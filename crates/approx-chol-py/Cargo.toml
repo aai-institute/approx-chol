@@ -1,0 +1,16 @@
+[package]
+name = "approx-chol-py"
+version = "0.1.0"
+edition = "2021"
+description = "Python bindings for approx-chol (approximate Cholesky factorization)"
+license = "MIT"
+publish = false
+
+[lib]
+name = "_approx_chol"
+crate-type = ["cdylib"]
+
+[dependencies]
+approx-chol = { path = "../approx-chol" }
+pyo3 = { version = "0.25", features = ["extension-module"] }
+numpy = "0.25"

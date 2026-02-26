@@ -1,0 +1,20 @@
+# Rust build artifacts
+target/
+
+# Pixi local environment/cache
+.pixi/
+
+# Python caches/build artifacts
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE and OS-specific files
+.idea/
+.DS_Store

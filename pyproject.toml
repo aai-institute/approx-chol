@@ -1,0 +1,19 @@
+[project]
+authors = [{name = "Kristof Schröder", email = "k.schroeder@appliedai-institute.de"}]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+]
+name = "approx-chol"
+requires-python = ">= 3.11"
+version = "0.1.0"
+
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[tool.maturin]
+python-source = "python"
+module-name = "approx_chol._approx_chol"
+manifest-path = "crates/approx-chol-py/Cargo.toml"
+features = ["pyo3/extension-module"]

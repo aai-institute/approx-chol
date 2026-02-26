@@ -1,0 +1,35 @@
+[package]
+name = "approx-chol"
+version = "0.1.0"
+edition = "2021"
+description = "Approximate Cholesky factorization for graph Laplacians"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/kristof-mattei/domain-decomp-chol"
+keywords = ["laplacian", "sparse", "cholesky", "preconditioner", "sddm"]
+categories = ["mathematics", "science", "algorithms"]
+
+[dependencies]
+rand = { version = "0.9", features = ["small_rng"] }
+sprs = { version = "0.11", optional = true, default-features = false }
+faer = { version = "0.22", optional = true, default-features = false }
+smallvec = "1.13"
+num-traits = "0.2"
+
+[features]
+default = []
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "factorization"
+harness = false
+
+[[bench]]
+name = "sampling"
+harness = false
+
+[[bench]]
+name = "smoke"
+harness = false
