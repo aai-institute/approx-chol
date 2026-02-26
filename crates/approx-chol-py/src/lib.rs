@@ -31,10 +31,7 @@ impl PyConfig {
     fn to_native(&self) -> Config {
         let split_merge = match (self.split, self.merge) {
             (Some(s), Some(m)) if s > 1 => Some(SplitMerge { split: s, merge: m }),
-            (Some(s), None) if s > 1 => Some(SplitMerge {
-                split: s,
-                merge: s,
-            }),
+            (Some(s), None) if s > 1 => Some(SplitMerge { split: s, merge: s }),
             _ => None,
         };
         Config {
@@ -69,7 +66,11 @@ impl PyFactor {
     }
 
     /// Solve LDL^T x = b, returning a new numpy array.
-    fn solve<'py>(&self, py: Python<'py>, b: PyReadonlyArray1<'py, f64>) -> Bound<'py, PyArray1<f64>> {
+    fn solve<'py>(
+        &self,
+        py: Python<'py>,
+        b: PyReadonlyArray1<'py, f64>,
+    ) -> Bound<'py, PyArray1<f64>> {
         let b_slice = b.as_slice().expect("contiguous array");
         let x = self.inner.solve(b_slice);
         PyArray1::from_vec(py, x)
@@ -133,17 +134,15 @@ fn factorize_raw<'py>(
 ///     config: Optional factorization configuration.
 #[pyfunction]
 #[pyo3(signature = (matrix, config=None))]
-fn factorize(py: Python<'_>, matrix: &Bound<'_, PyAny>, config: Option<&PyConfig>) -> PyResult<PyFactor> {
-    let indptr = matrix
-        .getattr("indptr")?
-        .extract::<Bound<'_, PyAny>>()?;
-    let indices = matrix
-        .getattr("indices")?
-        .extract::<Bound<'_, PyAny>>()?;
+fn factorize(
+    py: Python<'_>,
+    matrix: &Bound<'_, PyAny>,
+    config: Option<&PyConfig>,
+) -> PyResult<PyFactor> {
+    let indptr = matrix.getattr("indptr")?.extract::<Bound<'_, PyAny>>()?;
+    let indices = matrix.getattr("indices")?.extract::<Bound<'_, PyAny>>()?;
     let data = matrix.getattr("data")?.extract::<Bound<'_, PyAny>>()?;
-    let shape = matrix
-        .getattr("shape")?
-        .extract::<(usize, usize)>()?;
+    let shape = matrix.getattr("shape")?.extract::<(usize, usize)>()?;
 
     if shape.0 != shape.1 {
         return Err(pyo3::exceptions::PyValueError::new_err(

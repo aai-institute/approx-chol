@@ -3,7 +3,7 @@ use crate::graph::{EliminationGraph, GraphBuild, MultiEdgeGraph, SlimGraph};
 use crate::ordering::{DynamicOrdering, EliminationOrdering, StaticOrdering};
 use crate::sampling::{CdfSampler, WeightedSampler};
 use crate::types::Real;
-use crate::{Error, Factor, CsrRef};
+use crate::{CsrRef, Error, Factor};
 use num_traits::PrimInt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -67,10 +67,7 @@ where
     }
 
     /// Run approximate Cholesky factorization on a CSR SDDM matrix using `u32` indices.
-    pub fn build(
-        &self,
-        sddm: CsrRef<'_, T, u32>,
-    ) -> Result<Factor<T>, Error> {
+    pub fn build(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
         self.build_with_sampler(sddm, CdfSampler::<T>::new(self.config.seed))
     }
 
@@ -145,14 +142,10 @@ where
             return Ok(());
         };
         if split_merge.split == 0 {
-            return Err(Error::InvalidConfig(
-                "split_merge.split must be >= 1",
-            ));
+            return Err(Error::InvalidConfig("split_merge.split must be >= 1"));
         }
         if split_merge.merge == 0 {
-            return Err(Error::InvalidConfig(
-                "split_merge.merge must be >= 1",
-            ));
+            return Err(Error::InvalidConfig("split_merge.merge must be >= 1"));
         }
         Ok(())
     }

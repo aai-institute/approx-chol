@@ -188,7 +188,10 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
             let (cols, vals) = csr.row(row);
             for (&col, &val) in cols.iter().zip(vals.iter()) {
                 let col_usize = col as usize;
-                debug_assert!(col_usize < n, "CSR column index {col_usize} out of bounds (n={n})");
+                debug_assert!(
+                    col_usize < n,
+                    "CSR column index {col_usize} out of bounds (n={n})"
+                );
                 if row == col_usize {
                     diag[row] = val;
                     row_sums[row] = row_sums[row] + val;
@@ -216,14 +219,11 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
     fn live_neighbors(&mut self, v: usize, scratch: &mut Vec<Neighbor<T>>) {
         scratch.clear();
         scratch.extend(self.adj[v].iter().filter_map(|e| {
-            (e.weight() > T::zero() && !self.eliminated.get(e.to() as usize)).then_some(
-                Neighbor {
-                    to: e.to(),
-                    fill_weight: e.weight()
-                        * <T as NumCast>::from(e.count()).expect("count to scalar"),
-                    count: e.count(),
-                },
-            )
+            (e.weight() > T::zero() && !self.eliminated.get(e.to() as usize)).then_some(Neighbor {
+                to: e.to(),
+                fill_weight: e.weight() * <T as NumCast>::from(e.count()).expect("count to scalar"),
+                count: e.count(),
+            })
         }));
     }
 
@@ -262,12 +262,15 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
 
 /// Compute (max_abs_surplus, total_surplus_sum, count_nonzero) from row sums.
 fn surplus_stats<T: Real>(row_sums: &[T]) -> (T, T, usize) {
-    row_sums.iter().fold(
-        (T::zero(), T::zero(), 0usize),
-        |(max_s, sum, cnt), &s| {
-            (max_s.max(s.abs()), sum + s, cnt + (s.abs() > T::zero()) as usize)
-        },
-    )
+    row_sums
+        .iter()
+        .fold((T::zero(), T::zero(), 0usize), |(max_s, sum, cnt), &s| {
+            (
+                max_s.max(s.abs()),
+                sum + s,
+                cnt + (s.abs() > T::zero()) as usize,
+            )
+        })
 }
 
 /// Small epsilon for Laplacian augmentation, scaled to floating-point precision.
@@ -309,7 +312,10 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
         mut diag: Vec<T>,
         row_sums: &[T],
     ) -> GraphBuild<Self, T> {
-        assert!(adj.len() <= u32::MAX as usize, "graph size exceeds u32::MAX");
+        assert!(
+            adj.len() <= u32::MAX as usize,
+            "graph size exceeds u32::MAX"
+        );
         let m = adj.len();
         let (max_surplus, surplus_sum, surplus_count) = surplus_stats(row_sums);
         let aug_eps = augmentation_epsilon::<T>();

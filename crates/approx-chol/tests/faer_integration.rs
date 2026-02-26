@@ -1,9 +1,6 @@
 #![cfg(feature = "faer")]
 
-use approx_chol::{
-    factorize_from, factorize_generic, Config, Error, Builder,
-    CsrRef,
-};
+use approx_chol::{factorize_from, factorize_generic, Builder, Config, CsrRef, Error};
 use faer::sparse::SparseRowMat;
 use num_traits::{cast, Float, FromPrimitive, PrimInt};
 
@@ -143,8 +140,5 @@ fn faer_try_from_non_square_returns_error() {
     };
     let mat = SparseRowMat::new(symbolic, values);
     let err = CsrRef::try_from_faer(&mat).expect_err("non-square matrix must be rejected");
-    assert!(matches!(
-        err,
-        Error::InvalidCsr("expected square matrix")
-    ));
+    assert!(matches!(err, Error::InvalidCsr("expected square matrix")));
 }

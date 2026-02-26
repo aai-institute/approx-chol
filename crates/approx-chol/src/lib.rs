@@ -166,9 +166,7 @@ impl std::error::Error for Error {}
 /// assert_eq!(decomp.n(), 4);
 /// # Ok::<(), approx_chol::Error>(())
 /// ```
-pub fn factorize<T>(
-    sddm: CsrRef<'_, T, u32>,
-) -> Result<Factor<T>, Error>
+pub fn factorize<T>(sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error>
 where
     T: num_traits::Float + Send + Sync + 'static,
 {
@@ -205,10 +203,7 @@ where
 /// assert_eq!(factor.n(), 4);
 /// # Ok::<(), approx_chol::Error>(())
 /// ```
-pub fn factorize_with<T>(
-    sddm: CsrRef<'_, T, u32>,
-    config: Config,
-) -> Result<Factor<T>, Error>
+pub fn factorize_with<T>(sddm: CsrRef<'_, T, u32>, config: Config) -> Result<Factor<T>, Error>
 where
     T: num_traits::Float + Send + Sync + 'static,
 {
@@ -220,9 +215,7 @@ where
 ///
 /// Uses a zero-copy fast path when the input index type is `u32`; otherwise
 /// performs a checked conversion of row pointers and column indices.
-pub fn factorize_generic<T, I>(
-    sddm: CsrRef<'_, T, I>,
-) -> Result<Factor<T>, Error>
+pub fn factorize_generic<T, I>(sddm: CsrRef<'_, T, I>) -> Result<Factor<T>, Error>
 where
     T: num_traits::Float + Send + Sync + 'static,
     I: num_traits::PrimInt + 'static,
@@ -246,9 +239,7 @@ where
 /// conversion to `u32` fails, or conversion into [`CsrRef`] panics.
 /// Returns [`Error::InvalidConfig`] if configuration values are
 /// inconsistent.
-pub fn factorize_from<'a, T, I, M>(
-    sddm: M,
-) -> Result<Factor<T>, Error>
+pub fn factorize_from<'a, T, I, M>(sddm: M) -> Result<Factor<T>, Error>
 where
     T: num_traits::Float + Send + Sync + 'static,
     I: num_traits::PrimInt + 'a + 'static,

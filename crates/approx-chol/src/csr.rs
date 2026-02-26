@@ -77,32 +77,22 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
             ));
         }
 
-        let row_ptr_last = self.row_ptrs[n]
-            .to_usize()
-            .ok_or(Error::InvalidCsr(
-                "row_ptr value cannot be represented as usize",
-            ))?;
+        let row_ptr_last = self.row_ptrs[n].to_usize().ok_or(Error::InvalidCsr(
+            "row_ptr value cannot be represented as usize",
+        ))?;
         if row_ptr_last != self.col_indices.len() {
-            return Err(Error::InvalidCsr(
-                "row_ptrs[n] != col_indices.len()",
-            ));
+            return Err(Error::InvalidCsr("row_ptrs[n] != col_indices.len()"));
         }
 
         for i in 0..n {
-            let a = self.row_ptrs[i]
-                .to_usize()
-                .ok_or(Error::InvalidCsr(
-                    "row_ptr value cannot be represented as usize",
-                ))?;
-            let b = self.row_ptrs[i + 1]
-                .to_usize()
-                .ok_or(Error::InvalidCsr(
-                    "row_ptr value cannot be represented as usize",
-                ))?;
+            let a = self.row_ptrs[i].to_usize().ok_or(Error::InvalidCsr(
+                "row_ptr value cannot be represented as usize",
+            ))?;
+            let b = self.row_ptrs[i + 1].to_usize().ok_or(Error::InvalidCsr(
+                "row_ptr value cannot be represented as usize",
+            ))?;
             if a > b {
-                return Err(Error::InvalidCsr(
-                    "row_ptrs is not non-decreasing",
-                ));
+                return Err(Error::InvalidCsr("row_ptrs is not non-decreasing"));
             }
         }
 
@@ -250,25 +240,20 @@ impl<T: Clone, I: PrimInt> OwnedCsr<T, I> {
         values: &[T],
         n: usize,
     ) -> Result<Self, Error> {
-        let _ = cast::<usize, I>(n)
-            .ok_or(Error::InvalidCsr("n exceeds target index type"))?;
+        let _ = cast::<usize, I>(n).ok_or(Error::InvalidCsr("n exceeds target index type"))?;
         let n = u32::try_from(n).map_err(|_| Error::InvalidCsr("n exceeds u32::MAX"))?;
 
         let row_ptrs = row_ptrs
             .iter()
             .map(|&v| cast::<usize, I>(v))
             .collect::<Option<Vec<_>>>()
-            .ok_or(Error::InvalidCsr(
-                "row_ptr exceeds target index type",
-            ))?;
+            .ok_or(Error::InvalidCsr("row_ptr exceeds target index type"))?;
 
         let col_indices = col_indices
             .iter()
             .map(|&v| cast::<usize, I>(v))
             .collect::<Option<Vec<_>>>()
-            .ok_or(Error::InvalidCsr(
-                "col_index exceeds target index type",
-            ))?;
+            .ok_or(Error::InvalidCsr("col_index exceeds target index type"))?;
 
         Ok(Self {
             row_ptrs,
@@ -304,8 +289,8 @@ where
         if n != mat.cols() {
             return Err(Error::InvalidCsr("expected square matrix"));
         }
-        let n = u32::try_from(n)
-            .map_err(|_| Error::InvalidCsr("matrix dimension exceeds u32::MAX"))?;
+        let n =
+            u32::try_from(n).map_err(|_| Error::InvalidCsr("matrix dimension exceeds u32::MAX"))?;
         let (indptr, indices, data) = mat.into_raw_storage();
         Ok(CsrRef::new_unchecked(indptr, indices, data, n))
     }
@@ -328,9 +313,7 @@ where
     ///
     /// Returns [`Error::InvalidCsr`] if the matrix is not square or
     /// has dimension larger than `u32::MAX`.
-    pub fn try_from_faer_view(
-        mat: faer::sparse::SparseRowMatRef<'a, I, T>,
-    ) -> Result<Self, Error> {
+    pub fn try_from_faer_view(mat: faer::sparse::SparseRowMatRef<'a, I, T>) -> Result<Self, Error> {
         if mat.nrows() != mat.ncols() {
             return Err(Error::InvalidCsr("expected square matrix"));
         }
@@ -349,9 +332,7 @@ where
     ///
     /// Returns [`Error::InvalidCsr`] with the same conditions as
     /// [`Self::try_from_faer_view`].
-    pub fn try_from_faer(
-        mat: &'a faer::sparse::SparseRowMat<I, T>,
-    ) -> Result<Self, Error> {
+    pub fn try_from_faer(mat: &'a faer::sparse::SparseRowMat<I, T>) -> Result<Self, Error> {
         Self::try_from_faer_view(mat.as_ref())
     }
 }

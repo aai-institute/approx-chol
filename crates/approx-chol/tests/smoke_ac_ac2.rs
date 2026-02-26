@@ -1,7 +1,7 @@
 mod common;
 use common::*;
 
-use approx_chol::{Config, Builder, SplitMerge};
+use approx_chol::{Builder, Config, SplitMerge};
 
 fn run_smoke_case(rows: usize, cols: usize, config: Config) {
     let lap = grid_laplacian(rows, cols);

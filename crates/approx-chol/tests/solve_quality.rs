@@ -1,7 +1,7 @@
 mod common;
 use common::*;
 
-use approx_chol::{Config, Builder, CsrRef};
+use approx_chol::{Builder, Config, CsrRef};
 
 // ---------------------------------------------------------------------------
 // Gremban augmentation: SDDM vs pure Laplacian
@@ -24,9 +24,7 @@ fn sddm_4() -> (Vec<u32>, Vec<u32>, Vec<f64>, u32) {
 fn gremban_augmented_for_sddm() {
     let (rp, ci, vals, n) = sddm_4();
     let csr = CsrRef::new_unchecked(&rp, &ci, &vals, n);
-    let factor = Builder::new(Config::default())
-        .build(csr)
-        .unwrap();
+    let factor = Builder::new(Config::default()).build(csr).unwrap();
     // Gremban augmentation adds one extra vertex for SDDM matrices
     assert!(
         factor.n() > n as usize,
@@ -39,9 +37,7 @@ fn gremban_augmented_for_sddm() {
 fn no_augmentation_for_pure_laplacian() {
     let lap = grid_laplacian(3, 3); // pure Laplacian: zero row sums
     let original_n = lap.n as usize;
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
-        .unwrap();
+    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
     assert_eq!(
         factor.n(),
         original_n,
@@ -91,9 +87,7 @@ fn near_zero_surplus_f64_does_not_augment() {
 fn solve_into_gives_finite_nontrivial_solution() {
     let lap = grid_laplacian(8, 8);
     let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
-        .unwrap();
+    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
 
     let n = factor.n();
     let mut rhs = vec![0.0; n_orig];
@@ -121,9 +115,7 @@ fn solve_into_gives_finite_nontrivial_solution() {
 fn no_projection_differs_from_projection() {
     let lap = grid_laplacian(5, 5);
     let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
-        .unwrap();
+    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
 
     let n = factor.n();
     let mut rhs = vec![0.0; n_orig];
@@ -152,9 +144,7 @@ fn no_projection_differs_from_projection() {
 fn allocating_solve_matches_solve_into() {
     let lap = grid_laplacian(6, 6);
     let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
-        .unwrap();
+    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
 
     let n = factor.n();
     let mut rhs = vec![0.0; n_orig];
@@ -178,9 +168,7 @@ fn allocating_solve_matches_solve_into() {
 fn solve_in_place_matches_no_projection() {
     let lap = grid_laplacian(5, 5);
     let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
-        .unwrap();
+    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
 
     let n = factor.n();
     let mut rhs = vec![0.0; n_orig];
@@ -209,9 +197,7 @@ fn solve_in_place_matches_no_projection() {
 fn solve_into_panics_on_short_work_buffer() {
     let lap = grid_laplacian(4, 4);
     let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
-        .unwrap();
+    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
 
     let mut rhs = vec![0.0; n_orig];
     rhs[0] = 1.0;
@@ -224,9 +210,7 @@ fn solve_into_panics_on_short_work_buffer() {
 #[should_panic(expected = "work buffer too small")]
 fn solve_in_place_panics_on_short_work_buffer() {
     let lap = grid_laplacian(4, 4);
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
-        .unwrap();
+    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
 
     let mut y = vec![0.0; factor.n().saturating_sub(1)];
     factor.solve_in_place(&mut y);

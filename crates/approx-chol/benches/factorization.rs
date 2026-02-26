@@ -1,6 +1,6 @@
 mod common;
 
-use approx_chol::{Config, Builder};
+use approx_chol::{Builder, Config};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 use common::grid_laplacian;

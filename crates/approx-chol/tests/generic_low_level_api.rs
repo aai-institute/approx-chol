@@ -1,6 +1,5 @@
 use approx_chol::{
-    factorize, factorize_from, factorize_generic, Config, Error,
-    Builder, CsrRef, SplitMerge,
+    factorize, factorize_from, factorize_generic, Builder, Config, CsrRef, Error, SplitMerge,
 };
 use num_traits::{Float, FromPrimitive, PrimInt};
 
@@ -210,8 +209,5 @@ fn generic_conversion_row_ptr_overflow_is_reported() {
     let values = [1.0_f64];
     let csr = CsrRef::new_unchecked(&row_ptrs, &col_indices, &values, 1);
     let err = factorize_generic(csr).expect_err("row_ptr overflow should be reported");
-    assert!(matches!(
-        err,
-        Error::InvalidCsr("row_ptr exceeds u32::MAX")
-    ));
+    assert!(matches!(err, Error::InvalidCsr("row_ptr exceeds u32::MAX")));
 }

@@ -1,4 +1,4 @@
-use approx_chol::{Error, CsrRef};
+use approx_chol::{CsrRef, Error};
 
 // ---------------------------------------------------------------------------
 // Helpers — 4-node path Laplacian (valid CSR)

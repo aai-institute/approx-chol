@@ -9,7 +9,7 @@
 //! cargo run -p approx-chol --example ac2_config
 //! ```
 
-use approx_chol::{Config, Builder, CsrRef, SplitMerge};
+use approx_chol::{Builder, Config, CsrRef, SplitMerge};
 
 // --------------------------------------------------------------------------
 // Grid Laplacian builder (inlined — examples are separate compilation units)

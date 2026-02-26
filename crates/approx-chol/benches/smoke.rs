@@ -2,7 +2,7 @@ mod common;
 
 use std::time::Duration;
 
-use approx_chol::{Config, Builder, SplitMerge};
+use approx_chol::{Builder, Config, SplitMerge};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 
 use common::{grid_laplacian, GridLaplacian};
