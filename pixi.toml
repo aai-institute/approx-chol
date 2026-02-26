@@ -4,6 +4,7 @@ platforms = ["osx-arm64"]
 
 [dependencies]
 python = ">=3.11"
+pixi-pycharm = ">=0.0.10,<0.0.11"
 
 [pypi-dependencies]
 approx-chol = { path = ".", editable = true }
