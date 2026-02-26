@@ -1,0 +1,25 @@
+[workspace]
+channels = ["conda-forge"]
+platforms = ["osx-arm64"]
+
+[dependencies]
+python = ">=3.11"
+
+[pypi-dependencies]
+approx-chol = { path = ".", editable = true }
+
+[feature.build.dependencies]
+rust = ">=1.75"
+maturin = ">=1.7"
+
+[feature.dev.dependencies]
+pytest = ">=7.0"
+pytest-cov = "*"
+
+[environments]
+default = { features = ["build", "dev"], solve-group = "default" }
+
+[tasks]
+test = "pytest tests/ -v"
+develop = "maturin develop --uv --release"
+bench-smoke = "cargo bench -p approx-chol --bench smoke -- --sample-size 10 --warm-up-time 0.05 --measurement-time 0.1"
