@@ -16,6 +16,7 @@ maturin = ">=1.7"
 [feature.dev.dependencies]
 pytest = ">=7.0"
 pytest-cov = "*"
+cargo-llvm-cov = ">=0.8.4,<0.9"
 
 [environments]
 default = { features = ["build", "dev"], solve-group = "default" }
@@ -24,3 +25,4 @@ default = { features = ["build", "dev"], solve-group = "default" }
 test = "pytest tests/ -v"
 develop = "maturin develop --uv --release"
 bench-smoke = "cargo bench -p approx-chol --bench smoke -- --sample-size 10 --warm-up-time 0.05 --measurement-time 0.1"
+coverage = "cargo llvm-cov --workspace --all-features --summary-only"
