@@ -10,17 +10,16 @@ keywords = ["laplacian", "sparse", "cholesky", "preconditioner", "sddm"]
 categories = ["mathematics", "science", "algorithms"]
 
 [dependencies]
-rand = { version = "0.9", features = ["small_rng"] }
+rand = { version = "0.10.0"}
 sprs = { version = "0.11", optional = true, default-features = false }
-faer = { version = "0.22", optional = true, default-features = false }
-smallvec = "1.13"
+faer = { version = "0.24", optional = true, default-features = false }
 num-traits = "0.2"
 
 [features]
 default = []
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8.2", features = ["html_reports"] }
 
 [[bench]]
 name = "factorization"
