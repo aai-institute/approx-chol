@@ -70,10 +70,12 @@ impl PyFactor {
         &self,
         py: Python<'py>,
         b: PyReadonlyArray1<'py, f64>,
-    ) -> Bound<'py, PyArray1<f64>> {
-        let b_slice = b.as_slice().expect("contiguous array");
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let b_slice = b
+            .as_slice()
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("b must be contiguous"))?;
         let x = self.inner.solve(b_slice);
-        PyArray1::from_vec(py, x)
+        Ok(PyArray1::from_vec(py, x))
     }
 
     /// Solve LDL^T x = b, writing the result into an existing array.
@@ -82,7 +84,9 @@ impl PyFactor {
         b: PyReadonlyArray1<'py, f64>,
         out: &Bound<'py, PyArray1<f64>>,
     ) -> PyResult<()> {
-        let b_slice = b.as_slice().expect("contiguous array");
+        let b_slice = b
+            .as_slice()
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("b must be contiguous"))?;
         let mut out_rw = unsafe { out.as_array_mut() };
         let out_slice = out_rw
             .as_slice_mut()
@@ -117,9 +121,15 @@ fn factorize_raw<'py>(
     n: u32,
     config: Option<&PyConfig>,
 ) -> PyResult<PyFactor> {
-    let rp = row_ptrs.as_slice().expect("contiguous");
-    let ci = col_indices.as_slice().expect("contiguous");
-    let vals = values.as_slice().expect("contiguous");
+    let rp = row_ptrs
+        .as_slice()
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("row_ptrs must be contiguous"))?;
+    let ci = col_indices
+        .as_slice()
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("col_indices must be contiguous"))?;
+    let vals = values
+        .as_slice()
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("values must be contiguous"))?;
 
     let csr = CsrRef::new(rp, ci, vals, n).map_err(approx_chol_err_to_py)?;
     let native_config = config.map_or_else(Config::default, |c| c.to_native());
@@ -166,9 +176,15 @@ fn factorize(
         .call_method1("astype", (np.getattr("float64")?,))?
         .extract()?;
 
-    let rp = rp_arr.as_slice().expect("contiguous");
-    let ci = ci_arr.as_slice().expect("contiguous");
-    let vals = val_arr.as_slice().expect("contiguous");
+    let rp = rp_arr
+        .as_slice()
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("indptr must be contiguous"))?;
+    let ci = ci_arr
+        .as_slice()
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("indices must be contiguous"))?;
+    let vals = val_arr
+        .as_slice()
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("data must be contiguous"))?;
 
     let n = shape.0 as u32;
     let csr = CsrRef::new(rp, ci, vals, n).map_err(approx_chol_err_to_py)?;

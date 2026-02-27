@@ -193,7 +193,7 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
                     "CSR column index {col_usize} out of bounds (n={n})"
                 );
                 if row == col_usize {
-                    diag[row] = val;
+                    diag[row] = diag[row] + val;
                     row_sums[row] = row_sums[row] + val;
                 } else if val < T::zero() {
                     row_sums[row] = row_sums[row] + val;

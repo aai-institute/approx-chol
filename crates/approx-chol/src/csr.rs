@@ -45,6 +45,7 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
     /// Returns [`Error::InvalidCsr`] if:
     /// - `row_ptrs.len() != n + 1`
     /// - `col_indices.len() != values.len()`
+    /// - `row_ptrs[0] != 0`
     /// - `row_ptrs[n] != col_indices.len()`
     /// - `row_ptrs` is not non-decreasing
     /// - any column index is out of bounds (>= n)
@@ -80,6 +81,12 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
         let row_ptr_last = self.row_ptrs[n].to_usize().ok_or(Error::InvalidCsr(
             "row_ptr value cannot be represented as usize",
         ))?;
+        let row_ptr_first = self.row_ptrs[0].to_usize().ok_or(Error::InvalidCsr(
+            "row_ptr value cannot be represented as usize",
+        ))?;
+        if row_ptr_first != 0 {
+            return Err(Error::InvalidCsr("row_ptrs[0] != 0"));
+        }
         if row_ptr_last != self.col_indices.len() {
             return Err(Error::InvalidCsr("row_ptrs[n] != col_indices.len()"));
         }
