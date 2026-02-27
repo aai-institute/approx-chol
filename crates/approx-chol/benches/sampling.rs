@@ -3,7 +3,7 @@ mod common;
 use approx_chol::{Builder, Config, SplitMerge};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use std::collections::BTreeSet;
 
 use common::{grid_laplacian, GridLaplacian};
