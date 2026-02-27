@@ -2,12 +2,13 @@
 
 Approximate Cholesky factorization for SDDM and graph Laplacian systems.
 
-Provides a robust Rust implementation of approximate Cholesky (AC) factorization,
+This crate implements AC and AC(k), porting key algorithmic ideas from [Laplacians.jl](https://github.com/danspielman/Laplacians.jl) to make these algorithms accessible in the Rust ecosystem and through Python bindings.
+
+AC(k) was introduced and analyzed by Gao, Kyng, and Spielman (2025), "AC(k): Robust Solution of Laplacian Equations by Randomized Approximate Cholesky Factorization" (SIAM Journal on Scientific Computing, November 2025, ISSN 1064-8275).
+
+Provides a robust Rust implementation of approximate Cholesky factorization,
 suitable as a preconditioner for iterative solvers on symmetric diagonally dominant
-(SDDM) linear systems. SDDM matrices arise naturally in graph Laplacians,
-finite-element discretizations, and fixed-effects normal equations. Every graph
-Laplacian is SDDM; every SDDM matrix can be converted to a Laplacian via
-Gremban's reduction (1996).
+(SDDM) linear systems.
 
 ## Install
 
@@ -50,12 +51,20 @@ For a larger example with a grid Laplacian, see [`examples/basic_solve.rs`](exam
 | `sprs`  | Zero-copy `CsrRef` conversion from `sprs` matrices (`From` and fallible `try_from_sprs*`). |
 | `faer`  | Zero-copy `CsrRef` conversion from `faer` matrices (`From` and fallible `try_from_faer*`). |
 
+## Attribution
+
+This crate ports key algorithmic ideas from Laplacians.jl to make AC and AC(k) accessible in the Rust ecosystem and through Python bindings.
+
+This implementation is a Rust and Python-facing reimplementation of the AC and AC(k) algorithms developed by Daniel A. Spielman and other Laplacians.jl contributors.
+
+Laplacians.jl is licensed under the MIT License.
+
 ## License
 
 MIT
 
 ## References
 
+- Gao, Yuan; Kyng, Rasmus; Spielman, Daniel (2025). *AC(k): Robust Solution of Laplacian Equations by Randomized Approximate Cholesky Factorization.* SIAM Journal on Scientific Computing.
 - Gao, Kyng & Spielman (2023). *Robust and Practical Solution of Laplacian Equations by Approximate Elimination.* <https://arxiv.org/abs/2303.00709>
 - Kyng & Sachdeva (2016). *Approximate Gaussian Elimination for Laplacians — Fast, Sparse, and Simple.* <https://arxiv.org/abs/1605.02353>
-- Gremban (1996). *Combinatorial Preconditioners for Sparse, Symmetric, Diagonally Dominant Linear Systems.* Ph.D. thesis, CMU.
