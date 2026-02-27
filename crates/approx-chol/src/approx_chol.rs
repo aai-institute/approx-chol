@@ -6,7 +6,7 @@ mod star_ac;
 mod star_ac2;
 
 pub use builder::Builder;
-pub use decomposition::Factor;
+pub use decomposition::{Factor, SolveError};
 pub(crate) use sampled_column::SampledColumn;
 
 use crate::graph::EliminationGraph;

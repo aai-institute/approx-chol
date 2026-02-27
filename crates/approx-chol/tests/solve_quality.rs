@@ -1,7 +1,7 @@
 mod common;
 use common::*;
 
-use approx_chol::{Builder, Config, CsrRef};
+use approx_chol::{Builder, Config, CsrRef, SolveError};
 
 // ---------------------------------------------------------------------------
 // Gremban augmentation: SDDM vs pure Laplacian
@@ -190,6 +190,81 @@ fn solve_in_place_matches_no_projection() {
             "solve_in_place must match solve_into_with_projection(false): {a} vs {b}"
         );
     }
+}
+
+#[test]
+fn try_solve_matches_solve() {
+    let lap = grid_laplacian(6, 6);
+    let n_orig = lap.n as usize;
+    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
+
+    let mut rhs = vec![0.0; n_orig];
+    rhs[0] = 1.0;
+    rhs[n_orig - 1] = -1.0;
+
+    let x = factor.solve(&rhs);
+    let x_try = factor.try_solve(&rhs).expect("try_solve should succeed");
+    assert_eq!(x, x_try, "try_solve must match solve");
+}
+
+#[test]
+fn try_solve_into_reports_rhs_too_long() {
+    let lap = grid_laplacian(4, 4);
+    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
+
+    let rhs = vec![0.0; factor.n() + 1];
+    let mut work = vec![0.0; factor.n()];
+    let err = factor
+        .try_solve_into(&rhs, &mut work)
+        .expect_err("rhs longer than factor dimension must fail");
+    assert!(matches!(
+        err,
+        SolveError::RhsLengthExceedsFactor {
+            rhs_len: _,
+            factor_dim: _
+        }
+    ));
+}
+
+#[test]
+fn try_solve_into_reports_short_work_buffer() {
+    let lap = grid_laplacian(4, 4);
+    let n_orig = lap.n as usize;
+    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
+
+    let mut rhs = vec![0.0; n_orig];
+    rhs[0] = 1.0;
+    rhs[n_orig - 1] = -1.0;
+    let mut work = vec![0.0; factor.n().saturating_sub(1)];
+
+    let err = factor
+        .try_solve_into(&rhs, &mut work)
+        .expect_err("short work buffer must fail");
+    assert!(matches!(
+        err,
+        SolveError::WorkBufferTooSmall {
+            work_len: _,
+            factor_dim: _
+        }
+    ));
+}
+
+#[test]
+fn try_solve_in_place_reports_short_work_buffer() {
+    let lap = grid_laplacian(4, 4);
+    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
+
+    let mut y = vec![0.0; factor.n().saturating_sub(1)];
+    let err = factor
+        .try_solve_in_place(&mut y)
+        .expect_err("short in-place work buffer must fail");
+    assert!(matches!(
+        err,
+        SolveError::WorkBufferTooSmall {
+            work_len: _,
+            factor_dim: _
+        }
+    ));
 }
 
 #[test]

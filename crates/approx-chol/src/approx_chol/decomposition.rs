@@ -1,4 +1,5 @@
 use crate::types::Real;
+use core::fmt;
 
 /// Zero-copy view of a single elimination step (row operation).
 ///
@@ -156,34 +157,94 @@ pub struct Factor<T = f64> {
     pub(crate) sequence: EliminationSequence<T>,
 }
 
+/// Errors returned by fallible [`Factor`] solve methods.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SolveError {
+    /// Right-hand side length exceeds factor dimension.
+    RhsLengthExceedsFactor {
+        /// Provided RHS length.
+        rhs_len: usize,
+        /// Factor dimension (`Factor::n()`).
+        factor_dim: usize,
+    },
+    /// Work buffer is smaller than factor dimension.
+    WorkBufferTooSmall {
+        /// Provided work length.
+        work_len: usize,
+        /// Factor dimension (`Factor::n()`).
+        factor_dim: usize,
+    },
+}
+
+impl fmt::Display for SolveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RhsLengthExceedsFactor {
+                rhs_len,
+                factor_dim,
+            } => write!(
+                f,
+                "rhs length {} exceeds factor dimension {}",
+                rhs_len, factor_dim
+            ),
+            Self::WorkBufferTooSmall {
+                work_len,
+                factor_dim,
+            } => write!(
+                f,
+                "work buffer too small: got {}, need at least {}",
+                work_len, factor_dim
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SolveError {}
+
 impl<T> Factor<T>
 where
     T: num_traits::Float + Send + Sync + 'static,
 {
     #[inline]
+    fn validate_rhs_and_work(&self, b: &[T], work: &[T]) -> Result<(), SolveError> {
+        if b.len() > self.n {
+            return Err(SolveError::RhsLengthExceedsFactor {
+                rhs_len: b.len(),
+                factor_dim: self.n,
+            });
+        }
+        if work.len() < self.n {
+            return Err(SolveError::WorkBufferTooSmall {
+                work_len: work.len(),
+                factor_dim: self.n,
+            });
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn validate_in_place_work(&self, y: &[T]) -> Result<(), SolveError> {
+        if y.len() < self.n {
+            return Err(SolveError::WorkBufferTooSmall {
+                work_len: y.len(),
+                factor_dim: self.n,
+            });
+        }
+        Ok(())
+    }
+
+    #[inline]
     fn assert_rhs_and_work(&self, b: &[T], work: &[T]) {
-        assert!(
-            b.len() <= self.n,
-            "rhs length {} exceeds factor dimension {}",
-            b.len(),
-            self.n
-        );
-        assert!(
-            work.len() >= self.n,
-            "work buffer too small: got {}, need at least {}",
-            work.len(),
-            self.n
-        );
+        if let Err(err) = self.validate_rhs_and_work(b, work) {
+            panic!("{err}");
+        }
     }
 
     #[inline]
     fn assert_in_place_work(&self, y: &[T]) {
-        assert!(
-            y.len() >= self.n,
-            "work buffer too small: got {}, need at least {}",
-            y.len(),
-            self.n
-        );
+        if let Err(err) = self.validate_in_place_work(y) {
+            panic!("{err}");
+        }
     }
 
     /// Dimension of the factor (may be larger than the original matrix if
@@ -237,6 +298,17 @@ where
         work
     }
 
+    /// Fallible variant of [`Self::solve`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SolveError::RhsLengthExceedsFactor`] if `b.len() > self.n()`.
+    pub fn try_solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
+        let mut work = vec![T::zero(); self.n];
+        self.try_solve_into(b, &mut work)?;
+        Ok(work)
+    }
+
     /// Solve L D L^T x = b in-place, writing the result into `work`.
     ///
     /// # Panics
@@ -244,6 +316,16 @@ where
     /// Panics if `b.len() > self.n()` or `work.len() < self.n()`.
     pub fn solve_into(&self, b: &[T], work: &mut [T]) {
         self.solve_into_with_projection(b, work, true);
+    }
+
+    /// Fallible variant of [`Self::solve_into`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SolveError::RhsLengthExceedsFactor`] if `b.len() > self.n()`.
+    /// Returns [`SolveError::WorkBufferTooSmall`] if `work.len() < self.n()`.
+    pub fn try_solve_into(&self, b: &[T], work: &mut [T]) -> Result<(), SolveError> {
+        self.try_solve_into_with_projection(b, work, true)
     }
 
     /// Solve L D L^T x = b in-place with configurable zero-mean projection.
@@ -262,6 +344,29 @@ where
         }
     }
 
+    /// Fallible variant of [`Self::solve_into_with_projection`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SolveError::RhsLengthExceedsFactor`] if `b.len() > self.n()`.
+    /// Returns [`SolveError::WorkBufferTooSmall`] if `work.len() < self.n()`.
+    pub fn try_solve_into_with_projection(
+        &self,
+        b: &[T],
+        work: &mut [T],
+        project_zero_mean: bool,
+    ) -> Result<(), SolveError> {
+        self.validate_rhs_and_work(b, work)?;
+        work[..b.len()].copy_from_slice(b);
+        work[b.len()..self.n].fill(T::zero());
+        self.forward(work);
+        self.backward(work);
+        if project_zero_mean {
+            self.project_zero_mean(work);
+        }
+        Ok(())
+    }
+
     /// Solve L D L^T x = b in-place, assuming `y` already contains the RHS.
     ///
     /// # Panics
@@ -271,6 +376,18 @@ where
         self.assert_in_place_work(y);
         // SAFETY: `assert_in_place_work` guarantees `y.len() >= self.n()`.
         unsafe { self.solve_in_place_unchecked(y) };
+    }
+
+    /// Fallible variant of [`Self::solve_in_place`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SolveError::WorkBufferTooSmall`] if `y.len() < self.n()`.
+    pub fn try_solve_in_place(&self, y: &mut [T]) -> Result<(), SolveError> {
+        self.validate_in_place_work(y)?;
+        // SAFETY: `validate_in_place_work` guarantees `y.len() >= self.n()`.
+        unsafe { self.solve_in_place_unchecked(y) };
+        Ok(())
     }
 
     /// Solve L D L^T x = b in-place without checking `y` length.
