@@ -401,7 +401,6 @@ mod tests {
             let config = Config {
                 split_merge: Some(SplitMerge { split: 2, merge: 2 }),
                 seed,
-                ..Default::default()
             };
             let factor = Builder::<f64>::new(config)
                 .build(csr)

@@ -104,7 +104,6 @@ fn main() {
     let ac2_config = Config {
         split_merge: Some(SplitMerge { split: 2, merge: 2 }),
         seed: 42,
-        ..Default::default()
     };
     let ac2_factor = Builder::new(ac2_config)
         .build(lap.as_csr())
