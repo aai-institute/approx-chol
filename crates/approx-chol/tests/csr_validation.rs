@@ -75,6 +75,35 @@ fn new_rejects_non_monotonic_row_ptrs() {
 }
 
 #[test]
+fn new_rejects_non_zero_based_row_ptrs() {
+    // This matrix is intentionally malformed: row_ptrs starts at 1, so the
+    // first payload entry is not addressable by any row.
+    //
+    // If accepted, that leading entry is silently ignored and factorization
+    // runs on a different matrix than the caller provided.
+    let rp = vec![1u32, 3, 5];
+    let ci = vec![0u32, 0, 1, 0, 1];
+    let vals = vec![1234.0f64, 2.0, -1.0, -1.0, 2.0];
+    let n = 2u32;
+
+    match CsrRef::new(&rp, &ci, &vals, n) {
+        Err(Error::InvalidCsr(_)) => {}
+        Err(other) => panic!("expected InvalidCsr, got {other:?}"),
+        Ok(csr) => {
+            let (_, row0_vals) = csr.row(0);
+            let silently_dropped = !row0_vals.iter().any(|&v| (v - 1234.0).abs() < 1e-12);
+            assert!(
+                silently_dropped,
+                "expected malformed row_ptrs[0] to make leading payload unreachable"
+            );
+            panic!(
+                "accepted malformed CSR (row_ptrs[0] != 0): leading payload was silently ignored"
+            );
+        }
+    }
+}
+
+#[test]
 fn new_rejects_out_of_bounds_column_index() {
     let (rp, mut ci, vals, n) = path_laplacian_4();
     // Replace last column index with n (out of bounds; valid range is 0..n-1)
