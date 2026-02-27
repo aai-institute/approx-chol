@@ -10,9 +10,10 @@ class Config:
 
     Args:
         seed: Random seed for the edge-weight sampler.
-        split: Number of edge copies for AC2 (None or 1 = standard AC).
+        split: Number of edge copies for AC2 (None = standard AC, >=2 enables AC2).
         merge: Maximum multi-edges per neighbor pair for AC2.
-            Defaults to ``split`` if not provided.
+            Requires ``split`` and defaults to ``split`` if not provided.
+            When ``split == 1``, ``merge`` must be omitted or set to 1.
     """
 
     seed: int
@@ -43,7 +44,11 @@ class Factor:
         ...
 
     def solve(self, b: npt.ArrayLike) -> npt.NDArray[np.float64]:
-        """Solve LDL^T x = b, returning a new array."""
+        """Solve LDL^T x = b, returning a new array.
+
+        Raises:
+            ValueError: If ``b`` is not contiguous or ``len(b) > n``.
+        """
         ...
 
     def solve_into(
@@ -51,7 +56,12 @@ class Factor:
         b: npt.ArrayLike,
         out: npt.NDArray[np.float64],
     ) -> None:
-        """Solve LDL^T x = b, writing the result into *out*."""
+        """Solve LDL^T x = b, writing the result into *out*.
+
+        Raises:
+            ValueError: If ``b``/``out`` are not contiguous, sizes are invalid,
+                or ``b`` and ``out`` overlap in memory.
+        """
         ...
 
 def factorize(
@@ -65,7 +75,8 @@ def factorize(
         config: Optional factorization configuration.
 
     Raises:
-        ValueError: If the matrix is not square or has invalid structure.
+        ValueError: If the matrix is not square, has invalid dtypes/ranges,
+            exceeds index limits, or has invalid CSR structure.
     """
     ...
 
@@ -86,6 +97,6 @@ def factorize_raw(
         config: Optional factorization configuration.
 
     Raises:
-        ValueError: If the CSR structure is invalid.
+        ValueError: If the CSR structure or config is invalid.
     """
     ...

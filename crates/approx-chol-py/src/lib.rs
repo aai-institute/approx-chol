@@ -1,6 +1,78 @@
 use approx_chol::{Config, CsrRef, Error, SplitMerge};
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
+use std::mem::size_of;
+
+#[inline]
+fn value_error(message: impl Into<String>) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(message.into())
+}
+
+fn validate_integer_index_array<'py>(
+    np: &Bound<'py, PyModule>,
+    array_like: &Bound<'py, PyAny>,
+    name: &str,
+) -> PyResult<Bound<'py, PyArray1<u32>>> {
+    let arr = np.call_method1("asarray", (array_like,))?;
+    let ndim = arr.getattr("ndim")?.extract::<usize>()?;
+    if ndim != 1 {
+        return Err(value_error(format!("{name} must be a 1-D array")));
+    }
+    let kind = arr.getattr("dtype")?.getattr("kind")?.extract::<String>()?;
+    if kind != "i" && kind != "u" {
+        return Err(value_error(format!("{name} must have an integer dtype")));
+    }
+
+    let size = arr.getattr("size")?.extract::<usize>()?;
+    if size > 0 {
+        let arr_i64 = arr.call_method1("astype", (np.getattr("int64")?,))?;
+        let min_val = arr_i64.call_method0("min")?.extract::<i64>()?;
+        if min_val < 0 {
+            return Err(value_error(format!("{name} must be non-negative")));
+        }
+        let max_val = arr_i64.call_method0("max")?.extract::<i64>()?;
+        if max_val > u32::MAX as i64 {
+            return Err(value_error(format!("{name} exceeds u32::MAX")));
+        }
+    }
+
+    let arr_u32 = arr.call_method1("astype", (np.getattr("uint32")?,))?;
+    let arr_u32 = np.call_method1("ascontiguousarray", (arr_u32,))?;
+    arr_u32.extract::<Bound<'py, PyArray1<u32>>>()
+}
+
+fn validate_values_array<'py>(
+    np: &Bound<'py, PyModule>,
+    array_like: &Bound<'py, PyAny>,
+    name: &str,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let arr = np.call_method1("asarray", (array_like,))?;
+    let ndim = arr.getattr("ndim")?.extract::<usize>()?;
+    if ndim != 1 {
+        return Err(value_error(format!("{name} must be a 1-D array")));
+    }
+    let kind = arr.getattr("dtype")?.getattr("kind")?.extract::<String>()?;
+    if kind != "i" && kind != "u" && kind != "f" {
+        return Err(value_error(format!(
+            "{name} must have an integer or floating-point dtype"
+        )));
+    }
+    let arr_f64 = arr.call_method1("astype", (np.getattr("float64")?,))?;
+    let arr_f64 = np.call_method1("ascontiguousarray", (arr_f64,))?;
+    arr_f64.extract::<Bound<'py, PyArray1<f64>>>()
+}
+
+#[inline]
+fn slices_overlap<T>(lhs: &[T], rhs: &[T]) -> bool {
+    if lhs.is_empty() || rhs.is_empty() {
+        return false;
+    }
+    let lhs_start = lhs.as_ptr() as usize;
+    let rhs_start = rhs.as_ptr() as usize;
+    let lhs_end = lhs_start.saturating_add(lhs.len().saturating_mul(size_of::<T>()));
+    let rhs_end = rhs_start.saturating_add(rhs.len().saturating_mul(size_of::<T>()));
+    lhs_start < rhs_end && rhs_start < lhs_end
+}
 
 // ---------------------------------------------------------------------------
 // PyConfig
@@ -28,16 +100,29 @@ impl PyConfig {
 }
 
 impl PyConfig {
-    fn to_native(&self) -> Config {
+    fn to_native(&self) -> PyResult<Config> {
         let split_merge = match (self.split, self.merge) {
-            (Some(s), Some(m)) if s > 1 => Some(SplitMerge { split: s, merge: m }),
-            (Some(s), None) if s > 1 => Some(SplitMerge { split: s, merge: s }),
-            _ => None,
+            (None, None) => None,
+            (None, Some(_)) => {
+                return Err(value_error("config.merge requires config.split"));
+            }
+            (Some(0), _) => {
+                return Err(value_error("config.split must be >= 1"));
+            }
+            (Some(1), None) | (Some(1), Some(1)) => None,
+            (Some(1), Some(_)) => {
+                return Err(value_error("config.merge must be 1 when config.split is 1"));
+            }
+            (Some(_), Some(0)) => {
+                return Err(value_error("config.merge must be >= 1"));
+            }
+            (Some(s), Some(m)) => Some(SplitMerge { split: s, merge: m }),
+            (Some(s), None) => Some(SplitMerge { split: s, merge: s }),
         };
-        Config {
+        Ok(Config {
             seed: self.seed,
             split_merge,
-        }
+        })
     }
 }
 
@@ -73,7 +158,15 @@ impl PyFactor {
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let b_slice = b
             .as_slice()
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("b must be contiguous"))?;
+            .map_err(|_| value_error("b must be contiguous"))?;
+        let n = self.inner.n();
+        if b_slice.len() > n {
+            return Err(value_error(format!(
+                "rhs length {} exceeds factor dimension {}",
+                b_slice.len(),
+                n
+            )));
+        }
         let x = self.inner.solve(b_slice);
         Ok(PyArray1::from_vec(py, x))
     }
@@ -86,11 +179,29 @@ impl PyFactor {
     ) -> PyResult<()> {
         let b_slice = b
             .as_slice()
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("b must be contiguous"))?;
+            .map_err(|_| value_error("b must be contiguous"))?;
         let mut out_rw = unsafe { out.as_array_mut() };
         let out_slice = out_rw
             .as_slice_mut()
-            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("out must be contiguous"))?;
+            .ok_or_else(|| value_error("out must be contiguous"))?;
+        let n = self.inner.n();
+        if b_slice.len() > n {
+            return Err(value_error(format!(
+                "rhs length {} exceeds factor dimension {}",
+                b_slice.len(),
+                n
+            )));
+        }
+        if out_slice.len() < n {
+            return Err(value_error(format!(
+                "out length {} is smaller than factor dimension {}",
+                out_slice.len(),
+                n
+            )));
+        }
+        if slices_overlap(b_slice, out_slice) {
+            return Err(value_error("b and out must not overlap"));
+        }
         self.inner.solve_into(b_slice, out_slice);
         Ok(())
     }
@@ -101,7 +212,7 @@ impl PyFactor {
 // ---------------------------------------------------------------------------
 
 fn approx_chol_err_to_py(e: Error) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(e.to_string())
+    value_error(e.to_string())
 }
 
 /// Factorize an SDDM matrix from raw CSR arrays.
@@ -123,16 +234,19 @@ fn factorize_raw<'py>(
 ) -> PyResult<PyFactor> {
     let rp = row_ptrs
         .as_slice()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("row_ptrs must be contiguous"))?;
+        .map_err(|_| value_error("row_ptrs must be contiguous"))?;
     let ci = col_indices
         .as_slice()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("col_indices must be contiguous"))?;
+        .map_err(|_| value_error("col_indices must be contiguous"))?;
     let vals = values
         .as_slice()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("values must be contiguous"))?;
+        .map_err(|_| value_error("values must be contiguous"))?;
 
     let csr = CsrRef::new(rp, ci, vals, n).map_err(approx_chol_err_to_py)?;
-    let native_config = config.map_or_else(Config::default, |c| c.to_native());
+    let native_config = match config {
+        Some(cfg) => cfg.to_native()?,
+        None => Config::default(),
+    };
     let factor = approx_chol::factorize_with(csr, native_config).map_err(approx_chol_err_to_py)?;
     Ok(PyFactor { inner: factor })
 }
@@ -155,40 +269,39 @@ fn factorize(
     let shape = matrix.getattr("shape")?.extract::<(usize, usize)>()?;
 
     if shape.0 != shape.1 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "matrix must be square",
-        ));
+        return Err(value_error("matrix must be square"));
+    }
+    if shape.0 > u32::MAX as usize {
+        return Err(value_error("matrix dimension exceeds u32::MAX"));
     }
 
-    // Convert to the expected dtypes (uint32 for indices, float64 for data).
+    // Keep duck-typed input support but validate shape, dtype, and index ranges
+    // before any narrowing conversions.
     let np = py.import("numpy")?;
+    let rp_arr = validate_integer_index_array(&np, &indptr, "indptr")?;
+    let ci_arr = validate_integer_index_array(&np, &indices, "indices")?;
+    let val_arr = validate_values_array(&np, &data, "data")?;
 
-    let rp_arr: PyReadonlyArray1<'_, u32> = np
-        .call_method1("asarray", (&indptr,))?
-        .call_method1("astype", (np.getattr("uint32")?,))?
-        .extract()?;
-    let ci_arr: PyReadonlyArray1<'_, u32> = np
-        .call_method1("asarray", (&indices,))?
-        .call_method1("astype", (np.getattr("uint32")?,))?
-        .extract()?;
-    let val_arr: PyReadonlyArray1<'_, f64> = np
-        .call_method1("asarray", (&data,))?
-        .call_method1("astype", (np.getattr("float64")?,))?
-        .extract()?;
+    let rp_ro = rp_arr.readonly();
+    let ci_ro = ci_arr.readonly();
+    let vals_ro = val_arr.readonly();
 
-    let rp = rp_arr
+    let rp = rp_ro
         .as_slice()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("indptr must be contiguous"))?;
-    let ci = ci_arr
+        .map_err(|_| value_error("indptr must be contiguous"))?;
+    let ci = ci_ro
         .as_slice()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("indices must be contiguous"))?;
-    let vals = val_arr
+        .map_err(|_| value_error("indices must be contiguous"))?;
+    let vals = vals_ro
         .as_slice()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("data must be contiguous"))?;
+        .map_err(|_| value_error("data must be contiguous"))?;
 
-    let n = shape.0 as u32;
+    let n = u32::try_from(shape.0).map_err(|_| value_error("matrix dimension exceeds u32::MAX"))?;
     let csr = CsrRef::new(rp, ci, vals, n).map_err(approx_chol_err_to_py)?;
-    let native_config = config.map_or_else(Config::default, |c| c.to_native());
+    let native_config = match config {
+        Some(cfg) => cfg.to_native()?,
+        None => Config::default(),
+    };
     let factor = approx_chol::factorize_with(csr, native_config).map_err(approx_chol_err_to_py)?;
     Ok(PyFactor { inner: factor })
 }
