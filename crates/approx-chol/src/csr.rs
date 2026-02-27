@@ -280,6 +280,40 @@ impl<T, I: PrimInt> OwnedCsr<T, I> {
 }
 
 #[cfg(feature = "sprs")]
+fn try_from_sprs_view_impl<'a, T, I: sprs::SpIndex + PrimInt>(
+    mat: sprs::CsMatViewI<'a, T, I>,
+) -> Result<CsrRef<'a, T, I>, Error> {
+    if !mat.is_csr() {
+        return Err(Error::InvalidCsr("expected CSR matrix, got CSC"));
+    }
+    let n = mat.rows();
+    if n != mat.cols() {
+        return Err(Error::InvalidCsr("expected square matrix"));
+    }
+    let n = u32::try_from(n).map_err(|_| Error::InvalidCsr("matrix dimension exceeds u32::MAX"))?;
+    let (indptr, indices, data) = mat.into_raw_storage();
+    Ok(CsrRef::new_unchecked(indptr, indices, data, n))
+}
+
+#[cfg(feature = "faer")]
+fn try_from_faer_view_impl<'a, T, I: faer::Index + PrimInt>(
+    mat: faer::sparse::SparseRowMatRef<'a, I, T>,
+) -> Result<CsrRef<'a, T, I>, Error> {
+    if mat.nrows() != mat.ncols() {
+        return Err(Error::InvalidCsr("expected square matrix"));
+    }
+    let n = u32::try_from(mat.nrows())
+        .map_err(|_| Error::InvalidCsr("matrix dimension exceeds u32::MAX"))?;
+    let symbolic = mat.symbolic();
+    Ok(CsrRef::new_unchecked(
+        symbolic.row_ptr(),
+        symbolic.col_idx(),
+        mat.val(),
+        n,
+    ))
+}
+
+#[cfg(feature = "sprs")]
 impl<'a, T, I> CsrRef<'a, T, I>
 where
     I: sprs::SpIndex + PrimInt,
@@ -289,17 +323,7 @@ where
     /// Returns [`Error::InvalidCsr`] if the matrix is not CSR, not
     /// square, or has dimension larger than `u32::MAX`.
     pub fn try_from_sprs_view(mat: sprs::CsMatViewI<'a, T, I>) -> Result<Self, Error> {
-        if !mat.is_csr() {
-            return Err(Error::InvalidCsr("expected CSR matrix, got CSC"));
-        }
-        let n = mat.rows();
-        if n != mat.cols() {
-            return Err(Error::InvalidCsr("expected square matrix"));
-        }
-        let n =
-            u32::try_from(n).map_err(|_| Error::InvalidCsr("matrix dimension exceeds u32::MAX"))?;
-        let (indptr, indices, data) = mat.into_raw_storage();
-        Ok(CsrRef::new_unchecked(indptr, indices, data, n))
+        try_from_sprs_view_impl(mat)
     }
 
     /// Fallible zero-copy conversion from a borrowed `sprs` CSR matrix.
@@ -321,18 +345,7 @@ where
     /// Returns [`Error::InvalidCsr`] if the matrix is not square or
     /// has dimension larger than `u32::MAX`.
     pub fn try_from_faer_view(mat: faer::sparse::SparseRowMatRef<'a, I, T>) -> Result<Self, Error> {
-        if mat.nrows() != mat.ncols() {
-            return Err(Error::InvalidCsr("expected square matrix"));
-        }
-        let n = u32::try_from(mat.nrows())
-            .map_err(|_| Error::InvalidCsr("matrix dimension exceeds u32::MAX"))?;
-        let symbolic = mat.symbolic();
-        Ok(CsrRef::new_unchecked(
-            symbolic.row_ptr(),
-            symbolic.col_idx(),
-            mat.val(),
-            n,
-        ))
+        try_from_faer_view_impl(mat)
     }
 
     /// Fallible zero-copy conversion from a borrowed `faer` sparse row matrix.
@@ -354,16 +367,7 @@ where
 #[cfg(feature = "sprs")]
 impl<'a, T, I: sprs::SpIndex + PrimInt> From<sprs::CsMatViewI<'a, T, I>> for CsrRef<'a, T, I> {
     fn from(mat: sprs::CsMatViewI<'a, T, I>) -> Self {
-        assert!(mat.is_csr(), "expected CSR matrix, got CSC");
-        let n = mat.rows();
-        assert_eq!(n, mat.cols(), "expected square matrix");
-        let (indptr, indices, data) = mat.into_raw_storage();
-        CsrRef::new_unchecked(
-            indptr,
-            indices,
-            data,
-            u32::try_from(n).expect("matrix dimension exceeds u32::MAX"),
-        )
+        try_from_sprs_view_impl(mat).expect("expected CSR square matrix with n <= u32::MAX")
     }
 }
 
@@ -393,14 +397,7 @@ impl<'a, T, I: faer::Index + PrimInt> From<faer::sparse::SparseRowMatRef<'a, I, 
     for CsrRef<'a, T, I>
 {
     fn from(mat: faer::sparse::SparseRowMatRef<'a, I, T>) -> Self {
-        assert_eq!(mat.nrows(), mat.ncols(), "expected square matrix");
-        let symbolic = mat.symbolic();
-        CsrRef::new_unchecked(
-            symbolic.row_ptr(),
-            symbolic.col_idx(),
-            mat.val(),
-            u32::try_from(mat.nrows()).expect("matrix dimension exceeds u32::MAX"),
-        )
+        try_from_faer_view_impl(mat).expect("expected square matrix with n <= u32::MAX")
     }
 }
 

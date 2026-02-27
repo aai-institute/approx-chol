@@ -4,7 +4,7 @@ use crate::sampling::WeightedSampler;
 use crate::Real;
 use num_traits::NumCast;
 
-use super::dedup::DedupWorkspace;
+use super::dedup::Ac2DedupWorkspace;
 use super::sampled_column::{SampledColumn, StarElimination};
 use super::Star;
 
@@ -20,7 +20,7 @@ pub(super) struct Ac2Star<S: WeightedSampler<T>, T: Real> {
     counts: Vec<u32>,
     /// Max multi-edges kept per neighbor pair after compression.
     merge_limit: u32,
-    dedup: DedupWorkspace<T>,
+    dedup: Ac2DedupWorkspace<T>,
     sampler: S,
 }
 
@@ -31,7 +31,7 @@ impl<S: WeightedSampler<T>, T: Real> Ac2Star<S, T> {
             entries: Vec::new(),
             counts: Vec::new(),
             merge_limit,
-            dedup: DedupWorkspace::new(n),
+            dedup: Ac2DedupWorkspace::new(n),
             sampler,
         }
     }
@@ -46,7 +46,7 @@ impl<S: WeightedSampler<T>, T: Real> Star<T> for Ac2Star<S, T> {
         ordering: &mut O,
     ) {
         graph.live_neighbors(v, &mut self.raw);
-        self.dedup.dedup_ac2(
+        self.dedup.dedup(
             &mut self.raw,
             &mut self.entries,
             &mut self.counts,
@@ -60,21 +60,10 @@ impl<S: WeightedSampler<T>, T: Real> Star<T> for Ac2Star<S, T> {
     /// Algorithm 6 (GKS 2023): sample one column via batched clique-tree sampling.
     fn sample(&mut self, pivot_diag: T, column: &mut SampledColumn<T>) {
         debug_assert_eq!(self.entries.len(), self.counts.len());
-        column.clear();
         let entries = &self.entries;
-        let n = entries.len();
-
-        if n == 0 {
-            column.diagonal = pivot_diag;
+        let Some(n) = column.begin_sampling(entries, pivot_diag) else {
             return;
-        }
-
-        if n == 1 {
-            column.neighbors.push(entries[0].0);
-            column.fractions.push(T::one());
-            column.diagonal = pivot_diag;
-            return;
-        }
+        };
 
         let total_weight = entries.iter().fold(T::zero(), |a, e| a + e.1);
 
@@ -111,10 +100,7 @@ impl<S: WeightedSampler<T>, T: Real> Star<T> for Ac2Star<S, T> {
             elim.advance(f);
         }
 
-        let (j_last, w_last) = entries[n - 1];
-        column.neighbors.push(j_last);
-        column.fractions.push(T::one());
-        column.diagonal = elim.diagonal(w_last);
+        column.finalize_sampling(entries[n - 1], &elim);
     }
 
     fn is_empty(&self) -> bool {

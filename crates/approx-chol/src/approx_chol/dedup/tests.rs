@@ -10,7 +10,7 @@ fn nbr(to: u32, fill_weight: f64, count: u32) -> Neighbor<f64> {
 
 #[test]
 fn test_compress_merge_caps_count() {
-    let mut dedup = DedupWorkspace::<f64>::new(10);
+    let mut dedup = Ac2DedupWorkspace::<f64>::new(10);
     let mut raw = vec![
         nbr(3, 1.0, 1),
         nbr(3, 1.0, 1),
@@ -21,7 +21,7 @@ fn test_compress_merge_caps_count() {
     let mut entries = Vec::new();
     let mut counts = Vec::new();
 
-    dedup.dedup_ac2(&mut raw, &mut entries, &mut counts, 2);
+    dedup.dedup(&mut raw, &mut entries, &mut counts, 2);
 
     // Neighbor 3 had 4 copies -> capped to merge_limit=2
     assert_eq!(entries.len(), 2);
@@ -45,12 +45,12 @@ fn test_compress_merge_caps_count() {
 #[test]
 fn test_scatter_ac2_large_multiplicity_caps_without_overflow() {
     let n_edges = 70_000usize;
-    let mut dedup = DedupWorkspace::<f64>::new(4);
+    let mut dedup = Ac2DedupWorkspace::<f64>::new(4);
     let mut raw = vec![nbr(2, 1.0, 1); n_edges];
     let mut entries = Vec::new();
     let mut counts = Vec::new();
 
-    dedup.dedup_ac2(&mut raw, &mut entries, &mut counts, 2);
+    dedup.dedup(&mut raw, &mut entries, &mut counts, 2);
 
     assert_eq!(entries, vec![(2, n_edges as f64)]);
     assert_eq!(counts, vec![2]);
@@ -59,13 +59,13 @@ fn test_scatter_ac2_large_multiplicity_caps_without_overflow() {
 
 #[test]
 fn test_virtual_split_plus_fill_edge() {
-    let mut dedup = DedupWorkspace::<f64>::new(10);
+    let mut dedup = Ac2DedupWorkspace::<f64>::new(10);
     // Simulate virtual split edge (count=3, total_weight=6.0) + fill edge (count=1) to same neighbor
     let mut raw = vec![nbr(3, 6.0, 3), nbr(3, 1.5, 1)];
     let mut entries = Vec::new();
     let mut counts = Vec::new();
 
-    dedup.dedup_ac2(&mut raw, &mut entries, &mut counts, 10);
+    dedup.dedup(&mut raw, &mut entries, &mut counts, 10);
 
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].0, 3);
@@ -99,8 +99,8 @@ fn test_dedup_ac_sort_and_scatter_paths_agree() {
     let n_vertices_small = n_small + 1; // for vertex IDs
     let n_vertices_large = n_large + 1;
 
-    let mut dedup_small = DedupWorkspace::<f64>::new(n_vertices_small);
-    let mut dedup_large = DedupWorkspace::<f64>::new(n_vertices_large);
+    let mut dedup_small = AcDedupWorkspace::<f64>::new(n_vertices_small);
+    let mut dedup_large = AcDedupWorkspace::<f64>::new(n_vertices_large);
 
     let mut raw_small = make_raw_with_duplicate(n_small);
     let mut raw_large = make_raw_with_duplicate(n_large);
@@ -108,8 +108,8 @@ fn test_dedup_ac_sort_and_scatter_paths_agree() {
     let mut entries_small: Vec<(u32, f64)> = Vec::new();
     let mut entries_large: Vec<(u32, f64)> = Vec::new();
 
-    dedup_small.dedup_ac(&mut raw_small, &mut entries_small);
-    dedup_large.dedup_ac(&mut raw_large, &mut entries_large);
+    dedup_small.dedup(&mut raw_small, &mut entries_small);
+    dedup_large.dedup(&mut raw_large, &mut entries_large);
 
     // Both paths must have merged vertex 0.
     assert!(
@@ -192,8 +192,8 @@ fn test_dedup_ac2_sort_and_scatter_paths_agree() {
     let n_vertices_small = n_unique_small + 1;
     let n_vertices_large = n_unique_large + 1;
 
-    let mut dedup_small = DedupWorkspace::<f64>::new(n_vertices_small);
-    let mut dedup_large = DedupWorkspace::<f64>::new(n_vertices_large);
+    let mut dedup_small = Ac2DedupWorkspace::<f64>::new(n_vertices_small);
+    let mut dedup_large = Ac2DedupWorkspace::<f64>::new(n_vertices_large);
 
     let merge_limit = 4u32;
 
@@ -202,13 +202,13 @@ fn test_dedup_ac2_sort_and_scatter_paths_agree() {
     let mut entries_large: Vec<(u32, f64)> = Vec::new();
     let mut counts_large: Vec<u32> = Vec::new();
 
-    dedup_small.dedup_ac2(
+    dedup_small.dedup(
         &mut raw_small,
         &mut entries_small,
         &mut counts_small,
         merge_limit,
     );
-    dedup_large.dedup_ac2(
+    dedup_large.dedup(
         &mut raw_large,
         &mut entries_large,
         &mut counts_large,

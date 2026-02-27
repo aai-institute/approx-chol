@@ -38,6 +38,34 @@ impl<T: Real> SampledColumn<T> {
         self.fill_edges.clear();
     }
 
+    /// Initialize column sampling from a star's deduplicated neighbor list.
+    ///
+    /// Returns `Some(n)` when sampling should continue (`n >= 2`), otherwise
+    /// writes the trivial result (`n == 0` or `n == 1`) and returns `None`.
+    pub(super) fn begin_sampling(&mut self, entries: &[(u32, T)], pivot_diag: T) -> Option<usize> {
+        self.clear();
+        match entries {
+            [] => {
+                self.diagonal = pivot_diag;
+                None
+            }
+            [(j, _)] => {
+                self.neighbors.push(*j);
+                self.fractions.push(T::one());
+                self.diagonal = pivot_diag;
+                None
+            }
+            _ => Some(entries.len()),
+        }
+    }
+
+    /// Finalize sampling with the last star neighbor (always fraction 1).
+    pub(super) fn finalize_sampling(&mut self, last: (u32, T), elim: &StarElimination<T>) {
+        self.neighbors.push(last.0);
+        self.fractions.push(T::one());
+        self.diagonal = elim.diagonal(last.1);
+    }
+
     /// Apply fill-in edges to the graph, update diagonal values, and notify ordering.
     pub fn apply_fill_in<G: EliminationGraph<T>, O: EliminationOrdering<T>>(
         &self,

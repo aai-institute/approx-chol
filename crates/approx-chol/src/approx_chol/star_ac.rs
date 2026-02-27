@@ -3,7 +3,7 @@ use crate::ordering::EliminationOrdering;
 use crate::sampling::WeightedSampler;
 use crate::Real;
 
-use super::dedup::DedupWorkspace;
+use super::dedup::AcDedupWorkspace;
 use super::sampled_column::{SampledColumn, StarElimination};
 use super::Star;
 
@@ -15,7 +15,7 @@ pub(super) struct AcStar<S: WeightedSampler<T>, T: Real> {
     /// Raw neighbor output from `live_neighbors`.
     raw: Vec<Neighbor<T>>,
     entries: Vec<(u32, T)>,
-    dedup: DedupWorkspace<T>,
+    dedup: AcDedupWorkspace<T>,
     sampler: S,
 }
 
@@ -24,7 +24,7 @@ impl<S: WeightedSampler<T>, T: Real> AcStar<S, T> {
         Self {
             raw: Vec::new(),
             entries: Vec::new(),
-            dedup: DedupWorkspace::new(n),
+            dedup: AcDedupWorkspace::new(n),
             sampler,
         }
     }
@@ -39,7 +39,7 @@ impl<S: WeightedSampler<T>, T: Real> Star<T> for AcStar<S, T> {
         ordering: &mut O,
     ) {
         graph.live_neighbors(v, &mut self.raw);
-        self.dedup.dedup_ac(&mut self.raw, &mut self.entries);
+        self.dedup.dedup(&mut self.raw, &mut self.entries);
         for &u in self.dedup.merged() {
             ordering.notify_edges_merged(u);
         }
@@ -47,21 +47,10 @@ impl<S: WeightedSampler<T>, T: Real> Star<T> for AcStar<S, T> {
 
     /// Algorithm 5 (GKS 2023): sample one column of the approximate Cholesky factor.
     fn sample(&mut self, pivot_diag: T, column: &mut SampledColumn<T>) {
-        column.clear();
         let entries = &self.entries;
-        let n = entries.len();
-
-        if n == 0 {
-            column.diagonal = pivot_diag;
+        let Some(n) = column.begin_sampling(entries, pivot_diag) else {
             return;
-        }
-
-        if n == 1 {
-            column.neighbors.push(entries[0].0);
-            column.fractions.push(T::one());
-            column.diagonal = pivot_diag;
-            return;
-        }
+        };
 
         self.sampler.prepare(entries);
         let mut elim = StarElimination::new(pivot_diag);
@@ -76,10 +65,7 @@ impl<S: WeightedSampler<T>, T: Real> Star<T> for AcStar<S, T> {
             elim.advance(f);
         }
 
-        let (j_last, w_last) = entries[n - 1];
-        column.neighbors.push(j_last);
-        column.fractions.push(T::one());
-        column.diagonal = elim.diagonal(w_last);
+        column.finalize_sampling(entries[n - 1], &elim);
     }
 
     fn is_empty(&self) -> bool {
