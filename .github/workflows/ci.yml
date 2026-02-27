@@ -11,8 +11,15 @@ env:
 
 jobs:
   rust:
-    name: Rust checks
-    runs-on: ubuntu-latest
+    name: Rust checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -25,25 +32,32 @@ jobs:
         run: cargo test --workspace --all-features
 
   python:
-    name: Python bindings tests
-    runs-on: ubuntu-latest
+    name: Python bindings tests (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+        python-version:
+          - "3.11"
+          - "3.12"
+          - "3.13"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
       - uses: Swatinem/rust-cache@v2
       - name: Install package and test deps
         run: |
-          python -m venv .venv
-          . .venv/bin/activate
           python -m pip install --upgrade pip
           pip install -e . pytest
       - name: pytest
-        run: |
-          . .venv/bin/activate
-          pytest tests/ -v
+        run: pytest tests/ -v
 
   coverage:
     name: Coverage (Rust + Python)
