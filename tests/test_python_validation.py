@@ -1,31 +1,7 @@
-import importlib.machinery
-import importlib.util
-from pathlib import Path
-
 import numpy as np
 import pytest
 
-
-def _load_extension_module():
-    repo_root = Path(__file__).resolve().parents[1]
-    candidates = (
-        repo_root / "target/debug/lib_approx_chol.dylib",
-        repo_root / "target/debug/lib_approx_chol.so",
-        repo_root / "target/debug/_approx_chol.pyd",
-    )
-
-    for path in candidates:
-        if path.exists():
-            loader = importlib.machinery.ExtensionFileLoader("_approx_chol", str(path))
-            spec = importlib.util.spec_from_loader("_approx_chol", loader)
-            assert spec is not None
-            module = importlib.util.module_from_spec(spec)
-            loader.exec_module(module)
-            return module
-
-    pytest.skip(
-        "approx-chol Python extension not found; build with `cargo build -p approx-chol-py` first"
-    )
+from tests._ext_loader import load_extension_module
 
 
 def _base_csr():
@@ -36,7 +12,7 @@ def _base_csr():
 
 
 def test_config_is_strictly_validated():
-    ext = _load_extension_module()
+    ext = load_extension_module()
     row_ptrs, col_indices, values = _base_csr()
 
     with pytest.raises(ValueError, match="config.split must be >= 1"):
@@ -50,7 +26,7 @@ def test_config_is_strictly_validated():
 
 
 def test_duck_typed_factorize_validates_indices_and_dimension():
-    ext = _load_extension_module()
+    ext = load_extension_module()
 
     class MatrixLike:
         def __init__(self, indptr, indices, data, shape):
@@ -97,7 +73,7 @@ def test_duck_typed_factorize_validates_indices_and_dimension():
 
 
 def test_solve_and_solve_into_raise_value_error_for_shape_and_overlap():
-    ext = _load_extension_module()
+    ext = load_extension_module()
     row_ptrs, col_indices, values = _base_csr()
     factor = ext.factorize_raw(row_ptrs, col_indices, values, 2)
 

@@ -22,7 +22,7 @@ cargo-llvm-cov = ">=0.8.4,<0.9"
 default = { features = ["build", "dev"], solve-group = "default" }
 
 [tasks]
-test = "pytest tests/ -v"
+test = "maturin develop --uv && pytest tests/ -v"
 develop = "maturin develop --uv --release"
 bench-smoke = "cargo bench -p approx-chol --bench smoke -- --sample-size 10 --warm-up-time 0.05 --measurement-time 0.1"
 coverage = "cargo llvm-cov --workspace --all-features --summary-only"
