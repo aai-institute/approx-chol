@@ -34,7 +34,13 @@ fn bench_to_owned_u32_for_size(c: &mut Criterion, size: usize) {
             let converted = black_box(csr_u32)
                 .to_owned_u32()
                 .expect("u32 indices must fit in u32");
-            black_box(converted.as_ref().row_ptrs().len());
+            black_box(
+                converted
+                    .try_as_ref()
+                    .expect("owned CSR should stay valid")
+                    .row_ptrs()
+                    .len(),
+            );
         });
     });
 
@@ -43,7 +49,13 @@ fn bench_to_owned_u32_for_size(c: &mut Criterion, size: usize) {
             let converted = black_box(csr_usize)
                 .to_owned_u32()
                 .expect("usize indices from this grid must fit in u32");
-            black_box(converted.as_ref().row_ptrs().len());
+            black_box(
+                converted
+                    .try_as_ref()
+                    .expect("owned CSR should stay valid")
+                    .row_ptrs()
+                    .len(),
+            );
         });
     });
 

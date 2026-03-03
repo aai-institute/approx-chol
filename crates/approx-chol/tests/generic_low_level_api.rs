@@ -1,4 +1,4 @@
-use approx_chol::{factorize, Builder, Config, CsrRef, Error};
+use approx_chol::{factorize, Builder, Config, ConfigError, CsrError, CsrRef, Error};
 use num_traits::{Float, FromPrimitive, PrimInt};
 
 fn idx<I: TryFrom<usize>>(value: usize) -> I
@@ -164,7 +164,7 @@ fn split_zero_is_rejected() {
         .expect_err("split_merge=0 should return InvalidConfig");
     assert!(matches!(
         err,
-        Error::InvalidConfig("split_merge must be >= 1")
+        Error::InvalidConfig(ConfigError::SplitMergeMustBePositive { split_merge: 0 })
     ));
 }
 
@@ -182,6 +182,6 @@ fn factorize_catches_panicking_conversion() {
         factorize::<f64, u32, _>(PanicIntoCsr).expect_err("panicking conversion must map to error");
     assert!(matches!(
         err,
-        Error::InvalidCsr("input conversion panicked")
+        Error::InvalidCsr(CsrError::InputConversionPanicked)
     ));
 }

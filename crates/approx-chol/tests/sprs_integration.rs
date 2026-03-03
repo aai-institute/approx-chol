@@ -1,6 +1,6 @@
 #![cfg(feature = "sprs")]
 
-use approx_chol::{factorize, Builder, Config, CsrRef, Error};
+use approx_chol::{factorize, Builder, Config, CsrError, CsrRef, Error};
 use num_traits::{Float, FromPrimitive};
 
 /// Build a 4-node path graph Laplacian (0-1-2-3) as a sprs CSR matrix.
@@ -112,7 +112,7 @@ fn sprs_try_from_csc_returns_error() {
     let err = CsrRef::try_from_sprs_view(csc.view()).expect_err("CSC must be rejected");
     assert!(matches!(
         err,
-        Error::InvalidCsr("expected CSR matrix, got CSC")
+        Error::InvalidCsr(CsrError::ExpectedCsrMatrixGotCsc)
     ));
 }
 
@@ -123,7 +123,7 @@ fn sprs_factorize_rejects_csc_with_error() {
     let err = factorize(&csc).expect_err("CSC must be rejected");
     assert!(matches!(
         err,
-        Error::InvalidCsr("expected CSR matrix, got CSC")
+        Error::InvalidCsr(CsrError::ExpectedCsrMatrixGotCsc)
     ));
 }
 
@@ -131,5 +131,8 @@ fn sprs_factorize_rejects_csc_with_error() {
 fn sprs_try_from_non_square_returns_error() {
     let mat = sprs::CsMatI::<f64, u32>::new((3, 4), vec![0, 1, 2, 3], vec![0, 1, 2], vec![1.0; 3]);
     let err = CsrRef::try_from_sprs(&mat).expect_err("non-square matrix must be rejected");
-    assert!(matches!(err, Error::InvalidCsr("expected square matrix")));
+    assert!(matches!(
+        err,
+        Error::InvalidCsr(CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 })
+    ));
 }

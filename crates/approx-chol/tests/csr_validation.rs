@@ -90,7 +90,7 @@ fn new_rejects_non_zero_based_row_ptrs() {
         Err(Error::InvalidCsr(_)) => {}
         Err(other) => panic!("expected InvalidCsr, got {other:?}"),
         Ok(csr) => {
-            let (_, row0_vals) = csr.row(0);
+            let (_, row0_vals) = csr.try_row(0).expect("row 0 should be valid");
             let silently_dropped = !row0_vals.iter().any(|&v| (v - 1234.0).abs() < 1e-12);
             assert!(
                 silently_dropped,

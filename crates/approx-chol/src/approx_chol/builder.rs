@@ -2,7 +2,7 @@ use super::decomposition::EliminationSequence;
 use crate::graph::{EliminationGraph, GraphBuild, MultiEdgeGraph, SlimGraph};
 use crate::ordering::DynamicOrdering;
 use crate::sampling::{CdfSampler, WeightedSampler};
-use crate::{CsrRef, Error, Factor};
+use crate::{ConfigError, CsrError, CsrRef, Error, Factor};
 use num_traits::PrimInt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -68,10 +68,11 @@ where
         <M as TryInto<CsrRef<'a, T, I>>>::Error: Into<Error>,
     {
         let csr = catch_unwind(AssertUnwindSafe(|| sddm.try_into()))
-            .map_err(|_| Error::InvalidCsr("input conversion panicked"))?;
+            .map_err(|_| Error::InvalidCsr(CsrError::InputConversionPanicked))?;
         let csr = csr.map_err(Into::into)?;
         let converted = csr.to_owned_u32()?;
-        self.build_u32(converted.as_ref())
+        let converted_ref = converted.try_as_ref()?;
+        self.build_u32(converted_ref)
     }
 
     fn build_u32(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
@@ -116,7 +117,9 @@ where
             return Ok(());
         };
         if split_merge == 0 {
-            return Err(Error::InvalidConfig("split_merge must be >= 1"));
+            return Err(Error::InvalidConfig(
+                ConfigError::SplitMergeMustBePositive { split_merge },
+            ));
         }
         Ok(())
     }

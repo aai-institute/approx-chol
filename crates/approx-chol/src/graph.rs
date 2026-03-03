@@ -179,13 +179,13 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
         let n = csr.n();
         assert!(n <= u32::MAX as usize, "graph size exceeds u32::MAX");
         let mut adj: Vec<Vec<E>> = (0..n)
-            .map(|row| Vec::with_capacity(csr.row(row).0.len()))
+            .map(|row| Vec::with_capacity(csr.row_unchecked(row).0.len()))
             .collect();
         let mut diag = vec![T::zero(); n];
         let mut row_sums = vec![T::zero(); n];
 
         for row in 0..n {
-            let (cols, vals) = csr.row(row);
+            let (cols, vals) = csr.row_unchecked(row);
             for (&col, &val) in cols.iter().zip(vals.iter()) {
                 let col_usize = col as usize;
                 debug_assert!(
