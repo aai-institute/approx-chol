@@ -93,7 +93,7 @@ where
                     graph,
                     diagonal: diag,
                     ..
-                } = SlimGraph::<T>::from_sddm(sddm);
+                } = SlimGraph::<T>::from_sddm(sddm)?;
                 Ok(self.build_from_graph(graph, diag, sampler))
             }
             Some(k) => {
@@ -101,7 +101,7 @@ where
                     mut graph,
                     diagonal: diag,
                     ..
-                } = MultiEdgeGraph::<T>::from_sddm(sddm);
+                } = MultiEdgeGraph::<T>::from_sddm(sddm)?;
                 graph.mark_split_edges(k);
                 Ok(self.build_from_graph(graph, diag, sampler))
             }

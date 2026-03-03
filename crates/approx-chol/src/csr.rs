@@ -154,12 +154,6 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
         Ok((&self.col_indices[start..end], &self.values[start..end]))
     }
 
-    #[inline]
-    pub(crate) fn row_unchecked(&self, i: usize) -> (&'a [I], &'a [T]) {
-        self.try_row(i)
-            .expect("row index must be < n and row pointers validated")
-    }
-
     /// Number of rows (and columns — the matrix is square).
     #[inline]
     pub fn n(&self) -> usize {
@@ -171,12 +165,11 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
         let n = self.n as usize;
         debug_assert_eq!(self.row_ptrs.len(), n + 1);
         debug_assert_eq!(self.col_indices.len(), self.values.len());
-        debug_assert_eq!(
-            self.row_ptrs[n]
-                .to_usize()
-                .expect("row_ptr value cannot be represented as usize"),
-            self.col_indices.len()
-        );
+        if let Some(last) = self.row_ptrs[n].to_usize() {
+            debug_assert_eq!(last, self.col_indices.len());
+        } else {
+            debug_assert!(false, "row_ptr value cannot be represented as usize");
+        }
     }
 }
 

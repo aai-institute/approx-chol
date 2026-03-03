@@ -1,6 +1,6 @@
 //! Elimination graph for approximate Cholesky factorization.
 
-use crate::{CsrRef, Real};
+use crate::{CsrRef, Error, Real};
 use num_traits::NumCast;
 
 /// Named return type for [`EliminationGraph::from_sddm`].
@@ -23,7 +23,7 @@ pub(crate) struct Neighbor<T> {
 /// Contract for a mutable graph that supports vertex elimination and fill-in.
 pub(crate) trait EliminationGraph<T: Real> {
     /// Construct from a CSR SDDM matrix.
-    fn from_sddm(csr: CsrRef<'_, T, u32>) -> GraphBuild<Self, T>
+    fn from_sddm(csr: CsrRef<'_, T, u32>) -> Result<GraphBuild<Self, T>, Error>
     where
         Self: Sized;
 
@@ -175,17 +175,19 @@ pub(crate) type MultiEdgeGraph<T> = AdjListGraph<MultiEdge<T>, T>;
 const RETAIN_ADJ_CAPACITY_MAX: usize = 64;
 
 impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
-    fn from_sddm(csr: CsrRef<'_, T, u32>) -> GraphBuild<Self, T> {
+    fn from_sddm(csr: CsrRef<'_, T, u32>) -> Result<GraphBuild<Self, T>, Error> {
         let n = csr.n();
         assert!(n <= u32::MAX as usize, "graph size exceeds u32::MAX");
-        let mut adj: Vec<Vec<E>> = (0..n)
-            .map(|row| Vec::with_capacity(csr.row_unchecked(row).0.len()))
-            .collect();
+        let mut adj: Vec<Vec<E>> = Vec::with_capacity(n);
+        for row in 0..n {
+            let (cols, _) = csr.try_row(row)?;
+            adj.push(Vec::with_capacity(cols.len()));
+        }
         let mut diag = vec![T::zero(); n];
         let mut row_sums = vec![T::zero(); n];
 
         for row in 0..n {
-            let (cols, vals) = csr.row_unchecked(row);
+            let (cols, vals) = csr.try_row(row)?;
             for (&col, &val) in cols.iter().zip(vals.iter()) {
                 let col_usize = col as usize;
                 debug_assert!(
@@ -205,7 +207,7 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
             }
         }
 
-        Self::build_augmented_laplacian(adj, diag, &row_sums)
+        Ok(Self::build_augmented_laplacian(adj, diag, &row_sums))
     }
 
     fn n(&self) -> usize {
@@ -219,9 +221,10 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
     fn live_neighbors(&mut self, v: usize, scratch: &mut Vec<Neighbor<T>>) {
         scratch.clear();
         scratch.extend(self.adj[v].iter().filter_map(|e| {
+            let count_scalar = <T as NumCast>::from(e.count())?;
             (e.weight() > T::zero() && !self.eliminated.get(e.to() as usize)).then_some(Neighbor {
                 to: e.to(),
-                fill_weight: e.weight() * <T as NumCast>::from(e.count()).expect("count to scalar"),
+                fill_weight: e.weight() * count_scalar,
                 count: e.count(),
             })
         }));
@@ -276,9 +279,9 @@ fn surplus_stats<T: Real>(row_sums: &[T]) -> (T, T, usize) {
 /// Small epsilon for Laplacian augmentation, scaled to floating-point precision.
 fn augmentation_epsilon<T: Real>() -> T {
     if core::mem::size_of::<T>() <= 4 {
-        T::from(1e-6_f64).expect("finite epsilon")
+        T::from(1e-6_f64).unwrap_or_else(T::epsilon)
     } else {
-        T::from(1e-10_f64).expect("finite epsilon")
+        T::from(1e-10_f64).unwrap_or_else(T::epsilon)
     }
 }
 
@@ -357,7 +360,10 @@ impl<T: Real> MultiEdgeGraph<T> {
         if k <= 1 {
             return;
         }
-        let inv_k = T::one() / <T as NumCast>::from(k).expect("k to scalar");
+        let Some(k_scalar) = <T as NumCast>::from(k) else {
+            return;
+        };
+        let inv_k = T::one() / k_scalar;
         for adj_list in &mut self.adj {
             for edge in adj_list.iter_mut() {
                 edge.weight = edge.weight * inv_k;
