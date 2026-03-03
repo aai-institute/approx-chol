@@ -1,11 +1,22 @@
 use approx_chol::{Config, CsrRef, Error};
-use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
+use numpy::{BorrowError, PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
 use std::mem::size_of;
 
 #[inline]
 fn value_error(message: impl Into<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.into())
+}
+
+#[inline]
+fn borrow_error(name: &str, err: BorrowError) -> PyErr {
+    match err {
+        BorrowError::AlreadyBorrowed => {
+            pyo3::exceptions::PyBufferError::new_err(format!("{name} is already borrowed"))
+        }
+        BorrowError::NotWriteable => value_error(format!("{name} must be writeable")),
+        _ => pyo3::exceptions::PyRuntimeError::new_err(format!("failed to borrow {name}: {err}")),
+    }
 }
 
 fn validate_integer_index_array<'py>(
@@ -167,10 +178,6 @@ impl PyFactor {
         let b_slice = b
             .as_slice()
             .map_err(|_| value_error("b must be contiguous"))?;
-        let mut out_rw = unsafe { out.as_array_mut() };
-        let out_slice = out_rw
-            .as_slice_mut()
-            .ok_or_else(|| value_error("out must be contiguous"))?;
         let n = self.inner.n();
         if b_slice.len() > n {
             return Err(value_error(format!(
@@ -179,16 +186,28 @@ impl PyFactor {
                 n
             )));
         }
-        if out_slice.len() < n {
+        // Validate overlap and shape via shared borrows first. This prevents
+        // taking a mutable NumPy view before proving it is safe to write.
+        let out_ro = out.try_readonly().map_err(|e| borrow_error("out", e))?;
+        let out_ro_slice = out_ro
+            .as_slice()
+            .map_err(|_| value_error("out must be contiguous"))?;
+        if out_ro_slice.len() < n {
             return Err(value_error(format!(
                 "out length {} is smaller than factor dimension {}",
-                out_slice.len(),
+                out_ro_slice.len(),
                 n
             )));
         }
-        if slices_overlap(b_slice, out_slice) {
+        if slices_overlap(b_slice, out_ro_slice) {
             return Err(value_error("b and out must not overlap"));
         }
+        drop(out_ro);
+
+        let mut out_rw = out.try_readwrite().map_err(|e| borrow_error("out", e))?;
+        let out_slice = out_rw
+            .as_slice_mut()
+            .map_err(|_| value_error("out must be contiguous"))?;
         self.inner.solve_into(b_slice, out_slice);
         Ok(())
     }
