@@ -23,7 +23,7 @@ fn sddm_4() -> (Vec<u32>, Vec<u32>, Vec<f64>, u32) {
 #[test]
 fn gremban_augmented_for_sddm() {
     let (rp, ci, vals, n) = sddm_4();
-    let csr = CsrRef::new_unchecked(&rp, &ci, &vals, n);
+    let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid SDDM");
     let factor = Builder::new(Config::default()).build(csr).unwrap();
     // Gremban augmentation adds one extra vertex for SDDM matrices
     assert!(
@@ -95,7 +95,9 @@ fn solve_into_gives_finite_nontrivial_solution() {
     rhs[n_orig - 1] = -1.0;
 
     let mut work = vec![0.0; n];
-    factor.solve_into(&rhs, &mut work);
+    factor
+        .solve_into(&rhs, &mut work)
+        .expect("solve_into should succeed");
 
     assert!(
         work.iter().all(|x| x.is_finite()),
@@ -123,10 +125,14 @@ fn no_projection_differs_from_projection() {
     rhs[n_orig - 1] = -1.0;
 
     let mut with_proj = vec![0.0; n];
-    factor.solve_into_with_projection(&rhs, &mut with_proj, true);
+    factor
+        .solve_into_with_projection(&rhs, &mut with_proj, true)
+        .expect("solve_into_with_projection should succeed");
 
     let mut no_proj = vec![0.0; n];
-    factor.solve_into_with_projection(&rhs, &mut no_proj, false);
+    factor
+        .solve_into_with_projection(&rhs, &mut no_proj, false)
+        .expect("solve_into_with_projection should succeed");
 
     // The zero-mean projection should shift the solution; results must differ
     let any_different = with_proj
@@ -153,10 +159,12 @@ fn allocating_solve_matches_solve_into() {
 
     // solve_into reference
     let mut work = vec![0.0; n];
-    factor.solve_into(&rhs, &mut work);
+    factor
+        .solve_into(&rhs, &mut work)
+        .expect("solve_into should succeed");
 
     // allocating solve()
-    let result = factor.solve(&rhs);
+    let result = factor.solve(&rhs).expect("solve should succeed");
 
     assert_eq!(result.len(), n);
     for (a, b) in result.iter().zip(work.iter()) {
@@ -177,12 +185,16 @@ fn solve_in_place_matches_no_projection() {
 
     // solve_into_with_projection(false) — copies rhs, then forward+backward
     let mut reference = vec![0.0; n];
-    factor.solve_into_with_projection(&rhs, &mut reference, false);
+    factor
+        .solve_into_with_projection(&rhs, &mut reference, false)
+        .expect("solve_into_with_projection should succeed");
 
     // solve_in_place — caller does the copy, then forward+backward
     let mut in_place = vec![0.0; n];
     in_place[..rhs.len()].copy_from_slice(&rhs);
-    factor.solve_in_place(&mut in_place);
+    factor
+        .solve_in_place(&mut in_place)
+        .expect("solve_in_place should succeed");
 
     for (a, b) in reference.iter().zip(in_place.iter()) {
         assert!(
@@ -202,7 +214,7 @@ fn try_solve_matches_solve() {
     rhs[0] = 1.0;
     rhs[n_orig - 1] = -1.0;
 
-    let x = factor.solve(&rhs);
+    let x = factor.solve(&rhs).expect("solve should succeed");
     let x_try = factor.try_solve(&rhs).expect("try_solve should succeed");
     assert_eq!(x, x_try, "try_solve must match solve");
 }
@@ -268,8 +280,7 @@ fn try_solve_in_place_reports_short_work_buffer() {
 }
 
 #[test]
-#[should_panic(expected = "work buffer too small")]
-fn solve_into_panics_on_short_work_buffer() {
+fn solve_into_reports_short_work_buffer() {
     let lap = grid_laplacian(4, 4);
     let n_orig = lap.n as usize;
     let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
@@ -278,15 +289,32 @@ fn solve_into_panics_on_short_work_buffer() {
     rhs[0] = 1.0;
     rhs[n_orig - 1] = -1.0;
     let mut work = vec![0.0; factor.n().saturating_sub(1)];
-    factor.solve_into(&rhs, &mut work);
+    let err = factor
+        .solve_into(&rhs, &mut work)
+        .expect_err("short work buffer must fail");
+    assert!(matches!(
+        err,
+        SolveError::WorkBufferTooSmall {
+            work_len: _,
+            factor_dim: _
+        }
+    ));
 }
 
 #[test]
-#[should_panic(expected = "work buffer too small")]
-fn solve_in_place_panics_on_short_work_buffer() {
+fn solve_in_place_reports_short_work_buffer() {
     let lap = grid_laplacian(4, 4);
     let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
 
     let mut y = vec![0.0; factor.n().saturating_sub(1)];
-    factor.solve_in_place(&mut y);
+    let err = factor
+        .solve_in_place(&mut y)
+        .expect_err("short in-place work buffer must fail");
+    assert!(matches!(
+        err,
+        SolveError::WorkBufferTooSmall {
+            work_len: _,
+            factor_dim: _
+        }
+    ));
 }

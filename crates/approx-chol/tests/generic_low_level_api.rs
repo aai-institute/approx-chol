@@ -45,7 +45,9 @@ where
         T::from_f64(-1.0).expect("conv"),
     ];
     let mut work = vec![T::zero(); factor.n()];
-    factor.solve_into(&b, &mut work);
+    factor
+        .solve_into(&b, &mut work)
+        .expect("solve_into should succeed");
 
     assert!(work.iter().all(|x| x.is_finite()));
     let min_signal = T::from_f64(1e-6).expect("conv");
@@ -75,7 +77,9 @@ where
         T::from_f64(-1.0).expect("conv"),
     ];
     let mut work = vec![T::zero(); factor.n()];
-    factor.solve_into(&b, &mut work);
+    factor
+        .solve_into(&b, &mut work)
+        .expect("solve_into should succeed");
     assert!(work.iter().all(|x| x.is_finite()));
 }
 
@@ -119,7 +123,9 @@ fn low_level_default_factorize_u32_no_conversion_path() {
 
     let b = [1.0_f64, -1.0, 1.0, -1.0];
     let mut work = vec![0.0; factor.n()];
-    factor.solve_into(&b, &mut work);
+    factor
+        .solve_into(&b, &mut work)
+        .expect("solve_into should succeed");
     assert!(work.iter().all(|x| x.is_finite()));
 }
 
@@ -178,14 +184,4 @@ fn factorize_catches_panicking_conversion() {
         err,
         Error::InvalidCsr("input conversion panicked")
     ));
-}
-
-#[test]
-fn generic_conversion_row_ptr_overflow_is_reported() {
-    let row_ptrs = [0u64, u64::from(u32::MAX) + 1];
-    let col_indices = [0u64];
-    let values = [1.0_f64];
-    let csr = CsrRef::new_unchecked(&row_ptrs, &col_indices, &values, 1);
-    let err = factorize(csr).expect_err("row_ptr overflow should be reported");
-    assert!(matches!(err, Error::InvalidCsr("row_ptr exceeds u32::MAX")));
 }

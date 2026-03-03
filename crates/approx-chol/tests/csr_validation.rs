@@ -114,15 +114,3 @@ fn new_rejects_out_of_bounds_column_index() {
         "expected InvalidCsr, got {result:?}"
     );
 }
-
-// ---------------------------------------------------------------------------
-// CsrRef::new_unchecked() — constructs without validation
-// ---------------------------------------------------------------------------
-
-#[test]
-fn new_unchecked_constructs_without_validation() {
-    let (rp, ci, vals, n) = path_laplacian_4();
-    // This must not panic even if we skip validation
-    let csr = CsrRef::new_unchecked(&rp, &ci, &vals, n);
-    assert_eq!(csr.n(), n as usize);
-}

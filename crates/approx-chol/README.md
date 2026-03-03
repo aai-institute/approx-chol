@@ -38,7 +38,7 @@ let decomp = factorize(csr)?;
 
 // RHS must lie in the range of the Laplacian (sum to zero)
 let b = [1.0, -1.0, 1.0, -1.0];
-let x = decomp.solve(&b);
+let x = decomp.solve(&b).expect("rhs length must be <= factor dimension");
 assert!(x.iter().all(|v| v.is_finite()));
 ```
 
@@ -48,8 +48,8 @@ For a larger example with a grid Laplacian, see [`examples/basic_solve.rs`](exam
 
 | Feature | Effect |
 |---------|--------|
-| `sprs`  | Zero-copy `CsrRef` conversion from `sprs` matrices (`From` and fallible `try_from_sprs*`). |
-| `faer`  | Zero-copy `CsrRef` conversion from `faer` matrices (`From` and fallible `try_from_faer*`). |
+| `sprs`  | Zero-copy `CsrRef` conversion from `sprs` matrices (`TryFrom` and `try_from_sprs*`). |
+| `faer`  | Zero-copy `CsrRef` conversion from `faer` matrices (`TryFrom` and `try_from_faer*`). |
 
 ## Attribution
 

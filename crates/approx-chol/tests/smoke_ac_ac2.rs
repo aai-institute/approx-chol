@@ -14,7 +14,9 @@ fn run_smoke_case(rows: usize, cols: usize, config: Config) {
     rhs[n - 1] = -1.0;
 
     let mut work = vec![0.0; n];
-    factor.solve_into(&rhs, &mut work);
+    factor
+        .solve_into(&rhs, &mut work)
+        .expect("solve_into should succeed");
     assert!(work.iter().all(|x| x.is_finite()));
     assert!(work.iter().any(|x| x.abs() > 1e-12));
 }

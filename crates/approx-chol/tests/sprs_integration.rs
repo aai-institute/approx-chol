@@ -31,7 +31,7 @@ where
     I: sprs::SpIndex + num_traits::PrimInt + 'static,
 {
     let mat = path_laplacian_sprs::<T, I>();
-    let csr: CsrRef<'_, T, I> = (&mat).into();
+    let csr = CsrRef::try_from(&mat).expect("try_from should succeed for valid CSR");
 
     assert_eq!(csr.n(), 4);
     assert_eq!(csr.row_ptrs().len(), 5);
@@ -51,7 +51,9 @@ where
         T::from_f64(-1.0).expect("conv"),
     ];
     let mut work = vec![T::zero(); factor.n()];
-    factor.solve_into(&b, &mut work);
+    factor
+        .solve_into(&b, &mut work)
+        .expect("solve_into should succeed");
 
     assert!(work.iter().all(|x| x.is_finite()));
     let min_signal = T::from_f64(1e-6).expect("conv");
@@ -104,18 +106,21 @@ fn sprs_u64_f32() {
 }
 
 #[test]
-#[should_panic(expected = "expected CSR matrix, got CSC")]
-fn sprs_csc_panics() {
-    let csr = path_laplacian_sprs::<f64, u32>();
-    let csc = csr.to_csc();
-    let _: CsrRef<'_, f64, u32> = csc.view().into();
-}
-
-#[test]
 fn sprs_try_from_csc_returns_error() {
     let csr = path_laplacian_sprs::<f64, u32>();
     let csc = csr.to_csc();
     let err = CsrRef::try_from_sprs_view(csc.view()).expect_err("CSC must be rejected");
+    assert!(matches!(
+        err,
+        Error::InvalidCsr("expected CSR matrix, got CSC")
+    ));
+}
+
+#[test]
+fn sprs_factorize_rejects_csc_with_error() {
+    let csr = path_laplacian_sprs::<f64, u32>();
+    let csc = csr.to_csc();
+    let err = factorize(&csc).expect_err("CSC must be rejected");
     assert!(matches!(
         err,
         Error::InvalidCsr("expected CSR matrix, got CSC")

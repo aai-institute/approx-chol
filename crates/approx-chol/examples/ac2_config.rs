@@ -24,7 +24,8 @@ struct GridLaplacian {
 
 impl GridLaplacian {
     fn as_csr(&self) -> CsrRef<'_> {
-        CsrRef::new_unchecked(&self.row_ptrs, &self.col_indices, &self.values, self.n)
+        CsrRef::new(&self.row_ptrs, &self.col_indices, &self.values, self.n)
+            .expect("grid_laplacian must build valid CSR")
     }
 }
 
@@ -134,8 +135,8 @@ fn main() {
         *bi = if i < n / 2 { 1.0 } else { -1.0 };
     }
 
-    let x_ac = ac_factor.solve(&b);
-    let x_ac2 = ac2_factor.solve(&b);
+    let x_ac = ac_factor.solve(&b).expect("AC solve failed");
+    let x_ac2 = ac2_factor.solve(&b).expect("AC2 solve failed");
 
     let norm_ac: f64 = x_ac.iter().map(|v| v * v).sum::<f64>().sqrt();
     let norm_ac2: f64 = x_ac2.iter().map(|v| v * v).sum::<f64>().sqrt();

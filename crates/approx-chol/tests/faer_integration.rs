@@ -41,7 +41,7 @@ where
     I: faer::Index + PrimInt + 'static,
 {
     let mat = path_laplacian_faer::<T, I>();
-    let csr: CsrRef<'_, T, I> = (&mat).into();
+    let csr = CsrRef::try_from(&mat).expect("try_from should succeed for valid CSR");
 
     assert_eq!(csr.n(), 4);
     assert_eq!(csr.row_ptrs().len(), 5);
@@ -61,7 +61,9 @@ where
         T::from_f64(-1.0).expect("conv"),
     ];
     let mut work = vec![T::zero(); factor.n()];
-    factor.solve_into(&b, &mut work);
+    factor
+        .solve_into(&b, &mut work)
+        .expect("solve_into should succeed");
 
     assert!(work.iter().all(|x| x.is_finite()));
     let min_signal = T::from_f64(1e-6).expect("conv");
@@ -114,18 +116,6 @@ fn faer_u64_f32() {
 }
 
 #[test]
-#[should_panic(expected = "expected square matrix")]
-fn faer_non_square_panics() {
-    let row_ptrs = vec![0u32, 1, 2, 3];
-    let col_indices = vec![0u32, 1, 0];
-    let values = vec![1.0, 1.0, 1.0];
-    let symbolic =
-        faer::sparse::SymbolicSparseRowMat::<u32>::new_checked(3, 4, row_ptrs, None, col_indices);
-    let mat = SparseRowMat::new(symbolic, values);
-    let _: CsrRef<'_, f64, u32> = mat.as_ref().into();
-}
-
-#[test]
 fn faer_try_from_non_square_returns_error() {
     let row_ptrs = vec![0u32, 1, 2, 3];
     let col_indices = vec![0u32, 1, 0];
@@ -134,5 +124,17 @@ fn faer_try_from_non_square_returns_error() {
         faer::sparse::SymbolicSparseRowMat::<u32>::new_checked(3, 4, row_ptrs, None, col_indices);
     let mat = SparseRowMat::new(symbolic, values);
     let err = CsrRef::try_from_faer(&mat).expect_err("non-square matrix must be rejected");
+    assert!(matches!(err, Error::InvalidCsr("expected square matrix")));
+}
+
+#[test]
+fn faer_factorize_rejects_non_square_with_error() {
+    let row_ptrs = vec![0u32, 1, 2, 3];
+    let col_indices = vec![0u32, 1, 0];
+    let values = vec![1.0, 1.0, 1.0];
+    let symbolic =
+        faer::sparse::SymbolicSparseRowMat::<u32>::new_checked(3, 4, row_ptrs, None, col_indices);
+    let mat = SparseRowMat::new(symbolic, values);
+    let err = factorize(&mat).expect_err("non-square matrix must be rejected");
     assert!(matches!(err, Error::InvalidCsr("expected square matrix")));
 }

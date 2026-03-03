@@ -25,7 +25,9 @@ fn bench_solve_for_size(c: &mut Criterion, size: usize) {
     let mut work_projected = vec![0.0f64; n];
     group.bench_with_input(BenchmarkId::new("solve_into", n), &n, |b, _| {
         b.iter(|| {
-            factor.solve_into(black_box(&rhs), black_box(&mut work_projected));
+            factor
+                .solve_into(black_box(&rhs), black_box(&mut work_projected))
+                .expect("solve_into should succeed");
             black_box(&work_projected);
         });
     });
@@ -36,11 +38,13 @@ fn bench_solve_for_size(c: &mut Criterion, size: usize) {
         &n,
         |b, _| {
             b.iter(|| {
-                factor.solve_into_with_projection(
-                    black_box(&rhs),
-                    black_box(&mut work_no_projection),
-                    false,
-                );
+                factor
+                    .solve_into_with_projection(
+                        black_box(&rhs),
+                        black_box(&mut work_no_projection),
+                        false,
+                    )
+                    .expect("solve_into_with_projection should succeed");
                 black_box(&work_no_projection);
             });
         },
@@ -50,7 +54,9 @@ fn bench_solve_for_size(c: &mut Criterion, size: usize) {
     group.bench_with_input(BenchmarkId::new("solve_in_place", n), &n, |b, _| {
         b.iter(|| {
             work_in_place.copy_from_slice(&rhs);
-            factor.solve_in_place(black_box(&mut work_in_place));
+            factor
+                .solve_in_place(black_box(&mut work_in_place))
+                .expect("solve_in_place should succeed");
             black_box(&work_in_place);
         });
     });

@@ -20,7 +20,8 @@ struct GridLaplacian {
 
 impl GridLaplacian {
     fn as_csr(&self) -> CsrRef<'_> {
-        CsrRef::new_unchecked(&self.row_ptrs, &self.col_indices, &self.values, self.n)
+        CsrRef::new(&self.row_ptrs, &self.col_indices, &self.values, self.n)
+            .expect("grid_laplacian must build valid CSR")
     }
 }
 
@@ -104,7 +105,7 @@ fn main() {
     assert_eq!(b.iter().sum::<f64>(), 0.0, "RHS must sum to zero");
 
     // Solve: returns a newly allocated vector of length factor.n().
-    let x = factor.solve(&b);
+    let x = factor.solve(&b).expect("solve failed");
 
     // Quality check.
     let all_finite = x.iter().all(|v| v.is_finite());

@@ -15,7 +15,9 @@ fn solve_with_default_ac(
     .build(csr)
     .expect("factorization");
     let mut work = vec![0.0; factor.n()];
-    factor.solve_into_with_projection(rhs, &mut work, false);
+    factor
+        .solve_into_with_projection(rhs, &mut work, false)
+        .expect("solve_into_with_projection should succeed");
     work
 }
 

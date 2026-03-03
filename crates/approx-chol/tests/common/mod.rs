@@ -10,7 +10,8 @@ pub struct GridLaplacian {
 
 impl GridLaplacian {
     pub fn as_csr(&self) -> CsrRef<'_> {
-        CsrRef::new_unchecked(&self.row_ptrs, &self.col_indices, &self.values, self.n)
+        CsrRef::new(&self.row_ptrs, &self.col_indices, &self.values, self.n)
+            .expect("grid_laplacian must build valid CSR")
     }
 }
 

@@ -9,7 +9,7 @@ fn path_laplacian_4() -> (Vec<u32>, Vec<u32>, Vec<f64>) {
 }
 
 fn make_csr<'a>(indptr: &'a [u32], indices: &'a [u32], data: &'a [f64]) -> CsrRef<'a, f64, u32> {
-    CsrRef::new_unchecked(indptr, indices, data, (indptr.len() - 1) as u32)
+    CsrRef::new(indptr, indices, data, (indptr.len() - 1) as u32).expect("valid CSR test fixture")
 }
 
 #[test]
@@ -23,7 +23,9 @@ fn test_ac_default_solve_roundtrip() {
 
     let b = [1.0, -1.0, 1.0, -1.0];
     let mut work = vec![0.0; factor.n()];
-    factor.solve_into(&b, &mut work);
+    factor
+        .solve_into(&b, &mut work)
+        .expect("solve_into should succeed");
     assert!(work.iter().all(|x| x.is_finite()));
     assert!(work.iter().any(|x| x.abs() > 1e-10));
     let mean = work.iter().sum::<f64>() / work.len() as f64;
@@ -80,7 +82,9 @@ fn test_ac2_n_eq_1_augmented_diagonal_regression() {
     // on an augmented system (4 nodes due to Gremban's reduction).
     let b = [4.0f64, 4.0, 4.0];
     let mut work = vec![0.0f64; factor.n()];
-    factor.solve_into_with_projection(&b, &mut work, false);
+    factor
+        .solve_into_with_projection(&b, &mut work, false)
+        .expect("solve_into_with_projection should succeed");
 
     // All entries must be finite — the old bug set column.diagonal to the
     // small edge weight (1.0) instead of pivot_diag (5.0), making the
@@ -125,7 +129,9 @@ fn test_ac2_n_eq_1_solve_produces_finite_for_multiple_seeds() {
             .unwrap_or_else(|e| panic!("AC2 factorization failed (seed={seed}): {e}"));
 
         let mut work = vec![0.0f64; factor.n()];
-        factor.solve_into_with_projection(&b, &mut work, false);
+        factor
+            .solve_into_with_projection(&b, &mut work, false)
+            .expect("solve_into_with_projection should succeed");
 
         assert!(
             work.iter().all(|x| x.is_finite()),
@@ -165,7 +171,9 @@ fn test_ac2_near_zero_weight_star() {
 
     let b = [1.0f64, -1.0, 1.0];
     let mut work = vec![0.0f64; factor.n()];
-    factor.solve_into_with_projection(&b, &mut work, false);
+    factor
+        .solve_into_with_projection(&b, &mut work, false)
+        .expect("solve_into_with_projection should succeed");
 
     assert!(
         work.iter().all(|x| x.is_finite()),
