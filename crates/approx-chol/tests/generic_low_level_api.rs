@@ -134,12 +134,12 @@ fn low_level_factorize_csrref() {
 }
 
 #[test]
-fn low_level_u64_f32_ac2_generic() {
+fn low_level_u64_f32_ac2() {
     run_case_ac2::<u64, f32>();
 }
 
 #[test]
-fn low_level_usize_f64_ac2_generic() {
+fn low_level_usize_f64_ac2() {
     run_case_ac2::<usize, f64>();
 }
 
