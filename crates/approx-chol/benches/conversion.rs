@@ -10,7 +10,7 @@ use common::{grid_laplacian, OrPanic};
 
 fn bench_to_owned_u32_for_size(c: &mut Criterion, size: usize) {
     let lap = grid_laplacian(size, size);
-    let csr_u32 = lap.as_csr();
+    let csr_u32 = lap.as_csr().or_panic("grid_laplacian must build valid CSR");
 
     let row_ptrs_usize: Vec<usize> = lap.row_ptrs.iter().map(|&v| v as usize).collect();
     let col_indices_usize: Vec<usize> = lap.col_indices.iter().map(|&v| v as usize).collect();

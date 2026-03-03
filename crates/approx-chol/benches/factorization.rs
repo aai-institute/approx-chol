@@ -20,7 +20,7 @@ fn bench_approx_chol_build(c: &mut Criterion) {
             |b, lap| {
                 b.iter(|| {
                     builder
-                        .build(lap.as_csr())
+                        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
                         .or_panic("factorization should succeed")
                 });
             },

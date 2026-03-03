@@ -1,7 +1,11 @@
 #![cfg(feature = "faer")]
 
-mod common;
-use common::{ErrOrPanic, OrPanic};
+#[path = "common/panic_err.rs"]
+mod panic_err;
+#[path = "common/panic_ok.rs"]
+mod panic_ok;
+use panic_err::ErrOrPanic;
+use panic_ok::OrPanic;
 
 use approx_chol::{factorize, Builder, Config, CsrError, CsrRef, Error};
 use faer::sparse::SparseRowMat;

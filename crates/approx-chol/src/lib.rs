@@ -79,6 +79,8 @@ mod csr;
 pub(crate) mod graph;
 pub(crate) mod ordering;
 pub(crate) mod sampling;
+#[cfg(test)]
+pub(crate) mod test_utils;
 mod types;
 
 /// Low-level API for advanced use cases (custom pipelines, graph inspection, research).

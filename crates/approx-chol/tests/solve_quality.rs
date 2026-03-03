@@ -1,5 +1,12 @@
-mod common;
-use common::*;
+#[path = "common/grid.rs"]
+mod grid;
+#[path = "common/panic_err.rs"]
+mod panic_err;
+#[path = "common/panic_ok.rs"]
+mod panic_ok;
+use grid::grid_laplacian;
+use panic_err::ErrOrPanic;
+use panic_ok::OrPanic;
 
 use approx_chol::{Builder, Config, CsrRef, SolveError};
 
@@ -40,7 +47,7 @@ fn no_augmentation_for_pure_laplacian() {
     let lap = grid_laplacian(3, 3); // pure Laplacian: zero row sums
     let original_n = lap.n as usize;
     let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
+        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
         .or_panic("factorization should succeed");
     assert_eq!(
         factor.n(),
@@ -92,7 +99,7 @@ fn solve_into_gives_finite_nontrivial_solution() {
     let lap = grid_laplacian(8, 8);
     let n_orig = lap.n as usize;
     let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
+        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
         .or_panic("factorization should succeed");
 
     let n = factor.n();
@@ -124,7 +131,7 @@ fn no_projection_differs_from_projection() {
     let lap = grid_laplacian(5, 5);
     let n_orig = lap.n as usize;
     let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
+        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
         .or_panic("factorization should succeed");
 
     let n = factor.n();
@@ -159,7 +166,7 @@ fn allocating_solve_matches_solve_into() {
     let lap = grid_laplacian(6, 6);
     let n_orig = lap.n as usize;
     let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
+        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
         .or_panic("factorization should succeed");
 
     let n = factor.n();
@@ -187,7 +194,7 @@ fn solve_in_place_matches_no_projection() {
     let lap = grid_laplacian(5, 5);
     let n_orig = lap.n as usize;
     let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
+        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
         .or_panic("factorization should succeed");
 
     let n = factor.n();
@@ -221,7 +228,7 @@ fn try_solve_matches_solve() {
     let lap = grid_laplacian(6, 6);
     let n_orig = lap.n as usize;
     let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
+        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
         .or_panic("factorization should succeed");
 
     let mut rhs = vec![0.0; n_orig];
@@ -237,7 +244,7 @@ fn try_solve_matches_solve() {
 fn try_solve_into_reports_rhs_too_long() {
     let lap = grid_laplacian(4, 4);
     let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
+        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
         .or_panic("factorization should succeed");
 
     let rhs = vec![0.0; factor.n() + 1];
@@ -259,7 +266,7 @@ fn try_solve_into_reports_short_work_buffer() {
     let lap = grid_laplacian(4, 4);
     let n_orig = lap.n as usize;
     let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
+        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
         .or_panic("factorization should succeed");
 
     let mut rhs = vec![0.0; n_orig];
@@ -283,7 +290,7 @@ fn try_solve_into_reports_short_work_buffer() {
 fn try_solve_in_place_reports_short_work_buffer() {
     let lap = grid_laplacian(4, 4);
     let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
+        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
         .or_panic("factorization should succeed");
 
     let mut y = vec![0.0; factor.n().saturating_sub(1)];
@@ -304,7 +311,7 @@ fn solve_into_reports_short_work_buffer() {
     let lap = grid_laplacian(4, 4);
     let n_orig = lap.n as usize;
     let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
+        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
         .or_panic("factorization should succeed");
 
     let mut rhs = vec![0.0; n_orig];
@@ -327,7 +334,7 @@ fn solve_into_reports_short_work_buffer() {
 fn solve_in_place_reports_short_work_buffer() {
     let lap = grid_laplacian(4, 4);
     let factor = Builder::new(Config::default())
-        .build(lap.as_csr())
+        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
         .or_panic("factorization should succeed");
 
     let mut y = vec![0.0; factor.n().saturating_sub(1)];

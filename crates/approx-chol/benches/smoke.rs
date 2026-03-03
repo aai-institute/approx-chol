@@ -5,12 +5,13 @@ use std::time::Duration;
 use approx_chol::{Builder, Config};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 
-use common::{grid_laplacian, GridLaplacian, OrPanic};
+use common::grid::GridLaplacian;
+use common::{grid_laplacian, OrPanic};
 
 fn run_build_and_solve(lap: &GridLaplacian, config: Config) {
     let builder = Builder::new(config);
     let factor = builder
-        .build(lap.as_csr())
+        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
         .or_panic("factorization should succeed");
 
     let n = factor.n();

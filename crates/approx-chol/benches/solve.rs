@@ -11,7 +11,7 @@ use common::{grid_laplacian, OrPanic};
 fn bench_solve_for_size(c: &mut Criterion, size: usize) {
     let lap = grid_laplacian(size, size);
     let factor: Factor<f64> = Builder::new(Config::default())
-        .build(lap.as_csr())
+        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
         .or_panic("factorization should succeed");
     let n = factor.n();
 

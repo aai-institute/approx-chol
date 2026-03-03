@@ -396,19 +396,7 @@ impl<'a, T, I: faer::Index + PrimInt> TryFrom<&'a faer::sparse::SparseRowMat<I, 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    trait OrPanic<T> {
-        fn or_panic(self, context: &str) -> T;
-    }
-
-    impl<T, E: core::fmt::Debug> OrPanic<T> for Result<T, E> {
-        fn or_panic(self, context: &str) -> T {
-            match self {
-                Ok(value) => value,
-                Err(err) => panic!("{context}: {err:?}"),
-            }
-        }
-    }
+    use crate::test_utils::OrPanic;
 
     #[test]
     fn to_owned_u32_preserves_indices_for_u32_input() {

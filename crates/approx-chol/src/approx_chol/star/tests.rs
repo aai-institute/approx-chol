@@ -1,17 +1,5 @@
 use super::*;
-
-trait OrPanic<T> {
-    fn or_panic(self, context: &str) -> T;
-}
-
-impl<T> OrPanic<T> for Option<T> {
-    fn or_panic(self, context: &str) -> T {
-        match self {
-            Some(value) => value,
-            None => panic!("{context}"),
-        }
-    }
-}
+use crate::test_utils::OrPanic;
 
 fn nbr(to: u32, fill_weight: f64, count: u32) -> Neighbor<f64> {
     Neighbor {

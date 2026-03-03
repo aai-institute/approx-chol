@@ -1,5 +1,6 @@
-mod common;
-use common::OrPanic;
+#[path = "common/panic_ok.rs"]
+mod panic_ok;
+use panic_ok::OrPanic;
 
 use approx_chol::{factorize, factorize_with, Config, CsrRef};
 use proptest::prelude::*;

@@ -1,17 +1,5 @@
 use super::*;
-
-trait OrPanic<T> {
-    fn or_panic(self, context: &str) -> T;
-}
-
-impl<T, E: core::fmt::Debug> OrPanic<T> for Result<T, E> {
-    fn or_panic(self, context: &str) -> T {
-        match self {
-            Ok(value) => value,
-            Err(err) => panic!("{context}: {err:?}"),
-        }
-    }
-}
+use crate::test_utils::OrPanic;
 
 /// Build a 4-node path graph Laplacian as raw CSR arrays.
 fn path_laplacian_4() -> (Vec<u32>, Vec<u32>, Vec<f64>) {

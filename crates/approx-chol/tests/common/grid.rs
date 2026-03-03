@@ -1,41 +1,4 @@
-#![allow(dead_code)]
-
-use approx_chol::CsrRef;
-
-pub trait OrPanic<T> {
-    fn or_panic(self, context: &str) -> T;
-}
-
-impl<T, E: core::fmt::Debug> OrPanic<T> for Result<T, E> {
-    fn or_panic(self, context: &str) -> T {
-        match self {
-            Ok(value) => value,
-            Err(err) => panic!("{context}: {err:?}"),
-        }
-    }
-}
-
-impl<T> OrPanic<T> for Option<T> {
-    fn or_panic(self, context: &str) -> T {
-        match self {
-            Some(value) => value,
-            None => panic!("{context}"),
-        }
-    }
-}
-
-pub trait ErrOrPanic<E> {
-    fn err_or_panic(self, context: &str) -> E;
-}
-
-impl<T, E: core::fmt::Debug> ErrOrPanic<E> for Result<T, E> {
-    fn err_or_panic(self, context: &str) -> E {
-        match self {
-            Ok(_) => panic!("{context}"),
-            Err(err) => err,
-        }
-    }
-}
+use approx_chol::{CsrRef, Error};
 
 /// Grid Laplacian stored as owned arrays (CsrRef-compatible).
 pub struct GridLaplacian {
@@ -46,13 +9,15 @@ pub struct GridLaplacian {
 }
 
 impl GridLaplacian {
-    pub fn as_csr(&self) -> CsrRef<'_> {
+    pub fn as_csr(&self) -> Result<CsrRef<'_>, Error> {
         CsrRef::new(&self.row_ptrs, &self.col_indices, &self.values, self.n)
-            .or_panic("grid_laplacian must build valid CSR")
     }
 }
 
 /// Build a 2D grid Laplacian of size `rows x cols`.
+///
+/// Each interior vertex has degree 4, boundary 3, corners 2.
+/// The matrix is stored in CSR format with sorted column indices per row.
 pub fn grid_laplacian(rows: usize, cols: usize) -> GridLaplacian {
     let n = rows * cols;
     let mut row_ptrs: Vec<u32> = Vec::with_capacity(n + 1);

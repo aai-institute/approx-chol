@@ -1,5 +1,9 @@
-mod common;
-use common::*;
+#[path = "common/grid.rs"]
+mod grid;
+#[path = "common/panic_ok.rs"]
+mod panic_ok;
+use grid::grid_laplacian;
+use panic_ok::OrPanic;
 
 use approx_chol::{Builder, Config};
 
@@ -7,7 +11,7 @@ fn run_smoke_case(rows: usize, cols: usize, config: Config) {
     let lap = grid_laplacian(rows, cols);
     let builder = Builder::new(config);
     let factor = builder
-        .build(lap.as_csr())
+        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
         .or_panic("factorization should succeed");
 
     let n = factor.n();
