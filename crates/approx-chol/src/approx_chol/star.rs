@@ -497,11 +497,15 @@ impl<T: Real> Ac2DedupWorkspace<T> {
         self.sort_entries.sort_unstable_by(|a, b| {
             // Cross-multiply to compare a.weight/a.count vs b.weight/b.count
             // without division.
-            let lhs = a.weight * <T as NumCast>::from(b.count).expect("count to scalar");
-            let rhs = b.weight * <T as NumCast>::from(a.count).expect("count to scalar");
-            lhs.partial_cmp(&rhs)
-                .unwrap_or(Ordering::Equal)
-                .then_with(|| a.idx.cmp(&b.idx))
+            let cmp = match (<T as NumCast>::from(b.count), <T as NumCast>::from(a.count)) {
+                (Some(b_count_scalar), Some(a_count_scalar)) => {
+                    let lhs = a.weight * b_count_scalar;
+                    let rhs = b.weight * a_count_scalar;
+                    lhs.partial_cmp(&rhs).unwrap_or(Ordering::Equal)
+                }
+                _ => Ordering::Equal,
+            };
+            cmp.then_with(|| a.idx.cmp(&b.idx))
         });
 
         for (dst, item) in self.sort_entries.iter().enumerate() {

@@ -13,9 +13,9 @@ where
     #[inline]
     fn near_zero() -> Self {
         if core::mem::size_of::<T>() <= 4 {
-            <T as NumCast>::from(1e-6_f64).expect("finite threshold")
+            <T as NumCast>::from(1e-6_f64).unwrap_or_else(T::epsilon)
         } else {
-            <T as NumCast>::from(1e-14_f64).expect("finite threshold")
+            <T as NumCast>::from(1e-14_f64).unwrap_or_else(T::epsilon)
         }
     }
 }

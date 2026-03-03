@@ -43,7 +43,8 @@ pub(crate) fn sample_from_cumsum<T: Real>(
 
     // Draw a uniform in [0, 1) via next_u64 for rand 0.9/0.10 compatibility.
     let u = (rng.next_u64() as f64) / ((u64::MAX as f64) + 1.0);
-    let r = <T as NumCast>::from(u).expect("finite random") * remaining + base;
+    let u_t = <T as NumCast>::from(u)?;
+    let r = u_t * remaining + base;
 
     let range_size = end - start;
     let k = if range_size <= LINEAR_THRESHOLD {

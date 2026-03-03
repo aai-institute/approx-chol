@@ -212,12 +212,14 @@ pub(crate) fn clique_tree_sample_column_multi<T: Real, S: WeightedSampler<T>>(
     // Preserve pre-optimization behavior: accumulate in sorted entry order.
     let total_weight = entries.iter().fold(T::zero(), |a, e| a + e.1);
     if total_weight <= T::near_zero() {
+        let Some(n_scalar) = NumCast::from(n) else {
+            column.diagonal = pivot_diag;
+            return;
+        };
         column.diagonal = pivot_diag;
         for &(j, _) in entries {
             column.neighbors.push(j);
-            column
-                .fractions
-                .push(T::one() / NumCast::from(n).expect("n to scalar"));
+            column.fractions.push(T::one() / n_scalar);
         }
         return;
     }
@@ -229,8 +231,10 @@ pub(crate) fn clique_tree_sample_column_multi<T: Real, S: WeightedSampler<T>>(
     for (i, (&(j, w), &count)) in entries[..n - 1].iter().zip(counts.iter()).enumerate() {
         remaining = remaining - w;
         let f = elim.fraction(w);
-        let fill_wt =
-            w * remaining / (<T as NumCast>::from(count).expect("count to scalar") * total_weight);
+        let Some(count_scalar) = <T as NumCast>::from(count) else {
+            continue;
+        };
+        let fill_wt = w * remaining / (count_scalar * total_weight);
         column.neighbors.push(j);
         column.fractions.push(f);
         column.sample_fill_edges(j, count, fill_wt, sampler, entries, i + 1);
@@ -314,7 +318,9 @@ pub fn clique_tree_sample_multi<T>(
         return;
     }
     let t = split_merge;
-    let t_scalar: T = NumCast::from(t).expect("u32 to scalar");
+    let Some(t_scalar): Option<T> = NumCast::from(t) else {
+        return;
+    };
 
     entries.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
     let mut sampler = CdfSampler::<T>::new(seed);

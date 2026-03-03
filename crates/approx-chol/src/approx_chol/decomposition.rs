@@ -367,8 +367,10 @@ where
         if n == 0 {
             return;
         }
-        let mean = y[..n].iter().fold(T::zero(), |a, &b| a + b)
-            / <T as num_traits::NumCast>::from(n).expect("n to scalar");
+        let Some(n_scalar): Option<T> = <T as num_traits::NumCast>::from(n) else {
+            return;
+        };
+        let mean = y[..n].iter().fold(T::zero(), |a, &b| a + b) / n_scalar;
         for yi in &mut y[..n] {
             *yi = *yi - mean;
         }
