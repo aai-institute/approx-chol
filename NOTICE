@@ -1,0 +1,14 @@
+approx-chol
+
+This product includes algorithmic ideas and adapted implementation patterns from
+Laplacians.jl (https://github.com/danspielman/Laplacians.jl), especially around
+approximate Cholesky routines.
+
+Laplacians.jl copyright:
+Copyright (c) 2015-2016 Daniel A. Spielman and other contributors.
+
+The Laplacians.jl-derived material is retained under the MIT License.
+See LICENSES/LAPLACIANS-MIT.txt for the full MIT text.
+
+Additional modifications and surrounding implementation in this repository are
+copyright (c) 2026 appliedAI Institute for Europe gGmbH and contributors.

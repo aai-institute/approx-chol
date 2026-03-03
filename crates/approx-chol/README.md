@@ -61,7 +61,11 @@ Laplacians.jl is licensed under the MIT License.
 
 ## License
 
-MIT
+This crate is licensed under `Apache-2.0 AND MIT`.
+
+- Apache-2.0: see `LICENSE`.
+- MIT (for Laplacians.jl-derived material): see `LICENSES/LAPLACIANS-MIT.txt`.
+- Additional attribution and provenance notes: see `NOTICE`.
 
 ## References
 
