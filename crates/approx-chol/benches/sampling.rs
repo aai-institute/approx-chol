@@ -6,7 +6,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 use std::collections::BTreeSet;
 
-use common::{grid_laplacian, GridLaplacian};
+use common::{grid_laplacian, GridLaplacian, OrPanic};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -102,7 +102,11 @@ fn bench_factorization_grid(c: &mut Criterion) {
             BenchmarkId::new("AC", format!("{size}x{size}")),
             &lap,
             |b, lap| {
-                b.iter(|| builder.build(lap.as_csr()).unwrap());
+                b.iter(|| {
+                    builder
+                        .build(lap.as_csr())
+                        .or_panic("factorization should succeed")
+                });
             },
         );
 
@@ -116,7 +120,11 @@ fn bench_factorization_grid(c: &mut Criterion) {
             BenchmarkId::new("AC2", format!("{size}x{size}")),
             &lap,
             |b, lap| {
-                b.iter(|| ac2_builder.build(lap.as_csr()).unwrap());
+                b.iter(|| {
+                    ac2_builder
+                        .build(lap.as_csr())
+                        .or_panic("factorization should succeed")
+                });
             },
         );
     }
@@ -143,7 +151,11 @@ fn bench_factorization_powerlaw(c: &mut Criterion) {
         let builder = Builder::new(config);
 
         group.bench_with_input(BenchmarkId::new("AC", label), &lap, |b, lap| {
-            b.iter(|| builder.build(lap.as_csr()).unwrap());
+            b.iter(|| {
+                builder
+                    .build(lap.as_csr())
+                    .or_panic("factorization should succeed")
+            });
         });
     }
     group.finish();

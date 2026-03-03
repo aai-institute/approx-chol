@@ -5,11 +5,13 @@ use std::time::Duration;
 use approx_chol::{Builder, Config};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 
-use common::{grid_laplacian, GridLaplacian};
+use common::{grid_laplacian, GridLaplacian, OrPanic};
 
 fn run_build_and_solve(lap: &GridLaplacian, config: Config) {
     let builder = Builder::new(config);
-    let factor = builder.build(lap.as_csr()).unwrap();
+    let factor = builder
+        .build(lap.as_csr())
+        .or_panic("factorization should succeed");
 
     let n = factor.n();
     let mut rhs = vec![0.0; n];
@@ -18,7 +20,7 @@ fn run_build_and_solve(lap: &GridLaplacian, config: Config) {
     let mut work = vec![0.0; n];
     factor
         .solve_into(&rhs, &mut work)
-        .expect("solve_into should succeed");
+        .or_panic("solve_into should succeed");
     assert!(work.iter().all(|x| x.is_finite()));
 }
 

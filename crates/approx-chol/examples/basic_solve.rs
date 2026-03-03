@@ -5,7 +5,7 @@
 //! cargo run -p approx-chol --example basic_solve
 //! ```
 
-use approx_chol::{factorize, CsrRef};
+use approx_chol::{factorize, CsrRef, Error};
 
 // --------------------------------------------------------------------------
 // Grid Laplacian builder (inlined — examples are separate compilation units)
@@ -19,9 +19,8 @@ struct GridLaplacian {
 }
 
 impl GridLaplacian {
-    fn as_csr(&self) -> CsrRef<'_> {
+    fn as_csr(&self) -> Result<CsrRef<'_>, Error> {
         CsrRef::new(&self.row_ptrs, &self.col_indices, &self.values, self.n)
-            .expect("grid_laplacian must build valid CSR")
     }
 }
 
@@ -81,14 +80,14 @@ fn grid_laplacian(rows: usize, cols: usize) -> GridLaplacian {
 // Main
 // --------------------------------------------------------------------------
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build a 10×10 grid Laplacian (100 nodes).
     let lap = grid_laplacian(10, 10);
     let n = lap.n as usize;
     println!("Grid Laplacian: {}×{} ({} nodes)", 10, 10, n);
 
     // Factorize with default configuration (AC, DynamicPQ ordering).
-    let factor = factorize(lap.as_csr()).expect("factorization failed");
+    let factor = factorize(lap.as_csr()?)?;
     println!(
         "Factorization: {} elimination steps (factor dimension {})",
         factor.n_steps(),
@@ -105,7 +104,7 @@ fn main() {
     assert_eq!(b.iter().sum::<f64>(), 0.0, "RHS must sum to zero");
 
     // Solve: returns a newly allocated vector of length factor.n().
-    let x = factor.solve(&b).expect("solve failed");
+    let x = factor.solve(&b)?;
 
     // Quality check.
     let all_finite = x.iter().all(|v| v.is_finite());
@@ -115,4 +114,6 @@ fn main() {
     println!("Solution: all finite = {all_finite}");
     println!("Solution: L2 norm    = {norm:.6}");
     println!("Solution: mean       = {mean:.2e}  (near zero after gauge fix)");
+
+    Ok(())
 }

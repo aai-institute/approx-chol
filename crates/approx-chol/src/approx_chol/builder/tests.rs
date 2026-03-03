@@ -1,5 +1,18 @@
 use super::*;
 
+trait OrPanic<T> {
+    fn or_panic(self, context: &str) -> T;
+}
+
+impl<T, E: core::fmt::Debug> OrPanic<T> for Result<T, E> {
+    fn or_panic(self, context: &str) -> T {
+        match self {
+            Ok(value) => value,
+            Err(err) => panic!("{context}: {err:?}"),
+        }
+    }
+}
+
 /// Build a 4-node path graph Laplacian as raw CSR arrays.
 fn path_laplacian_4() -> (Vec<u32>, Vec<u32>, Vec<f64>) {
     let indptr = vec![0u32, 2, 5, 8, 10];
@@ -9,7 +22,7 @@ fn path_laplacian_4() -> (Vec<u32>, Vec<u32>, Vec<f64>) {
 }
 
 fn make_csr<'a>(indptr: &'a [u32], indices: &'a [u32], data: &'a [f64]) -> CsrRef<'a, f64, u32> {
-    CsrRef::new(indptr, indices, data, (indptr.len() - 1) as u32).expect("valid CSR test fixture")
+    CsrRef::new(indptr, indices, data, (indptr.len() - 1) as u32).or_panic("valid CSR test fixture")
 }
 
 #[test]
@@ -18,14 +31,14 @@ fn test_ac_default_solve_roundtrip() {
     let csr = make_csr(&indptr, &indices, &data);
 
     let builder = Builder::<f64>::new(Config::default());
-    let factor = builder.build(csr).unwrap();
+    let factor = builder.build(csr).or_panic("factorization should succeed");
     assert_eq!(factor.n_steps(), factor.n().saturating_sub(1));
 
     let b = [1.0, -1.0, 1.0, -1.0];
     let mut work = vec![0.0; factor.n()];
     factor
         .solve_into(&b, &mut work)
-        .expect("solve_into should succeed");
+        .or_panic("solve_into should succeed");
     assert!(work.iter().all(|x| x.is_finite()));
     assert!(work.iter().any(|x| x.abs() > 1e-10));
     let mean = work.iter().sum::<f64>() / work.len() as f64;
@@ -59,7 +72,7 @@ fn test_ac2_n_eq_1_augmented_diagonal_regression() {
     let indices = vec![0u32, 1, 0, 1, 2, 1, 2];
     let data = vec![5.0f64, -1.0, -1.0, 6.0, -1.0, -1.0, 5.0];
 
-    let csr = CsrRef::new(&indptr, &indices, &data, 3).expect("valid SDDM matrix");
+    let csr = CsrRef::new(&indptr, &indices, &data, 3).or_panic("valid SDDM matrix");
 
     let config = Config {
         split_merge: Some(2),
@@ -69,7 +82,9 @@ fn test_ac2_n_eq_1_augmented_diagonal_regression() {
 
     // Should complete without panic (old code would produce NaN/Inf for
     // vertices with n==1 and pivot_diag > neighbor_weight).
-    let factor = builder.build(csr).expect("AC2 factorization must succeed");
+    let factor = builder
+        .build(csr)
+        .or_panic("AC2 factorization must succeed");
     // The factor may be larger than 3 due to Gremban augmentation (the
     // matrix is SDDM but not Laplacian, so an auxiliary vertex is added).
     assert!(
@@ -84,7 +99,7 @@ fn test_ac2_n_eq_1_augmented_diagonal_regression() {
     let mut work = vec![0.0f64; factor.n()];
     factor
         .solve_into_with_projection(&b, &mut work, false)
-        .expect("solve_into_with_projection should succeed");
+        .or_panic("solve_into_with_projection should succeed");
 
     // All entries must be finite — the old bug set column.diagonal to the
     // small edge weight (1.0) instead of pivot_diag (5.0), making the
@@ -119,7 +134,7 @@ fn test_ac2_n_eq_1_solve_produces_finite_for_multiple_seeds() {
     let b = [9.0f64, -9.0];
 
     for seed in 0..8u64 {
-        let csr = CsrRef::new(&indptr, &indices, &data, 2).expect("valid SDDM");
+        let csr = CsrRef::new(&indptr, &indices, &data, 2).or_panic("valid SDDM");
         let config = Config {
             split_merge: Some(2),
             seed,
@@ -131,7 +146,7 @@ fn test_ac2_n_eq_1_solve_produces_finite_for_multiple_seeds() {
         let mut work = vec![0.0f64; factor.n()];
         factor
             .solve_into_with_projection(&b, &mut work, false)
-            .expect("solve_into_with_projection should succeed");
+            .or_panic("solve_into_with_projection should succeed");
 
         assert!(
             work.iter().all(|x| x.is_finite()),
@@ -157,7 +172,7 @@ fn test_ac2_near_zero_weight_star() {
     let indices = vec![0u32, 1, 0, 1, 2, 1, 2];
     let data = vec![2.0, -eps, -eps, 2.0, -eps, -eps, 2.0];
 
-    let csr = CsrRef::new(&indptr, &indices, &data, 3).expect("valid SDDM matrix");
+    let csr = CsrRef::new(&indptr, &indices, &data, 3).or_panic("valid SDDM matrix");
 
     let config = Config {
         split_merge: Some(2),
@@ -165,7 +180,7 @@ fn test_ac2_near_zero_weight_star() {
     };
     let factor = Builder::<f64>::new(config)
         .build(csr)
-        .expect("AC2 factorization must succeed with near-zero weights");
+        .or_panic("AC2 factorization must succeed with near-zero weights");
 
     assert!(factor.n() >= 3);
 
@@ -173,7 +188,7 @@ fn test_ac2_near_zero_weight_star() {
     let mut work = vec![0.0f64; factor.n()];
     factor
         .solve_into_with_projection(&b, &mut work, false)
-        .expect("solve_into_with_projection should succeed");
+        .or_panic("solve_into_with_projection should succeed");
 
     assert!(
         work.iter().all(|x| x.is_finite()),

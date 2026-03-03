@@ -23,8 +23,10 @@ fn sddm_4() -> (Vec<u32>, Vec<u32>, Vec<f64>, u32) {
 #[test]
 fn gremban_augmented_for_sddm() {
     let (rp, ci, vals, n) = sddm_4();
-    let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid SDDM");
-    let factor = Builder::new(Config::default()).build(csr).unwrap();
+    let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid SDDM");
+    let factor = Builder::new(Config::default())
+        .build(csr)
+        .or_panic("factorization should succeed");
     // Gremban augmentation adds one extra vertex for SDDM matrices
     assert!(
         factor.n() > n as usize,
@@ -37,7 +39,9 @@ fn gremban_augmented_for_sddm() {
 fn no_augmentation_for_pure_laplacian() {
     let lap = grid_laplacian(3, 3); // pure Laplacian: zero row sums
     let original_n = lap.n as usize;
-    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
+    let factor = Builder::new(Config::default())
+        .build(lap.as_csr())
+        .or_panic("factorization should succeed");
     assert_eq!(
         factor.n(),
         original_n,
@@ -51,10 +55,10 @@ fn near_zero_surplus_f32_does_not_augment() {
     let row_ptrs = [0u32, 2, 4];
     let col_indices = [0u32, 1, 0, 1];
     let values = [1.0_f32 + eps, -1.0_f32, -1.0_f32, 1.0_f32 + eps];
-    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).expect("valid csr");
+    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).or_panic("valid csr");
     let factor = Builder::<f32>::new(Config::default())
         .build(csr)
-        .expect("factorization should succeed");
+        .or_panic("factorization should succeed");
     assert_eq!(
         factor.n(),
         2,
@@ -68,10 +72,10 @@ fn near_zero_surplus_f64_does_not_augment() {
     let row_ptrs = [0u32, 2, 4];
     let col_indices = [0u32, 1, 0, 1];
     let values = [1.0_f64 + eps, -1.0_f64, -1.0_f64, 1.0_f64 + eps];
-    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).expect("valid csr");
+    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).or_panic("valid csr");
     let factor = Builder::<f64>::new(Config::default())
         .build(csr)
-        .expect("factorization should succeed");
+        .or_panic("factorization should succeed");
     assert_eq!(
         factor.n(),
         2,
@@ -87,7 +91,9 @@ fn near_zero_surplus_f64_does_not_augment() {
 fn solve_into_gives_finite_nontrivial_solution() {
     let lap = grid_laplacian(8, 8);
     let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
+    let factor = Builder::new(Config::default())
+        .build(lap.as_csr())
+        .or_panic("factorization should succeed");
 
     let n = factor.n();
     let mut rhs = vec![0.0; n_orig];
@@ -97,7 +103,7 @@ fn solve_into_gives_finite_nontrivial_solution() {
     let mut work = vec![0.0; n];
     factor
         .solve_into(&rhs, &mut work)
-        .expect("solve_into should succeed");
+        .or_panic("solve_into should succeed");
 
     assert!(
         work.iter().all(|x| x.is_finite()),
@@ -117,7 +123,9 @@ fn solve_into_gives_finite_nontrivial_solution() {
 fn no_projection_differs_from_projection() {
     let lap = grid_laplacian(5, 5);
     let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
+    let factor = Builder::new(Config::default())
+        .build(lap.as_csr())
+        .or_panic("factorization should succeed");
 
     let n = factor.n();
     let mut rhs = vec![0.0; n_orig];
@@ -127,12 +135,12 @@ fn no_projection_differs_from_projection() {
     let mut with_proj = vec![0.0; n];
     factor
         .solve_into_with_projection(&rhs, &mut with_proj, true)
-        .expect("solve_into_with_projection should succeed");
+        .or_panic("solve_into_with_projection should succeed");
 
     let mut no_proj = vec![0.0; n];
     factor
         .solve_into_with_projection(&rhs, &mut no_proj, false)
-        .expect("solve_into_with_projection should succeed");
+        .or_panic("solve_into_with_projection should succeed");
 
     // The zero-mean projection should shift the solution; results must differ
     let any_different = with_proj
@@ -150,7 +158,9 @@ fn no_projection_differs_from_projection() {
 fn allocating_solve_matches_solve_into() {
     let lap = grid_laplacian(6, 6);
     let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
+    let factor = Builder::new(Config::default())
+        .build(lap.as_csr())
+        .or_panic("factorization should succeed");
 
     let n = factor.n();
     let mut rhs = vec![0.0; n_orig];
@@ -161,10 +171,10 @@ fn allocating_solve_matches_solve_into() {
     let mut work = vec![0.0; n];
     factor
         .solve_into(&rhs, &mut work)
-        .expect("solve_into should succeed");
+        .or_panic("solve_into should succeed");
 
     // allocating solve()
-    let result = factor.solve(&rhs).expect("solve should succeed");
+    let result = factor.solve(&rhs).or_panic("solve should succeed");
 
     assert_eq!(result.len(), n);
     for (a, b) in result.iter().zip(work.iter()) {
@@ -176,7 +186,9 @@ fn allocating_solve_matches_solve_into() {
 fn solve_in_place_matches_no_projection() {
     let lap = grid_laplacian(5, 5);
     let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
+    let factor = Builder::new(Config::default())
+        .build(lap.as_csr())
+        .or_panic("factorization should succeed");
 
     let n = factor.n();
     let mut rhs = vec![0.0; n_orig];
@@ -187,14 +199,14 @@ fn solve_in_place_matches_no_projection() {
     let mut reference = vec![0.0; n];
     factor
         .solve_into_with_projection(&rhs, &mut reference, false)
-        .expect("solve_into_with_projection should succeed");
+        .or_panic("solve_into_with_projection should succeed");
 
     // solve_in_place — caller does the copy, then forward+backward
     let mut in_place = vec![0.0; n];
     in_place[..rhs.len()].copy_from_slice(&rhs);
     factor
         .solve_in_place(&mut in_place)
-        .expect("solve_in_place should succeed");
+        .or_panic("solve_in_place should succeed");
 
     for (a, b) in reference.iter().zip(in_place.iter()) {
         assert!(
@@ -208,27 +220,31 @@ fn solve_in_place_matches_no_projection() {
 fn try_solve_matches_solve() {
     let lap = grid_laplacian(6, 6);
     let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
+    let factor = Builder::new(Config::default())
+        .build(lap.as_csr())
+        .or_panic("factorization should succeed");
 
     let mut rhs = vec![0.0; n_orig];
     rhs[0] = 1.0;
     rhs[n_orig - 1] = -1.0;
 
-    let x = factor.solve(&rhs).expect("solve should succeed");
-    let x_try = factor.try_solve(&rhs).expect("try_solve should succeed");
+    let x = factor.solve(&rhs).or_panic("solve should succeed");
+    let x_try = factor.try_solve(&rhs).or_panic("try_solve should succeed");
     assert_eq!(x, x_try, "try_solve must match solve");
 }
 
 #[test]
 fn try_solve_into_reports_rhs_too_long() {
     let lap = grid_laplacian(4, 4);
-    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
+    let factor = Builder::new(Config::default())
+        .build(lap.as_csr())
+        .or_panic("factorization should succeed");
 
     let rhs = vec![0.0; factor.n() + 1];
     let mut work = vec![0.0; factor.n()];
     let err = factor
         .try_solve_into(&rhs, &mut work)
-        .expect_err("rhs longer than factor dimension must fail");
+        .err_or_panic("rhs longer than factor dimension must fail");
     assert!(matches!(
         err,
         SolveError::RhsLengthExceedsFactor {
@@ -242,7 +258,9 @@ fn try_solve_into_reports_rhs_too_long() {
 fn try_solve_into_reports_short_work_buffer() {
     let lap = grid_laplacian(4, 4);
     let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
+    let factor = Builder::new(Config::default())
+        .build(lap.as_csr())
+        .or_panic("factorization should succeed");
 
     let mut rhs = vec![0.0; n_orig];
     rhs[0] = 1.0;
@@ -251,7 +269,7 @@ fn try_solve_into_reports_short_work_buffer() {
 
     let err = factor
         .try_solve_into(&rhs, &mut work)
-        .expect_err("short work buffer must fail");
+        .err_or_panic("short work buffer must fail");
     assert!(matches!(
         err,
         SolveError::WorkBufferTooSmall {
@@ -264,12 +282,14 @@ fn try_solve_into_reports_short_work_buffer() {
 #[test]
 fn try_solve_in_place_reports_short_work_buffer() {
     let lap = grid_laplacian(4, 4);
-    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
+    let factor = Builder::new(Config::default())
+        .build(lap.as_csr())
+        .or_panic("factorization should succeed");
 
     let mut y = vec![0.0; factor.n().saturating_sub(1)];
     let err = factor
         .try_solve_in_place(&mut y)
-        .expect_err("short in-place work buffer must fail");
+        .err_or_panic("short in-place work buffer must fail");
     assert!(matches!(
         err,
         SolveError::WorkBufferTooSmall {
@@ -283,7 +303,9 @@ fn try_solve_in_place_reports_short_work_buffer() {
 fn solve_into_reports_short_work_buffer() {
     let lap = grid_laplacian(4, 4);
     let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
+    let factor = Builder::new(Config::default())
+        .build(lap.as_csr())
+        .or_panic("factorization should succeed");
 
     let mut rhs = vec![0.0; n_orig];
     rhs[0] = 1.0;
@@ -291,7 +313,7 @@ fn solve_into_reports_short_work_buffer() {
     let mut work = vec![0.0; factor.n().saturating_sub(1)];
     let err = factor
         .solve_into(&rhs, &mut work)
-        .expect_err("short work buffer must fail");
+        .err_or_panic("short work buffer must fail");
     assert!(matches!(
         err,
         SolveError::WorkBufferTooSmall {
@@ -304,12 +326,14 @@ fn solve_into_reports_short_work_buffer() {
 #[test]
 fn solve_in_place_reports_short_work_buffer() {
     let lap = grid_laplacian(4, 4);
-    let factor = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
+    let factor = Builder::new(Config::default())
+        .build(lap.as_csr())
+        .or_panic("factorization should succeed");
 
     let mut y = vec![0.0; factor.n().saturating_sub(1)];
     let err = factor
         .solve_in_place(&mut y)
-        .expect_err("short in-place work buffer must fail");
+        .err_or_panic("short in-place work buffer must fail");
     assert!(matches!(
         err,
         SolveError::WorkBufferTooSmall {

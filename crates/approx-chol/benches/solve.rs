@@ -6,11 +6,13 @@ use std::time::Duration;
 use approx_chol::{Builder, Config, Factor};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
-use common::grid_laplacian;
+use common::{grid_laplacian, OrPanic};
 
 fn bench_solve_for_size(c: &mut Criterion, size: usize) {
     let lap = grid_laplacian(size, size);
-    let factor: Factor<f64> = Builder::new(Config::default()).build(lap.as_csr()).unwrap();
+    let factor: Factor<f64> = Builder::new(Config::default())
+        .build(lap.as_csr())
+        .or_panic("factorization should succeed");
     let n = factor.n();
 
     let mut rhs = vec![0.0f64; n];
@@ -27,7 +29,7 @@ fn bench_solve_for_size(c: &mut Criterion, size: usize) {
         b.iter(|| {
             factor
                 .solve_into(black_box(&rhs), black_box(&mut work_projected))
-                .expect("solve_into should succeed");
+                .or_panic("solve_into should succeed");
             black_box(&work_projected);
         });
     });
@@ -44,7 +46,7 @@ fn bench_solve_for_size(c: &mut Criterion, size: usize) {
                         black_box(&mut work_no_projection),
                         false,
                     )
-                    .expect("solve_into_with_projection should succeed");
+                    .or_panic("solve_into_with_projection should succeed");
                 black_box(&work_no_projection);
             });
         },
@@ -56,7 +58,7 @@ fn bench_solve_for_size(c: &mut Criterion, size: usize) {
             work_in_place.copy_from_slice(&rhs);
             factor
                 .solve_in_place(black_box(&mut work_in_place))
-                .expect("solve_in_place should succeed");
+                .or_panic("solve_in_place should succeed");
             black_box(&work_in_place);
         });
     });

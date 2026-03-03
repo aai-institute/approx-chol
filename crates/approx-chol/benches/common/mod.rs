@@ -1,5 +1,27 @@
 use approx_chol::CsrRef;
 
+pub trait OrPanic<T> {
+    fn or_panic(self, context: &str) -> T;
+}
+
+impl<T, E: core::fmt::Debug> OrPanic<T> for Result<T, E> {
+    fn or_panic(self, context: &str) -> T {
+        match self {
+            Ok(value) => value,
+            Err(err) => panic!("{context}: {err:?}"),
+        }
+    }
+}
+
+impl<T> OrPanic<T> for Option<T> {
+    fn or_panic(self, context: &str) -> T {
+        match self {
+            Some(value) => value,
+            None => panic!("{context}"),
+        }
+    }
+}
+
 /// Grid Laplacian stored as owned arrays (CsrRef-compatible).
 pub struct GridLaplacian {
     pub row_ptrs: Vec<u32>,
@@ -11,7 +33,7 @@ pub struct GridLaplacian {
 impl GridLaplacian {
     pub fn as_csr(&self) -> CsrRef<'_> {
         CsrRef::new(&self.row_ptrs, &self.col_indices, &self.values, self.n)
-            .expect("grid_laplacian must build valid CSR")
+            .or_panic("grid_laplacian must build valid CSR")
     }
 }
 

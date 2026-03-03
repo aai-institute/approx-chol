@@ -1,5 +1,18 @@
 use super::*;
 
+trait OrPanic<T> {
+    fn or_panic(self, context: &str) -> T;
+}
+
+impl<T> OrPanic<T> for Option<T> {
+    fn or_panic(self, context: &str) -> T {
+        match self {
+            Some(value) => value,
+            None => panic!("{context}"),
+        }
+    }
+}
+
 fn nbr(to: u32, fill_weight: f64, count: u32) -> Neighbor<f64> {
     Neighbor {
         to,
@@ -28,13 +41,19 @@ fn test_compress_merge_caps_count() {
     assert_eq!(counts.len(), 2);
 
     // Find neighbor 3's entry
-    let idx3 = entries.iter().position(|e| e.0 == 3).unwrap();
+    let idx3 = entries
+        .iter()
+        .position(|e| e.0 == 3)
+        .or_panic("missing entry for neighbor 3");
     assert_eq!(counts[idx3], 2);
     // Total weight preserved: 4 copies * 1.0 = 4.0 (count capped, weight unchanged)
     assert!((entries[idx3].1 - 4.0).abs() < 1e-10);
 
     // Neighbor 5: count=1, weight=2.0
-    let idx5 = entries.iter().position(|e| e.0 == 5).unwrap();
+    let idx5 = entries
+        .iter()
+        .position(|e| e.0 == 5)
+        .or_panic("missing entry for neighbor 5");
     assert_eq!(counts[idx5], 1);
     assert!((entries[idx5].1 - 2.0).abs() < 1e-10);
 
@@ -144,7 +163,10 @@ fn test_dedup_ac_sort_and_scatter_paths_agree() {
     );
 
     // For small path: vertex 0 had weight 1.0 + 0.5 = 1.5 after merge.
-    let entry0_small = entries_small.iter().find(|e| e.0 == 0).unwrap();
+    let entry0_small = entries_small
+        .iter()
+        .find(|e| e.0 == 0)
+        .or_panic("missing merged entry for vertex 0 in sort path");
     assert!(
         (entry0_small.1 - 1.5).abs() < 1e-12,
         "sort path: merged weight for vertex 0 should be 1.5, got {}",
@@ -152,7 +174,10 @@ fn test_dedup_ac_sort_and_scatter_paths_agree() {
     );
 
     // For large path: same merge rule applies.
-    let entry0_large = entries_large.iter().find(|e| e.0 == 0).unwrap();
+    let entry0_large = entries_large
+        .iter()
+        .find(|e| e.0 == 0)
+        .or_panic("missing merged entry for vertex 0 in scatter path");
     assert!(
         (entry0_large.1 - 1.5).abs() < 1e-12,
         "scatter path: merged weight for vertex 0 should be 1.5, got {}",
@@ -231,8 +256,10 @@ fn test_dedup_ac2_sort_and_scatter_paths_agree() {
             .map(|(&(_, w), &c)| (w, c))
     };
 
-    let (w0_small, c0_small) = find(&entries_small, &counts_small, 0).unwrap();
-    let (w0_large, c0_large) = find(&entries_large, &counts_large, 0).unwrap();
+    let (w0_small, c0_small) = find(&entries_small, &counts_small, 0)
+        .or_panic("missing merged AC2 entry for vertex 0 in sort path");
+    let (w0_large, c0_large) = find(&entries_large, &counts_large, 0)
+        .or_panic("missing merged AC2 entry for vertex 0 in scatter path");
 
     assert!(
         (w0_small - 1.5).abs() < 1e-12,

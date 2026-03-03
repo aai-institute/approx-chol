@@ -397,15 +397,28 @@ impl<'a, T, I: faer::Index + PrimInt> TryFrom<&'a faer::sparse::SparseRowMat<I, 
 mod tests {
     use super::*;
 
+    trait OrPanic<T> {
+        fn or_panic(self, context: &str) -> T;
+    }
+
+    impl<T, E: core::fmt::Debug> OrPanic<T> for Result<T, E> {
+        fn or_panic(self, context: &str) -> T {
+            match self {
+                Ok(value) => value,
+                Err(err) => panic!("{context}: {err:?}"),
+            }
+        }
+    }
+
     #[test]
     fn to_owned_u32_preserves_indices_for_u32_input() {
         let row_ptrs = [0u32, 1];
         let col_indices = [0u32];
         let values = [1.0f64];
-        let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 1).expect("valid csr");
+        let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 1).or_panic("valid csr");
 
-        let converted = csr.to_owned_u32().expect("conversion");
-        let converted_ref = converted.try_as_ref().expect("must stay valid");
+        let converted = csr.to_owned_u32().or_panic("conversion");
+        let converted_ref = converted.try_as_ref().or_panic("must stay valid");
         assert_eq!(converted_ref.row_ptrs(), &row_ptrs);
         assert_eq!(converted_ref.col_indices(), &col_indices);
         assert_eq!(converted_ref.values(), &values);
@@ -416,10 +429,10 @@ mod tests {
         let row_ptrs = [0usize, 1];
         let col_indices = [0usize];
         let values = [1.0f64];
-        let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 1).expect("valid csr");
+        let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 1).or_panic("valid csr");
 
-        let converted = csr.to_owned_u32().expect("conversion");
-        let converted_ref = converted.try_as_ref().expect("must stay valid");
+        let converted = csr.to_owned_u32().or_panic("conversion");
+        let converted_ref = converted.try_as_ref().or_panic("must stay valid");
         assert_eq!(converted_ref.row_ptrs(), &[0u32, 1]);
         assert_eq!(converted_ref.col_indices(), &[0u32]);
         assert_eq!(converted_ref.values(), &values);

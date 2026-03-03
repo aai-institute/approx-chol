@@ -1,3 +1,6 @@
+mod common;
+use common::OrPanic;
+
 use approx_chol::{Builder, Config, CsrRef};
 
 fn solve_with_default_ac(
@@ -7,17 +10,17 @@ fn solve_with_default_ac(
     n: u32,
     rhs: &[f64],
 ) -> Vec<f64> {
-    let csr = CsrRef::new(row_ptrs, col_indices, values, n).expect("valid CSR");
+    let csr = CsrRef::new(row_ptrs, col_indices, values, n).or_panic("valid CSR");
     let factor = Builder::<f64>::new(Config {
         seed: 7,
         ..Config::default()
     })
     .build(csr)
-    .expect("factorization");
+    .or_panic("factorization");
     let mut work = vec![0.0; factor.n()];
     factor
         .solve_into_with_projection(rhs, &mut work, false)
-        .expect("solve_into_with_projection should succeed");
+        .or_panic("solve_into_with_projection should succeed");
     work
 }
 

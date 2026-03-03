@@ -6,7 +6,7 @@ use std::time::Duration;
 use approx_chol::CsrRef;
 use criterion::{criterion_group, criterion_main, Criterion};
 
-use common::grid_laplacian;
+use common::{grid_laplacian, OrPanic};
 
 fn bench_to_owned_u32_for_size(c: &mut Criterion, size: usize) {
     let lap = grid_laplacian(size, size);
@@ -15,7 +15,7 @@ fn bench_to_owned_u32_for_size(c: &mut Criterion, size: usize) {
     let row_ptrs_usize: Vec<usize> = lap.row_ptrs.iter().map(|&v| v as usize).collect();
     let col_indices_usize: Vec<usize> = lap.col_indices.iter().map(|&v| v as usize).collect();
     let csr_usize =
-        CsrRef::new(&row_ptrs_usize, &col_indices_usize, &lap.values, lap.n).expect("valid CSR");
+        CsrRef::new(&row_ptrs_usize, &col_indices_usize, &lap.values, lap.n).or_panic("valid CSR");
 
     let mut group = c.benchmark_group(format!("csr_to_owned_u32_{size}x{size}"));
     group.sample_size(20);
@@ -33,11 +33,11 @@ fn bench_to_owned_u32_for_size(c: &mut Criterion, size: usize) {
         b.iter(|| {
             let converted = black_box(csr_u32)
                 .to_owned_u32()
-                .expect("u32 indices must fit in u32");
+                .or_panic("u32 indices must fit in u32");
             black_box(
                 converted
                     .try_as_ref()
-                    .expect("owned CSR should stay valid")
+                    .or_panic("owned CSR should stay valid")
                     .row_ptrs()
                     .len(),
             );
@@ -48,11 +48,11 @@ fn bench_to_owned_u32_for_size(c: &mut Criterion, size: usize) {
         b.iter(|| {
             let converted = black_box(csr_usize)
                 .to_owned_u32()
-                .expect("usize indices from this grid must fit in u32");
+                .or_panic("usize indices from this grid must fit in u32");
             black_box(
                 converted
                     .try_as_ref()
-                    .expect("owned CSR should stay valid")
+                    .or_panic("owned CSR should stay valid")
                     .row_ptrs()
                     .len(),
             );

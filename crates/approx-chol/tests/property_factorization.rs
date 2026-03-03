@@ -1,3 +1,6 @@
+mod common;
+use common::OrPanic;
+
 use approx_chol::{factorize, factorize_with, Config, CsrRef};
 use proptest::prelude::*;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -61,18 +64,18 @@ proptest! {
     ) {
         let run = catch_unwind(AssertUnwindSafe(|| {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
-                .expect("generated CSR must be valid");
-            let factor = factorize(csr).expect("factorization should succeed");
+                .or_panic("generated CSR must be valid");
+            let factor = factorize(csr).or_panic("factorization should succeed");
             let rhs = rhs_for_dimension(n as usize);
             let mut work = vec![0.0_f64; factor.n()];
             factor
                 .solve_into(&rhs, &mut work)
-                .expect("solve_into should succeed");
+                .or_panic("solve_into should succeed");
             work
         }));
 
         prop_assert!(run.is_ok(), "default factorization or solve panicked");
-        let work = run.expect("checked above");
+        let work = run.or_panic("checked above");
         prop_assert!(work.iter().all(|x| x.is_finite()));
     }
 
@@ -81,15 +84,15 @@ proptest! {
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
-            .expect("generated CSR must be valid");
-        let factor = factorize(csr).expect("factorization should succeed");
+            .or_panic("generated CSR must be valid");
+        let factor = factorize(csr).or_panic("factorization should succeed");
         let rhs = rhs_for_dimension(n as usize);
 
-        let from_alloc = factor.solve(&rhs).expect("solve should succeed");
+        let from_alloc = factor.solve(&rhs).or_panic("solve should succeed");
         let mut from_into = vec![0.0_f64; factor.n()];
         factor
             .solve_into(&rhs, &mut from_into)
-            .expect("solve_into should succeed");
+            .or_panic("solve_into should succeed");
 
         prop_assert_eq!(from_alloc.len(), from_into.len());
         for (a, b) in from_alloc.iter().zip(from_into.iter()) {
@@ -103,7 +106,7 @@ proptest! {
     ) {
         let run = catch_unwind(AssertUnwindSafe(|| {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
-                .expect("generated CSR must be valid");
+                .or_panic("generated CSR must be valid");
             let factor = factorize_with(
                 csr,
                 Config {
@@ -111,17 +114,17 @@ proptest! {
                     split_merge: Some(2),
                 },
             )
-            .expect("AC2 factorization should succeed");
+            .or_panic("AC2 factorization should succeed");
             let rhs = rhs_for_dimension(n as usize);
             let mut work = vec![0.0_f64; factor.n()];
             factor
                 .solve_into(&rhs, &mut work)
-                .expect("solve_into should succeed");
+                .or_panic("solve_into should succeed");
             work
         }));
 
         prop_assert!(run.is_ok(), "AC2 factorization or solve panicked");
-        let work = run.expect("checked above");
+        let work = run.or_panic("checked above");
         prop_assert!(work.iter().all(|x| x.is_finite()));
     }
 }

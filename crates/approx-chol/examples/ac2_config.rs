@@ -9,7 +9,7 @@
 //! cargo run -p approx-chol --example ac2_config
 //! ```
 
-use approx_chol::{Builder, Config, CsrRef};
+use approx_chol::{Builder, Config, CsrRef, Error};
 
 // --------------------------------------------------------------------------
 // Grid Laplacian builder (inlined — examples are separate compilation units)
@@ -23,9 +23,8 @@ struct GridLaplacian {
 }
 
 impl GridLaplacian {
-    fn as_csr(&self) -> CsrRef<'_> {
+    fn as_csr(&self) -> Result<CsrRef<'_>, Error> {
         CsrRef::new(&self.row_ptrs, &self.col_indices, &self.values, self.n)
-            .expect("grid_laplacian must build valid CSR")
     }
 }
 
@@ -81,7 +80,7 @@ fn grid_laplacian(rows: usize, cols: usize) -> GridLaplacian {
 // Main
 // --------------------------------------------------------------------------
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lap = grid_laplacian(10, 10);
     let n = lap.n as usize;
     println!("Grid Laplacian: 10×10 ({n} nodes)\n");
@@ -90,9 +89,7 @@ fn main() {
     // Default AC (split_merge = None)
     // -----------------------------------------------------------------------
     let ac_config = Config::default();
-    let ac_factor = Builder::new(ac_config)
-        .build(lap.as_csr())
-        .expect("AC factorization failed");
+    let ac_factor = Builder::new(ac_config).build(lap.as_csr()?)?;
 
     println!("=== Default AC ===");
     println!("  split_merge : None (standard AC)");
@@ -106,9 +103,7 @@ fn main() {
         split_merge: Some(2),
         seed: 42,
     };
-    let ac2_factor = Builder::new(ac2_config)
-        .build(lap.as_csr())
-        .expect("AC2 factorization failed");
+    let ac2_factor = Builder::new(ac2_config).build(lap.as_csr()?)?;
 
     println!("\n=== AC2 (k=2) ===");
     println!("  split_merge : Some(2)");
@@ -135,8 +130,8 @@ fn main() {
         *bi = if i < n / 2 { 1.0 } else { -1.0 };
     }
 
-    let x_ac = ac_factor.solve(&b).expect("AC solve failed");
-    let x_ac2 = ac2_factor.solve(&b).expect("AC2 solve failed");
+    let x_ac = ac_factor.solve(&b)?;
+    let x_ac2 = ac2_factor.solve(&b)?;
 
     let norm_ac: f64 = x_ac.iter().map(|v| v * v).sum::<f64>().sqrt();
     let norm_ac2: f64 = x_ac2.iter().map(|v| v * v).sum::<f64>().sqrt();
@@ -145,4 +140,6 @@ fn main() {
     println!("  AC  : {norm_ac:.6}");
     println!("  AC2 : {norm_ac2:.6}");
     println!("  (norms differ — approximate factors have different spectral quality)");
+
+    Ok(())
 }

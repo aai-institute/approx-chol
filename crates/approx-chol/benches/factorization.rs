@@ -3,7 +3,7 @@ mod common;
 use approx_chol::{Builder, Config};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
-use common::grid_laplacian;
+use common::{grid_laplacian, OrPanic};
 
 fn bench_approx_chol_build(c: &mut Criterion) {
     let mut group = c.benchmark_group("approx_chol_build");
@@ -18,7 +18,11 @@ fn bench_approx_chol_build(c: &mut Criterion) {
             BenchmarkId::new("grid", format!("{}x{}", size, size)),
             &lap,
             |b, lap| {
-                b.iter(|| builder.build(lap.as_csr()).unwrap());
+                b.iter(|| {
+                    builder
+                        .build(lap.as_csr())
+                        .or_panic("factorization should succeed")
+                });
             },
         );
     }

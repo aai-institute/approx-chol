@@ -1,3 +1,6 @@
+mod common;
+use common::{ErrOrPanic, OrPanic};
+
 use approx_chol::{CsrError, CsrRef, Error};
 use proptest::prelude::*;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -51,7 +54,7 @@ proptest! {
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
-            .expect("generated CSR must be valid");
+            .or_panic("generated CSR must be valid");
 
         let access = catch_unwind(AssertUnwindSafe(|| {
             for i in 0..(n as usize) {
@@ -67,9 +70,9 @@ proptest! {
         extra in 0usize..=8
     ) {
         let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
-            .expect("generated CSR must be valid");
+            .or_panic("generated CSR must be valid");
         let row = (n as usize).saturating_add(extra);
-        let err = csr.try_row(row).expect_err("out-of-bounds row must fail");
+        let err = csr.try_row(row).err_or_panic("out-of-bounds row must fail");
         prop_assert_eq!(
             err,
             Error::InvalidCsr(CsrError::RowIndexOutOfBounds {
@@ -84,7 +87,7 @@ proptest! {
         (mut row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         row_ptrs.pop();
-        let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect_err("must fail");
+        let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).err_or_panic("must fail");
         prop_assert_eq!(
             err,
             Error::InvalidCsr(CsrError::RowPtrsLenMismatch {
@@ -99,7 +102,7 @@ proptest! {
         (row_ptrs, col_indices, mut values, n) in laplacian_csr_strategy()
     ) {
         values.pop();
-        let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect_err("must fail");
+        let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).err_or_panic("must fail");
         prop_assert_eq!(
             err,
             Error::InvalidCsr(CsrError::ColIndicesValuesLenMismatch {
@@ -114,7 +117,7 @@ proptest! {
         (mut row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         row_ptrs[0] = 1;
-        let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect_err("must fail");
+        let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).err_or_panic("must fail");
         prop_assert_eq!(
             err,
             Error::InvalidCsr(CsrError::RowPtrsMustStartAtZero { got: 1 })
@@ -127,7 +130,7 @@ proptest! {
     ) {
         let last = row_ptrs.len() - 1;
         row_ptrs[last] = row_ptrs[last].saturating_sub(1);
-        let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect_err("must fail");
+        let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).err_or_panic("must fail");
         prop_assert_eq!(
             err,
             Error::InvalidCsr(CsrError::RowPtrsEndMismatchNnz {
@@ -143,7 +146,7 @@ proptest! {
     ) {
         prop_assume!(n >= 2);
         row_ptrs[1] = row_ptrs[2].saturating_add(1);
-        let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect_err("must fail");
+        let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).err_or_panic("must fail");
         prop_assert_eq!(
             err,
             Error::InvalidCsr(CsrError::RowPtrsNotNonDecreasing {
@@ -159,7 +162,7 @@ proptest! {
         (row_ptrs, mut col_indices, values, n) in laplacian_csr_strategy()
     ) {
         col_indices[0] = n;
-        let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect_err("must fail");
+        let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).err_or_panic("must fail");
         prop_assert_eq!(
             err,
             Error::InvalidCsr(CsrError::ColumnIndexOutOfBounds {
