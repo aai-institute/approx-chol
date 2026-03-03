@@ -1,5 +1,4 @@
 use crate::Error;
-use core::any::TypeId;
 use num_traits::{cast, PrimInt};
 
 /// Borrowed CSR matrix view. Zero-copy from any CSR source.
@@ -14,23 +13,6 @@ pub struct CsrRef<'a, T = f64, I = u32> {
     col_indices: &'a [I],
     values: &'a [T],
     n: u32,
-}
-
-pub(crate) enum U32Csr<'a, T> {
-    Borrowed(CsrRef<'a, T, u32>),
-    Owned(OwnedCsr<T, u32>),
-}
-
-impl<T> U32Csr<'_, T> {
-    #[inline]
-    pub(crate) fn as_ref(&self) -> CsrRef<'_, T, u32> {
-        match self {
-            Self::Borrowed(csr) => {
-                CsrRef::new_unchecked(csr.row_ptrs(), csr.col_indices(), csr.values(), csr.n)
-            }
-            Self::Owned(csr) => csr.as_ref(),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -203,25 +185,6 @@ impl<'a, T: Clone, I: PrimInt> CsrRef<'a, T, I> {
             values: self.values.to_vec(),
             n: self.n,
         })
-    }
-}
-
-impl<'a, T: Clone, I: PrimInt + 'static> CsrRef<'a, T, I> {
-    pub(crate) fn to_u32_fast_or_owned(&self) -> Result<U32Csr<'a, T>, Error> {
-        if TypeId::of::<I>() == TypeId::of::<u32>() {
-            // SAFETY: `TypeId` equality proves `I` is exactly `u32`, so the
-            // slice metadata and element layout are identical.
-            let row_ptrs = unsafe { &*(self.row_ptrs as *const [I] as *const [u32]) };
-            // SAFETY: same argument as above.
-            let col_indices = unsafe { &*(self.col_indices as *const [I] as *const [u32]) };
-            return Ok(U32Csr::Borrowed(CsrRef::new_unchecked(
-                row_ptrs,
-                col_indices,
-                self.values,
-                self.n,
-            )));
-        }
-        self.to_owned_u32().map(U32Csr::Owned)
     }
 }
 
@@ -422,35 +385,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn to_u32_fast_or_owned_borrows_for_u32() {
+    fn to_owned_u32_preserves_indices_for_u32_input() {
         let row_ptrs = [0u32, 1];
         let col_indices = [0u32];
         let values = [1.0f64];
         let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 1).expect("valid csr");
 
-        let converted = csr.to_u32_fast_or_owned().expect("conversion");
-        let U32Csr::Borrowed(csr_u32) = converted else {
-            panic!("expected borrowed u32 fast path");
-        };
-
-        assert!(core::ptr::eq(
-            csr_u32.row_ptrs().as_ptr(),
-            row_ptrs.as_ptr()
-        ));
-        assert!(core::ptr::eq(
-            csr_u32.col_indices().as_ptr(),
-            col_indices.as_ptr()
-        ));
+        let converted = csr.to_owned_u32().expect("conversion");
+        let converted_ref = converted.as_ref();
+        assert_eq!(converted_ref.row_ptrs(), &row_ptrs);
+        assert_eq!(converted_ref.col_indices(), &col_indices);
+        assert_eq!(converted_ref.values(), &values);
     }
 
     #[test]
-    fn to_u32_fast_or_owned_allocates_for_non_u32_indices() {
+    fn to_owned_u32_converts_non_u32_indices() {
         let row_ptrs = [0usize, 1];
         let col_indices = [0usize];
         let values = [1.0f64];
         let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 1).expect("valid csr");
 
-        let converted = csr.to_u32_fast_or_owned().expect("conversion");
-        assert!(matches!(converted, U32Csr::Owned(_)));
+        let converted = csr.to_owned_u32().expect("conversion");
+        let converted_ref = converted.as_ref();
+        assert_eq!(converted_ref.row_ptrs(), &[0u32, 1]);
+        assert_eq!(converted_ref.col_indices(), &[0u32]);
+        assert_eq!(converted_ref.values(), &values);
     }
 }

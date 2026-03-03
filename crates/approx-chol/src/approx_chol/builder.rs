@@ -53,9 +53,8 @@ where
     /// Run approximate Cholesky factorization from any input convertible into
     /// [`CsrRef`].
     ///
-    /// Uses a zero-copy fast path for `u32` index inputs; otherwise performs a
-    /// checked conversion of row pointers and column indices to owned `u32`
-    /// storage.
+    /// Performs a checked conversion of row pointers and column indices to
+    /// owned `u32` storage.
     ///
     /// # Errors
     ///
@@ -68,7 +67,7 @@ where
     ) -> Result<Factor<T>, Error> {
         let csr = catch_unwind(AssertUnwindSafe(|| sddm.into()))
             .map_err(|_| Error::InvalidCsr("input conversion panicked"))?;
-        let converted = csr.to_u32_fast_or_owned()?;
+        let converted = csr.to_owned_u32()?;
         self.build_u32(converted.as_ref())
     }
 

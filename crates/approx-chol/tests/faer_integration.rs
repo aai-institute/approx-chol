@@ -25,15 +25,8 @@ where
         .map(|v| T::from_f64(v).expect("value conversion"))
         .collect();
 
-    let symbolic = unsafe {
-        faer::sparse::SymbolicSparseRowMat::<I>::new_unchecked(
-            nrows,
-            ncols,
-            row_ptrs,
-            None,
-            col_indices,
-        )
-    };
+    let symbolic =
+        faer::sparse::SymbolicSparseRowMat::<I>::new_checked(nrows, ncols, row_ptrs, None, col_indices);
     SparseRowMat::new(symbolic, values)
 }
 
@@ -121,9 +114,8 @@ fn faer_non_square_panics() {
     let row_ptrs = vec![0u32, 1, 2, 3];
     let col_indices = vec![0u32, 1, 0];
     let values = vec![1.0, 1.0, 1.0];
-    let symbolic = unsafe {
-        faer::sparse::SymbolicSparseRowMat::<u32>::new_unchecked(3, 4, row_ptrs, None, col_indices)
-    };
+    let symbolic =
+        faer::sparse::SymbolicSparseRowMat::<u32>::new_checked(3, 4, row_ptrs, None, col_indices);
     let mat = SparseRowMat::new(symbolic, values);
     let _: CsrRef<'_, f64, u32> = mat.as_ref().into();
 }
@@ -133,9 +125,8 @@ fn faer_try_from_non_square_returns_error() {
     let row_ptrs = vec![0u32, 1, 2, 3];
     let col_indices = vec![0u32, 1, 0];
     let values = vec![1.0, 1.0, 1.0];
-    let symbolic = unsafe {
-        faer::sparse::SymbolicSparseRowMat::<u32>::new_unchecked(3, 4, row_ptrs, None, col_indices)
-    };
+    let symbolic =
+        faer::sparse::SymbolicSparseRowMat::<u32>::new_checked(3, 4, row_ptrs, None, col_indices);
     let mat = SparseRowMat::new(symbolic, values);
     let err = CsrRef::try_from_faer(&mat).expect_err("non-square matrix must be rejected");
     assert!(matches!(err, Error::InvalidCsr("expected square matrix")));

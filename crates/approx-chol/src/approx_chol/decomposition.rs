@@ -43,68 +43,57 @@ impl<'a, T: num_traits::Float + Send + Sync + 'static> EliminationStep<'a, T> {
     #[inline(always)]
     pub(crate) fn apply_forward(&self, y: &mut [T], inv_diag: T) {
         self.debug_assert_in_bounds(y.len());
+        let vertex = self.vertex;
         let n = self.neighbor_indices.len();
         let zero = T::zero();
         let one = T::one();
         if n == 0 {
             if inv_diag != zero {
-                // SAFETY: `debug_assert_in_bounds` proves `self.vertex < y.len()`.
-                unsafe {
-                    *y.get_unchecked_mut(self.vertex) = *y.get_unchecked(self.vertex) * inv_diag
-                };
+                y[vertex] = y[vertex] * inv_diag;
             }
             return;
         }
 
-        // SAFETY: `debug_assert_in_bounds` proves `self.vertex < y.len()`.
-        let mut yi = unsafe { *y.get_unchecked(self.vertex) };
+        let mut yi = y[vertex];
 
         for (&j, &f) in self.neighbor_indices[..n - 1]
             .iter()
             .zip(self.elimination_fractions.iter())
         {
-            // SAFETY: `debug_assert_in_bounds` verifies every neighbor index is in bounds.
-            unsafe {
-                *y.get_unchecked_mut(j as usize) = *y.get_unchecked(j as usize) + f * yi;
-            };
+            let j = j as usize;
+            y[j] = y[j] + f * yi;
             yi = yi * (one - f);
         }
 
-        // SAFETY: `n > 0` and `n == self.neighbor_indices.len()`.
-        let j_last = unsafe { *self.neighbor_indices.get_unchecked(n - 1) } as usize;
-        // SAFETY: `debug_assert_in_bounds` verifies `j_last < y.len()`.
-        unsafe { *y.get_unchecked_mut(j_last) = *y.get_unchecked(j_last) + yi };
+        let j_last = self.neighbor_indices[n - 1] as usize;
+        y[j_last] = y[j_last] + yi;
         let val = if inv_diag != zero { yi * inv_diag } else { yi };
-        // SAFETY: `debug_assert_in_bounds` proves `self.vertex < y.len()`.
-        unsafe { *y.get_unchecked_mut(self.vertex) = val };
+        y[vertex] = val;
     }
 
     /// Backward substitution: gather neighbor contributions back to pivot.
     #[inline(always)]
     pub(crate) fn apply_backward(&self, y: &mut [T]) {
         self.debug_assert_in_bounds(y.len());
+        let vertex = self.vertex;
         let n = self.neighbor_indices.len();
         let one = T::one();
         if n == 0 {
             return;
         }
 
-        // SAFETY: `n > 0` and `n == self.neighbor_indices.len()`.
-        let j_last = unsafe { *self.neighbor_indices.get_unchecked(n - 1) } as usize;
-        // SAFETY: bounds established by `debug_assert_in_bounds`.
-        let mut yi = unsafe { *y.get_unchecked(self.vertex) + *y.get_unchecked(j_last) };
+        let j_last = self.neighbor_indices[n - 1] as usize;
+        let mut yi = y[vertex] + y[j_last];
 
         for (&j, &f) in self.neighbor_indices[..n - 1]
             .iter()
             .zip(self.elimination_fractions.iter())
             .rev()
         {
-            // SAFETY: bounds established by `debug_assert_in_bounds`.
-            yi = (one - f) * yi + f * unsafe { *y.get_unchecked(j as usize) };
+            yi = (one - f) * yi + f * y[j as usize];
         }
 
-        // SAFETY: `debug_assert_in_bounds` proves `self.vertex < y.len()`.
-        unsafe { *y.get_unchecked_mut(self.vertex) = yi };
+        y[vertex] = yi;
     }
 }
 
@@ -366,9 +355,7 @@ where
         seq.debug_assert_valid_for_dim(self.n);
         for i in 0..seq.n_steps() {
             let step = seq.step(i);
-            // SAFETY: `i < seq.n_steps()` and `debug_assert_valid_for_dim` checks
-            // `inv_diagonal.len() == seq.n_steps()`.
-            let inv_diag = unsafe { *seq.inv_diagonal.get_unchecked(i) };
+            let inv_diag = seq.inv_diagonal[i];
             step.apply_forward(y, inv_diag);
         }
     }
@@ -484,8 +471,7 @@ where
     /// Panics if `y.len() < self.n()`.
     pub fn solve_in_place(&self, y: &mut [T]) {
         self.assert_in_place_work(y);
-        // SAFETY: `assert_in_place_work` guarantees `y.len() >= self.n()`.
-        unsafe { self.solve_in_place_unchecked(y) };
+        self.solve_in_place_unchecked(y);
     }
 
     /// Fallible variant of [`Self::solve_in_place`].
@@ -495,17 +481,12 @@ where
     /// Returns [`SolveError::WorkBufferTooSmall`] if `y.len() < self.n()`.
     pub fn try_solve_in_place(&self, y: &mut [T]) -> Result<(), SolveError> {
         self.validate_in_place_work(y)?;
-        // SAFETY: `validate_in_place_work` guarantees `y.len() >= self.n()`.
-        unsafe { self.solve_in_place_unchecked(y) };
+        self.solve_in_place_unchecked(y);
         Ok(())
     }
 
     /// Solve L D L^T x = b in-place without checking `y` length.
-    ///
-    /// # Safety
-    ///
-    /// Caller must ensure `y.len() >= self.n()`.
-    pub unsafe fn solve_in_place_unchecked(&self, y: &mut [T]) {
+    pub fn solve_in_place_unchecked(&self, y: &mut [T]) {
         debug_assert!(
             y.len() >= self.n,
             "work buffer too small: got {}, need at least {}",
