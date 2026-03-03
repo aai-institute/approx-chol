@@ -36,7 +36,7 @@ Laplacians.jl is licensed under the MIT License.
 This project is licensed under `Apache-2.0 AND MIT`.
 
 - Apache-2.0: see `LICENSE`.
-- MIT (for Laplacians.jl-derived material): see `LICENSES/LAPLACIANS-MIT.txt`.
+- MIT (for Laplacians.jl-derived material): see `LICENSE-MIT`.
 - Additional attribution and provenance notes: see `NOTICE`.
 
 

@@ -191,7 +191,7 @@ packages:
 - pypi: ./
   name: approx-chol
   version: 0.1.0
-  sha256: 69e8f6e38f5226144831bc699f42c0dbf624f4c8c71b688e48b7084bf2aca77c
+  sha256: 0670d320e5d5bda574a9e4e4f26212b20d59c6373be1851b56467cea2bddf385
   requires_dist:
   - numpy>=1.24
   - scipy>=1.10
