@@ -38,4 +38,4 @@ pub use crate::sampling::CdfSampler;
 pub use crate::approx_chol::decomposition::{EliminationSequence, EliminationStep};
 
 // Star clique sampling utilities (AC + AC2 variants)
-pub use crate::star_clique::{clique_tree_sample, clique_tree_sample_multi};
+pub use crate::approx_chol::clique_tree::{clique_tree_sample, clique_tree_sample_multi};

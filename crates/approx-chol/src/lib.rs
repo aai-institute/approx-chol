@@ -94,7 +94,6 @@ mod csr;
 pub(crate) mod graph;
 pub(crate) mod ordering;
 pub(crate) mod sampling;
-mod star_clique;
 mod types;
 
 /// Low-level API for advanced use cases (custom pipelines, graph inspection, research).
@@ -108,9 +107,9 @@ pub(crate) use types::Real;
 // New code should prefer
 // `approx_chol::low_level::{Builder, Ordering, clique_tree_sample, clique_tree_sample_multi}`.
 #[doc(hidden)]
-pub use approx_chol::{Builder, Ordering};
+pub use approx_chol::clique_tree::{clique_tree_sample, clique_tree_sample_multi};
 #[doc(hidden)]
-pub use star_clique::{clique_tree_sample, clique_tree_sample_multi};
+pub use approx_chol::{Builder, Ordering};
 
 use std::fmt;
 

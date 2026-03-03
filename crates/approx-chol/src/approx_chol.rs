@@ -1,10 +1,9 @@
 mod builder;
-mod clique_tree;
+pub(crate) mod clique_tree;
 pub(crate) mod decomposition;
 mod dedup;
 pub(crate) mod sampled_column;
-mod star_ac;
-mod star_ac2;
+mod star;
 
 pub use builder::Builder;
 pub use decomposition::{Factor, SolveError};
