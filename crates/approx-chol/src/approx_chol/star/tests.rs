@@ -113,12 +113,18 @@ fn test_dedup_ac_sort_and_scatter_paths_agree() {
 
     // Both paths must have merged vertex 0.
     assert!(
-        dedup_small.merged().contains(&0),
-        "sort path: vertex 0 should be in merged list"
+        dedup_small
+            .merged_counts()
+            .iter()
+            .any(|&(idx, n)| idx == 0 && n > 0),
+        "sort path: vertex 0 should have merged duplicates"
     );
     assert!(
-        dedup_large.merged().contains(&0),
-        "scatter path: vertex 0 should be in merged list"
+        dedup_large
+            .merged_counts()
+            .iter()
+            .any(|&(idx, n)| idx == 0 && n > 0),
+        "scatter path: vertex 0 should have merged duplicates"
     );
 
     // Both must produce sorted-by-weight output (AC invariant).

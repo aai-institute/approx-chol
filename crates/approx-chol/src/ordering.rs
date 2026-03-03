@@ -32,11 +32,6 @@ pub(crate) trait EliminationOrdering<T: Real> {
     /// A fill edge was added between `u` and `v`.
     fn notify_fill_edge(&mut self, u: u32, v: u32);
 
-    /// Duplicate edges to `v` were merged during compression (degree decreased by 1).
-    fn notify_edges_merged(&mut self, v: u32) {
-        self.notify_neighbor_removed(v);
-    }
-
     /// `n` duplicate edges to `v` were merged during compression.
     fn notify_edges_merged_n(&mut self, v: u32, n: u32) {
         self.notify_neighbor_removed_n(v, n);
@@ -216,10 +211,6 @@ impl<T: Real> EliminationOrdering<T> for DynamicOrdering {
         DynamicOrdering::notify_fill_edge(self, u, v);
     }
 
-    fn notify_edges_merged(&mut self, v: u32) {
-        DynamicOrdering::notify_neighbor_removed(self, v);
-    }
-
     fn notify_edges_merged_n(&mut self, v: u32, n: u32) {
         DynamicOrdering::notify_neighbor_removed_n(self, v, n);
     }
@@ -356,10 +347,10 @@ mod tests {
         let mut pq = DynamicOrdering::new(3, [3, 2, 1].into_iter());
 
         // Merging edges to vertex 0 → degree decreases
-        <DynamicOrdering as EliminationOrdering<f64>>::notify_edges_merged(&mut pq, 0u32);
+        <DynamicOrdering as EliminationOrdering<f64>>::notify_edges_merged_n(&mut pq, 0u32, 1);
         assert_eq!(pq.elems[0].key, 2);
 
-        <DynamicOrdering as EliminationOrdering<f64>>::notify_edges_merged(&mut pq, 0u32);
+        <DynamicOrdering as EliminationOrdering<f64>>::notify_edges_merged_n(&mut pq, 0u32, 1);
         assert_eq!(pq.elems[0].key, 1);
     }
 

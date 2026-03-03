@@ -200,6 +200,7 @@ pub(crate) fn clique_tree_sample_column<T: Real, S: WeightedSampler<T>>(
 pub(crate) fn clique_tree_sample_column_multi<T: Real, S: WeightedSampler<T>>(
     entries: &[(u32, T)],
     counts: &[u32],
+    total_weight: T,
     pivot_diag: T,
     sampler: &mut S,
     column: &mut SampledColumn<T>,
@@ -209,7 +210,6 @@ pub(crate) fn clique_tree_sample_column_multi<T: Real, S: WeightedSampler<T>>(
         return;
     };
 
-    let total_weight = entries.iter().fold(T::zero(), |a, e| a + e.1);
     if total_weight <= T::near_zero() {
         column.diagonal = pivot_diag;
         for &(j, _) in entries {
