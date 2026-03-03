@@ -6,106 +6,9 @@ use crate::{CsrRef, Error, Factor};
 use num_traits::PrimInt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use super::clique_tree::{clique_tree_sample_column, clique_tree_sample_column_multi};
-use super::sampled_column::SampledColumn;
-use super::star::{Ac2StarBuilder, AcStarBuilder};
+use super::clique_tree::SampledColumn;
+use super::star::{Ac2StarBuilder, AcStarBuilder, StarBuilderVariant};
 use super::{Config, Ordering};
-
-trait StarBuilderVariant<T: num_traits::Float + Send + Sync + 'static> {
-    fn build_star<G: EliminationGraph<T>, O: EliminationOrdering<T>>(
-        &mut self,
-        graph: &mut G,
-        v: usize,
-        ordering: &mut O,
-    );
-    fn is_empty(&self) -> bool;
-    fn entries(&self) -> &[(u32, T)];
-    fn counts(&self) -> Option<&[u32]>;
-}
-
-impl<T: num_traits::Float + Send + Sync + 'static> StarBuilderVariant<T> for AcStarBuilder<T> {
-    fn build_star<G: EliminationGraph<T>, O: EliminationOrdering<T>>(
-        &mut self,
-        graph: &mut G,
-        v: usize,
-        ordering: &mut O,
-    ) {
-        self.build_star(graph, v, ordering);
-    }
-
-    fn is_empty(&self) -> bool {
-        self.is_empty()
-    }
-
-    fn entries(&self) -> &[(u32, T)] {
-        self.entries()
-    }
-
-    fn counts(&self) -> Option<&[u32]> {
-        None
-    }
-}
-
-impl<T: num_traits::Float + Send + Sync + 'static> StarBuilderVariant<T> for Ac2StarBuilder<T> {
-    fn build_star<G: EliminationGraph<T>, O: EliminationOrdering<T>>(
-        &mut self,
-        graph: &mut G,
-        v: usize,
-        ordering: &mut O,
-    ) {
-        self.build_star(graph, v, ordering);
-    }
-
-    fn is_empty(&self) -> bool {
-        self.is_empty()
-    }
-
-    fn entries(&self) -> &[(u32, T)] {
-        self.entries()
-    }
-
-    fn counts(&self) -> Option<&[u32]> {
-        Some(self.counts())
-    }
-}
-
-fn sample_star_column<T, W>(
-    entries: &[(u32, T)],
-    counts: Option<&[u32]>,
-    pivot_diag: T,
-    sampler: &mut W,
-    column: &mut SampledColumn<T>,
-) where
-    T: num_traits::Float + Send + Sync + 'static,
-    W: WeightedSampler<T>,
-{
-    match counts {
-        None => clique_tree_sample_column(entries, pivot_diag, sampler, column),
-        Some(counts) => {
-            clique_tree_sample_column_multi(entries, counts, pivot_diag, sampler, column)
-        }
-    }
-}
-
-fn notify_star_eliminated<T, O>(
-    ordering: &mut O,
-    v: usize,
-    entries: &[(u32, T)],
-    counts: Option<&[u32]>,
-) where
-    T: num_traits::Float + Send + Sync + 'static,
-    O: EliminationOrdering<T>,
-{
-    match counts {
-        None => ordering.notify_eliminated(v, entries),
-        Some(counts) => {
-            debug_assert_eq!(entries.len(), counts.len());
-            for (&(u, _), &count) in entries.iter().zip(counts.iter()) {
-                ordering.notify_neighbor_removed_n(u, count);
-            }
-        }
-    }
-}
 
 /// Builder for approximate Cholesky factorization (Algorithm 8, Gao-Kyng-Spielman 2023).
 ///
@@ -343,14 +246,7 @@ where
             }
 
             let star_entries = star_builder.entries();
-            let star_counts = star_builder.counts();
-            sample_star_column(
-                star_entries,
-                star_counts,
-                diag[v],
-                &mut sampler,
-                &mut column,
-            );
+            star_builder.sample_column(diag[v], &mut sampler, &mut column);
             seq.record_column(v, &column);
 
             graph.eliminate_vertex(v);
@@ -359,7 +255,7 @@ where
             }
 
             column.apply_fill_in(graph, diag, ordering);
-            notify_star_eliminated(ordering, v, star_entries, star_counts);
+            star_builder.notify_eliminated(ordering, v);
         }
 
         Factor { n, sequence: seq }

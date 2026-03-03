@@ -1,13 +1,11 @@
 mod builder;
 pub(crate) mod clique_tree;
 pub(crate) mod decomposition;
-mod dedup;
-pub(crate) mod sampled_column;
 mod star;
 
 pub use builder::Builder;
+pub(crate) use clique_tree::SampledColumn;
 pub use decomposition::{Factor, SolveError};
-pub(crate) use sampled_column::SampledColumn;
 
 // ---------------------------------------------------------------------------
 // Configuration

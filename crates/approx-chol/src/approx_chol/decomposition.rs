@@ -290,6 +290,17 @@ where
         }
     }
 
+    #[inline]
+    fn solve_into_kernel(&self, b: &[T], work: &mut [T], project_zero_mean: bool) {
+        work[..b.len()].copy_from_slice(b);
+        work[b.len()..self.n].fill(T::zero());
+        self.forward(work);
+        self.backward(work);
+        if project_zero_mean {
+            self.project_zero_mean(work);
+        }
+    }
+
     /// Solve LDL^T x = b, returning a newly allocated solution vector.
     #[must_use]
     pub fn solve(&self, b: &[T]) -> Vec<T> {
@@ -335,13 +346,7 @@ where
     /// Panics if `b.len() > self.n()` or `work.len() < self.n()`.
     pub fn solve_into_with_projection(&self, b: &[T], work: &mut [T], project_zero_mean: bool) {
         self.assert_rhs_and_work(b, work);
-        work[..b.len()].copy_from_slice(b);
-        work[b.len()..self.n].fill(T::zero());
-        self.forward(work);
-        self.backward(work);
-        if project_zero_mean {
-            self.project_zero_mean(work);
-        }
+        self.solve_into_kernel(b, work, project_zero_mean);
     }
 
     /// Fallible variant of [`Self::solve_into_with_projection`].
@@ -357,13 +362,7 @@ where
         project_zero_mean: bool,
     ) -> Result<(), SolveError> {
         self.validate_rhs_and_work(b, work)?;
-        work[..b.len()].copy_from_slice(b);
-        work[b.len()..self.n].fill(T::zero());
-        self.forward(work);
-        self.backward(work);
-        if project_zero_mean {
-            self.project_zero_mean(work);
-        }
+        self.solve_into_kernel(b, work, project_zero_mean);
         Ok(())
     }
 
