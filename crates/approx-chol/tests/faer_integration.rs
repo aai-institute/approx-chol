@@ -25,8 +25,13 @@ where
         .map(|v| T::from_f64(v).expect("value conversion"))
         .collect();
 
-    let symbolic =
-        faer::sparse::SymbolicSparseRowMat::<I>::new_checked(nrows, ncols, row_ptrs, None, col_indices);
+    let symbolic = faer::sparse::SymbolicSparseRowMat::<I>::new_checked(
+        nrows,
+        ncols,
+        row_ptrs,
+        None,
+        col_indices,
+    );
     SparseRowMat::new(symbolic, values)
 }
 

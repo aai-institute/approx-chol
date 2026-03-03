@@ -471,7 +471,7 @@ where
     /// Panics if `y.len() < self.n()`.
     pub fn solve_in_place(&self, y: &mut [T]) {
         self.assert_in_place_work(y);
-        self.solve_in_place_unchecked(y);
+        self.solve_in_place_unvalidated(y);
     }
 
     /// Fallible variant of [`Self::solve_in_place`].
@@ -481,12 +481,15 @@ where
     /// Returns [`SolveError::WorkBufferTooSmall`] if `y.len() < self.n()`.
     pub fn try_solve_in_place(&self, y: &mut [T]) -> Result<(), SolveError> {
         self.validate_in_place_work(y)?;
-        self.solve_in_place_unchecked(y);
+        self.solve_in_place_unvalidated(y);
         Ok(())
     }
 
-    /// Solve L D L^T x = b in-place without checking `y` length.
-    pub fn solve_in_place_unchecked(&self, y: &mut [T]) {
+    /// Solve L D L^T x = b in-place without upfront `y` length validation.
+    ///
+    /// This method is fully safe and keeps Rust bounds checks on slice indexing.
+    /// If `y.len() < self.n()`, it can panic while indexing.
+    pub fn solve_in_place_unvalidated(&self, y: &mut [T]) {
         debug_assert!(
             y.len() >= self.n,
             "work buffer too small: got {}, need at least {}",
