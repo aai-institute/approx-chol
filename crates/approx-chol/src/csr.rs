@@ -96,16 +96,6 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
         Ok(())
     }
 
-    /// Construct a `CsrRef` without validation.
-    pub fn new_unchecked(row_ptrs: &'a [I], col_indices: &'a [I], values: &'a [T], n: u32) -> Self {
-        Self {
-            row_ptrs,
-            col_indices,
-            values,
-            n,
-        }
-    }
-
     /// Row pointer array (length `n + 1`).
     #[inline]
     pub fn row_ptrs(&self) -> &[I] {
@@ -225,6 +215,8 @@ impl<T: Clone, I: PrimInt> OwnedCsr<T, I> {
             .collect::<Option<Vec<_>>>()
             .ok_or(Error::InvalidCsr("col_index exceeds target index type"))?;
 
+        CsrRef::new(&row_ptrs, &col_indices, values, n)?;
+
         Ok(Self {
             row_ptrs,
             col_indices,
@@ -238,7 +230,8 @@ impl<T, I: PrimInt> OwnedCsr<T, I> {
     /// Borrow as a [`CsrRef`] for use with
     /// [`Builder::build`](crate::Builder::build).
     pub fn as_ref(&self) -> CsrRef<'_, T, I> {
-        CsrRef::new_unchecked(&self.row_ptrs, &self.col_indices, &self.values, self.n)
+        CsrRef::new(&self.row_ptrs, &self.col_indices, &self.values, self.n)
+            .expect("OwnedCsr must uphold CSR invariants")
     }
 }
 
@@ -255,7 +248,7 @@ fn try_from_sprs_view_impl<'a, T, I: sprs::SpIndex + PrimInt>(
     }
     let n = u32::try_from(n).map_err(|_| Error::InvalidCsr("matrix dimension exceeds u32::MAX"))?;
     let (indptr, indices, data) = mat.into_raw_storage();
-    Ok(CsrRef::new_unchecked(indptr, indices, data, n))
+    CsrRef::new(indptr, indices, data, n)
 }
 
 #[cfg(feature = "faer")]
@@ -268,12 +261,7 @@ fn try_from_faer_view_impl<'a, T, I: faer::Index + PrimInt>(
     let n = u32::try_from(mat.nrows())
         .map_err(|_| Error::InvalidCsr("matrix dimension exceeds u32::MAX"))?;
     let symbolic = mat.symbolic();
-    Ok(CsrRef::new_unchecked(
-        symbolic.row_ptr(),
-        symbolic.col_idx(),
-        mat.val(),
-        n,
-    ))
+    CsrRef::new(symbolic.row_ptr(), symbolic.col_idx(), mat.val(), n)
 }
 
 #[cfg(feature = "sprs")]
@@ -320,63 +308,47 @@ where
     }
 }
 
-/// Zero-copy conversion from an `sprs` CSR matrix view.
-///
-/// Prefer [`CsrRef::try_from_sprs_view`] for panic-free conversion.
-///
-/// # Panics
-///
-/// Panics if the matrix is not in CSR format or is not square.
+/// Fallible zero-copy conversion from an `sprs` CSR matrix view.
 #[cfg(feature = "sprs")]
-impl<'a, T, I: sprs::SpIndex + PrimInt> From<sprs::CsMatViewI<'a, T, I>> for CsrRef<'a, T, I> {
-    fn from(mat: sprs::CsMatViewI<'a, T, I>) -> Self {
-        try_from_sprs_view_impl(mat).expect("expected CSR square matrix with n <= u32::MAX")
+impl<'a, T, I: sprs::SpIndex + PrimInt> TryFrom<sprs::CsMatViewI<'a, T, I>> for CsrRef<'a, T, I> {
+    type Error = Error;
+
+    fn try_from(mat: sprs::CsMatViewI<'a, T, I>) -> Result<Self, Self::Error> {
+        try_from_sprs_view_impl(mat)
     }
 }
 
-/// Zero-copy conversion from a borrowed `sprs` CSR matrix.
-///
-/// Prefer [`CsrRef::try_from_sprs`] for panic-free conversion.
-///
-/// # Panics
-///
-/// Panics if the matrix is not in CSR format or is not square.
+/// Fallible zero-copy conversion from a borrowed `sprs` CSR matrix.
 #[cfg(feature = "sprs")]
-impl<'a, T, I: sprs::SpIndex + PrimInt> From<&'a sprs::CsMatI<T, I>> for CsrRef<'a, T, I> {
-    fn from(mat: &'a sprs::CsMatI<T, I>) -> Self {
-        mat.view().into()
+impl<'a, T, I: sprs::SpIndex + PrimInt> TryFrom<&'a sprs::CsMatI<T, I>> for CsrRef<'a, T, I> {
+    type Error = Error;
+
+    fn try_from(mat: &'a sprs::CsMatI<T, I>) -> Result<Self, Self::Error> {
+        try_from_sprs_view_impl(mat.view())
     }
 }
 
-/// Zero-copy conversion from a `faer` CSR matrix view.
-///
-/// Prefer [`CsrRef::try_from_faer_view`] for panic-free conversion.
-///
-/// # Panics
-///
-/// Panics if the matrix is not square.
+/// Fallible zero-copy conversion from a `faer` sparse row matrix view.
 #[cfg(feature = "faer")]
-impl<'a, T, I: faer::Index + PrimInt> From<faer::sparse::SparseRowMatRef<'a, I, T>>
+impl<'a, T, I: faer::Index + PrimInt> TryFrom<faer::sparse::SparseRowMatRef<'a, I, T>>
     for CsrRef<'a, T, I>
 {
-    fn from(mat: faer::sparse::SparseRowMatRef<'a, I, T>) -> Self {
-        try_from_faer_view_impl(mat).expect("expected square matrix with n <= u32::MAX")
+    type Error = Error;
+
+    fn try_from(mat: faer::sparse::SparseRowMatRef<'a, I, T>) -> Result<Self, Self::Error> {
+        try_from_faer_view_impl(mat)
     }
 }
 
-/// Zero-copy conversion from a borrowed `faer` sparse row matrix.
-///
-/// Prefer [`CsrRef::try_from_faer`] for panic-free conversion.
-///
-/// # Panics
-///
-/// Panics if the matrix is not square.
+/// Fallible zero-copy conversion from a borrowed `faer` sparse row matrix.
 #[cfg(feature = "faer")]
-impl<'a, T, I: faer::Index + PrimInt> From<&'a faer::sparse::SparseRowMat<I, T>>
+impl<'a, T, I: faer::Index + PrimInt> TryFrom<&'a faer::sparse::SparseRowMat<I, T>>
     for CsrRef<'a, T, I>
 {
-    fn from(mat: &'a faer::sparse::SparseRowMat<I, T>) -> Self {
-        mat.as_ref().into()
+    type Error = Error;
+
+    fn try_from(mat: &'a faer::sparse::SparseRowMat<I, T>) -> Result<Self, Self::Error> {
+        try_from_faer_view_impl(mat.as_ref())
     }
 }
 

@@ -165,7 +165,10 @@ impl PyFactor {
                 n
             )));
         }
-        let x = self.inner.solve(b_slice);
+        let x = self
+            .inner
+            .try_solve(b_slice)
+            .map_err(|e| value_error(e.to_string()))?;
         Ok(PyArray1::from_vec(py, x))
     }
 
@@ -208,7 +211,9 @@ impl PyFactor {
         let out_slice = out_rw
             .as_slice_mut()
             .map_err(|_| value_error("out must be contiguous"))?;
-        self.inner.solve_into(b_slice, out_slice);
+        self.inner
+            .try_solve_into(b_slice, out_slice)
+            .map_err(|e| value_error(e.to_string()))?;
         Ok(())
     }
 }

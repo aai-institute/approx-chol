@@ -22,7 +22,7 @@
 //!
 //! // RHS must lie in the range of the Laplacian (sum to zero)
 //! let b = [1.0, -1.0, 1.0, -1.0];
-//! let x = decomp.solve(&b);
+//! let x = decomp.solve(&b).expect("rhs length must be <= factor dimension");
 //! assert!(x.iter().all(|v| f64::is_finite(*v)));
 //! # Ok::<(), approx_chol::Error>(())
 //! ```
@@ -53,8 +53,8 @@
 //!
 //! | Feature | Effect |
 //! |---------|--------|
-//! | `sprs`  | Enables zero-copy [`CsrRef`] conversion from `sprs` matrices (`From` and fallible `try_from_sprs*`). |
-//! | `faer`  | Enables zero-copy [`CsrRef`] conversion from `faer` matrices (`From` and fallible `try_from_faer*`). |
+//! | `sprs`  | Enables zero-copy [`CsrRef`] conversion from `sprs` matrices (`TryFrom` and `try_from_sprs*`). |
+//! | `faer`  | Enables zero-copy [`CsrRef`] conversion from `faer` matrices (`TryFrom` and `try_from_faer*`). |
 //!
 //! # References
 //!
@@ -123,12 +123,18 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+impl From<core::convert::Infallible> for Error {
+    fn from(value: core::convert::Infallible) -> Self {
+        match value {}
+    }
+}
+
 /// Factorize an SDDM matrix with default configuration.
 ///
 /// Uses standard AC with dynamic ordering (DynamicPQ). For AC2 or
 /// custom seeds, use [`factorize_with`].
 ///
-/// Accepts any input convertible into [`CsrRef`], including `CsrRef`
+/// Accepts any input fallibly convertible into [`CsrRef`], including `CsrRef`
 /// directly and, with feature flags, borrowed matrices from `sprs`/`faer`.
 ///
 /// # Errors
@@ -154,7 +160,8 @@ pub fn factorize<'a, T, I, M>(sddm: M) -> Result<Factor<T>, Error>
 where
     T: num_traits::Float + Send + Sync + 'static,
     I: num_traits::PrimInt + 'a + 'static,
-    M: Into<CsrRef<'a, T, I>>,
+    M: TryInto<CsrRef<'a, T, I>>,
+    <M as TryInto<CsrRef<'a, T, I>>>::Error: Into<Error>,
 {
     Builder::<T>::new(Config::default()).build(sddm)
 }
@@ -193,7 +200,8 @@ pub fn factorize_with<'a, T, I, M>(sddm: M, config: Config) -> Result<Factor<T>,
 where
     T: num_traits::Float + Send + Sync + 'static,
     I: num_traits::PrimInt + 'a + 'static,
-    M: Into<CsrRef<'a, T, I>>,
+    M: TryInto<CsrRef<'a, T, I>>,
+    <M as TryInto<CsrRef<'a, T, I>>>::Error: Into<Error>,
 {
     Builder::<T>::new(config).build(sddm)
 }

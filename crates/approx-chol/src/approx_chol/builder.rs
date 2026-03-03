@@ -50,7 +50,7 @@ where
         }
     }
 
-    /// Run approximate Cholesky factorization from any input convertible into
+    /// Run approximate Cholesky factorization from any input fallibly convertible into
     /// [`CsrRef`].
     ///
     /// Performs a checked conversion of row pointers and column indices to
@@ -58,15 +58,18 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidCsr`] if conversion panics, CSR validation
-    /// fails, or index conversion to `u32` fails.
+    /// Returns [`Error::InvalidCsr`] if conversion fails, conversion panics,
+    /// CSR validation fails, or index conversion to `u32` fails.
     /// Returns [`Error::InvalidConfig`] for invalid `split_merge`.
-    pub fn build<'a, I: PrimInt + 'a + 'static, M: Into<CsrRef<'a, T, I>>>(
-        &self,
-        sddm: M,
-    ) -> Result<Factor<T>, Error> {
-        let csr = catch_unwind(AssertUnwindSafe(|| sddm.into()))
+    pub fn build<'a, I, M>(&self, sddm: M) -> Result<Factor<T>, Error>
+    where
+        I: PrimInt + 'a + 'static,
+        M: TryInto<CsrRef<'a, T, I>>,
+        <M as TryInto<CsrRef<'a, T, I>>>::Error: Into<Error>,
+    {
+        let csr = catch_unwind(AssertUnwindSafe(|| sddm.try_into()))
             .map_err(|_| Error::InvalidCsr("input conversion panicked"))?;
+        let csr = csr.map_err(Into::into)?;
         let converted = csr.to_owned_u32()?;
         self.build_u32(converted.as_ref())
     }
