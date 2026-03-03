@@ -11,6 +11,7 @@
 //!
 //! ```
 //! use approx_chol::{factorize, CsrRef};
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!
 //! // 4-node path graph Laplacian (0-1-2-3)
 //! let row_ptrs    = [0u32, 2, 5, 8, 10];
@@ -22,9 +23,10 @@
 //!
 //! // RHS must lie in the range of the Laplacian (sum to zero)
 //! let b = [1.0, -1.0, 1.0, -1.0];
-//! let x = decomp.solve(&b).expect("rhs length must be <= factor dimension");
+//! let x = decomp.solve(&b)?;
 //! assert!(x.iter().all(|v| f64::is_finite(*v)));
-//! # Ok::<(), approx_chol::Error>(())
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # Algorithm variants
