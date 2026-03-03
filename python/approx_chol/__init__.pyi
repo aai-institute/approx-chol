@@ -10,21 +10,17 @@ class Config:
 
     Args:
         seed: Random seed for the edge-weight sampler.
-        split: Number of edge copies for AC2 (None = standard AC, >=2 enables AC2).
-        merge: Maximum multi-edges per neighbor pair for AC2.
-            Requires ``split`` and defaults to ``split`` if not provided.
-            When ``split == 1``, ``merge`` must be omitted or set to 1.
+        split: AC2 multi-edge multiplicity ``k``.
+            ``None`` or ``1`` selects standard AC; ``>=2`` enables AC2.
     """
 
     seed: int
     split: int | None
-    merge: int | None
 
     def __init__(
         self,
         seed: int = 0,
         split: int | None = None,
-        merge: int | None = None,
     ) -> None: ...
 
 class Factor:

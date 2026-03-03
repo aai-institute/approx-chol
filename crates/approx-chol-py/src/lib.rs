@@ -1,4 +1,4 @@
-use approx_chol::{Config, CsrRef, Error, SplitMerge};
+use approx_chol::{Config, CsrRef, Error};
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
 use std::mem::size_of;
@@ -86,38 +86,25 @@ struct PyConfig {
     seed: u64,
     #[pyo3(get)]
     split: Option<u32>,
-    #[pyo3(get)]
-    merge: Option<u32>,
 }
 
 #[pymethods]
 impl PyConfig {
     #[new]
-    #[pyo3(signature = (seed=0, split=None, merge=None))]
-    fn new(seed: u64, split: Option<u32>, merge: Option<u32>) -> Self {
-        Self { seed, split, merge }
+    #[pyo3(signature = (seed=0, split=None))]
+    fn new(seed: u64, split: Option<u32>) -> Self {
+        Self { seed, split }
     }
 }
 
 impl PyConfig {
     fn to_native(&self) -> PyResult<Config> {
-        let split_merge = match (self.split, self.merge) {
-            (None, None) => None,
-            (None, Some(_)) => {
-                return Err(value_error("config.merge requires config.split"));
-            }
-            (Some(0), _) => {
+        let split_merge = match self.split {
+            None | Some(1) => None,
+            Some(0) => {
                 return Err(value_error("config.split must be >= 1"));
             }
-            (Some(1), None) | (Some(1), Some(1)) => None,
-            (Some(1), Some(_)) => {
-                return Err(value_error("config.merge must be 1 when config.split is 1"));
-            }
-            (Some(_), Some(0)) => {
-                return Err(value_error("config.merge must be >= 1"));
-            }
-            (Some(s), Some(m)) => Some(SplitMerge { split: s, merge: m }),
-            (Some(s), None) => Some(SplitMerge { split: s, merge: s }),
+            Some(s) => Some(s),
         };
         Ok(Config {
             seed: self.seed,

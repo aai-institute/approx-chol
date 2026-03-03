@@ -105,13 +105,13 @@ where
                 } = SlimGraph::<T>::from_sddm(sddm);
                 Ok(self.build_from_graph(graph, diag, sampler))
             }
-            Some(sm) => {
+            Some(k) => {
                 let GraphBuild {
                     mut graph,
                     diagonal: diag,
                     ..
                 } = MultiEdgeGraph::<T>::from_sddm(sddm);
-                graph.mark_split_edges(sm.split);
+                graph.mark_split_edges(k);
                 Ok(self.build_from_graph(graph, diag, sampler))
             }
         }
@@ -125,11 +125,8 @@ where
         let Some(split_merge) = config.split_merge else {
             return Ok(());
         };
-        if split_merge.split == 0 {
-            return Err(Error::InvalidConfig("split_merge.split must be >= 1"));
-        }
-        if split_merge.merge == 0 {
-            return Err(Error::InvalidConfig("split_merge.merge must be >= 1"));
+        if split_merge == 0 {
+            return Err(Error::InvalidConfig("split_merge must be >= 1"));
         }
         Ok(())
     }
@@ -146,7 +143,7 @@ where
         let degree_sum: usize = degrees.iter().sum();
         let mut ordering = match self.config.split_merge {
             None => DynamicOrdering::new(n, degrees.into_iter()),
-            Some(sm) => DynamicOrdering::new_with_scale(n, degrees.into_iter(), sm.split as usize),
+            Some(k) => DynamicOrdering::new_with_scale(n, degrees.into_iter(), k as usize),
         };
         self.factorize_with_ordering(&mut graph, diag, &mut ordering, degree_sum, sampler)
     }
@@ -170,13 +167,13 @@ where
                 sampler,
                 AcStarBuilder::new(graph.n()),
             ),
-            Some(sm) => Self::factorize_with_variant(
+            Some(k) => Self::factorize_with_variant(
                 graph,
                 &mut diag,
                 ordering,
                 degree_sum,
                 sampler,
-                Ac2StarBuilder::new(graph.n(), sm.merge),
+                Ac2StarBuilder::new(graph.n(), k),
             ),
         }
     }

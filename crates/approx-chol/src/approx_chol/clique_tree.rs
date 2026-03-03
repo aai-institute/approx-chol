@@ -4,7 +4,6 @@ use crate::graph::EliminationGraph;
 use crate::ordering::EliminationOrdering;
 use crate::sampling::{near_zero, CdfSampler, WeightedSampler};
 use crate::types::Real;
-use crate::SplitMerge;
 use num_traits::NumCast;
 
 /// One sampled column of the approximate Cholesky factor (Algorithm 5, GKS 2023).
@@ -288,19 +287,19 @@ pub fn clique_tree_sample<T>(
     }
 }
 
-/// Sample AC2-style fill edges for a star with split/merge multiplicities.
+/// Sample AC2-style fill edges for a star with multiplicity `k`.
 ///
 /// This is the multi-edge counterpart of [`clique_tree_sample`], following the
 /// AC2 sampling logic (Algorithm 6 in Gao-Kyng-Spielman 2023).
 ///
-/// `split_merge` controls the per-neighbor multiplicity used during sampling:
-/// `t = min(split, merge)`. The function emits up to `t * (n - 1)` edges.
+/// `split_merge` controls the per-neighbor multiplicity used during sampling.
+/// The function emits up to `split_merge * (n - 1)` edges.
 ///
 /// `entries` is sorted in place (ascending by weight), and fill edges are
 /// appended to `out`.
 pub fn clique_tree_sample_multi<T>(
     entries: &mut [(u32, T)],
-    split_merge: SplitMerge,
+    split_merge: u32,
     seed: u64,
     out: &mut Vec<(u32, u32, T)>,
 ) where
@@ -311,10 +310,10 @@ pub fn clique_tree_sample_multi<T>(
         return;
     }
 
-    if split_merge.split == 0 || split_merge.merge == 0 {
+    if split_merge == 0 {
         return;
     }
-    let t = split_merge.split.min(split_merge.merge);
+    let t = split_merge;
     let t_scalar: T = NumCast::from(t).expect("u32 to scalar");
 
     entries.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
@@ -415,12 +414,7 @@ mod tests {
         let mut entries: Vec<(u32, f64)> = vec![(0, 2.0), (1, 3.0), (2, 1.0), (3, 5.0), (4, 4.0)];
         let mut out = Vec::new();
 
-        clique_tree_sample_multi(
-            &mut entries,
-            SplitMerge { split: 2, merge: 2 },
-            42,
-            &mut out,
-        );
+        clique_tree_sample_multi(&mut entries, 2, 42, &mut out);
 
         assert!(out.len() <= 8, "got {} edges, expected <= 8", out.len());
         for &(lo, hi, w) in &out {

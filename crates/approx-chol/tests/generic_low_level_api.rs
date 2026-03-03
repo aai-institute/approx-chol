@@ -1,6 +1,4 @@
-use approx_chol::{
-    factorize, factorize_from, factorize_generic, Builder, Config, CsrRef, Error, SplitMerge,
-};
+use approx_chol::{factorize, factorize_from, factorize_generic, Builder, Config, CsrRef, Error};
 use num_traits::{Float, FromPrimitive, PrimInt};
 
 fn idx<I: TryFrom<usize>>(value: usize) -> I
@@ -63,7 +61,7 @@ where
     let (rp, ci, vals, n) = path_laplacian::<I, T>();
     let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid csr");
     let builder = Builder::<T>::new(Config {
-        split_merge: Some(SplitMerge { split: 2, merge: 2 }),
+        split_merge: Some(2),
         seed: 7,
     });
     let factor = builder
@@ -152,34 +150,15 @@ fn split_zero_is_rejected() {
     let vals = [1.0_f64, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
     let csr = CsrRef::new(&rp, &ci, &vals, 4).expect("valid csr");
     let builder = Builder::<f64>::new(Config {
-        split_merge: Some(SplitMerge { split: 0, merge: 2 }),
+        split_merge: Some(0),
         ..Default::default()
     });
     let err = builder
         .build(csr)
-        .expect_err("split=0 should return InvalidConfig");
+        .expect_err("split_merge=0 should return InvalidConfig");
     assert!(matches!(
         err,
-        Error::InvalidConfig("split_merge.split must be >= 1")
-    ));
-}
-
-#[test]
-fn merge_zero_is_rejected() {
-    let rp = [0u32, 2, 5, 8, 10];
-    let ci = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
-    let vals = [1.0_f64, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
-    let csr = CsrRef::new(&rp, &ci, &vals, 4).expect("valid csr");
-    let builder = Builder::<f64>::new(Config {
-        split_merge: Some(SplitMerge { split: 2, merge: 0 }),
-        ..Default::default()
-    });
-    let err = builder
-        .build(csr)
-        .expect_err("merge=0 should return InvalidConfig");
-    assert!(matches!(
-        err,
-        Error::InvalidConfig("split_merge.merge must be >= 1")
+        Error::InvalidConfig("split_merge must be >= 1")
     ));
 }
 

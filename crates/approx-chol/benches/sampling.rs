@@ -1,6 +1,6 @@
 mod common;
 
-use approx_chol::{Builder, Config, SplitMerge};
+use approx_chol::{Builder, Config};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -107,7 +107,7 @@ fn bench_factorization_grid(c: &mut Criterion) {
         );
 
         let ac2_config = Config {
-            split_merge: Some(SplitMerge { split: 2, merge: 2 }),
+            split_merge: Some(2),
             ..Default::default()
         };
         let ac2_builder = Builder::new(ac2_config);

@@ -18,12 +18,6 @@ def test_config_is_strictly_validated():
     with pytest.raises(ValueError, match="config.split must be >= 1"):
         ext.factorize_raw(row_ptrs, col_indices, values, 2, ext.Config(split=0))
 
-    with pytest.raises(ValueError, match="config.merge requires config.split"):
-        ext.factorize_raw(row_ptrs, col_indices, values, 2, ext.Config(merge=2))
-
-    with pytest.raises(ValueError, match="config.merge must be 1 when config.split is 1"):
-        ext.factorize_raw(row_ptrs, col_indices, values, 2, ext.Config(split=1, merge=2))
-
 
 def test_duck_typed_factorize_validates_indices_and_dimension():
     ext = load_extension_module()

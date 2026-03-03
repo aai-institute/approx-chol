@@ -1,5 +1,4 @@
 use super::*;
-use crate::SplitMerge;
 
 /// Build a 4-node path graph Laplacian as raw CSR arrays.
 fn path_laplacian_4() -> (Vec<u32>, Vec<u32>, Vec<f64>) {
@@ -61,7 +60,7 @@ fn test_ac2_n_eq_1_augmented_diagonal_regression() {
     let csr = CsrRef::new(&indptr, &indices, &data, 3).expect("valid SDDM matrix");
 
     let config = Config {
-        split_merge: Some(SplitMerge { split: 2, merge: 2 }),
+        split_merge: Some(2),
         ..Default::default()
     };
     let builder = Builder::<f64>::new(config);
@@ -118,7 +117,7 @@ fn test_ac2_n_eq_1_solve_produces_finite_for_multiple_seeds() {
     for seed in 0..8u64 {
         let csr = CsrRef::new(&indptr, &indices, &data, 2).expect("valid SDDM");
         let config = Config {
-            split_merge: Some(SplitMerge { split: 2, merge: 2 }),
+            split_merge: Some(2),
             seed,
         };
         let factor = Builder::<f64>::new(config)
@@ -155,7 +154,7 @@ fn test_ac2_near_zero_weight_star() {
     let csr = CsrRef::new(&indptr, &indices, &data, 3).expect("valid SDDM matrix");
 
     let config = Config {
-        split_merge: Some(SplitMerge { split: 2, merge: 2 }),
+        split_merge: Some(2),
         ..Default::default()
     };
     let factor = Builder::<f64>::new(config)

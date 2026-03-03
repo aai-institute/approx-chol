@@ -1,4 +1,4 @@
-use approx_chol::{Builder, Config, CsrRef, SplitMerge};
+use approx_chol::{Builder, Config, CsrRef};
 use std::cmp::Ordering;
 use std::env;
 use std::error::Error;
@@ -33,7 +33,6 @@ struct Options {
     tol: f64,
     max_iters: usize,
     split: u32,
-    merge: u32,
 }
 
 impl Default for Options {
@@ -49,7 +48,6 @@ impl Default for Options {
             tol: 1e-6,
             max_iters: 2000,
             split: 2,
-            merge: 2,
         }
     }
 }
@@ -115,10 +113,6 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
             }
             "--split" => {
                 opts.split = next(i, key, &args)?.parse()?;
-                i += 2;
-            }
-            "--merge" => {
-                opts.merge = next(i, key, &args)?.parse()?;
                 i += 2;
             }
             _ => {
@@ -273,7 +267,7 @@ fn make_rhs(n: usize) -> Vec<f64> {
     b
 }
 
-fn config_for(variant: Variant, seed: u64, split: u32, merge: u32) -> Config {
+fn config_for(variant: Variant, seed: u64, split: u32) -> Config {
     match variant {
         Variant::Ac => Config {
             seed,
@@ -281,7 +275,7 @@ fn config_for(variant: Variant, seed: u64, split: u32, merge: u32) -> Config {
         },
         Variant::Ac2 => Config {
             seed,
-            split_merge: Some(SplitMerge { split, merge }),
+            split_merge: Some(split),
         },
     }
 }
@@ -370,24 +364,19 @@ fn run_case(
     let csr = CsrRef::new(&row_ptrs, &col_idx, &vals, n as u32)?;
 
     for w in 0..opts.factor_warmup {
-        let cfg = config_for(
-            variant,
-            seed.wrapping_add(100_000 + w as u64),
-            opts.split,
-            opts.merge,
-        );
+        let cfg = config_for(variant, seed.wrapping_add(100_000 + w as u64), opts.split);
         let _ = Builder::<f64>::new(cfg).build(csr)?;
     }
 
     let mut factor_times = Vec::with_capacity(opts.factor_repeats);
     for r in 0..opts.factor_repeats {
-        let cfg = config_for(variant, seed.wrapping_add(r as u64), opts.split, opts.merge);
+        let cfg = config_for(variant, seed.wrapping_add(r as u64), opts.split);
         let t0 = Instant::now();
         let _ = Builder::<f64>::new(cfg).build(csr)?;
         factor_times.push(t0.elapsed().as_secs_f64() * 1e3);
     }
 
-    let cfg_quality = config_for(variant, seed, opts.split, opts.merge);
+    let cfg_quality = config_for(variant, seed, opts.split);
     let factor = Builder::<f64>::new(cfg_quality).build(csr)?;
 
     let mut work = vec![0.0; n];

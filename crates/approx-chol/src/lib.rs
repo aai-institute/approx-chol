@@ -35,14 +35,13 @@
 //! one random edge sampling per elimination step. It is fast, memory-efficient,
 //! and sufficient for most applications. Use [`Config::default()`].
 //!
-//! ## AC2 — multi-edge split/merge
+//! ## AC2 — multi-edge multiplicity
 //!
 //! AC2 (Algorithm 6 in Gao-Kyng-Spielman 2023) splits each edge into `k`
-//! copies before elimination, then merges back to at most `l` multi-edges per
-//! neighbor pair after compression. This produces a denser but higher-quality
+//! copies before elimination, then keeps at most `k` multi-edges per neighbor
+//! pair after compression. This produces a denser but higher-quality
 //! approximate factor that converges in fewer PCG iterations, at the cost of
-//! higher factorization time. Enable via [`SplitMerge`] in
-//! [`Config::split_merge`].
+//! higher factorization time. Enable via [`Config::split_merge`].
 //!
 //! # Ordering strategies
 //!
@@ -83,7 +82,7 @@ mod types;
 /// Low-level API for advanced use cases (custom pipelines, graph inspection, research).
 pub mod low_level;
 
-pub use approx_chol::{Config, Factor, SolveError, SplitMerge};
+pub use approx_chol::{Config, Factor, SolveError};
 pub use csr::{CsrRef, OwnedCsr};
 pub(crate) use types::Real;
 
@@ -103,7 +102,7 @@ pub enum Error {
     /// The factorization configuration is invalid.
     ///
     /// The inner string describes the specific failure (e.g.
-    /// `"split_merge.merge must be >= 1"`).
+    /// `"split_merge must be >= 1"`).
     InvalidConfig(&'static str),
 
     /// The input CSR matrix has inconsistent dimensions or invalid structure.
@@ -157,19 +156,19 @@ where
 
 /// Factorize an SDDM matrix with custom configuration.
 ///
-/// Uses [`Config`] to control the random seed and AC2 split/merge
+/// Uses [`Config`] to control the random seed and AC2 split multiplicity
 /// parameters. Always uses DynamicPQ ordering.
 ///
 /// # Errors
 ///
 /// Returns [`Error::InvalidCsr`] if the input matrix structure is
 /// invalid, or [`Error::InvalidConfig`] if configuration values are
-/// inconsistent (e.g. `split_merge.split == 0`).
+/// inconsistent (e.g. `split_merge == Some(0)`).
 ///
 /// # Examples
 ///
 /// ```
-/// use approx_chol::{factorize_with, Config, SplitMerge, CsrRef};
+/// use approx_chol::{factorize_with, Config, CsrRef};
 ///
 /// let row_ptrs    = [0u32, 2, 5, 8, 10];
 /// let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
@@ -178,7 +177,7 @@ where
 /// let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
 /// let factor = factorize_with(csr, Config {
 ///     seed: 42,
-///     split_merge: Some(SplitMerge { split: 2, merge: 2 }),
+///     split_merge: Some(2),
 ///     ..Default::default()
 /// })?;
 /// assert_eq!(factor.n(), 4);

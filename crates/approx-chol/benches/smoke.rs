@@ -2,7 +2,7 @@ mod common;
 
 use std::time::Duration;
 
-use approx_chol::{Builder, Config, SplitMerge};
+use approx_chol::{Builder, Config};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 
 use common::{grid_laplacian, GridLaplacian};
@@ -32,7 +32,7 @@ fn bench_approx_chol_smoke(c: &mut Criterion) {
         let ac = Config::default();
         let ac2 = Config {
             seed: 42,
-            split_merge: Some(SplitMerge { split: 2, merge: 2 }),
+            split_merge: Some(2),
         };
 
         group.bench_with_input(

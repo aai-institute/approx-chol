@@ -1,7 +1,7 @@
 //! AC2 configuration example: compare default AC with the AC2 multi-edge variant.
 //!
-//! AC2 replaces each edge with `split` copies before factorization and keeps
-//! at most `merge` copies per neighbor pair after compression.  This reduces
+//! AC2 replaces each edge with `k` copies before factorization and keeps
+//! at most `k` copies per neighbor pair after compression. This reduces
 //! variance in the approximate factor at the cost of more fill-in per step.
 //!
 //! Run with:
@@ -9,7 +9,7 @@
 //! cargo run -p approx-chol --example ac2_config
 //! ```
 
-use approx_chol::{Builder, Config, CsrRef, SplitMerge};
+use approx_chol::{Builder, Config, CsrRef};
 
 // --------------------------------------------------------------------------
 // Grid Laplacian builder (inlined — examples are separate compilation units)
@@ -99,18 +99,18 @@ fn main() {
     println!("  factor dim  : {}", ac_factor.n());
 
     // -----------------------------------------------------------------------
-    // AC2 (split = 2, merge = 2)
+    // AC2 (k = 2)
     // -----------------------------------------------------------------------
     let ac2_config = Config {
-        split_merge: Some(SplitMerge { split: 2, merge: 2 }),
+        split_merge: Some(2),
         seed: 42,
     };
     let ac2_factor = Builder::new(ac2_config)
         .build(lap.as_csr())
         .expect("AC2 factorization failed");
 
-    println!("\n=== AC2 (split=2, merge=2) ===");
-    println!("  split_merge : Some(SplitMerge {{ split: 2, merge: 2 }})");
+    println!("\n=== AC2 (k=2) ===");
+    println!("  split_merge : Some(2)");
     println!("  n_steps     : {}", ac2_factor.n_steps());
     println!("  factor dim  : {}", ac2_factor.n());
 
