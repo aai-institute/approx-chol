@@ -50,42 +50,30 @@ where
         }
     }
 
-    /// Run approximate Cholesky factorization on a CSR SDDM matrix using `u32` indices.
-    pub fn build(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
-        self.build_with_sampler(sddm, CdfSampler::<T>::new(self.config.seed))
-    }
-
-    /// Run approximate Cholesky factorization on any index type convertible to `u32`.
-    ///
-    /// Uses a zero-copy fast path when `I = u32`; otherwise performs checked
-    /// index conversion to owned `u32` storage.
-    pub fn build_generic<I: PrimInt + 'static>(
-        &self,
-        sddm: CsrRef<'_, T, I>,
-    ) -> Result<Factor<T>, Error> {
-        let converted = sddm.to_u32_fast_or_owned()?;
-        self.build(converted.as_ref())
-    }
-
     /// Run approximate Cholesky factorization from any input convertible into
     /// [`CsrRef`].
     ///
-    /// This preserves the zero-copy path for `u32`-indexed inputs.
-    /// For panic-free matrix-adapter paths, prefer fallible conversion methods
-    /// on [`CsrRef`] and call [`Self::build_generic`].
+    /// Uses a zero-copy fast path for `u32` index inputs; otherwise performs a
+    /// checked conversion of row pointers and column indices to owned `u32`
+    /// storage.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidCsr`] if conversion panics, CSR
-    /// validation fails, or index conversion to `u32` fails.
+    /// Returns [`Error::InvalidCsr`] if conversion panics, CSR validation
+    /// fails, or index conversion to `u32` fails.
     /// Returns [`Error::InvalidConfig`] for invalid `split_merge`.
-    pub fn build_from<'a, I: PrimInt + 'a + 'static, M: Into<CsrRef<'a, T, I>>>(
+    pub fn build<'a, I: PrimInt + 'a + 'static, M: Into<CsrRef<'a, T, I>>>(
         &self,
         sddm: M,
     ) -> Result<Factor<T>, Error> {
         let csr = catch_unwind(AssertUnwindSafe(|| sddm.into()))
             .map_err(|_| Error::InvalidCsr("input conversion panicked"))?;
-        self.build_generic(csr)
+        let converted = csr.to_u32_fast_or_owned()?;
+        self.build_u32(converted.as_ref())
+    }
+
+    fn build_u32(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
+        self.build_with_sampler(sddm, CdfSampler::<T>::new(self.config.seed))
     }
 
     /// Run approximate Cholesky factorization with a custom [`WeightedSampler`].

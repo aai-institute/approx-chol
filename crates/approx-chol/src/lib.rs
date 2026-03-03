@@ -128,10 +128,13 @@ impl std::error::Error for Error {}
 /// Uses standard AC with dynamic ordering (DynamicPQ). For AC2 or
 /// custom seeds, use [`factorize_with`].
 ///
+/// Accepts any input convertible into [`CsrRef`], including `CsrRef`
+/// directly and, with feature flags, borrowed matrices from `sprs`/`faer`.
+///
 /// # Errors
 ///
-/// Returns [`Error::InvalidCsr`] if the input matrix structure is
-/// invalid (see [`CsrRef::new`] for the full list of checks).
+/// Returns [`Error::InvalidCsr`] if conversion or validation fails, if index
+/// conversion to `u32` fails, or if input conversion panics.
 ///
 /// # Examples
 ///
@@ -147,9 +150,11 @@ impl std::error::Error for Error {}
 /// assert_eq!(decomp.n(), 4);
 /// # Ok::<(), approx_chol::Error>(())
 /// ```
-pub fn factorize<T>(sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error>
+pub fn factorize<'a, T, I, M>(sddm: M) -> Result<Factor<T>, Error>
 where
     T: num_traits::Float + Send + Sync + 'static,
+    I: num_traits::PrimInt + 'a + 'static,
+    M: Into<CsrRef<'a, T, I>>,
 {
     Builder::<T>::new(Config::default()).build(sddm)
 }
@@ -161,9 +166,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`Error::InvalidCsr`] if the input matrix structure is
-/// invalid, or [`Error::InvalidConfig`] if configuration values are
-/// inconsistent (e.g. `split_merge == Some(0)`).
+/// Returns [`Error::InvalidCsr`] if conversion or validation fails, if index
+/// conversion to `u32` fails, or if input conversion panics.
+/// Returns [`Error::InvalidConfig`] if configuration values are inconsistent
+/// (e.g. `split_merge == Some(0)`).
 ///
 /// # Examples
 ///
@@ -183,47 +189,11 @@ where
 /// assert_eq!(factor.n(), 4);
 /// # Ok::<(), approx_chol::Error>(())
 /// ```
-pub fn factorize_with<T>(sddm: CsrRef<'_, T, u32>, config: Config) -> Result<Factor<T>, Error>
-where
-    T: num_traits::Float + Send + Sync + 'static,
-{
-    Builder::<T>::new(config).build(sddm)
-}
-
-/// Factorize an SDDM matrix with default configuration from any index type
-/// that can be converted to `u32`.
-///
-/// Uses a zero-copy fast path when the input index type is `u32`; otherwise
-/// performs a checked conversion of row pointers and column indices.
-pub fn factorize_generic<T, I>(sddm: CsrRef<'_, T, I>) -> Result<Factor<T>, Error>
-where
-    T: num_traits::Float + Send + Sync + 'static,
-    I: num_traits::PrimInt + 'static,
-{
-    Builder::<T>::new(Config::default()).build_generic(sddm)
-}
-
-/// Factorize an SDDM matrix from any input convertible into [`CsrRef`].
-///
-/// This is the highest-level entry point for ergonomic integration with sparse
-/// matrix libraries. Any type with a `From`/`Into` conversion to `CsrRef`
-/// can be passed directly.
-///
-/// For panic-free matrix-adapter paths, prefer the fallible constructors on
-/// [`CsrRef`] (`try_from_sprs_view`, `try_from_sprs`, `try_from_faer_view`,
-/// `try_from_faer`) and then call [`factorize_generic`].
-///
-/// # Errors
-///
-/// Returns [`Error::InvalidCsr`] if validation fails, index
-/// conversion to `u32` fails, or conversion into [`CsrRef`] panics.
-/// Returns [`Error::InvalidConfig`] if configuration values are
-/// inconsistent.
-pub fn factorize_from<'a, T, I, M>(sddm: M) -> Result<Factor<T>, Error>
+pub fn factorize_with<'a, T, I, M>(sddm: M, config: Config) -> Result<Factor<T>, Error>
 where
     T: num_traits::Float + Send + Sync + 'static,
     I: num_traits::PrimInt + 'a + 'static,
     M: Into<CsrRef<'a, T, I>>,
 {
-    Builder::<T>::new(Config::default()).build_from(sddm)
+    Builder::<T>::new(config).build(sddm)
 }

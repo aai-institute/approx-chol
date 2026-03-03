@@ -1,4 +1,4 @@
-use approx_chol::{factorize, factorize_from, factorize_generic, Builder, Config, CsrRef, Error};
+use approx_chol::{factorize, Builder, Config, CsrRef, Error};
 use num_traits::{Float, FromPrimitive, PrimInt};
 
 fn idx<I: TryFrom<usize>>(value: usize) -> I
@@ -35,7 +35,7 @@ where
     let (rp, ci, vals, n) = path_laplacian::<I, T>();
     let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid csr");
 
-    let factor = factorize_generic(csr).expect("factorization should succeed");
+    let factor = factorize(csr).expect("factorization should succeed");
     assert_eq!(factor.n_steps(), factor.n().saturating_sub(1));
 
     let b = [
@@ -65,7 +65,7 @@ where
         seed: 7,
     });
     let factor = builder
-        .build_generic(csr)
+        .build(csr)
         .expect("AC2 generic factorization should succeed");
 
     let b = [
@@ -124,12 +124,12 @@ fn low_level_default_factorize_u32_no_conversion_path() {
 }
 
 #[test]
-fn low_level_factorize_from_csrref() {
+fn low_level_factorize_csrref() {
     let rp = [0u32, 2, 5, 8, 10];
     let ci = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
     let vals = [1.0_f64, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
     let csr = CsrRef::new(&rp, &ci, &vals, 4).expect("valid csr");
-    let factor = factorize_from(csr).expect("factorization should succeed");
+    let factor = factorize(csr).expect("factorization should succeed");
     assert_eq!(factor.n(), 4);
 }
 
@@ -171,9 +171,9 @@ impl<'a> From<PanicIntoCsr> for CsrRef<'a, f64, u32> {
 }
 
 #[test]
-fn factorize_from_catches_panicking_conversion() {
-    let err = factorize_from::<f64, u32, _>(PanicIntoCsr)
-        .expect_err("panicking conversion must map to error");
+fn factorize_catches_panicking_conversion() {
+    let err =
+        factorize::<f64, u32, _>(PanicIntoCsr).expect_err("panicking conversion must map to error");
     assert!(matches!(
         err,
         Error::InvalidCsr("input conversion panicked")
@@ -186,6 +186,6 @@ fn generic_conversion_row_ptr_overflow_is_reported() {
     let col_indices = [0u64];
     let values = [1.0_f64];
     let csr = CsrRef::new_unchecked(&row_ptrs, &col_indices, &values, 1);
-    let err = factorize_generic(csr).expect_err("row_ptr overflow should be reported");
+    let err = factorize(csr).expect_err("row_ptr overflow should be reported");
     assert!(matches!(err, Error::InvalidCsr("row_ptr exceeds u32::MAX")));
 }

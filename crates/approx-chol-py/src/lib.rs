@@ -230,11 +230,14 @@ fn factorize_raw<'py>(
         .map_err(|_| value_error("values must be contiguous"))?;
 
     let csr = CsrRef::new(rp, ci, vals, n).map_err(approx_chol_err_to_py)?;
-    let native_config = match config {
-        Some(cfg) => cfg.to_native()?,
-        None => Config::default(),
-    };
-    let factor = approx_chol::factorize_with(csr, native_config).map_err(approx_chol_err_to_py)?;
+    let factor = match config {
+        Some(cfg) => {
+            let native_config = cfg.to_native()?;
+            approx_chol::factorize_with(csr, native_config)
+        }
+        None => approx_chol::factorize(csr),
+    }
+    .map_err(approx_chol_err_to_py)?;
     Ok(PyFactor { inner: factor })
 }
 
@@ -285,11 +288,14 @@ fn factorize(
 
     let n = u32::try_from(shape.0).map_err(|_| value_error("matrix dimension exceeds u32::MAX"))?;
     let csr = CsrRef::new(rp, ci, vals, n).map_err(approx_chol_err_to_py)?;
-    let native_config = match config {
-        Some(cfg) => cfg.to_native()?,
-        None => Config::default(),
-    };
-    let factor = approx_chol::factorize_with(csr, native_config).map_err(approx_chol_err_to_py)?;
+    let factor = match config {
+        Some(cfg) => {
+            let native_config = cfg.to_native()?;
+            approx_chol::factorize_with(csr, native_config)
+        }
+        None => approx_chol::factorize(csr),
+    }
+    .map_err(approx_chol_err_to_py)?;
     Ok(PyFactor { inner: factor })
 }
 

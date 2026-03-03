@@ -1,6 +1,6 @@
 #![cfg(feature = "sprs")]
 
-use approx_chol::{factorize_from, factorize_generic, Builder, Config, CsrRef, Error};
+use approx_chol::{factorize, Builder, Config, CsrRef, Error};
 use num_traits::{Float, FromPrimitive};
 
 /// Build a 4-node path graph Laplacian (0-1-2-3) as a sprs CSR matrix.
@@ -39,9 +39,7 @@ where
     assert_eq!(csr.values().len(), 10);
 
     let builder = Builder::<T>::new(Config::default());
-    let factor = builder
-        .build_from(&mat)
-        .expect("factorization should succeed");
+    let factor = builder.build(&mat).expect("factorization should succeed");
 
     assert!(factor.n() >= 4);
     assert!(factor.n_steps() > 0);
@@ -61,9 +59,9 @@ where
 }
 
 #[test]
-fn sprs_factorize_from_high_level() {
+fn sprs_factorize_high_level() {
     let mat = path_laplacian_sprs::<f64, u32>();
-    let factor = factorize_from(&mat).expect("factorization should succeed");
+    let factor = factorize(&mat).expect("factorization should succeed");
     assert!(factor.n() >= 4);
 }
 
@@ -71,7 +69,7 @@ fn sprs_factorize_from_high_level() {
 fn sprs_try_from_is_fallible_and_works() {
     let mat = path_laplacian_sprs::<f64, u64>();
     let csr = CsrRef::try_from_sprs(&mat).expect("fallible conversion should succeed");
-    let factor = factorize_generic(csr).expect("factorization should succeed");
+    let factor = factorize(csr).expect("factorization should succeed");
     assert!(factor.n() >= 4);
 }
 
