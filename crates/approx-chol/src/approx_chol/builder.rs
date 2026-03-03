@@ -2,15 +2,109 @@ use super::decomposition::EliminationSequence;
 use crate::graph::{EliminationGraph, GraphBuild, MultiEdgeGraph, SlimGraph};
 use crate::ordering::{DynamicOrdering, EliminationOrdering, StaticOrdering};
 use crate::sampling::{CdfSampler, WeightedSampler};
-use crate::types::Real;
 use crate::{CsrRef, Error, Factor};
 use num_traits::PrimInt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+use super::clique_tree::{clique_tree_sample, clique_tree_sample_multi};
 use super::sampled_column::SampledColumn;
-use super::star_ac::AcStar;
-use super::star_ac2::Ac2Star;
-use super::{Config, Ordering, Star};
+use super::star_ac::AcStarBuilder;
+use super::star_ac2::Ac2StarBuilder;
+use super::{Config, Ordering};
+
+trait StarBuilderVariant<T: num_traits::Float + Send + Sync + 'static> {
+    fn build_star<G: EliminationGraph<T>, O: EliminationOrdering<T>>(
+        &mut self,
+        graph: &mut G,
+        v: usize,
+        ordering: &mut O,
+    );
+    fn is_empty(&self) -> bool;
+    fn entries(&self) -> &[(u32, T)];
+    fn counts(&self) -> Option<&[u32]>;
+}
+
+impl<T: num_traits::Float + Send + Sync + 'static> StarBuilderVariant<T> for AcStarBuilder<T> {
+    fn build_star<G: EliminationGraph<T>, O: EliminationOrdering<T>>(
+        &mut self,
+        graph: &mut G,
+        v: usize,
+        ordering: &mut O,
+    ) {
+        self.build_star(graph, v, ordering);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+
+    fn entries(&self) -> &[(u32, T)] {
+        self.entries()
+    }
+
+    fn counts(&self) -> Option<&[u32]> {
+        None
+    }
+}
+
+impl<T: num_traits::Float + Send + Sync + 'static> StarBuilderVariant<T> for Ac2StarBuilder<T> {
+    fn build_star<G: EliminationGraph<T>, O: EliminationOrdering<T>>(
+        &mut self,
+        graph: &mut G,
+        v: usize,
+        ordering: &mut O,
+    ) {
+        self.build_star(graph, v, ordering);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+
+    fn entries(&self) -> &[(u32, T)] {
+        self.entries()
+    }
+
+    fn counts(&self) -> Option<&[u32]> {
+        Some(self.counts())
+    }
+}
+
+fn sample_star_column<T, W>(
+    entries: &[(u32, T)],
+    counts: Option<&[u32]>,
+    pivot_diag: T,
+    sampler: &mut W,
+    column: &mut SampledColumn<T>,
+) where
+    T: num_traits::Float + Send + Sync + 'static,
+    W: WeightedSampler<T>,
+{
+    match counts {
+        None => clique_tree_sample(entries, pivot_diag, sampler, column),
+        Some(counts) => clique_tree_sample_multi(entries, counts, pivot_diag, sampler, column),
+    }
+}
+
+fn notify_star_eliminated<T, O>(
+    ordering: &mut O,
+    v: usize,
+    entries: &[(u32, T)],
+    counts: Option<&[u32]>,
+) where
+    T: num_traits::Float + Send + Sync + 'static,
+    O: EliminationOrdering<T>,
+{
+    match counts {
+        None => ordering.notify_eliminated(v, entries),
+        Some(counts) => {
+            debug_assert_eq!(entries.len(), counts.len());
+            for (&(u, _), &count) in entries.iter().zip(counts.iter()) {
+                ordering.notify_neighbor_removed_n(u, count);
+            }
+        }
+    }
+}
 
 /// Builder for approximate Cholesky factorization (Algorithm 8, Gao-Kyng-Spielman 2023).
 ///
@@ -177,7 +271,7 @@ where
         }
     }
 
-    /// Dispatch on star type (AC vs AC2), then run the generic factorization loop.
+    /// Dispatch on the clique-tree sampling variant (AC vs AC2).
     fn factorize_with_ordering<
         G: EliminationGraph<T>,
         S: WeightedSampler<T>,
@@ -192,30 +286,38 @@ where
     ) -> Factor<T> {
         let mut diag = diag;
         match self.config.split_merge {
-            None => {
-                let star = AcStar::<S, T>::new(graph.n(), sampler);
-                Self::factorize(graph, &mut diag, ordering, degree_sum, star)
-            }
-            Some(sm) => {
-                let star = Ac2Star::<S, T>::new(graph.n(), sm.merge, sampler);
-                Self::factorize(graph, &mut diag, ordering, degree_sum, star)
-            }
+            None => Self::factorize_with_variant(
+                graph,
+                &mut diag,
+                ordering,
+                degree_sum,
+                sampler,
+                AcStarBuilder::new(graph.n()),
+            ),
+            Some(sm) => Self::factorize_with_variant(
+                graph,
+                &mut diag,
+                ordering,
+                degree_sum,
+                sampler,
+                Ac2StarBuilder::new(graph.n(), sm.merge),
+            ),
         }
     }
 
-    /// Unified factorization loop for both AC and AC2.
-    ///
-    /// Eliminates up to `n - 1` vertices (`target_steps`); the last vertex is never
-    /// eliminated because it would produce an empty star with no neighbors.
-    /// The loop may also break early if the ordering is exhausted before reaching the target.
-    /// `degree_sum` is the total degree of the initial graph, used as a capacity hint
-    /// for the `EliminationSequence` allocation.
-    fn factorize<G: EliminationGraph<T>, S: Star<T>, O: EliminationOrdering<T>>(
+    /// Algorithm 8 loop parameterized by a clique-tree sampling variant.
+    fn factorize_with_variant<
+        G: EliminationGraph<T>,
+        W: WeightedSampler<T>,
+        O: EliminationOrdering<T>,
+        B: StarBuilderVariant<T>,
+    >(
         graph: &mut G,
         diag: &mut [T],
         ordering: &mut O,
         degree_sum: usize,
-        mut star: S,
+        mut sampler: W,
+        mut star_builder: B,
     ) -> Factor<T> {
         let n = graph.n();
         let mut column = SampledColumn::<T>::new();
@@ -227,50 +329,40 @@ where
                 break;
             };
             steps_done += 1;
-            eliminate_vertex(v, graph, diag, ordering, &mut star, &mut column, &mut seq);
+            if graph.is_empty(v) {
+                seq.record_isolated(v, diag[v]);
+                continue;
+            }
+
+            star_builder.build_star(graph, v, ordering);
+            if star_builder.is_empty() {
+                seq.record_isolated(v, diag[v]);
+                graph.eliminate_vertex(v);
+                continue;
+            }
+
+            let star_entries = star_builder.entries();
+            let star_counts = star_builder.counts();
+            sample_star_column(
+                star_entries,
+                star_counts,
+                diag[v],
+                &mut sampler,
+                &mut column,
+            );
+            seq.record_column(v, &column);
+
+            graph.eliminate_vertex(v);
+            for &(u, w) in star_entries {
+                diag[u as usize] = diag[u as usize] - w;
+            }
+
+            column.apply_fill_in(graph, diag, ordering);
+            notify_star_eliminated(ordering, v, star_entries, star_counts);
         }
 
         Factor { n, sequence: seq }
     }
-}
-
-/// Per-vertex elimination step: compress, sample, eliminate, fill-in.
-fn eliminate_vertex<T: Real, G: EliminationGraph<T>, S: Star<T>, O: EliminationOrdering<T>>(
-    v: usize,
-    graph: &mut G,
-    diag: &mut [T],
-    ordering: &mut O,
-    star: &mut S,
-    column: &mut SampledColumn<T>,
-    seq: &mut EliminationSequence<T>,
-) {
-    if graph.is_empty(v) {
-        seq.record_isolated(v, diag[v]);
-        return;
-    }
-
-    // Phase 1: Compress — gather and dedup live neighbors of v
-    star.compress(graph, v, ordering);
-    if star.is_empty() {
-        seq.record_isolated(v, diag[v]);
-        graph.eliminate_vertex(v);
-        return;
-    }
-
-    // Phase 2: Sample — draw one column of the approximate factor
-    star.sample(diag[v], column);
-    seq.record_column(v, column);
-
-    // Phase 3: Eliminate — remove v and subtract its edge weights from neighbor diags
-    let star_entries = star.entries();
-    graph.eliminate_vertex(v);
-    for &(u, w) in star_entries {
-        diag[u as usize] = diag[u as usize] - w;
-    }
-
-    // Phase 4: Fill-in — insert sampled fill edges, apply Schur complement diag updates
-    column.apply_fill_in(graph, diag, ordering);
-    star.notify_eliminated(ordering, v);
 }
 
 #[cfg(test)]

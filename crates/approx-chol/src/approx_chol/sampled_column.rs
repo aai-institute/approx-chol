@@ -9,7 +9,7 @@ use crate::types::Real;
 /// Contains the column's diagonal entry, its non-zero neighbor indices with
 /// fractional weights, and the fill edges to be inserted back into the graph.
 ///
-/// Reusable across iterations (cleared at start of each `Star::sample`).
+/// Reusable across elimination steps (cleared at start of each sampling pass).
 pub(crate) struct SampledColumn<T: Real> {
     /// Diagonal value of the factor column: `L[v,v]`.
     pub diagonal: T,

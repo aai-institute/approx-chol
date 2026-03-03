@@ -37,5 +37,5 @@ pub use crate::sampling::CdfSampler;
 // Decomposition internals (read-only views into the factor)
 pub use crate::approx_chol::decomposition::{EliminationSequence, EliminationStep};
 
-// Star clique sampling utility
-pub use crate::star_clique::sample_star_clique;
+// Star clique sampling utilities (AC + AC2 variants)
+pub use crate::star_clique::{clique_tree_sample, clique_tree_sample_multi};

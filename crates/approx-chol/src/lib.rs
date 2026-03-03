@@ -104,13 +104,13 @@ pub use approx_chol::{Config, Factor, SolveError, SplitMerge};
 pub use csr::{CsrRef, OwnedCsr};
 pub(crate) use types::Real;
 
-// Re-export Builder, Ordering, and sample_star_clique at the crate root
-// for backward compatibility with current consumers. New code should prefer
-// `approx_chol::low_level::{Builder, Ordering, sample_star_clique}`.
+// Re-export Builder, Ordering, and star-clique sampling helpers at the crate root.
+// New code should prefer
+// `approx_chol::low_level::{Builder, Ordering, clique_tree_sample, clique_tree_sample_multi}`.
 #[doc(hidden)]
 pub use approx_chol::{Builder, Ordering};
 #[doc(hidden)]
-pub use star_clique::sample_star_clique;
+pub use star_clique::{clique_tree_sample, clique_tree_sample_multi};
 
 use std::fmt;
 

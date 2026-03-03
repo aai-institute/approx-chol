@@ -1,4 +1,5 @@
 mod builder;
+mod clique_tree;
 pub(crate) mod decomposition;
 mod dedup;
 pub(crate) mod sampled_column;
@@ -8,29 +9,6 @@ mod star_ac2;
 pub use builder::Builder;
 pub use decomposition::{Factor, SolveError};
 pub(crate) use sampled_column::SampledColumn;
-
-use crate::graph::EliminationGraph;
-use crate::ordering::EliminationOrdering;
-use crate::Real;
-
-/// Common interface for AC and AC2 star neighborhoods.
-///
-/// Both variants share the same compress → sample → entries lifecycle;
-/// the trait lets `factorize` be generic over the star type.
-pub(crate) trait Star<T: Real> {
-    fn compress<G: EliminationGraph<T>, O: EliminationOrdering<T>>(
-        &mut self,
-        graph: &mut G,
-        v: usize,
-        ordering: &mut O,
-    );
-    fn sample(&mut self, pivot_diag: T, column: &mut SampledColumn<T>);
-    fn is_empty(&self) -> bool;
-    fn entries(&self) -> &[(u32, T)];
-    fn notify_eliminated<O: EliminationOrdering<T>>(&self, ordering: &mut O, v: usize) {
-        ordering.notify_eliminated(v, self.entries());
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Configuration
