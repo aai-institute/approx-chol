@@ -16,14 +16,39 @@ pub struct EliminationStep<'a, T> {
 }
 
 impl<'a, T: num_traits::Float + Send + Sync + 'static> EliminationStep<'a, T> {
+    #[inline(always)]
+    fn debug_assert_in_bounds(&self, y_len: usize) {
+        debug_assert!(
+            self.vertex < y_len,
+            "pivot vertex {} out of bounds for work buffer len {}",
+            self.vertex,
+            y_len
+        );
+        debug_assert_eq!(
+            self.neighbor_indices.len(),
+            self.elimination_fractions.len(),
+            "neighbors/fractions length mismatch"
+        );
+        for &j in self.neighbor_indices {
+            debug_assert!(
+                (j as usize) < y_len,
+                "neighbor index {} out of bounds for work buffer len {}",
+                j,
+                y_len
+            );
+        }
+    }
+
     /// Forward elimination: scatter pivot weight to neighbors, then scale by D^{-1}.
     #[inline(always)]
     pub(crate) fn apply_forward(&self, y: &mut [T], inv_diag: T) {
+        self.debug_assert_in_bounds(y.len());
         let n = self.neighbor_indices.len();
         let zero = T::zero();
         let one = T::one();
         if n == 0 {
             if inv_diag != zero {
+                // SAFETY: `debug_assert_in_bounds` proves `self.vertex < y.len()`.
                 unsafe {
                     *y.get_unchecked_mut(self.vertex) = *y.get_unchecked(self.vertex) * inv_diag
                 };
@@ -31,34 +56,42 @@ impl<'a, T: num_traits::Float + Send + Sync + 'static> EliminationStep<'a, T> {
             return;
         }
 
+        // SAFETY: `debug_assert_in_bounds` proves `self.vertex < y.len()`.
         let mut yi = unsafe { *y.get_unchecked(self.vertex) };
 
         for (&j, &f) in self.neighbor_indices[..n - 1]
             .iter()
             .zip(self.elimination_fractions.iter())
         {
+            // SAFETY: `debug_assert_in_bounds` verifies every neighbor index is in bounds.
             unsafe {
                 *y.get_unchecked_mut(j as usize) = *y.get_unchecked(j as usize) + f * yi;
             };
             yi = yi * (one - f);
         }
 
+        // SAFETY: `n > 0` and `n == self.neighbor_indices.len()`.
         let j_last = unsafe { *self.neighbor_indices.get_unchecked(n - 1) } as usize;
+        // SAFETY: `debug_assert_in_bounds` verifies `j_last < y.len()`.
         unsafe { *y.get_unchecked_mut(j_last) = *y.get_unchecked(j_last) + yi };
         let val = if inv_diag != zero { yi * inv_diag } else { yi };
+        // SAFETY: `debug_assert_in_bounds` proves `self.vertex < y.len()`.
         unsafe { *y.get_unchecked_mut(self.vertex) = val };
     }
 
     /// Backward substitution: gather neighbor contributions back to pivot.
     #[inline(always)]
     pub(crate) fn apply_backward(&self, y: &mut [T]) {
+        self.debug_assert_in_bounds(y.len());
         let n = self.neighbor_indices.len();
         let one = T::one();
         if n == 0 {
             return;
         }
 
+        // SAFETY: `n > 0` and `n == self.neighbor_indices.len()`.
         let j_last = unsafe { *self.neighbor_indices.get_unchecked(n - 1) } as usize;
+        // SAFETY: bounds established by `debug_assert_in_bounds`.
         let mut yi = unsafe { *y.get_unchecked(self.vertex) + *y.get_unchecked(j_last) };
 
         for (&j, &f) in self.neighbor_indices[..n - 1]
@@ -66,9 +99,11 @@ impl<'a, T: num_traits::Float + Send + Sync + 'static> EliminationStep<'a, T> {
             .zip(self.elimination_fractions.iter())
             .rev()
         {
+            // SAFETY: bounds established by `debug_assert_in_bounds`.
             yi = (one - f) * yi + f * unsafe { *y.get_unchecked(j as usize) };
         }
 
+        // SAFETY: `debug_assert_in_bounds` proves `self.vertex < y.len()`.
         unsafe { *y.get_unchecked_mut(self.vertex) = yi };
     }
 }
@@ -101,6 +136,66 @@ impl<T> EliminationSequence<T> {
             neighbor_indices: &self.neighbor_indices[start..end],
             elimination_fractions: &self.elimination_fractions[start..end],
         }
+    }
+
+    #[inline]
+    fn debug_assert_valid_for_dim(&self, n: usize) {
+        debug_assert_eq!(
+            self.offsets.len(),
+            self.vertices.len() + 1,
+            "offsets length must be n_steps + 1"
+        );
+        debug_assert_eq!(
+            self.inv_diagonal.len(),
+            self.vertices.len(),
+            "inv_diagonal length must match n_steps"
+        );
+        debug_assert_eq!(
+            self.neighbor_indices.len(),
+            self.elimination_fractions.len(),
+            "neighbor and fraction storage must be aligned"
+        );
+
+        let Some(&first_offset) = self.offsets.first() else {
+            return;
+        };
+        debug_assert_eq!(first_offset, 0, "offsets must start at zero");
+
+        let nnz = self.neighbor_indices.len();
+        let mut prev = 0usize;
+        for (i, &vertex) in self.vertices.iter().enumerate() {
+            let start = self.offsets[i] as usize;
+            let end = self.offsets[i + 1] as usize;
+            debug_assert!(
+                start <= end && end <= nnz,
+                "invalid offset range [{start}, {end}) for nnz={nnz}"
+            );
+            debug_assert!(
+                start >= prev,
+                "offsets must be non-decreasing (prev={prev}, start={start})"
+            );
+            prev = end;
+
+            debug_assert!(
+                (vertex as usize) < n,
+                "vertex {} out of bounds for factor dim {}",
+                vertex,
+                n
+            );
+            for &j in &self.neighbor_indices[start..end] {
+                debug_assert!(
+                    (j as usize) < n,
+                    "neighbor {} out of bounds for factor dim {}",
+                    j,
+                    n
+                );
+            }
+        }
+        debug_assert_eq!(
+            self.offsets.last().copied().unwrap_or_default() as usize,
+            nnz,
+            "final offset must match nnz"
+        );
     }
 }
 
@@ -262,8 +357,17 @@ where
 
     fn forward(&self, y: &mut [T]) {
         let seq = &self.sequence;
+        debug_assert!(
+            y.len() >= self.n,
+            "work buffer too small in forward: got {}, need at least {}",
+            y.len(),
+            self.n
+        );
+        seq.debug_assert_valid_for_dim(self.n);
         for i in 0..seq.n_steps() {
             let step = seq.step(i);
+            // SAFETY: `i < seq.n_steps()` and `debug_assert_valid_for_dim` checks
+            // `inv_diagonal.len() == seq.n_steps()`.
             let inv_diag = unsafe { *seq.inv_diagonal.get_unchecked(i) };
             step.apply_forward(y, inv_diag);
         }
@@ -271,6 +375,13 @@ where
 
     fn backward(&self, y: &mut [T]) {
         let seq = &self.sequence;
+        debug_assert!(
+            y.len() >= self.n,
+            "work buffer too small in backward: got {}, need at least {}",
+            y.len(),
+            self.n
+        );
+        seq.debug_assert_valid_for_dim(self.n);
         for i in (0..seq.n_steps()).rev() {
             let step = seq.step(i);
             step.apply_backward(y);
@@ -403,5 +514,169 @@ where
         );
         self.forward(y);
         self.backward(y);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::{Rng, RngExt, SeedableRng};
+    use std::collections::BTreeSet;
+
+    fn random_sequence(rng: &mut impl Rng, n: usize, n_steps: usize) -> EliminationSequence<f64> {
+        let mut vertices = Vec::with_capacity(n_steps);
+        let mut offsets = Vec::with_capacity(n_steps + 1);
+        let mut neighbor_indices = Vec::new();
+        let mut elimination_fractions = Vec::new();
+        let mut inv_diagonal = Vec::with_capacity(n_steps);
+        offsets.push(0);
+
+        for _ in 0..n_steps {
+            let v = rng.random_range(0..n);
+            let max_deg = n.saturating_sub(1).min(4);
+            let deg = if max_deg == 0 {
+                0
+            } else {
+                rng.random_range(0..=max_deg)
+            };
+
+            let mut seen = BTreeSet::new();
+            while seen.len() < deg {
+                let u = rng.random_range(0..n);
+                if u != v {
+                    seen.insert(u);
+                }
+            }
+
+            for (idx, u) in seen.into_iter().enumerate() {
+                neighbor_indices.push(u as u32);
+                let frac = if idx + 1 == deg {
+                    1.0
+                } else {
+                    rng.random_range(0.0..1.0)
+                };
+                elimination_fractions.push(frac);
+            }
+
+            vertices.push(v as u32);
+            inv_diagonal.push(rng.random_range(-2.0..2.0));
+            offsets.push(neighbor_indices.len() as u32);
+        }
+
+        EliminationSequence {
+            vertices,
+            offsets,
+            neighbor_indices,
+            elimination_fractions,
+            inv_diagonal,
+        }
+    }
+
+    fn reference_forward(seq: &EliminationSequence<f64>, y: &mut [f64]) {
+        for i in 0..seq.n_steps() {
+            let step = seq.step(i);
+            let n = step.neighbor_indices.len();
+            let one = 1.0;
+            let mut yi = y[step.vertex];
+
+            if n == 0 {
+                let inv = seq.inv_diagonal[i];
+                if inv != 0.0 {
+                    y[step.vertex] = yi * inv;
+                }
+                continue;
+            }
+
+            for (&j, &f) in step.neighbor_indices[..n - 1]
+                .iter()
+                .zip(step.elimination_fractions.iter())
+            {
+                y[j as usize] += f * yi;
+                yi *= one - f;
+            }
+
+            let j_last = step.neighbor_indices[n - 1] as usize;
+            y[j_last] += yi;
+            y[step.vertex] = if seq.inv_diagonal[i] != 0.0 {
+                yi * seq.inv_diagonal[i]
+            } else {
+                yi
+            };
+        }
+    }
+
+    fn reference_backward(seq: &EliminationSequence<f64>, y: &mut [f64]) {
+        for i in (0..seq.n_steps()).rev() {
+            let step = seq.step(i);
+            let n = step.neighbor_indices.len();
+            if n == 0 {
+                continue;
+            }
+
+            let j_last = step.neighbor_indices[n - 1] as usize;
+            let mut yi = y[step.vertex] + y[j_last];
+            for (&j, &f) in step.neighbor_indices[..n - 1]
+                .iter()
+                .zip(step.elimination_fractions.iter())
+                .rev()
+            {
+                yi = (1.0 - f) * yi + f * y[j as usize];
+            }
+            y[step.vertex] = yi;
+        }
+    }
+
+    fn reference_project_zero_mean(y: &mut [f64], n: usize) {
+        if n == 0 {
+            return;
+        }
+        let mean = y[..n].iter().sum::<f64>() / n as f64;
+        for yi in &mut y[..n] {
+            *yi -= mean;
+        }
+    }
+
+    fn assert_close(lhs: &[f64], rhs: &[f64], tol: f64) {
+        assert_eq!(lhs.len(), rhs.len());
+        for (i, (&a, &b)) in lhs.iter().zip(rhs.iter()).enumerate() {
+            let diff = (a - b).abs();
+            assert!(
+                diff <= tol,
+                "mismatch at {i}: lhs={a:.16e}, rhs={b:.16e}, diff={diff:.3e}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsafe_solve_kernel_matches_checked_reference_randomized() {
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(0x5EED_BAAD_F00D);
+
+        for _ in 0..300 {
+            let n = rng.random_range(1..=16);
+            let n_steps = rng.random_range(1..=n);
+            let sequence = random_sequence(&mut rng, n, n_steps);
+            let factor = Factor { n, sequence };
+
+            let rhs_len = rng.random_range(0..=n);
+            let mut rhs = vec![0.0; rhs_len];
+            for v in &mut rhs {
+                *v = rng.random_range(-5.0..5.0);
+            }
+            let project = rng.random_bool(0.5);
+
+            let mut unsafe_work = vec![0.0; n];
+            factor.solve_into_kernel(&rhs, &mut unsafe_work, project);
+
+            let mut checked_work = vec![0.0; n];
+            checked_work[..rhs_len].copy_from_slice(&rhs);
+            checked_work[rhs_len..].fill(0.0);
+            reference_forward(&factor.sequence, &mut checked_work);
+            reference_backward(&factor.sequence, &mut checked_work);
+            if project {
+                reference_project_zero_mean(&mut checked_work, n);
+            }
+
+            assert_close(&unsafe_work, &checked_work, 1e-12);
+        }
     }
 }

@@ -70,7 +70,7 @@
 //!   <https://github.com/danspielman/Laplacians.jl>
 
 #![deny(missing_docs)]
-#![warn(clippy::all)]
+#![warn(clippy::all, clippy::undocumented_unsafe_blocks)]
 
 mod approx_chol;
 mod csr;
