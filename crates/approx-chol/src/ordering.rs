@@ -1,12 +1,10 @@
 //! Elimination ordering abstraction for approximate Cholesky factorization.
 //!
 //! Separates how the next vertex to eliminate is selected from the
-//! elimination loop. Two implementations:
-//! - `StaticOrdering`: pre-computed AMD ordering (notify methods are no-ops)
+//! elimination loop.
 //! - `DynamicOrdering`: bucket-based priority queue that adapts to fill-in
 //!   during elimination (ports Julia's `ApproxCholPQ`)
 
-use super::graph::{EliminationGraph, Neighbor};
 use crate::Real;
 
 // ---------------------------------------------------------------------------
@@ -14,9 +12,6 @@ use crate::Real;
 // ---------------------------------------------------------------------------
 
 pub(crate) trait EliminationOrdering<T: Real> {
-    /// Pick the next vertex to eliminate, or `None` if done.
-    fn next_vertex(&mut self) -> Option<usize>;
-
     /// One live edge incident to `v` was removed (degree estimate decrements by 1).
     fn notify_neighbor_removed(&mut self, _v: u32) {}
 
@@ -46,63 +41,6 @@ pub(crate) trait EliminationOrdering<T: Real> {
     fn notify_edges_merged_n(&mut self, v: u32, n: u32) {
         self.notify_neighbor_removed_n(v, n);
     }
-}
-
-// ---------------------------------------------------------------------------
-// StaticOrdering — extracted from the former `approximate_minimum_degree_order`
-// ---------------------------------------------------------------------------
-
-/// Pre-computed approximate minimum degree ordering. The order is fixed at
-/// construction time; `notify_*` methods are no-ops.
-pub struct StaticOrdering {
-    order: Vec<usize>,
-    pos: usize,
-}
-
-impl StaticOrdering {
-    /// Build AMD ordering using a `DynamicOrdering` priority queue.
-    ///
-    /// On a pristine graph (no fill yet), the PQ adapts to degree changes
-    /// from neighbor elimination, producing a true approximate minimum-degree
-    /// ordering rather than a snapshot-based one.
-    ///
-    /// Returns the ordering and the total degree sum (for capacity hints).
-    pub(crate) fn from_graph<T: Real, G: EliminationGraph<T>>(graph: &mut G) -> (Self, usize) {
-        let n = graph.n();
-        let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
-        let degree_sum: usize = degrees.iter().sum();
-        let mut pq = DynamicOrdering::new(n, degrees.into_iter());
-        let mut order = Vec::with_capacity(n);
-        let mut scratch: Vec<Neighbor<T>> = Vec::new();
-
-        while let Some(v) = pq.next_vertex() {
-            order.push(v);
-            graph.live_neighbors(v, &mut scratch);
-            for nbr in &scratch {
-                pq.notify_neighbor_removed_n(nbr.to, nbr.count);
-            }
-        }
-
-        (StaticOrdering { order, pos: 0 }, degree_sum)
-    }
-}
-
-impl<T: Real> EliminationOrdering<T> for StaticOrdering {
-    fn next_vertex(&mut self) -> Option<usize> {
-        if self.pos < self.order.len() {
-            let v = self.order[self.pos];
-            self.pos += 1;
-            Some(v)
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    fn notify_neighbor_removed(&mut self, _v: u32) {}
-
-    #[inline]
-    fn notify_fill_edge(&mut self, _u: u32, _v: u32) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -266,10 +204,6 @@ impl DynamicOrdering {
 }
 
 impl<T: Real> EliminationOrdering<T> for DynamicOrdering {
-    fn next_vertex(&mut self) -> Option<usize> {
-        DynamicOrdering::next_vertex(self)
-    }
-
     fn notify_neighbor_removed(&mut self, v: u32) {
         DynamicOrdering::notify_neighbor_removed(self, v);
     }

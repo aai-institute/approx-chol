@@ -1,6 +1,6 @@
 use super::decomposition::EliminationSequence;
 use crate::graph::{EliminationGraph, GraphBuild, MultiEdgeGraph, SlimGraph};
-use crate::ordering::{DynamicOrdering, EliminationOrdering, StaticOrdering};
+use crate::ordering::DynamicOrdering;
 use crate::sampling::{CdfSampler, WeightedSampler};
 use crate::{CsrRef, Error, Factor};
 use num_traits::PrimInt;
@@ -8,35 +8,32 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use super::clique_tree::SampledColumn;
 use super::star::{Ac2StarBuilder, AcStarBuilder, StarBuilderVariant};
-use super::{Config, Ordering};
+use super::Config;
 
 /// Builder for approximate Cholesky factorization (Algorithm 8, Gao-Kyng-Spielman 2023).
 ///
 /// Provides full control over the factorization pipeline, including
-/// elimination ordering. Most users should prefer [`factorize`](crate::factorize)
-/// or [`factorize_with`](crate::factorize_with).
+/// AC vs AC2 selection and seed control. Most users should prefer
+/// [`factorize`](crate::factorize) or [`factorize_with`](crate::factorize_with).
 ///
 /// # Examples
 ///
 /// ```
 /// use approx_chol::{Config, CsrRef};
-/// use approx_chol::low_level::{Builder, Ordering};
+/// use approx_chol::low_level::Builder;
 ///
 /// let row_ptrs    = [0u32, 2, 5, 8, 10];
 /// let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
 /// let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
 ///
 /// let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
-/// let factor = Builder::new(Config::default())
-///     .ordering(Ordering::StaticAMD)
-///     .build(csr)?;
+/// let factor = Builder::new(Config::default()).build(csr)?;
 /// assert_eq!(factor.n(), 4);
 /// # Ok::<(), approx_chol::Error>(())
 /// ```
 #[derive(Debug, Clone)]
 pub struct Builder<T = f64> {
     config: Config,
-    ordering: Ordering,
     _scalar: core::marker::PhantomData<T>,
 }
 
@@ -45,23 +42,12 @@ where
     T: num_traits::Float + Send + Sync + 'static,
 {
     /// Create a new builder with the given configuration.
-    ///
-    /// The elimination ordering defaults to [`Ordering::DynamicPQ`].
-    /// Use [`ordering`](Self::ordering) to override.
     #[must_use]
     pub fn new(config: Config) -> Self {
         Self {
             config,
-            ordering: Ordering::DynamicPQ,
             _scalar: core::marker::PhantomData,
         }
-    }
-
-    /// Set the elimination ordering strategy.
-    #[must_use]
-    pub fn ordering(mut self, ordering: Ordering) -> Self {
-        self.ordering = ordering;
-        self
     }
 
     /// Run approximate Cholesky factorization on a CSR SDDM matrix using `u32` indices.
@@ -156,35 +142,21 @@ where
         sampler: S,
     ) -> Factor<T> {
         let n = graph.n();
-        match self.ordering {
-            Ordering::StaticAMD => {
-                let (mut ordering, degree_sum) = StaticOrdering::from_graph::<T, _>(&mut graph);
-                self.factorize_with_ordering(&mut graph, diag, &mut ordering, degree_sum, sampler)
-            }
-            Ordering::DynamicPQ => {
-                let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
-                let degree_sum: usize = degrees.iter().sum();
-                let degree_scale = self
-                    .config
-                    .split_merge
-                    .map_or(1usize, |sm| sm.split as usize);
-                let mut ordering =
-                    DynamicOrdering::new_with_scale(n, degrees.into_iter(), degree_scale);
-                self.factorize_with_ordering(&mut graph, diag, &mut ordering, degree_sum, sampler)
-            }
-        }
+        let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
+        let degree_sum: usize = degrees.iter().sum();
+        let mut ordering = match self.config.split_merge {
+            None => DynamicOrdering::new(n, degrees.into_iter()),
+            Some(sm) => DynamicOrdering::new_with_scale(n, degrees.into_iter(), sm.split as usize),
+        };
+        self.factorize_with_ordering(&mut graph, diag, &mut ordering, degree_sum, sampler)
     }
 
     /// Dispatch on the clique-tree sampling variant (AC vs AC2).
-    fn factorize_with_ordering<
-        G: EliminationGraph<T>,
-        S: WeightedSampler<T>,
-        O: EliminationOrdering<T>,
-    >(
+    fn factorize_with_ordering<G: EliminationGraph<T>, S: WeightedSampler<T>>(
         &self,
         graph: &mut G,
         diag: Vec<T>,
-        ordering: &mut O,
+        ordering: &mut DynamicOrdering,
         degree_sum: usize,
         sampler: S,
     ) -> Factor<T> {
@@ -213,12 +185,11 @@ where
     fn factorize_with_variant<
         G: EliminationGraph<T>,
         W: WeightedSampler<T>,
-        O: EliminationOrdering<T>,
         B: StarBuilderVariant<T>,
     >(
         graph: &mut G,
         diag: &mut [T],
-        ordering: &mut O,
+        ordering: &mut DynamicOrdering,
         degree_sum: usize,
         mut sampler: W,
         mut star_builder: B,

@@ -11,31 +11,6 @@ pub use decomposition::{Factor, SolveError};
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Elimination ordering strategy for the approximate Cholesky factorization loop.
-///
-/// The ordering controls which vertex is eliminated next during factorization.
-/// Preferring low-degree vertices reduces fill-in and typically improves the
-/// quality of the resulting approximate factor.
-#[derive(Clone, Copy, Debug, Default)]
-pub enum Ordering {
-    /// Pre-computed approximate minimum degree (AMD) ordering.
-    ///
-    /// Degrees are computed once from the original graph before elimination
-    /// begins. The ordering is static: it cannot adapt to fill-in introduced
-    /// by the random sampling steps. Fast to compute and adequate for
-    /// well-conditioned inputs.
-    StaticAMD,
-
-    /// Dynamic bucket priority queue (default).
-    ///
-    /// Tracks vertex degrees throughout elimination, updating the priority of
-    /// affected neighbors after each step. Produces better orderings when
-    /// random fill-in significantly changes the degree distribution, at the
-    /// cost of slightly more bookkeeping per step.
-    #[default]
-    DynamicPQ,
-}
-
 /// Multi-edge split/merge parameters for the AC2 variant (Algorithm 6, GKS 2023).
 ///
 /// AC2 replaces each graph edge with `split` copies of weight `1/split`
@@ -70,9 +45,6 @@ impl Default for SplitMerge {
 ///
 /// Use [`Default`] for standard AC (recommended for most inputs).
 /// Set [`split_merge`](Self::split_merge) to enable AC2.
-///
-/// For ordering control, use [`low_level::Builder::ordering`](crate::low_level::Builder)
-/// instead.
 ///
 /// # Examples
 ///

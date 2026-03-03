@@ -50,22 +50,6 @@
 //! **DynamicPQ** — a bucket priority queue that tracks vertex degrees
 //! throughout elimination. This is the best default for nearly all inputs.
 //!
-//! For explicit ordering control, use [`low_level::Builder::ordering`]:
-//!
-//! ```
-//! use approx_chol::{Config, CsrRef};
-//! use approx_chol::low_level::{Builder, Ordering};
-//!
-//! # let row_ptrs    = [0u32, 2, 5, 8, 10];
-//! # let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
-//! # let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
-//! # let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
-//! let factor = Builder::new(Config::default())
-//!     .ordering(Ordering::StaticAMD)
-//!     .build(csr)?;
-//! # Ok::<(), approx_chol::Error>(())
-//! ```
-//!
 //! # Feature flags
 //!
 //! | Feature | Effect |
@@ -103,13 +87,13 @@ pub use approx_chol::{Config, Factor, SolveError, SplitMerge};
 pub use csr::{CsrRef, OwnedCsr};
 pub(crate) use types::Real;
 
-// Re-export Builder, Ordering, and star-clique sampling helpers at the crate root.
+// Re-export Builder and star-clique sampling helpers at the crate root.
 // New code should prefer
-// `approx_chol::low_level::{Builder, Ordering, clique_tree_sample, clique_tree_sample_multi}`.
+// `approx_chol::low_level::{Builder, clique_tree_sample, clique_tree_sample_multi}`.
 #[doc(hidden)]
 pub use approx_chol::clique_tree::{clique_tree_sample, clique_tree_sample_multi};
 #[doc(hidden)]
-pub use approx_chol::{Builder, Ordering};
+pub use approx_chol::Builder;
 
 use std::fmt;
 
@@ -174,8 +158,7 @@ where
 /// Factorize an SDDM matrix with custom configuration.
 ///
 /// Uses [`Config`] to control the random seed and AC2 split/merge
-/// parameters. Always uses DynamicPQ ordering. For ordering control,
-/// use [`low_level::Builder`].
+/// parameters. Always uses DynamicPQ ordering.
 ///
 /// # Errors
 ///
