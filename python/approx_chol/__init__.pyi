@@ -56,7 +56,8 @@ class Factor:
 
         Raises:
             ValueError: If ``b``/``out`` are not contiguous, sizes are invalid,
-                or ``b`` and ``out`` overlap in memory.
+                ``out`` is not writeable, or ``b`` and ``out`` overlap in memory.
+            BufferError: If ``out`` is already borrowed.
         """
         ...
 

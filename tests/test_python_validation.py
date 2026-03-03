@@ -86,3 +86,16 @@ def test_solve_and_solve_into_raise_value_error_for_shape_and_overlap():
 
     with pytest.raises(ValueError, match="must not overlap"):
         factor.solve_into(rhs, rhs)
+
+
+def test_solve_into_rejects_partially_overlapping_views():
+    ext = load_extension_module()
+    row_ptrs, col_indices, values = _base_csr()
+    factor = ext.factorize_raw(row_ptrs, col_indices, values, 2)
+
+    base = np.zeros(factor.n + 1, dtype=np.float64)
+    rhs = base[:-1]
+    out = base[1:]
+
+    with pytest.raises(ValueError, match="must not overlap"):
+        factor.solve_into(rhs, out)
