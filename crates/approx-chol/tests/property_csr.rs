@@ -1,3 +1,5 @@
+#[path = "common/laplacian_prop.rs"]
+mod laplacian_prop;
 #[path = "common/panic_err.rs"]
 mod panic_err;
 #[path = "common/panic_ok.rs"]
@@ -6,51 +8,9 @@ use panic_err::ErrOrPanic;
 use panic_ok::OrPanic;
 
 use approx_chol::{CsrError, CsrRef, Error};
+use laplacian_prop::laplacian_csr_strategy;
 use proptest::prelude::*;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-
-fn build_laplacian_csr(n: usize, edge_weights: &[u8]) -> (Vec<u32>, Vec<u32>, Vec<f64>, u32) {
-    let mut dense = vec![0.0_f64; n * n];
-    let mut edge_pos = 0usize;
-    for i in 0..n {
-        for j in (i + 1)..n {
-            let w = edge_weights[edge_pos] as f64;
-            edge_pos += 1;
-            if w <= 0.0 {
-                continue;
-            }
-            dense[i * n + j] -= w;
-            dense[j * n + i] -= w;
-            dense[i * n + i] += w;
-            dense[j * n + j] += w;
-        }
-    }
-
-    let mut row_ptrs = Vec::with_capacity(n + 1);
-    let mut col_indices = Vec::new();
-    let mut values = Vec::new();
-    row_ptrs.push(0u32);
-    for i in 0..n {
-        for j in 0..n {
-            let value = dense[i * n + j];
-            if i == j || value != 0.0 {
-                col_indices.push(j as u32);
-                values.push(value);
-            }
-        }
-        row_ptrs.push(col_indices.len() as u32);
-    }
-
-    (row_ptrs, col_indices, values, n as u32)
-}
-
-fn laplacian_csr_strategy() -> impl Strategy<Value = (Vec<u32>, Vec<u32>, Vec<f64>, u32)> {
-    (1usize..=8).prop_flat_map(|n| {
-        let pair_count = n * (n - 1) / 2;
-        prop::collection::vec(0u8..=4, pair_count)
-            .prop_map(move |edge_weights| build_laplacian_csr(n, &edge_weights))
-    })
-}
 
 proptest! {
     #[test]
