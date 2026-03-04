@@ -5,7 +5,8 @@ mod panic_ok;
 use panic_err::ErrOrPanic;
 use panic_ok::OrPanic;
 
-use approx_chol::{factorize, Builder, Config, ConfigError, CsrError, CsrRef, Error};
+use approx_chol::low_level::Builder;
+use approx_chol::{factorize, Config, ConfigError, CsrError, CsrRef, Error};
 use num_traits::{Float, FromPrimitive, PrimInt};
 
 fn idx<I: TryFrom<usize>>(value: usize) -> I

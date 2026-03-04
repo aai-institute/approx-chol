@@ -1,6 +1,7 @@
 mod common;
 
-use approx_chol::{Builder, Config};
+use approx_chol::low_level::Builder;
+use approx_chol::Config;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 use common::{grid_laplacian, OrPanic};

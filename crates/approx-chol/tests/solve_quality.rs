@@ -8,7 +8,8 @@ use grid::grid_laplacian;
 use panic_err::ErrOrPanic;
 use panic_ok::OrPanic;
 
-use approx_chol::{Builder, Config, CsrRef, SolveError};
+use approx_chol::low_level::Builder;
+use approx_chol::{Config, CsrRef, SolveError};
 
 // ---------------------------------------------------------------------------
 // Gremban augmentation: SDDM vs pure Laplacian

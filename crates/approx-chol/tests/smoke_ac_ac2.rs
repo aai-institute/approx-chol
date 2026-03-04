@@ -5,7 +5,8 @@ mod panic_ok;
 use grid::grid_laplacian;
 use panic_ok::OrPanic;
 
-use approx_chol::{Builder, Config};
+use approx_chol::low_level::Builder;
+use approx_chol::Config;
 
 fn run_smoke_case(rows: usize, cols: usize, config: Config) {
     let lap = grid_laplacian(rows, cols);

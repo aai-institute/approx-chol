@@ -90,14 +90,6 @@ pub use approx_chol::{Config, Factor, SolveError};
 pub use csr::{CsrRef, OwnedCsr};
 pub(crate) use types::Real;
 
-// Re-export Builder and star-clique sampling helpers at the crate root.
-// New code should prefer
-// `approx_chol::low_level::{Builder, clique_tree_sample, clique_tree_sample_multi}`.
-#[doc(hidden)]
-pub use approx_chol::clique_tree::{clique_tree_sample, clique_tree_sample_multi};
-#[doc(hidden)]
-pub use approx_chol::Builder;
-
 use std::fmt;
 
 /// Errors that can occur during approximate Cholesky factorization.
@@ -348,7 +340,7 @@ where
     M: TryInto<CsrRef<'a, T, I>>,
     <M as TryInto<CsrRef<'a, T, I>>>::Error: Into<Error>,
 {
-    Builder::<T>::new(Config::default()).build(sddm)
+    approx_chol::Builder::<T>::new(Config::default()).build(sddm)
 }
 
 /// Factorize an SDDM matrix with custom configuration.
@@ -388,5 +380,5 @@ where
     M: TryInto<CsrRef<'a, T, I>>,
     <M as TryInto<CsrRef<'a, T, I>>>::Error: Into<Error>,
 {
-    Builder::<T>::new(config).build(sddm)
+    approx_chol::Builder::<T>::new(config).build(sddm)
 }

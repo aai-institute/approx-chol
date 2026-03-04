@@ -3,7 +3,8 @@ mod common;
 use std::hint::black_box;
 use std::time::Duration;
 
-use approx_chol::{Builder, Config, Factor};
+use approx_chol::low_level::Builder;
+use approx_chol::{Config, Factor};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 use common::{grid_laplacian, OrPanic};

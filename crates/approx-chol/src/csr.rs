@@ -4,7 +4,7 @@ use num_traits::{cast, PrimInt};
 /// Borrowed CSR matrix view. Zero-copy from any CSR source.
 ///
 /// This is the primary input type for
-/// [`Builder::build`](crate::Builder::build).
+/// [`Builder::build`](crate::low_level::Builder::build).
 /// Construct from raw arrays owned by any sparse matrix library
 /// (`sprs`, `faer`, or plain `Vec`s).
 #[derive(Debug, Clone, Copy)]
@@ -256,7 +256,7 @@ impl<T: Clone, I: PrimInt> OwnedCsr<T, I> {
 
 impl<T, I: PrimInt> OwnedCsr<T, I> {
     /// Borrow as a [`CsrRef`] for use with
-    /// [`Builder::build`](crate::Builder::build).
+    /// [`Builder::build`](crate::low_level::Builder::build).
     ///
     /// # Errors
     ///

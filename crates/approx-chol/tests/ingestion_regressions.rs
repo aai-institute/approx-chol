@@ -2,7 +2,8 @@
 mod panic_ok;
 use panic_ok::OrPanic;
 
-use approx_chol::{Builder, Config, CsrRef};
+use approx_chol::low_level::Builder;
+use approx_chol::{Config, CsrRef};
 
 fn solve_with_default_ac(
     row_ptrs: &[u32],

@@ -12,7 +12,8 @@
 #[path = "shared/mod.rs"]
 mod shared;
 
-use approx_chol::{Builder, Config};
+use approx_chol::low_level::Builder;
+use approx_chol::Config;
 use shared::grid_laplacian;
 
 // --------------------------------------------------------------------------

@@ -7,7 +7,8 @@ mod panic_ok;
 use panic_err::ErrOrPanic;
 use panic_ok::OrPanic;
 
-use approx_chol::{factorize, Builder, Config, CsrError, CsrRef, Error};
+use approx_chol::low_level::Builder;
+use approx_chol::{factorize, Config, CsrError, CsrRef, Error};
 use faer::sparse::SparseRowMat;
 use num_traits::{cast, Float, FromPrimitive, PrimInt};
 
