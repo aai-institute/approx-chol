@@ -5,7 +5,7 @@
 //! - `DynamicOrdering`: bucket-based priority queue that adapts to fill-in
 //!   during elimination (ports Julia's `ApproxCholPQ`)
 
-use crate::Real;
+use crate::{CsrError, Real};
 
 // ---------------------------------------------------------------------------
 // Trait
@@ -62,7 +62,7 @@ struct PQElem {
 /// `min_list` is a *lower bound* on the index of the minimum non-empty bucket;
 /// [`pop`](Self::pop) scans upward from `min_list` to find the actual minimum.
 ///
-/// Requires `n <= u32::MAX` (asserted at construction).
+/// Requires `n <= u32::MAX` (validated at construction).
 pub struct DynamicOrdering {
     elems: Vec<PQElem>, // indexed by vertex id
     lists: Vec<u32>,    // bucket heads, indexed by key_map(degree)
@@ -217,7 +217,7 @@ impl<T: Real> EliminationOrdering<T> for DynamicOrdering {
 }
 
 impl DynamicOrdering {
-    pub(crate) fn new(n: usize, degrees: impl Iterator<Item = usize>) -> Self {
+    pub(crate) fn new(n: usize, degrees: impl Iterator<Item = usize>) -> Result<Self, CsrError> {
         Self::new_with_scale(n, degrees, 1)
     }
 
@@ -225,11 +225,10 @@ impl DynamicOrdering {
         n: usize,
         degrees: impl Iterator<Item = usize>,
         degree_scale: usize,
-    ) -> Self {
-        assert!(
-            n <= u32::MAX as usize,
-            "number of vertices exceeds u32::MAX"
-        );
+    ) -> Result<Self, CsrError> {
+        if n > u32::MAX as usize {
+            return Err(CsrError::NExceedsU32 { n });
+        }
         // Julia AC2 parity: keyMap uses `k = split*n`, bucket array length `2*k+1`.
         // Use scale=1 for standard AC.
         let bucket_base = degree_scale.saturating_mul(n).max(1);
@@ -266,14 +265,14 @@ impl DynamicOrdering {
             min_list = 0;
         }
 
-        DynamicOrdering {
+        Ok(DynamicOrdering {
             elems,
             lists,
             min_list,
             n_items,
             bucket_base,
             bucket_upper,
-        }
+        })
     }
 }
 
@@ -296,7 +295,7 @@ mod tests {
     #[test]
     fn test_pop_order() {
         // 4 vertices with degrees [3, 1, 2, 0]
-        let mut pq = DynamicOrdering::new(4, [3, 1, 2, 0].into_iter());
+        let mut pq = DynamicOrdering::new(4, [3, 1, 2, 0].into_iter()).expect("valid n");
 
         // Should pop in order of increasing degree
         assert_eq!(pq.next_vertex(), Some(3)); // degree 0
@@ -309,7 +308,7 @@ mod tests {
     #[test]
     fn test_inc_dec() {
         // 3 vertices with degrees [2, 1, 3]
-        let mut pq = DynamicOrdering::new(3, [2, 1, 3].into_iter());
+        let mut pq = DynamicOrdering::new(3, [2, 1, 3].into_iter()).expect("valid n");
 
         // Pop vertex 1 (degree 1, lowest)
         assert_eq!(pq.pop(), Some(1));
@@ -330,7 +329,7 @@ mod tests {
 
     #[test]
     fn test_notify_fill_edge() {
-        let mut pq = DynamicOrdering::new(3, [1, 1, 1].into_iter());
+        let mut pq = DynamicOrdering::new(3, [1, 1, 1].into_iter()).expect("valid n");
 
         // Fill edge between 0 and 2 → both inc by 1
         pq.notify_fill_edge(0u32, 2u32);
@@ -344,7 +343,7 @@ mod tests {
 
     #[test]
     fn test_notify_edges_merged() {
-        let mut pq = DynamicOrdering::new(3, [3, 2, 1].into_iter());
+        let mut pq = DynamicOrdering::new(3, [3, 2, 1].into_iter()).expect("valid n");
 
         // Merging edges to vertex 0 → degree decreases
         <DynamicOrdering as EliminationOrdering<f64>>::notify_edges_merged_n(&mut pq, 0u32, 1);
@@ -356,27 +355,27 @@ mod tests {
 
     #[test]
     fn test_notify_edges_merged_n() {
-        let mut pq = DynamicOrdering::new(3, [5, 2, 1].into_iter());
+        let mut pq = DynamicOrdering::new(3, [5, 2, 1].into_iter()).expect("valid n");
         <DynamicOrdering as EliminationOrdering<f64>>::notify_edges_merged_n(&mut pq, 0u32, 3);
         assert_eq!(pq.elems[0].key, 2);
     }
 
     #[test]
     fn test_split_scaled_bucket_layout() {
-        let pq = DynamicOrdering::new_with_scale(4, [1, 2, 3, 4].into_iter(), 2);
+        let pq = DynamicOrdering::new_with_scale(4, [1, 2, 3, 4].into_iter(), 2).expect("valid n");
         assert_eq!(pq.bucket_base, 8);
         assert_eq!(pq.lists.len(), 17);
     }
 
     #[test]
     fn test_empty_pq() {
-        let mut pq = DynamicOrdering::new(0, std::iter::empty());
+        let mut pq = DynamicOrdering::new(0, std::iter::empty()).expect("valid n");
         assert_eq!(pq.next_vertex(), None);
     }
 
     #[test]
     fn test_dec_at_zero() {
-        let mut pq = DynamicOrdering::new(1, [0].into_iter());
+        let mut pq = DynamicOrdering::new(1, [0].into_iter()).expect("valid n");
         pq.dec(0); // should not underflow
         assert_eq!(pq.elems[0].key, 0);
         assert_eq!(pq.pop(), Some(0));

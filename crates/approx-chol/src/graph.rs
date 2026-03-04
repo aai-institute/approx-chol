@@ -1,6 +1,6 @@
 //! Elimination graph for approximate Cholesky factorization.
 
-use crate::{CsrRef, Error, Real};
+use crate::{CsrError, CsrRef, Error, Real};
 use num_traits::NumCast;
 
 /// Named return type for [`EliminationGraph::from_sddm`].
@@ -177,7 +177,9 @@ const RETAIN_ADJ_CAPACITY_MAX: usize = 64;
 impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
     fn from_sddm(csr: CsrRef<'_, T, u32>) -> Result<GraphBuild<Self, T>, Error> {
         let n = csr.n();
-        assert!(n <= u32::MAX as usize, "graph size exceeds u32::MAX");
+        if n > u32::MAX as usize {
+            return Err(Error::InvalidCsr(CsrError::MatrixDimensionExceedsU32 { n }));
+        }
         let mut adj: Vec<Vec<E>> = Vec::with_capacity(n);
         for row in 0..n {
             let (cols, _) = csr.try_row(row)?;
@@ -206,8 +208,7 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
                 }
             }
         }
-
-        Ok(Self::build_augmented_laplacian(adj, diag, &row_sums))
+        Self::build_augmented_laplacian(adj, diag, &row_sums)
     }
 
     fn n(&self) -> usize {
@@ -314,18 +315,20 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
         mut adj: Vec<Vec<E>>,
         mut diag: Vec<T>,
         row_sums: &[T],
-    ) -> GraphBuild<Self, T> {
-        assert!(
-            adj.len() <= u32::MAX as usize,
-            "graph size exceeds u32::MAX"
-        );
+    ) -> Result<GraphBuild<Self, T>, Error> {
         let m = adj.len();
         let (max_surplus, surplus_sum, surplus_count) = surplus_stats(row_sums);
         let aug_eps = augmentation_epsilon::<T>();
         let needs_augmentation = max_surplus >= aug_eps;
 
         if needs_augmentation {
-            let aux = m as u32;
+            if m >= u32::MAX as usize {
+                return Err(Error::InvalidCsr(CsrError::MatrixDimensionExceedsU32 {
+                    n: m.saturating_add(1),
+                }));
+            }
+            let aux = u32::try_from(m)
+                .map_err(|_| Error::InvalidCsr(CsrError::MatrixDimensionExceedsU32 { n: m }))?;
 
             // Add augmentation vertex adjacency list
             adj.push(Vec::with_capacity(surplus_count));
@@ -343,14 +346,14 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
 
         let n = adj.len();
         let eliminated = BitVec::new(n);
-        GraphBuild {
+        Ok(GraphBuild {
             graph: AdjListGraph {
                 adj,
                 eliminated,
                 _marker: core::marker::PhantomData,
             },
             diagonal: diag,
-        }
+        })
     }
 }
 

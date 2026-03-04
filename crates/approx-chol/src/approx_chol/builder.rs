@@ -94,7 +94,7 @@ where
                     diagonal: diag,
                     ..
                 } = SlimGraph::<T>::from_sddm(sddm)?;
-                Ok(self.build_from_graph(graph, diag, sampler))
+                self.build_from_graph(graph, diag, sampler)
             }
             Some(k) => {
                 let GraphBuild {
@@ -103,7 +103,7 @@ where
                     ..
                 } = MultiEdgeGraph::<T>::from_sddm(sddm)?;
                 graph.mark_split_edges(k);
-                Ok(self.build_from_graph(graph, diag, sampler))
+                self.build_from_graph(graph, diag, sampler)
             }
         }
     }
@@ -130,14 +130,15 @@ where
         mut graph: G,
         diag: Vec<T>,
         sampler: S,
-    ) -> Factor<T> {
+    ) -> Result<Factor<T>, Error> {
         let n = graph.n();
         let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
         let degree_sum: usize = degrees.iter().sum();
         let mut ordering = match self.config.split_merge {
             None => DynamicOrdering::new(n, degrees.into_iter()),
             Some(k) => DynamicOrdering::new_with_scale(n, degrees.into_iter(), k as usize),
-        };
+        }
+        .map_err(Error::InvalidCsr)?;
         self.factorize_with_ordering(&mut graph, diag, &mut ordering, degree_sum, sampler)
     }
 
@@ -149,25 +150,25 @@ where
         ordering: &mut DynamicOrdering,
         degree_sum: usize,
         sampler: S,
-    ) -> Factor<T> {
+    ) -> Result<Factor<T>, Error> {
         let mut diag = diag;
         match self.config.split_merge {
-            None => Self::factorize_with_variant(
+            None => Ok(Self::factorize_with_variant(
                 graph,
                 &mut diag,
                 ordering,
                 degree_sum,
                 sampler,
                 AcStarBuilder::new(graph.n()),
-            ),
-            Some(k) => Self::factorize_with_variant(
+            )),
+            Some(k) => Ok(Self::factorize_with_variant(
                 graph,
                 &mut diag,
                 ordering,
                 degree_sum,
                 sampler,
                 Ac2StarBuilder::new(graph.n(), k),
-            ),
+            )),
         }
     }
 
