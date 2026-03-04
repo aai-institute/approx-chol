@@ -3,7 +3,7 @@ name = "approx-chol-py"
 version = "0.1.0"
 edition = "2021"
 description = "Python bindings for approx-chol (approximate Cholesky factorization)"
-license = "Apache-2.0 AND MIT"
+license = "MIT"
 publish = false
 
 [lib]

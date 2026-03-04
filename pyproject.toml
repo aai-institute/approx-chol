@@ -7,10 +7,9 @@ dependencies = [
 name = "approx-chol"
 requires-python = ">= 3.11"
 version = "0.1.0"
-license = "Apache-2.0 AND MIT"
+license = "MIT"
 license-files = [
     "LICENSE",
-    "LICENSE-MIT",
     "NOTICE",
 ]
 
