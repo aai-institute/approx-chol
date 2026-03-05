@@ -1,5 +1,3 @@
-use core::cmp::Ordering;
-
 use crate::graph::{EliminationGraph, Neighbor};
 use crate::ordering::EliminationOrdering;
 use crate::sampling::WeightedSampler;
@@ -170,6 +168,10 @@ struct Ac2SortEntry<T: Real> {
     idx: u32,
     weight: T,
     count: u32,
+    /// Precomputed avg weight (`weight / count`) used as a sort key.
+    /// Avoids cross-multiplication in the comparator, which can break
+    /// transitivity under floating-point rounding.
+    avg_weight: T,
 }
 
 /// Neighborhoods with at most this many entries use sort-based dedup (O(d log d),
@@ -479,30 +481,21 @@ impl<T: Real> Ac2DedupWorkspace<T> {
         self.sort_entries.clear();
         self.sort_entries.reserve(len);
         for i in 0..len {
+            let count_scalar: T = <T as NumCast>::from(counts[i]).unwrap_or(T::one());
             self.sort_entries.push(Ac2SortEntry {
                 idx: entries[i].0,
                 weight: entries[i].1,
                 count: counts[i],
+                avg_weight: entries[i].1 / count_scalar,
             });
         }
 
-        debug_assert!(
-            self.sort_entries.iter().all(|e| e.count > 0),
-            "sort_by_avg_weight: all counts must be positive for meaningful avg-weight comparison"
-        );
-
+        // Sort by precomputed avg_weight. Using a precomputed key guarantees
+        // transitivity (each element maps to a fixed float). The previous
+        // cross-multiplication approach (a.weight * b.count vs b.weight * a.count)
+        // could violate transitivity under floating-point rounding.
         self.sort_entries.sort_unstable_by(|a, b| {
-            // Cross-multiply to compare a.weight/a.count vs b.weight/b.count
-            // without division.
-            let cmp = match (<T as NumCast>::from(b.count), <T as NumCast>::from(a.count)) {
-                (Some(b_count_scalar), Some(a_count_scalar)) => {
-                    let lhs = a.weight * b_count_scalar;
-                    let rhs = b.weight * a_count_scalar;
-                    float_total_cmp(&lhs, &rhs)
-                }
-                _ => Ordering::Equal,
-            };
-            cmp.then_with(|| a.idx.cmp(&b.idx))
+            float_total_cmp(&a.avg_weight, &b.avg_weight).then_with(|| a.idx.cmp(&b.idx))
         });
 
         for (dst, item) in self.sort_entries.iter().enumerate() {
