@@ -29,5 +29,6 @@ where
 /// This function provides a proper total order by placing NaN after all non-NaN.
 #[inline]
 pub(crate) fn float_total_cmp<T: Float>(a: &T, b: &T) -> Ordering {
-    a.partial_cmp(b).unwrap_or_else(|| a.is_nan().cmp(&b.is_nan()))
+    a.partial_cmp(b)
+        .unwrap_or_else(|| a.is_nan().cmp(&b.is_nan()))
 }
