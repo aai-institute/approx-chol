@@ -3,6 +3,7 @@ use core::cmp::Ordering;
 use crate::graph::{EliminationGraph, Neighbor};
 use crate::ordering::EliminationOrdering;
 use crate::sampling::WeightedSampler;
+use crate::types::float_total_cmp;
 use crate::Real;
 use num_traits::NumCast;
 
@@ -178,11 +179,7 @@ const SCATTER_THRESHOLD: usize = 32;
 
 /// Sort entries by weight (ascending), breaking ties by vertex index.
 fn sort_by_weight_then_index<T: Real>(entries: &mut [(u32, T)]) {
-    entries.sort_unstable_by(|a, b| {
-        a.1.partial_cmp(&b.1)
-            .unwrap_or(Ordering::Equal)
-            .then_with(|| a.0.cmp(&b.0))
-    });
+    entries.sort_unstable_by(|a, b| float_total_cmp(&a.1, &b.1).then_with(|| a.0.cmp(&b.0)));
 }
 
 /// Shared scratch for dedup variants.
@@ -501,7 +498,7 @@ impl<T: Real> Ac2DedupWorkspace<T> {
                 (Some(b_count_scalar), Some(a_count_scalar)) => {
                     let lhs = a.weight * b_count_scalar;
                     let rhs = b.weight * a_count_scalar;
-                    lhs.partial_cmp(&rhs).unwrap_or(Ordering::Equal)
+                    float_total_cmp(&lhs, &rhs)
                 }
                 _ => Ordering::Equal,
             };

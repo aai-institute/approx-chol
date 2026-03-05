@@ -1,9 +1,7 @@
-use core::cmp::Ordering;
-
 use crate::graph::EliminationGraph;
 use crate::ordering::EliminationOrdering;
 use crate::sampling::{near_zero, CdfSampler, WeightedSampler};
-use crate::types::Real;
+use crate::types::{float_total_cmp, Real};
 use num_traits::NumCast;
 
 /// One sampled column of the approximate Cholesky factor (Algorithm 5, GKS 2023).
@@ -268,7 +266,7 @@ pub fn clique_tree_sample<T>(
         return;
     }
 
-    entries.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+    entries.sort_unstable_by(|a, b| float_total_cmp(&a.1, &b.1));
     let mut sampler = CdfSampler::<T>::new(seed);
     sampler.prepare(entries);
     let mut elim = StarElimination::new(pivot_diag);
@@ -322,7 +320,7 @@ pub fn clique_tree_sample_multi<T>(
         return;
     };
 
-    entries.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+    entries.sort_unstable_by(|a, b| float_total_cmp(&a.1, &b.1));
     let mut sampler = CdfSampler::<T>::new(seed);
     sampler.prepare(entries);
 
