@@ -18,3 +18,4 @@ venv/
 # IDE and OS-specific files
 .idea/
 .DS_Store
+*.dSYM
