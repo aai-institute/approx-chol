@@ -99,7 +99,13 @@ impl<'a, T: num_traits::Float + Send + Sync + 'static> EliminationStep<'a, T> {
 
 /// Contiguous memory owner for a sequence of elimination steps.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(bound(serialize = "T: serde::Serialize", deserialize = "T: serde::de::DeserializeOwned")))]
+#[cfg_attr(
+    feature = "serde",
+    serde(bound(
+        serialize = "T: serde::Serialize",
+        deserialize = "T: serde::de::DeserializeOwned"
+    ))
+)]
 #[derive(Clone, Debug)]
 pub struct EliminationSequence<T> {
     pub(crate) vertices: Vec<u32>,
@@ -238,7 +244,13 @@ impl<T: Real> EliminationSequence<T> {
 
 /// Approximate Cholesky decomposition L D L^T of an SDDM matrix.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(bound(serialize = "T: serde::Serialize", deserialize = "T: serde::de::DeserializeOwned")))]
+#[cfg_attr(
+    feature = "serde",
+    serde(bound(
+        serialize = "T: serde::Serialize",
+        deserialize = "T: serde::de::DeserializeOwned"
+    ))
+)]
 #[derive(Clone, Debug)]
 pub struct Factor<T = f64> {
     pub(crate) n: usize,
