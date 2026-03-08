@@ -11,12 +11,14 @@ categories = ["mathematics", "science", "algorithms"]
 
 [dependencies]
 rand = { version = "0.10.0"}
+serde = { version = "1", features = ["derive"], optional = true }
 sprs = { version = "0.11", optional = true, default-features = false }
 faer = { version = "0.24", optional = true, default-features = false }
 num-traits = "0.2"
 
 [features]
 default = []
+serde = ["dep:serde"]
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }

@@ -29,6 +29,7 @@ pub use decomposition::{Factor, SolveError};
 /// };
 /// assert!(config.split_merge.is_some());
 /// ```
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Config {
     /// Random seed for the edge-weight sampler. Use different values to get
