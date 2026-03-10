@@ -1,17 +1,32 @@
 [project]
-authors = [{name = "Kristof Schröder", email = "k.schroeder@appliedai-institute.de"}]
-dependencies = [
-    "numpy>=1.24",
-    "scipy>=1.10",
-]
 name = "approx-chol"
-requires-python = ">= 3.11"
 version = "0.1.0"
+description = "Approximate Cholesky factorization for graph Laplacians"
+readme = "README.md"
+authors = [{name = "Kristof Schröder", email = "k.schroeder@appliedai-institute.de"}]
+requires-python = ">= 3.11"
 license = "MIT"
 license-files = [
     "LICENSE",
     "NOTICE",
 ]
+keywords = ["laplacian", "sparse", "cholesky", "preconditioner", "sddm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+]
+
+[project.urls]
+Repository = "https://github.com/aai-institute/approx-chol"
+Issues = "https://github.com/aai-institute/approx-chol/issues"
 
 [build-system]
 requires = ["maturin>=1.7,<2"]

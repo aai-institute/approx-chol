@@ -1,0 +1,27 @@
+name: Cargo Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    environment: publish
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Verify tag is on main
+        run: git branch --contains "$GITHUB_SHA" | grep -qE '(^|\s)main$'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish approx-chol
+        run: cargo publish -p approx-chol
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
