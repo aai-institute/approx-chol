@@ -340,7 +340,7 @@ where
     M: TryInto<CsrRef<'a, T, I>>,
     <M as TryInto<CsrRef<'a, T, I>>>::Error: Into<Error>,
 {
-    approx_chol::Builder::<T>::new(Config::default()).build(sddm)
+    factorize_with(sddm, Config::default())
 }
 
 /// Factorize an SDDM matrix with custom configuration.

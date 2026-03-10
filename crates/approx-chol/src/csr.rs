@@ -1,6 +1,13 @@
 use crate::{CsrError, Error};
 use num_traits::{cast, PrimInt};
 
+fn cast_slice<S: PrimInt, D: PrimInt>(src: &[S], err: Error) -> Result<Vec<D>, Error> {
+    src.iter()
+        .map(|&v| cast::<S, D>(v))
+        .collect::<Option<Vec<_>>>()
+        .ok_or(err)
+}
+
 /// Borrowed CSR matrix view. Zero-copy from any CSR source.
 ///
 /// This is the primary input type for
@@ -184,18 +191,10 @@ impl<'a, T: Clone, I: PrimInt> CsrRef<'a, T, I> {
     ///
     /// Returns [`Error::InvalidCsr`] if any index does not fit in `u32`.
     pub fn to_owned_u32(&self) -> Result<OwnedCsr<T, u32>, Error> {
-        let row_ptrs = self
-            .row_ptrs
-            .iter()
-            .map(|&v| cast::<I, u32>(v))
-            .collect::<Option<Vec<_>>>()
-            .ok_or(Error::InvalidCsr(CsrError::RowPtrExceedsU32))?;
-        let col_indices = self
-            .col_indices
-            .iter()
-            .map(|&v| cast::<I, u32>(v))
-            .collect::<Option<Vec<_>>>()
-            .ok_or(Error::InvalidCsr(CsrError::ColIndexExceedsU32))?;
+        let row_ptrs =
+            cast_slice(self.row_ptrs, Error::InvalidCsr(CsrError::RowPtrExceedsU32))?;
+        let col_indices =
+            cast_slice(self.col_indices, Error::InvalidCsr(CsrError::ColIndexExceedsU32))?;
         Ok(OwnedCsr {
             row_ptrs,
             col_indices,
@@ -231,17 +230,14 @@ impl<T: Clone, I: PrimInt> OwnedCsr<T, I> {
             .ok_or(Error::InvalidCsr(CsrError::NExceedsTargetIndexType { n }))?;
         let n = u32::try_from(n).map_err(|_| Error::InvalidCsr(CsrError::NExceedsU32 { n }))?;
 
-        let row_ptrs = row_ptrs
-            .iter()
-            .map(|&v| cast::<usize, I>(v))
-            .collect::<Option<Vec<_>>>()
-            .ok_or(Error::InvalidCsr(CsrError::RowPtrExceedsTargetIndexType))?;
-
-        let col_indices = col_indices
-            .iter()
-            .map(|&v| cast::<usize, I>(v))
-            .collect::<Option<Vec<_>>>()
-            .ok_or(Error::InvalidCsr(CsrError::ColIndexExceedsTargetIndexType))?;
+        let row_ptrs = cast_slice(
+            row_ptrs,
+            Error::InvalidCsr(CsrError::RowPtrExceedsTargetIndexType),
+        )?;
+        let col_indices = cast_slice(
+            col_indices,
+            Error::InvalidCsr(CsrError::ColIndexExceedsTargetIndexType),
+        )?;
 
         CsrRef::new(&row_ptrs, &col_indices, values, n)?;
 
@@ -266,6 +262,18 @@ impl<T, I: PrimInt> OwnedCsr<T, I> {
     }
 }
 
+#[cfg(any(feature = "sprs", feature = "faer"))]
+fn validate_square_dims(rows: usize, cols: usize) -> Result<u32, Error> {
+    if rows != cols {
+        return Err(Error::InvalidCsr(CsrError::ExpectedSquareMatrix {
+            rows,
+            cols,
+        }));
+    }
+    u32::try_from(rows)
+        .map_err(|_| Error::InvalidCsr(CsrError::MatrixDimensionExceedsU32 { n: rows }))
+}
+
 #[cfg(feature = "sprs")]
 fn try_from_sprs_view_impl<'a, T, I: sprs::SpIndex + PrimInt>(
     mat: sprs::CsMatViewI<'a, T, I>,
@@ -273,16 +281,7 @@ fn try_from_sprs_view_impl<'a, T, I: sprs::SpIndex + PrimInt>(
     if !mat.is_csr() {
         return Err(Error::InvalidCsr(CsrError::ExpectedCsrMatrixGotCsc));
     }
-    let rows = mat.rows();
-    let cols = mat.cols();
-    if rows != cols {
-        return Err(Error::InvalidCsr(CsrError::ExpectedSquareMatrix {
-            rows,
-            cols,
-        }));
-    }
-    let n = u32::try_from(rows)
-        .map_err(|_| Error::InvalidCsr(CsrError::MatrixDimensionExceedsU32 { n: rows }))?;
+    let n = validate_square_dims(mat.rows(), mat.cols())?;
     let (indptr, indices, data) = mat.into_raw_storage();
     CsrRef::new(indptr, indices, data, n)
 }
@@ -291,16 +290,7 @@ fn try_from_sprs_view_impl<'a, T, I: sprs::SpIndex + PrimInt>(
 fn try_from_faer_view_impl<'a, T, I: faer::Index + PrimInt>(
     mat: faer::sparse::SparseRowMatRef<'a, I, T>,
 ) -> Result<CsrRef<'a, T, I>, Error> {
-    let rows = mat.nrows();
-    let cols = mat.ncols();
-    if rows != cols {
-        return Err(Error::InvalidCsr(CsrError::ExpectedSquareMatrix {
-            rows,
-            cols,
-        }));
-    }
-    let n = u32::try_from(rows)
-        .map_err(|_| Error::InvalidCsr(CsrError::MatrixDimensionExceedsU32 { n: rows }))?;
+    let n = validate_square_dims(mat.nrows(), mat.ncols())?;
     let symbolic = mat.symbolic();
     CsrRef::new(symbolic.row_ptr(), symbolic.col_idx(), mat.val(), n)
 }

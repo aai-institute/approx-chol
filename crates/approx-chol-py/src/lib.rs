@@ -217,7 +217,7 @@ impl PyFactor {
         }
         let x = self
             .inner
-            .try_solve(b_slice)
+            .solve(b_slice)
             .map_err(|e| value_error(e.to_string()))?;
         Ok(PyArray1::from_vec(py, x))
     }
@@ -268,13 +268,13 @@ impl PyFactor {
                 .as_slice_mut()
                 .map_err(|_| value_error("out must be contiguous"))?;
             self.inner
-                .try_solve_into(b_slice, out_slice)
+                .solve_into(b_slice, out_slice)
                 .map_err(|e| value_error(e.to_string()))?;
         } else {
             // Augmented: solve into temp buffer, copy original_n elements.
             let mut work = vec![0.0; n];
             self.inner
-                .try_solve_into(b_slice, &mut work)
+                .solve_into(b_slice, &mut work)
                 .map_err(|e| value_error(e.to_string()))?;
             let mut out_rw = out.try_readwrite().map_err(|e| borrow_error("out", e))?;
             let out_slice = out_rw

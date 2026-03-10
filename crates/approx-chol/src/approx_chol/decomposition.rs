@@ -431,15 +431,6 @@ where
         Ok(work)
     }
 
-    /// Backwards-compatible alias of [`Self::solve`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SolveError::RhsLengthExceedsFactor`] if `b.len() > self.n()`.
-    pub fn try_solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
-        self.solve(b)
-    }
-
     /// Solve L D L^T x = b in-place, writing the result into `work`.
     ///
     /// # Errors
@@ -448,16 +439,6 @@ where
     /// Returns [`SolveError::WorkBufferTooSmall`] if `work.len() < self.n()`.
     pub fn solve_into(&self, b: &[T], work: &mut [T]) -> Result<(), SolveError> {
         self.solve_into_with_projection(b, work, true)
-    }
-
-    /// Backwards-compatible alias of [`Self::solve_into`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SolveError::RhsLengthExceedsFactor`] if `b.len() > self.n()`.
-    /// Returns [`SolveError::WorkBufferTooSmall`] if `work.len() < self.n()`.
-    pub fn try_solve_into(&self, b: &[T], work: &mut [T]) -> Result<(), SolveError> {
-        self.solve_into(b, work)
     }
 
     /// Solve L D L^T x = b in-place with configurable zero-mean projection.
@@ -477,21 +458,6 @@ where
         Ok(())
     }
 
-    /// Backwards-compatible alias of [`Self::solve_into_with_projection`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SolveError::RhsLengthExceedsFactor`] if `b.len() > self.n()`.
-    /// Returns [`SolveError::WorkBufferTooSmall`] if `work.len() < self.n()`.
-    pub fn try_solve_into_with_projection(
-        &self,
-        b: &[T],
-        work: &mut [T],
-        project_zero_mean: bool,
-    ) -> Result<(), SolveError> {
-        self.solve_into_with_projection(b, work, project_zero_mean)
-    }
-
     /// Solve L D L^T x = b in-place, assuming `y` already contains the RHS.
     ///
     /// # Errors
@@ -501,15 +467,6 @@ where
         self.validate_in_place_work(y)?;
         self.solve_in_place_unvalidated(y);
         Ok(())
-    }
-
-    /// Backwards-compatible alias of [`Self::solve_in_place`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SolveError::WorkBufferTooSmall`] if `y.len() < self.n()`.
-    pub fn try_solve_in_place(&self, y: &mut [T]) -> Result<(), SolveError> {
-        self.solve_in_place(y)
     }
 
     /// Solve L D L^T x = b in-place without upfront `y` length validation.

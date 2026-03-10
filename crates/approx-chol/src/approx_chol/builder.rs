@@ -72,11 +72,7 @@ where
         let csr = csr.map_err(Into::into)?;
         let converted = csr.to_owned_u32()?;
         let converted_ref = converted.try_as_ref()?;
-        self.build_u32(converted_ref)
-    }
-
-    fn build_u32(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
-        self.build_with_sampler(sddm, CdfSampler::<T>::new(self.config.seed))
+        self.build_with_sampler(converted_ref, CdfSampler::<T>::new(self.config.seed))
     }
 
     /// Run approximate Cholesky factorization with a custom [`WeightedSampler`].
@@ -87,7 +83,7 @@ where
     ) -> Result<Factor<T>, Error> {
         let original_n = sddm.n();
         Self::validate_config(self.config)?;
-        Self::validate(&sddm)?;
+        sddm.validate()?;
         let mut factor = match self.config.split_merge {
             None => {
                 let GraphBuild {
@@ -109,10 +105,6 @@ where
         }?;
         factor.original_n = original_n;
         Ok(factor)
-    }
-
-    fn validate(csr: &CsrRef<'_, T, u32>) -> Result<(), Error> {
-        csr.validate()
     }
 
     fn validate_config(config: Config) -> Result<(), Error> {

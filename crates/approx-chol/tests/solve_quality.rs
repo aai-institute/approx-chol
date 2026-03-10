@@ -255,24 +255,7 @@ fn solve_in_place_matches_no_projection() {
 }
 
 #[test]
-fn try_solve_matches_solve() {
-    let lap = grid_laplacian(6, 6);
-    let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
-        .or_panic("factorization should succeed");
-
-    let mut rhs = vec![0.0; n_orig];
-    rhs[0] = 1.0;
-    rhs[n_orig - 1] = -1.0;
-
-    let x = factor.solve(&rhs).or_panic("solve should succeed");
-    let x_try = factor.try_solve(&rhs).or_panic("try_solve should succeed");
-    assert_eq!(x, x_try, "try_solve must match solve");
-}
-
-#[test]
-fn try_solve_into_reports_rhs_too_long() {
+fn solve_into_reports_rhs_too_long() {
     let lap = grid_laplacian(4, 4);
     let factor = Builder::new(Config::default())
         .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
@@ -281,57 +264,12 @@ fn try_solve_into_reports_rhs_too_long() {
     let rhs = vec![0.0; factor.n() + 1];
     let mut work = vec![0.0; factor.n()];
     let err = factor
-        .try_solve_into(&rhs, &mut work)
+        .solve_into(&rhs, &mut work)
         .err_or_panic("rhs longer than factor dimension must fail");
     assert!(matches!(
         err,
         SolveError::RhsLengthExceedsFactor {
             rhs_len: _,
-            factor_dim: _
-        }
-    ));
-}
-
-#[test]
-fn try_solve_into_reports_short_work_buffer() {
-    let lap = grid_laplacian(4, 4);
-    let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
-        .or_panic("factorization should succeed");
-
-    let mut rhs = vec![0.0; n_orig];
-    rhs[0] = 1.0;
-    rhs[n_orig - 1] = -1.0;
-    let mut work = vec![0.0; factor.n().saturating_sub(1)];
-
-    let err = factor
-        .try_solve_into(&rhs, &mut work)
-        .err_or_panic("short work buffer must fail");
-    assert!(matches!(
-        err,
-        SolveError::WorkBufferTooSmall {
-            work_len: _,
-            factor_dim: _
-        }
-    ));
-}
-
-#[test]
-fn try_solve_in_place_reports_short_work_buffer() {
-    let lap = grid_laplacian(4, 4);
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
-        .or_panic("factorization should succeed");
-
-    let mut y = vec![0.0; factor.n().saturating_sub(1)];
-    let err = factor
-        .try_solve_in_place(&mut y)
-        .err_or_panic("short in-place work buffer must fail");
-    assert!(matches!(
-        err,
-        SolveError::WorkBufferTooSmall {
-            work_len: _,
             factor_dim: _
         }
     ));
