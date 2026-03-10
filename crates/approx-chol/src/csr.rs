@@ -191,10 +191,11 @@ impl<'a, T: Clone, I: PrimInt> CsrRef<'a, T, I> {
     ///
     /// Returns [`Error::InvalidCsr`] if any index does not fit in `u32`.
     pub fn to_owned_u32(&self) -> Result<OwnedCsr<T, u32>, Error> {
-        let row_ptrs =
-            cast_slice(self.row_ptrs, Error::InvalidCsr(CsrError::RowPtrExceedsU32))?;
-        let col_indices =
-            cast_slice(self.col_indices, Error::InvalidCsr(CsrError::ColIndexExceedsU32))?;
+        let row_ptrs = cast_slice(self.row_ptrs, Error::InvalidCsr(CsrError::RowPtrExceedsU32))?;
+        let col_indices = cast_slice(
+            self.col_indices,
+            Error::InvalidCsr(CsrError::ColIndexExceedsU32),
+        )?;
         Ok(OwnedCsr {
             row_ptrs,
             col_indices,
