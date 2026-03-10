@@ -232,5 +232,5 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            wasm-wheels/*.whl
+            wheels-*/*
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') }}
