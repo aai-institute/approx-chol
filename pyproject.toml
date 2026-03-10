@@ -2,7 +2,7 @@
 name = "approx-chol"
 version = "0.1.0"
 description = "Approximate Cholesky factorization for graph Laplacians"
-readme = "README.md"
+readme = "python/README.md"
 authors = [{name = "Kristof Schröder", email = "k.schroeder@appliedai-institute.de"}]
 requires-python = ">= 3.11"
 license = "MIT"
