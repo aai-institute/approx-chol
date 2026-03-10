@@ -27,11 +27,18 @@ class Factor:
     """Approximate Cholesky factor (LDL^T decomposition).
 
     Obtained from :func:`factorize` or :func:`factorize_raw`.
+
+    Implements the scipy ``LinearOperator`` duck-type interface (``shape``,
+    ``matvec``, ``rmatvec``, ``dtype``), so it can be passed directly as
+    ``M=factor`` to iterative solvers like ``scipy.sparse.linalg.cg``.
     """
 
     @property
     def n(self) -> int:
-        """Matrix dimension (may include Gremban augmentation vertex)."""
+        """Internal factor dimension (may include Gremban augmentation vertex).
+
+        Use this to size work buffers for :meth:`solve_into`.
+        """
         ...
 
     @property
@@ -39,8 +46,38 @@ class Factor:
         """Number of elimination steps."""
         ...
 
+    @property
+    def shape(self) -> tuple[int, int]:
+        """Preconditioner shape ``(n, n)`` reflecting the original matrix dimension.
+
+        Part of the scipy ``LinearOperator`` duck-type interface.
+        """
+        ...
+
+    @property
+    def dtype(self) -> np.dtype[np.float64]:
+        """Numpy dtype of output arrays (``numpy.float64``).
+
+        Part of the scipy ``LinearOperator`` duck-type interface.
+        """
+        ...
+
+    def matvec(self, x: npt.ArrayLike) -> npt.NDArray[np.float64]:
+        """Apply the preconditioner (alias for :meth:`solve`).
+
+        Part of the scipy ``LinearOperator`` duck-type interface.
+        """
+        ...
+
+    def rmatvec(self, x: npt.ArrayLike) -> npt.NDArray[np.float64]:
+        """Apply the preconditioner transpose (alias for :meth:`solve`; symmetric).
+
+        Part of the scipy ``LinearOperator`` duck-type interface.
+        """
+        ...
+
     def solve(self, b: npt.ArrayLike) -> npt.NDArray[np.float64]:
-        """Solve LDL^T x = b, returning a new array.
+        """Solve LDL^T x = b, returning a new array of the original matrix dimension.
 
         Raises:
             ValueError: If ``b`` is not contiguous or ``len(b) > n``.
@@ -53,6 +90,9 @@ class Factor:
         out: npt.NDArray[np.float64],
     ) -> None:
         """Solve LDL^T x = b, writing the result into *out*.
+
+        The *out* array must have length >= ``shape[0]`` (the original matrix
+        dimension).
 
         Raises:
             ValueError: If ``b``/``out`` are not contiguous, sizes are invalid,

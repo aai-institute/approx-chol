@@ -129,14 +129,22 @@ impl PyConfig {
 // ---------------------------------------------------------------------------
 
 /// Approximate Cholesky factor (LDL^T decomposition).
+///
+/// Implements the scipy `LinearOperator` duck-type interface (`shape`, `matvec`,
+/// `rmatvec`, `dtype`) so it can be passed directly as `M=factor` to iterative
+/// solvers like `scipy.sparse.linalg.cg`.
 #[pyclass(frozen, name = "Factor")]
 struct PyFactor {
     inner: approx_chol::Factor<f64>,
+    /// Original matrix dimension (before possible Gremban augmentation).
+    original_n: usize,
 }
 
 #[pymethods]
 impl PyFactor {
-    /// Matrix dimension (may be larger than input if Gremban augmentation was applied).
+    /// Internal factor dimension (may be larger than ``shape[0]`` if Gremban
+    /// augmentation was applied).  Use this to size work buffers for
+    /// :meth:`solve_into`.
     #[getter]
     fn n(&self) -> usize {
         self.inner.n()
@@ -148,7 +156,49 @@ impl PyFactor {
         self.inner.n_steps()
     }
 
-    /// Solve LDL^T x = b, returning a new numpy array.
+    /// Preconditioner shape `(n, n)` reflecting the original matrix dimension.
+    ///
+    /// Part of the scipy `LinearOperator` duck-type interface.
+    #[getter]
+    fn shape(&self) -> (usize, usize) {
+        (self.original_n, self.original_n)
+    }
+
+    /// Numpy dtype of output arrays (`numpy.float64`).
+    ///
+    /// Part of the scipy `LinearOperator` duck-type interface.
+    #[getter]
+    fn dtype<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let np = py.import("numpy")?;
+        np.getattr("float64")
+    }
+
+    /// Apply the preconditioner: solve LDL^T x = b, returning a vector of the
+    /// original matrix dimension.
+    ///
+    /// Part of the scipy `LinearOperator` duck-type interface, enabling
+    /// `M=factor` in iterative solvers like `scipy.sparse.linalg.cg`.
+    fn matvec<'py>(
+        &self,
+        py: Python<'py>,
+        x: PyReadonlyArray1<'py, f64>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.solve(py, x)
+    }
+
+    /// Alias for `matvec` (the LDL^T factor is symmetric).
+    ///
+    /// Part of the scipy `LinearOperator` duck-type interface.
+    fn rmatvec<'py>(
+        &self,
+        py: Python<'py>,
+        x: PyReadonlyArray1<'py, f64>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.solve(py, x)
+    }
+
+    /// Solve LDL^T x = b, returning a new numpy array of the original
+    /// matrix dimension.
     fn solve<'py>(
         &self,
         py: Python<'py>,
@@ -173,6 +223,9 @@ impl PyFactor {
     }
 
     /// Solve LDL^T x = b, writing the result into an existing array.
+    ///
+    /// The `out` array must have length >= `original_n` (the original matrix
+    /// dimension, i.e. `factor.shape[0]`).
     fn solve_into<'py>(
         &self,
         b: PyReadonlyArray1<'py, f64>,
@@ -182,6 +235,7 @@ impl PyFactor {
             .as_slice()
             .map_err(|_| value_error("b must be contiguous"))?;
         let n = self.inner.n();
+        let original_n = self.original_n;
         if b_slice.len() > n {
             return Err(value_error(format!(
                 "rhs length {} exceeds factor dimension {}",
@@ -195,11 +249,11 @@ impl PyFactor {
         let out_ro_slice = out_ro
             .as_slice()
             .map_err(|_| value_error("out must be contiguous"))?;
-        if out_ro_slice.len() < n {
+        if out_ro_slice.len() < original_n {
             return Err(value_error(format!(
-                "out length {} is smaller than factor dimension {}",
+                "out length {} is smaller than original matrix dimension {}",
                 out_ro_slice.len(),
-                n
+                original_n
             )));
         }
         if slices_overlap(b_slice, out_ro_slice) {
@@ -207,13 +261,27 @@ impl PyFactor {
         }
         drop(out_ro);
 
-        let mut out_rw = out.try_readwrite().map_err(|e| borrow_error("out", e))?;
-        let out_slice = out_rw
-            .as_slice_mut()
-            .map_err(|_| value_error("out must be contiguous"))?;
-        self.inner
-            .try_solve_into(b_slice, out_slice)
-            .map_err(|e| value_error(e.to_string()))?;
+        if original_n == n {
+            // No augmentation: solve directly into out.
+            let mut out_rw = out.try_readwrite().map_err(|e| borrow_error("out", e))?;
+            let out_slice = out_rw
+                .as_slice_mut()
+                .map_err(|_| value_error("out must be contiguous"))?;
+            self.inner
+                .try_solve_into(b_slice, out_slice)
+                .map_err(|e| value_error(e.to_string()))?;
+        } else {
+            // Augmented: solve into temp buffer, copy original_n elements.
+            let mut work = vec![0.0; n];
+            self.inner
+                .try_solve_into(b_slice, &mut work)
+                .map_err(|e| value_error(e.to_string()))?;
+            let mut out_rw = out.try_readwrite().map_err(|e| borrow_error("out", e))?;
+            let out_slice = out_rw
+                .as_slice_mut()
+                .map_err(|_| value_error("out must be contiguous"))?;
+            out_slice[..original_n].copy_from_slice(&work[..original_n]);
+        }
         Ok(())
     }
 }
@@ -254,6 +322,7 @@ fn factorize_raw<'py>(
         .map_err(|_| value_error("values must be contiguous"))?;
 
     let csr = CsrRef::new(rp, ci, vals, n).map_err(approx_chol_err_to_py)?;
+    let original_n = n as usize;
     let factor = match config {
         Some(cfg) => {
             let native_config = cfg.to_native()?;
@@ -262,7 +331,10 @@ fn factorize_raw<'py>(
         None => approx_chol::factorize(csr),
     }
     .map_err(approx_chol_err_to_py)?;
-    Ok(PyFactor { inner: factor })
+    Ok(PyFactor {
+        inner: factor,
+        original_n,
+    })
 }
 
 /// Factorize an SDDM matrix from a scipy.sparse CSR matrix.
@@ -311,6 +383,7 @@ fn factorize(
         .map_err(|_| value_error("data must be contiguous"))?;
 
     let n = u32::try_from(shape.0).map_err(|_| value_error("matrix dimension exceeds u32::MAX"))?;
+    let original_n = shape.0;
     let csr = CsrRef::new(rp, ci, vals, n).map_err(approx_chol_err_to_py)?;
     let factor = match config {
         Some(cfg) => {
@@ -320,7 +393,10 @@ fn factorize(
         None => approx_chol::factorize(csr),
     }
     .map_err(approx_chol_err_to_py)?;
-    Ok(PyFactor { inner: factor })
+    Ok(PyFactor {
+        inner: factor,
+        original_n,
+    })
 }
 
 /// Approximate Cholesky factorization for SDDM/Laplacian systems.

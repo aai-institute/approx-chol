@@ -58,17 +58,12 @@ def test_preconditioner_reduces_cg_iterations_to_tolerance():
     assert info_unpre == 0, f"unpreconditioned CG did not converge, info={info_unpre}"
 
     factor = approx_chol.factorize(a, approx_chol.Config(seed=0))
-    preconditioner = spla.LinearOperator(
-        (n, n),
-        matvec=lambda v: factor.solve(np.asarray(v, dtype=np.float64))[:n],
-        dtype=np.float64,
-    )
 
     pre_iters: list[int] = []
     x_pre, info_pre = spla.cg(
         a,
         b,
-        M=preconditioner,
+        M=factor,
         rtol=1e-8,
         atol=0.0,
         maxiter=5000,
@@ -98,12 +93,7 @@ def test_preconditioner_reduces_fixed_budget_residual():
     residual_unpre = _relative_residual(a, x_unpre, b)
 
     factor = approx_chol.factorize(a, approx_chol.Config(seed=0))
-    preconditioner = spla.LinearOperator(
-        (n, n),
-        matvec=lambda v: factor.solve(np.asarray(v, dtype=np.float64))[:n],
-        dtype=np.float64,
-    )
-    x_pre, _ = spla.cg(a, b, M=preconditioner, rtol=0.0, atol=0.0, maxiter=budget)
+    x_pre, _ = spla.cg(a, b, M=factor, rtol=0.0, atol=0.0, maxiter=budget)
     residual_pre = _relative_residual(a, x_pre, b)
 
     assert residual_pre < residual_unpre * 0.1, (

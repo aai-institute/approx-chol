@@ -36,7 +36,7 @@ def test_duck_typed_factorize_validates_indices_and_dimension():
         (2, 2),
     )
     factor = ext.factorize(valid)
-    assert factor.n >= 2
+    assert factor.shape[0] >= 2
 
     too_large_idx = MatrixLike(
         np.array([0, 2, 4], dtype=np.int64),
@@ -70,20 +70,22 @@ def test_solve_and_solve_into_raise_value_error_for_shape_and_overlap():
     ext = load_extension_module()
     row_ptrs, col_indices, values = _base_csr()
     factor = ext.factorize_raw(row_ptrs, col_indices, values, 2)
+    original_n = factor.shape[0]
 
-    rhs_too_long = np.zeros(factor.n + 1, dtype=np.float64)
+    rhs_too_long = np.zeros(original_n + 10, dtype=np.float64)
     with pytest.raises(ValueError, match="rhs length"):
         factor.solve(rhs_too_long)
 
-    rhs = np.zeros(factor.n, dtype=np.float64)
+    rhs = np.zeros(original_n, dtype=np.float64)
     if rhs.size >= 2:
         rhs[0] = 1.0
         rhs[1] = -1.0
 
-    out_too_short = np.zeros(max(0, factor.n - 1), dtype=np.float64)
+    out_too_short = np.zeros(max(0, original_n - 1), dtype=np.float64)
     with pytest.raises(ValueError, match="out length"):
         factor.solve_into(rhs, out_too_short)
 
+    out = np.zeros(original_n, dtype=np.float64)
     with pytest.raises(ValueError, match="must not overlap"):
         factor.solve_into(rhs, rhs)
 
@@ -92,8 +94,9 @@ def test_solve_into_rejects_partially_overlapping_views():
     ext = load_extension_module()
     row_ptrs, col_indices, values = _base_csr()
     factor = ext.factorize_raw(row_ptrs, col_indices, values, 2)
+    original_n = factor.shape[0]
 
-    base = np.zeros(factor.n + 1, dtype=np.float64)
+    base = np.zeros(original_n + 1, dtype=np.float64)
     rhs = base[:-1]
     out = base[1:]
 

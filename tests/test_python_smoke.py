@@ -13,5 +13,5 @@ def test_package_surface_and_basic_factorize_raw_roundtrip():
     factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
     x = factor.solve(np.array([1.0, -1.0], dtype=np.float64))
 
-    assert x.shape == (factor.n,)
+    assert x.shape == (factor.shape[0],)
     assert np.isfinite(x).all()

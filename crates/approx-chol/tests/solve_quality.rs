@@ -175,19 +175,49 @@ fn allocating_solve_matches_solve_into() {
     rhs[0] = 1.0;
     rhs[n_orig - 1] = -1.0;
 
-    // solve_into reference
+    // solve_into reference (work buffer is full augmented dimension)
     let mut work = vec![0.0; n];
     factor
         .solve_into(&rhs, &mut work)
         .or_panic("solve_into should succeed");
 
-    // allocating solve()
+    // allocating solve() returns original_n elements
     let result = factor.solve(&rhs).or_panic("solve should succeed");
 
-    assert_eq!(result.len(), n);
-    for (a, b) in result.iter().zip(work.iter()) {
+    assert_eq!(result.len(), factor.original_n());
+    for (a, b) in result.iter().zip(work[..factor.original_n()].iter()) {
         assert_eq!(*a, *b, "allocating solve() must match solve_into()");
     }
+}
+
+#[test]
+fn solve_returns_original_n_for_sddm() {
+    let (rp, ci, vals, n) = sddm_4();
+    let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid SDDM");
+    let factor = Builder::new(Config::default())
+        .build(csr)
+        .or_panic("factorization should succeed");
+
+    assert!(
+        factor.n() > n as usize,
+        "SDDM should trigger Gremban augmentation"
+    );
+    assert_eq!(factor.original_n(), n as usize);
+
+    let mut rhs = vec![0.0; n as usize];
+    rhs[0] = 1.0;
+    rhs[(n as usize) - 1] = -1.0;
+
+    let result = factor.solve(&rhs).or_panic("solve should succeed");
+    assert_eq!(
+        result.len(),
+        n as usize,
+        "solve() must return original_n elements, not augmented"
+    );
+    assert!(
+        result.iter().all(|x| x.is_finite()),
+        "solution has non-finite values"
+    );
 }
 
 #[test]

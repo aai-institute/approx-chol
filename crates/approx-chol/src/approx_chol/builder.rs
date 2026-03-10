@@ -85,9 +85,10 @@ where
         sddm: CsrRef<'_, T, u32>,
         sampler: S,
     ) -> Result<Factor<T>, Error> {
+        let original_n = sddm.n();
         Self::validate_config(self.config)?;
         Self::validate(&sddm)?;
-        match self.config.split_merge {
+        let mut factor = match self.config.split_merge {
             None => {
                 let GraphBuild {
                     graph,
@@ -105,7 +106,9 @@ where
                 graph.mark_split_edges(k);
                 self.build_from_graph(graph, diag, sampler)
             }
-        }
+        }?;
+        factor.original_n = original_n;
+        Ok(factor)
     }
 
     fn validate(csr: &CsrRef<'_, T, u32>) -> Result<(), Error> {
@@ -220,7 +223,11 @@ where
             star_builder.notify_eliminated(ordering, v);
         }
 
-        Factor { n, sequence: seq }
+        Factor {
+            n,
+            original_n: n,
+            sequence: seq,
+        }
     }
 }
 

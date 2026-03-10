@@ -253,7 +253,10 @@ impl<T: Real> EliminationSequence<T> {
 )]
 #[derive(Clone, Debug)]
 pub struct Factor<T = f64> {
+    /// Dimension of the internal factorization (may include Gremban augmentation vertex).
     pub(crate) n: usize,
+    /// Original input matrix dimension (before possible Gremban augmentation).
+    pub(crate) original_n: usize,
     pub(crate) sequence: EliminationSequence<T>,
 }
 
@@ -333,8 +336,21 @@ where
         Ok(())
     }
 
-    /// Dimension of the factor (may be larger than the original matrix if
+    /// Dimension of the original input matrix.
+    ///
+    /// This is the dimension of vectors returned by [`Self::solve`] and accepted
+    /// by the preconditioner interface. For pure Laplacians this equals
+    /// [`Self::n`]; for SDDM matrices with Gremban augmentation it is one less.
+    #[inline]
+    pub fn original_n(&self) -> usize {
+        self.original_n
+    }
+
+    /// Internal factor dimension (may be larger than [`Self::original_n`] if
     /// Gremban augmentation was applied).
+    ///
+    /// This is the size required for work buffers in low-level methods like
+    /// [`Self::solve_into`] and [`Self::solve_in_place`].
     #[inline]
     pub fn n(&self) -> usize {
         self.n
@@ -411,6 +427,7 @@ where
     pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
         let mut work = vec![T::zero(); self.n];
         self.solve_into(b, &mut work)?;
+        work.truncate(self.original_n);
         Ok(work)
     }
 
@@ -649,7 +666,11 @@ mod tests {
             let n = rng.random_range(1..=16);
             let n_steps = rng.random_range(1..=n);
             let sequence = random_sequence(&mut rng, n, n_steps);
-            let factor = Factor { n, sequence };
+            let factor = Factor {
+                n,
+                original_n: n,
+                sequence,
+            };
 
             let rhs_len = rng.random_range(0..=n);
             let mut rhs = vec![0.0; rhs_len];
