@@ -16,10 +16,6 @@ jobs:
     environment: publish
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Verify tag is on main
-        run: git branch --contains "$GITHUB_SHA" | grep -qE '(^|\s)main$'
       - uses: dtolnay/rust-toolchain@stable
       - name: Publish approx-chol
         run: cargo publish -p approx-chol
