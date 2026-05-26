@@ -2,50 +2,13 @@
 mod laplacian_prop;
 #[path = "common/panic_err.rs"]
 mod panic_err;
-#[path = "common/panic_ok.rs"]
-mod panic_ok;
 use panic_err::ErrOrPanic;
-use panic_ok::OrPanic;
 
 use approx_chol::{CsrError, CsrRef, Error};
 use laplacian_prop::laplacian_csr_strategy;
 use proptest::prelude::*;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 
 proptest! {
-    #[test]
-    fn valid_try_row_access_is_panic_free(
-        (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
-    ) {
-        let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
-            .or_panic("generated CSR must be valid");
-
-        let access = catch_unwind(AssertUnwindSafe(|| {
-            for i in 0..(n as usize) {
-                let _ = csr.try_row(i);
-            }
-        }));
-        prop_assert!(access.is_ok(), "try_row() panicked on validated CSR");
-    }
-
-    #[test]
-    fn try_row_out_of_bounds_is_structured_error(
-        (row_ptrs, col_indices, values, n) in laplacian_csr_strategy(),
-        extra in 0usize..=8
-    ) {
-        let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
-            .or_panic("generated CSR must be valid");
-        let row = (n as usize).saturating_add(extra);
-        let err = csr.try_row(row).err_or_panic("out-of-bounds row must fail");
-        prop_assert_eq!(
-            err,
-            Error::InvalidCsr(CsrError::RowIndexOutOfBounds {
-                row,
-                n: n as usize,
-            })
-        );
-    }
-
     #[test]
     fn reports_row_ptr_length_mismatch(
         (mut row_ptrs, col_indices, values, n) in laplacian_csr_strategy()

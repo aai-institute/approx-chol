@@ -93,17 +93,9 @@ fn new_rejects_non_zero_based_row_ptrs() {
     match CsrRef::new(&rp, &ci, &vals, n) {
         Err(Error::InvalidCsr(_)) => {}
         Err(other) => panic!("expected InvalidCsr, got {other:?}"),
-        Ok(csr) => {
-            let (_, row0_vals) = csr.try_row(0).or_panic("row 0 should be valid");
-            let silently_dropped = !row0_vals.iter().any(|&v| (v - 1234.0).abs() < 1e-12);
-            assert!(
-                silently_dropped,
-                "expected malformed row_ptrs[0] to make leading payload unreachable"
-            );
-            panic!(
-                "accepted malformed CSR (row_ptrs[0] != 0): leading payload was silently ignored"
-            );
-        }
+        Ok(_) => panic!(
+            "accepted malformed CSR (row_ptrs[0] != 0): leading payload would be silently ignored"
+        ),
     }
 }
 

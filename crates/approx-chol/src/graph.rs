@@ -178,7 +178,9 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
     fn from_sddm(csr: CsrRef<'_, T, u32>) -> Result<GraphBuild<Self, T>, Error> {
         let n = csr.n();
         if n > u32::MAX as usize {
-            return Err(Error::InvalidCsr(CsrError::MatrixDimensionExceedsU32 { n }));
+            return Err(Error::InvalidCsr(
+                CsrError::MatrixDimensionExceedsIndexType { n },
+            ));
         }
         let mut adj: Vec<Vec<E>> = Vec::with_capacity(n);
         for row in 0..n {
@@ -323,12 +325,15 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
 
         if needs_augmentation {
             if m >= u32::MAX as usize {
-                return Err(Error::InvalidCsr(CsrError::MatrixDimensionExceedsU32 {
-                    n: m.saturating_add(1),
-                }));
+                return Err(Error::InvalidCsr(
+                    CsrError::MatrixDimensionExceedsIndexType {
+                        n: m.saturating_add(1),
+                    },
+                ));
             }
-            let aux = u32::try_from(m)
-                .map_err(|_| Error::InvalidCsr(CsrError::MatrixDimensionExceedsU32 { n: m }))?;
+            let aux = u32::try_from(m).map_err(|_| {
+                Error::InvalidCsr(CsrError::MatrixDimensionExceedsIndexType { n: m })
+            })?;
 
             // Add augmentation vertex adjacency list
             adj.push(Vec::with_capacity(surplus_count));

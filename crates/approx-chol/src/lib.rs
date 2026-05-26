@@ -55,8 +55,8 @@
 //!
 //! | Feature | Effect |
 //! |---------|--------|
-//! | `sprs`  | Enables zero-copy [`CsrRef`] conversion from `sprs` matrices (`TryFrom` and `try_from_sprs*`). |
-//! | `faer`  | Enables zero-copy [`CsrRef`] conversion from `faer` matrices (`TryFrom` and `try_from_faer*`). |
+//! | `sprs`  | Enables zero-copy [`CsrRef`] conversion from `sprs` matrices via `TryFrom`. |
+//! | `faer`  | Enables zero-copy [`CsrRef`] conversion from `faer` matrices via `TryFrom`. |
 //!
 //! # References
 //!
@@ -93,6 +93,7 @@ pub(crate) use types::Real;
 use std::fmt;
 
 /// Errors that can occur during approximate Cholesky factorization.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// The factorization configuration is invalid.
@@ -103,6 +104,7 @@ pub enum Error {
 }
 
 /// Structured configuration errors returned by factorization setup.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
     /// `split_merge` must be at least 1 when provided.
@@ -110,6 +112,24 @@ pub enum ConfigError {
         /// The invalid `split_merge` value provided by the caller.
         split_merge: u32,
     },
+}
+
+/// Which CSR array an index belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexKind {
+    /// `row_ptrs` array.
+    RowPtr,
+    /// `col_indices` array.
+    ColIndex,
+}
+
+impl fmt::Display for IndexKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RowPtr => write!(f, "row_ptr"),
+            Self::ColIndex => write!(f, "col_index"),
+        }
+    }
 }
 
 impl fmt::Display for ConfigError {
@@ -123,6 +143,7 @@ impl fmt::Display for ConfigError {
 }
 
 /// Structured CSR conversion and validation errors.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CsrError {
     /// `row_ptrs.len()` does not equal `n + 1`.
@@ -139,14 +160,11 @@ pub enum CsrError {
         /// Length of the values array.
         values_len: usize,
     },
-    /// A row pointer value could not be represented as `usize`.
-    RowPtrNotRepresentableAsUsize {
-        /// Position in `row_ptrs` where conversion failed.
-        position: usize,
-    },
-    /// A column index could not be represented as `usize`.
-    ColIndexNotRepresentableAsUsize {
-        /// Position in `col_indices` where conversion failed.
+    /// An index value cannot be represented as `usize`.
+    IndexNotRepresentableAsUsize {
+        /// Which CSR array the bad value came from.
+        kind: IndexKind,
+        /// Position in the source array.
         position: usize,
     },
     /// `row_ptrs[0]` must be zero.
@@ -179,31 +197,18 @@ pub enum CsrError {
         /// Matrix dimension.
         n: usize,
     },
-    /// Row index is out of bounds for this CSR matrix.
-    RowIndexOutOfBounds {
-        /// Requested row index.
-        row: usize,
-        /// Matrix dimension.
+    /// An index value (row pointer or column index) cannot be represented in
+    /// the target integer type.
+    IndexExceedsIndexType {
+        /// Which CSR array the bad value came from.
+        kind: IndexKind,
+    },
+    /// Matrix dimension `n` cannot be represented in the target integer type
+    /// (internally `u32`).
+    MatrixDimensionExceedsIndexType {
+        /// Matrix dimension that does not fit.
         n: usize,
     },
-    /// A row pointer cannot be converted to `u32`.
-    RowPtrExceedsU32,
-    /// A column index cannot be converted to `u32`.
-    ColIndexExceedsU32,
-    /// Matrix dimension `n` exceeds target index type.
-    NExceedsTargetIndexType {
-        /// Matrix dimension that does not fit target index type.
-        n: usize,
-    },
-    /// Matrix dimension `n` exceeds `u32::MAX`.
-    NExceedsU32 {
-        /// Matrix dimension that exceeds `u32::MAX`.
-        n: usize,
-    },
-    /// A row pointer cannot be represented in the target index type.
-    RowPtrExceedsTargetIndexType,
-    /// A column index cannot be represented in the target index type.
-    ColIndexExceedsTargetIndexType,
     /// Expected CSR layout but received CSC.
     ExpectedCsrMatrixGotCsc,
     /// Expected square matrix.
@@ -213,24 +218,17 @@ pub enum CsrError {
         /// Observed column count.
         cols: usize,
     },
-    /// Matrix dimension exceeds `u32::MAX`.
-    MatrixDimensionExceedsU32 {
-        /// Matrix dimension that exceeds `u32::MAX`.
-        n: usize,
-    },
-    /// Input conversion panicked.
+    /// Input conversion via `TryFrom` panicked.
     InputConversionPanicked,
 }
 
 impl fmt::Display for CsrError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::RowPtrsLenMismatch { expected, got } => {
-                write!(
-                    f,
-                    "row_ptrs length != n + 1 (expected {expected}, got {got})"
-                )
-            }
+            Self::RowPtrsLenMismatch { expected, got } => write!(
+                f,
+                "row_ptrs length != n + 1 (expected {expected}, got {got})"
+            ),
             Self::ColIndicesValuesLenMismatch {
                 col_indices_len,
                 values_len,
@@ -238,18 +236,10 @@ impl fmt::Display for CsrError {
                 f,
                 "col_indices and values have different lengths ({col_indices_len} != {values_len})"
             ),
-            Self::RowPtrNotRepresentableAsUsize { position } => {
-                write!(
-                    f,
-                    "row_ptr value at position {position} cannot be represented as usize"
-                )
-            }
-            Self::ColIndexNotRepresentableAsUsize { position } => {
-                write!(
-                    f,
-                    "column index at position {position} cannot be represented as usize"
-                )
-            }
+            Self::IndexNotRepresentableAsUsize { kind, position } => write!(
+                f,
+                "{kind} value at position {position} cannot be represented as usize"
+            ),
             Self::RowPtrsMustStartAtZero { got } => write!(f, "row_ptrs[0] must be 0 (got {got})"),
             Self::RowPtrsEndMismatchNnz { row_ptr_end, nnz } => {
                 write!(f, "row_ptrs[n] must equal nnz ({row_ptr_end} != {nnz})")
@@ -262,27 +252,15 @@ impl fmt::Display for CsrError {
                 f,
                 "column index out of bounds at position {position}: {col} >= {n}"
             ),
-            Self::RowIndexOutOfBounds { row, n } => {
-                write!(f, "row index out of bounds: {row} >= {n}")
+            Self::IndexExceedsIndexType { kind } => {
+                write!(f, "{kind} exceeds target index type capacity")
             }
-            Self::RowPtrExceedsU32 => write!(f, "row_ptr exceeds u32::MAX"),
-            Self::ColIndexExceedsU32 => write!(f, "col_index exceeds u32::MAX"),
-            Self::NExceedsTargetIndexType { n } => {
-                write!(f, "n exceeds target index type (n={n})")
-            }
-            Self::NExceedsU32 { n } => write!(f, "n exceeds u32::MAX (n={n})"),
-            Self::RowPtrExceedsTargetIndexType => {
-                write!(f, "row_ptr exceeds target index type")
-            }
-            Self::ColIndexExceedsTargetIndexType => {
-                write!(f, "col_index exceeds target index type")
+            Self::MatrixDimensionExceedsIndexType { n } => {
+                write!(f, "matrix dimension exceeds index type capacity (n={n})")
             }
             Self::ExpectedCsrMatrixGotCsc => write!(f, "expected CSR matrix, got CSC"),
             Self::ExpectedSquareMatrix { rows, cols } => {
                 write!(f, "expected square matrix (got {rows}x{cols})")
-            }
-            Self::MatrixDimensionExceedsU32 { n } => {
-                write!(f, "matrix dimension exceeds u32::MAX (n={n})")
             }
             Self::InputConversionPanicked => write!(f, "input conversion panicked"),
         }

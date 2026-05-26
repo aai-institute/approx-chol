@@ -168,6 +168,18 @@ impl<T: Real> StarElimination<T> {
 }
 
 /// Clique-tree sampling for AC stars (single sample per neighbor).
+///
+/// The elimination capacity is initialized from the **live column's
+/// off-diagonal sum** (`Σ |entries.weights|`), matching the original
+/// Laplacians.jl algorithm and the AC2 variant in this crate. The
+/// `pivot_diag` parameter is retained only to seed `SampledColumn`'s
+/// degenerate cases (n ≤ 1) and is not used inside the elimination loop.
+///
+/// Using the live column sum keeps `f ∈ [0, 1]` by construction, which is
+/// required for Laplacian-type inputs where `pivot_diag = Σ |off-diag|`
+/// exactly (zero slack). External `diag[v]` arrays maintained by callers
+/// can drift under stochastic elimination and feed sub-zero values here;
+/// computing capacity locally is the robust form.
 pub(crate) fn clique_tree_sample_column<T: Real, S: WeightedSampler<T>>(
     entries: &[(u32, T)],
     pivot_diag: T,
@@ -179,7 +191,8 @@ pub(crate) fn clique_tree_sample_column<T: Real, S: WeightedSampler<T>>(
     };
 
     sampler.prepare(entries);
-    let mut elim = StarElimination::new(pivot_diag);
+    let total_weight = entries.iter().fold(T::zero(), |acc, &(_, w)| acc + w);
+    let mut elim = StarElimination::new(total_weight);
 
     for (i, &(j, w)) in entries[..n - 1].iter().enumerate() {
         let f = elim.fraction(w);
@@ -197,7 +210,6 @@ pub(crate) fn clique_tree_sample_column<T: Real, S: WeightedSampler<T>>(
 pub(crate) fn clique_tree_sample_column_multi<T: Real, S: WeightedSampler<T>>(
     entries: &[(u32, T)],
     counts: &[u32],
-    _total_weight: T,
     pivot_diag: T,
     sampler: &mut S,
     column: &mut SampledColumn<T>,
@@ -244,21 +256,20 @@ pub(crate) fn clique_tree_sample_column_multi<T: Real, S: WeightedSampler<T>>(
 
 /// Sample fill edges approximating the Schur complement clique of a star.
 ///
-/// Given an eliminated vertex with weighted neighbors `entries` and diagonal
-/// `pivot_diag`, walks neighbors sorted by ascending weight and samples one
-/// fill edge per neighbor to a random later neighbor (AC clique-tree,
-/// Algorithm 5 in Gao-Kyng-Spielman 2023).
+/// Given an eliminated vertex with weighted neighbors `entries`, walks
+/// neighbors sorted by ascending weight and samples one fill edge per
+/// neighbor to a random later neighbor (AC clique-tree, Algorithm 5 in
+/// Gao-Kyng-Spielman 2023).
+///
+/// Elimination capacity is `Σ |entries.weights|` (the live column's
+/// off-diagonal sum), matching Laplacians.jl. For Laplacian inputs — where
+/// the pivot's matrix diagonal equals this sum — each fill edge is unbiased:
+/// `E[w(i,j)] = a_i * a_j / Σ a_k`.
 ///
 /// Produces at most `n-1` fill edges (a spanning tree on the n neighbors).
-/// Each fill edge is unbiased: `E[w(i,j)] = a_i * a_j / pivot_diag`.
-///
 /// `entries` is sorted in place. Fill edges are appended to `out`.
-pub fn clique_tree_sample<T>(
-    entries: &mut [(u32, T)],
-    pivot_diag: T,
-    seed: u64,
-    out: &mut Vec<(u32, u32, T)>,
-) where
+pub fn clique_tree_sample<T>(entries: &mut [(u32, T)], seed: u64, out: &mut Vec<(u32, u32, T)>)
+where
     T: num_traits::Float + Send + Sync + 'static,
 {
     let n = entries.len();
@@ -269,7 +280,11 @@ pub fn clique_tree_sample<T>(
     entries.sort_unstable_by(|a, b| float_total_cmp(&a.1, &b.1));
     let mut sampler = CdfSampler::<T>::new(seed);
     sampler.prepare(entries);
-    let mut elim = StarElimination::new(pivot_diag);
+    // Capacity = sum of live entry weights, matching Laplacians.jl. This is
+    // the only correct form for Laplacian-type inputs where the pivot's
+    // matrix diagonal equals the off-diagonal sum (zero SDD slack).
+    let total_weight = entries.iter().fold(T::zero(), |acc, &(_, w)| acc + w);
+    let mut elim = StarElimination::new(total_weight);
 
     for i in 0..n - 1 {
         let (j, w) = entries[i];
@@ -360,10 +375,9 @@ mod tests {
     #[test]
     fn tree_on_five_neighbors() {
         let mut entries: Vec<(u32, f64)> = vec![(0, 2.0), (1, 3.0), (2, 1.0), (3, 5.0), (4, 4.0)];
-        let pivot_diag: f64 = entries.iter().map(|(_, w)| w).sum();
         let mut out = Vec::new();
 
-        clique_tree_sample(&mut entries, pivot_diag, 42, &mut out);
+        clique_tree_sample(&mut entries, 42, &mut out);
 
         assert!(out.len() <= 4, "got {} edges, expected <= 4", out.len());
         for &(lo, hi, w) in &out {
@@ -376,11 +390,11 @@ mod tests {
     fn empty_and_single() {
         let mut out = Vec::new();
 
-        clique_tree_sample(&mut [], 1.0, 0, &mut out);
+        clique_tree_sample(&mut [], 0, &mut out);
         assert!(out.is_empty());
 
         let mut entries = vec![(0u32, 5.0)];
-        clique_tree_sample(&mut entries, 5.0, 0, &mut out);
+        clique_tree_sample(&mut entries, 0, &mut out);
         assert!(out.is_empty());
     }
 
@@ -395,7 +409,7 @@ mod tests {
         for trial in 0..n_trials {
             let mut entries = base_entries.clone();
             let mut out = Vec::new();
-            clique_tree_sample(&mut entries, pivot_diag, trial as u64, &mut out);
+            clique_tree_sample(&mut entries, trial as u64, &mut out);
             for &(lo, hi, w) in &out {
                 *pair_total.entry((lo, hi)).or_insert(0.0) += w;
             }

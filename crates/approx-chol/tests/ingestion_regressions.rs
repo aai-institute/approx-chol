@@ -20,9 +20,10 @@ fn solve_with_default_ac(
     .build(csr)
     .or_panic("factorization");
     let mut work = vec![0.0; factor.n()];
+    work[..rhs.len()].copy_from_slice(rhs);
     factor
-        .solve_into_with_projection(rhs, &mut work, false)
-        .or_panic("solve_into_with_projection should succeed");
+        .solve_in_place(&mut work)
+        .or_panic("solve_in_place should succeed");
     work
 }
 

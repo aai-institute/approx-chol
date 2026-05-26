@@ -227,7 +227,7 @@ impl DynamicOrdering {
         degree_scale: usize,
     ) -> Result<Self, CsrError> {
         if n > u32::MAX as usize {
-            return Err(CsrError::NExceedsU32 { n });
+            return Err(CsrError::MatrixDimensionExceedsIndexType { n });
         }
         // Julia AC2 parity: keyMap uses `k = split*n`, bucket array length `2*k+1`.
         // Use scale=1 for standard AC.

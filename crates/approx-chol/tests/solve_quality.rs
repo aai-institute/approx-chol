@@ -124,11 +124,11 @@ fn solve_into_gives_finite_nontrivial_solution() {
 }
 
 // ---------------------------------------------------------------------------
-// solve_into_with_projection(false) gives different result than with projection
+// solve_in_place skips projection (differs from solve_into)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn no_projection_differs_from_projection() {
+fn solve_in_place_skips_projection() {
     let lap = grid_laplacian(5, 5);
     let n_orig = lap.n as usize;
     let factor = Builder::new(Config::default())
@@ -142,13 +142,14 @@ fn no_projection_differs_from_projection() {
 
     let mut with_proj = vec![0.0; n];
     factor
-        .solve_into_with_projection(&rhs, &mut with_proj, true)
-        .or_panic("solve_into_with_projection should succeed");
+        .solve_into(&rhs, &mut with_proj)
+        .or_panic("solve_into should succeed");
 
     let mut no_proj = vec![0.0; n];
+    no_proj[..rhs.len()].copy_from_slice(&rhs);
     factor
-        .solve_into_with_projection(&rhs, &mut no_proj, false)
-        .or_panic("solve_into_with_projection should succeed");
+        .solve_in_place(&mut no_proj)
+        .or_panic("solve_in_place should succeed");
 
     // The zero-mean projection should shift the solution; results must differ
     let any_different = with_proj
@@ -218,40 +219,6 @@ fn solve_returns_original_n_for_sddm() {
         result.iter().all(|x| x.is_finite()),
         "solution has non-finite values"
     );
-}
-
-#[test]
-fn solve_in_place_matches_no_projection() {
-    let lap = grid_laplacian(5, 5);
-    let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
-        .or_panic("factorization should succeed");
-
-    let n = factor.n();
-    let mut rhs = vec![0.0; n_orig];
-    rhs[0] = 1.0;
-    rhs[n_orig - 1] = -1.0;
-
-    // solve_into_with_projection(false) — copies rhs, then forward+backward
-    let mut reference = vec![0.0; n];
-    factor
-        .solve_into_with_projection(&rhs, &mut reference, false)
-        .or_panic("solve_into_with_projection should succeed");
-
-    // solve_in_place — caller does the copy, then forward+backward
-    let mut in_place = vec![0.0; n];
-    in_place[..rhs.len()].copy_from_slice(&rhs);
-    factor
-        .solve_in_place(&mut in_place)
-        .or_panic("solve_in_place should succeed");
-
-    for (a, b) in reference.iter().zip(in_place.iter()) {
-        assert!(
-            (a - b).abs() < 1e-14,
-            "solve_in_place must match solve_into_with_projection(false): {a} vs {b}"
-        );
-    }
 }
 
 #[test]
