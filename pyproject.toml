@@ -1,6 +1,6 @@
 [project]
 name = "approx-chol"
-version = "0.1.0"
+version = "0.2.0"
 description = "Approximate Cholesky factorization for graph Laplacians"
 readme = "python/README.md"
 authors = [{name = "Kristof Schröder", email = "k.schroeder@appliedai-institute.de"}]
