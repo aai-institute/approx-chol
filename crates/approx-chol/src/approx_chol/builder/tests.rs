@@ -184,3 +184,64 @@ fn test_ac2_near_zero_weight_star() {
         work
     );
 }
+
+/// Regression: the AC single-sample path must not drift `diag[v]` below
+/// `T::epsilon()` on marginally-SDD Laplacian inputs.
+///
+/// Before the fix, `clique_tree_sample_column` initialized
+/// `StarElimination::capacity` from the externally-maintained `diag[v]`.
+/// For pure Laplacians, `diag[v] = Σ |off-diag(v)|` exactly (zero SDD
+/// slack). Floating-point error from accumulated fill additions can then
+/// push the maintained `diag[v]` below the live off-diagonal sum, and a
+/// later pivot pop trips `StarElimination::fraction`'s
+/// `debug_assert!(capacity > T::epsilon())`.
+///
+/// This 8-vertex dense Laplacian (with the AC default config) was found
+/// by random search to reproduce the panic deterministically in f32 across
+/// every solve seed. f32 was the easiest tier to surface the drift in a
+/// small test fixture; the same code path runs for f64 and is also fixed.
+#[test]
+fn test_ac_marginally_sdd_laplacian_no_capacity_drift() {
+    // 8-vertex Laplacian (zero row sums, marginally SDD by construction).
+    // Layout: row-sorted CSR with off-diagonal magnitudes spread across
+    // ~10x weight range — enough relative-error variation to push the
+    // maintained `diag[v]` below the live entry sum in f32.
+    let indptr: Vec<u32> = vec![0, 4, 8, 13, 15, 19, 25, 29, 34];
+    let indices: Vec<u32> = vec![
+        0, 1, 2, 5, 0, 1, 2, 5, 0, 1, 2, 3, 7, 2, 3, 4, 5, 6, 7, 0, 1, 4, 5, 6, 7, 4, 5, 6, 7, 2,
+        4, 5, 6, 7,
+    ];
+    let data_f32: Vec<f32> = vec![
+        171.20395, -7.728917, -67.65843, -95.81661, -7.728917, 118.25102, -88.94253, -21.579578,
+        -67.65843, -88.94253, 266.40173, -34.345234, -75.45554, -34.345234, 34.345234, 102.9335,
+        -25.572166, -8.642439, -68.71889, -95.81661, -21.579578, -25.572166, 178.5495, -17.176064,
+        -18.405073, -8.642439, -17.176064, 29.55138, -3.732876, -75.45554, -68.71889, -18.405073,
+        -3.732876, 166.31238,
+    ];
+
+    let csr = CsrRef::new(&indptr, &indices, &data_f32, 8).or_panic("valid marginal-SDD CSR");
+
+    // Balanced RHS (must sum to zero for a pure Laplacian solve).
+    let b: [f32; 8] = [1.0, 1.0, 1.0, 1.0, -1.0, -1.0, -1.0, -1.0];
+
+    for seed in 0..16u64 {
+        let config = Config {
+            seed,
+            ..Default::default()
+        };
+        let factor = Builder::<f32>::new(config)
+            .build(csr)
+            .unwrap_or_else(|e| panic!("seed={seed}: AC factorization failed: {e}"));
+
+        let mut work = vec![0.0f32; factor.n()];
+        factor
+            .solve_into(&b, &mut work)
+            .unwrap_or_else(|e| panic!("seed={seed}: solve_into failed: {e}"));
+
+        assert!(
+            work.iter().all(|x| x.is_finite()),
+            "seed={seed}: non-finite solve output: {:?}",
+            work
+        );
+    }
+}

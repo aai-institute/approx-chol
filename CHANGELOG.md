@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-05-26
+
+### Changed (breaking)
+
+- `low_level::clique_tree_sample` no longer takes a `pivot_diag` parameter.
+
+### Fixed
+
+- AC factorization no longer panics on marginally-SDD Laplacian inputs.
+
 ## [0.1.0] - 2026-03-10
 
 Initial release of `approx-chol`, providing approximate Cholesky factorization
@@ -26,4 +36,5 @@ for graph Laplacians in Rust with Python bindings.
 - Multi-platform CI with coverage reporting
 - Dual MIT license for Rust crate and Python package
 
+[0.2.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.2.0
 [0.1.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.1.0

@@ -92,8 +92,6 @@ pub(super) struct Ac2StarBuilder<T: Real> {
     entries: Vec<(u32, T)>,
     /// Multi-edge count per unique neighbor after compression.
     counts: Vec<u32>,
-    /// Sum of deduplicated incident weights for the current star.
-    total_weight: T,
     /// Max multi-edges kept per neighbor pair after compression.
     merge_limit: u32,
     dedup: Ac2DedupWorkspace<T>,
@@ -105,7 +103,6 @@ impl<T: Real> Ac2StarBuilder<T> {
             raw: Vec::new(),
             entries: Vec::new(),
             counts: Vec::new(),
-            total_weight: T::zero(),
             merge_limit,
             dedup: Ac2DedupWorkspace::new(n),
         }
@@ -120,7 +117,9 @@ impl<T: Real> StarBuilderVariant<T> for Ac2StarBuilder<T> {
         ordering: &mut O,
     ) {
         graph.live_neighbors(v, &mut self.raw);
-        self.total_weight = self.dedup.dedup(
+        // dedup() returns the deduplicated total weight; we no longer need it
+        // since `clique_tree_sample_column_multi` recomputes capacity locally.
+        let _ = self.dedup.dedup(
             &mut self.raw,
             &mut self.entries,
             &mut self.counts,
@@ -145,14 +144,7 @@ impl<T: Real> StarBuilderVariant<T> for Ac2StarBuilder<T> {
         sampler: &mut S,
         column: &mut SampledColumn<T>,
     ) {
-        clique_tree_sample_column_multi(
-            &self.entries,
-            &self.counts,
-            self.total_weight,
-            pivot_diag,
-            sampler,
-            column,
-        );
+        clique_tree_sample_column_multi(&self.entries, &self.counts, pivot_diag, sampler, column);
     }
 
     fn notify_eliminated<O: EliminationOrdering<T>>(&self, ordering: &mut O, _eliminated: usize) {
