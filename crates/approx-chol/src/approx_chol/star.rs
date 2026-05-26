@@ -117,9 +117,7 @@ impl<T: Real> StarBuilderVariant<T> for Ac2StarBuilder<T> {
         ordering: &mut O,
     ) {
         graph.live_neighbors(v, &mut self.raw);
-        // dedup() returns the deduplicated total weight; we no longer need it
-        // since `clique_tree_sample_column_multi` recomputes capacity locally.
-        let _ = self.dedup.dedup(
+        self.dedup.dedup(
             &mut self.raw,
             &mut self.entries,
             &mut self.counts,
@@ -346,11 +344,11 @@ impl<T: Real> Ac2DedupWorkspace<T> {
         entries: &mut Vec<(u32, T)>,
         counts: &mut Vec<u32>,
         merge_limit: u32,
-    ) -> T {
+    ) {
         if raw.len() <= SCATTER_THRESHOLD {
-            self.dedup_sort_small(raw, entries, counts, merge_limit)
+            self.dedup_sort_small(raw, entries, counts, merge_limit);
         } else {
-            self.dedup_scatter(raw, entries, counts, merge_limit)
+            self.dedup_scatter(raw, entries, counts, merge_limit);
         }
     }
 
@@ -360,11 +358,10 @@ impl<T: Real> Ac2DedupWorkspace<T> {
         entries: &mut Vec<(u32, T)>,
         counts: &mut Vec<u32>,
         merge_limit: u32,
-    ) -> T {
-        let total_weight = self.dedup_sort_core(raw, entries, counts);
+    ) {
+        self.dedup_sort_core(raw, entries, counts);
         Self::apply_merge_limit(entries, counts, merge_limit, &mut self.merged_counts);
         self.sort_by_avg_weight(entries, counts);
-        total_weight
     }
 
     fn dedup_sort_core(
@@ -372,24 +369,23 @@ impl<T: Real> Ac2DedupWorkspace<T> {
         raw: &mut [Neighbor<T>],
         entries: &mut Vec<(u32, T)>,
         counts: &mut Vec<u32>,
-    ) -> T {
+    ) {
         self.merged_counts.clear();
         entries.clear();
         counts.clear();
         if raw.is_empty() {
-            return T::zero();
+            return;
         }
         if raw.len() == 1 {
             entries.push((raw[0].to, raw[0].fill_weight));
             counts.push(raw[0].count);
-            return raw[0].fill_weight;
+            return;
         }
 
         raw.sort_unstable_by_key(|n| n.to);
 
         let mut write = 0;
         let mut count: u32 = raw[0].count;
-        let mut total_weight = T::zero();
         for read in 1..raw.len() {
             if raw[write].to == raw[read].to {
                 raw[write].fill_weight = raw[write].fill_weight + raw[read].fill_weight;
@@ -397,7 +393,6 @@ impl<T: Real> Ac2DedupWorkspace<T> {
             } else {
                 entries.push((raw[write].to, raw[write].fill_weight));
                 counts.push(count);
-                total_weight = total_weight + raw[write].fill_weight;
                 count = raw[read].count;
                 write += 1;
                 raw[write] = raw[read];
@@ -405,7 +400,6 @@ impl<T: Real> Ac2DedupWorkspace<T> {
         }
         entries.push((raw[write].to, raw[write].fill_weight));
         counts.push(count);
-        total_weight + raw[write].fill_weight
     }
 
     fn dedup_scatter(
@@ -414,7 +408,7 @@ impl<T: Real> Ac2DedupWorkspace<T> {
         entries: &mut Vec<(u32, T)>,
         counts: &mut Vec<u32>,
         merge_limit: u32,
-    ) -> T {
+    ) {
         self.scratch.ensure_scatter_buffers();
         self.scratch.unique.clear();
         self.merged_counts.clear();
@@ -433,19 +427,16 @@ impl<T: Real> Ac2DedupWorkspace<T> {
             self.scatter_counts[idx] = self.scatter_counts[idx].saturating_add(nbr.count);
         }
 
-        let mut total_weight = T::zero();
         for &idx in &self.scratch.unique {
             let idx_usize = idx as usize;
             entries.push((idx, self.scratch.scatter[idx_usize]));
             counts.push(self.scatter_counts[idx_usize]);
-            total_weight = total_weight + self.scratch.scatter[idx_usize];
             self.scratch.scatter[idx_usize] = T::zero();
             self.scatter_counts[idx_usize] = 0;
         }
 
         Self::apply_merge_limit(entries, counts, merge_limit, &mut self.merged_counts);
         self.sort_by_avg_weight(entries, counts);
-        total_weight
     }
 
     /// Apply merge limit: cap multi-edge counts, preserving total weight.
