@@ -26,11 +26,5 @@
 // Builder for custom factorization pipelines
 pub use crate::approx_chol::Builder;
 
-// Sampling
-pub use crate::sampling::CdfSampler;
-
-// Decomposition internals (read-only views into the factor)
-pub use crate::approx_chol::decomposition::{EliminationSequence, EliminationStep};
-
 // Star clique sampling utilities (AC + AC2 variants)
 pub use crate::approx_chol::clique_tree::{clique_tree_sample, clique_tree_sample_multi};

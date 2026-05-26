@@ -48,8 +48,8 @@ For a larger example with a grid Laplacian, see [`examples/basic_solve.rs`](exam
 
 | Feature | Effect |
 |---------|--------|
-| `sprs`  | Zero-copy `CsrRef` conversion from `sprs` matrices (`TryFrom` and `try_from_sprs*`). |
-| `faer`  | Zero-copy `CsrRef` conversion from `faer` matrices (`TryFrom` and `try_from_faer*`). |
+| `sprs`  | Zero-copy `CsrRef` conversion from `sprs` matrices via `TryFrom`. |
+| `faer`  | Zero-copy `CsrRef` conversion from `faer` matrices via `TryFrom`. |
 
 ## Attribution
 

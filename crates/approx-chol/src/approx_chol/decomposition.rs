@@ -261,6 +261,7 @@ pub struct Factor<T = f64> {
 }
 
 /// Errors returned by fallible [`Factor`] solve methods.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SolveError {
     /// Right-hand side length exceeds factor dimension.
@@ -409,17 +410,16 @@ where
     }
 
     #[inline]
-    fn solve_into_kernel(&self, b: &[T], work: &mut [T], project_zero_mean: bool) {
+    fn solve_into_kernel(&self, b: &[T], work: &mut [T]) {
         work[..b.len()].copy_from_slice(b);
         work[b.len()..self.n].fill(T::zero());
         self.forward(work);
         self.backward(work);
-        if project_zero_mean {
-            self.project_zero_mean(work);
-        }
+        self.project_zero_mean(work);
     }
 
-    /// Solve LDL^T x = b, returning a newly allocated solution vector.
+    /// Solve LDL^T x = b, returning a newly allocated solution vector with
+    /// zero-mean projection applied.
     ///
     /// # Errors
     ///
@@ -431,30 +431,20 @@ where
         Ok(work)
     }
 
-    /// Solve L D L^T x = b in-place, writing the result into `work`.
+    /// Solve L D L^T x = b in-place, writing the result into `work` and applying
+    /// zero-mean projection.
+    ///
+    /// For solves where projection is not desired (e.g., SDDM inside an
+    /// iterative solver), copy `b` into `work` and call
+    /// [`Self::solve_in_place`] instead.
     ///
     /// # Errors
     ///
     /// Returns [`SolveError::RhsLengthExceedsFactor`] if `b.len() > self.n()`.
     /// Returns [`SolveError::WorkBufferTooSmall`] if `work.len() < self.n()`.
     pub fn solve_into(&self, b: &[T], work: &mut [T]) -> Result<(), SolveError> {
-        self.solve_into_with_projection(b, work, true)
-    }
-
-    /// Solve L D L^T x = b in-place with configurable zero-mean projection.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SolveError::RhsLengthExceedsFactor`] if `b.len() > self.n()`.
-    /// Returns [`SolveError::WorkBufferTooSmall`] if `work.len() < self.n()`.
-    pub fn solve_into_with_projection(
-        &self,
-        b: &[T],
-        work: &mut [T],
-        project_zero_mean: bool,
-    ) -> Result<(), SolveError> {
         self.validate_rhs_and_work(b, work)?;
-        self.solve_into_kernel(b, work, project_zero_mean);
+        self.solve_into_kernel(b, work);
         Ok(())
     }
 
@@ -634,19 +624,16 @@ mod tests {
             for v in &mut rhs {
                 *v = rng.random_range(-5.0..5.0);
             }
-            let project = rng.random_bool(0.5);
 
             let mut unsafe_work = vec![0.0; n];
-            factor.solve_into_kernel(&rhs, &mut unsafe_work, project);
+            factor.solve_into_kernel(&rhs, &mut unsafe_work);
 
             let mut checked_work = vec![0.0; n];
             checked_work[..rhs_len].copy_from_slice(&rhs);
             checked_work[rhs_len..].fill(0.0);
             reference_forward(&factor.sequence, &mut checked_work);
             reference_backward(&factor.sequence, &mut checked_work);
-            if project {
-                reference_project_zero_mean(&mut checked_work, n);
-            }
+            reference_project_zero_mean(&mut checked_work, n);
 
             assert_close(&unsafe_work, &checked_work, 1e-12);
         }

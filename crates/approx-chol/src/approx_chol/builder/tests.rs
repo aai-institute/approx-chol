@@ -85,9 +85,10 @@ fn test_ac2_n_eq_1_augmented_diagonal_regression() {
     // on an augmented system (4 nodes due to Gremban's reduction).
     let b = [4.0f64, 4.0, 4.0];
     let mut work = vec![0.0f64; factor.n()];
+    work[..b.len()].copy_from_slice(&b);
     factor
-        .solve_into_with_projection(&b, &mut work, false)
-        .or_panic("solve_into_with_projection should succeed");
+        .solve_in_place(&mut work)
+        .or_panic("solve_in_place should succeed");
 
     // All entries must be finite — the old bug set column.diagonal to the
     // small edge weight (1.0) instead of pivot_diag (5.0), making the
@@ -132,9 +133,10 @@ fn test_ac2_n_eq_1_solve_produces_finite_for_multiple_seeds() {
             .unwrap_or_else(|e| panic!("AC2 factorization failed (seed={seed}): {e}"));
 
         let mut work = vec![0.0f64; factor.n()];
+        work[..b.len()].copy_from_slice(&b);
         factor
-            .solve_into_with_projection(&b, &mut work, false)
-            .or_panic("solve_into_with_projection should succeed");
+            .solve_in_place(&mut work)
+            .or_panic("solve_in_place should succeed");
 
         assert!(
             work.iter().all(|x| x.is_finite()),
@@ -174,9 +176,10 @@ fn test_ac2_near_zero_weight_star() {
 
     let b = [1.0f64, -1.0, 1.0];
     let mut work = vec![0.0f64; factor.n()];
+    work[..b.len()].copy_from_slice(&b);
     factor
-        .solve_into_with_projection(&b, &mut work, false)
-        .or_panic("solve_into_with_projection should succeed");
+        .solve_in_place(&mut work)
+        .or_panic("solve_in_place should succeed");
 
     assert!(
         work.iter().all(|x| x.is_finite()),

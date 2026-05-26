@@ -88,7 +88,7 @@ fn faer_factorize_high_level() {
 #[test]
 fn faer_try_from_is_fallible_and_works() {
     let mat = path_laplacian_faer::<f64, usize>();
-    let csr = CsrRef::try_from_faer(&mat).or_panic("fallible conversion should succeed");
+    let csr = CsrRef::try_from(&mat).or_panic("fallible conversion should succeed");
     let factor = factorize(csr).or_panic("factorization should succeed");
     assert!(factor.n() >= 4);
 }
@@ -131,7 +131,7 @@ fn faer_try_from_non_square_returns_error() {
     let symbolic =
         faer::sparse::SymbolicSparseRowMat::<u32>::new_checked(3, 4, row_ptrs, None, col_indices);
     let mat = SparseRowMat::new(symbolic, values);
-    let err = CsrRef::try_from_faer(&mat).err_or_panic("non-square matrix must be rejected");
+    let err = CsrRef::try_from(&mat).err_or_panic("non-square matrix must be rejected");
     assert!(matches!(
         err,
         Error::InvalidCsr(CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 })

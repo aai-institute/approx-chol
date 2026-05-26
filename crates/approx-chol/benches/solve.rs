@@ -35,24 +35,6 @@ fn bench_solve_for_size(c: &mut Criterion, size: usize) {
         });
     });
 
-    let mut work_no_projection = vec![0.0f64; n];
-    group.bench_with_input(
-        BenchmarkId::new("solve_into_no_projection", n),
-        &n,
-        |b, _| {
-            b.iter(|| {
-                factor
-                    .solve_into_with_projection(
-                        black_box(&rhs),
-                        black_box(&mut work_no_projection),
-                        false,
-                    )
-                    .or_panic("solve_into_with_projection should succeed");
-                black_box(&work_no_projection);
-            });
-        },
-    );
-
     let mut work_in_place = vec![0.0f64; n];
     group.bench_with_input(BenchmarkId::new("solve_in_place", n), &n, |b, _| {
         b.iter(|| {

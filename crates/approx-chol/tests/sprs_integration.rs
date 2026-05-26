@@ -78,7 +78,7 @@ fn sprs_factorize_high_level() {
 #[test]
 fn sprs_try_from_is_fallible_and_works() {
     let mat = path_laplacian_sprs::<f64, u64>();
-    let csr = CsrRef::try_from_sprs(&mat).or_panic("fallible conversion should succeed");
+    let csr = CsrRef::try_from(&mat).or_panic("fallible conversion should succeed");
     let factor = factorize(csr).or_panic("factorization should succeed");
     assert!(factor.n() >= 4);
 }
@@ -117,7 +117,7 @@ fn sprs_u64_f32() {
 fn sprs_try_from_csc_returns_error() {
     let csr = path_laplacian_sprs::<f64, u32>();
     let csc = csr.to_csc();
-    let err = CsrRef::try_from_sprs_view(csc.view()).err_or_panic("CSC must be rejected");
+    let err = CsrRef::try_from(csc.view()).err_or_panic("CSC must be rejected");
     assert!(matches!(
         err,
         Error::InvalidCsr(CsrError::ExpectedCsrMatrixGotCsc)
@@ -138,7 +138,7 @@ fn sprs_factorize_rejects_csc_with_error() {
 #[test]
 fn sprs_try_from_non_square_returns_error() {
     let mat = sprs::CsMatI::<f64, u32>::new((3, 4), vec![0, 1, 2, 3], vec![0, 1, 2], vec![1.0; 3]);
-    let err = CsrRef::try_from_sprs(&mat).err_or_panic("non-square matrix must be rejected");
+    let err = CsrRef::try_from(&mat).err_or_panic("non-square matrix must be rejected");
     assert!(matches!(
         err,
         Error::InvalidCsr(CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 })
