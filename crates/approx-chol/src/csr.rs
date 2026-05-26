@@ -239,7 +239,7 @@ impl<T: Clone, I: PrimInt> OwnedCsr<T, I> {
         values: &[T],
         n: usize,
     ) -> Result<Self, Error> {
-        let _ = cast::<usize, I>(n).ok_or(Error::InvalidCsr(
+        cast::<usize, I>(n).ok_or(Error::InvalidCsr(
             CsrError::MatrixDimensionExceedsIndexType { n },
         ))?;
         let n = u32::try_from(n)
