@@ -1,5 +1,4 @@
 use crate::graph::EliminationGraph;
-use crate::ordering::EliminationOrdering;
 use crate::sampling::{near_zero, CdfSampler, WeightedSampler};
 use crate::types::{float_total_cmp, Real};
 use num_traits::NumCast;
@@ -67,18 +66,22 @@ impl<T: Real> SampledColumn<T> {
         self.diagonal = elim.diagonal(last.1);
     }
 
-    /// Apply fill-in edges to the graph, update diagonal values, and notify ordering.
-    pub(crate) fn apply_fill_in<G: EliminationGraph<T>, O: EliminationOrdering<T>>(
+    /// Apply fill-in edges to the graph and update diagonal values, accumulating
+    /// per-vertex degree deltas into `delta` (one priority-queue move per
+    /// affected neighbor is issued later by the caller, rather than one per fill
+    /// edge).
+    pub(crate) fn apply_fill_in_delta<G: EliminationGraph<T>>(
         &self,
         graph: &mut G,
         diag: &mut [T],
-        ordering: &mut O,
+        delta: &mut [i32],
     ) {
         for &(u, w, weight) in &self.fill_edges {
             graph.add_fill_edge(u, w, weight);
             diag[u as usize] = diag[u as usize] + weight;
             diag[w as usize] = diag[w as usize] + weight;
-            ordering.notify_fill_edge(u, w);
+            delta[u as usize] += 1;
+            delta[w as usize] += 1;
         }
     }
 

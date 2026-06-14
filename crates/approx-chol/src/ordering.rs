@@ -12,30 +12,9 @@ use crate::{CsrError, Real};
 // ---------------------------------------------------------------------------
 
 pub(crate) trait EliminationOrdering<T: Real> {
-    /// One live edge incident to `v` was removed (degree estimate decrements by 1).
-    fn notify_neighbor_removed(&mut self, _v: u32) {}
-
-    /// `n` live edges incident to `v` were removed.
-    fn notify_neighbor_removed_n(&mut self, v: u32, n: u32) {
-        for _ in 0..n {
-            self.notify_neighbor_removed(v);
-        }
-    }
-
-    /// A vertex was eliminated; its (uneliminated) neighbors may have changed degree.
-    fn notify_eliminated(&mut self, _v: usize, neighbors: &[(u32, T)]) {
-        for &(u, _) in neighbors {
-            self.notify_neighbor_removed(u);
-        }
-    }
-
-    /// A fill edge was added between `u` and `v`.
-    fn notify_fill_edge(&mut self, u: u32, v: u32);
-
-    /// `n` duplicate edges to `v` were merged during compression.
-    fn notify_edges_merged_n(&mut self, v: u32, n: u32) {
-        self.notify_neighbor_removed_n(v, n);
-    }
+    /// `n` duplicate edges to `v` were merged during compression
+    /// (its degree estimate decreases by `n`).
+    fn notify_edges_merged_n(&mut self, v: u32, n: u32);
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +131,7 @@ impl DynamicOrdering {
         }
     }
 
+    #[cfg(test)]
     fn inc(&mut self, i: usize) {
         let key = self.elems[i].key;
         if key >= u32::MAX - 1 {
@@ -160,6 +140,7 @@ impl DynamicOrdering {
         self.pq_move(i, key + 1);
     }
 
+    #[cfg(test)]
     fn dec(&mut self, i: usize) {
         let old_key = self.elems[i].key;
         if old_key == 0 || old_key == u32::MAX {
@@ -176,43 +157,33 @@ impl DynamicOrdering {
         self.pq_move(i, old_key.saturating_sub(n));
     }
 
+    /// Apply a signed net change to vertex `i`'s degree estimate in a single
+    /// bucket move, instead of one move per incident fill/removed edge.
+    fn apply_delta(&mut self, i: usize, delta: i32) {
+        let key = self.elems[i].key;
+        if key == u32::MAX || delta == 0 {
+            return;
+        }
+        let new_key = (key as i64 + delta as i64).clamp(0, (u32::MAX - 1) as i64) as u32;
+        if new_key != key {
+            self.pq_move(i, new_key);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn apply_degree_delta(&mut self, v: u32, delta: i32) {
+        self.apply_delta(v as usize, delta);
+    }
+
     #[inline]
     pub(crate) fn next_vertex(&mut self) -> Option<usize> {
         self.pop()
     }
-
-    #[inline]
-    pub(crate) fn notify_neighbor_removed(&mut self, v: u32) {
-        self.dec(v as usize);
-    }
-
-    #[inline]
-    pub(crate) fn notify_neighbor_removed_n(&mut self, v: u32, n: u32) {
-        self.dec_n(v as usize, n);
-    }
-
-    #[inline]
-    pub(crate) fn notify_fill_edge(&mut self, u: u32, v: u32) {
-        self.inc(u as usize);
-        self.inc(v as usize);
-    }
 }
 
 impl<T: Real> EliminationOrdering<T> for DynamicOrdering {
-    fn notify_neighbor_removed(&mut self, v: u32) {
-        DynamicOrdering::notify_neighbor_removed(self, v);
-    }
-
-    fn notify_neighbor_removed_n(&mut self, v: u32, n: u32) {
-        DynamicOrdering::notify_neighbor_removed_n(self, v, n);
-    }
-
-    fn notify_fill_edge(&mut self, u: u32, v: u32) {
-        DynamicOrdering::notify_fill_edge(self, u, v);
-    }
-
     fn notify_edges_merged_n(&mut self, v: u32, n: u32) {
-        DynamicOrdering::notify_neighbor_removed_n(self, v, n);
+        self.dec_n(v as usize, n);
     }
 }
 
@@ -328,17 +299,28 @@ mod tests {
     }
 
     #[test]
-    fn test_notify_fill_edge() {
+    fn test_apply_degree_delta_fill_edge() {
         let mut pq = DynamicOrdering::new(3, [1, 1, 1].into_iter()).expect("valid n");
 
-        // Fill edge between 0 and 2 → both inc by 1
-        pq.notify_fill_edge(0u32, 2u32);
+        // Fill edge between 0 and 2 → each endpoint's degree estimate +1.
+        pq.apply_degree_delta(0u32, 1);
+        pq.apply_degree_delta(2u32, 1);
         assert_eq!(pq.elems[0].key, 2);
         assert_eq!(pq.elems[1].key, 1);
         assert_eq!(pq.elems[2].key, 2);
 
         // Vertex 1 (degree 1) should pop first
         assert_eq!(pq.pop(), Some(1));
+    }
+
+    #[test]
+    fn test_apply_degree_delta_net() {
+        // A signed net delta is applied in one bucket move; underflow clamps at 0.
+        let mut pq = DynamicOrdering::new(3, [5, 2, 1].into_iter()).expect("valid n");
+        pq.apply_degree_delta(0u32, -2); // 5 → 3
+        assert_eq!(pq.elems[0].key, 3);
+        pq.apply_degree_delta(0u32, -5); // 3 - 5 clamps to 0
+        assert_eq!(pq.elems[0].key, 0);
     }
 
     #[test]

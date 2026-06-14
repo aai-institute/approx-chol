@@ -24,7 +24,9 @@ pub(super) trait StarBuilderVariant<T: Real> {
         sampler: &mut S,
         column: &mut SampledColumn<T>,
     );
-    fn notify_eliminated<O: EliminationOrdering<T>>(&self, ordering: &mut O, eliminated: usize);
+    /// Accumulate the degree decrease each surviving neighbor experiences from
+    /// this vertex's elimination into `delta` (negative entries).
+    fn accumulate_removal_delta(&self, delta: &mut [i32]);
 }
 
 /// Star neighborhood builder for standard AC factorization.
@@ -78,8 +80,10 @@ impl<T: Real> StarBuilderVariant<T> for AcStarBuilder<T> {
         clique_tree_sample_column(&self.entries, pivot_diag, sampler, column);
     }
 
-    fn notify_eliminated<O: EliminationOrdering<T>>(&self, ordering: &mut O, eliminated: usize) {
-        ordering.notify_eliminated(eliminated, &self.entries);
+    fn accumulate_removal_delta(&self, delta: &mut [i32]) {
+        for &(u, _) in &self.entries {
+            delta[u as usize] -= 1;
+        }
     }
 }
 
@@ -145,10 +149,10 @@ impl<T: Real> StarBuilderVariant<T> for Ac2StarBuilder<T> {
         clique_tree_sample_column_multi(&self.entries, &self.counts, pivot_diag, sampler, column);
     }
 
-    fn notify_eliminated<O: EliminationOrdering<T>>(&self, ordering: &mut O, _eliminated: usize) {
+    fn accumulate_removal_delta(&self, delta: &mut [i32]) {
         debug_assert_eq!(self.entries.len(), self.counts.len());
         for (&(u, _), &count) in self.entries.iter().zip(self.counts.iter()) {
-            ordering.notify_neighbor_removed_n(u, count);
+            delta[u as usize] -= count as i32;
         }
     }
 }
