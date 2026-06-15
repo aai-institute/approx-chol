@@ -4,12 +4,6 @@ use rand::{Rng, SeedableRng};
 use crate::types::Real;
 use num_traits::NumCast;
 
-/// Weight threshold below which remaining weight is considered negligible.
-#[inline]
-pub(crate) fn near_zero<T: Real>() -> T {
-    T::near_zero()
-}
-
 /// Crossover point: for ranges of this size or smaller, a linear CDF scan is faster
 /// than binary search due to branch-prediction and cache effects.
 pub(crate) const LINEAR_THRESHOLD: usize = 32;
@@ -37,7 +31,7 @@ pub(crate) fn sample_from_cumsum<T: Real>(
     };
     let remaining = cumsum[end - 1] - base;
 
-    if remaining <= near_zero::<T>() {
+    if remaining <= T::near_zero() {
         return None;
     }
 
@@ -82,12 +76,6 @@ impl<T> CdfSampler<T> {
             cumsum: Vec::new(),
             rng: SmallRng::seed_from_u64(seed),
         }
-    }
-}
-
-impl<T> Default for CdfSampler<T> {
-    fn default() -> Self {
-        Self::new(0)
     }
 }
 
