@@ -1,5 +1,5 @@
 use crate::graph::{EliminationGraph, Neighbor};
-use crate::ordering::EliminationOrdering;
+use crate::ordering::{DegreeDeltas, DynamicOrdering};
 use crate::sampling::WeightedSampler;
 use crate::types::float_total_cmp;
 use crate::Real;
@@ -9,12 +9,22 @@ use super::clique_tree::{
     clique_tree_sample_column, clique_tree_sample_column_multi, SampledColumn,
 };
 
+/// Apply the merge-compression degree decrease immediately (not batched through
+/// [`DegreeDeltas`]), so it floors at zero *before* the step's fill/removal net
+/// delta — matching the per-edge baseline, where a merge driving the estimate
+/// below zero loses the excess rather than offsetting later fill.
+fn apply_merged_counts(merged: &[(u32, u32)], ordering: &mut DynamicOrdering) {
+    for &(u, n_merged) in merged {
+        ordering.decrease(u as usize, n_merged);
+    }
+}
+
 pub(super) trait StarBuilderVariant<T: Real> {
-    fn build_star<G: EliminationGraph<T>, O: EliminationOrdering<T>>(
+    fn build_star<G: EliminationGraph<T>>(
         &mut self,
         graph: &mut G,
         v: usize,
-        ordering: &mut O,
+        ordering: &mut DynamicOrdering,
     );
     fn is_empty(&self) -> bool;
     fn entries(&self) -> &[(u32, T)];
@@ -24,7 +34,9 @@ pub(super) trait StarBuilderVariant<T: Real> {
         sampler: &mut S,
         column: &mut SampledColumn<T>,
     );
-    fn notify_eliminated<O: EliminationOrdering<T>>(&self, ordering: &mut O, eliminated: usize);
+    /// Accumulate the degree decrease each surviving neighbor experiences from
+    /// this vertex's elimination (negative deltas).
+    fn accumulate_removal_delta(&self, deltas: &mut DegreeDeltas);
 }
 
 /// Star neighborhood builder for standard AC factorization.
@@ -48,17 +60,15 @@ impl<T: Real> AcStarBuilder<T> {
 }
 
 impl<T: Real> StarBuilderVariant<T> for AcStarBuilder<T> {
-    fn build_star<G: EliminationGraph<T>, O: EliminationOrdering<T>>(
+    fn build_star<G: EliminationGraph<T>>(
         &mut self,
         graph: &mut G,
         v: usize,
-        ordering: &mut O,
+        ordering: &mut DynamicOrdering,
     ) {
         graph.live_neighbors(v, &mut self.raw);
         self.dedup.dedup(&mut self.raw, &mut self.entries);
-        for &(u, n_merged) in self.dedup.merged_counts() {
-            ordering.notify_edges_merged_n(u, n_merged);
-        }
+        apply_merged_counts(self.dedup.merged_counts(), ordering);
     }
 
     fn is_empty(&self) -> bool {
@@ -78,8 +88,11 @@ impl<T: Real> StarBuilderVariant<T> for AcStarBuilder<T> {
         clique_tree_sample_column(&self.entries, pivot_diag, sampler, column);
     }
 
-    fn notify_eliminated<O: EliminationOrdering<T>>(&self, ordering: &mut O, eliminated: usize) {
-        ordering.notify_eliminated(eliminated, &self.entries);
+    fn accumulate_removal_delta(&self, deltas: &mut DegreeDeltas) {
+        // AC is the count-1 case of AC2's per-neighbor decrement below.
+        for &(u, _) in &self.entries {
+            deltas.decrease(u, 1);
+        }
     }
 }
 
@@ -110,11 +123,11 @@ impl<T: Real> Ac2StarBuilder<T> {
 }
 
 impl<T: Real> StarBuilderVariant<T> for Ac2StarBuilder<T> {
-    fn build_star<G: EliminationGraph<T>, O: EliminationOrdering<T>>(
+    fn build_star<G: EliminationGraph<T>>(
         &mut self,
         graph: &mut G,
         v: usize,
-        ordering: &mut O,
+        ordering: &mut DynamicOrdering,
     ) {
         graph.live_neighbors(v, &mut self.raw);
         self.dedup.dedup(
@@ -123,9 +136,7 @@ impl<T: Real> StarBuilderVariant<T> for Ac2StarBuilder<T> {
             &mut self.counts,
             self.merge_limit,
         );
-        for &(u, n_merged) in self.dedup.merged_counts() {
-            ordering.notify_edges_merged_n(u, n_merged);
-        }
+        apply_merged_counts(self.dedup.merged_counts(), ordering);
     }
 
     fn is_empty(&self) -> bool {
@@ -145,10 +156,10 @@ impl<T: Real> StarBuilderVariant<T> for Ac2StarBuilder<T> {
         clique_tree_sample_column_multi(&self.entries, &self.counts, pivot_diag, sampler, column);
     }
 
-    fn notify_eliminated<O: EliminationOrdering<T>>(&self, ordering: &mut O, _eliminated: usize) {
+    fn accumulate_removal_delta(&self, deltas: &mut DegreeDeltas) {
         debug_assert_eq!(self.entries.len(), self.counts.len());
         for (&(u, _), &count) in self.entries.iter().zip(self.counts.iter()) {
-            ordering.notify_neighbor_removed_n(u, count);
+            deltas.decrease(u, count);
         }
     }
 }

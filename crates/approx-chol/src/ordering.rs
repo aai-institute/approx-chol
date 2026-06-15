@@ -5,38 +5,7 @@
 //! - `DynamicOrdering`: bucket-based priority queue that adapts to fill-in
 //!   during elimination (ports Julia's `ApproxCholPQ`)
 
-use crate::{CsrError, Real};
-
-// ---------------------------------------------------------------------------
-// Trait
-// ---------------------------------------------------------------------------
-
-pub(crate) trait EliminationOrdering<T: Real> {
-    /// One live edge incident to `v` was removed (degree estimate decrements by 1).
-    fn notify_neighbor_removed(&mut self, _v: u32) {}
-
-    /// `n` live edges incident to `v` were removed.
-    fn notify_neighbor_removed_n(&mut self, v: u32, n: u32) {
-        for _ in 0..n {
-            self.notify_neighbor_removed(v);
-        }
-    }
-
-    /// A vertex was eliminated; its (uneliminated) neighbors may have changed degree.
-    fn notify_eliminated(&mut self, _v: usize, neighbors: &[(u32, T)]) {
-        for &(u, _) in neighbors {
-            self.notify_neighbor_removed(u);
-        }
-    }
-
-    /// A fill edge was added between `u` and `v`.
-    fn notify_fill_edge(&mut self, u: u32, v: u32);
-
-    /// `n` duplicate edges to `v` were merged during compression.
-    fn notify_edges_merged_n(&mut self, v: u32, n: u32) {
-        self.notify_neighbor_removed_n(v, n);
-    }
-}
+use crate::CsrError;
 
 // ---------------------------------------------------------------------------
 // DynamicOrdering — bucket-based priority queue (Julia `ApproxCholPQ` port)
@@ -48,7 +17,7 @@ const SENTINEL: u32 = u32::MAX;
 /// One element in the bucket priority queue, representing a single vertex.
 ///
 /// `key == u32::MAX` means the element has been removed from the priority queue
-/// (popped or logically deleted); operations like `inc`/`dec` skip removed elements.
+/// (popped or logically deleted); `apply_delta` skips removed elements.
 struct PQElem {
     prev: u32, // SENTINEL = head of bucket list
     next: u32, // SENTINEL = tail of bucket list
@@ -152,67 +121,82 @@ impl DynamicOrdering {
         }
     }
 
-    fn inc(&mut self, i: usize) {
+    /// Apply a signed net degree change to vertex `i` in one bucket move.
+    ///
+    /// `i64` so the full `u32` count range can be negated and summed without the
+    /// sign-flip an `i32` cast would cause; the clamp floors at zero.
+    fn apply_delta(&mut self, i: usize, delta: i64) {
         let key = self.elems[i].key;
-        if key >= u32::MAX - 1 {
+        if key == u32::MAX {
             return;
         }
-        self.pq_move(i, key + 1);
+        let new_key = (key as i64 + delta).clamp(0, (u32::MAX - 1) as i64) as u32;
+        if new_key != key {
+            self.pq_move(i, new_key);
+        }
     }
 
-    fn dec(&mut self, i: usize) {
-        let old_key = self.elems[i].key;
-        if old_key == 0 || old_key == u32::MAX {
-            return;
-        }
-        self.pq_move(i, old_key - 1);
-    }
-
-    fn dec_n(&mut self, i: usize, n: u32) {
-        let old_key = self.elems[i].key;
-        if old_key == 0 || old_key == u32::MAX || n == 0 {
-            return;
-        }
-        self.pq_move(i, old_key.saturating_sub(n));
+    /// Decrease vertex `i` by `n`, flooring at zero. Used for the immediate
+    /// merge-compression decrement (see `apply_merged_counts`).
+    #[inline]
+    pub(crate) fn decrease(&mut self, i: usize, n: u32) {
+        self.apply_delta(i, -(n as i64));
     }
 
     #[inline]
     pub(crate) fn next_vertex(&mut self) -> Option<usize> {
         self.pop()
     }
-
-    #[inline]
-    pub(crate) fn notify_neighbor_removed(&mut self, v: u32) {
-        self.dec(v as usize);
-    }
-
-    #[inline]
-    pub(crate) fn notify_neighbor_removed_n(&mut self, v: u32, n: u32) {
-        self.dec_n(v as usize, n);
-    }
-
-    #[inline]
-    pub(crate) fn notify_fill_edge(&mut self, u: u32, v: u32) {
-        self.inc(u as usize);
-        self.inc(v as usize);
-    }
 }
 
-impl<T: Real> EliminationOrdering<T> for DynamicOrdering {
-    fn notify_neighbor_removed(&mut self, v: u32) {
-        DynamicOrdering::notify_neighbor_removed(self, v);
+/// Accumulates net per-vertex degree changes for one elimination step, then
+/// applies them as one bucket move per affected vertex on [`flush`](Self::flush).
+///
+/// Tracks which vertices it touched so `flush` resets exactly those — the buffer
+/// is all-zero between steps no matter which vertices a step hits, so the caller
+/// need not enumerate them.
+pub(crate) struct DegreeDeltas {
+    buf: Vec<i64>,
+    touched: Vec<u32>,
+}
+
+impl DegreeDeltas {
+    pub(crate) fn new(n: usize) -> Self {
+        Self {
+            buf: vec![0; n],
+            touched: Vec::new(),
+        }
     }
 
-    fn notify_neighbor_removed_n(&mut self, v: u32, n: u32) {
-        DynamicOrdering::notify_neighbor_removed_n(self, v, n);
+    #[inline]
+    pub(crate) fn increase(&mut self, v: u32, n: u32) {
+        self.add(v, n as i64);
     }
 
-    fn notify_fill_edge(&mut self, u: u32, v: u32) {
-        DynamicOrdering::notify_fill_edge(self, u, v);
+    #[inline]
+    pub(crate) fn decrease(&mut self, v: u32, n: u32) {
+        self.add(v, -(n as i64));
     }
 
-    fn notify_edges_merged_n(&mut self, v: u32, n: u32) {
-        DynamicOrdering::notify_neighbor_removed_n(self, v, n);
+    #[inline]
+    fn add(&mut self, v: u32, delta: i64) {
+        let i = v as usize;
+        if self.buf[i] == 0 {
+            self.touched.push(v);
+        }
+        self.buf[i] += delta;
+    }
+
+    pub(crate) fn flush(&mut self, ordering: &mut DynamicOrdering) {
+        for &v in &self.touched {
+            let i = v as usize;
+            let d = self.buf[i];
+            self.buf[i] = 0;
+            if d != 0 {
+                ordering.apply_delta(i, d);
+            }
+        }
+        self.touched.clear();
     }
 }
 
@@ -306,7 +290,7 @@ mod tests {
     }
 
     #[test]
-    fn test_inc_dec() {
+    fn test_apply_delta_inc_dec() {
         // 3 vertices with degrees [2, 1, 3]
         let mut pq = DynamicOrdering::new(3, [2, 1, 3].into_iter()).expect("valid n");
 
@@ -314,11 +298,11 @@ mod tests {
         assert_eq!(pq.pop(), Some(1));
 
         // Increment vertex 0 (degree 2 → 3)
-        pq.inc(0);
+        pq.apply_delta(0, 1);
         assert_eq!(pq.elems[0].key, 3);
 
         // Decrement vertex 2 (degree 3 → 2)
-        pq.dec(2);
+        pq.apply_delta(2, -1);
         assert_eq!(pq.elems[2].key, 2);
 
         // Now vertex 2 (degree 2) should come before vertex 0 (degree 3)
@@ -328,11 +312,12 @@ mod tests {
     }
 
     #[test]
-    fn test_notify_fill_edge() {
+    fn test_apply_delta_fill_edge() {
         let mut pq = DynamicOrdering::new(3, [1, 1, 1].into_iter()).expect("valid n");
 
-        // Fill edge between 0 and 2 → both inc by 1
-        pq.notify_fill_edge(0u32, 2u32);
+        // Fill edge between 0 and 2 → each endpoint's degree estimate +1.
+        pq.apply_delta(0, 1);
+        pq.apply_delta(2, 1);
         assert_eq!(pq.elems[0].key, 2);
         assert_eq!(pq.elems[1].key, 1);
         assert_eq!(pq.elems[2].key, 2);
@@ -342,22 +327,43 @@ mod tests {
     }
 
     #[test]
-    fn test_notify_edges_merged() {
+    fn test_apply_delta_net() {
+        // A signed net delta is applied in one bucket move; underflow clamps at 0.
+        let mut pq = DynamicOrdering::new(3, [5, 2, 1].into_iter()).expect("valid n");
+        pq.apply_delta(0, -2); // 5 → 3
+        assert_eq!(pq.elems[0].key, 3);
+        pq.apply_delta(0, -5); // 3 - 5 clamps to 0
+        assert_eq!(pq.elems[0].key, 0);
+    }
+
+    #[test]
+    fn test_merged_edges_decrease_degree() {
         let mut pq = DynamicOrdering::new(3, [3, 2, 1].into_iter()).expect("valid n");
 
-        // Merging edges to vertex 0 → degree decreases
-        <DynamicOrdering as EliminationOrdering<f64>>::notify_edges_merged_n(&mut pq, 0u32, 1);
+        // Compression merges a duplicate edge to vertex 0 → degree estimate -1.
+        pq.apply_delta(0, -1);
         assert_eq!(pq.elems[0].key, 2);
 
-        <DynamicOrdering as EliminationOrdering<f64>>::notify_edges_merged_n(&mut pq, 0u32, 1);
+        pq.apply_delta(0, -1);
         assert_eq!(pq.elems[0].key, 1);
     }
 
     #[test]
-    fn test_notify_edges_merged_n() {
+    fn test_merged_edges_decrease_degree_by_n() {
         let mut pq = DynamicOrdering::new(3, [5, 2, 1].into_iter()).expect("valid n");
-        <DynamicOrdering as EliminationOrdering<f64>>::notify_edges_merged_n(&mut pq, 0u32, 3);
+        pq.apply_delta(0, -3);
         assert_eq!(pq.elems[0].key, 2);
+    }
+
+    #[test]
+    fn test_decrease_large_count_keeps_sign() {
+        // `decrease` takes a `u32` and negates it as `i64` internally, so a count
+        // above i32::MAX stays a *decrease*: with an i32 delta, `-(count as i32)`
+        // would sign-flip to a large positive and *raise* the degree.
+        let mut pq = DynamicOrdering::new(2, [10, 1].into_iter()).expect("valid n");
+        let count: u32 = 3_000_000_000; // > i32::MAX
+        pq.decrease(0, count); // 10 - 3e9 clamps to 0, never raises
+        assert_eq!(pq.elems[0].key, 0);
     }
 
     #[test]
@@ -374,10 +380,34 @@ mod tests {
     }
 
     #[test]
-    fn test_dec_at_zero() {
+    fn test_apply_delta_at_zero_clamps() {
         let mut pq = DynamicOrdering::new(1, [0].into_iter()).expect("valid n");
-        pq.dec(0); // should not underflow
+        pq.apply_delta(0, -1); // should not underflow
         assert_eq!(pq.elems[0].key, 0);
         assert_eq!(pq.pop(), Some(0));
+    }
+
+    #[test]
+    fn test_degree_deltas_flush_applies_net_per_vertex() {
+        let mut pq = DynamicOrdering::new(3, [5, 5, 5].into_iter()).expect("valid n");
+        let mut deltas = DegreeDeltas::new(3);
+
+        // Vertex 0: +1 +1 -3 = net -1. Vertex 1: +2. Vertex 2: untouched.
+        deltas.increase(0, 1);
+        deltas.increase(0, 1);
+        deltas.decrease(0, 3);
+        deltas.increase(1, 2);
+        deltas.flush(&mut pq);
+
+        assert_eq!(pq.elems[0].key, 4); // 5 - 1
+        assert_eq!(pq.elems[1].key, 7); // 5 + 2
+        assert_eq!(pq.elems[2].key, 5); // untouched
+
+        // flush resets the buffer for every touched vertex, so a second flush
+        // with no accumulated deltas is a no-op (no stale carryover).
+        deltas.flush(&mut pq);
+        assert_eq!(pq.elems[0].key, 4);
+        assert_eq!(pq.elems[1].key, 7);
+        assert_eq!(pq.elems[2].key, 5);
     }
 }

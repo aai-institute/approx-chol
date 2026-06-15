@@ -9,6 +9,33 @@ fn nbr(to: u32, fill_weight: f64, count: u32) -> Neighbor<f64> {
     }
 }
 
+/// Pins the per-step degree-update protocol: merge-compression decrements are
+/// applied to the ordering *immediately* (and floor at zero) by
+/// `apply_merged_counts`, **before** the step's fill/removal net delta is
+/// batched through [`DegreeDeltas`] and flushed. The sub-zero excess of a merge
+/// must therefore be lost, not offset later fill in the same step.
+///
+/// If a refactor folded the merge into `DegreeDeltas`, the merge and fill would
+/// net in one clamp and vertex 0's estimate would land at `clamp(2 - 5 + 4) = 1`
+/// instead of `clamp(2 - 5) = 0` then `0 + 4 = 4` — flipping the pop order below.
+#[test]
+fn test_merge_floors_immediately_before_batched_fill() {
+    let mut ordering = DynamicOrdering::new(2, [2, 2].into_iter()).expect("valid n");
+
+    // build_star reports 5 merged duplicate edges to vertex 0; applied at once.
+    apply_merged_counts(&[(0, 5)], &mut ordering); // 2 - 5 -> floors to 0
+
+    // Same-step fill: +4 to vertex 0, accumulated then flushed as one move.
+    let mut deltas = DegreeDeltas::new(2);
+    deltas.increase(0, 4); // 0 + 4 -> 4
+    deltas.flush(&mut ordering);
+
+    // Vertex 1 (degree 2) outranks vertex 0 (degree 4). A batched merge would
+    // make vertex 0 degree 1 and pop it first.
+    assert_eq!(ordering.next_vertex(), Some(1));
+    assert_eq!(ordering.next_vertex(), Some(0));
+}
+
 #[test]
 fn test_compress_merge_caps_count() {
     let mut dedup = Ac2DedupWorkspace::<f64>::new(10);
