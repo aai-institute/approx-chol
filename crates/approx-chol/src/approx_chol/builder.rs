@@ -1,6 +1,6 @@
 use super::decomposition::EliminationSequence;
 use crate::graph::{EliminationGraph, GraphBuild, MultiEdgeGraph, SlimGraph};
-use crate::ordering::DynamicOrdering;
+use crate::ordering::{DegreeDeltas, DynamicOrdering};
 use crate::sampling::{CdfSampler, WeightedSampler};
 use crate::{ConfigError, CsrError, CsrRef, Error, Factor};
 use num_traits::PrimInt;
@@ -183,6 +183,7 @@ where
         let n = graph.n();
         let mut column = SampledColumn::<T>::new();
         let mut seq = EliminationSequence::with_capacity(n, degree_sum);
+        let mut deltas = DegreeDeltas::new(n);
         let target_steps = n.saturating_sub(1);
         let mut steps_done = 0usize;
         while steps_done < target_steps {
@@ -211,8 +212,14 @@ where
                 diag[u as usize] = diag[u as usize] - w;
             }
 
-            column.apply_fill_in(graph, diag, ordering);
-            star_builder.notify_eliminated(ordering, v);
+            // Batch this step's degree-estimate updates into one pq_move per
+            // affected neighbor (net delta) instead of one per incident
+            // fill/removal/merge event. Batching reorders equal-degree vertices
+            // within a bucket, so the exact factor for a fixed seed can differ
+            // from a per-edge version (quality unaffected; see CHANGELOG).
+            column.apply_fill_in_delta(graph, diag, &mut deltas);
+            star_builder.accumulate_removal_delta(&mut deltas);
+            deltas.flush(ordering);
         }
 
         Factor {

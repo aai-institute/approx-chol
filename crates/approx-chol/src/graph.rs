@@ -77,6 +77,9 @@ pub(crate) trait EdgeLike<T: Real>: Clone + Copy {
     fn set_rev(&mut self, rev: u32);
     /// Virtual multi-edge count. Returns 1 for slim edges.
     fn count(&self) -> u32;
+    /// Total fill weight contributed by this edge (`weight * count`).
+    /// For slim edges this is just `weight` (no cast/multiply).
+    fn fill_weight(&self) -> T;
 }
 
 /// Slim edge for AC (no multi-edge tracking).
@@ -111,6 +114,10 @@ impl<T: Real> EdgeLike<T> for Edge<T> {
     #[inline]
     fn count(&self) -> u32 {
         1
+    }
+    #[inline]
+    fn fill_weight(&self) -> T {
+        self.weight
     }
 }
 
@@ -152,6 +159,15 @@ impl<T: Real> EdgeLike<T> for MultiEdge<T> {
     #[inline]
     fn count(&self) -> u32 {
         self.count
+    }
+    #[inline]
+    fn fill_weight(&self) -> T {
+        // `count` is 1 (fill/fresh) or a split factor `mark_split_edges` already
+        // cast to `T`, so it is always representable here; assert rather than
+        // silently yielding a wrong count-1 weight on a failed cast.
+        let count: T = <T as NumCast>::from(self.count)
+            .expect("edge count is representable in T by construction");
+        self.weight * count
     }
 }
 
@@ -224,12 +240,18 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
     fn live_neighbors(&mut self, v: usize, scratch: &mut Vec<Neighbor<T>>) {
         scratch.clear();
         scratch.extend(self.adj[v].iter().filter_map(|e| {
-            let count_scalar = <T as NumCast>::from(e.count())?;
-            (e.weight() > T::zero() && !self.eliminated.get(e.to() as usize)).then_some(Neighbor {
-                to: e.to(),
-                fill_weight: e.weight() * count_scalar,
-                count: e.count(),
-            })
+            // Positive predicate: a NaN weight is dead (`!(w > 0)` differs from
+            // `w <= 0` at NaN). if/else (not `bool::then`) keeps `fill_weight()`
+            // lazy for dead edges and avoids `clippy::filter_map_bool_then`.
+            if e.weight() > T::zero() && !self.eliminated.get(e.to() as usize) {
+                Some(Neighbor {
+                    to: e.to(),
+                    fill_weight: e.fill_weight(),
+                    count: e.count(),
+                })
+            } else {
+                None
+            }
         }));
     }
 
