@@ -57,6 +57,7 @@
 //! |---------|--------|
 //! | `sprs`  | Enables zero-copy [`CsrRef`] conversion from `sprs` matrices via `TryFrom`. |
 //! | `faer`  | Enables zero-copy [`CsrRef`] conversion from `faer` matrices via `TryFrom`. |
+//! | `serde` | Derives `Serialize`/`Deserialize` for [`Config`] and [`Factor`], enabling factor persistence. |
 //!
 //! # References
 //!

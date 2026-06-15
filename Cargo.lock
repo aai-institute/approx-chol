@@ -48,6 +48,7 @@ dependencies = [
  "proptest",
  "rand 0.10.0",
  "serde",
+ "serde_json",
  "sprs",
 ]
 
