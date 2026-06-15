@@ -1,6 +1,6 @@
 use crate::graph::EliminationGraph;
 use crate::ordering::DegreeDeltas;
-use crate::sampling::{near_zero, CdfSampler, WeightedSampler};
+use crate::sampling::{CdfSampler, WeightedSampler};
 use crate::types::{float_total_cmp, Real};
 use num_traits::NumCast;
 
@@ -110,6 +110,15 @@ impl<T: Real> SampledColumn<T> {
                 }
             }
         }
+    }
+
+    /// Append the sampled fill edges to `out` as `(lo, hi, weight)`, `lo < hi`.
+    fn extend_ordered_fill_edges(&self, out: &mut Vec<(u32, u32, T)>) {
+        out.extend(
+            self.fill_edges
+                .iter()
+                .map(|&(u, v, w)| if u < v { (u, v, w) } else { (v, u, w) }),
+        );
     }
 }
 
@@ -275,36 +284,13 @@ pub fn clique_tree_sample<T>(entries: &mut [(u32, T)], seed: u64, out: &mut Vec<
 where
     T: num_traits::Float + Send + Sync + 'static,
 {
-    let n = entries.len();
-    if n <= 1 {
-        return;
-    }
-
     entries.sort_unstable_by(|a, b| float_total_cmp(&a.1, &b.1));
     let mut sampler = CdfSampler::<T>::new(seed);
-    sampler.prepare(entries);
-    // Capacity = sum of live entry weights, matching Laplacians.jl. This is
-    // the only correct form for Laplacian-type inputs where the pivot's
-    // matrix diagonal equals the off-diagonal sum (zero SDD slack).
-    let total_weight = entries.iter().fold(T::zero(), |acc, &(_, w)| acc + w);
-    let mut elim = StarElimination::new(total_weight);
-
-    for i in 0..n - 1 {
-        let (j, w) = entries[i];
-        let f = elim.fraction(w);
-        let fill_wt = f * (T::one() - f) * elim.capacity();
-
-        if fill_wt > near_zero::<T>() {
-            if let Some(koff) = sampler.sample_from_range(i + 1, n) {
-                let k = entries[koff].0;
-                if j != k {
-                    let (lo, hi) = if j < k { (j, k) } else { (k, j) };
-                    out.push((lo, hi, fill_wt));
-                }
-            }
-        }
-        elim.advance(f);
-    }
+    let mut column = SampledColumn::new();
+    // pivot_diag only seeds the discarded column diagonal; capacity is derived
+    // from the entry weights, so the value passed here is irrelevant.
+    clique_tree_sample_column(entries, T::zero(), &mut sampler, &mut column);
+    column.extend_ordered_fill_edges(out);
 }
 
 /// Sample AC2-style fill edges for a star with multiplicity `k`.
@@ -325,50 +311,15 @@ pub fn clique_tree_sample_multi<T>(
 ) where
     T: num_traits::Float + Send + Sync + 'static,
 {
-    let n = entries.len();
-    if n <= 1 {
-        return;
-    }
-
     if split_merge == 0 {
         return;
     }
-    let t = split_merge;
-    let Some(t_scalar): Option<T> = NumCast::from(t) else {
-        return;
-    };
-
     entries.sort_unstable_by(|a, b| float_total_cmp(&a.1, &b.1));
+    let counts = vec![split_merge; entries.len()];
     let mut sampler = CdfSampler::<T>::new(seed);
-    sampler.prepare(entries);
-
-    let total_weight = entries.iter().fold(T::zero(), |acc, &(_, w)| acc + w);
-    if total_weight <= near_zero::<T>() {
-        return;
-    }
-
-    let mut remaining = total_weight;
-    let mut elim = StarElimination::new(total_weight);
-
-    for i in 0..n - 1 {
-        let (j, w) = entries[i];
-        let f = elim.fraction(w);
-        remaining = remaining - w;
-        let fill_wt = w * remaining / (t_scalar * total_weight);
-
-        if fill_wt > near_zero::<T>() {
-            for _ in 0..t {
-                if let Some(koff) = sampler.sample_from_range(i + 1, n) {
-                    let k = entries[koff].0;
-                    if j != k {
-                        let (lo, hi) = if j < k { (j, k) } else { (k, j) };
-                        out.push((lo, hi, fill_wt));
-                    }
-                }
-            }
-        }
-        elim.advance(f);
-    }
+    let mut column = SampledColumn::new();
+    clique_tree_sample_column_multi(entries, &counts, T::zero(), &mut sampler, &mut column);
+    column.extend_ordered_fill_edges(out);
 }
 
 #[cfg(test)]

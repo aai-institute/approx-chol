@@ -85,10 +85,6 @@ fn slices_overlap<T>(lhs: &[T], rhs: &[T]) -> bool {
     lhs_start < rhs_end && rhs_start < lhs_end
 }
 
-// ---------------------------------------------------------------------------
-// PyConfig
-// ---------------------------------------------------------------------------
-
 /// Configuration for approximate Cholesky factorization.
 #[pyclass(frozen, name = "Config")]
 #[derive(Clone)]
@@ -123,10 +119,6 @@ impl PyConfig {
         })
     }
 }
-
-// ---------------------------------------------------------------------------
-// PyFactor
-// ---------------------------------------------------------------------------
 
 /// Approximate Cholesky factor (LDL^T decomposition).
 ///
@@ -285,10 +277,6 @@ impl PyFactor {
         Ok(())
     }
 }
-
-// ---------------------------------------------------------------------------
-// Module functions
-// ---------------------------------------------------------------------------
 
 fn approx_chol_err_to_py(e: Error) -> PyErr {
     value_error(e.to_string())

@@ -4,6 +4,8 @@
 mod panic_err;
 #[path = "common/panic_ok.rs"]
 mod panic_ok;
+#[path = "common/path.rs"]
+mod path;
 use panic_err::ErrOrPanic;
 use panic_ok::OrPanic;
 
@@ -17,16 +19,10 @@ where
     T: Float + FromPrimitive + core::fmt::Debug + Send + Sync + 'static + core::iter::Sum<T>,
     I: sprs::SpIndex,
 {
-    let n = 4usize;
-    let indptr = [0usize, 2, 5, 8, 10]
-        .into_iter()
-        .map(I::from_usize)
-        .collect();
-    let indices = [0usize, 1, 0, 1, 2, 1, 2, 3, 2, 3]
-        .into_iter()
-        .map(I::from_usize)
-        .collect();
-    let data = [1.0_f64, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0]
+    let n = path::N as usize;
+    let indptr = path::ROW_PTRS.into_iter().map(I::from_usize).collect();
+    let indices = path::COL_INDICES.into_iter().map(I::from_usize).collect();
+    let data = path::VALUES
         .into_iter()
         .map(|v| T::from_f64(v).or_panic("value conversion"))
         .collect();

@@ -4,7 +4,6 @@ pub(crate) mod decomposition;
 mod star;
 
 pub use builder::Builder;
-pub(crate) use clique_tree::SampledColumn;
 pub use decomposition::{Factor, SolveError};
 
 // ---------------------------------------------------------------------------
