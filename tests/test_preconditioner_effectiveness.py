@@ -4,35 +4,7 @@ import scipy.sparse.linalg as spla
 
 import approx_chol
 
-
-def _grid_laplacian(rows: int, cols: int) -> sp.csr_matrix:
-    n = rows * cols
-    data: list[float] = []
-    row_idx: list[int] = []
-    col_idx: list[int] = []
-
-    def vid(r: int, c: int) -> int:
-        return r * cols + c
-
-    for r in range(rows):
-        for c in range(cols):
-            v = vid(r, c)
-            degree = 0
-            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                rr = r + dr
-                cc = c + dc
-                if 0 <= rr < rows and 0 <= cc < cols:
-                    u = vid(rr, cc)
-                    row_idx.append(v)
-                    col_idx.append(u)
-                    data.append(-1.0)
-                    degree += 1
-
-            row_idx.append(v)
-            col_idx.append(v)
-            data.append(float(degree))
-
-    return sp.csr_matrix((data, (row_idx, col_idx)), shape=(n, n))
+from tests._laplacians import grid_laplacian
 
 
 def _relative_residual(a: sp.csr_matrix, x: np.ndarray, b: np.ndarray) -> float:
@@ -40,7 +12,7 @@ def _relative_residual(a: sp.csr_matrix, x: np.ndarray, b: np.ndarray) -> float:
 
 
 def test_preconditioner_reduces_cg_iterations_to_tolerance():
-    a = _grid_laplacian(20, 20)
+    a = grid_laplacian(20, 20)
     n = a.shape[0]
     b = np.zeros(n, dtype=np.float64)
     b[0] = 1.0
@@ -82,7 +54,7 @@ def test_preconditioner_reduces_fixed_budget_residual():
     # Approximate Cholesky is an approximate inverse, so we do not assert exact
     # solves; instead we assert significantly faster residual decay under a
     # fixed CG iteration budget (conditioning proxy).
-    a = _grid_laplacian(20, 20)
+    a = grid_laplacian(20, 20)
     n = a.shape[0]
     b = np.zeros(n, dtype=np.float64)
     b[0] = 1.0

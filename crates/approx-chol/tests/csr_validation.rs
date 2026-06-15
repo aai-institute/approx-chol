@@ -1,5 +1,7 @@
 #[path = "common/panic_ok.rs"]
 mod panic_ok;
+#[path = "common/path.rs"]
+mod path;
 use panic_ok::OrPanic;
 
 use approx_chol::{CsrRef, Error};
@@ -9,12 +11,10 @@ use approx_chol::{CsrRef, Error};
 // ---------------------------------------------------------------------------
 
 fn path_laplacian_4() -> (Vec<u32>, Vec<u32>, Vec<f64>, u32) {
-    // 0 — 1 — 2 — 3
-    let row_ptrs = vec![0u32, 2, 5, 8, 10];
-    let col_indices = vec![0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
-    let values = vec![1.0f64, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
-    let n = 4u32;
-    (row_ptrs, col_indices, values, n)
+    let row_ptrs = path::ROW_PTRS.iter().map(|&v| v as u32).collect();
+    let col_indices = path::COL_INDICES.iter().map(|&v| v as u32).collect();
+    let values = path::VALUES.to_vec();
+    (row_ptrs, col_indices, values, path::N)
 }
 
 // ---------------------------------------------------------------------------

@@ -2,6 +2,8 @@
 mod panic_err;
 #[path = "common/panic_ok.rs"]
 mod panic_ok;
+#[path = "common/path.rs"]
+mod path;
 use panic_err::ErrOrPanic;
 use panic_ok::OrPanic;
 
@@ -22,16 +24,13 @@ where
     <I as TryFrom<usize>>::Error: core::fmt::Debug,
     T: Float + FromPrimitive + core::fmt::Debug + Send + Sync + 'static + core::iter::Sum<T>,
 {
-    let row_ptrs = [0usize, 2, 5, 8, 10].into_iter().map(idx::<I>).collect();
-    let col_indices = [0usize, 1, 0, 1, 2, 1, 2, 3, 2, 3]
-        .into_iter()
-        .map(idx::<I>)
-        .collect();
-    let values = [1.0_f64, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0]
+    let row_ptrs = path::ROW_PTRS.into_iter().map(idx::<I>).collect();
+    let col_indices = path::COL_INDICES.into_iter().map(idx::<I>).collect();
+    let values = path::VALUES
         .into_iter()
         .map(|v| T::from_f64(v).or_panic("value conversion"))
         .collect();
-    (row_ptrs, col_indices, values, 4)
+    (row_ptrs, col_indices, values, path::N)
 }
 
 fn run_case<I, T>()
@@ -123,10 +122,8 @@ fn low_level_usize_f32() {
 
 #[test]
 fn low_level_default_factorize_u32_no_conversion_path() {
-    let rp = [0u32, 2, 5, 8, 10];
-    let ci = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
-    let vals = [1.0_f64, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
-    let csr = CsrRef::new(&rp, &ci, &vals, 4).or_panic("valid csr");
+    let (rp, ci, vals, n) = path_laplacian::<u32, f64>();
+    let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid csr");
     let factor = factorize(csr).or_panic("factorization should succeed");
 
     let b = [1.0_f64, -1.0, 1.0, -1.0];
@@ -139,10 +136,8 @@ fn low_level_default_factorize_u32_no_conversion_path() {
 
 #[test]
 fn low_level_factorize_csrref() {
-    let rp = [0u32, 2, 5, 8, 10];
-    let ci = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
-    let vals = [1.0_f64, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
-    let csr = CsrRef::new(&rp, &ci, &vals, 4).or_panic("valid csr");
+    let (rp, ci, vals, n) = path_laplacian::<u32, f64>();
+    let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid csr");
     let factor = factorize(csr).or_panic("factorization should succeed");
     assert_eq!(factor.n(), 4);
 }
@@ -159,10 +154,8 @@ fn low_level_usize_f64_ac2() {
 
 #[test]
 fn split_zero_is_rejected() {
-    let rp = [0u32, 2, 5, 8, 10];
-    let ci = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
-    let vals = [1.0_f64, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
-    let csr = CsrRef::new(&rp, &ci, &vals, 4).or_panic("valid csr");
+    let (rp, ci, vals, n) = path_laplacian::<u32, f64>();
+    let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid csr");
     let builder = Builder::<f64>::new(Config {
         split_merge: Some(0),
         ..Default::default()

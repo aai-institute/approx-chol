@@ -4,6 +4,8 @@
 mod panic_err;
 #[path = "common/panic_ok.rs"]
 mod panic_ok;
+#[path = "common/path.rs"]
+mod path;
 use panic_err::ErrOrPanic;
 use panic_ok::OrPanic;
 
@@ -18,17 +20,17 @@ where
     T: Float + FromPrimitive + core::fmt::Debug + Send + Sync + 'static + core::iter::Sum<T>,
     I: faer::Index + PrimInt,
 {
-    let nrows = 4usize;
-    let ncols = 4usize;
-    let row_ptrs = [0usize, 2, 5, 8, 10]
+    let nrows = path::N as usize;
+    let ncols = path::N as usize;
+    let row_ptrs = path::ROW_PTRS
         .into_iter()
         .map(|v| cast::<usize, I>(v).or_panic("index conversion"))
         .collect();
-    let col_indices = [0usize, 1, 0, 1, 2, 1, 2, 3, 2, 3]
+    let col_indices = path::COL_INDICES
         .into_iter()
         .map(|v| cast::<usize, I>(v).or_panic("index conversion"))
         .collect();
-    let values = [1.0_f64, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0]
+    let values = path::VALUES
         .into_iter()
         .map(|v| T::from_f64(v).or_panic("value conversion"))
         .collect();
