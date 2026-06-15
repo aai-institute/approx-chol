@@ -190,8 +190,8 @@ packages:
   timestamp: 1770939786096
 - pypi: ./
   name: approx-chol
-  version: 0.2.0
-  sha256: bf27dd5f4986326423721e12d3b6aedcad06f19d8cee364e1f7c177496516db0
+  version: 0.3.0
+  sha256: 0227d95d326b837bdb13760f392299ad04153cff9f28499cb042ce2a0db34648
   requires_dist:
   - numpy>=1.24
   - scipy>=1.10
