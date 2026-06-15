@@ -205,7 +205,7 @@ where
 
             let star_entries = star_builder.entries();
             star_builder.sample_column(diag[v], &mut sampler, &mut column);
-            seq.record_column(v, &column);
+            seq.record_column(v, column.diagonal, &column.neighbors, &column.fractions);
 
             graph.eliminate_vertex(v);
             for &(u, w) in star_entries {

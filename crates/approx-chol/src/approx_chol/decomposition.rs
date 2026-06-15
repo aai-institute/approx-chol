@@ -225,18 +225,22 @@ impl<T: Real> EliminationSequence<T> {
         debug_assert_eq!(self.offsets.len(), self.vertices.len() + 1);
     }
 
-    /// Record one column from a `SampledColumn`.
-    pub(crate) fn record_column(&mut self, vertex: usize, column: &super::SampledColumn<T>) {
+    /// Record one sampled column (diagonal value plus its neighbor/fraction pattern).
+    pub(crate) fn record_column(
+        &mut self,
+        vertex: usize,
+        diagonal: T,
+        neighbors: &[u32],
+        fractions: &[T],
+    ) {
         self.vertices.push(vertex as u32);
-        self.inv_diagonal
-            .push(if column.diagonal.abs() > T::near_zero() {
-                T::one() / column.diagonal
-            } else {
-                T::zero()
-            });
-        self.neighbor_indices.extend_from_slice(&column.neighbors);
-        self.elimination_fractions
-            .extend_from_slice(&column.fractions);
+        self.inv_diagonal.push(if diagonal.abs() > T::near_zero() {
+            T::one() / diagonal
+        } else {
+            T::zero()
+        });
+        self.neighbor_indices.extend_from_slice(neighbors);
+        self.elimination_fractions.extend_from_slice(fractions);
         self.offsets.push(self.neighbor_indices.len() as u32);
         debug_assert_eq!(self.offsets.len(), self.vertices.len() + 1);
     }
@@ -455,23 +459,9 @@ where
     /// Returns [`SolveError::WorkBufferTooSmall`] if `y.len() < self.n()`.
     pub fn solve_in_place(&self, y: &mut [T]) -> Result<(), SolveError> {
         self.validate_in_place_work(y)?;
-        self.solve_in_place_unvalidated(y);
-        Ok(())
-    }
-
-    /// Solve L D L^T x = b in-place without upfront `y` length validation.
-    ///
-    /// This method is fully safe and keeps Rust bounds checks on slice indexing.
-    /// If `y.len() < self.n()`, it can panic while indexing.
-    pub(crate) fn solve_in_place_unvalidated(&self, y: &mut [T]) {
-        debug_assert!(
-            y.len() >= self.n,
-            "work buffer too small: got {}, need at least {}",
-            y.len(),
-            self.n
-        );
         self.forward(y);
         self.backward(y);
+        Ok(())
     }
 }
 
