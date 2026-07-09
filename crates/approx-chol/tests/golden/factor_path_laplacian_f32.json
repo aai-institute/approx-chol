@@ -1,0 +1,32 @@
+{
+  "n": 4,
+  "original_n": 4,
+  "sequence": {
+    "vertices": [
+      3,
+      2,
+      1
+    ],
+    "offsets": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "neighbor_indices": [
+      2,
+      1,
+      0
+    ],
+    "elimination_fractions": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "inv_diagonal": [
+      1.0,
+      1.0,
+      1.0
+    ]
+  }
+}
