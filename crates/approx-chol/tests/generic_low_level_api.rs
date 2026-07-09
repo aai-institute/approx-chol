@@ -72,6 +72,7 @@ where
     let builder = Builder::<T>::new(Config {
         split_merge: Some(2),
         seed: 7,
+        ..Default::default()
     });
     let factor = builder
         .build(csr)

@@ -108,12 +108,22 @@ where
     }
 
     fn validate_config(config: Config) -> Result<(), Error> {
-        let Some(split_merge) = config.split_merge else {
-            return Ok(());
-        };
-        if split_merge == 0 {
+        if let Some(split_merge) = config.split_merge {
+            if split_merge == 0 {
+                return Err(Error::InvalidConfig(
+                    ConfigError::SplitMergeMustBePositive { split_merge },
+                ));
+            }
+        }
+        let scaling = config.scaling;
+        if scaling.budget == 0 {
             return Err(Error::InvalidConfig(
-                ConfigError::SplitMergeMustBePositive { split_merge },
+                ConfigError::ScalingBudgetMustBePositive,
+            ));
+        }
+        if !(scaling.slack.is_finite() && scaling.slack > 0.0) {
+            return Err(Error::InvalidConfig(
+                ConfigError::ScalingSlackMustBeFinitePositive,
             ));
         }
         Ok(())

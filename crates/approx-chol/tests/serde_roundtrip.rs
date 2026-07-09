@@ -41,6 +41,7 @@ fn config_json_roundtrip() {
     let config = Config {
         seed: 42,
         split_merge: Some(3),
+        ..Default::default()
     };
 
     let json = serde_json::to_string(&config).or_panic("serialize config");

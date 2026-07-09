@@ -40,6 +40,7 @@ fn smoke_medium_grid_ac2() {
     let config = Config {
         seed: 42,
         split_merge: Some(2),
+        ..Default::default()
     };
     for size in [70, 100] {
         run_smoke_case(size, size, config);

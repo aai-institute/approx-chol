@@ -127,6 +127,7 @@ fn test_ac2_n_eq_1_solve_produces_finite_for_multiple_seeds() {
         let config = Config {
             split_merge: Some(2),
             seed,
+            ..Default::default()
         };
         let factor = Builder::<f64>::new(config)
             .build(csr)
