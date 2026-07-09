@@ -447,15 +447,38 @@ where
         self.apply_congruence(work); // exit: solution ← D·y
     }
 
-    /// Solve LDL^T x = b, returning a newly allocated solution vector with
-    /// zero-mean projection applied.
+    // Ground node absorbs the net current and its potential is the gauge, so no
+    // mean projection — the augmented Laplacian is grounded, not floating.
+    #[inline]
+    fn solve_grounded_kernel(&self, b: &[T], work: &mut [T]) {
+        let ground = self.original_n;
+        work[..b.len()].copy_from_slice(b);
+        work[b.len()..self.n].fill(T::zero());
+        self.apply_congruence(work);
+        let net = work[..ground].iter().fold(T::zero(), |a, &x| a + x);
+        work[ground] = -net;
+        self.forward(work);
+        self.backward(work);
+        let gauge = work[ground];
+        for x in &mut work[..ground] {
+            *x = *x - gauge;
+        }
+        self.apply_congruence(work);
+    }
+
+    /// Exact solution in caller coordinates, length [`Self::original_n`].
     ///
     /// # Errors
     ///
     /// Returns [`SolveError::RhsLengthExceedsFactor`] if `b.len() > self.n()`.
     pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
         let mut work = vec![T::zero(); self.n];
-        self.solve_into(b, &mut work)?;
+        self.validate_rhs_and_work(b, &work)?;
+        if self.original_n < self.n {
+            self.solve_grounded_kernel(b, &mut work);
+        } else {
+            self.solve_into_kernel(b, &mut work);
+        }
         work.truncate(self.original_n);
         Ok(work)
     }
