@@ -16,6 +16,13 @@ pub enum Error {
 
     /// The input CSR matrix has inconsistent dimensions or invalid structure.
     InvalidCsr(CsrError),
+
+    /// Signed input whose off-diagonal signs no signature can fold into the
+    /// Laplacian convention (a frustrated cycle).
+    FrustratedSigns {
+        /// A `(row, col)` off-diagonal whose sign closed the frustrated cycle.
+        edge: (usize, usize),
+    },
 }
 
 /// Structured configuration errors returned by factorization setup.
@@ -187,6 +194,10 @@ impl fmt::Display for Error {
         match self {
             Error::InvalidConfig(err) => write!(f, "invalid factorization config: {err}"),
             Error::InvalidCsr(err) => write!(f, "invalid CSR matrix: {err}"),
+            Error::FrustratedSigns { edge: (row, col) } => write!(
+                f,
+                "signed input is frustrated: off-diagonal ({row}, {col}) cannot be folded"
+            ),
         }
     }
 }

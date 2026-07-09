@@ -13,7 +13,7 @@ pub(crate) struct GraphBuild<G, T: Real> {
 /// explicitly instead of letting some fall through — the 0.2.x
 /// silent-corruption trap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Entry {
+pub(crate) enum Entry {
     /// `row == col`.
     Diagonal,
     /// Off-diagonal with negative weight: a graph edge of weight `-val`.
@@ -25,7 +25,7 @@ enum Entry {
     StructuralZero,
 }
 
-fn classify<T: Real>(row: usize, col: usize, val: T) -> Entry {
+pub(crate) fn classify<T: Real>(row: usize, col: usize, val: T) -> Entry {
     if row == col {
         Entry::Diagonal
     } else if val < T::zero() {
