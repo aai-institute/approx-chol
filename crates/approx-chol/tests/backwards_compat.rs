@@ -107,10 +107,11 @@ mod golden {
         factor_path_laplacian_f32 => factor::<f32>(PATH);
         factor_sddm_surplus_f64  => factor::<f64>(SDDM);
         factor_sddm_surplus_f32  => factor::<f32>(SDDM);
-        // #14 keeps Laplacian solves fixed but changes SDDM caller-dimension
-        // solves, so an SDDM solve golden is deliberately deferred to #14.
         solve_path_laplacian_f64 => factor::<f64>(PATH).solve(&[1.0, -1.0, 1.0, -1.0]).or_panic("solve");
         solve_path_laplacian_f32 => factor::<f32>(PATH).solve(&[1.0, -1.0, 1.0, -1.0]).or_panic("solve");
+        // Exact grounded SDDM solve at caller dimension (#14).
+        solve_sddm_surplus_f64 => factor::<f64>(SDDM).solve(&[1.0, -1.0, 1.0]).or_panic("solve");
+        solve_sddm_surplus_f32 => factor::<f32>(SDDM).solve(&[1.0, -1.0, 1.0]).or_panic("solve");
     }
 
     /// The SDDM fixture must actually trigger Gremban augmentation, or the

@@ -222,6 +222,31 @@ fn solve_returns_original_n_for_sddm() {
 }
 
 #[test]
+fn sddm_solve_is_exact_at_caller_dimension() {
+    // 3-node path with +0.5 surplus per row: min-degree eliminates only degree-≤2
+    // vertices, so the augmented factorization is exact and solve() must return
+    // the exact SDDM solution (not a mean-projected augmented-dimension vector).
+    let csr = CsrRef::new(
+        &[0u32, 2, 5, 7],
+        &[0u32, 1, 0, 1, 2, 1, 2],
+        &[1.5, -1.0, -1.0, 2.5, -1.0, -1.0, 1.5],
+        3,
+    )
+    .or_panic("valid SDDM");
+    let factor = Builder::new(Config::default())
+        .build(csr)
+        .or_panic("factorization should succeed");
+    assert_eq!(factor.n(), factor.original_n() + 1, "must be augmented");
+
+    let x = factor.solve(&[1.0, -1.0, 1.0]).or_panic("solve");
+    let expected = [6.0f64 / 7.0, 2.0 / 7.0, 6.0 / 7.0];
+    assert_eq!(x.len(), 3);
+    for (i, (&a, &b)) in x.iter().zip(&expected).enumerate() {
+        assert!((a - b).abs() < 1e-12, "x[{i}] = {a}, expected {b}");
+    }
+}
+
+#[test]
 fn solve_into_reports_rhs_too_long() {
     let lap = grid_laplacian(4, 4);
     let factor = Builder::new(Config::default())
