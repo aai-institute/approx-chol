@@ -262,6 +262,13 @@ pub struct Factor<T = f64> {
     /// Original input matrix dimension (before possible Gremban augmentation).
     pub(crate) original_n: usize,
     pub(crate) sequence: EliminationSequence<T>,
+    /// Per-node diagonal congruence (caller coordinates), applied symmetrically
+    /// on every solve. Absent = identity; skipped in serde to stay byte-identical.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub(crate) congruence: Option<Vec<T>>,
 }
 
 /// Errors returned by fallible [`Factor`] solve methods.
@@ -367,6 +374,22 @@ where
         self.sequence.n_steps()
     }
 
+    /// The per-node diagonal congruence applied on every solve, if any.
+    #[inline]
+    pub fn congruence(&self) -> Option<&[T]> {
+        self.congruence.as_deref()
+    }
+
+    // zip stops at the congruence length, so any augmentation slot is left intact.
+    #[inline]
+    fn apply_congruence(&self, v: &mut [T]) {
+        if let Some(d) = &self.congruence {
+            for (vi, &di) in v.iter_mut().zip(d.iter()) {
+                *vi = *vi * di;
+            }
+        }
+    }
+
     fn forward(&self, y: &mut [T]) {
         let seq = &self.sequence;
         debug_assert!(
@@ -417,9 +440,11 @@ where
     fn solve_into_kernel(&self, b: &[T], work: &mut [T]) {
         work[..b.len()].copy_from_slice(b);
         work[b.len()..self.n].fill(T::zero());
+        self.apply_congruence(work); // entry: RHS ← D·b
         self.forward(work);
         self.backward(work);
         self.project_zero_mean(work);
+        self.apply_congruence(work); // exit: solution ← D·y
     }
 
     /// Solve LDL^T x = b, returning a newly allocated solution vector with
@@ -459,8 +484,10 @@ where
     /// Returns [`SolveError::WorkBufferTooSmall`] if `y.len() < self.n()`.
     pub fn solve_in_place(&self, y: &mut [T]) -> Result<(), SolveError> {
         self.validate_in_place_work(y)?;
+        self.apply_congruence(y); // D·b
         self.forward(y);
         self.backward(y);
+        self.apply_congruence(y); // D·y
         Ok(())
     }
 }
@@ -470,6 +497,41 @@ mod tests {
     use super::*;
     use rand::{Rng, RngExt, SeedableRng};
     use std::collections::BTreeSet;
+
+    #[test]
+    fn congruence_applies_symmetrically_on_all_surfaces() {
+        // Path Laplacian (n == original_n, no augmentation slot).
+        let csr = crate::CsrRef::new(
+            &[0u32, 2, 5, 8, 10],
+            &[0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3],
+            &[1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0],
+            4,
+        )
+        .unwrap();
+        let base = crate::factorize(csr).unwrap();
+
+        let d = vec![2.0, -0.5, 1.0, -3.0]; // signature × positive scaling
+        let mut congruent = base.clone();
+        congruent.congruence = Some(d.clone());
+
+        let b = [1.0, -1.0, 1.0, -1.0];
+        let scale = |v: &[f64]| -> Vec<f64> { v.iter().zip(&d).map(|(x, di)| x * di).collect() };
+
+        // solve / solve_into share the kernel: x = D · solve_L(D · b).
+        let expected = scale(&base.solve(&scale(&b)).unwrap());
+        assert_eq!(congruent.solve(&b).unwrap(), expected);
+
+        let mut work = vec![0.0; congruent.n()];
+        congruent.solve_into(&b, &mut work).unwrap();
+        assert_eq!(&work[..congruent.original_n()], expected.as_slice());
+
+        // solve_in_place skips projection, so compare against that same surface.
+        let mut base_ip = scale(&b);
+        base.solve_in_place(&mut base_ip).unwrap();
+        let mut ip = b.to_vec();
+        congruent.solve_in_place(&mut ip).unwrap();
+        assert_eq!(ip, scale(&base_ip));
+    }
 
     fn random_sequence(rng: &mut impl Rng, n: usize, n_steps: usize) -> EliminationSequence<f64> {
         let mut vertices = Vec::with_capacity(n_steps);
@@ -607,6 +669,7 @@ mod tests {
                 n,
                 original_n: n,
                 sequence,
+                congruence: None,
             };
 
             let rhs_len = rng.random_range(0..=n);

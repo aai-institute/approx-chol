@@ -226,6 +226,7 @@ where
             n,
             original_n: n,
             sequence: seq,
+            congruence: None,
         }
     }
 }
