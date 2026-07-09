@@ -116,6 +116,7 @@ impl PyConfig {
         Ok(Config {
             seed: self.seed,
             split_merge,
+            ..Default::default()
         })
     }
 }

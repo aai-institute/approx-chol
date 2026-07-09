@@ -34,6 +34,10 @@ pub enum ConfigError {
         /// The invalid `split_merge` value provided by the caller.
         split_merge: u32,
     },
+    /// `Scaling` requires a positive sweep budget.
+    ScalingBudgetMustBePositive,
+    /// `Scaling` requires a finite, positive acceptance slack.
+    ScalingSlackMustBeFinitePositive,
 }
 
 /// Which CSR array an index belongs to.
@@ -59,6 +63,12 @@ impl fmt::Display for ConfigError {
         match self {
             Self::SplitMergeMustBePositive { split_merge } => {
                 write!(f, "split_merge must be >= 1 (got {split_merge})")
+            }
+            Self::ScalingBudgetMustBePositive => {
+                write!(f, "scaling budget must be >= 1")
+            }
+            Self::ScalingSlackMustBeFinitePositive => {
+                write!(f, "scaling slack must be finite and > 0")
             }
         }
     }

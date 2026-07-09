@@ -42,6 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ac2_config = Config {
         split_merge: Some(2),
         seed: 42,
+        ..Default::default()
     };
     let ac2_factor = Builder::new(ac2_config).build(lap.as_csr()?)?;
 
