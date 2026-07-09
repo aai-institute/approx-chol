@@ -9,6 +9,34 @@ pub(crate) struct GraphBuild<G, T: Real> {
     pub diagonal: Vec<T>,
 }
 
+/// Total classification of a CSR entry, so ingestion handles every entry
+/// explicitly instead of letting some fall through — the 0.2.x
+/// silent-corruption trap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Entry {
+    /// `row == col`.
+    Diagonal,
+    /// Off-diagonal with negative weight: a graph edge of weight `-val`.
+    Edge,
+    /// Off-diagonal with strictly positive weight — the sign-policy seam #15
+    /// (fold) and #16 (reject) plug into; the legacy policy drops it.
+    PositiveOffDiagonal,
+    /// Off-diagonal that is zero or NaN: structurally absent, nothing to do.
+    StructuralZero,
+}
+
+fn classify<T: Real>(row: usize, col: usize, val: T) -> Entry {
+    if row == col {
+        Entry::Diagonal
+    } else if val < T::zero() {
+        Entry::Edge
+    } else if val > T::zero() {
+        Entry::PositiveOffDiagonal
+    } else {
+        Entry::StructuralZero
+    }
+}
+
 /// A neighbor entry produced by star elimination.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Neighbor<T> {
@@ -214,15 +242,21 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
                     col_usize < n,
                     "CSR column index {col_usize} out of bounds (n={n})"
                 );
-                if row == col_usize {
-                    diag[row] = diag[row] + val;
-                    row_sums[row] = row_sums[row] + val;
-                } else if val < T::zero() {
-                    row_sums[row] = row_sums[row] + val;
-                    // Build a single undirected edge per symmetric pair.
-                    if row < col_usize {
-                        Self::add_edge_pair(&mut adj, row, col_usize, -val);
+                match classify(row, col_usize, val) {
+                    Entry::Diagonal => {
+                        diag[row] = diag[row] + val;
+                        row_sums[row] = row_sums[row] + val;
                     }
+                    Entry::Edge => {
+                        row_sums[row] = row_sums[row] + val;
+                        // Build a single undirected edge per symmetric pair.
+                        if row < col_usize {
+                            Self::add_edge_pair(&mut adj, row, col_usize, -val);
+                        }
+                    }
+                    // Legacy policy: drop, byte-identical to 0.2.x (#15/#16 act here).
+                    Entry::PositiveOffDiagonal => {}
+                    Entry::StructuralZero => {}
                 }
             }
         }
@@ -400,5 +434,42 @@ impl<T: Real> MultiEdgeGraph<T> {
                 edge.count = k;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_partitions_every_entry() {
+        assert_eq!(classify(1, 1, 5.0_f64), Entry::Diagonal);
+        assert_eq!(classify(1, 1, -5.0_f64), Entry::Diagonal);
+        assert_eq!(classify(0, 1, -1.0_f64), Entry::Edge);
+        assert_eq!(classify(0, 1, 2.0_f64), Entry::PositiveOffDiagonal);
+        assert_eq!(classify(0, 1, 0.0_f64), Entry::StructuralZero);
+        assert_eq!(classify(0, 1, f64::NAN), Entry::StructuralZero);
+    }
+
+    #[test]
+    fn positive_off_diagonal_reaches_policy_and_builds_no_edge() {
+        // 2x2 with a +1 off-diagonal. The entry is now classified (reaching the
+        // sign policy) rather than silently falling through; the legacy policy
+        // drops it, so no edge to vertex 1 is built.
+        let csr = CsrRef::new(
+            &[0u32, 2, 4],
+            &[0u32, 1, 0, 1],
+            &[2.0_f64, 1.0, 1.0, 2.0],
+            2,
+        )
+        .expect("valid csr");
+        let mut graph = SlimGraph::<f64>::from_sddm(csr).expect("build graph").graph;
+
+        let mut neighbors = Vec::new();
+        graph.live_neighbors(0, &mut neighbors);
+        assert!(
+            neighbors.iter().all(|n| n.to != 1),
+            "positive off-diagonal must not create an edge to vertex 1"
+        );
     }
 }
