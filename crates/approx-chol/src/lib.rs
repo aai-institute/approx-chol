@@ -76,6 +76,7 @@
 #![warn(clippy::all, clippy::undocumented_unsafe_blocks)]
 
 mod approx_chol;
+mod balance;
 mod csr;
 mod error;
 pub(crate) mod graph;
