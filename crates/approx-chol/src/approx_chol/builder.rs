@@ -98,26 +98,27 @@ where
             None => sddm,
         };
 
-        let mut factor = match self.config.split_merge {
+        let (mut factor, deficit) = match self.config.split_merge {
             None => {
                 let GraphBuild {
                     graph,
                     diagonal: diag,
-                    ..
+                    deficit,
                 } = SlimGraph::<T>::from_sddm(build_csr)?;
-                self.build_from_graph(graph, diag, sampler)
+                (self.build_from_graph(graph, diag, sampler)?, deficit)
             }
             Some(k) => {
                 let GraphBuild {
                     mut graph,
                     diagonal: diag,
-                    ..
+                    deficit,
                 } = MultiEdgeGraph::<T>::from_sddm(build_csr)?;
                 graph.mark_split_edges(k);
-                self.build_from_graph(graph, diag, sampler)
+                (self.build_from_graph(graph, diag, sampler)?, deficit)
             }
-        }?;
+        };
         factor.original_n = original_n;
+        factor.deficit = deficit;
         if let Some(s) = signs {
             factor.congruence = Some(
                 s.iter()
@@ -269,6 +270,7 @@ where
             original_n: n,
             sequence: seq,
             congruence: None,
+            deficit: None,
         }
     }
 }

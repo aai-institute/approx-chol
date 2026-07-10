@@ -1,12 +1,14 @@
 //! Elimination graph for approximate Cholesky factorization.
 
-use crate::{CsrError, CsrRef, Error, Real};
+use crate::{CsrError, CsrRef, Deficit, Error, Real};
 use num_traits::NumCast;
 
 /// Named return type for [`EliminationGraph::from_sddm`].
 pub(crate) struct GraphBuild<G, T: Real> {
     pub graph: G,
     pub diagonal: Vec<T>,
+    /// Dominance deficit clamped at augmentation, `None` when nothing clamped.
+    pub deficit: Option<Deficit<T>>,
 }
 
 /// Total classification of a CSR entry, so ingestion handles every entry
@@ -339,6 +341,19 @@ fn surplus_stats<T: Real>(row_sums: &[T]) -> (T, T, usize) {
         })
 }
 
+/// The deficit augmentation clamps: `max(−row_sum, 0)` totalled and worst-cased
+/// over rows. `None` when no row is deficient (dominant), so the identity path
+/// stays byte-identical. Measured on the folded matrix — the one being built.
+fn measure_deficit<T: Real>(row_sums: &[T]) -> Option<Deficit<T>> {
+    let (total, worst_row) = row_sums
+        .iter()
+        .fold((T::zero(), T::zero()), |(total, worst), &s| {
+            let d = (-s).max(T::zero());
+            (total + d, worst.max(d))
+        });
+    (total > T::zero()).then_some(Deficit { total, worst_row })
+}
+
 /// Small epsilon for Laplacian augmentation, scaled to floating-point precision.
 fn augmentation_epsilon<T: Real>() -> T {
     if core::mem::size_of::<T>() <= 4 {
@@ -379,6 +394,7 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
         row_sums: &[T],
     ) -> Result<GraphBuild<Self, T>, Error> {
         let m = adj.len();
+        let deficit = measure_deficit(row_sums);
         let (max_surplus, surplus_sum, surplus_count) = surplus_stats(row_sums);
         let aug_eps = augmentation_epsilon::<T>();
         let needs_augmentation = max_surplus >= aug_eps;
@@ -418,6 +434,7 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
                 _marker: core::marker::PhantomData,
             },
             diagonal: diag,
+            deficit,
         })
     }
 }

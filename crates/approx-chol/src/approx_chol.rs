@@ -4,7 +4,7 @@ pub(crate) mod decomposition;
 mod star;
 
 pub use builder::Builder;
-pub use decomposition::{Factor, SolveError};
+pub use decomposition::{Deficit, Factor, SolveError};
 
 // ---------------------------------------------------------------------------
 // Configuration

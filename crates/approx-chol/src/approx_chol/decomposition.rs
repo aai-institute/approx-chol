@@ -246,6 +246,18 @@ impl<T: Real> EliminationSequence<T> {
     }
 }
 
+/// The dominance deficit clamped at Gremban augmentation: the mass
+/// `max(−row_sum, 0)` that augmentation floors to zero rather than grounding.
+/// Zero on dominant input; nonzero marks the factor's one approximation.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Deficit<T = f64> {
+    /// Total clamped mass, summed over rows.
+    pub total: T,
+    /// Largest single-row clamped mass.
+    pub worst_row: T,
+}
+
 /// Approximate Cholesky decomposition L D L^T of an SDDM matrix.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
@@ -269,6 +281,14 @@ pub struct Factor<T = f64> {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub(crate) congruence: Option<Vec<T>>,
+    /// Deficit clamped at augmentation. `None` = nothing clamped (dominant);
+    /// a build diagnostic, skipped in serde to stay byte-identical (persistence
+    /// is #12/#20's concern).
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub(crate) deficit: Option<Deficit<T>>,
 }
 
 /// Errors returned by fallible [`Factor`] solve methods.
@@ -378,6 +398,16 @@ where
     #[inline]
     pub fn congruence(&self) -> Option<&[T]> {
         self.congruence.as_deref()
+    }
+
+    /// The dominance deficit clamped at augmentation (exactly zero on dominant
+    /// input); the factor's one approximation, measured not silently dropped.
+    #[inline]
+    pub fn deficit(&self) -> Deficit<T> {
+        self.deficit.unwrap_or(Deficit {
+            total: T::zero(),
+            worst_row: T::zero(),
+        })
     }
 
     // zip stops at the congruence length, so any augmentation slot is left intact.
@@ -693,6 +723,7 @@ mod tests {
                 original_n: n,
                 sequence,
                 congruence: None,
+                deficit: None,
             };
 
             let rhs_len = rng.random_range(0..=n);
