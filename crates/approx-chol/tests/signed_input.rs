@@ -1,6 +1,12 @@
-//! Balanceable signed SDD input (#15): folded internally, solved exactly in
-//! caller coordinates. A class assertion that the matrix is sign-free rejects a
+//! Signed SDD input handling.
+//!
+//! #15: balanceable input is folded internally and solved exactly in caller
+//! coordinates; a class assertion that the matrix is sign-free rejects a
 //! surviving positive off-diagonal instead of silently dropping it (0.2.x).
+//!
+//! #16: unbalanceable (frustrated) sign structure is rejected fail-fast through
+//! the default config with the witness edge — the pre-double-cover (#24)
+//! contract downstream crates map into domain errors.
 
 #[path = "common/panic_err.rs"]
 mod panic_err;
@@ -10,7 +16,7 @@ use panic_err::ErrOrPanic;
 use panic_ok::OrPanic;
 
 use approx_chol::low_level::Builder;
-use approx_chol::{Config, CsrRef, Error, InputClass};
+use approx_chol::{factorize, Config, CsrRef, Error, InputClass};
 
 /// `sddm_solve_is_exact_at_caller_dimension`'s proven-exact SDDM with node 1's
 /// sign flipped (a `[1, -1, 1]` congruence): `[[1.5, 1, 0], [1, 2.5, 1], [0, 1,
@@ -70,4 +76,46 @@ fn sign_free_input_attaches_no_congruence() {
         factor.congruence().is_none(),
         "sign-free input must not fold"
     );
+}
+
+/// A frustrated 4-cycle (one positive edge → odd parity) has no folding
+/// signature. Detection runs at certification, so the default config rejects it
+/// as `FrustratedSigns` with a witness edge — not the graph-level
+/// `PositiveOffDiagonal` guard, and not the 0.2.x silent drop.
+#[test]
+fn frustrated_signed_input_is_rejected_through_default_config() {
+    let csr = CsrRef::new(
+        &[0u32, 3, 6, 9, 12],
+        &[0u32, 1, 3, 0, 1, 2, 1, 2, 3, 0, 2, 3],
+        &[
+            4.0f64, 1.0, -1.0, 1.0, 4.0, -1.0, -1.0, 4.0, -1.0, -1.0, -1.0, 4.0,
+        ],
+        4,
+    )
+    .or_panic("valid signed SDD");
+    let err = factorize(csr).err_or_panic("frustrated input must be rejected");
+    let Error::FrustratedSigns { edge: (r, c) } = err else {
+        panic!("expected FrustratedSigns, got {err:?}");
+    };
+    assert!(
+        r < 4 && c < 4 && r != c,
+        "witness edge out of range: ({r}, {c})"
+    );
+}
+
+/// The rejection is specific to unbalanceable structure: a balanceable 4-cycle
+/// (two positive edges → even parity) folds and factorizes normally.
+#[test]
+fn balanceable_4_cycle_is_unaffected() {
+    let csr = CsrRef::new(
+        &[0u32, 3, 6, 9, 12],
+        &[0u32, 1, 3, 0, 1, 2, 1, 2, 3, 0, 2, 3],
+        &[
+            4.0f64, 1.0, -1.0, 1.0, 4.0, -1.0, -1.0, 4.0, 1.0, -1.0, 1.0, 4.0,
+        ],
+        4,
+    )
+    .or_panic("valid signed SDD");
+    let factor = factorize(csr).or_panic("balanceable input must factorize");
+    assert_eq!(factor.original_n(), 4);
 }
