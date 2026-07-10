@@ -3,7 +3,7 @@ mod panic_ok;
 use panic_ok::OrPanic;
 
 use approx_chol::low_level::Builder;
-use approx_chol::{Config, CsrRef};
+use approx_chol::{Config, CsrRef, Error};
 
 fn solve_with_default_ac(
     row_ptrs: &[u32],
@@ -57,6 +57,32 @@ fn duplicate_diagonal_entries_do_not_change_solve_behavior() {
         assert!(
             (a - b).abs() < 1e-10,
             "equivalent matrices should solve identically; mismatch at {i}: {a} vs {b}"
+        );
+    }
+}
+
+#[test]
+fn positive_off_diagonal_is_rejected_not_silently_dropped() {
+    // A = [ 5  1 ]   the +1 off-diagonals are outside the SDDM/Laplacian class.
+    //     [ 1  4 ]   Ingestion used to fall through both the diagonal and the
+    // `val < 0` edge branch, silently dropping them and factorizing diag(5, 4)
+    // — a confidently wrong factor. It now rejects the input instead.
+    let rp = [0u32, 2, 4];
+    let ci = [0u32, 1, 0, 1];
+    let vals = [5.0f64, 1.0, 1.0, 4.0];
+
+    // The AC (None) and AC2 (Some) paths share this ingestion; both must reject.
+    for split_merge in [None, Some(2)] {
+        let csr = CsrRef::new(&rp, &ci, &vals, 2).or_panic("valid CSR");
+        let err = Builder::<f64>::new(Config {
+            split_merge,
+            ..Config::default()
+        })
+        .build(csr)
+        .expect_err("positive off-diagonal must be rejected");
+        assert!(
+            matches!(err, Error::PositiveOffDiagonal { edge } if edge == (0, 1)),
+            "expected PositiveOffDiagonal at (0, 1), got {err:?}"
         );
     }
 }

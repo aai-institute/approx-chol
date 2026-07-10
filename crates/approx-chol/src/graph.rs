@@ -223,6 +223,13 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
                     if row < col_usize {
                         Self::add_edge_pair(&mut adj, row, col_usize, -val);
                     }
+                } else if val > T::zero() {
+                    // Positive off-diagonal: outside the SDDM/Laplacian class.
+                    // Reject instead of falling through — the silent drop here
+                    // corrupted the factored matrix.
+                    return Err(Error::PositiveOffDiagonal {
+                        edge: (row, col_usize),
+                    });
                 }
             }
         }

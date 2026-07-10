@@ -16,6 +16,15 @@ pub enum Error {
 
     /// The input CSR matrix has inconsistent dimensions or invalid structure.
     InvalidCsr(CsrError),
+
+    /// An off-diagonal entry is strictly positive. approx-chol factorizes SDDM
+    /// and graph-Laplacian systems, whose off-diagonals are non-positive; a
+    /// positive off-diagonal is outside that class and is rejected rather than
+    /// silently dropped, which would corrupt the factor.
+    PositiveOffDiagonal {
+        /// `(row, column)` of the offending strictly-positive off-diagonal.
+        edge: (usize, usize),
+    },
 }
 
 /// Structured configuration errors returned by factorization setup.
@@ -187,6 +196,10 @@ impl fmt::Display for Error {
         match self {
             Error::InvalidConfig(err) => write!(f, "invalid factorization config: {err}"),
             Error::InvalidCsr(err) => write!(f, "invalid CSR matrix: {err}"),
+            Error::PositiveOffDiagonal { edge: (row, col) } => write!(
+                f,
+                "off-diagonal ({row}, {col}) is positive; approx-chol requires SDDM/Laplacian input (off-diagonals must be <= 0)"
+            ),
         }
     }
 }
