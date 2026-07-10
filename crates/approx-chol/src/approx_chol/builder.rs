@@ -8,7 +8,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use super::clique_tree::SampledColumn;
 use super::star::{Ac2StarBuilder, AcStarBuilder, StarBuilderVariant};
-use super::Config;
+use super::{Config, InputClass};
+use crate::balance::certify_balance;
 
 /// Builder for approximate Cholesky factorization (Algorithm 8, Gao-Kyng-Spielman 2023).
 ///
@@ -84,13 +85,26 @@ where
         let original_n = sddm.n();
         Self::validate_config(self.config)?;
         sddm.validate()?;
+
+        let signs = self.folding_signature(sddm)?;
+        let folded = signs.as_ref().map(|s| fold_values(sddm, s));
+        let build_csr = match &folded {
+            Some(values) => CsrRef::new(
+                sddm.row_ptrs(),
+                sddm.col_indices(),
+                values,
+                original_n as u32,
+            )?,
+            None => sddm,
+        };
+
         let mut factor = match self.config.split_merge {
             None => {
                 let GraphBuild {
                     graph,
                     diagonal: diag,
                     ..
-                } = SlimGraph::<T>::from_sddm(sddm)?;
+                } = SlimGraph::<T>::from_sddm(build_csr)?;
                 self.build_from_graph(graph, diag, sampler)
             }
             Some(k) => {
@@ -98,13 +112,31 @@ where
                     mut graph,
                     diagonal: diag,
                     ..
-                } = MultiEdgeGraph::<T>::from_sddm(sddm)?;
+                } = MultiEdgeGraph::<T>::from_sddm(build_csr)?;
                 graph.mark_split_edges(k);
                 self.build_from_graph(graph, diag, sampler)
             }
         }?;
         factor.original_n = original_n;
+        if let Some(s) = signs {
+            factor.congruence = Some(
+                s.iter()
+                    .map(|&sign| if sign >= 0 { T::one() } else { -T::one() })
+                    .collect(),
+            );
+        }
         Ok(factor)
+    }
+
+    /// The ±1 fold signature, or `None` when folding would be the identity.
+    fn folding_signature(&self, sddm: CsrRef<'_, T, u32>) -> Result<Option<Vec<i8>>, Error> {
+        match self.config.assume {
+            InputClass::Laplacian | InputClass::Sddm => Ok(None),
+            InputClass::Auto | InputClass::Sdd | InputClass::HMatrix => {
+                let signs = certify_balance(sddm)?.signs().to_vec();
+                Ok(signs.iter().any(|&s| s < 0).then_some(signs))
+            }
+        }
     }
 
     fn validate_config(config: Config) -> Result<(), Error> {
@@ -239,6 +271,21 @@ where
             congruence: None,
         }
     }
+}
+
+/// Fold each off-diagonal by `sᵢ·sⱼ`, flipping balanceable positives negative.
+fn fold_values<T: num_traits::Float>(sddm: CsrRef<'_, T, u32>, signs: &[i8]) -> Vec<T> {
+    let row_ptrs = sddm.row_ptrs();
+    let col_indices = sddm.col_indices();
+    let mut folded = sddm.values().to_vec();
+    for row in 0..sddm.n() {
+        for k in row_ptrs[row] as usize..row_ptrs[row + 1] as usize {
+            if signs[row] != signs[col_indices[k] as usize] {
+                folded[k] = -folded[k];
+            }
+        }
+    }
+    folded
 }
 
 #[cfg(test)]

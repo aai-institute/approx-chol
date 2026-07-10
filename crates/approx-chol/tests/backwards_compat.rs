@@ -18,19 +18,19 @@ mod panic_ok;
 use approx_chol::{factorize, CsrRef};
 use panic_ok::OrPanic;
 
-/// The one intended divergence: input with a positive off-diagonal, which
-/// 0.2.x ingestion silently drops — corrupting the factor. Ignored here (no
-/// frozen value); #6 routes such entries to a sign policy and #15 makes this a
-/// correctness assertion, at which point this test is un-ignored and inverted.
+/// The one intended 0.2.x divergence, now fixed: a positive off-diagonal used
+/// to be silently dropped, corrupting the factor. `[[2, 1], [1, 2]]` is
+/// balanceable, so the widened default folds it and the factor solves the true
+/// matrix: `[[2, 1], [1, 2]] x = [1, 1]` ⇒ `x = [1/3, 1/3]`.
 #[test]
-#[ignore = "documents the 0.2.x silent-corruption bug; #6/#15 replace this with a correctness assertion"]
-fn positive_off_diagonal_is_silently_corrupted() {
-    // Symmetric 2x2 with a +1 off-diagonal (not an SDDM edge). Today this
-    // succeeds by dropping the positive entry; the factor no longer represents
-    // the input matrix.
+fn positive_off_diagonal_folds_instead_of_dropping() {
     let csr = CsrRef::new(&[0u32, 2, 4], &[0u32, 1, 0, 1], &[2.0, 1.0, 1.0, 2.0], 2)
         .or_panic("valid csr");
-    let _ = factorize(csr);
+    let factor = factorize(csr).or_panic("balanceable signed input must factorize");
+    let x = factor.solve(&[1.0, 1.0]).or_panic("solve");
+    for xi in x {
+        assert!((xi - 1.0f64 / 3.0).abs() < 1e-12, "expected 1/3, got {xi}");
+    }
 }
 
 #[cfg(target_os = "macos")]

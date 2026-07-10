@@ -7,12 +7,11 @@ use num_traits::Float;
 
 /// Per-node ±1 signs folding every off-diagonal into the Laplacian convention.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Signature(Vec<i8>);
+pub(crate) struct Signature(Vec<i8>);
 
 impl Signature {
     /// The per-node signs, each `+1` or `-1`.
-    #[must_use]
-    pub fn signs(&self) -> &[i8] {
+    pub(crate) fn signs(&self) -> &[i8] {
         &self.0
     }
 }
@@ -24,7 +23,7 @@ impl Signature {
 ///
 /// [`Error::FrustratedSigns`] when no signature folds every edge; CSR
 /// validation errors otherwise.
-pub fn certify_balance<T>(csr: CsrRef<'_, T, u32>) -> Result<Signature, Error>
+pub(crate) fn certify_balance<T>(csr: CsrRef<'_, T, u32>) -> Result<Signature, Error>
 where
     T: Float + Send + Sync + 'static,
 {
@@ -113,5 +112,78 @@ impl ParityDsu {
                 .map(|i| if self.find(i).1 { -1 } else { 1 })
                 .collect(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type Csr = (Vec<u32>, Vec<u32>, Vec<f64>, u32);
+
+    fn certify(csr: &Csr) -> Result<Vec<i8>, Error> {
+        let (rp, ci, vals, n) = csr;
+        let csr = CsrRef::new(rp, ci, vals, *n).expect("valid csr");
+        certify_balance(csr).map(|s| s.signs().to_vec())
+    }
+
+    fn assert_folds(csr: &Csr, signs: &[i8]) {
+        let (rp, ci, vals, _) = csr;
+        for row in 0..rp.len() - 1 {
+            for k in rp[row] as usize..rp[row + 1] as usize {
+                let col = ci[k] as usize;
+                if row != col {
+                    let folded = f64::from(signs[row]) * vals[k] * f64::from(signs[col]);
+                    assert!(folded <= 0.0, "edge ({row},{col}) folds to {folded} > 0");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sign_free_input_short_circuits_to_trivial_signature() {
+        let csr = (
+            vec![0u32, 2, 5, 8, 10],
+            vec![0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3],
+            vec![1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0],
+            4,
+        );
+        assert_eq!(certify(&csr).expect("balanceable"), vec![1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn balanceable_signed_input_yields_folding_signature() {
+        // Path 0-1-2, edge 0-1 positive, edge 1-2 negative.
+        let csr = (
+            vec![0u32, 2, 5, 7],
+            vec![0u32, 1, 0, 1, 2, 1, 2],
+            vec![3.0, 1.0, 1.0, 3.0, -1.0, -1.0, 3.0],
+            3,
+        );
+        let signs = certify(&csr).expect("balanceable");
+        assert!(signs.iter().all(|&s| s == 1 || s == -1));
+        assert_folds(&csr, &signs);
+    }
+
+    #[test]
+    fn frustrated_cycle_is_rejected_with_witness() {
+        // 4-cycle with one positive edge: odd parity, unbalanceable.
+        let csr = (
+            vec![0u32, 3, 6, 9, 12],
+            vec![0u32, 1, 3, 0, 1, 2, 1, 2, 3, 0, 2, 3],
+            vec![
+                4.0, 1.0, -1.0, 1.0, 4.0, -1.0, -1.0, 4.0, -1.0, -1.0, -1.0, 4.0,
+            ],
+            4,
+        );
+        let err = certify(&csr).expect_err("frustrated cycle must be rejected");
+        let Error::FrustratedSigns { edge } = err else {
+            panic!("expected FrustratedSigns, got {err:?}");
+        };
+        let (r, c) = edge;
+        assert!(
+            r < 4 && c < 4 && r != c,
+            "witness edge out of range: {edge:?}"
+        );
     }
 }

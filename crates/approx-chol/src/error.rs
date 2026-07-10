@@ -23,6 +23,13 @@ pub enum Error {
         /// A `(row, col)` off-diagonal whose sign closed the frustrated cycle.
         edge: (usize, usize),
     },
+
+    /// A positive off-diagonal survived to graph build: the input asserted as
+    /// `Laplacian`/`Sddm` is not sign-free (fold it with `assume: Auto`/`Sdd`).
+    PositiveOffDiagonal {
+        /// The `(row, col)` off-diagonal with strictly positive weight.
+        edge: (usize, usize),
+    },
 }
 
 /// Structured configuration errors returned by factorization setup.
@@ -207,6 +214,10 @@ impl fmt::Display for Error {
             Error::FrustratedSigns { edge: (row, col) } => write!(
                 f,
                 "signed input is frustrated: off-diagonal ({row}, {col}) cannot be folded"
+            ),
+            Error::PositiveOffDiagonal { edge: (row, col) } => write!(
+                f,
+                "positive off-diagonal ({row}, {col}) in Laplacian/SDDM input; use assume: Auto or Sdd to fold signed input"
             ),
         }
     }
