@@ -281,9 +281,8 @@ pub struct Factor<T = f64> {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub(crate) congruence: Option<Vec<T>>,
-    /// Deficit clamped at augmentation. `None` = nothing clamped (dominant);
-    /// a build diagnostic, skipped in serde to stay byte-identical (persistence
-    /// is #12/#20's concern).
+    /// `None` = nothing clamped; skipped in serde to stay byte-identical
+    /// (deficit persistence is #12/#20's concern, not this slice's).
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
@@ -400,8 +399,8 @@ where
         self.congruence.as_deref()
     }
 
-    /// The dominance deficit clamped at augmentation (exactly zero on dominant
-    /// input); the factor's one approximation, measured not silently dropped.
+    /// The clamped [`Deficit`] measured at augmentation; zero when nothing was
+    /// clamped.
     #[inline]
     pub fn deficit(&self) -> Deficit<T> {
         self.deficit.unwrap_or(Deficit {

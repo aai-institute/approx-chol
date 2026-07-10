@@ -7,7 +7,6 @@ use num_traits::NumCast;
 pub(crate) struct GraphBuild<G, T: Real> {
     pub graph: G,
     pub diagonal: Vec<T>,
-    /// Dominance deficit clamped at augmentation, `None` when nothing clamped.
     pub deficit: Option<Deficit<T>>,
 }
 
@@ -341,9 +340,9 @@ fn surplus_stats<T: Real>(row_sums: &[T]) -> (T, T, usize) {
         })
 }
 
-/// The deficit augmentation clamps: `max(−row_sum, 0)` totalled and worst-cased
-/// over rows. `None` when no row is deficient (dominant), so the identity path
-/// stays byte-identical. Measured on the folded matrix — the one being built.
+/// Sum and worst-row of the deficit augmentation clamps (see [`Deficit`]).
+/// `None` on dominant input keeps the identity path byte-identical. Measured on
+/// the folded matrix — the one being built.
 fn measure_deficit<T: Real>(row_sums: &[T]) -> Option<Deficit<T>> {
     let (total, worst_row) = row_sums
         .iter()
