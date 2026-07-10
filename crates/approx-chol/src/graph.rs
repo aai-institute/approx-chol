@@ -18,8 +18,8 @@ pub(crate) enum Entry {
     Diagonal,
     /// Off-diagonal with negative weight: a graph edge of weight `-val`.
     Edge,
-    /// Off-diagonal with strictly positive weight — the sign-policy seam #15
-    /// (fold) and #16 (reject) plug into; the legacy policy drops it.
+    /// Off-diagonal with strictly positive weight. Balanceable signs are folded
+    /// away before build; any survivor is rejected at ingestion.
     PositiveOffDiagonal,
     /// Off-diagonal that is zero or NaN: structurally absent, nothing to do.
     StructuralZero,
@@ -254,8 +254,12 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
                             Self::add_edge_pair(&mut adj, row, col_usize, -val);
                         }
                     }
-                    // Legacy policy: drop, byte-identical to 0.2.x (#15/#16 act here).
-                    Entry::PositiveOffDiagonal => {}
+                    // Signed input is folded upstream; a survivor is a broken sign-free assertion.
+                    Entry::PositiveOffDiagonal => {
+                        return Err(Error::PositiveOffDiagonal {
+                            edge: (row, col_usize),
+                        })
+                    }
                     Entry::StructuralZero => {}
                 }
             }
@@ -452,10 +456,10 @@ mod tests {
     }
 
     #[test]
-    fn positive_off_diagonal_reaches_policy_and_builds_no_edge() {
-        // 2x2 with a +1 off-diagonal. The entry is now classified (reaching the
-        // sign policy) rather than silently falling through; the legacy policy
-        // drops it, so no edge to vertex 1 is built.
+    fn positive_off_diagonal_is_rejected_at_ingestion() {
+        // 2x2 with a +1 off-diagonal. Folding happens above `from_sddm`; a
+        // survivor here means the caller asserted a sign-free class, so build
+        // rejects it rather than silently dropping (the 0.2.x corruption).
         let csr = CsrRef::new(
             &[0u32, 2, 4],
             &[0u32, 1, 0, 1],
@@ -463,13 +467,9 @@ mod tests {
             2,
         )
         .expect("valid csr");
-        let mut graph = SlimGraph::<f64>::from_sddm(csr).expect("build graph").graph;
-
-        let mut neighbors = Vec::new();
-        graph.live_neighbors(0, &mut neighbors);
-        assert!(
-            neighbors.iter().all(|n| n.to != 1),
-            "positive off-diagonal must not create an edge to vertex 1"
-        );
+        let Err(err) = SlimGraph::<f64>::from_sddm(csr) else {
+            panic!("positive off-diagonal must error");
+        };
+        assert!(matches!(err, Error::PositiveOffDiagonal { edge: (0, 1) }));
     }
 }

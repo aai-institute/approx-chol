@@ -28,6 +28,3 @@ pub use crate::approx_chol::Builder;
 
 // Star clique sampling utilities (AC + AC2 variants)
 pub use crate::approx_chol::clique_tree::{clique_tree_sample, clique_tree_sample_multi};
-
-// Signed-input balance certification (sign folding).
-pub use crate::balance::{certify_balance, Signature};
