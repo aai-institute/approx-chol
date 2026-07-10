@@ -133,7 +133,7 @@ where
     fn folding_signature(&self, sddm: CsrRef<'_, T, u32>) -> Result<Option<Vec<i8>>, Error> {
         match self.config.assume {
             InputClass::Laplacian | InputClass::Sddm => Ok(None),
-            InputClass::Auto | InputClass::Sdd | InputClass::HMatrix => {
+            InputClass::Auto | InputClass::Sdd => {
                 let signs = certify_balance(sddm)?.signs().to_vec();
                 Ok(signs.iter().any(|&s| s < 0).then_some(signs))
             }

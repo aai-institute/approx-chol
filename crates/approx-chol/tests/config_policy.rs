@@ -28,10 +28,10 @@ fn default_assumes_auto_and_errors_on_deficit() {
 #[test]
 fn functional_update_idiom_is_preserved() {
     let c = Config {
-        assume: InputClass::HMatrix,
+        assume: InputClass::Sdd,
         ..Default::default()
     };
-    assert_eq!(c.assume, InputClass::HMatrix);
+    assert_eq!(c.assume, InputClass::Sdd);
     assert_eq!(c.seed, 0);
     assert_eq!(c.scaling, Scaling::default());
 }
@@ -43,7 +43,6 @@ fn every_class_hint_is_constructible() {
         InputClass::Laplacian,
         InputClass::Sddm,
         InputClass::Sdd,
-        InputClass::HMatrix,
     ] {
         let c = Config {
             assume: class,

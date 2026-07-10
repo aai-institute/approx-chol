@@ -53,7 +53,9 @@ pub struct Config {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum InputClass {
-    /// Detect sign structure and dominance; fold and scale as needed.
+    /// Detect sign structure and dominance; fold and scale as needed. The entry
+    /// point for general (signed, non-dominant) H-matrices — a specific class
+    /// only asserts narrower structure to skip a detection pass.
     #[default]
     Auto,
     /// Graph Laplacian: sign-free, zero row sums.
@@ -62,8 +64,6 @@ pub enum InputClass {
     Sddm,
     /// Symmetric diagonally dominant: possibly signed, dominant.
     Sdd,
-    /// Symmetric H-matrix: possibly signed and non-dominant.
-    HMatrix,
 }
 
 /// Scaling relaxation toward generalized diagonal dominance.
