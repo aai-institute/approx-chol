@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- SDDM (Gremban-augmented) systems: `solve`/`solve_into` now recover the correct
+  solution by grounding against the auxiliary vertex. Previously a global
+  zero-mean projection was applied to the augmented factor, returning a
+  non-solution and producing a singular, non-convergent CG preconditioner.
+  (#35)
+
+### Changed
+
+- `solve`/`solve_into` (Rust and Python) reject a right-hand side longer than the
+  original matrix dimension rather than the augmented factor dimension.
+  `SolveError::RhsLengthExceedsFactor` and the corresponding Python `ValueError`
+  now report the original matrix dimension.
+
 ## [0.3.1] - 2026-07-10
 
 ### Fixed
@@ -66,6 +83,7 @@ for graph Laplacians in Rust with Python bindings.
 - Multi-platform CI with coverage reporting
 - Dual MIT license for Rust crate and Python package
 
+[Unreleased]: https://github.com/aai-institute/approx-chol/compare/v0.3.1...HEAD
 [0.3.1]: https://github.com/aai-institute/approx-chol/releases/tag/v0.3.1
 [0.3.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.3.0
 [0.2.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.2.0

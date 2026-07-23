@@ -221,6 +221,50 @@ fn solve_returns_original_n_for_sddm() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// SDDM solve accuracy (issue #35): solve(b) must equal M^-1 b
+//
+// A *diagonal* SDDM matrix augments to a star graph (aux vertex + leaves),
+// which is a tree, so approximate Cholesky is EXACT here — no sampling error.
+// That isolates the Gremban *recovery* (grounding) from AC approximation, so we
+// can assert against the closed-form inverse x_i = b_i / d_i with tight tol.
+// The RHS deliberately has a non-zero sum, which is exactly the case the old
+// global zero-mean projection got wrong.
+// ---------------------------------------------------------------------------
+
+/// Diagonal SDDM matrix `diag(2, 3, 5)` as CSR (row sums 2, 3, 5 -> augmented).
+fn diagonal_sddm() -> (Vec<u32>, Vec<u32>, Vec<f64>, u32) {
+    (vec![0, 1, 2, 3], vec![0, 1, 2], vec![2.0, 3.0, 5.0], 3)
+}
+
+#[test]
+fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs() {
+    let (rp, ci, vals, n) = diagonal_sddm();
+    let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid diagonal SDDM");
+    let factor = Builder::new(Config::default())
+        .build(csr)
+        .or_panic("factorization should succeed");
+
+    assert!(factor.n() > n as usize, "diagonal SDDM should be augmented");
+
+    // Both a strictly-positive and a mixed-sign RHS, each with a non-zero sum —
+    // the case the old global zero-mean recovery corrupted. For diagonal M the
+    // closed-form solution is x_i = b_i / d_i.
+    for b in [[1.0_f64, 2.0, 3.0], [1.0, -2.0, 4.0]] {
+        let x = factor.solve(&b).or_panic("solve should succeed");
+        assert_eq!(x.len(), n as usize);
+        for i in 0..n as usize {
+            let want = b[i] / vals[i];
+            assert!(
+                (x[i] - want).abs() < 1e-9,
+                "b={b:?}: x[{i}] = {:.6}, expected {want:.6} (M^-1 b); \
+                 solve returned a non-solution of the SDDM system",
+                x[i]
+            );
+        }
+    }
+}
+
 #[test]
 fn solve_into_reports_rhs_too_long() {
     let lap = grid_laplacian(4, 4);
@@ -240,6 +284,26 @@ fn solve_into_reports_rhs_too_long() {
             factor_dim: _
         }
     ));
+}
+
+#[test]
+fn solve_into_rejects_rhs_longer_than_original_for_augmented_factor() {
+    // For an augmented SDDM factor n() == original_n() + 1, and the aux slot is
+    // internal scratch. A RHS of length original_n + 1 must be rejected, not
+    // silently accepted with its last entry overwritten by the grounding setup.
+    let (rp, ci, vals, n) = diagonal_sddm();
+    let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid diagonal SDDM");
+    let factor = Builder::new(Config::default())
+        .build(csr)
+        .or_panic("factorization should succeed");
+    assert_eq!(factor.n(), factor.original_n() + 1, "SDDM augments by one");
+
+    let rhs = vec![0.0; factor.original_n() + 1]; // == factor.n(): the aux slot
+    let mut work = vec![0.0; factor.n()];
+    let err = factor
+        .solve_into(&rhs, &mut work)
+        .err_or_panic("rhs longer than original dimension must fail");
+    assert!(matches!(err, SolveError::RhsLengthExceedsFactor { .. }));
 }
 
 #[test]

@@ -85,9 +85,26 @@ def test_solve_and_solve_into_raise_value_error_for_shape_and_overlap():
     with pytest.raises(ValueError, match="out length"):
         factor.solve_into(rhs, out_too_short)
 
-    out = np.zeros(original_n, dtype=np.float64)
     with pytest.raises(ValueError, match="must not overlap"):
         factor.solve_into(rhs, rhs)
+
+
+def test_solve_rejects_augmented_length_rhs():
+    # _base_csr is SDDM (positive row sums), so it augments: original_n=2, n=3.
+    # A RHS of length original_n + 1 (the augmented dimension) must be rejected,
+    # not silently accepted with its trailing aux entry discarded.
+    ext = load_extension_module()
+    row_ptrs, col_indices, values = _base_csr()
+    factor = ext.factorize_raw(row_ptrs, col_indices, values, 2)
+    original_n = factor.shape[0]
+    assert factor.n == original_n + 1, "SDDM should augment by one vertex"
+
+    rhs_aug_len = np.zeros(original_n + 1, dtype=np.float64)
+    with pytest.raises(ValueError, match="rhs length"):
+        factor.solve(rhs_aug_len)
+    out = np.zeros(original_n, dtype=np.float64)
+    with pytest.raises(ValueError, match="rhs length"):
+        factor.solve_into(rhs_aug_len, out)
 
 
 def test_solve_into_rejects_partially_overlapping_views():

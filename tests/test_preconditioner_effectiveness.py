@@ -50,6 +50,40 @@ def test_preconditioner_reduces_cg_iterations_to_tolerance():
     assert _relative_residual(a, x_pre, b) <= _relative_residual(a, x_unpre, b) * 1.5
 
 
+def test_sddm_solve_matches_dense_inverse():
+    # Regression for issue #35. A small tridiagonal SDDM augments to a graph
+    # small enough that AC is exact, so solve(b) must equal the dense M^-1 b.
+    # The RHS has a non-zero sum -- exactly the case the old global zero-mean
+    # recovery corrupted.
+    m = np.array([[5.0, -1.0, 0.0], [-1.0, 6.0, -1.0], [0.0, -1.0, 5.0]])
+    a = sp.csr_matrix(m)
+    b = np.array([1.0, 2.0, 3.0])  # sum = 6 != 0
+
+    factor = approx_chol.factorize(a, approx_chol.Config(seed=0))
+    x = factor.solve(b)
+
+    assert np.linalg.norm(x - np.linalg.solve(m, b)) < 1e-9
+
+
+def test_sddm_preconditioner_makes_cg_converge():
+    # Regression for issue #35. SDDM = grid Laplacian + positive diagonal shift
+    # (positive row sums -> Gremban augmentation). The RHS has a non-zero sum, so
+    # grounding drives -sum(b) onto the auxiliary vertex. Under the old global
+    # zero-mean recovery the preconditioner is inconsistent and CG stalls at
+    # maxiter (verified: rel. residual ~1.9); with correct grounding it converges
+    # in a handful of iterations.
+    lap = grid_laplacian(20, 20)
+    n = lap.shape[0]
+    a = (lap + 0.5 * sp.eye(n, format="csr")).tocsr()
+    b = np.ones(n, dtype=np.float64)  # sum = n != 0
+
+    factor = approx_chol.factorize(a, approx_chol.Config(seed=0))
+    x, info = spla.cg(a, b, M=factor, rtol=1e-8, atol=0.0, maxiter=5000)
+
+    assert info == 0, f"preconditioned CG on SDDM did not converge, info={info}"
+    assert _relative_residual(a, x, b) < 1e-6
+
+
 def test_preconditioner_reduces_fixed_budget_residual():
     # Approximate Cholesky is an approximate inverse, so we do not assert exact
     # solves; instead we assert significantly faster residual decay under a
