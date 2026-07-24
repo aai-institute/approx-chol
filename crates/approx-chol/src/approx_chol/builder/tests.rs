@@ -1,13 +1,5 @@
 use super::*;
-use crate::test_utils::OrPanic;
-
-/// Build a 4-node path graph Laplacian as raw CSR arrays.
-fn path_laplacian_4() -> (Vec<u32>, Vec<u32>, Vec<f64>) {
-    let indptr = vec![0u32, 2, 5, 8, 10];
-    let indices = vec![0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
-    let data = vec![1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
-    (indptr, indices, data)
-}
+use crate::test_utils::{path_laplacian_4, OrPanic};
 
 fn make_csr<'a>(indptr: &'a [u32], indices: &'a [u32], data: &'a [f64]) -> CsrRef<'a, f64, u32> {
     CsrRef::new(indptr, indices, data, (indptr.len() - 1) as u32).or_panic("valid CSR test fixture")

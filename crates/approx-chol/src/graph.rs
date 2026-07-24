@@ -34,7 +34,7 @@ pub(crate) trait EliminationGraph<T: Real> {
     fn degree(&self, v: usize) -> usize;
 
     /// Collect live (non-eliminated, positive-weight) neighbors of `v` into `scratch`.
-    fn live_neighbors(&mut self, v: usize, scratch: &mut Vec<Neighbor<T>>);
+    fn live_neighbors(&self, v: usize, scratch: &mut Vec<Neighbor<T>>);
 
     /// Returns `true` if `v` has an empty adjacency list.
     fn is_empty(&self, v: usize) -> bool;
@@ -244,7 +244,7 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
         self.adj[v].iter().map(|e| e.count() as usize).sum()
     }
 
-    fn live_neighbors(&mut self, v: usize, scratch: &mut Vec<Neighbor<T>>) {
+    fn live_neighbors(&self, v: usize, scratch: &mut Vec<Neighbor<T>>) {
         scratch.clear();
         scratch.extend(self.adj[v].iter().filter_map(|e| {
             // Positive predicate: a NaN weight is dead (`!(w > 0)` differs from

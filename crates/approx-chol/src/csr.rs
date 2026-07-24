@@ -281,6 +281,16 @@ impl<T, I: PrimInt> OwnedCsr<T, I> {
     }
 }
 
+/// Lets `&OwnedCsr` be used directly at the `TryInto<CsrRef>` entry point
+/// (e.g. `factorize(&owned)`), like the zero-copy sparse conversions.
+impl<'a, T, I: PrimInt> TryFrom<&'a OwnedCsr<T, I>> for CsrRef<'a, T, I> {
+    type Error = Error;
+
+    fn try_from(owned: &'a OwnedCsr<T, I>) -> Result<Self, Self::Error> {
+        owned.try_as_ref()
+    }
+}
+
 #[cfg(any(feature = "sprs", feature = "faer"))]
 fn validate_square_dims(rows: usize, cols: usize) -> Result<u32, Error> {
     if rows != cols {
@@ -375,6 +385,21 @@ mod tests {
         assert_eq!(converted_ref.row_ptrs(), &row_ptrs);
         assert_eq!(converted_ref.col_indices(), &col_indices);
         assert_eq!(converted_ref.values(), &values);
+    }
+
+    #[test]
+    fn owned_csr_borrows_into_csr_ref_via_try_into() {
+        let (row_ptrs, col_indices, values) = crate::test_utils::path_laplacian_4();
+        let owned = CsrRef::new(&row_ptrs, &col_indices, &values, 4)
+            .or_panic("valid csr")
+            .to_owned_u32()
+            .or_panic("to owned");
+
+        let as_ref: CsrRef<'_, f64, u32> = (&owned).try_into().or_panic("borrow into CsrRef");
+        assert_eq!(as_ref.n(), 4);
+
+        let factor = crate::factorize(&owned).or_panic("factorize &OwnedCsr");
+        assert_eq!(factor.n(), 4);
     }
 
     #[test]

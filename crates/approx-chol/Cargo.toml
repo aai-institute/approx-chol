@@ -20,6 +20,8 @@ num-traits = "0.2"
 [features]
 default = []
 serde = ["dep:serde"]
+sprs = ["dep:sprs"]
+faer = ["dep:faer"]
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
