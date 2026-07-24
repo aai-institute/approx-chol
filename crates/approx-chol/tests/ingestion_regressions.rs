@@ -165,6 +165,37 @@ fn connected_single_component_input_is_not_falsely_rejected() {
 }
 
 #[test]
+fn tiny_scale_sddm_is_augmented_and_solves() {
+    // Surplus below the old absolute floor (1e-10) but above near_zero (1e-14) is
+    // genuine dominance: augment and solve, don't misreport a disconnected Laplacian.
+    let rp = [0u32, 1, 2];
+    let ci = [0u32, 1];
+    let vals = [5e-11_f64, 5e-11];
+    let factor = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(&rp, &ci, &vals, 2).or_panic("valid CSR"))
+        .expect("tiny-scale PD SDDM must be augmented and accepted");
+    // diag(5e-11) x = b  =>  x = b / 5e-11 (exact to rounding)
+    let x = factor.solve(&[1.0, 2.0]).or_panic("solve");
+    assert!((x[0] - 1.0 / 5e-11).abs() <= 1e-6 / 5e-11, "x[0]={}", x[0]);
+    assert!((x[1] - 2.0 / 5e-11).abs() <= 1e-6 / 5e-11, "x[1]={}", x[1]);
+}
+
+#[test]
+fn sub_near_zero_scale_is_rejected_not_silently_mis_solved() {
+    // Below near_zero the pivots would be clamped, so augmenting would mis-solve;
+    // such input must error rather than return a bogus solution.
+    let rp = [0u32, 1, 2];
+    let ci = [0u32, 1];
+    let vals = [1e-15_f64, 1e-15];
+    let result = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(&rp, &ci, &vals, 2).or_panic("valid CSR"));
+    assert!(
+        result.is_err(),
+        "sub-near_zero input must error rather than silently mis-solve, got {result:?}"
+    );
+}
+
+#[test]
 fn connected_non_dominant_input_is_not_reported_disconnected() {
     // Non-dominant input (negative row sums) leaves the ground vertex isolated;
     // that artifact must not be miscounted as a component. The graph is connected,

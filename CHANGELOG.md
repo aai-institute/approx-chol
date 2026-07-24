@@ -14,12 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zero-mean projection was applied to the augmented factor, returning a
   non-solution and producing a singular, non-convergent CG preconditioner.
   (#35)
-- Input that is not a single connected system is now rejected at factorization
-  time with the new `Error::Disconnected` variant (Python `ValueError`) instead
-  of silently returning a wrong answer. A genuine SDDM matrix is linked through
-  the shared Gremban ground vertex, so a block-diagonal SDDM is still accepted;
-  only out-of-scope input (a block with no diagonal surplus, e.g. a disconnected
-  pure Laplacian) triggers this. (#36)
+- Reject disconnected input with the new `Error::Disconnected` (Python `ValueError`)
+  instead of silently returning a wrong answer; block-diagonal SDDM stays accepted. (#36)
+- Scale the Gremban augmentation floor by `min(max_diagonal, 1)` so a
+  correctly-scaled-down SDDM is augmented rather than misread as disconnected. (#36)
 
 ### Changed
 
