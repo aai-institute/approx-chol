@@ -341,7 +341,35 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
         }
     }
 
-    /// Build the final graph, adding Gremban augmentation if needed.
+    /// Connected components among the first `n_real` vertices. Traversal follows
+    /// every edge, so a ground vertex (index `>= n_real`) links the blocks it
+    /// touches without being counted as its own component.
+    fn count_components(adj: &[Vec<E>], n_real: usize) -> usize {
+        let mut visited = BitVec::new(adj.len());
+        let mut stack: Vec<usize> = Vec::new();
+        let mut components = 0usize;
+        for start in 0..n_real {
+            if visited.get(start) {
+                continue;
+            }
+            components += 1;
+            visited.set(start);
+            stack.push(start);
+            while let Some(v) = stack.pop() {
+                for e in &adj[v] {
+                    let u = e.to() as usize;
+                    if !visited.get(u) {
+                        visited.set(u);
+                        stack.push(u);
+                    }
+                }
+            }
+        }
+        components
+    }
+
+    /// Build the final graph: apply Gremban augmentation if needed, then reject
+    /// disconnected input (`Error::Disconnected`).
     fn build_augmented_laplacian(
         mut adj: Vec<Vec<E>>,
         mut diag: Vec<T>,
@@ -379,6 +407,13 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
         }
 
         let n = adj.len();
+        // Reject before the expensive elimination: >1 component (over the real
+        // vertices) means a block can't reach ground. See `Error::Disconnected`.
+        let components = Self::count_components(&adj, m);
+        if components > 1 {
+            return Err(Error::Disconnected { components });
+        }
+
         let eliminated = BitVec::new(n);
         Ok(GraphBuild {
             graph: AdjListGraph {
