@@ -34,7 +34,7 @@ pub(crate) trait EliminationGraph<T: Real> {
     fn degree(&self, v: usize) -> usize;
 
     /// Collect live (non-eliminated, positive-weight) neighbors of `v` into `scratch`.
-    fn live_neighbors(&mut self, v: usize, scratch: &mut Vec<Neighbor<T>>);
+    fn live_neighbors(&self, v: usize, scratch: &mut Vec<Neighbor<T>>);
 
     /// Returns `true` if `v` has an empty adjacency list.
     fn is_empty(&self, v: usize) -> bool;
@@ -244,7 +244,7 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
         self.adj[v].iter().map(|e| e.count() as usize).sum()
     }
 
-    fn live_neighbors(&mut self, v: usize, scratch: &mut Vec<Neighbor<T>>) {
+    fn live_neighbors(&self, v: usize, scratch: &mut Vec<Neighbor<T>>) {
         scratch.clear();
         scratch.extend(self.adj[v].iter().filter_map(|e| {
             // Positive predicate: a NaN weight is dead (`!(w > 0)` differs from
@@ -321,8 +321,12 @@ fn augmentation_eps<T: Real>() -> T {
 impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
     #[inline]
     fn add_edge_pair(adj: &mut [Vec<E>], u: usize, v: usize, weight: T) {
-        debug_assert!(adj[v].len() < u32::MAX as usize);
-        debug_assert!(adj[u].len() < u32::MAX as usize);
+        // u32 reverse pointers; overflow is unreachable for tractable inputs,
+        // so assert (release too) rather than truncate and corrupt removal.
+        assert!(
+            adj[u].len() < u32::MAX as usize && adj[v].len() < u32::MAX as usize,
+            "adjacency list exceeds u32 edge capacity"
+        );
         let rev_u = adj[v].len() as u32;
         let rev_v = adj[u].len() as u32;
         adj[u].push(E::new(weight, v as u32, rev_u));

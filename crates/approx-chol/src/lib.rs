@@ -109,6 +109,8 @@ pub(crate) use types::Real;
 ///
 /// Returns [`Error::InvalidCsr`] if conversion or validation fails, if index
 /// conversion to `u32` fails, or if input conversion panics.
+/// Returns [`Error::PositiveOffDiagonal`] if any off-diagonal entry is strictly
+/// positive (outside the SDDM/Laplacian class).
 /// Returns [`Error::Disconnected`] if the input stays disconnected after Gremban
 /// grounding (more than one connected component).
 ///
@@ -145,6 +147,8 @@ where
 ///
 /// Returns [`Error::InvalidCsr`] if conversion or validation fails, if index
 /// conversion to `u32` fails, or if input conversion panics.
+/// Returns [`Error::PositiveOffDiagonal`] if any off-diagonal entry is strictly
+/// positive (outside the SDDM/Laplacian class).
 /// Returns [`Error::InvalidConfig`] if configuration values are inconsistent
 /// (e.g. `split_merge == Some(0)`).
 /// Returns [`Error::Disconnected`] if the input stays disconnected after Gremban

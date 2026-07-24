@@ -224,6 +224,18 @@ impl<T: Real> EliminationSequence<T> {
         }
     }
 
+    /// Push the running nonzero count as the next `u32` offset. Overflow is
+    /// unreachable for tractable inputs, so assert (in release too) rather than
+    /// truncate silently.
+    fn push_offset(&mut self) {
+        let nnz = self.neighbor_indices.len();
+        assert!(
+            nnz <= u32::MAX as usize,
+            "factor nonzero count {nnz} exceeds u32 offset capacity"
+        );
+        self.offsets.push(nnz as u32);
+    }
+
     /// Record an isolated vertex (no neighbors, clamped diagonal).
     pub(crate) fn record_isolated(&mut self, vertex: usize, diagonal: T) {
         self.vertices.push(vertex as u32);
@@ -232,7 +244,7 @@ impl<T: Real> EliminationSequence<T> {
         } else {
             T::zero()
         });
-        self.offsets.push(self.neighbor_indices.len() as u32);
+        self.push_offset();
         debug_assert_eq!(self.offsets.len(), self.vertices.len() + 1);
     }
 
@@ -252,7 +264,7 @@ impl<T: Real> EliminationSequence<T> {
         });
         self.neighbor_indices.extend_from_slice(neighbors);
         self.elimination_fractions.extend_from_slice(fractions);
-        self.offsets.push(self.neighbor_indices.len() as u32);
+        self.push_offset();
         debug_assert_eq!(self.offsets.len(), self.vertices.len() + 1);
     }
 }

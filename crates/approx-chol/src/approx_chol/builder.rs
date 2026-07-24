@@ -60,6 +60,8 @@ where
     ///
     /// Returns [`Error::InvalidCsr`] if conversion fails, conversion panics,
     /// CSR validation fails, or index conversion to `u32` fails.
+    /// Returns [`Error::PositiveOffDiagonal`] if any off-diagonal entry is
+    /// strictly positive (outside the SDDM/Laplacian class).
     /// Returns [`Error::InvalidConfig`] for invalid `split_merge`.
     /// Returns [`Error::Disconnected`] if the input is not a single connected
     /// component after Gremban grounding.
@@ -73,11 +75,15 @@ where
             .map_err(|_| Error::InvalidCsr(CsrError::InputConversionPanicked))?;
         let csr = csr.map_err(Into::into)?;
         let converted = csr.to_owned_u32()?;
+        // Sole per-factorization CSR validation; build_with_sampler trusts it.
         let converted_ref = converted.try_as_ref()?;
         self.build_with_sampler(converted_ref, CdfSampler::<T>::new(self.config.seed))
     }
 
     /// Run approximate Cholesky factorization with a custom [`WeightedSampler`].
+    ///
+    /// Assumes `sddm` already passed [`CsrRef::new`] validation (as
+    /// [`build`](Self::build) guarantees); does not re-validate.
     pub(crate) fn build_with_sampler<S: WeightedSampler<T>>(
         &self,
         sddm: CsrRef<'_, T, u32>,
@@ -85,7 +91,6 @@ where
     ) -> Result<Factor<T>, Error> {
         let original_n = sddm.n();
         Self::validate_config(self.config)?;
-        sddm.validate()?;
         let mut factor = match self.config.split_merge {
             None => {
                 let GraphBuild {

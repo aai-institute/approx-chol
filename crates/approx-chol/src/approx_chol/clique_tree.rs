@@ -39,25 +39,33 @@ impl<T: Real> SampledColumn<T> {
         self.fill_edges.clear();
     }
 
-    /// Initialize column sampling from a star's deduplicated neighbor list.
+    /// Initialize sampling, or write the fallback column and return `None`.
     ///
-    /// Returns `Some(n)` when sampling should continue (`n >= 2`), otherwise
-    /// writes the trivial result (`n == 0` or `n == 1`) and returns `None`.
-    fn begin_sampling(&mut self, entries: &[(u32, T)], pivot_diag: T) -> Option<usize> {
+    /// Returns `Some((n, total_weight))` only when the elimination loop should
+    /// run. Otherwise the column is a uniform split with no fill — trivial for
+    /// `n <= 1`, degenerate for a non-positive/non-finite total.
+    fn begin_sampling(&mut self, entries: &[(u32, T)], pivot_diag: T) -> Option<(usize, T)> {
         self.clear();
-        match entries {
-            [] => {
-                self.diagonal = pivot_diag;
-                None
+        let n = entries.len();
+        let fraction = if n < 2 {
+            T::one()
+        } else {
+            // Fold in entry (sorted) order: the sum order affects the factor
+            // bit-for-bit under a fixed seed.
+            let total_weight = entries.iter().fold(T::zero(), |acc, &(_, w)| acc + w);
+            // A non-positive/non-finite total has no valid fraction
+            // (`f = w·scale/total` divides through zero or NaN).
+            if total_weight.is_finite() && total_weight > T::near_zero() {
+                return Some((n, total_weight));
             }
-            [(j, _)] => {
-                self.neighbors.push(*j);
-                self.fractions.push(T::one());
-                self.diagonal = pivot_diag;
-                None
-            }
-            _ => Some(entries.len()),
-        }
+            T::one() / NumCast::from(n).expect("neighbor count fits in T")
+        };
+
+        self.diagonal = pivot_diag;
+        self.neighbors
+            .extend(entries.iter().map(|&(neighbor, _)| neighbor));
+        self.fractions.resize(n, fraction);
+        None
     }
 
     /// Finalize sampling with the last star neighbor (always fraction 1).
@@ -198,12 +206,11 @@ pub(crate) fn clique_tree_sample_column<T: Real, S: WeightedSampler<T>>(
     sampler: &mut S,
     column: &mut SampledColumn<T>,
 ) {
-    let Some(n) = column.begin_sampling(entries, pivot_diag) else {
+    let Some((n, total_weight)) = column.begin_sampling(entries, pivot_diag) else {
         return;
     };
 
     sampler.prepare(entries);
-    let total_weight = entries.iter().fold(T::zero(), |acc, &(_, w)| acc + w);
     let mut elim = StarElimination::new(total_weight);
 
     for (i, &(j, w)) in entries[..n - 1].iter().enumerate() {
@@ -227,24 +234,9 @@ pub(crate) fn clique_tree_sample_column_multi<T: Real, S: WeightedSampler<T>>(
     column: &mut SampledColumn<T>,
 ) {
     debug_assert_eq!(entries.len(), counts.len());
-    let Some(n) = column.begin_sampling(entries, pivot_diag) else {
+    let Some((n, total_weight)) = column.begin_sampling(entries, pivot_diag) else {
         return;
     };
-
-    // Preserve pre-optimization behavior: accumulate in sorted entry order.
-    let total_weight = entries.iter().fold(T::zero(), |a, e| a + e.1);
-    if total_weight <= T::near_zero() {
-        let Some(n_scalar) = NumCast::from(n) else {
-            column.diagonal = pivot_diag;
-            return;
-        };
-        column.diagonal = pivot_diag;
-        for &(j, _) in entries {
-            column.neighbors.push(j);
-            column.fractions.push(T::one() / n_scalar);
-        }
-        return;
-    }
 
     sampler.prepare(entries);
     let mut remaining = total_weight;
@@ -334,10 +326,7 @@ mod tests {
         clique_tree_sample(&mut entries, 42, &mut out);
 
         assert!(out.len() <= 4, "got {} edges, expected <= 4", out.len());
-        for &(lo, hi, w) in &out {
-            assert!(lo < hi, "edge ({lo}, {hi}) not ordered");
-            assert!(w > 0.0, "edge ({lo}, {hi}) has non-positive weight {w}");
-        }
+        assert_finite_positive_ordered(&out);
     }
 
     #[test]
@@ -381,6 +370,35 @@ mod tests {
         }
     }
 
+    fn assert_finite_positive_ordered(out: &[(u32, u32, f64)]) {
+        for &(lo, hi, w) in out {
+            assert!(lo < hi, "edge ({lo}, {hi}) not ordered");
+            assert!(
+                w.is_finite() && w > 0.0,
+                "edge ({lo}, {hi}) has non-finite/non-positive weight {w}"
+            );
+        }
+    }
+
+    #[test]
+    fn degenerate_total_weight_is_consistent_and_clean() {
+        // Zero/negative/NaN/inf totals: neither path may panic or emit fill.
+        let cases = [
+            [(0, 0.0), (1, 0.0), (2, 0.0)],
+            [(0, -1.0), (1, -2.0), (2, -3.0)],
+            [(0, f64::NAN), (1, 1.0), (2, 2.0)],
+            [(0, f64::INFINITY), (1, 1.0), (2, 2.0)],
+        ];
+        for mut entries in cases {
+            let mut out = Vec::new();
+            // AC only sorts `entries`, so AC2 sees the same (degenerate) star.
+            clique_tree_sample(&mut entries, 7, &mut out);
+            assert!(out.is_empty(), "AC emitted fill for a degenerate star");
+            clique_tree_sample_multi(&mut entries, 3, 7, &mut out);
+            assert!(out.is_empty(), "AC2 emitted fill for a degenerate star");
+        }
+    }
+
     #[test]
     fn ac2_respects_split_merge_edge_budget() {
         let mut entries: Vec<(u32, f64)> = vec![(0, 2.0), (1, 3.0), (2, 1.0), (3, 5.0), (4, 4.0)];
@@ -389,9 +407,6 @@ mod tests {
         clique_tree_sample_multi(&mut entries, 2, 42, &mut out);
 
         assert!(out.len() <= 8, "got {} edges, expected <= 8", out.len());
-        for &(lo, hi, w) in &out {
-            assert!(lo < hi, "edge ({lo}, {hi}) not ordered");
-            assert!(w > 0.0, "edge ({lo}, {hi}) has non-positive weight {w}");
-        }
+        assert_finite_positive_ordered(&out);
     }
 }

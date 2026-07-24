@@ -14,7 +14,7 @@ suitable as a preconditioner for iterative solvers on symmetric diagonally domin
 
 ```toml
 [dependencies]
-approx-chol = "0.1"
+approx-chol = "0.3"
 ```
 
 Or with Cargo:
