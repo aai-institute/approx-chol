@@ -321,8 +321,12 @@ fn augmentation_eps<T: Real>() -> T {
 impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
     #[inline]
     fn add_edge_pair(adj: &mut [Vec<E>], u: usize, v: usize, weight: T) {
-        debug_assert!(adj[v].len() < u32::MAX as usize);
-        debug_assert!(adj[u].len() < u32::MAX as usize);
+        // u32 reverse pointers; overflow is unreachable for tractable inputs,
+        // so assert (release too) rather than truncate and corrupt removal.
+        assert!(
+            adj[u].len() < u32::MAX as usize && adj[v].len() < u32::MAX as usize,
+            "adjacency list exceeds u32 edge capacity"
+        );
         let rev_u = adj[v].len() as u32;
         let rev_v = adj[u].len() as u32;
         adj[u].push(E::new(weight, v as u32, rev_u));
