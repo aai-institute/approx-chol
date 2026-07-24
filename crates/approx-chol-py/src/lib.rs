@@ -199,12 +199,12 @@ impl PyFactor {
         let b_slice = b
             .as_slice()
             .map_err(|_| value_error("b must be contiguous"))?;
-        let n = self.inner.n();
-        if b_slice.len() > n {
+        let original_n = self.original_n;
+        if b_slice.len() > original_n {
             return Err(value_error(format!(
-                "rhs length {} exceeds factor dimension {}",
+                "rhs length {} exceeds original matrix dimension {}",
                 b_slice.len(),
-                n
+                original_n
             )));
         }
         let x = self
@@ -228,11 +228,11 @@ impl PyFactor {
             .map_err(|_| value_error("b must be contiguous"))?;
         let n = self.inner.n();
         let original_n = self.original_n;
-        if b_slice.len() > n {
+        if b_slice.len() > original_n {
             return Err(value_error(format!(
-                "rhs length {} exceeds factor dimension {}",
+                "rhs length {} exceeds original matrix dimension {}",
                 b_slice.len(),
-                n
+                original_n
             )));
         }
         // Validate overlap and shape via shared borrows first. This prevents

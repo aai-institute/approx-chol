@@ -38,7 +38,7 @@ let decomp = factorize(csr)?;
 
 // RHS must lie in the range of the Laplacian (sum to zero)
 let b = [1.0, -1.0, 1.0, -1.0];
-let x = decomp.solve(&b).expect("rhs length must be <= factor dimension");
+let x = decomp.solve(&b).expect("rhs length must be <= original matrix dimension");
 assert!(x.iter().all(|v| v.is_finite()));
 ```
 

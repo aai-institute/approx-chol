@@ -268,11 +268,11 @@ pub struct Factor<T = f64> {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SolveError {
-    /// Right-hand side length exceeds factor dimension.
+    /// Right-hand side length exceeds the solvable (original) dimension.
     RhsLengthExceedsFactor {
         /// Provided RHS length.
         rhs_len: usize,
-        /// Factor dimension (`Factor::n()`).
+        /// Maximum accepted RHS length (`Factor::original_n()`).
         factor_dim: usize,
     },
     /// Work buffer is smaller than factor dimension.
@@ -292,7 +292,7 @@ impl fmt::Display for SolveError {
                 factor_dim,
             } => write!(
                 f,
-                "rhs length {} exceeds factor dimension {}",
+                "rhs length {} exceeds original matrix dimension {}",
                 rhs_len, factor_dim
             ),
             Self::WorkBufferTooSmall {
@@ -315,10 +315,10 @@ where
 {
     #[inline]
     fn validate_rhs_and_work(&self, b: &[T], work: &[T]) -> Result<(), SolveError> {
-        if b.len() > self.n {
+        if b.len() > self.original_n {
             return Err(SolveError::RhsLengthExceedsFactor {
                 rhs_len: b.len(),
-                factor_dim: self.n,
+                factor_dim: self.original_n,
             });
         }
         if work.len() < self.n {
@@ -413,21 +413,52 @@ where
         }
     }
 
+    /// Index of the Gremban auxiliary "ground" vertex (appended after the
+    /// original vertices), or `None` for a non-augmented factor.
+    #[inline]
+    fn aux_vertex(&self) -> Option<usize> {
+        (self.n > self.original_n).then_some(self.original_n)
+    }
+
+    /// Recover the original solution by grounding against the aux vertex:
+    /// `x_i = y_i - y_aux` (see [`Self::solve_into_kernel`] for why).
+    #[inline]
+    fn ground_by_aux(&self, y: &mut [T], aux: usize) {
+        let y_aux = y[aux];
+        for yi in &mut y[..aux] {
+            *yi = *yi - y_aux;
+        }
+    }
+
     #[inline]
     fn solve_into_kernel(&self, b: &[T], work: &mut [T]) {
         work[..b.len()].copy_from_slice(b);
         work[b.len()..self.n].fill(T::zero());
-        self.forward(work);
-        self.backward(work);
-        self.project_zero_mean(work);
+        if let Some(aux) = self.aux_vertex() {
+            // Gremban-augmented SDDM: the augmented Laplacian is singular with
+            // M·1 = surplus ≠ 0, so a global zero-mean projection would break
+            // M x = b. Instead put -Σb on the ground vertex (so the padded RHS
+            // lies in range) and recover x_i = y_i - y_aux.
+            let surplus = work[..aux].iter().fold(T::zero(), |acc, &x| acc + x);
+            work[aux] = -surplus;
+            self.forward(work);
+            self.backward(work);
+            self.ground_by_aux(work, aux);
+        } else {
+            // Pure Laplacian: singular with the constant null space; pick the
+            // canonical zero-mean representative.
+            self.forward(work);
+            self.backward(work);
+            self.project_zero_mean(work);
+        }
     }
 
-    /// Solve LDL^T x = b, returning a newly allocated solution vector with
-    /// zero-mean projection applied.
+    /// Solve `M x = b`, returning a newly allocated solution of the original
+    /// dimension (zero-mean for a pure Laplacian, Gremban-grounded for SDDM).
     ///
     /// # Errors
     ///
-    /// Returns [`SolveError::RhsLengthExceedsFactor`] if `b.len() > self.n()`.
+    /// Returns [`SolveError::RhsLengthExceedsFactor`] if `b.len() > self.original_n()`.
     pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
         let mut work = vec![T::zero(); self.n];
         self.solve_into(b, &mut work)?;
@@ -435,16 +466,14 @@ where
         Ok(work)
     }
 
-    /// Solve L D L^T x = b in-place, writing the result into `work` and applying
-    /// zero-mean projection.
+    /// Solve `M x = b` in-place, writing the recovered solution into `work`.
     ///
-    /// For solves where projection is not desired (e.g., SDDM inside an
-    /// iterative solver), copy `b` into `work` and call
-    /// [`Self::solve_in_place`] instead.
+    /// [`Self::solve_in_place`] performs only the raw triangular solve, without
+    /// this recovery step.
     ///
     /// # Errors
     ///
-    /// Returns [`SolveError::RhsLengthExceedsFactor`] if `b.len() > self.n()`.
+    /// Returns [`SolveError::RhsLengthExceedsFactor`] if `b.len() > self.original_n()`.
     /// Returns [`SolveError::WorkBufferTooSmall`] if `work.len() < self.n()`.
     pub fn solve_into(&self, b: &[T], work: &mut [T]) -> Result<(), SolveError> {
         self.validate_rhs_and_work(b, work)?;
@@ -452,7 +481,12 @@ where
         Ok(())
     }
 
-    /// Solve L D L^T x = b in-place, assuming `y` already contains the RHS.
+    /// Apply the raw `L D L^T` triangular solve in place, assuming `y` already
+    /// contains the RHS — no zero-mean projection and no Gremban grounding.
+    ///
+    /// For pure-Laplacian preconditioning, where the iterative solver absorbs
+    /// the constant null space. For an augmented SDDM factor the raw result is
+    /// *not* the solution of `M x = b`; use [`Self::solve`] instead.
     ///
     /// # Errors
     ///
@@ -584,6 +618,13 @@ mod tests {
         }
     }
 
+    fn reference_ground(y: &mut [f64], aux: usize) {
+        let y_aux = y[aux];
+        for yi in &mut y[..aux] {
+            *yi -= y_aux;
+        }
+    }
+
     fn assert_close(lhs: &[f64], rhs: &[f64], tol: f64) {
         assert_eq!(lhs.len(), rhs.len());
         for (i, (&a, &b)) in lhs.iter().zip(rhs.iter()).enumerate() {
@@ -596,36 +637,51 @@ mod tests {
     }
 
     #[test]
-    fn unsafe_solve_kernel_matches_checked_reference_randomized() {
+    fn solve_into_kernel_matches_checked_reference_randomized() {
         let mut rng = rand::rngs::SmallRng::seed_from_u64(0x5EED_BAAD_F00D);
 
         for _ in 0..300 {
             let n = rng.random_range(1..=16);
             let n_steps = rng.random_range(1..=n);
             let sequence = random_sequence(&mut rng, n, n_steps);
+
+            // Exercise both recovery paths: pure-Laplacian zero-mean projection
+            // (original_n == n) and Gremban grounding against the aux vertex
+            // (original_n == n - 1, so aux_vertex() == Some(n - 1)).
+            let augmented = n >= 2 && rng.random_range(0u8..2) == 0;
+            let original_n = if augmented { n - 1 } else { n };
             let factor = Factor {
                 n,
-                original_n: n,
+                original_n,
                 sequence,
             };
 
-            let rhs_len = rng.random_range(0..=n);
+            let rhs_len = rng.random_range(0..=original_n);
             let mut rhs = vec![0.0; rhs_len];
             for v in &mut rhs {
                 *v = rng.random_range(-5.0..5.0);
             }
 
-            let mut unsafe_work = vec![0.0; n];
-            factor.solve_into_kernel(&rhs, &mut unsafe_work);
+            let mut kernel_work = vec![0.0; n];
+            factor.solve_into_kernel(&rhs, &mut kernel_work);
 
             let mut checked_work = vec![0.0; n];
             checked_work[..rhs_len].copy_from_slice(&rhs);
             checked_work[rhs_len..].fill(0.0);
-            reference_forward(&factor.sequence, &mut checked_work);
-            reference_backward(&factor.sequence, &mut checked_work);
-            reference_project_zero_mean(&mut checked_work, n);
+            if augmented {
+                let aux = original_n;
+                let surplus: f64 = checked_work[..aux].iter().sum();
+                checked_work[aux] = -surplus;
+                reference_forward(&factor.sequence, &mut checked_work);
+                reference_backward(&factor.sequence, &mut checked_work);
+                reference_ground(&mut checked_work, aux);
+            } else {
+                reference_forward(&factor.sequence, &mut checked_work);
+                reference_backward(&factor.sequence, &mut checked_work);
+                reference_project_zero_mean(&mut checked_work, n);
+            }
 
-            assert_close(&unsafe_work, &checked_work, 1e-12);
+            assert_close(&kernel_work, &checked_work, 1e-12);
         }
     }
 }
