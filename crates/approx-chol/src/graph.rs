@@ -308,8 +308,9 @@ fn surplus_stats<T: Real>(row_sums: &[T]) -> (T, T, usize) {
         })
 }
 
-/// Small epsilon for Laplacian augmentation, scaled to floating-point precision.
-fn augmentation_epsilon<T: Real>() -> T {
+/// Absolute surplus floor separating genuine diagonal dominance from a
+/// Laplacian's rounding noise (scaled down for sub-unit matrices at the use site).
+fn augmentation_eps<T: Real>() -> T {
     if core::mem::size_of::<T>() <= 4 {
         T::from(1e-6_f64).unwrap_or_else(T::epsilon)
     } else {
@@ -377,8 +378,12 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
     ) -> Result<GraphBuild<Self, T>, Error> {
         let m = adj.len();
         let (max_surplus, surplus_sum, surplus_count) = surplus_stats(row_sums);
-        let aug_eps = augmentation_epsilon::<T>();
-        let needs_augmentation = max_surplus >= aug_eps;
+        // Surplus floor: absolute `augmentation_eps`, shrunk proportionally below
+        // scale 1. The cap keeps a large-scale barely-PD input augmented (consumers
+        // rely on it); `near_zero` rejects input the elimination can't resolve.
+        let max_diag = diag.iter().fold(T::zero(), |acc, &d| acc.max(d.abs()));
+        let floor = augmentation_eps::<T>() * max_diag.min(T::one());
+        let needs_augmentation = max_surplus > floor && max_diag > T::near_zero();
 
         if needs_augmentation {
             if m >= u32::MAX as usize {
