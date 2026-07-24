@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of silently returning a wrong answer; block-diagonal SDDM stays accepted. (#36)
 - Scale the Gremban augmentation floor by `min(max_diagonal, 1)` so a
   correctly-scaled-down SDDM is augmented rather than misread as disconnected. (#36)
+- Reject a structurally-invalid serde-deserialized `Factor` at deserialize time
+  rather than panicking or returning garbage on the first `solve` in release. (#37)
 
 ### Changed
 
