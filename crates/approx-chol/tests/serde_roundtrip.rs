@@ -37,6 +37,20 @@ fn factor_json_roundtrip_preserves_solve() {
 }
 
 #[test]
+fn deserializing_corrupted_factor_is_rejected() {
+    // The unit tests cover every FactorError variant directly; this asserts the
+    // serde `try_from` boundary is wired, so a structurally-corrupted persisted
+    // factor is rejected at deserialize time rather than panicking on solve.
+    let mut value = serde_json::to_value(path_factor()).or_panic("serialize factor");
+    value["sequence"]["offsets"]
+        .as_array_mut()
+        .expect("offsets is an array")
+        .pop();
+
+    assert!(serde_json::from_value::<Factor<f64>>(value).is_err());
+}
+
+#[test]
 fn config_json_roundtrip() {
     let config = Config {
         seed: 42,
