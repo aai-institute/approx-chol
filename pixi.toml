@@ -10,7 +10,7 @@ rust = ">=1.75"
 maturin = ">=1.7"
 uv = ">=0.4"
 
-# Everything CI needs to run the suite (cargo test + pytest + coverage + gates).
+# Everything CI needs: suite, coverage, and the gate tools.
 [feature.test.dependencies]
 pytest = ">=7.0"
 pytest-cov = "*"
@@ -18,10 +18,8 @@ cargo-llvm-cov = ">=0.8.4,<0.9"
 cargo-deny = ">=0.20.2,<0.21"
 cargo-semver-checks = ">=0.49,<0.50"
 
-# Local-only conveniences never invoked in CI, plus the editable install. The
-# editable build compiles the extension inside `pixi install`; keeping it out
-# of the `ci` environment means setup-pixi never pays that cold compile — CI
-# builds the extension exactly once, warm, via `maturin develop`.
+# The editable install belongs here, not in `ci`: it compiles the extension
+# during `pixi install`, which CI must not pay before sccache is configured.
 [feature.dev.dependencies]
 samply = ">=0.13"
 cargo-mutants = ">=27.1,<28"
@@ -40,14 +38,14 @@ ci = { features = ["build", "test"], solve-group = "default" }
 audit = { features = ["audit"] }
 
 [tasks]
-test = "maturin develop --uv && pytest tests/ -v"
-develop = "maturin develop --uv --release"
+test = "maturin develop --uv --locked && pytest tests/ -v"
+develop = "maturin develop --uv --release --locked"
 bench-smoke = "cargo bench -p approx-chol --bench smoke -- --sample-size 10 --warm-up-time 0.05 --measurement-time 0.1"
 coverage = "./scripts/coverage-with-python.sh"
-coverage-rust = "cargo llvm-cov --workspace --all-features --summary-only"
-deny = "cargo deny check"
+coverage-rust = "cargo llvm-cov --workspace --all-features --locked --summary-only"
+deny = "cargo deny --locked check"
 semver = "cargo semver-checks --package approx-chol"
-mutants = "cargo mutants"
+mutants = "cargo mutants -C --locked"
 
 [feature.audit.tasks]
 abi3audit = "abi3audit --strict"

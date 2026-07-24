@@ -19,3 +19,5 @@ venv/
 .idea/
 .DS_Store
 *.dSYM
+# LLVM coverage profiles land in the crate dir when tests run instrumented
+*.profraw
