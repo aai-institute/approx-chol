@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   correctly-scaled-down SDDM is augmented rather than misread as disconnected. (#36)
 - Reject a structurally-invalid serde-deserialized `Factor` at deserialize time
   rather than panicking or returning garbage on the first `solve` in release. (#37)
+- `low_level` clique-tree samplers no longer panic or emit non-finite fill on degenerate weights. (#38)
 
 ### Changed
 
