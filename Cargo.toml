@@ -5,7 +5,25 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+version = "0.3.1"
+edition = "2021"
+rust-version = "1.85"
+authors = ["Kristof Schröder <k.schroeder@appliedai-institute.de>"]
+license = "MIT"
+repository = "https://github.com/aai-institute/approx-chol"
+categories = ["mathematics", "science", "algorithms"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
 [profile.release]
 opt-level = 3
 lto = "fat"
 codegen-units = 1
+
+# Release-equivalent build that keeps line-level debug info so samply/perf can
+# resolve stack frames. Build with `cargo build --profile profiling`.
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"

@@ -1,14 +1,18 @@
 [package]
 name = "approx-chol"
-version = "0.3.1"
-edition = "2021"
-authors = ["Kristof Schröder <k.schroeder@appliedai-institute.de>"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
 description = "Approximate Cholesky factorization for graph Laplacians"
-license = "MIT"
+license.workspace = true
 readme = "README.md"
-repository = "https://github.com/aai-institute/approx-chol"
+repository.workspace = true
 keywords = ["laplacian", "sparse", "cholesky", "preconditioner", "sddm"]
-categories = ["mathematics", "science", "algorithms"]
+categories.workspace = true
+
+[lints]
+workspace = true
 
 [dependencies]
 rand = { version = "0.10.0"}
