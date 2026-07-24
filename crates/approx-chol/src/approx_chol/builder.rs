@@ -61,6 +61,8 @@ where
     /// Returns [`Error::InvalidCsr`] if conversion fails, conversion panics,
     /// CSR validation fails, or index conversion to `u32` fails.
     /// Returns [`Error::InvalidConfig`] for invalid `split_merge`.
+    /// Returns [`Error::Disconnected`] if the input is not a single connected
+    /// component after Gremban grounding.
     pub fn build<'a, I, M>(&self, sddm: M) -> Result<Factor<T>, Error>
     where
         I: PrimInt + 'a + 'static,

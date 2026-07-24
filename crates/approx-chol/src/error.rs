@@ -25,6 +25,15 @@ pub enum Error {
         /// `(row, column)` of the offending strictly-positive off-diagonal.
         edge: (usize, usize),
     },
+
+    /// The input is not a single connected SDDM/Laplacian system: some block has
+    /// no diagonal surplus to link it to the shared Gremban ground vertex (e.g. a
+    /// disconnected pure Laplacian). A block-diagonal SDDM is still accepted.
+    Disconnected {
+        /// Number of connected components among the input variables (the shared
+        /// ground vertex is not counted).
+        components: usize,
+    },
 }
 
 /// Structured configuration errors returned by factorization setup.
@@ -199,6 +208,10 @@ impl fmt::Display for Error {
             Error::PositiveOffDiagonal { edge: (row, col) } => write!(
                 f,
                 "off-diagonal ({row}, {col}) is positive; approx-chol requires SDDM/Laplacian input (off-diagonals must be <= 0)"
+            ),
+            Error::Disconnected { components } => write!(
+                f,
+                "input splits into {components} connected components; approx-chol solves a single connected SDDM/Laplacian system"
             ),
         }
     }

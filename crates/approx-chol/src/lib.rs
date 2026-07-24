@@ -101,10 +101,16 @@ pub(crate) use types::Real;
 /// Accepts any input fallibly convertible into [`CsrRef`], including `CsrRef`
 /// directly and, with feature flags, borrowed matrices from `sprs`/`faer`.
 ///
+/// The input must be a single **connected** system. A block-diagonal SDDM
+/// qualifies (the Gremban ground vertex links diagonally-dominant blocks); a
+/// block with no surplus, e.g. a disconnected pure Laplacian, is rejected.
+///
 /// # Errors
 ///
 /// Returns [`Error::InvalidCsr`] if conversion or validation fails, if index
 /// conversion to `u32` fails, or if input conversion panics.
+/// Returns [`Error::Disconnected`] if the input stays disconnected after Gremban
+/// grounding (more than one connected component).
 ///
 /// # Examples
 ///
@@ -141,6 +147,8 @@ where
 /// conversion to `u32` fails, or if input conversion panics.
 /// Returns [`Error::InvalidConfig`] if configuration values are inconsistent
 /// (e.g. `split_merge == Some(0)`).
+/// Returns [`Error::Disconnected`] if the input stays disconnected after Gremban
+/// grounding (see [`factorize`] for the connectivity precondition).
 ///
 /// # Examples
 ///

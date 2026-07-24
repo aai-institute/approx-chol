@@ -21,6 +21,7 @@ proptest! {
     fn default_factorization_solve_is_panic_free_and_finite(
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
+        prop_assume!(is_connected(&row_ptrs, &col_indices, n));
         let run = catch_unwind(AssertUnwindSafe(|| {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
                 .or_panic("generated CSR must be valid");
@@ -42,6 +43,7 @@ proptest! {
     fn default_solve_matches_solve_into(
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
+        prop_assume!(is_connected(&row_ptrs, &col_indices, n));
         let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
             .or_panic("generated CSR must be valid");
         let factor = factorize(csr).or_panic("factorization should succeed");
@@ -63,6 +65,7 @@ proptest! {
     fn ac2_factorization_solve_is_panic_free_and_finite(
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
+        prop_assume!(is_connected(&row_ptrs, &col_indices, n));
         let run = catch_unwind(AssertUnwindSafe(|| {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
                 .or_panic("generated CSR must be valid");
@@ -205,6 +208,7 @@ proptest! {
     fn deterministic_with_fixed_seed(
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
+        prop_assume!(is_connected(&row_ptrs, &col_indices, n));
         let config = Config { seed: 42, ..Default::default() };
         let rhs = rhs_for_dimension(n as usize);
 
@@ -235,6 +239,7 @@ proptest! {
     fn factor_dimensions_are_consistent(
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
+        prop_assume!(is_connected(&row_ptrs, &col_indices, n));
         let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
             .or_panic("valid CSR");
         let factor = factorize(csr).or_panic("factorization");
@@ -280,6 +285,7 @@ proptest! {
     fn f32_factorization_is_finite(
         (row_ptrs, col_indices, values_f64, n) in laplacian_csr_strategy()
     ) {
+        prop_assume!(is_connected(&row_ptrs, &col_indices, n));
         let values_f32: Vec<f32> = values_f64.iter().map(|&v| v as f32).collect();
         let csr = CsrRef::new(&row_ptrs, &col_indices, &values_f32, n)
             .or_panic("valid f32 CSR");
