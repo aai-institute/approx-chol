@@ -5,11 +5,7 @@ cargo llvm-cov clean --workspace
 source <(cargo llvm-cov show-env --sh)
 
 cargo test --workspace --all-features
-if python -m pip --version >/dev/null 2>&1; then
-    maturin develop
-else
-    maturin develop --uv
-fi
+maturin develop --uv
 pytest tests/ -v
 
 cargo llvm-cov report --summary-only
