@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`Backend::ExactBelow { max_dim }`, default `24`).
 - `ExactFailure` selects fallback or error on an invalid exact pivot.
 - `Factor::exact_fallbacks` records fallbacks; Python warns with `RuntimeWarning`.
+- `Error::Asymmetric`, `Error::NonFiniteValue`, `Error::NonFiniteRow` and
+  `Error::NotDiagonallyDominant` reject input that was previously accepted.
 
 ### Fixed
 
@@ -25,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `low_level` clique-tree samplers no longer panic or emit non-finite fill on degenerate weights. (#38)
 - `u32` nonzero/edge overflow now panics instead of silently truncating the factor. (#39)
 - `solve`/`solve_into` project an out-of-range right-hand side onto the range.
+- Edge splitting no longer reaches the exact backend, where `weight / k` underflowed
+  a subnormal weight to zero.
+- A dense block whose `anchor` or `ground` does not match its omitted vertex is
+  rejected at deserialize time.
+- A block too large to assemble densely falls back to approximate elimination
+  instead of failing the factorization.
 
 ### Changed
 
@@ -32,10 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The serde representation of `Factor` is incompatible with earlier releases.
 - `solve`/`solve_into` cap the right-hand side at the original matrix dimension,
   not the augmented one.
-- `solve_in_place` leaves one variable pinned per block, independent of `Backend`.
+- `solve_in_place` leaves one variable pinned per block; for a floating block which
+  variable that is depends on `Backend`.
 - A row surplus at or below `min(1e-10 * row_scale, sqrt(f64::EPSILON))` is
   rounding noise, not dominance, so the system is not augmented.
 - Duplicate entries are summed before the off-diagonal sign check.
+- `Error::Disconnected` is removed; disconnected input is factored per component.
 
 ### Performance
 

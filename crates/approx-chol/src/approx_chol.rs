@@ -13,6 +13,7 @@ pub use decomposition::{ExactFallback, Factor, SolveError};
 /// What to do when a block's exact Cholesky hits an invalid pivot, which means
 /// the input is not positive definite within the tolerance it was accepted under.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ExactFailure {
     /// Factor that block with approximate elimination instead, and record it in
@@ -29,6 +30,7 @@ pub enum ExactFailure {
 /// inputs are accepted: a block whose exact factorization hits an invalid pivot
 /// falls back to approximate elimination.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
     /// Approximate elimination for every block.
@@ -38,7 +40,8 @@ pub enum Backend {
     ///
     /// Exact factorization of a block costs `O(max_dim²)` memory and
     /// `O(max_dim³)` time; `max_dim` is neither capped nor validated, so a
-    /// large value trades a fast approximate factor for a slow exact one.
+    /// large value trades a fast approximate factor for a slow exact one. A block
+    /// too large to assemble densely falls back rather than failing.
     ExactBelow {
         /// Inclusive upper bound on the block dimension factored exactly.
         max_dim: usize,
@@ -74,7 +77,7 @@ impl Backend {
 
 /// Configuration for approximate Cholesky factorization.
 ///
-/// Use [`Default`] for standard AC (recommended for most inputs).
+/// [`Default`] is exact Cholesky below 24 vertices, standard AC above.
 /// Set [`split_merge`](Self::split_merge) to enable AC2.
 ///
 /// # Examples

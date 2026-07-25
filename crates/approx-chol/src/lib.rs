@@ -36,6 +36,9 @@
 //!
 //! # Algorithm variants
 //!
+//! [`Config::backend`] picks exact or approximate per block; by default only
+//! blocks over 24 vertices reach the variants below.
+//!
 //! ## AC — standard approximate Cholesky
 //!
 //! The default variant (Algorithm 5 / 8 in Gao-Kyng-Spielman 2023) performs
@@ -100,8 +103,8 @@ pub(crate) use types::Real;
 
 /// Factorize an SDDM matrix with default configuration.
 ///
-/// Uses standard AC with dynamic ordering (DynamicPQ). For AC2 or
-/// custom seeds, use [`factorize_with`].
+/// Exact Cholesky below 24 vertices, standard AC above with dynamic ordering
+/// (DynamicPQ). For AC2, another backend, or custom seeds, use [`factorize_with`].
 ///
 /// Accepts any input fallibly convertible into [`CsrRef`], including `CsrRef`
 /// directly and, with feature flags, borrowed matrices from `sprs`/`faer`.

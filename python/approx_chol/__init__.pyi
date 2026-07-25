@@ -28,7 +28,10 @@ class Backend:
         """Exact Cholesky for blocks of at most ``max_dim`` vertices.
 
         Exact factorization of a block costs ``O(max_dim**2)`` memory and
-        ``O(max_dim**3)`` time; ``max_dim`` is neither capped nor validated.
+        ``O(max_dim**3)`` time; ``max_dim`` is neither capped nor validated. A
+        block whose dense matrix will not fit in memory falls back to approximate
+        elimination rather than raising, so an over-large ``max_dim`` cannot make
+        a factorization fail.
         """
 
         max_dim: int
@@ -43,8 +46,8 @@ class Config:
         seed: Random seed for the edge-weight sampler.
         split: AC2 multi-edge multiplicity ``k``.
             ``None`` or ``1`` selects standard AC; ``>=2`` enables AC2.
-        backend: Per-block factorization backend.
-            ``None`` selects ``Backend.ExactBelow(max_dim=24)``.
+        backend: Per-block factorization backend. ``None`` selects
+            ``Backend.ExactBelow(24, ExactFailure.FallBackToApproximate)``.
     """
 
     seed: int
