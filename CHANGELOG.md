@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Performance
 
 - Canonical CSR is ingested without a reordering buffer.
+- Connectivity is tested with one traversal instead of enumerating components.
 
 ## [0.3.1] - 2026-07-10
 

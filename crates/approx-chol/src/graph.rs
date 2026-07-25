@@ -695,12 +695,36 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
         }
     }
 
-    /// Connected components among the first `n_real` vertices. Traversal follows
-    /// every edge, so a ground vertex (index `>= n_real`) links the blocks it
-    /// touches without being counted as its own component.
-    fn components(adj: &[Vec<E>], n_real: usize) -> Vec<Vec<u32>> {
-        let mut visited = BitVec::new(adj.len());
+    /// Connected components among the first `n_real` vertices, or `None` when the
+    /// graph is connected. Traversal follows every edge, so a ground vertex (index
+    /// `>= n_real`) links the blocks it touches without being counted as its own
+    /// component.
+    fn components(adj: &[Vec<E>], n_real: usize) -> Option<Vec<Vec<u32>>> {
+        let n = adj.len();
+        let mut visited = BitVec::new(n);
         let mut stack: Vec<usize> = Vec::new();
+        // One traversal reaches every vertex iff the graph is connected, so the
+        // common case never materializes or sorts a component list.
+        let mut reached = 0usize;
+        if n_real > 0 {
+            visited.set(0);
+            stack.push(0);
+            while let Some(v) = stack.pop() {
+                reached += 1;
+                for e in &adj[v] {
+                    let u = e.to() as usize;
+                    if !visited.get(u) {
+                        visited.set(u);
+                        stack.push(u);
+                    }
+                }
+            }
+        }
+        if reached == n {
+            return None;
+        }
+
+        let mut visited = BitVec::new(n);
         let mut components = Vec::new();
         for start in 0..n_real {
             if visited.get(start) {
@@ -722,7 +746,7 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
             component.sort_unstable();
             components.push(component);
         }
-        components
+        Some(components)
     }
 
     /// Build the final graph, apply Gremban augmentation, and retain component
@@ -764,11 +788,6 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
 
         let n = adj.len();
         let components = Self::components(&adj, m);
-        let components = if components.len() > 1 {
-            Some(components)
-        } else {
-            None
-        };
 
         let eliminated = BitVec::new(n);
         Ok(GraphBuild {
