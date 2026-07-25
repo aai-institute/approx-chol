@@ -22,9 +22,11 @@ pub(crate) struct Neighbor<T> {
     pub count: u32,
 }
 
+/// One stored off-diagonal, bucketed by its lower index so that index is implied.
 struct DirectedOffDiagonal<T: Real> {
-    lo: usize,
-    hi: usize,
+    hi: u32,
+    /// Whether the entry was stored above the diagonal, needed to compare the two
+    /// triangles for symmetry.
     upper: bool,
     value: T,
 }
@@ -231,8 +233,11 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
             adj.push(Vec::with_capacity(cols.len()));
         }
         let mut diag = vec![T::zero(); n];
-        let mut off_diagonals = Vec::new();
 
+        // Pair up the two stored triangles by bucketing every off-diagonal on its
+        // lower index. Counting the buckets first, then scattering, keeps this
+        // O(nnz) — a comparison sort over all entries dominated ingestion.
+        let mut bucket_ends = vec![0u32; n + 1];
         for (row, diagonal) in diag.iter_mut().enumerate() {
             let (cols, vals) = csr.try_row(row)?;
             let row_start = csr.row_ptrs()[row] as usize;
@@ -250,48 +255,72 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
                 if row == col_usize {
                     *diagonal = *diagonal + val;
                 } else if val != T::zero() {
-                    off_diagonals.push(DirectedOffDiagonal {
-                        lo: row.min(col_usize),
-                        hi: row.max(col_usize),
-                        upper: row < col_usize,
-                        value: val,
-                    });
+                    bucket_ends[row.min(col_usize) + 1] += 1;
                 }
             }
         }
-        off_diagonals.sort_unstable_by_key(|entry| (entry.lo, entry.hi, entry.upper));
+        for index in 0..n {
+            bucket_ends[index + 1] += bucket_ends[index];
+        }
+        let mut cursors = bucket_ends[..n].to_vec();
+        let mut off_diagonals: Vec<DirectedOffDiagonal<T>> = Vec::new();
+        off_diagonals.resize_with(bucket_ends[n] as usize, || DirectedOffDiagonal {
+            hi: 0,
+            upper: false,
+            value: T::zero(),
+        });
+        for row in 0..n {
+            let (cols, vals) = csr.try_row(row)?;
+            for (&col, &val) in cols.iter().zip(vals.iter()) {
+                let col_usize = col as usize;
+                if row == col_usize || val == T::zero() {
+                    continue;
+                }
+                let lo = row.min(col_usize);
+                let slot = &mut cursors[lo];
+                off_diagonals[*slot as usize] = DirectedOffDiagonal {
+                    hi: row.max(col_usize) as u32,
+                    upper: row < col_usize,
+                    value: val,
+                };
+                *slot += 1;
+            }
+        }
+
         let mut row_sums = diag.clone();
         let mut row_scales: Vec<T> = diag.iter().map(|value| value.abs()).collect();
-        let mut index = 0;
-        while index < off_diagonals.len() {
-            let row = off_diagonals[index].lo;
-            let col = off_diagonals[index].hi;
-            let mut upper = T::zero();
-            let mut lower = T::zero();
-            while index < off_diagonals.len()
-                && off_diagonals[index].lo == row
-                && off_diagonals[index].hi == col
-            {
-                let entry = &off_diagonals[index];
-                if entry.upper {
-                    upper = upper + entry.value;
-                } else {
-                    lower = lower + entry.value;
+        for row in 0..n {
+            let bucket =
+                &mut off_diagonals[bucket_ends[row] as usize..bucket_ends[row + 1] as usize];
+            // Buckets hold one vertex's stored neighbours, so this is a sort over
+            // the degree rather than over nnz.
+            bucket.sort_unstable_by_key(|entry| (entry.hi, entry.upper));
+            let mut index = 0;
+            while index < bucket.len() {
+                let col = bucket[index].hi as usize;
+                let mut upper = T::zero();
+                let mut lower = T::zero();
+                while index < bucket.len() && bucket[index].hi as usize == col {
+                    if bucket[index].upper {
+                        upper = upper + bucket[index].value;
+                    } else {
+                        lower = lower + bucket[index].value;
+                    }
+                    index += 1;
                 }
-                index += 1;
-            }
-            if !approximately_equal(upper, lower) {
-                return Err(Error::Asymmetric { edge: (row, col) });
-            }
-            if upper > T::zero() {
-                return Err(Error::PositiveOffDiagonal { edge: (row, col) });
-            }
-            if upper < T::zero() {
-                row_sums[row] = row_sums[row] + upper;
-                row_sums[col] = row_sums[col] + upper;
-                row_scales[row] = row_scales[row] + upper.abs();
-                row_scales[col] = row_scales[col] + upper.abs();
-                Self::add_edge_pair(&mut adj, row, col, -upper);
+                if !approximately_equal(upper, lower) {
+                    return Err(Error::Asymmetric { edge: (row, col) });
+                }
+                if upper > T::zero() {
+                    return Err(Error::PositiveOffDiagonal { edge: (row, col) });
+                }
+                if upper < T::zero() {
+                    row_sums[row] = row_sums[row] + upper;
+                    row_sums[col] = row_sums[col] + upper;
+                    row_scales[row] = row_scales[row] + upper.abs();
+                    row_scales[col] = row_scales[col] + upper.abs();
+                    Self::add_edge_pair(&mut adj, row, col, -upper);
+                }
             }
         }
         let tolerance = augmentation_eps::<T>();

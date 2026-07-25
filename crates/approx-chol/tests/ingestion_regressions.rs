@@ -538,3 +538,35 @@ fn exact_failure_error_policy_propagates_instead_of_falling_back() {
         }
     );
 }
+
+// CSR column indices are not required to be sorted, and duplicates coalesce, so
+// bucketed ingestion must not depend on the order entries arrive in.
+#[test]
+fn unsorted_and_split_entries_match_the_canonical_form() {
+    let canonical = {
+        let row_ptrs = [0u32, 2, 5, 7];
+        let columns = [0u32, 1, 0, 1, 2, 1, 2];
+        let values = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
+        solve_path(&row_ptrs, &columns, &values)
+    };
+    let shuffled = {
+        // Row 0's edge is split in two, row 1's entries are out of order.
+        let row_ptrs = [0u32, 3, 6, 8];
+        let columns = [1u32, 0, 1, 2, 0, 1, 2, 1];
+        let values = [-0.5, 1.0, -0.5, -1.0, -1.0, 2.0, 1.0, -1.0];
+        solve_path(&row_ptrs, &columns, &values)
+    };
+    for (a, b) in canonical.iter().zip(&shuffled) {
+        assert!(
+            (a - b).abs() < 1e-12,
+            "canonical {canonical:?} vs shuffled {shuffled:?}"
+        );
+    }
+}
+
+fn solve_path(row_ptrs: &[u32], columns: &[u32], values: &[f64]) -> Vec<f64> {
+    let factor = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(row_ptrs, columns, values, 3).or_panic("valid CSR"))
+        .or_panic("path factor");
+    factor.solve(&[1.0, 0.0, -1.0]).or_panic("solve")
+}
