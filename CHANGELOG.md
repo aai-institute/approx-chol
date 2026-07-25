@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `TryFrom<&OwnedCsr> for CsrRef`, so `factorize`/`Builder::build` take `&OwnedCsr` directly. (#41)
+- Exact Cholesky for small connected blocks, selected with `Config::backend`
+  (`Backend::ExactBelow { max_dim }`, default `24`).
 
 ### Fixed
 
@@ -18,10 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zero-mean projection was applied to the augmented factor, returning a
   non-solution and producing a singular, non-convergent CG preconditioner.
   (#35)
-- Reject disconnected input with the new `Error::Disconnected` (Python `ValueError`)
-  instead of silently returning a wrong answer; block-diagonal SDDM stays accepted. (#36)
-- Scale the Gremban augmentation floor by `min(max_diagonal, 1)` so a
-  correctly-scaled-down SDDM is augmented rather than misread as disconnected. (#36)
+- Factor each connected component of a disconnected Laplacian independently
+  instead of silently returning a wrong answer. (#36)
+- Augment a strictly-dominant SDDM whose entries are all scaled below unit
+  magnitude, instead of mistaking its row surplus for rounding noise and
+  returning a non-solution. (#36)
 - Reject a structurally-invalid serde-deserialized `Factor` at deserialize time
   rather than panicking or returning garbage on the first `solve` in release. (#37)
 - `low_level` clique-tree samplers no longer panic or emit non-finite fill on degenerate weights. (#38)
@@ -29,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `Config` gains the public `backend: Backend` field. Rust struct literals that
+  do not use `..Default::default()` must specify it; Python takes
+  `Config(backend=Backend.Approximate())` or `Backend.ExactBelow(max_dim=...)`.
+- The serde representation of `Factor` now supports exact and block factors and
+  is not compatible with factors serialized by earlier releases.
 - `solve`/`solve_into` (Rust and Python) reject a right-hand side longer than the
   original matrix dimension rather than the augmented factor dimension.
   `SolveError::RhsLengthExceedsFactor` and the corresponding Python `ValueError`
