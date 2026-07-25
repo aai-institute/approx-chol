@@ -81,27 +81,69 @@ jobs:
       - name: pytest
         run: pixi run -e platform test
 
-  python-versions:
-    name: Python ${{ matrix.python-version }} (Linux)
+  wheels:
+    name: abi3 wheel (${{ matrix.os }})
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTFLAGS: "-C debuginfo=0"
     strategy:
       fail-fast: false
       matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: ci audit
+          cache: true
+          cache-write: ${{ github.ref == 'refs/heads/main' }}
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: Swatinem/rust-cache@v2
+      - name: build wheel
+        run: pixi run -e ci maturin build --locked --out dist
+      - name: abi3audit
+        shell: bash
+        run: pixi run -e audit abi3audit dist/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}
+          path: dist/*.whl
+
+  import-matrix:
+    name: Import + tests (${{ matrix.os }}, py${{ matrix.python-version }})
+    needs: wheels
+    if: github.event_name == 'push'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
         python-version:
           - "3.11"
           - "3.12"
           - "3.13"
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}
+          path: dist
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - uses: Swatinem/rust-cache@v2
-      - name: Install package and test deps
+      - name: install the single abi3 wheel and run the suite
+        shell: bash
         run: |
           python -m pip install --upgrade pip
-          pip install -e . pytest
-      - name: pytest
-        run: pytest tests/ -v
+          python -m pip install pytest
+          python -m pip install dist/*.whl
+          pytest tests/ -v
