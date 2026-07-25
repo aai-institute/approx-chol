@@ -395,3 +395,75 @@ fn grounded_raw_solve_matches_recovered_solve_on_both_backends() {
         );
     }
 }
+
+// A floating block's pinned vertex is backend-dependent, and within one backend
+// raw and recovered differ only by that pin's constant. The grounded case above
+// catches neither.
+#[test]
+fn floating_raw_solve_pins_a_backend_dependent_vertex() {
+    let grid = grid_laplacian(5, 5);
+    let csr = grid.as_csr().or_panic("valid CSR");
+    let n = grid.n as usize;
+    let mut rhs: Vec<f64> = (0..n).map(|i| i as f64 - 12.0).collect();
+    let sum: f64 = rhs.iter().sum();
+    rhs[0] -= sum;
+
+    let solve = |backend| {
+        let factor = Builder::<f64>::new(Config {
+            backend,
+            seed: 7,
+            ..Config::default()
+        })
+        .build(csr)
+        .or_panic("factorization should succeed");
+        assert_eq!(factor.n(), n, "pure Laplacian must not be augmented");
+
+        let mut raw = rhs.clone();
+        factor.solve_in_place(&mut raw).or_panic("solve_in_place");
+        let mut recovered = vec![0.0; factor.n()];
+        factor
+            .solve_into(&rhs, &mut recovered)
+            .or_panic("solve_into");
+
+        let pinned = raw
+            .iter()
+            .position(|value| value.abs() < 1e-12)
+            .expect("one variable per block is pinned to zero");
+
+        // Same factor, so this is exact up to rounding.
+        let shift = raw[0] - recovered[0];
+        for (index, (&value, &canonical)) in raw.iter().zip(recovered.iter()).enumerate() {
+            assert!(
+                (value - canonical - shift).abs() < 1e-9,
+                "{backend:?}: raw must differ from recovered by one constant; \
+                 index {index} differs by {}",
+                value - canonical
+            );
+        }
+        assert!(
+            shift.abs() > 1e-9,
+            "{backend:?}: the constant must be non-zero"
+        );
+
+        let mean = recovered.iter().sum::<f64>() / n as f64;
+        assert!(
+            mean.abs() < 1e-9,
+            "{backend:?}: recovered solve must be the zero-mean representative"
+        );
+        pinned
+    };
+
+    let exact_pinned = solve(Backend::ExactBelow {
+        max_dim: n,
+        on_failure: ExactFailure::Error,
+    });
+    let approx_pinned = solve(Backend::Approximate);
+
+    // Dense storage drops the block's last vertex.
+    assert_eq!(exact_pinned, n - 1);
+    assert_ne!(
+        approx_pinned, exact_pinned,
+        "the pinned index is backend-dependent; a fixture where they coincide \
+         would not exercise the contract"
+    );
+}

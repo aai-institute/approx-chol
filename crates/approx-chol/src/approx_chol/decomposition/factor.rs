@@ -194,14 +194,20 @@ impl<T: num_traits::Float> Factor<T> {
                     n: block_n,
                 });
             }
-            if block.anchor as usize >= block_n {
+            // In-range but inconsistent writes `-sum` into a live variable.
+            let dense_pinned = block.factor.dense_pinned();
+            if block.anchor as usize >= block_n
+                || dense_pinned.is_some_and(|pinned| block.anchor as usize != pinned)
+            {
                 return Err(FactorError::BlockAnchorInvalid {
                     anchor: block.anchor as usize,
                     n: block_n,
                 });
             }
             if let Some(ground) = block.ground {
-                if ground as usize >= block_n {
+                if ground as usize >= block_n
+                    || dense_pinned.is_some_and(|pinned| ground as usize != pinned)
+                {
                     return Err(FactorError::BlockGroundInvalid {
                         ground: ground as usize,
                         n: block_n,
@@ -311,6 +317,13 @@ impl<T> BlockFactor<T> {
 
 #[cfg(feature = "serde")]
 impl<T: num_traits::Float> BlockFactor<T> {
+    fn dense_pinned(&self) -> Option<usize> {
+        match self {
+            Self::Approx { .. } => None,
+            Self::Dense { m, .. } => Some(*m),
+        }
+    }
+
     fn validate(&self) -> Result<(), FactorError> {
         match self {
             Self::Approx { n, sequence } => sequence.validate_for_dim(*n),
@@ -430,8 +443,9 @@ where
     }
 
     /// Solves the block system, leaving `values[pin]` equal to zero, where `pin`
-    /// is the ground vertex if this block has one and the anchor otherwise. Both
-    /// backends satisfy this, so the raw result never depends on which ran.
+    /// is the ground vertex if this block has one and the anchor otherwise. Which
+    /// vertex a floating block anchors is backend-dependent, so its result is only
+    /// determined up to a constant; [`Self::solve_recovered`] projects that out.
     fn apply_anchored(&self, values: &mut [T], anchor: usize, ground: Option<usize>) {
         // Every block is a singular Laplacian, so it solves only a zero-sum
         // right-hand side; both arms put `values` in that range.
@@ -480,7 +494,9 @@ where
         if values.is_empty() {
             return;
         }
-        let count = num_traits::cast::<usize, T>(values.len()).unwrap();
+        let Some(count) = num_traits::cast::<usize, T>(values.len()) else {
+            return;
+        };
         let mean = values.iter().fold(T::zero(), |sum, &value| sum + value) / count;
         for value in values.iter_mut() {
             *value = *value - mean;
@@ -589,6 +605,9 @@ where
     }
 
     /// Solve `M x = b`, returning a newly allocated solution.
+    ///
+    /// For singular `M` (a pure Laplacian, or a graph that splits into components)
+    /// this is the zero-mean least-squares solution: `M x == b` does not hold.
     pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
         let mut work = vec![T::zero(); self.n];
         self.solve_into(b, &mut work)?;
@@ -608,10 +627,12 @@ where
     ///
     /// Each block is left anchored: one variable per block is pinned to zero — the
     /// ground vertex where augmentation added one, the un-eliminated vertex
-    /// otherwise. For an SDDM input that pins the ground vertex, so the result
-    /// already solves `M x = b` and matches [`Self::solve_into`]. For a Laplacian
-    /// input the result differs from [`Self::solve_into`] by a constant per block.
-    /// Neither depends on [`Backend`](crate::Backend).
+    /// otherwise. For SDDM input that is the ground vertex, so the result already
+    /// solves `M x = b` and matches [`Self::solve_into`].
+    ///
+    /// For Laplacian input it differs from [`Self::solve_into`] by a constant per
+    /// block, and *which* variable is pinned depends on
+    /// [`Backend`](crate::Backend) — do not rely on a particular index being zero.
     pub fn solve_in_place(&self, values: &mut [T]) -> Result<(), SolveError> {
         self.validate(None, values.len())?;
         self.for_each_block(values, |block, values| {

@@ -108,3 +108,29 @@ fn config_without_backend_uses_current_default() {
     assert_eq!(restored.split_merge, Some(2));
     assert_eq!(restored.backend, Config::default().backend);
 }
+
+#[test]
+fn dense_block_with_inconsistent_pin_is_rejected() {
+    // A dense `anchor`/`ground` must equal the omitted index `m`; in-range but
+    // inconsistent silently solved a different RHS in release.
+    let row_ptrs = [0u32, 2, 4];
+    let col_indices = [0u32, 1, 0, 1];
+    let values = [2.0f64, -1.0, -1.0, 2.0];
+    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).or_panic("valid csr");
+    let factor = factorize_with(csr, Config::default()).or_panic("factorization");
+
+    let json = serde_json::to_value(&factor).or_panic("serialize");
+    assert_eq!(
+        json["blocks"][0]["factor"]["Dense"]["m"], 2,
+        "dense backend ran"
+    );
+
+    for field in ["anchor", "ground"] {
+        let mut tampered = json.clone();
+        tampered["blocks"][0][field] = serde_json::json!(0);
+        assert!(
+            serde_json::from_value::<Factor<f64>>(tampered).is_err(),
+            "in-range but inconsistent `{field}` must be rejected at deserialize"
+        );
+    }
+}
