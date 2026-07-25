@@ -1,0 +1,23 @@
+name: abi3 wheel
+description: Build the abi3 wheel for this runner, audit it, and upload it as an artifact.
+
+runs:
+  using: composite
+  steps:
+    - uses: prefix-dev/setup-pixi@v0.10.0
+      with:
+        environments: ci audit
+        cache: true
+        cache-write: ${{ github.ref == 'refs/heads/main' }}
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - uses: Swatinem/rust-cache@v2
+    - name: build wheel
+      shell: bash
+      run: pixi run -e ci maturin build --locked --out dist
+    - name: abi3audit
+      shell: bash
+      run: pixi run -e audit abi3audit dist/*.whl
+    - uses: actions/upload-artifact@v4
+      with:
+        name: wheel-${{ runner.os }}
+        path: dist/*.whl
