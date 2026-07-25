@@ -373,36 +373,28 @@ where
         let m = pivot_vertices.len();
         debug_assert_eq!(matrix.len(), m * m);
         for col in 0..m {
+            let failed = |failure| Error::DenseFactorizationFailed {
+                vertex: pivot_vertices[col] as usize,
+                failure,
+            };
             let mut diagonal = matrix[col * m + col];
             for k in 0..col {
                 let value = matrix[col * m + k];
                 diagonal = diagonal - value * value;
             }
             if !diagonal.is_finite() {
-                return Err(Error::DenseFactorizationFailed {
-                    vertex: pivot_vertices[col] as usize,
-                    failure: DenseFailure::NonFinitePivot,
-                });
+                return Err(failed(DenseFailure::NonFinitePivot));
             }
             if diagonal <= T::zero() {
-                return Err(Error::DenseFactorizationFailed {
-                    vertex: pivot_vertices[col] as usize,
-                    failure: DenseFailure::NonPositivePivot,
-                });
+                return Err(failed(DenseFailure::NonPositivePivot));
             }
             let pivot = diagonal.sqrt();
             if !pivot.is_finite() {
-                return Err(Error::DenseFactorizationFailed {
-                    vertex: pivot_vertices[col] as usize,
-                    failure: DenseFailure::NonFinitePivot,
-                });
+                return Err(failed(DenseFailure::NonFinitePivot));
             }
             let inverse = T::one() / pivot;
             if !inverse.is_finite() {
-                return Err(Error::DenseFactorizationFailed {
-                    vertex: pivot_vertices[col] as usize,
-                    failure: DenseFailure::NonFiniteReciprocal,
-                });
+                return Err(failed(DenseFailure::NonFiniteReciprocal));
             }
             matrix[col * m + col] = pivot;
             for row in col + 1..m {
@@ -589,8 +581,8 @@ where
     }
 
     fn solve_kernel(&self, b: &[T], work: &mut [T]) {
-        work[..self.n].fill(T::zero());
         work[..b.len()].copy_from_slice(b);
+        work[b.len()..self.n].fill(T::zero());
         self.for_each_block(work, |block, values| {
             block.factor.solve_recovered(values, block.ground());
         });

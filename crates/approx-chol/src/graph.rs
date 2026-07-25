@@ -2,7 +2,6 @@
 
 use crate::{CsrError, CsrRef, Error, Real};
 use num_traits::NumCast;
-use std::collections::HashMap;
 
 /// Named return type for [`EliminationGraph::from_sddm`].
 pub(crate) struct GraphBuild<G, T: Real> {
@@ -84,7 +83,9 @@ pub(crate) trait EdgeLike<T: Real>: Clone + Copy {
     fn new(weight: T, to: u32, rev: u32) -> Self;
     fn reindex(self, to: u32, rev: u32) -> Self;
     /// `k` virtual copies at `weight * inv_k`; slim edges are unchanged.
-    fn split(self, inv_k: T, k: u32) -> Self;
+    fn split(self, _inv_k: T, _k: u32) -> Self {
+        self
+    }
     fn weight(&self) -> T;
     fn to(&self) -> u32;
     fn rev(&self) -> u32;
@@ -116,10 +117,6 @@ impl<T: Real> EdgeLike<T> for Edge<T> {
             to,
             rev,
         }
-    }
-    #[inline]
-    fn split(self, _inv_k: T, _k: u32) -> Self {
-        self
     }
     #[inline]
     fn weight(&self) -> T {
@@ -305,8 +302,7 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
             }
         }
 
-        let mut row_sums = diag.clone();
-        let mut row_scales: Vec<T> = diag.iter().map(|value| value.abs()).collect();
+        let (mut row_sums, mut row_scales) = Self::seed_row_accumulators(&diag);
         for row in 0..n {
             let bucket =
                 &mut off_diagonals[bucket_ends[row] as usize..bucket_ends[row + 1] as usize];
@@ -326,19 +322,15 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
                     }
                     index += 1;
                 }
-                if !approximately_equal(upper, lower) {
-                    return Err(Error::Asymmetric { edge: (row, col) });
-                }
-                if upper > T::zero() {
-                    return Err(Error::PositiveOffDiagonal { edge: (row, col) });
-                }
-                if upper < T::zero() {
-                    row_sums[row] = row_sums[row] + upper;
-                    row_sums[col] = row_sums[col] + upper;
-                    row_scales[row] = row_scales[row] + upper.abs();
-                    row_scales[col] = row_scales[col] + upper.abs();
-                    Self::add_edge_pair(&mut adj, row, col, -upper);
-                }
+                Self::accept_off_diagonal(
+                    &mut adj,
+                    &mut row_sums,
+                    &mut row_scales,
+                    row,
+                    col,
+                    upper,
+                    lower,
+                )?;
             }
         }
         Self::augment(adj, diag, row_sums, &row_scales)
@@ -436,6 +428,44 @@ fn approximately_equal<T: Real>(left: T, right: T) -> bool {
 }
 
 impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
+    /// Row sums accumulate the diagonal plus every off-diagonal; row scales track
+    /// the same rows' magnitude sum, which sets the dominance tolerance.
+    fn seed_row_accumulators(diag: &[T]) -> (Vec<T>, Vec<T>) {
+        (
+            diag.to_vec(),
+            diag.iter().map(|value| value.abs()).collect(),
+        )
+    }
+
+    /// Check one coalesced off-diagonal against the SDDM class and fold it in.
+    /// Both ingestion paths route through here, so the accumulation order their
+    /// bit-for-bit agreement rests on is shared rather than mirrored by hand.
+    fn accept_off_diagonal(
+        adj: &mut [Vec<E>],
+        row_sums: &mut [T],
+        row_scales: &mut [T],
+        row: usize,
+        col: usize,
+        upper: T,
+        lower: T,
+    ) -> Result<(), Error> {
+        if !approximately_equal(upper, lower) {
+            return Err(Error::Asymmetric { edge: (row, col) });
+        }
+        if upper > T::zero() {
+            return Err(Error::PositiveOffDiagonal { edge: (row, col) });
+        }
+        // Duplicates can coalesce to exactly zero, which contributes no edge.
+        if upper < T::zero() {
+            row_sums[row] = row_sums[row] + upper;
+            row_sums[col] = row_sums[col] + upper;
+            row_scales[row] = row_scales[row] + upper.abs();
+            row_scales[col] = row_scales[col] + upper.abs();
+            Self::add_edge_pair(adj, row, col, -upper);
+        }
+        Ok(())
+    }
+
     /// Clamp each row's surplus and apply Gremban augmentation.
     fn augment(
         adj: Vec<Vec<E>>,
@@ -505,8 +535,7 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
                 *diagonal = value;
             }
         }
-        let mut row_sums = diag.clone();
-        let mut row_scales: Vec<T> = diag.iter().map(|value| value.abs()).collect();
+        let (mut row_sums, mut row_scales) = Self::seed_row_accumulators(&diag);
 
         let mut cursors: Vec<u32> = row_ptrs[..n].to_vec();
         for row in 0..n {
@@ -548,17 +577,15 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
                     continue;
                 }
                 let lower = Self::claim_mirror(col, row, &csr, &mut cursors)?;
-                if !approximately_equal(upper, lower) {
-                    return Err(Error::Asymmetric { edge: (row, col) });
-                }
-                if upper > T::zero() {
-                    return Err(Error::PositiveOffDiagonal { edge: (row, col) });
-                }
-                row_sums[row] = row_sums[row] + upper;
-                row_sums[col] = row_sums[col] + upper;
-                row_scales[row] = row_scales[row] + upper.abs();
-                row_scales[col] = row_scales[col] + upper.abs();
-                Self::add_edge_pair(&mut adj, row, col, -upper);
+                Self::accept_off_diagonal(
+                    &mut adj,
+                    &mut row_sums,
+                    &mut row_scales,
+                    row,
+                    col,
+                    upper,
+                    lower,
+                )?;
             }
         }
         Self::augment(adj, diag, row_sums, &row_scales)
@@ -604,37 +631,26 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
         Ok(found)
     }
 
-    /// The anchor-deleted principal submatrix, row-major, or `None` when `m * m`
+    /// The principal submatrix over `pivots`, row-major, or `None` when `m * m`
     /// scalars do not fit — a dispatch signal, not an input error.
-    pub(crate) fn dense_principal(
-        &self,
-        diagonal: &[T],
-        vertices: &[u32],
-    ) -> Option<(Vec<T>, Vec<u32>)> {
-        let pivot_vertices = if vertices.is_empty() {
-            Vec::new()
-        } else {
-            vertices[..vertices.len() - 1].to_vec()
-        };
-        let m = pivot_vertices.len();
-        let local_of: HashMap<u32, usize> = pivot_vertices
-            .iter()
-            .enumerate()
-            .map(|(local, &global)| (global, local))
-            .collect();
+    pub(crate) fn dense_principal(&self, diagonal: &[T], pivots: &[u32]) -> Option<Vec<T>> {
+        // Ascending order is what lets the global->local lookup be a binary
+        // search over `pivots` instead of a per-block map.
+        debug_assert!(pivots.windows(2).all(|pair| pair[0] < pair[1]));
+        let m = pivots.len();
         let matrix_len = m.checked_mul(m)?;
         let mut matrix = Vec::new();
         matrix.try_reserve_exact(matrix_len).ok()?;
         matrix.resize(matrix_len, T::zero());
-        for (local, &global) in pivot_vertices.iter().enumerate() {
+        for (local, &global) in pivots.iter().enumerate() {
             matrix[local * m + local] = diagonal[global as usize];
             for edge in &self.adj[global as usize] {
-                if let Some(&other) = local_of.get(&edge.to()) {
+                if let Ok(other) = pivots.binary_search(&edge.to()) {
                     matrix[local * m + other] = matrix[local * m + other] - edge.fill_weight();
                 }
             }
         }
-        Some((matrix, pivot_vertices))
+        Some(matrix)
     }
 
     pub(crate) fn extract_component(
@@ -647,7 +663,11 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
         for (local, &global) in vertices.iter().enumerate() {
             local_of[global as usize] = local;
         }
-        let mut adjacency = vec![Vec::new(); vertices.len()];
+        // The parent degree bounds the local one, so no list has to grow.
+        let mut adjacency: Vec<Vec<E>> = vertices
+            .iter()
+            .map(|&global| Vec::with_capacity(self.adj[global as usize].len()))
+            .collect();
         for (local_u, &global_u) in vertices.iter().enumerate() {
             for &edge in &self.adj[global_u as usize] {
                 let local_v = local_of[edge.to() as usize];
@@ -719,29 +739,7 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
         let n = adj.len();
         let mut visited = BitVec::new(n);
         let mut stack: Vec<usize> = Vec::new();
-        // One traversal reaches every vertex iff the graph is connected, so the
-        // common case never materializes or sorts a component list.
-        let mut reached = 0usize;
-        if n_real > 0 {
-            visited.set(0);
-            stack.push(0);
-            while let Some(v) = stack.pop() {
-                reached += 1;
-                for e in &adj[v] {
-                    let u = e.to() as usize;
-                    if !visited.get(u) {
-                        visited.set(u);
-                        stack.push(u);
-                    }
-                }
-            }
-        }
-        if reached == n {
-            return None;
-        }
-
-        let mut visited = BitVec::new(n);
-        let mut components = Vec::new();
+        let mut components: Vec<Vec<u32>> = Vec::new();
         for start in 0..n_real {
             if visited.get(start) {
                 continue;
@@ -759,8 +757,15 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
                     }
                 }
             }
-            component.sort_unstable();
             components.push(component);
+        }
+        // The first traversal reaching every vertex means the graph is connected,
+        // so the common case never sorts or returns a component list.
+        if components.len() <= 1 && components.first().map_or(0, Vec::len) == n {
+            return None;
+        }
+        for component in &mut components {
+            component.sort_unstable();
         }
         Some(components)
     }

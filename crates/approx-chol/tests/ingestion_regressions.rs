@@ -1,5 +1,8 @@
+#[path = "common/backends.rs"]
+mod backends;
 #[path = "common/grid.rs"]
 mod grid;
+use backends::backends;
 #[path = "common/panic_ok.rs"]
 mod panic_ok;
 use panic_ok::OrPanic;
@@ -433,13 +436,7 @@ fn interleaved_components_permute_and_restore_input_order() {
     let row_ptrs = [0u32, 2, 4, 6, 8];
     let columns = [0u32, 2, 1, 3, 0, 2, 1, 3];
     let values = [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
-    for backend in [
-        Backend::Approximate,
-        Backend::ExactBelow {
-            max_dim: 24,
-            on_failure: ExactFailure::FallBackToApproximate,
-        },
-    ] {
+    for backend in backends() {
         let factor = Builder::<f64>::new(Config {
             backend,
             ..Config::default()
@@ -463,13 +460,7 @@ fn inconsistent_rhs_is_projected_onto_the_range() {
     let row_ptrs = [0u32, 2, 4, 6, 8];
     let columns = [0u32, 2, 1, 3, 0, 2, 1, 3];
     let values = [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
-    for backend in [
-        Backend::Approximate,
-        Backend::ExactBelow {
-            max_dim: 24,
-            on_failure: ExactFailure::FallBackToApproximate,
-        },
-    ] {
+    for backend in backends() {
         let factor = Builder::<f64>::new(Config {
             backend,
             ..Config::default()

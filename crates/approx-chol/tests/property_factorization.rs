@@ -1,26 +1,19 @@
 #[path = "common/panic_ok.rs"]
 mod panic_ok;
 use panic_ok::OrPanic;
+#[path = "common/backends.rs"]
+mod backends;
 #[path = "common/laplacian_prop.rs"]
 mod laplacian_prop;
+use backends::backends;
 
-use approx_chol::{factorize_with, Backend, Config, CsrRef, ExactFailure};
+use approx_chol::{factorize_with, Backend, Config, CsrRef};
 use laplacian_prop::{
     csr_matvec, is_connected, laplacian_csr_strategy, laplacian_with_rhs_strategy, norm2,
     rhs_for_dimension, sddm_csr_strategy,
 };
 use proptest::prelude::*;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-
-// The generators cap n at 8, so a single default config would only ever exercise
-// the exact backend and leave the AC/AC2 sampler untested.
-const BACKENDS: [Backend; 2] = [
-    Backend::Approximate,
-    Backend::ExactBelow {
-        max_dim: 24,
-        on_failure: ExactFailure::FallBackToApproximate,
-    },
-];
 
 fn config(backend: Backend) -> Config {
     Config {
@@ -47,7 +40,7 @@ proptest! {
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         prop_assume!(is_connected(&row_ptrs, &col_indices, n));
-        for backend in BACKENDS {
+        for backend in backends() {
             let run = catch_unwind(AssertUnwindSafe(|| {
                 let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
                     .or_panic("generated CSR must be valid");
@@ -72,7 +65,7 @@ proptest! {
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         prop_assume!(is_connected(&row_ptrs, &col_indices, n));
-        for backend in BACKENDS {
+        for backend in backends() {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
                 .or_panic("generated CSR must be valid");
             let factor = factorize_with(csr, config(backend))
@@ -97,7 +90,7 @@ proptest! {
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         prop_assume!(is_connected(&row_ptrs, &col_indices, n));
-        for backend in BACKENDS {
+        for backend in backends() {
             let run = catch_unwind(AssertUnwindSafe(|| {
                 let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
                     .or_panic("generated CSR must be valid");
@@ -128,7 +121,7 @@ proptest! {
         prop_assume!(n >= 2);
         prop_assume!(is_connected(&row_ptrs, &col_indices, n));
 
-        for backend in BACKENDS {
+        for backend in backends() {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
                 .or_panic("valid CSR");
             let factor = factorize_with(csr, config(backend)).or_panic("factorization");
@@ -155,7 +148,7 @@ proptest! {
         prop_assume!(n >= 2);
         prop_assume!(is_connected(&row_ptrs, &col_indices, n));
 
-        for backend in BACKENDS {
+        for backend in backends() {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
                 .or_panic("valid CSR");
             let factor = factorize_with(csr, ac2_config(backend)).or_panic("AC2 factorization");
@@ -184,7 +177,7 @@ proptest! {
         let b_norm = norm2(&rhs);
         prop_assume!(b_norm > 1e-10);
 
-        for backend in BACKENDS {
+        for backend in backends() {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
                 .or_panic("valid CSR");
             let factor = factorize_with(csr, config(backend)).or_panic("factorization");
@@ -209,7 +202,7 @@ proptest! {
     fn sddm_factorization_is_panic_free_and_finite(
         (row_ptrs, col_indices, values, n) in sddm_csr_strategy()
     ) {
-        for backend in BACKENDS {
+        for backend in backends() {
             let run = catch_unwind(AssertUnwindSafe(|| {
                 let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
                     .or_panic("valid SDDM CSR");
@@ -238,7 +231,7 @@ proptest! {
     ) {
         prop_assume!(is_connected(&row_ptrs, &col_indices, n));
         let rhs = rhs_for_dimension(n as usize);
-        for backend in BACKENDS {
+        for backend in backends() {
             let cfg = Config { seed: 42, backend, ..Config::default() };
 
             let csr1 = CsrRef::new(&row_ptrs, &col_indices, &values, n)
@@ -270,7 +263,7 @@ proptest! {
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         prop_assume!(is_connected(&row_ptrs, &col_indices, n));
-        for backend in BACKENDS {
+        for backend in backends() {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
                 .or_panic("valid CSR");
             let factor = factorize_with(csr, config(backend)).or_panic("factorization");
@@ -291,7 +284,7 @@ proptest! {
     fn sddm_factor_dimensions_are_consistent(
         (row_ptrs, col_indices, values, n) in sddm_csr_strategy()
     ) {
-        for backend in BACKENDS {
+        for backend in backends() {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
                 .or_panic("valid SDDM CSR");
             let factor = factorize_with(csr, config(backend)).or_panic("factorization");
@@ -317,7 +310,7 @@ proptest! {
     ) {
         prop_assume!(is_connected(&row_ptrs, &col_indices, n));
         let values_f32: Vec<f32> = values_f64.iter().map(|&v| v as f32).collect();
-        for backend in BACKENDS {
+        for backend in backends() {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values_f32, n)
                 .or_panic("valid f32 CSR");
             let factor = factorize_with(csr, config(backend)).or_panic("f32 factorization");

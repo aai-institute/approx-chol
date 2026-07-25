@@ -1,5 +1,8 @@
+#[path = "common/backends.rs"]
+mod backends;
 #[path = "common/grid.rs"]
 mod grid;
+use backends::backends;
 #[path = "common/panic_err.rs"]
 mod panic_err;
 #[path = "common/panic_ok.rs"]
@@ -358,13 +361,7 @@ fn grounded_raw_solve_matches_recovered_solve_on_both_backends() {
     let row_ptrs = [0u32, 2, 4];
     let columns = [0u32, 1, 0, 1];
     let values = [2.0, -1.0, -1.0, 2.0];
-    for backend in [
-        Backend::Approximate,
-        Backend::ExactBelow {
-            max_dim: 24,
-            on_failure: ExactFailure::FallBackToApproximate,
-        },
-    ] {
+    for backend in backends() {
         let factor = Builder::<f64>::new(Config {
             backend,
             ..Config::default()

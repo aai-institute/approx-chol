@@ -60,17 +60,15 @@ impl Default for Backend {
 }
 
 impl Backend {
-    pub(crate) fn uses_exact(self, block_n: usize) -> bool {
+    /// `Some(policy)` when a block of `block_n` vertices is factored exactly,
+    /// carrying what to do if that factorization fails.
+    pub(crate) fn exact_policy(self, block_n: usize) -> Option<ExactFailure> {
         match self {
-            Self::Approximate => false,
-            Self::ExactBelow { max_dim, .. } => block_n <= max_dim,
-        }
-    }
-
-    pub(crate) fn on_failure(self) -> ExactFailure {
-        match self {
-            Self::Approximate => ExactFailure::default(),
-            Self::ExactBelow { on_failure, .. } => on_failure,
+            Self::Approximate => None,
+            Self::ExactBelow {
+                max_dim,
+                on_failure,
+            } => (block_n <= max_dim).then_some(on_failure),
         }
     }
 }

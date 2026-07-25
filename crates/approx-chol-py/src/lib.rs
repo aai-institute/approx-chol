@@ -108,6 +108,33 @@ enum PyBackend {
     },
 }
 
+// Both core enums are `#[non_exhaustive]`, so these conversions need a wildcard.
+// Reporting a not-yet-mirrored variant as the approximate path is safe; echoing a
+// stale `max_dim` would not be.
+impl From<ExactFailure> for PyExactFailure {
+    fn from(failure: ExactFailure) -> Self {
+        match failure {
+            ExactFailure::Error => Self::Error,
+            _ => Self::FallBackToApproximate,
+        }
+    }
+}
+
+impl From<Backend> for PyBackend {
+    fn from(backend: Backend) -> Self {
+        match backend {
+            Backend::ExactBelow {
+                max_dim,
+                on_failure,
+            } => Self::ExactBelow {
+                max_dim,
+                on_failure: on_failure.into(),
+            },
+            _ => Self::Approximate {},
+        }
+    }
+}
+
 /// Warn once per factorization if any block fell back from exact Cholesky, which
 /// means the input was not positive definite within ingestion's tolerance.
 fn warn_on_exact_fallback(py: Python<'_>, factor: &approx_chol::Factor<f64>) -> PyResult<()> {
@@ -155,10 +182,7 @@ impl PyConfig {
         Self {
             seed,
             split,
-            backend: backend.unwrap_or(PyBackend::ExactBelow {
-                max_dim: 24,
-                on_failure: PyExactFailure::FallBackToApproximate,
-            }),
+            backend: backend.unwrap_or_else(|| Backend::default().into()),
         }
     }
 }
