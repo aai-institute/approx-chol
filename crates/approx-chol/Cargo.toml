@@ -43,3 +43,7 @@ harness = false
 [[bench]]
 name = "solve"
 harness = false
+
+[[bench]]
+name = "ingestion"
+harness = false

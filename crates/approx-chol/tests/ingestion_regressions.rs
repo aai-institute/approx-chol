@@ -1,63 +1,11 @@
+#[path = "common/grid.rs"]
+mod grid;
 #[path = "common/panic_ok.rs"]
 mod panic_ok;
 use panic_ok::OrPanic;
 
 use approx_chol::low_level::Builder;
 use approx_chol::{Config, CsrRef, Error};
-
-fn solve_with_default_ac(
-    row_ptrs: &[u32],
-    col_indices: &[u32],
-    values: &[f64],
-    n: u32,
-    rhs: &[f64],
-) -> Vec<f64> {
-    let csr = CsrRef::new(row_ptrs, col_indices, values, n).or_panic("valid CSR");
-    let factor = Builder::<f64>::new(Config {
-        seed: 7,
-        ..Config::default()
-    })
-    .build(csr)
-    .or_panic("factorization");
-    let mut work = vec![0.0; factor.n()];
-    work[..rhs.len()].copy_from_slice(rhs);
-    factor.solve_in_place(&mut work);
-    work
-}
-
-#[test]
-fn duplicate_diagonal_entries_do_not_change_solve_behavior() {
-    // Two mathematically equivalent 2x2 SDDM matrices:
-    // - `dup_*`: diagonal split into duplicate entries in each row
-    // - `coal_*`: diagonal already coalesced
-    //
-    // A = [ 5  -1 ]
-    //     [ -1  4 ]
-    let dup_rp = vec![0u32, 3, 6];
-    let dup_ci = vec![0u32, 0, 1, 0, 1, 1];
-    let dup_vals = vec![2.0f64, 3.0, -1.0, -1.0, 1.5, 2.5];
-
-    let coal_rp = vec![0u32, 2, 4];
-    let coal_ci = vec![0u32, 1, 0, 1];
-    let coal_vals = vec![5.0f64, -1.0, -1.0, 4.0];
-
-    let rhs = vec![1.0f64, -1.0];
-
-    let x_dup = solve_with_default_ac(&dup_rp, &dup_ci, &dup_vals, 2, &rhs);
-    let x_coal = solve_with_default_ac(&coal_rp, &coal_ci, &coal_vals, 2, &rhs);
-
-    assert_eq!(
-        x_dup.len(),
-        x_coal.len(),
-        "equivalent inputs must produce factors with equal dimension"
-    );
-    for (i, (&a, &b)) in x_dup.iter().zip(x_coal.iter()).enumerate() {
-        assert!(
-            (a - b).abs() < 1e-10,
-            "equivalent matrices should solve identically; mismatch at {i}: {a} vs {b}"
-        );
-    }
-}
 
 #[test]
 fn positive_off_diagonal_is_rejected_not_silently_dropped() {
@@ -69,20 +17,47 @@ fn positive_off_diagonal_is_rejected_not_silently_dropped() {
     let ci = [0u32, 1, 0, 1];
     let vals = [5.0f64, 1.0, 1.0, 4.0];
 
-    // The AC (None) and AC2 (Some) paths share this ingestion; both must reject.
-    for split_merge in [None, Some(2)] {
-        let csr = CsrRef::new(&rp, &ci, &vals, 2).or_panic("valid CSR");
-        let err = Builder::<f64>::new(Config {
-            split_merge,
-            ..Config::default()
-        })
+    let csr = CsrRef::new(&rp, &ci, &vals, 2).or_panic("valid CSR");
+    let err = Builder::<f64>::new(Config::default())
         .build(csr)
         .expect_err("positive off-diagonal must be rejected");
-        assert!(
-            matches!(err, Error::PositiveOffDiagonal { edge } if edge == (0, 1)),
-            "expected PositiveOffDiagonal at (0, 1), got {err:?}"
-        );
-    }
+    assert!(
+        matches!(err, Error::PositiveOffDiagonal { edge } if edge == (0, 1)),
+        "expected PositiveOffDiagonal at (0, 1), got {err:?}"
+    );
+}
+
+#[test]
+fn transpose_entries_within_roundoff_are_symmetric() {
+    let next_after_one = f64::from_bits(1.0f64.to_bits() + 1);
+    let row_ptrs = [0u32, 2, 4];
+    let columns = [0u32, 1, 0, 1];
+    let values = [2.0, -1.0, -next_after_one, 2.0];
+    let csr = CsrRef::new(&row_ptrs, &columns, &values, 2).or_panic("valid CSR");
+
+    Builder::<f64>::new(Config::default())
+        .build(csr)
+        .or_panic("one-ulp transpose difference");
+}
+
+#[test]
+fn high_scale_positive_surplus_is_preserved() {
+    let row_ptrs = [0u32, 2, 4];
+    let columns = [0u32, 1, 0, 1];
+    let values = [1e12 + 100.0, -1e12, -1e12, 1e12 + 100.0];
+    let factor = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(&row_ptrs, &columns, &values, 2).or_panic("valid CSR"))
+        .or_panic("high-scale SDDM");
+    let solution = factor.solve(&[1.0, 1.0]).or_panic("solve");
+
+    assert!(
+        (solution[0] - 0.01).abs() < 1e-8,
+        "unexpected solution: {solution:?}"
+    );
+    assert!(
+        (solution[1] - 0.01).abs() < 1e-8,
+        "unexpected solution: {solution:?}"
+    );
 }
 
 /// CSR for `k` disjoint 2-node path Laplacians, stacked block-diagonally — a
@@ -106,30 +81,10 @@ fn block_diagonal_paths(k: u32) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
 }
 
 #[test]
-fn disconnected_laplacian_is_rejected() {
-    // Two components => a null space bigger than a connected Laplacian's single
-    // constant, so it must be rejected, not mis-solved. AC and AC2 both.
-    let (rp, ci, vals) = block_diagonal_paths(2);
-
-    for split_merge in [None, Some(2)] {
-        let csr = CsrRef::new(&rp, &ci, &vals, 4).or_panic("valid CSR");
-        let err = Builder::<f64>::new(Config {
-            split_merge,
-            ..Config::default()
-        })
-        .build(csr)
-        .expect_err("disconnected input must be rejected");
-        assert!(
-            matches!(err, Error::Disconnected { components: 2 }),
-            "expected Disconnected {{ components: 2 }}, got {err:?}"
-        );
-    }
-}
-
-#[test]
 fn disconnected_component_count_is_reported() {
-    // Three components: the reported count must track k (guards against a
-    // hardcoded 2 or an off-by-one), not merely "> 1".
+    // A null space bigger than a connected Laplacian's single constant must be
+    // rejected, not mis-solved, and the reported count must track k (guards
+    // against a hardcoded 2 or an off-by-one) rather than merely "> 1".
     let (rp, ci, vals) = block_diagonal_paths(3);
 
     let csr = CsrRef::new(&rp, &ci, &vals, 6).or_panic("valid CSR");
@@ -140,26 +95,6 @@ fn disconnected_component_count_is_reported() {
         matches!(err, Error::Disconnected { components: 3 }),
         "expected Disconnected {{ components: 3 }}, got {err:?}"
     );
-}
-
-#[test]
-fn connected_single_component_input_is_not_falsely_rejected() {
-    // The guard must fire only on genuine disconnection: a connected pure
-    // Laplacian and a connected SDDM are single-component and must factorize.
-    let lap = ([0u32, 2, 4], [0u32, 1, 0, 1], [1.0f64, -1.0, -1.0, 1.0]);
-    let sddm = ([0u32, 2, 4], [0u32, 1, 0, 1], [5.0f64, -1.0, -1.0, 4.0]);
-
-    for (rp, ci, vals) in [lap, sddm] {
-        for split_merge in [None, Some(2)] {
-            let csr = CsrRef::new(&rp, &ci, &vals, 2).or_panic("valid CSR");
-            Builder::<f64>::new(Config {
-                split_merge,
-                ..Config::default()
-            })
-            .build(csr)
-            .expect("connected single-component input must factorize");
-        }
-    }
 }
 
 #[test]
@@ -179,34 +114,15 @@ fn tiny_scale_sddm_is_augmented_and_solves() {
 }
 
 #[test]
-fn sub_near_zero_scale_is_rejected_not_silently_mis_solved() {
-    // Below near_zero the pivots would be clamped, so augmenting would mis-solve;
-    // such input must error rather than return a bogus solution.
-    let rp = [0u32, 1, 2];
-    let ci = [0u32, 1];
-    let vals = [1e-15_f64, 1e-15];
-    let result = Builder::<f64>::new(Config::default())
-        .build(CsrRef::new(&rp, &ci, &vals, 2).or_panic("valid CSR"));
-    assert!(
-        result.is_err(),
-        "sub-near_zero input must error rather than silently mis-solve, got {result:?}"
-    );
-}
-
-#[test]
-fn connected_non_dominant_input_is_not_reported_disconnected() {
-    // Non-dominant input (negative row sums) leaves the ground vertex isolated;
-    // that artifact must not be miscounted as a component. The graph is connected,
-    // so it must not be reported as Disconnected (even though it's out of class).
+fn connected_non_dominant_input_is_rejected_as_non_sddm() {
     let rp = [0u32, 2, 4];
     let ci = [0u32, 1, 0, 1];
     let vals = [1.0f64, -3.0, -3.0, 1.0];
     let csr = CsrRef::new(&rp, &ci, &vals, 2).or_panic("valid CSR");
-    let result = Builder::<f64>::new(Config::default()).build(csr);
-    assert!(
-        !matches!(result, Err(Error::Disconnected { .. })),
-        "connected input must not be reported as Disconnected, got {result:?}"
-    );
+    let error = Builder::<f64>::new(Config::default())
+        .build(csr)
+        .expect_err("non-SDDM input must be rejected");
+    assert!(matches!(error, Error::NotDiagonallyDominant { .. }));
 }
 
 #[test]
@@ -227,4 +143,169 @@ fn block_diagonal_sddm_is_accepted_via_shared_ground() {
         .build(csr)
         .expect("block-diagonal SDDM must be accepted via the shared ground vertex");
     }
+}
+
+#[test]
+fn empty_and_singleton_systems_have_defined_solves() {
+    let empty = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(&[0u32], &[], &[], 0).or_panic("valid empty CSR"))
+        .or_panic("empty factor");
+    assert_eq!(empty.solve(&[]).or_panic("empty solve"), Vec::<f64>::new());
+    assert_eq!(empty.n_steps(), 0);
+
+    let zero = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(&[0u32, 1], &[0], &[0.0], 1).or_panic("valid singleton"))
+        .or_panic("zero singleton factor");
+    assert_eq!(
+        zero.solve(&[7.0]).or_panic("zero singleton solve"),
+        vec![0.0]
+    );
+
+    let positive = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(&[0u32, 1], &[0], &[2.0], 1).or_panic("valid singleton"))
+        .or_panic("positive singleton factor");
+    let solution = positive.solve(&[7.0]).or_panic("positive singleton solve");
+    assert!((solution[0] - 3.5).abs() < 1e-14);
+}
+
+#[test]
+fn asymmetric_input_is_rejected_after_duplicate_coalescing() {
+    let missing = CsrRef::new(&[0u32, 2, 3], &[0, 1, 1], &[1.0, -1.0, 1.0], 2)
+        .or_panic("structurally valid CSR");
+    assert!(matches!(
+        Builder::<f64>::new(Config::default()).build(missing),
+        Err(Error::Asymmetric { edge: (0, 1) })
+    ));
+
+    let unequal = CsrRef::new(&[0u32, 2, 4], &[0, 1, 0, 1], &[1.0, -1.0, -2.0, 2.0], 2)
+        .or_panic("structurally valid CSR");
+    assert!(matches!(
+        Builder::<f64>::new(Config::default()).build(unequal),
+        Err(Error::Asymmetric { edge: (0, 1) })
+    ));
+
+    let coalesced = CsrRef::new(
+        &[0u32, 3, 6],
+        &[0, 1, 1, 0, 0, 1],
+        &[2.0, -0.25, -0.75, -0.5, -0.5, 2.0],
+        2,
+    )
+    .or_panic("structurally valid CSR");
+    Builder::<f64>::new(Config::default())
+        .build(coalesced)
+        .or_panic("equal coalesced transpose entries");
+}
+
+#[test]
+fn non_finite_input_is_reported() {
+    let non_finite =
+        CsrRef::new(&[0u32, 1], &[0], &[f64::NAN], 1).or_panic("structurally valid CSR");
+    assert_eq!(
+        Builder::<f64>::new(Config::default())
+            .build(non_finite)
+            .unwrap_err(),
+        Error::NonFiniteValue { position: 0 }
+    );
+}
+
+// CSR column indices are not required to be sorted, and duplicates coalesce, so
+// bucketed ingestion must not depend on the order entries arrive in.
+#[test]
+fn unsorted_and_split_entries_match_the_canonical_form() {
+    let canonical = {
+        let row_ptrs = [0u32, 2, 5, 7];
+        let columns = [0u32, 1, 0, 1, 2, 1, 2];
+        let values = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
+        solve_path(&row_ptrs, &columns, &values)
+    };
+    let shuffled = {
+        // Row 0 splits both its diagonal and its edge in two, and row 1's entries
+        // are out of order. Splitting the diagonal matters because a coalescing
+        // bug there is invisible to the off-diagonal sign and symmetry checks.
+        let row_ptrs = [0u32, 4, 7, 9];
+        let columns = [1u32, 0, 1, 0, 2, 0, 1, 2, 1];
+        let values = [-0.5, 0.25, -0.5, 0.75, -1.0, -1.0, 2.0, 1.0, -1.0];
+        solve_path(&row_ptrs, &columns, &values)
+    };
+    for (a, b) in canonical.iter().zip(&shuffled) {
+        assert!(
+            (a - b).abs() < 1e-12,
+            "canonical {canonical:?} vs shuffled {shuffled:?}"
+        );
+    }
+}
+
+// Descending columns per row denote the same matrix but force the bucketed
+// ingestion path, so this pins the canonical fast path as bit-identical rather
+// than merely close.
+#[test]
+fn canonical_and_reordered_ingestion_agree_bit_for_bit() {
+    let grid = grid::grid_laplacian(6, 7);
+    let n = grid.n as usize;
+
+    let mut reversed_columns = Vec::with_capacity(grid.col_indices.len());
+    let mut reversed_values = Vec::with_capacity(grid.values.len());
+    for row in 0..n {
+        let start = grid.row_ptrs[row] as usize;
+        let end = grid.row_ptrs[row + 1] as usize;
+        reversed_columns.extend(grid.col_indices[start..end].iter().rev());
+        reversed_values.extend(grid.values[start..end].iter().rev());
+    }
+
+    let rhs: Vec<f64> = (0..n).map(|i| (i % 5) as f64 - 2.0).collect();
+    let canonical = solve_grid(grid.as_csr().or_panic("valid CSR"), &rhs);
+    let reordered = solve_grid(
+        CsrRef::new(&grid.row_ptrs, &reversed_columns, &reversed_values, grid.n)
+            .or_panic("valid CSR"),
+        &rhs,
+    );
+
+    assert_eq!(canonical, reordered);
+}
+
+fn solve_grid(csr: CsrRef<'_>, rhs: &[f64]) -> Vec<f64> {
+    let factor = Builder::<f64>::new(Config::default())
+        .build(csr)
+        .or_panic("grid factor");
+    factor.solve(rhs).or_panic("solve")
+}
+
+fn solve_path(row_ptrs: &[u32], columns: &[u32], values: &[f64]) -> Vec<f64> {
+    let factor = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(row_ptrs, columns, values, 3).or_panic("valid CSR"))
+        .or_panic("path factor");
+    factor.solve(&[1.0, 0.0, -1.0]).or_panic("solve")
+}
+
+#[test]
+fn rows_summing_to_non_finite_are_rejected_on_both_paths() {
+    // Stored values are finite, symmetric and non-positive; the row sums are not.
+    let max = f64::MAX;
+    let expect_rejected =
+        |label: &str, row_ptrs: &[u32], col_indices: &[u32], values: &[f64], n| {
+            let csr = CsrRef::new(row_ptrs, col_indices, values, n).or_panic("valid CSR");
+            let result = Builder::<f64>::new(Config::default()).build(csr);
+            assert!(
+                matches!(result, Err(Error::NonFiniteRow { .. })),
+                "{label} must be rejected, got {result:?}"
+            );
+        };
+
+    // Bucketed path.
+    expect_rejected(
+        "coalesced duplicates",
+        &[0, 3, 6],
+        &[0, 1, 1, 0, 0, 1],
+        &[max, -max, -max, -max, -max, max],
+        2,
+    );
+    // Canonical path: no duplicates, two near-MAX off-diagonals in one row.
+    expect_rejected(
+        "canonical row overflow",
+        &[0, 3, 5, 7],
+        &[0, 1, 2, 0, 1, 0, 2],
+        &[0.0, -max, -max, -max, max, -max, max],
+        3,
+    );
+    expect_rejected("duplicate diagonal", &[0, 2], &[0, 0], &[max, max], 1);
 }

@@ -29,6 +29,11 @@
 //! # }
 //! ```
 //!
+//! # Input contract
+//!
+//! Duplicate entries for one coordinate are summed, as scipy's `sum_duplicates`
+//! does, so the sign and symmetry checks judge the coalesced entry.
+//!
 //! # Algorithm variants
 //!
 //! ## AC — standard approximate Cholesky
@@ -106,10 +111,12 @@ pub(crate) use types::Real;
 ///
 /// Returns [`Error::InvalidCsr`] if conversion or validation fails, if index
 /// conversion to `u32` fails, or if input conversion panics.
-/// Returns [`Error::PositiveOffDiagonal`] if any off-diagonal entry is strictly
+/// Returns [`Error::PositiveOffDiagonal`] if a coalesced off-diagonal is strictly
 /// positive (outside the SDDM/Laplacian class).
 /// Returns [`Error::Disconnected`] if the input stays disconnected after Gremban
 /// grounding (more than one connected component).
+/// Returns a structured numeric error for non-finite, asymmetric, or non-SDDM
+/// input.
 ///
 /// # Examples
 ///

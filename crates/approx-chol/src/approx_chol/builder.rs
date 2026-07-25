@@ -53,8 +53,8 @@ where
     /// Run approximate Cholesky factorization from any input fallibly convertible into
     /// [`CsrRef`].
     ///
-    /// Performs a checked conversion of row pointers and column indices to
-    /// owned `u32` storage.
+    /// Performs a checked conversion of row pointers and column indices to owned
+    /// `u32` storage; the values stay borrowed.
     ///
     /// # Errors
     ///
