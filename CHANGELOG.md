@@ -10,43 +10,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `TryFrom<&OwnedCsr> for CsrRef`, so `factorize`/`Builder::build` take `&OwnedCsr` directly. (#41)
-- Exact Cholesky for small connected blocks, selected with `Config::backend`
+- Exact Cholesky for small blocks via `Config::backend`
   (`Backend::ExactBelow { max_dim }`, default `24`).
+- `ExactFailure` selects fallback or error on an invalid exact pivot.
+- `Factor::exact_fallbacks` records fallbacks; Python warns with `RuntimeWarning`.
 
 ### Fixed
 
-- SDDM (Gremban-augmented) systems: `solve`/`solve_into` now recover the correct
-  solution by grounding against the auxiliary vertex. Previously a global
-  zero-mean projection was applied to the augmented factor, returning a
-  non-solution and producing a singular, non-convergent CG preconditioner.
-  (#35)
-- Factor each connected component of a disconnected Laplacian independently
-  instead of silently returning a wrong answer. (#36)
-- Augment a strictly-dominant SDDM whose entries are all scaled below unit
-  magnitude, instead of mistaking its row surplus for rounding noise and
-  returning a non-solution. (#36)
-- Reject a structurally-invalid serde-deserialized `Factor` at deserialize time
-  rather than panicking or returning garbage on the first `solve` in release. (#37)
+- `solve`/`solve_into` ground SDDM systems against the auxiliary vertex instead of
+  applying a global zero-mean projection. (#35)
+- Each connected component of a disconnected Laplacian is factored independently. (#36)
+- A strictly-dominant SDDM scaled below unit magnitude is augmented. (#36)
+- A structurally-invalid `Factor` is rejected at deserialize time. (#37)
 - `low_level` clique-tree samplers no longer panic or emit non-finite fill on degenerate weights. (#38)
 - `u32` nonzero/edge overflow now panics instead of silently truncating the factor. (#39)
+- `solve`/`solve_into` project an out-of-range right-hand side onto the range.
 
 ### Changed
 
-- `Config` gains the public `backend: Backend` field. Rust struct literals that
-  do not use `..Default::default()` must specify it; Python takes
-  `Config(backend=Backend.Approximate())` or `Backend.ExactBelow(max_dim=...)`.
-- The serde representation of `Factor` now supports exact and block factors and
-  is not compatible with factors serialized by earlier releases.
-- `solve`/`solve_into` (Rust and Python) reject a right-hand side longer than the
-  original matrix dimension rather than the augmented factor dimension.
-  `SolveError::RhsLengthExceedsFactor` and the corresponding Python `ValueError`
-  now report the original matrix dimension.
+- `Config` gains a public `backend` field, breaking exhaustive struct literals.
+- The serde representation of `Factor` is incompatible with earlier releases.
+- `solve`/`solve_into` cap the right-hand side at the original matrix dimension,
+  not the augmented one.
+- `solve_in_place` leaves one variable pinned per block, independent of `Backend`.
+- A row surplus at or below `min(1e-10 * row_scale, sqrt(f64::EPSILON))` is
+  rounding noise, not dominance, so the system is not augmented.
+- Duplicate entries are summed before the off-diagonal sign check.
 
 ### Performance
 
-- Ingest canonical CSR — column-sorted with no duplicate entries, as scipy emits —
-  without the reordering buffer: 5-20% faster factorization on dense-rowed input
-  and ~35 MiB less peak memory at 2.4M nonzeros.
+- Canonical CSR is ingested without a reordering buffer.
 
 ## [0.3.1] - 2026-07-10
 

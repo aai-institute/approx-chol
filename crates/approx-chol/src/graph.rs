@@ -435,6 +435,8 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
             if row_sums[row] < -row_tolerance {
                 return Err(Error::NotDiagonallyDominant { row });
             }
+            // The cap stops the relative arm swallowing real dominance at large
+            // scale; both ends are pinned by `*_scale_*` ingestion tests.
             let augmentation_floor = row_tolerance.min(T::epsilon().sqrt());
             if row_sums[row] < T::zero() || row_sums[row].abs() <= augmentation_floor {
                 row_sums[row] = T::zero();

@@ -62,7 +62,7 @@ where
     ///
     /// Returns [`Error::InvalidCsr`] if conversion fails, conversion panics,
     /// CSR validation fails, or index conversion to `u32` fails.
-    /// Returns [`Error::PositiveOffDiagonal`] if any off-diagonal entry is
+    /// Returns [`Error::PositiveOffDiagonal`] if a coalesced off-diagonal is
     /// strictly positive (outside the SDDM/Laplacian class).
     /// Returns [`Error::InvalidConfig`] for invalid `split_merge`.
     /// Returns a structured numeric error for non-finite, asymmetric, or

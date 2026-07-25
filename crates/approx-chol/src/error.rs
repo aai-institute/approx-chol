@@ -17,10 +17,8 @@ pub enum Error {
     /// The input CSR matrix has inconsistent dimensions or invalid structure.
     InvalidCsr(CsrError),
 
-    /// An off-diagonal entry is strictly positive. approx-chol factorizes SDDM
-    /// and graph-Laplacian systems, whose off-diagonals are non-positive; a
-    /// positive off-diagonal is outside that class and is rejected rather than
-    /// silently dropped, which would corrupt the factor.
+    /// A coalesced off-diagonal entry is strictly positive, so the matrix is
+    /// outside the SDDM/Laplacian class.
     PositiveOffDiagonal {
         /// `(row, column)` of the offending strictly-positive off-diagonal.
         edge: (usize, usize),
