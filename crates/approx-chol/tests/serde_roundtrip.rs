@@ -6,13 +6,20 @@ mod panic_ok;
 mod path;
 use panic_ok::OrPanic;
 
-use approx_chol::{factorize, Config, CsrRef, Factor};
+use approx_chol::{factorize_with, Config, CsrRef, Factor};
 
 fn path_factor() -> Factor<f64> {
     let row_ptrs: Vec<u32> = path::ROW_PTRS.iter().map(|&v| v as u32).collect();
     let col_indices: Vec<u32> = path::COL_INDICES.iter().map(|&v| v as u32).collect();
     let csr = CsrRef::new(&row_ptrs, &col_indices, &path::VALUES, path::N).or_panic("valid csr");
-    factorize(csr).or_panic("factorization should succeed")
+    factorize_with(
+        csr,
+        Config {
+            dense_threshold: 0,
+            ..Config::default()
+        },
+    )
+    .or_panic("factorization should succeed")
 }
 
 #[test]
@@ -37,12 +44,35 @@ fn factor_json_roundtrip_preserves_solve() {
 }
 
 #[test]
+fn dense_and_block_factors_roundtrip() {
+    let row_ptrs = [0u32, 2, 4, 6, 8];
+    let columns = [0u32, 1, 0, 1, 2, 3, 2, 3];
+    let values = [1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0];
+    for config in [
+        Config::default(),
+        Config {
+            dense_threshold: 0,
+            ..Config::default()
+        },
+    ] {
+        let csr = CsrRef::new(&row_ptrs, &columns, &values, 4).or_panic("valid CSR");
+        let factor = factorize_with(csr, config).or_panic("factor");
+        let encoded = serde_json::to_string(&factor).or_panic("serialize");
+        let restored: Factor<f64> = serde_json::from_str(&encoded).or_panic("deserialize");
+        assert_eq!(
+            restored.solve(&[1.0, -1.0, 2.0, -2.0]).unwrap(),
+            factor.solve(&[1.0, -1.0, 2.0, -2.0]).unwrap()
+        );
+    }
+}
+
+#[test]
 fn deserializing_corrupted_factor_is_rejected() {
     // The unit tests cover every FactorError variant directly; this asserts the
     // serde `try_from` boundary is wired, so a structurally-corrupted persisted
     // factor is rejected at deserialize time rather than panicking on solve.
     let mut value = serde_json::to_value(path_factor()).or_panic("serialize factor");
-    value["sequence"]["offsets"]
+    value["storage"]["Single"]["Approx"]["sequence"]["offsets"]
         .as_array_mut()
         .expect("offsets is an array")
         .pop();
@@ -55,6 +85,7 @@ fn config_json_roundtrip() {
     let config = Config {
         seed: 42,
         split_merge: Some(3),
+        dense_threshold: 24,
     };
 
     let json = serde_json::to_string(&config).or_panic("serialize config");
@@ -62,4 +93,5 @@ fn config_json_roundtrip() {
 
     assert_eq!(restored.seed, config.seed);
     assert_eq!(restored.split_merge, config.split_merge);
+    assert_eq!(restored.dense_threshold, config.dense_threshold);
 }

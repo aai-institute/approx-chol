@@ -1,5 +1,7 @@
-use super::decomposition::EliminationSequence;
-use crate::graph::{EliminationGraph, GraphBuild, MultiEdgeGraph, SlimGraph};
+use super::decomposition::{ComponentFactor, EliminationSequence, SingleFactor};
+use crate::graph::{
+    AdjListGraph, EdgeLike, EliminationGraph, GraphBuild, MultiEdgeGraph, SlimGraph,
+};
 use crate::ordering::{DegreeDeltas, DynamicOrdering};
 use crate::sampling::{CdfSampler, WeightedSampler};
 use crate::{ConfigError, CsrError, CsrRef, Error, Factor};
@@ -63,8 +65,8 @@ where
     /// Returns [`Error::PositiveOffDiagonal`] if any off-diagonal entry is
     /// strictly positive (outside the SDDM/Laplacian class).
     /// Returns [`Error::InvalidConfig`] for invalid `split_merge`.
-    /// Returns [`Error::Disconnected`] if the input is not a single connected
-    /// component after Gremban grounding.
+    /// Returns a structured numeric error for non-finite, asymmetric, or
+    /// non-SDDM input.
     pub fn build<'a, I, M>(&self, sddm: M) -> Result<Factor<T>, Error>
     where
         I: PrimInt + 'a + 'static,
@@ -75,43 +77,83 @@ where
             .map_err(|_| Error::InvalidCsr(CsrError::InputConversionPanicked))?;
         let csr = csr.map_err(Into::into)?;
         let converted = csr.to_owned_u32()?;
-        // Sole per-factorization CSR validation; build_with_sampler trusts it.
+        // Sole per-factorization CSR validation; graph ingestion trusts it.
         let converted_ref = converted.try_as_ref()?;
-        self.build_with_sampler(converted_ref, CdfSampler::<T>::new(self.config.seed))
+        self.build_validated(converted_ref)
     }
 
-    /// Run approximate Cholesky factorization with a custom [`WeightedSampler`].
-    ///
-    /// Assumes `sddm` already passed [`CsrRef::new`] validation (as
-    /// [`build`](Self::build) guarantees); does not re-validate.
-    pub(crate) fn build_with_sampler<S: WeightedSampler<T>>(
-        &self,
-        sddm: CsrRef<'_, T, u32>,
-        sampler: S,
-    ) -> Result<Factor<T>, Error> {
+    fn build_validated(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
         let original_n = sddm.n();
         Self::validate_config(self.config)?;
-        let mut factor = match self.config.split_merge {
+        let factor = match self.config.split_merge {
             None => {
-                let GraphBuild {
-                    graph,
-                    diagonal: diag,
-                    ..
-                } = SlimGraph::<T>::from_sddm(sddm)?;
-                self.build_from_graph(graph, diag, sampler)
+                let build = SlimGraph::<T>::from_sddm(sddm)?;
+                self.build_graph(build, original_n)
             }
             Some(k) => {
-                let GraphBuild {
-                    mut graph,
-                    diagonal: diag,
-                    ..
-                } = MultiEdgeGraph::<T>::from_sddm(sddm)?;
-                graph.mark_split_edges(k);
-                self.build_from_graph(graph, diag, sampler)
+                let mut build = MultiEdgeGraph::<T>::from_sddm(sddm)?;
+                build.graph.mark_split_edges(k);
+                self.build_graph(build, original_n)
             }
         }?;
-        factor.original_n = original_n;
+        debug_assert_eq!(factor.original_n(), original_n);
         Ok(factor)
+    }
+
+    fn build_graph<E: EdgeLike<T>>(
+        &self,
+        build: GraphBuild<AdjListGraph<E, T>, T>,
+        original_n: usize,
+    ) -> Result<Factor<T>, Error> {
+        let GraphBuild {
+            graph,
+            diagonal,
+            components,
+        } = build;
+        let n = graph.n();
+        let Some(components) = components else {
+            let vertices: Vec<u32> = (0..n as u32).collect();
+            let use_dense = n == 0
+                || (self.config.dense_threshold > 0 && original_n <= self.config.dense_threshold);
+            let factor = if use_dense {
+                let (matrix, pivots) = graph.dense_principal(&diagonal, &vertices);
+                SingleFactor::dense(n, matrix, &pivots)?
+            } else {
+                let mut sampler = CdfSampler::<T>::new(self.config.seed);
+                self.build_from_graph(graph, diagonal, &mut sampler)?
+            };
+            return Ok(Factor::single(original_n, factor));
+        };
+
+        let dense_inputs: Vec<_> = components
+            .iter()
+            .map(|vertices| {
+                let component_n = vertices
+                    .iter()
+                    .filter(|&&vertex| (vertex as usize) < original_n)
+                    .count();
+                (self.config.dense_threshold > 0 && component_n <= self.config.dense_threshold)
+                    .then(|| graph.dense_principal(&diagonal, vertices))
+            })
+            .collect();
+        let split = graph.into_components(diagonal, components);
+        let mut factors = Vec::with_capacity(split.len());
+        for (((graph, diagonal, vertices), dense_input), component_index) in
+            split.into_iter().zip(dense_inputs).zip(0usize..)
+        {
+            let factor = match dense_input {
+                Some((matrix, pivots)) => SingleFactor::dense(vertices.len(), matrix, &pivots)?,
+                None => {
+                    let representative = vertices.first().copied().unwrap_or(0) as u64;
+                    let mut sampler =
+                        CdfSampler::<T>::new(component_seed(self.config.seed, representative));
+                    self.build_from_graph(graph, diagonal, &mut sampler)?
+                }
+            };
+            debug_assert_eq!(component_index, factors.len());
+            factors.push(ComponentFactor { vertices, factor });
+        }
+        Ok(Factor::blocks(n, original_n, factors))
     }
 
     fn validate_config(config: Config) -> Result<(), Error> {
@@ -131,8 +173,8 @@ where
         &self,
         mut graph: G,
         diag: Vec<T>,
-        sampler: S,
-    ) -> Result<Factor<T>, Error> {
+        sampler: &mut S,
+    ) -> Result<SingleFactor<T>, Error> {
         let n = graph.n();
         let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
         let degree_sum: usize = degrees.iter().sum();
@@ -151,8 +193,8 @@ where
         diag: Vec<T>,
         ordering: &mut DynamicOrdering,
         degree_sum: usize,
-        sampler: S,
-    ) -> Result<Factor<T>, Error> {
+        sampler: &mut S,
+    ) -> Result<SingleFactor<T>, Error> {
         let mut diag = diag;
         match self.config.split_merge {
             None => Ok(Self::factorize_with_variant(
@@ -184,9 +226,9 @@ where
         diag: &mut [T],
         ordering: &mut DynamicOrdering,
         degree_sum: usize,
-        mut sampler: W,
+        sampler: &mut W,
         mut star_builder: B,
-    ) -> Factor<T> {
+    ) -> SingleFactor<T> {
         let n = graph.n();
         let mut column = SampledColumn::<T>::new();
         let mut seq = EliminationSequence::with_capacity(n, degree_sum);
@@ -211,7 +253,7 @@ where
             }
 
             let star_entries = star_builder.entries();
-            star_builder.sample_column(diag[v], &mut sampler, &mut column);
+            star_builder.sample_column(diag[v], sampler, &mut column);
             seq.record_column(v, column.diagonal, &column.neighbors, &column.fractions);
 
             graph.eliminate_vertex(v);
@@ -229,12 +271,15 @@ where
             deltas.flush(ordering);
         }
 
-        Factor {
-            n,
-            original_n: n,
-            sequence: seq,
-        }
+        SingleFactor::approx(n, seq)
     }
+}
+
+fn component_seed(seed: u64, representative: u64) -> u64 {
+    let mut value = seed ^ representative.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
 }
 
 #[cfg(test)]

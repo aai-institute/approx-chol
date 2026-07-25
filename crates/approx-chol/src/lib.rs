@@ -90,7 +90,7 @@ pub mod low_level;
 
 pub use approx_chol::{Config, Factor, SolveError};
 pub use csr::{CsrRef, OwnedCsr};
-pub use error::{ConfigError, CsrError, Error, IndexKind};
+pub use error::{ConfigError, CsrError, DenseFailure, Error, IndexKind};
 pub(crate) use types::Real;
 
 /// Factorize an SDDM matrix with default configuration.
@@ -101,9 +101,8 @@ pub(crate) use types::Real;
 /// Accepts any input fallibly convertible into [`CsrRef`], including `CsrRef`
 /// directly and, with feature flags, borrowed matrices from `sprs`/`faer`.
 ///
-/// The input must be a single **connected** system. A block-diagonal SDDM
-/// qualifies (the Gremban ground vertex links diagonally-dominant blocks); a
-/// block with no surplus, e.g. a disconnected pure Laplacian, is rejected.
+/// Disconnected systems are factored block-diagonally, with floating
+/// Laplacian kernels handled independently per component.
 ///
 /// # Errors
 ///
@@ -111,8 +110,8 @@ pub(crate) use types::Real;
 /// conversion to `u32` fails, or if input conversion panics.
 /// Returns [`Error::PositiveOffDiagonal`] if any off-diagonal entry is strictly
 /// positive (outside the SDDM/Laplacian class).
-/// Returns [`Error::Disconnected`] if the input stays disconnected after Gremban
-/// grounding (more than one connected component).
+/// Returns a structured numeric error for non-finite, asymmetric, or
+/// non-SDDM input, or if exact dense Cholesky encounters an invalid pivot.
 ///
 /// # Examples
 ///
@@ -151,8 +150,8 @@ where
 /// positive (outside the SDDM/Laplacian class).
 /// Returns [`Error::InvalidConfig`] if configuration values are inconsistent
 /// (e.g. `split_merge == Some(0)`).
-/// Returns [`Error::Disconnected`] if the input stays disconnected after Gremban
-/// grounding (see [`factorize`] for the connectivity precondition).
+/// Returns a structured numeric error for non-finite, asymmetric, or
+/// non-SDDM input, or if exact dense Cholesky encounters an invalid pivot.
 ///
 /// # Examples
 ///

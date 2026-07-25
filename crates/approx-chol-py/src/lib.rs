@@ -93,14 +93,20 @@ struct PyConfig {
     seed: u64,
     #[pyo3(get)]
     split: Option<u32>,
+    #[pyo3(get)]
+    dense_threshold: usize,
 }
 
 #[pymethods]
 impl PyConfig {
     #[new]
-    #[pyo3(signature = (seed=0, split=None))]
-    fn new(seed: u64, split: Option<u32>) -> Self {
-        Self { seed, split }
+    #[pyo3(signature = (seed=0, split=None, dense_threshold=24))]
+    fn new(seed: u64, split: Option<u32>, dense_threshold: usize) -> Self {
+        Self {
+            seed,
+            split,
+            dense_threshold,
+        }
     }
 }
 
@@ -116,6 +122,7 @@ impl PyConfig {
         Ok(Config {
             seed: self.seed,
             split_merge,
+            dense_threshold: self.dense_threshold,
         })
     }
 }
@@ -142,7 +149,7 @@ impl PyFactor {
         self.inner.n()
     }
 
-    /// Number of elimination steps.
+    /// Number of approximate elimination steps or exact dense pivots.
     #[getter]
     fn n_steps(&self) -> usize {
         self.inner.n_steps()

@@ -74,6 +74,7 @@ proptest! {
                 Config {
                     seed: 7,
                     split_merge: Some(2),
+                    ..Default::default()
                 },
             )
             .or_panic("AC2 factorization should succeed");
@@ -133,6 +134,7 @@ proptest! {
             Config {
                 seed: 7,
                 split_merge: Some(2),
+                ..Default::default()
             },
         )
         .or_panic("AC2 factorization");

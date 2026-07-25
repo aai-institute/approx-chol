@@ -108,40 +108,47 @@ fn block_diagonal_paths(k: u32) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
 }
 
 #[test]
-fn disconnected_laplacian_is_rejected() {
-    // Two components => a null space bigger than a connected Laplacian's single
-    // constant, so it must be rejected, not mis-solved. AC and AC2 both.
+fn disconnected_laplacian_solves_per_component() {
     let (rp, ci, vals) = block_diagonal_paths(2);
 
     for split_merge in [None, Some(2)] {
         let csr = CsrRef::new(&rp, &ci, &vals, 4).or_panic("valid CSR");
-        let err = Builder::<f64>::new(Config {
+        let factor = Builder::<f64>::new(Config {
             split_merge,
             ..Config::default()
         })
         .build(csr)
-        .expect_err("disconnected input must be rejected");
-        assert!(
-            matches!(err, Error::Disconnected { components: 2 }),
-            "expected Disconnected {{ components: 2 }}, got {err:?}"
-        );
+        .expect("disconnected Laplacian must factor block-diagonally");
+        let solution = factor.solve(&[1.0, -1.0, 2.0, -2.0]).unwrap();
+        assert_eq!(solution, vec![1.0, 0.0, 2.0, 0.0]);
     }
 }
 
 #[test]
-fn disconnected_component_count_is_reported() {
-    // Three components: the reported count must track k (guards against a
-    // hardcoded 2 or an off-by-one), not merely "> 1".
+fn disconnected_sparse_path_projects_each_component() {
+    let (rp, ci, vals) = block_diagonal_paths(2);
+    for split_merge in [None, Some(2)] {
+        let factor = Builder::<f64>::new(Config {
+            split_merge,
+            dense_threshold: 0,
+            ..Config::default()
+        })
+        .build(CsrRef::new(&rp, &ci, &vals, 4).or_panic("valid CSR"))
+        .or_panic("disconnected sparse factor");
+        let solution = factor.solve(&[1.0, -1.0, 2.0, -2.0]).unwrap();
+        assert_eq!(solution, vec![0.5, -0.5, 1.0, -1.0]);
+    }
+}
+
+#[test]
+fn disconnected_laplacian_handles_three_components() {
     let (rp, ci, vals) = block_diagonal_paths(3);
 
     let csr = CsrRef::new(&rp, &ci, &vals, 6).or_panic("valid CSR");
-    let err = Builder::<f64>::new(Config::default())
+    let factor = Builder::<f64>::new(Config::default())
         .build(csr)
-        .expect_err("disconnected input must be rejected");
-    assert!(
-        matches!(err, Error::Disconnected { components: 3 }),
-        "expected Disconnected {{ components: 3 }}, got {err:?}"
-    );
+        .expect("three components must factor");
+    assert_eq!(factor.n_steps(), 3);
 }
 
 #[test]
@@ -181,34 +188,28 @@ fn tiny_scale_sddm_is_augmented_and_solves() {
 }
 
 #[test]
-fn sub_near_zero_scale_is_rejected_not_silently_mis_solved() {
-    // Below near_zero the pivots would be clamped, so augmenting would mis-solve;
-    // such input must error rather than return a bogus solution.
+fn dense_path_solves_sub_sparse_threshold_scale() {
     let rp = [0u32, 1, 2];
     let ci = [0u32, 1];
     let vals = [1e-15_f64, 1e-15];
-    let result = Builder::<f64>::new(Config::default())
-        .build(CsrRef::new(&rp, &ci, &vals, 2).or_panic("valid CSR"));
-    assert!(
-        result.is_err(),
-        "sub-near_zero input must error rather than silently mis-solve, got {result:?}"
-    );
+    let factor = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(&rp, &ci, &vals, 2).or_panic("valid CSR"))
+        .expect("exact dense path does not clamp small positive pivots");
+    let solution = factor.solve(&[1.0, 2.0]).or_panic("solve");
+    assert!((solution[0] - 1e15).abs() / 1e15 < 1e-14);
+    assert!((solution[1] - 2e15).abs() / 2e15 < 1e-14);
 }
 
 #[test]
-fn connected_non_dominant_input_is_not_reported_disconnected() {
-    // Non-dominant input (negative row sums) leaves the ground vertex isolated;
-    // that artifact must not be miscounted as a component. The graph is connected,
-    // so it must not be reported as Disconnected (even though it's out of class).
+fn connected_non_dominant_input_is_rejected_as_non_sddm() {
     let rp = [0u32, 2, 4];
     let ci = [0u32, 1, 0, 1];
     let vals = [1.0f64, -3.0, -3.0, 1.0];
     let csr = CsrRef::new(&rp, &ci, &vals, 2).or_panic("valid CSR");
-    let result = Builder::<f64>::new(Config::default()).build(csr);
-    assert!(
-        !matches!(result, Err(Error::Disconnected { .. })),
-        "connected input must not be reported as Disconnected, got {result:?}"
-    );
+    let error = Builder::<f64>::new(Config::default())
+        .build(csr)
+        .expect_err("non-SDDM input must be rejected");
+    assert!(matches!(error, Error::NotDiagonallyDominant { .. }));
 }
 
 #[test]
@@ -229,4 +230,109 @@ fn block_diagonal_sddm_is_accepted_via_shared_ground() {
         .build(csr)
         .expect("block-diagonal SDDM must be accepted via the shared ground vertex");
     }
+}
+
+#[test]
+fn empty_and_singleton_systems_have_defined_solves() {
+    let empty = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(&[0u32], &[], &[], 0).or_panic("valid empty CSR"))
+        .or_panic("empty factor");
+    assert_eq!(empty.solve(&[]).or_panic("empty solve"), Vec::<f64>::new());
+    assert_eq!(empty.n_steps(), 0);
+
+    let zero = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(&[0u32, 1], &[0], &[0.0], 1).or_panic("valid singleton"))
+        .or_panic("zero singleton factor");
+    assert_eq!(
+        zero.solve(&[7.0]).or_panic("zero singleton solve"),
+        vec![0.0]
+    );
+
+    let positive = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(&[0u32, 1], &[0], &[2.0], 1).or_panic("valid singleton"))
+        .or_panic("positive singleton factor");
+    let solution = positive.solve(&[7.0]).or_panic("positive singleton solve");
+    assert!((solution[0] - 3.5).abs() < 1e-14);
+}
+
+#[test]
+fn many_zero_singletons_factor_as_trivial_components() {
+    let n = 128u32;
+    let row_ptrs = vec![0u32; n as usize + 1];
+    let factor = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(&row_ptrs, &[], &[], n).or_panic("valid zero CSR"))
+        .or_panic("zero components");
+    assert_eq!(factor.n_steps(), 0);
+    assert_eq!(
+        factor.solve(&vec![1.0; n as usize]).unwrap(),
+        vec![0.0; n as usize]
+    );
+}
+
+#[test]
+fn asymmetric_input_is_rejected_after_duplicate_coalescing() {
+    let missing = CsrRef::new(&[0u32, 2, 3], &[0, 1, 1], &[1.0, -1.0, 1.0], 2)
+        .or_panic("structurally valid CSR");
+    assert!(matches!(
+        Builder::<f64>::new(Config::default()).build(missing),
+        Err(Error::Asymmetric { edge: (0, 1) })
+    ));
+
+    let unequal = CsrRef::new(&[0u32, 2, 4], &[0, 1, 0, 1], &[1.0, -1.0, -2.0, 2.0], 2)
+        .or_panic("structurally valid CSR");
+    assert!(matches!(
+        Builder::<f64>::new(Config::default()).build(unequal),
+        Err(Error::Asymmetric { edge: (0, 1) })
+    ));
+
+    let coalesced = CsrRef::new(
+        &[0u32, 3, 6],
+        &[0, 1, 1, 0, 0, 1],
+        &[2.0, -0.25, -0.75, -0.5, -0.5, 2.0],
+        2,
+    )
+    .or_panic("structurally valid CSR");
+    Builder::<f64>::new(Config::default())
+        .build(coalesced)
+        .or_panic("equal coalesced transpose entries");
+}
+
+#[test]
+fn mixed_grounded_and_floating_components_solve_independently() {
+    let row_ptrs = [0u32, 1, 3, 5];
+    let columns = [0u32, 1, 2, 1, 2];
+    let values = [2.0, 1.0, -1.0, -1.0, 1.0];
+    let factor = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(&row_ptrs, &columns, &values, 3).or_panic("valid mixed CSR"))
+        .or_panic("mixed factor");
+    let solution = factor.solve(&[4.0, 1.0, -1.0]).unwrap();
+    assert!((solution[0] - 2.0).abs() < 1e-14);
+    assert_eq!(&solution[1..], &[1.0, 0.0]);
+}
+
+#[test]
+fn dense_threshold_is_applied_per_component() {
+    let row_ptrs = [0u32, 2, 4, 6, 9, 11];
+    let columns = [0u32, 1, 0, 1, 2, 3, 2, 3, 4, 3, 4];
+    let values = [1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
+    let factor = Builder::<f64>::new(Config {
+        dense_threshold: 2,
+        ..Config::default()
+    })
+    .build(CsrRef::new(&row_ptrs, &columns, &values, 5).or_panic("valid CSR"))
+    .or_panic("mixed backend factor");
+    let solution = factor.solve(&[1.0, -1.0, 1.0, 0.0, -1.0]).unwrap();
+    assert_eq!(solution, vec![1.0, 0.0, 1.0, 0.0, -1.0]);
+}
+
+#[test]
+fn non_finite_input_is_reported() {
+    let non_finite =
+        CsrRef::new(&[0u32, 1], &[0], &[f64::NAN], 1).or_panic("structurally valid CSR");
+    assert_eq!(
+        Builder::<f64>::new(Config::default())
+            .build(non_finite)
+            .unwrap_err(),
+        Error::NonFiniteValue { position: 0 }
+    );
 }

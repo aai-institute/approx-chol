@@ -1,11 +1,13 @@
 //! Approximate Cholesky factor: elimination-sequence storage ([`sequence`])
 //! and the LDLᵀ [`Factor`] solve API ([`factor`]).
 
+#[cfg(feature = "serde")]
 use core::fmt;
 
 mod factor;
 mod sequence;
 
+pub(crate) use factor::{ComponentFactor, SingleFactor};
 pub use factor::{Factor, SolveError};
 pub(crate) use sequence::EliminationSequence;
 
@@ -14,6 +16,7 @@ pub(crate) use sequence::EliminationSequence;
 /// Internal: surfaces only as a serde error string, via the `Debug`-based
 /// [`Display`] below (variant + offending values), so — unlike the public error
 /// enums in `error.rs` — it carries no hand-written per-variant prose.
+#[cfg(feature = "serde")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FactorError {
     /// `original_n` exceeds the internal factor dimension `n`.
@@ -46,8 +49,17 @@ pub(crate) enum FactorError {
     },
     /// The final offset must equal the neighbor storage length (`nnz`).
     FinalOffsetMismatch { last: usize, nnz: usize },
+    /// Dense lower-triangular storage is inconsistent with its dimension.
+    DenseLengthInvalid { n: usize, len: usize },
+    /// A component mapping and its local factor have different dimensions.
+    ComponentDimensionMismatch,
+    /// The top-level and single-factor dimensions differ.
+    SingleDimensionMismatch,
+    /// A component vertex is out of bounds or appears more than once.
+    ComponentVertexInvalid { vertex: usize },
 }
 
+#[cfg(feature = "serde")]
 impl fmt::Display for FactorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "corrupted persisted factor: {self:?}")

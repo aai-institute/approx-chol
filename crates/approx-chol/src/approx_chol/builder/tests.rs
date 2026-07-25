@@ -10,7 +10,10 @@ fn test_ac_default_solve_roundtrip() {
     let (indptr, indices, data) = path_laplacian_4();
     let csr = make_csr(&indptr, &indices, &data);
 
-    let builder = Builder::<f64>::new(Config::default());
+    let builder = Builder::<f64>::new(Config {
+        dense_threshold: 0,
+        ..Config::default()
+    });
     let factor = builder.build(csr).or_panic("factorization should succeed");
     assert_eq!(factor.n_steps(), factor.n().saturating_sub(1));
 
@@ -23,6 +26,13 @@ fn test_ac_default_solve_roundtrip() {
     assert!(work.iter().any(|x| x.abs() > 1e-10));
     let mean = work.iter().sum::<f64>() / work.len() as f64;
     assert!(mean.abs() < 1e-10);
+}
+
+#[test]
+fn component_seeds_are_stable_and_distinct() {
+    assert_eq!(component_seed(42, 7), component_seed(42, 7));
+    assert_ne!(component_seed(42, 7), component_seed(42, 8));
+    assert_ne!(component_seed(42, 7), component_seed(43, 7));
 }
 
 /// Regression test for the AC2 n==1 diagonal bug.
@@ -119,6 +129,7 @@ fn test_ac2_n_eq_1_solve_produces_finite_for_multiple_seeds() {
         let config = Config {
             split_merge: Some(2),
             seed,
+            ..Default::default()
         };
         let factor = Builder::<f64>::new(config)
             .build(csr)

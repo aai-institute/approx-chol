@@ -29,7 +29,7 @@ pub use decomposition::{Factor, SolveError};
 /// assert!(config.split_merge.is_some());
 /// ```
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct Config {
     /// Random seed for the edge-weight sampler. Use different values to get
     /// reproducible but varied approximate factors.
@@ -39,4 +39,17 @@ pub struct Config {
     /// `None` = standard AC (default), `Some(k)` = AC2 with `k` edge copies
     /// and `k` merge cap per neighbor pair.
     pub split_merge: Option<u32>,
+    /// Largest connected-component dimension factored with exact dense
+    /// Cholesky (default: `24`). `0` disables the dense path.
+    pub dense_threshold: usize,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            seed: 0,
+            split_merge: None,
+            dense_threshold: 24,
+        }
+    }
 }

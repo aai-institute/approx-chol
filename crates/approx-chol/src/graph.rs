@@ -2,11 +2,13 @@
 
 use crate::{CsrError, CsrRef, Error, Real};
 use num_traits::NumCast;
+use std::collections::HashMap;
 
 /// Named return type for [`EliminationGraph::from_sddm`].
 pub(crate) struct GraphBuild<G, T: Real> {
     pub graph: G,
     pub diagonal: Vec<T>,
+    pub components: Option<Vec<Vec<u32>>>,
 }
 
 /// A neighbor entry produced by star elimination.
@@ -204,25 +206,41 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
             adj.push(Vec::with_capacity(cols.len()));
         }
         let mut diag = vec![T::zero(); n];
-        let mut row_sums = vec![T::zero(); n];
+        let mut off_diagonals: HashMap<(usize, usize), (Option<T>, Option<T>)> = HashMap::new();
+        let mut edge_order = Vec::new();
+        let mut upper_edges = Vec::new();
 
-        for row in 0..n {
+        for (row, diagonal) in diag.iter_mut().enumerate() {
             let (cols, vals) = csr.try_row(row)?;
-            for (&col, &val) in cols.iter().zip(vals.iter()) {
+            let row_start = csr.row_ptrs()[row] as usize;
+            for (offset, (&col, &val)) in cols.iter().zip(vals.iter()).enumerate() {
+                if !val.is_finite() {
+                    return Err(Error::NonFiniteValue {
+                        position: row_start + offset,
+                    });
+                }
                 let col_usize = col as usize;
                 debug_assert!(
                     col_usize < n,
                     "CSR column index {col_usize} out of bounds (n={n})"
                 );
                 if row == col_usize {
-                    diag[row] = diag[row] + val;
-                    row_sums[row] = row_sums[row] + val;
+                    *diagonal = *diagonal + val;
                 } else if val < T::zero() {
-                    row_sums[row] = row_sums[row] + val;
-                    // Build a single undirected edge per symmetric pair.
                     if row < col_usize {
-                        Self::add_edge_pair(&mut adj, row, col_usize, -val);
+                        upper_edges.push((row, col_usize, -val));
                     }
+                    let (lo, hi, side) = if row < col_usize {
+                        (row, col_usize, 0)
+                    } else {
+                        (col_usize, row, 1)
+                    };
+                    let pair = off_diagonals.entry((lo, hi)).or_insert_with(|| {
+                        edge_order.push((lo, hi));
+                        (None, None)
+                    });
+                    let slot = if side == 0 { &mut pair.0 } else { &mut pair.1 };
+                    *slot = Some(slot.unwrap_or_else(T::zero) + val);
                 } else if val > T::zero() {
                     // Positive off-diagonal: outside the SDDM/Laplacian class.
                     // Reject instead of falling through — the silent drop here
@@ -231,6 +249,36 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
                         edge: (row, col_usize),
                     });
                 }
+            }
+        }
+        let mut row_sums = diag.clone();
+        let mut row_scales: Vec<T> = diag.iter().map(|value| value.abs()).collect();
+        for (row, col) in edge_order {
+            let (upper, lower) = off_diagonals
+                .remove(&(row, col))
+                .expect("edge order and symmetry map are built together");
+            let (Some(upper), Some(lower)) = (upper, lower) else {
+                return Err(Error::Asymmetric { edge: (row, col) });
+            };
+            if upper != lower {
+                return Err(Error::Asymmetric { edge: (row, col) });
+            }
+            row_sums[row] = row_sums[row] + upper;
+            row_sums[col] = row_sums[col] + upper;
+            row_scales[row] = row_scales[row] + upper.abs();
+            row_scales[col] = row_scales[col] + upper.abs();
+        }
+        for (row, col, weight) in upper_edges {
+            Self::add_edge_pair(&mut adj, row, col, weight);
+        }
+        let tolerance = augmentation_eps::<T>();
+        for row in 0..n {
+            let row_tolerance = tolerance * row_scales[row];
+            if row_sums[row] < -row_tolerance {
+                return Err(Error::NotDiagonallyDominant { row });
+            }
+            if row_sums[row].abs() <= row_tolerance {
+                row_sums[row] = T::zero();
             }
         }
         Self::build_augmented_laplacian(adj, diag, &row_sums)
@@ -319,6 +367,70 @@ fn augmentation_eps<T: Real>() -> T {
 }
 
 impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
+    pub(crate) fn dense_principal(&self, diagonal: &[T], vertices: &[u32]) -> (Vec<T>, Vec<u32>) {
+        let pivot_vertices = if vertices.is_empty() {
+            Vec::new()
+        } else {
+            vertices[..vertices.len() - 1].to_vec()
+        };
+        let m = pivot_vertices.len();
+        let local_of: HashMap<u32, usize> = pivot_vertices
+            .iter()
+            .enumerate()
+            .map(|(local, &global)| (global, local))
+            .collect();
+        let mut matrix = vec![T::zero(); m * m];
+        for (local, &global) in pivot_vertices.iter().enumerate() {
+            matrix[local * m + local] = diagonal[global as usize];
+            for edge in &self.adj[global as usize] {
+                if let Some(&other) = local_of.get(&edge.to()) {
+                    matrix[local * m + other] = matrix[local * m + other] - edge.weight();
+                }
+            }
+        }
+        (matrix, pivot_vertices)
+    }
+
+    pub(crate) fn into_components(
+        self,
+        diagonal: Vec<T>,
+        components: Vec<Vec<u32>>,
+    ) -> Vec<(Self, Vec<T>, Vec<u32>)> {
+        let mut result = Vec::with_capacity(components.len());
+        let mut local_of = vec![usize::MAX; self.adj.len()];
+        for vertices in components {
+            for (local, &global) in vertices.iter().enumerate() {
+                local_of[global as usize] = local;
+            }
+            let mut adjacency = vec![Vec::new(); vertices.len()];
+            for (local_u, &global_u) in vertices.iter().enumerate() {
+                for edge in &self.adj[global_u as usize] {
+                    let local_v = local_of[edge.to() as usize];
+                    if local_v != usize::MAX && local_u < local_v {
+                        Self::add_edge_pair(&mut adjacency, local_u, local_v, edge.weight());
+                    }
+                }
+            }
+            let local_diagonal = vertices
+                .iter()
+                .map(|&vertex| diagonal[vertex as usize])
+                .collect();
+            for &global in &vertices {
+                local_of[global as usize] = usize::MAX;
+            }
+            result.push((
+                Self {
+                    eliminated: BitVec::new(vertices.len()),
+                    adj: adjacency,
+                    _marker: core::marker::PhantomData,
+                },
+                local_diagonal,
+                vertices,
+            ));
+        }
+        result
+    }
+
     #[inline]
     fn add_edge_pair(adj: &mut [Vec<E>], u: usize, v: usize, weight: T) {
         // u32 reverse pointers; overflow is unreachable for tractable inputs,
@@ -349,18 +461,19 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
     /// Connected components among the first `n_real` vertices. Traversal follows
     /// every edge, so a ground vertex (index `>= n_real`) links the blocks it
     /// touches without being counted as its own component.
-    fn count_components(adj: &[Vec<E>], n_real: usize) -> usize {
+    fn components(adj: &[Vec<E>], n_real: usize) -> Vec<Vec<u32>> {
         let mut visited = BitVec::new(adj.len());
         let mut stack: Vec<usize> = Vec::new();
-        let mut components = 0usize;
+        let mut components = Vec::new();
         for start in 0..n_real {
             if visited.get(start) {
                 continue;
             }
-            components += 1;
+            let mut component = Vec::new();
             visited.set(start);
             stack.push(start);
             while let Some(v) = stack.pop() {
+                component.push(v as u32);
                 for e in &adj[v] {
                     let u = e.to() as usize;
                     if !visited.get(u) {
@@ -369,12 +482,14 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
                     }
                 }
             }
+            component.sort_unstable();
+            components.push(component);
         }
         components
     }
 
-    /// Build the final graph: apply Gremban augmentation if needed, then reject
-    /// disconnected input (`Error::Disconnected`).
+    /// Build the final graph, apply Gremban augmentation, and retain component
+    /// labels only when block dispatch is required.
     fn build_augmented_laplacian(
         mut adj: Vec<Vec<E>>,
         mut diag: Vec<T>,
@@ -382,12 +497,7 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
     ) -> Result<GraphBuild<Self, T>, Error> {
         let m = adj.len();
         let (max_surplus, surplus_sum, surplus_count) = surplus_stats(row_sums);
-        // Surplus floor: absolute `augmentation_eps`, shrunk proportionally below
-        // scale 1. The cap keeps a large-scale barely-PD input augmented (consumers
-        // rely on it); `near_zero` rejects input the elimination can't resolve.
-        let max_diag = diag.iter().fold(T::zero(), |acc, &d| acc.max(d.abs()));
-        let floor = augmentation_eps::<T>() * max_diag.min(T::one());
-        let needs_augmentation = max_surplus > floor && max_diag > T::near_zero();
+        let needs_augmentation = max_surplus > T::zero();
 
         if needs_augmentation {
             if m >= u32::MAX as usize {
@@ -416,12 +526,12 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
         }
 
         let n = adj.len();
-        // Reject before the expensive elimination: >1 component (over the real
-        // vertices) means a block can't reach ground. See `Error::Disconnected`.
-        let components = Self::count_components(&adj, m);
-        if components > 1 {
-            return Err(Error::Disconnected { components });
-        }
+        let components = Self::components(&adj, m);
+        let components = if components.len() > 1 {
+            Some(components)
+        } else {
+            None
+        };
 
         let eliminated = BitVec::new(n);
         Ok(GraphBuild {
@@ -431,6 +541,7 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
                 _marker: core::marker::PhantomData,
             },
             diagonal: diag,
+            components,
         })
     }
 }

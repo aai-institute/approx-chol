@@ -1,5 +1,6 @@
 //! Flat storage for the elimination sequence and its per-step row kernels.
 
+#[cfg(feature = "serde")]
 use super::FactorError;
 use crate::types::Real;
 
@@ -141,6 +142,7 @@ impl<T> EliminationSequence<T> {
     /// factor dimension `n`. Runs in release builds (unlike the `debug_assert`
     /// on the solve path), so a deserialized (untrusted) factor is rejected
     /// before it can index storage out of bounds or silently return garbage.
+    #[cfg(feature = "serde")]
     pub(crate) fn validate_for_dim(&self, n: usize) -> Result<(), FactorError> {
         let n_steps = self.vertices.len();
         if self.offsets.len() != n_steps + 1 {

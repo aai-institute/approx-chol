@@ -26,14 +26,43 @@ pub enum Error {
         edge: (usize, usize),
     },
 
-    /// The input is not a single connected SDDM/Laplacian system: some block has
-    /// no diagonal surplus to link it to the shared Gremban ground vertex (e.g. a
-    /// disconnected pure Laplacian). A block-diagonal SDDM is still accepted.
-    Disconnected {
-        /// Number of connected components among the input variables (the shared
-        /// ground vertex is not counted).
-        components: usize,
+    /// A matrix value is NaN or infinite.
+    NonFiniteValue {
+        /// Position in the CSR value array.
+        position: usize,
     },
+
+    /// Coalesced transpose entries are missing or unequal.
+    Asymmetric {
+        /// Canonical off-diagonal coordinate with `row < column`.
+        edge: (usize, usize),
+    },
+
+    /// A row has negative diagonal surplus beyond the rounding tolerance.
+    NotDiagonallyDominant {
+        /// Row whose diagonal is smaller than its off-diagonal magnitude sum.
+        row: usize,
+    },
+
+    /// Exact dense Cholesky could not produce a valid pivot.
+    DenseFactorizationFailed {
+        /// Original global vertex corresponding to the failed pivot.
+        vertex: usize,
+        /// Numeric failure observed at that pivot.
+        failure: DenseFailure,
+    },
+}
+
+/// Numeric reasons an exact dense Cholesky pivot can fail.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DenseFailure {
+    /// The updated diagonal was zero or negative.
+    NonPositivePivot,
+    /// The updated diagonal or its square root was NaN or infinite.
+    NonFinitePivot,
+    /// The reciprocal pivot was NaN or infinite.
+    NonFiniteReciprocal,
 }
 
 /// Structured configuration errors returned by factorization setup.
@@ -209,10 +238,31 @@ impl fmt::Display for Error {
                 f,
                 "off-diagonal ({row}, {col}) is positive; approx-chol requires SDDM/Laplacian input (off-diagonals must be <= 0)"
             ),
-            Error::Disconnected { components } => write!(
+            Error::NonFiniteValue { position } => {
+                write!(f, "matrix value at CSR position {position} is not finite")
+            }
+            Error::Asymmetric { edge: (row, col) } => write!(
                 f,
-                "input splits into {components} connected components; approx-chol solves a single connected SDDM/Laplacian system"
+                "matrix is not symmetric at ({row}, {col}) and ({col}, {row})"
             ),
+            Error::NotDiagonallyDominant { row } => write!(
+                f,
+                "row {row} is not diagonally dominant; approx-chol requires SDDM/Laplacian input"
+            ),
+            Error::DenseFactorizationFailed { vertex, failure } => write!(
+                f,
+                "dense Cholesky failed at vertex {vertex}: {failure}"
+            ),
+        }
+    }
+}
+
+impl fmt::Display for DenseFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NonPositivePivot => write!(f, "non-positive pivot"),
+            Self::NonFinitePivot => write!(f, "non-finite pivot"),
+            Self::NonFiniteReciprocal => write!(f, "non-finite reciprocal pivot"),
         }
     }
 }
