@@ -4,7 +4,7 @@ version = "0.3.1"
 description = "Approximate Cholesky factorization for graph Laplacians"
 readme = "python/README.md"
 authors = [{name = "Kristof Schröder", email = "k.schroeder@appliedai-institute.de"}]
-requires-python = ">= 3.11"
+requires-python = ">= 3.9"
 license = "MIT"
 license-files = [
     "LICENSE",
@@ -17,11 +17,20 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Free Threading :: 2 - Beta",
     "Topic :: Scientific/Engineering :: Mathematics",
 ]
+# Floors are enforced by the min-deps CI job, not guessed. scipy 1.12 is the
+# first release with `cg(rtol=...)`; 1.11 and older take `tol=` instead.
 dependencies = [
     "numpy>=1.24",
-    "scipy>=1.10",
+    "scipy>=1.12",
 ]
 
 [project.urls]

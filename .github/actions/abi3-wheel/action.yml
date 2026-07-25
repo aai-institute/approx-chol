@@ -14,6 +14,17 @@ runs:
     - name: build wheel
       shell: bash
       run: pixi run -e ci maturin build --locked --out dist
+    # maturin only warns when it cannot honour abi3, so assert the tag rather
+    # than trusting a green build to mean one wheel covers every interpreter.
+    - name: assert the wheel is tagged cp39-abi3
+      shell: bash
+      run: |
+        for whl in dist/*.whl; do
+          case "$(basename "$whl")" in
+            *-cp39-abi3-*) ;;
+            *) echo "::error::expected a cp39-abi3 wheel, got $(basename "$whl")"; exit 1 ;;
+          esac
+        done
     - name: abi3audit
       shell: bash
       run: pixi run -e audit abi3audit dist/*.whl

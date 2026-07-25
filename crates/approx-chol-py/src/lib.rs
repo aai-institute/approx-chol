@@ -468,7 +468,10 @@ fn factorize(
     factorize_csr(py, csr, config)
 }
 
-#[pymodule]
+/// Approximate Cholesky factorization for SDDM/Laplacian systems.
+// Every pyclass is `frozen` with `Sync` state and the module holds none, so nothing
+// here needs the GIL to stay sound on free-threaded builds.
+#[pymodule(gil_used = false)]
 fn _approx_chol(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBackend>()?;
     m.add_class::<PyConfig>()?;

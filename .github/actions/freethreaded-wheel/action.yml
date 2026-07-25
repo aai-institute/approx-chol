@@ -1,0 +1,69 @@
+name: free-threaded wheel
+description: >
+  Build the version-specific free-threaded wheel for this runner, prove it does
+  not re-enable the GIL, and upload it as an artifact.
+
+inputs:
+  python-version:
+    description: Free-threaded interpreter to build against, e.g. "3.14t".
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - id: interpreter
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    - uses: prefix-dev/setup-pixi@v0.10.0
+      with:
+        environments: ci
+        cache: true
+        cache-write: ${{ github.ref == 'refs/heads/main' }}
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - uses: Swatinem/rust-cache@v2
+    # Free-threaded CPython has no stable ABI before PEP 803 lands in 3.15, so
+    # this deliberately produces one version-specific wheel per interpreter
+    # instead of the single abi3 wheel the other jobs build.
+    - name: build wheel
+      shell: bash
+      run: >
+        pixi run -e ci maturin build --locked --out dist
+        --interpreter '${{ steps.interpreter.outputs.python-path }}'
+    - name: assert the wheel is tagged free-threaded
+      shell: bash
+      run: |
+        for whl in dist/*.whl; do
+          case "$(basename "$whl")" in
+            *-cp3??t-*) ;;
+            *) echo "::error::expected a free-threaded wheel, got $(basename "$whl")"; exit 1 ;;
+          esac
+        done
+    - name: install and run the suite
+      shell: bash
+      env:
+        PY: ${{ steps.interpreter.outputs.python-path }}
+      run: |
+        "$PY" -m pip install --upgrade pip
+        "$PY" -m pip install pytest numpy scipy
+        "$PY" -m pip install dist/*.whl
+        "$PY" -m pytest tests/ -v
+    # The wheel is worthless if importing it flips the GIL back on: that would
+    # silently de-optimise every other package in the process, and it is what
+    # happens by default without `gil_used = false` on the pymodule.
+    - name: assert the import leaves the GIL disabled
+      shell: bash
+      env:
+        PY: ${{ steps.interpreter.outputs.python-path }}
+      run: |
+        PYTHON_GIL=0 "$PY" -X warn_default_encoding -c '
+        import sys, warnings
+        warnings.simplefilter("error", RuntimeWarning)
+        import approx_chol
+        assert not sys._is_gil_enabled(), "importing approx_chol re-enabled the GIL"
+        print("GIL still disabled after import")
+        '
+    - uses: actions/upload-artifact@v4
+      with:
+        name: wheel-${{ runner.os }}-${{ inputs.python-version }}
+        path: dist/*.whl
