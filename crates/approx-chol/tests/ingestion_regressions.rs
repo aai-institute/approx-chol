@@ -607,3 +607,92 @@ fn solve_path(row_ptrs: &[u32], columns: &[u32], values: &[f64]) -> Vec<f64> {
         .or_panic("path factor");
     factor.solve(&[1.0, 0.0, -1.0]).or_panic("solve")
 }
+
+#[test]
+fn rows_summing_to_non_finite_are_rejected_on_both_paths() {
+    // Stored values are finite, symmetric and non-positive; the row sums are not.
+    let max = f64::MAX;
+    let expect_rejected =
+        |label: &str, row_ptrs: &[u32], col_indices: &[u32], values: &[f64], n| {
+            let csr = CsrRef::new(row_ptrs, col_indices, values, n).or_panic("valid CSR");
+            for backend in [
+                Backend::Approximate,
+                Backend::ExactBelow {
+                    max_dim: 24,
+                    on_failure: ExactFailure::Error,
+                },
+            ] {
+                let result = Builder::<f64>::new(Config {
+                    backend,
+                    ..Config::default()
+                })
+                .build(csr);
+                assert!(
+                    matches!(result, Err(Error::NonFiniteRow { .. })),
+                    "{label} under {backend:?} must be rejected, got {result:?}"
+                );
+            }
+        };
+
+    // Bucketed path.
+    expect_rejected(
+        "coalesced duplicates",
+        &[0, 3, 6],
+        &[0, 1, 1, 0, 0, 1],
+        &[max, -max, -max, -max, -max, max],
+        2,
+    );
+    // Canonical path: no duplicates, two near-MAX off-diagonals in one row.
+    expect_rejected(
+        "canonical row overflow",
+        &[0, 3, 5, 7],
+        &[0, 1, 2, 0, 1, 0, 2],
+        &[0.0, -max, -max, -max, max, -max, max],
+        3,
+    );
+    expect_rejected("duplicate diagonal", &[0, 2], &[0, 0], &[max, max], 1);
+}
+
+#[test]
+fn edge_splitting_does_not_reach_the_exact_backend() {
+    // AC2's `weight / k` then `weight * count` round trip underflows a subnormal
+    // to zero, which fed the exact assembly a diagonal matrix instead of a path.
+    let row_ptrs = [0u32, 2, 5, 7];
+    let col_indices = [0u32, 1, 0, 1, 2, 1, 2];
+    let exact = Backend::ExactBelow {
+        max_dim: 24,
+        on_failure: ExactFailure::Error,
+    };
+
+    for weight in [1.0f64, f64::from_bits(1)] {
+        let values = [
+            weight,
+            -weight,
+            -weight,
+            2.0 * weight,
+            -weight,
+            -weight,
+            weight,
+        ];
+        let rhs = [weight, 0.0, -weight];
+        let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 3).or_panic("valid CSR");
+
+        let solve = |split_merge| {
+            Builder::<f64>::new(Config {
+                backend: exact,
+                split_merge,
+                ..Config::default()
+            })
+            .build(csr)
+            .or_panic("exact factorization")
+            .solve(&rhs)
+            .or_panic("solve")
+        };
+
+        assert_eq!(
+            solve(None),
+            solve(Some(2)),
+            "exact factor must not depend on the AC2 knob (weight={weight:e})"
+        );
+    }
+}

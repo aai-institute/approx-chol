@@ -90,9 +90,8 @@ where
                 let build = SlimGraph::<T>::from_sddm(sddm)?;
                 self.build_graph(build, original_n)
             }
-            Some(k) => {
-                let mut build = MultiEdgeGraph::<T>::from_sddm(sddm)?;
-                build.graph.mark_split_edges(k);
+            Some(_) => {
+                let build = MultiEdgeGraph::<T>::from_sddm(sddm)?;
                 self.build_graph(build, original_n)
             }
         }?;
@@ -106,10 +105,11 @@ where
         original_n: usize,
     ) -> Result<Factor<T>, Error> {
         let GraphBuild {
-            graph,
+            mut graph,
             diagonal,
             components,
         } = build;
+        let split_merge = self.config.split_merge.unwrap_or(1);
         let n = graph.n();
         if n == 0 {
             return Ok(Factor::empty(original_n));
@@ -119,15 +119,12 @@ where
         let Some(components) = components else {
             let vertices: Vec<u32> = (0..n as u32).collect();
             let mut fallbacks = Vec::new();
-            let exact = if self.config.backend.uses_exact(original_n) {
-                let (matrix, pivots) = graph.dense_principal(&diagonal, &vertices)?;
-                self.try_exact(n, matrix, &pivots, &mut fallbacks)?
-            } else {
-                None
-            };
+            let exact =
+                self.try_exact(&graph, &diagonal, &vertices, n, original_n, &mut fallbacks)?;
             let (factor, anchor) = match exact {
                 Some(factor) => (factor, n - 1),
                 None => {
+                    graph.mark_split_edges(split_merge);
                     let mut sampler = CdfSampler::<T>::new(self.config.seed);
                     self.build_from_graph(graph, diagonal, &mut sampler)?
                 }
@@ -157,20 +154,23 @@ where
                 .filter(|vertex| vertices.last() == Some(vertex))
                 .map(|_| (block_n - 1) as u32);
             let component_n = ground.map_or(block_n, |ground| ground as usize);
-            let exact = if self.config.backend.uses_exact(component_n) {
-                let (matrix, pivots) = graph.dense_principal(&diagonal, &vertices)?;
-                self.try_exact(block_n, matrix, &pivots, &mut fallbacks)?
-            } else {
-                None
-            };
+            let exact = self.try_exact(
+                &graph,
+                &diagonal,
+                &vertices,
+                block_n,
+                component_n,
+                &mut fallbacks,
+            )?;
             let (factor, anchor) = match exact {
                 Some(factor) => (factor, block_n - 1),
                 None => {
                     if local_of.is_empty() {
                         local_of.resize(n, usize::MAX);
                     }
-                    let (component_graph, component_diagonal) =
+                    let (mut component_graph, component_diagonal) =
                         graph.extract_component(&diagonal, &vertices, &mut local_of);
+                    component_graph.mark_split_edges(split_merge);
                     let representative = vertices.first().copied().unwrap_or(0) as u64;
                     let mut sampler =
                         CdfSampler::<T>::new(component_seed(self.config.seed, representative));
@@ -190,16 +190,25 @@ where
         ))
     }
 
-    /// `None` when the exact factorization failed on a pivot and the configured
-    /// [`ExactFailure`] asks for a fallback, which is recorded in `fallbacks`.
-    fn try_exact(
+    /// `None` when the block is not factored exactly: over `max_dim`, too large to
+    /// assemble, or a failed pivot that [`ExactFailure`] asks to fall back from.
+    fn try_exact<E: EdgeLike<T>>(
         &self,
+        graph: &AdjListGraph<E, T>,
+        diagonal: &[T],
+        vertices: &[u32],
         block_n: usize,
-        matrix: Vec<T>,
-        pivots: &[u32],
+        component_n: usize,
         fallbacks: &mut Vec<ExactFallback>,
     ) -> Result<Option<BlockFactor<T>>, Error> {
-        match BlockFactor::dense(block_n, matrix, pivots) {
+        if !self.config.backend.uses_exact(component_n) {
+            return Ok(None);
+        }
+        // Unrecorded: `fallbacks` means not positive definite, not out of memory.
+        let Some((matrix, pivots)) = graph.dense_principal(diagonal, vertices) else {
+            return Ok(None);
+        };
+        match BlockFactor::dense(block_n, matrix, &pivots) {
             Ok(factor) => Ok(Some(factor)),
             Err(Error::DenseFactorizationFailed { vertex, failure })
                 if self.config.backend.on_failure() == ExactFailure::FallBackToApproximate =>

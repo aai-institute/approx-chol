@@ -42,18 +42,19 @@ pub enum Error {
         row: usize,
     },
 
+    /// A row's accumulated diagonal or magnitude sum overflowed, though every
+    /// stored value is finite.
+    NonFiniteRow {
+        /// Row that overflowed.
+        row: usize,
+    },
+
     /// Exact dense Cholesky could not produce a valid pivot.
     DenseFactorizationFailed {
         /// Original global vertex corresponding to the failed pivot.
         vertex: usize,
         /// Numeric failure observed at that pivot.
         failure: DenseFailure,
-    },
-
-    /// An exact dense component cannot be represented in memory.
-    DenseMatrixTooLarge {
-        /// Dense component dimension.
-        dimension: usize,
     },
 }
 
@@ -254,13 +255,13 @@ impl fmt::Display for Error {
                 f,
                 "row {row} is not diagonally dominant; approx-chol requires SDDM/Laplacian input"
             ),
+            Error::NonFiniteRow { row } => write!(
+                f,
+                "row {row} sums to a non-finite diagonal or off-diagonal magnitude; approx-chol requires SDDM/Laplacian input"
+            ),
             Error::DenseFactorizationFailed { vertex, failure } => write!(
                 f,
                 "dense Cholesky failed at vertex {vertex}: {failure}"
-            ),
-            Error::DenseMatrixTooLarge { dimension } => write!(
-                f,
-                "dense component of dimension {dimension} is too large to allocate"
             ),
         }
     }

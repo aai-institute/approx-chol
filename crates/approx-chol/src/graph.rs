@@ -83,6 +83,8 @@ impl BitVec {
 pub(crate) trait EdgeLike<T: Real>: Clone + Copy {
     fn new(weight: T, to: u32, rev: u32) -> Self;
     fn reindex(self, to: u32, rev: u32) -> Self;
+    /// `k` virtual copies at `weight * inv_k`; slim edges are unchanged.
+    fn split(self, inv_k: T, k: u32) -> Self;
     fn weight(&self) -> T;
     fn to(&self) -> u32;
     fn rev(&self) -> u32;
@@ -114,6 +116,10 @@ impl<T: Real> EdgeLike<T> for Edge<T> {
             to,
             rev,
         }
+    }
+    #[inline]
+    fn split(self, _inv_k: T, _k: u32) -> Self {
+        self
     }
     #[inline]
     fn weight(&self) -> T {
@@ -167,6 +173,14 @@ impl<T: Real> EdgeLike<T> for MultiEdge<T> {
             to,
             rev,
             count: self.count,
+        }
+    }
+    #[inline]
+    fn split(self, inv_k: T, k: u32) -> Self {
+        Self {
+            weight: self.weight * inv_k,
+            count: k,
+            ..self
         }
     }
     #[inline]
@@ -297,8 +311,8 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
             let bucket =
                 &mut off_diagonals[bucket_ends[row] as usize..bucket_ends[row + 1] as usize];
             // Buckets hold one vertex's stored neighbours, so this is a sort over
-            // the degree rather than over nnz.
-            bucket.sort_unstable_by_key(|entry| (entry.hi, entry.upper));
+            // the degree rather than over nnz. Stable, so duplicates sum in order.
+            bucket.sort_by_key(|entry| entry.hi);
             let mut index = 0;
             while index < bucket.len() {
                 let col = bucket[index].hi as usize;
@@ -431,6 +445,10 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
     ) -> Result<GraphBuild<Self, T>, Error> {
         let tolerance = augmentation_eps::<T>();
         for row in 0..row_sums.len() {
+            // Every check below succeeds on an infinite deficit (`-inf < -inf`).
+            if !row_sums[row].is_finite() || !row_scales[row].is_finite() {
+                return Err(Error::NonFiniteRow { row });
+            }
             let row_tolerance = tolerance * row_scales[row];
             if row_sums[row] < -row_tolerance {
                 return Err(Error::NotDiagonallyDominant { row });
@@ -586,11 +604,13 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
         Ok(found)
     }
 
+    /// The anchor-deleted principal submatrix, row-major, or `None` when `m * m`
+    /// scalars do not fit — a dispatch signal, not an input error.
     pub(crate) fn dense_principal(
         &self,
         diagonal: &[T],
         vertices: &[u32],
-    ) -> Result<(Vec<T>, Vec<u32>), Error> {
+    ) -> Option<(Vec<T>, Vec<u32>)> {
         let pivot_vertices = if vertices.is_empty() {
             Vec::new()
         } else {
@@ -602,13 +622,9 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
             .enumerate()
             .map(|(local, &global)| (global, local))
             .collect();
-        let matrix_len = m
-            .checked_mul(m)
-            .ok_or(Error::DenseMatrixTooLarge { dimension: m })?;
+        let matrix_len = m.checked_mul(m)?;
         let mut matrix = Vec::new();
-        matrix
-            .try_reserve_exact(matrix_len)
-            .map_err(|_| Error::DenseMatrixTooLarge { dimension: m })?;
+        matrix.try_reserve_exact(matrix_len).ok()?;
         matrix.resize(matrix_len, T::zero());
         for (local, &global) in pivot_vertices.iter().enumerate() {
             matrix[local * m + local] = diagonal[global as usize];
@@ -618,7 +634,7 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
                 }
             }
         }
-        Ok((matrix, pivot_vertices))
+        Some((matrix, pivot_vertices))
     }
 
     pub(crate) fn extract_component(
@@ -802,8 +818,11 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
     }
 }
 
-impl<T: Real> MultiEdgeGraph<T> {
-    /// Mark each edge as `k` virtual copies at `weight / k`.
+impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
+    /// Mark each edge as `k` virtual copies at `weight / k`; no-op for slim edges.
+    /// Approximate path only: `weight / k` underflows a subnormal to zero, which
+    /// `fill_weight`'s `weight * count` cannot recover, so the exact dense
+    /// assembly must see an unsplit graph.
     pub(crate) fn mark_split_edges(&mut self, k: u32) {
         if k <= 1 {
             return;
@@ -814,8 +833,7 @@ impl<T: Real> MultiEdgeGraph<T> {
         let inv_k = T::one() / k_scalar;
         for adj_list in &mut self.adj {
             for edge in adj_list.iter_mut() {
-                edge.weight = edge.weight * inv_k;
-                edge.count = k;
+                *edge = edge.split(inv_k, k);
             }
         }
     }
