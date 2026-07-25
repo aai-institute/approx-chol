@@ -110,9 +110,9 @@ fn config_without_backend_uses_current_default() {
 }
 
 #[test]
-fn dense_block_with_inconsistent_pin_is_rejected() {
-    // A dense `anchor`/`ground` must equal the omitted index `m`; in-range but
-    // inconsistent silently solved a different RHS in release.
+fn dense_block_with_inconsistent_ground_is_rejected() {
+    // A dense `ground` must equal the omitted index `m`; in-range but inconsistent
+    // silently solved a different RHS in release.
     let row_ptrs = [0u32, 2, 4];
     let col_indices = [0u32, 1, 0, 1];
     let values = [2.0f64, -1.0, -1.0, 2.0];
@@ -124,13 +124,15 @@ fn dense_block_with_inconsistent_pin_is_rejected() {
         json["blocks"][0]["factor"]["Dense"]["m"], 2,
         "dense backend ran"
     );
+    assert!(
+        json["blocks"][0].get("anchor").is_none(),
+        "only an approximate factor carries an anchor"
+    );
 
-    for field in ["anchor", "ground"] {
-        let mut tampered = json.clone();
-        tampered["blocks"][0][field] = serde_json::json!(0);
-        assert!(
-            serde_json::from_value::<Factor<f64>>(tampered).is_err(),
-            "in-range but inconsistent `{field}` must be rejected at deserialize"
-        );
-    }
+    let mut tampered = json;
+    tampered["blocks"][0]["ground"] = serde_json::json!(0);
+    assert!(
+        serde_json::from_value::<Factor<f64>>(tampered).is_err(),
+        "in-range but inconsistent `ground` must be rejected at deserialize"
+    );
 }

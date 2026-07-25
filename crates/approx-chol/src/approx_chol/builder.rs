@@ -121,8 +121,8 @@ where
             let mut fallbacks = Vec::new();
             let exact =
                 self.try_exact(&graph, &diagonal, &vertices, n, original_n, &mut fallbacks)?;
-            let (factor, anchor) = match exact {
-                Some(factor) => (factor, n - 1),
+            let factor = match exact {
+                Some(factor) => factor,
                 None => {
                     graph.mark_split_edges(split_merge);
                     let mut sampler = CdfSampler::<T>::new(self.config.seed);
@@ -131,7 +131,6 @@ where
             };
             let block = Block {
                 start: 0,
-                anchor: anchor as u32,
                 ground: ground_vertex.map(|_| (n - 1) as u32),
                 factor,
             };
@@ -162,8 +161,8 @@ where
                 component_n,
                 &mut fallbacks,
             )?;
-            let (factor, anchor) = match exact {
-                Some(factor) => (factor, block_n - 1),
+            let factor = match exact {
+                Some(factor) => factor,
                 None => {
                     if local_of.is_empty() {
                         local_of.resize(n, usize::MAX);
@@ -179,7 +178,6 @@ where
             };
             blocks.push(Block {
                 start: forward.len() as u32,
-                anchor: anchor as u32,
                 ground,
                 factor,
             });
@@ -232,14 +230,13 @@ where
         Ok(())
     }
 
-    /// Run factorization on a pre-built graph (fused pipeline path). Returns the
-    /// factor and the local index of the vertex left un-eliminated.
+    /// Run factorization on a pre-built graph (fused pipeline path).
     pub(crate) fn build_from_graph<G: EliminationGraph<T>, S: WeightedSampler<T>>(
         &self,
         mut graph: G,
         diag: Vec<T>,
         sampler: &mut S,
-    ) -> Result<(BlockFactor<T>, usize), Error> {
+    ) -> Result<BlockFactor<T>, Error> {
         let n = graph.n();
         let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
         let degree_sum: usize = degrees.iter().sum();
@@ -259,7 +256,7 @@ where
         ordering: &mut DynamicOrdering,
         degree_sum: usize,
         sampler: &mut S,
-    ) -> Result<(BlockFactor<T>, usize), Error> {
+    ) -> Result<BlockFactor<T>, Error> {
         let mut diag = diag;
         match self.config.split_merge {
             None => Ok(Self::factorize_with_variant(
@@ -293,7 +290,7 @@ where
         degree_sum: usize,
         sampler: &mut W,
         mut star_builder: B,
-    ) -> (BlockFactor<T>, usize) {
+    ) -> BlockFactor<T> {
         let n = graph.n();
         let mut column = SampledColumn::<T>::new();
         let mut seq = EliminationSequence::with_capacity(n, degree_sum);
@@ -339,7 +336,7 @@ where
         // The one vertex left after `n - 1` pops is never eliminated: the anchor.
         let anchor = ordering.next_vertex().unwrap_or(0);
         debug_assert!(n == 0 || anchor < n);
-        (BlockFactor::approx(n, seq), anchor)
+        BlockFactor::approx(n, anchor as u32, seq)
     }
 }
 

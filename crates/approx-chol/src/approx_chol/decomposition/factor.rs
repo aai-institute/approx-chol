@@ -21,6 +21,8 @@ mod tests;
 pub(crate) enum BlockFactor<T> {
     Approx {
         n: usize,
+        /// Every block's Laplacian is singular, so one variable must be pinned.
+        anchor: u32,
         sequence: EliminationSequence<T>,
     },
     Dense {
@@ -41,8 +43,6 @@ pub(crate) enum BlockFactor<T> {
 #[derive(Clone, Debug)]
 pub(crate) struct Block<T> {
     pub(crate) start: u32,
-    /// Every block's Laplacian is singular, so one variable must be pinned.
-    pub(crate) anchor: u32,
     pub(crate) ground: Option<u32>,
     pub(crate) factor: BlockFactor<T>,
 }
@@ -194,19 +194,13 @@ impl<T: num_traits::Float> Factor<T> {
                     n: block_n,
                 });
             }
-            // In-range but inconsistent writes `-sum` into a live variable.
-            let dense_pinned = block.factor.dense_pinned();
-            if block.anchor as usize >= block_n
-                || dense_pinned.is_some_and(|pinned| block.anchor as usize != pinned)
-            {
-                return Err(FactorError::BlockAnchorInvalid {
-                    anchor: block.anchor as usize,
-                    n: block_n,
-                });
-            }
             if let Some(ground) = block.ground {
+                // In-range but inconsistent writes `-sum` into a live variable.
                 if ground as usize >= block_n
-                    || dense_pinned.is_some_and(|pinned| ground as usize != pinned)
+                    || block
+                        .factor
+                        .dense_pinned()
+                        .is_some_and(|pinned| ground as usize != pinned)
                 {
                     return Err(FactorError::BlockGroundInvalid {
                         ground: ground as usize,
@@ -326,7 +320,19 @@ impl<T: num_traits::Float> BlockFactor<T> {
 
     fn validate(&self) -> Result<(), FactorError> {
         match self {
-            Self::Approx { n, sequence } => sequence.validate_for_dim(*n),
+            Self::Approx {
+                n,
+                anchor,
+                sequence,
+            } => {
+                if *anchor as usize >= *n {
+                    return Err(FactorError::BlockAnchorInvalid {
+                        anchor: *anchor as usize,
+                        n: *n,
+                    });
+                }
+                sequence.validate_for_dim(*n)
+            }
             Self::Dense { n, m, lower } => {
                 if m.checked_mul(*m) != Some(lower.len()) || *m != n.saturating_sub(1) {
                     return Err(FactorError::DenseLengthInvalid {
@@ -351,8 +357,12 @@ impl<T> BlockFactor<T>
 where
     T: num_traits::Float + Send + Sync + 'static,
 {
-    pub(crate) fn approx(n: usize, sequence: EliminationSequence<T>) -> Self {
-        Self::Approx { n, sequence }
+    pub(crate) fn approx(n: usize, anchor: u32, sequence: EliminationSequence<T>) -> Self {
+        Self::Approx {
+            n,
+            anchor,
+            sequence,
+        }
     }
 
     pub(crate) fn dense(
@@ -446,7 +456,7 @@ where
     /// is the ground vertex if this block has one and the anchor otherwise. Which
     /// vertex a floating block anchors is backend-dependent, so its result is only
     /// determined up to a constant; [`Self::solve_recovered`] projects that out.
-    fn apply_anchored(&self, values: &mut [T], anchor: usize, ground: Option<usize>) {
+    fn apply_anchored(&self, values: &mut [T], ground: Option<usize>) {
         // Every block is a singular Laplacian, so it solves only a zero-sum
         // right-hand side; both arms put `values` in that range.
         match ground {
@@ -467,13 +477,11 @@ where
         match self {
             // The factor is already of the anchor-deleted submatrix, and
             // `solve_raw` zeroes the anchor slot.
-            Self::Dense { m, .. } => {
-                debug_assert_eq!(ground.unwrap_or(anchor), *m);
+            Self::Dense { .. } => self.solve_raw(values),
+            Self::Approx { anchor, .. } => {
+                let pin = ground.unwrap_or(*anchor as usize);
                 self.solve_raw(values);
-            }
-            Self::Approx { .. } => {
-                self.solve_raw(values);
-                let pinned = values[ground.unwrap_or(anchor)];
+                let pinned = values[pin];
                 for value in values.iter_mut() {
                     *value = *value - pinned;
                 }
@@ -481,8 +489,8 @@ where
         }
     }
 
-    fn solve_recovered(&self, values: &mut [T], anchor: usize, ground: Option<usize>) {
-        self.apply_anchored(values, anchor, ground);
+    fn solve_recovered(&self, values: &mut [T], ground: Option<usize>) {
+        self.apply_anchored(values, ground);
         // Pinning the ground vertex already gives the SDDM solution; a floating
         // block is determined only up to a constant, fixed here to zero mean.
         if ground.is_none() {
@@ -584,9 +592,7 @@ where
         work[..self.n].fill(T::zero());
         work[..b.len()].copy_from_slice(b);
         self.for_each_block(work, |block, values| {
-            block
-                .factor
-                .solve_recovered(values, block.anchor as usize, block.ground());
+            block.factor.solve_recovered(values, block.ground());
         });
     }
 
@@ -636,9 +642,7 @@ where
     pub fn solve_in_place(&self, values: &mut [T]) -> Result<(), SolveError> {
         self.validate(None, values.len())?;
         self.for_each_block(values, |block, values| {
-            block
-                .factor
-                .apply_anchored(values, block.anchor as usize, block.ground());
+            block.factor.apply_anchored(values, block.ground());
         });
         Ok(())
     }

@@ -56,7 +56,7 @@ pub(crate) enum FactorError {
     DensePivotInvalid { index: usize },
     /// Blocks do not tile `[0, n)` in ascending order without gaps or overlap.
     BlockRangeInvalid { start: usize, n: usize },
-    /// A block's anchor is not a local index of that block.
+    /// An approximate block's anchor is not a local index of that block.
     BlockAnchorInvalid { anchor: usize, n: usize },
     /// A block's ground vertex is not a local index of that block.
     BlockGroundInvalid { ground: usize, n: usize },

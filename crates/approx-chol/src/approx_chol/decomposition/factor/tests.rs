@@ -6,7 +6,7 @@ fn dense_factor_solves_and_projects_to_zero_mean() {
     // Zero-sum, so the range projection is a no-op and the solve reduces to the
     // anchor-deleted 2x2 system.
     let mut rhs = [6.0_f64, 7.0, -13.0];
-    factor.solve_recovered(&mut rhs, 2, None);
+    factor.solve_recovered(&mut rhs, None);
     assert!(rhs[0].abs() < 1e-12);
     assert!((rhs[1] - 1.0).abs() < 1e-12);
     assert!((rhs[2] + 1.0).abs() < 1e-12);
@@ -68,7 +68,6 @@ mod validation {
             permutation: None,
             blocks: vec![Block {
                 start: 0,
-                anchor: 2,
                 ground: None,
                 factor: block,
             }],
@@ -77,7 +76,7 @@ mod validation {
     }
 
     fn approx() -> Factor<f64> {
-        factor_of(BlockFactor::approx(3, sequence()))
+        factor_of(BlockFactor::approx(3, 2, sequence()))
     }
 
     fn dense() -> Factor<f64> {
@@ -87,6 +86,13 @@ mod validation {
     fn seq_of(factor: &mut Factor<f64>) -> &mut EliminationSequence<f64> {
         match &mut factor.blocks[0].factor {
             BlockFactor::Approx { sequence, .. } => sequence,
+            BlockFactor::Dense { .. } => unreachable!("fixture is an approx factor"),
+        }
+    }
+
+    fn anchor_of(factor: &mut Factor<f64>) -> &mut u32 {
+        match &mut factor.blocks[0].factor {
+            BlockFactor::Approx { anchor, .. } => anchor,
             BlockFactor::Dense { .. } => unreachable!("fixture is an approx factor"),
         }
     }
@@ -229,8 +235,8 @@ mod validation {
             ),
             (
                 "anchor out of block",
-                dense,
-                |f| f.blocks[0].anchor = 3,
+                approx,
+                |f| *anchor_of(f) = 3,
                 FactorError::BlockAnchorInvalid { anchor: 3, n: 3 },
             ),
             (

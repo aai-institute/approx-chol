@@ -29,8 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `solve`/`solve_into` project an out-of-range right-hand side onto the range.
 - Edge splitting no longer reaches the exact backend, where `weight / k` underflowed
   a subnormal weight to zero.
-- A dense block whose `anchor` or `ground` does not match its omitted vertex is
-  rejected at deserialize time.
+- A dense block whose `ground` does not match its omitted vertex is rejected at
+  deserialize time.
 - A block too large to assemble densely falls back to approximate elimination
   instead of failing the factorization.
 
