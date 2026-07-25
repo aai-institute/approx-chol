@@ -1,7 +1,7 @@
 //! CSR to elimination graph: canonicalize, pair each off-diagonal with its
 //! mirror, and close the row deficits with a Gremban ground vertex.
 
-use super::{add_edge_pair, count_components, AdjListGraph, Edge, EdgeCount, GraphBuild};
+use super::{add_edge_pair, components, AdjListGraph, Edge, EdgeCount, GraphBuild};
 use crate::types::count_as_scalar;
 use crate::{CsrError, CsrRef, Error, Real};
 
@@ -188,8 +188,8 @@ fn parse<T: Real, C: EdgeCount>(
     augment(adj, diag, row_sums)
 }
 
-/// Clamp each row's surplus to non-negative, then close the remaining deficits
-/// with a Gremban ground vertex and reject disconnected input.
+/// Clamp each row's surplus to non-negative, close the remaining deficits with a
+/// Gremban ground vertex, and label the connected components for block dispatch.
 ///
 /// `row_sums` arrives holding each row's off-diagonal total; the diagonal joins it
 /// here, the first point at which every row's is known.
@@ -259,15 +259,10 @@ fn augment<T: Real, C: EdgeCount>(
         }
     }
 
-    // Reject before the expensive elimination: >1 component (over the real
-    // vertices) means a block can't reach ground. See `Error::Disconnected`.
-    let components = count_components(&adj, m);
-    if components > 1 {
-        return Err(Error::Disconnected { components });
-    }
-
+    let components = components(&adj, m);
     Ok(GraphBuild {
         graph: AdjListGraph::from_adjacency(adj),
         diagonal: diag,
+        components,
     })
 }

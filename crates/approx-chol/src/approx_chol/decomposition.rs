@@ -7,6 +7,7 @@ use core::fmt;
 mod factor;
 mod sequence;
 
+pub(crate) use factor::{Block, BlockFactor};
 pub use factor::{Factor, SolveError};
 pub(crate) use sequence::EliminationSequence;
 
@@ -43,6 +44,25 @@ pub(crate) enum FactorError {
     TrailingNeighborStorage {
         covered: usize,
         nnz: usize,
+    },
+    /// Blocks do not tile `[0, n)` in ascending order without gaps or overlap.
+    BlockRangeInvalid {
+        start: usize,
+        n: usize,
+    },
+    /// An approximate block's anchor is not a local index of that block.
+    BlockAnchorInvalid {
+        anchor: usize,
+        n: usize,
+    },
+    /// A block's ground vertex is not a local index of that block.
+    BlockGroundInvalid {
+        ground: usize,
+        n: usize,
+    },
+    /// A permutation position is out of bounds, repeated, or a bare fixed point.
+    PermutationInvalid {
+        position: usize,
     },
 }
 

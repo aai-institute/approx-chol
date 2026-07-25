@@ -246,3 +246,82 @@ fn short_work_buffer_panics() {
 
     factor.solve_in_place(&mut vec![0.0; factor.n() - 1]);
 }
+
+// A grounded block's anchored solve *is* the SDDM solution, so solve_in_place and
+// solve_into must agree.
+#[test]
+fn grounded_raw_solve_matches_recovered_solve() {
+    let row_ptrs = [0u32, 2, 4];
+    let columns = [0u32, 1, 0, 1];
+    let values = [2.0, -1.0, -1.0, 2.0];
+    let factor = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(&row_ptrs, &columns, &values, 2).or_panic("valid CSR"))
+        .or_panic("factorization should succeed");
+
+    let n = factor.n();
+    assert_eq!(n, 3, "strictly dominant input must gain a ground vertex");
+
+    let rhs = [1.0, -2.0];
+    let mut recovered = vec![0.0; n];
+    factor
+        .solve_into(&rhs, &mut recovered)
+        .or_panic("solve_into should succeed");
+
+    let mut raw = vec![0.0; n];
+    raw[..rhs.len()].copy_from_slice(&rhs);
+    factor.solve_in_place(&mut raw);
+
+    assert_eq!(raw[..2], recovered[..2]);
+    assert_eq!(raw[n - 1], 0.0, "ground must be pinned");
+}
+
+// A floating block has no ground vertex to absorb the null-space component, so
+// `solve_in_place` pins one variable and differs from `solve_into` by that
+// constant. The grounded case above catches neither.
+#[test]
+fn floating_raw_solve_differs_from_recovered_by_one_constant() {
+    let grid = grid_laplacian(5, 5);
+    let csr = grid.as_csr().or_panic("valid CSR");
+    let n = grid.n as usize;
+    let mut rhs: Vec<f64> = (0..n).map(|i| i as f64 - 12.0).collect();
+    let sum: f64 = rhs.iter().sum();
+    rhs[0] -= sum;
+
+    let factor = Builder::<f64>::new(Config {
+        seed: 7,
+        ..Config::default()
+    })
+    .build(csr)
+    .or_panic("factorization should succeed");
+    assert_eq!(factor.n(), n, "pure Laplacian must not be augmented");
+
+    let mut raw = rhs.clone();
+    factor.solve_in_place(&mut raw);
+    let mut recovered = vec![0.0; factor.n()];
+    factor
+        .solve_into(&rhs, &mut recovered)
+        .or_panic("solve_into");
+
+    assert!(
+        raw.iter().any(|value| value.abs() < 1e-12),
+        "one variable per block is pinned to zero"
+    );
+
+    // Same factor, so this is exact up to rounding.
+    let shift = raw[0] - recovered[0];
+    for (index, (&value, &canonical)) in raw.iter().zip(recovered.iter()).enumerate() {
+        assert!(
+            (value - canonical - shift).abs() < 1e-9,
+            "raw must differ from recovered by one constant; \
+             index {index} differs by {}",
+            value - canonical
+        );
+    }
+    assert!(shift.abs() > 1e-9, "the constant must be non-zero");
+
+    let mean = recovered.iter().sum::<f64>() / n as f64;
+    assert!(
+        mean.abs() < 1e-9,
+        "recovered solve must be the zero-mean representative"
+    );
+}

@@ -15,37 +15,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- SDDM (Gremban-augmented) systems: `solve`/`solve_into` now recover the correct
-  solution by grounding against the auxiliary vertex. Previously a global
-  zero-mean projection was applied to the augmented factor, returning a
-  non-solution and producing a singular, non-convergent CG preconditioner.
-  (#35)
-- Reject disconnected input with the new `Error::Disconnected` (Python `ValueError`)
-  instead of silently returning a wrong answer; block-diagonal SDDM stays accepted. (#36)
+- `solve`/`solve_into` ground SDDM systems against the auxiliary vertex instead of
+  applying a global zero-mean projection. (#35)
+- Each connected component of a disconnected Laplacian is factored independently. (#36)
 - A strictly-dominant SDDM scaled below unit magnitude is augmented. (#36)
-- Reject a structurally-invalid serde-deserialized `Factor` at deserialize time
-  rather than panicking or returning garbage on the first `solve` in release. (#37)
+- A structurally-invalid `Factor` is rejected at deserialize time. (#37)
 - `low_level` clique-tree samplers no longer panic or emit non-finite fill on degenerate weights. (#38)
 - `u32` nonzero/edge overflow now panics instead of silently truncating the factor. (#39)
+- `solve`/`solve_into` project an out-of-range right-hand side onto the range.
 
 ### Changed
 
-- `solve`/`solve_into` (Rust and Python) reject a right-hand side longer than the
-  original matrix dimension rather than the augmented factor dimension.
-  `SolveError::RhsLengthExceedsFactor` and the corresponding Python `ValueError`
-  now report the original matrix dimension.
-- `CsrRef::row_ptrs`/`col_indices`/`values` return slices with the view's lifetime.
 - The serde representation of `Factor` is incompatible with earlier releases.
+- `solve`/`solve_into` cap the right-hand side at the original matrix dimension.
+- `solve_in_place` leaves one variable pinned per block.
 - `solve_in_place` no longer returns `Result`; a work buffer shorter than
   `Factor::n()` panics and `SolveError::WorkBufferTooSmall` is removed.
 - `OwnedCsr::try_as_ref` is replaced by the infallible `as_csr_ref`, and
   `TryFrom<&OwnedCsr> for CsrRef` by `From`.
+- `CsrRef::row_ptrs`/`col_indices`/`values` return slices with the view's lifetime.
 - A row surplus at or below `min(1e-10 * row_scale, sqrt(EPSILON))`, the row's
   accumulated rounding noise, or the resolvable pivot scale does not trigger
   augmentation.
 - Duplicate entries are summed before the off-diagonal sign check.
 - A row sum folds in its diagonal last, so the exact factor for a fixed seed can
   differ from earlier releases on input whose row sums do not accumulate exactly.
+- `Error::Disconnected` is removed; disconnected input is factored per component.
 
 ### Performance
 
@@ -53,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Finiteness and canonicality share one pass over the nonzeros.
 - The diagonal comes from the mirror walk instead of a binary search per row.
 - The per-row dominance tolerance is derived from the diagonal and the row sum.
+- Connectivity is tested with one traversal instead of enumerating components.
 
 ## [0.3.1] - 2026-07-10
 

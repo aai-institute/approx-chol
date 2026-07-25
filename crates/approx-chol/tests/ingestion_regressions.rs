@@ -28,7 +28,7 @@ fn build(config: Config, rp: &[u32], ci: &[u32], vals: &[f64]) -> Result<Factor<
 #[test]
 fn out_of_class_input_is_rejected_at_its_reported_position() {
     let max = f64::MAX;
-    let cases: [Rejected<'_>; 11] = [
+    let cases: [Rejected<'_>; 9] = [
         // Used to fall through both the diagonal and the `val < 0` edge branch,
         // silently factorizing diag(5, 4) — a confidently wrong factor.
         (
@@ -74,28 +74,6 @@ fn out_of_class_input_is_rejected_at_its_reported_position() {
             &[1, 0, 2, 1, 0, 2, 1],
             &[-1.0, 1.0, -1.0, 2.0, f64::NAN, 1.0, -1.0],
             Error::NonFiniteValue { position: 4 },
-        ),
-        // Below the resolvable pivot scale the elimination clamps each pivot, so
-        // augmenting would return the right-hand side unchanged. Clamping the
-        // surplus instead leaves the ground vertex isolated, which is what makes
-        // this reachable as a rejection at all.
-        (
-            "surplus below the resolvable pivot scale",
-            &[0, 1, 2],
-            &[0, 1],
-            &[1e-15, 1e-15],
-            Error::Disconnected { components: 2 },
-        ),
-        // A null space bigger than a connected Laplacian's single constant. Three
-        // disjoint 2-node paths, so the count guards against a hardcoded 2.
-        (
-            "three components",
-            &[0, 2, 4, 6, 8, 10, 12],
-            &[0, 1, 0, 1, 2, 3, 2, 3, 4, 5, 4, 5],
-            &[
-                1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0,
-            ],
-            Error::Disconnected { components: 3 },
         ),
         // The three row-sum overflows below store only finite, symmetric,
         // non-positive values; one per ingestion path.
@@ -206,6 +184,138 @@ fn genuine_surplus_at_either_scale_is_augmented_and_solves() {
                 "{label}: {solution:?} vs {expected:?}"
             );
         }
+    }
+}
+
+/// CSR for `k` disjoint 2-node path Laplacians, stacked block-diagonally — a
+/// graph with `k` connected components. For `k = 2`:
+///   [ 1 -1  .  . ]
+///   [-1  1  .  . ]
+///   [ .  .  1 -1 ]
+///   [ .  . -1  1 ]
+fn block_diagonal_paths(k: u32) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
+    let (mut rp, mut ci, mut vals) = (vec![0u32], Vec::new(), Vec::new());
+    for b in 0..k {
+        let (a, z) = (2 * b, 2 * b + 1);
+        // both rows span columns [a, z]: +1 on the diagonal, -1 off it
+        for row_vals in [[1.0, -1.0], [-1.0, 1.0]] {
+            ci.extend([a, z]);
+            vals.extend(row_vals);
+            rp.push(ci.len() as u32);
+        }
+    }
+    (rp, ci, vals)
+}
+
+#[test]
+fn disconnected_laplacian_solves_per_component() {
+    let (rp, ci, vals) = block_diagonal_paths(2);
+
+    for split_merge in [None, Some(2)] {
+        let csr = CsrRef::new(&rp, &ci, &vals, 4).or_panic("valid CSR");
+        let factor = Builder::<f64>::new(Config {
+            split_merge,
+            ..Config::default()
+        })
+        .build(csr)
+        .expect("disconnected Laplacian must factor block-diagonally");
+        let solution = factor.solve(&[1.0, -1.0, 2.0, -2.0]).unwrap();
+        assert_eq!(solution, vec![0.5, -0.5, 1.0, -1.0]);
+    }
+}
+
+#[test]
+fn disconnected_sparse_ac2_preserves_virtual_edge_multiplicity() {
+    let row_ptrs = [0u32, 2, 5, 7, 9, 12, 14];
+    let columns = [0u32, 1, 0, 1, 2, 1, 2, 3, 4, 3, 4, 5, 4, 5];
+    let values = [
+        1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0,
+    ];
+    let factor = Builder::<f64>::new(Config {
+        seed: 7,
+        split_merge: Some(3),
+    })
+    .build(CsrRef::new(&row_ptrs, &columns, &values, 6).or_panic("valid CSR"))
+    .or_panic("disconnected AC2 factor");
+
+    let solution = factor
+        .solve(&[1.0, 0.0, -1.0, 1.0, 0.0, -1.0])
+        .or_panic("solve");
+    assert_eq!(solution, vec![1.0, 0.0, -1.0, 1.0, 0.0, -1.0]);
+}
+
+#[test]
+fn disconnected_laplacian_handles_three_components() {
+    let (rp, ci, vals) = block_diagonal_paths(3);
+
+    let csr = CsrRef::new(&rp, &ci, &vals, 6).or_panic("valid CSR");
+    let factor = Builder::<f64>::new(Config::default())
+        .build(csr)
+        .expect("three components must factor");
+    assert_eq!(factor.n_steps(), 3);
+}
+
+#[test]
+fn many_zero_singletons_factor_as_trivial_components() {
+    let n = 128u32;
+    let row_ptrs = vec![0u32; n as usize + 1];
+    let factor = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(&row_ptrs, &[], &[], n).or_panic("valid zero CSR"))
+        .or_panic("zero components");
+    assert_eq!(factor.n_steps(), 0);
+    assert_eq!(
+        factor.solve(&vec![1.0; n as usize]).unwrap(),
+        vec![0.0; n as usize]
+    );
+}
+
+#[test]
+fn mixed_grounded_and_floating_components_solve_independently() {
+    let row_ptrs = [0u32, 1, 3, 5];
+    let columns = [0u32, 1, 2, 1, 2];
+    let values = [2.0, 1.0, -1.0, -1.0, 1.0];
+    let factor = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(&row_ptrs, &columns, &values, 3).or_panic("valid mixed CSR"))
+        .or_panic("mixed factor");
+    let solution = factor.solve(&[4.0, 1.0, -1.0]).unwrap();
+    assert!((solution[0] - 2.0).abs() < 1e-14);
+    assert_eq!(&solution[1..], &[0.5, -0.5]);
+}
+
+// Components {0,2} and {1,3} concatenate to [0,2,1,3]: a non-identity block
+// permutation, unlike the block-diagonal fixtures above.
+#[test]
+fn interleaved_components_permute_and_restore_input_order() {
+    let row_ptrs = [0u32, 2, 4, 6, 8];
+    let columns = [0u32, 2, 1, 3, 0, 2, 1, 3];
+    let values = [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
+    let factor = Builder::<f64>::new(Config {
+        ..Config::default()
+    })
+    .build(CsrRef::new(&row_ptrs, &columns, &values, 4).or_panic("valid CSR"))
+    .or_panic("interleaved factor");
+    let solution = factor.solve(&[1.0, 2.0, -1.0, -2.0]).or_panic("solve");
+    for (got, want) in solution.iter().zip([0.5, 1.0, -0.5, -1.0]) {
+        assert!((got - want).abs() < 1e-12);
+    }
+}
+
+// A floating block whose right-hand side is not zero-sum has no exact solution;
+// projecting onto the range gives the least-squares one.
+#[test]
+fn inconsistent_rhs_is_projected_onto_the_range() {
+    let row_ptrs = [0u32, 2, 4, 6, 8];
+    let columns = [0u32, 2, 1, 3, 0, 2, 1, 3];
+    let values = [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
+    let factor = Builder::<f64>::new(Config {
+        ..Config::default()
+    })
+    .build(CsrRef::new(&row_ptrs, &columns, &values, 4).or_panic("valid CSR"))
+    .or_panic("interleaved factor");
+    // Block {0,2} gets [3, -1] (sum 2), block {1,3} gets [5, -2] (sum 3).
+    let solution = factor.solve(&[3.0, 5.0, -1.0, -2.0]).or_panic("solve");
+    for (got, want) in solution.iter().zip([1.0, 1.75, -1.0, -1.75]) {
+        assert!((got - want).abs() < 1e-12);
     }
 }
 

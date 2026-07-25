@@ -135,3 +135,10 @@ fn test_ac_marginally_sdd_laplacian_no_capacity_drift() {
         );
     }
 }
+
+#[test]
+fn component_seeds_are_stable_and_distinct() {
+    assert_eq!(component_seed(42, 7), component_seed(42, 7));
+    assert_ne!(component_seed(42, 7), component_seed(42, 8));
+    assert_ne!(component_seed(42, 7), component_seed(43, 7));
+}

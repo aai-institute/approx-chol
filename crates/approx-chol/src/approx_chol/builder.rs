@@ -1,4 +1,4 @@
-use super::decomposition::EliminationSequence;
+use super::decomposition::{Block, BlockFactor, EliminationSequence};
 use crate::graph::{AdjListGraph, GraphBuild, MultiEdgeGraph, SlimGraph};
 use crate::ordering::{DegreeDeltas, DynamicOrdering};
 use crate::sampling::CdfSampler;
@@ -73,36 +73,98 @@ where
     /// Assumes `sddm` already passed [`CsrRef::new`] validation (as
     /// [`build`](Self::build) guarantees); does not re-validate.
     fn build_validated(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
-        Self::validate_config(self.config)?;
         let original_n = sddm.n();
-        let (n, sequence) = match self.config.split_merge {
+        Self::validate_config(self.config)?;
+        let factor = match self.config.split_merge {
             None => {
-                let GraphBuild {
-                    graph,
-                    diagonal: diag,
-                    ..
-                } = SlimGraph::<T>::from_sddm(sddm)?;
-                let n = graph.n();
-                let star = AcStarBuilder::new(n);
-                (n, self.build_from_graph(graph, diag, star, 1))
+                let build = SlimGraph::<T>::from_sddm(sddm)?;
+                self.build_graph(build, original_n, AcStarBuilder::new, 1)
             }
             Some(k) => {
-                let GraphBuild {
-                    mut graph,
-                    diagonal: diag,
-                    ..
-                } = MultiEdgeGraph::<T>::from_sddm(sddm)?;
-                graph.mark_split_edges(k);
-                let n = graph.n();
-                let star = Ac2StarBuilder::new(n, k);
-                (n, self.build_from_graph(graph, diag, star, k as usize))
+                let mut build = MultiEdgeGraph::<T>::from_sddm(sddm)?;
+                build.graph.mark_split_edges(k);
+                let star = move |n| Ac2StarBuilder::new(n, k);
+                self.build_graph(build, original_n, star, k as usize)
             }
+        }?;
+        debug_assert_eq!(factor.original_n(), original_n);
+        Ok(factor)
+    }
+
+    /// `make_star` and `degree_scale` come from the caller's single variant match
+    /// and are applied per component, so nothing here can pair an AC star builder
+    /// with a split multi-edge graph.
+    fn build_graph<B: StarBuilderVariant<T>>(
+        &self,
+        build: GraphBuild<AdjListGraph<B::Count, T>, T>,
+        original_n: usize,
+        make_star: impl Fn(usize) -> B,
+        degree_scale: usize,
+    ) -> Result<Factor<T>, Error> {
+        let GraphBuild {
+            graph,
+            diagonal,
+            components,
+        } = build;
+        let n = graph.n();
+        if n == 0 {
+            return Ok(Factor::empty(original_n));
+        }
+        // Ground has the highest index, so it is the last vertex of its block.
+        let ground_vertex = (n > original_n).then_some(original_n as u32);
+        let Some(components) = components else {
+            let block = Block {
+                start: 0,
+                ground: ground_vertex,
+                factor: self.build_approximate(
+                    graph,
+                    diagonal,
+                    self.config.seed,
+                    &make_star,
+                    degree_scale,
+                ),
+            };
+            return Ok(Factor::from_blocks(n, original_n, &[], vec![block]));
         };
-        Ok(Factor {
-            n,
-            original_n,
-            sequence,
-        })
+
+        let mut forward: Vec<u32> = Vec::with_capacity(n);
+        let mut blocks = Vec::with_capacity(components.len());
+        let mut local_of = vec![usize::MAX; n];
+        for vertices in components {
+            let ground = ground_vertex
+                .filter(|vertex| vertices.last() == Some(vertex))
+                .map(|_| (vertices.len() - 1) as u32);
+            let (component_graph, component_diagonal) =
+                graph.extract_component(&diagonal, &vertices, &mut local_of);
+            let representative = vertices.first().copied().unwrap_or(0) as u64;
+            let factor = self.build_approximate(
+                component_graph,
+                component_diagonal,
+                component_seed(self.config.seed, representative),
+                &make_star,
+                degree_scale,
+            );
+            blocks.push(Block {
+                start: forward.len() as u32,
+                ground,
+                factor,
+            });
+            forward.extend_from_slice(&vertices);
+        }
+        Ok(Factor::from_blocks(n, original_n, &forward, blocks))
+    }
+
+    fn build_approximate<B: StarBuilderVariant<T>>(
+        &self,
+        graph: AdjListGraph<B::Count, T>,
+        diagonal: Vec<T>,
+        seed: u64,
+        make_star: &impl Fn(usize) -> B,
+        degree_scale: usize,
+    ) -> BlockFactor<T> {
+        let mut sampler = CdfSampler::<T>::new(seed);
+        let star_builder = make_star(graph.n());
+        self.build_from_graph(graph, diagonal, &mut sampler, star_builder, degree_scale)
     }
 
     fn validate_config(config: Config) -> Result<(), Error> {
@@ -126,14 +188,14 @@ where
         &self,
         mut graph: AdjListGraph<B::Count, T>,
         mut diag: Vec<T>,
+        sampler: &mut CdfSampler<T>,
         mut star_builder: B,
         degree_scale: usize,
-    ) -> EliminationSequence<T> {
+    ) -> BlockFactor<T> {
         let n = graph.n();
         let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
         let degree_sum: usize = degrees.iter().sum();
         let mut ordering = DynamicOrdering::new(&degrees, degree_scale);
-        let mut sampler = CdfSampler::<T>::new(self.config.seed);
         let mut column = SampledColumn::<T>::new();
         let mut seq = EliminationSequence::with_capacity(n, degree_sum);
         let mut deltas = DegreeDeltas::new(n);
@@ -152,7 +214,7 @@ where
                 continue;
             }
 
-            star_builder.sample_column(diag[v], &mut sampler, &mut column);
+            star_builder.sample_column(diag[v], sampler, &mut column);
             seq.record_column(v, column.diagonal, column.neighbors(), column.fractions());
 
             graph.eliminate_vertex(v);
@@ -170,8 +232,18 @@ where
             deltas.flush(&mut ordering);
         }
 
-        seq
+        // The one vertex left after `n - 1` pops is never eliminated: the anchor.
+        let anchor = ordering.next_vertex().unwrap_or(0);
+        debug_assert!(n == 0 || anchor < n);
+        BlockFactor::approx(n, anchor as u32, seq)
     }
+}
+
+fn component_seed(seed: u64, representative: u64) -> u64 {
+    let mut value = seed ^ representative.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
 }
 
 #[cfg(test)]

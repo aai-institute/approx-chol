@@ -12,6 +12,7 @@ use crate::{CsrRef, Error, Real};
 pub(crate) struct GraphBuild<G, T: Real> {
     pub graph: G,
     pub diagonal: Vec<T>,
+    pub components: Option<Vec<Vec<u32>>>,
 }
 
 /// A neighbor entry produced by star elimination. Carries the edge's
@@ -121,6 +122,12 @@ impl<T: Real, C: EdgeCount> Edge<T, C> {
         }
     }
 
+    /// The same edge under a component-local relabeling.
+    #[inline]
+    fn reindex(self, to: u32, rev: u32) -> Self {
+        Self { to, rev, ..self }
+    }
+
     #[inline]
     fn fill_weight(&self) -> T {
         self.count.scale(self.weight)
@@ -216,6 +223,41 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
         }
         add_edge_pair(&mut self.adj, u as usize, v as usize, weight);
     }
+
+    /// The subgraph over `vertices`, renumbered to `0..vertices.len()` in the
+    /// order given. `local_of` is a scratch map of `usize::MAX`, left as found.
+    pub(crate) fn extract_component(
+        &self,
+        diagonal: &[T],
+        vertices: &[u32],
+        local_of: &mut [usize],
+    ) -> (Self, Vec<T>) {
+        debug_assert_eq!(local_of.len(), self.adj.len());
+        for (local, &global) in vertices.iter().enumerate() {
+            local_of[global as usize] = local;
+        }
+        // The parent degree bounds the local one, so no list has to grow.
+        let mut adjacency: Vec<Vec<Edge<T, C>>> = vertices
+            .iter()
+            .map(|&global| Vec::with_capacity(self.adj[global as usize].len()))
+            .collect();
+        for (local_u, &global_u) in vertices.iter().enumerate() {
+            for &edge in &self.adj[global_u as usize] {
+                let local_v = local_of[edge.to as usize];
+                if local_v != usize::MAX && local_u < local_v {
+                    add_reindexed_edge_pair(&mut adjacency, local_u, local_v, edge);
+                }
+            }
+        }
+        for &global in vertices {
+            local_of[global as usize] = usize::MAX;
+        }
+        let local_diagonal = vertices
+            .iter()
+            .map(|&vertex| diagonal[vertex as usize])
+            .collect();
+        (Self::from_adjacency(adjacency), local_diagonal)
+    }
 }
 
 impl<T: Real> MultiEdgeGraph<T> {
@@ -266,21 +308,27 @@ fn remove_edge_at<T: Real, C: EdgeCount>(adj: &mut [Vec<Edge<T, C>>], u: usize, 
     }
 }
 
-/// Connected components among the first `n_real` vertices. Traversal follows
-/// every edge, so a ground vertex (index `>= n_real`) links the blocks it
-/// touches without being counted as its own component.
-fn count_components<T: Real, C: EdgeCount>(adj: &[Vec<Edge<T, C>>], n_real: usize) -> usize {
-    let mut visited = BitVec::new(adj.len());
+/// Connected components among the first `n_real` vertices, or `None` when the
+/// graph is connected. Traversal follows every edge, so a ground vertex (index
+/// `>= n_real`) links the blocks it touches without being counted as its own
+/// component.
+fn components<T: Real, C: EdgeCount>(
+    adj: &[Vec<Edge<T, C>>],
+    n_real: usize,
+) -> Option<Vec<Vec<u32>>> {
+    let n = adj.len();
+    let mut visited = BitVec::new(n);
     let mut stack: Vec<usize> = Vec::new();
-    let mut components = 0usize;
+    let mut components: Vec<Vec<u32>> = Vec::new();
     for start in 0..n_real {
         if visited.get(start) {
             continue;
         }
-        components += 1;
+        let mut component = Vec::new();
         visited.set(start);
         stack.push(start);
         while let Some(v) = stack.pop() {
+            component.push(v as u32);
             for e in &adj[v] {
                 let u = e.to as usize;
                 if !visited.get(u) {
@@ -289,8 +337,33 @@ fn count_components<T: Real, C: EdgeCount>(adj: &[Vec<Edge<T, C>>], n_real: usiz
                 }
             }
         }
+        components.push(component);
     }
-    components
+    // The first traversal reaching every vertex means the graph is connected,
+    // so the common case never sorts or returns a component list.
+    if components.len() <= 1 && components.first().map_or(0, Vec::len) == n {
+        return None;
+    }
+    for component in &mut components {
+        component.sort_unstable();
+    }
+    Some(components)
+}
+
+fn add_reindexed_edge_pair<T: Real, C: EdgeCount>(
+    adj: &mut [Vec<Edge<T, C>>],
+    u: usize,
+    v: usize,
+    edge: Edge<T, C>,
+) {
+    assert!(
+        adj[u].len() < u32::MAX as usize && adj[v].len() < u32::MAX as usize,
+        "adjacency list exceeds u32 edge capacity"
+    );
+    let rev_u = adj[v].len() as u32;
+    let rev_v = adj[u].len() as u32;
+    adj[u].push(edge.reindex(v as u32, rev_u));
+    adj[v].push(edge.reindex(u as u32, rev_v));
 }
 
 #[cfg(test)]
