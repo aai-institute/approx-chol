@@ -73,6 +73,7 @@ impl BitVec {
 /// Abstraction over edge storage: slim (AC) vs multi-edge (AC2).
 pub(crate) trait EdgeLike<T: Real>: Clone + Copy {
     fn new(weight: T, to: u32, rev: u32) -> Self;
+    fn reindex(self, to: u32, rev: u32) -> Self;
     fn weight(&self) -> T;
     fn to(&self) -> u32;
     fn rev(&self) -> u32;
@@ -96,6 +97,14 @@ impl<T: Real> EdgeLike<T> for Edge<T> {
     #[inline]
     fn new(weight: T, to: u32, rev: u32) -> Self {
         Self { weight, to, rev }
+    }
+    #[inline]
+    fn reindex(self, to: u32, rev: u32) -> Self {
+        Self {
+            weight: self.weight,
+            to,
+            rev,
+        }
     }
     #[inline]
     fn weight(&self) -> T {
@@ -140,6 +149,15 @@ impl<T: Real> EdgeLike<T> for MultiEdge<T> {
             to,
             rev,
             count: 1,
+        }
+    }
+    #[inline]
+    fn reindex(self, to: u32, rev: u32) -> Self {
+        Self {
+            weight: self.weight,
+            to,
+            rev,
+            count: self.count,
         }
     }
     #[inline]
@@ -391,44 +409,40 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
         (matrix, pivot_vertices)
     }
 
-    pub(crate) fn into_components(
-        self,
-        diagonal: Vec<T>,
-        components: Vec<Vec<u32>>,
-    ) -> Vec<(Self, Vec<T>, Vec<u32>)> {
-        let mut result = Vec::with_capacity(components.len());
-        let mut local_of = vec![usize::MAX; self.adj.len()];
-        for vertices in components {
-            for (local, &global) in vertices.iter().enumerate() {
-                local_of[global as usize] = local;
-            }
-            let mut adjacency = vec![Vec::new(); vertices.len()];
-            for (local_u, &global_u) in vertices.iter().enumerate() {
-                for edge in &self.adj[global_u as usize] {
-                    let local_v = local_of[edge.to() as usize];
-                    if local_v != usize::MAX && local_u < local_v {
-                        Self::add_edge_pair(&mut adjacency, local_u, local_v, edge.weight());
-                    }
+    pub(crate) fn extract_component(
+        &self,
+        diagonal: &[T],
+        vertices: &[u32],
+        local_of: &mut [usize],
+    ) -> (Self, Vec<T>) {
+        debug_assert_eq!(local_of.len(), self.adj.len());
+        for (local, &global) in vertices.iter().enumerate() {
+            local_of[global as usize] = local;
+        }
+        let mut adjacency = vec![Vec::new(); vertices.len()];
+        for (local_u, &global_u) in vertices.iter().enumerate() {
+            for &edge in &self.adj[global_u as usize] {
+                let local_v = local_of[edge.to() as usize];
+                if local_v != usize::MAX && local_u < local_v {
+                    Self::add_reindexed_edge_pair(&mut adjacency, local_u, local_v, edge);
                 }
             }
-            let local_diagonal = vertices
-                .iter()
-                .map(|&vertex| diagonal[vertex as usize])
-                .collect();
-            for &global in &vertices {
-                local_of[global as usize] = usize::MAX;
-            }
-            result.push((
-                Self {
-                    eliminated: BitVec::new(vertices.len()),
-                    adj: adjacency,
-                    _marker: core::marker::PhantomData,
-                },
-                local_diagonal,
-                vertices,
-            ));
         }
-        result
+        for &global in vertices {
+            local_of[global as usize] = usize::MAX;
+        }
+        let local_diagonal = vertices
+            .iter()
+            .map(|&vertex| diagonal[vertex as usize])
+            .collect();
+        (
+            Self {
+                eliminated: BitVec::new(vertices.len()),
+                adj: adjacency,
+                _marker: core::marker::PhantomData,
+            },
+            local_diagonal,
+        )
     }
 
     #[inline]
@@ -443,6 +457,17 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
         let rev_v = adj[u].len() as u32;
         adj[u].push(E::new(weight, v as u32, rev_u));
         adj[v].push(E::new(weight, u as u32, rev_v));
+    }
+
+    fn add_reindexed_edge_pair(adj: &mut [Vec<E>], u: usize, v: usize, edge: E) {
+        assert!(
+            adj[u].len() < u32::MAX as usize && adj[v].len() < u32::MAX as usize,
+            "adjacency list exceeds u32 edge capacity"
+        );
+        let rev_u = adj[v].len() as u32;
+        let rev_v = adj[u].len() as u32;
+        adj[u].push(edge.reindex(v as u32, rev_u));
+        adj[v].push(edge.reindex(u as u32, rev_v));
     }
 
     /// Remove `adj[u][idx]` in O(1) via swap-remove and repair the moved edge's

@@ -125,32 +125,29 @@ where
             return Ok(Factor::single(original_n, factor));
         };
 
-        let dense_inputs: Vec<_> = components
-            .iter()
-            .map(|vertices| {
-                let component_n = vertices
-                    .iter()
-                    .filter(|&&vertex| (vertex as usize) < original_n)
-                    .count();
-                (self.config.dense_threshold > 0 && component_n <= self.config.dense_threshold)
-                    .then(|| graph.dense_principal(&diagonal, vertices))
-            })
-            .collect();
-        let split = graph.into_components(diagonal, components);
-        let mut factors = Vec::with_capacity(split.len());
-        for (((graph, diagonal, vertices), dense_input), component_index) in
-            split.into_iter().zip(dense_inputs).zip(0usize..)
-        {
-            let factor = match dense_input {
-                Some((matrix, pivots)) => SingleFactor::dense(vertices.len(), matrix, &pivots)?,
-                None => {
-                    let representative = vertices.first().copied().unwrap_or(0) as u64;
-                    let mut sampler =
-                        CdfSampler::<T>::new(component_seed(self.config.seed, representative));
-                    self.build_from_graph(graph, diagonal, &mut sampler)?
+        let mut factors = Vec::with_capacity(components.len());
+        let mut local_of = Vec::new();
+        for vertices in components {
+            let component_n = vertices
+                .iter()
+                .filter(|&&vertex| (vertex as usize) < original_n)
+                .count();
+            let use_dense =
+                self.config.dense_threshold > 0 && component_n <= self.config.dense_threshold;
+            let factor = if use_dense {
+                let (matrix, pivots) = graph.dense_principal(&diagonal, &vertices);
+                SingleFactor::dense(vertices.len(), matrix, &pivots)?
+            } else {
+                if local_of.is_empty() {
+                    local_of.resize(n, usize::MAX);
                 }
+                let (component_graph, component_diagonal) =
+                    graph.extract_component(&diagonal, &vertices, &mut local_of);
+                let representative = vertices.first().copied().unwrap_or(0) as u64;
+                let mut sampler =
+                    CdfSampler::<T>::new(component_seed(self.config.seed, representative));
+                self.build_from_graph(component_graph, component_diagonal, &mut sampler)?
             };
-            debug_assert_eq!(component_index, factors.len());
             factors.push(ComponentFactor { vertices, factor });
         }
         Ok(Factor::blocks(n, original_n, factors))

@@ -413,41 +413,39 @@ where
 
     fn solve_kernel(&self, b: &[T], work: &mut [T]) {
         work[..self.n].fill(T::zero());
+        work[..b.len()].copy_from_slice(b);
         match &self.storage {
-            FactorStorage::Single(factor) => {
-                work[..b.len()].copy_from_slice(b);
-                factor.solve_recovered(work, self.original_n);
-            }
+            FactorStorage::Single(factor) => factor.solve_recovered(work, self.original_n),
             FactorStorage::Blocks(components) => {
-                let max_n = components
-                    .iter()
-                    .map(|component| component.factor.n())
-                    .max()
-                    .unwrap_or(0);
-                let mut local = vec![T::zero(); max_n];
-                for component in components {
-                    let local_n = component.factor.n();
-                    local[..local_n].fill(T::zero());
-                    let mut local_original_n = 0;
-                    for (local_index, &global) in component.vertices.iter().enumerate() {
-                        let global = global as usize;
-                        if global < self.original_n {
-                            local_original_n += 1;
-                            if global < b.len() {
-                                local[local_index] = b[global];
-                            }
-                        }
-                    }
-                    component
-                        .factor
-                        .solve_recovered(&mut local[..local_n], local_original_n);
-                    for (local_index, &global) in component.vertices.iter().enumerate() {
-                        let global = global as usize;
-                        if global < self.original_n {
-                            work[global] = local[local_index];
-                        }
-                    }
-                }
+                Self::solve_components(components, work, |component, local| {
+                    let local_original_n = component
+                        .vertices
+                        .partition_point(|&vertex| (vertex as usize) < self.original_n);
+                    component.factor.solve_recovered(local, local_original_n);
+                });
+            }
+        }
+    }
+
+    fn solve_components(
+        components: &[ComponentFactor<T>],
+        values: &mut [T],
+        mut solve: impl FnMut(&ComponentFactor<T>, &mut [T]),
+    ) {
+        let max_n = components
+            .iter()
+            .map(|component| component.factor.n())
+            .max()
+            .unwrap_or(0);
+        let mut local = vec![T::zero(); max_n];
+        for component in components {
+            let local = &mut local[..component.factor.n()];
+            for (local_index, &global) in component.vertices.iter().enumerate() {
+                local[local_index] = values[global as usize];
+            }
+            solve(component, local);
+            for (local_index, &global) in component.vertices.iter().enumerate() {
+                values[global as usize] = local[local_index];
             }
         }
     }
@@ -473,22 +471,9 @@ where
         match &self.storage {
             FactorStorage::Single(factor) => factor.solve_raw(values),
             FactorStorage::Blocks(components) => {
-                let max_n = components
-                    .iter()
-                    .map(|component| component.factor.n())
-                    .max()
-                    .unwrap_or(0);
-                let mut local = vec![T::zero(); max_n];
-                for component in components {
-                    let local_n = component.factor.n();
-                    for (local_index, &global) in component.vertices.iter().enumerate() {
-                        local[local_index] = values[global as usize];
-                    }
-                    component.factor.solve_raw(&mut local[..local_n]);
-                    for (local_index, &global) in component.vertices.iter().enumerate() {
-                        values[global as usize] = local[local_index];
-                    }
-                }
+                Self::solve_components(components, values, |component, local| {
+                    component.factor.solve_raw(local);
+                });
             }
         }
         Ok(())

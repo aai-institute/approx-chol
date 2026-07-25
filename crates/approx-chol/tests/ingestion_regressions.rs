@@ -141,6 +141,27 @@ fn disconnected_sparse_path_projects_each_component() {
 }
 
 #[test]
+fn disconnected_sparse_ac2_preserves_virtual_edge_multiplicity() {
+    let row_ptrs = [0u32, 2, 5, 7, 9, 12, 14];
+    let columns = [0u32, 1, 0, 1, 2, 1, 2, 3, 4, 3, 4, 5, 4, 5];
+    let values = [
+        1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0,
+    ];
+    let factor = Builder::<f64>::new(Config {
+        seed: 7,
+        split_merge: Some(3),
+        dense_threshold: 0,
+    })
+    .build(CsrRef::new(&row_ptrs, &columns, &values, 6).or_panic("valid CSR"))
+    .or_panic("disconnected AC2 factor");
+
+    let solution = factor
+        .solve(&[1.0, 0.0, -1.0, 1.0, 0.0, -1.0])
+        .or_panic("solve");
+    assert_eq!(solution, vec![1.0, 0.0, -1.0, 1.0, 0.0, -1.0]);
+}
+
+#[test]
 fn disconnected_laplacian_handles_three_components() {
     let (rp, ci, vals) = block_diagonal_paths(3);
 
