@@ -66,6 +66,7 @@ fn test_ac2_n_eq_1_augmented_diagonal_regression() {
     let csr = CsrRef::new(&indptr, &indices, &data, 3).or_panic("valid SDDM matrix");
 
     let config = Config {
+        backend: Backend::Approximate,
         split_merge: Some(2),
         ..Default::default()
     };
@@ -128,9 +129,9 @@ fn test_ac2_n_eq_1_solve_produces_finite_for_multiple_seeds() {
     for seed in 0..8u64 {
         let csr = CsrRef::new(&indptr, &indices, &data, 2).or_panic("valid SDDM");
         let config = Config {
+            backend: Backend::Approximate,
             split_merge: Some(2),
             seed,
-            ..Default::default()
         };
         let factor = Builder::<f64>::new(config)
             .build(csr)
@@ -169,6 +170,7 @@ fn test_ac2_near_zero_weight_star() {
     let csr = CsrRef::new(&indptr, &indices, &data, 3).or_panic("valid SDDM matrix");
 
     let config = Config {
+        backend: Backend::Approximate,
         split_merge: Some(2),
         ..Default::default()
     };
@@ -233,6 +235,7 @@ fn test_ac_marginally_sdd_laplacian_no_capacity_drift() {
 
     for seed in 0..16u64 {
         let config = Config {
+            backend: Backend::Approximate,
             seed,
             ..Default::default()
         };
