@@ -43,7 +43,3 @@ harness = false
 [[bench]]
 name = "solve"
 harness = false
-
-[[bench]]
-name = "conversion"
-harness = false

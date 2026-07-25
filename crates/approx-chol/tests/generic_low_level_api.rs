@@ -121,28 +121,6 @@ fn low_level_usize_f32() {
 }
 
 #[test]
-fn low_level_default_factorize_u32_no_conversion_path() {
-    let (rp, ci, vals, n) = path_laplacian::<u32, f64>();
-    let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid csr");
-    let factor = factorize(csr).or_panic("factorization should succeed");
-
-    let b = [1.0_f64, -1.0, 1.0, -1.0];
-    let mut work = vec![0.0; factor.n()];
-    factor
-        .solve_into(&b, &mut work)
-        .or_panic("solve_into should succeed");
-    assert!(work.iter().all(|x| x.is_finite()));
-}
-
-#[test]
-fn low_level_factorize_csrref() {
-    let (rp, ci, vals, n) = path_laplacian::<u32, f64>();
-    let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid csr");
-    let factor = factorize(csr).or_panic("factorization should succeed");
-    assert_eq!(factor.n(), 4);
-}
-
-#[test]
 fn low_level_u64_f32_ac2() {
     run_case_ac2::<u64, f32>();
 }

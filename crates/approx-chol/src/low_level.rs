@@ -5,26 +5,10 @@
 //! elimination sequences and samplers.
 //!
 //! Most users should prefer the high-level [`factorize`](crate::factorize)
-//! and [`factorize_with`](crate::factorize_with) functions.
+//! and [`factorize_with`](crate::factorize_with) functions; see [`Builder`] for
+//! the entry point and a usage example.
 //!
-//! # Usage
-//!
-//! ```
-//! use approx_chol::{Config, CsrRef};
-//! use approx_chol::low_level::Builder;
-//!
-//! let row_ptrs    = [0u32, 2, 5, 8, 10];
-//! let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
-//! let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
-//!
-//! let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
-//! let factor = Builder::new(Config::default()).build(csr)?;
-//! assert_eq!(factor.n(), 4);
-//! # Ok::<(), approx_chol::Error>(())
-//! ```
+//! [`Builder`]: crate::low_level::Builder
 
-// Builder for custom factorization pipelines
-pub use crate::approx_chol::Builder;
-
-// Star clique sampling utilities (AC + AC2 variants)
 pub use crate::approx_chol::clique_tree::{clique_tree_sample, clique_tree_sample_multi};
+pub use crate::approx_chol::Builder;

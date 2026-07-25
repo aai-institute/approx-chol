@@ -145,14 +145,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`Error::InvalidCsr`] if conversion or validation fails, if index
-/// conversion to `u32` fails, or if input conversion panics.
-/// Returns [`Error::PositiveOffDiagonal`] if any off-diagonal entry is strictly
-/// positive (outside the SDDM/Laplacian class).
-/// Returns [`Error::InvalidConfig`] if configuration values are inconsistent
-/// (e.g. `split_merge == Some(0)`).
-/// Returns [`Error::Disconnected`] if the input stays disconnected after Gremban
-/// grounding (see [`factorize`] for the connectivity precondition).
+/// As [`factorize`], plus [`Error::InvalidConfig`] if the configuration is
+/// inconsistent (e.g. `split_merge == Some(0)`), which `Config::default` is not.
 ///
 /// # Examples
 ///
