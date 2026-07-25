@@ -51,9 +51,16 @@ pub enum Error {
         /// Numeric failure observed at that pivot.
         failure: DenseFailure,
     },
+
+    /// An exact dense component cannot be represented in memory.
+    DenseMatrixTooLarge {
+        /// Dense component dimension.
+        dimension: usize,
+    },
 }
 
 /// Numeric reasons an exact dense Cholesky pivot can fail.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DenseFailure {
@@ -252,6 +259,10 @@ impl fmt::Display for Error {
             Error::DenseFactorizationFailed { vertex, failure } => write!(
                 f,
                 "dense Cholesky failed at vertex {vertex}: {failure}"
+            ),
+            Error::DenseMatrixTooLarge { dimension } => write!(
+                f,
+                "dense component of dimension {dimension} is too large to allocate"
             ),
         }
     }

@@ -1,4 +1,4 @@
-use approx_chol::{Config, CsrRef, Error};
+use approx_chol::{Backend, Config, CsrRef, Error, ExactFailure};
 use numpy::{BorrowError, PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
 use std::mem::size_of;
@@ -85,6 +85,56 @@ fn slices_overlap<T>(lhs: &[T], rhs: &[T]) -> bool {
     lhs_start < rhs_end && rhs_start < lhs_end
 }
 
+/// What to do when a block's exact Cholesky hits an invalid pivot.
+#[pyclass(eq, eq_int, frozen, name = "ExactFailure")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PyExactFailure {
+    /// Factor that block with approximate elimination instead, warning once.
+    FallBackToApproximate,
+    /// Raise instead of falling back.
+    Error,
+}
+
+/// Which factorization to run on each connected block.
+#[pyclass(frozen, name = "Backend")]
+#[derive(Clone)]
+enum PyBackend {
+    /// Approximate elimination for every block.
+    Approximate {},
+    /// Exact Cholesky for blocks of at most `max_dim` vertices.
+    ExactBelow {
+        max_dim: usize,
+        on_failure: PyExactFailure,
+    },
+}
+
+/// Warn once per factorization if any block fell back from exact Cholesky, which
+/// means the input was not positive definite within ingestion's tolerance.
+fn warn_on_exact_fallback(py: Python<'_>, factor: &approx_chol::Factor<f64>) -> PyResult<()> {
+    let fallbacks = factor.exact_fallbacks();
+    if fallbacks.is_empty() {
+        return Ok(());
+    }
+    let detail = fallbacks
+        .iter()
+        .map(|fallback| format!("vertex {} ({:?})", fallback.vertex, fallback.failure))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let message = format!(
+        "exact Cholesky failed on {} block(s) and fell back to approximate \
+         elimination: {detail}. The matrix is not positive definite within the \
+         tolerance it was accepted under; the factor is still usable as a \
+         preconditioner.",
+        fallbacks.len()
+    );
+    let warnings = py.import("warnings")?;
+    warnings.call_method1(
+        "warn",
+        (message, py.get_type::<pyo3::exceptions::PyRuntimeWarning>()),
+    )?;
+    Ok(())
+}
+
 /// Configuration for approximate Cholesky factorization.
 #[pyclass(frozen, name = "Config")]
 #[derive(Clone)]
@@ -94,18 +144,21 @@ struct PyConfig {
     #[pyo3(get)]
     split: Option<u32>,
     #[pyo3(get)]
-    dense_threshold: usize,
+    backend: PyBackend,
 }
 
 #[pymethods]
 impl PyConfig {
     #[new]
-    #[pyo3(signature = (seed=0, split=None, dense_threshold=24))]
-    fn new(seed: u64, split: Option<u32>, dense_threshold: usize) -> Self {
+    #[pyo3(signature = (seed=0, split=None, backend=None))]
+    fn new(seed: u64, split: Option<u32>, backend: Option<PyBackend>) -> Self {
         Self {
             seed,
             split,
-            dense_threshold,
+            backend: backend.unwrap_or(PyBackend::ExactBelow {
+                max_dim: 24,
+                on_failure: PyExactFailure::FallBackToApproximate,
+            }),
         }
     }
 }
@@ -119,10 +172,23 @@ impl PyConfig {
             }
             Some(s) => Some(s),
         };
+        let backend = match self.backend {
+            PyBackend::Approximate {} => Backend::Approximate,
+            PyBackend::ExactBelow {
+                max_dim,
+                on_failure,
+            } => Backend::ExactBelow {
+                max_dim,
+                on_failure: match on_failure {
+                    PyExactFailure::FallBackToApproximate => ExactFailure::FallBackToApproximate,
+                    PyExactFailure::Error => ExactFailure::Error,
+                },
+            },
+        };
         Ok(Config {
             seed: self.seed,
             split_merge,
-            dense_threshold: self.dense_threshold,
+            backend,
         })
     }
 }
@@ -300,6 +366,7 @@ fn approx_chol_err_to_py(e: Error) -> PyErr {
 #[pyfunction]
 #[pyo3(signature = (row_ptrs, col_indices, values, n, config=None))]
 fn factorize_raw<'py>(
+    py: Python<'py>,
     row_ptrs: PyReadonlyArray1<'py, u32>,
     col_indices: PyReadonlyArray1<'py, u32>,
     values: PyReadonlyArray1<'py, f64>,
@@ -326,6 +393,7 @@ fn factorize_raw<'py>(
         None => approx_chol::factorize(csr),
     }
     .map_err(approx_chol_err_to_py)?;
+    warn_on_exact_fallback(py, &factor)?;
     Ok(PyFactor {
         inner: factor,
         original_n,
@@ -388,6 +456,7 @@ fn factorize(
         None => approx_chol::factorize(csr),
     }
     .map_err(approx_chol_err_to_py)?;
+    warn_on_exact_fallback(py, &factor)?;
     Ok(PyFactor {
         inner: factor,
         original_n,
@@ -397,6 +466,8 @@ fn factorize(
 /// Approximate Cholesky factorization for SDDM/Laplacian systems.
 #[pymodule]
 fn _approx_chol(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyExactFailure>()?;
+    m.add_class::<PyBackend>()?;
     m.add_class::<PyConfig>()?;
     m.add_class::<PyFactor>()?;
     m.add_function(wrap_pyfunction!(factorize, m)?)?;

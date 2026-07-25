@@ -18,7 +18,7 @@ mod tests;
     ))
 )]
 #[derive(Clone, Debug)]
-pub(crate) enum SingleFactor<T> {
+pub(crate) enum BlockFactor<T> {
     Approx {
         n: usize,
         sequence: EliminationSequence<T>,
@@ -39,23 +39,91 @@ pub(crate) enum SingleFactor<T> {
     ))
 )]
 #[derive(Clone, Debug)]
-pub(crate) struct ComponentFactor<T> {
-    pub(crate) vertices: Vec<u32>,
-    pub(crate) factor: SingleFactor<T>,
+pub(crate) struct Block<T> {
+    pub(crate) start: u32,
+    /// Every block's Laplacian is singular, so one variable must be pinned.
+    pub(crate) anchor: u32,
+    pub(crate) ground: Option<u32>,
+    pub(crate) factor: BlockFactor<T>,
 }
 
+impl<T> Block<T> {
+    fn ground(&self) -> Option<usize> {
+        self.ground.map(|ground| ground as usize)
+    }
+}
+
+/// Block-contiguous order to input order, held as the cycle decomposition of
+/// the forward map so both directions are in-place rotations needing no scratch.
+/// Fixed points are omitted; `starts` bounds each cycle's run in `cycles`.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "serde",
-    serde(bound(
-        serialize = "T: serde::Serialize",
-        deserialize = "T: serde::de::DeserializeOwned"
-    ))
-)]
 #[derive(Clone, Debug)]
-enum FactorStorage<T> {
-    Single(SingleFactor<T>),
-    Blocks(Vec<ComponentFactor<T>>),
+pub(crate) struct Permutation {
+    cycles: Vec<u32>,
+    starts: Vec<u32>,
+}
+
+impl Permutation {
+    /// `forward[i]` is the input vertex at permuted position `i`; `None` if identity.
+    pub(crate) fn from_forward(forward: &[u32]) -> Option<Self> {
+        if forward.iter().enumerate().all(|(i, &v)| i as u32 == v) {
+            return None;
+        }
+        let mut visited = vec![false; forward.len()];
+        let mut cycles = Vec::new();
+        let mut starts = vec![0u32];
+        for position in 0..forward.len() {
+            if visited[position] || forward[position] as usize == position {
+                continue;
+            }
+            let mut current = position;
+            while !visited[current] {
+                visited[current] = true;
+                cycles.push(current as u32);
+                current = forward[current] as usize;
+            }
+            starts.push(cycles.len() as u32);
+        }
+        Some(Self { cycles, starts })
+    }
+
+    fn cycle_slices(&self) -> impl Iterator<Item = &[u32]> {
+        self.starts
+            .windows(2)
+            .map(|bounds| &self.cycles[bounds[0] as usize..bounds[1] as usize])
+    }
+
+    /// `values[i] <- values[forward[i]]`
+    fn gather<T: Copy>(&self, values: &mut [T]) {
+        for cycle in self.cycle_slices() {
+            let first = values[cycle[0] as usize];
+            for window in cycle.windows(2) {
+                values[window[0] as usize] = values[window[1] as usize];
+            }
+            values[cycle[cycle.len() - 1] as usize] = first;
+        }
+    }
+
+    /// `values[forward[i]] <- values[i]`
+    fn scatter<T: Copy>(&self, values: &mut [T]) {
+        for cycle in self.cycle_slices() {
+            let last = values[cycle[cycle.len() - 1] as usize];
+            for window in cycle.windows(2).rev() {
+                values[window[1] as usize] = values[window[0] as usize];
+            }
+            values[cycle[0] as usize] = last;
+        }
+    }
+}
+
+/// A block whose exact factorization failed, so it was factored approximately.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExactFallback {
+    /// Pivot vertex that failed, in input numbering.
+    pub vertex: usize,
+    /// Why the pivot failed.
+    pub failure: DenseFailure,
 }
 
 /// Exact or approximate Cholesky decomposition of an SDDM matrix.
@@ -65,7 +133,7 @@ enum FactorStorage<T> {
     serde(
         bound(
             serialize = "T: serde::Serialize",
-            deserialize = "T: serde::de::DeserializeOwned"
+            deserialize = "T: serde::de::DeserializeOwned + num_traits::Float"
         ),
         try_from = "FactorData<T>"
     )
@@ -74,7 +142,9 @@ enum FactorStorage<T> {
 pub struct Factor<T = f64> {
     pub(crate) n: usize,
     pub(crate) original_n: usize,
-    storage: FactorStorage<T>,
+    permutation: Option<Permutation>,
+    blocks: Vec<Block<T>>,
+    exact_fallbacks: Vec<ExactFallback>,
 }
 
 #[cfg(feature = "serde")]
@@ -83,18 +153,22 @@ pub struct Factor<T = f64> {
 struct FactorData<T> {
     n: usize,
     original_n: usize,
-    storage: FactorStorage<T>,
+    permutation: Option<Permutation>,
+    blocks: Vec<Block<T>>,
+    exact_fallbacks: Vec<ExactFallback>,
 }
 
 #[cfg(feature = "serde")]
-impl<T> TryFrom<FactorData<T>> for Factor<T> {
+impl<T: num_traits::Float> TryFrom<FactorData<T>> for Factor<T> {
     type Error = FactorError;
 
     fn try_from(data: FactorData<T>) -> Result<Self, Self::Error> {
         let factor = Self {
             n: data.n,
             original_n: data.original_n,
-            storage: data.storage,
+            permutation: data.permutation,
+            blocks: data.blocks,
+            exact_fallbacks: data.exact_fallbacks,
         };
         factor.validate_structure()?;
         Ok(factor)
@@ -102,7 +176,7 @@ impl<T> TryFrom<FactorData<T>> for Factor<T> {
 }
 
 #[cfg(feature = "serde")]
-impl<T> Factor<T> {
+impl<T: num_traits::Float> Factor<T> {
     fn validate_structure(&self) -> Result<(), FactorError> {
         if self.original_n > self.n {
             return Err(FactorError::OriginalDimExceedsInternal {
@@ -110,63 +184,70 @@ impl<T> Factor<T> {
                 n: self.n,
             });
         }
-        fn validate_single<T>(factor: &SingleFactor<T>) -> Result<(), FactorError> {
-            match factor {
-                SingleFactor::Approx { n, sequence } => sequence.validate_for_dim(*n),
-                SingleFactor::Dense { n, m, lower } => {
-                    if m.checked_mul(*m) != Some(lower.len()) || *m != n.saturating_sub(1) {
-                        return Err(FactorError::DenseLengthInvalid {
-                            n: *n,
-                            len: lower.len(),
-                        });
-                    }
-                    Ok(())
+        // Tiling [0, n) is what stops a corrupted range aliasing another block.
+        let mut expected_start = 0usize;
+        for block in &self.blocks {
+            let block_n = block.factor.n();
+            if block.start as usize != expected_start || block_n == 0 {
+                return Err(FactorError::BlockRangeInvalid {
+                    start: block.start as usize,
+                    n: block_n,
+                });
+            }
+            if block.anchor as usize >= block_n {
+                return Err(FactorError::BlockAnchorInvalid {
+                    anchor: block.anchor as usize,
+                    n: block_n,
+                });
+            }
+            if let Some(ground) = block.ground {
+                if ground as usize >= block_n {
+                    return Err(FactorError::BlockGroundInvalid {
+                        ground: ground as usize,
+                        n: block_n,
+                    });
                 }
             }
+            block.factor.validate()?;
+            expected_start += block_n;
         }
-        match &self.storage {
-            FactorStorage::Single(factor) => {
-                let factor_n = match factor {
-                    SingleFactor::Approx { n, .. } | SingleFactor::Dense { n, .. } => *n,
-                };
-                if factor_n != self.n {
-                    return Err(FactorError::SingleDimensionMismatch);
-                }
-                validate_single(factor)
-            }
-            FactorStorage::Blocks(components) => {
-                let mut seen = vec![false; self.n];
-                for component in components {
-                    if let Some(window) = component
-                        .vertices
-                        .windows(2)
-                        .find(|window| window[0] >= window[1])
-                    {
-                        return Err(FactorError::ComponentVertexInvalid {
-                            vertex: window[1] as usize,
-                        });
-                    }
-                    let component_n = match &component.factor {
-                        SingleFactor::Approx { n, .. } | SingleFactor::Dense { n, .. } => *n,
-                    };
-                    if component.vertices.len() != component_n {
-                        return Err(FactorError::ComponentDimensionMismatch);
-                    }
-                    for &vertex in &component.vertices {
-                        let vertex = vertex as usize;
-                        if vertex >= self.n || seen[vertex] {
-                            return Err(FactorError::ComponentVertexInvalid { vertex });
-                        }
-                        seen[vertex] = true;
-                    }
-                    validate_single(&component.factor)?;
-                }
-                if let Some(vertex) = seen.iter().position(|&is_seen| !is_seen) {
-                    return Err(FactorError::ComponentVertexInvalid { vertex });
-                }
-                Ok(())
-            }
+        if expected_start != self.n {
+            return Err(FactorError::BlockRangeInvalid {
+                start: expected_start,
+                n: self.n,
+            });
         }
+        if let Some(permutation) = &self.permutation {
+            permutation.validate_for_dim(self.n)?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl Permutation {
+    fn validate_for_dim(&self, n: usize) -> Result<(), FactorError> {
+        if self.starts.first() != Some(&0)
+            || self.starts.last() != Some(&(self.cycles.len() as u32))
+        {
+            return Err(FactorError::PermutationInvalid { position: 0 });
+        }
+        if self.starts.windows(2).any(|bounds| bounds[0] >= bounds[1]) {
+            return Err(FactorError::PermutationInvalid { position: 0 });
+        }
+        // `from_forward` omits fixed points; `gather` would silently ignore one.
+        if self.cycle_slices().any(|cycle| cycle.len() < 2) {
+            return Err(FactorError::PermutationInvalid { position: 0 });
+        }
+        let mut seen = vec![false; n];
+        for &position in &self.cycles {
+            let position = position as usize;
+            if position >= n || seen[position] {
+                return Err(FactorError::PermutationInvalid { position });
+            }
+            seen[position] = true;
+        }
+        Ok(())
     }
 }
 
@@ -213,7 +294,47 @@ impl fmt::Display for SolveError {
 
 impl std::error::Error for SolveError {}
 
-impl<T> SingleFactor<T>
+impl<T> BlockFactor<T> {
+    fn n(&self) -> usize {
+        match self {
+            Self::Approx { n, .. } | Self::Dense { n, .. } => *n,
+        }
+    }
+
+    fn n_steps(&self) -> usize {
+        match self {
+            Self::Approx { sequence, .. } => sequence.n_steps(),
+            Self::Dense { m, .. } => *m,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T: num_traits::Float> BlockFactor<T> {
+    fn validate(&self) -> Result<(), FactorError> {
+        match self {
+            Self::Approx { n, sequence } => sequence.validate_for_dim(*n),
+            Self::Dense { n, m, lower } => {
+                if m.checked_mul(*m) != Some(lower.len()) || *m != n.saturating_sub(1) {
+                    return Err(FactorError::DenseLengthInvalid {
+                        n: *n,
+                        len: lower.len(),
+                    });
+                }
+                // `solve_raw` divides by each diagonal entry twice per row.
+                for index in 0..*m {
+                    let pivot = lower[index * m + index];
+                    if !pivot.is_finite() || pivot <= T::zero() {
+                        return Err(FactorError::DensePivotInvalid { index });
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl<T> BlockFactor<T>
 where
     T: num_traits::Float + Send + Sync + 'static,
 {
@@ -276,19 +397,6 @@ where
         })
     }
 
-    fn n(&self) -> usize {
-        match self {
-            Self::Approx { n, .. } | Self::Dense { n, .. } => *n,
-        }
-    }
-
-    fn n_steps(&self) -> usize {
-        match self {
-            Self::Approx { sequence, .. } => sequence.n_steps(),
-            Self::Dense { m, .. } => *m,
-        }
-    }
-
     fn solve_raw(&self, values: &mut [T]) {
         match self {
             Self::Approx { sequence, .. } => {
@@ -321,33 +429,61 @@ where
         }
     }
 
-    fn solve_recovered(&self, values: &mut [T], original_n: usize) {
-        match self {
-            Self::Dense { .. } => self.solve_raw(values),
-            Self::Approx { .. } if self.n() > original_n => {
-                let aux = original_n;
-                values[aux] = -values[..aux]
-                    .iter()
-                    .fold(T::zero(), |sum, &value| sum + value);
-                self.solve_raw(values);
-                let ground = values[aux];
-                for value in &mut values[..aux] {
-                    *value = *value - ground;
+    /// Solves the block system, leaving `values[pin]` equal to zero, where `pin`
+    /// is the ground vertex if this block has one and the anchor otherwise. Both
+    /// backends satisfy this, so the raw result never depends on which ran.
+    fn apply_anchored(&self, values: &mut [T], anchor: usize, ground: Option<usize>) {
+        // Every block is a singular Laplacian, so it solves only a zero-sum
+        // right-hand side; both arms put `values` in that range.
+        match ground {
+            // The exact embedding of `M x = b` as `L_aug [x; 0] = [b; -sum b]`.
+            Some(ground) => {
+                let mut sum = T::zero();
+                for (index, &value) in values.iter().enumerate() {
+                    if index != ground {
+                        sum = sum + value;
+                    }
                 }
+                values[ground] = -sum;
+            }
+            // No ground vertex to absorb the null-space component, so project it
+            // out; an inconsistent right-hand side then gives least squares.
+            None => Self::project_zero_mean(values),
+        }
+        match self {
+            // The factor is already of the anchor-deleted submatrix, and
+            // `solve_raw` zeroes the anchor slot.
+            Self::Dense { m, .. } => {
+                debug_assert_eq!(ground.unwrap_or(anchor), *m);
+                self.solve_raw(values);
             }
             Self::Approx { .. } => {
                 self.solve_raw(values);
-                if original_n > 0 {
-                    let count = num_traits::cast::<usize, T>(original_n).unwrap();
-                    let mean = values[..original_n]
-                        .iter()
-                        .fold(T::zero(), |sum, &value| sum + value)
-                        / count;
-                    for value in &mut values[..original_n] {
-                        *value = *value - mean;
-                    }
+                let pinned = values[ground.unwrap_or(anchor)];
+                for value in values.iter_mut() {
+                    *value = *value - pinned;
                 }
             }
+        }
+    }
+
+    fn solve_recovered(&self, values: &mut [T], anchor: usize, ground: Option<usize>) {
+        self.apply_anchored(values, anchor, ground);
+        // Pinning the ground vertex already gives the SDDM solution; a floating
+        // block is determined only up to a constant, fixed here to zero mean.
+        if ground.is_none() {
+            Self::project_zero_mean(values);
+        }
+    }
+
+    fn project_zero_mean(values: &mut [T]) {
+        if values.is_empty() {
+            return;
+        }
+        let count = num_traits::cast::<usize, T>(values.len()).unwrap();
+        let mean = values.iter().fold(T::zero(), |sum, &value| sum + value) / count;
+        for value in values.iter_mut() {
+            *value = *value - mean;
         }
     }
 }
@@ -356,20 +492,43 @@ impl<T> Factor<T>
 where
     T: num_traits::Float + Send + Sync + 'static,
 {
-    pub(crate) fn single(original_n: usize, factor: SingleFactor<T>) -> Self {
-        Self {
-            n: factor.n(),
-            original_n,
-            storage: FactorStorage::Single(factor),
-        }
-    }
-
-    pub(crate) fn blocks(n: usize, original_n: usize, components: Vec<ComponentFactor<T>>) -> Self {
+    /// An empty `forward` means the blocks already sit in input order.
+    pub(crate) fn from_blocks(
+        n: usize,
+        original_n: usize,
+        forward: &[u32],
+        blocks: Vec<Block<T>>,
+        exact_fallbacks: Vec<ExactFallback>,
+    ) -> Self {
+        debug_assert!(forward.is_empty() || forward.len() == n);
         Self {
             n,
             original_n,
-            storage: FactorStorage::Blocks(components),
+            permutation: Permutation::from_forward(forward),
+            blocks,
+            exact_fallbacks,
         }
+    }
+
+    pub(crate) fn empty(original_n: usize) -> Self {
+        Self {
+            n: 0,
+            original_n,
+            permutation: None,
+            blocks: Vec::new(),
+            exact_fallbacks: Vec::new(),
+        }
+    }
+
+    /// Blocks that [`Backend::ExactBelow`](crate::Backend::ExactBelow) selected for
+    /// exact Cholesky but whose factorization failed, so they were factored
+    /// approximately instead. Empty for any other backend.
+    ///
+    /// A non-empty result means the input was not positive definite within the
+    /// tolerance ingestion accepted it under; the factor is still usable as a
+    /// preconditioner.
+    pub fn exact_fallbacks(&self) -> &[ExactFallback] {
+        &self.exact_fallbacks
     }
 
     /// Dimension of the original input matrix.
@@ -384,13 +543,7 @@ where
 
     /// Number of approximate elimination steps or exact dense pivots.
     pub fn n_steps(&self) -> usize {
-        match &self.storage {
-            FactorStorage::Single(factor) => factor.n_steps(),
-            FactorStorage::Blocks(components) => components
-                .iter()
-                .map(|component| component.factor.n_steps())
-                .sum(),
-        }
+        self.blocks.iter().map(|block| block.factor.n_steps()).sum()
     }
 
     fn validate(&self, b_len: Option<usize>, work_len: usize) -> Result<(), SolveError> {
@@ -414,39 +567,24 @@ where
     fn solve_kernel(&self, b: &[T], work: &mut [T]) {
         work[..self.n].fill(T::zero());
         work[..b.len()].copy_from_slice(b);
-        match &self.storage {
-            FactorStorage::Single(factor) => factor.solve_recovered(work, self.original_n),
-            FactorStorage::Blocks(components) => {
-                Self::solve_components(components, work, |component, local| {
-                    let local_original_n = component
-                        .vertices
-                        .partition_point(|&vertex| (vertex as usize) < self.original_n);
-                    component.factor.solve_recovered(local, local_original_n);
-                });
-            }
-        }
+        self.for_each_block(work, |block, values| {
+            block
+                .factor
+                .solve_recovered(values, block.anchor as usize, block.ground());
+        });
     }
 
-    fn solve_components(
-        components: &[ComponentFactor<T>],
-        values: &mut [T],
-        mut solve: impl FnMut(&ComponentFactor<T>, &mut [T]),
-    ) {
-        let max_n = components
-            .iter()
-            .map(|component| component.factor.n())
-            .max()
-            .unwrap_or(0);
-        let mut local = vec![T::zero(); max_n];
-        for component in components {
-            let local = &mut local[..component.factor.n()];
-            for (local_index, &global) in component.vertices.iter().enumerate() {
-                local[local_index] = values[global as usize];
-            }
-            solve(component, local);
-            for (local_index, &global) in component.vertices.iter().enumerate() {
-                values[global as usize] = local[local_index];
-            }
+    fn for_each_block(&self, values: &mut [T], mut solve: impl FnMut(&Block<T>, &mut [T])) {
+        let values = &mut values[..self.n];
+        if let Some(permutation) = &self.permutation {
+            permutation.gather(values);
+        }
+        for block in &self.blocks {
+            let start = block.start as usize;
+            solve(block, &mut values[start..start + block.factor.n()]);
+        }
+        if let Some(permutation) = &self.permutation {
+            permutation.scatter(values);
         }
     }
 
@@ -465,17 +603,22 @@ where
         Ok(())
     }
 
-    /// Apply the stored factors directly without gauge recovery.
+    /// Solve in place, skipping the zero-mean canonicalization that [`Self::solve`]
+    /// applies to floating blocks.
+    ///
+    /// Each block is left anchored: one variable per block is pinned to zero — the
+    /// ground vertex where augmentation added one, the un-eliminated vertex
+    /// otherwise. For an SDDM input that pins the ground vertex, so the result
+    /// already solves `M x = b` and matches [`Self::solve_into`]. For a Laplacian
+    /// input the result differs from [`Self::solve_into`] by a constant per block.
+    /// Neither depends on [`Backend`](crate::Backend).
     pub fn solve_in_place(&self, values: &mut [T]) -> Result<(), SolveError> {
         self.validate(None, values.len())?;
-        match &self.storage {
-            FactorStorage::Single(factor) => factor.solve_raw(values),
-            FactorStorage::Blocks(components) => {
-                Self::solve_components(components, values, |component, local| {
-                    component.factor.solve_raw(local);
-                });
-            }
-        }
+        self.for_each_block(values, |block, values| {
+            block
+                .factor
+                .apply_anchored(values, block.anchor as usize, block.ground());
+        });
         Ok(())
     }
 }

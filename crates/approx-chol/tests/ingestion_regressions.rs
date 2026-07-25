@@ -3,7 +3,7 @@ mod panic_ok;
 use panic_ok::OrPanic;
 
 use approx_chol::low_level::Builder;
-use approx_chol::{Config, CsrRef, Error};
+use approx_chol::{Backend, Config, CsrRef, DenseFailure, Error, ExactFailure};
 
 fn solve_with_default_ac(
     row_ptrs: &[u32],
@@ -87,6 +87,69 @@ fn positive_off_diagonal_is_rejected_not_silently_dropped() {
     }
 }
 
+#[test]
+fn duplicate_off_diagonals_are_classified_after_coalescing() {
+    let row_ptrs = [0u32, 3, 6];
+    let columns = [0u32, 1, 1, 0, 0, 1];
+    let values = [1.0, 1.0, -2.0, 1.0, -2.0, 1.0];
+    let csr = CsrRef::new(&row_ptrs, &columns, &values, 2).or_panic("valid CSR");
+
+    Builder::<f64>::new(Config::default())
+        .build(csr)
+        .or_panic("coalesced off-diagonal is negative");
+}
+
+#[test]
+fn transpose_entries_within_roundoff_are_symmetric() {
+    let next_after_one = f64::from_bits(1.0f64.to_bits() + 1);
+    let row_ptrs = [0u32, 2, 4];
+    let columns = [0u32, 1, 0, 1];
+    let values = [2.0, -1.0, -next_after_one, 2.0];
+    let csr = CsrRef::new(&row_ptrs, &columns, &values, 2).or_panic("valid CSR");
+
+    Builder::<f64>::new(Config::default())
+        .build(csr)
+        .or_panic("one-ulp transpose difference");
+}
+
+#[test]
+fn high_scale_positive_surplus_is_preserved() {
+    let row_ptrs = [0u32, 2, 4];
+    let columns = [0u32, 1, 0, 1];
+    let values = [1e12 + 100.0, -1e12, -1e12, 1e12 + 100.0];
+    let factor = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(&row_ptrs, &columns, &values, 2).or_panic("valid CSR"))
+        .or_panic("high-scale SDDM");
+    let solution = factor.solve(&[1.0, 1.0]).or_panic("solve");
+
+    assert!(
+        (solution[0] - 0.01).abs() < 1e-8,
+        "unexpected solution: {solution:?}"
+    );
+    assert!(
+        (solution[1] - 0.01).abs() < 1e-8,
+        "unexpected solution: {solution:?}"
+    );
+}
+
+#[test]
+fn dense_ac2_uses_total_virtual_edge_weight() {
+    let row_ptrs = [0u32, 3, 6, 9];
+    let columns = [0u32, 1, 2, 0, 1, 2, 0, 1, 2];
+    let values = [3.0, -1.0, -1.0, -1.0, 3.0, -1.0, -1.0, -1.0, 3.0];
+    let factor = Builder::<f64>::new(Config {
+        split_merge: Some(2),
+        ..Config::default()
+    })
+    .build(CsrRef::new(&row_ptrs, &columns, &values, 3).or_panic("valid CSR"))
+    .or_panic("dense AC2 factor");
+    let solution = factor.solve(&[1.0, 2.0, 3.0]).or_panic("solve");
+
+    for (actual, expected) in solution.iter().zip([1.75, 2.0, 2.25]) {
+        assert!((actual - expected).abs() < 1e-12);
+    }
+}
+
 /// CSR for `k` disjoint 2-node path Laplacians, stacked block-diagonally — a
 /// graph with `k` connected components. For `k = 2`:
 ///   [ 1 -1  .  . ]
@@ -120,7 +183,7 @@ fn disconnected_laplacian_solves_per_component() {
         .build(csr)
         .expect("disconnected Laplacian must factor block-diagonally");
         let solution = factor.solve(&[1.0, -1.0, 2.0, -2.0]).unwrap();
-        assert_eq!(solution, vec![1.0, 0.0, 2.0, 0.0]);
+        assert_eq!(solution, vec![0.5, -0.5, 1.0, -1.0]);
     }
 }
 
@@ -130,7 +193,7 @@ fn disconnected_sparse_path_projects_each_component() {
     for split_merge in [None, Some(2)] {
         let factor = Builder::<f64>::new(Config {
             split_merge,
-            dense_threshold: 0,
+            backend: Backend::Approximate,
             ..Config::default()
         })
         .build(CsrRef::new(&rp, &ci, &vals, 4).or_panic("valid CSR"))
@@ -150,7 +213,7 @@ fn disconnected_sparse_ac2_preserves_virtual_edge_multiplicity() {
     let factor = Builder::<f64>::new(Config {
         seed: 7,
         split_merge: Some(3),
-        dense_threshold: 0,
+        backend: Backend::Approximate,
     })
     .build(CsrRef::new(&row_ptrs, &columns, &values, 6).or_panic("valid CSR"))
     .or_panic("disconnected AC2 factor");
@@ -328,22 +391,25 @@ fn mixed_grounded_and_floating_components_solve_independently() {
         .or_panic("mixed factor");
     let solution = factor.solve(&[4.0, 1.0, -1.0]).unwrap();
     assert!((solution[0] - 2.0).abs() < 1e-14);
-    assert_eq!(&solution[1..], &[1.0, 0.0]);
+    assert_eq!(&solution[1..], &[0.5, -0.5]);
 }
 
 #[test]
-fn dense_threshold_is_applied_per_component() {
+fn exact_backend_is_applied_per_component() {
     let row_ptrs = [0u32, 2, 4, 6, 9, 11];
     let columns = [0u32, 1, 0, 1, 2, 3, 2, 3, 4, 3, 4];
     let values = [1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
     let factor = Builder::<f64>::new(Config {
-        dense_threshold: 2,
+        backend: Backend::ExactBelow {
+            max_dim: 2,
+            on_failure: ExactFailure::FallBackToApproximate,
+        },
         ..Config::default()
     })
     .build(CsrRef::new(&row_ptrs, &columns, &values, 5).or_panic("valid CSR"))
     .or_panic("mixed backend factor");
     let solution = factor.solve(&[1.0, -1.0, 1.0, 0.0, -1.0]).unwrap();
-    assert_eq!(solution, vec![1.0, 0.0, 1.0, 0.0, -1.0]);
+    assert_eq!(solution, vec![0.5, -0.5, 1.0, 0.0, -1.0]);
 }
 
 #[test]
@@ -355,5 +421,120 @@ fn non_finite_input_is_reported() {
             .build(non_finite)
             .unwrap_err(),
         Error::NonFiniteValue { position: 0 }
+    );
+}
+
+// Components {0,2} and {1,3} concatenate to [0,2,1,3]: a non-identity block
+// permutation, unlike the block-diagonal fixtures above.
+#[test]
+fn interleaved_components_permute_and_restore_input_order() {
+    let row_ptrs = [0u32, 2, 4, 6, 8];
+    let columns = [0u32, 2, 1, 3, 0, 2, 1, 3];
+    let values = [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
+    for backend in [
+        Backend::Approximate,
+        Backend::ExactBelow {
+            max_dim: 24,
+            on_failure: ExactFailure::FallBackToApproximate,
+        },
+    ] {
+        let factor = Builder::<f64>::new(Config {
+            backend,
+            ..Config::default()
+        })
+        .build(CsrRef::new(&row_ptrs, &columns, &values, 4).or_panic("valid CSR"))
+        .or_panic("interleaved factor");
+        let solution = factor.solve(&[1.0, 2.0, -1.0, -2.0]).or_panic("solve");
+        for (got, want) in solution.iter().zip([0.5, 1.0, -0.5, -1.0]) {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "backend {backend:?}: got {solution:?}"
+            );
+        }
+    }
+}
+
+// A floating block whose right-hand side is not zero-sum has no exact solution;
+// projecting onto the range makes both backends return the same least-squares one.
+#[test]
+fn inconsistent_rhs_is_projected_onto_the_range() {
+    let row_ptrs = [0u32, 2, 4, 6, 8];
+    let columns = [0u32, 2, 1, 3, 0, 2, 1, 3];
+    let values = [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
+    for backend in [
+        Backend::Approximate,
+        Backend::ExactBelow {
+            max_dim: 24,
+            on_failure: ExactFailure::FallBackToApproximate,
+        },
+    ] {
+        let factor = Builder::<f64>::new(Config {
+            backend,
+            ..Config::default()
+        })
+        .build(CsrRef::new(&row_ptrs, &columns, &values, 4).or_panic("valid CSR"))
+        .or_panic("interleaved factor");
+        // Block {0,2} gets [3, -1] (sum 2), block {1,3} gets [5, -2] (sum 3).
+        let solution = factor.solve(&[3.0, 5.0, -1.0, -2.0]).or_panic("solve");
+        for (got, want) in solution.iter().zip([1.0, 1.75, -1.0, -1.75]) {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "backend {backend:?}: got {solution:?}"
+            );
+        }
+    }
+}
+
+// Ingestion clamps row 1's deficit of -1 (tiny beside a row scale of ~2e16) and so
+// accepts a matrix that is exactly singular. Exact Cholesky rightly refuses it;
+// the default backend must fall back rather than reject the input outright.
+#[test]
+fn exact_pivot_failure_falls_back_and_is_recorded() {
+    let row_ptrs = [0u32, 2, 5, 7];
+    let columns = [0u32, 1, 0, 1, 2, 1, 2];
+    let values = [1e16, -1e16, -1e16, 1e16 + 1.0, -1.0, -1.0, 1.0];
+    let csr = CsrRef::new(&row_ptrs, &columns, &values, 3).or_panic("valid CSR");
+
+    let factor = Builder::<f64>::new(Config::default())
+        .build(csr)
+        .or_panic("clamped input must factor, not error");
+    let fallbacks = factor.exact_fallbacks();
+    assert_eq!(fallbacks.len(), 1, "expected one recorded fallback");
+    assert_eq!(fallbacks[0].vertex, 1);
+    assert_eq!(fallbacks[0].failure, DenseFailure::NonPositivePivot);
+    assert!(factor.solve(&[1.0, 0.0, -1.0]).is_ok());
+
+    // Nothing to fall back from when no block was selected for exact Cholesky.
+    let approximate = Builder::<f64>::new(Config {
+        backend: Backend::Approximate,
+        ..Config::default()
+    })
+    .build(csr)
+    .or_panic("approximate factor");
+    assert!(approximate.exact_fallbacks().is_empty());
+}
+
+#[test]
+fn exact_failure_error_policy_propagates_instead_of_falling_back() {
+    let row_ptrs = [0u32, 2, 5, 7];
+    let columns = [0u32, 1, 0, 1, 2, 1, 2];
+    let values = [1e16, -1e16, -1e16, 1e16 + 1.0, -1.0, -1.0, 1.0];
+    let csr = CsrRef::new(&row_ptrs, &columns, &values, 3).or_panic("valid CSR");
+
+    let error = Builder::<f64>::new(Config {
+        backend: Backend::ExactBelow {
+            max_dim: 24,
+            on_failure: ExactFailure::Error,
+        },
+        ..Config::default()
+    })
+    .build(csr)
+    .expect_err("ExactFailure::Error must not fall back");
+    assert_eq!(
+        error,
+        Error::DenseFactorizationFailed {
+            vertex: 1,
+            failure: DenseFailure::NonPositivePivot,
+        }
     );
 }

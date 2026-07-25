@@ -6,7 +6,7 @@ mod panic_ok;
 mod path;
 use panic_ok::OrPanic;
 
-use approx_chol::{factorize_with, Config, CsrRef, Factor};
+use approx_chol::{factorize_with, Backend, Config, CsrRef, ExactFailure, Factor};
 
 fn path_factor() -> Factor<f64> {
     let row_ptrs: Vec<u32> = path::ROW_PTRS.iter().map(|&v| v as u32).collect();
@@ -15,7 +15,7 @@ fn path_factor() -> Factor<f64> {
     factorize_with(
         csr,
         Config {
-            dense_threshold: 0,
+            backend: Backend::Approximate,
             ..Config::default()
         },
     )
@@ -51,7 +51,7 @@ fn dense_and_block_factors_roundtrip() {
     for config in [
         Config::default(),
         Config {
-            dense_threshold: 0,
+            backend: Backend::Approximate,
             ..Config::default()
         },
     ] {
@@ -68,11 +68,11 @@ fn dense_and_block_factors_roundtrip() {
 
 #[test]
 fn deserializing_corrupted_factor_is_rejected() {
-    // The unit tests cover every FactorError variant directly; this asserts the
-    // serde `try_from` boundary is wired, so a structurally-corrupted persisted
-    // factor is rejected at deserialize time rather than panicking on solve.
+    // Asserts the serde `try_from` boundary is wired, so a structurally-corrupted
+    // persisted factor is rejected at deserialize time rather than panicking on
+    // solve. Per-variant coverage lives in the `factor` unit tests.
     let mut value = serde_json::to_value(path_factor()).or_panic("serialize factor");
-    value["storage"]["Single"]["Approx"]["sequence"]["offsets"]
+    value["blocks"][0]["factor"]["Approx"]["sequence"]["offsets"]
         .as_array_mut()
         .expect("offsets is an array")
         .pop();
@@ -85,7 +85,10 @@ fn config_json_roundtrip() {
     let config = Config {
         seed: 42,
         split_merge: Some(3),
-        dense_threshold: 24,
+        backend: Backend::ExactBelow {
+            max_dim: 24,
+            on_failure: ExactFailure::FallBackToApproximate,
+        },
     };
 
     let json = serde_json::to_string(&config).or_panic("serialize config");
@@ -93,5 +96,15 @@ fn config_json_roundtrip() {
 
     assert_eq!(restored.seed, config.seed);
     assert_eq!(restored.split_merge, config.split_merge);
-    assert_eq!(restored.dense_threshold, config.dense_threshold);
+    assert_eq!(restored.backend, config.backend);
+}
+
+#[test]
+fn config_without_backend_uses_current_default() {
+    let restored: Config =
+        serde_json::from_str(r#"{"seed":42,"split_merge":2}"#).or_panic("legacy config");
+
+    assert_eq!(restored.seed, 42);
+    assert_eq!(restored.split_merge, Some(2));
+    assert_eq!(restored.backend, Config::default().backend);
 }

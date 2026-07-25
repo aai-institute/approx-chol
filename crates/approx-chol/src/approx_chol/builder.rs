@@ -1,4 +1,4 @@
-use super::decomposition::{ComponentFactor, EliminationSequence, SingleFactor};
+use super::decomposition::{Block, BlockFactor, EliminationSequence, ExactFallback};
 use crate::graph::{
     AdjListGraph, EdgeLike, EliminationGraph, GraphBuild, MultiEdgeGraph, SlimGraph,
 };
@@ -10,7 +10,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use super::clique_tree::SampledColumn;
 use super::star::{Ac2StarBuilder, AcStarBuilder, StarBuilderVariant};
-use super::Config;
+use super::{Config, ExactFailure};
 
 /// Builder for approximate Cholesky factorization (Algorithm 8, Gao-Kyng-Spielman 2023).
 ///
@@ -111,46 +111,104 @@ where
             components,
         } = build;
         let n = graph.n();
+        if n == 0 {
+            return Ok(Factor::empty(original_n));
+        }
+        // Ground has the highest index, so it is the last vertex of its block.
+        let ground_vertex = (n > original_n).then_some(original_n as u32);
         let Some(components) = components else {
             let vertices: Vec<u32> = (0..n as u32).collect();
-            let use_dense = n == 0
-                || (self.config.dense_threshold > 0 && original_n <= self.config.dense_threshold);
-            let factor = if use_dense {
-                let (matrix, pivots) = graph.dense_principal(&diagonal, &vertices);
-                SingleFactor::dense(n, matrix, &pivots)?
+            let mut fallbacks = Vec::new();
+            let exact = if self.config.backend.uses_exact(original_n) {
+                let (matrix, pivots) = graph.dense_principal(&diagonal, &vertices)?;
+                self.try_exact(n, matrix, &pivots, &mut fallbacks)?
             } else {
-                let mut sampler = CdfSampler::<T>::new(self.config.seed);
-                self.build_from_graph(graph, diagonal, &mut sampler)?
+                None
             };
-            return Ok(Factor::single(original_n, factor));
+            let (factor, anchor) = match exact {
+                Some(factor) => (factor, n - 1),
+                None => {
+                    let mut sampler = CdfSampler::<T>::new(self.config.seed);
+                    self.build_from_graph(graph, diagonal, &mut sampler)?
+                }
+            };
+            let block = Block {
+                start: 0,
+                anchor: anchor as u32,
+                ground: ground_vertex.map(|_| (n - 1) as u32),
+                factor,
+            };
+            return Ok(Factor::from_blocks(
+                n,
+                original_n,
+                &[],
+                vec![block],
+                fallbacks,
+            ));
         };
 
-        let mut factors = Vec::with_capacity(components.len());
+        let mut forward: Vec<u32> = Vec::with_capacity(n);
+        let mut blocks = Vec::with_capacity(components.len());
         let mut local_of = Vec::new();
+        let mut fallbacks = Vec::new();
         for vertices in components {
-            let component_n = vertices
-                .iter()
-                .filter(|&&vertex| (vertex as usize) < original_n)
-                .count();
-            let use_dense =
-                self.config.dense_threshold > 0 && component_n <= self.config.dense_threshold;
-            let factor = if use_dense {
-                let (matrix, pivots) = graph.dense_principal(&diagonal, &vertices);
-                SingleFactor::dense(vertices.len(), matrix, &pivots)?
+            let block_n = vertices.len();
+            let ground = ground_vertex
+                .filter(|vertex| vertices.last() == Some(vertex))
+                .map(|_| (block_n - 1) as u32);
+            let component_n = ground.map_or(block_n, |ground| ground as usize);
+            let exact = if self.config.backend.uses_exact(component_n) {
+                let (matrix, pivots) = graph.dense_principal(&diagonal, &vertices)?;
+                self.try_exact(block_n, matrix, &pivots, &mut fallbacks)?
             } else {
-                if local_of.is_empty() {
-                    local_of.resize(n, usize::MAX);
-                }
-                let (component_graph, component_diagonal) =
-                    graph.extract_component(&diagonal, &vertices, &mut local_of);
-                let representative = vertices.first().copied().unwrap_or(0) as u64;
-                let mut sampler =
-                    CdfSampler::<T>::new(component_seed(self.config.seed, representative));
-                self.build_from_graph(component_graph, component_diagonal, &mut sampler)?
+                None
             };
-            factors.push(ComponentFactor { vertices, factor });
+            let (factor, anchor) = match exact {
+                Some(factor) => (factor, block_n - 1),
+                None => {
+                    if local_of.is_empty() {
+                        local_of.resize(n, usize::MAX);
+                    }
+                    let (component_graph, component_diagonal) =
+                        graph.extract_component(&diagonal, &vertices, &mut local_of);
+                    let representative = vertices.first().copied().unwrap_or(0) as u64;
+                    let mut sampler =
+                        CdfSampler::<T>::new(component_seed(self.config.seed, representative));
+                    self.build_from_graph(component_graph, component_diagonal, &mut sampler)?
+                }
+            };
+            blocks.push(Block {
+                start: forward.len() as u32,
+                anchor: anchor as u32,
+                ground,
+                factor,
+            });
+            forward.extend_from_slice(&vertices);
         }
-        Ok(Factor::blocks(n, original_n, factors))
+        Ok(Factor::from_blocks(
+            n, original_n, &forward, blocks, fallbacks,
+        ))
+    }
+
+    /// `None` when the exact factorization failed on a pivot and the configured
+    /// [`ExactFailure`] asks for a fallback, which is recorded in `fallbacks`.
+    fn try_exact(
+        &self,
+        block_n: usize,
+        matrix: Vec<T>,
+        pivots: &[u32],
+        fallbacks: &mut Vec<ExactFallback>,
+    ) -> Result<Option<BlockFactor<T>>, Error> {
+        match BlockFactor::dense(block_n, matrix, pivots) {
+            Ok(factor) => Ok(Some(factor)),
+            Err(Error::DenseFactorizationFailed { vertex, failure })
+                if self.config.backend.on_failure() == ExactFailure::FallBackToApproximate =>
+            {
+                fallbacks.push(ExactFallback { vertex, failure });
+                Ok(None)
+            }
+            Err(other) => Err(other),
+        }
     }
 
     fn validate_config(config: Config) -> Result<(), Error> {
@@ -165,13 +223,14 @@ where
         Ok(())
     }
 
-    /// Run factorization on a pre-built graph (fused pipeline path).
+    /// Run factorization on a pre-built graph (fused pipeline path). Returns the
+    /// factor and the local index of the vertex left un-eliminated.
     pub(crate) fn build_from_graph<G: EliminationGraph<T>, S: WeightedSampler<T>>(
         &self,
         mut graph: G,
         diag: Vec<T>,
         sampler: &mut S,
-    ) -> Result<SingleFactor<T>, Error> {
+    ) -> Result<(BlockFactor<T>, usize), Error> {
         let n = graph.n();
         let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
         let degree_sum: usize = degrees.iter().sum();
@@ -191,7 +250,7 @@ where
         ordering: &mut DynamicOrdering,
         degree_sum: usize,
         sampler: &mut S,
-    ) -> Result<SingleFactor<T>, Error> {
+    ) -> Result<(BlockFactor<T>, usize), Error> {
         let mut diag = diag;
         match self.config.split_merge {
             None => Ok(Self::factorize_with_variant(
@@ -225,7 +284,7 @@ where
         degree_sum: usize,
         sampler: &mut W,
         mut star_builder: B,
-    ) -> SingleFactor<T> {
+    ) -> (BlockFactor<T>, usize) {
         let n = graph.n();
         let mut column = SampledColumn::<T>::new();
         let mut seq = EliminationSequence::with_capacity(n, degree_sum);
@@ -268,7 +327,10 @@ where
             deltas.flush(ordering);
         }
 
-        SingleFactor::approx(n, seq)
+        // The one vertex left after `n - 1` pops is never eliminated: the anchor.
+        let anchor = ordering.next_vertex().unwrap_or(0);
+        debug_assert!(n == 0 || anchor < n);
+        (BlockFactor::approx(n, seq), anchor)
     }
 }
 

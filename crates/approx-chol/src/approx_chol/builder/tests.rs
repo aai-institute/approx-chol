@@ -1,5 +1,6 @@
 use super::*;
 use crate::test_utils::{path_laplacian_4, OrPanic};
+use crate::Backend;
 
 fn make_csr<'a>(indptr: &'a [u32], indices: &'a [u32], data: &'a [f64]) -> CsrRef<'a, f64, u32> {
     CsrRef::new(indptr, indices, data, (indptr.len() - 1) as u32).or_panic("valid CSR test fixture")
@@ -11,7 +12,7 @@ fn test_ac_default_solve_roundtrip() {
     let csr = make_csr(&indptr, &indices, &data);
 
     let builder = Builder::<f64>::new(Config {
-        dense_threshold: 0,
+        backend: Backend::Approximate,
         ..Config::default()
     });
     let factor = builder.build(csr).or_panic("factorization should succeed");

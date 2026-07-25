@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 
@@ -15,8 +17,12 @@ def test_config_is_strictly_validated():
     ext = load_extension_module()
     row_ptrs, col_indices, values = _base_csr()
 
-    assert ext.Config().dense_threshold == 24
-    assert ext.Config(dense_threshold=0).dense_threshold == 0
+    default_backend = ext.Config().backend
+    assert isinstance(default_backend, ext.Backend.ExactBelow)
+    assert default_backend.max_dim == 24
+    assert isinstance(
+        ext.Config(backend=ext.Backend.Approximate()).backend, ext.Backend.Approximate
+    )
 
     with pytest.raises(ValueError, match="config.split must be >= 1"):
         ext.factorize_raw(row_ptrs, col_indices, values, 2, ext.Config(split=0))
@@ -122,3 +128,34 @@ def test_solve_into_rejects_partially_overlapping_views():
 
     with pytest.raises(ValueError, match="must not overlap"):
         factor.solve_into(rhs, out)
+
+
+def test_exact_fallback_emits_runtime_warning():
+    ext = load_extension_module()
+    # Row 1's deficit of -1 is clamped against a row scale of ~2e16, so ingestion
+    # accepts a matrix that exact Cholesky then refuses.
+    row_ptrs = np.array([0, 2, 5, 7], dtype=np.uint32)
+    col_indices = np.array([0, 1, 0, 1, 2, 1, 2], dtype=np.uint32)
+    values = np.array(
+        [1e16, -1e16, -1e16, 1e16 + 1.0, -1.0, -1.0, 1.0], dtype=np.float64
+    )
+
+    with pytest.warns(RuntimeWarning, match="fell back to approximate"):
+        factor = ext.factorize_raw(row_ptrs, col_indices, values, 3)
+    assert factor.n >= 3
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ext.factorize_raw(
+            row_ptrs,
+            col_indices,
+            values,
+            3,
+            ext.Config(backend=ext.Backend.Approximate()),
+        )
+
+    strict = ext.Config(
+        backend=ext.Backend.ExactBelow(max_dim=24, on_failure=ext.ExactFailure.Error)
+    )
+    with pytest.raises(ValueError, match="non-positive pivot"):
+        ext.factorize_raw(row_ptrs, col_indices, values, 3, strict)

@@ -5,6 +5,37 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
+class ExactFailure:
+    """What to do when a block's exact Cholesky hits an invalid pivot."""
+
+    FallBackToApproximate: ExactFailure
+    Error: ExactFailure
+
+class Backend:
+    """Which factorization to run on each connected block.
+
+    Selecting a backend does not change which inputs are accepted: a block whose
+    exact factorization hits an invalid pivot falls back to approximate
+    elimination, and a ``RuntimeWarning`` is emitted.
+    """
+
+    class Approximate:
+        """Approximate elimination for every block."""
+
+        def __init__(self) -> None: ...
+
+    class ExactBelow:
+        """Exact Cholesky for blocks of at most ``max_dim`` vertices.
+
+        Exact factorization of a block costs ``O(max_dim**2)`` memory and
+        ``O(max_dim**3)`` time; ``max_dim`` is neither capped nor validated.
+        """
+
+        max_dim: int
+        on_failure: ExactFailure
+
+        def __init__(self, max_dim: int, on_failure: ExactFailure) -> None: ...
+
 class Config:
     """Configuration for approximate Cholesky factorization.
 
@@ -12,19 +43,19 @@ class Config:
         seed: Random seed for the edge-weight sampler.
         split: AC2 multi-edge multiplicity ``k``.
             ``None`` or ``1`` selects standard AC; ``>=2`` enables AC2.
-        dense_threshold: Largest connected component factored exactly.
-            ``0`` disables dense factorization.
+        backend: Per-block factorization backend.
+            ``None`` selects ``Backend.ExactBelow(max_dim=24)``.
     """
 
     seed: int
     split: int | None
-    dense_threshold: int
+    backend: Backend
 
     def __init__(
         self,
         seed: int = 0,
         split: int | None = None,
-        dense_threshold: int = 24,
+        backend: Backend | None = None,
     ) -> None: ...
 
 class Factor:
@@ -118,6 +149,11 @@ def factorize(
     Raises:
         ValueError: If the matrix is not square, has invalid dtypes/ranges,
             exceeds index limits, or has invalid CSR structure.
+
+    Warns:
+        RuntimeWarning: If a block selected for exact Cholesky failed and fell
+            back to approximate elimination, meaning the matrix is not positive
+            definite within the tolerance it was accepted under.
     """
     ...
 
@@ -139,5 +175,10 @@ def factorize_raw(
 
     Raises:
         ValueError: If the CSR structure or config is invalid.
+
+    Warns:
+        RuntimeWarning: If a block selected for exact Cholesky failed and fell
+            back to approximate elimination, meaning the matrix is not positive
+            definite within the tolerance it was accepted under.
     """
     ...

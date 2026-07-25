@@ -88,7 +88,7 @@ mod types;
 /// Low-level API for advanced use cases (custom pipelines, graph inspection, research).
 pub mod low_level;
 
-pub use approx_chol::{Config, Factor, SolveError};
+pub use approx_chol::{Backend, Config, ExactFailure, ExactFallback, Factor, SolveError};
 pub use csr::{CsrRef, OwnedCsr};
 pub use error::{ConfigError, CsrError, DenseFailure, Error, IndexKind};
 pub(crate) use types::Real;

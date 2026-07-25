@@ -9,7 +9,7 @@ use panic_err::ErrOrPanic;
 use panic_ok::OrPanic;
 
 use approx_chol::low_level::Builder;
-use approx_chol::{Config, CsrRef, SolveError};
+use approx_chol::{Backend, Config, CsrRef, ExactFailure, SolveError};
 
 // ---------------------------------------------------------------------------
 // Gremban augmentation: SDDM vs pure Laplacian
@@ -348,4 +348,50 @@ fn solve_in_place_reports_short_work_buffer() {
             factor_dim: _
         }
     ));
+}
+
+// A grounded block's anchored solve *is* the SDDM solution, so solve_in_place and
+// solve_into must agree — and must do so for either backend. Before the anchored
+// invariant this held only for the exact backend.
+#[test]
+fn grounded_raw_solve_matches_recovered_solve_on_both_backends() {
+    let row_ptrs = [0u32, 2, 4];
+    let columns = [0u32, 1, 0, 1];
+    let values = [2.0, -1.0, -1.0, 2.0];
+    for backend in [
+        Backend::Approximate,
+        Backend::ExactBelow {
+            max_dim: 24,
+            on_failure: ExactFailure::FallBackToApproximate,
+        },
+    ] {
+        let factor = Builder::<f64>::new(Config {
+            backend,
+            ..Config::default()
+        })
+        .build(CsrRef::new(&row_ptrs, &columns, &values, 2).or_panic("valid CSR"))
+        .or_panic("factorization should succeed");
+
+        let n = factor.n();
+        assert_eq!(n, 3, "strictly dominant input must gain a ground vertex");
+
+        let rhs = [1.0, -2.0];
+        let mut recovered = vec![0.0; n];
+        factor
+            .solve_into(&rhs, &mut recovered)
+            .or_panic("solve_into should succeed");
+
+        let mut raw = vec![0.0; n];
+        raw[..rhs.len()].copy_from_slice(&rhs);
+        factor
+            .solve_in_place(&mut raw)
+            .or_panic("solve_in_place should succeed");
+
+        assert_eq!(raw[..2], recovered[..2], "backend {backend:?}");
+        assert_eq!(
+            raw[n - 1],
+            0.0,
+            "backend {backend:?}: ground must be pinned"
+        );
+    }
 }

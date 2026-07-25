@@ -22,6 +22,13 @@ pub(crate) struct Neighbor<T> {
     pub count: u32,
 }
 
+struct DirectedOffDiagonal<T: Real> {
+    lo: usize,
+    hi: usize,
+    upper: bool,
+    value: T,
+}
+
 /// Contract for a mutable graph that supports vertex elimination and fill-in.
 pub(crate) trait EliminationGraph<T: Real> {
     /// Construct from a CSR SDDM matrix.
@@ -224,9 +231,7 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
             adj.push(Vec::with_capacity(cols.len()));
         }
         let mut diag = vec![T::zero(); n];
-        let mut off_diagonals: HashMap<(usize, usize), (Option<T>, Option<T>)> = HashMap::new();
-        let mut edge_order = Vec::new();
-        let mut upper_edges = Vec::new();
+        let mut off_diagonals = Vec::new();
 
         for (row, diagonal) in diag.iter_mut().enumerate() {
             let (cols, vals) = csr.try_row(row)?;
@@ -244,50 +249,50 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
                 );
                 if row == col_usize {
                     *diagonal = *diagonal + val;
-                } else if val < T::zero() {
-                    if row < col_usize {
-                        upper_edges.push((row, col_usize, -val));
-                    }
-                    let (lo, hi, side) = if row < col_usize {
-                        (row, col_usize, 0)
-                    } else {
-                        (col_usize, row, 1)
-                    };
-                    let pair = off_diagonals.entry((lo, hi)).or_insert_with(|| {
-                        edge_order.push((lo, hi));
-                        (None, None)
-                    });
-                    let slot = if side == 0 { &mut pair.0 } else { &mut pair.1 };
-                    *slot = Some(slot.unwrap_or_else(T::zero) + val);
-                } else if val > T::zero() {
-                    // Positive off-diagonal: outside the SDDM/Laplacian class.
-                    // Reject instead of falling through — the silent drop here
-                    // corrupted the factored matrix.
-                    return Err(Error::PositiveOffDiagonal {
-                        edge: (row, col_usize),
+                } else if val != T::zero() {
+                    off_diagonals.push(DirectedOffDiagonal {
+                        lo: row.min(col_usize),
+                        hi: row.max(col_usize),
+                        upper: row < col_usize,
+                        value: val,
                     });
                 }
             }
         }
+        off_diagonals.sort_unstable_by_key(|entry| (entry.lo, entry.hi, entry.upper));
         let mut row_sums = diag.clone();
         let mut row_scales: Vec<T> = diag.iter().map(|value| value.abs()).collect();
-        for (row, col) in edge_order {
-            let (upper, lower) = off_diagonals
-                .remove(&(row, col))
-                .expect("edge order and symmetry map are built together");
-            let (Some(upper), Some(lower)) = (upper, lower) else {
-                return Err(Error::Asymmetric { edge: (row, col) });
-            };
-            if upper != lower {
+        let mut index = 0;
+        while index < off_diagonals.len() {
+            let row = off_diagonals[index].lo;
+            let col = off_diagonals[index].hi;
+            let mut upper = T::zero();
+            let mut lower = T::zero();
+            while index < off_diagonals.len()
+                && off_diagonals[index].lo == row
+                && off_diagonals[index].hi == col
+            {
+                let entry = &off_diagonals[index];
+                if entry.upper {
+                    upper = upper + entry.value;
+                } else {
+                    lower = lower + entry.value;
+                }
+                index += 1;
+            }
+            if !approximately_equal(upper, lower) {
                 return Err(Error::Asymmetric { edge: (row, col) });
             }
-            row_sums[row] = row_sums[row] + upper;
-            row_sums[col] = row_sums[col] + upper;
-            row_scales[row] = row_scales[row] + upper.abs();
-            row_scales[col] = row_scales[col] + upper.abs();
-        }
-        for (row, col, weight) in upper_edges {
-            Self::add_edge_pair(&mut adj, row, col, weight);
+            if upper > T::zero() {
+                return Err(Error::PositiveOffDiagonal { edge: (row, col) });
+            }
+            if upper < T::zero() {
+                row_sums[row] = row_sums[row] + upper;
+                row_sums[col] = row_sums[col] + upper;
+                row_scales[row] = row_scales[row] + upper.abs();
+                row_scales[col] = row_scales[col] + upper.abs();
+                Self::add_edge_pair(&mut adj, row, col, -upper);
+            }
         }
         let tolerance = augmentation_eps::<T>();
         for row in 0..n {
@@ -295,7 +300,8 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
             if row_sums[row] < -row_tolerance {
                 return Err(Error::NotDiagonallyDominant { row });
             }
-            if row_sums[row].abs() <= row_tolerance {
+            let augmentation_floor = row_tolerance.min(T::epsilon().sqrt());
+            if row_sums[row] < T::zero() || row_sums[row].abs() <= augmentation_floor {
                 row_sums[row] = T::zero();
             }
         }
@@ -384,8 +390,21 @@ fn augmentation_eps<T: Real>() -> T {
     }
 }
 
+fn approximately_equal<T: Real>(left: T, right: T) -> bool {
+    if left == right {
+        return true;
+    }
+    let ulps = T::from(8.0).unwrap_or_else(T::one);
+    let scale = left.abs().max(right.abs());
+    (left - right).abs() <= ulps * T::epsilon() * scale
+}
+
 impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
-    pub(crate) fn dense_principal(&self, diagonal: &[T], vertices: &[u32]) -> (Vec<T>, Vec<u32>) {
+    pub(crate) fn dense_principal(
+        &self,
+        diagonal: &[T],
+        vertices: &[u32],
+    ) -> Result<(Vec<T>, Vec<u32>), Error> {
         let pivot_vertices = if vertices.is_empty() {
             Vec::new()
         } else {
@@ -397,16 +416,23 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
             .enumerate()
             .map(|(local, &global)| (global, local))
             .collect();
-        let mut matrix = vec![T::zero(); m * m];
+        let matrix_len = m
+            .checked_mul(m)
+            .ok_or(Error::DenseMatrixTooLarge { dimension: m })?;
+        let mut matrix = Vec::new();
+        matrix
+            .try_reserve_exact(matrix_len)
+            .map_err(|_| Error::DenseMatrixTooLarge { dimension: m })?;
+        matrix.resize(matrix_len, T::zero());
         for (local, &global) in pivot_vertices.iter().enumerate() {
             matrix[local * m + local] = diagonal[global as usize];
             for edge in &self.adj[global as usize] {
                 if let Some(&other) = local_of.get(&edge.to()) {
-                    matrix[local * m + other] = matrix[local * m + other] - edge.weight();
+                    matrix[local * m + other] = matrix[local * m + other] - edge.fill_weight();
                 }
             }
         }
-        (matrix, pivot_vertices)
+        Ok((matrix, pivot_vertices))
     }
 
     pub(crate) fn extract_component(
