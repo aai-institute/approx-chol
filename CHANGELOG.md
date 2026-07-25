@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SolveError::RhsLengthExceedsFactor` and the corresponding Python `ValueError`
   now report the original matrix dimension.
 
+### Performance
+
+- Ingest canonical CSR — column-sorted with no duplicate entries, as scipy emits —
+  without the reordering buffer: 5-20% faster factorization on dense-rowed input
+  and ~35 MiB less peak memory at 2.4M nonzeros.
+
 ## [0.3.1] - 2026-07-10
 
 ### Fixed

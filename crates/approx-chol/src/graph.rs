@@ -234,6 +234,10 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
         }
         let mut diag = vec![T::zero(); n];
 
+        if Self::columns_strictly_ascending(&csr)? {
+            return Self::from_canonical_sddm(csr, adj, diag);
+        }
+
         // Pair up the two stored triangles by bucketing every off-diagonal on its
         // lower index. Counting the buckets first, then scattering, keeps this
         // O(nnz) — a comparison sort over all entries dominated ingestion.
@@ -323,18 +327,7 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
                 }
             }
         }
-        let tolerance = augmentation_eps::<T>();
-        for row in 0..n {
-            let row_tolerance = tolerance * row_scales[row];
-            if row_sums[row] < -row_tolerance {
-                return Err(Error::NotDiagonallyDominant { row });
-            }
-            let augmentation_floor = row_tolerance.min(T::epsilon().sqrt());
-            if row_sums[row] < T::zero() || row_sums[row].abs() <= augmentation_floor {
-                row_sums[row] = T::zero();
-            }
-        }
-        Self::build_augmented_laplacian(adj, diag, &row_sums)
+        Self::augment(adj, diag, row_sums, &row_scales)
     }
 
     fn n(&self) -> usize {
@@ -429,6 +422,168 @@ fn approximately_equal<T: Real>(left: T, right: T) -> bool {
 }
 
 impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
+    /// Clamp each row's surplus and apply Gremban augmentation.
+    fn augment(
+        adj: Vec<Vec<E>>,
+        diag: Vec<T>,
+        mut row_sums: Vec<T>,
+        row_scales: &[T],
+    ) -> Result<GraphBuild<Self, T>, Error> {
+        let tolerance = augmentation_eps::<T>();
+        for row in 0..row_sums.len() {
+            let row_tolerance = tolerance * row_scales[row];
+            if row_sums[row] < -row_tolerance {
+                return Err(Error::NotDiagonallyDominant { row });
+            }
+            let augmentation_floor = row_tolerance.min(T::epsilon().sqrt());
+            if row_sums[row] < T::zero() || row_sums[row].abs() <= augmentation_floor {
+                row_sums[row] = T::zero();
+            }
+        }
+        Self::build_augmented_laplacian(adj, diag, &row_sums)
+    }
+
+    /// Strictly ascending columns imply no duplicate entries, which lets
+    /// [`Self::from_canonical_sddm`] pair the stored triangles without reordering.
+    /// Scans indices only, never values.
+    fn columns_strictly_ascending(csr: &CsrRef<'_, T, u32>) -> Result<bool, Error> {
+        for row in 0..csr.n() {
+            let (cols, _) = csr.try_row(row)?;
+            if cols.windows(2).any(|pair| pair[0] >= pair[1]) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Ingest canonical CSR — the shape scipy produces and the only one within
+    /// emits — by walking each row once and claiming each upper-triangle entry's
+    /// mirror through a monotone per-row cursor. Accumulates into `row_sums` in the
+    /// same order as the bucketed path, so both agree bit for bit.
+    fn from_canonical_sddm(
+        csr: CsrRef<'_, T, u32>,
+        mut adj: Vec<Vec<E>>,
+        mut diag: Vec<T>,
+    ) -> Result<GraphBuild<Self, T>, Error> {
+        let n = csr.n();
+        let row_ptrs = csr.row_ptrs();
+        let col_indices = csr.col_indices();
+        let values = csr.values();
+
+        // Read the diagonal by search rather than a full pass, so the off-diagonal
+        // accumulation below can start from it as the bucketed path does.
+        for (row, diagonal) in diag.iter_mut().enumerate() {
+            let (cols, vals) = csr.try_row(row)?;
+            let offset = cols.partition_point(|&col| (col as usize) < row);
+            if cols.get(offset) == Some(&(row as u32)) {
+                let value = vals[offset];
+                if !value.is_finite() {
+                    return Err(Error::NonFiniteValue {
+                        position: row_ptrs[row] as usize + offset,
+                    });
+                }
+                *diagonal = value;
+            }
+        }
+        let mut row_sums = diag.clone();
+        let mut row_scales: Vec<T> = diag.iter().map(|value| value.abs()).collect();
+
+        let mut cursors: Vec<u32> = row_ptrs[..n].to_vec();
+        for row in 0..n {
+            let row_end = row_ptrs[row + 1];
+            let mut cursor = cursors[row];
+            // Anything still below the diagonal was never claimed as a mirror, so
+            // its counterpart above the diagonal is missing.
+            while cursor < row_end {
+                let col = col_indices[cursor as usize] as usize;
+                if col >= row {
+                    break;
+                }
+                let value = values[cursor as usize];
+                if !value.is_finite() {
+                    return Err(Error::NonFiniteValue {
+                        position: cursor as usize,
+                    });
+                }
+                if value != T::zero() {
+                    return Err(Error::Asymmetric { edge: (col, row) });
+                }
+                cursor += 1;
+            }
+            if cursor < row_end && col_indices[cursor as usize] as usize == row {
+                cursor += 1;
+            }
+            cursors[row] = cursor;
+
+            while cursor < row_end {
+                let col = col_indices[cursor as usize] as usize;
+                let upper = values[cursor as usize];
+                if !upper.is_finite() {
+                    return Err(Error::NonFiniteValue {
+                        position: cursor as usize,
+                    });
+                }
+                cursor += 1;
+                if upper == T::zero() {
+                    continue;
+                }
+                let lower = Self::claim_mirror(col, row, &csr, &mut cursors)?;
+                if !approximately_equal(upper, lower) {
+                    return Err(Error::Asymmetric { edge: (row, col) });
+                }
+                if upper > T::zero() {
+                    return Err(Error::PositiveOffDiagonal { edge: (row, col) });
+                }
+                row_sums[row] = row_sums[row] + upper;
+                row_sums[col] = row_sums[col] + upper;
+                row_scales[row] = row_scales[row] + upper.abs();
+                row_scales[col] = row_scales[col] + upper.abs();
+                Self::add_edge_pair(&mut adj, row, col, -upper);
+            }
+        }
+        Self::augment(adj, diag, row_sums, &row_scales)
+    }
+
+    /// Consume `row`'s entry at `col`, treating stored zeros as absent and
+    /// returning zero when it is missing.
+    fn claim_mirror(
+        row: usize,
+        col: usize,
+        csr: &CsrRef<'_, T, u32>,
+        cursors: &mut [u32],
+    ) -> Result<T, Error> {
+        let row_ptrs = csr.row_ptrs();
+        let col_indices = csr.col_indices();
+        let values = csr.values();
+        let row_end = row_ptrs[row + 1];
+        let mut cursor = cursors[row];
+        let mut found = T::zero();
+        while cursor < row_end {
+            let at = col_indices[cursor as usize] as usize;
+            if at > col {
+                break;
+            }
+            let value = values[cursor as usize];
+            if !value.is_finite() {
+                return Err(Error::NonFiniteValue {
+                    position: cursor as usize,
+                });
+            }
+            cursor += 1;
+            if at == col {
+                found = value;
+                break;
+            }
+            // Skipped a stored entry whose own mirror above the diagonal is missing.
+            if value != T::zero() {
+                cursors[row] = cursor;
+                return Err(Error::Asymmetric { edge: (at, row) });
+            }
+        }
+        cursors[row] = cursor;
+        Ok(found)
+    }
+
     pub(crate) fn dense_principal(
         &self,
         diagonal: &[T],

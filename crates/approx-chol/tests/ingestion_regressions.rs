@@ -1,3 +1,5 @@
+#[path = "common/grid.rs"]
+mod grid;
 #[path = "common/panic_ok.rs"]
 mod panic_ok;
 use panic_ok::OrPanic;
@@ -562,6 +564,41 @@ fn unsorted_and_split_entries_match_the_canonical_form() {
             "canonical {canonical:?} vs shuffled {shuffled:?}"
         );
     }
+}
+
+// Descending columns per row denote the same matrix but force the bucketed
+// ingestion path, so this pins the canonical fast path as bit-identical rather
+// than merely close.
+#[test]
+fn canonical_and_reordered_ingestion_agree_bit_for_bit() {
+    let grid = grid::grid_laplacian(6, 7);
+    let n = grid.n as usize;
+
+    let mut reversed_columns = Vec::with_capacity(grid.col_indices.len());
+    let mut reversed_values = Vec::with_capacity(grid.values.len());
+    for row in 0..n {
+        let start = grid.row_ptrs[row] as usize;
+        let end = grid.row_ptrs[row + 1] as usize;
+        reversed_columns.extend(grid.col_indices[start..end].iter().rev());
+        reversed_values.extend(grid.values[start..end].iter().rev());
+    }
+
+    let rhs: Vec<f64> = (0..n).map(|i| (i % 5) as f64 - 2.0).collect();
+    let canonical = solve_grid(grid.as_csr().or_panic("valid CSR"), &rhs);
+    let reordered = solve_grid(
+        CsrRef::new(&grid.row_ptrs, &reversed_columns, &reversed_values, grid.n)
+            .or_panic("valid CSR"),
+        &rhs,
+    );
+
+    assert_eq!(canonical, reordered);
+}
+
+fn solve_grid(csr: CsrRef<'_>, rhs: &[f64]) -> Vec<f64> {
+    let factor = Builder::<f64>::new(Config::default())
+        .build(csr)
+        .or_panic("grid factor");
+    factor.solve(rhs).or_panic("solve")
 }
 
 fn solve_path(row_ptrs: &[u32], columns: &[u32], values: &[f64]) -> Vec<f64> {
