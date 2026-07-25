@@ -15,6 +15,9 @@ def test_config_is_strictly_validated():
     ext = load_extension_module()
     row_ptrs, col_indices, values = _base_csr()
 
+    assert ext.Config().dense_threshold == 24
+    assert ext.Config(dense_threshold=0).dense_threshold == 0
+
     with pytest.raises(ValueError, match="config.split must be >= 1"):
         ext.factorize_raw(row_ptrs, col_indices, values, 2, ext.Config(split=0))
 

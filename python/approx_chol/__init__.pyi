@@ -12,15 +12,19 @@ class Config:
         seed: Random seed for the edge-weight sampler.
         split: AC2 multi-edge multiplicity ``k``.
             ``None`` or ``1`` selects standard AC; ``>=2`` enables AC2.
+        dense_threshold: Largest connected component factored exactly.
+            ``0`` disables dense factorization.
     """
 
     seed: int
     split: int | None
+    dense_threshold: int
 
     def __init__(
         self,
         seed: int = 0,
         split: int | None = None,
+        dense_threshold: int = 24,
     ) -> None: ...
 
 class Factor:
@@ -43,7 +47,7 @@ class Factor:
 
     @property
     def n_steps(self) -> int:
-        """Number of elimination steps."""
+        """Number of approximate elimination steps or exact dense pivots."""
         ...
 
     @property
