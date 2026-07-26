@@ -3,13 +3,8 @@ use crate::ordering::DegreeDeltas;
 use crate::sampling::{CdfSampler, WeightedSampler};
 use crate::types::{count_as_scalar, float_total_cmp, Real};
 
-/// One sampled column of the approximate Cholesky factor (Algorithm 5, GKS 2023).
-///
-/// Represents the result of clique-tree sampling on a star neighborhood.
-/// Contains the column's diagonal entry, its non-zero neighbor indices with
-/// fractional weights, and the fill edges to be inserted back into the graph.
-///
-/// Reusable across elimination steps (cleared at start of each sampling pass).
+/// One sampled column of the approximate Cholesky factor (Algorithm 5, GKS 2023),
+/// reused across elimination steps and cleared at the start of each sampling pass.
 pub(crate) struct SampledColumn<T: Real> {
     /// Diagonal value of the factor column: `L[v,v]`.
     pub diagonal: T,
@@ -255,27 +250,14 @@ impl<T: Real> MultiStar<T> {
     }
 }
 
-/// Running state for sequential edge elimination on a star graph.
-///
-/// When eliminating pivot vertex v, its neighbors are processed sequentially
-/// along a clique-tree path (GKS 2023, Algorithms 5 & 6). For each neighbor
-/// j_i with edge weight w_i, the elimination fraction is
-/// `f_i = w_i * scale / capacity`.
-///
-/// **Fields:**
-/// - `scale`: cumulative product of `(1 - f_k)` for all previously processed
-///   neighbors k < i. Tracks how much of the original edge weight survives
-///   after earlier samplings.
-/// - `capacity`: remaining weight budget, updated as `capacity *= (1 - f_i)^2`
-///   after each step. Initialized differently by variant:
-///   - **AC**: `pivot_diag` (the matrix diagonal entry for the pivot)
-///   - **AC2**: `total_weight` (sum of incident edge weights)
-///
-/// After `advance(f)`, both `scale` and `capacity` shrink,
-/// ensuring subsequent fractions account for weight already consumed by
-/// earlier fill edges.
+/// Running state for sequential edge elimination on a star graph (GKS 2023,
+/// Algorithms 5 & 6): neighbors are processed along a clique-tree path, each one
+/// taking fraction `f_i = w_i * scale / capacity` of what earlier neighbors left.
 struct StarElimination<T = f64> {
+    /// Product of `(1 - f_k)` over already-processed neighbors: the share of the
+    /// original edge weight that survives to this one.
     scale: T,
+    /// Remaining weight budget, shrunk by `(1 - f_i)^2` per step.
     capacity: T,
 }
 
@@ -314,17 +296,10 @@ impl<T: Real> StarElimination<T> {
 
 /// Clique-tree sampling for AC stars (single sample per neighbor).
 ///
-/// The elimination capacity is initialized from the **live column's
-/// off-diagonal sum** (`Σ |entries.weights|`), matching the original
-/// Laplacians.jl algorithm and the AC2 variant in this crate. The
-/// `pivot_diag` parameter is retained only to seed `SampledColumn`'s
-/// degenerate cases (n ≤ 1) and is not used inside the elimination loop.
-///
-/// Using the live column sum keeps `f ∈ [0, 1]` by construction, which is
-/// required for Laplacian-type inputs where `pivot_diag = Σ |off-diag|`
-/// exactly (zero slack). External `diag[v]` arrays maintained by callers
-/// can drift under stochastic elimination and feed sub-zero values here;
-/// computing capacity locally is the robust form.
+/// Capacity comes from the live column sum, not from `pivot_diag`: that keeps
+/// `f ∈ [0, 1]` by construction, whereas a caller-maintained `diag[v]` can drift
+/// below the column sum under stochastic elimination. `pivot_diag` only seeds the
+/// degenerate (`n <= 1`) column.
 pub(crate) fn clique_tree_sample_column<T: Real, S: WeightedSampler<T>>(
     entries: &[(u32, T)],
     pivot_diag: T,

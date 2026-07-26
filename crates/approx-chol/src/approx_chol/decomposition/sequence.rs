@@ -3,11 +3,8 @@
 use super::FactorError;
 use crate::types::Real;
 
-/// Zero-copy view of a single elimination step (row operation).
-///
-/// Borrows slices from the flat CSR storage in `EliminationSequence`.
-/// Each step eliminates `vertex` by splitting its weight among neighbors
-/// according to `elimination_fractions`.
+/// Zero-copy view of one elimination step: it eliminates `vertex` by splitting
+/// its weight among neighbors according to `elimination_fractions`.
 pub(crate) struct EliminationStep<'a, T> {
     pub(crate) vertex: usize,
     /// Zero when the pivot diagonal was clamped to near-zero.

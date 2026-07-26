@@ -12,7 +12,6 @@ pub(crate) struct GraphBuild<G, T: Real> {
 /// A neighbor entry produced by star elimination.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Neighbor<T> {
-    /// Target vertex index.
     pub to: u32,
     /// Accumulated fill weight (weight × count for AC2, just weight for AC).
     pub fill_weight: T,

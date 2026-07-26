@@ -1,13 +1,5 @@
-//! Elimination ordering abstraction for approximate Cholesky factorization.
-//!
-//! Separates how the next vertex to eliminate is selected from the
-//! elimination loop.
-//! - `DynamicOrdering`: bucket-based priority queue that adapts to fill-in
-//!   during elimination (ports Julia's `ApproxCholPQ`)
-
-// ---------------------------------------------------------------------------
-// DynamicOrdering — bucket-based priority queue (Julia `ApproxCholPQ` port)
-// ---------------------------------------------------------------------------
+//! Which vertex the elimination loop takes next: a bucket priority queue over
+//! live degree estimates that adapts to fill-in (ports Julia's `ApproxCholPQ`).
 
 /// Linked-list terminator: marks that there is no previous or next element in a bucket chain.
 const SENTINEL: u32 = u32::MAX;
@@ -54,8 +46,6 @@ fn key_map(degree: usize, bucket_base: usize, bucket_upper: usize) -> usize {
 
 impl DynamicOrdering {
     /// Pop the vertex with the minimum degree estimate.
-    ///
-    /// `min_list` is a lower bound; we scan upward until a non-empty bucket is found.
     fn pop(&mut self) -> Option<usize> {
         if self.n_items == 0 {
             return None;

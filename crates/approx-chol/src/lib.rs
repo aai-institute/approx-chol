@@ -45,11 +45,8 @@
 //! approximate factor that converges in fewer PCG iterations, at the cost of
 //! higher factorization time. Enable via [`Config::split_merge`].
 //!
-//! # Ordering strategies
-//!
-//! The high-level API ([`factorize`], [`factorize_with`]) always uses
-//! **DynamicPQ** — a bucket priority queue that tracks vertex degrees
-//! throughout elimination. This is the best default for nearly all inputs.
+//! Both variants eliminate in dynamic minimum-degree order, tracked in a bucket
+//! priority queue over live degrees. This is not configurable.
 //!
 //! # Feature flags
 //!
