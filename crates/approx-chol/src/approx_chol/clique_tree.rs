@@ -106,12 +106,11 @@ impl<T: Real> SampledColumn<T> {
         if n_samples == 0 || fill_weight <= T::near_zero() {
             return;
         }
-        let n = entries.len();
-        if tail >= n {
+        if tail >= entries.len() {
             return;
         }
         for _ in 0..n_samples {
-            if let Some(koff) = sampler.sample_from_range(tail, n) {
+            if let Some(koff) = sampler.sample_suffix(tail) {
                 let k = entries[koff].0;
                 if neighbor != k {
                     self.fill_edges.push((neighbor, k, fill_weight));
