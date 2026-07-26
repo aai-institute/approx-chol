@@ -1,8 +1,7 @@
 use crate::graph::EliminationGraph;
 use crate::ordering::DegreeDeltas;
 use crate::sampling::{CdfSampler, WeightedSampler};
-use crate::types::{float_total_cmp, Real};
-use num_traits::NumCast;
+use crate::types::{count_as_scalar, float_total_cmp, Real};
 
 /// One sampled column of the approximate Cholesky factor (Algorithm 5, GKS 2023).
 ///
@@ -58,7 +57,7 @@ impl<T: Real> SampledColumn<T> {
             if total_weight.is_finite() && total_weight > T::near_zero() {
                 return Some((n, total_weight));
             }
-            T::one() / NumCast::from(n).expect("neighbor count fits in T")
+            T::one() / count_as_scalar::<T, _>(n)
         };
 
         self.diagonal = pivot_diag;
@@ -126,6 +125,119 @@ impl<T: Real> SampledColumn<T> {
                 .iter()
                 .map(|&(u, v, w)| if u < v { (u, v, w) } else { (v, u, w) }),
         );
+    }
+}
+
+/// A deduped AC2 star neighborhood: one `(neighbor, weight)` entry and one
+/// multiplicity per unique neighbor.
+///
+/// The two arrays are only ever pushed, cleared and permuted together, so
+/// nothing downstream has to check that they still agree about length or about
+/// which multiplicity belongs to which neighbor.
+pub(crate) struct MultiStar<T: Real> {
+    entries: Vec<(u32, T)>,
+    counts: Vec<u32>,
+    sort_scratch: Vec<SortEntry<T>>,
+}
+
+/// Packed staging record for [`MultiStar::sort_by_avg_weight`]: permuting two
+/// arrays needs one sortable element holding both halves.
+#[derive(Clone, Copy)]
+struct SortEntry<T: Real> {
+    neighbor: u32,
+    weight: T,
+    count: u32,
+    /// Precomputed `weight / count` sort key. Cross-multiplying in the
+    /// comparator instead can break transitivity under floating-point rounding.
+    avg_weight: T,
+}
+
+impl<T: Real> MultiStar<T> {
+    pub(super) fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            counts: Vec::new(),
+            sort_scratch: Vec::new(),
+        }
+    }
+
+    /// Every neighbor at the same multiplicity — the shape
+    /// [`clique_tree_sample_multi`] samples.
+    fn uniform(entries: &[(u32, T)], count: u32) -> Self {
+        let mut star = Self::new();
+        for &(neighbor, weight) in entries {
+            star.push(neighbor, weight, count);
+        }
+        star
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.entries.clear();
+        self.counts.clear();
+    }
+
+    pub(super) fn push(&mut self, neighbor: u32, weight: T, count: u32) {
+        self.entries.push((neighbor, weight));
+        self.counts.push(count);
+    }
+
+    /// Push, or fold into the previous entry when it repeats the same neighbor.
+    /// Over `neighbor`-sorted input that coalesces duplicates in one pass.
+    pub(super) fn push_or_merge(&mut self, neighbor: u32, weight: T, count: u32) {
+        if self.entries.last().map(|last| last.0) == Some(neighbor) {
+            let last = self.entries.len() - 1;
+            self.entries[last].1 = self.entries[last].1 + weight;
+            self.counts[last] = self.counts[last].saturating_add(count);
+        } else {
+            self.push(neighbor, weight, count);
+        }
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub(super) fn entries(&self) -> &[(u32, T)] {
+        &self.entries
+    }
+
+    pub(super) fn iter(&self) -> impl Iterator<Item = (u32, T, u32)> + '_ {
+        self.entries
+            .iter()
+            .zip(&self.counts)
+            .map(|(&(neighbor, weight), &count)| (neighbor, weight, count))
+    }
+
+    /// Cap every multiplicity at `limit`, leaving weights untouched and
+    /// reporting each discard as `(neighbor, discarded)`.
+    pub(super) fn apply_merge_limit(&mut self, limit: u32, merged: &mut Vec<(u32, u32)>) {
+        for (&(neighbor, _), count) in self.entries.iter().zip(self.counts.iter_mut()) {
+            if *count > limit {
+                merged.push((neighbor, *count - limit));
+                *count = limit;
+            }
+        }
+    }
+
+    /// Sort by average weight ascending, breaking ties by neighbor index.
+    pub(super) fn sort_by_avg_weight(&mut self) {
+        self.sort_scratch.clear();
+        self.sort_scratch.reserve(self.entries.len());
+        for (&(neighbor, weight), &count) in self.entries.iter().zip(&self.counts) {
+            self.sort_scratch.push(SortEntry {
+                neighbor,
+                weight,
+                count,
+                avg_weight: weight / count_as_scalar::<T, _>(count),
+            });
+        }
+        self.sort_scratch.sort_unstable_by(|a, b| {
+            float_total_cmp(&a.avg_weight, &b.avg_weight).then_with(|| a.neighbor.cmp(&b.neighbor))
+        });
+        for (i, item) in self.sort_scratch.iter().enumerate() {
+            self.entries[i] = (item.neighbor, item.weight);
+            self.counts[i] = item.count;
+        }
     }
 }
 
@@ -226,13 +338,12 @@ pub(crate) fn clique_tree_sample_column<T: Real, S: WeightedSampler<T>>(
 
 /// Clique-tree sampling for AC2 stars (multi-sample per neighbor).
 pub(crate) fn clique_tree_sample_column_multi<T: Real, S: WeightedSampler<T>>(
-    entries: &[(u32, T)],
-    counts: &[u32],
+    star: &MultiStar<T>,
     pivot_diag: T,
     sampler: &mut S,
     column: &mut SampledColumn<T>,
 ) {
-    debug_assert_eq!(entries.len(), counts.len());
+    let entries = star.entries();
     let Some((n, total_weight)) = column.begin_sampling(entries, pivot_diag) else {
         return;
     };
@@ -241,13 +352,10 @@ pub(crate) fn clique_tree_sample_column_multi<T: Real, S: WeightedSampler<T>>(
     let mut remaining = total_weight;
     let mut elim = StarElimination::new(total_weight);
 
-    for (i, (&(j, w), &count)) in entries[..n - 1].iter().zip(counts.iter()).enumerate() {
+    for (i, (j, w, count)) in star.iter().take(n - 1).enumerate() {
         remaining = remaining - w;
         let f = elim.fraction(w);
-        let Some(count_scalar) = <T as NumCast>::from(count) else {
-            continue;
-        };
-        let fill_wt = w * remaining / (count_scalar * total_weight);
+        let fill_wt = w * remaining / (count_as_scalar::<T, _>(count) * total_weight);
         column.neighbors.push(j);
         column.fractions.push(f);
         column.sample_fill_edges(j, count, fill_wt, sampler, entries, i + 1);
@@ -306,10 +414,10 @@ pub fn clique_tree_sample_multi<T>(
         return;
     }
     entries.sort_unstable_by(|a, b| float_total_cmp(&a.1, &b.1));
-    let counts = vec![split_merge; entries.len()];
+    let star = MultiStar::uniform(entries, split_merge);
     let mut sampler = CdfSampler::<T>::new(seed);
     let mut column = SampledColumn::new();
-    clique_tree_sample_column_multi(entries, &counts, T::zero(), &mut sampler, &mut column);
+    clique_tree_sample_column_multi(&star, T::zero(), &mut sampler, &mut column);
     column.extend_ordered_fill_edges(out);
 }
 

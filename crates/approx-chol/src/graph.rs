@@ -1,7 +1,7 @@
 //! Elimination graph for approximate Cholesky factorization.
 
+use crate::types::count_as_scalar;
 use crate::{CsrError, CsrRef, Error, Real};
-use num_traits::NumCast;
 
 /// Named return type for [`EliminationGraph::from_sddm`].
 pub(crate) struct GraphBuild<G, T: Real> {
@@ -162,12 +162,7 @@ impl<T: Real> EdgeLike<T> for MultiEdge<T> {
     }
     #[inline]
     fn fill_weight(&self) -> T {
-        // `count` is 1 (fill/fresh) or a split factor `mark_split_edges` already
-        // cast to `T`, so it is always representable here; assert rather than
-        // silently yielding a wrong count-1 weight on a failed cast.
-        let count: T = <T as NumCast>::from(self.count)
-            .expect("edge count is representable in T by construction");
-        self.weight * count
+        self.weight * count_as_scalar::<T, _>(self.count)
     }
 }
 
@@ -430,10 +425,7 @@ impl<T: Real> MultiEdgeGraph<T> {
         if k <= 1 {
             return;
         }
-        let Some(k_scalar) = <T as NumCast>::from(k) else {
-            return;
-        };
-        let inv_k = T::one() / k_scalar;
+        let inv_k = T::one() / count_as_scalar::<T, _>(k);
         for adj_list in &mut self.adj {
             for edge in adj_list.iter_mut() {
                 edge.weight = edge.weight * inv_k;

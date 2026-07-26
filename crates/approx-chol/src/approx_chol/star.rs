@@ -3,10 +3,9 @@ use crate::ordering::{DegreeDeltas, DynamicOrdering};
 use crate::sampling::WeightedSampler;
 use crate::types::float_total_cmp;
 use crate::Real;
-use num_traits::NumCast;
 
 use super::clique_tree::{
-    clique_tree_sample_column, clique_tree_sample_column_multi, SampledColumn,
+    clique_tree_sample_column, clique_tree_sample_column_multi, MultiStar, SampledColumn,
 };
 
 /// Apply the merge-compression degree decrease immediately (not batched through
@@ -102,9 +101,7 @@ impl<T: Real> StarBuilderVariant<T> for AcStarBuilder<T> {
 pub(super) struct Ac2StarBuilder<T: Real> {
     /// Raw neighbor output from `live_neighbors`.
     raw: Vec<Neighbor<T>>,
-    entries: Vec<(u32, T)>,
-    /// Multi-edge count per unique neighbor after compression.
-    counts: Vec<u32>,
+    star: MultiStar<T>,
     /// Max multi-edges kept per neighbor pair after compression.
     merge_limit: u32,
     dedup: Ac2DedupWorkspace<T>,
@@ -114,8 +111,7 @@ impl<T: Real> Ac2StarBuilder<T> {
     pub(super) fn new(n: usize, merge_limit: u32) -> Self {
         Self {
             raw: Vec::new(),
-            entries: Vec::new(),
-            counts: Vec::new(),
+            star: MultiStar::new(),
             merge_limit,
             dedup: Ac2DedupWorkspace::new(n),
         }
@@ -130,21 +126,17 @@ impl<T: Real> StarBuilderVariant<T> for Ac2StarBuilder<T> {
         ordering: &mut DynamicOrdering,
     ) {
         graph.live_neighbors(v, &mut self.raw);
-        self.dedup.dedup(
-            &mut self.raw,
-            &mut self.entries,
-            &mut self.counts,
-            self.merge_limit,
-        );
+        self.dedup
+            .dedup(&mut self.raw, &mut self.star, self.merge_limit);
         apply_merged_counts(self.dedup.merged_counts(), ordering);
     }
 
     fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.star.is_empty()
     }
 
     fn entries(&self) -> &[(u32, T)] {
-        &self.entries
+        self.star.entries()
     }
 
     fn sample_column<S: WeightedSampler<T>>(
@@ -153,26 +145,14 @@ impl<T: Real> StarBuilderVariant<T> for Ac2StarBuilder<T> {
         sampler: &mut S,
         column: &mut SampledColumn<T>,
     ) {
-        clique_tree_sample_column_multi(&self.entries, &self.counts, pivot_diag, sampler, column);
+        clique_tree_sample_column_multi(&self.star, pivot_diag, sampler, column);
     }
 
     fn accumulate_removal_delta(&self, deltas: &mut DegreeDeltas) {
-        debug_assert_eq!(self.entries.len(), self.counts.len());
-        for (&(u, _), &count) in self.entries.iter().zip(self.counts.iter()) {
+        for (u, _, count) in self.star.iter() {
             deltas.decrease(u, count);
         }
     }
-}
-
-#[derive(Clone, Copy)]
-struct Ac2SortEntry<T: Real> {
-    idx: u32,
-    weight: T,
-    count: u32,
-    /// Precomputed avg weight (`weight / count`) used as a sort key.
-    /// Avoids cross-multiplication in the comparator, which can break
-    /// transitivity under floating-point rounding.
-    avg_weight: T,
 }
 
 /// Neighborhoods with at most this many entries use sort-based dedup (O(d log d),
@@ -329,8 +309,6 @@ pub(super) struct Ac2DedupWorkspace<T: Real> {
     scatter_counts: Vec<u32>,
     /// Compressed merge counts for AC2 merge-limit discards.
     merged_counts: Vec<(u32, u32)>,
-    /// Reusable packed scratch for AC2 avg-weight sorting.
-    sort_entries: Vec<Ac2SortEntry<T>>,
 }
 
 impl<T: Real> Ac2DedupWorkspace<T> {
@@ -339,7 +317,6 @@ impl<T: Real> Ac2DedupWorkspace<T> {
             scratch: DedupScratch::new(n),
             scatter_counts: Vec::new(),
             merged_counts: Vec::new(),
-            sort_entries: Vec::new(),
         }
     }
 
@@ -349,82 +326,30 @@ impl<T: Real> Ac2DedupWorkspace<T> {
     }
 
     /// Deduplicate raw tuples for AC2 path, apply merge cap, and sort by avg-weight.
-    pub fn dedup(
-        &mut self,
-        raw: &mut [Neighbor<T>],
-        entries: &mut Vec<(u32, T)>,
-        counts: &mut Vec<u32>,
-        merge_limit: u32,
-    ) {
+    pub fn dedup(&mut self, raw: &mut [Neighbor<T>], star: &mut MultiStar<T>, merge_limit: u32) {
         if raw.len() <= SCATTER_THRESHOLD {
-            self.dedup_sort_small(raw, entries, counts, merge_limit);
+            self.dedup_sort(raw, star);
         } else {
-            self.dedup_scatter(raw, entries, counts, merge_limit);
+            self.dedup_scatter(raw, star);
         }
+        star.apply_merge_limit(merge_limit, &mut self.merged_counts);
+        star.sort_by_avg_weight();
     }
 
-    fn dedup_sort_small(
-        &mut self,
-        raw: &mut [Neighbor<T>],
-        entries: &mut Vec<(u32, T)>,
-        counts: &mut Vec<u32>,
-        merge_limit: u32,
-    ) {
-        self.dedup_sort_core(raw, entries, counts);
-        Self::apply_merge_limit(entries, counts, merge_limit, &mut self.merged_counts);
-        self.sort_by_avg_weight(entries, counts);
-    }
-
-    fn dedup_sort_core(
-        &mut self,
-        raw: &mut [Neighbor<T>],
-        entries: &mut Vec<(u32, T)>,
-        counts: &mut Vec<u32>,
-    ) {
+    fn dedup_sort(&mut self, raw: &mut [Neighbor<T>], star: &mut MultiStar<T>) {
         self.merged_counts.clear();
-        entries.clear();
-        counts.clear();
-        if raw.is_empty() {
-            return;
-        }
-        if raw.len() == 1 {
-            entries.push((raw[0].to, raw[0].fill_weight));
-            counts.push(raw[0].count);
-            return;
-        }
-
+        star.clear();
         raw.sort_unstable_by_key(|n| n.to);
-
-        let mut write = 0;
-        let mut count: u32 = raw[0].count;
-        for read in 1..raw.len() {
-            if raw[write].to == raw[read].to {
-                raw[write].fill_weight = raw[write].fill_weight + raw[read].fill_weight;
-                count = count.saturating_add(raw[read].count);
-            } else {
-                entries.push((raw[write].to, raw[write].fill_weight));
-                counts.push(count);
-                count = raw[read].count;
-                write += 1;
-                raw[write] = raw[read];
-            }
+        for nbr in raw.iter() {
+            star.push_or_merge(nbr.to, nbr.fill_weight, nbr.count);
         }
-        entries.push((raw[write].to, raw[write].fill_weight));
-        counts.push(count);
     }
 
-    fn dedup_scatter(
-        &mut self,
-        raw: &[Neighbor<T>],
-        entries: &mut Vec<(u32, T)>,
-        counts: &mut Vec<u32>,
-        merge_limit: u32,
-    ) {
+    fn dedup_scatter(&mut self, raw: &[Neighbor<T>], star: &mut MultiStar<T>) {
         self.scratch.ensure_scatter_buffers();
         self.scratch.unique.clear();
         self.merged_counts.clear();
-        entries.clear();
-        counts.clear();
+        star.clear();
         if self.scatter_counts.len() < self.scratch.n {
             self.scatter_counts.resize(self.scratch.n, 0);
         }
@@ -440,61 +365,13 @@ impl<T: Real> Ac2DedupWorkspace<T> {
 
         for &idx in &self.scratch.unique {
             let idx_usize = idx as usize;
-            entries.push((idx, self.scratch.scatter[idx_usize]));
-            counts.push(self.scatter_counts[idx_usize]);
+            star.push(
+                idx,
+                self.scratch.scatter[idx_usize],
+                self.scatter_counts[idx_usize],
+            );
             self.scratch.scatter[idx_usize] = T::zero();
             self.scatter_counts[idx_usize] = 0;
-        }
-
-        Self::apply_merge_limit(entries, counts, merge_limit, &mut self.merged_counts);
-        self.sort_by_avg_weight(entries, counts);
-    }
-
-    /// Apply merge limit: cap multi-edge counts, preserving total weight.
-    fn apply_merge_limit(
-        entries: &[(u32, T)],
-        counts: &mut [u32],
-        merge_limit: u32,
-        merged_counts: &mut Vec<(u32, u32)>,
-    ) {
-        let limit = merge_limit;
-        for i in 0..entries.len() {
-            let count = counts[i];
-            if count > limit {
-                let discarded = count - limit;
-                counts[i] = limit;
-                let idx = entries[i].0;
-                merged_counts.push((idx, discarded));
-            }
-        }
-    }
-
-    /// Sort entries by average weight ascending, then by vertex index.
-    fn sort_by_avg_weight(&mut self, entries: &mut [(u32, T)], counts: &mut [u32]) {
-        let len = entries.len();
-        self.sort_entries.clear();
-        self.sort_entries.reserve(len);
-        for i in 0..len {
-            let count_scalar: T = <T as NumCast>::from(counts[i]).unwrap_or(T::one());
-            self.sort_entries.push(Ac2SortEntry {
-                idx: entries[i].0,
-                weight: entries[i].1,
-                count: counts[i],
-                avg_weight: entries[i].1 / count_scalar,
-            });
-        }
-
-        // Sort by precomputed avg_weight. Using a precomputed key guarantees
-        // transitivity (each element maps to a fixed float). The previous
-        // cross-multiplication approach (a.weight * b.count vs b.weight * a.count)
-        // could violate transitivity under floating-point rounding.
-        self.sort_entries.sort_unstable_by(|a, b| {
-            float_total_cmp(&a.avg_weight, &b.avg_weight).then_with(|| a.idx.cmp(&b.idx))
-        });
-
-        for (dst, item) in self.sort_entries.iter().enumerate() {
-            entries[dst] = (item.idx, item.weight);
-            counts[dst] = item.count;
         }
     }
 }
