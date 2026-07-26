@@ -1,5 +1,5 @@
 use super::decomposition::EliminationSequence;
-use crate::graph::{EliminationGraph, GraphBuild, MultiEdgeGraph, SlimGraph};
+use crate::graph::{AdjListGraph, GraphBuild, MultiEdgeGraph, SlimGraph};
 use crate::ordering::{DegreeDeltas, DynamicOrdering};
 use crate::sampling::CdfSampler;
 use crate::{ConfigError, CsrError, CsrRef, Error, Factor};
@@ -116,12 +116,12 @@ where
 
     /// Algorithm 8 loop on a pre-built graph.
     ///
-    /// `star_builder` and `degree_scale` come from the caller's variant match, so
-    /// this cannot pair an AC builder with a split multi-edge graph — a pairing
+    /// The graph's multiplicity storage is the star builder's `Count`, so an AC
+    /// builder over a split multi-edge graph does not compile — a pairing
     /// nothing checked while both were re-derived here from `Config`.
-    fn build_from_graph<G: EliminationGraph<T>, B: StarBuilderVariant<T>>(
+    fn build_from_graph<B: StarBuilderVariant<T>>(
         &self,
-        mut graph: G,
+        mut graph: AdjListGraph<B::Count, T>,
         mut diag: Vec<T>,
         mut star_builder: B,
         degree_scale: usize,

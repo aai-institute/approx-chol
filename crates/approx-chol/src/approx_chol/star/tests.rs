@@ -1,11 +1,19 @@
 use super::*;
 use crate::test_utils::OrPanic;
 
-fn nbr(to: u32, fill_weight: f64, count: u32) -> Neighbor<f64> {
+fn nbr(to: u32, fill_weight: f64, count: u32) -> Neighbor<f64, Multi> {
     Neighbor {
         to,
         fill_weight,
-        count,
+        count: Multi::new(count),
+    }
+}
+
+fn ac_nbr(to: u32, fill_weight: f64) -> Neighbor<f64, Single> {
+    Neighbor {
+        to,
+        fill_weight,
+        count: Single,
     }
 }
 
@@ -45,7 +53,7 @@ fn find(star: &MultiStar<f64>, neighbor: u32) -> Option<(f64, u32)> {
 
 fn dedup_ac2(
     n: usize,
-    raw: &mut [Neighbor<f64>],
+    raw: &mut [Neighbor<f64, Multi>],
     merge_limit: u32,
 ) -> (Ac2DedupWorkspace<f64>, MultiStar<f64>) {
     let mut dedup = Ac2DedupWorkspace::<f64>::new(n);
@@ -108,11 +116,12 @@ fn test_virtual_split_plus_fill_edge() {
 
 /// Build a canonical set of raw 3-tuples with `n` unique vertices plus
 /// one duplicate pair to exercise merge logic. Vertex IDs stay within `[0, n)`.
-fn make_raw_with_duplicate(n: usize) -> Vec<Neighbor<f64>> {
+fn make_raw_with_duplicate(n: usize) -> Vec<Neighbor<f64, Single>> {
     assert!(n >= 2, "need at least 2 unique vertices");
-    let mut raw: Vec<Neighbor<f64>> = (0..n as u32).map(|i| nbr(i, (i + 1) as f64, 1)).collect();
+    let mut raw: Vec<Neighbor<f64, Single>> =
+        (0..n as u32).map(|i| ac_nbr(i, (i + 1) as f64)).collect();
     // Add a duplicate for vertex 0 so merged tracking is exercised.
-    raw.push(nbr(0, 0.5, 1));
+    raw.push(ac_nbr(0, 0.5));
     raw
 }
 
@@ -216,9 +225,9 @@ fn test_dedup_ac2_sort_and_scatter_paths_agree() {
 
     // Helper: build a canonical raw input with a specific number of entries.
     // Uses n-1 unique vertices (IDs 0..n-2) + one duplicate of vertex 0.
-    let make_ac2_raw = |n: usize| -> (Vec<Neighbor<f64>>, usize) {
+    let make_ac2_raw = |n: usize| -> (Vec<Neighbor<f64, Multi>>, usize) {
         let n_unique = n - 1; // one slot used by the duplicate
-        let mut raw: Vec<Neighbor<f64>> = (0..n_unique as u32)
+        let mut raw: Vec<Neighbor<f64, Multi>> = (0..n_unique as u32)
             .map(|i| nbr(i, (i + 1) as f64, 2))
             .collect();
         // Duplicate vertex 0 with a different weight and count.

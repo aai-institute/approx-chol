@@ -3,46 +3,20 @@
 use crate::types::count_as_scalar;
 use crate::{CsrError, CsrRef, Error, Real};
 
-/// Named return type for [`EliminationGraph::from_sddm`].
+/// Named return type for [`AdjListGraph::from_sddm`].
 pub(crate) struct GraphBuild<G, T: Real> {
     pub graph: G,
     pub diagonal: Vec<T>,
 }
 
-/// A neighbor entry produced by star elimination.
+/// A neighbor entry produced by star elimination. Carries the edge's
+/// multiplicity storage, so the AC path has no multiplicity field to fill in.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Neighbor<T> {
+pub(crate) struct Neighbor<T, C> {
     pub to: u32,
     /// Accumulated fill weight (weight × count for AC2, just weight for AC).
     pub fill_weight: T,
-    /// Edge multiplicity (always 1 for AC, may be >1 for AC2).
-    pub count: u32,
-}
-
-/// Contract for a mutable graph that supports vertex elimination and fill-in.
-pub(crate) trait EliminationGraph<T: Real> {
-    /// Construct from a CSR SDDM matrix.
-    fn from_sddm(csr: CsrRef<'_, T, u32>) -> Result<GraphBuild<Self, T>, Error>
-    where
-        Self: Sized;
-
-    /// Number of vertices (fixed at construction time).
-    fn n(&self) -> usize;
-
-    /// Current degree of vertex `v` (sum of multi-edge counts; includes stale entries).
-    fn degree(&self, v: usize) -> usize;
-
-    /// Collect live (non-eliminated, positive-weight) neighbors of `v` into `scratch`.
-    fn live_neighbors(&self, v: usize, scratch: &mut Vec<Neighbor<T>>);
-
-    /// Returns `true` if `v` has an empty adjacency list.
-    fn is_empty(&self, v: usize) -> bool;
-
-    /// Mark `v` as eliminated and release its adjacency storage.
-    fn eliminate_vertex(&mut self, v: usize);
-
-    /// Insert a symmetric fill edge between `u` and `v` with the given weight.
-    fn add_fill_edge(&mut self, u: u32, v: u32, weight: T);
+    pub count: C,
 }
 
 struct BitVec {
@@ -72,11 +46,11 @@ impl BitVec {
 ///
 /// `Single` is a ZST, which keeps the AC edge exactly as wide as it was before
 /// the count existed (asserted in the tests below).
-pub(crate) trait EdgeCount<T: Real>: Clone + Copy {
+pub(crate) trait EdgeCount: Clone + Copy {
     fn one() -> Self;
     fn get(&self) -> u32;
     /// Fill weight this multiplicity contributes at edge weight `weight`.
-    fn scale(&self, weight: T) -> T;
+    fn scale<T: Real>(&self, weight: T) -> T;
 }
 
 /// AC: every edge is a single edge, so there is nothing to store.
@@ -87,7 +61,13 @@ pub(crate) struct Single;
 #[derive(Clone, Copy)]
 pub(crate) struct Multi(u32);
 
-impl<T: Real> EdgeCount<T> for Single {
+impl Multi {
+    pub(crate) fn new(count: u32) -> Self {
+        Self(count)
+    }
+}
+
+impl EdgeCount for Single {
     #[inline]
     fn one() -> Self {
         Self
@@ -97,12 +77,12 @@ impl<T: Real> EdgeCount<T> for Single {
         1
     }
     #[inline]
-    fn scale(&self, weight: T) -> T {
+    fn scale<T: Real>(&self, weight: T) -> T {
         weight
     }
 }
 
-impl<T: Real> EdgeCount<T> for Multi {
+impl EdgeCount for Multi {
     #[inline]
     fn one() -> Self {
         Self(1)
@@ -112,7 +92,7 @@ impl<T: Real> EdgeCount<T> for Multi {
         self.0
     }
     #[inline]
-    fn scale(&self, weight: T) -> T {
+    fn scale<T: Real>(&self, weight: T) -> T {
         weight * count_as_scalar::<T, _>(self.0)
     }
 }
@@ -125,7 +105,7 @@ pub(crate) struct Edge<T: Real, C> {
     count: C,
 }
 
-impl<T: Real, C: EdgeCount<T>> Edge<T, C> {
+impl<T: Real, C: EdgeCount> Edge<T, C> {
     #[inline]
     fn new(weight: T, to: u32, rev: u32) -> Self {
         Self {
@@ -160,8 +140,9 @@ pub(crate) type MultiEdgeGraph<T> = AdjListGraph<Multi, T>;
 /// large vectors to avoid retaining fill-heavy buffers across eliminations.
 const RETAIN_ADJ_CAPACITY_MAX: usize = 64;
 
-impl<C: EdgeCount<T>, T: Real> EliminationGraph<T> for AdjListGraph<C, T> {
-    fn from_sddm(csr: CsrRef<'_, T, u32>) -> Result<GraphBuild<Self, T>, Error> {
+impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
+    /// Construct from a CSR SDDM matrix.
+    pub(crate) fn from_sddm(csr: CsrRef<'_, T, u32>) -> Result<GraphBuild<Self, T>, Error> {
         let n = csr.n();
         let mut adj: Vec<Vec<Edge<T, C>>> = Vec::with_capacity(n);
         for (cols, _) in csr.rows() {
@@ -195,15 +176,18 @@ impl<C: EdgeCount<T>, T: Real> EliminationGraph<T> for AdjListGraph<C, T> {
         Self::build_augmented_laplacian(adj, diag, &row_sums)
     }
 
-    fn n(&self) -> usize {
+    /// Number of vertices (fixed at construction time).
+    pub(crate) fn n(&self) -> usize {
         self.adj.len()
     }
 
-    fn degree(&self, v: usize) -> usize {
+    /// Current degree of vertex `v` (sum of multi-edge counts; includes stale entries).
+    pub(crate) fn degree(&self, v: usize) -> usize {
         self.adj[v].iter().map(|e| e.count.get() as usize).sum()
     }
 
-    fn live_neighbors(&self, v: usize, scratch: &mut Vec<Neighbor<T>>) {
+    /// Collect live (non-eliminated, positive-weight) neighbors of `v` into `scratch`.
+    pub(crate) fn live_neighbors(&self, v: usize, scratch: &mut Vec<Neighbor<T, C>>) {
         scratch.clear();
         scratch.extend(self.adj[v].iter().filter_map(|e| {
             // Positive predicate: a NaN weight is dead (`!(w > 0)` differs from
@@ -213,7 +197,7 @@ impl<C: EdgeCount<T>, T: Real> EliminationGraph<T> for AdjListGraph<C, T> {
                 Some(Neighbor {
                     to: e.to,
                     fill_weight: e.fill_weight(),
-                    count: e.count.get(),
+                    count: e.count,
                 })
             } else {
                 None
@@ -221,11 +205,13 @@ impl<C: EdgeCount<T>, T: Real> EliminationGraph<T> for AdjListGraph<C, T> {
         }));
     }
 
-    fn is_empty(&self, v: usize) -> bool {
+    /// Returns `true` if `v` has an empty adjacency list.
+    pub(crate) fn is_empty(&self, v: usize) -> bool {
         self.adj[v].is_empty()
     }
 
-    fn eliminate_vertex(&mut self, v: usize) {
+    /// Mark `v` as eliminated and release its adjacency storage.
+    pub(crate) fn eliminate_vertex(&mut self, v: usize) {
         self.eliminated.set(v);
         while let Some(edge) = self.adj[v].pop() {
             let u = edge.to as usize;
@@ -246,7 +232,8 @@ impl<C: EdgeCount<T>, T: Real> EliminationGraph<T> for AdjListGraph<C, T> {
         }
     }
 
-    fn add_fill_edge(&mut self, u: u32, v: u32, weight: T) {
+    /// Insert a symmetric fill edge between `u` and `v` with the given weight.
+    pub(crate) fn add_fill_edge(&mut self, u: u32, v: u32, weight: T) {
         if u == v {
             return;
         }
@@ -277,7 +264,7 @@ fn augmentation_eps<T: Real>() -> T {
     }
 }
 
-impl<C: EdgeCount<T>, T: Real> AdjListGraph<C, T> {
+impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
     #[inline]
     fn add_edge_pair(adj: &mut [Vec<Edge<T, C>>], u: usize, v: usize, weight: T) {
         // u32 reverse pointers; overflow is unreachable for tractable inputs,
@@ -398,7 +385,7 @@ impl<T: Real> MultiEdgeGraph<T> {
         for adj_list in &mut self.adj {
             for edge in adj_list.iter_mut() {
                 edge.weight = edge.weight * inv_k;
-                edge.count = Multi(k);
+                edge.count = Multi::new(k);
             }
         }
     }

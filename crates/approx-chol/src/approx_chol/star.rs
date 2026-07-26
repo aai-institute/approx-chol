@@ -1,4 +1,4 @@
-use crate::graph::{EliminationGraph, Neighbor};
+use crate::graph::{AdjListGraph, EdgeCount, Multi, Neighbor, Single};
 use crate::ordering::{DegreeDeltas, DynamicOrdering};
 use crate::sampling::CdfSampler;
 use crate::types::float_total_cmp;
@@ -19,9 +19,14 @@ fn apply_merged_counts(merged: &[(u32, u32)], ordering: &mut DynamicOrdering) {
 }
 
 pub(super) trait StarBuilderVariant<T: Real> {
-    fn build_star<G: EliminationGraph<T>>(
+    /// Edge multiplicity storage this variant eliminates on: what makes an AC
+    /// builder over a split multi-edge graph a type error rather than a mistake
+    /// the caller has to avoid.
+    type Count: EdgeCount;
+
+    fn build_star(
         &mut self,
-        graph: &mut G,
+        graph: &mut AdjListGraph<Self::Count, T>,
         v: usize,
         ordering: &mut DynamicOrdering,
     );
@@ -43,7 +48,7 @@ pub(super) trait StarBuilderVariant<T: Real> {
 /// Lightweight variant: no multi-edge counts or merge limit.
 pub(super) struct AcStarBuilder<T: Real> {
     /// Raw neighbor output from `live_neighbors`.
-    raw: Vec<Neighbor<T>>,
+    raw: Vec<Neighbor<T, Single>>,
     entries: Vec<(u32, T)>,
     dedup: AcDedupWorkspace<T>,
 }
@@ -59,9 +64,11 @@ impl<T: Real> AcStarBuilder<T> {
 }
 
 impl<T: Real> StarBuilderVariant<T> for AcStarBuilder<T> {
-    fn build_star<G: EliminationGraph<T>>(
+    type Count = Single;
+
+    fn build_star(
         &mut self,
-        graph: &mut G,
+        graph: &mut AdjListGraph<Single, T>,
         v: usize,
         ordering: &mut DynamicOrdering,
     ) {
@@ -100,7 +107,7 @@ impl<T: Real> StarBuilderVariant<T> for AcStarBuilder<T> {
 /// Tracks multi-edge counts per neighbor and enforces a merge limit.
 pub(super) struct Ac2StarBuilder<T: Real> {
     /// Raw neighbor output from `live_neighbors`.
-    raw: Vec<Neighbor<T>>,
+    raw: Vec<Neighbor<T, Multi>>,
     star: MultiStar<T>,
     /// Max multi-edges kept per neighbor pair after compression.
     merge_limit: u32,
@@ -119,9 +126,11 @@ impl<T: Real> Ac2StarBuilder<T> {
 }
 
 impl<T: Real> StarBuilderVariant<T> for Ac2StarBuilder<T> {
-    fn build_star<G: EliminationGraph<T>>(
+    type Count = Multi;
+
+    fn build_star(
         &mut self,
-        graph: &mut G,
+        graph: &mut AdjListGraph<Multi, T>,
         v: usize,
         ordering: &mut DynamicOrdering,
     ) {
@@ -219,7 +228,7 @@ impl<T: Real> AcDedupWorkspace<T> {
     }
 
     /// Deduplicate raw tuples for AC path and sort by weight ascending.
-    pub fn dedup(&mut self, raw: &mut [Neighbor<T>], entries: &mut Vec<(u32, T)>) {
+    pub fn dedup(&mut self, raw: &mut [Neighbor<T, Single>], entries: &mut Vec<(u32, T)>) {
         if raw.len() <= SCATTER_THRESHOLD {
             self.dedup_sort_small(raw, entries);
         } else {
@@ -227,12 +236,12 @@ impl<T: Real> AcDedupWorkspace<T> {
         }
     }
 
-    fn dedup_sort_small(&mut self, raw: &mut [Neighbor<T>], entries: &mut Vec<(u32, T)>) {
+    fn dedup_sort_small(&mut self, raw: &mut [Neighbor<T, Single>], entries: &mut Vec<(u32, T)>) {
         self.dedup_sort_core(raw, entries);
         sort_by_weight_then_index(entries);
     }
 
-    fn dedup_sort_core(&mut self, raw: &mut [Neighbor<T>], entries: &mut Vec<(u32, T)>) {
+    fn dedup_sort_core(&mut self, raw: &mut [Neighbor<T, Single>], entries: &mut Vec<(u32, T)>) {
         self.merged_counts.clear();
         entries.clear();
         if raw.is_empty() {
@@ -267,7 +276,7 @@ impl<T: Real> AcDedupWorkspace<T> {
         }
     }
 
-    fn dedup_scatter(&mut self, raw: &[Neighbor<T>], entries: &mut Vec<(u32, T)>) {
+    fn dedup_scatter(&mut self, raw: &[Neighbor<T, Single>], entries: &mut Vec<(u32, T)>) {
         self.scratch.ensure_scatter_buffers();
         self.scratch.unique.clear();
         self.merged_counts.clear();
@@ -326,7 +335,12 @@ impl<T: Real> Ac2DedupWorkspace<T> {
     }
 
     /// Deduplicate raw tuples for AC2 path, apply merge cap, and sort by avg-weight.
-    pub fn dedup(&mut self, raw: &mut [Neighbor<T>], star: &mut MultiStar<T>, merge_limit: u32) {
+    pub fn dedup(
+        &mut self,
+        raw: &mut [Neighbor<T, Multi>],
+        star: &mut MultiStar<T>,
+        merge_limit: u32,
+    ) {
         if raw.len() <= SCATTER_THRESHOLD {
             self.dedup_sort(raw, star);
         } else {
@@ -336,16 +350,16 @@ impl<T: Real> Ac2DedupWorkspace<T> {
         star.sort_by_avg_weight();
     }
 
-    fn dedup_sort(&mut self, raw: &mut [Neighbor<T>], star: &mut MultiStar<T>) {
+    fn dedup_sort(&mut self, raw: &mut [Neighbor<T, Multi>], star: &mut MultiStar<T>) {
         self.merged_counts.clear();
         star.clear();
         raw.sort_unstable_by_key(|n| n.to);
         for nbr in raw.iter() {
-            star.push_or_merge(nbr.to, nbr.fill_weight, nbr.count);
+            star.push_or_merge(nbr.to, nbr.fill_weight, nbr.count.get());
         }
     }
 
-    fn dedup_scatter(&mut self, raw: &[Neighbor<T>], star: &mut MultiStar<T>) {
+    fn dedup_scatter(&mut self, raw: &[Neighbor<T, Multi>], star: &mut MultiStar<T>) {
         self.scratch.ensure_scatter_buffers();
         self.scratch.unique.clear();
         self.merged_counts.clear();
@@ -360,7 +374,7 @@ impl<T: Real> Ac2DedupWorkspace<T> {
                 self.scratch.unique.push(nbr.to);
             }
             self.scratch.scatter[idx] = self.scratch.scatter[idx] + nbr.fill_weight;
-            self.scatter_counts[idx] = self.scatter_counts[idx].saturating_add(nbr.count);
+            self.scatter_counts[idx] = self.scatter_counts[idx].saturating_add(nbr.count.get());
         }
 
         for &idx in &self.scratch.unique {
