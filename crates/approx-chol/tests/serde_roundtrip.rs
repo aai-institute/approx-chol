@@ -59,8 +59,7 @@ fn deserializing_corrupted_factor_is_rejected() {
     // persisted factor is rejected at deserialize time rather than panicking on
     // solve. Per-variant coverage lives in the `factor` unit tests.
     let mut value = serde_json::to_value(path_factor()).or_panic("serialize factor");
-    value["blocks"][0]["factor"]["sequence"]["steps"][0]["vertex"] =
-        serde_json::Value::from(999u32);
+    value["blocks"][0]["sequence"]["steps"][0]["vertex"] = serde_json::Value::from(999u32);
 
     assert!(serde_json::from_value::<Factor<f64>>(value).is_err());
 }
@@ -77,20 +76,4 @@ fn config_json_roundtrip() {
 
     assert_eq!(restored.seed, config.seed);
     assert_eq!(restored.split_merge, config.split_merge);
-}
-
-#[test]
-fn block_with_out_of_range_ground_is_rejected() {
-    let row_ptrs = [0u32, 2, 4];
-    let col_indices = [0u32, 1, 0, 1];
-    let values = [2.0f64, -1.0, -1.0, 2.0];
-    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).or_panic("valid csr");
-    let factor = factorize_with(csr, Config::default()).or_panic("factorization");
-
-    let mut tampered = serde_json::to_value(&factor).or_panic("serialize");
-    tampered["blocks"][0]["ground"] = serde_json::json!(99);
-    assert!(
-        serde_json::from_value::<Factor<f64>>(tampered).is_err(),
-        "a ground outside the block must be rejected at deserialize"
-    );
 }

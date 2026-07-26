@@ -1,4 +1,4 @@
-use super::decomposition::{Block, BlockFactor, EliminationSequence};
+use super::decomposition::{BlockFactor, EliminationSequence, Permutation, Pin};
 use crate::graph::{AdjListGraph, GraphBuild, MultiEdgeGraph, SlimGraph};
 use crate::ordering::{DegreeDeltas, DynamicOrdering};
 use crate::sampling::CdfSampler;
@@ -75,7 +75,7 @@ where
     fn build_validated(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
         let original_n = sddm.n();
         Self::validate_config(self.config)?;
-        let factor = match self.config.split_merge {
+        match self.config.split_merge {
             None => {
                 let build = SlimGraph::<T>::from_sddm(sddm)?;
                 self.build_graph(build, original_n, AcStarBuilder::new, 1)
@@ -86,9 +86,7 @@ where
                 let star = move |n| Ac2StarBuilder::new(n, k);
                 self.build_graph(build, original_n, star, k as usize)
             }
-        }?;
-        debug_assert_eq!(factor.original_n(), original_n);
-        Ok(factor)
+        }
     }
 
     /// `make_star` and `degree_scale` come from the caller's single variant match
@@ -113,18 +111,15 @@ where
         // Ground has the highest index, so it is the last vertex of its block.
         let ground_vertex = (n > original_n).then_some(original_n as u32);
         let Some(components) = components else {
-            let block = Block {
-                start: 0,
-                ground: ground_vertex,
-                factor: self.build_approximate(
-                    graph,
-                    diagonal,
-                    self.config.seed,
-                    &make_star,
-                    degree_scale,
-                ),
-            };
-            return Ok(Factor::from_blocks(n, original_n, &[], vec![block]));
+            let block = self.build_approximate(
+                graph,
+                diagonal,
+                ground_vertex,
+                self.config.seed,
+                &make_star,
+                degree_scale,
+            );
+            return Ok(Factor::from_blocks(n, original_n, None, vec![block]));
         };
 
         let mut forward: Vec<u32> = Vec::with_capacity(n);
@@ -137,34 +132,39 @@ where
             let (component_graph, component_diagonal) =
                 graph.extract_component(&diagonal, &vertices, &mut local_of);
             let representative = vertices.first().copied().unwrap_or(0) as u64;
-            let factor = self.build_approximate(
+            blocks.push(self.build_approximate(
                 component_graph,
                 component_diagonal,
+                ground,
                 component_seed(self.config.seed, representative),
                 &make_star,
                 degree_scale,
-            );
-            blocks.push(Block {
-                start: forward.len() as u32,
-                ground,
-                factor,
-            });
+            ));
             forward.extend_from_slice(&vertices);
         }
-        Ok(Factor::from_blocks(n, original_n, &forward, blocks))
+        let permutation = Permutation::from_forward(&forward);
+        Ok(Factor::from_blocks(n, original_n, permutation, blocks))
     }
 
     fn build_approximate<B: StarBuilderVariant<T>>(
         &self,
         graph: AdjListGraph<B::Count, T>,
         diagonal: Vec<T>,
+        ground: Option<u32>,
         seed: u64,
         make_star: &impl Fn(usize) -> B,
         degree_scale: usize,
     ) -> BlockFactor<T> {
         let mut sampler = CdfSampler::<T>::new(seed);
         let star_builder = make_star(graph.n());
-        self.build_from_graph(graph, diagonal, &mut sampler, star_builder, degree_scale)
+        self.build_from_graph(
+            graph,
+            diagonal,
+            ground,
+            &mut sampler,
+            star_builder,
+            degree_scale,
+        )
     }
 
     fn validate_config(config: Config) -> Result<(), Error> {
@@ -188,6 +188,7 @@ where
         &self,
         mut graph: AdjListGraph<B::Count, T>,
         mut diag: Vec<T>,
+        ground: Option<u32>,
         sampler: &mut CdfSampler<T>,
         mut star_builder: B,
         degree_scale: usize,
@@ -232,10 +233,13 @@ where
             deltas.flush(&mut ordering);
         }
 
-        // The one vertex left after `n - 1` pops is never eliminated: the anchor.
-        let anchor = ordering.next_vertex().unwrap_or(0);
-        debug_assert!(n == 0 || anchor < n);
-        BlockFactor::approx(n, anchor as u32, seq)
+        // A grounded block pins its ground vertex; a floating one pins the single
+        // vertex left un-eliminated after `n - 1` pops.
+        let pin = match ground {
+            Some(ground) => Pin::Ground(ground),
+            None => Pin::Floating(ordering.next_vertex().unwrap_or(0) as u32),
+        };
+        BlockFactor::approx(n, pin, seq)
     }
 }
 

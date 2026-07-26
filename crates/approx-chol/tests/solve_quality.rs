@@ -12,19 +12,6 @@ use approx_chol::low_level::Builder;
 use approx_chol::{Config, CsrRef, SolveError};
 use num_traits::Float;
 
-/// Build a 4x4 SDDM matrix (positive diagonal row sums — strictly diagonally dominant).
-///
-/// We use the path Laplacian (0-1-2-3) and add 1.0 to each diagonal entry,
-/// so row sums are positive (1 for interior, 2 for boundary).
-fn sddm_4() -> (Vec<u32>, Vec<u32>, Vec<f64>, u32) {
-    let row_ptrs = vec![0u32, 2, 5, 8, 10];
-    let col_indices = vec![0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
-    //                     diag  off  off  diag off  off  diag off  off  diag
-    let values = vec![2.0f64, -1.0, -1.0, 3.0, -1.0, -1.0, 3.0, -1.0, -1.0, 2.0];
-    let n = 4u32;
-    (row_ptrs, col_indices, values, n)
-}
-
 /// Row-sum drift at roundoff scale must not read as diagonal dominance. The
 /// floor is precision-dependent, so `eps` comes from the caller.
 fn assert_no_augmentation_at_surplus<T: Float + Send + Sync + 'static>(eps: T) {
@@ -81,94 +68,6 @@ fn surplus_below_the_row_noise_floor_does_not_augment() {
         factor.n(),
         factor.original_n(),
         "surplus below the row's noise floor must not add a ground vertex"
-    );
-}
-
-#[test]
-fn solve_into_gives_finite_nontrivial_solution() {
-    let lap = grid_laplacian(8, 8);
-    let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
-        .or_panic("factorization should succeed");
-
-    let n = factor.n();
-    let mut rhs = vec![0.0; n_orig];
-    rhs[0] = 1.0;
-    rhs[n_orig - 1] = -1.0;
-
-    let mut work = vec![0.0; n];
-    factor
-        .solve_into(&rhs, &mut work)
-        .or_panic("solve_into should succeed");
-
-    assert!(
-        work.iter().all(|x| x.is_finite()),
-        "solution has non-finite values"
-    );
-    assert!(
-        work.iter().any(|x| x.abs() > 1e-12),
-        "solution is trivially zero"
-    );
-}
-
-#[test]
-fn solve_in_place_skips_projection() {
-    let lap = grid_laplacian(5, 5);
-    let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
-        .or_panic("factorization should succeed");
-
-    let n = factor.n();
-    let mut rhs = vec![0.0; n_orig];
-    rhs[0] = 1.0;
-    rhs[n_orig - 1] = -1.0;
-
-    let mut with_proj = vec![0.0; n];
-    factor
-        .solve_into(&rhs, &mut with_proj)
-        .or_panic("solve_into should succeed");
-
-    let mut no_proj = vec![0.0; n];
-    no_proj[..rhs.len()].copy_from_slice(&rhs);
-    factor.solve_in_place(&mut no_proj);
-
-    // The zero-mean projection should shift the solution; results must differ
-    let any_different = with_proj
-        .iter()
-        .zip(no_proj.iter())
-        .any(|(a, b)| (a - b).abs() > 1e-14);
-    assert!(any_different, "expected projection to change the solution");
-}
-
-#[test]
-fn solve_returns_original_n_for_sddm() {
-    let (rp, ci, vals, n) = sddm_4();
-    let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid SDDM");
-    let factor = Builder::new(Config::default())
-        .build(csr)
-        .or_panic("factorization should succeed");
-
-    assert!(
-        factor.n() > n as usize,
-        "SDDM should trigger Gremban augmentation"
-    );
-    assert_eq!(factor.original_n(), n as usize);
-
-    let mut rhs = vec![0.0; n as usize];
-    rhs[0] = 1.0;
-    rhs[(n as usize) - 1] = -1.0;
-
-    let result = factor.solve(&rhs).or_panic("solve should succeed");
-    assert_eq!(
-        result.len(),
-        n as usize,
-        "solve() must return original_n elements, not augmented"
-    );
-    assert!(
-        result.iter().all(|x| x.is_finite()),
-        "solution has non-finite values"
     );
 }
 

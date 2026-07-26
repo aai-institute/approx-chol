@@ -7,7 +7,7 @@ use core::fmt;
 mod factor;
 mod sequence;
 
-pub(crate) use factor::{Block, BlockFactor};
+pub(crate) use factor::{BlockFactor, Permutation, Pin};
 pub use factor::{Factor, SolveError};
 pub(crate) use sequence::EliminationSequence;
 
@@ -45,19 +45,14 @@ pub(crate) enum FactorError {
         covered: usize,
         nnz: usize,
     },
-    /// Blocks do not tile `[0, n)` in ascending order without gaps or overlap.
-    BlockRangeInvalid {
-        start: usize,
+    /// Block dimensions do not sum to the factor dimension.
+    BlockDimsDoNotCoverFactor {
+        covered: usize,
         n: usize,
     },
-    /// An approximate block's anchor is not a local index of that block.
-    BlockAnchorInvalid {
-        anchor: usize,
-        n: usize,
-    },
-    /// A block's ground vertex is not a local index of that block.
-    BlockGroundInvalid {
-        ground: usize,
+    /// A block's pinned variable is not a local index of that block.
+    BlockPinInvalid {
+        pin: usize,
         n: usize,
     },
     /// A permutation position is out of bounds, repeated, or a bare fixed point.

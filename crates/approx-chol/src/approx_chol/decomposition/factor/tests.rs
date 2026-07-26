@@ -47,29 +47,17 @@ mod validation {
         }
     }
 
-    fn factor_of(block: BlockFactor<f64>) -> Factor<f64> {
+    fn approx() -> Factor<f64> {
         Factor {
             n: 3,
             original_n: 3,
             permutation: None,
-            blocks: vec![Block {
-                start: 0,
-                ground: None,
-                factor: block,
-            }],
+            blocks: vec![BlockFactor::approx(3, Pin::Floating(2), sequence())],
         }
     }
 
-    fn approx() -> Factor<f64> {
-        factor_of(BlockFactor::approx(3, 2, sequence()))
-    }
-
     fn seq_of(factor: &mut Factor<f64>) -> &mut EliminationSequence<f64> {
-        &mut factor.blocks[0].factor.sequence
-    }
-
-    fn anchor_of(factor: &mut Factor<f64>) -> &mut u32 {
-        &mut factor.blocks[0].factor.anchor
+        &mut factor.blocks[0].sequence
     }
 
     #[test]
@@ -130,28 +118,16 @@ mod validation {
                 FactorError::TrailingNeighborStorage { covered: 1, nnz: 2 },
             ),
             (
-                "block start",
-                approx,
-                |f| f.blocks[0].start = 1,
-                FactorError::BlockRangeInvalid { start: 1, n: 3 },
-            ),
-            (
                 "blocks do not cover n",
                 approx,
                 |f| f.n = 4,
-                FactorError::BlockRangeInvalid { start: 3, n: 4 },
+                FactorError::BlockDimsDoNotCoverFactor { covered: 3, n: 4 },
             ),
             (
-                "anchor out of block",
+                "pin out of block",
                 approx,
-                |f| *anchor_of(f) = 3,
-                FactorError::BlockAnchorInvalid { anchor: 3, n: 3 },
-            ),
-            (
-                "ground out of block",
-                approx,
-                |f| f.blocks[0].ground = Some(3),
-                FactorError::BlockGroundInvalid { ground: 3, n: 3 },
+                |f| f.blocks[0].pin = Pin::Ground(3),
+                FactorError::BlockPinInvalid { pin: 3, n: 3 },
             ),
             (
                 "permutation position out of bounds",

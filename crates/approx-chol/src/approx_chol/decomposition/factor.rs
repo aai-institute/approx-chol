@@ -19,29 +19,35 @@ mod tests;
 #[derive(Clone, Debug)]
 pub(crate) struct BlockFactor<T> {
     n: usize,
-    /// Every block's Laplacian is singular, so one variable must be pinned.
-    anchor: u32,
+    pin: Pin,
     sequence: EliminationSequence<T>,
 }
 
+/// Every block's Laplacian is singular, so one variable is pinned to zero. Which
+/// one it is also decides how the right-hand side gets into the block's range,
+/// so the two travel together rather than as an `Option` each solve re-reads.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "serde",
-    serde(bound(
-        serialize = "T: serde::Serialize",
-        deserialize = "T: serde::de::DeserializeOwned"
-    ))
-)]
-#[derive(Clone, Debug)]
-pub(crate) struct Block<T> {
-    pub(crate) start: u32,
-    pub(crate) ground: Option<u32>,
-    pub(crate) factor: BlockFactor<T>,
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Pin {
+    /// A Gremban ground vertex, which absorbs the null-space component exactly.
+    Ground(u32),
+    /// The un-eliminated vertex of a block that has no ground vertex, so the
+    /// null-space component is projected out instead.
+    Floating(u32),
 }
 
-impl<T> Block<T> {
-    fn ground(&self) -> Option<usize> {
-        self.ground.map(|ground| ground as usize)
+impl Pin {
+    #[inline]
+    fn index(self) -> usize {
+        match self {
+            Self::Ground(vertex) | Self::Floating(vertex) => vertex as usize,
+        }
+    }
+
+    /// Whether the anchored solution still carries an arbitrary constant.
+    #[inline]
+    fn is_floating(self) -> bool {
+        matches!(self, Self::Floating(_))
     }
 }
 
@@ -102,7 +108,7 @@ pub struct Factor<T = f64> {
     pub(crate) n: usize,
     pub(crate) original_n: usize,
     permutation: Option<Permutation>,
-    blocks: Vec<Block<T>>,
+    blocks: Vec<BlockFactor<T>>,
 }
 
 #[cfg(feature = "serde")]
@@ -112,7 +118,7 @@ struct FactorData<T> {
     n: usize,
     original_n: usize,
     permutation: Option<Permutation>,
-    blocks: Vec<Block<T>>,
+    blocks: Vec<BlockFactor<T>>,
 }
 
 #[cfg(feature = "serde")]
@@ -139,7 +145,7 @@ impl<T: num_traits::Float> TryFrom<FactorData<T>> for Factor<T> {
 #[cfg(any(feature = "serde", test))]
 impl<T> Factor<T> {
     /// Check the invariants the solve path relies on: `original_n <= n`, blocks
-    /// tiling `[0, n)` with an in-range ground, and a permutation of `0..n`.
+    /// covering `n` with an in-range pin, and a permutation of `0..n`.
     fn validate_structure(&self) -> Result<(), FactorError> {
         if self.original_n > self.n {
             return Err(FactorError::OriginalDimExceedsInternal {
@@ -147,33 +153,18 @@ impl<T> Factor<T> {
                 n: self.n,
             });
         }
-        // Tiling [0, n) is what stops a corrupted range aliasing another block.
-        let mut expected_start = 0usize;
+        // Each block's range begins where the previous one ended, so they tile
+        // `[0, n)` by construction and only the total is left to check. The
+        // checked sum is what stops a wrapped total from passing as that total.
+        let mut covered = 0usize;
         for block in &self.blocks {
-            let block_n = block.factor.n();
-            if block.start as usize != expected_start || block_n == 0 {
-                return Err(FactorError::BlockRangeInvalid {
-                    start: block.start as usize,
-                    n: block_n,
-                });
-            }
-            // In-range but inconsistent writes `-sum` into a live variable.
-            if let Some(ground) = block.ground {
-                if ground as usize >= block_n {
-                    return Err(FactorError::BlockGroundInvalid {
-                        ground: ground as usize,
-                        n: block_n,
-                    });
-                }
-            }
-            block.factor.validate()?;
-            expected_start += block_n;
+            block.validate()?;
+            covered = covered
+                .checked_add(block.n())
+                .ok_or(FactorError::BlockDimsDoNotCoverFactor { covered, n: self.n })?;
         }
-        if expected_start != self.n {
-            return Err(FactorError::BlockRangeInvalid {
-                start: expected_start,
-                n: self.n,
-            });
+        if covered != self.n {
+            return Err(FactorError::BlockDimsDoNotCoverFactor { covered, n: self.n });
         }
         if let Some(permutation) = &self.permutation {
             permutation.validate_for_dim(self.n)?;
@@ -249,9 +240,12 @@ impl<T> BlockFactor<T> {
 #[cfg(any(feature = "serde", test))]
 impl<T> BlockFactor<T> {
     fn validate(&self) -> Result<(), FactorError> {
-        if self.anchor as usize >= self.n {
-            return Err(FactorError::BlockAnchorInvalid {
-                anchor: self.anchor as usize,
+        // An in-range but wrong ground pin writes `-sum` into a live variable; an
+        // out-of-range one indexes past the block. A zero-dimension block, which
+        // no pin can be an index of, is rejected here too.
+        if self.pin.index() >= self.n {
+            return Err(FactorError::BlockPinInvalid {
+                pin: self.pin.index(),
                 n: self.n,
             });
         }
@@ -263,12 +257,8 @@ impl<T> BlockFactor<T>
 where
     T: num_traits::Float + Send + Sync + 'static,
 {
-    pub(crate) fn approx(n: usize, anchor: u32, sequence: EliminationSequence<T>) -> Self {
-        Self {
-            n,
-            anchor,
-            sequence,
-        }
+    pub(crate) fn approx(n: usize, pin: Pin, sequence: EliminationSequence<T>) -> Self {
+        Self { n, pin, sequence }
     }
 
     fn solve_raw(&self, values: &mut [T]) {
@@ -281,16 +271,16 @@ where
         }
     }
 
-    /// Solves the block system, leaving `values[pin]` equal to zero, where `pin`
-    /// is the ground vertex if this block has one and the anchor otherwise. A
+    /// Solves the block system, leaving the pinned variable equal to zero. A
     /// floating block's result is determined only up to a constant;
     /// [`Self::solve_recovered`] projects that out.
-    fn apply_anchored(&self, values: &mut [T], ground: Option<usize>) {
+    fn apply_anchored(&self, values: &mut [T]) {
         // Every block is a singular Laplacian, so it solves only a zero-sum
         // right-hand side; both arms put `values` in that range.
-        match ground {
+        match self.pin {
             // The exact embedding of `M x = b` as `L_aug [x; 0] = [b; -sum b]`.
-            Some(ground) => {
+            Pin::Ground(ground) => {
+                let ground = ground as usize;
                 let mut sum = T::zero();
                 for (index, &value) in values.iter().enumerate() {
                     if index != ground {
@@ -301,21 +291,20 @@ where
             }
             // No ground vertex to absorb the null-space component, so project it
             // out; an inconsistent right-hand side then gives least squares.
-            None => Self::project_zero_mean(values),
+            Pin::Floating(_) => Self::project_zero_mean(values),
         }
-        let pin = ground.unwrap_or(self.anchor as usize);
         self.solve_raw(values);
-        let pinned = values[pin];
+        let pinned = values[self.pin.index()];
         for value in values.iter_mut() {
             *value = *value - pinned;
         }
     }
 
-    fn solve_recovered(&self, values: &mut [T], ground: Option<usize>) {
-        self.apply_anchored(values, ground);
+    fn solve_recovered(&self, values: &mut [T]) {
+        self.apply_anchored(values);
         // Pinning the ground vertex already gives the SDDM solution; a floating
         // block is determined only up to a constant, fixed here to zero mean.
-        if ground.is_none() {
+        if self.pin.is_floating() {
             Self::project_zero_mean(values);
         }
     }
@@ -338,20 +327,23 @@ impl<T> Factor<T>
 where
     T: num_traits::Float + Send + Sync + 'static,
 {
-    /// An empty `forward` means the blocks already sit in input order.
     pub(crate) fn from_blocks(
         n: usize,
         original_n: usize,
-        forward: &[u32],
-        blocks: Vec<Block<T>>,
+        permutation: Option<Permutation>,
+        blocks: Vec<BlockFactor<T>>,
     ) -> Self {
-        debug_assert!(forward.is_empty() || forward.len() == n);
-        Self {
+        let factor = Self {
             n,
             original_n,
-            permutation: Permutation::from_forward(forward),
+            permutation,
             blocks,
-        }
+        };
+        // Once per factorization, not once per solve: the solve path relies on
+        // these invariants but cannot violate them.
+        #[cfg(any(feature = "serde", test))]
+        debug_assert_eq!(factor.validate_structure(), Ok(()));
+        factor
     }
 
     pub(crate) fn empty(original_n: usize) -> Self {
@@ -375,7 +367,7 @@ where
 
     /// Total number of elimination steps across all blocks.
     pub fn n_steps(&self) -> usize {
-        self.blocks.iter().map(|block| block.factor.n_steps()).sum()
+        self.blocks.iter().map(BlockFactor::n_steps).sum()
     }
 
     #[inline]
@@ -402,14 +394,10 @@ where
     fn solve_kernel(&self, b: &[T], work: &mut [T]) {
         work[..b.len()].copy_from_slice(b);
         work[b.len()..self.n].fill(T::zero());
-        self.for_each_block(work, |block, values| {
-            block.factor.solve_recovered(values, block.ground());
-        });
+        self.for_each_block(work, BlockFactor::solve_recovered);
     }
 
-    fn for_each_block(&self, values: &mut [T], mut solve: impl FnMut(&Block<T>, &mut [T])) {
-        #[cfg(any(feature = "serde", test))]
-        debug_assert_eq!(self.validate_structure(), Ok(()));
+    fn for_each_block(&self, values: &mut [T], mut solve: impl FnMut(&BlockFactor<T>, &mut [T])) {
         let values = &mut values[..self.n];
         let Some(permutation) = &self.permutation else {
             Self::solve_blocks(&self.blocks, values, &mut solve);
@@ -427,13 +415,15 @@ where
     // measurably blocked the closure from inlining into the common path.
     #[inline(always)]
     fn solve_blocks(
-        blocks: &[Block<T>],
+        blocks: &[BlockFactor<T>],
         values: &mut [T],
-        solve: &mut impl FnMut(&Block<T>, &mut [T]),
+        solve: &mut impl FnMut(&BlockFactor<T>, &mut [T]),
     ) {
+        let mut start = 0usize;
         for block in blocks {
-            let start = block.start as usize;
-            solve(block, &mut values[start..start + block.factor.n()]);
+            let end = start + block.n();
+            solve(block, &mut values[start..end]);
+            start = end;
         }
     }
 
@@ -480,8 +470,6 @@ where
     /// If `values.len() < self.n()`.
     pub fn solve_in_place(&self, values: &mut [T]) {
         self.assert_work_fits(values);
-        self.for_each_block(values, |block, values| {
-            block.factor.apply_anchored(values, block.ground());
-        });
+        self.for_each_block(values, BlockFactor::apply_anchored);
     }
 }

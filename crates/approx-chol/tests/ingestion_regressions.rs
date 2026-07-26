@@ -207,20 +207,27 @@ fn block_diagonal_paths(k: u32) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
     (rp, ci, vals)
 }
 
+/// Each 2-node block solves independently, so the answer scales with the block's
+/// own right-hand side and every block contributes exactly one elimination step.
 #[test]
 fn disconnected_laplacian_solves_per_component() {
-    let (rp, ci, vals) = block_diagonal_paths(2);
+    for k in [2u32, 3] {
+        let (rp, ci, vals) = block_diagonal_paths(k);
+        let n = 2 * k;
+        let rhs: Vec<f64> = (1..=k).flat_map(|b| [b as f64, -(b as f64)]).collect();
+        let expected: Vec<f64> = rhs.iter().map(|value| value / 2.0).collect();
 
-    for split_merge in [None, Some(2)] {
-        let csr = CsrRef::new(&rp, &ci, &vals, 4).or_panic("valid CSR");
-        let factor = Builder::<f64>::new(Config {
-            split_merge,
-            ..Config::default()
-        })
-        .build(csr)
-        .expect("disconnected Laplacian must factor block-diagonally");
-        let solution = factor.solve(&[1.0, -1.0, 2.0, -2.0]).unwrap();
-        assert_eq!(solution, vec![0.5, -0.5, 1.0, -1.0]);
+        for split_merge in [None, Some(2)] {
+            let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid CSR");
+            let factor = Builder::<f64>::new(Config {
+                split_merge,
+                ..Config::default()
+            })
+            .build(csr)
+            .expect("disconnected Laplacian must factor block-diagonally");
+            assert_eq!(factor.n_steps(), k as usize, "one step per 2-node block");
+            assert_eq!(factor.solve(&rhs).unwrap(), expected);
+        }
     }
 }
 
@@ -242,17 +249,6 @@ fn disconnected_sparse_ac2_preserves_virtual_edge_multiplicity() {
         .solve(&[1.0, 0.0, -1.0, 1.0, 0.0, -1.0])
         .or_panic("solve");
     assert_eq!(solution, vec![1.0, 0.0, -1.0, 1.0, 0.0, -1.0]);
-}
-
-#[test]
-fn disconnected_laplacian_handles_three_components() {
-    let (rp, ci, vals) = block_diagonal_paths(3);
-
-    let csr = CsrRef::new(&rp, &ci, &vals, 6).or_panic("valid CSR");
-    let factor = Builder::<f64>::new(Config::default())
-        .build(csr)
-        .expect("three components must factor");
-    assert_eq!(factor.n_steps(), 3);
 }
 
 #[test]
@@ -283,39 +279,36 @@ fn mixed_grounded_and_floating_components_solve_independently() {
 }
 
 // Components {0,2} and {1,3} concatenate to [0,2,1,3]: a non-identity block
-// permutation, unlike the block-diagonal fixtures above.
+// permutation, unlike the block-diagonal fixtures above. A right-hand side that
+// is not zero-sum per block has no exact solution, so the second case is the
+// least-squares one the range projection gives.
 #[test]
-fn interleaved_components_permute_and_restore_input_order() {
+fn interleaved_components_solve_in_input_order() {
     let row_ptrs = [0u32, 2, 4, 6, 8];
     let columns = [0u32, 2, 1, 3, 0, 2, 1, 3];
     let values = [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
-    let factor = Builder::<f64>::new(Config {
-        ..Config::default()
-    })
-    .build(CsrRef::new(&row_ptrs, &columns, &values, 4).or_panic("valid CSR"))
-    .or_panic("interleaved factor");
-    let solution = factor.solve(&[1.0, 2.0, -1.0, -2.0]).or_panic("solve");
-    for (got, want) in solution.iter().zip([0.5, 1.0, -0.5, -1.0]) {
-        assert!((got - want).abs() < 1e-12);
-    }
-}
+    let factor = Builder::<f64>::new(Config::default())
+        .build(CsrRef::new(&row_ptrs, &columns, &values, 4).or_panic("valid CSR"))
+        .or_panic("interleaved factor");
 
-// A floating block whose right-hand side is not zero-sum has no exact solution;
-// projecting onto the range gives the least-squares one.
-#[test]
-fn inconsistent_rhs_is_projected_onto_the_range() {
-    let row_ptrs = [0u32, 2, 4, 6, 8];
-    let columns = [0u32, 2, 1, 3, 0, 2, 1, 3];
-    let values = [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
-    let factor = Builder::<f64>::new(Config {
-        ..Config::default()
-    })
-    .build(CsrRef::new(&row_ptrs, &columns, &values, 4).or_panic("valid CSR"))
-    .or_panic("interleaved factor");
-    // Block {0,2} gets [3, -1] (sum 2), block {1,3} gets [5, -2] (sum 3).
-    let solution = factor.solve(&[3.0, 5.0, -1.0, -2.0]).or_panic("solve");
-    for (got, want) in solution.iter().zip([1.0, 1.75, -1.0, -1.75]) {
-        assert!((got - want).abs() < 1e-12);
+    // Block {0,2} gets the 1st and 3rd entry, block {1,3} the 2nd and 4th.
+    let cases = [
+        (
+            "zero-sum per block",
+            [1.0, 2.0, -1.0, -2.0],
+            [0.5, 1.0, -0.5, -1.0],
+        ),
+        (
+            "inconsistent",
+            [3.0, 5.0, -1.0, -2.0],
+            [1.0, 1.75, -1.0, -1.75],
+        ),
+    ];
+    for (label, rhs, expected) in cases {
+        let solution = factor.solve(&rhs).or_panic("solve");
+        for (got, want) in solution.iter().zip(expected) {
+            assert!((got - want).abs() < 1e-12, "{label}: {solution:?}");
+        }
     }
 }
 
