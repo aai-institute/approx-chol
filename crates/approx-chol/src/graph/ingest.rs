@@ -53,16 +53,9 @@ impl<'a, T: Real> Canonical<'a, T> {
             entries.extend(cols.iter().copied().zip(vals.iter().copied()));
             // One row's degree, not nnz. Stable, so duplicates sum in stored order.
             entries.sort_by_key(|&(col, _)| col);
-            let mut index = 0;
-            while index < entries.len() {
-                let (col, mut sum) = entries[index];
-                index += 1;
-                while index < entries.len() && entries[index].0 == col {
-                    sum = sum + entries[index].1;
-                    index += 1;
-                }
-                col_indices.push(col);
-                values.push(sum);
+            for group in entries.chunk_by(|left, right| left.0 == right.0) {
+                col_indices.push(group[0].0);
+                values.push(group[1..].iter().fold(group[0].1, |sum, &(_, v)| sum + v));
             }
             row_ptrs.push(col_indices.len() as u32);
         }
@@ -121,23 +114,11 @@ fn parse<T: Real, C: EdgeCount>(
     let mut cursors: Vec<u32> = row_ptrs[..n].to_vec();
     for row in 0..n {
         let row_end = row_ptrs[row + 1];
+        // The diagonal is claimed like any mirror: it advances the cursor past
+        // everything below it, which by now should be only the zeros that
+        // contribute no edge. Its value was already read above.
+        claim_mirror(row, row, row_ptrs, col_indices, values, &mut cursors)?;
         let mut cursor = cursors[row];
-        // Anything still below the diagonal was never claimed as a mirror, so
-        // its counterpart above the diagonal is missing.
-        while cursor < row_end {
-            let col = col_indices[cursor as usize] as usize;
-            if col >= row {
-                break;
-            }
-            if values[cursor as usize] != T::zero() {
-                return Err(Error::Asymmetric { edge: (col, row) });
-            }
-            cursor += 1;
-        }
-        if cursor < row_end && col_indices[cursor as usize] as usize == row {
-            cursor += 1;
-        }
-        cursors[row] = cursor;
 
         while cursor < row_end {
             let col = col_indices[cursor as usize] as usize;
