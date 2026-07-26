@@ -1,5 +1,6 @@
 //! Flat storage for the elimination sequence and its per-step row kernels.
 
+#[cfg(any(feature = "serde", test))]
 use super::FactorError;
 use crate::types::Real;
 
@@ -192,6 +193,7 @@ impl<T> EliminationSequence<T> {
     /// Check every structural invariant the solve path relies on, against a
     /// factor dimension `n`, so a deserialized (untrusted) factor is rejected
     /// before it can index storage out of bounds or silently return garbage.
+    #[cfg(any(feature = "serde", test))]
     pub(crate) fn validate_for_dim(&self, n: usize) -> Result<(), FactorError> {
         // Threading `start` through the loop makes the ranges contiguous and
         // non-decreasing by construction; only `start <= end <= nnz` is left to check.

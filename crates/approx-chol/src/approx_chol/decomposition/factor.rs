@@ -1,6 +1,7 @@
 //! The [`Factor`] LDLᵀ decomposition and its solve API.
 
 use super::sequence::EliminationSequence;
+#[cfg(any(feature = "serde", test))]
 use super::FactorError;
 use core::fmt;
 
@@ -59,7 +60,9 @@ impl<T> TryFrom<FactorData<T>> for Factor<T> {
 // Structural validation (no numeric `T` bound). Only the serde boundary needs
 // it: the builder produces the invariants by construction, and the solve
 // kernels index safe slices, so a corrupt factor could only ever panic on a
-// bounds check rather than read past its storage.
+// bounds check rather than read past its storage. Without that boundary there is
+// nothing to validate, so the whole path compiles away.
+#[cfg(any(feature = "serde", test))]
 impl<T> Factor<T> {
     /// Check the invariants the solve path relies on: `original_n <= n` and a
     /// [`EliminationSequence::validate_for_dim`]-valid sequence for dimension `n`.
