@@ -67,127 +67,103 @@ impl BitVec {
     }
 }
 
-/// Abstraction over edge storage: slim (AC) vs multi-edge (AC2).
-pub(crate) trait EdgeLike<T: Real>: Clone + Copy {
-    fn new(weight: T, to: u32, rev: u32) -> Self;
-    fn weight(&self) -> T;
-    fn to(&self) -> u32;
-    fn rev(&self) -> u32;
-    fn set_rev(&mut self, rev: u32);
-    /// Virtual multi-edge count. Returns 1 for slim edges.
-    fn count(&self) -> u32;
-    /// Total fill weight contributed by this edge (`weight * count`).
-    /// For slim edges this is just `weight` (no cast/multiply).
-    fn fill_weight(&self) -> T;
+/// How an edge stores its multiplicity: the only thing that differs between the
+/// AC and AC2 edge layouts, so it is the only thing either one defines.
+///
+/// `Single` is a ZST, which keeps the AC edge exactly as wide as it was before
+/// the count existed (asserted in the tests below).
+pub(crate) trait EdgeCount<T: Real>: Clone + Copy {
+    fn one() -> Self;
+    fn get(&self) -> u32;
+    /// Fill weight this multiplicity contributes at edge weight `weight`.
+    fn scale(&self, weight: T) -> T;
 }
 
-/// Slim edge for AC (no multi-edge tracking).
+/// AC: every edge is a single edge, so there is nothing to store.
 #[derive(Clone, Copy)]
-pub(crate) struct Edge<T: Real> {
-    weight: T,
-    to: u32,
-    rev: u32,
-}
+pub(crate) struct Single;
 
-impl<T: Real> EdgeLike<T> for Edge<T> {
+/// AC2: a virtual multiplicity set by [`MultiEdgeGraph::mark_split_edges`].
+#[derive(Clone, Copy)]
+pub(crate) struct Multi(u32);
+
+impl<T: Real> EdgeCount<T> for Single {
     #[inline]
-    fn new(weight: T, to: u32, rev: u32) -> Self {
-        Self { weight, to, rev }
+    fn one() -> Self {
+        Self
     }
     #[inline]
-    fn weight(&self) -> T {
-        self.weight
-    }
-    #[inline]
-    fn to(&self) -> u32 {
-        self.to
-    }
-    #[inline]
-    fn rev(&self) -> u32 {
-        self.rev
-    }
-    #[inline]
-    fn set_rev(&mut self, rev: u32) {
-        self.rev = rev;
-    }
-    #[inline]
-    fn count(&self) -> u32 {
+    fn get(&self) -> u32 {
         1
     }
     #[inline]
-    fn fill_weight(&self) -> T {
-        self.weight
+    fn scale(&self, weight: T) -> T {
+        weight
     }
 }
 
-/// Multi-edge for AC2 with virtual count.
+impl<T: Real> EdgeCount<T> for Multi {
+    #[inline]
+    fn one() -> Self {
+        Self(1)
+    }
+    #[inline]
+    fn get(&self) -> u32 {
+        self.0
+    }
+    #[inline]
+    fn scale(&self, weight: T) -> T {
+        weight * count_as_scalar::<T, _>(self.0)
+    }
+}
+
 #[derive(Clone, Copy)]
-pub(crate) struct MultiEdge<T: Real> {
+pub(crate) struct Edge<T: Real, C> {
     weight: T,
     to: u32,
     rev: u32,
-    count: u32,
+    count: C,
 }
 
-impl<T: Real> EdgeLike<T> for MultiEdge<T> {
+impl<T: Real, C: EdgeCount<T>> Edge<T, C> {
     #[inline]
     fn new(weight: T, to: u32, rev: u32) -> Self {
         Self {
             weight,
             to,
             rev,
-            count: 1,
+            count: C::one(),
         }
     }
-    #[inline]
-    fn weight(&self) -> T {
-        self.weight
-    }
-    #[inline]
-    fn to(&self) -> u32 {
-        self.to
-    }
-    #[inline]
-    fn rev(&self) -> u32 {
-        self.rev
-    }
-    #[inline]
-    fn set_rev(&mut self, rev: u32) {
-        self.rev = rev;
-    }
-    #[inline]
-    fn count(&self) -> u32 {
-        self.count
-    }
+
     #[inline]
     fn fill_weight(&self) -> T {
-        self.weight * count_as_scalar::<T, _>(self.count)
+        self.count.scale(self.weight)
     }
 }
 
-/// Adjacency-list elimination graph, generic over edge type.
-pub(crate) struct AdjListGraph<E: EdgeLike<T>, T: Real> {
+/// Adjacency-list elimination graph, generic over edge multiplicity storage.
+pub(crate) struct AdjListGraph<C, T: Real> {
     /// Per-vertex adjacency list.
-    adj: Vec<Vec<E>>,
+    adj: Vec<Vec<Edge<T, C>>>,
     /// `eliminated[v]` is `true` after `eliminate_vertex(v)` has been called.
     eliminated: BitVec,
-    _marker: core::marker::PhantomData<T>,
 }
 
-/// AC path: slim edges, no multi-edge tracking.
-pub(crate) type SlimGraph<T> = AdjListGraph<Edge<T>, T>;
+/// AC path: no multi-edge tracking.
+pub(crate) type SlimGraph<T> = AdjListGraph<Single, T>;
 
 /// AC2 path: edges with virtual multi-edge counts.
-pub(crate) type MultiEdgeGraph<T> = AdjListGraph<MultiEdge<T>, T>;
+pub(crate) type MultiEdgeGraph<T> = AdjListGraph<Multi, T>;
 
 /// Keep capacity of tiny adjacency lists to reduce allocator churn, but release
 /// large vectors to avoid retaining fill-heavy buffers across eliminations.
 const RETAIN_ADJ_CAPACITY_MAX: usize = 64;
 
-impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
+impl<C: EdgeCount<T>, T: Real> EliminationGraph<T> for AdjListGraph<C, T> {
     fn from_sddm(csr: CsrRef<'_, T, u32>) -> Result<GraphBuild<Self, T>, Error> {
         let n = csr.n();
-        let mut adj: Vec<Vec<E>> = Vec::with_capacity(n);
+        let mut adj: Vec<Vec<Edge<T, C>>> = Vec::with_capacity(n);
         for (cols, _) in csr.rows() {
             adj.push(Vec::with_capacity(cols.len()));
         }
@@ -224,7 +200,7 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
     }
 
     fn degree(&self, v: usize) -> usize {
-        self.adj[v].iter().map(|e| e.count() as usize).sum()
+        self.adj[v].iter().map(|e| e.count.get() as usize).sum()
     }
 
     fn live_neighbors(&self, v: usize, scratch: &mut Vec<Neighbor<T>>) {
@@ -233,11 +209,11 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
             // Positive predicate: a NaN weight is dead (`!(w > 0)` differs from
             // `w <= 0` at NaN). if/else (not `bool::then`) keeps `fill_weight()`
             // lazy for dead edges and avoids `clippy::filter_map_bool_then`.
-            if e.weight() > T::zero() && !self.eliminated.get(e.to() as usize) {
+            if e.weight > T::zero() && !self.eliminated.get(e.to as usize) {
                 Some(Neighbor {
-                    to: e.to(),
+                    to: e.to,
                     fill_weight: e.fill_weight(),
-                    count: e.count(),
+                    count: e.count.get(),
                 })
             } else {
                 None
@@ -252,18 +228,18 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
     fn eliminate_vertex(&mut self, v: usize) {
         self.eliminated.set(v);
         while let Some(edge) = self.adj[v].pop() {
-            let u = edge.to() as usize;
+            let u = edge.to as usize;
             if self.eliminated.get(u) {
                 continue;
             }
             debug_assert!(
-                (edge.rev() as usize) < self.adj[u].len(),
+                (edge.rev as usize) < self.adj[u].len(),
                 "reverse pointer out of bounds: rev={} but adj[{}].len()={}",
-                edge.rev(),
+                edge.rev,
                 u,
                 self.adj[u].len()
             );
-            Self::remove_edge_at(&mut self.adj, u, edge.rev() as usize);
+            Self::remove_edge_at(&mut self.adj, u, edge.rev as usize);
         }
         if self.adj[v].capacity() > RETAIN_ADJ_CAPACITY_MAX {
             self.adj[v] = Vec::new();
@@ -301,9 +277,9 @@ fn augmentation_eps<T: Real>() -> T {
     }
 }
 
-impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
+impl<C: EdgeCount<T>, T: Real> AdjListGraph<C, T> {
     #[inline]
-    fn add_edge_pair(adj: &mut [Vec<E>], u: usize, v: usize, weight: T) {
+    fn add_edge_pair(adj: &mut [Vec<Edge<T, C>>], u: usize, v: usize, weight: T) {
         // u32 reverse pointers; overflow is unreachable for tractable inputs,
         // so assert (release too) rather than truncate and corrupt removal.
         assert!(
@@ -312,27 +288,27 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
         );
         let rev_u = adj[v].len() as u32;
         let rev_v = adj[u].len() as u32;
-        adj[u].push(E::new(weight, v as u32, rev_u));
-        adj[v].push(E::new(weight, u as u32, rev_v));
+        adj[u].push(Edge::new(weight, v as u32, rev_u));
+        adj[v].push(Edge::new(weight, u as u32, rev_v));
     }
 
     /// Remove `adj[u][idx]` in O(1) via swap-remove and repair the moved edge's
     /// reverse pointer in its opposite adjacency list.
-    fn remove_edge_at(adj: &mut [Vec<E>], u: usize, idx: usize) {
+    fn remove_edge_at(adj: &mut [Vec<Edge<T, C>>], u: usize, idx: usize) {
         let last_idx = adj[u].len() - 1;
         adj[u].swap_remove(idx);
         if idx < last_idx {
             let moved = adj[u][idx];
-            let w = moved.to() as usize;
-            let rev = moved.rev() as usize;
-            adj[w][rev].set_rev(idx as u32);
+            let w = moved.to as usize;
+            let rev = moved.rev as usize;
+            adj[w][rev].rev = idx as u32;
         }
     }
 
     /// Connected components among the first `n_real` vertices. Traversal follows
     /// every edge, so a ground vertex (index `>= n_real`) links the blocks it
     /// touches without being counted as its own component.
-    fn count_components(adj: &[Vec<E>], n_real: usize) -> usize {
+    fn count_components(adj: &[Vec<Edge<T, C>>], n_real: usize) -> usize {
         let mut visited = BitVec::new(adj.len());
         let mut stack: Vec<usize> = Vec::new();
         let mut components = 0usize;
@@ -345,7 +321,7 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
             stack.push(start);
             while let Some(v) = stack.pop() {
                 for e in &adj[v] {
-                    let u = e.to() as usize;
+                    let u = e.to as usize;
                     if !visited.get(u) {
                         visited.set(u);
                         stack.push(u);
@@ -359,7 +335,7 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
     /// Build the final graph: apply Gremban augmentation if needed, then reject
     /// disconnected input (`Error::Disconnected`).
     fn build_augmented_laplacian(
-        mut adj: Vec<Vec<E>>,
+        mut adj: Vec<Vec<Edge<T, C>>>,
         mut diag: Vec<T>,
         row_sums: &[T],
     ) -> Result<GraphBuild<Self, T>, Error> {
@@ -406,11 +382,7 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
 
         let eliminated = BitVec::new(n);
         Ok(GraphBuild {
-            graph: AdjListGraph {
-                adj,
-                eliminated,
-                _marker: core::marker::PhantomData,
-            },
+            graph: AdjListGraph { adj, eliminated },
             diagonal: diag,
         })
     }
@@ -426,8 +398,29 @@ impl<T: Real> MultiEdgeGraph<T> {
         for adj_list in &mut self.adj {
             for edge in adj_list.iter_mut() {
                 edge.weight = edge.weight * inv_k;
-                edge.count = k;
+                edge.count = Multi(k);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The AC edge must not pay for the multiplicity it does not store: `Single`
+    /// is a ZST, so both layouts are what the two hand-written structs were.
+    #[test]
+    fn edge_layout_is_unchanged_by_the_shared_definition() {
+        assert_eq!(
+            size_of::<Edge<f64, Single>>(),
+            size_of::<f64>() + 2 * size_of::<u32>()
+        );
+        assert_eq!(
+            size_of::<Edge<f64, Multi>>(),
+            size_of::<Edge<f64, Single>>() + size_of::<f64>(),
+            "one u32 plus its alignment padding"
+        );
+        assert_eq!(size_of::<Single>(), 0);
     }
 }
