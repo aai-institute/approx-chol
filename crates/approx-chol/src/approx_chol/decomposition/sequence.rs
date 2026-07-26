@@ -7,7 +7,6 @@ use crate::types::Real;
 /// its weight among neighbors according to `elimination_fractions`.
 pub(crate) struct EliminationStep<'a, T> {
     pub(crate) vertex: usize,
-    /// Zero when the pivot diagonal was clamped to near-zero.
     pub(crate) inv_diag: T,
     pub(crate) neighbor_indices: &'a [u32],
     pub(crate) elimination_fractions: &'a [T],
@@ -23,12 +22,9 @@ impl<'a, T: num_traits::Float + Send + Sync + 'static> EliminationStep<'a, T> {
         let vertex = self.vertex;
         let inv_diag = self.inv_diag;
         let n = self.neighbor_indices.len();
-        let zero = T::zero();
         let one = T::one();
         if n == 0 {
-            if inv_diag != zero {
-                y[vertex] = y[vertex] * inv_diag;
-            }
+            y[vertex] = y[vertex] * inv_diag;
             return;
         }
 
@@ -45,7 +41,7 @@ impl<'a, T: num_traits::Float + Send + Sync + 'static> EliminationStep<'a, T> {
 
         let j_last = self.neighbor_indices[n - 1] as usize;
         y[j_last] = y[j_last] + yi;
-        y[vertex] = if inv_diag != zero { yi * inv_diag } else { yi };
+        y[vertex] = yi * inv_diag;
     }
 
     /// Backward substitution: gather neighbor contributions back to pivot.
@@ -73,8 +69,8 @@ impl<'a, T: num_traits::Float + Send + Sync + 'static> EliminationStep<'a, T> {
     }
 }
 
-/// Header for one elimination step: which vertex, its reciprocal diagonal, and
-/// where its neighbor range ends. The range *starts* at the previous header's
+/// Header for one elimination step: which vertex, the factor its pivot is scaled
+/// by, and where its neighbor range ends. The range *starts* at the previous header's
 /// `end`, so there is no second array that could disagree about step count,
 /// about where step 0 begins, or about which diagonal belongs to which vertex.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -262,10 +258,12 @@ impl<T: Real> EliminationSequence<T> {
         self.steps.push(StepHeader {
             vertex: vertex as u32,
             end: nnz as u32,
+            // A pivot too small to invert is left unscaled, which *is* a scale
+            // factor of one — storing it spares every use the special case.
             inv_diag: if diagonal.abs() > T::near_zero() {
                 T::one() / diagonal
             } else {
-                T::zero()
+                T::one()
             },
         });
     }
