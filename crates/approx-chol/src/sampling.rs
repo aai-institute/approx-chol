@@ -56,25 +56,14 @@ pub(crate) fn sample_from_cumsum<T: Real>(
     Some(k)
 }
 
-/// Strategy for weighted index sampling during clique-tree factorization.
-pub(crate) trait WeightedSampler<T: Real> {
-    /// Build internal state from the full set of `(vertex_index, weight)` entries.
-    fn prepare(&mut self, entries: &[(u32, T)]);
-
-    /// Sample one index from `entries[start..]` proportional to weight. The end
-    /// is the prepared set's own length, so no caller can name a stale one.
-    fn sample_suffix(&mut self, start: usize) -> Option<usize>;
-}
-
 /// Inverse-CDF sampler with hybrid linear/binary search.
-pub struct CdfSampler<T = f64> {
+pub(crate) struct CdfSampler<T = f64> {
     cumsum: Vec<T>,
     rng: SmallRng,
 }
 
 impl<T> CdfSampler<T> {
-    /// Create a new sampler with the given PRNG seed.
-    pub fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         Self {
             cumsum: Vec::new(),
             rng: SmallRng::seed_from_u64(seed),
@@ -82,10 +71,10 @@ impl<T> CdfSampler<T> {
     }
 }
 
-impl<T: Real> WeightedSampler<T> for CdfSampler<T> {
-    /// Build cumulative sum from weights using naive summation (assumes well-conditioned weights).
+impl<T: Real> CdfSampler<T> {
+    /// Cumulative sum by naive summation (assumes well-conditioned weights).
     #[inline]
-    fn prepare(&mut self, entries: &[(u32, T)]) {
+    pub(crate) fn prepare(&mut self, entries: &[(u32, T)]) {
         self.cumsum.clear();
         let mut acc = T::zero();
         for &(_, w) in entries {
@@ -94,8 +83,11 @@ impl<T: Real> WeightedSampler<T> for CdfSampler<T> {
         }
     }
 
+    /// Sample one index from the prepared entries at or after `start`,
+    /// proportional to weight. The end is the prepared set's own length, so no
+    /// caller can name a stale one.
     #[inline]
-    fn sample_suffix(&mut self, start: usize) -> Option<usize> {
+    pub(crate) fn sample_suffix(&mut self, start: usize) -> Option<usize> {
         sample_from_cumsum(&self.cumsum, &mut self.rng, start)
     }
 }
@@ -107,7 +99,7 @@ mod tests {
     const SEED: u64 = 42;
 
     fn sample_counts(
-        sampler: &mut impl WeightedSampler<f64>,
+        sampler: &mut CdfSampler<f64>,
         entries: &[(u32, f64)],
         start: usize,
         n_samples: usize,

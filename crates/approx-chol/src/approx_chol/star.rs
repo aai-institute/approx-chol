@@ -1,6 +1,6 @@
 use crate::graph::{EliminationGraph, Neighbor};
 use crate::ordering::{DegreeDeltas, DynamicOrdering};
-use crate::sampling::WeightedSampler;
+use crate::sampling::CdfSampler;
 use crate::types::float_total_cmp;
 use crate::Real;
 
@@ -27,10 +27,10 @@ pub(super) trait StarBuilderVariant<T: Real> {
     );
     fn is_empty(&self) -> bool;
     fn entries(&self) -> &[(u32, T)];
-    fn sample_column<S: WeightedSampler<T>>(
+    fn sample_column(
         &self,
         pivot_diag: T,
-        sampler: &mut S,
+        sampler: &mut CdfSampler<T>,
         column: &mut SampledColumn<T>,
     );
     /// Accumulate the degree decrease each surviving neighbor experiences from
@@ -78,10 +78,10 @@ impl<T: Real> StarBuilderVariant<T> for AcStarBuilder<T> {
         &self.entries
     }
 
-    fn sample_column<S: WeightedSampler<T>>(
+    fn sample_column(
         &self,
         pivot_diag: T,
-        sampler: &mut S,
+        sampler: &mut CdfSampler<T>,
         column: &mut SampledColumn<T>,
     ) {
         clique_tree_sample_column(&self.entries, pivot_diag, sampler, column);
@@ -139,10 +139,10 @@ impl<T: Real> StarBuilderVariant<T> for Ac2StarBuilder<T> {
         self.star.entries()
     }
 
-    fn sample_column<S: WeightedSampler<T>>(
+    fn sample_column(
         &self,
         pivot_diag: T,
-        sampler: &mut S,
+        sampler: &mut CdfSampler<T>,
         column: &mut SampledColumn<T>,
     ) {
         clique_tree_sample_column_multi(&self.star, pivot_diag, sampler, column);

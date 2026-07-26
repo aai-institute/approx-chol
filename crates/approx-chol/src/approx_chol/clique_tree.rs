@@ -1,6 +1,6 @@
 use crate::graph::EliminationGraph;
 use crate::ordering::DegreeDeltas;
-use crate::sampling::{CdfSampler, WeightedSampler};
+use crate::sampling::CdfSampler;
 use crate::types::{count_as_scalar, float_total_cmp, Real};
 
 /// One sampled column of the approximate Cholesky factor (Algorithm 5, GKS 2023),
@@ -107,7 +107,7 @@ impl<T: Real> SampledColumn<T> {
         neighbor: u32,
         n_samples: u32,
         fill_weight: T,
-        sampler: &mut impl WeightedSampler<T>,
+        sampler: &mut CdfSampler<T>,
         entries: &[(u32, T)],
         tail: usize,
     ) {
@@ -300,10 +300,10 @@ impl<T: Real> StarElimination<T> {
 /// `f ∈ [0, 1]` by construction, whereas a caller-maintained `diag[v]` can drift
 /// below the column sum under stochastic elimination. `pivot_diag` only seeds the
 /// degenerate (`n <= 1`) column.
-pub(crate) fn clique_tree_sample_column<T: Real, S: WeightedSampler<T>>(
+pub(crate) fn clique_tree_sample_column<T: Real>(
     entries: &[(u32, T)],
     pivot_diag: T,
-    sampler: &mut S,
+    sampler: &mut CdfSampler<T>,
     column: &mut SampledColumn<T>,
 ) {
     let Some((n, total_weight)) = column.begin_sampling(entries, pivot_diag) else {
@@ -325,10 +325,10 @@ pub(crate) fn clique_tree_sample_column<T: Real, S: WeightedSampler<T>>(
 }
 
 /// Clique-tree sampling for AC2 stars (multi-sample per neighbor).
-pub(crate) fn clique_tree_sample_column_multi<T: Real, S: WeightedSampler<T>>(
+pub(crate) fn clique_tree_sample_column_multi<T: Real>(
     star: &MultiStar<T>,
     pivot_diag: T,
-    sampler: &mut S,
+    sampler: &mut CdfSampler<T>,
     column: &mut SampledColumn<T>,
 ) {
     let entries = star.entries();
