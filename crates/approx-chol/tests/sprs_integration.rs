@@ -53,33 +53,14 @@ where
     assert_solves_path_rhs(&factor);
 }
 
+/// One factorization per (index, scalar) pair the adapter supports.
 #[test]
-fn sprs_u32_f64() {
+fn sprs_csr_factorizes_over_index_and_scalar_types() {
     run_case::<f64, u32>();
-}
-
-#[test]
-fn sprs_u32_f32() {
     run_case::<f32, u32>();
-}
-
-#[test]
-fn sprs_usize_f64() {
     run_case::<f64, usize>();
-}
-
-#[test]
-fn sprs_usize_f32() {
     run_case::<f32, usize>();
-}
-
-#[test]
-fn sprs_u64_f64() {
     run_case::<f64, u64>();
-}
-
-#[test]
-fn sprs_u64_f32() {
     run_case::<f32, u64>();
 }
 

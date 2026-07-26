@@ -21,11 +21,9 @@ use super::Config;
 /// ```
 /// use approx_chol::{Config, CsrRef};
 /// use approx_chol::low_level::Builder;
-///
-/// let row_ptrs    = [0u32, 2, 5, 8, 10];
-/// let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
-/// let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
-///
+/// # let row_ptrs    = [0u32, 2, 5, 8, 10];
+/// # let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
+/// # let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
 /// let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
 /// let factor = Builder::new(Config::default()).build(csr)?;
 /// assert_eq!(factor.n(), 4);

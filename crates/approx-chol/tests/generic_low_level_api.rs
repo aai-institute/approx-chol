@@ -36,7 +36,8 @@ where
     (row_ptrs, col_indices, values, path::N)
 }
 
-fn run_case<I, T>()
+/// Factorize the shared path-Laplacian fixture at `config` and check the solve.
+fn run_case<I, T>(config: Config)
 where
     I: PrimInt + TryFrom<usize> + 'static,
     <I as TryFrom<usize>>::Error: core::fmt::Debug,
@@ -44,68 +45,31 @@ where
 {
     let (rp, ci, vals, n) = path_laplacian::<I, T>();
     let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid csr");
+    let factor = Builder::<T>::new(config)
+        .build(csr)
+        .or_panic("factorization should succeed");
 
-    let factor = factorize(csr).or_panic("factorization should succeed");
     assert_eq!(factor.n_steps(), factor.n().saturating_sub(1));
     assert_solves_path_rhs(&factor);
 }
 
-fn run_case_ac2<I, T>()
-where
-    I: PrimInt + TryFrom<usize> + 'static,
-    <I as TryFrom<usize>>::Error: core::fmt::Debug,
-    T: Float + FromPrimitive + core::fmt::Debug + Send + Sync + 'static + core::iter::Sum<T>,
-{
-    let (rp, ci, vals, n) = path_laplacian::<I, T>();
-    let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid csr");
-    let builder = Builder::<T>::new(Config {
-        split_merge: 2,
-        seed: 7,
-    });
-    let factor = builder
-        .build(csr)
-        .or_panic("AC2 generic factorization should succeed");
-    assert_solves_path_rhs(&factor);
-}
-
+/// One factorization per (index, scalar) pair, on both the AC and AC2 paths.
 #[test]
-fn low_level_u32_f64() {
-    run_case::<u32, f64>();
-}
-
-#[test]
-fn low_level_u32_f32() {
-    run_case::<u32, f32>();
-}
-
-#[test]
-fn low_level_u64_f64() {
-    run_case::<u64, f64>();
-}
-
-#[test]
-fn low_level_u64_f32() {
-    run_case::<u64, f32>();
-}
-
-#[test]
-fn low_level_usize_f64() {
-    run_case::<usize, f64>();
-}
-
-#[test]
-fn low_level_usize_f32() {
-    run_case::<usize, f32>();
-}
-
-#[test]
-fn low_level_u64_f32_ac2() {
-    run_case_ac2::<u64, f32>();
-}
-
-#[test]
-fn low_level_usize_f64_ac2() {
-    run_case_ac2::<usize, f64>();
+fn low_level_builder_is_generic_over_index_and_scalar_types() {
+    for config in [
+        Config::default(),
+        Config {
+            split_merge: 2,
+            seed: 7,
+        },
+    ] {
+        run_case::<u32, f64>(config);
+        run_case::<u32, f32>(config);
+        run_case::<u64, f64>(config);
+        run_case::<u64, f32>(config);
+        run_case::<usize, f64>(config);
+        run_case::<usize, f32>(config);
+    }
 }
 
 struct PanicIntoCsr;
