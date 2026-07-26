@@ -11,8 +11,8 @@ pub(super) fn from_sddm<T: Real, C: EdgeCount>(
 }
 
 /// CSR whose columns ascend strictly within every row, which also rules out
-/// duplicates. [`parse`] pairs mirrors with a monotone cursor, which is a
-/// merge-join only under that guarantee, so it takes this rather than raw arrays.
+/// duplicates. [`Mirrors`] is a merge-join only under that guarantee, so [`parse`]
+/// takes this rather than raw arrays.
 enum Canonical<'a, T> {
     Borrowed(CsrRef<'a, T, u32>),
     Rewritten {
@@ -24,15 +24,21 @@ enum Canonical<'a, T> {
 
 impl<'a, T: Real> Canonical<'a, T> {
     fn from_csr(csr: CsrRef<'a, T, u32>) -> Result<Self, Error> {
-        // Rejecting non-finite values against the caller's array is what keeps the
-        // reported position in the caller's numbering rather than a rewritten copy's.
-        if let Some(position) = csr.values().iter().position(|value| !value.is_finite()) {
-            return Err(Error::NonFiniteValue { position });
+        // Rows tile the value array in order, so one pass answers both questions:
+        // non-finite wins over non-canonical either way, and the reported position
+        // stays in the caller's numbering rather than a rewritten copy's.
+        let mut canonical = true;
+        let mut row_start = 0;
+        for (cols, vals) in csr.rows() {
+            if let Some(offset) = vals.iter().position(|value| !value.is_finite()) {
+                return Err(Error::NonFiniteValue {
+                    position: row_start + offset,
+                });
+            }
+            canonical = canonical && cols.windows(2).all(|pair| pair[0] < pair[1]);
+            row_start += vals.len();
         }
-        if csr
-            .rows()
-            .all(|(cols, _)| cols.windows(2).all(|pair| pair[0] < pair[1]))
-        {
+        if canonical {
             return Ok(Self::Borrowed(csr));
         }
         Ok(Self::rewrite(csr))
@@ -78,6 +84,55 @@ impl<'a, T: Real> Canonical<'a, T> {
     }
 }
 
+/// Canonical arrays plus one cursor per row, each advancing only forward. Every
+/// entry is claimed at most once across the whole walk, which is what makes
+/// mirror pairing a merge-join instead of a per-edge search.
+struct Mirrors<'a, T> {
+    row_ptrs: &'a [u32],
+    col_indices: &'a [u32],
+    values: &'a [T],
+    cursors: Vec<u32>,
+}
+
+impl<'a, T: Real> Mirrors<'a, T> {
+    fn new(row_ptrs: &'a [u32], col_indices: &'a [u32], values: &'a [T]) -> Self {
+        let cursors = row_ptrs[..row_ptrs.len() - 1].to_vec();
+        Self {
+            row_ptrs,
+            col_indices,
+            values,
+            cursors,
+        }
+    }
+
+    /// Consume `row`'s entry at `col`, treating stored zeros as absent and
+    /// returning zero when it is missing.
+    fn claim(&mut self, row: usize, col: usize) -> Result<T, Error> {
+        let row_end = self.row_ptrs[row + 1];
+        let mut cursor = self.cursors[row];
+        let mut found = T::zero();
+        while cursor < row_end {
+            let at = self.col_indices[cursor as usize] as usize;
+            if at > col {
+                break;
+            }
+            let value = self.values[cursor as usize];
+            cursor += 1;
+            if at == col {
+                found = value;
+                break;
+            }
+            // Skipped a stored entry whose own mirror above the diagonal is missing.
+            if value != T::zero() {
+                self.cursors[row] = cursor;
+                return Err(Error::Asymmetric { edge: (at, row) });
+            }
+        }
+        self.cursors[row] = cursor;
+        Ok(found)
+    }
+}
+
 fn approximately_equal<T: Real>(left: T, right: T) -> bool {
     if left == right {
         return true;
@@ -111,14 +166,14 @@ fn parse<T: Real, C: EdgeCount>(
     }
     let mut row_sums = diag.clone();
 
-    let mut cursors: Vec<u32> = row_ptrs[..n].to_vec();
+    let mut mirrors = Mirrors::new(row_ptrs, col_indices, values);
     for row in 0..n {
         let row_end = row_ptrs[row + 1];
         // The diagonal is claimed like any mirror: it advances the cursor past
         // everything below it, which by now should be only the zeros that
         // contribute no edge. Its value was already read above.
-        claim_mirror(row, row, row_ptrs, col_indices, values, &mut cursors)?;
-        let mut cursor = cursors[row];
+        mirrors.claim(row, row)?;
+        let mut cursor = mirrors.cursors[row];
 
         while cursor < row_end {
             let col = col_indices[cursor as usize] as usize;
@@ -128,7 +183,7 @@ fn parse<T: Real, C: EdgeCount>(
             if upper == T::zero() {
                 continue;
             }
-            let lower = claim_mirror(col, row, row_ptrs, col_indices, values, &mut cursors)?;
+            let lower = mirrors.claim(col, row)?;
             if !approximately_equal(upper, lower) {
                 return Err(Error::Asymmetric { edge: (row, col) });
             }
@@ -144,40 +199,6 @@ fn parse<T: Real, C: EdgeCount>(
         }
     }
     augment(adj, diag, row_sums)
-}
-
-/// Consume `row`'s entry at `col`, treating stored zeros as absent and
-/// returning zero when it is missing.
-fn claim_mirror<T: Real>(
-    row: usize,
-    col: usize,
-    row_ptrs: &[u32],
-    col_indices: &[u32],
-    values: &[T],
-    cursors: &mut [u32],
-) -> Result<T, Error> {
-    let row_end = row_ptrs[row + 1];
-    let mut cursor = cursors[row];
-    let mut found = T::zero();
-    while cursor < row_end {
-        let at = col_indices[cursor as usize] as usize;
-        if at > col {
-            break;
-        }
-        let value = values[cursor as usize];
-        cursor += 1;
-        if at == col {
-            found = value;
-            break;
-        }
-        // Skipped a stored entry whose own mirror above the diagonal is missing.
-        if value != T::zero() {
-            cursors[row] = cursor;
-            return Err(Error::Asymmetric { edge: (at, row) });
-        }
-    }
-    cursors[row] = cursor;
-    Ok(found)
 }
 
 /// Clamp each row's surplus to non-negative, then close the remaining deficits

@@ -28,7 +28,7 @@ fn build(config: Config, rp: &[u32], ci: &[u32], vals: &[f64]) -> Result<Factor<
 #[test]
 fn out_of_class_input_is_rejected_at_its_reported_position() {
     let max = f64::MAX;
-    let cases: [Rejected<'_>; 9] = [
+    let cases: [Rejected<'_>; 10] = [
         // Used to fall through both the diagonal and the `val < 0` edge branch,
         // silently factorizing diag(5, 4) — a confidently wrong factor.
         (
@@ -65,6 +65,15 @@ fn out_of_class_input_is_rejected_at_its_reported_position() {
             &[0],
             &[f64::NAN],
             Error::NonFiniteValue { position: 0 },
+        ),
+        // Descending columns in row 0, so the position must be the caller's flat
+        // index and must be reported in preference to the non-canonical shape.
+        (
+            "stored NaN in a later row of non-canonical input",
+            &[0, 2, 5, 7],
+            &[1, 0, 2, 1, 0, 2, 1],
+            &[-1.0, 1.0, -1.0, 2.0, f64::NAN, 1.0, -1.0],
+            Error::NonFiniteValue { position: 4 },
         ),
         // A null space bigger than a connected Laplacian's single constant. Three
         // disjoint 2-node paths, so the count guards against a hardcoded 2.
