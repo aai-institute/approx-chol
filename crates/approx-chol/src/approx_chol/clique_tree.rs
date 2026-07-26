@@ -13,10 +13,11 @@ use crate::types::{count_as_scalar, float_total_cmp, Real};
 pub(crate) struct SampledColumn<T: Real> {
     /// Diagonal value of the factor column: `L[v,v]`.
     pub diagonal: T,
-    /// Neighbor indices in the column's non-zero pattern.
-    pub neighbors: Vec<u32>,
-    /// Fractional weight for each neighbor: `L[neighbor, v] / L[v, v]`.
-    pub fractions: Vec<T>,
+    /// Neighbor indices in the column's non-zero pattern, and each one's
+    /// fractional weight `L[neighbor, v] / L[v, v]`. Private and only appended
+    /// through [`Self::push_neighbor`], so the two can never disagree.
+    neighbors: Vec<u32>,
+    fractions: Vec<T>,
     /// Fill edges `(u, w, weight)` to insert into the graph after elimination.
     fill_edges: Vec<(u32, u32, T)>,
 }
@@ -36,6 +37,20 @@ impl<T: Real> SampledColumn<T> {
         self.neighbors.clear();
         self.fractions.clear();
         self.fill_edges.clear();
+    }
+
+    #[inline]
+    fn push_neighbor(&mut self, neighbor: u32, fraction: T) {
+        self.neighbors.push(neighbor);
+        self.fractions.push(fraction);
+    }
+
+    pub(crate) fn neighbors(&self) -> &[u32] {
+        &self.neighbors
+    }
+
+    pub(crate) fn fractions(&self) -> &[T] {
+        &self.fractions
     }
 
     /// Initialize sampling, or write the fallback column and return `None`.
@@ -61,16 +76,15 @@ impl<T: Real> SampledColumn<T> {
         };
 
         self.diagonal = pivot_diag;
-        self.neighbors
-            .extend(entries.iter().map(|&(neighbor, _)| neighbor));
-        self.fractions.resize(n, fraction);
+        for &(neighbor, _) in entries {
+            self.push_neighbor(neighbor, fraction);
+        }
         None
     }
 
     /// Finalize sampling with the last star neighbor (always fraction 1).
     fn finalize_sampling(&mut self, last: (u32, T), elim: &StarElimination<T>) {
-        self.neighbors.push(last.0);
-        self.fractions.push(T::one());
+        self.push_neighbor(last.0, T::one());
         self.diagonal = elim.diagonal(last.1);
     }
 
@@ -327,8 +341,7 @@ pub(crate) fn clique_tree_sample_column<T: Real, S: WeightedSampler<T>>(
     for (i, &(j, w)) in entries[..n - 1].iter().enumerate() {
         let f = elim.fraction(w);
         let fill_wt = f * (T::one() - f) * elim.capacity();
-        column.neighbors.push(j);
-        column.fractions.push(f);
+        column.push_neighbor(j, f);
         column.sample_fill_edges(j, 1, fill_wt, sampler, entries, i + 1);
         elim.advance(f);
     }
@@ -356,8 +369,7 @@ pub(crate) fn clique_tree_sample_column_multi<T: Real, S: WeightedSampler<T>>(
         remaining = remaining - w;
         let f = elim.fraction(w);
         let fill_wt = w * remaining / (count_as_scalar::<T, _>(count) * total_weight);
-        column.neighbors.push(j);
-        column.fractions.push(f);
+        column.push_neighbor(j, f);
         column.sample_fill_edges(j, count, fill_wt, sampler, entries, i + 1);
         elim.advance(f);
     }

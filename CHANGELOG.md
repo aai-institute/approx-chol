@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now report the original matrix dimension.
 - `CsrRef::row_ptrs`/`col_indices`/`values` return slices with the view's lifetime.
 - The serde representation of `Factor` is incompatible with earlier releases.
+- `solve_in_place` no longer returns `Result`; a work buffer shorter than
+  `Factor::n()` panics and `SolveError::WorkBufferTooSmall` is removed.
+- `OwnedCsr::try_as_ref` is replaced by the infallible `as_csr_ref`, and
+  `TryFrom<&OwnedCsr> for CsrRef` by `From`.
 
 ## [0.3.1] - 2026-07-10
 

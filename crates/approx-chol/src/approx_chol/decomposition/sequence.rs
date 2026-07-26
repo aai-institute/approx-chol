@@ -96,19 +96,75 @@ pub(crate) struct StepHeader<T> {
 }
 
 /// Contiguous memory owner for a sequence of elimination steps.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+///
+/// The two neighbor arrays cross the serde boundary as one array of pairs (see
+/// [`SequenceData`]), so a persisted sequence cannot arrive with them
+/// disagreeing about length; the solve path keeps them split.
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 #[cfg_attr(
     feature = "serde",
-    serde(bound(
-        serialize = "T: serde::Serialize",
-        deserialize = "T: serde::de::DeserializeOwned"
-    ))
+    serde(
+        bound(deserialize = "T: serde::de::DeserializeOwned"),
+        from = "SequenceData<T>"
+    )
 )]
 #[derive(Clone, Debug)]
 pub(crate) struct EliminationSequence<T> {
     pub(crate) steps: Vec<StepHeader<T>>,
     pub(crate) neighbor_indices: Vec<u32>,
     pub(crate) elimination_fractions: Vec<T>,
+}
+
+/// Persisted shape of an [`EliminationSequence`]. Unzipping one pair array into
+/// two columns is infallible, which is what retires the length check.
+#[cfg(feature = "serde")]
+#[derive(serde::Deserialize)]
+#[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
+struct SequenceData<T> {
+    steps: Vec<StepHeader<T>>,
+    /// One `(neighbor, elimination fraction)` per factor nonzero.
+    neighbors: Vec<(u32, T)>,
+}
+
+#[cfg(feature = "serde")]
+impl<T> From<SequenceData<T>> for EliminationSequence<T> {
+    fn from(data: SequenceData<T>) -> Self {
+        let (neighbor_indices, elimination_fractions) = data.neighbors.into_iter().unzip();
+        Self {
+            steps: data.steps,
+            neighbor_indices,
+            elimination_fractions,
+        }
+    }
+}
+
+/// Mirrors [`SequenceData`] field for field. Hand-written rather than a
+/// `serde(into)` shadow so serializing neither clones the sequence nor forces a
+/// `Clone` bound onto [`Factor`](super::Factor)'s serialize impl.
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize> serde::Serialize for EliminationSequence<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut out = serializer.serialize_struct("EliminationSequence", 2)?;
+        out.serialize_field("steps", &self.steps)?;
+        out.serialize_field("neighbors", &PairedNeighbors(self))?;
+        out.end()
+    }
+}
+
+#[cfg(feature = "serde")]
+struct PairedNeighbors<'a, T>(&'a EliminationSequence<T>);
+
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize> serde::Serialize for PairedNeighbors<'_, T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(
+            self.0
+                .neighbor_indices
+                .iter()
+                .zip(&self.0.elimination_fractions),
+        )
+    }
 }
 
 // Read-only accessors (no internal trait bounds).
@@ -143,13 +199,6 @@ impl<T> EliminationSequence<T> {
     /// on the solve path), so a deserialized (untrusted) factor is rejected
     /// before it can index storage out of bounds or silently return garbage.
     pub(crate) fn validate_for_dim(&self, n: usize) -> Result<(), FactorError> {
-        if self.neighbor_indices.len() != self.elimination_fractions.len() {
-            return Err(FactorError::NeighborFractionLengthMismatch {
-                neighbor_len: self.neighbor_indices.len(),
-                fraction_len: self.elimination_fractions.len(),
-            });
-        }
-
         // Threading `start` through the loop makes the ranges contiguous and
         // non-decreasing by construction; only `start <= end <= nnz` is left to check.
         let nnz = self.neighbor_indices.len();
