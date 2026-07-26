@@ -84,7 +84,8 @@ where
                     diagonal: diag,
                     ..
                 } = SlimGraph::<T>::from_sddm(sddm)?;
-                self.build_from_graph(graph, diag)
+                let star = AcStarBuilder::new(graph.n());
+                self.build_from_graph(graph, diag, star, 1)
             }
             Some(k) => {
                 let GraphBuild {
@@ -93,9 +94,10 @@ where
                     ..
                 } = MultiEdgeGraph::<T>::from_sddm(sddm)?;
                 graph.mark_split_edges(k);
-                self.build_from_graph(graph, diag)
+                let star = Ac2StarBuilder::new(graph.n(), k);
+                self.build_from_graph(graph, diag, star, k as usize)
             }
-        }?;
+        };
         factor.original_n = original_n;
         Ok(factor)
     }
@@ -112,48 +114,23 @@ where
         Ok(())
     }
 
-    /// Run factorization on a pre-built graph (fused pipeline path).
-    pub(crate) fn build_from_graph<G: EliminationGraph<T>>(
+    /// Algorithm 8 loop on a pre-built graph.
+    ///
+    /// `star_builder` and `degree_scale` come from the caller's variant match, so
+    /// this cannot pair an AC builder with a split multi-edge graph — a pairing
+    /// nothing checked while both were re-derived here from `Config`.
+    fn build_from_graph<G: EliminationGraph<T>, B: StarBuilderVariant<T>>(
         &self,
         mut graph: G,
         mut diag: Vec<T>,
-    ) -> Result<Factor<T>, Error> {
+        mut star_builder: B,
+        degree_scale: usize,
+    ) -> Factor<T> {
         let n = graph.n();
         let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
         let degree_sum: usize = degrees.iter().sum();
-        let degree_scale = self.config.split_merge.map_or(1, |k| k as usize);
         let mut ordering = DynamicOrdering::new(&degrees, degree_scale);
-        let sampler = CdfSampler::<T>::new(self.config.seed);
-        Ok(match self.config.split_merge {
-            None => Self::factorize_with_variant(
-                &mut graph,
-                &mut diag,
-                &mut ordering,
-                degree_sum,
-                sampler,
-                AcStarBuilder::new(n),
-            ),
-            Some(k) => Self::factorize_with_variant(
-                &mut graph,
-                &mut diag,
-                &mut ordering,
-                degree_sum,
-                sampler,
-                Ac2StarBuilder::new(n, k),
-            ),
-        })
-    }
-
-    /// Algorithm 8 loop parameterized by a clique-tree sampling variant.
-    fn factorize_with_variant<G: EliminationGraph<T>, B: StarBuilderVariant<T>>(
-        graph: &mut G,
-        diag: &mut [T],
-        ordering: &mut DynamicOrdering,
-        degree_sum: usize,
-        mut sampler: CdfSampler<T>,
-        mut star_builder: B,
-    ) -> Factor<T> {
-        let n = graph.n();
+        let mut sampler = CdfSampler::<T>::new(self.config.seed);
         let mut column = SampledColumn::<T>::new();
         let mut seq = EliminationSequence::with_capacity(n, degree_sum);
         let mut deltas = DegreeDeltas::new(n);
@@ -169,7 +146,7 @@ where
                 continue;
             }
 
-            star_builder.build_star(graph, v, ordering);
+            star_builder.build_star(&mut graph, v, &mut ordering);
             if star_builder.is_empty() {
                 seq.record_isolated(v, diag[v]);
                 graph.eliminate_vertex(v);
@@ -190,9 +167,9 @@ where
             // fill/removal/merge event. Batching reorders equal-degree vertices
             // within a bucket, so the exact factor for a fixed seed can differ
             // from a per-edge version (quality unaffected; see CHANGELOG).
-            column.apply_fill_in_delta(graph, diag, &mut deltas);
+            column.apply_fill_in_delta(&mut graph, &mut diag, &mut deltas);
             star_builder.accumulate_removal_delta(&mut deltas);
-            deltas.flush(ordering);
+            deltas.flush(&mut ordering);
         }
 
         Factor {
