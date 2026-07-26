@@ -12,10 +12,6 @@ use approx_chol::low_level::Builder;
 use approx_chol::{Config, CsrRef, SolveError};
 use num_traits::Float;
 
-// ---------------------------------------------------------------------------
-// Gremban augmentation: SDDM vs pure Laplacian
-// ---------------------------------------------------------------------------
-
 /// Build a 4x4 SDDM matrix (positive diagonal row sums — strictly diagonally dominant).
 ///
 /// We use the path Laplacian (0-1-2-3) and add 1.0 to each diagonal entry,
@@ -53,10 +49,6 @@ fn near_zero_surplus_does_not_augment() {
     assert_no_augmentation_at_surplus(5e-11_f64);
 }
 
-// ---------------------------------------------------------------------------
-// Solve quality: grid Laplacian
-// ---------------------------------------------------------------------------
-
 #[test]
 fn solve_into_gives_finite_nontrivial_solution() {
     let lap = grid_laplacian(8, 8);
@@ -84,10 +76,6 @@ fn solve_into_gives_finite_nontrivial_solution() {
         "solution is trivially zero"
     );
 }
-
-// ---------------------------------------------------------------------------
-// solve_in_place skips projection (differs from solve_into)
-// ---------------------------------------------------------------------------
 
 #[test]
 fn solve_in_place_skips_projection() {
