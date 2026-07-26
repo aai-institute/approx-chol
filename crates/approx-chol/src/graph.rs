@@ -374,6 +374,9 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
         let needs_augmentation = max_surplus > floor && max_diag > T::near_zero();
 
         if needs_augmentation {
+            // The ground vertex takes index `m`, so the augmented graph needs one
+            // more `u32` than the input dimension. Checking that here leaves the
+            // cast below infallible.
             if m >= u32::MAX as usize {
                 return Err(Error::InvalidCsr(
                     CsrError::MatrixDimensionExceedsIndexType {
@@ -381,14 +384,9 @@ impl<E: EdgeLike<T>, T: Real> AdjListGraph<E, T> {
                     },
                 ));
             }
-            let aux = u32::try_from(m).map_err(|_| {
-                Error::InvalidCsr(CsrError::MatrixDimensionExceedsIndexType { n: m })
-            })?;
+            let aux = m as u32;
 
-            // Add augmentation vertex adjacency list
             adj.push(Vec::with_capacity(surplus_count));
-
-            // Extend diagonal
             diag.push(surplus_sum);
 
             for (row, &surplus_raw) in row_sums.iter().enumerate() {
