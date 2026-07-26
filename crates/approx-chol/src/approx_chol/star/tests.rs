@@ -20,7 +20,7 @@ fn nbr(to: u32, fill_weight: f64, count: u32) -> Neighbor<f64> {
 /// instead of `clamp(2 - 5) = 0` then `0 + 4 = 4` — flipping the pop order below.
 #[test]
 fn test_merge_floors_immediately_before_batched_fill() {
-    let mut ordering = DynamicOrdering::new(2, [2, 2].into_iter()).expect("valid n");
+    let mut ordering = DynamicOrdering::new(&[2, 2], 1).expect("valid n");
 
     // build_star reports 5 merged duplicate edges to vertex 0; applied at once.
     apply_merged_counts(&[(0, 5)], &mut ordering); // 2 - 5 -> floors to 0

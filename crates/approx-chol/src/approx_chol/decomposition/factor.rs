@@ -21,9 +21,7 @@ mod tests;
 )]
 #[derive(Clone, Debug)]
 pub struct Factor<T = f64> {
-    /// Dimension of the internal factorization (may include Gremban augmentation vertex).
     pub(crate) n: usize,
-    /// Original input matrix dimension (before possible Gremban augmentation).
     pub(crate) original_n: usize,
     pub(crate) sequence: EliminationSequence<T>,
 }
@@ -129,13 +127,7 @@ where
     T: num_traits::Float + Send + Sync + 'static,
 {
     #[inline]
-    fn validate_rhs_and_work(&self, b: &[T], work: &[T]) -> Result<(), SolveError> {
-        if b.len() > self.original_n {
-            return Err(SolveError::RhsLengthExceedsFactor {
-                rhs_len: b.len(),
-                factor_dim: self.original_n,
-            });
-        }
+    fn validate_work(&self, work: &[T]) -> Result<(), SolveError> {
         if work.len() < self.n {
             return Err(SolveError::WorkBufferTooSmall {
                 work_len: work.len(),
@@ -146,14 +138,14 @@ where
     }
 
     #[inline]
-    fn validate_in_place_work(&self, y: &[T]) -> Result<(), SolveError> {
-        if y.len() < self.n {
-            return Err(SolveError::WorkBufferTooSmall {
-                work_len: y.len(),
-                factor_dim: self.n,
+    fn validate_rhs_and_work(&self, b: &[T], work: &[T]) -> Result<(), SolveError> {
+        if b.len() > self.original_n {
+            return Err(SolveError::RhsLengthExceedsFactor {
+                rhs_len: b.len(),
+                factor_dim: self.original_n,
             });
         }
-        Ok(())
+        self.validate_work(work)
     }
 
     /// Dimension of the original input matrix.
@@ -184,32 +176,17 @@ where
 
     fn forward(&self, y: &mut [T]) {
         let seq = &self.sequence;
-        debug_assert!(
-            y.len() >= self.n,
-            "work buffer too small in forward: got {}, need at least {}",
-            y.len(),
-            self.n
-        );
         self.debug_assert_valid_structure();
         for i in 0..seq.n_steps() {
-            let step = seq.step(i);
-            let inv_diag = seq.inv_diagonal[i];
-            step.apply_forward(y, inv_diag);
+            seq.step(i).apply_forward(y);
         }
     }
 
     fn backward(&self, y: &mut [T]) {
         let seq = &self.sequence;
-        debug_assert!(
-            y.len() >= self.n,
-            "work buffer too small in backward: got {}, need at least {}",
-            y.len(),
-            self.n
-        );
         self.debug_assert_valid_structure();
         for i in (0..seq.n_steps()).rev() {
-            let step = seq.step(i);
-            step.apply_backward(y);
+            seq.step(i).apply_backward(y);
         }
     }
 
@@ -307,7 +284,7 @@ where
     ///
     /// Returns [`SolveError::WorkBufferTooSmall`] if `y.len() < self.n()`.
     pub fn solve_in_place(&self, y: &mut [T]) -> Result<(), SolveError> {
-        self.validate_in_place_work(y)?;
+        self.validate_work(y)?;
         self.forward(y);
         self.backward(y);
         Ok(())
