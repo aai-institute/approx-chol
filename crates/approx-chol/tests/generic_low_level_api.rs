@@ -4,8 +4,11 @@ mod panic_err;
 mod panic_ok;
 #[path = "common/path.rs"]
 mod path;
+#[path = "common/path_solve.rs"]
+mod path_solve;
 use panic_err::ErrOrPanic;
 use panic_ok::OrPanic;
+use path_solve::assert_solves_path_rhs;
 
 use approx_chol::low_level::Builder;
 use approx_chol::{factorize, Config, ConfigError, CsrError, CsrRef, Error};
@@ -44,21 +47,7 @@ where
 
     let factor = factorize(csr).or_panic("factorization should succeed");
     assert_eq!(factor.n_steps(), factor.n().saturating_sub(1));
-
-    let b = [
-        T::from_f64(1.0).or_panic("conv"),
-        T::from_f64(-1.0).or_panic("conv"),
-        T::from_f64(1.0).or_panic("conv"),
-        T::from_f64(-1.0).or_panic("conv"),
-    ];
-    let mut work = vec![T::zero(); factor.n()];
-    factor
-        .solve_into(&b, &mut work)
-        .or_panic("solve_into should succeed");
-
-    assert!(work.iter().all(|x| x.is_finite()));
-    let min_signal = T::from_f64(1e-6).or_panic("conv");
-    assert!(work.iter().any(|x| x.abs() > min_signal));
+    assert_solves_path_rhs(&factor);
 }
 
 fn run_case_ac2<I, T>()
@@ -76,18 +65,7 @@ where
     let factor = builder
         .build(csr)
         .or_panic("AC2 generic factorization should succeed");
-
-    let b = [
-        T::from_f64(1.0).or_panic("conv"),
-        T::from_f64(-1.0).or_panic("conv"),
-        T::from_f64(1.0).or_panic("conv"),
-        T::from_f64(-1.0).or_panic("conv"),
-    ];
-    let mut work = vec![T::zero(); factor.n()];
-    factor
-        .solve_into(&b, &mut work)
-        .or_panic("solve_into should succeed");
-    assert!(work.iter().all(|x| x.is_finite()));
+    assert_solves_path_rhs(&factor);
 }
 
 #[test]
