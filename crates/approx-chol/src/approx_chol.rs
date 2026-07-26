@@ -26,7 +26,6 @@ pub use decomposition::{Factor, SolveError};
 ///     seed: 42,
 ///     ..Default::default()
 /// };
-/// assert!(config.split_merge.is_some());
 /// ```
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, Default)]

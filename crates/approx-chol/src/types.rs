@@ -4,8 +4,14 @@ use num_traits::{Float, NumCast};
 
 /// Internal scalar trait supported by approximate Cholesky kernels.
 pub(crate) trait Real: Float + Send + Sync + 'static {
+    /// Pick a threshold by the type's precision: `single` for `f32`-width
+    /// scalars, `double` otherwise.
+    fn by_precision(single: f64, double: f64) -> Self;
+
     /// Near-zero threshold for numeric guards.
-    fn near_zero() -> Self;
+    fn near_zero() -> Self {
+        Self::by_precision(1e-6, 1e-14)
+    }
 }
 
 impl<T> Real for T
@@ -13,12 +19,13 @@ where
     T: Float + Send + Sync + 'static,
 {
     #[inline]
-    fn near_zero() -> Self {
-        if core::mem::size_of::<T>() <= 4 {
-            <T as NumCast>::from(1e-6_f64).unwrap_or_else(T::epsilon)
+    fn by_precision(single: f64, double: f64) -> Self {
+        let value = if core::mem::size_of::<T>() <= 4 {
+            single
         } else {
-            <T as NumCast>::from(1e-14_f64).unwrap_or_else(T::epsilon)
-        }
+            double
+        };
+        <T as NumCast>::from(value).unwrap_or_else(T::epsilon)
     }
 }
 

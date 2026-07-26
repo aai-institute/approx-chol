@@ -29,6 +29,11 @@
 //! # }
 //! ```
 //!
+//! # Input contract
+//!
+//! Duplicate entries for one coordinate are summed, as scipy's `sum_duplicates`
+//! does, so the sign and symmetry checks judge the coalesced entry.
+//!
 //! # Algorithm variants
 //!
 //! ## AC — standard approximate Cholesky
@@ -104,12 +109,8 @@ pub(crate) use types::Real;
 ///
 /// # Errors
 ///
-/// Returns [`Error::InvalidCsr`] if conversion or validation fails, if index
-/// conversion to `u32` fails, or if input conversion panics.
-/// Returns [`Error::PositiveOffDiagonal`] if any off-diagonal entry is strictly
-/// positive (outside the SDDM/Laplacian class).
-/// Returns [`Error::Disconnected`] if the input stays disconnected after Gremban
-/// grounding (more than one connected component).
+/// One [`Error`] variant per way the input can fall outside the SDDM/Laplacian
+/// class or fail CSR conversion; each variant documents its own condition.
 ///
 /// # Examples
 ///
@@ -137,9 +138,6 @@ where
 
 /// Factorize an SDDM matrix with custom configuration.
 ///
-/// Uses [`Config`] to control the random seed and AC2 split multiplicity
-/// parameters. Always uses DynamicPQ ordering.
-///
 /// # Errors
 ///
 /// As [`factorize`], plus [`Error::InvalidConfig`] if the configuration is
@@ -149,17 +147,11 @@ where
 ///
 /// ```
 /// use approx_chol::{factorize_with, Config, CsrRef};
-///
-/// let row_ptrs    = [0u32, 2, 5, 8, 10];
-/// let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
-/// let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
-///
+/// # let row_ptrs    = [0u32, 2, 5, 8, 10];
+/// # let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
+/// # let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
 /// let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
-/// let factor = factorize_with(csr, Config {
-///     seed: 42,
-///     split_merge: Some(2),
-///     ..Default::default()
-/// })?;
+/// let factor = factorize_with(csr, Config { seed: 42, split_merge: Some(2) })?;
 /// assert_eq!(factor.n(), 4);
 /// # Ok::<(), approx_chol::Error>(())
 /// ```

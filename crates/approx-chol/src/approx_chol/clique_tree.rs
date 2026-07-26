@@ -1,4 +1,4 @@
-use crate::graph::EliminationGraph;
+use crate::graph::{AdjListGraph, EdgeCount};
 use crate::ordering::DegreeDeltas;
 use crate::sampling::CdfSampler;
 use crate::types::{count_as_scalar, float_total_cmp, Real};
@@ -86,9 +86,9 @@ impl<T: Real> SampledColumn<T> {
     /// Apply fill-in edges to the graph and update diagonal values, recording
     /// each endpoint's +1 degree change in `deltas` (the caller flushes one
     /// priority-queue move per affected neighbor, rather than one per fill edge).
-    pub(crate) fn apply_fill_in_delta<G: EliminationGraph<T>>(
+    pub(crate) fn apply_fill_in_delta<C: EdgeCount>(
         &self,
-        graph: &mut G,
+        graph: &mut AdjListGraph<C, T>,
         diag: &mut [T],
         deltas: &mut DegreeDeltas,
     ) {
@@ -200,10 +200,6 @@ impl<T: Real> MultiStar<T> {
         } else {
             self.push(neighbor, weight, count);
         }
-    }
-
-    pub(super) fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 
     pub(super) fn entries(&self) -> &[(u32, T)] {

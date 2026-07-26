@@ -1,11 +1,19 @@
 use super::*;
 use crate::test_utils::OrPanic;
 
-fn nbr(to: u32, fill_weight: f64, count: u32) -> Neighbor<f64> {
+fn nbr(to: u32, fill_weight: f64, count: u32) -> Neighbor<f64, Multi> {
     Neighbor {
         to,
         fill_weight,
-        count,
+        count: Multi::new(count),
+    }
+}
+
+fn ac_nbr(to: u32, fill_weight: f64) -> Neighbor<f64, Single> {
+    Neighbor {
+        to,
+        fill_weight,
+        count: Single,
     }
 }
 
@@ -45,7 +53,7 @@ fn find(star: &MultiStar<f64>, neighbor: u32) -> Option<(f64, u32)> {
 
 fn dedup_ac2(
     n: usize,
-    raw: &mut [Neighbor<f64>],
+    raw: &mut [Neighbor<f64, Multi>],
     merge_limit: u32,
 ) -> (Ac2DedupWorkspace<f64>, MultiStar<f64>) {
     let mut dedup = Ac2DedupWorkspace::<f64>::new(n);
@@ -103,176 +111,92 @@ fn test_virtual_split_plus_fill_edge() {
 }
 
 // -----------------------------------------------------------------------
-// Equivalence tests: sort path (<= SCATTER_THRESHOLD) vs scatter path (> SCATTER_THRESHOLD)
+// Equivalence: sort path (<= SCATTER_THRESHOLD) vs scatter path (above it)
+//
+// `dedup` dispatches on `raw.len()`, so no single input can reach both paths
+// through it; these call each path directly instead. The paths report merges in
+// different orders (neighbor-sorted vs first-seen), so only the sorted merge
+// lists are compared. Both fixtures use weights whose duplicate sums are exact
+// in binary — the paths accumulate in different orders, which is not the claim.
 // -----------------------------------------------------------------------
 
-/// Build a canonical set of raw 3-tuples with `n` unique vertices plus
-/// one duplicate pair to exercise merge logic. Vertex IDs stay within `[0, n)`.
-fn make_raw_with_duplicate(n: usize) -> Vec<Neighbor<f64>> {
-    assert!(n >= 2, "need at least 2 unique vertices");
-    let mut raw: Vec<Neighbor<f64>> = (0..n as u32).map(|i| nbr(i, (i + 1) as f64, 1)).collect();
-    // Add a duplicate for vertex 0 so merged tracking is exercised.
-    raw.push(nbr(0, 0.5, 1));
-    raw
+fn sorted_merged(merged: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    let mut out = merged.to_vec();
+    out.sort_unstable();
+    out
 }
 
-/// AC dedup: sort path (small neighborhood, <= SCATTER_THRESHOLD entries)
-/// produces the same deduplicated weights as the scatter path (large neighborhood).
-#[test]
-fn test_dedup_ac_sort_and_scatter_paths_agree() {
-    // Small neighborhood: <= SCATTER_THRESHOLD entries (uses sort path)
-    let n_small = SCATTER_THRESHOLD; // exactly at threshold -> sort path
-                                     // Large neighborhood: > SCATTER_THRESHOLD entries (uses scatter path)
-    let n_large = SCATTER_THRESHOLD + 10;
-
-    let n_vertices_small = n_small + 1; // for vertex IDs
-    let n_vertices_large = n_large + 1;
-
-    let mut dedup_small = AcDedupWorkspace::<f64>::new(n_vertices_small);
-    let mut dedup_large = AcDedupWorkspace::<f64>::new(n_vertices_large);
-
-    let mut raw_small = make_raw_with_duplicate(n_small);
-    let mut raw_large = make_raw_with_duplicate(n_large);
-
-    let mut entries_small: Vec<(u32, f64)> = Vec::new();
-    let mut entries_large: Vec<(u32, f64)> = Vec::new();
-
-    dedup_small.dedup(&mut raw_small, &mut entries_small);
-    dedup_large.dedup(&mut raw_large, &mut entries_large);
-
-    // Both paths must have merged vertex 0.
-    assert!(
-        dedup_small
-            .merged_counts()
-            .iter()
-            .any(|&(idx, n)| idx == 0 && n > 0),
-        "sort path: vertex 0 should have merged duplicates"
-    );
-    assert!(
-        dedup_large
-            .merged_counts()
-            .iter()
-            .any(|&(idx, n)| idx == 0 && n > 0),
-        "scatter path: vertex 0 should have merged duplicates"
-    );
-
-    // Both must produce sorted-by-weight output (AC invariant).
-    let is_sorted_by_weight = |v: &[(u32, f64)]| {
-        v.windows(2)
-            .all(|w| w[0].1 < w[1].1 || (w[0].1 == w[1].1 && w[0].0 <= w[1].0))
-    };
-    assert!(
-        is_sorted_by_weight(&entries_small),
-        "sort-path AC output must be sorted by weight: {:?}",
-        entries_small
-    );
-    assert!(
-        is_sorted_by_weight(&entries_large),
-        "scatter-path AC output must be sorted by weight: {:?}",
-        entries_large
-    );
-
-    // For small path: vertex 0 had weight 1.0 + 0.5 = 1.5 after merge.
-    let entry0_small = entries_small
-        .iter()
-        .find(|e| e.0 == 0)
-        .or_panic("missing merged entry for vertex 0 in sort path");
-    assert!(
-        (entry0_small.1 - 1.5).abs() < 1e-12,
-        "sort path: merged weight for vertex 0 should be 1.5, got {}",
-        entry0_small.1
-    );
-
-    // For large path: same merge rule applies.
-    let entry0_large = entries_large
-        .iter()
-        .find(|e| e.0 == 0)
-        .or_panic("missing merged entry for vertex 0 in scatter path");
-    assert!(
-        (entry0_large.1 - 1.5).abs() < 1e-12,
-        "scatter path: merged weight for vertex 0 should be 1.5, got {}",
-        entry0_large.1
-    );
-
-    // Each path must have (n - 1) unique entries (n unique raw, one duplicate merged).
-    assert_eq!(entries_small.len(), n_small);
-    assert_eq!(entries_large.len(), n_large);
+/// Raw neighborhood with two duplicated vertices and one singleton.
+fn ac_raw() -> [Neighbor<f64, Single>; 5] {
+    [
+        ac_nbr(2, 3.0),
+        ac_nbr(0, 1.0),
+        ac_nbr(2, 0.5),
+        ac_nbr(1, 4.0),
+        ac_nbr(0, 0.25),
+    ]
 }
 
-/// AC2 dedup: sort path and scatter path produce identical results.
-///
-/// Constructs raw inputs that straddle the SCATTER_THRESHOLD and verifies
-/// that both paths:
-/// 1. Sum weights correctly for duplicate vertices.
-/// 2. Accumulate counts correctly.
-/// 3. Apply the merge limit consistently.
-/// 4. Sort by average weight (total_weight / count) ascending.
 #[test]
-fn test_dedup_ac2_sort_and_scatter_paths_agree() {
-    // Sort path: n_small raw entries (uses sort-based dedup).
-    let n_small = SCATTER_THRESHOLD; // exactly at threshold -> sort path
-                                     // Scatter path: n_large raw entries (uses scatter-gather dedup).
-    let n_large = SCATTER_THRESHOLD + 10;
+fn dedup_ac_paths_agree() {
+    let mut by_sort = AcDedupWorkspace::<f64>::new(3);
+    let mut sorted_entries = Vec::new();
+    by_sort.dedup_sort_small(&mut ac_raw(), &mut sorted_entries);
 
-    // Helper: build a canonical raw input with a specific number of entries.
-    // Uses n-1 unique vertices (IDs 0..n-2) + one duplicate of vertex 0.
-    let make_ac2_raw = |n: usize| -> (Vec<Neighbor<f64>>, usize) {
-        let n_unique = n - 1; // one slot used by the duplicate
-        let mut raw: Vec<Neighbor<f64>> = (0..n_unique as u32)
-            .map(|i| nbr(i, (i + 1) as f64, 2))
-            .collect();
-        // Duplicate vertex 0 with a different weight and count.
-        raw.push(nbr(0, 0.5, 1));
-        assert_eq!(raw.len(), n);
-        (raw, n_unique)
+    let mut by_scatter = AcDedupWorkspace::<f64>::new(3);
+    let mut scattered_entries = Vec::new();
+    by_scatter.dedup_scatter(&ac_raw(), &mut scattered_entries);
+
+    // Weights summed per vertex, ascending by weight then vertex index.
+    assert_eq!(sorted_entries, vec![(0, 1.25), (2, 3.5), (1, 4.0)]);
+    assert_eq!(scattered_entries, sorted_entries);
+
+    assert_eq!(sorted_merged(by_sort.merged_counts()), vec![(0, 1), (2, 1)]);
+    assert_eq!(
+        sorted_merged(by_scatter.merged_counts()),
+        sorted_merged(by_sort.merged_counts())
+    );
+}
+
+#[test]
+fn dedup_ac2_paths_agree() {
+    const LIMIT: u32 = 4;
+    let raw = || {
+        [
+            nbr(2, 3.0, 2),
+            nbr(0, 1.0, 1),
+            nbr(2, 0.5, 3),
+            nbr(1, 4.0, 2),
+            nbr(0, 0.25, 1),
+        ]
     };
 
-    let (mut raw_small, n_unique_small) = make_ac2_raw(n_small);
-    let (mut raw_large, n_unique_large) = make_ac2_raw(n_large);
+    let mut by_sort = Ac2DedupWorkspace::<f64>::new(3);
+    let mut star_sort = MultiStar::new();
+    by_sort.dedup_sort(&mut raw(), &mut star_sort);
+    star_sort.apply_merge_limit(LIMIT, &mut by_sort.merged_counts);
+    star_sort.sort_by_avg_weight();
 
-    let n_vertices_small = n_unique_small + 1;
-    let n_vertices_large = n_unique_large + 1;
+    let mut by_scatter = Ac2DedupWorkspace::<f64>::new(3);
+    let mut star_scatter = MultiStar::new();
+    by_scatter.dedup_scatter(&raw(), &mut star_scatter);
+    star_scatter.apply_merge_limit(LIMIT, &mut by_scatter.merged_counts);
+    star_scatter.sort_by_avg_weight();
 
-    let merge_limit = 4u32;
-    let (dedup_small, star_small) = dedup_ac2(n_vertices_small, &mut raw_small, merge_limit);
-    let (dedup_large, star_large) = dedup_ac2(n_vertices_large, &mut raw_large, merge_limit);
-
-    // Both paths: vertex 0 was duplicated, so its merged weight = 1.0 + 0.5 = 1.5
-    // and its merged count = 2 + 1 = 3 (within merge_limit=4, no cap).
-    let (w0_small, c0_small) =
-        find(&star_small, 0).or_panic("missing merged AC2 entry for vertex 0 in sort path");
-    let (w0_large, c0_large) =
-        find(&star_large, 0).or_panic("missing merged AC2 entry for vertex 0 in scatter path");
-
-    assert!(
-        (w0_small - 1.5).abs() < 1e-12,
-        "sort path: merged weight for vertex 0 should be 1.5, got {w0_small}"
+    // Weights and counts summed per vertex, vertex 2 capped from 5 to LIMIT,
+    // ascending by weight/count: 1.25/2 < 3.5/4 < 4.0/2.
+    assert_eq!(
+        star_sort.iter().collect::<Vec<_>>(),
+        vec![(0, 1.25, 2), (2, 3.5, 4), (1, 4.0, 2)]
     );
     assert_eq!(
-        c0_small, 3,
-        "sort path: merged count for vertex 0 should be 3"
+        star_scatter.iter().collect::<Vec<_>>(),
+        star_sort.iter().collect::<Vec<_>>()
     );
 
-    assert!(
-        (w0_large - 1.5).abs() < 1e-12,
-        "scatter path: merged weight for vertex 0 should be 1.5, got {w0_large}"
-    );
+    assert_eq!(sorted_merged(&by_sort.merged_counts), vec![(2, 1)]);
     assert_eq!(
-        c0_large, 3,
-        "scatter path: merged count for vertex 0 should be 3"
+        sorted_merged(&by_scatter.merged_counts),
+        sorted_merged(&by_sort.merged_counts)
     );
-
-    // No merge-limit cap should have fired (count 3 <= limit 4).
-    assert!(
-        dedup_small.merged_counts().is_empty(),
-        "sort path: no entries should be capped at merge_limit=4"
-    );
-    assert!(
-        dedup_large.merged_counts().is_empty(),
-        "scatter path: no entries should be capped at merge_limit=4"
-    );
-
-    // Entry counts: n_unique deduplicated entries in each case.
-    assert_eq!(star_small.entries().len(), n_unique_small);
-    assert_eq!(star_large.entries().len(), n_unique_large);
 }

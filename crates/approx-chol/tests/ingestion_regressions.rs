@@ -1,230 +1,289 @@
+#[path = "common/grid.rs"]
+mod grid;
 #[path = "common/panic_ok.rs"]
 mod panic_ok;
 use panic_ok::OrPanic;
 
 use approx_chol::low_level::Builder;
-use approx_chol::{Config, CsrRef, Error};
+use approx_chol::{Config, CsrRef, Error, Factor};
 
-fn solve_with_default_ac(
-    row_ptrs: &[u32],
-    col_indices: &[u32],
-    values: &[f64],
-    n: u32,
-    rhs: &[f64],
-) -> Vec<f64> {
-    let csr = CsrRef::new(row_ptrs, col_indices, values, n).or_panic("valid CSR");
-    let factor = Builder::<f64>::new(Config {
-        seed: 7,
-        ..Config::default()
-    })
-    .build(csr)
-    .or_panic("factorization");
-    let mut work = vec![0.0; factor.n()];
-    work[..rhs.len()].copy_from_slice(rhs);
-    factor.solve_in_place(&mut work);
-    work
+/// `(label, row_ptrs, col_indices, values)`, and the error the shape must be
+/// rejected with.
+type Rejected<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64], Error);
+/// A shape that must be accepted.
+type Accepted<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64]);
+/// A shape with a right-hand side and the solution it must produce.
+type Solved<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64], [f64; 2], [f64; 2]);
+
+/// `n` follows from `rp`, so no case can disagree with its own row count.
+fn build(config: Config, rp: &[u32], ci: &[u32], vals: &[f64]) -> Result<Factor<f64>, Error> {
+    let n = (rp.len() - 1) as u32;
+    let csr = CsrRef::new(rp, ci, vals, n).or_panic("structurally valid CSR");
+    Builder::<f64>::new(config).build(csr)
 }
 
+/// Each shape is the smallest matrix reaching one rejection, and the expected
+/// error is compared whole: a shape cannot pass by being rejected elsewhere, and
+/// the reported coordinate or row cannot drift.
 #[test]
-fn duplicate_diagonal_entries_do_not_change_solve_behavior() {
-    // Two mathematically equivalent 2x2 SDDM matrices:
-    // - `dup_*`: diagonal split into duplicate entries in each row
-    // - `coal_*`: diagonal already coalesced
-    //
-    // A = [ 5  -1 ]
-    //     [ -1  4 ]
-    let dup_rp = vec![0u32, 3, 6];
-    let dup_ci = vec![0u32, 0, 1, 0, 1, 1];
-    let dup_vals = vec![2.0f64, 3.0, -1.0, -1.0, 1.5, 2.5];
+fn out_of_class_input_is_rejected_at_its_reported_position() {
+    let max = f64::MAX;
+    let cases: [Rejected<'_>; 11] = [
+        // Used to fall through both the diagonal and the `val < 0` edge branch,
+        // silently factorizing diag(5, 4) — a confidently wrong factor.
+        (
+            "positive off-diagonal",
+            &[0, 2, 4],
+            &[0, 1, 0, 1],
+            &[5.0, 1.0, 1.0, 4.0],
+            Error::PositiveOffDiagonal { edge: (0, 1) },
+        ),
+        (
+            "missing transpose",
+            &[0, 2, 3],
+            &[0, 1, 1],
+            &[1.0, -1.0, 1.0],
+            Error::Asymmetric { edge: (0, 1) },
+        ),
+        (
+            "unequal transpose",
+            &[0, 2, 4],
+            &[0, 1, 0, 1],
+            &[1.0, -1.0, -2.0, 2.0],
+            Error::Asymmetric { edge: (0, 1) },
+        ),
+        (
+            "connected but not dominant",
+            &[0, 2, 4],
+            &[0, 1, 0, 1],
+            &[1.0, -3.0, -3.0, 1.0],
+            Error::NotDiagonallyDominant { row: 0 },
+        ),
+        (
+            "stored NaN",
+            &[0, 1],
+            &[0],
+            &[f64::NAN],
+            Error::NonFiniteValue { position: 0 },
+        ),
+        // Descending columns in row 0, so the position must be the caller's flat
+        // index and must be reported in preference to the non-canonical shape.
+        (
+            "stored NaN in a later row of non-canonical input",
+            &[0, 2, 5, 7],
+            &[1, 0, 2, 1, 0, 2, 1],
+            &[-1.0, 1.0, -1.0, 2.0, f64::NAN, 1.0, -1.0],
+            Error::NonFiniteValue { position: 4 },
+        ),
+        // Below the resolvable pivot scale the elimination clamps each pivot, so
+        // augmenting would return the right-hand side unchanged. Clamping the
+        // surplus instead leaves the ground vertex isolated, which is what makes
+        // this reachable as a rejection at all.
+        (
+            "surplus below the resolvable pivot scale",
+            &[0, 1, 2],
+            &[0, 1],
+            &[1e-15, 1e-15],
+            Error::Disconnected { components: 2 },
+        ),
+        // A null space bigger than a connected Laplacian's single constant. Three
+        // disjoint 2-node paths, so the count guards against a hardcoded 2.
+        (
+            "three components",
+            &[0, 2, 4, 6, 8, 10, 12],
+            &[0, 1, 0, 1, 2, 3, 2, 3, 4, 5, 4, 5],
+            &[
+                1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0,
+            ],
+            Error::Disconnected { components: 3 },
+        ),
+        // The three row-sum overflows below store only finite, symmetric,
+        // non-positive values; one per ingestion path.
+        (
+            "overflow via coalesced duplicates",
+            &[0, 3, 6],
+            &[0, 1, 1, 0, 0, 1],
+            &[max, -max, -max, -max, -max, max],
+            Error::NonFiniteRow { row: 0 },
+        ),
+        (
+            "overflow on the canonical path",
+            &[0, 3, 5, 7],
+            &[0, 1, 2, 0, 1, 0, 2],
+            &[0.0, -max, -max, -max, max, -max, max],
+            Error::NonFiniteRow { row: 0 },
+        ),
+        (
+            "overflow via duplicate diagonal",
+            &[0, 2],
+            &[0, 0],
+            &[max, max],
+            Error::NonFiniteRow { row: 0 },
+        ),
+    ];
 
-    let coal_rp = vec![0u32, 2, 4];
-    let coal_ci = vec![0u32, 1, 0, 1];
-    let coal_vals = vec![5.0f64, -1.0, -1.0, 4.0];
-
-    let rhs = vec![1.0f64, -1.0];
-
-    let x_dup = solve_with_default_ac(&dup_rp, &dup_ci, &dup_vals, 2, &rhs);
-    let x_coal = solve_with_default_ac(&coal_rp, &coal_ci, &coal_vals, 2, &rhs);
-
-    assert_eq!(
-        x_dup.len(),
-        x_coal.len(),
-        "equivalent inputs must produce factors with equal dimension"
-    );
-    for (i, (&a, &b)) in x_dup.iter().zip(x_coal.iter()).enumerate() {
-        assert!(
-            (a - b).abs() < 1e-10,
-            "equivalent matrices should solve identically; mismatch at {i}: {a} vs {b}"
-        );
+    for (label, rp, ci, vals, expected) in cases {
+        let observed = build(Config::default(), rp, ci, vals).expect_err(label);
+        assert_eq!(observed, expected, "{label}");
     }
 }
 
+/// Shapes that look out of class to a stricter check but are valid SDDM, on both
+/// the AC and AC2 paths.
 #[test]
-fn positive_off_diagonal_is_rejected_not_silently_dropped() {
-    // A = [ 5  1 ]   the +1 off-diagonals are outside the SDDM/Laplacian class.
-    //     [ 1  4 ]   Ingestion used to fall through both the diagonal and the
-    // `val < 0` edge branch, silently dropping them and factorizing diag(5, 4)
-    // — a confidently wrong factor. It now rejects the input instead.
-    let rp = [0u32, 2, 4];
-    let ci = [0u32, 1, 0, 1];
-    let vals = [5.0f64, 1.0, 1.0, 4.0];
+fn in_class_input_is_accepted_on_both_paths() {
+    let next_after_one = f64::from_bits(1.0f64.to_bits() + 1);
+    let cases: [Accepted<'_>; 3] = [
+        (
+            "one-ulp transpose difference",
+            &[0, 2, 4],
+            &[0, 1, 0, 1],
+            &[2.0, -1.0, -next_after_one, 2.0],
+        ),
+        (
+            "transposes equal only after coalescing",
+            &[0, 3, 6],
+            &[0, 1, 1, 0, 0, 1],
+            &[2.0, -0.25, -0.75, -0.5, -0.5, 2.0],
+        ),
+        // Two PD SDDM blocks: the off-diagonal graph has two components, but every
+        // row has surplus, so the ground vertex links them into one. A
+        // pre-augmentation component count would reject it.
+        (
+            "block-diagonal SDDM sharing a ground vertex",
+            &[0, 2, 4, 6, 8],
+            &[0, 1, 0, 1, 2, 3, 2, 3],
+            &[5.0, -1.0, -1.0, 4.0, 5.0, -1.0, -1.0, 4.0],
+        ),
+    ];
 
-    // The AC (None) and AC2 (Some) paths share this ingestion; both must reject.
-    for split_merge in [None, Some(2)] {
-        let csr = CsrRef::new(&rp, &ci, &vals, 2).or_panic("valid CSR");
-        let err = Builder::<f64>::new(Config {
-            split_merge,
-            ..Config::default()
-        })
-        .build(csr)
-        .expect_err("positive off-diagonal must be rejected");
-        assert!(
-            matches!(err, Error::PositiveOffDiagonal { edge } if edge == (0, 1)),
-            "expected PositiveOffDiagonal at (0, 1), got {err:?}"
-        );
-    }
-}
-
-/// CSR for `k` disjoint 2-node path Laplacians, stacked block-diagonally — a
-/// graph with `k` connected components. For `k = 2`:
-///   [ 1 -1  .  . ]
-///   [-1  1  .  . ]
-///   [ .  .  1 -1 ]
-///   [ .  . -1  1 ]
-fn block_diagonal_paths(k: u32) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
-    let (mut rp, mut ci, mut vals) = (vec![0u32], Vec::new(), Vec::new());
-    for b in 0..k {
-        let (a, z) = (2 * b, 2 * b + 1);
-        // both rows span columns [a, z]: +1 on the diagonal, -1 off it
-        for row_vals in [[1.0, -1.0], [-1.0, 1.0]] {
-            ci.extend([a, z]);
-            vals.extend(row_vals);
-            rp.push(ci.len() as u32);
-        }
-    }
-    (rp, ci, vals)
-}
-
-#[test]
-fn disconnected_laplacian_is_rejected() {
-    // Two components => a null space bigger than a connected Laplacian's single
-    // constant, so it must be rejected, not mis-solved. AC and AC2 both.
-    let (rp, ci, vals) = block_diagonal_paths(2);
-
-    for split_merge in [None, Some(2)] {
-        let csr = CsrRef::new(&rp, &ci, &vals, 4).or_panic("valid CSR");
-        let err = Builder::<f64>::new(Config {
-            split_merge,
-            ..Config::default()
-        })
-        .build(csr)
-        .expect_err("disconnected input must be rejected");
-        assert!(
-            matches!(err, Error::Disconnected { components: 2 }),
-            "expected Disconnected {{ components: 2 }}, got {err:?}"
-        );
-    }
-}
-
-#[test]
-fn disconnected_component_count_is_reported() {
-    // Three components: the reported count must track k (guards against a
-    // hardcoded 2 or an off-by-one), not merely "> 1".
-    let (rp, ci, vals) = block_diagonal_paths(3);
-
-    let csr = CsrRef::new(&rp, &ci, &vals, 6).or_panic("valid CSR");
-    let err = Builder::<f64>::new(Config::default())
-        .build(csr)
-        .expect_err("disconnected input must be rejected");
-    assert!(
-        matches!(err, Error::Disconnected { components: 3 }),
-        "expected Disconnected {{ components: 3 }}, got {err:?}"
-    );
-}
-
-#[test]
-fn connected_single_component_input_is_not_falsely_rejected() {
-    // The guard must fire only on genuine disconnection: a connected pure
-    // Laplacian and a connected SDDM are single-component and must factorize.
-    let lap = ([0u32, 2, 4], [0u32, 1, 0, 1], [1.0f64, -1.0, -1.0, 1.0]);
-    let sddm = ([0u32, 2, 4], [0u32, 1, 0, 1], [5.0f64, -1.0, -1.0, 4.0]);
-
-    for (rp, ci, vals) in [lap, sddm] {
+    for (label, rp, ci, vals) in cases {
         for split_merge in [None, Some(2)] {
-            let csr = CsrRef::new(&rp, &ci, &vals, 2).or_panic("valid CSR");
-            Builder::<f64>::new(Config {
+            let config = Config {
                 split_merge,
                 ..Config::default()
-            })
-            .build(csr)
-            .expect("connected single-component input must factorize");
+            };
+            build(config, rp, ci, vals)
+                .unwrap_or_else(|err| panic!("{label} at split_merge {split_merge:?}: {err}"));
+        }
+    }
+}
+
+/// Both ends of the per-row surplus floor: 1e12-scale dominance must survive the
+/// relative tolerance, and a 5e-11 surplus (below the old absolute 1e-10 floor,
+/// above `near_zero`) must still count as dominance rather than a disconnected
+/// Laplacian. The accuracy bound is relative for the same reason the floor is.
+#[test]
+fn genuine_surplus_at_either_scale_is_augmented_and_solves() {
+    let cases: [Solved<'_>; 2] = [
+        (
+            "1e12 scale",
+            &[0, 2, 4],
+            &[0, 1, 0, 1],
+            &[1e12 + 100.0, -1e12, -1e12, 1e12 + 100.0],
+            [1.0, 1.0],
+            [0.01, 0.01],
+        ),
+        // diag(5e-11) x = b  =>  x = b / 5e-11 (exact to rounding)
+        (
+            "5e-11 scale",
+            &[0, 1, 2],
+            &[0, 1],
+            &[5e-11, 5e-11],
+            [1.0, 2.0],
+            [1.0 / 5e-11, 2.0 / 5e-11],
+        ),
+    ];
+
+    for (label, rp, ci, vals, rhs, expected) in cases {
+        let solution = build(Config::default(), rp, ci, vals)
+            .or_panic(label)
+            .solve(&rhs)
+            .or_panic("solve");
+        for (got, want) in solution.iter().zip(expected) {
+            assert!(
+                (got - want).abs() <= 1e-6 * want.abs(),
+                "{label}: {solution:?} vs {expected:?}"
+            );
         }
     }
 }
 
 #[test]
-fn tiny_scale_sddm_is_augmented_and_solves() {
-    // Surplus below the old absolute floor (1e-10) but above near_zero (1e-14) is
-    // genuine dominance: augment and solve, don't misreport a disconnected Laplacian.
-    let rp = [0u32, 1, 2];
-    let ci = [0u32, 1];
-    let vals = [5e-11_f64, 5e-11];
-    let factor = Builder::<f64>::new(Config::default())
-        .build(CsrRef::new(&rp, &ci, &vals, 2).or_panic("valid CSR"))
-        .expect("tiny-scale PD SDDM must be augmented and accepted");
-    // diag(5e-11) x = b  =>  x = b / 5e-11 (exact to rounding)
-    let x = factor.solve(&[1.0, 2.0]).or_panic("solve");
-    assert!((x[0] - 1.0 / 5e-11).abs() <= 1e-6 / 5e-11, "x[0]={}", x[0]);
-    assert!((x[1] - 2.0 / 5e-11).abs() <= 1e-6 / 5e-11, "x[1]={}", x[1]);
-}
+fn empty_and_singleton_systems_have_defined_solves() {
+    let empty = build(Config::default(), &[0], &[], &[]).or_panic("empty factor");
+    assert_eq!(empty.solve(&[]).or_panic("empty solve"), Vec::<f64>::new());
+    assert_eq!(empty.n_steps(), 0);
 
-#[test]
-fn sub_near_zero_scale_is_rejected_not_silently_mis_solved() {
-    // Below near_zero the pivots would be clamped, so augmenting would mis-solve;
-    // such input must error rather than return a bogus solution.
-    let rp = [0u32, 1, 2];
-    let ci = [0u32, 1];
-    let vals = [1e-15_f64, 1e-15];
-    let result = Builder::<f64>::new(Config::default())
-        .build(CsrRef::new(&rp, &ci, &vals, 2).or_panic("valid CSR"));
-    assert!(
-        result.is_err(),
-        "sub-near_zero input must error rather than silently mis-solve, got {result:?}"
+    let zero = build(Config::default(), &[0, 1], &[0], &[0.0]).or_panic("zero singleton");
+    assert_eq!(
+        zero.solve(&[7.0]).or_panic("zero singleton solve"),
+        vec![0.0]
     );
+
+    let positive = build(Config::default(), &[0, 1], &[0], &[2.0]).or_panic("positive singleton");
+    let solution = positive.solve(&[7.0]).or_panic("positive singleton solve");
+    assert!((solution[0] - 3.5).abs() < 1e-14);
 }
 
+// CSR column indices are not required to be sorted, and duplicates coalesce, so
+// bucketed ingestion must not depend on the order entries arrive in.
 #[test]
-fn connected_non_dominant_input_is_not_reported_disconnected() {
-    // Non-dominant input (negative row sums) leaves the ground vertex isolated;
-    // that artifact must not be miscounted as a component. The graph is connected,
-    // so it must not be reported as Disconnected (even though it's out of class).
-    let rp = [0u32, 2, 4];
-    let ci = [0u32, 1, 0, 1];
-    let vals = [1.0f64, -3.0, -3.0, 1.0];
-    let csr = CsrRef::new(&rp, &ci, &vals, 2).or_panic("valid CSR");
-    let result = Builder::<f64>::new(Config::default()).build(csr);
-    assert!(
-        !matches!(result, Err(Error::Disconnected { .. })),
-        "connected input must not be reported as Disconnected, got {result:?}"
+fn unsorted_and_split_entries_match_the_canonical_form() {
+    let canonical = solve_path(
+        &[0, 2, 5, 7],
+        &[0, 1, 0, 1, 2, 1, 2],
+        &[1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0],
     );
-}
-
-#[test]
-fn block_diagonal_sddm_is_accepted_via_shared_ground() {
-    // Two PD SDDM blocks, block-diagonal: the off-diagonal graph has two
-    // components, but every row has surplus so the ground vertex links them into
-    // one. Valid SDDM, must be accepted (a pre-augmentation count would reject it).
-    let rp = [0u32, 2, 4, 6, 8];
-    let ci = [0u32, 1, 0, 1, 2, 3, 2, 3];
-    let vals = [5.0f64, -1.0, -1.0, 4.0, 5.0, -1.0, -1.0, 4.0];
-
-    for split_merge in [None, Some(2)] {
-        let csr = CsrRef::new(&rp, &ci, &vals, 4).or_panic("valid CSR");
-        Builder::<f64>::new(Config {
-            split_merge,
-            ..Config::default()
-        })
-        .build(csr)
-        .expect("block-diagonal SDDM must be accepted via the shared ground vertex");
+    // Row 0 splits both its diagonal and its edge in two, and row 1's entries are
+    // out of order. Splitting the diagonal matters because a coalescing bug there
+    // is invisible to the off-diagonal sign and symmetry checks.
+    let shuffled = solve_path(
+        &[0, 4, 7, 9],
+        &[1, 0, 1, 0, 2, 0, 1, 2, 1],
+        &[-0.5, 0.25, -0.5, 0.75, -1.0, -1.0, 2.0, 1.0, -1.0],
+    );
+    for (a, b) in canonical.iter().zip(&shuffled) {
+        assert!(
+            (a - b).abs() < 1e-12,
+            "canonical {canonical:?} vs shuffled {shuffled:?}"
+        );
     }
+}
+
+// Descending columns per row denote the same matrix but force the bucketed
+// ingestion path, so this pins the canonical fast path as bit-identical rather
+// than merely close.
+#[test]
+fn canonical_and_reordered_ingestion_agree_bit_for_bit() {
+    let grid = grid::grid_laplacian(6, 7);
+    let n = grid.n as usize;
+
+    let mut reversed_columns = Vec::with_capacity(grid.col_indices.len());
+    let mut reversed_values = Vec::with_capacity(grid.values.len());
+    for row in 0..n {
+        let span = grid.row_ptrs[row] as usize..grid.row_ptrs[row + 1] as usize;
+        reversed_columns.extend(grid.col_indices[span.clone()].iter().rev());
+        reversed_values.extend(grid.values[span].iter().rev());
+    }
+
+    let rhs: Vec<f64> = (0..n).map(|i| (i % 5) as f64 - 2.0).collect();
+    let solve = |csr| {
+        Builder::<f64>::new(Config::default())
+            .build(csr)
+            .or_panic("grid factor")
+            .solve(&rhs)
+            .or_panic("solve")
+    };
+
+    let reordered = CsrRef::new(&grid.row_ptrs, &reversed_columns, &reversed_values, grid.n)
+        .or_panic("valid CSR");
+    assert_eq!(solve(grid.as_csr().or_panic("valid CSR")), solve(reordered));
+}
+
+fn solve_path(rp: &[u32], ci: &[u32], vals: &[f64]) -> Vec<f64> {
+    build(Config::default(), rp, ci, vals)
+        .or_panic("path factor")
+        .solve(&[1.0, 0.0, -1.0])
+        .or_panic("solve")
 }

@@ -1,5 +1,5 @@
 use super::decomposition::EliminationSequence;
-use crate::graph::{EliminationGraph, GraphBuild, MultiEdgeGraph, SlimGraph};
+use crate::graph::{AdjListGraph, GraphBuild, MultiEdgeGraph, SlimGraph};
 use crate::ordering::{DegreeDeltas, DynamicOrdering};
 use crate::sampling::CdfSampler;
 use crate::{ConfigError, CsrError, CsrRef, Error, Factor};
@@ -21,11 +21,9 @@ use super::Config;
 /// ```
 /// use approx_chol::{Config, CsrRef};
 /// use approx_chol::low_level::Builder;
-///
-/// let row_ptrs    = [0u32, 2, 5, 8, 10];
-/// let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
-/// let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
-///
+/// # let row_ptrs    = [0u32, 2, 5, 8, 10];
+/// # let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
+/// # let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
 /// let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
 /// let factor = Builder::new(Config::default()).build(csr)?;
 /// assert_eq!(factor.n(), 4);
@@ -53,8 +51,8 @@ where
     /// Run approximate Cholesky factorization from any input fallibly convertible into
     /// [`CsrRef`].
     ///
-    /// Performs a checked conversion of row pointers and column indices to
-    /// owned `u32` storage.
+    /// Performs a checked conversion of row pointers and column indices to owned
+    /// `u32` storage; the values stay borrowed.
     ///
     /// # Errors
     ///
@@ -75,17 +73,18 @@ where
     /// Assumes `sddm` already passed [`CsrRef::new`] validation (as
     /// [`build`](Self::build) guarantees); does not re-validate.
     fn build_validated(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
-        let original_n = sddm.n();
         Self::validate_config(self.config)?;
-        let mut factor = match self.config.split_merge {
+        let original_n = sddm.n();
+        let (n, sequence) = match self.config.split_merge {
             None => {
                 let GraphBuild {
                     graph,
                     diagonal: diag,
                     ..
                 } = SlimGraph::<T>::from_sddm(sddm)?;
-                let star = AcStarBuilder::new(graph.n());
-                self.build_from_graph(graph, diag, star, 1)
+                let n = graph.n();
+                let star = AcStarBuilder::new(n);
+                (n, self.build_from_graph(graph, diag, star, 1))
             }
             Some(k) => {
                 let GraphBuild {
@@ -94,12 +93,16 @@ where
                     ..
                 } = MultiEdgeGraph::<T>::from_sddm(sddm)?;
                 graph.mark_split_edges(k);
-                let star = Ac2StarBuilder::new(graph.n(), k);
-                self.build_from_graph(graph, diag, star, k as usize)
+                let n = graph.n();
+                let star = Ac2StarBuilder::new(n, k);
+                (n, self.build_from_graph(graph, diag, star, k as usize))
             }
         };
-        factor.original_n = original_n;
-        Ok(factor)
+        Ok(Factor {
+            n,
+            original_n,
+            sequence,
+        })
     }
 
     fn validate_config(config: Config) -> Result<(), Error> {
@@ -116,16 +119,16 @@ where
 
     /// Algorithm 8 loop on a pre-built graph.
     ///
-    /// `star_builder` and `degree_scale` come from the caller's variant match, so
-    /// this cannot pair an AC builder with a split multi-edge graph — a pairing
+    /// The graph's multiplicity storage is the star builder's `Count`, so an AC
+    /// builder over a split multi-edge graph does not compile — a pairing
     /// nothing checked while both were re-derived here from `Config`.
-    fn build_from_graph<G: EliminationGraph<T>, B: StarBuilderVariant<T>>(
+    fn build_from_graph<B: StarBuilderVariant<T>>(
         &self,
-        mut graph: G,
+        mut graph: AdjListGraph<B::Count, T>,
         mut diag: Vec<T>,
         mut star_builder: B,
         degree_scale: usize,
-    ) -> Factor<T> {
+    ) -> EliminationSequence<T> {
         let n = graph.n();
         let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
         let degree_sum: usize = degrees.iter().sum();
@@ -141,19 +144,14 @@ where
                 break;
             };
             steps_done += 1;
-            if graph.is_empty(v) {
-                seq.record_isolated(v, diag[v]);
-                continue;
-            }
-
             star_builder.build_star(&mut graph, v, &mut ordering);
-            if star_builder.is_empty() {
+            let star_entries = star_builder.entries();
+            if star_entries.is_empty() {
                 seq.record_isolated(v, diag[v]);
                 graph.eliminate_vertex(v);
                 continue;
             }
 
-            let star_entries = star_builder.entries();
             star_builder.sample_column(diag[v], &mut sampler, &mut column);
             seq.record_column(v, column.diagonal, column.neighbors(), column.fractions());
 
@@ -172,11 +170,7 @@ where
             deltas.flush(&mut ordering);
         }
 
-        Factor {
-            n,
-            original_n: n,
-            sequence: seq,
-        }
+        seq
     }
 }
 

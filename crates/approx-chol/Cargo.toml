@@ -43,3 +43,4 @@ harness = false
 [[bench]]
 name = "solve"
 harness = false
+

@@ -11,16 +11,11 @@ use std::fmt;
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// The factorization configuration is invalid.
-    InvalidConfig(ConfigError),
-
     /// The input CSR matrix has inconsistent dimensions or invalid structure.
     InvalidCsr(CsrError),
 
-    /// An off-diagonal entry is strictly positive. approx-chol factorizes SDDM
-    /// and graph-Laplacian systems, whose off-diagonals are non-positive; a
-    /// positive off-diagonal is outside that class and is rejected rather than
-    /// silently dropped, which would corrupt the factor.
+    /// A coalesced off-diagonal entry is strictly positive, so the matrix is
+    /// outside the SDDM/Laplacian class.
     PositiveOffDiagonal {
         /// `(row, column)` of the offending strictly-positive off-diagonal.
         edge: (usize, usize),
@@ -34,6 +29,34 @@ pub enum Error {
         /// ground vertex is not counted).
         components: usize,
     },
+
+    /// The factorization configuration is invalid.
+    InvalidConfig(ConfigError),
+
+    /// A matrix value is NaN or infinite.
+    NonFiniteValue {
+        /// Position in the CSR value array.
+        position: usize,
+    },
+
+    /// Coalesced transpose entries are missing or unequal.
+    Asymmetric {
+        /// Canonical off-diagonal coordinate with `row < column`.
+        edge: (usize, usize),
+    },
+
+    /// A row has negative diagonal surplus beyond the rounding tolerance.
+    NotDiagonallyDominant {
+        /// Row whose diagonal is smaller than its off-diagonal magnitude sum.
+        row: usize,
+    },
+
+    /// A row's accumulated diagonal or magnitude sum overflowed, though every
+    /// stored value is finite.
+    NonFiniteRow {
+        /// Row that overflowed.
+        row: usize,
+    },
 }
 
 /// Structured configuration errors returned by factorization setup.
@@ -45,6 +68,16 @@ pub enum ConfigError {
         /// The invalid `split_merge` value provided by the caller.
         split_merge: u32,
     },
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SplitMergeMustBePositive { split_merge } => {
+                write!(f, "split_merge must be >= 1 (got {split_merge})")
+            }
+        }
+    }
 }
 
 /// Which CSR array an index belongs to.
@@ -61,16 +94,6 @@ impl fmt::Display for IndexKind {
         match self {
             Self::RowPtr => write!(f, "row_ptr"),
             Self::ColIndex => write!(f, "col_index"),
-        }
-    }
-}
-
-impl fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::SplitMergeMustBePositive { split_merge } => {
-                write!(f, "split_merge must be >= 1 (got {split_merge})")
-            }
         }
     }
 }
@@ -203,7 +226,6 @@ impl fmt::Display for CsrError {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::InvalidConfig(err) => write!(f, "invalid factorization config: {err}"),
             Error::InvalidCsr(err) => write!(f, "invalid CSR matrix: {err}"),
             Error::PositiveOffDiagonal { edge: (row, col) } => write!(
                 f,
@@ -212,6 +234,22 @@ impl fmt::Display for Error {
             Error::Disconnected { components } => write!(
                 f,
                 "input splits into {components} connected components; approx-chol solves a single connected SDDM/Laplacian system"
+            ),
+            Error::InvalidConfig(err) => write!(f, "invalid factorization config: {err}"),
+            Error::NonFiniteValue { position } => {
+                write!(f, "matrix value at CSR position {position} is not finite")
+            }
+            Error::Asymmetric { edge: (row, col) } => write!(
+                f,
+                "matrix is not symmetric at ({row}, {col}) and ({col}, {row})"
+            ),
+            Error::NotDiagonallyDominant { row } => write!(
+                f,
+                "row {row} is not diagonally dominant; approx-chol requires SDDM/Laplacian input"
+            ),
+            Error::NonFiniteRow { row } => write!(
+                f,
+                "row {row} sums to a non-finite diagonal or off-diagonal magnitude; approx-chol requires SDDM/Laplacian input"
             ),
         }
     }
