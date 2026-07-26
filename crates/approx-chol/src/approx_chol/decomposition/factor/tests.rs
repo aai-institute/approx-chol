@@ -50,7 +50,7 @@ fn validate_structure_rejects_each_corruption() {
         (
             "neighbor range past nnz",
             |f| f.sequence.steps[0].end = 5,
-            FactorError::OffsetRangeInvalid {
+            FactorError::NeighborRangeInvalid {
                 step: 0,
                 start: 0,
                 end: 5,
@@ -76,13 +76,12 @@ fn validate_structure_rejects_each_corruption() {
             },
         ),
         (
-            // Extra neighbor storage no step references: last end (2) < nnz (3).
-            "final end below nnz",
+            "trailing neighbor storage",
             |f| {
                 f.sequence.neighbor_indices.push(1);
                 f.sequence.elimination_fractions.push(0.1);
             },
-            FactorError::FinalOffsetMismatch { last: 2, nnz: 3 },
+            FactorError::TrailingNeighborStorage { covered: 2, nnz: 3 },
         ),
     ];
 

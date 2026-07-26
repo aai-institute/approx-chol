@@ -9,13 +9,10 @@ use crate::types::Real;
 /// Each step eliminates `vertex` by splitting its weight among neighbors
 /// according to `elimination_fractions`.
 pub struct EliminationStep<'a, T> {
-    /// Index of the eliminated vertex.
     pub vertex: usize,
-    /// Reciprocal of the pivot diagonal, or zero when it was clamped.
+    /// Zero when the pivot diagonal was clamped to near-zero.
     pub inv_diag: T,
-    /// Indices of neighbors that receive fill weight.
     pub neighbor_indices: &'a [u32],
-    /// Fraction of remaining weight distributed to each neighbor.
     pub elimination_fractions: &'a [T],
 }
 
@@ -72,8 +69,7 @@ impl<'a, T: num_traits::Float + Send + Sync + 'static> EliminationStep<'a, T> {
 
         let j_last = self.neighbor_indices[n - 1] as usize;
         y[j_last] = y[j_last] + yi;
-        let val = if inv_diag != zero { yi * inv_diag } else { yi };
-        y[vertex] = val;
+        y[vertex] = if inv_diag != zero { yi * inv_diag } else { yi };
     }
 
     /// Backward substitution: gather neighbor contributions back to pivot.
@@ -139,13 +135,11 @@ pub struct EliminationSequence<T> {
 
 // Public read-only API (no internal trait bounds).
 impl<T> EliminationSequence<T> {
-    /// Number of elimination steps recorded.
     #[inline(always)]
     pub fn n_steps(&self) -> usize {
         self.steps.len()
     }
 
-    /// Borrow step `i` as a zero-copy view.
     #[inline(always)]
     pub fn step(&self, i: usize) -> EliminationStep<'_, T>
     where
@@ -185,7 +179,7 @@ impl<T> EliminationSequence<T> {
         for (i, step) in self.steps.iter().enumerate() {
             let end = step.end as usize;
             if start > end || end > nnz {
-                return Err(FactorError::OffsetRangeInvalid {
+                return Err(FactorError::NeighborRangeInvalid {
                     step: i,
                     start,
                     end,
@@ -212,7 +206,10 @@ impl<T> EliminationSequence<T> {
             start = end;
         }
         if start != nnz {
-            return Err(FactorError::FinalOffsetMismatch { last: start, nnz });
+            return Err(FactorError::TrailingNeighborStorage {
+                covered: start,
+                nnz,
+            });
         }
         Ok(())
     }
@@ -221,7 +218,6 @@ impl<T> EliminationSequence<T> {
 // Internal construction methods (pub(crate) only, Real bound is internal).
 #[allow(private_bounds)]
 impl<T: Real> EliminationSequence<T> {
-    /// Pre-allocate for `n` elimination steps with an estimated total neighbor count.
     pub(crate) fn with_capacity(n: usize, degree_sum: usize) -> Self {
         Self {
             steps: Vec::with_capacity(n),
