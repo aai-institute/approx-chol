@@ -121,11 +121,9 @@ where
         let n = graph.n();
         let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
         let degree_sum: usize = degrees.iter().sum();
-        let mut ordering = match self.config.split_merge {
-            None => DynamicOrdering::new(n, degrees.into_iter()),
-            Some(k) => DynamicOrdering::new_with_scale(n, degrees.into_iter(), k as usize),
-        }
-        .map_err(Error::InvalidCsr)?;
+        let degree_scale = self.config.split_merge.map_or(1, |k| k as usize);
+        let mut ordering =
+            DynamicOrdering::new(&degrees, degree_scale).map_err(Error::InvalidCsr)?;
         let sampler = CdfSampler::<T>::new(self.config.seed);
         Ok(match self.config.split_merge {
             None => Self::factorize_with_variant(
