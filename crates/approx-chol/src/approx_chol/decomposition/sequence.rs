@@ -13,8 +13,10 @@ pub(crate) struct EliminationStep<'a, T> {
 }
 
 /// Every index a kernel below touches is in bounds already: the caller asserts
-/// `y.len() >= n` once per solve, and `validate_for_dim(n)` puts every vertex and
-/// neighbor under `n`. Neither kernel re-checks per step.
+/// `y.len() >= n` once per solve, and every vertex and neighbor is under `n` —
+/// by construction from the builder, by [`EliminationSequence::validate_for_dim`]
+/// from serde.
+/// Neither kernel re-checks per step.
 impl<'a, T: num_traits::Float + Send + Sync + 'static> EliminationStep<'a, T> {
     /// Forward elimination: scatter pivot weight to neighbors, then scale by D^{-1}.
     #[inline(always)]
@@ -188,8 +190,7 @@ impl<T> EliminationSequence<T> {
     }
 
     /// Check every structural invariant the solve path relies on, against a
-    /// factor dimension `n`. Runs in release builds (unlike the `debug_assert`
-    /// on the solve path), so a deserialized (untrusted) factor is rejected
+    /// factor dimension `n`, so a deserialized (untrusted) factor is rejected
     /// before it can index storage out of bounds or silently return garbage.
     pub(crate) fn validate_for_dim(&self, n: usize) -> Result<(), FactorError> {
         // Threading `start` through the loop makes the ranges contiguous and

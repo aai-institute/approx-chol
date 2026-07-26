@@ -56,8 +56,10 @@ impl<T> TryFrom<FactorData<T>> for Factor<T> {
     }
 }
 
-// Structural validation (no numeric `T` bound; shared by the solve-path
-// `debug_assert` and the serde deserialize boundary).
+// Structural validation (no numeric `T` bound). Only the serde boundary needs
+// it: the builder produces the invariants by construction, and the solve
+// kernels index safe slices, so a corrupt factor could only ever panic on a
+// bounds check rather than read past its storage.
 impl<T> Factor<T> {
     /// Check the invariants the solve path relies on: `original_n <= n` and a
     /// [`EliminationSequence::validate_for_dim`]-valid sequence for dimension `n`.
@@ -69,11 +71,6 @@ impl<T> Factor<T> {
             });
         }
         self.sequence.validate_for_dim(self.n)
-    }
-
-    #[inline]
-    fn debug_assert_valid_structure(&self) {
-        debug_assert_eq!(self.validate_structure(), Ok(()));
     }
 }
 
@@ -164,7 +161,6 @@ where
 
     fn forward(&self, y: &mut [T]) {
         let seq = &self.sequence;
-        self.debug_assert_valid_structure();
         for i in 0..seq.n_steps() {
             seq.step(i).apply_forward(y);
         }
@@ -172,7 +168,6 @@ where
 
     fn backward(&self, y: &mut [T]) {
         let seq = &self.sequence;
-        self.debug_assert_valid_structure();
         for i in (0..seq.n_steps()).rev() {
             seq.step(i).apply_backward(y);
         }
