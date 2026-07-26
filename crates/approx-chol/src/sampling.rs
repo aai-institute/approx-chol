@@ -8,11 +8,11 @@ use num_traits::NumCast;
 /// than binary search due to branch-prediction and cache effects.
 pub(crate) const LINEAR_THRESHOLD: usize = 32;
 
-/// Sample one index from `cumsum[start..end]` proportional to weight.
+/// Sample one index from `cumsum[start..]` proportional to weight.
 ///
-/// Uses a linear scan for small ranges (≤ [`LINEAR_THRESHOLD`]) and binary
-/// search via `partition_point` for larger ones. Returns `None` if the
-/// remaining weight in the range is negligible.
+/// Uses a linear scan for small suffixes (≤ [`LINEAR_THRESHOLD`]) and binary
+/// search via `partition_point` for larger ones. Returns `None` if the suffix is
+/// empty or its remaining weight is negligible.
 ///
 /// The `.min(end - 1)` clamp guards against floating-point rounding where
 /// the random value slightly exceeds the cumulative sum range.
@@ -20,9 +20,11 @@ pub(crate) fn sample_from_cumsum<T: Real>(
     cumsum: &[T],
     rng: &mut SmallRng,
     start: usize,
-    end: usize,
 ) -> Option<usize> {
-    debug_assert!(start < end && end <= cumsum.len());
+    let end = cumsum.len();
+    if start >= end {
+        return None;
+    }
 
     let base = if start > 0 {
         cumsum[start - 1]
@@ -54,24 +56,14 @@ pub(crate) fn sample_from_cumsum<T: Real>(
     Some(k)
 }
 
-/// Strategy for weighted index sampling during clique-tree factorization.
-pub(crate) trait WeightedSampler<T: Real> {
-    /// Build internal state from the full set of `(vertex_index, weight)` entries.
-    fn prepare(&mut self, entries: &[(u32, T)]);
-
-    /// Sample one index from `entries[start..end]` proportional to weight.
-    fn sample_from_range(&mut self, start: usize, end: usize) -> Option<usize>;
-}
-
 /// Inverse-CDF sampler with hybrid linear/binary search.
-pub struct CdfSampler<T = f64> {
+pub(crate) struct CdfSampler<T = f64> {
     cumsum: Vec<T>,
     rng: SmallRng,
 }
 
 impl<T> CdfSampler<T> {
-    /// Create a new sampler with the given PRNG seed.
-    pub fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         Self {
             cumsum: Vec::new(),
             rng: SmallRng::seed_from_u64(seed),
@@ -79,10 +71,10 @@ impl<T> CdfSampler<T> {
     }
 }
 
-impl<T: Real> WeightedSampler<T> for CdfSampler<T> {
-    /// Build cumulative sum from weights using naive summation (assumes well-conditioned weights).
+impl<T: Real> CdfSampler<T> {
+    /// Cumulative sum by naive summation (assumes well-conditioned weights).
     #[inline]
-    fn prepare(&mut self, entries: &[(u32, T)]) {
+    pub(crate) fn prepare(&mut self, entries: &[(u32, T)]) {
         self.cumsum.clear();
         let mut acc = T::zero();
         for &(_, w) in entries {
@@ -91,9 +83,12 @@ impl<T: Real> WeightedSampler<T> for CdfSampler<T> {
         }
     }
 
+    /// Sample one index from the prepared entries at or after `start`,
+    /// proportional to weight. The end is the prepared set's own length, so no
+    /// caller can name a stale one.
     #[inline]
-    fn sample_from_range(&mut self, start: usize, end: usize) -> Option<usize> {
-        sample_from_cumsum(&self.cumsum, &mut self.rng, start, end)
+    pub(crate) fn sample_suffix(&mut self, start: usize) -> Option<usize> {
+        sample_from_cumsum(&self.cumsum, &mut self.rng, start)
     }
 }
 
@@ -104,16 +99,15 @@ mod tests {
     const SEED: u64 = 42;
 
     fn sample_counts(
-        sampler: &mut impl WeightedSampler<f64>,
+        sampler: &mut CdfSampler<f64>,
         entries: &[(u32, f64)],
         start: usize,
-        end: usize,
         n_samples: usize,
     ) -> Vec<u32> {
         sampler.prepare(entries);
         let mut counts = vec![0u32; entries.len()];
         for _ in 0..n_samples {
-            if let Some(idx) = sampler.sample_from_range(start, end) {
+            if let Some(idx) = sampler.sample_suffix(start) {
                 counts[idx] += 1;
             }
         }
@@ -125,7 +119,7 @@ mod tests {
         let mut sampler = CdfSampler::new(SEED);
         let entries: Vec<(u32, f64)> = vec![(0, 1.0), (1, 2.0), (2, 7.0)];
         let n_samples = 50_000;
-        let counts = sample_counts(&mut sampler, &entries, 0, 3, n_samples);
+        let counts = sample_counts(&mut sampler, &entries, 0, n_samples);
 
         let total_w = 10.0;
         let expected = [1.0 / total_w, 2.0 / total_w, 7.0 / total_w];
@@ -147,7 +141,7 @@ mod tests {
         let mut sampler = CdfSampler::new(SEED);
         let entries: Vec<(u32, f64)> = (0..5).map(|i| (i as u32, (i + 1) as f64)).collect();
         let n_samples = 10_000;
-        let counts = sample_counts(&mut sampler, &entries, 2, 5, n_samples);
+        let counts = sample_counts(&mut sampler, &entries, 2, n_samples);
 
         assert_eq!(counts[0], 0, "index 0 sampled from range [2,5)");
         assert_eq!(counts[1], 0, "index 1 sampled from range [2,5)");
@@ -167,7 +161,7 @@ mod tests {
 
         for start in 1..n {
             for _ in 0..20 {
-                if let Some(idx) = sampler.sample_from_range(start, n) {
+                if let Some(idx) = sampler.sample_suffix(start) {
                     assert!(
                         idx >= start && idx < n,
                         "index {idx} out of range [{start}, {n})"
@@ -191,7 +185,7 @@ mod tests {
 
         for _ in 0..100 {
             assert!(
-                sampler.sample_from_range(0, 3).is_none(),
+                sampler.sample_suffix(0).is_none(),
                 "expected None for near-zero weights"
             );
         }
@@ -203,7 +197,7 @@ mod tests {
         let entries = vec![(0u32, 5.0)];
         sampler.prepare(&entries);
         for _ in 0..100 {
-            assert_eq!(sampler.sample_from_range(0, 1), Some(0));
+            assert_eq!(sampler.sample_suffix(0), Some(0));
         }
     }
 
@@ -212,7 +206,7 @@ mod tests {
         let mut sampler = CdfSampler::new(SEED);
         let entries = vec![(0u32, 1.0), (1, 3.0)];
         let n_samples = 20_000;
-        let counts = sample_counts(&mut sampler, &entries, 0, 2, n_samples);
+        let counts = sample_counts(&mut sampler, &entries, 0, n_samples);
 
         let ratio = counts[1] as f64 / counts[0].max(1) as f64;
         assert!(
@@ -227,7 +221,7 @@ mod tests {
         let n = 50;
         let entries: Vec<(u32, f64)> = (0..n).map(|i| (i as u32, 1.0)).collect();
         let n_samples = 100_000;
-        let counts = sample_counts(&mut sampler, &entries, 0, n, n_samples);
+        let counts = sample_counts(&mut sampler, &entries, 0, n_samples);
 
         let expected = n_samples as f64 / n as f64;
         for (i, &c) in counts.iter().enumerate() {

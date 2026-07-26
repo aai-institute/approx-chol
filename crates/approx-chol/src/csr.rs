@@ -245,27 +245,25 @@ impl<T, I: PrimInt> OwnedCsr<T, I> {
     /// Borrow as a [`CsrRef`] for use with
     /// [`Builder::build`](crate::low_level::Builder::build).
     ///
-    /// # Errors
-    ///
-    /// None. Both constructors validate and the fields are private, so there is
-    /// nothing left to check; the `Result` stays for API compatibility.
-    pub fn try_as_ref(&self) -> Result<CsrRef<'_, T, I>, Error> {
-        Ok(CsrRef {
+    /// Infallible: both constructors validate and the fields are private, so
+    /// there is nothing left to check.
+    pub fn as_csr_ref(&self) -> CsrRef<'_, T, I> {
+        CsrRef {
             row_ptrs: &self.row_ptrs,
             col_indices: &self.col_indices,
             values: &self.values,
             n: self.n,
-        })
+        }
     }
 }
 
 /// Lets `&OwnedCsr` be used directly at the `TryInto<CsrRef>` entry point
-/// (e.g. `factorize(&owned)`), like the zero-copy sparse conversions.
-impl<'a, T, I: PrimInt> TryFrom<&'a OwnedCsr<T, I>> for CsrRef<'a, T, I> {
-    type Error = Error;
-
-    fn try_from(owned: &'a OwnedCsr<T, I>) -> Result<Self, Self::Error> {
-        owned.try_as_ref()
+/// (e.g. `factorize(&owned)`), like the zero-copy sparse conversions. The
+/// blanket `TryFrom` this induces has `Error = Infallible`, which
+/// [`Builder::build`](crate::low_level::Builder::build) already accepts.
+impl<'a, T, I: PrimInt> From<&'a OwnedCsr<T, I>> for CsrRef<'a, T, I> {
+    fn from(owned: &'a OwnedCsr<T, I>) -> Self {
+        owned.as_csr_ref()
     }
 }
 
@@ -358,7 +356,7 @@ mod tests {
             narrow.to_owned_u32().or_panic("u32 conversion"),
             wide.to_owned_u32().or_panic("usize conversion"),
         ] {
-            let converted = owned.try_as_ref().or_panic("infallible");
+            let converted = owned.as_csr_ref();
             assert_eq!(converted.row_ptrs(), &[0u32, 1]);
             assert_eq!(converted.col_indices(), &[0u32]);
             assert_eq!(converted.values(), &values);
@@ -366,16 +364,18 @@ mod tests {
     }
 
     #[test]
-    fn owned_csr_borrows_into_csr_ref_via_try_into() {
+    fn owned_csr_borrows_into_csr_ref() {
         let (row_ptrs, col_indices, values) = crate::test_utils::path_laplacian_4();
         let owned = CsrRef::new(&row_ptrs, &col_indices, &values, 4)
             .or_panic("valid csr")
             .to_owned_u32()
             .or_panic("to owned");
 
-        let as_ref: CsrRef<'_, f64, u32> = (&owned).try_into().or_panic("borrow into CsrRef");
+        let as_ref: CsrRef<'_, f64, u32> = (&owned).into();
         assert_eq!(as_ref.n(), 4);
 
+        // The `TryInto` bound at the `factorize` entry point still accepts it,
+        // now through `Error = Infallible`.
         let factor = crate::factorize(&owned).or_panic("factorize &OwnedCsr");
         assert_eq!(factor.n(), 4);
     }

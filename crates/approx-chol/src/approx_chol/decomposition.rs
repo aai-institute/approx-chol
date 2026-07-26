@@ -20,10 +20,6 @@ pub(crate) enum FactorError {
         original_n: usize,
         n: usize,
     },
-    NeighborFractionLengthMismatch {
-        neighbor_len: usize,
-        fraction_len: usize,
-    },
     /// `start > end` or `end > nnz`.
     NeighborRangeInvalid {
         step: usize,

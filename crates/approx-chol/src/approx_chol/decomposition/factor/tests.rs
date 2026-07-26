@@ -40,14 +40,6 @@ fn validate_structure_rejects_each_corruption() {
             },
         ),
         (
-            "neighbor/fraction length mismatch",
-            |f| f.sequence.elimination_fractions.push(0.25),
-            FactorError::NeighborFractionLengthMismatch {
-                neighbor_len: 2,
-                fraction_len: 3,
-            },
-        ),
-        (
             "neighbor range past nnz",
             |f| f.sequence.steps[0].end = 5,
             FactorError::NeighborRangeInvalid {

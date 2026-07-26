@@ -6,8 +6,11 @@ mod panic_err;
 mod panic_ok;
 #[path = "common/path.rs"]
 mod path;
+#[path = "common/path_solve.rs"]
+mod path_solve;
 use panic_err::ErrOrPanic;
 use panic_ok::OrPanic;
+use path_solve::assert_solves_path_rhs;
 
 use approx_chol::low_level::Builder;
 use approx_chol::{factorize, Config, CsrError, CsrRef, Error};
@@ -47,36 +50,7 @@ where
 
     assert!(factor.n() >= 4);
     assert!(factor.n_steps() > 0);
-
-    let b = [
-        T::from_f64(1.0).or_panic("conv"),
-        T::from_f64(-1.0).or_panic("conv"),
-        T::from_f64(1.0).or_panic("conv"),
-        T::from_f64(-1.0).or_panic("conv"),
-    ];
-    let mut work = vec![T::zero(); factor.n()];
-    factor
-        .solve_into(&b, &mut work)
-        .or_panic("solve_into should succeed");
-
-    assert!(work.iter().all(|x| x.is_finite()));
-    let min_signal = T::from_f64(1e-6).or_panic("conv");
-    assert!(work.iter().any(|x| x.abs() > min_signal));
-}
-
-#[test]
-fn sprs_factorize_high_level() {
-    let mat = path_laplacian_sprs::<f64, u32>();
-    let factor = factorize(&mat).or_panic("factorization should succeed");
-    assert!(factor.n() >= 4);
-}
-
-#[test]
-fn sprs_try_from_is_fallible_and_works() {
-    let mat = path_laplacian_sprs::<f64, u64>();
-    let csr = CsrRef::try_from(&mat).or_panic("fallible conversion should succeed");
-    let factor = factorize(csr).or_panic("factorization should succeed");
-    assert!(factor.n() >= 4);
+    assert_solves_path_rhs(&factor);
 }
 
 #[test]
@@ -107,17 +81,6 @@ fn sprs_u64_f64() {
 #[test]
 fn sprs_u64_f32() {
     run_case::<f32, u64>();
-}
-
-#[test]
-fn sprs_try_from_csc_returns_error() {
-    let csr = path_laplacian_sprs::<f64, u32>();
-    let csc = csr.to_csc();
-    let err = CsrRef::try_from(csc.view()).err_or_panic("CSC must be rejected");
-    assert!(matches!(
-        err,
-        Error::InvalidCsr(CsrError::ExpectedCsrMatrixGotCsc)
-    ));
 }
 
 #[test]

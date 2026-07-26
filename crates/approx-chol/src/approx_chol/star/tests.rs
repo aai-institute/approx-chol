@@ -20,7 +20,7 @@ fn nbr(to: u32, fill_weight: f64, count: u32) -> Neighbor<f64> {
 /// instead of `clamp(2 - 5) = 0` then `0 + 4 = 4` — flipping the pop order below.
 #[test]
 fn test_merge_floors_immediately_before_batched_fill() {
-    let mut ordering = DynamicOrdering::new(&[2, 2], 1).expect("valid n");
+    let mut ordering = DynamicOrdering::new(&[2, 2], 1);
 
     // build_star reports 5 merged duplicate edges to vertex 0; applied at once.
     apply_merged_counts(&[(0, 5)], &mut ordering); // 2 - 5 -> floors to 0
@@ -36,9 +36,26 @@ fn test_merge_floors_immediately_before_batched_fill() {
     assert_eq!(ordering.next_vertex(), Some(0));
 }
 
+/// `(weight, count)` for `neighbor`, or `None` if the star has no such entry.
+fn find(star: &MultiStar<f64>, neighbor: u32) -> Option<(f64, u32)> {
+    star.iter()
+        .find(|&(n, _, _)| n == neighbor)
+        .map(|(_, weight, count)| (weight, count))
+}
+
+fn dedup_ac2(
+    n: usize,
+    raw: &mut [Neighbor<f64>],
+    merge_limit: u32,
+) -> (Ac2DedupWorkspace<f64>, MultiStar<f64>) {
+    let mut dedup = Ac2DedupWorkspace::<f64>::new(n);
+    let mut star = MultiStar::new();
+    dedup.dedup(raw, &mut star, merge_limit);
+    (dedup, star)
+}
+
 #[test]
 fn test_compress_merge_caps_count() {
-    let mut dedup = Ac2DedupWorkspace::<f64>::new(10);
     let mut raw = vec![
         nbr(3, 1.0, 1),
         nbr(3, 1.0, 1),
@@ -46,32 +63,18 @@ fn test_compress_merge_caps_count() {
         nbr(3, 1.0, 1),
         nbr(5, 2.0, 1),
     ];
-    let mut entries = Vec::new();
-    let mut counts = Vec::new();
+    let (dedup, star) = dedup_ac2(10, &mut raw, 2);
 
-    dedup.dedup(&mut raw, &mut entries, &mut counts, 2);
+    // Neighbor 3 had 4 copies -> count capped to merge_limit=2, weight preserved.
+    let (w3, c3) = find(&star, 3).or_panic("missing entry for neighbor 3");
+    assert_eq!(c3, 2);
+    assert!((w3 - 4.0).abs() < 1e-10);
 
-    // Neighbor 3 had 4 copies -> capped to merge_limit=2
-    assert_eq!(entries.len(), 2);
-    assert_eq!(counts.len(), 2);
+    let (w5, c5) = find(&star, 5).or_panic("missing entry for neighbor 5");
+    assert_eq!(c5, 1);
+    assert!((w5 - 2.0).abs() < 1e-10);
 
-    // Find neighbor 3's entry
-    let idx3 = entries
-        .iter()
-        .position(|e| e.0 == 3)
-        .or_panic("missing entry for neighbor 3");
-    assert_eq!(counts[idx3], 2);
-    // Total weight preserved: 4 copies * 1.0 = 4.0 (count capped, weight unchanged)
-    assert!((entries[idx3].1 - 4.0).abs() < 1e-10);
-
-    // Neighbor 5: count=1, weight=2.0
-    let idx5 = entries
-        .iter()
-        .position(|e| e.0 == 5)
-        .or_panic("missing entry for neighbor 5");
-    assert_eq!(counts[idx5], 1);
-    assert!((entries[idx5].1 - 2.0).abs() < 1e-10);
-
+    assert_eq!(star.entries().len(), 2);
     // merged_counts should record 2 discarded edges for neighbor 3
     assert_eq!(dedup.merged_counts(), &[(3, 2)]);
 }
@@ -79,32 +82,24 @@ fn test_compress_merge_caps_count() {
 #[test]
 fn test_scatter_ac2_large_multiplicity_caps_without_overflow() {
     let n_edges = 70_000usize;
-    let mut dedup = Ac2DedupWorkspace::<f64>::new(4);
     let mut raw = vec![nbr(2, 1.0, 1); n_edges];
-    let mut entries = Vec::new();
-    let mut counts = Vec::new();
+    let (dedup, star) = dedup_ac2(4, &mut raw, 2);
 
-    dedup.dedup(&mut raw, &mut entries, &mut counts, 2);
-
-    assert_eq!(entries, vec![(2, n_edges as f64)]);
-    assert_eq!(counts, vec![2]);
+    assert_eq!(
+        star.iter().collect::<Vec<_>>(),
+        vec![(2, n_edges as f64, 2)]
+    );
     assert_eq!(dedup.merged_counts(), &[(2, (n_edges - 2) as u32)]);
 }
 
 #[test]
 fn test_virtual_split_plus_fill_edge() {
-    let mut dedup = Ac2DedupWorkspace::<f64>::new(10);
-    // Simulate virtual split edge (count=3, total_weight=6.0) + fill edge (count=1) to same neighbor
+    // Virtual split edge (count=3, total_weight=6.0) + fill edge (count=1) to
+    // the same neighbor.
     let mut raw = vec![nbr(3, 6.0, 3), nbr(3, 1.5, 1)];
-    let mut entries = Vec::new();
-    let mut counts = Vec::new();
+    let (_, star) = dedup_ac2(10, &mut raw, 10);
 
-    dedup.dedup(&mut raw, &mut entries, &mut counts, 10);
-
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].0, 3);
-    assert!((entries[0].1 - 7.5).abs() < 1e-10); // 6.0 + 1.5
-    assert_eq!(counts[0], 4); // 3 + 1
+    assert_eq!(star.iter().collect::<Vec<_>>(), vec![(3, 7.5, 4)]);
 }
 
 // -----------------------------------------------------------------------
@@ -238,43 +233,16 @@ fn test_dedup_ac2_sort_and_scatter_paths_agree() {
     let n_vertices_small = n_unique_small + 1;
     let n_vertices_large = n_unique_large + 1;
 
-    let mut dedup_small = Ac2DedupWorkspace::<f64>::new(n_vertices_small);
-    let mut dedup_large = Ac2DedupWorkspace::<f64>::new(n_vertices_large);
-
     let merge_limit = 4u32;
-
-    let mut entries_small: Vec<(u32, f64)> = Vec::new();
-    let mut counts_small: Vec<u32> = Vec::new();
-    let mut entries_large: Vec<(u32, f64)> = Vec::new();
-    let mut counts_large: Vec<u32> = Vec::new();
-
-    dedup_small.dedup(
-        &mut raw_small,
-        &mut entries_small,
-        &mut counts_small,
-        merge_limit,
-    );
-    dedup_large.dedup(
-        &mut raw_large,
-        &mut entries_large,
-        &mut counts_large,
-        merge_limit,
-    );
+    let (dedup_small, star_small) = dedup_ac2(n_vertices_small, &mut raw_small, merge_limit);
+    let (dedup_large, star_large) = dedup_ac2(n_vertices_large, &mut raw_large, merge_limit);
 
     // Both paths: vertex 0 was duplicated, so its merged weight = 1.0 + 0.5 = 1.5
     // and its merged count = 2 + 1 = 3 (within merge_limit=4, no cap).
-    let find = |entries: &[(u32, f64)], counts: &[u32], target: u32| {
-        entries
-            .iter()
-            .zip(counts.iter())
-            .find(|(&(idx, _), _)| idx == target)
-            .map(|(&(_, w), &c)| (w, c))
-    };
-
-    let (w0_small, c0_small) = find(&entries_small, &counts_small, 0)
-        .or_panic("missing merged AC2 entry for vertex 0 in sort path");
-    let (w0_large, c0_large) = find(&entries_large, &counts_large, 0)
-        .or_panic("missing merged AC2 entry for vertex 0 in scatter path");
+    let (w0_small, c0_small) =
+        find(&star_small, 0).or_panic("missing merged AC2 entry for vertex 0 in sort path");
+    let (w0_large, c0_large) =
+        find(&star_large, 0).or_panic("missing merged AC2 entry for vertex 0 in scatter path");
 
     assert!(
         (w0_small - 1.5).abs() < 1e-12,
@@ -305,8 +273,6 @@ fn test_dedup_ac2_sort_and_scatter_paths_agree() {
     );
 
     // Entry counts: n_unique deduplicated entries in each case.
-    assert_eq!(entries_small.len(), n_unique_small);
-    assert_eq!(counts_small.len(), n_unique_small);
-    assert_eq!(entries_large.len(), n_unique_large);
-    assert_eq!(counts_large.len(), n_unique_large);
+    assert_eq!(star_small.entries().len(), n_unique_small);
+    assert_eq!(star_large.entries().len(), n_unique_large);
 }

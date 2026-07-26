@@ -22,6 +22,19 @@ where
     }
 }
 
+/// A count (edge multiplicity, neighbor count) as a scalar, for the weight and
+/// sort-key formulas that multiply or divide by it.
+///
+/// `f32` and `f64` represent every such count, so the cast only fails for an
+/// exotic `Float`. It panics there rather than substituting a value: the call
+/// sites previously disagreed about the substitute — skip the neighbor, use one,
+/// skip the whole edge split, panic — and all but the last silently corrupt the
+/// factor.
+#[inline]
+pub(crate) fn count_as_scalar<T: Float, N: num_traits::ToPrimitive>(count: N) -> T {
+    <T as NumCast>::from(count).expect("count is representable in T")
+}
+
 /// Total ordering for floats. NaN sorts last.
 ///
 /// `partial_cmp` returns `None` when NaN is involved, which violates the total

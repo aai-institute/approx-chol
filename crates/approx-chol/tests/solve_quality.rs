@@ -147,9 +147,7 @@ fn solve_in_place_skips_projection() {
 
     let mut no_proj = vec![0.0; n];
     no_proj[..rhs.len()].copy_from_slice(&rhs);
-    factor
-        .solve_in_place(&mut no_proj)
-        .or_panic("solve_in_place should succeed");
+    factor.solve_in_place(&mut no_proj);
 
     // The zero-mean projection should shift the solution; results must differ
     let any_different = with_proj
@@ -307,45 +305,12 @@ fn solve_into_rejects_rhs_longer_than_original_for_augmented_factor() {
 }
 
 #[test]
-fn solve_into_reports_short_work_buffer() {
-    let lap = grid_laplacian(4, 4);
-    let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
-        .or_panic("factorization should succeed");
-
-    let mut rhs = vec![0.0; n_orig];
-    rhs[0] = 1.0;
-    rhs[n_orig - 1] = -1.0;
-    let mut work = vec![0.0; factor.n().saturating_sub(1)];
-    let err = factor
-        .solve_into(&rhs, &mut work)
-        .err_or_panic("short work buffer must fail");
-    assert!(matches!(
-        err,
-        SolveError::WorkBufferTooSmall {
-            work_len: _,
-            factor_dim: _
-        }
-    ));
-}
-
-#[test]
-fn solve_in_place_reports_short_work_buffer() {
+#[should_panic(expected = "work buffer too small")]
+fn short_work_buffer_panics() {
     let lap = grid_laplacian(4, 4);
     let factor = Builder::new(Config::default())
         .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
         .or_panic("factorization should succeed");
 
-    let mut y = vec![0.0; factor.n().saturating_sub(1)];
-    let err = factor
-        .solve_in_place(&mut y)
-        .err_or_panic("short in-place work buffer must fail");
-    assert!(matches!(
-        err,
-        SolveError::WorkBufferTooSmall {
-            work_len: _,
-            factor_dim: _
-        }
-    ));
+    factor.solve_in_place(&mut vec![0.0; factor.n() - 1]);
 }

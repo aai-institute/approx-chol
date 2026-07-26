@@ -1,23 +1,18 @@
 use crate::graph::EliminationGraph;
 use crate::ordering::DegreeDeltas;
-use crate::sampling::{CdfSampler, WeightedSampler};
-use crate::types::{float_total_cmp, Real};
-use num_traits::NumCast;
+use crate::sampling::CdfSampler;
+use crate::types::{count_as_scalar, float_total_cmp, Real};
 
-/// One sampled column of the approximate Cholesky factor (Algorithm 5, GKS 2023).
-///
-/// Represents the result of clique-tree sampling on a star neighborhood.
-/// Contains the column's diagonal entry, its non-zero neighbor indices with
-/// fractional weights, and the fill edges to be inserted back into the graph.
-///
-/// Reusable across elimination steps (cleared at start of each sampling pass).
+/// One sampled column of the approximate Cholesky factor (Algorithm 5, GKS 2023),
+/// reused across elimination steps and cleared at the start of each sampling pass.
 pub(crate) struct SampledColumn<T: Real> {
     /// Diagonal value of the factor column: `L[v,v]`.
     pub diagonal: T,
-    /// Neighbor indices in the column's non-zero pattern.
-    pub neighbors: Vec<u32>,
-    /// Fractional weight for each neighbor: `L[neighbor, v] / L[v, v]`.
-    pub fractions: Vec<T>,
+    /// Neighbor indices in the column's non-zero pattern, and each one's
+    /// fractional weight `L[neighbor, v] / L[v, v]`. Private and only appended
+    /// through [`Self::push_neighbor`], so the two can never disagree.
+    neighbors: Vec<u32>,
+    fractions: Vec<T>,
     /// Fill edges `(u, w, weight)` to insert into the graph after elimination.
     fill_edges: Vec<(u32, u32, T)>,
 }
@@ -39,6 +34,20 @@ impl<T: Real> SampledColumn<T> {
         self.fill_edges.clear();
     }
 
+    #[inline]
+    fn push_neighbor(&mut self, neighbor: u32, fraction: T) {
+        self.neighbors.push(neighbor);
+        self.fractions.push(fraction);
+    }
+
+    pub(crate) fn neighbors(&self) -> &[u32] {
+        &self.neighbors
+    }
+
+    pub(crate) fn fractions(&self) -> &[T] {
+        &self.fractions
+    }
+
     /// Initialize sampling, or write the fallback column and return `None`.
     ///
     /// Returns `Some((n, total_weight))` only when the elimination loop should
@@ -58,20 +67,19 @@ impl<T: Real> SampledColumn<T> {
             if total_weight.is_finite() && total_weight > T::near_zero() {
                 return Some((n, total_weight));
             }
-            T::one() / NumCast::from(n).expect("neighbor count fits in T")
+            T::one() / count_as_scalar::<T, _>(n)
         };
 
         self.diagonal = pivot_diag;
-        self.neighbors
-            .extend(entries.iter().map(|&(neighbor, _)| neighbor));
-        self.fractions.resize(n, fraction);
+        for &(neighbor, _) in entries {
+            self.push_neighbor(neighbor, fraction);
+        }
         None
     }
 
     /// Finalize sampling with the last star neighbor (always fraction 1).
     fn finalize_sampling(&mut self, last: (u32, T), elim: &StarElimination<T>) {
-        self.neighbors.push(last.0);
-        self.fractions.push(T::one());
+        self.push_neighbor(last.0, T::one());
         self.diagonal = elim.diagonal(last.1);
     }
 
@@ -99,19 +107,18 @@ impl<T: Real> SampledColumn<T> {
         neighbor: u32,
         n_samples: u32,
         fill_weight: T,
-        sampler: &mut impl WeightedSampler<T>,
+        sampler: &mut CdfSampler<T>,
         entries: &[(u32, T)],
         tail: usize,
     ) {
         if n_samples == 0 || fill_weight <= T::near_zero() {
             return;
         }
-        let n = entries.len();
-        if tail >= n {
+        if tail >= entries.len() {
             return;
         }
         for _ in 0..n_samples {
-            if let Some(koff) = sampler.sample_from_range(tail, n) {
+            if let Some(koff) = sampler.sample_suffix(tail) {
                 let k = entries[koff].0;
                 if neighbor != k {
                     self.fill_edges.push((neighbor, k, fill_weight));
@@ -130,27 +137,127 @@ impl<T: Real> SampledColumn<T> {
     }
 }
 
-/// Running state for sequential edge elimination on a star graph.
+/// A deduped AC2 star neighborhood: one `(neighbor, weight)` entry and one
+/// multiplicity per unique neighbor.
 ///
-/// When eliminating pivot vertex v, its neighbors are processed sequentially
-/// along a clique-tree path (GKS 2023, Algorithms 5 & 6). For each neighbor
-/// j_i with edge weight w_i, the elimination fraction is
-/// `f_i = w_i * scale / capacity`.
-///
-/// **Fields:**
-/// - `scale`: cumulative product of `(1 - f_k)` for all previously processed
-///   neighbors k < i. Tracks how much of the original edge weight survives
-///   after earlier samplings.
-/// - `capacity`: remaining weight budget, updated as `capacity *= (1 - f_i)^2`
-///   after each step. Initialized differently by variant:
-///   - **AC**: `pivot_diag` (the matrix diagonal entry for the pivot)
-///   - **AC2**: `total_weight` (sum of incident edge weights)
-///
-/// After `advance(f)`, both `scale` and `capacity` shrink,
-/// ensuring subsequent fractions account for weight already consumed by
-/// earlier fill edges.
+/// The two arrays are only ever pushed, cleared and permuted together, so
+/// nothing downstream has to check that they still agree about length or about
+/// which multiplicity belongs to which neighbor.
+pub(crate) struct MultiStar<T: Real> {
+    entries: Vec<(u32, T)>,
+    counts: Vec<u32>,
+    sort_scratch: Vec<SortEntry<T>>,
+}
+
+/// Packed staging record for [`MultiStar::sort_by_avg_weight`]: permuting two
+/// arrays needs one sortable element holding both halves.
+#[derive(Clone, Copy)]
+struct SortEntry<T: Real> {
+    neighbor: u32,
+    weight: T,
+    count: u32,
+    /// Precomputed `weight / count` sort key. Cross-multiplying in the
+    /// comparator instead can break transitivity under floating-point rounding.
+    avg_weight: T,
+}
+
+impl<T: Real> MultiStar<T> {
+    pub(super) fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            counts: Vec::new(),
+            sort_scratch: Vec::new(),
+        }
+    }
+
+    /// Every neighbor at the same multiplicity — the shape
+    /// [`clique_tree_sample_multi`] samples.
+    fn uniform(entries: &[(u32, T)], count: u32) -> Self {
+        let mut star = Self::new();
+        for &(neighbor, weight) in entries {
+            star.push(neighbor, weight, count);
+        }
+        star
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.entries.clear();
+        self.counts.clear();
+    }
+
+    pub(super) fn push(&mut self, neighbor: u32, weight: T, count: u32) {
+        self.entries.push((neighbor, weight));
+        self.counts.push(count);
+    }
+
+    /// Push, or fold into the previous entry when it repeats the same neighbor.
+    /// Over `neighbor`-sorted input that coalesces duplicates in one pass.
+    pub(super) fn push_or_merge(&mut self, neighbor: u32, weight: T, count: u32) {
+        if self.entries.last().map(|last| last.0) == Some(neighbor) {
+            let last = self.entries.len() - 1;
+            self.entries[last].1 = self.entries[last].1 + weight;
+            self.counts[last] = self.counts[last].saturating_add(count);
+        } else {
+            self.push(neighbor, weight, count);
+        }
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub(super) fn entries(&self) -> &[(u32, T)] {
+        &self.entries
+    }
+
+    pub(super) fn iter(&self) -> impl Iterator<Item = (u32, T, u32)> + '_ {
+        self.entries
+            .iter()
+            .zip(&self.counts)
+            .map(|(&(neighbor, weight), &count)| (neighbor, weight, count))
+    }
+
+    /// Cap every multiplicity at `limit`, leaving weights untouched and
+    /// reporting each discard as `(neighbor, discarded)`.
+    pub(super) fn apply_merge_limit(&mut self, limit: u32, merged: &mut Vec<(u32, u32)>) {
+        for (&(neighbor, _), count) in self.entries.iter().zip(self.counts.iter_mut()) {
+            if *count > limit {
+                merged.push((neighbor, *count - limit));
+                *count = limit;
+            }
+        }
+    }
+
+    /// Sort by average weight ascending, breaking ties by neighbor index.
+    pub(super) fn sort_by_avg_weight(&mut self) {
+        self.sort_scratch.clear();
+        self.sort_scratch.reserve(self.entries.len());
+        for (&(neighbor, weight), &count) in self.entries.iter().zip(&self.counts) {
+            self.sort_scratch.push(SortEntry {
+                neighbor,
+                weight,
+                count,
+                avg_weight: weight / count_as_scalar::<T, _>(count),
+            });
+        }
+        self.sort_scratch.sort_unstable_by(|a, b| {
+            float_total_cmp(&a.avg_weight, &b.avg_weight).then_with(|| a.neighbor.cmp(&b.neighbor))
+        });
+        for (i, item) in self.sort_scratch.iter().enumerate() {
+            self.entries[i] = (item.neighbor, item.weight);
+            self.counts[i] = item.count;
+        }
+    }
+}
+
+/// Running state for sequential edge elimination on a star graph (GKS 2023,
+/// Algorithms 5 & 6): neighbors are processed along a clique-tree path, each one
+/// taking fraction `f_i = w_i * scale / capacity` of what earlier neighbors left.
 struct StarElimination<T = f64> {
+    /// Product of `(1 - f_k)` over already-processed neighbors: the share of the
+    /// original edge weight that survives to this one.
     scale: T,
+    /// Remaining weight budget, shrunk by `(1 - f_i)^2` per step.
     capacity: T,
 }
 
@@ -189,21 +296,14 @@ impl<T: Real> StarElimination<T> {
 
 /// Clique-tree sampling for AC stars (single sample per neighbor).
 ///
-/// The elimination capacity is initialized from the **live column's
-/// off-diagonal sum** (`Σ |entries.weights|`), matching the original
-/// Laplacians.jl algorithm and the AC2 variant in this crate. The
-/// `pivot_diag` parameter is retained only to seed `SampledColumn`'s
-/// degenerate cases (n ≤ 1) and is not used inside the elimination loop.
-///
-/// Using the live column sum keeps `f ∈ [0, 1]` by construction, which is
-/// required for Laplacian-type inputs where `pivot_diag = Σ |off-diag|`
-/// exactly (zero slack). External `diag[v]` arrays maintained by callers
-/// can drift under stochastic elimination and feed sub-zero values here;
-/// computing capacity locally is the robust form.
-pub(crate) fn clique_tree_sample_column<T: Real, S: WeightedSampler<T>>(
+/// Capacity comes from the live column sum, not from `pivot_diag`: that keeps
+/// `f ∈ [0, 1]` by construction, whereas a caller-maintained `diag[v]` can drift
+/// below the column sum under stochastic elimination. `pivot_diag` only seeds the
+/// degenerate (`n <= 1`) column.
+pub(crate) fn clique_tree_sample_column<T: Real>(
     entries: &[(u32, T)],
     pivot_diag: T,
-    sampler: &mut S,
+    sampler: &mut CdfSampler<T>,
     column: &mut SampledColumn<T>,
 ) {
     let Some((n, total_weight)) = column.begin_sampling(entries, pivot_diag) else {
@@ -216,8 +316,7 @@ pub(crate) fn clique_tree_sample_column<T: Real, S: WeightedSampler<T>>(
     for (i, &(j, w)) in entries[..n - 1].iter().enumerate() {
         let f = elim.fraction(w);
         let fill_wt = f * (T::one() - f) * elim.capacity();
-        column.neighbors.push(j);
-        column.fractions.push(f);
+        column.push_neighbor(j, f);
         column.sample_fill_edges(j, 1, fill_wt, sampler, entries, i + 1);
         elim.advance(f);
     }
@@ -226,14 +325,13 @@ pub(crate) fn clique_tree_sample_column<T: Real, S: WeightedSampler<T>>(
 }
 
 /// Clique-tree sampling for AC2 stars (multi-sample per neighbor).
-pub(crate) fn clique_tree_sample_column_multi<T: Real, S: WeightedSampler<T>>(
-    entries: &[(u32, T)],
-    counts: &[u32],
+pub(crate) fn clique_tree_sample_column_multi<T: Real>(
+    star: &MultiStar<T>,
     pivot_diag: T,
-    sampler: &mut S,
+    sampler: &mut CdfSampler<T>,
     column: &mut SampledColumn<T>,
 ) {
-    debug_assert_eq!(entries.len(), counts.len());
+    let entries = star.entries();
     let Some((n, total_weight)) = column.begin_sampling(entries, pivot_diag) else {
         return;
     };
@@ -242,15 +340,11 @@ pub(crate) fn clique_tree_sample_column_multi<T: Real, S: WeightedSampler<T>>(
     let mut remaining = total_weight;
     let mut elim = StarElimination::new(total_weight);
 
-    for (i, (&(j, w), &count)) in entries[..n - 1].iter().zip(counts.iter()).enumerate() {
+    for (i, (j, w, count)) in star.iter().take(n - 1).enumerate() {
         remaining = remaining - w;
         let f = elim.fraction(w);
-        let Some(count_scalar) = <T as NumCast>::from(count) else {
-            continue;
-        };
-        let fill_wt = w * remaining / (count_scalar * total_weight);
-        column.neighbors.push(j);
-        column.fractions.push(f);
+        let fill_wt = w * remaining / (count_as_scalar::<T, _>(count) * total_weight);
+        column.push_neighbor(j, f);
         column.sample_fill_edges(j, count, fill_wt, sampler, entries, i + 1);
         elim.advance(f);
     }
@@ -307,10 +401,10 @@ pub fn clique_tree_sample_multi<T>(
         return;
     }
     entries.sort_unstable_by(|a, b| float_total_cmp(&a.1, &b.1));
-    let counts = vec![split_merge; entries.len()];
+    let star = MultiStar::uniform(entries, split_merge);
     let mut sampler = CdfSampler::<T>::new(seed);
     let mut column = SampledColumn::new();
-    clique_tree_sample_column_multi(entries, &counts, T::zero(), &mut sampler, &mut column);
+    clique_tree_sample_column_multi(&star, T::zero(), &mut sampler, &mut column);
     column.extend_ordered_fill_edges(out);
 }
 
