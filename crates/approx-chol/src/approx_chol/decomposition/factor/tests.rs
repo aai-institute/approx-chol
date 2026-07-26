@@ -1,4 +1,4 @@
-use super::super::sequence::Step;
+use super::super::sequence::StepHeader;
 use super::*;
 
 /// Minimal structurally-valid factor: n=3, one step eliminating vertex 0
@@ -8,7 +8,7 @@ fn valid_factor() -> Factor<f64> {
         n: 3,
         original_n: 3,
         sequence: EliminationSequence {
-            steps: vec![Step {
+            steps: vec![StepHeader {
                 vertex: 0,
                 end: 2,
                 inv_diag: 1.0,

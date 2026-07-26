@@ -111,7 +111,7 @@ impl<'a, T: num_traits::Float + Send + Sync + 'static> EliminationStep<'a, T> {
     ))
 )]
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Step<T> {
+pub(crate) struct StepHeader<T> {
     pub(crate) vertex: u32,
     pub(crate) end: u32,
     pub(crate) inv_diag: T,
@@ -128,7 +128,7 @@ pub(crate) struct Step<T> {
 )]
 #[derive(Clone, Debug)]
 pub struct EliminationSequence<T> {
-    pub(crate) steps: Vec<Step<T>>,
+    pub(crate) steps: Vec<StepHeader<T>>,
     pub(crate) neighbor_indices: Vec<u32>,
     pub(crate) elimination_fractions: Vec<T>,
 }
@@ -235,7 +235,7 @@ impl<T: Real> EliminationSequence<T> {
             nnz <= u32::MAX as usize,
             "factor nonzero count {nnz} exceeds u32 offset capacity"
         );
-        self.steps.push(Step {
+        self.steps.push(StepHeader {
             vertex: vertex as u32,
             end: nnz as u32,
             inv_diag: if diagonal.abs() > T::near_zero() {
