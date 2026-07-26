@@ -51,7 +51,7 @@ fn deserializing_corrupted_factor_is_rejected() {
 fn config_json_roundtrip() {
     let config = Config {
         seed: 42,
-        split_merge: Some(3),
+        split_merge: 3,
     };
 
     let json = serde_json::to_string(&config).or_panic("serialize config");

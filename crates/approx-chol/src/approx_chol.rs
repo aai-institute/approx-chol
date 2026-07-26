@@ -22,11 +22,10 @@ pub use decomposition::{Factor, SolveError};
 ///
 /// // AC2 variant with multi-edge multiplicity
 /// let config = Config {
-///     split_merge: Some(2),
+///     split_merge: 2,
 ///     seed: 42,
 ///     ..Default::default()
 /// };
-/// assert!(config.split_merge.is_some());
 /// ```
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, Default)]
@@ -36,7 +35,8 @@ pub struct Config {
     pub seed: u64,
     /// AC2 multi-edge multiplicity parameter (`k`).
     ///
-    /// `None` = standard AC (default), `Some(k)` = AC2 with `k` edge copies
-    /// and `k` merge cap per neighbor pair.
-    pub split_merge: Option<u32>,
+    /// `0` (the default) = standard AC, `k >= 1` = AC2 with `k` edge copies and
+    /// `k` merge cap per neighbor pair. Zero is "no multi-edges" rather than an
+    /// error, so no configuration of this field is rejected.
+    pub split_merge: u32,
 }

@@ -85,16 +85,6 @@ impl<'a, T: Real> Canonical<'a, T> {
     }
 }
 
-/// Absolute surplus floor separating genuine diagonal dominance from a
-/// Laplacian's rounding noise (scaled by the row's magnitude at the use site).
-fn augmentation_eps<T: Real>() -> T {
-    if core::mem::size_of::<T>() <= 4 {
-        T::from(1e-6_f64).unwrap_or_else(T::epsilon)
-    } else {
-        T::from(1e-10_f64).unwrap_or_else(T::epsilon)
-    }
-}
-
 fn approximately_equal<T: Real>(left: T, right: T) -> bool {
     if left == right {
         return true;
@@ -216,7 +206,9 @@ fn augment<T: Real, C: EdgeCount>(
     mut diag: Vec<T>,
     mut row_sums: Vec<T>,
 ) -> Result<GraphBuild<AdjListGraph<C, T>, T>, Error> {
-    let tolerance = augmentation_eps::<T>();
+    // Absolute surplus floor separating genuine diagonal dominance from a
+    // Laplacian's rounding noise; scaled by each row's magnitude below.
+    let tolerance = T::by_precision(1e-6, 1e-10);
     let mut surplus_sum = T::zero();
     let mut grounded = 0usize;
     for (row, (sum, &d)) in row_sums.iter_mut().zip(diag.iter()).enumerate() {

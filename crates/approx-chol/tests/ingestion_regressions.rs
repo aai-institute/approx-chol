@@ -134,7 +134,7 @@ fn block_diagonal_sddm_is_accepted_via_shared_ground() {
     let ci = [0u32, 1, 0, 1, 2, 3, 2, 3];
     let vals = [5.0f64, -1.0, -1.0, 4.0, 5.0, -1.0, -1.0, 4.0];
 
-    for split_merge in [None, Some(2)] {
+    for split_merge in [0, 2] {
         let csr = CsrRef::new(&rp, &ci, &vals, 4).or_panic("valid CSR");
         Builder::<f64>::new(Config {
             split_merge,

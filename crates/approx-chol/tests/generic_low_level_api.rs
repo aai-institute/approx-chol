@@ -11,7 +11,7 @@ use panic_ok::OrPanic;
 use path_solve::assert_solves_path_rhs;
 
 use approx_chol::low_level::Builder;
-use approx_chol::{factorize, Config, ConfigError, CsrError, CsrRef, Error};
+use approx_chol::{factorize, Config, CsrError, CsrRef, Error};
 use num_traits::{Float, FromPrimitive, PrimInt};
 
 fn idx<I: TryFrom<usize>>(value: usize) -> I
@@ -59,7 +59,7 @@ where
     let (rp, ci, vals, n) = path_laplacian::<I, T>();
     let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid csr");
     let builder = Builder::<T>::new(Config {
-        split_merge: Some(2),
+        split_merge: 2,
         seed: 7,
     });
     let factor = builder
@@ -106,23 +106,6 @@ fn low_level_u64_f32_ac2() {
 #[test]
 fn low_level_usize_f64_ac2() {
     run_case_ac2::<usize, f64>();
-}
-
-#[test]
-fn split_zero_is_rejected() {
-    let (rp, ci, vals, n) = path_laplacian::<u32, f64>();
-    let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid csr");
-    let builder = Builder::<f64>::new(Config {
-        split_merge: Some(0),
-        ..Default::default()
-    });
-    let err = builder
-        .build(csr)
-        .err_or_panic("split_merge=0 should return InvalidConfig");
-    assert!(matches!(
-        err,
-        Error::InvalidConfig(ConfigError::SplitMergeMustBePositive { split_merge: 0 })
-    ));
 }
 
 struct PanicIntoCsr;

@@ -48,7 +48,7 @@ proptest! {
         prop_assume!(is_connected(&row_ptrs, &col_indices, n));
         let csr = (row_ptrs, col_indices, values, n);
 
-        for config in [Config::default(), Config { seed: 7, split_merge: Some(2) }] {
+        for config in [Config::default(), Config { seed: 7, split_merge: 2 }] {
             if let Some(relative) = relative_residual(&csr, config, &rhs) {
                 prop_assert!(
                     relative < RESIDUAL_LIMIT,

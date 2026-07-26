@@ -43,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A row surplus at or below `min(1e-10 * row_scale, sqrt(f64::EPSILON))` does not
   trigger augmentation.
 - Duplicate entries are summed before the off-diagonal sign check.
+- `Config::split_merge` is `u32` with `0` selecting standard AC; `ConfigError` and
+  `Error::InvalidConfig` are removed.
 
 ### Performance
 

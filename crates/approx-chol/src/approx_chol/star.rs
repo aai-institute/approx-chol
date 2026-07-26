@@ -30,7 +30,7 @@ pub(super) trait StarBuilderVariant<T: Real> {
         v: usize,
         ordering: &mut DynamicOrdering,
     );
-    fn is_empty(&self) -> bool;
+    /// The star's neighbors; empty when the pivot had no live neighbor left.
     fn entries(&self) -> &[(u32, T)];
     fn sample_column(
         &self,
@@ -75,10 +75,6 @@ impl<T: Real> StarBuilderVariant<T> for AcStarBuilder<T> {
         graph.live_neighbors(v, &mut self.raw);
         self.dedup.dedup(&mut self.raw, &mut self.entries);
         apply_merged_counts(self.dedup.merged_counts(), ordering);
-    }
-
-    fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 
     fn entries(&self) -> &[(u32, T)] {
@@ -138,10 +134,6 @@ impl<T: Real> StarBuilderVariant<T> for Ac2StarBuilder<T> {
         self.dedup
             .dedup(&mut self.raw, &mut self.star, self.merge_limit);
         apply_merged_counts(self.dedup.merged_counts(), ordering);
-    }
-
-    fn is_empty(&self) -> bool {
-        self.star.is_empty()
     }
 
     fn entries(&self) -> &[(u32, T)] {

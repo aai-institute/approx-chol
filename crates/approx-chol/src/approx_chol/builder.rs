@@ -2,7 +2,7 @@ use super::decomposition::EliminationSequence;
 use crate::graph::{AdjListGraph, GraphBuild, MultiEdgeGraph, SlimGraph};
 use crate::ordering::{DegreeDeltas, DynamicOrdering};
 use crate::sampling::CdfSampler;
-use crate::{ConfigError, CsrError, CsrRef, Error, Factor};
+use crate::{CsrError, CsrRef, Error, Factor};
 use num_traits::PrimInt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -76,42 +76,34 @@ where
     /// [`build`](Self::build) guarantees); does not re-validate.
     fn build_validated(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
         let original_n = sddm.n();
-        Self::validate_config(self.config)?;
-        let mut factor = match self.config.split_merge {
-            None => {
+        let (n, sequence) = match self.config.split_merge {
+            0 => {
                 let GraphBuild {
                     graph,
                     diagonal: diag,
                     ..
                 } = SlimGraph::<T>::from_sddm(sddm)?;
-                let star = AcStarBuilder::new(graph.n());
-                self.build_from_graph(graph, diag, star, 1)
+                let n = graph.n();
+                let star = AcStarBuilder::new(n);
+                (n, self.build_from_graph(graph, diag, star, 1))
             }
-            Some(k) => {
+            k => {
                 let GraphBuild {
                     mut graph,
                     diagonal: diag,
                     ..
                 } = MultiEdgeGraph::<T>::from_sddm(sddm)?;
                 graph.mark_split_edges(k);
-                let star = Ac2StarBuilder::new(graph.n(), k);
-                self.build_from_graph(graph, diag, star, k as usize)
+                let n = graph.n();
+                let star = Ac2StarBuilder::new(n, k);
+                (n, self.build_from_graph(graph, diag, star, k as usize))
             }
         };
-        factor.original_n = original_n;
-        Ok(factor)
-    }
-
-    fn validate_config(config: Config) -> Result<(), Error> {
-        let Some(split_merge) = config.split_merge else {
-            return Ok(());
-        };
-        if split_merge == 0 {
-            return Err(Error::InvalidConfig(
-                ConfigError::SplitMergeMustBePositive { split_merge },
-            ));
-        }
-        Ok(())
+        Ok(Factor {
+            n,
+            original_n,
+            sequence,
+        })
     }
 
     /// Algorithm 8 loop on a pre-built graph.
@@ -125,7 +117,7 @@ where
         mut diag: Vec<T>,
         mut star_builder: B,
         degree_scale: usize,
-    ) -> Factor<T> {
+    ) -> EliminationSequence<T> {
         let n = graph.n();
         let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
         let degree_sum: usize = degrees.iter().sum();
@@ -142,13 +134,13 @@ where
             };
             steps_done += 1;
             star_builder.build_star(&mut graph, v, &mut ordering);
-            if star_builder.is_empty() {
+            let star_entries = star_builder.entries();
+            if star_entries.is_empty() {
                 seq.record_isolated(v, diag[v]);
                 graph.eliminate_vertex(v);
                 continue;
             }
 
-            let star_entries = star_builder.entries();
             star_builder.sample_column(diag[v], &mut sampler, &mut column);
             seq.record_column(v, column.diagonal, column.neighbors(), column.fractions());
 
@@ -167,11 +159,7 @@ where
             deltas.flush(&mut ordering);
         }
 
-        Factor {
-            n,
-            original_n: n,
-            sequence: seq,
-        }
+        seq
     }
 }
 

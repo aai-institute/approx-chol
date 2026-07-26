@@ -113,7 +113,7 @@ fn bench_factorization_grid(c: &mut Criterion) {
         );
 
         let ac2_config = Config {
-            split_merge: Some(2),
+            split_merge: 2,
             ..Default::default()
         };
         let ac2_builder = Builder::new(ac2_config);

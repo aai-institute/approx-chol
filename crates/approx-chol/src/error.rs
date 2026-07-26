@@ -11,9 +11,6 @@ use std::fmt;
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// The factorization configuration is invalid.
-    InvalidConfig(ConfigError),
-
     /// The input CSR matrix has inconsistent dimensions or invalid structure.
     InvalidCsr(CsrError),
 
@@ -59,17 +56,6 @@ pub enum Error {
     },
 }
 
-/// Structured configuration errors returned by factorization setup.
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConfigError {
-    /// `split_merge` must be at least 1 when provided.
-    SplitMergeMustBePositive {
-        /// The invalid `split_merge` value provided by the caller.
-        split_merge: u32,
-    },
-}
-
 /// Which CSR array an index belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexKind {
@@ -84,16 +70,6 @@ impl fmt::Display for IndexKind {
         match self {
             Self::RowPtr => write!(f, "row_ptr"),
             Self::ColIndex => write!(f, "col_index"),
-        }
-    }
-}
-
-impl fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::SplitMergeMustBePositive { split_merge } => {
-                write!(f, "split_merge must be >= 1 (got {split_merge})")
-            }
         }
     }
 }
@@ -226,7 +202,6 @@ impl fmt::Display for CsrError {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::InvalidConfig(err) => write!(f, "invalid factorization config: {err}"),
             Error::InvalidCsr(err) => write!(f, "invalid CSR matrix: {err}"),
             Error::PositiveOffDiagonal { edge: (row, col) } => write!(
                 f,
