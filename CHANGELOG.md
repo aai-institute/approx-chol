@@ -43,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A row surplus at or below `min(1e-10 * row_scale, sqrt(EPSILON))` or the row's
   accumulated rounding noise does not trigger augmentation.
 - Duplicate entries are summed before the off-diagonal sign check.
+- A row sum folds in its diagonal last, so the exact factor for a fixed seed can
+  differ from earlier releases on input whose row sums do not accumulate exactly.
 - `Config::split_merge` is `u32` with `0` selecting standard AC; `ConfigError` and
   `Error::InvalidConfig` are removed.
 
@@ -50,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Canonical CSR is ingested without a reordering buffer.
 - Finiteness and canonicality share one pass over the nonzeros.
+- The diagonal comes from the mirror walk instead of a binary search per row.
 - The per-row dominance tolerance is derived from the diagonal and the row sum.
 
 ## [0.3.1] - 2026-07-10

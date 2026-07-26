@@ -148,25 +148,18 @@ fn parse<T: Real, C: EdgeCount>(
         .map(|row| Vec::with_capacity((row_ptrs[row + 1] - row_ptrs[row]) as usize))
         .collect();
 
-    // Read the diagonal by search rather than a full pass, so the off-diagonal
-    // accumulation below can start from it.
     let mut diag = vec![T::zero(); n];
-    for (row, diagonal) in diag.iter_mut().enumerate() {
-        let start = row_ptrs[row] as usize;
-        let cols = &col_indices[start..row_ptrs[row + 1] as usize];
-        let offset = cols.partition_point(|&col| (col as usize) < row);
-        if cols.get(offset) == Some(&(row as u32)) {
-            *diagonal = values[start + offset];
-        }
-    }
-    let mut row_sums = diag.clone();
+    // Off-diagonal contributions only; `augment` folds in the diagonal, which is
+    // not known for a row until that row's own claim below.
+    let mut row_sums = vec![T::zero(); n];
 
     for row in 0..n {
         let row_end = row_ptrs[row + 1];
-        // The diagonal is claimed like any mirror: it advances the cursor past
-        // everything below it, which by now should be only the zeros that
-        // contribute no edge. Its value was already read above.
-        mirrors.claim(row, row)?;
+        // The diagonal is claimed like any mirror, which both yields its value and
+        // advances the cursor past everything below it — by now only the zeros that
+        // contribute no edge. Claiming every diagonal up front instead would skip
+        // the mirrors that live below them.
+        diag[row] = mirrors.claim(row, row)?;
         let mut cursor = mirrors.cursors[row];
 
         while cursor < row_end {
@@ -197,6 +190,9 @@ fn parse<T: Real, C: EdgeCount>(
 
 /// Clamp each row's surplus to non-negative, then close the remaining deficits
 /// with a Gremban ground vertex and reject disconnected input.
+///
+/// `row_sums` arrives holding each row's off-diagonal total; the diagonal joins it
+/// here, the first point at which every row's is known.
 fn augment<T: Real, C: EdgeCount>(
     mut adj: Vec<Vec<Edge<T, C>>>,
     mut diag: Vec<T>,
@@ -208,6 +204,7 @@ fn augment<T: Real, C: EdgeCount>(
     let mut surplus_sum = T::zero();
     let mut grounded = 0usize;
     for (row, (sum, &d)) in row_sums.iter_mut().zip(diag.iter()).enumerate() {
+        *sum = d + *sum;
         // Every off-diagonal folded into the sum was negative, so the row's
         // magnitude sum is `|d| + d - sum` and needs no second accumulator.
         let scale = d.abs() + d - *sum;
