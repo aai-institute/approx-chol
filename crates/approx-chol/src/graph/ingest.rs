@@ -2,6 +2,7 @@
 //! mirror, and close the row deficits with a Gremban ground vertex.
 
 use super::{add_edge_pair, count_components, AdjListGraph, Edge, EdgeCount, GraphBuild};
+use crate::types::count_as_scalar;
 use crate::{CsrError, CsrRef, Error, Real};
 
 pub(super) fn from_sddm<T: Real, C: EdgeCount>(
@@ -201,8 +202,8 @@ fn augment<T: Real, C: EdgeCount>(
     mut diag: Vec<T>,
     mut row_sums: Vec<T>,
 ) -> Result<GraphBuild<AdjListGraph<C, T>, T>, Error> {
-    // Absolute surplus floor separating genuine diagonal dominance from a
-    // Laplacian's rounding noise; scaled by each row's magnitude below.
+    // Relative floor below which a surplus is not worth a ground edge, scaled by
+    // each row's magnitude below.
     let tolerance = T::by_precision(1e-6, 1e-10);
     let mut surplus_sum = T::zero();
     let mut grounded = 0usize;
@@ -218,9 +219,16 @@ fn augment<T: Real, C: EdgeCount>(
         if *sum < -row_tolerance {
             return Err(Error::NotDiagonallyDominant { row });
         }
-        // The cap stops the relative arm swallowing real dominance at large
-        // scale; both ends are pinned by `*_scale_*` ingestion tests.
-        if *sum < T::zero() || sum.abs() <= row_tolerance.min(T::epsilon().sqrt()) {
+        // Grounding is worth it only above both floors. The policy floor is
+        // relative, capped absolutely so a 1e12-scale row's real surplus is not
+        // swallowed; the noise floor is the error this row's own sum could have
+        // accumulated over its `terms` additions, without which a high-degree row
+        // at scale grounds on rounding alone at a weight orders above the truth.
+        // Both ends are pinned by the `*_scale_*` and `*_noise_floor_*` tests.
+        let policy = row_tolerance.min(T::epsilon().sqrt());
+        let terms = count_as_scalar::<T, _>(adj[row].len() + 1);
+        let noise = T::epsilon() * scale * terms;
+        if *sum < T::zero() || *sum <= policy.max(noise) {
             *sum = T::zero();
         } else {
             surplus_sum = surplus_sum + *sum;

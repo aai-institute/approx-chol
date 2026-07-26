@@ -40,8 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Factor::n()` panics and `SolveError::WorkBufferTooSmall` is removed.
 - `OwnedCsr::try_as_ref` is replaced by the infallible `as_csr_ref`, and
   `TryFrom<&OwnedCsr> for CsrRef` by `From`.
-- A row surplus at or below `min(1e-10 * row_scale, sqrt(f64::EPSILON))` does not
-  trigger augmentation.
+- A row surplus at or below `min(1e-10 * row_scale, sqrt(EPSILON))` or the row's
+  accumulated rounding noise does not trigger augmentation.
 - Duplicate entries are summed before the off-diagonal sign check.
 - `Config::split_merge` is `u32` with `0` selecting standard AC; `ConfigError` and
   `Error::InvalidConfig` are removed.
@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Performance
 
 - Canonical CSR is ingested without a reordering buffer.
+- Finiteness and canonicality share one pass over the nonzeros.
 - The per-row dominance tolerance is derived from the diagonal and the row sum.
 
 ## [0.3.1] - 2026-07-10

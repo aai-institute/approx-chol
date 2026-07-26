@@ -49,6 +49,41 @@ fn near_zero_surplus_does_not_augment() {
     assert_no_augmentation_at_surplus(5e-11_f64);
 }
 
+/// A surplus can be real and still be noise: this star's centre carries
+/// `+1.92e-8` against a row scale of `8e8`, so `2.4e-17` relative — below `eps`,
+/// hence not representable as dominance. It clears the absolute `sqrt(EPSILON)`
+/// arm of the floor and must be caught by the row's noise floor instead, or the
+/// factor gains a ground edge whose weight the input cannot actually express.
+#[test]
+fn surplus_below_the_row_noise_floor_does_not_augment() {
+    // Centre diagonal is the nearest double to 1e8 + 3e8 + 1e-7; each leaf balances
+    // exactly, so only the centre row is in question.
+    let row_ptrs = [0u32, 4, 6, 8, 10];
+    let col_indices = [0u32, 1, 2, 3, 0, 1, 0, 2, 0, 3];
+    let values = [
+        400_000_000.000_000_1_f64,
+        -1e8,
+        -3e8,
+        -1e-7,
+        -1e8,
+        1e8,
+        -3e8,
+        3e8,
+        -1e-7,
+        1e-7,
+    ];
+    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4).or_panic("valid csr");
+    let factor = Builder::<f64>::new(Config::default())
+        .build(csr)
+        .or_panic("factorization should succeed");
+
+    assert_eq!(
+        factor.n(),
+        factor.original_n(),
+        "surplus below the row's noise floor must not add a ground vertex"
+    );
+}
+
 #[test]
 fn solve_into_gives_finite_nontrivial_solution() {
     let lap = grid_laplacian(8, 8);
