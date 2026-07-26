@@ -141,11 +141,6 @@ where
                 break;
             };
             steps_done += 1;
-            if graph.is_empty(v) {
-                seq.record_isolated(v, diag[v]);
-                continue;
-            }
-
             star_builder.build_star(&mut graph, v, &mut ordering);
             if star_builder.is_empty() {
                 seq.record_isolated(v, diag[v]);

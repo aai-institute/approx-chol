@@ -205,11 +205,6 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
         }));
     }
 
-    /// Returns `true` if `v` has an empty adjacency list.
-    pub(crate) fn is_empty(&self, v: usize) -> bool {
-        self.adj[v].is_empty()
-    }
-
     /// Mark `v` as eliminated and release its adjacency storage.
     pub(crate) fn eliminate_vertex(&mut self, v: usize) {
         self.eliminated.set(v);
