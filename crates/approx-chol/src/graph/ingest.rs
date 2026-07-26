@@ -7,86 +7,80 @@ use crate::{CsrError, CsrRef, Error, Real};
 pub(super) fn from_sddm<T: Real, C: EdgeCount>(
     csr: CsrRef<'_, T, u32>,
 ) -> Result<GraphBuild<AdjListGraph<C, T>, T>, Error> {
-    parse(&Canonical::from_csr(csr)?)
+    // A rewrite has to outlive the walk that borrows it, so it lives in this frame
+    // rather than inside `Mirrors`.
+    let rewritten = canonicalize(csr)?;
+    match &rewritten {
+        Some(r) => parse(Mirrors::new(&r.row_ptrs, &r.col_indices, &r.values)),
+        None => parse(Mirrors::new(
+            csr.row_ptrs(),
+            csr.col_indices(),
+            csr.values(),
+        )),
+    }
 }
 
-/// CSR whose columns ascend strictly within every row, which also rules out
-/// duplicates. [`Mirrors`] is a merge-join only under that guarantee, so [`parse`]
-/// takes this rather than raw arrays.
-enum Canonical<'a, T> {
-    Borrowed(CsrRef<'a, T, u32>),
+/// Canonical arrays rebuilt from non-canonical input.
+struct Rewritten<T> {
+    row_ptrs: Vec<u32>,
+    col_indices: Vec<u32>,
+    values: Vec<T>,
+}
+
+/// `None` when the caller's columns already ascend strictly within every row, the
+/// shape scipy produces and the only one within emits.
+fn canonicalize<T: Real>(csr: CsrRef<'_, T, u32>) -> Result<Option<Rewritten<T>>, Error> {
+    // Rows tile the value array in order, so one pass answers both questions:
+    // non-finite wins over non-canonical either way, and the reported position
+    // stays in the caller's numbering rather than a rewritten copy's.
+    let mut canonical = true;
+    let mut row_start = 0;
+    for (cols, vals) in csr.rows() {
+        if let Some(offset) = vals.iter().position(|value| !value.is_finite()) {
+            return Err(Error::NonFiniteValue {
+                position: row_start + offset,
+            });
+        }
+        canonical = canonical && cols.windows(2).all(|pair| pair[0] < pair[1]);
+        row_start += vals.len();
+    }
+    if canonical {
+        return Ok(None);
+    }
+    Ok(Some(rewrite(csr)))
+}
+
+/// Sort each row and sum duplicate entries as scipy's `sum_duplicates` does. Only
+/// non-canonical input pays this copy.
+fn rewrite<T: Real>(csr: CsrRef<'_, T, u32>) -> Rewritten<T> {
+    let nnz = csr.col_indices().len();
+    let mut row_ptrs = Vec::with_capacity(csr.n() + 1);
+    let mut col_indices = Vec::with_capacity(nnz);
+    let mut values = Vec::with_capacity(nnz);
+    let mut entries: Vec<(u32, T)> = Vec::new();
+    row_ptrs.push(0u32);
+    for (cols, vals) in csr.rows() {
+        entries.clear();
+        entries.extend(cols.iter().copied().zip(vals.iter().copied()));
+        // One row's degree, not nnz. Stable, so duplicates sum in stored order.
+        entries.sort_by_key(|&(col, _)| col);
+        for group in entries.chunk_by(|left, right| left.0 == right.0) {
+            col_indices.push(group[0].0);
+            values.push(group[1..].iter().fold(group[0].1, |sum, &(_, v)| sum + v));
+        }
+        row_ptrs.push(col_indices.len() as u32);
+    }
     Rewritten {
-        row_ptrs: Vec<u32>,
-        col_indices: Vec<u32>,
-        values: Vec<T>,
-    },
-}
-
-impl<'a, T: Real> Canonical<'a, T> {
-    fn from_csr(csr: CsrRef<'a, T, u32>) -> Result<Self, Error> {
-        // Rows tile the value array in order, so one pass answers both questions:
-        // non-finite wins over non-canonical either way, and the reported position
-        // stays in the caller's numbering rather than a rewritten copy's.
-        let mut canonical = true;
-        let mut row_start = 0;
-        for (cols, vals) in csr.rows() {
-            if let Some(offset) = vals.iter().position(|value| !value.is_finite()) {
-                return Err(Error::NonFiniteValue {
-                    position: row_start + offset,
-                });
-            }
-            canonical = canonical && cols.windows(2).all(|pair| pair[0] < pair[1]);
-            row_start += vals.len();
-        }
-        if canonical {
-            return Ok(Self::Borrowed(csr));
-        }
-        Ok(Self::rewrite(csr))
-    }
-
-    /// Sum duplicate entries as scipy's `sum_duplicates` does. Only non-canonical
-    /// input pays this copy; the shape scipy produces and the only one within
-    /// emits takes the borrowed arm.
-    fn rewrite(csr: CsrRef<'a, T, u32>) -> Self {
-        let nnz = csr.col_indices().len();
-        let mut row_ptrs = Vec::with_capacity(csr.n() + 1);
-        let mut col_indices = Vec::with_capacity(nnz);
-        let mut values = Vec::with_capacity(nnz);
-        let mut entries: Vec<(u32, T)> = Vec::new();
-        row_ptrs.push(0u32);
-        for (cols, vals) in csr.rows() {
-            entries.clear();
-            entries.extend(cols.iter().copied().zip(vals.iter().copied()));
-            // One row's degree, not nnz. Stable, so duplicates sum in stored order.
-            entries.sort_by_key(|&(col, _)| col);
-            for group in entries.chunk_by(|left, right| left.0 == right.0) {
-                col_indices.push(group[0].0);
-                values.push(group[1..].iter().fold(group[0].1, |sum, &(_, v)| sum + v));
-            }
-            row_ptrs.push(col_indices.len() as u32);
-        }
-        Self::Rewritten {
-            row_ptrs,
-            col_indices,
-            values,
-        }
-    }
-
-    fn parts(&self) -> (&[u32], &[u32], &[T]) {
-        match self {
-            Self::Borrowed(csr) => (csr.row_ptrs(), csr.col_indices(), csr.values()),
-            Self::Rewritten {
-                row_ptrs,
-                col_indices,
-                values,
-            } => (row_ptrs, col_indices, values),
-        }
+        row_ptrs,
+        col_indices,
+        values,
     }
 }
 
-/// Canonical arrays plus one cursor per row, each advancing only forward. Every
-/// entry is claimed at most once across the whole walk, which is what makes
-/// mirror pairing a merge-join instead of a per-edge search.
+/// Canonical CSR — columns ascend strictly within every row, which also rules out
+/// duplicates — plus one cursor per row, each advancing only forward. Every entry
+/// is claimed at most once across the whole walk, which is a merge-join only under
+/// that guarantee; hence [`canonicalize`] rather than raw arrays.
 struct Mirrors<'a, T> {
     row_ptrs: &'a [u32],
     col_indices: &'a [u32],
@@ -145,9 +139,9 @@ fn approximately_equal<T: Real>(left: T, right: T) -> bool {
 /// Walk each row once, claiming each upper-triangle entry's mirror through a
 /// monotone per-row cursor.
 fn parse<T: Real, C: EdgeCount>(
-    canonical: &Canonical<T>,
+    mut mirrors: Mirrors<'_, T>,
 ) -> Result<GraphBuild<AdjListGraph<C, T>, T>, Error> {
-    let (row_ptrs, col_indices, values) = canonical.parts();
+    let (row_ptrs, col_indices, values) = (mirrors.row_ptrs, mirrors.col_indices, mirrors.values);
     let n = row_ptrs.len() - 1;
     let mut adj: Vec<Vec<Edge<T, C>>> = (0..n)
         .map(|row| Vec::with_capacity((row_ptrs[row + 1] - row_ptrs[row]) as usize))
@@ -166,7 +160,6 @@ fn parse<T: Real, C: EdgeCount>(
     }
     let mut row_sums = diag.clone();
 
-    let mut mirrors = Mirrors::new(row_ptrs, col_indices, values);
     for row in 0..n {
         let row_end = row_ptrs[row + 1];
         // The diagonal is claimed like any mirror: it advances the cursor past
