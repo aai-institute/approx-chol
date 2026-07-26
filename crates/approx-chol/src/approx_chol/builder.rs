@@ -1,7 +1,7 @@
 use super::decomposition::EliminationSequence;
 use crate::graph::{EliminationGraph, GraphBuild, MultiEdgeGraph, SlimGraph};
 use crate::ordering::{DegreeDeltas, DynamicOrdering};
-use crate::sampling::{CdfSampler, WeightedSampler};
+use crate::sampling::CdfSampler;
 use crate::{ConfigError, CsrError, CsrRef, Error, Factor};
 use num_traits::PrimInt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -58,13 +58,7 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidCsr`] if conversion fails, conversion panics,
-    /// CSR validation fails, or index conversion to `u32` fails.
-    /// Returns [`Error::PositiveOffDiagonal`] if any off-diagonal entry is
-    /// strictly positive (outside the SDDM/Laplacian class).
-    /// Returns [`Error::InvalidConfig`] for invalid `split_merge`.
-    /// Returns [`Error::Disconnected`] if the input is not a single connected
-    /// component after Gremban grounding.
+    /// As [`factorize_with`](crate::factorize_with).
     pub fn build<'a, I, M>(&self, sddm: M) -> Result<Factor<T>, Error>
     where
         I: PrimInt + 'a + 'static,
@@ -74,21 +68,13 @@ where
         let csr = catch_unwind(AssertUnwindSafe(|| sddm.try_into()))
             .map_err(|_| Error::InvalidCsr(CsrError::InputConversionPanicked))?;
         let csr = csr.map_err(Into::into)?;
-        let converted = csr.to_owned_u32()?;
-        // Sole per-factorization CSR validation; build_with_sampler trusts it.
-        let converted_ref = converted.try_as_ref()?;
-        self.build_with_sampler(converted_ref, CdfSampler::<T>::new(self.config.seed))
+        let narrowed = csr.narrow_indices()?;
+        self.build_validated(narrowed.with_values(csr.values()))
     }
 
-    /// Run approximate Cholesky factorization with a custom [`WeightedSampler`].
-    ///
     /// Assumes `sddm` already passed [`CsrRef::new`] validation (as
     /// [`build`](Self::build) guarantees); does not re-validate.
-    pub(crate) fn build_with_sampler<S: WeightedSampler<T>>(
-        &self,
-        sddm: CsrRef<'_, T, u32>,
-        sampler: S,
-    ) -> Result<Factor<T>, Error> {
+    fn build_validated(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
         let original_n = sddm.n();
         Self::validate_config(self.config)?;
         let mut factor = match self.config.split_merge {
@@ -98,7 +84,7 @@ where
                     diagonal: diag,
                     ..
                 } = SlimGraph::<T>::from_sddm(sddm)?;
-                self.build_from_graph(graph, diag, sampler)
+                self.build_from_graph(graph, diag)
             }
             Some(k) => {
                 let GraphBuild {
@@ -107,7 +93,7 @@ where
                     ..
                 } = MultiEdgeGraph::<T>::from_sddm(sddm)?;
                 graph.mark_split_edges(k);
-                self.build_from_graph(graph, diag, sampler)
+                self.build_from_graph(graph, diag)
             }
         }?;
         factor.original_n = original_n;
@@ -127,11 +113,10 @@ where
     }
 
     /// Run factorization on a pre-built graph (fused pipeline path).
-    pub(crate) fn build_from_graph<G: EliminationGraph<T>, S: WeightedSampler<T>>(
+    pub(crate) fn build_from_graph<G: EliminationGraph<T>>(
         &self,
         mut graph: G,
-        diag: Vec<T>,
-        sampler: S,
+        mut diag: Vec<T>,
     ) -> Result<Factor<T>, Error> {
         let n = graph.n();
         let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
@@ -141,50 +126,34 @@ where
             Some(k) => DynamicOrdering::new_with_scale(n, degrees.into_iter(), k as usize),
         }
         .map_err(Error::InvalidCsr)?;
-        self.factorize_with_ordering(&mut graph, diag, &mut ordering, degree_sum, sampler)
-    }
-
-    /// Dispatch on the clique-tree sampling variant (AC vs AC2).
-    fn factorize_with_ordering<G: EliminationGraph<T>, S: WeightedSampler<T>>(
-        &self,
-        graph: &mut G,
-        diag: Vec<T>,
-        ordering: &mut DynamicOrdering,
-        degree_sum: usize,
-        sampler: S,
-    ) -> Result<Factor<T>, Error> {
-        let mut diag = diag;
-        match self.config.split_merge {
-            None => Ok(Self::factorize_with_variant(
-                graph,
+        let sampler = CdfSampler::<T>::new(self.config.seed);
+        Ok(match self.config.split_merge {
+            None => Self::factorize_with_variant(
+                &mut graph,
                 &mut diag,
-                ordering,
+                &mut ordering,
                 degree_sum,
                 sampler,
-                AcStarBuilder::new(graph.n()),
-            )),
-            Some(k) => Ok(Self::factorize_with_variant(
-                graph,
+                AcStarBuilder::new(n),
+            ),
+            Some(k) => Self::factorize_with_variant(
+                &mut graph,
                 &mut diag,
-                ordering,
+                &mut ordering,
                 degree_sum,
                 sampler,
-                Ac2StarBuilder::new(graph.n(), k),
-            )),
-        }
+                Ac2StarBuilder::new(n, k),
+            ),
+        })
     }
 
     /// Algorithm 8 loop parameterized by a clique-tree sampling variant.
-    fn factorize_with_variant<
-        G: EliminationGraph<T>,
-        W: WeightedSampler<T>,
-        B: StarBuilderVariant<T>,
-    >(
+    fn factorize_with_variant<G: EliminationGraph<T>, B: StarBuilderVariant<T>>(
         graph: &mut G,
         diag: &mut [T],
         ordering: &mut DynamicOrdering,
         degree_sum: usize,
-        mut sampler: W,
+        mut sampler: CdfSampler<T>,
         mut star_builder: B,
     ) -> Factor<T> {
         let n = graph.n();

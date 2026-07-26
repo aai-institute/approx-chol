@@ -1,11 +1,20 @@
 use crate::{CsrError, Error, IndexKind};
 use num_traits::{cast, PrimInt};
 
-fn cast_slice<S: PrimInt, D: PrimInt>(src: &[S], err: Error) -> Result<Vec<D>, Error> {
+fn cast_slice<S: PrimInt, D: PrimInt>(src: &[S], kind: IndexKind) -> Result<Vec<D>, Error> {
     src.iter()
         .map(|&v| cast::<S, D>(v))
         .collect::<Option<Vec<_>>>()
-        .ok_or(err)
+        .ok_or(Error::InvalidCsr(CsrError::IndexExceedsIndexType { kind }))
+}
+
+fn as_usize<I: PrimInt>(value: I, kind: IndexKind, position: usize) -> Result<usize, Error> {
+    value
+        .to_usize()
+        .ok_or(Error::InvalidCsr(CsrError::IndexNotRepresentableAsUsize {
+            kind,
+            position,
+        }))
 }
 
 /// Borrowed CSR matrix view. Zero-copy from any CSR source.
@@ -22,23 +31,33 @@ pub struct CsrRef<'a, T = f64, I = u32> {
     n: u32,
 }
 
-// ---------------------------------------------------------------------------
-// Structural methods — only need I: PrimInt, no T bounds
-// ---------------------------------------------------------------------------
+/// `u32`-narrowed index arrays still carrying the source view's validated
+/// invariants, so re-pairing them with values skips the `nnz` re-walk.
+pub(crate) struct NarrowedCsr {
+    row_ptrs: Vec<u32>,
+    col_indices: Vec<u32>,
+    n: u32,
+}
+
+impl NarrowedCsr {
+    pub(crate) fn with_values<'a, T>(&'a self, values: &'a [T]) -> CsrRef<'a, T, u32> {
+        CsrRef {
+            row_ptrs: &self.row_ptrs,
+            col_indices: &self.col_indices,
+            values,
+            n: self.n,
+        }
+    }
+}
 
 impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
-    /// Construct a `CsrRef` with full validation.
+    /// Construct a `CsrRef` with full validation. The only constructor, so every
+    /// `CsrRef` that exists is structurally valid.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidCsr`] if:
-    /// - `row_ptrs.len() != n + 1`
-    /// - `col_indices.len() != values.len()`
-    /// - `row_ptrs[0] != 0`
-    /// - `row_ptrs[n] != col_indices.len()`
-    /// - `row_ptrs` is not non-decreasing
-    /// - any column index is out of bounds (>= n)
-    /// - a pointer/index cannot be represented as `usize`
+    /// Returns [`Error::InvalidCsr`] if the arrays are not a structurally valid
+    /// CSR of dimension `n`; the [`CsrError`] variant names the violation.
     pub fn new(
         row_ptrs: &'a [I],
         col_indices: &'a [I],
@@ -55,8 +74,7 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
         Ok(csr)
     }
 
-    /// Validate structural invariants of the CSR matrix.
-    pub(crate) fn validate(&self) -> Result<(), Error> {
+    fn validate(&self) -> Result<(), Error> {
         let n = self.n as usize;
         if self.row_ptrs.len() != n + 1 {
             return Err(Error::InvalidCsr(CsrError::RowPtrsLenMismatch {
@@ -71,21 +89,10 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
             }));
         }
 
-        let row_ptr_last = self.row_ptrs[n].to_usize().ok_or(Error::InvalidCsr(
-            CsrError::IndexNotRepresentableAsUsize {
-                kind: IndexKind::RowPtr,
-                position: n,
-            },
-        ))?;
-        let row_ptr_first = self.row_ptrs[0].to_usize().ok_or(Error::InvalidCsr(
-            CsrError::IndexNotRepresentableAsUsize {
-                kind: IndexKind::RowPtr,
-                position: 0,
-            },
-        ))?;
-        if row_ptr_first != 0 {
+        let row_ptr_last = as_usize(self.row_ptrs[n], IndexKind::RowPtr, n)?;
+        if self.row_ptrs[0] != I::zero() {
             return Err(Error::InvalidCsr(CsrError::RowPtrsMustStartAtZero {
-                got: row_ptr_first,
+                got: as_usize(self.row_ptrs[0], IndexKind::RowPtr, 0)?,
             }));
         }
         if row_ptr_last != self.col_indices.len() {
@@ -95,87 +102,57 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
             }));
         }
 
+        // Both scans compare in `I`, so the happy path converts no index; only the
+        // error arms need a `usize` for the payload.
         for i in 0..n {
-            let a = self.row_ptrs[i].to_usize().ok_or(Error::InvalidCsr(
-                CsrError::IndexNotRepresentableAsUsize {
-                    kind: IndexKind::RowPtr,
-                    position: i,
-                },
-            ))?;
-            let b = self.row_ptrs[i + 1].to_usize().ok_or(Error::InvalidCsr(
-                CsrError::IndexNotRepresentableAsUsize {
-                    kind: IndexKind::RowPtr,
-                    position: i + 1,
-                },
-            ))?;
-            if a > b {
+            if self.row_ptrs[i] > self.row_ptrs[i + 1] {
                 return Err(Error::InvalidCsr(CsrError::RowPtrsNotNonDecreasing {
                     row: i,
-                    prev: a,
-                    next: b,
+                    prev: as_usize(self.row_ptrs[i], IndexKind::RowPtr, i)?,
+                    next: as_usize(self.row_ptrs[i + 1], IndexKind::RowPtr, i + 1)?,
                 }));
             }
         }
 
-        for (position, &col) in self.col_indices.iter().enumerate() {
-            let col_usize = col.to_usize().ok_or(Error::InvalidCsr(
-                CsrError::IndexNotRepresentableAsUsize {
-                    kind: IndexKind::ColIndex,
-                    position,
-                },
-            ))?;
-            if col_usize >= self.n as usize {
-                return Err(Error::InvalidCsr(CsrError::ColumnIndexOutOfBounds {
-                    position,
-                    col: col_usize,
-                    n: self.n as usize,
-                }));
+        // `None` means `I` cannot represent `n`, so every `I` value is below it.
+        if let Some(limit) = cast::<u32, I>(self.n) {
+            for (position, &col) in self.col_indices.iter().enumerate() {
+                if col >= limit {
+                    return Err(Error::InvalidCsr(CsrError::ColumnIndexOutOfBounds {
+                        position,
+                        col: as_usize(col, IndexKind::ColIndex, position)?,
+                        n,
+                    }));
+                }
             }
         }
         Ok(())
     }
 
+    pub(crate) fn narrow_indices(&self) -> Result<NarrowedCsr, Error> {
+        Ok(NarrowedCsr {
+            row_ptrs: cast_slice(self.row_ptrs, IndexKind::RowPtr)?,
+            col_indices: cast_slice(self.col_indices, IndexKind::ColIndex)?,
+            n: self.n,
+        })
+    }
+
     /// Row pointer array (length `n + 1`).
     #[inline]
-    pub fn row_ptrs(&self) -> &[I] {
+    pub fn row_ptrs(&self) -> &'a [I] {
         self.row_ptrs
     }
 
     /// Column index array (length `nnz`).
     #[inline]
-    pub fn col_indices(&self) -> &[I] {
+    pub fn col_indices(&self) -> &'a [I] {
         self.col_indices
     }
 
     /// Value array (length `nnz`).
     #[inline]
-    pub fn values(&self) -> &[T] {
+    pub fn values(&self) -> &'a [T] {
         self.values
-    }
-
-    /// Returns (col_indices, values) for row `i`.
-    ///
-    /// Crate-internal helper; callers must ensure `i < n`.
-    #[inline]
-    pub(crate) fn try_row(&self, i: usize) -> Result<(&'a [I], &'a [T]), Error> {
-        debug_assert!(
-            i < self.n as usize,
-            "row index {i} out of bounds for n={}",
-            self.n
-        );
-        let start = self.row_ptrs[i].to_usize().ok_or(Error::InvalidCsr(
-            CsrError::IndexNotRepresentableAsUsize {
-                kind: IndexKind::RowPtr,
-                position: i,
-            },
-        ))?;
-        let end = self.row_ptrs[i + 1].to_usize().ok_or(Error::InvalidCsr(
-            CsrError::IndexNotRepresentableAsUsize {
-                kind: IndexKind::RowPtr,
-                position: i + 1,
-            },
-        ))?;
-        Ok((&self.col_indices[start..end], &self.values[start..end]))
     }
 
     /// Number of rows (and columns — the matrix is square).
@@ -185,9 +162,18 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Conversion methods — need T: Clone for value copies
-// ---------------------------------------------------------------------------
+impl<'a, T> CsrRef<'a, T, u32> {
+    /// Each row's `(col_indices, values)`, in order. Infallible: pinning `I` to
+    /// `u32` discharges the index conversion that [`validate`](Self::validate)
+    /// has to check for a general `I`.
+    pub(crate) fn rows(self) -> impl Iterator<Item = (&'a [u32], &'a [T])> {
+        (0..self.n as usize).map(move |i| {
+            let start = self.row_ptrs[i] as usize;
+            let end = self.row_ptrs[i + 1] as usize;
+            (&self.col_indices[start..end], &self.values[start..end])
+        })
+    }
+}
 
 impl<'a, T: Clone, I: PrimInt> CsrRef<'a, T, I> {
     /// Convert to an owned CSR with `u32` indices.
@@ -196,23 +182,16 @@ impl<'a, T: Clone, I: PrimInt> CsrRef<'a, T, I> {
     ///
     /// Returns [`Error::InvalidCsr`] if any index does not fit in `u32`.
     pub fn to_owned_u32(&self) -> Result<OwnedCsr<T, u32>, Error> {
-        let row_ptrs = cast_slice(
-            self.row_ptrs,
-            Error::InvalidCsr(CsrError::IndexExceedsIndexType {
-                kind: IndexKind::RowPtr,
-            }),
-        )?;
-        let col_indices = cast_slice(
-            self.col_indices,
-            Error::InvalidCsr(CsrError::IndexExceedsIndexType {
-                kind: IndexKind::ColIndex,
-            }),
-        )?;
+        let NarrowedCsr {
+            row_ptrs,
+            col_indices,
+            n,
+        } = self.narrow_indices()?;
         Ok(OwnedCsr {
             row_ptrs,
             col_indices,
             values: self.values.to_vec(),
-            n: self.n,
+            n,
         })
     }
 }
@@ -239,24 +218,17 @@ impl<T: Clone, I: PrimInt> OwnedCsr<T, I> {
         values: &[T],
         n: usize,
     ) -> Result<Self, Error> {
-        cast::<usize, I>(n).ok_or(Error::InvalidCsr(
-            CsrError::MatrixDimensionExceedsIndexType { n },
-        ))?;
+        // `n` must fit `u32` to be stored and `I` for `validate` to bounds-check
+        // columns against it at all.
         let n = u32::try_from(n)
-            .map_err(|_| Error::InvalidCsr(CsrError::MatrixDimensionExceedsIndexType { n }))?;
+            .ok()
+            .filter(|&fits| cast::<u32, I>(fits).is_some())
+            .ok_or(Error::InvalidCsr(
+                CsrError::MatrixDimensionExceedsIndexType { n },
+            ))?;
 
-        let row_ptrs = cast_slice(
-            row_ptrs,
-            Error::InvalidCsr(CsrError::IndexExceedsIndexType {
-                kind: IndexKind::RowPtr,
-            }),
-        )?;
-        let col_indices = cast_slice(
-            col_indices,
-            Error::InvalidCsr(CsrError::IndexExceedsIndexType {
-                kind: IndexKind::ColIndex,
-            }),
-        )?;
+        let row_ptrs = cast_slice(row_ptrs, IndexKind::RowPtr)?;
+        let col_indices = cast_slice(col_indices, IndexKind::ColIndex)?;
 
         CsrRef::new(&row_ptrs, &col_indices, values, n)?;
 
@@ -275,9 +247,15 @@ impl<T, I: PrimInt> OwnedCsr<T, I> {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidCsr`] if internal CSR invariants are violated.
+    /// None. Both constructors validate and the fields are private, so there is
+    /// nothing left to check; the `Result` stays for API compatibility.
     pub fn try_as_ref(&self) -> Result<CsrRef<'_, T, I>, Error> {
-        CsrRef::new(&self.row_ptrs, &self.col_indices, &self.values, self.n)
+        Ok(CsrRef {
+            row_ptrs: &self.row_ptrs,
+            col_indices: &self.col_indices,
+            values: &self.values,
+            n: self.n,
+        })
     }
 }
 
@@ -324,7 +302,6 @@ fn try_from_faer_view_impl<'a, T, I: faer::Index + PrimInt>(
     CsrRef::new(symbolic.row_ptr(), symbolic.col_idx(), mat.val(), n)
 }
 
-/// Fallible zero-copy conversion from an `sprs` CSR matrix view.
 #[cfg(feature = "sprs")]
 impl<'a, T, I: sprs::SpIndex + PrimInt> TryFrom<sprs::CsMatViewI<'a, T, I>> for CsrRef<'a, T, I> {
     type Error = Error;
@@ -334,7 +311,6 @@ impl<'a, T, I: sprs::SpIndex + PrimInt> TryFrom<sprs::CsMatViewI<'a, T, I>> for 
     }
 }
 
-/// Fallible zero-copy conversion from a borrowed `sprs` CSR matrix.
 #[cfg(feature = "sprs")]
 impl<'a, T, I: sprs::SpIndex + PrimInt> TryFrom<&'a sprs::CsMatI<T, I>> for CsrRef<'a, T, I> {
     type Error = Error;
@@ -344,7 +320,6 @@ impl<'a, T, I: sprs::SpIndex + PrimInt> TryFrom<&'a sprs::CsMatI<T, I>> for CsrR
     }
 }
 
-/// Fallible zero-copy conversion from a `faer` sparse row matrix view.
 #[cfg(feature = "faer")]
 impl<'a, T, I: faer::Index + PrimInt> TryFrom<faer::sparse::SparseRowMatRef<'a, I, T>>
     for CsrRef<'a, T, I>
@@ -356,7 +331,6 @@ impl<'a, T, I: faer::Index + PrimInt> TryFrom<faer::sparse::SparseRowMatRef<'a, 
     }
 }
 
-/// Fallible zero-copy conversion from a borrowed `faer` sparse row matrix.
 #[cfg(feature = "faer")]
 impl<'a, T, I: faer::Index + PrimInt> TryFrom<&'a faer::sparse::SparseRowMat<I, T>>
     for CsrRef<'a, T, I>
@@ -374,17 +348,21 @@ mod tests {
     use crate::test_utils::OrPanic;
 
     #[test]
-    fn to_owned_u32_preserves_indices_for_u32_input() {
-        let row_ptrs = [0u32, 1];
-        let col_indices = [0u32];
+    fn to_owned_u32_narrows_any_index_type_and_keeps_values() {
         let values = [1.0f64];
-        let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 1).or_panic("valid csr");
+        let (wide_row_ptrs, wide_col_indices) = ([0usize, 1], [0usize]);
+        let narrow = CsrRef::new(&[0u32, 1], &[0u32], &values, 1).or_panic("valid csr");
+        let wide = CsrRef::new(&wide_row_ptrs, &wide_col_indices, &values, 1).or_panic("valid csr");
 
-        let converted = csr.to_owned_u32().or_panic("conversion");
-        let converted_ref = converted.try_as_ref().or_panic("must stay valid");
-        assert_eq!(converted_ref.row_ptrs(), &row_ptrs);
-        assert_eq!(converted_ref.col_indices(), &col_indices);
-        assert_eq!(converted_ref.values(), &values);
+        for owned in [
+            narrow.to_owned_u32().or_panic("u32 conversion"),
+            wide.to_owned_u32().or_panic("usize conversion"),
+        ] {
+            let converted = owned.try_as_ref().or_panic("infallible");
+            assert_eq!(converted.row_ptrs(), &[0u32, 1]);
+            assert_eq!(converted.col_indices(), &[0u32]);
+            assert_eq!(converted.values(), &values);
+        }
     }
 
     #[test]
@@ -400,19 +378,5 @@ mod tests {
 
         let factor = crate::factorize(&owned).or_panic("factorize &OwnedCsr");
         assert_eq!(factor.n(), 4);
-    }
-
-    #[test]
-    fn to_owned_u32_converts_non_u32_indices() {
-        let row_ptrs = [0usize, 1];
-        let col_indices = [0usize];
-        let values = [1.0f64];
-        let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 1).or_panic("valid csr");
-
-        let converted = csr.to_owned_u32().or_panic("conversion");
-        let converted_ref = converted.try_as_ref().or_panic("must stay valid");
-        assert_eq!(converted_ref.row_ptrs(), &[0u32, 1]);
-        assert_eq!(converted_ref.col_indices(), &[0u32]);
-        assert_eq!(converted_ref.values(), &values);
     }
 }

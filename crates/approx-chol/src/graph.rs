@@ -199,21 +199,15 @@ impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
             ));
         }
         let mut adj: Vec<Vec<E>> = Vec::with_capacity(n);
-        for row in 0..n {
-            let (cols, _) = csr.try_row(row)?;
+        for (cols, _) in csr.rows() {
             adj.push(Vec::with_capacity(cols.len()));
         }
         let mut diag = vec![T::zero(); n];
         let mut row_sums = vec![T::zero(); n];
 
-        for row in 0..n {
-            let (cols, vals) = csr.try_row(row)?;
+        for (row, (cols, vals)) in csr.rows().enumerate() {
             for (&col, &val) in cols.iter().zip(vals.iter()) {
                 let col_usize = col as usize;
-                debug_assert!(
-                    col_usize < n,
-                    "CSR column index {col_usize} out of bounds (n={n})"
-                );
                 if row == col_usize {
                     diag[row] = diag[row] + val;
                     row_sums[row] = row_sums[row] + val;

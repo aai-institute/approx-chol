@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   original matrix dimension rather than the augmented factor dimension.
   `SolveError::RhsLengthExceedsFactor` and the corresponding Python `ValueError`
   now report the original matrix dimension.
+- `CsrRef::row_ptrs`/`col_indices`/`values` return slices with the view's lifetime.
 
 ## [0.3.1] - 2026-07-10
 

@@ -39,6 +39,8 @@ proptest! {
         );
     }
 
+    // A non-zero start leaves the first payload entry addressable by no row, so
+    // accepting it would factorize a different matrix than the caller passed.
     #[test]
     fn reports_non_zero_row_ptr_start(
         (mut row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
