@@ -42,50 +42,19 @@ proptest! {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn ac_residual_is_bounded(
-        (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
-    ) {
-        prop_assume!(is_connected(&row_ptrs, &col_indices, n));
-        let rhs = rhs_for_dimension(n as usize);
-        let csr = (row_ptrs, col_indices, values, n);
-
-        if let Some(relative) = relative_residual(&csr, Config::default(), &rhs) {
-            prop_assert!(
-                relative < RESIDUAL_LIMIT,
-                "AC relative residual too large: {relative:.4e}"
-            );
-        }
-    }
-
-    #[test]
-    fn ac2_residual_is_bounded(
-        (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
-    ) {
-        prop_assume!(is_connected(&row_ptrs, &col_indices, n));
-        let rhs = rhs_for_dimension(n as usize);
-        let csr = (row_ptrs, col_indices, values, n);
-        let config = Config { seed: 7, split_merge: Some(2) };
-
-        if let Some(relative) = relative_residual(&csr, config, &rhs) {
-            prop_assert!(
-                relative < RESIDUAL_LIMIT,
-                "AC2 relative residual too large: {relative:.4e}"
-            );
-        }
-    }
-
-    #[test]
-    fn random_rhs_residual_is_bounded(
+    fn residual_is_bounded(
         ((row_ptrs, col_indices, values, n), rhs) in laplacian_with_rhs_strategy()
     ) {
         prop_assume!(is_connected(&row_ptrs, &col_indices, n));
         let csr = (row_ptrs, col_indices, values, n);
 
-        if let Some(relative) = relative_residual(&csr, Config::default(), &rhs) {
-            prop_assert!(
-                relative < RESIDUAL_LIMIT,
-                "random-RHS relative residual too large: {relative:.4e}"
-            );
+        for config in [Config::default(), Config { seed: 7, split_merge: Some(2) }] {
+            if let Some(relative) = relative_residual(&csr, config, &rhs) {
+                prop_assert!(
+                    relative < RESIDUAL_LIMIT,
+                    "{config:?}: relative residual too large: {relative:.4e}"
+                );
+            }
         }
     }
 
@@ -124,9 +93,10 @@ proptest! {
             .solve_into(&rhs, &mut from_into)
             .or_panic("solve_into should succeed");
 
+        // `solve` is `solve_into` plus a truncation, so nothing may differ.
         prop_assert_eq!(from_alloc.len(), from_into.len());
         for (a, b) in from_alloc.iter().zip(from_into.iter()) {
-            prop_assert!((*a - *b).abs() <= 1e-12);
+            prop_assert!(a.to_bits() == b.to_bits(), "{} vs {}", a, b);
         }
     }
 
@@ -135,15 +105,23 @@ proptest! {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn sddm_solve_is_finite(
+    fn sddm_factor_is_augmented_and_solves_finitely(
         (row_ptrs, col_indices, values, n) in sddm_csr_strategy()
     ) {
         let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
             .or_panic("valid SDDM CSR");
         let factor = factorize(csr).or_panic("factorization");
-        let rhs = rhs_for_dimension(n as usize);
 
-        let x = factor.solve(&rhs).or_panic("solve");
+        prop_assert_eq!(
+            factor.original_n(), n as usize,
+            "original_n must match input dimension"
+        );
+        prop_assert!(
+            factor.n() > n as usize,
+            "SDDM should trigger Gremban augmentation (factor.n() must be > n)"
+        );
+
+        let x = factor.solve(&rhs_for_dimension(n as usize)).or_panic("solve");
         prop_assert!(x.iter().all(|v| v.is_finite()), "SDDM solution has non-finite values");
     }
 
@@ -202,21 +180,4 @@ proptest! {
         );
     }
 
-    #[test]
-    fn sddm_factor_dimensions_are_consistent(
-        (row_ptrs, col_indices, values, n) in sddm_csr_strategy()
-    ) {
-        let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
-            .or_panic("valid SDDM CSR");
-        let factor = factorize(csr).or_panic("factorization");
-
-        prop_assert_eq!(
-            factor.original_n(), n as usize,
-            "original_n must match input dimension"
-        );
-        prop_assert!(
-            factor.n() > n as usize,
-            "SDDM should trigger Gremban augmentation (factor.n() must be > n)"
-        );
-    }
 }

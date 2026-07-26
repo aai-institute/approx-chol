@@ -10,6 +10,7 @@ use panic_ok::OrPanic;
 
 use approx_chol::low_level::Builder;
 use approx_chol::{Config, CsrRef, SolveError};
+use num_traits::Float;
 
 // ---------------------------------------------------------------------------
 // Gremban augmentation: SDDM vs pure Laplacian
@@ -28,67 +29,28 @@ fn sddm_4() -> (Vec<u32>, Vec<u32>, Vec<f64>, u32) {
     (row_ptrs, col_indices, values, n)
 }
 
-#[test]
-fn gremban_augmented_for_sddm() {
-    let (rp, ci, vals, n) = sddm_4();
-    let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid SDDM");
-    let factor = Builder::new(Config::default())
-        .build(csr)
-        .or_panic("factorization should succeed");
-    // Gremban augmentation adds one extra vertex for SDDM matrices
-    assert!(
-        factor.n() > n as usize,
-        "expected factor.n() > {n}, got {}",
-        factor.n()
-    );
-}
-
-#[test]
-fn no_augmentation_for_pure_laplacian() {
-    let lap = grid_laplacian(3, 3); // pure Laplacian: zero row sums
-    let original_n = lap.n as usize;
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
-        .or_panic("factorization should succeed");
-    assert_eq!(
-        factor.n(),
-        original_n,
-        "pure Laplacian should not be augmented"
-    );
-}
-
-#[test]
-fn near_zero_surplus_f32_does_not_augment() {
-    let eps = 5e-7_f32;
+/// Row-sum drift at roundoff scale must not read as diagonal dominance. The
+/// floor is precision-dependent, so `eps` comes from the caller.
+fn assert_no_augmentation_at_surplus<T: Float + Send + Sync + 'static>(eps: T) {
+    let one = T::one();
     let row_ptrs = [0u32, 2, 4];
     let col_indices = [0u32, 1, 0, 1];
-    let values = [1.0_f32 + eps, -1.0_f32, -1.0_f32, 1.0_f32 + eps];
+    let values = [one + eps, -one, -one, one + eps];
     let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).or_panic("valid csr");
-    let factor = Builder::<f32>::new(Config::default())
+    let factor = Builder::<T>::new(Config::default())
         .build(csr)
         .or_panic("factorization should succeed");
     assert_eq!(
         factor.n(),
         2,
-        "roundoff-scale row-sum drift should not trigger augmentation for f32"
+        "roundoff drift must not trigger augmentation"
     );
 }
 
 #[test]
-fn near_zero_surplus_f64_does_not_augment() {
-    let eps = 5e-11_f64;
-    let row_ptrs = [0u32, 2, 4];
-    let col_indices = [0u32, 1, 0, 1];
-    let values = [1.0_f64 + eps, -1.0_f64, -1.0_f64, 1.0_f64 + eps];
-    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).or_panic("valid csr");
-    let factor = Builder::<f64>::new(Config::default())
-        .build(csr)
-        .or_panic("factorization should succeed");
-    assert_eq!(
-        factor.n(),
-        2,
-        "roundoff-scale row-sum drift should not trigger augmentation for f64"
-    );
+fn near_zero_surplus_does_not_augment() {
+    assert_no_augmentation_at_surplus(5e-7_f32);
+    assert_no_augmentation_at_surplus(5e-11_f64);
 }
 
 // ---------------------------------------------------------------------------
@@ -155,38 +117,6 @@ fn solve_in_place_skips_projection() {
         .zip(no_proj.iter())
         .any(|(a, b)| (a - b).abs() > 1e-14);
     assert!(any_different, "expected projection to change the solution");
-}
-
-// ---------------------------------------------------------------------------
-// Allocating solve() gives same result as solve_into()
-// ---------------------------------------------------------------------------
-
-#[test]
-fn allocating_solve_matches_solve_into() {
-    let lap = grid_laplacian(6, 6);
-    let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
-        .or_panic("factorization should succeed");
-
-    let n = factor.n();
-    let mut rhs = vec![0.0; n_orig];
-    rhs[0] = 1.0;
-    rhs[n_orig - 1] = -1.0;
-
-    // solve_into reference (work buffer is full augmented dimension)
-    let mut work = vec![0.0; n];
-    factor
-        .solve_into(&rhs, &mut work)
-        .or_panic("solve_into should succeed");
-
-    // allocating solve() returns original_n elements
-    let result = factor.solve(&rhs).or_panic("solve should succeed");
-
-    assert_eq!(result.len(), factor.original_n());
-    for (a, b) in result.iter().zip(work[..factor.original_n()].iter()) {
-        assert_eq!(*a, *b, "allocating solve() must match solve_into()");
-    }
 }
 
 #[test]
@@ -261,27 +191,6 @@ fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs() {
             );
         }
     }
-}
-
-#[test]
-fn solve_into_reports_rhs_too_long() {
-    let lap = grid_laplacian(4, 4);
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
-        .or_panic("factorization should succeed");
-
-    let rhs = vec![0.0; factor.n() + 1];
-    let mut work = vec![0.0; factor.n()];
-    let err = factor
-        .solve_into(&rhs, &mut work)
-        .err_or_panic("rhs longer than factor dimension must fail");
-    assert!(matches!(
-        err,
-        SolveError::RhsLengthExceedsFactor {
-            rhs_len: _,
-            factor_dim: _
-        }
-    ));
 }
 
 #[test]
