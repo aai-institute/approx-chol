@@ -40,8 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Factor::n()` panics and `SolveError::WorkBufferTooSmall` is removed.
 - `OwnedCsr::try_as_ref` is replaced by the infallible `as_csr_ref`, and
   `TryFrom<&OwnedCsr> for CsrRef` by `From`.
-- A row surplus at or below `min(1e-10 * row_scale, sqrt(EPSILON))` or the row's
-  accumulated rounding noise does not trigger augmentation.
+- A row surplus at or below `min(1e-10 * row_scale, sqrt(EPSILON))`, the row's
+  accumulated rounding noise, or the resolvable pivot scale does not trigger
+  augmentation.
 - Duplicate entries are summed before the off-diagonal sign check.
 - A row sum folds in its diagonal last, so the exact factor for a fixed seed can
   differ from earlier releases on input whose row sums do not accumulate exactly.

@@ -28,7 +28,7 @@ fn build(config: Config, rp: &[u32], ci: &[u32], vals: &[f64]) -> Result<Factor<
 #[test]
 fn out_of_class_input_is_rejected_at_its_reported_position() {
     let max = f64::MAX;
-    let cases: [Rejected<'_>; 10] = [
+    let cases: [Rejected<'_>; 11] = [
         // Used to fall through both the diagonal and the `val < 0` edge branch,
         // silently factorizing diag(5, 4) — a confidently wrong factor.
         (
@@ -74,6 +74,17 @@ fn out_of_class_input_is_rejected_at_its_reported_position() {
             &[1, 0, 2, 1, 0, 2, 1],
             &[-1.0, 1.0, -1.0, 2.0, f64::NAN, 1.0, -1.0],
             Error::NonFiniteValue { position: 4 },
+        ),
+        // Below the resolvable pivot scale the elimination clamps each pivot, so
+        // augmenting would return the right-hand side unchanged. Clamping the
+        // surplus instead leaves the ground vertex isolated, which is what makes
+        // this reachable as a rejection at all.
+        (
+            "surplus below the resolvable pivot scale",
+            &[0, 1, 2],
+            &[0, 1],
+            &[1e-15, 1e-15],
+            Error::Disconnected { components: 2 },
         ),
         // A null space bigger than a connected Laplacian's single constant. Three
         // disjoint 2-node paths, so the count guards against a hardcoded 2.

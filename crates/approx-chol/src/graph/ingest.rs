@@ -208,24 +208,31 @@ fn augment<T: Real, C: EdgeCount>(
         // Every off-diagonal folded into the sum was negative, so the row's
         // magnitude sum is `|d| + d - sum` and needs no second accumulator.
         let scale = d.abs() + d - *sum;
-        // Every check below succeeds on an infinite deficit (`-inf < -inf`).
-        if !sum.is_finite() || !scale.is_finite() {
+        // A non-finite sum forces a non-finite scale, so scale alone decides. Every
+        // check below succeeds on an infinite deficit (`-inf < -inf`).
+        if !scale.is_finite() {
             return Err(Error::NonFiniteRow { row });
         }
         let row_tolerance = tolerance * scale;
         if *sum < -row_tolerance {
             return Err(Error::NotDiagonallyDominant { row });
         }
-        // Grounding is worth it only above both floors. The policy floor is
-        // relative, capped absolutely so a 1e12-scale row's real surplus is not
-        // swallowed; the noise floor is the error this row's own sum could have
-        // accumulated over its `terms` additions, without which a high-degree row
-        // at scale grounds on rounding alone at a weight orders above the truth.
-        // Both ends are pinned by the `*_scale_*` and `*_noise_floor_*` tests.
+        // A surplus earns a ground edge only above three floors, each rejecting a
+        // different way it could fail to be dominance worth acting on:
+        //   policy    — too small relative to the row to matter, capped absolutely
+        //               so a 1e12-scale row's real surplus is not swallowed;
+        //   noise     — inside the error this row's own sum could have accumulated
+        //               over its `terms` additions, so it may not be there at all;
+        //   resolvable— below the pivot scale the elimination can invert, so
+        //               grounding on it manufactures a link the solve cannot use
+        //               and silently returns the right-hand side unchanged.
+        // All three are pinned by tests: `*_scale_*`, `*_noise_floor_*`,
+        // `sub_near_zero_*`.
         let policy = row_tolerance.min(T::epsilon().sqrt());
         let terms = count_as_scalar::<T, _>(adj[row].len() + 1);
         let noise = T::epsilon() * scale * terms;
-        if *sum < T::zero() || *sum <= policy.max(noise) {
+        let floor = policy.max(noise).max(T::near_zero());
+        if *sum < T::zero() || *sum <= floor {
             *sum = T::zero();
         } else {
             surplus_sum = surplus_sum + *sum;
