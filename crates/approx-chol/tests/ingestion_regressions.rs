@@ -21,9 +21,7 @@ fn solve_with_default_ac(
     .or_panic("factorization");
     let mut work = vec![0.0; factor.n()];
     work[..rhs.len()].copy_from_slice(rhs);
-    factor
-        .solve_in_place(&mut work)
-        .or_panic("solve_in_place should succeed");
+    factor.solve_in_place(&mut work);
     work
 }
 

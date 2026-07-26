@@ -16,34 +16,13 @@ pub(crate) struct EliminationStep<'a, T> {
     pub(crate) elimination_fractions: &'a [T],
 }
 
+/// Every index a kernel below touches is in bounds already: the caller asserts
+/// `y.len() >= n` once per solve, and `validate_for_dim(n)` puts every vertex and
+/// neighbor under `n`. Neither kernel re-checks per step.
 impl<'a, T: num_traits::Float + Send + Sync + 'static> EliminationStep<'a, T> {
-    #[inline(always)]
-    fn debug_assert_in_bounds(&self, y_len: usize) {
-        debug_assert!(
-            self.vertex < y_len,
-            "pivot vertex {} out of bounds for work buffer len {}",
-            self.vertex,
-            y_len
-        );
-        debug_assert_eq!(
-            self.neighbor_indices.len(),
-            self.elimination_fractions.len(),
-            "neighbors/fractions length mismatch"
-        );
-        for &j in self.neighbor_indices {
-            debug_assert!(
-                (j as usize) < y_len,
-                "neighbor index {} out of bounds for work buffer len {}",
-                j,
-                y_len
-            );
-        }
-    }
-
     /// Forward elimination: scatter pivot weight to neighbors, then scale by D^{-1}.
     #[inline(always)]
     pub(crate) fn apply_forward(&self, y: &mut [T]) {
-        self.debug_assert_in_bounds(y.len());
         let vertex = self.vertex;
         let inv_diag = self.inv_diag;
         let n = self.neighbor_indices.len();
@@ -75,7 +54,6 @@ impl<'a, T: num_traits::Float + Send + Sync + 'static> EliminationStep<'a, T> {
     /// Backward substitution: gather neighbor contributions back to pivot.
     #[inline(always)]
     pub(crate) fn apply_backward(&self, y: &mut [T]) {
-        self.debug_assert_in_bounds(y.len());
         let vertex = self.vertex;
         let n = self.neighbor_indices.len();
         let one = T::one();

@@ -39,9 +39,7 @@ fn bench_solve_for_size(c: &mut Criterion, size: usize) {
     group.bench_with_input(BenchmarkId::new("solve_in_place", n), &n, |b, _| {
         b.iter(|| {
             work_in_place.copy_from_slice(&rhs);
-            factor
-                .solve_in_place(black_box(&mut work_in_place))
-                .or_panic("solve_in_place should succeed");
+            factor.solve_in_place(black_box(&mut work_in_place));
             black_box(&work_in_place);
         });
     });

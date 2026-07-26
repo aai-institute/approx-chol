@@ -78,6 +78,10 @@ impl<T> Factor<T> {
 }
 
 /// Errors returned by fallible [`Factor`] solve methods.
+///
+/// Only the right-hand side gets an error variant: its length comes from data
+/// the caller may not control. A short work buffer is caller-side misuse —
+/// [`Factor::n`] is the authority on the size — so it panics instead.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SolveError {
@@ -86,13 +90,6 @@ pub enum SolveError {
         /// Provided RHS length.
         rhs_len: usize,
         /// Maximum accepted RHS length (`Factor::original_n()`).
-        factor_dim: usize,
-    },
-    /// Work buffer is smaller than factor dimension.
-    WorkBufferTooSmall {
-        /// Provided work length.
-        work_len: usize,
-        /// Factor dimension (`Factor::n()`).
         factor_dim: usize,
     },
 }
@@ -108,14 +105,6 @@ impl fmt::Display for SolveError {
                 "rhs length {} exceeds original matrix dimension {}",
                 rhs_len, factor_dim
             ),
-            Self::WorkBufferTooSmall {
-                work_len,
-                factor_dim,
-            } => write!(
-                f,
-                "work buffer too small: got {}, need at least {}",
-                work_len, factor_dim
-            ),
         }
     }
 }
@@ -127,25 +116,24 @@ where
     T: num_traits::Float + Send + Sync + 'static,
 {
     #[inline]
-    fn validate_work(&self, work: &[T]) -> Result<(), SolveError> {
-        if work.len() < self.n {
-            return Err(SolveError::WorkBufferTooSmall {
-                work_len: work.len(),
-                factor_dim: self.n,
-            });
-        }
-        Ok(())
+    fn assert_work_fits(&self, work: &[T]) {
+        assert!(
+            work.len() >= self.n,
+            "work buffer too small: got {}, need at least {}",
+            work.len(),
+            self.n
+        );
     }
 
     #[inline]
-    fn validate_rhs_and_work(&self, b: &[T], work: &[T]) -> Result<(), SolveError> {
+    fn validate_rhs(&self, b: &[T]) -> Result<(), SolveError> {
         if b.len() > self.original_n {
             return Err(SolveError::RhsLengthExceedsFactor {
                 rhs_len: b.len(),
                 factor_dim: self.original_n,
             });
         }
-        self.validate_work(work)
+        Ok(())
     }
 
     /// Dimension of the original input matrix.
@@ -192,7 +180,7 @@ where
 
     #[inline]
     fn project_zero_mean(&self, y: &mut [T]) {
-        let n = self.n.min(y.len());
+        let n = self.n;
         if n == 0 {
             return;
         }
@@ -266,9 +254,13 @@ where
     /// # Errors
     ///
     /// Returns [`SolveError::RhsLengthExceedsFactor`] if `b.len() > self.original_n()`.
-    /// Returns [`SolveError::WorkBufferTooSmall`] if `work.len() < self.n()`.
+    ///
+    /// # Panics
+    ///
+    /// If `work.len() < self.n()`.
     pub fn solve_into(&self, b: &[T], work: &mut [T]) -> Result<(), SolveError> {
-        self.validate_rhs_and_work(b, work)?;
+        self.validate_rhs(b)?;
+        self.assert_work_fits(work);
         self.solve_into_kernel(b, work);
         Ok(())
     }
@@ -280,13 +272,12 @@ where
     /// the constant null space. For an augmented SDDM factor the raw result is
     /// *not* the solution of `M x = b`; use [`Self::solve`] instead.
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// Returns [`SolveError::WorkBufferTooSmall`] if `y.len() < self.n()`.
-    pub fn solve_in_place(&self, y: &mut [T]) -> Result<(), SolveError> {
-        self.validate_work(y)?;
+    /// If `y.len() < self.n()`.
+    pub fn solve_in_place(&self, y: &mut [T]) {
+        self.assert_work_fits(y);
         self.forward(y);
         self.backward(y);
-        Ok(())
     }
 }

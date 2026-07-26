@@ -24,9 +24,7 @@ fn assert_ac2_augmented_solve_is_finite(indptr: &[u32], indices: &[u32], data: &
 
         let mut work = vec![0.0f64; factor.n()];
         work[..b.len()].copy_from_slice(b);
-        factor
-            .solve_in_place(&mut work)
-            .or_panic("solve_in_place should succeed");
+        factor.solve_in_place(&mut work);
         assert!(
             work.iter().all(|x| x.is_finite()),
             "seed={seed}: non-finite solve output: {work:?}"
