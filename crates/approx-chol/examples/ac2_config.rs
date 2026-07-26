@@ -26,13 +26,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Grid Laplacian: 10×10 ({n} nodes)\n");
 
     // -----------------------------------------------------------------------
-    // Default AC (split_merge = 0)
+    // Default AC (split_merge = None)
     // -----------------------------------------------------------------------
     let ac_config = Config::default();
     let ac_factor = Builder::new(ac_config).build(lap.as_csr()?)?;
 
     println!("=== Default AC ===");
-    println!("  split_merge : 0 (standard AC)");
+    println!("  split_merge : None (standard AC)");
     println!("  n_steps     : {}", ac_factor.n_steps());
     println!("  factor dim  : {}", ac_factor.n());
 
@@ -40,13 +40,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // AC2 (k = 2)
     // -----------------------------------------------------------------------
     let ac2_config = Config {
-        split_merge: 2,
+        split_merge: Some(2),
         seed: 42,
     };
     let ac2_factor = Builder::new(ac2_config).build(lap.as_csr()?)?;
 
     println!("\n=== AC2 (k=2) ===");
-    println!("  split_merge : 2");
+    println!("  split_merge : Some(2)");
     println!("  n_steps     : {}", ac2_factor.n_steps());
     println!("  factor dim  : {}", ac2_factor.n());
 

@@ -46,8 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Duplicate entries are summed before the off-diagonal sign check.
 - A row sum folds in its diagonal last, so the exact factor for a fixed seed can
   differ from earlier releases on input whose row sums do not accumulate exactly.
-- `Config::split_merge` is `u32` with `0` selecting standard AC; `ConfigError` and
-  `Error::InvalidConfig` are removed.
 
 ### Performance
 

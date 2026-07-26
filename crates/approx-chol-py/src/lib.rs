@@ -106,14 +106,12 @@ impl PyConfig {
 
 impl PyConfig {
     fn to_native(&self) -> PyResult<Config> {
-        // Python hands over an untyped int, so this is the one boundary where a
-        // zero has to be rejected rather than encoded.
         let split_merge = match self.split {
-            None | Some(1) => 0,
+            None | Some(1) => None,
             Some(0) => {
                 return Err(value_error("config.split must be >= 1"));
             }
-            Some(s) => s,
+            Some(s) => Some(s),
         };
         Ok(Config {
             seed: self.seed,

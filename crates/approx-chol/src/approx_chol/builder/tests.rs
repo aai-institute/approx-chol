@@ -12,7 +12,7 @@ fn assert_ac2_augmented_solve_is_finite(indptr: &[u32], indices: &[u32], data: &
     let csr = make_csr(indptr, indices, data);
     for seed in 0..8u64 {
         let factor = Builder::<f64>::new(Config {
-            split_merge: 2,
+            split_merge: Some(2),
             seed,
         })
         .build(csr)

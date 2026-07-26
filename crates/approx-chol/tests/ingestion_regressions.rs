@@ -158,13 +158,13 @@ fn in_class_input_is_accepted_on_both_paths() {
     ];
 
     for (label, rp, ci, vals) in cases {
-        for split_merge in [0, 2] {
+        for split_merge in [None, Some(2)] {
             let config = Config {
                 split_merge,
                 ..Config::default()
             };
             build(config, rp, ci, vals)
-                .unwrap_or_else(|err| panic!("{label} at split_merge {split_merge}: {err}"));
+                .unwrap_or_else(|err| panic!("{label} at split_merge {split_merge:?}: {err}"));
         }
     }
 }

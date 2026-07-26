@@ -2,7 +2,7 @@ use super::decomposition::EliminationSequence;
 use crate::graph::{AdjListGraph, GraphBuild, MultiEdgeGraph, SlimGraph};
 use crate::ordering::{DegreeDeltas, DynamicOrdering};
 use crate::sampling::CdfSampler;
-use crate::{CsrError, CsrRef, Error, Factor};
+use crate::{ConfigError, CsrError, CsrRef, Error, Factor};
 use num_traits::PrimInt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -73,9 +73,10 @@ where
     /// Assumes `sddm` already passed [`CsrRef::new`] validation (as
     /// [`build`](Self::build) guarantees); does not re-validate.
     fn build_validated(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
+        Self::validate_config(self.config)?;
         let original_n = sddm.n();
         let (n, sequence) = match self.config.split_merge {
-            0 => {
+            None => {
                 let GraphBuild {
                     graph,
                     diagonal: diag,
@@ -85,7 +86,7 @@ where
                 let star = AcStarBuilder::new(n);
                 (n, self.build_from_graph(graph, diag, star, 1))
             }
-            k => {
+            Some(k) => {
                 let GraphBuild {
                     mut graph,
                     diagonal: diag,
@@ -102,6 +103,18 @@ where
             original_n,
             sequence,
         })
+    }
+
+    fn validate_config(config: Config) -> Result<(), Error> {
+        let Some(split_merge) = config.split_merge else {
+            return Ok(());
+        };
+        if split_merge == 0 {
+            return Err(Error::InvalidConfig(
+                ConfigError::SplitMergeMustBePositive { split_merge },
+            ));
+        }
+        Ok(())
     }
 
     /// Algorithm 8 loop on a pre-built graph.

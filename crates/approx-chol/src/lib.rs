@@ -92,7 +92,7 @@ pub mod low_level;
 
 pub use approx_chol::{Config, Factor, SolveError};
 pub use csr::{CsrRef, OwnedCsr};
-pub use error::{CsrError, Error, IndexKind};
+pub use error::{ConfigError, CsrError, Error, IndexKind};
 pub(crate) use types::Real;
 
 /// Factorize an SDDM matrix with default configuration.
@@ -140,7 +140,8 @@ where
 ///
 /// # Errors
 ///
-/// As [`factorize`]: no [`Config`] is rejected.
+/// As [`factorize`], plus [`Error::InvalidConfig`] if the configuration is
+/// inconsistent (e.g. `split_merge == Some(0)`), which `Config::default` is not.
 ///
 /// # Examples
 ///
@@ -150,7 +151,7 @@ where
 /// # let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
 /// # let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
 /// let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
-/// let factor = factorize_with(csr, Config { seed: 42, split_merge: 2 })?;
+/// let factor = factorize_with(csr, Config { seed: 42, split_merge: Some(2) })?;
 /// assert_eq!(factor.n(), 4);
 /// # Ok::<(), approx_chol::Error>(())
 /// ```

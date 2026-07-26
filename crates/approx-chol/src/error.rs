@@ -30,6 +30,9 @@ pub enum Error {
         components: usize,
     },
 
+    /// The factorization configuration is invalid.
+    InvalidConfig(ConfigError),
+
     /// A matrix value is NaN or infinite.
     NonFiniteValue {
         /// Position in the CSR value array.
@@ -54,6 +57,27 @@ pub enum Error {
         /// Row that overflowed.
         row: usize,
     },
+}
+
+/// Structured configuration errors returned by factorization setup.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigError {
+    /// `split_merge` must be at least 1 when provided.
+    SplitMergeMustBePositive {
+        /// The invalid `split_merge` value provided by the caller.
+        split_merge: u32,
+    },
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SplitMergeMustBePositive { split_merge } => {
+                write!(f, "split_merge must be >= 1 (got {split_merge})")
+            }
+        }
+    }
 }
 
 /// Which CSR array an index belongs to.
@@ -211,6 +235,7 @@ impl fmt::Display for Error {
                 f,
                 "input splits into {components} connected components; approx-chol solves a single connected SDDM/Laplacian system"
             ),
+            Error::InvalidConfig(err) => write!(f, "invalid factorization config: {err}"),
             Error::NonFiniteValue { position } => {
                 write!(f, "matrix value at CSR position {position} is not finite")
             }
