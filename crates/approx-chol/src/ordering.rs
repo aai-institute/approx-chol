@@ -5,8 +5,6 @@
 //! - `DynamicOrdering`: bucket-based priority queue that adapts to fill-in
 //!   during elimination (ports Julia's `ApproxCholPQ`)
 
-use crate::CsrError;
-
 // ---------------------------------------------------------------------------
 // DynamicOrdering — bucket-based priority queue (Julia `ApproxCholPQ` port)
 // ---------------------------------------------------------------------------
@@ -31,7 +29,8 @@ struct PQElem {
 /// `min_list` is a *lower bound* on the index of the minimum non-empty bucket;
 /// [`pop`](Self::pop) scans upward from `min_list` to find the actual minimum.
 ///
-/// Requires `n <= u32::MAX` (validated at construction).
+/// Vertex ids are `u32`. Nothing here re-checks that they fit: `CsrRef` stores
+/// the dimension as a `u32`, and the ground vertex is the only one added past it.
 pub struct DynamicOrdering {
     elems: Vec<PQElem>, // indexed by vertex id
     lists: Vec<u32>,    // bucket heads, indexed by key_map(degree)
@@ -199,11 +198,8 @@ impl DegreeDeltas {
 }
 
 impl DynamicOrdering {
-    pub(crate) fn new(degrees: &[usize], degree_scale: usize) -> Result<Self, CsrError> {
+    pub(crate) fn new(degrees: &[usize], degree_scale: usize) -> Self {
         let n = degrees.len();
-        if n > u32::MAX as usize {
-            return Err(CsrError::MatrixDimensionExceedsIndexType { n });
-        }
         // Julia AC2 parity: keyMap uses `k = split*n`, bucket array length `2*k+1`.
         // Use scale=1 for standard AC.
         let bucket_base = degree_scale.saturating_mul(n).max(1);
@@ -237,14 +233,14 @@ impl DynamicOrdering {
             min_list = 0;
         }
 
-        Ok(DynamicOrdering {
+        DynamicOrdering {
             elems,
             lists,
             min_list,
             n_items,
             bucket_base,
             bucket_upper,
-        })
+        }
     }
 }
 
@@ -267,7 +263,7 @@ mod tests {
     #[test]
     fn test_pop_order() {
         // 4 vertices with degrees [3, 1, 2, 0]
-        let mut pq = DynamicOrdering::new(&[3, 1, 2, 0], 1).expect("valid n");
+        let mut pq = DynamicOrdering::new(&[3, 1, 2, 0], 1);
 
         // Should pop in order of increasing degree
         assert_eq!(pq.next_vertex(), Some(3)); // degree 0
@@ -280,7 +276,7 @@ mod tests {
     #[test]
     fn test_apply_delta_inc_dec() {
         // 3 vertices with degrees [2, 1, 3]
-        let mut pq = DynamicOrdering::new(&[2, 1, 3], 1).expect("valid n");
+        let mut pq = DynamicOrdering::new(&[2, 1, 3], 1);
 
         // Pop vertex 1 (degree 1, lowest)
         assert_eq!(pq.pop(), Some(1));
@@ -301,7 +297,7 @@ mod tests {
 
     #[test]
     fn test_apply_delta_fill_edge() {
-        let mut pq = DynamicOrdering::new(&[1, 1, 1], 1).expect("valid n");
+        let mut pq = DynamicOrdering::new(&[1, 1, 1], 1);
 
         // Fill edge between 0 and 2 → each endpoint's degree estimate +1.
         pq.apply_delta(0, 1);
@@ -317,7 +313,7 @@ mod tests {
     #[test]
     fn test_apply_delta_net() {
         // A signed net delta is applied in one bucket move; underflow clamps at 0.
-        let mut pq = DynamicOrdering::new(&[5, 2, 1], 1).expect("valid n");
+        let mut pq = DynamicOrdering::new(&[5, 2, 1], 1);
         pq.apply_delta(0, -2); // 5 → 3
         assert_eq!(pq.elems[0].key, 3);
         pq.apply_delta(0, -5); // 3 - 5 clamps to 0
@@ -326,7 +322,7 @@ mod tests {
 
     #[test]
     fn test_merged_edges_decrease_degree() {
-        let mut pq = DynamicOrdering::new(&[3, 2, 1], 1).expect("valid n");
+        let mut pq = DynamicOrdering::new(&[3, 2, 1], 1);
 
         // Compression merges a duplicate edge to vertex 0 → degree estimate -1.
         pq.apply_delta(0, -1);
@@ -338,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_merged_edges_decrease_degree_by_n() {
-        let mut pq = DynamicOrdering::new(&[5, 2, 1], 1).expect("valid n");
+        let mut pq = DynamicOrdering::new(&[5, 2, 1], 1);
         pq.apply_delta(0, -3);
         assert_eq!(pq.elems[0].key, 2);
     }
@@ -348,7 +344,7 @@ mod tests {
         // `decrease` takes a `u32` and negates it as `i64` internally, so a count
         // above i32::MAX stays a *decrease*: with an i32 delta, `-(count as i32)`
         // would sign-flip to a large positive and *raise* the degree.
-        let mut pq = DynamicOrdering::new(&[10, 1], 1).expect("valid n");
+        let mut pq = DynamicOrdering::new(&[10, 1], 1);
         let count: u32 = 3_000_000_000; // > i32::MAX
         pq.decrease(0, count); // 10 - 3e9 clamps to 0, never raises
         assert_eq!(pq.elems[0].key, 0);
@@ -356,20 +352,20 @@ mod tests {
 
     #[test]
     fn test_split_scaled_bucket_layout() {
-        let pq = DynamicOrdering::new(&[1, 2, 3, 4], 2).expect("valid n");
+        let pq = DynamicOrdering::new(&[1, 2, 3, 4], 2);
         assert_eq!(pq.bucket_base, 8);
         assert_eq!(pq.lists.len(), 17);
     }
 
     #[test]
     fn test_empty_pq() {
-        let mut pq = DynamicOrdering::new(&[], 1).expect("valid n");
+        let mut pq = DynamicOrdering::new(&[], 1);
         assert_eq!(pq.next_vertex(), None);
     }
 
     #[test]
     fn test_apply_delta_at_zero_clamps() {
-        let mut pq = DynamicOrdering::new(&[0], 1).expect("valid n");
+        let mut pq = DynamicOrdering::new(&[0], 1);
         pq.apply_delta(0, -1); // should not underflow
         assert_eq!(pq.elems[0].key, 0);
         assert_eq!(pq.pop(), Some(0));
@@ -377,7 +373,7 @@ mod tests {
 
     #[test]
     fn test_degree_deltas_flush_applies_net_per_vertex() {
-        let mut pq = DynamicOrdering::new(&[5, 5, 5], 1).expect("valid n");
+        let mut pq = DynamicOrdering::new(&[5, 5, 5], 1);
         let mut deltas = DegreeDeltas::new(3);
 
         // Vertex 0: +1 +1 -3 = net -1. Vertex 1: +2. Vertex 2: untouched.

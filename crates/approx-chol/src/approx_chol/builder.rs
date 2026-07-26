@@ -122,8 +122,7 @@ where
         let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
         let degree_sum: usize = degrees.iter().sum();
         let degree_scale = self.config.split_merge.map_or(1, |k| k as usize);
-        let mut ordering =
-            DynamicOrdering::new(&degrees, degree_scale).map_err(Error::InvalidCsr)?;
+        let mut ordering = DynamicOrdering::new(&degrees, degree_scale);
         let sampler = CdfSampler::<T>::new(self.config.seed);
         Ok(match self.config.split_merge {
             None => Self::factorize_with_variant(

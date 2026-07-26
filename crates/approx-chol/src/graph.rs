@@ -193,11 +193,6 @@ const RETAIN_ADJ_CAPACITY_MAX: usize = 64;
 impl<E: EdgeLike<T>, T: Real> EliminationGraph<T> for AdjListGraph<E, T> {
     fn from_sddm(csr: CsrRef<'_, T, u32>) -> Result<GraphBuild<Self, T>, Error> {
         let n = csr.n();
-        if n > u32::MAX as usize {
-            return Err(Error::InvalidCsr(
-                CsrError::MatrixDimensionExceedsIndexType { n },
-            ));
-        }
         let mut adj: Vec<Vec<E>> = Vec::with_capacity(n);
         for (cols, _) in csr.rows() {
             adj.push(Vec::with_capacity(cols.len()));
