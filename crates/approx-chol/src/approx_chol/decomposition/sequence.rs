@@ -8,12 +8,12 @@ use crate::types::Real;
 /// Borrows slices from the flat CSR storage in `EliminationSequence`.
 /// Each step eliminates `vertex` by splitting its weight among neighbors
 /// according to `elimination_fractions`.
-pub struct EliminationStep<'a, T> {
-    pub vertex: usize,
+pub(crate) struct EliminationStep<'a, T> {
+    pub(crate) vertex: usize,
     /// Zero when the pivot diagonal was clamped to near-zero.
-    pub inv_diag: T,
-    pub neighbor_indices: &'a [u32],
-    pub elimination_fractions: &'a [T],
+    pub(crate) inv_diag: T,
+    pub(crate) neighbor_indices: &'a [u32],
+    pub(crate) elimination_fractions: &'a [T],
 }
 
 impl<'a, T: num_traits::Float + Send + Sync + 'static> EliminationStep<'a, T> {
@@ -127,21 +127,21 @@ pub(crate) struct StepHeader<T> {
     ))
 )]
 #[derive(Clone, Debug)]
-pub struct EliminationSequence<T> {
+pub(crate) struct EliminationSequence<T> {
     pub(crate) steps: Vec<StepHeader<T>>,
     pub(crate) neighbor_indices: Vec<u32>,
     pub(crate) elimination_fractions: Vec<T>,
 }
 
-// Public read-only API (no internal trait bounds).
+// Read-only accessors (no internal trait bounds).
 impl<T> EliminationSequence<T> {
     #[inline(always)]
-    pub fn n_steps(&self) -> usize {
+    pub(crate) fn n_steps(&self) -> usize {
         self.steps.len()
     }
 
     #[inline(always)]
-    pub fn step(&self, i: usize) -> EliminationStep<'_, T>
+    pub(crate) fn step(&self, i: usize) -> EliminationStep<'_, T>
     where
         T: Copy,
     {
@@ -226,14 +226,14 @@ impl<T: Real> EliminationSequence<T> {
         }
     }
 
-    /// Close the current step at the running nonzero count. Offset overflow is
-    /// unreachable for tractable inputs, so assert (in release too) rather than
-    /// truncate silently.
+    /// Close the current step at the running nonzero count. Overflow of the `u32`
+    /// range end is unreachable for tractable inputs, so assert (in release too)
+    /// rather than truncate silently.
     fn push_step(&mut self, vertex: usize, diagonal: T) {
         let nnz = self.neighbor_indices.len();
         assert!(
             nnz <= u32::MAX as usize,
-            "factor nonzero count {nnz} exceeds u32 offset capacity"
+            "factor nonzero count {nnz} exceeds u32 range capacity"
         );
         self.steps.push(StepHeader {
             vertex: vertex as u32,
