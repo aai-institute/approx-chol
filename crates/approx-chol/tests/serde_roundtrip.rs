@@ -42,10 +42,7 @@ fn deserializing_corrupted_factor_is_rejected() {
     // serde `try_from` boundary is wired, so a structurally-corrupted persisted
     // factor is rejected at deserialize time rather than panicking on solve.
     let mut value = serde_json::to_value(path_factor()).or_panic("serialize factor");
-    value["sequence"]["offsets"]
-        .as_array_mut()
-        .expect("offsets is an array")
-        .pop();
+    value["sequence"]["steps"][0]["vertex"] = serde_json::Value::from(999u32);
 
     assert!(serde_json::from_value::<Factor<f64>>(value).is_err());
 }

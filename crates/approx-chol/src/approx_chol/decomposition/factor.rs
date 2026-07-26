@@ -192,9 +192,7 @@ where
         );
         self.debug_assert_valid_structure();
         for i in 0..seq.n_steps() {
-            let step = seq.step(i);
-            let inv_diag = seq.inv_diagonal[i];
-            step.apply_forward(y, inv_diag);
+            seq.step(i).apply_forward(y);
         }
     }
 
@@ -208,8 +206,7 @@ where
         );
         self.debug_assert_valid_structure();
         for i in (0..seq.n_steps()).rev() {
-            let step = seq.step(i);
-            step.apply_backward(y);
+            seq.step(i).apply_backward(y);
         }
     }
 

@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SolveError::RhsLengthExceedsFactor` and the corresponding Python `ValueError`
   now report the original matrix dimension.
 - `CsrRef::row_ptrs`/`col_indices`/`values` return slices with the view's lifetime.
+- Serialized `Factor` layout: the elimination sequence stores one header per step
+  instead of separate `vertices`/`offsets`/`inv_diagonal` arrays. Factors persisted
+  by earlier versions no longer deserialize.
 
 ## [0.3.1] - 2026-07-10
 

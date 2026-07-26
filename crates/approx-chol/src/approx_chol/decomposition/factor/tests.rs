@@ -1,3 +1,4 @@
+use super::super::sequence::Step;
 use super::*;
 
 /// Minimal structurally-valid factor: n=3, one step eliminating vertex 0
@@ -7,11 +8,13 @@ fn valid_factor() -> Factor<f64> {
         n: 3,
         original_n: 3,
         sequence: EliminationSequence {
-            vertices: vec![0],
-            offsets: vec![0, 2],
+            steps: vec![Step {
+                vertex: 0,
+                end: 2,
+                inv_diag: 1.0,
+            }],
             neighbor_indices: vec![1, 2],
             elimination_fractions: vec![0.5, 1.0],
-            inv_diagonal: vec![1.0],
         },
     }
 }
@@ -37,24 +40,6 @@ fn validate_structure_rejects_each_corruption() {
             },
         ),
         (
-            "offsets length != n_steps + 1",
-            |f| {
-                f.sequence.offsets.pop();
-            },
-            FactorError::OffsetsLengthMismatch {
-                expected: 2,
-                got: 1,
-            },
-        ),
-        (
-            "inv_diagonal length != n_steps",
-            |f| f.sequence.inv_diagonal.clear(),
-            FactorError::InvDiagonalLengthMismatch {
-                expected: 1,
-                got: 0,
-            },
-        ),
-        (
             "neighbor/fraction length mismatch",
             |f| f.sequence.elimination_fractions.push(0.25),
             FactorError::NeighborFractionLengthMismatch {
@@ -63,13 +48,8 @@ fn validate_structure_rejects_each_corruption() {
             },
         ),
         (
-            "offsets[0] != 0",
-            |f| f.sequence.offsets[0] = 1,
-            FactorError::OffsetsMustStartAtZero { got: 1 },
-        ),
-        (
-            "offset range past nnz",
-            |f| f.sequence.offsets = vec![0, 5],
+            "neighbor range past nnz",
+            |f| f.sequence.steps[0].end = 5,
             FactorError::OffsetRangeInvalid {
                 step: 0,
                 start: 0,
@@ -79,7 +59,7 @@ fn validate_structure_rejects_each_corruption() {
         ),
         (
             "vertex out of bounds",
-            |f| f.sequence.vertices[0] = 9,
+            |f| f.sequence.steps[0].vertex = 9,
             FactorError::VertexOutOfBounds {
                 step: 0,
                 vertex: 9,
@@ -96,8 +76,8 @@ fn validate_structure_rejects_each_corruption() {
             },
         ),
         (
-            // Extra neighbor storage no step references: last offset (2) < nnz (3).
-            "final offset below nnz",
+            // Extra neighbor storage no step references: last end (2) < nnz (3).
+            "final end below nnz",
             |f| {
                 f.sequence.neighbor_indices.push(1);
                 f.sequence.elimination_fractions.push(0.1);

@@ -18,18 +18,12 @@ pub(crate) use sequence::EliminationSequence;
 pub(crate) enum FactorError {
     /// `original_n` exceeds the internal factor dimension `n`.
     OriginalDimExceedsInternal { original_n: usize, n: usize },
-    /// `offsets.len()` must equal `n_steps + 1`.
-    OffsetsLengthMismatch { expected: usize, got: usize },
-    /// `inv_diagonal.len()` must equal `n_steps`.
-    InvDiagonalLengthMismatch { expected: usize, got: usize },
     /// `neighbor_indices` and `elimination_fractions` differ in length.
     NeighborFractionLengthMismatch {
         neighbor_len: usize,
         fraction_len: usize,
     },
-    /// `offsets[0]` must be zero.
-    OffsetsMustStartAtZero { got: u32 },
-    /// A step's offset range `[start, end)` is invalid (`start > end` or `end > nnz`).
+    /// A step's neighbor range `[start, end)` is invalid (`start > end` or `end > nnz`).
     OffsetRangeInvalid {
         step: usize,
         start: usize,
