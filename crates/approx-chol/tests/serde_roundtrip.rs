@@ -59,7 +59,7 @@ fn deserializing_corrupted_factor_is_rejected() {
     // persisted factor is rejected at deserialize time rather than panicking on
     // solve. Per-variant coverage lives in the `factor` unit tests.
     let mut value = serde_json::to_value(path_factor()).or_panic("serialize factor");
-    value["blocks"][0]["sequence"]["steps"][0]["vertex"] = serde_json::Value::from(999u32);
+    value["blocks"][0]["sequence"][0]["vertex"] = serde_json::Value::from(999u32);
 
     assert!(serde_json::from_value::<Factor<f64>>(value).is_err());
 }

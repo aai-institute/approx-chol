@@ -67,6 +67,8 @@ mod validation {
             .expect("approx fixture is valid");
     }
 
+    /// Covers every variant but `NonzeroCountExceedsU32`, which needs a payload
+    /// of more than `u32::MAX` nonzeros to reach.
     #[test]
     fn every_factor_error_variant_is_reachable() {
         #[allow(clippy::type_complexity)]
@@ -78,17 +80,6 @@ mod validation {
                 FactorError::OriginalDimExceedsInternal {
                     original_n: 4,
                     n: 3,
-                },
-            ),
-            (
-                "neighbor range past nnz",
-                approx,
-                |f| seq_of(f).steps[0].end = 99,
-                FactorError::NeighborRangeInvalid {
-                    step: 0,
-                    start: 0,
-                    end: 99,
-                    nnz: 2,
                 },
             ),
             (
@@ -110,12 +101,6 @@ mod validation {
                     neighbor: 99,
                     n: 3,
                 },
-            ),
-            (
-                "trailing neighbor storage",
-                approx,
-                |f| seq_of(f).steps[1].end = 1,
-                FactorError::TrailingNeighborStorage { covered: 1, nnz: 2 },
             ),
             (
                 "blocks do not cover n",
