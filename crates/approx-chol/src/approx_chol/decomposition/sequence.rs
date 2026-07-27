@@ -2,6 +2,7 @@
 
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;
+use crate::approx_chol::clique_tree::SampledColumn;
 use crate::types::Real;
 
 /// Zero-copy view of one elimination step: it eliminates `vertex` by splitting
@@ -276,16 +277,13 @@ impl<T: Real> EliminationSequence<T> {
         self.push_step(vertex, diagonal);
     }
 
-    /// Record one sampled column (diagonal value plus its neighbor/fraction pattern).
-    pub(crate) fn record_column(
-        &mut self,
-        vertex: usize,
-        diagonal: T,
-        neighbors: &[u32],
-        fractions: &[T],
-    ) {
+    /// Record one sampled column. Taking the column itself rather than its three
+    /// parts is what keeps a neighbor array from being stored against a fraction
+    /// array of another length — the pairing [`SampledColumn`] maintains.
+    pub(crate) fn record_column(&mut self, vertex: usize, column: &SampledColumn<T>) {
+        let (neighbors, fractions) = column.pattern();
         self.neighbor_indices.extend_from_slice(neighbors);
         self.elimination_fractions.extend_from_slice(fractions);
-        self.push_step(vertex, diagonal);
+        self.push_step(vertex, column.diagonal);
     }
 }

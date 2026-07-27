@@ -1,3 +1,7 @@
+//! Proptest strategies and reference helpers for Laplacian/SDDM CSR input.
+//! Each suite that includes this file uses a subset.
+#![allow(dead_code)]
+
 use proptest::prelude::*;
 use std::collections::VecDeque;
 
@@ -46,7 +50,6 @@ pub fn laplacian_csr_strategy() -> impl Strategy<Value = LaplacianCsr> {
     })
 }
 
-#[allow(dead_code)]
 pub fn rhs_for_dimension(n: usize) -> Vec<f64> {
     let mut rhs = vec![0.0_f64; n];
     if n >= 2 {
@@ -56,7 +59,6 @@ pub fn rhs_for_dimension(n: usize) -> Vec<f64> {
     rhs
 }
 
-#[allow(dead_code)]
 pub fn csr_matvec(row_ptrs: &[u32], col_indices: &[u32], values: &[f64], x: &[f64]) -> Vec<f64> {
     let n = row_ptrs.len() - 1;
     let mut y = vec![0.0; n];
@@ -70,7 +72,6 @@ pub fn csr_matvec(row_ptrs: &[u32], col_indices: &[u32], values: &[f64], x: &[f6
     y
 }
 
-#[allow(dead_code)]
 pub fn is_connected(row_ptrs: &[u32], col_indices: &[u32], n: u32) -> bool {
     if n <= 1 {
         return true;
@@ -94,12 +95,10 @@ pub fn is_connected(row_ptrs: &[u32], col_indices: &[u32], n: u32) -> bool {
     visited.iter().all(|&v| v)
 }
 
-#[allow(dead_code)]
 pub fn norm2(v: &[f64]) -> f64 {
     v.iter().map(|x| x * x).sum::<f64>().sqrt()
 }
 
-#[allow(dead_code)]
 pub fn random_zero_sum_rhs_strategy(n: usize) -> BoxedStrategy<Vec<f64>> {
     if n <= 1 {
         Just(vec![0.0; n]).boxed()
@@ -116,7 +115,6 @@ pub fn random_zero_sum_rhs_strategy(n: usize) -> BoxedStrategy<Vec<f64>> {
     }
 }
 
-#[allow(dead_code)]
 pub fn laplacian_with_rhs_strategy() -> impl Strategy<Value = (LaplacianCsr, Vec<f64>)> {
     laplacian_csr_strategy().prop_flat_map(|(rp, ci, vals, n)| {
         random_zero_sum_rhs_strategy(n as usize)
@@ -124,7 +122,6 @@ pub fn laplacian_with_rhs_strategy() -> impl Strategy<Value = (LaplacianCsr, Vec
     })
 }
 
-#[allow(dead_code)]
 pub fn sddm_csr_strategy() -> impl Strategy<Value = LaplacianCsr> {
     (1usize..=8).prop_flat_map(|n| {
         let pair_count = n * (n - 1) / 2;

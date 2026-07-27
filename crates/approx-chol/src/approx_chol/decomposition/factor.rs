@@ -380,17 +380,6 @@ where
         );
     }
 
-    #[inline]
-    fn validate_rhs(&self, b: &[T]) -> Result<(), SolveError> {
-        if b.len() > self.original_n {
-            return Err(SolveError::RhsLengthExceedsFactor {
-                rhs_len: b.len(),
-                factor_dim: self.original_n,
-            });
-        }
-        Ok(())
-    }
-
     fn solve_kernel(&self, b: &[T], work: &mut [T]) {
         work[..b.len()].copy_from_slice(b);
         work[b.len()..self.n].fill(T::zero());
@@ -448,7 +437,12 @@ where
     ///
     /// If `work.len() < self.n()`.
     pub fn solve_into(&self, b: &[T], work: &mut [T]) -> Result<(), SolveError> {
-        self.validate_rhs(b)?;
+        if b.len() > self.original_n {
+            return Err(SolveError::RhsLengthExceedsFactor {
+                rhs_len: b.len(),
+                factor_dim: self.original_n,
+            });
+        }
         self.assert_work_fits(work);
         self.solve_kernel(b, work);
         Ok(())

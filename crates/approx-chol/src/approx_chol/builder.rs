@@ -13,22 +13,10 @@ use super::Config;
 /// Builder for approximate Cholesky factorization (Algorithm 8, Gao-Kyng-Spielman 2023).
 ///
 /// Provides full control over the factorization pipeline, including
-/// AC vs AC2 selection and seed control. Most users should prefer
-/// [`factorize`](crate::factorize) or [`factorize_with`](crate::factorize_with).
-///
-/// # Examples
-///
-/// ```
-/// use approx_chol::{Config, CsrRef};
-/// use approx_chol::low_level::Builder;
-/// # let row_ptrs    = [0u32, 2, 5, 8, 10];
-/// # let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
-/// # let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
-/// let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
-/// let factor = Builder::new(Config::default()).build(csr)?;
-/// assert_eq!(factor.n(), 4);
-/// # Ok::<(), approx_chol::Error>(())
-/// ```
+/// AC vs AC2 selection and seed control. `Builder::new(config).build(sddm)` is
+/// what [`factorize_with`](crate::factorize_with) runs, and that is where the
+/// worked example lives; most callers should prefer it or
+/// [`factorize`](crate::factorize).
 #[derive(Debug, Clone)]
 pub struct Builder<T = f64> {
     config: Config,
@@ -78,26 +66,25 @@ where
         match self.config.split_merge {
             None => {
                 let build = SlimGraph::<T>::from_sddm(sddm)?;
-                self.build_graph(build, original_n, AcStarBuilder::new, 1)
+                self.build_graph(build, original_n, AcStarBuilder::new)
             }
             Some(k) => {
                 let mut build = MultiEdgeGraph::<T>::from_sddm(sddm)?;
                 build.graph.mark_split_edges(k);
                 let star = move |n| Ac2StarBuilder::new(n, k);
-                self.build_graph(build, original_n, star, k as usize)
+                self.build_graph(build, original_n, star)
             }
         }
     }
 
-    /// `make_star` and `degree_scale` come from the caller's single variant match
-    /// and are applied per component, so nothing here can pair an AC star builder
-    /// with a split multi-edge graph.
+    /// `make_star` comes from the caller's single variant match and is applied per
+    /// component, so nothing here can pair an AC star builder with a split
+    /// multi-edge graph.
     fn build_graph<B: StarBuilderVariant<T>>(
         &self,
         build: GraphBuild<AdjListGraph<B::Count, T>, T>,
         original_n: usize,
         make_star: impl Fn(usize) -> B,
-        degree_scale: usize,
     ) -> Result<Factor<T>, Error> {
         let GraphBuild {
             graph,
@@ -117,7 +104,6 @@ where
                 ground_vertex,
                 self.config.seed,
                 &make_star,
-                degree_scale,
             );
             return Ok(Factor::from_blocks(n, original_n, None, vec![block]));
         };
@@ -138,7 +124,6 @@ where
                 ground,
                 component_seed(self.config.seed, representative),
                 &make_star,
-                degree_scale,
             ));
             forward.extend_from_slice(&vertices);
         }
@@ -153,18 +138,10 @@ where
         ground: Option<u32>,
         seed: u64,
         make_star: &impl Fn(usize) -> B,
-        degree_scale: usize,
     ) -> BlockFactor<T> {
         let mut sampler = CdfSampler::<T>::new(seed);
         let star_builder = make_star(graph.n());
-        self.build_from_graph(
-            graph,
-            diagonal,
-            ground,
-            &mut sampler,
-            star_builder,
-            degree_scale,
-        )
+        self.build_from_graph(graph, diagonal, ground, &mut sampler, star_builder)
     }
 
     fn validate_config(config: Config) -> Result<(), Error> {
@@ -179,11 +156,9 @@ where
         Ok(())
     }
 
-    /// Algorithm 8 loop on a pre-built graph.
-    ///
-    /// The graph's multiplicity storage is the star builder's `Count`, so an AC
-    /// builder over a split multi-edge graph does not compile — a pairing
-    /// nothing checked while both were re-derived here from `Config`.
+    /// Algorithm 8 loop on a pre-built graph. The graph's multiplicity storage is
+    /// the star builder's `Count`, so an AC builder over a split multi-edge graph
+    /// does not compile.
     fn build_from_graph<B: StarBuilderVariant<T>>(
         &self,
         mut graph: AdjListGraph<B::Count, T>,
@@ -191,11 +166,14 @@ where
         ground: Option<u32>,
         sampler: &mut CdfSampler<T>,
         mut star_builder: B,
-        degree_scale: usize,
     ) -> BlockFactor<T> {
         let n = graph.n();
         let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
         let degree_sum: usize = degrees.iter().sum();
+        // The bucket layout scales with the multiplicity the graph was split at,
+        // read from the same `Config` the split came from rather than threaded
+        // alongside the star builder as a second copy that could disagree.
+        let degree_scale = self.config.split_merge.unwrap_or(1) as usize;
         let mut ordering = DynamicOrdering::new(&degrees, degree_scale);
         let mut column = SampledColumn::<T>::new();
         let mut seq = EliminationSequence::with_capacity(n, degree_sum);
@@ -216,7 +194,7 @@ where
             }
 
             star_builder.sample_column(diag[v], sampler, &mut column);
-            seq.record_column(v, column.diagonal, column.neighbors(), column.fractions());
+            seq.record_column(v, &column);
 
             graph.eliminate_vertex(v);
             for &(u, w) in star_entries {

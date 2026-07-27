@@ -40,15 +40,13 @@ where
     assert_view_and_factor_match_fixture(&mat, Config::default());
 }
 
-/// One factorization per (index, scalar) pair the adapter supports.
+/// One factorization per index type the adapter converts. The scalar is
+/// forwarded untouched, so `generic_low_level_api` owns that axis.
 #[test]
-fn sprs_csr_factorizes_over_index_and_scalar_types() {
+fn sprs_csr_factorizes_over_index_types() {
     run_case::<f64, u32>();
-    run_case::<f32, u32>();
     run_case::<f64, usize>();
-    run_case::<f32, usize>();
     run_case::<f64, u64>();
-    run_case::<f32, u64>();
 }
 
 #[test]

@@ -8,14 +8,11 @@ use num_traits::NumCast;
 /// than binary search due to branch-prediction and cache effects.
 const LINEAR_THRESHOLD: usize = 32;
 
-/// Sample one index from `cumsum[start..]` proportional to weight.
+/// Sample one index from `cumsum[start..]` proportional to weight, or `None` when
+/// the suffix is empty or its remaining weight is negligible.
 ///
-/// Uses a linear scan for small suffixes (≤ [`LINEAR_THRESHOLD`]) and binary
-/// search via `partition_point` for larger ones. Returns `None` if the suffix is
-/// empty or its remaining weight is negligible.
-///
-/// The `.min(end - 1)` clamp guards against floating-point rounding where
-/// the random value slightly exceeds the cumulative sum range.
+/// The `.min(end - 1)` clamp guards against floating-point rounding where the
+/// random value slightly exceeds the cumulative sum range.
 fn sample_from_cumsum<T: Real>(cumsum: &[T], rng: &mut SmallRng, start: usize) -> Option<usize> {
     let end = cumsum.len();
     if start >= end {

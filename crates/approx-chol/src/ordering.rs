@@ -19,7 +19,7 @@ struct PQElem {
 /// Vertices are distributed into buckets by their current degree estimate via
 /// [`key_map`]. Each bucket is a doubly-linked list threaded through [`PQElem`].
 /// `min_list` is a *lower bound* on the index of the minimum non-empty bucket;
-/// [`pop`](Self::pop) scans upward from `min_list` to find the actual minimum.
+/// [`next_vertex`](Self::next_vertex) scans upward from it for the actual minimum.
 ///
 /// Vertex ids are `u32`. Nothing here re-checks that they fit: `CsrRef` stores
 /// the dimension as a `u32`, and the ground vertex is the only one added past it.
@@ -46,7 +46,7 @@ fn key_map(degree: usize, bucket_base: usize, bucket_upper: usize) -> usize {
 
 impl DynamicOrdering {
     /// Pop the vertex with the minimum degree estimate.
-    fn pop(&mut self) -> Option<usize> {
+    pub(crate) fn next_vertex(&mut self) -> Option<usize> {
         if self.n_items == 0 {
             return None;
         }
@@ -122,11 +122,6 @@ impl DynamicOrdering {
     #[inline]
     pub(crate) fn decrease(&mut self, i: usize, n: u32) {
         self.apply_delta(i, -(n as i64));
-    }
-
-    #[inline]
-    pub(crate) fn next_vertex(&mut self) -> Option<usize> {
-        self.pop()
     }
 }
 
@@ -296,12 +291,12 @@ mod tests {
     #[test]
     fn test_apply_delta_rebuckets() {
         let mut pq = DynamicOrdering::new(&[2, 1, 3], 1);
-        assert_eq!(pq.pop(), Some(1));
+        assert_eq!(pq.next_vertex(), Some(1));
         pq.apply_delta(0, 1);
         pq.apply_delta(2, -1);
-        assert_eq!(pq.pop(), Some(2));
-        assert_eq!(pq.pop(), Some(0));
-        assert_eq!(pq.pop(), None);
+        assert_eq!(pq.next_vertex(), Some(2));
+        assert_eq!(pq.next_vertex(), Some(0));
+        assert_eq!(pq.next_vertex(), None);
     }
 
     #[test]

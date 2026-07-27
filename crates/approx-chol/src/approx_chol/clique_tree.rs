@@ -40,12 +40,9 @@ impl<T: Real> SampledColumn<T> {
         self.fractions.push(fraction);
     }
 
-    pub(crate) fn neighbors(&self) -> &[u32] {
-        &self.neighbors
-    }
-
-    pub(crate) fn fractions(&self) -> &[T] {
-        &self.fractions
+    /// The column's non-zero pattern, always as the pair it is built as.
+    pub(crate) fn pattern(&self) -> (&[u32], &[T]) {
+        (&self.neighbors, &self.fractions)
     }
 
     /// Initialize sampling, or write the fallback column and return `None`.

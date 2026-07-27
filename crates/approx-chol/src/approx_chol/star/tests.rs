@@ -55,10 +55,10 @@ fn dedup_ac2(
     n: usize,
     raw: &mut [Neighbor<f64, Multi>],
     merge_limit: u32,
-) -> (Ac2DedupWorkspace<f64>, MultiStar<f64>) {
-    let mut dedup = Ac2DedupWorkspace::<f64>::new(n);
+) -> (DedupWorkspace<f64>, MultiStar<f64>) {
+    let mut dedup = DedupWorkspace::<f64>::new(n);
     let mut star = MultiStar::new();
-    dedup.dedup(raw, &mut star, merge_limit);
+    dedup.dedup_ac2(raw, &mut star, merge_limit);
     (dedup, star)
 }
 
@@ -139,13 +139,13 @@ fn ac_raw() -> [Neighbor<f64, Single>; 5] {
 
 #[test]
 fn dedup_ac_paths_agree() {
-    let mut by_sort = AcDedupWorkspace::<f64>::new(3);
+    let mut by_sort = DedupWorkspace::<f64>::new(3);
     let mut sorted_entries = Vec::new();
-    by_sort.dedup_sort_small(&mut ac_raw(), &mut sorted_entries);
+    by_sort.dedup_ac_sort(&mut ac_raw(), &mut sorted_entries);
 
-    let mut by_scatter = AcDedupWorkspace::<f64>::new(3);
+    let mut by_scatter = DedupWorkspace::<f64>::new(3);
     let mut scattered_entries = Vec::new();
-    by_scatter.dedup_scatter(&ac_raw(), &mut scattered_entries);
+    by_scatter.dedup_ac_scatter(&ac_raw(), &mut scattered_entries);
 
     // Weights summed per vertex, ascending by weight then vertex index.
     assert_eq!(sorted_entries, vec![(0, 1.25), (2, 3.5), (1, 4.0)]);
@@ -171,15 +171,15 @@ fn dedup_ac2_paths_agree() {
         ]
     };
 
-    let mut by_sort = Ac2DedupWorkspace::<f64>::new(3);
+    let mut by_sort = DedupWorkspace::<f64>::new(3);
     let mut star_sort = MultiStar::new();
-    by_sort.dedup_sort(&mut raw(), &mut star_sort);
+    by_sort.dedup_ac2_sort(&mut raw(), &mut star_sort);
     star_sort.apply_merge_limit(LIMIT, &mut by_sort.merged_counts);
     star_sort.sort_by_avg_weight();
 
-    let mut by_scatter = Ac2DedupWorkspace::<f64>::new(3);
+    let mut by_scatter = DedupWorkspace::<f64>::new(3);
     let mut star_scatter = MultiStar::new();
-    by_scatter.dedup_scatter(&raw(), &mut star_scatter);
+    by_scatter.dedup_ac2_scatter(&raw(), &mut star_scatter);
     star_scatter.apply_merge_limit(LIMIT, &mut by_scatter.merged_counts);
     star_scatter.sort_by_avg_weight();
 
