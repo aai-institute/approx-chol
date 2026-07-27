@@ -19,7 +19,7 @@ pub(crate) struct EliminationStep<'a, T> {
 /// by construction from the builder, by [`EliminationSequence::validate_for_dim`]
 /// from serde.
 /// Neither kernel re-checks per step.
-impl<'a, T: num_traits::Float + Send + Sync + 'static> EliminationStep<'a, T> {
+impl<'a, T: Real> EliminationStep<'a, T> {
     /// Forward elimination: scatter pivot weight to neighbors, then scale by D^{-1}.
     #[inline(always)]
     pub(crate) fn apply_forward(&self, y: &mut [T]) {
@@ -239,8 +239,6 @@ impl<T> EliminationSequence<T> {
     }
 }
 
-// Internal construction methods (pub(crate) only, Real bound is internal).
-#[allow(private_bounds)]
 impl<T: Real> EliminationSequence<T> {
     pub(crate) fn with_capacity(n: usize, degree_sum: usize) -> Self {
         Self {
