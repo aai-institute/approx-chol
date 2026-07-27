@@ -95,16 +95,14 @@ where
         if n == 0 {
             return Ok(Factor::empty(original_n));
         }
+        // One stream for the whole factorization: the blocks are drawn from it in
+        // component order, which is fixed by the input.
+        let mut sampler = CdfSampler::<T>::new(self.config.seed);
         // Ground has the highest index, so it is the last vertex of its block.
         let ground_vertex = (n > original_n).then_some(original_n as u32);
         let Some(components) = components else {
-            let block = self.build_approximate(
-                graph,
-                diagonal,
-                ground_vertex,
-                self.config.seed,
-                &make_star,
-            );
+            let star = make_star(n);
+            let block = self.build_from_graph(graph, diagonal, ground_vertex, &mut sampler, star);
             return Ok(Factor::from_blocks(n, original_n, None, vec![block]));
         };
 
@@ -117,31 +115,18 @@ where
                 .map(|_| (vertices.len() - 1) as u32);
             let (component_graph, component_diagonal) =
                 graph.take_component(&diagonal, &vertices, &mut local_of);
-            let representative = vertices.first().copied().unwrap_or(0) as u64;
-            blocks.push(self.build_approximate(
+            let star = make_star(vertices.len());
+            blocks.push(self.build_from_graph(
                 component_graph,
                 component_diagonal,
                 ground,
-                component_seed(self.config.seed, representative),
-                &make_star,
+                &mut sampler,
+                star,
             ));
             forward.extend_from_slice(&vertices);
         }
         let permutation = Permutation::from_forward(&forward);
         Ok(Factor::from_blocks(n, original_n, permutation, blocks))
-    }
-
-    fn build_approximate<B: StarBuilderVariant<T>>(
-        &self,
-        graph: AdjListGraph<B::Count, T>,
-        diagonal: Vec<T>,
-        ground: Option<u32>,
-        seed: u64,
-        make_star: &impl Fn(usize) -> B,
-    ) -> BlockFactor<T> {
-        let mut sampler = CdfSampler::<T>::new(seed);
-        let star_builder = make_star(graph.n());
-        self.build_from_graph(graph, diagonal, ground, &mut sampler, star_builder)
     }
 
     fn validate_config(config: Config) -> Result<(), Error> {
@@ -219,13 +204,6 @@ where
         };
         BlockFactor::approx(n, pin, seq)
     }
-}
-
-fn component_seed(seed: u64, representative: u64) -> u64 {
-    let mut value = seed ^ representative.wrapping_add(0x9e37_79b9_7f4a_7c15);
-    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    value ^ (value >> 31)
 }
 
 #[cfg(test)]
