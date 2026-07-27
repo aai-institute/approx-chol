@@ -29,8 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The serde representation of `Factor` is incompatible with earlier releases.
 - `solve`/`solve_into` cap the right-hand side at the original matrix dimension.
 - `solve_in_place` leaves one variable pinned per block.
-- `solve_in_place` no longer returns `Result`; a work buffer shorter than
-  `Factor::n()` panics and `SolveError::WorkBufferTooSmall` is removed.
 - `OwnedCsr::try_as_ref` is replaced by the infallible `as_csr_ref`, and
   `TryFrom<&OwnedCsr> for CsrRef` by `From`.
 - `CsrRef::row_ptrs`/`col_indices`/`values` return slices with the view's lifetime.

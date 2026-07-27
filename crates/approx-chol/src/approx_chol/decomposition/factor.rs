@@ -195,10 +195,6 @@ impl Permutation {
 }
 
 /// Errors returned by fallible [`Factor`] solve methods.
-///
-/// Only the right-hand side gets an error variant: its length comes from data
-/// the caller may not control. A short work buffer is caller-side misuse —
-/// [`Factor::n`] is the authority on the size — so it panics instead.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SolveError {
@@ -207,6 +203,13 @@ pub enum SolveError {
         /// Provided RHS length.
         rhs_len: usize,
         /// Maximum accepted RHS length.
+        factor_dim: usize,
+    },
+    /// Work buffer is smaller than factor dimension.
+    WorkBufferTooSmall {
+        /// Provided work length.
+        work_len: usize,
+        /// Factor dimension (`Factor::n()`).
         factor_dim: usize,
     },
 }
@@ -220,6 +223,13 @@ impl fmt::Display for SolveError {
             } => write!(
                 f,
                 "rhs length {rhs_len} exceeds original matrix dimension {factor_dim}"
+            ),
+            Self::WorkBufferTooSmall {
+                work_len,
+                factor_dim,
+            } => write!(
+                f,
+                "work buffer too small: got {work_len}, need at least {factor_dim}"
             ),
         }
     }
@@ -371,13 +381,14 @@ where
     }
 
     #[inline]
-    fn assert_work_fits(&self, work: &[T]) {
-        assert!(
-            work.len() >= self.n,
-            "work buffer too small: got {}, need at least {}",
-            work.len(),
-            self.n
-        );
+    fn validate_work(&self, work: &[T]) -> Result<(), SolveError> {
+        if work.len() < self.n {
+            return Err(SolveError::WorkBufferTooSmall {
+                work_len: work.len(),
+                factor_dim: self.n,
+            });
+        }
+        Ok(())
     }
 
     fn solve_kernel(&self, b: &[T], work: &mut [T]) {
@@ -432,10 +443,7 @@ where
     /// # Errors
     ///
     /// Returns [`SolveError::RhsLengthExceedsFactor`] if `b.len() > self.original_n()`.
-    ///
-    /// # Panics
-    ///
-    /// If `work.len() < self.n()`.
+    /// Returns [`SolveError::WorkBufferTooSmall`] if `work.len() < self.n()`.
     pub fn solve_into(&self, b: &[T], work: &mut [T]) -> Result<(), SolveError> {
         if b.len() > self.original_n {
             return Err(SolveError::RhsLengthExceedsFactor {
@@ -443,7 +451,7 @@ where
                 factor_dim: self.original_n,
             });
         }
-        self.assert_work_fits(work);
+        self.validate_work(work)?;
         self.solve_kernel(b, work);
         Ok(())
     }
@@ -459,11 +467,12 @@ where
     /// For Laplacian input it differs from [`Self::solve_into`] by a constant per
     /// block.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// If `values.len() < self.n()`.
-    pub fn solve_in_place(&self, values: &mut [T]) {
-        self.assert_work_fits(values);
+    /// Returns [`SolveError::WorkBufferTooSmall`] if `values.len() < self.n()`.
+    pub fn solve_in_place(&self, values: &mut [T]) -> Result<(), SolveError> {
+        self.validate_work(values)?;
         self.for_each_block(values, BlockFactor::apply_anchored);
+        Ok(())
     }
 }

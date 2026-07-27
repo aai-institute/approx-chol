@@ -136,14 +136,35 @@ fn solve_into_rejects_rhs_longer_than_original_for_augmented_factor() {
 }
 
 #[test]
-#[should_panic(expected = "work buffer too small")]
-fn short_work_buffer_panics() {
+fn solve_into_reports_short_work_buffer() {
+    let lap = grid_laplacian(4, 4);
+    let n_orig = lap.n as usize;
+    let factor = Builder::new(Config::default())
+        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
+        .or_panic("factorization should succeed");
+
+    let mut rhs = vec![0.0; n_orig];
+    rhs[0] = 1.0;
+    rhs[n_orig - 1] = -1.0;
+    let mut work = vec![0.0; factor.n().saturating_sub(1)];
+    let err = factor
+        .solve_into(&rhs, &mut work)
+        .err_or_panic("short work buffer must fail");
+    assert!(matches!(err, SolveError::WorkBufferTooSmall { .. }));
+}
+
+#[test]
+fn solve_in_place_reports_short_work_buffer() {
     let lap = grid_laplacian(4, 4);
     let factor = Builder::new(Config::default())
         .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
         .or_panic("factorization should succeed");
 
-    factor.solve_in_place(&mut vec![0.0; factor.n() - 1]);
+    let mut y = vec![0.0; factor.n().saturating_sub(1)];
+    let err = factor
+        .solve_in_place(&mut y)
+        .err_or_panic("short in-place work buffer must fail");
+    assert!(matches!(err, SolveError::WorkBufferTooSmall { .. }));
 }
 
 // A grounded block's anchored solve *is* the SDDM solution, so solve_in_place and
@@ -168,7 +189,9 @@ fn grounded_raw_solve_matches_recovered_solve() {
 
     let mut raw = vec![0.0; n];
     raw[..rhs.len()].copy_from_slice(&rhs);
-    factor.solve_in_place(&mut raw);
+    factor
+        .solve_in_place(&mut raw)
+        .or_panic("solve_in_place should succeed");
 
     assert_eq!(raw[..2], recovered[..2]);
     assert_eq!(raw[n - 1], 0.0, "ground must be pinned");
@@ -195,7 +218,9 @@ fn floating_raw_solve_differs_from_recovered_by_one_constant() {
     assert_eq!(factor.n(), n, "pure Laplacian must not be augmented");
 
     let mut raw = rhs.clone();
-    factor.solve_in_place(&mut raw);
+    factor
+        .solve_in_place(&mut raw)
+        .or_panic("solve_in_place should succeed");
     let mut recovered = vec![0.0; factor.n()];
     factor
         .solve_into(&rhs, &mut recovered)
