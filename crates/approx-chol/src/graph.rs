@@ -107,6 +107,8 @@ impl EdgeCount for Multi {
 pub(crate) struct Edge<T: Real, C> {
     weight: T,
     to: u32,
+    /// Index of this edge's mirror in `adj[to]`; whatever moves an edge must
+    /// preserve it.
     rev: u32,
     count: C,
 }
@@ -222,14 +224,9 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
     /// `0..vertices.len()` in the order given.
     ///
     /// A component is closed under edges, so each list moves intact and only its
-    /// endpoints need relabeling: every reverse pointer still addresses the
-    /// position it did in the parent.
-    pub(crate) fn take_component(
-        &mut self,
-        diagonal: &[T],
-        vertices: &[u32],
-        local_of: &mut [u32],
-    ) -> (Self, Vec<T>) {
+    /// endpoints need relabeling: every `rev` still addresses the position it did
+    /// in the parent.
+    pub(crate) fn take_component(&mut self, vertices: &[u32], local_of: &mut [u32]) -> Self {
         debug_assert_eq!(local_of.len(), self.adj.len());
         for (local, &global) in vertices.iter().enumerate() {
             local_of[global as usize] = local as u32;
@@ -244,11 +241,7 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
                 edges
             })
             .collect();
-        let local_diagonal = vertices
-            .iter()
-            .map(|&vertex| diagonal[vertex as usize])
-            .collect();
-        (Self::from_adjacency(adjacency), local_diagonal)
+        Self::from_adjacency(adjacency)
     }
 }
 

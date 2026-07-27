@@ -101,31 +101,31 @@ where
         // Ground has the highest index, so it is the last vertex of its block.
         let ground_vertex = (n > original_n).then_some(original_n as u32);
         let Some(components) = components else {
-            let star = make_star(n);
-            let block = self.build_from_graph(graph, diagonal, ground_vertex, &mut sampler, star);
+            let block =
+                self.build_from_graph(graph, diagonal, ground_vertex, &mut sampler, &make_star);
             return Ok(Factor::from_blocks(n, original_n, None, vec![block]));
         };
 
-        let mut forward: Vec<u32> = Vec::with_capacity(n);
         let mut blocks = Vec::with_capacity(components.len());
         let mut local_of = vec![0u32; n];
-        for vertices in components {
+        for vertices in &components {
             let ground = ground_vertex
                 .filter(|vertex| vertices.last() == Some(vertex))
                 .map(|_| (vertices.len() - 1) as u32);
-            let (component_graph, component_diagonal) =
-                graph.take_component(&diagonal, &vertices, &mut local_of);
-            let star = make_star(vertices.len());
+            let component_graph = graph.take_component(vertices, &mut local_of);
+            let component_diagonal = vertices
+                .iter()
+                .map(|&vertex| diagonal[vertex as usize])
+                .collect();
             blocks.push(self.build_from_graph(
                 component_graph,
                 component_diagonal,
                 ground,
                 &mut sampler,
-                star,
+                &make_star,
             ));
-            forward.extend_from_slice(&vertices);
         }
-        let permutation = Permutation::from_forward(&forward);
+        let permutation = Permutation::from_forward(&components.concat());
         Ok(Factor::from_blocks(n, original_n, permutation, blocks))
     }
 
@@ -150,9 +150,10 @@ where
         mut diag: Vec<T>,
         ground: Option<u32>,
         sampler: &mut CdfSampler<T>,
-        mut star_builder: B,
+        make_star: &impl Fn(usize) -> B,
     ) -> BlockFactor<T> {
         let n = graph.n();
+        let mut star_builder = make_star(n);
         let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
         let degree_sum: usize = degrees.iter().sum();
         // The bucket layout scales with the multiplicity the graph was split at,

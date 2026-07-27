@@ -312,39 +312,23 @@ fn interleaved_components_solve_in_input_order() {
     }
 }
 
-fn laplacian_csr(n: u32, edges: &[(u32, u32)]) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
-    let mut rows: Vec<Vec<(u32, f64)>> = vec![Vec::new(); n as usize];
-    for &(u, v) in edges {
-        rows[u as usize].push((v, -1.0));
-        rows[v as usize].push((u, -1.0));
-    }
+/// Two interleaved 8-cycles (`v ± 2 mod 16`): every star has degree two, so AC is
+/// exact here and the residual is round-off. The fixtures above are too small to
+/// swap-remove.
+#[test]
+fn moved_components_keep_their_edges_through_fill_and_removal() {
+    const N: u32 = 16;
     let (mut row_ptrs, mut columns, mut values) = (vec![0u32], Vec::new(), Vec::new());
-    for (vertex, row) in rows.iter_mut().enumerate() {
-        row.push((vertex as u32, row.len() as f64));
+    for v in 0..N {
+        let mut row = [((v + N - 2) % N, -1.0), (v, 2.0), ((v + 2) % N, -1.0)];
         row.sort_unstable_by_key(|&(column, _)| column);
         columns.extend(row.iter().map(|&(column, _)| column));
         values.extend(row.iter().map(|&(_, value)| value));
         row_ptrs.push(columns.len() as u32);
     }
-    (row_ptrs, columns, values)
-}
-
-/// Two interleaved 8-cycles: every star has degree two, so AC is exact here and
-/// the residual is round-off. The fixtures above are too small to swap-remove.
-#[test]
-fn moved_components_keep_their_edges_through_fill_and_removal() {
-    const CYCLE: u32 = 8;
-    let edges: Vec<(u32, u32)> = (0..CYCLE)
-        .flat_map(|i| {
-            let next = (i + 1) % CYCLE;
-            [(2 * i, 2 * next), (2 * i + 1, 2 * next + 1)]
-        })
-        .collect();
-    let n = 2 * CYCLE;
-    let (row_ptrs, columns, values) = laplacian_csr(n, &edges);
 
     // Zero-sum within each cycle, so the singular system is consistent.
-    let rhs: Vec<f64> = (0..n).map(|v| if v < n / 2 { 1.0 } else { -1.0 }).collect();
+    let rhs: Vec<f64> = (0..N).map(|v| if v < N / 2 { 1.0 } else { -1.0 }).collect();
     for seed in 0..4u64 {
         let factor = build(
             Config {
@@ -356,19 +340,17 @@ fn moved_components_keep_their_edges_through_fill_and_removal() {
             &values,
         )
         .or_panic("double-cycle factor");
-        assert_eq!(factor.n_steps(), (n - 2) as usize, "one pin per cycle");
+        assert_eq!(factor.n_steps(), (N - 2) as usize, "one pin per cycle");
 
         let x = factor.solve(&rhs).or_panic("solve");
-        let residual = (0..n as usize).map(|row| {
+        for row in 0..N as usize {
             let range = row_ptrs[row] as usize..row_ptrs[row + 1] as usize;
             let ax: f64 = columns[range.clone()]
                 .iter()
                 .zip(&values[range])
                 .map(|(&column, value)| value * x[column as usize])
                 .sum();
-            (ax - rhs[row]).abs()
-        });
-        for (row, error) in residual.enumerate() {
+            let error = (ax - rhs[row]).abs();
             assert!(error < 1e-10, "seed={seed}: row {row} residual {error:.3e}");
         }
     }
