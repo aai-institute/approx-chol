@@ -5,8 +5,8 @@
 
 mod ingest;
 
-use crate::types::count_as_scalar;
-use crate::{CsrRef, Error, Real};
+use crate::types::{count_as_scalar, Real};
+use crate::{CsrRef, Error};
 
 /// Named return type for [`AdjListGraph::from_sddm`].
 pub(crate) struct GraphBuild<G, T: Real> {

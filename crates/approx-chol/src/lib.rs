@@ -93,7 +93,6 @@ pub mod low_level;
 pub use approx_chol::{Config, Factor, SolveError};
 pub use csr::{CsrRef, OwnedCsr};
 pub use error::{ConfigError, CsrError, Error, IndexKind};
-pub(crate) use types::Real;
 
 /// Factorize an SDDM matrix with default configuration.
 ///

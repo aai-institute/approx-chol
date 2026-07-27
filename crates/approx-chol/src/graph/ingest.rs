@@ -2,8 +2,8 @@
 //! mirror, and close the row deficits with a Gremban ground vertex.
 
 use super::{add_edge_pair, components, AdjListGraph, Edge, EdgeCount, GraphBuild};
-use crate::types::count_as_scalar;
-use crate::{CsrError, CsrRef, Error, Real};
+use crate::types::{count_as_scalar, Real};
+use crate::{CsrError, CsrRef, Error};
 
 pub(super) fn from_sddm<T: Real, C: EdgeCount>(
     csr: CsrRef<'_, T, u32>,

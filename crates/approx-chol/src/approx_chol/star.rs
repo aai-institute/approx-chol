@@ -1,8 +1,7 @@
 use crate::graph::{AdjListGraph, EdgeCount, Multi, Neighbor, Single};
 use crate::ordering::{DegreeDeltas, DynamicOrdering};
 use crate::sampling::CdfSampler;
-use crate::types::float_total_cmp;
-use crate::Real;
+use crate::types::{float_total_cmp, Real};
 
 use super::clique_tree::{
     clique_tree_sample_column, clique_tree_sample_column_multi, MultiStar, SampledColumn,
