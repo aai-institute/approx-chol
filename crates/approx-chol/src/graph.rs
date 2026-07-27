@@ -5,13 +5,14 @@
 
 mod ingest;
 
-use crate::types::count_as_scalar;
-use crate::{CsrRef, Error, Real};
+use crate::types::{count_as_scalar, Real};
+use crate::{CsrRef, Error};
 
 /// Named return type for [`AdjListGraph::from_sddm`].
 pub(crate) struct GraphBuild<G, T: Real> {
     pub graph: G,
     pub diagonal: Vec<T>,
+    pub components: Option<Vec<Vec<u32>>>,
 }
 
 /// A neighbor entry produced by star elimination. Carries the edge's
@@ -106,6 +107,8 @@ impl EdgeCount for Multi {
 pub(crate) struct Edge<T: Real, C> {
     weight: T,
     to: u32,
+    /// Index of this edge's mirror in `adj[to]`; whatever moves an edge must
+    /// preserve it.
     rev: u32,
     count: C,
 }
@@ -216,6 +219,30 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
         }
         add_edge_pair(&mut self.adj, u as usize, v as usize, weight);
     }
+
+    /// Moves the subgraph over `vertices` out of `self`, renumbered to
+    /// `0..vertices.len()` in the order given.
+    ///
+    /// A component is closed under edges, so each list moves intact and only its
+    /// endpoints need relabeling: every `rev` still addresses the position it did
+    /// in the parent.
+    pub(crate) fn take_component(&mut self, vertices: &[u32], local_of: &mut [u32]) -> Self {
+        debug_assert_eq!(local_of.len(), self.adj.len());
+        for (local, &global) in vertices.iter().enumerate() {
+            local_of[global as usize] = local as u32;
+        }
+        let adjacency = vertices
+            .iter()
+            .map(|&global| {
+                let mut edges = core::mem::take(&mut self.adj[global as usize]);
+                for edge in &mut edges {
+                    edge.to = local_of[edge.to as usize];
+                }
+                edges
+            })
+            .collect();
+        Self::from_adjacency(adjacency)
+    }
 }
 
 impl<T: Real> MultiEdgeGraph<T> {
@@ -266,21 +293,27 @@ fn remove_edge_at<T: Real, C: EdgeCount>(adj: &mut [Vec<Edge<T, C>>], u: usize, 
     }
 }
 
-/// Connected components among the first `n_real` vertices. Traversal follows
-/// every edge, so a ground vertex (index `>= n_real`) links the blocks it
-/// touches without being counted as its own component.
-fn count_components<T: Real, C: EdgeCount>(adj: &[Vec<Edge<T, C>>], n_real: usize) -> usize {
-    let mut visited = BitVec::new(adj.len());
+/// Connected components among the first `n_real` vertices, or `None` when the
+/// graph is connected. Traversal follows every edge, so a ground vertex (index
+/// `>= n_real`) links the blocks it touches without being counted as its own
+/// component.
+fn components<T: Real, C: EdgeCount>(
+    adj: &[Vec<Edge<T, C>>],
+    n_real: usize,
+) -> Option<Vec<Vec<u32>>> {
+    let n = adj.len();
+    let mut visited = BitVec::new(n);
     let mut stack: Vec<usize> = Vec::new();
-    let mut components = 0usize;
+    let mut components: Vec<Vec<u32>> = Vec::new();
     for start in 0..n_real {
         if visited.get(start) {
             continue;
         }
-        components += 1;
+        let mut component = Vec::new();
         visited.set(start);
         stack.push(start);
         while let Some(v) = stack.pop() {
+            component.push(v as u32);
             for e in &adj[v] {
                 let u = e.to as usize;
                 if !visited.get(u) {
@@ -289,8 +322,17 @@ fn count_components<T: Real, C: EdgeCount>(adj: &[Vec<Edge<T, C>>], n_real: usiz
                 }
             }
         }
+        components.push(component);
     }
-    components
+    // The first traversal reaching every vertex means the graph is connected,
+    // so the common case never sorts or returns a component list.
+    if components.len() <= 1 && components.first().map_or(0, Vec::len) == n {
+        return None;
+    }
+    for component in &mut components {
+        component.sort_unstable();
+    }
+    Some(components)
 }
 
 #[cfg(test)]

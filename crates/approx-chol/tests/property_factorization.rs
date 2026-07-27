@@ -74,7 +74,8 @@ proptest! {
     }
 
     // -----------------------------------------------------------------------
-    // The two solve entry points agree
+    // Factor dimensions, and the two solve entry points agreeing — both read off
+    // one factorization of the connected-Laplacian strategy.
     // -----------------------------------------------------------------------
 
     #[test]
@@ -86,6 +87,13 @@ proptest! {
             .or_panic("generated CSR must be valid");
         let factor = factorize(csr).or_panic("factorization should succeed");
         let rhs = rhs_for_dimension(n as usize);
+
+        prop_assert_eq!(factor.original_n(), n as usize);
+        // A pure Laplacian has no surplus, so it is not augmented.
+        prop_assert_eq!(
+            factor.n(), n as usize,
+            "pure Laplacian should not trigger Gremban augmentation"
+        );
 
         let from_alloc = factor.solve(&rhs).or_panic("solve should succeed");
         let mut from_into = vec![0.0_f64; factor.n()];
@@ -154,30 +162,6 @@ proptest! {
                 "non-deterministic: {} vs {}", a, b
             );
         }
-    }
-
-    // -----------------------------------------------------------------------
-    // Factor dimensions are consistent
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn factor_dimensions_are_consistent(
-        (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
-    ) {
-        prop_assume!(is_connected(&row_ptrs, &col_indices, n));
-        let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
-            .or_panic("valid CSR");
-        let factor = factorize(csr).or_panic("factorization");
-
-        prop_assert_eq!(
-            factor.original_n(), n as usize,
-            "original_n must match input dimension"
-        );
-        // A pure Laplacian has no surplus, so it is not augmented.
-        prop_assert_eq!(
-            factor.n(), n as usize,
-            "pure Laplacian should not trigger Gremban augmentation"
-        );
     }
 
 }

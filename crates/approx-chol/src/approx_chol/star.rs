@@ -1,8 +1,7 @@
 use crate::graph::{AdjListGraph, EdgeCount, Multi, Neighbor, Single};
 use crate::ordering::{DegreeDeltas, DynamicOrdering};
 use crate::sampling::CdfSampler;
-use crate::types::float_total_cmp;
-use crate::Real;
+use crate::types::{float_total_cmp, Real};
 
 use super::clique_tree::{
     clique_tree_sample_column, clique_tree_sample_column_multi, MultiStar, SampledColumn,
@@ -50,7 +49,7 @@ pub(super) struct AcStarBuilder<T: Real> {
     /// Raw neighbor output from `live_neighbors`.
     raw: Vec<Neighbor<T, Single>>,
     entries: Vec<(u32, T)>,
-    dedup: AcDedupWorkspace<T>,
+    dedup: DedupWorkspace<T>,
 }
 
 impl<T: Real> AcStarBuilder<T> {
@@ -58,7 +57,7 @@ impl<T: Real> AcStarBuilder<T> {
         Self {
             raw: Vec::new(),
             entries: Vec::new(),
-            dedup: AcDedupWorkspace::new(n),
+            dedup: DedupWorkspace::new(n),
         }
     }
 }
@@ -73,7 +72,7 @@ impl<T: Real> StarBuilderVariant<T> for AcStarBuilder<T> {
         ordering: &mut DynamicOrdering,
     ) {
         graph.live_neighbors(v, &mut self.raw);
-        self.dedup.dedup(&mut self.raw, &mut self.entries);
+        self.dedup.dedup_ac(&mut self.raw, &mut self.entries);
         apply_merged_counts(self.dedup.merged_counts(), ordering);
     }
 
@@ -107,7 +106,7 @@ pub(super) struct Ac2StarBuilder<T: Real> {
     star: MultiStar<T>,
     /// Max multi-edges kept per neighbor pair after compression.
     merge_limit: u32,
-    dedup: Ac2DedupWorkspace<T>,
+    dedup: DedupWorkspace<T>,
 }
 
 impl<T: Real> Ac2StarBuilder<T> {
@@ -116,7 +115,7 @@ impl<T: Real> Ac2StarBuilder<T> {
             raw: Vec::new(),
             star: MultiStar::new(),
             merge_limit,
-            dedup: Ac2DedupWorkspace::new(n),
+            dedup: DedupWorkspace::new(n),
         }
     }
 }
@@ -132,7 +131,7 @@ impl<T: Real> StarBuilderVariant<T> for Ac2StarBuilder<T> {
     ) {
         graph.live_neighbors(v, &mut self.raw);
         self.dedup
-            .dedup(&mut self.raw, &mut self.star, self.merge_limit);
+            .dedup_ac2(&mut self.raw, &mut self.star, self.merge_limit);
         apply_merged_counts(self.dedup.merged_counts(), ordering);
     }
 
@@ -166,12 +165,15 @@ fn sort_by_weight_then_index<T: Real>(entries: &mut [(u32, T)]) {
     entries.sort_unstable_by(|a, b| float_total_cmp(&a.1, &b.1).then_with(|| a.0.cmp(&b.0)));
 }
 
-/// Shared scratch for dedup variants.
+/// Shared scratch for dedup variants. Both leave every per-vertex slot at zero
+/// when they finish, so a zero `count` is also what marks a vertex unvisited —
+/// no separate seen-set to keep in step with it.
 struct DedupScratch<T: Real> {
     /// `scatter[idx]` accumulates weight for vertex `idx`.
     scatter: Vec<T>,
-    /// Tracks first-seen vertices for AC scatter dedup.
-    scatter_seen: Vec<bool>,
+    /// `counts[idx]` accumulates multiplicity for vertex `idx`: raw occurrences
+    /// on the AC path, summed multi-edge counts on the AC2 path.
+    counts: Vec<u32>,
     /// Tracks unique vertex indices seen in the current pass.
     unique: Vec<u32>,
     /// Number of vertices in the graph (for buffer sizing).
@@ -182,35 +184,64 @@ impl<T: Real> DedupScratch<T> {
     fn new(n: usize) -> Self {
         Self {
             scatter: Vec::new(),
-            scatter_seen: Vec::new(),
+            counts: Vec::new(),
             unique: Vec::new(),
             n,
         }
     }
 
-    fn ensure_scatter_buffers(&mut self) {
+    /// Clear the pass state and size the per-vertex buffers.
+    fn begin_pass(&mut self) {
         if self.scatter.len() < self.n {
             self.scatter.resize(self.n, T::zero());
-            self.scatter_seen.resize(self.n, false);
+            self.counts.resize(self.n, 0);
+        }
+        self.unique.clear();
+    }
+
+    /// Accumulate one raw neighbor, recording the vertex the first time it appears.
+    #[inline]
+    fn accumulate(&mut self, to: u32, weight: T, count: u32) {
+        let idx = to as usize;
+        if self.counts[idx] == 0 {
+            self.unique.push(to);
+        }
+        self.scatter[idx] = self.scatter[idx] + weight;
+        self.counts[idx] = self.counts[idx].saturating_add(count);
+    }
+
+    /// Visit each vertex the pass accumulated, in first-seen order, resetting its
+    /// slots as it goes so the buffers are all-zero again when this returns.
+    #[inline]
+    fn drain_unique(&mut self, mut visit: impl FnMut(u32, T, u32)) {
+        for index in 0..self.unique.len() {
+            let vertex = self.unique[index];
+            let idx = vertex as usize;
+            visit(vertex, self.scatter[idx], self.counts[idx]);
+            self.scatter[idx] = T::zero();
+            self.counts[idx] = 0;
         }
     }
 }
 
-/// AC dedup workspace (weights only, tracks merged duplicate counts).
-pub(super) struct AcDedupWorkspace<T: Real> {
+/// Dedup workspace for both variants: the same per-vertex scratch and the same
+/// merged-count report, differing only in which `dedup_*` the star builder calls
+/// — and that is already decided by the `Neighbor` type it holds.
+///
+/// `merged_counts` stays outside [`DedupScratch`] so the scatter paths can push to
+/// it from inside [`DedupScratch::drain_unique`]'s closure; one struct would
+/// borrow all of `self` for the call.
+pub(super) struct DedupWorkspace<T: Real> {
     scratch: DedupScratch<T>,
-    /// Number of duplicates merged per vertex.
+    /// Duplicates merged per vertex (AC), or merge-limit discards (AC2).
     merged_counts: Vec<(u32, u32)>,
-    /// Duplicate counter per vertex for scatter dedup.
-    scatter_merged_counts: Vec<u32>,
 }
 
-impl<T: Real> AcDedupWorkspace<T> {
+impl<T: Real> DedupWorkspace<T> {
     pub fn new(n: usize) -> Self {
         Self {
             scratch: DedupScratch::new(n),
             merged_counts: Vec::new(),
-            scatter_merged_counts: Vec::new(),
         }
     }
 
@@ -220,20 +251,15 @@ impl<T: Real> AcDedupWorkspace<T> {
     }
 
     /// Deduplicate raw tuples for AC path and sort by weight ascending.
-    pub fn dedup(&mut self, raw: &mut [Neighbor<T, Single>], entries: &mut Vec<(u32, T)>) {
+    pub fn dedup_ac(&mut self, raw: &mut [Neighbor<T, Single>], entries: &mut Vec<(u32, T)>) {
         if raw.len() <= SCATTER_THRESHOLD {
-            self.dedup_sort_small(raw, entries);
+            self.dedup_ac_sort(raw, entries);
         } else {
-            self.dedup_scatter(raw, entries);
+            self.dedup_ac_scatter(raw, entries);
         }
     }
 
-    fn dedup_sort_small(&mut self, raw: &mut [Neighbor<T, Single>], entries: &mut Vec<(u32, T)>) {
-        self.dedup_sort_core(raw, entries);
-        sort_by_weight_then_index(entries);
-    }
-
-    fn dedup_sort_core(&mut self, raw: &mut [Neighbor<T, Single>], entries: &mut Vec<(u32, T)>) {
+    fn dedup_ac_sort(&mut self, raw: &mut [Neighbor<T, Single>], entries: &mut Vec<(u32, T)>) {
         self.merged_counts.clear();
         entries.clear();
         if raw.is_empty() {
@@ -266,83 +292,48 @@ impl<T: Real> AcDedupWorkspace<T> {
         if n_merged > 0 {
             self.merged_counts.push((raw[write].to, n_merged));
         }
-    }
-
-    fn dedup_scatter(&mut self, raw: &[Neighbor<T, Single>], entries: &mut Vec<(u32, T)>) {
-        self.scratch.ensure_scatter_buffers();
-        self.scratch.unique.clear();
-        self.merged_counts.clear();
-        entries.clear();
-        if self.scatter_merged_counts.len() < self.scratch.n {
-            self.scatter_merged_counts.resize(self.scratch.n, 0);
-        }
-
-        for nbr in raw {
-            let idx = nbr.to as usize;
-            if !self.scratch.scatter_seen[idx] {
-                self.scratch.scatter_seen[idx] = true;
-                self.scratch.unique.push(nbr.to);
-            } else {
-                self.scatter_merged_counts[idx] = self.scatter_merged_counts[idx].saturating_add(1);
-            }
-            self.scratch.scatter[idx] = self.scratch.scatter[idx] + nbr.fill_weight;
-        }
-
-        for &idx in &self.scratch.unique {
-            let idx_usize = idx as usize;
-            entries.push((idx, self.scratch.scatter[idx_usize]));
-            let n_merged = self.scatter_merged_counts[idx_usize];
-            if n_merged > 0 {
-                self.merged_counts.push((idx, n_merged));
-                self.scatter_merged_counts[idx_usize] = 0;
-            }
-            self.scratch.scatter[idx_usize] = T::zero();
-            self.scratch.scatter_seen[idx_usize] = false;
-        }
+        // The coalescing pass above emits neighbor-sorted entries; elimination
+        // wants them by ascending weight.
         sort_by_weight_then_index(entries);
     }
-}
 
-/// AC2 dedup workspace (weights + multiplicities + merge-cap reporting).
-pub(super) struct Ac2DedupWorkspace<T: Real> {
-    scratch: DedupScratch<T>,
-    /// Scatter buffer for multi-edge counts during scatter-gather dedup.
-    scatter_counts: Vec<u32>,
-    /// Compressed merge counts for AC2 merge-limit discards.
-    merged_counts: Vec<(u32, u32)>,
-}
+    fn dedup_ac_scatter(&mut self, raw: &[Neighbor<T, Single>], entries: &mut Vec<(u32, T)>) {
+        self.scratch.begin_pass();
+        self.merged_counts.clear();
+        entries.clear();
 
-impl<T: Real> Ac2DedupWorkspace<T> {
-    pub fn new(n: usize) -> Self {
-        Self {
-            scratch: DedupScratch::new(n),
-            scatter_counts: Vec::new(),
-            merged_counts: Vec::new(),
+        for nbr in raw {
+            self.scratch.accumulate(nbr.to, nbr.fill_weight, 1);
         }
-    }
 
-    /// `(vertex, count)` pairs for merge-limit discards during the last dedup.
-    pub fn merged_counts(&self) -> &[(u32, u32)] {
-        &self.merged_counts
+        let merged_counts = &mut self.merged_counts;
+        self.scratch.drain_unique(|vertex, weight, occurrences| {
+            entries.push((vertex, weight));
+            // One occurrence is the surviving entry; the rest merged into it.
+            if occurrences > 1 {
+                merged_counts.push((vertex, occurrences - 1));
+            }
+        });
+        sort_by_weight_then_index(entries);
     }
 
     /// Deduplicate raw tuples for AC2 path, apply merge cap, and sort by avg-weight.
-    pub fn dedup(
+    pub fn dedup_ac2(
         &mut self,
         raw: &mut [Neighbor<T, Multi>],
         star: &mut MultiStar<T>,
         merge_limit: u32,
     ) {
         if raw.len() <= SCATTER_THRESHOLD {
-            self.dedup_sort(raw, star);
+            self.dedup_ac2_sort(raw, star);
         } else {
-            self.dedup_scatter(raw, star);
+            self.dedup_ac2_scatter(raw, star);
         }
         star.apply_merge_limit(merge_limit, &mut self.merged_counts);
         star.sort_by_avg_weight();
     }
 
-    fn dedup_sort(&mut self, raw: &mut [Neighbor<T, Multi>], star: &mut MultiStar<T>) {
+    fn dedup_ac2_sort(&mut self, raw: &mut [Neighbor<T, Multi>], star: &mut MultiStar<T>) {
         self.merged_counts.clear();
         star.clear();
         raw.sort_unstable_by_key(|n| n.to);
@@ -351,34 +342,19 @@ impl<T: Real> Ac2DedupWorkspace<T> {
         }
     }
 
-    fn dedup_scatter(&mut self, raw: &[Neighbor<T, Multi>], star: &mut MultiStar<T>) {
-        self.scratch.ensure_scatter_buffers();
-        self.scratch.unique.clear();
+    fn dedup_ac2_scatter(&mut self, raw: &[Neighbor<T, Multi>], star: &mut MultiStar<T>) {
+        self.scratch.begin_pass();
         self.merged_counts.clear();
         star.clear();
-        if self.scatter_counts.len() < self.scratch.n {
-            self.scatter_counts.resize(self.scratch.n, 0);
-        }
 
         for nbr in raw {
-            let idx = nbr.to as usize;
-            if self.scatter_counts[idx] == 0 {
-                self.scratch.unique.push(nbr.to);
-            }
-            self.scratch.scatter[idx] = self.scratch.scatter[idx] + nbr.fill_weight;
-            self.scatter_counts[idx] = self.scatter_counts[idx].saturating_add(nbr.count.get());
+            self.scratch
+                .accumulate(nbr.to, nbr.fill_weight, nbr.count.get());
         }
 
-        for &idx in &self.scratch.unique {
-            let idx_usize = idx as usize;
-            star.push(
-                idx,
-                self.scratch.scatter[idx_usize],
-                self.scatter_counts[idx_usize],
-            );
-            self.scratch.scatter[idx_usize] = T::zero();
-            self.scatter_counts[idx_usize] = 0;
-        }
+        self.scratch.drain_unique(|vertex, weight, count| {
+            star.push(vertex, weight, count);
+        });
     }
 }
 

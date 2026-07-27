@@ -7,6 +7,7 @@ use core::fmt;
 mod factor;
 mod sequence;
 
+pub(crate) use factor::{BlockFactor, Permutation, Pin};
 pub use factor::{Factor, SolveError};
 pub(crate) use sequence::EliminationSequence;
 
@@ -22,11 +23,8 @@ pub(crate) enum FactorError {
         original_n: usize,
         n: usize,
     },
-    /// `start > end` or `end > nnz`.
-    NeighborRangeInvalid {
-        step: usize,
-        start: usize,
-        end: usize,
+    /// More factor nonzeros than a `u32` step offset can address.
+    NonzeroCountExceedsU32 {
         nnz: usize,
     },
     VertexOutOfBounds {
@@ -39,10 +37,19 @@ pub(crate) enum FactorError {
         neighbor: u32,
         n: usize,
     },
-    /// Trailing neighbor storage that no step references.
-    TrailingNeighborStorage {
+    /// Block dimensions do not sum to the factor dimension.
+    BlockDimsDoNotCoverFactor {
         covered: usize,
-        nnz: usize,
+        n: usize,
+    },
+    /// A block's pinned variable is not a local index of that block.
+    BlockPinInvalid {
+        pin: usize,
+        n: usize,
+    },
+    /// A permutation position is out of bounds, repeated, or a bare fixed point.
+    PermutationInvalid {
+        position: usize,
     },
 }
 

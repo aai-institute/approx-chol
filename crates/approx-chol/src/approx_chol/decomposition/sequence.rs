@@ -2,6 +2,7 @@
 
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;
+use crate::approx_chol::clique_tree::SampledColumn;
 use crate::types::Real;
 
 /// Zero-copy view of one elimination step: it eliminates `vertex` by splitting
@@ -18,7 +19,7 @@ pub(crate) struct EliminationStep<'a, T> {
 /// by construction from the builder, by [`EliminationSequence::validate_for_dim`]
 /// from serde.
 /// Neither kernel re-checks per step.
-impl<'a, T: num_traits::Float + Send + Sync + 'static> EliminationStep<'a, T> {
+impl<'a, T: Real> EliminationStep<'a, T> {
     /// Forward elimination: scatter pivot weight to neighbors, then scale by D^{-1}.
     #[inline(always)]
     pub(crate) fn apply_forward(&self, y: &mut [T]) {
@@ -76,14 +77,6 @@ impl<'a, T: num_traits::Float + Send + Sync + 'static> EliminationStep<'a, T> {
 /// by, and where its neighbor range ends. The range *starts* at the previous header's
 /// `end`, so there is no second array that could disagree about step count,
 /// about where step 0 begins, or about which diagonal belongs to which vertex.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "serde",
-    serde(bound(
-        serialize = "T: serde::Serialize",
-        deserialize = "T: serde::de::DeserializeOwned"
-    ))
-)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct StepHeader<T> {
     pub(crate) vertex: u32,
@@ -93,15 +86,16 @@ pub(crate) struct StepHeader<T> {
 
 /// Contiguous memory owner for a sequence of elimination steps.
 ///
-/// The two neighbor arrays cross the serde boundary as one array of pairs (see
-/// [`SequenceData`]), so a persisted sequence cannot arrive with them
-/// disagreeing about length; the solve path keeps them split.
+/// A persisted sequence is a list of [`StepData`], each owning its own neighbors,
+/// so the cumulative `end` offsets are *rebuilt* on load rather than trusted:
+/// contiguous, non-decreasing and exhaustive by construction. The solve path
+/// keeps the flat split arrays.
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 #[cfg_attr(
     feature = "serde",
     serde(
         bound(deserialize = "T: serde::de::DeserializeOwned"),
-        from = "SequenceData<T>"
+        try_from = "Vec<StepData<T>>"
     )
 )]
 #[derive(Clone, Debug)]
@@ -111,55 +105,88 @@ pub(crate) struct EliminationSequence<T> {
     pub(crate) elimination_fractions: Vec<T>,
 }
 
-/// Persisted shape of an [`EliminationSequence`]. Unzipping one pair array into
-/// two columns is infallible, which is what retires the length check.
+/// Persisted shape of one step. Nesting the neighbors under the step they belong
+/// to is what retires the range and trailing-storage checks.
 #[cfg(feature = "serde")]
 #[derive(serde::Deserialize)]
 #[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
-struct SequenceData<T> {
-    steps: Vec<StepHeader<T>>,
-    /// One `(neighbor, elimination fraction)` per factor nonzero.
+struct StepData<T> {
+    vertex: u32,
+    inv_diag: T,
+    /// One `(neighbor, elimination fraction)` per factor nonzero in this step.
     neighbors: Vec<(u32, T)>,
 }
 
 #[cfg(feature = "serde")]
-impl<T> From<SequenceData<T>> for EliminationSequence<T> {
-    fn from(data: SequenceData<T>) -> Self {
-        let (neighbor_indices, elimination_fractions) = data.neighbors.into_iter().unzip();
-        Self {
-            steps: data.steps,
+impl<T> TryFrom<Vec<StepData<T>>> for EliminationSequence<T> {
+    type Error = FactorError;
+
+    fn try_from(data: Vec<StepData<T>>) -> Result<Self, Self::Error> {
+        let mut steps = Vec::with_capacity(data.len());
+        let mut neighbor_indices = Vec::new();
+        let mut elimination_fractions = Vec::new();
+        for step in data {
+            for (neighbor, fraction) in step.neighbors {
+                neighbor_indices.push(neighbor);
+                elimination_fractions.push(fraction);
+            }
+            let nnz = neighbor_indices.len();
+            // The only range invariant the nesting cannot carry: `end` is a `u32`.
+            let end =
+                u32::try_from(nnz).map_err(|_| FactorError::NonzeroCountExceedsU32 { nnz })?;
+            steps.push(StepHeader {
+                vertex: step.vertex,
+                end,
+                inv_diag: step.inv_diag,
+            });
+        }
+        Ok(Self {
+            steps,
             neighbor_indices,
             elimination_fractions,
-        }
+        })
     }
 }
 
-/// Mirrors [`SequenceData`] field for field. Hand-written rather than a
-/// `serde(into)` shadow so serializing neither clones the sequence nor forces a
-/// `Clone` bound onto [`Factor`](super::Factor)'s serialize impl.
+/// Mirrors [`StepData`] without materializing one: each step borrows its slice of
+/// the flat arrays, so serializing allocates nothing regardless of `nnz`.
 #[cfg(feature = "serde")]
 impl<T: serde::Serialize> serde::Serialize for EliminationSequence<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq((0..self.steps.len()).map(|i| StepView(self, i)))
+    }
+}
+
+#[cfg(feature = "serde")]
+struct StepView<'a, T>(&'a EliminationSequence<T>, usize);
+
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize> serde::Serialize for StepView<'_, T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut out = serializer.serialize_struct("EliminationSequence", 2)?;
-        out.serialize_field("steps", &self.steps)?;
-        out.serialize_field("neighbors", &PairedNeighbors(self))?;
+        let (sequence, i) = (self.0, self.1);
+        let (start, end) = sequence.neighbor_range(i);
+        let mut out = serializer.serialize_struct("StepData", 3)?;
+        out.serialize_field("vertex", &sequence.steps[i].vertex)?;
+        out.serialize_field("inv_diag", &sequence.steps[i].inv_diag)?;
+        out.serialize_field(
+            "neighbors",
+            &PairedNeighbors(
+                &sequence.neighbor_indices[start..end],
+                &sequence.elimination_fractions[start..end],
+            ),
+        )?;
         out.end()
     }
 }
 
 #[cfg(feature = "serde")]
-struct PairedNeighbors<'a, T>(&'a EliminationSequence<T>);
+struct PairedNeighbors<'a, T>(&'a [u32], &'a [T]);
 
 #[cfg(feature = "serde")]
 impl<T: serde::Serialize> serde::Serialize for PairedNeighbors<'_, T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_seq(
-            self.0
-                .neighbor_indices
-                .iter()
-                .zip(&self.0.elimination_fractions),
-        )
+        serializer.collect_seq(self.0.iter().zip(self.1))
     }
 }
 
@@ -170,46 +197,37 @@ impl<T> EliminationSequence<T> {
         self.steps.len()
     }
 
+    /// Half-open range of step `i` in the flat neighbor arrays.
     #[inline(always)]
-    pub(crate) fn step(&self, i: usize) -> EliminationStep<'_, T>
-    where
-        T: Copy,
-    {
-        let step = &self.steps[i];
+    fn neighbor_range(&self, i: usize) -> (usize, usize) {
         let start = if i == 0 {
             0
         } else {
             self.steps[i - 1].end as usize
         };
-        let end = step.end as usize;
+        (start, self.steps[i].end as usize)
+    }
+
+    #[inline(always)]
+    pub(crate) fn step(&self, i: usize) -> EliminationStep<'_, T>
+    where
+        T: Copy,
+    {
+        let (start, end) = self.neighbor_range(i);
         EliminationStep {
-            vertex: step.vertex as usize,
-            inv_diag: step.inv_diag,
+            vertex: self.steps[i].vertex as usize,
+            inv_diag: self.steps[i].inv_diag,
             neighbor_indices: &self.neighbor_indices[start..end],
             elimination_fractions: &self.elimination_fractions[start..end],
         }
     }
 
-    /// Check every structural invariant the solve path relies on, against a
-    /// factor dimension `n`, so a deserialized (untrusted) factor is rejected
-    /// before it can index storage out of bounds or silently return garbage.
+    /// Reject vertices and neighbors that would index outside a factor of
+    /// dimension `n`. The ranges themselves need no check — they are rebuilt from
+    /// the nested persisted form, never read off the wire.
     #[cfg(any(feature = "serde", test))]
     pub(crate) fn validate_for_dim(&self, n: usize) -> Result<(), FactorError> {
-        // Threading `start` through the loop makes the ranges contiguous and
-        // non-decreasing by construction; only `start <= end <= nnz` is left to check.
-        let nnz = self.neighbor_indices.len();
-        let mut start = 0usize;
         for (i, step) in self.steps.iter().enumerate() {
-            let end = step.end as usize;
-            if start > end || end > nnz {
-                return Err(FactorError::NeighborRangeInvalid {
-                    step: i,
-                    start,
-                    end,
-                    nnz,
-                });
-            }
-
             if (step.vertex as usize) >= n {
                 return Err(FactorError::VertexOutOfBounds {
                     step: i,
@@ -217,6 +235,7 @@ impl<T> EliminationSequence<T> {
                     n,
                 });
             }
+            let (start, end) = self.neighbor_range(i);
             for &j in &self.neighbor_indices[start..end] {
                 if (j as usize) >= n {
                     return Err(FactorError::NeighborOutOfBounds {
@@ -226,20 +245,11 @@ impl<T> EliminationSequence<T> {
                     });
                 }
             }
-            start = end;
-        }
-        if start != nnz {
-            return Err(FactorError::TrailingNeighborStorage {
-                covered: start,
-                nnz,
-            });
         }
         Ok(())
     }
 }
 
-// Internal construction methods (pub(crate) only, Real bound is internal).
-#[allow(private_bounds)]
 impl<T: Real> EliminationSequence<T> {
     pub(crate) fn with_capacity(n: usize, degree_sum: usize) -> Self {
         Self {
@@ -276,16 +286,13 @@ impl<T: Real> EliminationSequence<T> {
         self.push_step(vertex, diagonal);
     }
 
-    /// Record one sampled column (diagonal value plus its neighbor/fraction pattern).
-    pub(crate) fn record_column(
-        &mut self,
-        vertex: usize,
-        diagonal: T,
-        neighbors: &[u32],
-        fractions: &[T],
-    ) {
+    /// Record one sampled column. Taking the column itself rather than its three
+    /// parts is what keeps a neighbor array from being stored against a fraction
+    /// array of another length — the pairing [`SampledColumn`] maintains.
+    pub(crate) fn record_column(&mut self, vertex: usize, column: &SampledColumn<T>) {
+        let (neighbors, fractions) = column.pattern();
         self.neighbor_indices.extend_from_slice(neighbors);
         self.elimination_fractions.extend_from_slice(fractions);
-        self.push_step(vertex, diagonal);
+        self.push_step(vertex, column.diagonal);
     }
 }

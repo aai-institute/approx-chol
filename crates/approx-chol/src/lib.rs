@@ -93,7 +93,6 @@ pub mod low_level;
 pub use approx_chol::{Config, Factor, SolveError};
 pub use csr::{CsrRef, OwnedCsr};
 pub use error::{ConfigError, CsrError, Error, IndexKind};
-pub(crate) use types::Real;
 
 /// Factorize an SDDM matrix with default configuration.
 ///
@@ -103,9 +102,8 @@ pub(crate) use types::Real;
 /// Accepts any input fallibly convertible into [`CsrRef`], including `CsrRef`
 /// directly and, with feature flags, borrowed matrices from `sprs`/`faer`.
 ///
-/// The input must be a single **connected** system. A block-diagonal SDDM
-/// qualifies (the Gremban ground vertex links diagonally-dominant blocks); a
-/// block with no surplus, e.g. a disconnected pure Laplacian, is rejected.
+/// Disconnected systems are factored block-diagonally, with floating
+/// Laplacian kernels handled independently per component.
 ///
 /// # Errors
 ///

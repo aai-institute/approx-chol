@@ -10,10 +10,9 @@ mod path;
 mod path_solve;
 use panic_err::ErrOrPanic;
 use panic_ok::OrPanic;
-use path_solve::assert_solves_path_rhs;
+use path_solve::assert_view_and_factor_match_fixture;
 
-use approx_chol::low_level::Builder;
-use approx_chol::{factorize, Config, CsrError, CsrRef, Error};
+use approx_chol::{factorize, Config, CsrError, Error};
 use faer::sparse::SparseRowMat;
 use num_traits::{cast, Float, FromPrimitive, PrimInt};
 
@@ -54,30 +53,16 @@ where
     I: faer::Index + PrimInt + 'static,
 {
     let mat = path_laplacian_faer::<T, I>();
-    let csr = CsrRef::try_from(&mat).or_panic("try_from should succeed for valid CSR");
-
-    assert_eq!(csr.n(), 4);
-    assert_eq!(csr.row_ptrs().len(), 5);
-    assert_eq!(csr.col_indices().len(), 10);
-    assert_eq!(csr.values().len(), 10);
-
-    let builder = Builder::<T>::new(Config::default());
-    let factor = builder.build(&mat).or_panic("factorization should succeed");
-
-    assert!(factor.n() >= 4);
-    assert!(factor.n_steps() > 0);
-    assert_solves_path_rhs(&factor);
+    assert_view_and_factor_match_fixture(&mat, Config::default());
 }
 
-/// One factorization per (index, scalar) pair the adapter supports.
+/// One factorization per index type the adapter converts. The scalar is
+/// forwarded untouched, so `generic_low_level_api` owns that axis.
 #[test]
-fn faer_csr_factorizes_over_index_and_scalar_types() {
+fn faer_csr_factorizes_over_index_types() {
     run_case::<f64, u32>();
-    run_case::<f32, u32>();
     run_case::<f64, usize>();
-    run_case::<f32, usize>();
     run_case::<f64, u64>();
-    run_case::<f32, u64>();
 }
 
 #[test]

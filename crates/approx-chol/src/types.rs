@@ -42,11 +42,8 @@ pub(crate) fn count_as_scalar<T: Float, N: num_traits::ToPrimitive>(count: N) ->
     <T as NumCast>::from(count).expect("count is representable in T")
 }
 
-/// Total ordering for floats. NaN sorts last.
-///
-/// `partial_cmp` returns `None` when NaN is involved, which violates the total
-/// order required by Rust's sort algorithms (Rust 1.81+ panics on violation).
-/// This function provides a proper total order by placing NaN after all non-NaN.
+/// Total ordering for floats, NaN last. `partial_cmp` alone returns `None` at NaN,
+/// which violates the total order Rust's sorts require (1.81+ panics on it).
 #[inline]
 pub(crate) fn float_total_cmp<T: Float>(a: &T, b: &T) -> Ordering {
     a.partial_cmp(b)
