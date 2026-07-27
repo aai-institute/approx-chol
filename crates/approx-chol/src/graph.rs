@@ -112,22 +112,14 @@ pub(crate) struct Edge<T: Real, C> {
 }
 
 impl<T: Real, C: EdgeCount> Edge<T, C> {
-    /// A single edge of the given weight; [`link_pair`] assigns its endpoint and
-    /// reverse pointer, the only place either is set.
     #[inline]
-    fn new(weight: T) -> Self {
+    fn new(weight: T, to: u32, rev: u32) -> Self {
         Self {
             weight,
-            to: 0,
-            rev: 0,
+            to,
+            rev,
             count: C::one(),
         }
-    }
-
-    /// The same edge pointing at a different endpoint.
-    #[inline]
-    fn reindex(self, to: u32, rev: u32) -> Self {
-        Self { to, rev, ..self }
     }
 
     #[inline]
@@ -226,34 +218,32 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
         add_edge_pair(&mut self.adj, u as usize, v as usize, weight);
     }
 
-    /// The subgraph over `vertices`, renumbered to `0..vertices.len()` in the
-    /// order given. `local_of` is a scratch map of `usize::MAX`, left as found.
-    pub(crate) fn extract_component(
-        &self,
+    /// Moves the subgraph over `vertices` out of `self`, renumbered to
+    /// `0..vertices.len()` in the order given.
+    ///
+    /// A component is closed under edges, so each list moves intact and only its
+    /// endpoints need relabeling: every reverse pointer still addresses the
+    /// position it did in the parent.
+    pub(crate) fn take_component(
+        &mut self,
         diagonal: &[T],
         vertices: &[u32],
-        local_of: &mut [usize],
+        local_of: &mut [u32],
     ) -> (Self, Vec<T>) {
         debug_assert_eq!(local_of.len(), self.adj.len());
         for (local, &global) in vertices.iter().enumerate() {
-            local_of[global as usize] = local;
+            local_of[global as usize] = local as u32;
         }
-        // The parent degree bounds the local one, so no list has to grow.
-        let mut adjacency: Vec<Vec<Edge<T, C>>> = vertices
+        let adjacency = vertices
             .iter()
-            .map(|&global| Vec::with_capacity(self.adj[global as usize].len()))
-            .collect();
-        for (local_u, &global_u) in vertices.iter().enumerate() {
-            for &edge in &self.adj[global_u as usize] {
-                let local_v = local_of[edge.to as usize];
-                if local_v != usize::MAX && local_u < local_v {
-                    link_pair(&mut adjacency, local_u, local_v, edge);
+            .map(|&global| {
+                let mut edges = core::mem::take(&mut self.adj[global as usize]);
+                for edge in &mut edges {
+                    edge.to = local_of[edge.to as usize];
                 }
-            }
-        }
-        for &global in vertices {
-            local_of[global as usize] = usize::MAX;
-        }
+                edges
+            })
+            .collect();
         let local_diagonal = vertices
             .iter()
             .map(|&vertex| diagonal[vertex as usize])
@@ -285,29 +275,16 @@ fn add_edge_pair<T: Real, C: EdgeCount>(
     v: usize,
     weight: T,
 ) {
-    link_pair(adj, u, v, Edge::new(weight));
-}
-
-/// Store `edge` in both endpoints' adjacency lists, each copy pointing at the
-/// other and carrying the index it sits at there. The one place a reverse pointer
-/// is produced, so it is also the one place their `u32` range is checked.
-#[inline]
-fn link_pair<T: Real, C: EdgeCount>(
-    adj: &mut [Vec<Edge<T, C>>],
-    u: usize,
-    v: usize,
-    edge: Edge<T, C>,
-) {
-    // Overflow is unreachable for tractable inputs, so assert (release too)
-    // rather than truncate and corrupt removal.
+    // u32 reverse pointers; overflow is unreachable for tractable inputs,
+    // so assert (release too) rather than truncate and corrupt removal.
     assert!(
         adj[u].len() < u32::MAX as usize && adj[v].len() < u32::MAX as usize,
         "adjacency list exceeds u32 edge capacity"
     );
     let rev_u = adj[v].len() as u32;
     let rev_v = adj[u].len() as u32;
-    adj[u].push(edge.reindex(v as u32, rev_u));
-    adj[v].push(edge.reindex(u as u32, rev_v));
+    adj[u].push(Edge::new(weight, v as u32, rev_u));
+    adj[v].push(Edge::new(weight, u as u32, rev_v));
 }
 
 /// Remove `adj[u][idx]` in O(1) via swap-remove and repair the moved edge's

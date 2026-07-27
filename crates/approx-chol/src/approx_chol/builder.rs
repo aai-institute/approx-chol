@@ -87,7 +87,7 @@ where
         make_star: impl Fn(usize) -> B,
     ) -> Result<Factor<T>, Error> {
         let GraphBuild {
-            graph,
+            mut graph,
             diagonal,
             components,
         } = build;
@@ -110,13 +110,13 @@ where
 
         let mut forward: Vec<u32> = Vec::with_capacity(n);
         let mut blocks = Vec::with_capacity(components.len());
-        let mut local_of = vec![usize::MAX; n];
+        let mut local_of = vec![0u32; n];
         for vertices in components {
             let ground = ground_vertex
                 .filter(|vertex| vertices.last() == Some(vertex))
                 .map(|_| (vertices.len() - 1) as u32);
             let (component_graph, component_diagonal) =
-                graph.extract_component(&diagonal, &vertices, &mut local_of);
+                graph.take_component(&diagonal, &vertices, &mut local_of);
             let representative = vertices.first().copied().unwrap_or(0) as u64;
             blocks.push(self.build_approximate(
                 component_graph,
