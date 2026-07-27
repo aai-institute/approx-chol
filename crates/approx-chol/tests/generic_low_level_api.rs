@@ -8,7 +8,7 @@ mod path;
 mod path_solve;
 use panic_err::ErrOrPanic;
 use panic_ok::OrPanic;
-use path_solve::assert_solves_path_rhs;
+use path_solve::assert_view_and_factor_match_fixture;
 
 use approx_chol::low_level::Builder;
 use approx_chol::{factorize, Config, ConfigError, CsrError, CsrRef, Error};
@@ -45,12 +45,7 @@ where
 {
     let (rp, ci, vals, n) = path_laplacian::<I, T>();
     let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid csr");
-    let factor = Builder::<T>::new(config)
-        .build(csr)
-        .or_panic("factorization should succeed");
-
-    assert_eq!(factor.n_steps(), factor.n().saturating_sub(1));
-    assert_solves_path_rhs(&factor);
+    assert_view_and_factor_match_fixture(csr, config);
 }
 
 /// One factorization per (index, scalar) pair, on both the AC and AC2 paths.

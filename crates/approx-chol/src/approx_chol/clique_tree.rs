@@ -273,11 +273,6 @@ impl<T: Real> StarElimination<T> {
     }
 
     #[inline(always)]
-    fn capacity(&self) -> T {
-        self.capacity
-    }
-
-    #[inline(always)]
     fn advance(&mut self, f: T) {
         let retain = T::one() - f;
         self.scale = self.scale * retain;
@@ -311,7 +306,7 @@ pub(crate) fn clique_tree_sample_column<T: Real>(
 
     for (i, &(j, w)) in entries[..n - 1].iter().enumerate() {
         let f = elim.fraction(w);
-        let fill_wt = f * (T::one() - f) * elim.capacity();
+        let fill_wt = f * (T::one() - f) * elim.capacity;
         column.push_neighbor(j, f);
         column.sample_fill_edges(j, 1, fill_wt, sampler, entries, i + 1);
         elim.advance(f);

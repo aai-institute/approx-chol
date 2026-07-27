@@ -6,7 +6,7 @@ use num_traits::NumCast;
 
 /// Crossover point: for ranges of this size or smaller, a linear CDF scan is faster
 /// than binary search due to branch-prediction and cache effects.
-pub(crate) const LINEAR_THRESHOLD: usize = 32;
+const LINEAR_THRESHOLD: usize = 32;
 
 /// Sample one index from `cumsum[start..]` proportional to weight.
 ///
@@ -16,11 +16,7 @@ pub(crate) const LINEAR_THRESHOLD: usize = 32;
 ///
 /// The `.min(end - 1)` clamp guards against floating-point rounding where
 /// the random value slightly exceeds the cumulative sum range.
-pub(crate) fn sample_from_cumsum<T: Real>(
-    cumsum: &[T],
-    rng: &mut SmallRng,
-    start: usize,
-) -> Option<usize> {
+fn sample_from_cumsum<T: Real>(cumsum: &[T], rng: &mut SmallRng, start: usize) -> Option<usize> {
     let end = cumsum.len();
     if start >= end {
         return None;
@@ -136,20 +132,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn suffix_range() {
-        let mut sampler = CdfSampler::new(SEED);
-        let entries: Vec<(u32, f64)> = (0..5).map(|i| (i as u32, (i + 1) as f64)).collect();
-        let n_samples = 10_000;
-        let counts = sample_counts(&mut sampler, &entries, 2, n_samples);
-
-        assert_eq!(counts[0], 0, "index 0 sampled from range [2,5)");
-        assert_eq!(counts[1], 0, "index 1 sampled from range [2,5)");
-        for (i, &count) in counts.iter().enumerate().skip(2).take(3) {
-            assert!(count > 0, "index {i} never sampled from range [2,5)");
-        }
-    }
-
+    /// Sweeps every start, so both the linear and `partition_point` arms of the
+    /// suffix search run, and no draw may fall before the start it was given.
     #[test]
     fn monotonic_suffix() {
         let mut sampler = CdfSampler::new(SEED);
@@ -201,20 +185,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn two_entries() {
-        let mut sampler = CdfSampler::new(SEED);
-        let entries = vec![(0u32, 1.0), (1, 3.0)];
-        let n_samples = 20_000;
-        let counts = sample_counts(&mut sampler, &entries, 0, n_samples);
-
-        let ratio = counts[1] as f64 / counts[0].max(1) as f64;
-        assert!(
-            (2.0..=4.5).contains(&ratio),
-            "expected ratio ~3, got {ratio:.2} (counts: {counts:?})"
-        );
-    }
-
+    /// `n` above [`LINEAR_THRESHOLD`], so this is the binary-search arm's
+    /// distribution; [`distribution_accuracy`] covers the linear one.
     #[test]
     fn equal_weights() {
         let mut sampler = CdfSampler::new(SEED);

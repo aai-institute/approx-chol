@@ -78,25 +78,19 @@ impl DynamicOrdering {
             return;
         }
 
-        // Remove from old list
         let prev = self.elems[i].prev;
         let next = self.elems[i].next;
         if prev != SENTINEL {
-            // Interior or tail: patch predecessor's next pointer
             self.elems[prev as usize].next = next;
         } else {
-            // Head of bucket: advance the bucket head to our successor
             self.lists[old_list] = next;
         }
         if next != SENTINEL {
-            // Interior or head: patch successor's prev pointer
             self.elems[next as usize].prev = prev;
         }
-        // (If next == SENTINEL, we were the tail; nothing to patch.)
 
-        // Insert at head of new list
         let old_head = self.lists[new_list];
-        self.elems[i].prev = SENTINEL; // new head has no predecessor
+        self.elems[i].prev = SENTINEL;
         self.elems[i].next = old_head;
         if old_head != SENTINEL {
             self.elems[old_head as usize].prev = i as u32;
@@ -263,70 +257,51 @@ mod tests {
         assert_eq!(pq.next_vertex(), None);
     }
 
+    /// `(label, initial degrees, `(vertex, delta)` to apply, expected keys)`.
+    type DeltaCase<'a> = (&'a str, &'a [usize], &'a [(usize, i64)], &'a [u32]);
+
+    /// Every caller of `apply_delta` — fill (+1 per endpoint), removal and merge
+    /// compression (−n) — is the same operation on the key, floored at zero.
     #[test]
-    fn test_apply_delta_inc_dec() {
-        // 3 vertices with degrees [2, 1, 3]
+    fn test_apply_delta_moves_the_key_by_the_delta() {
+        let cases: [DeltaCase<'_>; 4] = [
+            (
+                "fill on two endpoints",
+                &[1, 1, 1],
+                &[(0, 1), (2, 1)],
+                &[2, 1, 2],
+            ),
+            (
+                "increment and decrement",
+                &[2, 1, 3],
+                &[(0, 1), (2, -1)],
+                &[3, 1, 2],
+            ),
+            ("net decrease", &[5, 2, 1], &[(0, -2), (0, -1)], &[2, 2, 1]),
+            ("underflow floors at zero", &[1, 2], &[(0, -5)], &[0, 2]),
+        ];
+        for (label, degrees, deltas, expected) in cases {
+            let mut pq = DynamicOrdering::new(degrees, 1);
+            for &(vertex, delta) in deltas {
+                pq.apply_delta(vertex, delta);
+            }
+            for (vertex, &key) in expected.iter().enumerate() {
+                assert_eq!(pq.elems[vertex].key, key, "{label}: vertex {vertex}");
+            }
+        }
+    }
+
+    /// The key change has to re-bucket, not just re-label: after it, the popped
+    /// order follows the new keys.
+    #[test]
+    fn test_apply_delta_rebuckets() {
         let mut pq = DynamicOrdering::new(&[2, 1, 3], 1);
-
-        // Pop vertex 1 (degree 1, lowest)
         assert_eq!(pq.pop(), Some(1));
-
-        // Increment vertex 0 (degree 2 → 3)
         pq.apply_delta(0, 1);
-        assert_eq!(pq.elems[0].key, 3);
-
-        // Decrement vertex 2 (degree 3 → 2)
         pq.apply_delta(2, -1);
-        assert_eq!(pq.elems[2].key, 2);
-
-        // Now vertex 2 (degree 2) should come before vertex 0 (degree 3)
         assert_eq!(pq.pop(), Some(2));
         assert_eq!(pq.pop(), Some(0));
         assert_eq!(pq.pop(), None);
-    }
-
-    #[test]
-    fn test_apply_delta_fill_edge() {
-        let mut pq = DynamicOrdering::new(&[1, 1, 1], 1);
-
-        // Fill edge between 0 and 2 → each endpoint's degree estimate +1.
-        pq.apply_delta(0, 1);
-        pq.apply_delta(2, 1);
-        assert_eq!(pq.elems[0].key, 2);
-        assert_eq!(pq.elems[1].key, 1);
-        assert_eq!(pq.elems[2].key, 2);
-
-        // Vertex 1 (degree 1) should pop first
-        assert_eq!(pq.pop(), Some(1));
-    }
-
-    #[test]
-    fn test_apply_delta_net() {
-        // A signed net delta is applied in one bucket move; underflow clamps at 0.
-        let mut pq = DynamicOrdering::new(&[5, 2, 1], 1);
-        pq.apply_delta(0, -2); // 5 → 3
-        assert_eq!(pq.elems[0].key, 3);
-        pq.apply_delta(0, -5); // 3 - 5 clamps to 0
-        assert_eq!(pq.elems[0].key, 0);
-    }
-
-    #[test]
-    fn test_merged_edges_decrease_degree() {
-        let mut pq = DynamicOrdering::new(&[3, 2, 1], 1);
-
-        // Compression merges a duplicate edge to vertex 0 → degree estimate -1.
-        pq.apply_delta(0, -1);
-        assert_eq!(pq.elems[0].key, 2);
-
-        pq.apply_delta(0, -1);
-        assert_eq!(pq.elems[0].key, 1);
-    }
-
-    #[test]
-    fn test_merged_edges_decrease_degree_by_n() {
-        let mut pq = DynamicOrdering::new(&[5, 2, 1], 1);
-        pq.apply_delta(0, -3);
-        assert_eq!(pq.elems[0].key, 2);
     }
 
     #[test]
@@ -351,14 +326,6 @@ mod tests {
     fn test_empty_pq() {
         let mut pq = DynamicOrdering::new(&[], 1);
         assert_eq!(pq.next_vertex(), None);
-    }
-
-    #[test]
-    fn test_apply_delta_at_zero_clamps() {
-        let mut pq = DynamicOrdering::new(&[0], 1);
-        pq.apply_delta(0, -1); // should not underflow
-        assert_eq!(pq.elems[0].key, 0);
-        assert_eq!(pq.pop(), Some(0));
     }
 
     #[test]

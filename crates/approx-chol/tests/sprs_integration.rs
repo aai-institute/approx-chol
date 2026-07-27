@@ -10,9 +10,8 @@ mod path;
 mod path_solve;
 use panic_err::ErrOrPanic;
 use panic_ok::OrPanic;
-use path_solve::assert_solves_path_rhs;
+use path_solve::assert_view_and_factor_match_fixture;
 
-use approx_chol::low_level::Builder;
 use approx_chol::{factorize, Config, CsrError, CsrRef, Error};
 use num_traits::{Float, FromPrimitive};
 
@@ -38,19 +37,7 @@ where
     I: sprs::SpIndex + num_traits::PrimInt + 'static,
 {
     let mat = path_laplacian_sprs::<T, I>();
-    let csr = CsrRef::try_from(&mat).or_panic("try_from should succeed for valid CSR");
-
-    assert_eq!(csr.n(), 4);
-    assert_eq!(csr.row_ptrs().len(), 5);
-    assert_eq!(csr.col_indices().len(), 10);
-    assert_eq!(csr.values().len(), 10);
-
-    let builder = Builder::<T>::new(Config::default());
-    let factor = builder.build(&mat).or_panic("factorization should succeed");
-
-    assert!(factor.n() >= 4);
-    assert!(factor.n_steps() > 0);
-    assert_solves_path_rhs(&factor);
+    assert_view_and_factor_match_fixture(&mat, Config::default());
 }
 
 /// One factorization per (index, scalar) pair the adapter supports.
