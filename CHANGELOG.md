@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A row's departure from zero-sum is judged against `epsilon * scale * terms` in both
   directions: a surplus above it is grounded, a deficit below it is
   `Error::NotDiagonallyDominant`. (#78, #85, #91)
+- A persisted `Factor` declares `format_version`, and a payload declaring another
+  version is rejected naming both versions. (#50)
 - Approximate elimination judges a weight total, a fill weight and a sampled suffix by
   whether they are positive rather than against an absolute floor, so the factor for a
   fixed seed differs wherever a weight fell below `1e-14` (`f64`) or `1e-6` (`f32`). (#92)
@@ -49,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `From<&OwnedCsr> for CsrRef`, so `factorize`/`Builder::build` take `&OwnedCsr` directly. (#41)
 - Wheels are now a single `cp39-abi3` build per platform, valid on every CPython from 3.9 up, verified by `abi3audit --strict` and an import-plus-test matrix across 3.9–3.14 on Linux, macOS, and Windows; free-threaded interpreters get a version-specific `cp314t` wheel on Linux x86_64, Windows x64 and macOS arm64. (#61)
 - `requires-python` drops to 3.9, and the `scipy` floor rises to 1.12 for `cg(rtol=)`. (#61)
+- `FACTOR_FORMAT_VERSION` names the encoding a persisted `Factor` declares. (#50)
 
 ### Fixed
 

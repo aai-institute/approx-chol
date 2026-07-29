@@ -8,14 +8,19 @@ use core::fmt;
 #[cfg(test)]
 mod tests;
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// The encoding a persisted [`Factor`] declares as its first field, incremented in the
+/// low half whenever the serialized representation changes in a way an older reader would
+/// misread. A non-self-describing format reads the field positionally, so the tag half
+/// keeps a payload that predates the field from passing the check on whatever `usize` led
+/// it — `1` would collide with the `original_n` of a one-variable system.
+#[cfg(feature = "serde")]
+pub const FACTOR_FORMAT_VERSION: u32 = 0x4143_0001;
+
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 #[cfg_attr(
     feature = "serde",
     serde(
-        bound(
-            serialize = "T: serde::Serialize",
-            deserialize = "T: serde::de::DeserializeOwned + num_traits::Float"
-        ),
+        bound(deserialize = "T: serde::de::DeserializeOwned + num_traits::Float"),
         try_from = "FactorData<T>"
     )
 )]
@@ -25,14 +30,44 @@ pub struct Factor<T = f64> {
     original_n: usize,
     permutation: Option<Permutation>,
     blocks: Vec<Block<T>>,
-    #[cfg_attr(feature = "serde", serde(default))]
     fallbacks: Vec<Fallback>,
 }
 
+/// Borrows what it writes, so declaring the version costs no copy of the factor.
+/// Field order and names match [`FactorData`], which is what reads it back.
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize)]
+#[serde(bound(serialize = "T: serde::Serialize"))]
+struct FactorRef<'a, T> {
+    format_version: u32,
+    original_n: usize,
+    permutation: Option<&'a Permutation>,
+    blocks: &'a [Block<T>],
+    fallbacks: &'a [Fallback],
+}
+
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize> serde::Serialize for Factor<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        FactorRef {
+            format_version: FACTOR_FORMAT_VERSION,
+            original_n: self.original_n,
+            permutation: self.permutation.as_ref(),
+            blocks: &self.blocks,
+            fallbacks: &self.fallbacks,
+        }
+        .serialize(serializer)
+    }
+}
+
+/// `format_version` defaults rather than being required, so a payload that predates the
+/// field is rejected for the version it implies instead of for a missing field.
 #[cfg(feature = "serde")]
 #[derive(serde::Deserialize)]
 #[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
 struct FactorData<T> {
+    #[serde(default)]
+    format_version: u32,
     original_n: usize,
     permutation: Option<Permutation>,
     blocks: Vec<Block<T>>,
@@ -45,6 +80,12 @@ impl<T: num_traits::Float> TryFrom<FactorData<T>> for Factor<T> {
     type Error = FactorError;
 
     fn try_from(data: FactorData<T>) -> Result<Self, Self::Error> {
+        if data.format_version != FACTOR_FORMAT_VERSION {
+            return Err(FactorError::UnsupportedFormatVersion {
+                found: data.format_version,
+                supported: FACTOR_FORMAT_VERSION,
+            });
+        }
         let factor = Self {
             original_n: data.original_n,
             permutation: data.permutation,
