@@ -52,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-finite or out-of-range factor values. (#80)
 - Each block draws from its own sampler stream, so a fixed seed factors a block the same
   way under either backend. (#82)
+- A row surplus that is real against its own scale is grounded instead of discarded for
+  falling below an absolute floor, which had answered such an SPD input as a singular
+  Laplacian. (#78)
 
 ## [0.3.1] - 2026-07-10
 

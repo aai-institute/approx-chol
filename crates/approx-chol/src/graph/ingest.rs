@@ -2,7 +2,7 @@
 //! and close the row deficits with a Gremban ground vertex.
 
 use super::{add_edge_pair, block_layout, AdjListGraph, Edge, EdgeCount, GraphBuild};
-use crate::types::{count_as_scalar, near_zero, row_sum_slack, Real};
+use crate::types::{count_as_scalar, row_sum_slack, Real};
 use crate::{CsrError, CsrRef, Error};
 
 pub(super) fn from_sddm<T: Real, C: EdgeCount>(
@@ -214,10 +214,10 @@ impl<T: Real> RowBalance<T> {
         // Error this row's own sum could have accumulated over its additions, the
         // diagonal included.
         let accumulated = T::epsilon() * scale * count_as_scalar::<T, _>(degree + 1);
-        // Below the pivot scale the elimination can invert, grounding manufactures a
-        // link the solve cannot use and silently returns the right-hand side.
-        let resolvable = near_zero::<T>();
-        if excess <= relative.max(accumulated).max(resolvable) {
+        // Both arms scale with the row, so a surplus this clears is real for this row
+        // whatever its absolute size; elimination inverts any pivot with a
+        // representable reciprocal, so smallness alone is not a reason to discard it.
+        if excess <= relative.max(accumulated) {
             return Self::Negligible;
         }
         Self::Surplus(excess)
