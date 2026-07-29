@@ -23,11 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entries are summed before the off-diagonal sign check.
 - `Config::split_merge` of `Some(1)` selects standard AC in place of AC2 with one
   edge copy, and `Some(0)` selects it instead of erroring.
-- `low_level::StarSampler` replaces the `low_level::clique_tree_sample` and
-  `low_level::clique_tree_sample_multi` functions. The seed and `split_merge` move to
-  `StarSampler::new`, and `sample` names the star whose stream it draws; the sampler
-  keeps its scratch between stars, where the functions allocated per call. Fill edges
-  are unchanged for a given base seed and star index.
+- `low_level::CliqueTreeSampler` replaces `low_level::clique_tree_sample` and
+  `low_level::clique_tree_sample_multi`: `seed` and `split_merge` move to
+  `CliqueTreeSampler::new`, and `sample` takes the star index and borrows its entries.
+  Fill edges are unchanged for a given base seed and star index.
 - `OwnedCsr::try_as_ref` is replaced by the infallible `as_csr_ref`, and
   `CsrRef::row_ptrs`/`col_indices`/`values` return slices with the view's lifetime.
 
@@ -45,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - A structurally or numerically invalid `Factor` is rejected at deserialize time. (#37)
-- `low_level` clique-tree samplers no longer panic or emit non-finite fill on degenerate weights. (#38)
+- `low_level::CliqueTreeSampler` no longer panics or emits non-finite fill on degenerate weights. (#38)
 - `u32` nonzero/edge overflow now panics instead of silently truncating the factor. (#39)
 - A strictly-dominant SDDM scaled below unit magnitude is augmented, and elimination
   keeps the scale of an underflowing diagonal or per-copy share. (#36)

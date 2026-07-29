@@ -13,7 +13,7 @@ mod factor;
 mod permutation;
 
 pub(crate) use anchor::Anchor;
-pub use approximate::StarSampler;
+pub use approximate::CliqueTreeSampler;
 pub(crate) use block::{Block, BlockDim};
 pub(crate) use cholesky::Cholesky;
 pub use factor::{Factor, Fallback, SolveError};

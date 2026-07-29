@@ -1,6 +1,6 @@
 mod common;
 
-use approx_chol::low_level::{Builder, StarSampler};
+use approx_chol::low_level::{Builder, CliqueTreeSampler};
 use approx_chol::Config;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::rngs::SmallRng;
@@ -171,34 +171,25 @@ fn bench_star_sampler(c: &mut Criterion) {
     let mut group = c.benchmark_group("star_sampler");
     for degree in [4usize, 10, 32] {
         let mut rng = SmallRng::seed_from_u64(0x5EED);
-        let stars: Vec<Vec<(u32, f64)>> = (0..STARS)
-            .map(|_| {
-                (0..degree)
-                    .map(|_| {
-                        (
-                            rng.random_range(0..1_000_000u32),
-                            rng.random_range(0.25..1.25f64),
-                        )
-                    })
-                    .collect()
-            })
+        // Neighbors distinct within a star, as `sample` requires; only weights vary.
+        let flat: Vec<(u32, f64)> = (0..STARS * degree)
+            .map(|i| ((i % degree) as u32, rng.random_range(0.25..1.25f64)))
             .collect();
 
         group.throughput(criterion::Throughput::Elements(STARS as u64));
-        group.bench_with_input(BenchmarkId::new("AC", degree), &stars, |b, stars| {
-            let mut sampler = StarSampler::new(0, None);
-            let mut entries = Vec::with_capacity(degree);
-            let mut out = Vec::with_capacity(2 * degree);
-            b.iter(|| {
-                for (index, star) in stars.iter().enumerate() {
-                    entries.clear();
-                    entries.extend_from_slice(star);
-                    out.clear();
-                    sampler.sample(index as u64, &mut entries, &mut out);
-                    std::hint::black_box(&out);
-                }
+        for (label, split_merge) in [("AC", None), ("AC2 k=4", Some(4))] {
+            group.bench_with_input(BenchmarkId::new(label, degree), &flat, |b, flat| {
+                let mut sampler = CliqueTreeSampler::new(0, split_merge);
+                let mut out = Vec::new();
+                b.iter(|| {
+                    for (index, star) in flat.chunks(degree).enumerate() {
+                        out.clear();
+                        sampler.sample(index as u64, star, &mut out);
+                        std::hint::black_box(&out);
+                    }
+                });
             });
-        });
+        }
     }
     group.finish();
 }

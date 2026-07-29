@@ -32,16 +32,20 @@ impl<T: Real, C: EdgeCount> Star<T, C> {
 
     /// Every neighbor at the same multiplicity, the shape the standalone sampler is
     /// handed. Refills in place, so sampling a whole elimination allocates once.
+    ///
+    /// Deliberately not [`Self::sort`]: one multiplicity throughout makes `per_copy`
+    /// order-preserving, and adding its neighbor tie-break measured 3-10% per star for
+    /// an ordering no released version promised.
     pub(super) fn refill_uniform(&mut self, entries: &[(u32, T)], copies: C) {
         self.clear();
-        self.entries.reserve(entries.len());
-        for &(neighbor, weight) in entries {
-            self.push(StarEntry {
+        self.entries
+            .extend(entries.iter().map(|&(neighbor, weight)| StarEntry {
                 neighbor,
                 copies,
                 weight,
-            });
-        }
+            }));
+        self.entries
+            .sort_unstable_by(|a, b| float_total_cmp(&a.weight, &b.weight));
     }
 
     fn clear(&mut self) {
