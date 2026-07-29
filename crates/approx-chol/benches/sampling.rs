@@ -1,6 +1,6 @@
 mod common;
 
-use approx_chol::low_level::Builder;
+use approx_chol::low_level::{Builder, CliqueTreeSampler};
 use approx_chol::Config;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::rngs::SmallRng;
@@ -163,9 +163,41 @@ fn bench_factorization_powerlaw(c: &mut Criterion) {
     group.finish();
 }
 
+/// The standalone sampler, which no factorization bench reaches: a consumer eliminating
+/// its own stars pays this per star, not amortized over a whole `Builder::build`.
+fn bench_star_sampler(c: &mut Criterion) {
+    const STARS: usize = 10_000;
+
+    let mut group = c.benchmark_group("star_sampler");
+    for degree in [4usize, 10, 32] {
+        let mut rng = SmallRng::seed_from_u64(0x5EED);
+        // Neighbors distinct within a star, as `sample` requires; only weights vary.
+        let flat: Vec<(u32, f64)> = (0..STARS * degree)
+            .map(|i| ((i % degree) as u32, rng.random_range(0.25..1.25f64)))
+            .collect();
+
+        group.throughput(criterion::Throughput::Elements(STARS as u64));
+        for (label, split_merge) in [("AC", None), ("AC2 k=4", Some(4))] {
+            group.bench_with_input(BenchmarkId::new(label, degree), &flat, |b, flat| {
+                let mut sampler = CliqueTreeSampler::new(0, split_merge);
+                let mut out = Vec::new();
+                b.iter(|| {
+                    for (index, star) in flat.chunks(degree).enumerate() {
+                        out.clear();
+                        sampler.sample(index as u64, star, &mut out);
+                        std::hint::black_box(&out);
+                    }
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_factorization_grid,
     bench_factorization_powerlaw,
+    bench_star_sampler,
 );
 criterion_main!(benches);

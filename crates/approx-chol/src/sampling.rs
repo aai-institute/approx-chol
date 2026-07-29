@@ -32,6 +32,10 @@ impl<T> CdfSampler<T> {
     pub(crate) fn restart(&mut self, block: u64) {
         self.rng = SmallRng::seed_from_u64(self.seed.wrapping_add(block));
     }
+
+    pub(crate) fn seed(&self) -> u64 {
+        self.seed
+    }
 }
 
 impl<T: Real> CdfSampler<T> {
