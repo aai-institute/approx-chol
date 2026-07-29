@@ -6,7 +6,9 @@ mod panic_ok;
 mod path;
 use panic_ok::OrPanic;
 
-use approx_chol::{factorize_with, Backend, Config, CsrRef, ExactFailure, Factor};
+use approx_chol::{
+    factorize_with, Backend, Config, CsrRef, ExactFailure, Factor, FACTOR_FORMAT_VERSION,
+};
 use rstest::rstest;
 
 fn path_factor_with(config: Config) -> Factor<f64> {
@@ -81,6 +83,49 @@ fn deserializing_corrupted_factor_is_rejected() {
     value["blocks"][0]["dim"] = serde_json::Value::from(999u32);
 
     assert!(serde_json::from_value::<Factor<f64>>(value).is_err());
+}
+
+#[test]
+fn a_payload_declares_the_format_version_it_was_written_with() {
+    let value = serde_json::to_value(path_factor()).or_panic("serialize factor");
+    assert_eq!(
+        value["format_version"].as_u64(),
+        Some(u64::from(FACTOR_FORMAT_VERSION)),
+        "a persisted factor must say which encoding produced it"
+    );
+}
+
+/// A missing field stands for a payload written before the version existed, so both it
+/// and a future encoding have to fail for the version rather than for some interior
+/// field a reader cannot act on.
+#[rstest]
+#[case::from_a_future_release(Some(FACTOR_FORMAT_VERSION + 1))]
+#[case::from_before_the_field_existed(None)]
+fn a_payload_of_another_format_version_is_rejected_by_version(#[case] declared: Option<u32>) {
+    let mut value = serde_json::to_value(path_factor()).or_panic("serialize factor");
+    match declared {
+        Some(version) => value["format_version"] = serde_json::Value::from(version),
+        None => {
+            value
+                .as_object_mut()
+                .or_panic("factor serializes as a map")
+                .remove("format_version");
+        }
+    }
+
+    let error = serde_json::from_value::<Factor<f64>>(value)
+        .err()
+        .or_panic("a foreign format version must not deserialize")
+        .to_string();
+    let found = declared.unwrap_or(0);
+    assert!(
+        error.contains(&format!("format version {found:#010x}")),
+        "error must name the version it found, got: {error}"
+    );
+    assert!(
+        error.contains(&format!("{FACTOR_FORMAT_VERSION:#010x}")),
+        "error must name the version this build reads, got: {error}"
+    );
 }
 
 #[rstest]
