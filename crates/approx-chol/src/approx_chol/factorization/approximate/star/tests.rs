@@ -52,20 +52,14 @@ fn test_merge_floors_immediately_before_batched_fill() {
     assert_eq!(ordering.next_vertex(), Some(0));
 }
 
-fn dedup_multi(
-    n: usize,
-    raw: Vec<Neighbor<f64, Multi>>,
-    limit: u32,
-) -> (DedupWorkspace<f64, Multi>, Star<f64, Multi>) {
+fn dedup_multi(n: usize, raw: Vec<Neighbor<f64, Multi>>, limit: u32) -> Star<f64, Multi> {
     let mut dedup = DedupWorkspace::<f64, Multi>::new(n);
     dedup.raw = raw;
     let mut star = Star::new();
     dedup.dedup(&mut star, limit);
-    (dedup, star)
+    star
 }
 
-/// Weights always sum; copies sum and then cap at the merge limit, whether the
-/// duplicates arrive as separate single edges or as one already-split multi-edge.
 /// Every weight here sums exactly in binary, so the comparison is by value.
 #[test]
 fn dedup_sums_weights_and_caps_copies() {
@@ -100,9 +94,9 @@ fn dedup_sums_weights_and_caps_copies() {
         ),
     ];
     for (label, raw, limit, expected, merged) in cases {
-        let (dedup, star) = dedup_multi(10, raw, limit);
+        let star = dedup_multi(10, raw, limit);
         assert_eq!(triples(&star), expected, "{label}");
-        assert_eq!(dedup.removed_copies(), merged, "{label}");
+        assert_eq!(star.removed_copies(), merged, "{label}");
     }
 }
 
@@ -110,15 +104,14 @@ fn dedup_sums_weights_and_caps_copies() {
 fn test_scatter_large_multiplicity_caps_without_overflow() {
     let n_edges = 70_000usize;
     let raw = vec![nbr(2, 1.0, 1); n_edges];
-    let (dedup, star) = dedup_multi(4, raw, 2);
+    let star = dedup_multi(4, raw, 2);
 
     assert_eq!(triples(&star), vec![(2, n_edges as f64, 2)]);
-    assert_eq!(dedup.removed_copies(), &[(2, (n_edges - 2) as u32)]);
+    assert_eq!(star.removed_copies(), &[(2, (n_edges - 2) as u32)]);
 }
 
-/// A single-copy layout keeps one copy per neighbor whatever the duplicates were,
-/// so every collapsed duplicate is a discard. The limit is not a free parameter —
-/// it is `Single`'s own copy count, which is what makes this the AC path.
+/// The limit is not free here: it is `Single`'s own copy count, which is what makes
+/// this the AC path.
 #[test]
 fn a_single_copy_star_keeps_one_copy_and_discards_the_rest() {
     let mut dedup = DedupWorkspace::<f64, Single>::new(3);
@@ -127,7 +120,7 @@ fn a_single_copy_star_keeps_one_copy_and_discards_the_rest() {
     dedup.dedup(&mut star, Single.get());
 
     assert_eq!(triples(&star), vec![(0, 1.0, 1), (2, 3.5, 1)]);
-    assert_eq!(dedup.removed_copies(), &[(2, 1)]);
+    assert_eq!(star.removed_copies(), &[(2, 1)]);
 }
 
 // -----------------------------------------------------------------------
@@ -181,18 +174,17 @@ fn dedup_single_copy_paths_agree() {
     assert_eq!(triples(&star_scatter), triples(&star_sort));
 
     assert_eq!(
-        sorted_merged(by_sort.removed_copies()),
+        sorted_merged(star_sort.removed_copies()),
         vec![(0, 1), (2, 1)]
     );
     assert_eq!(
-        sorted_merged(by_scatter.removed_copies()),
-        sorted_merged(by_sort.removed_copies())
+        sorted_merged(star_scatter.removed_copies()),
+        sorted_merged(star_sort.removed_copies())
     );
 }
 
-/// Equal sort keys leave only the neighbor index to order by, and it must ascend.
-/// Every other star test uses distinct keys, so a reversed tie-break would change
-/// the clique-tree path with nothing to notice.
+/// Every other star test uses distinct keys, so a reversed tie-break would change the
+/// clique-tree path with nothing to notice.
 #[test]
 fn equal_sort_keys_order_by_ascending_neighbor() {
     let mut single = Star::<f64, Single>::new();
@@ -256,15 +248,14 @@ fn dedup_multi_copy_paths_agree() {
     );
     assert_eq!(triples(&star_scatter), triples(&star_sort));
 
-    assert_eq!(sorted_merged(&by_sort.removed_copies), vec![(2, 1)]);
+    assert_eq!(sorted_merged(star_sort.removed_copies()), vec![(2, 1)]);
     assert_eq!(
-        sorted_merged(&by_scatter.removed_copies),
-        sorted_merged(&by_sort.removed_copies)
+        sorted_merged(star_scatter.removed_copies()),
+        sorted_merged(star_sort.removed_copies())
     );
 }
 
-/// The star entry must not pay for a count a single-copy layout knows statically:
-/// AC's entry stays exactly the pair it was, for both scalar widths.
+/// AC's entry must not pay for a count its layout knows statically.
 #[test]
 fn a_single_copy_star_entry_is_as_wide_as_the_bare_pair() {
     assert_eq!(
@@ -295,5 +286,5 @@ fn the_split_is_the_cap_and_the_surviving_copy_count() {
     dedup.dedup(&mut star, k.get());
 
     assert_eq!(triples(&star), vec![(1, 6.0, 3)]);
-    assert_eq!(dedup.removed_copies(), &[(1, 3)]);
+    assert_eq!(star.removed_copies(), &[(1, 3)]);
 }

@@ -14,13 +14,13 @@ pub(super) struct StarEntry<T, C> {
     pub weight: T,
 }
 
-/// A pivot's deduped neighborhood: one entry per unique neighbor, ordered as the
-/// clique-tree path eliminates them.
+/// A pivot's deduped neighborhood — one entry per unique neighbor, ordered as the
+/// clique-tree path eliminates them — and what collapsing it cost each neighbor's
+/// degree.
 pub(super) struct Star<T: Real, C> {
     entries: Vec<StarEntry<T, C>>,
-    /// Staging for the sort of a layout whose copies differ, which needs one
-    /// sortable element carrying both the key and the entry it belongs to. A
-    /// single-copy star sorts in place and never touches this.
+    removed_copies: Vec<(u32, u32)>,
+    /// A single-copy star sorts in place and never touches this.
     sort_scratch: Vec<(T, StarEntry<T, C>)>,
 }
 
@@ -28,12 +28,13 @@ impl<T: Real, C: EdgeCount> Star<T, C> {
     pub(super) fn new() -> Self {
         Self {
             entries: Vec::new(),
+            removed_copies: Vec::new(),
             sort_scratch: Vec::new(),
         }
     }
 
-    /// Every neighbor at the same multiplicity — the shape the standalone samplers
-    /// are handed.
+    /// Every neighbor at the same multiplicity, the shape the standalone samplers are
+    /// handed.
     pub(super) fn uniform(entries: &[(u32, T)], copies: C) -> Self {
         let mut star = Self::new();
         for &(neighbor, weight) in entries {
@@ -48,25 +49,18 @@ impl<T: Real, C: EdgeCount> Star<T, C> {
 
     fn clear(&mut self) {
         self.entries.clear();
+        self.removed_copies.clear();
     }
 
     fn push(&mut self, entry: StarEntry<T, C>) {
         self.entries.push(entry);
     }
 
-    /// Keep at most `limit` copies of `copies` merged edges to `neighbor`, reporting
-    /// the discards. One call per unique neighbor, so the cap needs no second pass.
-    fn push_capped(
-        &mut self,
-        neighbor: u32,
-        weight: T,
-        copies: u32,
-        limit: u32,
-        discarded: &mut Vec<(u32, u32)>,
-    ) {
+    /// One call per unique neighbor, so the cap needs no second pass.
+    fn push_capped(&mut self, neighbor: u32, weight: T, copies: u32, limit: u32) {
         let (copies, dropped) = C::cap(copies, limit);
         if dropped > 0 {
-            discarded.push((neighbor, dropped));
+            self.removed_copies.push((neighbor, dropped));
         }
         self.push(StarEntry {
             neighbor,
@@ -79,19 +73,20 @@ impl<T: Real, C: EdgeCount> Star<T, C> {
         &self.entries
     }
 
-    /// Accumulate the degree decrease each surviving neighbor experiences from the
-    /// pivot's elimination (negative deltas).
+    /// Duplicates collapsed into one entry, or multiplicity the cap discarded: one
+    /// degree decrement either way, which is why one ledger carries both.
+    pub(super) fn removed_copies(&self) -> &[(u32, u32)] {
+        &self.removed_copies
+    }
+
     pub(super) fn accumulate_removal_delta(&self, deltas: &mut DegreeDeltas) {
         for entry in &self.entries {
             deltas.decrease(entry.neighbor, entry.copies.get());
         }
     }
 
-    /// Ascending by the weight one copy carries, ties by neighbor index.
-    ///
-    /// A star whose copies all count one orders on weight alone; otherwise the
-    /// quotient is precomputed, because cross-multiplying in the comparator can
-    /// break transitivity under floating-point rounding.
+    /// Ascending by the weight one copy carries, ties by neighbor index. The quotient
+    /// is precomputed: cross-multiplying in the comparator can break transitivity.
     fn sort(&mut self) {
         if self.entries.len() <= 1 {
             return;
@@ -157,34 +152,24 @@ impl<T: Real, C: EdgeCount> StarBuilder<T, C> {
     ) {
         self.dedup.collect(graph, v);
         self.dedup.dedup(&mut self.star, self.copies);
-        apply_removed_copies(self.dedup.removed_copies(), ordering);
+        apply_removed_copies(self.star.removed_copies(), ordering);
     }
 
-    /// The star the last [`build_star`](Self::build_star) produced; its entries are
-    /// empty when the pivot had no live neighbor left.
+    /// Entries are empty when the pivot had no live neighbor left.
     pub(super) fn star(&self) -> &Star<T, C> {
         &self.star
     }
 }
 
-/// Neighborhoods with at most this many entries use sort-based dedup (O(d log d),
-/// cache-friendly for small d). Larger neighborhoods use scatter-gather (O(d) via
-/// indexed buffers, but with higher constant from random-access pattern).
+/// At or below this many entries, sorting beats the scatter path's random access.
 const SCATTER_THRESHOLD: usize = 32;
 
-/// Shared scratch for dedup variants. Both leave every per-vertex slot at zero
-/// when they finish, so a zero `count` is also what marks a vertex unvisited —
-/// no separate seen-set to keep in step with it.
+/// Every per-vertex slot is left at zero, so a zero `count` also marks a vertex
+/// unvisited — no separate seen-set to keep in step with it.
 struct DedupScratch<T: Real> {
-    /// `scatter[idx]` accumulates weight for vertex `idx`.
     scatter: Vec<T>,
-    /// `counts[idx]` sums [`EdgeCount::get`] over the raw neighbors at vertex
-    /// `idx`. That is an occurrence count on the AC path only because a slim edge
-    /// counts one — both paths accumulate the same quantity.
     counts: Vec<u32>,
-    /// Tracks unique vertex indices seen in the current pass.
     unique: Vec<u32>,
-    /// Number of vertices in the graph (for buffer sizing).
     n: usize,
 }
 
@@ -232,24 +217,9 @@ impl<T: Real> DedupScratch<T> {
     }
 }
 
-/// The pivot's neighborhood on its way from the graph to a deduped star: the raw
-/// buffer it is read into, the per-vertex scratch that collapses it, and the report
-/// of what that collapse cost each vertex's degree.
-///
-/// `raw` lives here rather than in the star builder because nothing outside this
-/// workspace ever reads it — it is refilled by [`collect`](Self::collect) and
-/// consumed by [`dedup`](Self::dedup) on the next line.
-///
-/// `removed_copies` stays outside [`DedupScratch`] so the scatter path can push to
-/// it from inside [`DedupScratch::drain_unique`]'s closure; one struct would
-/// borrow all of `self` for the call.
 pub(super) struct DedupWorkspace<T: Real, C> {
     raw: Vec<Neighbor<T, C>>,
     scratch: DedupScratch<T>,
-    /// Edge copies that left each vertex's degree this pass — duplicates collapsed
-    /// into one entry, or multiplicity the merge cap discarded. One decrement
-    /// either way, which is why one buffer carries both.
-    removed_copies: Vec<(u32, u32)>,
 }
 
 impl<T: Real, C: EdgeCount> DedupWorkspace<T, C> {
@@ -257,28 +227,16 @@ impl<T: Real, C: EdgeCount> DedupWorkspace<T, C> {
         Self {
             raw: Vec::new(),
             scratch: DedupScratch::new(n),
-            removed_copies: Vec::new(),
         }
     }
 
-    /// `(vertex, copies removed)` from the last dedup call.
-    pub fn removed_copies(&self) -> &[(u32, u32)] {
-        &self.removed_copies
-    }
-
-    /// Read the pivot's live neighbors into `raw`, replacing the previous pass.
     fn collect(&mut self, graph: &AdjListGraph<C, T>, v: usize) {
         graph.live_neighbors(v, &mut self.raw);
     }
 
-    /// Collapse the collected neighborhood into `star`, keeping at most `limit`
-    /// copies per neighbor, and order it for elimination.
-    ///
-    /// The two paths differ only in how they find the duplicates; both cap and emit
-    /// each unique neighbor exactly once, so neither can report a merge the other
-    /// would not.
+    /// The two paths differ only in how they find the duplicates; neither caps, so
+    /// neither can report a merge the other would not.
     pub(super) fn dedup(&mut self, star: &mut Star<T, C>, limit: u32) {
-        self.removed_copies.clear();
         star.clear();
         if self.raw.len() <= SCATTER_THRESHOLD {
             self.dedup_by_sort(star, limit);
@@ -300,11 +258,11 @@ impl<T: Real, C: EdgeCount> DedupWorkspace<T, C> {
                 run.1 = run.1 + neighbor.fill_weight;
                 run.2 = run.2.saturating_add(neighbor.count.get());
             } else {
-                star.push_capped(run.0, run.1, run.2, limit, &mut self.removed_copies);
+                star.push_capped(run.0, run.1, run.2, limit);
                 run = (neighbor.to, neighbor.fill_weight, neighbor.count.get());
             }
         }
-        star.push_capped(run.0, run.1, run.2, limit, &mut self.removed_copies);
+        star.push_capped(run.0, run.1, run.2, limit);
     }
 
     fn dedup_by_scatter(&mut self, star: &mut Star<T, C>, limit: u32) {
@@ -313,10 +271,8 @@ impl<T: Real, C: EdgeCount> DedupWorkspace<T, C> {
             self.scratch
                 .accumulate(neighbor.to, neighbor.fill_weight, neighbor.count.get());
         }
-
-        let removed_copies = &mut self.removed_copies;
         self.scratch.drain_unique(|vertex, weight, copies| {
-            star.push_capped(vertex, weight, copies, limit, removed_copies);
+            star.push_capped(vertex, weight, copies, limit);
         });
     }
 }
