@@ -59,19 +59,6 @@ pub fn rhs_for_dimension(n: usize) -> Vec<f64> {
     rhs
 }
 
-pub fn csr_matvec(row_ptrs: &[u32], col_indices: &[u32], values: &[f64], x: &[f64]) -> Vec<f64> {
-    let n = row_ptrs.len() - 1;
-    let mut y = vec![0.0; n];
-    for i in 0..n {
-        let start = row_ptrs[i] as usize;
-        let end = row_ptrs[i + 1] as usize;
-        for k in start..end {
-            y[i] += values[k] * x[col_indices[k] as usize];
-        }
-    }
-    y
-}
-
 pub fn is_connected(row_ptrs: &[u32], col_indices: &[u32], n: u32) -> bool {
     if n <= 1 {
         return true;
@@ -93,10 +80,6 @@ pub fn is_connected(row_ptrs: &[u32], col_indices: &[u32], n: u32) -> bool {
         }
     }
     visited.iter().all(|&v| v)
-}
-
-pub fn norm2(v: &[f64]) -> f64 {
-    v.iter().map(|x| x * x).sum::<f64>().sqrt()
 }
 
 pub fn random_zero_sum_rhs_strategy(n: usize) -> BoxedStrategy<Vec<f64>> {

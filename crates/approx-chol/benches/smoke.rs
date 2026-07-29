@@ -39,6 +39,7 @@ fn bench_approx_chol_smoke(c: &mut Criterion) {
         let ac2 = Config {
             seed: 42,
             split_merge: Some(2),
+            ..Config::default()
         };
 
         group.bench_with_input(

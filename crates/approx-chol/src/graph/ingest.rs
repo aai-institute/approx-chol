@@ -1,8 +1,8 @@
-//! CSR to elimination graph: canonicalize, pair each off-diagonal with its
-//! mirror, and close the row deficits with a Gremban ground vertex.
+//! CSR to elimination graph: canonicalize, pair each off-diagonal with its mirror,
+//! and close the row deficits with a Gremban ground vertex.
 
-use super::{add_edge_pair, components, AdjListGraph, Edge, EdgeCount, GraphBuild};
-use crate::types::{count_as_scalar, Real};
+use super::{add_edge_pair, block_layout, AdjListGraph, Edge, EdgeCount, GraphBuild};
+use crate::types::{count_as_scalar, near_zero, row_sum_slack, Real};
 use crate::{CsrError, CsrRef, Error};
 
 pub(super) fn from_sddm<T: Real, C: EdgeCount>(
@@ -51,8 +51,7 @@ fn canonicalize<T: Real>(csr: CsrRef<'_, T, u32>) -> Result<Option<Rewritten<T>>
     Ok(Some(rewrite(csr)))
 }
 
-/// Sort each row and sum duplicate entries as scipy's `sum_duplicates` does. Only
-/// non-canonical input pays this copy.
+/// Only non-canonical input pays this copy.
 fn rewrite<T: Real>(csr: CsrRef<'_, T, u32>) -> Rewritten<T> {
     let nnz = csr.col_indices().len();
     let mut row_ptrs = Vec::with_capacity(csr.n() + 1);
@@ -78,10 +77,8 @@ fn rewrite<T: Real>(csr: CsrRef<'_, T, u32>) -> Rewritten<T> {
     }
 }
 
-/// Canonical CSR — columns ascend strictly within every row, which also rules out
-/// duplicates — plus one cursor per row, each advancing only forward. Every entry
-/// is claimed at most once across the whole walk, which is a merge-join only under
-/// that guarantee; hence [`canonicalize`] rather than raw arrays.
+/// One forward-only cursor per row. The walk is a merge-join only because every entry
+/// is claimed at most once, which is what [`canonicalize`] guarantees.
 struct Mirrors<'a, T> {
     row_ptrs: &'a [u32],
     col_indices: &'a [u32],
@@ -100,8 +97,7 @@ impl<'a, T: Real> Mirrors<'a, T> {
         }
     }
 
-    /// Consume `row`'s entry at `col`, treating stored zeros as absent and
-    /// returning zero when it is missing.
+    /// Stored zeros count as absent.
     fn claim(&mut self, row: usize, col: usize) -> Result<T, Error> {
         let row_end = self.row_ptrs[row + 1];
         let mut cursor = self.cursors[row];
@@ -137,8 +133,7 @@ fn approximately_equal<T: Real>(left: T, right: T) -> bool {
     (left - right).abs() <= ulps * T::epsilon() * scale
 }
 
-/// Walk each row once, claiming each upper-triangle entry's mirror through a
-/// monotone per-row cursor.
+/// One pass per row, claiming each upper-triangle entry's mirror.
 fn parse<T: Real, C: EdgeCount>(
     mut mirrors: Mirrors<'_, T>,
 ) -> Result<GraphBuild<AdjListGraph<C, T>, T>, Error> {
@@ -188,9 +183,47 @@ fn parse<T: Real, C: EdgeCount>(
     augment(adj, diag, row_sums)
 }
 
-/// Clamp each row's surplus to non-negative, close the remaining deficits with a
-/// Gremban ground vertex, and label the connected components for block dispatch.
-///
+/// How far one row's diagonal exceeds its off-diagonal mass, judged against the noise
+/// the row's own scale and term count can carry.
+enum RowBalance<T> {
+    NonFinite,
+    Deficit,
+    Negligible,
+    /// Worth closing with a ground edge.
+    Surplus(T),
+}
+
+impl<T: Real> RowBalance<T> {
+    fn of(diagonal: T, off_diagonal_sum: T, degree: usize) -> Self {
+        let excess = diagonal + off_diagonal_sum;
+        // Every off-diagonal folded into the sum was negative, so the row's
+        // magnitude sum is `|d| + d - excess` and needs no second accumulator.
+        let scale = diagonal.abs() + diagonal - excess;
+        // A non-finite sum forces a non-finite scale, so scale alone decides. Every
+        // comparison below succeeds on an infinite deficit (`-inf < -inf`).
+        if !scale.is_finite() {
+            return Self::NonFinite;
+        }
+        let slack = row_sum_slack::<T>() * scale;
+        if excess < -slack {
+            return Self::Deficit;
+        }
+        // The same slack the deficit was rejected by, capped absolutely so a
+        // 1e12-scale row's real surplus is not swallowed.
+        let relative = slack.min(T::epsilon().sqrt());
+        // Error this row's own sum could have accumulated over its additions, the
+        // diagonal included.
+        let accumulated = T::epsilon() * scale * count_as_scalar::<T, _>(degree + 1);
+        // Below the pivot scale the elimination can invert, grounding manufactures a
+        // link the solve cannot use and silently returns the right-hand side.
+        let resolvable = near_zero::<T>();
+        if excess <= relative.max(accumulated).max(resolvable) {
+            return Self::Negligible;
+        }
+        Self::Surplus(excess)
+    }
+}
+
 /// `row_sums` arrives holding each row's off-diagonal total; the diagonal joins it
 /// here, the first point at which every row's is known.
 fn augment<T: Real, C: EdgeCount>(
@@ -198,49 +231,23 @@ fn augment<T: Real, C: EdgeCount>(
     mut diag: Vec<T>,
     mut row_sums: Vec<T>,
 ) -> Result<GraphBuild<AdjListGraph<C, T>, T>, Error> {
-    // Relative floor below which a surplus is not worth a ground edge, scaled by
-    // each row's magnitude below.
-    let tolerance = T::by_precision(1e-6, 1e-10);
     let mut surplus_sum = T::zero();
     let mut grounded = 0usize;
     for (row, (sum, &d)) in row_sums.iter_mut().zip(diag.iter()).enumerate() {
-        *sum = d + *sum;
-        // Every off-diagonal folded into the sum was negative, so the row's
-        // magnitude sum is `|d| + d - sum` and needs no second accumulator.
-        let scale = d.abs() + d - *sum;
-        // A non-finite sum forces a non-finite scale, so scale alone decides. Every
-        // check below succeeds on an infinite deficit (`-inf < -inf`).
-        if !scale.is_finite() {
-            return Err(Error::NonFiniteRow { row });
-        }
-        let row_tolerance = tolerance * scale;
-        if *sum < -row_tolerance {
-            return Err(Error::NotDiagonallyDominant { row });
-        }
-        // A surplus earns a ground edge only above three floors, each rejecting a
-        // different way it could fail to be dominance worth acting on:
-        //   policy    — too small relative to the row to matter, capped absolutely
-        //               so a 1e12-scale row's real surplus is not swallowed;
-        //   noise     — inside the error this row's own sum could have accumulated
-        //               over its `terms` additions, so it may not be there at all;
-        //   resolvable— below the pivot scale the elimination can invert, so
-        //               grounding on it manufactures a link the solve cannot use
-        //               and silently returns the right-hand side unchanged.
-        // All three are pinned by tests: `*_scale_*`, `*_noise_floor_*`,
-        // `sub_near_zero_*`.
-        let policy = row_tolerance.min(T::epsilon().sqrt());
-        let terms = count_as_scalar::<T, _>(adj[row].len() + 1);
-        let noise = T::epsilon() * scale * terms;
-        let floor = policy.max(noise).max(T::near_zero());
-        if *sum < T::zero() || *sum <= floor {
-            *sum = T::zero();
-        } else {
-            surplus_sum = surplus_sum + *sum;
-            grounded += 1;
-        }
+        *sum = match RowBalance::of(d, *sum, adj[row].len()) {
+            RowBalance::NonFinite => return Err(Error::NonFiniteRow { row }),
+            RowBalance::Deficit => return Err(Error::NotDiagonallyDominant { row }),
+            RowBalance::Negligible => T::zero(),
+            RowBalance::Surplus(excess) => {
+                surplus_sum = surplus_sum + excess;
+                grounded += 1;
+                excess
+            }
+        };
     }
 
     let m = adj.len();
+    let mut ground = None;
     if grounded > 0 {
         if m >= u32::MAX as usize {
             return Err(Error::InvalidCsr(
@@ -257,12 +264,15 @@ fn augment<T: Real, C: EdgeCount>(
                 add_edge_pair(&mut adj, row, m, surplus);
             }
         }
+        // The bound above is what makes this cast lossless.
+        ground = Some(m as u32);
     }
 
-    let components = components(&adj, m);
+    let layout = block_layout(&adj, m);
     Ok(GraphBuild {
         graph: AdjListGraph::from_adjacency(adj),
         diagonal: diag,
-        components,
+        layout,
+        ground,
     })
 }

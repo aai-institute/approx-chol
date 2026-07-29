@@ -7,12 +7,9 @@ use panic_ok::OrPanic;
 use approx_chol::low_level::Builder;
 use approx_chol::{Config, CsrRef, Error, Factor};
 
-/// `(label, row_ptrs, col_indices, values)`, and the error the shape must be
-/// rejected with.
+/// The error the shape must be rejected with.
 type Rejected<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64], Error);
-/// A shape that must be accepted.
 type Accepted<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64]);
-/// A shape with a right-hand side and the solution it must produce.
 type Solved<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64], [f64; 2], [f64; 2]);
 
 /// `n` follows from `rp`, so no case can disagree with its own row count.
@@ -22,13 +19,12 @@ fn build(config: Config, rp: &[u32], ci: &[u32], vals: &[f64]) -> Result<Factor<
     Builder::<f64>::new(config).build(csr)
 }
 
-/// Each shape is the smallest matrix reaching one rejection, and the expected
-/// error is compared whole: a shape cannot pass by being rejected elsewhere, and
-/// the reported coordinate or row cannot drift.
+/// The expected error is compared whole, so a shape cannot pass by being rejected
+/// elsewhere and the reported coordinate cannot drift.
 #[test]
 fn out_of_class_input_is_rejected_at_its_reported_position() {
     let max = f64::MAX;
-    let cases: [Rejected<'_>; 9] = [
+    let cases: [Rejected<'_>; 10] = [
         // Used to fall through both the diagonal and the `val < 0` edge branch,
         // silently factorizing diag(5, 4) — a confidently wrong factor.
         (
@@ -42,6 +38,15 @@ fn out_of_class_input_is_rejected_at_its_reported_position() {
             "missing transpose",
             &[0, 2, 3],
             &[0, 1, 1],
+            &[1.0, -1.0, 1.0],
+            Error::Asymmetric { edge: (0, 1) },
+        ),
+        // Reaches the asymmetry the mirror cursor skips past, not the one the
+        // comparison rejects: the lower entry is stored and its upper is absent.
+        (
+            "missing upper mirror",
+            &[0, 1, 3],
+            &[0, 0, 1],
             &[1.0, -1.0, 1.0],
             Error::Asymmetric { edge: (0, 1) },
         ),
@@ -106,8 +111,7 @@ fn out_of_class_input_is_rejected_at_its_reported_position() {
     }
 }
 
-/// Shapes that look out of class to a stricter check but are valid SDDM, on both
-/// the AC and AC2 paths.
+/// Shapes a stricter check would reject, but which are valid SDDM.
 #[test]
 fn in_class_input_is_accepted_on_both_paths() {
     let next_after_one = f64::from_bits(1.0f64.to_bits() + 1);
@@ -148,9 +152,7 @@ fn in_class_input_is_accepted_on_both_paths() {
 }
 
 /// Both ends of the per-row surplus floor: 1e12-scale dominance must survive the
-/// relative tolerance, and a 5e-11 surplus (below the old absolute 1e-10 floor,
-/// above `near_zero`) must still count as dominance rather than a disconnected
-/// Laplacian. The accuracy bound is relative for the same reason the floor is.
+/// relative tolerance, and a 5e-11 surplus must still count as dominance.
 #[test]
 fn genuine_surplus_at_either_scale_is_augmented_and_solves() {
     let cases: [Solved<'_>; 2] = [
@@ -207,8 +209,7 @@ fn block_diagonal_paths(k: u32) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
     (rp, ci, vals)
 }
 
-/// Each 2-node block solves independently, so the answer scales with the block's
-/// own right-hand side and every block contributes exactly one elimination step.
+/// Each 2-node block solves independently, contributing one elimination step.
 #[test]
 fn disconnected_laplacian_solves_per_component() {
     for k in [2u32, 3] {
@@ -241,6 +242,7 @@ fn disconnected_sparse_ac2_preserves_virtual_edge_multiplicity() {
     let factor = Builder::<f64>::new(Config {
         seed: 7,
         split_merge: Some(3),
+        ..Config::default()
     })
     .build(CsrRef::new(&row_ptrs, &columns, &values, 6).or_panic("valid CSR"))
     .or_panic("disconnected AC2 factor");
@@ -312,9 +314,8 @@ fn interleaved_components_solve_in_input_order() {
     }
 }
 
-/// Two interleaved 8-cycles (`v ± 2 mod 16`): every star has degree two, so AC is
-/// exact here and the residual is round-off. The fixtures above are too small to
-/// swap-remove.
+/// Every star has degree two, so AC is exact and the residual is round-off. The
+/// fixtures above are too small to swap-remove.
 #[test]
 fn moved_components_keep_their_edges_through_fill_and_removal() {
     const N: u32 = 16;

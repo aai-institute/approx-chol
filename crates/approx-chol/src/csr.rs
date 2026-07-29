@@ -1,11 +1,17 @@
 use crate::{CsrError, Error, IndexKind};
 use num_traits::{cast, PrimInt};
 
+/// Reserves up front: collecting into `Option<Vec<_>>` drops the size hint, so the
+/// conversion grew the output by repeated doubling — 3.5x the traffic of the result.
 fn cast_slice<S: PrimInt, D: PrimInt>(src: &[S], kind: IndexKind) -> Result<Vec<D>, Error> {
-    src.iter()
-        .map(|&v| cast::<S, D>(v))
-        .collect::<Option<Vec<_>>>()
-        .ok_or(Error::InvalidCsr(CsrError::IndexExceedsIndexType { kind }))
+    let mut out = Vec::with_capacity(src.len());
+    for &value in src {
+        out.push(
+            cast::<S, D>(value)
+                .ok_or(Error::InvalidCsr(CsrError::IndexExceedsIndexType { kind }))?,
+        );
+    }
+    Ok(out)
 }
 
 fn as_usize<I: PrimInt>(value: I, kind: IndexKind, position: usize) -> Result<usize, Error> {
@@ -374,8 +380,8 @@ mod tests {
         let as_ref: CsrRef<'_, f64, u32> = (&owned).into();
         assert_eq!(as_ref.n(), 4);
 
-        // The `TryInto` bound at the `factorize` entry point still accepts it,
-        // now through `Error = Infallible`.
+        // The `TryInto` bound at the `factorize` entry point accepts it through
+        // `Error = Infallible`.
         let factor = crate::factorize(&owned).or_panic("factorize &OwnedCsr");
         assert_eq!(factor.n(), 4);
     }

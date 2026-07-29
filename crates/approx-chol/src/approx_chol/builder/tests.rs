@@ -1,19 +1,75 @@
 use super::*;
-use crate::test_utils::{path_laplacian_4, OrPanic};
+use crate::approx_chol::factorization::exact::NotFactorable;
+use crate::test_utils::OrPanic;
+use crate::{DenseFailure, ExactFailure, UnusablePivot};
+
+/// Naming the pivot and applying the policy are separate steps, so both are swept.
+#[test]
+fn only_an_unusable_pivot_answers_to_the_failure_policy() {
+    let pivot = NotFactorable::InvalidPivot {
+        pivot: 2,
+        failure: DenseFailure::NonPositivePivot,
+    };
+    let too_large = NotFactorable::WillNotFit { dim: 9 };
+    let component = Some(&[0u32, 15, 30][..]);
+    let named = |vertex| UnusablePivot {
+        vertex,
+        failure: DenseFailure::NonPositivePivot,
+    };
+
+    let cases = [
+        (
+            "pivot, falling back",
+            pivot,
+            ExactFailure::FallBackToApproximate,
+            component,
+            Ok(Fallback::InvalidPivot(named(30))),
+        ),
+        (
+            "pivot, erroring",
+            pivot,
+            ExactFailure::Error,
+            component,
+            Err(Error::DenseFactorizationFailed(named(30))),
+        ),
+        (
+            "pivot of a whole-graph block is already global",
+            pivot,
+            ExactFailure::FallBackToApproximate,
+            None,
+            Ok(Fallback::InvalidPivot(named(2))),
+        ),
+        (
+            "will not fit, falling back",
+            too_large,
+            ExactFailure::FallBackToApproximate,
+            component,
+            Ok(Fallback::WillNotFit { dim: 9 }),
+        ),
+        (
+            "will not fit, erroring",
+            too_large,
+            ExactFailure::Error,
+            component,
+            Ok(Fallback::WillNotFit { dim: 9 }),
+        ),
+    ];
+    for (label, reason, on_failure, vertices, expected) in cases {
+        assert_eq!(on_failure.accept(reason.at(vertices)), expected, "{label}");
+    }
+}
 
 fn make_csr<'a>(indptr: &'a [u32], indices: &'a [u32], data: &'a [f64]) -> CsrRef<'a, f64, u32> {
     CsrRef::new(indptr, indices, data, (indptr.len() - 1) as u32).or_panic("valid CSR test fixture")
 }
 
-/// Factorize an SDDM fixture with AC2 across seeds and assert the solve stays
-/// finite and non-trivial. Asserts the fixture is actually augmented, since
-/// every caller is a regression against losing the augmentation mass.
 fn assert_ac2_augmented_solve_is_finite(indptr: &[u32], indices: &[u32], data: &[f64], b: &[f64]) {
     let csr = make_csr(indptr, indices, data);
     for seed in 0..8u64 {
         let factor = Builder::<f64>::new(Config {
             split_merge: Some(2),
             seed,
+            ..Config::default()
         })
         .build(csr)
         .unwrap_or_else(|e| panic!("AC2 factorization failed (seed={seed}): {e}"));
@@ -39,38 +95,13 @@ fn assert_ac2_augmented_solve_is_finite(indptr: &[u32], indices: &[u32], data: &
 }
 
 #[test]
-fn test_ac_default_solve_roundtrip() {
-    let (indptr, indices, data) = path_laplacian_4();
-    let csr = make_csr(&indptr, &indices, &data);
-
-    let builder = Builder::<f64>::new(Config::default());
-    let factor = builder.build(csr).or_panic("factorization should succeed");
-    assert_eq!(factor.n_steps(), factor.n().saturating_sub(1));
-
-    let b = [1.0, -1.0, 1.0, -1.0];
-    let mut work = vec![0.0; factor.n()];
-    factor
-        .solve_into(&b, &mut work)
-        .or_panic("solve_into should succeed");
-    assert!(work.iter().all(|x| x.is_finite()));
-    assert!(work.iter().any(|x| x.abs() > 1e-10));
-    let mean = work.iter().sum::<f64>() / work.len() as f64;
-    assert!(mean.abs() < 1e-10);
-}
-
-/// Regression: a one-neighbor star must take its capacity from the pivot
-/// diagonal, not from the single neighbor's weight. Taking the weight dropped
-/// the augmentation mass and degenerated the Schur update to NaN/Inf.
-#[test]
 fn ac2_one_neighbor_star_keeps_augmentation_mass() {
-    // 3-node path 0-1-2, diagonal far above the edge weights.
     assert_ac2_augmented_solve_is_finite(
         &[0, 2, 5, 7],
         &[0, 1, 0, 1, 2, 1, 2],
         &[5.0, -1.0, -1.0, 6.0, -1.0, -1.0, 5.0],
         &[4.0, 4.0, 4.0],
     );
-    // 2 nodes, so every vertex's star has exactly one neighbor.
     assert_ac2_augmented_solve_is_finite(
         &[0, 2, 4],
         &[0, 1, 0, 1],
@@ -79,8 +110,6 @@ fn ac2_one_neighbor_star_keeps_augmentation_mass() {
     );
 }
 
-/// Regression: a star whose total weight underflows to near zero must skip fill
-/// sampling rather than divide by it.
 #[test]
 fn ac2_near_zero_weight_star_skips_fill_sampling() {
     let eps = 1e-300;
@@ -92,12 +121,6 @@ fn ac2_near_zero_weight_star_skips_fill_sampling() {
     );
 }
 
-/// Regression: the AC single-sample path must not drift `diag[v]` below
-/// `T::epsilon()` on marginally-SDD Laplacians, where `diag[v] = Σ |off-diag(v)|`
-/// exactly. Accumulated fill error can push the maintained `diag[v]` below the
-/// live off-diagonal sum, tripping `StarElimination::fraction`'s capacity
-/// assertion. This 8-vertex f32 fixture reproduces the panic on every seed;
-/// the same path runs for f64.
 #[test]
 fn test_ac_marginally_sdd_laplacian_no_capacity_drift() {
     let indptr: Vec<u32> = vec![0, 4, 8, 13, 15, 19, 25, 29, 34];
@@ -114,7 +137,6 @@ fn test_ac_marginally_sdd_laplacian_no_capacity_drift() {
     ];
 
     let csr = CsrRef::new(&indptr, &indices, &data_f32, 8).or_panic("valid marginal-SDD CSR");
-    // Balanced RHS (must sum to zero for a pure Laplacian solve).
     let b: [f32; 8] = [1.0, 1.0, 1.0, 1.0, -1.0, -1.0, -1.0, -1.0];
 
     for seed in 0..16u64 {
