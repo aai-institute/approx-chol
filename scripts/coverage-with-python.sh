@@ -8,5 +8,6 @@ cargo test --workspace --all-features --locked
 maturin develop --uv --locked
 pytest tests/ -v
 
-# Tracks the 90.59% both CI and a clean local run measure.
+# Floor, not a target: CI measures 93.58% lines, so this leaves room for a change to
+# add an untested branch without failing on the margin alone.
 cargo llvm-cov report --summary-only --fail-under-lines 90
