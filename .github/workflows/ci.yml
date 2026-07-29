@@ -9,49 +9,91 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  rust:
-    name: Rust checks (${{ matrix.os }})
+  check:
+    name: Check + Coverage (Linux)
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: ci
+          cache: true
+          cache-write: ${{ github.ref == 'refs/heads/main' }}
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt
+        run: pixi run -e ci cargo fmt --all -- --check
+      - name: cargo clippy
+        run: pixi run -e ci cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      # Feature-gated code is dead unless the gate is off in some configuration too.
+      - name: cargo clippy (default features)
+        run: pixi run -e ci cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: cargo clippy (no default features)
+        run: pixi run -e ci cargo clippy --workspace --all-targets --no-default-features --locked -- -D warnings
+      - name: coverage (cargo test + pytest, instrumented)
+        run: pixi run -e ci coverage
+
+  msrv:
+    name: MSRV (1.85.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check (workspace, all features, at the declared MSRV)
+        run: cargo check --workspace --all-features --locked
+
+  # Runs on PRs: this crate's behaviour is precision- and platform-dependent
+  # (`near_zero` differs by four orders between f32 and f64), so a Linux-only verdict
+  # would let that class land on main unattributed.
+  platform:
+    name: Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTFLAGS: "-C debuginfo=0"
     strategy:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: platform
+          cache: true
+          cache-write: ${{ github.ref == 'refs/heads/main' }}
+      - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
-      - name: cargo fmt
-        run: cargo fmt --all -- --check
-      - name: cargo clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      # Feature-gated code is dead unless the gate is off in some configuration too.
-      - name: cargo clippy (default features)
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: cargo clippy (no default features)
-        run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings
       - name: cargo test
-        run: cargo test --workspace --all-features
+        run: pixi run -e platform cargo test --workspace --all-features --locked
+      - name: pytest
+        run: pixi run -e platform test
 
-  python:
-    name: Python bindings tests (${{ matrix.os }}, py${{ matrix.python-version }})
-    runs-on: ${{ matrix.os }}
+  python-versions:
+    name: Python ${{ matrix.python-version }} (Linux)
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
         python-version:
           - "3.11"
           - "3.12"
           - "3.13"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
         with:
@@ -63,30 +105,3 @@ jobs:
           pip install -e . pytest
       - name: pytest
         run: pytest tests/ -v
-
-  coverage:
-    name: Coverage (Rust + Python)
-    runs-on: ubuntu-latest
-    needs:
-      - rust
-      - python
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - uses: taiki-e/install-action@cargo-llvm-cov
-      - uses: Swatinem/rust-cache@v2
-      - name: Install coverage deps
-        run: |
-          python -m venv .venv
-          . .venv/bin/activate
-          python -m pip install --upgrade pip
-          pip install maturin numpy scipy pytest
-      - name: Run coverage with Python bindings
-        run: |
-          . .venv/bin/activate
-          ./scripts/coverage-with-python.sh

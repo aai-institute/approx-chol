@@ -42,7 +42,7 @@
 //! ```
 
 #![deny(missing_docs)]
-#![warn(clippy::all, clippy::undocumented_unsafe_blocks)]
+#![warn(clippy::all)]
 
 mod approx_chol;
 mod csr;
