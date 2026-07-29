@@ -5,7 +5,7 @@ mod clique_tree;
 mod ordering;
 mod star;
 
-pub use clique_tree::clique_tree_sample;
+pub use clique_tree::StarSampler;
 
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;

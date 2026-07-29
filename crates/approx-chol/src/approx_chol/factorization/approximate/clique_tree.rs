@@ -203,41 +203,56 @@ pub(super) fn sample_column<T: Real, C: EdgeCount>(
     column.finalize_sampling(last, &elim);
 }
 
-/// Sample the Schur complement clique of a star (GKS 2023, Algorithms 5 and 6),
-/// appending at most `k * (n-1)` fill edges to `out` and sorting `entries` in place.
-/// `split_merge` is [`Config::split_merge`](crate::Config::split_merge) and takes the
-/// same values.
-pub fn clique_tree_sample<T>(
-    entries: &mut [(u32, T)],
-    split_merge: Option<u32>,
-    seed: u64,
-    out: &mut Vec<(u32, u32, T)>,
-) where
-    T: num_traits::Float + Send + Sync + 'static,
-{
-    // Generic over the copies, so AC and AC2 differ only in the star they build.
-    // The zero `pivot_diag` only seeds the column diagonal this discards.
-    fn sample<T: Real, C: EdgeCount>(
-        entries: &[(u32, T)],
-        copies: C,
-        seed: u64,
-        out: &mut Vec<(u32, u32, T)>,
-    ) {
-        let mut sampler = CdfSampler::<T>::new(seed);
-        let mut column = SampledColumn::new();
-        sample_column(
-            &Star::uniform(entries, copies),
-            T::zero(),
-            &mut sampler,
-            &mut column,
-        );
-        column.extend_ordered_fill_edges(out);
+/// Which star the sampler builds. Fixed for the sampler's life because
+/// [`Config::split_merge`](crate::Config::split_merge) is fixed for a factorization's.
+enum Copies<T: Real> {
+    Single(Star<T, Single>),
+    Multi(Star<T, Multi>, Multi),
+}
+
+/// Samples the Schur complement clique of one star at a time (GKS 2023, Algorithms 5
+/// and 6), for callers that eliminate a star outside a full factorization.
+///
+/// The scratch outlives the call, so eliminating a graph allocates once rather than
+/// once per star.
+pub struct StarSampler<T: num_traits::Float + Send + Sync + 'static = f64> {
+    copies: Copies<T>,
+    draws: CdfSampler<T>,
+    column: SampledColumn<T>,
+}
+
+impl<T: num_traits::Float + Send + Sync + 'static> StarSampler<T> {
+    /// `split_merge` is [`Config::split_merge`](crate::Config::split_merge) and takes
+    /// the same values. `seed` is the base each star's stream is derived from.
+    pub fn new(seed: u64, split_merge: Option<u32>) -> Self {
+        Self {
+            copies: match split_merge.and_then(SplitFactor::new) {
+                None => Copies::Single(Star::new()),
+                Some(k) => Copies::Multi(Star::new(), Multi::from(k)),
+            },
+            draws: CdfSampler::new(seed),
+            column: SampledColumn::new(),
+        }
     }
 
-    entries.sort_unstable_by(|a, b| float_total_cmp(&a.1, &b.1));
-    match split_merge.and_then(SplitFactor::new) {
-        None => sample(entries, Single, seed, out),
-        Some(k) => sample(entries, Multi::from(k), seed, out),
+    /// Appends at most `k * (n-1)` fill edges to `out` and sorts `entries` in place.
+    /// `star` names the stream, so the same index answers alike whatever order the
+    /// caller eliminates in.
+    pub fn sample(&mut self, star: u64, entries: &mut [(u32, T)], out: &mut Vec<(u32, u32, T)>) {
+        entries.sort_unstable_by(|a, b| float_total_cmp(&a.1, &b.1));
+        self.draws.restart(star);
+        // The zero `pivot_diag` only seeds the column diagonal this discards.
+        match &mut self.copies {
+            Copies::Single(star) => {
+                star.refill_uniform(entries, Single);
+                sample_column(star, T::zero(), &mut self.draws, &mut self.column);
+            }
+            Copies::Multi(star, copies) => {
+                star.refill_uniform(entries, *copies);
+                sample_column(star, T::zero(), &mut self.draws, &mut self.column);
+            }
+        }
+        self.column.extend_ordered_fill_edges(out);
     }
 }
 
@@ -250,9 +265,9 @@ mod tests {
     fn a_sampled_star_stays_within_its_edge_budget() {
         let star: [(u32, f64); 5] = [(0, 2.0), (1, 3.0), (2, 1.0), (3, 5.0), (4, 4.0)];
         let mut ac = Vec::new();
-        clique_tree_sample(&mut star.clone(), None, 42, &mut ac);
+        StarSampler::new(42, None).sample(0, &mut star.clone(), &mut ac);
         let mut ac2 = Vec::new();
-        clique_tree_sample(&mut star.clone(), Some(2), 42, &mut ac2);
+        StarSampler::new(42, Some(2)).sample(0, &mut star.clone(), &mut ac2);
 
         for (label, out, budget) in [("AC", ac, 4), ("AC2 k=2", ac2, 8)] {
             assert!(
@@ -270,11 +285,11 @@ mod tests {
     fn a_split_below_two_samples_the_same_edges_as_ac() {
         let star: [(u32, f64); 5] = [(0, 2.0), (1, 3.0), (2, 1.0), (3, 5.0), (4, 4.0)];
         let mut expected = Vec::new();
-        clique_tree_sample(&mut star.clone(), None, 42, &mut expected);
+        StarSampler::new(42, None).sample(0, &mut star.clone(), &mut expected);
 
         for split_merge in [Some(0), Some(1)] {
             let mut out = Vec::new();
-            clique_tree_sample(&mut star.clone(), split_merge, 42, &mut out);
+            StarSampler::new(42, split_merge).sample(0, &mut star.clone(), &mut out);
             assert_eq!(out, expected, "split_merge {split_merge:?} is not AC");
         }
     }
@@ -283,11 +298,11 @@ mod tests {
     fn empty_and_single() {
         let mut out = Vec::new();
 
-        clique_tree_sample(&mut [], None, 0, &mut out);
+        StarSampler::new(0, None).sample(0, &mut [], &mut out);
         assert!(out.is_empty());
 
         let mut entries = vec![(0u32, 5.0)];
-        clique_tree_sample(&mut entries, None, 0, &mut out);
+        StarSampler::new(0, None).sample(0, &mut entries, &mut out);
         assert!(out.is_empty());
     }
 
@@ -298,11 +313,12 @@ mod tests {
 
         let n_trials = 50_000;
         let mut pair_total = std::collections::HashMap::<(u32, u32), f64>::new();
+        let mut sampler = StarSampler::new(0, None);
 
         for trial in 0..n_trials {
             let mut entries = base_entries.clone();
             let mut out = Vec::new();
-            clique_tree_sample(&mut entries, None, trial as u64, &mut out);
+            sampler.sample(trial as u64, &mut entries, &mut out);
             for &(lo, hi, w) in &out {
                 *pair_total.entry((lo, hi)).or_insert(0.0) += w;
             }
@@ -317,6 +333,38 @@ mod tests {
                 (0.3..=3.0).contains(&ratio),
                 "pair ({lo},{hi}): avg_per_trial={avg_per_trial:.4}, exact={exact:.4}, ratio={ratio:.2}"
             );
+        }
+    }
+
+    /// The scratch is what a reused sampler carries between stars, so a stale entry,
+    /// fraction or fill edge would show up as a star answering differently the second
+    /// time round.
+    #[test]
+    fn a_reused_sampler_answers_as_a_fresh_one() {
+        let stars: [Vec<(u32, f64)>; 3] = [
+            vec![(0, 2.0), (1, 3.0), (2, 1.0), (3, 5.0), (4, 4.0)],
+            vec![(7, 1.0), (8, 1.0)],
+            vec![(2, 9.0), (5, 0.5), (6, 4.0), (9, 2.5)],
+        ];
+
+        for split_merge in [None, Some(3)] {
+            let mut reused = StarSampler::new(11, split_merge);
+            for (index, star) in stars.iter().enumerate() {
+                let mut from_reused = Vec::new();
+                reused.sample(index as u64, &mut star.clone(), &mut from_reused);
+
+                let mut from_fresh = Vec::new();
+                StarSampler::new(11, split_merge).sample(
+                    index as u64,
+                    &mut star.clone(),
+                    &mut from_fresh,
+                );
+
+                assert_eq!(
+                    from_reused, from_fresh,
+                    "star {index} at split_merge {split_merge:?} depends on sampler history"
+                );
+            }
         }
     }
 
@@ -342,9 +390,9 @@ mod tests {
         for mut entries in cases {
             let mut out = Vec::new();
             // AC only sorts `entries`, so AC2 sees the same (degenerate) star.
-            clique_tree_sample(&mut entries, None, 7, &mut out);
+            StarSampler::new(7, None).sample(0, &mut entries, &mut out);
             assert!(out.is_empty(), "AC emitted fill for a degenerate star");
-            clique_tree_sample(&mut entries, Some(3), 7, &mut out);
+            StarSampler::new(7, Some(3)).sample(0, &mut entries, &mut out);
             assert!(out.is_empty(), "AC2 emitted fill for a degenerate star");
         }
     }
