@@ -26,7 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `low_level::CliqueTreeSampler` replaces `low_level::clique_tree_sample` and
   `low_level::clique_tree_sample_multi`: `seed` and `split_merge` move to
   `CliqueTreeSampler::new`, and `sample` takes the star index and borrows its entries.
-  Fill edges are unchanged for a given base seed and star index.
+  Fill edges are unchanged for a given base seed and star index, except that entries of
+  equal weight now order by neighbor index.
 - `OwnedCsr::try_as_ref` is replaced by the infallible `as_csr_ref`, and
   `CsrRef::row_ptrs`/`col_indices`/`values` return slices with the view's lifetime.
 

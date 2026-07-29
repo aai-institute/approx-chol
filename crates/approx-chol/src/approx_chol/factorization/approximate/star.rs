@@ -1,6 +1,7 @@
 use super::ordering::{DegreeDeltas, DynamicOrdering};
 use crate::graph::{AdjListGraph, EdgeCount, Neighbor};
 use crate::types::{float_total_cmp, Real};
+use core::cmp::Ordering;
 
 /// Copies are stored the way the graph stores them, so a single-copy layout spends no
 /// space on a count it knows and no arithmetic dividing by it.
@@ -9,6 +10,13 @@ pub(super) struct StarEntry<T, C> {
     pub neighbor: u32,
     pub copies: C,
     pub weight: T,
+}
+
+/// Ascending by weight, ties by neighbor index. Total on a deduped star, which is what
+/// keeps the sampled clique tree off `sort_unstable`'s element-width heuristics.
+#[inline]
+fn by_weight_then_neighbor<T: Real, C>(a: &StarEntry<T, C>, b: &StarEntry<T, C>) -> Ordering {
+    float_total_cmp(&a.weight, &b.weight).then_with(|| a.neighbor.cmp(&b.neighbor))
 }
 
 /// A pivot's deduped neighborhood — one entry per unique neighbor, ordered as the
@@ -33,9 +41,8 @@ impl<T: Real, C: EdgeCount> Star<T, C> {
     /// Every neighbor at the same multiplicity, the shape the standalone sampler is
     /// handed. Refills in place, so sampling a whole elimination allocates once.
     ///
-    /// Deliberately not [`Self::sort`]: one multiplicity throughout makes `per_copy`
-    /// order-preserving, and adding its neighbor tie-break measured 3-10% per star for
-    /// an ordering no released version promised.
+    /// One multiplicity throughout makes `per_copy` order-preserving, so this orders on
+    /// the raw weight and skips [`Self::sort`]'s scratch round-trip.
     pub(super) fn refill_uniform(&mut self, entries: &[(u32, T)], copies: C) {
         self.clear();
         self.entries
@@ -44,8 +51,7 @@ impl<T: Real, C: EdgeCount> Star<T, C> {
                 copies,
                 weight,
             }));
-        self.entries
-            .sort_unstable_by(|a, b| float_total_cmp(&a.weight, &b.weight));
+        self.entries.sort_unstable_by(by_weight_then_neighbor);
     }
 
     fn clear(&mut self) {
@@ -93,9 +99,7 @@ impl<T: Real, C: EdgeCount> Star<T, C> {
             return;
         }
         if C::SINGLE_COPY {
-            self.entries.sort_unstable_by(|a, b| {
-                float_total_cmp(&a.weight, &b.weight).then_with(|| a.neighbor.cmp(&b.neighbor))
-            });
+            self.entries.sort_unstable_by(by_weight_then_neighbor);
             return;
         }
         self.sort_scratch.clear();
