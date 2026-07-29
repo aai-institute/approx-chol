@@ -1,7 +1,7 @@
 mod builder;
-pub(crate) mod clique_tree;
-pub(crate) mod decomposition;
-mod star;
+mod config;
+mod factorization;
 
-pub use builder::{Builder, Config};
-pub use decomposition::{Factor, SolveError};
+pub use builder::Builder;
+pub use config::{Backend, Config, ExactFailure};
+pub use factorization::{clique_tree_sample, Factor, Fallback, SolveError};

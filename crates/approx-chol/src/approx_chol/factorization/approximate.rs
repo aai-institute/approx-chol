@@ -1,17 +1,87 @@
-//! Flat storage for the elimination sequence and its per-step row kernels.
+//! Approximate Cholesky of one block by randomized elimination (Algorithm 8),
+//! the sequence it produces, and the per-step row kernels that solve with it.
+//!
+//! The randomized machinery is this backend's alone — [`ordering`] picks the next
+//! vertex, [`star`] assembles its neighborhood, [`clique_tree`] samples the column
+//! — so it lives here rather than beside the graph the exact backend also reads.
+
+mod clique_tree;
+mod ordering;
+mod star;
+
+pub use clique_tree::clique_tree_sample;
 
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;
-use crate::approx_chol::clique_tree::SampledColumn;
+use clique_tree::{sample_column, SampledColumn};
+use ordering::{DegreeDeltas, DynamicOrdering};
+use star::StarBuilder;
+
+use crate::graph::{AdjListGraph, EdgeCount};
+use crate::sampling::CdfSampler;
 use crate::types::Real;
+
+/// The graph's multiplicity storage decides the split it is eliminated on, so an AC
+/// factorization over a split multi-edge graph does not compile.
+pub(crate) fn eliminate<T: Real, C: EdgeCount>(
+    mut graph: AdjListGraph<C, T>,
+    mut diag: Vec<T>,
+    sampler: &mut CdfSampler<T>,
+    split: C::Split,
+) -> EliminationSequence<T> {
+    let n = graph.n();
+    let copies = C::split_edges(&mut graph, split);
+    let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
+    let degree_sum: usize = degrees.iter().sum();
+    let mut star_builder = StarBuilder::<T, C>::new(n, copies);
+    let mut ordering = DynamicOrdering::new(&degrees, copies as usize);
+    let mut column = SampledColumn::<T>::new();
+    let mut seq = EliminationSequence::with_capacity(n, degree_sum);
+    let mut deltas = DegreeDeltas::new(n);
+    let target_steps = n.saturating_sub(1);
+    let mut steps_done = 0usize;
+    while steps_done < target_steps {
+        let Some(v) = ordering.next_vertex() else {
+            break;
+        };
+        steps_done += 1;
+        star_builder.build_star(&mut graph, v, &mut ordering);
+        let star = star_builder.star();
+        if star.entries().is_empty() {
+            seq.record_isolated(v, diag[v]);
+            graph.eliminate_vertex(v);
+            continue;
+        }
+
+        sample_column(star, diag[v], sampler, &mut column);
+        seq.record_column(v, &column);
+
+        graph.eliminate_vertex(v);
+        for entry in star.entries() {
+            let u = entry.neighbor as usize;
+            diag[u] = diag[u] - entry.weight;
+        }
+
+        // Batch this step's degree-estimate updates into one pq_move per
+        // affected neighbor (net delta) instead of one per incident
+        // fill/removal/merge event. Batching reorders equal-degree vertices
+        // within a bucket, so the exact factor for a fixed seed can differ
+        // from a per-edge version (quality unaffected; see CHANGELOG).
+        column.apply_fill_in_delta(&mut graph, &mut diag, &mut deltas);
+        star.accumulate_removal_delta(&mut deltas);
+        deltas.flush(&mut ordering);
+    }
+
+    seq
+}
 
 /// Zero-copy view of one elimination step: it eliminates `vertex` by splitting
 /// its weight among neighbors according to `elimination_fractions`.
-pub(crate) struct EliminationStep<'a, T> {
-    pub(crate) vertex: usize,
-    pub(crate) inv_diag: T,
-    pub(crate) neighbor_indices: &'a [u32],
-    pub(crate) elimination_fractions: &'a [T],
+pub(super) struct EliminationStep<'a, T> {
+    vertex: usize,
+    inv_diag: T,
+    neighbor_indices: &'a [u32],
+    elimination_fractions: &'a [T],
 }
 
 /// Every index a kernel below touches is in bounds already: the caller asserts
@@ -22,7 +92,7 @@ pub(crate) struct EliminationStep<'a, T> {
 impl<'a, T: Real> EliminationStep<'a, T> {
     /// Forward elimination: scatter pivot weight to neighbors, then scale by D^{-1}.
     #[inline(always)]
-    pub(crate) fn apply_forward(&self, y: &mut [T]) {
+    pub(super) fn apply_forward(&self, y: &mut [T]) {
         let vertex = self.vertex;
         let inv_diag = self.inv_diag;
         let n = self.neighbor_indices.len();
@@ -50,7 +120,7 @@ impl<'a, T: Real> EliminationStep<'a, T> {
 
     /// Backward substitution: gather neighbor contributions back to pivot.
     #[inline(always)]
-    pub(crate) fn apply_backward(&self, y: &mut [T]) {
+    pub(super) fn apply_backward(&self, y: &mut [T]) {
         let vertex = self.vertex;
         let n = self.neighbor_indices.len();
         let one = T::one();
@@ -193,7 +263,7 @@ impl<T: serde::Serialize> serde::Serialize for PairedNeighbors<'_, T> {
 // Read-only accessors (no internal trait bounds).
 impl<T> EliminationSequence<T> {
     #[inline(always)]
-    pub(crate) fn n_steps(&self) -> usize {
+    pub(super) fn n_steps(&self) -> usize {
         self.steps.len()
     }
 
@@ -209,7 +279,7 @@ impl<T> EliminationSequence<T> {
     }
 
     #[inline(always)]
-    pub(crate) fn step(&self, i: usize) -> EliminationStep<'_, T>
+    pub(super) fn step(&self, i: usize) -> EliminationStep<'_, T>
     where
         T: Copy,
     {
@@ -226,7 +296,10 @@ impl<T> EliminationSequence<T> {
     /// dimension `n`. The ranges themselves need no check — they are rebuilt from
     /// the nested persisted form, never read off the wire.
     #[cfg(any(feature = "serde", test))]
-    pub(crate) fn validate_for_dim(&self, n: usize) -> Result<(), FactorError> {
+    pub(super) fn validate_for_dim(&self, n: usize) -> Result<(), FactorError>
+    where
+        T: num_traits::Float,
+    {
         for (i, step) in self.steps.iter().enumerate() {
             if (step.vertex as usize) >= n {
                 return Err(FactorError::VertexOutOfBounds {
@@ -245,13 +318,23 @@ impl<T> EliminationSequence<T> {
                     });
                 }
             }
+            // A fraction splits one column's weight, so it is a proportion; an
+            // `inv_diag` is a reciprocal the solve multiplies by.
+            let fractions = &self.elimination_fractions[start..end];
+            if !step.inv_diag.is_finite()
+                || fractions
+                    .iter()
+                    .any(|f| !f.is_finite() || *f < T::zero() || *f > T::one())
+            {
+                return Err(FactorError::StepValueInvalid { step: i });
+            }
         }
         Ok(())
     }
 }
 
 impl<T: Real> EliminationSequence<T> {
-    pub(crate) fn with_capacity(n: usize, degree_sum: usize) -> Self {
+    fn with_capacity(n: usize, degree_sum: usize) -> Self {
         Self {
             steps: Vec::with_capacity(n),
             neighbor_indices: Vec::with_capacity(degree_sum),
@@ -271,25 +354,25 @@ impl<T: Real> EliminationSequence<T> {
         self.steps.push(StepHeader {
             vertex: vertex as u32,
             end: nnz as u32,
-            // A pivot too small to invert is left unscaled, which *is* a scale
-            // factor of one — storing it spares every use the special case.
-            inv_diag: if diagonal.abs() > T::near_zero() {
-                T::one() / diagonal
-            } else {
-                T::one()
+            // Only a reciprocal too large to represent is unusable. A merely small
+            // pivot inverts fine, and standing one in for `one` drops the block's
+            // scale outright rather than losing accuracy.
+            inv_diag: match T::one() / diagonal {
+                inverse if inverse.is_finite() => inverse,
+                _ => T::one(),
             },
         });
     }
 
     /// Record an isolated vertex (no neighbors, clamped diagonal).
-    pub(crate) fn record_isolated(&mut self, vertex: usize, diagonal: T) {
+    fn record_isolated(&mut self, vertex: usize, diagonal: T) {
         self.push_step(vertex, diagonal);
     }
 
     /// Record one sampled column. Taking the column itself rather than its three
     /// parts is what keeps a neighbor array from being stored against a fraction
     /// array of another length — the pairing [`SampledColumn`] maintains.
-    pub(crate) fn record_column(&mut self, vertex: usize, column: &SampledColumn<T>) {
+    fn record_column(&mut self, vertex: usize, column: &SampledColumn<T>) {
         let (neighbors, fractions) = column.pattern();
         self.neighbor_indices.extend_from_slice(neighbors);
         self.elimination_fractions.extend_from_slice(fractions);

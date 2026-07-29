@@ -1,10 +1,3 @@
-//! Error vocabulary shared across the crate.
-//!
-//! These types form the public error surface (re-exported at the crate root)
-//! and the shared failure vocabulary that the low-level modules (`csr`,
-//! `graph`, `ordering`) construct. Keeping them in one leaf module lets every
-//! layer depend *down* to it rather than reaching up to the crate root.
-
 use std::fmt;
 
 /// Errors that can occur during approximate Cholesky factorization.
@@ -14,15 +7,12 @@ pub enum Error {
     /// The input CSR matrix has inconsistent dimensions or invalid structure.
     InvalidCsr(CsrError),
 
-    /// A coalesced off-diagonal entry is strictly positive, so the matrix is
-    /// outside the SDDM/Laplacian class.
+    /// A coalesced off-diagonal entry is strictly positive, so the matrix is outside
+    /// the SDDM/Laplacian class.
     PositiveOffDiagonal {
         /// `(row, column)` of the offending strictly-positive off-diagonal.
         edge: (usize, usize),
     },
-
-    /// The factorization configuration is invalid.
-    InvalidConfig(ConfigError),
 
     /// A matrix value is NaN or infinite.
     NonFiniteValue {
@@ -42,31 +32,66 @@ pub enum Error {
         row: usize,
     },
 
-    /// A row's accumulated diagonal or magnitude sum overflowed, though every
-    /// stored value is finite.
+    /// A row's accumulated diagonal or magnitude sum overflowed.
     NonFiniteRow {
         /// Row that overflowed.
         row: usize,
     },
+
+    /// Exact dense Cholesky hit an unusable pivot and [`ExactFailure::Error`](crate::ExactFailure::Error) asked for that to fail.
+    DenseFactorizationFailed(UnusablePivot),
 }
 
-/// Structured configuration errors returned by factorization setup.
+/// An exact dense Cholesky pivot that could not be used, and where it was.
+///
+/// The same pivot is either reported as a [`Fallback`](crate::Fallback) or raised
+/// as [`Error::DenseFactorizationFailed`], so [`ExactFailure`](crate::ExactFailure)
+/// chooses between two spellings of one payload rather than two payloads.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnusablePivot {
+    /// The failing pivot's vertex, in the numbering of the factorized input.
+    pub vertex: usize,
+    /// Why the pivot was unusable.
+    pub failure: DenseFailure,
+}
+
+impl fmt::Display for UnusablePivot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "vertex {}: {}", self.vertex, self.failure)
+    }
+}
+
+/// Why an exact dense Cholesky pivot was unusable.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConfigError {
-    /// `split_merge` must be at least 1 when provided.
-    SplitMergeMustBePositive {
-        /// The invalid `split_merge` value provided by the caller.
-        split_merge: u32,
-    },
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DenseFailure {
+    /// The updated diagonal was zero or negative.
+    NonPositivePivot,
+    /// The updated diagonal was NaN or infinite.
+    NonFinitePivot,
 }
 
-impl fmt::Display for ConfigError {
+impl DenseFailure {
+    /// `None` when `pivot` is usable, so the build and the deserialize-validate
+    /// paths cannot disagree about what makes one unusable.
+    pub(crate) fn of<T: num_traits::Float>(pivot: T) -> Option<Self> {
+        if !pivot.is_finite() {
+            Some(Self::NonFinitePivot)
+        } else if pivot <= T::zero() {
+            Some(Self::NonPositivePivot)
+        } else {
+            None
+        }
+    }
+}
+
+impl fmt::Display for DenseFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::SplitMergeMustBePositive { split_merge } => {
-                write!(f, "split_merge must be >= 1 (got {split_merge})")
-            }
+            Self::NonPositivePivot => write!(f, "pivot is zero or negative"),
+            Self::NonFinitePivot => write!(f, "pivot is not finite"),
         }
     }
 }
@@ -144,8 +169,8 @@ pub enum CsrError {
         /// Matrix dimension.
         n: usize,
     },
-    /// An index value (row pointer or column index) cannot be represented in
-    /// the target integer type.
+    /// An index value (row pointer or column index) cannot be represented in the
+    /// target integer type.
     IndexExceedsIndexType {
         /// Which CSR array the bad value came from.
         kind: IndexKind,
@@ -222,7 +247,6 @@ impl fmt::Display for Error {
                 f,
                 "off-diagonal ({row}, {col}) is positive; approx-chol requires SDDM/Laplacian input (off-diagonals must be <= 0)"
             ),
-            Error::InvalidConfig(err) => write!(f, "invalid factorization config: {err}"),
             Error::NonFiniteValue { position } => {
                 write!(f, "matrix value at CSR position {position} is not finite")
             }
@@ -238,6 +262,9 @@ impl fmt::Display for Error {
                 f,
                 "row {row} sums to a non-finite diagonal or off-diagonal magnitude; approx-chol requires SDDM/Laplacian input"
             ),
+            Error::DenseFactorizationFailed(pivot) => {
+                write!(f, "exact dense Cholesky failed at {pivot}")
+            }
         }
     }
 }

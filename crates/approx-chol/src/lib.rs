@@ -81,7 +81,6 @@ mod approx_chol;
 mod csr;
 mod error;
 pub(crate) mod graph;
-pub(crate) mod ordering;
 pub(crate) mod sampling;
 #[cfg(test)]
 pub(crate) mod test_utils;
@@ -90,9 +89,9 @@ mod types;
 /// Low-level API for advanced use cases (custom pipelines, graph inspection, research).
 pub mod low_level;
 
-pub use approx_chol::{Config, Factor, SolveError};
+pub use approx_chol::{Backend, Config, ExactFailure, Factor, Fallback, SolveError};
 pub use csr::{CsrRef, OwnedCsr};
-pub use error::{ConfigError, CsrError, Error, IndexKind};
+pub use error::{CsrError, DenseFailure, Error, IndexKind, UnusablePivot};
 
 /// Factorize an SDDM matrix with default configuration.
 ///

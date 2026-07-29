@@ -1,39 +1,16 @@
-use super::decomposition::{BlockFactor, EliminationSequence, Permutation, Pin};
-use crate::graph::{AdjListGraph, GraphBuild, MultiEdgeGraph, SlimGraph};
-use crate::ordering::{DegreeDeltas, DynamicOrdering};
+use super::config::{Backend, Config, Route};
+use super::factorization::{
+    approximate, exact, Anchor, Block, BlockDim, Cholesky, Fallback, Permutation,
+};
+use crate::graph::{AdjListGraph, EdgeCount, GraphBuild, Multi, MultiEdgeGraph, Single, SlimGraph};
 use crate::sampling::CdfSampler;
-use crate::{ConfigError, CsrError, CsrRef, Error, Factor};
+use crate::types::Real;
+use crate::{CsrError, CsrRef, Error, Factor};
 use num_traits::PrimInt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use super::clique_tree::SampledColumn;
-use super::star::{Ac2StarBuilder, AcStarBuilder, StarBuilderVariant};
-
-/// Configuration for approximate Cholesky factorization.
-///
-/// Use [`Default`] for standard AC (recommended for most inputs).
-/// Set [`split_merge`](Self::split_merge) to enable AC2.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Config {
-    /// Random seed for the edge-weight sampler. Use different values to get
-    /// reproducible but varied approximate factors.
-    pub seed: u64,
-    /// AC2 multi-edge multiplicity parameter (`k`).
-    ///
-    /// `None` = standard AC (default), `Some(k)` = AC2 with `k` edge copies
-    /// and `k` merge cap per neighbor pair.
-    pub split_merge: Option<u32>,
-}
-
-/// Builder for approximate Cholesky factorization (Algorithm 8, Gao-Kyng-Spielman 2023).
-///
-/// Provides full control over the factorization pipeline, including
-/// AC vs AC2 selection and seed control. `Builder::new(config).build(sddm)` is
-/// what [`factorize_with`](crate::factorize_with) runs, and that is where the
-/// worked example lives; most callers should prefer it or
-/// [`factorize`](crate::factorize).
 #[derive(Debug, Clone)]
+/// Factorization pipeline behind [`factorize_with`](crate::factorize_with).
 pub struct Builder<T = f64> {
     config: Config,
     _scalar: core::marker::PhantomData<T>,
@@ -43,8 +20,8 @@ impl<T> Builder<T>
 where
     T: num_traits::Float + Send + Sync + 'static,
 {
-    /// Create a new builder with the given configuration.
     #[must_use]
+    /// Create a builder with the given configuration.
     pub fn new(config: Config) -> Self {
         Self {
             config,
@@ -52,15 +29,7 @@ where
         }
     }
 
-    /// Run approximate Cholesky factorization from any input fallibly convertible into
-    /// [`CsrRef`].
-    ///
-    /// Performs a checked conversion of row pointers and column indices to owned
-    /// `u32` storage; the values stay borrowed.
-    ///
-    /// # Errors
-    ///
-    /// As [`factorize_with`](crate::factorize_with).
+    /// Factorize any input fallibly convertible into [`CsrRef`].
     pub fn build<'a, I, M>(&self, sddm: M) -> Result<Factor<T>, Error>
     where
         I: PrimInt + 'a + 'static,
@@ -74,152 +43,171 @@ where
         self.build_validated(narrowed.with_values(csr.values()))
     }
 
-    /// Assumes `sddm` already passed [`CsrRef::new`] validation (as
-    /// [`build`](Self::build) guarantees); does not re-validate.
+    /// The multiplicity decides the edge layout and the split eliminated on
+    /// together, so each arm names one algorithm end to end.
     fn build_validated(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
         let original_n = sddm.n();
-        Self::validate_config(self.config)?;
-        match self.config.split_merge {
+        match self.config.split_factor() {
             None => {
                 let build = SlimGraph::<T>::from_sddm(sddm)?;
-                self.build_graph(build, original_n, AcStarBuilder::new)
+                self.build_graph::<Single>(build, original_n, ())
             }
             Some(k) => {
-                let mut build = MultiEdgeGraph::<T>::from_sddm(sddm)?;
-                build.graph.mark_split_edges(k);
-                let star = move |n| Ac2StarBuilder::new(n, k);
-                self.build_graph(build, original_n, star)
+                let build = MultiEdgeGraph::<T>::from_sddm(sddm)?;
+                self.build_graph::<Multi>(build, original_n, k)
             }
         }
     }
 
-    /// `make_star` comes from the caller's single variant match and is applied per
-    /// component, so nothing here can pair an AC star builder with a split
-    /// multi-edge graph.
-    fn build_graph<B: StarBuilderVariant<T>>(
+    fn build_graph<C: EdgeCount>(
         &self,
-        build: GraphBuild<AdjListGraph<B::Count, T>, T>,
+        build: GraphBuild<AdjListGraph<C, T>, T>,
         original_n: usize,
-        make_star: impl Fn(usize) -> B,
+        split: C::Split,
     ) -> Result<Factor<T>, Error> {
         let GraphBuild {
-            mut graph,
+            graph,
             diagonal,
-            components,
+            layout,
+            ground,
         } = build;
-        let n = graph.n();
-        if n == 0 {
+        if graph.n() == 0 {
             return Ok(Factor::empty(original_n));
         }
-        // One stream for the whole factorization: the blocks are drawn from it in
-        // component order, which is fixed by the input.
-        let mut sampler = CdfSampler::<T>::new(self.config.seed);
-        // Ground has the highest index, so it is the last vertex of its block.
-        let ground_vertex = (n > original_n).then_some(original_n as u32);
-        let Some(components) = components else {
-            let block =
-                self.build_from_graph(graph, diagonal, ground_vertex, &mut sampler, &make_star);
-            return Ok(Factor::from_blocks(n, original_n, None, vec![block]));
+        let mut factorizer = BlockFactorizer::<T, C>::new(self.config, split);
+        let Some(layout) = layout else {
+            let (block, fallback) = factorizer.factor(Component::whole(graph, diagonal, ground))?;
+            return Ok(Factor::from_blocks(
+                original_n,
+                None,
+                vec![block],
+                fallback.into_iter().collect(),
+            ));
         };
 
-        let mut blocks = Vec::with_capacity(components.len());
-        let mut local_of = vec![0u32; n];
-        for vertices in &components {
-            let ground = ground_vertex
-                .filter(|vertex| vertices.last() == Some(vertex))
-                .map(|_| (vertices.len() - 1) as u32);
-            let component_graph = graph.take_component(vertices, &mut local_of);
-            let component_diagonal = vertices
+        let mut blocks = Vec::with_capacity(layout.block_count());
+        let mut fallbacks = Vec::new();
+        let mut partition = Partition::new(graph, diagonal, ground);
+        for vertices in layout.blocks() {
+            let (block, fallback) = factorizer.factor(partition.take(vertices))?;
+            blocks.push(block);
+            fallbacks.extend(fallback);
+        }
+        Ok(Factor::from_blocks(
+            original_n,
+            Permutation::from_order(layout.into_order()),
+            blocks,
+            fallbacks,
+        ))
+    }
+}
+
+/// One block to factor: its subgraph, that subgraph's diagonal, which variable the
+/// solve pins, and how its local vertices name global ones.
+struct Component<'v, C, T: Real> {
+    graph: AdjListGraph<C, T>,
+    diagonal: Vec<T>,
+    anchor: Anchor,
+    /// `None` when the block is the whole graph, so a local vertex is already global.
+    vertices: Option<&'v [u32]>,
+}
+
+impl<C: EdgeCount, T: Real> Component<'_, C, T> {
+    /// The whole graph as one block, named by no vertex list: a local vertex is
+    /// already a global one, so `0..n` never has to be materialized.
+    fn whole(graph: AdjListGraph<C, T>, diagonal: Vec<T>, ground: Option<u32>) -> Self {
+        let last_vertex = (graph.n() - 1) as u32;
+        Self {
+            graph,
+            diagonal,
+            anchor: Anchor::of_block(ground, last_vertex),
+            vertices: None,
+        }
+    }
+}
+
+/// The ingested graph, drained one connected component at a time. Owning what the
+/// per-component loop holds constant is what lets a block be named by its vertices
+/// alone; a connected input never builds one, so it keeps skipping this scratch.
+struct Partition<C, T: Real> {
+    graph: AdjListGraph<C, T>,
+    diagonal: Vec<T>,
+    ground: Option<u32>,
+    local_of: Vec<u32>,
+}
+
+impl<C: EdgeCount, T: Real> Partition<C, T> {
+    fn new(graph: AdjListGraph<C, T>, diagonal: Vec<T>, ground: Option<u32>) -> Self {
+        Self {
+            local_of: vec![0u32; graph.n()],
+            graph,
+            diagonal,
+            ground,
+        }
+    }
+
+    fn take<'v>(&mut self, vertices: &'v [u32]) -> Component<'v, C, T> {
+        let last_vertex = *vertices
+            .last()
+            .expect("a component has at least one vertex");
+        Component {
+            anchor: Anchor::of_block(self.ground, last_vertex),
+            graph: self.graph.take_component(vertices, &mut self.local_of),
+            diagonal: vertices
                 .iter()
-                .map(|&vertex| diagonal[vertex as usize])
-                .collect();
-            blocks.push(self.build_from_graph(
-                component_graph,
-                component_diagonal,
-                ground,
-                &mut sampler,
-                &make_star,
-            ));
+                .map(|&vertex| self.diagonal[vertex as usize])
+                .collect(),
+            vertices: Some(vertices),
         }
-        let permutation = Permutation::from_forward(&components.concat());
-        Ok(Factor::from_blocks(n, original_n, permutation, blocks))
+    }
+}
+
+/// What every block of one factorization shares, resolved: the routing rule, the
+/// single RNG stream a fixed seed promises, and the split the edges are eliminated
+/// on.
+///
+/// [`Config`] does not survive construction. Keeping it would carry a second,
+/// unresolved spelling of decisions `split` and `sampler` already hold.
+struct BlockFactorizer<T: Real, C: EdgeCount> {
+    backend: Backend,
+    sampler: CdfSampler<T>,
+    split: C::Split,
+}
+
+impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
+    fn new(config: Config, split: C::Split) -> Self {
+        Self {
+            sampler: CdfSampler::new(config.seed),
+            backend: config.backend,
+            split,
+        }
     }
 
-    fn validate_config(config: Config) -> Result<(), Error> {
-        let Some(split_merge) = config.split_merge else {
-            return Ok(());
-        };
-        if split_merge == 0 {
-            return Err(Error::InvalidConfig(
-                ConfigError::SplitMergeMustBePositive { split_merge },
-            ));
-        }
-        Ok(())
-    }
-
-    /// Algorithm 8 loop on a pre-built graph. The graph's multiplicity storage is
-    /// the star builder's `Count`, so an AC builder over a split multi-edge graph
-    /// does not compile.
-    fn build_from_graph<B: StarBuilderVariant<T>>(
-        &self,
-        mut graph: AdjListGraph<B::Count, T>,
-        mut diag: Vec<T>,
-        ground: Option<u32>,
-        sampler: &mut CdfSampler<T>,
-        make_star: &impl Fn(usize) -> B,
-    ) -> BlockFactor<T> {
-        let n = graph.n();
-        let mut star_builder = make_star(n);
-        let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
-        let degree_sum: usize = degrees.iter().sum();
-        // The bucket layout scales with the multiplicity the graph was split at,
-        // read from the same `Config` the split came from rather than threaded
-        // alongside the star builder as a second copy that could disagree.
-        let degree_scale = self.config.split_merge.unwrap_or(1) as usize;
-        let mut ordering = DynamicOrdering::new(&degrees, degree_scale);
-        let mut column = SampledColumn::<T>::new();
-        let mut seq = EliminationSequence::with_capacity(n, degree_sum);
-        let mut deltas = DegreeDeltas::new(n);
-        let target_steps = n.saturating_sub(1);
-        let mut steps_done = 0usize;
-        while steps_done < target_steps {
-            let Some(v) = ordering.next_vertex() else {
-                break;
-            };
-            steps_done += 1;
-            star_builder.build_star(&mut graph, v, &mut ordering);
-            let star_entries = star_builder.entries();
-            if star_entries.is_empty() {
-                seq.record_isolated(v, diag[v]);
-                graph.eliminate_vertex(v);
-                continue;
+    fn factor(
+        &mut self,
+        component: Component<'_, C, T>,
+    ) -> Result<(Block<T>, Option<Fallback>), Error> {
+        let dim = BlockDim::of(component.graph.n()).expect("a block has at least one vertex");
+        let anchor = component.anchor;
+        let mut fallback = None;
+        if let Route::Exact { on_failure } = self.backend.route(dim) {
+            match exact::factor(&component.graph, &component.diagonal, dim) {
+                Ok(lower) => return Ok((Block::new(dim, anchor, Cholesky::Exact(lower)), None)),
+                Err(reason) => {
+                    fallback = Some(on_failure.accept(reason.at(component.vertices))?);
+                }
             }
-
-            star_builder.sample_column(diag[v], sampler, &mut column);
-            seq.record_column(v, &column);
-
-            graph.eliminate_vertex(v);
-            for &(u, w) in star_entries {
-                diag[u as usize] = diag[u as usize] - w;
-            }
-
-            // Batch this step's degree-estimate updates into one pq_move per
-            // affected neighbor (net delta) instead of one per incident
-            // fill/removal/merge event. Batching reorders equal-degree vertices
-            // within a bucket, so the exact factor for a fixed seed can differ
-            // from a per-edge version (quality unaffected; see CHANGELOG).
-            column.apply_fill_in_delta(&mut graph, &mut diag, &mut deltas);
-            star_builder.accumulate_removal_delta(&mut deltas);
-            deltas.flush(&mut ordering);
         }
-
-        // A grounded block pins its ground vertex; a floating one pins the single
-        // vertex left un-eliminated after `n - 1` pops.
-        let pin = match ground {
-            Some(ground) => Pin::Ground(ground),
-            None => Pin::Floating(ordering.next_vertex().unwrap_or(0) as u32),
-        };
-        BlockFactor::approx(n, pin, seq)
+        let sequence = approximate::eliminate::<T, C>(
+            component.graph,
+            component.diagonal,
+            &mut self.sampler,
+            self.split,
+        );
+        Ok((
+            Block::new(dim, anchor, Cholesky::Approximate(sequence)),
+            fallback,
+        ))
     }
 }
 

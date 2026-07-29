@@ -23,30 +23,36 @@ struct PQElem {
 ///
 /// Vertex ids are `u32`. Nothing here re-checks that they fit: `CsrRef` stores
 /// the dimension as a `u32`, and the ground vertex is the only one added past it.
-pub struct DynamicOrdering {
+pub(super) struct DynamicOrdering {
     elems: Vec<PQElem>, // indexed by vertex id
     lists: Vec<u32>,    // bucket heads, indexed by key_map(degree)
     min_list: usize,    // lower bound on minimum non-empty bucket
     n_items: usize,
     bucket_base: usize,
-    bucket_upper: usize,
+}
+
+/// Buckets a base needs: one per degree up to `bucket_base`, then one per multiple
+/// of it. The one place the bucket count follows from the base, so the cap below and
+/// the array in [`DynamicOrdering::new`] cannot disagree about which bucket is last.
+fn n_buckets(bucket_base: usize) -> usize {
+    bucket_base.saturating_mul(2).saturating_add(1)
 }
 
 /// Map degree to bucket index.
 ///
-/// Degrees <= `bucket_base` get individual buckets; higher degrees are grouped
-/// via `bucket_base + degree / bucket_base`, capped at `bucket_upper`.
-fn key_map(degree: usize, bucket_base: usize, bucket_upper: usize) -> usize {
+/// Degrees <= `bucket_base` get individual buckets; higher degrees are grouped via
+/// `bucket_base + degree / bucket_base`, capped at the last bucket.
+fn key_map(degree: usize, bucket_base: usize) -> usize {
     if degree <= bucket_base {
         degree
     } else {
-        (bucket_base + degree / bucket_base).min(bucket_upper)
+        (bucket_base + degree / bucket_base).min(n_buckets(bucket_base) - 1)
     }
 }
 
 impl DynamicOrdering {
     /// Pop the vertex with the minimum degree estimate.
-    pub(crate) fn next_vertex(&mut self) -> Option<usize> {
+    pub(super) fn next_vertex(&mut self) -> Option<usize> {
         if self.n_items == 0 {
             return None;
         }
@@ -70,8 +76,8 @@ impl DynamicOrdering {
     /// Move element `i` to the bucket for `new_key`, re-linking the doubly-linked lists.
     fn pq_move(&mut self, i: usize, new_key: u32) {
         let old_key = self.elems[i].key;
-        let old_list = key_map(old_key as usize, self.bucket_base, self.bucket_upper);
-        let new_list = key_map(new_key as usize, self.bucket_base, self.bucket_upper);
+        let old_list = key_map(old_key as usize, self.bucket_base);
+        let new_list = key_map(new_key as usize, self.bucket_base);
 
         self.elems[i].key = new_key;
         if old_list == new_list {
@@ -120,7 +126,7 @@ impl DynamicOrdering {
     /// Decrease vertex `i` by `n`, flooring at zero. Used for the immediate
     /// merge-compression decrement (see `apply_merged_counts`).
     #[inline]
-    pub(crate) fn decrease(&mut self, i: usize, n: u32) {
+    pub(super) fn decrease(&mut self, i: usize, n: u32) {
         self.apply_delta(i, -(n as i64));
     }
 }
@@ -131,13 +137,13 @@ impl DynamicOrdering {
 /// Tracks which vertices it touched so `flush` resets exactly those — the buffer
 /// is all-zero between steps no matter which vertices a step hits, so the caller
 /// need not enumerate them.
-pub(crate) struct DegreeDeltas {
+pub(super) struct DegreeDeltas {
     buf: Vec<i64>,
     touched: Vec<u32>,
 }
 
 impl DegreeDeltas {
-    pub(crate) fn new(n: usize) -> Self {
+    pub(super) fn new(n: usize) -> Self {
         Self {
             buf: vec![0; n],
             touched: Vec::new(),
@@ -145,12 +151,12 @@ impl DegreeDeltas {
     }
 
     #[inline]
-    pub(crate) fn increase(&mut self, v: u32, n: u32) {
+    pub(super) fn increase(&mut self, v: u32, n: u32) {
         self.add(v, n as i64);
     }
 
     #[inline]
-    pub(crate) fn decrease(&mut self, v: u32, n: u32) {
+    pub(super) fn decrease(&mut self, v: u32, n: u32) {
         self.add(v, -(n as i64));
     }
 
@@ -163,7 +169,7 @@ impl DegreeDeltas {
         self.buf[i] += delta;
     }
 
-    pub(crate) fn flush(&mut self, ordering: &mut DynamicOrdering) {
+    pub(super) fn flush(&mut self, ordering: &mut DynamicOrdering) {
         for &v in &self.touched {
             let i = v as usize;
             let d = self.buf[i];
@@ -177,13 +183,12 @@ impl DegreeDeltas {
 }
 
 impl DynamicOrdering {
-    pub(crate) fn new(degrees: &[usize], degree_scale: usize) -> Self {
+    pub(super) fn new(degrees: &[usize], degree_scale: usize) -> Self {
         let n = degrees.len();
         // Julia AC2 parity: keyMap uses `k = split*n`, bucket array length `2*k+1`.
         // Use scale=1 for standard AC.
         let bucket_base = degree_scale.saturating_mul(n).max(1);
-        let n_lists = bucket_base.saturating_mul(2).saturating_add(1);
-        let bucket_upper = n_lists - 1;
+        let n_lists = n_buckets(bucket_base);
         let mut lists = vec![SENTINEL; n_lists];
         let mut elems = Vec::with_capacity(n);
         let mut min_list = n_lists;
@@ -191,7 +196,7 @@ impl DynamicOrdering {
 
         for (v, &deg) in degrees.iter().enumerate() {
             let key = deg as u32;
-            let list = key_map(deg, bucket_base, bucket_upper);
+            let list = key_map(deg, bucket_base);
             let old_head = lists[list];
             elems.push(PQElem {
                 prev: SENTINEL,
@@ -218,7 +223,6 @@ impl DynamicOrdering {
             min_list,
             n_items,
             bucket_base,
-            bucket_upper,
         }
     }
 }
@@ -230,13 +234,12 @@ mod tests {
     #[test]
     fn test_key_map() {
         let k = 10;
-        let upper = 2 * k;
-        assert_eq!(key_map(0, k, upper), 0);
-        assert_eq!(key_map(5, k, upper), 5);
-        assert_eq!(key_map(10, k, upper), 10);
-        assert_eq!(key_map(15, k, upper), 11); // 10 + 15/10 = 11
-        assert_eq!(key_map(20, k, upper), 12); // 10 + 20/10 = 12
-        assert_eq!(key_map(10_000, k, upper), upper); // capped at upper bucket
+        assert_eq!(key_map(0, k), 0);
+        assert_eq!(key_map(5, k), 5);
+        assert_eq!(key_map(10, k), 10);
+        assert_eq!(key_map(15, k), 11); // 10 + 15/10 = 11
+        assert_eq!(key_map(20, k), 12); // 10 + 20/10 = 12
+        assert_eq!(key_map(10_000, k), n_buckets(k) - 1); // capped at last bucket
     }
 
     #[test]

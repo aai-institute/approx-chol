@@ -12,7 +12,58 @@ use crate::{CsrRef, Error};
 pub(crate) struct GraphBuild<G, T: Real> {
     pub graph: G,
     pub diagonal: Vec<T>,
-    pub components: Option<Vec<Vec<u32>>>,
+    /// `None` when the graph is connected, which is the one block case.
+    pub layout: Option<BlockLayout>,
+    /// The Gremban ground vertex, when ingestion closed any row deficit with one.
+    /// Appended last, so it is the highest-numbered vertex in the graph and the
+    /// last vertex of whichever block ends up holding it.
+    pub ground: Option<u32>,
+}
+
+/// Every vertex once, its connected components back to back: the order the factor
+/// stores blocks in.
+///
+/// One array rather than one per component, because the same sequence answers all
+/// three questions asked of it — where each block ends, which global vertices a
+/// block owns, and what permutation maps the two coordinate systems.
+pub(crate) struct BlockLayout {
+    order: Vec<u32>,
+    /// Exclusive end of each block in `order`; the next block starts where this
+    /// one stops, so no block can claim a vertex twice or leave a gap.
+    ends: Vec<u32>,
+}
+
+impl BlockLayout {
+    pub(crate) fn block_count(&self) -> usize {
+        self.ends.len()
+    }
+
+    /// Each block's global vertex names, in storage order.
+    pub(crate) fn blocks(&self) -> impl Iterator<Item = &[u32]> + '_ {
+        self.ends.iter().scan(0usize, |start, &end| {
+            let end = end as usize;
+            let block = &self.order[*start..end];
+            *start = end;
+            Some(block)
+        })
+    }
+
+    /// The same sequence read as a permutation: position `i` holds the input
+    /// vertex the factor keeps at `i`.
+    pub(crate) fn into_order(self) -> Vec<u32> {
+        self.order
+    }
+
+    /// Ascending within each block, which puts the ground vertex — the highest
+    /// numbered — last in whichever block holds it.
+    fn sort_blocks(&mut self) {
+        let mut start = 0usize;
+        for &end in &self.ends {
+            let end = end as usize;
+            self.order[start..end].sort_unstable();
+            start = end;
+        }
+    }
 }
 
 /// A neighbor entry produced by star elimination. Carries the edge's
@@ -20,7 +71,7 @@ pub(crate) struct GraphBuild<G, T: Real> {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Neighbor<T, C> {
     pub to: u32,
-    /// Accumulated fill weight (weight × count for AC2, just weight for AC).
+    /// Accumulated weight the neighbor's copies carry between them.
     pub fill_weight: T,
     pub count: C,
 }
@@ -47,33 +98,90 @@ impl BitVec {
     }
 }
 
-/// How an edge stores its multiplicity: the only thing that differs between the
-/// AC and AC2 edge layouts, so it is the only thing either one defines.
+/// How an edge stores its multiplicity, and everything that follows from it: AC is
+/// AC2 at one copy per edge, so the whole difference between them is this trait.
 ///
-/// `Single` is a ZST, which keeps the AC edge exactly as wide as it was before
-/// the count existed (asserted in the tests below).
+/// `Single` is a ZST, so the AC edge stays exactly as wide as an edge carrying no
+/// count at all (asserted in the tests below).
 pub(crate) trait EdgeCount: Clone + Copy {
+    /// What choosing this layout carries beyond the type: nothing for AC, the
+    /// multiplicity for AC2. `Single` cannot name a `k`, which is what makes an AC
+    /// factorization over split multi-edges a type error rather than a mistake the
+    /// caller has to avoid.
+    type Split: Copy;
+
+    /// Whether every edge of this layout is exactly one copy. `Single` knows it
+    /// statically, which is what lets the single-copy path sort on weights instead
+    /// of on quotients that are all division by one.
+    const SINGLE_COPY: bool;
+
     fn one() -> Self;
     fn get(&self) -> u32;
-    /// Fill weight this multiplicity contributes at edge weight `weight`.
-    fn scale<T: Real>(&self, weight: T) -> T;
+
+    /// Share of `total` carried by one copy. The star's sort key and its sampled
+    /// fill weight are the same division, and for `Single` it is the identity — so
+    /// the AC path performs no division rather than dividing by one.
+    fn per_copy<T: Real>(&self, total: T) -> T;
+
+    /// Keep at most `limit` copies of a coalesced neighbor, and report how many the
+    /// cap discarded. `Single` stores nothing and keeps one, so its discard count is
+    /// the duplicates the merge collapsed.
+    fn cap(copies: u32, limit: u32) -> (Self, u32);
+
+    /// Split every edge into copies of itself, before the degrees are read, and
+    /// report how many that is. The degree-bucket scale, the star's merge cap and
+    /// the per-neighbor sample count are one number because they are one return
+    /// value; a cap of one is what keeps AC's star single-copy throughout.
+    fn split_edges<T: Real>(graph: &mut AdjListGraph<Self, T>, split: Self::Split) -> u32;
 }
 
 /// AC: every edge is a single edge, so there is nothing to store.
 #[derive(Clone, Copy)]
 pub(crate) struct Single;
 
-/// AC2: a virtual multiplicity set by [`MultiEdgeGraph::mark_split_edges`].
+/// AC2: this edge's virtual copy count, set to the [`SplitFactor`] by
+/// [`MultiEdgeGraph::mark_split_edges`] and only lowered from there by the merge cap.
 #[derive(Clone, Copy)]
 pub(crate) struct Multi(u32);
 
 impl Multi {
+    /// Any count at all, which only a test needs: elimination makes a `Multi` from
+    /// the validated split or from [`EdgeCount::cap`], never from a bare number.
+    #[cfg(test)]
     pub(crate) fn new(count: u32) -> Self {
         Self(count)
     }
 }
 
+impl From<SplitFactor> for Multi {
+    #[inline]
+    fn from(split: SplitFactor) -> Self {
+        Self(split.get())
+    }
+}
+
+/// The factor AC2 splits each edge by, distinct from the per-edge count [`Multi`]
+/// carries. Splitting fewer than twice is standard AC, so the factors that exist are
+/// exactly the ones AC2 is defined for: `1/k` cannot be the infinity a zero would
+/// give, and no split can be a no-op.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SplitFactor(u32);
+
+impl SplitFactor {
+    /// `None` when `k` selects standard AC instead.
+    pub(crate) fn new(k: u32) -> Option<Self> {
+        (k >= 2).then_some(Self(k))
+    }
+
+    pub(crate) fn get(self) -> u32 {
+        self.0
+    }
+}
+
 impl EdgeCount for Single {
+    type Split = ();
+    const SINGLE_COPY: bool = true;
+
     #[inline]
     fn one() -> Self {
         Self
@@ -83,12 +191,25 @@ impl EdgeCount for Single {
         1
     }
     #[inline]
-    fn scale<T: Real>(&self, weight: T) -> T {
-        weight
+    fn per_copy<T: Real>(&self, total: T) -> T {
+        total
+    }
+    #[inline]
+    fn cap(copies: u32, _limit: u32) -> (Self, u32) {
+        (Self, copies - 1)
+    }
+    /// A slim edge has nowhere to put a multiplicity, so AC eliminates the graph
+    /// exactly as ingested.
+    #[inline]
+    fn split_edges<T: Real>(_graph: &mut AdjListGraph<Self, T>, _split: ()) -> u32 {
+        1
     }
 }
 
 impl EdgeCount for Multi {
+    type Split = SplitFactor;
+    const SINGLE_COPY: bool = false;
+
     #[inline]
     fn one() -> Self {
         Self(1)
@@ -98,8 +219,18 @@ impl EdgeCount for Multi {
         self.0
     }
     #[inline]
-    fn scale<T: Real>(&self, weight: T) -> T {
-        weight * count_as_scalar::<T, _>(self.0)
+    fn per_copy<T: Real>(&self, total: T) -> T {
+        total / count_as_scalar::<T, _>(self.0)
+    }
+    #[inline]
+    fn cap(copies: u32, limit: u32) -> (Self, u32) {
+        let kept = copies.min(limit);
+        (Self(kept), copies - kept)
+    }
+    #[inline]
+    fn split_edges<T: Real>(graph: &mut AdjListGraph<Self, T>, split: SplitFactor) -> u32 {
+        graph.mark_split_edges(split);
+        split.get()
     }
 }
 
@@ -124,9 +255,11 @@ impl<T: Real, C: EdgeCount> Edge<T, C> {
         }
     }
 
+    /// The weight all copies carry between them, which is what the edge stores:
+    /// splitting sets the count and leaves the weight alone.
     #[inline]
     fn fill_weight(&self) -> T {
-        self.count.scale(self.weight)
+        self.weight
     }
 }
 
@@ -246,16 +379,13 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
 }
 
 impl<T: Real> MultiEdgeGraph<T> {
-    /// Mark each edge as `k` virtual copies at `weight / k`.
-    pub(crate) fn mark_split_edges(&mut self, k: u32) {
-        if k <= 1 {
-            return;
-        }
-        let inv_k = T::one() / count_as_scalar::<T, _>(k);
+    /// Mark each edge as `k` virtual copies of it. The weight stays the total across
+    /// the copies, so this cannot underflow one away and [`EdgeCount::per_copy`]
+    /// divides where a single copy is what's wanted.
+    pub(crate) fn mark_split_edges(&mut self, k: SplitFactor) {
         for adj_list in &mut self.adj {
             for edge in adj_list.iter_mut() {
-                edge.weight = edge.weight * inv_k;
-                edge.count = Multi::new(k);
+                edge.count = k.into();
             }
         }
     }
@@ -293,27 +423,29 @@ fn remove_edge_at<T: Real, C: EdgeCount>(adj: &mut [Vec<Edge<T, C>>], u: usize, 
     }
 }
 
-/// Connected components among the first `n_real` vertices, or `None` when the
-/// graph is connected. Traversal follows every edge, so a ground vertex (index
-/// `>= n_real`) links the blocks it touches without being counted as its own
-/// component.
-fn components<T: Real, C: EdgeCount>(
+/// Connected components among the first `n_real` vertices laid out back to back,
+/// or `None` when the graph is connected. Traversal follows every edge, so a
+/// ground vertex (index `>= n_real`) links the blocks it touches without being
+/// counted as its own component.
+fn block_layout<T: Real, C: EdgeCount>(
     adj: &[Vec<Edge<T, C>>],
     n_real: usize,
-) -> Option<Vec<Vec<u32>>> {
+) -> Option<BlockLayout> {
     let n = adj.len();
     let mut visited = BitVec::new(n);
     let mut stack: Vec<usize> = Vec::new();
-    let mut components: Vec<Vec<u32>> = Vec::new();
+    let mut layout = BlockLayout {
+        order: Vec::with_capacity(n),
+        ends: Vec::new(),
+    };
     for start in 0..n_real {
         if visited.get(start) {
             continue;
         }
-        let mut component = Vec::new();
         visited.set(start);
         stack.push(start);
         while let Some(v) = stack.pop() {
-            component.push(v as u32);
+            layout.order.push(v as u32);
             for e in &adj[v] {
                 let u = e.to as usize;
                 if !visited.get(u) {
@@ -322,17 +454,15 @@ fn components<T: Real, C: EdgeCount>(
                 }
             }
         }
-        components.push(component);
+        layout.ends.push(layout.order.len() as u32);
     }
     // The first traversal reaching every vertex means the graph is connected,
-    // so the common case never sorts or returns a component list.
-    if components.len() <= 1 && components.first().map_or(0, Vec::len) == n {
+    // so the common case never sorts or returns a layout.
+    if layout.ends.len() <= 1 && layout.order.len() == n {
         return None;
     }
-    for component in &mut components {
-        component.sort_unstable();
-    }
-    Some(components)
+    layout.sort_blocks();
+    Some(layout)
 }
 
 #[cfg(test)]
@@ -353,5 +483,28 @@ mod tests {
             "one u32 plus its alignment padding"
         );
         assert_eq!(size_of::<Single>(), 0);
+    }
+
+    /// The cap the split reports is the count it wrote on the edges. A return value
+    /// that drifted from [`MultiEdgeGraph::mark_split_edges`] would cap every star
+    /// at a multiplicity the graph does not carry, and no other test would notice.
+    #[test]
+    fn the_reported_cap_is_the_count_written_on_the_edges() {
+        let k = SplitFactor::new(3).expect("3 splits");
+        let mut graph = MultiEdgeGraph::<f64>::from_adjacency(vec![
+            vec![Edge::new(1.0, 1, 0)],
+            vec![Edge::new(1.0, 0, 0)],
+        ]);
+
+        let cap = Multi::split_edges(&mut graph, k);
+
+        let mut neighbors = Vec::new();
+        graph.live_neighbors(0, &mut neighbors);
+        assert_eq!(cap, k.get(), "the cap is the configured split");
+        assert_eq!(
+            neighbors[0].count.get(),
+            cap,
+            "the cap is the count the edges carry"
+        );
     }
 }

@@ -1,8 +1,8 @@
 //! CSR to elimination graph: canonicalize, pair each off-diagonal with its
 //! mirror, and close the row deficits with a Gremban ground vertex.
 
-use super::{add_edge_pair, components, AdjListGraph, Edge, EdgeCount, GraphBuild};
-use crate::types::{count_as_scalar, Real};
+use super::{add_edge_pair, block_layout, AdjListGraph, Edge, EdgeCount, GraphBuild};
+use crate::types::{augmentation_floor, row_sum_slack, Real};
 use crate::{CsrError, CsrRef, Error};
 
 pub(super) fn from_sddm<T: Real, C: EdgeCount>(
@@ -198,9 +198,7 @@ fn augment<T: Real, C: EdgeCount>(
     mut diag: Vec<T>,
     mut row_sums: Vec<T>,
 ) -> Result<GraphBuild<AdjListGraph<C, T>, T>, Error> {
-    // Relative floor below which a surplus is not worth a ground edge, scaled by
-    // each row's magnitude below.
-    let tolerance = T::by_precision(1e-6, 1e-10);
+    let slack = row_sum_slack::<T>();
     let mut surplus_sum = T::zero();
     let mut grounded = 0usize;
     for (row, (sum, &d)) in row_sums.iter_mut().zip(diag.iter()).enumerate() {
@@ -213,25 +211,11 @@ fn augment<T: Real, C: EdgeCount>(
         if !scale.is_finite() {
             return Err(Error::NonFiniteRow { row });
         }
-        let row_tolerance = tolerance * scale;
+        let row_tolerance = slack * scale;
         if *sum < -row_tolerance {
             return Err(Error::NotDiagonallyDominant { row });
         }
-        // A surplus earns a ground edge only above three floors, each rejecting a
-        // different way it could fail to be dominance worth acting on:
-        //   policy    — too small relative to the row to matter, capped absolutely
-        //               so a 1e12-scale row's real surplus is not swallowed;
-        //   noise     — inside the error this row's own sum could have accumulated
-        //               over its `terms` additions, so it may not be there at all;
-        //   resolvable— below the pivot scale the elimination can invert, so
-        //               grounding on it manufactures a link the solve cannot use
-        //               and silently returns the right-hand side unchanged.
-        // All three are pinned by tests: `*_scale_*`, `*_noise_floor_*`,
-        // `sub_near_zero_*`.
-        let policy = row_tolerance.min(T::epsilon().sqrt());
-        let terms = count_as_scalar::<T, _>(adj[row].len() + 1);
-        let noise = T::epsilon() * scale * terms;
-        let floor = policy.max(noise).max(T::near_zero());
+        let floor = augmentation_floor(scale, row_tolerance, adj[row].len() + 1);
         if *sum < T::zero() || *sum <= floor {
             *sum = T::zero();
         } else {
@@ -241,6 +225,7 @@ fn augment<T: Real, C: EdgeCount>(
     }
 
     let m = adj.len();
+    let mut ground = None;
     if grounded > 0 {
         if m >= u32::MAX as usize {
             return Err(Error::InvalidCsr(
@@ -257,12 +242,15 @@ fn augment<T: Real, C: EdgeCount>(
                 add_edge_pair(&mut adj, row, m, surplus);
             }
         }
+        // The bound above is what makes this cast lossless.
+        ground = Some(m as u32);
     }
 
-    let components = components(&adj, m);
+    let layout = block_layout(&adj, m);
     Ok(GraphBuild {
         graph: AdjListGraph::from_adjacency(adj),
         diagonal: diag,
-        components,
+        layout,
+        ground,
     })
 }
