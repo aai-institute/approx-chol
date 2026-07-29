@@ -30,7 +30,8 @@ where
 }
 
 /// Solve the alternating-sign RHS on the 4-node path fixture and assert the
-/// result is finite and not the trivial zero vector.
+/// result is finite, not the trivial zero vector, and the zero-mean representative
+/// the fixture's floating block has no ground vertex to pick for it.
 pub fn assert_solves_path_rhs<T>(factor: &Factor<T>)
 where
     T: Float + FromPrimitive + core::fmt::Debug + Send + Sync + 'static,
@@ -48,4 +49,8 @@ where
         work.iter().any(|x| x.abs() > min_signal),
         "solution is trivially zero"
     );
+
+    let count = T::from_usize(work.len()).expect("dimension is representable");
+    let mean = work.iter().fold(T::zero(), |sum, &x| sum + x) / count;
+    assert!(mean.abs() < min_signal, "solution is not zero-mean");
 }

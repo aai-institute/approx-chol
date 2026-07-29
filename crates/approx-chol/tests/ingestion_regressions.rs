@@ -28,7 +28,7 @@ fn build(config: Config, rp: &[u32], ci: &[u32], vals: &[f64]) -> Result<Factor<
 #[test]
 fn out_of_class_input_is_rejected_at_its_reported_position() {
     let max = f64::MAX;
-    let cases: [Rejected<'_>; 9] = [
+    let cases: [Rejected<'_>; 10] = [
         // Used to fall through both the diagonal and the `val < 0` edge branch,
         // silently factorizing diag(5, 4) — a confidently wrong factor.
         (
@@ -42,6 +42,15 @@ fn out_of_class_input_is_rejected_at_its_reported_position() {
             "missing transpose",
             &[0, 2, 3],
             &[0, 1, 1],
+            &[1.0, -1.0, 1.0],
+            Error::Asymmetric { edge: (0, 1) },
+        ),
+        // Reaches the asymmetry the mirror cursor skips past, not the one the
+        // comparison rejects: the lower entry is stored and its upper is absent.
+        (
+            "missing upper mirror",
+            &[0, 1, 3],
+            &[0, 0, 1],
             &[1.0, -1.0, 1.0],
             Error::Asymmetric { edge: (0, 1) },
         ),
@@ -241,6 +250,7 @@ fn disconnected_sparse_ac2_preserves_virtual_edge_multiplicity() {
     let factor = Builder::<f64>::new(Config {
         seed: 7,
         split_merge: Some(3),
+        ..Config::default()
     })
     .build(CsrRef::new(&row_ptrs, &columns, &values, 6).or_panic("valid CSR"))
     .or_panic("disconnected AC2 factor");

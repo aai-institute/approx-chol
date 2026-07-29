@@ -28,20 +28,22 @@ fn run_smoke_case(rows: usize, cols: usize, config: Config) {
     assert!(work.iter().any(|x| x.abs() > 1e-12));
 }
 
+/// 10k vertices: the scale at which the bucket layout and fill-in bookkeeping carry
+/// load the property suite's eight-vertex graphs never reach.
 #[test]
 fn smoke_medium_grid_ac() {
-    for size in [70, 100] {
-        run_smoke_case(size, size, Config::default());
-    }
+    run_smoke_case(100, 100, Config::default());
 }
 
 #[test]
 fn smoke_medium_grid_ac2() {
-    let config = Config {
-        seed: 42,
-        split_merge: Some(2),
-    };
-    for size in [70, 100] {
-        run_smoke_case(size, size, config);
-    }
+    run_smoke_case(
+        100,
+        100,
+        Config {
+            seed: 42,
+            split_merge: Some(2),
+            ..Config::default()
+        },
+    );
 }
