@@ -59,7 +59,9 @@ x = factor.solve(b)
 - `factorize_raw(row_ptrs, col_indices, values, n, config=None)` — Factorize from raw CSR arrays.
 - `Factor.solve(b)` — Solve LDL^T x = b, returning a new array.
 - `Factor.solve_into(b, out)` — Solve in-place into a pre-allocated array.
-- `Config(seed=0, split=None)` — Configuration for the factorization.
+- `Config(seed=0, split=None, backend=None)` — Configuration for the factorization.
+- `Backend.Approximate()` / `Backend.ExactBelow(max_dim, on_failure)` — Which factorization each block gets; defaults to `ExactBelow(24, ExactFailure.FallBackToApproximate)`.
+- `Factor.fallbacks` — Blocks routed to exact Cholesky and factored approximately anyway; also raises a `RuntimeWarning`.
 
 ## Attribution
 

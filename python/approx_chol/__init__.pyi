@@ -5,22 +5,63 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
+class ExactFailure:
+    """What to do about a block whose exact Cholesky reaches an unusable pivot."""
+
+    FallBackToApproximate: ExactFailure
+    Error: ExactFailure
+
+class Backend:
+    """Which factorization each connected block gets."""
+
+    class Approximate(Backend): ...
+
+    class ExactBelow(Backend):
+        """Exact dense Cholesky at or below ``max_dim`` solved variables.
+
+        A ``max_dim`` of ``0`` claims no block, so it selects ``Approximate``.
+        """
+
+        max_dim: int
+        on_failure: ExactFailure
+        def __init__(self, max_dim: int, on_failure: ExactFailure) -> None: ...
+
+class DenseFailure:
+    """Why an exact dense Cholesky pivot was unusable."""
+
+    NonPositivePivot: DenseFailure
+    NonFinitePivot: DenseFailure
+    Unknown: DenseFailure
+
+class Fallback:
+    """Why a block routed to exact Cholesky was factored approximately instead."""
+
+    class InvalidPivot(Fallback):
+        vertex: int
+        failure: DenseFailure
+
+    class WillNotFit(Fallback):
+        dim: int
+
+    class Other(Fallback):
+        reason: str
+
 class Config:
     """Configuration for approximate Cholesky factorization.
 
-    Args:
-        seed: Random seed for the edge-weight sampler.
-        split: AC2 multi-edge multiplicity ``k``.
-            ``None`` or ``1`` selects standard AC; ``>=2`` enables AC2.
+    ``split`` is the AC2 multi-edge multiplicity. Splitting an edge fewer than
+    twice is standard AC, so ``None``, ``0`` and ``1`` all select AC.
     """
 
     seed: int
     split: int | None
+    backend: Backend
 
     def __init__(
         self,
         seed: int = 0,
         split: int | None = None,
+        backend: Backend | None = None,
     ) -> None: ...
 
 class Factor:
@@ -44,6 +85,15 @@ class Factor:
     @property
     def n_steps(self) -> int:
         """Number of elimination steps."""
+        ...
+
+    @property
+    def fallbacks(self) -> list[Fallback]:
+        """Blocks routed to exact Cholesky and factored approximately anyway.
+
+        Non-empty means the factor is less accurate than the configured backend
+        asked for; :func:`factorize` also emits a ``RuntimeWarning``.
+        """
         ...
 
     @property

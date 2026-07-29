@@ -19,12 +19,15 @@ class MatrixLike:
         self.shape = shape
 
 
-def test_config_is_strictly_validated():
+def test_split_below_two_is_accepted_as_standard_ac():
     ext = load_extension_module()
     row_ptrs, col_indices, values = _base_csr()
 
-    with pytest.raises(ValueError, match="config.split must be >= 1"):
-        ext.factorize_raw(row_ptrs, col_indices, values, 2, ext.Config(split=0))
+    for split in (None, 0, 1):
+        factor = ext.factorize_raw(
+            row_ptrs, col_indices, values, 2, ext.Config(split=split)
+        )
+        assert factor.shape == (2, 2)
 
 
 def test_duck_typed_factorize_validates_indices_and_dimension():
