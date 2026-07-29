@@ -2,7 +2,7 @@
 //! and close the row deficits with a Gremban ground vertex.
 
 use super::{add_edge_pair, block_layout, AdjListGraph, Edge, EdgeCount, GraphBuild};
-use crate::types::{count_as_scalar, deficit_slack, Real};
+use crate::types::{count_as_scalar, Real};
 use crate::{CsrError, CsrRef, Error};
 
 pub(super) fn from_sddm<T: Real, C: EdgeCount>(
@@ -217,12 +217,15 @@ impl<T: Real> RowBalance<T> {
         if !scale.is_finite() {
             return Self::NonFinite;
         }
-        if excess < -deficit_slack::<T>() * scale {
+        // The most this row's own additions could have invented, and so the only
+        // departure from zero-sum the row cannot account for. One floor for both signs:
+        // a departure this clears is real evidence whichever way it points, and
+        // forgiving more in one direction than the other grounds a row for a drift that
+        // would be dismissed as noise with its sign flipped.
+        let accumulated = T::epsilon() * scale * count_as_scalar::<T, _>(terms);
+        if excess < -accumulated {
             return Self::Deficit;
         }
-        // The most this row's own additions could have invented; a coarser floor would
-        // discard real dominance to guess at what the caller meant.
-        let accumulated = T::epsilon() * scale * count_as_scalar::<T, _>(terms);
         if excess <= accumulated {
             return Self::Negligible;
         }

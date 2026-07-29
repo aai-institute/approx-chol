@@ -12,30 +12,35 @@ use panic_ok::OrPanic;
 use residual::relative_residual_over;
 
 use approx_chol::low_level::Builder;
-use approx_chol::{Backend, Config, CsrRef, SolveError};
+use approx_chol::{Backend, Config, CsrRef, Error, SolveError};
 use num_traits::Float;
 use rstest::rstest;
 
-/// Whether `[[1+drift, -1], [-1, 1+drift]]` gets a ground vertex. Row scale is 2 and
-/// degree 1, so the summation floor is `4 * eps`.
-fn augments_at_drift<T: Float + Send + Sync + 'static>(drift: T) -> bool {
+/// Routes `[[1+drift, -1], [-1, 1+drift]]`: `Ok(true)` when the drift is real dominance
+/// and earns a ground vertex, `Ok(false)` when it is within the row's own summation
+/// error, `Err` when it is a real deficit. Row scale is 2 over 2 stored terms, so the
+/// floor is `4 * eps` either way.
+fn route_at_drift<T: Float + Send + Sync + 'static>(drift: T) -> Result<bool, Error> {
     let one = T::one();
     let row_ptrs = [0u32, 2, 4];
     let col_indices = [0u32, 1, 0, 1];
     let values = [one + drift, -one, -one, one + drift];
     let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).or_panic("valid csr");
-    let factor = Builder::<T>::new(Config::default())
+    Builder::<T>::new(Config::default())
         .build(csr)
-        .or_panic("factorization should succeed");
-    factor.n() > factor.original_n()
+        .map(|factor| factor.n() > factor.original_n())
 }
 
 /// Augmentation is decided in ingestion, before routing, so the default suffices. One
-/// ULP is drift a single addition can account for, so the row is left floating.
+/// ULP either way is drift a single addition accounts for, so the row is left floating.
 #[test]
 fn summation_roundoff_does_not_augment() {
-    assert!(!augments_at_drift(f32::EPSILON));
-    assert!(!augments_at_drift(f64::EPSILON));
+    for drift in [f32::EPSILON, -f32::EPSILON] {
+        assert!(!route_at_drift(drift).or_panic("f32 roundoff is in class"));
+    }
+    for drift in [f64::EPSILON, -f64::EPSILON] {
+        assert!(!route_at_drift(drift).or_panic("f64 roundoff is in class"));
+    }
 }
 
 /// Past that the surplus is real dominance (#85). Both drifts land mid-window for their
@@ -43,17 +48,24 @@ fn summation_roundoff_does_not_augment() {
 /// invents, yet through 0.3.1 both were answered as a singular Laplacian.
 #[test]
 fn surplus_beyond_summation_roundoff_augments() {
-    assert!(augments_at_drift(1e-6_f32));
-    assert!(augments_at_drift(5e-11_f64));
+    assert!(route_at_drift(1e-6_f32).or_panic("f32 dominance"));
+    assert!(route_at_drift(5e-11_f64).or_panic("f64 dominance"));
 }
 
-/// A *deficit* of the same size still does not augment: it is forgiven by a
-/// deliberately coarser slack, because it is a claim about the caller's intent to be
-/// dominant rather than about what the row's own summation could have produced.
+/// The same magnitude with the sign flipped is real *non*-dominance, and is reported
+/// rather than zeroed (#91). Through 0.3.1 a coarser deficit tolerance forgave these,
+/// which left a matrix drifting both ways factored partially grounded.
 #[test]
-fn near_zero_deficit_does_not_augment() {
-    assert!(!augments_at_drift(-5e-7_f32));
-    assert!(!augments_at_drift(-5e-11_f64));
+fn deficit_beyond_summation_roundoff_is_rejected() {
+    for err in [
+        route_at_drift(-1e-6_f32).err_or_panic("f32 deficit must be reported"),
+        route_at_drift(-5e-11_f64).err_or_panic("f64 deficit must be reported"),
+    ] {
+        assert!(
+            matches!(err, Error::NotDiagonallyDominant { row: 0 }),
+            "{err:?}"
+        );
+    }
 }
 
 /// A 4-vertex star whose centre diagonal is `offset` ULPs above its exactly-dyadic

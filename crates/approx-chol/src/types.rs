@@ -26,15 +26,6 @@ pub(crate) fn near_zero<T: Float>() -> T {
     by_precision(1e-6, 1e-14)
 }
 
-/// How much of a *deficit* this fraction of the row's magnitude forgives before the row
-/// is called non-dominant: deliberately coarse, since it is forgiving a caller whose
-/// matrix was meant to be dominant. Too coarse to judge a surplus, which asks only what
-/// the row's own summation could have invented.
-#[inline]
-pub(crate) fn deficit_slack<T: Float>() -> T {
-    by_precision(1e-6, 1e-10)
-}
-
 /// Panics on an exotic `Float` rather than substituting: every substitute a call site
 /// could pick silently corrupts the factor instead. `f32` and `f64` never fail.
 #[inline]
