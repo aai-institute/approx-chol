@@ -1,5 +1,5 @@
 use approx_chol::{Config, CsrRef, Error};
-use numpy::{BorrowError, PyArray1, PyArrayMethods, PyReadonlyArray1};
+use numpy::{BorrowError, Element, PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
 use std::mem::size_of;
 
@@ -19,58 +19,83 @@ fn borrow_error(name: &str, err: BorrowError) -> PyErr {
     }
 }
 
-fn validate_integer_index_array<'py>(
-    np: &Bound<'py, PyModule>,
-    array_like: &Bound<'py, PyAny>,
-    name: &str,
-) -> PyResult<Bound<'py, PyArray1<u32>>> {
-    let arr = np.call_method1("asarray", (array_like,))?;
-    let ndim = arr.getattr("ndim")?.extract::<usize>()?;
-    if ndim != 1 {
-        return Err(value_error(format!("{name} must be a 1-D array")));
-    }
-    let kind = arr.getattr("dtype")?.getattr("kind")?.extract::<String>()?;
-    if kind != "i" && kind != "u" {
-        return Err(value_error(format!("{name} must have an integer dtype")));
-    }
+/// One kind of CSR input column: the dtypes it accepts and the element it is cast
+/// to. The element is the column's own associated type, so no call site can pair an
+/// index column with a float element or ask for a cast the accepted kinds do not
+/// allow.
+trait Column {
+    type Element: numpy::Element;
 
-    let size = arr.getattr("size")?.extract::<usize>()?;
-    if size > 0 {
-        let arr_i64 = arr.call_method1("astype", (np.getattr("int64")?,))?;
-        let min_val = arr_i64.call_method0("min")?.extract::<i64>()?;
-        if min_val < 0 {
-            return Err(value_error(format!("{name} must be non-negative")));
-        }
-        let max_val = arr_i64.call_method0("max")?.extract::<i64>()?;
-        if max_val > u32::MAX as i64 {
-            return Err(value_error(format!("{name} exceeds u32::MAX")));
-        }
-    }
+    /// Numpy dtype kind characters this column accepts.
+    fn accepts(kind: &str) -> bool;
 
-    let arr_u32 = arr.call_method1("astype", (np.getattr("uint32")?,))?;
-    let arr_u32 = np.call_method1("ascontiguousarray", (arr_u32,))?;
-    arr_u32.extract::<Bound<'py, PyArray1<u32>>>()
+    /// What the rejection message says the column must have.
+    fn expected() -> &'static str;
+
+    /// Whatever the cast would silently lose beyond the dtype kind.
+    fn check_range(_arr: &Bound<'_, PyAny>, _name: &str) -> PyResult<()> {
+        Ok(())
+    }
 }
 
-fn validate_values_array<'py>(
+struct Index;
+
+impl Column for Index {
+    type Element = u32;
+
+    fn accepts(kind: &str) -> bool {
+        kind == "i" || kind == "u"
+    }
+
+    fn expected() -> &'static str {
+        "an integer dtype"
+    }
+
+    fn check_range(arr: &Bound<'_, PyAny>, name: &str) -> PyResult<()> {
+        if arr.getattr("size")?.extract::<usize>()? == 0 {
+            return Ok(());
+        }
+        let wide = arr.call_method1("astype", (i64::get_dtype(arr.py()),))?;
+        if wide.call_method0("min")?.extract::<i64>()? < 0 {
+            return Err(value_error(format!("{name} must be non-negative")));
+        }
+        if wide.call_method0("max")?.extract::<i64>()? > u32::MAX as i64 {
+            return Err(value_error(format!("{name} exceeds u32::MAX")));
+        }
+        Ok(())
+    }
+}
+
+struct Value;
+
+impl Column for Value {
+    type Element = f64;
+
+    fn accepts(kind: &str) -> bool {
+        kind == "i" || kind == "u" || kind == "f"
+    }
+
+    fn expected() -> &'static str {
+        "an integer or floating-point dtype"
+    }
+}
+
+fn as_contiguous_1d<'py, C: Column>(
     np: &Bound<'py, PyModule>,
     array_like: &Bound<'py, PyAny>,
     name: &str,
-) -> PyResult<Bound<'py, PyArray1<f64>>> {
+) -> PyResult<Bound<'py, PyArray1<C::Element>>> {
     let arr = np.call_method1("asarray", (array_like,))?;
-    let ndim = arr.getattr("ndim")?.extract::<usize>()?;
-    if ndim != 1 {
+    if arr.getattr("ndim")?.extract::<usize>()? != 1 {
         return Err(value_error(format!("{name} must be a 1-D array")));
     }
     let kind = arr.getattr("dtype")?.getattr("kind")?.extract::<String>()?;
-    if kind != "i" && kind != "u" && kind != "f" {
-        return Err(value_error(format!(
-            "{name} must have an integer or floating-point dtype"
-        )));
+    if !C::accepts(&kind) {
+        return Err(value_error(format!("{name} must have {}", C::expected())));
     }
-    let arr_f64 = arr.call_method1("astype", (np.getattr("float64")?,))?;
-    let arr_f64 = np.call_method1("ascontiguousarray", (arr_f64,))?;
-    arr_f64.extract::<Bound<'py, PyArray1<f64>>>()
+    C::check_range(&arr, name)?;
+    let cast = arr.call_method1("astype", (C::Element::get_dtype(arr.py()),))?;
+    np.call_method1("ascontiguousarray", (cast,))?.extract()
 }
 
 #[inline]
@@ -349,12 +374,10 @@ fn factorize(
         return Err(value_error("matrix dimension exceeds u32::MAX"));
     }
 
-    // Keep duck-typed input support but validate shape, dtype, and index ranges
-    // before any narrowing conversions.
     let np = py.import("numpy")?;
-    let rp_arr = validate_integer_index_array(&np, &indptr, "indptr")?;
-    let ci_arr = validate_integer_index_array(&np, &indices, "indices")?;
-    let val_arr = validate_values_array(&np, &data, "data")?;
+    let rp_arr = as_contiguous_1d::<Index>(&np, &indptr, "indptr")?;
+    let ci_arr = as_contiguous_1d::<Index>(&np, &indices, "indices")?;
+    let val_arr = as_contiguous_1d::<Value>(&np, &data, "data")?;
 
     let rp_ro = rp_arr.readonly();
     let ci_ro = ci_arr.readonly();
