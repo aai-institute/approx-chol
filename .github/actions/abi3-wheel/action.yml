@@ -1,0 +1,34 @@
+name: abi3 wheel
+description: Build the abi3 wheel for this runner, audit it, and upload it as an artifact.
+
+runs:
+  using: composite
+  steps:
+    - uses: prefix-dev/setup-pixi@v0.10.0
+      with:
+        environments: wheel audit
+        cache: true
+        cache-write: ${{ github.ref == 'refs/heads/main' }}
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - uses: Swatinem/rust-cache@v2
+    - name: build wheel
+      shell: bash
+      run: pixi run -e wheel maturin build --locked --out dist
+    # maturin only warns when it cannot honour abi3, so assert the tag rather
+    # than trusting a green build to mean one wheel covers every interpreter.
+    - name: assert the wheel is tagged cp39-abi3
+      shell: bash
+      run: |
+        for whl in dist/*.whl; do
+          case "$(basename "$whl")" in
+            *-cp39-abi3-*) ;;
+            *) echo "::error::expected a cp39-abi3 wheel, got $(basename "$whl")"; exit 1 ;;
+          esac
+        done
+    - name: abi3audit
+      shell: bash
+      run: pixi run -e audit abi3audit --strict dist/*.whl
+    - uses: actions/upload-artifact@v4
+      with:
+        name: wheel-${{ runner.os }}
+        path: dist/*.whl

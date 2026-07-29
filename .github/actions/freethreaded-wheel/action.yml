@@ -1,0 +1,75 @@
+name: free-threaded wheel
+description: >
+  Build the version-specific free-threaded wheel for this runner, prove it does
+  not re-enable the GIL, and upload it as an artifact.
+
+inputs:
+  python-version:
+    description: >
+      Free-threaded interpreter to build against, e.g. "3.14t". 3.14 is the floor:
+      free-threading is only officially supported from there, and scipy ships no
+      cp313t wheel, so an older interpreter cannot install the suite.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - id: interpreter
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    - uses: prefix-dev/setup-pixi@v0.10.0
+      with:
+        environments: wheel
+        cache: true
+        cache-write: ${{ github.ref == 'refs/heads/main' }}
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - uses: Swatinem/rust-cache@v2
+    - name: name the interpreter once
+      shell: bash
+      run: echo "PY=${{ steps.interpreter.outputs.python-path }}" >> "$GITHUB_ENV"
+    # Free-threaded CPython has no stable ABI before PEP 803 lands in 3.15, so
+    # this deliberately produces one version-specific wheel per interpreter
+    # instead of the single abi3 wheel the other jobs build.
+    - name: build wheel
+      shell: bash
+      run: pixi run -e wheel maturin build --locked --out dist --interpreter "$PY"
+    # Derived from the requested version rather than a `cp3??t` wildcard, so a wheel
+    # built against a different free-threaded interpreter than the job claims fails
+    # here instead of shipping mislabelled.
+    - name: assert the wheel is tagged free-threaded
+      shell: bash
+      run: |
+        want="cp$(echo '${{ inputs.python-version }}' | tr -d '.t')t"
+        for whl in dist/*.whl; do
+          case "$(basename "$whl")" in
+            *-"$want"-*) ;;
+            *) echo "::error::expected a $want wheel, got $(basename "$whl")"; exit 1 ;;
+          esac
+        done
+    # Before the suite: this needs only the wheel, and it is the claim the job
+    # exists to prove. The RuntimeWarning filter is what catches a missing
+    # `gil_used = false` — under PYTHON_GIL=0 CPython warns rather than flipping the
+    # GIL back on, so the assert alone would pass.
+    - name: assert the import leaves the GIL disabled
+      shell: bash
+      run: |
+        "$PY" -m pip install dist/*.whl
+        PYTHON_GIL=0 "$PY" -c '
+        import sys, warnings
+        warnings.simplefilter("error", RuntimeWarning)
+        import approx_chol
+        assert not sys._is_gil_enabled(), "importing approx_chol re-enabled the GIL"
+        print("GIL still disabled after import")
+        '
+    # numpy and scipy arrive as the wheel's own declared dependencies, so the
+    # floors in pyproject.toml are what gets exercised.
+    - name: run the suite
+      shell: bash
+      run: |
+        "$PY" -m pip install pytest
+        "$PY" -m pytest tests/ -v
+    - uses: actions/upload-artifact@v4
+      with:
+        name: wheel-${{ runner.os }}-${{ inputs.python-version }}
+        path: dist/*.whl
