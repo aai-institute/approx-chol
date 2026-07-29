@@ -16,35 +16,44 @@ use approx_chol::{Backend, Config, CsrRef, SolveError};
 use num_traits::Float;
 use rstest::rstest;
 
-/// The floor is precision-dependent, so `eps` comes from the caller.
-fn assert_no_augmentation_at_drift<T: Float + Send + Sync + 'static>(eps: T) {
+/// Whether `[[1+drift, -1], [-1, 1+drift]]` gets a ground vertex. Row scale is 2 and
+/// degree 1, so the summation floor is `4 * eps`.
+fn augments_at_drift<T: Float + Send + Sync + 'static>(drift: T) -> bool {
     let one = T::one();
     let row_ptrs = [0u32, 2, 4];
     let col_indices = [0u32, 1, 0, 1];
-    let values = [one + eps, -one, -one, one + eps];
+    let values = [one + drift, -one, -one, one + drift];
     let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).or_panic("valid csr");
     let factor = Builder::<T>::new(Config::default())
         .build(csr)
         .or_panic("factorization should succeed");
-    assert_eq!(
-        factor.n(),
-        2,
-        "roundoff drift must not trigger augmentation"
-    );
+    factor.n() > factor.original_n()
 }
 
-/// Augmentation is decided in ingestion, before routing, so the default suffices.
+/// Augmentation is decided in ingestion, before routing, so the default suffices. One
+/// ULP is drift a single addition can account for, so the row is left floating.
 #[test]
-fn near_zero_surplus_does_not_augment() {
-    assert_no_augmentation_at_drift(5e-7_f32);
-    assert_no_augmentation_at_drift(5e-11_f64);
+fn summation_roundoff_does_not_augment() {
+    assert!(!augments_at_drift(f32::EPSILON));
+    assert!(!augments_at_drift(f64::EPSILON));
 }
 
-/// A deficit inside the row's slack is not a dominance error either.
+/// Past that the surplus is real dominance (#85). Both drifts land mid-window for their
+/// precision — 8 ULPs of this row in `f32`, 2.25e5 in `f64` — which no two-term sum
+/// invents, yet through 0.3.1 both were answered as a singular Laplacian.
+#[test]
+fn surplus_beyond_summation_roundoff_augments() {
+    assert!(augments_at_drift(1e-6_f32));
+    assert!(augments_at_drift(5e-11_f64));
+}
+
+/// A *deficit* of the same size still does not augment: it is forgiven by a
+/// deliberately coarser slack, because it is a claim about the caller's intent to be
+/// dominant rather than about what the row's own summation could have produced.
 #[test]
 fn near_zero_deficit_does_not_augment() {
-    assert_no_augmentation_at_drift(-5e-7_f32);
-    assert_no_augmentation_at_drift(-5e-11_f64);
+    assert!(!augments_at_drift(-5e-7_f32));
+    assert!(!augments_at_drift(-5e-11_f64));
 }
 
 /// `+1.92e-8` against a row scale of `8e8` is `2.4e-17` relative — below `eps`, so it

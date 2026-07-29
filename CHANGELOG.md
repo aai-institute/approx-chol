@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `low_level::clique_tree_sample_multi`.
 - `OwnedCsr::try_as_ref` is replaced by the infallible `as_csr_ref`, and
   `CsrRef::row_ptrs`/`col_indices`/`values` return slices with the view's lifetime.
+- A row surplus is grounded once it exceeds `epsilon * scale * (degree + 1)`, the error
+  the row's own summation could carry; rows whose drift from zero-sum falls between that
+  and the old `1e-10 * scale` floor are solved as SDDM where 0.3.1 projected them as a
+  singular Laplacian. (#85)
 
 ### Removed
 

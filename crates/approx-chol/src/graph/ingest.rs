@@ -2,7 +2,7 @@
 //! and close the row deficits with a Gremban ground vertex.
 
 use super::{add_edge_pair, block_layout, AdjListGraph, Edge, EdgeCount, GraphBuild};
-use crate::types::{count_as_scalar, row_sum_slack, Real};
+use crate::types::{count_as_scalar, deficit_slack, Real};
 use crate::{CsrError, CsrRef, Error};
 
 pub(super) fn from_sddm<T: Real, C: EdgeCount>(
@@ -204,20 +204,13 @@ impl<T: Real> RowBalance<T> {
         if !scale.is_finite() {
             return Self::NonFinite;
         }
-        let slack = row_sum_slack::<T>() * scale;
-        if excess < -slack {
+        if excess < -deficit_slack::<T>() * scale {
             return Self::Deficit;
         }
-        // The same slack the deficit was rejected by, capped absolutely so a
-        // 1e12-scale row's real surplus is not swallowed.
-        let relative = slack.min(T::epsilon().sqrt());
-        // Error this row's own sum could have accumulated over its additions, the
-        // diagonal included.
+        // The most this row's own additions could have invented; a coarser floor would
+        // discard real dominance to guess at what the caller meant.
         let accumulated = T::epsilon() * scale * count_as_scalar::<T, _>(degree + 1);
-        // Both arms scale with the row, so a surplus this clears is real for this row
-        // whatever its absolute size; elimination inverts any pivot with a
-        // representable reciprocal, so smallness alone is not a reason to discard it.
-        if excess <= relative.max(accumulated) {
+        if excess <= accumulated {
             return Self::Negligible;
         }
         Self::Surplus(excess)
