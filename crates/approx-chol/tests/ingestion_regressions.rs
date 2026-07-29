@@ -151,11 +151,12 @@ fn in_class_input_is_accepted_on_both_paths() {
     }
 }
 
-/// Both ends of the per-row surplus floor: 1e12-scale dominance must survive the
-/// relative tolerance, and a 5e-11 surplus must still count as dominance.
+/// Every end of the per-row surplus floor: 1e12-scale dominance must survive the
+/// relative tolerance, a 5e-11 surplus must still count as dominance, and a surplus
+/// real against its own row scale must not be discarded for being absolutely small.
 #[test]
 fn genuine_surplus_at_either_scale_is_augmented_and_solves() {
-    let cases: [Solved<'_>; 2] = [
+    let cases: [Solved<'_>; 3] = [
         (
             "1e12 scale",
             &[0, 2, 4],
@@ -172,6 +173,16 @@ fn genuine_surplus_at_either_scale_is_augmented_and_solves() {
             &[5e-11, 5e-11],
             [1.0, 2.0],
             [1.0 / 5e-11, 2.0 / 5e-11],
+        ),
+        // Surplus 6e-15 on a 2e-6-scale row: 1e9 times the error the row's own additions
+        // could carry, so it is dominance rather than noise. Eigenvalue 6e-15 on [1, 1].
+        (
+            "surplus below near_zero",
+            &[0, 2, 4],
+            &[0, 1, 0, 1],
+            &[1e-6 + 6e-15, -1e-6, -1e-6, 1e-6 + 6e-15],
+            [1.0, 1.0],
+            [1.0 / 6e-15, 1.0 / 6e-15],
         ),
     ];
 
