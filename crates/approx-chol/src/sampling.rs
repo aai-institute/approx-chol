@@ -13,6 +13,7 @@ const LINEAR_THRESHOLD: usize = 32;
 pub(crate) struct CdfSampler<T = f64> {
     neighbors: Vec<u32>,
     cumsum: Vec<T>,
+    seed: u64,
     rng: SmallRng,
 }
 
@@ -21,8 +22,15 @@ impl<T> CdfSampler<T> {
         Self {
             neighbors: Vec::new(),
             cumsum: Vec::new(),
+            seed,
             rng: SmallRng::seed_from_u64(seed),
         }
+    }
+
+    /// A stream per block off the one seed, keeping the scratch. `seed_from_u64`
+    /// decorrelates neighboring values, so `block` needs no hashing.
+    pub(crate) fn restart(&mut self, block: u64) {
+        self.rng = SmallRng::seed_from_u64(self.seed.wrapping_add(block));
     }
 }
 

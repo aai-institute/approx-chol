@@ -112,6 +112,11 @@ struct Component<'v, C, T: Real> {
 }
 
 impl<C: EdgeCount, T: Real> Component<'_, C, T> {
+    /// Names the block by what it holds rather than by how many blocks precede it.
+    fn first_vertex(&self) -> u64 {
+        self.vertices.map_or(0, |vertices| u64::from(vertices[0]))
+    }
+
     /// A local vertex is already a global one, so `0..n` is never materialized.
     fn whole(graph: AdjListGraph<C, T>, diagonal: Vec<T>, ground: Option<u32>) -> Self {
         let last_vertex = (graph.n() - 1) as u32;
@@ -159,8 +164,8 @@ impl<C: EdgeCount, T: Real> Partition<C, T> {
     }
 }
 
-/// What every block shares, resolved — including the one RNG stream a fixed seed
-/// promises, which is why [`Config`] does not survive construction.
+/// What every block shares, resolved — including the sampler each block restarts its
+/// own stream from, which is why [`Config`] does not survive construction.
 struct BlockFactorizer<T: Real, C: EdgeCount> {
     backend: Backend,
     sampler: CdfSampler<T>,
@@ -180,6 +185,10 @@ impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
         &mut self,
         component: Component<'_, C, T>,
     ) -> Result<(Block<T>, Option<Fallback>), Error> {
+        // Restarts for every block, routed or not, so one block's draws never shift
+        // because another was factored exactly.
+        self.sampler.restart(component.first_vertex());
+
         let dim = BlockDim::of(component.graph.n()).expect("a block has at least one vertex");
         let anchor = component.anchor;
         let mut fallback = None;

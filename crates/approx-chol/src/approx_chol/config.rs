@@ -6,7 +6,8 @@ use crate::Error;
 #[derive(Clone, Copy, Debug, Default)]
 /// Configuration for approximate Cholesky factorization.
 pub struct Config {
-    /// Random seed for the edge-weight sampler.
+    /// Random seed for the edge-weight sampler. Each block draws from its own stream,
+    /// so its factor does not depend on how the blocks before it were routed.
     pub seed: u64,
     /// AC2 multi-edge multiplicity `k`. Splitting an edge fewer than twice is
     /// standard AC, so `None`, `Some(0)` and `Some(1)` all select AC.

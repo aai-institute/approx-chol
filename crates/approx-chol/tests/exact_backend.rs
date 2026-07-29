@@ -105,6 +105,42 @@ fn a_bound_of_zero_claims_no_block() {
     );
 }
 
+/// A claimed block draws nothing, so one shared stream would hand the next block a
+/// different position than the approximate backend leaves it at.
+#[test]
+fn a_claimed_block_does_not_shift_a_later_blocks_draws() {
+    let small = grid_laplacian(3, 3);
+    let large = grid_laplacian(7, 7);
+    let (small_n, large_n) = (small.n as usize, large.n as usize);
+    let lap = side_by_side(&small, &large);
+    let csr = lap.as_csr().or_panic("valid CSR");
+
+    let mut b = vec![0.0; small_n + large_n];
+    b[small_n] = 1.0;
+    b[small_n + large_n - 1] = -1.0;
+
+    let solve = |backend| {
+        factorize_with(
+            csr,
+            Config {
+                backend,
+                ..Config::default()
+            },
+        )
+        .or_panic("factorization")
+        .solve(&b)
+        .or_panic("solve")
+    };
+
+    let approximated = solve(Backend::Approximate);
+    let claimed = solve(Backend::default());
+    assert_eq!(
+        approximated[small_n..],
+        claimed[small_n..],
+        "claiming the small block moved the large block's stream"
+    );
+}
+
 #[test]
 fn routing_is_decided_per_block() {
     let small = grid_laplacian(3, 3);
