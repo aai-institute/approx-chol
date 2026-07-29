@@ -8,6 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Both free-threaded jobs build this one interpreter; `publish.yml` has its own copy.
+  FREETHREADED_PYTHON: "3.14t"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -114,28 +116,20 @@ jobs:
   # one is also the only interpreter that can run it. The action therefore
   # tests in place and these jobs feed no import matrix.
   wheel-freethreaded-linux:
-    name: free-threaded wheel (ubuntu-latest, py${{ matrix.python-version }})
+    name: free-threaded wheel (ubuntu-latest)
     runs-on: ubuntu-latest
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
       RUSTFLAGS: "-C debuginfo=0"
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version:
-          # 3.14 only: scipy ships no cp313t wheel, so the suite would need a
-          # source build the runner has no BLAS for. Free-threading is also only
-          # officially supported from 3.14.
-          - "3.14t"
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/freethreaded-wheel
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ env.FREETHREADED_PYTHON }}
 
   wheel-freethreaded-platform:
-    name: free-threaded wheel (${{ matrix.os }}, py${{ matrix.python-version }})
+    name: free-threaded wheel (${{ matrix.os }})
     if: github.event_name == 'push'
     runs-on: ${{ matrix.os }}
     env:
@@ -148,16 +142,11 @@ jobs:
         os:
           - macos-latest
           - windows-latest
-        python-version:
-          # 3.14 only: scipy ships no cp313t wheel, so the suite would need a
-          # source build the runner has no BLAS for. Free-threading is also only
-          # officially supported from 3.14.
-          - "3.14t"
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/freethreaded-wheel
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ env.FREETHREADED_PYTHON }}
 
   import-matrix:
     name: Import + tests (${{ matrix.os }}, py${{ matrix.python-version }})

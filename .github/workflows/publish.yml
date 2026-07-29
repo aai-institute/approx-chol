@@ -12,6 +12,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # Mirrors `ci.yml`'s FREETHREADED_PYTHON; a workflow cannot read another's env.
+  FREETHREADED_PYTHON: "3.14t"
+
 jobs:
   linux:
     runs-on: ${{ matrix.platform.runner }}
@@ -138,9 +142,12 @@ jobs:
           path: dist
 
   # Free-threaded CPython has no stable ABI before PEP 803, so the abi3 wheel above
-  # does not cover it and pyo3 emits a version-specific wheel instead. Limited to the
-  # platforms `ci.yml` builds and imports free-threaded, rather than the full target
-  # list: 3.14t is not meaningfully distributed for armv7/s390x/ppc64le/x86.
+  # does not cover it and pyo3 emits a version-specific wheel instead.
+  #
+  # The runner set is exactly `ci.yml`'s wheel-freethreaded-{linux,platform} matrix, so
+  # nothing ships free-threaded without having passed that job's GIL assertion. Keep the
+  # two lists equal when either changes; 3.14t is not meaningfully distributed for
+  # armv7/s390x/ppc64le/x86 or musllinux, so those stay abi3-only.
   freethreaded:
     runs-on: ${{ matrix.platform.runner }}
     strategy:
@@ -150,29 +157,28 @@ jobs:
             target: x86_64
           - runner: windows-latest
             target: x64
-          - runner: macos-15-intel
-            target: x86_64
           - runner: macos-latest
             target: aarch64
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - id: interpreter
+        uses: actions/setup-python@v6
         with:
-          python-version: 3.14t
+          python-version: ${{ env.FREETHREADED_PYTHON }}
       - name: Build free-threaded wheel
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --interpreter python3.14t
+          args: --release --out dist --interpreter python${{ env.FREETHREADED_PYTHON }}
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-          manylinux: auto
       - name: Assert the wheel is tagged free-threaded
         shell: bash
         run: |
+          want="cp$(echo '${{ env.FREETHREADED_PYTHON }}' | tr -d '.t')t"
           for whl in dist/*.whl; do
             case "$(basename "$whl")" in
-              *-cp3??t-*) ;;
-              *) echo "::error::expected a free-threaded wheel, got $(basename "$whl")"; exit 1 ;;
+              *-"$want"-*) ;;
+              *) echo "::error::expected a $want wheel, got $(basename "$whl")"; exit 1 ;;
             esac
           done
       - name: Upload wheels

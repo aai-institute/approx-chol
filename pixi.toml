@@ -8,7 +8,7 @@ platforms = ["linux-64", "win-64", "osx-arm64", "osx-64"]
 # free-threaded build, which has no stable ABI (PEP 803 lands abi3t in 3.15),
 # so maturin would drop abi3 and emit a version-specific wheel from a plain
 # `maturin build`. Free-threaded wheels are built deliberately, by the
-# wheel-freethreaded job pinning an explicit 3.13t/3.14t interpreter.
+# wheel-freethreaded jobs pinning an explicit 3.14t interpreter.
 python = ">=3.11,<3.14"
 
 [feature.build.dependencies]
@@ -56,6 +56,7 @@ uv = ">=0.4"
 [environments]
 default = { features = ["build", "test", "coverage", "gates", "dev"], solve-group = "default" }
 ci = { features = ["build", "test", "coverage"], solve-group = "default" }
+wheel = { features = ["build"], solve-group = "default" }
 platform = { features = ["build", "test"], solve-group = "default" }
 gates = { features = ["build", "gates"], solve-group = "default" }
 audit = { features = ["audit"] }
@@ -70,6 +71,3 @@ coverage-rust = "cargo llvm-cov --workspace --all-features --locked --summary-on
 deny = "cargo deny --locked check"
 semver = "cargo semver-checks --package approx-chol"
 mutants = "cargo mutants -C --locked"
-
-[feature.audit.tasks]
-abi3audit = "abi3audit --strict"
