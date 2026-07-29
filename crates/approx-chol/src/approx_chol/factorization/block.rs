@@ -1,25 +1,18 @@
-//! One block of the factorization: an [`Anchor`] paired with a [`Cholesky`].
-//!
-//! The two are orthogonal and independently chosen — the anchor by augmentation, the
-//! Cholesky by policy — so all four combinations occur.
-
 use super::anchor::Anchor;
 use super::cholesky::Cholesky;
 use crate::types::Real;
 use core::num::NonZeroUsize;
 
-/// A block's dimension, in the two forms its consumers actually ask for. The
-/// pinned variable is the block's last, so the routing bound, the dense factor and
-/// the step count all want [`solved`](Self::solved) rather than the total — and
-/// none of them has to spell the subtraction to get it.
+/// A block's dimension in both forms its consumers ask for, so none of them spells
+/// the pinned variable's subtraction itself.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BlockDim(NonZeroUsize);
 
 impl BlockDim {
-    /// `None` for a block of no variables: it has nothing to pin, and every
-    /// dimension derived from it would underflow.
+    /// `None` for a block of no variables: every dimension derived from it would
+    /// underflow.
     pub(crate) fn of(total: usize) -> Option<Self> {
         NonZeroUsize::new(total).map(Self)
     }
@@ -64,8 +57,6 @@ impl<T> Block<T> {
 }
 
 impl<T: Real> Block<T> {
-    /// `canonical` picks the zero-mean representative for a floating block; without
-    /// it the block is left anchored at zero in its pinned variable.
     fn solve(&self, values: &mut [T], canonical: bool) {
         self.anchor.prepare(values);
         self.cholesky.apply(values);

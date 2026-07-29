@@ -3,8 +3,7 @@ use crate::approx_chol::factorization::exact::NotFactorable;
 use crate::test_utils::OrPanic;
 use crate::{DenseFailure, ExactFailure, UnusablePivot};
 
-/// Naming the pivot and applying the policy are separate steps, so the cases sweep
-/// both: the same failure under either policy, and either failure under `Error`.
+/// Naming the pivot and applying the policy are separate steps, so both are swept.
 #[test]
 fn only_an_unusable_pivot_answers_to_the_failure_policy() {
     let pivot = NotFactorable::InvalidPivot {

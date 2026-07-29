@@ -43,8 +43,8 @@ where
         self.build_validated(narrowed.with_values(csr.values()))
     }
 
-    /// The multiplicity decides the edge layout and the split eliminated on
-    /// together, so each arm names one algorithm end to end.
+    /// The multiplicity decides layout and split together, so each arm names one
+    /// algorithm end to end.
     fn build_validated(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
         let original_n = sddm.n();
         match self.config.split_factor() {
@@ -102,8 +102,7 @@ where
     }
 }
 
-/// One block to factor: its subgraph, that subgraph's diagonal, which variable the
-/// solve pins, and how its local vertices name global ones.
+/// One block to factor, and how its local vertices name global ones.
 struct Component<'v, C, T: Real> {
     graph: AdjListGraph<C, T>,
     diagonal: Vec<T>,
@@ -113,8 +112,7 @@ struct Component<'v, C, T: Real> {
 }
 
 impl<C: EdgeCount, T: Real> Component<'_, C, T> {
-    /// The whole graph as one block, named by no vertex list: a local vertex is
-    /// already a global one, so `0..n` never has to be materialized.
+    /// A local vertex is already a global one, so `0..n` is never materialized.
     fn whole(graph: AdjListGraph<C, T>, diagonal: Vec<T>, ground: Option<u32>) -> Self {
         let last_vertex = (graph.n() - 1) as u32;
         Self {
@@ -126,9 +124,8 @@ impl<C: EdgeCount, T: Real> Component<'_, C, T> {
     }
 }
 
-/// The ingested graph, drained one connected component at a time. Owning what the
-/// per-component loop holds constant is what lets a block be named by its vertices
-/// alone; a connected input never builds one, so it keeps skipping this scratch.
+/// The ingested graph, drained one connected component at a time. A connected input
+/// never builds one, so it keeps skipping this scratch.
 struct Partition<C, T: Real> {
     graph: AdjListGraph<C, T>,
     diagonal: Vec<T>,
@@ -162,12 +159,8 @@ impl<C: EdgeCount, T: Real> Partition<C, T> {
     }
 }
 
-/// What every block of one factorization shares, resolved: the routing rule, the
-/// single RNG stream a fixed seed promises, and the split the edges are eliminated
-/// on.
-///
-/// [`Config`] does not survive construction. Keeping it would carry a second,
-/// unresolved spelling of decisions `split` and `sampler` already hold.
+/// What every block shares, resolved — including the one RNG stream a fixed seed
+/// promises, which is why [`Config`] does not survive construction.
 struct BlockFactorizer<T: Real, C: EdgeCount> {
     backend: Backend,
     sampler: CdfSampler<T>,

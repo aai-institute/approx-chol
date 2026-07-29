@@ -36,7 +36,6 @@ where
     (row_ptrs, col_indices, values, path::N)
 }
 
-/// Factorize the shared path-Laplacian fixture at `config` and check the solve.
 fn run_case<I, T>(config: Config)
 where
     I: PrimInt + TryFrom<usize> + 'static,
@@ -86,8 +85,7 @@ fn factorize_catches_panicking_conversion() {
     ));
 }
 
-/// Splitting an edge fewer than twice is standard AC, so these three configs are
-/// one code path and must agree entry for entry, not merely to roundoff.
+/// One code path, so these must agree entry for entry, not merely to roundoff.
 #[test]
 fn split_below_two_is_standard_ac() {
     let (rp, ci, vals, n) = path_laplacian::<u32, f64>();

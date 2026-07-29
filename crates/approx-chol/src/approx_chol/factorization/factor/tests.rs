@@ -116,10 +116,8 @@ mod validation {
         }
     }
 
-    /// Covers every variant but `NonzeroCountExceedsU32`, which needs a payload
-    /// of more than `u32::MAX` nonzeros to reach. Neither an empty block nor a
-    /// dimension that is not an augmentation is among them: a [`BlockDim`] is
-    /// non-zero and `n` is derived from the blocks' anchors.
+    /// Every variant but `NonzeroCountExceedsU32`, which needs more than `u32::MAX`
+    /// nonzeros to reach.
     #[test]
     fn every_factor_error_variant_is_reachable() {
         #[allow(clippy::type_complexity)]

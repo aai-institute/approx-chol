@@ -42,11 +42,9 @@ pub enum Error {
     DenseFactorizationFailed(UnusablePivot),
 }
 
-/// An exact dense Cholesky pivot that could not be used, and where it was.
-///
-/// The same pivot is either reported as a [`Fallback`](crate::Fallback) or raised
-/// as [`Error::DenseFactorizationFailed`], so [`ExactFailure`](crate::ExactFailure)
-/// chooses between two spellings of one payload rather than two payloads.
+/// An exact dense Cholesky pivot that could not be used, and where it was. The same
+/// payload is reported as a [`Fallback`](crate::Fallback) or raised as
+/// [`Error::DenseFactorizationFailed`].
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnusablePivot {
@@ -74,8 +72,7 @@ pub enum DenseFailure {
 }
 
 impl DenseFailure {
-    /// `None` when `pivot` is usable, so the build and the deserialize-validate
-    /// paths cannot disagree about what makes one unusable.
+    /// The one definition, so build and deserialize-validate cannot disagree.
     pub(crate) fn of<T: num_traits::Float>(pivot: T) -> Option<Self> {
         if !pivot.is_finite() {
             Some(Self::NonFinitePivot)

@@ -51,8 +51,7 @@ fn canonicalize<T: Real>(csr: CsrRef<'_, T, u32>) -> Result<Option<Rewritten<T>>
     Ok(Some(rewrite(csr)))
 }
 
-/// Sort each row and sum duplicate entries as scipy's `sum_duplicates` does. Only
-/// non-canonical input pays this copy.
+/// Only non-canonical input pays this copy.
 fn rewrite<T: Real>(csr: CsrRef<'_, T, u32>) -> Rewritten<T> {
     let nnz = csr.col_indices().len();
     let mut row_ptrs = Vec::with_capacity(csr.n() + 1);
@@ -78,10 +77,8 @@ fn rewrite<T: Real>(csr: CsrRef<'_, T, u32>) -> Rewritten<T> {
     }
 }
 
-/// Canonical CSR — columns ascend strictly within every row, which also rules out
-/// duplicates — plus one cursor per row, each advancing only forward. Every entry
-/// is claimed at most once across the whole walk, which is a merge-join only under
-/// that guarantee; hence [`canonicalize`] rather than raw arrays.
+/// One forward-only cursor per row. The walk is a merge-join only because every entry
+/// is claimed at most once, which is what [`canonicalize`] guarantees.
 struct Mirrors<'a, T> {
     row_ptrs: &'a [u32],
     col_indices: &'a [u32],
@@ -100,8 +97,7 @@ impl<'a, T: Real> Mirrors<'a, T> {
         }
     }
 
-    /// Consume `row`'s entry at `col`, treating stored zeros as absent and
-    /// returning zero when it is missing.
+    /// Stored zeros count as absent.
     fn claim(&mut self, row: usize, col: usize) -> Result<T, Error> {
         let row_end = self.row_ptrs[row + 1];
         let mut cursor = self.cursors[row];
@@ -137,8 +133,7 @@ fn approximately_equal<T: Real>(left: T, right: T) -> bool {
     (left - right).abs() <= ulps * T::epsilon() * scale
 }
 
-/// Walk each row once, claiming each upper-triangle entry's mirror through a
-/// monotone per-row cursor.
+/// One pass per row, claiming each upper-triangle entry's mirror.
 fn parse<T: Real, C: EdgeCount>(
     mut mirrors: Mirrors<'_, T>,
 ) -> Result<GraphBuild<AdjListGraph<C, T>, T>, Error> {

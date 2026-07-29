@@ -1,9 +1,5 @@
-//! Approximate Cholesky of one block by randomized elimination (Algorithm 8),
-//! the sequence it produces, and the per-step row kernels that solve with it.
-//!
-//! The randomized machinery is this backend's alone — [`ordering`] picks the next
-//! vertex, [`star`] assembles its neighborhood, [`clique_tree`] samples the column
-//! — so it lives here rather than beside the graph the exact backend also reads.
+//! Randomized elimination (Algorithm 8). The machinery is this backend's alone, so it
+//! lives here rather than beside the graph the exact backend also reads.
 
 mod clique_tree;
 mod ordering;
@@ -21,7 +17,7 @@ use crate::graph::{AdjListGraph, EdgeCount};
 use crate::sampling::CdfSampler;
 use crate::types::Real;
 
-/// The graph's multiplicity storage decides the split it is eliminated on, so an AC
+/// `C::Split` ties the split to the graph's multiplicity storage, so an AC
 /// factorization over a split multi-edge graph does not compile.
 pub(crate) fn eliminate<T: Real, C: EdgeCount>(
     mut graph: AdjListGraph<C, T>,
@@ -62,11 +58,9 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
             diag[u] = diag[u] - entry.weight;
         }
 
-        // Batch this step's degree-estimate updates into one pq_move per
-        // affected neighbor (net delta) instead of one per incident
-        // fill/removal/merge event. Batching reorders equal-degree vertices
-        // within a bucket, so the exact factor for a fixed seed can differ
-        // from a per-edge version (quality unaffected; see CHANGELOG).
+        // One pq_move per affected neighbor, not one per incident event. Batching
+        // reorders equal-degree vertices, so a fixed seed's factor differs from a
+        // per-edge version's (quality unaffected; see CHANGELOG).
         column.apply_fill_in_delta(&mut graph, &mut diag, &mut deltas);
         star.accumulate_removal_delta(&mut deltas);
         deltas.flush(&mut ordering);
@@ -75,8 +69,7 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
     seq
 }
 
-/// Zero-copy view of one elimination step: it eliminates `vertex` by splitting
-/// its weight among neighbors according to `elimination_fractions`.
+/// Zero-copy view of one elimination step.
 pub(super) struct EliminationStep<'a, T> {
     vertex: usize,
     inv_diag: T,
@@ -84,11 +77,9 @@ pub(super) struct EliminationStep<'a, T> {
     elimination_fractions: &'a [T],
 }
 
-/// Every index a kernel below touches is in bounds already: the caller asserts
-/// `y.len() >= n` once per solve, and every vertex and neighbor is under `n` —
-/// by construction from the builder, by [`EliminationSequence::validate_for_dim`]
-/// from serde.
-/// Neither kernel re-checks per step.
+/// Neither kernel bounds-checks per step: the caller asserts `y.len() >= n` once per
+/// solve, and every index is under `n` by construction or by
+/// [`EliminationSequence::validate_for_dim`].
 impl<'a, T: Real> EliminationStep<'a, T> {
     /// Forward elimination: scatter pivot weight to neighbors, then scale by D^{-1}.
     #[inline(always)]
@@ -143,10 +134,8 @@ impl<'a, T: Real> EliminationStep<'a, T> {
     }
 }
 
-/// Header for one elimination step: which vertex, the factor its pivot is scaled
-/// by, and where its neighbor range ends. The range *starts* at the previous header's
-/// `end`, so there is no second array that could disagree about step count,
-/// about where step 0 begins, or about which diagonal belongs to which vertex.
+/// The neighbor range *starts* at the previous header's `end`, so no second array can
+/// disagree about step count or about which diagonal belongs to which vertex.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct StepHeader<T> {
     pub(crate) vertex: u32,
@@ -154,12 +143,8 @@ pub(crate) struct StepHeader<T> {
     pub(crate) inv_diag: T,
 }
 
-/// Contiguous memory owner for a sequence of elimination steps.
-///
-/// A persisted sequence is a list of [`StepData`], each owning its own neighbors,
-/// so the cumulative `end` offsets are *rebuilt* on load rather than trusted:
-/// contiguous, non-decreasing and exhaustive by construction. The solve path
-/// keeps the flat split arrays.
+/// The solve path keeps flat split arrays; a persisted sequence nests neighbors under
+/// their step, so the `end` offsets are rebuilt on load rather than trusted.
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 #[cfg_attr(
     feature = "serde",
@@ -175,15 +160,14 @@ pub(crate) struct EliminationSequence<T> {
     pub(crate) elimination_fractions: Vec<T>,
 }
 
-/// Persisted shape of one step. Nesting the neighbors under the step they belong
-/// to is what retires the range and trailing-storage checks.
+/// Nesting the neighbors under their step is what retires the range and
+/// trailing-storage checks.
 #[cfg(feature = "serde")]
 #[derive(serde::Deserialize)]
 #[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
 struct StepData<T> {
     vertex: u32,
     inv_diag: T,
-    /// One `(neighbor, elimination fraction)` per factor nonzero in this step.
     neighbors: Vec<(u32, T)>,
 }
 
@@ -218,8 +202,8 @@ impl<T> TryFrom<Vec<StepData<T>>> for EliminationSequence<T> {
     }
 }
 
-/// Mirrors [`StepData`] without materializing one: each step borrows its slice of
-/// the flat arrays, so serializing allocates nothing regardless of `nnz`.
+/// Mirrors [`StepData`] without materializing one, so serializing allocates nothing
+/// regardless of `nnz`.
 #[cfg(feature = "serde")]
 impl<T: serde::Serialize> serde::Serialize for EliminationSequence<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -267,7 +251,6 @@ impl<T> EliminationSequence<T> {
         self.steps.len()
     }
 
-    /// Half-open range of step `i` in the flat neighbor arrays.
     #[inline(always)]
     fn neighbor_range(&self, i: usize) -> (usize, usize) {
         let start = if i == 0 {
@@ -292,9 +275,8 @@ impl<T> EliminationSequence<T> {
         }
     }
 
-    /// Reject vertices and neighbors that would index outside a factor of
-    /// dimension `n`. The ranges themselves need no check — they are rebuilt from
-    /// the nested persisted form, never read off the wire.
+    /// The ranges need no check — they are rebuilt from the nested persisted form,
+    /// never read off the wire.
     #[cfg(any(feature = "serde", test))]
     pub(super) fn validate_for_dim(&self, n: usize) -> Result<(), FactorError>
     where
@@ -342,9 +324,8 @@ impl<T: Real> EliminationSequence<T> {
         }
     }
 
-    /// Close the current step at the running nonzero count. Overflow of the `u32`
-    /// range end is unreachable for tractable inputs, so assert (in release too)
-    /// rather than truncate silently.
+    /// Overflowing the `u32` range end is unreachable for tractable inputs, so assert
+    /// in release too rather than truncate silently.
     fn push_step(&mut self, vertex: usize, diagonal: T) {
         let nnz = self.neighbor_indices.len();
         assert!(
@@ -354,9 +335,8 @@ impl<T: Real> EliminationSequence<T> {
         self.steps.push(StepHeader {
             vertex: vertex as u32,
             end: nnz as u32,
-            // Only a reciprocal too large to represent is unusable. A merely small
-            // pivot inverts fine, and standing one in for `one` drops the block's
-            // scale outright rather than losing accuracy.
+            // A merely small pivot inverts fine; standing `one` in for it would drop
+            // the block's scale outright rather than lose accuracy.
             inv_diag: match T::one() / diagonal {
                 inverse if inverse.is_finite() => inverse,
                 _ => T::one(),
@@ -364,14 +344,12 @@ impl<T: Real> EliminationSequence<T> {
         });
     }
 
-    /// Record an isolated vertex (no neighbors, clamped diagonal).
     fn record_isolated(&mut self, vertex: usize, diagonal: T) {
         self.push_step(vertex, diagonal);
     }
 
-    /// Record one sampled column. Taking the column itself rather than its three
-    /// parts is what keeps a neighbor array from being stored against a fraction
-    /// array of another length — the pairing [`SampledColumn`] maintains.
+    /// Takes the column, not its parts: [`SampledColumn`] is what keeps a neighbor
+    /// array from being stored against a fraction array of another length.
     fn record_column(&mut self, vertex: usize, column: &SampledColumn<T>) {
         let (neighbors, fractions) = column.pattern();
         self.neighbor_indices.extend_from_slice(neighbors);

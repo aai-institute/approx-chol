@@ -17,7 +17,6 @@ fn ac_nbr(to: u32, fill_weight: f64) -> Neighbor<f64, Single> {
     }
 }
 
-/// `(neighbor, weight, surviving copies)` per entry, in elimination order.
 fn triples<C: EdgeCount>(star: &Star<f64, C>) -> Vec<(u32, f64, u32)> {
     star.entries()
         .iter()
@@ -25,15 +24,9 @@ fn triples<C: EdgeCount>(star: &Star<f64, C>) -> Vec<(u32, f64, u32)> {
         .collect()
 }
 
-/// Pins the per-step degree-update protocol: merge-compression decrements are
-/// applied to the ordering *immediately* (and floor at zero) by
-/// `apply_removed_copies`, **before** the step's fill/removal net delta is
-/// batched through [`DegreeDeltas`] and flushed. The sub-zero excess of a merge
-/// must therefore be lost, not offset later fill in the same step.
-///
-/// If a refactor folded the merge into `DegreeDeltas`, the merge and fill would
-/// net in one clamp and vertex 0's estimate would land at `clamp(2 - 5 + 4) = 1`
-/// instead of `clamp(2 - 5) = 0` then `0 + 4 = 4` — flipping the pop order below.
+/// Folding the merge into [`DegreeDeltas`] would net merge and fill in one clamp,
+/// landing vertex 0 at `clamp(2 - 5 + 4) = 1` instead of `clamp(2 - 5) = 0` then
+/// `+ 4 = 4`, which flips the pop order below.
 #[test]
 fn test_merge_floors_immediately_before_batched_fill() {
     let mut ordering = DynamicOrdering::new(&[2, 2], 1);
@@ -139,7 +132,6 @@ fn sorted_merged(merged: &[(u32, u32)]) -> Vec<(u32, u32)> {
     out
 }
 
-/// Raw neighborhood with two duplicated vertices and one singleton.
 fn ac_raw() -> [Neighbor<f64, Single>; 5] {
     [
         ac_nbr(2, 3.0),
@@ -275,8 +267,6 @@ fn a_single_copy_star_entry_is_as_wide_as_the_bare_pair() {
     );
 }
 
-/// A star split by a `SplitFactor` keeps that many copies per entry, which is what
-/// the sampler divides the clique weight by.
 #[test]
 fn the_split_is_the_cap_and_the_surviving_copy_count() {
     let k = SplitFactor::new(3).expect("3 splits");

@@ -28,8 +28,8 @@ fn run_smoke_case(rows: usize, cols: usize, config: Config) {
     assert!(work.iter().any(|x| x.abs() > 1e-12));
 }
 
-/// 10k vertices: the scale at which the bucket layout and fill-in bookkeeping carry
-/// load the property suite's eight-vertex graphs never reach.
+/// The scale at which bucket layout and fill-in bookkeeping carry load the property
+/// suite's eight-vertex graphs never reach.
 #[test]
 fn smoke_medium_grid_ac() {
     run_smoke_case(100, 100, Config::default());

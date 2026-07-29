@@ -17,18 +17,12 @@ use laplacian_prop::{
 use proptest::prelude::*;
 use residual::relative_residual_over;
 
-/// Largest relative residual `||Ax - b|| / ||b||` an approximate factor may leave.
-/// A residual of exactly `1` is what `x = 0` scores, so this is the weakest bound
-/// that still demands a factor beat answering nothing. Measured max over this
-/// strategy is `0.74` across sampler seeds `0..96` and every `split_merge`.
+/// `x = 0` scores exactly `1`, so this is the weakest bound that still demands a
+/// factor beat answering nothing; measured max is `0.74` over seeds `0..96`.
 const RESIDUAL_LIMIT: f64 = 1.0;
 
-/// Factorize, solve, and return `||Ax - b|| / ||b||` — or `None` when `b` is too
-/// small for the ratio to carry information.
-///
-/// A non-finite solve shows up here as a non-finite ratio, so this subsumes the
-/// finiteness checks it replaced. Panics inside the body are already reported
-/// (and shrunk) by proptest, so nothing catches them.
+/// `None` when `b` is too small for the ratio to carry information. A non-finite
+/// solve shows up as a non-finite ratio, so this subsumes a separate check.
 fn relative_residual(csr: &LaplacianCsr, config: Config, rhs: &[f64]) -> Option<f64> {
     let (row_ptrs, col_indices, values, n) = csr;
     let view = CsrRef::new(row_ptrs, col_indices, values, *n).or_panic("valid CSR");

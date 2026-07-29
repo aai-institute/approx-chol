@@ -1,16 +1,8 @@
-//! Block-contiguous ordering: the map between input coordinates and the contiguous
-//! ranges the blocks tile.
-
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;
 
-/// Block-contiguous order to input order: `forward[i]` is the input vertex at
-/// permuted position `i`.
-///
-/// Applied through a scratch buffer rather than in place. An in-place rotation
-/// needs the cycle decomposition, which measured slower in both phases — the
-/// round trip is pure random access on both sides, where gathering through
-/// scratch keeps one side sequential per pass.
+/// `forward[i]` is the input vertex at block-contiguous position `i`. Applied through
+/// scratch: an in-place cycle rotation measured slower in both phases.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub(crate) struct Permutation {
@@ -18,11 +10,8 @@ pub(crate) struct Permutation {
 }
 
 impl Permutation {
-    /// `None` for the identity, which is what leaves connected input — the common
-    /// case — permutation-free and allocation-free on every solve.
-    ///
-    /// Takes the block order by value: it is already the map this needs, so there
-    /// is nothing to copy out of it.
+    /// `None` for the identity, which leaves connected input — the common case —
+    /// allocation-free on every solve.
     pub(crate) fn from_order(forward: Vec<u32>) -> Option<Self> {
         if forward.iter().enumerate().all(|(i, &v)| i as u32 == v) {
             return None;

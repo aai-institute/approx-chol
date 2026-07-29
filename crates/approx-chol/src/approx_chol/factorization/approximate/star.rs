@@ -2,11 +2,8 @@ use super::ordering::{DegreeDeltas, DynamicOrdering};
 use crate::graph::{AdjListGraph, EdgeCount, Neighbor};
 use crate::types::{float_total_cmp, Real};
 
-/// One entry of a deduped star: a neighbor, the weight its surviving copies carry
-/// between them, and how many that is.
-///
-/// The copies are stored the way the graph stores them, so a single-copy layout
-/// spends no space on a count it knows and no arithmetic on dividing by it.
+/// Copies are stored the way the graph stores them, so a single-copy layout spends no
+/// space on a count it knows and no arithmetic dividing by it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct StarEntry<T, C> {
     pub neighbor: u32,
@@ -112,26 +109,19 @@ impl<T: Real, C: EdgeCount> Star<T, C> {
     }
 }
 
-/// Apply the merge-compression degree decrease immediately (not batched through
-/// [`DegreeDeltas`]), so it floors at zero *before* the step's fill/removal net
-/// delta — matching the per-edge baseline, where a merge driving the estimate
-/// below zero loses the excess rather than offsetting later fill.
+/// Immediate, not batched through [`DegreeDeltas`], so a merge driving the estimate
+/// below zero loses the excess rather than offsetting the same step's fill.
 fn apply_removed_copies(merged: &[(u32, u32)], ordering: &mut DynamicOrdering) {
     for &(u, n_merged) in merged {
         ordering.decrease(u as usize, n_merged);
     }
 }
 
-/// Builds the pivot's star, one elimination step at a time.
-///
 /// AC and AC2 are the same builder over different edge layouts: [`EdgeCount`] holds
-/// everything that differs, so the copies an edge splits into reach the degree
-/// buckets, the merge cap and the sampler as one number from one place.
+/// everything that differs.
 pub(super) struct StarBuilder<T: Real, C: EdgeCount> {
     star: Star<T, C>,
     dedup: DedupWorkspace<T, C>,
-    /// Copies each edge is eliminated on, which the split already decided: the cap
-    /// no neighbor pair may keep more of.
     copies: u32,
 }
 
@@ -183,7 +173,6 @@ impl<T: Real> DedupScratch<T> {
         }
     }
 
-    /// Clear the pass state and size the per-vertex buffers.
     fn begin_pass(&mut self) {
         if self.scatter.len() < self.n {
             self.scatter.resize(self.n, T::zero());
@@ -192,7 +181,6 @@ impl<T: Real> DedupScratch<T> {
         self.unique.clear();
     }
 
-    /// Accumulate one raw neighbor, recording the vertex the first time it appears.
     #[inline]
     fn accumulate(&mut self, to: u32, weight: T, count: u32) {
         let idx = to as usize;
@@ -203,8 +191,8 @@ impl<T: Real> DedupScratch<T> {
         self.counts[idx] = self.counts[idx].saturating_add(count);
     }
 
-    /// Visit each vertex the pass accumulated, in first-seen order, resetting its
-    /// slots as it goes so the buffers are all-zero again when this returns.
+    /// First-seen order, resetting each slot as it goes so the buffers are all-zero
+    /// again when this returns.
     #[inline]
     fn drain_unique(&mut self, mut visit: impl FnMut(u32, T, u32)) {
         for index in 0..self.unique.len() {

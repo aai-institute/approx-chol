@@ -19,20 +19,15 @@ fn borrow_error(name: &str, err: BorrowError) -> PyErr {
     }
 }
 
-/// One kind of CSR input column: the dtypes it accepts and the element it is cast
-/// to. The element is the column's own associated type, so no call site can pair an
-/// index column with a float element or ask for a cast the accepted kinds do not
-/// allow.
+/// The element is the column's own associated type, so no call site can pair an index
+/// column with a float element.
 trait Column {
     type Element: numpy::Element;
 
-    /// Numpy dtype kind characters this column accepts.
     fn accepts(kind: &str) -> bool;
 
-    /// What the rejection message says the column must have.
     fn expected() -> &'static str;
 
-    /// Whatever the cast would silently lose beyond the dtype kind.
     fn check_range(_arr: &Bound<'_, PyAny>, _name: &str) -> PyResult<()> {
         Ok(())
     }

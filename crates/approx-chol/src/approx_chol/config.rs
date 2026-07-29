@@ -38,10 +38,8 @@ pub enum Backend {
     /// Exact dense Cholesky at or below `max_dim` solved variables, approximate
     /// elimination above.
     ExactBelow {
-        /// Inclusive bound on the variables a block solves for; costs `O(max_dim³)`
-        /// time. A bound of `0` claims no block, so it selects [`Approximate`].
-        ///
-        /// [`Approximate`]: Backend::Approximate
+        /// Inclusive bound on the variables a block solves for, costing `O(max_dim³)`
+        /// time; `0` claims no block and so selects [`Approximate`](Backend::Approximate).
         max_dim: usize,
         /// What to do about a claimed block that reaches an unusable pivot.
         on_failure: ExactFailure,
@@ -64,9 +62,8 @@ pub(super) enum Route {
 }
 
 impl ExactFailure {
-    /// Apply the policy to a block that declined exact elimination. Only an
-    /// unusable pivot can be fatal — a block that will not fit is factored
-    /// approximately whatever the policy says, so there is one arm, not two.
+    /// One arm, not two: a block that will not fit falls back whatever the policy
+    /// says, so only an unusable pivot can be fatal.
     pub(super) fn accept(self, fallback: Fallback) -> Result<Fallback, Error> {
         match (self, fallback) {
             (Self::Error, Fallback::InvalidPivot(pivot)) => {
@@ -78,18 +75,16 @@ impl ExactFailure {
 }
 
 impl Config {
-    /// The AC2 split factor this configuration selects, or `None` for standard AC.
-    /// The one place the total [`split_merge`](Self::split_merge) field becomes the
-    /// algorithm, so nothing downstream restates which values mean AC.
+    /// The one place [`split_merge`](Self::split_merge) becomes the algorithm, so
+    /// nothing downstream restates which values mean AC.
     pub(super) fn split_factor(self) -> Option<SplitFactor> {
         self.split_merge.and_then(SplitFactor::new)
     }
 }
 
 impl Backend {
-    /// Routing depends on the block, so this stays a function of its dimension
-    /// rather than a value resolved once. It reads no other field, which is what
-    /// lets the pipeline carry a backend instead of the whole [`Config`].
+    /// Reads no field but the backend's own, which is what lets the pipeline carry a
+    /// [`Backend`] instead of the whole [`Config`].
     pub(super) fn route(self, dim: BlockDim) -> Route {
         match self {
             // The range starts at one because a block solving for no variable has

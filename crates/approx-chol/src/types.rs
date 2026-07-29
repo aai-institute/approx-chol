@@ -2,15 +2,13 @@ use core::cmp::Ordering;
 
 use num_traits::{Float, NumCast};
 
-/// Internal scalar bound for approximate Cholesky kernels. Nothing but the bound:
-/// the tolerances below are the algorithm's policy, not the scalar's capability,
-/// and they read the same way `count_as_scalar` and `float_total_cmp` do.
+/// Nothing but the scalar bound: the tolerances below are the algorithm's policy, not
+/// the scalar's capability.
 pub(crate) trait Real: Float + Send + Sync + 'static {}
 
 impl<T> Real for T where T: Float + Send + Sync + 'static {}
 
-/// Pick a threshold by the type's precision: `single` for `f32`-width scalars,
-/// `double` otherwise.
+/// `single` for `f32`-width scalars, `double` otherwise.
 #[inline]
 fn by_precision<T: Float>(single: f64, double: f64) -> T {
     let value = if core::mem::size_of::<T>() <= 4 {

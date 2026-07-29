@@ -72,9 +72,8 @@ fn a_claimed_block_solves_exactly_where_elimination_does_not() {
     );
 }
 
-/// `max_dim: 0` is the documented way to spell [`Backend::Approximate`] through
-/// `ExactBelow`. The fixture above separates the backends, so a block claimed after
-/// all would change the solve rather than pass unnoticed.
+/// The fixture above separates the backends, so a block claimed after all changes
+/// the solve rather than passing unnoticed.
 #[test]
 fn a_bound_of_zero_claims_no_block() {
     let lap = grid_laplacian(4, 4);
@@ -203,8 +202,8 @@ fn a_failed_pivot_can_be_asked_to_fail_the_factorization() {
     );
 }
 
-/// A row norm is only a norm over the factor: squaring anything else stored beside
-/// it overflows on weights this large and rejects a factor that is fine.
+/// Squaring anything stored beside the factor overflows at these weights and rejects
+/// a factor that is fine.
 #[test]
 fn a_block_whose_weights_square_to_infinity_still_factors() {
     let big = 1e200;

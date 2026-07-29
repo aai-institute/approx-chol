@@ -4,21 +4,12 @@ use rand::{Rng, SeedableRng};
 use crate::types::{near_zero, Real};
 use num_traits::NumCast;
 
-/// Crossover point: for ranges of this size or smaller, a linear CDF scan is faster
-/// than binary search due to branch-prediction and cache effects.
+/// At or below this range size a linear CDF scan beats binary search.
 const LINEAR_THRESHOLD: usize = 32;
 
-/// A star's neighbors as a weighted distribution, drawn from by suffix, and the
-/// stream those draws come from.
-///
-/// Holding `neighbors` rather than borrowing the entries is what leaves one length
-/// in play: both arrays are refilled by the same [`prepare`](Self::prepare) loop, so
-/// a draw answers with a neighbor without any caller re-indexing an offset it was
-/// handed.
-///
-/// The stream outlives any one distribution on purpose. A fixed seed reproduces a
-/// factor only because *one* sampler is threaded through every block, so owning the
-/// rng here is what makes a second stream unconstructible.
+/// A star's neighbors as a weighted distribution, drawn from by suffix. Owning
+/// `neighbors` rather than borrowing leaves one length in play, so a draw answers
+/// with a neighbor rather than an offset the caller re-indexes.
 pub(crate) struct CdfSampler<T = f64> {
     neighbors: Vec<u32>,
     cumsum: Vec<T>,
@@ -36,9 +27,6 @@ impl<T> CdfSampler<T> {
 }
 
 impl<T: Real> CdfSampler<T> {
-    /// Take `entries` as the distribution to draw from, replacing the previous one.
-    /// Cumulative sum by naive summation (assumes well-conditioned weights).
-    ///
     /// Takes the pairs rather than whatever holds them, so the sampler stays
     /// independent of how a caller stores a weighted neighborhood.
     #[inline]
@@ -53,9 +41,8 @@ impl<T: Real> CdfSampler<T> {
         }
     }
 
-    /// Draw one neighbor at or after `start` proportional to weight, or `None` when
-    /// that suffix is empty or carries negligible weight. The end is the prepared
-    /// distribution's own length, so no caller can name a stale one.
+    /// The end is the prepared distribution's own length, so no caller can name a
+    /// stale one.
     #[inline]
     pub(crate) fn sample_after(&mut self, start: usize) -> Option<u32> {
         let index = self.sample_suffix(start)?;
@@ -104,8 +91,7 @@ mod tests {
 
     const SEED: u64 = 42;
 
-    /// Every fixture below names entry `i` neighbor `i`, so a draw indexes the
-    /// tally it belongs to and the suffix bound reads off the neighbor directly.
+    /// Every fixture names entry `i` neighbor `i`, so a draw indexes its own tally.
     fn sample_counts(entries: &[(u32, f64)], start: usize, n_samples: usize) -> Vec<u32> {
         let mut sampler = CdfSampler::new(SEED);
         sampler.prepare(entries.iter().copied());
@@ -118,9 +104,8 @@ mod tests {
         counts
     }
 
-    /// Draws land in proportion to weight on both arms of the suffix search: three
-    /// entries stay under [`LINEAR_THRESHOLD`], fifty do not. Critical values are
-    /// chi-squared at `p = 0.001` for `len - 1` degrees of freedom.
+    /// Three entries stay under [`LINEAR_THRESHOLD`], fifty do not. Critical values
+    /// are chi-squared at `p = 0.001` for `len - 1` degrees of freedom.
     #[test]
     fn draws_follow_the_weights_on_both_search_arms() {
         let skewed: Vec<(u32, f64)> = vec![(0, 1.0), (1, 2.0), (2, 7.0)];
@@ -146,8 +131,7 @@ mod tests {
         }
     }
 
-    /// Sweeps every start, so both the linear and `partition_point` arms of the
-    /// suffix search run, and no draw may fall before the start it was given.
+    /// Sweeps every start, so both arms of the suffix search run.
     #[test]
     fn monotonic_suffix() {
         let mut sampler = CdfSampler::new(SEED);
@@ -176,8 +160,7 @@ mod tests {
         }
     }
 
-    /// A suffix with only one place to land, or nowhere worth landing, answers the
-    /// same way every draw — there is no distribution left to sample.
+    /// There is no distribution left to sample, so every draw must answer alike.
     #[test]
     fn a_degenerate_suffix_answers_deterministically() {
         let cases = [

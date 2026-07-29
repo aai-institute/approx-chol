@@ -4,17 +4,12 @@ use crate::graph::{AdjListGraph, EdgeCount, Multi, Single, SplitFactor};
 use crate::sampling::CdfSampler;
 use crate::types::{count_as_scalar, float_total_cmp, near_zero, Real};
 
-/// One sampled column of the approximate Cholesky factor (Algorithm 5, GKS 2023),
-/// reused across elimination steps and cleared at the start of each sampling pass.
+/// One sampled column of the factor (Algorithm 5, GKS 2023), reused across steps.
 pub(super) struct SampledColumn<T: Real> {
-    /// Diagonal value of the factor column: `L[v,v]`.
     pub diagonal: T,
-    /// Neighbor indices in the column's non-zero pattern, and each one's
-    /// fractional weight `L[neighbor, v] / L[v, v]`. Private and only appended
-    /// through [`Self::push_neighbor`], so the two can never disagree.
+    /// Only appended through [`Self::push_neighbor`], so the two can never disagree.
     neighbors: Vec<u32>,
     fractions: Vec<T>,
-    /// Fill edges `(u, w, weight)` to insert into the graph after elimination.
     fill_edges: Vec<(u32, u32, T)>,
 }
 
@@ -41,16 +36,12 @@ impl<T: Real> SampledColumn<T> {
         self.fractions.push(fraction);
     }
 
-    /// The column's non-zero pattern, always as the pair it is built as.
     pub(super) fn pattern(&self) -> (&[u32], &[T]) {
         (&self.neighbors, &self.fractions)
     }
 
-    /// Initialize sampling, or write the fallback column and return `None`.
-    ///
-    /// `Some` only when the elimination loop should run. Otherwise the column is a
-    /// uniform split with no fill — trivial for one entry or none, degenerate for a
-    /// non-positive/non-finite total.
+    /// `None` writes the fallback column instead: a uniform split with no fill, for a
+    /// star of at most one entry or a non-positive/non-finite total.
     fn begin_sampling<'a, C: Copy>(
         &mut self,
         entries: &'a [StarEntry<T, C>],
@@ -85,15 +76,13 @@ impl<T: Real> SampledColumn<T> {
         None
     }
 
-    /// Finalize sampling with the last star neighbor (always fraction 1).
     fn finalize_sampling<C>(&mut self, last: StarEntry<T, C>, elim: &StarElimination<T>) {
         self.push_neighbor(last.neighbor, T::one());
         self.diagonal = elim.diagonal(last.weight);
     }
 
-    /// Apply fill-in edges to the graph and update diagonal values, recording
-    /// each endpoint's +1 degree change in `deltas` (the caller flushes one
-    /// priority-queue move per affected neighbor, rather than one per fill edge).
+    /// Degree changes go to `deltas`, so the caller flushes one priority-queue move
+    /// per affected neighbor rather than one per fill edge.
     pub(super) fn apply_fill_in_delta<C: EdgeCount>(
         &self,
         graph: &mut AdjListGraph<C, T>,
@@ -109,7 +98,6 @@ impl<T: Real> SampledColumn<T> {
         }
     }
 
-    /// Sample fill edges between `neighbor` and random star neighbors past `tail`.
     fn sample_fill_edges(
         &mut self,
         neighbor: u32,
@@ -130,7 +118,6 @@ impl<T: Real> SampledColumn<T> {
         }
     }
 
-    /// Append the sampled fill edges to `out` as `(lo, hi, weight)`, `lo < hi`.
     fn extend_ordered_fill_edges(&self, out: &mut Vec<(u32, u32, T)>) {
         out.extend(
             self.fill_edges
@@ -140,23 +127,19 @@ impl<T: Real> SampledColumn<T> {
     }
 }
 
-/// A star the elimination loop can run on, split where the sampler splits it: the
-/// last neighbor takes what the others leave, so it never enters the loop, and every
-/// caller reads its count off `rest` rather than deriving it from an index.
+/// The last neighbor takes what the others leave, so it never enters the loop and no
+/// caller derives its count from an index.
 struct Sampling<'a, T, C> {
     rest: &'a [StarEntry<T, C>],
     last: StarEntry<T, C>,
     total_weight: T,
 }
 
-/// Running state for sequential edge elimination on a star graph (GKS 2023,
-/// Algorithms 5 & 6): neighbors are processed along a clique-tree path, each one
-/// taking fraction `f_i = w_i * scale / capacity` of what earlier neighbors left.
+/// Neighbors walk a clique-tree path, each taking fraction `f_i = w_i * scale /
+/// capacity` of what earlier ones left.
 struct StarElimination<T = f64> {
-    /// Product of `(1 - f_k)` over already-processed neighbors: the share of the
-    /// original edge weight that survives to this one.
+    /// Product of `(1 - f_k)` over processed neighbors.
     scale: T,
-    /// Remaining weight budget, shrunk by `(1 - f_i)^2` per step.
     capacity: T,
 }
 
@@ -188,19 +171,8 @@ impl<T: Real> StarElimination<T> {
     }
 }
 
-/// Clique-tree sampling of one column (GKS 2023, Algorithms 5 and 6): each neighbor
-/// takes its fraction of what earlier ones left, and samples one fill edge per copy.
-///
-/// Multiplicity enters in exactly two places — how many fill edges a neighbor draws,
-/// and the share of the clique weight one of them carries — which is why AC and AC2
-/// are this one function. AC2's per-copy fill weight is `w·remaining/(k·total)`,
-/// and `remaining` is `total·scale`, the quantity [`StarElimination`] already
-/// carries; spelling it that way is what leaves one formula here instead of two.
-///
-/// Capacity comes from the live column sum, not from `pivot_diag`: that keeps
-/// `f ∈ [0, 1]` by construction, whereas a caller-maintained `diag[v]` can drift
-/// below the column sum under stochastic elimination. `pivot_diag` only seeds the
-/// degenerate (`n <= 1`) column.
+/// Capacity is the live column sum, not `pivot_diag`, which keeps `f ∈ [0, 1]` by
+/// construction where a caller-maintained `diag[v]` can drift below the column sum.
 pub(super) fn sample_column<T: Real, C: EdgeCount>(
     star: &Star<T, C>,
     pivot_diag: T,
@@ -231,22 +203,10 @@ pub(super) fn sample_column<T: Real, C: EdgeCount>(
     column.finalize_sampling(last, &elim);
 }
 
-/// Sample fill edges approximating the Schur complement clique of a star.
-///
-/// Given an eliminated vertex with weighted neighbors `entries`, walks neighbors
-/// sorted by ascending weight and samples `split_merge` fill edges per neighbor to
-/// random later neighbors (clique-tree, Algorithms 5 and 6 in Gao-Kyng-Spielman
-/// 2023). `split_merge` is [`Config::split_merge`](crate::Config::split_merge): it
-/// takes the same values and means the same thing, so AC is `None`, `Some(0)` and
-/// `Some(1)` here too, and AC2 with multiplicity `k` is `Some(k)`.
-///
-/// Elimination capacity is `Σ |entries.weights|` (the live column's
-/// off-diagonal sum), matching Laplacians.jl. For Laplacian inputs — where
-/// the pivot's matrix diagonal equals this sum — each fill edge is unbiased:
-/// `E[w(i,j)] = a_i * a_j / Σ a_k`.
-///
-/// Produces at most `k * (n-1)` fill edges (`k` copies of a spanning tree on the n
-/// neighbors). `entries` is sorted in place. Fill edges are appended to `out`.
+/// Sample the Schur complement clique of a star (GKS 2023, Algorithms 5 and 6),
+/// appending at most `k * (n-1)` fill edges to `out` and sorting `entries` in place.
+/// `split_merge` is [`Config::split_merge`](crate::Config::split_merge) and takes the
+/// same values.
 pub fn clique_tree_sample<T>(
     entries: &mut [(u32, T)],
     split_merge: Option<u32>,
@@ -285,8 +245,7 @@ pub fn clique_tree_sample<T>(
 mod tests {
     use super::*;
 
-    /// Both samplers span the same five neighbors; AC's budget is the spanning tree
-    /// on them, AC2's is `k` copies of it.
+    /// AC's budget is the spanning tree on the five neighbors, AC2's is `k` copies.
     #[test]
     fn a_sampled_star_stays_within_its_edge_budget() {
         let star: [(u32, f64); 5] = [(0, 2.0), (1, 3.0), (2, 1.0), (3, 5.0), (4, 4.0)];
@@ -305,9 +264,8 @@ mod tests {
         }
     }
 
-    /// The raw sampler and `Config` have to agree about what a split below two
-    /// means, or `Some(0)` selects AC through one public entry point and nothing
-    /// through the other.
+    /// Or `Some(0)` selects AC through one public entry point and nothing through the
+    /// other.
     #[test]
     fn a_split_below_two_samples_the_same_edges_as_ac() {
         let star: [(u32, f64); 5] = [(0, 2.0), (1, 3.0), (2, 1.0), (3, 5.0), (4, 4.0)];

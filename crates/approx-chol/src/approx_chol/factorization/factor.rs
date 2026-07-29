@@ -83,9 +83,8 @@ impl fmt::Display for Fallback {
 impl<T: num_traits::Float> Factor<T> {
     fn validate_structure(&self) -> Result<(), FactorError> {
         let n = self.n();
-        // A Ground anchor overwrites its block's last entry with `-sum`, so a
-        // second one silently solves a different system. Whether *any* block is
-        // grounded needs no check — it is what `n` is derived from.
+        // A Ground anchor overwrites its block's last entry with `-sum`, so a second
+        // one silently solves a different system.
         let grounded = self.ground_blocks();
         if grounded > 1 {
             return Err(FactorError::MultipleGroundBlocks { grounded });
@@ -167,9 +166,8 @@ impl<T> Factor<T> {
         self.original_n + self.ground_blocks()
     }
 
-    /// Blocks anchored on a Gremban ground vertex, which is the augmentation
-    /// itself: there is at most one such vertex, it is the last variable of
-    /// whichever block holds it, and nothing else records that it exists.
+    /// Nothing else records that the ground vertex exists, and at most one block can
+    /// hold it.
     fn ground_blocks(&self) -> usize {
         self.blocks
             .iter()
@@ -199,8 +197,6 @@ where
         factor
     }
 
-    /// Only a zero-dimension input reaches this, so there is no block to hold a
-    /// ground vertex and nothing to permute.
     pub(crate) fn empty(original_n: usize) -> Self {
         Self::from_blocks(original_n, None, Vec::new(), Vec::new())
     }

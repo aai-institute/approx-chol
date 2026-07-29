@@ -14,8 +14,8 @@ pub(crate) enum NotFactorable {
 }
 
 impl NotFactorable {
-    /// Name the failure in the input's numbering. `vertices` is `None` when the
-    /// block is the whole graph and a local vertex is already a global one.
+    /// `vertices` is `None` when the block is the whole graph, where a local vertex
+    /// is already a global one.
     pub(crate) fn at(self, vertices: Option<&[u32]>) -> Fallback {
         match self {
             Self::InvalidPivot { pivot, failure } => Fallback::InvalidPivot(UnusablePivot {
@@ -35,12 +35,11 @@ pub(crate) fn factor<T: Real, C: EdgeCount>(
     assemble(graph, diagonal, dim.solved())?.factor_in_place()
 }
 
-/// Where row `row` of the packed lower triangle starts.
 const fn row_start(row: usize) -> usize {
     row * (row + 1) / 2
 }
 
-/// Scalars a packed `m * m` lower triangle occupies, `None` when that overflows.
+/// `None` when the scalar count overflows.
 const fn packed_len(m: usize) -> Option<usize> {
     match m.checked_add(1) {
         Some(rows) => match m.checked_mul(rows) {
@@ -51,9 +50,8 @@ const fn packed_len(m: usize) -> Option<usize> {
     }
 }
 
-/// The block's Laplacian, lower triangle only: the factorization reads nothing
-/// above the diagonal, and a stored upper triangle would double the persisted
-/// factor and embed the input matrix in it.
+/// Lower triangle only: a stored upper triangle would double the persisted factor and
+/// embed the input matrix in it.
 fn assemble<T: Real, C: EdgeCount>(
     graph: &AdjListGraph<C, T>,
     diagonal: &[T],
@@ -77,8 +75,8 @@ fn assemble<T: Real, C: EdgeCount>(
     Ok(matrix)
 }
 
-/// A packed lower triangle: row `r` is its own `r + 1` scalars, so every consumer
-/// asks for a row instead of restating where one starts.
+/// Packed: row `r` is its own `r + 1` scalars, so no consumer restates where one
+/// starts.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub(crate) struct LowerTriangular<T> {
@@ -86,8 +84,8 @@ pub(crate) struct LowerTriangular<T> {
 }
 
 impl<T> LowerTriangular<T> {
-    /// Rows the packed storage holds — [`packed_len`] inverted, so the row count is
-    /// the triangle's own fact rather than one every consumer is handed alongside it.
+    /// [`packed_len`] inverted, so the row count is the triangle's own fact rather
+    /// than one every consumer is handed alongside it.
     pub(super) fn rows(&self) -> usize {
         ((8 * self.values.len() + 1).isqrt() - 1) / 2
     }
@@ -117,8 +115,7 @@ impl<T: Real> LowerTriangular<T> {
         Ok(Self { values })
     }
 
-    /// Indexes `values` directly rather than through [`row`](Self::row): reading the
-    /// pivot row while writing a later one needs a split borrow, and that form
+    /// Indexes `values` directly: the split borrow [`row`](Self::row) would need
     /// measured 1.2–2.1% slower across `n = 128..384` on a complete graph.
     fn factor_in_place(mut self) -> Result<Self, NotFactorable> {
         let m = self.rows();

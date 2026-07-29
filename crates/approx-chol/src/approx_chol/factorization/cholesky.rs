@@ -1,7 +1,5 @@
-//! Which of the two factorizations a block carries.
-//!
-//! Both factor the same matrix — the block minus its pinned last vertex — so they
-//! are interchangeable, and neither knows which one a block got.
+//! Both arms factor the same matrix — the block minus its pinned last vertex — so a
+//! block's solve never asks which one it got.
 
 use super::approximate::EliminationSequence;
 #[cfg(any(feature = "serde", test))]

@@ -79,28 +79,16 @@ fn surplus_below_the_row_noise_floor_does_not_augment() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// SDDM solve accuracy (issue #35): solve(b) must equal M^-1 b
-//
-// A *diagonal* SDDM matrix augments to a star graph (aux vertex + leaves),
-// which is a tree, so approximate Cholesky is EXACT here — no sampling error.
-// That isolates the Gremban *recovery* (grounding) from AC approximation, so we
-// can assert against the closed-form inverse x_i = b_i / d_i with tight tol.
-// The RHS deliberately has a non-zero sum, which is exactly the case the old
-// global zero-mean projection got wrong.
-// ---------------------------------------------------------------------------
+// A diagonal SDDM matrix augments to a star, which is a tree, so AC is exact here —
+// that isolates Gremban recovery from sampling error. The RHS sums non-zero, the case
+// the old global zero-mean projection got wrong.
 
-/// Diagonal SDDM matrix `diag(2, 3, 5)` as CSR (row sums 2, 3, 5 -> augmented).
 fn diagonal_sddm() -> (Vec<u32>, Vec<u32>, Vec<f64>, u32) {
     (vec![0, 1, 2, 3], vec![0, 1, 2], vec![2.0, 3.0, 5.0], 3)
 }
 
-/// A star graph is a tree for AC2 as much as for AC: every leaf has one unique
-/// neighbor however many copies it is split into, so no clique edge is ever
-/// sampled and the tight tolerance holds at every `k`. This is the only place the
-/// AC2 arithmetic — the split and the fill weight it recombines to — is checked
-/// against a closed form rather than against being finite. Both RHS have a
-/// non-zero sum, the case the old global zero-mean recovery corrupted.
+/// A star is a tree at every `k`, so no clique edge is sampled and the tight
+/// tolerance holds — the only closed-form check on the AC2 arithmetic.
 #[rstest]
 #[case::approximate(Backend::Approximate)]
 #[case::exact(Backend::default())]
@@ -156,8 +144,7 @@ fn solve_into_rejects_rhs_longer_than_original_for_augmented_factor() {
     );
 }
 
-/// Both entry points size their buffer through the same check, and neither may
-/// write past a buffer that is one short of the factor dimension.
+/// Both entry points size their buffer through the same check.
 #[test]
 fn every_solve_entry_point_reports_a_short_work_buffer() {
     let lap = grid_laplacian(4, 4);

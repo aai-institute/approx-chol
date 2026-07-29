@@ -1,7 +1,4 @@
-//! Elimination graph for approximate Cholesky factorization.
-//!
-//! Building one from CSR input lives in [`ingest`]; this module owns only the
-//! graph itself and the elimination operations on it.
+//! Elimination graph. Building one from CSR input lives in [`ingest`].
 
 mod ingest;
 
@@ -14,22 +11,17 @@ pub(crate) struct GraphBuild<G, T: Real> {
     pub diagonal: Vec<T>,
     /// `None` when the graph is connected, which is the one block case.
     pub layout: Option<BlockLayout>,
-    /// The Gremban ground vertex, when ingestion closed any row deficit with one.
-    /// Appended last, so it is the highest-numbered vertex in the graph and the
-    /// last vertex of whichever block ends up holding it.
+    /// The Gremban ground vertex, appended last, so it is the highest-numbered vertex
+    /// and the last of whichever block holds it.
     pub ground: Option<u32>,
 }
 
-/// Every vertex once, its connected components back to back: the order the factor
-/// stores blocks in.
-///
-/// One array rather than one per component, because the same sequence answers all
-/// three questions asked of it — where each block ends, which global vertices a
-/// block owns, and what permutation maps the two coordinate systems.
+/// Every vertex once, components back to back. One array rather than one per
+/// component: the same sequence answers all three questions asked of it.
 pub(crate) struct BlockLayout {
     order: Vec<u32>,
-    /// Exclusive end of each block in `order`; the next block starts where this
-    /// one stops, so no block can claim a vertex twice or leave a gap.
+    /// The next block starts where this one stops, so no block claims a vertex twice
+    /// or leaves a gap.
     ends: Vec<u32>,
 }
 
@@ -48,14 +40,12 @@ impl BlockLayout {
         })
     }
 
-    /// The same sequence read as a permutation: position `i` holds the input
-    /// vertex the factor keeps at `i`.
+    /// The same sequence read as a permutation.
     pub(crate) fn into_order(self) -> Vec<u32> {
         self.order
     }
 
-    /// Ascending within each block, which puts the ground vertex — the highest
-    /// numbered — last in whichever block holds it.
+    /// Ascending within each block, which puts the ground vertex last in its own.
     fn sort_blocks(&mut self) {
         let mut start = 0usize;
         for &end in &self.ends {
@@ -66,8 +56,7 @@ impl BlockLayout {
     }
 }
 
-/// A neighbor entry produced by star elimination. Carries the edge's
-/// multiplicity storage, so the AC path has no multiplicity field to fill in.
+/// Carries the edge's multiplicity storage, so the AC path has no field to fill in.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Neighbor<T, C> {
     pub to: u32,
@@ -98,40 +87,30 @@ impl BitVec {
     }
 }
 
-/// How an edge stores its multiplicity, and everything that follows from it: AC is
-/// AC2 at one copy per edge, so the whole difference between them is this trait.
-///
-/// `Single` is a ZST, so the AC edge stays exactly as wide as an edge carrying no
-/// count at all (asserted in the tests below).
+/// AC is AC2 at one copy per edge, so the whole difference between them is this
+/// trait. `Single` is a ZST, so an AC edge carries no count at all.
 pub(crate) trait EdgeCount: Clone + Copy {
-    /// What choosing this layout carries beyond the type: nothing for AC, the
-    /// multiplicity for AC2. `Single` cannot name a `k`, which is what makes an AC
-    /// factorization over split multi-edges a type error rather than a mistake the
-    /// caller has to avoid.
+    /// `Single` cannot name a `k`, which makes an AC factorization over split
+    /// multi-edges a type error rather than a mistake to avoid.
     type Split: Copy;
 
-    /// Whether every edge of this layout is exactly one copy. `Single` knows it
-    /// statically, which is what lets the single-copy path sort on weights instead
-    /// of on quotients that are all division by one.
+    /// Known statically, which lets the single-copy path sort on weights instead of
+    /// quotients that are all division by one.
     const SINGLE_COPY: bool;
 
     fn one() -> Self;
     fn get(&self) -> u32;
 
-    /// Share of `total` carried by one copy. The star's sort key and its sampled
-    /// fill weight are the same division, and for `Single` it is the identity — so
-    /// the AC path performs no division rather than dividing by one.
+    /// The identity for `Single`, so the AC path performs no division rather than
+    /// dividing by one.
     fn per_copy<T: Real>(&self, total: T) -> T;
 
-    /// Keep at most `limit` copies of a coalesced neighbor, and report how many the
-    /// cap discarded. `Single` stores nothing and keeps one, so its discard count is
-    /// the duplicates the merge collapsed.
+    /// `Single` keeps one, so its discard count is the duplicates the merge
+    /// collapsed.
     fn cap(copies: u32, limit: u32) -> (Self, u32);
 
-    /// Split every edge into copies of itself, before the degrees are read, and
-    /// report how many that is. The degree-bucket scale, the star's merge cap and
-    /// the per-neighbor sample count are one number because they are one return
-    /// value; a cap of one is what keeps AC's star single-copy throughout.
+    /// The degree-bucket scale, the merge cap and the per-neighbor sample count are
+    /// one number because they are one return value.
     fn split_edges<T: Real>(graph: &mut AdjListGraph<Self, T>, split: Self::Split) -> u32;
 }
 
@@ -139,14 +118,14 @@ pub(crate) trait EdgeCount: Clone + Copy {
 #[derive(Clone, Copy)]
 pub(crate) struct Single;
 
-/// AC2: this edge's virtual copy count, set to the [`SplitFactor`] by
-/// [`MultiEdgeGraph::mark_split_edges`] and only lowered from there by the merge cap.
+/// This edge's virtual copy count, only ever lowered from the [`SplitFactor`] by the
+/// merge cap.
 #[derive(Clone, Copy)]
 pub(crate) struct Multi(u32);
 
 impl Multi {
-    /// Any count at all, which only a test needs: elimination makes a `Multi` from
-    /// the validated split or from [`EdgeCount::cap`], never from a bare number.
+    /// Only a test needs this: elimination makes a `Multi` from the validated split
+    /// or from [`EdgeCount::cap`], never from a bare number.
     #[cfg(test)]
     pub(crate) fn new(count: u32) -> Self {
         Self(count)
@@ -160,10 +139,8 @@ impl From<SplitFactor> for Multi {
     }
 }
 
-/// The factor AC2 splits each edge by, distinct from the per-edge count [`Multi`]
-/// carries. Splitting fewer than twice is standard AC, so the factors that exist are
-/// exactly the ones AC2 is defined for: `1/k` cannot be the infinity a zero would
-/// give, and no split can be a no-op.
+/// Distinct from the per-edge count [`Multi`] carries. Only the factors AC2 is
+/// defined for exist, so `1/k` is never infinite and no split is a no-op.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SplitFactor(u32);
 
@@ -198,8 +175,7 @@ impl EdgeCount for Single {
     fn cap(copies: u32, _limit: u32) -> (Self, u32) {
         (Self, copies - 1)
     }
-    /// A slim edge has nowhere to put a multiplicity, so AC eliminates the graph
-    /// exactly as ingested.
+    /// A slim edge has nowhere to put a multiplicity.
     #[inline]
     fn split_edges<T: Real>(_graph: &mut AdjListGraph<Self, T>, _split: ()) -> u32 {
         1
@@ -238,8 +214,7 @@ impl EdgeCount for Multi {
 pub(crate) struct Edge<T: Real, C> {
     weight: T,
     to: u32,
-    /// Index of this edge's mirror in `adj[to]`; whatever moves an edge must
-    /// preserve it.
+    /// Index of this edge's mirror in `adj[to]`; whatever moves an edge preserves it.
     rev: u32,
     count: C,
 }
@@ -255,8 +230,7 @@ impl<T: Real, C: EdgeCount> Edge<T, C> {
         }
     }
 
-    /// The weight all copies carry between them, which is what the edge stores:
-    /// splitting sets the count and leaves the weight alone.
+    /// Splitting sets the count and leaves the weight alone.
     #[inline]
     fn fill_weight(&self) -> T {
         self.weight
@@ -277,8 +251,8 @@ pub(crate) type SlimGraph<T> = AdjListGraph<Single, T>;
 /// AC2 path: edges with virtual multi-edge counts.
 pub(crate) type MultiEdgeGraph<T> = AdjListGraph<Multi, T>;
 
-/// Keep capacity of tiny adjacency lists to reduce allocator churn, but release
-/// large vectors to avoid retaining fill-heavy buffers across eliminations.
+/// Tiny lists keep their capacity; larger ones are released rather than retained
+/// across eliminations.
 const RETAIN_ADJ_CAPACITY_MAX: usize = 64;
 
 impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
@@ -353,12 +327,8 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
         add_edge_pair(&mut self.adj, u as usize, v as usize, weight);
     }
 
-    /// Moves the subgraph over `vertices` out of `self`, renumbered to
-    /// `0..vertices.len()` in the order given.
-    ///
     /// A component is closed under edges, so each list moves intact and only its
-    /// endpoints need relabeling: every `rev` still addresses the position it did
-    /// in the parent.
+    /// endpoints need relabeling — every `rev` still addresses its parent position.
     pub(crate) fn take_component(&mut self, vertices: &[u32], local_of: &mut [u32]) -> Self {
         debug_assert_eq!(local_of.len(), self.adj.len());
         for (local, &global) in vertices.iter().enumerate() {
@@ -379,9 +349,8 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
 }
 
 impl<T: Real> MultiEdgeGraph<T> {
-    /// Mark each edge as `k` virtual copies of it. The weight stays the total across
-    /// the copies, so this cannot underflow one away and [`EdgeCount::per_copy`]
-    /// divides where a single copy is what's wanted.
+    /// The weight stays the total across the copies, so this cannot underflow one
+    /// away; [`EdgeCount::per_copy`] divides where a single copy is wanted.
     pub(crate) fn mark_split_edges(&mut self, k: SplitFactor) {
         for adj_list in &mut self.adj {
             for edge in adj_list.iter_mut() {
@@ -410,8 +379,7 @@ fn add_edge_pair<T: Real, C: EdgeCount>(
     adj[v].push(Edge::new(weight, u as u32, rev_v));
 }
 
-/// Remove `adj[u][idx]` in O(1) via swap-remove and repair the moved edge's
-/// reverse pointer in its opposite adjacency list.
+/// Swap-remove, repairing the moved edge's reverse pointer.
 fn remove_edge_at<T: Real, C: EdgeCount>(adj: &mut [Vec<Edge<T, C>>], u: usize, idx: usize) {
     let last_idx = adj[u].len() - 1;
     adj[u].swap_remove(idx);
@@ -423,8 +391,7 @@ fn remove_edge_at<T: Real, C: EdgeCount>(adj: &mut [Vec<Edge<T, C>>], u: usize, 
     }
 }
 
-/// Connected components among the first `n_real` vertices laid out back to back,
-/// or `None` when the graph is connected. Traversal follows every edge, so a
+/// `None` when the graph is connected. Traversal follows every edge, so a
 /// ground vertex (index `>= n_real`) links the blocks it touches without being
 /// counted as its own component.
 fn block_layout<T: Real, C: EdgeCount>(
@@ -485,9 +452,8 @@ mod tests {
         assert_eq!(size_of::<Single>(), 0);
     }
 
-    /// The cap the split reports is the count it wrote on the edges. A return value
-    /// that drifted from [`MultiEdgeGraph::mark_split_edges`] would cap every star
-    /// at a multiplicity the graph does not carry, and no other test would notice.
+    /// A cap that drifted from [`MultiEdgeGraph::mark_split_edges`] would bound every
+    /// star at a multiplicity the graph does not carry, unnoticed elsewhere.
     #[test]
     fn the_reported_cap_is_the_count_written_on_the_edges() {
         let k = SplitFactor::new(3).expect("3 splits");
