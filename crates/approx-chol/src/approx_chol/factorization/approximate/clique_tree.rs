@@ -211,6 +211,15 @@ enum StarScratch<T: Real> {
     Multi(Star<T, Multi>, Multi),
 }
 
+/// The elimination path dedupes through its workspace; a standalone caller promises it
+/// instead. A repeat splits one edge's weight across two clique-tree positions and ties
+/// with itself, so it under-weights the fill rather than failing.
+fn neighbors_are_unique<T>(entries: &[(u32, T)]) -> bool {
+    let mut seen: Vec<u32> = entries.iter().map(|&(neighbor, _)| neighbor).collect();
+    seen.sort_unstable();
+    seen.windows(2).all(|pair| pair[0] != pair[1])
+}
+
 /// Samples one star's clique tree at a time — the sparse stand-in for its Schur
 /// complement clique (GKS 2023, Algorithms 5 and 6) — for callers that eliminate a star
 /// outside a full factorization.
@@ -242,6 +251,10 @@ impl<T: num_traits::Float + Send + Sync + 'static> CliqueTreeSampler<T> {
     /// `entries`. `index` names the stream, so the same index answers alike whatever
     /// order the caller eliminates in.
     pub fn sample(&mut self, index: u64, entries: &[(u32, T)], out: &mut Vec<(u32, u32, T)>) {
+        debug_assert!(
+            neighbors_are_unique(entries),
+            "a star needs one entry per neighbor"
+        );
         self.draws.restart(index);
         // The zero `pivot_diag` only seeds the column diagonal this discards.
         match &mut self.star {
@@ -378,6 +391,16 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A repeated neighbor is the one input the tie-break cannot order, since it ties
+    /// with itself on both keys.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "one entry per neighbor")]
+    fn a_repeated_neighbor_is_caught_in_debug() {
+        let mut out = Vec::new();
+        CliqueTreeSampler::new(0, None).sample(0, &[(3, 1.0), (5, 4.0), (3, 2.0)], &mut out);
     }
 
     fn assert_finite_positive_ordered(out: &[(u32, u32, f64)]) {
