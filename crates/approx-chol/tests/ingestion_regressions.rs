@@ -177,7 +177,7 @@ fn genuine_surplus_at_either_scale_is_augmented_and_solves() {
         // Surplus 6e-15 on a 2e-6-scale row: 1e9 times the error the row's own additions
         // could carry, so it is dominance rather than noise. Eigenvalue 6e-15 on [1, 1].
         (
-            "surplus below near_zero",
+            "surplus far below any absolute floor",
             &[0, 2, 4],
             &[0, 1, 0, 1],
             &[1e-6 + 6e-15, -1e-6, -1e-6, 1e-6 + 6e-15],
@@ -268,6 +268,61 @@ fn f32_surplus_is_judged_against_summation_error_alone() {
             "{label}: surplus {surplus:e}"
         );
     }
+}
+
+/// The graph symmetrizes an accepted mirror pair to one value, but classification must
+/// not: charging the upper value to both rows made the tolerated difference look like the
+/// lower row's own surplus, so the same matrix routed differently depending on which
+/// triangle held the larger magnitude.
+#[test]
+fn tolerated_mirror_difference_is_not_one_row_s_surplus() {
+    let off = 1.0 + 5.0 * f64::EPSILON;
+    let cases = [
+        ("upper holds the smaller", [1.0, -1.0, -off, off]),
+        ("lower holds the smaller", [off, -off, -1.0, 1.0]),
+    ];
+    for (label, vals) in cases {
+        let factor = build(Config::default(), &[0, 2, 4], &[0, 1, 0, 1], &vals).or_panic(label);
+        assert_eq!(
+            factor.n(),
+            factor.original_n(),
+            "{label}: every stored row sums to zero, so neither may be grounded"
+        );
+    }
+}
+
+/// `rewrite` folds each duplicate group with its own additions, so the error allowance
+/// counts stored entries rather than coalesced neighbours. Ten sub-ULP duplicates are
+/// absorbed one way and accumulate the other, which invented a surplus on a row that
+/// sums exactly to zero.
+#[test]
+fn coalescing_additions_are_inside_the_error_allowance() {
+    let half = f64::EPSILON / 2.0;
+    let (mut rp, mut ci, mut vals) = (vec![0u32], Vec::new(), Vec::new());
+    for row in 0..2u32 {
+        ci.extend(core::iter::repeat_n(row, 10));
+        vals.extend(core::iter::repeat_n(half, 10));
+        ci.extend([row, 1 - row]);
+        vals.extend([1.0, -1.0]);
+        ci.extend(core::iter::repeat_n(1 - row, 10));
+        vals.extend(core::iter::repeat_n(-half, 10));
+        rp.push(ci.len() as u32);
+    }
+    let factor = build(Config::default(), &rp, &ci, &vals).or_panic("coalesced duplicates");
+    assert_eq!(
+        factor.n(),
+        factor.original_n(),
+        "duplicates coalescing to a balanced Laplacian must not be grounded"
+    );
+}
+
+/// `|d| + d` overflowed before the excess was subtracted, rejecting a solvable row for
+/// being near the top of the range rather than for anything about its balance.
+#[test]
+fn a_diagonal_near_the_type_maximum_still_solves() {
+    let factor = build(Config::default(), &[0, 1], &[0], &[f64::MAX]).or_panic("max diagonal");
+    let solution = factor.solve(&[f64::MAX]).or_panic("solve");
+    assert!((solution[0] - 1.0).abs() < 1e-12, "{solution:?}");
 }
 
 /// CSR for `k` disjoint 2-node path Laplacians, stacked block-diagonally — a

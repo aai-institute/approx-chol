@@ -56,36 +56,28 @@ fn near_zero_deficit_does_not_augment() {
     assert!(!augments_at_drift(-5e-11_f64));
 }
 
-/// `+1.92e-8` against a row scale of `8e8` is `2.4e-17` relative — below `eps`, so it
-/// clears the `sqrt(EPSILON)` arm and only the noise floor can catch it.
-#[test]
-fn surplus_below_the_row_noise_floor_does_not_augment() {
-    // Centre diagonal is the nearest double to 1e8 + 3e8 + 1e-7; each leaf balances
-    // exactly, so only the centre row is in question.
+/// A 4-vertex star whose centre diagonal is `offset` ULPs above its exactly-dyadic
+/// off-diagonal mass, so the drift is the offset and nothing else. Leaves balance
+/// exactly, leaving only the centre row in question.
+fn star_augments_at_ulp_offset(offset: u64) -> bool {
+    let centre = f64::from_bits(4e8f64.to_bits() + offset);
     let row_ptrs = [0u32, 4, 6, 8, 10];
     let col_indices = [0u32, 1, 2, 3, 0, 1, 0, 2, 0, 3];
-    let values = [
-        400_000_000.000_000_1_f64,
-        -1e8,
-        -3e8,
-        -1e-7,
-        -1e8,
-        1e8,
-        -3e8,
-        3e8,
-        -1e-7,
-        1e-7,
-    ];
+    let values = [centre, -1e8, -2e8, -1e8, -1e8, 1e8, -2e8, 2e8, -1e8, 1e8];
     let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4).or_panic("valid csr");
     let factor = Builder::<f64>::new(Config::default())
         .build(csr)
         .or_panic("factorization should succeed");
+    factor.n() > factor.original_n()
+}
 
-    assert_eq!(
-        factor.n(),
-        factor.original_n(),
-        "surplus below the row's noise floor must not add a ground vertex"
-    );
+/// Brackets the floor at a large row scale, where an absolute threshold would misjudge
+/// both ends. Scale is `8e8` and the row has 4 stored terms, so the floor is
+/// `eps * 8e8 * 4 = 7.1e-7`, or 11.9 ULPs of the centre diagonal.
+#[test]
+fn surplus_below_the_row_noise_floor_does_not_augment() {
+    assert!(!star_augments_at_ulp_offset(4), "4 ULP is inside the floor");
+    assert!(star_augments_at_ulp_offset(24), "24 ULP is real dominance");
 }
 
 // A diagonal SDDM matrix augments to a star, which is a tree, so AC is exact here —

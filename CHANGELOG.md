@@ -27,10 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `low_level::clique_tree_sample_multi`.
 - `OwnedCsr::try_as_ref` is replaced by the infallible `as_csr_ref`, and
   `CsrRef::row_ptrs`/`col_indices`/`values` return slices with the view's lifetime.
-- A row surplus is grounded once it exceeds `epsilon * scale * (degree + 1)`, the error
-  the row's own summation could carry; rows whose drift from zero-sum falls between that
-  and the old `1e-10 * scale` floor are solved as SDDM where 0.3.1 projected them as a
-  singular Laplacian. (#85)
+- A row surplus is grounded once it exceeds `epsilon * scale * terms`, the error the row's
+  own summation could carry, in place of 0.3.1's absolute and `1e-10 * scale` floors. Input
+  whose rows drift from zero-sum by more than that is solved as SDDM where 0.3.1 projected
+  it as a singular Laplacian. Note the deficit tolerance stays at `1e-10 * scale`, so input
+  drifting both ways row by row — a Laplacian assembled from truncated decimals — now
+  factorizes partially grounded, and its solve is correspondingly ill-conditioned. (#78, #85)
 
 ### Removed
 
@@ -58,9 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-finite or out-of-range factor values. (#80)
 - Each block draws from its own sampler stream, so a fixed seed factors a block the same
   way under either backend. (#82)
-- A row surplus that is real against its own scale is grounded instead of discarded for
-  falling below an absolute floor, which had answered such an SPD input as a singular
-  Laplacian. (#78)
+- A diagonal above half the scalar's maximum no longer overflows the row-scale
+  computation, which had rejected a solvable row as `Error::NonFiniteRow`.
 
 ## [0.3.1] - 2026-07-10
 
