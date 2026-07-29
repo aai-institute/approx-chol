@@ -26,13 +26,6 @@ pub(crate) fn near_zero<T: Float>() -> T {
     by_precision(1e-6, 1e-14)
 }
 
-/// A departure from zero smaller than this fraction of the row's magnitude is not
-/// real — four orders coarser than [`near_zero`], which answers a different question.
-#[inline]
-pub(crate) fn row_sum_slack<T: Float>() -> T {
-    by_precision(1e-6, 1e-10)
-}
-
 /// Panics on an exotic `Float` rather than substituting: every substitute a call site
 /// could pick silently corrupts the factor instead. `f32` and `f64` never fail.
 #[inline]

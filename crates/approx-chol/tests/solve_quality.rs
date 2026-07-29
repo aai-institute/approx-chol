@@ -12,71 +12,84 @@ use panic_ok::OrPanic;
 use residual::relative_residual_over;
 
 use approx_chol::low_level::Builder;
-use approx_chol::{Backend, Config, CsrRef, SolveError};
+use approx_chol::{Backend, Config, CsrRef, Error, SolveError};
 use num_traits::Float;
 use rstest::rstest;
 
-/// The floor is precision-dependent, so `eps` comes from the caller.
-fn assert_no_augmentation_at_drift<T: Float + Send + Sync + 'static>(eps: T) {
+/// Routes `[[1+drift, -1], [-1, 1+drift]]`: `Ok(true)` when the drift is real dominance
+/// and earns a ground vertex, `Ok(false)` when it is within the row's own summation
+/// error, `Err` when it is a real deficit. Row scale is 2 over 2 stored terms, so the
+/// floor is `4 * eps` either way.
+fn route_at_drift<T: Float + Send + Sync + 'static>(drift: T) -> Result<bool, Error> {
     let one = T::one();
     let row_ptrs = [0u32, 2, 4];
     let col_indices = [0u32, 1, 0, 1];
-    let values = [one + eps, -one, -one, one + eps];
+    let values = [one + drift, -one, -one, one + drift];
     let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).or_panic("valid csr");
-    let factor = Builder::<T>::new(Config::default())
+    Builder::<T>::new(Config::default())
         .build(csr)
-        .or_panic("factorization should succeed");
-    assert_eq!(
-        factor.n(),
-        2,
-        "roundoff drift must not trigger augmentation"
-    );
+        .map(|factor| factor.n() > factor.original_n())
 }
 
-/// Augmentation is decided in ingestion, before routing, so the default suffices.
+/// Augmentation is decided in ingestion, before routing, so the default suffices. One
+/// ULP either way is drift a single addition accounts for, so the row is left floating.
 #[test]
-fn near_zero_surplus_does_not_augment() {
-    assert_no_augmentation_at_drift(5e-7_f32);
-    assert_no_augmentation_at_drift(5e-11_f64);
+fn summation_roundoff_does_not_augment() {
+    for drift in [f32::EPSILON, -f32::EPSILON] {
+        assert!(!route_at_drift(drift).or_panic("f32 roundoff is in class"));
+    }
+    for drift in [f64::EPSILON, -f64::EPSILON] {
+        assert!(!route_at_drift(drift).or_panic("f64 roundoff is in class"));
+    }
 }
 
-/// A deficit inside the row's slack is not a dominance error either.
+/// Past that the surplus is real dominance (#85). Both drifts land mid-window for their
+/// precision — 8 ULPs of this row in `f32`, 2.25e5 in `f64` — which no two-term sum
+/// invents, yet through 0.3.1 both were answered as a singular Laplacian.
 #[test]
-fn near_zero_deficit_does_not_augment() {
-    assert_no_augmentation_at_drift(-5e-7_f32);
-    assert_no_augmentation_at_drift(-5e-11_f64);
+fn surplus_beyond_summation_roundoff_augments() {
+    assert!(route_at_drift(1e-6_f32).or_panic("f32 dominance"));
+    assert!(route_at_drift(5e-11_f64).or_panic("f64 dominance"));
 }
 
-/// `+1.92e-8` against a row scale of `8e8` is `2.4e-17` relative — below `eps`, so it
-/// clears the `sqrt(EPSILON)` arm and only the noise floor can catch it.
+/// The same magnitude with the sign flipped is real *non*-dominance, and is reported
+/// rather than zeroed (#91). Through 0.3.1 a coarser deficit tolerance forgave these,
+/// which left a matrix drifting both ways factored partially grounded.
 #[test]
-fn surplus_below_the_row_noise_floor_does_not_augment() {
-    // Centre diagonal is the nearest double to 1e8 + 3e8 + 1e-7; each leaf balances
-    // exactly, so only the centre row is in question.
+fn deficit_beyond_summation_roundoff_is_rejected() {
+    for err in [
+        route_at_drift(-1e-6_f32).err_or_panic("f32 deficit must be reported"),
+        route_at_drift(-5e-11_f64).err_or_panic("f64 deficit must be reported"),
+    ] {
+        assert!(
+            matches!(err, Error::NotDiagonallyDominant { row: 0 }),
+            "{err:?}"
+        );
+    }
+}
+
+/// A 4-vertex star whose centre diagonal is `offset` ULPs above its exactly-dyadic
+/// off-diagonal mass, so the drift is the offset and nothing else. Leaves balance
+/// exactly, leaving only the centre row in question.
+fn star_augments_at_ulp_offset(offset: u64) -> bool {
+    let centre = f64::from_bits(4e8f64.to_bits() + offset);
     let row_ptrs = [0u32, 4, 6, 8, 10];
     let col_indices = [0u32, 1, 2, 3, 0, 1, 0, 2, 0, 3];
-    let values = [
-        400_000_000.000_000_1_f64,
-        -1e8,
-        -3e8,
-        -1e-7,
-        -1e8,
-        1e8,
-        -3e8,
-        3e8,
-        -1e-7,
-        1e-7,
-    ];
+    let values = [centre, -1e8, -2e8, -1e8, -1e8, 1e8, -2e8, 2e8, -1e8, 1e8];
     let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4).or_panic("valid csr");
     let factor = Builder::<f64>::new(Config::default())
         .build(csr)
         .or_panic("factorization should succeed");
+    factor.n() > factor.original_n()
+}
 
-    assert_eq!(
-        factor.n(),
-        factor.original_n(),
-        "surplus below the row's noise floor must not add a ground vertex"
-    );
+/// Brackets the floor at a large row scale, where an absolute threshold would misjudge
+/// both ends. Scale is `8e8` and the row has 4 stored terms, so the floor is
+/// `eps * 8e8 * 4 = 7.1e-7`, or 11.9 ULPs of the centre diagonal.
+#[test]
+fn surplus_below_the_row_noise_floor_does_not_augment() {
+    assert!(!star_augments_at_ulp_offset(4), "4 ULP is inside the floor");
+    assert!(star_augments_at_ulp_offset(24), "24 ULP is real dominance");
 }
 
 // A diagonal SDDM matrix augments to a star, which is a tree, so AC is exact here —

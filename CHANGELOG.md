@@ -30,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   equal weight now order by neighbor index.
 - `OwnedCsr::try_as_ref` is replaced by the infallible `as_csr_ref`, and
   `CsrRef::row_ptrs`/`col_indices`/`values` return slices with the view's lifetime.
+- A row's departure from zero-sum is judged against `epsilon * scale * terms` in both
+  directions: a surplus above it is grounded, a deficit below it is
+  `Error::NotDiagonallyDominant`. (#78, #85, #91)
 
 ### Removed
 
@@ -57,9 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-finite or out-of-range factor values. (#80)
 - Each block draws from its own sampler stream, so a fixed seed factors a block the same
   way under either backend. (#82)
-- A row surplus that is real against its own scale is grounded instead of discarded for
-  falling below an absolute floor, which had answered such an SPD input as a singular
-  Laplacian. (#78)
+- A diagonal above half the scalar's maximum no longer overflows the row-scale computation.
 
 ## [0.3.1] - 2026-07-10
 

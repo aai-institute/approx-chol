@@ -151,9 +151,9 @@ fn in_class_input_is_accepted_on_both_paths() {
     }
 }
 
-/// Every end of the per-row surplus floor: 1e12-scale dominance must survive the
-/// relative tolerance, a 5e-11 surplus must still count as dominance, and a surplus
-/// real against its own row scale must not be discarded for being absolutely small.
+/// Both ends of the row-scale range, where a floor set in absolute terms fails at one
+/// end or the other: 1e12-scale dominance, a 5e-11-scale system, and a surplus real
+/// against its own row scale but far below any absolute floor.
 #[test]
 fn genuine_surplus_at_either_scale_is_augmented_and_solves() {
     let cases: [Solved<'_>; 3] = [
@@ -177,7 +177,7 @@ fn genuine_surplus_at_either_scale_is_augmented_and_solves() {
         // Surplus 6e-15 on a 2e-6-scale row: 1e9 times the error the row's own additions
         // could carry, so it is dominance rather than noise. Eigenvalue 6e-15 on [1, 1].
         (
-            "surplus below near_zero",
+            "surplus far below any absolute floor",
             &[0, 2, 4],
             &[0, 1, 0, 1],
             &[1e-6 + 6e-15, -1e-6, -1e-6, 1e-6 + 6e-15],
@@ -198,6 +198,131 @@ fn genuine_surplus_at_either_scale_is_augmented_and_solves() {
             );
         }
     }
+}
+
+/// A two-row system `[[a+s, -a], [-a, a+s]]` — dominant by `s` on both rows, so a
+/// grounded factor carries one extra vertex and a floating one does not.
+fn surplus_pair<T>(a: T, s: T) -> ([u32; 3], [u32; 4], [T; 4])
+where
+    T: Copy + core::ops::Add<Output = T> + core::ops::Neg<Output = T>,
+{
+    ([0, 2, 4], [0, 1, 0, 1], [a + s, -a, -a, a + s])
+}
+
+/// The routing, not the solution: an ill-conditioned pair's solve carries too much
+/// round-off to pin, while `n() > original_n()` says which branch was taken. The floor
+/// here is `epsilon * scale * (degree + 1)` = `2.2e-16 * 2e-6 * 2` = `8.9e-22`.
+#[test]
+fn surplus_is_judged_against_summation_error_alone() {
+    // (label, surplus, grounded)
+    let cases: [(&str, f64, bool); 5] = [
+        ("far above the floor", 6e-12, true),
+        ("above the floor", 6e-15, true),
+        // Was discarded by a floor 1e6 coarser than rounding, and answered as a
+        // singular Laplacian: relative error 1.0 on a system with an exact solution.
+        ("just above the floor", 6e-18, true),
+        // Genuinely within the row's own summation error, so indistinguishable from
+        // a floating Laplacian and treated as one.
+        ("below the floor", 6e-22, false),
+        ("not representable at this scale", 1e-30, false),
+    ];
+
+    for (label, surplus, grounded) in cases {
+        let (rp, ci, vals) = surplus_pair(1e-6, surplus);
+        let factor = build(Config::default(), &rp, &ci, &vals).or_panic(label);
+        assert_eq!(
+            factor.n() > factor.original_n(),
+            grounded,
+            "{label}: surplus {surplus:e} routed to n={} original_n={}",
+            factor.n(),
+            factor.original_n()
+        );
+        if grounded {
+            let solution = factor.solve(&[1.0, 1.0]).or_panic("solve");
+            let want = 1.0 / surplus;
+            assert!(
+                (solution[0] - want).abs() <= 1e-3 * want,
+                "{label}: {solution:?} vs {want:e}"
+            );
+        }
+    }
+}
+
+/// The same window in `f32`, where #85 measured it at a 2e-3 row scale: the old floor
+/// was `1e-6 * 2e-3 = 2e-9`, summation error is `1.19e-7 * 2e-3 * 2 = 4.8e-10`.
+#[test]
+fn f32_surplus_is_judged_against_summation_error_alone() {
+    for (label, surplus, grounded) in [
+        ("above the floor", 1.2e-9f32, true),
+        ("below", 2e-10, false),
+    ] {
+        let (rp, ci, vals) = surplus_pair(1e-3f32, surplus);
+        let n = (rp.len() - 1) as u32;
+        let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("structurally valid CSR");
+        let factor = Builder::<f32>::new(Config::default())
+            .build(csr)
+            .or_panic(label);
+        assert_eq!(
+            factor.n() > factor.original_n(),
+            grounded,
+            "{label}: surplus {surplus:e}"
+        );
+    }
+}
+
+/// The graph symmetrizes an accepted mirror pair to one value, but classification must
+/// not: charging the upper value to both rows made the tolerated difference look like the
+/// lower row's own surplus, so the same matrix routed differently depending on which
+/// triangle held the larger magnitude.
+#[test]
+fn tolerated_mirror_difference_is_not_one_row_s_surplus() {
+    let off = 1.0 + 5.0 * f64::EPSILON;
+    let cases = [
+        ("upper holds the smaller", [1.0, -1.0, -off, off]),
+        ("lower holds the smaller", [off, -off, -1.0, 1.0]),
+    ];
+    for (label, vals) in cases {
+        let factor = build(Config::default(), &[0, 2, 4], &[0, 1, 0, 1], &vals).or_panic(label);
+        assert_eq!(
+            factor.n(),
+            factor.original_n(),
+            "{label}: every stored row sums to zero, so neither may be grounded"
+        );
+    }
+}
+
+/// `rewrite` folds each duplicate group with its own additions, so the error allowance
+/// counts stored entries rather than coalesced neighbours. Ten sub-ULP duplicates are
+/// absorbed one way and accumulate the other, which invented a surplus on a row that
+/// sums exactly to zero.
+#[test]
+fn coalescing_additions_are_inside_the_error_allowance() {
+    let half = f64::EPSILON / 2.0;
+    let (mut rp, mut ci, mut vals) = (vec![0u32], Vec::new(), Vec::new());
+    for row in 0..2u32 {
+        ci.extend(core::iter::repeat_n(row, 10));
+        vals.extend(core::iter::repeat_n(half, 10));
+        ci.extend([row, 1 - row]);
+        vals.extend([1.0, -1.0]);
+        ci.extend(core::iter::repeat_n(1 - row, 10));
+        vals.extend(core::iter::repeat_n(-half, 10));
+        rp.push(ci.len() as u32);
+    }
+    let factor = build(Config::default(), &rp, &ci, &vals).or_panic("coalesced duplicates");
+    assert_eq!(
+        factor.n(),
+        factor.original_n(),
+        "duplicates coalescing to a balanced Laplacian must not be grounded"
+    );
+}
+
+/// `|d| + d` overflowed before the excess was subtracted, rejecting a solvable row for
+/// being near the top of the range rather than for anything about its balance.
+#[test]
+fn a_diagonal_near_the_type_maximum_still_solves() {
+    let factor = build(Config::default(), &[0, 1], &[0], &[f64::MAX]).or_panic("max diagonal");
+    let solution = factor.solve(&[f64::MAX]).or_panic("solve");
+    assert!((solution[0] - 1.0).abs() < 1e-12, "{solution:?}");
 }
 
 /// CSR for `k` disjoint 2-node path Laplacians, stacked block-diagonally — a

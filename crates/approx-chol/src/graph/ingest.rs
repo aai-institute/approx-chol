@@ -2,7 +2,7 @@
 //! and close the row deficits with a Gremban ground vertex.
 
 use super::{add_edge_pair, block_layout, AdjListGraph, Edge, EdgeCount, GraphBuild};
-use crate::types::{count_as_scalar, row_sum_slack, Real};
+use crate::types::{count_as_scalar, Real};
 use crate::{CsrError, CsrRef, Error};
 
 pub(super) fn from_sddm<T: Real, C: EdgeCount>(
@@ -11,13 +11,20 @@ pub(super) fn from_sddm<T: Real, C: EdgeCount>(
     // A rewrite has to outlive the walk that borrows it, so it lives in this frame
     // rather than inside `Mirrors`.
     let rewritten = canonicalize(csr)?;
+    // Additions charged to a row's excess, counted before coalescing: `rewrite` folds
+    // each duplicate group with its own additions, and those land in the row's sum too.
+    // For canonical input this is the diagonal plus the row's degree, as before.
+    let terms: Vec<u32> = csr
+        .row_ptrs()
+        .windows(2)
+        .map(|bounds| bounds[1] - bounds[0])
+        .collect();
     match &rewritten {
-        Some(r) => parse(Mirrors::new(&r.row_ptrs, &r.col_indices, &r.values)),
-        None => parse(Mirrors::new(
-            csr.row_ptrs(),
-            csr.col_indices(),
-            csr.values(),
-        )),
+        Some(r) => parse(Mirrors::new(&r.row_ptrs, &r.col_indices, &r.values), &terms),
+        None => parse(
+            Mirrors::new(csr.row_ptrs(), csr.col_indices(), csr.values()),
+            &terms,
+        ),
     }
 }
 
@@ -136,6 +143,7 @@ fn approximately_equal<T: Real>(left: T, right: T) -> bool {
 /// One pass per row, claiming each upper-triangle entry's mirror.
 fn parse<T: Real, C: EdgeCount>(
     mut mirrors: Mirrors<'_, T>,
+    terms: &[u32],
 ) -> Result<GraphBuild<AdjListGraph<C, T>, T>, Error> {
     let (row_ptrs, col_indices, values) = (mirrors.row_ptrs, mirrors.col_indices, mirrors.values);
     let n = row_ptrs.len() - 1;
@@ -175,12 +183,15 @@ fn parse<T: Real, C: EdgeCount>(
             // Zero was skipped and positive rejected, so `upper` is negative here
             // and `-upper` is the edge weight. A NaN coalesced from opposing
             // infinities never reaches this line — it fails the symmetry check.
+            // Each row sums the value it stores, not the one the graph symmetrizes to:
+            // charging `upper` to both would make the tolerated mirror difference look
+            // like `col`'s own surplus and ground it.
             row_sums[row] = row_sums[row] + upper;
-            row_sums[col] = row_sums[col] + upper;
+            row_sums[col] = row_sums[col] + lower;
             add_edge_pair(&mut adj, row, col, -upper);
         }
     }
-    augment(adj, diag, row_sums)
+    augment(adj, diag, row_sums, terms)
 }
 
 /// How far one row's diagonal exceeds its off-diagonal mass, judged against the noise
@@ -194,30 +205,28 @@ enum RowBalance<T> {
 }
 
 impl<T: Real> RowBalance<T> {
-    fn of(diagonal: T, off_diagonal_sum: T, degree: usize) -> Self {
+    /// `terms` is how many additions produced `excess`, not the row's degree.
+    fn of(diagonal: T, off_diagonal_sum: T, terms: u32) -> Self {
         let excess = diagonal + off_diagonal_sum;
-        // Every off-diagonal folded into the sum was negative, so the row's
-        // magnitude sum is `|d| + d - excess` and needs no second accumulator.
-        let scale = diagonal.abs() + diagonal - excess;
+        // Every off-diagonal folded into the sum was negative, so the row's magnitude
+        // sum is `|d| + d - excess` and needs no second accumulator. Subtracting before
+        // the second add keeps a diagonal above `MAX / 2` from overflowing to infinity.
+        let scale = (diagonal.abs() - excess) + diagonal;
         // A non-finite sum forces a non-finite scale, so scale alone decides. Every
         // comparison below succeeds on an infinite deficit (`-inf < -inf`).
         if !scale.is_finite() {
             return Self::NonFinite;
         }
-        let slack = row_sum_slack::<T>() * scale;
-        if excess < -slack {
+        // The most this row's own additions could have invented, and so the only
+        // departure from zero-sum the row cannot account for. One floor for both signs:
+        // a departure this clears is real evidence whichever way it points, and
+        // forgiving more in one direction than the other grounds a row for a drift that
+        // would be dismissed as noise with its sign flipped.
+        let accumulated = T::epsilon() * scale * count_as_scalar::<T, _>(terms);
+        if excess < -accumulated {
             return Self::Deficit;
         }
-        // The same slack the deficit was rejected by, capped absolutely so a
-        // 1e12-scale row's real surplus is not swallowed.
-        let relative = slack.min(T::epsilon().sqrt());
-        // Error this row's own sum could have accumulated over its additions, the
-        // diagonal included.
-        let accumulated = T::epsilon() * scale * count_as_scalar::<T, _>(degree + 1);
-        // Both arms scale with the row, so a surplus this clears is real for this row
-        // whatever its absolute size; elimination inverts any pivot with a
-        // representable reciprocal, so smallness alone is not a reason to discard it.
-        if excess <= relative.max(accumulated) {
+        if excess <= accumulated {
             return Self::Negligible;
         }
         Self::Surplus(excess)
@@ -230,11 +239,12 @@ fn augment<T: Real, C: EdgeCount>(
     mut adj: Vec<Vec<Edge<T, C>>>,
     mut diag: Vec<T>,
     mut row_sums: Vec<T>,
+    terms: &[u32],
 ) -> Result<GraphBuild<AdjListGraph<C, T>, T>, Error> {
     let mut surplus_sum = T::zero();
     let mut grounded = 0usize;
     for (row, (sum, &d)) in row_sums.iter_mut().zip(diag.iter()).enumerate() {
-        *sum = match RowBalance::of(d, *sum, adj[row].len()) {
+        *sum = match RowBalance::of(d, *sum, terms[row]) {
             RowBalance::NonFinite => return Err(Error::NonFiniteRow { row }),
             RowBalance::Deficit => return Err(Error::NotDiagonallyDominant { row }),
             RowBalance::Negligible => T::zero(),
