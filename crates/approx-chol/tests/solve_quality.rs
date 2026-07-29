@@ -16,9 +16,8 @@ use approx_chol::{Backend, Config, CsrRef, SolveError};
 use num_traits::Float;
 use rstest::rstest;
 
-/// Row-sum drift at roundoff scale must not read as diagonal dominance. The
-/// floor is precision-dependent, so `eps` comes from the caller.
-fn assert_no_augmentation_at_surplus<T: Float + Send + Sync + 'static>(eps: T) {
+/// The floor is precision-dependent, so `eps` comes from the caller.
+fn assert_no_augmentation_at_drift<T: Float + Send + Sync + 'static>(eps: T) {
     let one = T::one();
     let row_ptrs = [0u32, 2, 4];
     let col_indices = [0u32, 1, 0, 1];
@@ -34,19 +33,22 @@ fn assert_no_augmentation_at_surplus<T: Float + Send + Sync + 'static>(eps: T) {
     );
 }
 
-/// Augmentation is decided in ingestion, before a block is routed to a backend,
-/// so these fixtures need only the default.
+/// Augmentation is decided in ingestion, before routing, so the default suffices.
 #[test]
 fn near_zero_surplus_does_not_augment() {
-    assert_no_augmentation_at_surplus(5e-7_f32);
-    assert_no_augmentation_at_surplus(5e-11_f64);
+    assert_no_augmentation_at_drift(5e-7_f32);
+    assert_no_augmentation_at_drift(5e-11_f64);
 }
 
-/// A surplus can be real and still be noise: this star's centre carries
-/// `+1.92e-8` against a row scale of `8e8`, so `2.4e-17` relative — below `eps`,
-/// hence not representable as dominance. It clears the absolute `sqrt(EPSILON)`
-/// arm of the floor and must be caught by the row's noise floor instead, or the
-/// factor gains a ground edge whose weight the input cannot actually express.
+/// A deficit inside the row's slack is not a dominance error either.
+#[test]
+fn near_zero_deficit_does_not_augment() {
+    assert_no_augmentation_at_drift(-5e-7_f32);
+    assert_no_augmentation_at_drift(-5e-11_f64);
+}
+
+/// `+1.92e-8` against a row scale of `8e8` is `2.4e-17` relative — below `eps`, so it
+/// clears the `sqrt(EPSILON)` arm and only the noise floor can catch it.
 #[test]
 fn surplus_below_the_row_noise_floor_does_not_augment() {
     // Centre diagonal is the nearest double to 1e8 + 3e8 + 1e-7; each leaf balances

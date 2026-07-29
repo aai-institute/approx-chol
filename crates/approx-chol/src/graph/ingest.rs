@@ -1,8 +1,8 @@
-//! CSR to elimination graph: canonicalize, pair each off-diagonal with its
-//! mirror, and close the row deficits with a Gremban ground vertex.
+//! CSR to elimination graph: canonicalize, pair each off-diagonal with its mirror,
+//! and close the row deficits with a Gremban ground vertex.
 
 use super::{add_edge_pair, block_layout, AdjListGraph, Edge, EdgeCount, GraphBuild};
-use crate::types::{augmentation_floor, row_sum_slack, Real};
+use crate::types::{count_as_scalar, near_zero, row_sum_slack, Real};
 use crate::{CsrError, CsrRef, Error};
 
 pub(super) fn from_sddm<T: Real, C: EdgeCount>(
@@ -188,9 +188,47 @@ fn parse<T: Real, C: EdgeCount>(
     augment(adj, diag, row_sums)
 }
 
-/// Clamp each row's surplus to non-negative, close the remaining deficits with a
-/// Gremban ground vertex, and label the connected components for block dispatch.
-///
+/// How far one row's diagonal exceeds its off-diagonal mass, judged against the noise
+/// the row's own scale and term count can carry.
+enum RowBalance<T> {
+    NonFinite,
+    Deficit,
+    Negligible,
+    /// Worth closing with a ground edge.
+    Surplus(T),
+}
+
+impl<T: Real> RowBalance<T> {
+    fn of(diagonal: T, off_diagonal_sum: T, degree: usize) -> Self {
+        let excess = diagonal + off_diagonal_sum;
+        // Every off-diagonal folded into the sum was negative, so the row's
+        // magnitude sum is `|d| + d - excess` and needs no second accumulator.
+        let scale = diagonal.abs() + diagonal - excess;
+        // A non-finite sum forces a non-finite scale, so scale alone decides. Every
+        // comparison below succeeds on an infinite deficit (`-inf < -inf`).
+        if !scale.is_finite() {
+            return Self::NonFinite;
+        }
+        let slack = row_sum_slack::<T>() * scale;
+        if excess < -slack {
+            return Self::Deficit;
+        }
+        // The same slack the deficit was rejected by, capped absolutely so a
+        // 1e12-scale row's real surplus is not swallowed.
+        let relative = slack.min(T::epsilon().sqrt());
+        // Error this row's own sum could have accumulated over its additions, the
+        // diagonal included.
+        let accumulated = T::epsilon() * scale * count_as_scalar::<T, _>(degree + 1);
+        // Below the pivot scale the elimination can invert, grounding manufactures a
+        // link the solve cannot use and silently returns the right-hand side.
+        let resolvable = near_zero::<T>();
+        if excess <= relative.max(accumulated).max(resolvable) {
+            return Self::Negligible;
+        }
+        Self::Surplus(excess)
+    }
+}
+
 /// `row_sums` arrives holding each row's off-diagonal total; the diagonal joins it
 /// here, the first point at which every row's is known.
 fn augment<T: Real, C: EdgeCount>(
@@ -198,30 +236,19 @@ fn augment<T: Real, C: EdgeCount>(
     mut diag: Vec<T>,
     mut row_sums: Vec<T>,
 ) -> Result<GraphBuild<AdjListGraph<C, T>, T>, Error> {
-    let slack = row_sum_slack::<T>();
     let mut surplus_sum = T::zero();
     let mut grounded = 0usize;
     for (row, (sum, &d)) in row_sums.iter_mut().zip(diag.iter()).enumerate() {
-        *sum = d + *sum;
-        // Every off-diagonal folded into the sum was negative, so the row's
-        // magnitude sum is `|d| + d - sum` and needs no second accumulator.
-        let scale = d.abs() + d - *sum;
-        // A non-finite sum forces a non-finite scale, so scale alone decides. Every
-        // check below succeeds on an infinite deficit (`-inf < -inf`).
-        if !scale.is_finite() {
-            return Err(Error::NonFiniteRow { row });
-        }
-        let row_tolerance = slack * scale;
-        if *sum < -row_tolerance {
-            return Err(Error::NotDiagonallyDominant { row });
-        }
-        let floor = augmentation_floor(scale, row_tolerance, adj[row].len() + 1);
-        if *sum < T::zero() || *sum <= floor {
-            *sum = T::zero();
-        } else {
-            surplus_sum = surplus_sum + *sum;
-            grounded += 1;
-        }
+        *sum = match RowBalance::of(d, *sum, adj[row].len()) {
+            RowBalance::NonFinite => return Err(Error::NonFiniteRow { row }),
+            RowBalance::Deficit => return Err(Error::NotDiagonallyDominant { row }),
+            RowBalance::Negligible => T::zero(),
+            RowBalance::Surplus(excess) => {
+                surplus_sum = surplus_sum + excess;
+                grounded += 1;
+                excess
+            }
+        };
     }
 
     let m = adj.len();
