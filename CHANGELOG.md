@@ -46,6 +46,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `u32` nonzero/edge overflow now panics instead of silently truncating the factor. (#39)
 - A strictly-dominant SDDM scaled below unit magnitude is augmented, and elimination
   keeps the scale of an underflowing diagonal or per-copy share. (#36)
+- Approximate elimination keeps a small pivot's reciprocal wherever it is representable
+  instead of substituting a scale of one. (#75)
+- `validate_structure` rejects a tampered `Anchor`, an `original_n` unrelated to `n`, and
+  non-finite or out-of-range factor values. (#80)
+- Each block draws from its own sampler stream, so a fixed seed factors a block the same
+  way under either backend. (#82)
 
 ## [0.3.1] - 2026-07-10
 
