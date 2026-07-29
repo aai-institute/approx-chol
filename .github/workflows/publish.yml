@@ -137,6 +137,50 @@ jobs:
           name: wheels-macos-${{ matrix.platform.target }}
           path: dist
 
+  # Free-threaded CPython has no stable ABI before PEP 803, so the abi3 wheel above
+  # does not cover it and pyo3 emits a version-specific wheel instead. Limited to the
+  # platforms `ci.yml` builds and imports free-threaded, rather than the full target
+  # list: 3.14t is not meaningfully distributed for armv7/s390x/ppc64le/x86.
+  freethreaded:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: ubuntu-22.04
+            target: x86_64
+          - runner: windows-latest
+            target: x64
+          - runner: macos-15-intel
+            target: x86_64
+          - runner: macos-latest
+            target: aarch64
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: 3.14t
+      - name: Build free-threaded wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --interpreter python3.14t
+          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          manylinux: auto
+      - name: Assert the wheel is tagged free-threaded
+        shell: bash
+        run: |
+          for whl in dist/*.whl; do
+            case "$(basename "$whl")" in
+              *-cp3??t-*) ;;
+              *) echo "::error::expected a free-threaded wheel, got $(basename "$whl")"; exit 1 ;;
+            esac
+          done
+      - name: Upload wheels
+        uses: actions/upload-artifact@v6
+        with:
+          name: wheels-freethreaded-${{ matrix.platform.runner }}-${{ matrix.platform.target }}
+          path: dist
+
   sdist:
     runs-on: ubuntu-latest
     steps:
@@ -157,7 +201,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: publish
     if: ${{ startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' }}
-    needs: [linux, musllinux, windows, macos, sdist]
+    needs: [linux, musllinux, windows, macos, freethreaded, sdist]
     permissions:
       # Use to sign the release artifacts
       id-token: write
