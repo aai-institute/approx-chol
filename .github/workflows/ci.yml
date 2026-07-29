@@ -124,7 +124,9 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-          - "3.13t"
+          # 3.14 only: scipy ships no cp313t wheel, so the suite would need a
+          # source build the runner has no BLAS for. Free-threading is also only
+          # officially supported from 3.14.
           - "3.14t"
     steps:
       - uses: actions/checkout@v7
@@ -147,7 +149,9 @@ jobs:
           - macos-latest
           - windows-latest
         python-version:
-          - "3.13t"
+          # 3.14 only: scipy ships no cp313t wheel, so the suite would need a
+          # source build the runner has no BLAS for. Free-threading is also only
+          # officially supported from 3.14.
           - "3.14t"
     steps:
       - uses: actions/checkout@v7
