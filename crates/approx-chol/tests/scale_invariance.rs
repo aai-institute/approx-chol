@@ -1,0 +1,82 @@
+#[path = "common/panic_ok.rs"]
+mod panic_ok;
+use panic_ok::OrPanic;
+
+use approx_chol::{factorize_with, Backend, Config, CsrRef};
+use num_traits::Float;
+use rstest::rstest;
+
+const N: usize = 6;
+
+/// Complete graph on [`N`] vertices at uniform conductance `w`, so scaling `w` scales the
+/// whole matrix and nothing else.
+fn scaled_solve<T>(w: T, backend: Backend) -> Vec<T>
+where
+    T: Float + Send + Sync + 'static,
+{
+    let mut row_ptrs = vec![0u32];
+    let (mut col_indices, mut values) = (Vec::new(), Vec::new());
+    let degree = T::from(N - 1).expect("small count is representable");
+    for row in 0..N {
+        for col in 0..N {
+            col_indices.push(col as u32);
+            values.push(if row == col { w * degree } else { -w });
+        }
+        row_ptrs.push(col_indices.len() as u32);
+    }
+    let rhs: Vec<T> = [1.0, -1.0, 2.0, -2.0, 0.5, -0.5]
+        .iter()
+        .map(|&b| T::from(b).expect("literal is representable"))
+        .collect();
+    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, N as u32).or_panic("valid csr");
+    let config = Config {
+        backend,
+        ..Config::default()
+    };
+    factorize_with(csr, config)
+        .or_panic("factorization should succeed")
+        .solve(&rhs)
+        .or_panic("solve should succeed")
+        .iter()
+        .map(|&x| x * w)
+        .collect()
+}
+
+/// `M x = b` scaled by `w` has solution `x / w`, so `w * x(w)` is invariant for any
+/// scale-free method at a fixed seed. An absolute floor in the sampler shows up here as a
+/// deviation of order one rather than of order epsilon: before #92, `f64` broke at `1e-14`
+/// and `f32` at `1e-6`, both by 98%.
+///
+/// Bounded above at unit scale: a solution far below the right-hand side is lost in the
+/// solve kernel for reasons unrelated to the sampler's floors (#93).
+fn assert_invariant_under_scaling<T>(backend: Backend, exponents: &[i32], tolerance: T)
+where
+    T: Float + Send + Sync + std::fmt::LowerExp + 'static,
+{
+    let ten = T::from(10.0).expect("ten is representable");
+    let reference = scaled_solve(T::one(), backend);
+    for &exponent in exponents {
+        let w = ten.powi(exponent);
+        for (index, (&scaled, &want)) in scaled_solve(w, backend).iter().zip(&reference).enumerate()
+        {
+            let deviation = ((scaled - want) / want).abs();
+            assert!(
+                deviation < tolerance,
+                "w=1e{exponent}: x[{index}] deviates by {deviation:e}"
+            );
+        }
+    }
+}
+
+#[rstest]
+#[case::approximate(Backend::Approximate)]
+#[case::exact(Backend::default())]
+fn factorization_is_invariant_under_uniform_scaling(#[case] backend: Backend) {
+    assert_invariant_under_scaling(
+        backend,
+        &[-300, -200, -100, -30, -16, -15, -14, -5, -1],
+        1e-12f64,
+    );
+    // `f32`'s floor was `1e-6`, which is ordinary conductance territory.
+    assert_invariant_under_scaling(backend, &[-30, -20, -12, -8, -7, -6, -5, -2, -1], 1e-4f32);
+}

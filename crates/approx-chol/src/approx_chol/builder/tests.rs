@@ -111,7 +111,7 @@ fn ac2_one_neighbor_star_keeps_augmentation_mass() {
 }
 
 #[test]
-fn ac2_near_zero_weight_star_skips_fill_sampling() {
+fn ac2_extreme_small_weight_star_still_solves_finitely() {
     let eps = 1e-300;
     assert_ac2_augmented_solve_is_finite(
         &[0, 2, 5, 7],

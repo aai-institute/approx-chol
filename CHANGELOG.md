@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A row's departure from zero-sum is judged against `epsilon * scale * terms` in both
   directions: a surplus above it is grounded, a deficit below it is
   `Error::NotDiagonallyDominant`. (#78, #85, #91)
+- Approximate elimination judges a weight total, a fill weight and a sampled suffix by
+  whether they are positive rather than against an absolute floor, so the factor for a
+  fixed seed differs wherever a weight fell below `1e-14` (`f64`) or `1e-6` (`f32`). (#92)
 
 ### Removed
 
@@ -54,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `u32` nonzero/edge overflow now panics instead of silently truncating the factor. (#39)
 - A strictly-dominant SDDM scaled below unit magnitude is augmented, and elimination
   keeps the scale of an underflowing diagonal or per-copy share. (#36)
+- Approximate factorization is invariant under uniform weight scaling; absolute floors
+  in the sampler cost up to 98% accuracy below `1e-14` (`f64`) and `1e-6` (`f32`). (#92)
 - Approximate elimination keeps a small pivot's reciprocal wherever it is representable
   instead of substituting a scale of one. (#75)
 - `validate_structure` rejects a tampered `Anchor`, an `original_n` unrelated to `n`, and

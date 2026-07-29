@@ -8,24 +8,6 @@ pub(crate) trait Real: Float + Send + Sync + 'static {}
 
 impl<T> Real for T where T: Float + Send + Sync + 'static {}
 
-/// `single` for `f32`-width scalars, `double` otherwise.
-#[inline]
-fn by_precision<T: Float>(single: f64, double: f64) -> T {
-    let value = if core::mem::size_of::<T>() <= 4 {
-        single
-    } else {
-        double
-    };
-    <T as NumCast>::from(value).unwrap_or_else(T::epsilon)
-}
-
-/// The scale below which a weight or pivot is not resolvable, so dividing by it is
-/// what breaks rather than the value being wrong.
-#[inline]
-pub(crate) fn near_zero<T: Float>() -> T {
-    by_precision(1e-6, 1e-14)
-}
-
 /// Panics on an exotic `Float` rather than substituting: every substitute a call site
 /// could pick silently corrupts the factor instead. `f32` and `f64` never fail.
 #[inline]

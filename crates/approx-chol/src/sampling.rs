@@ -1,7 +1,7 @@
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
-use crate::types::{near_zero, Real};
+use crate::types::Real;
 use num_traits::NumCast;
 
 /// At or below this range size a linear CDF scan beats binary search.
@@ -74,7 +74,9 @@ impl<T: Real> CdfSampler<T> {
             T::zero()
         };
         let remaining = self.cumsum[end - 1] - base;
-        if remaining <= near_zero::<T>() {
+        // A positive interval is all a draw needs; a floor above zero would refuse to
+        // sample a suffix whose mass is small only because the input's scale is.
+        if remaining <= T::zero() {
             return None;
         }
 
@@ -143,6 +145,23 @@ mod tests {
         }
     }
 
+    /// Scaling every weight scales the CDF, not the distribution, so a suffix stays as
+    /// samplable at `1e-300` as at unit magnitude.
+    #[test]
+    fn a_uniformly_scaled_distribution_draws_alike() {
+        let reference = sample_counts(&[(0, 1.0), (1, 2.0), (2, 7.0)], 0, 1_000);
+        for scale in [1e-6f64, 1e-20, 1e-300, 1e6, 1e300] {
+            let entries: Vec<(u32, f64)> = [(0, 1.0), (1, 2.0), (2, 7.0)]
+                .map(|(neighbor, weight): (u32, f64)| (neighbor, weight * scale))
+                .to_vec();
+            assert_eq!(
+                sample_counts(&entries, 0, 1_000),
+                reference,
+                "scale {scale:e} changed the draws"
+            );
+        }
+    }
+
     /// Sweeps every start, so both arms of the suffix search run.
     #[test]
     fn monotonic_suffix() {
@@ -176,11 +195,7 @@ mod tests {
     #[test]
     fn a_degenerate_suffix_answers_deterministically() {
         let cases = [
-            (
-                "weights below the near-zero floor",
-                vec![(0u32, 1e-20f64); 3],
-                None,
-            ),
+            ("weights that sum to zero", vec![(0u32, 0.0f64); 3], None),
             ("empty", vec![], None),
             ("one entry", vec![(0, 5.0)], Some(0u32)),
         ];

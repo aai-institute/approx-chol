@@ -2,7 +2,7 @@ use super::ordering::DegreeDeltas;
 use super::star::{Star, StarEntry};
 use crate::graph::{AdjListGraph, EdgeCount, Multi, Single, SplitFactor};
 use crate::sampling::CdfSampler;
-use crate::types::{count_as_scalar, near_zero, Real};
+use crate::types::{count_as_scalar, Real};
 
 /// One sampled column of the factor (Algorithm 5, GKS 2023), reused across steps.
 pub(super) struct SampledColumn<T: Real> {
@@ -55,15 +55,19 @@ impl<T: Real> SampledColumn<T> {
                 let total_weight = entries
                     .iter()
                     .fold(T::zero(), |acc, entry| acc + entry.weight);
-                // A non-positive/non-finite total has no valid fraction
-                // (`f = w·scale/total` divides through zero or NaN).
-                if total_weight.is_finite() && total_weight > near_zero::<T>() {
+                // Entries are sorted ascending, so `total_weight >= w_i` puts every
+                // `f = w·scale/total` in `[0, 1]`: a finite positive total is the whole
+                // precondition, and any floor above it would judge scale instead.
+                if total_weight.is_finite() && total_weight > T::zero() {
                     return Some(Sampling {
                         rest,
                         last,
                         total_weight,
                     });
                 }
+                // Unreachable from `factorize`, which admits only strictly positive
+                // finite weights: only a caller handing `CliqueTreeSampler` its own
+                // weights gets here.
                 T::one() / count_as_scalar::<T, _>(entries.len())
             }
             _ => T::one(),
@@ -106,7 +110,7 @@ impl<T: Real> SampledColumn<T> {
         draws: &mut CdfSampler<T>,
         tail: usize,
     ) {
-        if n_samples == 0 || fill_weight <= near_zero::<T>() {
+        if n_samples == 0 || fill_weight <= T::zero() {
             return;
         }
         for _ in 0..n_samples {
@@ -154,7 +158,7 @@ impl<T: Real> StarElimination<T> {
 
     #[inline(always)]
     fn fraction(&self, w: T) -> T {
-        debug_assert!(self.capacity > T::epsilon());
+        debug_assert!(self.capacity > T::zero());
         w * self.scale / self.capacity
     }
 
