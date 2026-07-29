@@ -38,7 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Factor::fallbacks`, `Fallback`, `UnusablePivot` and `DenseFailure` name each component that fell back and why its pivot was unusable.
 - Python `Backend`, `ExactFailure`, `DenseFailure`, `Config(backend=...)`, `Factor.fallbacks` and `Fallback`; `factorize`/`factorize_raw` emit a `RuntimeWarning` per fallback.
 - `From<&OwnedCsr> for CsrRef`, so `factorize`/`Builder::build` take `&OwnedCsr` directly. (#41)
-- Wheels are now a single `cp311-abi3` build per platform, valid on every CPython from 3.11 up, verified by `abi3audit --strict` and an import-plus-test matrix across 3.11–3.13 on Linux, macOS, and Windows. (#61)
+- Wheels are now a single `cp39-abi3` build per platform, valid on every CPython from 3.9 up, verified by `abi3audit --strict` and an import-plus-test matrix across 3.9–3.14 on Linux, macOS, and Windows; free-threaded interpreters get a version-specific wheel each. (#61)
+- `requires-python` drops to 3.9, and the `scipy` floor rises to 1.12 for `cg(rtol=)`. (#61)
 
 ### Fixed
 
