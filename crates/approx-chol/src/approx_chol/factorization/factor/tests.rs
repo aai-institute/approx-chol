@@ -55,6 +55,7 @@ mod validation {
             ],
             neighbor_indices: vec![1, 2],
             elimination_fractions: vec![1.0, 1.0],
+            uneliminated: 2,
         }
     }
 
@@ -185,6 +186,18 @@ mod validation {
                 approx,
                 |f| seq_of(f).elimination_fractions[0] = 2.0,
                 FactorError::StepValueInvalid { step: 0 },
+            ),
+            (
+                "uneliminated vertex bounds",
+                approx,
+                |f| seq_of(f).uneliminated = 99,
+                FactorError::UneliminatedVertexInvalid { vertex: 99, n: 3 },
+            ),
+            (
+                "uneliminated vertex is a pivot a step already eliminated",
+                approx,
+                |f| seq_of(f).uneliminated = 1,
+                FactorError::UneliminatedVertexInvalid { vertex: 1, n: 3 },
             ),
             (
                 "exact factor shorter than its block",

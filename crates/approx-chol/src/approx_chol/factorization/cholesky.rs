@@ -28,14 +28,7 @@ pub(crate) enum Cholesky<T> {
 impl<T: Real> Cholesky<T> {
     pub(super) fn apply(&self, values: &mut [T]) {
         match self {
-            Self::Approximate(sequence) => {
-                for index in 0..sequence.n_steps() {
-                    sequence.step(index).apply_forward(values);
-                }
-                for index in (0..sequence.n_steps()).rev() {
-                    sequence.step(index).apply_backward(values);
-                }
-            }
+            Self::Approximate(sequence) => sequence.substitute(values),
             Self::Exact(lower) => lower.substitute(values),
         }
     }

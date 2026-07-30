@@ -47,8 +47,10 @@ where
 /// deviation of order one rather than of order epsilon: before #92, `f64` broke at `1e-14`
 /// and `f32` at `1e-6`, both by 98%.
 ///
-/// Bounded above at unit scale: a solution far below the right-hand side is lost in the
-/// solve kernel for reasons unrelated to the sampler's floors (#93).
+/// Above unit scale it is the solve kernel rather than the sampler that the exponents
+/// bound: before #93 the pivot entries, at `1/w` of the right-hand side's scale, were
+/// annihilated by the residue the uneliminated vertex carried, which `Anchor::recover`
+/// then turned into exact zeros.
 fn assert_invariant_under_scaling<T>(backend: Backend, exponents: &[i32], tolerance: T)
 where
     T: Float + Send + Sync + std::fmt::LowerExp + 'static,
@@ -74,9 +76,17 @@ where
 fn factorization_is_invariant_under_uniform_scaling(#[case] backend: Backend) {
     assert_invariant_under_scaling(
         backend,
-        &[-300, -200, -100, -30, -16, -15, -14, -5, -1],
+        &[
+            -300, -200, -100, -30, -16, -15, -14, -5, -1, 21, 23, 31, 32, 37, 43, 50, 100, 152,
+            200, 300,
+        ],
         1e-12f64,
     );
-    // `f32`'s floor was `1e-6`, which is ordinary conductance territory.
-    assert_invariant_under_scaling(backend, &[-30, -20, -12, -8, -7, -6, -5, -2, -1], 1e-4f32);
+    // `f32`'s floor was `1e-6` and its annihilation set in at `1e10`, both ordinary
+    // conductance territory.
+    assert_invariant_under_scaling(
+        backend,
+        &[-30, -20, -12, -8, -7, -6, -5, -2, -1, 7, 10, 12, 20, 30],
+        1e-4f32,
+    );
 }
