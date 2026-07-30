@@ -9,68 +9,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (breaking)
 
-- Disconnected input is supported: each connected component is factored, grounded and
-  projected on its own in place of a global zero-mean projection. 0.3.1 coupled the
-  components and silently solved a different system when a right-hand side was not
-  zero-sum within each; solve output differs even where 0.3.1 was correct. (#35, #36)
-- `solve`/`solve_into` cap the right-hand side at the original matrix dimension, and
+- Each connected component of a disconnected input is factored, grounded and projected
+  on its own. ([#35], [#36])
+- `solve`/`solve_into` cap the right-hand side at the original dimension;
   `solve_in_place` leaves one variable pinned per component.
-- The serde representation of `Factor` is incompatible with 0.3.1, and the exact
-  factor for a fixed seed can differ.
-- `Config` gains a `backend` field, so struct literals need `..Config::default()`.
+- The serde representation of `Factor` is incompatible with 0.3.1, and a fixed seed can
+  produce a different factor.
+- `Config` gains a `backend` field, defaulting to exact dense Cholesky for a component
+  of at most 24 solved variables. ([#83])
 - `Error::Asymmetric`, `Error::NonFiniteValue`, `Error::NonFiniteRow` and
-  `Error::NotDiagonallyDominant` reject input that 0.3.1 accepted, and duplicate
-  entries are summed before the off-diagonal sign check.
-- `Config::split_merge` of `Some(1)` selects standard AC in place of AC2 with one
-  edge copy, and `Some(0)` selects it instead of erroring.
-- `low_level::CliqueTreeSampler` replaces `low_level::clique_tree_sample` and
-  `low_level::clique_tree_sample_multi`: `seed` and `split_merge` move to
-  `CliqueTreeSampler::new`, and `sample` takes the star index and borrows its entries.
-  Fill edges are unchanged for a given base seed and star index, except that entries of
-  equal weight now order by neighbor index.
-- `OwnedCsr::try_as_ref` is replaced by the infallible `as_csr_ref`, and
-  `CsrRef::row_ptrs`/`col_indices`/`values` return slices with the view's lifetime.
-- A row's departure from zero-sum is judged against `epsilon * scale * terms` in both
-  directions: a surplus above it is grounded, a deficit below it is
-  `Error::NotDiagonallyDominant`. (#78, #85, #91)
-- A persisted `Factor` declares `format_version`, and a payload declaring another
-  version is rejected naming both versions. (#50)
-- Approximate elimination judges a weight total, a fill weight and a sampled suffix by
-  whether they are positive rather than against an absolute floor, so the factor for a
-  fixed seed differs wherever a weight fell below `1e-14` (`f64`) or `1e-6` (`f32`). (#92)
+  `Error::NotDiagonallyDominant` reject non-symmetric, non-finite and non-dominant
+  input, and duplicate entries are summed before the off-diagonal sign check.
+- `Config::split_merge` of `Some(0)` or `Some(1)` selects standard AC.
+- `low_level::CliqueTreeSampler` replaces `clique_tree_sample`/`clique_tree_sample_multi`:
+  `seed` and `split_merge` move to `new`, `sample` takes the star index, and entries of
+  equal weight order by neighbor index.
+- `OwnedCsr::try_as_ref` is replaced by the infallible `as_csr_ref`, and `CsrRef`
+  accessors return slices with the view's lifetime.
+- A row surplus above `epsilon * scale * terms` is grounded, a deficit below it is
+  `Error::NotDiagonallyDominant`. ([#78], [#85], [#91])
+- A persisted `Factor` declares `format_version` and rejects any other version. ([#50])
+- The sampler judges weights by sign rather than against an absolute floor, so a fixed
+  seed's factor differs below `1e-14` (`f64`) / `1e-6` (`f32`). ([#92])
 
 ### Removed
 
-- `Error::InvalidConfig` and `ConfigError` — no `split_merge` value is invalid.
+- `Error::InvalidConfig` and `ConfigError`.
 
 ### Added
 
-- `Config::backend` selects the per-component factorization: `Backend::ExactBelow { max_dim, on_failure }` by default, or `Backend::Approximate`. `ExactFailure` chooses whether an unusable pivot falls back to approximate elimination or fails with `Error::DenseFactorizationFailed`.
-- `Factor::fallbacks`, `Fallback`, `UnusablePivot` and `DenseFailure` name each component that fell back and why its pivot was unusable.
-- Python `Backend`, `ExactFailure`, `DenseFailure`, `Config(backend=...)`, `Factor.fallbacks` and `Fallback`; `factorize`/`factorize_raw` emit a `RuntimeWarning` per fallback.
-- `From<&OwnedCsr> for CsrRef`, so `factorize`/`Builder::build` take `&OwnedCsr` directly. (#41)
-- Wheels are now a single `cp39-abi3` build per platform, valid on every CPython from 3.9 up, verified by `abi3audit --strict` and an import-plus-test matrix across 3.9–3.14 on Linux, macOS, and Windows; free-threaded interpreters get a version-specific `cp314t` wheel on Linux x86_64, Windows x64 and macOS arm64. (#61)
-- `requires-python` drops to 3.9, and the `scipy` floor rises to 1.12 for `cg(rtol=)`. (#61)
-- `FACTOR_FORMAT_VERSION` names the encoding a persisted `Factor` declares. (#50)
+- `Config::backend`: `Backend::ExactBelow { max_dim, on_failure }` or
+  `Backend::Approximate`, with `ExactFailure` choosing fallback or
+  `Error::DenseFactorizationFailed`. ([#83])
+- `Factor::fallbacks`, `Fallback`, `UnusablePivot` and `DenseFailure`. ([#83])
+- Python `Backend`, `ExactFailure`, `DenseFailure`, `Fallback`, `Config(backend=...)`,
+  `Factor.fallbacks`, and a `RuntimeWarning` per fallback. ([#83])
+- `From<&OwnedCsr> for CsrRef`. ([#41])
+- One `cp39-abi3` wheel per platform, plus `cp314t` free-threaded wheels. ([#61])
+- `requires-python` drops to 3.9 and the `scipy` floor rises to 1.12. ([#61])
+- `FACTOR_FORMAT_VERSION`. ([#50])
+- An MSRV of Rust 1.85. ([#62])
 
 ### Fixed
 
-- A structurally or numerically invalid `Factor` is rejected at deserialize time. (#37)
-- `low_level::CliqueTreeSampler` no longer panics or emits non-finite fill on degenerate weights. (#38)
-- `u32` nonzero/edge overflow now panics instead of silently truncating the factor. (#39)
-- A strictly-dominant SDDM scaled below unit magnitude is augmented, and elimination
-  keeps the scale of an underflowing diagonal or per-copy share. (#36)
-- Approximate factorization is invariant under uniform weight scaling; absolute floors
-  in the sampler cost up to 98% accuracy below `1e-14` (`f64`) and `1e-6` (`f32`). (#92)
-- Approximate elimination keeps a small pivot's reciprocal wherever it is representable
-  instead of substituting a scale of one. (#75)
-- The approximate solve zeroes the uneliminated vertex between its passes, so a solution
-  far below the right-hand side is no longer annihilated and returned as exact zeros. (#93)
-- `validate_structure` rejects a tampered `Anchor`, an `original_n` unrelated to `n`, and
-  non-finite or out-of-range factor values. (#80)
-- Each block draws from its own sampler stream, so a fixed seed factors a block the same
-  way under either backend. (#82)
-- A diagonal above half the scalar's maximum no longer overflows the row-scale computation.
+- An invalid `Factor` — tampered anchor, mismatched `original_n`, non-finite or
+  out-of-range values — is rejected at deserialize time. ([#37], [#80])
+- `CliqueTreeSampler` no longer panics or emits non-finite fill on degenerate
+  weights. ([#38])
+- `u32` nonzero/edge overflow panics instead of truncating the factor. ([#39])
+- A sub-unit-scale strictly-dominant SDDM is augmented, and elimination keeps the scale
+  of an underflowing diagonal or per-copy share. ([#36])
+- Approximate elimination keeps a small pivot's reciprocal wherever it is
+  representable. ([#75])
+- The approximate solve zeroes the uneliminated vertex between passes, so a small
+  solution is no longer annihilated. ([#93])
+- Each block draws from its own sampler stream, so a fixed seed factors it the same way
+  under either backend. ([#82])
+- A large diagonal no longer overflows the row-scale computation.
 
 ## [0.3.1] - 2026-07-10
 
@@ -138,3 +133,22 @@ for graph Laplacians in Rust with Python bindings.
 [0.3.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.3.0
 [0.2.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.2.0
 [0.1.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.1.0
+
+[#35]: https://github.com/aai-institute/approx-chol/issues/35
+[#36]: https://github.com/aai-institute/approx-chol/issues/36
+[#37]: https://github.com/aai-institute/approx-chol/issues/37
+[#38]: https://github.com/aai-institute/approx-chol/issues/38
+[#39]: https://github.com/aai-institute/approx-chol/issues/39
+[#41]: https://github.com/aai-institute/approx-chol/issues/41
+[#50]: https://github.com/aai-institute/approx-chol/issues/50
+[#61]: https://github.com/aai-institute/approx-chol/issues/61
+[#62]: https://github.com/aai-institute/approx-chol/issues/62
+[#75]: https://github.com/aai-institute/approx-chol/issues/75
+[#78]: https://github.com/aai-institute/approx-chol/issues/78
+[#80]: https://github.com/aai-institute/approx-chol/issues/80
+[#82]: https://github.com/aai-institute/approx-chol/issues/82
+[#83]: https://github.com/aai-institute/approx-chol/issues/83
+[#85]: https://github.com/aai-institute/approx-chol/issues/85
+[#91]: https://github.com/aai-institute/approx-chol/issues/91
+[#92]: https://github.com/aai-institute/approx-chol/issues/92
+[#93]: https://github.com/aai-institute/approx-chol/issues/93
