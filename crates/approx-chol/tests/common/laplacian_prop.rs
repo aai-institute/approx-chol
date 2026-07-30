@@ -42,6 +42,61 @@ pub fn build_laplacian_csr(n: usize, edge_weights: &[u8]) -> LaplacianCsr {
     (row_ptrs, col_indices, values, n as u32)
 }
 
+/// `A'[p[i]][p[j]] = A[i][j]`, rebuilt through a dense buffer so the result's rows carry
+/// the same explicit-diagonal convention [`build_laplacian_csr`] emits.
+pub fn permute_csr(csr: &LaplacianCsr, p: &[usize]) -> LaplacianCsr {
+    let (row_ptrs, col_indices, values, n) = csr;
+    let n = *n as usize;
+    let mut dense = vec![0.0_f64; n * n];
+    for row in 0..n {
+        for k in row_ptrs[row] as usize..row_ptrs[row + 1] as usize {
+            dense[p[row] * n + p[col_indices[k] as usize]] = values[k];
+        }
+    }
+    let mut out_ptrs = Vec::with_capacity(n + 1);
+    let (mut out_cols, mut out_vals) = (Vec::new(), Vec::new());
+    out_ptrs.push(0u32);
+    for row in 0..n {
+        for col in 0..n {
+            let value = dense[row * n + col];
+            if row == col || value != 0.0 {
+                out_cols.push(col as u32);
+                out_vals.push(value);
+            }
+        }
+        out_ptrs.push(out_cols.len() as u32);
+    }
+    (out_ptrs, out_cols, out_vals, n as u32)
+}
+
+pub fn permutation_strategy(n: usize) -> impl Strategy<Value = Vec<usize>> {
+    Just((0..n).collect::<Vec<_>>()).prop_shuffle()
+}
+
+/// Components are the residue classes mod the returned `parts`, so they interleave and the
+/// block-contiguous order is never the identity. Without this the suites reach a
+/// non-identity `Permutation` in about 3 cases of 512, nearly always an involution.
+pub fn interleaved_components_strategy() -> impl Strategy<Value = (LaplacianCsr, usize)> {
+    (2usize..=3, 5usize..=9).prop_flat_map(|(parts, n)| {
+        let pair_count = n * (n - 1) / 2;
+        // Never zero within a class, so each class is a complete graph and the component
+        // count is exactly `parts`.
+        prop::collection::vec(1u8..=4, pair_count).prop_map(move |weights| {
+            let mut edge_weights = vec![0u8; pair_count];
+            let mut position = 0usize;
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    if i % parts == j % parts {
+                        edge_weights[position] = weights[position];
+                    }
+                    position += 1;
+                }
+            }
+            (build_laplacian_csr(n, &edge_weights), parts)
+        })
+    })
+}
+
 pub fn laplacian_csr_strategy() -> impl Strategy<Value = LaplacianCsr> {
     (1usize..=8).prop_flat_map(|n| {
         let pair_count = n * (n - 1) / 2;
