@@ -74,6 +74,8 @@ where
 #[case::approximate(Backend::Approximate)]
 #[case::exact(Backend::default())]
 fn factorization_is_invariant_under_uniform_scaling(#[case] backend: Backend) {
+    // `f64`'s floor was `1e-14`, and its annihilation set in at `1e21` on this fixture;
+    // the exponents above unit scale are ones that failed before #93.
     assert_invariant_under_scaling(
         backend,
         &[

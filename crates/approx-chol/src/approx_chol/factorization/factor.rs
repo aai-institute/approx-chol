@@ -242,9 +242,10 @@ where
         Self::from_blocks(original_n, None, Vec::new(), Vec::new())
     }
 
-    /// Total elimination steps across all blocks.
+    /// Total elimination steps across all blocks: every block solves for all but one of
+    /// its variables, whichever arm factored it.
     pub fn n_steps(&self) -> usize {
-        self.blocks.iter().map(Block::n_steps).sum()
+        self.blocks.iter().map(|block| block.dim.solved()).sum()
     }
 
     #[inline]

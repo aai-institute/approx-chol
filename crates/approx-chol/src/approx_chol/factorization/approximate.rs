@@ -34,13 +34,10 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
     let mut column = SampledColumn::<T>::new();
     let mut seq = SequenceBuilder::with_capacity(n, degree_sum);
     let mut deltas = DegreeDeltas::new(n);
-    let target_steps = n.saturating_sub(1);
-    let mut steps_done = 0usize;
-    while steps_done < target_steps {
-        let Some(v) = ordering.next_vertex() else {
-            break;
-        };
-        steps_done += 1;
+    for _ in 0..n.saturating_sub(1) {
+        let v = ordering
+            .next_vertex()
+            .expect("the queue holds every vertex of the block");
         star_builder.build_star(&mut graph, v, &mut ordering);
         let star = star_builder.star();
         if star.entries().is_empty() {
@@ -66,18 +63,17 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
         deltas.flush(&mut ordering);
     }
 
-    // `target_steps` is one short of `n`, so the queue still holds the vertex no step
-    // eliminated. Min-degree picks it, so it is only the block's last — the one the
-    // anchor pins — when the block has no other.
+    // One step short of `n`, so the queue still holds the vertex no step eliminated —
+    // the block's last, which is what the anchor pins, only when it has no other.
     seq.finish(
         ordering
             .next_vertex()
-            .expect("one vertex is left uneliminated") as u32,
+            .expect("the queue holds every vertex of the block") as u32,
     )
 }
 
 /// Zero-copy view of one elimination step.
-pub(super) struct EliminationStep<'a, T> {
+struct EliminationStep<'a, T> {
     vertex: usize,
     inv_diag: T,
     neighbor_indices: &'a [u32],
@@ -90,7 +86,7 @@ pub(super) struct EliminationStep<'a, T> {
 impl<'a, T: Real> EliminationStep<'a, T> {
     /// Forward elimination: scatter pivot weight to neighbors, then scale by D^{-1}.
     #[inline(always)]
-    pub(super) fn apply_forward(&self, y: &mut [T]) {
+    fn apply_forward(&self, y: &mut [T]) {
         let vertex = self.vertex;
         let inv_diag = self.inv_diag;
         let n = self.neighbor_indices.len();
@@ -118,7 +114,7 @@ impl<'a, T: Real> EliminationStep<'a, T> {
 
     /// Backward substitution: gather neighbor contributions back to pivot.
     #[inline(always)]
-    pub(super) fn apply_backward(&self, y: &mut [T]) {
+    fn apply_backward(&self, y: &mut [T]) {
         let vertex = self.vertex;
         let n = self.neighbor_indices.len();
         let one = T::one();
@@ -279,7 +275,7 @@ impl<T: serde::Serialize> serde::Serialize for PairedNeighbors<'_, T> {
 // Read-only accessors (no internal trait bounds).
 impl<T> EliminationSequence<T> {
     #[inline(always)]
-    pub(super) fn n_steps(&self) -> usize {
+    fn n_steps(&self) -> usize {
         self.steps.len()
     }
 
@@ -314,22 +310,14 @@ impl<T> EliminationSequence<T> {
     where
         T: num_traits::Float,
     {
-        // `substitute` writes this entry unchecked, and a vertex a step already
-        // eliminated would have its pivot zeroed instead.
-        if (self.uneliminated as usize) >= n
-            || self
-                .steps
-                .iter()
-                .any(|step| step.vertex == self.uneliminated)
-        {
+        // `substitute` writes this entry unchecked.
+        if (self.uneliminated as usize) >= n {
             return Err(FactorError::UneliminatedVertexInvalid {
                 vertex: self.uneliminated,
                 n,
             });
         }
-        // With the count and the distinctness below, one step per vertex but the
-        // uneliminated one: any other tiling leaves a vertex neither divided nor zeroed,
-        // which is the loss `substitute` exists to prevent.
+        // Any other tiling leaves a vertex neither divided by a pivot nor zeroed.
         if self.steps.len() + 1 != n {
             return Err(FactorError::StepCountDoesNotTileBlock {
                 steps: self.steps.len(),
@@ -372,6 +360,12 @@ impl<T> EliminationSequence<T> {
                 return Err(FactorError::StepValueInvalid { step: i });
             }
         }
+        if eliminated[self.uneliminated as usize] {
+            return Err(FactorError::UneliminatedVertexInvalid {
+                vertex: self.uneliminated,
+                n,
+            });
+        }
         Ok(())
     }
 }
@@ -391,8 +385,7 @@ impl<T: Real> EliminationSequence<T> {
     }
 }
 
-/// Accumulates the flat arrays, so a sequence cannot exist without naming the vertex its
-/// steps left behind.
+/// A sequence cannot exist without naming the vertex its steps left behind.
 struct SequenceBuilder<T> {
     steps: Vec<StepHeader<T>>,
     neighbor_indices: Vec<u32>,
