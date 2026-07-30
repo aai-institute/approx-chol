@@ -64,6 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the sampler cost up to 98% accuracy below `1e-14` (`f64`) and `1e-6` (`f32`). (#92)
 - Approximate elimination keeps a small pivot's reciprocal wherever it is representable
   instead of substituting a scale of one. (#75)
+- The approximate solve zeroes the uneliminated vertex between its passes, so a solution
+  far below the right-hand side is no longer annihilated and returned as exact zeros. (#93)
 - `validate_structure` rejects a tampered `Anchor`, an `original_n` unrelated to `n`, and
   non-finite or out-of-range factor values. (#80)
 - Each block draws from its own sampler stream, so a fixed seed factors a block the same

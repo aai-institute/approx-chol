@@ -1,5 +1,5 @@
-//! Both arms factor the same matrix — the block minus its pinned last vertex — so a
-//! block's solve never asks which one it got.
+//! Both arms leave one variable free, so a block's solve never asks which one it got —
+//! the exact arm the pinned last vertex, the approximate one whichever min-degree spared.
 
 use super::approximate::EliminationSequence;
 #[cfg(any(feature = "serde", test))]
@@ -28,24 +28,8 @@ pub(crate) enum Cholesky<T> {
 impl<T: Real> Cholesky<T> {
     pub(super) fn apply(&self, values: &mut [T]) {
         match self {
-            Self::Approximate(sequence) => {
-                for index in 0..sequence.n_steps() {
-                    sequence.step(index).apply_forward(values);
-                }
-                for index in (0..sequence.n_steps()).rev() {
-                    sequence.step(index).apply_backward(values);
-                }
-            }
+            Self::Approximate(sequence) => sequence.substitute(values),
             Self::Exact(lower) => lower.substitute(values),
-        }
-    }
-}
-
-impl<T> Cholesky<T> {
-    pub(super) fn n_steps(&self) -> usize {
-        match self {
-            Self::Approximate(sequence) => sequence.n_steps(),
-            Self::Exact(lower) => lower.rows(),
         }
     }
 }

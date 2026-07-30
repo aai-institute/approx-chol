@@ -14,7 +14,7 @@ mod tests;
 /// keeps a payload that predates the field from passing the check on whatever `usize` led
 /// it — `1` would collide with the `original_n` of a one-variable system.
 #[cfg(feature = "serde")]
-pub const FACTOR_FORMAT_VERSION: u32 = 0x4143_0001;
+pub const FACTOR_FORMAT_VERSION: u32 = 0x4143_0002;
 
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 #[cfg_attr(
@@ -242,9 +242,10 @@ where
         Self::from_blocks(original_n, None, Vec::new(), Vec::new())
     }
 
-    /// Total elimination steps across all blocks.
+    /// Total elimination steps across all blocks: every block solves for all but one of
+    /// its variables, whichever arm factored it.
     pub fn n_steps(&self) -> usize {
-        self.blocks.iter().map(Block::n_steps).sum()
+        self.blocks.iter().map(|block| block.dim.solved()).sum()
     }
 
     #[inline]

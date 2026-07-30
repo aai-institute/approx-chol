@@ -65,6 +65,18 @@ pub(crate) enum FactorError {
     StepValueInvalid {
         step: usize,
     },
+    UneliminatedVertexInvalid {
+        vertex: u32,
+        n: usize,
+    },
+    StepCountDoesNotTileBlock {
+        steps: usize,
+        n: usize,
+    },
+    VertexEliminatedTwice {
+        step: usize,
+        vertex: u32,
+    },
     MultipleGroundBlocks {
         grounded: usize,
     },

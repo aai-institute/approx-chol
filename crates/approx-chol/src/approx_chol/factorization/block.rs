@@ -50,10 +50,6 @@ impl<T> Block<T> {
             cholesky,
         }
     }
-
-    pub(super) fn n_steps(&self) -> usize {
-        self.cholesky.n_steps()
-    }
 }
 
 impl<T: Real> Block<T> {

@@ -32,15 +32,12 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
     let mut star_builder = StarBuilder::<T, C>::new(n, copies);
     let mut ordering = DynamicOrdering::new(&degrees, copies as usize);
     let mut column = SampledColumn::<T>::new();
-    let mut seq = EliminationSequence::with_capacity(n, degree_sum);
+    let mut seq = SequenceBuilder::with_capacity(n, degree_sum);
     let mut deltas = DegreeDeltas::new(n);
-    let target_steps = n.saturating_sub(1);
-    let mut steps_done = 0usize;
-    while steps_done < target_steps {
-        let Some(v) = ordering.next_vertex() else {
-            break;
-        };
-        steps_done += 1;
+    for _ in 0..n.saturating_sub(1) {
+        let v = ordering
+            .next_vertex()
+            .expect("the queue holds every vertex of the block");
         star_builder.build_star(&mut graph, v, &mut ordering);
         let star = star_builder.star();
         if star.entries().is_empty() {
@@ -66,11 +63,17 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
         deltas.flush(&mut ordering);
     }
 
-    seq
+    // One step short of `n`, so the queue still holds the vertex no step eliminated —
+    // the block's last, which is what the anchor pins, only when it has no other.
+    seq.finish(
+        ordering
+            .next_vertex()
+            .expect("the queue holds every vertex of the block") as u32,
+    )
 }
 
 /// Zero-copy view of one elimination step.
-pub(super) struct EliminationStep<'a, T> {
+struct EliminationStep<'a, T> {
     vertex: usize,
     inv_diag: T,
     neighbor_indices: &'a [u32],
@@ -83,7 +86,7 @@ pub(super) struct EliminationStep<'a, T> {
 impl<'a, T: Real> EliminationStep<'a, T> {
     /// Forward elimination: scatter pivot weight to neighbors, then scale by D^{-1}.
     #[inline(always)]
-    pub(super) fn apply_forward(&self, y: &mut [T]) {
+    fn apply_forward(&self, y: &mut [T]) {
         let vertex = self.vertex;
         let inv_diag = self.inv_diag;
         let n = self.neighbor_indices.len();
@@ -111,7 +114,7 @@ impl<'a, T: Real> EliminationStep<'a, T> {
 
     /// Backward substitution: gather neighbor contributions back to pivot.
     #[inline(always)]
-    pub(super) fn apply_backward(&self, y: &mut [T]) {
+    fn apply_backward(&self, y: &mut [T]) {
         let vertex = self.vertex;
         let n = self.neighbor_indices.len();
         let one = T::one();
@@ -150,7 +153,7 @@ pub(crate) struct StepHeader<T> {
     feature = "serde",
     serde(
         bound(deserialize = "T: serde::de::DeserializeOwned"),
-        try_from = "Vec<StepData<T>>"
+        try_from = "SequenceData<T>"
     )
 )]
 #[derive(Clone, Debug)]
@@ -158,6 +161,8 @@ pub(crate) struct EliminationSequence<T> {
     pub(crate) steps: Vec<StepHeader<T>>,
     pub(crate) neighbor_indices: Vec<u32>,
     pub(crate) elimination_fractions: Vec<T>,
+    /// The one vertex no step eliminates, so nothing divides its entry by a pivot.
+    pub(crate) uneliminated: u32,
 }
 
 /// Nesting the neighbors under their step is what retires the range and
@@ -172,14 +177,22 @@ struct StepData<T> {
 }
 
 #[cfg(feature = "serde")]
-impl<T> TryFrom<Vec<StepData<T>>> for EliminationSequence<T> {
+#[derive(serde::Deserialize)]
+#[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
+struct SequenceData<T> {
+    uneliminated: u32,
+    steps: Vec<StepData<T>>,
+}
+
+#[cfg(feature = "serde")]
+impl<T> TryFrom<SequenceData<T>> for EliminationSequence<T> {
     type Error = FactorError;
 
-    fn try_from(data: Vec<StepData<T>>) -> Result<Self, Self::Error> {
-        let mut steps = Vec::with_capacity(data.len());
+    fn try_from(data: SequenceData<T>) -> Result<Self, Self::Error> {
+        let mut steps = Vec::with_capacity(data.steps.len());
         let mut neighbor_indices = Vec::new();
         let mut elimination_fractions = Vec::new();
-        for step in data {
+        for step in data.steps {
             for (neighbor, fraction) in step.neighbors {
                 neighbor_indices.push(neighbor);
                 elimination_fractions.push(fraction);
@@ -198,16 +211,31 @@ impl<T> TryFrom<Vec<StepData<T>>> for EliminationSequence<T> {
             steps,
             neighbor_indices,
             elimination_fractions,
+            uneliminated: data.uneliminated,
         })
     }
 }
 
-/// Mirrors [`StepData`] without materializing one, so serializing allocates nothing
+/// Mirrors [`SequenceData`] without materializing one, so serializing allocates nothing
 /// regardless of `nnz`.
 #[cfg(feature = "serde")]
 impl<T: serde::Serialize> serde::Serialize for EliminationSequence<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_seq((0..self.steps.len()).map(|i| StepView(self, i)))
+        use serde::ser::SerializeStruct;
+        let mut out = serializer.serialize_struct("SequenceData", 2)?;
+        out.serialize_field("uneliminated", &self.uneliminated)?;
+        out.serialize_field("steps", &StepsView(self))?;
+        out.end()
+    }
+}
+
+#[cfg(feature = "serde")]
+struct StepsView<'a, T>(&'a EliminationSequence<T>);
+
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize> serde::Serialize for StepsView<'_, T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq((0..self.0.steps.len()).map(|i| StepView(self.0, i)))
     }
 }
 
@@ -247,7 +275,7 @@ impl<T: serde::Serialize> serde::Serialize for PairedNeighbors<'_, T> {
 // Read-only accessors (no internal trait bounds).
 impl<T> EliminationSequence<T> {
     #[inline(always)]
-    pub(super) fn n_steps(&self) -> usize {
+    fn n_steps(&self) -> usize {
         self.steps.len()
     }
 
@@ -262,7 +290,7 @@ impl<T> EliminationSequence<T> {
     }
 
     #[inline(always)]
-    pub(super) fn step(&self, i: usize) -> EliminationStep<'_, T>
+    fn step(&self, i: usize) -> EliminationStep<'_, T>
     where
         T: Copy,
     {
@@ -282,12 +310,33 @@ impl<T> EliminationSequence<T> {
     where
         T: num_traits::Float,
     {
+        // `substitute` writes this entry unchecked.
+        if (self.uneliminated as usize) >= n {
+            return Err(FactorError::UneliminatedVertexInvalid {
+                vertex: self.uneliminated,
+                n,
+            });
+        }
+        // Any other tiling leaves a vertex neither divided by a pivot nor zeroed.
+        if self.steps.len() + 1 != n {
+            return Err(FactorError::StepCountDoesNotTileBlock {
+                steps: self.steps.len(),
+                n,
+            });
+        }
+        let mut eliminated = vec![false; n];
         for (i, step) in self.steps.iter().enumerate() {
             if (step.vertex as usize) >= n {
                 return Err(FactorError::VertexOutOfBounds {
                     step: i,
                     vertex: step.vertex,
                     n,
+                });
+            }
+            if core::mem::replace(&mut eliminated[step.vertex as usize], true) {
+                return Err(FactorError::VertexEliminatedTwice {
+                    step: i,
+                    vertex: step.vertex,
                 });
             }
             let (start, end) = self.neighbor_range(i);
@@ -311,16 +360,53 @@ impl<T> EliminationSequence<T> {
                 return Err(FactorError::StepValueInvalid { step: i });
             }
         }
+        if eliminated[self.uneliminated as usize] {
+            return Err(FactorError::UneliminatedVertexInvalid {
+                vertex: self.uneliminated,
+                n,
+            });
+        }
         Ok(())
     }
 }
 
 impl<T: Real> EliminationSequence<T> {
+    /// `D^+` zeroes the uneliminated vertex, whose entry is the rounding residue of a
+    /// zero-sum right-hand side — at the right-hand side's scale, so leaving it there
+    /// annihilates the solution-scale entries the backward pass reads (#93).
+    pub(super) fn substitute(&self, y: &mut [T]) {
+        for index in 0..self.n_steps() {
+            self.step(index).apply_forward(y);
+        }
+        y[self.uneliminated as usize] = T::zero();
+        for index in (0..self.n_steps()).rev() {
+            self.step(index).apply_backward(y);
+        }
+    }
+}
+
+/// A sequence cannot exist without naming the vertex its steps left behind.
+struct SequenceBuilder<T> {
+    steps: Vec<StepHeader<T>>,
+    neighbor_indices: Vec<u32>,
+    elimination_fractions: Vec<T>,
+}
+
+impl<T: Real> SequenceBuilder<T> {
     fn with_capacity(n: usize, degree_sum: usize) -> Self {
         Self {
             steps: Vec::with_capacity(n),
             neighbor_indices: Vec::with_capacity(degree_sum),
             elimination_fractions: Vec::with_capacity(degree_sum),
+        }
+    }
+
+    fn finish(self, uneliminated: u32) -> EliminationSequence<T> {
+        EliminationSequence {
+            steps: self.steps,
+            neighbor_indices: self.neighbor_indices,
+            elimination_fractions: self.elimination_fractions,
+            uneliminated,
         }
     }
 
