@@ -200,6 +200,20 @@ mod validation {
                 FactorError::UneliminatedVertexInvalid { vertex: 1, n: 3 },
             ),
             (
+                "steps leave a second vertex uneliminated",
+                approx,
+                |f| {
+                    seq_of(f).steps.truncate(1);
+                },
+                FactorError::StepCountDoesNotTileBlock { steps: 1, n: 3 },
+            ),
+            (
+                "one vertex is eliminated twice, so another never is",
+                approx,
+                |f| seq_of(f).steps[1].vertex = 0,
+                FactorError::VertexEliminatedTwice { step: 1, vertex: 0 },
+            ),
+            (
                 "exact factor shorter than its block",
                 exact,
                 |f| lower_of(f).values.truncate(2),

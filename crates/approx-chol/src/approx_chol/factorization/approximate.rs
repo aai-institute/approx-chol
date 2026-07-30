@@ -67,7 +67,8 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
     }
 
     // `target_steps` is one short of `n`, so the queue still holds the vertex no step
-    // eliminated — and it is not the block's last, which is what the anchor pins.
+    // eliminated. Min-degree picks it, so it is only the block's last — the one the
+    // anchor pins — when the block has no other.
     seq.finish(
         ordering
             .next_vertex()
@@ -326,12 +327,28 @@ impl<T> EliminationSequence<T> {
                 n,
             });
         }
+        // With the count and the distinctness below, one step per vertex but the
+        // uneliminated one: any other tiling leaves a vertex neither divided nor zeroed,
+        // which is the loss `substitute` exists to prevent.
+        if self.steps.len() + 1 != n {
+            return Err(FactorError::StepCountDoesNotTileBlock {
+                steps: self.steps.len(),
+                n,
+            });
+        }
+        let mut eliminated = vec![false; n];
         for (i, step) in self.steps.iter().enumerate() {
             if (step.vertex as usize) >= n {
                 return Err(FactorError::VertexOutOfBounds {
                     step: i,
                     vertex: step.vertex,
                     n,
+                });
+            }
+            if core::mem::replace(&mut eliminated[step.vertex as usize], true) {
+                return Err(FactorError::VertexEliminatedTwice {
+                    step: i,
+                    vertex: step.vertex,
                 });
             }
             let (start, end) = self.neighbor_range(i);
