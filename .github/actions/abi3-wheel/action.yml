@@ -28,7 +28,7 @@ runs:
     - name: abi3audit
       shell: bash
       run: pixi run -e audit abi3audit --strict dist/*.whl
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v6
       with:
         name: wheel-${{ runner.os }}
         path: dist/*.whl
