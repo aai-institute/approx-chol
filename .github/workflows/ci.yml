@@ -53,6 +53,22 @@ jobs:
       - name: cargo check (workspace, all features, at the declared MSRV)
         run: cargo check --workspace --all-features --locked
 
+  # Baseline is the last published release, so a breaking change stays red until the
+  # version bump that reflects it lands with it.
+  semver:
+    name: Public API (semver)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: gates
+          cache: true
+          cache-write: ${{ github.ref == 'refs/heads/main' }}
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo semver-checks
+        run: pixi run -e gates semver
+
   # Runs on PRs: this crate's behaviour is precision- and platform-dependent
   # (`near_zero` differs by four orders between f32 and f64), so a Linux-only verdict
   # would let that class land on main unattributed.

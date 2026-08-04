@@ -27,7 +27,7 @@ scipy = ">=1.12"
 [feature.coverage.dependencies]
 cargo-llvm-cov = ">=0.8.4,<0.9"
 
-# No job runs these yet; #52 and #54 add the gates.
+# `cargo-deny` has no job yet; #52 adds it.
 [feature.gates.dependencies]
 cargo-deny = ">=0.20.2,<0.21"
 cargo-semver-checks = ">=0.49,<0.50"
@@ -69,5 +69,7 @@ bench-smoke = "cargo bench -p approx-chol --bench smoke -- --sample-size 10 --wa
 coverage = "./scripts/coverage-with-python.sh"
 coverage-rust = "cargo llvm-cov --workspace --all-features --locked --summary-only"
 deny = "cargo deny --locked check"
-semver = "cargo semver-checks --package approx-chol"
+# Scoped to the published crate: approx-chol-py is a cdylib whose real surface is
+# the Python ABI, which cargo-semver-checks cannot analyze.
+semver = "cargo semver-checks --package approx-chol --all-features"
 mutants = "cargo mutants -C --locked"
