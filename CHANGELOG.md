@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The Python bindings build against pyo3 and numpy 0.29. ([#89])
+
 ## [0.4.0] - 2026-07-30
 
 ### Changed (breaking)
@@ -150,6 +156,7 @@ for graph Laplacians in Rust with Python bindings.
 [#82]: https://github.com/aai-institute/approx-chol/issues/82
 [#83]: https://github.com/aai-institute/approx-chol/issues/83
 [#85]: https://github.com/aai-institute/approx-chol/issues/85
+[#89]: https://github.com/aai-institute/approx-chol/issues/89
 [#91]: https://github.com/aai-institute/approx-chol/issues/91
 [#92]: https://github.com/aai-institute/approx-chol/issues/92
 [#93]: https://github.com/aai-institute/approx-chol/issues/93

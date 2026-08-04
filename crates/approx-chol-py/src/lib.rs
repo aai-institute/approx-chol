@@ -90,7 +90,9 @@ fn as_contiguous_1d<'py, C: Column>(
     }
     C::check_range(&arr, name)?;
     let cast = arr.call_method1("astype", (C::Element::get_dtype(arr.py()),))?;
-    np.call_method1("ascontiguousarray", (cast,))?.extract()
+    np.call_method1("ascontiguousarray", (cast,))?
+        .cast_into()
+        .map_err(Into::into)
 }
 
 #[inline]
@@ -105,14 +107,14 @@ fn slices_overlap<T>(lhs: &[T], rhs: &[T]) -> bool {
     lhs_start < rhs_end && rhs_start < lhs_end
 }
 
-#[pyclass(frozen, eq, eq_int, name = "ExactFailure")]
+#[pyclass(frozen, eq, eq_int, from_py_object, name = "ExactFailure")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PyExactFailure {
     FallBackToApproximate,
     Error,
 }
 
-#[pyclass(frozen, eq, name = "Backend")]
+#[pyclass(frozen, eq, from_py_object, name = "Backend")]
 #[derive(Clone, PartialEq, Eq)]
 enum PyBackend {
     Approximate {},
@@ -160,7 +162,7 @@ impl Default for PyBackend {
     }
 }
 
-#[pyclass(frozen, name = "Config")]
+#[pyclass(frozen, from_py_object, name = "Config")]
 #[derive(Clone)]
 struct PyConfig {
     #[pyo3(get)]
@@ -194,7 +196,8 @@ impl PyConfig {
     }
 }
 
-#[pyclass(frozen, eq, eq_int, name = "DenseFailure")]
+// Not skippable: `Fallback::InvalidPivot`'s generated constructor takes it as an argument.
+#[pyclass(frozen, eq, eq_int, from_py_object, name = "DenseFailure")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PyDenseFailure {
     NonPositivePivot,
@@ -214,7 +217,7 @@ impl From<DenseFailure> for PyDenseFailure {
     }
 }
 
-#[pyclass(frozen, eq, name = "Fallback")]
+#[pyclass(frozen, eq, skip_from_py_object, name = "Fallback")]
 #[derive(Clone, PartialEq, Eq)]
 enum PyFallback {
     InvalidPivot {
