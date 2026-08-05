@@ -112,7 +112,6 @@ jobs:
 
   wheel-platform:
     name: abi3 wheel (${{ matrix.os }})
-    if: github.event_name == 'push'
     runs-on: ${{ matrix.os }}
     env:
       RUSTC_WRAPPER: sccache
@@ -169,7 +168,6 @@ jobs:
     needs:
       - wheel-linux
       - wheel-platform
-    if: github.event_name == 'push'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -202,10 +200,8 @@ jobs:
           python -m pip install dist/*.whl
           pytest tests/ -v
 
-  # The matrix above only runs post-merge, so a PR would otherwise never touch
-  # the oldest supported interpreter or the declared dependency floors. This
-  # job covers both on every PR: `lowest-direct` is what makes
-  # `numpy>=1.24`/`scipy>=1.12` a tested claim rather than a guess.
+  # `lowest-direct` is what makes `numpy>=1.24`/`scipy>=1.12` a tested claim
+  # rather than a guess; the matrix above only ever resolves the highest.
   floor:
     name: Floor (py3.9, ${{ matrix.resolution }} deps)
     needs: wheel-linux
