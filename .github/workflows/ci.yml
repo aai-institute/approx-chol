@@ -99,8 +99,12 @@ jobs:
       - name: pytest
         run: pixi run -e platform test
 
+  # Packaging, not correctness: postponing this to merge (import-matrix and
+  # floor need it too, and a skipped `needs` skips them along with it) keeps
+  # every PR to Rust-only checks plus platform's cross-OS test matrix.
   wheel:
     name: abi3 wheel (${{ matrix.os }})
+    if: github.event_name == 'push'
     runs-on: ${{ matrix.os }}
     env:
       RUSTC_WRAPPER: sccache
@@ -122,6 +126,7 @@ jobs:
   # tests in place and this job feeds no import matrix.
   wheel-freethreaded:
     name: free-threaded wheel (${{ matrix.os }})
+    if: github.event_name == 'push'
     runs-on: ${{ matrix.os }}
     env:
       RUSTC_WRAPPER: sccache
