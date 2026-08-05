@@ -1,6 +1,5 @@
 use super::*;
 use crate::approx_chol::factorization::exact::NotFactorable;
-use crate::test_utils::OrPanic;
 use crate::{DenseFailure, ExactFailure, UnusablePivot};
 
 /// Naming the pivot and applying the policy are separate steps, so both are swept.
@@ -60,7 +59,7 @@ fn only_an_unusable_pivot_answers_to_the_failure_policy() {
 }
 
 fn make_csr<'a>(indptr: &'a [u32], indices: &'a [u32], data: &'a [f64]) -> CsrRef<'a, f64, u32> {
-    CsrRef::new(indptr, indices, data, (indptr.len() - 1) as u32).or_panic("valid CSR test fixture")
+    CsrRef::new(indptr, indices, data, (indptr.len() - 1) as u32).expect("valid CSR test fixture")
 }
 
 fn assert_ac2_augmented_solve_is_finite(indptr: &[u32], indices: &[u32], data: &[f64], b: &[f64]) {
@@ -82,7 +81,7 @@ fn assert_ac2_augmented_solve_is_finite(indptr: &[u32], indices: &[u32], data: &
         work[..b.len()].copy_from_slice(b);
         factor
             .solve_in_place(&mut work)
-            .or_panic("solve_in_place should succeed");
+            .expect("solve_in_place should succeed");
         assert!(
             work.iter().all(|x| x.is_finite()),
             "seed={seed}: non-finite solve output: {work:?}"
@@ -136,7 +135,7 @@ fn test_ac_marginally_sdd_laplacian_no_capacity_drift() {
         -3.732876, 166.31238,
     ];
 
-    let csr = CsrRef::new(&indptr, &indices, &data_f32, 8).or_panic("valid marginal-SDD CSR");
+    let csr = CsrRef::new(&indptr, &indices, &data_f32, 8).expect("valid marginal-SDD CSR");
     let b: [f32; 8] = [1.0, 1.0, 1.0, 1.0, -1.0, -1.0, -1.0, -1.0];
 
     for seed in 0..16u64 {

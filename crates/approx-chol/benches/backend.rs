@@ -3,7 +3,6 @@ mod common;
 use approx_chol::low_level::Builder;
 use approx_chol::{Backend, Config, ExactFailure, Factor};
 use common::grid::GridLaplacian;
-use common::OrPanic;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 type Shape = (&'static str, fn(usize) -> GridLaplacian);
@@ -63,7 +62,7 @@ fn bench_backend_build(c: &mut Criterion) {
             let lap = build_lap(n);
             // CSR validation is O(n + nnz) and would swamp the exact arm at the
             // small sizes this bench exists to compare.
-            let csr = lap.as_csr().or_panic("valid CSR");
+            let csr = lap.as_csr().expect("valid CSR");
             for (label, backend) in backends() {
                 let builder = Builder::<f64>::new(Config {
                     backend,
@@ -71,7 +70,7 @@ fn bench_backend_build(c: &mut Criterion) {
                 });
                 let id = BenchmarkId::new(format!("{shape}/{label}"), n);
                 group.bench_with_input(id, &csr, |b, csr| {
-                    b.iter(|| builder.build(*csr).or_panic("factorization should succeed"));
+                    b.iter(|| builder.build(*csr).expect("factorization should succeed"));
                 });
             }
         }
@@ -92,8 +91,8 @@ fn bench_backend_solve(c: &mut Criterion) {
                     backend,
                     ..Config::default()
                 })
-                .build(lap.as_csr().or_panic("valid CSR"))
-                .or_panic("factorization should succeed");
+                .build(lap.as_csr().expect("valid CSR"))
+                .expect("factorization should succeed");
                 let mut work = vec![0.0; factor.n()];
 
                 let id = BenchmarkId::new(format!("{shape}/{label}"), n);
@@ -101,7 +100,7 @@ fn bench_backend_solve(c: &mut Criterion) {
                     b.iter(|| {
                         factor
                             .solve_into(rhs, &mut work)
-                            .or_panic("solve should succeed")
+                            .expect("solve should succeed")
                     });
                 });
             }

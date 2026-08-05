@@ -349,18 +349,17 @@ impl<'a, T, I: faer::Index + PrimInt> TryFrom<&'a faer::sparse::SparseRowMat<I, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::OrPanic;
 
     #[test]
     fn to_owned_u32_narrows_any_index_type_and_keeps_values() {
         let values = [1.0f64];
         let (wide_row_ptrs, wide_col_indices) = ([0usize, 1], [0usize]);
-        let narrow = CsrRef::new(&[0u32, 1], &[0u32], &values, 1).or_panic("valid csr");
-        let wide = CsrRef::new(&wide_row_ptrs, &wide_col_indices, &values, 1).or_panic("valid csr");
+        let narrow = CsrRef::new(&[0u32, 1], &[0u32], &values, 1).expect("valid csr");
+        let wide = CsrRef::new(&wide_row_ptrs, &wide_col_indices, &values, 1).expect("valid csr");
 
         for owned in [
-            narrow.to_owned_u32().or_panic("u32 conversion"),
-            wide.to_owned_u32().or_panic("usize conversion"),
+            narrow.to_owned_u32().expect("u32 conversion"),
+            wide.to_owned_u32().expect("usize conversion"),
         ] {
             let converted = owned.as_csr_ref();
             assert_eq!(converted.row_ptrs(), &[0u32, 1]);
@@ -373,16 +372,16 @@ mod tests {
     fn owned_csr_borrows_into_csr_ref() {
         let (row_ptrs, col_indices, values) = crate::test_utils::path_laplacian_4();
         let owned = CsrRef::new(&row_ptrs, &col_indices, &values, 4)
-            .or_panic("valid csr")
+            .expect("valid csr")
             .to_owned_u32()
-            .or_panic("to owned");
+            .expect("to owned");
 
         let as_ref: CsrRef<'_, f64, u32> = (&owned).into();
         assert_eq!(as_ref.n(), 4);
 
         // The `TryInto` bound at the `factorize` entry point accepts it through
         // `Error = Infallible`.
-        let factor = crate::factorize(&owned).or_panic("factorize &OwnedCsr");
+        let factor = crate::factorize(&owned).expect("factorize &OwnedCsr");
         assert_eq!(factor.n(), 4);
     }
 }

@@ -1,15 +1,9 @@
 #![cfg(feature = "faer")]
 
-#[path = "common/panic_err.rs"]
-mod panic_err;
-#[path = "common/panic_ok.rs"]
-mod panic_ok;
 #[path = "common/path.rs"]
 mod path;
 #[path = "common/path_solve.rs"]
 mod path_solve;
-use panic_err::ErrOrPanic;
-use panic_ok::OrPanic;
 use path_solve::assert_view_and_factor_match_fixture;
 
 use approx_chol::{factorize, Config, CsrError, Error};
@@ -26,15 +20,15 @@ where
     let ncols = path::N as usize;
     let row_ptrs = path::ROW_PTRS
         .into_iter()
-        .map(|v| cast::<usize, I>(v).or_panic("index conversion"))
+        .map(|v| cast::<usize, I>(v).expect("index conversion"))
         .collect();
     let col_indices = path::COL_INDICES
         .into_iter()
-        .map(|v| cast::<usize, I>(v).or_panic("index conversion"))
+        .map(|v| cast::<usize, I>(v).expect("index conversion"))
         .collect();
     let values = path::VALUES
         .into_iter()
-        .map(|v| T::from_f64(v).or_panic("value conversion"))
+        .map(|v| T::from_f64(v).expect("value conversion"))
         .collect();
 
     let symbolic = faer::sparse::SymbolicSparseRowMat::<I>::new_checked(
@@ -75,7 +69,7 @@ fn faer_factorize_rejects_non_square_with_error() {
         vec![0u32, 1, 0],
     );
     let mat = SparseRowMat::new(symbolic, vec![1.0, 1.0, 1.0]);
-    let err = factorize(&mat).err_or_panic("non-square matrix must be rejected");
+    let err = factorize(&mat).expect_err("non-square matrix must be rejected");
     assert!(matches!(
         err,
         Error::InvalidCsr(CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 })

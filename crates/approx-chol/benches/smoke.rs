@@ -7,13 +7,13 @@ use approx_chol::Config;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 
 use common::grid::GridLaplacian;
-use common::{grid_laplacian, OrPanic};
+use common::grid_laplacian;
 
 fn run_build_and_solve(lap: &GridLaplacian, config: Config) {
     let builder = Builder::new(config);
     let factor = builder
-        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
-        .or_panic("factorization should succeed");
+        .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
+        .expect("factorization should succeed");
 
     let n = factor.n();
     let mut rhs = vec![0.0; n];
@@ -22,7 +22,7 @@ fn run_build_and_solve(lap: &GridLaplacian, config: Config) {
     let mut work = vec![0.0; n];
     factor
         .solve_into(&rhs, &mut work)
-        .or_panic("solve_into should succeed");
+        .expect("solve_into should succeed");
     assert!(work.iter().all(|x| x.is_finite()));
 }
 

@@ -7,7 +7,7 @@ use approx_chol::low_level::Builder;
 use approx_chol::{Config, CsrRef, Factor};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
-use common::{grid_laplacian, OrPanic};
+use common::grid_laplacian;
 
 /// `k` interleaved path Laplacians: vertex `i` neighbours `i - k` and `i + k`, so
 /// component membership maximally interleaves with input numbering. The only shape
@@ -59,8 +59,8 @@ fn interleaved_paths(n: usize, k: usize) -> InterleavedPaths {
 fn bench_solve_for_size(c: &mut Criterion, size: usize) {
     let lap = grid_laplacian(size, size);
     let factor: Factor<f64> = Builder::new(Config::default())
-        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
-        .or_panic("factorization should succeed");
+        .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
+        .expect("factorization should succeed");
     let n = factor.n();
 
     let mut rhs = vec![0.0f64; n];
@@ -77,7 +77,7 @@ fn bench_solve_for_size(c: &mut Criterion, size: usize) {
         b.iter(|| {
             factor
                 .solve_into(black_box(&rhs), black_box(&mut work_projected))
-                .or_panic("solve_into should succeed");
+                .expect("solve_into should succeed");
             black_box(&work_projected);
         });
     });
@@ -88,7 +88,7 @@ fn bench_solve_for_size(c: &mut Criterion, size: usize) {
             work_in_place.copy_from_slice(&rhs);
             factor
                 .solve_in_place(black_box(&mut work_in_place))
-                .or_panic("solve_in_place should succeed");
+                .expect("solve_in_place should succeed");
             black_box(&work_in_place);
         });
     });
@@ -103,9 +103,9 @@ fn bench_disconnected_solve(c: &mut Criterion, n: usize, k: usize) {
     let factor: Factor<f64> = Builder::new(Config::default())
         .build(
             lap.as_csr()
-                .or_panic("interleaved paths must build valid CSR"),
+                .expect("interleaved paths must build valid CSR"),
         )
-        .or_panic("disconnected factorization should succeed");
+        .expect("disconnected factorization should succeed");
     let dim = factor.n();
 
     let mut rhs = vec![0.0f64; dim];
@@ -121,7 +121,7 @@ fn bench_disconnected_solve(c: &mut Criterion, n: usize, k: usize) {
         b.iter(|| {
             factor
                 .solve_into(black_box(&rhs), black_box(&mut work))
-                .or_panic("solve_into should succeed");
+                .expect("solve_into should succeed");
             black_box(&work);
         });
     });

@@ -2,11 +2,8 @@
 //! Frozen payloads from earlier builds; `serde_roundtrip.rs` writes and reads with one
 //! build, so an encoding shift is invisible to it and visible here.
 
-#[path = "common/panic_ok.rs"]
-mod panic_ok;
 #[path = "common/residual.rs"]
 mod residual;
-use panic_ok::OrPanic;
 
 use approx_chol::{factorize_with, Config, CsrRef, Factor, FACTOR_FORMAT_VERSION};
 use rstest::rstest;
@@ -27,12 +24,12 @@ struct Matrix {
 
 impl Matrix {
     fn csr(&self) -> CsrRef<'_, f64, u32> {
-        let n = u32::try_from(self.row_ptrs.len() - 1).or_panic("dimension fits in u32");
-        CsrRef::new(self.row_ptrs, self.col_indices, self.values, n).or_panic("valid csr")
+        let n = u32::try_from(self.row_ptrs.len() - 1).expect("dimension fits in u32");
+        CsrRef::new(self.row_ptrs, self.col_indices, self.values, n).expect("valid csr")
     }
 
     fn factor(&self) -> Factor<f64> {
-        factorize_with(self.csr(), Config::default()).or_panic("factorization should succeed")
+        factorize_with(self.csr(), Config::default()).expect("factorization should succeed")
     }
 }
 
@@ -59,14 +56,14 @@ const FIXTURES: [&Matrix; 2] = [&INTERLEAVED, &GROUNDED];
 #[case::grounded_sddm(&GROUNDED, include_str!("fixtures/grounded_sddm_0x41430002.json"))]
 fn a_committed_payload_decodes_and_still_solves(#[case] matrix: &Matrix, #[case] committed: &str) {
     let restored: Factor<f64> = serde_json::from_str(committed)
-        .or_panic("committed payload must decode; regenerate it if the format version moved");
+        .expect("committed payload must decode; regenerate it if the format version moved");
     let fresh = matrix.factor();
 
     assert_eq!(restored.n(), fresh.n());
     assert_eq!(restored.original_n(), fresh.original_n());
     assert_eq!(restored.n_steps(), fresh.n_steps());
 
-    let x = restored.solve(&B).or_panic("solve the restored factor");
+    let x = restored.solve(&B).expect("solve the restored factor");
     let residual = residual::relative_residual_over(matrix.csr(), &x, &B, 0..B.len());
     assert!(
         residual < 1e-12,
@@ -75,7 +72,7 @@ fn a_committed_payload_decodes_and_still_solves(#[case] matrix: &Matrix, #[case]
     );
 
     // The residual alone is satisfied by any valid factor, not only the one that wrote these bytes.
-    let expected = fresh.solve(&B).or_panic("solve the fresh factor");
+    let expected = fresh.solve(&B).expect("solve the fresh factor");
     assert!(
         x.iter()
             .zip(&expected)
@@ -87,8 +84,7 @@ fn a_committed_payload_decodes_and_still_solves(#[case] matrix: &Matrix, #[case]
 #[test]
 fn a_payload_from_before_the_last_bump_is_rejected_by_its_version() {
     let error = serde_json::from_str::<Factor<f64>>(PRE_BUMP)
-        .err()
-        .or_panic("a pre-bump payload must not decode")
+        .expect_err("a pre-bump payload must not decode")
         .to_string();
 
     assert!(
@@ -119,8 +115,8 @@ fn regenerate_wire_format_fixtures() {
             "{path} already exists; delete it first if you really mean to unfreeze it"
         );
         let json =
-            serde_json::to_string_pretty(&matrix.factor()).or_panic("serialize the fixture factor");
-        std::fs::write(&path, format!("{json}\n")).or_panic("write the fixture");
+            serde_json::to_string_pretty(&matrix.factor()).expect("serialize the fixture factor");
+        std::fs::write(&path, format!("{json}\n")).expect("write the fixture");
         println!("wrote {path}");
     }
 }
