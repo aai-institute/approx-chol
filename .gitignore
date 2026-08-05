@@ -21,3 +21,7 @@ venv/
 *.dSYM
 # LLVM coverage profiles land in the crate dir when tests run instrumented
 *.profraw
+
+# cargo-mutants working/output directory
+/mutants.out/
+/mutants.out.old/
