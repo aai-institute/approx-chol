@@ -89,7 +89,12 @@ impl<T: Real> CdfSampler<T> {
         let k = if end - start <= LINEAR_THRESHOLD {
             let mut k = start;
             while k < end && self.cumsum[k] < r {
+                let advanced = k;
                 k += 1;
+                // A broken advance leaves this condition re-checking the same index
+                // forever instead of failing, so a bad increment hangs rather than
+                // panics.
+                debug_assert!(k > advanced, "sample_suffix linear scan failed to advance");
             }
             k
         } else {
