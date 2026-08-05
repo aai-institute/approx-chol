@@ -35,11 +35,22 @@ jobs:
         run: pixi run -e ci cargo fmt --all -- --check
       - name: cargo clippy
         run: pixi run -e ci cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      # Feature-gated code is dead unless the gate is off in some configuration too.
-      - name: cargo clippy (default features)
-        run: pixi run -e ci cargo clippy --workspace --all-targets --locked -- -D warnings
-      - name: cargo clippy (no default features)
-        run: pixi run -e ci cargo clippy --workspace --all-targets --no-default-features --locked -- -D warnings
+      # approx-chol's 3 optional features (serde, sprs, faer) are a full powerset of 8;
+      # small enough to enumerate directly rather than add cargo-hack, which isn't on
+      # conda-forge (#55). default = [] makes "default" and "no-default-features" the
+      # same build, so the empty-set iteration below replaces both rather than paying
+      # for that combination twice.
+      - name: cargo clippy (approx-chol feature powerset)
+        run: |
+          for features in "" serde sprs faer serde,sprs serde,faer sprs,faer serde,sprs,faer; do
+            echo "::group::features=[$features]"
+            pixi run -e ci cargo clippy -p approx-chol --all-targets --no-default-features --features "$features" --locked -- -D warnings
+            echo "::endgroup::"
+          done
+      # cargo test only ever runs under --all-features (in coverage below); a feature
+      # gated away by default there would silently vanish rather than fail.
+      - name: cargo test (default features)
+        run: pixi run -e ci cargo test --workspace --locked
       - name: coverage (cargo test + pytest, instrumented)
         run: pixi run -e ci coverage
 
