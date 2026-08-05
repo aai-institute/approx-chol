@@ -201,17 +201,11 @@ jobs:
           pytest tests/ -v
 
   # `lowest-direct` is what makes `numpy>=1.24`/`scipy>=1.12` a tested claim
-  # rather than a guess; the matrix above only ever resolves the highest.
+  # rather than a guess; py3.9 at the highest resolution is import-matrix's job.
   floor:
-    name: Floor (py3.9, ${{ matrix.resolution }} deps)
+    name: Floor (py3.9, lowest-direct deps)
     needs: wheel-linux
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        resolution:
-          - highest
-          - lowest-direct
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
@@ -227,7 +221,7 @@ jobs:
         run: |
           pixi run -e floor uv venv --python 3.9 .venv
           pixi run -e floor uv pip install --python .venv \
-            --resolution ${{ matrix.resolution }} dist/*.whl
+            --resolution lowest-direct dist/*.whl
           pixi run -e floor uv pip install --python .venv pytest
           .venv/bin/python -c 'import numpy, scipy, sys; print(
             f"python {sys.version.split()[0]}  numpy {numpy.__version__}  scipy {scipy.__version__}")'
