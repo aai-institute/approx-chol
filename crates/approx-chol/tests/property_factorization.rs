@@ -1,8 +1,5 @@
 #[path = "common/backends.rs"]
 mod backends;
-#[path = "common/panic_ok.rs"]
-mod panic_ok;
-use panic_ok::OrPanic;
 #[path = "common/laplacian_prop.rs"]
 mod laplacian_prop;
 #[path = "common/residual.rs"]
@@ -25,11 +22,11 @@ const RESIDUAL_LIMIT: f64 = 1.0;
 /// solve shows up as a non-finite ratio, so this subsumes a separate check.
 fn relative_residual(csr: &LaplacianCsr, config: Config, rhs: &[f64]) -> Option<f64> {
     let (row_ptrs, col_indices, values, n) = csr;
-    let view = CsrRef::new(row_ptrs, col_indices, values, *n).or_panic("valid CSR");
+    let view = CsrRef::new(row_ptrs, col_indices, values, *n).expect("valid CSR");
     let x = factorize_with(view, config)
-        .or_panic("factorization")
+        .expect("factorization")
         .solve(rhs)
-        .or_panic("solve");
+        .expect("solve");
 
     // `relative_residual_over` divides by the row range's own norm, so the guard
     // stays here: a `b` too small to divide by would come back NaN, not `None`.
@@ -73,11 +70,11 @@ proptest! {
         let rhs: Vec<f32> = rhs_for_dimension(n as usize).iter().map(|&v| v as f32).collect();
         for backend in backends() {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values_f32, n)
-                .or_panic("valid f32 CSR");
+                .expect("valid f32 CSR");
             let config = Config { backend, ..Config::default() };
-            let factor = factorize_with(csr, config).or_panic("f32 factorization");
+            let factor = factorize_with(csr, config).expect("f32 factorization");
 
-            let x = factor.solve(&rhs).or_panic("f32 solve");
+            let x = factor.solve(&rhs).expect("f32 solve");
             prop_assert!(
                 x.iter().all(|v| v.is_finite()),
                 "{backend:?}: f32 solution has non-finite values"
@@ -98,9 +95,9 @@ proptest! {
         let rhs = rhs_for_dimension(n as usize);
         for backend in backends() {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
-                .or_panic("generated CSR must be valid");
+                .expect("generated CSR must be valid");
             let config = Config { backend, ..Config::default() };
-            let factor = factorize_with(csr, config).or_panic("factorization should succeed");
+            let factor = factorize_with(csr, config).expect("factorization should succeed");
 
             prop_assert_eq!(factor.original_n(), n as usize);
             // A pure Laplacian has no surplus, so it is not augmented.
@@ -109,11 +106,11 @@ proptest! {
                 "pure Laplacian should not trigger Gremban augmentation"
             );
 
-            let from_alloc = factor.solve(&rhs).or_panic("solve should succeed");
+            let from_alloc = factor.solve(&rhs).expect("solve should succeed");
             let mut from_into = vec![0.0_f64; factor.n()];
             factor
                 .solve_into(&rhs, &mut from_into)
-                .or_panic("solve_into should succeed");
+                .expect("solve_into should succeed");
 
             // `solve` is `solve_into` plus a truncation, so nothing may differ.
             prop_assert_eq!(from_alloc.len(), from_into.len());
@@ -133,9 +130,9 @@ proptest! {
     ) {
         for backend in backends() {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
-                .or_panic("valid SDDM CSR");
+                .expect("valid SDDM CSR");
             let config = Config { backend, ..Config::default() };
-            let factor = factorize_with(csr, config).or_panic("factorization");
+            let factor = factorize_with(csr, config).expect("factorization");
 
             prop_assert_eq!(
                 factor.original_n(), n as usize,
@@ -146,7 +143,7 @@ proptest! {
                 "SDDM should trigger Gremban augmentation (factor.n() must be > n)"
             );
 
-            let x = factor.solve(&rhs_for_dimension(n as usize)).or_panic("solve");
+            let x = factor.solve(&rhs_for_dimension(n as usize)).expect("solve");
             prop_assert!(
                 x.iter().all(|v| v.is_finite()),
                 "{backend:?}: SDDM solution has non-finite values"
@@ -168,14 +165,14 @@ proptest! {
             let config = Config { seed: 42, backend, ..Default::default() };
 
             let csr1 = CsrRef::new(&row_ptrs, &col_indices, &values, n)
-                .or_panic("valid CSR");
-            let x1 = factorize_with(csr1, config).or_panic("factorize 1")
-                .solve(&rhs).or_panic("solve 1");
+                .expect("valid CSR");
+            let x1 = factorize_with(csr1, config).expect("factorize 1")
+                .solve(&rhs).expect("solve 1");
 
             let csr2 = CsrRef::new(&row_ptrs, &col_indices, &values, n)
-                .or_panic("valid CSR");
-            let x2 = factorize_with(csr2, config).or_panic("factorize 2")
-                .solve(&rhs).or_panic("solve 2");
+                .expect("valid CSR");
+            let x2 = factorize_with(csr2, config).expect("factorize 2")
+                .solve(&rhs).expect("solve 2");
 
             prop_assert_eq!(x1.len(), x2.len());
             for (a, b) in x1.iter().zip(x2.iter()) {

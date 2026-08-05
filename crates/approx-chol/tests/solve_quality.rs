@@ -1,14 +1,8 @@
 #[path = "common/grid.rs"]
 mod grid;
-#[path = "common/panic_err.rs"]
-mod panic_err;
-#[path = "common/panic_ok.rs"]
-mod panic_ok;
 #[path = "common/residual.rs"]
 mod residual;
 use grid::grid_laplacian;
-use panic_err::ErrOrPanic;
-use panic_ok::OrPanic;
 use residual::relative_residual_over;
 
 use approx_chol::low_level::Builder;
@@ -25,7 +19,7 @@ fn route_at_drift<T: Float + Send + Sync + 'static>(drift: T) -> Result<bool, Er
     let row_ptrs = [0u32, 2, 4];
     let col_indices = [0u32, 1, 0, 1];
     let values = [one + drift, -one, -one, one + drift];
-    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).or_panic("valid csr");
+    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).expect("valid csr");
     Builder::<T>::new(Config::default())
         .build(csr)
         .map(|factor| factor.n() > factor.original_n())
@@ -36,10 +30,10 @@ fn route_at_drift<T: Float + Send + Sync + 'static>(drift: T) -> Result<bool, Er
 #[test]
 fn summation_roundoff_does_not_augment() {
     for drift in [f32::EPSILON, -f32::EPSILON] {
-        assert!(!route_at_drift(drift).or_panic("f32 roundoff is in class"));
+        assert!(!route_at_drift(drift).expect("f32 roundoff is in class"));
     }
     for drift in [f64::EPSILON, -f64::EPSILON] {
-        assert!(!route_at_drift(drift).or_panic("f64 roundoff is in class"));
+        assert!(!route_at_drift(drift).expect("f64 roundoff is in class"));
     }
 }
 
@@ -48,8 +42,8 @@ fn summation_roundoff_does_not_augment() {
 /// invents, yet through 0.3.1 both were answered as a singular Laplacian.
 #[test]
 fn surplus_beyond_summation_roundoff_augments() {
-    assert!(route_at_drift(1e-6_f32).or_panic("f32 dominance"));
-    assert!(route_at_drift(5e-11_f64).or_panic("f64 dominance"));
+    assert!(route_at_drift(1e-6_f32).expect("f32 dominance"));
+    assert!(route_at_drift(5e-11_f64).expect("f64 dominance"));
 }
 
 /// The same magnitude with the sign flipped is real *non*-dominance, and is reported
@@ -58,8 +52,8 @@ fn surplus_beyond_summation_roundoff_augments() {
 #[test]
 fn deficit_beyond_summation_roundoff_is_rejected() {
     for err in [
-        route_at_drift(-1e-6_f32).err_or_panic("f32 deficit must be reported"),
-        route_at_drift(-5e-11_f64).err_or_panic("f64 deficit must be reported"),
+        route_at_drift(-1e-6_f32).expect_err("f32 deficit must be reported"),
+        route_at_drift(-5e-11_f64).expect_err("f64 deficit must be reported"),
     ] {
         assert!(
             matches!(err, Error::NotDiagonallyDominant { row: 0 }),
@@ -76,10 +70,10 @@ fn star_augments_at_ulp_offset(offset: u64) -> bool {
     let row_ptrs = [0u32, 4, 6, 8, 10];
     let col_indices = [0u32, 1, 2, 3, 0, 1, 0, 2, 0, 3];
     let values = [centre, -1e8, -2e8, -1e8, -1e8, 1e8, -2e8, 2e8, -1e8, 1e8];
-    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4).or_panic("valid csr");
+    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4).expect("valid csr");
     let factor = Builder::<f64>::new(Config::default())
         .build(csr)
-        .or_panic("factorization should succeed");
+        .expect("factorization should succeed");
     factor.n() > factor.original_n()
 }
 
@@ -111,18 +105,18 @@ fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
     #[values([1.0, 2.0, 3.0], [1.0, -2.0, 4.0])] b: [f64; 3],
 ) {
     let (rp, ci, vals, n) = diagonal_sddm();
-    let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid diagonal SDDM");
+    let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid diagonal SDDM");
     let factor = Builder::new(Config {
         backend,
         split_merge,
         ..Config::default()
     })
     .build(csr)
-    .or_panic("factorization should succeed");
+    .expect("factorization should succeed");
 
     assert!(factor.n() > n as usize, "diagonal SDDM should be augmented");
 
-    let x = factor.solve(&b).or_panic("solve should succeed");
+    let x = factor.solve(&b).expect("solve should succeed");
     assert_eq!(x.len(), n as usize);
     for i in 0..n as usize {
         let want = b[i] / vals[i];
@@ -140,17 +134,17 @@ fn solve_into_rejects_rhs_longer_than_original_for_augmented_factor() {
     // internal scratch. A RHS of length original_n + 1 must be rejected, not
     // silently accepted with its last entry overwritten by the grounding setup.
     let (rp, ci, vals, n) = diagonal_sddm();
-    let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid diagonal SDDM");
+    let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid diagonal SDDM");
     let factor = Builder::new(Config::default())
         .build(csr)
-        .or_panic("factorization should succeed");
+        .expect("factorization should succeed");
     assert_eq!(factor.n(), factor.original_n() + 1, "SDDM augments by one");
 
     let rhs = vec![0.0; factor.original_n() + 1]; // == factor.n(): the aux slot
     let mut work = vec![0.0; factor.n()];
     let err = factor
         .solve_into(&rhs, &mut work)
-        .err_or_panic("rhs longer than original dimension must fail");
+        .expect_err("rhs longer than original dimension must fail");
     assert!(
         matches!(err, SolveError::RhsLengthExceedsFactor { .. }),
         "{err:?}"
@@ -163,8 +157,8 @@ fn every_solve_entry_point_reports_a_short_work_buffer() {
     let lap = grid_laplacian(4, 4);
     let n_orig = lap.n as usize;
     let factor = Builder::new(Config::default())
-        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
-        .or_panic("factorization should succeed");
+        .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
+        .expect("factorization should succeed");
 
     let mut rhs = vec![0.0; n_orig];
     rhs[0] = 1.0;
@@ -174,10 +168,10 @@ fn every_solve_entry_point_reports_a_short_work_buffer() {
     for err in [
         factor
             .solve_into(&rhs, &mut work)
-            .err_or_panic("solve_into must reject a short work buffer"),
+            .expect_err("solve_into must reject a short work buffer"),
         factor
             .solve_in_place(&mut work)
-            .err_or_panic("solve_in_place must reject a short work buffer"),
+            .expect_err("solve_in_place must reject a short work buffer"),
     ] {
         assert!(
             matches!(err, SolveError::WorkBufferTooSmall { .. }),
@@ -199,8 +193,8 @@ fn grounded_raw_solve_matches_recovered_solve(#[case] backend: Backend) {
         backend,
         ..Config::default()
     })
-    .build(CsrRef::new(&row_ptrs, &columns, &values, 2).or_panic("valid CSR"))
-    .or_panic("factorization should succeed");
+    .build(CsrRef::new(&row_ptrs, &columns, &values, 2).expect("valid CSR"))
+    .expect("factorization should succeed");
 
     let n = factor.n();
     assert_eq!(n, 3, "strictly dominant input must gain a ground vertex");
@@ -209,13 +203,13 @@ fn grounded_raw_solve_matches_recovered_solve(#[case] backend: Backend) {
     let mut recovered = vec![0.0; n];
     factor
         .solve_into(&rhs, &mut recovered)
-        .or_panic("solve_into should succeed");
+        .expect("solve_into should succeed");
 
     let mut raw = vec![0.0; n];
     raw[..rhs.len()].copy_from_slice(&rhs);
     factor
         .solve_in_place(&mut raw)
-        .or_panic("solve_in_place should succeed");
+        .expect("solve_in_place should succeed");
 
     assert_eq!(raw[..2], recovered[..2]);
     assert_eq!(raw[n - 1], 0.0, "ground must be pinned");
@@ -229,7 +223,7 @@ fn grounded_raw_solve_matches_recovered_solve(#[case] backend: Backend) {
 #[case::exact(Backend::default())]
 fn floating_raw_solve_differs_from_recovered_by_one_constant(#[case] backend: Backend) {
     let grid = grid_laplacian(5, 5);
-    let csr = grid.as_csr().or_panic("valid CSR");
+    let csr = grid.as_csr().expect("valid CSR");
     let n = grid.n as usize;
     let mut rhs: Vec<f64> = (0..n).map(|i| i as f64 - 12.0).collect();
     let sum: f64 = rhs.iter().sum();
@@ -241,17 +235,15 @@ fn floating_raw_solve_differs_from_recovered_by_one_constant(#[case] backend: Ba
         ..Config::default()
     })
     .build(csr)
-    .or_panic("factorization should succeed");
+    .expect("factorization should succeed");
     assert_eq!(factor.n(), n, "pure Laplacian must not be augmented");
 
     let mut raw = rhs.clone();
     factor
         .solve_in_place(&mut raw)
-        .or_panic("solve_in_place should succeed");
+        .expect("solve_in_place should succeed");
     let mut recovered = vec![0.0; factor.n()];
-    factor
-        .solve_into(&rhs, &mut recovered)
-        .or_panic("solve_into");
+    factor.solve_into(&rhs, &mut recovered).expect("solve_into");
 
     // Both backends pin the block's last variable, so this index is not
     // backend-dependent the way the pinned *value* once was.
@@ -290,7 +282,7 @@ where
         .map(|value| T::from(value).expect("fixture weight is representable") * scale)
         .collect();
     let csr = CsrRef::new(&lap.row_ptrs, &lap.col_indices, &values, lap.n)
-        .or_panic("scaled path is valid CSR");
+        .expect("scaled path is valid CSR");
     let one = T::one();
     let b = [one, T::zero(), T::zero(), -one];
 
@@ -299,8 +291,8 @@ where
         ..Config::default()
     })
     .build(csr)
-    .or_panic("factorization should succeed");
-    let x = factor.solve(&b).or_panic("solve");
+    .expect("factorization should succeed");
+    let x = factor.solve(&b).expect("solve");
 
     let relative = relative_residual_over(csr, &x, &b, 0..b.len());
     assert!(

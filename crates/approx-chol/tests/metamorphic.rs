@@ -12,8 +12,6 @@
 
 #[path = "common/laplacian_prop.rs"]
 mod laplacian_prop;
-#[path = "common/panic_ok.rs"]
-mod panic_ok;
 #[path = "common/residual.rs"]
 mod residual;
 
@@ -21,7 +19,6 @@ use approx_chol::{factorize_with, Config, CsrRef, Factor};
 use laplacian_prop::{
     interleaved_components_strategy, permutation_strategy, permute_csr, LaplacianCsr,
 };
-use panic_ok::OrPanic;
 use proptest::prelude::*;
 use residual::relative_residual_over;
 
@@ -35,18 +32,18 @@ fn agrees(got: f64, want: f64) -> bool {
 /// The exact arm, and a check that it really was exact: a block reaching an unusable pivot
 /// falls back to the sampler by default, which would quietly make this the approximate arm.
 fn solve_exactly(csr: CsrRef<'_>, rhs: &[f64]) -> Vec<f64> {
-    let factor: Factor<f64> = factorize_with(csr, Config::default()).or_panic("factorization");
+    let factor: Factor<f64> = factorize_with(csr, Config::default()).expect("factorization");
     assert!(
         factor.fallbacks().is_empty(),
         "block fell back to the sampler: {:?}",
         factor.fallbacks()
     );
-    factor.solve(rhs).or_panic("solve")
+    factor.solve(rhs).expect("solve")
 }
 
 fn solve_generated(csr: &LaplacianCsr, rhs: &[f64]) -> Vec<f64> {
     let (row_ptrs, col_indices, values, n) = csr;
-    let view = CsrRef::new(row_ptrs, col_indices, values, *n).or_panic("generated CSR is valid");
+    let view = CsrRef::new(row_ptrs, col_indices, values, *n).expect("generated CSR is valid");
     solve_exactly(view, rhs)
 }
 
@@ -112,7 +109,7 @@ proptest! {
         prop_assume!(rhs.iter().map(|value| value * value).sum::<f64>().sqrt() > 1e-9);
 
         let (row_ptrs, col_indices, values, n) = &csr;
-        let view = CsrRef::new(row_ptrs, col_indices, values, *n).or_panic("generated CSR");
+        let view = CsrRef::new(row_ptrs, col_indices, values, *n).expect("generated CSR");
         let x = solve_exactly(view, &rhs);
         let relative = relative_residual_over(view, &x, &rhs, 0..rhs.len());
         prop_assert!(relative < 1e-9, "components left residual {relative:e}");

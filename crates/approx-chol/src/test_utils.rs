@@ -1,13 +1,9 @@
 //! Unit-test support, sourced from the files the integration suites, benches and
 //! examples already share, so each fixture and helper exists once in the tree.
 
-#[path = "../tests/common/panic_ok.rs"]
-mod panic_ok;
 #[allow(dead_code)]
 #[path = "../tests/common/path.rs"]
 mod path;
-
-pub(crate) use panic_ok::OrPanic;
 
 /// 4-node path-graph Laplacian CSR `(row_ptrs, col_indices, values)`. Zero row
 /// sums → no Gremban augmentation, so the factor keeps `n() == 4`.

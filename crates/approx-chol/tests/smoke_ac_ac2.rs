@@ -1,9 +1,6 @@
 #[path = "common/grid.rs"]
 mod grid;
-#[path = "common/panic_ok.rs"]
-mod panic_ok;
 use grid::grid_laplacian;
-use panic_ok::OrPanic;
 
 use approx_chol::low_level::Builder;
 use approx_chol::Config;
@@ -12,8 +9,8 @@ fn run_smoke_case(rows: usize, cols: usize, config: Config) {
     let lap = grid_laplacian(rows, cols);
     let builder = Builder::new(config);
     let factor = builder
-        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
-        .or_panic("factorization should succeed");
+        .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
+        .expect("factorization should succeed");
 
     let n = factor.n();
     let mut rhs = vec![0.0; n];
@@ -23,7 +20,7 @@ fn run_smoke_case(rows: usize, cols: usize, config: Config) {
     let mut work = vec![0.0; n];
     factor
         .solve_into(&rhs, &mut work)
-        .or_panic("solve_into should succeed");
+        .expect("solve_into should succeed");
     assert!(work.iter().all(|x| x.is_finite()));
     assert!(work.iter().any(|x| x.abs() > 1e-12));
 }

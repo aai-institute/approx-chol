@@ -1,14 +1,8 @@
 #[path = "common/grid.rs"]
 mod grid;
-#[path = "common/panic_err.rs"]
-mod panic_err;
-#[path = "common/panic_ok.rs"]
-mod panic_ok;
 #[path = "common/residual.rs"]
 mod residual;
 use grid::grid_laplacian;
-use panic_err::ErrOrPanic;
-use panic_ok::OrPanic;
 use residual::relative_residual_over;
 
 use approx_chol::{
@@ -36,12 +30,12 @@ fn side_by_side(left: &GridLaplacian, right: &GridLaplacian) -> GridLaplacian {
 #[test]
 fn a_claimed_block_solves_exactly_where_elimination_does_not() {
     let lap = grid_laplacian(4, 4);
-    let csr = lap.as_csr().or_panic("valid CSR");
+    let csr = lap.as_csr().expect("valid CSR");
     let mut b = vec![0.0; 16];
     b[0] = 1.0;
     b[15] = -1.0;
 
-    let exact = factorize_with(csr, Config::default()).or_panic("exact factorization");
+    let exact = factorize_with(csr, Config::default()).expect("exact factorization");
     let approximate = factorize_with(
         csr,
         Config {
@@ -49,7 +43,7 @@ fn a_claimed_block_solves_exactly_where_elimination_does_not() {
             ..Config::default()
         },
     )
-    .or_panic("approximate factorization");
+    .expect("approximate factorization");
 
     assert!(
         exact.fallbacks().is_empty(),
@@ -58,9 +52,8 @@ fn a_claimed_block_solves_exactly_where_elimination_does_not() {
     );
 
     let rows = 0..b.len();
-    let exact = relative_residual_over(csr, &exact.solve(&b).or_panic("solve"), &b, rows.clone());
-    let approximate =
-        relative_residual_over(csr, &approximate.solve(&b).or_panic("solve"), &b, rows);
+    let exact = relative_residual_over(csr, &exact.solve(&b).expect("solve"), &b, rows.clone());
+    let approximate = relative_residual_over(csr, &approximate.solve(&b).expect("solve"), &b, rows);
 
     assert!(
         exact < 1e-12,
@@ -77,7 +70,7 @@ fn a_claimed_block_solves_exactly_where_elimination_does_not() {
 #[test]
 fn a_bound_of_zero_claims_no_block() {
     let lap = grid_laplacian(4, 4);
-    let csr = lap.as_csr().or_panic("valid CSR");
+    let csr = lap.as_csr().expect("valid CSR");
     let mut b = vec![0.0; 16];
     b[0] = 1.0;
     b[15] = -1.0;
@@ -90,9 +83,9 @@ fn a_bound_of_zero_claims_no_block() {
                 ..Config::default()
             },
         )
-        .or_panic("factorization")
+        .expect("factorization")
         .solve(&b)
-        .or_panic("solve")
+        .expect("solve")
     };
 
     assert_eq!(
@@ -113,7 +106,7 @@ fn a_claimed_block_does_not_shift_a_later_blocks_draws() {
     let large = grid_laplacian(7, 7);
     let (small_n, large_n) = (small.n as usize, large.n as usize);
     let lap = side_by_side(&small, &large);
-    let csr = lap.as_csr().or_panic("valid CSR");
+    let csr = lap.as_csr().expect("valid CSR");
 
     let mut b = vec![0.0; small_n + large_n];
     b[small_n] = 1.0;
@@ -127,9 +120,9 @@ fn a_claimed_block_does_not_shift_a_later_blocks_draws() {
                 ..Config::default()
             },
         )
-        .or_panic("factorization")
+        .expect("factorization")
         .solve(&b)
-        .or_panic("solve")
+        .expect("solve")
     };
 
     let approximated = solve(Backend::Approximate);
@@ -147,7 +140,7 @@ fn routing_is_decided_per_block() {
     let large = grid_laplacian(7, 7);
     let (small_n, large_n) = (small.n as usize, large.n as usize);
     let lap = side_by_side(&small, &large);
-    let csr = lap.as_csr().or_panic("valid CSR");
+    let csr = lap.as_csr().expect("valid CSR");
 
     let mut b = vec![0.0; small_n + large_n];
     b[0] = 1.0;
@@ -155,8 +148,8 @@ fn routing_is_decided_per_block() {
     b[small_n] = 1.0;
     b[small_n + large_n - 1] = -1.0;
 
-    let factor = factorize_with(csr, Config::default()).or_panic("factorization");
-    let x = factor.solve(&b).or_panic("solve");
+    let factor = factorize_with(csr, Config::default()).expect("factorization");
+    let x = factor.solve(&b).expect("solve");
 
     let claimed = relative_residual_over(csr, &x, &b, 0..small_n);
     let approximated = relative_residual_over(csr, &x, &b, small_n..small_n + large_n);
@@ -183,8 +176,8 @@ fn cancelling_path() -> GridLaplacian {
 #[test]
 fn a_pivot_lost_to_cancellation_is_reported() {
     let lap = cancelling_path();
-    let factor = factorize_with(lap.as_csr().or_panic("valid CSR"), Config::default())
-        .or_panic("factorization");
+    let factor =
+        factorize_with(lap.as_csr().expect("valid CSR"), Config::default()).expect("factorization");
 
     assert_eq!(
         factor.fallbacks(),
@@ -194,7 +187,7 @@ fn a_pivot_lost_to_cancellation_is_reported() {
         })],
         "the failing pivot is vertex 1"
     );
-    let x = factor.solve(&[1.0, 0.0, -1.0]).or_panic("solve");
+    let x = factor.solve(&[1.0, 0.0, -1.0]).expect("solve");
     assert!(x.iter().all(|value| value.is_finite()));
 }
 
@@ -202,8 +195,8 @@ fn a_pivot_lost_to_cancellation_is_reported() {
 fn a_reported_pivot_is_translated_out_of_block_local_numbering() {
     let grid = grid_laplacian(3, 3);
     let lap = side_by_side(&grid, &cancelling_path());
-    let factor = factorize_with(lap.as_csr().or_panic("valid CSR"), Config::default())
-        .or_panic("factorization");
+    let factor =
+        factorize_with(lap.as_csr().expect("valid CSR"), Config::default()).expect("factorization");
 
     assert_eq!(
         factor.fallbacks(),
@@ -218,7 +211,7 @@ fn a_reported_pivot_is_translated_out_of_block_local_numbering() {
 fn a_failed_pivot_can_be_asked_to_fail_the_factorization() {
     let lap = cancelling_path();
     let error = factorize_with(
-        lap.as_csr().or_panic("valid CSR"),
+        lap.as_csr().expect("valid CSR"),
         Config {
             backend: Backend::ExactBelow {
                 max_dim: 24,
@@ -227,7 +220,7 @@ fn a_failed_pivot_can_be_asked_to_fail_the_factorization() {
             ..Config::default()
         },
     )
-    .err_or_panic("ExactFailure::Error must fail the factorization");
+    .expect_err("ExactFailure::Error must fail the factorization");
 
     assert_eq!(
         error,
@@ -249,10 +242,10 @@ fn a_block_whose_weights_square_to_infinity_still_factors() {
         values: vec![big, -big, -big, 2.0 * big, -big, -big, big],
         n: 3,
     };
-    let factor = factorize_with(lap.as_csr().or_panic("valid CSR"), Config::default())
-        .or_panic("factorization");
+    let factor =
+        factorize_with(lap.as_csr().expect("valid CSR"), Config::default()).expect("factorization");
 
     assert!(factor.fallbacks().is_empty());
-    let x = factor.solve(&[1.0, 0.0, -1.0]).or_panic("solve");
+    let x = factor.solve(&[1.0, 0.0, -1.0]).expect("solve");
     assert!(x.iter().all(|value| value.is_finite()), "{x:?}");
 }

@@ -1,8 +1,5 @@
 #[path = "common/grid.rs"]
 mod grid;
-#[path = "common/panic_ok.rs"]
-mod panic_ok;
-use panic_ok::OrPanic;
 
 use approx_chol::low_level::Builder;
 use approx_chol::{Config, CsrRef, Error, Factor};
@@ -15,7 +12,7 @@ type Solved<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64], [f64; 2], [f64; 2])
 /// `n` follows from `rp`, so no case can disagree with its own row count.
 fn build(config: Config, rp: &[u32], ci: &[u32], vals: &[f64]) -> Result<Factor<f64>, Error> {
     let n = (rp.len() - 1) as u32;
-    let csr = CsrRef::new(rp, ci, vals, n).or_panic("structurally valid CSR");
+    let csr = CsrRef::new(rp, ci, vals, n).expect("structurally valid CSR");
     Builder::<f64>::new(config).build(csr)
 }
 
@@ -188,9 +185,9 @@ fn genuine_surplus_at_either_scale_is_augmented_and_solves() {
 
     for (label, rp, ci, vals, rhs, expected) in cases {
         let solution = build(Config::default(), rp, ci, vals)
-            .or_panic(label)
+            .expect(label)
             .solve(&rhs)
-            .or_panic("solve");
+            .expect("solve");
         for (got, want) in solution.iter().zip(expected) {
             assert!(
                 (got - want).abs() <= 1e-6 * want.abs(),
@@ -229,7 +226,7 @@ fn surplus_is_judged_against_summation_error_alone() {
 
     for (label, surplus, grounded) in cases {
         let (rp, ci, vals) = surplus_pair(1e-6, surplus);
-        let factor = build(Config::default(), &rp, &ci, &vals).or_panic(label);
+        let factor = build(Config::default(), &rp, &ci, &vals).expect(label);
         assert_eq!(
             factor.n() > factor.original_n(),
             grounded,
@@ -238,7 +235,7 @@ fn surplus_is_judged_against_summation_error_alone() {
             factor.original_n()
         );
         if grounded {
-            let solution = factor.solve(&[1.0, 1.0]).or_panic("solve");
+            let solution = factor.solve(&[1.0, 1.0]).expect("solve");
             let want = 1.0 / surplus;
             assert!(
                 (solution[0] - want).abs() <= 1e-3 * want,
@@ -258,10 +255,10 @@ fn f32_surplus_is_judged_against_summation_error_alone() {
     ] {
         let (rp, ci, vals) = surplus_pair(1e-3f32, surplus);
         let n = (rp.len() - 1) as u32;
-        let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("structurally valid CSR");
+        let csr = CsrRef::new(&rp, &ci, &vals, n).expect("structurally valid CSR");
         let factor = Builder::<f32>::new(Config::default())
             .build(csr)
-            .or_panic(label);
+            .expect(label);
         assert_eq!(
             factor.n() > factor.original_n(),
             grounded,
@@ -282,7 +279,7 @@ fn tolerated_mirror_difference_is_not_one_row_s_surplus() {
         ("lower holds the smaller", [off, -off, -1.0, 1.0]),
     ];
     for (label, vals) in cases {
-        let factor = build(Config::default(), &[0, 2, 4], &[0, 1, 0, 1], &vals).or_panic(label);
+        let factor = build(Config::default(), &[0, 2, 4], &[0, 1, 0, 1], &vals).expect(label);
         assert_eq!(
             factor.n(),
             factor.original_n(),
@@ -308,7 +305,7 @@ fn coalescing_additions_are_inside_the_error_allowance() {
         vals.extend(core::iter::repeat_n(-half, 10));
         rp.push(ci.len() as u32);
     }
-    let factor = build(Config::default(), &rp, &ci, &vals).or_panic("coalesced duplicates");
+    let factor = build(Config::default(), &rp, &ci, &vals).expect("coalesced duplicates");
     assert_eq!(
         factor.n(),
         factor.original_n(),
@@ -320,8 +317,8 @@ fn coalescing_additions_are_inside_the_error_allowance() {
 /// being near the top of the range rather than for anything about its balance.
 #[test]
 fn a_diagonal_near_the_type_maximum_still_solves() {
-    let factor = build(Config::default(), &[0, 1], &[0], &[f64::MAX]).or_panic("max diagonal");
-    let solution = factor.solve(&[f64::MAX]).or_panic("solve");
+    let factor = build(Config::default(), &[0, 1], &[0], &[f64::MAX]).expect("max diagonal");
+    let solution = factor.solve(&[f64::MAX]).expect("solve");
     assert!((solution[0] - 1.0).abs() < 1e-12, "{solution:?}");
 }
 
@@ -355,7 +352,7 @@ fn disconnected_laplacian_solves_per_component() {
         let expected: Vec<f64> = rhs.iter().map(|value| value / 2.0).collect();
 
         for split_merge in [None, Some(2)] {
-            let csr = CsrRef::new(&rp, &ci, &vals, n).or_panic("valid CSR");
+            let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid CSR");
             let factor = Builder::<f64>::new(Config {
                 split_merge,
                 ..Config::default()
@@ -363,7 +360,7 @@ fn disconnected_laplacian_solves_per_component() {
             .build(csr)
             .expect("disconnected Laplacian must factor block-diagonally");
             assert_eq!(factor.n_steps(), k as usize, "one step per 2-node block");
-            assert_eq!(factor.solve(&rhs).unwrap(), expected);
+            assert_eq!(factor.solve(&rhs).expect("solve"), expected);
         }
     }
 }
@@ -380,12 +377,12 @@ fn disconnected_sparse_ac2_preserves_virtual_edge_multiplicity() {
         split_merge: Some(3),
         ..Config::default()
     })
-    .build(CsrRef::new(&row_ptrs, &columns, &values, 6).or_panic("valid CSR"))
-    .or_panic("disconnected AC2 factor");
+    .build(CsrRef::new(&row_ptrs, &columns, &values, 6).expect("valid CSR"))
+    .expect("disconnected AC2 factor");
 
     let solution = factor
         .solve(&[1.0, 0.0, -1.0, 1.0, 0.0, -1.0])
-        .or_panic("solve");
+        .expect("solve");
     assert_eq!(solution, vec![1.0, 0.0, -1.0, 1.0, 0.0, -1.0]);
 }
 
@@ -394,11 +391,11 @@ fn many_zero_singletons_factor_as_trivial_components() {
     let n = 128u32;
     let row_ptrs = vec![0u32; n as usize + 1];
     let factor = Builder::<f64>::new(Config::default())
-        .build(CsrRef::new(&row_ptrs, &[], &[], n).or_panic("valid zero CSR"))
-        .or_panic("zero components");
+        .build(CsrRef::new(&row_ptrs, &[], &[], n).expect("valid zero CSR"))
+        .expect("zero components");
     assert_eq!(factor.n_steps(), 0);
     assert_eq!(
-        factor.solve(&vec![1.0; n as usize]).unwrap(),
+        factor.solve(&vec![1.0; n as usize]).expect("solve"),
         vec![0.0; n as usize]
     );
 }
@@ -409,9 +406,9 @@ fn mixed_grounded_and_floating_components_solve_independently() {
     let columns = [0u32, 1, 2, 1, 2];
     let values = [2.0, 1.0, -1.0, -1.0, 1.0];
     let factor = Builder::<f64>::new(Config::default())
-        .build(CsrRef::new(&row_ptrs, &columns, &values, 3).or_panic("valid mixed CSR"))
-        .or_panic("mixed factor");
-    let solution = factor.solve(&[4.0, 1.0, -1.0]).unwrap();
+        .build(CsrRef::new(&row_ptrs, &columns, &values, 3).expect("valid mixed CSR"))
+        .expect("mixed factor");
+    let solution = factor.solve(&[4.0, 1.0, -1.0]).expect("solve");
     assert!((solution[0] - 2.0).abs() < 1e-14);
     assert_eq!(&solution[1..], &[0.5, -0.5]);
 }
@@ -426,8 +423,8 @@ fn interleaved_components_solve_in_input_order() {
     let columns = [0u32, 2, 1, 3, 0, 2, 1, 3];
     let values = [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
     let factor = Builder::<f64>::new(Config::default())
-        .build(CsrRef::new(&row_ptrs, &columns, &values, 4).or_panic("valid CSR"))
-        .or_panic("interleaved factor");
+        .build(CsrRef::new(&row_ptrs, &columns, &values, 4).expect("valid CSR"))
+        .expect("interleaved factor");
 
     // Block {0,2} gets the 1st and 3rd entry, block {1,3} the 2nd and 4th.
     let cases = [
@@ -443,7 +440,7 @@ fn interleaved_components_solve_in_input_order() {
         ),
     ];
     for (label, rhs, expected) in cases {
-        let solution = factor.solve(&rhs).or_panic("solve");
+        let solution = factor.solve(&rhs).expect("solve");
         for (got, want) in solution.iter().zip(expected) {
             assert!((got - want).abs() < 1e-12, "{label}: {solution:?}");
         }
@@ -476,10 +473,10 @@ fn moved_components_keep_their_edges_through_fill_and_removal() {
             &columns,
             &values,
         )
-        .or_panic("double-cycle factor");
+        .expect("double-cycle factor");
         assert_eq!(factor.n_steps(), (N - 2) as usize, "one pin per cycle");
 
-        let x = factor.solve(&rhs).or_panic("solve");
+        let x = factor.solve(&rhs).expect("solve");
         for row in 0..N as usize {
             let range = row_ptrs[row] as usize..row_ptrs[row + 1] as usize;
             let ax: f64 = columns[range.clone()]
@@ -495,18 +492,15 @@ fn moved_components_keep_their_edges_through_fill_and_removal() {
 
 #[test]
 fn empty_and_singleton_systems_have_defined_solves() {
-    let empty = build(Config::default(), &[0], &[], &[]).or_panic("empty factor");
-    assert_eq!(empty.solve(&[]).or_panic("empty solve"), Vec::<f64>::new());
+    let empty = build(Config::default(), &[0], &[], &[]).expect("empty factor");
+    assert_eq!(empty.solve(&[]).expect("empty solve"), Vec::<f64>::new());
     assert_eq!(empty.n_steps(), 0);
 
-    let zero = build(Config::default(), &[0, 1], &[0], &[0.0]).or_panic("zero singleton");
-    assert_eq!(
-        zero.solve(&[7.0]).or_panic("zero singleton solve"),
-        vec![0.0]
-    );
+    let zero = build(Config::default(), &[0, 1], &[0], &[0.0]).expect("zero singleton");
+    assert_eq!(zero.solve(&[7.0]).expect("zero singleton solve"), vec![0.0]);
 
-    let positive = build(Config::default(), &[0, 1], &[0], &[2.0]).or_panic("positive singleton");
-    let solution = positive.solve(&[7.0]).or_panic("positive singleton solve");
+    let positive = build(Config::default(), &[0, 1], &[0], &[2.0]).expect("positive singleton");
+    let solution = positive.solve(&[7.0]).expect("positive singleton solve");
     assert!((solution[0] - 3.5).abs() < 1e-14);
 }
 
@@ -555,19 +549,19 @@ fn canonical_and_reordered_ingestion_agree_bit_for_bit() {
     let solve = |csr| {
         Builder::<f64>::new(Config::default())
             .build(csr)
-            .or_panic("grid factor")
+            .expect("grid factor")
             .solve(&rhs)
-            .or_panic("solve")
+            .expect("solve")
     };
 
     let reordered = CsrRef::new(&grid.row_ptrs, &reversed_columns, &reversed_values, grid.n)
-        .or_panic("valid CSR");
-    assert_eq!(solve(grid.as_csr().or_panic("valid CSR")), solve(reordered));
+        .expect("valid CSR");
+    assert_eq!(solve(grid.as_csr().expect("valid CSR")), solve(reordered));
 }
 
 fn solve_path(rp: &[u32], ci: &[u32], vals: &[f64]) -> Vec<f64> {
     build(Config::default(), rp, ci, vals)
-        .or_panic("path factor")
+        .expect("path factor")
         .solve(&[1.0, 0.0, -1.0])
-        .or_panic("solve")
+        .expect("solve")
 }

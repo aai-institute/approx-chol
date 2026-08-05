@@ -1,15 +1,9 @@
 #![cfg(feature = "sprs")]
 
-#[path = "common/panic_err.rs"]
-mod panic_err;
-#[path = "common/panic_ok.rs"]
-mod panic_ok;
 #[path = "common/path.rs"]
 mod path;
 #[path = "common/path_solve.rs"]
 mod path_solve;
-use panic_err::ErrOrPanic;
-use panic_ok::OrPanic;
 use path_solve::assert_view_and_factor_match_fixture;
 
 use approx_chol::{factorize, Config, CsrError, CsrRef, Error};
@@ -26,7 +20,7 @@ where
     let indices = path::COL_INDICES.into_iter().map(I::from_usize).collect();
     let data = path::VALUES
         .into_iter()
-        .map(|v| T::from_f64(v).or_panic("value conversion"))
+        .map(|v| T::from_f64(v).expect("value conversion"))
         .collect();
     sprs::CsMatI::new((n, n), indptr, indices, data)
 }
@@ -53,7 +47,7 @@ fn sprs_csr_factorizes_over_index_types() {
 fn sprs_factorize_rejects_csc_with_error() {
     let csr = path_laplacian_sprs::<f64, u32>();
     let csc = csr.to_csc();
-    let err = factorize(&csc).err_or_panic("CSC must be rejected");
+    let err = factorize(&csc).expect_err("CSC must be rejected");
     assert!(matches!(
         err,
         Error::InvalidCsr(CsrError::ExpectedCsrMatrixGotCsc)
@@ -63,7 +57,7 @@ fn sprs_factorize_rejects_csc_with_error() {
 #[test]
 fn sprs_try_from_non_square_returns_error() {
     let mat = sprs::CsMatI::<f64, u32>::new((3, 4), vec![0, 1, 2, 3], vec![0, 1, 2], vec![1.0; 3]);
-    let err = CsrRef::try_from(&mat).err_or_panic("non-square matrix must be rejected");
+    let err = CsrRef::try_from(&mat).expect_err("non-square matrix must be rejected");
     assert!(matches!(
         err,
         Error::InvalidCsr(CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 })

@@ -4,7 +4,7 @@ use approx_chol::low_level::Builder;
 use approx_chol::Config;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
-use common::{grid_laplacian, OrPanic};
+use common::grid_laplacian;
 
 fn bench_approx_chol_build(c: &mut Criterion) {
     let mut group = c.benchmark_group("approx_chol_build");
@@ -21,8 +21,8 @@ fn bench_approx_chol_build(c: &mut Criterion) {
             |b, lap| {
                 b.iter(|| {
                     builder
-                        .build(lap.as_csr().or_panic("grid_laplacian must build valid CSR"))
-                        .or_panic("factorization should succeed")
+                        .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
+                        .expect("factorization should succeed")
                 });
             },
         );

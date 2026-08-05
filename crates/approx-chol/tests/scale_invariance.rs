@@ -1,7 +1,3 @@
-#[path = "common/panic_ok.rs"]
-mod panic_ok;
-use panic_ok::OrPanic;
-
 use approx_chol::{factorize_with, Backend, Config, CsrRef};
 use num_traits::Float;
 use rstest::rstest;
@@ -28,15 +24,15 @@ where
         .iter()
         .map(|&b| T::from(b).expect("literal is representable"))
         .collect();
-    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, N as u32).or_panic("valid csr");
+    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, N as u32).expect("valid csr");
     let config = Config {
         backend,
         ..Config::default()
     };
     factorize_with(csr, config)
-        .or_panic("factorization should succeed")
+        .expect("factorization should succeed")
         .solve(&rhs)
-        .or_panic("solve should succeed")
+        .expect("solve should succeed")
         .iter()
         .map(|&x| x * w)
         .collect()
