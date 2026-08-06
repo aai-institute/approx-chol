@@ -412,6 +412,13 @@ fn block_layout<T: Real, C: EdgeCount>(
         visited.set(start);
         stack.push(start);
         while let Some(v) = stack.pop() {
+            // Each vertex is pushed at most once (guarded by `visited`), so this
+            // traversal cannot outlast `n` pops; broken visited-tracking turns that
+            // guarantee into unbounded re-visits, which hangs rather than fails.
+            debug_assert!(
+                layout.order.len() < n,
+                "block_layout traversal exceeded vertex count — visited tracking is broken"
+            );
             layout.order.push(v as u32);
             for e in &adj[v] {
                 let u = e.to as usize;

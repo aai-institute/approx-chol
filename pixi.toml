@@ -71,4 +71,7 @@ deny = "cargo deny --locked check"
 # Scoped to the published crate: approx-chol-py is a cdylib whose real surface is
 # the Python ABI, which cargo-semver-checks cannot analyze.
 semver = "cargo semver-checks --package approx-chol --all-features"
-mutants = "cargo mutants -C --locked"
+# serde: the only in-scope feature with real logic (sprs/faer's conversion adapters are
+# excluded in .cargo/mutants.toml); without it active, that code is compiled out entirely
+# and any mutation in it "survives" trivially rather than being meaningfully tested.
+mutants = "cargo mutants -C --locked --features serde"
