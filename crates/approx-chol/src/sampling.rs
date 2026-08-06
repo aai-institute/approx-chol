@@ -63,6 +63,14 @@ impl<T: Real> CdfSampler<T> {
 
     #[inline]
     fn sample_suffix(&mut self, start: usize) -> Option<usize> {
+        // The canonical 53-bit draw, in [0, 1) by construction: every value is exactly
+        // representable, so no rounding lands on 1.0. `next_u64` for rand 0.9/0.10 compatibility.
+        let u = ((self.rng.next_u64() >> 11) as f64) * (1.0 / (1u64 << 53) as f64);
+        self.index_for_draw(start, u)
+    }
+
+    #[inline]
+    fn index_for_draw(&self, start: usize, u: f64) -> Option<usize> {
         let end = self.cumsum.len();
         if start >= end {
             return None;
@@ -80,12 +88,8 @@ impl<T: Real> CdfSampler<T> {
             return None;
         }
 
-        // Draw a uniform in [0, 1) via next_u64 for rand 0.9/0.10 compatibility.
-        let u = (self.rng.next_u64() as f64) / ((u64::MAX as f64) + 1.0);
         let r = <T as NumCast>::from(u)? * remaining + base;
 
-        // The clamp guards floating-point rounding that puts `r` past the last
-        // cumulative sum.
         let k = if end - start <= LINEAR_THRESHOLD {
             let mut k = start;
             while k < end && self.cumsum[k] < r {
@@ -100,6 +104,9 @@ impl<T: Real> CdfSampler<T> {
         } else {
             self.cumsum[start..end].partition_point(|&c| c < r) + start
         };
+        // `u < 1.0` does not survive narrowing to `f32`, which rounds every draw above
+        // `1 - 2^-25` to exactly 1.0 and leaves `fl(remaining + base) > cumsum[end - 1]`
+        // reachable. At `f64` the draw's own bound already rules that out.
         Some(k.min(end - 1))
     }
 }
@@ -220,6 +227,62 @@ mod tests {
         let heavy_half = n / 2..n;
         for i in heavy_half {
             assert!(sampled_any[i], "heavy index {i} was never sampled");
+        }
+    }
+
+    /// The draw the RNG can actually produce, for the extremes of `next_u64`'s range —
+    /// the top of which the old `/(u64::MAX as f64 + 1.0)` mapping rounded to exactly `1.0`.
+    fn draw(bits: u64) -> f64 {
+        ((bits >> 11) as f64) * (1.0 / (1u64 << 53) as f64)
+    }
+
+    #[test]
+    fn every_draw_is_below_one() {
+        for bits in (0..2048u64)
+            .map(|d| u64::MAX - d)
+            .chain([0, 1, 1 << 53, 1 << 63])
+        {
+            let u = draw(bits);
+            assert!((0.0..1.0).contains(&u), "u = {u:.20} for bits = {bits:#x}");
+        }
+    }
+
+    /// Narrowing to `f32` rounds every draw above `1 - 2^-25` to exactly 1.0, so
+    /// `fl(remaining + base)` can still exceed the last cumulative sum and the clamp stays
+    /// load-bearing — it is not dead code left over from the `[0, 1]` draw. These weights
+    /// were found by searching random distributions for a start whose `remaining` rounds up;
+    /// at `f64` that search returns nothing, which is why only the `f32` case is pinned here.
+    #[test]
+    fn the_top_draw_narrowed_to_f32_still_needs_the_clamp() {
+        let top = draw(u64::MAX);
+        assert_eq!(
+            <f32 as NumCast>::from(top).expect("the draw narrows to f32"),
+            1.0,
+            "the top draw must narrow to 1.0f32 or this tests nothing"
+        );
+
+        let weights: [f32; 5] = [18852.719, 69.055_58, 113_884.05, 70647.53, 956.364_56];
+        let padding: Vec<f32> = vec![1.0; LINEAR_THRESHOLD];
+        // The overrunning start is at index 2, reached through each search arm in turn.
+        for extra in [0, padding.len()] {
+            let entries: Vec<(u32, f32)> = weights
+                .iter()
+                .chain(padding.iter().take(extra))
+                .enumerate()
+                .map(|(i, &w)| (i as u32, w))
+                .collect();
+            let mut sampler = CdfSampler::<f32>::new(SEED);
+            sampler.prepare(entries.iter().copied());
+            for start in 0..entries.len() {
+                let index = sampler
+                    .index_for_draw(start, top)
+                    .expect("a positive suffix is samplable");
+                assert!(
+                    index < entries.len(),
+                    "len {}, start {start}: index {index} is past the CDF",
+                    entries.len()
+                );
+            }
         }
     }
 

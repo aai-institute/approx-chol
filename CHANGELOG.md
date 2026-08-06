@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The star sampler draws from `[0, 1)`; the previous mapping could return exactly `1.0`. ([#109])
+
 ### Changed
 
 - The Python bindings build against pyo3 and numpy 0.29. ([#89])
@@ -160,3 +164,4 @@ for graph Laplacians in Rust with Python bindings.
 [#91]: https://github.com/aai-institute/approx-chol/issues/91
 [#92]: https://github.com/aai-institute/approx-chol/issues/92
 [#93]: https://github.com/aai-institute/approx-chol/issues/93
+[#109]: https://github.com/aai-institute/approx-chol/issues/109
