@@ -5,10 +5,11 @@ mod laplacian_prop;
 #[path = "common/residual.rs"]
 mod residual;
 
-use approx_chol::{factorize_with, Config, CsrRef};
+use approx_chol::{factorize_with, Backend, Config, CsrRef};
 use backends::backends;
 use laplacian_prop::{
-    is_connected, laplacian_csr_strategy, laplacian_with_rhs_strategy, rhs_for_dimension,
+    is_connected, laplacian_csr_strategy, laplacian_with_rhs_strategy,
+    one_grounded_component_strategy, per_component_consistent_rhs, rhs_for_dimension,
     sddm_csr_strategy, LaplacianCsr,
 };
 use proptest::prelude::*;
@@ -184,4 +185,29 @@ proptest! {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // A grounded block among floating ones is still recognized as grounded
+    // -----------------------------------------------------------------------
+
+    /// The ground vertex is appended above every real vertex, so it is a block's last
+    /// only once the block is sorted — the DFS reaches it early, since ingestion adds
+    /// its edge after the component's own. Leave the block unsorted and
+    /// `Anchor::of_block` reads the grounded block as floating, which solves the wrong
+    /// system on those rows. Only reachable when the ground vertex does not bridge the
+    /// components, i.e. when exactly one of them carries diagonal surplus.
+    #[test]
+    fn a_grounded_block_beside_floating_ones_solves_its_own_rows(
+        ((row_ptrs, col_indices, values, n), parts) in one_grounded_component_strategy()
+    ) {
+        let rhs = per_component_consistent_rhs(n as usize, parts);
+        let view = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect("valid CSR");
+        let config = Config { seed: 11, backend: Backend::default(), ..Default::default() };
+        let x = factorize_with(view, config).expect("factorize").solve(&rhs).expect("solve");
+
+        let residual = relative_residual_over(view, &x, &rhs, 0..rhs.len());
+        prop_assert!(
+            residual < 1e-9,
+            "grounded block solved as floating: residual {residual:e}"
+        );
+    }
 }

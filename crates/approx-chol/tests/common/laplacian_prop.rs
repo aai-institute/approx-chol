@@ -97,6 +97,54 @@ pub fn interleaved_components_strategy() -> impl Strategy<Value = (LaplacianCsr,
     })
 }
 
+/// Components as in [`interleaved_components_strategy`], but only class `0` carries
+/// diagonal surplus, so the ground vertex attaches to that class alone and the
+/// augmented graph stays disconnected.
+pub fn one_grounded_component_strategy() -> impl Strategy<Value = (LaplacianCsr, usize)> {
+    (2usize..=3, 5usize..=9).prop_flat_map(|(parts, n)| {
+        let pair_count = n * (n - 1) / 2;
+        (
+            prop::collection::vec(1u8..=4, pair_count),
+            prop::collection::vec(1u8..=5, n),
+        )
+            .prop_map(move |(weights, surpluses)| {
+                let mut edge_weights = vec![0u8; pair_count];
+                let mut position = 0usize;
+                for i in 0..n {
+                    for j in (i + 1)..n {
+                        if i % parts == j % parts {
+                            edge_weights[position] = weights[position];
+                        }
+                        position += 1;
+                    }
+                }
+                let (rp, ci, mut vals, n_u32) = build_laplacian_csr(n, &edge_weights);
+                for i in (0..n).filter(|i| i % parts == 0) {
+                    for k in rp[i] as usize..rp[i + 1] as usize {
+                        if ci[k] as usize == i {
+                            vals[k] += surpluses[i] as f64;
+                        }
+                    }
+                }
+                ((rp, ci, vals, n_u32), parts)
+            })
+    })
+}
+
+/// Zero-sum within each residue class, so every floating block's right-hand side is
+/// consistent and the whole system has an exact solution to measure against.
+pub fn per_component_consistent_rhs(n: usize, parts: usize) -> Vec<f64> {
+    let mut rhs: Vec<f64> = (0..n).map(|i| (i as f64 * 1.7).sin() * 3.0).collect();
+    for class in 1..parts {
+        let members: Vec<usize> = (0..n).filter(|i| i % parts == class).collect();
+        let mean = members.iter().map(|&i| rhs[i]).sum::<f64>() / members.len() as f64;
+        for &i in &members {
+            rhs[i] -= mean;
+        }
+    }
+    rhs
+}
+
 pub fn laplacian_csr_strategy() -> impl Strategy<Value = LaplacianCsr> {
     (1usize..=8).prop_flat_map(|n| {
         let pair_count = n * (n - 1) / 2;
