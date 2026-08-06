@@ -45,6 +45,12 @@ impl<T> CdfSampler<T> {
     pub(crate) fn seed(&self) -> u64 {
         self.seed
     }
+
+    /// `next_u64` for rand 0.9/0.10 compatibility.
+    #[inline]
+    fn draw(&mut self) -> f64 {
+        draw_from(self.rng.next_u64())
+    }
 }
 
 impl<T: Real> CdfSampler<T> {
@@ -72,8 +78,7 @@ impl<T: Real> CdfSampler<T> {
 
     #[inline]
     fn sample_suffix(&mut self, start: usize) -> Option<usize> {
-        // `next_u64` for rand 0.9/0.10 compatibility.
-        let u = draw_from(self.rng.next_u64());
+        let u = self.draw();
         self.index_for_draw(start, u)
     }
 
@@ -254,17 +259,40 @@ mod tests {
         }
     }
 
-    /// The bound has to hold for the draws the generator actually emits, not only for the
-    /// bit patterns a test picks — `sample_suffix` is the sole caller that turns rng output
-    /// into `u`, so a regression there is invisible to a test that maps bits itself.
+    /// Reverting #109 moves `u` by at most `2^-53`, which changes the chosen bucket only on
+    /// a boundary straddle — so the mapping has to be pinned on the draw's own bits, where
+    /// truncation and round-to-nearest disagree on every `bits` with a nonzero low 11.
     #[test]
-    fn the_rngs_own_draws_stay_below_one() {
-        for seed in [0u64, 1, SEED, u64::MAX] {
-            let mut rng = SmallRng::seed_from_u64(seed);
-            for _ in 0..200_000 {
-                let u = draw_from(rng.next_u64());
-                assert!((0.0..1.0).contains(&u), "seed {seed}: u = {u:.20}");
-            }
+    fn the_samplers_own_draw_is_the_documented_mapping() {
+        let mut sampler = CdfSampler::<f64>::new(SEED);
+        let mut stream = SmallRng::seed_from_u64(SEED);
+
+        for i in 0..4_096 {
+            let expected = draw_from(stream.next_u64());
+            assert_eq!(
+                sampler.draw().to_bits(),
+                expected.to_bits(),
+                "draw {i}: the sampler left the documented mapping"
+            );
+        }
+    }
+
+    /// The draw's value is [`the_samplers_own_draw_is_the_documented_mapping`]'s; this pins
+    /// what surrounds it — exactly one draw per call, `start` reaching the search unchanged.
+    #[test]
+    fn sample_suffix_maps_one_raw_draw_per_call() {
+        let entries: Vec<(u32, f64)> = (0..64).map(|i| (i, (i + 1) as f64)).collect();
+        let mut sampler = CdfSampler::new(SEED);
+        sampler.prepare(entries.iter().copied());
+        let mut stream = SmallRng::seed_from_u64(SEED);
+
+        for start in (0..entries.len()).cycle().take(4_096) {
+            let expected = sampler.index_for_draw(start, draw_from(stream.next_u64()));
+            assert_eq!(
+                sampler.sample_suffix(start),
+                expected,
+                "start {start}: the sampler's own draw left the documented mapping"
+            );
         }
     }
 
