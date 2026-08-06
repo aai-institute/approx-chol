@@ -7,13 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- The star sampler draws from `[0, 1)`; the previous mapping could return exactly `1.0`. ([#109])
-
 ### Changed
 
 - The Python bindings build against pyo3 and numpy 0.29. ([#89])
+
+### Fixed
+
+- The star sampler draws from `[0, 1)`; the previous mapping could return exactly `1.0`. ([#109])
 
 ## [0.4.0] - 2026-07-30
 
