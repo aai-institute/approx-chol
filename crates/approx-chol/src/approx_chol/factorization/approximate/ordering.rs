@@ -43,13 +43,13 @@ impl DynamicOrdering {
             return None;
         }
         while self.min_list < self.lists.len() && self.lists[self.min_list] == SENTINEL {
-            let advanced = self.min_list;
+            let previous = self.min_list;
             self.min_list += 1;
             // A broken advance leaves this condition re-checking the same bucket
             // forever instead of failing, so a bad increment hangs rather than
             // panics.
             debug_assert!(
-                self.min_list > advanced,
+                self.min_list > previous,
                 "next_vertex's bucket scan failed to advance"
             );
         }
