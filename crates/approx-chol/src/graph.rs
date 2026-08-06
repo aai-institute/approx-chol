@@ -459,6 +459,33 @@ mod tests {
         assert_eq!(size_of::<Single>(), 0);
     }
 
+    /// The predicate is positive on purpose: a zero weight carries no coupling and a
+    /// NaN one is not evidence of any, so both are dead even though the neighbor is
+    /// live. Reading either as a live neighbor puts a phantom edge in the star.
+    #[test]
+    fn only_positively_weighted_edges_are_live() {
+        let graph = MultiEdgeGraph::<f64>::from_adjacency(vec![
+            vec![
+                Edge::new(2.0, 1, 0),
+                Edge::new(0.0, 2, 0),
+                Edge::new(f64::NAN, 3, 0),
+            ],
+            vec![Edge::new(2.0, 0, 0)],
+            vec![Edge::new(0.0, 0, 1)],
+            vec![Edge::new(f64::NAN, 0, 2)],
+        ]);
+
+        let mut neighbors = Vec::new();
+        graph.live_neighbors(0, &mut neighbors);
+
+        let live: Vec<u32> = neighbors.iter().map(|n| n.to).collect();
+        assert_eq!(
+            live,
+            vec![1],
+            "only the positively weighted neighbor is live"
+        );
+    }
+
     /// A cap that drifted from [`MultiEdgeGraph::mark_split_edges`] would bound every
     /// star at a multiplicity the graph does not carry, unnoticed elsewhere.
     #[test]
