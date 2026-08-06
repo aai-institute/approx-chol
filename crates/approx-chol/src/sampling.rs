@@ -7,6 +7,15 @@ use num_traits::NumCast;
 /// At or below this range size a linear CDF scan beats binary search.
 const LINEAR_THRESHOLD: usize = 32;
 
+/// The canonical 53-bit draw, in `[0, 1)` by construction: `bits >> 11` is at most
+/// `2^53 - 1` and the scale is a power of two, so the product is exact and no rounding
+/// lands on 1.0. Taking bits rather than an rng keeps the mapping testable at the
+/// extremes the generator reaches only by chance.
+#[inline]
+fn draw_from(bits: u64) -> f64 {
+    ((bits >> 11) as f64) * (1.0 / (1u64 << 53) as f64)
+}
+
 /// A star's neighbors as a weighted distribution, drawn from by suffix. Owning
 /// `neighbors` rather than borrowing leaves one length in play, so a draw answers
 /// with a neighbor rather than an offset the caller re-indexes.
@@ -63,9 +72,8 @@ impl<T: Real> CdfSampler<T> {
 
     #[inline]
     fn sample_suffix(&mut self, start: usize) -> Option<usize> {
-        // The canonical 53-bit draw, in [0, 1) by construction: every value is exactly
-        // representable, so no rounding lands on 1.0. `next_u64` for rand 0.9/0.10 compatibility.
-        let u = ((self.rng.next_u64() >> 11) as f64) * (1.0 / (1u64 << 53) as f64);
+        // `next_u64` for rand 0.9/0.10 compatibility.
+        let u = draw_from(self.rng.next_u64());
         self.index_for_draw(start, u)
     }
 
@@ -230,20 +238,33 @@ mod tests {
         }
     }
 
-    /// The draw the RNG can actually produce, for the extremes of `next_u64`'s range —
-    /// the top of which the old `/(u64::MAX as f64 + 1.0)` mapping rounded to exactly `1.0`.
-    fn draw(bits: u64) -> f64 {
-        ((bits >> 11) as f64) * (1.0 / (1u64 << 53) as f64)
-    }
-
+    /// The old `/(u64::MAX as f64 + 1.0)` mapping rounded the top of `next_u64`'s range to
+    /// exactly `1.0`. Stepping by `1 << 11` moves the retained bits every iteration — a
+    /// stride of 1 only walks the 11 discarded bits and re-tests one draw.
     #[test]
     fn every_draw_is_below_one() {
-        for bits in (0..2048u64)
-            .map(|d| u64::MAX - d)
-            .chain([0, 1, 1 << 53, 1 << 63])
+        let top = (0..4096u64).map(|d| u64::MAX - d * (1 << 11));
+        let spread = (0..4096u64).map(|d| d.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        for bits in top
+            .chain(spread)
+            .chain([0, 1, (1 << 11) - 1, 1 << 53, 1 << 63])
         {
-            let u = draw(bits);
+            let u = draw_from(bits);
             assert!((0.0..1.0).contains(&u), "u = {u:.20} for bits = {bits:#x}");
+        }
+    }
+
+    /// The bound has to hold for the draws the generator actually emits, not only for the
+    /// bit patterns a test picks — `sample_suffix` is the sole caller that turns rng output
+    /// into `u`, so a regression there is invisible to a test that maps bits itself.
+    #[test]
+    fn the_rngs_own_draws_stay_below_one() {
+        for seed in [0u64, 1, SEED, u64::MAX] {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            for _ in 0..200_000 {
+                let u = draw_from(rng.next_u64());
+                assert!((0.0..1.0).contains(&u), "seed {seed}: u = {u:.20}");
+            }
         }
     }
 
@@ -254,7 +275,7 @@ mod tests {
     /// at `f64` that search returns nothing, which is why only the `f32` case is pinned here.
     #[test]
     fn the_top_draw_narrowed_to_f32_still_needs_the_clamp() {
-        let top = draw(u64::MAX);
+        let top = draw_from(u64::MAX);
         assert_eq!(
             <f32 as NumCast>::from(top).expect("the draw narrows to f32"),
             1.0,
