@@ -150,6 +150,33 @@ mod tests {
         }
     }
 
+    /// A suffix draw is uniform over `[base, total)`, so the prefix's mass must leave
+    /// the interval's width untouched. `monotonic_suffix` sweeps every start but only
+    /// judges range and reachability, both of which a mis-sized interval still
+    /// satisfies — it just aims the draws at the wrong end of the suffix.
+    #[test]
+    fn a_heavy_prefix_does_not_reshape_the_suffix() {
+        let entries: Vec<(u32, f64)> = vec![(0, 100.0), (1, 1.0), (2, 2.0), (3, 7.0)];
+        let n_samples = 50_000;
+        let counts = sample_counts(&entries, 1, n_samples);
+
+        let suffix = &entries[1..];
+        let total: f64 = suffix.iter().map(|&(_, w)| w).sum();
+        let chi2: f64 = suffix
+            .iter()
+            .map(|&(neighbor, weight)| {
+                let expected = weight / total * n_samples as f64;
+                (counts[neighbor as usize] as f64 - expected).powi(2) / expected
+            })
+            .sum();
+
+        assert_eq!(counts[0], 0, "the prefix is not in the suffix");
+        assert!(
+            chi2 < 13.82,
+            "chi-squared {chi2:.2} exceeds 13.82; counts = {counts:?}"
+        );
+    }
+
     /// Scaling every weight scales the CDF, not the distribution, so a suffix stays as
     /// samplable at `1e-300` as at unit magnitude.
     #[test]
