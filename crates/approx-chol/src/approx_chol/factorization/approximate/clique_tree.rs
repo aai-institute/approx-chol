@@ -102,20 +102,21 @@ impl<T: Real> SampledColumn<T> {
         }
     }
 
-    fn sample_fill_edges(
+    /// Generic in the count so `Single`'s literal 1 folds the copy loop away.
+    fn sample_fill_edges<C: EdgeCount>(
         &mut self,
         neighbor: u32,
-        n_samples: u32,
+        copies: C,
         fill_weight: T,
         draws: &mut CdfSampler<T>,
         tail: usize,
     ) {
-        if n_samples == 0 || fill_weight <= T::zero() {
+        if fill_weight <= T::zero() {
             return;
         }
         // The suffix does not move across the copies, so the sampler resolves it once.
         let fill_edges = &mut self.fill_edges;
-        draws.sample_batch(tail, n_samples, |k| {
+        draws.sample_batch(tail, copies.get(), |k| {
             if neighbor != k {
                 fill_edges.push((neighbor, k, fill_weight));
             }
@@ -200,7 +201,7 @@ pub(super) fn sample_column<T: Real, C: EdgeCount>(
         let f = elim.fraction(entry.weight);
         let fill_wt = entry.copies.per_copy(f * (T::one() - f) * elim.capacity);
         column.push_neighbor(entry.neighbor, f);
-        column.sample_fill_edges(entry.neighbor, entry.copies.get(), fill_wt, sampler, i + 1);
+        column.sample_fill_edges(entry.neighbor, entry.copies, fill_wt, sampler, i + 1);
         elim.advance(f);
     }
 
