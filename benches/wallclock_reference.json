@@ -1,0 +1,7 @@
+{
+  "_comment": "threshold_pct sits well above the 6-19% best-of-N spread measured across candidate workloads, so only sustained real regressions alert. best_ns ships null because a reference is only meaningful measured on CI hardware; the Perf Reference workflow seeds it.",
+  "threshold_pct": 25.0,
+  "refresh_min_delta_pct": 10.0,
+  "workload": null,
+  "best_ns": null
+}

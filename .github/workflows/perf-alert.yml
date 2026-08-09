@@ -1,0 +1,50 @@
+name: Perf Alert
+
+# Post-merge, so it cannot block a merge: a wall-clock gate on shared runners
+# produces flaky failures and gets disabled. (#60)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# No cancellation: the job blocks nothing, and cancelling the run a merge started
+# leaves that merge unmeasured while the next run's alert names the wrong commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  wallclock:
+    name: Wall-clock banded factorization (alert only)
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v7
+      # Build-only environment: this job runs one cargo command and needs
+      # neither the test stack nor the coverage tooling that `ci` carries.
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: wheel
+          cache: true
+          cache-write: ${{ github.ref == 'refs/heads/main' }}
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: Swatinem/rust-cache@v2
+
+      # `shell: bash` for pipefail: the default shell would let a panicking bench
+      # pass through `tee` as a green step.
+      - name: Time the headline factorization (release, best-of-N)
+        shell: bash
+        run: pixi run -e wheel bench-wallclock | tee bench.out
+
+      - name: Compare against committed reference
+        run: pixi run -e wheel python scripts/check-wallclock-reference.py --bench-output bench.out --commit "${{ github.sha }}"
