@@ -40,11 +40,16 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
 
+      # `shell: bash` for pipefail: the default shell would let a panicking bench
+      # pass through `tee` as a green step.
       - name: Time the headline factorization (release, best-of-N)
+        shell: bash
         run: pixi run -e wheel bench-wallclock | tee bench.out
 
+      # --reference from the same env the push step diffs, so the two cannot
+      # disagree about which file was written.
       - name: Update reference
-        run: pixi run -e wheel python scripts/check-wallclock-reference.py --bench-output bench.out --update
+        run: pixi run -e wheel python scripts/check-wallclock-reference.py --reference "$REFERENCE_FILE" --bench-output bench.out --update
 
       # A branch, not a push to main: the bench takes minutes, long enough for a
       # merge to land and make a direct push a non-fast-forward. The summary asks

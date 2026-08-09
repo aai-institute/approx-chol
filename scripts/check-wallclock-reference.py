@@ -97,6 +97,12 @@ def main() -> int:
     baseline_ms = baseline / 1e6
 
     if delta_pct > threshold_pct:
+        # An annotation, because a green check's job summary is a page nobody opens.
+        print(
+            f"::warning::wall-clock regression: {measured_ms:.1f} ms vs "
+            f"{baseline_ms:.1f} ms reference (+{delta_pct:.1f}%, threshold "
+            f"+{threshold_pct:.1f}%) on {args.commit}"
+        )
         emit(
             f"## 🚨 Wall-clock perf regression (non-blocking)\n\n"
             f"Merge `{args.commit}` slowed `{workload}`.\n\n"

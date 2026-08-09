@@ -39,7 +39,8 @@ fn banded_laplacian(n: usize, half: usize) -> GridLaplacian {
 fn main() {
     let lap = banded_laplacian(N, HALF_BANDWIDTH);
     let csr = lap.as_csr().expect("banded_laplacian must build valid CSR");
-    let builder = Builder::<f64>::new(Config::default());
+    let config = Config::default();
+    let builder = Builder::<f64>::new(config);
 
     let mut best = u128::MAX;
     for _ in 0..RUNS {
@@ -50,8 +51,11 @@ fn main() {
         black_box(&factor);
     }
 
-    // Derived from the consts so a retuned workload cannot keep comparing against
-    // a reference measured on the old one.
-    println!("WALLCLOCK_WORKLOAD=banded/n={N}/half={HALF_BANDWIDTH}/runs={RUNS}");
+    // Every input that changes what is measured, so a retuned bench cannot keep
+    // comparing against a reference built from the old one. Config goes in whole:
+    // it is `non_exhaustive`, and switching backend or split_merge changes the
+    // algorithm without touching a const here.
+    let config = format!("{config:?}").replace(' ', "");
+    println!("WALLCLOCK_WORKLOAD=banded/n={N}/half={HALF_BANDWIDTH}/runs={RUNS}/f64/{config}");
     println!("WALLCLOCK_BEST_NS={best}");
 }

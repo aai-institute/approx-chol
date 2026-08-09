@@ -12,9 +12,11 @@ on:
 permissions:
   contents: read
 
+# No cancellation: the job blocks nothing, and cancelling the run a merge started
+# leaves that merge unmeasured while the next run's alert names the wrong commit.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -38,7 +40,10 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
 
+      # `shell: bash` for pipefail: the default shell would let a panicking bench
+      # pass through `tee` as a green step.
       - name: Time the headline factorization (release, best-of-N)
+        shell: bash
         run: pixi run -e wheel bench-wallclock | tee bench.out
 
       - name: Compare against committed reference
