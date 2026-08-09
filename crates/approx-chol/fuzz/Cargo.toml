@@ -1,0 +1,35 @@
+[package]
+name = "approx-chol-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+postcard = { version = "1", features = ["use-std"] }
+
+[dependencies.approx-chol]
+path = ".."
+features = ["serde"]
+
+# The build script writes the seed corpus.
+[build-dependencies]
+postcard = { version = "1", features = ["use-std"] }
+
+[build-dependencies.approx-chol]
+path = ".."
+features = ["serde"]
+
+[[bin]]
+name = "factor_from_bytes"
+path = "fuzz_targets/factor_from_bytes.rs"
+test = false
+doc = false
+bench = false
+
+# Its own workspace: cargo-fuzz needs nightly, and this keeps that requirement from
+# reaching the crates the released build is compiled from.
+[workspace]

@@ -158,6 +158,19 @@ mod validation {
                 FactorError::BlockDimsDoNotCoverFactor { covered: 3, n: 4 },
             ),
             (
+                // The augmentation is what pushes the sum past the end of the address
+                // space, so only a grounded factor can reach this.
+                "a grounded factor's dimension leaves no room for its ground vertex",
+                approx,
+                |f| {
+                    f.blocks[0].anchor = Anchor::Ground;
+                    f.original_n = usize::MAX;
+                },
+                FactorError::AugmentedDimensionOverflows {
+                    original_n: usize::MAX,
+                },
+            ),
+            (
                 "two blocks claim the one ground vertex",
                 two_ground_blocks,
                 |_| {},
