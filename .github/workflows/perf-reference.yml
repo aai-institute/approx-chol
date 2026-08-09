@@ -1,0 +1,85 @@
+name: Perf Reference
+
+# Re-measures the headline factorization on CI hardware and opens the refresh as
+# a reviewable diff. A number measured on a maintainer's laptop is meaningless
+# against a runner, so this is the only way the reference is written. (#60)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  REFERENCE_FILE: benches/wallclock_reference.json
+
+jobs:
+  refresh:
+    name: Refresh wall-clock reference
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Require main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::dispatch this workflow on main"
+          exit 1
+
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: ci
+          cache: true
+          cache-write: ${{ github.ref == 'refs/heads/main' }}
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Time the headline factorization (release, best-of-N)
+        id: bench
+        run: |
+          out="$(pixi run -e ci bench-wallclock)"
+          echo "$out"
+          best="$(printf '%s\n' "$out" | grep -oE 'WALLCLOCK_BEST_NS=[0-9]+' | tail -n1 | cut -d= -f2 || true)"
+          echo "best_ns=${best:-}" >> "$GITHUB_OUTPUT"
+
+      - name: Update reference
+        env:
+          BEST_NS: ${{ steps.bench.outputs.best_ns }}
+        run: |
+          if [ -z "$BEST_NS" ]; then
+            echo "::error::bench emitted no WALLCLOCK_BEST_NS; reference unchanged"
+            exit 1
+          fi
+          python3 scripts/check-wallclock-reference.py --measured-ns "$BEST_NS" --update
+
+      # A branch, not a push to main: the bench takes minutes, long enough for a
+      # merge to land and make a direct push a non-fast-forward. A pull request
+      # opened by the bot would not run the required checks, so the summary asks
+      # for a human to open it.
+      - name: Push refresh branch
+        env:
+          BEST_NS: ${{ steps.bench.outputs.best_ns }}
+          SOURCE_SHA: ${{ github.sha }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          if git diff --quiet -- "$REFERENCE_FILE"; then
+            printf 'Measured %s ns; within the refresh floor, so the reference is unchanged and no branch was pushed.\n' "$BEST_NS" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+          branch="perf/reference-$stamp"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add "$REFERENCE_FILE"
+          git commit -m "chore(perf): refresh wall-clock reference to ${BEST_NS}ns (#60)" -m "Measured on ${SOURCE_SHA}."
+          git push origin "$branch"
+          printf 'Refreshed the reference to %s ns, measured on `%s`.\n\n[Open the pull request](%s/compare/main...%s?expand=1) — opening it yourself runs the required checks, which a bot-opened pull request cannot.\n' \
+            "$BEST_NS" "$SOURCE_SHA" "$REPO_URL" "$branch" | tee -a "$GITHUB_STEP_SUMMARY"

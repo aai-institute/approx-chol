@@ -65,6 +65,7 @@ floor = { features = ["floor"] }
 test = "maturin develop --uv --locked && pytest tests/ -v"
 develop = "maturin develop --uv --release --locked"
 bench-smoke = "cargo bench -p approx-chol --bench smoke -- --sample-size 10 --warm-up-time 0.05 --measurement-time 0.1"
+bench-wallclock = "cargo bench -p approx-chol --bench wallclock_banded --locked"
 coverage = "./scripts/coverage-with-python.sh"
 coverage-rust = "cargo llvm-cov --workspace --all-features --locked --summary-only"
 deny = "cargo deny --locked check"

@@ -55,3 +55,7 @@ harness = false
 name = "solve"
 harness = false
 
+[[bench]]
+name = "wallclock_banded"
+harness = false
+

@@ -1,0 +1,6 @@
+{
+  "_comment": "Fixed (NOT rolling) wall-clock reference for the non-blocking perf alert (#60). A rolling baseline ratchets: a sequence of 3% regressions each passes against its predecessor. The reference MUST be measured on CI hardware (ubuntu-latest), not a maintainer's machine, so best_ns ships null and is seeded by dispatching the Perf Reference workflow on main. An intentional, accepted slowdown is recorded by re-running that dispatch, so drift shows up as a reviewable diff to this file. threshold_pct sits well above the 6-19% best-of-5 spread measured locally so only sustained real regressions alert (and the alert is non-blocking regardless).",
+  "threshold_pct": 25.0,
+  "refresh_min_delta_pct": 10.0,
+  "best_ns": null
+}
