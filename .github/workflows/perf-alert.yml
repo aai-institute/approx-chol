@@ -1,11 +1,7 @@
 name: Perf Alert
 
-# Times the headline banded factorization on every merge to main and compares
-# the best of N runs against a committed, FIXED reference. A regression is
-# reported, never fails the build: this runs post-merge, so it cannot block a
-# merge, and a wall-clock gate on shared runners produces flaky failures and
-# gets disabled. A bench that emits no number does fail — that is breakage, not
-# a perf signal. (#60)
+# Post-merge, so it cannot block a merge: a wall-clock gate on shared runners
+# produces flaky failures and gets disabled. (#60)
 
 on:
   push:

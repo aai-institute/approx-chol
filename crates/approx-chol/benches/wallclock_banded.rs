@@ -1,11 +1,3 @@
-//! Headline factorization for the non-blocking wall-clock alert (#60).
-//!
-//! Best of N, not mean: contention only ever slows a run, so the minimum is the
-//! cleanest estimate. Banded at degree 12 rather than the degree-4 grid the other
-//! benches use, because ingestion is ~17% of the build at degree 4 and negligible
-//! past it — degree 12 is where `within`'s factors sit, so the tracked number
-//! moves with the sampler instead of with ingestion.
-
 mod common;
 
 use std::hint::black_box;
@@ -16,10 +8,11 @@ use approx_chol::Config;
 use common::grid::GridLaplacian;
 
 const N: usize = 160_000;
+// Degree 12, not the grid benches' 4: ingestion is ~17% of the build at degree 4
+// and negligible past it, and `within`'s factors sit here.
 const HALF_BANDWIDTH: usize = 6;
 const RUNS: usize = 9;
 
-/// Banded Laplacian on a path: vertex `i` joins `i ± 1 ..= i ± HALF_BANDWIDTH`.
 fn banded_laplacian(n: usize, half: usize) -> GridLaplacian {
     let mut row_ptrs = Vec::with_capacity(n + 1);
     let mut col_indices = Vec::with_capacity(n * (2 * half + 1));
@@ -28,9 +21,10 @@ fn banded_laplacian(n: usize, half: usize) -> GridLaplacian {
     for row in 0..n {
         let lo = row.saturating_sub(half);
         let hi = (row + half).min(n - 1);
+        let degree = (hi - lo) as f64;
         for col in lo..=hi {
             col_indices.push(col as u32);
-            values.push(if col == row { (hi - lo) as f64 } else { -1.0 });
+            values.push(if col == row { degree } else { -1.0 });
         }
         row_ptrs.push(col_indices.len() as u32);
     }
@@ -51,6 +45,7 @@ fn main() {
     for _ in 0..RUNS {
         let start = Instant::now();
         let factor = builder.build(csr).expect("factorization should succeed");
+        // Min, not mean: contention only ever slows a run.
         best = best.min(start.elapsed().as_nanos());
         black_box(&factor);
     }

@@ -1,8 +1,7 @@
 name: Perf Reference
 
-# Re-measures the headline factorization on CI hardware and opens the refresh as
-# a reviewable diff. A number measured on a maintainer's laptop is meaningless
-# against a runner, so this is the only thing that writes the reference. (#60)
+# The only thing that writes the reference: a number measured on a maintainer's
+# laptop is meaningless against a runner. (#60)
 
 on:
   workflow_dispatch:
@@ -37,7 +36,7 @@ jobs:
         with:
           environments: wheel
           cache: true
-          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          cache-write: true
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
 

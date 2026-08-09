@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Non-blocking wall-clock perf alert (#60).
+"""Compare a `wallclock_banded` run against the committed reference (#60).
 
-Reads the `wallclock_banded` bench output and compares its best time against a
-committed, FIXED reference. A regression beyond the reference's threshold raises
-a GitHub job-summary alert naming the merge, but never fails the build: a
-wall-clock signal on shared CI runners is advisory. A bench that emitted no
-number is infrastructure breakage rather than a perf verdict, so that does fail.
-Use --update to bootstrap or refresh the reference on CI hardware.
+A regression writes a GitHub job-summary alert but never fails the build, because
+a wall-clock signal on shared runners is advisory. A bench that emitted no number
+is breakage rather than a slow result, so that does fail. --update refreshes the
+reference instead of comparing.
 """
 
 import argparse
@@ -27,7 +25,7 @@ def emit(markdown: str) -> None:
     print(markdown)
 
 
-def parse_bench_output(text: str) -> tuple[float, str]:
+def parse_bench_output(text: str) -> tuple[int, str]:
     best = re.findall(r"WALLCLOCK_BEST_NS=(\d+)", text)
     workload = re.findall(r"WALLCLOCK_WORKLOAD=(\S+)", text)
     if not best or not workload:
@@ -35,7 +33,7 @@ def parse_bench_output(text: str) -> tuple[float, str]:
             "::error::bench emitted no WALLCLOCK_BEST_NS/WALLCLOCK_WORKLOAD; "
             "the harness is broken, not slow"
         )
-    return float(best[-1]), workload[-1]
+    return int(best[-1]), workload[-1]
 
 
 def main() -> int:
@@ -46,7 +44,7 @@ def main() -> int:
         required=True,
         help="file holding the wallclock_banded harness's stdout",
     )
-    p.add_argument("--commit", default=os.environ.get("GITHUB_SHA", "(local run)"))
+    p.add_argument("--commit", default="(local run)")
     p.add_argument(
         "--update",
         action="store_true",
@@ -62,7 +60,7 @@ def main() -> int:
     baseline_workload = reference.get("workload")
 
     if args.update:
-        min_delta_pct = float(reference.get("refresh_min_delta_pct", 10.0))
+        min_delta_pct = reference["refresh_min_delta_pct"]
         if baseline and workload == baseline_workload:
             delta_pct = (measured - baseline) / baseline * 100.0
             if abs(delta_pct) <= min_delta_pct:
@@ -72,7 +70,7 @@ def main() -> int:
                 )
                 return 0
         reference["workload"] = workload
-        reference["best_ns"] = round(measured, 3)
+        reference["best_ns"] = measured
         ref_path.write_text(json.dumps(reference, indent=2) + "\n")
         emit(f"Updated wall-clock reference to {measured_ms:.1f} ms on `{workload}`.")
         return 0
@@ -94,7 +92,7 @@ def main() -> int:
         )
         return 0
 
-    threshold_pct = float(reference.get("threshold_pct", 25.0))
+    threshold_pct = reference["threshold_pct"]
     delta_pct = (measured - baseline) / baseline * 100.0
     baseline_ms = baseline / 1e6
 
