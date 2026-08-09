@@ -1,11 +1,10 @@
-//! Headline factorization for the non-blocking wall-clock alert (#60). Prints
-//! `WALLCLOCK_BEST_NS=<ns>` for `scripts/check-wallclock-reference.py`.
+//! Headline factorization for the non-blocking wall-clock alert (#60).
 //!
-//! Best-of-N, not mean: runner contention can only slow a run, so the minimum is
-//! the cleanest estimate. Banded at degree 12 rather than the degree-4 grid every
-//! other bench uses, because ingestion is ~17% of the build at degree 4 and
-//! negligible past it — degree 12 is where `within`'s factors actually sit, so the
-//! tracked number moves with the sampler rather than with ingestion.
+//! Best of N, not mean: contention only ever slows a run, so the minimum is the
+//! cleanest estimate. Banded at degree 12 rather than the degree-4 grid the other
+//! benches use, because ingestion is ~17% of the build at degree 4 and negligible
+//! past it — degree 12 is where `within`'s factors sit, so the tracked number
+//! moves with the sampler instead of with ingestion.
 
 mod common;
 
@@ -18,7 +17,7 @@ use common::grid::GridLaplacian;
 
 const N: usize = 160_000;
 const HALF_BANDWIDTH: usize = 6;
-const RUNS: usize = 5;
+const RUNS: usize = 9;
 
 /// Banded Laplacian on a path: vertex `i` joins `i ± 1 ..= i ± HALF_BANDWIDTH`.
 fn banded_laplacian(n: usize, half: usize) -> GridLaplacian {
@@ -56,5 +55,8 @@ fn main() {
         black_box(&factor);
     }
 
+    // Derived from the consts so a retuned workload cannot keep comparing against
+    // a reference measured on the old one.
+    println!("WALLCLOCK_WORKLOAD=banded/n={N}/half={HALF_BANDWIDTH}/runs={RUNS}");
     println!("WALLCLOCK_BEST_NS={best}");
 }

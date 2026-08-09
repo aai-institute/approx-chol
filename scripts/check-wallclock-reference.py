@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """Non-blocking wall-clock perf alert (#60).
 
-Compares the best wall-clock time of the headline banded factorization (from the
-`wallclock_banded` bench harness) against a committed, FIXED reference. A
-regression beyond the reference's threshold raises a GitHub job-summary alert
-naming the merge. This script NEVER exits nonzero: a wall-clock signal on shared
-CI runners is advisory, not a build gate. Use --update to bootstrap or refresh
-the committed reference on CI hardware.
+Reads the `wallclock_banded` bench output and compares its best time against a
+committed, FIXED reference. A regression beyond the reference's threshold raises
+a GitHub job-summary alert naming the merge, but never fails the build: a
+wall-clock signal on shared CI runners is advisory. A bench that emitted no
+number is infrastructure breakage rather than a perf verdict, so that does fail.
+Use --update to bootstrap or refresh the reference on CI hardware.
 """
 
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -26,14 +27,24 @@ def emit(markdown: str) -> None:
     print(markdown)
 
 
+def parse_bench_output(text: str) -> tuple[float, str]:
+    best = re.findall(r"WALLCLOCK_BEST_NS=(\d+)", text)
+    workload = re.findall(r"WALLCLOCK_WORKLOAD=(\S+)", text)
+    if not best or not workload:
+        raise SystemExit(
+            "::error::bench emitted no WALLCLOCK_BEST_NS/WALLCLOCK_WORKLOAD; "
+            "the harness is broken, not slow"
+        )
+    return float(best[-1]), workload[-1]
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--reference", default=DEFAULT_REFERENCE)
     p.add_argument(
-        "--measured-ns",
-        type=float,
+        "--bench-output",
         required=True,
-        help="best wall-clock nanoseconds emitted by the wallclock_banded harness",
+        help="file holding the wallclock_banded harness's stdout",
     )
     p.add_argument("--commit", default=os.environ.get("GITHUB_SHA", "(local run)"))
     p.add_argument(
@@ -45,13 +56,14 @@ def main() -> int:
 
     ref_path = Path(args.reference)
     reference = json.loads(ref_path.read_text())
-    measured = args.measured_ns
+    measured, workload = parse_bench_output(Path(args.bench_output).read_text())
     measured_ms = measured / 1e6
     baseline = reference.get("best_ns")
+    baseline_workload = reference.get("workload")
 
     if args.update:
         min_delta_pct = float(reference.get("refresh_min_delta_pct", 10.0))
-        if baseline:
+        if baseline and workload == baseline_workload:
             delta_pct = (measured - baseline) / baseline * 100.0
             if abs(delta_pct) <= min_delta_pct:
                 emit(
@@ -59,9 +71,10 @@ def main() -> int:
                     f"({delta_pct:+.1f}%) is inside the ±{min_delta_pct:.0f}% refresh floor."
                 )
                 return 0
+        reference["workload"] = workload
         reference["best_ns"] = round(measured, 3)
         ref_path.write_text(json.dumps(reference, indent=2) + "\n")
-        emit(f"Updated wall-clock reference to {measured_ms:.1f} ms (best of runs).")
+        emit(f"Updated wall-clock reference to {measured_ms:.1f} ms on `{workload}`.")
         return 0
 
     if not baseline:
@@ -72,6 +85,15 @@ def main() -> int:
         )
         return 0
 
+    if workload != baseline_workload:
+        emit(
+            f"⚠️ **Perf reference measures a different workload.** This run is "
+            f"`{workload}`, the reference is `{baseline_workload}` — the two are not "
+            f"comparable, so no verdict was formed. Re-seed via the **Perf "
+            f"Reference** workflow."
+        )
+        return 0
+
     threshold_pct = float(reference.get("threshold_pct", 25.0))
     delta_pct = (measured - baseline) / baseline * 100.0
     baseline_ms = baseline / 1e6
@@ -79,7 +101,7 @@ def main() -> int:
     if delta_pct > threshold_pct:
         emit(
             f"## 🚨 Wall-clock perf regression (non-blocking)\n\n"
-            f"Merge `{args.commit}` slowed the headline banded factorization.\n\n"
+            f"Merge `{args.commit}` slowed `{workload}`.\n\n"
             f"| metric | value |\n|---|---|\n"
             f"| best (this merge) | {measured_ms:.1f} ms |\n"
             f"| reference | {baseline_ms:.1f} ms |\n"

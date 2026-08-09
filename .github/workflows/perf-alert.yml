@@ -1,10 +1,11 @@
 name: Perf Alert
 
 # Times the headline banded factorization on every merge to main and compares
-# the best of N runs against a committed, FIXED reference. NON-blocking by
-# design — it raises a job-summary alert but never fails the build. It runs
-# post-merge, so it cannot block a merge; a wall-clock check that gates PRs on
-# shared runners produces flaky failures and gets disabled. (#60)
+# the best of N runs against a committed, FIXED reference. A regression is
+# reported, never fails the build: this runs post-merge, so it cannot block a
+# merge, and a wall-clock gate on shared runners produces flaky failures and
+# gets disabled. A bench that emits no number does fail — that is breakage, not
+# a perf signal. (#60)
 
 on:
   push:
@@ -31,22 +32,18 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
     steps:
       - uses: actions/checkout@v7
+      # Build-only environment: this job runs one cargo command and needs
+      # neither the test stack nor the coverage tooling that `ci` carries.
       - uses: prefix-dev/setup-pixi@v0.10.0
         with:
-          environments: ci
+          environments: wheel
           cache: true
           cache-write: ${{ github.ref == 'refs/heads/main' }}
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
 
       - name: Time the headline factorization (release, best-of-N)
-        id: bench
-        run: |
-          out="$(pixi run -e ci bench-wallclock)"
-          echo "$out"
-          best="$(printf '%s\n' "$out" | grep -oE 'WALLCLOCK_BEST_NS=[0-9]+' | tail -n1 | cut -d= -f2 || true)"
-          echo "best_ns=${best:-}" >> "$GITHUB_OUTPUT"
+        run: pixi run -e wheel bench-wallclock | tee bench.out
 
-      - name: Compare against committed reference (alert only)
-        if: steps.bench.outputs.best_ns != ''
-        run: python3 scripts/check-wallclock-reference.py --measured-ns "${{ steps.bench.outputs.best_ns }}" --commit "${{ github.sha }}"
+      - name: Compare against committed reference
+        run: pixi run -e wheel python scripts/check-wallclock-reference.py --bench-output bench.out --commit "${{ github.sha }}"
