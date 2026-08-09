@@ -123,13 +123,20 @@ impl fmt::Display for Fallback {
 #[cfg(any(feature = "serde", test))]
 impl<T: num_traits::Float> Factor<T> {
     fn validate_structure(&self) -> Result<(), FactorError> {
-        let n = self.n();
         // A Ground anchor overwrites its block's last entry with `-sum`, so a second
         // one silently solves a different system.
         let grounded = self.ground_blocks();
         if grounded > 1 {
             return Err(FactorError::MultipleGroundBlocks { grounded });
         }
+        // `n()` adds the augmentation to a dimension the payload chose, and adds it bare.
+        // This is where that sum is proven to fit, so the formula stays in one place.
+        if self.original_n > usize::MAX - grounded {
+            return Err(FactorError::AugmentedDimensionOverflows {
+                original_n: self.original_n,
+            });
+        }
+        let n = self.n();
         let mut covered = 0usize;
         for block in &self.blocks {
             block.cholesky.validate_for_dim(block.dim)?;

@@ -52,6 +52,9 @@ pub(crate) enum FactorError {
         covered: usize,
         n: usize,
     },
+    AugmentedDimensionOverflows {
+        original_n: usize,
+    },
     ExactFactorLengthInvalid {
         n: usize,
         len: usize,

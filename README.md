@@ -21,6 +21,8 @@ pixi run develop
 cargo check --workspace
 cargo test --workspace --all-features
 pixi run test
+# on demand, on nightly, from crates/approx-chol/fuzz
+cargo +nightly fuzz run factor_from_bytes
 ```
 
 ## Attribution

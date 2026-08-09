@@ -10,6 +10,8 @@ readme = "README.md"
 repository.workspace = true
 keywords = ["laplacian", "sparse", "cholesky", "preconditioner", "sddm"]
 categories.workspace = true
+# A nested workspace nothing in the published crate reads.
+exclude = ["fuzz"]
 
 [lints]
 workspace = true
