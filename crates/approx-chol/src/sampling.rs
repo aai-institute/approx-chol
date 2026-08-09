@@ -19,7 +19,7 @@ fn draw_from(bits: u64) -> f64 {
 /// The mass a suffix leaves to draw from, `[base, base + remaining)`. Holding one is the
 /// guard: an unsamplable suffix has no interval, so it never reaches a draw.
 #[derive(Clone, Copy)]
-struct SuffixInterval<T> {
+pub(crate) struct SuffixInterval<T> {
     base: T,
     remaining: T,
 }
@@ -87,25 +87,20 @@ impl<T: Real> CdfSampler<T> {
         }
     }
 
-    /// The end is the prepared distribution's own length, so no caller can name a
-    /// stale one.
+    /// Takes the interval rather than a start, so a caller drawing repeatedly from one
+    /// suffix rebuilds it once instead of per draw. Holding it is the guard, so this
+    /// always answers.
     #[inline]
-    pub(crate) fn sample_after(&mut self, start: usize) -> Option<u32> {
-        let index = self.sample_suffix(start)?;
-        Some(self.neighbors[index])
-    }
-
-    /// Draws only once the suffix is known samplable, so a `None` leaves the block's
-    /// stream where it was rather than shifting every later draw by one.
-    #[inline]
-    fn sample_suffix(&mut self, start: usize) -> Option<usize> {
-        let interval = self.suffix_interval(start)?;
+    pub(crate) fn sample_in(&mut self, start: usize, interval: SuffixInterval<T>) -> u32 {
         let u = self.draw();
-        Some(self.index_for_draw(start, interval, u))
+        self.neighbors[self.index_for_draw(start, interval, u)]
     }
 
+    /// The end is the prepared distribution's own length, so no caller can name a
+    /// stale one. `None` leaves the block's stream where it was, since only
+    /// [`Self::sample_in`] draws.
     #[inline]
-    fn suffix_interval(&self, start: usize) -> Option<SuffixInterval<T>> {
+    pub(crate) fn suffix_interval(&self, start: usize) -> Option<SuffixInterval<T>> {
         let end = self.cumsum.len();
         if start >= end {
             return None;
@@ -154,6 +149,21 @@ impl<T: Real> CdfSampler<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The composition `sample_fill_edges` hoists apart, kept whole so the tests can pin
+    /// that splitting it changed nothing.
+    impl<T: Real> CdfSampler<T> {
+        fn sample_after(&mut self, start: usize) -> Option<u32> {
+            let index = self.sample_suffix(start)?;
+            Some(self.neighbors[index])
+        }
+
+        fn sample_suffix(&mut self, start: usize) -> Option<usize> {
+            let interval = self.suffix_interval(start)?;
+            let u = self.draw();
+            Some(self.index_for_draw(start, interval, u))
+        }
+    }
 
     const SEED: u64 = 42;
 

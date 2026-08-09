@@ -113,11 +113,14 @@ impl<T: Real> SampledColumn<T> {
         if n_samples == 0 || fill_weight <= T::zero() {
             return;
         }
+        // The suffix does not move across the copies, so its interval is loop-invariant.
+        let Some(interval) = draws.suffix_interval(tail) else {
+            return;
+        };
         for _ in 0..n_samples {
-            if let Some(k) = draws.sample_after(tail) {
-                if neighbor != k {
-                    self.fill_edges.push((neighbor, k, fill_weight));
-                }
+            let k = draws.sample_in(tail, interval);
+            if neighbor != k {
+                self.fill_edges.push((neighbor, k, fill_weight));
             }
         }
     }
