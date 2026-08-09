@@ -25,9 +25,13 @@ struct SuffixInterval<T> {
 }
 
 impl<T: Real> SuffixInterval<T> {
+    /// Panics on an exotic `Float` rather than substituting, as
+    /// [`crate::types::count_as_scalar`] does: a substituted draw would silently aim every
+    /// sample at the same neighbor.
     #[inline]
-    fn point(&self, u: f64) -> Option<T> {
-        Some(<T as NumCast>::from(u)? * self.remaining + self.base)
+    fn point(self, u: f64) -> T {
+        <T as NumCast>::from(u).expect("the draw is representable in T") * self.remaining
+            + self.base
     }
 }
 
@@ -97,7 +101,7 @@ impl<T: Real> CdfSampler<T> {
     fn sample_suffix(&mut self, start: usize) -> Option<usize> {
         let interval = self.suffix_interval(start)?;
         let u = self.draw();
-        self.index_for_draw(start, interval, u)
+        Some(self.index_for_draw(start, interval, u))
     }
 
     #[inline]
@@ -122,9 +126,9 @@ impl<T: Real> CdfSampler<T> {
     }
 
     #[inline]
-    fn index_for_draw(&self, start: usize, interval: SuffixInterval<T>, u: f64) -> Option<usize> {
+    fn index_for_draw(&self, start: usize, interval: SuffixInterval<T>, u: f64) -> usize {
         let end = self.cumsum.len();
-        let r = interval.point(u)?;
+        let r = interval.point(u);
 
         let k = if end - start <= LINEAR_THRESHOLD {
             let mut k = start;
@@ -143,7 +147,7 @@ impl<T: Real> CdfSampler<T> {
         // `u < 1.0` does not survive narrowing to `f32`, which rounds every draw above
         // `1 - 2^-25` to exactly 1.0 and leaves `fl(remaining + base) > cumsum[end - 1]`
         // reachable. At `f64` the draw's own bound already rules that out.
-        Some(k.min(end - 1))
+        k.min(end - 1)
     }
 }
 
@@ -316,7 +320,7 @@ mod tests {
             let expected = sampler.index_for_draw(start, interval, draw_from(stream.next_u64()));
             assert_eq!(
                 sampler.sample_suffix(start),
-                expected,
+                Some(expected),
                 "start {start}: the sampler's own draw left the documented mapping"
             );
         }
@@ -352,9 +356,7 @@ mod tests {
                 let interval = sampler
                     .suffix_interval(start)
                     .expect("a positive suffix is samplable");
-                let index = sampler
-                    .index_for_draw(start, interval, top)
-                    .expect("the draw narrows into the interval");
+                let index = sampler.index_for_draw(start, interval, top);
                 assert!(
                     index < entries.len(),
                     "len {}, start {start}: index {index} is past the CDF",
@@ -388,7 +390,7 @@ mod tests {
             let expected = sampler.index_for_draw(0, interval, draw_from(stream.next_u64()));
             assert_eq!(
                 sampler.sample_suffix(0),
-                expected,
+                Some(expected),
                 "draw {i}: a refused start spent a draw"
             );
         }
