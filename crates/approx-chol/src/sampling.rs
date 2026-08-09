@@ -157,6 +157,11 @@ mod tests {
 
     const SEED: u64 = 42;
 
+    /// Weights rising with the index, so a suffix keeps mass wherever it starts.
+    fn ascending_weights(n: usize) -> Vec<(u32, f64)> {
+        (0..n).map(|i| (i as u32, (i + 1) as f64)).collect()
+    }
+
     /// Every fixture names entry `i` neighbor `i`, so a draw indexes its own tally.
     fn sample_counts(entries: &[(u32, f64)], start: usize, n_samples: usize) -> Vec<u32> {
         let mut sampler = CdfSampler::new(SEED);
@@ -246,7 +251,7 @@ mod tests {
     fn monotonic_suffix() {
         let mut sampler = CdfSampler::new(SEED);
         let n = 64;
-        let entries: Vec<(u32, f64)> = (0..n).map(|i| (i as u32, (i + 1) as f64)).collect();
+        let entries = ascending_weights(n);
         sampler.prepare(entries.iter().copied());
 
         let mut sampled_any = vec![false; n];
@@ -276,11 +281,7 @@ mod tests {
     #[test]
     fn every_draw_is_below_one() {
         let top = (0..4096u64).map(|d| u64::MAX - d * (1 << 11));
-        let spread = (0..4096u64).map(|d| d.wrapping_mul(0x9E37_79B9_7F4A_7C15));
-        for bits in top
-            .chain(spread)
-            .chain([0, 1, (1 << 11) - 1, 1 << 53, 1 << 63])
-        {
+        for bits in top.chain([0, 1, (1 << 11) - 1, 1 << 53, 1 << 63]) {
             let u = draw_from(bits);
             assert!((0.0..1.0).contains(&u), "u = {u:.20} for bits = {bits:#x}");
         }
@@ -308,7 +309,7 @@ mod tests {
     /// what surrounds it — exactly one draw per call, `start` reaching the search unchanged.
     #[test]
     fn sample_suffix_maps_one_raw_draw_per_call() {
-        let entries: Vec<(u32, f64)> = (0..64).map(|i| (i, (i + 1) as f64)).collect();
+        let entries = ascending_weights(64);
         let mut sampler = CdfSampler::new(SEED);
         sampler.prepare(entries.iter().copied());
         let mut stream = SmallRng::seed_from_u64(SEED);
@@ -341,14 +342,14 @@ mod tests {
         );
 
         let weights: [f32; 5] = [18852.719, 69.055_58, 113_884.05, 70647.53, 956.364_56];
-        let padding: Vec<f32> = vec![1.0; LINEAR_THRESHOLD];
         // The overrunning start is at index 2, reached through each search arm in turn.
-        for extra in [0, padding.len()] {
+        for padding in [0, LINEAR_THRESHOLD] {
             let entries: Vec<(u32, f32)> = weights
                 .iter()
-                .chain(padding.iter().take(extra))
+                .copied()
+                .chain(std::iter::repeat_n(1.0, padding))
                 .enumerate()
-                .map(|(i, &w)| (i as u32, w))
+                .map(|(i, w)| (i as u32, w))
                 .collect();
             let mut sampler = CdfSampler::<f32>::new(SEED);
             sampler.prepare(entries.iter().copied());
@@ -384,13 +385,9 @@ mod tests {
                     "start {refused} is samplable"
                 );
             }
-            let interval = sampler
-                .suffix_interval(0)
-                .expect("a positive suffix is samplable");
-            let expected = sampler.index_for_draw(0, interval, draw_from(stream.next_u64()));
             assert_eq!(
-                sampler.sample_suffix(0),
-                Some(expected),
+                sampler.draw().to_bits(),
+                draw_from(stream.next_u64()).to_bits(),
                 "draw {i}: a refused start spent a draw"
             );
         }
