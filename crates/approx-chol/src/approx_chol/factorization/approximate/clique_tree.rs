@@ -113,13 +113,13 @@ impl<T: Real> SampledColumn<T> {
         if n_samples == 0 || fill_weight <= T::zero() {
             return;
         }
-        for _ in 0..n_samples {
-            if let Some(k) = draws.sample_after(tail) {
-                if neighbor != k {
-                    self.fill_edges.push((neighbor, k, fill_weight));
-                }
+        // The suffix does not move across the copies, so the sampler resolves it once.
+        let fill_edges = &mut self.fill_edges;
+        draws.sample_batch(tail, n_samples, |k| {
+            if neighbor != k {
+                fill_edges.push((neighbor, k, fill_weight));
             }
-        }
+        });
     }
 
     fn extend_ordered_fill_edges(&self, out: &mut Vec<(u32, u32, T)>) {
