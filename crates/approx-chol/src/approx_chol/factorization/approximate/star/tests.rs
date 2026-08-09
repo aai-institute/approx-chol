@@ -1,6 +1,10 @@
 use super::*;
 use crate::graph::{Multi, Single, SplitFactor};
 
+fn split(k: u32) -> SplitFactor {
+    SplitFactor::new(k).expect("the fixtures split by 2 or more")
+}
+
 fn nbr(to: u32, fill_weight: f64, count: u32) -> Neighbor<f64, Multi> {
     Neighbor {
         to,
@@ -45,7 +49,7 @@ fn test_merge_floors_immediately_before_batched_fill() {
     assert_eq!(ordering.next_vertex(), Some(0));
 }
 
-fn dedup_multi(n: usize, raw: Vec<Neighbor<f64, Multi>>, limit: u32) -> Star<f64, Multi> {
+fn dedup_multi(n: usize, raw: Vec<Neighbor<f64, Multi>>, limit: SplitFactor) -> Star<f64, Multi> {
     let mut dedup = DedupWorkspace::<f64, Multi>::new(n);
     dedup.raw = raw;
     let mut star = Star::new();
@@ -60,7 +64,7 @@ fn dedup_sums_weights_and_caps_copies() {
     let cases: [(
         &str,
         Vec<Neighbor<f64, Multi>>,
-        u32,
+        SplitFactor,
         Vec<(u32, f64, u32)>,
         Vec<(u32, u32)>,
     ); 2] = [
@@ -73,7 +77,7 @@ fn dedup_sums_weights_and_caps_copies() {
                 nbr(3, 1.0, 1),
                 nbr(5, 2.0, 1),
             ],
-            2,
+            split(2),
             // Both average 2.0 per copy, so the tie falls to the lower index.
             vec![(3, 4.0, 2), (5, 2.0, 1)],
             vec![(3, 2)],
@@ -81,7 +85,7 @@ fn dedup_sums_weights_and_caps_copies() {
         (
             "virtual split edge plus a fill edge, under the limit",
             vec![nbr(3, 6.0, 3), nbr(3, 1.5, 1)],
-            10,
+            split(10),
             vec![(3, 7.5, 4)],
             vec![],
         ),
@@ -97,20 +101,20 @@ fn dedup_sums_weights_and_caps_copies() {
 fn test_scatter_large_multiplicity_caps_without_overflow() {
     let n_edges = 70_000usize;
     let raw = vec![nbr(2, 1.0, 1); n_edges];
-    let star = dedup_multi(4, raw, 2);
+    let star = dedup_multi(4, raw, split(2));
 
     assert_eq!(triples(&star), vec![(2, n_edges as f64, 2)]);
     assert_eq!(star.removed_copies(), &[(2, (n_edges - 2) as u32)]);
 }
 
-/// The limit is not free here: it is `Single`'s own copy count, which is what makes
-/// this the AC path.
+/// `Single` has no cap to name, so the AC path keeps one copy by construction rather
+/// than by comparison.
 #[test]
 fn a_single_copy_star_keeps_one_copy_and_discards_the_rest() {
     let mut dedup = DedupWorkspace::<f64, Single>::new(3);
     dedup.raw = vec![ac_nbr(2, 3.0), ac_nbr(2, 0.5), ac_nbr(0, 1.0)];
     let mut star = Star::new();
-    dedup.dedup(&mut star, Single.get());
+    dedup.dedup(&mut star, ());
 
     assert_eq!(triples(&star), vec![(0, 1.0, 1), (2, 3.5, 1)]);
     assert_eq!(star.removed_copies(), &[(2, 1)]);
@@ -144,18 +148,16 @@ fn ac_raw() -> [Neighbor<f64, Single>; 5] {
 
 #[test]
 fn dedup_single_copy_paths_agree() {
-    const LIMIT: u32 = 1;
-
     let mut by_sort = DedupWorkspace::<f64, Single>::new(3);
     by_sort.raw = ac_raw().to_vec();
     let mut star_sort = Star::new();
-    by_sort.dedup_by_sort(&mut star_sort, LIMIT);
+    by_sort.dedup_by_sort(&mut star_sort, ());
     star_sort.sort();
 
     let mut by_scatter = DedupWorkspace::<f64, Single>::new(3);
     by_scatter.raw = ac_raw().to_vec();
     let mut star_scatter = Star::new();
-    by_scatter.dedup_by_scatter(&mut star_scatter, LIMIT);
+    by_scatter.dedup_by_scatter(&mut star_scatter, ());
     star_scatter.sort();
 
     // Weights summed per vertex, ascending by weight then vertex index.
@@ -209,7 +211,7 @@ fn equal_sort_keys_order_by_ascending_neighbor() {
 
 #[test]
 fn dedup_multi_copy_paths_agree() {
-    const LIMIT: u32 = 4;
+    let limit = split(4);
     let raw = || {
         [
             nbr(2, 3.0, 2),
@@ -223,16 +225,16 @@ fn dedup_multi_copy_paths_agree() {
     let mut by_sort = DedupWorkspace::<f64, Multi>::new(3);
     by_sort.raw = raw().to_vec();
     let mut star_sort = Star::new();
-    by_sort.dedup_by_sort(&mut star_sort, LIMIT);
+    by_sort.dedup_by_sort(&mut star_sort, limit);
     star_sort.sort();
 
     let mut by_scatter = DedupWorkspace::<f64, Multi>::new(3);
     by_scatter.raw = raw().to_vec();
     let mut star_scatter = Star::new();
-    by_scatter.dedup_by_scatter(&mut star_scatter, LIMIT);
+    by_scatter.dedup_by_scatter(&mut star_scatter, limit);
     star_scatter.sort();
 
-    // Weights and copies summed per vertex, vertex 2 capped from 5 to LIMIT,
+    // Weights and copies summed per vertex, vertex 2 capped from 5 to the split's 4,
     // ascending by weight/copies: 1.25/2 < 3.5/4 < 4.0/2.
     assert_eq!(
         triples(&star_sort),
@@ -269,11 +271,11 @@ fn a_single_copy_star_entry_is_as_wide_as_the_bare_pair() {
 
 #[test]
 fn the_split_is_the_cap_and_the_surviving_copy_count() {
-    let k = SplitFactor::new(3).expect("3 splits");
+    let k = split(3);
     let mut dedup = DedupWorkspace::<f64, Multi>::new(4);
     dedup.raw = vec![nbr(1, 3.0, 3), nbr(1, 3.0, 3)];
     let mut star = Star::new();
-    dedup.dedup(&mut star, k.get());
+    dedup.dedup(&mut star, k);
 
     assert_eq!(triples(&star), vec![(1, 6.0, 3)]);
     assert_eq!(star.removed_copies(), &[(1, 3)]);

@@ -64,7 +64,7 @@ impl<T: Real, C: EdgeCount> Star<T, C> {
     }
 
     /// One call per unique neighbor, so the cap needs no second pass.
-    fn push_capped(&mut self, neighbor: u32, weight: T, copies: u32, limit: u32) {
+    fn push_capped(&mut self, neighbor: u32, weight: T, copies: u32, limit: C::Split) {
         let (copies, dropped) = C::cap(copies, limit);
         if dropped > 0 {
             self.removed_copies.push((neighbor, dropped));
@@ -130,15 +130,15 @@ fn apply_removed_copies(merged: &[(u32, u32)], ordering: &mut DynamicOrdering) {
 pub(super) struct StarBuilder<T: Real, C: EdgeCount> {
     star: Star<T, C>,
     dedup: DedupWorkspace<T, C>,
-    copies: u32,
+    split: C::Split,
 }
 
 impl<T: Real, C: EdgeCount> StarBuilder<T, C> {
-    pub(super) fn new(n: usize, copies: u32) -> Self {
+    pub(super) fn new(n: usize, split: C::Split) -> Self {
         Self {
             star: Star::new(),
             dedup: DedupWorkspace::new(n),
-            copies,
+            split,
         }
     }
 
@@ -149,7 +149,7 @@ impl<T: Real, C: EdgeCount> StarBuilder<T, C> {
         ordering: &mut DynamicOrdering,
     ) {
         self.dedup.collect(graph, v);
-        self.dedup.dedup(&mut self.star, self.copies);
+        self.dedup.dedup(&mut self.star, self.split);
         apply_removed_copies(self.star.removed_copies(), ordering);
     }
 
@@ -232,7 +232,7 @@ impl<T: Real, C: EdgeCount> DedupWorkspace<T, C> {
 
     /// The two paths differ only in how they find the duplicates; neither caps, so
     /// neither can report a merge the other would not.
-    pub(super) fn dedup(&mut self, star: &mut Star<T, C>, limit: u32) {
+    pub(super) fn dedup(&mut self, star: &mut Star<T, C>, limit: C::Split) {
         star.clear();
         if self.raw.len() <= SCATTER_THRESHOLD {
             self.dedup_by_sort(star, limit);
@@ -242,7 +242,7 @@ impl<T: Real, C: EdgeCount> DedupWorkspace<T, C> {
         star.sort();
     }
 
-    fn dedup_by_sort(&mut self, star: &mut Star<T, C>, limit: u32) {
+    fn dedup_by_sort(&mut self, star: &mut Star<T, C>, limit: C::Split) {
         if self.raw.is_empty() {
             return;
         }
@@ -261,7 +261,7 @@ impl<T: Real, C: EdgeCount> DedupWorkspace<T, C> {
         star.push_capped(run.0, run.1, run.2, limit);
     }
 
-    fn dedup_by_scatter(&mut self, star: &mut Star<T, C>, limit: u32) {
+    fn dedup_by_scatter(&mut self, star: &mut Star<T, C>, limit: C::Split) {
         self.scratch.begin_pass();
         for neighbor in &self.raw {
             self.scratch

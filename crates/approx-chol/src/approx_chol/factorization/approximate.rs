@@ -29,7 +29,7 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
     let copies = C::split_edges(&mut graph, split);
     let degrees: Vec<usize> = (0..n).map(|v| graph.degree(v)).collect();
     let degree_sum: usize = degrees.iter().sum();
-    let mut star_builder = StarBuilder::<T, C>::new(n, copies);
+    let mut star_builder = StarBuilder::<T, C>::new(n, split);
     let mut ordering = DynamicOrdering::new(&degrees, copies as usize);
     let mut column = SampledColumn::<T>::new();
     let mut seq = SequenceBuilder::with_capacity(n, degree_sum);
