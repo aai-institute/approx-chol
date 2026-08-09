@@ -7,6 +7,34 @@ use num_traits::NumCast;
 /// At or below this range size a linear CDF scan beats binary search.
 const LINEAR_THRESHOLD: usize = 32;
 
+/// The canonical 53-bit draw, in `[0, 1)` by construction: `bits >> 11` is at most
+/// `2^53 - 1` and the scale is a power of two, so the product is exact and no rounding
+/// lands on 1.0. Taking bits rather than an rng keeps the mapping testable at the
+/// extremes the generator reaches only by chance.
+#[inline]
+fn draw_from(bits: u64) -> f64 {
+    ((bits >> 11) as f64) * (1.0 / (1u64 << 53) as f64)
+}
+
+/// The mass a suffix leaves to draw from, `[base, base + remaining)`. Holding one is the
+/// guard: an unsamplable suffix has no interval, so it never reaches a draw.
+#[derive(Clone, Copy)]
+struct SuffixInterval<T> {
+    base: T,
+    remaining: T,
+}
+
+impl<T: Real> SuffixInterval<T> {
+    /// Panics on an exotic `Float` rather than substituting, as
+    /// [`crate::types::count_as_scalar`] does: a substituted draw would silently aim every
+    /// sample at the same neighbor.
+    #[inline]
+    fn point(self, u: f64) -> T {
+        <T as NumCast>::from(u).expect("the draw is representable in T") * self.remaining
+            + self.base
+    }
+}
+
 /// A star's neighbors as a weighted distribution, drawn from by suffix. Owning
 /// `neighbors` rather than borrowing leaves one length in play, so a draw answers
 /// with a neighbor rather than an offset the caller re-indexes.
@@ -36,6 +64,12 @@ impl<T> CdfSampler<T> {
     pub(crate) fn seed(&self) -> u64 {
         self.seed
     }
+
+    /// `next_u64` for rand 0.9/0.10 compatibility.
+    #[inline]
+    fn draw(&mut self) -> f64 {
+        draw_from(self.rng.next_u64())
+    }
 }
 
 impl<T: Real> CdfSampler<T> {
@@ -61,8 +95,17 @@ impl<T: Real> CdfSampler<T> {
         Some(self.neighbors[index])
     }
 
+    /// Draws only once the suffix is known samplable, so a `None` leaves the block's
+    /// stream where it was rather than shifting every later draw by one.
     #[inline]
     fn sample_suffix(&mut self, start: usize) -> Option<usize> {
+        let interval = self.suffix_interval(start)?;
+        let u = self.draw();
+        Some(self.index_for_draw(start, interval, u))
+    }
+
+    #[inline]
+    fn suffix_interval(&self, start: usize) -> Option<SuffixInterval<T>> {
         let end = self.cumsum.len();
         if start >= end {
             return None;
@@ -79,13 +122,14 @@ impl<T: Real> CdfSampler<T> {
         if remaining <= T::zero() {
             return None;
         }
+        Some(SuffixInterval { base, remaining })
+    }
 
-        // Draw a uniform in [0, 1) via next_u64 for rand 0.9/0.10 compatibility.
-        let u = (self.rng.next_u64() as f64) / ((u64::MAX as f64) + 1.0);
-        let r = <T as NumCast>::from(u)? * remaining + base;
+    #[inline]
+    fn index_for_draw(&self, start: usize, interval: SuffixInterval<T>, u: f64) -> usize {
+        let end = self.cumsum.len();
+        let r = interval.point(u);
 
-        // The clamp guards floating-point rounding that puts `r` past the last
-        // cumulative sum.
         let k = if end - start <= LINEAR_THRESHOLD {
             let mut k = start;
             while k < end && self.cumsum[k] < r {
@@ -100,7 +144,10 @@ impl<T: Real> CdfSampler<T> {
         } else {
             self.cumsum[start..end].partition_point(|&c| c < r) + start
         };
-        Some(k.min(end - 1))
+        // `u < 1.0` does not survive narrowing to `f32`, which rounds every draw above
+        // `1 - 2^-25` to exactly 1.0 and leaves `fl(remaining + base) > cumsum[end - 1]`
+        // reachable. At `f64` the draw's own bound already rules that out.
+        k.min(end - 1)
     }
 }
 
@@ -109,6 +156,11 @@ mod tests {
     use super::*;
 
     const SEED: u64 = 42;
+
+    /// Weights rising with the index, so a suffix keeps mass wherever it starts.
+    fn ascending_weights(n: usize) -> Vec<(u32, f64)> {
+        (0..n).map(|i| (i as u32, (i + 1) as f64)).collect()
+    }
 
     /// Every fixture names entry `i` neighbor `i`, so a draw indexes its own tally.
     fn sample_counts(entries: &[(u32, f64)], start: usize, n_samples: usize) -> Vec<u32> {
@@ -199,7 +251,7 @@ mod tests {
     fn monotonic_suffix() {
         let mut sampler = CdfSampler::new(SEED);
         let n = 64;
-        let entries: Vec<(u32, f64)> = (0..n).map(|i| (i as u32, (i + 1) as f64)).collect();
+        let entries = ascending_weights(n);
         sampler.prepare(entries.iter().copied());
 
         let mut sampled_any = vec![false; n];
@@ -220,6 +272,124 @@ mod tests {
         let heavy_half = n / 2..n;
         for i in heavy_half {
             assert!(sampled_any[i], "heavy index {i} was never sampled");
+        }
+    }
+
+    /// The old `/(u64::MAX as f64 + 1.0)` mapping rounded the top of `next_u64`'s range to
+    /// exactly `1.0`. Stepping by `1 << 11` moves the retained bits every iteration — a
+    /// stride of 1 only walks the 11 discarded bits and re-tests one draw.
+    #[test]
+    fn every_draw_is_below_one() {
+        let top = (0..4096u64).map(|d| u64::MAX - d * (1 << 11));
+        for bits in top.chain([0, 1, (1 << 11) - 1, 1 << 53, 1 << 63]) {
+            let u = draw_from(bits);
+            assert!((0.0..1.0).contains(&u), "u = {u:.20} for bits = {bits:#x}");
+        }
+    }
+
+    /// Reverting #109 moves `u` by at most `2^-53`, which changes the chosen bucket only on
+    /// a boundary straddle — so the mapping has to be pinned on the draw's own bits, where
+    /// truncation and round-to-nearest disagree on every `bits` with a nonzero low 11.
+    #[test]
+    fn the_samplers_own_draw_is_the_documented_mapping() {
+        let mut sampler = CdfSampler::<f64>::new(SEED);
+        let mut stream = SmallRng::seed_from_u64(SEED);
+
+        for i in 0..4_096 {
+            let expected = draw_from(stream.next_u64());
+            assert_eq!(
+                sampler.draw().to_bits(),
+                expected.to_bits(),
+                "draw {i}: the sampler left the documented mapping"
+            );
+        }
+    }
+
+    /// The draw's value is [`the_samplers_own_draw_is_the_documented_mapping`]'s; this pins
+    /// what surrounds it — exactly one draw per call, `start` reaching the search unchanged.
+    #[test]
+    fn sample_suffix_maps_one_raw_draw_per_call() {
+        let entries = ascending_weights(64);
+        let mut sampler = CdfSampler::new(SEED);
+        sampler.prepare(entries.iter().copied());
+        let mut stream = SmallRng::seed_from_u64(SEED);
+
+        for start in (0..entries.len()).cycle().take(4_096) {
+            let interval = sampler
+                .suffix_interval(start)
+                .expect("a positive suffix is samplable");
+            let expected = sampler.index_for_draw(start, interval, draw_from(stream.next_u64()));
+            assert_eq!(
+                sampler.sample_suffix(start),
+                Some(expected),
+                "start {start}: the sampler's own draw left the documented mapping"
+            );
+        }
+    }
+
+    /// Narrowing to `f32` rounds every draw above `1 - 2^-25` to exactly 1.0, so
+    /// `fl(remaining + base)` can still exceed the last cumulative sum and the clamp stays
+    /// load-bearing — it is not dead code left over from the `[0, 1]` draw. These weights
+    /// were found by searching random distributions for a start whose `remaining` rounds up;
+    /// at `f64` that search returns nothing, which is why only the `f32` case is pinned here.
+    #[test]
+    fn the_top_draw_narrowed_to_f32_still_needs_the_clamp() {
+        let top = draw_from(u64::MAX);
+        assert_eq!(
+            <f32 as NumCast>::from(top).expect("the draw narrows to f32"),
+            1.0,
+            "the top draw must narrow to 1.0f32 or this tests nothing"
+        );
+
+        let weights: [f32; 5] = [18852.719, 69.055_58, 113_884.05, 70647.53, 956.364_56];
+        // The overrunning start is at index 2, reached through each search arm in turn.
+        for padding in [0, LINEAR_THRESHOLD] {
+            let entries: Vec<(u32, f32)> = weights
+                .iter()
+                .copied()
+                .chain(std::iter::repeat_n(1.0, padding))
+                .enumerate()
+                .map(|(i, w)| (i as u32, w))
+                .collect();
+            let mut sampler = CdfSampler::<f32>::new(SEED);
+            sampler.prepare(entries.iter().copied());
+            for start in 0..entries.len() {
+                let interval = sampler
+                    .suffix_interval(start)
+                    .expect("a positive suffix is samplable");
+                let index = sampler.index_for_draw(start, interval, top);
+                assert!(
+                    index < entries.len(),
+                    "len {}, start {start}: index {index} is past the CDF",
+                    entries.len()
+                );
+            }
+        }
+    }
+
+    /// Both guards answer `None`, and a `None` that consumed a draw would shift every
+    /// later value in the block's stream. Entry 3 carries no mass, so `start = 3` is
+    /// refused by the interval rather than by the length.
+    #[test]
+    fn an_unsamplable_suffix_spends_no_draw() {
+        let entries: Vec<(u32, f64)> = vec![(0, 1.0), (1, 2.0), (2, 7.0), (3, 0.0)];
+        let mut sampler = CdfSampler::new(SEED);
+        sampler.prepare(entries.iter().copied());
+        let mut stream = SmallRng::seed_from_u64(SEED);
+
+        for i in 0..256 {
+            for refused in [3, entries.len()] {
+                assert_eq!(
+                    sampler.sample_after(refused),
+                    None,
+                    "start {refused} is samplable"
+                );
+            }
+            assert_eq!(
+                sampler.draw().to_bits(),
+                draw_from(stream.next_u64()).to_bits(),
+                "draw {i}: a refused start spent a draw"
+            );
         }
     }
 
