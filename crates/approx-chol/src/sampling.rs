@@ -19,7 +19,7 @@ fn draw_from(bits: u64) -> f64 {
 /// The mass a suffix leaves to draw from, `[base, base + remaining)`. Holding one is the
 /// guard: an unsamplable suffix has no interval, so it never reaches a draw.
 #[derive(Clone, Copy)]
-pub(crate) struct SuffixInterval<T> {
+struct SuffixInterval<T> {
     base: T,
     remaining: T,
 }
@@ -87,20 +87,24 @@ impl<T: Real> CdfSampler<T> {
         }
     }
 
-    /// Takes the interval rather than a start, so a caller drawing repeatedly from one
-    /// suffix rebuilds it once instead of per draw. Holding it is the guard, so this
-    /// always answers.
+    /// Takes the whole run of draws, so one suffix is resolved once rather than per draw
+    /// and no caller can hold a resolved suffix across a [`Self::prepare`].
     #[inline]
-    pub(crate) fn sample_in(&mut self, start: usize, interval: SuffixInterval<T>) -> u32 {
-        let u = self.draw();
-        self.neighbors[self.index_for_draw(start, interval, u)]
+    pub(crate) fn sample_batch(&mut self, start: usize, n: u32, mut emit: impl FnMut(u32)) {
+        let Some(interval) = self.suffix_interval(start) else {
+            return;
+        };
+        for _ in 0..n {
+            let u = self.draw();
+            emit(self.neighbors[self.index_for_draw(start, interval, u)]);
+        }
     }
 
     /// The end is the prepared distribution's own length, so no caller can name a
     /// stale one. `None` leaves the block's stream where it was, since only
-    /// [`Self::sample_in`] draws.
+    /// [`Self::sample_batch`] draws.
     #[inline]
-    pub(crate) fn suffix_interval(&self, start: usize) -> Option<SuffixInterval<T>> {
+    fn suffix_interval(&self, start: usize) -> Option<SuffixInterval<T>> {
         let end = self.cumsum.len();
         if start >= end {
             return None;
@@ -133,7 +137,7 @@ impl<T: Real> CdfSampler<T> {
                 // A broken advance leaves this condition re-checking the same index
                 // forever instead of failing, so a bad increment hangs rather than
                 // panics.
-                debug_assert!(k > previous, "sample_suffix linear scan failed to advance");
+                debug_assert!(k > previous, "index_for_draw linear scan failed to advance");
             }
             k
         } else {
@@ -150,19 +154,12 @@ impl<T: Real> CdfSampler<T> {
 mod tests {
     use super::*;
 
-    /// The composition `sample_fill_edges` hoists apart, kept whole so the tests can pin
-    /// that splitting it changed nothing.
-    impl<T: Real> CdfSampler<T> {
-        fn sample_after(&mut self, start: usize) -> Option<u32> {
-            let index = self.sample_suffix(start)?;
-            Some(self.neighbors[index])
-        }
-
-        fn sample_suffix(&mut self, start: usize) -> Option<usize> {
-            let interval = self.suffix_interval(start)?;
-            let u = self.draw();
-            Some(self.index_for_draw(start, interval, u))
-        }
+    /// Delegates rather than re-composing, so the tests reach `sample_batch` itself and a
+    /// mutant inside it cannot hide behind a second copy of its body.
+    fn sample_after<T: Real>(sampler: &mut CdfSampler<T>, start: usize) -> Option<u32> {
+        let mut drawn = None;
+        sampler.sample_batch(start, 1, |neighbor| drawn = Some(neighbor));
+        drawn
     }
 
     const SEED: u64 = 42;
@@ -178,7 +175,7 @@ mod tests {
         sampler.prepare(entries.iter().copied());
         let mut counts = vec![0u32; entries.len()];
         for _ in 0..n_samples {
-            if let Some(neighbor) = sampler.sample_after(start) {
+            if let Some(neighbor) = sample_after(&mut sampler, start) {
                 counts[neighbor as usize] += 1;
             }
         }
@@ -268,7 +265,7 @@ mod tests {
 
         for start in 1..n {
             for _ in 0..20 {
-                if let Some(neighbor) = sampler.sample_after(start) {
+                if let Some(neighbor) = sample_after(&mut sampler, start) {
                     let idx = neighbor as usize;
                     assert!(
                         idx >= start && idx < n,
@@ -318,7 +315,7 @@ mod tests {
     /// The draw's value is [`the_samplers_own_draw_is_the_documented_mapping`]'s; this pins
     /// what surrounds it — exactly one draw per call, `start` reaching the search unchanged.
     #[test]
-    fn sample_suffix_maps_one_raw_draw_per_call() {
+    fn sample_batch_maps_one_raw_draw_per_call() {
         let entries = ascending_weights(64);
         let mut sampler = CdfSampler::new(SEED);
         sampler.prepare(entries.iter().copied());
@@ -329,9 +326,11 @@ mod tests {
                 .suffix_interval(start)
                 .expect("a positive suffix is samplable");
             let expected = sampler.index_for_draw(start, interval, draw_from(stream.next_u64()));
+            let mut drawn = None;
+            sampler.sample_batch(start, 1, |neighbor| drawn = Some(neighbor));
             assert_eq!(
-                sampler.sample_suffix(start),
-                Some(expected),
+                drawn,
+                Some(entries[expected].0),
                 "start {start}: the sampler's own draw left the documented mapping"
             );
         }
@@ -390,7 +389,7 @@ mod tests {
         for i in 0..256 {
             for refused in [3, entries.len()] {
                 assert_eq!(
-                    sampler.sample_after(refused),
+                    sample_after(&mut sampler, refused),
                     None,
                     "start {refused} is samplable"
                 );
@@ -415,7 +414,7 @@ mod tests {
             let mut sampler = CdfSampler::new(SEED);
             sampler.prepare(entries.iter().copied());
             for _ in 0..100 {
-                assert_eq!(sampler.sample_after(0), expected, "{label}");
+                assert_eq!(sample_after(&mut sampler, 0), expected, "{label}");
             }
         }
     }
