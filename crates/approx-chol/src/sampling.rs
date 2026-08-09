@@ -16,6 +16,21 @@ fn draw_from(bits: u64) -> f64 {
     ((bits >> 11) as f64) * (1.0 / (1u64 << 53) as f64)
 }
 
+/// The mass a suffix leaves to draw from, `[base, base + remaining)`. Holding one is the
+/// guard: an unsamplable suffix has no interval, so it never reaches a draw.
+#[derive(Clone, Copy)]
+struct SuffixInterval<T> {
+    base: T,
+    remaining: T,
+}
+
+impl<T: Real> SuffixInterval<T> {
+    #[inline]
+    fn point(&self, u: f64) -> Option<T> {
+        Some(<T as NumCast>::from(u)? * self.remaining + self.base)
+    }
+}
+
 /// A star's neighbors as a weighted distribution, drawn from by suffix. Owning
 /// `neighbors` rather than borrowing leaves one length in play, so a draw answers
 /// with a neighbor rather than an offset the caller re-indexes.
@@ -76,14 +91,17 @@ impl<T: Real> CdfSampler<T> {
         Some(self.neighbors[index])
     }
 
+    /// Draws only once the suffix is known samplable, so a `None` leaves the block's
+    /// stream where it was rather than shifting every later draw by one.
     #[inline]
     fn sample_suffix(&mut self, start: usize) -> Option<usize> {
+        let interval = self.suffix_interval(start)?;
         let u = self.draw();
-        self.index_for_draw(start, u)
+        self.index_for_draw(start, interval, u)
     }
 
     #[inline]
-    fn index_for_draw(&self, start: usize, u: f64) -> Option<usize> {
+    fn suffix_interval(&self, start: usize) -> Option<SuffixInterval<T>> {
         let end = self.cumsum.len();
         if start >= end {
             return None;
@@ -100,8 +118,13 @@ impl<T: Real> CdfSampler<T> {
         if remaining <= T::zero() {
             return None;
         }
+        Some(SuffixInterval { base, remaining })
+    }
 
-        let r = <T as NumCast>::from(u)? * remaining + base;
+    #[inline]
+    fn index_for_draw(&self, start: usize, interval: SuffixInterval<T>, u: f64) -> Option<usize> {
+        let end = self.cumsum.len();
+        let r = interval.point(u)?;
 
         let k = if end - start <= LINEAR_THRESHOLD {
             let mut k = start;
@@ -287,7 +310,10 @@ mod tests {
         let mut stream = SmallRng::seed_from_u64(SEED);
 
         for start in (0..entries.len()).cycle().take(4_096) {
-            let expected = sampler.index_for_draw(start, draw_from(stream.next_u64()));
+            let interval = sampler
+                .suffix_interval(start)
+                .expect("a positive suffix is samplable");
+            let expected = sampler.index_for_draw(start, interval, draw_from(stream.next_u64()));
             assert_eq!(
                 sampler.sample_suffix(start),
                 expected,
@@ -323,15 +349,48 @@ mod tests {
             let mut sampler = CdfSampler::<f32>::new(SEED);
             sampler.prepare(entries.iter().copied());
             for start in 0..entries.len() {
-                let index = sampler
-                    .index_for_draw(start, top)
+                let interval = sampler
+                    .suffix_interval(start)
                     .expect("a positive suffix is samplable");
+                let index = sampler
+                    .index_for_draw(start, interval, top)
+                    .expect("the draw narrows into the interval");
                 assert!(
                     index < entries.len(),
                     "len {}, start {start}: index {index} is past the CDF",
                     entries.len()
                 );
             }
+        }
+    }
+
+    /// Both guards answer `None`, and a `None` that consumed a draw would shift every
+    /// later value in the block's stream. Entry 3 carries no mass, so `start = 3` is
+    /// refused by the interval rather than by the length.
+    #[test]
+    fn an_unsamplable_suffix_spends_no_draw() {
+        let entries: Vec<(u32, f64)> = vec![(0, 1.0), (1, 2.0), (2, 7.0), (3, 0.0)];
+        let mut sampler = CdfSampler::new(SEED);
+        sampler.prepare(entries.iter().copied());
+        let mut stream = SmallRng::seed_from_u64(SEED);
+
+        for i in 0..256 {
+            for refused in [3, entries.len()] {
+                assert_eq!(
+                    sampler.sample_after(refused),
+                    None,
+                    "start {refused} is samplable"
+                );
+            }
+            let interval = sampler
+                .suffix_interval(0)
+                .expect("a positive suffix is samplable");
+            let expected = sampler.index_for_draw(0, interval, draw_from(stream.next_u64()));
+            assert_eq!(
+                sampler.sample_suffix(0),
+                expected,
+                "draw {i}: a refused start spent a draw"
+            );
         }
     }
 
