@@ -106,11 +106,11 @@ pub(crate) trait EdgeCount: Clone + Copy {
     fn per_copy<T: Real>(&self, total: T) -> T;
 
     /// `Single` keeps one, so its discard count is the duplicates the merge
-    /// collapsed.
-    fn cap(copies: u32, limit: u32) -> (Self, u32);
+    /// collapsed. The cap is the split itself, which is why `Single` has none to name.
+    fn cap(copies: u32, limit: Self::Split) -> (Self, u32);
 
-    /// The degree-bucket scale, the merge cap and the per-neighbor sample count are
-    /// one number because they are one return value.
+    /// The degree-bucket scale and the per-neighbor sample count are one number because
+    /// they are one return value; the merge cap is [`Self::Split`] instead.
     fn split_edges<T: Real>(graph: &mut AdjListGraph<Self, T>, split: Self::Split) -> u32;
 }
 
@@ -172,7 +172,7 @@ impl EdgeCount for Single {
         total
     }
     #[inline]
-    fn cap(copies: u32, _limit: u32) -> (Self, u32) {
+    fn cap(copies: u32, _limit: ()) -> (Self, u32) {
         (Self, copies - 1)
     }
     /// A slim edge has nowhere to put a multiplicity.
@@ -199,8 +199,8 @@ impl EdgeCount for Multi {
         total / count_as_scalar::<T, _>(self.0)
     }
     #[inline]
-    fn cap(copies: u32, limit: u32) -> (Self, u32) {
-        let kept = copies.min(limit);
+    fn cap(copies: u32, limit: SplitFactor) -> (Self, u32) {
+        let kept = copies.min(limit.get());
         (Self(kept), copies - kept)
     }
     #[inline]
