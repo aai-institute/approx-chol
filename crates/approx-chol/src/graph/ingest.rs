@@ -7,7 +7,8 @@ mod canonical;
 mod sets;
 mod validate;
 
-use super::{add_edge_pair, AdjListGraph, Edge, EdgeCount};
+use super::adjacency::{add_edge_pair, AdjListGraph, Edge};
+use super::multiplicity::EdgeCount;
 use crate::types::Real;
 use crate::{CsrRef, Error};
 use canonical::Canonical;
