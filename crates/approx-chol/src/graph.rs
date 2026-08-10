@@ -1,6 +1,5 @@
-//! Elimination graph: the [`adjacency`] it is eliminated on, the edge
-//! [`multiplicity`] that separates AC from AC2, the [`blocks`] the vertex set splits
-//! into, and the [`ingest`]ion that builds all three from CSR input.
+//! Elimination graph: [`adjacency`], [`multiplicity`], [`blocks`], and the
+//! [`ingest`]ion that builds all three from CSR input.
 
 mod adjacency;
 mod blocks;

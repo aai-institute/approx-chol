@@ -1,30 +1,24 @@
 use super::adjacency::AdjListGraph;
 use crate::types::{count_as_scalar, Real};
 
-/// AC is AC2 at one copy per edge, so the whole difference between them is this
-/// trait. `Single` is a ZST, so an AC edge carries no count at all.
+/// AC is AC2 at one copy per edge, so this trait is the whole difference.
 pub(crate) trait EdgeCount: Clone + Copy {
-    /// `Single` cannot name a `k`, which makes an AC factorization over split
-    /// multi-edges a type error rather than a mistake to avoid.
+    /// `Single` cannot name a `k`, making AC over split multi-edges a type error.
     type Split: Copy;
 
-    /// Known statically, which lets the single-copy path sort on weights instead of
-    /// quotients that are all division by one.
+    /// Static, so the single-copy path sorts on weights not division by one.
     const SINGLE_COPY: bool;
 
     fn one() -> Self;
     fn get(&self) -> u32;
 
-    /// The identity for `Single`, so the AC path performs no division rather than
-    /// dividing by one.
+    /// Identity for `Single`, so the AC path divides not at all.
     fn per_copy<T: Real>(&self, total: T) -> T;
 
-    /// `Single` keeps one, so its discard count is the duplicates the merge
-    /// collapsed. The cap is the split itself, which is why `Single` has none to name.
+    /// `Single` keeps one, so its discard count is what the merge collapsed.
     fn cap(copies: u32, limit: Self::Split) -> (Self, u32);
 
-    /// The degree-bucket scale and the per-neighbor sample count are one number because
-    /// they are one return value; the merge cap is [`Self::Split`] instead.
+    /// Bucket scale and per-neighbor sample count are one number; the cap is `Split`.
     fn split_edges<T: Real>(graph: &mut AdjListGraph<Self, T>, split: Self::Split) -> u32;
 }
 
@@ -32,14 +26,12 @@ pub(crate) trait EdgeCount: Clone + Copy {
 #[derive(Clone, Copy)]
 pub(crate) struct Single;
 
-/// This edge's virtual copy count, only ever lowered from the [`SplitFactor`] by the
-/// merge cap.
+/// Virtual copy count, only ever lowered from [`SplitFactor`] by the merge cap.
 #[derive(Clone, Copy)]
 pub(crate) struct Multi(u32);
 
 impl Multi {
-    /// Only a test needs this: elimination makes a `Multi` from the validated split
-    /// or from [`EdgeCount::cap`], never from a bare number.
+    /// Only a test needs this; elimination never makes a `Multi` from a bare number.
     #[cfg(test)]
     pub(crate) fn new(count: u32) -> Self {
         Self(count)
@@ -53,8 +45,7 @@ impl From<SplitFactor> for Multi {
     }
 }
 
-/// Distinct from the per-edge count [`Multi`] carries. Only the factors AC2 is
-/// defined for exist, so `1/k` is never infinite and no split is a no-op.
+/// Only factors AC2 is defined for exist, so `1/k` is finite and no split is a no-op.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SplitFactor(u32);
 
@@ -128,8 +119,8 @@ mod tests {
     use super::super::adjacency::{Edge, MultiEdgeGraph};
     use super::*;
 
-    /// A cap that drifted from [`MultiEdgeGraph::mark_split_edges`] would bound every
-    /// star at a multiplicity the graph does not carry, unnoticed elsewhere.
+    /// A cap drifting from `mark_split_edges` bounds every star at a multiplicity
+    /// the graph does not carry.
     #[test]
     fn the_reported_cap_is_the_count_written_on_the_edges() {
         let k = SplitFactor::new(3).expect("3 splits");

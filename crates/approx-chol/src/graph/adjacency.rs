@@ -70,8 +70,7 @@ pub(crate) struct AdjListGraph<C, T: Real> {
 /// AC2 path: edges with virtual multi-edge counts.
 pub(crate) type MultiEdgeGraph<T> = AdjListGraph<Multi, T>;
 
-/// Tiny lists keep their capacity; larger ones are released rather than retained
-/// across eliminations.
+/// Above this, a list is released rather than retained across eliminations.
 const RETAIN_ADJ_CAPACITY_MAX: usize = 64;
 
 impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
@@ -96,9 +95,8 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
     pub(crate) fn live_neighbors(&self, v: usize, scratch: &mut Vec<Neighbor<T, C>>) {
         scratch.clear();
         scratch.extend(self.adj[v].iter().filter_map(|e| {
-            // Positive predicate: a NaN weight is dead (`!(w > 0)` differs from
-            // `w <= 0` at NaN). if/else (not `bool::then`) keeps `fill_weight()`
-            // lazy for dead edges and avoids `clippy::filter_map_bool_then`.
+            // Positive predicate, so a NaN weight is dead: `!(w > 0)` differs from
+            // `w <= 0` there. if/else keeps `fill_weight()` lazy for dead edges.
             if e.weight > T::zero() && !self.eliminated.get(e.to as usize) {
                 Some(Neighbor {
                     to: e.to,
@@ -143,8 +141,7 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
 }
 
 impl<T: Real> MultiEdgeGraph<T> {
-    /// The weight stays the total across the copies, so this cannot underflow one
-    /// away; [`EdgeCount::per_copy`] divides where a single copy is wanted.
+    /// The weight stays the total, so no copy underflows; `per_copy` divides.
     pub(crate) fn mark_split_edges(&mut self, k: SplitFactor) {
         for adj_list in &mut self.adj {
             for edge in adj_list.iter_mut() {
@@ -161,8 +158,7 @@ pub(super) fn add_edge_pair<T: Real, C: EdgeCount>(
     v: usize,
     weight: T,
 ) {
-    // u32 reverse pointers; overflow is unreachable for tractable inputs,
-    // so assert (release too) rather than truncate and corrupt removal.
+    // Truncating a u32 reverse pointer would corrupt removal, so assert in release too.
     assert!(
         adj[u].len() < u32::MAX as usize && adj[v].len() < u32::MAX as usize,
         "adjacency list exceeds u32 edge capacity"
@@ -189,8 +185,7 @@ mod tests {
     use super::*;
     use crate::graph::Single;
 
-    /// The AC edge must not pay for the multiplicity it does not store: `Single`
-    /// is a ZST, so both layouts are what the two hand-written structs were.
+    /// `Single` is a ZST, so the AC edge pays nothing for multiplicity it never stores.
     #[test]
     fn edge_layout_is_unchanged_by_the_shared_definition() {
         assert_eq!(
@@ -205,9 +200,8 @@ mod tests {
         assert_eq!(size_of::<Single>(), 0);
     }
 
-    /// The predicate is positive on purpose: a zero weight carries no coupling and a
-    /// NaN one is not evidence of any, so both are dead even though the neighbor is
-    /// live. Reading either as a live neighbor puts a phantom edge in the star.
+    /// Zero and NaN weights are dead though the neighbor lives; reading either as
+    /// live puts a phantom edge in the star.
     #[test]
     fn only_positively_weighted_edges_are_live() {
         let graph = MultiEdgeGraph::<f64>::from_adjacency(vec![
