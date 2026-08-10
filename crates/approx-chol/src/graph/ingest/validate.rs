@@ -1,6 +1,6 @@
+use super::blocks::BlockLayout;
 use super::canonical::Canonical;
 use super::sets::DisjointSets;
-use crate::graph::BlockLayout;
 use crate::types::{count_as_scalar, Real};
 use crate::{CsrError, Error};
 

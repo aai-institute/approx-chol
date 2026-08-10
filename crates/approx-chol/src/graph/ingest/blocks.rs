@@ -1,3 +1,33 @@
+/// Every vertex once, components back to back. One array rather than one per
+/// component: the same sequence answers all three questions asked of it.
+pub(crate) struct BlockLayout {
+    pub(super) order: Vec<u32>,
+    /// The next block starts where this one stops, so no block claims a vertex twice
+    /// or leaves a gap.
+    pub(super) ends: Vec<u32>,
+}
+
+impl BlockLayout {
+    pub(crate) fn block_count(&self) -> usize {
+        self.ends.len()
+    }
+
+    /// Each block's global vertex names, in storage order.
+    pub(crate) fn blocks(&self) -> impl Iterator<Item = &[u32]> + '_ {
+        self.ends.iter().scan(0usize, |start, &end| {
+            let end = end as usize;
+            let block = &self.order[*start..end];
+            *start = end;
+            Some(block)
+        })
+    }
+
+    /// The same sequence read as a permutation.
+    pub(crate) fn into_order(self) -> Vec<u32> {
+        self.order
+    }
+}
+
 /// One block's vertices and the map back from global names to its own.
 ///
 /// [`Whole`](BlockVertices::Whole) is the connected case, where a local vertex already

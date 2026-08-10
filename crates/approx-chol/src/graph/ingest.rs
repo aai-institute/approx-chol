@@ -7,13 +7,13 @@ mod canonical;
 mod sets;
 mod validate;
 
-use super::{add_edge_pair, AdjListGraph, BlockLayout, Edge, EdgeCount};
+use super::{add_edge_pair, AdjListGraph, Edge, EdgeCount};
 use crate::types::Real;
 use crate::{CsrRef, Error};
 use canonical::Canonical;
 use validate::{validate, Grounding, Ingested};
 
-pub(crate) use blocks::BlockVertices;
+pub(crate) use blocks::{BlockLayout, BlockVertices};
 
 /// The ingested input, kept whole so each block takes only what its backend needs. A
 /// block routed to the dense arm reads its triangle straight from these arrays; only
