@@ -280,9 +280,9 @@ struct Ingested<T> {
     /// One per real vertex, and the ground vertex's last when grounded.
     diagonal: Vec<T>,
     grounding: Grounding<T>,
-    /// Connectivity, unioned by the walk that validates rather than by one of its own:
-    /// every edge is already being visited there.
-    sets: DisjointSets,
+    /// Blocks implied by the connectivity the validating walk unioned as it went, rather
+    /// than by a pass of its own: every edge is already being visited there.
+    layout: Option<BlockLayout>,
 }
 
 /// A matrix whose rows all balance is a bare Laplacian on each of its components, and
@@ -430,7 +430,7 @@ fn ground<T: Real>(
         return Ok(Ingested {
             diagonal,
             grounding: Grounding::Floating,
-            sets,
+            layout: sets.layout(),
         });
     }
     if m >= u32::MAX as usize {
@@ -457,7 +457,7 @@ fn ground<T: Real>(
             surpluses: row_sums,
             degree,
         },
-        sets,
+        layout: sets.layout(),
     })
 }
 
@@ -547,13 +547,11 @@ pub(crate) struct Ingestion<'a, T> {
 impl<'a, T: Real> Ingestion<'a, T> {
     pub(crate) fn of(csr: CsrRef<'a, T, u32>) -> Result<Self, Error> {
         let canonical = Canonical::of(csr)?;
-        let mut ingested = validate(&canonical)?;
-        let layout = ingested.sets.layout();
         let Ingested {
             diagonal,
             grounding,
-            ..
-        } = ingested;
+            layout,
+        } = validate(&canonical)?;
         Ok(Self {
             canonical,
             n: diagonal.len(),
@@ -720,10 +718,9 @@ mod tests {
         let n = (row_ptrs.len() - 1) as u32;
         let csr = CsrRef::new(row_ptrs, col_indices, values, n).expect("valid CSR");
         let canonical = Canonical::of(csr).expect("canonical");
-        let mut ingested = validate(&canonical).expect("valid SDDM");
-        ingested
-            .sets
-            .layout()
+        validate(&canonical)
+            .expect("valid SDDM")
+            .layout
             .map(|layout| layout.blocks().map(<[u32]>::to_vec).collect::<Vec<_>>())
     }
 
