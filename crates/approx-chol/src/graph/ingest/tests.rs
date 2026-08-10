@@ -12,9 +12,7 @@ fn blocks_of(row_ptrs: &[u32], col_indices: &[u32], values: &[f64]) -> Option<Ve
         .map(|layout| layout.blocks().map(<[u32]>::to_vec).collect::<Vec<_>>())
 }
 
-/// Two PD blocks whose off-diagonal graphs are disjoint. The ground vertex is not
-/// in the CSR, so connectivity read from the CSR alone splits them — and each half
-/// then gets an adjacency built for a block that does not hold all of its edges.
+/// Disjoint off-diagonal graphs: read from the CSR alone, connectivity splits them.
 #[test]
 fn components_sharing_a_ground_vertex_are_one_block() {
     let blocks = blocks_of(
@@ -28,9 +26,8 @@ fn components_sharing_a_ground_vertex_are_one_block() {
     );
 }
 
-/// The same shape with no surplus anywhere: nothing grounds them, so they stay
-/// apart. Without this the test above would also pass on a layout that merged
-/// every component unconditionally.
+/// No surplus, so nothing grounds them — the test above would pass on a layout
+/// that merged unconditionally.
 #[test]
 fn components_with_no_surplus_stay_separate() {
     let blocks = blocks_of(

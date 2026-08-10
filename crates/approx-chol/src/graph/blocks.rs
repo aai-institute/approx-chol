@@ -28,16 +28,13 @@ impl BlockLayout {
     }
 }
 
-/// One block's vertices and the map back from global names to its own.
-///
-/// [`Whole`](BlockVertices::Whole) is the connected case, where a local vertex already
-/// is a global one, so the common input never materializes `0..n` to say so.
+/// One block's vertices and the map back. [`Whole`](BlockVertices::Whole) is the
+/// connected case, which never materializes `0..n`.
 pub(crate) enum BlockVertices<'v> {
     Whole(usize),
     Part {
         vertices: &'v [u32],
-        /// Only the entries `vertices` names are meaningful; the rest belong to other
-        /// blocks and are never read through this view.
+        /// Only the entries `vertices` names are meaningful.
         local_of: &'v [u32],
     },
 }
@@ -47,8 +44,7 @@ impl<'v> BlockVertices<'v> {
         Self::Whole(n)
     }
 
-    /// Fills `local_of`, so "the reverse map agrees with `vertices`" is established here
-    /// once instead of being a precondition every reader has to be trusted to have met.
+    /// Fills `local_of` here, so agreement with `vertices` is not a reader's precondition.
     pub(crate) fn part(vertices: &'v [u32], local_of: &'v mut [u32]) -> Self {
         for (local, &global) in vertices.iter().enumerate() {
             local_of[global as usize] = local as u32;

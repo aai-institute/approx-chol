@@ -7,8 +7,7 @@ pub(super) struct DisjointSets {
 }
 
 impl DisjointSets {
-    /// Room for the ground vertex, which [`push`](Self::push) appends after the walk:
-    /// sizing exactly would make augmented input pay two reallocations for it.
+    /// Room for the ground vertex, so [`push`](Self::push) reallocates nothing.
     pub(super) fn new(n: usize) -> Self {
         let mut parent = Vec::with_capacity(n + 1);
         parent.extend(0..n as u32);
@@ -40,9 +39,7 @@ impl DisjointSets {
         self.size[root as usize] as usize == self.parent.len()
     }
 
-    /// Takes `root` already resolved and hands back the surviving root, so a caller
-    /// unioning one vertex against many pays a single walk for it rather than one per
-    /// edge.
+    /// Resolved in, surviving root out: one walk per caller, not one per edge.
     pub(super) fn union_resolved(&mut self, root: u32, vertex: u32) -> u32 {
         let (mut root, mut merged) = (root, self.find(vertex));
         if root == merged {
@@ -56,18 +53,14 @@ impl DisjointSets {
         root
     }
 
-    /// The blocks these unions imply, so each one is known — and routed — before any
-    /// graph is built for it. `None` when the graph is connected, which is the one
-    /// block case and never pays for the counting sort below.
+    /// `None` when connected, which never pays for the counting sort below.
     pub(super) fn layout(&mut self) -> Option<BlockLayout> {
         let total = self.parent.len();
         if total == 0 || self.is_one_set() {
             return None;
         }
 
-        // Ascending, so a block's vertices are appended in order and the blocks
-        // themselves are ordered by their lowest member — the ground vertex outranks
-        // every real one, so it lands last in its own block.
+        // Ascending, so blocks order by lowest member and the ground vertex lands last.
         let mut block_of = vec![u32::MAX; total];
         let mut ends: Vec<u32> = Vec::new();
         for vertex in 0..total {
@@ -81,8 +74,7 @@ impl DisjointSets {
             }
         }
 
-        // Exclusive scan, so each entry is its block's write cursor; the fill below then
-        // advances every cursor to exactly the end it is named for.
+        // Exclusive scan: each entry is its block's cursor, which the fill advances.
         let mut start = 0u32;
         for count in &mut ends {
             let n = *count;

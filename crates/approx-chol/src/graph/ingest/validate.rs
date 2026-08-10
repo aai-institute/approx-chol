@@ -4,8 +4,7 @@ use crate::graph::BlockLayout;
 use crate::types::{count_as_scalar, Real};
 use crate::{CsrError, Error};
 
-/// One forward-only cursor per row. The walk is a merge-join only because every entry
-/// is claimed at most once, which is what [`Canonical`] guarantees.
+/// A merge-join only because [`Canonical`] guarantees each entry is claimed once.
 struct Mirrors<'a, T> {
     row_ptrs: &'a [u32],
     col_indices: &'a [u32],
@@ -70,29 +69,23 @@ pub(super) struct Ingested<T> {
     /// One per real vertex, and the ground vertex's last when grounded.
     pub(super) diagonal: Vec<T>,
     pub(super) grounding: Grounding<T>,
-    /// Blocks implied by the connectivity the validating walk unioned as it went, rather
-    /// than by a pass of its own: every edge is already being visited there.
+    /// Unioned by the validating walk rather than by a pass of its own.
     pub(super) layout: Option<BlockLayout>,
 }
 
-/// A matrix whose rows all balance is a bare Laplacian on each of its components, and
-/// has no ground vertex to attach.
+/// All rows balancing means a bare Laplacian, with no ground vertex to attach.
 pub(super) enum Grounding<T> {
     Floating,
     Grounded {
-        /// Indexed by row, zero where the row balances — the row-sum accumulator reused
-        /// in place rather than a second array.
+        /// The row-sum accumulator reused in place; zero where the row balances.
         surpluses: Vec<T>,
         /// How many of those are positive, which is the ground vertex's degree.
         degree: usize,
     },
 }
 
-/// One pass per row, claiming each upper-triangle entry's mirror. Every stored entry is
-/// read exactly once between the claims and the loop below, which is what lets
-/// [`Canonical::of`] leave finiteness to this walk. Accumulates what the
-/// augmentation decision needs and builds nothing: which arm each block gets is not
-/// known until its dimension is, and that waits on the layout this pass feeds.
+/// Reads every stored entry exactly once, which is what lets [`Canonical::of`] leave
+/// finiteness here. Builds nothing: routing waits on the layout this pass feeds.
 pub(super) fn validate<T: Real>(canonical: &Canonical<'_, T>) -> Result<Ingested<T>, Error> {
     let (row_ptrs, col_indices, values) = canonical.arrays();
     let n = row_ptrs.len() - 1;
@@ -100,16 +93,12 @@ pub(super) fn validate<T: Real>(canonical: &Canonical<'_, T>) -> Result<Ingested
 
     let mut sets = DisjointSets::new(n);
     let mut diagonal = vec![T::zero(); n];
-    // Off-diagonal contributions only; the diagonal joins in `ground`, which is
-    // not known for a row until that row's own claim below.
+    // Off-diagonal only; the diagonal joins in `ground`.
     let mut row_sums = vec![T::zero(); n];
 
     for row in 0..n {
         let row_end = row_ptrs[row + 1];
-        // The diagonal is claimed like any mirror, which both yields its value and
-        // advances the cursor past everything below it — by now only the zeros that
-        // contribute no edge. Claiming every diagonal up front instead would skip
-        // the mirrors that live below them.
+        // Claimed like any mirror: claiming diagonals up front would skip those below.
         diagonal[row] = mirrors.claim(row, row)?;
         let mut cursor = mirrors.cursors[row];
         let mut root = sets.find(row as u32);
@@ -134,12 +123,8 @@ pub(super) fn validate<T: Real>(canonical: &Canonical<'_, T>) -> Result<Ingested
             if upper > T::zero() {
                 return Err(Error::PositiveOffDiagonal { edge: (row, col) });
             }
-            // Zero was skipped and positive rejected, so `upper` is negative here
-            // and `-upper` is the edge weight. A NaN coalesced from opposing
-            // infinities never reaches this line — it fails the symmetry check.
-            // Each row sums the value it stores, not the one the graph symmetrizes to:
-            // charging `upper` to both would make the tolerated mirror difference look
-            // like `col`'s own surplus and ground it.
+            // Each row sums the value it stores: charging `upper` to both would read
+            // the tolerated mirror difference as `col`'s own surplus and ground it.
             row_sums[row] = row_sums[row] + upper;
             row_sums[col] = row_sums[col] + lower;
             root = sets.union_resolved(root, col as u32);
@@ -162,20 +147,14 @@ impl<T: Real> RowBalance<T> {
     /// `terms` is how many additions produced `excess`, not the row's degree.
     fn of(diagonal: T, off_diagonal_sum: T, terms: u32) -> Self {
         let excess = diagonal + off_diagonal_sum;
-        // Every off-diagonal folded into the sum was negative, so the row's magnitude
-        // sum is `|d| + d - excess` and needs no second accumulator. Subtracting before
-        // the second add keeps a diagonal above `MAX / 2` from overflowing to infinity.
+        // Every off-diagonal was negative; subtracting first survives `d > MAX / 2`.
         let scale = (diagonal.abs() - excess) + diagonal;
-        // A non-finite sum forces a non-finite scale, so scale alone decides. Every
-        // comparison below succeeds on an infinite deficit (`-inf < -inf`).
+        // A non-finite sum forces a non-finite scale, so scale alone decides.
         if !scale.is_finite() {
             return Self::NonFinite;
         }
-        // The most this row's own additions could have invented, and so the only
-        // departure from zero-sum the row cannot account for. One floor for both signs:
-        // a departure this clears is real evidence whichever way it points, and
-        // forgiving more in one direction than the other grounds a row for a drift that
-        // would be dismissed as noise with its sign flipped.
+        // One floor for both signs: forgiving more in one direction grounds a row for
+        // drift that the opposite sign would dismiss as noise.
         let accumulated = T::epsilon() * scale * count_as_scalar::<T, _>(terms);
         if excess < -accumulated {
             return Self::Deficit;
@@ -187,8 +166,7 @@ impl<T: Real> RowBalance<T> {
     }
 }
 
-/// `row_sums` arrives holding each row's off-diagonal total; the diagonal joins it
-/// here, the first point at which every row's is known.
+/// `row_sums` arrives off-diagonal-only; the diagonal joins it here.
 fn ground<T: Real>(
     mut diagonal: Vec<T>,
     mut row_sums: Vec<T>,
@@ -231,9 +209,8 @@ fn ground<T: Real>(
         ));
     }
     diagonal.push(total);
-    // The ground vertex is absent from the CSR, so the rows it closes are unioned
-    // through it here: it links every component holding a surplus into one block, and
-    // connectivity read from the CSR alone would hand back each of them separately.
+    // Absent from the CSR, so the rows it closes are unioned through it here —
+    // connectivity read from the CSR alone would hand each component back separately.
     let vertex = sets.push();
     let mut root = vertex;
     for (row, &surplus) in row_sums.iter().enumerate() {

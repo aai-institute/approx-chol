@@ -1,6 +1,4 @@
-//! CSR to elimination graph: canonicalize, pair each off-diagonal with its mirror,
-//! and close the row deficits with a Gremban ground vertex. One module per phase, in
-//! the order the pipeline runs them.
+//! CSR to elimination graph, one module per phase in pipeline order.
 
 mod canonical;
 mod sets;
@@ -14,13 +12,10 @@ use crate::{CsrRef, Error};
 use canonical::Canonical;
 use validate::{validate, Grounding, Ingested};
 
-/// The ingested input, kept whole so each block takes only what its backend needs. A
-/// block routed to the dense arm reads its triangle straight from these arrays; only
-/// one that will actually be eliminated on gets an adjacency list built for it.
+/// Kept whole so a block routed to the dense arm never gets an adjacency list built.
 pub(crate) struct Ingestion<'a, T> {
     canonical: Canonical<'a, T>,
-    /// Emptied by [`take_block_diagonal`](Ingestion::take_block_diagonal) for the whole
-    /// graph, which is why `n` is its own field rather than this vector's length.
+    /// `take_block_diagonal` empties this, so `n` cannot be its length.
     diagonal: Vec<T>,
     n: usize,
     grounding: Grounding<T>,
@@ -49,19 +44,15 @@ impl<'a, T: Real> Ingestion<'a, T> {
         self.n
     }
 
-    /// Whether this block holds the Gremban ground vertex, which decides how it is
-    /// anchored. Ingestion appends that vertex above every real one and a block lists
-    /// its vertices ascending, so it can only ever be a block's last.
+    /// The ground vertex outranks every real one, so it can only be a block's last.
     pub(crate) fn carries_ground(&self, block: &BlockVertices<'_>) -> bool {
         match &self.grounding {
             Grounding::Floating => false,
-            // The bound checked in `ground` is what makes the cast lossless.
             Grounding::Grounded { surpluses, .. } => block.last() == surpluses.len() as u32,
         }
     }
 
-    /// `None` when the graph is connected, which is the one block case. Taken rather
-    /// than borrowed so the caller can walk the blocks while asking for each one.
+    /// `None` when connected. Taken so the caller can walk blocks while asking for each.
     pub(crate) fn take_layout(&mut self) -> Option<BlockLayout> {
         self.layout.take()
     }
@@ -71,17 +62,8 @@ impl<'a, T: Real> Ingestion<'a, T> {
         self.diagonal[block.global(local)]
     }
 
-    /// Hands `entry` each strictly-upper off-diagonal of the block's row `local`, in
-    /// the block's own numbering.
-    ///
-    /// The upper mirror is the authoritative one: `validate` tolerates mirrors that
-    /// differ by a few ulps, and the approximate route symmetrizes on this same value,
-    /// so reading the stored lower one instead would make the two routes disagree about
-    /// a matrix they were both handed.
-    ///
-    /// A block's last vertex has no CSR row when it is the ground vertex, and no upper
-    /// entries when it is not, so it yields nothing either way rather than indexing past
-    /// the row pointers.
+    /// Upper, not the stored lower: mirrors may differ by ulps and the approximate
+    /// route symmetrizes on this one.
     pub(crate) fn upper_row(
         &self,
         block: &BlockVertices<'_>,
@@ -101,8 +83,7 @@ impl<'a, T: Real> Ingestion<'a, T> {
         }
     }
 
-    /// The block's diagonal in local order. The whole graph is moved out rather than
-    /// copied: it is one block, so nothing reads it again.
+    /// The whole graph is moved out: it is one block, so nothing reads it again.
     pub(crate) fn take_block_diagonal(&mut self, block: &BlockVertices<'_>) -> Vec<T> {
         match block {
             BlockVertices::Whole(_) => core::mem::take(&mut self.diagonal),
@@ -121,8 +102,7 @@ impl<'a, T: Real> Ingestion<'a, T> {
         let (row_ptrs, col_indices, values) = self.canonical.arrays();
         let rows = row_ptrs.len() - 1;
         let n = block.len();
-        // Every grounded row is unioned through the ground vertex, so they all share one
-        // block and its degree is the whole count wherever it lands.
+        // Every grounded row shares one block, so its degree is the whole count.
         let ground_degree = match self.grounding {
             Grounding::Floating => 0,
             Grounding::Grounded { degree, .. } => degree,
@@ -139,9 +119,7 @@ impl<'a, T: Real> Ingestion<'a, T> {
             adj.push(Vec::with_capacity(degree));
         }
 
-        // The arm is resolved once around the edge loop, not tested inside it: measured
-        // on this loop, the per-edge discriminant test kept `local_of`'s pointer and
-        // length spilled to the stack and reloaded for every edge added.
+        // Measured: an in-loop discriminant test spills `local_of` and reloads per edge.
         match block {
             BlockVertices::Whole(_) => {
                 for local in 0..n {
@@ -157,8 +135,7 @@ impl<'a, T: Real> Ingestion<'a, T> {
                 }
             }
             BlockVertices::Part { vertices, local_of } => {
-                // Columns are already bounded by the matrix dimension, so narrowing the
-                // slice lets the bound live in a register rather than being reloaded.
+                // Narrowed so the bound lives in a register.
                 let local_of = &local_of[..rows];
                 for (local, &global) in vertices.iter().enumerate() {
                     let global = global as usize;
