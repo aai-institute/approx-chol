@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A block routed to the exact dense backend no longer gets an elimination graph built for
+  it. ([#84])
+- `Error::NonFiniteValue` no longer takes precedence over `Error::Asymmetric`,
+  `Error::PositiveOffDiagonal` and `Error::NotDiagonallyDominant`. ([#84])
 - The Python bindings build against pyo3 and numpy 0.29. ([#89])
 
 ### Fixed
@@ -162,6 +166,7 @@ for graph Laplacians in Rust with Python bindings.
 [#80]: https://github.com/aai-institute/approx-chol/issues/80
 [#82]: https://github.com/aai-institute/approx-chol/issues/82
 [#83]: https://github.com/aai-institute/approx-chol/issues/83
+[#84]: https://github.com/aai-institute/approx-chol/issues/84
 [#85]: https://github.com/aai-institute/approx-chol/issues/85
 [#89]: https://github.com/aai-institute/approx-chol/issues/89
 [#91]: https://github.com/aai-institute/approx-chol/issues/91

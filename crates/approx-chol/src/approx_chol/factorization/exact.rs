@@ -2,7 +2,7 @@ use super::block::BlockDim;
 use super::factor::Fallback;
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;
-use crate::graph::{AdjListGraph, EdgeCount, Neighbor};
+use crate::graph::{BlockVertices, Ingestion};
 use crate::types::Real;
 use crate::{DenseFailure, UnusablePivot};
 
@@ -14,12 +14,10 @@ pub(crate) enum NotFactorable {
 }
 
 impl NotFactorable {
-    /// `vertices` is `None` when the block is the whole graph, where a local vertex
-    /// is already a global one.
-    pub(crate) fn at(self, vertices: Option<&[u32]>) -> Fallback {
+    pub(crate) fn at(self, block: &BlockVertices<'_>) -> Fallback {
         match self {
             Self::InvalidPivot { pivot, failure } => Fallback::InvalidPivot(UnusablePivot {
-                vertex: vertices.map_or(pivot, |vertices| vertices[pivot] as usize),
+                vertex: block.global(pivot),
                 failure,
             }),
             Self::WillNotFit { dim } => Fallback::WillNotFit { dim },
@@ -27,12 +25,12 @@ impl NotFactorable {
     }
 }
 
-pub(crate) fn factor<T: Real, C: EdgeCount>(
-    graph: &AdjListGraph<C, T>,
-    diagonal: &[T],
+pub(crate) fn factor<T: Real>(
+    ingestion: &Ingestion<'_, T>,
+    block: &BlockVertices<'_>,
     dim: BlockDim,
 ) -> Result<LowerTriangular<T>, NotFactorable> {
-    assemble(graph, diagonal, dim.solved())?.factor_in_place()
+    assemble(ingestion, block, dim.solved())?.factor_in_place()
 }
 
 const fn row_start(row: usize) -> usize {
@@ -52,25 +50,30 @@ const fn packed_len(m: usize) -> Option<usize> {
 
 /// Lower triangle only: a stored upper triangle would double the persisted factor and
 /// embed the input matrix in it.
-fn assemble<T: Real, C: EdgeCount>(
-    graph: &AdjListGraph<C, T>,
-    diagonal: &[T],
+///
+/// Read from the ingested arrays rather than from an elimination graph, because a block
+/// that reaches here is never eliminated on and so never needs one built.
+fn assemble<T: Real>(
+    ingestion: &Ingestion<'_, T>,
+    block: &BlockVertices<'_>,
     m: usize,
 ) -> Result<LowerTriangular<T>, NotFactorable> {
     let mut matrix = LowerTriangular::zeros(m)?;
-    let mut neighbors: Vec<Neighbor<T, C>> = Vec::with_capacity(m);
     for row in 0..m {
-        graph.live_neighbors(row, &mut neighbors);
-        let target = matrix.row_mut(row);
-        target[row] = diagonal[row];
-        for neighbor in &neighbors {
-            let col = neighbor.to as usize;
-            // The graph carries no self-loop, so `col < row` drops only the mirror
-            // above the diagonal and the pinned columns at or past `m`.
-            if col < row {
-                target[col] = target[col] - neighbor.fill_weight;
+        matrix.row_mut(row)[row] = ingestion.block_diagonal(block, row);
+    }
+    // Scattered from the upper triangle rather than gathered from the lower one: the
+    // upper entry is the mirror the whole crate treats as authoritative, and reaching it
+    // by row means each block row is still read exactly once.
+    for row in 0..m {
+        ingestion.upper_row(block, row, |col, value| {
+            // Past the triangle is the block's pinned last vertex, whose row and column
+            // the dense factor does not carry.
+            if col < m {
+                let slot = &mut matrix.row_mut(col)[row];
+                *slot = *slot + value;
             }
-        }
+        });
     }
     Ok(matrix)
 }

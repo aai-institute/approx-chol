@@ -10,16 +10,6 @@ pub(crate) enum Anchor {
 }
 
 impl Anchor {
-    /// The ground vertex can only be a block's last: ingestion appends it above every
-    /// real vertex and a component lists its vertices ascending.
-    pub(crate) fn of_block(ground: Option<u32>, last_vertex: u32) -> Self {
-        if ground == Some(last_vertex) {
-            Self::Ground
-        } else {
-            Self::Floating
-        }
-    }
-
     /// Make `values` zero-sum, which is the only right-hand side a block solves.
     pub(super) fn prepare<T: Real>(self, values: &mut [T]) {
         match self {

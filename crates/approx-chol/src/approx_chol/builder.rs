@@ -2,7 +2,7 @@ use super::config::{Backend, Config, Route};
 use super::factorization::{
     approximate, exact, Anchor, Block, BlockDim, Cholesky, Fallback, Permutation,
 };
-use crate::graph::{AdjListGraph, EdgeCount, GraphBuild, Multi, MultiEdgeGraph, Single, SlimGraph};
+use crate::graph::{BlockVertices, EdgeCount, Ingestion, Multi, Single};
 use crate::sampling::CdfSampler;
 use crate::types::Real;
 use crate::{CsrError, CsrRef, Error, Factor};
@@ -47,36 +47,26 @@ where
     /// algorithm end to end.
     fn build_validated(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
         let original_n = sddm.n();
+        let ingestion = Ingestion::of(sddm)?;
         match self.config.split_factor() {
-            None => {
-                let build = SlimGraph::<T>::from_sddm(sddm)?;
-                self.build_graph::<Single>(build, original_n, ())
-            }
-            Some(k) => {
-                let build = MultiEdgeGraph::<T>::from_sddm(sddm)?;
-                self.build_graph::<Multi>(build, original_n, k)
-            }
+            None => self.factor_blocks::<Single>(ingestion, original_n, ()),
+            Some(k) => self.factor_blocks::<Multi>(ingestion, original_n, k),
         }
     }
 
-    fn build_graph<C: EdgeCount>(
+    fn factor_blocks<C: EdgeCount>(
         &self,
-        build: GraphBuild<AdjListGraph<C, T>, T>,
+        mut ingestion: Ingestion<'_, T>,
         original_n: usize,
         split: C::Split,
     ) -> Result<Factor<T>, Error> {
-        let GraphBuild {
-            graph,
-            diagonal,
-            layout,
-            ground,
-        } = build;
-        if graph.n() == 0 {
+        if ingestion.n() == 0 {
             return Ok(Factor::empty(original_n));
         }
         let mut factorizer = BlockFactorizer::<T, C>::new(self.config, split);
-        let Some(layout) = layout else {
-            let (block, fallback) = factorizer.factor(Component::whole(graph, diagonal, ground))?;
+        let Some(layout) = ingestion.take_layout() else {
+            let whole = BlockVertices::whole(ingestion.n());
+            let (block, fallback) = factorizer.factor(&mut ingestion, &whole)?;
             return Ok(Factor::from_blocks(
                 original_n,
                 None,
@@ -87,9 +77,11 @@ where
 
         let mut blocks = Vec::with_capacity(layout.block_count());
         let mut fallbacks = Vec::new();
-        let mut partition = Partition::new(graph, diagonal, ground);
+        // Scratch reused across blocks; each view refills the entries it names.
+        let mut local_of = vec![0u32; ingestion.n()];
         for vertices in layout.blocks() {
-            let (block, fallback) = factorizer.factor(partition.take(vertices))?;
+            let view = BlockVertices::part(vertices, &mut local_of);
+            let (block, fallback) = factorizer.factor(&mut ingestion, &view)?;
             blocks.push(block);
             fallbacks.extend(fallback);
         }
@@ -99,68 +91,6 @@ where
             blocks,
             fallbacks,
         ))
-    }
-}
-
-/// One block to factor, and how its local vertices name global ones.
-struct Component<'v, C, T: Real> {
-    graph: AdjListGraph<C, T>,
-    diagonal: Vec<T>,
-    anchor: Anchor,
-    /// `None` when the block is the whole graph, so a local vertex is already global.
-    vertices: Option<&'v [u32]>,
-}
-
-impl<C: EdgeCount, T: Real> Component<'_, C, T> {
-    /// Names the block by what it holds rather than by how many blocks precede it.
-    fn first_vertex(&self) -> u64 {
-        self.vertices.map_or(0, |vertices| u64::from(vertices[0]))
-    }
-
-    /// A local vertex is already a global one, so `0..n` is never materialized.
-    fn whole(graph: AdjListGraph<C, T>, diagonal: Vec<T>, ground: Option<u32>) -> Self {
-        let last_vertex = (graph.n() - 1) as u32;
-        Self {
-            graph,
-            diagonal,
-            anchor: Anchor::of_block(ground, last_vertex),
-            vertices: None,
-        }
-    }
-}
-
-/// The ingested graph, drained one connected component at a time. A connected input
-/// never builds one, so it keeps skipping this scratch.
-struct Partition<C, T: Real> {
-    graph: AdjListGraph<C, T>,
-    diagonal: Vec<T>,
-    ground: Option<u32>,
-    local_of: Vec<u32>,
-}
-
-impl<C: EdgeCount, T: Real> Partition<C, T> {
-    fn new(graph: AdjListGraph<C, T>, diagonal: Vec<T>, ground: Option<u32>) -> Self {
-        Self {
-            local_of: vec![0u32; graph.n()],
-            graph,
-            diagonal,
-            ground,
-        }
-    }
-
-    fn take<'v>(&mut self, vertices: &'v [u32]) -> Component<'v, C, T> {
-        let last_vertex = *vertices
-            .last()
-            .expect("a component has at least one vertex");
-        Component {
-            anchor: Anchor::of_block(self.ground, last_vertex),
-            graph: self.graph.take_component(vertices, &mut self.local_of),
-            diagonal: vertices
-                .iter()
-                .map(|&vertex| self.diagonal[vertex as usize])
-                .collect(),
-            vertices: Some(vertices),
-        }
     }
 }
 
@@ -181,31 +111,37 @@ impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
         }
     }
 
+    /// Routing first, so a block the dense backend claims never has an elimination
+    /// graph built for it — only a fallback from that arm, or the approximate route,
+    /// reaches [`Ingestion::block_graph`].
     fn factor(
         &mut self,
-        component: Component<'_, C, T>,
+        ingestion: &mut Ingestion<'_, T>,
+        block: &BlockVertices<'_>,
     ) -> Result<(Block<T>, Option<Fallback>), Error> {
         // Restarts for every block, routed or not, so one block's draws never shift
         // because another was factored exactly.
-        self.sampler.restart(component.first_vertex());
+        self.sampler.restart(block.first());
 
-        let dim = BlockDim::of(component.graph.n()).expect("a block has at least one vertex");
-        let anchor = component.anchor;
+        let dim = BlockDim::of(block.len()).expect("a block has at least one vertex");
+        let anchor = if ingestion.carries_ground(block) {
+            Anchor::Ground
+        } else {
+            Anchor::Floating
+        };
         let mut fallback = None;
         if let Route::Exact { on_failure } = self.backend.route(dim) {
-            match exact::factor(&component.graph, &component.diagonal, dim) {
+            match exact::factor(ingestion, block, dim) {
                 Ok(lower) => return Ok((Block::new(dim, anchor, Cholesky::Exact(lower)), None)),
                 Err(reason) => {
-                    fallback = Some(on_failure.accept(reason.at(component.vertices))?);
+                    fallback = Some(on_failure.accept(reason.at(block))?);
                 }
             }
         }
-        let sequence = approximate::eliminate::<T, C>(
-            component.graph,
-            component.diagonal,
-            &mut self.sampler,
-            self.split,
-        );
+        let graph = ingestion.block_graph::<C>(block);
+        let diagonal = ingestion.take_block_diagonal(block);
+        let sequence =
+            approximate::eliminate::<T, C>(graph, diagonal, &mut self.sampler, self.split);
         Ok((
             Block::new(dim, anchor, Cholesky::Approximate(sequence)),
             fallback,

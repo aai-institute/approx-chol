@@ -1,288 +1,172 @@
-//! CSR to elimination graph: canonicalize, pair each off-diagonal with its mirror,
-//! and close the row deficits with a Gremban ground vertex.
+//! CSR to elimination graph, one module per phase in pipeline order.
 
-use super::{add_edge_pair, block_layout, AdjListGraph, Edge, EdgeCount, GraphBuild};
-use crate::types::{count_as_scalar, Real};
-use crate::{CsrError, CsrRef, Error};
+mod canonical;
+mod sets;
+mod validate;
 
-pub(super) fn from_sddm<T: Real, C: EdgeCount>(
-    csr: CsrRef<'_, T, u32>,
-) -> Result<GraphBuild<AdjListGraph<C, T>, T>, Error> {
-    // A rewrite has to outlive the walk that borrows it, so it lives in this frame
-    // rather than inside `Mirrors`.
-    let rewritten = canonicalize(csr)?;
-    // Additions charged to a row's excess, counted before coalescing: `rewrite` folds
-    // each duplicate group with its own additions, and those land in the row's sum too.
-    // For canonical input this is the diagonal plus the row's degree, as before.
-    let terms: Vec<u32> = csr
-        .row_ptrs()
-        .windows(2)
-        .map(|bounds| bounds[1] - bounds[0])
-        .collect();
-    match &rewritten {
-        Some(r) => parse(Mirrors::new(&r.row_ptrs, &r.col_indices, &r.values), &terms),
-        None => parse(
-            Mirrors::new(csr.row_ptrs(), csr.col_indices(), csr.values()),
-            &terms,
-        ),
-    }
+use super::adjacency::{add_edge_pair, AdjListGraph, Edge};
+use super::blocks::{BlockLayout, BlockVertices};
+use super::multiplicity::EdgeCount;
+use crate::types::Real;
+use crate::{CsrRef, Error};
+use canonical::Canonical;
+use validate::{validate, Grounding, Ingested};
+
+/// Kept whole so a block routed to the dense arm never gets an adjacency list built.
+pub(crate) struct Ingestion<'a, T> {
+    canonical: Canonical<'a, T>,
+    /// `take_block_diagonal` empties this, so `n` cannot be its length.
+    diagonal: Vec<T>,
+    n: usize,
+    grounding: Grounding<T>,
+    layout: Option<BlockLayout>,
 }
 
-/// Canonical arrays rebuilt from non-canonical input.
-struct Rewritten<T> {
-    row_ptrs: Vec<u32>,
-    col_indices: Vec<u32>,
-    values: Vec<T>,
-}
-
-/// `None` when the caller's columns already ascend strictly within every row, the
-/// shape scipy produces and the only one within emits.
-fn canonicalize<T: Real>(csr: CsrRef<'_, T, u32>) -> Result<Option<Rewritten<T>>, Error> {
-    // Rows tile the value array in order, so one pass answers both questions:
-    // non-finite wins over non-canonical either way, and the reported position
-    // stays in the caller's numbering rather than a rewritten copy's.
-    let mut canonical = true;
-    let mut row_start = 0;
-    for (cols, vals) in csr.rows() {
-        if let Some(offset) = vals.iter().position(|value| !value.is_finite()) {
-            return Err(Error::NonFiniteValue {
-                position: row_start + offset,
-            });
-        }
-        canonical = canonical && cols.windows(2).all(|pair| pair[0] < pair[1]);
-        row_start += vals.len();
+impl<'a, T: Real> Ingestion<'a, T> {
+    pub(crate) fn of(csr: CsrRef<'a, T, u32>) -> Result<Self, Error> {
+        let canonical = Canonical::of(csr)?;
+        let Ingested {
+            diagonal,
+            grounding,
+            layout,
+        } = validate(&canonical)?;
+        Ok(Self {
+            canonical,
+            n: diagonal.len(),
+            diagonal,
+            grounding,
+            layout,
+        })
     }
-    if canonical {
-        return Ok(None);
-    }
-    Ok(Some(rewrite(csr)))
-}
 
-/// Only non-canonical input pays this copy.
-fn rewrite<T: Real>(csr: CsrRef<'_, T, u32>) -> Rewritten<T> {
-    let nnz = csr.col_indices().len();
-    let mut row_ptrs = Vec::with_capacity(csr.n() + 1);
-    let mut col_indices = Vec::with_capacity(nnz);
-    let mut values = Vec::with_capacity(nnz);
-    let mut entries: Vec<(u32, T)> = Vec::new();
-    row_ptrs.push(0u32);
-    for (cols, vals) in csr.rows() {
-        entries.clear();
-        entries.extend(cols.iter().copied().zip(vals.iter().copied()));
-        // One row's degree, not nnz. Stable, so duplicates sum in stored order.
-        entries.sort_by_key(|&(col, _)| col);
-        for group in entries.chunk_by(|left, right| left.0 == right.0) {
-            col_indices.push(group[0].0);
-            values.push(group[1..].iter().fold(group[0].1, |sum, &(_, v)| sum + v));
-        }
-        row_ptrs.push(col_indices.len() as u32);
+    /// Vertices the factorization covers, the ground one included.
+    pub(crate) fn n(&self) -> usize {
+        self.n
     }
-    Rewritten {
-        row_ptrs,
-        col_indices,
-        values,
-    }
-}
 
-/// One forward-only cursor per row. The walk is a merge-join only because every entry
-/// is claimed at most once, which is what [`canonicalize`] guarantees.
-struct Mirrors<'a, T> {
-    row_ptrs: &'a [u32],
-    col_indices: &'a [u32],
-    values: &'a [T],
-    cursors: Vec<u32>,
-}
-
-impl<'a, T: Real> Mirrors<'a, T> {
-    fn new(row_ptrs: &'a [u32], col_indices: &'a [u32], values: &'a [T]) -> Self {
-        let cursors = row_ptrs[..row_ptrs.len() - 1].to_vec();
-        Self {
-            row_ptrs,
-            col_indices,
-            values,
-            cursors,
+    /// The ground vertex outranks every real one, so it can only be a block's last.
+    pub(crate) fn carries_ground(&self, block: &BlockVertices<'_>) -> bool {
+        match &self.grounding {
+            Grounding::Floating => false,
+            Grounding::Grounded { surpluses, .. } => block.last() == surpluses.len() as u32,
         }
     }
 
-    /// Stored zeros count as absent.
-    fn claim(&mut self, row: usize, col: usize) -> Result<T, Error> {
-        let row_end = self.row_ptrs[row + 1];
-        let mut cursor = self.cursors[row];
-        let mut found = T::zero();
-        while cursor < row_end {
-            let at = self.col_indices[cursor as usize] as usize;
-            if at > col {
-                break;
-            }
-            let value = self.values[cursor as usize];
-            cursor += 1;
-            if at == col {
-                found = value;
-                break;
-            }
-            // Skipped a stored entry whose own mirror above the diagonal is missing.
-            if value != T::zero() {
-                self.cursors[row] = cursor;
-                return Err(Error::Asymmetric { edge: (at, row) });
+    /// `None` when connected. Taken so the caller can walk blocks while asking for each.
+    pub(crate) fn take_layout(&mut self) -> Option<BlockLayout> {
+        self.layout.take()
+    }
+
+    /// The diagonal entry the block's row `local` carries.
+    pub(crate) fn block_diagonal(&self, block: &BlockVertices<'_>, local: usize) -> T {
+        self.diagonal[block.global(local)]
+    }
+
+    /// Upper, not the stored lower: mirrors may differ by ulps and the approximate
+    /// route symmetrizes on this one.
+    pub(crate) fn upper_row(
+        &self,
+        block: &BlockVertices<'_>,
+        local: usize,
+        mut entry: impl FnMut(usize, T),
+    ) {
+        let (row_ptrs, col_indices, values) = self.canonical.arrays();
+        let row = block.global(local);
+        if row + 1 >= row_ptrs.len() {
+            return;
+        }
+        let (from, to) = (row_ptrs[row] as usize, row_ptrs[row + 1] as usize);
+        for (&col, &value) in col_indices[from..to].iter().zip(&values[from..to]) {
+            if col as usize > row && value != T::zero() {
+                entry(block.local(col as usize), value);
             }
         }
-        self.cursors[row] = cursor;
-        Ok(found)
     }
-}
 
-fn approximately_equal<T: Real>(left: T, right: T) -> bool {
-    if left == right {
-        return true;
-    }
-    let ulps = T::from(8.0).unwrap_or_else(T::one);
-    let scale = left.abs().max(right.abs());
-    (left - right).abs() <= ulps * T::epsilon() * scale
-}
-
-/// One pass per row, claiming each upper-triangle entry's mirror.
-fn parse<T: Real, C: EdgeCount>(
-    mut mirrors: Mirrors<'_, T>,
-    terms: &[u32],
-) -> Result<GraphBuild<AdjListGraph<C, T>, T>, Error> {
-    let (row_ptrs, col_indices, values) = (mirrors.row_ptrs, mirrors.col_indices, mirrors.values);
-    let n = row_ptrs.len() - 1;
-    let mut adj: Vec<Vec<Edge<T, C>>> = (0..n)
-        .map(|row| Vec::with_capacity((row_ptrs[row + 1] - row_ptrs[row]) as usize))
-        .collect();
-
-    let mut diag = vec![T::zero(); n];
-    // Off-diagonal contributions only; `augment` folds in the diagonal, which is
-    // not known for a row until that row's own claim below.
-    let mut row_sums = vec![T::zero(); n];
-
-    for row in 0..n {
-        let row_end = row_ptrs[row + 1];
-        // The diagonal is claimed like any mirror, which both yields its value and
-        // advances the cursor past everything below it — by now only the zeros that
-        // contribute no edge. Claiming every diagonal up front instead would skip
-        // the mirrors that live below them.
-        diag[row] = mirrors.claim(row, row)?;
-        let mut cursor = mirrors.cursors[row];
-
-        while cursor < row_end {
-            let col = col_indices[cursor as usize] as usize;
-            let upper = values[cursor as usize];
-            cursor += 1;
-            // Duplicates can coalesce to exactly zero, which contributes no edge.
-            if upper == T::zero() {
-                continue;
-            }
-            let lower = mirrors.claim(col, row)?;
-            if !approximately_equal(upper, lower) {
-                return Err(Error::Asymmetric { edge: (row, col) });
-            }
-            if upper > T::zero() {
-                return Err(Error::PositiveOffDiagonal { edge: (row, col) });
-            }
-            // Zero was skipped and positive rejected, so `upper` is negative here
-            // and `-upper` is the edge weight. A NaN coalesced from opposing
-            // infinities never reaches this line — it fails the symmetry check.
-            // Each row sums the value it stores, not the one the graph symmetrizes to:
-            // charging `upper` to both would make the tolerated mirror difference look
-            // like `col`'s own surplus and ground it.
-            row_sums[row] = row_sums[row] + upper;
-            row_sums[col] = row_sums[col] + lower;
-            add_edge_pair(&mut adj, row, col, -upper);
+    /// The whole graph is moved out: it is one block, so nothing reads it again.
+    pub(crate) fn take_block_diagonal(&mut self, block: &BlockVertices<'_>) -> Vec<T> {
+        match block {
+            BlockVertices::Whole(_) => core::mem::take(&mut self.diagonal),
+            BlockVertices::Part { vertices, .. } => vertices
+                .iter()
+                .map(|&vertex| self.diagonal[vertex as usize])
+                .collect(),
         }
     }
-    augment(adj, diag, row_sums, terms)
-}
 
-/// How far one row's diagonal exceeds its off-diagonal mass, judged against the noise
-/// the row's own scale and term count can carry.
-enum RowBalance<T> {
-    NonFinite,
-    Deficit,
-    Negligible,
-    /// Worth closing with a ground edge.
-    Surplus(T),
-}
-
-impl<T: Real> RowBalance<T> {
-    /// `terms` is how many additions produced `excess`, not the row's degree.
-    fn of(diagonal: T, off_diagonal_sum: T, terms: u32) -> Self {
-        let excess = diagonal + off_diagonal_sum;
-        // Every off-diagonal folded into the sum was negative, so the row's magnitude
-        // sum is `|d| + d - excess` and needs no second accumulator. Subtracting before
-        // the second add keeps a diagonal above `MAX / 2` from overflowing to infinity.
-        let scale = (diagonal.abs() - excess) + diagonal;
-        // A non-finite sum forces a non-finite scale, so scale alone decides. Every
-        // comparison below succeeds on an infinite deficit (`-inf < -inf`).
-        if !scale.is_finite() {
-            return Self::NonFinite;
-        }
-        // The most this row's own additions could have invented, and so the only
-        // departure from zero-sum the row cannot account for. One floor for both signs:
-        // a departure this clears is real evidence whichever way it points, and
-        // forgiving more in one direction than the other grounds a row for a drift that
-        // would be dismissed as noise with its sign flipped.
-        let accumulated = T::epsilon() * scale * count_as_scalar::<T, _>(terms);
-        if excess < -accumulated {
-            return Self::Deficit;
-        }
-        if excess <= accumulated {
-            return Self::Negligible;
-        }
-        Self::Surplus(excess)
-    }
-}
-
-/// `row_sums` arrives holding each row's off-diagonal total; the diagonal joins it
-/// here, the first point at which every row's is known.
-fn augment<T: Real, C: EdgeCount>(
-    mut adj: Vec<Vec<Edge<T, C>>>,
-    mut diag: Vec<T>,
-    mut row_sums: Vec<T>,
-    terms: &[u32],
-) -> Result<GraphBuild<AdjListGraph<C, T>, T>, Error> {
-    let mut surplus_sum = T::zero();
-    let mut grounded = 0usize;
-    for (row, (sum, &d)) in row_sums.iter_mut().zip(diag.iter()).enumerate() {
-        *sum = match RowBalance::of(d, *sum, terms[row]) {
-            RowBalance::NonFinite => return Err(Error::NonFiniteRow { row }),
-            RowBalance::Deficit => return Err(Error::NotDiagonallyDominant { row }),
-            RowBalance::Negligible => T::zero(),
-            RowBalance::Surplus(excess) => {
-                surplus_sum = surplus_sum + excess;
-                grounded += 1;
-                excess
-            }
+    /// Builds the block's adjacency, which only the approximate arm needs.
+    pub(crate) fn block_graph<C: EdgeCount>(
+        &self,
+        block: &BlockVertices<'_>,
+    ) -> AdjListGraph<C, T> {
+        let (row_ptrs, col_indices, values) = self.canonical.arrays();
+        let rows = row_ptrs.len() - 1;
+        let n = block.len();
+        // Every grounded row shares one block, so its degree is the whole count.
+        let ground_degree = match self.grounding {
+            Grounding::Floating => 0,
+            Grounding::Grounded { degree, .. } => degree,
         };
-    }
 
-    let m = adj.len();
-    let mut ground = None;
-    if grounded > 0 {
-        if m >= u32::MAX as usize {
-            return Err(Error::InvalidCsr(
-                CsrError::MatrixDimensionExceedsIndexType {
-                    n: m.saturating_add(1),
-                },
-            ));
+        let mut adj: Vec<Vec<Edge<T, C>>> = Vec::with_capacity(n);
+        for local in 0..n {
+            let global = block.global(local);
+            let degree = if global < rows {
+                (row_ptrs[global + 1] - row_ptrs[global]) as usize
+            } else {
+                ground_degree
+            };
+            adj.push(Vec::with_capacity(degree));
         }
-        adj.push(Vec::with_capacity(grounded));
-        diag.push(surplus_sum);
-        for (row, &surplus) in row_sums.iter().enumerate() {
-            // The clamp above left every surplus non-negative.
-            if surplus > T::zero() {
-                add_edge_pair(&mut adj, row, m, surplus);
+
+        // Measured: an in-loop discriminant test spills `local_of` and reloads per edge.
+        match block {
+            BlockVertices::Whole(_) => {
+                for local in 0..n {
+                    if local >= rows {
+                        continue;
+                    }
+                    let (from, to) = (row_ptrs[local] as usize, row_ptrs[local + 1] as usize);
+                    for (&col, &value) in col_indices[from..to].iter().zip(&values[from..to]) {
+                        if col as usize > local && value != T::zero() {
+                            add_edge_pair(&mut adj, local, col as usize, -value);
+                        }
+                    }
+                }
+            }
+            BlockVertices::Part { vertices, local_of } => {
+                // Narrowed so the bound lives in a register.
+                let local_of = &local_of[..rows];
+                for (local, &global) in vertices.iter().enumerate() {
+                    let global = global as usize;
+                    if global >= rows {
+                        continue;
+                    }
+                    let (from, to) = (row_ptrs[global] as usize, row_ptrs[global + 1] as usize);
+                    for (&col, &value) in col_indices[from..to].iter().zip(&values[from..to]) {
+                        if col as usize > global && value != T::zero() {
+                            add_edge_pair(&mut adj, local, local_of[col as usize] as usize, -value);
+                        }
+                    }
+                }
             }
         }
-        // The bound above is what makes this cast lossless.
-        ground = Some(m as u32);
-    }
 
-    let layout = block_layout(&adj, m);
-    Ok(GraphBuild {
-        graph: AdjListGraph::from_adjacency(adj),
-        diagonal: diag,
-        layout,
-        ground,
-    })
+        if let Grounding::Grounded { surpluses, .. } = &self.grounding {
+            if self.carries_ground(block) {
+                let ground = n - 1;
+                for (row, &surplus) in surpluses.iter().enumerate() {
+                    // The clamp in `ground` left every surplus non-negative.
+                    if surplus > T::zero() {
+                        add_edge_pair(&mut adj, block.local(row), ground, surplus);
+                    }
+                }
+            }
+        }
+
+        AdjListGraph::from_adjacency(adj)
+    }
 }
+
+#[cfg(test)]
+mod tests;
