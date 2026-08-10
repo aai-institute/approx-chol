@@ -18,6 +18,7 @@ allow-wildcard-paths = true
 skip = [
     { crate = "equator@0.2.2", reason = "pulled by faer's nano-gemm 0.2.2; faer 0.24 also depends on equator 0.6.0 directly" },
     { crate = "equator-macro@0.2.1", reason = "proc-macro half of the equator 0.2.2 pin above" },
+    { crate = "rustc-hash@1.1.0", reason = "dev-only; dhat's allocation profiler pins rustc-hash 1 while numpy pulls 2" },
 ]
 skip-tree = [
     { crate = "proptest@1.10.0", reason = "dev-only; proptest and its dev-only companion tempfile both pull a rand 0.9 lineage (rand, rand_core, getrandom, rand_chacha, rand_xorshift) while the library depends on rand 0.10" },
