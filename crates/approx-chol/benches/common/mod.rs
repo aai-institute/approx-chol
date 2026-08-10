@@ -4,5 +4,6 @@
 
 #[path = "../../tests/common/grid.rs"]
 pub mod grid;
+pub mod shapes;
 
 pub use grid::grid_laplacian;

@@ -44,6 +44,10 @@ name = "factorization"
 harness = false
 
 [[bench]]
+name = "ingestion"
+harness = false
+
+[[bench]]
 name = "sampling"
 harness = false
 
