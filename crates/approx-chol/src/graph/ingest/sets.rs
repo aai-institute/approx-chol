@@ -1,4 +1,4 @@
-use super::blocks::BlockLayout;
+use crate::graph::BlockLayout;
 
 /// Union-find with path halving and union by size.
 pub(super) struct DisjointSets {

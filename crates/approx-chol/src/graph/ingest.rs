@@ -2,19 +2,17 @@
 //! and close the row deficits with a Gremban ground vertex. One module per phase, in
 //! the order the pipeline runs them.
 
-mod blocks;
 mod canonical;
 mod sets;
 mod validate;
 
 use super::adjacency::{add_edge_pair, AdjListGraph, Edge};
+use super::blocks::{BlockLayout, BlockVertices};
 use super::multiplicity::EdgeCount;
 use crate::types::Real;
 use crate::{CsrRef, Error};
 use canonical::Canonical;
 use validate::{validate, Grounding, Ingested};
-
-pub(crate) use blocks::{BlockLayout, BlockVertices};
 
 /// The ingested input, kept whole so each block takes only what its backend needs. A
 /// block routed to the dense arm reads its triangle straight from these arrays; only
