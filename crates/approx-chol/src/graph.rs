@@ -2,19 +2,9 @@
 
 mod ingest;
 
-use crate::types::{count_as_scalar, Real};
-use crate::{CsrRef, Error};
+pub(crate) use ingest::{BlockVertices, Ingestion};
 
-/// Named return type for [`AdjListGraph::from_sddm`].
-pub(crate) struct GraphBuild<G, T: Real> {
-    pub graph: G,
-    pub diagonal: Vec<T>,
-    /// `None` when the graph is connected, which is the one block case.
-    pub layout: Option<BlockLayout>,
-    /// The Gremban ground vertex, appended last, so it is the highest-numbered vertex
-    /// and the last of whichever block holds it.
-    pub ground: Option<u32>,
-}
+use crate::types::{count_as_scalar, Real};
 
 /// Every vertex once, components back to back. One array rather than one per
 /// component: the same sequence answers all three questions asked of it.
@@ -43,16 +33,6 @@ impl BlockLayout {
     /// The same sequence read as a permutation.
     pub(crate) fn into_order(self) -> Vec<u32> {
         self.order
-    }
-
-    /// Ascending within each block, which puts the ground vertex last in its own.
-    fn sort_blocks(&mut self) {
-        let mut start = 0usize;
-        for &end in &self.ends {
-            let end = end as usize;
-            self.order[start..end].sort_unstable();
-            start = end;
-        }
     }
 }
 
@@ -245,9 +225,6 @@ pub(crate) struct AdjListGraph<C, T: Real> {
     eliminated: BitVec,
 }
 
-/// AC path: no multi-edge tracking.
-pub(crate) type SlimGraph<T> = AdjListGraph<Single, T>;
-
 /// AC2 path: edges with virtual multi-edge counts.
 pub(crate) type MultiEdgeGraph<T> = AdjListGraph<Multi, T>;
 
@@ -256,11 +233,6 @@ pub(crate) type MultiEdgeGraph<T> = AdjListGraph<Multi, T>;
 const RETAIN_ADJ_CAPACITY_MAX: usize = 64;
 
 impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
-    /// Construct from a CSR SDDM matrix.
-    pub(crate) fn from_sddm(csr: CsrRef<'_, T, u32>) -> Result<GraphBuild<Self, T>, Error> {
-        ingest::from_sddm(csr)
-    }
-
     fn from_adjacency(adj: Vec<Vec<Edge<T, C>>>) -> Self {
         Self {
             eliminated: BitVec::new(adj.len()),
@@ -326,26 +298,6 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
         }
         add_edge_pair(&mut self.adj, u as usize, v as usize, weight);
     }
-
-    /// A component is closed under edges, so each list moves intact and only its
-    /// endpoints need relabeling — every `rev` still addresses its parent position.
-    pub(crate) fn take_component(&mut self, vertices: &[u32], local_of: &mut [u32]) -> Self {
-        debug_assert_eq!(local_of.len(), self.adj.len());
-        for (local, &global) in vertices.iter().enumerate() {
-            local_of[global as usize] = local as u32;
-        }
-        let adjacency = vertices
-            .iter()
-            .map(|&global| {
-                let mut edges = core::mem::take(&mut self.adj[global as usize]);
-                for edge in &mut edges {
-                    edge.to = local_of[edge.to as usize];
-                }
-                edges
-            })
-            .collect();
-        Self::from_adjacency(adjacency)
-    }
 }
 
 impl<T: Real> MultiEdgeGraph<T> {
@@ -389,54 +341,6 @@ fn remove_edge_at<T: Real, C: EdgeCount>(adj: &mut [Vec<Edge<T, C>>], u: usize, 
         let rev = moved.rev as usize;
         adj[w][rev].rev = idx as u32;
     }
-}
-
-/// `None` when the graph is connected. Traversal follows every edge, so a
-/// ground vertex (index `>= n_real`) links the blocks it touches without being
-/// counted as its own component.
-fn block_layout<T: Real, C: EdgeCount>(
-    adj: &[Vec<Edge<T, C>>],
-    n_real: usize,
-) -> Option<BlockLayout> {
-    let n = adj.len();
-    let mut visited = BitVec::new(n);
-    let mut stack: Vec<usize> = Vec::new();
-    let mut layout = BlockLayout {
-        order: Vec::with_capacity(n),
-        ends: Vec::new(),
-    };
-    for start in 0..n_real {
-        if visited.get(start) {
-            continue;
-        }
-        visited.set(start);
-        stack.push(start);
-        while let Some(v) = stack.pop() {
-            // Each vertex is pushed at most once (guarded by `visited`), so this
-            // traversal cannot outlast `n` pops; broken visited-tracking turns that
-            // guarantee into unbounded re-visits, which hangs rather than fails.
-            debug_assert!(
-                layout.order.len() < n,
-                "block_layout traversal exceeded vertex count — visited tracking is broken"
-            );
-            layout.order.push(v as u32);
-            for e in &adj[v] {
-                let u = e.to as usize;
-                if !visited.get(u) {
-                    visited.set(u);
-                    stack.push(u);
-                }
-            }
-        }
-        layout.ends.push(layout.order.len() as u32);
-    }
-    // The first traversal reaching every vertex means the graph is connected,
-    // so the common case never sorts or returns a layout.
-    if layout.ends.len() <= 1 && layout.order.len() == n {
-        return None;
-    }
-    layout.sort_blocks();
-    Some(layout)
 }
 
 #[cfg(test)]

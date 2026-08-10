@@ -53,8 +53,14 @@ fn only_an_unusable_pivot_answers_to_the_failure_policy() {
             Ok(Fallback::WillNotFit { dim: 9 }),
         ),
     ];
+    // Wide enough for the highest global vertex the component names.
+    let mut local_of = vec![0u32; 31];
     for (label, reason, on_failure, vertices, expected) in cases {
-        assert_eq!(on_failure.accept(reason.at(vertices)), expected, "{label}");
+        let block = match vertices {
+            None => BlockVertices::whole(9),
+            Some(vertices) => BlockVertices::part(vertices, &mut local_of),
+        };
+        assert_eq!(on_failure.accept(reason.at(&block)), expected, "{label}");
     }
 }
 
