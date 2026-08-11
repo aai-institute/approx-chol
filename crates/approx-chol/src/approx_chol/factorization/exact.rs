@@ -191,7 +191,9 @@ impl<T: num_traits::Float> LowerTriangular<T> {
     }
 
     pub(super) fn validate_values(&self) -> Result<(), FactorError> {
-        for row in 0..self.rows() {
+        // Through `pinned_dim`, so no call order leaves the entries past the last
+        // complete row unread.
+        for row in 0..self.pinned_dim()?.solved() {
             let entries = self.row(row);
             // `substitute` divides by each diagonal entry twice per row, so a
             // pivot whose reciprocal overflows cannot be divided by either.
@@ -235,6 +237,20 @@ mod tests {
                 "diagonal {diagonal}"
             );
         }
+    }
+
+    /// The entries past the last complete row are the ones a row loop bounded by
+    /// `rows()` would never read, so validating values alone must still reject.
+    #[test]
+    fn values_past_the_last_complete_row_are_not_validated_around() {
+        assert_eq!(
+            LowerTriangular {
+                values: vec![1.0, 1.0, 1.0, f64::NAN],
+            }
+            .validate_values()
+            .expect_err("a length no triangle has must be rejected"),
+            FactorError::ExactFactorLengthInvalid { len: 4 },
+        );
     }
 
     #[test]
