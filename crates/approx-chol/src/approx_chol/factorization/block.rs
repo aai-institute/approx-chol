@@ -1,7 +1,12 @@
 use super::anchor::Anchor;
 use super::cholesky::Cholesky;
+#[cfg(any(feature = "serde", test))]
+use super::FactorError;
 use crate::types::Real;
 use core::num::NonZeroUsize;
+
+#[cfg(test)]
+mod tests;
 
 /// A block's dimension in both forms its consumers ask for, so none of them spells
 /// the pinned variable's subtraction itself.
@@ -30,10 +35,13 @@ impl BlockDim {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
     feature = "serde",
-    serde(bound(
-        serialize = "T: serde::Serialize",
-        deserialize = "T: serde::de::DeserializeOwned"
-    ))
+    serde(
+        bound(
+            serialize = "T: serde::Serialize",
+            deserialize = "T: serde::de::DeserializeOwned + num_traits::Float"
+        ),
+        try_from = "BlockData<T>"
+    )
 )]
 #[derive(Clone, Debug)]
 pub(crate) struct Block<T> {
@@ -49,6 +57,32 @@ impl<T> Block<T> {
             anchor,
             cholesky,
         }
+    }
+}
+
+/// A block as a payload carries it: a `dim` nothing has yet held its `cholesky` to. Same
+/// fields in the same order as [`Block`], which is what writes these bytes.
+#[cfg(any(feature = "serde", test))]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(bound(deserialize = "T: serde::de::DeserializeOwned"))
+)]
+struct BlockData<T> {
+    dim: BlockDim,
+    anchor: Anchor,
+    cholesky: Cholesky<T>,
+}
+
+/// Pinning the dim to the payload behind it here is what lets every consumer sum block
+/// dims without a check of its own.
+#[cfg(any(feature = "serde", test))]
+impl<T: num_traits::Float> TryFrom<BlockData<T>> for Block<T> {
+    type Error = FactorError;
+
+    fn try_from(data: BlockData<T>) -> Result<Self, Self::Error> {
+        data.cholesky.validate_for_dim(data.dim)?;
+        Ok(Self::new(data.dim, data.anchor, data.cholesky))
     }
 }
 

@@ -62,7 +62,7 @@ impl<T: serde::Serialize> serde::Serialize for Factor<T> {
 /// field is rejected for the version it implies instead of for a missing field.
 #[cfg(feature = "serde")]
 #[derive(serde::Deserialize)]
-#[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
+#[serde(bound(deserialize = "T: serde::de::DeserializeOwned + num_traits::Float"))]
 struct FactorData<T> {
     #[serde(default)]
     format_version: u32,
@@ -83,8 +83,9 @@ impl<T: num_traits::Float> TryFrom<FactorData<T>> for Factor<T> {
                 supported: FACTOR_FORMAT_VERSION,
             });
         }
-        Self::validate_structure(&data.blocks, data.permutation.as_ref())?;
-        Ok(Self::of(data.permutation, data.blocks, data.fallbacks))
+        let factor = Self::of(data.permutation, data.blocks, data.fallbacks);
+        factor.validate_structure()?;
+        Ok(factor)
     }
 }
 
@@ -111,25 +112,19 @@ impl fmt::Display for Fallback {
     }
 }
 
+/// Every block arrives already checked against its own cholesky, so what is left is what
+/// no single block can see.
 #[cfg(any(feature = "serde", test))]
-impl<T: num_traits::Float> Factor<T> {
-    pub(super) fn validate_structure(
-        blocks: &[Block<T>],
-        permutation: Option<&Permutation>,
-    ) -> Result<(), FactorError> {
+impl<T> Factor<T> {
+    fn validate_structure(&self) -> Result<(), FactorError> {
         // A Ground anchor overwrites its block's last entry with `-sum`, so a second
         // one silently solves a different system.
-        let grounded = Self::ground_blocks(blocks);
+        let grounded = Self::ground_blocks(&self.blocks);
         if grounded > 1 {
             return Err(FactorError::MultipleGroundBlocks { grounded });
         }
-        let n = blocks.iter().try_fold(0usize, |covered, block| {
-            block.cholesky.validate_for_dim(block.dim)?;
-            // A checked dim is pinned to the data behind it, so the total cannot overflow.
-            Ok(covered + block.dim.total())
-        })?;
-        if let Some(permutation) = permutation {
-            permutation.validate_for_dim(n)?;
+        if let Some(permutation) = &self.permutation {
+            permutation.validate_for_dim(self.n)?;
         }
         Ok(())
     }
@@ -195,7 +190,8 @@ impl<T> Factor<T> {
         self.n
     }
 
-    /// The one place `n` is ever written, so it cannot drift from the blocks it sums.
+    /// The one place `n` is ever written, so it cannot drift from the blocks it sums. No
+    /// [`Block`] carries a dim its cholesky does not pin, so the total cannot overflow.
     fn of(
         permutation: Option<Permutation>,
         blocks: Vec<Block<T>>,
@@ -230,10 +226,7 @@ where
     ) -> Self {
         let factor = Self::of(permutation, blocks, fallbacks);
         #[cfg(any(feature = "serde", test))]
-        debug_assert_eq!(
-            Self::validate_structure(&factor.blocks, factor.permutation.as_ref()),
-            Ok(())
-        );
+        debug_assert_eq!(factor.validate_structure(), Ok(()));
         factor
     }
 
