@@ -25,8 +25,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The star sampler draws from `[0, 1)`; the previous mapping could return exactly `1.0`. ([#109])
-- A deserialized `Factor` whose dimension leaves no room for its ground vertex is rejected
-  instead of overflowing. ([#59])
 
 ## [0.4.0] - 2026-07-30
 
@@ -165,7 +163,6 @@ for graph Laplacians in Rust with Python bindings.
 [#39]: https://github.com/aai-institute/approx-chol/issues/39
 [#41]: https://github.com/aai-institute/approx-chol/issues/41
 [#50]: https://github.com/aai-institute/approx-chol/issues/50
-[#59]: https://github.com/aai-institute/approx-chol/issues/59
 [#61]: https://github.com/aai-institute/approx-chol/issues/61
 [#62]: https://github.com/aai-institute/approx-chol/issues/62
 [#75]: https://github.com/aai-institute/approx-chol/issues/75
