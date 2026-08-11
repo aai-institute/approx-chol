@@ -190,8 +190,7 @@ impl<T> Factor<T> {
         self.n
     }
 
-    /// The one place `n` is ever written, so it cannot drift from the blocks it sums. No
-    /// [`Block`] carries a dim its cholesky does not pin, so the total cannot overflow.
+    /// The one place `n` is ever written, so it cannot drift from the blocks it sums.
     fn of(
         permutation: Option<Permutation>,
         blocks: Vec<Block<T>>,

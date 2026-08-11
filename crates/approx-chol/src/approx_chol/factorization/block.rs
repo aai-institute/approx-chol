@@ -50,8 +50,12 @@ pub(crate) struct Block<T> {
     pub(super) cholesky: Cholesky<T>,
 }
 
-impl<T> Block<T> {
+impl<T: num_traits::Float> Block<T> {
     pub(crate) fn new(dim: BlockDim, anchor: Anchor, cholesky: Cholesky<T>) -> Self {
+        // What the wire has to be told, a builder can get wrong too; every consumer sums
+        // these dims trusting that neither did.
+        #[cfg(any(feature = "serde", test))]
+        debug_assert_eq!(cholesky.validate_for_dim(dim), Ok(()));
         Self {
             dim,
             anchor,
@@ -60,8 +64,8 @@ impl<T> Block<T> {
     }
 }
 
-/// A block as a payload carries it: a `dim` nothing has yet held its `cholesky` to. Same
-/// fields in the same order as [`Block`], which is what writes these bytes.
+/// A block as a payload carries it — a `dim` nothing has held its `cholesky` to — in
+/// [`Block`]'s own field order, which is what a positional reader needs.
 #[cfg(any(feature = "serde", test))]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 #[cfg_attr(
@@ -74,8 +78,8 @@ struct BlockData<T> {
     cholesky: Cholesky<T>,
 }
 
-/// Pinning the dim to the payload behind it here is what lets every consumer sum block
-/// dims without a check of its own.
+/// Pinning the dim to the payload behind it is what lets every consumer sum block dims
+/// without a check of its own.
 #[cfg(any(feature = "serde", test))]
 impl<T: num_traits::Float> TryFrom<BlockData<T>> for Block<T> {
     type Error = FactorError;

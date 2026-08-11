@@ -24,8 +24,7 @@ fn permutation_of_identity_is_none() {
     assert!(Permutation::from_order(Vec::new()).is_none());
 }
 
-/// A block validates its own cholesky against its own dim before it exists, so what is
-/// left here is what only the whole factor can see.
+/// Every fact no single block can see; a block's own serde boundary owns the rest.
 mod validation {
     use crate::approx_chol::factorization::exact::LowerTriangular;
     use crate::approx_chol::factorization::{
@@ -36,8 +35,8 @@ mod validation {
 
     use super::*;
 
-    /// Three variables, of which the block solves for `3 - 1`, so its packed factor
-    /// holds `2 * 3 / 2`.
+    /// Three variables, and a cholesky that is valid but arbitrary: nothing at this level
+    /// reads it.
     fn block(anchor: Anchor) -> Block<f64> {
         Block::new(
             BlockDim::of(3).expect("fixture dimension is non-zero"),
@@ -56,11 +55,6 @@ mod validation {
         of_blocks(vec![block(Anchor::Floating)])
     }
 
-    /// Two blocks tiling `5 + 1` variables, both claiming the one ground vertex.
-    fn two_ground_blocks() -> Factor<f64> {
-        of_blocks(vec![block(Anchor::Ground), block(Anchor::Ground)])
-    }
-
     #[test]
     fn a_factor_of_valid_blocks_passes() {
         floating()
@@ -68,56 +62,36 @@ mod validation {
             .unwrap_or_else(|error| panic!("fixture is valid: {error}"));
     }
 
-    /// Every variant no single block could have raised.
+    /// Two blocks tiling `5 + 1` variables, both claiming the one ground vertex.
     #[test]
-    fn every_cross_block_error_variant_is_reachable() {
-        #[allow(clippy::type_complexity)]
-        let cases: Vec<(&str, fn() -> Factor<f64>, fn(&mut Factor<f64>), FactorError)> = vec![
-            (
-                "two blocks claim the one ground vertex",
-                two_ground_blocks,
-                |_| {},
-                FactorError::MultipleGroundBlocks { grounded: 2 },
-            ),
-            (
-                "permutation position out of bounds",
-                floating,
-                |f| {
-                    f.permutation = Some(Permutation {
-                        forward: vec![0, 1, 99],
-                    });
-                },
-                FactorError::PermutationInvalid { position: 99 },
-            ),
-            (
-                "permutation repeats a position",
-                floating,
-                |f| {
-                    f.permutation = Some(Permutation {
-                        forward: vec![0, 1, 1],
-                    });
-                },
-                FactorError::PermutationInvalid { position: 1 },
-            ),
-            (
-                "permutation shorter than the factor",
-                floating,
-                |f| {
-                    f.permutation = Some(Permutation {
-                        forward: vec![1, 0],
-                    });
-                },
-                FactorError::PermutationInvalid { position: 2 },
-            ),
+    fn a_second_block_cannot_claim_the_ground_vertex() {
+        let factor = of_blocks(vec![block(Anchor::Ground), block(Anchor::Ground)]);
+
+        assert_eq!(
+            factor.validate_structure(),
+            Err(FactorError::MultipleGroundBlocks { grounded: 2 })
+        );
+    }
+
+    /// The reported position is the offending entry, or the map's length when it is too
+    /// short to have one.
+    #[test]
+    fn a_permutation_that_does_not_cover_the_factor_is_rejected() {
+        let cases = [
+            ("a position out of bounds", vec![0, 1, 99], 99),
+            ("a repeated position", vec![0, 1, 1], 1),
+            ("shorter than the factor", vec![1, 0], 2),
         ];
 
-        for (label, build, corrupt, expected) in cases {
-            let mut factor = build();
-            corrupt(&mut factor);
-            let error = factor
-                .validate_structure()
-                .expect_err(&format!("{label}: corruption must be rejected"));
-            assert_eq!(error, expected, "{label}");
+        for (label, forward, position) in cases {
+            let mut factor = floating();
+            factor.permutation = Some(Permutation { forward });
+
+            assert_eq!(
+                factor.validate_structure(),
+                Err(FactorError::PermutationInvalid { position }),
+                "{label}"
+            );
         }
     }
 }

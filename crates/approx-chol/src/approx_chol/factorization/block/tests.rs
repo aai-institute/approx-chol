@@ -191,3 +191,18 @@ fn every_block_error_variant_is_reachable() {
         assert_eq!(error, expected, "{label}");
     }
 }
+
+/// The factorization builder is trusted with its own dims only because this fires when it
+/// is wrong.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic = "assertion"]
+fn a_block_built_around_a_cholesky_that_does_not_pin_its_dim_panics() {
+    Block::new(
+        dim(3),
+        Anchor::Floating,
+        Cholesky::Exact(LowerTriangular {
+            values: vec![1.0; 2],
+        }),
+    );
+}
