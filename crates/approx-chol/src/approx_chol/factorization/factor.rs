@@ -1,4 +1,3 @@
-use super::anchor::Anchor;
 use super::block::Block;
 use super::permutation::Permutation;
 #[cfg(any(feature = "serde", test))]
@@ -197,7 +196,7 @@ impl<T> Factor<T> {
         fallbacks: Vec<Fallback>,
     ) -> Self {
         Self {
-            n: blocks.iter().map(|block| block.dim.total()).sum(),
+            n: blocks.iter().map(|block| block.dim().total()).sum(),
             permutation,
             blocks,
             fallbacks,
@@ -207,10 +206,7 @@ impl<T> Factor<T> {
     /// Nothing else records that the ground vertex exists, and at most one block can
     /// hold it.
     fn ground_blocks(blocks: &[Block<T>]) -> usize {
-        blocks
-            .iter()
-            .filter(|block| block.anchor == Anchor::Ground)
-            .count()
+        blocks.iter().filter(|block| block.is_ground()).count()
     }
 }
 
@@ -236,7 +232,7 @@ where
     /// Total elimination steps across all blocks: every block solves for all but one of
     /// its variables, whichever arm factored it.
     pub fn n_steps(&self) -> usize {
-        self.blocks.iter().map(|block| block.dim.solved()).sum()
+        self.blocks.iter().map(|block| block.dim().solved()).sum()
     }
 
     #[inline]
@@ -276,7 +272,7 @@ where
     ) {
         let mut start = 0usize;
         for block in blocks {
-            let end = start + block.dim.total();
+            let end = start + block.dim().total();
             solve(block, &mut values[start..end]);
             start = end;
         }
