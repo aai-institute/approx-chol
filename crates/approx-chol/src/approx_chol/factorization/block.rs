@@ -50,9 +50,19 @@ impl BlockDim {
 )]
 #[derive(Clone, Debug)]
 pub(crate) struct Block<T> {
-    pub(super) dim: BlockDim,
-    pub(super) anchor: Anchor,
-    pub(super) cholesky: Cholesky<T>,
+    dim: BlockDim,
+    anchor: Anchor,
+    cholesky: Cholesky<T>,
+}
+
+impl<T> Block<T> {
+    pub(super) fn dim(&self) -> BlockDim {
+        self.dim
+    }
+
+    pub(super) fn is_ground(&self) -> bool {
+        self.anchor == Anchor::Ground
+    }
 }
 
 impl<T: num_traits::Float> Block<T> {
