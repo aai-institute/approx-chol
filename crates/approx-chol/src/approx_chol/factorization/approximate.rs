@@ -8,6 +8,8 @@ mod star;
 pub use clique_tree::CliqueTreeSampler;
 
 #[cfg(any(feature = "serde", test))]
+use super::block::BlockDim;
+#[cfg(any(feature = "serde", test))]
 use super::FactorError;
 use clique_tree::{sample_column, SampledColumn};
 use ordering::{DegreeDeltas, DynamicOrdering};
@@ -82,7 +84,7 @@ struct EliminationStep<'a, T> {
 
 /// Neither kernel bounds-checks per step: the caller asserts `y.len() >= n` once per
 /// solve, and every index is under `n` by construction or by
-/// [`EliminationSequence::validate_for_dim`].
+/// [`EliminationSequence::validate_values`].
 impl<'a, T: Real> EliminationStep<'a, T> {
     /// Forward elimination: scatter pivot weight to neighbors, then scale by D^{-1}.
     #[inline(always)]
@@ -303,24 +305,25 @@ impl<T> EliminationSequence<T> {
         }
     }
 
+    /// Every step eliminates one vertex and one is left over, so the step count is
+    /// what tiles the block.
+    #[cfg(any(feature = "serde", test))]
+    pub(super) fn pinned_dim(&self) -> BlockDim {
+        BlockDim::of(self.steps.len() + 1).expect("a step count plus the pinned vertex is non-zero")
+    }
+
     /// The ranges need no check — they are rebuilt from the nested persisted form,
     /// never read off the wire.
     #[cfg(any(feature = "serde", test))]
-    pub(super) fn validate_for_dim(&self, n: usize) -> Result<(), FactorError>
+    pub(super) fn validate_values(&self) -> Result<(), FactorError>
     where
         T: num_traits::Float,
     {
+        let n = self.pinned_dim().total();
         // `substitute` writes this entry unchecked.
         if (self.uneliminated as usize) >= n {
             return Err(FactorError::UneliminatedVertexInvalid {
                 vertex: self.uneliminated,
-                n,
-            });
-        }
-        // Any other tiling leaves a vertex neither divided by a pivot nor zeroed.
-        if self.steps.len() + 1 != n {
-            return Err(FactorError::StepCountDoesNotTileBlock {
-                steps: self.steps.len(),
                 n,
             });
         }

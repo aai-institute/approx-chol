@@ -76,9 +76,9 @@ fn a_dim_its_cholesky_cannot_pin_never_becomes_a_block() {
 
     assert_eq!(
         Block::try_from(data).expect_err("an unpinned dim must be rejected"),
-        FactorError::ExactFactorLengthInvalid {
-            n: usize::MAX,
-            len: 3,
+        FactorError::BlockDimMismatch {
+            pinned: 3,
+            claimed: usize::MAX,
         }
     );
 }
@@ -155,7 +155,10 @@ fn every_block_error_variant_is_reachable() {
             |d| {
                 seq_of(d).steps.truncate(1);
             },
-            FactorError::StepCountDoesNotTileBlock { steps: 1, n: 3 },
+            FactorError::BlockDimMismatch {
+                pinned: 2,
+                claimed: 3,
+            },
         ),
         (
             "one vertex is eliminated twice, so another never is",
@@ -167,7 +170,7 @@ fn every_block_error_variant_is_reachable() {
             "exact factor shorter than its block",
             exact,
             |d| lower_of(d).values.truncate(2),
-            FactorError::ExactFactorLengthInvalid { n: 3, len: 2 },
+            FactorError::ExactFactorLengthInvalid { len: 2 },
         ),
         (
             "exact factor pivot is zero",

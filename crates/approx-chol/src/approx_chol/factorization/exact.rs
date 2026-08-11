@@ -179,15 +179,19 @@ impl<T: Real> LowerTriangular<T> {
 
 #[cfg(any(feature = "serde", test))]
 impl<T: num_traits::Float> LowerTriangular<T> {
-    pub(super) fn validate_for_dim(&self, dim: BlockDim) -> Result<(), FactorError> {
-        let m = dim.solved();
-        if packed_len(m) != Some(self.values.len()) {
+    /// The triangle's own row count plus the variable it leaves pinned.
+    pub(super) fn pinned_dim(&self) -> Result<BlockDim, FactorError> {
+        let rows = self.rows();
+        if packed_len(rows) != Some(self.values.len()) {
             return Err(FactorError::ExactFactorLengthInvalid {
-                n: dim.total(),
                 len: self.values.len(),
             });
         }
-        for row in 0..m {
+        Ok(BlockDim::of(rows + 1).expect("a row count plus the pinned variable is non-zero"))
+    }
+
+    pub(super) fn validate_values(&self) -> Result<(), FactorError> {
+        for row in 0..self.rows() {
             let entries = self.row(row);
             // `substitute` divides by each diagonal entry twice per row, so a
             // pivot whose reciprocal overflows cannot be divided by either.

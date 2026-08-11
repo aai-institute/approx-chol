@@ -36,12 +36,26 @@ impl<T: Real> Cholesky<T> {
 
 #[cfg(any(feature = "serde", test))]
 impl<T: num_traits::Float> Cholesky<T> {
-    pub(super) fn validate_for_dim(&self, dim: BlockDim) -> Result<(), FactorError> {
+    /// The dim the payload itself covers. An arm cannot answer `Ok(())` here, so one
+    /// added without saying how many variables it spans does not compile.
+    fn pinned_dim(&self) -> Result<BlockDim, FactorError> {
         match self {
-            // An elimination sequence indexes the whole block, the pinned variable
-            // included; a dense factor covers only the variables solved for.
-            Self::Approximate(sequence) => sequence.validate_for_dim(dim.total()),
-            Self::Exact(lower) => lower.validate_for_dim(dim),
+            Self::Approximate(sequence) => Ok(sequence.pinned_dim()),
+            Self::Exact(lower) => lower.pinned_dim(),
+        }
+    }
+
+    pub(super) fn validate_for_dim(&self, dim: BlockDim) -> Result<(), FactorError> {
+        let pinned = self.pinned_dim()?;
+        if pinned != dim {
+            return Err(FactorError::BlockDimMismatch {
+                pinned: pinned.total(),
+                claimed: dim.total(),
+            });
+        }
+        match self {
+            Self::Approximate(sequence) => sequence.validate_values(),
+            Self::Exact(lower) => lower.validate_values(),
         }
     }
 }
