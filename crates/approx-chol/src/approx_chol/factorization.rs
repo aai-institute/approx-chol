@@ -48,7 +48,6 @@ pub(crate) enum FactorError {
         neighbor: u32,
         n: usize,
     },
-    /// No dimension pins a packed triangle of this length.
     ExactFactorLengthInvalid {
         len: usize,
     },

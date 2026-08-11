@@ -305,11 +305,9 @@ impl<T> EliminationSequence<T> {
         }
     }
 
-    /// Every step eliminates one vertex and one is left over, so the step count is
-    /// what tiles the block.
     #[cfg(any(feature = "serde", test))]
     pub(super) fn pinned_dim(&self) -> BlockDim {
-        BlockDim::of(self.steps.len() + 1).expect("a step count plus the pinned vertex is non-zero")
+        BlockDim::pinning(self.n_steps())
     }
 
     /// The ranges need no check — they are rebuilt from the nested persisted form,

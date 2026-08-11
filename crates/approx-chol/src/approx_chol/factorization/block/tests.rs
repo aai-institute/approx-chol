@@ -68,21 +68,6 @@ fn valid_fixtures_pass() {
     }
 }
 
-/// A dim no payload of any length could pin, so nothing downstream ever gets to sum it.
-#[test]
-fn a_dim_its_cholesky_cannot_pin_never_becomes_a_block() {
-    let mut data = exact();
-    data.dim = BlockDim::of(usize::MAX).expect("non-zero");
-
-    assert_eq!(
-        Block::try_from(data).expect_err("an unpinned dim must be rejected"),
-        FactorError::BlockDimMismatch {
-            pinned: 3,
-            claimed: usize::MAX,
-        }
-    );
-}
-
 /// Every variant a block's own cholesky can raise.
 #[test]
 fn every_block_error_variant_is_reachable() {
@@ -158,6 +143,15 @@ fn every_block_error_variant_is_reachable() {
             FactorError::BlockDimMismatch {
                 pinned: 2,
                 claimed: 3,
+            },
+        ),
+        (
+            "the exact factor pins fewer variables than the block claims",
+            exact,
+            |d| d.dim = dim(4),
+            FactorError::BlockDimMismatch {
+                pinned: 3,
+                claimed: 4,
             },
         ),
         (

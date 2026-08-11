@@ -179,7 +179,6 @@ impl<T: Real> LowerTriangular<T> {
 
 #[cfg(any(feature = "serde", test))]
 impl<T: num_traits::Float> LowerTriangular<T> {
-    /// The triangle's own row count plus the variable it leaves pinned.
     pub(super) fn pinned_dim(&self) -> Result<BlockDim, FactorError> {
         let rows = self.rows();
         if packed_len(rows) != Some(self.values.len()) {
@@ -187,12 +186,11 @@ impl<T: num_traits::Float> LowerTriangular<T> {
                 len: self.values.len(),
             });
         }
-        Ok(BlockDim::of(rows + 1).expect("a row count plus the pinned variable is non-zero"))
+        Ok(BlockDim::pinning(rows))
     }
 
     pub(super) fn validate_values(&self) -> Result<(), FactorError> {
-        // Through `pinned_dim`, so no call order leaves the entries past the last
-        // complete row unread.
+        // Through `pinned_dim`, so no call order leaves the trailing entries unread.
         for row in 0..self.pinned_dim()?.solved() {
             let entries = self.row(row);
             // `substitute` divides by each diagonal entry twice per row, so a
@@ -239,8 +237,6 @@ mod tests {
         }
     }
 
-    /// The entries past the last complete row are the ones a row loop bounded by
-    /// `rows()` would never read, so validating values alone must still reject.
     #[test]
     fn values_past_the_last_complete_row_are_not_validated_around() {
         assert_eq!(

@@ -36,8 +36,7 @@ impl<T: Real> Cholesky<T> {
 
 #[cfg(any(feature = "serde", test))]
 impl<T: num_traits::Float> Cholesky<T> {
-    /// The dim the payload itself covers. An arm cannot answer `Ok(())` here, so one
-    /// added without saying how many variables it spans does not compile.
+    /// Takes no `dim`, so an arm cannot launder the claimed one back as its answer.
     fn pinned_dim(&self) -> Result<BlockDim, FactorError> {
         match self {
             Self::Approximate(sequence) => Ok(sequence.pinned_dim()),

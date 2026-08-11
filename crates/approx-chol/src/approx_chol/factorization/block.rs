@@ -8,8 +8,8 @@ use core::num::NonZeroUsize;
 #[cfg(test)]
 mod tests;
 
-/// A block's dimension in both forms its consumers ask for, so none of them spells
-/// the pinned variable's subtraction itself.
+/// A block's dimension in both forms its consumers ask for, and derivable from either,
+/// so none of them spells the pinned variable's offset itself.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,6 +20,10 @@ impl BlockDim {
     /// underflow.
     pub(crate) fn of(total: usize) -> Option<Self> {
         NonZeroUsize::new(total).map(Self)
+    }
+
+    pub(crate) fn pinning(solved: usize) -> Self {
+        Self(NonZeroUsize::MIN.saturating_add(solved))
     }
 
     pub(crate) fn total(self) -> usize {
