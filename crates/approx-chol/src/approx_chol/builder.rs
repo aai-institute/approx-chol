@@ -43,6 +43,21 @@ where
         self.build_validated(narrowed.with_values(csr.values()))
     }
 
+    /// Measurement arm for #69: what an additive `u32` entry point would do — no
+    /// `catch_unwind`, no narrowing copy.
+    #[doc(hidden)]
+    pub fn build_u32(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
+        self.build_validated(sddm)
+    }
+
+    /// Control for #69: identical to `build_u32` except it pays the narrowing copy,
+    /// so the pair differs by the copy alone and not by generics or `catch_unwind`.
+    #[doc(hidden)]
+    pub fn build_u32_narrow(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
+        let narrowed = sddm.narrow_indices()?;
+        self.build_validated(narrowed.with_values(sddm.values()))
+    }
+
     /// The multiplicity decides layout and split together, so each arm names one
     /// algorithm end to end.
     fn build_validated(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
