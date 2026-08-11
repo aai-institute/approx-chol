@@ -59,28 +59,24 @@ mod validation {
         }
     }
 
-    fn of_blocks(original_n: usize, blocks: Vec<Block<f64>>) -> Factor<f64> {
-        Factor {
-            original_n,
-            permutation: None,
-            blocks,
-            fallbacks: Vec::new(),
-        }
+    fn of_blocks(blocks: Vec<Block<f64>>) -> Factor<f64> {
+        Factor::of(None, blocks, Vec::new())
+    }
+
+    fn validate(factor: &Factor<f64>) -> Result<(), FactorError> {
+        Factor::validate_structure(&factor.blocks, factor.permutation.as_ref())
     }
 
     fn with_cholesky(cholesky: Cholesky<f64>) -> Factor<f64> {
-        of_blocks(3, vec![Block::new(dim(3), Anchor::Floating, cholesky)])
+        of_blocks(vec![Block::new(dim(3), Anchor::Floating, cholesky)])
     }
 
     /// Two blocks tiling `5 + 1` variables, both claiming the one ground vertex.
     fn two_ground_blocks() -> Factor<f64> {
-        of_blocks(
-            5,
-            vec![
-                Block::new(dim(3), Anchor::Ground, Cholesky::Approximate(sequence())),
-                Block::new(dim(3), Anchor::Ground, Cholesky::Approximate(sequence())),
-            ],
-        )
+        of_blocks(vec![
+            Block::new(dim(3), Anchor::Ground, Cholesky::Approximate(sequence())),
+            Block::new(dim(3), Anchor::Ground, Cholesky::Approximate(sequence())),
+        ])
     }
 
     fn approx() -> Factor<f64> {
@@ -111,10 +107,31 @@ mod validation {
     #[test]
     fn valid_fixtures_pass() {
         for (label, factor) in [("approximate", approx()), ("exact", exact())] {
-            factor
-                .validate_structure()
-                .unwrap_or_else(|error| panic!("{label} fixture is valid: {error}"));
+            validate(&factor).unwrap_or_else(|error| panic!("{label} fixture is valid: {error}"));
         }
+    }
+
+    /// Two blocks whose dims cannot be added; each is checked against its own cholesky
+    /// before it is summed, so the total is never formed.
+    #[test]
+    fn dims_that_cannot_be_summed_are_rejected_before_they_are() {
+        let huge = || {
+            Block::new(
+                BlockDim::of(usize::MAX).expect("non-zero"),
+                Anchor::Floating,
+                Cholesky::Exact(LowerTriangular {
+                    values: vec![1.0; 3],
+                }),
+            )
+        };
+
+        assert_eq!(
+            Factor::validate_structure(&[huge(), huge()], None),
+            Err(FactorError::ExactFactorLengthInvalid {
+                n: usize::MAX,
+                len: 3,
+            })
+        );
     }
 
     /// Every variant but `NonzeroCountExceedsU32`, which needs more than `u32::MAX`
@@ -141,33 +158,6 @@ mod validation {
                     step: 0,
                     neighbor: 99,
                     n: 3,
-                },
-            ),
-            (
-                "blocks do not cover n",
-                approx,
-                |f| f.original_n = 4,
-                FactorError::BlockDimsDoNotCoverFactor { covered: 3, n: 4 },
-            ),
-            (
-                // The anchor is what `n` is derived from, so claiming a ground
-                // vertex now claims a variable the blocks do not tile.
-                "a ground anchor with no ground vertex to hold",
-                approx,
-                |f| f.blocks[0].anchor = Anchor::Ground,
-                FactorError::BlockDimsDoNotCoverFactor { covered: 3, n: 4 },
-            ),
-            (
-                // The augmentation is what pushes the sum past the end of the address
-                // space, so only a grounded factor can reach this.
-                "a grounded factor's dimension leaves no room for its ground vertex",
-                approx,
-                |f| {
-                    f.blocks[0].anchor = Anchor::Ground;
-                    f.original_n = usize::MAX;
-                },
-                FactorError::AugmentedDimensionOverflows {
-                    original_n: usize::MAX,
                 },
             ),
             (
@@ -279,9 +269,8 @@ mod validation {
         for (label, build, corrupt, expected) in cases {
             let mut factor = build();
             corrupt(&mut factor);
-            let error = factor
-                .validate_structure()
-                .expect_err(&format!("{label}: corruption must be rejected"));
+            let error =
+                validate(&factor).expect_err(&format!("{label}: corruption must be rejected"));
             assert_eq!(error, expected, "{label}");
         }
     }

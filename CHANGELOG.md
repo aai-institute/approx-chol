@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- A persisted `Factor` no longer carries `original_n`; it is derived from the blocks, and
+  `FACTOR_FORMAT_VERSION` is `0x41430003`. ([#118])
+- A deserialized `Factor` no longer rejects a tampered block anchor, which 0.4.0
+  documented as rejected. ([#118])
+
 ### Changed
 
 - A block routed to the exact dense backend no longer gets an elimination graph built for
@@ -173,3 +180,4 @@ for graph Laplacians in Rust with Python bindings.
 [#92]: https://github.com/aai-institute/approx-chol/issues/92
 [#93]: https://github.com/aai-institute/approx-chol/issues/93
 [#109]: https://github.com/aai-institute/approx-chol/issues/109
+[#118]: https://github.com/aai-institute/approx-chol/issues/118

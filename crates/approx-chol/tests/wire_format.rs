@@ -8,9 +8,9 @@ mod residual;
 use approx_chol::{factorize_with, Config, CsrRef, Factor, FACTOR_FORMAT_VERSION};
 use rstest::rstest;
 
-/// Written by `a06782e^`, the last build before the version moved to `0x41430002`.
-const PRE_BUMP: &str = include_str!("fixtures/pre_bump_0x41430001.json");
-const PRE_BUMP_VERSION: u32 = 0x4143_0001;
+/// The interleaved payload as it was written before the version moved to `0x41430003`.
+const PRE_BUMP: &str = include_str!("fixtures/pre_bump_0x41430002.json");
+const PRE_BUMP_VERSION: u32 = 0x4143_0002;
 
 /// Zero-sum over each component, so the floating case has an exact solution.
 const B: [f64; 4] = [1.0, 2.0, -1.0, -2.0];
@@ -52,8 +52,8 @@ const GROUNDED: Matrix = Matrix {
 const FIXTURES: [&Matrix; 2] = [&INTERLEAVED, &GROUNDED];
 
 #[rstest]
-#[case::interleaved(&INTERLEAVED, include_str!("fixtures/interleaved_0x41430002.json"))]
-#[case::grounded_sddm(&GROUNDED, include_str!("fixtures/grounded_sddm_0x41430002.json"))]
+#[case::interleaved(&INTERLEAVED, include_str!("fixtures/interleaved_0x41430003.json"))]
+#[case::grounded_sddm(&GROUNDED, include_str!("fixtures/grounded_sddm_0x41430003.json"))]
 fn a_committed_payload_decodes_and_still_solves(#[case] matrix: &Matrix, #[case] committed: &str) {
     let restored: Factor<f64> = serde_json::from_str(committed)
         .expect("committed payload must decode; regenerate it if the format version moved");
