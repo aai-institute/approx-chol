@@ -68,21 +68,6 @@ fn valid_fixtures_pass() {
     }
 }
 
-/// A dim no payload of any length could pin, so nothing downstream ever gets to sum it.
-#[test]
-fn a_dim_its_cholesky_cannot_pin_never_becomes_a_block() {
-    let mut data = exact();
-    data.dim = BlockDim::of(usize::MAX).expect("non-zero");
-
-    assert_eq!(
-        Block::try_from(data).expect_err("an unpinned dim must be rejected"),
-        FactorError::ExactFactorLengthInvalid {
-            n: usize::MAX,
-            len: 3,
-        }
-    );
-}
-
 /// Every variant a block's own cholesky can raise.
 #[test]
 fn every_block_error_variant_is_reachable() {
@@ -155,7 +140,19 @@ fn every_block_error_variant_is_reachable() {
             |d| {
                 seq_of(d).steps.truncate(1);
             },
-            FactorError::StepCountDoesNotTileBlock { steps: 1, n: 3 },
+            FactorError::BlockDimMismatch {
+                pinned: 2,
+                claimed: 3,
+            },
+        ),
+        (
+            "the exact factor pins fewer variables than the block claims",
+            exact,
+            |d| d.dim = dim(4),
+            FactorError::BlockDimMismatch {
+                pinned: 3,
+                claimed: 4,
+            },
         ),
         (
             "one vertex is eliminated twice, so another never is",
@@ -167,7 +164,7 @@ fn every_block_error_variant_is_reachable() {
             "exact factor shorter than its block",
             exact,
             |d| lower_of(d).values.truncate(2),
-            FactorError::ExactFactorLengthInvalid { n: 3, len: 2 },
+            FactorError::ExactFactorLengthInvalid { len: 2 },
         ),
         (
             "exact factor pivot is zero",

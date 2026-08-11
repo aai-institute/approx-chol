@@ -179,15 +179,19 @@ impl<T: Real> LowerTriangular<T> {
 
 #[cfg(any(feature = "serde", test))]
 impl<T: num_traits::Float> LowerTriangular<T> {
-    pub(super) fn validate_for_dim(&self, dim: BlockDim) -> Result<(), FactorError> {
-        let m = dim.solved();
-        if packed_len(m) != Some(self.values.len()) {
+    pub(super) fn pinned_dim(&self) -> Result<BlockDim, FactorError> {
+        let rows = self.rows();
+        if packed_len(rows) != Some(self.values.len()) {
             return Err(FactorError::ExactFactorLengthInvalid {
-                n: dim.total(),
                 len: self.values.len(),
             });
         }
-        for row in 0..m {
+        Ok(BlockDim::pinning(rows))
+    }
+
+    pub(super) fn validate_values(&self) -> Result<(), FactorError> {
+        // Through `pinned_dim`, so no call order leaves the trailing entries unread.
+        for row in 0..self.pinned_dim()?.solved() {
             let entries = self.row(row);
             // `substitute` divides by each diagonal entry twice per row, so a
             // pivot whose reciprocal overflows cannot be divided by either.
@@ -231,6 +235,18 @@ mod tests {
                 "diagonal {diagonal}"
             );
         }
+    }
+
+    #[test]
+    fn values_past_the_last_complete_row_are_not_validated_around() {
+        assert_eq!(
+            LowerTriangular {
+                values: vec![1.0, 1.0, 1.0, f64::NAN],
+            }
+            .validate_values()
+            .expect_err("a length no triangle has must be rejected"),
+            FactorError::ExactFactorLengthInvalid { len: 4 },
+        );
     }
 
     #[test]

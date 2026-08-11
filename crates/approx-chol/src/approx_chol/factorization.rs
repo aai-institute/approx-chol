@@ -49,7 +49,6 @@ pub(crate) enum FactorError {
         n: usize,
     },
     ExactFactorLengthInvalid {
-        n: usize,
         len: usize,
     },
     ExactPivotInvalid {
@@ -65,9 +64,9 @@ pub(crate) enum FactorError {
         vertex: u32,
         n: usize,
     },
-    StepCountDoesNotTileBlock {
-        steps: usize,
-        n: usize,
+    BlockDimMismatch {
+        pinned: usize,
+        claimed: usize,
     },
     VertexEliminatedTwice {
         step: usize,
