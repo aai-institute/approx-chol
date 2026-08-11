@@ -22,6 +22,7 @@ impl BlockDim {
         NonZeroUsize::new(total).map(Self)
     }
 
+    #[cfg(any(feature = "serde", test))]
     pub(crate) fn pinning(solved: usize) -> Self {
         Self(NonZeroUsize::MIN.saturating_add(solved))
     }
