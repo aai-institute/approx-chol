@@ -82,6 +82,27 @@ fn deserializing_corrupted_factor_is_rejected() {
     assert!(serde_json::from_value::<Factor<f64>>(value).is_err());
 }
 
+/// Deliberate, and the cost of deriving the dimension: no wire fact contradicts an anchor
+/// any more, so tampering with one answers a different system instead of being an error.
+#[test]
+fn a_tampered_block_anchor_deserializes_and_answers_a_different_system() {
+    let factor = path_factor();
+    let mut value = serde_json::to_value(&factor).expect("serialize factor");
+    value["blocks"][0]["anchor"] = serde_json::Value::from("Ground");
+
+    let restored: Factor<f64> =
+        serde_json::from_value(value).expect("nothing on the wire falsifies an anchor");
+    assert_eq!(restored.n(), factor.n());
+    assert_eq!(restored.original_n(), factor.original_n() - 1);
+
+    // The anchor decides whether the block's last entry is pinned or projected out, so
+    // the tampered factor is not merely one variable short.
+    let b = [1.0, 2.0, -3.0];
+    let honest = factor.solve(&b).expect("solve the honest factor");
+    let tampered = restored.solve(&b).expect("solve the tampered factor");
+    assert_ne!(honest[..tampered.len()], tampered[..]);
+}
+
 #[test]
 fn a_payload_declares_the_format_version_it_was_written_with() {
     let value = serde_json::to_value(path_factor()).expect("serialize factor");

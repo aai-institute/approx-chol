@@ -12,9 +12,9 @@ mod tests;
 /// low half whenever the serialized representation changes in a way an older reader would
 /// misread. A non-self-describing format reads the field positionally, so the tag half
 /// keeps a payload that predates the field from passing the check on whatever `usize` led
-/// it — `1` would collide with the `original_n` of a one-variable system.
+/// it — `1` would collide with the dimension a one-variable system led with.
 #[cfg(feature = "serde")]
-pub const FACTOR_FORMAT_VERSION: u32 = 0x4143_0002;
+pub const FACTOR_FORMAT_VERSION: u32 = 0x4143_0003;
 
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 #[cfg_attr(
@@ -27,7 +27,7 @@ pub const FACTOR_FORMAT_VERSION: u32 = 0x4143_0002;
 #[derive(Clone, Debug)]
 /// Exact or approximate Cholesky decomposition of an SDDM matrix.
 pub struct Factor<T = f64> {
-    original_n: usize,
+    n: usize,
     permutation: Option<Permutation>,
     blocks: Vec<Block<T>>,
     fallbacks: Vec<Fallback>,
@@ -40,7 +40,6 @@ pub struct Factor<T = f64> {
 #[serde(bound(serialize = "T: serde::Serialize"))]
 struct FactorRef<'a, T> {
     format_version: u32,
-    original_n: usize,
     permutation: Option<&'a Permutation>,
     blocks: &'a [Block<T>],
     fallbacks: &'a [Fallback],
@@ -51,7 +50,6 @@ impl<T: serde::Serialize> serde::Serialize for Factor<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         FactorRef {
             format_version: FACTOR_FORMAT_VERSION,
-            original_n: self.original_n,
             permutation: self.permutation.as_ref(),
             blocks: &self.blocks,
             fallbacks: &self.fallbacks,
@@ -68,7 +66,6 @@ impl<T: serde::Serialize> serde::Serialize for Factor<T> {
 struct FactorData<T> {
     #[serde(default)]
     format_version: u32,
-    original_n: usize,
     permutation: Option<Permutation>,
     blocks: Vec<Block<T>>,
     #[serde(default)]
@@ -86,14 +83,8 @@ impl<T: num_traits::Float> TryFrom<FactorData<T>> for Factor<T> {
                 supported: FACTOR_FORMAT_VERSION,
             });
         }
-        let factor = Self {
-            original_n: data.original_n,
-            permutation: data.permutation,
-            blocks: data.blocks,
-            fallbacks: data.fallbacks,
-        };
-        factor.validate_structure()?;
-        Ok(factor)
+        Self::validate_structure(&data.blocks, data.permutation.as_ref())?;
+        Ok(Self::of(data.permutation, data.blocks, data.fallbacks))
     }
 }
 
@@ -122,32 +113,22 @@ impl fmt::Display for Fallback {
 
 #[cfg(any(feature = "serde", test))]
 impl<T: num_traits::Float> Factor<T> {
-    fn validate_structure(&self) -> Result<(), FactorError> {
+    pub(super) fn validate_structure(
+        blocks: &[Block<T>],
+        permutation: Option<&Permutation>,
+    ) -> Result<(), FactorError> {
         // A Ground anchor overwrites its block's last entry with `-sum`, so a second
         // one silently solves a different system.
-        let grounded = self.ground_blocks();
+        let grounded = Self::ground_blocks(blocks);
         if grounded > 1 {
             return Err(FactorError::MultipleGroundBlocks { grounded });
         }
-        // `n()` adds the augmentation to a dimension the payload chose, and adds it bare.
-        // This is where that sum is proven to fit, so the formula stays in one place.
-        if self.original_n > usize::MAX - grounded {
-            return Err(FactorError::AugmentedDimensionOverflows {
-                original_n: self.original_n,
-            });
-        }
-        let n = self.n();
-        let mut covered = 0usize;
-        for block in &self.blocks {
+        let n = blocks.iter().try_fold(0usize, |covered, block| {
             block.cholesky.validate_for_dim(block.dim)?;
-            covered = covered
-                .checked_add(block.dim.total())
-                .ok_or(FactorError::BlockDimsDoNotCoverFactor { covered, n })?;
-        }
-        if covered != n {
-            return Err(FactorError::BlockDimsDoNotCoverFactor { covered, n });
-        }
-        if let Some(permutation) = &self.permutation {
+            // A checked dim is pinned to the data behind it, so the total cannot overflow.
+            Ok(covered + block.dim.total())
+        })?;
+        if let Some(permutation) = permutation {
             permutation.validate_for_dim(n)?;
         }
         Ok(())
@@ -205,19 +186,33 @@ impl<T> Factor<T> {
 
     /// Dimension of the original input matrix.
     pub fn original_n(&self) -> usize {
-        self.original_n
+        self.n - Self::ground_blocks(&self.blocks)
     }
 
     /// Internal factor dimension, including a possible ground vertex.
     #[inline]
     pub fn n(&self) -> usize {
-        self.original_n + self.ground_blocks()
+        self.n
+    }
+
+    /// The one place `n` is ever written, so it cannot drift from the blocks it sums.
+    fn of(
+        permutation: Option<Permutation>,
+        blocks: Vec<Block<T>>,
+        fallbacks: Vec<Fallback>,
+    ) -> Self {
+        Self {
+            n: blocks.iter().map(|block| block.dim.total()).sum(),
+            permutation,
+            blocks,
+            fallbacks,
+        }
     }
 
     /// Nothing else records that the ground vertex exists, and at most one block can
     /// hold it.
-    fn ground_blocks(&self) -> usize {
-        self.blocks
+    fn ground_blocks(blocks: &[Block<T>]) -> usize {
+        blocks
             .iter()
             .filter(|block| block.anchor == Anchor::Ground)
             .count()
@@ -229,24 +224,21 @@ where
     T: num_traits::Float + Send + Sync + 'static,
 {
     pub(crate) fn from_blocks(
-        original_n: usize,
         permutation: Option<Permutation>,
         blocks: Vec<Block<T>>,
         fallbacks: Vec<Fallback>,
     ) -> Self {
-        let factor = Self {
-            original_n,
-            permutation,
-            blocks,
-            fallbacks,
-        };
+        let factor = Self::of(permutation, blocks, fallbacks);
         #[cfg(any(feature = "serde", test))]
-        debug_assert_eq!(factor.validate_structure(), Ok(()));
+        debug_assert_eq!(
+            Self::validate_structure(&factor.blocks, factor.permutation.as_ref()),
+            Ok(())
+        );
         factor
     }
 
-    pub(crate) fn empty(original_n: usize) -> Self {
-        Self::from_blocks(original_n, None, Vec::new(), Vec::new())
+    pub(crate) fn empty() -> Self {
+        Self::from_blocks(None, Vec::new(), Vec::new())
     }
 
     /// Total elimination steps across all blocks: every block solves for all but one of
@@ -302,16 +294,17 @@ where
     pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
         let mut work = vec![T::zero(); self.n()];
         self.solve_into(b, &mut work)?;
-        work.truncate(self.original_n);
+        work.truncate(self.original_n());
         Ok(work)
     }
 
     /// Solve `M x = b` into a caller-provided work buffer.
     pub fn solve_into(&self, b: &[T], work: &mut [T]) -> Result<(), SolveError> {
-        if b.len() > self.original_n {
+        let original_n = self.original_n();
+        if b.len() > original_n {
             return Err(SolveError::RhsLengthExceedsFactor {
                 rhs_len: b.len(),
-                factor_dim: self.original_n,
+                factor_dim: original_n,
             });
         }
         self.validate_work(work)?;

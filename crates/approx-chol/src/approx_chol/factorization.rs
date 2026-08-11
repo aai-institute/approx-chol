@@ -48,13 +48,6 @@ pub(crate) enum FactorError {
         neighbor: u32,
         n: usize,
     },
-    BlockDimsDoNotCoverFactor {
-        covered: usize,
-        n: usize,
-    },
-    AugmentedDimensionOverflows {
-        original_n: usize,
-    },
     ExactFactorLengthInvalid {
         n: usize,
         len: usize,

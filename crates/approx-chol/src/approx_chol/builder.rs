@@ -49,26 +49,26 @@ where
         let original_n = sddm.n();
         let ingestion = Ingestion::of(sddm)?;
         match self.config.split_factor() {
-            None => self.factor_blocks::<Single>(ingestion, original_n, ()),
-            Some(k) => self.factor_blocks::<Multi>(ingestion, original_n, k),
+            None => self.factor_blocks::<Single>(ingestion, ()),
+            Some(k) => self.factor_blocks::<Multi>(ingestion, k),
         }
+        // The only scope holding both the caller's dimension and the finished factor.
+        .inspect(|factor| debug_assert_eq!(factor.original_n(), original_n))
     }
 
     fn factor_blocks<C: EdgeCount>(
         &self,
         mut ingestion: Ingestion<'_, T>,
-        original_n: usize,
         split: C::Split,
     ) -> Result<Factor<T>, Error> {
         if ingestion.n() == 0 {
-            return Ok(Factor::empty(original_n));
+            return Ok(Factor::empty());
         }
         let mut factorizer = BlockFactorizer::<T, C>::new(self.config, split);
         let Some(layout) = ingestion.take_layout() else {
             let whole = BlockVertices::whole(ingestion.n());
             let (block, fallback) = factorizer.factor(&mut ingestion, &whole)?;
             return Ok(Factor::from_blocks(
-                original_n,
                 None,
                 vec![block],
                 fallback.into_iter().collect(),
@@ -86,7 +86,6 @@ where
             fallbacks.extend(fallback);
         }
         Ok(Factor::from_blocks(
-            original_n,
             Permutation::from_order(layout.into_order()),
             blocks,
             fallbacks,
