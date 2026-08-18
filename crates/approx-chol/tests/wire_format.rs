@@ -5,12 +5,12 @@
 #[path = "common/residual.rs"]
 mod residual;
 
-use approx_chol::{factorize_with, Config, CsrRef, Factor, FACTOR_FORMAT_VERSION};
+use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, FACTOR_FORMAT_VERSION};
 use rstest::rstest;
 
-/// The interleaved payload as it was written before the version moved to `0x41430003`.
-const PRE_BUMP: &str = include_str!("fixtures/pre_bump_0x41430002.json");
-const PRE_BUMP_VERSION: u32 = 0x4143_0002;
+/// The interleaved payload as it was written before the version moved to `0x41430004`.
+const PRE_BUMP: &str = include_str!("fixtures/pre_bump_0x41430003.json");
+const PRE_BUMP_VERSION: u32 = 0x4143_0003;
 
 /// Zero-sum over each component, so the floating case has an exact solution.
 const B: [f64; 4] = [1.0, 2.0, -1.0, -2.0];
@@ -20,6 +20,11 @@ struct Matrix {
     row_ptrs: &'static [u32],
     col_indices: &'static [u32],
     values: &'static [f64],
+    /// `None` takes the crate default rather than restating it here.
+    backend: Option<Backend>,
+    /// An exactly-factored fixture solves its own matrix; a sampled one only preconditions
+    /// it, so what pins a sampled payload is its agreement with a fresh factor below.
+    residual_bound: f64,
 }
 
 impl Matrix {
@@ -29,7 +34,11 @@ impl Matrix {
     }
 
     fn factor(&self) -> Factor<f64> {
-        factorize_with(self.csr(), Config::default()).expect("factorization should succeed")
+        let config = Config {
+            backend: self.backend.unwrap_or_default(),
+            ..Config::default()
+        };
+        factorize_with(self.csr(), config).expect("factorization should succeed")
     }
 }
 
@@ -39,6 +48,8 @@ const INTERLEAVED: Matrix = Matrix {
     row_ptrs: &[0, 2, 4, 6, 8],
     col_indices: &[0, 2, 1, 3, 0, 2, 1, 3],
     values: &[1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0],
+    backend: None,
+    residual_bound: 1e-12,
 };
 
 /// Strictly dominant, so ingestion grounds it and the payload carries a ground anchor.
@@ -47,13 +58,34 @@ const GROUNDED: Matrix = Matrix {
     row_ptrs: &[0, 2, 5, 8, 10],
     col_indices: &[0, 1, 0, 1, 2, 1, 2, 3, 2, 3],
     values: &[2.0, -1.0, -1.0, 3.0, -1.0, -1.0, 3.0, -1.0, -1.0, 2.0],
+    backend: None,
+    residual_bound: 1e-12,
 };
 
-const FIXTURES: [&Matrix; 2] = [&INTERLEAVED, &GROUNDED];
+/// `K5` under the approximate arm: the default backend takes a block this small exactly,
+/// so the encoding of an elimination sequence would otherwise go unfrozen — and every step
+/// here carries several neighbors, so the composed coefficients are something other than
+/// the lone `1.0` a two-vertex block would pin.
+const SAMPLED: Matrix = Matrix {
+    name: "sampled_k5",
+    row_ptrs: &[0, 5, 10, 15, 20, 25],
+    col_indices: &[
+        0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4,
+    ],
+    values: &[
+        4.0, -1.0, -1.0, -1.0, -1.0, -1.0, 4.0, -1.0, -1.0, -1.0, -1.0, -1.0, 4.0, -1.0, -1.0,
+        -1.0, -1.0, -1.0, 4.0, -1.0, -1.0, -1.0, -1.0, -1.0, 4.0,
+    ],
+    backend: Some(Backend::Approximate),
+    residual_bound: 0.5,
+};
+
+const FIXTURES: [&Matrix; 3] = [&INTERLEAVED, &GROUNDED, &SAMPLED];
 
 #[rstest]
-#[case::interleaved(&INTERLEAVED, include_str!("fixtures/interleaved_0x41430003.json"))]
-#[case::grounded_sddm(&GROUNDED, include_str!("fixtures/grounded_sddm_0x41430003.json"))]
+#[case::interleaved(&INTERLEAVED, include_str!("fixtures/interleaved_0x41430004.json"))]
+#[case::grounded_sddm(&GROUNDED, include_str!("fixtures/grounded_sddm_0x41430004.json"))]
+#[case::sampled_k5(&SAMPLED, include_str!("fixtures/sampled_k5_0x41430004.json"))]
 fn a_committed_payload_decodes_and_still_solves(#[case] matrix: &Matrix, #[case] committed: &str) {
     let restored: Factor<f64> = serde_json::from_str(committed)
         .expect("committed payload must decode; regenerate it if the format version moved");
@@ -66,9 +98,10 @@ fn a_committed_payload_decodes_and_still_solves(#[case] matrix: &Matrix, #[case]
     let x = restored.solve(&B).expect("solve the restored factor");
     let residual = residual::relative_residual_over(matrix.csr(), &x, &B, 0..B.len());
     assert!(
-        residual < 1e-12,
+        residual < matrix.residual_bound,
         "the committed payload decoded to a factor that no longer solves its own matrix: \
-         relative residual {residual:e}"
+         relative residual {residual:e} against a bound of {:e}",
+        matrix.residual_bound
     );
 
     // The residual alone is satisfied by any valid factor, not only the one that wrote these bytes.

@@ -13,7 +13,7 @@ mod tests;
 /// keeps a payload that predates the field from passing the check on whatever `usize` led
 /// it — `1` would collide with the dimension a one-variable system led with.
 #[cfg(feature = "serde")]
-pub const FACTOR_FORMAT_VERSION: u32 = 0x4143_0003;
+pub const FACTOR_FORMAT_VERSION: u32 = 0x4143_0004;
 
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 #[cfg_attr(

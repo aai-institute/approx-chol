@@ -74,12 +74,16 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
     )
 }
 
+/// Independent lanes for the backward gather; float addition is not ours to reassociate.
+const LANES: usize = 4;
+
 /// Zero-copy view of one elimination step.
 struct EliminationStep<'a, T> {
     vertex: usize,
-    inv_diag: T,
+    /// `D^{-1}` already scaled by what the neighbors left, so no pass rebuilds it.
+    pivot_scale: T,
     neighbor_indices: &'a [u32],
-    elimination_fractions: &'a [T],
+    coefficients: &'a [T],
 }
 
 /// Neither kernel bounds-checks per step: the caller asserts `y.len() >= n` once per
@@ -89,53 +93,35 @@ impl<'a, T: Real> EliminationStep<'a, T> {
     /// Forward elimination: scatter pivot weight to neighbors, then scale by D^{-1}.
     #[inline(always)]
     fn apply_forward(&self, y: &mut [T]) {
-        let vertex = self.vertex;
-        let inv_diag = self.inv_diag;
-        let n = self.neighbor_indices.len();
-        let one = T::one();
-        if n == 0 {
-            y[vertex] = y[vertex] * inv_diag;
-            return;
-        }
-
-        let mut yi = y[vertex];
-
-        for (&j, &f) in self.neighbor_indices[..n - 1]
-            .iter()
-            .zip(self.elimination_fractions.iter())
-        {
+        let pivot = y[self.vertex];
+        for (&j, &c) in self.neighbor_indices.iter().zip(self.coefficients.iter()) {
             let j = j as usize;
-            y[j] = y[j] + f * yi;
-            yi = yi * (one - f);
+            y[j] = y[j] + c * pivot;
         }
-
-        let j_last = self.neighbor_indices[n - 1] as usize;
-        y[j_last] = y[j_last] + yi;
-        y[vertex] = yi * inv_diag;
+        y[self.vertex] = pivot * self.pivot_scale;
     }
 
-    /// Backward substitution: gather neighbor contributions back to pivot.
+    /// Four accumulators, not one: a lone `total + c * y[j]` would reinstate the serial
+    /// dependency the composed coefficients exist to break.
     #[inline(always)]
     fn apply_backward(&self, y: &mut [T]) {
-        let vertex = self.vertex;
-        let n = self.neighbor_indices.len();
-        let one = T::one();
-        if n == 0 {
+        let Some((&retained, _)) = self.coefficients.split_last() else {
             return;
+        };
+        let mut lanes = [retained * y[self.vertex], T::zero(), T::zero(), T::zero()];
+        let mut neighbors = self.neighbor_indices.chunks_exact(LANES);
+        let mut coefficients = self.coefficients.chunks_exact(LANES);
+        for (js, cs) in neighbors.by_ref().zip(coefficients.by_ref()) {
+            lanes[0] = lanes[0] + cs[0] * y[js[0] as usize];
+            lanes[1] = lanes[1] + cs[1] * y[js[1] as usize];
+            lanes[2] = lanes[2] + cs[2] * y[js[2] as usize];
+            lanes[3] = lanes[3] + cs[3] * y[js[3] as usize];
         }
-
-        let j_last = self.neighbor_indices[n - 1] as usize;
-        let mut yi = y[vertex] + y[j_last];
-
-        for (&j, &f) in self.neighbor_indices[..n - 1]
-            .iter()
-            .zip(self.elimination_fractions.iter())
-            .rev()
-        {
-            yi = (one - f) * yi + f * y[j as usize];
+        let mut total = (lanes[0] + lanes[1]) + (lanes[2] + lanes[3]);
+        for (&j, &c) in neighbors.remainder().iter().zip(coefficients.remainder()) {
+            total = total + c * y[j as usize];
         }
-
-        y[vertex] = yi;
+        y[self.vertex] = total;
     }
 }
 
@@ -145,7 +131,8 @@ impl<'a, T: Real> EliminationStep<'a, T> {
 pub(crate) struct StepHeader<T> {
     pub(crate) vertex: u32,
     pub(crate) end: u32,
-    pub(crate) inv_diag: T,
+    /// `D^{-1}` premultiplied by the step's retained fraction, so no pass rebuilds it.
+    pub(crate) pivot_scale: T,
 }
 
 /// The solve path keeps flat split arrays; a persisted sequence nests neighbors under
@@ -162,7 +149,8 @@ pub(crate) struct StepHeader<T> {
 pub(crate) struct EliminationSequence<T> {
     pub(crate) steps: Vec<StepHeader<T>>,
     pub(crate) neighbor_indices: Vec<u32>,
-    pub(crate) elimination_fractions: Vec<T>,
+    /// What each neighbor takes of the *original* pivot, not of what predecessors left.
+    pub(crate) coefficients: Vec<T>,
     /// The one vertex no step eliminates, so nothing divides its entry by a pivot.
     pub(crate) uneliminated: u32,
 }
@@ -174,7 +162,7 @@ pub(crate) struct EliminationSequence<T> {
 #[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
 struct StepData<T> {
     vertex: u32,
-    inv_diag: T,
+    pivot_scale: T,
     neighbors: Vec<(u32, T)>,
 }
 
@@ -193,11 +181,11 @@ impl<T> TryFrom<SequenceData<T>> for EliminationSequence<T> {
     fn try_from(data: SequenceData<T>) -> Result<Self, Self::Error> {
         let mut steps = Vec::with_capacity(data.steps.len());
         let mut neighbor_indices = Vec::new();
-        let mut elimination_fractions = Vec::new();
+        let mut coefficients = Vec::new();
         for step in data.steps {
-            for (neighbor, fraction) in step.neighbors {
+            for (neighbor, coefficient) in step.neighbors {
                 neighbor_indices.push(neighbor);
-                elimination_fractions.push(fraction);
+                coefficients.push(coefficient);
             }
             let nnz = neighbor_indices.len();
             // The only range invariant the nesting cannot carry: `end` is a `u32`.
@@ -206,13 +194,13 @@ impl<T> TryFrom<SequenceData<T>> for EliminationSequence<T> {
             steps.push(StepHeader {
                 vertex: step.vertex,
                 end,
-                inv_diag: step.inv_diag,
+                pivot_scale: step.pivot_scale,
             });
         }
         Ok(Self {
             steps,
             neighbor_indices,
-            elimination_fractions,
+            coefficients,
             uneliminated: data.uneliminated,
         })
     }
@@ -252,12 +240,12 @@ impl<T: serde::Serialize> serde::Serialize for StepView<'_, T> {
         let (start, end) = sequence.neighbor_range(i);
         let mut out = serializer.serialize_struct("StepData", 3)?;
         out.serialize_field("vertex", &sequence.steps[i].vertex)?;
-        out.serialize_field("inv_diag", &sequence.steps[i].inv_diag)?;
+        out.serialize_field("pivot_scale", &sequence.steps[i].pivot_scale)?;
         out.serialize_field(
             "neighbors",
             &PairedNeighbors(
                 &sequence.neighbor_indices[start..end],
-                &sequence.elimination_fractions[start..end],
+                &sequence.coefficients[start..end],
             ),
         )?;
         out.end()
@@ -299,9 +287,9 @@ impl<T> EliminationSequence<T> {
         let (start, end) = self.neighbor_range(i);
         EliminationStep {
             vertex: self.steps[i].vertex as usize,
-            inv_diag: self.steps[i].inv_diag,
+            pivot_scale: self.steps[i].pivot_scale,
             neighbor_indices: &self.neighbor_indices[start..end],
-            elimination_fractions: &self.elimination_fractions[start..end],
+            coefficients: &self.coefficients[start..end],
         }
     }
 
@@ -350,13 +338,13 @@ impl<T> EliminationSequence<T> {
                     });
                 }
             }
-            // A fraction splits one column's weight, so it is a proportion; an
-            // `inv_diag` is a reciprocal the solve multiplies by.
-            let fractions = &self.elimination_fractions[start..end];
-            if !step.inv_diag.is_finite()
-                || fractions
+            // Composing the fractions leaves them proportions of the pivot, so they
+            // keep the same bounds; `pivot_scale` scales one and is not itself bounded.
+            let coefficients = &self.coefficients[start..end];
+            if !step.pivot_scale.is_finite()
+                || coefficients
                     .iter()
-                    .any(|f| !f.is_finite() || *f < T::zero() || *f > T::one())
+                    .any(|c| !c.is_finite() || *c < T::zero() || *c > T::one())
             {
                 return Err(FactorError::StepValueInvalid { step: i });
             }
@@ -390,7 +378,7 @@ impl<T: Real> EliminationSequence<T> {
 struct SequenceBuilder<T> {
     steps: Vec<StepHeader<T>>,
     neighbor_indices: Vec<u32>,
-    elimination_fractions: Vec<T>,
+    coefficients: Vec<T>,
 }
 
 impl<T: Real> SequenceBuilder<T> {
@@ -398,7 +386,7 @@ impl<T: Real> SequenceBuilder<T> {
         Self {
             steps: Vec::with_capacity(n),
             neighbor_indices: Vec::with_capacity(degree_sum),
-            elimination_fractions: Vec::with_capacity(degree_sum),
+            coefficients: Vec::with_capacity(degree_sum),
         }
     }
 
@@ -406,14 +394,14 @@ impl<T: Real> SequenceBuilder<T> {
         EliminationSequence {
             steps: self.steps,
             neighbor_indices: self.neighbor_indices,
-            elimination_fractions: self.elimination_fractions,
+            coefficients: self.coefficients,
             uneliminated,
         }
     }
 
     /// Overflowing the `u32` range end is unreachable for tractable inputs, so assert
     /// in release too rather than truncate silently.
-    fn push_step(&mut self, vertex: usize, diagonal: T) {
+    fn push_step(&mut self, vertex: usize, diagonal: T, retained: T) {
         let nnz = self.neighbor_indices.len();
         assert!(
             nnz <= u32::MAX as usize,
@@ -424,15 +412,16 @@ impl<T: Real> SequenceBuilder<T> {
             end: nnz as u32,
             // A merely small pivot inverts fine; standing `one` in for it would drop
             // the block's scale outright rather than lose accuracy.
-            inv_diag: match T::one() / diagonal {
-                inverse if inverse.is_finite() => inverse,
-                _ => T::one(),
-            },
+            pivot_scale: retained
+                * match T::one() / diagonal {
+                    inverse if inverse.is_finite() => inverse,
+                    _ => T::one(),
+                },
         });
     }
 
     fn record_isolated(&mut self, vertex: usize, diagonal: T) {
-        self.push_step(vertex, diagonal);
+        self.push_step(vertex, diagonal, T::one());
     }
 
     /// Takes the column, not its parts: [`SampledColumn`] is what keeps a neighbor
@@ -440,7 +429,24 @@ impl<T: Real> SequenceBuilder<T> {
     fn record_column(&mut self, vertex: usize, column: &SampledColumn<T>) {
         let (neighbors, fractions) = column.pattern();
         self.neighbor_indices.extend_from_slice(neighbors);
-        self.elimination_fractions.extend_from_slice(fractions);
-        self.push_step(vertex, column.diagonal);
+        let retained = self.push_coefficients(fractions);
+        self.push_step(vertex, column.diagonal, retained);
+    }
+
+    /// Composes the sampled fractions once at build time so the solve does not rebuild
+    /// the running product on every apply: neighbor `i` takes `f_i * prod(1 - f_k), k < i`
+    /// of the original pivot. The last slot — a placeholder the fractions never used —
+    /// takes what all of them left, which is also what scales the pivot itself.
+    fn push_coefficients(&mut self, fractions: &[T]) -> T {
+        let Some((_, leading)) = fractions.split_last() else {
+            return T::one();
+        };
+        let mut retained = T::one();
+        for &f in leading {
+            self.coefficients.push(f * retained);
+            retained = retained * (T::one() - f);
+        }
+        self.coefficients.push(retained);
+        retained
     }
 }
