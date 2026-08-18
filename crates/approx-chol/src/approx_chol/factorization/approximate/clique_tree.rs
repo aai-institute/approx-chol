@@ -11,6 +11,8 @@ pub(super) struct SampledColumn<T: Real> {
     neighbors: Vec<u32>,
     coefficients: Vec<T>,
     /// What the pushed neighbors left of the pivot, which is the next one's share of it.
+    /// Zero once a whole share has claimed the rest — [`Self::pivot_share`], not this, is
+    /// what a finished column kept.
     retained: T,
     fill_edges: Vec<(u32, u32, T)>,
 }
@@ -45,6 +47,12 @@ impl<T: Real> SampledColumn<T> {
 
     pub(super) fn pattern(&self) -> (&[u32], &[T]) {
         (&self.neighbors, &self.coefficients)
+    }
+
+    /// What the pivot itself keeps: the last neighbor claims whatever the others left, so
+    /// its coefficient is that same remainder.
+    pub(super) fn pivot_share(&self) -> T {
+        self.coefficients.last().copied().unwrap_or_else(T::one)
     }
 
     /// `None` writes the fallback column instead: a uniform split with no fill, for a

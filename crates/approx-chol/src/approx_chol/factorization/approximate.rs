@@ -130,16 +130,16 @@ impl<'a, T: Real> EliminationStep<'a, T> {
                 y[self.vertex] = total;
             }
             [.., retained] => {
-                let mut lanes = [retained * y[self.vertex], T::zero(), T::zero(), T::zero()];
+                let mut lanes = [T::zero(); LANES];
+                lanes[0] = retained * y[self.vertex];
                 let mut neighbors = self.neighbor_indices.chunks_exact(LANES);
                 let mut coefficients = self.coefficients.chunks_exact(LANES);
                 for (js, cs) in neighbors.by_ref().zip(coefficients.by_ref()) {
-                    lanes[0] = lanes[0] + cs[0] * y[js[0] as usize];
-                    lanes[1] = lanes[1] + cs[1] * y[js[1] as usize];
-                    lanes[2] = lanes[2] + cs[2] * y[js[2] as usize];
-                    lanes[3] = lanes[3] + cs[3] * y[js[3] as usize];
+                    for lane in 0..LANES {
+                        lanes[lane] = lanes[lane] + cs[lane] * y[js[lane] as usize];
+                    }
                 }
-                let mut total = (lanes[0] + lanes[1]) + (lanes[2] + lanes[3]);
+                let mut total = lanes.iter().fold(T::zero(), |sum, &lane| sum + lane);
                 for (&j, &c) in neighbors.remainder().iter().zip(coefficients.remainder()) {
                     total = total + c * y[j as usize];
                 }
@@ -459,7 +459,6 @@ impl<T: Real> SequenceBuilder<T> {
         let (neighbors, coefficients) = column.pattern();
         self.neighbor_indices.extend_from_slice(neighbors);
         self.coefficients.extend_from_slice(coefficients);
-        let retained = coefficients.last().copied().unwrap_or_else(T::one);
-        self.push_step(vertex, column.diagonal, retained);
+        self.push_step(vertex, column.diagonal, column.pivot_share());
     }
 }
