@@ -9,7 +9,9 @@ pub(super) struct SampledColumn<T: Real> {
     pub diagonal: T,
     /// Only appended through [`Self::push_neighbor`], so the two can never disagree.
     neighbors: Vec<u32>,
-    fractions: Vec<T>,
+    coefficients: Vec<T>,
+    /// What the pushed neighbors left of the pivot, which is the next one's share of it.
+    retained: T,
     fill_edges: Vec<(u32, u32, T)>,
 }
 
@@ -18,7 +20,8 @@ impl<T: Real> SampledColumn<T> {
         Self {
             diagonal: T::zero(),
             neighbors: Vec::new(),
-            fractions: Vec::new(),
+            coefficients: Vec::new(),
+            retained: T::one(),
             fill_edges: Vec::new(),
         }
     }
@@ -26,18 +29,22 @@ impl<T: Real> SampledColumn<T> {
     fn clear(&mut self) {
         self.diagonal = T::zero();
         self.neighbors.clear();
-        self.fractions.clear();
+        self.coefficients.clear();
+        self.retained = T::one();
         self.fill_edges.clear();
     }
 
+    /// Stores what `fraction` of the *original* pivot this neighbor takes, so the solve
+    /// never rebuilds the running product. A whole share claims whatever is left.
     #[inline]
     fn push_neighbor(&mut self, neighbor: u32, fraction: T) {
         self.neighbors.push(neighbor);
-        self.fractions.push(fraction);
+        self.coefficients.push(fraction * self.retained);
+        self.retained = self.retained * (T::one() - fraction);
     }
 
     pub(super) fn pattern(&self) -> (&[u32], &[T]) {
-        (&self.neighbors, &self.fractions)
+        (&self.neighbors, &self.coefficients)
     }
 
     /// `None` writes the fallback column instead: a uniform split with no fill, for a
@@ -74,8 +81,11 @@ impl<T: Real> SampledColumn<T> {
         };
 
         self.diagonal = pivot_diag;
-        for entry in entries {
-            self.push_neighbor(entry.neighbor, fraction);
+        if let Some((last, leading)) = entries.split_last() {
+            for entry in leading {
+                self.push_neighbor(entry.neighbor, fraction);
+            }
+            self.push_neighbor(last.neighbor, T::one());
         }
         None
     }

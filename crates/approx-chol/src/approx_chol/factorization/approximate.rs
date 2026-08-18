@@ -453,28 +453,13 @@ impl<T: Real> SequenceBuilder<T> {
     }
 
     /// Takes the column, not its parts: [`SampledColumn`] is what keeps a neighbor
-    /// array from being stored against a fraction array of another length.
+    /// array from being stored against a coefficient array of another length. The column
+    /// composes as it samples, so the last coefficient is already what the pivot retained.
     fn record_column(&mut self, vertex: usize, column: &SampledColumn<T>) {
-        let (neighbors, fractions) = column.pattern();
+        let (neighbors, coefficients) = column.pattern();
         self.neighbor_indices.extend_from_slice(neighbors);
-        let retained = self.push_coefficients(fractions);
+        self.coefficients.extend_from_slice(coefficients);
+        let retained = coefficients.last().copied().unwrap_or_else(T::one);
         self.push_step(vertex, column.diagonal, retained);
-    }
-
-    /// Composes the sampled fractions once at build time so the solve does not rebuild
-    /// the running product on every apply: neighbor `i` takes `f_i * prod(1 - f_k), k < i`
-    /// of the original pivot. The last slot — a placeholder the fractions never used —
-    /// takes what all of them left, which is also what scales the pivot itself.
-    fn push_coefficients(&mut self, fractions: &[T]) -> T {
-        let Some((_, leading)) = fractions.split_last() else {
-            return T::one();
-        };
-        let mut retained = T::one();
-        for &f in leading {
-            self.coefficients.push(f * retained);
-            retained = retained * (T::one() - f);
-        }
-        self.coefficients.push(retained);
-        retained
     }
 }
