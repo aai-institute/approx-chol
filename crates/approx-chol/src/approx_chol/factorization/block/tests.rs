@@ -122,6 +122,14 @@ fn every_block_error_variant_is_reachable() {
             |d| seq_of(d).coefficients[0] = 2.0,
             FactorError::StepValueInvalid { step: 0 },
         ),
+        // Both kernels drop the multiply for a step of one neighbor, so a payload that
+        // gives it anything but the whole pivot has to be refused rather than misapplied.
+        (
+            "a lone neighbor takes less than the whole pivot",
+            approx,
+            |d| seq_of(d).coefficients[0] = 0.5,
+            FactorError::StepValueInvalid { step: 0 },
+        ),
         (
             "uneliminated vertex bounds",
             approx,

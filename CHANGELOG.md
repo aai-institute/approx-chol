@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed (breaking)
+
+- A persisted `Factor` stores what each neighbor takes of the original pivot rather than of
+  what earlier neighbors left, and `FACTOR_FORMAT_VERSION` is `0x41430004`.
+
+### Changed
+
+- The solve applies a factor without rebuilding a running product per entry: dense-factor
+  solves are 1.1-3.0x faster, grid solves ~10% faster, path-shaped factors ~4-5% slower.
+- Factorizing composes the sampled fractions, costing 2-7% on dense blocks.
+
 ## [0.5.0] - 2026-08-11
 
 ### Changed (breaking)

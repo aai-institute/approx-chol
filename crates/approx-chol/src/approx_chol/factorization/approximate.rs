@@ -94,34 +94,58 @@ impl<'a, T: Real> EliminationStep<'a, T> {
     #[inline(always)]
     fn apply_forward(&self, y: &mut [T]) {
         let pivot = y[self.vertex];
-        for (&j, &c) in self.neighbor_indices.iter().zip(self.coefficients.iter()) {
-            let j = j as usize;
-            y[j] = y[j] + c * pivot;
+        match *self.coefficients {
+            // A lone neighbor takes the whole pivot, and `validate_values` holds its
+            // coefficient at exactly one, so neither kernel issues that multiply.
+            [_] => {
+                let j = self.neighbor_indices[0] as usize;
+                y[j] = y[j] + pivot;
+            }
+            _ => {
+                for (&j, &c) in self.neighbor_indices.iter().zip(self.coefficients) {
+                    let j = j as usize;
+                    y[j] = y[j] + c * pivot;
+                }
+            }
         }
         y[self.vertex] = pivot * self.pivot_scale;
     }
 
-    /// Four accumulators, not one: a lone `total + c * y[j]` would reinstate the serial
-    /// dependency the composed coefficients exist to break.
+    /// Backward substitution, dispatched on how much there is to gather: a min-degree order
+    /// leaves enough one-neighbor stars that spending the lanes' combining adds on a row
+    /// too short to fill them costs real time.
     #[inline(always)]
     fn apply_backward(&self, y: &mut [T]) {
-        let Some((&retained, _)) = self.coefficients.split_last() else {
-            return;
-        };
-        let mut lanes = [retained * y[self.vertex], T::zero(), T::zero(), T::zero()];
-        let mut neighbors = self.neighbor_indices.chunks_exact(LANES);
-        let mut coefficients = self.coefficients.chunks_exact(LANES);
-        for (js, cs) in neighbors.by_ref().zip(coefficients.by_ref()) {
-            lanes[0] = lanes[0] + cs[0] * y[js[0] as usize];
-            lanes[1] = lanes[1] + cs[1] * y[js[1] as usize];
-            lanes[2] = lanes[2] + cs[2] * y[js[2] as usize];
-            lanes[3] = lanes[3] + cs[3] * y[js[3] as usize];
+        match *self.coefficients {
+            [] => {}
+            [_] => {
+                let j = self.neighbor_indices[0] as usize;
+                y[self.vertex] = y[self.vertex] + y[j];
+            }
+            [.., retained] if self.coefficients.len() < LANES => {
+                let mut total = retained * y[self.vertex];
+                for (&j, &c) in self.neighbor_indices.iter().zip(self.coefficients) {
+                    total = total + c * y[j as usize];
+                }
+                y[self.vertex] = total;
+            }
+            [.., retained] => {
+                let mut lanes = [retained * y[self.vertex], T::zero(), T::zero(), T::zero()];
+                let mut neighbors = self.neighbor_indices.chunks_exact(LANES);
+                let mut coefficients = self.coefficients.chunks_exact(LANES);
+                for (js, cs) in neighbors.by_ref().zip(coefficients.by_ref()) {
+                    lanes[0] = lanes[0] + cs[0] * y[js[0] as usize];
+                    lanes[1] = lanes[1] + cs[1] * y[js[1] as usize];
+                    lanes[2] = lanes[2] + cs[2] * y[js[2] as usize];
+                    lanes[3] = lanes[3] + cs[3] * y[js[3] as usize];
+                }
+                let mut total = (lanes[0] + lanes[1]) + (lanes[2] + lanes[3]);
+                for (&j, &c) in neighbors.remainder().iter().zip(coefficients.remainder()) {
+                    total = total + c * y[j as usize];
+                }
+                y[self.vertex] = total;
+            }
         }
-        let mut total = (lanes[0] + lanes[1]) + (lanes[2] + lanes[3]);
-        for (&j, &c) in neighbors.remainder().iter().zip(coefficients.remainder()) {
-            total = total + c * y[j as usize];
-        }
-        y[self.vertex] = total;
     }
 }
 
@@ -340,8 +364,12 @@ impl<T> EliminationSequence<T> {
             }
             // Composing the fractions leaves them proportions of the pivot, so they
             // keep the same bounds; `pivot_scale` scales one and is not itself bounded.
+            // Both kernels elide a lone neighbor's multiply, so its coefficient — what a
+            // star of one gives the only vertex it can — is held to exactly one.
             let coefficients = &self.coefficients[start..end];
+            let elided_is_whole = !matches!(coefficients, [c] if *c != T::one());
             if !step.pivot_scale.is_finite()
+                || !elided_is_whole
                 || coefficients
                     .iter()
                     .any(|c| !c.is_finite() || *c < T::zero() || *c > T::one())
