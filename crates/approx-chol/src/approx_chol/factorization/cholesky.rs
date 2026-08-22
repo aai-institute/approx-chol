@@ -14,7 +14,7 @@ use crate::types::Real;
     feature = "serde",
     serde(bound(
         serialize = "T: serde::Serialize",
-        deserialize = "T: serde::de::DeserializeOwned"
+        deserialize = "T: serde::de::DeserializeOwned + num_traits::Float"
     ))
 )]
 #[derive(Clone, Debug)]
