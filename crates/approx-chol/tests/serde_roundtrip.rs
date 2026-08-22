@@ -1,5 +1,7 @@
 #![cfg(feature = "serde")]
 
+#[path = "common/laplacian_prop.rs"]
+mod laplacian_prop;
 #[path = "common/path.rs"]
 mod path;
 
@@ -21,22 +23,20 @@ fn path_factor() -> Factor<f64> {
 
 /// Varied weights, so no two neighbors take the same share and a column of `n - 1` of them
 /// is something a path or a `K4` cannot stand in for.
-fn complete_laplacian(n: usize) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
-    let weight = |i: usize, j: usize| 1.0 + ((i.min(j) * 7 + i.max(j) * 3) % 11) as f64;
-    let mut row_ptrs = vec![0u32];
-    let (mut columns, mut values) = (Vec::new(), Vec::new());
-    for i in 0..n {
-        for j in 0..n {
-            columns.push(j as u32);
-            values.push(if i == j {
-                (0..n).filter(|&k| k != i).map(|k| weight(i, k)).sum()
-            } else {
-                -weight(i, j)
-            });
-        }
-        row_ptrs.push(columns.len() as u32);
-    }
-    (row_ptrs, columns, values)
+fn complete_factor(n: usize) -> Factor<f64> {
+    let weights: Vec<u8> = (0..n)
+        .flat_map(|i| ((i + 1)..n).map(move |j| 1 + ((i * 7 + j * 3) % 11) as u8))
+        .collect();
+    let (row_ptrs, columns, values, dim) = laplacian_prop::build_laplacian_csr(n, &weights);
+    let csr = CsrRef::new(&row_ptrs, &columns, &values, dim).expect("valid CSR");
+    factorize_with(
+        csr,
+        Config {
+            backend: Backend::Approximate,
+            ..Config::default()
+        },
+    )
+    .expect("factorization should succeed")
 }
 
 #[rstest]
@@ -82,16 +82,7 @@ fn factor_json_roundtrip_preserves_solve(#[case] backend: Backend) {
 /// remainder to depend on every share before it can only be checked here.
 #[test]
 fn a_postcard_roundtrip_reproduces_long_columns_bit_for_bit() {
-    let (row_ptrs, columns, values) = complete_laplacian(9);
-    let csr = CsrRef::new(&row_ptrs, &columns, &values, 9).expect("valid CSR");
-    let factor = factorize_with(
-        csr,
-        Config {
-            backend: Backend::Approximate,
-            ..Config::default()
-        },
-    )
-    .expect("factorization should succeed");
+    let factor = complete_factor(9);
 
     let bytes = postcard::to_stdvec(&factor).expect("serialize factor");
     let restored: Factor<f64> = postcard::from_bytes(&bytes).expect("deserialize factor");
@@ -135,16 +126,7 @@ fn deserializing_corrupted_factor_is_rejected() {
 /// pivot between them, which leaves the derived remainder negative.
 #[test]
 fn a_column_whose_shares_overspend_the_pivot_is_rejected() {
-    let (row_ptrs, columns, values) = complete_laplacian(4);
-    let csr = CsrRef::new(&row_ptrs, &columns, &values, 4).expect("valid CSR");
-    let factor = factorize_with(
-        csr,
-        Config {
-            backend: Backend::Approximate,
-            ..Config::default()
-        },
-    )
-    .expect("factorization should succeed");
+    let factor = complete_factor(4);
 
     let mut value = serde_json::to_value(&factor).expect("serialize factor");
     let shares = &mut value["blocks"][0]["cholesky"]["Approximate"]["steps"][0]["column"]["shares"];

@@ -19,6 +19,14 @@ const B: [f64; 4] = [1.0, 2.0, -1.0, -2.0];
 /// leave the last row's equation out of the residual.
 const B5: [f64; 5] = [1.0, 2.0, -1.0, -2.0, 0.0];
 
+/// A sampled factor only preconditions its matrix, so a residual bound tight enough to
+/// mean anything would fail it; what pins that payload is agreeing with a fresh factor.
+#[derive(PartialEq)]
+enum Solves {
+    ItsOwnMatrix,
+    OnlyAsAPreconditioner,
+}
+
 struct Matrix {
     name: &'static str,
     row_ptrs: &'static [u32],
@@ -26,9 +34,7 @@ struct Matrix {
     values: &'static [f64],
     /// `None` takes the crate default rather than restating it here.
     backend: Option<Backend>,
-    /// An exactly-factored fixture solves its own matrix; a sampled one only preconditions
-    /// it, so what pins a sampled payload is its agreement with a fresh factor below.
-    residual_bound: f64,
+    solves: Solves,
     /// Sized to this matrix, so every row reaches the residual.
     rhs: &'static [f64],
 }
@@ -55,7 +61,7 @@ const INTERLEAVED: Matrix = Matrix {
     col_indices: &[0, 2, 1, 3, 0, 2, 1, 3],
     values: &[1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0],
     backend: None,
-    residual_bound: 1e-12,
+    solves: Solves::ItsOwnMatrix,
     rhs: &B,
 };
 
@@ -66,7 +72,7 @@ const GROUNDED: Matrix = Matrix {
     col_indices: &[0, 1, 0, 1, 2, 1, 2, 3, 2, 3],
     values: &[2.0, -1.0, -1.0, 3.0, -1.0, -1.0, 3.0, -1.0, -1.0, 2.0],
     backend: None,
-    residual_bound: 1e-12,
+    solves: Solves::ItsOwnMatrix,
     rhs: &B,
 };
 
@@ -85,7 +91,7 @@ const SAMPLED: Matrix = Matrix {
         -1.0, -1.0, -1.0, 4.0, -1.0, -1.0, -1.0, -1.0, -1.0, 4.0,
     ],
     backend: Some(Backend::Approximate),
-    residual_bound: 0.5,
+    solves: Solves::OnlyAsAPreconditioner,
     rhs: &B5,
 };
 
@@ -111,13 +117,14 @@ fn a_committed_payload_decodes_and_still_solves(#[case] matrix: &Matrix, #[case]
         "the fixture's right-hand side must cover every row, or the residual skips one"
     );
     let x = restored.solve(b).expect("solve the restored factor");
-    let residual = residual::relative_residual_over(matrix.csr(), &x, b, 0..b.len());
-    assert!(
-        residual < matrix.residual_bound,
-        "the committed payload decoded to a factor that no longer solves its own matrix: \
-         relative residual {residual:e} against a bound of {:e}",
-        matrix.residual_bound
-    );
+    if matrix.solves == Solves::ItsOwnMatrix {
+        let residual = residual::relative_residual_over(matrix.csr(), &x, b, 0..b.len());
+        assert!(
+            residual < 1e-12,
+            "the committed payload decoded to a factor that no longer solves its own \
+             matrix: relative residual {residual:e}"
+        );
+    }
 
     // The residual alone is satisfied by any valid factor, not only the one that wrote these bytes.
     let expected = fresh.solve(b).expect("solve the fresh factor");

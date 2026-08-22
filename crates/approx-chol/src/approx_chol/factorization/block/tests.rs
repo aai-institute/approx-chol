@@ -6,8 +6,6 @@ fn dim(n: usize) -> BlockDim {
     BlockDim::of(n).expect("fixture dimension is non-zero")
 }
 
-/// Every column's last coefficient is the share its remainder neighbor took, which is what
-/// the shares before it left — `1 - 0.2 - 0.3` for the leading step.
 fn sequence() -> EliminationSequence<f64> {
     EliminationSequence {
         steps: vec![
@@ -30,7 +28,7 @@ fn sequence() -> EliminationSequence<f64> {
             },
         ],
         neighbor_indices: vec![1, 2, 3, 2],
-        coefficients: vec![0.2, 0.3, 0.5, 1.0],
+        coefficients: vec![0.2, 0.3, 1.0 - 0.2 - 0.3, 1.0],
         uneliminated: 3,
     }
 }
