@@ -19,6 +19,26 @@ fn path_factor() -> Factor<f64> {
     path_factor_with(Config::default())
 }
 
+/// Varied weights, so no two neighbors take the same share and a column of `n - 1` of them
+/// is something a path or a `K4` cannot stand in for.
+fn complete_laplacian(n: usize) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
+    let weight = |i: usize, j: usize| 1.0 + ((i.min(j) * 7 + i.max(j) * 3) % 11) as f64;
+    let mut row_ptrs = vec![0u32];
+    let (mut columns, mut values) = (Vec::new(), Vec::new());
+    for i in 0..n {
+        for j in 0..n {
+            columns.push(j as u32);
+            values.push(if i == j {
+                (0..n).filter(|&k| k != i).map(|k| weight(i, k)).sum()
+            } else {
+                -weight(i, j)
+            });
+        }
+        row_ptrs.push(columns.len() as u32);
+    }
+    (row_ptrs, columns, values)
+}
+
 #[rstest]
 #[case::approximate(Backend::Approximate)]
 #[case::exact(Backend::default())]
@@ -56,6 +76,34 @@ fn factor_json_roundtrip_preserves_solve(#[case] backend: Backend) {
     assert_roundtrip("grounded SDDM", &grounded, &[1.0, -1.0]);
 }
 
+/// Postcard is how `within` persists a factor, and it is positional — so it, not JSON, is
+/// what pins the payload's field order. It also parses an `f64` back exactly, where
+/// `serde_json` rounds a 17-digit one by an ulp, so a column long enough for the derived
+/// remainder to depend on every share before it can only be checked here.
+#[test]
+fn a_postcard_roundtrip_reproduces_long_columns_bit_for_bit() {
+    let (row_ptrs, columns, values) = complete_laplacian(9);
+    let csr = CsrRef::new(&row_ptrs, &columns, &values, 9).expect("valid CSR");
+    let factor = factorize_with(
+        csr,
+        Config {
+            backend: Backend::Approximate,
+            ..Config::default()
+        },
+    )
+    .expect("factorization should succeed");
+
+    let bytes = postcard::to_stdvec(&factor).expect("serialize factor");
+    let restored: Factor<f64> = postcard::from_bytes(&bytes).expect("deserialize factor");
+
+    let b = [1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0, 0.0];
+    assert_eq!(
+        factor.solve(&b).expect("solve original"),
+        restored.solve(&b).expect("solve restored"),
+        "a restored factor must reproduce the solve bit-for-bit"
+    );
+}
+
 fn assert_roundtrip(label: &str, factor: &Factor<f64>, b: &[f64]) {
     let json = serde_json::to_string(factor).expect("serialize factor");
     let restored: Factor<f64> = serde_json::from_str(&json).expect("deserialize factor");
@@ -78,6 +126,33 @@ fn deserializing_corrupted_factor_is_rejected() {
         "no block dimension to corrupt"
     );
     value["blocks"][0]["dim"] = serde_json::Value::from(999u32);
+
+    assert!(serde_json::from_value::<Factor<f64>>(value).is_err());
+}
+
+/// A payload cannot say that a column hands out more pivot than it has — there is no field
+/// for the remainder's share — so the reachable corruption is shares that overspend the
+/// pivot between them, which leaves the derived remainder negative.
+#[test]
+fn a_column_whose_shares_overspend_the_pivot_is_rejected() {
+    let (row_ptrs, columns, values) = complete_laplacian(4);
+    let csr = CsrRef::new(&row_ptrs, &columns, &values, 4).expect("valid CSR");
+    let factor = factorize_with(
+        csr,
+        Config {
+            backend: Backend::Approximate,
+            ..Config::default()
+        },
+    )
+    .expect("factorization should succeed");
+
+    let mut value = serde_json::to_value(&factor).expect("serialize factor");
+    let shares = &mut value["blocks"][0]["cholesky"]["Approximate"]["steps"][0]["column"]["shares"];
+    assert!(
+        shares[0][1].is_f64(),
+        "the leading step of a complete graph carries shares to overspend"
+    );
+    shares[0][1] = serde_json::Value::from(2.0);
 
     assert!(serde_json::from_value::<Factor<f64>>(value).is_err());
 }

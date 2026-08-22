@@ -90,7 +90,7 @@ struct EliminationStep<'a, T> {
 /// solve, and every index is under `n` by construction or by
 /// [`EliminationSequence::validate_values`].
 impl<'a, T: Real> EliminationStep<'a, T> {
-    /// Forward elimination: scatter pivot weight to neighbors, then scale by D^{-1}.
+    /// Forward elimination: scatter pivot weight to neighbors, then scale by `pivot_scale`.
     #[inline(always)]
     fn apply_forward(&self, y: &mut [T]) {
         let pivot = y[self.vertex];
@@ -165,7 +165,7 @@ pub(crate) struct StepHeader<T> {
 #[cfg_attr(
     feature = "serde",
     serde(
-        bound(deserialize = "T: serde::de::DeserializeOwned"),
+        bound(deserialize = "T: serde::de::DeserializeOwned + num_traits::Float"),
         try_from = "SequenceData<T>"
     )
 )]
@@ -187,7 +187,18 @@ pub(crate) struct EliminationSequence<T> {
 struct StepData<T> {
     vertex: u32,
     pivot_scale: T,
-    neighbors: Vec<(u32, T)>,
+    /// `None` for an isolated pivot, which has no neighbor to give anything to.
+    column: Option<ColumnData<T>>,
+}
+
+/// The remainder carries no share: it takes what the others leave, so a payload has
+/// nowhere to say that a column hands out more pivot than it has.
+#[cfg(feature = "serde")]
+#[derive(serde::Deserialize)]
+#[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
+struct ColumnData<T> {
+    shares: Vec<(u32, T)>,
+    remainder: u32,
 }
 
 #[cfg(feature = "serde")]
@@ -199,34 +210,22 @@ struct SequenceData<T> {
 }
 
 #[cfg(feature = "serde")]
-impl<T> TryFrom<SequenceData<T>> for EliminationSequence<T> {
+impl<T: num_traits::Float> TryFrom<SequenceData<T>> for EliminationSequence<T> {
     type Error = FactorError;
 
     fn try_from(data: SequenceData<T>) -> Result<Self, Self::Error> {
-        let mut steps = Vec::with_capacity(data.steps.len());
-        let mut neighbor_indices = Vec::new();
-        let mut coefficients = Vec::new();
+        let mut builder = SequenceBuilder::with_capacity(data.steps.len(), 0);
         for step in data.steps {
-            for (neighbor, coefficient) in step.neighbors {
-                neighbor_indices.push(neighbor);
-                coefficients.push(coefficient);
-            }
-            let nnz = neighbor_indices.len();
-            // The only range invariant the nesting cannot carry: `end` is a `u32`.
-            let end =
-                u32::try_from(nnz).map_err(|_| FactorError::NonzeroCountExceedsU32 { nnz })?;
-            steps.push(StepHeader {
-                vertex: step.vertex,
-                end,
-                pivot_scale: step.pivot_scale,
-            });
+            let (shares, remainder) = match step.column {
+                Some(column) => (column.shares, Some(column.remainder)),
+                None => (Vec::new(), None),
+            };
+            builder.push_column(shares, remainder);
+            builder
+                .push_header(step.vertex, step.pivot_scale)
+                .map_err(|nnz| FactorError::NonzeroCountExceedsU32 { nnz })?;
         }
-        Ok(Self {
-            steps,
-            neighbor_indices,
-            coefficients,
-            uneliminated: data.uneliminated,
-        })
+        Ok(builder.finish(data.uneliminated))
     }
 }
 
@@ -265,13 +264,33 @@ impl<T: serde::Serialize> serde::Serialize for StepView<'_, T> {
         let mut out = serializer.serialize_struct("StepData", 3)?;
         out.serialize_field("vertex", &sequence.steps[i].vertex)?;
         out.serialize_field("pivot_scale", &sequence.steps[i].pivot_scale)?;
-        out.serialize_field(
-            "neighbors",
-            &PairedNeighbors(
-                &sequence.neighbor_indices[start..end],
-                &sequence.coefficients[start..end],
-            ),
-        )?;
+        // The remainder's share is what the decoder subtracts back out, so writing it
+        // would be writing a value nothing reads.
+        let column =
+            sequence.neighbor_indices[start..end]
+                .split_last()
+                .map(|(&remainder, shared)| ColumnView {
+                    shares: PairedNeighbors(shared, &sequence.coefficients[start..end - 1]),
+                    remainder,
+                });
+        out.serialize_field("column", &column)?;
+        out.end()
+    }
+}
+
+#[cfg(feature = "serde")]
+struct ColumnView<'a, T> {
+    shares: PairedNeighbors<'a, T>,
+    remainder: u32,
+}
+
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize> serde::Serialize for ColumnView<'_, T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut out = serializer.serialize_struct("ColumnData", 2)?;
+        out.serialize_field("shares", &self.shares)?;
+        out.serialize_field("remainder", &self.remainder)?;
         out.end()
     }
 }
@@ -362,17 +381,14 @@ impl<T> EliminationSequence<T> {
                     });
                 }
             }
-            // Composing the fractions leaves them proportions of the pivot, so they
-            // keep the same bounds; `pivot_scale` scales one and is not itself bounded.
-            // Both kernels elide a lone neighbor's multiply, so its coefficient — what a
-            // star of one gives the only vertex it can — is held to exactly one.
+            // The remainder takes what the shares leave, so a column handing out more pivot
+            // than it has leaves that share negative — which, with a non-finite one, is all
+            // there is left to catch. `pivot_scale` scales one and is not itself bounded.
             let coefficients = &self.coefficients[start..end];
-            let elided_is_whole = !matches!(coefficients, [c] if *c != T::one());
             if !step.pivot_scale.is_finite()
-                || !elided_is_whole
                 || coefficients
                     .iter()
-                    .any(|c| !c.is_finite() || *c < T::zero() || *c > T::one())
+                    .any(|c| !c.is_finite() || *c < T::zero())
             {
                 return Err(FactorError::StepValueInvalid { step: i });
             }
@@ -409,7 +425,7 @@ struct SequenceBuilder<T> {
     coefficients: Vec<T>,
 }
 
-impl<T: Real> SequenceBuilder<T> {
+impl<T: num_traits::Float> SequenceBuilder<T> {
     fn with_capacity(n: usize, degree_sum: usize) -> Self {
         Self {
             steps: Vec::with_capacity(n),
@@ -427,38 +443,66 @@ impl<T: Real> SequenceBuilder<T> {
         }
     }
 
+    /// Subtracts the shares from the pivot to reach the remainder's, and returns it — the
+    /// one site that derives it, so a sequence off the wire and one off the sampler cannot
+    /// disagree about what the shares leave, and a lone neighbor takes exactly one.
+    fn push_column(
+        &mut self,
+        shares: impl IntoIterator<Item = (u32, T)>,
+        remainder: Option<u32>,
+    ) -> T {
+        let mut left = T::one();
+        for (neighbor, share) in shares {
+            self.neighbor_indices.push(neighbor);
+            self.coefficients.push(share);
+            left = left - share;
+        }
+        if let Some(neighbor) = remainder {
+            self.neighbor_indices.push(neighbor);
+            self.coefficients.push(left);
+        }
+        left
+    }
+
+    /// `Err` carries the `nnz` that overflowed the range end, the one invariant neither
+    /// the nesting on the wire nor the sampler's own bookkeeping can carry.
+    fn push_header(&mut self, vertex: u32, pivot_scale: T) -> Result<(), usize> {
+        let nnz = self.neighbor_indices.len();
+        let end = u32::try_from(nnz).map_err(|_| nnz)?;
+        self.steps.push(StepHeader {
+            vertex,
+            end,
+            pivot_scale,
+        });
+        Ok(())
+    }
+
     /// Overflowing the `u32` range end is unreachable for tractable inputs, so assert
     /// in release too rather than truncate silently.
     fn push_step(&mut self, vertex: usize, diagonal: T, retained: T) {
-        let nnz = self.neighbor_indices.len();
-        assert!(
-            nnz <= u32::MAX as usize,
-            "factor nonzero count {nnz} exceeds u32 range capacity"
-        );
-        self.steps.push(StepHeader {
-            vertex: vertex as u32,
-            end: nnz as u32,
-            // A merely small pivot inverts fine; standing `one` in for it would drop
-            // the block's scale outright rather than lose accuracy.
-            pivot_scale: retained
-                * match T::one() / diagonal {
-                    inverse if inverse.is_finite() => inverse,
-                    _ => T::one(),
-                },
-        });
+        // A merely small pivot inverts fine; standing `one` in for it would drop
+        // the block's scale outright rather than lose accuracy.
+        let inverse = match T::one() / diagonal {
+            inverse if inverse.is_finite() => inverse,
+            _ => T::one(),
+        };
+        self.push_header(vertex as u32, retained * inverse)
+            .unwrap_or_else(|nnz| panic!("factor nonzero count {nnz} exceeds u32 range capacity"));
     }
 
     fn record_isolated(&mut self, vertex: usize, diagonal: T) {
-        self.push_step(vertex, diagonal, T::one());
+        let retained = self.push_column([], None);
+        self.push_step(vertex, diagonal, retained);
     }
+}
 
+impl<T: Real> SequenceBuilder<T> {
     /// Takes the column, not its parts: [`SampledColumn`] is what keeps a neighbor
-    /// array from being stored against a coefficient array of another length. The column
-    /// composes as it samples, so the last coefficient is already what the pivot retained.
+    /// array from being stored against a coefficient array of another length.
     fn record_column(&mut self, vertex: usize, column: &SampledColumn<T>) {
-        let (neighbors, coefficients) = column.pattern();
-        self.neighbor_indices.extend_from_slice(neighbors);
-        self.coefficients.extend_from_slice(coefficients);
-        self.push_step(vertex, column.diagonal, column.pivot_share());
+        let (neighbors, shares) = column.shares();
+        let pairs = neighbors.iter().copied().zip(shares.iter().copied());
+        let retained = self.push_column(pairs, column.remainder());
+        self.push_step(vertex, column.diagonal, retained);
     }
 }

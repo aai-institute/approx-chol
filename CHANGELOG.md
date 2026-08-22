@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A persisted `Factor` stores what each neighbor takes of the original pivot rather than of
   what earlier neighbors left, and `FACTOR_FORMAT_VERSION` is `0x41430004`.
+- A persisted column names the neighbor that takes the remaining pivot rather than storing
+  its share.
 
 ### Changed
 

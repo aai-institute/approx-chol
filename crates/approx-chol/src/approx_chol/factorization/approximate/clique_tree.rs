@@ -10,9 +10,10 @@ pub(super) struct SampledColumn<T: Real> {
     /// Only appended through [`Self::push_neighbor`], so the two can never disagree.
     neighbors: Vec<u32>,
     coefficients: Vec<T>,
+    /// Named rather than weighted: what it takes is whatever the shares leave, which only
+    /// the sequence that stores them can subtract.
+    remainder: Option<u32>,
     /// What the pushed neighbors left of the pivot, which is the next one's share of it.
-    /// Zero once a whole share has claimed the rest — [`Self::pivot_share`], not this, is
-    /// what a finished column kept.
     retained: T,
     fill_edges: Vec<(u32, u32, T)>,
 }
@@ -23,6 +24,7 @@ impl<T: Real> SampledColumn<T> {
             diagonal: T::zero(),
             neighbors: Vec::new(),
             coefficients: Vec::new(),
+            remainder: None,
             retained: T::one(),
             fill_edges: Vec::new(),
         }
@@ -32,12 +34,13 @@ impl<T: Real> SampledColumn<T> {
         self.diagonal = T::zero();
         self.neighbors.clear();
         self.coefficients.clear();
+        self.remainder = None;
         self.retained = T::one();
         self.fill_edges.clear();
     }
 
     /// Stores what `fraction` of the *original* pivot this neighbor takes, so the solve
-    /// never rebuilds the running product. A whole share claims whatever is left.
+    /// never rebuilds the running product.
     #[inline]
     fn push_neighbor(&mut self, neighbor: u32, fraction: T) {
         self.neighbors.push(neighbor);
@@ -45,14 +48,12 @@ impl<T: Real> SampledColumn<T> {
         self.retained = self.retained * (T::one() - fraction);
     }
 
-    pub(super) fn pattern(&self) -> (&[u32], &[T]) {
+    pub(super) fn shares(&self) -> (&[u32], &[T]) {
         (&self.neighbors, &self.coefficients)
     }
 
-    /// What the pivot itself keeps: the last neighbor claims whatever the others left, so
-    /// its coefficient is that same remainder.
-    pub(super) fn pivot_share(&self) -> T {
-        self.coefficients.last().copied().unwrap_or_else(T::one)
+    pub(super) fn remainder(&self) -> Option<u32> {
+        self.remainder
     }
 
     /// `None` writes the fallback column instead: a uniform split with no fill, for a
@@ -93,13 +94,13 @@ impl<T: Real> SampledColumn<T> {
             for entry in leading {
                 self.push_neighbor(entry.neighbor, fraction);
             }
-            self.push_neighbor(last.neighbor, T::one());
+            self.remainder = Some(last.neighbor);
         }
         None
     }
 
     fn finalize_sampling<C>(&mut self, last: StarEntry<T, C>, elim: &StarElimination<T>) {
-        self.push_neighbor(last.neighbor, T::one());
+        self.remainder = Some(last.neighbor);
         self.diagonal = elim.diagonal(last.weight);
     }
 
