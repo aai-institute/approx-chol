@@ -74,7 +74,8 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
     )
 }
 
-/// Independent lanes for the backward gather; float addition is not ours to reassociate.
+/// Independent lanes for the backward gather. The split reassociates the row's sum, so this
+/// constant is part of a factor's solve output, not a free tuning knob.
 const LANES: usize = 4;
 
 /// Zero-copy view of one elimination step.
@@ -95,9 +96,11 @@ impl<'a, T: Real> EliminationStep<'a, T> {
     fn apply_forward(&self, y: &mut [T]) {
         let pivot = y[self.vertex];
         match *self.coefficients {
-            // A lone neighbor takes the whole pivot, and `validate_values` holds its
-            // coefficient at exactly one, so neither kernel issues that multiply.
-            [_] => {
+            // A column always names the neighbor taking its remainder, so a lone
+            // coefficient is that remainder with nothing subtracted from it: exactly one,
+            // and neither kernel issues that multiply.
+            [c] => {
+                debug_assert!(c == T::one(), "a lone coefficient takes the whole pivot");
                 let j = self.neighbor_indices[0] as usize;
                 y[j] = y[j] + pivot;
             }
@@ -118,7 +121,8 @@ impl<'a, T: Real> EliminationStep<'a, T> {
     fn apply_backward(&self, y: &mut [T]) {
         match *self.coefficients {
             [] => {}
-            [_] => {
+            [c] => {
+                debug_assert!(c == T::one(), "a lone coefficient takes the whole pivot");
                 let j = self.neighbor_indices[0] as usize;
                 y[self.vertex] = y[self.vertex] + y[j];
             }
@@ -381,9 +385,10 @@ impl<T> EliminationSequence<T> {
                     });
                 }
             }
-            // The remainder takes what the shares leave, so a column handing out more pivot
-            // than it has leaves that share negative — which, with a non-finite one, is all
-            // there is left to catch. `pivot_scale` scales one and is not itself bounded.
+            // Every decoded column derives its remainder from the shares, so one handing out
+            // more pivot than it has leaves that share negative — which, with a non-finite
+            // one, is all there is left to catch on the wire. `pivot_scale` scales one and
+            // is not itself bounded.
             let coefficients = &self.coefficients[start..end];
             if !step.pivot_scale.is_finite()
                 || coefficients

@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The solve applies a factor without rebuilding a running product per entry: dense-factor
   solves are 1.1-3.0x faster, grid solves ~10% faster, path-shaped factors ~4-5% slower.
 - Factorizing composes the sampled fractions, costing 2-7% on dense blocks.
+- An existing factor's solve output changes bit-for-bit: composition and the gather's lane
+  split both reassociate the row's sum.
 
 ## [0.5.0] - 2026-08-11
 
