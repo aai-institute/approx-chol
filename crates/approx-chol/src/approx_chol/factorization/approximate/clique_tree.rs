@@ -7,15 +7,21 @@ use crate::types::{count_as_scalar, Real};
 /// One sampled column of the factor (Algorithm 5, GKS 2023), reused across steps.
 pub(super) struct SampledColumn<T: Real> {
     pub diagonal: T,
-    /// Only appended through [`Self::push_neighbor`], so the two can never disagree.
+    /// Only appended through [`Self::push_share`], so the two can never disagree.
     neighbors: Vec<u32>,
     coefficients: Vec<T>,
     /// Named rather than weighted: what it takes is whatever the shares leave, which only
     /// the sequence that stores them can subtract.
     remainder: Option<u32>,
-    /// What the pushed neighbors left of the pivot, which is the next one's share of it.
-    retained: T,
     fill_edges: Vec<(u32, u32, T)>,
+}
+
+/// A column's shares and the neighbor taking what they leave, as one value: a share cannot
+/// be handed on with nothing named to absorb the remainder.
+pub(super) struct ColumnShares<'a, T> {
+    pub(super) neighbors: &'a [u32],
+    pub(super) coefficients: &'a [T],
+    pub(super) remainder: u32,
 }
 
 impl<T: Real> SampledColumn<T> {
@@ -25,7 +31,6 @@ impl<T: Real> SampledColumn<T> {
             neighbors: Vec::new(),
             coefficients: Vec::new(),
             remainder: None,
-            retained: T::one(),
             fill_edges: Vec::new(),
         }
     }
@@ -35,25 +40,23 @@ impl<T: Real> SampledColumn<T> {
         self.neighbors.clear();
         self.coefficients.clear();
         self.remainder = None;
-        self.retained = T::one();
         self.fill_edges.clear();
     }
 
-    /// Stores what `fraction` of the *original* pivot this neighbor takes, so the solve
-    /// never rebuilds the running product.
+    /// `share` is of the *original* pivot, composed by the [`Retained`] the caller walks,
+    /// so the solve never rebuilds the running product.
     #[inline]
-    fn push_neighbor(&mut self, neighbor: u32, fraction: T) {
+    fn push_share(&mut self, neighbor: u32, share: T) {
         self.neighbors.push(neighbor);
-        self.coefficients.push(fraction * self.retained);
-        self.retained = self.retained * (T::one() - fraction);
+        self.coefficients.push(share);
     }
 
-    pub(super) fn shares(&self) -> (&[u32], &[T]) {
-        (&self.neighbors, &self.coefficients)
-    }
-
-    pub(super) fn remainder(&self) -> Option<u32> {
-        self.remainder
+    pub(super) fn shares(&self) -> Option<ColumnShares<'_, T>> {
+        Some(ColumnShares {
+            neighbors: &self.neighbors,
+            coefficients: &self.coefficients,
+            remainder: self.remainder?,
+        })
     }
 
     /// `None` writes the fallback column instead: a uniform split with no fill, for a
@@ -91,8 +94,9 @@ impl<T: Real> SampledColumn<T> {
 
         self.diagonal = pivot_diag;
         if let Some((last, leading)) = entries.split_last() {
+            let mut retained = Retained::new();
             for entry in leading {
-                self.push_neighbor(entry.neighbor, fraction);
+                self.push_share(entry.neighbor, retained.take(fraction));
             }
             self.remainder = Some(last.neighbor);
         }
@@ -159,11 +163,29 @@ struct Sampling<'a, T, C> {
     total_weight: T,
 }
 
-/// Neighbors walk a clique-tree path, each taking fraction `f_i = w_i * scale /
+/// Product of `(1 - f_k)` over the neighbors already taken, which is what the next one's
+/// fraction is a fraction of. Composing a share and advancing the product are one step, so
+/// no coefficient can be built from a product that missed a fraction.
+struct Retained<T>(T);
+
+impl<T: Real> Retained<T> {
+    #[inline(always)]
+    fn new() -> Self {
+        Self(T::one())
+    }
+
+    #[inline(always)]
+    fn take(&mut self, f: T) -> T {
+        let share = f * self.0;
+        self.0 = self.0 * (T::one() - f);
+        share
+    }
+}
+
+/// Neighbors walk a clique-tree path, each taking fraction `f_i = w_i * retained /
 /// capacity` of what earlier ones left.
 struct StarElimination<T = f64> {
-    /// Product of `(1 - f_k)` over processed neighbors.
-    scale: T,
+    retained: Retained<T>,
     capacity: T,
 }
 
@@ -171,7 +193,7 @@ impl<T: Real> StarElimination<T> {
     #[inline(always)]
     fn new(capacity: T) -> Self {
         Self {
-            scale: T::one(),
+            retained: Retained::new(),
             capacity,
         }
     }
@@ -179,19 +201,21 @@ impl<T: Real> StarElimination<T> {
     #[inline(always)]
     fn fraction(&self, w: T) -> T {
         debug_assert!(self.capacity > T::zero());
-        w * self.scale / self.capacity
+        w * self.retained.0 / self.capacity
     }
 
+    /// What this neighbor takes of the original pivot, the path advanced past it.
     #[inline(always)]
-    fn advance(&mut self, f: T) {
+    fn take(&mut self, f: T) -> T {
+        let share = self.retained.take(f);
         let retain = T::one() - f;
-        self.scale = self.scale * retain;
         self.capacity = self.capacity * retain * retain;
+        share
     }
 
     #[inline(always)]
     fn diagonal(&self, last_weight: T) -> T {
-        last_weight * self.scale
+        last_weight * self.retained.0
     }
 }
 
@@ -219,9 +243,8 @@ pub(super) fn sample_column<T: Real, C: EdgeCount>(
     for (i, entry) in rest.iter().enumerate() {
         let f = elim.fraction(entry.weight);
         let fill_wt = entry.copies.per_copy(f * (T::one() - f) * elim.capacity);
-        column.push_neighbor(entry.neighbor, f);
+        column.push_share(entry.neighbor, elim.take(f));
         column.sample_fill_edges(entry.neighbor, entry.copies, fill_wt, sampler, i + 1);
-        elim.advance(f);
     }
 
     column.finalize_sampling(last, &elim);

@@ -220,11 +220,9 @@ impl<T: num_traits::Float> TryFrom<SequenceData<T>> for EliminationSequence<T> {
     fn try_from(data: SequenceData<T>) -> Result<Self, Self::Error> {
         let mut builder = SequenceBuilder::with_capacity(data.steps.len(), 0);
         for step in data.steps {
-            let (shares, remainder) = match step.column {
-                Some(column) => (column.shares, Some(column.remainder)),
-                None => (Vec::new(), None),
-            };
-            builder.push_column(shares, remainder);
+            if let Some(column) = step.column {
+                builder.push_column(column.shares, column.remainder);
+            }
             builder
                 .push_header(step.vertex, step.pivot_scale)
                 .map_err(|nnz| FactorError::NonzeroCountExceedsU32 { nnz })?;
@@ -450,22 +448,17 @@ impl<T: num_traits::Float> SequenceBuilder<T> {
 
     /// Subtracts the shares from the pivot to reach the remainder's, and returns it — the
     /// one site that derives it, so a sequence off the wire and one off the sampler cannot
-    /// disagree about what the shares leave, and a lone neighbor takes exactly one.
-    fn push_column(
-        &mut self,
-        shares: impl IntoIterator<Item = (u32, T)>,
-        remainder: Option<u32>,
-    ) -> T {
+    /// disagree about what the shares leave, and a lone neighbor takes exactly one. Naming
+    /// the remainder is not optional: a share the kernels would then discard is unwritable.
+    fn push_column(&mut self, shares: impl IntoIterator<Item = (u32, T)>, remainder: u32) -> T {
         let mut left = T::one();
         for (neighbor, share) in shares {
             self.neighbor_indices.push(neighbor);
             self.coefficients.push(share);
             left = left - share;
         }
-        if let Some(neighbor) = remainder {
-            self.neighbor_indices.push(neighbor);
-            self.coefficients.push(left);
-        }
+        self.neighbor_indices.push(remainder);
+        self.coefficients.push(left);
         left
     }
 
@@ -495,9 +488,9 @@ impl<T: num_traits::Float> SequenceBuilder<T> {
             .unwrap_or_else(|nnz| panic!("factor nonzero count {nnz} exceeds u32 range capacity"));
     }
 
+    /// No neighbor to give anything to, so the pivot keeps what it retained: all of it.
     fn record_isolated(&mut self, vertex: usize, diagonal: T) {
-        let retained = self.push_column([], None);
-        self.push_step(vertex, diagonal, retained);
+        self.push_step(vertex, diagonal, T::one());
     }
 }
 
@@ -505,9 +498,17 @@ impl<T: Real> SequenceBuilder<T> {
     /// Takes the column, not its parts: [`SampledColumn`] is what keeps a neighbor
     /// array from being stored against a coefficient array of another length.
     fn record_column(&mut self, vertex: usize, column: &SampledColumn<T>) {
-        let (neighbors, shares) = column.shares();
-        let pairs = neighbors.iter().copied().zip(shares.iter().copied());
-        let retained = self.push_column(pairs, column.remainder());
+        let retained = match column.shares() {
+            Some(shares) => {
+                let pairs = shares
+                    .neighbors
+                    .iter()
+                    .copied()
+                    .zip(shares.coefficients.iter().copied());
+                self.push_column(pairs, shares.remainder)
+            }
+            None => T::one(),
+        };
         self.push_step(vertex, column.diagonal, retained);
     }
 }

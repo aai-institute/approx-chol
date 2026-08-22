@@ -10,17 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed (breaking)
 
 - A persisted `Factor` stores what each neighbor takes of the original pivot rather than of
-  what earlier neighbors left, and `FACTOR_FORMAT_VERSION` is `0x41430004`.
+  what earlier neighbors left, and `FACTOR_FORMAT_VERSION` is `0x41430004`. ([#131])
 - A persisted column names the neighbor that takes the remaining pivot rather than storing
-  its share.
+  its share. ([#131])
 
 ### Changed
 
 - The solve applies a factor without rebuilding a running product per entry: dense-factor
-  solves are 1.1-3.0x faster, grid solves ~10% faster, path-shaped factors ~4-5% slower.
-- Factorizing composes the sampled fractions, costing 2-7% on dense blocks.
+  solves are 1.1-3.0x faster, grid solves ~10% faster, path-shaped factors ~4-5% slower. ([#131])
+- Factorizing composes the sampled fractions, costing 2-7% on dense blocks. ([#131])
 - An existing factor's solve output changes bit-for-bit: composition and the gather's lane
-  split both reassociate the row's sum.
+  split both reassociate the row's sum. ([#131])
 
 ## [0.5.0] - 2026-08-11
 
@@ -196,3 +196,4 @@ for graph Laplacians in Rust with Python bindings.
 [#93]: https://github.com/aai-institute/approx-chol/issues/93
 [#109]: https://github.com/aai-institute/approx-chol/issues/109
 [#118]: https://github.com/aai-institute/approx-chol/issues/118
+[#131]: https://github.com/aai-institute/approx-chol/pull/131
