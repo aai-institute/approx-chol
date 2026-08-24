@@ -112,8 +112,8 @@ impl<'a, T: Real> EliminationStep<'a, T> {
         y[self.vertex] = pivot * self.pivot_scale;
     }
 
-    /// Dispatched on row length: a min-degree order leaves enough short rows that the
-    /// lanes' combining adds cost real time on one too short to fill them.
+    /// A lone neighbor is special-cased for the many rows a min-degree order leaves at
+    /// degree one, not for the arithmetic: the general arm would give the same bits.
     #[inline(always)]
     fn apply_backward(&self, y: &mut [T]) {
         match *self.coefficients {
@@ -122,13 +122,6 @@ impl<'a, T: Real> EliminationStep<'a, T> {
                 debug_assert!(c == T::one(), "a lone coefficient takes the whole pivot");
                 let j = self.neighbor_indices[0] as usize;
                 y[self.vertex] = y[self.vertex] + y[j];
-            }
-            [.., retained] if self.coefficients.len() < LANES => {
-                let mut total = retained * y[self.vertex];
-                for (&j, &c) in self.neighbor_indices.iter().zip(self.coefficients) {
-                    total = total + c * y[j as usize];
-                }
-                y[self.vertex] = total;
             }
             [.., retained] => {
                 let mut lanes = [T::zero(); LANES];
