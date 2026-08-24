@@ -183,7 +183,7 @@ fn dedup_single_copy_paths_agree() {
 fn equal_sort_keys_order_by_ascending_neighbor() {
     let mut single = Star::<f64, Single>::new();
     for neighbor in [5, 2, 9] {
-        single.push(StarEntry {
+        single.entries.push(StarEntry {
             neighbor,
             copies: Single,
             weight: 1.5,
@@ -199,7 +199,7 @@ fn equal_sort_keys_order_by_ascending_neighbor() {
     // so it needs its own tie: every quotient here is 1.5 and exact in binary.
     let mut multi = Star::<f64, Multi>::new();
     for (neighbor, weight, copies) in [(5u32, 3.0, 2u32), (2, 1.5, 1), (9, 6.0, 4)] {
-        multi.push(StarEntry {
+        multi.entries.push(StarEntry {
             neighbor,
             copies: Multi::new(copies),
             weight,

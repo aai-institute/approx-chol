@@ -59,17 +59,13 @@ impl<T: Real, C: EdgeCount> Star<T, C> {
         self.removed_copies.clear();
     }
 
-    fn push(&mut self, entry: StarEntry<T, C>) {
-        self.entries.push(entry);
-    }
-
     /// One call per unique neighbor, so the cap needs no second pass.
     fn push_capped(&mut self, neighbor: u32, weight: T, copies: u32, limit: C::Split) {
         let (copies, dropped) = C::cap(copies, limit);
         if dropped > 0 {
             self.removed_copies.push((neighbor, dropped));
         }
-        self.push(StarEntry {
+        self.entries.push(StarEntry {
             neighbor,
             copies,
             weight,
