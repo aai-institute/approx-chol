@@ -15,9 +15,6 @@ const PRE_BUMP_VERSION: u32 = 0x4143_0003;
 /// Zero-sum over each component, so the floating case has an exact solution.
 const B: [f64; 4] = [1.0, 2.0, -1.0, -2.0];
 
-/// The same for five vertices; a short one is zero-extended and skips the last row.
-const B5: [f64; 5] = [1.0, 2.0, -1.0, -2.0, 0.0];
-
 /// A sampled factor preconditions rather than solves, so no residual bound pins it.
 #[derive(PartialEq)]
 enum Solves {
@@ -33,8 +30,6 @@ struct Matrix {
     /// `None` takes the crate default rather than restating it here.
     backend: Option<Backend>,
     solves: Solves,
-    /// Sized to this matrix, so every row reaches the residual.
-    rhs: &'static [f64],
 }
 
 impl Matrix {
@@ -60,7 +55,6 @@ const INTERLEAVED: Matrix = Matrix {
     values: &[1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0],
     backend: None,
     solves: Solves::ItsOwnMatrix,
-    rhs: &B,
 };
 
 /// Strictly dominant, so ingestion grounds it and the payload carries a ground anchor.
@@ -71,23 +65,19 @@ const GROUNDED: Matrix = Matrix {
     values: &[2.0, -1.0, -1.0, 3.0, -1.0, -1.0, 3.0, -1.0, -1.0, 2.0],
     backend: None,
     solves: Solves::ItsOwnMatrix,
-    rhs: &B,
 };
 
-/// `K5` under the approximate arm: the only fixture freezing an elimination sequence.
+/// `K4` under the approximate arm: the only fixture freezing an elimination sequence, and
+/// its leading column hands out shares rather than the lone `1.0` a path would pin.
 const SAMPLED: Matrix = Matrix {
-    name: "sampled_k5",
-    row_ptrs: &[0, 5, 10, 15, 20, 25],
-    col_indices: &[
-        0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4,
-    ],
+    name: "sampled_k4",
+    row_ptrs: &[0, 4, 8, 12, 16],
+    col_indices: &[0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3],
     values: &[
-        4.0, -1.0, -1.0, -1.0, -1.0, -1.0, 4.0, -1.0, -1.0, -1.0, -1.0, -1.0, 4.0, -1.0, -1.0,
-        -1.0, -1.0, -1.0, 4.0, -1.0, -1.0, -1.0, -1.0, -1.0, 4.0,
+        3.0, -1.0, -1.0, -1.0, -1.0, 3.0, -1.0, -1.0, -1.0, -1.0, 3.0, -1.0, -1.0, -1.0, -1.0, 3.0,
     ],
     backend: Some(Backend::Approximate),
     solves: Solves::OnlyAsAPreconditioner,
-    rhs: &B5,
 };
 
 const FIXTURES: [&Matrix; 3] = [&INTERLEAVED, &GROUNDED, &SAMPLED];
@@ -95,7 +85,7 @@ const FIXTURES: [&Matrix; 3] = [&INTERLEAVED, &GROUNDED, &SAMPLED];
 #[rstest]
 #[case::interleaved(&INTERLEAVED, include_str!("fixtures/interleaved_0x41430004.json"))]
 #[case::grounded_sddm(&GROUNDED, include_str!("fixtures/grounded_sddm_0x41430004.json"))]
-#[case::sampled_k5(&SAMPLED, include_str!("fixtures/sampled_k5_0x41430004.json"))]
+#[case::sampled_k4(&SAMPLED, include_str!("fixtures/sampled_k4_0x41430004.json"))]
 fn a_committed_payload_decodes_and_still_solves(#[case] matrix: &Matrix, #[case] committed: &str) {
     let restored: Factor<f64> = serde_json::from_str(committed)
         .expect("committed payload must decode; regenerate it if the format version moved");
@@ -105,7 +95,7 @@ fn a_committed_payload_decodes_and_still_solves(#[case] matrix: &Matrix, #[case]
     assert_eq!(restored.original_n(), fresh.original_n());
     assert_eq!(restored.n_steps(), fresh.n_steps());
 
-    let b = matrix.rhs;
+    let b = &B;
     assert_eq!(
         b.len(),
         matrix.row_ptrs.len() - 1,
