@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A persisted column names the neighbor taking the remaining pivot rather than storing its
   share. ([#131])
 
+### Changed
+
+- Faster `Factor::solve` on dense factors, from composing elimination fractions at build
+  time. ([#131])
+
 ## [0.5.0] - 2026-08-11
 
 ### Changed (breaking)
