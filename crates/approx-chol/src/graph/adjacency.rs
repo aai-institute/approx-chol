@@ -103,7 +103,9 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
         }));
     }
 
-    /// Mark `v` as eliminated and release its adjacency storage.
+    /// Mark `v` as eliminated and release its adjacency storage. Kept out of line: at one
+    /// call site LLVM inlines it into the elimination loop, costing 1.6% of the build.
+    #[inline(never)]
     pub(crate) fn eliminate_vertex(&mut self, v: usize) {
         self.eliminated.set(v);
         while let Some(edge) = self.adj[v].pop() {
