@@ -483,9 +483,7 @@ impl<T: num_traits::Float> SequenceBuilder<T> {
         }
         self.push_header(step.vertex, step.pivot_scale)
     }
-}
 
-impl<T: Real> SequenceBuilder<T> {
     /// Takes the column, not its parts, so a neighbor array cannot be stored against a
     /// coefficient array of another length; `None` is a pivot that keeps all it retained.
     fn push_sampled(&mut self, vertex: usize, diagonal: T, column: Option<ColumnShares<'_, T>>) {
