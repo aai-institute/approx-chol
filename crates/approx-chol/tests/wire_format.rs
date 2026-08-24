@@ -6,7 +6,6 @@
 mod residual;
 
 use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, FACTOR_FORMAT_VERSION};
-use rstest::rstest;
 
 /// The interleaved payload as it was written before the version moved to `0x41430004`.
 const PRE_BUMP: &str = include_str!("fixtures/pre_bump_0x41430003.json");
@@ -34,6 +33,16 @@ impl Matrix {
     /// preconditions, so no residual bound tight enough to mean anything holds.
     fn solves_its_own_matrix(&self) -> bool {
         self.backend.is_none()
+    }
+
+    /// The one place a fixture path is spelled, so the reader below and the regenerator
+    /// cannot disagree about which file this build's version names.
+    fn fixture_path(&self) -> String {
+        format!(
+            "{}/tests/fixtures/{}_{FACTOR_FORMAT_VERSION:#010x}.json",
+            env!("CARGO_MANIFEST_DIR"),
+            self.name
+        )
     }
 
     fn factor(&self) -> Factor<f64> {
@@ -77,41 +86,49 @@ const SAMPLED: Matrix = Matrix {
 
 const FIXTURES: [&Matrix; 3] = [&INTERLEAVED, &GROUNDED, &SAMPLED];
 
-#[rstest]
-#[case::interleaved(&INTERLEAVED, include_str!("fixtures/interleaved_0x41430004.json"))]
-#[case::grounded_sddm(&GROUNDED, include_str!("fixtures/grounded_sddm_0x41430004.json"))]
-#[case::sampled_k4(&SAMPLED, include_str!("fixtures/sampled_k4_0x41430004.json"))]
-fn a_committed_payload_decodes_and_still_solves(#[case] matrix: &Matrix, #[case] committed: &str) {
-    let restored: Factor<f64> = serde_json::from_str(committed)
-        .expect("committed payload must decode; regenerate it if the format version moved");
-    let fresh = matrix.factor();
+#[test]
+fn a_committed_payload_decodes_and_still_solves() {
+    for matrix in FIXTURES {
+        let name = matrix.name;
+        let committed = std::fs::read_to_string(matrix.fixture_path()).unwrap_or_else(|e| {
+            panic!(
+                "{name}: no committed payload for this version ({e}); \
+                 regenerate the fixtures if the format version moved"
+            )
+        });
+        let restored: Factor<f64> = serde_json::from_str(&committed)
+            .unwrap_or_else(|e| panic!("{name}: committed payload must decode: {e}"));
+        let fresh = matrix.factor();
 
-    assert_eq!(restored.n(), fresh.n());
-    assert_eq!(restored.original_n(), fresh.original_n());
-    assert_eq!(restored.n_steps(), fresh.n_steps());
+        assert_eq!(restored.n(), fresh.n(), "{name}");
+        assert_eq!(restored.original_n(), fresh.original_n(), "{name}");
+        assert_eq!(restored.n_steps(), fresh.n_steps(), "{name}");
 
-    let b = &B;
-    let x = restored.solve(b).expect("solve the restored factor");
-    if matrix.solves_its_own_matrix() {
-        // Rows come from the matrix, not from `b`: a short right-hand side must panic in
-        // the residual rather than quietly leave the last equation unjudged.
-        let rows = 0..matrix.row_ptrs.len() - 1;
-        let residual = residual::relative_residual_over(matrix.csr(), &x, b, rows);
+        let b = &B;
+        let x = restored.solve(b).expect("solve the restored factor");
+        if matrix.solves_its_own_matrix() {
+            // Rows come from the matrix, not from `b`: a short right-hand side must panic
+            // in the residual rather than quietly leave the last equation unjudged.
+            let rows = 0..matrix.row_ptrs.len() - 1;
+            let residual = residual::relative_residual_over(matrix.csr(), &x, b, rows);
+            assert!(
+                residual < 1e-12,
+                "{name}: the committed payload decoded to a factor that no longer solves \
+                 its own matrix: relative residual {residual:e}"
+            );
+        }
+
+        // The residual alone is satisfied by any valid factor, not only the one that wrote
+        // these bytes.
+        let expected = fresh.solve(b).expect("solve the fresh factor");
         assert!(
-            residual < 1e-12,
-            "the committed payload decoded to a factor that no longer solves its own \
-             matrix: relative residual {residual:e}"
+            x.iter()
+                .zip(&expected)
+                .all(|(got, want)| (got - want).abs() < 1e-12),
+            "{name}: the committed payload solves differently from this build: \
+             {x:?} against {expected:?}"
         );
     }
-
-    // The residual alone is satisfied by any valid factor, not only the one that wrote these bytes.
-    let expected = fresh.solve(b).expect("solve the fresh factor");
-    assert!(
-        x.iter()
-            .zip(&expected)
-            .all(|(got, want)| (got - want).abs() < 1e-12),
-        "the committed payload solves differently from this build: {x:?} against {expected:?}"
-    );
 }
 
 #[test]
@@ -130,17 +147,13 @@ fn a_payload_from_before_the_last_bump_is_rejected_by_its_version() {
     );
 }
 
-/// `cargo test -p approx-chol --features serde --test wire_format -- --ignored`, then point
-/// each `include_str!` at the new file and `PRE_BUMP` at what it replaced.
+/// `cargo test -p approx-chol --features serde --test wire_format -- --ignored`; the reader
+/// above finds the new files by version, so only `PRE_BUMP` needs repointing.
 #[test]
 #[ignore = "writes fixtures; run deliberately after a format version bump"]
 fn regenerate_wire_format_fixtures() {
     for matrix in FIXTURES {
-        let path = format!(
-            "{}/tests/fixtures/{}_{FACTOR_FORMAT_VERSION:#010x}.json",
-            env!("CARGO_MANIFEST_DIR"),
-            matrix.name
-        );
+        let path = matrix.fixture_path();
         // Rewriting a committed payload with today's encoder is how this test comes to agree
         // with the drift it exists to catch.
         assert!(
