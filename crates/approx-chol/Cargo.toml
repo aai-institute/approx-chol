@@ -33,8 +33,7 @@ faer = ["dep:faer"]
 criterion = { version = "0.8.2", features = ["html_reports"] }
 proptest = "1.6"
 rstest = { version = "0.26.1", default-features = false }
-# Without `float_roundtrip` serde_json parses an f64 back an ulp off, so no JSON test can
-# assert a decoded factor solves bit-for-bit.
+# Without `float_roundtrip` serde_json parses an f64 back an ulp off.
 serde_json = { version = "1", features = ["float_roundtrip"] }
 
 [[bench]]

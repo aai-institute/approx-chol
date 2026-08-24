@@ -74,14 +74,12 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
     )
 }
 
-/// Independent lanes for the backward gather. The split reassociates the row's sum, so this
-/// constant is part of a factor's solve output, not a free tuning knob.
+/// The split reassociates the row's sum, so this is part of a factor's solve output.
 const LANES: usize = 4;
 
 /// Zero-copy view of one elimination step.
 struct EliminationStep<'a, T> {
     vertex: usize,
-    /// `D^{-1}` already scaled by what the neighbors left, so no pass rebuilds it.
     pivot_scale: T,
     neighbor_indices: &'a [u32],
     coefficients: &'a [T],
@@ -96,7 +94,6 @@ impl<'a, T: Real> EliminationStep<'a, T> {
     fn apply_forward(&self, y: &mut [T]) {
         let pivot = y[self.vertex];
         match *self.coefficients {
-            // A lone coefficient is a remainder with nothing subtracted from it.
             [c] => {
                 debug_assert!(c == T::one(), "a lone coefficient takes the whole pivot");
                 let j = self.neighbor_indices[0] as usize;
@@ -112,8 +109,7 @@ impl<'a, T: Real> EliminationStep<'a, T> {
         y[self.vertex] = pivot * self.pivot_scale;
     }
 
-    /// A lone neighbor is special-cased for the many rows a min-degree order leaves at
-    /// degree one, not for the arithmetic: the general arm would give the same bits.
+    /// The lone-neighbor arm is for the many degree-one rows, not the arithmetic.
     #[inline(always)]
     fn apply_backward(&self, y: &mut [T]) {
         match *self.coefficients {
@@ -149,7 +145,7 @@ impl<'a, T: Real> EliminationStep<'a, T> {
 pub(crate) struct StepHeader<T> {
     pub(crate) vertex: u32,
     pub(crate) end: u32,
-    /// `D^{-1}` premultiplied by the step's retained fraction, so no pass rebuilds it.
+    /// `D^{-1}` premultiplied by the retained fraction, so no pass rebuilds it.
     pub(crate) pivot_scale: T,
 }
 
@@ -185,8 +181,7 @@ struct StepData<T> {
     column: Option<ColumnData<T>>,
 }
 
-/// The remainder carries no share: it takes what the others leave, so a payload has
-/// nowhere to say that a column hands out more pivot than it has.
+/// No share for the remainder, so a payload cannot overspend a column's pivot.
 #[cfg(feature = "serde")]
 #[derive(serde::Deserialize)]
 #[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
@@ -210,8 +205,12 @@ impl<T: num_traits::Float> TryFrom<SequenceData<T>> for EliminationSequence<T> {
     fn try_from(data: SequenceData<T>) -> Result<Self, Self::Error> {
         let mut builder = SequenceBuilder::with_capacity(data.steps.len(), 0);
         for step in data.steps {
+            // Already composed on the wire, and absent rather than empty for an isolated pivot.
+            if let Some(column) = step.column {
+                builder.push_column(column.shares.into_iter(), column.remainder);
+            }
             builder
-                .push_decoded(step)
+                .push_header(step.vertex, step.pivot_scale)
                 .map_err(|nnz| FactorError::NonzeroCountExceedsU32 { nnz })?;
         }
         Ok(builder.finish(data.uneliminated))
@@ -253,16 +252,13 @@ impl<T: serde::Serialize> serde::Serialize for StepView<'_, T> {
         let mut out = serializer.serialize_struct("StepData", 3)?;
         out.serialize_field("vertex", &sequence.steps[i].vertex)?;
         out.serialize_field("pivot_scale", &sequence.steps[i].pivot_scale)?;
-        // The remainder's share is what the decoder subtracts back out, so writing it
-        // would be writing a value nothing reads.
+        // The decoder subtracts the remainder's share back out, so writing it writes
+        // a value nothing reads.
         let column =
             sequence.neighbor_indices[start..end]
                 .split_last()
                 .map(|(&remainder, shared)| ColumnView {
-                    shares: PairedNeighbors(
-                        shared,
-                        &sequence.coefficients[start..][..shared.len()],
-                    ),
+                    shares: PairedNeighbors(shared, &sequence.coefficients[start..end - 1]),
                     remainder,
                 });
         out.serialize_field("column", &column)?;
@@ -271,20 +267,11 @@ impl<T: serde::Serialize> serde::Serialize for StepView<'_, T> {
 }
 
 #[cfg(feature = "serde")]
-struct ColumnView<'a, T> {
+#[derive(serde::Serialize)]
+#[serde(rename = "ColumnData")]
+struct ColumnView<'a, T: serde::Serialize> {
     shares: PairedNeighbors<'a, T>,
     remainder: u32,
-}
-
-#[cfg(feature = "serde")]
-impl<T: serde::Serialize> serde::Serialize for ColumnView<'_, T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeStruct;
-        let mut out = serializer.serialize_struct("ColumnData", 2)?;
-        out.serialize_field("shares", &self.shares)?;
-        out.serialize_field("remainder", &self.remainder)?;
-        out.end()
-    }
 }
 
 #[cfg(feature = "serde")]
@@ -373,8 +360,7 @@ impl<T> EliminationSequence<T> {
                     });
                 }
             }
-            // Overspent shares leave the derived remainder negative; `pivot_scale` scales
-            // a share and is not itself bounded.
+            // Overspent shares leave the derived remainder negative.
             let coefficients = &self.coefficients[start..end];
             if !step.pivot_scale.is_finite()
                 || coefficients
@@ -434,8 +420,7 @@ impl<T: num_traits::Float> SequenceBuilder<T> {
         }
     }
 
-    /// The one site that derives the remainder's share, so a sequence off the wire and one
-    /// off the sampler cannot disagree about what the shares leave.
+    /// The one site deriving the remainder, so wire and sampler cannot disagree.
     fn push_column(
         &mut self,
         shares: impl ExactSizeIterator<Item = (u32, T)>,
@@ -454,8 +439,7 @@ impl<T: num_traits::Float> SequenceBuilder<T> {
         left
     }
 
-    /// Closes the step over whatever column was pushed since the last one, so `end` is
-    /// only ever derivable at this call. `Err` carries the `nnz` that overflowed it.
+    /// Closes the step over the column pushed since the last one; `Err` carries the `nnz`.
     fn push_header(&mut self, vertex: u32, pivot_scale: T) -> Result<(), usize> {
         let nnz = self.neighbor_indices.len();
         let end = u32::try_from(nnz).map_err(|_| nnz)?;
@@ -467,25 +451,19 @@ impl<T: num_traits::Float> SequenceBuilder<T> {
         Ok(())
     }
 
-    /// `pivot_scale` comes off the wire already composed, and a decoded column is absent
-    /// rather than empty for an isolated pivot.
-    #[cfg(feature = "serde")]
-    fn push_decoded(&mut self, step: StepData<T>) -> Result<(), usize> {
-        if let Some(column) = step.column {
-            self.push_column(column.shares.into_iter(), column.remainder);
-        }
-        self.push_header(step.vertex, step.pivot_scale)
-    }
-
-    /// Takes the column, not its parts, so a neighbor array cannot be stored against a
-    /// coefficient array of another length; `None` is a pivot that keeps all it retained.
+    /// `None` is a pivot that keeps everything it retained.
     fn push_sampled(&mut self, vertex: usize, diagonal: T, column: Option<ColumnShares<'_, T>>) {
         let retained = match column {
-            Some(shares) => self.push_column(shares.pairs(), shares.remainder),
+            Some(c) => self.push_column(
+                c.neighbors
+                    .iter()
+                    .copied()
+                    .zip(c.coefficients.iter().copied()),
+                c.remainder,
+            ),
             None => T::one(),
         };
-        // A merely small pivot inverts fine; standing `one` in for it would drop
-        // the block's scale outright rather than lose accuracy.
+        // A small pivot inverts fine; `one` would drop the block's scale outright.
         let inverse = match T::one() / diagonal {
             inverse if inverse.is_finite() => inverse,
             _ => T::one(),

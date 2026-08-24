@@ -15,12 +15,10 @@ const PRE_BUMP_VERSION: u32 = 0x4143_0003;
 /// Zero-sum over each component, so the floating case has an exact solution.
 const B: [f64; 4] = [1.0, 2.0, -1.0, -2.0];
 
-/// The same, for a five-vertex fixture: a short right-hand side would be zero-extended and
-/// leave the last row's equation out of the residual.
+/// The same for five vertices; a short one is zero-extended and skips the last row.
 const B5: [f64; 5] = [1.0, 2.0, -1.0, -2.0, 0.0];
 
-/// A sampled factor only preconditions its matrix, so a residual bound tight enough to
-/// mean anything would fail it; what pins that payload is agreeing with a fresh factor.
+/// A sampled factor preconditions rather than solves, so no residual bound pins it.
 #[derive(PartialEq)]
 enum Solves {
     ItsOwnMatrix,
@@ -76,10 +74,7 @@ const GROUNDED: Matrix = Matrix {
     rhs: &B,
 };
 
-/// `K5` under the approximate arm: the default backend takes a block this small exactly,
-/// so the encoding of an elimination sequence would otherwise go unfrozen — and every step
-/// here carries several neighbors, so the composed coefficients are something other than
-/// the lone `1.0` a two-vertex block would pin.
+/// `K5` under the approximate arm: the only fixture freezing an elimination sequence.
 const SAMPLED: Matrix = Matrix {
     name: "sampled_k5",
     row_ptrs: &[0, 5, 10, 15, 20, 25],
