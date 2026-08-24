@@ -6,6 +6,7 @@
 mod residual;
 
 use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, FACTOR_FORMAT_VERSION};
+use rstest::rstest;
 
 /// The interleaved payload as it was written before the version moved to `0x41430004`.
 const PRE_BUMP: &str = include_str!("fixtures/pre_bump_0x41430003.json");
@@ -29,10 +30,8 @@ impl Matrix {
         CsrRef::new(self.row_ptrs, self.col_indices, self.values, n).expect("valid csr")
     }
 
-    /// The default backend takes blocks this small exactly; a sampled factor only
-    /// preconditions, so no residual bound tight enough to mean anything holds.
-    fn solves_its_own_matrix(&self) -> bool {
-        self.backend.is_none()
+    fn backend(&self) -> Backend {
+        self.backend.unwrap_or_default()
     }
 
     /// The one place a fixture path is spelled, so the reader below and the regenerator
@@ -47,7 +46,7 @@ impl Matrix {
 
     fn factor(&self) -> Factor<f64> {
         let config = Config {
-            backend: self.backend.unwrap_or_default(),
+            backend: self.backend(),
             ..Config::default()
         };
         factorize_with(self.csr(), config).expect("factorization should succeed")
@@ -86,49 +85,51 @@ const SAMPLED: Matrix = Matrix {
 
 const FIXTURES: [&Matrix; 3] = [&INTERLEAVED, &GROUNDED, &SAMPLED];
 
+/// Adding a fixture means adding a case below; without this the new const is regenerated
+/// but never read back.
 #[test]
-fn a_committed_payload_decodes_and_still_solves() {
-    for matrix in FIXTURES {
-        let name = matrix.name;
-        let committed = std::fs::read_to_string(matrix.fixture_path()).unwrap_or_else(|e| {
-            panic!(
-                "{name}: no committed payload for this version ({e}); \
-                 regenerate the fixtures if the format version moved"
-            )
-        });
-        let restored: Factor<f64> = serde_json::from_str(&committed)
-            .unwrap_or_else(|e| panic!("{name}: committed payload must decode: {e}"));
-        let fresh = matrix.factor();
+fn every_fixture_has_a_case() {
+    assert_eq!(FIXTURES.len(), 3);
+}
 
-        assert_eq!(restored.n(), fresh.n(), "{name}");
-        assert_eq!(restored.original_n(), fresh.original_n(), "{name}");
-        assert_eq!(restored.n_steps(), fresh.n_steps(), "{name}");
+#[rstest]
+#[case::interleaved(&INTERLEAVED)]
+#[case::grounded_sddm(&GROUNDED)]
+#[case::sampled_k4(&SAMPLED)]
+fn a_committed_payload_decodes_and_still_solves(#[case] matrix: &Matrix) {
+    let committed = std::fs::read_to_string(matrix.fixture_path())
+        .expect("no committed payload for this version; regenerate if the version moved");
+    let restored: Factor<f64> =
+        serde_json::from_str(&committed).expect("committed payload must decode");
+    let fresh = matrix.factor();
 
-        let b = &B;
-        let x = restored.solve(b).expect("solve the restored factor");
-        if matrix.solves_its_own_matrix() {
-            // Rows come from the matrix, not from `b`: a short right-hand side must panic
-            // in the residual rather than quietly leave the last equation unjudged.
-            let rows = 0..matrix.row_ptrs.len() - 1;
-            let residual = residual::relative_residual_over(matrix.csr(), &x, b, rows);
-            assert!(
-                residual < 1e-12,
-                "{name}: the committed payload decoded to a factor that no longer solves \
-                 its own matrix: relative residual {residual:e}"
-            );
-        }
+    assert_eq!(restored.n(), fresh.n());
+    assert_eq!(restored.original_n(), fresh.original_n());
+    assert_eq!(restored.n_steps(), fresh.n_steps());
 
-        // The residual alone is satisfied by any valid factor, not only the one that wrote
-        // these bytes.
-        let expected = fresh.solve(b).expect("solve the fresh factor");
+    let x = restored.solve(&B).expect("solve the restored factor");
+    // A sampled factor only preconditions, so no residual bound tight enough to mean
+    // anything holds; asking anyway would pass for the wrong reason.
+    if !matches!(matrix.backend(), Backend::Approximate) {
+        // Rows come from the matrix, not from `b`: a short right-hand side must panic in
+        // the residual rather than quietly leave the last equation unjudged.
+        let rows = 0..matrix.row_ptrs.len() - 1;
+        let residual = residual::relative_residual_over(matrix.csr(), &x, &B, rows);
         assert!(
-            x.iter()
-                .zip(&expected)
-                .all(|(got, want)| (got - want).abs() < 1e-12),
-            "{name}: the committed payload solves differently from this build: \
-             {x:?} against {expected:?}"
+            residual < 1e-12,
+            "the committed payload decoded to a factor that no longer solves its own \
+             matrix: relative residual {residual:e}"
         );
     }
+
+    // The residual alone is satisfied by any valid factor, not only the one that wrote these bytes.
+    let expected = fresh.solve(&B).expect("solve the fresh factor");
+    assert!(
+        x.iter()
+            .zip(&expected)
+            .all(|(got, want)| (got - want).abs() < 1e-12),
+        "the committed payload solves differently from this build: {x:?} against {expected:?}"
+    );
 }
 
 #[test]
