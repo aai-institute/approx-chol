@@ -15,27 +15,25 @@ const PRE_BUMP_VERSION: u32 = 0x4143_0003;
 /// Zero-sum over each component, so the floating case has an exact solution.
 const B: [f64; 4] = [1.0, 2.0, -1.0, -2.0];
 
-/// A sampled factor preconditions rather than solves, so no residual bound pins it.
-#[derive(PartialEq)]
-enum Solves {
-    ItsOwnMatrix,
-    OnlyAsAPreconditioner,
-}
-
 struct Matrix {
     name: &'static str,
     row_ptrs: &'static [u32],
     col_indices: &'static [u32],
     values: &'static [f64],
-    /// `None` takes the crate default rather than restating it here.
+    /// `Backend::default()` is a trait method, so a const initializer cannot call it.
     backend: Option<Backend>,
-    solves: Solves,
 }
 
 impl Matrix {
     fn csr(&self) -> CsrRef<'_, f64, u32> {
         let n = u32::try_from(self.row_ptrs.len() - 1).expect("dimension fits in u32");
         CsrRef::new(self.row_ptrs, self.col_indices, self.values, n).expect("valid csr")
+    }
+
+    /// The default backend takes blocks this small exactly; a sampled factor only
+    /// preconditions, so no residual bound tight enough to mean anything holds.
+    fn solves_its_own_matrix(&self) -> bool {
+        self.backend.is_none()
     }
 
     fn factor(&self) -> Factor<f64> {
@@ -54,7 +52,6 @@ const INTERLEAVED: Matrix = Matrix {
     col_indices: &[0, 2, 1, 3, 0, 2, 1, 3],
     values: &[1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0],
     backend: None,
-    solves: Solves::ItsOwnMatrix,
 };
 
 /// Strictly dominant, so ingestion grounds it and the payload carries a ground anchor.
@@ -64,7 +61,6 @@ const GROUNDED: Matrix = Matrix {
     col_indices: &[0, 1, 0, 1, 2, 1, 2, 3, 2, 3],
     values: &[2.0, -1.0, -1.0, 3.0, -1.0, -1.0, 3.0, -1.0, -1.0, 2.0],
     backend: None,
-    solves: Solves::ItsOwnMatrix,
 };
 
 /// `K4` under the approximate arm: the only fixture freezing an elimination sequence, and
@@ -77,7 +73,6 @@ const SAMPLED: Matrix = Matrix {
         3.0, -1.0, -1.0, -1.0, -1.0, 3.0, -1.0, -1.0, -1.0, -1.0, 3.0, -1.0, -1.0, -1.0, -1.0, 3.0,
     ],
     backend: Some(Backend::Approximate),
-    solves: Solves::OnlyAsAPreconditioner,
 };
 
 const FIXTURES: [&Matrix; 3] = [&INTERLEAVED, &GROUNDED, &SAMPLED];
@@ -96,14 +91,12 @@ fn a_committed_payload_decodes_and_still_solves(#[case] matrix: &Matrix, #[case]
     assert_eq!(restored.n_steps(), fresh.n_steps());
 
     let b = &B;
-    assert_eq!(
-        b.len(),
-        matrix.row_ptrs.len() - 1,
-        "the fixture's right-hand side must cover every row, or the residual skips one"
-    );
     let x = restored.solve(b).expect("solve the restored factor");
-    if matrix.solves == Solves::ItsOwnMatrix {
-        let residual = residual::relative_residual_over(matrix.csr(), &x, b, 0..b.len());
+    if matrix.solves_its_own_matrix() {
+        // Rows come from the matrix, not from `b`: a short right-hand side must panic in
+        // the residual rather than quietly leave the last equation unjudged.
+        let rows = 0..matrix.row_ptrs.len() - 1;
+        let residual = residual::relative_residual_over(matrix.csr(), &x, b, rows);
         assert!(
             residual < 1e-12,
             "the committed payload decoded to a factor that no longer solves its own \

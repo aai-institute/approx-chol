@@ -178,15 +178,15 @@ struct StepData<T> {
     vertex: u32,
     pivot_scale: T,
     /// `None` for an isolated pivot, which has no neighbor to give anything to.
-    column: Option<ColumnData<T>>,
+    column: Option<ColumnData<Vec<(u32, T)>>>,
 }
 
-/// No share for the remainder, so a payload cannot overspend a column's pivot.
+/// No share for the remainder, so a payload cannot overspend a column's pivot. One
+/// declaration for both directions: `S` is owned pairs decoding, borrowed slices encoding.
 #[cfg(feature = "serde")]
-#[derive(serde::Deserialize)]
-#[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
-struct ColumnData<T> {
-    shares: Vec<(u32, T)>,
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ColumnData<S> {
+    shares: S,
     remainder: u32,
 }
 
@@ -257,21 +257,13 @@ impl<T: serde::Serialize> serde::Serialize for StepView<'_, T> {
         let column =
             sequence.neighbor_indices[start..end]
                 .split_last()
-                .map(|(&remainder, shared)| ColumnView {
+                .map(|(&remainder, shared)| ColumnData {
                     shares: PairedNeighbors(shared, &sequence.coefficients[start..end - 1]),
                     remainder,
                 });
         out.serialize_field("column", &column)?;
         out.end()
     }
-}
-
-#[cfg(feature = "serde")]
-#[derive(serde::Serialize)]
-#[serde(rename = "ColumnData")]
-struct ColumnView<'a, T: serde::Serialize> {
-    shares: PairedNeighbors<'a, T>,
-    remainder: u32,
 }
 
 #[cfg(feature = "serde")]

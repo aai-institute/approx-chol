@@ -11,31 +11,25 @@ fn sequence() -> EliminationSequence<f64> {
         steps: vec![
             StepHeader {
                 vertex: 0,
-                end: 3,
+                end: 2,
                 pivot_scale: 0.5,
             },
+            // An isolated pivot ends where the last step did: no neighbors to close over.
             StepHeader {
                 vertex: 1,
-                end: 4,
-                pivot_scale: 1.0,
-            },
-            // The star of an isolated pivot is empty, so its column has no share to hold
-            // to anything.
-            StepHeader {
-                vertex: 2,
-                end: 4,
+                end: 2,
                 pivot_scale: 1.0,
             },
         ],
-        neighbor_indices: vec![1, 2, 3, 2],
-        coefficients: vec![0.2, 0.3, 1.0 - 0.2 - 0.3, 1.0],
-        uneliminated: 3,
+        neighbor_indices: vec![1, 2],
+        coefficients: vec![0.2, 0.8],
+        uneliminated: 2,
     }
 }
 
 fn data(cholesky: Cholesky<f64>) -> BlockData<f64> {
     BlockData {
-        dim: dim(4),
+        dim: dim(3),
         anchor: Anchor::Floating,
         cholesky,
     }
@@ -45,10 +39,10 @@ fn approx() -> BlockData<f64> {
     data(Cholesky::Approximate(sequence()))
 }
 
-/// The block solves for `4 - 1` variables, so its packed factor holds `3 * 4 / 2`.
+/// The block solves for `3 - 1` variables, so its packed factor holds `2 * 3 / 2`.
 fn exact() -> BlockData<f64> {
     data(Cholesky::Exact(LowerTriangular {
-        values: vec![1.0; 6],
+        values: vec![1.0; 3],
     }))
 }
 
@@ -92,7 +86,7 @@ fn every_block_error_variant_is_reachable() {
             FactorError::VertexOutOfBounds {
                 step: 0,
                 vertex: 99,
-                n: 4,
+                n: 3,
             },
         ),
         (
@@ -102,7 +96,7 @@ fn every_block_error_variant_is_reachable() {
             FactorError::NeighborOutOfBounds {
                 step: 0,
                 neighbor: 99,
-                n: 4,
+                n: 3,
             },
         ),
         (
@@ -142,13 +136,13 @@ fn every_block_error_variant_is_reachable() {
             "uneliminated vertex bounds",
             approx,
             |d| seq_of(d).uneliminated = 99,
-            FactorError::UneliminatedVertexInvalid { vertex: 99, n: 4 },
+            FactorError::UneliminatedVertexInvalid { vertex: 99, n: 3 },
         ),
         (
             "uneliminated vertex is a pivot a step already eliminated",
             approx,
             |d| seq_of(d).uneliminated = 1,
-            FactorError::UneliminatedVertexInvalid { vertex: 1, n: 4 },
+            FactorError::UneliminatedVertexInvalid { vertex: 1, n: 3 },
         ),
         (
             "steps leave a second vertex uneliminated",
@@ -158,16 +152,16 @@ fn every_block_error_variant_is_reachable() {
             },
             FactorError::BlockDimMismatch {
                 pinned: 2,
-                claimed: 4,
+                claimed: 3,
             },
         ),
         (
             "the exact factor pins fewer variables than the block claims",
             exact,
-            |d| d.dim = dim(5),
+            |d| d.dim = dim(4),
             FactorError::BlockDimMismatch {
-                pinned: 4,
-                claimed: 5,
+                pinned: 3,
+                claimed: 4,
             },
         ),
         (
