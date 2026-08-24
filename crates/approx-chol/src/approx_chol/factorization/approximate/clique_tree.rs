@@ -7,10 +7,19 @@ use crate::types::{count_as_scalar, Real};
 /// One sampled column of the factor (Algorithm 5, GKS 2023), reused across steps.
 pub(super) struct SampledColumn<T: Real> {
     pub diagonal: T,
-    /// Only appended through [`Self::push_neighbor`], so the two can never disagree.
+    /// Only appended through [`Self::push_share`], so the two can never disagree.
     neighbors: Vec<u32>,
-    fractions: Vec<T>,
+    coefficients: Vec<T>,
+    /// Named rather than weighted: only the sequence storing the shares can subtract them.
+    remainder: Option<u32>,
     fill_edges: Vec<(u32, u32, T)>,
+}
+
+/// A share cannot be handed on with nothing named to absorb the remainder.
+pub(super) struct ColumnShares<'a, T> {
+    pub(super) neighbors: &'a [u32],
+    pub(super) coefficients: &'a [T],
+    pub(super) remainder: u32,
 }
 
 impl<T: Real> SampledColumn<T> {
@@ -18,71 +27,46 @@ impl<T: Real> SampledColumn<T> {
         Self {
             diagonal: T::zero(),
             neighbors: Vec::new(),
-            fractions: Vec::new(),
+            coefficients: Vec::new(),
+            remainder: None,
             fill_edges: Vec::new(),
         }
     }
 
-    fn clear(&mut self) {
-        self.diagonal = T::zero();
+    /// A column that hands on nothing, which is what an empty star leaves.
+    fn reset(&mut self, pivot_diag: T) {
+        self.diagonal = pivot_diag;
         self.neighbors.clear();
-        self.fractions.clear();
+        self.coefficients.clear();
+        self.remainder = None;
         self.fill_edges.clear();
     }
 
+    /// `share` is of the *original* pivot, so the solve never rebuilds the running product.
     #[inline]
-    fn push_neighbor(&mut self, neighbor: u32, fraction: T) {
+    fn push_share(&mut self, neighbor: u32, share: T) {
         self.neighbors.push(neighbor);
-        self.fractions.push(fraction);
+        self.coefficients.push(share);
     }
 
-    pub(super) fn pattern(&self) -> (&[u32], &[T]) {
-        (&self.neighbors, &self.fractions)
+    pub(super) fn shares(&self) -> Option<ColumnShares<'_, T>> {
+        Some(ColumnShares {
+            neighbors: &self.neighbors,
+            coefficients: &self.coefficients,
+            remainder: self.remainder?,
+        })
     }
 
-    /// `None` writes the fallback column instead: a uniform split with no fill, for a
-    /// star of at most one entry or a non-positive/non-finite total.
-    fn begin_sampling<'a, C: Copy>(
-        &mut self,
-        entries: &'a [StarEntry<T, C>],
-        pivot_diag: T,
-    ) -> Option<Sampling<'a, T, C>> {
-        self.clear();
-        let fraction = match entries.split_last() {
-            Some((&last, rest)) if !rest.is_empty() => {
-                // Fold in entry (sorted) order: the sum order affects the factor
-                // bit-for-bit under a fixed seed.
-                let total_weight = entries
-                    .iter()
-                    .fold(T::zero(), |acc, entry| acc + entry.weight);
-                // Entries are sorted ascending, so `total_weight >= w_i` puts every
-                // `f = w·scale/total` in `[0, 1]`: a finite positive total is the whole
-                // precondition, and any floor above it would judge scale instead.
-                if total_weight.is_finite() && total_weight > T::zero() {
-                    return Some(Sampling {
-                        rest,
-                        last,
-                        total_weight,
-                    });
-                }
-                // Unreachable from `factorize`, which admits only strictly positive
-                // finite weights: only a caller handing `CliqueTreeSampler` its own
-                // weights gets here.
-                T::one() / count_as_scalar::<T, _>(entries.len())
-            }
-            _ => T::one(),
-        };
-
-        self.diagonal = pivot_diag;
-        for entry in entries {
-            self.push_neighbor(entry.neighbor, fraction);
+    /// A uniform split with no fill. Unreachable from `factorize`, which admits only
+    /// strictly positive finite weights: only a caller handing `CliqueTreeSampler` its
+    /// own weights gets here.
+    fn push_uniform_shares<C>(&mut self, rest: &[StarEntry<T, C>]) {
+        let fraction = T::one() / count_as_scalar::<T, _>(rest.len() + 1);
+        let mut retained = T::one();
+        for entry in rest {
+            self.push_share(entry.neighbor, fraction * retained);
+            retained = retained * (T::one() - fraction);
         }
-        None
-    }
-
-    fn finalize_sampling<C>(&mut self, last: StarEntry<T, C>, elim: &StarElimination<T>) {
-        self.push_neighbor(last.neighbor, T::one());
-        self.diagonal = elim.diagonal(last.weight);
     }
 
     /// Degree changes go to `deltas`, so the caller flushes one priority-queue move
@@ -132,18 +116,10 @@ impl<T: Real> SampledColumn<T> {
     }
 }
 
-/// The last neighbor takes what the others leave, so it never enters the loop and no
-/// caller derives its count from an index.
-struct Sampling<'a, T, C> {
-    rest: &'a [StarEntry<T, C>],
-    last: StarEntry<T, C>,
-    total_weight: T,
-}
-
 /// Neighbors walk a clique-tree path, each taking fraction `f_i = w_i * scale /
 /// capacity` of what earlier ones left.
 struct StarElimination<T = f64> {
-    /// Product of `(1 - f_k)` over processed neighbors.
+    /// Product of `(1 - f_k)` over the neighbors already taken.
     scale: T,
     capacity: T,
 }
@@ -163,16 +139,14 @@ impl<T: Real> StarElimination<T> {
         w * self.scale / self.capacity
     }
 
+    /// What this neighbor takes of the original pivot, the path advanced past it.
     #[inline(always)]
-    fn advance(&mut self, f: T) {
+    fn take(&mut self, f: T) -> T {
+        let share = f * self.scale;
         let retain = T::one() - f;
         self.scale = self.scale * retain;
         self.capacity = self.capacity * retain * retain;
-    }
-
-    #[inline(always)]
-    fn diagonal(&self, last_weight: T) -> T {
-        last_weight * self.scale
+        share
     }
 }
 
@@ -185,27 +159,40 @@ pub(super) fn sample_column<T: Real, C: EdgeCount>(
     column: &mut SampledColumn<T>,
 ) {
     let entries = star.entries();
-    let Some(Sampling {
-        rest,
-        last,
-        total_weight,
-    }) = column.begin_sampling(entries, pivot_diag)
-    else {
+    column.reset(pivot_diag);
+    // The last neighbor takes what the others leave, so it never enters the loop and no
+    // caller derives its count from an index.
+    let Some((last, rest)) = entries.split_last() else {
         return;
     };
+    column.remainder = Some(last.neighbor);
+    if rest.is_empty() {
+        return;
+    }
+
+    // Fold in entry (sorted) order: the sum order affects the factor bit-for-bit under a
+    // fixed seed.
+    let total_weight = entries
+        .iter()
+        .fold(T::zero(), |acc, entry| acc + entry.weight);
+    // Entries are sorted ascending, so `total_weight >= w_i` puts every
+    // `f = w·scale/total` in `[0, 1]`: a finite positive total is the whole precondition,
+    // and any floor above it would judge scale instead.
+    if !(total_weight.is_finite() && total_weight > T::zero()) {
+        column.push_uniform_shares(rest);
+        return;
+    }
 
     sampler.prepare(entries.iter().map(|entry| (entry.neighbor, entry.weight)));
     let mut elim = StarElimination::new(total_weight);
-
     for (i, entry) in rest.iter().enumerate() {
         let f = elim.fraction(entry.weight);
         let fill_wt = entry.copies.per_copy(f * (T::one() - f) * elim.capacity);
-        column.push_neighbor(entry.neighbor, f);
+        column.push_share(entry.neighbor, elim.take(f));
         column.sample_fill_edges(entry.neighbor, entry.copies, fill_wt, sampler, i + 1);
-        elim.advance(f);
     }
 
-    column.finalize_sampling(last, &elim);
+    column.diagonal = last.weight * elim.scale;
 }
 
 /// The star buffer the sampler refills, at the multiplicity it was built for. Fixed

@@ -85,7 +85,7 @@ impl<T: num_traits::Float> Block<T> {
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 #[cfg_attr(
     feature = "serde",
-    serde(bound(deserialize = "T: serde::de::DeserializeOwned"))
+    serde(bound(deserialize = "T: serde::de::DeserializeOwned + num_traits::Float"))
 )]
 struct BlockData<T> {
     dim: BlockDim,

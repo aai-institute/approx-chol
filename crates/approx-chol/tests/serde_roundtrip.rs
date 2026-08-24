@@ -1,5 +1,7 @@
 #![cfg(feature = "serde")]
 
+#[path = "common/laplacian_prop.rs"]
+mod laplacian_prop;
 #[path = "common/path.rs"]
 mod path;
 
@@ -17,6 +19,23 @@ fn path_factor_with(config: Config) -> Factor<f64> {
 
 fn path_factor() -> Factor<f64> {
     path_factor_with(Config::default())
+}
+
+/// Varied weights, so no two neighbors of a length `n - 1` column take the same share.
+fn complete_factor(n: usize) -> Factor<f64> {
+    let weights: Vec<u8> = (0..n)
+        .flat_map(|i| ((i + 1)..n).map(move |j| 1 + ((i * 7 + j * 3) % 11) as u8))
+        .collect();
+    let (row_ptrs, columns, values, dim) = laplacian_prop::build_laplacian_csr(n, &weights);
+    let csr = CsrRef::new(&row_ptrs, &columns, &values, dim).expect("valid CSR");
+    factorize_with(
+        csr,
+        Config {
+            backend: Backend::Approximate,
+            ..Config::default()
+        },
+    )
+    .expect("factorization should succeed")
 }
 
 #[rstest]
@@ -56,6 +75,13 @@ fn factor_json_roundtrip_preserves_solve(#[case] backend: Backend) {
     assert_roundtrip("grounded SDDM", &grounded, &[1.0, -1.0]);
 }
 
+/// Long enough that the derived remainder depends on every share before it.
+#[test]
+fn a_roundtrip_reproduces_long_columns_bit_for_bit() {
+    let b = [1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0, 0.0];
+    assert_roundtrip("complete graph", &complete_factor(9), &b);
+}
+
 fn assert_roundtrip(label: &str, factor: &Factor<f64>, b: &[f64]) {
     let json = serde_json::to_string(factor).expect("serialize factor");
     let restored: Factor<f64> = serde_json::from_str(&json).expect("deserialize factor");
@@ -82,8 +108,23 @@ fn deserializing_corrupted_factor_is_rejected() {
     assert!(serde_json::from_value::<Factor<f64>>(value).is_err());
 }
 
-/// Deliberate, and the cost of deriving the dimension: no wire fact contradicts an anchor
-/// any more, so tampering with one answers a different system instead of being an error.
+/// With no field for the remainder's share, overspending is the reachable corruption.
+#[test]
+fn a_column_whose_shares_overspend_the_pivot_is_rejected() {
+    let factor = complete_factor(4);
+
+    let mut value = serde_json::to_value(&factor).expect("serialize factor");
+    let shares = &mut value["blocks"][0]["cholesky"]["Approximate"]["steps"][0]["column"]["shares"];
+    assert!(
+        shares[0][1].is_f64(),
+        "the leading step of a complete graph carries shares to overspend"
+    );
+    shares[0][1] = serde_json::Value::from(2.0);
+
+    assert!(serde_json::from_value::<Factor<f64>>(value).is_err());
+}
+
+/// No wire fact contradicts an anchor, so tampering answers a different system.
 #[test]
 fn a_tampered_block_anchor_deserializes_and_answers_a_different_system() {
     let factor = path_factor();
@@ -113,9 +154,7 @@ fn a_payload_declares_the_format_version_it_was_written_with() {
     );
 }
 
-/// A missing field stands for a payload written before the version existed, so both it
-/// and a future encoding have to fail for the version rather than for some interior
-/// field a reader cannot act on.
+/// A missing field is a pre-version payload; both must fail for the version.
 #[rstest]
 #[case::from_a_future_release(Some(FACTOR_FORMAT_VERSION + 1))]
 #[case::from_before_the_field_existed(None)]

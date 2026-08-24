@@ -51,12 +51,6 @@ impl<T: Real, C: EdgeCount> Edge<T, C> {
             count: C::one(),
         }
     }
-
-    /// Splitting sets the count and leaves the weight alone.
-    #[inline]
-    fn fill_weight(&self) -> T {
-        self.weight
-    }
 }
 
 /// Adjacency-list elimination graph, generic over edge multiplicity storage.
@@ -96,11 +90,11 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
         scratch.clear();
         scratch.extend(self.adj[v].iter().filter_map(|e| {
             // Positive predicate, so a NaN weight is dead: `!(w > 0)` differs from
-            // `w <= 0` there. if/else keeps `fill_weight()` lazy for dead edges.
+            // `w <= 0` there. Splitting sets the count and leaves the weight alone.
             if e.weight > T::zero() && !self.eliminated.get(e.to as usize) {
                 Some(Neighbor {
                     to: e.to,
-                    fill_weight: e.fill_weight(),
+                    fill_weight: e.weight,
                     count: e.count,
                 })
             } else {
@@ -109,7 +103,9 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
         }));
     }
 
-    /// Mark `v` as eliminated and release its adjacency storage.
+    /// Mark `v` as eliminated and release its adjacency storage. Out of line: the call is
+    /// O(1) against an O(degree) body, but its footprint in the elimination loop is not.
+    #[inline(never)]
     pub(crate) fn eliminate_vertex(&mut self, v: usize) {
         self.eliminated.set(v);
         while let Some(edge) = self.adj[v].pop() {

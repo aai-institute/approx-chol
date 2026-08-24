@@ -1,0 +1,56 @@
+{
+  "format_version": 1094909956,
+  "permutation": null,
+  "blocks": [
+    {
+      "dim": 4,
+      "anchor": "Floating",
+      "cholesky": {
+        "Approximate": {
+          "uneliminated": 0,
+          "steps": [
+            {
+              "vertex": 3,
+              "pivot_scale": 1.0,
+              "column": {
+                "shares": [
+                  [
+                    0,
+                    0.3333333333333333
+                  ],
+                  [
+                    1,
+                    0.33333333333333337
+                  ]
+                ],
+                "remainder": 2
+              }
+            },
+            {
+              "vertex": 2,
+              "pivot_scale": 0.7499999999999998,
+              "column": {
+                "shares": [
+                  [
+                    0,
+                    0.42857142857142855
+                  ]
+                ],
+                "remainder": 1
+              }
+            },
+            {
+              "vertex": 1,
+              "pivot_scale": 0.44680851063829785,
+              "column": {
+                "shares": [],
+                "remainder": 0
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "fallbacks": []
+}

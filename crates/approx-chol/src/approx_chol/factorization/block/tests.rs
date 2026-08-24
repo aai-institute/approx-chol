@@ -11,17 +11,18 @@ fn sequence() -> EliminationSequence<f64> {
         steps: vec![
             StepHeader {
                 vertex: 0,
-                end: 1,
-                inv_diag: 1.0,
+                end: 2,
+                pivot_scale: 0.5,
             },
+            // An isolated pivot ends where the last step did: no neighbors to close over.
             StepHeader {
                 vertex: 1,
                 end: 2,
-                inv_diag: 1.0,
+                pivot_scale: 1.0,
             },
         ],
         neighbor_indices: vec![1, 2],
-        elimination_fractions: vec![1.0, 1.0],
+        coefficients: vec![0.2, 0.8],
         uneliminated: 2,
     }
 }
@@ -111,15 +112,24 @@ fn every_block_error_variant_is_reachable() {
             FactorError::ExactRowNotRepresentable { row: 1 },
         ),
         (
-            "step inv_diag is not finite",
+            "step pivot_scale is not finite",
             approx,
-            |d| seq_of(d).steps[0].inv_diag = f64::INFINITY,
+            |d| seq_of(d).steps[0].pivot_scale = f64::INFINITY,
             FactorError::StepValueInvalid { step: 0 },
         ),
+        // A share of the pivot is a share of it, and a remainder left negative by shares
+        // that overspend the pivot reads the same way here.
         (
-            "elimination fraction is not a proportion",
+            "solve coefficient is negative",
             approx,
-            |d| seq_of(d).elimination_fractions[0] = 2.0,
+            |d| seq_of(d).coefficients[0] = -0.2,
+            FactorError::StepValueInvalid { step: 0 },
+        ),
+        // A NaN compares false against zero, so nothing but finiteness catches it.
+        (
+            "solve coefficient is not a number",
+            approx,
+            |d| seq_of(d).coefficients[1] = f64::NAN,
             FactorError::StepValueInvalid { step: 0 },
         ),
         (

@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed (breaking)
+
+- A persisted `Factor` stores each neighbor's share of the original pivot, and
+  `FACTOR_FORMAT_VERSION` is `0x41430004`. ([#131])
+- A persisted column names the neighbor taking the remaining pivot rather than storing its
+  share. ([#131])
+
+### Changed
+
+- Faster `Factor::solve` on dense factors, from composing elimination fractions at build
+  time. ([#131])
+
 ## [0.5.0] - 2026-08-11
 
 ### Changed (breaking)
@@ -179,3 +193,4 @@ for graph Laplacians in Rust with Python bindings.
 [#93]: https://github.com/aai-institute/approx-chol/issues/93
 [#109]: https://github.com/aai-institute/approx-chol/issues/109
 [#118]: https://github.com/aai-institute/approx-chol/issues/118
+[#131]: https://github.com/aai-institute/approx-chol/pull/131
