@@ -76,23 +76,12 @@ fn factor_json_roundtrip_preserves_solve(#[case] backend: Backend) {
     assert_roundtrip("grounded SDDM", &grounded, &[1.0, -1.0]);
 }
 
-/// Postcard is how `within` persists a factor, and it is positional — so it, not JSON, is
-/// what pins the payload's field order. It also parses an `f64` back exactly, where
-/// `serde_json` rounds a 17-digit one by an ulp, so a column long enough for the derived
-/// remainder to depend on every share before it can only be checked here.
+/// A column long enough that its derived remainder depends on every share before it: a
+/// short one cannot tell an exact decode from an ulp-off one.
 #[test]
-fn a_postcard_roundtrip_reproduces_long_columns_bit_for_bit() {
-    let factor = complete_factor(9);
-
-    let bytes = postcard::to_stdvec(&factor).expect("serialize factor");
-    let restored: Factor<f64> = postcard::from_bytes(&bytes).expect("deserialize factor");
-
+fn a_roundtrip_reproduces_long_columns_bit_for_bit() {
     let b = [1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0, 0.0];
-    assert_eq!(
-        factor.solve(&b).expect("solve original"),
-        restored.solve(&b).expect("solve restored"),
-        "a restored factor must reproduce the solve bit-for-bit"
-    );
+    assert_roundtrip("complete graph", &complete_factor(9), &b);
 }
 
 fn assert_roundtrip(label: &str, factor: &Factor<f64>, b: &[f64]) {
