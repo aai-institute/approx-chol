@@ -14,13 +14,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A persisted column names the neighbor taking the remaining pivot rather than storing its
   share. ([#131])
 
-### Changed
-
-- Dense-factor solves are 1.1-3.0x faster, grid solves ~10% faster, path-shaped factors
-  ~4-5% slower. ([#131])
-- Factorizing costs 2-7% more on dense blocks. ([#131])
-- An existing factor's solve output changes bit-for-bit. ([#131])
-
 ## [0.5.0] - 2026-08-11
 
 ### Changed (breaking)
