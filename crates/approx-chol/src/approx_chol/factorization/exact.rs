@@ -1,7 +1,7 @@
 use super::factor::Fallback;
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;
-use crate::graph::{BlockVertices, Ingestion};
+use crate::graph::{BlockVertices, Component};
 use crate::types::Real;
 use crate::{DenseFailure, UnusablePivot};
 
@@ -24,14 +24,10 @@ impl NotFactorable {
     }
 }
 
-/// `eliminated` is every block row but the last slot's: all of them when that slot is a
-/// ground the block does not hold.
 pub(crate) fn factor<T: Real>(
-    ingestion: &Ingestion<T>,
-    block: &BlockVertices<'_>,
-    eliminated: usize,
+    component: &Component<'_, T>,
 ) -> Result<LowerTriangular<T>, NotFactorable> {
-    assemble(ingestion, block, eliminated)?.factor_in_place()
+    assemble(component, component.eliminated())?.factor_in_place()
 }
 
 const fn row_start(row: usize) -> usize {
@@ -57,17 +53,19 @@ const fn packed_len(m: usize) -> Option<usize> {
 /// summed here, in the input's row order: an edge to the pinned vertex still counts toward
 /// its other endpoint's.
 fn assemble<T: Real>(
-    ingestion: &Ingestion<T>,
-    block: &BlockVertices<'_>,
+    component: &Component<'_, T>,
     m: usize,
 ) -> Result<LowerTriangular<T>, NotFactorable> {
     let mut matrix = LowerTriangular::zeros(m)?;
-    for row in 0..m {
-        matrix.row_mut(row)[row] = ingestion.surplus(block, row);
+    let view = component.view();
+    if let Component::Grounded { surplus, .. } = component {
+        for row in 0..m {
+            matrix.row_mut(row)[row] = surplus[view.vertices().global(row)];
+        }
     }
     // Scattered, because the input stores only the upper triangle.
     for row in 0..m {
-        ingestion.upper_row(block, row, |col, weight| {
+        view.upper_row(row, |col, weight| {
             let diagonal = &mut matrix.row_mut(row)[row];
             *diagonal = *diagonal + weight;
             if col < m {

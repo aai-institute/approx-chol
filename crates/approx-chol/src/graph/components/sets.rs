@@ -1,4 +1,4 @@
-use crate::graph::BlockLayout;
+use crate::graph::blocks::BlockLayout;
 
 /// Union-find with path halving and union by size.
 pub(super) struct DisjointSets {
@@ -72,11 +72,17 @@ impl DisjointSets {
             start += n;
         }
         let mut order = vec![0u32; total];
+        let mut position = vec![0u32; total];
         for vertex in 0..total {
             let block = block_of[self.find(vertex as u32) as usize] as usize;
             order[ends[block] as usize] = vertex as u32;
+            position[vertex] = ends[block];
             ends[block] += 1;
         }
-        Some(BlockLayout { order, ends })
+        Some(BlockLayout {
+            order,
+            position,
+            ends,
+        })
     }
 }

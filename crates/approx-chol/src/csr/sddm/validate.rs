@@ -1,7 +1,7 @@
 use super::canonical::{column, row_ptr};
 use crate::sddm::{surplus_sums_finitely, Diagonal};
 use crate::types::{count_as_scalar, Real};
-use crate::{Grounded, Laplacian, NotSddm, Sddm};
+use crate::{Laplacian, NotSddm, Sddm};
 use num_traits::PrimInt;
 
 /// A merge-join only because canonical rows guarantee each entry is claimed once.
@@ -176,7 +176,6 @@ fn with_surplus<T: Real>(
     mut row_sums: Vec<T>,
     terms: impl Iterator<Item = u32>,
 ) -> Result<Sddm<T>, NotSddm> {
-    let mut grounded = false;
     for (row, ((sum, &d), count)) in row_sums
         .iter_mut()
         .zip(diagonal.iter())
@@ -187,10 +186,7 @@ fn with_surplus<T: Real>(
             RowBalance::NonFinite => return Err(NotSddm::NonFiniteRow { row }),
             RowBalance::Deficit => return Err(NotSddm::NotDiagonallyDominant { row }),
             RowBalance::Negligible => T::zero(),
-            RowBalance::Surplus(excess) => {
-                grounded = true;
-                excess
-            }
+            RowBalance::Surplus(excess) => excess,
         };
     }
     if let Some(row) = degrees.first_non_finite_with(&row_sums) {
@@ -199,9 +195,5 @@ fn with_surplus<T: Real>(
     if !surplus_sums_finitely(&row_sums) {
         return Err(NotSddm::SurplusOverflow);
     }
-    Ok(if grounded {
-        Grounded::trusted(laplacian, row_sums).into()
-    } else {
-        laplacian.into()
-    })
+    Ok(Sddm::trusted(laplacian, row_sums))
 }

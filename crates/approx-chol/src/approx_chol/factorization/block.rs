@@ -1,5 +1,6 @@
 use super::cholesky::Cholesky;
 use super::gauge::{pin_ground, project_zero_mean, relative_to_ground};
+use crate::graph::Component;
 use crate::types::Real;
 
 #[cfg(test)]
@@ -25,6 +26,14 @@ pub(crate) enum Block<T> {
 }
 
 impl<T> Block<T> {
+    /// The component's variant, carried over to its factor.
+    pub(crate) fn of(component: &Component<'_, T>, cholesky: Cholesky<T>) -> Self {
+        match component {
+            Component::Laplacian(_) => Self::Floating(cholesky),
+            Component::Grounded { .. } => Self::Grounded(cholesky),
+        }
+    }
+
     fn cholesky(&self) -> &Cholesky<T> {
         match self {
             Self::Grounded(cholesky) | Self::Floating(cholesky) => cholesky,

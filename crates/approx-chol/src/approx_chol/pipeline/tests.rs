@@ -56,11 +56,15 @@ fn only_an_unusable_pivot_answers_to_the_failure_policy() {
         ),
     ];
     // Wide enough for the highest global vertex the component names.
-    let mut local_of = vec![0u32; 31];
+    let position = vec![0u32; 31];
     for (label, reason, on_failure, vertices, expected) in cases {
         let block = match vertices {
-            None => BlockVertices::whole(9),
-            Some(vertices) => BlockVertices::part(vertices, &mut local_of),
+            None => BlockVertices::Whole(9),
+            Some(vertices) => BlockVertices::Part {
+                vertices,
+                position: &position,
+                start: 0,
+            },
         };
         assert_eq!(on_failure.accept(reason.at(&block)), expected, "{label}");
     }
@@ -79,7 +83,7 @@ fn assert_ac2_augmented_solve_is_finite(indptr: &[u32], indices: &[u32], data: &
     for seed in 0..8u64 {
         let sddm = Sddm::try_from(csr).expect("fixture is SDDM");
         let factor = factorize(
-            sddm,
+            &sddm,
             Config {
                 split_merge: Some(2),
                 seed,
@@ -154,7 +158,7 @@ fn test_ac_marginally_sdd_laplacian_no_capacity_drift() {
             ..Default::default()
         };
         let sddm = Sddm::try_from(csr).expect("fixture is SDDM");
-        let factor = factorize(sddm, config)
+        let factor = factorize(&sddm, config)
             .unwrap_or_else(|e| panic!("seed={seed}: AC factorization failed: {e}"));
 
         let work = factor

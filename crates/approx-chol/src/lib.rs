@@ -105,5 +105,5 @@ pub fn factorize_with<T>(
 where
     T: num_traits::Float + Send + Sync + 'static,
 {
-    approx_chol::factorize(sddm.into(), config)
+    approx_chol::factorize(&sddm.into(), config)
 }

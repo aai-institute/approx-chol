@@ -2,6 +2,8 @@
 /// component: the same sequence answers all three questions asked of it.
 pub(crate) struct BlockLayout {
     pub(super) order: Vec<u32>,
+    /// `order` inverted, so a component's local index is a subtraction, written once for all.
+    pub(super) position: Vec<u32>,
     /// The next block starts where this one stops, so no block claims a vertex twice
     /// or leaves a gap.
     pub(super) ends: Vec<u32>,
@@ -12,11 +14,14 @@ impl BlockLayout {
         self.ends.len()
     }
 
-    /// Each block's global vertex names, in storage order.
-    pub(crate) fn blocks(&self) -> impl Iterator<Item = &[u32]> + '_ {
-        self.ends.iter().scan(0usize, |start, &end| {
-            let end = end as usize;
-            let block = &self.order[*start..end];
+    /// Each block's vertices, in storage order.
+    pub(crate) fn blocks(&self) -> impl Iterator<Item = BlockVertices<'_>> + '_ {
+        self.ends.iter().scan(0u32, |start, &end| {
+            let block = BlockVertices::Part {
+                vertices: &self.order[*start as usize..end as usize],
+                position: &self.position,
+                start: *start,
+            };
             *start = end;
             Some(block)
         })
@@ -34,24 +39,13 @@ pub(crate) enum BlockVertices<'v> {
     Whole(usize),
     Part {
         vertices: &'v [u32],
-        /// Only the entries `vertices` names are meaningful.
-        local_of: &'v [u32],
+        /// Every input vertex's place in the layout, shared by all blocks.
+        position: &'v [u32],
+        start: u32,
     },
 }
 
-impl<'v> BlockVertices<'v> {
-    pub(crate) fn whole(n: usize) -> Self {
-        Self::Whole(n)
-    }
-
-    /// Fills `local_of` here, so agreement with `vertices` is not a reader's precondition.
-    pub(crate) fn part(vertices: &'v [u32], local_of: &'v mut [u32]) -> Self {
-        for (local, &global) in vertices.iter().enumerate() {
-            local_of[global as usize] = local as u32;
-        }
-        Self::Part { vertices, local_of }
-    }
-
+impl BlockVertices<'_> {
     pub(crate) fn len(&self) -> usize {
         match self {
             Self::Whole(n) => *n,
@@ -71,7 +65,9 @@ impl<'v> BlockVertices<'v> {
     pub(super) fn local(&self, global: usize) -> usize {
         match self {
             Self::Whole(_) => global,
-            Self::Part { local_of, .. } => local_of[global] as usize,
+            Self::Part {
+                position, start, ..
+            } => (position[global] - start) as usize,
         }
     }
 

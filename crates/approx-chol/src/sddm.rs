@@ -29,23 +29,21 @@ impl<T: Float> Diagonal<T> {
     }
 }
 
-/// One positive entry at least, `Ok(false)` when every one is zero.
 fn validate_surplus<T: Float>(
     laplacian: &Laplacian<T>,
     surplus: &[T],
-) -> Result<bool, GroundedError> {
+) -> Result<(), GroundedError> {
     if surplus.len() != laplacian.n() {
         return Err(GroundedError::LengthMismatch {
             expected: laplacian.n(),
             got: surplus.len(),
         });
     }
-    let mut any = false;
-    for (vertex, &s) in surplus.iter().enumerate() {
-        if !(s.is_finite() && s >= T::zero()) {
-            return Err(GroundedError::InvalidSurplus { vertex });
-        }
-        any |= s > T::zero();
+    if let Some(vertex) = surplus
+        .iter()
+        .position(|&s| !(s.is_finite() && s >= T::zero()))
+    {
+        return Err(GroundedError::InvalidSurplus { vertex });
     }
     if !surplus_sums_finitely(surplus) {
         return Err(GroundedError::SurplusOverflow);
@@ -53,7 +51,7 @@ fn validate_surplus<T: Float>(
     if let Some(vertex) = laplacian.diagonal(surplus.to_vec()).first_non_finite() {
         return Err(GroundedError::DiagonalOverflow { vertex });
     }
-    Ok(any)
+    Ok(())
 }
 
 /// The sum is a ground vertex's degree.
@@ -216,11 +214,17 @@ impl<T: Float> Sddm<T> {
     ///
     /// What [`Grounded::new`] reports, except [`GroundedError::NoSurplus`].
     pub fn with_surplus(laplacian: Laplacian<T>, surplus: Vec<T>) -> Result<Self, GroundedError> {
-        Ok(if validate_surplus(&laplacian, &surplus)? {
+        validate_surplus(&laplacian, &surplus)?;
+        Ok(Self::trusted(laplacian, surplus))
+    }
+
+    /// The one place the variant is chosen; the caller has checked every sum.
+    pub(crate) fn trusted(laplacian: Laplacian<T>, surplus: Vec<T>) -> Self {
+        if surplus.iter().any(|&s| s > T::zero()) {
             Grounded { laplacian, surplus }.into()
         } else {
             laplacian.into()
-        })
+        }
     }
 }
 
@@ -253,20 +257,14 @@ impl<T: Float> Grounded<T> {
     /// that is not finite, and
     /// [`GroundedError::NoSurplus`] when every one is zero, which is a bare [`Laplacian`].
     pub fn new(laplacian: Laplacian<T>, surplus: Vec<T>) -> Result<Self, GroundedError> {
-        if !validate_surplus(&laplacian, &surplus)? {
-            return Err(GroundedError::NoSurplus);
+        match Sddm::with_surplus(laplacian, surplus)? {
+            Sddm::Grounded(grounded) => Ok(grounded),
+            Sddm::Laplacian(_) => Err(GroundedError::NoSurplus),
         }
-        Ok(Self { laplacian, surplus })
     }
 }
 
 impl<T> Grounded<T> {
-    /// `surplus` is one non-negative entry per vertex, at least one positive, and every
-    /// sum [`new`](Self::new) checks is finite.
-    pub(crate) fn trusted(laplacian: Laplacian<T>, surplus: Vec<T>) -> Self {
-        Self { laplacian, surplus }
-    }
-
     /// Number of vertices.
     pub fn n(&self) -> usize {
         self.laplacian.n()
