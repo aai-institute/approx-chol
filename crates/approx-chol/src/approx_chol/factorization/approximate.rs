@@ -8,8 +8,6 @@ mod star;
 pub use clique_tree::CliqueTreeSampler;
 
 #[cfg(any(feature = "serde", test))]
-use super::block::BlockDim;
-#[cfg(any(feature = "serde", test))]
 use super::FactorError;
 use clique_tree::{sample_column, ColumnShares, SampledColumn};
 use ordering::{DegreeDeltas, DynamicOrdering};
@@ -23,7 +21,6 @@ use crate::types::Real;
 /// factorization over a split multi-edge graph does not compile.
 pub(crate) fn eliminate<T: Real, C: EdgeCount>(
     mut graph: AdjListGraph<C, T>,
-    mut diag: Vec<T>,
     sampler: &mut CdfSampler<T>,
     split: C::Split,
 ) -> EliminationSequence<T> {
@@ -42,25 +39,20 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
             .expect("the queue holds every vertex of the block");
         star_builder.build_star(&mut graph, v, &mut ordering);
         let star = star_builder.star();
-        sample_column(star, diag[v], sampler, &mut column);
+        sample_column(star, sampler, &mut column);
         seq.push_sampled(v, column.diagonal, column.shares());
 
         graph.eliminate_vertex(v);
-        for entry in star.entries() {
-            let u = entry.neighbor as usize;
-            diag[u] = diag[u] - entry.weight;
-        }
 
         // One pq_move per affected neighbor, not one per incident event. Batching
         // reorders equal-degree vertices, so a fixed seed's factor differs from a
         // per-edge version's (quality unaffected; see CHANGELOG).
-        column.apply_fill_in_delta(&mut graph, &mut diag, &mut deltas);
+        column.apply_fill_in_delta(&mut graph, &mut deltas);
         star.accumulate_removal_delta(&mut deltas);
         deltas.flush(&mut ordering);
     }
 
-    // One step short of `n`, so the queue still holds the vertex no step eliminated —
-    // the block's last, which is what the anchor pins, only when it has no other.
+    // One step short of `n`, so the queue still holds the vertex no step eliminated.
     seq.finish(
         ordering
             .next_vertex()
@@ -207,7 +199,9 @@ impl<T: num_traits::Float> TryFrom<SequenceData<T>> for EliminationSequence<T> {
                 .push_header(step.vertex, step.pivot_scale)
                 .map_err(|nnz| FactorError::NonzeroCountExceedsU32 { nnz })?;
         }
-        Ok(builder.finish(data.uneliminated))
+        let sequence = builder.finish(data.uneliminated);
+        sequence.validate_values()?;
+        Ok(sequence)
     }
 }
 
@@ -273,7 +267,7 @@ impl<T: serde::Serialize> serde::Serialize for PairedNeighbors<'_, T> {
 // Read-only accessors (no internal trait bounds).
 impl<T> EliminationSequence<T> {
     #[inline(always)]
-    fn n_steps(&self) -> usize {
+    pub(super) fn n_steps(&self) -> usize {
         self.steps.len()
     }
 
@@ -301,11 +295,6 @@ impl<T> EliminationSequence<T> {
         }
     }
 
-    #[cfg(any(feature = "serde", test))]
-    pub(super) fn pinned_dim(&self) -> BlockDim {
-        BlockDim::pinning(self.n_steps())
-    }
-
     /// The ranges need no check — they are rebuilt from the nested persisted form,
     /// never read off the wire.
     #[cfg(any(feature = "serde", test))]
@@ -313,7 +302,7 @@ impl<T> EliminationSequence<T> {
     where
         T: num_traits::Float,
     {
-        let n = self.pinned_dim().total();
+        let n = self.n_steps() + 1;
         // `substitute` writes this entry unchecked.
         if (self.uneliminated as usize) >= n {
             return Err(FactorError::UneliminatedVertexInvalid {

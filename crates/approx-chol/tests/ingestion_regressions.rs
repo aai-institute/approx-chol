@@ -1,11 +1,16 @@
+#[path = "common/factor.rs"]
+mod factor;
 #[path = "common/grid.rs"]
 mod grid;
 
-use approx_chol::low_level::Builder;
-use approx_chol::{Config, CsrRef, Error, Factor, Sddm};
+use approx_chol::{factorize_with, Config, CsrRef, Factor, NotSddm, Sddm, UnusablePivot};
+
+fn factor(config: Config, csr: CsrRef<'_, f64>) -> Result<Factor<f64>, UnusablePivot> {
+    factor::factor(config, csr)
+}
 
 /// The error the shape must be rejected with.
-type Rejected<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64], Error);
+type Rejected<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64], NotSddm);
 type Accepted<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64]);
 type Solved<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64], [f64; 2], [f64; 2]);
 
@@ -19,10 +24,11 @@ fn grounds<T: num_traits::Float + Send + Sync + 'static>(
     matches!(Sddm::try_from(csr), Ok(Sddm::Grounded(_)))
 }
 
-fn build(config: Config, rp: &[u32], ci: &[u32], vals: &[f64]) -> Result<Factor<f64>, Error> {
+fn build(config: Config, rp: &[u32], ci: &[u32], vals: &[f64]) -> Result<Factor<f64>, NotSddm> {
     let n = (rp.len() - 1) as u32;
     let csr = CsrRef::new(rp, ci, vals, n).expect("structurally valid CSR");
-    Builder::<f64>::new(config).build(csr)
+    let sddm = Sddm::try_from(csr)?;
+    Ok(factorize_with(sddm, config).expect("the default policy falls back"))
 }
 
 /// The expected error is compared whole, so a shape cannot pass by being rejected
@@ -38,14 +44,14 @@ fn out_of_class_input_is_rejected_at_its_reported_position() {
             &[0, 2, 4],
             &[0, 1, 0, 1],
             &[5.0, 1.0, 1.0, 4.0],
-            Error::PositiveOffDiagonal { edge: (0, 1) },
+            NotSddm::PositiveOffDiagonal { edge: (0, 1) },
         ),
         (
             "missing transpose",
             &[0, 2, 3],
             &[0, 1, 1],
             &[1.0, -1.0, 1.0],
-            Error::Asymmetric { edge: (0, 1) },
+            NotSddm::Asymmetric { edge: (0, 1) },
         ),
         // Reaches the asymmetry the mirror cursor skips past, not the one the
         // comparison rejects: the lower entry is stored and its upper is absent.
@@ -54,28 +60,28 @@ fn out_of_class_input_is_rejected_at_its_reported_position() {
             &[0, 1, 3],
             &[0, 0, 1],
             &[1.0, -1.0, 1.0],
-            Error::Asymmetric { edge: (0, 1) },
+            NotSddm::Asymmetric { edge: (0, 1) },
         ),
         (
             "unequal transpose",
             &[0, 2, 4],
             &[0, 1, 0, 1],
             &[1.0, -1.0, -2.0, 2.0],
-            Error::Asymmetric { edge: (0, 1) },
+            NotSddm::Asymmetric { edge: (0, 1) },
         ),
         (
             "connected but not dominant",
             &[0, 2, 4],
             &[0, 1, 0, 1],
             &[1.0, -3.0, -3.0, 1.0],
-            Error::NotDiagonallyDominant { row: 0 },
+            NotSddm::NotDiagonallyDominant { row: 0 },
         ),
         (
             "stored NaN",
             &[0, 1],
             &[0],
             &[f64::NAN],
-            Error::NonFiniteValue { position: 0 },
+            NotSddm::NonFiniteValue { position: 0 },
         ),
         // Descending columns in row 0, so the position must be the caller's flat
         // index and must be reported in preference to the non-canonical shape.
@@ -84,7 +90,7 @@ fn out_of_class_input_is_rejected_at_its_reported_position() {
             &[0, 2, 5, 7],
             &[1, 0, 2, 1, 0, 2, 1],
             &[-1.0, 1.0, -1.0, 2.0, f64::NAN, 1.0, -1.0],
-            Error::NonFiniteValue { position: 4 },
+            NotSddm::NonFiniteValue { position: 4 },
         ),
         // The three row-sum overflows below store only finite, symmetric,
         // non-positive values; one per ingestion path.
@@ -93,21 +99,21 @@ fn out_of_class_input_is_rejected_at_its_reported_position() {
             &[0, 3, 6],
             &[0, 1, 1, 0, 0, 1],
             &[max, -max, -max, -max, -max, max],
-            Error::NonFiniteRow { row: 0 },
+            NotSddm::NonFiniteRow { row: 0 },
         ),
         (
             "overflow on the canonical path",
             &[0, 3, 5, 7],
             &[0, 1, 2, 0, 1, 0, 2],
             &[0.0, -max, -max, -max, max, -max, max],
-            Error::NonFiniteRow { row: 0 },
+            NotSddm::NonFiniteRow { row: 0 },
         ),
         (
             "overflow via duplicate diagonal",
             &[0, 2],
             &[0, 0],
             &[max, max],
-            Error::NonFiniteRow { row: 0 },
+            NotSddm::NonFiniteRow { row: 0 },
         ),
     ];
 
@@ -351,11 +357,13 @@ fn disconnected_laplacian_solves_per_component() {
 
         for split_merge in [None, Some(2)] {
             let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid CSR");
-            let factor = Builder::<f64>::new(Config {
-                split_merge,
-                ..Config::default()
-            })
-            .build(csr)
+            let factor = factor(
+                Config {
+                    split_merge,
+                    ..Config::default()
+                },
+                csr,
+            )
             .expect("disconnected Laplacian must factor block-diagonally");
             assert_eq!(factor.n_steps(), k as usize, "one step per 2-node block");
             assert_eq!(factor.solve(&rhs).expect("solve"), expected);
@@ -370,12 +378,14 @@ fn disconnected_sparse_ac2_preserves_virtual_edge_multiplicity() {
     let values = [
         1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0,
     ];
-    let factor = Builder::<f64>::new(Config {
-        seed: 7,
-        split_merge: Some(3),
-        ..Config::default()
-    })
-    .build(CsrRef::new(&row_ptrs, &columns, &values, 6).expect("valid CSR"))
+    let factor = factor(
+        Config {
+            seed: 7,
+            split_merge: Some(3),
+            ..Config::default()
+        },
+        CsrRef::new(&row_ptrs, &columns, &values, 6).expect("valid CSR"),
+    )
     .expect("disconnected AC2 factor");
 
     let solution = factor
@@ -388,9 +398,11 @@ fn disconnected_sparse_ac2_preserves_virtual_edge_multiplicity() {
 fn many_zero_singletons_factor_as_trivial_components() {
     let n = 128u32;
     let row_ptrs = vec![0u32; n as usize + 1];
-    let factor = Builder::<f64>::new(Config::default())
-        .build(CsrRef::new(&row_ptrs, &[], &[], n).expect("valid zero CSR"))
-        .expect("zero components");
+    let factor = factor(
+        Config::default(),
+        CsrRef::new(&row_ptrs, &[], &[], n).expect("valid zero CSR"),
+    )
+    .expect("zero components");
     assert_eq!(factor.n_steps(), 0);
     assert_eq!(
         factor.solve(&vec![1.0; n as usize]).expect("solve"),
@@ -403,9 +415,11 @@ fn mixed_grounded_and_floating_components_solve_independently() {
     let row_ptrs = [0u32, 1, 3, 5];
     let columns = [0u32, 1, 2, 1, 2];
     let values = [2.0, 1.0, -1.0, -1.0, 1.0];
-    let factor = Builder::<f64>::new(Config::default())
-        .build(CsrRef::new(&row_ptrs, &columns, &values, 3).expect("valid mixed CSR"))
-        .expect("mixed factor");
+    let factor = factor(
+        Config::default(),
+        CsrRef::new(&row_ptrs, &columns, &values, 3).expect("valid mixed CSR"),
+    )
+    .expect("mixed factor");
     let solution = factor.solve(&[4.0, 1.0, -1.0]).expect("solve");
     assert!((solution[0] - 2.0).abs() < 1e-14);
     assert_eq!(&solution[1..], &[0.5, -0.5]);
@@ -420,9 +434,11 @@ fn interleaved_components_solve_in_input_order() {
     let row_ptrs = [0u32, 2, 4, 6, 8];
     let columns = [0u32, 2, 1, 3, 0, 2, 1, 3];
     let values = [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
-    let factor = Builder::<f64>::new(Config::default())
-        .build(CsrRef::new(&row_ptrs, &columns, &values, 4).expect("valid CSR"))
-        .expect("interleaved factor");
+    let factor = factor(
+        Config::default(),
+        CsrRef::new(&row_ptrs, &columns, &values, 4).expect("valid CSR"),
+    )
+    .expect("interleaved factor");
 
     // Block {0,2} gets the 1st and 3rd entry, block {1,3} the 2nd and 4th.
     let cases = [
@@ -545,8 +561,7 @@ fn canonical_and_reordered_ingestion_agree_bit_for_bit() {
 
     let rhs: Vec<f64> = (0..n).map(|i| (i % 5) as f64 - 2.0).collect();
     let solve = |csr| {
-        Builder::<f64>::new(Config::default())
-            .build(csr)
+        factor(Config::default(), csr)
             .expect("grid factor")
             .solve(&rhs)
             .expect("solve")

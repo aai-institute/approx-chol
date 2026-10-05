@@ -3,8 +3,8 @@ mod common;
 use std::hint::black_box;
 use std::time::Instant;
 
-use approx_chol::low_level::Builder;
 use approx_chol::Config;
+use common::factor;
 use common::grid::GridLaplacian;
 
 const N: usize = 160_000;
@@ -40,12 +40,11 @@ fn main() {
     let lap = banded_laplacian(N, HALF_BANDWIDTH);
     let csr = lap.as_csr().expect("banded_laplacian must build valid CSR");
     let config = Config::default();
-    let builder = Builder::<f64>::new(config);
 
     let mut best = u128::MAX;
     for _ in 0..RUNS {
         let start = Instant::now();
-        let factor = builder.build(csr).expect("factorization should succeed");
+        let factor = factor(config, csr).expect("factorization should succeed");
         // Min, not mean: contention only ever slows a run.
         best = best.min(start.elapsed().as_nanos());
         black_box(&factor);

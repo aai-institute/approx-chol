@@ -1,86 +1,197 @@
 use std::fmt;
 
-/// Errors that can occur during approximate Cholesky factorization.
+/// Why a [`CsrRef`](crate::CsrRef) is not an [`Sddm`](crate::Sddm).
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Error {
-    /// The input CSR matrix has inconsistent dimensions or invalid structure.
-    InvalidCsr(CsrError),
-
-    /// A coalesced off-diagonal entry is strictly positive, so the matrix is outside
-    /// the SDDM/Laplacian class.
-    PositiveOffDiagonal {
-        /// `(row, column)` of the offending strictly-positive off-diagonal.
-        edge: (usize, usize),
+pub enum NotSddm {
+    /// `n` is `u32::MAX` or more, leaving no index for a ground vertex.
+    DimensionTooLarge {
+        /// Matrix dimension.
+        n: usize,
     },
-
+    /// More stored entries than `u32` positions.
+    TooManyNonzeros {
+        /// Stored entries.
+        nnz: usize,
+    },
     /// A matrix value is NaN or infinite.
     NonFiniteValue {
         /// Position in the CSR value array.
         position: usize,
     },
-
     /// Coalesced transpose entries are missing or unequal.
     Asymmetric {
         /// Canonical off-diagonal coordinate with `row < column`.
         edge: (usize, usize),
     },
-
-    /// A row has negative diagonal surplus beyond the rounding tolerance.
+    /// A coalesced off-diagonal entry is strictly positive.
+    PositiveOffDiagonal {
+        /// `(row, column)` of the offending entry.
+        edge: (usize, usize),
+    },
+    /// A row's diagonal falls short of its off-diagonal magnitude beyond rounding.
     NotDiagonallyDominant {
-        /// Row whose diagonal is smaller than its off-diagonal magnitude sum.
+        /// The deficient row.
         row: usize,
     },
-
-    /// A row's accumulated diagonal or magnitude sum overflowed.
+    /// A row's diagonal or off-diagonal magnitude sums to a non-finite value.
     NonFiniteRow {
-        /// Row that overflowed.
+        /// The row.
         row: usize,
     },
+    /// The diagonal surplus total is not finite.
+    SurplusOverflow,
+}
 
-    /// Exact dense Cholesky hit an unusable pivot and [`ExactFailure::Error`](crate::ExactFailure::Error) asked for that to fail.
-    DenseFactorizationFailed(UnusablePivot),
+impl fmt::Display for NotSddm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DimensionTooLarge { n } => {
+                write!(f, "matrix dimension {n} leaves no u32 index for a ground vertex")
+            }
+            Self::TooManyNonzeros { nnz } => write!(f, "{nnz} stored entries exceed u32"),
+            Self::NonFiniteValue { position } => {
+                write!(f, "matrix value at CSR position {position} is not finite")
+            }
+            Self::Asymmetric { edge: (row, col) } => write!(
+                f,
+                "matrix is not symmetric at ({row}, {col}) and ({col}, {row})"
+            ),
+            Self::PositiveOffDiagonal { edge: (row, col) } => write!(
+                f,
+                "off-diagonal ({row}, {col}) is positive; approx-chol requires SDDM/Laplacian input (off-diagonals must be <= 0)"
+            ),
+            Self::NotDiagonallyDominant { row } => write!(
+                f,
+                "row {row} is not diagonally dominant; approx-chol requires SDDM/Laplacian input"
+            ),
+            Self::NonFiniteRow { row } => write!(
+                f,
+                "row {row} sums to a non-finite diagonal or off-diagonal magnitude; approx-chol requires SDDM/Laplacian input"
+            ),
+            Self::SurplusOverflow => write!(f, "diagonal surplus total is not finite"),
+        }
+    }
+}
 
-    /// A [`Laplacian`](crate::Laplacian) row lists a neighbor at or below its own index.
+impl std::error::Error for NotSddm {}
+
+/// Why arrays are not a [`Laplacian`](crate::Laplacian).
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LaplacianError {
+    /// The arrays are not a CSR matrix.
+    Structure(CsrError),
+    /// `u32::MAX` or more vertices, leaving no index for a ground vertex.
+    TooManyVertices {
+        /// Vertex count.
+        n: usize,
+    },
+    /// A row lists a neighbor at or below its own index.
     NotStrictlyUpper {
         /// `(row, neighbor)` with `neighbor <= row`.
         edge: (usize, usize),
     },
-
-    /// A [`Laplacian`](crate::Laplacian) row's neighbors are not strictly ascending.
+    /// A row's neighbors are not strictly ascending.
     UnsortedNeighbors {
         /// Row with a repeated or out-of-order neighbor.
         row: usize,
     },
-
-    /// A [`Laplacian`](crate::Laplacian) edge weight is zero or negative.
-    NonPositiveWeight {
+    /// An edge weight is not finite and positive.
+    InvalidWeight {
         /// `(row, neighbor)` of the offending edge.
         edge: (usize, usize),
     },
+    /// A weighted degree that is not finite.
+    DegreeOverflow {
+        /// The vertex.
+        vertex: usize,
+    },
+}
 
-    /// A [`Grounded`](crate::Grounded) was given a surplus count other than its vertex count.
-    SurplusLengthMismatch {
+impl fmt::Display for LaplacianError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Structure(err) => write!(f, "invalid Laplacian adjacency: {err}"),
+            Self::TooManyVertices { n } => {
+                write!(f, "{n} vertices leave no u32 index for a ground vertex")
+            }
+            Self::NotStrictlyUpper { edge: (row, col) } => {
+                write!(
+                    f,
+                    "Laplacian row {row} lists neighbor {col}, which is not above it"
+                )
+            }
+            Self::UnsortedNeighbors { row } => {
+                write!(
+                    f,
+                    "Laplacian row {row} neighbors are not strictly ascending"
+                )
+            }
+            Self::InvalidWeight { edge: (row, col) } => write!(
+                f,
+                "Laplacian edge ({row}, {col}) has a weight that is not finite and positive"
+            ),
+            Self::DegreeOverflow { vertex } => {
+                write!(f, "vertex {vertex}'s weighted degree is not finite")
+            }
+        }
+    }
+}
+
+impl std::error::Error for LaplacianError {}
+
+/// Why a surplus does not ground a [`Laplacian`](crate::Laplacian).
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GroundedError {
+    /// A surplus count other than the vertex count.
+    LengthMismatch {
         /// The Laplacian's vertex count.
         expected: usize,
         /// The surplus count given.
         got: usize,
     },
-
-    /// A [`Grounded`](crate::Grounded) surplus is negative or not finite.
+    /// A surplus that is negative or not finite.
     InvalidSurplus {
         /// Vertex carrying it.
         vertex: usize,
     },
-
-    /// A [`Grounded`](crate::Grounded) surplus is zero everywhere: that is a
-    /// [`Laplacian`](crate::Laplacian).
+    /// Zero everywhere: that is a [`Laplacian`](crate::Laplacian).
     NoSurplus,
+    /// The surplus total is not finite.
+    SurplusOverflow,
+    /// A diagonal entry, weighted degree plus surplus, that is not finite.
+    DiagonalOverflow {
+        /// The vertex.
+        vertex: usize,
+    },
 }
 
+impl fmt::Display for GroundedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LengthMismatch { expected, got } => {
+                write!(f, "expected {expected} surplus entries, got {got}")
+            }
+            Self::InvalidSurplus { vertex } => {
+                write!(f, "surplus at vertex {vertex} is negative or not finite")
+            }
+            Self::NoSurplus => write!(f, "surplus is zero everywhere, which is a Laplacian"),
+            Self::SurplusOverflow => write!(f, "surplus total is not finite"),
+            Self::DiagonalOverflow { vertex } => {
+                write!(f, "diagonal at vertex {vertex} is not finite")
+            }
+        }
+    }
+}
+
+impl std::error::Error for GroundedError {}
+
 /// An exact dense Cholesky pivot that could not be used, and where it was. The same
-/// payload is reported as a [`Fallback`](crate::Fallback) or raised as
-/// [`Error::DenseFactorizationFailed`].
+/// payload is reported as a [`Fallback`](crate::Fallback) or, under
+/// [`ExactFailure::Error`](crate::ExactFailure::Error), returned by
+/// [`factorize_with`](crate::factorize_with).
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnusablePivot {
@@ -95,6 +206,8 @@ impl fmt::Display for UnusablePivot {
         write!(f, "vertex {}: {}", self.vertex, self.failure)
     }
 }
+
+impl std::error::Error for UnusablePivot {}
 
 /// Why an exact dense Cholesky pivot was unusable.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -202,12 +315,6 @@ pub enum CsrError {
         /// Matrix dimension.
         n: usize,
     },
-    /// An index value (row pointer or column index) cannot be represented in the
-    /// target integer type.
-    IndexExceedsIndexType {
-        /// Which CSR array the bad value came from.
-        kind: IndexKind,
-    },
     /// Matrix dimension `n` cannot be represented in the target integer type
     /// (internally `u32`).
     MatrixDimensionExceedsIndexType {
@@ -223,8 +330,6 @@ pub enum CsrError {
         /// Observed column count.
         cols: usize,
     },
-    /// Input conversion via `TryFrom` panicked.
-    InputConversionPanicked,
 }
 
 impl fmt::Display for CsrError {
@@ -257,9 +362,6 @@ impl fmt::Display for CsrError {
                 f,
                 "column index out of bounds at position {position}: {col} >= {n}"
             ),
-            Self::IndexExceedsIndexType { kind } => {
-                write!(f, "{kind} exceeds target index type capacity")
-            }
             Self::MatrixDimensionExceedsIndexType { n } => {
                 write!(f, "matrix dimension exceeds index type capacity (n={n})")
             }
@@ -267,61 +369,8 @@ impl fmt::Display for CsrError {
             Self::ExpectedSquareMatrix { rows, cols } => {
                 write!(f, "expected square matrix (got {rows}x{cols})")
             }
-            Self::InputConversionPanicked => write!(f, "input conversion panicked"),
         }
     }
 }
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::InvalidCsr(err) => write!(f, "invalid CSR matrix: {err}"),
-            Error::PositiveOffDiagonal { edge: (row, col) } => write!(
-                f,
-                "off-diagonal ({row}, {col}) is positive; approx-chol requires SDDM/Laplacian input (off-diagonals must be <= 0)"
-            ),
-            Error::NonFiniteValue { position } => {
-                write!(f, "matrix value at CSR position {position} is not finite")
-            }
-            Error::Asymmetric { edge: (row, col) } => write!(
-                f,
-                "matrix is not symmetric at ({row}, {col}) and ({col}, {row})"
-            ),
-            Error::NotDiagonallyDominant { row } => write!(
-                f,
-                "row {row} is not diagonally dominant; approx-chol requires SDDM/Laplacian input"
-            ),
-            Error::NonFiniteRow { row } => write!(
-                f,
-                "row {row} sums to a non-finite diagonal or off-diagonal magnitude; approx-chol requires SDDM/Laplacian input"
-            ),
-            Error::DenseFactorizationFailed(pivot) => {
-                write!(f, "exact dense Cholesky failed at {pivot}")
-            }
-            Error::NotStrictlyUpper { edge: (row, col) } => {
-                write!(f, "Laplacian row {row} lists neighbor {col}, which is not above it")
-            }
-            Error::UnsortedNeighbors { row } => {
-                write!(f, "Laplacian row {row} neighbors are not strictly ascending")
-            }
-            Error::NonPositiveWeight { edge: (row, col) } => {
-                write!(f, "Laplacian edge ({row}, {col}) has a non-positive weight")
-            }
-            Error::SurplusLengthMismatch { expected, got } => {
-                write!(f, "expected {expected} surplus entries, got {got}")
-            }
-            Error::InvalidSurplus { vertex } => {
-                write!(f, "surplus at vertex {vertex} is negative or not finite")
-            }
-            Error::NoSurplus => write!(f, "surplus is zero everywhere, which is a Laplacian"),
-        }
-    }
-}
-
-impl std::error::Error for Error {}
-
-impl From<core::convert::Infallible> for Error {
-    fn from(value: core::convert::Infallible) -> Self {
-        match value {}
-    }
-}
+impl std::error::Error for CsrError {}

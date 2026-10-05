@@ -1,7 +1,7 @@
 mod common;
 
-use approx_chol::low_level::Builder;
 use approx_chol::{Backend, Config, ExactFailure, Factor};
+use common::factor;
 use common::grid::GridLaplacian;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
@@ -64,13 +64,13 @@ fn bench_backend_build(c: &mut Criterion) {
             // small sizes this bench exists to compare.
             let csr = lap.as_csr().expect("valid CSR");
             for (label, backend) in backends() {
-                let builder = Builder::<f64>::new(Config {
+                let config = Config {
                     backend,
                     ..Config::default()
-                });
+                };
                 let id = BenchmarkId::new(format!("{shape}/{label}"), n);
                 group.bench_with_input(id, &csr, |b, csr| {
-                    b.iter(|| builder.build(*csr).expect("factorization should succeed"));
+                    b.iter(|| factor(config, *csr).expect("factorization should succeed"));
                 });
             }
         }
@@ -87,11 +87,13 @@ fn bench_backend_solve(c: &mut Criterion) {
             rhs[0] = 1.0;
             rhs[n - 1] = -1.0;
             for (label, backend) in backends() {
-                let factor: Factor<f64> = Builder::new(Config {
-                    backend,
-                    ..Config::default()
-                })
-                .build(lap.as_csr().expect("valid CSR"))
+                let factor: Factor<f64> = factor(
+                    Config {
+                        backend,
+                        ..Config::default()
+                    },
+                    lap.as_csr().expect("valid CSR"),
+                )
                 .expect("factorization should succeed");
                 let mut work = vec![0.0; factor.n()];
                 let mut scratch = vec![0.0; factor.scratch_len()];

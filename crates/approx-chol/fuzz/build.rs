@@ -1,4 +1,4 @@
-use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, FACTOR_FORMAT_VERSION};
+use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, Sddm, FACTOR_FORMAT_VERSION};
 use std::fs;
 use std::path::Path;
 
@@ -44,14 +44,24 @@ fn seeds() -> Vec<(&'static str, Factor<f64>)> {
                 Backend::Approximate,
             ),
         ),
-        // Strictly dominant, so ingestion grounds it and a block anchors on the augmented
-        // vertex instead of floating.
+        // Strictly dominant, so the block is grounded and its sink is a slot past its
+        // vertices instead of its own last vertex.
         (
             "grounded_sddm",
             factor(
                 &[0, 2, 4],
                 &[0, 1, 0, 1],
                 &[2.0, -1.0, -1.0, 2.0],
+                Backend::Approximate,
+            ),
+        ),
+        // Grounded components interleaved: ground slots between blocks under a permutation.
+        (
+            "permuted_grounded_components",
+            factor(
+                &[0, 2, 4, 6, 8],
+                &[0, 2, 1, 3, 0, 2, 1, 3],
+                &[2.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 3.0],
                 Backend::Approximate,
             ),
         ),
@@ -85,7 +95,8 @@ fn factor(row_ptrs: &[u32], col_indices: &[u32], values: &[f64], backend: Backen
         backend,
         ..Config::default()
     };
-    factorize_with(csr, config).expect("factorization should succeed")
+    let sddm = Sddm::try_from(csr).expect("valid SDDM");
+    factorize_with(sddm, config).expect("factorization should succeed")
 }
 
 /// A 4-neighborhood grid Laplacian: enough elimination steps that a mutated payload can

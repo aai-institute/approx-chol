@@ -5,12 +5,12 @@
 #[path = "common/residual.rs"]
 mod residual;
 
-use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, FACTOR_FORMAT_VERSION};
+use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, Sddm, FACTOR_FORMAT_VERSION};
 use rstest::rstest;
 
-/// The interleaved payload as it was written before the version moved to `0x41430004`.
-const PRE_BUMP: &str = include_str!("fixtures/pre_bump_0x41430003.json");
-const PRE_BUMP_VERSION: u32 = 0x4143_0003;
+/// The interleaved payload as it was written before the version moved to `0x41430005`.
+const PRE_BUMP: &str = include_str!("fixtures/pre_bump_0x41430004.json");
+const PRE_BUMP_VERSION: u32 = 0x4143_0004;
 
 /// Zero-sum over each component, so the floating case has an exact solution.
 const B: [f64; 4] = [1.0, 2.0, -1.0, -2.0];
@@ -49,7 +49,8 @@ impl Matrix {
             backend: self.backend(),
             ..Config::default()
         };
-        factorize_with(self.csr(), config).expect("factorization should succeed")
+        factorize_with(Sddm::try_from(self.csr()).expect("valid SDDM"), config)
+            .expect("factorization should succeed")
     }
 }
 
@@ -62,7 +63,7 @@ const INTERLEAVED: Matrix = Matrix {
     backend: None,
 };
 
-/// Strictly dominant, so ingestion grounds it and the payload carries a ground anchor.
+/// Strictly dominant, so the payload carries a grounded block.
 const GROUNDED: Matrix = Matrix {
     name: "grounded_sddm",
     row_ptrs: &[0, 2, 5, 8, 10],

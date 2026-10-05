@@ -15,7 +15,7 @@ mod laplacian_prop;
 #[path = "common/residual.rs"]
 mod residual;
 
-use approx_chol::{factorize_with, Config, CsrRef, Factor};
+use approx_chol::{factorize_with, Config, CsrRef, Factor, Sddm};
 use laplacian_prop::{
     interleaved_components_strategy, permutation_strategy, permute_csr, LaplacianCsr,
 };
@@ -32,7 +32,9 @@ fn agrees(got: f64, want: f64) -> bool {
 /// The exact arm, and a check that it really was exact: a block reaching an unusable pivot
 /// falls back to the sampler by default, which would quietly make this the approximate arm.
 fn solve_exactly(csr: CsrRef<'_>, rhs: &[f64]) -> Vec<f64> {
-    let factor: Factor<f64> = factorize_with(csr, Config::default()).expect("factorization");
+    let factor: Factor<f64> =
+        factorize_with(Sddm::try_from(csr).expect("valid SDDM"), Config::default())
+            .expect("factorization");
     assert!(
         factor.fallbacks().is_empty(),
         "block fell back to the sampler: {:?}",

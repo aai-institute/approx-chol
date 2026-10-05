@@ -1,11 +1,17 @@
 use crate::types::Real;
-use crate::{CsrRef, Error};
+use crate::{CsrRef, NotSddm};
 use num_traits::PrimInt;
 
 /// A row pointer of a validated [`CsrRef`]: in `0..=nnz`, so in `usize` whatever `J` is.
 #[inline(always)]
 pub(super) fn row_ptr<J: PrimInt>(ptr: J) -> usize {
     ptr.to_usize().expect("a validated row pointer is a usize")
+}
+
+/// A column of a validated [`CsrRef`]: in `0..n`, and `n` is a `u32`.
+#[inline(always)]
+pub(super) fn column<J: PrimInt>(col: J) -> usize {
+    col.to_usize().expect("a validated column is a usize")
 }
 
 /// Each row's addition count, from the caller's own pointers: [`rewrite`]'s coalescing
@@ -37,24 +43,31 @@ pub(super) struct Rewritten<T> {
     pub(super) values: Vec<T>,
 }
 
-/// Only non-canonical input pays this copy.
-pub(super) fn rewrite<T: Real>(csr: CsrRef<'_, T, u32>) -> Result<Rewritten<T>, Error> {
+/// Only non-canonical input pays this copy, which narrows the caller's index type to
+/// `u32` as it goes.
+pub(super) fn rewrite<T: Real, J: PrimInt>(csr: CsrRef<'_, T, J>) -> Result<Rewritten<T>, NotSddm> {
     let nnz = csr.col_indices().len();
     let mut row_ptrs = Vec::with_capacity(csr.n() + 1);
     let mut col_indices = Vec::with_capacity(nnz);
     let mut values = Vec::with_capacity(nnz);
     let mut entries: Vec<(u32, T)> = Vec::new();
     row_ptrs.push(0u32);
-    for (row, (cols, vals)) in csr.rows().enumerate() {
+    for (row, bounds) in csr.row_ptrs().windows(2).enumerate() {
+        let (from, to) = (row_ptr(bounds[0]), row_ptr(bounds[1]));
         entries.clear();
-        entries.extend(cols.iter().copied().zip(vals.iter().copied()));
+        entries.extend(
+            csr.col_indices()[from..to]
+                .iter()
+                .map(|&col| column(col) as u32)
+                .zip(csr.values()[from..to].iter().copied()),
+        );
         // One row's degree, not nnz. Stable, so duplicates sum in stored order.
         entries.sort_by_key(|&(col, _)| col);
         for group in entries.chunk_by(|left, right| left.0 == right.0) {
             let folded = group[1..].iter().fold(group[0].1, |sum, &(_, v)| sum + v);
             // Only this fold can overflow; caught here so downstream stays all-finite.
             if !folded.is_finite() {
-                return Err(Error::NonFiniteRow { row });
+                return Err(NotSddm::NonFiniteRow { row });
             }
             col_indices.push(group[0].0);
             values.push(folded);

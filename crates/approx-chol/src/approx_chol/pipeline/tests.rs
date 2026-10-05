@@ -1,6 +1,8 @@
 use super::*;
 use crate::approx_chol::factorization::exact::NotFactorable;
-use crate::{CsrRef, DenseFailure, ExactFailure, UnusablePivot};
+use crate::approx_chol::factorization::Fallback;
+use crate::graph::BlockVertices;
+use crate::{CsrRef, DenseFailure, ExactFailure, Sddm, UnusablePivot};
 
 /// Naming the pivot and applying the policy are separate steps, so both are swept.
 #[test]
@@ -29,7 +31,7 @@ fn only_an_unusable_pivot_answers_to_the_failure_policy() {
             pivot,
             ExactFailure::Error,
             component,
-            Err(Error::DenseFactorizationFailed(named(30))),
+            Err(named(30)),
         ),
         (
             "pivot of a whole-graph block is already global",
@@ -75,12 +77,15 @@ fn assert_ac2_augmented_solve_is_finite(indptr: &[u32], indices: &[u32], data: &
         "fixture must reach the grounded path"
     );
     for seed in 0..8u64 {
-        let factor = Builder::<f64>::new(Config {
-            split_merge: Some(2),
-            seed,
-            ..Config::default()
-        })
-        .build(csr)
+        let sddm = Sddm::try_from(csr).expect("fixture is SDDM");
+        let factor = factorize(
+            sddm,
+            Config {
+                split_merge: Some(2),
+                seed,
+                ..Config::default()
+            },
+        )
         .unwrap_or_else(|e| panic!("AC2 factorization failed (seed={seed}): {e}"));
         let mut work = b.to_vec();
         let mut scratch = vec![0.0f64; factor.scratch_len()];
@@ -148,8 +153,8 @@ fn test_ac_marginally_sdd_laplacian_no_capacity_drift() {
             seed,
             ..Default::default()
         };
-        let factor = Builder::<f32>::new(config)
-            .build(csr)
+        let sddm = Sddm::try_from(csr).expect("fixture is SDDM");
+        let factor = factorize(sddm, config)
             .unwrap_or_else(|e| panic!("seed={seed}: AC factorization failed: {e}"));
 
         let work = factor

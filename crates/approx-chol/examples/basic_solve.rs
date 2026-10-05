@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Grid Laplacian: {}×{} ({} nodes)", 10, 10, n);
 
     // Factorize with default configuration (AC, DynamicPQ ordering).
-    let factor = factorize(lap.as_csr()?)?;
+    let factor = factorize(lap.sddm());
     println!(
         "Factorization: {} elimination steps (factor dimension {})",
         factor.n_steps(),

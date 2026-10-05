@@ -1,5 +1,4 @@
-//! Low-level API: the [`Builder`] behind [`factorize`](crate::factorize), and the
-//! clique-tree sampler on its own, for callers that eliminate a star outside a
-//! full factorization.
+//! The clique-tree sampler on its own, for callers that eliminate a star outside a full
+//! factorization.
 
-pub use crate::approx_chol::{Builder, CliqueTreeSampler};
+pub use crate::approx_chol::CliqueTreeSampler;

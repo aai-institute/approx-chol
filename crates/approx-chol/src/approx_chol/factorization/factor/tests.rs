@@ -8,13 +8,13 @@ fn permutation_gather_matches_its_definition_and_scatter_inverts_it() {
 
     let original = [10.0_f64, 20.0, 30.0];
     let mut scratch = [0.0_f64; 3];
-    permutation.gather_into(&original, &mut scratch);
+    permutation.gather_into(&original, 0, &mut scratch);
     for (position, &source) in forward.iter().enumerate() {
         assert_eq!(scratch[position], original[source as usize]);
     }
 
     let mut values = [0.0_f64; 3];
-    permutation.scatter_from(&scratch, &mut values);
+    permutation.scatter_from(&scratch, 0, &mut values);
     assert_eq!(values, original);
 }
 
@@ -24,53 +24,60 @@ fn permutation_of_identity_is_none() {
     assert!(Permutation::from_order(Vec::new()).is_none());
 }
 
-/// Every fact no single block can see; a block's own serde boundary owns the rest.
-mod validation {
+mod layout {
     use crate::approx_chol::factorization::exact::LowerTriangular;
-    use crate::approx_chol::factorization::{
-        anchor::Anchor,
-        block::{Block, BlockDim},
-        cholesky::Cholesky,
-    };
+    use crate::approx_chol::factorization::{block::Block, cholesky::Cholesky};
 
     use super::*;
 
-    /// Three variables, and a cholesky that is valid but arbitrary: nothing at this level
-    /// reads it.
-    fn block(anchor: Anchor) -> Block<f64> {
-        Block::new(
-            BlockDim::of(3).expect("fixture dimension is non-zero"),
-            anchor,
-            Cholesky::Exact(LowerTriangular {
-                values: vec![1.0; 3],
-            }),
-        )
+    /// Two rows, so three slots: valid but arbitrary, since nothing here reads it.
+    fn cholesky() -> Cholesky<f64> {
+        Cholesky::Exact(LowerTriangular {
+            values: vec![1.0; 3],
+        })
     }
 
-    fn of_blocks(blocks: Vec<Block<f64>>) -> Factor<f64> {
+    pub(super) fn of_blocks(blocks: Vec<Block<f64>>) -> Factor<f64> {
         Factor::of(None, blocks, Vec::new())
     }
 
-    fn floating() -> Factor<f64> {
-        of_blocks(vec![block(Anchor::Floating)])
+    pub(super) fn floating() -> Factor<f64> {
+        of_blocks(vec![Block::Floating(cholesky())])
     }
+
+    /// A ground slot sits after its block's vertices, so the next block's inputs land
+    /// one slot further along than their positions.
+    #[test]
+    fn a_ground_slot_shifts_every_later_block() {
+        let factor = of_blocks(vec![
+            Block::Grounded(cholesky()),
+            Block::Floating(cholesky()),
+        ]);
+        assert_eq!((factor.n(), factor.scratch_len()), (5, 6));
+        assert_eq!(factor.spans().collect::<Vec<_>>(), [(0, 2, 0), (2, 3, 3)]);
+    }
+
+    #[test]
+    fn floating_input_without_a_permutation_needs_no_scratch() {
+        let factor = of_blocks(vec![
+            Block::Floating(cholesky()),
+            Block::Floating(cholesky()),
+        ]);
+        assert_eq!((factor.n(), factor.scratch_len()), (6, 0));
+        assert_eq!(factor.spans().collect::<Vec<_>>(), [(0, 6, 0)]);
+    }
+}
+
+/// Every fact no single block can see; a block's own serde boundary owns the rest.
+mod validation {
+    use super::layout::floating;
+    use super::*;
 
     #[test]
     fn a_factor_of_valid_blocks_passes() {
         floating()
             .validate_structure()
             .unwrap_or_else(|error| panic!("fixture is valid: {error}"));
-    }
-
-    /// Two blocks tiling `5 + 1` variables, both claiming the one ground vertex.
-    #[test]
-    fn a_second_block_cannot_claim_the_ground_vertex() {
-        let factor = of_blocks(vec![block(Anchor::Ground), block(Anchor::Ground)]);
-
-        assert_eq!(
-            factor.validate_structure(),
-            Err(FactorError::MultipleGroundBlocks { grounded: 2 })
-        );
     }
 
     /// The reported position is the offending entry, or the map's length when it is too

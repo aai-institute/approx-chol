@@ -13,7 +13,7 @@ mod tests;
 /// keeps a payload that predates the field from passing the check on whatever `usize` led
 /// it — `1` would collide with the dimension a one-variable system led with.
 #[cfg(feature = "serde")]
-pub const FACTOR_FORMAT_VERSION: u32 = 0x4143_0004;
+pub const FACTOR_FORMAT_VERSION: u32 = 0x4143_0005;
 
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 #[cfg_attr(
@@ -27,7 +27,7 @@ pub const FACTOR_FORMAT_VERSION: u32 = 0x4143_0004;
 /// Exact or approximate Cholesky decomposition of an SDDM matrix.
 pub struct Factor<T = f64> {
     n: usize,
-    grounded: bool,
+    slots: usize,
     permutation: Option<Permutation>,
     blocks: Vec<Block<T>>,
     fallbacks: Vec<Fallback>,
@@ -64,7 +64,7 @@ impl<T: serde::Serialize> serde::Serialize for Factor<T> {
 #[derive(serde::Deserialize)]
 #[serde(bound(deserialize = "T: serde::de::DeserializeOwned + num_traits::Float"))]
 struct FactorData<T> {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "current_version")]
     format_version: u32,
     permutation: Option<Permutation>,
     blocks: Vec<Block<T>>,
@@ -72,11 +72,28 @@ struct FactorData<T> {
     fallbacks: Vec<Fallback>,
 }
 
+/// Checked as it is read, so another version's payload fails on its version rather than
+/// on the first field whose shape moved.
+#[cfg(feature = "serde")]
+fn current_version<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    let found = <u32 as serde::Deserialize>::deserialize(deserializer)?;
+    if found != FACTOR_FORMAT_VERSION {
+        return Err(serde::de::Error::custom(
+            FactorError::UnsupportedFormatVersion {
+                found,
+                supported: FACTOR_FORMAT_VERSION,
+            },
+        ));
+    }
+    Ok(found)
+}
+
 #[cfg(feature = "serde")]
 impl<T: num_traits::Float> TryFrom<FactorData<T>> for Factor<T> {
     type Error = FactorError;
 
     fn try_from(data: FactorData<T>) -> Result<Self, Self::Error> {
+        // Only a payload that predates the field reaches here with another version.
         if data.format_version != FACTOR_FORMAT_VERSION {
             return Err(FactorError::UnsupportedFormatVersion {
                 found: data.format_version,
@@ -117,12 +134,6 @@ impl fmt::Display for Fallback {
 #[cfg(any(feature = "serde", test))]
 impl<T> Factor<T> {
     fn validate_structure(&self) -> Result<(), FactorError> {
-        // A Ground anchor overwrites its block's last entry with `-sum`, so a second
-        // one silently solves a different system.
-        let grounded = self.blocks.iter().filter(|block| block.is_ground()).count();
-        if grounded > 1 {
-            return Err(FactorError::MultipleGroundBlocks { grounded });
-        }
         if let Some(permutation) = &self.permutation {
             permutation.validate_for_dim(self.n)?;
         }
@@ -172,34 +183,49 @@ impl<T> Factor<T> {
         &self.fallbacks
     }
 
-    /// Dimension of the factored input; the ground vertex never counts.
+    /// Dimension of the factored input.
     pub fn n(&self) -> usize {
-        self.n - usize::from(self.grounded)
+        self.n
     }
 
-    /// What [`solve_in_place`](Self::solve_in_place) needs: nothing for connected
-    /// floating input, else room for the ground vertex and the permutation.
+    /// What [`solve_in_place`](Self::solve_in_place) needs: nothing for floating input
+    /// that needs no permutation, else room for every block's slots, grounds included.
     pub fn scratch_len(&self) -> usize {
-        if self.permutation.is_some() || self.grounded {
-            self.n
+        if self.permutation.is_some() || self.slots != self.n {
+            self.slots
         } else {
             0
         }
     }
 
-    /// The one place `n` and `grounded` are ever written, so neither drifts from the blocks.
+    /// The one place `n` and `slots` are ever written, so neither drifts from the blocks.
     fn of(
         permutation: Option<Permutation>,
         blocks: Vec<Block<T>>,
         fallbacks: Vec<Fallback>,
     ) -> Self {
         Self {
-            n: blocks.iter().map(|block| block.dim().total()).sum(),
-            grounded: blocks.iter().any(Block::is_ground),
+            n: blocks.iter().map(Block::vertices).sum(),
+            slots: blocks.iter().map(Block::slots).sum(),
             permutation,
             blocks,
             fallbacks,
         }
+    }
+
+    /// Each block's first input position, vertex count and first slot. One span when
+    /// no block holds a ground, since positions and slots then coincide.
+    fn spans(&self) -> impl Iterator<Item = (usize, usize, usize)> + '_ {
+        let whole = (self.slots == self.n).then_some((0, self.n, 0));
+        let blocks = whole.is_none().then(|| {
+            self.blocks.iter().scan((0, 0), |(input, slot), block| {
+                let span = (*input, block.vertices(), *slot);
+                *input += block.vertices();
+                *slot += block.slots();
+                Some(span)
+            })
+        });
+        whole.into_iter().chain(blocks.into_iter().flatten())
     }
 }
 
@@ -212,6 +238,8 @@ where
         blocks: Vec<Block<T>>,
         fallbacks: Vec<Fallback>,
     ) -> Self {
+        #[cfg(any(feature = "serde", test))]
+        debug_assert!(blocks.iter().all(|block| block.validate().is_ok()));
         let factor = Self::of(permutation, blocks, fallbacks);
         #[cfg(any(feature = "serde", test))]
         debug_assert_eq!(factor.validate_structure(), Ok(()));
@@ -222,18 +250,18 @@ where
         Self::from_blocks(None, Vec::new(), Vec::new())
     }
 
-    /// Total elimination steps across all blocks: every block solves for all but one of
-    /// its variables, whichever arm factored it.
+    /// Total elimination steps across all blocks: every slot but one per block, whichever
+    /// arm factored it.
     pub fn n_steps(&self) -> usize {
-        self.blocks.iter().map(|block| block.dim().solved()).sum()
+        self.blocks.iter().map(Block::eliminated).sum()
     }
 
     #[inline(always)]
-    fn solve_blocks(&self, values: &mut [T]) {
+    fn solve_blocks(&self, slots: &mut [T]) {
         let mut start = 0usize;
         for block in &self.blocks {
-            let end = start + block.dim().total();
-            block.solve(&mut values[start..end]);
+            let end = start + block.slots();
+            block.solve(&mut slots[start..end]);
             start = end;
         }
     }
@@ -267,16 +295,22 @@ where
             self.solve_blocks(x);
             return Ok(());
         }
-        // The ground slot is whatever scratch held: its anchor overwrites it first.
+        // A ground slot keeps whatever scratch held: its block writes it before reading it.
         let work = &mut scratch[..needed];
-        match &self.permutation {
-            None => work[..x.len()].copy_from_slice(x),
-            Some(permutation) => permutation.gather_into(x, work),
+        for (input, len, slot) in self.spans() {
+            let slots = &mut work[slot..slot + len];
+            match &self.permutation {
+                None => slots.copy_from_slice(&x[input..input + len]),
+                Some(permutation) => permutation.gather_into(x, input, slots),
+            }
         }
         self.solve_blocks(work);
-        match &self.permutation {
-            None => x.copy_from_slice(&work[..x.len()]),
-            Some(permutation) => permutation.scatter_from(work, x),
+        for (input, len, slot) in self.spans() {
+            let slots = &work[slot..slot + len];
+            match &self.permutation {
+                None => x[input..input + len].copy_from_slice(slots),
+                Some(permutation) => permutation.scatter_from(slots, input, x),
+            }
         }
         Ok(())
     }

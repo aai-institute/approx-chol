@@ -1,13 +1,14 @@
-//! Both arms leave one variable free, so a block's solve never asks which one it got —
-//! the exact arm the pinned last vertex, the approximate one whichever min-degree spared.
+//! Both arms leave one slot of their block free, so a block's solve never asks which one
+//! it got — the exact arm the last slot, the approximate one whichever min-degree spared.
 
 use super::approximate::EliminationSequence;
-#[cfg(any(feature = "serde", test))]
-use super::block::BlockDim;
 use super::exact::LowerTriangular;
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;
 use crate::types::Real;
+
+#[cfg(test)]
+mod tests;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
@@ -21,8 +22,17 @@ use crate::types::Real;
 pub(crate) enum Cholesky<T> {
     /// Algorithm 8's sampled elimination sequence.
     Approximate(EliminationSequence<T>),
-    /// Exact dense factor over the variables the block solves for.
+    /// Exact dense factor over every slot but the last.
     Exact(LowerTriangular<T>),
+}
+
+impl<T> Cholesky<T> {
+    pub(super) fn eliminated(&self) -> usize {
+        match self {
+            Self::Approximate(sequence) => sequence.n_steps(),
+            Self::Exact(lower) => lower.rows(),
+        }
+    }
 }
 
 impl<T: Real> Cholesky<T> {
@@ -36,22 +46,7 @@ impl<T: Real> Cholesky<T> {
 
 #[cfg(any(feature = "serde", test))]
 impl<T: num_traits::Float> Cholesky<T> {
-    /// Takes no `dim`, so an arm cannot launder the claimed one back as its answer.
-    fn pinned_dim(&self) -> Result<BlockDim, FactorError> {
-        match self {
-            Self::Approximate(sequence) => Ok(sequence.pinned_dim()),
-            Self::Exact(lower) => lower.pinned_dim(),
-        }
-    }
-
-    pub(super) fn validate_for_dim(&self, dim: BlockDim) -> Result<(), FactorError> {
-        let pinned = self.pinned_dim()?;
-        if pinned != dim {
-            return Err(FactorError::BlockDimMismatch {
-                pinned: pinned.total(),
-                claimed: dim.total(),
-            });
-        }
+    pub(super) fn validate(&self) -> Result<(), FactorError> {
         match self {
             Self::Approximate(sequence) => sequence.validate_values(),
             Self::Exact(lower) => lower.validate_values(),

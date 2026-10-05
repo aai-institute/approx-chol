@@ -2,15 +2,11 @@
 mod grid;
 use grid::grid_laplacian;
 
-use approx_chol::low_level::Builder;
-use approx_chol::Config;
+use approx_chol::{factorize_with, Config};
 
 fn run_smoke_case(rows: usize, cols: usize, config: Config) {
     let lap = grid_laplacian(rows, cols);
-    let builder = Builder::new(config);
-    let factor = builder
-        .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
-        .expect("factorization should succeed");
+    let factor = factorize_with(lap.sddm(), config).expect("factorization should succeed");
 
     let n = factor.n();
     let mut rhs = vec![0.0; n];

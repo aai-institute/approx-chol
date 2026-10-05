@@ -14,7 +14,8 @@ fn path_factor_with(config: Config) -> Factor<f64> {
     let row_ptrs: Vec<u32> = path::ROW_PTRS.iter().map(|&v| v as u32).collect();
     let col_indices: Vec<u32> = path::COL_INDICES.iter().map(|&v| v as u32).collect();
     let csr = CsrRef::new(&row_ptrs, &col_indices, &path::VALUES, path::N).expect("valid csr");
-    factorize_with(csr, config).expect("factorization should succeed")
+    factorize_with(Sddm::try_from(csr).expect("valid SDDM"), config)
+        .expect("factorization should succeed")
 }
 
 fn path_factor() -> Factor<f64> {
@@ -29,7 +30,7 @@ fn complete_factor(n: usize) -> Factor<f64> {
     let (row_ptrs, columns, values, dim) = laplacian_prop::build_laplacian_csr(n, &weights);
     let csr = CsrRef::new(&row_ptrs, &columns, &values, dim).expect("valid CSR");
     factorize_with(
-        csr,
+        Sddm::try_from(csr).expect("valid SDDM"),
         Config {
             backend: Backend::Approximate,
             ..Config::default()
@@ -63,10 +64,12 @@ fn factor_json_roundtrip_preserves_solve(#[case] backend: Backend) {
     );
     assert_roundtrip(
         "two components",
-        &factorize_with(split, config).expect("factorization should succeed"),
+        &factorize_with(Sddm::try_from(split).expect("valid SDDM"), config)
+            .expect("factorization should succeed"),
         &[1.0, -1.0, 2.0, -2.0],
     );
-    assert!(matches!(Sddm::try_from(sddm), Ok(Sddm::Grounded(_))));
+    let sddm = Sddm::try_from(sddm).expect("valid SDDM");
+    assert!(matches!(sddm, Sddm::Grounded(_)));
     let grounded = factorize_with(sddm, config).expect("factorization should succeed");
     assert_roundtrip("grounded SDDM", &grounded, &[1.0, -1.0]);
 }
@@ -91,14 +94,14 @@ fn assert_roundtrip(label: &str, factor: &Factor<f64>, b: &[f64]) {
     );
 }
 
+/// A block's dimension is its factor's, so a value too many is no triangle at all.
 #[test]
 fn deserializing_corrupted_factor_is_rejected() {
     let mut value = serde_json::to_value(path_factor()).expect("serialize factor");
-    assert!(
-        value["blocks"][0]["dim"].is_u64(),
-        "no block dimension to corrupt"
-    );
-    value["blocks"][0]["dim"] = serde_json::Value::from(999u32);
+    let lower = value["blocks"][0]["Floating"]["Exact"]
+        .as_array_mut()
+        .expect("the path's block is exact");
+    lower.push(serde_json::Value::from(1.0));
 
     assert!(serde_json::from_value::<Factor<f64>>(value).is_err());
 }
@@ -109,7 +112,7 @@ fn a_column_whose_shares_overspend_the_pivot_is_rejected() {
     let factor = complete_factor(4);
 
     let mut value = serde_json::to_value(&factor).expect("serialize factor");
-    let shares = &mut value["blocks"][0]["cholesky"]["Approximate"]["steps"][0]["column"]["shares"];
+    let shares = &mut value["blocks"][0]["Floating"]["Approximate"]["steps"][0]["column"]["shares"];
     assert!(
         shares[0][1].is_f64(),
         "the leading step of a complete graph carries shares to overspend"
@@ -119,18 +122,22 @@ fn a_column_whose_shares_overspend_the_pivot_is_rejected() {
     assert!(serde_json::from_value::<Factor<f64>>(value).is_err());
 }
 
-/// No wire fact contradicts an anchor, so tampering answers a different system.
+/// No wire fact contradicts a block's grounding, so tampering answers a different system.
 #[test]
-fn a_tampered_block_anchor_deserializes_and_answers_a_different_system() {
+fn a_tampered_block_grounding_deserializes_and_answers_a_different_system() {
     let factor = path_factor();
     let mut value = serde_json::to_value(&factor).expect("serialize factor");
-    value["blocks"][0]["anchor"] = serde_json::Value::from("Ground");
+    let block = value["blocks"][0]
+        .as_object_mut()
+        .expect("a block serializes as its variant");
+    let cholesky = block.remove("Floating").expect("the path floats");
+    block.insert("Grounded".to_owned(), cholesky);
 
     let restored: Factor<f64> =
         serde_json::from_value(value).expect("nothing on the wire falsifies an anchor");
     assert_eq!(restored.n(), factor.n() - 1);
 
-    // The anchor decides whether the block's last entry is pinned or projected out, so
+    // The grounding decides whether the block's last slot is a vertex or the ground, so
     // the tampered factor is not merely one variable short.
     let b = [1.0, 2.0, -3.0];
     let honest = factor

@@ -1,4 +1,4 @@
-use approx_chol::{Backend, Config, CsrRef, DenseFailure, Error, ExactFailure, Fallback};
+use approx_chol::{Backend, Config, CsrRef, DenseFailure, ExactFailure, Fallback, Sddm};
 use numpy::{BorrowError, Element, PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
 use std::mem::size_of;
@@ -284,7 +284,9 @@ fn factorize_csr(
     config: Option<&PyConfig>,
 ) -> PyResult<PyFactor> {
     let config = config.map(PyConfig::to_native).unwrap_or_default();
-    let inner = approx_chol::factorize_with(csr, config).map_err(approx_chol_err_to_py)?;
+    let sddm = Sddm::try_from(csr).map_err(|e| value_error(e.to_string()))?;
+    let inner = approx_chol::factorize_with(sddm, config)
+        .map_err(|pivot| value_error(format!("exact dense Cholesky failed at {pivot}")))?;
     warn_on_fallback(py, &inner)?;
     Ok(PyFactor { inner })
 }
@@ -397,10 +399,6 @@ impl PyFactor {
     }
 }
 
-fn approx_chol_err_to_py(e: Error) -> PyErr {
-    value_error(e.to_string())
-}
-
 #[pyfunction]
 #[pyo3(signature = (row_ptrs, col_indices, values, n, config=None))]
 fn factorize_raw<'py>(
@@ -421,7 +419,8 @@ fn factorize_raw<'py>(
         .as_slice()
         .map_err(|_| value_error("values must be contiguous"))?;
 
-    let csr = CsrRef::new(rp, ci, vals, n).map_err(approx_chol_err_to_py)?;
+    let csr = CsrRef::new(rp, ci, vals, n)
+        .map_err(|e| value_error(format!("invalid CSR matrix: {e}")))?;
     factorize_csr(py, csr, config)
 }
 
@@ -464,7 +463,8 @@ fn factorize(
         .map_err(|_| value_error("data must be contiguous"))?;
 
     let n = u32::try_from(shape.0).map_err(|_| value_error("matrix dimension exceeds u32::MAX"))?;
-    let csr = CsrRef::new(rp, ci, vals, n).map_err(approx_chol_err_to_py)?;
+    let csr = CsrRef::new(rp, ci, vals, n)
+        .map_err(|e| value_error(format!("invalid CSR matrix: {e}")))?;
     factorize_csr(py, csr, config)
 }
 

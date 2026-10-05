@@ -1,20 +1,19 @@
-//! A [`block`] is an [`anchor`] paired with a [`cholesky`], the two chosen
-//! independently — by augmentation and by policy — so all four combinations occur.
+//! A [`block`] is grounded or floating around a [`cholesky`], the two chosen
+//! independently — by the input's surplus and by policy — so all four combinations occur.
 
 #[cfg(any(feature = "serde", test))]
 use core::fmt;
 
-mod anchor;
 pub(crate) mod approximate;
 mod block;
 mod cholesky;
 pub(crate) mod exact;
 mod factor;
+mod gauge;
 mod permutation;
 
-pub(crate) use anchor::Anchor;
 pub use approximate::CliqueTreeSampler;
-pub(crate) use block::{Block, BlockDim};
+pub(crate) use block::Block;
 pub(crate) use cholesky::Cholesky;
 #[cfg(feature = "serde")]
 pub use factor::FACTOR_FORMAT_VERSION;
@@ -64,16 +63,9 @@ pub(crate) enum FactorError {
         vertex: u32,
         n: usize,
     },
-    BlockDimMismatch {
-        pinned: usize,
-        claimed: usize,
-    },
     VertexEliminatedTwice {
         step: usize,
         vertex: u32,
-    },
-    MultipleGroundBlocks {
-        grounded: usize,
     },
     PermutationInvalid {
         position: usize,

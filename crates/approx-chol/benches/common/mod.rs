@@ -6,3 +6,8 @@
 pub mod grid;
 
 pub use grid::grid_laplacian;
+
+#[path = "../../tests/common/factor.rs"]
+pub mod factor;
+
+pub use factor::factor;

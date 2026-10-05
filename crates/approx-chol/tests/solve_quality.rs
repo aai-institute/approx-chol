@@ -1,3 +1,5 @@
+#[path = "common/factor.rs"]
+mod factor;
 #[path = "common/grid.rs"]
 mod grid;
 #[path = "common/residual.rs"]
@@ -5,8 +7,8 @@ mod residual;
 use grid::grid_laplacian;
 use residual::relative_residual_over;
 
-use approx_chol::low_level::Builder;
-use approx_chol::{Backend, Config, CsrRef, Error, Sddm, SolveError};
+use approx_chol::{Backend, Config, CsrRef, NotSddm, Sddm, SolveError};
+use factor::factor;
 use num_traits::Float;
 use rstest::rstest;
 
@@ -14,7 +16,7 @@ use rstest::rstest;
 /// and earns a ground vertex, `Ok(false)` when it is within the row's own summation
 /// error, `Err` when it is a real deficit. Row scale is 2 over 2 stored terms, so the
 /// floor is `4 * eps` either way.
-fn route_at_drift<T: Float + Send + Sync + 'static>(drift: T) -> Result<bool, Error> {
+fn route_at_drift<T: Float + Send + Sync + 'static>(drift: T) -> Result<bool, NotSddm> {
     let one = T::one();
     let row_ptrs = [0u32, 2, 4];
     let col_indices = [0u32, 1, 0, 1];
@@ -53,7 +55,7 @@ fn deficit_beyond_summation_roundoff_is_rejected() {
         route_at_drift(-5e-11_f64).expect_err("f64 deficit must be reported"),
     ] {
         assert!(
-            matches!(err, Error::NotDiagonallyDominant { row: 0 }),
+            matches!(err, NotSddm::NotDiagonallyDominant { row: 0 }),
             "{err:?}"
         );
     }
@@ -104,12 +106,14 @@ fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
         matches!(Sddm::try_from(csr), Ok(Sddm::Grounded(_))),
         "diagonal SDDM should be grounded"
     );
-    let factor = Builder::new(Config {
-        backend,
-        split_merge,
-        ..Config::default()
-    })
-    .build(csr)
+    let factor = factor(
+        Config {
+            backend,
+            split_merge,
+            ..Config::default()
+        },
+        csr,
+    )
     .expect("factorization should succeed");
 
     let x = factor.solve(&b).expect("solve should succeed");
@@ -128,9 +132,7 @@ fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
 fn solve_in_place_rejects_a_length_other_than_n() {
     let (rp, ci, vals, n) = diagonal_sddm();
     let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid diagonal SDDM");
-    let factor = Builder::new(Config::default())
-        .build(csr)
-        .expect("factorization should succeed");
+    let factor = factor(Config::default(), csr).expect("factorization should succeed");
     let mut scratch = vec![0.0; factor.scratch_len()];
     for len in [factor.n() - 1, factor.n() + 1] {
         let err = factor
@@ -144,9 +146,7 @@ fn solve_in_place_rejects_a_length_other_than_n() {
 fn solve_in_place_rejects_short_scratch() {
     let (rp, ci, vals, n) = diagonal_sddm();
     let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid diagonal SDDM");
-    let factor = Builder::new(Config::default())
-        .build(csr)
-        .expect("factorization should succeed");
+    let factor = factor(Config::default(), csr).expect("factorization should succeed");
     assert!(factor.scratch_len() > 0, "a grounded factor needs scratch");
     let mut x = vec![1.0; factor.n()];
     let err = factor
@@ -163,11 +163,13 @@ fn dirty_scratch_does_not_change_the_solution(#[case] backend: Backend) {
     let row_ptrs = [0u32, 2, 4, 5];
     let columns = [0u32, 1, 0, 1, 2];
     let values = [2.0, -1.0, -1.0, 2.0, 1.0];
-    let factor = Builder::<f64>::new(Config {
-        backend,
-        ..Config::default()
-    })
-    .build(CsrRef::new(&row_ptrs, &columns, &values, 3).expect("valid CSR"))
+    let factor = factor(
+        Config {
+            backend,
+            ..Config::default()
+        },
+        CsrRef::new(&row_ptrs, &columns, &values, 3).expect("valid CSR"),
+    )
     .expect("factorization should succeed");
     let solve = |dirt: f64| {
         let mut x = vec![1.0, -2.0, 0.5];
@@ -197,11 +199,13 @@ where
     let one = T::one();
     let b = [one, T::zero(), T::zero(), -one];
 
-    let factor = Builder::<T>::new(Config {
-        backend,
-        ..Config::default()
-    })
-    .build(csr)
+    let factor = factor(
+        Config {
+            backend,
+            ..Config::default()
+        },
+        csr,
+    )
     .expect("factorization should succeed");
     let x = factor.solve(&b).expect("solve");
 

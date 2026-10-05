@@ -6,7 +6,7 @@ mod path;
 mod path_solve;
 use path_solve::assert_view_and_factor_match_fixture;
 
-use approx_chol::{factorize, Config, CsrError, CsrRef, Error};
+use approx_chol::{Config, CsrError, CsrRef};
 use num_traits::{Float, FromPrimitive};
 
 /// Build a 4-node path graph Laplacian (0-1-2-3) as a sprs CSR matrix.
@@ -44,22 +44,16 @@ fn sprs_csr_factorizes_over_index_types() {
 }
 
 #[test]
-fn sprs_factorize_rejects_csc_with_error() {
+fn sprs_view_rejects_csc_with_error() {
     let csr = path_laplacian_sprs::<f64, u32>();
     let csc = csr.to_csc();
-    let err = factorize(&csc).expect_err("CSC must be rejected");
-    assert!(matches!(
-        err,
-        Error::InvalidCsr(CsrError::ExpectedCsrMatrixGotCsc)
-    ));
+    let err = CsrRef::try_from(&csc).expect_err("CSC must be rejected");
+    assert_eq!(err, CsrError::ExpectedCsrMatrixGotCsc);
 }
 
 #[test]
 fn sprs_try_from_non_square_returns_error() {
     let mat = sprs::CsMatI::<f64, u32>::new((3, 4), vec![0, 1, 2, 3], vec![0, 1, 2], vec![1.0; 3]);
     let err = CsrRef::try_from(&mat).expect_err("non-square matrix must be rejected");
-    assert!(matches!(
-        err,
-        Error::InvalidCsr(CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 })
-    ));
+    assert_eq!(err, CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 });
 }

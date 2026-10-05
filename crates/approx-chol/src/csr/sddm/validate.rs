@@ -1,17 +1,8 @@
-use super::canonical::row_ptr;
+use super::canonical::{column, row_ptr};
+use crate::sddm::{surplus_sums_finitely, Diagonal};
 use crate::types::{count_as_scalar, Real};
-use crate::{CsrError, Error, Grounded, IndexKind, Laplacian, Sddm};
+use crate::{Grounded, Laplacian, NotSddm, Sddm};
 use num_traits::PrimInt;
-
-/// Converted where it is read, so canonical input is never copied whatever its index type;
-/// only a signed type can fail, with a negative column.
-#[inline(always)]
-fn column<J: PrimInt>(col: J) -> Result<usize, Error> {
-    col.to_usize()
-        .ok_or(Error::InvalidCsr(CsrError::IndexExceedsIndexType {
-            kind: IndexKind::ColIndex,
-        }))
-}
 
 /// A merge-join only because canonical rows guarantee each entry is claimed once.
 struct Mirrors<'a, J, T> {
@@ -37,18 +28,19 @@ impl<'a, J: PrimInt, T: Real> Mirrors<'a, J, T> {
     }
 
     /// Stored zeros count as absent.
-    fn claim(&mut self, row: usize, col: usize) -> Result<T, Error> {
+    fn claim(&mut self, row: usize, col: usize) -> Result<T, NotSddm> {
         let row_end = row_ptr(self.row_ptrs[row + 1]) as u32;
         let mut cursor = self.cursors[row];
         let mut found = T::zero();
         while cursor < row_end {
-            let at = column(self.col_indices[cursor as usize])?;
+            // Converted where it is read, so canonical input is never copied.
+            let at = column(self.col_indices[cursor as usize]);
             if at > col {
                 break;
             }
             let value = self.values[cursor as usize];
             if !value.is_finite() {
-                return Err(Error::NonFiniteValue {
+                return Err(NotSddm::NonFiniteValue {
                     position: cursor as usize,
                 });
             }
@@ -60,7 +52,7 @@ impl<'a, J: PrimInt, T: Real> Mirrors<'a, J, T> {
             // Skipped a stored entry whose own mirror above the diagonal is missing.
             if value != T::zero() {
                 self.cursors[row] = cursor;
-                return Err(Error::Asymmetric { edge: (at, row) });
+                return Err(NotSddm::Asymmetric { edge: (at, row) });
             }
         }
         self.cursors[row] = cursor;
@@ -85,7 +77,7 @@ pub(super) fn sddm_of<J: PrimInt, T: Real>(
     col_indices: &[J],
     values: &[T],
     terms: impl Iterator<Item = u32>,
-) -> Result<Sddm<T>, Error> {
+) -> Result<Sddm<T>, NotSddm> {
     let n = row_ptrs.len() - 1;
     let mut mirrors = Mirrors::new(row_ptrs, col_indices, values);
 
@@ -93,6 +85,7 @@ pub(super) fn sddm_of<J: PrimInt, T: Real>(
     // Off-diagonal only; the diagonal joins in `surplus`.
     let mut row_sums = vec![T::zero(); n];
     let upper_estimate = col_indices.len().saturating_sub(n) / 2;
+    let mut degrees = Diagonal::starting_at(vec![T::zero(); n]);
     let mut upper_ptrs = Vec::with_capacity(n + 1);
     let mut neighbors = Vec::with_capacity(upper_estimate);
     let mut weights = Vec::with_capacity(upper_estimate);
@@ -105,10 +98,10 @@ pub(super) fn sddm_of<J: PrimInt, T: Real>(
         let mut cursor = mirrors.cursors[row];
 
         while cursor < row_end {
-            let col = column(col_indices[cursor as usize])?;
+            let col = column(col_indices[cursor as usize]);
             let upper = values[cursor as usize];
             if !upper.is_finite() {
-                return Err(Error::NonFiniteValue {
+                return Err(NotSddm::NonFiniteValue {
                     position: cursor as usize,
                 });
             }
@@ -119,10 +112,10 @@ pub(super) fn sddm_of<J: PrimInt, T: Real>(
             }
             let lower = mirrors.claim(col, row)?;
             if !approximately_equal(upper, lower) {
-                return Err(Error::Asymmetric { edge: (row, col) });
+                return Err(NotSddm::Asymmetric { edge: (row, col) });
             }
             if upper > T::zero() {
-                return Err(Error::PositiveOffDiagonal { edge: (row, col) });
+                return Err(NotSddm::PositiveOffDiagonal { edge: (row, col) });
             }
             // Each row sums the value it stores: charging `upper` to both would read
             // the tolerated mirror difference as `col`'s own surplus and ground it.
@@ -130,11 +123,15 @@ pub(super) fn sddm_of<J: PrimInt, T: Real>(
             row_sums[col] = row_sums[col] + lower;
             neighbors.push(col as u32);
             weights.push(-upper);
+            degrees.add(row, col, -upper);
         }
         upper_ptrs.push(neighbors.len() as u32);
     }
+    if let Some(row) = degrees.first_non_finite() {
+        return Err(NotSddm::NonFiniteRow { row });
+    }
     let laplacian = Laplacian::trusted(upper_ptrs, neighbors, weights);
-    with_surplus(laplacian, &diagonal, row_sums, terms)
+    with_surplus(laplacian, &diagonal, &degrees, row_sums, terms)
 }
 
 /// How far one row's diagonal exceeds its off-diagonal mass, judged against the noise
@@ -175,9 +172,10 @@ impl<T: Real> RowBalance<T> {
 fn with_surplus<T: Real>(
     laplacian: Laplacian<T>,
     diagonal: &[T],
+    degrees: &Diagonal<T>,
     mut row_sums: Vec<T>,
     terms: impl Iterator<Item = u32>,
-) -> Result<Sddm<T>, Error> {
+) -> Result<Sddm<T>, NotSddm> {
     let mut grounded = false;
     for (row, ((sum, &d), count)) in row_sums
         .iter_mut()
@@ -186,14 +184,20 @@ fn with_surplus<T: Real>(
         .enumerate()
     {
         *sum = match RowBalance::of(d, *sum, count) {
-            RowBalance::NonFinite => return Err(Error::NonFiniteRow { row }),
-            RowBalance::Deficit => return Err(Error::NotDiagonallyDominant { row }),
+            RowBalance::NonFinite => return Err(NotSddm::NonFiniteRow { row }),
+            RowBalance::Deficit => return Err(NotSddm::NotDiagonallyDominant { row }),
             RowBalance::Negligible => T::zero(),
             RowBalance::Surplus(excess) => {
                 grounded = true;
                 excess
             }
         };
+    }
+    if let Some(row) = degrees.first_non_finite_with(&row_sums) {
+        return Err(NotSddm::NonFiniteRow { row });
+    }
+    if !surplus_sums_finitely(&row_sums) {
+        return Err(NotSddm::SurplusOverflow);
     }
     Ok(if grounded {
         Grounded::trusted(laplacian, row_sums).into()

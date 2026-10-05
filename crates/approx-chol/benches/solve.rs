@@ -3,11 +3,10 @@ mod common;
 use std::hint::black_box;
 use std::time::Duration;
 
-use approx_chol::low_level::Builder;
 use approx_chol::{Config, CsrRef, Factor};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
-use common::grid_laplacian;
+use common::{factor, grid_laplacian};
 
 /// `k` interleaved path Laplacians: vertex `i` neighbours `i - k` and `i + k`, so
 /// component membership maximally interleaves with input numbering. The only shape
@@ -20,7 +19,7 @@ struct InterleavedPaths {
 }
 
 impl InterleavedPaths {
-    fn as_csr(&self) -> Result<CsrRef<'_>, approx_chol::Error> {
+    fn as_csr(&self) -> Result<CsrRef<'_>, approx_chol::CsrError> {
         CsrRef::new(&self.row_ptrs, &self.col_indices, &self.values, self.n)
     }
 }
@@ -58,9 +57,11 @@ fn interleaved_paths(n: usize, k: usize) -> InterleavedPaths {
 
 fn bench_solve_for_size(c: &mut Criterion, size: usize) {
     let lap = grid_laplacian(size, size);
-    let factor: Factor<f64> = Builder::new(Config::default())
-        .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
-        .expect("factorization should succeed");
+    let factor: Factor<f64> = factor(
+        Config::default(),
+        lap.as_csr().expect("grid_laplacian must build valid CSR"),
+    )
+    .expect("factorization should succeed");
     let n = factor.n();
 
     let mut rhs = vec![0.0f64; n];
@@ -91,12 +92,12 @@ fn bench_solve_for_size(c: &mut Criterion, size: usize) {
 /// per component, against the connected grid solves above.
 fn bench_disconnected_solve(c: &mut Criterion, n: usize, k: usize) {
     let lap = interleaved_paths(n, k);
-    let factor: Factor<f64> = Builder::new(Config::default())
-        .build(
-            lap.as_csr()
-                .expect("interleaved paths must build valid CSR"),
-        )
-        .expect("disconnected factorization should succeed");
+    let factor: Factor<f64> = factor(
+        Config::default(),
+        lap.as_csr()
+            .expect("interleaved paths must build valid CSR"),
+    )
+    .expect("disconnected factorization should succeed");
     let dim = factor.n();
 
     let mut rhs = vec![0.0f64; dim];

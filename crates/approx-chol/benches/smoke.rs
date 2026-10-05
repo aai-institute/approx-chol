@@ -2,18 +2,18 @@ mod common;
 
 use std::time::Duration;
 
-use approx_chol::low_level::Builder;
 use approx_chol::Config;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 
 use common::grid::GridLaplacian;
-use common::grid_laplacian;
+use common::{factor, grid_laplacian};
 
 fn run_build_and_solve(lap: &GridLaplacian, config: Config) {
-    let builder = Builder::new(config);
-    let factor = builder
-        .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
-        .expect("factorization should succeed");
+    let factor = factor(
+        config,
+        lap.as_csr().expect("grid_laplacian must build valid CSR"),
+    )
+    .expect("factorization should succeed");
 
     let n = factor.n();
     let mut rhs = vec![0.0; n];

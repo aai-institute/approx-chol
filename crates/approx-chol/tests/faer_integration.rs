@@ -6,7 +6,7 @@ mod path;
 mod path_solve;
 use path_solve::assert_view_and_factor_match_fixture;
 
-use approx_chol::{factorize, Config, CsrError, Error};
+use approx_chol::{Config, CsrError, CsrRef};
 use faer::sparse::SparseRowMat;
 use num_traits::{cast, Float, FromPrimitive, PrimInt};
 
@@ -60,7 +60,7 @@ fn faer_csr_factorizes_over_index_types() {
 }
 
 #[test]
-fn faer_factorize_rejects_non_square_with_error() {
+fn faer_view_rejects_non_square_with_error() {
     let symbolic = faer::sparse::SymbolicSparseRowMat::<u32>::new_checked(
         3,
         4,
@@ -69,9 +69,6 @@ fn faer_factorize_rejects_non_square_with_error() {
         vec![0u32, 1, 0],
     );
     let mat = SparseRowMat::new(symbolic, vec![1.0, 1.0, 1.0]);
-    let err = factorize(&mat).expect_err("non-square matrix must be rejected");
-    assert!(matches!(
-        err,
-        Error::InvalidCsr(CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 })
-    ));
+    let err = CsrRef::try_from(&mat).expect_err("non-square matrix must be rejected");
+    assert_eq!(err, CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 });
 }

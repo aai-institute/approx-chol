@@ -12,8 +12,7 @@
 #[path = "shared/mod.rs"]
 mod shared;
 
-use approx_chol::low_level::Builder;
-use approx_chol::Config;
+use approx_chol::{factorize_with, Config};
 use shared::grid_laplacian;
 
 // --------------------------------------------------------------------------
@@ -29,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Default AC (split_merge = None)
     // -----------------------------------------------------------------------
     let ac_config = Config::default();
-    let ac_factor = Builder::new(ac_config).build(lap.as_csr()?)?;
+    let ac_factor = factorize_with(lap.sddm(), ac_config)?;
 
     println!("=== Default AC ===");
     println!("  split_merge : None (standard AC)");
@@ -43,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         seed: 42,
         ..Config::default()
     };
-    let ac2_factor = Builder::new(ac2_config).build(lap.as_csr()?)?;
+    let ac2_factor = factorize_with(lap.sddm(), ac2_config)?;
 
     println!("\n=== AC2 (k=2) ===");
     println!("  split_merge : Some(2)");

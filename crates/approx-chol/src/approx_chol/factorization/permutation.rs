@@ -19,21 +19,17 @@ impl Permutation {
         Some(Self { forward })
     }
 
-    /// `scratch[i] <- values[forward[i]]`, skipping a ground vertex `values` does not hold.
-    pub(super) fn gather_into<T: Copy>(&self, values: &[T], scratch: &mut [T]) {
-        for (slot, &source) in scratch.iter_mut().zip(self.forward.iter()) {
-            if let Some(&value) = values.get(source as usize) {
-                *slot = value;
-            }
+    /// `out[i] <- values[forward[start + i]]`.
+    pub(super) fn gather_into<T: Copy>(&self, values: &[T], start: usize, out: &mut [T]) {
+        for (slot, &source) in out.iter_mut().zip(&self.forward[start..]) {
+            *slot = values[source as usize];
         }
     }
 
-    /// `values[forward[i]] <- scratch[i]`, dropping the ground vertex.
-    pub(super) fn scatter_from<T: Copy>(&self, scratch: &[T], values: &mut [T]) {
-        for (&value, &target) in scratch.iter().zip(self.forward.iter()) {
-            if let Some(slot) = values.get_mut(target as usize) {
-                *slot = value;
-            }
+    /// `values[forward[start + i]] <- slots[i]`.
+    pub(super) fn scatter_from<T: Copy>(&self, slots: &[T], start: usize, values: &mut [T]) {
+        for (&value, &target) in slots.iter().zip(&self.forward[start..]) {
+            values[target as usize] = value;
         }
     }
 }

@@ -33,17 +33,17 @@ use approx_chol::{factorize, Grounded, Laplacian};
 
 // Path 0-1-2-3 with unit weights.
 let path: Laplacian = Laplacian::new(vec![0, 1, 2, 3, 3], vec![1, 2, 3], vec![1.0, 1.0, 1.0])?;
-let x = factorize(path.clone())?.solve(&[1.0, -1.0, 1.0, -1.0])?;
+let x = factorize(path.clone()).solve(&[1.0, -1.0, 1.0, -1.0])?;
 
 // The same path with surplus on vertex 0, so any right-hand side is consistent.
 let grounded = Grounded::new(path, vec![1.0, 0.0, 0.0, 0.0])?;
-let x = factorize(grounded)?.solve(&[1.0, 2.0, 3.0, 4.0])?;
+let x = factorize(grounded).solve(&[1.0, 2.0, 3.0, 4.0])?;
 ```
 
 A CSR matrix converts into an `Sddm`, which checks symmetry and dominance:
 
 ```rust
-use approx_chol::{factorize, CsrRef};
+use approx_chol::{factorize, CsrRef, Sddm};
 
 // 4-node path graph Laplacian (0-1-2-3)
 let row_ptrs    = [0u32, 2, 5, 8, 10];
@@ -51,7 +51,7 @@ let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
 let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
 
 let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
-let decomp = factorize(csr)?;
+let decomp = factorize(Sddm::try_from(csr)?);
 
 // RHS must lie in the range of the Laplacian (sum to zero)
 let b = [1.0, -1.0, 1.0, -1.0];
@@ -65,8 +65,8 @@ For a larger example with a grid Laplacian, see [`examples/basic_solve.rs`](exam
 
 | Feature | Effect |
 |---------|--------|
-| `sprs`  | `CsrRef` and `Sddm` conversions from `sprs` matrices via `TryFrom`. |
-| `faer`  | `CsrRef` and `Sddm` conversions from `faer` matrices via `TryFrom`. |
+| `sprs`  | `CsrRef` conversions from `sprs` matrices via `TryFrom`. |
+| `faer`  | `CsrRef` conversions from `faer` matrices via `TryFrom`. |
 
 ## Attribution
 

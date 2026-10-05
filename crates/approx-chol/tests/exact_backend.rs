@@ -6,7 +6,7 @@ use grid::grid_laplacian;
 use residual::relative_residual_over;
 
 use approx_chol::{
-    factorize_with, Backend, Config, DenseFailure, Error, ExactFailure, Fallback, UnusablePivot,
+    factorize_with, Backend, Config, DenseFailure, ExactFailure, Fallback, Sddm, UnusablePivot,
 };
 use grid::GridLaplacian;
 
@@ -35,9 +35,10 @@ fn a_claimed_block_solves_exactly_where_elimination_does_not() {
     b[0] = 1.0;
     b[15] = -1.0;
 
-    let exact = factorize_with(csr, Config::default()).expect("exact factorization");
+    let exact = factorize_with(Sddm::try_from(csr).expect("valid SDDM"), Config::default())
+        .expect("exact factorization");
     let approximate = factorize_with(
-        csr,
+        Sddm::try_from(csr).expect("valid SDDM"),
         Config {
             backend: Backend::Approximate,
             ..Config::default()
@@ -77,7 +78,7 @@ fn a_bound_of_zero_claims_no_block() {
 
     let solve = |backend| {
         factorize_with(
-            csr,
+            Sddm::try_from(csr).expect("valid SDDM"),
             Config {
                 backend,
                 ..Config::default()
@@ -114,7 +115,7 @@ fn a_claimed_block_does_not_shift_a_later_blocks_draws() {
 
     let solve = |backend| {
         factorize_with(
-            csr,
+            Sddm::try_from(csr).expect("valid SDDM"),
             Config {
                 backend,
                 ..Config::default()
@@ -148,7 +149,8 @@ fn routing_is_decided_per_block() {
     b[small_n] = 1.0;
     b[small_n + large_n - 1] = -1.0;
 
-    let factor = factorize_with(csr, Config::default()).expect("factorization");
+    let factor = factorize_with(Sddm::try_from(csr).expect("valid SDDM"), Config::default())
+        .expect("factorization");
     let x = factor.solve(&b).expect("solve");
 
     let claimed = relative_residual_over(csr, &x, &b, 0..small_n);
@@ -176,8 +178,7 @@ fn cancelling_path() -> GridLaplacian {
 #[test]
 fn a_pivot_lost_to_cancellation_is_reported() {
     let lap = cancelling_path();
-    let factor =
-        factorize_with(lap.as_csr().expect("valid CSR"), Config::default()).expect("factorization");
+    let factor = factorize_with(lap.sddm(), Config::default()).expect("factorization");
 
     assert_eq!(
         factor.fallbacks(),
@@ -195,8 +196,7 @@ fn a_pivot_lost_to_cancellation_is_reported() {
 fn a_reported_pivot_is_translated_out_of_block_local_numbering() {
     let grid = grid_laplacian(3, 3);
     let lap = side_by_side(&grid, &cancelling_path());
-    let factor =
-        factorize_with(lap.as_csr().expect("valid CSR"), Config::default()).expect("factorization");
+    let factor = factorize_with(lap.sddm(), Config::default()).expect("factorization");
 
     assert_eq!(
         factor.fallbacks(),
@@ -211,7 +211,7 @@ fn a_reported_pivot_is_translated_out_of_block_local_numbering() {
 fn a_failed_pivot_can_be_asked_to_fail_the_factorization() {
     let lap = cancelling_path();
     let error = factorize_with(
-        lap.as_csr().expect("valid CSR"),
+        lap.sddm(),
         Config {
             backend: Backend::ExactBelow {
                 max_dim: 24,
@@ -224,10 +224,10 @@ fn a_failed_pivot_can_be_asked_to_fail_the_factorization() {
 
     assert_eq!(
         error,
-        Error::DenseFactorizationFailed(UnusablePivot {
+        UnusablePivot {
             vertex: 1,
             failure: DenseFailure::NonPositivePivot,
-        })
+        }
     );
 }
 
@@ -242,8 +242,7 @@ fn a_block_whose_weights_square_to_infinity_still_factors() {
         values: vec![big, -big, -big, 2.0 * big, -big, -big, big],
         n: 3,
     };
-    let factor =
-        factorize_with(lap.as_csr().expect("valid CSR"), Config::default()).expect("factorization");
+    let factor = factorize_with(lap.sddm(), Config::default()).expect("factorization");
 
     assert!(factor.fallbacks().is_empty());
     let x = factor.solve(&[1.0, 0.0, -1.0]).expect("solve");

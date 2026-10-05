@@ -1,4 +1,3 @@
-use super::block::BlockDim;
 use super::factor::Fallback;
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;
@@ -25,12 +24,14 @@ impl NotFactorable {
     }
 }
 
+/// `eliminated` is every block row but the last slot's: all of them when that slot is a
+/// ground the block does not hold.
 pub(crate) fn factor<T: Real>(
     ingestion: &Ingestion<T>,
     block: &BlockVertices<'_>,
-    dim: BlockDim,
+    eliminated: usize,
 ) -> Result<LowerTriangular<T>, NotFactorable> {
-    assemble(ingestion, block, dim.solved())?.factor_in_place()
+    assemble(ingestion, block, eliminated)?.factor_in_place()
 }
 
 const fn row_start(row: usize) -> usize {
@@ -51,8 +52,10 @@ const fn packed_len(m: usize) -> Option<usize> {
 /// Lower triangle only: a stored upper triangle would double the persisted factor and
 /// embed the input matrix in it.
 ///
-/// Read from the ingested arrays rather than from an elimination graph, because a block
-/// that reaches here is never eliminated on and so never needs one built.
+/// Read from the input rather than from an elimination graph, because a block that
+/// reaches here is never eliminated on and so never needs one built. The diagonal is
+/// summed here, in the input's row order: an edge to the pinned vertex still counts toward
+/// its other endpoint's.
 fn assemble<T: Real>(
     ingestion: &Ingestion<T>,
     block: &BlockVertices<'_>,
@@ -60,16 +63,18 @@ fn assemble<T: Real>(
 ) -> Result<LowerTriangular<T>, NotFactorable> {
     let mut matrix = LowerTriangular::zeros(m)?;
     for row in 0..m {
-        matrix.row_mut(row)[row] = ingestion.block_diagonal(block, row);
+        matrix.row_mut(row)[row] = ingestion.surplus(block, row);
     }
     // Scattered, because the input stores only the upper triangle.
     for row in 0..m {
-        ingestion.upper_row(block, row, |col, value| {
-            // Past the triangle is the block's pinned last vertex, whose row and column
-            // the dense factor does not carry.
+        ingestion.upper_row(block, row, |col, weight| {
+            let diagonal = &mut matrix.row_mut(row)[row];
+            *diagonal = *diagonal + weight;
             if col < m {
+                let diagonal = &mut matrix.row_mut(col)[col];
+                *diagonal = *diagonal + weight;
                 let slot = &mut matrix.row_mut(col)[row];
-                *slot = *slot + value;
+                *slot = *slot - weight;
             }
         });
     }
@@ -78,7 +83,14 @@ fn assemble<T: Real>(
 
 /// Packed: row `r` is its own `r + 1` scalars, so no consumer restates where one
 /// starts.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(
+        bound(deserialize = "T: serde::de::DeserializeOwned + num_traits::Float"),
+        try_from = "Vec<T>"
+    )
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct LowerTriangular<T> {
     pub(super) values: Vec<T>,
@@ -175,21 +187,35 @@ impl<T: Real> LowerTriangular<T> {
     }
 }
 
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize> serde::Serialize for LowerTriangular<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.values.serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T: num_traits::Float> TryFrom<Vec<T>> for LowerTriangular<T> {
+    type Error = FactorError;
+
+    fn try_from(values: Vec<T>) -> Result<Self, Self::Error> {
+        let lower = Self { values };
+        lower.validate_values()?;
+        Ok(lower)
+    }
+}
+
 #[cfg(any(feature = "serde", test))]
 impl<T: num_traits::Float> LowerTriangular<T> {
-    pub(super) fn pinned_dim(&self) -> Result<BlockDim, FactorError> {
+    pub(super) fn validate_values(&self) -> Result<(), FactorError> {
         let rows = self.rows();
+        // First, so no length leaves trailing entries unread.
         if packed_len(rows) != Some(self.values.len()) {
             return Err(FactorError::ExactFactorLengthInvalid {
                 len: self.values.len(),
             });
         }
-        Ok(BlockDim::pinning(rows))
-    }
-
-    pub(super) fn validate_values(&self) -> Result<(), FactorError> {
-        // Through `pinned_dim`, so no call order leaves the trailing entries unread.
-        for row in 0..self.pinned_dim()?.solved() {
+        for row in 0..rows {
             let entries = self.row(row);
             // `substitute` divides by each diagonal entry twice per row, so a
             // pivot whose reciprocal overflows cannot be divided by either.

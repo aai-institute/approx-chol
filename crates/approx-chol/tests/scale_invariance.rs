@@ -1,4 +1,4 @@
-use approx_chol::{factorize_with, Backend, Config, CsrRef};
+use approx_chol::{factorize_with, Backend, Config, CsrRef, Sddm};
 use num_traits::Float;
 use rstest::rstest;
 
@@ -29,7 +29,7 @@ where
         backend,
         ..Config::default()
     };
-    factorize_with(csr, config)
+    factorize_with(Sddm::try_from(csr).expect("valid SDDM"), config)
         .expect("factorization should succeed")
         .solve(&rhs)
         .expect("solve should succeed")

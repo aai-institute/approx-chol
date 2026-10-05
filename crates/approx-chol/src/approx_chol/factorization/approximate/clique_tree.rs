@@ -34,8 +34,8 @@ impl<T: Real> SampledColumn<T> {
     }
 
     /// A column that hands on nothing, which is what an empty star leaves.
-    fn reset(&mut self, pivot_diag: T) {
-        self.diagonal = pivot_diag;
+    fn reset(&mut self) {
+        self.diagonal = T::zero();
         self.neighbors.clear();
         self.coefficients.clear();
         self.remainder = None;
@@ -74,13 +74,10 @@ impl<T: Real> SampledColumn<T> {
     pub(super) fn apply_fill_in_delta<C: EdgeCount>(
         &self,
         graph: &mut AdjListGraph<C, T>,
-        diag: &mut [T],
         deltas: &mut DegreeDeltas,
     ) {
         for &(u, w, weight) in &self.fill_edges {
             graph.add_fill_edge(u, w, weight);
-            diag[u as usize] = diag[u as usize] + weight;
-            diag[w as usize] = diag[w as usize] + weight;
             deltas.increase(u, 1);
             deltas.increase(w, 1);
         }
@@ -150,16 +147,15 @@ impl<T: Real> StarElimination<T> {
     }
 }
 
-/// Capacity is the live column sum, not `pivot_diag`, which keeps `f ∈ [0, 1]` by
-/// construction where a caller-maintained `diag[v]` can drift below the column sum.
+/// The pivot is the live column sum: the kernel eliminates Laplacians, whose diagonal
+/// is the star's weight, so no caller-maintained diagonal can drift from it.
 pub(super) fn sample_column<T: Real, C: EdgeCount>(
     star: &Star<T, C>,
-    pivot_diag: T,
     sampler: &mut CdfSampler<T>,
     column: &mut SampledColumn<T>,
 ) {
     let entries = star.entries();
-    column.reset(pivot_diag);
+    column.reset();
     // The last neighbor takes what the others leave, so it never enters the loop and no
     // caller derives its count from an index.
     let Some((last, rest)) = entries.split_last() else {
@@ -167,6 +163,7 @@ pub(super) fn sample_column<T: Real, C: EdgeCount>(
     };
     column.remainder = Some(last.neighbor);
     if rest.is_empty() {
+        column.diagonal = last.weight;
         return;
     }
 
@@ -248,15 +245,14 @@ impl<T: num_traits::Float + Send + Sync + 'static> CliqueTreeSampler<T> {
             "a star needs one entry per neighbor"
         );
         self.draws.restart(index);
-        // The zero `pivot_diag` only seeds the column diagonal this discards.
         match &mut self.star {
             StarScratch::Single(star) => {
                 star.refill_uniform(entries, Single);
-                sample_column(star, T::zero(), &mut self.draws, &mut self.column);
+                sample_column(star, &mut self.draws, &mut self.column);
             }
             StarScratch::Multi(star, copies) => {
                 star.refill_uniform(entries, *copies);
-                sample_column(star, T::zero(), &mut self.draws, &mut self.column);
+                sample_column(star, &mut self.draws, &mut self.column);
             }
         }
         self.column.extend_ordered_fill_edges(out);

@@ -9,23 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `Laplacian`, `Grounded` and `Sddm` input types; every CSR source converts into `Sddm`.
+- `Laplacian`, `Grounded` and `Sddm` input types, and `Sddm::with_surplus`.
 - `Factor::scratch_len`.
+- `NotSddm`, `LaplacianError` and `GroundedError`, one per constructor.
 
 ### Changed (breaking)
 
-- `factorize`, `factorize_with` and `Builder::build` take `TryInto<Sddm>` instead of
-  `TryInto<CsrRef>`.
+- `factorize` and `factorize_with` take `impl Into<Sddm>`; a `CsrRef` converts with
+  `Sddm::try_from`.
+- `factorize` returns a `Factor`; `factorize_with` fails only with an `UnusablePivot`.
+- `CsrRef::new` and the `sprs`/`faer` conversions return `CsrError`.
+- `Error`, `Builder`, `OwnedCsr`, `CsrRef::to_owned_u32` and
+  `CsrError::{InputConversionPanicked, IndexExceedsIndexType}` are removed.
+- `CsrRef::new` rejects a negative column index.
 - `Factor::n` is the input dimension.
 - `Factor::solve_in_place(x, scratch)` replaces `solve_into` and the old `solve_in_place`;
   `x` has length `n`.
 - `Factor::original_n` is removed.
 - `SolveError` is `LengthMismatch` or `ScratchTooSmall`.
+- Each grounded component gets its own ground vertex, so grounded components factor as
+  separate blocks.
+- A persisted `Factor` stores each block as `Grounded` or `Floating` around its factor,
+  with no dimension, and `FACTOR_FORMAT_VERSION` is `0x41430005`.
 
 ### Changed
 
 - A floating block's mean and a grounded block's ground entry are summed with
   compensation.
+- Approximate elimination takes each pivot from its star's weight.
 
 ## [0.6.0] - 2026-08-24
 

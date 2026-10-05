@@ -82,14 +82,4 @@ impl<'v> BlockVertices<'v> {
             Self::Part { vertices, .. } => u64::from(vertices[0]),
         }
     }
-
-    /// Blocks list their vertices ascending, so the highest-numbered one is last.
-    pub(super) fn last(&self) -> u32 {
-        match self {
-            Self::Whole(n) => (n - 1) as u32,
-            Self::Part { vertices, .. } => {
-                *vertices.last().expect("a block has at least one vertex")
-            }
-        }
-    }
 }

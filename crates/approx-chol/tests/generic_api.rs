@@ -4,8 +4,7 @@ mod path;
 mod path_solve;
 use path_solve::assert_view_and_factor_match_fixture;
 
-use approx_chol::low_level::Builder;
-use approx_chol::{factorize, Config, CsrError, CsrRef, Error};
+use approx_chol::{factorize_with, Config, CsrRef, Sddm};
 use num_traits::{Float, FromPrimitive, PrimInt};
 
 fn idx<I: TryFrom<usize>>(value: usize) -> I
@@ -43,7 +42,7 @@ where
 
 /// One factorization per (index, scalar) pair, on both the AC and AC2 paths.
 #[test]
-fn low_level_builder_is_generic_over_index_and_scalar_types() {
+fn factorization_is_generic_over_index_and_scalar_types() {
     for config in [
         Config::default(),
         Config {
@@ -61,35 +60,20 @@ fn low_level_builder_is_generic_over_index_and_scalar_types() {
     }
 }
 
-struct PanicIntoCsr;
-
-impl From<PanicIntoCsr> for approx_chol::Sddm<f64> {
-    fn from(_: PanicIntoCsr) -> Self {
-        panic!("boom during conversion");
-    }
-}
-
-#[test]
-fn factorize_catches_panicking_conversion() {
-    let err =
-        factorize::<f64, _>(PanicIntoCsr).expect_err("panicking conversion must map to error");
-    assert!(matches!(
-        err,
-        Error::InvalidCsr(CsrError::InputConversionPanicked)
-    ));
-}
-
 /// One code path, so these must agree entry for entry, not merely to roundoff.
 #[test]
 fn split_below_two_is_standard_ac() {
     let (rp, ci, vals, n) = path_laplacian::<u32, f64>();
     let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid csr");
     let factor = |split_merge| {
-        Builder::<f64>::new(Config {
-            split_merge,
-            ..Default::default()
-        })
-        .build(csr)
+        let sddm = Sddm::try_from(csr).expect("valid SDDM");
+        factorize_with(
+            sddm,
+            Config {
+                split_merge,
+                ..Default::default()
+            },
+        )
         .expect("standard AC builds")
     };
     let reference = factor(None);

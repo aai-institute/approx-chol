@@ -1,6 +1,6 @@
-use super::factorization::{BlockDim, Fallback};
+use super::factorization::Fallback;
 use crate::graph::SplitFactor;
-use crate::Error;
+use crate::UnusablePivot;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, Default)]
@@ -25,7 +25,7 @@ pub enum ExactFailure {
     #[default]
     /// Factor that block approximately and record it in [`Factor::fallbacks`](crate::Factor::fallbacks).
     FallBackToApproximate,
-    /// Fail with [`Error::DenseFactorizationFailed`](crate::Error::DenseFactorizationFailed).
+    /// Fail with the [`UnusablePivot`](crate::UnusablePivot).
     Error,
 }
 
@@ -65,11 +65,9 @@ pub(super) enum Route {
 impl ExactFailure {
     /// One arm, not two: a block that will not fit falls back whatever the policy
     /// says, so only an unusable pivot can be fatal.
-    pub(super) fn accept(self, fallback: Fallback) -> Result<Fallback, Error> {
+    pub(super) fn accept(self, fallback: Fallback) -> Result<Fallback, UnusablePivot> {
         match (self, fallback) {
-            (Self::Error, Fallback::InvalidPivot(pivot)) => {
-                Err(Error::DenseFactorizationFailed(pivot))
-            }
+            (Self::Error, Fallback::InvalidPivot(pivot)) => Err(pivot),
             _ => Ok(fallback),
         }
     }
@@ -86,14 +84,14 @@ impl Config {
 impl Backend {
     /// Reads no field but the backend's own, which is what lets the pipeline carry a
     /// [`Backend`] instead of the whole [`Config`].
-    pub(super) fn route(self, dim: BlockDim) -> Route {
+    pub(super) fn route(self, eliminated: usize) -> Route {
         match self {
             // The range starts at one because a block solving for no variable has
             // no dense factor to build, whatever `max_dim` claims.
             Backend::ExactBelow {
                 max_dim,
                 on_failure,
-            } if (1..=max_dim).contains(&dim.solved()) => Route::Exact { on_failure },
+            } if (1..=max_dim).contains(&eliminated) => Route::Exact { on_failure },
             _ => Route::Approximate,
         }
     }
