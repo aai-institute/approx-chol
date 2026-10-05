@@ -20,7 +20,7 @@ pub const FACTOR_FORMAT_VERSION: u32 = 0x4143_0005;
     feature = "serde",
     serde(
         bound(deserialize = "T: serde::de::DeserializeOwned + num_traits::Float"),
-        try_from = "FactorData<T>"
+        try_from = "OwnedFactor<T>"
     )
 )]
 #[derive(Clone, Debug)]
@@ -33,43 +33,33 @@ pub struct Factor<T = f64> {
     fallbacks: Vec<Fallback>,
 }
 
-/// Borrows what it writes, so declaring the version costs no copy of the factor.
-/// Field order and names match [`FactorData`], which is what reads it back.
+/// One wire shape: owned decoding, borrowed encoding, so writing the version copies nothing.
 #[cfg(feature = "serde")]
-#[derive(serde::Serialize)]
-#[serde(bound(serialize = "T: serde::Serialize"))]
-struct FactorRef<'a, T> {
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FactorData<P, B, F> {
+    /// Defaulted, so a payload predating the field fails on its version, not a missing field.
+    #[serde(default, deserialize_with = "current_version")]
     format_version: u32,
-    permutation: Option<&'a Permutation>,
-    blocks: &'a [Block<T>],
-    fallbacks: &'a [Fallback],
+    permutation: P,
+    blocks: B,
+    #[serde(default)]
+    fallbacks: F,
 }
+
+#[cfg(feature = "serde")]
+type OwnedFactor<T> = FactorData<Option<Permutation>, Vec<Block<T>>, Vec<Fallback>>;
 
 #[cfg(feature = "serde")]
 impl<T: serde::Serialize> serde::Serialize for Factor<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        FactorRef {
+        FactorData {
             format_version: FACTOR_FORMAT_VERSION,
             permutation: self.permutation.as_ref(),
-            blocks: &self.blocks,
-            fallbacks: &self.fallbacks,
+            blocks: self.blocks.as_slice(),
+            fallbacks: self.fallbacks.as_slice(),
         }
         .serialize(serializer)
     }
-}
-
-/// `format_version` defaults rather than being required, so a payload that predates the
-/// field is rejected for the version it implies instead of for a missing field.
-#[cfg(feature = "serde")]
-#[derive(serde::Deserialize)]
-#[serde(bound(deserialize = "T: serde::de::DeserializeOwned + num_traits::Float"))]
-struct FactorData<T> {
-    #[serde(default, deserialize_with = "current_version")]
-    format_version: u32,
-    permutation: Option<Permutation>,
-    blocks: Vec<Block<T>>,
-    #[serde(default)]
-    fallbacks: Vec<Fallback>,
 }
 
 /// Checked as it is read, so another version's payload fails on its version rather than
@@ -89,10 +79,10 @@ fn current_version<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<
 }
 
 #[cfg(feature = "serde")]
-impl<T: num_traits::Float> TryFrom<FactorData<T>> for Factor<T> {
+impl<T: num_traits::Float> TryFrom<OwnedFactor<T>> for Factor<T> {
     type Error = FactorError;
 
-    fn try_from(data: FactorData<T>) -> Result<Self, Self::Error> {
+    fn try_from(data: OwnedFactor<T>) -> Result<Self, Self::Error> {
         // Only a payload that predates the field reaches here with another version.
         if data.format_version != FACTOR_FORMAT_VERSION {
             return Err(FactorError::UnsupportedFormatVersion {

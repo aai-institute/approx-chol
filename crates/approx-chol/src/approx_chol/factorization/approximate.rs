@@ -142,7 +142,7 @@ pub(crate) struct StepHeader<T> {
     feature = "serde",
     serde(
         bound(deserialize = "T: serde::de::DeserializeOwned + num_traits::Float"),
-        try_from = "SequenceData<T>"
+        try_from = "OwnedSequence<T>"
     )
 )]
 #[derive(Clone, Debug)]
@@ -155,20 +155,25 @@ pub(crate) struct EliminationSequence<T> {
     pub(crate) uneliminated: u32,
 }
 
-/// Nesting the neighbors under their step is what retires the range and
-/// trailing-storage checks.
+/// One wire shape: owned containers decoding, borrowed views encoding.
 #[cfg(feature = "serde")]
-#[derive(serde::Deserialize)]
-#[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
-struct StepData<T> {
-    vertex: u32,
-    pivot_scale: T,
-    /// `None` for an isolated pivot, which has no neighbor to give anything to.
-    column: Option<ColumnData<Vec<(u32, T)>>>,
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SequenceData<Steps> {
+    uneliminated: u32,
+    steps: Steps,
 }
 
-/// No share for the remainder, so a payload cannot overspend a column's pivot. One
-/// declaration for both directions: `S` is owned pairs decoding, borrowed slices encoding.
+/// Nesting neighbors under their step retires the range and trailing-storage checks.
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StepData<P, S> {
+    vertex: u32,
+    pivot_scale: P,
+    /// `None` for an isolated pivot, which has no neighbor to give anything to.
+    column: Option<ColumnData<S>>,
+}
+
+/// No share for the remainder, so a payload cannot overspend a column's pivot.
 #[cfg(feature = "serde")]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ColumnData<S> {
@@ -177,18 +182,13 @@ struct ColumnData<S> {
 }
 
 #[cfg(feature = "serde")]
-#[derive(serde::Deserialize)]
-#[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
-struct SequenceData<T> {
-    uneliminated: u32,
-    steps: Vec<StepData<T>>,
-}
+type OwnedSequence<T> = SequenceData<Vec<StepData<T, Vec<(u32, T)>>>>;
 
 #[cfg(feature = "serde")]
-impl<T: num_traits::Float> TryFrom<SequenceData<T>> for EliminationSequence<T> {
+impl<T: num_traits::Float> TryFrom<OwnedSequence<T>> for EliminationSequence<T> {
     type Error = FactorError;
 
-    fn try_from(data: SequenceData<T>) -> Result<Self, Self::Error> {
+    fn try_from(data: OwnedSequence<T>) -> Result<Self, Self::Error> {
         let mut builder = SequenceBuilder::with_capacity(data.steps.len(), 0);
         for step in data.steps {
             // Already composed on the wire, and absent rather than empty for an isolated pivot.
@@ -205,16 +205,15 @@ impl<T: num_traits::Float> TryFrom<SequenceData<T>> for EliminationSequence<T> {
     }
 }
 
-/// Mirrors [`SequenceData`] without materializing one, so serializing allocates nothing
-/// regardless of `nnz`.
+/// Encodes through borrowed views, so serializing allocates nothing regardless of `nnz`.
 #[cfg(feature = "serde")]
 impl<T: serde::Serialize> serde::Serialize for EliminationSequence<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeStruct;
-        let mut out = serializer.serialize_struct("SequenceData", 2)?;
-        out.serialize_field("uneliminated", &self.uneliminated)?;
-        out.serialize_field("steps", &StepsView(self))?;
-        out.end()
+        SequenceData {
+            uneliminated: self.uneliminated,
+            steps: StepsView(self),
+        }
+        .serialize(serializer)
     }
 }
 
@@ -224,33 +223,24 @@ struct StepsView<'a, T>(&'a EliminationSequence<T>);
 #[cfg(feature = "serde")]
 impl<T: serde::Serialize> serde::Serialize for StepsView<'_, T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_seq((0..self.0.steps.len()).map(|i| StepView(self.0, i)))
-    }
-}
-
-#[cfg(feature = "serde")]
-struct StepView<'a, T>(&'a EliminationSequence<T>, usize);
-
-#[cfg(feature = "serde")]
-impl<T: serde::Serialize> serde::Serialize for StepView<'_, T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeStruct;
-        let (sequence, i) = (self.0, self.1);
-        let (start, end) = sequence.neighbor_range(i);
-        let mut out = serializer.serialize_struct("StepData", 3)?;
-        out.serialize_field("vertex", &sequence.steps[i].vertex)?;
-        out.serialize_field("pivot_scale", &sequence.steps[i].pivot_scale)?;
-        // The decoder subtracts the remainder's share back out, so writing it writes
-        // a value nothing reads.
-        let column =
-            sequence.neighbor_indices[start..end]
-                .split_last()
-                .map(|(&remainder, shared)| ColumnData {
-                    shares: PairedNeighbors(shared, &sequence.coefficients[start..end - 1]),
-                    remainder,
-                });
-        out.serialize_field("column", &column)?;
-        out.end()
+        let sequence = self.0;
+        serializer.collect_seq((0..sequence.steps.len()).map(|i| {
+            let (start, end) = sequence.neighbor_range(i);
+            // The decoder subtracts the remainder's share back out, so writing it writes
+            // a value nothing reads.
+            let column =
+                sequence.neighbor_indices[start..end]
+                    .split_last()
+                    .map(|(&remainder, shared)| ColumnData {
+                        shares: PairedNeighbors(shared, &sequence.coefficients[start..end - 1]),
+                        remainder,
+                    });
+            StepData {
+                vertex: sequence.steps[i].vertex,
+                pivot_scale: &sequence.steps[i].pivot_scale,
+                column,
+            }
+        }))
     }
 }
 
