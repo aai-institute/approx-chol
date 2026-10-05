@@ -13,9 +13,9 @@ fn vertices_of(sddm: &Sddm<f64>) -> Vec<Vec<usize>> {
     Components::of(sddm)
         .iter()
         .map(|component| {
-            let vertices = component.view().vertices();
-            (0..vertices.len())
-                .map(|local| vertices.global(local))
+            let view = component.view();
+            (0..view.vertices.len())
+                .map(|local| view.global(local))
                 .collect()
         })
         .collect()
@@ -32,10 +32,10 @@ fn grounded_components_stay_separate() {
     assert_eq!(vertices_of(&sddm), [[0, 1], [2, 3]]);
 }
 
-/// A vertex no edge reaches is its own block, which is what makes the ordering
+/// A vertex no edge reaches is its own component, which is what makes the ordering
 /// "by lowest member" observable rather than incidental.
 #[test]
-fn blocks_are_ordered_by_their_lowest_vertex() {
+fn components_are_ordered_by_their_lowest_vertex() {
     let sddm = sddm_of(
         &[0, 2, 3, 4, 6],
         &[0, 3, 1, 2, 0, 3],

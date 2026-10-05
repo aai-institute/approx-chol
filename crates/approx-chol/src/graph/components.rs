@@ -1,12 +1,13 @@
 //! [`Sddm`] to its connected components, each a classified view in its own numbering.
 
+mod layout;
 mod sets;
 
 use super::adjacency::{add_edge_pair, AdjListGraph, Edge};
-use super::blocks::{BlockLayout, BlockVertices};
 use super::multiplicity::EdgeCount;
 use crate::types::Real;
 use crate::{Laplacian, Sddm};
+use layout::{Layout, Vertices};
 use sets::DisjointSets;
 
 /// Counts both triangles' degrees and unions each edge's endpoints in one walk.
@@ -32,7 +33,7 @@ pub(crate) struct Components<'a, T> {
     /// Both triangles' count per vertex, so adjacency lists never regrow.
     degrees: Vec<u32>,
     /// `None` when connected.
-    layout: Option<BlockLayout>,
+    layout: Option<Layout>,
 }
 
 impl<'a, T: Real> Components<'a, T> {
@@ -46,15 +47,15 @@ impl<'a, T: Real> Components<'a, T> {
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.layout.as_ref().map_or(1, BlockLayout::block_count)
+        self.layout.as_ref().map_or(1, Layout::count)
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = Component<'_, T>> + '_ {
         let whole = self
             .layout
             .is_none()
-            .then(|| BlockVertices::Whole(self.sddm.n()));
-        let parts = self.layout.iter().flat_map(BlockLayout::blocks);
+            .then(|| Vertices::Whole(self.sddm.n()));
+        let parts = self.layout.iter().flat_map(Layout::components);
         whole
             .into_iter()
             .chain(parts)
@@ -62,7 +63,7 @@ impl<'a, T: Real> Components<'a, T> {
     }
 
     /// The one place a component's variant is decided; only split grounded input scans.
-    fn component<'s>(&'s self, vertices: BlockVertices<'s>) -> Component<'s, T> {
+    fn component<'s>(&'s self, vertices: Vertices<'s>) -> Component<'s, T> {
         let view = View {
             laplacian: self.sddm.laplacian(),
             degrees: &self.degrees,
@@ -73,8 +74,8 @@ impl<'a, T: Real> Components<'a, T> {
         };
         let surplus = grounded.surplus();
         let holds_surplus = match &view.vertices {
-            BlockVertices::Whole(_) => true,
-            BlockVertices::Part { vertices, .. } => vertices
+            Vertices::Whole(_) => true,
+            Vertices::Part { vertices, .. } => vertices
                 .iter()
                 .any(|&vertex| surplus[vertex as usize] > T::zero()),
         };
@@ -87,7 +88,7 @@ impl<'a, T: Real> Components<'a, T> {
 
     /// Component-contiguous input order; `None` when connected.
     pub(crate) fn into_order(self) -> Option<Vec<u32>> {
-        self.layout.map(BlockLayout::into_order)
+        self.layout.map(Layout::into_order)
     }
 }
 
@@ -105,12 +106,12 @@ pub(crate) enum Component<'a, T> {
 pub(crate) struct View<'a, T> {
     laplacian: &'a Laplacian<T>,
     degrees: &'a [u32],
-    vertices: BlockVertices<'a>,
+    vertices: Vertices<'a>,
 }
 
 impl<T> View<'_, T> {
-    pub(crate) fn vertices(&self) -> &BlockVertices<'_> {
-        &self.vertices
+    pub(crate) fn global(&self, local: usize) -> usize {
+        self.vertices.global(local)
     }
 
     /// The edge weights above the row's diagonal, by local column.
@@ -130,6 +131,11 @@ impl<T: Real> Component<'_, T> {
         match self {
             Self::Laplacian(view) | Self::Grounded { view, .. } => view,
         }
+    }
+
+    /// Names the component by what it holds rather than by how many precede it.
+    pub(crate) fn first(&self) -> u64 {
+        self.view().vertices.first()
     }
 
     /// Every slot but one: a floating component's free vertex, or a grounded one's ground.
@@ -158,7 +164,7 @@ impl<T: Real> Component<'_, T> {
 
         // Measured: an in-loop discriminant test spills the map and reloads per edge.
         match &view.vertices {
-            BlockVertices::Whole(_) => {
+            Vertices::Whole(_) => {
                 for local in 0..k {
                     let (neighbors, weights) = laplacian.row(local);
                     for (&col, &weight) in neighbors.iter().zip(weights) {
@@ -166,7 +172,7 @@ impl<T: Real> Component<'_, T> {
                     }
                 }
             }
-            BlockVertices::Part {
+            Vertices::Part {
                 vertices,
                 position,
                 start,

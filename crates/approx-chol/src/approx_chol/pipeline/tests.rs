@@ -1,72 +1,39 @@
 use super::*;
-use crate::approx_chol::factorization::exact::NotFactorable;
 use crate::approx_chol::factorization::Fallback;
-use crate::graph::BlockVertices;
 use crate::{CsrRef, DenseFailure, ExactFailure, Sddm, UnusablePivot};
 
-/// Naming the pivot and applying the policy are separate steps, so both are swept.
+/// A block that will not fit falls back whatever the policy says.
 #[test]
 fn only_an_unusable_pivot_answers_to_the_failure_policy() {
-    let pivot = NotFactorable::InvalidPivot {
-        pivot: 2,
+    let unusable = UnusablePivot {
+        vertex: 30,
         failure: DenseFailure::NonPositivePivot,
     };
-    let too_large = NotFactorable::WillNotFit { dim: 9 };
-    let component = Some(&[0u32, 15, 30][..]);
-    let named = |vertex| UnusablePivot {
-        vertex,
-        failure: DenseFailure::NonPositivePivot,
-    };
-
+    let pivot = Fallback::InvalidPivot(unusable);
+    let too_large = Fallback::WillNotFit { dim: 9 };
     let cases = [
         (
             "pivot, falling back",
             pivot,
             ExactFailure::FallBackToApproximate,
-            component,
-            Ok(Fallback::InvalidPivot(named(30))),
+            Ok(pivot),
         ),
-        (
-            "pivot, erroring",
-            pivot,
-            ExactFailure::Error,
-            component,
-            Err(named(30)),
-        ),
-        (
-            "pivot of a whole-graph block is already global",
-            pivot,
-            ExactFailure::FallBackToApproximate,
-            None,
-            Ok(Fallback::InvalidPivot(named(2))),
-        ),
+        ("pivot, erroring", pivot, ExactFailure::Error, Err(unusable)),
         (
             "will not fit, falling back",
             too_large,
             ExactFailure::FallBackToApproximate,
-            component,
-            Ok(Fallback::WillNotFit { dim: 9 }),
+            Ok(too_large),
         ),
         (
             "will not fit, erroring",
             too_large,
             ExactFailure::Error,
-            component,
-            Ok(Fallback::WillNotFit { dim: 9 }),
+            Ok(too_large),
         ),
     ];
-    // Wide enough for the highest global vertex the component names.
-    let position = vec![0u32; 31];
-    for (label, reason, on_failure, vertices, expected) in cases {
-        let block = match vertices {
-            None => BlockVertices::Whole(9),
-            Some(vertices) => BlockVertices::Part {
-                vertices,
-                position: &position,
-                start: 0,
-            },
-        };
-        assert_eq!(on_failure.accept(reason.at(&block)), expected, "{label}");
+    for (label, fallback, on_failure, expected) in cases {
+        assert_eq!(on_failure.accept(fallback), expected, "{label}");
     }
 }
 

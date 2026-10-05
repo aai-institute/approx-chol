@@ -1,4 +1,4 @@
-use crate::graph::blocks::BlockLayout;
+use super::layout::Layout;
 
 /// Union-find with path halving and union by size.
 pub(super) struct DisjointSets {
@@ -44,27 +44,27 @@ impl DisjointSets {
     }
 
     /// `None` when connected, which never pays for the counting sort below.
-    pub(super) fn layout(&mut self) -> Option<BlockLayout> {
+    pub(super) fn layout(&mut self) -> Option<Layout> {
         let total = self.parent.len();
         if total == 0 || self.is_one_set() {
             return None;
         }
 
-        // Ascending, so blocks order by lowest member.
-        let mut block_of = vec![u32::MAX; total];
+        // Ascending, so components order by lowest member.
+        let mut component_of = vec![u32::MAX; total];
         let mut ends: Vec<u32> = Vec::new();
         for vertex in 0..total {
             let root = self.find(vertex as u32) as usize;
-            let block = block_of[root];
-            if block == u32::MAX {
-                block_of[root] = ends.len() as u32;
+            let component = component_of[root];
+            if component == u32::MAX {
+                component_of[root] = ends.len() as u32;
                 ends.push(1);
             } else {
-                ends[block as usize] += 1;
+                ends[component as usize] += 1;
             }
         }
 
-        // Exclusive scan: each entry is its block's cursor, which the fill advances.
+        // Exclusive scan: each entry is its component's cursor, which the fill advances.
         let mut start = 0u32;
         for count in &mut ends {
             let n = *count;
@@ -74,12 +74,12 @@ impl DisjointSets {
         let mut order = vec![0u32; total];
         let mut position = vec![0u32; total];
         for vertex in 0..total {
-            let block = block_of[self.find(vertex as u32) as usize] as usize;
-            order[ends[block] as usize] = vertex as u32;
-            position[vertex] = ends[block];
-            ends[block] += 1;
+            let component = component_of[self.find(vertex as u32) as usize] as usize;
+            order[ends[component] as usize] = vertex as u32;
+            position[vertex] = ends[component];
+            ends[component] += 1;
         }
-        Some(BlockLayout {
+        Some(Layout {
             order,
             position,
             ends,

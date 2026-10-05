@@ -62,17 +62,16 @@ impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
         &mut self,
         component: &Component<'_, T>,
     ) -> Result<(Block<T>, Option<Fallback>), UnusablePivot> {
-        let vertices = component.view().vertices();
         // Restarts for every block, routed or not, so one block's draws never shift
         // because another was factored exactly.
-        self.sampler.restart(vertices.first());
+        self.sampler.restart(component.first());
 
         let mut fallback = None;
         if let Route::Exact { on_failure } = self.backend.route(component.eliminated()) {
             match exact::factor(component) {
                 Ok(lower) => return Ok((Block::of(component, Cholesky::Exact(lower)), None)),
                 Err(reason) => {
-                    fallback = Some(on_failure.accept(reason.at(vertices))?);
+                    fallback = Some(on_failure.accept(reason)?);
                 }
             }
         }

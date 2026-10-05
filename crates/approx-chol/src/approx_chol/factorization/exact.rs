@@ -1,33 +1,18 @@
 use super::factor::Fallback;
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;
-use crate::graph::{BlockVertices, Component};
+use crate::graph::Component;
 use crate::types::Real;
 use crate::{DenseFailure, UnusablePivot};
 
-/// Why the dense backend declined a block, in that block's own numbering.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NotFactorable {
-    InvalidPivot { pivot: usize, failure: DenseFailure },
-    WillNotFit { dim: usize },
-}
-
-impl NotFactorable {
-    pub(crate) fn at(self, block: &BlockVertices<'_>) -> Fallback {
-        match self {
-            Self::InvalidPivot { pivot, failure } => Fallback::InvalidPivot(UnusablePivot {
-                vertex: block.global(pivot),
-                failure,
-            }),
-            Self::WillNotFit { dim } => Fallback::WillNotFit { dim },
-        }
-    }
-}
-
+/// Pivots are named in input numbering, so a failure needs no translation downstream.
 pub(crate) fn factor<T: Real>(
     component: &Component<'_, T>,
-) -> Result<LowerTriangular<T>, NotFactorable> {
-    assemble(component, component.eliminated())?.factor_in_place()
+) -> Result<LowerTriangular<T>, Fallback> {
+    let view = component.view();
+    assemble(component, component.eliminated())?
+        .factor_in_place(|pivot| view.global(pivot))
+        .map_err(Fallback::InvalidPivot)
 }
 
 const fn row_start(row: usize) -> usize {
@@ -55,12 +40,12 @@ const fn packed_len(m: usize) -> Option<usize> {
 fn assemble<T: Real>(
     component: &Component<'_, T>,
     m: usize,
-) -> Result<LowerTriangular<T>, NotFactorable> {
+) -> Result<LowerTriangular<T>, Fallback> {
     let mut matrix = LowerTriangular::zeros(m)?;
     let view = component.view();
     if let Component::Grounded { surplus, .. } = component {
         for row in 0..m {
-            matrix.row_mut(row)[row] = surplus[view.vertices().global(row)];
+            matrix.row_mut(row)[row] = surplus[view.global(row)];
         }
     }
     // Scattered, because the input stores only the upper triangle.
@@ -115,8 +100,8 @@ impl<T> LowerTriangular<T> {
 }
 
 impl<T: Real> LowerTriangular<T> {
-    fn zeros(m: usize) -> Result<Self, NotFactorable> {
-        let will_not_fit = NotFactorable::WillNotFit { dim: m };
+    fn zeros(m: usize) -> Result<Self, Fallback> {
+        let will_not_fit = Fallback::WillNotFit { dim: m };
         let scalars = packed_len(m).ok_or(will_not_fit)?;
         let mut values = Vec::new();
         values
@@ -128,7 +113,7 @@ impl<T: Real> LowerTriangular<T> {
 
     /// Indexes `values` directly: the split borrow [`row`](Self::row) would need
     /// measured 1.2–2.1% slower across `n = 128..384` on a complete graph.
-    fn factor_in_place(mut self) -> Result<Self, NotFactorable> {
+    fn factor_in_place(mut self, name: impl Fn(usize) -> usize) -> Result<Self, UnusablePivot> {
         let m = self.rows();
         let matrix = &mut self.values;
         for col in 0..m {
@@ -139,8 +124,8 @@ impl<T: Real> LowerTriangular<T> {
                 diagonal = diagonal - value * value;
             }
             if let Some(failure) = DenseFailure::of(diagonal) {
-                return Err(NotFactorable::InvalidPivot {
-                    pivot: col,
+                return Err(UnusablePivot {
+                    vertex: name(col),
                     failure,
                 });
             }
@@ -251,9 +236,9 @@ mod tests {
                 LowerTriangular {
                     values: vec![diagonal],
                 }
-                .factor_in_place()
+                .factor_in_place(|pivot| pivot + 7)
                 .expect_err("pivot is unusable"),
-                NotFactorable::InvalidPivot { pivot: 0, failure },
+                UnusablePivot { vertex: 7, failure },
                 "diagonal {diagonal}"
             );
         }
