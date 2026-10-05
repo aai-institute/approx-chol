@@ -18,7 +18,7 @@ impl Anchor {
                 let Some((pinned, rest)) = values.split_last_mut() else {
                     return;
                 };
-                *pinned = -rest.iter().fold(T::zero(), |sum, &value| sum + value);
+                *pinned = -compensated_sum(rest);
             }
             // Nothing to absorb the null-space component, so project it out; an
             // inconsistent right-hand side then gives least squares.
@@ -41,8 +41,28 @@ impl Anchor {
 
 fn project_zero_mean<T: Real>(values: &mut [T]) {
     let count = count_as_scalar::<T, _>(values.len());
-    let mean = values.iter().fold(T::zero(), |sum, &value| sum + value) / count;
+    let mean = compensated_sum(values) / count;
     for value in values.iter_mut() {
         *value = *value - mean;
     }
 }
+
+/// Neumaier: a plain fold loses the small terms of a large block.
+fn compensated_sum<T: Real>(values: &[T]) -> T {
+    let mut sum = T::zero();
+    let mut compensation = T::zero();
+    for &value in values {
+        let next = sum + value;
+        compensation = compensation
+            + if sum.abs() >= value.abs() {
+                (sum - next) + value
+            } else {
+                (value - next) + sum
+            };
+        sum = next;
+    }
+    sum + compensation
+}
+
+#[cfg(test)]
+mod tests;
