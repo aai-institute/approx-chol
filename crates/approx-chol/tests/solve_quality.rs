@@ -6,7 +6,7 @@ use grid::grid_laplacian;
 use residual::relative_residual_over;
 
 use approx_chol::low_level::Builder;
-use approx_chol::{Backend, Config, CsrRef, Error, SolveError};
+use approx_chol::{Backend, Config, CsrRef, Error, Sddm, SolveError};
 use num_traits::Float;
 use rstest::rstest;
 
@@ -20,13 +20,10 @@ fn route_at_drift<T: Float + Send + Sync + 'static>(drift: T) -> Result<bool, Er
     let col_indices = [0u32, 1, 0, 1];
     let values = [one + drift, -one, -one, one + drift];
     let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).expect("valid csr");
-    Builder::<T>::new(Config::default())
-        .build(csr)
-        .map(|factor| factor.scratch_len() > 0)
+    Sddm::<T>::try_from(csr).map(|sddm| matches!(sddm, Sddm::Grounded(_)))
 }
 
-/// Augmentation is decided in ingestion, before routing, so the default suffices. One
-/// ULP either way is drift a single addition accounts for, so the row is left floating.
+/// One ULP either way is drift a single addition accounts for, so the row is left floating.
 #[test]
 fn summation_roundoff_does_not_augment() {
     for drift in [f32::EPSILON, -f32::EPSILON] {
@@ -71,10 +68,7 @@ fn star_augments_at_ulp_offset(offset: u64) -> bool {
     let col_indices = [0u32, 1, 2, 3, 0, 1, 0, 2, 0, 3];
     let values = [centre, -1e8, -2e8, -1e8, -1e8, 1e8, -2e8, 2e8, -1e8, 1e8];
     let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4).expect("valid csr");
-    let factor = Builder::<f64>::new(Config::default())
-        .build(csr)
-        .expect("factorization should succeed");
-    factor.scratch_len() > 0
+    matches!(Sddm::try_from(csr), Ok(Sddm::Grounded(_)))
 }
 
 /// Brackets the floor at a large row scale, where an absolute threshold would misjudge
@@ -106,6 +100,10 @@ fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
 ) {
     let (rp, ci, vals, n) = diagonal_sddm();
     let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid diagonal SDDM");
+    assert!(
+        matches!(Sddm::try_from(csr), Ok(Sddm::Grounded(_))),
+        "diagonal SDDM should be grounded"
+    );
     let factor = Builder::new(Config {
         backend,
         split_merge,
@@ -113,11 +111,6 @@ fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
     })
     .build(csr)
     .expect("factorization should succeed");
-
-    assert!(
-        factor.scratch_len() > 0,
-        "diagonal SDDM should be augmented"
-    );
 
     let x = factor.solve(&b).expect("solve should succeed");
     assert_eq!(x.len(), n as usize);

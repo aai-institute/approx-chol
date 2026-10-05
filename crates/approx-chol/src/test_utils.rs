@@ -5,8 +5,7 @@
 #[path = "../tests/common/path.rs"]
 mod path;
 
-/// 4-node path-graph Laplacian CSR `(row_ptrs, col_indices, values)`. Zero row
-/// sums → no Gremban augmentation, so the factor keeps `n() == 4`.
+/// 4-node path-graph Laplacian CSR `(row_ptrs, col_indices, values)`.
 pub(crate) fn path_laplacian_4() -> (Vec<u32>, Vec<u32>, Vec<f64>) {
     (
         path::ROW_PTRS.iter().map(|&v| v as u32).collect(),

@@ -16,7 +16,7 @@ impl DisjointSets {
         Self { parent, size }
     }
 
-    /// Appends a vertex the CSR does not carry, and names it.
+    /// Appends a vertex the input does not carry, and names it.
     pub(super) fn push(&mut self) -> u32 {
         let vertex = self.parent.len() as u32;
         self.parent.push(vertex);

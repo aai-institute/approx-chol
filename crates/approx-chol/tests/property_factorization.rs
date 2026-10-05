@@ -5,7 +5,7 @@ mod laplacian_prop;
 #[path = "common/residual.rs"]
 mod residual;
 
-use approx_chol::{factorize_with, Backend, Config, CsrRef};
+use approx_chol::{factorize_with, Backend, Config, CsrRef, Sddm};
 use backends::backends;
 use laplacian_prop::{
     is_connected, laplacian_csr_strategy, laplacian_with_rhs_strategy,
@@ -89,7 +89,7 @@ proptest! {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn default_solve_matches_solve_into(
+    fn solve_matches_solve_in_place(
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         prop_assume!(is_connected(&row_ptrs, &col_indices, n));
@@ -101,11 +101,8 @@ proptest! {
             let factor = factorize_with(csr, config).expect("factorization should succeed");
 
             prop_assert_eq!(factor.n(), n as usize);
-            // A pure Laplacian has no surplus, so it is not augmented.
-            prop_assert_eq!(
-                factor.scratch_len(), 0,
-                "pure Laplacian should not trigger Gremban augmentation"
-            );
+            // Connected and floating, so no scratch: `&mut []` below relies on it.
+            prop_assert_eq!(factor.scratch_len(), 0);
 
             let from_alloc = factor.solve(&rhs).expect("solve should succeed");
             let mut from_into = rhs.clone();
@@ -137,8 +134,8 @@ proptest! {
 
             prop_assert_eq!(factor.n(), n as usize, "n must match input dimension");
             prop_assert!(
-                factor.scratch_len() > 0,
-                "SDDM should trigger Gremban augmentation"
+                matches!(Sddm::try_from(csr), Ok(Sddm::Grounded(_))),
+                "SDDM should be grounded"
             );
 
             let x = factor.solve(&rhs_for_dimension(n as usize)).expect("solve");

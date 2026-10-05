@@ -2,7 +2,7 @@
 mod grid;
 
 use approx_chol::low_level::Builder;
-use approx_chol::{Config, CsrRef, Error, Factor};
+use approx_chol::{Config, CsrRef, Error, Factor, Sddm};
 
 /// The error the shape must be rejected with.
 type Rejected<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64], Error);
@@ -10,6 +10,15 @@ type Accepted<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64]);
 type Solved<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64], [f64; 2], [f64; 2]);
 
 /// `n` follows from `rp`, so no case can disagree with its own row count.
+fn grounds<T: num_traits::Float + Send + Sync + 'static>(
+    rp: &[u32],
+    ci: &[u32],
+    vals: &[T],
+) -> bool {
+    let csr = CsrRef::new(rp, ci, vals, (rp.len() - 1) as u32).expect("structurally valid CSR");
+    matches!(Sddm::try_from(csr), Ok(Sddm::Grounded(_)))
+}
+
 fn build(config: Config, rp: &[u32], ci: &[u32], vals: &[f64]) -> Result<Factor<f64>, Error> {
     let n = (rp.len() - 1) as u32;
     let csr = CsrRef::new(rp, ci, vals, n).expect("structurally valid CSR");
@@ -207,7 +216,7 @@ where
 }
 
 /// The routing, not the solution: an ill-conditioned pair's solve carries too much
-/// round-off to pin, while `n() > original_n()` says which branch was taken. The floor
+/// round-off to pin, while the conversion's variant says which branch was taken. The floor
 /// here is `epsilon * scale * (degree + 1)` = `2.2e-16 * 2e-6 * 2` = `8.9e-22`.
 #[test]
 fn surplus_is_judged_against_summation_error_alone() {
@@ -226,14 +235,13 @@ fn surplus_is_judged_against_summation_error_alone() {
 
     for (label, surplus, grounded) in cases {
         let (rp, ci, vals) = surplus_pair(1e-6, surplus);
-        let factor = build(Config::default(), &rp, &ci, &vals).expect(label);
         assert_eq!(
-            factor.scratch_len() > 0,
+            grounds(&rp, &ci, &vals),
             grounded,
-            "{label}: surplus {surplus:e} routed to scratch_len={}",
-            factor.scratch_len()
+            "{label}: surplus {surplus:e}"
         );
         if grounded {
+            let factor = build(Config::default(), &rp, &ci, &vals).expect(label);
             let solution = factor.solve(&[1.0, 1.0]).expect("solve");
             let want = 1.0 / surplus;
             assert!(
@@ -253,13 +261,8 @@ fn f32_surplus_is_judged_against_summation_error_alone() {
         ("below", 2e-10, false),
     ] {
         let (rp, ci, vals) = surplus_pair(1e-3f32, surplus);
-        let n = (rp.len() - 1) as u32;
-        let csr = CsrRef::new(&rp, &ci, &vals, n).expect("structurally valid CSR");
-        let factor = Builder::<f32>::new(Config::default())
-            .build(csr)
-            .expect(label);
         assert_eq!(
-            factor.scratch_len() > 0,
+            grounds(&rp, &ci, &vals),
             grounded,
             "{label}: surplus {surplus:e}"
         );
@@ -278,10 +281,8 @@ fn tolerated_mirror_difference_is_not_one_row_s_surplus() {
         ("lower holds the smaller", [off, -off, -1.0, 1.0]),
     ];
     for (label, vals) in cases {
-        let factor = build(Config::default(), &[0, 2, 4], &[0, 1, 0, 1], &vals).expect(label);
-        assert_eq!(
-            factor.scratch_len(),
-            0,
+        assert!(
+            !grounds(&[0, 2, 4], &[0, 1, 0, 1], &vals),
             "{label}: every stored row sums to zero, so neither may be grounded"
         );
     }
@@ -304,10 +305,8 @@ fn coalescing_additions_are_inside_the_error_allowance() {
         vals.extend(core::iter::repeat_n(-half, 10));
         rp.push(ci.len() as u32);
     }
-    let factor = build(Config::default(), &rp, &ci, &vals).expect("coalesced duplicates");
-    assert_eq!(
-        factor.scratch_len(),
-        0,
+    assert!(
+        !grounds(&rp, &ci, &vals),
         "duplicates coalescing to a balanced Laplacian must not be grounded"
     );
 }

@@ -76,10 +76,7 @@ class Factor:
 
     @property
     def n(self) -> int:
-        """Internal factor dimension (may include Gremban augmentation vertex).
-
-        Use this to size work buffers for :meth:`solve_into`.
-        """
+        """Matrix dimension."""
         ...
 
     @property
@@ -98,7 +95,7 @@ class Factor:
 
     @property
     def shape(self) -> tuple[int, int]:
-        """Preconditioner shape ``(n, n)`` reflecting the original matrix dimension.
+        """Preconditioner shape ``(n, n)``.
 
         Part of the scipy ``LinearOperator`` duck-type interface.
         """
@@ -127,10 +124,10 @@ class Factor:
         ...
 
     def solve(self, b: npt.ArrayLike) -> npt.NDArray[np.float64]:
-        """Solve LDL^T x = b, returning a new array of the original matrix dimension.
+        """Solve LDL^T x = b, returning a new array of length ``n``.
 
         Raises:
-            ValueError: If ``b`` is not contiguous or ``len(b) > n``.
+            ValueError: If ``b`` is not contiguous or ``len(b) != n``.
         """
         ...
 
@@ -141,8 +138,7 @@ class Factor:
     ) -> None:
         """Solve LDL^T x = b, writing the result into *out*.
 
-        The *out* array must have length >= ``shape[0]`` (the original matrix
-        dimension).
+        ``b`` has length ``n``; the first ``n`` entries of *out* receive the solution.
 
         Raises:
             ValueError: If ``b``/``out`` are not contiguous, sizes are invalid,

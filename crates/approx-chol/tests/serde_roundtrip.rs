@@ -6,7 +6,7 @@ mod laplacian_prop;
 mod path;
 
 use approx_chol::{
-    factorize_with, Backend, Config, CsrRef, ExactFailure, Factor, FACTOR_FORMAT_VERSION,
+    factorize_with, Backend, Config, CsrRef, ExactFailure, Factor, Sddm, FACTOR_FORMAT_VERSION,
 };
 use rstest::rstest;
 
@@ -66,8 +66,8 @@ fn factor_json_roundtrip_preserves_solve(#[case] backend: Backend) {
         &factorize_with(split, config).expect("factorization should succeed"),
         &[1.0, -1.0, 2.0, -2.0],
     );
+    assert!(matches!(Sddm::try_from(sddm), Ok(Sddm::Grounded(_))));
     let grounded = factorize_with(sddm, config).expect("factorization should succeed");
-    assert!(grounded.scratch_len() > 0, "SDDM input augments");
     assert_roundtrip("grounded SDDM", &grounded, &[1.0, -1.0]);
 }
 

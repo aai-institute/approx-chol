@@ -1,3 +1,5 @@
+mod sddm;
+
 use crate::{CsrError, Error, IndexKind, Sddm};
 use num_traits::{cast, PrimInt};
 
@@ -23,12 +25,8 @@ fn as_usize<I: PrimInt>(value: I, kind: IndexKind, position: usize) -> Result<us
         }))
 }
 
-/// Borrowed CSR matrix view. Zero-copy from any CSR source.
-///
-/// This is the primary input type for
-/// [`Builder::build`](crate::low_level::Builder::build).
-/// Construct from raw arrays owned by any sparse matrix library
-/// (`sprs`, `faer`, or plain `Vec`s).
+/// Borrowed CSR matrix view. Zero-copy from any CSR source (`sprs`, `faer`, or plain
+/// `Vec`s); converts into an [`Sddm`].
 #[derive(Debug, Clone, Copy)]
 pub struct CsrRef<'a, T = f64, I = u32> {
     row_ptrs: &'a [I],
@@ -248,11 +246,8 @@ impl<T: Clone, I: PrimInt> OwnedCsr<T, I> {
 }
 
 impl<T, I: PrimInt> OwnedCsr<T, I> {
-    /// Borrow as a [`CsrRef`] for use with
-    /// [`Builder::build`](crate::low_level::Builder::build).
-    ///
-    /// Infallible: both constructors validate and the fields are private, so
-    /// there is nothing left to check.
+    /// Borrow as a [`CsrRef`]. Infallible: both constructors validate and the fields are
+    /// private, so there is nothing left to check.
     pub fn as_csr_ref(&self) -> CsrRef<'_, T, I> {
         CsrRef {
             row_ptrs: &self.row_ptrs,
@@ -263,10 +258,6 @@ impl<T, I: PrimInt> OwnedCsr<T, I> {
     }
 }
 
-/// Lets `&OwnedCsr` be used directly at the `TryInto<CsrRef>` entry point
-/// (e.g. `factorize(&owned)`), like the zero-copy sparse conversions. The
-/// blanket `TryFrom` this induces has `Error = Infallible`, which
-/// [`Builder::build`](crate::low_level::Builder::build) already accepts.
 impl<'a, T, I: PrimInt> From<&'a OwnedCsr<T, I>> for CsrRef<'a, T, I> {
     fn from(owned: &'a OwnedCsr<T, I>) -> Self {
         owned.as_csr_ref()
@@ -355,7 +346,7 @@ where
     type Error = Error;
 
     fn try_from(csr: CsrRef<'a, T, I>) -> Result<Self, Error> {
-        crate::graph::sddm_from_csr(csr)
+        sddm::from_csr(csr)
     }
 }
 
@@ -456,8 +447,6 @@ mod tests {
         let as_ref: CsrRef<'_, f64, u32> = (&owned).into();
         assert_eq!(as_ref.n(), 4);
 
-        // The `TryInto` bound at the `factorize` entry point accepts it through
-        // `Error = Infallible`.
         let factor = crate::factorize(&owned).expect("factorize &OwnedCsr");
         assert_eq!(factor.n(), 4);
     }

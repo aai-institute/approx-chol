@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `Laplacian`, `Grounded` and `Sddm` input types; every CSR source converts into `Sddm`.
+- `Factor::scratch_len`.
+
+### Changed (breaking)
+
+- `factorize`, `factorize_with` and `Builder::build` take `TryInto<Sddm>` instead of
+  `TryInto<CsrRef>`.
+- `Factor::n` is the input dimension.
+- `Factor::solve_in_place(x, scratch)` replaces `solve_into` and the old `solve_in_place`;
+  `x` has length `n`.
+- `Factor::original_n` is removed.
+- `SolveError` is `LengthMismatch` or `ScratchTooSmall`.
+
+### Changed
+
+- A floating block's mean and a grounded block's ground entry are summed with
+  compensation.
+
 ## [0.6.0] - 2026-08-24
 
 ### Changed (breaking)

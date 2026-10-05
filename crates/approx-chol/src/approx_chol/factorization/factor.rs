@@ -27,6 +27,7 @@ pub const FACTOR_FORMAT_VERSION: u32 = 0x4143_0004;
 /// Exact or approximate Cholesky decomposition of an SDDM matrix.
 pub struct Factor<T = f64> {
     n: usize,
+    grounded: bool,
     permutation: Option<Permutation>,
     blocks: Vec<Block<T>>,
     fallbacks: Vec<Fallback>,
@@ -118,7 +119,7 @@ impl<T> Factor<T> {
     fn validate_structure(&self) -> Result<(), FactorError> {
         // A Ground anchor overwrites its block's last entry with `-sum`, so a second
         // one silently solves a different system.
-        let grounded = Self::ground_blocks(&self.blocks);
+        let grounded = self.blocks.iter().filter(|block| block.is_ground()).count();
         if grounded > 1 {
             return Err(FactorError::MultipleGroundBlocks { grounded });
         }
@@ -153,10 +154,7 @@ impl fmt::Display for SolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::LengthMismatch { len, factor_dim } => {
-                write!(
-                    f,
-                    "solution length {len} differs from factor dimension {factor_dim}"
-                )
+                write!(f, "length {len} differs from factor dimension {factor_dim}")
             }
             Self::ScratchTooSmall {
                 scratch_len,
@@ -176,20 +174,20 @@ impl<T> Factor<T> {
 
     /// Dimension of the factored input; the ground vertex never counts.
     pub fn n(&self) -> usize {
-        self.n - Self::ground_blocks(&self.blocks)
+        self.n - usize::from(self.grounded)
     }
 
     /// What [`solve_in_place`](Self::solve_in_place) needs: nothing for connected
     /// floating input, else room for the ground vertex and the permutation.
     pub fn scratch_len(&self) -> usize {
-        if self.permutation.is_some() || self.n != self.n() {
+        if self.permutation.is_some() || self.grounded {
             self.n
         } else {
             0
         }
     }
 
-    /// The one place `n` is ever written, so it cannot drift from the blocks it sums.
+    /// The one place `n` and `grounded` are ever written, so neither drifts from the blocks.
     fn of(
         permutation: Option<Permutation>,
         blocks: Vec<Block<T>>,
@@ -197,16 +195,11 @@ impl<T> Factor<T> {
     ) -> Self {
         Self {
             n: blocks.iter().map(|block| block.dim().total()).sum(),
+            grounded: blocks.iter().any(Block::is_ground),
             permutation,
             blocks,
             fallbacks,
         }
-    }
-
-    /// Nothing else records that the ground vertex exists, and at most one block can
-    /// hold it.
-    fn ground_blocks(blocks: &[Block<T>]) -> usize {
-        blocks.iter().filter(|block| block.is_ground()).count()
     }
 }
 
@@ -236,15 +229,11 @@ where
     }
 
     #[inline(always)]
-    fn solve_blocks(
-        blocks: &[Block<T>],
-        values: &mut [T],
-        solve: &mut impl FnMut(&Block<T>, &mut [T]),
-    ) {
+    fn solve_blocks(&self, values: &mut [T]) {
         let mut start = 0usize;
-        for block in blocks {
+        for block in &self.blocks {
             let end = start + block.dim().total();
-            solve(block, &mut values[start..end]);
+            block.solve(&mut values[start..end]);
             start = end;
         }
     }
@@ -274,9 +263,8 @@ where
                 needed,
             });
         }
-        let mut solve = Block::solve_canonical;
         if needed == 0 {
-            Self::solve_blocks(&self.blocks, x, &mut solve);
+            self.solve_blocks(x);
             return Ok(());
         }
         // The ground slot is whatever scratch held: its anchor overwrites it first.
@@ -285,7 +273,7 @@ where
             None => work[..x.len()].copy_from_slice(x),
             Some(permutation) => permutation.gather_into(x, work),
         }
-        Self::solve_blocks(&self.blocks, work, &mut solve);
+        self.solve_blocks(work);
         match &self.permutation {
             None => x.copy_from_slice(&work[..x.len()]),
             Some(permutation) => permutation.scatter_from(work, x),

@@ -34,7 +34,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Default AC ===");
     println!("  split_merge : None (standard AC)");
     println!("  n_steps     : {}", ac_factor.n_steps());
-    println!("  factor dim  : {}", ac_factor.n());
 
     // -----------------------------------------------------------------------
     // AC2 (k = 2)
@@ -49,19 +48,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== AC2 (k=2) ===");
     println!("  split_merge : Some(2)");
     println!("  n_steps     : {}", ac2_factor.n_steps());
-    println!("  factor dim  : {}", ac2_factor.n());
-
-    // The factor dimension is the same — AC2 doesn't augment the matrix,
-    // it only changes how edges are sampled during factorization.
-    assert_eq!(
-        ac_factor.n(),
-        ac2_factor.n(),
-        "AC and AC2 must have the same factor dimension"
-    );
-    println!(
-        "\nNote: factor dimensions match ({}) — AC2 changes sampling quality, not matrix size.",
-        ac_factor.n()
-    );
 
     // -----------------------------------------------------------------------
     // Solve the same system with both factors and compare

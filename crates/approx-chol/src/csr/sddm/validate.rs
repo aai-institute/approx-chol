@@ -134,10 +134,7 @@ pub(super) fn sddm_of<J: PrimInt, T: Real>(
         upper_ptrs.push(neighbors.len() as u32);
     }
     let laplacian = Laplacian::trusted(upper_ptrs, neighbors, weights);
-    Ok(match surplus(&diagonal, row_sums, terms)? {
-        Some(surplus) => Grounded::trusted(laplacian, surplus).into(),
-        None => laplacian.into(),
-    })
+    with_surplus(laplacian, &diagonal, row_sums, terms)
 }
 
 /// How far one row's diagonal exceeds its off-diagonal mass, judged against the noise
@@ -173,13 +170,14 @@ impl<T: Real> RowBalance<T> {
     }
 }
 
-/// `row_sums` arrives off-diagonal-only and leaves as each row's surplus, or `None`
-/// when every row balances.
-fn surplus<T: Real>(
+/// `row_sums` arrives off-diagonal-only and becomes each row's surplus; a Laplacian when
+/// every row balances.
+fn with_surplus<T: Real>(
+    laplacian: Laplacian<T>,
     diagonal: &[T],
     mut row_sums: Vec<T>,
     terms: impl Iterator<Item = u32>,
-) -> Result<Option<Vec<T>>, Error> {
+) -> Result<Sddm<T>, Error> {
     let mut grounded = false;
     for (row, ((sum, &d), count)) in row_sums
         .iter_mut()
@@ -197,5 +195,9 @@ fn surplus<T: Real>(
             }
         };
     }
-    Ok(grounded.then_some(row_sums))
+    Ok(if grounded {
+        Grounded::trusted(laplacian, row_sums).into()
+    } else {
+        laplacian.into()
+    })
 }

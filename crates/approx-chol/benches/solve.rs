@@ -109,7 +109,7 @@ fn bench_disconnected_solve(c: &mut Criterion, n: usize, k: usize) {
     group.sample_size(50);
     group.warm_up_time(Duration::from_millis(200));
     group.measurement_time(Duration::from_secs(2));
-    group.bench_with_input(BenchmarkId::new("solve_into", n), &n, |b, _| {
+    group.bench_with_input(BenchmarkId::new("solve_in_place", n), &n, |b, _| {
         b.iter(|| {
             work.copy_from_slice(&rhs);
             factor

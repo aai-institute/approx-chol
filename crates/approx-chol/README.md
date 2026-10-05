@@ -14,7 +14,7 @@ suitable as a preconditioner for iterative solvers on symmetric diagonally domin
 
 ```toml
 [dependencies]
-approx-chol = "0.3"
+approx-chol = "0.6"
 ```
 
 Or with Cargo:
@@ -24,6 +24,23 @@ cargo add approx-chol
 ```
 
 ## Example
+
+An `Sddm` is a `Laplacian`, given as its strict upper adjacency, alone or `Grounded` by
+a diagonal surplus:
+
+```rust
+use approx_chol::{factorize, Grounded, Laplacian};
+
+// Path 0-1-2-3 with unit weights.
+let path: Laplacian = Laplacian::new(vec![0, 1, 2, 3, 3], vec![1, 2, 3], vec![1.0, 1.0, 1.0])?;
+let x = factorize(path.clone())?.solve(&[1.0, -1.0, 1.0, -1.0])?;
+
+// The same path with surplus on vertex 0, so any right-hand side is consistent.
+let grounded = Grounded::new(path, vec![1.0, 0.0, 0.0, 0.0])?;
+let x = factorize(grounded)?.solve(&[1.0, 2.0, 3.0, 4.0])?;
+```
+
+A CSR matrix converts into an `Sddm`, which checks symmetry and dominance:
 
 ```rust
 use approx_chol::{factorize, CsrRef};
@@ -38,7 +55,7 @@ let decomp = factorize(csr)?;
 
 // RHS must lie in the range of the Laplacian (sum to zero)
 let b = [1.0, -1.0, 1.0, -1.0];
-let x = decomp.solve(&b).expect("rhs length must be <= original matrix dimension");
+let x = decomp.solve(&b)?;
 assert!(x.iter().all(|v| v.is_finite()));
 ```
 
@@ -48,8 +65,8 @@ For a larger example with a grid Laplacian, see [`examples/basic_solve.rs`](exam
 
 | Feature | Effect |
 |---------|--------|
-| `sprs`  | Zero-copy `CsrRef` conversion from `sprs` matrices via `TryFrom`. |
-| `faer`  | Zero-copy `CsrRef` conversion from `faer` matrices via `TryFrom`. |
+| `sprs`  | `CsrRef` and `Sddm` conversions from `sprs` matrices via `TryFrom`. |
+| `faer`  | `CsrRef` and `Sddm` conversions from `faer` matrices via `TryFrom`. |
 
 ## Attribution
 

@@ -10,7 +10,7 @@ from tests._laplacians import grid_laplacian
 
 
 def _sddm_matrix() -> sp.csr_matrix:
-    """2x2 SDDM matrix that triggers Gremban augmentation."""
+    """2x2 SDDM matrix with surplus on both rows."""
     return sp.csr_matrix(np.array([[2.0, -1.0], [-1.0, 2.0]], dtype=np.float64))
 
 
@@ -23,9 +23,7 @@ class TestFactorShapeAndDtype:
     def test_shape_matches_original_dimension_sddm(self):
         a = _sddm_matrix()
         factor = approx_chol.factorize(a)
-        # Gremban augmentation adds a vertex: factor.n > 2
-        assert factor.n > 2
-        # But shape reflects the original 2x2 matrix
+        assert factor.n == 2
         assert factor.shape == (2, 2)
 
     def test_dtype_is_float64(self):

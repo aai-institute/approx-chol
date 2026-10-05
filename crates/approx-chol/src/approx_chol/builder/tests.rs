@@ -70,6 +70,10 @@ fn make_csr<'a>(indptr: &'a [u32], indices: &'a [u32], data: &'a [f64]) -> CsrRe
 
 fn assert_ac2_augmented_solve_is_finite(indptr: &[u32], indices: &[u32], data: &[f64], b: &[f64]) {
     let csr = make_csr(indptr, indices, data);
+    assert!(
+        matches!(Sddm::try_from(csr), Ok(Sddm::Grounded(_))),
+        "fixture must reach the grounded path"
+    );
     for seed in 0..8u64 {
         let factor = Builder::<f64>::new(Config {
             split_merge: Some(2),
@@ -78,11 +82,6 @@ fn assert_ac2_augmented_solve_is_finite(indptr: &[u32], indices: &[u32], data: &
         })
         .build(csr)
         .unwrap_or_else(|e| panic!("AC2 factorization failed (seed={seed}): {e}"));
-        assert!(
-            factor.scratch_len() > b.len(),
-            "fixture must reach the Gremban-augmented path"
-        );
-
         let mut work = b.to_vec();
         let mut scratch = vec![0.0f64; factor.scratch_len()];
         factor

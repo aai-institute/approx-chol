@@ -3,6 +3,7 @@ use num_traits::Float;
 
 /// A weighted graph's Laplacian `L(G)`, stored as `G`'s strict upper adjacency: row `i`
 /// lists its neighbors `j > i` in ascending order, each with a finite weight `w > 0`.
+/// Below `u32::MAX` vertices, so a ground vertex still has an index.
 ///
 /// The matrix entry at `(i, j)` is `-w`; the diagonal is never stored.
 #[derive(Debug, Clone)]
@@ -17,7 +18,8 @@ impl<T: Float> Laplacian<T> {
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidCsr`] for malformed `row_ptrs` or an out-of-range neighbor,
+    /// [`Error::InvalidCsr`] for malformed `row_ptrs`, `u32::MAX` or more vertices, or an
+    /// out-of-range neighbor,
     /// [`Error::NotStrictlyUpper`], [`Error::UnsortedNeighbors`], [`Error::NonFiniteValue`]
     /// or [`Error::NonPositiveWeight`] for the entry that breaks the invariant.
     pub fn new(row_ptrs: Vec<u32>, neighbors: Vec<u32>, weights: Vec<T>) -> Result<Self, Error> {
@@ -45,6 +47,11 @@ impl<T: Float> Laplacian<T> {
             }));
         }
         let n = row_ptrs.len() - 1;
+        if n >= u32::MAX as usize {
+            return Err(Error::InvalidCsr(
+                CsrError::MatrixDimensionExceedsIndexType { n },
+            ));
+        }
         for (row, bounds) in row_ptrs.windows(2).enumerate() {
             if bounds[0] > bounds[1] {
                 return Err(Error::InvalidCsr(CsrError::RowPtrsNotNonDecreasing {
@@ -218,9 +225,5 @@ impl<T> Grounded<T> {
     /// survived the summation-noise floor.
     pub fn surplus(&self) -> &[T] {
         &self.surplus
-    }
-
-    pub(crate) fn into_parts(self) -> (Laplacian<T>, Vec<T>) {
-        (self.laplacian, self.surplus)
     }
 }

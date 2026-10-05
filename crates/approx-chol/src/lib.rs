@@ -1,5 +1,26 @@
 //! Approximate Cholesky factorization for SDDM and graph Laplacian systems.
 //!
+//! An [`Sddm`] is a [`Laplacian`], given as its strict upper adjacency, alone or
+//! [`Grounded`] by a diagonal surplus:
+//!
+//! ```
+//! use approx_chol::{factorize, Grounded, Laplacian};
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! // Path 0-1-2-3 with unit weights.
+//! let path: Laplacian = Laplacian::new(vec![0, 1, 2, 3, 3], vec![1, 2, 3], vec![1.0, 1.0, 1.0])?;
+//! let x = factorize(path.clone())?.solve(&[1.0, -1.0, 1.0, -1.0])?;
+//! assert!(x.iter().all(|v| v.is_finite()));
+//!
+//! // The same path with surplus on vertex 0, so any right-hand side is consistent.
+//! let grounded = Grounded::new(path, vec![1.0, 0.0, 0.0, 0.0])?;
+//! let x = factorize(grounded)?.solve(&[1.0, 2.0, 3.0, 4.0])?;
+//! assert!(x.iter().all(|v| v.is_finite()));
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! A CSR matrix converts into an [`Sddm`], which checks symmetry and dominance:
+//!
 //! ```
 //! use approx_chol::{factorize, CsrRef};
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {

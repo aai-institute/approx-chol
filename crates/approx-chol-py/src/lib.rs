@@ -361,16 +361,15 @@ impl PyFactor {
         let b_slice = b
             .as_slice()
             .map_err(|_| value_error("b must be contiguous"))?;
-        let original_n = self.inner.n();
+        let n = self.inner.n();
         let out_ro = out.try_readonly().map_err(|e| borrow_error("out", e))?;
         let out_ro_slice = out_ro
             .as_slice()
             .map_err(|_| value_error("out must be contiguous"))?;
-        if out_ro_slice.len() < original_n {
+        if out_ro_slice.len() < n {
             return Err(value_error(format!(
-                "out length {} is smaller than original matrix dimension {}",
-                out_ro_slice.len(),
-                original_n
+                "out length {} is smaller than matrix dimension {n}",
+                out_ro_slice.len()
             )));
         }
         if slices_overlap(b_slice, out_ro_slice) {
@@ -382,13 +381,13 @@ impl PyFactor {
         let out_slice = out_rw
             .as_slice_mut()
             .map_err(|_| value_error("out must be contiguous"))?;
-        if b_slice.len() != original_n {
+        if b_slice.len() != n {
             return Err(value_error(format!(
-                "b length {} differs from matrix dimension {original_n}",
+                "b length {} differs from matrix dimension {n}",
                 b_slice.len()
             )));
         }
-        let x = &mut out_slice[..original_n];
+        let x = &mut out_slice[..n];
         x.copy_from_slice(b_slice);
         let mut scratch = vec![0.0; self.inner.scratch_len()];
         self.inner

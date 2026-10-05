@@ -62,9 +62,7 @@ fn assemble<T: Real>(
     for row in 0..m {
         matrix.row_mut(row)[row] = ingestion.block_diagonal(block, row);
     }
-    // Scattered from the upper triangle rather than gathered from the lower one: the
-    // upper entry is the mirror the whole crate treats as authoritative, and reaching it
-    // by row means each block row is still read exactly once.
+    // Scattered, because the input stores only the upper triangle.
     for row in 0..m {
         ingestion.upper_row(block, row, |col, value| {
             // Past the triangle is the block's pinned last vertex, whose row and column

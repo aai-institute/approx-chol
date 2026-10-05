@@ -24,7 +24,5 @@ fuzz_target!(|data: &[u8]| {
     };
     // Deserializing is not the claim under test — a payload every structural check admits
     // and that then panics in `solve` is.
-    let _ = factor.solve(&vec![1.0; factor.original_n()]);
-    let mut values = vec![1.0; factor.n()];
-    let _ = factor.solve_in_place(&mut values);
+    let _ = factor.solve(&vec![1.0; factor.n()]);
 });
