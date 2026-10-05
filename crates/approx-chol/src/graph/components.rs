@@ -32,7 +32,7 @@ pub(crate) struct Components<'a, T> {
     sddm: &'a Sddm<T>,
     /// Both triangles' count per vertex, so adjacency lists never regrow.
     degrees: Vec<u32>,
-    /// `None` when connected.
+    /// `None` when connected or empty.
     layout: Option<Layout>,
 }
 
@@ -47,19 +47,21 @@ impl<'a, T: Real> Components<'a, T> {
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.layout.as_ref().map_or(1, Layout::count)
+        usize::from(self.whole().is_some()) + self.layout.as_ref().map_or(0, Layout::count)
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = Component<'_, T>> + '_ {
-        let whole = self
-            .layout
-            .is_none()
-            .then(|| Vertices::Whole(self.sddm.n()));
         let parts = self.layout.iter().flat_map(Layout::components);
-        whole
+        self.whole()
             .into_iter()
             .chain(parts)
             .map(|vertices| self.component(vertices))
+    }
+
+    /// Empty input has no component, so no view ever has zero vertices.
+    fn whole(&self) -> Option<Vertices<'static>> {
+        let n = self.sddm.n();
+        (self.layout.is_none() && n > 0).then_some(Vertices::Whole(n))
     }
 
     /// The one place a component's variant is decided; only split grounded input scans.

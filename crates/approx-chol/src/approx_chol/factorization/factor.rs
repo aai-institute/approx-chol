@@ -236,10 +236,6 @@ where
         factor
     }
 
-    pub(crate) fn empty() -> Self {
-        Self::from_blocks(None, Vec::new(), Vec::new())
-    }
-
     /// Total elimination steps across all blocks: every slot but one per block, whichever
     /// arm factored it.
     pub fn n_steps(&self) -> usize {

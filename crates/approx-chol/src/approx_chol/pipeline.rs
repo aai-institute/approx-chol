@@ -22,9 +22,6 @@ fn factor_components<T: Real, C: EdgeCount>(
     config: Config,
     split: C::Split,
 ) -> Result<Factor<T>, UnusablePivot> {
-    if sddm.n() == 0 {
-        return Ok(Factor::empty());
-    }
     let components = Components::of(sddm);
     let mut factorizer = BlockFactorizer::<T, C>::new(config, split);
     let mut blocks = Vec::with_capacity(components.len());

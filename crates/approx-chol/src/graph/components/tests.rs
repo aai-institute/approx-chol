@@ -21,6 +21,13 @@ fn vertices_of(sddm: &Sddm<f64>) -> Vec<Vec<usize>> {
         .collect()
 }
 
+#[test]
+fn empty_input_has_no_component() {
+    let sddm = sddm_of(&[0], &[], &[]);
+    let components = Components::of(&sddm);
+    assert_eq!((components.len(), components.iter().count()), (0, 0));
+}
+
 /// Each component grounds itself, so surplus never joins two of them.
 #[test]
 fn grounded_components_stay_separate() {
