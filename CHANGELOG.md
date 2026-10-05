@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SolveError` is `LengthMismatch` or `ScratchTooSmall`.
 - Each grounded component gets its own ground vertex, so grounded components factor as
   separate blocks.
+- A CSR matrix whose surplus sums past the scalar's maximum is rejected with
+  `NotSddm::SurplusOverflow`.
 - A persisted `Factor` stores each block as `Grounded` or `Floating` around its factor,
   with no dimension, and `FACTOR_FORMAT_VERSION` is `0x41430005`.
 
