@@ -26,7 +26,7 @@ impl NotFactorable {
 }
 
 pub(crate) fn factor<T: Real>(
-    ingestion: &Ingestion<'_, T>,
+    ingestion: &Ingestion<T>,
     block: &BlockVertices<'_>,
     dim: BlockDim,
 ) -> Result<LowerTriangular<T>, NotFactorable> {
@@ -54,7 +54,7 @@ const fn packed_len(m: usize) -> Option<usize> {
 /// Read from the ingested arrays rather than from an elimination graph, because a block
 /// that reaches here is never eliminated on and so never needs one built.
 fn assemble<T: Real>(
-    ingestion: &Ingestion<'_, T>,
+    ingestion: &Ingestion<T>,
     block: &BlockVertices<'_>,
     m: usize,
 ) -> Result<LowerTriangular<T>, NotFactorable> {

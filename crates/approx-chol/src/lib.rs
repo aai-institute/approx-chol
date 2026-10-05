@@ -49,6 +49,7 @@ mod csr;
 mod error;
 pub(crate) mod graph;
 pub(crate) mod sampling;
+mod sddm;
 #[cfg(test)]
 pub(crate) mod test_utils;
 mod types;
@@ -60,14 +61,14 @@ pub use approx_chol::FACTOR_FORMAT_VERSION;
 pub use approx_chol::{Backend, Config, ExactFailure, Factor, Fallback, SolveError};
 pub use csr::{CsrRef, OwnedCsr};
 pub use error::{CsrError, DenseFailure, Error, IndexKind, UnusablePivot};
+pub use sddm::{Grounded, Laplacian, Sddm};
 
 /// Factorize an SDDM matrix with [`Config::default`].
-pub fn factorize<'a, T, I, M>(sddm: M) -> Result<Factor<T>, Error>
+pub fn factorize<T, M>(sddm: M) -> Result<Factor<T>, Error>
 where
     T: num_traits::Float + Send + Sync + 'static,
-    I: num_traits::PrimInt + 'a + 'static,
-    M: TryInto<CsrRef<'a, T, I>>,
-    <M as TryInto<CsrRef<'a, T, I>>>::Error: Into<Error>,
+    M: TryInto<Sddm<T>>,
+    <M as TryInto<Sddm<T>>>::Error: Into<Error>,
 {
     factorize_with(sddm, Config::default())
 }
@@ -79,12 +80,11 @@ where
 /// Beyond the input rejections [`factorize`] shares, returns
 /// [`Error::DenseFactorizationFailed`] when a block's exact pivot is unusable and
 /// [`ExactFailure::Error`] asked for that to fail rather than fall back.
-pub fn factorize_with<'a, T, I, M>(sddm: M, config: Config) -> Result<Factor<T>, Error>
+pub fn factorize_with<T, M>(sddm: M, config: Config) -> Result<Factor<T>, Error>
 where
     T: num_traits::Float + Send + Sync + 'static,
-    I: num_traits::PrimInt + 'a + 'static,
-    M: TryInto<CsrRef<'a, T, I>>,
-    <M as TryInto<CsrRef<'a, T, I>>>::Error: Into<Error>,
+    M: TryInto<Sddm<T>>,
+    <M as TryInto<Sddm<T>>>::Error: Into<Error>,
 {
     approx_chol::Builder::<T>::new(config).build(sddm)
 }

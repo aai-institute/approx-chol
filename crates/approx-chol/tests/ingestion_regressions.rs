@@ -228,11 +228,10 @@ fn surplus_is_judged_against_summation_error_alone() {
         let (rp, ci, vals) = surplus_pair(1e-6, surplus);
         let factor = build(Config::default(), &rp, &ci, &vals).expect(label);
         assert_eq!(
-            factor.n() > factor.original_n(),
+            factor.scratch_len() > 0,
             grounded,
-            "{label}: surplus {surplus:e} routed to n={} original_n={}",
-            factor.n(),
-            factor.original_n()
+            "{label}: surplus {surplus:e} routed to scratch_len={}",
+            factor.scratch_len()
         );
         if grounded {
             let solution = factor.solve(&[1.0, 1.0]).expect("solve");
@@ -260,7 +259,7 @@ fn f32_surplus_is_judged_against_summation_error_alone() {
             .build(csr)
             .expect(label);
         assert_eq!(
-            factor.n() > factor.original_n(),
+            factor.scratch_len() > 0,
             grounded,
             "{label}: surplus {surplus:e}"
         );
@@ -281,8 +280,8 @@ fn tolerated_mirror_difference_is_not_one_row_s_surplus() {
     for (label, vals) in cases {
         let factor = build(Config::default(), &[0, 2, 4], &[0, 1, 0, 1], &vals).expect(label);
         assert_eq!(
-            factor.n(),
-            factor.original_n(),
+            factor.scratch_len(),
+            0,
             "{label}: every stored row sums to zero, so neither may be grounded"
         );
     }
@@ -307,8 +306,8 @@ fn coalescing_additions_are_inside_the_error_allowance() {
     }
     let factor = build(Config::default(), &rp, &ci, &vals).expect("coalesced duplicates");
     assert_eq!(
-        factor.n(),
-        factor.original_n(),
+        factor.scratch_len(),
+        0,
         "duplicates coalescing to a balanced Laplacian must not be grounded"
     );
 }

@@ -19,10 +19,7 @@ fn run_build_and_solve(lap: &GridLaplacian, config: Config) {
     let mut rhs = vec![0.0; n];
     rhs[0] = 1.0;
     rhs[n - 1] = -1.0;
-    let mut work = vec![0.0; n];
-    factor
-        .solve_into(&rhs, &mut work)
-        .expect("solve_into should succeed");
+    let work = factor.solve(&rhs).expect("solve should succeed");
     assert!(work.iter().all(|x| x.is_finite()));
 }
 

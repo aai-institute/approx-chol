@@ -106,17 +106,9 @@ impl<T: num_traits::Float> TryFrom<BlockData<T>> for Block<T> {
 }
 
 impl<T: Real> Block<T> {
-    fn solve(&self, values: &mut [T], canonical: bool) {
+    pub(super) fn solve_canonical(&self, values: &mut [T]) {
         self.anchor.prepare(values);
         self.cholesky.apply(values);
-        self.anchor.recover(values, canonical);
-    }
-
-    pub(super) fn solve_anchored(&self, values: &mut [T]) {
-        self.solve(values, false);
-    }
-
-    pub(super) fn solve_canonical(&self, values: &mut [T]) {
-        self.solve(values, true);
+        self.anchor.recover(values);
     }
 }

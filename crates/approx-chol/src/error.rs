@@ -40,6 +40,42 @@ pub enum Error {
 
     /// Exact dense Cholesky hit an unusable pivot and [`ExactFailure::Error`](crate::ExactFailure::Error) asked for that to fail.
     DenseFactorizationFailed(UnusablePivot),
+
+    /// A [`Laplacian`](crate::Laplacian) row lists a neighbor at or below its own index.
+    NotStrictlyUpper {
+        /// `(row, neighbor)` with `neighbor <= row`.
+        edge: (usize, usize),
+    },
+
+    /// A [`Laplacian`](crate::Laplacian) row's neighbors are not strictly ascending.
+    UnsortedNeighbors {
+        /// Row with a repeated or out-of-order neighbor.
+        row: usize,
+    },
+
+    /// A [`Laplacian`](crate::Laplacian) edge weight is zero or negative.
+    NonPositiveWeight {
+        /// `(row, neighbor)` of the offending edge.
+        edge: (usize, usize),
+    },
+
+    /// A [`Grounded`](crate::Grounded) was given a surplus count other than its vertex count.
+    SurplusLengthMismatch {
+        /// The Laplacian's vertex count.
+        expected: usize,
+        /// The surplus count given.
+        got: usize,
+    },
+
+    /// A [`Grounded`](crate::Grounded) surplus is negative or not finite.
+    InvalidSurplus {
+        /// Vertex carrying it.
+        vertex: usize,
+    },
+
+    /// A [`Grounded`](crate::Grounded) surplus is zero everywhere: that is a
+    /// [`Laplacian`](crate::Laplacian).
+    NoSurplus,
 }
 
 /// An exact dense Cholesky pivot that could not be used, and where it was. The same
@@ -262,6 +298,22 @@ impl fmt::Display for Error {
             Error::DenseFactorizationFailed(pivot) => {
                 write!(f, "exact dense Cholesky failed at {pivot}")
             }
+            Error::NotStrictlyUpper { edge: (row, col) } => {
+                write!(f, "Laplacian row {row} lists neighbor {col}, which is not above it")
+            }
+            Error::UnsortedNeighbors { row } => {
+                write!(f, "Laplacian row {row} neighbors are not strictly ascending")
+            }
+            Error::NonPositiveWeight { edge: (row, col) } => {
+                write!(f, "Laplacian edge ({row}, {col}) has a non-positive weight")
+            }
+            Error::SurplusLengthMismatch { expected, got } => {
+                write!(f, "expected {expected} surplus entries, got {got}")
+            }
+            Error::InvalidSurplus { vertex } => {
+                write!(f, "surplus at vertex {vertex} is negative or not finite")
+            }
+            Error::NoSurplus => write!(f, "surplus is zero everywhere, which is a Laplacian"),
         }
     }
 }

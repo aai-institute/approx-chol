@@ -104,7 +104,6 @@ fn a_committed_payload_decodes_and_still_solves(#[case] matrix: &Matrix) {
     let fresh = matrix.factor();
 
     assert_eq!(restored.n(), fresh.n());
-    assert_eq!(restored.original_n(), fresh.original_n());
     assert_eq!(restored.n_steps(), fresh.n_steps());
 
     let x = restored.solve(&B).expect("solve the restored factor");

@@ -63,7 +63,7 @@ fn low_level_builder_is_generic_over_index_and_scalar_types() {
 
 struct PanicIntoCsr;
 
-impl<'a> From<PanicIntoCsr> for CsrRef<'a, f64, u32> {
+impl From<PanicIntoCsr> for approx_chol::Sddm<f64> {
     fn from(_: PanicIntoCsr) -> Self {
         panic!("boom during conversion");
     }
@@ -72,7 +72,7 @@ impl<'a> From<PanicIntoCsr> for CsrRef<'a, f64, u32> {
 #[test]
 fn factorize_catches_panicking_conversion() {
     let err =
-        factorize::<f64, u32, _>(PanicIntoCsr).expect_err("panicking conversion must map to error");
+        factorize::<f64, _>(PanicIntoCsr).expect_err("panicking conversion must map to error");
     assert!(matches!(
         err,
         Error::InvalidCsr(CsrError::InputConversionPanicked)
@@ -96,11 +96,13 @@ fn split_below_two_is_standard_ac() {
     let mut b = vec![0.0; n as usize];
     b[0] = 1.0;
     let mut expected = b.clone();
-    reference.solve_in_place(&mut expected).expect("solve");
+    reference
+        .solve_in_place(&mut expected, &mut [])
+        .expect("solve");
     for split_merge in [Some(0), Some(1)] {
         let mut actual = b.clone();
         factor(split_merge)
-            .solve_in_place(&mut actual)
+            .solve_in_place(&mut actual, &mut [])
             .expect("solve");
         assert_eq!(actual, expected, "split_merge {split_merge:?} is not AC");
     }

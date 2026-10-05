@@ -5,8 +5,7 @@ use super::factorization::{
 use crate::graph::{BlockVertices, EdgeCount, Ingestion, Multi, Single};
 use crate::sampling::CdfSampler;
 use crate::types::Real;
-use crate::{CsrError, CsrRef, Error, Factor};
-use num_traits::PrimInt;
+use crate::{CsrError, Error, Factor, Sddm};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[derive(Debug, Clone)]
@@ -29,23 +28,22 @@ where
         }
     }
 
-    /// Factorize any input fallibly convertible into [`CsrRef`].
-    pub fn build<'a, I, M>(&self, sddm: M) -> Result<Factor<T>, Error>
+    /// Factorize an [`Sddm`], or any input fallibly convertible into one (a [`CsrRef`](crate::CsrRef)
+    /// among them).
+    pub fn build<M>(&self, sddm: M) -> Result<Factor<T>, Error>
     where
-        I: PrimInt + 'a + 'static,
-        M: TryInto<CsrRef<'a, T, I>>,
-        <M as TryInto<CsrRef<'a, T, I>>>::Error: Into<Error>,
+        M: TryInto<Sddm<T>>,
+        <M as TryInto<Sddm<T>>>::Error: Into<Error>,
     {
-        let csr = catch_unwind(AssertUnwindSafe(|| sddm.try_into()))
+        let sddm = catch_unwind(AssertUnwindSafe(|| sddm.try_into()))
             .map_err(|_| Error::InvalidCsr(CsrError::InputConversionPanicked))?;
-        let csr = csr.map_err(Into::into)?;
-        let narrowed = csr.narrow_indices()?;
-        self.build_validated(narrowed.with_values(csr.values()))
+        let sddm = sddm.map_err(Into::into)?;
+        self.build_validated(sddm)
     }
 
     /// The multiplicity decides layout and split together, so each arm names one
     /// algorithm end to end.
-    fn build_validated(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
+    fn build_validated(&self, sddm: Sddm<T>) -> Result<Factor<T>, Error> {
         let original_n = sddm.n();
         let ingestion = Ingestion::of(sddm)?;
         match self.config.split_factor() {
@@ -53,12 +51,12 @@ where
             Some(k) => self.factor_blocks::<Multi>(ingestion, k),
         }
         // The only scope holding both the caller's dimension and the finished factor.
-        .inspect(|factor| debug_assert_eq!(factor.original_n(), original_n))
+        .inspect(|factor| debug_assert_eq!(factor.n(), original_n))
     }
 
     fn factor_blocks<C: EdgeCount>(
         &self,
-        mut ingestion: Ingestion<'_, T>,
+        mut ingestion: Ingestion<T>,
         split: C::Split,
     ) -> Result<Factor<T>, Error> {
         if ingestion.n() == 0 {
@@ -115,7 +113,7 @@ impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
     /// reaches [`Ingestion::block_graph`].
     fn factor(
         &mut self,
-        ingestion: &mut Ingestion<'_, T>,
+        ingestion: &mut Ingestion<T>,
         block: &BlockVertices<'_>,
     ) -> Result<(Block<T>, Option<Fallback>), Error> {
         // Restarts for every block, routed or not, so one block's draws never shift

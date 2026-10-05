@@ -312,7 +312,7 @@ impl PyFactor {
 
     #[getter]
     fn shape(&self) -> (usize, usize) {
-        let n = self.inner.original_n();
+        let n = self.inner.n();
         (n, n)
     }
 
@@ -361,8 +361,7 @@ impl PyFactor {
         let b_slice = b
             .as_slice()
             .map_err(|_| value_error("b must be contiguous"))?;
-        let n = self.inner.n();
-        let original_n = self.inner.original_n();
+        let original_n = self.inner.n();
         let out_ro = out.try_readonly().map_err(|e| borrow_error("out", e))?;
         let out_ro_slice = out_ro
             .as_slice()
@@ -383,19 +382,18 @@ impl PyFactor {
         let out_slice = out_rw
             .as_slice_mut()
             .map_err(|_| value_error("out must be contiguous"))?;
-        // `out` is only guaranteed to hold `original_n`, so a ground vertex — the one
-        // variable past it — has to land in scratch rather than past the caller's end.
-        if original_n == n {
-            self.inner
-                .solve_into(b_slice, out_slice)
-                .map_err(|e| value_error(e.to_string()))?;
-        } else {
-            let mut work = vec![0.0; n];
-            self.inner
-                .solve_into(b_slice, &mut work)
-                .map_err(|e| value_error(e.to_string()))?;
-            out_slice[..original_n].copy_from_slice(&work[..original_n]);
+        if b_slice.len() != original_n {
+            return Err(value_error(format!(
+                "b length {} differs from matrix dimension {original_n}",
+                b_slice.len()
+            )));
         }
+        let x = &mut out_slice[..original_n];
+        x.copy_from_slice(b_slice);
+        let mut scratch = vec![0.0; self.inner.scratch_len()];
+        self.inner
+            .solve_in_place(x, &mut scratch)
+            .map_err(|e| value_error(e.to_string()))?;
         Ok(())
     }
 }

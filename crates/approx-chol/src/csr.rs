@@ -1,4 +1,4 @@
-use crate::{CsrError, Error, IndexKind};
+use crate::{CsrError, Error, IndexKind, Sddm};
 use num_traits::{cast, PrimInt};
 
 /// Reserves up front: collecting into `Option<Vec<_>>` drops the size hint, so the
@@ -343,6 +343,83 @@ impl<'a, T, I: faer::Index + PrimInt> TryFrom<&'a faer::sparse::SparseRowMat<I, 
 
     fn try_from(mat: &'a faer::sparse::SparseRowMat<I, T>) -> Result<Self, Self::Error> {
         try_from_faer_view_impl(mat.as_ref())
+    }
+}
+
+/// The CSR path: the mirror check and the surplus-noise judgement live only here.
+impl<'a, T, I> TryFrom<CsrRef<'a, T, I>> for Sddm<T>
+where
+    T: num_traits::Float + Send + Sync + 'static,
+    I: PrimInt,
+{
+    type Error = Error;
+
+    fn try_from(csr: CsrRef<'a, T, I>) -> Result<Self, Error> {
+        crate::graph::sddm_from_csr(csr)
+    }
+}
+
+impl<'a, T, I> TryFrom<&'a OwnedCsr<T, I>> for Sddm<T>
+where
+    T: num_traits::Float + Send + Sync + 'static,
+    I: PrimInt,
+{
+    type Error = Error;
+
+    fn try_from(owned: &'a OwnedCsr<T, I>) -> Result<Self, Error> {
+        Self::try_from(owned.as_csr_ref())
+    }
+}
+
+#[cfg(feature = "sprs")]
+impl<'a, T, I> TryFrom<sprs::CsMatViewI<'a, T, I>> for Sddm<T>
+where
+    T: num_traits::Float + Send + Sync + 'static,
+    I: sprs::SpIndex + PrimInt,
+{
+    type Error = Error;
+
+    fn try_from(mat: sprs::CsMatViewI<'a, T, I>) -> Result<Self, Error> {
+        Self::try_from(try_from_sprs_view_impl(mat)?)
+    }
+}
+
+#[cfg(feature = "sprs")]
+impl<'a, T, I> TryFrom<&'a sprs::CsMatI<T, I>> for Sddm<T>
+where
+    T: num_traits::Float + Send + Sync + 'static,
+    I: sprs::SpIndex + PrimInt,
+{
+    type Error = Error;
+
+    fn try_from(mat: &'a sprs::CsMatI<T, I>) -> Result<Self, Error> {
+        Self::try_from(try_from_sprs_view_impl(mat.view())?)
+    }
+}
+
+#[cfg(feature = "faer")]
+impl<'a, T, I> TryFrom<faer::sparse::SparseRowMatRef<'a, I, T>> for Sddm<T>
+where
+    T: num_traits::Float + Send + Sync + 'static,
+    I: faer::Index + PrimInt,
+{
+    type Error = Error;
+
+    fn try_from(mat: faer::sparse::SparseRowMatRef<'a, I, T>) -> Result<Self, Error> {
+        Self::try_from(try_from_faer_view_impl(mat)?)
+    }
+}
+
+#[cfg(feature = "faer")]
+impl<'a, T, I> TryFrom<&'a faer::sparse::SparseRowMat<I, T>> for Sddm<T>
+where
+    T: num_traits::Float + Send + Sync + 'static,
+    I: faer::Index + PrimInt,
+{
+    type Error = Error;
+
+    fn try_from(mat: &'a faer::sparse::SparseRowMat<I, T>) -> Result<Self, Error> {
+        Self::try_from(try_from_faer_view_impl(mat.as_ref())?)
     }
 }
 

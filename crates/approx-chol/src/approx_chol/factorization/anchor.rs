@@ -26,14 +26,14 @@ impl Anchor {
         }
     }
 
-    pub(super) fn recover<T: Real>(self, values: &mut [T], canonical: bool) {
+    pub(super) fn recover<T: Real>(self, values: &mut [T]) {
         let Some(&pinned) = values.last() else {
             return;
         };
         for value in values.iter_mut() {
             *value = *value - pinned;
         }
-        if canonical && self == Self::Floating {
+        if self == Self::Floating {
             project_zero_mean(values);
         }
     }

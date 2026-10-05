@@ -1,20 +1,33 @@
-use super::canonical::Canonical;
-use super::sets::DisjointSets;
-use crate::graph::BlockLayout;
+use super::canonical::row_ptr;
 use crate::types::{count_as_scalar, Real};
-use crate::{CsrError, Error};
+use crate::{CsrError, Error, Grounded, IndexKind, Laplacian, Sddm};
+use num_traits::PrimInt;
 
-/// A merge-join only because [`Canonical`] guarantees each entry is claimed once.
-struct Mirrors<'a, T> {
-    row_ptrs: &'a [u32],
-    col_indices: &'a [u32],
+/// Converted where it is read, so canonical input is never copied whatever its index type;
+/// only a signed type can fail, with a negative column.
+#[inline(always)]
+fn column<J: PrimInt>(col: J) -> Result<usize, Error> {
+    col.to_usize()
+        .ok_or(Error::InvalidCsr(CsrError::IndexExceedsIndexType {
+            kind: IndexKind::ColIndex,
+        }))
+}
+
+/// A merge-join only because canonical rows guarantee each entry is claimed once.
+struct Mirrors<'a, J, T> {
+    row_ptrs: &'a [J],
+    col_indices: &'a [J],
     values: &'a [T],
+    /// `nnz` fits `u32`, which the caller checks.
     cursors: Vec<u32>,
 }
 
-impl<'a, T: Real> Mirrors<'a, T> {
-    fn new(row_ptrs: &'a [u32], col_indices: &'a [u32], values: &'a [T]) -> Self {
-        let cursors = row_ptrs[..row_ptrs.len() - 1].to_vec();
+impl<'a, J: PrimInt, T: Real> Mirrors<'a, J, T> {
+    fn new(row_ptrs: &'a [J], col_indices: &'a [J], values: &'a [T]) -> Self {
+        let cursors = row_ptrs[..row_ptrs.len() - 1]
+            .iter()
+            .map(|&ptr| row_ptr(ptr) as u32)
+            .collect();
         Self {
             row_ptrs,
             col_indices,
@@ -25,11 +38,11 @@ impl<'a, T: Real> Mirrors<'a, T> {
 
     /// Stored zeros count as absent.
     fn claim(&mut self, row: usize, col: usize) -> Result<T, Error> {
-        let row_end = self.row_ptrs[row + 1];
+        let row_end = row_ptr(self.row_ptrs[row + 1]) as u32;
         let mut cursor = self.cursors[row];
         let mut found = T::zero();
         while cursor < row_end {
-            let at = self.col_indices[cursor as usize] as usize;
+            let at = column(self.col_indices[cursor as usize])?;
             if at > col {
                 break;
             }
@@ -64,47 +77,35 @@ fn approximately_equal<T: Real>(left: T, right: T) -> bool {
     (left - right).abs() <= ulps * T::epsilon() * scale
 }
 
-/// Everything ingestion learns from the CSR before any graph exists.
-pub(super) struct Ingested<T> {
-    /// One per real vertex, and the ground vertex's last when grounded.
-    pub(super) diagonal: Vec<T>,
-    pub(super) grounding: Grounding<T>,
-    /// Unioned by the validating walk rather than by a pass of its own.
-    pub(super) layout: Option<BlockLayout>,
-}
-
-/// All rows balancing means a bare Laplacian, with no ground vertex to attach.
-pub(super) enum Grounding<T> {
-    Floating,
-    Grounded {
-        /// The row-sum accumulator reused in place; zero where the row balances.
-        surpluses: Vec<T>,
-        /// How many of those are positive, which is the ground vertex's degree.
-        degree: usize,
-    },
-}
-
-/// Reads every stored entry exactly once, which is what lets [`Canonical::of`] leave
-/// finiteness here. Builds nothing: routing waits on the layout this pass feeds.
-pub(super) fn validate<T: Real>(canonical: &Canonical<'_, T>) -> Result<Ingested<T>, Error> {
-    let (row_ptrs, col_indices, values) = canonical.arrays();
+/// Reads every stored entry of canonical arrays exactly once, which is what lets the
+/// canonical path skip a finiteness scan of its own. The upper mirror is the one kept:
+/// the whole crate treats it as authoritative.
+pub(super) fn sddm_of<J: PrimInt, T: Real>(
+    row_ptrs: &[J],
+    col_indices: &[J],
+    values: &[T],
+    terms: impl Iterator<Item = u32>,
+) -> Result<Sddm<T>, Error> {
     let n = row_ptrs.len() - 1;
     let mut mirrors = Mirrors::new(row_ptrs, col_indices, values);
 
-    let mut sets = DisjointSets::new(n);
     let mut diagonal = vec![T::zero(); n];
-    // Off-diagonal only; the diagonal joins in `ground`.
+    // Off-diagonal only; the diagonal joins in `surplus`.
     let mut row_sums = vec![T::zero(); n];
+    let upper_estimate = col_indices.len().saturating_sub(n) / 2;
+    let mut upper_ptrs = Vec::with_capacity(n + 1);
+    let mut neighbors = Vec::with_capacity(upper_estimate);
+    let mut weights = Vec::with_capacity(upper_estimate);
+    upper_ptrs.push(0u32);
 
     for row in 0..n {
-        let row_end = row_ptrs[row + 1];
+        let row_end = row_ptr(row_ptrs[row + 1]) as u32;
         // Claimed like any mirror: claiming diagonals up front would skip those below.
         diagonal[row] = mirrors.claim(row, row)?;
         let mut cursor = mirrors.cursors[row];
-        let mut root = sets.find(row as u32);
 
         while cursor < row_end {
-            let col = col_indices[cursor as usize] as usize;
+            let col = column(col_indices[cursor as usize])?;
             let upper = values[cursor as usize];
             if !upper.is_finite() {
                 return Err(Error::NonFiniteValue {
@@ -127,10 +128,16 @@ pub(super) fn validate<T: Real>(canonical: &Canonical<'_, T>) -> Result<Ingested
             // the tolerated mirror difference as `col`'s own surplus and ground it.
             row_sums[row] = row_sums[row] + upper;
             row_sums[col] = row_sums[col] + lower;
-            root = sets.union_resolved(root, col as u32);
+            neighbors.push(col as u32);
+            weights.push(-upper);
         }
+        upper_ptrs.push(neighbors.len() as u32);
     }
-    ground(diagonal, row_sums, canonical.terms(), sets)
+    let laplacian = Laplacian::trusted(upper_ptrs, neighbors, weights);
+    Ok(match surplus(&diagonal, row_sums, terms)? {
+        Some(surplus) => Grounded::trusted(laplacian, surplus).into(),
+        None => laplacian.into(),
+    })
 }
 
 /// How far one row's diagonal exceeds its off-diagonal mass, judged against the noise
@@ -166,15 +173,14 @@ impl<T: Real> RowBalance<T> {
     }
 }
 
-/// `row_sums` arrives off-diagonal-only; the diagonal joins it here.
-fn ground<T: Real>(
-    mut diagonal: Vec<T>,
+/// `row_sums` arrives off-diagonal-only and leaves as each row's surplus, or `None`
+/// when every row balances.
+fn surplus<T: Real>(
+    diagonal: &[T],
     mut row_sums: Vec<T>,
     terms: impl Iterator<Item = u32>,
-    mut sets: DisjointSets,
-) -> Result<Ingested<T>, Error> {
-    let mut total = T::zero();
-    let mut degree = 0usize;
+) -> Result<Option<Vec<T>>, Error> {
+    let mut grounded = false;
     for (row, ((sum, &d), count)) in row_sums
         .iter_mut()
         .zip(diagonal.iter())
@@ -186,44 +192,10 @@ fn ground<T: Real>(
             RowBalance::Deficit => return Err(Error::NotDiagonallyDominant { row }),
             RowBalance::Negligible => T::zero(),
             RowBalance::Surplus(excess) => {
-                total = total + excess;
-                degree += 1;
+                grounded = true;
                 excess
             }
         };
     }
-
-    let m = diagonal.len();
-    if degree == 0 {
-        return Ok(Ingested {
-            diagonal,
-            grounding: Grounding::Floating,
-            layout: sets.layout(),
-        });
-    }
-    if m >= u32::MAX as usize {
-        return Err(Error::InvalidCsr(
-            CsrError::MatrixDimensionExceedsIndexType {
-                n: m.saturating_add(1),
-            },
-        ));
-    }
-    diagonal.push(total);
-    // Absent from the CSR, so the rows it closes are unioned through it here —
-    // connectivity read from the CSR alone would hand each component back separately.
-    let vertex = sets.push();
-    let mut root = vertex;
-    for (row, &surplus) in row_sums.iter().enumerate() {
-        if surplus > T::zero() {
-            root = sets.union_resolved(root, row as u32);
-        }
-    }
-    Ok(Ingested {
-        diagonal,
-        grounding: Grounding::Grounded {
-            surpluses: row_sums,
-            degree,
-        },
-        layout: sets.layout(),
-    })
+    Ok(grounded.then_some(row_sums))
 }

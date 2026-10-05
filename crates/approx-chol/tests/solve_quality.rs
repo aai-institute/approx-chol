@@ -22,7 +22,7 @@ fn route_at_drift<T: Float + Send + Sync + 'static>(drift: T) -> Result<bool, Er
     let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).expect("valid csr");
     Builder::<T>::new(Config::default())
         .build(csr)
-        .map(|factor| factor.n() > factor.original_n())
+        .map(|factor| factor.scratch_len() > 0)
 }
 
 /// Augmentation is decided in ingestion, before routing, so the default suffices. One
@@ -74,7 +74,7 @@ fn star_augments_at_ulp_offset(offset: u64) -> bool {
     let factor = Builder::<f64>::new(Config::default())
         .build(csr)
         .expect("factorization should succeed");
-    factor.n() > factor.original_n()
+    factor.scratch_len() > 0
 }
 
 /// Brackets the floor at a large row scale, where an absolute threshold would misjudge
@@ -114,7 +114,10 @@ fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
     .build(csr)
     .expect("factorization should succeed");
 
-    assert!(factor.n() > n as usize, "diagonal SDDM should be augmented");
+    assert!(
+        factor.scratch_len() > 0,
+        "diagonal SDDM should be augmented"
+    );
 
     let x = factor.solve(&b).expect("solve should succeed");
     assert_eq!(x.len(), n as usize);
@@ -129,142 +132,57 @@ fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
 }
 
 #[test]
-fn solve_into_rejects_rhs_longer_than_original_for_augmented_factor() {
-    // For an augmented SDDM factor n() == original_n() + 1, and the aux slot is
-    // internal scratch. A RHS of length original_n + 1 must be rejected, not
-    // silently accepted with its last entry overwritten by the grounding setup.
+fn solve_in_place_rejects_a_length_other_than_n() {
     let (rp, ci, vals, n) = diagonal_sddm();
     let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid diagonal SDDM");
     let factor = Builder::new(Config::default())
         .build(csr)
         .expect("factorization should succeed");
-    assert_eq!(factor.n(), factor.original_n() + 1, "SDDM augments by one");
-
-    let rhs = vec![0.0; factor.original_n() + 1]; // == factor.n(): the aux slot
-    let mut work = vec![0.0; factor.n()];
-    let err = factor
-        .solve_into(&rhs, &mut work)
-        .expect_err("rhs longer than original dimension must fail");
-    assert!(
-        matches!(err, SolveError::RhsLengthExceedsFactor { .. }),
-        "{err:?}"
-    );
+    let mut scratch = vec![0.0; factor.scratch_len()];
+    for len in [factor.n() - 1, factor.n() + 1] {
+        let err = factor
+            .solve_in_place(&mut vec![0.0; len], &mut scratch)
+            .expect_err("only n() entries are a solution");
+        assert!(matches!(err, SolveError::LengthMismatch { .. }), "{err:?}");
+    }
 }
 
-/// Both entry points size their buffer through the same check.
 #[test]
-fn every_solve_entry_point_reports_a_short_work_buffer() {
-    let lap = grid_laplacian(4, 4);
-    let n_orig = lap.n as usize;
+fn solve_in_place_rejects_short_scratch() {
+    let (rp, ci, vals, n) = diagonal_sddm();
+    let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid diagonal SDDM");
     let factor = Builder::new(Config::default())
-        .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
+        .build(csr)
         .expect("factorization should succeed");
-
-    let mut rhs = vec![0.0; n_orig];
-    rhs[0] = 1.0;
-    rhs[n_orig - 1] = -1.0;
-    let mut work = vec![0.0; factor.n().saturating_sub(1)];
-
-    for err in [
-        factor
-            .solve_into(&rhs, &mut work)
-            .expect_err("solve_into must reject a short work buffer"),
-        factor
-            .solve_in_place(&mut work)
-            .expect_err("solve_in_place must reject a short work buffer"),
-    ] {
-        assert!(
-            matches!(err, SolveError::WorkBufferTooSmall { .. }),
-            "{err:?}"
-        );
-    }
+    assert!(factor.scratch_len() > 0, "a grounded factor needs scratch");
+    let mut x = vec![1.0; factor.n()];
+    let err = factor
+        .solve_in_place(&mut x, &mut vec![0.0; factor.scratch_len() - 1])
+        .expect_err("short scratch must fail");
+    assert!(matches!(err, SolveError::ScratchTooSmall { .. }), "{err:?}");
 }
 
-// A grounded block's anchored solve *is* the SDDM solution, so solve_in_place and
-// solve_into must agree.
+/// Scratch is a buffer, not an input: whatever it held, the solution is the same.
 #[rstest]
 #[case::approximate(Backend::Approximate)]
 #[case::exact(Backend::default())]
-fn grounded_raw_solve_matches_recovered_solve(#[case] backend: Backend) {
-    let row_ptrs = [0u32, 2, 4];
-    let columns = [0u32, 1, 0, 1];
-    let values = [2.0, -1.0, -1.0, 2.0];
+fn dirty_scratch_does_not_change_the_solution(#[case] backend: Backend) {
+    let row_ptrs = [0u32, 2, 4, 5];
+    let columns = [0u32, 1, 0, 1, 2];
+    let values = [2.0, -1.0, -1.0, 2.0, 1.0];
     let factor = Builder::<f64>::new(Config {
         backend,
         ..Config::default()
     })
-    .build(CsrRef::new(&row_ptrs, &columns, &values, 2).expect("valid CSR"))
+    .build(CsrRef::new(&row_ptrs, &columns, &values, 3).expect("valid CSR"))
     .expect("factorization should succeed");
-
-    let n = factor.n();
-    assert_eq!(n, 3, "strictly dominant input must gain a ground vertex");
-
-    let rhs = [1.0, -2.0];
-    let mut recovered = vec![0.0; n];
-    factor
-        .solve_into(&rhs, &mut recovered)
-        .expect("solve_into should succeed");
-
-    let mut raw = vec![0.0; n];
-    raw[..rhs.len()].copy_from_slice(&rhs);
-    factor
-        .solve_in_place(&mut raw)
-        .expect("solve_in_place should succeed");
-
-    assert_eq!(raw[..2], recovered[..2]);
-    assert_eq!(raw[n - 1], 0.0, "ground must be pinned");
-}
-
-// A floating block has no ground vertex to absorb the null-space component, so
-// `solve_in_place` pins one variable and differs from `solve_into` by that
-// constant. The grounded case above catches neither.
-#[rstest]
-#[case::approximate(Backend::Approximate)]
-#[case::exact(Backend::default())]
-fn floating_raw_solve_differs_from_recovered_by_one_constant(#[case] backend: Backend) {
-    let grid = grid_laplacian(5, 5);
-    let csr = grid.as_csr().expect("valid CSR");
-    let n = grid.n as usize;
-    let mut rhs: Vec<f64> = (0..n).map(|i| i as f64 - 12.0).collect();
-    let sum: f64 = rhs.iter().sum();
-    rhs[0] -= sum;
-
-    let factor = Builder::<f64>::new(Config {
-        seed: 7,
-        backend,
-        ..Config::default()
-    })
-    .build(csr)
-    .expect("factorization should succeed");
-    assert_eq!(factor.n(), n, "pure Laplacian must not be augmented");
-
-    let mut raw = rhs.clone();
-    factor
-        .solve_in_place(&mut raw)
-        .expect("solve_in_place should succeed");
-    let mut recovered = vec![0.0; factor.n()];
-    factor.solve_into(&rhs, &mut recovered).expect("solve_into");
-
-    // Both backends pin the block's last variable, so this index is not
-    // backend-dependent the way the pinned *value* once was.
-    assert_eq!(raw[n - 1], 0.0, "the block's last variable is pinned");
-
-    // Same factor, so this is exact up to rounding.
-    let shift = raw[0] - recovered[0];
-    for (index, (&value, &canonical)) in raw.iter().zip(recovered.iter()).enumerate() {
-        assert!(
-            (value - canonical - shift).abs() < 1e-9,
-            "raw must differ from recovered by one constant; index {index} differs by {}",
-            value - canonical
-        );
-    }
-    assert!(shift.abs() > 1e-9, "the constant must be non-zero");
-
-    let mean = recovered.iter().sum::<f64>() / n as f64;
-    assert!(
-        mean.abs() < 1e-9,
-        "recovered solve must be the zero-mean representative"
-    );
+    let solve = |dirt: f64| {
+        let mut x = vec![1.0, -2.0, 0.5];
+        let mut scratch = vec![dirt; factor.scratch_len()];
+        factor.solve_in_place(&mut x, &mut scratch).expect("solve");
+        x
+    };
+    assert_eq!(solve(3.0), solve(-7.0));
 }
 
 /// Scaling a Laplacian by `t` scales its solution by `1/t`, so a factor that drops

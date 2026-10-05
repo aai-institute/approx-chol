@@ -67,11 +67,7 @@ fn factor_json_roundtrip_preserves_solve(#[case] backend: Backend) {
         &[1.0, -1.0, 2.0, -2.0],
     );
     let grounded = factorize_with(sddm, config).expect("factorization should succeed");
-    assert_eq!(
-        grounded.n(),
-        grounded.original_n() + 1,
-        "SDDM input augments by one"
-    );
+    assert!(grounded.scratch_len() > 0, "SDDM input augments");
     assert_roundtrip("grounded SDDM", &grounded, &[1.0, -1.0]);
 }
 
@@ -87,7 +83,6 @@ fn assert_roundtrip(label: &str, factor: &Factor<f64>, b: &[f64]) {
     let restored: Factor<f64> = serde_json::from_str(&json).expect("deserialize factor");
 
     assert_eq!(restored.n(), factor.n(), "{label}");
-    assert_eq!(restored.original_n(), factor.original_n(), "{label}");
     assert_eq!(restored.n_steps(), factor.n_steps(), "{label}");
     assert_eq!(
         factor.solve(b).expect("solve original"),
@@ -133,13 +128,14 @@ fn a_tampered_block_anchor_deserializes_and_answers_a_different_system() {
 
     let restored: Factor<f64> =
         serde_json::from_value(value).expect("nothing on the wire falsifies an anchor");
-    assert_eq!(restored.n(), factor.n());
-    assert_eq!(restored.original_n(), factor.original_n() - 1);
+    assert_eq!(restored.n(), factor.n() - 1);
 
     // The anchor decides whether the block's last entry is pinned or projected out, so
     // the tampered factor is not merely one variable short.
     let b = [1.0, 2.0, -3.0];
-    let honest = factor.solve(&b).expect("solve the honest factor");
+    let honest = factor
+        .solve(&[1.0, 2.0, -3.0, 0.0])
+        .expect("solve the honest factor");
     let tampered = restored.solve(&b).expect("solve the tampered factor");
     assert_ne!(honest[..tampered.len()], tampered[..]);
 }

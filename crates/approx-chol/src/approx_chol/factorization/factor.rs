@@ -133,39 +133,35 @@ impl<T> Factor<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Errors returned by fallible [`Factor`] solve methods.
 pub enum SolveError {
-    /// Right-hand side longer than the solvable (original) dimension.
-    RhsLengthExceedsFactor {
-        /// Provided RHS length.
-        rhs_len: usize,
-        /// Maximum accepted RHS length.
+    /// Solution buffer of a length other than [`Factor::n`].
+    LengthMismatch {
+        /// Provided length.
+        len: usize,
+        /// [`Factor::n`].
         factor_dim: usize,
     },
-    /// Work buffer smaller than the factor dimension.
-    WorkBufferTooSmall {
-        /// Provided work length.
-        work_len: usize,
-        /// Factor dimension (`Factor::n()`).
-        factor_dim: usize,
+    /// Scratch shorter than [`Factor::scratch_len`].
+    ScratchTooSmall {
+        /// Provided scratch length.
+        scratch_len: usize,
+        /// [`Factor::scratch_len`].
+        needed: usize,
     },
 }
 
 impl fmt::Display for SolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::RhsLengthExceedsFactor {
-                rhs_len,
-                factor_dim,
-            } => write!(
-                f,
-                "rhs length {rhs_len} exceeds original matrix dimension {factor_dim}"
-            ),
-            Self::WorkBufferTooSmall {
-                work_len,
-                factor_dim,
-            } => write!(
-                f,
-                "work buffer too small: got {work_len}, need at least {factor_dim}"
-            ),
+            Self::LengthMismatch { len, factor_dim } => {
+                write!(
+                    f,
+                    "solution length {len} differs from factor dimension {factor_dim}"
+                )
+            }
+            Self::ScratchTooSmall {
+                scratch_len,
+                needed,
+            } => write!(f, "scratch too small: got {scratch_len}, need {needed}"),
         }
     }
 }
@@ -178,15 +174,19 @@ impl<T> Factor<T> {
         &self.fallbacks
     }
 
-    /// Dimension of the original input matrix.
-    pub fn original_n(&self) -> usize {
+    /// Dimension of the factored input; the ground vertex never counts.
+    pub fn n(&self) -> usize {
         self.n - Self::ground_blocks(&self.blocks)
     }
 
-    /// Internal factor dimension, including a possible ground vertex.
-    #[inline]
-    pub fn n(&self) -> usize {
-        self.n
+    /// What [`solve_in_place`](Self::solve_in_place) needs: nothing for connected
+    /// floating input, else room for the ground vertex and the permutation.
+    pub fn scratch_len(&self) -> usize {
+        if self.permutation.is_some() || self.n != self.n() {
+            self.n
+        } else {
+            0
+        }
     }
 
     /// The one place `n` is ever written, so it cannot drift from the blocks it sums.
@@ -235,35 +235,6 @@ where
         self.blocks.iter().map(|block| block.dim().solved()).sum()
     }
 
-    #[inline]
-    fn validate_work(&self, work: &[T]) -> Result<(), SolveError> {
-        if work.len() < self.n() {
-            return Err(SolveError::WorkBufferTooSmall {
-                work_len: work.len(),
-                factor_dim: self.n(),
-            });
-        }
-        Ok(())
-    }
-
-    fn solve_kernel(&self, b: &[T], work: &mut [T]) {
-        work[..b.len()].copy_from_slice(b);
-        work[b.len()..self.n()].fill(T::zero());
-        self.for_each_block(work, Block::solve_canonical);
-    }
-
-    fn for_each_block(&self, values: &mut [T], mut solve: impl FnMut(&Block<T>, &mut [T])) {
-        let values = &mut values[..self.n()];
-        let Some(permutation) = &self.permutation else {
-            Self::solve_blocks(&self.blocks, values, &mut solve);
-            return;
-        };
-        let mut scratch = vec![T::zero(); self.n()];
-        permutation.gather_into(values, &mut scratch);
-        Self::solve_blocks(&self.blocks, &mut scratch, &mut solve);
-        permutation.scatter_from(&scratch, values);
-    }
-
     #[inline(always)]
     fn solve_blocks(
         blocks: &[Block<T>],
@@ -280,30 +251,45 @@ where
 
     /// Solve `M x = b`, returning the zero-mean least-squares solution for singular `M`.
     pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
-        let mut work = vec![T::zero(); self.n()];
-        self.solve_into(b, &mut work)?;
-        work.truncate(self.original_n());
-        Ok(work)
+        let mut x = b.to_vec();
+        let mut scratch = vec![T::zero(); self.scratch_len()];
+        self.solve_in_place(&mut x, &mut scratch)?;
+        Ok(x)
     }
 
-    /// Solve `M x = b` into a caller-provided work buffer.
-    pub fn solve_into(&self, b: &[T], work: &mut [T]) -> Result<(), SolveError> {
-        let original_n = self.original_n();
-        if b.len() > original_n {
-            return Err(SolveError::RhsLengthExceedsFactor {
-                rhs_len: b.len(),
-                factor_dim: original_n,
+    /// `x` holds `b` on entry and the solution on return; floating components come back
+    /// zero-mean. `scratch` is at least [`scratch_len`](Self::scratch_len) long and its
+    /// contents never matter.
+    pub fn solve_in_place(&self, x: &mut [T], scratch: &mut [T]) -> Result<(), SolveError> {
+        if x.len() != self.n() {
+            return Err(SolveError::LengthMismatch {
+                len: x.len(),
+                factor_dim: self.n(),
             });
         }
-        self.validate_work(work)?;
-        self.solve_kernel(b, work);
-        Ok(())
-    }
-
-    /// Solve in place, leaving one variable per block pinned to zero.
-    pub fn solve_in_place(&self, values: &mut [T]) -> Result<(), SolveError> {
-        self.validate_work(values)?;
-        self.for_each_block(values, Block::solve_anchored);
+        let needed = self.scratch_len();
+        if scratch.len() < needed {
+            return Err(SolveError::ScratchTooSmall {
+                scratch_len: scratch.len(),
+                needed,
+            });
+        }
+        let mut solve = Block::solve_canonical;
+        if needed == 0 {
+            Self::solve_blocks(&self.blocks, x, &mut solve);
+            return Ok(());
+        }
+        // The ground slot is whatever scratch held: its anchor overwrites it first.
+        let work = &mut scratch[..needed];
+        match &self.permutation {
+            None => work[..x.len()].copy_from_slice(x),
+            Some(permutation) => permutation.gather_into(x, work),
+        }
+        Self::solve_blocks(&self.blocks, work, &mut solve);
+        match &self.permutation {
+            None => x.copy_from_slice(&work[..x.len()]),
+            Some(permutation) => permutation.scatter_from(work, x),
+        }
         Ok(())
     }
 }

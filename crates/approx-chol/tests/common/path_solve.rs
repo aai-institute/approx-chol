@@ -11,8 +11,9 @@ use num_traits::{Float, FromPrimitive, PrimInt};
 /// this, so none of them owns a copy of it.
 pub fn assert_view_and_factor_match_fixture<'a, T, I, M>(matrix: M, config: Config)
 where
-    M: TryInto<CsrRef<'a, T, I>> + Copy,
+    M: TryInto<CsrRef<'a, T, I>> + TryInto<approx_chol::Sddm<T>> + Copy,
     <M as TryInto<CsrRef<'a, T, I>>>::Error: core::fmt::Debug + Into<Error>,
+    <M as TryInto<approx_chol::Sddm<T>>>::Error: Into<Error>,
     I: PrimInt + 'static,
     T: Float + FromPrimitive + core::fmt::Debug + Send + Sync + 'static,
 {
@@ -38,10 +39,7 @@ where
 {
     let one = T::one();
     let b = [one, -one, one, -one];
-    let mut work = vec![T::zero(); factor.n()];
-    factor
-        .solve_into(&b, &mut work)
-        .expect("solve_into should succeed");
+    let work = factor.solve(&b).expect("solve should succeed");
 
     assert!(work.iter().all(|x| x.is_finite()), "solution not finite");
     let min_signal = T::from_f64(1e-6).expect("1e-6 is representable");

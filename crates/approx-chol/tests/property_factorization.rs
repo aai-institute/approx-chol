@@ -100,20 +100,20 @@ proptest! {
             let config = Config { backend, ..Config::default() };
             let factor = factorize_with(csr, config).expect("factorization should succeed");
 
-            prop_assert_eq!(factor.original_n(), n as usize);
+            prop_assert_eq!(factor.n(), n as usize);
             // A pure Laplacian has no surplus, so it is not augmented.
             prop_assert_eq!(
-                factor.n(), n as usize,
+                factor.scratch_len(), 0,
                 "pure Laplacian should not trigger Gremban augmentation"
             );
 
             let from_alloc = factor.solve(&rhs).expect("solve should succeed");
-            let mut from_into = vec![0.0_f64; factor.n()];
+            let mut from_into = rhs.clone();
             factor
-                .solve_into(&rhs, &mut from_into)
-                .expect("solve_into should succeed");
+                .solve_in_place(&mut from_into, &mut [])
+                .expect("solve_in_place should succeed");
 
-            // `solve` is `solve_into` plus a truncation, so nothing may differ.
+            // `solve` is `solve_in_place` on a copy, so nothing may differ.
             prop_assert_eq!(from_alloc.len(), from_into.len());
             for (a, b) in from_alloc.iter().zip(from_into.iter()) {
                 prop_assert!(a.to_bits() == b.to_bits(), "{backend:?}: {} vs {}", a, b);
@@ -135,13 +135,10 @@ proptest! {
             let config = Config { backend, ..Config::default() };
             let factor = factorize_with(csr, config).expect("factorization");
 
-            prop_assert_eq!(
-                factor.original_n(), n as usize,
-                "original_n must match input dimension"
-            );
+            prop_assert_eq!(factor.n(), n as usize, "n must match input dimension");
             prop_assert!(
-                factor.n() > n as usize,
-                "SDDM should trigger Gremban augmentation (factor.n() must be > n)"
+                factor.scratch_len() > 0,
+                "SDDM should trigger Gremban augmentation"
             );
 
             let x = factor.solve(&rhs_for_dimension(n as usize)).expect("solve");

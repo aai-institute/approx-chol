@@ -1,6 +1,6 @@
 use super::*;
 use crate::approx_chol::factorization::exact::NotFactorable;
-use crate::{DenseFailure, ExactFailure, UnusablePivot};
+use crate::{CsrRef, DenseFailure, ExactFailure, UnusablePivot};
 
 /// Naming the pivot and applying the policy are separate steps, so both are swept.
 #[test]
@@ -79,14 +79,14 @@ fn assert_ac2_augmented_solve_is_finite(indptr: &[u32], indices: &[u32], data: &
         .build(csr)
         .unwrap_or_else(|e| panic!("AC2 factorization failed (seed={seed}): {e}"));
         assert!(
-            factor.n() > b.len(),
+            factor.scratch_len() > b.len(),
             "fixture must reach the Gremban-augmented path"
         );
 
-        let mut work = vec![0.0f64; factor.n()];
-        work[..b.len()].copy_from_slice(b);
+        let mut work = b.to_vec();
+        let mut scratch = vec![0.0f64; factor.scratch_len()];
         factor
-            .solve_in_place(&mut work)
+            .solve_in_place(&mut work, &mut scratch)
             .expect("solve_in_place should succeed");
         assert!(
             work.iter().all(|x| x.is_finite()),
@@ -153,10 +153,9 @@ fn test_ac_marginally_sdd_laplacian_no_capacity_drift() {
             .build(csr)
             .unwrap_or_else(|e| panic!("seed={seed}: AC factorization failed: {e}"));
 
-        let mut work = vec![0.0f32; factor.n()];
-        factor
-            .solve_into(&b, &mut work)
-            .unwrap_or_else(|e| panic!("seed={seed}: solve_into failed: {e}"));
+        let work = factor
+            .solve(&b)
+            .unwrap_or_else(|e| panic!("seed={seed}: solve failed: {e}"));
 
         assert!(
             work.iter().all(|x| x.is_finite()),
