@@ -1,65 +1,181 @@
+mod csr;
+
 use crate::{CsrError, CsrRef, GroundedError, LaplacianError};
 use num_traits::Float;
 
-/// Each vertex's diagonal, summed edge by edge in row order onto a starting value: the
-/// order the exact arm sums it in, so a finite one here is finite there.
-pub(crate) struct Diagonal<T>(Vec<T>);
+/// Each vertex's weighted degree, summed edge by edge in row order.
+struct Degrees<T>(Vec<T>);
 
-impl<T: Float> Diagonal<T> {
-    pub(crate) fn starting_at(start: Vec<T>) -> Self {
-        Self(start)
+impl<T: Float> Degrees<T> {
+    fn zeros(n: usize) -> Self {
+        Self(vec![T::zero(); n])
     }
 
     #[inline]
-    pub(crate) fn add(&mut self, row: usize, col: usize, weight: T) {
+    fn add(&mut self, row: usize, col: usize, weight: T) {
         self.0[row] = self.0[row] + weight;
         self.0[col] = self.0[col] + weight;
     }
+}
 
-    pub(crate) fn first_non_finite(&self) -> Option<usize> {
-        self.0.iter().position(|value| !value.is_finite())
+/// Strictly upper and ascending fold into one bound: a column must exceed the row's last.
+#[inline]
+fn accepts<T: Float>(last: usize, col: usize, weight: T) -> bool {
+    col > last && weight > T::zero() && weight.is_finite()
+}
+
+/// Names what [`accepts`] refused; `last` is the row itself until the row holds an edge.
+#[cold]
+fn rejection(row: usize, last: usize, col: usize) -> LaplacianError {
+    if col <= row {
+        LaplacianError::NotStrictlyUpper { edge: (row, col) }
+    } else if col <= last {
+        LaplacianError::UnsortedNeighbors { row }
+    } else {
+        LaplacianError::InvalidWeight { edge: (row, col) }
+    }
+}
+
+/// A vertex whose weighted degree is not finite.
+struct DegreeOverflow {
+    vertex: usize,
+}
+
+/// Which sum attaching surplus left non-finite.
+enum SumOverflow {
+    Diagonal { vertex: usize },
+    Total,
+}
+
+/// The only way to a [`Laplacian`]: every degree is summed as an edge arrives. Edges are
+/// checked by whoever holds the argument for them, so appending stays inside this module.
+struct UpperRows<T> {
+    row_ptrs: Vec<u32>,
+    neighbors: Vec<u32>,
+    weights: Vec<T>,
+    degrees: Degrees<T>,
+    row: usize,
+}
+
+impl<T: Float> UpperRows<T> {
+    fn with_capacity(n: usize, nnz: usize) -> Self {
+        let mut row_ptrs = Vec::with_capacity(n + 1);
+        row_ptrs.push(0);
+        Self {
+            row_ptrs,
+            neighbors: Vec::with_capacity(nnz),
+            weights: Vec::with_capacity(nnz),
+            degrees: Degrees::zeros(n),
+            row: 0,
+        }
     }
 
-    /// For a caller that learns the surplus only after summing the edges.
-    pub(crate) fn first_non_finite_with(&self, surplus: &[T]) -> Option<usize> {
-        self.0
+    /// The caller's rows are canonical and its weights already proven positive and finite.
+    #[inline]
+    fn push(&mut self, col: u32, weight: T) {
+        self.neighbors.push(col);
+        self.weights.push(weight);
+        self.degrees.add(self.row, col as usize, weight);
+    }
+
+    fn end_row(&mut self) {
+        self.row_ptrs.push(self.neighbors.len() as u32);
+        self.row += 1;
+    }
+
+    /// Checks arrays already shaped as CSR in place, so adopting them copies nothing.
+    fn adopt(
+        row_ptrs: Vec<u32>,
+        neighbors: Vec<u32>,
+        weights: Vec<T>,
+    ) -> Result<Checked<T>, LaplacianError> {
+        let n = row_ptrs.len() - 1;
+        let mut degrees = Degrees::zeros(n);
+        for (row, bounds) in row_ptrs.windows(2).enumerate() {
+            let mut last = row;
+            for position in bounds[0] as usize..bounds[1] as usize {
+                let (col, weight) = (neighbors[position] as usize, weights[position]);
+                if !accepts(last, col, weight) {
+                    return Err(rejection(row, last, col));
+                }
+                last = col;
+                degrees.add(row, col, weight);
+            }
+        }
+        Self {
+            row_ptrs,
+            neighbors,
+            weights,
+            degrees,
+            row: n,
+        }
+        .finish()
+        .map_err(|DegreeOverflow { vertex }| LaplacianError::DegreeOverflow { vertex })
+    }
+
+    fn finish(self) -> Result<Checked<T>, DegreeOverflow> {
+        if let Some(vertex) = self.degrees.0.iter().position(|degree| !degree.is_finite()) {
+            return Err(DegreeOverflow { vertex });
+        }
+        Ok(Checked {
+            laplacian: Laplacian {
+                row_ptrs: self.row_ptrs,
+                neighbors: self.neighbors,
+                weights: self.weights,
+            },
+            degrees: self.degrees,
+        })
+    }
+}
+
+/// A [`Laplacian`] with the degrees it was checked with, so attaching surplus sums no edge twice.
+struct Checked<T> {
+    laplacian: Laplacian<T>,
+    degrees: Degrees<T>,
+}
+
+impl<T: Float> Checked<T> {
+    /// Re-sums the degrees of a Laplacian whose own were dropped after it was checked.
+    fn of(laplacian: Laplacian<T>) -> Self {
+        let mut degrees = Degrees::zeros(laplacian.n());
+        for row in 0..laplacian.n() {
+            let (neighbors, weights) = laplacian.row(row);
+            for (&col, &weight) in neighbors.iter().zip(weights) {
+                degrees.add(row, col as usize, weight);
+            }
+        }
+        Self { laplacian, degrees }
+    }
+
+    fn into_laplacian(self) -> Laplacian<T> {
+        self.laplacian
+    }
+
+    /// `surplus` is one finite, non-negative entry per vertex; the one place the variant is chosen.
+    fn with_surplus(self, surplus: Vec<T>) -> Result<Sddm<T>, SumOverflow> {
+        let total = surplus.iter().fold(T::zero(), |sum, &s| sum + s);
+        if !total.is_finite() {
+            return Err(SumOverflow::Total);
+        }
+        if let Some(vertex) = self
+            .degrees
+            .0
             .iter()
-            .zip(surplus)
-            .position(|(&value, &s)| !(value + s).is_finite())
+            .zip(&surplus)
+            .position(|(&degree, &s)| !(degree + s).is_finite())
+        {
+            return Err(SumOverflow::Diagonal { vertex });
+        }
+        Ok(if surplus.iter().any(|&s| s > T::zero()) {
+            Grounded {
+                laplacian: self.laplacian,
+                surplus,
+            }
+            .into()
+        } else {
+            self.laplacian.into()
+        })
     }
-}
-
-fn validate_surplus<T: Float>(
-    laplacian: &Laplacian<T>,
-    surplus: &[T],
-) -> Result<(), GroundedError> {
-    if surplus.len() != laplacian.n() {
-        return Err(GroundedError::LengthMismatch {
-            expected: laplacian.n(),
-            got: surplus.len(),
-        });
-    }
-    if let Some(vertex) = surplus
-        .iter()
-        .position(|&s| !(s.is_finite() && s >= T::zero()))
-    {
-        return Err(GroundedError::InvalidSurplus { vertex });
-    }
-    if !surplus_sums_finitely(surplus) {
-        return Err(GroundedError::SurplusOverflow);
-    }
-    if let Some(vertex) = laplacian.diagonal(surplus.to_vec()).first_non_finite() {
-        return Err(GroundedError::DiagonalOverflow { vertex });
-    }
-    Ok(())
-}
-
-/// The sum is a ground vertex's degree.
-pub(crate) fn surplus_sums_finitely<T: Float>(surplus: &[T]) -> bool {
-    surplus
-        .iter()
-        .fold(T::zero(), |sum, &s| sum + s)
-        .is_finite()
 }
 
 /// A weighted graph's Laplacian `L(G)`, stored as `G`'s strict upper adjacency: row `i`
@@ -99,61 +215,11 @@ impl<T: Float> Laplacian<T> {
             .ok_or(LaplacianError::TooManyVertices { n })?;
         CsrRef::new(&row_ptrs, &neighbors, &weights, dimension)
             .map_err(LaplacianError::Structure)?;
-        let mut diagonal = Diagonal::starting_at(vec![T::zero(); n]);
-        for (row, bounds) in row_ptrs.windows(2).enumerate() {
-            let (from, to) = (bounds[0] as usize, bounds[1] as usize);
-            let mut previous = row;
-            for position in from..to {
-                let col = neighbors[position] as usize;
-                if col <= row {
-                    return Err(LaplacianError::NotStrictlyUpper { edge: (row, col) });
-                }
-                if position > from && col <= previous {
-                    return Err(LaplacianError::UnsortedNeighbors { row });
-                }
-                previous = col;
-                let weight = weights[position];
-                if !(weight.is_finite() && weight > T::zero()) {
-                    return Err(LaplacianError::InvalidWeight { edge: (row, col) });
-                }
-                diagonal.add(row, col, weight);
-            }
-        }
-        if let Some(vertex) = diagonal.first_non_finite() {
-            return Err(LaplacianError::DegreeOverflow { vertex });
-        }
-        Ok(Self {
-            row_ptrs,
-            neighbors,
-            weights,
-        })
-    }
-}
-
-impl<T: Float> Laplacian<T> {
-    /// `start` plus each vertex's weighted degree.
-    fn diagonal(&self, start: Vec<T>) -> Diagonal<T> {
-        let mut diagonal = Diagonal::starting_at(start);
-        for row in 0..self.n() {
-            let (neighbors, weights) = self.row(row);
-            for (&col, &weight) in neighbors.iter().zip(weights) {
-                diagonal.add(row, col as usize, weight);
-            }
-        }
-        diagonal
+        UpperRows::adopt(row_ptrs, neighbors, weights).map(Checked::into_laplacian)
     }
 }
 
 impl<T> Laplacian<T> {
-    /// Built by a caller that already holds the invariants [`new`](Self::new) checks.
-    pub(crate) fn trusted(row_ptrs: Vec<u32>, neighbors: Vec<u32>, weights: Vec<T>) -> Self {
-        Self {
-            row_ptrs,
-            neighbors,
-            weights,
-        }
-    }
-
     /// Number of vertices.
     pub fn n(&self) -> usize {
         self.row_ptrs.len() - 1
@@ -214,17 +280,24 @@ impl<T: Float> Sddm<T> {
     ///
     /// What [`Grounded::new`] reports, except [`GroundedError::NoSurplus`].
     pub fn with_surplus(laplacian: Laplacian<T>, surplus: Vec<T>) -> Result<Self, GroundedError> {
-        validate_surplus(&laplacian, &surplus)?;
-        Ok(Self::trusted(laplacian, surplus))
-    }
-
-    /// The one place the variant is chosen; the caller has checked every sum.
-    pub(crate) fn trusted(laplacian: Laplacian<T>, surplus: Vec<T>) -> Self {
-        if surplus.iter().any(|&s| s > T::zero()) {
-            Grounded { laplacian, surplus }.into()
-        } else {
-            laplacian.into()
+        if surplus.len() != laplacian.n() {
+            return Err(GroundedError::LengthMismatch {
+                expected: laplacian.n(),
+                got: surplus.len(),
+            });
         }
+        if let Some(vertex) = surplus
+            .iter()
+            .position(|&s| !(s.is_finite() && s >= T::zero()))
+        {
+            return Err(GroundedError::InvalidSurplus { vertex });
+        }
+        Checked::of(laplacian)
+            .with_surplus(surplus)
+            .map_err(|overflow| match overflow {
+                SumOverflow::Diagonal { vertex } => GroundedError::DiagonalOverflow { vertex },
+                SumOverflow::Total => GroundedError::SurplusOverflow,
+            })
     }
 }
 

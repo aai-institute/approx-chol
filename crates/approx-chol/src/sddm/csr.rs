@@ -8,7 +8,7 @@ use crate::{CsrRef, NotSddm, Sddm};
 use num_traits::PrimInt;
 
 /// Canonical input is read in place, in the caller's own index type.
-pub(super) fn from_csr<T: Real, I: PrimInt>(csr: CsrRef<'_, T, I>) -> Result<Sddm<T>, NotSddm> {
+fn from_csr<T: Real, I: PrimInt>(csr: CsrRef<'_, T, I>) -> Result<Sddm<T>, NotSddm> {
     let nnz = csr.col_indices().len();
     if nnz > u32::MAX as usize {
         return Err(NotSddm::TooManyNonzeros { nnz });
@@ -31,4 +31,17 @@ pub(super) fn from_csr<T: Real, I: PrimInt>(csr: CsrRef<'_, T, I>) -> Result<Sdd
         &rewritten.values,
         terms,
     )
+}
+
+/// The CSR path: the mirror check and the surplus-noise judgement live only here.
+impl<'a, T, I> TryFrom<CsrRef<'a, T, I>> for Sddm<T>
+where
+    T: num_traits::Float + Send + Sync + 'static,
+    I: PrimInt,
+{
+    type Error = NotSddm;
+
+    fn try_from(csr: CsrRef<'a, T, I>) -> Result<Self, NotSddm> {
+        from_csr(csr)
+    }
 }

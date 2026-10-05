@@ -1,6 +1,4 @@
-mod sddm;
-
-use crate::{CsrError, IndexKind, NotSddm, Sddm};
+use crate::{CsrError, IndexKind};
 use num_traits::{cast, PrimInt};
 
 fn as_usize<I: PrimInt>(value: I, kind: IndexKind, position: usize) -> Result<usize, CsrError> {
@@ -195,18 +193,5 @@ impl<'a, T, I: faer::Index + PrimInt> TryFrom<&'a faer::sparse::SparseRowMat<I, 
 
     fn try_from(mat: &'a faer::sparse::SparseRowMat<I, T>) -> Result<Self, Self::Error> {
         try_from_faer_view_impl(mat.as_ref())
-    }
-}
-
-/// The CSR path: the mirror check and the surplus-noise judgement live only here.
-impl<'a, T, I> TryFrom<CsrRef<'a, T, I>> for Sddm<T>
-where
-    T: num_traits::Float + Send + Sync + 'static,
-    I: PrimInt,
-{
-    type Error = NotSddm;
-
-    fn try_from(csr: CsrRef<'a, T, I>) -> Result<Self, NotSddm> {
-        sddm::from_csr(csr)
     }
 }

@@ -1,7 +1,7 @@
 use super::canonical::{column, row_ptr};
-use crate::sddm::{surplus_sums_finitely, Diagonal};
+use crate::sddm::{Checked, DegreeOverflow, SumOverflow, UpperRows};
 use crate::types::{count_as_scalar, Real};
-use crate::{Laplacian, NotSddm, Sddm};
+use crate::{NotSddm, Sddm};
 use num_traits::PrimInt;
 
 /// A merge-join only because canonical rows guarantee each entry is claimed once.
@@ -85,11 +85,7 @@ pub(super) fn sddm_of<J: PrimInt, T: Real>(
     // Off-diagonal only; the diagonal joins in `surplus`.
     let mut row_sums = vec![T::zero(); n];
     let upper_estimate = col_indices.len().saturating_sub(n) / 2;
-    let mut degrees = Diagonal::starting_at(vec![T::zero(); n]);
-    let mut upper_ptrs = Vec::with_capacity(n + 1);
-    let mut neighbors = Vec::with_capacity(upper_estimate);
-    let mut weights = Vec::with_capacity(upper_estimate);
-    upper_ptrs.push(0u32);
+    let mut rows = UpperRows::with_capacity(n, upper_estimate);
 
     for row in 0..n {
         let row_end = row_ptr(row_ptrs[row + 1]) as u32;
@@ -121,17 +117,14 @@ pub(super) fn sddm_of<J: PrimInt, T: Real>(
             // the tolerated mirror difference as `col`'s own surplus and ground it.
             row_sums[row] = row_sums[row] + upper;
             row_sums[col] = row_sums[col] + lower;
-            neighbors.push(col as u32);
-            weights.push(-upper);
-            degrees.add(row, col, -upper);
+            rows.push(col as u32, -upper);
         }
-        upper_ptrs.push(neighbors.len() as u32);
+        rows.end_row();
     }
-    if let Some(row) = degrees.first_non_finite() {
-        return Err(NotSddm::NonFiniteRow { row });
-    }
-    let laplacian = Laplacian::trusted(upper_ptrs, neighbors, weights);
-    with_surplus(laplacian, &diagonal, &degrees, row_sums, terms)
+    let checked = rows
+        .finish()
+        .map_err(|DegreeOverflow { vertex }| NotSddm::NonFiniteRow { row: vertex })?;
+    with_surplus(checked, &diagonal, row_sums, terms)
 }
 
 /// How far one row's diagonal exceeds its off-diagonal mass, judged against the noise
@@ -170,9 +163,8 @@ impl<T: Real> RowBalance<T> {
 /// `row_sums` arrives off-diagonal-only and becomes each row's surplus; a Laplacian when
 /// every row balances.
 fn with_surplus<T: Real>(
-    laplacian: Laplacian<T>,
+    checked: Checked<T>,
     diagonal: &[T],
-    degrees: &Diagonal<T>,
     mut row_sums: Vec<T>,
     terms: impl Iterator<Item = u32>,
 ) -> Result<Sddm<T>, NotSddm> {
@@ -189,11 +181,10 @@ fn with_surplus<T: Real>(
             RowBalance::Surplus(excess) => excess,
         };
     }
-    if let Some(row) = degrees.first_non_finite_with(&row_sums) {
-        return Err(NotSddm::NonFiniteRow { row });
-    }
-    if !surplus_sums_finitely(&row_sums) {
-        return Err(NotSddm::SurplusOverflow);
-    }
-    Ok(Sddm::trusted(laplacian, row_sums))
+    checked
+        .with_surplus(row_sums)
+        .map_err(|overflow| match overflow {
+            SumOverflow::Diagonal { vertex } => NotSddm::NonFiniteRow { row: vertex },
+            SumOverflow::Total => NotSddm::SurplusOverflow,
+        })
 }
