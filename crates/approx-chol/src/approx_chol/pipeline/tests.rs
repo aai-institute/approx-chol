@@ -1,47 +1,11 @@
 use super::*;
-use crate::approx_chol::factorization::Fallback;
-use crate::{CsrRef, DenseFailure, ExactFailure, Sddm, UnusablePivot};
-
-/// A block that will not fit falls back whatever the policy says.
-#[test]
-fn only_an_unusable_pivot_answers_to_the_failure_policy() {
-    let unusable = UnusablePivot {
-        vertex: 30,
-        failure: DenseFailure::NonPositivePivot,
-    };
-    let pivot = Fallback::InvalidPivot(unusable);
-    let too_large = Fallback::WillNotFit { dim: 9 };
-    let cases = [
-        (
-            "pivot, falling back",
-            pivot,
-            ExactFailure::FallBackToApproximate,
-            Ok(pivot),
-        ),
-        ("pivot, erroring", pivot, ExactFailure::Error, Err(unusable)),
-        (
-            "will not fit, falling back",
-            too_large,
-            ExactFailure::FallBackToApproximate,
-            Ok(too_large),
-        ),
-        (
-            "will not fit, erroring",
-            too_large,
-            ExactFailure::Error,
-            Ok(too_large),
-        ),
-    ];
-    for (label, fallback, on_failure, expected) in cases {
-        assert_eq!(on_failure.accept(fallback), expected, "{label}");
-    }
-}
+use crate::{CsrRef, Sddm};
 
 fn make_csr<'a>(indptr: &'a [u32], indices: &'a [u32], data: &'a [f64]) -> CsrRef<'a, f64, u32> {
     CsrRef::new(indptr, indices, data, (indptr.len() - 1) as u32).expect("valid CSR test fixture")
 }
 
-fn assert_ac2_augmented_solve_is_finite(indptr: &[u32], indices: &[u32], data: &[f64], b: &[f64]) {
+fn assert_ac2_grounded_solve_is_finite(indptr: &[u32], indices: &[u32], data: &[f64], b: &[f64]) {
     let csr = make_csr(indptr, indices, data);
     assert!(
         matches!(Sddm::try_from(csr), Ok(Sddm::Grounded(_))),
@@ -75,14 +39,14 @@ fn assert_ac2_augmented_solve_is_finite(indptr: &[u32], indices: &[u32], data: &
 }
 
 #[test]
-fn ac2_one_neighbor_star_keeps_augmentation_mass() {
-    assert_ac2_augmented_solve_is_finite(
+fn ac2_one_neighbor_star_keeps_the_ground_s_mass() {
+    assert_ac2_grounded_solve_is_finite(
         &[0, 2, 5, 7],
         &[0, 1, 0, 1, 2, 1, 2],
         &[5.0, -1.0, -1.0, 6.0, -1.0, -1.0, 5.0],
         &[4.0, 4.0, 4.0],
     );
-    assert_ac2_augmented_solve_is_finite(
+    assert_ac2_grounded_solve_is_finite(
         &[0, 2, 4],
         &[0, 1, 0, 1],
         &[10.0, -1.0, -1.0, 10.0],
@@ -93,7 +57,7 @@ fn ac2_one_neighbor_star_keeps_augmentation_mass() {
 #[test]
 fn ac2_extreme_small_weight_star_still_solves_finitely() {
     let eps = 1e-300;
-    assert_ac2_augmented_solve_is_finite(
+    assert_ac2_grounded_solve_is_finite(
         &[0, 2, 5, 7],
         &[0, 1, 0, 1, 2, 1, 2],
         &[2.0, -eps, -eps, 2.0, -eps, -eps, 2.0],

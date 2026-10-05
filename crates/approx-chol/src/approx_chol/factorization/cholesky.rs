@@ -8,7 +8,7 @@ use super::FactorError;
 use crate::types::Real;
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(

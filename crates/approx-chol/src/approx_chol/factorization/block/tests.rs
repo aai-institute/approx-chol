@@ -1,38 +1,11 @@
 use super::*;
-use crate::approx_chol::factorization::approximate::{EliminationSequence, StepHeader};
-use crate::approx_chol::factorization::exact::LowerTriangular;
-
-/// Two steps over three slots, leaving slot 2.
-fn sequence() -> EliminationSequence<f64> {
-    EliminationSequence {
-        steps: vec![
-            StepHeader {
-                vertex: 0,
-                end: 2,
-                pivot_scale: 0.5,
-            },
-            StepHeader {
-                vertex: 1,
-                end: 2,
-                pivot_scale: 1.0,
-            },
-        ],
-        neighbor_indices: vec![1, 2],
-        coefficients: vec![0.2, 0.8],
-        uneliminated: 2,
-    }
-}
+use crate::approx_chol::factorization::cholesky::tests::{approx, exact};
 
 /// Only the ground slot separates the two: the same cholesky covers one input vertex
 /// fewer when its last slot is the ground.
 #[test]
 fn a_grounded_block_has_one_slot_more_than_vertices() {
-    for cholesky in [
-        Cholesky::Approximate(sequence()),
-        Cholesky::Exact(LowerTriangular {
-            values: vec![1.0; 3],
-        }),
-    ] {
+    for cholesky in [approx(), exact()] {
         let grounded = Block::Grounded(cholesky.clone());
         let floating = Block::Floating(cholesky);
         assert_eq!((grounded.vertices(), grounded.slots()), (2, 3));
@@ -43,7 +16,7 @@ fn a_grounded_block_has_one_slot_more_than_vertices() {
 /// A floating block's solution is zero-mean, whatever the factor pinned.
 #[test]
 fn a_floating_solution_is_zero_mean() {
-    let block = Block::Floating(Cholesky::Approximate(sequence()));
+    let block = Block::Floating(approx());
     let mut slots = [1.0, -3.0, 2.5];
     block.solve(&mut slots);
     assert!(slots.iter().sum::<f64>().abs() < 1e-15, "{slots:?}");

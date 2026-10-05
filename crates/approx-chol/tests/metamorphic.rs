@@ -2,13 +2,13 @@
 //! `property_factorization.rs` would accept as consistently wrong in the same way.
 //!
 //! Equivariance is asserted on the exact arm alone, because `BlockFactorizer::factor`
-//! restarts the sampler at `component.first_vertex()` — a global vertex label — so
+//! restarts the sampler at `component.first()` — a global vertex label — so
 //! relabeling redraws every clique edge: the approximate arm's solution moves 8.6-19% and
 //! its residual up to 5.1x across 12 seeds. No tolerance both admits that and rejects a
 //! broken permutation.
 //!
 //! Scaling equivariance lives in `scale_invariance.rs`, over 20 exponents spanning the
-//! augmentation floor.
+//! surplus noise floor.
 
 #[path = "common/laplacian_prop.rs"]
 mod laplacian_prop;

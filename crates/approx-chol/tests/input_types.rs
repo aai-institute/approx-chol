@@ -1,6 +1,4 @@
-use approx_chol::{
-    factorize, CsrError, CsrRef, Grounded, GroundedError, Laplacian, LaplacianError, Sddm,
-};
+use approx_chol::{CsrError, Grounded, GroundedError, Laplacian, LaplacianError, Sddm};
 
 /// The path 0-1-2 with unit weights.
 fn path() -> Laplacian {
@@ -148,20 +146,4 @@ fn with_surplus_is_a_laplacian_exactly_when_every_surplus_is_zero() {
             got: 2
         }
     );
-}
-
-/// The CSR path converts into the same representation, so it factors to the same bits.
-#[test]
-fn a_csr_matrix_and_its_typed_input_factor_identically() {
-    let row_ptrs = [0u32, 2, 5, 7];
-    let col_indices = [0u32, 1, 0, 1, 2, 1, 2];
-    let values = [3.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
-    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 3).expect("valid CSR");
-    let typed: Sddm = Grounded::new(path(), vec![2.0, 0.0, 0.0])
-        .expect("valid surplus")
-        .into();
-
-    let b = [1.0, 2.0, 3.0];
-    let from_csr = factorize(Sddm::try_from(csr).expect("SDDM")).solve(&b);
-    assert_eq!(from_csr, factorize(typed).solve(&b));
 }

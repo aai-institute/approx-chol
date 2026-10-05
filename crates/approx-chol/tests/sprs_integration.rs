@@ -35,7 +35,7 @@ where
 }
 
 /// One factorization per index type the adapter converts. The scalar is
-/// forwarded untouched, so `generic_low_level_api` owns that axis.
+/// forwarded untouched, so `generic_api` owns that axis.
 #[test]
 fn sprs_csr_factorizes_over_index_types() {
     run_case::<f64, u32>();

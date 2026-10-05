@@ -98,8 +98,7 @@ pub fn interleaved_components_strategy() -> impl Strategy<Value = (LaplacianCsr,
 }
 
 /// Components as in [`interleaved_components_strategy`], but only class `0` carries
-/// diagonal surplus, so the ground vertex attaches to that class alone and the
-/// augmented graph stays disconnected.
+/// diagonal surplus, so it alone is grounded and the others float.
 pub fn one_grounded_component_strategy() -> impl Strategy<Value = (LaplacianCsr, usize)> {
     (2usize..=3, 5usize..=9).prop_flat_map(|(parts, n)| {
         let pair_count = n * (n - 1) / 2;

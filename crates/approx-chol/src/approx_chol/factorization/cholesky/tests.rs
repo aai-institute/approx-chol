@@ -2,7 +2,7 @@ use super::*;
 use crate::approx_chol::factorization::approximate::StepHeader;
 
 /// Two steps over three slots, leaving slot 2.
-fn approx() -> Cholesky<f64> {
+pub(in crate::approx_chol::factorization) fn approx() -> Cholesky<f64> {
     Cholesky::Approximate(EliminationSequence {
         steps: vec![
             StepHeader {
@@ -24,7 +24,7 @@ fn approx() -> Cholesky<f64> {
 }
 
 /// Two rows over three slots, so the packed factor holds `2 * 3 / 2`.
-fn exact() -> Cholesky<f64> {
+pub(in crate::approx_chol::factorization) fn exact() -> Cholesky<f64> {
     Cholesky::Exact(LowerTriangular {
         values: vec![1.0; 3],
     })

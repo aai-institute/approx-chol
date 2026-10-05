@@ -184,7 +184,7 @@ impl<T: Float> Checked<T> {
 /// degree is finite.
 ///
 /// The matrix entry at `(i, j)` is `-w`; the diagonal is never stored.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Laplacian<T = f64> {
     row_ptrs: Vec<u32>,
     neighbors: Vec<u32>,
@@ -250,7 +250,7 @@ impl<T> Laplacian<T> {
 
 /// A symmetric diagonally dominant matrix with non-positive off-diagonals: a graph's
 /// Laplacian, alone or with surplus on its diagonal.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Sddm<T = f64> {
     /// Floating in every connected component.
     Laplacian(Laplacian<T>),
@@ -315,7 +315,7 @@ impl<T> From<Grounded<T>> for Sddm<T> {
 
 /// `L(G) + diag(surplus)` with surplus somewhere; a connected component without any
 /// still floats. Every diagonal entry and the surplus total are finite.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Grounded<T = f64> {
     laplacian: Laplacian<T>,
     surplus: Vec<T>,

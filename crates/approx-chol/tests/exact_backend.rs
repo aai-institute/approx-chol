@@ -6,7 +6,7 @@ use grid::grid_laplacian;
 use residual::relative_residual_over;
 
 use approx_chol::{
-    factorize_with, Backend, Config, DenseFailure, ExactFailure, Fallback, Sddm, UnusablePivot,
+    factorize_with, Backend, Config, DenseFailure, ExactFailure, Fallback, UnusablePivot,
 };
 use grid::GridLaplacian;
 
@@ -35,10 +35,9 @@ fn a_claimed_block_solves_exactly_where_elimination_does_not() {
     b[0] = 1.0;
     b[15] = -1.0;
 
-    let exact = factorize_with(Sddm::try_from(csr).expect("valid SDDM"), Config::default())
-        .expect("exact factorization");
+    let exact = factorize_with(lap.sddm(), Config::default()).expect("exact factorization");
     let approximate = factorize_with(
-        Sddm::try_from(csr).expect("valid SDDM"),
+        lap.sddm(),
         Config {
             backend: Backend::Approximate,
             ..Config::default()
@@ -71,14 +70,13 @@ fn a_claimed_block_solves_exactly_where_elimination_does_not() {
 #[test]
 fn a_bound_of_zero_claims_no_block() {
     let lap = grid_laplacian(4, 4);
-    let csr = lap.as_csr().expect("valid CSR");
     let mut b = vec![0.0; 16];
     b[0] = 1.0;
     b[15] = -1.0;
 
     let solve = |backend| {
         factorize_with(
-            Sddm::try_from(csr).expect("valid SDDM"),
+            lap.sddm(),
             Config {
                 backend,
                 ..Config::default()
@@ -107,7 +105,6 @@ fn a_claimed_block_does_not_shift_a_later_blocks_draws() {
     let large = grid_laplacian(7, 7);
     let (small_n, large_n) = (small.n as usize, large.n as usize);
     let lap = side_by_side(&small, &large);
-    let csr = lap.as_csr().expect("valid CSR");
 
     let mut b = vec![0.0; small_n + large_n];
     b[small_n] = 1.0;
@@ -115,7 +112,7 @@ fn a_claimed_block_does_not_shift_a_later_blocks_draws() {
 
     let solve = |backend| {
         factorize_with(
-            Sddm::try_from(csr).expect("valid SDDM"),
+            lap.sddm(),
             Config {
                 backend,
                 ..Config::default()
@@ -149,8 +146,7 @@ fn routing_is_decided_per_block() {
     b[small_n] = 1.0;
     b[small_n + large_n - 1] = -1.0;
 
-    let factor = factorize_with(Sddm::try_from(csr).expect("valid SDDM"), Config::default())
-        .expect("factorization");
+    let factor = factorize_with(lap.sddm(), Config::default()).expect("factorization");
     let x = factor.solve(&b).expect("solve");
 
     let claimed = relative_residual_over(csr, &x, &b, 0..small_n);

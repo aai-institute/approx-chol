@@ -1,4 +1,14 @@
-use approx_chol::{factorize_with, Backend, Config, CsrRef, Sddm};
+#[path = "common/factor.rs"]
+mod factor;
+#[path = "common/grid.rs"]
+mod grid;
+#[path = "common/residual.rs"]
+mod residual;
+use factor::factor;
+use grid::grid_laplacian;
+use residual::relative_residual_over;
+
+use approx_chol::{Backend, Config, CsrRef};
 use num_traits::Float;
 use rstest::rstest;
 
@@ -29,7 +39,7 @@ where
         backend,
         ..Config::default()
     };
-    factorize_with(Sddm::try_from(csr).expect("valid SDDM"), config)
+    factor(config, csr)
         .expect("factorization should succeed")
         .solve(&rhs)
         .expect("solve should succeed")
@@ -45,8 +55,8 @@ where
 ///
 /// Above unit scale it is the solve kernel rather than the sampler that the exponents
 /// bound: before #93 the pivot entries, at `1/w` of the right-hand side's scale, were
-/// annihilated by the residue the uneliminated vertex carried, which `Anchor::recover`
-/// then turned into exact zeros.
+/// annihilated by the residue the uneliminated vertex carried, which the gauge then
+/// turned into exact zeros.
 fn assert_invariant_under_scaling<T>(backend: Backend, exponents: &[i32], tolerance: T)
 where
     T: Float + Send + Sync + std::fmt::LowerExp + 'static,
@@ -87,4 +97,62 @@ fn factorization_is_invariant_under_uniform_scaling(#[case] backend: Backend) {
         &[-30, -20, -12, -8, -7, -6, -5, -2, -1, 7, 10, 12, 20, 30],
         1e-4f32,
     );
+}
+
+/// Scaling a Laplacian by `t` scales its solution by `1/t`, so a factor that drops
+/// the scale is wrong by that whole factor rather than slightly less accurate.
+fn assert_scaled_path_solves<T>(exponent: i32, backend: Backend)
+where
+    T: Float + Send + Sync + 'static + std::fmt::LowerExp,
+{
+    let ten = T::from(10.0).expect("10 is representable");
+    let scale = ten.powi(exponent);
+    let mut lap = grid_laplacian(1, 4);
+    let values: Vec<T> = lap
+        .values
+        .drain(..)
+        .map(|value| T::from(value).expect("fixture weight is representable") * scale)
+        .collect();
+    let csr = CsrRef::new(&lap.row_ptrs, &lap.col_indices, &values, lap.n)
+        .expect("scaled path is valid CSR");
+    let one = T::one();
+    let b = [one, T::zero(), T::zero(), -one];
+
+    let factor = factor(
+        Config {
+            backend,
+            ..Config::default()
+        },
+        csr,
+    )
+    .expect("factorization should succeed");
+    let x = factor.solve(&b).expect("solve");
+
+    let relative = relative_residual_over(csr, &x, &b, 0..b.len());
+    assert!(
+        relative < T::from(1e-6).expect("tolerance is representable"),
+        "relative residual {relative:e}"
+    );
+}
+
+/// The two scalars bottom out at different exponents, so each gets the range its
+/// solution is still representable in.
+#[rstest]
+#[case::approximate(Backend::Approximate)]
+#[case::exact(Backend::default())]
+fn a_scaled_f64_laplacian_solves_wherever_its_solution_is_representable(
+    #[case] backend: Backend,
+    #[values(0, -5, -15, -100, -250)] exponent: i32,
+) {
+    assert_scaled_path_solves::<f64>(exponent, backend);
+}
+
+#[rstest]
+#[case::approximate(Backend::Approximate)]
+#[case::exact(Backend::default())]
+fn a_scaled_f32_laplacian_solves_wherever_its_solution_is_representable(
+    #[case] backend: Backend,
+    #[values(0, -3, -10, -25)] exponent: i32,
+) {
+    assert_scaled_path_solves::<f32>(exponent, backend);
 }

@@ -96,3 +96,6 @@ impl Backend {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

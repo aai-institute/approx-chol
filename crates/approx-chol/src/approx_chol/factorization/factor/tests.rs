@@ -25,17 +25,10 @@ fn permutation_of_identity_is_none() {
 }
 
 mod layout {
-    use crate::approx_chol::factorization::exact::LowerTriangular;
-    use crate::approx_chol::factorization::{block::Block, cholesky::Cholesky};
+    use crate::approx_chol::factorization::block::Block;
+    use crate::approx_chol::factorization::cholesky::tests::exact as cholesky;
 
     use super::*;
-
-    /// Two rows, so three slots: valid but arbitrary, since nothing here reads it.
-    fn cholesky() -> Cholesky<f64> {
-        Cholesky::Exact(LowerTriangular {
-            values: vec![1.0; 3],
-        })
-    }
 
     pub(super) fn of_blocks(blocks: Vec<Block<f64>>) -> Factor<f64> {
         Factor::of(None, blocks, Vec::new())

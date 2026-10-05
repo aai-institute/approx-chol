@@ -1,5 +1,7 @@
 #![cfg(feature = "serde")]
 
+#[path = "common/factor.rs"]
+mod factor;
 #[path = "common/laplacian_prop.rs"]
 mod laplacian_prop;
 #[path = "common/path.rs"]
@@ -8,14 +10,14 @@ mod path;
 use approx_chol::{
     factorize_with, Backend, Config, CsrRef, ExactFailure, Factor, Sddm, FACTOR_FORMAT_VERSION,
 };
+use factor::factor;
 use rstest::rstest;
 
 fn path_factor_with(config: Config) -> Factor<f64> {
     let row_ptrs: Vec<u32> = path::ROW_PTRS.iter().map(|&v| v as u32).collect();
     let col_indices: Vec<u32> = path::COL_INDICES.iter().map(|&v| v as u32).collect();
     let csr = CsrRef::new(&row_ptrs, &col_indices, &path::VALUES, path::N).expect("valid csr");
-    factorize_with(Sddm::try_from(csr).expect("valid SDDM"), config)
-        .expect("factorization should succeed")
+    factor(config, csr).expect("factorization should succeed")
 }
 
 fn path_factor() -> Factor<f64> {
@@ -29,14 +31,11 @@ fn complete_factor(n: usize) -> Factor<f64> {
         .collect();
     let (row_ptrs, columns, values, dim) = laplacian_prop::build_laplacian_csr(n, &weights);
     let csr = CsrRef::new(&row_ptrs, &columns, &values, dim).expect("valid CSR");
-    factorize_with(
-        Sddm::try_from(csr).expect("valid SDDM"),
-        Config {
-            backend: Backend::Approximate,
-            ..Config::default()
-        },
-    )
-    .expect("factorization should succeed")
+    let config = Config {
+        backend: Backend::Approximate,
+        ..Config::default()
+    };
+    factor(config, csr).expect("factorization should succeed")
 }
 
 #[rstest]
@@ -47,8 +46,7 @@ fn factor_json_roundtrip_preserves_solve(#[case] backend: Backend) {
     let values = [1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0];
     let split = CsrRef::new(&row_ptrs, &columns, &values, 4).expect("valid CSR");
 
-    // Strictly dominant, so ingestion grounds it and the restored factor has to
-    // recover the augmentation from its blocks' anchors.
+    // Strictly dominant, so the restored factor has to recover the ground from its block's variant.
     let (sddm_row_ptrs, sddm_columns) = ([0u32, 2, 4], [0u32, 1, 0, 1]);
     let sddm_values = [2.0, -1.0, -1.0, 2.0];
     let sddm = CsrRef::new(&sddm_row_ptrs, &sddm_columns, &sddm_values, 2).expect("valid CSR");
@@ -64,8 +62,7 @@ fn factor_json_roundtrip_preserves_solve(#[case] backend: Backend) {
     );
     assert_roundtrip(
         "two components",
-        &factorize_with(Sddm::try_from(split).expect("valid SDDM"), config)
-            .expect("factorization should succeed"),
+        &factor(config, split).expect("factorization should succeed"),
         &[1.0, -1.0, 2.0, -2.0],
     );
     let sddm = Sddm::try_from(sddm).expect("valid SDDM");
@@ -134,7 +131,7 @@ fn a_tampered_block_grounding_deserializes_and_answers_a_different_system() {
     block.insert("Grounded".to_owned(), cholesky);
 
     let restored: Factor<f64> =
-        serde_json::from_value(value).expect("nothing on the wire falsifies an anchor");
+        serde_json::from_value(value).expect("nothing on the wire falsifies a block's variant");
     assert_eq!(restored.n(), factor.n() - 1);
 
     // The grounding decides whether the block's last slot is a vertex or the ground, so
