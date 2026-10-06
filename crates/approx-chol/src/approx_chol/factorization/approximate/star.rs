@@ -150,14 +150,10 @@ impl<T: Real, C: EdgeCount> StarBuilder<T, C> {
         graph: &mut AdjListGraph<C, T>,
         v: usize,
         ordering: &mut DynamicOrdering,
-    ) {
-        self.dedup.collect(graph, v);
+    ) -> &Star<T, C> {
+        graph.live_neighbors(v, &mut self.dedup.raw);
         self.dedup.dedup(&mut self.star, self.split);
         apply_removed_copies(self.star.removed_copies(), ordering);
-    }
-
-    /// Entries are empty when the pivot had no live neighbor left.
-    pub(super) fn star(&self) -> &Star<T, C> {
         &self.star
     }
 }
@@ -227,10 +223,6 @@ impl<T: Real, C: EdgeCount> DedupWorkspace<T, C> {
             raw: Vec::new(),
             scratch: DedupScratch::new(n),
         }
-    }
-
-    fn collect(&mut self, graph: &AdjListGraph<C, T>, v: usize) {
-        graph.live_neighbors(v, &mut self.raw);
     }
 
     /// The two paths differ only in how they find the duplicates; neither caps, so

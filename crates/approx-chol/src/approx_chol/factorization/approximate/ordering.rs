@@ -17,7 +17,6 @@ pub(super) struct DynamicOrdering {
     elems: Vec<PQElem>, // indexed by vertex id
     lists: Vec<u32>,    // bucket heads, indexed by key_map(degree)
     min_list: usize,    // lower bound on minimum non-empty bucket
-    n_items: usize,
     bucket_base: usize,
 }
 
@@ -39,9 +38,6 @@ fn key_map(degree: usize, bucket_base: usize) -> usize {
 
 impl DynamicOrdering {
     pub(super) fn next_vertex(&mut self) -> Option<usize> {
-        if self.n_items == 0 {
-            return None;
-        }
         while self.min_list < self.lists.len() && self.lists[self.min_list] == SENTINEL {
             let previous = self.min_list;
             self.min_list += 1;
@@ -63,7 +59,6 @@ impl DynamicOrdering {
             self.elems[next as usize].prev = SENTINEL;
         }
         self.elems[i].key = u32::MAX; // mark as removed
-        self.n_items -= 1;
         Some(i)
     }
 
@@ -178,7 +173,6 @@ impl DynamicOrdering {
         let mut lists = vec![SENTINEL; n_lists];
         let mut elems = Vec::with_capacity(n);
         let mut min_list = n_lists;
-        let mut n_items = 0;
 
         for (v, &deg) in degrees.iter().enumerate() {
             let key = deg as u32;
@@ -196,7 +190,6 @@ impl DynamicOrdering {
             if list < min_list {
                 min_list = list;
             }
-            n_items += 1;
         }
 
         if min_list == n_lists {
@@ -207,7 +200,6 @@ impl DynamicOrdering {
             elems,
             lists,
             min_list,
-            n_items,
             bucket_base,
         }
     }
