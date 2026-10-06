@@ -1,12 +1,7 @@
 examine_globs = ["crates/approx-chol/src/**/*.rs"]
-# Thin conversion adapters to sprs/faer's own sparse types, not the kernel this
-# gate targets; static discovery lists them regardless of which features are
-# active, so left unexcluded they'd "survive" trivially against a default build
-# that never compiles them at all.
+# Thin sprs/faer conversion adapters, outside the kernel this gate targets.
 exclude_re = [
     "validate_square_dims",
-    "try_from_sprs_view_impl",
-    "try_from_faer_view_impl",
     "sprs::",
     "faer::",
 ]

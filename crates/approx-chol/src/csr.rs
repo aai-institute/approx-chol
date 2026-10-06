@@ -286,32 +286,16 @@ fn validate_square_dims(rows: usize, cols: usize) -> Result<u32, Error> {
 }
 
 #[cfg(feature = "sprs")]
-fn try_from_sprs_view_impl<'a, T, I: sprs::SpIndex + PrimInt>(
-    mat: sprs::CsMatViewI<'a, T, I>,
-) -> Result<CsrRef<'a, T, I>, Error> {
-    if !mat.is_csr() {
-        return Err(Error::InvalidCsr(CsrError::ExpectedCsrMatrixGotCsc));
-    }
-    let n = validate_square_dims(mat.rows(), mat.cols())?;
-    let (indptr, indices, data) = mat.into_raw_storage();
-    CsrRef::new(indptr, indices, data, n)
-}
-
-#[cfg(feature = "faer")]
-fn try_from_faer_view_impl<'a, T, I: faer::Index + PrimInt>(
-    mat: faer::sparse::SparseRowMatRef<'a, I, T>,
-) -> Result<CsrRef<'a, T, I>, Error> {
-    let n = validate_square_dims(mat.nrows(), mat.ncols())?;
-    let symbolic = mat.symbolic();
-    CsrRef::new(symbolic.row_ptr(), symbolic.col_idx(), mat.val(), n)
-}
-
-#[cfg(feature = "sprs")]
 impl<'a, T, I: sprs::SpIndex + PrimInt> TryFrom<sprs::CsMatViewI<'a, T, I>> for CsrRef<'a, T, I> {
     type Error = Error;
 
     fn try_from(mat: sprs::CsMatViewI<'a, T, I>) -> Result<Self, Self::Error> {
-        try_from_sprs_view_impl(mat)
+        if !mat.is_csr() {
+            return Err(Error::InvalidCsr(CsrError::ExpectedCsrMatrixGotCsc));
+        }
+        let n = validate_square_dims(mat.rows(), mat.cols())?;
+        let (indptr, indices, data) = mat.into_raw_storage();
+        CsrRef::new(indptr, indices, data, n)
     }
 }
 
@@ -320,7 +304,7 @@ impl<'a, T, I: sprs::SpIndex + PrimInt> TryFrom<&'a sprs::CsMatI<T, I>> for CsrR
     type Error = Error;
 
     fn try_from(mat: &'a sprs::CsMatI<T, I>) -> Result<Self, Self::Error> {
-        try_from_sprs_view_impl(mat.view())
+        Self::try_from(mat.view())
     }
 }
 
@@ -331,7 +315,9 @@ impl<'a, T, I: faer::Index + PrimInt> TryFrom<faer::sparse::SparseRowMatRef<'a, 
     type Error = Error;
 
     fn try_from(mat: faer::sparse::SparseRowMatRef<'a, I, T>) -> Result<Self, Self::Error> {
-        try_from_faer_view_impl(mat)
+        let n = validate_square_dims(mat.nrows(), mat.ncols())?;
+        let symbolic = mat.symbolic();
+        CsrRef::new(symbolic.row_ptr(), symbolic.col_idx(), mat.val(), n)
     }
 }
 
@@ -342,7 +328,7 @@ impl<'a, T, I: faer::Index + PrimInt> TryFrom<&'a faer::sparse::SparseRowMat<I, 
     type Error = Error;
 
     fn try_from(mat: &'a faer::sparse::SparseRowMat<I, T>) -> Result<Self, Self::Error> {
-        try_from_faer_view_impl(mat.as_ref())
+        Self::try_from(mat.as_ref())
     }
 }
 

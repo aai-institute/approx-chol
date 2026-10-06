@@ -35,20 +35,15 @@ jobs:
         run: pixi run -e ci cargo fmt --all -- --check
       - name: cargo clippy
         run: pixi run -e ci cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      # approx-chol's 3 optional features (serde, sprs, faer) are a full powerset of 8;
-      # small enough to enumerate directly rather than add cargo-hack, which isn't on
-      # conda-forge (#55). default = [] makes "default" and "no-default-features" the
-      # same build, so the empty-set iteration below replaces both rather than paying
-      # for that combination twice.
-      - name: cargo clippy (approx-chol feature powerset)
+      # All-features is clippied above; hand-enumerated since cargo-hack isn't on conda-forge (#55).
+      - name: cargo clippy (approx-chol feature subsets)
         run: |
-          for features in "" serde sprs faer serde,sprs serde,faer sprs,faer serde,sprs,faer; do
+          for features in "" serde sprs faer serde,sprs serde,faer sprs,faer; do
             echo "::group::features=[$features]"
             pixi run -e ci cargo clippy -p approx-chol --all-targets --no-default-features --features "$features" --locked -- -D warnings
             echo "::endgroup::"
           done
-      # cargo test only ever runs under --all-features (in coverage below); a feature
-      # gated away by default there would silently vanish rather than fail.
+      # Coverage tests only --all-features, which hides breakage with features off.
       - name: cargo test (default features)
         run: pixi run -e ci cargo test --workspace --locked
       - name: coverage (cargo test + pytest, instrumented)
@@ -64,8 +59,7 @@ jobs:
       - name: cargo check (workspace, all features, at the declared MSRV)
         run: cargo check --workspace --all-features --locked
 
-  # Baseline is the last published release, so a breaking change stays red until the
-  # version bump that reflects it lands with it.
+  # Baselined on the last release, so a breaking change stays red until its version bump lands.
   semver:
     name: Public API (semver)
     runs-on: ubuntu-latest
@@ -95,9 +89,7 @@ jobs:
       - name: cargo deny
         run: pixi run -e gates deny
 
-  # Runs on PRs: this crate's behaviour is precision- and platform-dependent
-  # (`near_zero` differs by four orders between f32 and f64), so a Linux-only verdict
-  # would let that class land on main unattributed.
+  # On PRs: behaviour is precision- and platform-dependent, so a Linux-only verdict lets that onto main.
   platform:
     name: Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -125,9 +117,7 @@ jobs:
       - name: pytest
         run: pixi run -e platform test
 
-  # Packaging, not correctness: postponing this to merge (import-matrix and
-  # floor need it too, and a skipped `needs` skips them along with it) keeps
-  # every PR to Rust-only checks plus platform's cross-OS test matrix.
+  # Packaging, not correctness, so deferred to merge; import-matrix and floor skip with it via `needs`.
   wheel:
     name: abi3 wheel (${{ matrix.os }})
     if: github.event_name == 'push'
@@ -147,9 +137,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/abi3-wheel
 
-  # Free-threaded wheels are version-specific, so the interpreter that builds
-  # one is also the only interpreter that can run it. The action therefore
-  # tests in place and this job feeds no import matrix.
+  # A free-threaded wheel runs only on the interpreter that built it, so the action tests in place.
   wheel-freethreaded:
     name: free-threaded wheel (${{ matrix.os }})
     if: github.event_name == 'push'
@@ -206,8 +194,7 @@ jobs:
           python -m pip install dist/*.whl
           pytest tests/ -v
 
-  # `lowest-direct` is what makes `numpy>=1.24`/`scipy>=1.12` a tested claim
-  # rather than a guess; py3.9 at the highest resolution is import-matrix's job.
+  # `lowest-direct` makes the numpy/scipy floors a tested claim rather than a guess.
   floor:
     name: Floor (py3.9, lowest-direct deps)
     needs: wheel

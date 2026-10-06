@@ -28,15 +28,11 @@ runs:
     - name: name the interpreter once
       shell: bash
       run: echo "PY=${{ steps.interpreter.outputs.python-path }}" >> "$GITHUB_ENV"
-    # Free-threaded CPython has no stable ABI before PEP 803 lands in 3.15, so
-    # this deliberately produces one version-specific wheel per interpreter
-    # instead of the single abi3 wheel the other jobs build.
+    # No free-threaded stable ABI before PEP 803 (3.15), so this wheel is version-specific.
     - name: build wheel
       shell: bash
       run: pixi run -e wheel maturin build --locked --out dist --interpreter "$PY"
-    # Derived from the requested version rather than a `cp3??t` wildcard, so a wheel
-    # built against a different free-threaded interpreter than the job claims fails
-    # here instead of shipping mislabelled.
+    # Derived from the input, not a `cp3??t` wildcard, so a wheel for the wrong interpreter fails here.
     - name: assert the wheel is tagged free-threaded
       shell: bash
       run: |
@@ -47,10 +43,7 @@ runs:
             *) echo "::error::expected a $want wheel, got $(basename "$whl")"; exit 1 ;;
           esac
         done
-    # Before the suite: this needs only the wheel, and it is the claim the job
-    # exists to prove. The RuntimeWarning filter is what catches a missing
-    # `gil_used = false` — under PYTHON_GIL=0 CPython warns rather than flipping the
-    # GIL back on, so the assert alone would pass.
+    # The RuntimeWarning filter catches a missing `gil_used = false`: under PYTHON_GIL=0 CPython only warns.
     - name: assert the import leaves the GIL disabled
       shell: bash
       run: |
@@ -62,8 +55,7 @@ runs:
         assert not sys._is_gil_enabled(), "importing approx_chol re-enabled the GIL"
         print("GIL still disabled after import")
         '
-    # numpy and scipy arrive as the wheel's own declared dependencies, so the
-    # floors in pyproject.toml are what gets exercised.
+    # numpy/scipy come from the wheel's declared dependencies, so pyproject.toml's ranges are exercised.
     - name: run the suite
       shell: bash
       run: |
