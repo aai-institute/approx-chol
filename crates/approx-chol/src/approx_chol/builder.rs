@@ -42,8 +42,8 @@ where
     }
 
     /// Multiplicity fixes layout and split together, so each arm is one algorithm end to end.
-    fn build_validated<I: PrimInt>(&self, csr: CsrRef<'_, T, I>) -> Result<Factor<T>, Error> {
-        let sddm = Sddm::try_from(csr)?;
+    fn build_validated<I: PrimInt>(&self, sddm: CsrRef<'_, T, I>) -> Result<Factor<T>, Error> {
+        let sddm = Sddm::try_from(sddm)?;
         let n = sddm.n();
         let ingestion = Ingestion::of(sddm);
         match self.config.split_factor() {

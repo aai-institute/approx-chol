@@ -2,15 +2,11 @@ use super::*;
 use crate::graph::Single;
 use crate::CsrRef;
 
-fn ingest(row_ptrs: &[u32], col_indices: &[u32], values: &[f64]) -> Ingestion<f64> {
+/// Blocks are what the layout says they are, in its own numbering.
+fn blocks_of(row_ptrs: &[u32], col_indices: &[u32], values: &[f64]) -> Option<Vec<Vec<u32>>> {
     let n = (row_ptrs.len() - 1) as u32;
     let csr = CsrRef::new(row_ptrs, col_indices, values, n).expect("valid CSR");
     Ingestion::of(Sddm::try_from(csr).expect("valid SDDM"))
-}
-
-/// Blocks are what the layout says they are, in its own numbering.
-fn blocks_of(row_ptrs: &[u32], col_indices: &[u32], values: &[f64]) -> Option<Vec<Vec<u32>>> {
-    ingest(row_ptrs, col_indices, values)
         .layout
         .map(|layout| layout.blocks().map(<[u32]>::to_vec).collect::<Vec<_>>())
 }
@@ -54,11 +50,11 @@ fn blocks_are_ordered_by_their_lowest_vertex() {
 /// The layout precedes any graph, so this pins that a block's graph has the vertices it promised.
 #[test]
 fn the_built_graph_agrees_with_the_layout() {
-    let mut ingestion = ingest(
-        &[0, 2, 4, 6, 8],
-        &[0, 1, 0, 1, 2, 3, 2, 3],
-        &[5.0, -1.0, -1.0, 4.0, 1.0, -1.0, -1.0, 1.0],
-    );
+    let row_ptrs = [0u32, 2, 4, 6, 8];
+    let col_indices = [0u32, 1, 0, 1, 2, 3, 2, 3];
+    let values = [5.0, -1.0, -1.0, 4.0, 1.0, -1.0, -1.0, 1.0];
+    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4).expect("valid CSR");
+    let mut ingestion = Ingestion::of(Sddm::try_from(csr).expect("valid SDDM"));
     assert_eq!(ingestion.n(), 5);
 
     let layout = ingestion.take_layout().expect("two blocks");

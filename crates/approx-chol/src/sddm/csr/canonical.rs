@@ -47,9 +47,11 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
     }
 
     /// Counted before coalescing: [`rewrite`]'s own additions land in the row sum too.
-    pub(super) fn terms(&self, row: usize) -> u32 {
-        let row_ptrs = self.input.row_ptrs();
-        (index(row_ptrs[row + 1]) - index(row_ptrs[row])) as u32
+    pub(super) fn terms(&self) -> impl Iterator<Item = u32> + '_ {
+        self.input
+            .row_ptrs()
+            .windows(2)
+            .map(|bounds| (index(bounds[1]) - index(bounds[0])) as u32)
     }
 }
 

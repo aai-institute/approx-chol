@@ -5,14 +5,13 @@ mod sets;
 use super::adjacency::{add_edge_pair, AdjListGraph, Edge};
 use super::blocks::{BlockLayout, BlockVertices};
 use super::multiplicity::EdgeCount;
-use crate::sddm::{Grounded, Sddm};
+use crate::sddm::Sddm;
 use crate::types::Real;
 use sets::DisjointSets;
 
 /// Kept whole so a block routed to the dense arm never gets an adjacency list built.
 pub(crate) struct Ingestion<T> {
     sddm: Sddm<T>,
-    /// One per real vertex, and the ground vertex's last when grounded.
     diagonal: Vec<T>,
     /// Each vertex's edge count, its ground edge included.
     degrees: Vec<u32>,
@@ -20,14 +19,12 @@ pub(crate) struct Ingestion<T> {
 }
 
 impl<T: Real> Ingestion<T> {
-    /// One walk sums the diagonal, counts edges and unions the components.
     pub(crate) fn of(sddm: Sddm<T>) -> Self {
         let m = sddm.n();
         let mut sets = DisjointSets::new(m);
         // Room for the ground's count.
         let mut degrees = Vec::with_capacity(m + 1);
         degrees.resize(m, 0u32);
-        // The row whose root is resolved, and that root.
         let mut resolved = (u32::MAX, 0u32);
         let diagonal = sddm.diagonal(|row, col| {
             let row = row as u32;
@@ -60,21 +57,17 @@ impl<T: Real> Ingestion<T> {
         }
     }
 
-    /// The ground vertex outranks every real one, so it can only be a block's last.
-    fn ground_of(&self, block: &BlockVertices<'_>) -> Option<&Grounded<T>> {
-        match &self.sddm {
-            Sddm::Grounded(grounded) if block.last() == self.sddm.n() as u32 => Some(grounded),
-            _ => None,
-        }
-    }
-
     /// Vertices the factorization covers, the ground one included.
     pub(crate) fn n(&self) -> usize {
         self.diagonal.len()
     }
 
+    /// The ground vertex outranks every real one, so it can only be a block's last.
     pub(crate) fn carries_ground(&self, block: &BlockVertices<'_>) -> bool {
-        self.ground_of(block).is_some()
+        match &self.sddm {
+            Sddm::Laplacian(_) => false,
+            Sddm::Grounded(grounded) => block.last() == grounded.surplus().len() as u32,
+        }
     }
 
     /// `None` when connected. Taken because its order becomes the factor's permutation.
@@ -87,19 +80,14 @@ impl<T: Real> Ingestion<T> {
         self.diagonal[block.global(local)]
     }
 
-    /// The off-diagonal entries `-w` above the block row's diagonal.
+    /// Upper, not lower: mirrors may differ by ulps and the approximate route symmetrizes on this one.
     pub(crate) fn upper_row(
         &self,
         block: &BlockVertices<'_>,
         local: usize,
         mut entry: impl FnMut(usize, T),
     ) {
-        let row = block.global(local);
-        let laplacian = self.sddm.laplacian();
-        if row >= laplacian.n() {
-            return;
-        }
-        let (neighbors, weights) = laplacian.row(row);
+        let (neighbors, weights) = self.sddm.laplacian().row(block.global(local));
         for (&col, &weight) in neighbors.iter().zip(weights) {
             entry(block.local(col as usize), -weight);
         }
@@ -144,11 +132,14 @@ impl<T: Real> Ingestion<T> {
             }
         }
 
-        if let Some(grounded) = self.ground_of(block) {
-            let ground = n - 1;
-            for (row, &surplus) in grounded.surplus().iter().enumerate() {
-                if surplus > T::zero() {
-                    add_edge_pair(&mut adj, block.local(row), ground, surplus);
+        if let Sddm::Grounded(grounded) = &self.sddm {
+            if self.carries_ground(block) {
+                let ground = n - 1;
+                for (row, &surplus) in grounded.surplus().iter().enumerate() {
+                    // The balance verdict left every surplus non-negative.
+                    if surplus > T::zero() {
+                        add_edge_pair(&mut adj, block.local(row), ground, surplus);
+                    }
                 }
             }
         }

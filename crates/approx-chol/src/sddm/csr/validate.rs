@@ -1,8 +1,8 @@
 use super::canonical::Canonical;
 use super::index;
-use crate::sddm::{floor, Sddm, UpperRows};
+use crate::sddm::{add_edge, total, Grounded, Laplacian, Sddm};
 use crate::types::{count_as_scalar, Real};
-use crate::Error;
+use crate::{CsrError, Error};
 use num_traits::PrimInt;
 
 /// A merge-join only because [`Canonical`] guarantees each entry is claimed once.
@@ -59,6 +59,11 @@ impl<'a, T: Real, I: PrimInt> Mirrors<'a, T, I> {
     }
 }
 
+/// An admission threshold, measured to keep uniformly scaled solves at unit-scale quality (#163).
+fn floor<T: Real>() -> T {
+    T::min_positive_value() / T::epsilon()
+}
+
 fn approximately_equal<T: Real>(left: T, right: T) -> bool {
     if left == right {
         return true;
@@ -79,7 +84,11 @@ pub(super) fn sddm_of<T: Real, I: PrimInt>(
     let mut diagonal = vec![T::zero(); n];
     // Off-diagonal only; the diagonal joins in the balance verdict.
     let mut row_sums = vec![T::zero(); n];
-    let mut rows = UpperRows::with_capacity(n, col_indices.len().saturating_sub(n) / 2);
+    let mut degrees = vec![T::zero(); n];
+    let mut upper_ptrs = Vec::with_capacity(n + 1);
+    upper_ptrs.push(0);
+    let mut neighbors = Vec::with_capacity(col_indices.len() / 2);
+    let mut weights = Vec::with_capacity(col_indices.len() / 2);
 
     for row in 0..n {
         let row_end = index(row_ptrs[row + 1]) as u32;
@@ -113,18 +122,63 @@ pub(super) fn sddm_of<T: Real, I: PrimInt>(
             // Each row sums its own value; charging `upper` to both grounds `col` on mirror noise.
             row_sums[row] = row_sums[row] + upper;
             row_sums[col] = row_sums[col] + lower;
-            rows.push(col as u32, -upper);
+            add_edge(&mut degrees, row, col, -upper);
+            neighbors.push(col as u32);
+            weights.push(-upper);
         }
-        rows.end_row();
+        upper_ptrs.push(neighbors.len() as u32);
     }
-    rows.finish(row_sums, |row, sum| {
-        match RowBalance::of(diagonal[row], sum, canonical.terms(row)) {
-            RowBalance::NonFinite => Err(Error::NonFiniteRow { row }),
-            RowBalance::Deficit => Err(Error::NotDiagonallyDominant { row }),
-            RowBalance::Negligible => Ok(T::zero()),
-            RowBalance::Surplus(excess) => Ok(excess),
+
+    // Judged in row order, so the first bad row is the one reported.
+    for (row, ((sum, &d), (&degree, terms))) in row_sums
+        .iter_mut()
+        .zip(&diagonal)
+        .zip(degrees.iter().zip(canonical.terms()))
+        .enumerate()
+    {
+        *sum = match RowBalance::of(d, *sum, terms) {
+            RowBalance::NonFinite => return Err(Error::NonFiniteRow { row }),
+            RowBalance::Deficit => return Err(Error::NotDiagonallyDominant { row }),
+            RowBalance::Negligible => T::zero(),
+            RowBalance::Surplus(excess) => excess,
+        };
+        // Ingestion's diagonal: the degree it sums, not the stored entry.
+        let entry = degree + *sum;
+        if !entry.is_finite() {
+            return Err(Error::NonFiniteRow { row });
         }
-    })
+        // After the balance verdict, so a row that is not dominant at any scale says so.
+        if entry > T::zero() && entry < floor() {
+            return Err(Error::MagnitudeTooSmall { entry: (row, row) });
+        }
+    }
+    let ground = total(&row_sums);
+    if !ground.is_finite() {
+        return Err(Error::SurplusOverflow);
+    }
+    if ground > T::zero() && ground < floor() {
+        return Err(Error::SurplusTooSmall);
+    }
+    let laplacian = Laplacian {
+        row_ptrs: upper_ptrs,
+        neighbors,
+        weights,
+    };
+    // Every surplus is zero or positive, so a positive total means some vertex is grounded.
+    if ground == T::zero() {
+        return Ok(Sddm::Laplacian(laplacian));
+    }
+    if n >= u32::MAX as usize {
+        return Err(Error::InvalidCsr(
+            CsrError::MatrixDimensionExceedsIndexType {
+                n: n.saturating_add(1),
+            },
+        ));
+    }
+    Ok(Sddm::Grounded(Grounded {
+        laplacian,
+        surplus: row_sums,
+    }))
 }
 
 /// A row's diagonal surplus, judged against the noise its own scale and term count can carry.

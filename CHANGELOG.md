@@ -20,7 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Factor::solve_in_place` returns the zero-mean solution on floating blocks. ([#135])
 - A persisted block is grounded or floating with no stored dimension, and
   `FACTOR_FORMAT_VERSION` is `0x41430005`. ([#148])
-- A CSR with `u32::MAX` rows is rejected without diagonal surplus too. ([#145])
 
 ### Added
 
