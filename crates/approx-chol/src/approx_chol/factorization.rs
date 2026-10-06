@@ -3,21 +3,21 @@
 #[cfg(any(feature = "serde", test))]
 use core::fmt;
 
-pub(crate) mod approximate;
+pub(super) mod approximate;
 mod block;
 mod cholesky;
-pub(crate) mod exact;
+pub(super) mod exact;
 mod factor;
 mod gauge;
 mod permutation;
 
 pub use approximate::CliqueTreeSampler;
-pub(crate) use block::Block;
-pub(crate) use cholesky::Cholesky;
+pub(super) use block::Block;
+pub(super) use cholesky::Cholesky;
 #[cfg(feature = "serde")]
 pub use factor::FACTOR_FORMAT_VERSION;
 pub use factor::{Factor, SolveError};
-pub(crate) use permutation::Permutation;
+pub(super) use permutation::Permutation;
 
 /// Raised at the serde boundary, before a corrupted persisted factor can reach the solve.
 #[cfg(any(feature = "serde", test))]

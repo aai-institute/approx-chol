@@ -193,7 +193,7 @@ impl<T> Factor<T>
 where
     T: num_traits::Float + Send + Sync + 'static,
 {
-    pub(crate) fn from_blocks(
+    pub(in crate::approx_chol) fn from_blocks(
         permutation: Option<Permutation>,
         blocks: Vec<Block<T>>,
         fallbacks: Vec<Fallback>,
