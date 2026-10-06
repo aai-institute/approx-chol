@@ -131,17 +131,21 @@ fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
     }
 }
 
-/// The ground slot is internal, so a right-hand side reaching it is one entry too long.
+/// The ground slot is internal, so `n + 1` is too long even though scratch holds `n + 1` slots.
 #[test]
-fn every_solve_rejects_a_length_other_than_n() {
+fn every_solve_checks_its_buffer_lengths() {
     let (rp, ci, vals, n) = diagonal_sddm();
     let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid diagonal SDDM");
     let factor = Builder::new(Config::default())
         .build(csr)
         .expect("factorization should succeed");
-    assert_eq!(factor.n(), n as usize);
+    let needed = factor.scratch_len();
+    assert!(
+        needed > factor.n(),
+        "a grounded factor solves through scratch"
+    );
 
-    let mut scratch = vec![0.0; factor.scratch_len()];
+    let mut scratch = vec![0.0; needed];
     for len in [factor.n() - 1, factor.n() + 1] {
         let mut x = vec![0.0; len];
         for err in [
@@ -159,22 +163,10 @@ fn every_solve_rejects_a_length_other_than_n() {
             );
         }
     }
-}
-
-#[test]
-fn solve_in_place_rejects_short_scratch() {
-    let (rp, ci, vals, n) = diagonal_sddm();
-    let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid diagonal SDDM");
-    let factor = Builder::new(Config::default())
-        .build(csr)
-        .expect("factorization should succeed");
-    let needed = factor.scratch_len();
-    assert!(needed > 0, "a grounded factor solves through scratch");
 
     let mut x = vec![1.0; factor.n()];
-    let mut scratch = vec![0.0; needed - 1];
     assert_eq!(
-        factor.solve_in_place(&mut x, &mut scratch),
+        factor.solve_in_place(&mut x, &mut scratch[..needed - 1]),
         Err(SolveError::ScratchTooSmall {
             scratch_len: needed - 1,
             needed
@@ -184,21 +176,20 @@ fn solve_in_place_rejects_short_scratch() {
 
 /// NaN reaches the result if any slot, a ground included, is read before it is written.
 #[rstest]
-#[case::approximate(Backend::Approximate)]
-#[case::exact(Backend::default())]
+#[case::grounded(&[0, 2, 4], &[0, 1, 0, 1], &[2.0, -1.0, -1.0, 2.0])]
+#[case::interleaved_components(
+    &[0, 2, 4, 6, 8],
+    &[0, 2, 1, 3, 0, 2, 1, 3],
+    &[1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0]
+)]
 fn dirty_scratch_does_not_change_the_solution(
-    #[case] backend: Backend,
-    #[values(true, false)] grounded: bool,
+    #[case] row_ptrs: &[u32],
+    #[case] columns: &[u32],
+    #[case] values: &[f64],
+    #[values(Backend::Approximate, Backend::default())] backend: Backend,
 ) {
-    let (row_ptrs, columns, values) = ([0u32, 2, 4], [0u32, 1, 0, 1], [2.0, -1.0, -1.0, 2.0]);
-    let grid = grid_laplacian(5, 5);
-    let csr = if grounded {
-        CsrRef::new(&row_ptrs, &columns, &values, 2)
-    } else {
-        grid.as_csr()
-    }
-    .expect("valid CSR");
-    let n = csr.n();
+    let n = row_ptrs.len() - 1;
+    let csr = CsrRef::new(row_ptrs, columns, values, n as u32).expect("valid CSR");
     let factor = Builder::<f64>::new(Config {
         seed: 7,
         backend,
@@ -206,13 +197,7 @@ fn dirty_scratch_does_not_change_the_solution(
     })
     .build(csr)
     .expect("factorization should succeed");
-    assert_eq!(factor.n(), n, "ground slots stay internal");
-    if grounded {
-        assert!(
-            factor.scratch_len() > factor.n(),
-            "scratch holds the ground slot"
-        );
-    }
+    assert!(factor.scratch_len() > 0, "the solve goes through scratch");
 
     let rhs: Vec<f64> = (0..n).map(|i| i as f64 - 1.5).collect();
     let mut in_place = rhs.clone();

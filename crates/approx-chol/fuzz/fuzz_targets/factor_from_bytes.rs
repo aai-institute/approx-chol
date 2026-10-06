@@ -24,9 +24,9 @@ fuzz_target!(|data: &[u8]| {
     };
     // Deserializing is not the claim under test — a payload every structural check admits
     // and that then panics in `solve` is.
-    let Ok(solved) = factor.solve(&vec![1.0; factor.n()]) else {
-        return;
-    };
+    let solved = factor
+        .solve(&vec![1.0; factor.n()])
+        .expect("a right-hand side of length n is accepted");
     // NaN scratch, ground slots included, reaches the solution if any slot is read before written.
     let mut values = vec![1.0; factor.n()];
     let mut scratch = vec![f64::NAN; factor.scratch_len()];

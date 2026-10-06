@@ -77,16 +77,14 @@ proptest! {
     }
 
     // -----------------------------------------------------------------------
-    // Factor dimensions, and the two solve entry points agreeing — both read off
-    // one factorization of the connected-Laplacian strategy.
+    // Factor dimensions of the connected-Laplacian strategy.
     // -----------------------------------------------------------------------
 
     #[test]
-    fn solve_matches_solve_in_place_with_dirty_scratch(
+    fn laplacian_factor_has_input_dimension_and_no_ground(
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         prop_assume!(is_connected(&row_ptrs, &col_indices, n));
-        let rhs = rhs_for_dimension(n as usize);
         for backend in backends() {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
                 .expect("generated CSR must be valid");
@@ -99,18 +97,6 @@ proptest! {
                 !is_grounded(&factor),
                 "pure Laplacian should not trigger Gremban augmentation"
             );
-
-            let from_alloc = factor.solve(&rhs).expect("solve should succeed");
-            let mut from_into = rhs.clone();
-            let mut scratch = vec![f64::NAN; factor.scratch_len()];
-            factor
-                .solve_in_place(&mut from_into, &mut scratch)
-                .expect("solve_in_place should succeed");
-
-            prop_assert_eq!(from_alloc.len(), from_into.len());
-            for (a, b) in from_alloc.iter().zip(from_into.iter()) {
-                prop_assert!(a.to_bits() == b.to_bits(), "{backend:?}: {} vs {}", a, b);
-            }
         }
     }
 
