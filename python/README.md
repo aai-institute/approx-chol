@@ -33,6 +33,16 @@ b = np.array([1.0, -1.0, 1.0, -1.0])
 x = factor.solve(b)
 ```
 
+### Preconditioning
+
+`Factor` is a scipy `LinearOperator`, so it passes directly as `M` to iterative solvers:
+
+```python
+from scipy.sparse.linalg import cg
+
+x, info = cg(laplacian, b, M=factor)
+```
+
 ### Configuration
 
 ```python
