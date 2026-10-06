@@ -10,18 +10,25 @@ use super::multiplicity::EdgeCount;
 use crate::types::Real;
 use crate::{CsrRef, Error};
 use canonical::Canonical;
+use num_traits::PrimInt;
 use validate::{validate, Grounding, Ingested};
 
+/// A validated [`CsrRef`] index is non-negative and at most `nnz`, so it is a `usize`.
+#[inline(always)]
+fn index<I: PrimInt>(value: I) -> usize {
+    value.to_usize().expect("a validated CSR index is a usize")
+}
+
 /// Kept whole so a block routed to the dense arm never gets an adjacency list built.
-pub(crate) struct Ingestion<'a, T> {
-    canonical: Canonical<'a, T>,
+pub(crate) struct Ingestion<'a, T, I> {
+    canonical: Canonical<'a, T, I>,
     diagonal: Vec<T>,
     grounding: Grounding<T>,
     layout: Option<BlockLayout>,
 }
 
-impl<'a, T: Real> Ingestion<'a, T> {
-    pub(crate) fn of(csr: CsrRef<'a, T, u32>) -> Result<Self, Error> {
+impl<'a, T: Real, I: PrimInt> Ingestion<'a, T, I> {
+    pub(crate) fn of(csr: CsrRef<'a, T, I>) -> Result<Self, Error> {
         let canonical = Canonical::of(csr)?;
         let Ingested {
             diagonal,
@@ -71,10 +78,11 @@ impl<'a, T: Real> Ingestion<'a, T> {
         if row + 1 >= row_ptrs.len() {
             return;
         }
-        let (from, to) = (row_ptrs[row] as usize, row_ptrs[row + 1] as usize);
+        let (from, to) = (index(row_ptrs[row]), index(row_ptrs[row + 1]));
         for (&col, &value) in col_indices[from..to].iter().zip(&values[from..to]) {
-            if col as usize > row && value != T::zero() {
-                entry(block.local(col as usize), value);
+            let col = index(col);
+            if col > row && value != T::zero() {
+                entry(block.local(col), value);
             }
         }
     }
@@ -97,7 +105,7 @@ impl<'a, T: Real> Ingestion<'a, T> {
         for local in 0..n {
             let global = block.global(local);
             let degree = if global < rows {
-                (row_ptrs[global + 1] - row_ptrs[global]) as usize
+                index(row_ptrs[global + 1]) - index(row_ptrs[global])
             } else {
                 ground_degree
             };
@@ -111,10 +119,11 @@ impl<'a, T: Real> Ingestion<'a, T> {
                     if local >= rows {
                         continue;
                     }
-                    let (from, to) = (row_ptrs[local] as usize, row_ptrs[local + 1] as usize);
+                    let (from, to) = (index(row_ptrs[local]), index(row_ptrs[local + 1]));
                     for (&col, &value) in col_indices[from..to].iter().zip(&values[from..to]) {
-                        if col as usize > local && value != T::zero() {
-                            add_edge_pair(&mut adj, local, col as usize, -value);
+                        let col = index(col);
+                        if col > local && value != T::zero() {
+                            add_edge_pair(&mut adj, local, col, -value);
                         }
                     }
                 }
@@ -127,10 +136,11 @@ impl<'a, T: Real> Ingestion<'a, T> {
                     if global >= rows {
                         continue;
                     }
-                    let (from, to) = (row_ptrs[global] as usize, row_ptrs[global + 1] as usize);
+                    let (from, to) = (index(row_ptrs[global]), index(row_ptrs[global + 1]));
                     for (&col, &value) in col_indices[from..to].iter().zip(&values[from..to]) {
-                        if col as usize > global && value != T::zero() {
-                            add_edge_pair(&mut adj, local, local_of[col as usize] as usize, -value);
+                        let col = index(col);
+                        if col > global && value != T::zero() {
+                            add_edge_pair(&mut adj, local, local_of[col] as usize, -value);
                         }
                     }
                 }
