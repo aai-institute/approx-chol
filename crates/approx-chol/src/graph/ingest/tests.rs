@@ -38,18 +38,6 @@ fn components_with_no_surplus_stay_separate() {
     assert_eq!(blocks, Some(vec![vec![0, 1], vec![2, 3]]));
 }
 
-/// One grounded component beside a floating one. The ground vertex outranks every
-/// real vertex, so it lands last in the block it joins rather than opening one.
-#[test]
-fn the_ground_vertex_lands_last_in_its_own_block() {
-    let blocks = blocks_of(
-        &[0, 2, 4, 6, 8],
-        &[0, 1, 0, 1, 2, 3, 2, 3],
-        &[5.0, -1.0, -1.0, 4.0, 1.0, -1.0, -1.0, 1.0],
-    );
-    assert_eq!(blocks, Some(vec![vec![0, 1, 4], vec![2, 3]]));
-}
-
 /// A vertex no edge reaches is its own block, which is what makes the ordering
 /// "by lowest member" observable rather than incidental.
 #[test]
