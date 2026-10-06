@@ -17,7 +17,7 @@ impl Anchor {
                 let Some((pinned, rest)) = values.split_last_mut() else {
                     return;
                 };
-                *pinned = -rest.iter().fold(T::zero(), |sum, &value| sum + value);
+                *pinned = -compensated_sum(rest);
             }
             // Nothing absorbs the null space, so project it out; an inconsistent rhs gets least squares.
             Self::Floating => project_zero_mean(values),
@@ -39,8 +39,24 @@ impl Anchor {
 
 fn project_zero_mean<T: Real>(values: &mut [T]) {
     let count = count_as_scalar::<T, _>(values.len());
-    let mean = values.iter().fold(T::zero(), |sum, &value| sum + value) / count;
+    let mean = compensated_sum(values) / count;
     for value in values.iter_mut() {
         *value = *value - mean;
     }
 }
+
+/// A plain fold drops the small terms of a large block; branchless TwoSum is cheaper than Neumaier.
+fn compensated_sum<T: Real>(values: &[T]) -> T {
+    let mut sum = T::zero();
+    let mut compensation = T::zero();
+    for &value in values {
+        let next = sum + value;
+        let back = next - sum;
+        compensation = compensation + ((sum - (next - back)) + (value - back));
+        sum = next;
+    }
+    sum + compensation
+}
+
+#[cfg(test)]
+mod tests;

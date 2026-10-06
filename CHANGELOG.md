@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `Factor::solve` sums each block's right-hand side with compensation, so a large constant
+  offset no longer swamps the answer. ([#147])
+
 ## [0.6.0] - 2026-08-24
 
 ### Changed (breaking)
@@ -195,3 +202,4 @@ for graph Laplacians in Rust with Python bindings.
 [#109]: https://github.com/aai-institute/approx-chol/issues/109
 [#118]: https://github.com/aai-institute/approx-chol/issues/118
 [#131]: https://github.com/aai-institute/approx-chol/pull/131
+[#147]: https://github.com/aai-institute/approx-chol/issues/147
