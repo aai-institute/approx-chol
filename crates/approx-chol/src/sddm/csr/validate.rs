@@ -57,6 +57,39 @@ impl<'a, T: Real, I: PrimInt> Mirrors<'a, T, I> {
         self.cursors[row] = cursor;
         Ok(found)
     }
+
+    /// The row's diagonal; `entry` sees each nonzero above it as `(col, upper, lower)`, its mirror within tolerance.
+    #[inline]
+    fn row(
+        &mut self,
+        row: usize,
+        mut entry: impl FnMut(usize, T, T) -> Result<(), Error>,
+    ) -> Result<T, Error> {
+        // Claimed like any mirror: claiming diagonals up front would skip those below.
+        let diagonal = self.claim(row, row)?;
+        let row_end = index(self.row_ptrs[row + 1]) as u32;
+        let mut cursor = self.cursors[row];
+        while cursor < row_end {
+            let col = index(self.col_indices[cursor as usize]);
+            let upper = self.values[cursor as usize];
+            if !upper.is_finite() {
+                return Err(Error::NonFiniteValue {
+                    position: cursor as usize,
+                });
+            }
+            cursor += 1;
+            // Duplicates can coalesce to exactly zero, which contributes no edge.
+            if upper == T::zero() {
+                continue;
+            }
+            let lower = self.claim(col, row)?;
+            if !approximately_equal(upper, lower) {
+                return Err(Error::Asymmetric { edge: (row, col) });
+            }
+            entry(col, upper, lower)?;
+        }
+        Ok(diagonal)
+    }
 }
 
 /// An admission threshold, measured to keep uniformly scaled solves at unit-scale quality (#163).
@@ -88,28 +121,7 @@ pub(super) fn edges<T: Real, I: PrimInt>(
     let mut weights = Vec::with_capacity(col_indices.len() / 2);
 
     for row in 0..n {
-        let row_end = index(row_ptrs[row + 1]) as u32;
-        // Claimed like any mirror: claiming diagonals up front would skip those below.
-        sums.diagonal[row] = mirrors.claim(row, row)?;
-        let mut cursor = mirrors.cursors[row];
-
-        while cursor < row_end {
-            let col = index(col_indices[cursor as usize]);
-            let upper = values[cursor as usize];
-            if !upper.is_finite() {
-                return Err(Error::NonFiniteValue {
-                    position: cursor as usize,
-                });
-            }
-            cursor += 1;
-            // Duplicates can coalesce to exactly zero, which contributes no edge.
-            if upper == T::zero() {
-                continue;
-            }
-            let lower = mirrors.claim(col, row)?;
-            if !approximately_equal(upper, lower) {
-                return Err(Error::Asymmetric { edge: (row, col) });
-            }
+        sums.diagonal[row] = mirrors.row(row, |col, upper, lower| {
             if upper > T::zero() {
                 return Err(Error::PositiveOffDiagonal { edge: (row, col) });
             }
@@ -119,7 +131,8 @@ pub(super) fn edges<T: Real, I: PrimInt>(
             sums.add(row, col, upper, lower);
             neighbors.push(col as u32);
             weights.push(-upper);
-        }
+            Ok(())
+        })?;
         upper_ptrs.push(neighbors.len() as u32);
     }
     let laplacian = Laplacian {
