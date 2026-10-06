@@ -1,4 +1,5 @@
-mod common;
+#[path = "../tests/common/grid.rs"]
+mod grid;
 
 use std::hint::black_box;
 use std::time::Duration;
@@ -7,8 +8,7 @@ use approx_chol::low_level::Builder;
 use approx_chol::{Config, Factor};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
-use common::grid::GridLaplacian;
-use common::grid_laplacian;
+use grid::{grid_laplacian, GridLaplacian};
 
 /// `k` interleaved paths: the only shape with a non-identity block permutation.
 fn interleaved_paths(n: usize, k: usize) -> GridLaplacian {

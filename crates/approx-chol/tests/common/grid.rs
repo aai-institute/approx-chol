@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use approx_chol::{CsrRef, Error};
 
 /// Grid Laplacian stored as owned arrays (CsrRef-compatible).

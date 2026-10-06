@@ -1,10 +1,9 @@
-#[path = "common/grid.rs"]
-mod grid;
 #[path = "common/grounded.rs"]
 mod grounded;
+#[path = "common/path.rs"]
+mod path;
 #[path = "common/residual.rs"]
 mod residual;
-use grid::grid_laplacian;
 use grounded::is_grounded;
 use residual::relative_residual_over;
 
@@ -216,13 +215,11 @@ where
 {
     let ten = T::from(10.0).expect("10 is representable");
     let scale = ten.powi(exponent);
-    let mut lap = grid_laplacian(1, 4);
-    let values: Vec<T> = lap
-        .values
-        .drain(..)
-        .map(|value| T::from(value).expect("fixture weight is representable") * scale)
+    let values: Vec<T> = path::VALUES
+        .iter()
+        .map(|&value| T::from(value).expect("fixture weight is representable") * scale)
         .collect();
-    let csr = CsrRef::new(&lap.row_ptrs, &lap.col_indices, &values, lap.n)
+    let csr = CsrRef::new(&path::ROW_PTRS, &path::COL_INDICES, &values, path::N)
         .expect("scaled path is valid CSR");
     let one = T::one();
     let b = [one, T::zero(), T::zero(), -one];

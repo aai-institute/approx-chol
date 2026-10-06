@@ -287,8 +287,8 @@ mod tests {
 
     #[test]
     fn owned_csr_borrows_into_csr_ref() {
-        let (row_ptrs, col_indices, values) = crate::test_utils::path_laplacian_4();
-        let owned = CsrRef::new(&row_ptrs, &col_indices, &values, 4)
+        let (row_ptrs, col_indices, values, n) = crate::test_utils::path_laplacian_4();
+        let owned = CsrRef::new(&row_ptrs, &col_indices, &values, n)
             .expect("valid csr")
             .to_owned_u32()
             .expect("to owned");

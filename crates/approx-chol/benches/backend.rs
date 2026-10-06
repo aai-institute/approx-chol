@@ -1,16 +1,17 @@
-mod common;
+#[path = "../tests/common/grid.rs"]
+mod grid;
 
 use approx_chol::low_level::Builder;
 use approx_chol::{Backend, Config, ExactFailure, Factor};
-use common::grid::GridLaplacian;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use grid::GridLaplacian;
 
 type Shape = (&'static str, fn(usize) -> GridLaplacian);
 
 /// Dense cost depends only on `n` and the sampler's on fill, so these bracket the crossover.
 fn shapes() -> [Shape; 2] {
     [
-        ("path", |n| common::grid_laplacian(1, n)),
+        ("path", |n| grid::grid_laplacian(1, n)),
         ("complete", complete_laplacian),
     ]
 }
