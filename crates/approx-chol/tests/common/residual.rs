@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use approx_chol::CsrRef;
 use num_traits::Float;
 
