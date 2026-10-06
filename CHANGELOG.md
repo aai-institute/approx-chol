@@ -33,8 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Solves sum each block's right-hand side with compensation. ([#147])
 - A nonzero entry below `MIN_POSITIVE / EPSILON` in magnitude is rejected with `Error::MagnitudeTooSmall`. ([#163])
-- A diagonal surplus total that overflows or falls below `MIN_POSITIVE / EPSILON` is rejected with
-  `Error::SurplusOverflow` or `Error::SurplusTooSmall`. ([#145])
+- A diagonal surplus total that overflows is rejected with `Error::SurplusOverflow`, and a diagonal
+  surplus below `MIN_POSITIVE / EPSILON` with `Error::MagnitudeTooSmall`. ([#145])
 
 ## [0.6.0] - 2026-08-24
 

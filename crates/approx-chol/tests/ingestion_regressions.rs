@@ -115,13 +115,13 @@ fn out_of_class_input_is_rejected_at_its_reported_position() {
             &[max, max],
             Error::SurplusOverflow,
         ),
-        // Every stored entry clears the floor; the ground's diagonal does not.
+        // Every stored entry clears the floor; row 0's ground edge does not, whatever row 2 adds.
         (
-            "surplus total below the floor",
-            &[0, 2, 4],
-            &[0, 1, 0, 1],
-            &[1e-290 + 1e-300, -1e-290, -1e-290, 1e-290],
-            Error::SurplusTooSmall,
+            "surplus below the floor",
+            &[0, 2, 4, 5],
+            &[0, 1, 0, 1, 2],
+            &[1e-290 + 1e-300, -1e-290, -1e-290, 1e-290, 1.0],
+            Error::MagnitudeTooSmall { entry: (0, 0) },
         ),
         // Rows are judged in order, so the first row's floor outranks the second's deficit.
         (

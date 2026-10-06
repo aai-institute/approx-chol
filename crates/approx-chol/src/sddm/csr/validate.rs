@@ -140,24 +140,21 @@ pub(super) fn sddm_of<T: Real, I: PrimInt>(
             RowBalance::NonFinite => return Err(Error::NonFiniteRow { row }),
             RowBalance::Deficit => return Err(Error::NotDiagonallyDominant { row }),
             RowBalance::Negligible => T::zero(),
+            // The ground edge's weight; after the verdict, so a row not dominant at any scale says so.
+            RowBalance::Surplus(excess) if excess < floor() => {
+                return Err(Error::MagnitudeTooSmall { entry: (row, row) })
+            }
             RowBalance::Surplus(excess) => excess,
         };
         // Ingestion's diagonal: the degree it sums, not the stored entry.
-        let entry = degree + *sum;
-        if !entry.is_finite() {
+        if !(degree + *sum).is_finite() {
             return Err(Error::NonFiniteRow { row });
         }
-        // After the balance verdict, so a row that is not dominant at any scale says so.
-        if entry > T::zero() && entry < floor() {
-            return Err(Error::MagnitudeTooSmall { entry: (row, row) });
-        }
     }
+    // The ground's degree, which the approximate arm sums when it eliminates the ground.
     let ground = total(&row_sums);
     if !ground.is_finite() {
         return Err(Error::SurplusOverflow);
-    }
-    if ground > T::zero() && ground < floor() {
-        return Err(Error::SurplusTooSmall);
     }
     let laplacian = Laplacian {
         row_ptrs: upper_ptrs,

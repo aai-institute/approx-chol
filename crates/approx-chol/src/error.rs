@@ -37,7 +37,7 @@ pub enum Error {
         row: usize,
     },
 
-    /// A nonzero entry's magnitude is below `MIN_POSITIVE / EPSILON`, the measured floor of accurate solves.
+    /// A nonzero entry's magnitude, or a diagonal's surplus, is below `MIN_POSITIVE / EPSILON`, the measured floor of accurate solves.
     MagnitudeTooSmall {
         /// `(row, column)` of the entry, the column canonical with `row <= column`.
         entry: (usize, usize),
@@ -45,9 +45,6 @@ pub enum Error {
 
     /// The diagonal surplus total is not finite.
     SurplusOverflow,
-
-    /// The diagonal surplus total is positive but below `MIN_POSITIVE / EPSILON`.
-    SurplusTooSmall,
 
     /// Exact dense Cholesky hit an unusable pivot and [`ExactFailure::Error`](crate::ExactFailure::Error) asked for that to fail.
     DenseFactorizationFailed(UnusablePivot),
@@ -289,15 +286,15 @@ impl fmt::Display for Error {
                 f,
                 "row {row} sums to a non-finite diagonal or off-diagonal magnitude; approx-chol requires SDDM/Laplacian input"
             ),
+            Error::MagnitudeTooSmall { entry: (row, col) } if row == col => write!(
+                f,
+                "row {row}'s diagonal surplus is below MIN_POSITIVE / EPSILON of the scalar type; scale the matrix up"
+            ),
             Error::MagnitudeTooSmall { entry: (row, col) } => write!(
                 f,
                 "entry ({row}, {col}) is below MIN_POSITIVE / EPSILON of the scalar type; scale the matrix up"
             ),
             Error::SurplusOverflow => write!(f, "diagonal surplus total is not finite"),
-            Error::SurplusTooSmall => write!(
-                f,
-                "diagonal surplus total is below MIN_POSITIVE / EPSILON of the scalar type; scale the matrix up"
-            ),
             Error::DenseFactorizationFailed(pivot) => {
                 write!(f, "exact dense Cholesky failed at {pivot}")
             }
