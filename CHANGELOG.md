@@ -25,8 +25,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `Factor::scratch_len`. ([#146])
-- `Laplacian`, `Grounded` and `Sddm` input types, with `LaplacianError` and `GroundedError`. ([#133])
-- `TryFrom<CsrRef> for Sddm`, failing with `NotSddm`. ([#145])
 
 ### Changed
 
@@ -36,7 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Solves sum each block's right-hand side with compensation. ([#147])
 - A nonzero entry below `MIN_POSITIVE / EPSILON` in magnitude is rejected with `Error::MagnitudeTooSmall`. ([#163])
-- A diagonal surplus total that overflows is rejected with `Error::SurplusOverflow`. ([#145])
+- A diagonal surplus total that overflows or falls below `MIN_POSITIVE / EPSILON` is rejected with
+  `Error::SurplusOverflow` or `Error::SurplusTooSmall`. ([#145])
 
 ## [0.6.0] - 2026-08-24
 
@@ -228,7 +227,6 @@ for graph Laplacians in Rust with Python bindings.
 [#109]: https://github.com/aai-institute/approx-chol/issues/109
 [#118]: https://github.com/aai-institute/approx-chol/issues/118
 [#131]: https://github.com/aai-institute/approx-chol/pull/131
-[#133]: https://github.com/aai-institute/approx-chol/issues/133
 [#135]: https://github.com/aai-institute/approx-chol/issues/135
 [#140]: https://github.com/aai-institute/approx-chol/issues/140
 [#145]: https://github.com/aai-institute/approx-chol/issues/145

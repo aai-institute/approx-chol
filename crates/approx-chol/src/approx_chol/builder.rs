@@ -2,8 +2,9 @@ use super::config::{Backend, Config, Route};
 use super::factorization::{approximate, exact, Block, Cholesky, Permutation};
 use crate::graph::{BlockVertices, EdgeCount, Ingestion, Multi, Single};
 use crate::sampling::CdfSampler;
+use crate::sddm::Sddm;
 use crate::types::Real;
-use crate::{CsrError, CsrRef, Error, Factor, Fallback, Sddm};
+use crate::{CsrError, CsrRef, Error, Factor, Fallback};
 use num_traits::PrimInt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 

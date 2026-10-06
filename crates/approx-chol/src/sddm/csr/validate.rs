@@ -1,9 +1,9 @@
 use super::canonical::Canonical;
 use super::index;
-use crate::sddm::{floor, DegreeOverflow, DiagonalFault, UpperRows};
-use crate::types::count_as_scalar;
-use crate::{NotSddm, Sddm};
-use num_traits::{Float, PrimInt};
+use crate::sddm::{floor, Sddm, UpperRows};
+use crate::types::{count_as_scalar, Real};
+use crate::Error;
+use num_traits::PrimInt;
 
 /// A merge-join only because [`Canonical`] guarantees each entry is claimed once.
 struct Mirrors<'a, T, I> {
@@ -13,7 +13,7 @@ struct Mirrors<'a, T, I> {
     cursors: Vec<u32>,
 }
 
-impl<'a, T: Float, I: PrimInt> Mirrors<'a, T, I> {
+impl<'a, T: Real, I: PrimInt> Mirrors<'a, T, I> {
     fn new(row_ptrs: &'a [I], col_indices: &'a [I], values: &'a [T]) -> Self {
         let cursors = row_ptrs[..row_ptrs.len() - 1]
             .iter()
@@ -28,7 +28,7 @@ impl<'a, T: Float, I: PrimInt> Mirrors<'a, T, I> {
     }
 
     /// Stored zeros count as absent.
-    fn claim(&mut self, row: usize, col: usize) -> Result<T, NotSddm> {
+    fn claim(&mut self, row: usize, col: usize) -> Result<T, Error> {
         let row_end = index(self.row_ptrs[row + 1]) as u32;
         let mut cursor = self.cursors[row];
         let mut found = T::zero();
@@ -39,7 +39,7 @@ impl<'a, T: Float, I: PrimInt> Mirrors<'a, T, I> {
             }
             let value = self.values[cursor as usize];
             if !value.is_finite() {
-                return Err(NotSddm::NonFiniteValue {
+                return Err(Error::NonFiniteValue {
                     position: cursor as usize,
                 });
             }
@@ -51,7 +51,7 @@ impl<'a, T: Float, I: PrimInt> Mirrors<'a, T, I> {
             // Skipped a stored entry whose own mirror above the diagonal is missing.
             if value != T::zero() {
                 self.cursors[row] = cursor;
-                return Err(NotSddm::Asymmetric { edge: (at, row) });
+                return Err(Error::Asymmetric { edge: (at, row) });
             }
         }
         self.cursors[row] = cursor;
@@ -59,7 +59,7 @@ impl<'a, T: Float, I: PrimInt> Mirrors<'a, T, I> {
     }
 }
 
-fn approximately_equal<T: Float>(left: T, right: T) -> bool {
+fn approximately_equal<T: Real>(left: T, right: T) -> bool {
     if left == right {
         return true;
     }
@@ -69,15 +69,15 @@ fn approximately_equal<T: Float>(left: T, right: T) -> bool {
 }
 
 /// Reads every stored entry once, so [`Canonical::of`] leaves finiteness here; the upper mirror is kept.
-pub(super) fn sddm_of<T: Float, I: PrimInt>(
+pub(super) fn sddm_of<T: Real, I: PrimInt>(
     canonical: &Canonical<'_, T, I>,
-) -> Result<Sddm<T>, NotSddm> {
+) -> Result<Sddm<T>, Error> {
     let (row_ptrs, col_indices, values) = canonical.arrays();
     let n = row_ptrs.len() - 1;
     let mut mirrors = Mirrors::new(row_ptrs, col_indices, values);
 
     let mut diagonal = vec![T::zero(); n];
-    // Off-diagonal only; the diagonal joins in `surplus`.
+    // Off-diagonal only; the diagonal joins in the balance verdict.
     let mut row_sums = vec![T::zero(); n];
     let mut rows = UpperRows::with_capacity(n, col_indices.len().saturating_sub(n) / 2);
 
@@ -91,7 +91,7 @@ pub(super) fn sddm_of<T: Float, I: PrimInt>(
             let col = index(col_indices[cursor as usize]);
             let upper = values[cursor as usize];
             if !upper.is_finite() {
-                return Err(NotSddm::NonFiniteValue {
+                return Err(Error::NonFiniteValue {
                     position: cursor as usize,
                 });
             }
@@ -102,13 +102,13 @@ pub(super) fn sddm_of<T: Float, I: PrimInt>(
             }
             let lower = mirrors.claim(col, row)?;
             if !approximately_equal(upper, lower) {
-                return Err(NotSddm::Asymmetric { edge: (row, col) });
+                return Err(Error::Asymmetric { edge: (row, col) });
             }
             if upper > T::zero() {
-                return Err(NotSddm::PositiveOffDiagonal { edge: (row, col) });
+                return Err(Error::PositiveOffDiagonal { edge: (row, col) });
             }
             if -upper < floor() {
-                return Err(NotSddm::MagnitudeTooSmall { entry: (row, col) });
+                return Err(Error::MagnitudeTooSmall { entry: (row, col) });
             }
             // Each row sums its own value; charging `upper` to both grounds `col` on mirror noise.
             row_sums[row] = row_sums[row] + upper;
@@ -117,16 +117,13 @@ pub(super) fn sddm_of<T: Float, I: PrimInt>(
         }
         rows.end_row();
     }
-    let checked = rows
-        .finish()
-        .map_err(|DegreeOverflow { vertex }| NotSddm::NonFiniteRow { row: vertex })?;
-    let surplus = surplus(&diagonal, row_sums, canonical.terms())?;
-    checked.with_surplus(surplus).map_err(|fault| match fault {
-        DiagonalFault::Overflow { vertex } => NotSddm::NonFiniteRow { row: vertex },
-        DiagonalFault::BelowFloor { vertex } => NotSddm::MagnitudeTooSmall {
-            entry: (vertex, vertex),
-        },
-        DiagonalFault::GroundOverflow => NotSddm::SurplusOverflow,
+    rows.finish(row_sums, |row, sum| {
+        match RowBalance::of(diagonal[row], sum, canonical.terms(row)) {
+            RowBalance::NonFinite => Err(Error::NonFiniteRow { row }),
+            RowBalance::Deficit => Err(Error::NotDiagonallyDominant { row }),
+            RowBalance::Negligible => Ok(T::zero()),
+            RowBalance::Surplus(excess) => Ok(excess),
+        }
     })
 }
 
@@ -139,7 +136,7 @@ enum RowBalance<T> {
     Surplus(T),
 }
 
-impl<T: Float> RowBalance<T> {
+impl<T: Real> RowBalance<T> {
     /// `terms` is how many additions produced `excess`, not the row's degree.
     fn of(diagonal: T, off_diagonal_sum: T, terms: u32) -> Self {
         let excess = diagonal + off_diagonal_sum;
@@ -159,21 +156,4 @@ impl<T: Float> RowBalance<T> {
         }
         Self::Surplus(excess)
     }
-}
-
-/// `row_sums` arrives off-diagonal-only and leaves as each row's surplus.
-fn surplus<T: Float>(
-    diagonal: &[T],
-    mut row_sums: Vec<T>,
-    terms: impl Iterator<Item = u32>,
-) -> Result<Vec<T>, NotSddm> {
-    for (row, ((sum, &d), count)) in row_sums.iter_mut().zip(diagonal).zip(terms).enumerate() {
-        *sum = match RowBalance::of(d, *sum, count) {
-            RowBalance::NonFinite => return Err(NotSddm::NonFiniteRow { row }),
-            RowBalance::Deficit => return Err(NotSddm::NotDiagonallyDominant { row }),
-            RowBalance::Negligible => T::zero(),
-            RowBalance::Surplus(excess) => excess,
-        };
-    }
-    Ok(row_sums)
 }

@@ -1,6 +1,7 @@
 use super::index;
-use crate::{CsrRef, NotSddm};
-use num_traits::{Float, PrimInt};
+use crate::types::Real;
+use crate::{CsrError, CsrRef, Error, IndexKind};
+use num_traits::PrimInt;
 
 /// Strictly ascending columns per row; scipy already emits them, so only rare input pays for a copy.
 pub(super) struct Canonical<'a, T, I> {
@@ -9,13 +10,14 @@ pub(super) struct Canonical<'a, T, I> {
     rewritten: Option<Rewritten<T, I>>,
 }
 
-impl<'a, T: Float, I: PrimInt> Canonical<'a, T, I> {
-    /// Reads no value on the canonical path, sparing a stream: `sddm_of` checks each as it reads it.
-    pub(super) fn of(csr: CsrRef<'a, T, I>) -> Result<Self, NotSddm> {
+impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
+    /// Reads no value on the canonical path, sparing a stream: `validate` checks each as it reads it.
+    pub(super) fn of(csr: CsrRef<'a, T, I>) -> Result<Self, Error> {
         // Every position downstream, mirror cursors included, is a `u32`.
-        let nnz = csr.col_indices().len();
-        if u32::try_from(nnz).is_err() {
-            return Err(NotSddm::TooManyNonzeros { nnz });
+        if u32::try_from(csr.col_indices().len()).is_err() {
+            return Err(Error::InvalidCsr(CsrError::IndexExceedsIndexType {
+                kind: IndexKind::RowPtr,
+            }));
         }
         if is_canonical(csr.row_ptrs(), csr.col_indices()) {
             return Ok(Self {
@@ -25,7 +27,7 @@ impl<'a, T: Float, I: PrimInt> Canonical<'a, T, I> {
         }
         // Before rewriting, so the position stays the caller's own.
         if let Some(position) = csr.values().iter().position(|value| !value.is_finite()) {
-            return Err(NotSddm::NonFiniteValue { position });
+            return Err(Error::NonFiniteValue { position });
         }
         Ok(Self {
             input: csr,
@@ -45,11 +47,9 @@ impl<'a, T: Float, I: PrimInt> Canonical<'a, T, I> {
     }
 
     /// Counted before coalescing: [`rewrite`]'s own additions land in the row sum too.
-    pub(super) fn terms(&self) -> impl Iterator<Item = u32> + '_ {
-        self.input
-            .row_ptrs()
-            .windows(2)
-            .map(|bounds| (index(bounds[1]) - index(bounds[0])) as u32)
+    pub(super) fn terms(&self, row: usize) -> u32 {
+        let row_ptrs = self.input.row_ptrs();
+        (index(row_ptrs[row + 1]) - index(row_ptrs[row])) as u32
     }
 }
 
@@ -73,7 +73,7 @@ struct Rewritten<T, I> {
 }
 
 /// Only non-canonical input pays this copy.
-fn rewrite<T: Float, I: PrimInt>(csr: CsrRef<'_, T, I>) -> Result<Rewritten<T, I>, NotSddm> {
+fn rewrite<T: Real, I: PrimInt>(csr: CsrRef<'_, T, I>) -> Result<Rewritten<T, I>, Error> {
     let nnz = csr.col_indices().len();
     let mut row_ptrs = Vec::with_capacity(csr.n() + 1);
     let mut col_indices = Vec::with_capacity(nnz);
@@ -95,7 +95,7 @@ fn rewrite<T: Float, I: PrimInt>(csr: CsrRef<'_, T, I>) -> Result<Rewritten<T, I
             let folded = group[1..].iter().fold(group[0].1, |sum, &(_, v)| sum + v);
             // Only this fold can overflow; caught here so downstream stays all-finite.
             if !folded.is_finite() {
-                return Err(NotSddm::NonFiniteRow { row });
+                return Err(Error::NonFiniteRow { row });
             }
             col_indices.push(group[0].0);
             values.push(folded);

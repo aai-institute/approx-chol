@@ -5,8 +5,8 @@ mod sets;
 use super::adjacency::{add_edge_pair, AdjListGraph, Edge};
 use super::blocks::{BlockLayout, BlockVertices};
 use super::multiplicity::EdgeCount;
+use crate::sddm::{Grounded, Sddm};
 use crate::types::Real;
-use crate::{Grounded, Sddm};
 use sets::DisjointSets;
 
 /// Kept whole so a block routed to the dense arm never gets an adjacency list built.
@@ -63,7 +63,7 @@ impl<T: Real> Ingestion<T> {
     /// The ground vertex outranks every real one, so it can only be a block's last.
     fn ground_of(&self, block: &BlockVertices<'_>) -> Option<&Grounded<T>> {
         match &self.sddm {
-            Sddm::Grounded(grounded) if block.last() == grounded.n() as u32 => Some(grounded),
+            Sddm::Grounded(grounded) if block.last() == self.sddm.n() as u32 => Some(grounded),
             _ => None,
         }
     }

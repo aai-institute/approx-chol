@@ -1,216 +1,5 @@
 use std::fmt;
 
-/// Why a [`CsrRef`](crate::CsrRef) is not an [`Sddm`](crate::Sddm).
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NotSddm {
-    /// `n` is `u32::MAX`, leaving no index for a ground vertex.
-    DimensionTooLarge {
-        /// Matrix dimension.
-        n: usize,
-    },
-    /// More stored entries than `u32` positions.
-    TooManyNonzeros {
-        /// Stored entries.
-        nnz: usize,
-    },
-    /// A matrix value is NaN or infinite.
-    NonFiniteValue {
-        /// Position in the CSR value array.
-        position: usize,
-    },
-    /// Coalesced transpose entries are missing or unequal.
-    Asymmetric {
-        /// Canonical off-diagonal coordinate with `row < column`.
-        edge: (usize, usize),
-    },
-    /// A coalesced off-diagonal entry is strictly positive.
-    PositiveOffDiagonal {
-        /// `(row, column)` of the offending entry.
-        edge: (usize, usize),
-    },
-    /// A row's diagonal falls short of its off-diagonal magnitude beyond rounding.
-    NotDiagonallyDominant {
-        /// The deficient row.
-        row: usize,
-    },
-    /// A row's diagonal or off-diagonal magnitude sums to a non-finite value.
-    NonFiniteRow {
-        /// The row.
-        row: usize,
-    },
-    /// A nonzero entry's magnitude is below `MIN_POSITIVE / EPSILON`, the measured floor of accurate solves.
-    MagnitudeTooSmall {
-        /// `(row, column)` of the entry, the column canonical with `row <= column`.
-        entry: (usize, usize),
-    },
-    /// The diagonal surplus total is not finite.
-    SurplusOverflow,
-}
-
-impl fmt::Display for NotSddm {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DimensionTooLarge { n } => {
-                write!(f, "matrix dimension {n} leaves no u32 index for a ground vertex")
-            }
-            Self::TooManyNonzeros { nnz } => write!(f, "{nnz} stored entries exceed u32"),
-            Self::NonFiniteValue { position } => {
-                write!(f, "matrix value at CSR position {position} is not finite")
-            }
-            Self::Asymmetric { edge: (row, col) } => write!(
-                f,
-                "matrix is not symmetric at ({row}, {col}) and ({col}, {row})"
-            ),
-            Self::PositiveOffDiagonal { edge: (row, col) } => write!(
-                f,
-                "off-diagonal ({row}, {col}) is positive; approx-chol requires SDDM/Laplacian input (off-diagonals must be <= 0)"
-            ),
-            Self::NotDiagonallyDominant { row } => write!(
-                f,
-                "row {row} is not diagonally dominant; approx-chol requires SDDM/Laplacian input"
-            ),
-            Self::NonFiniteRow { row } => write!(
-                f,
-                "row {row} sums to a non-finite diagonal or off-diagonal magnitude; approx-chol requires SDDM/Laplacian input"
-            ),
-            Self::MagnitudeTooSmall { entry: (row, col) } => write!(
-                f,
-                "entry ({row}, {col}) is below MIN_POSITIVE / EPSILON of the scalar type; scale the matrix up"
-            ),
-            Self::SurplusOverflow => write!(f, "diagonal surplus total is not finite"),
-        }
-    }
-}
-
-impl std::error::Error for NotSddm {}
-
-/// Why arrays are not a [`Laplacian`](crate::Laplacian).
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LaplacianError {
-    /// The arrays are not a CSR matrix.
-    Structure(CsrError),
-    /// `u32::MAX` or more vertices, leaving no index for a ground vertex.
-    TooManyVertices {
-        /// Vertex count.
-        n: usize,
-    },
-    /// A row lists a neighbor at or below its own index.
-    NotStrictlyUpper {
-        /// `(row, neighbor)` with `neighbor <= row`.
-        edge: (usize, usize),
-    },
-    /// A row's neighbors are not strictly ascending.
-    UnsortedNeighbors {
-        /// Row with a repeated or out-of-order neighbor.
-        row: usize,
-    },
-    /// An edge weight is not finite and positive.
-    InvalidWeight {
-        /// `(row, neighbor)` of the offending edge.
-        edge: (usize, usize),
-    },
-    /// An edge weight is below `MIN_POSITIVE / EPSILON`, the measured floor of accurate solves.
-    WeightTooSmall {
-        /// `(row, neighbor)` of the offending edge.
-        edge: (usize, usize),
-    },
-    /// A weighted degree that is not finite.
-    DegreeOverflow {
-        /// The vertex.
-        vertex: usize,
-    },
-}
-
-impl fmt::Display for LaplacianError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Structure(err) => write!(f, "invalid Laplacian adjacency: {err}"),
-            Self::TooManyVertices { n } => {
-                write!(f, "{n} vertices leave no u32 index for a ground vertex")
-            }
-            Self::NotStrictlyUpper { edge: (row, col) } => write!(
-                f,
-                "Laplacian row {row} lists neighbor {col}, which is not above it"
-            ),
-            Self::UnsortedNeighbors { row } => {
-                write!(f, "Laplacian row {row} neighbors are not strictly ascending")
-            }
-            Self::InvalidWeight { edge: (row, col) } => write!(
-                f,
-                "Laplacian edge ({row}, {col}) has a weight that is not finite and positive"
-            ),
-            Self::WeightTooSmall { edge: (row, col) } => write!(
-                f,
-                "Laplacian edge ({row}, {col}) is below MIN_POSITIVE / EPSILON of the scalar type; scale the weights up"
-            ),
-            Self::DegreeOverflow { vertex } => {
-                write!(f, "vertex {vertex}'s weighted degree is not finite")
-            }
-        }
-    }
-}
-
-impl std::error::Error for LaplacianError {}
-
-/// Why a surplus does not ground a [`Laplacian`](crate::Laplacian).
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GroundedError {
-    /// A surplus count other than the vertex count.
-    LengthMismatch {
-        /// The Laplacian's vertex count.
-        expected: usize,
-        /// The surplus count given.
-        got: usize,
-    },
-    /// A surplus that is negative, subnormal or not finite.
-    InvalidSurplus {
-        /// Vertex carrying it.
-        vertex: usize,
-    },
-    /// Zero everywhere: that is a [`Laplacian`](crate::Laplacian).
-    NoSurplus,
-    /// The surplus total is not finite.
-    SurplusOverflow,
-    /// A diagonal entry, weighted degree plus surplus, that is not finite.
-    DiagonalOverflow {
-        /// The vertex.
-        vertex: usize,
-    },
-    /// A positive diagonal entry below `MIN_POSITIVE / EPSILON`, the measured floor of accurate solves.
-    DiagonalTooSmall {
-        /// The vertex.
-        vertex: usize,
-    },
-}
-
-impl fmt::Display for GroundedError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::LengthMismatch { expected, got } => {
-                write!(f, "expected {expected} surplus entries, got {got}")
-            }
-            Self::InvalidSurplus { vertex } => write!(
-                f,
-                "surplus at vertex {vertex} is negative, subnormal or not finite"
-            ),
-            Self::NoSurplus => write!(f, "surplus is zero everywhere, which is a Laplacian"),
-            Self::SurplusOverflow => write!(f, "surplus total is not finite"),
-            Self::DiagonalOverflow { vertex } => {
-                write!(f, "diagonal at vertex {vertex} is not finite")
-            }
-            Self::DiagonalTooSmall { vertex } => write!(
-                f,
-                "diagonal at vertex {vertex} is below MIN_POSITIVE / EPSILON of the scalar type; scale the matrix up"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for GroundedError {}
-
 /// Errors that can occur during approximate Cholesky factorization.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -257,30 +46,11 @@ pub enum Error {
     /// The diagonal surplus total is not finite.
     SurplusOverflow,
 
+    /// The diagonal surplus total is positive but below `MIN_POSITIVE / EPSILON`.
+    SurplusTooSmall,
+
     /// Exact dense Cholesky hit an unusable pivot and [`ExactFailure::Error`](crate::ExactFailure::Error) asked for that to fail.
     DenseFactorizationFailed(UnusablePivot),
-}
-
-impl From<NotSddm> for Error {
-    fn from(err: NotSddm) -> Self {
-        match err {
-            NotSddm::DimensionTooLarge { n } => {
-                Self::InvalidCsr(CsrError::MatrixDimensionExceedsIndexType {
-                    n: n.saturating_add(1),
-                })
-            }
-            NotSddm::TooManyNonzeros { .. } => Self::InvalidCsr(CsrError::IndexExceedsIndexType {
-                kind: IndexKind::RowPtr,
-            }),
-            NotSddm::NonFiniteValue { position } => Self::NonFiniteValue { position },
-            NotSddm::Asymmetric { edge } => Self::Asymmetric { edge },
-            NotSddm::PositiveOffDiagonal { edge } => Self::PositiveOffDiagonal { edge },
-            NotSddm::NotDiagonallyDominant { row } => Self::NotDiagonallyDominant { row },
-            NotSddm::NonFiniteRow { row } => Self::NonFiniteRow { row },
-            NotSddm::MagnitudeTooSmall { entry } => Self::MagnitudeTooSmall { entry },
-            NotSddm::SurplusOverflow => Self::SurplusOverflow,
-        }
-    }
 }
 
 /// An unusable exact pivot, reported as a [`Fallback`] or raised as [`Error::DenseFactorizationFailed`].
@@ -524,6 +294,10 @@ impl fmt::Display for Error {
                 "entry ({row}, {col}) is below MIN_POSITIVE / EPSILON of the scalar type; scale the matrix up"
             ),
             Error::SurplusOverflow => write!(f, "diagonal surplus total is not finite"),
+            Error::SurplusTooSmall => write!(
+                f,
+                "diagonal surplus total is below MIN_POSITIVE / EPSILON of the scalar type; scale the matrix up"
+            ),
             Error::DenseFactorizationFailed(pivot) => {
                 write!(f, "exact dense Cholesky failed at {pivot}")
             }
