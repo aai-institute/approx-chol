@@ -8,7 +8,6 @@ mod block;
 mod cholesky;
 pub(super) mod exact;
 mod factor;
-mod gauge;
 mod permutation;
 
 pub use approximate::CliqueTreeSampler;
