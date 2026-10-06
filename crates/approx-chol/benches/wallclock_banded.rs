@@ -8,8 +8,7 @@ use approx_chol::Config;
 use common::grid::GridLaplacian;
 
 const N: usize = 160_000;
-// Degree 12, not the grid benches' 4: ingestion is ~17% of the build at degree 4
-// and negligible past it, and `within`'s factors sit here.
+// Degree 12, where `within`'s factors sit; at degree 4 ingestion is ~17% of the build.
 const HALF_BANDWIDTH: usize = 6;
 const RUNS: usize = 9;
 
@@ -51,10 +50,7 @@ fn main() {
         black_box(&factor);
     }
 
-    // Every input that changes what is measured, so a retuned bench cannot keep
-    // comparing against a reference built from the old one. Config goes in whole:
-    // it is `non_exhaustive`, and switching backend or split_merge changes the
-    // algorithm without touching a const here.
+    // Whole `Config` (non_exhaustive) so a retuned bench never compares against a stale reference.
     let config = format!("{config:?}").replace(' ', "");
     println!("WALLCLOCK_WORKLOAD=banded/n={N}/half={HALF_BANDWIDTH}/runs={RUNS}/f64/{config}");
     println!("WALLCLOCK_BEST_NS={best}");
