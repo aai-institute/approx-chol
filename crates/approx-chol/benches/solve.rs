@@ -3,28 +3,16 @@ mod common;
 use std::hint::black_box;
 use std::time::Duration;
 
-use approx_chol::{Config, CsrRef, Factor};
+use approx_chol::{Config, Factor};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
+use common::grid::GridLaplacian;
 use common::{factor, grid_laplacian};
 
 /// `k` interleaved path Laplacians: vertex `i` neighbours `i - k` and `i + k`, so
 /// component membership maximally interleaves with input numbering. The only shape
 /// where the block permutation is non-identity, and the worst case for it.
-struct InterleavedPaths {
-    row_ptrs: Vec<u32>,
-    col_indices: Vec<u32>,
-    values: Vec<f64>,
-    n: u32,
-}
-
-impl InterleavedPaths {
-    fn as_csr(&self) -> Result<CsrRef<'_>, approx_chol::CsrError> {
-        CsrRef::new(&self.row_ptrs, &self.col_indices, &self.values, self.n)
-    }
-}
-
-fn interleaved_paths(n: usize, k: usize) -> InterleavedPaths {
+fn interleaved_paths(n: usize, k: usize) -> GridLaplacian {
     let mut row_ptrs = Vec::with_capacity(n + 1);
     let mut col_indices = Vec::new();
     let mut values = Vec::new();
@@ -47,7 +35,7 @@ fn interleaved_paths(n: usize, k: usize) -> InterleavedPaths {
         values[diagonal_slot] = degree;
         row_ptrs.push(col_indices.len() as u32);
     }
-    InterleavedPaths {
+    GridLaplacian {
         row_ptrs,
         col_indices,
         values,
