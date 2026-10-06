@@ -22,12 +22,6 @@ pub(super) use permutation::Permutation;
 #[cfg(any(feature = "serde", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum FactorError {
-    // Payloads are only written at the current version, so without serde this is unreachable.
-    #[cfg(feature = "serde")]
-    UnsupportedFormatVersion {
-        found: u32,
-        supported: u32,
-    },
     // Only the deserialize path can construct this; `test` alone leaves it dead.
     #[cfg(feature = "serde")]
     NonzeroCountExceedsU32 {
@@ -68,30 +62,9 @@ pub(super) enum FactorError {
     },
 }
 
-#[cfg(feature = "serde")]
-impl FactorError {
-    fn check_version(found: u32) -> Result<(), Self> {
-        if found == FACTOR_FORMAT_VERSION {
-            return Ok(());
-        }
-        Err(Self::UnsupportedFormatVersion {
-            found,
-            supported: FACTOR_FORMAT_VERSION,
-        })
-    }
-}
-
 #[cfg(any(feature = "serde", test))]
 impl fmt::Display for FactorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Not corruption: intact bytes written by a release this one does not read.
-        #[cfg(feature = "serde")]
-        if let Self::UnsupportedFormatVersion { found, supported } = self {
-            return write!(
-                f,
-                "persisted factor declares format version {found:#010x}, but this build reads {supported:#010x}"
-            );
-        }
         write!(f, "corrupted persisted factor: {self:?}")
     }
 }

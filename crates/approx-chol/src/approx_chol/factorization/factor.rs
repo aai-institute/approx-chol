@@ -36,9 +36,7 @@ pub struct Factor<T = f64> {
 #[cfg(feature = "serde")]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct FactorData<P, B, F> {
-    /// Defaulted, so a payload predating the field fails on its version, not a missing field.
-    #[serde(default, deserialize_with = "current_version")]
-    format_version: u32,
+    format_version: CurrentFormat,
     permutation: P,
     blocks: B,
     #[serde(default)]
@@ -48,11 +46,44 @@ struct FactorData<P, B, F> {
 #[cfg(feature = "serde")]
 type OwnedFactor<T> = FactorData<Option<Permutation>, Vec<Block<T>>, Vec<Fallback>>;
 
+/// Deserializes from [`FACTOR_FORMAT_VERSION`] alone, so another version fails before any moved field.
+#[cfg(feature = "serde")]
+#[derive(Clone, Copy, Debug)]
+struct CurrentFormat;
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for CurrentFormat {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u32(FACTOR_FORMAT_VERSION)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for CurrentFormat {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let found = <u32 as serde::Deserialize>::deserialize(deserializer)?;
+        if found != FACTOR_FORMAT_VERSION {
+            return Err(serde::de::Error::invalid_value(
+                serde::de::Unexpected::Other(&format!("format version {found:#010x}")),
+                &Self,
+            ));
+        }
+        Ok(Self)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::de::Expected for CurrentFormat {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "format version {FACTOR_FORMAT_VERSION:#010x}")
+    }
+}
+
 #[cfg(feature = "serde")]
 impl<T: serde::Serialize> serde::Serialize for Factor<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         FactorData {
-            format_version: FACTOR_FORMAT_VERSION,
+            format_version: CurrentFormat,
             permutation: self.permutation.as_ref(),
             blocks: self.blocks.as_slice(),
             fallbacks: self.fallbacks.as_slice(),
@@ -61,21 +92,11 @@ impl<T: serde::Serialize> serde::Serialize for Factor<T> {
     }
 }
 
-/// Checked as read, so another version fails on its version, not on the first moved field.
-#[cfg(feature = "serde")]
-fn current_version<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
-    let found = <u32 as serde::Deserialize>::deserialize(deserializer)?;
-    FactorError::check_version(found).map_err(serde::de::Error::custom)?;
-    Ok(found)
-}
-
 #[cfg(feature = "serde")]
 impl<T: num_traits::Float> TryFrom<OwnedFactor<T>> for Factor<T> {
     type Error = FactorError;
 
     fn try_from(data: OwnedFactor<T>) -> Result<Self, Self::Error> {
-        // Only a payload missing the field reaches here unchecked.
-        FactorError::check_version(data.format_version)?;
         let factor = Self::of(data.permutation, data.blocks, data.fallbacks);
         factor.validate_structure()?;
         Ok(factor)

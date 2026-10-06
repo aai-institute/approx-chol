@@ -141,11 +141,20 @@ fn a_payload_declares_the_format_version_it_was_written_with() {
     );
 }
 
-/// A missing field is a pre-version payload; both must fail for the version.
+/// A payload predating the field has no version to name, so it fails on the missing field.
 #[rstest]
-#[case::from_a_future_release(Some(FACTOR_FORMAT_VERSION + 1))]
-#[case::from_before_the_field_existed(None)]
-fn a_payload_of_another_format_version_is_rejected_by_version(#[case] declared: Option<u32>) {
+#[case::from_a_future_release(
+    Some(FACTOR_FORMAT_VERSION + 1),
+    format!(
+        "format version {:#010x}, expected format version {FACTOR_FORMAT_VERSION:#010x}",
+        FACTOR_FORMAT_VERSION + 1
+    )
+)]
+#[case::from_before_the_field_existed(None, "missing field `format_version`".to_owned())]
+fn a_payload_of_another_format_version_is_rejected_by_version(
+    #[case] declared: Option<u32>,
+    #[case] reason: String,
+) {
     let mut value = serde_json::to_value(path_factor()).expect("serialize factor");
     match declared {
         Some(version) => value["format_version"] = serde_json::Value::from(version),
@@ -160,15 +169,7 @@ fn a_payload_of_another_format_version_is_rejected_by_version(#[case] declared: 
     let error = serde_json::from_value::<Factor<f64>>(value)
         .expect_err("a foreign format version must not deserialize")
         .to_string();
-    let found = declared.unwrap_or(0);
-    assert!(
-        error.contains(&format!("format version {found:#010x}")),
-        "error must name the version it found, got: {error}"
-    );
-    assert!(
-        error.contains(&format!("{FACTOR_FORMAT_VERSION:#010x}")),
-        "error must name the version this build reads, got: {error}"
-    );
+    assert!(error.contains(&reason), "expected {reason:?}, got: {error}");
 }
 
 #[rstest]
