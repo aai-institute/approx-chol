@@ -20,7 +20,12 @@ impl Anchor {
                 *pinned = -compensated_sum(rest);
             }
             // Nothing absorbs the null space, so project it out; an inconsistent rhs gets least squares.
-            Self::Floating => project_zero_mean(values),
+            Self::Floating => {
+                let mean = compensated_sum(values) / count_as_scalar::<T, _>(values.len());
+                for value in values.iter_mut() {
+                    *value = *value - mean;
+                }
+            }
         }
     }
 
@@ -32,16 +37,13 @@ impl Anchor {
             *value = *value - pinned;
         }
         if canonical && self == Self::Floating {
-            project_zero_mean(values);
+            // Pinned to zero above, so no offset is left for compensation to keep.
+            let sum = values.iter().fold(T::zero(), |sum, &value| sum + value);
+            let mean = sum / count_as_scalar::<T, _>(values.len());
+            for value in values.iter_mut() {
+                *value = *value - mean;
+            }
         }
-    }
-}
-
-fn project_zero_mean<T: Real>(values: &mut [T]) {
-    let count = count_as_scalar::<T, _>(values.len());
-    let mean = compensated_sum(values) / count;
-    for value in values.iter_mut() {
-        *value = *value - mean;
     }
 }
 
@@ -55,7 +57,12 @@ fn compensated_sum<T: Real>(values: &[T]) -> T {
         compensation = compensation + ((sum - (next - back)) + (value - back));
         sum = next;
     }
-    sum + compensation
+    // Once the sum overflows TwoSum's error is NaN; keep the plain fold's infinity.
+    if compensation.is_finite() {
+        sum + compensation
+    } else {
+        sum
+    }
 }
 
 #[cfg(test)]

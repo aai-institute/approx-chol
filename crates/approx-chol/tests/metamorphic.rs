@@ -10,12 +10,15 @@
 //! Scaling equivariance lives in `scale_invariance.rs`, over 20 exponents spanning the
 //! augmentation floor.
 
+#[path = "common/grid.rs"]
+mod grid;
 #[path = "common/laplacian_prop.rs"]
 mod laplacian_prop;
 #[path = "common/residual.rs"]
 mod residual;
 
-use approx_chol::{factorize_with, Config, CsrRef, Factor};
+use approx_chol::{factorize, factorize_with, Config, CsrRef, Factor};
+use grid::grid_laplacian;
 use laplacian_prop::{
     interleaved_components_strategy, permutation_strategy, permute_csr, LaplacianCsr,
 };
@@ -102,4 +105,24 @@ proptest! {
         let relative = relative_residual_over(view, &x, &rhs, 0..rhs.len());
         prop_assert!(relative < 1e-9, "components left residual {relative:e}");
     }
+}
+
+/// A floating block solves `b - mean(b)`, so adding a constant to `b` must leave `x`.
+#[test]
+fn a_constant_added_to_a_floating_rhs_leaves_the_solution() {
+    let grid = grid_laplacian(100, 100);
+    let factor: Factor<f64> = factorize(grid.as_csr().expect("grid CSR")).expect("factorization");
+    // Dyadic, so `value + 2^30` is exact and only the solve's own sums can lose the constant.
+    let rhs: Vec<f64> = (0..grid.n as usize)
+        .map(|i| (i * 37 % 2001) as f64 / 1024.0 - 1.0)
+        .collect();
+    let shifted: Vec<f64> = rhs.iter().map(|value| value + 2f64.powi(30)).collect();
+    let base = factor.solve(&rhs).expect("solve");
+    let got = factor.solve(&shifted).expect("solve");
+
+    let norm = |values: &[f64]| values.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let difference: Vec<f64> = got.iter().zip(&base).map(|(g, b)| g - b).collect();
+    let moved = norm(&difference) / norm(&base);
+    // Compensated sums leave 1.9e-5, a plain fold 3.1e-2.
+    assert!(moved < 1e-3, "the constant moved the solution by {moved:e}");
 }

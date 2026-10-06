@@ -9,8 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `Factor::solve` sums each block's right-hand side with compensation, so a large constant
-  offset no longer swamps the answer. ([#147])
+- Solves sum each block's right-hand side with compensation. ([#147])
 
 ## [0.6.0] - 2026-08-24
 
