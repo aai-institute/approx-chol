@@ -11,10 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Factor::n` is the input dimension; ground slots are internal. ([#140])
 - `Factor::original_n` is removed. ([#140])
-- `Factor::solve_into` and `Factor::solve_in_place` take buffers of length `Factor::n`. ([#140])
+- `Factor::solve_into` is removed. ([#146])
+- `Factor::solve_in_place` takes `x` of length `Factor::n` and caller scratch of at least
+  `Factor::scratch_len`. ([#146])
+- `Factor::solve` rejects a right-hand side whose length is not `Factor::n`. ([#146])
+- `SolveError` is `LengthMismatch` or `ScratchTooSmall`. ([#146])
+- Python `Factor.solve`, `solve_into` and `matvec` reject a `b` whose length is not `n`. ([#146])
 - `Factor::solve_in_place` returns the zero-mean solution on floating blocks. ([#135])
 - A persisted block is grounded or floating with no stored dimension, and
   `FACTOR_FORMAT_VERSION` is `0x41430005`. ([#148])
+
+### Added
+
+- `Factor::scratch_len`. ([#146])
 
 ### Fixed
 
@@ -213,6 +222,7 @@ for graph Laplacians in Rust with Python bindings.
 [#131]: https://github.com/aai-institute/approx-chol/pull/131
 [#135]: https://github.com/aai-institute/approx-chol/issues/135
 [#140]: https://github.com/aai-institute/approx-chol/issues/140
+[#146]: https://github.com/aai-institute/approx-chol/issues/146
 [#147]: https://github.com/aai-institute/approx-chol/issues/147
 [#148]: https://github.com/aai-institute/approx-chol/issues/148
 [#163]: https://github.com/aai-institute/approx-chol/issues/163

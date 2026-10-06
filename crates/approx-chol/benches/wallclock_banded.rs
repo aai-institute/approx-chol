@@ -1,18 +1,15 @@
-mod common;
-
 use std::hint::black_box;
 use std::time::Instant;
 
 use approx_chol::low_level::Builder;
-use approx_chol::Config;
-use common::grid::GridLaplacian;
+use approx_chol::{Config, CsrRef};
 
 const N: usize = 160_000;
 // Degree 12, where `within`'s factors sit; at degree 4 ingestion is ~17% of the build.
 const HALF_BANDWIDTH: usize = 6;
 const RUNS: usize = 9;
 
-fn banded_laplacian(n: usize, half: usize) -> GridLaplacian {
+fn banded_laplacian(n: usize, half: usize) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
     let mut row_ptrs = Vec::with_capacity(n + 1);
     let mut col_indices = Vec::with_capacity(n * (2 * half + 1));
     let mut values = Vec::with_capacity(n * (2 * half + 1));
@@ -27,17 +24,13 @@ fn banded_laplacian(n: usize, half: usize) -> GridLaplacian {
         }
         row_ptrs.push(col_indices.len() as u32);
     }
-    GridLaplacian {
-        row_ptrs,
-        col_indices,
-        values,
-        n: n as u32,
-    }
+    (row_ptrs, col_indices, values)
 }
 
 fn main() {
-    let lap = banded_laplacian(N, HALF_BANDWIDTH);
-    let csr = lap.as_csr().expect("banded_laplacian must build valid CSR");
+    let (row_ptrs, col_indices, values) = banded_laplacian(N, HALF_BANDWIDTH);
+    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, N as u32)
+        .expect("banded_laplacian must build valid CSR");
     let config = Config::default();
     let builder = Builder::<f64>::new(config);
 

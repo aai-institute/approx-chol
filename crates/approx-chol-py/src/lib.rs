@@ -370,14 +370,17 @@ impl PyFactor {
             return Err(value_error("b and out must not overlap"));
         }
         drop(out_ro);
+        let x = self
+            .inner
+            .solve(b_slice)
+            .map_err(|e| value_error(e.to_string()))?;
 
         let mut out_rw = out.try_readwrite().map_err(|e| borrow_error("out", e))?;
         let out_slice = out_rw
             .as_slice_mut()
             .map_err(|_| value_error("out must be contiguous"))?;
-        self.inner
-            .solve_into(b_slice, out_slice)
-            .map_err(|e| value_error(e.to_string()))
+        out_slice[..n].copy_from_slice(&x);
+        Ok(())
     }
 }
 

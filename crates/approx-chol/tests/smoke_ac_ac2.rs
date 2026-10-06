@@ -27,10 +27,7 @@ fn smoke_medium_grid(#[case] config: Config) {
     rhs[0] = 1.0;
     rhs[n - 1] = -1.0;
 
-    let mut work = vec![0.0; n];
-    factor
-        .solve_into(&rhs, &mut work)
-        .expect("solve_into should succeed");
+    let work = factor.solve(&rhs).expect("solve should succeed");
     assert!(work.iter().all(|x| x.is_finite()));
     assert!(work.iter().any(|x| x.abs() > 1e-12));
 }

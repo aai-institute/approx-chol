@@ -130,7 +130,7 @@ class Factor:
         """Solve LDL^T x = b, returning a new array of the original matrix dimension.
 
         Raises:
-            ValueError: If ``b`` is not contiguous or ``len(b) > n``.
+            ValueError: If ``b`` is not contiguous or ``len(b) != n``.
         """
         ...
 
@@ -141,8 +141,7 @@ class Factor:
     ) -> None:
         """Solve LDL^T x = b, writing the result into *out*.
 
-        The *out* array must have length >= ``shape[0]`` (the original matrix
-        dimension).
+        ``b`` must have length ``shape[0]``, and *out* at least that length.
 
         Raises:
             ValueError: If ``b``/``out`` are not contiguous, sizes are invalid,

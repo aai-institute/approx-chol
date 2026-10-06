@@ -1,10 +1,9 @@
-#[path = "common/grid.rs"]
-mod grid;
 #[path = "common/grounded.rs"]
 mod grounded;
+#[path = "common/path.rs"]
+mod path;
 #[path = "common/residual.rs"]
 mod residual;
-use grid::grid_laplacian;
 use grounded::is_grounded;
 use residual::relative_residual_over;
 
@@ -131,76 +130,65 @@ fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
     }
 }
 
-/// The ground slot is internal, so a right-hand side reaching it is one entry too long.
+/// The ground slot is internal, so `n + 1` is too long even though scratch holds `n + 1` slots.
 #[test]
-fn solve_into_rejects_rhs_reaching_the_ground_slot() {
+fn every_solve_checks_its_buffer_lengths() {
     let (rp, ci, vals, n) = diagonal_sddm();
     let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid diagonal SDDM");
     let factor = Builder::new(Config::default())
         .build(csr)
         .expect("factorization should succeed");
-    assert_eq!(factor.n(), n as usize);
-
-    let rhs = vec![0.0; factor.n() + 1];
-    let mut work = vec![0.0; factor.n() + 1];
-    let err = factor
-        .solve_into(&rhs, &mut work)
-        .expect_err("rhs longer than original dimension must fail");
+    let needed = factor.scratch_len();
     assert!(
-        matches!(err, SolveError::RhsLengthExceedsFactor { .. }),
-        "{err:?}"
+        needed > factor.n(),
+        "a grounded factor solves through scratch"
+    );
+
+    let mut scratch = vec![0.0; needed];
+    for len in [factor.n() - 1, factor.n() + 1] {
+        let mut x = vec![0.0; len];
+        for err in [
+            factor.solve(&x).expect_err("solve must reject the length"),
+            factor
+                .solve_in_place(&mut x, &mut scratch)
+                .expect_err("solve_in_place must reject the length"),
+        ] {
+            assert_eq!(
+                err,
+                SolveError::LengthMismatch {
+                    len,
+                    factor_dim: factor.n()
+                }
+            );
+        }
+    }
+
+    let mut x = vec![1.0; factor.n()];
+    assert_eq!(
+        factor.solve_in_place(&mut x, &mut scratch[..needed - 1]),
+        Err(SolveError::ScratchTooSmall {
+            scratch_len: needed - 1,
+            needed
+        })
     );
 }
 
-/// Both entry points size their buffer through the same check.
-#[test]
-fn every_solve_entry_point_reports_a_short_work_buffer() {
-    let lap = grid_laplacian(4, 4);
-    let n_orig = lap.n as usize;
-    let factor = Builder::new(Config::default())
-        .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
-        .expect("factorization should succeed");
-
-    let mut rhs = vec![0.0; n_orig];
-    rhs[0] = 1.0;
-    rhs[n_orig - 1] = -1.0;
-    let mut work = vec![0.0; factor.n().saturating_sub(1)];
-
-    for err in [
-        factor
-            .solve_into(&rhs, &mut work)
-            .expect_err("solve_into must reject a short work buffer"),
-        factor
-            .solve_in_place(&mut work)
-            .expect_err("solve_in_place must reject a short work buffer"),
-    ] {
-        assert!(
-            matches!(err, SolveError::WorkBufferTooSmall { .. }),
-            "{err:?}"
-        );
-    }
-}
-
-/// Each block has one gauge, so the in-place solve is the canonical one, grounded or not.
+/// NaN reaches the result if any slot, a ground included, is read before it is written.
 #[rstest]
-#[case::approximate(Backend::Approximate)]
-#[case::exact(Backend::default())]
-fn solve_in_place_matches_solve_into(
-    #[case] backend: Backend,
-    #[values(true, false)] grounded: bool,
+#[case::grounded(&[0, 2, 4], &[0, 1, 0, 1], &[2.0, -1.0, -1.0, 2.0])]
+#[case::interleaved_components(
+    &[0, 2, 4, 6, 8],
+    &[0, 2, 1, 3, 0, 2, 1, 3],
+    &[1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0]
+)]
+fn dirty_scratch_does_not_change_the_solution(
+    #[case] row_ptrs: &[u32],
+    #[case] columns: &[u32],
+    #[case] values: &[f64],
+    #[values(Backend::Approximate, Backend::default())] backend: Backend,
 ) {
-    let (row_ptrs, columns, values) = if grounded {
-        (
-            vec![0u32, 2, 4],
-            vec![0u32, 1, 0, 1],
-            vec![2.0, -1.0, -1.0, 2.0],
-        )
-    } else {
-        let grid = grid_laplacian(5, 5);
-        (grid.row_ptrs, grid.col_indices, grid.values)
-    };
     let n = row_ptrs.len() - 1;
-    let csr = CsrRef::new(&row_ptrs, &columns, &values, n as u32).expect("valid CSR");
+    let csr = CsrRef::new(row_ptrs, columns, values, n as u32).expect("valid CSR");
     let factor = Builder::<f64>::new(Config {
         seed: 7,
         backend,
@@ -208,16 +196,15 @@ fn solve_in_place_matches_solve_into(
     })
     .build(csr)
     .expect("factorization should succeed");
-    assert_eq!(factor.n(), n, "ground slots stay internal");
+    assert!(factor.scratch_len() > 0, "the solve goes through scratch");
 
     let rhs: Vec<f64> = (0..n).map(|i| i as f64 - 1.5).collect();
     let mut in_place = rhs.clone();
+    let mut scratch = vec![f64::NAN; factor.scratch_len() + 1];
     factor
-        .solve_in_place(&mut in_place)
+        .solve_in_place(&mut in_place, &mut scratch)
         .expect("solve_in_place should succeed");
-    let mut into = vec![0.0; n];
-    factor.solve_into(&rhs, &mut into).expect("solve_into");
-    assert_eq!(in_place, into);
+    assert_eq!(in_place, factor.solve(&rhs).expect("solve"));
 }
 
 /// Scaling a Laplacian by `t` scales its solution by `1/t`, so a factor that drops
@@ -228,13 +215,11 @@ where
 {
     let ten = T::from(10.0).expect("10 is representable");
     let scale = ten.powi(exponent);
-    let mut lap = grid_laplacian(1, 4);
-    let values: Vec<T> = lap
-        .values
-        .drain(..)
-        .map(|value| T::from(value).expect("fixture weight is representable") * scale)
+    let values: Vec<T> = path::VALUES
+        .iter()
+        .map(|&value| T::from(value).expect("fixture weight is representable") * scale)
         .collect();
-    let csr = CsrRef::new(&lap.row_ptrs, &lap.col_indices, &values, lap.n)
+    let csr = CsrRef::new(&path::ROW_PTRS, &path::COL_INDICES, &values, path::N)
         .expect("scaled path is valid CSR");
     let one = T::one();
     let b = [one, T::zero(), T::zero(), -one];

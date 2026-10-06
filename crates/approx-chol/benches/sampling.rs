@@ -1,4 +1,5 @@
-mod common;
+#[path = "../tests/common/grid.rs"]
+mod grid;
 
 use approx_chol::low_level::{Builder, CliqueTreeSampler};
 use approx_chol::Config;
@@ -7,8 +8,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 use std::collections::BTreeSet;
 
-use common::grid::GridLaplacian;
-use common::grid_laplacian;
+use grid::{grid_laplacian, GridLaplacian};
 
 fn barabasi_albert(n: usize, m: usize, seed: u64) -> GridLaplacian {
     assert!(m >= 1 && n > m);

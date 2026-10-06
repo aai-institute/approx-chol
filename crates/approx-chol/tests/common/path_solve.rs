@@ -23,10 +23,7 @@ where
     assert_eq!(factor.n_steps(), factor.n().saturating_sub(1));
 
     let b = [1.0, -1.0, 1.0, -1.0];
-    let mut work = vec![0.0; factor.n()];
-    factor
-        .solve_into(&b, &mut work)
-        .expect("solve_into should succeed");
+    let work = factor.solve(&b).expect("solve should succeed");
     assert!(work.iter().all(|x| x.is_finite()), "solution not finite");
     assert!(
         work.iter().any(|x| x.abs() > 1e-6),
