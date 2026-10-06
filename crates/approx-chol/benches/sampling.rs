@@ -10,11 +10,6 @@ use std::collections::BTreeSet;
 use common::grid::GridLaplacian;
 use common::grid_laplacian;
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Barabasi-Albert preferential-attachment graph -> Laplacian CSR.
 fn barabasi_albert(n: usize, m: usize, seed: u64) -> GridLaplacian {
     assert!(m >= 1 && n > m);
     let mut rng = SmallRng::seed_from_u64(seed);
@@ -22,7 +17,6 @@ fn barabasi_albert(n: usize, m: usize, seed: u64) -> GridLaplacian {
     let mut adj: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); n];
     let mut degree_list: Vec<u32> = Vec::new();
 
-    // Seed: complete graph on vertices 0..m
     for i in 0..m {
         for j in (i + 1)..m {
             adj[i].insert(j as u32);
@@ -32,7 +26,6 @@ fn barabasi_albert(n: usize, m: usize, seed: u64) -> GridLaplacian {
         }
     }
 
-    // Growth: each new vertex picks m distinct targets proportional to degree
     for v in m..n {
         let mut targets = BTreeSet::new();
         while targets.len() < m {
@@ -52,7 +45,6 @@ fn barabasi_albert(n: usize, m: usize, seed: u64) -> GridLaplacian {
         }
     }
 
-    // Build CSR Laplacian
     let mut row_ptrs: Vec<u32> = Vec::with_capacity(n + 1);
     let mut col_indices = Vec::new();
     let mut values = Vec::new();
@@ -86,10 +78,6 @@ fn barabasi_albert(n: usize, m: usize, seed: u64) -> GridLaplacian {
         n: n as u32,
     }
 }
-
-// ---------------------------------------------------------------------------
-// End-to-end: grid Laplacian (uniform degree ~4)
-// ---------------------------------------------------------------------------
 
 fn bench_factorization_grid(c: &mut Criterion) {
     let mut group = c.benchmark_group("factorization_grid");
@@ -133,10 +121,6 @@ fn bench_factorization_grid(c: &mut Criterion) {
     group.finish();
 }
 
-// ---------------------------------------------------------------------------
-// End-to-end: Barabasi-Albert power-law graph (hub degrees >> 1000)
-// ---------------------------------------------------------------------------
-
 fn bench_factorization_powerlaw(c: &mut Criterion) {
     let mut group = c.benchmark_group("factorization_powerlaw");
     group.sample_size(10);
@@ -163,8 +147,7 @@ fn bench_factorization_powerlaw(c: &mut Criterion) {
     group.finish();
 }
 
-/// The standalone sampler, which no factorization bench reaches: a consumer eliminating
-/// its own stars pays this per star, not amortized over a whole `Builder::build`.
+/// A consumer eliminating its own stars pays this per star, outside any `Builder::build`.
 fn bench_star_sampler(c: &mut Criterion) {
     const STARS: usize = 10_000;
 

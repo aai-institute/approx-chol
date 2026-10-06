@@ -7,8 +7,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 type Shape = (&'static str, fn(usize) -> GridLaplacian);
 
-/// Dense Cholesky cost depends only on `n`, the sampler's on the fill it creates,
-/// so the two shapes bracket the density range and the crossover sits between them.
+/// Dense cost depends only on `n` and the sampler's on fill, so these bracket the crossover.
 fn shapes() -> [Shape; 2] {
     [
         ("path", |n| common::grid_laplacian(1, n)),
@@ -16,8 +15,7 @@ fn shapes() -> [Shape; 2] {
     ]
 }
 
-/// Complete graph on `n` vertices: connected, floating, and the densest block
-/// either backend can be handed.
+/// The densest block either backend can be handed.
 fn complete_laplacian(n: usize) -> GridLaplacian {
     let mut row_ptrs = Vec::with_capacity(n + 1);
     let mut col_indices = Vec::with_capacity(n * n);
@@ -38,8 +36,7 @@ fn complete_laplacian(n: usize) -> GridLaplacian {
     }
 }
 
-/// `max_dim` is unbounded so the exact arm claims every size in the sweep;
-/// `Backend::default` would silently route the larger ones to the other arm.
+/// Unbounded `max_dim`: `Backend::default` would route the larger sizes to the other arm.
 fn backends() -> [(&'static str, Backend); 2] {
     [
         ("approximate", Backend::Approximate),
@@ -60,8 +57,7 @@ fn bench_backend_build(c: &mut Criterion) {
     for (shape, build_lap) in shapes() {
         for n in DIMENSIONS {
             let lap = build_lap(n);
-            // CSR validation is O(n + nnz) and would swamp the exact arm at the
-            // small sizes this bench exists to compare.
+            // CSR validation would swamp the exact arm at the small sizes compared here.
             let csr = lap.as_csr().expect("valid CSR");
             for (label, backend) in backends() {
                 let builder = Builder::<f64>::new(Config {
