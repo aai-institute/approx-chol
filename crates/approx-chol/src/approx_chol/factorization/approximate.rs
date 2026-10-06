@@ -416,7 +416,7 @@ impl<T: num_traits::Float> SequenceBuilder<T> {
     }
 
     /// `None` is a pivot that keeps everything it retained.
-    fn push_sampled(&mut self, vertex: usize, diagonal: T, column: Option<ColumnShares<'_, T>>) {
+    fn push_sampled(&mut self, vertex: usize, pivot: T, column: Option<ColumnShares<'_, T>>) {
         let retained = match column {
             Some(c) => self.push_column(
                 c.neighbors
@@ -428,7 +428,7 @@ impl<T: num_traits::Float> SequenceBuilder<T> {
             None => T::one(),
         };
         // A small pivot inverts fine; `one` would drop the block's scale outright.
-        let inverse = match T::one() / diagonal {
+        let inverse = match T::one() / pivot {
             inverse if inverse.is_finite() => inverse,
             _ => T::one(),
         };
