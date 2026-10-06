@@ -1,8 +1,7 @@
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;
 
-/// `forward[i]` is the input vertex at block-contiguous position `i`. Applied through
-/// scratch: an in-place cycle rotation measured slower in both phases.
+/// `forward[i]` is the input vertex at block position `i`; scratch beat in-place (measured).
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub(crate) struct Permutation {
@@ -10,8 +9,7 @@ pub(crate) struct Permutation {
 }
 
 impl Permutation {
-    /// `None` for the identity, which leaves connected input — the common case —
-    /// allocation-free on every solve.
+    /// `None` for the identity, keeping connected input allocation-free on every solve.
     pub(crate) fn from_order(forward: Vec<u32>) -> Option<Self> {
         if forward.iter().enumerate().all(|(i, &v)| i as u32 == v) {
             return None;

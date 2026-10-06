@@ -119,8 +119,7 @@ mod tests {
     use super::super::adjacency::{Edge, MultiEdgeGraph};
     use super::*;
 
-    /// A cap drifting from `mark_split_edges` bounds every star at a multiplicity
-    /// the graph does not carry.
+    /// A cap drifting from `mark_split_edges` bounds stars at a multiplicity the graph lacks.
     #[test]
     fn the_reported_cap_is_the_count_written_on_the_edges() {
         let k = SplitFactor::new(3).expect("3 splits");

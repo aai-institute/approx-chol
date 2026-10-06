@@ -117,8 +117,7 @@ fn every_block_error_variant_is_reachable() {
             |d| seq_of(d).steps[0].pivot_scale = f64::INFINITY,
             FactorError::StepValueInvalid { step: 0 },
         ),
-        // A share of the pivot is a share of it, and a remainder left negative by shares
-        // that overspend the pivot reads the same way here.
+        // A negative remainder from overspending shares reads the same as a negative share.
         (
             "solve coefficient is negative",
             approx,
@@ -199,8 +198,7 @@ fn every_block_error_variant_is_reachable() {
     }
 }
 
-/// The factorization builder is trusted with its own dims only because this fires when it
-/// is wrong.
+/// The builder is trusted with its own dims only because this fires when they are wrong.
 #[cfg(debug_assertions)]
 #[test]
 #[should_panic = "assertion"]

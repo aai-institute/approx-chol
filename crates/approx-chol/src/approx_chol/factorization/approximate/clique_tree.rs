@@ -57,9 +57,7 @@ impl<T: Real> SampledColumn<T> {
         })
     }
 
-    /// A uniform split with no fill. Unreachable from `factorize`, which admits only
-    /// strictly positive finite weights: only a caller handing `CliqueTreeSampler` its
-    /// own weights gets here.
+    /// Uniform split, no fill; only a standalone `CliqueTreeSampler` caller's weights reach here.
     fn push_uniform_shares<C>(&mut self, rest: &[StarEntry<T, C>]) {
         let fraction = T::one() / count_as_scalar::<T, _>(rest.len() + 1);
         let mut retained = T::one();
@@ -69,8 +67,7 @@ impl<T: Real> SampledColumn<T> {
         }
     }
 
-    /// Degree changes go to `deltas`, so the caller flushes one priority-queue move
-    /// per affected neighbor rather than one per fill edge.
+    /// Degree changes go to `deltas`: one queue move per affected neighbor, not per fill edge.
     pub(super) fn apply_fill_in_delta<C: EdgeCount>(
         &self,
         graph: &mut AdjListGraph<C, T>,
@@ -116,8 +113,7 @@ impl<T: Real> SampledColumn<T> {
     }
 }
 
-/// Neighbors walk a clique-tree path, each taking fraction `f_i = w_i * scale /
-/// capacity` of what earlier ones left.
+/// Neighbors walk a clique-tree path, each taking `f_i = w_i * scale / capacity` of what's left.
 struct StarElimination<T = f64> {
     /// Product of `(1 - f_k)` over the neighbors already taken.
     scale: T,
@@ -150,8 +146,7 @@ impl<T: Real> StarElimination<T> {
     }
 }
 
-/// Capacity is the live column sum, not `pivot_diag`, which keeps `f ∈ [0, 1]` by
-/// construction where a caller-maintained `diag[v]` can drift below the column sum.
+/// Capacity is the live column sum, not `pivot_diag`, which can drift below it and push `f` past 1.
 pub(super) fn sample_column<T: Real, C: EdgeCount>(
     star: &Star<T, C>,
     pivot_diag: T,
@@ -160,8 +155,7 @@ pub(super) fn sample_column<T: Real, C: EdgeCount>(
 ) {
     let entries = star.entries();
     column.reset(pivot_diag);
-    // The last neighbor takes what the others leave, so it never enters the loop and no
-    // caller derives its count from an index.
+    // The last neighbor takes the remainder, so no caller derives its count from an index.
     let Some((last, rest)) = entries.split_last() else {
         return;
     };
@@ -170,14 +164,11 @@ pub(super) fn sample_column<T: Real, C: EdgeCount>(
         return;
     }
 
-    // Fold in entry (sorted) order: the sum order affects the factor bit-for-bit under a
-    // fixed seed.
+    // Fold in sorted order: the sum order changes the factor bit-for-bit under a fixed seed.
     let total_weight = entries
         .iter()
         .fold(T::zero(), |acc, entry| acc + entry.weight);
-    // Entries are sorted ascending, so `total_weight >= w_i` puts every
-    // `f = w·scale/total` in `[0, 1]`: a finite positive total is the whole precondition,
-    // and any floor above it would judge scale instead.
+    // Sorted ascending puts every `f` in `[0, 1]`; a floor above zero would judge scale instead.
     if !(total_weight.is_finite() && total_weight > T::zero()) {
         column.push_uniform_shares(rest);
         return;
@@ -195,30 +186,20 @@ pub(super) fn sample_column<T: Real, C: EdgeCount>(
     column.diagonal = last.weight * elim.scale;
 }
 
-/// The star buffer the sampler refills, at the multiplicity it was built for. Fixed
-/// for the sampler's life because
-/// [`Config::split_merge`](crate::Config::split_merge) is fixed for a factorization's.
+/// Fixed for the sampler's life, as [`Config::split_merge`](crate::Config::split_merge) is.
 enum StarScratch<T: Real> {
     Single(Star<T, Single>),
     Multi(Star<T, Multi>, Multi),
 }
 
-/// The elimination path dedupes through its workspace; a standalone caller promises it
-/// instead. A repeat splits one edge's weight across two clique-tree positions and ties
-/// with itself, so it under-weights the fill rather than failing.
+/// Standalone callers promise dedup; a repeat ties with itself and under-weights the fill.
 fn neighbors_are_unique<T>(entries: &[(u32, T)]) -> bool {
     let mut seen: Vec<u32> = entries.iter().map(|&(neighbor, _)| neighbor).collect();
     seen.sort_unstable();
     seen.windows(2).all(|pair| pair[0] != pair[1])
 }
 
-/// Samples one star's clique tree at a time — the sparse stand-in for its Schur
-/// complement clique (GKS 2023, Algorithms 5 and 6) — for callers that eliminate a star
-/// outside a full factorization.
-///
-/// The scratch outlives the call, so eliminating a graph allocates once rather than
-/// once per star. Sampling needs `&mut self`, so a parallel caller wants one sampler
-/// per thread; on a shared base seed they agree per star index.
+/// Samples a star's clique tree outside a factorization; samplers on one seed agree per star index.
 pub struct CliqueTreeSampler<T: num_traits::Float + Send + Sync + 'static = f64> {
     star: StarScratch<T>,
     draws: CdfSampler<T>,
@@ -226,8 +207,7 @@ pub struct CliqueTreeSampler<T: num_traits::Float + Send + Sync + 'static = f64>
 }
 
 impl<T: num_traits::Float + Send + Sync + 'static> CliqueTreeSampler<T> {
-    /// `split_merge` is [`Config::split_merge`](crate::Config::split_merge) and takes
-    /// the same values. `seed` is the base each star's stream is derived from.
+    /// `split_merge` as in [`Config`](crate::Config); each star's stream derives from `seed`.
     pub fn new(seed: u64, split_merge: Option<u32>) -> Self {
         Self {
             star: match split_merge.and_then(SplitFactor::new) {
@@ -239,9 +219,7 @@ impl<T: num_traits::Float + Send + Sync + 'static> CliqueTreeSampler<T> {
         }
     }
 
-    /// Appends at most `k * (n-1)` fill edges to `out`, for a star of deduplicated
-    /// `entries`. `index` names the stream, so the same index answers alike whatever
-    /// order the caller eliminates in.
+    /// Appends ≤ `k * (n-1)` fill edges for deduped `entries`; `index` picks the stream.
     pub fn sample(&mut self, index: u64, entries: &[(u32, T)], out: &mut Vec<(u32, u32, T)>) {
         debug_assert!(
             neighbors_are_unique(entries),
@@ -263,9 +241,7 @@ impl<T: num_traits::Float + Send + Sync + 'static> CliqueTreeSampler<T> {
     }
 }
 
-/// The scratch is noise; the seed and the multiplicity actually in force are what a
-/// caller debugging a differing factor needs. Reporting `copies` rather than echoing
-/// `split_merge` keeps `Some(1)`, which selects AC, from printing as AC2.
+/// Reports `copies`, not `split_merge`, so `Some(1)` (which selects AC) never prints as AC2.
 impl<T: num_traits::Float + Send + Sync + 'static> core::fmt::Debug for CliqueTreeSampler<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let copies = match &self.star {
@@ -302,8 +278,7 @@ mod tests {
         }
     }
 
-    /// Or `Some(0)` selects AC through one public entry point and nothing through the
-    /// other.
+    /// Else `Some(0)` would select AC through one public entry point and nothing through the other.
     #[test]
     fn a_split_below_two_samples_the_same_edges_as_ac() {
         let star: [(u32, f64); 5] = [(0, 2.0), (1, 3.0), (2, 1.0), (3, 5.0), (4, 4.0)];
@@ -357,9 +332,7 @@ mod tests {
         }
     }
 
-    /// The scratch is what a reused sampler carries between stars, so a stale entry,
-    /// fraction or fill edge would show up as a star answering differently the second
-    /// time round.
+    /// Stale scratch from an earlier star would make the same star answer differently.
     #[test]
     fn a_reused_sampler_answers_as_a_fresh_one() {
         let stars: [Vec<(u32, f64)>; 3] = [
@@ -385,8 +358,7 @@ mod tests {
         }
     }
 
-    /// A repeated neighbor is the one input the tie-break cannot order, since it ties
-    /// with itself on both keys.
+    /// A repeated neighbor ties with itself on both keys, so the tie-break cannot order it.
     #[test]
     #[cfg(debug_assertions)]
     #[should_panic(expected = "one entry per neighbor")]

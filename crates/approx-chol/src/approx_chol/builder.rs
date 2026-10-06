@@ -41,8 +41,7 @@ where
         self.build_validated(narrowed.with_values(csr.values()))
     }
 
-    /// The multiplicity decides layout and split together, so each arm names one
-    /// algorithm end to end.
+    /// Multiplicity fixes layout and split together, so each arm is one algorithm end to end.
     fn build_validated(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
         let original_n = sddm.n();
         let ingestion = Ingestion::of(sddm)?;
@@ -91,8 +90,7 @@ where
     }
 }
 
-/// What every block shares, resolved — including the sampler each block restarts its
-/// own stream from, which is why [`Config`] does not survive construction.
+/// Per-block shared state; [`Config`] does not survive construction because the sampler replaces it.
 struct BlockFactorizer<T: Real, C: EdgeCount> {
     backend: Backend,
     sampler: CdfSampler<T>,
@@ -108,16 +106,13 @@ impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
         }
     }
 
-    /// Routing first, so a block the dense backend claims never has an elimination
-    /// graph built for it — only a fallback from that arm, or the approximate route,
-    /// reaches [`Ingestion::block_graph`].
+    /// Routes first, so a block the dense backend claims never builds an elimination graph.
     fn factor(
         &mut self,
         ingestion: &mut Ingestion<'_, T>,
         block: &BlockVertices<'_>,
     ) -> Result<(Block<T>, Option<Fallback>), Error> {
-        // Restarts for every block, routed or not, so one block's draws never shift
-        // because another was factored exactly.
+        // Every block restarts, so one block's draws never shift because another went exact.
         self.sampler.restart(block.first());
 
         let dim = BlockDim::of(block.len()).expect("a block has at least one vertex");

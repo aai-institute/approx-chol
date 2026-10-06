@@ -8,16 +8,14 @@ use core::num::NonZeroUsize;
 #[cfg(test)]
 mod tests;
 
-/// A block's dimension in both forms its consumers ask for, and derivable from either,
-/// so none of them spells the pinned variable's offset itself.
+/// A block's dimension in both forms consumers ask for, so none spells the pinned variable's offset.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BlockDim(NonZeroUsize);
 
 impl BlockDim {
-    /// `None` for a block of no variables: every dimension derived from it would
-    /// underflow.
+    /// `None` for a block of no variables, whose derived dimensions would underflow.
     pub(crate) fn of(total: usize) -> Option<Self> {
         NonZeroUsize::new(total).map(Self)
     }
@@ -67,8 +65,7 @@ impl<T> Block<T> {
 
 impl<T: num_traits::Float> Block<T> {
     pub(crate) fn new(dim: BlockDim, anchor: Anchor, cholesky: Cholesky<T>) -> Self {
-        // What the wire has to be told, a builder can get wrong too; every consumer sums
-        // these dims trusting that neither did.
+        // A builder can get the dims wrong as a payload can, and every consumer trusts them.
         #[cfg(any(feature = "serde", test))]
         debug_assert_eq!(cholesky.validate_for_dim(dim), Ok(()));
         Self {
@@ -79,8 +76,7 @@ impl<T: num_traits::Float> Block<T> {
     }
 }
 
-/// A block as a payload carries it — a `dim` nothing has held its `cholesky` to — in
-/// [`Block`]'s own field order, which is what a positional reader needs.
+/// A block as a payload carries it, `dim` unchecked, in [`Block`]'s positional field order.
 #[cfg(any(feature = "serde", test))]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 #[cfg_attr(
@@ -93,8 +89,7 @@ struct BlockData<T> {
     cholesky: Cholesky<T>,
 }
 
-/// Pinning the dim to the payload behind it is what lets every consumer sum block dims
-/// without a check of its own.
+/// Pinning the dim to its payload lets every consumer sum block dims without its own check.
 #[cfg(any(feature = "serde", test))]
 impl<T: num_traits::Float> TryFrom<BlockData<T>> for Block<T> {
     type Error = FactorError;

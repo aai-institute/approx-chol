@@ -1,8 +1,7 @@
 use crate::{CsrError, Error, IndexKind};
 use num_traits::{cast, PrimInt};
 
-/// Reserves up front: collecting into `Option<Vec<_>>` drops the size hint, so the
-/// conversion grew the output by repeated doubling — 3.5x the traffic of the result.
+/// Reserves up front: collecting into `Option<Vec<_>>` drops the size hint and cost 3.5x the traffic.
 fn cast_slice<S: PrimInt, D: PrimInt>(src: &[S], kind: IndexKind) -> Result<Vec<D>, Error> {
     let mut out = Vec::with_capacity(src.len());
     for &value in src {
@@ -23,12 +22,7 @@ fn as_usize<I: PrimInt>(value: I, kind: IndexKind, position: usize) -> Result<us
         }))
 }
 
-/// Borrowed CSR matrix view. Zero-copy from any CSR source.
-///
-/// This is the primary input type for
-/// [`Builder::build`](crate::low_level::Builder::build).
-/// Construct from raw arrays owned by any sparse matrix library
-/// (`sprs`, `faer`, or plain `Vec`s).
+/// Zero-copy, validated CSR view over any library's arrays: the factorization input.
 #[derive(Debug, Clone, Copy)]
 pub struct CsrRef<'a, T = f64, I = u32> {
     row_ptrs: &'a [I],
@@ -37,8 +31,7 @@ pub struct CsrRef<'a, T = f64, I = u32> {
     n: u32,
 }
 
-/// `u32`-narrowed index arrays still carrying the source view's validated
-/// invariants, so re-pairing them with values skips the `nnz` re-walk.
+/// `u32` index arrays that keep the source view's validation, so re-pairing skips the `nnz` re-walk.
 pub(crate) struct NarrowedCsr {
     row_ptrs: Vec<u32>,
     col_indices: Vec<u32>,
@@ -57,13 +50,7 @@ impl NarrowedCsr {
 }
 
 impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
-    /// Construct a `CsrRef` with full validation. The only constructor, so every
-    /// `CsrRef` that exists is structurally valid.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidCsr`] if the arrays are not a structurally valid
-    /// CSR of dimension `n`; the [`CsrError`] variant names the violation.
+    /// The only constructor, so every `CsrRef` is valid; [`Error::InvalidCsr`] names a violation.
     pub fn new(
         row_ptrs: &'a [I],
         col_indices: &'a [I],
@@ -108,8 +95,7 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
             }));
         }
 
-        // Both scans compare in `I`, so the happy path converts no index; only the
-        // error arms need a `usize` for the payload.
+        // Both scans compare in `I`, so only the error arms convert an index to `usize`.
         for i in 0..n {
             if self.row_ptrs[i] > self.row_ptrs[i + 1] {
                 return Err(Error::InvalidCsr(CsrError::RowPtrsNotNonDecreasing {
@@ -169,9 +155,7 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
 }
 
 impl<'a, T> CsrRef<'a, T, u32> {
-    /// Each row's `(col_indices, values)`, in order. Infallible: pinning `I` to
-    /// `u32` discharges the index conversion that [`validate`](Self::validate)
-    /// has to check for a general `I`.
+    /// Infallible: `u32` indices discharge the conversion [`validate`](Self::validate) checks.
     pub(crate) fn rows(self) -> impl Iterator<Item = (&'a [u32], &'a [T])> {
         (0..self.n as usize).map(move |i| {
             let start = self.row_ptrs[i] as usize;
@@ -182,11 +166,7 @@ impl<'a, T> CsrRef<'a, T, u32> {
 }
 
 impl<'a, T: Clone, I: PrimInt> CsrRef<'a, T, I> {
-    /// Convert to an owned CSR with `u32` indices.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidCsr`] if any index does not fit in `u32`.
+    /// Owned copy with `u32` indices; [`Error::InvalidCsr`] if an index does not fit.
     pub fn to_owned_u32(&self) -> Result<OwnedCsr<T, u32>, Error> {
         let NarrowedCsr {
             row_ptrs,
@@ -212,20 +192,14 @@ pub struct OwnedCsr<T = f64, I = u32> {
 }
 
 impl<T: Clone, I: PrimInt> OwnedCsr<T, I> {
-    /// Convert `usize`-indexed CSR arrays to an owned representation.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidCsr`] if any value exceeds index type
-    /// capacity.
+    /// Owned CSR from `usize` arrays; [`Error::InvalidCsr`] if a value exceeds the index type.
     pub fn try_from_usize(
         row_ptrs: &[usize],
         col_indices: &[usize],
         values: &[T],
         n: usize,
     ) -> Result<Self, Error> {
-        // `n` must fit `u32` to be stored and `I` for `validate` to bounds-check
-        // columns against it at all.
+        // `n` must fit `u32` to be stored, and `I` for `validate` to bounds-check columns against it.
         let n = u32::try_from(n)
             .ok()
             .filter(|&fits| cast::<u32, I>(fits).is_some())
@@ -248,11 +222,7 @@ impl<T: Clone, I: PrimInt> OwnedCsr<T, I> {
 }
 
 impl<T, I: PrimInt> OwnedCsr<T, I> {
-    /// Borrow as a [`CsrRef`] for use with
-    /// [`Builder::build`](crate::low_level::Builder::build).
-    ///
-    /// Infallible: both constructors validate and the fields are private, so
-    /// there is nothing left to check.
+    /// Infallible: both constructors validate and the fields are private.
     pub fn as_csr_ref(&self) -> CsrRef<'_, T, I> {
         CsrRef {
             row_ptrs: &self.row_ptrs,
@@ -263,10 +233,7 @@ impl<T, I: PrimInt> OwnedCsr<T, I> {
     }
 }
 
-/// Lets `&OwnedCsr` be used directly at the `TryInto<CsrRef>` entry point
-/// (e.g. `factorize(&owned)`), like the zero-copy sparse conversions. The
-/// blanket `TryFrom` this induces has `Error = Infallible`, which
-/// [`Builder::build`](crate::low_level::Builder::build) already accepts.
+/// Lets `factorize(&owned)` work through the induced `TryFrom<Error = Infallible>`.
 impl<'a, T, I: PrimInt> From<&'a OwnedCsr<T, I>> for CsrRef<'a, T, I> {
     fn from(owned: &'a OwnedCsr<T, I>) -> Self {
         owned.as_csr_ref()
@@ -365,8 +332,6 @@ mod tests {
         let as_ref: CsrRef<'_, f64, u32> = (&owned).into();
         assert_eq!(as_ref.n(), 4);
 
-        // The `TryInto` bound at the `factorize` entry point accepts it through
-        // `Error = Infallible`.
         let factor = crate::factorize(&owned).expect("factorize &OwnedCsr");
         assert_eq!(factor.n(), 4);
     }

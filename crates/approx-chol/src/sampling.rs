@@ -7,17 +7,13 @@ use num_traits::NumCast;
 /// At or below this range size a linear CDF scan beats binary search.
 const LINEAR_THRESHOLD: usize = 32;
 
-/// The canonical 53-bit draw, in `[0, 1)` by construction: `bits >> 11` is at most
-/// `2^53 - 1` and the scale is a power of two, so the product is exact and no rounding
-/// lands on 1.0. Taking bits rather than an rng keeps the mapping testable at the
-/// extremes the generator reaches only by chance.
+/// 53 bits times a power of two is exact, so never 1.0; takes bits so tests reach the extremes.
 #[inline]
 fn draw_from(bits: u64) -> f64 {
     ((bits >> 11) as f64) * (1.0 / (1u64 << 53) as f64)
 }
 
-/// The mass a suffix leaves to draw from, `[base, base + remaining)`. Holding one is the
-/// guard: an unsamplable suffix has no interval, so it never reaches a draw.
+/// A suffix's draw range `[base, base + remaining)`; an unsamplable suffix has none to draw from.
 #[derive(Clone, Copy)]
 struct SuffixInterval<T> {
     base: T,
@@ -25,9 +21,7 @@ struct SuffixInterval<T> {
 }
 
 impl<T: Real> SuffixInterval<T> {
-    /// Panics on an exotic `Float` rather than substituting, as
-    /// [`crate::types::count_as_scalar`] does: a substituted draw would silently aim every
-    /// sample at the same neighbor.
+    /// Panics on an exotic `Float`: a substituted draw would aim every sample at one neighbor.
     #[inline]
     fn point(self, u: f64) -> T {
         <T as NumCast>::from(u).expect("the draw is representable in T") * self.remaining
@@ -35,9 +29,7 @@ impl<T: Real> SuffixInterval<T> {
     }
 }
 
-/// A star's neighbors as a weighted distribution, drawn from by suffix. Owning
-/// `neighbors` rather than borrowing leaves one length in play, so a draw answers
-/// with a neighbor rather than an offset the caller re-indexes.
+/// Owns `neighbors`, so a suffix draw answers a neighbor, not an offset the caller re-indexes.
 pub(crate) struct CdfSampler<T = f64> {
     neighbors: Vec<u32>,
     cumsum: Vec<T>,
@@ -55,8 +47,7 @@ impl<T> CdfSampler<T> {
         }
     }
 
-    /// A stream per block off the one seed, keeping the scratch. `seed_from_u64`
-    /// decorrelates neighboring values, so `block` needs no hashing.
+    /// A stream per block off one seed; `seed_from_u64` decorrelates neighbors, so no hashing.
     pub(crate) fn restart(&mut self, block: u64) {
         self.rng = SmallRng::seed_from_u64(self.seed.wrapping_add(block));
     }
@@ -73,8 +64,7 @@ impl<T> CdfSampler<T> {
 }
 
 impl<T: Real> CdfSampler<T> {
-    /// Takes the pairs rather than whatever holds them, so the sampler stays
-    /// independent of how a caller stores a weighted neighborhood.
+    /// Takes pairs, not their container, so the sampler ignores how callers store neighborhoods.
     #[inline]
     pub(crate) fn prepare(&mut self, entries: impl IntoIterator<Item = (u32, T)>) {
         self.neighbors.clear();
@@ -87,8 +77,7 @@ impl<T: Real> CdfSampler<T> {
         }
     }
 
-    /// Takes the whole run of draws, so one suffix is resolved once rather than per draw
-    /// and no caller can hold a resolved suffix across a [`Self::prepare`].
+    /// Takes the whole run, so a suffix resolves once and none survives a [`Self::prepare`].
     #[inline]
     pub(crate) fn sample_batch(&mut self, start: usize, n: u32, mut emit: impl FnMut(u32)) {
         let Some(interval) = self.suffix_interval(start) else {
@@ -100,9 +89,7 @@ impl<T: Real> CdfSampler<T> {
         }
     }
 
-    /// The end is the prepared distribution's own length, so no caller can name a
-    /// stale one. `None` leaves the block's stream where it was, since only
-    /// [`Self::sample_batch`] draws.
+    /// Ends at the prepared length, so none is stale; `None` spends no draw from the stream.
     #[inline]
     fn suffix_interval(&self, start: usize) -> Option<SuffixInterval<T>> {
         let end = self.cumsum.len();
@@ -116,8 +103,7 @@ impl<T: Real> CdfSampler<T> {
             T::zero()
         };
         let remaining = self.cumsum[end - 1] - base;
-        // A positive interval is all a draw needs; a floor above zero would refuse to
-        // sample a suffix whose mass is small only because the input's scale is.
+        // No floor above zero: it would refuse a suffix that is small only by input scale.
         if remaining <= T::zero() {
             return None;
         }
@@ -134,18 +120,14 @@ impl<T: Real> CdfSampler<T> {
             while k < end && self.cumsum[k] < r {
                 let previous = k;
                 k += 1;
-                // A broken advance leaves this condition re-checking the same index
-                // forever instead of failing, so a bad increment hangs rather than
-                // panics.
+                // Turns a broken increment's infinite loop into a panic.
                 debug_assert!(k > previous, "index_for_draw linear scan failed to advance");
             }
             k
         } else {
             self.cumsum[start..end].partition_point(|&c| c < r) + start
         };
-        // `u < 1.0` does not survive narrowing to `f32`, which rounds every draw above
-        // `1 - 2^-25` to exactly 1.0 and leaves `fl(remaining + base) > cumsum[end - 1]`
-        // reachable. At `f64` the draw's own bound already rules that out.
+        // A draw narrowed to `f32` can round to 1.0 and overrun `cumsum[end - 1]`; `f64` cannot.
         k.min(end - 1)
     }
 }
@@ -154,8 +136,7 @@ impl<T: Real> CdfSampler<T> {
 mod tests {
     use super::*;
 
-    /// Delegates rather than re-composing, so the tests reach `sample_batch` itself and a
-    /// mutant inside it cannot hide behind a second copy of its body.
+    /// Delegates, so tests reach `sample_batch` itself and a mutant can't hide behind a copy.
     fn sample_after<T: Real>(sampler: &mut CdfSampler<T>, start: usize) -> Option<u32> {
         let mut drawn = None;
         sampler.sample_batch(start, 1, |neighbor| drawn = Some(neighbor));
@@ -182,8 +163,7 @@ mod tests {
         counts
     }
 
-    /// Three entries stay under [`LINEAR_THRESHOLD`], fifty do not. Critical values
-    /// are chi-squared at `p = 0.001` for `len - 1` degrees of freedom.
+    /// Three entries stay under [`LINEAR_THRESHOLD`], fifty do not; critical at `p = 0.001`.
     #[test]
     fn draws_follow_the_weights_on_both_search_arms() {
         let skewed: Vec<(u32, f64)> = vec![(0, 1.0), (1, 2.0), (2, 7.0)];
@@ -209,10 +189,7 @@ mod tests {
         }
     }
 
-    /// A suffix draw is uniform over `[base, total)`, so the prefix's mass must leave
-    /// the interval's width untouched. `monotonic_suffix` sweeps every start but only
-    /// judges range and reachability, both of which a mis-sized interval still
-    /// satisfies — it just aims the draws at the wrong end of the suffix.
+    /// A mis-sized interval passes `monotonic_suffix`'s range checks but skews the suffix.
     #[test]
     fn a_heavy_prefix_does_not_reshape_the_suffix() {
         let entries: Vec<(u32, f64)> = vec![(0, 100.0), (1, 1.0), (2, 2.0), (3, 7.0)];
@@ -236,8 +213,7 @@ mod tests {
         );
     }
 
-    /// Scaling every weight scales the CDF, not the distribution, so a suffix stays as
-    /// samplable at `1e-300` as at unit magnitude.
+    /// Scaling the weights scales the CDF, not the distribution, so `1e-300` samples like unit.
     #[test]
     fn a_uniformly_scaled_distribution_draws_alike() {
         let reference = sample_counts(&[(0, 1.0), (1, 2.0), (2, 7.0)], 0, 1_000);
@@ -282,9 +258,7 @@ mod tests {
         }
     }
 
-    /// The old `/(u64::MAX as f64 + 1.0)` mapping rounded the top of `next_u64`'s range to
-    /// exactly `1.0`. Stepping by `1 << 11` moves the retained bits every iteration — a
-    /// stride of 1 only walks the 11 discarded bits and re-tests one draw.
+    /// Strides by `1 << 11` so each step changes the retained bits, not the 11 discarded ones.
     #[test]
     fn every_draw_is_below_one() {
         let top = (0..4096u64).map(|d| u64::MAX - d * (1 << 11));
@@ -294,9 +268,7 @@ mod tests {
         }
     }
 
-    /// Reverting #109 moves `u` by at most `2^-53`, which changes the chosen bucket only on
-    /// a boundary straddle — so the mapping has to be pinned on the draw's own bits, where
-    /// truncation and round-to-nearest disagree on every `bits` with a nonzero low 11.
+    /// Pinned on raw bits: a `2^-53` shift of `u` changes the bucket only on a boundary straddle.
     #[test]
     fn the_samplers_own_draw_is_the_documented_mapping() {
         let mut sampler = CdfSampler::<f64>::new(SEED);
@@ -312,8 +284,7 @@ mod tests {
         }
     }
 
-    /// The draw's value is [`the_samplers_own_draw_is_the_documented_mapping`]'s; this pins
-    /// what surrounds it — exactly one draw per call, `start` reaching the search unchanged.
+    /// Pins exactly one draw per call, with `start` reaching the search unchanged.
     #[test]
     fn sample_batch_maps_one_raw_draw_per_call() {
         let entries = ascending_weights(64);
@@ -336,11 +307,7 @@ mod tests {
         }
     }
 
-    /// Narrowing to `f32` rounds every draw above `1 - 2^-25` to exactly 1.0, so
-    /// `fl(remaining + base)` can still exceed the last cumulative sum and the clamp stays
-    /// load-bearing — it is not dead code left over from the `[0, 1]` draw. These weights
-    /// were found by searching random distributions for a start whose `remaining` rounds up;
-    /// at `f64` that search returns nothing, which is why only the `f32` case is pinned here.
+    /// Searched-for weights where `f32` narrowing overruns the CDF; `f64` has no such case.
     #[test]
     fn the_top_draw_narrowed_to_f32_still_needs_the_clamp() {
         let top = draw_from(u64::MAX);
@@ -376,9 +343,7 @@ mod tests {
         }
     }
 
-    /// Both guards answer `None`, and a `None` that consumed a draw would shift every
-    /// later value in the block's stream. Entry 3 carries no mass, so `start = 3` is
-    /// refused by the interval rather than by the length.
+    /// A `None` that drew would shift the block's stream; `start = 3` hits the interval guard.
     #[test]
     fn an_unsamplable_suffix_spends_no_draw() {
         let entries: Vec<(u32, f64)> = vec![(0, 1.0), (1, 2.0), (2, 7.0), (3, 0.0)];

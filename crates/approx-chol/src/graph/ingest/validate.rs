@@ -84,8 +84,7 @@ pub(super) enum Grounding<T> {
     },
 }
 
-/// Reads every stored entry exactly once, which is what lets [`Canonical::of`] leave
-/// finiteness here. Builds nothing: routing waits on the layout this pass feeds.
+/// Reads every stored entry once, so [`Canonical::of`] leaves finiteness here; routing waits on it.
 pub(super) fn validate<T: Real>(canonical: &Canonical<'_, T>) -> Result<Ingested<T>, Error> {
     let (row_ptrs, col_indices, values) = canonical.arrays();
     let n = row_ptrs.len() - 1;
@@ -123,8 +122,7 @@ pub(super) fn validate<T: Real>(canonical: &Canonical<'_, T>) -> Result<Ingested
             if upper > T::zero() {
                 return Err(Error::PositiveOffDiagonal { edge: (row, col) });
             }
-            // Each row sums the value it stores: charging `upper` to both would read
-            // the tolerated mirror difference as `col`'s own surplus and ground it.
+            // Each row sums its own value; charging `upper` to both grounds `col` on mirror noise.
             row_sums[row] = row_sums[row] + upper;
             row_sums[col] = row_sums[col] + lower;
             root = sets.union_resolved(root, col as u32);
@@ -133,8 +131,7 @@ pub(super) fn validate<T: Real>(canonical: &Canonical<'_, T>) -> Result<Ingested
     ground(diagonal, row_sums, canonical.terms(), sets)
 }
 
-/// How far one row's diagonal exceeds its off-diagonal mass, judged against the noise
-/// the row's own scale and term count can carry.
+/// A row's diagonal surplus, judged against the noise its own scale and term count can carry.
 enum RowBalance<T> {
     NonFinite,
     Deficit,
@@ -153,8 +150,7 @@ impl<T: Real> RowBalance<T> {
         if !scale.is_finite() {
             return Self::NonFinite;
         }
-        // One floor for both signs: forgiving more in one direction grounds a row for
-        // drift that the opposite sign would dismiss as noise.
+        // One floor for both signs, or a row grounds on drift the opposite sign dismisses as noise.
         let accumulated = T::epsilon() * scale * count_as_scalar::<T, _>(terms);
         if excess < -accumulated {
             return Self::Deficit;
@@ -209,8 +205,7 @@ fn ground<T: Real>(
         ));
     }
     diagonal.push(total);
-    // Absent from the CSR, so the rows it closes are unioned through it here —
-    // connectivity read from the CSR alone would hand each component back separately.
+    // The ground is absent from the CSR, so the rows it closes are unioned through it here.
     let vertex = sets.push();
     let mut root = vertex;
     for (row, &surplus) in row_sums.iter().enumerate() {

@@ -26,8 +26,7 @@ fn components_sharing_a_ground_vertex_are_one_block() {
     );
 }
 
-/// No surplus, so nothing grounds them — the test above would pass on a layout
-/// that merged unconditionally.
+/// No surplus grounds them, so a layout that merged unconditionally fails here.
 #[test]
 fn components_with_no_surplus_stay_separate() {
     let blocks = blocks_of(
@@ -38,8 +37,7 @@ fn components_with_no_surplus_stay_separate() {
     assert_eq!(blocks, Some(vec![vec![0, 1], vec![2, 3]]));
 }
 
-/// A vertex no edge reaches is its own block, which is what makes the ordering
-/// "by lowest member" observable rather than incidental.
+/// An isolated vertex is its own block, which makes ordering "by lowest member" observable.
 #[test]
 fn blocks_are_ordered_by_their_lowest_vertex() {
     let blocks = blocks_of(
@@ -50,8 +48,7 @@ fn blocks_are_ordered_by_their_lowest_vertex() {
     assert_eq!(blocks, Some(vec![vec![0, 3], vec![1], vec![2]]));
 }
 
-/// The layout is read before any graph exists, so this pins that the graph a block
-/// is actually handed still has the vertices the layout promised it.
+/// The layout precedes any graph, so this pins that a block's graph has the vertices it promised.
 #[test]
 fn the_built_graph_agrees_with_the_layout() {
     let row_ptrs = [0u32, 2, 4, 6, 8];

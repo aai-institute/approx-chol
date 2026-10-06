@@ -1,7 +1,6 @@
 use crate::types::{count_as_scalar, Real};
 
-/// Every block is a connected pure Laplacian, so its null space is `span{1}` and its
-/// last variable is pinned; this is whether pinning it is by itself the answer.
+/// Whether pinning a block's last variable (its Laplacian null space is `span{1}`) is the answer.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Anchor {
@@ -20,8 +19,7 @@ impl Anchor {
                 };
                 *pinned = -rest.iter().fold(T::zero(), |sum, &value| sum + value);
             }
-            // Nothing to absorb the null-space component, so project it out; an
-            // inconsistent right-hand side then gives least squares.
+            // Nothing absorbs the null space, so project it out; an inconsistent rhs gets least squares.
             Self::Floating => project_zero_mean(values),
         }
     }

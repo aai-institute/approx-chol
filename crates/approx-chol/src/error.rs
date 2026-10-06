@@ -7,8 +7,7 @@ pub enum Error {
     /// The input CSR matrix has inconsistent dimensions or invalid structure.
     InvalidCsr(CsrError),
 
-    /// A coalesced off-diagonal entry is strictly positive, so the matrix is outside
-    /// the SDDM/Laplacian class.
+    /// A coalesced off-diagonal entry is strictly positive: the matrix is not SDDM.
     PositiveOffDiagonal {
         /// `(row, column)` of the offending strictly-positive off-diagonal.
         edge: (usize, usize),
@@ -42,9 +41,7 @@ pub enum Error {
     DenseFactorizationFailed(UnusablePivot),
 }
 
-/// An exact dense Cholesky pivot that could not be used, and where it was. The same
-/// payload is reported as a [`Fallback`] or raised as
-/// [`Error::DenseFactorizationFailed`].
+/// An unusable exact pivot, reported as a [`Fallback`] or raised as [`Error::DenseFactorizationFailed`].
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnusablePivot {
@@ -189,14 +186,12 @@ pub enum CsrError {
         /// Matrix dimension.
         n: usize,
     },
-    /// An index value (row pointer or column index) cannot be represented in the
-    /// target integer type.
+    /// A row pointer or column index does not fit the target integer type.
     IndexExceedsIndexType {
         /// Which CSR array the bad value came from.
         kind: IndexKind,
     },
-    /// Matrix dimension `n` cannot be represented in the target integer type
-    /// (internally `u32`).
+    /// Matrix dimension `n` does not fit the target integer type (internally `u32`).
     MatrixDimensionExceedsIndexType {
         /// Matrix dimension that does not fit.
         n: usize,
