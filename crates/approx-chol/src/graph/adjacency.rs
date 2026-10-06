@@ -89,8 +89,7 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
     pub(crate) fn live_neighbors(&self, v: usize, scratch: &mut Vec<Neighbor<T, C>>) {
         scratch.clear();
         scratch.extend(self.adj[v].iter().filter_map(|e| {
-            // Positive predicate, so a NaN weight is dead: `!(w > 0)` differs from
-            // `w <= 0` there. Splitting sets the count and leaves the weight alone.
+            // Positive predicate, so NaN weights are dead; splitting sets count, not weight.
             if e.weight > T::zero() && !self.eliminated.get(e.to as usize) {
                 Some(Neighbor {
                     to: e.to,
@@ -103,8 +102,7 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
         }));
     }
 
-    /// Mark `v` as eliminated and release its adjacency storage. Out of line: the call is
-    /// O(1) against an O(degree) body, but its footprint in the elimination loop is not.
+    /// Out of line: the call is O(1) against an O(degree) body, but its loop footprint is not.
     #[inline(never)]
     pub(crate) fn eliminate_vertex(&mut self, v: usize) {
         self.eliminated.set(v);
@@ -196,8 +194,7 @@ mod tests {
         assert_eq!(size_of::<Single>(), 0);
     }
 
-    /// Zero and NaN weights are dead though the neighbor lives; reading either as
-    /// live puts a phantom edge in the star.
+    /// Zero and NaN weights are dead though the neighbor lives; either read live is a phantom edge.
     #[test]
     fn only_positively_weighted_edges_are_live() {
         let graph = MultiEdgeGraph::<f64>::from_adjacency(vec![

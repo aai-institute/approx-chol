@@ -14,8 +14,7 @@
 //! # }
 //! ```
 //!
-//! [`Config::backend`] picks a factorization per connected block: exact dense
-//! Cholesky at or below `max_dim` solved variables, approximate elimination above.
+//! [`Config::backend`] picks exact dense Cholesky or approximate elimination per connected block.
 //!
 //! ```
 //! use approx_chol::{factorize_with, Backend, Config, CsrRef, ExactFailure};
@@ -34,8 +33,7 @@
 //! };
 //! let factor = factorize_with(csr, config)?;
 //!
-//! // A block whose exact pivot is unusable is factored approximately and listed
-//! // here, so a non-empty slice means the factor is less accurate than asked for.
+//! // Lists blocks factored approximately after an unusable exact pivot: less accurate than asked.
 //! assert!(factor.fallbacks().is_empty());
 //! # Ok(())
 //! # }
@@ -72,13 +70,7 @@ where
     factorize_with(sddm, Config::default())
 }
 
-/// Factorize an SDDM matrix with a custom [`Config`].
-///
-/// # Errors
-///
-/// Beyond the input rejections [`factorize`] shares, returns
-/// [`Error::DenseFactorizationFailed`] when a block's exact pivot is unusable and
-/// [`ExactFailure::Error`] asked for that to fail rather than fall back.
+/// [`factorize`] with a custom [`Config`], whose [`ExactFailure::Error`] can raise a pivot error.
 pub fn factorize_with<'a, T, I, M>(sddm: M, config: Config) -> Result<Factor<T>, Error>
 where
     T: num_traits::Float + Send + Sync + 'static,

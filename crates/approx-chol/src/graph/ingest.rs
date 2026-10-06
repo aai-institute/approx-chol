@@ -62,8 +62,7 @@ impl<'a, T: Real> Ingestion<'a, T> {
         self.diagonal[block.global(local)]
     }
 
-    /// Upper, not the stored lower: mirrors may differ by ulps and the approximate
-    /// route symmetrizes on this one.
+    /// Upper, not lower: mirrors may differ by ulps and the approximate route symmetrizes on this one.
     pub(crate) fn upper_row(
         &self,
         block: &BlockVertices<'_>,

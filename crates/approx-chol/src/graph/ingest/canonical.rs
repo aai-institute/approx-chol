@@ -1,8 +1,7 @@
 use crate::types::Real;
 use crate::{CsrRef, Error};
 
-/// Strictly ascending columns per row, which scipy already emits, so only rare input
-/// pays for the rewritten copy.
+/// Strictly ascending columns per row; scipy already emits them, so only rare input pays for a copy.
 pub(super) struct Canonical<'a, T> {
     input: CsrRef<'a, T, u32>,
     /// `None` when the caller's arrays are already canonical.
@@ -10,8 +9,7 @@ pub(super) struct Canonical<'a, T> {
 }
 
 impl<'a, T: Real> Canonical<'a, T> {
-    /// Reads no value on the canonical path: `validate` checks each as it reads it,
-    /// sparing a whole stream over the widest array.
+    /// Reads no value on the canonical path, sparing a stream: `validate` checks each as it reads it.
     pub(super) fn of(csr: CsrRef<'a, T, u32>) -> Result<Self, Error> {
         if is_canonical(csr.row_ptrs(), csr.col_indices()) {
             return Ok(Self {

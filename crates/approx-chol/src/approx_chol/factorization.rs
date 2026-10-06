@@ -1,5 +1,4 @@
-//! A [`block`] is an [`anchor`] paired with a [`cholesky`], the two chosen
-//! independently — by augmentation and by policy — so all four combinations occur.
+//! A [`block`] pairs an independently chosen [`anchor`] and [`cholesky`]; all four pairs occur.
 
 #[cfg(any(feature = "serde", test))]
 use core::fmt;
@@ -21,13 +20,11 @@ pub use factor::FACTOR_FORMAT_VERSION;
 pub use factor::{Factor, SolveError};
 pub(super) use permutation::Permutation;
 
-/// Raised at the serde boundary, before a corrupted persisted factor can reach the
-/// solve path.
+/// Raised at the serde boundary, before a corrupted persisted factor can reach the solve.
 #[cfg(any(feature = "serde", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum FactorError {
-    // A payload is only ever written with the current version, so `test` alone leaves
-    // the mismatch arm unreachable without the serde boundary.
+    // Payloads are only written at the current version, so without serde this is unreachable.
     #[cfg(feature = "serde")]
     UnsupportedFormatVersion {
         found: u32,
@@ -83,8 +80,7 @@ pub(super) enum FactorError {
 #[cfg(any(feature = "serde", test))]
 impl fmt::Display for FactorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // The version mismatch is the one arm that is not corruption: the bytes are
-        // intact and were written by a release this one does not read.
+        // Not corruption: intact bytes written by a release this one does not read.
         #[cfg(feature = "serde")]
         if let Self::UnsupportedFormatVersion { found, supported } = self {
             return write!(

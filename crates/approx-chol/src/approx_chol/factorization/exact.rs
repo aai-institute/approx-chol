@@ -47,11 +47,7 @@ const fn packed_len(m: usize) -> Option<usize> {
     }
 }
 
-/// Lower triangle only: a stored upper triangle would double the persisted factor and
-/// embed the input matrix in it.
-///
-/// Read from the ingested arrays rather than from an elimination graph, because a block
-/// that reaches here is never eliminated on and so never needs one built.
+/// Read from the ingested arrays: a block that reaches here never needs an elimination graph.
 fn assemble<T: Real>(
     ingestion: &Ingestion<'_, T>,
     block: &BlockVertices<'_>,
@@ -61,13 +57,10 @@ fn assemble<T: Real>(
     for row in 0..m {
         matrix.row_mut(row)[row] = ingestion.block_diagonal(block, row);
     }
-    // Scattered from the upper triangle rather than gathered from the lower one: the
-    // upper entry is the mirror the whole crate treats as authoritative, and reaching it
-    // by row means each block row is still read exactly once.
+    // Scattered from the upper triangle, the authoritative mirror, still reading each row once.
     for row in 0..m {
         ingestion.upper_row(block, row, |col, value| {
-            // Past the triangle is the block's pinned last vertex, whose row and column
-            // the dense factor does not carry.
+            // Past the triangle is the pinned last vertex, which the dense factor does not carry.
             if col < m {
                 let slot = &mut matrix.row_mut(col)[row];
                 *slot = *slot + value;
@@ -77,8 +70,7 @@ fn assemble<T: Real>(
     Ok(matrix)
 }
 
-/// Packed: row `r` is its own `r + 1` scalars, so no consumer restates where one
-/// starts.
+/// Packed lower triangle: an upper one would double the persisted factor and embed the input.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub(crate) struct LowerTriangular<T> {
@@ -86,8 +78,7 @@ pub(crate) struct LowerTriangular<T> {
 }
 
 impl<T> LowerTriangular<T> {
-    /// [`packed_len`] inverted, so the row count is the triangle's own fact rather
-    /// than one every consumer is handed alongside it.
+    /// [`packed_len`] inverted, so the row count is the triangle's own fact, not passed alongside.
     pub(super) fn rows(&self) -> usize {
         ((8 * self.values.len() + 1).isqrt() - 1) / 2
     }
@@ -117,8 +108,7 @@ impl<T: Real> LowerTriangular<T> {
         Ok(Self { values })
     }
 
-    /// Indexes `values` directly: the split borrow [`row`](Self::row) would need
-    /// measured 1.2–2.1% slower across `n = 128..384` on a complete graph.
+    /// Indexes `values` directly: borrowing via [`row`](Self::row) measured 1.2–2.1% slower.
     fn factor_in_place(mut self) -> Result<Self, NotFactorable> {
         let m = self.rows();
         let matrix = &mut self.values;
@@ -165,8 +155,7 @@ impl<T: Real> LowerTriangular<T> {
         }
         for row in (0..m).rev() {
             let mut value = solved[row];
-            // Down column `row`, so each factor entry is in a different row: strided,
-            // unlike the forward pass, and the reason this one keeps an index.
+            // Strided down column `row`, unlike the forward pass, which is why this keeps an index.
             for (offset, &solution) in solved[row + 1..].iter().enumerate() {
                 value = value - self.row(row + 1 + offset)[row] * solution;
             }
@@ -192,14 +181,12 @@ impl<T: num_traits::Float> LowerTriangular<T> {
         // Through `pinned_dim`, so no call order leaves the trailing entries unread.
         for row in 0..self.pinned_dim()?.solved() {
             let entries = self.row(row);
-            // `substitute` divides by each diagonal entry twice per row, so a
-            // pivot whose reciprocal overflows cannot be divided by either.
+            // `substitute` divides by each pivot, so one whose reciprocal overflows is unusable.
             let pivot = entries[row];
             if DenseFailure::of(pivot).is_some() || !(T::one() / pivot).is_finite() {
                 return Err(FactorError::ExactPivotInvalid { index: row });
             }
-            // A real Cholesky factor's row norm is a diagonal of the matrix it
-            // factors, so a row that squares to infinity factors nothing.
+            // A row's norm is a diagonal of the factored matrix; an infinite one factors nothing.
             let norm = entries
                 .iter()
                 .fold(T::zero(), |sum, &value| sum + value * value);

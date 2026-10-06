@@ -35,8 +35,7 @@ mod validation {
 
     use super::*;
 
-    /// Three variables, and a cholesky that is valid but arbitrary: nothing at this level
-    /// reads it.
+    /// Three variables; the cholesky is arbitrary because nothing at this level reads it.
     fn block(anchor: Anchor) -> Block<f64> {
         Block::new(
             BlockDim::of(3).expect("fixture dimension is non-zero"),
@@ -73,8 +72,7 @@ mod validation {
         );
     }
 
-    /// The reported position is the offending entry, or the map's length when it is too
-    /// short to have one.
+    /// Reports the offending entry, or the map's length when it is too short to have one.
     #[test]
     fn a_permutation_that_does_not_cover_the_factor_is_rejected() {
         let cases = [

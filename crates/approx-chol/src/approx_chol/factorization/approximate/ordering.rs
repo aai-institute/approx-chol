@@ -10,9 +10,7 @@ struct PQElem {
     key: u32,  // current degree estimate
 }
 
-/// Each bucket is a doubly-linked list threaded through [`PQElem`]; `min_list` is a
-/// *lower bound* on the minimum non-empty bucket, which
-/// [`next_vertex`](Self::next_vertex) scans upward from.
+/// Buckets are linked lists through [`PQElem`]; `min_list` is only a lower bound on the minimum.
 pub(super) struct DynamicOrdering {
     elems: Vec<PQElem>, // indexed by vertex id
     lists: Vec<u32>,    // bucket heads, indexed by key_map(degree)
@@ -20,14 +18,11 @@ pub(super) struct DynamicOrdering {
     bucket_base: usize,
 }
 
-/// The one place the bucket count follows from the base, so the cap below and
-/// [`DynamicOrdering::new`] cannot disagree about which bucket is last.
+/// Sole derivation of the bucket count, so `key_map`'s cap and `new` agree on the last bucket.
 fn n_buckets(bucket_base: usize) -> usize {
     bucket_base.saturating_mul(2).saturating_add(1)
 }
 
-/// Degrees at or below `bucket_base` get their own bucket; higher ones group by
-/// `bucket_base + degree / bucket_base`.
 fn key_map(degree: usize, bucket_base: usize) -> usize {
     if degree <= bucket_base {
         degree
@@ -41,9 +36,7 @@ impl DynamicOrdering {
         while self.min_list < self.lists.len() && self.lists[self.min_list] == SENTINEL {
             let previous = self.min_list;
             self.min_list += 1;
-            // A broken advance leaves this condition re-checking the same bucket
-            // forever instead of failing, so a bad increment hangs rather than
-            // panics.
+            // A broken advance would hang re-checking one bucket; this turns that into a panic.
             debug_assert!(
                 self.min_list > previous,
                 "next_vertex's bucket scan failed to advance"
@@ -96,8 +89,7 @@ impl DynamicOrdering {
         }
     }
 
-    /// `i64` so the full `u32` count range negates and sums without the sign flip an
-    /// `i32` cast would cause.
+    /// `i64` so negating a full-range `u32` count cannot sign-flip as an `i32` would.
     fn apply_delta(&mut self, i: usize, delta: i64) {
         let key = self.elems[i].key;
         if key == u32::MAX {
@@ -116,8 +108,7 @@ impl DynamicOrdering {
     }
 }
 
-/// One bucket move per affected vertex on [`flush`](Self::flush), which resets exactly
-/// the vertices it touched so the caller need not enumerate them.
+/// One bucket move per affected vertex on [`flush`](Self::flush), which resets what it touched.
 pub(super) struct DegreeDeltas {
     buf: Vec<i64>,
     touched: Vec<u32>,
@@ -166,8 +157,7 @@ impl DegreeDeltas {
 impl DynamicOrdering {
     pub(super) fn new(degrees: &[usize], degree_scale: usize) -> Self {
         let n = degrees.len();
-        // Julia AC2 parity: keyMap uses `k = split*n`, bucket array length `2*k+1`.
-        // Use scale=1 for standard AC.
+        // Matches Laplacians.jl AC2: bucket base `k = split * n`, `2k + 1` buckets.
         let bucket_base = degree_scale.saturating_mul(n).max(1);
         let n_lists = n_buckets(bucket_base);
         let mut lists = vec![SENTINEL; n_lists];
@@ -279,9 +269,7 @@ mod tests {
 
     #[test]
     fn test_decrease_large_count_keeps_sign() {
-        // `decrease` takes a `u32` and negates it as `i64` internally, so a count
-        // above i32::MAX stays a *decrease*: with an i32 delta, `-(count as i32)`
-        // would sign-flip to a large positive and *raise* the degree.
+        // An `i32` delta would sign-flip a count above `i32::MAX` into a degree increase.
         let mut pq = DynamicOrdering::new(&[10, 1], 1);
         let count: u32 = 3_000_000_000; // > i32::MAX
         pq.decrease(0, count); // 10 - 3e9 clamps to 0, never raises
@@ -317,8 +305,7 @@ mod tests {
         assert_eq!(pq.elems[1].key, 7); // 5 + 2
         assert_eq!(pq.elems[2].key, 5); // untouched
 
-        // flush resets the buffer for every touched vertex, so a second flush
-        // with no accumulated deltas is a no-op (no stale carryover).
+        // A second flush with nothing accumulated must be a no-op: no stale carryover.
         deltas.flush(&mut pq);
         assert_eq!(pq.elems[0].key, 4);
         assert_eq!(pq.elems[1].key, 7);

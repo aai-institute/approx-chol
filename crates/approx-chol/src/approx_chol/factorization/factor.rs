@@ -8,11 +8,7 @@ use core::fmt;
 #[cfg(test)]
 mod tests;
 
-/// The encoding a persisted [`Factor`] declares as its first field, incremented in the
-/// low half whenever the serialized representation changes in a way an older reader would
-/// misread. A non-self-describing format reads the field positionally, so the tag half
-/// keeps a payload that predates the field from passing the check on whatever `usize` led
-/// it — `1` would collide with the dimension a one-variable system led with.
+/// Bump the low half on any encoding change; the tag half stops an unversioned payload's `n` matching.
 #[cfg(feature = "serde")]
 pub const FACTOR_FORMAT_VERSION: u32 = 0x4143_0004;
 
@@ -33,8 +29,7 @@ pub struct Factor<T = f64> {
     fallbacks: Vec<Fallback>,
 }
 
-/// Borrows what it writes, so declaring the version costs no copy of the factor.
-/// Field order and names match [`FactorData`], which is what reads it back.
+/// Borrows, so declaring the version copies nothing; fields match [`FactorData`], its reader.
 #[cfg(feature = "serde")]
 #[derive(serde::Serialize)]
 #[serde(bound(serialize = "T: serde::Serialize"))]
@@ -58,8 +53,7 @@ impl<T: serde::Serialize> serde::Serialize for Factor<T> {
     }
 }
 
-/// `format_version` defaults rather than being required, so a payload that predates the
-/// field is rejected for the version it implies instead of for a missing field.
+/// Defaults, so a payload predating the field is rejected for its version, not a missing field.
 #[cfg(feature = "serde")]
 #[derive(serde::Deserialize)]
 #[serde(bound(deserialize = "T: serde::de::DeserializeOwned + num_traits::Float"))]
@@ -89,13 +83,11 @@ impl<T: num_traits::Float> TryFrom<FactorData<T>> for Factor<T> {
     }
 }
 
-/// Every block arrives already checked against its own cholesky, so what is left is what
-/// no single block can see.
+/// Blocks arrive checked against their own cholesky; this covers what no single block sees.
 #[cfg(any(feature = "serde", test))]
 impl<T> Factor<T> {
     fn validate_structure(&self) -> Result<(), FactorError> {
-        // A Ground anchor overwrites its block's last entry with `-sum`, so a second
-        // one silently solves a different system.
+        // A Ground anchor overwrites its block's last entry; a second one solves another system.
         let grounded = Self::ground_blocks(&self.blocks);
         if grounded > 1 {
             return Err(FactorError::MultipleGroundBlocks { grounded });
@@ -181,8 +173,7 @@ impl<T> Factor<T> {
         }
     }
 
-    /// Nothing else records that the ground vertex exists, and at most one block can
-    /// hold it.
+    /// Nothing else records that the ground vertex exists, and at most one block can hold it.
     fn ground_blocks(blocks: &[Block<T>]) -> usize {
         blocks.iter().filter(|block| block.is_ground()).count()
     }
@@ -207,8 +198,7 @@ where
         Self::from_blocks(None, Vec::new(), Vec::new())
     }
 
-    /// Total elimination steps across all blocks: every block solves for all but one of
-    /// its variables, whichever arm factored it.
+    /// Total elimination steps: every block solves for all but one of its variables.
     pub fn n_steps(&self) -> usize {
         self.blocks.iter().map(|block| block.dim().solved()).sum()
     }

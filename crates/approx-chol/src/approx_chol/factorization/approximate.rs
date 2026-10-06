@@ -1,5 +1,4 @@
-//! Randomized elimination (Algorithm 8). The machinery is this backend's alone, so it
-//! lives here rather than beside the graph the exact backend also reads.
+//! Randomized elimination (Algorithm 8), kept apart from the graph the exact backend also reads.
 
 mod clique_tree;
 mod ordering;
@@ -19,8 +18,7 @@ use crate::graph::{AdjListGraph, EdgeCount};
 use crate::sampling::CdfSampler;
 use crate::types::Real;
 
-/// `C::Split` ties the split to the graph's multiplicity storage, so an AC
-/// factorization over a split multi-edge graph does not compile.
+/// `C::Split` ties split to storage, so AC over a split multi-edge graph does not compile.
 pub(crate) fn eliminate<T: Real, C: EdgeCount>(
     mut graph: AdjListGraph<C, T>,
     mut diag: Vec<T>,
@@ -50,16 +48,13 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
             diag[u] = diag[u] - entry.weight;
         }
 
-        // One pq_move per affected neighbor, not one per incident event. Batching
-        // reorders equal-degree vertices, so a fixed seed's factor differs from a
-        // per-edge version's (quality unaffected; see CHANGELOG).
+        // One pq_move per affected neighbor; batching reorders equal-degree ties (quality-neutral).
         column.apply_fill_in_delta(&mut graph, &mut diag, &mut deltas);
         star.accumulate_removal_delta(&mut deltas);
         deltas.flush(&mut ordering);
     }
 
-    // One step short of `n`, so the queue still holds the vertex no step eliminated —
-    // the block's last, which is what the anchor pins, only when it has no other.
+    // One step short of `n`: the queue still holds the uneliminated vertex the anchor pins.
     seq.finish(
         ordering
             .next_vertex()
@@ -78,9 +73,7 @@ struct EliminationStep<'a, T> {
     coefficients: &'a [T],
 }
 
-/// Neither kernel bounds-checks per step: the caller asserts `y.len() >= n` once per
-/// solve, and every index is under `n` by construction or by
-/// [`EliminationSequence::validate_values`].
+/// No per-step bounds checks: `y.len() >= n` is asserted once and every index is below `n`.
 impl<'a, T: Real> EliminationStep<'a, T> {
     /// Forward elimination: scatter pivot weight to neighbors, then scale by `pivot_scale`.
     #[inline(always)]
@@ -132,8 +125,7 @@ impl<'a, T: Real> EliminationStep<'a, T> {
     }
 }
 
-/// The neighbor range *starts* at the previous header's `end`, so no second array can
-/// disagree about step count or about which diagonal belongs to which vertex.
+/// Neighbor range starts at the previous `end`, so no second array can disagree on step count.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct StepHeader<T> {
     pub(crate) vertex: u32,
@@ -142,8 +134,7 @@ pub(crate) struct StepHeader<T> {
     pub(crate) pivot_scale: T,
 }
 
-/// The solve path keeps flat split arrays; a persisted sequence nests neighbors under
-/// their step, so the `end` offsets are rebuilt on load rather than trusted.
+/// Flat arrays for the solve; persisted nested, so `end` offsets are rebuilt on load, not trusted.
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 #[cfg_attr(
     feature = "serde",
@@ -162,8 +153,7 @@ pub(crate) struct EliminationSequence<T> {
     pub(crate) uneliminated: u32,
 }
 
-/// Nesting the neighbors under their step is what retires the range and
-/// trailing-storage checks.
+/// Neighbors nest under their step, which retires the range and trailing-storage checks.
 #[cfg(feature = "serde")]
 #[derive(serde::Deserialize)]
 #[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
@@ -174,8 +164,7 @@ struct StepData<T> {
     column: Option<ColumnData<Vec<(u32, T)>>>,
 }
 
-/// No share for the remainder, so a payload cannot overspend a column's pivot. One
-/// declaration for both directions: `S` is owned pairs decoding, borrowed slices encoding.
+/// No remainder share, so a payload cannot overspend its pivot; `S` is owned or borrowed.
 #[cfg(feature = "serde")]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ColumnData<S> {
@@ -210,8 +199,7 @@ impl<T: num_traits::Float> TryFrom<SequenceData<T>> for EliminationSequence<T> {
     }
 }
 
-/// Mirrors [`SequenceData`] without materializing one, so serializing allocates nothing
-/// regardless of `nnz`.
+/// Mirrors [`SequenceData`] without materializing one, so serializing allocates nothing.
 #[cfg(feature = "serde")]
 impl<T: serde::Serialize> serde::Serialize for EliminationSequence<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -245,8 +233,7 @@ impl<T: serde::Serialize> serde::Serialize for StepView<'_, T> {
         let mut out = serializer.serialize_struct("StepData", 3)?;
         out.serialize_field("vertex", &sequence.steps[i].vertex)?;
         out.serialize_field("pivot_scale", &sequence.steps[i].pivot_scale)?;
-        // The decoder subtracts the remainder's share back out, so writing it writes
-        // a value nothing reads.
+        // The decoder rederives the remainder's share, so writing it writes nothing read.
         let column =
             sequence.neighbor_indices[start..end]
                 .split_last()
@@ -305,8 +292,7 @@ impl<T> EliminationSequence<T> {
         BlockDim::pinning(self.n_steps())
     }
 
-    /// The ranges need no check — they are rebuilt from the nested persisted form,
-    /// never read off the wire.
+    /// Ranges need no check: they are rebuilt from the nested wire form, never read from it.
     #[cfg(any(feature = "serde", test))]
     pub(super) fn validate_values(&self) -> Result<(), FactorError>
     where
@@ -366,9 +352,7 @@ impl<T> EliminationSequence<T> {
 }
 
 impl<T: Real> EliminationSequence<T> {
-    /// `D^+` zeroes the uneliminated vertex, whose entry is the rounding residue of a
-    /// zero-sum right-hand side — at the right-hand side's scale, so leaving it there
-    /// annihilates the solution-scale entries the backward pass reads (#93).
+    /// `D^+` zeroes the uneliminated vertex, whose rounding residue would annihilate `x` (#93).
     pub(super) fn substitute(&self, y: &mut [T]) {
         for index in 0..self.n_steps() {
             self.step(index).apply_forward(y);

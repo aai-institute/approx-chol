@@ -1,5 +1,4 @@
-//! Both arms leave one variable free, so a block's solve never asks which one it got —
-//! the exact arm the pinned last vertex, the approximate one whichever min-degree spared.
+//! Both arms leave one variable free, so a block's solve never asks which arm it got.
 
 use super::approximate::EliminationSequence;
 #[cfg(any(feature = "serde", test))]

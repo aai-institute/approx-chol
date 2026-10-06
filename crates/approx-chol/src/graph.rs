@@ -1,5 +1,4 @@
-//! Elimination graph: [`adjacency`], [`multiplicity`], [`blocks`], and the
-//! [`ingest`]ion that builds all three from CSR input.
+//! Elimination graph: [`adjacency`], [`multiplicity`], [`blocks`], and their [`ingest`]ion from CSR.
 
 mod adjacency;
 mod blocks;
