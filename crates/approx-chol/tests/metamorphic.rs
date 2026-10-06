@@ -1,7 +1,7 @@
 //! Relations between *related* inputs, which is what pins arithmetic that
 //! `property_factorization.rs` would accept as consistently wrong in the same way.
 //!
-//! Equivariance is asserted on the exact arm alone, because `BlockFactorizer::factor`
+//! Equivariance is asserted on the exact arm alone, because the pipeline
 //! restarts the sampler at `component.first()` — a global vertex label — so
 //! relabeling redraws every clique edge: the approximate arm's solution moves 8.6-19% and
 //! its residual up to 5.1x across 12 seeds. No tolerance both admits that and rejects a

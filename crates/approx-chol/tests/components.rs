@@ -40,7 +40,6 @@ fn many_zero_singletons_factor_as_trivial_components() {
     assert_eq!(factor.solve(&vec![1.0; n]).expect("solve"), vec![0.0; n]);
 }
 
-/// `k` disjoint 2-vertex paths stacked block-diagonally.
 fn block_diagonal_paths(k: u32) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
     let (mut rp, mut ci, mut vals) = (vec![0u32], Vec::new(), Vec::new());
     for b in 0..k {

@@ -1,7 +1,7 @@
 //! Shared assertions for the path-Laplacian fixture that the generic, sprs and
-//! faer suites each run over their own index and value types.
+//! faer suites each run over their own index (and, in generic_api, value) types.
 
-use approx_chol::{factorize_with, Config, CsrRef, Factor, Sddm};
+use approx_chol::{factorize_with, Config, CsrRef, Sddm};
 use num_traits::{Float, FromPrimitive, PrimInt};
 
 /// The whole input-adapter contract for one matrix carrying the path fixture: the
@@ -23,27 +23,17 @@ where
     let sddm = Sddm::try_from(view).expect("path is SDDM");
     let factor = factorize_with(sddm, config).expect("factorization should succeed");
     assert_eq!(factor.n_steps(), factor.n().saturating_sub(1));
-    assert_solves_path_rhs(&factor);
-}
 
-/// Solve the alternating-sign RHS on the 4-node path fixture and assert the
-/// result is finite, not the trivial zero vector, and the zero-mean representative
-/// the fixture's floating block has no ground vertex to pick for it.
-pub fn assert_solves_path_rhs<T>(factor: &Factor<T>)
-where
-    T: Float + FromPrimitive + core::fmt::Debug + Send + Sync + 'static,
-{
     let one = T::one();
     let b = [one, -one, one, -one];
     let work = factor.solve(&b).expect("solve should succeed");
-
     assert!(work.iter().all(|x| x.is_finite()), "solution not finite");
     let min_signal = T::from_f64(1e-6).expect("1e-6 is representable");
     assert!(
         work.iter().any(|x| x.abs() > min_signal),
         "solution is trivially zero"
     );
-
+    // The floating block has no ground vertex, so the zero-mean representative is the answer.
     let count = T::from_usize(work.len()).expect("dimension is representable");
     let mean = work.iter().fold(T::zero(), |sum, &x| sum + x) / count;
     assert!(mean.abs() < min_signal, "solution is not zero-mean");

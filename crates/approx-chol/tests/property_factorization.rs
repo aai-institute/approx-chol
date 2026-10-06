@@ -38,10 +38,6 @@ fn relative_residual(csr: &LaplacianCsr, config: Config, rhs: &[f64]) -> Option<
 }
 
 proptest! {
-    // -----------------------------------------------------------------------
-    // Solution quality: residual ||Ax - b|| / ||b|| is bounded
-    // -----------------------------------------------------------------------
-
     #[test]
     fn residual_is_bounded(
         ((row_ptrs, col_indices, values, n), rhs) in laplacian_with_rhs_strategy()
@@ -85,11 +81,6 @@ proptest! {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Factor dimensions, and the two solve entry points agreeing — both read off
-    // one factorization of the connected-Laplacian strategy.
-    // -----------------------------------------------------------------------
-
     #[test]
     fn solve_matches_solve_in_place(
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
@@ -120,10 +111,6 @@ proptest! {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Grounded input
-    // -----------------------------------------------------------------------
-
     #[test]
     fn grounded_input_solves_finitely(
         (row_ptrs, col_indices, values, n) in sddm_csr_strategy()
@@ -147,10 +134,6 @@ proptest! {
             );
         }
     }
-
-    // -----------------------------------------------------------------------
-    // Determinism: same seed + same input → identical output
-    // -----------------------------------------------------------------------
 
     #[test]
     fn deterministic_with_fixed_seed(

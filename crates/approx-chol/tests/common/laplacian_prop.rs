@@ -1,5 +1,4 @@
-//! Proptest strategies and reference helpers for Laplacian/SDDM CSR input.
-//! Each suite that includes this file uses a subset.
+//! Proptest strategies for Laplacian/SDDM CSR; each suite that includes this uses a subset.
 #![allow(dead_code)]
 
 use proptest::prelude::*;
@@ -100,33 +99,18 @@ pub fn interleaved_components_strategy() -> impl Strategy<Value = (LaplacianCsr,
 /// Components as in [`interleaved_components_strategy`], but only class `0` carries
 /// diagonal surplus, so it alone is grounded and the others float.
 pub fn one_grounded_component_strategy() -> impl Strategy<Value = (LaplacianCsr, usize)> {
-    (2usize..=3, 5usize..=9).prop_flat_map(|(parts, n)| {
-        let pair_count = n * (n - 1) / 2;
-        (
-            prop::collection::vec(1u8..=4, pair_count),
-            prop::collection::vec(1u8..=5, n),
-        )
-            .prop_map(move |(weights, surpluses)| {
-                let mut edge_weights = vec![0u8; pair_count];
-                let mut position = 0usize;
-                for i in 0..n {
-                    for j in (i + 1)..n {
-                        if i % parts == j % parts {
-                            edge_weights[position] = weights[position];
-                        }
-                        position += 1;
+    interleaved_components_strategy().prop_flat_map(|((rp, ci, vals, n), parts)| {
+        prop::collection::vec(1u8..=5, n as usize).prop_map(move |surpluses| {
+            let mut vals = vals.clone();
+            for i in (0..n as usize).filter(|i| i % parts == 0) {
+                for k in rp[i] as usize..rp[i + 1] as usize {
+                    if ci[k] as usize == i {
+                        vals[k] += surpluses[i] as f64;
                     }
                 }
-                let (rp, ci, mut vals, n_u32) = build_laplacian_csr(n, &edge_weights);
-                for i in (0..n).filter(|i| i % parts == 0) {
-                    for k in rp[i] as usize..rp[i + 1] as usize {
-                        if ci[k] as usize == i {
-                            vals[k] += surpluses[i] as f64;
-                        }
-                    }
-                }
-                ((rp, ci, vals, n_u32), parts)
-            })
+            }
+            ((rp.clone(), ci.clone(), vals, n), parts)
+        })
     })
 }
 
@@ -184,26 +168,15 @@ pub fn is_connected(row_ptrs: &[u32], col_indices: &[u32], n: u32) -> bool {
     visited.iter().all(|&v| v)
 }
 
-pub fn random_zero_sum_rhs_strategy(n: usize) -> BoxedStrategy<Vec<f64>> {
-    if n <= 1 {
-        Just(vec![0.0; n]).boxed()
-    } else {
-        prop::collection::vec(-10.0f64..10.0, n)
-            .prop_map(|mut v| {
-                let mean = v.iter().sum::<f64>() / v.len() as f64;
-                for x in &mut v {
-                    *x -= mean;
-                }
-                v
-            })
-            .boxed()
-    }
-}
-
 pub fn laplacian_with_rhs_strategy() -> impl Strategy<Value = (LaplacianCsr, Vec<f64>)> {
     laplacian_csr_strategy().prop_flat_map(|(rp, ci, vals, n)| {
-        random_zero_sum_rhs_strategy(n as usize)
-            .prop_map(move |rhs| ((rp.clone(), ci.clone(), vals.clone(), n), rhs))
+        prop::collection::vec(-10.0f64..10.0, n as usize).prop_map(move |mut rhs| {
+            let mean = rhs.iter().sum::<f64>() / rhs.len() as f64;
+            for x in &mut rhs {
+                *x -= mean;
+            }
+            ((rp.clone(), ci.clone(), vals.clone(), n), rhs)
+        })
     })
 }
 

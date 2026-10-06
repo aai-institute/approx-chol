@@ -8,14 +8,9 @@ use path_solve::assert_view_and_factor_match_fixture;
 
 use approx_chol::{Config, CsrError, CsrRef};
 use faer::sparse::SparseRowMat;
-use num_traits::{cast, Float, FromPrimitive, PrimInt};
+use num_traits::{cast, PrimInt};
 
-/// Build a 4-node path graph Laplacian (0-1-2-3) as a faer sparse CSR matrix.
-fn path_laplacian_faer<T, I>() -> SparseRowMat<I, T>
-where
-    T: Float + FromPrimitive + core::fmt::Debug + Send + Sync + 'static + core::iter::Sum<T>,
-    I: faer::Index + PrimInt,
-{
+fn path_laplacian_faer<I: faer::Index + PrimInt>() -> SparseRowMat<I, f64> {
     let nrows = path::N as usize;
     let ncols = path::N as usize;
     let row_ptrs = path::ROW_PTRS
@@ -26,10 +21,6 @@ where
         .into_iter()
         .map(|v| cast::<usize, I>(v).expect("index conversion"))
         .collect();
-    let values = path::VALUES
-        .into_iter()
-        .map(|v| T::from_f64(v).expect("value conversion"))
-        .collect();
 
     let symbolic = faer::sparse::SymbolicSparseRowMat::<I>::new_checked(
         nrows,
@@ -38,15 +29,11 @@ where
         None,
         col_indices,
     );
-    SparseRowMat::new(symbolic, values)
+    SparseRowMat::new(symbolic, path::VALUES.to_vec())
 }
 
-fn run_case<T, I>()
-where
-    T: Float + FromPrimitive + core::fmt::Debug + Send + Sync + 'static + core::iter::Sum<T>,
-    I: faer::Index + PrimInt + 'static,
-{
-    let mat = path_laplacian_faer::<T, I>();
+fn run_case<I: faer::Index + PrimInt + 'static>() {
+    let mat = path_laplacian_faer::<I>();
     assert_view_and_factor_match_fixture(&mat, Config::default());
 }
 
@@ -54,9 +41,9 @@ where
 /// forwarded untouched, so `generic_api` owns that axis.
 #[test]
 fn faer_csr_factorizes_over_index_types() {
-    run_case::<f64, u32>();
-    run_case::<f64, usize>();
-    run_case::<f64, u64>();
+    run_case::<u32>();
+    run_case::<usize>();
+    run_case::<u64>();
 }
 
 #[test]

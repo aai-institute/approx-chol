@@ -1,6 +1,5 @@
 use approx_chol::{CsrError, Grounded, GroundedError, Laplacian, LaplacianError, Sddm};
 
-/// The path 0-1-2 with unit weights.
 fn path() -> Laplacian {
     Laplacian::new(vec![0, 1, 2, 2], vec![1, 2], vec![1.0, 1.0]).expect("valid path")
 }

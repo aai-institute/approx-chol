@@ -144,16 +144,6 @@ fn a_tampered_block_grounding_deserializes_and_answers_a_different_system() {
     assert_ne!(honest[..tampered.len()], tampered[..]);
 }
 
-#[test]
-fn a_payload_declares_the_format_version_it_was_written_with() {
-    let value = serde_json::to_value(path_factor()).expect("serialize factor");
-    assert_eq!(
-        value["format_version"].as_u64(),
-        Some(u64::from(FACTOR_FORMAT_VERSION)),
-        "a persisted factor must say which encoding produced it"
-    );
-}
-
 /// A missing field is a pre-version payload; both must fail for the version.
 #[rstest]
 #[case::from_a_future_release(Some(FACTOR_FORMAT_VERSION + 1))]

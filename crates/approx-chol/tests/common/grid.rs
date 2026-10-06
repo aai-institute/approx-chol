@@ -2,7 +2,6 @@
 
 use approx_chol::{CsrError, CsrRef, Sddm};
 
-/// Grid Laplacian stored as owned arrays (CsrRef-compatible).
 pub struct GridLaplacian {
     pub row_ptrs: Vec<u32>,
     pub col_indices: Vec<u32>,
@@ -20,10 +19,6 @@ impl GridLaplacian {
     }
 }
 
-/// Build a 2D grid Laplacian of size `rows x cols`.
-///
-/// Each interior vertex has degree 4, boundary 3, corners 2.
-/// The matrix is stored in CSR format with sorted column indices per row.
 pub fn grid_laplacian(rows: usize, cols: usize) -> GridLaplacian {
     let n = rows * cols;
     let mut row_ptrs: Vec<u32> = Vec::with_capacity(n + 1);
