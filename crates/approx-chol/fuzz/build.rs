@@ -2,7 +2,6 @@ use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, FACTOR_FORMAT
 use std::fs;
 use std::path::Path;
 
-#[allow(dead_code)]
 #[path = "../tests/common/grid.rs"]
 mod grid;
 
@@ -42,9 +41,13 @@ fn seeds() -> Vec<(&'static str, Factor<f64>)> {
         (
             "permuted_components",
             factor(
-                &[0, 2, 4, 6, 8],
-                &[0, 2, 1, 3, 0, 2, 1, 3],
-                &[1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0],
+                CsrRef::new(
+                    &[0, 2, 4, 6, 8],
+                    &[0, 2, 1, 3, 0, 2, 1, 3],
+                    &[1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0],
+                    4,
+                )
+                .expect("valid csr"),
                 Backend::Approximate,
             ),
         ),
@@ -53,21 +56,15 @@ fn seeds() -> Vec<(&'static str, Factor<f64>)> {
         (
             "grounded_sddm",
             factor(
-                &[0, 2, 4],
-                &[0, 1, 0, 1],
-                &[2.0, -1.0, -1.0, 2.0],
+                CsrRef::new(&[0, 2, 4], &[0, 1, 0, 1], &[2.0, -1.0, -1.0, 2.0], 2)
+                    .expect("valid csr"),
                 Backend::Approximate,
             ),
         ),
         // Enough steps that a mutated payload can disagree about which vertex a step eliminates.
         (
             "grid_4x4",
-            factor(
-                &grid.row_ptrs,
-                &grid.col_indices,
-                &grid.values,
-                Backend::Approximate,
-            ),
+            factor(grid.as_csr().expect("valid csr"), Backend::Approximate),
         ),
     ]
 }
@@ -76,16 +73,18 @@ fn seeds() -> Vec<(&'static str, Factor<f64>)> {
 /// it: an elimination sequence against a packed dense factor.
 fn path(backend: Backend) -> Factor<f64> {
     factor(
-        &[0, 2, 5, 8, 10],
-        &[0, 1, 0, 1, 2, 1, 2, 3, 2, 3],
-        &[1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0],
+        CsrRef::new(
+            &[0, 2, 5, 8, 10],
+            &[0, 1, 0, 1, 2, 1, 2, 3, 2, 3],
+            &[1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0],
+            4,
+        )
+        .expect("valid csr"),
         backend,
     )
 }
 
-fn factor(row_ptrs: &[u32], col_indices: &[u32], values: &[f64], backend: Backend) -> Factor<f64> {
-    let n = u32::try_from(row_ptrs.len() - 1).expect("dimension fits in u32");
-    let csr = CsrRef::new(row_ptrs, col_indices, values, n).expect("valid csr");
+fn factor(csr: CsrRef<'_>, backend: Backend) -> Factor<f64> {
     let config = Config {
         backend,
         ..Config::default()
