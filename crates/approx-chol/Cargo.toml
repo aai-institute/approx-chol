@@ -31,7 +31,6 @@ faer = ["dep:faer"]
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
-dhat = "0.3.3"
 proptest = "1.6"
 rstest = { version = "0.26.1", default-features = false }
 # Without `float_roundtrip` serde_json parses an f64 back an ulp off.
