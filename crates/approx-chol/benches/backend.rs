@@ -90,12 +90,14 @@ fn bench_backend_solve(c: &mut Criterion) {
                 .build(lap.as_csr().expect("valid CSR"))
                 .expect("factorization should succeed");
                 let mut work = vec![0.0; factor.n()];
+                let mut scratch = vec![0.0; factor.scratch_len()];
 
                 let id = BenchmarkId::new(format!("{shape}/{label}"), n);
                 group.bench_with_input(id, &rhs, |b, rhs| {
                     b.iter(|| {
+                        work.copy_from_slice(rhs);
                         factor
-                            .solve_into(rhs, &mut work)
+                            .solve_in_place(&mut work, &mut scratch)
                             .expect("solve should succeed")
                     });
                 });

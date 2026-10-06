@@ -125,9 +125,11 @@ fn a_flipped_block_gauge_deserializes_and_answers_a_different_system() {
     assert_eq!(restored.n(), factor.n() - 1);
 
     // The last slot turned from a vertex into a ground, so this is not merely one variable short.
-    let b = [1.0, 2.0, -3.0];
+    let b = [1.0, 2.0, -3.0, 0.0];
     let honest = factor.solve(&b).expect("solve the honest factor");
-    let tampered = restored.solve(&b).expect("solve the tampered factor");
+    let tampered = restored
+        .solve(&b[..restored.n()])
+        .expect("solve the tampered factor");
     assert_ne!(honest[..tampered.len()], tampered[..]);
 }
 

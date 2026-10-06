@@ -1,4 +1,6 @@
-use approx_chol::{Backend, Config, CsrRef, DenseFailure, Error, ExactFailure, Fallback};
+use approx_chol::{
+    Backend, Config, CsrRef, DenseFailure, Error, ExactFailure, Fallback, SolveError,
+};
 use numpy::{BorrowError, Element, PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
 use std::mem::size_of;
@@ -355,6 +357,15 @@ impl PyFactor {
             .as_slice()
             .map_err(|_| value_error("b must be contiguous"))?;
         let n = self.inner.n();
+        if b_slice.len() != n {
+            return Err(value_error(
+                SolveError::LengthMismatch {
+                    len: b_slice.len(),
+                    factor_dim: n,
+                }
+                .to_string(),
+            ));
+        }
         let out_ro = out.try_readonly().map_err(|e| borrow_error("out", e))?;
         let out_ro_slice = out_ro
             .as_slice()
@@ -375,8 +386,11 @@ impl PyFactor {
         let out_slice = out_rw
             .as_slice_mut()
             .map_err(|_| value_error("out must be contiguous"))?;
+        let x = &mut out_slice[..n];
+        x.copy_from_slice(b_slice);
+        let mut scratch = vec![0.0; self.inner.scratch_len()];
         self.inner
-            .solve_into(b_slice, out_slice)
+            .solve_in_place(x, &mut scratch)
             .map_err(|e| value_error(e.to_string()))
     }
 }

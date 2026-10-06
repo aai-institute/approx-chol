@@ -82,7 +82,7 @@ proptest! {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn default_solve_matches_solve_into(
+    fn solve_matches_solve_in_place_with_dirty_scratch(
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         prop_assume!(is_connected(&row_ptrs, &col_indices, n));
@@ -101,12 +101,12 @@ proptest! {
             );
 
             let from_alloc = factor.solve(&rhs).expect("solve should succeed");
-            let mut from_into = vec![0.0_f64; factor.n()];
+            let mut from_into = rhs.clone();
+            let mut scratch = vec![f64::NAN; factor.scratch_len()];
             factor
-                .solve_into(&rhs, &mut from_into)
-                .expect("solve_into should succeed");
+                .solve_in_place(&mut from_into, &mut scratch)
+                .expect("solve_in_place should succeed");
 
-            // `solve` is `solve_into` on a fresh buffer, so nothing may differ.
             prop_assert_eq!(from_alloc.len(), from_into.len());
             for (a, b) in from_alloc.iter().zip(from_into.iter()) {
                 prop_assert!(a.to_bits() == b.to_bits(), "{backend:?}: {} vs {}", a, b);
