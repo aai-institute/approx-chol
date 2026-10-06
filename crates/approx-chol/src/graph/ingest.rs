@@ -13,7 +13,7 @@ use canonical::Canonical;
 use num_traits::PrimInt;
 use validate::{validate, Grounding, Ingested};
 
-/// A validated [`CsrRef`] index is non-negative and at most `nnz`, so it is a `usize`.
+/// A validated [`CsrRef`] index is non-negative and fits `usize`.
 #[inline(always)]
 fn index<I: PrimInt>(value: I) -> usize {
     value.to_usize().expect("a validated CSR index is a usize")

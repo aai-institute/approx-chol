@@ -2,19 +2,19 @@
 mod backends;
 #[path = "common/grid.rs"]
 mod grid;
+#[path = "common/laplacian_prop.rs"]
+mod laplacian_prop;
 
 use approx_chol::{factorize_with, Backend, Config, CsrRef};
 use backends::backends;
+use laplacian_prop::widen;
 use num_traits::PrimInt;
 
 fn solution_bits<I: PrimInt + 'static>(input: CsrRef<'_>, backend: Backend) -> Vec<u64> {
-    let widen = |indices: &[u32]| -> Vec<I> {
-        indices
-            .iter()
-            .map(|&index| I::from(index).expect("fits"))
-            .collect()
-    };
-    let (row_ptrs, col_indices) = (widen(input.row_ptrs()), widen(input.col_indices()));
+    let (row_ptrs, col_indices) = (
+        widen::<I>(input.row_ptrs()),
+        widen::<I>(input.col_indices()),
+    );
     let n = input.n();
     let csr = CsrRef::new(&row_ptrs, &col_indices, input.values(), n as u32).expect("valid CSR");
     let config = Config {

@@ -83,13 +83,13 @@ fn rewrite<T: Real, I: PrimInt>(csr: CsrRef<'_, T, I>) -> Result<Rewritten<T, I>
     let mut entries: Vec<(I, T)> = Vec::new();
     row_ptrs.push(I::zero());
     for (row, bounds) in csr.row_ptrs().windows(2).enumerate() {
-        let stored = index(bounds[0])..index(bounds[1]);
+        let (from, to) = (index(bounds[0]), index(bounds[1]));
         entries.clear();
         entries.extend(
-            csr.col_indices()[stored.clone()]
+            csr.col_indices()[from..to]
                 .iter()
                 .copied()
-                .zip(csr.values()[stored].iter().copied()),
+                .zip(csr.values()[from..to].iter().copied()),
         );
         // One row's degree, not nnz. Stable, so duplicates sum in stored order.
         entries.sort_by_key(|&(col, _)| col);

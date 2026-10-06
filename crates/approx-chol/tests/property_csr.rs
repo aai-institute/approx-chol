@@ -2,7 +2,7 @@
 mod laplacian_prop;
 
 use approx_chol::{CsrError, CsrRef, Error, IndexKind};
-use laplacian_prop::laplacian_csr_strategy;
+use laplacian_prop::{laplacian_csr_strategy, widen};
 use proptest::prelude::*;
 
 proptest! {
@@ -103,8 +103,7 @@ proptest! {
     fn reports_negative_column(
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
-        let signed = |indices: &[u32]| -> Vec<i64> { indices.iter().map(|&i| i64::from(i)).collect() };
-        let (row_ptrs, mut col_indices) = (signed(&row_ptrs), signed(&col_indices));
+        let (row_ptrs, mut col_indices) = (widen::<i64>(&row_ptrs), widen::<i64>(&col_indices));
         let position = col_indices.len() - 1;
         col_indices[position] = -1;
         let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect_err("must fail");
