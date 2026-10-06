@@ -6,56 +6,29 @@ mod path;
 mod path_solve;
 use path_solve::assert_view_and_factor_match_fixture;
 
-use approx_chol::{factorize, Config, CsrError, Error};
+use approx_chol::{factorize, CsrError, Error};
 use faer::sparse::SparseRowMat;
-use num_traits::{cast, Float, FromPrimitive, PrimInt};
+use num_traits::{cast, PrimInt};
 
-/// Build a 4-node path graph Laplacian (0-1-2-3) as a faer sparse CSR matrix.
-fn path_laplacian_faer<T, I>() -> SparseRowMat<I, T>
-where
-    T: Float + FromPrimitive + core::fmt::Debug + Send + Sync + 'static + core::iter::Sum<T>,
-    I: faer::Index + PrimInt,
-{
-    let nrows = path::N as usize;
-    let ncols = path::N as usize;
-    let row_ptrs = path::ROW_PTRS
-        .into_iter()
-        .map(|v| cast::<usize, I>(v).expect("index conversion"))
-        .collect();
-    let col_indices = path::COL_INDICES
-        .into_iter()
-        .map(|v| cast::<usize, I>(v).expect("index conversion"))
-        .collect();
-    let values = path::VALUES
-        .into_iter()
-        .map(|v| T::from_f64(v).expect("value conversion"))
-        .collect();
-
+fn run_case<I: faer::Index + PrimInt + 'static>() {
+    let index = |v| cast::<usize, I>(v).expect("index conversion");
     let symbolic = faer::sparse::SymbolicSparseRowMat::<I>::new_checked(
-        nrows,
-        ncols,
-        row_ptrs,
+        path::N as usize,
+        path::N as usize,
+        path::ROW_PTRS.into_iter().map(index).collect(),
         None,
-        col_indices,
+        path::COL_INDICES.into_iter().map(index).collect(),
     );
-    SparseRowMat::new(symbolic, values)
-}
-
-fn run_case<T, I>()
-where
-    T: Float + FromPrimitive + core::fmt::Debug + Send + Sync + 'static + core::iter::Sum<T>,
-    I: faer::Index + PrimInt + 'static,
-{
-    let mat = path_laplacian_faer::<T, I>();
-    assert_view_and_factor_match_fixture(&mat, Config::default());
+    let mat = SparseRowMat::new(symbolic, path::VALUES.to_vec());
+    assert_view_and_factor_match_fixture(&mat);
 }
 
 /// One factorization per index type the adapter converts; the scalar passes through untouched.
 #[test]
 fn faer_csr_factorizes_over_index_types() {
-    run_case::<f64, u32>();
-    run_case::<f64, usize>();
-    run_case::<f64, u64>();
+    run_case::<u32>();
+    run_case::<usize>();
+    run_case::<u64>();
 }
 
 #[test]
