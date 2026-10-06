@@ -5,27 +5,27 @@
 use core::fmt;
 
 mod anchor;
-pub(crate) mod approximate;
+pub(super) mod approximate;
 mod block;
 mod cholesky;
-pub(crate) mod exact;
+pub(super) mod exact;
 mod factor;
 mod permutation;
 
-pub(crate) use anchor::Anchor;
+pub(super) use anchor::Anchor;
 pub use approximate::CliqueTreeSampler;
-pub(crate) use block::{Block, BlockDim};
-pub(crate) use cholesky::Cholesky;
+pub(super) use block::{Block, BlockDim};
+pub(super) use cholesky::Cholesky;
 #[cfg(feature = "serde")]
 pub use factor::FACTOR_FORMAT_VERSION;
-pub use factor::{Factor, Fallback, SolveError};
-pub(crate) use permutation::Permutation;
+pub use factor::{Factor, SolveError};
+pub(super) use permutation::Permutation;
 
 /// Raised at the serde boundary, before a corrupted persisted factor can reach the
 /// solve path.
 #[cfg(any(feature = "serde", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FactorError {
+pub(super) enum FactorError {
     // A payload is only ever written with the current version, so `test` alone leaves
     // the mismatch arm unreachable without the serde boundary.
     #[cfg(feature = "serde")]

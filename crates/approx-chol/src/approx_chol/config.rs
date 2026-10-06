@@ -1,6 +1,6 @@
-use super::factorization::{BlockDim, Fallback};
+use super::factorization::BlockDim;
 use crate::graph::SplitFactor;
-use crate::Error;
+use crate::{Error, Fallback};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, Default)]

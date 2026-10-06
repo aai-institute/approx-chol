@@ -57,9 +57,9 @@ pub mod low_level;
 
 #[cfg(feature = "serde")]
 pub use approx_chol::FACTOR_FORMAT_VERSION;
-pub use approx_chol::{Backend, Config, ExactFailure, Factor, Fallback, SolveError};
+pub use approx_chol::{Backend, Config, ExactFailure, Factor, SolveError};
 pub use csr::{CsrRef, OwnedCsr};
-pub use error::{CsrError, DenseFailure, Error, IndexKind, UnusablePivot};
+pub use error::{CsrError, DenseFailure, Error, Fallback, IndexKind, UnusablePivot};
 
 /// Factorize an SDDM matrix with [`Config::default`].
 pub fn factorize<'a, T, I, M>(sddm: M) -> Result<Factor<T>, Error>
