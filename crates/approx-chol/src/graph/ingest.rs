@@ -20,34 +20,29 @@ pub(crate) struct Ingestion<T> {
 }
 
 impl<T: Real> Ingestion<T> {
-    /// Sums degrees in the order [`Sddm`]'s checks did, so every diagonal is one they proved finite.
+    /// One walk sums the diagonal, counts edges and unions the components.
     pub(crate) fn of(sddm: Sddm<T>) -> Self {
-        let laplacian = sddm.laplacian();
-        let m = laplacian.n();
+        let m = sddm.n();
         let mut sets = DisjointSets::new(m);
-        let mut diagonal = vec![T::zero(); m];
-        let mut degrees = vec![0u32; m];
-        for row in 0..m {
-            let (neighbors, weights) = laplacian.row(row);
-            degrees[row] += neighbors.len() as u32;
-            let mut root = sets.find(row as u32);
-            for (&col, &weight) in neighbors.iter().zip(weights) {
-                diagonal[row] = diagonal[row] + weight;
-                diagonal[col as usize] = diagonal[col as usize] + weight;
-                degrees[col as usize] += 1;
-                root = sets.union_resolved(root, col);
+        // Room for the ground's count.
+        let mut degrees = Vec::with_capacity(m + 1);
+        degrees.resize(m, 0u32);
+        // The row whose root is resolved, and that root.
+        let mut resolved = (u32::MAX, 0u32);
+        let diagonal = sddm.diagonal(|row, col| {
+            let row = row as u32;
+            degrees[row as usize] += 1;
+            degrees[col as usize] += 1;
+            if resolved.0 != row {
+                resolved = (row, sets.find(row));
             }
-        }
+            resolved.1 = sets.union_resolved(resolved.1, col);
+        });
         if let Sddm::Grounded(grounded) = &sddm {
-            let surplus = grounded.surplus();
-            for (d, &s) in diagonal.iter_mut().zip(surplus) {
-                *d = *d + s;
-            }
-            diagonal.push(surplus.iter().fold(T::zero(), |sum, &s| sum + s));
             // The ground is absent from the input, so the rows it closes are unioned through it here.
             let mut root = sets.push();
             let mut degree = 0u32;
-            for (row, &s) in surplus.iter().enumerate() {
+            for (row, &s) in grounded.surplus().iter().enumerate() {
                 if s > T::zero() {
                     root = sets.union_resolved(root, row as u32);
                     degrees[row] += 1;
@@ -65,10 +60,11 @@ impl<T: Real> Ingestion<T> {
         }
     }
 
-    fn grounded(&self) -> Option<&Grounded<T>> {
+    /// The ground vertex outranks every real one, so it can only be a block's last.
+    fn ground_of(&self, block: &BlockVertices<'_>) -> Option<&Grounded<T>> {
         match &self.sddm {
-            Sddm::Laplacian(_) => None,
-            Sddm::Grounded(grounded) => Some(grounded),
+            Sddm::Grounded(grounded) if block.last() == grounded.n() as u32 => Some(grounded),
+            _ => None,
         }
     }
 
@@ -77,10 +73,8 @@ impl<T: Real> Ingestion<T> {
         self.diagonal.len()
     }
 
-    /// The ground vertex outranks every real one, so it can only be a block's last.
     pub(crate) fn carries_ground(&self, block: &BlockVertices<'_>) -> bool {
-        self.grounded()
-            .is_some_and(|grounded| block.last() == grounded.n() as u32)
+        self.ground_of(block).is_some()
     }
 
     /// `None` when connected. Taken because its order becomes the factor's permutation.
@@ -150,7 +144,7 @@ impl<T: Real> Ingestion<T> {
             }
         }
 
-        if let Some(grounded) = self.grounded().filter(|_| self.carries_ground(block)) {
+        if let Some(grounded) = self.ground_of(block) {
             let ground = n - 1;
             for (row, &surplus) in grounded.surplus().iter().enumerate() {
                 if surplus > T::zero() {

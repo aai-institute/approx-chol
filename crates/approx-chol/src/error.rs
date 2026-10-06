@@ -265,7 +265,9 @@ impl From<NotSddm> for Error {
     fn from(err: NotSddm) -> Self {
         match err {
             NotSddm::DimensionTooLarge { n } => {
-                Self::InvalidCsr(CsrError::MatrixDimensionExceedsIndexType { n: n + 1 })
+                Self::InvalidCsr(CsrError::MatrixDimensionExceedsIndexType {
+                    n: n.saturating_add(1),
+                })
             }
             NotSddm::TooManyNonzeros { .. } => Self::InvalidCsr(CsrError::IndexExceedsIndexType {
                 kind: IndexKind::RowPtr,

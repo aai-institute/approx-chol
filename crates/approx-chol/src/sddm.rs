@@ -8,18 +8,52 @@ fn floor<T: Float>() -> T {
     T::min_positive_value() / T::epsilon()
 }
 
-/// Each vertex's weighted degree, summed edge by edge in row order.
+/// Each vertex's weighted degree, summed edge by edge in row order: checks and consumers share it.
 struct Degrees<T>(Vec<T>);
 
 impl<T: Float> Degrees<T> {
+    /// Room for the ground's diagonal, which [`plus`](Self::plus) appends.
     fn zeros(n: usize) -> Self {
-        Self(vec![T::zero(); n])
+        let mut degrees = Vec::with_capacity(n + 1);
+        degrees.resize(n, T::zero());
+        Self(degrees)
     }
 
     #[inline]
     fn add(&mut self, row: usize, col: usize, weight: T) {
         self.0[row] = self.0[row] + weight;
         self.0[col] = self.0[col] + weight;
+    }
+
+    /// `visit` sees each edge on the way, so a caller walking them anyway needs no pass of its own.
+    fn of(laplacian: &Laplacian<T>, mut visit: impl FnMut(usize, u32)) -> Self {
+        let mut degrees = Self::zeros(laplacian.n());
+        for row in 0..laplacian.n() {
+            let (neighbors, weights) = laplacian.row(row);
+            for (&col, &weight) in neighbors.iter().zip(weights) {
+                degrees.add(row, col as usize, weight);
+                visit(row, col);
+            }
+        }
+        degrees
+    }
+
+    fn first_non_finite(&self) -> Option<usize> {
+        self.0.iter().position(|degree| !degree.is_finite())
+    }
+
+    /// Each vertex's diagonal, then the ground's when there is surplus: its total.
+    fn plus(self, surplus: Option<&[T]>) -> Vec<T> {
+        let mut diagonal = self.0;
+        let Some(surplus) = surplus else {
+            return diagonal;
+        };
+        let total = surplus.iter().fold(T::zero(), |sum, &s| sum + s);
+        for (d, &s) in diagonal.iter_mut().zip(surplus) {
+            *d = *d + s;
+        }
+        diagonal.push(total);
+        diagonal
     }
 }
 
@@ -55,7 +89,7 @@ enum DiagonalFault {
     GroundOverflow,
 }
 
-/// The only way to a [`Laplacian`]: degrees are summed as edges arrive, which callers have checked.
+/// Builds a [`Laplacian`] row by row, summing degrees as edges arrive, which callers have checked.
 struct UpperRows<T> {
     row_ptrs: Vec<u32>,
     neighbors: Vec<u32>,
@@ -90,14 +124,38 @@ impl<T: Float> UpperRows<T> {
         self.row += 1;
     }
 
+    fn finish(self) -> Result<Checked<T>, DegreeOverflow> {
+        let laplacian = Laplacian {
+            row_ptrs: self.row_ptrs,
+            neighbors: self.neighbors,
+            weights: self.weights,
+        };
+        Checked::new(laplacian, self.degrees)
+    }
+}
+
+/// A [`Laplacian`] with the degrees it was checked with, so attaching surplus sums no edge twice.
+struct Checked<T> {
+    laplacian: Laplacian<T>,
+    degrees: Degrees<T>,
+}
+
+impl<T: Float> Checked<T> {
+    /// The one place a [`Laplacian`] comes into being, so none skips the degree check.
+    fn new(laplacian: Laplacian<T>, degrees: Degrees<T>) -> Result<Self, DegreeOverflow> {
+        match degrees.first_non_finite() {
+            Some(vertex) => Err(DegreeOverflow { vertex }),
+            None => Ok(Self { laplacian, degrees }),
+        }
+    }
+
     /// Checks arrays already shaped as CSR in place, so adopting them copies nothing.
     fn adopt(
         row_ptrs: Vec<u32>,
         neighbors: Vec<u32>,
         weights: Vec<T>,
-    ) -> Result<Checked<T>, LaplacianError> {
-        let n = row_ptrs.len() - 1;
-        let mut degrees = Degrees::zeros(n);
+    ) -> Result<Self, LaplacianError> {
+        let mut degrees = Degrees::zeros(row_ptrs.len() - 1);
         for (row, bounds) in row_ptrs.windows(2).enumerate() {
             let mut last = row;
             for position in bounds[0] as usize..bounds[1] as usize {
@@ -109,67 +167,40 @@ impl<T: Float> UpperRows<T> {
                 degrees.add(row, col, weight);
             }
         }
-        Self {
+        let laplacian = Laplacian {
             row_ptrs,
             neighbors,
             weights,
-            degrees,
-            row: n,
-        }
-        .finish()
-        .map_err(|DegreeOverflow { vertex }| LaplacianError::DegreeOverflow { vertex })
+        };
+        Self::new(laplacian, degrees)
+            .map_err(|DegreeOverflow { vertex }| LaplacianError::DegreeOverflow { vertex })
     }
 
-    fn finish(self) -> Result<Checked<T>, DegreeOverflow> {
-        if let Some(vertex) = self.degrees.0.iter().position(|degree| !degree.is_finite()) {
-            return Err(DegreeOverflow { vertex });
-        }
-        Ok(Checked {
-            laplacian: Laplacian {
-                row_ptrs: self.row_ptrs,
-                neighbors: self.neighbors,
-                weights: self.weights,
-            },
-            degrees: self.degrees,
-        })
-    }
-}
-
-/// A [`Laplacian`] with the degrees it was checked with, so attaching surplus sums no edge twice.
-struct Checked<T> {
-    laplacian: Laplacian<T>,
-    degrees: Degrees<T>,
-}
-
-impl<T: Float> Checked<T> {
     /// Re-sums the degrees of a Laplacian whose own were dropped after it was checked.
     fn of(laplacian: Laplacian<T>) -> Self {
-        let mut degrees = Degrees::zeros(laplacian.n());
-        for row in 0..laplacian.n() {
-            let (neighbors, weights) = laplacian.row(row);
-            for (&col, &weight) in neighbors.iter().zip(weights) {
-                degrees.add(row, col as usize, weight);
-            }
-        }
+        let degrees = Degrees::of(&laplacian, |_, _| {});
         Self { laplacian, degrees }
     }
 
     /// `surplus` is one non-negative, zero-or-normal entry per vertex; the one place the variant is chosen.
     fn with_surplus(self, surplus: Vec<T>) -> Result<Sddm<T>, DiagonalFault> {
-        let total = surplus.iter().fold(T::zero(), |sum, &s| sum + s);
+        let diagonal = self.degrees.plus(Some(&surplus));
+        let (&total, vertices) = diagonal
+            .split_last()
+            .expect("the ground's diagonal is last");
         if !total.is_finite() {
             return Err(DiagonalFault::GroundOverflow);
         }
-        for (vertex, (&degree, &s)) in self.degrees.0.iter().zip(&surplus).enumerate() {
-            let diagonal = degree + s;
-            if !diagonal.is_finite() {
+        for (vertex, &d) in vertices.iter().enumerate() {
+            if !d.is_finite() {
                 return Err(DiagonalFault::Overflow { vertex });
             }
-            if diagonal > T::zero() && diagonal < floor() {
+            if d > T::zero() && d < floor() {
                 return Err(DiagonalFault::BelowFloor { vertex });
             }
         }
-        Ok(if surplus.iter().any(|&s| s > T::zero()) {
+        // Every surplus is zero or positive, so a positive total means some vertex is grounded.
+        Ok(if total > T::zero() {
             Grounded {
                 laplacian: self.laplacian,
                 surplus,
@@ -196,21 +227,15 @@ impl<T: Float> Laplacian<T> {
         neighbors: Vec<u32>,
         weights: Vec<T>,
     ) -> Result<Self, LaplacianError> {
-        let Some(n) = row_ptrs.len().checked_sub(1) else {
-            return Err(LaplacianError::Structure(
-                crate::CsrError::RowPtrsLenMismatch {
-                    expected: 1,
-                    got: 0,
-                },
-            ));
-        };
+        // Empty arrays reach `validated`, which names them.
+        let n = row_ptrs.len().saturating_sub(1);
         let dimension = u32::try_from(n)
             .ok()
             .filter(|&n| n < u32::MAX)
             .ok_or(LaplacianError::TooManyVertices { n })?;
         CsrRef::validated(&row_ptrs, &neighbors, &weights, dimension)
             .map_err(LaplacianError::Structure)?;
-        UpperRows::adopt(row_ptrs, neighbors, weights).map(|checked| checked.laplacian)
+        Checked::adopt(row_ptrs, neighbors, weights).map(|checked| checked.laplacian)
     }
 }
 
@@ -268,6 +293,15 @@ impl<T> Sddm<T> {
 }
 
 impl<T: Float> Sddm<T> {
+    /// Each vertex's diagonal as its checks summed it, so every entry is finite; the ground's last.
+    pub(crate) fn diagonal(&self, visit: impl FnMut(usize, u32)) -> Vec<T> {
+        let surplus = match self {
+            Self::Laplacian(_) => None,
+            Self::Grounded(grounded) => Some(grounded.surplus()),
+        };
+        Degrees::of(self.laplacian(), visit).plus(surplus)
+    }
+
     /// `L + diag(surplus)`, bare when all zero; errors as [`Grounded::new`] save `NoSurplus`.
     pub fn with_surplus(laplacian: Laplacian<T>, surplus: Vec<T>) -> Result<Self, GroundedError> {
         if surplus.len() != laplacian.n() {
