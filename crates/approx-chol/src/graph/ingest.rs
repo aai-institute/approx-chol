@@ -49,7 +49,7 @@ impl<'a, T: Real> Ingestion<'a, T> {
         }
     }
 
-    /// `None` when connected. Taken so the caller can walk blocks while asking for each.
+    /// `None` when connected. Taken because its order becomes the factor's permutation.
     pub(crate) fn take_layout(&mut self) -> Option<BlockLayout> {
         self.layout.take()
     }

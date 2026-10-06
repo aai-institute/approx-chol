@@ -38,8 +38,8 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
             .next_vertex()
             .expect("the queue holds every vertex of the block");
         let star = star_builder.build_star(&mut graph, v, &mut ordering);
-        sample_column(star, sampler, &mut column);
-        seq.push_sampled(v, column.diagonal, column.shares());
+        let pivot = sample_column(star, sampler, &mut column);
+        seq.push_sampled(v, pivot, column.shares());
 
         graph.eliminate_vertex(v);
 

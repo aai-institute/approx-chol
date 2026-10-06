@@ -6,7 +6,6 @@ use crate::types::{count_as_scalar, Real};
 
 /// One sampled column of the factor (Algorithm 5, GKS 2023), reused across steps.
 pub(super) struct SampledColumn<T: Real> {
-    pub diagonal: T,
     /// Only appended through [`Self::push_share`], so the two can never disagree.
     neighbors: Vec<u32>,
     coefficients: Vec<T>,
@@ -25,7 +24,6 @@ pub(super) struct ColumnShares<'a, T> {
 impl<T: Real> SampledColumn<T> {
     pub(super) fn new() -> Self {
         Self {
-            diagonal: T::zero(),
             neighbors: Vec::new(),
             coefficients: Vec::new(),
             remainder: None,
@@ -34,8 +32,7 @@ impl<T: Real> SampledColumn<T> {
     }
 
     /// A column that hands on nothing, which is what an empty star leaves.
-    fn reset(&mut self, pivot_diag: T) {
-        self.diagonal = pivot_diag;
+    fn reset(&mut self) {
         self.neighbors.clear();
         self.coefficients.clear();
         self.remainder = None;
@@ -143,31 +140,31 @@ impl<T: Real> StarElimination<T> {
     }
 }
 
-/// The pivot is the star's live sum: the arm sees only Laplacians, whose diagonal that sum is.
+/// Returns the pivot: the arm sees only Laplacians, whose diagonal is the star's live sum.
 pub(super) fn sample_column<T: Real, C: EdgeCount>(
     star: &Star<T, C>,
     sampler: &mut CdfSampler<T>,
     column: &mut SampledColumn<T>,
-) {
+) -> T {
     let entries = star.entries();
+    column.reset();
+    // The last neighbor takes the remainder, so no caller derives its count from an index.
+    let Some((last, rest)) = entries.split_last() else {
+        return T::zero();
+    };
+    column.remainder = Some(last.neighbor);
+    if rest.is_empty() {
+        return last.weight;
+    }
+
     // Fold in sorted order: the sum order changes the factor bit-for-bit under a fixed seed.
     let total_weight = entries
         .iter()
         .fold(T::zero(), |acc, entry| acc + entry.weight);
-    column.reset(total_weight);
-    // The last neighbor takes the remainder, so no caller derives its count from an index.
-    let Some((last, rest)) = entries.split_last() else {
-        return;
-    };
-    column.remainder = Some(last.neighbor);
-    if rest.is_empty() {
-        return;
-    }
-
     // Sorted ascending puts every `f` in `[0, 1]`; a floor above zero would judge scale instead.
     if !(total_weight.is_finite() && total_weight > T::zero()) {
         column.push_uniform_shares(rest);
-        return;
+        return total_weight;
     }
 
     sampler.prepare(entries.iter().map(|entry| (entry.neighbor, entry.weight)));
@@ -179,7 +176,7 @@ pub(super) fn sample_column<T: Real, C: EdgeCount>(
         column.sample_fill_edges(entry.neighbor, entry.copies, fill_wt, sampler, i + 1);
     }
 
-    column.diagonal = last.weight * elim.scale;
+    last.weight * elim.scale
 }
 
 /// Fixed for the sampler's life, as [`Config::split_merge`](crate::Config::split_merge) is.
