@@ -20,8 +20,7 @@ fn run_case<I: sprs::SpIndex + num_traits::PrimInt + 'static>() {
     assert_view_and_factor_match_fixture(&mat, Config::default());
 }
 
-/// One factorization per index type the adapter converts. The scalar is
-/// forwarded untouched, so `generic_api` owns that axis.
+/// One factorization per index type the adapter converts; the scalar passes through untouched.
 #[test]
 fn sprs_csr_factorizes_over_index_types() {
     run_case::<u32>();

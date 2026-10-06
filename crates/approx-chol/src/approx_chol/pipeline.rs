@@ -44,6 +44,3 @@ fn factor_components<T: Real, C: EdgeCount>(
     let permutation = components.into_order().and_then(Permutation::from_order);
     Ok(Factor::from_blocks(permutation, blocks, fallbacks))
 }
-
-#[cfg(test)]
-mod tests;

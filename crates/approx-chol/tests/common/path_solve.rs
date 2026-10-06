@@ -1,5 +1,4 @@
-//! Shared assertions for the path-Laplacian fixture that the generic, sprs and
-//! faer suites each run over their own index (and, in generic_api, value) types.
+//! Path-Laplacian assertions the sprs and faer suites run once per index type.
 
 use approx_chol::{factorize_with, Config, CsrRef, Sddm};
 use num_traits::{Float, FromPrimitive, PrimInt};

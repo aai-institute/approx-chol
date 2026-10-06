@@ -37,8 +37,7 @@ fn run_case<I: faer::Index + PrimInt + 'static>() {
     assert_view_and_factor_match_fixture(&mat, Config::default());
 }
 
-/// One factorization per index type the adapter converts. The scalar is
-/// forwarded untouched, so `generic_api` owns that axis.
+/// One factorization per index type the adapter converts; the scalar passes through untouched.
 #[test]
 fn faer_csr_factorizes_over_index_types() {
     run_case::<u32>();

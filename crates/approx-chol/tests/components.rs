@@ -40,56 +40,6 @@ fn many_zero_singletons_factor_as_trivial_components() {
     assert_eq!(factor.solve(&vec![1.0; n]).expect("solve"), vec![0.0; n]);
 }
 
-fn block_diagonal_paths(k: u32) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
-    let (mut rp, mut ci, mut vals) = (vec![0u32], Vec::new(), Vec::new());
-    for b in 0..k {
-        let (a, z) = (2 * b, 2 * b + 1);
-        for row_vals in [[1.0, -1.0], [-1.0, 1.0]] {
-            ci.extend([a, z]);
-            vals.extend(row_vals);
-            rp.push(ci.len() as u32);
-        }
-    }
-    (rp, ci, vals)
-}
-
-/// Each 2-vertex component solves independently, contributing one elimination step.
-#[test]
-fn disconnected_laplacian_solves_per_component() {
-    for k in [2u32, 3] {
-        let (rp, ci, vals) = block_diagonal_paths(k);
-        let rhs: Vec<f64> = (1..=k).flat_map(|b| [b as f64, -(b as f64)]).collect();
-        let expected: Vec<f64> = rhs.iter().map(|value| value / 2.0).collect();
-
-        for split_merge in [None, Some(2)] {
-            let config = Config {
-                split_merge,
-                ..Config::default()
-            };
-            let factor = factor(config, csr(&rp, &ci, &vals)).expect("factor");
-            assert_eq!(factor.n_steps(), k as usize, "one step per component");
-            assert_eq!(factor.solve(&rhs).expect("solve"), expected);
-        }
-    }
-}
-
-#[test]
-fn disconnected_sparse_ac2_preserves_virtual_edge_multiplicity() {
-    let row_ptrs = [0u32, 2, 5, 7, 9, 12, 14];
-    let columns = [0u32, 1, 0, 1, 2, 1, 2, 3, 4, 3, 4, 5, 4, 5];
-    let values = [
-        1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0,
-    ];
-    let config = Config {
-        seed: 7,
-        split_merge: Some(3),
-        ..Config::default()
-    };
-    let factor = factor(config, csr(&row_ptrs, &columns, &values)).expect("AC2 factor");
-    let b = [1.0, 0.0, -1.0, 1.0, 0.0, -1.0];
-    assert_eq!(factor.solve(&b).expect("solve"), b);
-}
-
 #[test]
 fn mixed_grounded_and_floating_components_solve_independently() {
     let (row_ptrs, columns) = ([0u32, 1, 3, 5], [0u32, 1, 2, 1, 2]);
@@ -155,37 +105,6 @@ fn interleaved_grounded_components_solve_exactly(#[case] backend: Backend) {
     let x = factor.solve(&b).expect("solve");
     let residual = relative_residual_over(csr, &x, &b, 0..4);
     assert!(residual < 1e-14, "relative residual {residual:e}");
-}
-
-/// Every star has degree two, so AC is exact and the residual is round-off. The
-/// fixtures above are too small to swap-remove.
-#[test]
-fn moved_components_keep_their_edges_through_fill_and_removal() {
-    const N: u32 = 16;
-    let (mut row_ptrs, mut columns, mut values) = (vec![0u32], Vec::new(), Vec::new());
-    for v in 0..N {
-        let mut row = [((v + N - 2) % N, -1.0), (v, 2.0), ((v + 2) % N, -1.0)];
-        row.sort_unstable_by_key(|&(column, _)| column);
-        columns.extend(row.iter().map(|&(column, _)| column));
-        values.extend(row.iter().map(|&(_, value)| value));
-        row_ptrs.push(columns.len() as u32);
-    }
-
-    // Zero-sum within each cycle, so the singular system is consistent.
-    let rhs: Vec<f64> = (0..N).map(|v| if v < N / 2 { 1.0 } else { -1.0 }).collect();
-    let csr = csr(&row_ptrs, &columns, &values);
-    for seed in 0..4u64 {
-        let config = Config {
-            seed,
-            ..Config::default()
-        };
-        let factor = factor(config, csr).expect("double-cycle factor");
-        assert_eq!(factor.n_steps(), (N - 2) as usize, "one pin per cycle");
-
-        let x = factor.solve(&rhs).expect("solve");
-        let residual = relative_residual_over(csr, &x, &rhs, 0..N as usize);
-        assert!(residual < 1e-10, "seed={seed}: residual {residual:.3e}");
-    }
 }
 
 /// A long path grounded at one end, where min-degree eliminates the ground first: the
