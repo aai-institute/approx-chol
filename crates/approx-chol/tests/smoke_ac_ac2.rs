@@ -13,6 +13,11 @@ fn run_smoke_case(rows: usize, cols: usize, config: Config) {
         .expect("factorization should succeed");
 
     let n = factor.n();
+    assert_eq!(
+        factor.n_steps(),
+        n - 1,
+        "a connected Laplacian pins one vertex"
+    );
     let mut rhs = vec![0.0; n];
     rhs[0] = 1.0;
     rhs[n - 1] = -1.0;
