@@ -139,5 +139,12 @@ mod tests {
             cap,
             "the cap is the count the edges carry"
         );
+
+        let mut single = AdjListGraph::<Single, f64>::from_adjacency(vec![
+            vec![Edge::new(1.0, 1, 0)],
+            vec![Edge::new(1.0, 0, 0)],
+        ]);
+        let cap = Single::split_edges(&mut single, ());
+        assert_eq!(cap, Single.get(), "an unsplit edge carries one copy");
     }
 }

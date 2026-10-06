@@ -6,45 +6,31 @@ mod path;
 mod path_solve;
 use path_solve::assert_view_and_factor_match_fixture;
 
-use approx_chol::{factorize, Config, CsrError, CsrRef, Error};
-use num_traits::{Float, FromPrimitive};
+use approx_chol::{factorize, CsrError, CsrRef, Error};
 
-/// Build a 4-node path graph Laplacian (0-1-2-3) as a sprs CSR matrix.
-fn path_laplacian_sprs<T, I>() -> sprs::CsMatI<T, I>
-where
-    T: Float + FromPrimitive + core::fmt::Debug + Send + Sync + 'static + core::iter::Sum<T>,
-    I: sprs::SpIndex,
-{
+fn path_laplacian_sprs<I: sprs::SpIndex>() -> sprs::CsMatI<f64, I> {
     let n = path::N as usize;
     let indptr = path::ROW_PTRS.into_iter().map(I::from_usize).collect();
     let indices = path::COL_INDICES.into_iter().map(I::from_usize).collect();
-    let data = path::VALUES
-        .into_iter()
-        .map(|v| T::from_f64(v).expect("value conversion"))
-        .collect();
-    sprs::CsMatI::new((n, n), indptr, indices, data)
+    sprs::CsMatI::new((n, n), indptr, indices, path::VALUES.to_vec())
 }
 
-fn run_case<T, I>()
-where
-    T: Float + FromPrimitive + core::fmt::Debug + Send + Sync + 'static + core::iter::Sum<T>,
-    I: sprs::SpIndex + num_traits::PrimInt + 'static,
-{
-    let mat = path_laplacian_sprs::<T, I>();
-    assert_view_and_factor_match_fixture(&mat, Config::default());
+fn run_case<I: sprs::SpIndex + num_traits::PrimInt + 'static>() {
+    let mat = path_laplacian_sprs::<I>();
+    assert_view_and_factor_match_fixture(&mat);
 }
 
 /// One factorization per index type the adapter converts; the scalar passes through untouched.
 #[test]
 fn sprs_csr_factorizes_over_index_types() {
-    run_case::<f64, u32>();
-    run_case::<f64, usize>();
-    run_case::<f64, u64>();
+    run_case::<u32>();
+    run_case::<usize>();
+    run_case::<u64>();
 }
 
 #[test]
 fn sprs_factorize_rejects_csc_with_error() {
-    let csr = path_laplacian_sprs::<f64, u32>();
+    let csr = path_laplacian_sprs::<u32>();
     let csc = csr.to_csc();
     let err = factorize(&csc).expect_err("CSC must be rejected");
     assert!(matches!(

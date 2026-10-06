@@ -22,13 +22,6 @@ use laplacian_prop::{
 use proptest::prelude::*;
 use residual::relative_residual_over;
 
-/// The exact arm's error here is roundoff — measured worst 5.6e-16 relative — while a gauge
-/// read off a vertex moves the solution by order 0.1. Mixed abs+rel because a relative-only
-/// bound is unstable on the near-zero entries a zero-mean solution always has.
-fn agrees(got: f64, want: f64) -> bool {
-    (got - want).abs() <= 1e-10 + 1e-8 * want.abs()
-}
-
 /// The exact arm, and a check that it really was exact: a block reaching an unusable pivot
 /// falls back to the sampler by default, which would quietly make this the approximate arm.
 fn solve_exactly(csr: CsrRef<'_>, rhs: &[f64]) -> Vec<f64> {
@@ -45,17 +38,6 @@ fn solve_generated(csr: &LaplacianCsr, rhs: &[f64]) -> Vec<f64> {
     let (row_ptrs, col_indices, values, n) = csr;
     let view = CsrRef::new(row_ptrs, col_indices, values, *n).expect("generated CSR is valid");
     solve_exactly(view, rhs)
-}
-
-/// Component `part` holds the vertices congruent to it, so a stride reaches exactly one.
-fn per_component_zero_mean(rhs: &mut [f64], parts: usize) {
-    for part in 0..parts {
-        let mean = rhs[part..].iter().step_by(parts).sum::<f64>()
-            / rhs[part..].iter().step_by(parts).count() as f64;
-        for value in rhs[part..].iter_mut().step_by(parts) {
-            *value -= mean;
-        }
-    }
 }
 
 fn interleaved_case() -> impl Strategy<Value = (LaplacianCsr, usize, Vec<f64>, Vec<usize>)> {
@@ -86,12 +68,13 @@ proptest! {
         }
         let got = solve_generated(&permute_csr(&csr, &p), &permuted_rhs);
 
+        // Exact-arm roundoff (worst 5.6e-16) vs a gauge's ~0.1; abs+rel for near-zero entries.
         for (vertex, &want) in base.iter().enumerate() {
+            let got = got[p[vertex]];
             prop_assert!(
-                agrees(got[p[vertex]], want),
-                "x[{vertex}] -> x'[{}]: {:e} vs {want:e} (p={p:?})",
-                p[vertex],
-                got[p[vertex]]
+                (got - want).abs() <= 1e-10 + 1e-8 * want.abs(),
+                "x[{vertex}] -> x'[{}]: {got:e} vs {want:e} (p={p:?})",
+                p[vertex]
             );
         }
     }
@@ -103,9 +86,14 @@ proptest! {
     fn interleaved_components_are_solved_not_just_relabelled_consistently(
         (csr, parts, mut rhs, _p) in interleaved_case()
     ) {
-        // A floating component answers only a zero-sum right-hand side exactly; anything
-        // else leaves its mean in the residual and would mask a real error.
-        per_component_zero_mean(&mut rhs, parts);
+        // Only a zero-sum rhs per floating component is solved exactly; a stride of `parts` is one component.
+        for part in 0..parts {
+            let mean = rhs[part..].iter().step_by(parts).sum::<f64>()
+                / rhs[part..].iter().step_by(parts).count() as f64;
+            for value in rhs[part..].iter_mut().step_by(parts) {
+                *value -= mean;
+            }
+        }
         prop_assume!(rhs.iter().map(|value| value * value).sum::<f64>().sqrt() > 1e-9);
 
         let (row_ptrs, col_indices, values, n) = &csr;

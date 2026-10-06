@@ -10,7 +10,7 @@ use backends::backends;
 use laplacian_prop::{
     is_connected, laplacian_csr_strategy, laplacian_with_rhs_strategy,
     one_grounded_component_strategy, per_component_consistent_rhs, rhs_for_dimension,
-    sddm_csr_strategy, LaplacianCsr,
+    sddm_csr_strategy,
 };
 use proptest::prelude::*;
 use residual::relative_residual_over;
@@ -18,22 +18,6 @@ use residual::relative_residual_over;
 /// `x = 0` scores exactly `1`, so this is the weakest bound that still demands a
 /// factor beat answering nothing; measured max is `0.74` over seeds `0..96`.
 const RESIDUAL_LIMIT: f64 = 1.0;
-
-/// `None` when `b` is too small for the ratio to carry information. A non-finite
-/// solve shows up as a non-finite ratio, so this subsumes a separate check.
-fn relative_residual(csr: &LaplacianCsr, config: Config, rhs: &[f64]) -> Option<f64> {
-    let (row_ptrs, col_indices, values, n) = csr;
-    let view = CsrRef::new(row_ptrs, col_indices, values, *n).expect("valid CSR");
-    let x = factorize_with(view, config)
-        .expect("factorization")
-        .solve(rhs)
-        .expect("solve");
-
-    // `relative_residual_over` divides by the row range's own norm, so the guard
-    // stays here: a `b` too small to divide by would come back NaN, not `None`.
-    let b_norm = rhs.iter().map(|b| b * b).sum::<f64>().sqrt();
-    (b_norm > 1e-15).then(|| relative_residual_over(view, &x, rhs, 0..rhs.len()))
-}
 
 proptest! {
     // -----------------------------------------------------------------------
@@ -45,19 +29,25 @@ proptest! {
         ((row_ptrs, col_indices, values, n), rhs) in laplacian_with_rhs_strategy()
     ) {
         prop_assume!(is_connected(&row_ptrs, &col_indices, n));
-        let csr = (row_ptrs, col_indices, values, n);
+        // `relative_residual_over` would return NaN, not skip, for a `b` too small to divide by.
+        prop_assume!(rhs.iter().map(|b| b * b).sum::<f64>().sqrt() > 1e-15);
+        let view = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect("valid CSR");
 
         for backend in backends() {
         for config in [
             Config { backend, ..Config::default() },
             Config { seed: 7, split_merge: Some(2), backend },
         ] {
-            if let Some(relative) = relative_residual(&csr, config, &rhs) {
-                prop_assert!(
-                    relative < RESIDUAL_LIMIT,
-                    "{config:?}: relative residual too large: {relative:.4e}"
-                );
-            }
+            let x = factorize_with(view, config)
+                .expect("factorization")
+                .solve(&rhs)
+                .expect("solve");
+            // A non-finite solve shows up as a non-finite ratio, so this subsumes a finiteness check.
+            let relative = relative_residual_over(view, &x, &rhs, 0..rhs.len());
+            prop_assert!(
+                relative < RESIDUAL_LIMIT,
+                "{config:?}: relative residual too large: {relative:.4e}"
+            );
         }
         }
     }

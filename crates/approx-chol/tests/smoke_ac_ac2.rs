@@ -4,11 +4,16 @@ use grid::grid_laplacian;
 
 use approx_chol::low_level::Builder;
 use approx_chol::Config;
+use rstest::rstest;
 
-fn run_smoke_case(rows: usize, cols: usize, config: Config) {
-    let lap = grid_laplacian(rows, cols);
-    let builder = Builder::new(config);
-    let factor = builder
+/// The scale at which bucket layout and fill-in bookkeeping carry load the property
+/// suite's eight-vertex graphs never reach.
+#[rstest]
+#[case::ac(Config::default())]
+#[case::ac2(Config { seed: 42, split_merge: Some(2), ..Config::default() })]
+fn smoke_medium_grid(#[case] config: Config) {
+    let lap = grid_laplacian(100, 100);
+    let factor = Builder::new(config)
         .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
         .expect("factorization should succeed");
 
@@ -28,24 +33,4 @@ fn run_smoke_case(rows: usize, cols: usize, config: Config) {
         .expect("solve_into should succeed");
     assert!(work.iter().all(|x| x.is_finite()));
     assert!(work.iter().any(|x| x.abs() > 1e-12));
-}
-
-/// The scale at which bucket layout and fill-in bookkeeping carry load the property
-/// suite's eight-vertex graphs never reach.
-#[test]
-fn smoke_medium_grid_ac() {
-    run_smoke_case(100, 100, Config::default());
-}
-
-#[test]
-fn smoke_medium_grid_ac2() {
-    run_smoke_case(
-        100,
-        100,
-        Config {
-            seed: 42,
-            split_merge: Some(2),
-            ..Config::default()
-        },
-    );
 }
