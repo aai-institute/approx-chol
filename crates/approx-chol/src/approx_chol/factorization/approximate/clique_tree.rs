@@ -71,13 +71,10 @@ impl<T: Real> SampledColumn<T> {
     pub(super) fn apply_fill_in_delta<C: EdgeCount>(
         &self,
         graph: &mut AdjListGraph<C, T>,
-        diag: &mut [T],
         deltas: &mut DegreeDeltas,
     ) {
         for &(u, w, weight) in &self.fill_edges {
             graph.add_fill_edge(u, w, weight);
-            diag[u as usize] = diag[u as usize] + weight;
-            diag[w as usize] = diag[w as usize] + weight;
             deltas.increase(u, 1);
             deltas.increase(w, 1);
         }
@@ -146,15 +143,18 @@ impl<T: Real> StarElimination<T> {
     }
 }
 
-/// Capacity is the live column sum, not `pivot_diag`, which can drift below it and push `f` past 1.
+/// The pivot is the star's live sum: the arm sees only Laplacians, whose diagonal that sum is.
 pub(super) fn sample_column<T: Real, C: EdgeCount>(
     star: &Star<T, C>,
-    pivot_diag: T,
     sampler: &mut CdfSampler<T>,
     column: &mut SampledColumn<T>,
 ) {
     let entries = star.entries();
-    column.reset(pivot_diag);
+    // Fold in sorted order: the sum order changes the factor bit-for-bit under a fixed seed.
+    let total_weight = entries
+        .iter()
+        .fold(T::zero(), |acc, entry| acc + entry.weight);
+    column.reset(total_weight);
     // The last neighbor takes the remainder, so no caller derives its count from an index.
     let Some((last, rest)) = entries.split_last() else {
         return;
@@ -164,10 +164,6 @@ pub(super) fn sample_column<T: Real, C: EdgeCount>(
         return;
     }
 
-    // Fold in sorted order: the sum order changes the factor bit-for-bit under a fixed seed.
-    let total_weight = entries
-        .iter()
-        .fold(T::zero(), |acc, entry| acc + entry.weight);
     // Sorted ascending puts every `f` in `[0, 1]`; a floor above zero would judge scale instead.
     if !(total_weight.is_finite() && total_weight > T::zero()) {
         column.push_uniform_shares(rest);
@@ -226,15 +222,14 @@ impl<T: num_traits::Float + Send + Sync + 'static> CliqueTreeSampler<T> {
             "a star needs one entry per neighbor"
         );
         self.draws.restart(index);
-        // The zero `pivot_diag` only seeds the column diagonal this discards.
         match &mut self.star {
             StarScratch::Single(star) => {
                 star.refill_uniform(entries, Single);
-                sample_column(star, T::zero(), &mut self.draws, &mut self.column);
+                sample_column(star, &mut self.draws, &mut self.column);
             }
             StarScratch::Multi(star, copies) => {
                 star.refill_uniform(entries, *copies);
-                sample_column(star, T::zero(), &mut self.draws, &mut self.column);
+                sample_column(star, &mut self.draws, &mut self.column);
             }
         }
         self.column.extend_ordered_fill_edges(out);

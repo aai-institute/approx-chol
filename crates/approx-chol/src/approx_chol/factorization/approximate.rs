@@ -21,7 +21,6 @@ use crate::types::Real;
 /// `C::Split` ties split to storage, so AC over a split multi-edge graph does not compile.
 pub(crate) fn eliminate<T: Real, C: EdgeCount>(
     mut graph: AdjListGraph<C, T>,
-    mut diag: Vec<T>,
     sampler: &mut CdfSampler<T>,
     split: C::Split,
 ) -> EliminationSequence<T> {
@@ -39,17 +38,13 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
             .next_vertex()
             .expect("the queue holds every vertex of the block");
         let star = star_builder.build_star(&mut graph, v, &mut ordering);
-        sample_column(star, diag[v], sampler, &mut column);
+        sample_column(star, sampler, &mut column);
         seq.push_sampled(v, column.diagonal, column.shares());
 
         graph.eliminate_vertex(v);
-        for entry in star.entries() {
-            let u = entry.neighbor as usize;
-            diag[u] = diag[u] - entry.weight;
-        }
 
         // One pq_move per affected neighbor; batching reorders equal-degree ties (quality-neutral).
-        column.apply_fill_in_delta(&mut graph, &mut diag, &mut deltas);
+        column.apply_fill_in_delta(&mut graph, &mut deltas);
         star.accumulate_removal_delta(&mut deltas);
         deltas.flush(&mut ordering);
     }
