@@ -1,4 +1,4 @@
-//! Elimination graph: [`adjacency`], [`multiplicity`], [`blocks`], and their [`ingest`]ion from CSR.
+//! Elimination graph: [`adjacency`], [`multiplicity`], [`blocks`], and their [`ingest`]ion from the SDDM input.
 
 mod adjacency;
 mod blocks;

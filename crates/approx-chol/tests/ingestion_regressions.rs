@@ -29,7 +29,7 @@ fn build(config: Config, rp: &[u32], ci: &[u32], vals: &[f64]) -> Result<Factor<
 fn out_of_class_input_is_rejected_at_its_reported_position() {
     let max = f64::MAX;
     let tiny = 1e-310;
-    let cases: [Rejected<'_>; 12] = [
+    let cases: [Rejected<'_>; 13] = [
         // Used to fall through both the diagonal and the `val < 0` edge branch,
         // silently factorizing diag(5, 4) — a confidently wrong factor.
         (
@@ -107,6 +107,13 @@ fn out_of_class_input_is_rejected_at_its_reported_position() {
             &[0, 0],
             &[max, max],
             Error::NonFiniteRow { row: 0 },
+        ),
+        (
+            "overflow of the surplus total",
+            &[0, 1, 2],
+            &[0, 1],
+            &[max, max],
+            Error::SurplusOverflow,
         ),
         // Normal diagonals; the edge's pivot alone would have no finite inverse (#163).
         (

@@ -20,15 +20,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Factor::solve_in_place` returns the zero-mean solution on floating blocks. ([#135])
 - A persisted block is grounded or floating with no stored dimension, and
   `FACTOR_FORMAT_VERSION` is `0x41430005`. ([#148])
+- A CSR with `u32::MAX` rows is rejected without diagonal surplus too. ([#145])
 
 ### Added
 
 - `Factor::scratch_len`. ([#146])
+- `Laplacian`, `Grounded` and `Sddm` input types, with `LaplacianError` and `GroundedError`. ([#133])
+- `TryFrom<CsrRef> for Sddm`, failing with `NotSddm`. ([#145])
+
+### Changed
+
+- An exact block's diagonal is the weighted degree plus the surplus that clears summation noise. ([#145])
 
 ### Fixed
 
 - Solves sum each block's right-hand side with compensation. ([#147])
 - A nonzero entry below `MIN_POSITIVE / EPSILON` in magnitude is rejected with `Error::MagnitudeTooSmall`. ([#163])
+- A diagonal surplus total that overflows is rejected with `Error::SurplusOverflow`. ([#145])
 
 ## [0.6.0] - 2026-08-24
 
@@ -220,8 +228,10 @@ for graph Laplacians in Rust with Python bindings.
 [#109]: https://github.com/aai-institute/approx-chol/issues/109
 [#118]: https://github.com/aai-institute/approx-chol/issues/118
 [#131]: https://github.com/aai-institute/approx-chol/pull/131
+[#133]: https://github.com/aai-institute/approx-chol/issues/133
 [#135]: https://github.com/aai-institute/approx-chol/issues/135
 [#140]: https://github.com/aai-institute/approx-chol/issues/140
+[#145]: https://github.com/aai-institute/approx-chol/issues/145
 [#146]: https://github.com/aai-institute/approx-chol/issues/146
 [#147]: https://github.com/aai-institute/approx-chol/issues/147
 [#148]: https://github.com/aai-institute/approx-chol/issues/148

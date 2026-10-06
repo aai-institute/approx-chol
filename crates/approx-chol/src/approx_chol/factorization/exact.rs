@@ -3,7 +3,6 @@ use super::FactorError;
 use crate::graph::{BlockVertices, Ingestion};
 use crate::types::Real;
 use crate::{DenseFailure, Fallback, UnusablePivot};
-use num_traits::PrimInt;
 
 /// Why the dense backend declined a block, in that block's own numbering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,8 +23,8 @@ impl NotFactorable {
     }
 }
 
-pub(crate) fn factor<T: Real, I: PrimInt>(
-    ingestion: &Ingestion<'_, T, I>,
+pub(crate) fn factor<T: Real>(
+    ingestion: &Ingestion<T>,
     block: &BlockVertices<'_>,
     eliminated: usize,
 ) -> Result<LowerTriangular<T>, NotFactorable> {
@@ -48,8 +47,8 @@ const fn packed_len(m: usize) -> Option<usize> {
 }
 
 /// Read from the ingested arrays: a block that reaches here never needs an elimination graph.
-fn assemble<T: Real, I: PrimInt>(
-    ingestion: &Ingestion<'_, T, I>,
+fn assemble<T: Real>(
+    ingestion: &Ingestion<T>,
     block: &BlockVertices<'_>,
     m: usize,
 ) -> Result<LowerTriangular<T>, NotFactorable> {

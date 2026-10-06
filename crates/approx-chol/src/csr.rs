@@ -13,13 +13,10 @@ fn cast_slice<S: PrimInt, D: PrimInt>(src: &[S], kind: IndexKind) -> Result<Vec<
     Ok(out)
 }
 
-fn as_usize<I: PrimInt>(value: I, kind: IndexKind, position: usize) -> Result<usize, Error> {
+fn as_usize<I: PrimInt>(value: I, kind: IndexKind, position: usize) -> Result<usize, CsrError> {
     value
         .to_usize()
-        .ok_or(Error::InvalidCsr(CsrError::IndexNotRepresentableAsUsize {
-            kind,
-            position,
-        }))
+        .ok_or(CsrError::IndexNotRepresentableAsUsize { kind, position })
 }
 
 /// Zero-copy, validated CSR view over any library's arrays: the factorization input.
@@ -39,6 +36,15 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
         values: &'a [T],
         n: u32,
     ) -> Result<Self, Error> {
+        Self::validated(row_ptrs, col_indices, values, n).map_err(Error::InvalidCsr)
+    }
+
+    pub(crate) fn validated(
+        row_ptrs: &'a [I],
+        col_indices: &'a [I],
+        values: &'a [T],
+        n: u32,
+    ) -> Result<Self, CsrError> {
         let csr = Self {
             row_ptrs,
             col_indices,
@@ -49,42 +55,42 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
         Ok(csr)
     }
 
-    fn validate(&self) -> Result<(), Error> {
+    fn validate(&self) -> Result<(), CsrError> {
         let n = self.n as usize;
         if self.row_ptrs.len() != n + 1 {
-            return Err(Error::InvalidCsr(CsrError::RowPtrsLenMismatch {
+            return Err(CsrError::RowPtrsLenMismatch {
                 expected: n + 1,
                 got: self.row_ptrs.len(),
-            }));
+            });
         }
         if self.col_indices.len() != self.values.len() {
-            return Err(Error::InvalidCsr(CsrError::ColIndicesValuesLenMismatch {
+            return Err(CsrError::ColIndicesValuesLenMismatch {
                 col_indices_len: self.col_indices.len(),
                 values_len: self.values.len(),
-            }));
+            });
         }
 
         let row_ptr_last = as_usize(self.row_ptrs[n], IndexKind::RowPtr, n)?;
         if self.row_ptrs[0] != I::zero() {
-            return Err(Error::InvalidCsr(CsrError::RowPtrsMustStartAtZero {
+            return Err(CsrError::RowPtrsMustStartAtZero {
                 got: as_usize(self.row_ptrs[0], IndexKind::RowPtr, 0)?,
-            }));
+            });
         }
         if row_ptr_last != self.col_indices.len() {
-            return Err(Error::InvalidCsr(CsrError::RowPtrsEndMismatchNnz {
+            return Err(CsrError::RowPtrsEndMismatchNnz {
                 row_ptr_end: row_ptr_last,
                 nnz: self.col_indices.len(),
-            }));
+            });
         }
 
         // Both scans compare in `I`, so only the error arms convert an index to `usize`.
         for i in 0..n {
             if self.row_ptrs[i] > self.row_ptrs[i + 1] {
-                return Err(Error::InvalidCsr(CsrError::RowPtrsNotNonDecreasing {
+                return Err(CsrError::RowPtrsNotNonDecreasing {
                     row: i,
                     prev: as_usize(self.row_ptrs[i], IndexKind::RowPtr, i)?,
                     next: as_usize(self.row_ptrs[i + 1], IndexKind::RowPtr, i + 1)?,
-                }));
+                });
             }
         }
 
@@ -93,17 +99,17 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
         for (position, &col) in self.col_indices.iter().enumerate() {
             // Downstream reads columns in place as `usize`, which a negative one is not.
             if col < I::zero() {
-                return Err(Error::InvalidCsr(CsrError::IndexNotRepresentableAsUsize {
+                return Err(CsrError::IndexNotRepresentableAsUsize {
                     kind: IndexKind::ColIndex,
                     position,
-                }));
+                });
             }
             if limit.is_some_and(|limit| col >= limit) {
-                return Err(Error::InvalidCsr(CsrError::ColumnIndexOutOfBounds {
+                return Err(CsrError::ColumnIndexOutOfBounds {
                     position,
                     col: as_usize(col, IndexKind::ColIndex, position)?,
                     n,
-                }));
+                });
             }
         }
         Ok(())

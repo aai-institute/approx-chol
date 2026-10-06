@@ -3,7 +3,7 @@ use super::factorization::{approximate, exact, Block, Cholesky, Permutation};
 use crate::graph::{BlockVertices, EdgeCount, Ingestion, Multi, Single};
 use crate::sampling::CdfSampler;
 use crate::types::Real;
-use crate::{CsrError, CsrRef, Error, Factor, Fallback};
+use crate::{CsrError, CsrRef, Error, Factor, Fallback, Sddm};
 use num_traits::PrimInt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -41,20 +41,21 @@ where
     }
 
     /// Multiplicity fixes layout and split together, so each arm is one algorithm end to end.
-    fn build_validated<I: PrimInt>(&self, sddm: CsrRef<'_, T, I>) -> Result<Factor<T>, Error> {
+    fn build_validated<I: PrimInt>(&self, csr: CsrRef<'_, T, I>) -> Result<Factor<T>, Error> {
+        let sddm = Sddm::try_from(csr)?;
         let n = sddm.n();
-        let ingestion = Ingestion::of(sddm)?;
+        let ingestion = Ingestion::of(sddm);
         match self.config.split_factor() {
-            None => self.factor_blocks::<Single, _>(ingestion, n, ()),
-            Some(k) => self.factor_blocks::<Multi, _>(ingestion, n, k),
+            None => self.factor_blocks::<Single>(ingestion, n, ()),
+            Some(k) => self.factor_blocks::<Multi>(ingestion, n, k),
         }
         // The only scope holding both the caller's dimension and the finished factor.
         .inspect(|factor| debug_assert_eq!(factor.n(), n))
     }
 
-    fn factor_blocks<C: EdgeCount, I: PrimInt>(
+    fn factor_blocks<C: EdgeCount>(
         &self,
-        mut ingestion: Ingestion<'_, T, I>,
+        mut ingestion: Ingestion<T>,
         n: usize,
         split: C::Split,
     ) -> Result<Factor<T>, Error> {
@@ -109,9 +110,9 @@ impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
         }
     }
 
-    fn factor<I: PrimInt>(
+    fn factor(
         &mut self,
-        ingestion: &Ingestion<'_, T, I>,
+        ingestion: &Ingestion<T>,
         block: &BlockVertices<'_>,
     ) -> Result<(Block<T>, Option<Fallback>), Error> {
         let (cholesky, fallback) = self.cholesky(ingestion, block)?;
@@ -124,9 +125,9 @@ impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
     }
 
     /// Routes first, so a block the dense backend claims never builds an elimination graph.
-    fn cholesky<I: PrimInt>(
+    fn cholesky(
         &mut self,
-        ingestion: &Ingestion<'_, T, I>,
+        ingestion: &Ingestion<T>,
         block: &BlockVertices<'_>,
     ) -> Result<(Cholesky<T>, Option<Fallback>), Error> {
         // Every block restarts, so one block's draws never shift because another went exact.

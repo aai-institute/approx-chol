@@ -1,46 +1,75 @@
-//! CSR to elimination graph, one module per phase in pipeline order.
+//! [`Sddm`] to elimination graph.
 
-mod canonical;
 mod sets;
-mod validate;
 
 use super::adjacency::{add_edge_pair, AdjListGraph, Edge};
 use super::blocks::{BlockLayout, BlockVertices};
 use super::multiplicity::EdgeCount;
 use crate::types::Real;
-use crate::{CsrRef, Error};
-use canonical::Canonical;
-use num_traits::PrimInt;
-use validate::{validate, Grounding, Ingested};
-
-/// A validated [`CsrRef`] index is non-negative and fits `usize`.
-#[inline(always)]
-fn index<I: PrimInt>(value: I) -> usize {
-    value.to_usize().expect("a validated CSR index is a usize")
-}
+use crate::{Grounded, Sddm};
+use sets::DisjointSets;
 
 /// Kept whole so a block routed to the dense arm never gets an adjacency list built.
-pub(crate) struct Ingestion<'a, T, I> {
-    canonical: Canonical<'a, T, I>,
+pub(crate) struct Ingestion<T> {
+    sddm: Sddm<T>,
+    /// One per real vertex, and the ground vertex's last when grounded.
     diagonal: Vec<T>,
-    grounding: Grounding<T>,
+    /// Each vertex's edge count, its ground edge included.
+    degrees: Vec<u32>,
     layout: Option<BlockLayout>,
 }
 
-impl<'a, T: Real, I: PrimInt> Ingestion<'a, T, I> {
-    pub(crate) fn of(csr: CsrRef<'a, T, I>) -> Result<Self, Error> {
-        let canonical = Canonical::of(csr)?;
-        let Ingested {
+impl<T: Real> Ingestion<T> {
+    /// Sums degrees in the order [`Sddm`]'s checks did, so every diagonal is one they proved finite.
+    pub(crate) fn of(sddm: Sddm<T>) -> Self {
+        let laplacian = sddm.laplacian();
+        let m = laplacian.n();
+        let mut sets = DisjointSets::new(m);
+        let mut diagonal = vec![T::zero(); m];
+        let mut degrees = vec![0u32; m];
+        for row in 0..m {
+            let (neighbors, weights) = laplacian.row(row);
+            degrees[row] += neighbors.len() as u32;
+            let mut root = sets.find(row as u32);
+            for (&col, &weight) in neighbors.iter().zip(weights) {
+                diagonal[row] = diagonal[row] + weight;
+                diagonal[col as usize] = diagonal[col as usize] + weight;
+                degrees[col as usize] += 1;
+                root = sets.union_resolved(root, col);
+            }
+        }
+        if let Sddm::Grounded(grounded) = &sddm {
+            let surplus = grounded.surplus();
+            for (d, &s) in diagonal.iter_mut().zip(surplus) {
+                *d = *d + s;
+            }
+            diagonal.push(surplus.iter().fold(T::zero(), |sum, &s| sum + s));
+            // The ground is absent from the input, so the rows it closes are unioned through it here.
+            let mut root = sets.push();
+            let mut degree = 0u32;
+            for (row, &s) in surplus.iter().enumerate() {
+                if s > T::zero() {
+                    root = sets.union_resolved(root, row as u32);
+                    degrees[row] += 1;
+                    degree += 1;
+                }
+            }
+            degrees.push(degree);
+        }
+        debug_assert!(diagonal.iter().all(|d| d.is_finite()));
+        Self {
+            layout: sets.layout(),
+            sddm,
             diagonal,
-            grounding,
-            layout,
-        } = validate(&canonical)?;
-        Ok(Self {
-            canonical,
-            diagonal,
-            grounding,
-            layout,
-        })
+            degrees,
+        }
+    }
+
+    fn grounded(&self) -> Option<&Grounded<T>> {
+        match &self.sddm {
+            Sddm::Laplacian(_) => None,
+            Sddm::Grounded(grounded) => Some(grounded),
+        }
     }
 
     /// Vertices the factorization covers, the ground one included.
@@ -50,10 +79,8 @@ impl<'a, T: Real, I: PrimInt> Ingestion<'a, T, I> {
 
     /// The ground vertex outranks every real one, so it can only be a block's last.
     pub(crate) fn carries_ground(&self, block: &BlockVertices<'_>) -> bool {
-        match &self.grounding {
-            Grounding::Floating => false,
-            Grounding::Grounded { surpluses, .. } => block.last() == surpluses.len() as u32,
-        }
+        self.grounded()
+            .is_some_and(|grounded| block.last() == grounded.n() as u32)
     }
 
     /// `None` when connected. Taken because its order becomes the factor's permutation.
@@ -66,24 +93,21 @@ impl<'a, T: Real, I: PrimInt> Ingestion<'a, T, I> {
         self.diagonal[block.global(local)]
     }
 
-    /// Upper, not lower: mirrors may differ by ulps and the approximate route symmetrizes on this one.
+    /// The off-diagonal entries `-w` above the block row's diagonal.
     pub(crate) fn upper_row(
         &self,
         block: &BlockVertices<'_>,
         local: usize,
         mut entry: impl FnMut(usize, T),
     ) {
-        let (row_ptrs, col_indices, values) = self.canonical.arrays();
         let row = block.global(local);
-        if row + 1 >= row_ptrs.len() {
+        let laplacian = self.sddm.laplacian();
+        if row >= laplacian.n() {
             return;
         }
-        let (from, to) = (index(row_ptrs[row]), index(row_ptrs[row + 1]));
-        for (&col, &value) in col_indices[from..to].iter().zip(&values[from..to]) {
-            let col = index(col);
-            if col > row && value != T::zero() {
-                entry(block.local(col), value);
-            }
+        let (neighbors, weights) = laplacian.row(row);
+        for (&col, &weight) in neighbors.iter().zip(weights) {
+            entry(block.local(col as usize), -weight);
         }
     }
 
@@ -92,39 +116,21 @@ impl<'a, T: Real, I: PrimInt> Ingestion<'a, T, I> {
         &self,
         block: &BlockVertices<'_>,
     ) -> AdjListGraph<C, T> {
-        let (row_ptrs, col_indices, values) = self.canonical.arrays();
-        let rows = row_ptrs.len() - 1;
+        let laplacian = self.sddm.laplacian();
+        let rows = laplacian.n();
         let n = block.len();
-        // Every grounded row shares one block, so its degree is the whole count.
-        let ground_degree = match self.grounding {
-            Grounding::Floating => 0,
-            Grounding::Grounded { degree, .. } => degree,
-        };
-
-        let mut adj: Vec<Vec<Edge<T, C>>> = Vec::with_capacity(n);
-        for local in 0..n {
-            let global = block.global(local);
-            let degree = if global < rows {
-                index(row_ptrs[global + 1]) - index(row_ptrs[global])
-            } else {
-                ground_degree
-            };
-            adj.push(Vec::with_capacity(degree));
-        }
+        // One slot of slack takes the first fill edge: exact capacity measured +3% on degree-4 grids.
+        let mut adj: Vec<Vec<Edge<T, C>>> = (0..n)
+            .map(|local| Vec::with_capacity(self.degrees[block.global(local)] as usize + 1))
+            .collect();
 
         // Measured: an in-loop discriminant test spills `local_of` and reloads per edge.
         match block {
             BlockVertices::Whole(_) => {
-                for local in 0..n {
-                    if local >= rows {
-                        continue;
-                    }
-                    let (from, to) = (index(row_ptrs[local]), index(row_ptrs[local + 1]));
-                    for (&col, &value) in col_indices[from..to].iter().zip(&values[from..to]) {
-                        let col = index(col);
-                        if col > local && value != T::zero() {
-                            add_edge_pair(&mut adj, local, col, -value);
-                        }
+                for local in 0..n.min(rows) {
+                    let (neighbors, weights) = laplacian.row(local);
+                    for (&col, &weight) in neighbors.iter().zip(weights) {
+                        add_edge_pair(&mut adj, local, col as usize, weight);
                     }
                 }
             }
@@ -136,25 +142,19 @@ impl<'a, T: Real, I: PrimInt> Ingestion<'a, T, I> {
                     if global >= rows {
                         continue;
                     }
-                    let (from, to) = (index(row_ptrs[global]), index(row_ptrs[global + 1]));
-                    for (&col, &value) in col_indices[from..to].iter().zip(&values[from..to]) {
-                        let col = index(col);
-                        if col > global && value != T::zero() {
-                            add_edge_pair(&mut adj, local, local_of[col] as usize, -value);
-                        }
+                    let (neighbors, weights) = laplacian.row(global);
+                    for (&col, &weight) in neighbors.iter().zip(weights) {
+                        add_edge_pair(&mut adj, local, local_of[col as usize] as usize, weight);
                     }
                 }
             }
         }
 
-        if let Grounding::Grounded { surpluses, .. } = &self.grounding {
-            if self.carries_ground(block) {
-                let ground = n - 1;
-                for (row, &surplus) in surpluses.iter().enumerate() {
-                    // The clamp in `ground` left every surplus non-negative.
-                    if surplus > T::zero() {
-                        add_edge_pair(&mut adj, block.local(row), ground, surplus);
-                    }
+        if let Some(grounded) = self.grounded().filter(|_| self.carries_ground(block)) {
+            let ground = n - 1;
+            for (row, &surplus) in grounded.surplus().iter().enumerate() {
+                if surplus > T::zero() {
+                    add_edge_pair(&mut adj, block.local(row), ground, surplus);
                 }
             }
         }
