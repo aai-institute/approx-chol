@@ -64,7 +64,7 @@ where
         let mut factorizer = BlockFactorizer::<T, C>::new(self.config, split);
         let Some(layout) = ingestion.take_layout() else {
             let whole = BlockVertices::whole(ingestion.n());
-            let (block, fallback) = factorizer.factor(&mut ingestion, &whole)?;
+            let (block, fallback) = factorizer.factor(&ingestion, &whole)?;
             return Ok(Factor::from_blocks(
                 None,
                 vec![block],
@@ -78,7 +78,7 @@ where
         let mut local_of = vec![0u32; ingestion.n()];
         for vertices in layout.blocks() {
             let view = BlockVertices::part(vertices, &mut local_of);
-            let (block, fallback) = factorizer.factor(&mut ingestion, &view)?;
+            let (block, fallback) = factorizer.factor(&ingestion, &view)?;
             blocks.push(block);
             fallbacks.extend(fallback);
         }
@@ -109,7 +109,7 @@ impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
     /// Routes first, so a block the dense backend claims never builds an elimination graph.
     fn factor(
         &mut self,
-        ingestion: &mut Ingestion<'_, T>,
+        ingestion: &Ingestion<'_, T>,
         block: &BlockVertices<'_>,
     ) -> Result<(Block<T>, Option<Fallback>), Error> {
         // Every block restarts, so one block's draws never shift because another went exact.
@@ -131,9 +131,7 @@ impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
             }
         }
         let graph = ingestion.block_graph::<C>(block);
-        let diagonal = ingestion.take_block_diagonal(block);
-        let sequence =
-            approximate::eliminate::<T, C>(graph, diagonal, &mut self.sampler, self.split);
+        let sequence = approximate::eliminate::<T, C>(graph, &mut self.sampler, self.split);
         Ok((
             Block::new(dim, anchor, Cholesky::Approximate(sequence)),
             fallback,

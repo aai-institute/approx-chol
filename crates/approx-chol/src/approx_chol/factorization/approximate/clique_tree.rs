@@ -6,7 +6,6 @@ use crate::types::{count_as_scalar, Real};
 
 /// One sampled column of the factor (Algorithm 5, GKS 2023), reused across steps.
 pub(super) struct SampledColumn<T: Real> {
-    pub diagonal: T,
     /// Only appended through [`Self::push_share`], so the two can never disagree.
     neighbors: Vec<u32>,
     coefficients: Vec<T>,
@@ -25,7 +24,6 @@ pub(super) struct ColumnShares<'a, T> {
 impl<T: Real> SampledColumn<T> {
     pub(super) fn new() -> Self {
         Self {
-            diagonal: T::zero(),
             neighbors: Vec::new(),
             coefficients: Vec::new(),
             remainder: None,
@@ -34,8 +32,7 @@ impl<T: Real> SampledColumn<T> {
     }
 
     /// A column that hands on nothing, which is what an empty star leaves.
-    fn reset(&mut self, pivot_diag: T) {
-        self.diagonal = pivot_diag;
+    fn reset(&mut self) {
         self.neighbors.clear();
         self.coefficients.clear();
         self.remainder = None;
@@ -71,13 +68,10 @@ impl<T: Real> SampledColumn<T> {
     pub(super) fn apply_fill_in_delta<C: EdgeCount>(
         &self,
         graph: &mut AdjListGraph<C, T>,
-        diag: &mut [T],
         deltas: &mut DegreeDeltas,
     ) {
         for &(u, w, weight) in &self.fill_edges {
             graph.add_fill_edge(u, w, weight);
-            diag[u as usize] = diag[u as usize] + weight;
-            diag[w as usize] = diag[w as usize] + weight;
             deltas.increase(u, 1);
             deltas.increase(w, 1);
         }
@@ -146,22 +140,21 @@ impl<T: Real> StarElimination<T> {
     }
 }
 
-/// Capacity is the live column sum, not `pivot_diag`, which can drift below it and push `f` past 1.
+/// Returns the pivot: the arm sees only Laplacians, whose diagonal is the star's live sum.
 pub(super) fn sample_column<T: Real, C: EdgeCount>(
     star: &Star<T, C>,
-    pivot_diag: T,
     sampler: &mut CdfSampler<T>,
     column: &mut SampledColumn<T>,
-) {
+) -> T {
     let entries = star.entries();
-    column.reset(pivot_diag);
+    column.reset();
     // The last neighbor takes the remainder, so no caller derives its count from an index.
     let Some((last, rest)) = entries.split_last() else {
-        return;
+        return T::zero();
     };
     column.remainder = Some(last.neighbor);
     if rest.is_empty() {
-        return;
+        return last.weight;
     }
 
     // Fold in sorted order: the sum order changes the factor bit-for-bit under a fixed seed.
@@ -171,7 +164,7 @@ pub(super) fn sample_column<T: Real, C: EdgeCount>(
     // Sorted ascending puts every `f` in `[0, 1]`; a floor above zero would judge scale instead.
     if !(total_weight.is_finite() && total_weight > T::zero()) {
         column.push_uniform_shares(rest);
-        return;
+        return total_weight;
     }
 
     sampler.prepare(entries.iter().map(|entry| (entry.neighbor, entry.weight)));
@@ -183,7 +176,7 @@ pub(super) fn sample_column<T: Real, C: EdgeCount>(
         column.sample_fill_edges(entry.neighbor, entry.copies, fill_wt, sampler, i + 1);
     }
 
-    column.diagonal = last.weight * elim.scale;
+    last.weight * elim.scale
 }
 
 /// Fixed for the sampler's life, as [`Config::split_merge`](crate::Config::split_merge) is.
@@ -226,15 +219,14 @@ impl<T: num_traits::Float + Send + Sync + 'static> CliqueTreeSampler<T> {
             "a star needs one entry per neighbor"
         );
         self.draws.restart(index);
-        // The zero `pivot_diag` only seeds the column diagonal this discards.
         match &mut self.star {
             StarScratch::Single(star) => {
                 star.refill_uniform(entries, Single);
-                sample_column(star, T::zero(), &mut self.draws, &mut self.column);
+                sample_column(star, &mut self.draws, &mut self.column);
             }
             StarScratch::Multi(star, copies) => {
                 star.refill_uniform(entries, *copies);
-                sample_column(star, T::zero(), &mut self.draws, &mut self.column);
+                sample_column(star, &mut self.draws, &mut self.column);
             }
         }
         self.column.extend_ordered_fill_edges(out);

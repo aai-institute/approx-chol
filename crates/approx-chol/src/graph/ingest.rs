@@ -15,9 +15,7 @@ use validate::{validate, Grounding, Ingested};
 /// Kept whole so a block routed to the dense arm never gets an adjacency list built.
 pub(crate) struct Ingestion<'a, T> {
     canonical: Canonical<'a, T>,
-    /// `take_block_diagonal` empties this, so `n` cannot be its length.
     diagonal: Vec<T>,
-    n: usize,
     grounding: Grounding<T>,
     layout: Option<BlockLayout>,
 }
@@ -32,7 +30,6 @@ impl<'a, T: Real> Ingestion<'a, T> {
         } = validate(&canonical)?;
         Ok(Self {
             canonical,
-            n: diagonal.len(),
             diagonal,
             grounding,
             layout,
@@ -41,7 +38,7 @@ impl<'a, T: Real> Ingestion<'a, T> {
 
     /// Vertices the factorization covers, the ground one included.
     pub(crate) fn n(&self) -> usize {
-        self.n
+        self.diagonal.len()
     }
 
     /// The ground vertex outranks every real one, so it can only be a block's last.
@@ -52,7 +49,7 @@ impl<'a, T: Real> Ingestion<'a, T> {
         }
     }
 
-    /// `None` when connected. Taken so the caller can walk blocks while asking for each.
+    /// `None` when connected. Taken because its order becomes the factor's permutation.
     pub(crate) fn take_layout(&mut self) -> Option<BlockLayout> {
         self.layout.take()
     }
@@ -79,17 +76,6 @@ impl<'a, T: Real> Ingestion<'a, T> {
             if col as usize > row && value != T::zero() {
                 entry(block.local(col as usize), value);
             }
-        }
-    }
-
-    /// The whole graph is moved out: it is one block, so nothing reads it again.
-    pub(crate) fn take_block_diagonal(&mut self, block: &BlockVertices<'_>) -> Vec<T> {
-        match block {
-            BlockVertices::Whole(_) => core::mem::take(&mut self.diagonal),
-            BlockVertices::Part { vertices, .. } => vertices
-                .iter()
-                .map(|&vertex| self.diagonal[vertex as usize])
-                .collect(),
         }
     }
 
