@@ -2,6 +2,7 @@ use super::block::Block;
 use super::permutation::Permutation;
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;
+use crate::Fallback;
 use core::fmt;
 
 #[cfg(test)]
@@ -85,29 +86,6 @@ impl<T: num_traits::Float> TryFrom<FactorData<T>> for Factor<T> {
         let factor = Self::of(data.permutation, data.blocks, data.fallbacks);
         factor.validate_structure()?;
         Ok(factor)
-    }
-}
-
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-/// Why a block [`Backend::ExactBelow`](crate::Backend::ExactBelow) claimed was factored approximately.
-pub enum Fallback {
-    /// Dense elimination reached a pivot it could not use.
-    InvalidPivot(crate::UnusablePivot),
-    /// The dense copy would not fit in memory; never fatal, whatever [`ExactFailure`](crate::ExactFailure) says.
-    WillNotFit {
-        /// Variables the block solves for, so the copy is `dim * dim` scalars.
-        dim: usize,
-    },
-}
-
-impl fmt::Display for Fallback {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidPivot(pivot) => write!(f, "{pivot}"),
-            Self::WillNotFit { dim } => write!(f, "{dim} variables do not fit in memory"),
-        }
     }
 }
 

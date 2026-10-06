@@ -1,10 +1,9 @@
 use super::block::BlockDim;
-use super::factor::Fallback;
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;
 use crate::graph::{BlockVertices, Ingestion};
 use crate::types::Real;
-use crate::{DenseFailure, UnusablePivot};
+use crate::{DenseFailure, Fallback, UnusablePivot};
 
 /// Why the dense backend declined a block, in that block's own numbering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

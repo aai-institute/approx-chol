@@ -43,7 +43,7 @@ pub enum Error {
 }
 
 /// An exact dense Cholesky pivot that could not be used, and where it was. The same
-/// payload is reported as a [`Fallback`](crate::Fallback) or raised as
+/// payload is reported as a [`Fallback`] or raised as
 /// [`Error::DenseFactorizationFailed`].
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +57,29 @@ pub struct UnusablePivot {
 impl fmt::Display for UnusablePivot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "vertex {}: {}", self.vertex, self.failure)
+    }
+}
+
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Why a block [`Backend::ExactBelow`](crate::Backend::ExactBelow) claimed was factored approximately.
+pub enum Fallback {
+    /// Dense elimination reached a pivot it could not use.
+    InvalidPivot(UnusablePivot),
+    /// The dense copy would not fit in memory; never fatal, whatever [`ExactFailure`](crate::ExactFailure) says.
+    WillNotFit {
+        /// Variables the block solves for, so the copy is `dim * dim` scalars.
+        dim: usize,
+    },
+}
+
+impl fmt::Display for Fallback {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidPivot(pivot) => write!(f, "{pivot}"),
+            Self::WillNotFit { dim } => write!(f, "{dim} variables do not fit in memory"),
+        }
     }
 }
 

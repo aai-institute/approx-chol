@@ -1,11 +1,9 @@
 use super::config::{Backend, Config, Route};
-use super::factorization::{
-    approximate, exact, Anchor, Block, BlockDim, Cholesky, Fallback, Permutation,
-};
+use super::factorization::{approximate, exact, Anchor, Block, BlockDim, Cholesky, Permutation};
 use crate::graph::{BlockVertices, EdgeCount, Ingestion, Multi, Single};
 use crate::sampling::CdfSampler;
 use crate::types::Real;
-use crate::{CsrError, CsrRef, Error, Factor};
+use crate::{CsrError, CsrRef, Error, Factor, Fallback};
 use num_traits::PrimInt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
