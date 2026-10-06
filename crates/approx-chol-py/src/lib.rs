@@ -19,8 +19,7 @@ fn borrow_error(name: &str, err: BorrowError) -> PyErr {
     }
 }
 
-/// The element is the column's own associated type, so no call site can pair an index
-/// column with a float element.
+/// An associated element type stops a call site pairing an index column with a float element.
 trait Column {
     type Element: numpy::Element;
 
@@ -150,8 +149,6 @@ impl Default for PyBackend {
                 on_failure,
             } => Self::ExactBelow {
                 max_dim,
-                // `ExactFailure` is `non_exhaustive`, so a newer core can default to a
-                // policy these bindings do not model yet.
                 on_failure: match on_failure {
                     ExactFailure::Error => PyExactFailure::Error,
                     _ => PyExactFailure::FallBackToApproximate,
@@ -207,8 +204,6 @@ enum PyDenseFailure {
 
 impl From<DenseFailure> for PyDenseFailure {
     fn from(failure: DenseFailure) -> Self {
-        // `DenseFailure` is `non_exhaustive`, so a newer core can report a cause
-        // these bindings do not model yet.
         match failure {
             DenseFailure::NonPositivePivot => Self::NonPositivePivot,
             DenseFailure::NonFinitePivot => Self::NonFinitePivot,
@@ -227,8 +222,7 @@ enum PyFallback {
     WillNotFit {
         dim: usize,
     },
-    // `Fallback` is `non_exhaustive`, so a newer core can report a reason these
-    // bindings do not model yet.
+    // `Fallback` is `non_exhaustive`, so its wildcard arm needs a target.
     Other {
         reason: String,
     },
@@ -254,8 +248,7 @@ struct PyFactor {
     inner: approx_chol::Factor<f64>,
 }
 
-/// The default `ExactFailure` downgrades a block to approximate elimination, so
-/// without this the accuracy loss is silent.
+/// Without this, the default `ExactFailure`'s downgrade to approximate elimination is silent.
 fn warn_on_fallback(py: Python<'_>, factor: &approx_chol::Factor<f64>) -> PyResult<()> {
     let fallbacks = factor.fallbacks();
     if fallbacks.is_empty() {
@@ -439,9 +432,7 @@ fn factorize(
     if shape.0 != shape.1 {
         return Err(value_error("matrix must be square"));
     }
-    if shape.0 > u32::MAX as usize {
-        return Err(value_error("matrix dimension exceeds u32::MAX"));
-    }
+    let n = u32::try_from(shape.0).map_err(|_| value_error("matrix dimension exceeds u32::MAX"))?;
 
     let np = py.import("numpy")?;
     let rp_arr = as_contiguous_1d::<Index>(&np, &indptr, "indptr")?;
@@ -462,15 +453,13 @@ fn factorize(
         .as_slice()
         .map_err(|_| value_error("data must be contiguous"))?;
 
-    let n = u32::try_from(shape.0).map_err(|_| value_error("matrix dimension exceeds u32::MAX"))?;
     let csr = CsrRef::new(rp, ci, vals, n)
         .map_err(|e| value_error(format!("invalid CSR matrix: {e}")))?;
     factorize_csr(py, csr, config)
 }
 
 /// Approximate Cholesky factorization for SDDM/Laplacian systems.
-// Every pyclass is `frozen` with `Sync` state and the module holds none, so nothing
-// here needs the GIL to stay sound on free-threaded builds.
+// GIL-free is sound: every pyclass is `frozen` with `Sync` state and the module holds none.
 #[pymodule(gil_used = false)]
 fn _approx_chol(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBackend>()?;
