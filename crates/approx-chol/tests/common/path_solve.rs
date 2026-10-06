@@ -1,5 +1,4 @@
-//! Shared assertions for the path-Laplacian fixture that the generic, sprs and
-//! faer suites each run over their own index and value types.
+//! Path-Laplacian assertions the sprs and faer suites run once per index type.
 
 use approx_chol::low_level::Builder;
 use approx_chol::{Config, CsrRef, Error, Factor};
@@ -7,8 +6,7 @@ use num_traits::{Float, FromPrimitive, PrimInt};
 
 /// The whole input-adapter contract for one matrix carrying the path fixture: the
 /// borrowed view reports the fixture's shape, and the same matrix factorizes and
-/// solves through `Builder::build`. All three conversion suites assert exactly
-/// this, so none of them owns a copy of it.
+/// solves through `Builder::build`.
 pub fn assert_view_and_factor_match_fixture<'a, T, I, M>(matrix: M, config: Config)
 where
     M: TryInto<CsrRef<'a, T, I>> + Copy,

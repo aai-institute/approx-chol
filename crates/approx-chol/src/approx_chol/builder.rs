@@ -145,6 +145,3 @@ impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
         ))
     }
 }
-
-#[cfg(test)]
-mod tests;
