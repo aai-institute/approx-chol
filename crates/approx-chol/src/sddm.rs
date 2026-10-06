@@ -47,8 +47,7 @@ enum SumOverflow {
     Total,
 }
 
-/// The only way to a [`Laplacian`]: every degree is summed as an edge arrives. Edges are
-/// checked by whoever holds the argument for them, so appending stays inside this module.
+/// The only way to a [`Laplacian`]: degrees are summed as edges arrive, which callers have checked.
 struct UpperRows<T> {
     row_ptrs: Vec<u32>,
     neighbors: Vec<u32>,
@@ -147,10 +146,6 @@ impl<T: Float> Checked<T> {
         Self { laplacian, degrees }
     }
 
-    fn into_laplacian(self) -> Laplacian<T> {
-        self.laplacian
-    }
-
     /// `surplus` is one finite, non-negative entry per vertex; the one place the variant is chosen.
     fn with_surplus(self, surplus: Vec<T>) -> Result<Sddm<T>, SumOverflow> {
         let total = surplus.iter().fold(T::zero(), |sum, &s| sum + s);
@@ -178,12 +173,7 @@ impl<T: Float> Checked<T> {
     }
 }
 
-/// A weighted graph's Laplacian `L(G)`, stored as `G`'s strict upper adjacency: row `i`
-/// lists its neighbors `j > i` in ascending order, each with a finite weight `w > 0`.
-/// Below `u32::MAX` vertices, so a ground vertex still has an index, and every weighted
-/// degree is finite.
-///
-/// The matrix entry at `(i, j)` is `-w`; the diagonal is never stored.
+/// `L(G)` stored as `G`'s strict upper adjacency with positive weights; the diagonal is implied.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Laplacian<T = f64> {
     row_ptrs: Vec<u32>,
@@ -192,12 +182,7 @@ pub struct Laplacian<T = f64> {
 }
 
 impl<T: Float> Laplacian<T> {
-    /// Validate and take ownership of a strict upper adjacency.
-    ///
-    /// # Errors
-    ///
-    /// [`LaplacianError::Structure`] when the arrays are not a CSR matrix, else the
-    /// variant naming the first entry or vertex that breaks the invariant.
+    /// Errors with [`LaplacianError`] naming the first entry or vertex that breaks the invariant.
     pub fn new(
         row_ptrs: Vec<u32>,
         neighbors: Vec<u32>,
@@ -215,7 +200,7 @@ impl<T: Float> Laplacian<T> {
             .ok_or(LaplacianError::TooManyVertices { n })?;
         CsrRef::new(&row_ptrs, &neighbors, &weights, dimension)
             .map_err(LaplacianError::Structure)?;
-        UpperRows::adopt(row_ptrs, neighbors, weights).map(Checked::into_laplacian)
+        UpperRows::adopt(row_ptrs, neighbors, weights).map(|checked| checked.laplacian)
     }
 }
 
@@ -248,8 +233,7 @@ impl<T> Laplacian<T> {
     }
 }
 
-/// A symmetric diagonally dominant matrix with non-positive off-diagonals: a graph's
-/// Laplacian, alone or with surplus on its diagonal.
+/// A symmetric diagonally dominant matrix with non-positive off-diagonals: Laplacian plus surplus.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Sddm<T = f64> {
     /// Floating in every connected component.
@@ -274,11 +258,7 @@ impl<T> Sddm<T> {
 }
 
 impl<T: Float> Sddm<T> {
-    /// `L + diag(surplus)`, which is the bare Laplacian when every surplus is zero.
-    ///
-    /// # Errors
-    ///
-    /// What [`Grounded::new`] reports, except [`GroundedError::NoSurplus`].
+    /// `L + diag(surplus)`, bare when all zero; errors as [`Grounded::new`] save `NoSurplus`.
     pub fn with_surplus(laplacian: Laplacian<T>, surplus: Vec<T>) -> Result<Self, GroundedError> {
         if surplus.len() != laplacian.n() {
             return Err(GroundedError::LengthMismatch {
@@ -313,8 +293,7 @@ impl<T> From<Grounded<T>> for Sddm<T> {
     }
 }
 
-/// `L(G) + diag(surplus)` with surplus somewhere; a connected component without any
-/// still floats. Every diagonal entry and the surplus total are finite.
+/// `L(G) + diag(surplus)` with surplus somewhere; a component without any still floats.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Grounded<T = f64> {
     laplacian: Laplacian<T>,
@@ -322,13 +301,7 @@ pub struct Grounded<T = f64> {
 }
 
 impl<T: Float> Grounded<T> {
-    /// # Errors
-    ///
-    /// [`GroundedError::LengthMismatch`] unless there is one surplus per vertex,
-    /// [`GroundedError::InvalidSurplus`] for one that is negative or not finite,
-    /// [`GroundedError::SurplusOverflow`] or [`GroundedError::DiagonalOverflow`] for a sum
-    /// that is not finite, and
-    /// [`GroundedError::NoSurplus`] when every one is zero, which is a bare [`Laplacian`].
+    /// Errors with [`GroundedError`], including [`GroundedError::NoSurplus`] for all-zero surplus.
     pub fn new(laplacian: Laplacian<T>, surplus: Vec<T>) -> Result<Self, GroundedError> {
         match Sddm::with_surplus(laplacian, surplus)? {
             Sddm::Grounded(grounded) => Ok(grounded),
@@ -348,8 +321,7 @@ impl<T> Grounded<T> {
         &self.laplacian
     }
 
-    /// Each vertex's diagonal excess over its edge weights; on the CSR path, what
-    /// survived the summation-noise floor.
+    /// Diagonal excess over edge weights; from CSR, only what survives the summation-noise floor.
     pub fn surplus(&self) -> &[T] {
         &self.surplus
     }

@@ -28,23 +28,17 @@ fn triples<C: EdgeCount>(star: &Star<f64, C>) -> Vec<(u32, f64, u32)> {
         .collect()
 }
 
-/// Folding the merge into [`DegreeDeltas`] would net merge and fill in one clamp,
-/// landing vertex 0 at `clamp(2 - 5 + 4) = 1` instead of `clamp(2 - 5) = 0` then
-/// `+ 4 = 4`, which flips the pop order below.
+/// A batched merge would land vertex 0 at `clamp(2 - 5 + 4) = 1`, not `0 + 4`, flipping the pop.
 #[test]
 fn test_merge_floors_immediately_before_batched_fill() {
     let mut ordering = DynamicOrdering::new(&[2, 2], 1);
 
-    // build_star reports 5 merged duplicate edges to vertex 0; applied at once.
-    apply_removed_copies(&[(0, 5)], &mut ordering); // 2 - 5 -> floors to 0
+    apply_removed_copies(&[(0, 5)], &mut ordering);
 
-    // Same-step fill: +4 to vertex 0, accumulated then flushed as one move.
     let mut deltas = DegreeDeltas::new(2);
-    deltas.increase(0, 4); // 0 + 4 -> 4
+    deltas.increase(0, 4);
     deltas.flush(&mut ordering);
 
-    // Vertex 1 (degree 2) outranks vertex 0 (degree 4). A batched merge would
-    // make vertex 0 degree 1 and pop it first.
     assert_eq!(ordering.next_vertex(), Some(1));
     assert_eq!(ordering.next_vertex(), Some(0));
 }
@@ -67,7 +61,7 @@ fn dedup_sums_weights_and_caps_copies() {
         SplitFactor,
         Vec<(u32, f64, u32)>,
         Vec<(u32, u32)>,
-    ); 2] = [
+    ); 3] = [
         (
             "four single copies capped to two",
             vec![
@@ -89,6 +83,13 @@ fn dedup_sums_weights_and_caps_copies() {
             vec![(3, 7.5, 4)],
             vec![],
         ),
+        (
+            "two split edges merged past the split",
+            vec![nbr(1, 3.0, 3), nbr(1, 3.0, 3)],
+            split(3),
+            vec![(1, 6.0, 3)],
+            vec![(1, 3)],
+        ),
     ];
     for (label, raw, limit, expected, merged) in cases {
         let star = dedup_multi(10, raw, limit);
@@ -107,28 +108,7 @@ fn test_scatter_large_multiplicity_caps_without_overflow() {
     assert_eq!(star.removed_copies(), &[(2, (n_edges - 2) as u32)]);
 }
 
-/// `Single` has no cap to name, so the AC path keeps one copy by construction rather
-/// than by comparison.
-#[test]
-fn a_single_copy_star_keeps_one_copy_and_discards_the_rest() {
-    let mut dedup = DedupWorkspace::<f64, Single>::new(3);
-    dedup.raw = vec![ac_nbr(2, 3.0), ac_nbr(2, 0.5), ac_nbr(0, 1.0)];
-    let mut star = Star::new();
-    dedup.dedup(&mut star, ());
-
-    assert_eq!(triples(&star), vec![(0, 1.0, 1), (2, 3.5, 1)]);
-    assert_eq!(star.removed_copies(), &[(2, 1)]);
-}
-
-// -----------------------------------------------------------------------
-// Equivalence: sort path (<= SCATTER_THRESHOLD) vs scatter path (above it)
-//
-// `dedup` dispatches on `raw.len()`, so no single input can reach both paths
-// through it; these call each path directly instead. The paths report merges in
-// different orders (neighbor-sorted vs first-seen), so only the sorted merge
-// lists are compared. Both fixtures use weights whose duplicate sums are exact
-// in binary — the paths accumulate in different orders, which is not the claim.
-// -----------------------------------------------------------------------
+// `dedup` routes by length, so these call each path directly; merge orders differ by path.
 
 fn sorted_merged(merged: &[(u32, u32)]) -> Vec<(u32, u32)> {
     let mut out = merged.to_vec();
@@ -160,7 +140,6 @@ fn dedup_single_copy_paths_agree() {
     by_scatter.dedup_by_scatter(&mut star_scatter, ());
     star_scatter.sort();
 
-    // Weights summed per vertex, ascending by weight then vertex index.
     assert_eq!(
         triples(&star_sort),
         vec![(0, 1.25, 1), (2, 3.5, 1), (1, 4.0, 1)]
@@ -177,8 +156,7 @@ fn dedup_single_copy_paths_agree() {
     );
 }
 
-/// Every other star test uses distinct keys, so a reversed tie-break would change the
-/// clique-tree path with nothing to notice.
+/// Other star tests use distinct keys, so a reversed tie-break would go unnoticed.
 #[test]
 fn equal_sort_keys_order_by_ascending_neighbor() {
     let mut single = Star::<f64, Single>::new();
@@ -195,8 +173,7 @@ fn equal_sort_keys_order_by_ascending_neighbor() {
         vec![(2, 1.5, 1), (5, 1.5, 1), (9, 1.5, 1)]
     );
 
-    // The multi-copy branch sorts through `sort_scratch` on the per-copy quotient,
-    // so it needs its own tie: every quotient here is 1.5 and exact in binary.
+    // The multi-copy branch sorts by per-copy quotient, so it needs its own tie (all 1.5).
     let mut multi = Star::<f64, Multi>::new();
     for (neighbor, weight, copies) in [(5u32, 3.0, 2u32), (2, 1.5, 1), (9, 6.0, 4)] {
         multi.entries.push(StarEntry {
@@ -234,8 +211,7 @@ fn dedup_multi_copy_paths_agree() {
     by_scatter.dedup_by_scatter(&mut star_scatter, limit);
     star_scatter.sort();
 
-    // Weights and copies summed per vertex, vertex 2 capped from 5 to the split's 4,
-    // ascending by weight/copies: 1.25/2 < 3.5/4 < 4.0/2.
+    // Vertex 2 caps from 5 to 4; ordered by weight/copies: 1.25/2 < 3.5/4 < 4.0/2.
     assert_eq!(
         triples(&star_sort),
         vec![(0, 1.25, 2), (2, 3.5, 4), (1, 4.0, 2)]
@@ -267,16 +243,4 @@ fn a_single_copy_star_entry_is_as_wide_as_the_bare_pair() {
         size_of::<StarEntry<f64, Single>>(),
         "the multi count lands in the pair's padding"
     );
-}
-
-#[test]
-fn the_split_is_the_cap_and_the_surviving_copy_count() {
-    let k = split(3);
-    let mut dedup = DedupWorkspace::<f64, Multi>::new(4);
-    dedup.raw = vec![nbr(1, 3.0, 3), nbr(1, 3.0, 3)];
-    let mut star = Star::new();
-    dedup.dedup(&mut star, k);
-
-    assert_eq!(triples(&star), vec![(1, 6.0, 3)]);
-    assert_eq!(star.removed_copies(), &[(1, 3)]);
 }

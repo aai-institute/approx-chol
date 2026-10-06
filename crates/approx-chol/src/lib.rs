@@ -1,7 +1,6 @@
 //! Approximate Cholesky factorization for SDDM and graph Laplacian systems.
 //!
-//! An [`Sddm`] is a [`Laplacian`], given as its strict upper adjacency, alone or
-//! [`Grounded`] by a diagonal surplus:
+//! An [`Sddm`] is a [`Laplacian`] (strict upper adjacency), alone or [`Grounded`] by a surplus:
 //!
 //! ```
 //! use approx_chol::{factorize, Grounded, Laplacian};
@@ -19,24 +18,7 @@
 //! # }
 //! ```
 //!
-//! A CSR matrix converts into an [`Sddm`], which checks symmetry and dominance:
-//!
-//! ```
-//! use approx_chol::{factorize, CsrRef, Sddm};
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let row_ptrs    = [0u32, 2, 5, 8, 10];
-//! let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
-//! let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
-//!
-//! let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
-//! let x = factorize(Sddm::try_from(csr)?).solve(&[1.0, -1.0, 1.0, -1.0])?;
-//! assert!(x.iter().all(|v| f64::is_finite(*v)));
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! [`Config::backend`] picks a factorization per connected block: exact dense
-//! Cholesky at or below `max_dim` solved variables, approximate elimination above.
+//! A CSR becomes a checked [`Sddm`]; [`Config::backend`] picks exact or approximate per block:
 //!
 //! ```
 //! use approx_chol::{factorize_with, Backend, Config, CsrRef, ExactFailure, Sddm};
@@ -44,7 +26,7 @@
 //! let row_ptrs    = [0u32, 2, 5, 8, 10];
 //! let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
 //! let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
-//! let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
+//! let sddm = Sddm::try_from(CsrRef::new(&row_ptrs, &col_indices, &values, 4)?)?;
 //!
 //! let config = Config {
 //!     backend: Backend::ExactBelow {
@@ -53,10 +35,8 @@
 //!     },
 //!     ..Config::default()
 //! };
-//! let factor = factorize_with(Sddm::try_from(csr)?, config)?;
-//!
-//! // A block whose exact pivot is unusable is factored approximately and listed
-//! // here, so a non-empty slice means the factor is less accurate than asked for.
+//! let factor = factorize_with(sddm, config)?;
+//! // Lists blocks factored approximately after an unusable exact pivot: less accurate than asked.
 //! assert!(factor.fallbacks().is_empty());
 //! # Ok(())
 //! # }
@@ -93,11 +73,7 @@ where
         .expect("the default policy falls back on an unusable pivot rather than failing")
 }
 
-/// Factorize with a custom [`Config`].
-///
-/// # Errors
-///
-/// The [`UnusablePivot`] of a block's exact Cholesky, only under [`ExactFailure::Error`].
+/// Factorize with a custom [`Config`]; [`UnusablePivot`] only under [`ExactFailure::Error`].
 pub fn factorize_with<T>(
     sddm: impl Into<Sddm<T>>,
     config: Config,

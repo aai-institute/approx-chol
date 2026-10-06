@@ -3,8 +3,7 @@ use crate::graph::{AdjListGraph, EdgeCount, Neighbor};
 use crate::types::{float_total_cmp, Real};
 use core::cmp::Ordering;
 
-/// Copies are stored the way the graph stores them, so a single-copy layout spends no
-/// space on a count it knows and no arithmetic dividing by it.
+/// Copies stored as the graph stores them, so a single-copy star pays no count or division.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct StarEntry<T, C> {
     pub neighbor: u32,
@@ -12,16 +11,13 @@ pub(super) struct StarEntry<T, C> {
     pub weight: T,
 }
 
-/// Ascending by weight, ties by neighbor index. Total on a deduped star, which is what
-/// keeps the sampled clique tree off `sort_unstable`'s element-width heuristics.
+/// Total on a deduped star, which keeps the clique tree off `sort_unstable`'s width heuristics.
 #[inline]
 fn by_weight_then_neighbor<T: Real, C>(a: &StarEntry<T, C>, b: &StarEntry<T, C>) -> Ordering {
     float_total_cmp(&a.weight, &b.weight).then_with(|| a.neighbor.cmp(&b.neighbor))
 }
 
-/// A pivot's deduped neighborhood — one entry per unique neighbor, ordered as the
-/// clique-tree path eliminates them — and what collapsing it cost each neighbor's
-/// degree.
+/// A pivot's deduped neighborhood in clique-tree order, and what collapsing it cost each degree.
 pub(super) struct Star<T: Real, C> {
     entries: Vec<StarEntry<T, C>>,
     removed_copies: Vec<(u32, u32)>,
@@ -38,11 +34,7 @@ impl<T: Real, C: EdgeCount> Star<T, C> {
         }
     }
 
-    /// Every neighbor at the same multiplicity, the shape the standalone sampler is
-    /// handed. Refills in place, so sampling a whole elimination allocates once.
-    ///
-    /// One multiplicity throughout makes `per_copy` order-preserving, so this orders on
-    /// the raw weight and skips [`Self::sort`]'s scratch round-trip.
+    /// One multiplicity keeps `per_copy` monotone, so this sorts raw weights, skipping the scratch.
     pub(super) fn refill_uniform(&mut self, entries: &[(u32, T)], copies: C) {
         self.clear();
         self.entries
@@ -76,8 +68,7 @@ impl<T: Real, C: EdgeCount> Star<T, C> {
         &self.entries
     }
 
-    /// Duplicates collapsed into one entry, or multiplicity the cap discarded: one
-    /// degree decrement either way, which is why one ledger carries both.
+    /// Collapsed duplicates or capped copies: both are one degree decrement, hence one ledger.
     pub(super) fn removed_copies(&self) -> &[(u32, u32)] {
         &self.removed_copies
     }
@@ -88,8 +79,7 @@ impl<T: Real, C: EdgeCount> Star<T, C> {
         }
     }
 
-    /// Ascending by the weight one copy carries, ties by neighbor index. The quotient
-    /// is precomputed: cross-multiplying in the comparator can break transitivity.
+    /// Per-copy weight is precomputed: cross-multiplying in the comparator can break transitivity.
     fn sort(&mut self) {
         if self.entries.len() <= 1 {
             return;
@@ -113,16 +103,14 @@ impl<T: Real, C: EdgeCount> Star<T, C> {
     }
 }
 
-/// Immediate, not batched through [`DegreeDeltas`], so a merge driving the estimate
-/// below zero loses the excess rather than offsetting the same step's fill.
+/// Unbatched, so a merge below zero loses its excess instead of offsetting this step's fill.
 fn apply_removed_copies(merged: &[(u32, u32)], ordering: &mut DynamicOrdering) {
     for &(u, n_merged) in merged {
         ordering.decrease(u as usize, n_merged);
     }
 }
 
-/// AC and AC2 are the same builder over different edge layouts: [`EdgeCount`] holds
-/// everything that differs.
+/// AC and AC2 share this builder; [`EdgeCount`] holds everything that differs.
 pub(super) struct StarBuilder<T: Real, C: EdgeCount> {
     star: Star<T, C>,
     dedup: DedupWorkspace<T, C>,
@@ -143,14 +131,10 @@ impl<T: Real, C: EdgeCount> StarBuilder<T, C> {
         graph: &mut AdjListGraph<C, T>,
         v: usize,
         ordering: &mut DynamicOrdering,
-    ) {
-        self.dedup.collect(graph, v);
+    ) -> &Star<T, C> {
+        graph.live_neighbors(v, &mut self.dedup.raw);
         self.dedup.dedup(&mut self.star, self.split);
         apply_removed_copies(self.star.removed_copies(), ordering);
-    }
-
-    /// Entries are empty when the pivot had no live neighbor left.
-    pub(super) fn star(&self) -> &Star<T, C> {
         &self.star
     }
 }
@@ -158,8 +142,7 @@ impl<T: Real, C: EdgeCount> StarBuilder<T, C> {
 /// At or below this many entries, sorting beats the scatter path's random access.
 const SCATTER_THRESHOLD: usize = 32;
 
-/// Every per-vertex slot is left at zero, so a zero `count` also marks a vertex
-/// unvisited — no separate seen-set to keep in step with it.
+/// Slots rest at zero, so a zero `count` also marks a vertex unvisited — no separate seen-set.
 struct DedupScratch<T: Real> {
     scatter: Vec<T>,
     counts: Vec<u32>,
@@ -195,8 +178,7 @@ impl<T: Real> DedupScratch<T> {
         self.counts[idx] = self.counts[idx].saturating_add(count);
     }
 
-    /// First-seen order, resetting each slot as it goes so the buffers are all-zero
-    /// again when this returns.
+    /// First-seen order, re-zeroing each slot so the buffers are all-zero again on return.
     #[inline]
     fn drain_unique(&mut self, mut visit: impl FnMut(u32, T, u32)) {
         for index in 0..self.unique.len() {
@@ -222,12 +204,7 @@ impl<T: Real, C: EdgeCount> DedupWorkspace<T, C> {
         }
     }
 
-    fn collect(&mut self, graph: &AdjListGraph<C, T>, v: usize) {
-        graph.live_neighbors(v, &mut self.raw);
-    }
-
-    /// The two paths differ only in how they find the duplicates; neither caps, so
-    /// neither can report a merge the other would not.
+    /// The paths differ only in finding duplicates; neither caps, so both report the same merges.
     pub(super) fn dedup(&mut self, star: &mut Star<T, C>, limit: C::Split) {
         star.clear();
         if self.raw.len() <= SCATTER_THRESHOLD {

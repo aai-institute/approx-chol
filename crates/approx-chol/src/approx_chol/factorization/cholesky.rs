@@ -1,5 +1,4 @@
-//! Both arms leave one slot of their block free, so a block's solve never asks which one
-//! it got — the exact arm the last slot, the approximate one whichever min-degree spared.
+//! Both arms leave one slot free, so a block's solve never asks which arm it got.
 
 use super::approximate::EliminationSequence;
 use super::exact::LowerTriangular;

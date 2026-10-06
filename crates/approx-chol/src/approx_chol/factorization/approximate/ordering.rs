@@ -1,34 +1,28 @@
-//! Bucket priority queue over live degree estimates (ports Julia's `ApproxCholPQ`).
+//! Bucket priority queue over live degree estimates.
 
 /// Linked-list terminator.
 const SENTINEL: u32 = u32::MAX;
 
 /// `key == u32::MAX` marks an element removed; `apply_delta` skips those.
 struct PQElem {
-    prev: u32, // SENTINEL = head of bucket list
-    next: u32, // SENTINEL = tail of bucket list
-    key: u32,  // current degree estimate
+    prev: u32,
+    next: u32,
+    key: u32,
 }
 
-/// Each bucket is a doubly-linked list threaded through [`PQElem`]; `min_list` is a
-/// *lower bound* on the minimum non-empty bucket, which
-/// [`next_vertex`](Self::next_vertex) scans upward from.
+/// Buckets are linked lists through [`PQElem`]; `min_list` is only a lower bound on the minimum.
 pub(super) struct DynamicOrdering {
-    elems: Vec<PQElem>, // indexed by vertex id
-    lists: Vec<u32>,    // bucket heads, indexed by key_map(degree)
-    min_list: usize,    // lower bound on minimum non-empty bucket
-    n_items: usize,
+    elems: Vec<PQElem>,
+    lists: Vec<u32>,
+    min_list: usize,
     bucket_base: usize,
 }
 
-/// The one place the bucket count follows from the base, so the cap below and
-/// [`DynamicOrdering::new`] cannot disagree about which bucket is last.
+/// Sole derivation of the bucket count, so `key_map`'s cap and `new` agree on the last bucket.
 fn n_buckets(bucket_base: usize) -> usize {
     bucket_base.saturating_mul(2).saturating_add(1)
 }
 
-/// Degrees at or below `bucket_base` get their own bucket; higher ones group by
-/// `bucket_base + degree / bucket_base`.
 fn key_map(degree: usize, bucket_base: usize) -> usize {
     if degree <= bucket_base {
         degree
@@ -39,15 +33,10 @@ fn key_map(degree: usize, bucket_base: usize) -> usize {
 
 impl DynamicOrdering {
     pub(super) fn next_vertex(&mut self) -> Option<usize> {
-        if self.n_items == 0 {
-            return None;
-        }
         while self.min_list < self.lists.len() && self.lists[self.min_list] == SENTINEL {
             let previous = self.min_list;
             self.min_list += 1;
-            // A broken advance leaves this condition re-checking the same bucket
-            // forever instead of failing, so a bad increment hangs rather than
-            // panics.
+            // A broken advance would hang re-checking one bucket; this turns that into a panic.
             debug_assert!(
                 self.min_list > previous,
                 "next_vertex's bucket scan failed to advance"
@@ -62,8 +51,7 @@ impl DynamicOrdering {
         if next != SENTINEL {
             self.elems[next as usize].prev = SENTINEL;
         }
-        self.elems[i].key = u32::MAX; // mark as removed
-        self.n_items -= 1;
+        self.elems[i].key = u32::MAX;
         Some(i)
     }
 
@@ -101,8 +89,7 @@ impl DynamicOrdering {
         }
     }
 
-    /// `i64` so the full `u32` count range negates and sums without the sign flip an
-    /// `i32` cast would cause.
+    /// `i64` so negating a full-range `u32` count cannot sign-flip as an `i32` would.
     fn apply_delta(&mut self, i: usize, delta: i64) {
         let key = self.elems[i].key;
         if key == u32::MAX {
@@ -121,8 +108,7 @@ impl DynamicOrdering {
     }
 }
 
-/// One bucket move per affected vertex on [`flush`](Self::flush), which resets exactly
-/// the vertices it touched so the caller need not enumerate them.
+/// One bucket move per affected vertex on [`flush`](Self::flush), which resets what it touched.
 pub(super) struct DegreeDeltas {
     buf: Vec<i64>,
     touched: Vec<u32>,
@@ -171,14 +157,12 @@ impl DegreeDeltas {
 impl DynamicOrdering {
     pub(super) fn new(degrees: &[usize], degree_scale: usize) -> Self {
         let n = degrees.len();
-        // Julia AC2 parity: keyMap uses `k = split*n`, bucket array length `2*k+1`.
-        // Use scale=1 for standard AC.
+        // Matches Laplacians.jl AC2: bucket base `k = split * n`, `2k + 1` buckets.
         let bucket_base = degree_scale.saturating_mul(n).max(1);
         let n_lists = n_buckets(bucket_base);
         let mut lists = vec![SENTINEL; n_lists];
         let mut elems = Vec::with_capacity(n);
         let mut min_list = n_lists;
-        let mut n_items = 0;
 
         for (v, &deg) in degrees.iter().enumerate() {
             let key = deg as u32;
@@ -196,18 +180,12 @@ impl DynamicOrdering {
             if list < min_list {
                 min_list = list;
             }
-            n_items += 1;
-        }
-
-        if min_list == n_lists {
-            min_list = 0;
         }
 
         DynamicOrdering {
             elems,
             lists,
             min_list,
-            n_items,
             bucket_base,
         }
     }
@@ -223,21 +201,19 @@ mod tests {
         assert_eq!(key_map(0, k), 0);
         assert_eq!(key_map(5, k), 5);
         assert_eq!(key_map(10, k), 10);
-        assert_eq!(key_map(15, k), 11); // 10 + 15/10 = 11
-        assert_eq!(key_map(20, k), 12); // 10 + 20/10 = 12
-        assert_eq!(key_map(10_000, k), n_buckets(k) - 1); // capped at last bucket
+        assert_eq!(key_map(15, k), 11);
+        assert_eq!(key_map(20, k), 12);
+        assert_eq!(key_map(10_000, k), n_buckets(k) - 1);
     }
 
     #[test]
     fn test_pop_order() {
-        // 4 vertices with degrees [3, 1, 2, 0]
         let mut pq = DynamicOrdering::new(&[3, 1, 2, 0], 1);
 
-        // Should pop in order of increasing degree
-        assert_eq!(pq.next_vertex(), Some(3)); // degree 0
-        assert_eq!(pq.next_vertex(), Some(1)); // degree 1
-        assert_eq!(pq.next_vertex(), Some(2)); // degree 2
-        assert_eq!(pq.next_vertex(), Some(0)); // degree 3
+        assert_eq!(pq.next_vertex(), Some(3));
+        assert_eq!(pq.next_vertex(), Some(1));
+        assert_eq!(pq.next_vertex(), Some(2));
+        assert_eq!(pq.next_vertex(), Some(0));
         assert_eq!(pq.next_vertex(), None);
     }
 
@@ -287,12 +263,10 @@ mod tests {
 
     #[test]
     fn test_decrease_large_count_keeps_sign() {
-        // `decrease` takes a `u32` and negates it as `i64` internally, so a count
-        // above i32::MAX stays a *decrease*: with an i32 delta, `-(count as i32)`
-        // would sign-flip to a large positive and *raise* the degree.
+        // An `i32` delta would sign-flip a count above `i32::MAX` into a degree increase.
         let mut pq = DynamicOrdering::new(&[10, 1], 1);
-        let count: u32 = 3_000_000_000; // > i32::MAX
-        pq.decrease(0, count); // 10 - 3e9 clamps to 0, never raises
+        let count: u32 = 3_000_000_000;
+        pq.decrease(0, count);
         assert_eq!(pq.elems[0].key, 0);
     }
 
@@ -314,19 +288,17 @@ mod tests {
         let mut pq = DynamicOrdering::new(&[5, 5, 5], 1);
         let mut deltas = DegreeDeltas::new(3);
 
-        // Vertex 0: +1 +1 -3 = net -1. Vertex 1: +2. Vertex 2: untouched.
         deltas.increase(0, 1);
         deltas.increase(0, 1);
         deltas.decrease(0, 3);
         deltas.increase(1, 2);
         deltas.flush(&mut pq);
 
-        assert_eq!(pq.elems[0].key, 4); // 5 - 1
-        assert_eq!(pq.elems[1].key, 7); // 5 + 2
-        assert_eq!(pq.elems[2].key, 5); // untouched
+        assert_eq!(pq.elems[0].key, 4);
+        assert_eq!(pq.elems[1].key, 7);
+        assert_eq!(pq.elems[2].key, 5);
 
-        // flush resets the buffer for every touched vertex, so a second flush
-        // with no accumulated deltas is a no-op (no stale carryover).
+        // A second flush with nothing accumulated must not replay stale deltas.
         deltas.flush(&mut pq);
         assert_eq!(pq.elems[0].key, 4);
         assert_eq!(pq.elems[1].key, 7);

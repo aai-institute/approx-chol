@@ -47,7 +47,8 @@ impl<'a, T: Real> Components<'a, T> {
     }
 
     pub(crate) fn len(&self) -> usize {
-        usize::from(self.whole().is_some()) + self.layout.as_ref().map_or(0, Layout::count)
+        usize::from(self.whole().is_some())
+            + self.layout.as_ref().map_or(0, |layout| layout.ends.len())
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = Component<'_, T>> + '_ {
@@ -90,7 +91,7 @@ impl<'a, T: Real> Components<'a, T> {
 
     /// Component-contiguous input order; `None` when connected.
     pub(crate) fn into_order(self) -> Option<Vec<u32>> {
-        self.layout.map(Layout::into_order)
+        self.layout.map(|layout| layout.order)
     }
 }
 

@@ -39,8 +39,7 @@ fn grounded_components_stay_separate() {
     assert_eq!(vertices_of(&sddm), [[0, 1], [2, 3]]);
 }
 
-/// A vertex no edge reaches is its own component, which is what makes the ordering
-/// "by lowest member" observable rather than incidental.
+/// A vertex no edge reaches is its own component, making the lowest-member order observable.
 #[test]
 fn components_are_ordered_by_their_lowest_vertex() {
     let sddm = sddm_of(

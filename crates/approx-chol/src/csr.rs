@@ -7,8 +7,7 @@ fn as_usize<I: PrimInt>(value: I, kind: IndexKind, position: usize) -> Result<us
         .ok_or(CsrError::IndexNotRepresentableAsUsize { kind, position })
 }
 
-/// Borrowed CSR matrix view. Zero-copy from any CSR source (`sprs`, `faer`, or plain
-/// `Vec`s); converts into an [`Sddm`].
+/// Zero-copy CSR view of `sprs`, `faer` or plain slices; converts into an [`Sddm`](crate::Sddm).
 #[derive(Debug, Clone, Copy)]
 pub struct CsrRef<'a, T = f64, I = u32> {
     row_ptrs: &'a [I],
@@ -18,13 +17,7 @@ pub struct CsrRef<'a, T = f64, I = u32> {
 }
 
 impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
-    /// Construct a `CsrRef` with full validation. The only constructor, so every
-    /// `CsrRef` that exists is structurally valid.
-    ///
-    /// # Errors
-    ///
-    /// The [`CsrError`] naming the violation when the arrays are not a structurally
-    /// valid CSR of dimension `n`.
+    /// The only constructor, so every `CsrRef` is valid; errors with the violated [`CsrError`].
     pub fn new(
         row_ptrs: &'a [I],
         col_indices: &'a [I],
@@ -69,8 +62,7 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
             });
         }
 
-        // Both scans compare in `I`, so the happy path converts no index; only the
-        // error arms need a `usize` for the payload.
+        // Both scans compare in `I`, so only the error arms convert an index to `usize`.
         for i in 0..n {
             if self.row_ptrs[i] > self.row_ptrs[i + 1] {
                 return Err(CsrError::RowPtrsNotNonDecreasing {
@@ -136,32 +128,16 @@ fn validate_square_dims(rows: usize, cols: usize) -> Result<u32, CsrError> {
 }
 
 #[cfg(feature = "sprs")]
-fn try_from_sprs_view_impl<'a, T, I: sprs::SpIndex + PrimInt>(
-    mat: sprs::CsMatViewI<'a, T, I>,
-) -> Result<CsrRef<'a, T, I>, CsrError> {
-    if !mat.is_csr() {
-        return Err(CsrError::ExpectedCsrMatrixGotCsc);
-    }
-    let n = validate_square_dims(mat.rows(), mat.cols())?;
-    let (indptr, indices, data) = mat.into_raw_storage();
-    CsrRef::new(indptr, indices, data, n)
-}
-
-#[cfg(feature = "faer")]
-fn try_from_faer_view_impl<'a, T, I: faer::Index + PrimInt>(
-    mat: faer::sparse::SparseRowMatRef<'a, I, T>,
-) -> Result<CsrRef<'a, T, I>, CsrError> {
-    let n = validate_square_dims(mat.nrows(), mat.ncols())?;
-    let symbolic = mat.symbolic();
-    CsrRef::new(symbolic.row_ptr(), symbolic.col_idx(), mat.val(), n)
-}
-
-#[cfg(feature = "sprs")]
 impl<'a, T, I: sprs::SpIndex + PrimInt> TryFrom<sprs::CsMatViewI<'a, T, I>> for CsrRef<'a, T, I> {
     type Error = CsrError;
 
     fn try_from(mat: sprs::CsMatViewI<'a, T, I>) -> Result<Self, Self::Error> {
-        try_from_sprs_view_impl(mat)
+        if !mat.is_csr() {
+            return Err(CsrError::ExpectedCsrMatrixGotCsc);
+        }
+        let n = validate_square_dims(mat.rows(), mat.cols())?;
+        let (indptr, indices, data) = mat.into_raw_storage();
+        CsrRef::new(indptr, indices, data, n)
     }
 }
 
@@ -170,7 +146,7 @@ impl<'a, T, I: sprs::SpIndex + PrimInt> TryFrom<&'a sprs::CsMatI<T, I>> for CsrR
     type Error = CsrError;
 
     fn try_from(mat: &'a sprs::CsMatI<T, I>) -> Result<Self, Self::Error> {
-        try_from_sprs_view_impl(mat.view())
+        Self::try_from(mat.view())
     }
 }
 
@@ -181,7 +157,9 @@ impl<'a, T, I: faer::Index + PrimInt> TryFrom<faer::sparse::SparseRowMatRef<'a, 
     type Error = CsrError;
 
     fn try_from(mat: faer::sparse::SparseRowMatRef<'a, I, T>) -> Result<Self, Self::Error> {
-        try_from_faer_view_impl(mat)
+        let n = validate_square_dims(mat.nrows(), mat.ncols())?;
+        let symbolic = mat.symbolic();
+        CsrRef::new(symbolic.row_ptr(), symbolic.col_idx(), mat.val(), n)
     }
 }
 
@@ -192,6 +170,6 @@ impl<'a, T, I: faer::Index + PrimInt> TryFrom<&'a faer::sparse::SparseRowMat<I, 
     type Error = CsrError;
 
     fn try_from(mat: &'a faer::sparse::SparseRowMat<I, T>) -> Result<Self, Self::Error> {
-        try_from_faer_view_impl(mat.as_ref())
+        Self::try_from(mat.as_ref())
     }
 }

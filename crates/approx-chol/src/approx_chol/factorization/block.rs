@@ -6,8 +6,7 @@ use crate::types::Real;
 #[cfg(test)]
 mod tests;
 
-/// One connected component, whose cholesky eliminates every slot but one; the variant is
-/// how that freedom is fixed.
+/// One component; its cholesky leaves one slot free and the variant is how that is fixed.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
     feature = "serde",
@@ -18,8 +17,7 @@ mod tests;
 )]
 #[derive(Clone, Debug)]
 pub(crate) enum Block<T> {
-    /// `L_C + diag(surplus_C)`, factored as `L_C` augmented by a ground vertex in the
-    /// last slot, which no input entry maps to and the solution is measured from.
+    /// `L_C + diag(surplus_C)`, factored as `L_C` plus a ground in the last slot.
     Grounded(Cholesky<T>),
     /// `L_C`, whose solution is the zero-mean one.
     Floating(Cholesky<T>),
@@ -65,8 +63,7 @@ impl<T: num_traits::Float> Block<T> {
 }
 
 impl<T: Real> Block<T> {
-    /// `slots` holds the block's right-hand side, then its solution; a ground's entry
-    /// on entry is never read.
+    /// `slots` holds the right-hand side, then the solution; a ground's input entry is unread.
     pub(super) fn solve(&self, slots: &mut [T]) {
         match self {
             Self::Grounded(cholesky) => {

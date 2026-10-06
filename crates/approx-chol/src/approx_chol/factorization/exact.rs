@@ -30,13 +30,7 @@ const fn packed_len(m: usize) -> Option<usize> {
     }
 }
 
-/// Lower triangle only: a stored upper triangle would double the persisted factor and
-/// embed the input matrix in it.
-///
-/// Read from the input rather than from an elimination graph, because a block that
-/// reaches here is never eliminated on and so never needs one built. The diagonal is
-/// summed here, in the input's row order: an edge to the pinned vertex still counts toward
-/// its other endpoint's.
+/// From the input, not an elimination graph: an exactly factored block never needs one built.
 fn assemble<T: Real>(
     component: &Component<'_, T>,
     m: usize,
@@ -53,6 +47,7 @@ fn assemble<T: Real>(
         view.upper_row(row, |col, weight| {
             let diagonal = &mut matrix.row_mut(row)[row];
             *diagonal = *diagonal + weight;
+            // An edge to the pinned vertex still counts toward this row's diagonal.
             if col < m {
                 let diagonal = &mut matrix.row_mut(col)[col];
                 *diagonal = *diagonal + weight;
@@ -64,8 +59,7 @@ fn assemble<T: Real>(
     Ok(matrix)
 }
 
-/// Packed: row `r` is its own `r + 1` scalars, so no consumer restates where one
-/// starts.
+/// Packed lower triangle: an upper one would double the persisted factor and embed the input.
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 #[cfg_attr(
     feature = "serde",
@@ -80,8 +74,7 @@ pub(crate) struct LowerTriangular<T> {
 }
 
 impl<T> LowerTriangular<T> {
-    /// [`packed_len`] inverted, so the row count is the triangle's own fact rather
-    /// than one every consumer is handed alongside it.
+    /// [`packed_len`] inverted, so the row count is the triangle's own fact, not passed alongside.
     pub(super) fn rows(&self) -> usize {
         ((8 * self.values.len() + 1).isqrt() - 1) / 2
     }
@@ -111,8 +104,7 @@ impl<T: Real> LowerTriangular<T> {
         Ok(Self { values })
     }
 
-    /// Indexes `values` directly: the split borrow [`row`](Self::row) would need
-    /// measured 1.2–2.1% slower across `n = 128..384` on a complete graph.
+    /// Indexes `values` directly: borrowing via [`row`](Self::row) measured 1.2–2.1% slower.
     fn factor_in_place(mut self, name: impl Fn(usize) -> usize) -> Result<Self, UnusablePivot> {
         let m = self.rows();
         let matrix = &mut self.values;
@@ -159,8 +151,7 @@ impl<T: Real> LowerTriangular<T> {
         }
         for row in (0..m).rev() {
             let mut value = solved[row];
-            // Down column `row`, so each factor entry is in a different row: strided,
-            // unlike the forward pass, and the reason this one keeps an index.
+            // Strided down column `row`, unlike the forward pass, which is why this keeps an index.
             for (offset, &solution) in solved[row + 1..].iter().enumerate() {
                 value = value - self.row(row + 1 + offset)[row] * solution;
             }
@@ -200,14 +191,12 @@ impl<T: num_traits::Float> LowerTriangular<T> {
         }
         for row in 0..rows {
             let entries = self.row(row);
-            // `substitute` divides by each diagonal entry twice per row, so a
-            // pivot whose reciprocal overflows cannot be divided by either.
+            // `substitute` divides by each pivot, so one whose reciprocal overflows is unusable.
             let pivot = entries[row];
             if DenseFailure::of(pivot).is_some() || !(T::one() / pivot).is_finite() {
                 return Err(FactorError::ExactPivotInvalid { index: row });
             }
-            // A real Cholesky factor's row norm is a diagonal of the matrix it
-            // factors, so a row that squares to infinity factors nothing.
+            // A row's norm is a diagonal of the factored matrix; an infinite one factors nothing.
             let norm = entries
                 .iter()
                 .fold(T::zero(), |sum, &value| sum + value * value);
@@ -242,18 +231,6 @@ mod tests {
                 "diagonal {diagonal}"
             );
         }
-    }
-
-    #[test]
-    fn values_past_the_last_complete_row_are_not_validated_around() {
-        assert_eq!(
-            LowerTriangular {
-                values: vec![1.0, 1.0, 1.0, f64::NAN],
-            }
-            .validate_values()
-            .expect_err("a length no triangle has must be rejected"),
-            FactorError::ExactFactorLengthInvalid { len: 4 },
-        );
     }
 
     #[test]

@@ -31,7 +31,6 @@ pub(crate) struct Single;
 pub(crate) struct Multi(u32);
 
 impl Multi {
-    /// Only a test needs this; elimination never makes a `Multi` from a bare number.
     #[cfg(test)]
     pub(crate) fn new(count: u32) -> Self {
         Self(count)
@@ -119,8 +118,7 @@ mod tests {
     use super::super::adjacency::{Edge, MultiEdgeGraph};
     use super::*;
 
-    /// A cap drifting from `mark_split_edges` bounds every star at a multiplicity
-    /// the graph does not carry.
+    /// A cap drifting from `mark_split_edges` bounds stars at a multiplicity the graph lacks.
     #[test]
     fn the_reported_cap_is_the_count_written_on_the_edges() {
         let k = SplitFactor::new(3).expect("3 splits");

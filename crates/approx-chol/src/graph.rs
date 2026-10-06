@@ -1,5 +1,4 @@
-//! Elimination graph: [`adjacency`], [`multiplicity`], and the input's [`components`],
-//! each viewed in place and built into its own graph.
+//! Elimination graph, and the input's [`components`] viewed in place, each built as its own graph.
 
 mod adjacency;
 mod components;

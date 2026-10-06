@@ -54,7 +54,6 @@ fn valid_fixtures_pass() {
     }
 }
 
-/// Every variant a cholesky can raise.
 #[test]
 fn every_cholesky_error_variant_is_reachable() {
     #[allow(clippy::type_complexity)]
@@ -120,8 +119,7 @@ fn every_cholesky_error_variant_is_reachable() {
             |c| seq_of(c).steps[0].pivot_scale = f64::INFINITY,
             FactorError::StepValueInvalid { step: 0 },
         ),
-        // A share of the pivot is a share of it, and a remainder left negative by shares
-        // that overspend the pivot reads the same way here.
+        // A negative remainder from overspending shares reads the same as a negative share.
         (
             "solve coefficient is negative",
             approx,
@@ -142,10 +140,10 @@ fn every_cholesky_error_variant_is_reachable() {
             FactorError::VertexEliminatedTwice { step: 1, vertex: 0 },
         ),
         (
-            "exact factor of no triangle's length",
+            "exact factor with a non-finite entry past its last complete row",
             exact,
-            |c| lower_of(c).values.truncate(2),
-            FactorError::ExactFactorLengthInvalid { len: 2 },
+            |c| lower_of(c).values.push(f64::NAN),
+            FactorError::ExactFactorLengthInvalid { len: 4 },
         ),
         (
             "exact factor pivot is zero",

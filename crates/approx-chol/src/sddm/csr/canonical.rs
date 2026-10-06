@@ -14,17 +14,14 @@ pub(super) fn column<J: PrimInt>(col: J) -> usize {
     col.to_usize().expect("a validated column is a usize")
 }
 
-/// Each row's addition count, from the caller's own pointers: [`rewrite`]'s coalescing
-/// additions land in the row sum too.
+/// Per-row addition counts from the caller's own pointers, so [`rewrite`]'s coalescing sums count.
 pub(super) fn terms<J: PrimInt>(row_ptrs: &[J]) -> impl Iterator<Item = u32> + '_ {
     row_ptrs
         .windows(2)
         .map(|bounds| (row_ptr(bounds[1]) - row_ptr(bounds[0])) as u32)
 }
 
-/// Strictly ascending columns per row, which scipy already emits, so only rare input
-/// pays for a rewritten copy. Accumulated, not short-circuited: measured 0.4-2% of the
-/// build over the `all` form.
+/// Strictly ascending columns, as scipy emits; accumulated since short-circuiting measured slower.
 pub(super) fn is_canonical<J: PrimInt>(row_ptrs: &[J], col_indices: &[J]) -> bool {
     let mut canonical = true;
     for bounds in row_ptrs.windows(2) {
@@ -43,8 +40,7 @@ pub(super) struct Rewritten<T> {
     pub(super) values: Vec<T>,
 }
 
-/// Only non-canonical input pays this copy, which narrows the caller's index type to
-/// `u32` as it goes.
+/// Only non-canonical input pays this copy, which narrows the caller's index type to `u32`.
 pub(super) fn rewrite<T: Real, J: PrimInt>(csr: CsrRef<'_, T, J>) -> Result<Rewritten<T>, NotSddm> {
     let nnz = csr.col_indices().len();
     let mut row_ptrs = Vec::with_capacity(csr.n() + 1);

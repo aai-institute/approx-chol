@@ -188,10 +188,7 @@ impl fmt::Display for GroundedError {
 
 impl std::error::Error for GroundedError {}
 
-/// An exact dense Cholesky pivot that could not be used, and where it was. The same
-/// payload is reported as a [`Fallback`](crate::Fallback) or, under
-/// [`ExactFailure::Error`](crate::ExactFailure::Error), returned by
-/// [`factorize_with`](crate::factorize_with).
+/// An unusable exact dense Cholesky pivot, reported as a [`Fallback`](crate::Fallback) or an error.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnusablePivot {
@@ -315,8 +312,7 @@ pub enum CsrError {
         /// Matrix dimension.
         n: usize,
     },
-    /// Matrix dimension `n` cannot be represented in the target integer type
-    /// (internally `u32`).
+    /// Matrix dimension `n` does not fit the internal `u32` index type.
     MatrixDimensionExceedsIndexType {
         /// Matrix dimension that does not fit.
         n: usize,

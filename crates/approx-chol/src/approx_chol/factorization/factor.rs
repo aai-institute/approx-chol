@@ -7,11 +7,7 @@ use core::fmt;
 #[cfg(test)]
 mod tests;
 
-/// The encoding a persisted [`Factor`] declares as its first field, incremented in the
-/// low half whenever the serialized representation changes in a way an older reader would
-/// misread. A non-self-describing format reads the field positionally, so the tag half
-/// keeps a payload that predates the field from passing the check on whatever `usize` led
-/// it — `1` would collide with the dimension a one-variable system led with.
+/// Bump the low half on any encoding change; the tag half stops an unversioned payload's `n` matching.
 #[cfg(feature = "serde")]
 pub const FACTOR_FORMAT_VERSION: u32 = 0x4143_0005;
 
@@ -62,8 +58,7 @@ impl<T: serde::Serialize> serde::Serialize for Factor<T> {
     }
 }
 
-/// Checked as it is read, so another version's payload fails on its version rather than
-/// on the first field whose shape moved.
+/// Checked as read, so another version fails on its version, not on the first moved field.
 #[cfg(feature = "serde")]
 fn current_version<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
     let found = <u32 as serde::Deserialize>::deserialize(deserializer)?;
@@ -99,11 +94,11 @@ impl<T: num_traits::Float> TryFrom<OwnedFactor<T>> for Factor<T> {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-/// Why a block [`Backend::ExactBelow`](crate::Backend::ExactBelow) claimed was factored approximately.
+/// Why an [`ExactBelow`](crate::Backend::ExactBelow) block was factored approximately.
 pub enum Fallback {
     /// Dense elimination reached a pivot it could not use.
     InvalidPivot(crate::UnusablePivot),
-    /// The dense copy would not fit in memory; never fatal, whatever [`ExactFailure`](crate::ExactFailure) says.
+    /// The dense copy would not fit; never fatal under any [`ExactFailure`](crate::ExactFailure).
     WillNotFit {
         /// Variables the block solves for, so the copy is `dim * dim` scalars.
         dim: usize,
@@ -119,8 +114,7 @@ impl fmt::Display for Fallback {
     }
 }
 
-/// Every block arrives already checked against its own cholesky, so what is left is what
-/// no single block can see.
+/// Blocks arrive checked against their own cholesky; this covers what no single block sees.
 #[cfg(any(feature = "serde", test))]
 impl<T> Factor<T> {
     fn validate_structure(&self) -> Result<(), FactorError> {
@@ -178,8 +172,7 @@ impl<T> Factor<T> {
         self.n
     }
 
-    /// What [`solve_in_place`](Self::solve_in_place) needs: nothing for floating input
-    /// that needs no permutation, else room for every block's slots, grounds included.
+    /// Zero for floating input needing no permutation, else every block's slots, grounds included.
     pub fn scratch_len(&self) -> usize {
         if self.permutation.is_some() || self.slots != self.n {
             self.slots
@@ -203,8 +196,7 @@ impl<T> Factor<T> {
         }
     }
 
-    /// Each block's first input position, vertex count and first slot. One span when
-    /// no block holds a ground, since positions and slots then coincide.
+    /// (input start, vertices, first slot) per block; one span when no block holds a ground.
     fn spans(&self) -> impl Iterator<Item = (usize, usize, usize)> + '_ {
         let whole = (self.slots == self.n).then_some((0, self.n, 0));
         let blocks = whole.is_none().then(|| {
@@ -236,8 +228,7 @@ where
         factor
     }
 
-    /// Total elimination steps across all blocks: every slot but one per block, whichever
-    /// arm factored it.
+    /// Total elimination steps: every slot but one per block, whichever arm factored it.
     pub fn n_steps(&self) -> usize {
         self.blocks.iter().map(Block::eliminated).sum()
     }
@@ -260,9 +251,7 @@ where
         Ok(x)
     }
 
-    /// `x` holds `b` on entry and the solution on return; floating components come back
-    /// zero-mean. `scratch` is at least [`scratch_len`](Self::scratch_len) long and its
-    /// contents never matter.
+    /// `x` holds `b` on entry and the solution on return; `scratch` contents never matter.
     pub fn solve_in_place(&self, x: &mut [T], scratch: &mut [T]) -> Result<(), SolveError> {
         if x.len() != self.n() {
             return Err(SolveError::LengthMismatch {

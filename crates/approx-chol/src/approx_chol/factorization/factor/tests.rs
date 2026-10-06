@@ -38,8 +38,7 @@ mod layout {
         of_blocks(vec![Block::Floating(cholesky())])
     }
 
-    /// A ground slot sits after its block's vertices, so the next block's inputs land
-    /// one slot further along than their positions.
+    /// A ground slot follows its block's vertices, shifting later blocks one slot along.
     #[test]
     fn a_ground_slot_shifts_every_later_block() {
         let factor = of_blocks(vec![
@@ -73,8 +72,7 @@ mod validation {
             .unwrap_or_else(|error| panic!("fixture is valid: {error}"));
     }
 
-    /// The reported position is the offending entry, or the map's length when it is too
-    /// short to have one.
+    /// The position reported is the offending entry, or the length of a too-short map.
     #[test]
     fn a_permutation_that_does_not_cover_the_factor_is_rejected() {
         let cases = [

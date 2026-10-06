@@ -55,9 +55,7 @@ impl<T: Real, C: EdgeCount> Edge<T, C> {
 
 /// Adjacency-list elimination graph, generic over edge multiplicity storage.
 pub(crate) struct AdjListGraph<C, T: Real> {
-    /// Per-vertex adjacency list.
     adj: Vec<Vec<Edge<T, C>>>,
-    /// `eliminated[v]` is `true` after `eliminate_vertex(v)` has been called.
     eliminated: BitVec,
 }
 
@@ -75,12 +73,11 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
         }
     }
 
-    /// Number of vertices (fixed at construction time).
     pub(crate) fn n(&self) -> usize {
         self.adj.len()
     }
 
-    /// Current degree of vertex `v` (sum of multi-edge counts; includes stale entries).
+    /// Sums multi-edge counts, stale entries included.
     pub(crate) fn degree(&self, v: usize) -> usize {
         self.adj[v].iter().map(|e| e.count.get() as usize).sum()
     }
@@ -89,8 +86,7 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
     pub(crate) fn live_neighbors(&self, v: usize, scratch: &mut Vec<Neighbor<T, C>>) {
         scratch.clear();
         scratch.extend(self.adj[v].iter().filter_map(|e| {
-            // Positive predicate, so a NaN weight is dead: `!(w > 0)` differs from
-            // `w <= 0` there. Splitting sets the count and leaves the weight alone.
+            // Positive predicate, so NaN weights are dead; splitting sets count, not weight.
             if e.weight > T::zero() && !self.eliminated.get(e.to as usize) {
                 Some(Neighbor {
                     to: e.to,
@@ -103,8 +99,7 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
         }));
     }
 
-    /// Mark `v` as eliminated and release its adjacency storage. Out of line: the call is
-    /// O(1) against an O(degree) body, but its footprint in the elimination loop is not.
+    /// Out of line: the call is O(1) against an O(degree) body, but its loop footprint is not.
     #[inline(never)]
     pub(crate) fn eliminate_vertex(&mut self, v: usize) {
         self.eliminated.set(v);
@@ -127,7 +122,6 @@ impl<C: EdgeCount, T: Real> AdjListGraph<C, T> {
         }
     }
 
-    /// Insert a symmetric fill edge between `u` and `v` with the given weight.
     pub(crate) fn add_fill_edge(&mut self, u: u32, v: u32, weight: T) {
         if u == v {
             return;
@@ -196,8 +190,7 @@ mod tests {
         assert_eq!(size_of::<Single>(), 0);
     }
 
-    /// Zero and NaN weights are dead though the neighbor lives; reading either as
-    /// live puts a phantom edge in the star.
+    /// Zero and NaN weights are dead though the neighbor lives, else the star gets a phantom edge.
     #[test]
     fn only_positively_weighted_edges_are_live() {
         let graph = MultiEdgeGraph::<f64>::from_adjacency(vec![

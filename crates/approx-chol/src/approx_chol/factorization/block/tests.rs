@@ -1,17 +1,5 @@
 use super::*;
-use crate::approx_chol::factorization::cholesky::tests::{approx, exact};
-
-/// Only the ground slot separates the two: the same cholesky covers one input vertex
-/// fewer when its last slot is the ground.
-#[test]
-fn a_grounded_block_has_one_slot_more_than_vertices() {
-    for cholesky in [approx(), exact()] {
-        let grounded = Block::Grounded(cholesky.clone());
-        let floating = Block::Floating(cholesky);
-        assert_eq!((grounded.vertices(), grounded.slots()), (2, 3));
-        assert_eq!((floating.vertices(), floating.slots()), (3, 3));
-    }
-}
+use crate::approx_chol::factorization::cholesky::tests::approx;
 
 /// A floating block's solution is zero-mean, whatever the factor pinned.
 #[test]

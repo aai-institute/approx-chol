@@ -69,9 +69,7 @@ fn approximately_equal<T: Real>(left: T, right: T) -> bool {
     (left - right).abs() <= ulps * T::epsilon() * scale
 }
 
-/// Reads every stored entry of canonical arrays exactly once, which is what lets the
-/// canonical path skip a finiteness scan of its own. The upper mirror is the one kept:
-/// the whole crate treats it as authoritative.
+/// Reads each entry once, so canonical input needs no finiteness scan; the upper mirror is kept.
 pub(super) fn sddm_of<J: PrimInt, T: Real>(
     row_ptrs: &[J],
     col_indices: &[J],
@@ -113,8 +111,7 @@ pub(super) fn sddm_of<J: PrimInt, T: Real>(
             if upper > T::zero() {
                 return Err(NotSddm::PositiveOffDiagonal { edge: (row, col) });
             }
-            // Each row sums the value it stores: charging `upper` to both would read
-            // the tolerated mirror difference as `col`'s own surplus and ground it.
+            // Each row sums its own value; charging `upper` to both grounds `col` on mirror noise.
             row_sums[row] = row_sums[row] + upper;
             row_sums[col] = row_sums[col] + lower;
             rows.push(col as u32, -upper);
@@ -127,58 +124,35 @@ pub(super) fn sddm_of<J: PrimInt, T: Real>(
     with_surplus(checked, &diagonal, row_sums, terms)
 }
 
-/// How far one row's diagonal exceeds its off-diagonal mass, judged against the noise
-/// the row's own scale and term count can carry.
-enum RowBalance<T> {
-    NonFinite,
-    Deficit,
-    Negligible,
-    /// Worth closing with a ground edge.
-    Surplus(T),
-}
-
-impl<T: Real> RowBalance<T> {
-    /// `terms` is how many additions produced `excess`, not the row's degree.
-    fn of(diagonal: T, off_diagonal_sum: T, terms: u32) -> Self {
-        let excess = diagonal + off_diagonal_sum;
-        // Every off-diagonal was negative; subtracting first survives `d > MAX / 2`.
-        let scale = (diagonal.abs() - excess) + diagonal;
-        // A non-finite sum forces a non-finite scale, so scale alone decides.
-        if !scale.is_finite() {
-            return Self::NonFinite;
-        }
-        // One floor for both signs: forgiving more in one direction grounds a row for
-        // drift that the opposite sign would dismiss as noise.
-        let accumulated = T::epsilon() * scale * count_as_scalar::<T, _>(terms);
-        if excess < -accumulated {
-            return Self::Deficit;
-        }
-        if excess <= accumulated {
-            return Self::Negligible;
-        }
-        Self::Surplus(excess)
-    }
-}
-
-/// `row_sums` arrives off-diagonal-only and becomes each row's surplus; a Laplacian when
-/// every row balances.
+/// `row_sums` arrives off-diagonal-only and leaves as each row's surplus.
 fn with_surplus<T: Real>(
     checked: Checked<T>,
     diagonal: &[T],
     mut row_sums: Vec<T>,
     terms: impl Iterator<Item = u32>,
 ) -> Result<Sddm<T>, NotSddm> {
-    for (row, ((sum, &d), count)) in row_sums
+    for (row, ((sum, &d), additions)) in row_sums
         .iter_mut()
         .zip(diagonal.iter())
         .zip(terms)
         .enumerate()
     {
-        *sum = match RowBalance::of(d, *sum, count) {
-            RowBalance::NonFinite => return Err(NotSddm::NonFiniteRow { row }),
-            RowBalance::Deficit => return Err(NotSddm::NotDiagonallyDominant { row }),
-            RowBalance::Negligible => T::zero(),
-            RowBalance::Surplus(excess) => excess,
+        let excess = d + *sum;
+        // Every off-diagonal was negative; subtracting first survives `d > MAX / 2`.
+        let scale = (d.abs() - excess) + d;
+        // A non-finite sum forces a non-finite scale, so scale alone decides.
+        if !scale.is_finite() {
+            return Err(NotSddm::NonFiniteRow { row });
+        }
+        // One floor for both signs, else one sign grounds drift the other dismisses as noise.
+        let accumulated = T::epsilon() * scale * count_as_scalar::<T, _>(additions);
+        if excess < -accumulated {
+            return Err(NotSddm::NotDiagonallyDominant { row });
+        }
+        *sum = if excess <= accumulated {
+            T::zero()
+        } else {
+            excess
         };
     }
     checked
