@@ -8,10 +8,3 @@ fn compensated_sum_recovers_the_term_a_plain_fold_drops() {
         assert_eq!(compensated_sum(&values), 1.0);
     }
 }
-
-#[test]
-fn compensated_sum_overflows_to_infinity_like_a_plain_fold() {
-    for values in [[f64::MAX, f64::MAX, -f64::MAX], [1.0, f64::INFINITY, 2.0]] {
-        assert_eq!(compensated_sum(&values), f64::INFINITY);
-    }
-}

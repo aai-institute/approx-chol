@@ -57,12 +57,7 @@ fn compensated_sum<T: Real>(values: &[T]) -> T {
         compensation = compensation + ((sum - (next - back)) + (value - back));
         sum = next;
     }
-    // Once the sum overflows TwoSum's error is NaN; keep the plain fold's infinity.
-    if compensation.is_finite() {
-        sum + compensation
-    } else {
-        sum
-    }
+    sum + compensation
 }
 
 #[cfg(test)]
