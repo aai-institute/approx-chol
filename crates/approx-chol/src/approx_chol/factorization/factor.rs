@@ -245,7 +245,7 @@ where
         Ok(x)
     }
 
-    /// Solve in place: `x` holds `b` on entry and the solution on return; scratch contents are ignored.
+    /// Solve in place: `x` holds `b` on entry and the solution on return; scratch is overwritten, never read.
     pub fn solve_in_place(&self, x: &mut [T], scratch: &mut [T]) -> Result<(), SolveError> {
         if x.len() != self.n() {
             return Err(SolveError::LengthMismatch {

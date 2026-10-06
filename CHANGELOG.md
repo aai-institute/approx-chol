@@ -16,9 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Factor::scratch_len`. ([#146])
 - `Factor::solve` rejects a right-hand side whose length is not `Factor::n`. ([#146])
 - `SolveError` is `LengthMismatch` or `ScratchTooSmall`. ([#146])
+- Python `Factor.solve`, `solve_into` and `matvec` reject a `b` whose length is not `n`. ([#146])
 - `Factor::solve_in_place` returns the zero-mean solution on floating blocks. ([#135])
 - A persisted block is grounded or floating with no stored dimension, and
   `FACTOR_FORMAT_VERSION` is `0x41430005`. ([#148])
+
+### Added
+
+- `Factor::scratch_len`. ([#146])
 
 ### Fixed
 
