@@ -1,0 +1,54 @@
+diff --git a/crates/approx-chol/src/approx_chol/factorization/approximate.rs b/crates/approx-chol/src/approx_chol/factorization/approximate.rs
+index 0fb288f..51c0760 100644
+--- a/crates/approx-chol/src/approx_chol/factorization/approximate.rs
++++ b/crates/approx-chol/src/approx_chol/factorization/approximate.rs
+@@ -33,6 +33,9 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
+     let degree_sum: usize = degrees.iter().sum();
+     let mut star_builder = StarBuilder::<T, C>::new(n, split);
+     let mut ordering = DynamicOrdering::new(&degrees, copies as usize);
++    if n > 0 {
++        ordering.exclude(n - 1);
++    }
+     let mut column = SampledColumn::<T>::new();
+     let mut seq = SequenceBuilder::with_capacity(n, degree_sum);
+     let mut deltas = DegreeDeltas::new(n);
+@@ -61,11 +64,7 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
+ 
+     // One step short of `n`, so the queue still holds the vertex no step eliminated —
+     // the block's last, which is what the anchor pins, only when it has no other.
+-    seq.finish(
+-        ordering
+-            .next_vertex()
+-            .expect("the queue holds every vertex of the block") as u32,
+-    )
++    seq.finish((n - 1) as u32)
+ }
+ 
+ /// The split reassociates the row's sum, so this is part of a factor's solve output.
+diff --git a/crates/approx-chol/src/approx_chol/factorization/approximate/ordering.rs b/crates/approx-chol/src/approx_chol/factorization/approximate/ordering.rs
+index ea395fb..94fbf9f 100644
+--- a/crates/approx-chol/src/approx_chol/factorization/approximate/ordering.rs
++++ b/crates/approx-chol/src/approx_chol/factorization/approximate/ordering.rs
+@@ -67,6 +67,22 @@ impl DynamicOrdering {
+         Some(i)
+     }
+ 
++    pub(super) fn exclude(&mut self, i: usize) {
++        let list = key_map(self.elems[i].key as usize, self.bucket_base);
++        let prev = self.elems[i].prev;
++        let next = self.elems[i].next;
++        if prev != SENTINEL {
++            self.elems[prev as usize].next = next;
++        } else {
++            self.lists[list] = next;
++        }
++        if next != SENTINEL {
++            self.elems[next as usize].prev = prev;
++        }
++        self.elems[i].key = u32::MAX;
++        self.n_items -= 1;
++    }
++
+     fn pq_move(&mut self, i: usize, new_key: u32) {
+         let old_key = self.elems[i].key;
+         let old_list = key_map(old_key as usize, self.bucket_base);

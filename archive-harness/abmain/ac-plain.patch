@@ -1,0 +1,25 @@
+diff --git a/crates/approx-chol/src/approx_chol/factorization/gauge.rs b/crates/approx-chol/src/approx_chol/factorization/gauge.rs
+index da117ec..4637af6 100644
+--- a/crates/approx-chol/src/approx_chol/factorization/gauge.rs
++++ b/crates/approx-chol/src/approx_chol/factorization/gauge.rs
+@@ -28,19 +28,7 @@ pub(super) fn project_zero_mean<T: Real>(values: &mut [T]) {
+ 
+ /// Neumaier: a plain fold loses the small terms of a large block.
+ fn compensated_sum<T: Real>(values: &[T]) -> T {
+-    let mut sum = T::zero();
+-    let mut compensation = T::zero();
+-    for &value in values {
+-        let next = sum + value;
+-        compensation = compensation
+-            + if sum.abs() >= value.abs() {
+-                (sum - next) + value
+-            } else {
+-                (value - next) + sum
+-            };
+-        sum = next;
+-    }
+-    sum + compensation
++    values.iter().fold(T::zero(), |sum, &value| sum + value)
+ }
+ 
+ #[cfg(test)]

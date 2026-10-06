@@ -1,0 +1,22 @@
+[package]
+name = "abmain"
+version = "0.0.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+# 76470d4 (0.6.0)
+ac_main = { package = "approx-chol", path = "../arms/ac_main/crates/approx-chol" }
+# 76470d4 (0.6.0), compiled separately as a control
+ac_twin = { package = "approx-chol", path = "../arms/ac_twin/crates/approx-chol" }
+# 4d2f315
+ac_new = { package = "approx-chol", path = "../arms/ac_new/crates/approx-chol" }
+# 4d2f315 + ac-plain.patch
+ac_plain = { package = "approx-chol", path = "../arms/ac_plain/crates/approx-chol" }
+
+[profile.release]
+debug = true
+opt-level = 3
+lto = "fat"
+codegen-units = 1

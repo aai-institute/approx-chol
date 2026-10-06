@@ -1,0 +1,17 @@
+[package]
+name = "abbench6"
+version = "0.0.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+# 5c98137
+ac_base = { package = "approx-chol", path = "../arms/ac_base/crates/approx-chol" }
+# 5c98137 + ac-forced.patch
+ac_forced = { package = "approx-chol", path = "../arms/ac_forced/crates/approx-chol" }
+# day-1 redesign, uncommitted on 2026-10-05
+ac_new = { package = "approx-chol", path = "../arms/ac_new/crates/approx-chol" }
+
+[profile.release]
+debug = false
