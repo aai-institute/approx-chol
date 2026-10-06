@@ -1,6 +1,6 @@
 use super::ordering::{DegreeDeltas, DynamicOrdering};
 use crate::graph::{AdjListGraph, EdgeCount, Neighbor};
-use crate::types::{float_total_cmp, Real};
+use crate::types::Real;
 use core::cmp::Ordering;
 
 /// Copies stored as the graph stores them, so a single-copy star pays no count or division.
@@ -9,6 +9,13 @@ pub(super) struct StarEntry<T, C> {
     pub neighbor: u32,
     pub copies: C,
     pub weight: T,
+}
+
+/// NaN last: `partial_cmp`'s `None` breaks the total order sorts require (1.81+ panics).
+#[inline]
+fn float_total_cmp<T: Real>(a: &T, b: &T) -> Ordering {
+    a.partial_cmp(b)
+        .unwrap_or_else(|| a.is_nan().cmp(&b.is_nan()))
 }
 
 /// Total on a deduped star, which keeps the clique tree off `sort_unstable`'s width heuristics.
