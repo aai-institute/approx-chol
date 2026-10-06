@@ -37,6 +37,12 @@ pub enum Error {
         row: usize,
     },
 
+    /// A nonzero entry's magnitude is below `MIN_POSITIVE / EPSILON`, the measured floor of accurate solves.
+    MagnitudeTooSmall {
+        /// `(row, column)` of the entry, the column canonical with `row <= column`.
+        entry: (usize, usize),
+    },
+
     /// Exact dense Cholesky hit an unusable pivot and [`ExactFailure::Error`](crate::ExactFailure::Error) asked for that to fail.
     DenseFactorizationFailed(UnusablePivot),
 }
@@ -276,6 +282,10 @@ impl fmt::Display for Error {
             Error::NonFiniteRow { row } => write!(
                 f,
                 "row {row} sums to a non-finite diagonal or off-diagonal magnitude; approx-chol requires SDDM/Laplacian input"
+            ),
+            Error::MagnitudeTooSmall { entry: (row, col) } => write!(
+                f,
+                "entry ({row}, {col}) is below MIN_POSITIVE / EPSILON of the scalar type; scale the matrix up"
             ),
             Error::DenseFactorizationFailed(pivot) => {
                 write!(f, "exact dense Cholesky failed at {pivot}")

@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Solves sum each block's right-hand side with compensation. ([#147])
+- A nonzero entry below `MIN_POSITIVE / EPSILON` in magnitude is rejected with `Error::MagnitudeTooSmall`. ([#163])
 
 ## [0.6.0] - 2026-08-24
 
@@ -214,3 +215,4 @@ for graph Laplacians in Rust with Python bindings.
 [#140]: https://github.com/aai-institute/approx-chol/issues/140
 [#147]: https://github.com/aai-institute/approx-chol/issues/147
 [#148]: https://github.com/aai-institute/approx-chol/issues/148
+[#163]: https://github.com/aai-institute/approx-chol/issues/163

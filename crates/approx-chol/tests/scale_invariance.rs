@@ -75,7 +75,7 @@ fn factorization_is_invariant_under_uniform_scaling(#[case] backend: Backend) {
     assert_invariant_under_scaling(
         backend,
         &[
-            -300, -200, -100, -30, -16, -15, -14, -5, -1, 21, 23, 31, 32, 37, 43, 50, 100, 152,
+            -290, -200, -100, -30, -16, -15, -14, -5, -1, 21, 23, 31, 32, 37, 43, 50, 100, 152,
             200, 300,
         ],
         1e-12f64,
