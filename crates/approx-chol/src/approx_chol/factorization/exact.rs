@@ -216,6 +216,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_pivot_is_named_in_the_input_numbering() {
+        let pivot = NotFactorable::InvalidPivot {
+            pivot: 2,
+            failure: DenseFailure::NonPositivePivot,
+        };
+        let named = |vertex| {
+            Fallback::InvalidPivot(UnusablePivot {
+                vertex,
+                failure: DenseFailure::NonPositivePivot,
+            })
+        };
+        // Wide enough for the highest global vertex the component names.
+        let mut local_of = vec![0u32; 31];
+        let component = BlockVertices::part(&[0, 15, 30], &mut local_of);
+        assert_eq!(pivot.at(&component), named(30));
+        assert_eq!(pivot.at(&BlockVertices::whole(9)), named(2));
+        assert_eq!(
+            NotFactorable::WillNotFit { dim: 9 }.at(&component),
+            Fallback::WillNotFit { dim: 9 }
+        );
+    }
+
+    #[test]
     fn an_unusable_pivot_names_its_cause() {
         let cases = [
             (f64::INFINITY, DenseFailure::NonFinitePivot),

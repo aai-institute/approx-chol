@@ -2,6 +2,9 @@ use super::factorization::BlockDim;
 use crate::graph::SplitFactor;
 use crate::{Error, Fallback};
 
+#[cfg(test)]
+mod tests;
+
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, Default)]
 /// Configuration for approximate Cholesky factorization.
