@@ -305,7 +305,7 @@ impl PyFactor {
 
     #[getter]
     fn shape(&self) -> (usize, usize) {
-        let n = self.inner.original_n();
+        let n = self.inner.n();
         (n, n)
     }
 
@@ -355,16 +355,15 @@ impl PyFactor {
             .as_slice()
             .map_err(|_| value_error("b must be contiguous"))?;
         let n = self.inner.n();
-        let original_n = self.inner.original_n();
         let out_ro = out.try_readonly().map_err(|e| borrow_error("out", e))?;
         let out_ro_slice = out_ro
             .as_slice()
             .map_err(|_| value_error("out must be contiguous"))?;
-        if out_ro_slice.len() < original_n {
+        if out_ro_slice.len() < n {
             return Err(value_error(format!(
-                "out length {} is smaller than original matrix dimension {}",
+                "out length {} is smaller than matrix dimension {}",
                 out_ro_slice.len(),
-                original_n
+                n
             )));
         }
         if slices_overlap(b_slice, out_ro_slice) {
@@ -376,19 +375,9 @@ impl PyFactor {
         let out_slice = out_rw
             .as_slice_mut()
             .map_err(|_| value_error("out must be contiguous"))?;
-        // `out` holds only `original_n`, so the ground vertex past it lands in scratch.
-        if original_n == n {
-            self.inner
-                .solve_into(b_slice, out_slice)
-                .map_err(|e| value_error(e.to_string()))?;
-        } else {
-            let mut work = vec![0.0; n];
-            self.inner
-                .solve_into(b_slice, &mut work)
-                .map_err(|e| value_error(e.to_string()))?;
-            out_slice[..original_n].copy_from_slice(&work[..original_n]);
-        }
-        Ok(())
+        self.inner
+            .solve_into(b_slice, out_slice)
+            .map_err(|e| value_error(e.to_string()))
     }
 }
 

@@ -1,19 +1,18 @@
-//! A [`block`] pairs an independently chosen [`anchor`] and [`cholesky`]; all four pairs occur.
+//! A [`block`] is grounded or floating around either [`cholesky`] arm; all four pairs occur.
 
 #[cfg(any(feature = "serde", test))]
 use core::fmt;
 
-mod anchor;
 pub(super) mod approximate;
 mod block;
 mod cholesky;
 pub(super) mod exact;
 mod factor;
+mod gauge;
 mod permutation;
 
-pub(super) use anchor::Anchor;
 pub use approximate::CliqueTreeSampler;
-pub(super) use block::{Block, BlockDim};
+pub(super) use block::Block;
 pub(super) use cholesky::Cholesky;
 #[cfg(feature = "serde")]
 pub use factor::FACTOR_FORMAT_VERSION;
@@ -61,20 +60,26 @@ pub(super) enum FactorError {
         vertex: u32,
         n: usize,
     },
-    BlockDimMismatch {
-        pinned: usize,
-        claimed: usize,
-    },
     VertexEliminatedTwice {
         step: usize,
         vertex: u32,
     },
-    MultipleGroundBlocks {
-        grounded: usize,
-    },
     PermutationInvalid {
         position: usize,
     },
+}
+
+#[cfg(feature = "serde")]
+impl FactorError {
+    fn check_version(found: u32) -> Result<(), Self> {
+        if found == FACTOR_FORMAT_VERSION {
+            return Ok(());
+        }
+        Err(Self::UnsupportedFormatVersion {
+            found,
+            supported: FACTOR_FORMAT_VERSION,
+        })
+    }
 }
 
 #[cfg(any(feature = "serde", test))]

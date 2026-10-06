@@ -45,7 +45,7 @@ where
 ///
 /// Above unit scale it is the solve kernel rather than the sampler that the exponents
 /// bound: before #93 the pivot entries, at `1/w` of the right-hand side's scale, were
-/// annihilated by the residue the uneliminated vertex carried, which `Anchor::recover`
+/// annihilated by the residue the uneliminated vertex carried, which the gauge's recovery
 /// then turned into exact zeros.
 fn assert_invariant_under_scaling<T>(backend: Backend, exponents: &[i32], tolerance: T)
 where

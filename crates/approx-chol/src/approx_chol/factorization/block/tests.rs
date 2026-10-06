@@ -2,10 +2,6 @@ use super::*;
 use crate::approx_chol::factorization::approximate::{EliminationSequence, StepHeader};
 use crate::approx_chol::factorization::exact::LowerTriangular;
 
-fn dim(n: usize) -> BlockDim {
-    BlockDim::of(n).expect("fixture dimension is non-zero")
-}
-
 fn sequence() -> EliminationSequence<f64> {
     EliminationSequence {
         steps: vec![
@@ -27,43 +23,35 @@ fn sequence() -> EliminationSequence<f64> {
     }
 }
 
-fn data(cholesky: Cholesky<f64>) -> BlockData<f64> {
-    BlockData {
-        dim: dim(3),
-        anchor: Anchor::Floating,
-        cholesky,
-    }
+fn approx() -> Block<f64> {
+    Block::Floating(Cholesky::Approximate(sequence()))
 }
 
-fn approx() -> BlockData<f64> {
-    data(Cholesky::Approximate(sequence()))
-}
-
-/// The block solves for `3 - 1` variables, so its packed factor holds `2 * 3 / 2`.
-fn exact() -> BlockData<f64> {
-    data(Cholesky::Exact(LowerTriangular {
+/// Two eliminated rows, so its packed factor holds `2 * 3 / 2`.
+fn exact() -> Block<f64> {
+    Block::Floating(Cholesky::Exact(LowerTriangular {
         values: vec![1.0; 3],
     }))
 }
 
-fn seq_of(data: &mut BlockData<f64>) -> &mut EliminationSequence<f64> {
-    match &mut data.cholesky {
-        Cholesky::Approximate(sequence) => sequence,
-        Cholesky::Exact(_) => unreachable!("fixture is approximate"),
+fn seq_of(block: &mut Block<f64>) -> &mut EliminationSequence<f64> {
+    match block {
+        Block::Floating(Cholesky::Approximate(sequence)) => sequence,
+        _ => unreachable!("fixture is floating and approximate"),
     }
 }
 
-fn lower_of(data: &mut BlockData<f64>) -> &mut LowerTriangular<f64> {
-    match &mut data.cholesky {
-        Cholesky::Exact(lower) => lower,
-        Cholesky::Approximate(_) => unreachable!("fixture is exact"),
+fn lower_of(block: &mut Block<f64>) -> &mut LowerTriangular<f64> {
+    match block {
+        Block::Floating(Cholesky::Exact(lower)) => lower,
+        _ => unreachable!("fixture is floating and exact"),
     }
 }
 
 #[test]
 fn valid_fixtures_pass() {
-    for (label, data) in [("approximate", approx()), ("exact", exact())] {
-        if let Err(error) = Block::try_from(data) {
+    for (label, block) in [("approximate", approx()), ("exact", exact())] {
+        if let Err(error) = block.validate() {
             panic!("{label} fixture is valid: {error}");
         }
     }
@@ -73,16 +61,11 @@ fn valid_fixtures_pass() {
 #[test]
 fn every_block_error_variant_is_reachable() {
     #[allow(clippy::type_complexity)]
-    let cases: Vec<(
-        &str,
-        fn() -> BlockData<f64>,
-        fn(&mut BlockData<f64>),
-        FactorError,
-    )> = vec![
+    let cases: Vec<(&str, fn() -> Block<f64>, fn(&mut Block<f64>), FactorError)> = vec![
         (
             "pivot vertex bounds",
             approx,
-            |d| seq_of(d).steps[0].vertex = 99,
+            |b| seq_of(b).steps[0].vertex = 99,
             FactorError::VertexOutOfBounds {
                 step: 0,
                 vertex: 99,
@@ -92,7 +75,7 @@ fn every_block_error_variant_is_reachable() {
         (
             "neighbor bounds",
             approx,
-            |d| seq_of(d).neighbor_indices[0] = 99,
+            |b| seq_of(b).neighbor_indices[0] = 99,
             FactorError::NeighborOutOfBounds {
                 step: 0,
                 neighbor: 99,
@@ -102,112 +85,128 @@ fn every_block_error_variant_is_reachable() {
         (
             "exact pivot too small to divide by",
             exact,
-            |d| lower_of(d).values[0] = 1e-320,
+            |b| lower_of(b).values[0] = 1e-320,
             FactorError::ExactPivotInvalid { index: 0 },
         ),
         (
             "exact off-diagonal squares to infinity",
             exact,
-            |d| lower_of(d).values[1] = 1e308,
+            |b| lower_of(b).values[1] = 1e308,
             FactorError::ExactRowNotRepresentable { row: 1 },
         ),
         (
             "step pivot_scale is not finite",
             approx,
-            |d| seq_of(d).steps[0].pivot_scale = f64::INFINITY,
+            |b| seq_of(b).steps[0].pivot_scale = f64::INFINITY,
             FactorError::StepValueInvalid { step: 0 },
         ),
         // A negative remainder from overspending shares reads the same as a negative share.
         (
             "solve coefficient is negative",
             approx,
-            |d| seq_of(d).coefficients[0] = -0.2,
+            |b| seq_of(b).coefficients[0] = -0.2,
             FactorError::StepValueInvalid { step: 0 },
         ),
         // A NaN compares false against zero, so nothing but finiteness catches it.
         (
             "solve coefficient is not a number",
             approx,
-            |d| seq_of(d).coefficients[1] = f64::NAN,
+            |b| seq_of(b).coefficients[1] = f64::NAN,
             FactorError::StepValueInvalid { step: 0 },
         ),
         (
             "uneliminated vertex bounds",
             approx,
-            |d| seq_of(d).uneliminated = 99,
+            |b| seq_of(b).uneliminated = 99,
             FactorError::UneliminatedVertexInvalid { vertex: 99, n: 3 },
         ),
         (
             "uneliminated vertex is a pivot a step already eliminated",
             approx,
-            |d| seq_of(d).uneliminated = 1,
+            |b| seq_of(b).uneliminated = 1,
             FactorError::UneliminatedVertexInvalid { vertex: 1, n: 3 },
         ),
+        // The slot count shrinks with the steps, so the free vertex falls outside it.
         (
             "steps leave a second vertex uneliminated",
             approx,
-            |d| {
-                seq_of(d).steps.truncate(1);
-            },
-            FactorError::BlockDimMismatch {
-                pinned: 2,
-                claimed: 3,
-            },
-        ),
-        (
-            "the exact factor pins fewer variables than the block claims",
-            exact,
-            |d| d.dim = dim(4),
-            FactorError::BlockDimMismatch {
-                pinned: 3,
-                claimed: 4,
-            },
+            |b| seq_of(b).steps.truncate(1),
+            FactorError::UneliminatedVertexInvalid { vertex: 2, n: 2 },
         ),
         (
             "one vertex is eliminated twice, so another never is",
             approx,
-            |d| seq_of(d).steps[1].vertex = 0,
+            |b| seq_of(b).steps[1].vertex = 0,
             FactorError::VertexEliminatedTwice { step: 1, vertex: 0 },
         ),
         (
             "exact factor shorter than its block",
             exact,
-            |d| lower_of(d).values.truncate(2),
+            |b| lower_of(b).values.truncate(2),
             FactorError::ExactFactorLengthInvalid { len: 2 },
         ),
         (
             "exact factor pivot is zero",
             exact,
-            |d| lower_of(d).values[0] = 0.0,
+            |b| lower_of(b).values[0] = 0.0,
             FactorError::ExactPivotInvalid { index: 0 },
         ),
         (
             "exact factor pivot is not finite",
             exact,
-            |d| lower_of(d).values[2] = f64::NAN,
+            |b| lower_of(b).values[2] = f64::NAN,
             FactorError::ExactPivotInvalid { index: 1 },
         ),
     ];
 
     for (label, build, corrupt, expected) in cases {
-        let mut data = build();
-        corrupt(&mut data);
-        let error =
-            Block::try_from(data).expect_err(&format!("{label}: corruption must be rejected"));
+        let mut block = build();
+        corrupt(&mut block);
+        let error = block
+            .validate()
+            .expect_err(&format!("{label}: corruption must be rejected"));
         assert_eq!(error, expected, "{label}");
     }
 }
 
-/// The builder is trusted with its own dims only because this fires when they are wrong.
-#[cfg(debug_assertions)]
+/// Three slots, eliminating the two that are not `free` through a chain ending at it.
+fn leaving_free(free: u32) -> Cholesky<f64> {
+    let [first, second] = match free {
+        0 => [1, 2],
+        1 => [0, 2],
+        _ => [0, 1],
+    };
+    Cholesky::Approximate(EliminationSequence {
+        steps: vec![
+            StepHeader {
+                vertex: first,
+                end: 1,
+                pivot_scale: 0.5,
+            },
+            StepHeader {
+                vertex: second,
+                end: 2,
+                pivot_scale: 0.25,
+            },
+        ],
+        neighbor_indices: vec![second, free],
+        coefficients: vec![1.0, 1.0],
+        uneliminated: free,
+    })
+}
+
 #[test]
-#[should_panic = "assertion"]
-fn a_block_built_around_a_cholesky_that_does_not_pin_its_dim_panics() {
-    Block::new(
-        dim(3),
-        Anchor::Floating,
-        Cholesky::Exact(LowerTriangular {
-            values: vec![1.0; 2],
-        }),
-    );
+fn the_gauge_holds_whichever_slot_elimination_left_free() {
+    for free in 0..3 {
+        let grounded = Block::Grounded(leaving_free(free));
+        let mut slots = [1.0, -3.0, 0.5];
+        grounded.solve(&mut slots);
+        assert_eq!(slots[2], 0.0, "grounded, free slot {free}: {slots:?}");
+
+        let floating = Block::Floating(leaving_free(free));
+        let mut slots = [1.0, -3.0, 0.5];
+        floating.solve(&mut slots);
+        let sum: f64 = slots.iter().sum();
+        assert!(sum.abs() < 1e-14, "floating, free slot {free}: {slots:?}");
+    }
 }

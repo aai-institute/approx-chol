@@ -1,4 +1,3 @@
-use super::factorization::BlockDim;
 use crate::graph::SplitFactor;
 use crate::{Error, Fallback};
 
@@ -81,13 +80,13 @@ impl Config {
 }
 
 impl Backend {
-    pub(super) fn route(self, dim: BlockDim) -> Route {
+    pub(super) fn route(self, eliminated: usize) -> Route {
         match self {
             // Starts at one: a block solving for no variable has no dense factor to build.
             Backend::ExactBelow {
                 max_dim,
                 on_failure,
-            } if (1..=max_dim).contains(&dim.solved()) => Route::Exact { on_failure },
+            } if (1..=max_dim).contains(&eliminated) => Route::Exact { on_failure },
             _ => Route::Approximate,
         }
     }

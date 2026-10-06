@@ -51,13 +51,26 @@ fn seeds() -> Vec<(&'static str, Factor<f64>)> {
                 Backend::Approximate,
             ),
         ),
-        // Strictly dominant, so ingestion grounds it and a block anchors on the augmented
-        // vertex instead of floating.
+        // Strictly dominant, so ingestion grounds it and the block keeps a ground slot.
         (
             "grounded_sddm",
             factor(
                 CsrRef::new(&[0, 2, 4], &[0, 1, 0, 1], &[2.0, -1.0, -1.0, 2.0], 2)
                     .expect("valid csr"),
+                Backend::Approximate,
+            ),
+        ),
+        // Interleaved again, with surplus on vertex 0: a ground slot inside a permuted span.
+        (
+            "permuted_grounded_component",
+            factor(
+                CsrRef::new(
+                    &[0, 2, 4, 6, 8],
+                    &[0, 2, 1, 3, 0, 2, 1, 3],
+                    &[2.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0],
+                    4,
+                )
+                .expect("valid csr"),
                 Backend::Approximate,
             ),
         ),

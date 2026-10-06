@@ -1,11 +1,9 @@
 {
-  "format_version": 1094909956,
+  "format_version": 1094909957,
   "permutation": null,
   "blocks": [
     {
-      "dim": 4,
-      "anchor": "Floating",
-      "cholesky": {
+      "Floating": {
         "Approximate": {
           "uneliminated": 0,
           "steps": [

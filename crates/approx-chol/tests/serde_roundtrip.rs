@@ -1,5 +1,7 @@
 #![cfg(feature = "serde")]
 
+#[path = "common/grounded.rs"]
+mod grounded;
 #[path = "common/laplacian_prop.rs"]
 mod laplacian_prop;
 #[path = "common/path.rs"]
@@ -8,6 +10,7 @@ mod path;
 use approx_chol::{
     factorize_with, Backend, Config, CsrRef, ExactFailure, Factor, FACTOR_FORMAT_VERSION,
 };
+use grounded::is_grounded;
 use rstest::rstest;
 
 fn path_factor_with(config: Config) -> Factor<f64> {
@@ -46,8 +49,7 @@ fn factor_json_roundtrip_preserves_solve(#[case] backend: Backend) {
     let values = [1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0];
     let split = CsrRef::new(&row_ptrs, &columns, &values, 4).expect("valid CSR");
 
-    // Strictly dominant, so ingestion grounds it and the restored factor has to
-    // recover the augmentation from its blocks' anchors.
+    // Strictly dominant, so the restored factor recovers the ground from its block's gauge.
     let (sddm_row_ptrs, sddm_columns) = ([0u32, 2, 4], [0u32, 1, 0, 1]);
     let sddm_values = [2.0, -1.0, -1.0, 2.0];
     let sddm = CsrRef::new(&sddm_row_ptrs, &sddm_columns, &sddm_values, 2).expect("valid CSR");
@@ -67,11 +69,7 @@ fn factor_json_roundtrip_preserves_solve(#[case] backend: Backend) {
         &[1.0, -1.0, 2.0, -2.0],
     );
     let grounded = factorize_with(sddm, config).expect("factorization should succeed");
-    assert_eq!(
-        grounded.n(),
-        grounded.original_n() + 1,
-        "SDDM input augments by one"
-    );
+    assert!(is_grounded(&grounded), "SDDM input augments by one");
     assert_roundtrip("grounded SDDM", &grounded, &[1.0, -1.0]);
 }
 
@@ -87,7 +85,6 @@ fn assert_roundtrip(label: &str, factor: &Factor<f64>, b: &[f64]) {
     let restored: Factor<f64> = serde_json::from_str(&json).expect("deserialize factor");
 
     assert_eq!(restored.n(), factor.n(), "{label}");
-    assert_eq!(restored.original_n(), factor.original_n(), "{label}");
     assert_eq!(restored.n_steps(), factor.n_steps(), "{label}");
     assert_eq!(
         factor.solve(b).expect("solve original"),
@@ -96,25 +93,13 @@ fn assert_roundtrip(label: &str, factor: &Factor<f64>, b: &[f64]) {
     );
 }
 
-#[test]
-fn deserializing_corrupted_factor_is_rejected() {
-    let mut value = serde_json::to_value(path_factor()).expect("serialize factor");
-    assert!(
-        value["blocks"][0]["dim"].is_u64(),
-        "no block dimension to corrupt"
-    );
-    value["blocks"][0]["dim"] = serde_json::Value::from(999u32);
-
-    assert!(serde_json::from_value::<Factor<f64>>(value).is_err());
-}
-
 /// With no field for the remainder's share, overspending is the reachable corruption.
 #[test]
 fn a_column_whose_shares_overspend_the_pivot_is_rejected() {
     let factor = complete_factor(4);
 
     let mut value = serde_json::to_value(&factor).expect("serialize factor");
-    let shares = &mut value["blocks"][0]["cholesky"]["Approximate"]["steps"][0]["column"]["shares"];
+    let shares = &mut value["blocks"][0]["Floating"]["Approximate"]["steps"][0]["column"]["shares"];
     assert!(
         shares[0][1].is_f64(),
         "the leading step of a complete graph carries shares to overspend"
@@ -124,20 +109,22 @@ fn a_column_whose_shares_overspend_the_pivot_is_rejected() {
     assert!(serde_json::from_value::<Factor<f64>>(value).is_err());
 }
 
-/// No wire fact contradicts an anchor, so tampering answers a different system.
+/// No wire fact contradicts a block's gauge, so a flipped tag answers a different system.
 #[test]
-fn a_tampered_block_anchor_deserializes_and_answers_a_different_system() {
+fn a_flipped_block_gauge_deserializes_and_answers_a_different_system() {
     let factor = path_factor();
     let mut value = serde_json::to_value(&factor).expect("serialize factor");
-    value["blocks"][0]["anchor"] = serde_json::Value::from("Ground");
+    let block = value["blocks"][0]
+        .as_object_mut()
+        .expect("a block serializes as its tagged gauge");
+    let cholesky = block.remove("Floating").expect("the path floats");
+    block.insert("Grounded".to_owned(), cholesky);
 
     let restored: Factor<f64> =
-        serde_json::from_value(value).expect("nothing on the wire falsifies an anchor");
-    assert_eq!(restored.n(), factor.n());
-    assert_eq!(restored.original_n(), factor.original_n() - 1);
+        serde_json::from_value(value).expect("nothing on the wire falsifies a gauge");
+    assert_eq!(restored.n(), factor.n() - 1);
 
-    // The anchor decides whether the block's last entry is pinned or projected out, so
-    // the tampered factor is not merely one variable short.
+    // The last slot turned from a vertex into a ground, so this is not merely one variable short.
     let b = [1.0, 2.0, -3.0];
     let honest = factor.solve(&b).expect("solve the honest factor");
     let tampered = restored.solve(&b).expect("solve the tampered factor");

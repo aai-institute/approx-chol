@@ -23,9 +23,8 @@ class TestFactorShapeAndDtype:
     def test_shape_matches_original_dimension_sddm(self):
         a = _sddm_matrix()
         factor = approx_chol.factorize(a)
-        # Gremban augmentation adds a vertex: factor.n > 2
-        assert factor.n > 2
-        # But shape reflects the original 2x2 matrix
+        # The Gremban ground vertex stays internal to the factor.
+        assert factor.n == 2
         assert factor.shape == (2, 2)
 
     def test_dtype_is_float64(self):
