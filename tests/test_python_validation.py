@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from tests._ext_loader import load_extension_module
+import approx_chol
 
 
 def _base_csr():
@@ -20,26 +20,23 @@ class MatrixLike:
 
 
 def test_split_below_two_is_accepted_as_standard_ac():
-    ext = load_extension_module()
     row_ptrs, col_indices, values = _base_csr()
 
     for split in (None, 0, 1):
-        factor = ext.factorize_raw(
-            row_ptrs, col_indices, values, 2, ext.Config(split=split)
+        factor = approx_chol.factorize_raw(
+            row_ptrs, col_indices, values, 2, approx_chol.Config(split=split)
         )
         assert factor.shape == (2, 2)
 
 
 def test_duck_typed_factorize_validates_indices_and_dimension():
-    ext = load_extension_module()
-
     valid = MatrixLike(
         np.array([0, 2, 4], dtype=np.int64),
         np.array([0, 1, 0, 1], dtype=np.int64),
         np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64),
         (2, 2),
     )
-    factor = ext.factorize(valid)
+    factor = approx_chol.factorize(valid)
     assert factor.shape[0] >= 2
 
     too_large_idx = MatrixLike(
@@ -49,7 +46,7 @@ def test_duck_typed_factorize_validates_indices_and_dimension():
         (2, 2),
     )
     with pytest.raises(ValueError, match="indices exceeds u32::MAX"):
-        ext.factorize(too_large_idx)
+        approx_chol.factorize(too_large_idx)
 
     negative_idx = MatrixLike(
         np.array([0, 2, 4], dtype=np.int64),
@@ -58,7 +55,7 @@ def test_duck_typed_factorize_validates_indices_and_dimension():
         (2, 2),
     )
     with pytest.raises(ValueError, match="indices must be non-negative"):
-        ext.factorize(negative_idx)
+        approx_chol.factorize(negative_idx)
 
     oversized_dim = MatrixLike(
         np.array([0, 2, 4], dtype=np.int64),
@@ -67,19 +64,18 @@ def test_duck_typed_factorize_validates_indices_and_dimension():
         (2**32 + 1, 2**32 + 1),
     )
     with pytest.raises(ValueError, match="matrix dimension exceeds u32::MAX"):
-        ext.factorize(oversized_dim)
+        approx_chol.factorize(oversized_dim)
 
 
 def test_each_column_rejects_the_dtype_kinds_it_cannot_carry():
     # An index column casts to uint32 and a value column to float64, so a float
     # index would truncate silently and a complex value would drop its imaginary
     # part. Each names only the kinds it accepts, and both share the rank check.
-    ext = load_extension_module()
     row_ptrs, col_indices, values = _base_csr()
 
     float_index = MatrixLike(row_ptrs.astype(np.float64), col_indices, values, (2, 2))
     with pytest.raises(ValueError, match="indptr must have an integer dtype"):
-        ext.factorize(float_index)
+        approx_chol.factorize(float_index)
 
     complex_value = MatrixLike(
         row_ptrs, col_indices, values.astype(np.complex128), (2, 2)
@@ -87,17 +83,16 @@ def test_each_column_rejects_the_dtype_kinds_it_cannot_carry():
     with pytest.raises(
         ValueError, match="data must have an integer or floating-point dtype"
     ):
-        ext.factorize(complex_value)
+        approx_chol.factorize(complex_value)
 
     two_dimensional = MatrixLike(row_ptrs, col_indices.reshape(2, 2), values, (2, 2))
     with pytest.raises(ValueError, match="indices must be a 1-D array"):
-        ext.factorize(two_dimensional)
+        approx_chol.factorize(two_dimensional)
 
 
 def test_solve_and_solve_into_raise_value_error_for_shape_and_overlap():
-    ext = load_extension_module()
     row_ptrs, col_indices, values = _base_csr()
-    factor = ext.factorize_raw(row_ptrs, col_indices, values, 2)
+    factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
     original_n = factor.shape[0]
 
     rhs_too_long = np.zeros(original_n + 10, dtype=np.float64)
@@ -121,9 +116,8 @@ def test_solve_rejects_augmented_length_rhs():
     # _base_csr is SDDM (positive row sums), so it augments: original_n=2, n=3.
     # A RHS of length original_n + 1 (the augmented dimension) must be rejected,
     # not silently accepted with its trailing aux entry discarded.
-    ext = load_extension_module()
     row_ptrs, col_indices, values = _base_csr()
-    factor = ext.factorize_raw(row_ptrs, col_indices, values, 2)
+    factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
     original_n = factor.shape[0]
     assert factor.n == original_n + 1, "SDDM should augment by one vertex"
 
@@ -136,9 +130,8 @@ def test_solve_rejects_augmented_length_rhs():
 
 
 def test_solve_into_rejects_partially_overlapping_views():
-    ext = load_extension_module()
     row_ptrs, col_indices, values = _base_csr()
-    factor = ext.factorize_raw(row_ptrs, col_indices, values, 2)
+    factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
     original_n = factor.shape[0]
 
     base = np.zeros(original_n + 1, dtype=np.float64)
