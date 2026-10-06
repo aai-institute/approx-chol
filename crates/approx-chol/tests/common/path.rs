@@ -1,8 +1,4 @@
 //! Canonical 4-node path-graph Laplacian (0-1-2-3) fixture data.
-//!
-//! Shared across the CSR-validation, generic, and sprs/faer integration suites
-//! so the matrix lives in exactly one place; each suite wraps it into the index
-//! and value types it exercises.
 
 /// Matrix dimension.
 pub const N: u32 = 4;

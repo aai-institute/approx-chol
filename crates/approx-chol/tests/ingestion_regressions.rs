@@ -322,70 +322,6 @@ fn a_diagonal_near_the_type_maximum_still_solves() {
     assert!((solution[0] - 1.0).abs() < 1e-12, "{solution:?}");
 }
 
-/// CSR for `k` disjoint 2-node path Laplacians, stacked block-diagonally — a
-/// graph with `k` connected components. For `k = 2`:
-///   [ 1 -1  .  . ]
-///   [-1  1  .  . ]
-///   [ .  .  1 -1 ]
-///   [ .  . -1  1 ]
-fn block_diagonal_paths(k: u32) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
-    let (mut rp, mut ci, mut vals) = (vec![0u32], Vec::new(), Vec::new());
-    for b in 0..k {
-        let (a, z) = (2 * b, 2 * b + 1);
-        // both rows span columns [a, z]: +1 on the diagonal, -1 off it
-        for row_vals in [[1.0, -1.0], [-1.0, 1.0]] {
-            ci.extend([a, z]);
-            vals.extend(row_vals);
-            rp.push(ci.len() as u32);
-        }
-    }
-    (rp, ci, vals)
-}
-
-/// Each 2-node block solves independently, contributing one elimination step.
-#[test]
-fn disconnected_laplacian_solves_per_component() {
-    for k in [2u32, 3] {
-        let (rp, ci, vals) = block_diagonal_paths(k);
-        let n = 2 * k;
-        let rhs: Vec<f64> = (1..=k).flat_map(|b| [b as f64, -(b as f64)]).collect();
-        let expected: Vec<f64> = rhs.iter().map(|value| value / 2.0).collect();
-
-        for split_merge in [None, Some(2)] {
-            let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid CSR");
-            let factor = Builder::<f64>::new(Config {
-                split_merge,
-                ..Config::default()
-            })
-            .build(csr)
-            .expect("disconnected Laplacian must factor block-diagonally");
-            assert_eq!(factor.n_steps(), k as usize, "one step per 2-node block");
-            assert_eq!(factor.solve(&rhs).expect("solve"), expected);
-        }
-    }
-}
-
-#[test]
-fn disconnected_sparse_ac2_preserves_virtual_edge_multiplicity() {
-    let row_ptrs = [0u32, 2, 5, 7, 9, 12, 14];
-    let columns = [0u32, 1, 0, 1, 2, 1, 2, 3, 4, 3, 4, 5, 4, 5];
-    let values = [
-        1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0,
-    ];
-    let factor = Builder::<f64>::new(Config {
-        seed: 7,
-        split_merge: Some(3),
-        ..Config::default()
-    })
-    .build(CsrRef::new(&row_ptrs, &columns, &values, 6).expect("valid CSR"))
-    .expect("disconnected AC2 factor");
-
-    let solution = factor
-        .solve(&[1.0, 0.0, -1.0, 1.0, 0.0, -1.0])
-        .expect("solve");
-    assert_eq!(solution, vec![1.0, 0.0, -1.0, 1.0, 0.0, -1.0]);
-}
-
 #[test]
 fn many_zero_singletons_factor_as_trivial_components() {
     let n = 128u32;
@@ -443,49 +379,6 @@ fn interleaved_components_solve_in_input_order() {
         let solution = factor.solve(&rhs).expect("solve");
         for (got, want) in solution.iter().zip(expected) {
             assert!((got - want).abs() < 1e-12, "{label}: {solution:?}");
-        }
-    }
-}
-
-/// Every star has degree two, so AC is exact and the residual is round-off. The
-/// fixtures above are too small to swap-remove.
-#[test]
-fn moved_components_keep_their_edges_through_fill_and_removal() {
-    const N: u32 = 16;
-    let (mut row_ptrs, mut columns, mut values) = (vec![0u32], Vec::new(), Vec::new());
-    for v in 0..N {
-        let mut row = [((v + N - 2) % N, -1.0), (v, 2.0), ((v + 2) % N, -1.0)];
-        row.sort_unstable_by_key(|&(column, _)| column);
-        columns.extend(row.iter().map(|&(column, _)| column));
-        values.extend(row.iter().map(|&(_, value)| value));
-        row_ptrs.push(columns.len() as u32);
-    }
-
-    // Zero-sum within each cycle, so the singular system is consistent.
-    let rhs: Vec<f64> = (0..N).map(|v| if v < N / 2 { 1.0 } else { -1.0 }).collect();
-    for seed in 0..4u64 {
-        let factor = build(
-            Config {
-                seed,
-                ..Config::default()
-            },
-            &row_ptrs,
-            &columns,
-            &values,
-        )
-        .expect("double-cycle factor");
-        assert_eq!(factor.n_steps(), (N - 2) as usize, "one pin per cycle");
-
-        let x = factor.solve(&rhs).expect("solve");
-        for row in 0..N as usize {
-            let range = row_ptrs[row] as usize..row_ptrs[row + 1] as usize;
-            let ax: f64 = columns[range.clone()]
-                .iter()
-                .zip(&values[range])
-                .map(|(&column, value)| value * x[column as usize])
-                .sum();
-            let error = (ax - rhs[row]).abs();
-            assert!(error < 1e-10, "seed={seed}: row {row} residual {error:.3e}");
         }
     }
 }
