@@ -1,8 +1,8 @@
 use super::canonical::Canonical;
 use super::index;
-use crate::sddm::{add_edge, total, Grounded, Laplacian, Sddm};
+use crate::sddm::{add_edge, Laplacian};
 use crate::types::{count_as_scalar, Real};
-use crate::{CsrError, Error};
+use crate::Error;
 use num_traits::PrimInt;
 
 /// A merge-join only because [`Canonical`] guarantees each entry is claimed once.
@@ -74,17 +74,14 @@ fn approximately_equal<T: Real>(left: T, right: T) -> bool {
 }
 
 /// Reads every stored entry once, so [`Canonical::of`] leaves finiteness here; the upper mirror is kept.
-pub(super) fn sddm_of<T: Real, I: PrimInt>(
+pub(super) fn edges<T: Real, I: PrimInt>(
     canonical: &Canonical<'_, T, I>,
-) -> Result<Sddm<T>, Error> {
+) -> Result<(Laplacian<T>, RowSums<T>), Error> {
     let (row_ptrs, col_indices, values) = canonical.arrays();
     let n = row_ptrs.len() - 1;
     let mut mirrors = Mirrors::new(row_ptrs, col_indices, values);
 
-    let mut diagonal = vec![T::zero(); n];
-    // Off-diagonal only; the diagonal joins in the balance verdict.
-    let mut row_sums = vec![T::zero(); n];
-    let mut degrees = vec![T::zero(); n];
+    let mut sums = RowSums::zeros(n);
     let mut upper_ptrs = Vec::with_capacity(n + 1);
     upper_ptrs.push(0);
     let mut neighbors = Vec::with_capacity(col_indices.len() / 2);
@@ -93,7 +90,7 @@ pub(super) fn sddm_of<T: Real, I: PrimInt>(
     for row in 0..n {
         let row_end = index(row_ptrs[row + 1]) as u32;
         // Claimed like any mirror: claiming diagonals up front would skip those below.
-        diagonal[row] = mirrors.claim(row, row)?;
+        sums.diagonal[row] = mirrors.claim(row, row)?;
         let mut cursor = mirrors.cursors[row];
 
         while cursor < row_end {
@@ -119,63 +116,72 @@ pub(super) fn sddm_of<T: Real, I: PrimInt>(
             if -upper < floor() {
                 return Err(Error::MagnitudeTooSmall { entry: (row, col) });
             }
-            // Each row sums its own value; charging `upper` to both grounds `col` on mirror noise.
-            row_sums[row] = row_sums[row] + upper;
-            row_sums[col] = row_sums[col] + lower;
-            add_edge(&mut degrees, row, col, -upper);
+            sums.add(row, col, upper, lower);
             neighbors.push(col as u32);
             weights.push(-upper);
         }
         upper_ptrs.push(neighbors.len() as u32);
-    }
-
-    // Judged in row order, so the first bad row is the one reported.
-    for (row, ((sum, &d), (&degree, terms))) in row_sums
-        .iter_mut()
-        .zip(&diagonal)
-        .zip(degrees.iter().zip(canonical.terms()))
-        .enumerate()
-    {
-        *sum = match RowBalance::of(d, *sum, terms) {
-            RowBalance::NonFinite => return Err(Error::NonFiniteRow { row }),
-            RowBalance::Deficit => return Err(Error::NotDiagonallyDominant { row }),
-            RowBalance::Negligible => T::zero(),
-            // The ground edge's weight; after the verdict, so a row not dominant at any scale says so.
-            RowBalance::Surplus(excess) if excess < floor() => {
-                return Err(Error::MagnitudeTooSmall { entry: (row, row) })
-            }
-            RowBalance::Surplus(excess) => excess,
-        };
-        // Ingestion's diagonal: the degree it sums, not the stored entry.
-        if !(degree + *sum).is_finite() {
-            return Err(Error::NonFiniteRow { row });
-        }
-    }
-    // The ground's degree, which the approximate arm sums when it eliminates the ground.
-    let ground = total(&row_sums);
-    if !ground.is_finite() {
-        return Err(Error::SurplusOverflow);
     }
     let laplacian = Laplacian {
         row_ptrs: upper_ptrs,
         neighbors,
         weights,
     };
-    // Every surplus is zero or positive, so a positive total means some vertex is grounded.
-    if ground == T::zero() {
-        return Ok(Sddm::Laplacian(laplacian));
+    Ok((laplacian, sums))
+}
+
+/// What the balance verdict reads per row, summed as the walk claims each edge.
+pub(super) struct RowSums<T> {
+    diagonal: Vec<T>,
+    /// Off-diagonal only; the diagonal joins in the balance verdict.
+    off_diagonal: Vec<T>,
+    /// Summed as ingestion sums them, so the diagonal checked here is the one it reads.
+    degrees: Vec<T>,
+}
+
+impl<T: Real> RowSums<T> {
+    fn zeros(n: usize) -> Self {
+        Self {
+            diagonal: vec![T::zero(); n],
+            off_diagonal: vec![T::zero(); n],
+            degrees: vec![T::zero(); n],
+        }
     }
-    if n >= u32::MAX as usize {
-        return Err(Error::InvalidCsr(
-            CsrError::MatrixDimensionExceedsIndexType {
-                n: n.saturating_add(1),
-            },
-        ));
+
+    #[inline]
+    fn add(&mut self, row: usize, col: usize, upper: T, lower: T) {
+        // Each row sums its own value; charging `upper` to both grounds `col` on mirror noise.
+        self.off_diagonal[row] = self.off_diagonal[row] + upper;
+        self.off_diagonal[col] = self.off_diagonal[col] + lower;
+        add_edge(&mut self.degrees, row, col, -upper);
     }
-    Ok(Sddm::Grounded(Grounded {
-        laplacian,
-        surplus: row_sums,
-    }))
+
+    /// Judged in row order, so the first bad row is the one reported.
+    pub(super) fn surplus(self, terms: impl Iterator<Item = u32>) -> Result<Vec<T>, Error> {
+        let mut surplus = self.off_diagonal;
+        for (row, ((sum, &d), (&degree, terms))) in surplus
+            .iter_mut()
+            .zip(&self.diagonal)
+            .zip(self.degrees.iter().zip(terms))
+            .enumerate()
+        {
+            *sum = match RowBalance::of(d, *sum, terms) {
+                RowBalance::NonFinite => return Err(Error::NonFiniteRow { row }),
+                RowBalance::Deficit => return Err(Error::NotDiagonallyDominant { row }),
+                RowBalance::Negligible => T::zero(),
+                // The ground edge's weight; after the verdict, so a row not dominant at any scale says so.
+                RowBalance::Surplus(excess) if excess < floor() => {
+                    return Err(Error::MagnitudeTooSmall { entry: (row, row) })
+                }
+                RowBalance::Surplus(excess) => excess,
+            };
+            // Ingestion's diagonal: the degree it sums, not the stored entry.
+            if !(degree + *sum).is_finite() {
+                return Err(Error::NonFiniteRow { row });
+            }
+        }
+        Ok(surplus)
+    }
 }
 
 /// A row's diagonal surplus, judged against the noise its own scale and term count can carry.

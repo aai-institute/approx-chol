@@ -1,6 +1,7 @@
 mod csr;
 
 use crate::types::Real;
+use crate::{CsrError, Error};
 
 /// The ground's diagonal; one definition, so the check and ingestion sum it identically.
 fn total<T: Real>(surplus: &[T]) -> T {
@@ -54,6 +55,27 @@ impl<T> Sddm<T> {
 }
 
 impl<T: Real> Sddm<T> {
+    /// Grounded exactly where some surplus is positive; an all-zero surplus stays a bare Laplacian.
+    fn with_surplus(laplacian: Laplacian<T>, surplus: Vec<T>) -> Result<Self, Error> {
+        // The ground's degree, which the approximate arm sums when it eliminates the ground.
+        let ground = total(&surplus);
+        if !ground.is_finite() {
+            return Err(Error::SurplusOverflow);
+        }
+        // Every surplus is zero or positive, so a positive total means some vertex is grounded.
+        if ground == T::zero() {
+            return Ok(Self::Laplacian(laplacian));
+        }
+        if laplacian.n() >= u32::MAX as usize {
+            return Err(Error::InvalidCsr(
+                CsrError::MatrixDimensionExceedsIndexType {
+                    n: laplacian.n().saturating_add(1),
+                },
+            ));
+        }
+        Ok(Self::Grounded(Grounded { laplacian, surplus }))
+    }
+
     /// Summed in the checks' order, so every entry is finite; `visit` spares a caller its own edge pass.
     pub(crate) fn diagonal(&self, mut visit: impl FnMut(usize, u32)) -> Vec<T> {
         let laplacian = self.laplacian();
