@@ -1,7 +1,6 @@
 name: Perf Reference
 
-# The only thing that writes the reference: a number measured on a maintainer's
-# laptop is meaningless against a runner. (#60)
+# Sole writer of the reference: a laptop measurement is meaningless against a runner (#60).
 
 on:
   workflow_dispatch:
@@ -40,21 +39,16 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
 
-      # `shell: bash` for pipefail: the default shell would let a panicking bench
-      # pass through `tee` as a green step.
+      # bash for pipefail: the default shell lets a panicking bench pass through `tee` green.
       - name: Time the headline factorization (release, best-of-N)
         shell: bash
         run: pixi run -e wheel bench-wallclock | tee bench.out
 
-      # --reference from the same env the push step diffs, so the two cannot
-      # disagree about which file was written.
+      # --reference from the env the push step diffs, so both agree on the written file.
       - name: Update reference
         run: pixi run -e wheel python scripts/check-wallclock-reference.py --reference "$REFERENCE_FILE" --bench-output bench.out --update
 
-      # A branch, not a push to main: the bench takes minutes, long enough for a
-      # merge to land and make a direct push a non-fast-forward. The summary asks
-      # a human to open the pull request, because a bot-opened one does not run
-      # the required checks.
+      # A branch: a merge during the slow bench breaks fast-forward, and bot-opened PRs skip required checks.
       - name: Push refresh branch
         env:
           SOURCE_SHA: ${{ github.sha }}

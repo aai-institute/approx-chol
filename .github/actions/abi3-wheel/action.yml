@@ -14,8 +14,7 @@ runs:
     - name: build wheel
       shell: bash
       run: pixi run -e wheel maturin build --locked --out dist
-    # maturin only warns when it cannot honour abi3, so assert the tag rather
-    # than trusting a green build to mean one wheel covers every interpreter.
+    # maturin only warns when it cannot honour abi3, so a green build proves nothing.
     - name: assert the wheel is tagged cp39-abi3
       shell: bash
       run: |
