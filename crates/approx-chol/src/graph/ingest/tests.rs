@@ -74,6 +74,6 @@ fn the_built_graph_agrees_with_the_layout() {
     assert_eq!(
         built,
         vec![(3, true), (2, false)],
-        "only the block ending at the ground vertex is anchored to it"
+        "only the block ending at the ground vertex carries it"
     );
 }

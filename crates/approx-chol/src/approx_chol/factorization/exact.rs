@@ -1,4 +1,3 @@
-use super::block::BlockDim;
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;
 use crate::graph::{BlockVertices, Ingestion};
@@ -28,9 +27,9 @@ impl NotFactorable {
 pub(crate) fn factor<T: Real, I: PrimInt>(
     ingestion: &Ingestion<'_, T, I>,
     block: &BlockVertices<'_>,
-    dim: BlockDim,
+    eliminated: usize,
 ) -> Result<LowerTriangular<T>, NotFactorable> {
-    assemble(ingestion, block, dim.solved())?.factor_in_place()
+    assemble(ingestion, block, eliminated)?.factor_in_place()
 }
 
 const fn row_start(row: usize) -> usize {
@@ -168,19 +167,15 @@ impl<T: Real> LowerTriangular<T> {
 
 #[cfg(any(feature = "serde", test))]
 impl<T: num_traits::Float> LowerTriangular<T> {
-    pub(super) fn pinned_dim(&self) -> Result<BlockDim, FactorError> {
+    pub(super) fn validate_values(&self) -> Result<(), FactorError> {
         let rows = self.rows();
+        // A length no triangle has leaves trailing entries no row reads.
         if packed_len(rows) != Some(self.values.len()) {
             return Err(FactorError::ExactFactorLengthInvalid {
                 len: self.values.len(),
             });
         }
-        Ok(BlockDim::pinning(rows))
-    }
-
-    pub(super) fn validate_values(&self) -> Result<(), FactorError> {
-        // Through `pinned_dim`, so no call order leaves the trailing entries unread.
-        for row in 0..self.pinned_dim()?.solved() {
+        for row in 0..rows {
             let entries = self.row(row);
             // `substitute` divides by each pivot, so one whose reciprocal overflows is unusable.
             let pivot = entries[row];

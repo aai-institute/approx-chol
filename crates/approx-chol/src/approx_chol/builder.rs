@@ -1,5 +1,5 @@
 use super::config::{Backend, Config, Route};
-use super::factorization::{approximate, exact, Anchor, Block, BlockDim, Cholesky, Permutation};
+use super::factorization::{approximate, exact, Block, Cholesky, Permutation};
 use crate::graph::{BlockVertices, EdgeCount, Ingestion, Multi, Single};
 use crate::sampling::CdfSampler;
 use crate::types::Real;
@@ -42,19 +42,20 @@ where
 
     /// Multiplicity fixes layout and split together, so each arm is one algorithm end to end.
     fn build_validated<I: PrimInt>(&self, sddm: CsrRef<'_, T, I>) -> Result<Factor<T>, Error> {
-        let original_n = sddm.n();
+        let n = sddm.n();
         let ingestion = Ingestion::of(sddm)?;
         match self.config.split_factor() {
-            None => self.factor_blocks::<Single, _>(ingestion, ()),
-            Some(k) => self.factor_blocks::<Multi, _>(ingestion, k),
+            None => self.factor_blocks::<Single, _>(ingestion, n, ()),
+            Some(k) => self.factor_blocks::<Multi, _>(ingestion, n, k),
         }
         // The only scope holding both the caller's dimension and the finished factor.
-        .inspect(|factor| debug_assert_eq!(factor.original_n(), original_n))
+        .inspect(|factor| debug_assert_eq!(factor.n(), n))
     }
 
     fn factor_blocks<C: EdgeCount, I: PrimInt>(
         &self,
         mut ingestion: Ingestion<'_, T, I>,
+        n: usize,
         split: C::Split,
     ) -> Result<Factor<T>, Error> {
         if ingestion.n() == 0 {
@@ -81,8 +82,11 @@ where
             blocks.push(block);
             fallbacks.extend(fallback);
         }
+        // The ground is not an input vertex; its block keeps it as a slot of its own.
+        let mut order = layout.into_order();
+        order.retain(|&vertex| (vertex as usize) < n);
         Ok(Factor::from_blocks(
-            Permutation::from_order(layout.into_order()),
+            Permutation::from_order(order),
             blocks,
             fallbacks,
         ))
@@ -105,25 +109,37 @@ impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
         }
     }
 
-    /// Routes first, so a block the dense backend claims never builds an elimination graph.
     fn factor<I: PrimInt>(
         &mut self,
         ingestion: &Ingestion<'_, T, I>,
         block: &BlockVertices<'_>,
     ) -> Result<(Block<T>, Option<Fallback>), Error> {
+        let (cholesky, fallback) = self.cholesky(ingestion, block)?;
+        let gauged = if ingestion.carries_ground(block) {
+            Block::Grounded(cholesky)
+        } else {
+            Block::Floating(cholesky)
+        };
+        Ok((gauged, fallback))
+    }
+
+    /// Routes first, so a block the dense backend claims never builds an elimination graph.
+    fn cholesky<I: PrimInt>(
+        &mut self,
+        ingestion: &Ingestion<'_, T, I>,
+        block: &BlockVertices<'_>,
+    ) -> Result<(Cholesky<T>, Option<Fallback>), Error> {
         // Every block restarts, so one block's draws never shift because another went exact.
         self.sampler.restart(block.first());
 
-        let dim = BlockDim::of(block.len()).expect("a block has at least one vertex");
-        let anchor = if ingestion.carries_ground(block) {
-            Anchor::Ground
-        } else {
-            Anchor::Floating
-        };
+        let eliminated = block
+            .len()
+            .checked_sub(1)
+            .expect("a block has at least one vertex");
         let mut fallback = None;
-        if let Route::Exact { on_failure } = self.backend.route(dim) {
-            match exact::factor(ingestion, block, dim) {
-                Ok(lower) => return Ok((Block::new(dim, anchor, Cholesky::Exact(lower)), None)),
+        if let Route::Exact { on_failure } = self.backend.route(eliminated) {
+            match exact::factor(ingestion, block, eliminated) {
+                Ok(lower) => return Ok((Cholesky::Exact(lower), None)),
                 Err(reason) => {
                     fallback = Some(on_failure.accept(reason.at(block))?);
                 }
@@ -131,9 +147,6 @@ impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
         }
         let graph = ingestion.block_graph::<C>(block);
         let sequence = approximate::eliminate::<T, C>(graph, &mut self.sampler, self.split);
-        Ok((
-            Block::new(dim, anchor, Cholesky::Approximate(sequence)),
-            fallback,
-        ))
+        Ok((Cholesky::Approximate(sequence), fallback))
     }
 }

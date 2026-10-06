@@ -1,8 +1,11 @@
 #[path = "common/grid.rs"]
 mod grid;
+#[path = "common/grounded.rs"]
+mod grounded;
 #[path = "common/residual.rs"]
 mod residual;
 use grid::grid_laplacian;
+use grounded::is_grounded;
 use residual::relative_residual_over;
 
 use approx_chol::low_level::Builder;
@@ -22,7 +25,7 @@ fn route_at_drift<T: Float + Send + Sync + 'static>(drift: T) -> Result<bool, Er
     let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).expect("valid csr");
     Builder::<T>::new(Config::default())
         .build(csr)
-        .map(|factor| factor.n() > factor.original_n())
+        .map(|factor| is_grounded(&factor))
 }
 
 /// Augmentation is decided in ingestion, before routing, so the default suffices. One
@@ -74,7 +77,7 @@ fn star_augments_at_ulp_offset(offset: u64) -> bool {
     let factor = Builder::<f64>::new(Config::default())
         .build(csr)
         .expect("factorization should succeed");
-    factor.n() > factor.original_n()
+    is_grounded(&factor)
 }
 
 /// Brackets the floor at a large row scale, where an absolute threshold would misjudge
@@ -114,7 +117,7 @@ fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
     .build(csr)
     .expect("factorization should succeed");
 
-    assert!(factor.n() > n as usize, "diagonal SDDM should be augmented");
+    assert!(is_grounded(&factor), "diagonal SDDM should be augmented");
 
     let x = factor.solve(&b).expect("solve should succeed");
     assert_eq!(x.len(), n as usize);
@@ -128,20 +131,18 @@ fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
     }
 }
 
+/// The ground slot is internal, so a right-hand side reaching it is one entry too long.
 #[test]
-fn solve_into_rejects_rhs_longer_than_original_for_augmented_factor() {
-    // For an augmented SDDM factor n() == original_n() + 1, and the aux slot is
-    // internal scratch. A RHS of length original_n + 1 must be rejected, not
-    // silently accepted with its last entry overwritten by the grounding setup.
+fn solve_into_rejects_rhs_reaching_the_ground_slot() {
     let (rp, ci, vals, n) = diagonal_sddm();
     let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid diagonal SDDM");
     let factor = Builder::new(Config::default())
         .build(csr)
         .expect("factorization should succeed");
-    assert_eq!(factor.n(), factor.original_n() + 1, "SDDM augments by one");
+    assert_eq!(factor.n(), n as usize);
 
-    let rhs = vec![0.0; factor.original_n() + 1]; // == factor.n(): the aux slot
-    let mut work = vec![0.0; factor.n()];
+    let rhs = vec![0.0; factor.n() + 1];
+    let mut work = vec![0.0; factor.n() + 1];
     let err = factor
         .solve_into(&rhs, &mut work)
         .expect_err("rhs longer than original dimension must fail");
@@ -180,55 +181,26 @@ fn every_solve_entry_point_reports_a_short_work_buffer() {
     }
 }
 
-// A grounded block's anchored solve *is* the SDDM solution, so solve_in_place and
-// solve_into must agree.
+/// Each block has one gauge, so the in-place solve is the canonical one, grounded or not.
 #[rstest]
 #[case::approximate(Backend::Approximate)]
 #[case::exact(Backend::default())]
-fn grounded_raw_solve_matches_recovered_solve(#[case] backend: Backend) {
-    let row_ptrs = [0u32, 2, 4];
-    let columns = [0u32, 1, 0, 1];
-    let values = [2.0, -1.0, -1.0, 2.0];
-    let factor = Builder::<f64>::new(Config {
-        backend,
-        ..Config::default()
-    })
-    .build(CsrRef::new(&row_ptrs, &columns, &values, 2).expect("valid CSR"))
-    .expect("factorization should succeed");
-
-    let n = factor.n();
-    assert_eq!(n, 3, "strictly dominant input must gain a ground vertex");
-
-    let rhs = [1.0, -2.0];
-    let mut recovered = vec![0.0; n];
-    factor
-        .solve_into(&rhs, &mut recovered)
-        .expect("solve_into should succeed");
-
-    let mut raw = vec![0.0; n];
-    raw[..rhs.len()].copy_from_slice(&rhs);
-    factor
-        .solve_in_place(&mut raw)
-        .expect("solve_in_place should succeed");
-
-    assert_eq!(raw[..2], recovered[..2]);
-    assert_eq!(raw[n - 1], 0.0, "ground must be pinned");
-}
-
-// A floating block has no ground vertex to absorb the null-space component, so
-// `solve_in_place` pins one variable and differs from `solve_into` by that
-// constant. The grounded case above catches neither.
-#[rstest]
-#[case::approximate(Backend::Approximate)]
-#[case::exact(Backend::default())]
-fn floating_raw_solve_differs_from_recovered_by_one_constant(#[case] backend: Backend) {
-    let grid = grid_laplacian(5, 5);
-    let csr = grid.as_csr().expect("valid CSR");
-    let n = grid.n as usize;
-    let mut rhs: Vec<f64> = (0..n).map(|i| i as f64 - 12.0).collect();
-    let sum: f64 = rhs.iter().sum();
-    rhs[0] -= sum;
-
+fn solve_in_place_matches_solve_into(
+    #[case] backend: Backend,
+    #[values(true, false)] grounded: bool,
+) {
+    let (row_ptrs, columns, values) = if grounded {
+        (
+            vec![0u32, 2, 4],
+            vec![0u32, 1, 0, 1],
+            vec![2.0, -1.0, -1.0, 2.0],
+        )
+    } else {
+        let grid = grid_laplacian(5, 5);
+        (grid.row_ptrs, grid.col_indices, grid.values)
+    };
+    let n = row_ptrs.len() - 1;
+    let csr = CsrRef::new(&row_ptrs, &columns, &values, n as u32).expect("valid CSR");
     let factor = Builder::<f64>::new(Config {
         seed: 7,
         backend,
@@ -236,35 +208,16 @@ fn floating_raw_solve_differs_from_recovered_by_one_constant(#[case] backend: Ba
     })
     .build(csr)
     .expect("factorization should succeed");
-    assert_eq!(factor.n(), n, "pure Laplacian must not be augmented");
+    assert_eq!(factor.n(), n, "ground slots stay internal");
 
-    let mut raw = rhs.clone();
+    let rhs: Vec<f64> = (0..n).map(|i| i as f64 - 1.5).collect();
+    let mut in_place = rhs.clone();
     factor
-        .solve_in_place(&mut raw)
+        .solve_in_place(&mut in_place)
         .expect("solve_in_place should succeed");
-    let mut recovered = vec![0.0; factor.n()];
-    factor.solve_into(&rhs, &mut recovered).expect("solve_into");
-
-    // Both backends pin the block's last variable, so this index is not
-    // backend-dependent the way the pinned *value* once was.
-    assert_eq!(raw[n - 1], 0.0, "the block's last variable is pinned");
-
-    // Same factor, so this is exact up to rounding.
-    let shift = raw[0] - recovered[0];
-    for (index, (&value, &canonical)) in raw.iter().zip(recovered.iter()).enumerate() {
-        assert!(
-            (value - canonical - shift).abs() < 1e-9,
-            "raw must differ from recovered by one constant; index {index} differs by {}",
-            value - canonical
-        );
-    }
-    assert!(shift.abs() > 1e-9, "the constant must be non-zero");
-
-    let mean = recovered.iter().sum::<f64>() / n as f64;
-    assert!(
-        mean.abs() < 1e-9,
-        "recovered solve must be the zero-mean representative"
-    );
+    let mut into = vec![0.0; n];
+    factor.solve_into(&rhs, &mut into).expect("solve_into");
+    assert_eq!(in_place, into);
 }
 
 /// Scaling a Laplacian by `t` scales its solution by `1/t`, so a factor that drops

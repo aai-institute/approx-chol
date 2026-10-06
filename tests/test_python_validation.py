@@ -113,13 +113,11 @@ def test_solve_and_solve_into_raise_value_error_for_shape_and_overlap():
 
 
 def test_solve_rejects_augmented_length_rhs():
-    # _base_csr is SDDM (positive row sums), so it augments: original_n=2, n=3.
-    # A RHS of length original_n + 1 (the augmented dimension) must be rejected,
-    # not silently accepted with its trailing aux entry discarded.
+    # SDDM input gains an internal ground slot, which a RHS must not reach.
     row_ptrs, col_indices, values = _base_csr()
     factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
     original_n = factor.shape[0]
-    assert factor.n == original_n + 1, "SDDM should augment by one vertex"
+    assert factor.n == original_n, "the ground slot stays internal"
 
     rhs_aug_len = np.zeros(original_n + 1, dtype=np.float64)
     with pytest.raises(ValueError, match="rhs length"):

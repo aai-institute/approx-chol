@@ -1,5 +1,5 @@
 {
-  "format_version": 1094909955,
+  "format_version": 1094909957,
   "permutation": {
     "forward": [
       0,
@@ -10,9 +10,7 @@
   },
   "blocks": [
     {
-      "dim": 2,
-      "anchor": "Floating",
-      "cholesky": {
+      "Floating": {
         "Exact": {
           "values": [
             1.0
@@ -21,9 +19,7 @@
       }
     },
     {
-      "dim": 2,
-      "anchor": "Floating",
-      "cholesky": {
+      "Floating": {
         "Exact": {
           "values": [
             1.0

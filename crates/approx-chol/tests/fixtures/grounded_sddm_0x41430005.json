@@ -1,11 +1,9 @@
 {
-  "format_version": 1094909956,
+  "format_version": 1094909957,
   "permutation": null,
   "blocks": [
     {
-      "dim": 5,
-      "anchor": "Ground",
-      "cholesky": {
+      "Grounded": {
         "Exact": {
           "values": [
             1.4142135623730951,

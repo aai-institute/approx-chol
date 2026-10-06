@@ -7,8 +7,6 @@ mod star;
 pub use clique_tree::CliqueTreeSampler;
 
 #[cfg(any(feature = "serde", test))]
-use super::block::BlockDim;
-#[cfg(any(feature = "serde", test))]
 use super::FactorError;
 use clique_tree::{sample_column, ColumnShares, SampledColumn};
 use ordering::{DegreeDeltas, DynamicOrdering};
@@ -49,7 +47,7 @@ pub(crate) fn eliminate<T: Real, C: EdgeCount>(
         deltas.flush(&mut ordering);
     }
 
-    // One step short of `n`: the queue still holds the uneliminated vertex the anchor pins.
+    // One step short of `n`: the queue still holds the uneliminated vertex `substitute` zeroes.
     seq.finish(
         ordering
             .next_vertex()
@@ -254,7 +252,7 @@ impl<T: serde::Serialize> serde::Serialize for PairedNeighbors<'_, T> {
 // Read-only accessors (no internal trait bounds).
 impl<T> EliminationSequence<T> {
     #[inline(always)]
-    fn n_steps(&self) -> usize {
+    pub(super) fn n_steps(&self) -> usize {
         self.steps.len()
     }
 
@@ -282,18 +280,13 @@ impl<T> EliminationSequence<T> {
         }
     }
 
-    #[cfg(any(feature = "serde", test))]
-    pub(super) fn pinned_dim(&self) -> BlockDim {
-        BlockDim::pinning(self.n_steps())
-    }
-
     /// Ranges need no check: they are rebuilt from the nested wire form, never read from it.
     #[cfg(any(feature = "serde", test))]
     pub(super) fn validate_values(&self) -> Result<(), FactorError>
     where
         T: num_traits::Float,
     {
-        let n = self.pinned_dim().total();
+        let n = self.n_steps() + 1;
         // `substitute` writes this entry unchecked.
         if (self.uneliminated as usize) >= n {
             return Err(FactorError::UneliminatedVertexInvalid {

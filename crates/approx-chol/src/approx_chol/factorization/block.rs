@@ -1,117 +1,107 @@
-use super::anchor::Anchor;
 use super::cholesky::Cholesky;
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;
-use crate::types::Real;
-use core::num::NonZeroUsize;
+use crate::types::{count_as_scalar, Real};
 
 #[cfg(test)]
 mod tests;
 
-/// A block's dimension in both forms consumers ask for, so none spells the pinned variable's offset.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(transparent))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct BlockDim(NonZeroUsize);
-
-impl BlockDim {
-    /// `None` for a block of no variables, whose derived dimensions would underflow.
-    pub(crate) fn of(total: usize) -> Option<Self> {
-        NonZeroUsize::new(total).map(Self)
-    }
-
-    #[cfg(any(feature = "serde", test))]
-    pub(crate) fn pinning(solved: usize) -> Self {
-        Self(NonZeroUsize::MIN.saturating_add(solved))
-    }
-
-    pub(crate) fn total(self) -> usize {
-        self.0.get()
-    }
-
-    /// Variables the block solves for — all but the pinned last one.
-    pub(crate) fn solved(self) -> usize {
-        self.0.get() - 1
-    }
-}
-
+/// One component; its cholesky leaves one slot free and the variant is how that is fixed.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
     feature = "serde",
-    serde(
-        bound(
-            serialize = "T: serde::Serialize",
-            deserialize = "T: serde::de::DeserializeOwned + num_traits::Float"
-        ),
-        try_from = "BlockData<T>"
-    )
+    serde(bound(
+        serialize = "T: serde::Serialize",
+        deserialize = "T: serde::de::DeserializeOwned + num_traits::Float"
+    ))
 )]
 #[derive(Clone, Debug)]
-pub(crate) struct Block<T> {
-    dim: BlockDim,
-    anchor: Anchor,
-    cholesky: Cholesky<T>,
+pub(crate) enum Block<T> {
+    /// `L_C + diag(surplus_C)`, factored as `L_C` plus a ground in the last slot.
+    Grounded(Cholesky<T>),
+    /// `L_C`, whose solution is the zero-mean one.
+    Floating(Cholesky<T>),
 }
 
 impl<T> Block<T> {
-    pub(super) fn dim(&self) -> BlockDim {
-        self.dim
-    }
-
-    pub(super) fn is_ground(&self) -> bool {
-        self.anchor == Anchor::Ground
-    }
-}
-
-impl<T: num_traits::Float> Block<T> {
-    pub(crate) fn new(dim: BlockDim, anchor: Anchor, cholesky: Cholesky<T>) -> Self {
-        // A builder can get the dims wrong as a payload can, and every consumer trusts them.
-        #[cfg(any(feature = "serde", test))]
-        debug_assert_eq!(cholesky.validate_for_dim(dim), Ok(()));
-        Self {
-            dim,
-            anchor,
-            cholesky,
+    fn cholesky(&self) -> &Cholesky<T> {
+        match self {
+            Self::Grounded(cholesky) | Self::Floating(cholesky) => cholesky,
         }
     }
+
+    pub(super) fn eliminated(&self) -> usize {
+        self.cholesky().eliminated()
+    }
+
+    /// Input vertices, which is every slot but a ground.
+    pub(super) fn vertices(&self) -> usize {
+        match self {
+            Self::Grounded(cholesky) => cholesky.eliminated(),
+            Self::Floating(cholesky) => cholesky.eliminated() + 1,
+        }
+    }
+
+    pub(super) fn slots(&self) -> usize {
+        self.cholesky().eliminated() + 1
+    }
 }
 
-/// A block as a payload carries it, `dim` unchecked, in [`Block`]'s positional field order.
 #[cfg(any(feature = "serde", test))]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
-#[cfg_attr(
-    feature = "serde",
-    serde(bound(deserialize = "T: serde::de::DeserializeOwned + num_traits::Float"))
-)]
-struct BlockData<T> {
-    dim: BlockDim,
-    anchor: Anchor,
-    cholesky: Cholesky<T>,
-}
-
-/// Pinning the dim to its payload lets every consumer sum block dims without its own check.
-#[cfg(any(feature = "serde", test))]
-impl<T: num_traits::Float> TryFrom<BlockData<T>> for Block<T> {
-    type Error = FactorError;
-
-    fn try_from(data: BlockData<T>) -> Result<Self, Self::Error> {
-        data.cholesky.validate_for_dim(data.dim)?;
-        Ok(Self::new(data.dim, data.anchor, data.cholesky))
+impl<T: num_traits::Float> Block<T> {
+    pub(super) fn validate(&self) -> Result<(), FactorError> {
+        self.cholesky().validate()
     }
 }
 
 impl<T: Real> Block<T> {
-    fn solve(&self, values: &mut [T], canonical: bool) {
-        self.anchor.prepare(values);
-        self.cholesky.apply(values);
-        self.anchor.recover(values, canonical);
+    /// `slots` holds the right-hand side, then the solution; a ground's input entry is unread.
+    pub(super) fn solve(&self, slots: &mut [T]) {
+        let len = count_as_scalar::<T, _>(slots.len());
+        match self {
+            Self::Grounded(cholesky) => {
+                // The exact embedding of `M x = b` as `L_aug [x; 0] = [b; -sum b]`.
+                if let Some((ground, rest)) = slots.split_last_mut() {
+                    *ground = -compensated_sum(rest);
+                }
+                cholesky.apply(slots);
+                // Whichever slot the factor left free, the ground is what reads zero.
+                shift_by_last(slots);
+            }
+            Self::Floating(cholesky) => {
+                // Nothing absorbs the null space, so project it out; an inconsistent rhs gets least squares.
+                shift(slots, compensated_sum(slots) / len);
+                cholesky.apply(slots);
+                // Offset to the last slot first, so a plain fold has no large offset to lose terms against.
+                shift_by_last(slots);
+                let sum = slots.iter().fold(T::zero(), |sum, &value| sum + value);
+                shift(slots, sum / len);
+            }
+        }
     }
+}
 
-    pub(super) fn solve_anchored(&self, values: &mut [T]) {
-        self.solve(values, false);
+fn shift<T: Real>(values: &mut [T], by: T) {
+    for value in values.iter_mut() {
+        *value = *value - by;
     }
+}
 
-    pub(super) fn solve_canonical(&self, values: &mut [T]) {
-        self.solve(values, true);
+fn shift_by_last<T: Real>(values: &mut [T]) {
+    if let Some(&last) = values.last() {
+        shift(values, last);
     }
+}
+
+/// A plain fold drops the small terms of a large block; branchless TwoSum is cheaper than Neumaier.
+fn compensated_sum<T: Real>(values: &[T]) -> T {
+    let mut sum = T::zero();
+    let mut compensation = T::zero();
+    for &value in values {
+        let next = sum + value;
+        let back = next - sum;
+        compensation = compensation + ((sum - (next - back)) + (value - back));
+        sum = next;
+    }
+    sum + compensation
 }

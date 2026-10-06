@@ -1,10 +1,13 @@
 #[path = "common/grid.rs"]
 mod grid;
+#[path = "common/grounded.rs"]
+mod grounded;
 #[path = "common/laplacian_prop.rs"]
 mod laplacian_prop;
 
 use approx_chol::low_level::Builder;
 use approx_chol::{Config, CsrRef, Error, Factor};
+use grounded::is_grounded;
 use laplacian_prop::widen;
 use num_traits::PrimInt;
 
@@ -211,7 +214,7 @@ where
 }
 
 /// The routing, not the solution: an ill-conditioned pair's solve carries too much
-/// round-off to pin, while `n() > original_n()` says which branch was taken. The floor
+/// round-off to pin, while `is_grounded` says which branch was taken. The floor
 /// here is `epsilon * scale * (degree + 1)` = `2.2e-16 * 2e-6 * 2` = `8.9e-22`.
 #[test]
 fn surplus_is_judged_against_summation_error_alone() {
@@ -232,11 +235,11 @@ fn surplus_is_judged_against_summation_error_alone() {
         let (rp, ci, vals) = surplus_pair(1e-6, surplus);
         let factor = build(Config::default(), &rp, &ci, &vals).expect(label);
         assert_eq!(
-            factor.n() > factor.original_n(),
+            is_grounded(&factor),
             grounded,
-            "{label}: surplus {surplus:e} routed to n={} original_n={}",
+            "{label}: surplus {surplus:e} routed to n={} n_steps={}",
             factor.n(),
-            factor.original_n()
+            factor.n_steps()
         );
         if grounded {
             let solution = factor.solve(&[1.0, 1.0]).expect("solve");
@@ -264,7 +267,7 @@ fn f32_surplus_is_judged_against_summation_error_alone() {
             .build(csr)
             .expect(label);
         assert_eq!(
-            factor.n() > factor.original_n(),
+            is_grounded(&factor),
             grounded,
             "{label}: surplus {surplus:e}"
         );
@@ -284,9 +287,8 @@ fn tolerated_mirror_difference_is_not_one_row_s_surplus() {
     ];
     for (label, vals) in cases {
         let factor = build(Config::default(), &[0, 2, 4], &[0, 1, 0, 1], &vals).expect(label);
-        assert_eq!(
-            factor.n(),
-            factor.original_n(),
+        assert!(
+            !is_grounded(&factor),
             "{label}: every stored row sums to zero, so neither may be grounded"
         );
     }
@@ -310,9 +312,8 @@ fn coalescing_additions_are_inside_the_error_allowance() {
         rp.push(ci.len() as u32);
     }
     let factor = build(Config::default(), &rp, &ci, &vals).expect("coalesced duplicates");
-    assert_eq!(
-        factor.n(),
-        factor.original_n(),
+    assert!(
+        !is_grounded(&factor),
         "duplicates coalescing to a balanced Laplacian must not be grounded"
     );
 }

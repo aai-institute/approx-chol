@@ -76,9 +76,9 @@ class Factor:
 
     @property
     def n(self) -> int:
-        """Internal factor dimension (may include Gremban augmentation vertex).
+        """Matrix dimension; a Gremban ground vertex stays internal.
 
-        Use this to size work buffers for :meth:`solve_into`.
+        Use this to size output buffers for :meth:`solve_into`.
         """
         ...
 
