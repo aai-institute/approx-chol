@@ -1,20 +1,25 @@
 use super::canonical::Canonical;
+use super::index;
 use super::sets::DisjointSets;
 use crate::graph::BlockLayout;
 use crate::types::{count_as_scalar, Real};
 use crate::{CsrError, Error};
+use num_traits::PrimInt;
 
 /// A merge-join only because [`Canonical`] guarantees each entry is claimed once.
-struct Mirrors<'a, T> {
-    row_ptrs: &'a [u32],
-    col_indices: &'a [u32],
+struct Mirrors<'a, T, I> {
+    row_ptrs: &'a [I],
+    col_indices: &'a [I],
     values: &'a [T],
     cursors: Vec<u32>,
 }
 
-impl<'a, T: Real> Mirrors<'a, T> {
-    fn new(row_ptrs: &'a [u32], col_indices: &'a [u32], values: &'a [T]) -> Self {
-        let cursors = row_ptrs[..row_ptrs.len() - 1].to_vec();
+impl<'a, T: Real, I: PrimInt> Mirrors<'a, T, I> {
+    fn new(row_ptrs: &'a [I], col_indices: &'a [I], values: &'a [T]) -> Self {
+        let cursors = row_ptrs[..row_ptrs.len() - 1]
+            .iter()
+            .map(|&ptr| index(ptr) as u32)
+            .collect();
         Self {
             row_ptrs,
             col_indices,
@@ -25,11 +30,11 @@ impl<'a, T: Real> Mirrors<'a, T> {
 
     /// Stored zeros count as absent.
     fn claim(&mut self, row: usize, col: usize) -> Result<T, Error> {
-        let row_end = self.row_ptrs[row + 1];
+        let row_end = index(self.row_ptrs[row + 1]) as u32;
         let mut cursor = self.cursors[row];
         let mut found = T::zero();
         while cursor < row_end {
-            let at = self.col_indices[cursor as usize] as usize;
+            let at = index(self.col_indices[cursor as usize]);
             if at > col {
                 break;
             }
@@ -85,7 +90,9 @@ pub(super) enum Grounding<T> {
 }
 
 /// Reads every stored entry once, so [`Canonical::of`] leaves finiteness here; routing waits on it.
-pub(super) fn validate<T: Real>(canonical: &Canonical<'_, T>) -> Result<Ingested<T>, Error> {
+pub(super) fn validate<T: Real, I: PrimInt>(
+    canonical: &Canonical<'_, T, I>,
+) -> Result<Ingested<T>, Error> {
     let (row_ptrs, col_indices, values) = canonical.arrays();
     let n = row_ptrs.len() - 1;
     let mut mirrors = Mirrors::new(row_ptrs, col_indices, values);
@@ -96,14 +103,14 @@ pub(super) fn validate<T: Real>(canonical: &Canonical<'_, T>) -> Result<Ingested
     let mut row_sums = vec![T::zero(); n];
 
     for row in 0..n {
-        let row_end = row_ptrs[row + 1];
+        let row_end = index(row_ptrs[row + 1]) as u32;
         // Claimed like any mirror: claiming diagonals up front would skip those below.
         diagonal[row] = mirrors.claim(row, row)?;
         let mut cursor = mirrors.cursors[row];
         let mut root = sets.find(row as u32);
 
         while cursor < row_end {
-            let col = col_indices[cursor as usize] as usize;
+            let col = index(col_indices[cursor as usize]);
             let upper = values[cursor as usize];
             if !upper.is_finite() {
                 return Err(Error::NonFiniteValue {

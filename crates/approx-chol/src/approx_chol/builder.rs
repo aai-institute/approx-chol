@@ -37,25 +37,24 @@ where
         let csr = catch_unwind(AssertUnwindSafe(|| sddm.try_into()))
             .map_err(|_| Error::InvalidCsr(CsrError::InputConversionPanicked))?;
         let csr = csr.map_err(Into::into)?;
-        let narrowed = csr.narrow_indices()?;
-        self.build_validated(narrowed.with_values(csr.values()))
+        self.build_validated(csr)
     }
 
     /// Multiplicity fixes layout and split together, so each arm is one algorithm end to end.
-    fn build_validated(&self, sddm: CsrRef<'_, T, u32>) -> Result<Factor<T>, Error> {
+    fn build_validated<I: PrimInt>(&self, sddm: CsrRef<'_, T, I>) -> Result<Factor<T>, Error> {
         let original_n = sddm.n();
         let ingestion = Ingestion::of(sddm)?;
         match self.config.split_factor() {
-            None => self.factor_blocks::<Single>(ingestion, ()),
-            Some(k) => self.factor_blocks::<Multi>(ingestion, k),
+            None => self.factor_blocks::<Single, _>(ingestion, ()),
+            Some(k) => self.factor_blocks::<Multi, _>(ingestion, k),
         }
         // The only scope holding both the caller's dimension and the finished factor.
         .inspect(|factor| debug_assert_eq!(factor.original_n(), original_n))
     }
 
-    fn factor_blocks<C: EdgeCount>(
+    fn factor_blocks<C: EdgeCount, I: PrimInt>(
         &self,
-        mut ingestion: Ingestion<'_, T>,
+        mut ingestion: Ingestion<'_, T, I>,
         split: C::Split,
     ) -> Result<Factor<T>, Error> {
         if ingestion.n() == 0 {
@@ -107,9 +106,9 @@ impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
     }
 
     /// Routes first, so a block the dense backend claims never builds an elimination graph.
-    fn factor(
+    fn factor<I: PrimInt>(
         &mut self,
-        ingestion: &Ingestion<'_, T>,
+        ingestion: &Ingestion<'_, T, I>,
         block: &BlockVertices<'_>,
     ) -> Result<(Block<T>, Option<Fallback>), Error> {
         // Every block restarts, so one block's draws never shift because another went exact.

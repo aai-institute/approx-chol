@@ -31,24 +31,6 @@ pub struct CsrRef<'a, T = f64, I = u32> {
     n: u32,
 }
 
-/// `u32` index arrays that keep the source view's validation, so re-pairing skips the `nnz` re-walk.
-pub(crate) struct NarrowedCsr {
-    row_ptrs: Vec<u32>,
-    col_indices: Vec<u32>,
-    n: u32,
-}
-
-impl NarrowedCsr {
-    pub(crate) fn with_values<'a, T>(&'a self, values: &'a [T]) -> CsrRef<'a, T, u32> {
-        CsrRef {
-            row_ptrs: &self.row_ptrs,
-            col_indices: &self.col_indices,
-            values,
-            n: self.n,
-        }
-    }
-}
-
 impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
     /// The only constructor, so every `CsrRef` is valid; [`Error::InvalidCsr`] names a violation.
     pub fn new(
@@ -107,26 +89,24 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
         }
 
         // `None` means `I` cannot represent `n`, so every `I` value is below it.
-        if let Some(limit) = cast::<u32, I>(self.n) {
-            for (position, &col) in self.col_indices.iter().enumerate() {
-                if col >= limit {
-                    return Err(Error::InvalidCsr(CsrError::ColumnIndexOutOfBounds {
-                        position,
-                        col: as_usize(col, IndexKind::ColIndex, position)?,
-                        n,
-                    }));
-                }
+        let limit = cast::<u32, I>(self.n);
+        for (position, &col) in self.col_indices.iter().enumerate() {
+            // Downstream reads columns in place as `usize`, which a negative one is not.
+            if col < I::zero() {
+                return Err(Error::InvalidCsr(CsrError::IndexNotRepresentableAsUsize {
+                    kind: IndexKind::ColIndex,
+                    position,
+                }));
+            }
+            if limit.is_some_and(|limit| col >= limit) {
+                return Err(Error::InvalidCsr(CsrError::ColumnIndexOutOfBounds {
+                    position,
+                    col: as_usize(col, IndexKind::ColIndex, position)?,
+                    n,
+                }));
             }
         }
         Ok(())
-    }
-
-    pub(crate) fn narrow_indices(&self) -> Result<NarrowedCsr, Error> {
-        Ok(NarrowedCsr {
-            row_ptrs: cast_slice(self.row_ptrs, IndexKind::RowPtr)?,
-            col_indices: cast_slice(self.col_indices, IndexKind::ColIndex)?,
-            n: self.n,
-        })
     }
 
     /// Row pointer array (length `n + 1`).
@@ -154,30 +134,14 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
     }
 }
 
-impl<'a, T> CsrRef<'a, T, u32> {
-    /// Infallible: `u32` indices discharge the conversion [`validate`](Self::validate) checks.
-    pub(crate) fn rows(self) -> impl Iterator<Item = (&'a [u32], &'a [T])> {
-        (0..self.n as usize).map(move |i| {
-            let start = self.row_ptrs[i] as usize;
-            let end = self.row_ptrs[i + 1] as usize;
-            (&self.col_indices[start..end], &self.values[start..end])
-        })
-    }
-}
-
 impl<'a, T: Clone, I: PrimInt> CsrRef<'a, T, I> {
     /// Owned copy with `u32` indices; [`Error::InvalidCsr`] if an index does not fit.
     pub fn to_owned_u32(&self) -> Result<OwnedCsr<T, u32>, Error> {
-        let NarrowedCsr {
-            row_ptrs,
-            col_indices,
-            n,
-        } = self.narrow_indices()?;
         Ok(OwnedCsr {
-            row_ptrs,
-            col_indices,
+            row_ptrs: cast_slice(self.row_ptrs, IndexKind::RowPtr)?,
+            col_indices: cast_slice(self.col_indices, IndexKind::ColIndex)?,
             values: self.values.to_vec(),
-            n,
+            n: self.n,
         })
     }
 }

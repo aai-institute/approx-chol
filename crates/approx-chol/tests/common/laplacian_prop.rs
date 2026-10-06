@@ -7,6 +7,14 @@ use std::collections::VecDeque;
 
 pub type LaplacianCsr = (Vec<u32>, Vec<u32>, Vec<f64>, u32);
 
+/// The same indices in another integer type.
+pub fn widen<I: num_traits::PrimInt>(indices: &[u32]) -> Vec<I> {
+    indices
+        .iter()
+        .map(|&index| I::from(index).expect("fits"))
+        .collect()
+}
+
 pub fn build_laplacian_csr(n: usize, edge_weights: &[u8]) -> LaplacianCsr {
     let mut dense = vec![0.0_f64; n * n];
     let mut edge_pos = 0usize;

@@ -1,8 +1,12 @@
 #[path = "common/grid.rs"]
 mod grid;
+#[path = "common/laplacian_prop.rs"]
+mod laplacian_prop;
 
 use approx_chol::low_level::Builder;
 use approx_chol::{Config, CsrRef, Error, Factor};
+use laplacian_prop::widen;
+use num_traits::PrimInt;
 
 /// The error the shape must be rejected with.
 type Rejected<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64], Error);
@@ -424,7 +428,7 @@ fn unsorted_and_split_entries_match_the_canonical_form() {
 
 // Descending columns per row denote the same matrix but force the bucketed
 // ingestion path, so this pins the canonical fast path as bit-identical rather
-// than merely close.
+// than merely close. The u64 copy is rewritten in its own index type.
 #[test]
 fn canonical_and_reordered_ingestion_agree_bit_for_bit() {
     let grid = grid::grid_laplacian(6, 7);
@@ -439,17 +443,27 @@ fn canonical_and_reordered_ingestion_agree_bit_for_bit() {
     }
 
     let rhs: Vec<f64> = (0..n).map(|i| (i % 5) as f64 - 2.0).collect();
-    let solve = |csr| {
-        Builder::<f64>::new(Config::default())
-            .build(csr)
-            .expect("grid factor")
-            .solve(&rhs)
-            .expect("solve")
-    };
+    let canonical = solve_grid(grid.as_csr().expect("valid CSR"), &rhs);
 
     let reordered = CsrRef::new(&grid.row_ptrs, &reversed_columns, &reversed_values, grid.n)
         .expect("valid CSR");
-    assert_eq!(solve(grid.as_csr().expect("valid CSR")), solve(reordered));
+    assert_eq!(canonical, solve_grid(reordered, &rhs));
+
+    let (wide_row_ptrs, wide_columns) = (
+        widen::<u64>(&grid.row_ptrs),
+        widen::<u64>(&reversed_columns),
+    );
+    let wide =
+        CsrRef::new(&wide_row_ptrs, &wide_columns, &reversed_values, grid.n).expect("valid CSR");
+    assert_eq!(canonical, solve_grid(wide, &rhs));
+}
+
+fn solve_grid<I: PrimInt + 'static>(csr: CsrRef<'_, f64, I>, rhs: &[f64]) -> Vec<f64> {
+    Builder::<f64>::new(Config::default())
+        .build(csr)
+        .expect("grid factor")
+        .solve(rhs)
+        .expect("solve")
 }
 
 fn solve_path(rp: &[u32], ci: &[u32], vals: &[f64]) -> Vec<f64> {
