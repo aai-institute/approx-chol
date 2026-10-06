@@ -60,6 +60,11 @@ impl<'a, T: Real, I: PrimInt> Mirrors<'a, T, I> {
     }
 }
 
+/// An admission threshold, measured to keep uniformly scaled solves at unit-scale quality (#163).
+fn floor<T: Real>() -> T {
+    T::min_positive_value() / T::epsilon()
+}
+
 fn approximately_equal<T: Real>(left: T, right: T) -> bool {
     if left == right {
         return true;
@@ -129,6 +134,9 @@ pub(super) fn validate<T: Real, I: PrimInt>(
             if upper > T::zero() {
                 return Err(Error::PositiveOffDiagonal { edge: (row, col) });
             }
+            if -upper < floor() {
+                return Err(Error::MagnitudeTooSmall { entry: (row, col) });
+            }
             // Each row sums its own value; charging `upper` to both grounds `col` on mirror noise.
             row_sums[row] = row_sums[row] + upper;
             row_sums[col] = row_sums[col] + lower;
@@ -194,6 +202,10 @@ fn ground<T: Real>(
                 excess
             }
         };
+        // After the balance verdict, so a row that is not dominant at any scale says so.
+        if d > T::zero() && d < floor() {
+            return Err(Error::MagnitudeTooSmall { entry: (row, row) });
+        }
     }
 
     let m = diagonal.len();

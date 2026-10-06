@@ -420,7 +420,11 @@ impl<T: num_traits::Float> SequenceBuilder<T> {
             ),
             None => T::one(),
         };
-        // A small pivot inverts fine; `one` would drop the block's scale outright.
+        // Admitted input reaches this only past ~2^1074 range in one star (#168); `one` drops the scale.
+        debug_assert!(
+            (T::one() / pivot).is_finite(),
+            "pivot has no finite inverse"
+        );
         let inverse = match T::one() / pivot {
             inverse if inverse.is_finite() => inverse,
             _ => T::one(),

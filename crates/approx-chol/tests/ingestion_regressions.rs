@@ -28,7 +28,8 @@ fn build(config: Config, rp: &[u32], ci: &[u32], vals: &[f64]) -> Result<Factor<
 #[test]
 fn out_of_class_input_is_rejected_at_its_reported_position() {
     let max = f64::MAX;
-    let cases: [Rejected<'_>; 10] = [
+    let tiny = 1e-310;
+    let cases: [Rejected<'_>; 12] = [
         // Used to fall through both the diagonal and the `val < 0` edge branch,
         // silently factorizing diag(5, 4) — a confidently wrong factor.
         (
@@ -106,6 +107,21 @@ fn out_of_class_input_is_rejected_at_its_reported_position() {
             &[0, 0],
             &[max, max],
             Error::NonFiniteRow { row: 0 },
+        ),
+        // Normal diagonals; the edge's pivot alone would have no finite inverse (#163).
+        (
+            "subnormal edge",
+            &[0, 2, 4],
+            &[0, 1, 0, 1],
+            &[1.0, -tiny, -tiny, 1.0],
+            Error::MagnitudeTooSmall { entry: (0, 1) },
+        ),
+        (
+            "subnormal diagonal",
+            &[0, 1],
+            &[0],
+            &[tiny],
+            Error::MagnitudeTooSmall { entry: (0, 0) },
         ),
     ];
 
