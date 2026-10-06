@@ -1,7 +1,7 @@
 #[path = "common/laplacian_prop.rs"]
 mod laplacian_prop;
 
-use approx_chol::{CsrError, CsrRef, Error};
+use approx_chol::{CsrError, CsrRef, Error, IndexKind};
 use laplacian_prop::laplacian_csr_strategy;
 use proptest::prelude::*;
 
@@ -95,6 +95,24 @@ proptest! {
                 position: 0,
                 col: n as usize,
                 n: n as usize,
+            })
+        );
+    }
+
+    #[test]
+    fn reports_negative_column(
+        (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
+    ) {
+        let signed = |indices: &[u32]| -> Vec<i64> { indices.iter().map(|&i| i64::from(i)).collect() };
+        let (row_ptrs, mut col_indices) = (signed(&row_ptrs), signed(&col_indices));
+        let position = col_indices.len() - 1;
+        col_indices[position] = -1;
+        let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect_err("must fail");
+        prop_assert_eq!(
+            err,
+            Error::InvalidCsr(CsrError::IndexNotRepresentableAsUsize {
+                kind: IndexKind::ColIndex,
+                position,
             })
         );
     }

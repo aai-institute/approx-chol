@@ -107,15 +107,21 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
         }
 
         // `None` means `I` cannot represent `n`, so every `I` value is below it.
-        if let Some(limit) = cast::<u32, I>(self.n) {
-            for (position, &col) in self.col_indices.iter().enumerate() {
-                if col >= limit {
-                    return Err(Error::InvalidCsr(CsrError::ColumnIndexOutOfBounds {
-                        position,
-                        col: as_usize(col, IndexKind::ColIndex, position)?,
-                        n,
-                    }));
-                }
+        let limit = cast::<u32, I>(self.n);
+        for (position, &col) in self.col_indices.iter().enumerate() {
+            // Downstream reads columns in place as `usize`, which a negative one is not.
+            if col < I::zero() {
+                return Err(Error::InvalidCsr(CsrError::IndexNotRepresentableAsUsize {
+                    kind: IndexKind::ColIndex,
+                    position,
+                }));
+            }
+            if limit.is_some_and(|limit| col >= limit) {
+                return Err(Error::InvalidCsr(CsrError::ColumnIndexOutOfBounds {
+                    position,
+                    col: as_usize(col, IndexKind::ColIndex, position)?,
+                    n,
+                }));
             }
         }
         Ok(())
