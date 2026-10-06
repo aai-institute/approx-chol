@@ -206,6 +206,29 @@ impl fmt::Display for UnusablePivot {
 
 impl std::error::Error for UnusablePivot {}
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Why an [`ExactBelow`](crate::Backend::ExactBelow) block was factored approximately.
+pub enum Fallback {
+    /// Dense elimination reached a pivot it could not use.
+    InvalidPivot(UnusablePivot),
+    /// The dense copy would not fit; never fatal under any [`ExactFailure`](crate::ExactFailure).
+    WillNotFit {
+        /// Variables the block solves for, so the copy is `dim * dim` scalars.
+        dim: usize,
+    },
+}
+
+impl fmt::Display for Fallback {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidPivot(pivot) => write!(f, "{pivot}"),
+            Self::WillNotFit { dim } => write!(f, "{dim} variables do not fit in memory"),
+        }
+    }
+}
+
 /// Why an exact dense Cholesky pivot was unusable.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]

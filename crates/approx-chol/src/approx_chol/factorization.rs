@@ -16,7 +16,7 @@ pub(crate) use block::Block;
 pub(crate) use cholesky::Cholesky;
 #[cfg(feature = "serde")]
 pub use factor::FACTOR_FORMAT_VERSION;
-pub use factor::{Factor, Fallback, SolveError};
+pub use factor::{Factor, SolveError};
 pub(crate) use permutation::Permutation;
 
 /// Raised at the serde boundary, before a corrupted persisted factor can reach the solve.

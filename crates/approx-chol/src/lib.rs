@@ -57,10 +57,11 @@ pub mod low_level;
 
 #[cfg(feature = "serde")]
 pub use approx_chol::FACTOR_FORMAT_VERSION;
-pub use approx_chol::{Backend, Config, ExactFailure, Factor, Fallback, SolveError};
+pub use approx_chol::{Backend, Config, ExactFailure, Factor, SolveError};
 pub use csr::CsrRef;
 pub use error::{
-    CsrError, DenseFailure, GroundedError, IndexKind, LaplacianError, NotSddm, UnusablePivot,
+    CsrError, DenseFailure, Fallback, GroundedError, IndexKind, LaplacianError, NotSddm,
+    UnusablePivot,
 };
 pub use sddm::{Grounded, Laplacian, Sddm};
 

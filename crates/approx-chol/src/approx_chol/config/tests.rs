@@ -1,5 +1,5 @@
 use super::*;
-use crate::approx_chol::factorization::Fallback;
+use crate::Fallback;
 use crate::{DenseFailure, UnusablePivot};
 
 /// A block that will not fit falls back whatever the policy says.

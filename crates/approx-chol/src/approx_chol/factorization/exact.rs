@@ -1,9 +1,8 @@
-use super::factor::Fallback;
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;
 use crate::graph::Component;
 use crate::types::Real;
-use crate::{DenseFailure, UnusablePivot};
+use crate::{DenseFailure, Fallback, UnusablePivot};
 
 /// Pivots are named in input numbering, so a failure needs no translation downstream.
 pub(crate) fn factor<T: Real>(
