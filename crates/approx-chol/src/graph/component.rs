@@ -9,7 +9,7 @@ use crate::sddm::{Laplacian, Sddm};
 use crate::types::Real;
 use sets::DisjointSets;
 
-/// `None` when connected. Its order becomes the factor's permutation.
+/// `None` when connected. Its order becomes the factor's permutation; surplus never joins components.
 pub(crate) fn components<T: Real>(sddm: &Sddm<T>) -> Option<BlockLayout> {
     let laplacian = sddm.laplacian();
     let mut sets = DisjointSets::new(laplacian.n());
@@ -21,17 +21,6 @@ pub(crate) fn components<T: Real>(sddm: &Sddm<T>) -> Option<BlockLayout> {
         let mut root = sets.find(row as u32);
         for &col in neighbors {
             root = sets.union_resolved(root, col);
-        }
-    }
-    if let Sddm::Grounded(grounded) = sddm {
-        // One ground shared by every grounded row, so their components are one.
-        let surplus = grounded.surplus();
-        let mut rows = (0..laplacian.n() as u32).filter(|&row| surplus[row as usize] > T::zero());
-        if let Some(first) = rows.next() {
-            let mut root = sets.find(first);
-            for row in rows {
-                root = sets.union_resolved(root, row);
-            }
         }
     }
     sets.layout()

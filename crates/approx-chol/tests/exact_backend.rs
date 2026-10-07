@@ -207,6 +207,50 @@ fn a_reported_pivot_is_translated_out_of_block_local_numbering() {
     );
 }
 
+/// `P A Pᵀ`: vertex `v` is renamed `to[v]`.
+fn renamed(lap: &GridLaplacian, to: &[u32]) -> GridLaplacian {
+    let n = lap.n as usize;
+    let mut rows: Vec<Vec<(u32, f64)>> = vec![Vec::new(); n];
+    for row in 0..n {
+        for k in lap.row_ptrs[row] as usize..lap.row_ptrs[row + 1] as usize {
+            rows[to[row] as usize].push((to[lap.col_indices[k] as usize], lap.values[k]));
+        }
+    }
+    let mut renamed = GridLaplacian {
+        row_ptrs: vec![0],
+        col_indices: Vec::new(),
+        values: Vec::new(),
+        n: lap.n,
+    };
+    for mut row in rows {
+        row.sort_by_key(|&(col, _)| col);
+        for (col, value) in row {
+            renamed.col_indices.push(col);
+            renamed.values.push(value);
+        }
+        renamed.row_ptrs.push(renamed.col_indices.len() as u32);
+    }
+    renamed
+}
+
+#[test]
+fn a_reported_pivot_names_the_input_vertex_when_components_interleave() {
+    let lap = side_by_side(&grid_laplacian(3, 3), &cancelling_path());
+    // The path's vertices 9, 10, 11 land on 1, 5, 9, so neither block is contiguous.
+    let to = [0, 2, 3, 4, 6, 7, 8, 10, 11, 1, 5, 9];
+    let interleaved = renamed(&lap, &to);
+    let factor = factorize_with(interleaved.as_csr().expect("valid CSR"), Config::default())
+        .expect("factorization");
+
+    assert_eq!(
+        factor.fallbacks(),
+        [Fallback::InvalidPivot(UnusablePivot {
+            vertex: 5,
+            failure: DenseFailure::NonPositivePivot,
+        })]
+    );
+}
+
 #[test]
 fn a_failed_pivot_can_be_asked_to_fail_the_factorization() {
     let lap = cancelling_path();

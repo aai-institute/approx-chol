@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - An exact block's diagonal is the weighted degree plus the surplus that clears summation noise. ([#145])
+- Each grounded component is factored on its own ground, not one ground shared by all. ([#138])
 
 ### Fixed
 
@@ -227,6 +228,7 @@ for graph Laplacians in Rust with Python bindings.
 [#118]: https://github.com/aai-institute/approx-chol/issues/118
 [#131]: https://github.com/aai-institute/approx-chol/pull/131
 [#135]: https://github.com/aai-institute/approx-chol/issues/135
+[#138]: https://github.com/aai-institute/approx-chol/issues/138
 [#140]: https://github.com/aai-institute/approx-chol/issues/140
 [#145]: https://github.com/aai-institute/approx-chol/issues/145
 [#146]: https://github.com/aai-institute/approx-chol/issues/146

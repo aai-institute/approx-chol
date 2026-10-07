@@ -10,29 +10,19 @@ fn blocks_of(row_ptrs: &[u32], col_indices: &[u32], values: &[f64]) -> Option<Ve
     components(&sddm).map(|layout| layout.blocks().map(<[u32]>::to_vec).collect::<Vec<_>>())
 }
 
-/// Disjoint off-diagonal graphs: read from the CSR alone, connectivity splits them.
-#[test]
-fn components_sharing_a_ground_are_one_block() {
-    let blocks = blocks_of(
-        &[0, 2, 4, 6, 8],
-        &[0, 1, 0, 1, 2, 3, 2, 3],
-        &[5.0, -1.0, -1.0, 4.0, 5.0, -1.0, -1.0, 4.0],
-    );
-    assert!(
-        blocks.is_none(),
-        "a shared ground joins every grounded component, got {blocks:?}"
-    );
-}
+/// Three pairs on interleaved vertices: grounded at one vertex, floating, grounded at both.
+const ROW_PTRS: [u32; 7] = [0, 2, 4, 6, 8, 10, 12];
+const COL_INDICES: [u32; 12] = [0, 3, 1, 4, 2, 5, 0, 3, 1, 4, 2, 5];
+const VALUES: [f64; 12] = [
+    2.0, -1.0, 1.0, -1.0, 2.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 2.0,
+];
 
-/// No surplus grounds them, so a layout that merged unconditionally fails here.
 #[test]
-fn components_with_no_surplus_stay_separate() {
-    let blocks = blocks_of(
-        &[0, 2, 4, 6, 8],
-        &[0, 1, 0, 1, 2, 3, 2, 3],
-        &[1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0],
+fn surplus_never_joins_components() {
+    assert_eq!(
+        blocks_of(&ROW_PTRS, &COL_INDICES, &VALUES),
+        Some(vec![vec![0, 3], vec![1, 4], vec![2, 5]])
     );
-    assert_eq!(blocks, Some(vec![vec![0, 1], vec![2, 3]]));
 }
 
 /// An isolated vertex is its own block, which makes ordering "by lowest member" observable.
@@ -46,30 +36,29 @@ fn blocks_are_ordered_by_their_lowest_vertex() {
     assert_eq!(blocks, Some(vec![vec![0, 3], vec![1], vec![2]]));
 }
 
-/// The layout precedes any graph, so this pins that a block's graph has the vertices it promised.
+/// Each grounded component gets its own ground slot, joined to its own surplus vertices only.
 #[test]
-fn only_a_grounded_component_appends_a_ground_slot() {
-    let row_ptrs = [0u32, 2, 4, 6, 8];
-    let col_indices = [0u32, 1, 0, 1, 2, 3, 2, 3];
-    let values = [5.0, -1.0, -1.0, 4.0, 1.0, -1.0, -1.0, 1.0];
-    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4).expect("valid CSR");
+fn each_grounded_component_appends_its_own_ground_slot() {
+    let csr = CsrRef::new(&ROW_PTRS, &COL_INDICES, &VALUES, 6).expect("valid CSR");
     let sddm = Sddm::try_from(csr).expect("valid SDDM");
-
-    let layout = components(&sddm).expect("two blocks");
-    let blocks: Vec<Vec<u32>> = layout.blocks().map(<[u32]>::to_vec).collect();
-    assert_eq!(blocks, vec![vec![0, 1], vec![2, 3]]);
+    let layout = components(&sddm).expect("three blocks");
 
     let mut local_of = vec![0u32; sddm.n()];
-    let built: Vec<(usize, usize, bool)> = blocks
-        .iter()
+    let built: Vec<(bool, usize, Vec<usize>)> = layout
+        .blocks()
         .map(|vertices| {
             let component = Component::new(&sddm, BlockVertices::part(vertices, &mut local_of));
-            (
-                component.graph::<Single>().n(),
-                component.eliminated(),
-                component.is_grounded(),
-            )
+            let graph = component.graph::<Single>();
+            let degrees = (0..graph.n()).map(|v| graph.degree(v)).collect();
+            (component.is_grounded(), component.eliminated(), degrees)
         })
         .collect();
-    assert_eq!(built, vec![(3, 2, true), (2, 1, false)]);
+    assert_eq!(
+        built,
+        vec![
+            (true, 2, vec![2, 1, 1]),
+            (false, 1, vec![1, 1]),
+            (true, 2, vec![2, 2, 2]),
+        ]
+    );
 }
