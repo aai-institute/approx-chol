@@ -18,8 +18,8 @@ impl<'a, T: Real, I: PrimInt> TryFrom<CsrRef<'a, T, I>> for Sddm<T> {
 
     fn try_from(csr: CsrRef<'a, T, I>) -> Result<Self, Error> {
         let canonical = Canonical::of(csr)?;
-        let (laplacian, sums) = validate::edges(&canonical)?;
+        let (summed, sums) = validate::edges(&canonical)?;
         let surplus = sums.surplus(canonical.terms())?;
-        Sddm::with_surplus(laplacian, surplus)
+        Sddm::with_surplus(summed, surplus)
     }
 }

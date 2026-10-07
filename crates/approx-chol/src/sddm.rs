@@ -1,37 +1,15 @@
 mod csr;
+mod laplacian;
+
+pub(crate) use laplacian::Laplacian;
+use laplacian::Summed;
 
 use crate::types::Real;
 use crate::{CsrError, Error};
 
-/// The ground's diagonal; one definition, so the check and ingestion sum it identically.
-fn total<T: Real>(surplus: &[T]) -> T {
-    surplus.iter().fold(T::zero(), |sum, &s| sum + s)
-}
-
-/// One definition, so the check and ingestion sum each weighted degree identically.
-#[inline]
-fn add_edge<T: Real>(degrees: &mut [T], row: usize, col: usize, weight: T) {
-    degrees[row] = degrees[row] + weight;
-    degrees[col] = degrees[col] + weight;
-}
-
-/// `L(G)` stored as `G`'s strict upper adjacency with positive weights; the diagonal is implied.
-pub(crate) struct Laplacian<T> {
-    row_ptrs: Vec<u32>,
-    neighbors: Vec<u32>,
-    weights: Vec<T>,
-}
-
-impl<T> Laplacian<T> {
-    pub(crate) fn n(&self) -> usize {
-        self.row_ptrs.len() - 1
-    }
-
-    #[inline]
-    pub(crate) fn row(&self, i: usize) -> (&[u32], &[T]) {
-        let (from, to) = (self.row_ptrs[i] as usize, self.row_ptrs[i + 1] as usize);
-        (&self.neighbors[from..to], &self.weights[from..to])
-    }
+/// An admission threshold, measured to keep uniformly scaled solves at unit-scale quality (#163).
+fn floor<T: Real>() -> T {
+    T::min_positive_value() / T::epsilon()
 }
 
 /// A symmetric diagonally dominant matrix with non-positive off-diagonals: Laplacian plus surplus.
@@ -55,28 +33,37 @@ impl<T> Sddm<T> {
 }
 
 impl<T: Real> Sddm<T> {
-    /// Grounded exactly where some surplus is positive; an all-zero surplus stays a bare Laplacian.
-    fn with_surplus(laplacian: Laplacian<T>, surplus: Vec<T>) -> Result<Self, Error> {
+    /// Owns every sum check, whoever stored the rows; an all-zero surplus stays a bare Laplacian.
+    fn with_surplus(summed: Summed<T>, surplus: Vec<T>) -> Result<Self, Error> {
+        // A ground edge's weight, so it clears the floor every stored entry clears.
+        if let Some(row) = surplus.iter().position(|&s| s > T::zero() && s < floor()) {
+            return Err(Error::MagnitudeTooSmall { entry: (row, row) });
+        }
         // The ground's degree, which the approximate arm sums when it eliminates the ground.
-        let ground = total(&surplus);
+        let ground = surplus.iter().fold(T::zero(), |sum, &s| sum + s);
         if !ground.is_finite() {
             return Err(Error::SurplusOverflow);
         }
-        // Every surplus is zero or positive, so a positive total means some vertex is grounded.
-        if ground == T::zero() {
-            return Ok(Self::Laplacian(laplacian));
+        if let Some(row) = summed.first_non_finite_diagonal(&surplus) {
+            return Err(Error::NonFiniteRow { row });
         }
-        if laplacian.n() >= u32::MAX as usize {
+        let laplacian = summed.into_laplacian();
+        if ground != T::zero() && laplacian.n() >= u32::MAX as usize {
             return Err(Error::InvalidCsr(
                 CsrError::MatrixDimensionExceedsIndexType {
                     n: laplacian.n().saturating_add(1),
                 },
             ));
         }
-        Ok(Self::Grounded(Grounded { laplacian, surplus }))
+        // Every surplus is zero or positive, so a positive total means some vertex is grounded.
+        Ok(if ground == T::zero() {
+            Self::Laplacian(laplacian)
+        } else {
+            Self::Grounded(Grounded { laplacian, surplus })
+        })
     }
 
-    /// Summed in the checks' order, so every entry is finite; `visit` spares a caller its own edge pass.
+    /// Summed in [`Summed`]'s order, so every entry is the checked one; `visit` spares a caller its own edge pass.
     pub(crate) fn diagonal(&self, mut visit: impl FnMut(usize, u32)) -> Vec<T> {
         let laplacian = self.laplacian();
         let n = laplacian.n();
@@ -86,7 +73,8 @@ impl<T: Real> Sddm<T> {
         for row in 0..n {
             let (neighbors, weights) = laplacian.row(row);
             for (&col, &weight) in neighbors.iter().zip(weights) {
-                add_edge(&mut diagonal, row, col as usize, weight);
+                diagonal[row] = diagonal[row] + weight;
+                diagonal[col as usize] = diagonal[col as usize] + weight;
                 visit(row, col);
             }
         }
@@ -94,7 +82,7 @@ impl<T: Real> Sddm<T> {
             for (d, &s) in diagonal.iter_mut().zip(&grounded.surplus) {
                 *d = *d + s;
             }
-            diagonal.push(total(&grounded.surplus));
+            diagonal.push(grounded.surplus.iter().fold(T::zero(), |sum, &s| sum + s));
         }
         diagonal
     }
