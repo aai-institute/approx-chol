@@ -13,22 +13,24 @@ fn floor<T: Real>() -> T {
 }
 
 /// A symmetric diagonally dominant matrix with non-positive off-diagonals: Laplacian plus surplus.
-pub(crate) enum Sddm<T> {
-    Laplacian(Laplacian<T>),
-    /// Grounded wherever surplus is positive; a component without any still floats.
-    Grounded(Grounded<T>),
+pub(crate) struct Sddm<T> {
+    laplacian: Laplacian<T>,
+    /// Positive somewhere, or `None`; a component without any still floats.
+    surplus: Option<Vec<T>>,
 }
 
 impl<T> Sddm<T> {
     pub(crate) fn n(&self) -> usize {
-        self.laplacian().n()
+        self.laplacian.n()
     }
 
     pub(crate) fn laplacian(&self) -> &Laplacian<T> {
-        match self {
-            Self::Laplacian(laplacian) => laplacian,
-            Self::Grounded(grounded) => &grounded.laplacian,
-        }
+        &self.laplacian
+    }
+
+    /// Diagonal excess over edge weights, only what survives the summation-noise floor.
+    pub(crate) fn surplus(&self) -> Option<&[T]> {
+        self.surplus.as_deref()
     }
 }
 
@@ -50,7 +52,10 @@ impl<T: Real> Sddm<T> {
         let laplacian = summed.into_laplacian();
         // Every surplus is zero or positive, so a positive total means some vertex is grounded.
         if ground == T::zero() {
-            return Ok(Self::Laplacian(laplacian));
+            return Ok(Self {
+                laplacian,
+                surplus: None,
+            });
         }
         // A grounded component's ground slot is named by a `u32` after its vertices.
         let n = laplacian.n() + 1;
@@ -59,7 +64,10 @@ impl<T: Real> Sddm<T> {
                 CsrError::MatrixDimensionExceedsIndexType { n },
             ));
         }
-        Ok(Self::Grounded(Grounded { laplacian, surplus }))
+        Ok(Self {
+            laplacian,
+            surplus: Some(surplus),
+        })
     }
 
     /// Each row's upper entries, then its surplus; a diagonal arrives as summands, in [`Summed`]'s order.
@@ -69,9 +77,8 @@ impl<T: Real> Sddm<T> {
         rows: impl Iterator<Item = usize> + Clone,
         mut entry: impl FnMut(usize, usize, T),
     ) {
-        let laplacian = self.laplacian();
         for row in rows.clone() {
-            let (neighbors, weights) = laplacian.row(row);
+            let (neighbors, weights) = self.laplacian.row(row);
             for (&col, &weight) in neighbors.iter().zip(weights) {
                 let col = col as usize;
                 entry(row, col, -weight);
@@ -79,22 +86,10 @@ impl<T: Real> Sddm<T> {
                 entry(col, col, weight);
             }
         }
-        if let Self::Grounded(grounded) = self {
+        if let Some(surplus) = &self.surplus {
             for row in rows {
-                entry(row, row, grounded.surplus[row]);
+                entry(row, row, surplus[row]);
             }
         }
-    }
-}
-
-pub(crate) struct Grounded<T> {
-    laplacian: Laplacian<T>,
-    surplus: Vec<T>,
-}
-
-impl<T> Grounded<T> {
-    /// Diagonal excess over edge weights, only what survives the summation-noise floor.
-    pub(crate) fn surplus(&self) -> &[T] {
-        &self.surplus
     }
 }

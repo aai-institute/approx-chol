@@ -23,9 +23,8 @@ pub(crate) fn components<T: Real>(sddm: &Sddm<T>) -> Option<BlockLayout> {
             root = sets.union_resolved(root, col);
         }
     }
-    if let Sddm::Grounded(grounded) = sddm {
+    if let Some(surplus) = sddm.surplus() {
         // One ground shared by every grounded row, so their components are one.
-        let surplus = grounded.surplus();
         let mut rows = (0..laplacian.n() as u32).filter(|&row| surplus[row as usize] > T::zero());
         if let Some(first) = rows.next() {
             let mut root = sets.find(first);
@@ -47,19 +46,12 @@ pub(crate) struct Component<'a, T> {
 
 impl<'a, T: Real> Component<'a, T> {
     pub(crate) fn new(sddm: &'a Sddm<T>, vertices: BlockVertices<'a>) -> Self {
-        let surplus = match sddm {
-            Sddm::Laplacian(_) => None,
-            Sddm::Grounded(grounded) => {
-                let surplus = grounded.surplus();
-                let holds_surplus = match &vertices {
-                    BlockVertices::Whole(_) => true,
-                    BlockVertices::Part { vertices, .. } => vertices
-                        .iter()
-                        .any(|&vertex| surplus[vertex as usize] > T::zero()),
-                };
-                holds_surplus.then_some(surplus)
-            }
-        };
+        let surplus = sddm.surplus().filter(|surplus| match &vertices {
+            BlockVertices::Whole(_) => true,
+            BlockVertices::Part { vertices, .. } => vertices
+                .iter()
+                .any(|&vertex| surplus[vertex as usize] > T::zero()),
+        });
         Self {
             sddm,
             vertices,
