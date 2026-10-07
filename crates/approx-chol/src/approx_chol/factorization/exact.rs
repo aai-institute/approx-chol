@@ -1,6 +1,6 @@
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;
-use crate::graph::{BlockVertices, Ingestion};
+use crate::graph::Component;
 use crate::types::Real;
 use crate::{DenseFailure, Fallback, UnusablePivot};
 
@@ -12,10 +12,10 @@ pub(crate) enum NotFactorable {
 }
 
 impl NotFactorable {
-    pub(crate) fn at(self, block: &BlockVertices<'_>) -> Fallback {
+    pub(crate) fn at<T: Real>(self, component: &Component<'_, T>) -> Fallback {
         match self {
             Self::InvalidPivot { pivot, failure } => Fallback::InvalidPivot(UnusablePivot {
-                vertex: block.global(pivot),
+                vertex: component.global(pivot),
                 failure,
             }),
             Self::WillNotFit { dim } => Fallback::WillNotFit { dim },
@@ -24,11 +24,9 @@ impl NotFactorable {
 }
 
 pub(crate) fn factor<T: Real>(
-    ingestion: &Ingestion<T>,
-    block: &BlockVertices<'_>,
-    eliminated: usize,
+    component: &Component<'_, T>,
 ) -> Result<LowerTriangular<T>, NotFactorable> {
-    assemble(ingestion, block, eliminated)?.factor_in_place()
+    assemble(component)?.factor_in_place()
 }
 
 const fn row_start(row: usize) -> usize {
@@ -46,26 +44,13 @@ const fn packed_len(m: usize) -> Option<usize> {
     }
 }
 
-/// Read from the ingested arrays: a block that reaches here never needs an elimination graph.
-fn assemble<T: Real>(
-    ingestion: &Ingestion<T>,
-    block: &BlockVertices<'_>,
-    m: usize,
-) -> Result<LowerTriangular<T>, NotFactorable> {
-    let mut matrix = LowerTriangular::zeros(m)?;
-    for row in 0..m {
-        matrix.row_mut(row)[row] = ingestion.block_diagonal(block, row);
-    }
-    // Scattered from the upper triangle, the authoritative mirror, still reading each row once.
-    for row in 0..m {
-        ingestion.upper_row(block, row, |col, value| {
-            // Past the triangle is the pinned last vertex, which the dense factor does not carry.
-            if col < m {
-                let slot = &mut matrix.row_mut(col)[row];
-                *slot = *slot + value;
-            }
-        });
-    }
+/// Read from the input: a block that reaches here never needs an elimination graph.
+fn assemble<T: Real>(component: &Component<'_, T>) -> Result<LowerTriangular<T>, NotFactorable> {
+    let mut matrix = LowerTriangular::zeros(component.eliminated())?;
+    component.entries(|row, col, value| {
+        let slot = &mut matrix.row_mut(col)[row];
+        *slot = *slot + value;
+    });
     Ok(matrix)
 }
 
@@ -196,6 +181,9 @@ impl<T: num_traits::Float> LowerTriangular<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::BlockVertices;
+    use crate::sddm::Sddm;
+    use crate::CsrRef;
 
     #[test]
     fn a_pivot_is_named_in_the_input_numbering() {
@@ -210,10 +198,14 @@ mod tests {
             })
         };
         // Wide enough for the highest global vertex the component names.
+        let row_ptrs = [0u32; 32];
+        let csr = CsrRef::new(&row_ptrs, &[], &[], 31).expect("valid CSR");
+        let sddm = Sddm::<f64>::try_from(csr).expect("a Laplacian");
         let mut local_of = vec![0u32; 31];
-        let component = BlockVertices::part(&[0, 15, 30], &mut local_of);
+        let component = Component::new(&sddm, BlockVertices::part(&[0, 15, 30], &mut local_of));
         assert_eq!(pivot.at(&component), named(30));
-        assert_eq!(pivot.at(&BlockVertices::whole(9)), named(2));
+        let whole = Component::new(&sddm, BlockVertices::whole(31));
+        assert_eq!(pivot.at(&whole), named(2));
         assert_eq!(
             NotFactorable::WillNotFit { dim: 9 }.at(&component),
             Fallback::WillNotFit { dim: 9 }

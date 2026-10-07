@@ -48,43 +48,42 @@ impl<T: Real> Sddm<T> {
             return Err(Error::NonFiniteRow { row });
         }
         let laplacian = summed.into_laplacian();
-        if ground != T::zero() && laplacian.n() >= u32::MAX as usize {
+        // Every surplus is zero or positive, so a positive total means some vertex is grounded.
+        if ground == T::zero() {
+            return Ok(Self::Laplacian(laplacian));
+        }
+        // A grounded component's ground slot is named by a `u32` after its vertices.
+        let n = laplacian.n() + 1;
+        if u32::try_from(n).is_err() {
             return Err(Error::InvalidCsr(
-                CsrError::MatrixDimensionExceedsIndexType {
-                    n: laplacian.n().saturating_add(1),
-                },
+                CsrError::MatrixDimensionExceedsIndexType { n },
             ));
         }
-        // Every surplus is zero or positive, so a positive total means some vertex is grounded.
-        Ok(if ground == T::zero() {
-            Self::Laplacian(laplacian)
-        } else {
-            Self::Grounded(Grounded { laplacian, surplus })
-        })
+        Ok(Self::Grounded(Grounded { laplacian, surplus }))
     }
 
-    /// Summed in [`Summed`]'s order, so every entry is the checked one; `visit` spares a caller its own edge pass.
-    pub(crate) fn diagonal(&self, mut visit: impl FnMut(usize, u32)) -> Vec<T> {
+    /// Each row's upper entries, then its surplus; a diagonal arrives as summands, in [`Summed`]'s order.
+    #[inline]
+    pub(crate) fn entries(
+        &self,
+        rows: impl Iterator<Item = usize> + Clone,
+        mut entry: impl FnMut(usize, usize, T),
+    ) {
         let laplacian = self.laplacian();
-        let n = laplacian.n();
-        // Room for the ground's diagonal.
-        let mut diagonal = Vec::with_capacity(n + 1);
-        diagonal.resize(n, T::zero());
-        for row in 0..n {
+        for row in rows.clone() {
             let (neighbors, weights) = laplacian.row(row);
             for (&col, &weight) in neighbors.iter().zip(weights) {
-                diagonal[row] = diagonal[row] + weight;
-                diagonal[col as usize] = diagonal[col as usize] + weight;
-                visit(row, col);
+                let col = col as usize;
+                entry(row, col, -weight);
+                entry(row, row, weight);
+                entry(col, col, weight);
             }
         }
         if let Self::Grounded(grounded) = self {
-            for (d, &s) in diagonal.iter_mut().zip(&grounded.surplus) {
-                *d = *d + s;
+            for row in rows {
+                entry(row, row, grounded.surplus[row]);
             }
-            diagonal.push(grounded.surplus.iter().fold(T::zero(), |sum, &s| sum + s));
         }
-        diagonal
     }
 }
 

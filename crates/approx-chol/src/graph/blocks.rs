@@ -64,29 +64,11 @@ impl<'v> BlockVertices<'v> {
         }
     }
 
-    #[inline]
-    pub(super) fn local(&self, global: usize) -> usize {
-        match self {
-            Self::Whole(_) => global,
-            Self::Part { local_of, .. } => local_of[global] as usize,
-        }
-    }
-
     /// Names the block by what it holds rather than by how many blocks precede it.
     pub(crate) fn first(&self) -> u64 {
         match self {
             Self::Whole(_) => 0,
             Self::Part { vertices, .. } => u64::from(vertices[0]),
-        }
-    }
-
-    /// Blocks list their vertices ascending, so the highest-numbered one is last.
-    pub(super) fn last(&self) -> u32 {
-        match self {
-            Self::Whole(n) => (n - 1) as u32,
-            Self::Part { vertices, .. } => {
-                *vertices.last().expect("a block has at least one vertex")
-            }
         }
     }
 }

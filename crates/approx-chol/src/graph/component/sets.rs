@@ -7,21 +7,11 @@ pub(super) struct DisjointSets {
 }
 
 impl DisjointSets {
-    /// Room for the ground vertex, so [`push`](Self::push) reallocates nothing.
     pub(super) fn new(n: usize) -> Self {
-        let mut parent = Vec::with_capacity(n + 1);
-        parent.extend(0..n as u32);
-        let mut size = Vec::with_capacity(n + 1);
-        size.resize(n, 1);
-        Self { parent, size }
-    }
-
-    /// Appends a vertex the CSR does not carry, and names it.
-    pub(super) fn push(&mut self) -> u32 {
-        let vertex = self.parent.len() as u32;
-        self.parent.push(vertex);
-        self.size.push(1);
-        vertex
+        Self {
+            parent: (0..n as u32).collect(),
+            size: vec![1; n],
+        }
     }
 
     pub(super) fn find(&mut self, mut vertex: u32) -> u32 {
@@ -60,7 +50,7 @@ impl DisjointSets {
             return None;
         }
 
-        // Ascending, so blocks order by lowest member and the ground vertex lands last.
+        // Ascending, so blocks order by lowest member.
         let mut block_of = vec![u32::MAX; total];
         let mut ends: Vec<u32> = Vec::new();
         for vertex in 0..total {

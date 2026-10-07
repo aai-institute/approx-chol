@@ -1,6 +1,6 @@
 use super::config::{Backend, Config, Route};
 use super::factorization::{approximate, exact, Block, Cholesky, Permutation};
-use crate::graph::{BlockVertices, EdgeCount, Ingestion, Multi, Single};
+use crate::graph::{components, BlockVertices, Component, EdgeCount, Multi, Single};
 use crate::sampling::CdfSampler;
 use crate::sddm::Sddm;
 use crate::types::Real;
@@ -42,31 +42,28 @@ where
     }
 
     /// Multiplicity fixes layout and split together, so each arm is one algorithm end to end.
-    fn build_validated<I: PrimInt>(&self, sddm: CsrRef<'_, T, I>) -> Result<Factor<T>, Error> {
-        let sddm = Sddm::try_from(sddm)?;
-        let n = sddm.n();
-        let ingestion = Ingestion::of(sddm);
+    fn build_validated<I: PrimInt>(&self, csr: CsrRef<'_, T, I>) -> Result<Factor<T>, Error> {
+        let sddm = Sddm::try_from(csr)?;
         match self.config.split_factor() {
-            None => self.factor_blocks::<Single>(ingestion, n, ()),
-            Some(k) => self.factor_blocks::<Multi>(ingestion, n, k),
+            None => self.factor_blocks::<Single>(&sddm, ()),
+            Some(k) => self.factor_blocks::<Multi>(&sddm, k),
         }
         // The only scope holding both the caller's dimension and the finished factor.
-        .inspect(|factor| debug_assert_eq!(factor.n(), n))
+        .inspect(|factor| debug_assert_eq!(factor.n(), sddm.n()))
     }
 
     fn factor_blocks<C: EdgeCount>(
         &self,
-        mut ingestion: Ingestion<T>,
-        n: usize,
+        sddm: &Sddm<T>,
         split: C::Split,
     ) -> Result<Factor<T>, Error> {
-        if ingestion.n() == 0 {
+        if sddm.n() == 0 {
             return Ok(Factor::empty());
         }
         let mut factorizer = BlockFactorizer::<T, C>::new(self.config, split);
-        let Some(layout) = ingestion.take_layout() else {
-            let whole = BlockVertices::whole(ingestion.n());
-            let (block, fallback) = factorizer.factor(&ingestion, &whole)?;
+        let Some(layout) = components(sddm) else {
+            let whole = Component::new(sddm, BlockVertices::whole(sddm.n()));
+            let (block, fallback) = factorizer.factor(&whole)?;
             return Ok(Factor::from_blocks(
                 None,
                 vec![block],
@@ -77,18 +74,15 @@ where
         let mut blocks = Vec::with_capacity(layout.block_count());
         let mut fallbacks = Vec::new();
         // Scratch reused across blocks; each view refills the entries it names.
-        let mut local_of = vec![0u32; ingestion.n()];
+        let mut local_of = vec![0u32; sddm.n()];
         for vertices in layout.blocks() {
-            let view = BlockVertices::part(vertices, &mut local_of);
-            let (block, fallback) = factorizer.factor(&ingestion, &view)?;
+            let component = Component::new(sddm, BlockVertices::part(vertices, &mut local_of));
+            let (block, fallback) = factorizer.factor(&component)?;
             blocks.push(block);
             fallbacks.extend(fallback);
         }
-        // The ground is not an input vertex; its block keeps it as a slot of its own.
-        let mut order = layout.into_order();
-        order.retain(|&vertex| (vertex as usize) < n);
         Ok(Factor::from_blocks(
-            Permutation::from_order(order),
+            Permutation::from_order(layout.into_order()),
             blocks,
             fallbacks,
         ))
@@ -113,11 +107,10 @@ impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
 
     fn factor(
         &mut self,
-        ingestion: &Ingestion<T>,
-        block: &BlockVertices<'_>,
+        component: &Component<'_, T>,
     ) -> Result<(Block<T>, Option<Fallback>), Error> {
-        let (cholesky, fallback) = self.cholesky(ingestion, block)?;
-        let gauged = if ingestion.carries_ground(block) {
+        let (cholesky, fallback) = self.cholesky(component)?;
+        let gauged = if component.is_grounded() {
             Block::Grounded(cholesky)
         } else {
             Block::Floating(cholesky)
@@ -125,30 +118,25 @@ impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
         Ok((gauged, fallback))
     }
 
-    /// Routes first, so a block the dense backend claims never builds an elimination graph.
+    /// Routes first, so a component the dense backend claims never builds an elimination graph.
     fn cholesky(
         &mut self,
-        ingestion: &Ingestion<T>,
-        block: &BlockVertices<'_>,
+        component: &Component<'_, T>,
     ) -> Result<(Cholesky<T>, Option<Fallback>), Error> {
         // Every block restarts, so one block's draws never shift because another went exact.
-        self.sampler.restart(block.first());
+        self.sampler.restart(component.first());
 
-        let eliminated = block
-            .len()
-            .checked_sub(1)
-            .expect("a block has at least one vertex");
         let mut fallback = None;
-        if let Route::Exact { on_failure } = self.backend.route(eliminated) {
-            match exact::factor(ingestion, block, eliminated) {
+        if let Route::Exact { on_failure } = self.backend.route(component.eliminated()) {
+            match exact::factor(component) {
                 Ok(lower) => return Ok((Cholesky::Exact(lower), None)),
                 Err(reason) => {
-                    fallback = Some(on_failure.accept(reason.at(block))?);
+                    fallback = Some(on_failure.accept(reason.at(component))?);
                 }
             }
         }
-        let graph = ingestion.block_graph::<C>(block);
-        let sequence = approximate::eliminate::<T, C>(graph, &mut self.sampler, self.split);
+        let adjacency = component.graph::<C>();
+        let sequence = approximate::eliminate::<T, C>(adjacency, &mut self.sampler, self.split);
         Ok((Cholesky::Approximate(sequence), fallback))
     }
 }
