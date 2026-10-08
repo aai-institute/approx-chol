@@ -1,6 +1,6 @@
 #[cfg(any(feature = "serde", test))]
 use super::FactorError;
-use crate::graph::{BlockVertices, Ingestion};
+use crate::graph::{BlockVertices, CoreRows, Ingestion};
 use crate::types::Real;
 use crate::{DenseFailure, Fallback, UnusablePivot};
 use num_traits::PrimInt;
@@ -24,12 +24,37 @@ impl NotFactorable {
     }
 }
 
-pub(crate) fn factor<T: Real, I: PrimInt>(
-    ingestion: &Ingestion<'_, T, I>,
-    block: &BlockVertices<'_>,
+/// What the dense arm reads: the diagonal and the strict upper triangle, block-local.
+pub(crate) trait DenseRows<T> {
+    fn diagonal(&self, row: usize) -> T;
+    fn upper_row(&self, row: usize, entry: impl FnMut(usize, T));
+}
+
+impl<T: Real, I: PrimInt> DenseRows<T> for (&Ingestion<'_, T, I>, &BlockVertices<'_>) {
+    fn diagonal(&self, row: usize) -> T {
+        self.0.block_diagonal(self.1, row)
+    }
+
+    fn upper_row(&self, row: usize, entry: impl FnMut(usize, T)) {
+        self.0.upper_row(self.1, row, entry);
+    }
+}
+
+impl<T: Real> DenseRows<T> for CoreRows<T> {
+    fn diagonal(&self, row: usize) -> T {
+        CoreRows::diagonal(self, row)
+    }
+
+    fn upper_row(&self, row: usize, entry: impl FnMut(usize, T)) {
+        CoreRows::upper_row(self, row, entry);
+    }
+}
+
+pub(crate) fn factor<T: Real>(
+    rows: &impl DenseRows<T>,
     eliminated: usize,
 ) -> Result<LowerTriangular<T>, NotFactorable> {
-    assemble(ingestion, block, eliminated)?.factor_in_place()
+    assemble(rows, eliminated)?.factor_in_place()
 }
 
 const fn row_start(row: usize) -> usize {
@@ -48,18 +73,17 @@ const fn packed_len(m: usize) -> Option<usize> {
 }
 
 /// Read from the ingested arrays: a block that reaches here never needs an elimination graph.
-fn assemble<T: Real, I: PrimInt>(
-    ingestion: &Ingestion<'_, T, I>,
-    block: &BlockVertices<'_>,
+fn assemble<T: Real>(
+    rows: &impl DenseRows<T>,
     m: usize,
 ) -> Result<LowerTriangular<T>, NotFactorable> {
     let mut matrix = LowerTriangular::zeros(m)?;
     for row in 0..m {
-        matrix.row_mut(row)[row] = ingestion.block_diagonal(block, row);
+        matrix.row_mut(row)[row] = rows.diagonal(row);
     }
     // Scattered from the upper triangle, the authoritative mirror, still reading each row once.
     for row in 0..m {
-        ingestion.upper_row(block, row, |col, value| {
+        rows.upper_row(row, |col, value| {
             // Past the triangle is the pinned last vertex, which the dense factor does not carry.
             if col < m {
                 let slot = &mut matrix.row_mut(col)[row];

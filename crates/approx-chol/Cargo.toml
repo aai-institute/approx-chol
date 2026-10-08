@@ -22,6 +22,7 @@ serde = { version = "1", features = ["derive"], optional = true }
 sprs = { version = "0.11", optional = true, default-features = false }
 faer = { version = "0.24", optional = true, default-features = false }
 num-traits = "0.2"
+rayon = "1"
 
 [features]
 default = []

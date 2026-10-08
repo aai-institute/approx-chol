@@ -47,6 +47,7 @@ mod csr;
 mod error;
 pub(crate) mod graph;
 pub(crate) mod sampling;
+mod sgdd;
 #[cfg(test)]
 pub(crate) mod test_utils;
 mod types;
@@ -58,6 +59,7 @@ pub use approx_chol::FACTOR_FORMAT_VERSION;
 pub use approx_chol::{Backend, Config, ExactFailure, Factor, SolveError};
 pub use csr::{CsrRef, OwnedCsr};
 pub use error::{CsrError, DenseFailure, Error, Fallback, IndexKind, UnusablePivot};
+pub use sgdd::{bipartite, ScalingPolicy, ScalingReport, SchurMode, Sgdd, SgddError, SgddFactor};
 
 /// Factorize an SDDM matrix with [`Config::default`].
 pub fn factorize<'a, T, I, M>(sddm: M) -> Result<Factor<T>, Error>
