@@ -1,4 +1,4 @@
-use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, FACTOR_FORMAT_VERSION};
+use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, Sddm, FACTOR_FORMAT_VERSION};
 use std::fs;
 use std::path::Path;
 
@@ -102,5 +102,6 @@ fn factor(csr: CsrRef<'_>, backend: Backend) -> Factor<f64> {
         backend,
         ..Config::default()
     };
-    factorize_with(csr, config).expect("factorization should succeed")
+    factorize_with(Sddm::try_from(csr).expect("an SDDM"), config)
+        .expect("factorization should succeed")
 }

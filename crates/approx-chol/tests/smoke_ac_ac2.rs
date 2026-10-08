@@ -2,8 +2,7 @@
 mod grid;
 use grid::grid_laplacian;
 
-use approx_chol::low_level::Builder;
-use approx_chol::Config;
+use approx_chol::{factorize_with, Config, Sddm};
 use rstest::rstest;
 
 /// The scale at which bucket layout and fill-in bookkeeping carry load the property
@@ -13,9 +12,12 @@ use rstest::rstest;
 #[case::ac2(Config { seed: 42, split_merge: Some(2), ..Config::default() })]
 fn smoke_medium_grid(#[case] config: Config) {
     let lap = grid_laplacian(100, 100);
-    let factor = Builder::new(config)
-        .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
-        .expect("factorization should succeed");
+    let factor = factorize_with(
+        Sddm::try_from(lap.as_csr().expect("grid_laplacian must build valid CSR"))
+            .expect("an SDDM"),
+        config,
+    )
+    .expect("factorization should succeed");
 
     let n = factor.n();
     assert_eq!(

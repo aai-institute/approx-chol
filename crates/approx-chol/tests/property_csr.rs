@@ -1,7 +1,7 @@
 #[path = "common/laplacian_prop.rs"]
 mod laplacian_prop;
 
-use approx_chol::{CsrError, CsrRef, Error, IndexKind};
+use approx_chol::{CsrError, CsrRef, IndexKind};
 use laplacian_prop::{laplacian_csr_strategy, widen};
 use proptest::prelude::*;
 
@@ -14,10 +14,10 @@ proptest! {
         let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect_err("must fail");
         prop_assert_eq!(
             err,
-            Error::InvalidCsr(CsrError::RowPtrsLenMismatch {
+            CsrError::RowPtrsLenMismatch {
                 expected: (n as usize) + 1,
                 got: row_ptrs.len(),
-            })
+            }
         );
     }
 
@@ -29,10 +29,10 @@ proptest! {
         let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect_err("must fail");
         prop_assert_eq!(
             err,
-            Error::InvalidCsr(CsrError::ColIndicesValuesLenMismatch {
+            CsrError::ColIndicesValuesLenMismatch {
                 col_indices_len: col_indices.len(),
                 values_len: values.len(),
-            })
+            }
         );
     }
 
@@ -46,7 +46,7 @@ proptest! {
         let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect_err("must fail");
         prop_assert_eq!(
             err,
-            Error::InvalidCsr(CsrError::RowPtrsMustStartAtZero { got: 1 })
+            CsrError::RowPtrsMustStartAtZero { got: 1 }
         );
     }
 
@@ -59,10 +59,10 @@ proptest! {
         let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect_err("must fail");
         prop_assert_eq!(
             err,
-            Error::InvalidCsr(CsrError::RowPtrsEndMismatchNnz {
+            CsrError::RowPtrsEndMismatchNnz {
                 row_ptr_end: row_ptrs[last] as usize,
                 nnz: col_indices.len(),
-            })
+            }
         );
     }
 
@@ -75,11 +75,11 @@ proptest! {
         let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect_err("must fail");
         prop_assert_eq!(
             err,
-            Error::InvalidCsr(CsrError::RowPtrsNotNonDecreasing {
+            CsrError::RowPtrsNotNonDecreasing {
                 row: 1,
                 prev: row_ptrs[1] as usize,
                 next: row_ptrs[2] as usize,
-            })
+            }
         );
     }
 
@@ -91,11 +91,11 @@ proptest! {
         let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect_err("must fail");
         prop_assert_eq!(
             err,
-            Error::InvalidCsr(CsrError::ColumnIndexOutOfBounds {
+            CsrError::ColumnIndexOutOfBounds {
                 position: 0,
                 col: n as usize,
                 n: n as usize,
-            })
+            }
         );
     }
 
@@ -109,10 +109,10 @@ proptest! {
         let err = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect_err("must fail");
         prop_assert_eq!(
             err,
-            Error::InvalidCsr(CsrError::IndexNotRepresentableAsUsize {
+            CsrError::IndexNotRepresentableAsUsize {
                 kind: IndexKind::ColIndex,
                 position,
-            })
+            }
         );
     }
 }

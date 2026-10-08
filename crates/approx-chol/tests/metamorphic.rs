@@ -17,7 +17,7 @@ mod laplacian_prop;
 #[path = "common/residual.rs"]
 mod residual;
 
-use approx_chol::{factorize, factorize_with, Config, CsrRef, Factor};
+use approx_chol::{factorize, factorize_with, Config, CsrRef, Factor, Sddm};
 use grid::grid_laplacian;
 use laplacian_prop::{
     interleaved_components_strategy, permutation_strategy, permute_csr, LaplacianCsr,
@@ -28,7 +28,9 @@ use residual::relative_residual_over;
 /// The exact arm, and a check that it really was exact: a block reaching an unusable pivot
 /// falls back to the sampler by default, which would quietly make this the approximate arm.
 fn solve_exactly(csr: CsrRef<'_>, rhs: &[f64]) -> Vec<f64> {
-    let factor: Factor<f64> = factorize_with(csr, Config::default()).expect("factorization");
+    let factor: Factor<f64> =
+        factorize_with(Sddm::try_from(csr).expect("an SDDM"), Config::default())
+            .expect("factorization");
     assert!(
         factor.fallbacks().is_empty(),
         "block fell back to the sampler: {:?}",
@@ -111,7 +113,8 @@ proptest! {
 #[test]
 fn a_constant_added_to_a_floating_rhs_leaves_the_solution() {
     let grid = grid_laplacian(100, 100);
-    let factor: Factor<f64> = factorize(grid.as_csr().expect("grid CSR")).expect("factorization");
+    let factor: Factor<f64> =
+        factorize(Sddm::try_from(grid.as_csr().expect("grid CSR")).expect("an SDDM"));
     // Dyadic, so `value + 2^30` is exact and only the solve's own sums can lose the constant.
     let rhs: Vec<f64> = (0..grid.n as usize)
         .map(|i| (i * 37 % 2001) as f64 / 1024.0 - 1.0)

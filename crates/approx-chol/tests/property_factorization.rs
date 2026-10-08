@@ -7,7 +7,7 @@ mod laplacian_prop;
 #[path = "common/residual.rs"]
 mod residual;
 
-use approx_chol::{factorize_with, Backend, Config, CsrRef};
+use approx_chol::{factorize_with, Backend, Config, CsrRef, Sddm};
 use backends::backends;
 use grounded::is_grounded;
 use laplacian_prop::{
@@ -41,7 +41,7 @@ proptest! {
             Config { backend, ..Config::default() },
             Config { seed: 7, split_merge: Some(2), backend },
         ] {
-            let x = factorize_with(view, config)
+            let x = factorize_with(Sddm::try_from(view).expect("an SDDM"), config)
                 .expect("factorization")
                 .solve(&rhs)
                 .expect("solve");
@@ -66,7 +66,7 @@ proptest! {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values_f32, n)
                 .expect("valid f32 CSR");
             let config = Config { backend, ..Config::default() };
-            let factor = factorize_with(csr, config).expect("f32 factorization");
+            let factor = factorize_with(Sddm::try_from(csr).expect("an SDDM"), config).expect("f32 factorization");
 
             let x = factor.solve(&rhs).expect("f32 solve");
             prop_assert!(
@@ -89,7 +89,7 @@ proptest! {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
                 .expect("generated CSR must be valid");
             let config = Config { backend, ..Config::default() };
-            let factor = factorize_with(csr, config).expect("factorization should succeed");
+            let factor = factorize_with(Sddm::try_from(csr).expect("an SDDM"), config).expect("factorization should succeed");
 
             prop_assert_eq!(factor.n(), n as usize);
             // A pure Laplacian has no surplus, so it is not augmented.
@@ -112,7 +112,7 @@ proptest! {
             let csr = CsrRef::new(&row_ptrs, &col_indices, &values, n)
                 .expect("valid SDDM CSR");
             let config = Config { backend, ..Config::default() };
-            let factor = factorize_with(csr, config).expect("factorization");
+            let factor = factorize_with(Sddm::try_from(csr).expect("an SDDM"), config).expect("factorization");
 
             prop_assert_eq!(factor.n(), n as usize, "n must match input dimension");
             // Every row carries surplus, so the ground joins all of them into one block.
@@ -141,12 +141,12 @@ proptest! {
 
             let csr1 = CsrRef::new(&row_ptrs, &col_indices, &values, n)
                 .expect("valid CSR");
-            let x1 = factorize_with(csr1, config).expect("factorize 1")
+            let x1 = factorize_with(Sddm::try_from(csr1).expect("an SDDM"), config).expect("factorize 1")
                 .solve(&rhs).expect("solve 1");
 
             let csr2 = CsrRef::new(&row_ptrs, &col_indices, &values, n)
                 .expect("valid CSR");
-            let x2 = factorize_with(csr2, config).expect("factorize 2")
+            let x2 = factorize_with(Sddm::try_from(csr2).expect("an SDDM"), config).expect("factorize 2")
                 .solve(&rhs).expect("solve 2");
 
             prop_assert_eq!(x1.len(), x2.len());
@@ -176,7 +176,7 @@ proptest! {
         let rhs = per_component_consistent_rhs(n as usize, parts);
         let view = CsrRef::new(&row_ptrs, &col_indices, &values, n).expect("valid CSR");
         let config = Config { seed: 11, backend: Backend::default(), ..Default::default() };
-        let x = factorize_with(view, config).expect("factorize").solve(&rhs).expect("solve");
+        let x = factorize_with(Sddm::try_from(view).expect("an SDDM"), config).expect("factorize").solve(&rhs).expect("solve");
 
         let residual = relative_residual_over(view, &x, &rhs, 0..rhs.len());
         prop_assert!(

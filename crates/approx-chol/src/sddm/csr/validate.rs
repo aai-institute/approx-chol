@@ -1,9 +1,11 @@
 use super::canonical::Canonical;
 use super::index;
-use crate::sddm::floor;
-use crate::sddm::laplacian::{Summed, UpperRows};
+use crate::sddm::{
+    check_weight, floor, grounding, GroundOverflow, Incidence, Laplacian, NotFinite, Sddm,
+};
 use crate::types::{count_as_scalar, Real};
 use crate::Error;
+use crate::WeightDefect;
 use num_traits::PrimInt;
 
 /// A merge-join only because [`Canonical`] guarantees each entry is claimed once.
@@ -59,38 +61,74 @@ impl<'a, T: Real, I: PrimInt> Mirrors<'a, T, I> {
         Ok(found)
     }
 
-    /// The row's diagonal; `entry` sees each nonzero above it as `(col, upper, lower)`, its mirror within tolerance.
+    /// The row's diagonal; `entry` sees each nonzero above it as `(col, weight, upper, lower)`, its mirror within tolerance.
     #[inline]
-    fn row(
-        &mut self,
-        row: usize,
-        mut entry: impl FnMut(usize, T, T) -> Result<(), Error>,
-    ) -> Result<T, Error> {
+    fn row(&mut self, row: usize, mut entry: impl FnMut(usize, T, T, T)) -> Result<T, Error> {
         // Claimed like any mirror: claiming diagonals up front would skip those below.
         let diagonal = self.claim(row, row)?;
         let row_end = index(self.row_ptrs[row + 1]) as u32;
         let mut cursor = self.cursors[row];
         while cursor < row_end {
-            let col = index(self.col_indices[cursor as usize]);
-            let upper = self.values[cursor as usize];
-            if !upper.is_finite() {
-                return Err(Error::NonFiniteValue {
-                    position: cursor as usize,
-                });
-            }
+            let position = cursor as usize;
+            let col = index(self.col_indices[position]);
+            let upper = self.values[position];
             cursor += 1;
             // Duplicates can coalesce to exactly zero, which contributes no edge.
             if upper == T::zero() {
                 continue;
             }
+            // Before the mirror test, which a NaN would fail as an asymmetry.
+            let weight = check_weight(-upper).map_err(|defect| match defect {
+                WeightDefect::NonFinite => Error::NonFiniteValue { position },
+                WeightDefect::NotPositive => Error::PositiveOffDiagonal { edge: (row, col) },
+                WeightDefect::BelowFloor => Error::MagnitudeTooSmall { entry: (row, col) },
+            })?;
             let lower = self.claim(col, row)?;
             if !approximately_equal(upper, lower) {
                 return Err(Error::Asymmetric { edge: (row, col) });
             }
-            entry(col, upper, lower)?;
+            entry(col, weight, upper, lower);
         }
         Ok(diagonal)
     }
+}
+
+/// One walk over the stored entries: each kept edge is stored, summed into its rows, and linked.
+pub(super) fn sddm<T: Real, I: PrimInt>(canonical: &Canonical<'_, T, I>) -> Result<Sddm<T>, Error> {
+    let (row_ptrs, col_indices, values) = canonical.arrays();
+    let n = row_ptrs.len() - 1;
+    let mut mirrors = Mirrors::new(row_ptrs, col_indices, values);
+    let mut sums = RowSums::zeros(n);
+    let mut incidence = Incidence::new(n);
+    let mut upper_ptrs = Vec::with_capacity(n + 1);
+    upper_ptrs.push(0u32);
+    let mut neighbors = Vec::with_capacity(col_indices.len() / 2);
+    let mut weights = Vec::with_capacity(col_indices.len() / 2);
+
+    for row in 0..n {
+        let mut links = incidence.row(row);
+        sums.diagonal[row] = mirrors.row(row, |col, weight, upper, lower| {
+            sums.add(row, col, upper, lower);
+            neighbors.push(col as u32);
+            weights.push(weight);
+            links.add(col, weight);
+        })?;
+        upper_ptrs.push(neighbors.len() as u32);
+    }
+
+    let surplus = sums.surplus(canonical.terms())?;
+    let components = incidence
+        .finish(Some(&surplus))
+        .map_err(|NotFinite { vertex }| Error::NonFiniteRow { row: vertex })?;
+    let surplus = grounding(&components, surplus)
+        .map_err(|GroundOverflow { vertex }| Error::GroundOverflow { vertex })?;
+    let laplacian = Laplacian {
+        row_ptrs: upper_ptrs,
+        neighbors,
+        weights,
+        components,
+    };
+    Ok(Sddm { laplacian, surplus })
 }
 
 fn approximately_equal<T: Real>(left: T, right: T) -> bool {
@@ -102,36 +140,8 @@ fn approximately_equal<T: Real>(left: T, right: T) -> bool {
     (left - right).abs() <= ulps * T::epsilon() * scale
 }
 
-/// Reads every stored entry once, so [`Canonical::of`] leaves finiteness here; the upper mirror is kept.
-pub(super) fn edges<T: Real, I: PrimInt>(
-    canonical: &Canonical<'_, T, I>,
-) -> Result<(Summed<T>, RowSums<T>), Error> {
-    let (row_ptrs, col_indices, values) = canonical.arrays();
-    let n = row_ptrs.len() - 1;
-    let mut mirrors = Mirrors::new(row_ptrs, col_indices, values);
-
-    let mut sums = RowSums::zeros(n);
-    let mut rows = UpperRows::with_capacity(n, col_indices.len() / 2);
-
-    for row in 0..n {
-        sums.diagonal[row] = mirrors.row(row, |col, upper, lower| {
-            if upper > T::zero() {
-                return Err(Error::PositiveOffDiagonal { edge: (row, col) });
-            }
-            if -upper < floor() {
-                return Err(Error::MagnitudeTooSmall { entry: (row, col) });
-            }
-            sums.add(row, col, upper, lower);
-            rows.push(row, col, -upper);
-            Ok(())
-        })?;
-        rows.end_row();
-    }
-    Ok((rows.finish(), sums))
-}
-
 /// What the balance verdict reads per row, summed as the walk claims each edge.
-pub(super) struct RowSums<T> {
+struct RowSums<T> {
     diagonal: Vec<T>,
     /// Off-diagonal only; the diagonal joins in the balance verdict.
     off_diagonal: Vec<T>,
@@ -153,7 +163,7 @@ impl<T: Real> RowSums<T> {
     }
 
     /// Judged in row order, so the first unbalanced row is the one reported.
-    pub(super) fn surplus(self, terms: impl Iterator<Item = u32>) -> Result<Vec<T>, Error> {
+    fn surplus(self, terms: impl Iterator<Item = u32>) -> Result<Vec<T>, Error> {
         let mut surplus = self.off_diagonal;
         for (row, ((sum, &d), terms)) in surplus
             .iter_mut()
@@ -165,6 +175,10 @@ impl<T: Real> RowSums<T> {
                 RowBalance::NonFinite => return Err(Error::NonFiniteRow { row }),
                 RowBalance::Deficit => return Err(Error::NotDiagonallyDominant { row }),
                 RowBalance::Negligible => T::zero(),
+                // A ground edge's weight, so it clears the floor every stored entry clears.
+                RowBalance::BelowFloor => {
+                    return Err(Error::MagnitudeTooSmall { entry: (row, row) })
+                }
                 RowBalance::Surplus(excess) => excess,
             };
         }
@@ -177,6 +191,7 @@ enum RowBalance<T> {
     NonFinite,
     Deficit,
     Negligible,
+    BelowFloor,
     /// Worth closing with a ground edge.
     Surplus(T),
 }
@@ -198,6 +213,9 @@ impl<T: Real> RowBalance<T> {
         }
         if excess <= accumulated {
             return Self::Negligible;
+        }
+        if excess < floor() {
+            return Self::BelowFloor;
         }
         Self::Surplus(excess)
     }

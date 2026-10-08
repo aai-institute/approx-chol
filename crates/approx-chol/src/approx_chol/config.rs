@@ -1,5 +1,5 @@
 use crate::graph::SplitFactor;
-use crate::{Error, Fallback};
+use crate::{Fallback, UnusablePivot};
 
 #[cfg(test)]
 mod tests;
@@ -25,7 +25,7 @@ pub enum ExactFailure {
     #[default]
     /// Factor that block approximately and record it in [`Factor::fallbacks`](crate::Factor::fallbacks).
     FallBackToApproximate,
-    /// Fail with [`Error::DenseFactorizationFailed`](crate::Error::DenseFactorizationFailed).
+    /// Fail with the [`UnusablePivot`] from [`factorize_with`](crate::factorize_with).
     Error,
 }
 
@@ -62,11 +62,9 @@ pub(super) enum Route {
 
 impl ExactFailure {
     /// A block that will not fit falls back whatever the policy, so only a pivot can be fatal.
-    pub(super) fn accept(self, fallback: Fallback) -> Result<Fallback, Error> {
+    pub(super) fn accept(self, fallback: Fallback) -> Result<Fallback, UnusablePivot> {
         match (self, fallback) {
-            (Self::Error, Fallback::InvalidPivot(pivot)) => {
-                Err(Error::DenseFactorizationFailed(pivot))
-            }
+            (Self::Error, Fallback::InvalidPivot(pivot)) => Err(pivot),
             _ => Ok(fallback),
         }
     }

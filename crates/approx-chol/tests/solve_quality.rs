@@ -7,8 +7,7 @@ mod residual;
 use grounded::is_grounded;
 use residual::relative_residual_over;
 
-use approx_chol::low_level::Builder;
-use approx_chol::{Backend, Config, CsrRef, Error, SolveError};
+use approx_chol::{factorize, factorize_with, Backend, Config, CsrRef, Error, Sddm, SolveError};
 use num_traits::Float;
 use rstest::rstest;
 
@@ -22,9 +21,7 @@ fn route_at_drift<T: Float + Send + Sync + 'static>(drift: T) -> Result<bool, Er
     let col_indices = [0u32, 1, 0, 1];
     let values = [one + drift, -one, -one, one + drift];
     let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).expect("valid csr");
-    Builder::<T>::new(Config::default())
-        .build(csr)
-        .map(|factor| is_grounded(&factor))
+    Sddm::try_from(csr).map(|sddm| is_grounded(&factorize(sddm)))
 }
 
 /// Augmentation is decided in ingestion, before routing, so the default suffices. One
@@ -73,8 +70,7 @@ fn star_augments_at_ulp_offset(offset: u64) -> bool {
     let col_indices = [0u32, 1, 2, 3, 0, 1, 0, 2, 0, 3];
     let values = [centre, -1e8, -2e8, -1e8, -1e8, 1e8, -2e8, 2e8, -1e8, 1e8];
     let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4).expect("valid csr");
-    let factor = Builder::<f64>::new(Config::default())
-        .build(csr)
+    let factor = factorize_with(Sddm::try_from(csr).expect("an SDDM"), Config::default())
         .expect("factorization should succeed");
     is_grounded(&factor)
 }
@@ -108,12 +104,14 @@ fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
 ) {
     let (rp, ci, vals, n) = diagonal_sddm();
     let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid diagonal SDDM");
-    let factor = Builder::new(Config {
-        backend,
-        split_merge,
-        ..Config::default()
-    })
-    .build(csr)
+    let factor = factorize_with(
+        Sddm::try_from(csr).expect("an SDDM"),
+        Config {
+            backend,
+            split_merge,
+            ..Config::default()
+        },
+    )
     .expect("factorization should succeed");
 
     assert!(is_grounded(&factor), "diagonal SDDM should be augmented");
@@ -135,8 +133,7 @@ fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
 fn every_solve_checks_its_buffer_lengths() {
     let (rp, ci, vals, n) = diagonal_sddm();
     let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid diagonal SDDM");
-    let factor = Builder::new(Config::default())
-        .build(csr)
+    let factor = factorize_with(Sddm::try_from(csr).expect("an SDDM"), Config::default())
         .expect("factorization should succeed");
     let needed = factor.scratch_len();
     assert!(
@@ -189,12 +186,14 @@ fn dirty_scratch_does_not_change_the_solution(
 ) {
     let n = row_ptrs.len() - 1;
     let csr = CsrRef::new(row_ptrs, columns, values, n as u32).expect("valid CSR");
-    let factor = Builder::<f64>::new(Config {
-        seed: 7,
-        backend,
-        ..Config::default()
-    })
-    .build(csr)
+    let factor = factorize_with(
+        Sddm::try_from(csr).expect("an SDDM"),
+        Config {
+            seed: 7,
+            backend,
+            ..Config::default()
+        },
+    )
     .expect("factorization should succeed");
     assert!(factor.scratch_len() > 0, "the solve goes through scratch");
 
@@ -224,11 +223,13 @@ where
     let one = T::one();
     let b = [one, T::zero(), T::zero(), -one];
 
-    let factor = Builder::<T>::new(Config {
-        backend,
-        ..Config::default()
-    })
-    .build(csr)
+    let factor = factorize_with(
+        Sddm::try_from(csr).expect("an SDDM"),
+        Config {
+            backend,
+            ..Config::default()
+        },
+    )
     .expect("factorization should succeed");
     let x = factor.solve(&b).expect("solve");
 

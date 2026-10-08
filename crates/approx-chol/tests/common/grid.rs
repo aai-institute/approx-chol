@@ -1,4 +1,4 @@
-use approx_chol::{CsrRef, Error};
+use approx_chol::{CsrError, CsrRef};
 
 /// Grid Laplacian stored as owned arrays (CsrRef-compatible).
 pub struct GridLaplacian {
@@ -9,7 +9,7 @@ pub struct GridLaplacian {
 }
 
 impl GridLaplacian {
-    pub fn as_csr(&self) -> Result<CsrRef<'_>, Error> {
+    pub fn as_csr(&self) -> Result<CsrRef<'_>, CsrError> {
         CsrRef::new(&self.row_ptrs, &self.col_indices, &self.values, self.n)
     }
 }

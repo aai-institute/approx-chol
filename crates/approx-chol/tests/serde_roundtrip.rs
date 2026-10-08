@@ -8,7 +8,7 @@ mod laplacian_prop;
 mod path;
 
 use approx_chol::{
-    factorize_with, Backend, Config, CsrRef, ExactFailure, Factor, FACTOR_FORMAT_VERSION,
+    factorize_with, Backend, Config, CsrRef, ExactFailure, Factor, Sddm, FACTOR_FORMAT_VERSION,
 };
 use grounded::is_grounded;
 use rstest::rstest;
@@ -17,7 +17,8 @@ fn path_factor_with(config: Config) -> Factor<f64> {
     let row_ptrs: Vec<u32> = path::ROW_PTRS.iter().map(|&v| v as u32).collect();
     let col_indices: Vec<u32> = path::COL_INDICES.iter().map(|&v| v as u32).collect();
     let csr = CsrRef::new(&row_ptrs, &col_indices, &path::VALUES, path::N).expect("valid csr");
-    factorize_with(csr, config).expect("factorization should succeed")
+    factorize_with(Sddm::try_from(csr).expect("an SDDM"), config)
+        .expect("factorization should succeed")
 }
 
 fn path_factor() -> Factor<f64> {
@@ -32,7 +33,7 @@ fn complete_factor(n: usize) -> Factor<f64> {
     let (row_ptrs, columns, values, dim) = laplacian_prop::build_laplacian_csr(n, &weights);
     let csr = CsrRef::new(&row_ptrs, &columns, &values, dim).expect("valid CSR");
     factorize_with(
-        csr,
+        Sddm::try_from(csr).expect("an SDDM"),
         Config {
             backend: Backend::Approximate,
             ..Config::default()
@@ -65,10 +66,12 @@ fn factor_json_roundtrip_preserves_solve(#[case] backend: Backend) {
     );
     assert_roundtrip(
         "two components",
-        &factorize_with(split, config).expect("factorization should succeed"),
+        &factorize_with(Sddm::try_from(split).expect("an SDDM"), config)
+            .expect("factorization should succeed"),
         &[1.0, -1.0, 2.0, -2.0],
     );
-    let grounded = factorize_with(sddm, config).expect("factorization should succeed");
+    let grounded = factorize_with(Sddm::try_from(sddm).expect("an SDDM"), config)
+        .expect("factorization should succeed");
     assert!(is_grounded(&grounded), "SDDM input augments by one");
     assert_roundtrip("grounded SDDM", &grounded, &[1.0, -1.0]);
 }

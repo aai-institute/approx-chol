@@ -3,7 +3,7 @@
 #[path = "shared/mod.rs"]
 mod shared;
 
-use approx_chol::factorize;
+use approx_chol::{factorize, Sddm};
 use shared::grid_laplacian;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let n = lap.n as usize;
     println!("Grid Laplacian: {}×{} ({} nodes)", 10, 10, n);
 
-    let factor = factorize(lap.as_csr()?)?;
+    let factor = factorize(Sddm::try_from(lap.as_csr()?)?);
     println!(
         "Factorization: {} elimination steps (factor dimension {})",
         factor.n_steps(),

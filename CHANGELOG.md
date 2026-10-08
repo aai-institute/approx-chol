@@ -20,20 +20,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Factor::solve_in_place` returns the zero-mean solution on floating blocks. ([#135])
 - A persisted block is grounded or floating with no stored dimension, and
   `FACTOR_FORMAT_VERSION` is `0x41430005`. ([#148])
+- `factorize` and `factorize_with` take `impl Into<Sddm>`; a `CsrRef` converts with `Sddm::try_from`. ([#142])
+- `factorize` returns a `Factor`, and `factorize_with` fails only with `UnusablePivot`. ([#142])
+- `low_level::Builder` is removed. ([#142])
+- `CsrRef::new`, `CsrRef::to_owned_u32`, `OwnedCsr::try_from_usize` and the `sprs` and `faer`
+  conversions fail with `CsrError`. ([#142])
+- `CsrRef::new` rejects `n = u32::MAX` and more than `u32::MAX` stored entries. ([#142])
+- `Error::InvalidCsr`, `Error::DenseFactorizationFailed` and `CsrError::InputConversionPanicked`
+  are removed. ([#142])
 
 ### Added
 
 - `Factor::scratch_len`. ([#146])
+- `Laplacian::new` from a strict upper adjacency, failing with `LaplacianError`. ([#142])
+- `Sddm::new` from a strict upper adjacency and a diagonal surplus, failing with `SddmError`. ([#143])
 
 ### Changed
 
 - An exact block's diagonal is the weighted degree plus the surplus that clears summation noise. ([#145])
+- Each grounded component is factored on its own ground, not one ground shared by all. ([#138])
 
 ### Fixed
 
 - Solves sum each block's right-hand side with compensation. ([#147])
 - A nonzero entry below `MIN_POSITIVE / EPSILON` in magnitude is rejected with `Error::MagnitudeTooSmall`. ([#163])
-- A diagonal surplus total that overflows is rejected with `Error::SurplusOverflow`, and a diagonal
+- A component whose surplus total overflows is rejected with `Error::GroundOverflow`, and a diagonal
   surplus below `MIN_POSITIVE / EPSILON` with `Error::MagnitudeTooSmall`. ([#145])
 
 ## [0.6.0] - 2026-08-24
@@ -227,7 +238,10 @@ for graph Laplacians in Rust with Python bindings.
 [#118]: https://github.com/aai-institute/approx-chol/issues/118
 [#131]: https://github.com/aai-institute/approx-chol/pull/131
 [#135]: https://github.com/aai-institute/approx-chol/issues/135
+[#138]: https://github.com/aai-institute/approx-chol/issues/138
 [#140]: https://github.com/aai-institute/approx-chol/issues/140
+[#142]: https://github.com/aai-institute/approx-chol/issues/142
+[#143]: https://github.com/aai-institute/approx-chol/issues/143
 [#145]: https://github.com/aai-institute/approx-chol/issues/145
 [#146]: https://github.com/aai-institute/approx-chol/issues/146
 [#147]: https://github.com/aai-institute/approx-chol/issues/147

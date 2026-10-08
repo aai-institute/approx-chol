@@ -4,8 +4,7 @@ mod grid;
 use std::hint::black_box;
 use std::time::Duration;
 
-use approx_chol::low_level::Builder;
-use approx_chol::{Config, Factor};
+use approx_chol::{factorize_with, Config, Factor, Sddm};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 use grid::{grid_laplacian, GridLaplacian};
@@ -44,9 +43,12 @@ fn interleaved_paths(n: usize, k: usize) -> GridLaplacian {
 
 fn bench_solve_for_size(c: &mut Criterion, size: usize) {
     let lap = grid_laplacian(size, size);
-    let factor: Factor<f64> = Builder::new(Config::default())
-        .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
-        .expect("factorization should succeed");
+    let factor: Factor<f64> = factorize_with(
+        Sddm::try_from(lap.as_csr().expect("grid_laplacian must build valid CSR"))
+            .expect("an SDDM"),
+        Config::default(),
+    )
+    .expect("factorization should succeed");
     let n = factor.n();
 
     let mut rhs = vec![0.0f64; n];
@@ -76,12 +78,15 @@ fn bench_solve_for_size(c: &mut Criterion, size: usize) {
 /// Guards the permutation round trip and per-component block solves against the grid solves above.
 fn bench_disconnected_solve(c: &mut Criterion, n: usize, k: usize) {
     let lap = interleaved_paths(n, k);
-    let factor: Factor<f64> = Builder::new(Config::default())
-        .build(
+    let factor: Factor<f64> = factorize_with(
+        Sddm::try_from(
             lap.as_csr()
                 .expect("interleaved paths must build valid CSR"),
         )
-        .expect("disconnected factorization should succeed");
+        .expect("an SDDM"),
+        Config::default(),
+    )
+    .expect("disconnected factorization should succeed");
     let dim = factor.n();
 
     let mut rhs = vec![0.0f64; dim];

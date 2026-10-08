@@ -6,7 +6,7 @@ mod path;
 mod path_solve;
 use path_solve::assert_view_and_factor_match_fixture;
 
-use approx_chol::{factorize, CsrError, CsrRef, Error};
+use approx_chol::{CsrError, CsrRef};
 
 fn path_laplacian_sprs<I: sprs::SpIndex>() -> sprs::CsMatI<f64, I> {
     let n = path::N as usize;
@@ -32,11 +32,8 @@ fn sprs_csr_factorizes_over_index_types() {
 fn sprs_factorize_rejects_csc_with_error() {
     let csr = path_laplacian_sprs::<u32>();
     let csc = csr.to_csc();
-    let err = factorize(&csc).expect_err("CSC must be rejected");
-    assert!(matches!(
-        err,
-        Error::InvalidCsr(CsrError::ExpectedCsrMatrixGotCsc)
-    ));
+    let err = CsrRef::try_from(&csc).expect_err("CSC must be rejected");
+    assert!(matches!(err, CsrError::ExpectedCsrMatrixGotCsc));
 }
 
 #[test]
@@ -45,6 +42,6 @@ fn sprs_try_from_non_square_returns_error() {
     let err = CsrRef::try_from(&mat).expect_err("non-square matrix must be rejected");
     assert!(matches!(
         err,
-        Error::InvalidCsr(CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 })
+        CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 }
     ));
 }

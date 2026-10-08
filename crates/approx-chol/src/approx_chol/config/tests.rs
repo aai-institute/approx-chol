@@ -17,12 +17,7 @@ fn only_an_unusable_pivot_answers_to_the_failure_policy() {
             ExactFailure::FallBackToApproximate,
             Ok(pivot),
         ),
-        (
-            "pivot, erroring",
-            pivot,
-            ExactFailure::Error,
-            Err(Error::DenseFactorizationFailed(unusable)),
-        ),
+        ("pivot, erroring", pivot, ExactFailure::Error, Err(unusable)),
         (
             "will not fit, falling back",
             too_large,

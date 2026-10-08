@@ -209,10 +209,6 @@ where
         factor
     }
 
-    pub(crate) fn empty() -> Self {
-        Self::from_blocks(None, Vec::new(), Vec::new())
-    }
-
     /// Total elimination steps: every slot but one per block, whichever arm factored it.
     pub fn n_steps(&self) -> usize {
         self.blocks.iter().map(Block::eliminated).sum()

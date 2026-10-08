@@ -1,3 +1,3 @@
-//! The [`Builder`] behind [`factorize`](crate::factorize), and the standalone clique-tree sampler.
+//! The standalone clique-tree sampler.
 
-pub use crate::approx_chol::{Builder, CliqueTreeSampler};
+pub use crate::approx_chol::CliqueTreeSampler;

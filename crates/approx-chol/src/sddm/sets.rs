@@ -1,3 +1,4 @@
+use super::Components;
 use crate::graph::BlockLayout;
 
 /// Union-find with path halving and union by size.
@@ -43,11 +44,11 @@ impl DisjointSets {
         root
     }
 
-    /// `None` when connected, which never pays for the counting sort below.
-    pub(super) fn layout(&mut self) -> Option<BlockLayout> {
+    /// A connected input never pays for the counting sort below.
+    pub(super) fn components(mut self) -> Components {
         let total = self.parent.len();
-        if total == 0 || self.is_one_set() {
-            return None;
+        if total > 0 && self.is_one_set() {
+            return Components::Connected;
         }
 
         // Ascending, so blocks order by lowest member.
@@ -77,6 +78,6 @@ impl DisjointSets {
             order[ends[block] as usize] = vertex as u32;
             ends[block] += 1;
         }
-        Some(BlockLayout { order, ends })
+        Components::Split(BlockLayout::new(order, ends))
     }
 }

@@ -1,8 +1,8 @@
 #[path = "../tests/common/grid.rs"]
 mod grid;
 
-use approx_chol::low_level::{Builder, CliqueTreeSampler};
-use approx_chol::Config;
+use approx_chol::low_level::CliqueTreeSampler;
+use approx_chol::{factorize_with, Config, Sddm};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -86,16 +86,16 @@ fn bench_factorization_grid(c: &mut Criterion) {
     for &size in &[50, 100, 200] {
         let lap = grid_laplacian(size, size);
         let config = Config::default();
-        let builder = Builder::new(config);
 
         group.bench_with_input(
             BenchmarkId::new("AC", format!("{size}x{size}")),
             &lap,
             |b, lap| {
                 b.iter(|| {
-                    builder
-                        .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
-                        .expect("factorization should succeed")
+                    let sddm =
+                        Sddm::try_from(lap.as_csr().expect("grid_laplacian must build valid CSR"))
+                            .expect("an SDDM");
+                    factorize_with(sddm, config).expect("factorization should succeed")
                 });
             },
         );
@@ -104,16 +104,16 @@ fn bench_factorization_grid(c: &mut Criterion) {
             split_merge: Some(2),
             ..Default::default()
         };
-        let ac2_builder = Builder::new(ac2_config);
 
         group.bench_with_input(
             BenchmarkId::new("AC2", format!("{size}x{size}")),
             &lap,
             |b, lap| {
                 b.iter(|| {
-                    ac2_builder
-                        .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
-                        .expect("factorization should succeed")
+                    let sddm =
+                        Sddm::try_from(lap.as_csr().expect("grid_laplacian must build valid CSR"))
+                            .expect("an SDDM");
+                    factorize_with(sddm, ac2_config).expect("factorization should succeed")
                 });
             },
         );
@@ -134,20 +134,20 @@ fn bench_factorization_powerlaw(c: &mut Criterion) {
     ] {
         let lap = barabasi_albert(n, m, 0xDEAD);
         let config = Config::default();
-        let builder = Builder::new(config);
 
         group.bench_with_input(BenchmarkId::new("AC", label), &lap, |b, lap| {
             b.iter(|| {
-                builder
-                    .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
-                    .expect("factorization should succeed")
+                let sddm =
+                    Sddm::try_from(lap.as_csr().expect("grid_laplacian must build valid CSR"))
+                        .expect("an SDDM");
+                factorize_with(sddm, config).expect("factorization should succeed")
             });
         });
     }
     group.finish();
 }
 
-/// A consumer eliminating its own stars pays this per star, outside any `Builder::build`.
+/// A consumer eliminating its own stars pays this per star, outside any `factorize_with`.
 fn bench_star_sampler(c: &mut Criterion) {
     const STARS: usize = 10_000;
 

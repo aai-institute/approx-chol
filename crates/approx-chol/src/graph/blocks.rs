@@ -1,11 +1,16 @@
 /// Every vertex once, components back to back, in one array since one sequence answers every query.
+#[derive(Clone, Debug)]
 pub(crate) struct BlockLayout {
-    pub(super) order: Vec<u32>,
+    order: Vec<u32>,
     /// Each block starts where the last stopped, so none claims a vertex twice or leaves a gap.
-    pub(super) ends: Vec<u32>,
+    ends: Vec<u32>,
 }
 
 impl BlockLayout {
+    pub(crate) fn new(order: Vec<u32>, ends: Vec<u32>) -> Self {
+        Self { order, ends }
+    }
+
     pub(crate) fn block_count(&self) -> usize {
         self.ends.len()
     }

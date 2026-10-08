@@ -1,6 +1,6 @@
 use super::index;
 use crate::types::Real;
-use crate::{CsrError, CsrRef, Error, IndexKind};
+use crate::{CsrRef, Error};
 use num_traits::PrimInt;
 
 /// Strictly ascending columns per row; scipy already emits them, so only rare input pays for a copy.
@@ -13,12 +13,6 @@ pub(super) struct Canonical<'a, T, I> {
 impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
     /// Reads no value on the canonical path, sparing a stream: `validate` checks each as it reads it.
     pub(super) fn of(csr: CsrRef<'a, T, I>) -> Result<Self, Error> {
-        // Every position downstream, mirror cursors included, is a `u32`.
-        if u32::try_from(csr.col_indices().len()).is_err() {
-            return Err(Error::InvalidCsr(CsrError::IndexExceedsIndexType {
-                kind: IndexKind::RowPtr,
-            }));
-        }
         if is_canonical(csr.row_ptrs(), csr.col_indices()) {
             return Ok(Self {
                 input: csr,

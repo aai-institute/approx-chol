@@ -1,12 +1,9 @@
 use std::fmt;
 
-/// Errors that can occur during approximate Cholesky factorization.
+/// Why a [`CsrRef`](crate::CsrRef) is not an SDDM matrix, from [`Sddm::try_from`](crate::Sddm).
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// The input CSR matrix has inconsistent dimensions or invalid structure.
-    InvalidCsr(CsrError),
-
     /// A coalesced off-diagonal entry is strictly positive: the matrix is not SDDM.
     PositiveOffDiagonal {
         /// `(row, column)` of the offending strictly-positive off-diagonal.
@@ -43,14 +40,247 @@ pub enum Error {
         entry: (usize, usize),
     },
 
-    /// The diagonal surplus total is not finite.
-    SurplusOverflow,
-
-    /// Exact dense Cholesky hit an unusable pivot and [`ExactFailure::Error`](crate::ExactFailure::Error) asked for that to fail.
-    DenseFactorizationFailed(UnusablePivot),
+    /// A component's ground, the sum of its diagonal surplus, is not finite.
+    GroundOverflow {
+        /// The component's lowest vertex.
+        vertex: usize,
+    },
 }
 
-/// An unusable exact pivot, reported as a [`Fallback`] or raised as [`Error::DenseFactorizationFailed`].
+/// Why an edge weight cannot be stored.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WeightDefect {
+    /// NaN or infinite.
+    NonFinite,
+    /// Zero or negative.
+    NotPositive,
+    /// Below `MIN_POSITIVE / EPSILON`, the measured floor of accurate solves.
+    BelowFloor,
+}
+
+/// Why the arrays given to [`Laplacian::new`](crate::Laplacian::new) are not a strict upper adjacency.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdjacencyError {
+    /// `row_ptrs` is empty, so it does not even name zero rows.
+    RowPtrsEmpty,
+    /// `row_ptrs[0]` is not zero.
+    RowPtrsMustStartAtZero {
+        /// The observed start.
+        got: u32,
+    },
+    /// `neighbors` and `weights` differ in length.
+    NeighborsWeightsLenMismatch {
+        /// Length of `neighbors`.
+        neighbors: usize,
+        /// Length of `weights`.
+        weights: usize,
+    },
+    /// The last row pointer is not the length of `neighbors`.
+    RowPtrsEndMismatch {
+        /// The last row pointer.
+        end: u32,
+        /// Length of `neighbors`.
+        len: usize,
+    },
+    /// `row_ptrs[row] > row_ptrs[row + 1]`.
+    RowPtrsDecrease {
+        /// The row whose end precedes its start.
+        row: usize,
+    },
+    /// A ground slot after the vertices would not fit `u32`.
+    TooManyVertices {
+        /// The number of vertices.
+        n: usize,
+    },
+    /// A neighbor is not above the diagonal.
+    NotStrictlyUpper {
+        /// `(row, neighbor)` with `neighbor <= row`.
+        edge: (usize, usize),
+    },
+    /// A row's neighbors are not strictly ascending.
+    Unsorted {
+        /// `(row, neighbor)` at or before its predecessor.
+        edge: (usize, usize),
+    },
+    /// A neighbor is not a vertex.
+    NeighborOutOfBounds {
+        /// `(row, neighbor)` with `neighbor >= n`.
+        edge: (usize, usize),
+        /// The number of vertices.
+        n: usize,
+    },
+    /// An edge weight cannot be stored.
+    Weight {
+        /// `(row, neighbor)` of the edge.
+        edge: (usize, usize),
+        /// What is wrong with its weight.
+        defect: WeightDefect,
+    },
+}
+
+/// Why [`Laplacian::new`](crate::Laplacian::new) rejected its arrays.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LaplacianError {
+    /// The arrays are not a strict upper adjacency.
+    Adjacency(AdjacencyError),
+    /// A vertex's weighted degree, its diagonal, is not finite.
+    DegreeNotFinite {
+        /// The vertex.
+        vertex: usize,
+    },
+}
+
+/// Why a diagonal surplus cannot be stored.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SurplusDefect {
+    /// Negative.
+    Negative,
+    /// Positive but below `MIN_POSITIVE / EPSILON`, the measured floor of accurate solves.
+    BelowFloor,
+}
+
+/// Why [`Sddm::new`](crate::Sddm::new) rejected its arrays.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SddmError {
+    /// The arrays are not a strict upper adjacency.
+    Adjacency(AdjacencyError),
+    /// The surplus does not have one entry per vertex.
+    SurplusLength {
+        /// Length of the surplus.
+        len: usize,
+        /// The number of vertices.
+        n: usize,
+    },
+    /// A vertex's surplus cannot be stored.
+    Surplus {
+        /// The vertex.
+        vertex: usize,
+        /// What is wrong with its surplus.
+        defect: SurplusDefect,
+    },
+    /// A vertex's diagonal, its weighted degree plus its surplus, is not finite.
+    DiagonalNotFinite {
+        /// The vertex.
+        vertex: usize,
+    },
+    /// A component's ground, the sum of its surplus, is not finite.
+    GroundOverflow {
+        /// The component's lowest vertex.
+        vertex: usize,
+    },
+}
+
+impl From<AdjacencyError> for LaplacianError {
+    fn from(error: AdjacencyError) -> Self {
+        Self::Adjacency(error)
+    }
+}
+
+impl From<AdjacencyError> for SddmError {
+    fn from(error: AdjacencyError) -> Self {
+        Self::Adjacency(error)
+    }
+}
+
+impl fmt::Display for WeightDefect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NonFinite => write!(f, "is not finite"),
+            Self::NotPositive => write!(f, "is not positive"),
+            Self::BelowFloor => write!(f, "is below MIN_POSITIVE / EPSILON of the scalar type"),
+        }
+    }
+}
+
+impl fmt::Display for SurplusDefect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Negative => write!(f, "is negative"),
+            Self::BelowFloor => write!(f, "is below MIN_POSITIVE / EPSILON of the scalar type"),
+        }
+    }
+}
+
+impl fmt::Display for AdjacencyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RowPtrsEmpty => write!(f, "row_ptrs is empty"),
+            Self::RowPtrsMustStartAtZero { got } => write!(f, "row_ptrs[0] must be 0 (got {got})"),
+            Self::NeighborsWeightsLenMismatch { neighbors, weights } => write!(
+                f,
+                "neighbors and weights have different lengths ({neighbors} != {weights})"
+            ),
+            Self::RowPtrsEndMismatch { end, len } => {
+                write!(
+                    f,
+                    "the last row pointer must equal the neighbor count ({end} != {len})"
+                )
+            }
+            Self::RowPtrsDecrease { row } => write!(f, "row_ptrs decreases after row {row}"),
+            Self::TooManyVertices { n } => write!(f, "{n} vertices leave no u32 for a ground slot"),
+            Self::NotStrictlyUpper { edge: (row, col) } => {
+                write!(f, "neighbor {col} of row {row} is not above the diagonal")
+            }
+            Self::Unsorted { edge: (row, col) } => {
+                write!(f, "neighbor {col} of row {row} is not strictly ascending")
+            }
+            Self::NeighborOutOfBounds {
+                edge: (row, col),
+                n,
+            } => {
+                write!(
+                    f,
+                    "neighbor {col} of row {row} is not one of the {n} vertices"
+                )
+            }
+            Self::Weight {
+                edge: (row, col),
+                defect,
+            } => write!(f, "the weight of edge ({row}, {col}) {defect}"),
+        }
+    }
+}
+
+impl fmt::Display for LaplacianError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Adjacency(error) => write!(f, "invalid adjacency: {error}"),
+            Self::DegreeNotFinite { vertex } => {
+                write!(f, "vertex {vertex}'s weighted degree is not finite")
+            }
+        }
+    }
+}
+
+impl fmt::Display for SddmError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Adjacency(error) => write!(f, "invalid adjacency: {error}"),
+            Self::SurplusLength { len, n } => {
+                write!(f, "surplus has {len} entries for {n} vertices")
+            }
+            Self::Surplus { vertex, defect } => write!(f, "vertex {vertex}'s surplus {defect}"),
+            Self::DiagonalNotFinite { vertex } => {
+                write!(f, "vertex {vertex}'s diagonal is not finite")
+            }
+            Self::GroundOverflow { vertex } => write!(
+                f,
+                "the ground of the component holding vertex {vertex} sums to a non-finite value"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AdjacencyError {}
+impl std::error::Error for LaplacianError {}
+impl std::error::Error for SddmError {}
+
+/// An unusable exact pivot, reported as a [`Fallback`] or returned by [`factorize_with`](crate::factorize_with).
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnusablePivot {
@@ -214,8 +444,6 @@ pub enum CsrError {
         /// Observed column count.
         cols: usize,
     },
-    /// Input conversion via `TryFrom` panicked.
-    InputConversionPanicked,
 }
 
 impl fmt::Display for CsrError {
@@ -258,7 +486,6 @@ impl fmt::Display for CsrError {
             Self::ExpectedSquareMatrix { rows, cols } => {
                 write!(f, "expected square matrix (got {rows}x{cols})")
             }
-            Self::InputConversionPanicked => write!(f, "input conversion panicked"),
         }
     }
 }
@@ -266,7 +493,6 @@ impl fmt::Display for CsrError {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::InvalidCsr(err) => write!(f, "invalid CSR matrix: {err}"),
             Error::PositiveOffDiagonal { edge: (row, col) } => write!(
                 f,
                 "off-diagonal ({row}, {col}) is positive; approx-chol requires SDDM/Laplacian input (off-diagonals must be <= 0)"
@@ -294,18 +520,14 @@ impl fmt::Display for Error {
                 f,
                 "entry ({row}, {col}) is below MIN_POSITIVE / EPSILON of the scalar type; scale the matrix up"
             ),
-            Error::SurplusOverflow => write!(f, "diagonal surplus total is not finite"),
-            Error::DenseFactorizationFailed(pivot) => {
-                write!(f, "exact dense Cholesky failed at {pivot}")
-            }
+            Error::GroundOverflow { vertex } => write!(
+                f,
+                "the ground of the component holding vertex {vertex} sums to a non-finite value"
+            ),
         }
     }
 }
 
 impl std::error::Error for Error {}
-
-impl From<core::convert::Infallible> for Error {
-    fn from(value: core::convert::Infallible) -> Self {
-        match value {}
-    }
-}
+impl std::error::Error for CsrError {}
+impl std::error::Error for UnusablePivot {}

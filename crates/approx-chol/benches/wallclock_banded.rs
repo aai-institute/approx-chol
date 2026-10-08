@@ -1,8 +1,7 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use approx_chol::low_level::Builder;
-use approx_chol::{Config, CsrRef};
+use approx_chol::{factorize_with, Config, CsrRef, Sddm};
 
 const N: usize = 160_000;
 // Degree 12, where `within`'s factors sit; at degree 4 ingestion is ~17% of the build.
@@ -32,12 +31,12 @@ fn main() {
     let csr = CsrRef::new(&row_ptrs, &col_indices, &values, N as u32)
         .expect("banded_laplacian must build valid CSR");
     let config = Config::default();
-    let builder = Builder::<f64>::new(config);
 
     let mut best = u128::MAX;
     for _ in 0..RUNS {
         let start = Instant::now();
-        let factor = builder.build(csr).expect("factorization should succeed");
+        let sddm = Sddm::try_from(csr).expect("an SDDM");
+        let factor = factorize_with(sddm, config).expect("factorization should succeed");
         // Min, not mean: contention only ever slows a run.
         best = best.min(start.elapsed().as_nanos());
         black_box(&factor);

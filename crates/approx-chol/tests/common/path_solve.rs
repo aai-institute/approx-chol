@@ -1,14 +1,13 @@
 //! Path-Laplacian assertions the sprs and faer suites run once per index type.
 
-use approx_chol::low_level::Builder;
-use approx_chol::{Config, CsrRef, Error};
+use approx_chol::{factorize, CsrRef, Sddm};
 use num_traits::PrimInt;
 
 /// The whole input-adapter contract: the view reports the fixture's shape, and the matrix factorizes and solves.
 pub fn assert_view_and_factor_match_fixture<'a, I, M>(matrix: M)
 where
     M: TryInto<CsrRef<'a, f64, I>> + Copy,
-    <M as TryInto<CsrRef<'a, f64, I>>>::Error: core::fmt::Debug + Into<Error>,
+    <M as TryInto<CsrRef<'a, f64, I>>>::Error: core::fmt::Debug,
     I: PrimInt + 'static,
 {
     let view: CsrRef<'a, f64, I> = matrix.try_into().expect("valid CSR view");
@@ -17,9 +16,7 @@ where
     assert_eq!(view.col_indices().len(), super::path::COL_INDICES.len());
     assert_eq!(view.values().len(), super::path::VALUES.len());
 
-    let factor = Builder::<f64>::new(Config::default())
-        .build(matrix)
-        .expect("factorization should succeed");
+    let factor = factorize(Sddm::try_from(view).expect("an SDDM"));
     assert_eq!(factor.n_steps(), factor.n().saturating_sub(1));
 
     let b = [1.0, -1.0, 1.0, -1.0];

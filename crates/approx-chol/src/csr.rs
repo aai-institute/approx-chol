@@ -1,25 +1,19 @@
-use crate::{CsrError, Error, IndexKind};
+use crate::{CsrError, IndexKind};
 use num_traits::{cast, PrimInt};
 
 /// Reserves up front: collecting into `Option<Vec<_>>` drops the size hint and cost 3.5x the traffic.
-fn cast_slice<S: PrimInt, D: PrimInt>(src: &[S], kind: IndexKind) -> Result<Vec<D>, Error> {
+fn cast_slice<S: PrimInt, D: PrimInt>(src: &[S], kind: IndexKind) -> Result<Vec<D>, CsrError> {
     let mut out = Vec::with_capacity(src.len());
     for &value in src {
-        out.push(
-            cast::<S, D>(value)
-                .ok_or(Error::InvalidCsr(CsrError::IndexExceedsIndexType { kind }))?,
-        );
+        out.push(cast::<S, D>(value).ok_or(CsrError::IndexExceedsIndexType { kind })?);
     }
     Ok(out)
 }
 
-fn as_usize<I: PrimInt>(value: I, kind: IndexKind, position: usize) -> Result<usize, Error> {
+fn as_usize<I: PrimInt>(value: I, kind: IndexKind, position: usize) -> Result<usize, CsrError> {
     value
         .to_usize()
-        .ok_or(Error::InvalidCsr(CsrError::IndexNotRepresentableAsUsize {
-            kind,
-            position,
-        }))
+        .ok_or(CsrError::IndexNotRepresentableAsUsize { kind, position })
 }
 
 /// Zero-copy, validated CSR view over any library's arrays: the factorization input.
@@ -32,13 +26,13 @@ pub struct CsrRef<'a, T = f64, I = u32> {
 }
 
 impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
-    /// The only constructor, so every `CsrRef` is valid; [`Error::InvalidCsr`] names a violation.
+    /// The only constructor, so every `CsrRef` is valid; [`CsrError`] names a violation.
     pub fn new(
         row_ptrs: &'a [I],
         col_indices: &'a [I],
         values: &'a [T],
         n: u32,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, CsrError> {
         let csr = Self {
             row_ptrs,
             col_indices,
@@ -49,42 +43,52 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
         Ok(csr)
     }
 
-    fn validate(&self) -> Result<(), Error> {
+    fn validate(&self) -> Result<(), CsrError> {
         let n = self.n as usize;
+        // A grounded component's ground slot is named by a `u32` after its vertices.
+        if self.n == u32::MAX {
+            return Err(CsrError::MatrixDimensionExceedsIndexType { n });
+        }
         if self.row_ptrs.len() != n + 1 {
-            return Err(Error::InvalidCsr(CsrError::RowPtrsLenMismatch {
+            return Err(CsrError::RowPtrsLenMismatch {
                 expected: n + 1,
                 got: self.row_ptrs.len(),
-            }));
+            });
         }
         if self.col_indices.len() != self.values.len() {
-            return Err(Error::InvalidCsr(CsrError::ColIndicesValuesLenMismatch {
+            return Err(CsrError::ColIndicesValuesLenMismatch {
                 col_indices_len: self.col_indices.len(),
                 values_len: self.values.len(),
-            }));
+            });
         }
 
         let row_ptr_last = as_usize(self.row_ptrs[n], IndexKind::RowPtr, n)?;
         if self.row_ptrs[0] != I::zero() {
-            return Err(Error::InvalidCsr(CsrError::RowPtrsMustStartAtZero {
+            return Err(CsrError::RowPtrsMustStartAtZero {
                 got: as_usize(self.row_ptrs[0], IndexKind::RowPtr, 0)?,
-            }));
+            });
+        }
+        // Every position downstream, mirror cursors included, is a `u32`.
+        if u32::try_from(self.col_indices.len()).is_err() {
+            return Err(CsrError::IndexExceedsIndexType {
+                kind: IndexKind::RowPtr,
+            });
         }
         if row_ptr_last != self.col_indices.len() {
-            return Err(Error::InvalidCsr(CsrError::RowPtrsEndMismatchNnz {
+            return Err(CsrError::RowPtrsEndMismatchNnz {
                 row_ptr_end: row_ptr_last,
                 nnz: self.col_indices.len(),
-            }));
+            });
         }
 
         // Both scans compare in `I`, so only the error arms convert an index to `usize`.
         for i in 0..n {
             if self.row_ptrs[i] > self.row_ptrs[i + 1] {
-                return Err(Error::InvalidCsr(CsrError::RowPtrsNotNonDecreasing {
+                return Err(CsrError::RowPtrsNotNonDecreasing {
                     row: i,
                     prev: as_usize(self.row_ptrs[i], IndexKind::RowPtr, i)?,
                     next: as_usize(self.row_ptrs[i + 1], IndexKind::RowPtr, i + 1)?,
-                }));
+                });
             }
         }
 
@@ -93,17 +97,17 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
         for (position, &col) in self.col_indices.iter().enumerate() {
             // Downstream reads columns in place as `usize`, which a negative one is not.
             if col < I::zero() {
-                return Err(Error::InvalidCsr(CsrError::IndexNotRepresentableAsUsize {
+                return Err(CsrError::IndexNotRepresentableAsUsize {
                     kind: IndexKind::ColIndex,
                     position,
-                }));
+                });
             }
             if limit.is_some_and(|limit| col >= limit) {
-                return Err(Error::InvalidCsr(CsrError::ColumnIndexOutOfBounds {
+                return Err(CsrError::ColumnIndexOutOfBounds {
                     position,
                     col: as_usize(col, IndexKind::ColIndex, position)?,
                     n,
-                }));
+                });
             }
         }
         Ok(())
@@ -135,8 +139,8 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
 }
 
 impl<'a, T: Clone, I: PrimInt> CsrRef<'a, T, I> {
-    /// Owned copy with `u32` indices; [`Error::InvalidCsr`] if an index does not fit.
-    pub fn to_owned_u32(&self) -> Result<OwnedCsr<T, u32>, Error> {
+    /// Owned copy with `u32` indices; [`CsrError`] if an index does not fit.
+    pub fn to_owned_u32(&self) -> Result<OwnedCsr<T, u32>, CsrError> {
         Ok(OwnedCsr {
             row_ptrs: cast_slice(self.row_ptrs, IndexKind::RowPtr)?,
             col_indices: cast_slice(self.col_indices, IndexKind::ColIndex)?,
@@ -156,20 +160,18 @@ pub struct OwnedCsr<T = f64, I = u32> {
 }
 
 impl<T: Clone, I: PrimInt> OwnedCsr<T, I> {
-    /// Owned CSR from `usize` arrays; [`Error::InvalidCsr`] if a value exceeds the index type.
+    /// Owned CSR from `usize` arrays; [`CsrError`] if a value exceeds the index type.
     pub fn try_from_usize(
         row_ptrs: &[usize],
         col_indices: &[usize],
         values: &[T],
         n: usize,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, CsrError> {
         // `n` must fit `u32` to be stored, and `I` for `validate` to bounds-check columns against it.
         let n = u32::try_from(n)
             .ok()
             .filter(|&fits| cast::<u32, I>(fits).is_some())
-            .ok_or(Error::InvalidCsr(
-                CsrError::MatrixDimensionExceedsIndexType { n },
-            ))?;
+            .ok_or(CsrError::MatrixDimensionExceedsIndexType { n })?;
 
         let row_ptrs = cast_slice(row_ptrs, IndexKind::RowPtr)?;
         let col_indices = cast_slice(col_indices, IndexKind::ColIndex)?;
@@ -197,7 +199,6 @@ impl<T, I: PrimInt> OwnedCsr<T, I> {
     }
 }
 
-/// Lets `factorize(&owned)` work through the induced `TryFrom<Error = Infallible>`.
 impl<'a, T, I: PrimInt> From<&'a OwnedCsr<T, I>> for CsrRef<'a, T, I> {
     fn from(owned: &'a OwnedCsr<T, I>) -> Self {
         owned.as_csr_ref()
@@ -205,24 +206,20 @@ impl<'a, T, I: PrimInt> From<&'a OwnedCsr<T, I>> for CsrRef<'a, T, I> {
 }
 
 #[cfg(any(feature = "sprs", feature = "faer"))]
-fn validate_square_dims(rows: usize, cols: usize) -> Result<u32, Error> {
+fn validate_square_dims(rows: usize, cols: usize) -> Result<u32, CsrError> {
     if rows != cols {
-        return Err(Error::InvalidCsr(CsrError::ExpectedSquareMatrix {
-            rows,
-            cols,
-        }));
+        return Err(CsrError::ExpectedSquareMatrix { rows, cols });
     }
-    u32::try_from(rows)
-        .map_err(|_| Error::InvalidCsr(CsrError::MatrixDimensionExceedsIndexType { n: rows }))
+    u32::try_from(rows).map_err(|_| CsrError::MatrixDimensionExceedsIndexType { n: rows })
 }
 
 #[cfg(feature = "sprs")]
 impl<'a, T, I: sprs::SpIndex + PrimInt> TryFrom<sprs::CsMatViewI<'a, T, I>> for CsrRef<'a, T, I> {
-    type Error = Error;
+    type Error = CsrError;
 
     fn try_from(mat: sprs::CsMatViewI<'a, T, I>) -> Result<Self, Self::Error> {
         if !mat.is_csr() {
-            return Err(Error::InvalidCsr(CsrError::ExpectedCsrMatrixGotCsc));
+            return Err(CsrError::ExpectedCsrMatrixGotCsc);
         }
         let n = validate_square_dims(mat.rows(), mat.cols())?;
         let (indptr, indices, data) = mat.into_raw_storage();
@@ -232,7 +229,7 @@ impl<'a, T, I: sprs::SpIndex + PrimInt> TryFrom<sprs::CsMatViewI<'a, T, I>> for 
 
 #[cfg(feature = "sprs")]
 impl<'a, T, I: sprs::SpIndex + PrimInt> TryFrom<&'a sprs::CsMatI<T, I>> for CsrRef<'a, T, I> {
-    type Error = Error;
+    type Error = CsrError;
 
     fn try_from(mat: &'a sprs::CsMatI<T, I>) -> Result<Self, Self::Error> {
         Self::try_from(mat.view())
@@ -243,7 +240,7 @@ impl<'a, T, I: sprs::SpIndex + PrimInt> TryFrom<&'a sprs::CsMatI<T, I>> for CsrR
 impl<'a, T, I: faer::Index + PrimInt> TryFrom<faer::sparse::SparseRowMatRef<'a, I, T>>
     for CsrRef<'a, T, I>
 {
-    type Error = Error;
+    type Error = CsrError;
 
     fn try_from(mat: faer::sparse::SparseRowMatRef<'a, I, T>) -> Result<Self, Self::Error> {
         let n = validate_square_dims(mat.nrows(), mat.ncols())?;
@@ -256,7 +253,7 @@ impl<'a, T, I: faer::Index + PrimInt> TryFrom<faer::sparse::SparseRowMatRef<'a, 
 impl<'a, T, I: faer::Index + PrimInt> TryFrom<&'a faer::sparse::SparseRowMat<I, T>>
     for CsrRef<'a, T, I>
 {
-    type Error = Error;
+    type Error = CsrError;
 
     fn try_from(mat: &'a faer::sparse::SparseRowMat<I, T>) -> Result<Self, Self::Error> {
         Self::try_from(mat.as_ref())
@@ -296,7 +293,7 @@ mod tests {
         let as_ref: CsrRef<'_, f64, u32> = (&owned).into();
         assert_eq!(as_ref.n(), 4);
 
-        let factor = crate::factorize(&owned).expect("factorize &OwnedCsr");
-        assert_eq!(factor.n(), 4);
+        let sddm = crate::Sddm::try_from(owned.as_csr_ref()).expect("an SDDM");
+        assert_eq!(crate::factorize(sddm).n(), 4);
     }
 }

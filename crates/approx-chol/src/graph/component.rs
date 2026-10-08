@@ -1,66 +1,51 @@
-//! The [`Sddm`] split into components, each grounded by its own surplus or floating.
-
-mod sets;
+//! One connected block of the SDDM input, grounded by its own surplus or floating.
 
 use super::adjacency::{add_edge_pair, AdjListGraph, Edge};
-use super::blocks::{BlockLayout, BlockVertices};
+use super::blocks::BlockVertices;
 use super::multiplicity::EdgeCount;
-use crate::sddm::{Laplacian, Sddm};
+use crate::sddm::Laplacian;
 use crate::types::Real;
-use sets::DisjointSets;
 
-/// `None` when connected. Its order becomes the factor's permutation.
-pub(crate) fn components<T: Real>(sddm: &Sddm<T>) -> Option<BlockLayout> {
-    let laplacian = sddm.laplacian();
-    let mut sets = DisjointSets::new(laplacian.n());
-    for row in 0..laplacian.n() {
-        let (neighbors, _) = laplacian.row(row);
-        if neighbors.is_empty() {
-            continue;
-        }
-        let mut root = sets.find(row as u32);
-        for &col in neighbors {
-            root = sets.union_resolved(root, col);
-        }
-    }
-    if let Some(surplus) = sddm.surplus() {
-        // One ground shared by every grounded row, so their components are one.
-        let mut rows = (0..laplacian.n() as u32).filter(|&row| surplus[row as usize] > T::zero());
-        if let Some(first) = rows.next() {
-            let mut root = sets.find(first);
-            for row in rows {
-                root = sets.union_resolved(root, row);
-            }
-        }
-    }
-    sets.layout()
+/// How a component's free slot is fixed: by its own ground, or by pinning its last vertex.
+pub(crate) enum Gauge<'a, T> {
+    Floating,
+    /// The input's surplus, indexed by global vertex.
+    Grounded(&'a [T]),
 }
 
 /// A floating component pins its last vertex; a grounded one appends a ground slot after its vertices.
 pub(crate) struct Component<'a, T> {
-    sddm: &'a Sddm<T>,
+    laplacian: &'a Laplacian<T>,
     vertices: BlockVertices<'a>,
-    /// `Some` exactly when a vertex here has positive surplus.
-    surplus: Option<&'a [T]>,
+    gauge: Gauge<'a, T>,
 }
 
 impl<'a, T: Real> Component<'a, T> {
-    pub(crate) fn new(sddm: &'a Sddm<T>, vertices: BlockVertices<'a>) -> Self {
-        let surplus = sddm.surplus().filter(|surplus| match &vertices {
+    /// `surplus` is `Some` only when some component holds surplus, so a whole input with it is grounded.
+    pub(crate) fn new(
+        laplacian: &'a Laplacian<T>,
+        vertices: BlockVertices<'a>,
+        surplus: Option<&'a [T]>,
+    ) -> Self {
+        let holds_surplus = |surplus: &[T]| match &vertices {
             BlockVertices::Whole(_) => true,
             BlockVertices::Part { vertices, .. } => vertices
                 .iter()
                 .any(|&vertex| surplus[vertex as usize] > T::zero()),
-        });
+        };
+        let gauge = match surplus {
+            Some(surplus) if holds_surplus(surplus) => Gauge::Grounded(surplus),
+            _ => Gauge::Floating,
+        };
         Self {
-            sddm,
+            laplacian,
             vertices,
-            surplus,
+            gauge,
         }
     }
 
     pub(crate) fn is_grounded(&self) -> bool {
-        self.surplus.is_some()
+        matches!(self.gauge, Gauge::Grounded(_))
     }
 
     /// Every vertex but a floating component's pinned one.
@@ -89,12 +74,12 @@ impl<'a, T: Real> Component<'a, T> {
         let rows = self.eliminated();
         // Matched once, outside the walk, as `for_each_edge` is.
         match &self.vertices {
-            BlockVertices::Whole(_) => self.sddm.entries(0..rows, |row, col, value| {
+            BlockVertices::Whole(_) => self.input_entries(0..rows, |row, col, value| {
                 if col < rows {
                     entry(row, col, value);
                 }
             }),
-            BlockVertices::Part { vertices, local_of } => self.sddm.entries(
+            BlockVertices::Part { vertices, local_of } => self.input_entries(
                 vertices[..rows].iter().map(|&global| global as usize),
                 |row, col, value| {
                     let col = local_of[col] as usize;
@@ -106,9 +91,36 @@ impl<'a, T: Real> Component<'a, T> {
         }
     }
 
+    /// Each row's upper entries, then its surplus; a diagonal arrives as summands, in storage order.
+    #[inline]
+    fn input_entries(
+        &self,
+        rows: impl Iterator<Item = usize> + Clone,
+        mut entry: impl FnMut(usize, usize, T),
+    ) {
+        for row in rows.clone() {
+            let (neighbors, weights) = self.laplacian.row(row);
+            for (&col, &weight) in neighbors.iter().zip(weights) {
+                let col = col as usize;
+                entry(row, col, -weight);
+                entry(row, row, weight);
+                entry(col, col, weight);
+            }
+        }
+        if let Gauge::Grounded(surplus) = self.gauge {
+            for row in rows {
+                entry(row, row, surplus[row]);
+            }
+        }
+    }
+
     /// Builds the component's adjacency, which only the approximate arm needs.
     pub(crate) fn graph<C: EdgeCount>(&self) -> AdjListGraph<C, T> {
-        let laplacian = self.sddm.laplacian();
+        let laplacian = self.laplacian;
+        let surplus = match self.gauge {
+            Gauge::Grounded(surplus) => Some(surplus),
+            Gauge::Floating => None,
+        };
         let vertices = self.vertices.len();
         let ground = vertices;
 
@@ -117,9 +129,7 @@ impl<'a, T: Real> Component<'a, T> {
         let mut degrees: Vec<u32> = Vec::with_capacity(vertices + 1);
         degrees.extend((0..vertices).map(|local| {
             let global = self.vertices.global(local);
-            let grounded = self
-                .surplus
-                .is_some_and(|surplus| surplus[global] > T::zero());
+            let grounded = surplus.is_some_and(|surplus| surplus[global] > T::zero());
             ground_degree += u32::from(grounded);
             laplacian.row(global).0.len() as u32 + u32::from(grounded)
         }));
@@ -136,7 +146,7 @@ impl<'a, T: Real> Component<'a, T> {
         for_each_edge(laplacian, &self.vertices, |local, col, weight| {
             add_edge_pair(&mut adj, local, col, weight);
         });
-        if let Some(surplus) = self.surplus {
+        if let Some(surplus) = surplus {
             for local in 0..vertices {
                 let s = surplus[self.vertices.global(local)];
                 if s > T::zero() {

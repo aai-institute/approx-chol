@@ -181,7 +181,6 @@ impl<T: num_traits::Float> LowerTriangular<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::BlockVertices;
     use crate::sddm::Sddm;
     use crate::CsrRef;
 
@@ -197,19 +196,53 @@ mod tests {
                 failure: DenseFailure::NonPositivePivot,
             })
         };
-        // Wide enough for the highest global vertex the component names.
-        let row_ptrs = [0u32; 32];
-        let csr = CsrRef::new(&row_ptrs, &[], &[], 31).expect("valid CSR");
-        let sddm = Sddm::<f64>::try_from(csr).expect("a Laplacian");
-        let mut local_of = vec![0u32; 31];
-        let component = Component::new(&sddm, BlockVertices::part(&[0, 15, 30], &mut local_of));
-        assert_eq!(pivot.at(&component), named(30));
-        let whole = Component::new(&sddm, BlockVertices::whole(31));
-        assert_eq!(pivot.at(&whole), named(2));
+        // A path 0-15-30 among 31 vertices, the rest isolated: its block is the first.
+        let mut row_ptrs = vec![0u32];
+        let (mut col_indices, mut values) = (Vec::new(), Vec::new());
+        for row in 0..31u32 {
+            let entries: &[(u32, f64)] = match row {
+                0 => &[(0, 1.0), (15, -1.0)],
+                15 => &[(0, -1.0), (15, 2.0), (30, -1.0)],
+                30 => &[(15, -1.0), (30, 1.0)],
+                _ => &[],
+            };
+            for &(col, value) in entries {
+                col_indices.push(col);
+                values.push(value);
+            }
+            row_ptrs.push(col_indices.len() as u32);
+        }
+        let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 31).expect("valid CSR");
+        let (named_by_first, _) = Sddm::<f64>::try_from(csr)
+            .expect("a Laplacian")
+            .map_components(|component| {
+                let path = component.eliminated() == 2;
+                Ok::<_, ()>(path.then(|| {
+                    [
+                        pivot.at(component),
+                        NotFactorable::WillNotFit { dim: 9 }.at(component),
+                    ]
+                }))
+            })
+            .expect("no component fails");
         assert_eq!(
-            NotFactorable::WillNotFit { dim: 9 }.at(&component),
-            Fallback::WillNotFit { dim: 9 }
+            named_by_first[0],
+            Some([named(30), Fallback::WillNotFit { dim: 9 }])
         );
+
+        let path = [0u32, 2, 5, 7];
+        let csr = CsrRef::new(
+            &path,
+            &[0, 1, 0, 1, 2, 1, 2],
+            &[1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0],
+            3,
+        )
+        .expect("valid CSR");
+        let (whole, _) = Sddm::<f64>::try_from(csr)
+            .expect("a Laplacian")
+            .map_components(|component| Ok::<_, ()>(pivot.at(component)))
+            .expect("no component fails");
+        assert_eq!(whole, [named(2)]);
     }
 
     #[test]

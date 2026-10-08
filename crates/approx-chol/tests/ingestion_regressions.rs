@@ -5,8 +5,7 @@ mod grounded;
 #[path = "common/laplacian_prop.rs"]
 mod laplacian_prop;
 
-use approx_chol::low_level::Builder;
-use approx_chol::{Config, CsrRef, Error, Factor};
+use approx_chol::{factorize_with, Config, CsrRef, Error, Factor, Sddm};
 use grounded::is_grounded;
 use laplacian_prop::widen;
 use num_traits::PrimInt;
@@ -20,7 +19,8 @@ type Solved<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64], [f64; 2], [f64; 2])
 fn build(config: Config, rp: &[u32], ci: &[u32], vals: &[f64]) -> Result<Factor<f64>, Error> {
     let n = (rp.len() - 1) as u32;
     let csr = CsrRef::new(rp, ci, vals, n).expect("structurally valid CSR");
-    Builder::<f64>::new(config).build(csr)
+    let sddm = Sddm::try_from(csr)?;
+    Ok(factorize_with(sddm, config).expect("no case asks an exact pivot to fail"))
 }
 
 /// The expected error is compared whole, so a shape cannot pass by being rejected
@@ -108,12 +108,13 @@ fn out_of_class_input_is_rejected_at_its_reported_position() {
             &[max, max],
             Error::NonFiniteRow { row: 0 },
         ),
+        // Each diagonal is finite; the one ground both surpluses close on is not.
         (
-            "overflow of the surplus total",
-            &[0, 1, 2],
-            &[0, 1],
-            &[max, max],
-            Error::SurplusOverflow,
+            "overflow of a component's ground",
+            &[0, 2, 4],
+            &[0, 1, 0, 1],
+            &[max, -1.0, -1.0, max],
+            Error::GroundOverflow { vertex: 0 },
         ),
         // Every stored entry clears the floor; row 0's ground edge does not, whatever row 2 adds.
         (
@@ -150,7 +151,8 @@ fn out_of_class_input_is_rejected_at_its_reported_position() {
 #[test]
 fn in_class_input_is_accepted_on_both_paths() {
     let next_after_one = f64::from_bits(1.0f64.to_bits() + 1);
-    let cases: [Accepted<'_>; 3] = [
+    let max = f64::MAX;
+    let cases: [Accepted<'_>; 4] = [
         (
             "one-ulp transpose difference",
             &[0, 2, 4],
@@ -163,14 +165,19 @@ fn in_class_input_is_accepted_on_both_paths() {
             &[0, 1, 1, 0, 0, 1],
             &[2.0, -0.25, -0.75, -0.5, -0.5, 2.0],
         ),
-        // Two PD SDDM blocks: the off-diagonal graph has two components, but every
-        // row has surplus, so the ground vertex links them into one. A
-        // pre-augmentation component count would reject it.
+        // Two PD SDDM blocks, each on its own ground.
         (
-            "block-diagonal SDDM sharing a ground vertex",
+            "block-diagonal SDDM",
             &[0, 2, 4, 6, 8],
             &[0, 1, 0, 1, 2, 3, 2, 3],
             &[5.0, -1.0, -1.0, 4.0, 5.0, -1.0, -1.0, 4.0],
+        ),
+        // One shared ground would sum both to infinity; each component's own ground is finite.
+        (
+            "grounds that only a shared ground would overflow",
+            &[0, 1, 2],
+            &[0, 1],
+            &[max, max],
         ),
     ];
 
@@ -294,9 +301,8 @@ fn f32_surplus_is_judged_against_summation_error_alone() {
         let (rp, ci, vals) = surplus_pair(1e-3f32, surplus);
         let n = (rp.len() - 1) as u32;
         let csr = CsrRef::new(&rp, &ci, &vals, n).expect("structurally valid CSR");
-        let factor = Builder::<f32>::new(Config::default())
-            .build(csr)
-            .expect(label);
+        let factor =
+            factorize_with(Sddm::try_from(csr).expect("an SDDM"), Config::default()).expect(label);
         assert_eq!(
             is_grounded(&factor),
             grounded,
@@ -362,9 +368,12 @@ fn a_diagonal_near_the_type_maximum_still_solves() {
 fn many_zero_singletons_factor_as_trivial_components() {
     let n = 128u32;
     let row_ptrs = vec![0u32; n as usize + 1];
-    let factor = Builder::<f64>::new(Config::default())
-        .build(CsrRef::new(&row_ptrs, &[], &[], n).expect("valid zero CSR"))
-        .expect("zero components");
+    let factor = factorize_with(
+        Sddm::<f64>::try_from(CsrRef::new(&row_ptrs, &[], &[], n).expect("valid zero CSR"))
+            .expect("an SDDM"),
+        Config::default(),
+    )
+    .expect("zero components");
     assert_eq!(factor.n_steps(), 0);
     assert_eq!(
         factor.solve(&vec![1.0; n as usize]).expect("solve"),
@@ -377,9 +386,14 @@ fn mixed_grounded_and_floating_components_solve_independently() {
     let row_ptrs = [0u32, 1, 3, 5];
     let columns = [0u32, 1, 2, 1, 2];
     let values = [2.0, 1.0, -1.0, -1.0, 1.0];
-    let factor = Builder::<f64>::new(Config::default())
-        .build(CsrRef::new(&row_ptrs, &columns, &values, 3).expect("valid mixed CSR"))
-        .expect("mixed factor");
+    let factor = factorize_with(
+        Sddm::<f64>::try_from(
+            CsrRef::new(&row_ptrs, &columns, &values, 3).expect("valid mixed CSR"),
+        )
+        .expect("an SDDM"),
+        Config::default(),
+    )
+    .expect("mixed factor");
     let solution = factor.solve(&[4.0, 1.0, -1.0]).expect("solve");
     assert!((solution[0] - 2.0).abs() < 1e-14);
     assert_eq!(&solution[1..], &[0.5, -0.5]);
@@ -394,9 +408,12 @@ fn interleaved_components_solve_in_input_order() {
     let row_ptrs = [0u32, 2, 4, 6, 8];
     let columns = [0u32, 2, 1, 3, 0, 2, 1, 3];
     let values = [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
-    let factor = Builder::<f64>::new(Config::default())
-        .build(CsrRef::new(&row_ptrs, &columns, &values, 4).expect("valid CSR"))
-        .expect("interleaved factor");
+    let factor = factorize_with(
+        Sddm::<f64>::try_from(CsrRef::new(&row_ptrs, &columns, &values, 4).expect("valid CSR"))
+            .expect("an SDDM"),
+        Config::default(),
+    )
+    .expect("interleaved factor");
 
     // Block {0,2} gets the 1st and 3rd entry, block {1,3} the 2nd and 4th.
     let cases = [
@@ -491,8 +508,7 @@ fn canonical_and_reordered_ingestion_agree_bit_for_bit() {
 }
 
 fn solve_grid<I: PrimInt + 'static>(csr: CsrRef<'_, f64, I>, rhs: &[f64]) -> Vec<f64> {
-    Builder::<f64>::new(Config::default())
-        .build(csr)
+    factorize_with(Sddm::try_from(csr).expect("an SDDM"), Config::default())
         .expect("grid factor")
         .solve(rhs)
         .expect("solve")

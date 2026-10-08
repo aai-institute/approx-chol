@@ -1,4 +1,7 @@
-use approx_chol::{Backend, Config, CsrRef, DenseFailure, Error, ExactFailure, Fallback};
+use approx_chol::{
+    Backend, Config, CsrError, CsrRef, DenseFailure, Error, ExactFailure, Fallback, Sddm,
+    UnusablePivot,
+};
 use numpy::{BorrowError, Element, PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
 use std::mem::size_of;
@@ -277,7 +280,8 @@ fn factorize_csr(
     config: Option<&PyConfig>,
 ) -> PyResult<PyFactor> {
     let config = config.map(PyConfig::to_native).unwrap_or_default();
-    let inner = approx_chol::factorize_with(csr, config).map_err(approx_chol_err_to_py)?;
+    let sddm = Sddm::try_from(csr).map_err(approx_chol_err_to_py)?;
+    let inner = approx_chol::factorize_with(sddm, config).map_err(unusable_pivot_to_py)?;
     warn_on_fallback(py, &inner)?;
     Ok(PyFactor { inner })
 }
@@ -388,6 +392,14 @@ fn approx_chol_err_to_py(e: Error) -> PyErr {
     value_error(e.to_string())
 }
 
+fn csr_err_to_py(e: CsrError) -> PyErr {
+    value_error(format!("invalid CSR matrix: {e}"))
+}
+
+fn unusable_pivot_to_py(pivot: UnusablePivot) -> PyErr {
+    value_error(format!("exact dense Cholesky failed at {pivot}"))
+}
+
 #[pyfunction]
 #[pyo3(signature = (row_ptrs, col_indices, values, n, config=None))]
 fn factorize_raw<'py>(
@@ -408,7 +420,7 @@ fn factorize_raw<'py>(
         .as_slice()
         .map_err(|_| value_error("values must be contiguous"))?;
 
-    let csr = CsrRef::new(rp, ci, vals, n).map_err(approx_chol_err_to_py)?;
+    let csr = CsrRef::new(rp, ci, vals, n).map_err(csr_err_to_py)?;
     factorize_csr(py, csr, config)
 }
 
@@ -448,7 +460,7 @@ fn factorize(
         .as_slice()
         .map_err(|_| value_error("data must be contiguous"))?;
 
-    let csr = CsrRef::new(rp, ci, vals, n).map_err(approx_chol_err_to_py)?;
+    let csr = CsrRef::new(rp, ci, vals, n).map_err(csr_err_to_py)?;
     factorize_csr(py, csr, config)
 }
 

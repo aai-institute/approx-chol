@@ -6,7 +6,7 @@ mod path;
 mod path_solve;
 use path_solve::assert_view_and_factor_match_fixture;
 
-use approx_chol::{factorize, CsrError, Error};
+use approx_chol::{CsrError, CsrRef};
 use faer::sparse::SparseRowMat;
 use num_traits::{cast, PrimInt};
 
@@ -41,9 +41,9 @@ fn faer_factorize_rejects_non_square_with_error() {
         vec![0u32, 1, 0],
     );
     let mat = SparseRowMat::new(symbolic, vec![1.0, 1.0, 1.0]);
-    let err = factorize(&mat).expect_err("non-square matrix must be rejected");
+    let err = CsrRef::try_from(&mat).expect_err("non-square matrix must be rejected");
     assert!(matches!(
         err,
-        Error::InvalidCsr(CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 })
+        CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 }
     ));
 }

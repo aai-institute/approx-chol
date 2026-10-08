@@ -3,8 +3,7 @@
 #[path = "shared/mod.rs"]
 mod shared;
 
-use approx_chol::low_level::Builder;
-use approx_chol::Config;
+use approx_chol::{factorize_with, Config, Sddm};
 use shared::grid_laplacian;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -13,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Grid Laplacian: 10×10 ({n} nodes)\n");
 
     let ac_config = Config::default();
-    let ac_factor = Builder::new(ac_config).build(lap.as_csr()?)?;
+    let ac_factor = factorize_with(Sddm::try_from(lap.as_csr()?)?, ac_config)?;
 
     println!("=== Default AC ===");
     println!("  split_merge : None (standard AC)");
@@ -25,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         seed: 42,
         ..Config::default()
     };
-    let ac2_factor = Builder::new(ac2_config).build(lap.as_csr()?)?;
+    let ac2_factor = factorize_with(Sddm::try_from(lap.as_csr()?)?, ac2_config)?;
 
     println!("\n=== AC2 (k=2) ===");
     println!("  split_merge : Some(2)");

@@ -7,5 +7,5 @@ mod multiplicity;
 
 pub(crate) use adjacency::{AdjListGraph, Neighbor};
 pub(crate) use blocks::{BlockLayout, BlockVertices};
-pub(crate) use component::{components, Component};
+pub(crate) use component::Component;
 pub(crate) use multiplicity::{EdgeCount, Multi, Single, SplitFactor};

@@ -5,7 +5,7 @@
 #[path = "common/residual.rs"]
 mod residual;
 
-use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, FACTOR_FORMAT_VERSION};
+use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, Sddm, FACTOR_FORMAT_VERSION};
 use rstest::rstest;
 
 /// The interleaved payload as it was written before the version moved to `0x41430005`.
@@ -49,7 +49,8 @@ impl Matrix {
             backend: self.backend(),
             ..Config::default()
         };
-        factorize_with(self.csr(), config).expect("factorization should succeed")
+        factorize_with(Sddm::try_from(self.csr()).expect("an SDDM"), config)
+            .expect("factorization should succeed")
     }
 }
 
