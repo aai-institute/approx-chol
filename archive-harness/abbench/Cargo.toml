@@ -1,0 +1,23 @@
+[package]
+name = "abbench"
+version = "0.0.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+# 7421a8d, feat/133-sddm-input HEAD
+ac_base = { package = "approx-chol", path = "../arms/base/crates/approx-chol" }
+# 7421a8d again, compiled as its own crate: the layout-noise twin
+ac_twin = { package = "approx-chol", path = "../arms/twin/crates/approx-chol" }
+# redesign phase 1, frozen
+ac_new = { package = "approx-chol", path = "../arms/new/crates/approx-chol" }
+# working tree again, compiled as its own crate
+ac_newtwin = { package = "approx-chol", path = "../arms/newtwin/crates/approx-chol" }
+dhat = "0.3"
+
+[profile.release]
+debug = true
+opt-level = 3
+lto = "fat"
+codegen-units = 1
