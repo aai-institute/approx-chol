@@ -147,6 +147,11 @@ impl Cross {
 
 /// Buckets by row in column order, then sums each row's cells through a dense workspace.
 fn accumulate(n_rows: usize, n_cols: usize, cells: &[(u32, u32, f64)]) -> Block {
+    // within's dispatch: dense below ~40 MB unless the sparse path would use less memory.
+    let table_size = n_rows.saturating_mul(n_cols);
+    if table_size <= 5_000_000 || cells.len().saturating_mul(12) >= table_size.saturating_mul(8) {
+        return accumulate_dense(n_rows, n_cols, cells);
+    }
     let mut bucket_ptr = vec![0u32; n_rows + 1];
     for &(row, _, _) in cells {
         bucket_ptr[row as usize + 1] += 1;
@@ -186,6 +191,35 @@ fn accumulate(n_rows: usize, n_cols: usize, cells: &[(u32, u32, f64)]) -> Block 
         indptr[row + 1] = indices.len() as u32;
         touched.clear();
     }
+    Block {
+        indptr,
+        indices,
+        data,
+        nrows: n_rows,
+        ncols: n_cols,
+    }
+}
+
+/// One flat table with O(1) accumulation per cell.
+fn accumulate_dense(n_rows: usize, n_cols: usize, cells: &[(u32, u32, f64)]) -> Block {
+    let mut table = vec![0.0f64; n_rows * n_cols];
+    for &(row, col, cell) in cells {
+        table[row as usize * n_cols + col as usize] += cell;
+    }
+    let mut indptr = Vec::with_capacity(n_rows + 1);
+    let mut indices = Vec::new();
+    let mut data = Vec::new();
+    indptr.push(0u32);
+    for row in table.chunks_exact(n_cols.max(1)).take(n_rows) {
+        for (col, &value) in row.iter().enumerate() {
+            if value != 0.0 {
+                indices.push(col as u32);
+                data.push(value);
+            }
+        }
+        indptr.push(indices.len() as u32);
+    }
+    indptr.resize(n_rows + 1, indices.len() as u32);
     Block {
         indptr,
         indices,
