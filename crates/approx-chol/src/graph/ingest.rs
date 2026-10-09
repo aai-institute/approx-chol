@@ -11,7 +11,7 @@ use crate::types::Real;
 use crate::{CsrRef, Error};
 use canonical::Canonical;
 use num_traits::PrimInt;
-use validate::{validate, Grounding, Ingested};
+use validate::{validate, with_surpluses, Grounding, Ingested};
 
 /// A validated [`CsrRef`] index is non-negative and fits `usize`.
 #[inline(always)]
@@ -35,6 +35,25 @@ impl<'a, T: Real, I: PrimInt> Ingestion<'a, T, I> {
             grounding,
             layout,
         } = validate(&canonical)?;
+        Ok(Self {
+            canonical,
+            diagonal,
+            grounding,
+            layout,
+        })
+    }
+
+    /// `laplacian` holds off-diagonals only; each row's diagonal is its adjacency plus its surplus.
+    pub(crate) fn with_surpluses(
+        laplacian: CsrRef<'a, T, I>,
+        surpluses: &[T],
+    ) -> Result<Self, Error> {
+        let canonical = Canonical::of(laplacian)?;
+        let Ingested {
+            diagonal,
+            grounding,
+            layout,
+        } = with_surpluses(&canonical, surpluses)?;
         Ok(Self {
             canonical,
             diagonal,

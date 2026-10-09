@@ -218,6 +218,34 @@ where
         self.blocks.iter().map(Block::eliminated).sum()
     }
 
+    /// Room [`solve_in_slots`](Self::solve_in_slots) takes: `n`, then one slot per ground.
+    pub(crate) fn slots(&self) -> usize {
+        self.slots
+    }
+
+    /// Scratch [`solve_in_slots`](Self::solve_in_slots) needs: none when one unpermuted block spans it.
+    pub(crate) fn slots_scratch_len(&self) -> usize {
+        if self.solves_in_slots() {
+            0
+        } else {
+            self.scratch_len()
+        }
+    }
+
+    /// `x` holds the `n` inputs then the ground's room, so a single unpermuted block copies nothing.
+    pub(crate) fn solve_in_slots(&self, x: &mut [T], scratch: &mut [T]) -> Result<(), SolveError> {
+        debug_assert_eq!(x.len(), self.slots);
+        if self.solves_in_slots() {
+            self.solve_blocks(x);
+            return Ok(());
+        }
+        self.solve_in_place(&mut x[..self.n], scratch)
+    }
+
+    fn solves_in_slots(&self) -> bool {
+        self.permutation.is_none() && self.blocks.len() <= 1
+    }
+
     /// Scratch length [`solve_in_place`](Self::solve_in_place) needs; zero when blocks solve `x` directly.
     pub fn scratch_len(&self) -> usize {
         if self.permutation.is_some() || self.slots != self.n {

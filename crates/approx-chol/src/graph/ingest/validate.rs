@@ -179,10 +179,10 @@ impl<T: Real> RowBalance<T> {
 
 /// `row_sums` arrives off-diagonal-only; the diagonal joins it here.
 fn ground<T: Real>(
-    mut diagonal: Vec<T>,
+    diagonal: Vec<T>,
     mut row_sums: Vec<T>,
     terms: impl Iterator<Item = u32>,
-    mut sets: DisjointSets,
+    sets: DisjointSets,
 ) -> Result<Ingested<T>, Error> {
     let mut total = T::zero();
     let mut degree = 0usize;
@@ -208,6 +208,49 @@ fn ground<T: Real>(
         }
     }
 
+    attach_ground(diagonal, row_sums, total, degree, sets)
+}
+
+/// A caller that assembled the SDDM knows each surplus exactly, so none is re-derived from a rounded diagonal.
+pub(super) fn with_surpluses<T: Real, I: PrimInt>(
+    canonical: &Canonical<'_, T, I>,
+    surpluses: &[T],
+) -> Result<Ingested<T>, Error> {
+    let (row_ptrs, col_indices, values) = canonical.arrays();
+    let n = row_ptrs.len() - 1;
+    debug_assert_eq!(surpluses.len(), n);
+    let mut sets = DisjointSets::new(n);
+    let mut diagonal = Vec::with_capacity(n + 1);
+    let mut total = T::zero();
+    let mut degree = 0usize;
+    for (row, &surplus) in surpluses.iter().enumerate() {
+        let (from, to) = (index(row_ptrs[row]), index(row_ptrs[row + 1]));
+        let mut root = sets.find(row as u32);
+        let mut adjacency = T::zero();
+        for (&col, &value) in col_indices[from..to].iter().zip(&values[from..to]) {
+            let col = index(col);
+            adjacency = adjacency - value;
+            if col > row {
+                root = sets.union_resolved(root, col as u32);
+            }
+        }
+        diagonal.push(adjacency + surplus);
+        if surplus > T::zero() {
+            total = total + surplus;
+            degree += 1;
+        }
+    }
+    attach_ground(diagonal, surpluses.to_vec(), total, degree, sets)
+}
+
+/// `surpluses` is zero on every balanced row; the ground closes the rest.
+fn attach_ground<T: Real>(
+    mut diagonal: Vec<T>,
+    row_sums: Vec<T>,
+    total: T,
+    degree: usize,
+    mut sets: DisjointSets,
+) -> Result<Ingested<T>, Error> {
     let m = diagonal.len();
     if degree == 0 {
         return Ok(Ingested {

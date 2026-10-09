@@ -11,8 +11,7 @@ use crate::sgdd::factor_pairs::{CoordinateMap, Grounding, LocalComponent, Matrix
 use crate::sgdd::SchurMode;
 
 use super::compensated_sum;
-use super::csr_matrix::CsrMatrix;
-use super::factor::{factor_sparse, ReducedFactor};
+use super::factor::{ReducedFactor, ReducedSystem};
 use super::schur;
 
 /// Minimum number of rows to trigger parallel back-substitution.
@@ -88,8 +87,6 @@ pub(crate) struct BlockElimSolver {
     reduced_factor: ReducedFactor,
     /// Internal DOF count; the matrix is single-sized, a cover living in `reduced_factor`.
     n_internal: usize,
-    /// Internal factor dimension, including backend-added auxiliary vertices.
-    n_reduced: usize,
     /// Original-to-SDDM coordinate map.
     coordinates: CoordinateMap,
 }
@@ -158,12 +155,11 @@ impl Eliminated {
 }
 
 fn factor_complement(
-    complement: &CsrMatrix,
+    complement: &ReducedSystem,
     config: &LocalSolverConfig,
     on_failure: ExactFailure,
 ) -> Result<Factor, Error> {
-    let approx_chol = config.to_approx_chol(on_failure);
-    factor_sparse(complement, approx_chol)
+    complement.factor(config.to_approx_chol(on_failure))
 }
 
 /// Gremban cover: SDDM, and acts on the antisymmetric `[z, -z]` subspace as the original.
@@ -241,15 +237,13 @@ impl BlockElimSolver {
         let cross_tab = cross_tab.into();
         // Every solve reads the transpose, so it is built here rather than inside the first.
         cross_tab.ct();
-        debug_assert!(reduced_factor.spans_kept_block(cross_tab.n_cols()));
+        debug_assert_eq!(reduced_factor.dimension(), cross_tab.n_cols());
         let n_internal = cross_tab.n_local();
-        let n_reduced = reduced_factor.solve_dimension();
         Self {
             cross_tab,
             inv_diag_elim,
             reduced_factor,
             n_internal,
-            n_reduced,
             coordinates,
         }
     }
@@ -267,14 +261,10 @@ impl BlockElimSolver {
         let eliminated = Eliminated::new(matrix)?;
 
         let factor = match form {
-            MatrixForm::Laplacian => {
-                let factor = ReducedFactor::Direct {
-                    factor: Eliminated::factor_reduced(&eliminated, config)?,
-                    grounding: eliminated.matrix.grounding,
-                };
-                debug_assert!(factor.solve_dimension() >= factor.input_dimension());
-                factor
-            }
+            MatrixForm::Laplacian => ReducedFactor::Direct {
+                factor: Eliminated::factor_reduced(&eliminated, config)?,
+                grounding: eliminated.matrix.grounding,
+            },
             // Surplus survives the cover, so it grounds as the signed matrix did.
             MatrixForm::SignedPendingCover => ReducedFactor::Cover {
                 inner: Eliminated::factor_reduced(eliminated.cover()?, config)?,
@@ -299,13 +289,11 @@ impl BlockElimSolver {
     ) -> Result<(), SolveError> {
         let n = self.n_internal;
         let (n_elim, n_keep) = (self.n_eliminated(), self.n_kept());
-        let explicit_ground = self.reduced_factor.explicit_ground_index(n_keep);
 
         scale_by_diag_in_place(&mut rhs[..n_elim], &self.inv_diag_elim);
 
         {
             let (main, scratch) = rhs.split_at_mut(n);
-            scratch[n_keep..self.n_reduced].fill(0.0);
             self.cross_tab.ct().spmv_assign_add(
                 &main[..n_elim],
                 &main[n_elim..],
@@ -313,46 +301,23 @@ impl BlockElimSolver {
                 allow_inner_parallelism,
             );
         }
-        match self.reduced_factor.grounding() {
-            Some(Grounding::Floating) => {
-                subtract_mean(&mut rhs[n..], self.n_reduced);
-            }
-            // The ground node's potential is the gauge subtracted after the solve.
-            Some(Grounding::Grounded) => {
-                if let Some(ground) = explicit_ground {
-                    rhs[n + ground] = -compensated_sum(&rhs[n..n + n_keep]);
-                }
-            }
-            // A cover grounds itself via the antisymmetric `[b, -b]` embed.
-            None => {}
+        // A grounded factor and a cover each fix their own gauge; only a floating one needs this.
+        if self.reduced_factor.grounding() == Some(Grounding::Floating) {
+            subtract_mean(&mut rhs[n..], n_keep);
         }
 
-        // The reduced solve spills into slots that are dead except the grounded gauge.
-        let reduced = n_elim..n_elim + self.n_reduced;
+        // The backend's ground slot past the kept block is written before it is read.
+        let slots = self.reduced_factor.slots();
+        let reduced = n_elim..n_elim + slots;
         debug_assert!(
-            n_keep <= self.n_reduced,
-            "reduced region must cover the kept block",
-        );
-        debug_assert!(
-            reduced.end <= sol.len() && n + self.n_reduced <= rhs.len(),
+            reduced.end <= sol.len() && n + slots <= rhs.len(),
             "reduced solve and its RHS copy must fit sol and rhs",
         );
-        debug_assert!(
-            explicit_ground.is_none_or(|g| n_keep <= g && g < self.n_reduced),
-            "grounded gauge slot must spill past the kept block into a solved slot",
-        );
-        sol[reduced.clone()].copy_from_slice(&rhs[n..n + self.n_reduced]);
-        let embed = &mut rhs[n + self.n_reduced..];
+        sol[reduced.clone()].copy_from_slice(&rhs[n..n + slots]);
+        let embed = &mut rhs[n + slots..];
         self.reduced_factor
             .solve_in_place(&mut sol[reduced], embed)?;
-        if let Some(ground) = explicit_ground {
-            let ground = sol[n_elim + ground];
-            for v in &mut sol[n_elim..n_elim + n_keep] {
-                *v -= ground;
-            }
-        }
 
-        // Back-substitution reads the gauged kept block, so the gauge subtraction runs first.
         let (sol_output, sol_source) = sol.split_at_mut(n_elim);
         let sol_source = &sol_source[..n_keep];
         backsub_block_from_scaled_rhs(
@@ -377,7 +342,7 @@ impl BlockElimSolver {
     }
 
     pub(crate) fn scratch_size(&self) -> usize {
-        self.n_internal + self.n_reduced + self.reduced_factor.scratch_len()
+        self.n_internal + self.reduced_factor.slots() + self.reduced_factor.scratch_len()
     }
 
     pub(crate) fn inner_parallelism_work_estimate(&self) -> usize {
@@ -411,5 +376,101 @@ impl BlockElimSolver {
         }
         self.coordinates.unfold(&mut sol[..n], n_eliminated);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Backend, Config};
+
+    /// SCI's scaling of a component whose vertex 3 couples through a cell cancelled to 1.7e-16.
+    fn scaled_near_inverse_epsilon() -> LocalComponent {
+        let c = CsrBlock {
+            indptr: vec![0, 1, 3],
+            indices: vec![0, 0, 1],
+            data: vec![
+                0.03390196555552335,
+                0.03390196555552337,
+                1.6147876412209096e-33,
+            ],
+            nrows: 2,
+            ncols: 2,
+        };
+        LocalComponent {
+            matrix: SddmMatrix {
+                cross_tab: CrossTab::eager(c),
+                diagonal: vec![
+                    0.03390196555552335,
+                    0.03390196555552338,
+                    1.0,
+                    2.7733391199176196e-32,
+                ],
+                ground_edges: vec![
+                    0.0,
+                    1.3877787807814457e-17,
+                    0.9321960688889532,
+                    2.611860355795529e-32,
+                ],
+                grounding: Grounding::Grounded,
+            },
+            form: MatrixForm::Laplacian,
+            coordinates: CoordinateMap::Scaled(
+                vec![
+                    0.05822539442161242,
+                    -0.05822539442161245,
+                    1.0,
+                    -1.6653345369377348e-16,
+                ]
+                .into_boxed_slice(),
+            ),
+        }
+    }
+
+    #[test]
+    fn a_grounded_solve_survives_a_scale_range_near_inverse_epsilon() {
+        // The unscaled block: diag(10, 10, 1, 1) with the three cells it couples.
+        let apply = |x: &[f64]| {
+            let (c00, c10, c11) = (
+                -0.5822539442161242,
+                0.5822539442161243,
+                -1.6653345369377348e-16,
+            );
+            [
+                10.0 * x[0] + c00 * x[2],
+                10.0 * x[1] + c10 * x[2] + c11 * x[3],
+                x[2] + c00 * x[0] + c10 * x[1],
+                x[3] + c11 * x[1],
+            ]
+        };
+        let b = [0.3, -0.2, 0.1, 0.4];
+        for (schur, max_dim) in [
+            (SchurMode::Exact, usize::MAX),
+            (SchurMode::Sampled { seed: 0, split: 1 }, 0),
+        ] {
+            let approx_chol = Config {
+                backend: Backend::ExactBelow {
+                    max_dim,
+                    on_failure: ExactFailure::FallBackToApproximate,
+                },
+                ..Config::default()
+            };
+            let config = LocalSolverConfig {
+                approx_chol,
+                schur,
+                dense_threshold: max_dim,
+            };
+            let solver = BlockElimSolver::build(scaled_near_inverse_epsilon(), &config).unwrap();
+            let mut rhs = b.to_vec();
+            rhs.resize(solver.scratch_size(), 0.0);
+            let mut sol = vec![0.0; solver.scratch_size()];
+            solver.solve_local(&mut rhs, &mut sol, false).unwrap();
+            let residual = apply(&sol[..4])
+                .iter()
+                .zip(&b)
+                .map(|(ax, b)| (ax - b).abs())
+                .fold(0.0, f64::max);
+            assert!(residual < 1e-12, "{schur:?}: residual {residual:e}");
+        }
     }
 }

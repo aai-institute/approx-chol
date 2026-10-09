@@ -1,7 +1,7 @@
 //! Reduced-system factor for Schur-complement local solves.
 //!
 //! [`ReducedFactor`] wraps an `approx-chol` factor, either directly or behind a
-//! Gremban cover. [`factor_sparse`] bridges to the `approx-chol` builder.
+//! Gremban cover. [`ReducedSystem`] bridges to the `approx-chol` builder.
 
 use crate::low_level::Builder;
 use crate::{CsrRef, Error, Factor, SolveError};
@@ -21,7 +21,7 @@ pub(crate) enum ReducedFactor {
     },
     /// Gremban cover of a signed reduced Schur, kept here so the operator stays single-sized.
     Cover {
-        /// Factor of the doubled cover; the tail past `2*m` is the grounding augmentation.
+        /// Factor of the doubled cover.
         inner: Factor,
         /// Single signed reduced dimension exposed to the caller.
         m: usize,
@@ -37,17 +37,6 @@ impl ReducedFactor {
         }
     }
 
-    /// Explicit ground vertex appended past the kept block; `None` for the kept block alone.
-    pub(crate) fn explicit_ground_index(&self, n_kept: usize) -> Option<usize> {
-        (self.grounding() == Some(Grounding::Grounded) && self.input_dimension() == n_kept + 1)
-            .then_some(n_kept)
-    }
-
-    /// Whether the factor was built over a kept block of this size, with or without ground.
-    pub(crate) fn spans_kept_block(&self, n_kept: usize) -> bool {
-        self.input_dimension() == n_kept || self.explicit_ground_index(n_kept).is_some()
-    }
-
     pub(crate) fn fallbacks(&self) -> &[crate::Fallback] {
         match self {
             Self::Direct { factor, .. } => factor.fallbacks(),
@@ -55,18 +44,18 @@ impl ReducedFactor {
         }
     }
 
-    /// Dimension handed to the backend, which adds grounding vertices of its own.
-    pub(crate) fn input_dimension(&self) -> usize {
+    /// The kept block's size; the backend's ground vertex and the cover's sheets stay inside.
+    pub(crate) fn dimension(&self) -> usize {
         match self {
             Self::Direct { factor, .. } => factor.n(),
-            // The cover is hidden behind the single signed interface.
             Self::Cover { m, .. } => *m,
         }
     }
 
-    pub(crate) fn solve_dimension(&self) -> usize {
+    /// The reduced buffer's length: the kept block, then the backend's ground slot when it has one.
+    pub(crate) fn slots(&self) -> usize {
         match self {
-            Self::Direct { factor, .. } => factor.n(),
+            Self::Direct { factor, .. } => factor.slots(),
             Self::Cover { m, .. } => *m,
         }
     }
@@ -74,12 +63,12 @@ impl ReducedFactor {
     /// Extra scratch beyond the reduced buffers; only [`Self::Cover`] embeds into a larger system.
     pub(crate) fn scratch_len(&self) -> usize {
         match self {
-            Self::Direct { factor, .. } => factor.scratch_len(),
-            Self::Cover { inner, .. } => inner.n() + inner.scratch_len(),
+            Self::Direct { factor, .. } => factor.slots_scratch_len(),
+            Self::Cover { inner, .. } => inner.slots() + inner.slots_scratch_len(),
         }
     }
 
-    /// `x` spans [`Self::solve_dimension`]; `scratch` is at least [`Self::scratch_len`] long.
+    /// `x` spans [`Self::slots`], the kept block first; `scratch` is at least [`Self::scratch_len`] long.
     pub(crate) fn solve_in_place(
         &self,
         x: &mut [f64],
@@ -87,22 +76,17 @@ impl ReducedFactor {
     ) -> Result<(), SolveError> {
         match self {
             Self::Direct { factor, .. } => {
-                debug_assert_eq!(factor.n(), x.len());
-                solve_approx(factor, x, scratch)
+                factor.solve_in_slots(x, &mut scratch[..factor.slots_scratch_len()])
             }
             Self::Cover { inner, m } => {
                 debug_assert_eq!(*m, x.len());
-                let cover_n = inner.n();
-                let (buf, inner_scratch) = scratch.split_at_mut(cover_n);
-                // Grounding vertices past the `2m` cover nodes have zero RHS, so clear the tail.
+                debug_assert_eq!(inner.n(), 2 * *m);
+                let (buf, inner_scratch) = scratch.split_at_mut(inner.slots());
                 buf[..*m].copy_from_slice(x);
                 for (out, &v) in buf[*m..2 * *m].iter_mut().zip(x.iter()) {
                     *out = -v;
                 }
-                for slot in buf[2 * *m..].iter_mut() {
-                    *slot = 0.0;
-                }
-                solve_approx(inner, buf, inner_scratch)?;
+                inner.solve_in_slots(buf, &mut inner_scratch[..inner.slots_scratch_len()])?;
                 // Read back the antisymmetric solution: x = (x⁺ - x⁻) / 2.
                 for (i, out) in x.iter_mut().enumerate() {
                     *out = 0.5 * (buf[i] - buf[*m + i]);
@@ -113,17 +97,28 @@ impl ReducedFactor {
     }
 }
 
-fn solve_approx(f: &Factor, x: &mut [f64], scratch: &mut [f64]) -> Result<(), SolveError> {
-    f.solve_in_place(x, &mut scratch[..f.scratch_len()])
+/// Reduced SDDM as Laplacian off-diagonals plus each row's surplus, exact rather than re-derived.
+#[derive(Clone, Debug)]
+pub(crate) struct ReducedSystem {
+    laplacian: CsrMatrix,
+    surplus: Vec<f64>,
 }
 
-/// Returns the `approx-chol` error unmapped, so the caller can spot an unusable exact pivot.
-pub(crate) fn factor_sparse(matrix: &CsrMatrix, config: crate::Config) -> Result<Factor, Error> {
-    let csr = CsrRef::new(
-        matrix.indptr(),
-        matrix.indices(),
-        matrix.data(),
-        u32::try_from(matrix.n()).expect("Schur complement dimension exceeds u32::MAX"),
-    )?;
-    Builder::new(config).build(csr)
+impl ReducedSystem {
+    /// `laplacian` stores no diagonal: the backend sums each row's adjacency and adds its surplus.
+    pub(crate) fn new(laplacian: CsrMatrix, surplus: Vec<f64>) -> Self {
+        debug_assert_eq!(laplacian.n(), surplus.len());
+        Self { laplacian, surplus }
+    }
+
+    /// Returns the `approx-chol` error unmapped, so the caller can spot an unusable exact pivot.
+    pub(crate) fn factor(&self, config: crate::Config) -> Result<Factor, Error> {
+        let csr = CsrRef::new(
+            self.laplacian.indptr(),
+            self.laplacian.indices(),
+            self.laplacian.data(),
+            u32::try_from(self.laplacian.n()).expect("Schur complement dimension exceeds u32::MAX"),
+        )?;
+        Builder::new(config).build_with_surpluses(csr, &self.surplus)
+    }
 }

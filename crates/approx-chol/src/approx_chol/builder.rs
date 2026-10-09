@@ -43,7 +43,24 @@ where
     /// Multiplicity fixes layout and split together, so each arm is one algorithm end to end.
     fn build_validated<I: PrimInt>(&self, sddm: CsrRef<'_, T, I>) -> Result<Factor<T>, Error> {
         let n = sddm.n();
-        let ingestion = Ingestion::of(sddm)?;
+        self.build_ingested(Ingestion::of(sddm)?, n)
+    }
+
+    /// Trusts its caller: `laplacian` is symmetric with non-positive off-diagonals only.
+    pub(crate) fn build_with_surpluses<I: PrimInt>(
+        &self,
+        laplacian: CsrRef<'_, T, I>,
+        surpluses: &[T],
+    ) -> Result<Factor<T>, Error> {
+        let n = laplacian.n();
+        self.build_ingested(Ingestion::with_surpluses(laplacian, surpluses)?, n)
+    }
+
+    fn build_ingested<I: PrimInt>(
+        &self,
+        ingestion: Ingestion<'_, T, I>,
+        n: usize,
+    ) -> Result<Factor<T>, Error> {
         match self.config.split_factor() {
             None => self.factor_blocks::<Single, _>(ingestion, n, ()),
             Some(k) => self.factor_blocks::<Multi, _>(ingestion, n, k),
