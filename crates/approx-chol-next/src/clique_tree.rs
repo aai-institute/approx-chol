@@ -17,12 +17,12 @@ pub(crate) struct CliqueSampler<T, C: Copies> {
     star: Star<T, C>,
     draws: CdfSampler<T>,
     column: Column<T>,
-    factor: C::Factor,
+    split: C::Split,
 }
 
 impl<T: Real, C: Copies> CliqueSampler<T, C> {
-    /// `factor` caps every merge, so one sampler cannot mix two.
-    pub(crate) fn new(stream: Stream, factor: C::Factor) -> Self {
+    /// `split` caps every merge, so one sampler cannot mix two.
+    pub(crate) fn new(stream: Stream, split: C::Split) -> Self {
         todo!()
     }
 

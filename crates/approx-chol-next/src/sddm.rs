@@ -32,7 +32,7 @@ impl<'a, T: Real> Sddm<'a, T> {
     }
 
     /// The Gremban cover of signed `M`: a Laplacian on two sheets that acts as `M` on `[z; −z]`.
-    pub(crate) fn cover(signed: &UpperAdjacency<T>, surplus: &Surplus<T>) -> Sddm<'static, T> {
+    pub(crate) fn cover(signed: &UpperAdjacency<T>, grounding: &Grounding<T>) -> Sddm<'static, T> {
         todo!()
     }
 
@@ -41,7 +41,7 @@ impl<'a, T: Real> Sddm<'a, T> {
     }
 
     pub(crate) fn grounded(&self) -> bool {
-        matches!(*self.grounding, Grounding::Grounded(_))
+        self.grounding.is_grounded()
     }
 
     pub(crate) fn sheets(&self) -> Sheets {
@@ -72,28 +72,32 @@ pub(crate) fn rank(rows: usize, grounded: bool) -> usize {
     }
 }
 
-/// What closes `L` into an SDDM: a surplus with a positive total, or nothing, leaving it singular.
+/// What closes `L` into an SDDM: a surplus with a positive total, or none, leaving it singular.
 #[derive(Clone, Debug)]
-pub(crate) enum Grounding<T> {
-    Grounded(Surplus<T>),
-    Floating,
-}
+pub(crate) struct Grounding<T>(Option<Surplus<T>>);
 
 impl<T: Real> Grounding<T> {
     /// Floats exactly when nothing grounds: an all-zero surplus.
     pub(crate) fn of(surplus: Surplus<T>) -> Self {
-        match surplus.grounds() {
-            true => Self::Grounded(surplus),
-            false => Self::Floating,
-        }
+        Self(surplus.grounds().then_some(surplus))
+    }
+
+    /// A proven alias: one vertex anchors instead, whatever surplus rounding left.
+    pub(crate) fn floating() -> Self {
+        Self(None)
+    }
+
+    pub(crate) fn surplus(&self) -> Option<&Surplus<T>> {
+        self.0.as_ref()
+    }
+
+    pub(crate) fn is_grounded(&self) -> bool {
+        self.0.is_some()
     }
 
     /// Whether it grounds exactly `n` rows.
     pub(crate) fn fits(&self, n: usize) -> bool {
-        match self {
-            Self::Grounded(surplus) => surplus.0.len() == n,
-            Self::Floating => true,
-        }
+        self.0.as_ref().is_none_or(|surplus| surplus.0.len() == n)
     }
 }
 

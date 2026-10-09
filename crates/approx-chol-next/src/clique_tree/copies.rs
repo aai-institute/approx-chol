@@ -2,9 +2,9 @@ use crate::config::SplitFactor;
 use crate::Real;
 
 /// An edge's virtual copies; AC is AC2 at one copy per edge, so this trait is the whole difference.
-pub(crate) trait Copies: Clone + Copy {
+pub(crate) trait Copies: Copy + Send + Sync {
     /// `Single` cannot name a `k`, making AC over split multi-edges a type error.
-    type Factor: Copy;
+    type Split: Copy + Send + Sync;
 
     const SINGLE_COPY: bool;
 
@@ -12,13 +12,13 @@ pub(crate) trait Copies: Clone + Copy {
     fn one() -> Self;
 
     /// What an edge of the input carries once split.
-    fn initial(factor: Self::Factor) -> Self;
+    fn initial(split: Self::Split) -> Self;
 
     fn get(&self) -> u32;
     fn per_copy<T: Real>(&self, total: T) -> T;
 
     /// The kept copies, and how many the cap discarded.
-    fn cap(copies: u32, factor: Self::Factor) -> (Self, u32);
+    fn cap(copies: u32, split: Self::Split) -> (Self, u32);
 }
 
 #[derive(Clone, Copy)]
@@ -29,7 +29,7 @@ pub(crate) struct Single;
 pub(crate) struct Multi(u32);
 
 impl Copies for Single {
-    type Factor = ();
+    type Split = ();
     const SINGLE_COPY: bool = true;
 
     fn one() -> Self {
@@ -54,15 +54,15 @@ impl Copies for Single {
 }
 
 impl Copies for Multi {
-    type Factor = SplitFactor;
+    type Split = SplitFactor;
     const SINGLE_COPY: bool = false;
 
     fn one() -> Self {
         Self(1)
     }
 
-    fn initial(factor: SplitFactor) -> Self {
-        Self(factor.get())
+    fn initial(split: SplitFactor) -> Self {
+        Self(split.get())
     }
 
     fn get(&self) -> u32 {
@@ -73,7 +73,7 @@ impl Copies for Multi {
         todo!()
     }
 
-    fn cap(copies: u32, factor: SplitFactor) -> (Self, u32) {
+    fn cap(copies: u32, split: SplitFactor) -> (Self, u32) {
         todo!()
     }
 }

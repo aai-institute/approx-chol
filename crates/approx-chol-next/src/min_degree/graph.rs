@@ -18,7 +18,7 @@ pub(super) struct EliminationGraph<T, C> {
 
 impl<T: Real, C: Copies> EliminationGraph<T, C> {
     /// The ground is a vertex like any other: forcing it last measured +0-10% PCG iterations.
-    pub(super) fn of(sddm: &Sddm<'_, T>, factor: C::Factor) -> Self {
+    pub(super) fn of(sddm: &Sddm<'_, T>, split: C::Split) -> Self {
         todo!()
     }
 

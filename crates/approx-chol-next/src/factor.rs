@@ -1,4 +1,4 @@
-//! Routes each part to its eliminations, and stores and applies `A_c⁺ ≈ F · Round · R⁺ · Round' · F`.
+//! Routes each part to its eliminations, and applies `A_c⁺ ≈ P F · Round · Rem⁺ · Round' · F P`, `P` projecting out `F·1`.
 
 mod remainder;
 
@@ -81,6 +81,7 @@ impl std::error::Error for SolveError {}
 pub struct Factor<T = f64> {
     n: usize,
     parts: Vec<PartFactor<T>>,
+    dead: Box<[u32]>,
 }
 
 impl<T: Real> Factor<T> {
@@ -88,7 +89,11 @@ impl<T: Real> Factor<T> {
         let parts = (sgdd.parts().par_iter())
             .map(|part| PartFactor::build(part, config))
             .collect::<Result<_, _>>()?;
-        Ok(Self { n: sgdd.n(), parts })
+        Ok(Self {
+            n: sgdd.n(),
+            parts,
+            dead: sgdd.dead().into(),
+        })
     }
 
     /// Dimension of `A`.

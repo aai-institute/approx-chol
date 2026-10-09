@@ -13,7 +13,7 @@ pub(super) struct Decomposition<'v, T, I> {
 }
 
 enum Input<'v, T, I> {
-    /// A signless Laplacian: its diagonal is `|C|`'s row sums, so every part floats.
+    /// A signless Laplacian: its diagonal sums each vertex's column weights, so a negative one fails as not GDD.
     Signless(Biadjacency<T>),
     /// A Gram, its diagonal given; floats when `fᵀGf ≤ 10u·fᵀDf`, summed as squares per column of `V`.
     Gram {
@@ -76,7 +76,7 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
     /// One pass over the input decides every part's ground, matching parts by their vertices.
     pub(super) fn float(&self, parts: &mut [Part<T>]) {
         match &self.input {
-            Input::Signless(_) => parts.iter_mut().for_each(|part| part.m.float()),
+            Input::Signless(_) => (parts.iter_mut()).for_each(|part| part.m.float()),
             Input::Gram { .. } | Input::Csr(_) => todo!(),
         }
     }

@@ -16,8 +16,8 @@ enum Kind<T> {
 }
 
 impl<T: Real> Congruence<T> {
-    /// `S R`; unscaled signs stay unmaterialized, so an SDDM input keeps `F = I`.
-    pub(super) fn new(signature: Signature, scales: Option<Box<[T]>>) -> Self {
+    /// `S R`, `S = I` for a frustrated `A_c`; unscaled signs stay unmaterialized, so an SDDM keeps `F = I`.
+    pub(super) fn new(signature: Option<Signature>, scales: Option<Box<[T]>>) -> Self {
         todo!()
     }
 
@@ -38,7 +38,7 @@ impl<T: Real> Congruence<T> {
         todo!()
     }
 
-    /// `x ← F x`; `A_c⁺ = F M⁺ F` on `A_c`'s range, so the solve applies it on both sides.
+    /// `x ← F x`; with `P` projecting out `F·1`, `A_c⁺ = P F M⁺ F P`, so the solve applies it on both sides.
     pub(crate) fn apply(&self, x: &mut [T]) {
         todo!()
     }

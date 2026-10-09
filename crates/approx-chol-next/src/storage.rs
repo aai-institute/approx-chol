@@ -61,6 +61,20 @@ impl<T: Real> UpperAdjacency<T> {
         self.rows.n_rows()
     }
 
+    /// Orients each edge `lo < hi`, sorts, and sums duplicates: fill and covers emit them in any order.
+    pub(crate) fn from_edges(n: usize, edges: impl IntoIterator<Item = (u32, u32, T)>) -> Self {
+        todo!()
+    }
+
+    /// `Σ_j |x_ij|` over both triangles.
+    pub(crate) fn abs_row_sums(&self) -> Vec<T> {
+        todo!()
+    }
+
+    pub(crate) fn nonpositive(&self) -> bool {
+        todo!()
+    }
+
     /// Row `i`'s neighbors above it.
     pub(crate) fn upper(&self, i: usize) -> impl Iterator<Item = (usize, &T)> {
         self.rows.row(i)
@@ -136,6 +150,15 @@ impl<T: Real> CrossBlock<T> {
 
     pub(crate) fn ct(&self) -> &Rows<T> {
         self.ct.get_or_init(|| self.c.transpose())
+    }
+
+    /// `Σ|c|` per row of `[0 C; Cᵀ 0]`: eliminated rows, then kept ones.
+    pub(crate) fn abs_row_sums(&self) -> Vec<T> {
+        todo!()
+    }
+
+    pub(crate) fn nonpositive(&self) -> bool {
+        todo!()
     }
 
     /// `F C F` over the block's local order, a fresh block so no stale `Cᵀ` survives; `None` on overflow.

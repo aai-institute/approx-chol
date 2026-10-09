@@ -18,11 +18,8 @@ struct QueueElem {
 }
 
 impl DynamicOrdering {
-    /// Buckets span `factor · n`, Laplacians.jl's AC2 scale.
-    pub(super) fn new<T: Real, C: Copies>(
-        graph: &EliminationGraph<T, C>,
-        factor: C::Factor,
-    ) -> Self {
+    /// Buckets span `split · n`, Laplacians.jl's AC2 scale.
+    pub(super) fn new<T: Real, C: Copies>(graph: &EliminationGraph<T, C>, split: C::Split) -> Self {
         todo!()
     }
 

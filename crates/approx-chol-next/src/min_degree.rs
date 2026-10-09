@@ -30,12 +30,12 @@ pub(crate) fn eliminate<T: Real>(
 fn run<T: Real, C: Copies>(
     sddm: &Sddm<'_, T>,
     streams: Streams,
-    factor: C::Factor,
+    split: C::Split,
 ) -> SampledCholesky<T> {
-    let mut graph = EliminationGraph::<T, C>::of(sddm, factor);
+    let mut graph = EliminationGraph::<T, C>::of(sddm, split);
     let n = graph.n();
-    let mut ordering = DynamicOrdering::new(&graph, factor);
-    let mut clique = CliqueSampler::<T, C>::new(streams.remainder(), factor);
+    let mut ordering = DynamicOrdering::new(&graph, split);
+    let mut clique = CliqueSampler::<T, C>::new(streams.remainder(), split);
     let mut fill = Fill::new();
     let mut steps = Steps::with_capacity(n);
     for _ in 1..n {

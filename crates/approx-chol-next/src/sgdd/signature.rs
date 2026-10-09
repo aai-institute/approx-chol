@@ -8,7 +8,7 @@ pub(super) enum Signature {
     /// A positive bipartite block: every vertex from this one on is negated.
     NegateFrom(usize),
     /// `true` where the vertex is negated.
-    Signs(Box<[bool]>),
+    Negated(Box<[bool]>),
 }
 
 /// `None` for a frustrated component: a negative cycle admits no signature.

@@ -23,12 +23,8 @@ impl<T: Real, C: Copies> Star<T, C> {
         }
     }
 
-    /// Merges duplicate neighbors under `factor`'s cap, then sorts by per-copy weight.
-    pub(super) fn refill(
-        &mut self,
-        neighbors: impl Iterator<Item = (u32, C, T)>,
-        factor: C::Factor,
-    ) {
+    /// Merges duplicate neighbors under `split`'s cap, then sorts by per-copy weight.
+    pub(super) fn refill(&mut self, neighbors: impl Iterator<Item = (u32, C, T)>, split: C::Split) {
         todo!()
     }
 

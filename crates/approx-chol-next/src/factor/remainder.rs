@@ -9,7 +9,7 @@ use crate::Real;
 #[derive(Clone, Debug)]
 pub(super) struct SddmFactor<T> {
     sheets: Sheets,
-    block: Block<T>,
+    gauge: Gauge<T>,
 }
 
 impl<T: Real> SddmFactor<T> {
@@ -29,32 +29,34 @@ impl<T: Real> SddmFactor<T> {
     }
 
     fn of(sddm: &Sddm<'_, T>, cholesky: Cholesky<T>) -> Self {
-        let block = match sddm.grounded() {
-            true => Block::Grounded(cholesky),
-            false => Block::Floating(cholesky),
+        let gauge = match sddm.grounded() {
+            true => Gauge::Grounded(cholesky),
+            false => Gauge::Floating(cholesky),
         };
         Self {
             sheets: sddm.sheets(),
-            block,
+            gauge,
         }
     }
 
-    /// The lifted rows and a grounded block's ground slot, for `kept` vertices.
+    /// The lifted rows and a grounded factor's ground slot, for `kept` vertices.
     pub(super) fn scratch_len(&self, kept: usize) -> usize {
-        let ground = usize::from(matches!(self.block, Block::Grounded(_)));
+        let ground = usize::from(matches!(self.gauge, Gauge::Grounded(_)));
         self.sheets.count() * kept + ground
     }
 
-    /// Lifts to the sheets, appends a grounded block's ground slot, substitutes, and descends.
+    /// Lifts to the sheets, fixes the gauge, substitutes, and descends.
     pub(super) fn solve(&self, x: &mut [T], scratch: &mut [T]) {
         todo!()
     }
 }
 
-/// Grounded factors carry the ground as their uneliminated slot; floating ones leave a vertex free.
+/// How the factor's free slot is fixed.
 #[derive(Clone, Debug)]
-enum Block<T> {
+enum Gauge<T> {
+    /// The ground is the appended slot, right-hand side `−Σb`; every entry then shifts so it reads zero.
     Grounded(Cholesky<T>),
+    /// The free slot reads zero; the part's projection fixes the rest.
     Floating(Cholesky<T>),
 }
 

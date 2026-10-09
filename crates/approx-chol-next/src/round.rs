@@ -5,14 +5,14 @@ use std::sync::Arc;
 use crate::clique_tree::{Copies, Streams};
 use crate::config::{CliqueRule, InnerParallelism};
 use crate::sddm::{self, Sddm};
-use crate::sgdd::Signs;
+use crate::sgdd::Balance;
 use crate::storage::{CrossBlock, Fill};
 use crate::Real;
 
-/// Stored columns `C / d_e`, applied as two products because the block's steps commute.
+/// `M`'s cross block and the pivots `d_e`, applied as two products because the block's steps commute.
 #[derive(Clone, Debug)]
 pub(crate) struct Round<T> {
-    /// Shared with the part, signed for a frustrated one: the cover never doubles it.
+    /// `M`'s own `C`, signs kept and shared with the part: a frustrated part's cover never doubles it.
     cross: Arc<CrossBlock<T>>,
     inv_pivot: Box<[T]>,
 }
@@ -36,12 +36,12 @@ impl<T: Real> Round<T> {
 /// A round before its stored form is taken, so one pivot vector serves every complement and the solve.
 pub(crate) struct RoundBuilder<'a, T> {
     round: Round<T>,
-    signs: &'a Signs<T>,
+    balance: &'a Balance<T>,
 }
 
 impl<'a, T: Real> RoundBuilder<'a, T> {
     /// Pivots are `Σ|c_ek| + s_e`, the same on both sheets of a cover.
-    pub(crate) fn new(cross: &Arc<CrossBlock<T>>, signs: &'a Signs<T>) -> Self {
+    pub(crate) fn new(cross: &Arc<CrossBlock<T>>, balance: &'a Balance<T>) -> Self {
         todo!()
     }
 
@@ -51,8 +51,8 @@ impl<'a, T: Real> RoundBuilder<'a, T> {
 
     /// Known before the complement is built: its surplus `s_k + |C|ᵀ D_e⁻¹ s_e` grounds iff the part's does.
     pub(crate) fn complement_rank(&self) -> usize {
-        let rows = self.signs.sheets().count() * self.round.cross.n_kept();
-        sddm::rank(rows, self.signs.grounded())
+        let rows = self.balance.sheets().count() * self.round.cross.n_kept();
+        sddm::rank(rows, self.balance.grounding().is_grounded())
     }
 
     /// The kept block's Schur complement on the part's sheets; stars run in parallel.
@@ -68,7 +68,7 @@ impl<'a, T: Real> RoundBuilder<'a, T> {
 /// Each eliminated star's clique tree under its own stream, appended to one task's fill.
 fn sampled_fill<T: Real, C: Copies>(
     builder: &RoundBuilder<'_, T>,
-    factor: C::Factor,
+    split: C::Split,
     streams: Streams,
 ) -> Fill<T> {
     todo!()

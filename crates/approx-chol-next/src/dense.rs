@@ -4,6 +4,7 @@ use crate::sddm::Sddm;
 use crate::Real;
 
 /// What makes a dense pivot unusable.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PivotDefect {
     /// Infinite or NaN.
@@ -22,6 +23,7 @@ pub struct UnusablePivot {
 }
 
 /// A remainder routed dense and factored approximately instead: less accurate than asked.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fallback {
     /// The dense Cholesky reached an unusable pivot.

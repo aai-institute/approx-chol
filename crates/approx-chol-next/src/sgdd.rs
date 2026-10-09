@@ -11,14 +11,14 @@ use std::sync::Arc;
 
 use num_traits::PrimInt;
 
-pub(crate) use congruence::Congruence;
+use congruence::Congruence;
 use decomposition::Decomposition;
 use scaling::NotScalable;
 pub use scaling::{ScalingPolicy, ScalingReport};
 
 use crate::input::{Csr, CsrError, Gram, Graph};
 use crate::round::RoundBuilder;
-use crate::sddm::{Grounding, Sddm, Sheets, Surplus};
+use crate::sddm::{Grounding, Sddm, Sheets};
 use crate::storage::{CrossBlock, UpperAdjacency};
 use crate::Real;
 
@@ -58,13 +58,13 @@ impl<T: Real> Part<T> {
 
     /// Whether `A_c` is singular, so a solve returns `A_c⁺b`.
     pub(crate) fn floats(&self) -> bool {
-        matches!(self.m.signs, Signs::Folded(Grounding::Floating))
+        matches!(&self.m.balance, Balance::Balanced(grounding) if !grounding.is_grounded())
     }
 
     /// What the remainder factors: `M` itself, its cover, or a round's complement.
     pub(crate) fn elimination(&self) -> Elimination<'_, T> {
-        match (&self.m.off_diagonal, &self.m.signs) {
-            (OffDiagonal::General(adjacency), Signs::Folded(grounding)) => {
+        match (&self.m.off_diagonal, &self.m.balance) {
+            (OffDiagonal::General(adjacency), Balance::Balanced(grounding)) => {
                 let sddm = Sddm::new(
                     Cow::Borrowed(adjacency),
                     Cow::Borrowed(grounding),
@@ -72,11 +72,11 @@ impl<T: Real> Part<T> {
                 );
                 Elimination::Whole(sddm)
             }
-            (OffDiagonal::General(adjacency), Signs::Frustrated(surplus)) => {
-                Elimination::Whole(Sddm::cover(adjacency, surplus))
+            (OffDiagonal::General(adjacency), Balance::Frustrated(grounding)) => {
+                Elimination::Whole(Sddm::cover(adjacency, grounding))
             }
-            (OffDiagonal::Bipartite(cross), signs) => {
-                Elimination::Round(RoundBuilder::new(cross, signs))
+            (OffDiagonal::Bipartite(cross), balance) => {
+                Elimination::Round(RoundBuilder::new(cross, balance))
             }
         }
     }
@@ -118,25 +118,26 @@ impl<T> Frame<T> {
     }
 }
 
-/// `M`, weakly dominant once scaled and clamped: its off-diagonal, and what its signs leave of the diagonal.
+/// `M`, weakly dominant once scaled and clamped: its off-diagonal, and whether a signature folded it.
 #[derive(Clone, Debug)]
 struct Sdd<T> {
     off_diagonal: OffDiagonal<T>,
-    signs: Signs<T>,
+    balance: Balance<T>,
 }
 
 impl<T: Real> Sdd<T> {
-    /// Panics unless the surplus has one entry per row.
-    fn new(off_diagonal: OffDiagonal<T>, signs: Signs<T>) -> Self {
-        let n = off_diagonal.n();
-        let fits = match &signs {
-            Signs::Folded(grounding) => grounding.fits(n),
-            Signs::Frustrated(surplus) => surplus.values().len() == n,
-        };
-        assert!(fits, "one surplus per row");
+    /// Panics unless one surplus per row, and a balanced `M` folded to a Z-matrix.
+    fn new(off_diagonal: OffDiagonal<T>, balance: Balance<T>) -> Self {
+        assert!(
+            balance.grounding().fits(off_diagonal.n()),
+            "one surplus per row"
+        );
+        if let Balance::Balanced(_) = balance {
+            assert!(off_diagonal.nonpositive(), "a folded M is a Z-matrix");
+        }
         Self {
             off_diagonal,
-            signs,
+            balance,
         }
     }
 
@@ -146,38 +147,33 @@ impl<T: Real> Sdd<T> {
 
     /// A proven alias anchors one vertex instead of the surplus rounding left; a frustrated `M` is definite.
     fn float(&mut self) {
-        if let Signs::Folded(grounding) = &mut self.signs {
-            *grounding = Grounding::Floating;
+        if let Balance::Balanced(grounding) = &mut self.balance {
+            *grounding = Grounding::floating();
         }
     }
 }
 
-/// Whether a signature folded `M` to a Z-matrix, with its surplus: only a folded `M` can float.
+/// Whether a signature folds `M` (Harary), and the grounding of the matrix its remainder factors.
 #[derive(Clone, Debug)]
-pub(crate) enum Signs<T> {
-    Folded(Grounding<T>),
-    /// No signature exists, so the remainder factors a two-sheet cover.
-    Frustrated(Surplus<T>),
+pub(crate) enum Balance<T> {
+    /// Folded to a Z-matrix: `M` itself, singular when it floats.
+    Balanced(Grounding<T>),
+    /// No signature exists: a two-sheet cover, definite on `[z; −z]` even when it floats.
+    Frustrated(Grounding<T>),
 }
 
-impl<T: Real> Signs<T> {
+impl<T: Real> Balance<T> {
     pub(crate) fn sheets(&self) -> Sheets {
         match self {
-            Self::Folded(_) => Sheets::One,
+            Self::Balanced(_) => Sheets::One,
             Self::Frustrated(_) => Sheets::Two,
         }
     }
 
-    pub(crate) fn surplus(&self) -> Option<&Surplus<T>> {
+    pub(crate) fn grounding(&self) -> &Grounding<T> {
         match self {
-            Self::Folded(Grounding::Grounded(surplus)) | Self::Frustrated(surplus) => Some(surplus),
-            Self::Folded(Grounding::Floating) => None,
+            Self::Balanced(grounding) | Self::Frustrated(grounding) => grounding,
         }
-    }
-
-    /// Whether the remainder's matrix carries a ground.
-    pub(crate) fn grounded(&self) -> bool {
-        self.surplus().is_some_and(Surplus::grounds)
     }
 }
 
@@ -196,6 +192,21 @@ impl<T: Real> OffDiagonal<T> {
             Self::Bipartite(cross) => cross.n(),
         }
     }
+
+    /// `Σ_j |a_ij|` per row in local order: dominance, surplus and pivots all start here.
+    fn abs_row_sums(&self) -> Vec<T> {
+        match self {
+            Self::General(adjacency) => adjacency.abs_row_sums(),
+            Self::Bipartite(cross) => cross.abs_row_sums(),
+        }
+    }
+
+    fn nonpositive(&self) -> bool {
+        match self {
+            Self::General(adjacency) => adjacency.nonpositive(),
+            Self::Bipartite(cross) => cross.nonpositive(),
+        }
+    }
 }
 
 /// `A` as one reduced [`Part`] per connected component; vertices in no part solve to `0`.
@@ -203,6 +214,8 @@ impl<T: Real> OffDiagonal<T> {
 pub struct Sgdd<T = f64> {
     n: usize,
     parts: Vec<Part<T>>,
+    /// Lone vertices with a zero diagonal, recorded so a solve zeroes them without a pass over `n`.
+    dead: Box<[u32]>,
 }
 
 impl<T: Real> Sgdd<T> {
@@ -214,6 +227,10 @@ impl<T: Real> Sgdd<T> {
     /// The parts, each factored and solved on its own.
     pub fn parts(&self) -> &[Part<T>] {
         &self.parts
+    }
+
+    pub(crate) fn dead(&self) -> &[u32] {
+        &self.dead
     }
 
     /// The worst part's report: present iff some scaling was clamped beyond the policy's tolerance.
@@ -244,9 +261,13 @@ impl<T: Real> Sgdd<T> {
         decomposition: Decomposition<'_, T, I>,
         policy: &ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        let mut parts = Vec::new();
-        for a in decomposition.components().filter(|a| !a.is_dead()) {
+        let (mut parts, mut dead) = (Vec::new(), Vec::new());
+        for a in decomposition.components() {
             let vertex = a.vertices[0];
+            if a.is_dead() {
+                dead.push(vertex);
+                continue;
+            }
             parts.push(a.reduce(policy).map_err(|e| match e {
                 NotScalable::NotGdd => ReduceError::NotGdd { vertex },
                 NotScalable::Overflow => ReduceError::Unscalable { vertex },
@@ -256,6 +277,7 @@ impl<T: Real> Sgdd<T> {
         Ok(Self {
             n: decomposition.n(),
             parts,
+            dead: dead.into_boxed_slice(),
         })
     }
 }
@@ -286,11 +308,11 @@ impl<T: Real> Component<T> {
     fn reduce(self, policy: &ScalingPolicy) -> Result<Part<T>, NotScalable> {
         let scaling = scaling::dominance_scaling(&self, policy)?;
         let signature = signature::signature(&self.off_diagonal);
-        self.congruence(scaling, signature)
+        self.into_part(scaling, signature)
     }
 
     /// `F = S R` folds and scales `A_c`, or only scales a frustrated one; deficits clamp to zero surplus.
-    fn congruence(
+    fn into_part(
         self,
         scaling: scaling::Scaling<T>,
         signature: Option<signature::Signature>,
