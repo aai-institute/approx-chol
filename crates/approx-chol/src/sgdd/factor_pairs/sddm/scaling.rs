@@ -28,6 +28,8 @@ struct NormalizedCrossOperator<'a> {
     small_inv_sqrt: &'a [f64],
     large_inv_sqrt: &'a [f64],
     small_side: BipartiteSide,
+    /// `α > 1` keeps `α² − MᵀM` definite, so a singular component never lands on its Perron vector.
+    shift: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -37,7 +39,7 @@ enum CandidateKind {
 }
 
 impl<'a> NormalizedCrossOperator<'a> {
-    fn new(cross_tab: &'a CrossTab, inv_sqrt: &'a [f64]) -> Self {
+    fn new(cross_tab: &'a CrossTab, inv_sqrt: &'a [f64], shift: f64) -> Self {
         let (row_inv_sqrt, col_inv_sqrt) = inv_sqrt.split_at(cross_tab.n_rows());
         let (small_to_large, large_to_small, small_inv_sqrt, large_inv_sqrt, small_side) =
             if cross_tab.n_rows() <= cross_tab.n_cols() {
@@ -63,6 +65,7 @@ impl<'a> NormalizedCrossOperator<'a> {
             small_inv_sqrt,
             large_inv_sqrt,
             small_side,
+            shift,
         }
     }
 
@@ -95,11 +98,12 @@ impl<'a> NormalizedCrossOperator<'a> {
     }
 
     fn apply_reduced(&self, input: &[f64], large_work: &mut [f64], output: &mut [f64]) {
-        // Eliminating the large side gives `I - MᵀM` on the cheaper side.
+        // Eliminating the large side of `αI − M` gives `α² − MᵀM` on the cheaper side.
+        let shift_squared = self.shift * self.shift;
         self.apply_large(input, large_work);
         self.apply_small(large_work, output);
         for (value, &input_value) in output.iter_mut().zip(input) {
-            *value = input_value - *value;
+            *value = shift_squared * input_value - *value;
         }
     }
 
@@ -108,7 +112,7 @@ impl<'a> NormalizedCrossOperator<'a> {
         let mut rhs = vec![0.0; self.small_len()];
         self.apply_small(large_work, &mut rhs);
         for value in &mut rhs {
-            *value += 1.0;
+            *value += self.shift;
         }
         rhs
     }
@@ -124,11 +128,19 @@ impl<'a> NormalizedCrossOperator<'a> {
             return None;
         }
         self.apply_large(small, large);
-        if matches!(kind, CandidateKind::Strict) {
-            for value in large.iter_mut() {
-                *value += 1.0;
+        // A strict large row solves `αy − Mx = 1`, so its ratio is `α − 1/y`: within `α − 1` of dominant.
+        let large_violation = match kind {
+            CandidateKind::Strict => {
+                for value in large.iter_mut() {
+                    *value = (*value + 1.0) / self.shift;
+                }
+                large
+                    .iter()
+                    .map(|&value| self.shift - 1.0 / value - 1.0)
+                    .fold(0.0f64, f64::max)
             }
-        }
+            CandidateKind::Boundary => 0.0,
+        };
         if !large.iter().all(|value| value.is_finite() && *value > 0.0) {
             return None;
         }
@@ -138,7 +150,7 @@ impl<'a> NormalizedCrossOperator<'a> {
                 .iter()
                 .zip(small)
                 .map(|(&target, &value)| target / value - 1.0)
-                .fold(0.0f64, f64::max),
+                .fold(large_violation, f64::max),
         )
     }
 
@@ -418,7 +430,8 @@ fn dispatch(
         violation: violation_of(&initial_mu),
         mu: initial_mu,
     };
-    let operator = NormalizedCrossOperator::new(cross_tab, &inv_sqrt);
+    let operator =
+        NormalizedCrossOperator::new(cross_tab, &inv_sqrt, 1.0 + 0.5 * scaling.tolerance);
     let result = reduced_cg_scaling(&operator, initial, scaling)?;
     let scales: Vec<f64> = result
         .candidate
@@ -435,4 +448,37 @@ fn dispatch(
         iterations: result.iterations,
         violation: result.candidate.violation.max(0.0),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_singular_component_keeps_surplus_of_the_tolerances_order() {
+        // `D − |C|` has the null vector (1, 2 | 1, 1); at `α = 1` CG lands on it and keeps only roundoff.
+        let c = CsrBlock {
+            indptr: vec![0, 2, 4],
+            indices: vec![0, 1, 0, 1],
+            data: vec![1.0, 1.0, 1.0, 1.0],
+            nrows: 2,
+            ncols: 2,
+        };
+        let cross_tab = CrossTab::eager(c);
+        let diagonal = [2.0, 1.0, 3.0, 3.0];
+        let policy = ScalingConfig::default();
+        let scaling = dominance_scaling(&cross_tab, &diagonal, &policy).unwrap();
+        assert!(scaling.violation <= policy.tolerance);
+        let f = &scaling.scales;
+        let surplus = (0..4)
+            .map(|i| {
+                let off: f64 = cross_tab.neighbors(i).map(|(j, v)| v.abs() * f[j]).sum();
+                1.0 - off / (diagonal[i] * f[i])
+            })
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            surplus > 0.01 * policy.tolerance,
+            "largest relative surplus {surplus:e}"
+        );
+    }
 }
