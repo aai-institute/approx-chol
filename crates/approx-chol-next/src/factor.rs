@@ -156,13 +156,22 @@ impl<T: Real> PartFactor<T> {
         let frame = part.frame();
         let vertices = frame.vertices();
         let streams = Streams::new(config.seed, vertices[0]);
-        let (round, (remainder, fallback)) = match Elimination::of(part) {
-            Elimination::Whole(sddm) => {
+        let (round, (remainder, fallback)) = match part.m() {
+            (OffDiagonal::General(adjacency), balance) => {
+                let sddm = match balance {
+                    Balance::Balanced(grounding) => Sddm::new(
+                        Cow::Borrowed(adjacency),
+                        Cow::Borrowed(grounding),
+                        Sheets::One,
+                    ),
+                    Balance::Frustrated(grounding) => Sddm::cover(adjacency, grounding),
+                };
                 let dense = |sddm: &_| SddmFactor::dense(sddm, vertices);
                 let sampled = |sddm| SddmFactor::sampled(sddm, config.remainder, streams);
                 (None, route(sddm.rank(), sddm, dense, sampled, config)?)
             }
-            Elimination::Round(builder) => {
+            (OffDiagonal::Bipartite(cross), balance) => {
+                let builder = RoundBuilder::new(cross, balance);
                 let kept = &vertices[builder.n_eliminated()..];
                 // A dense Cholesky spends nothing on sparsity, so only the exact complement goes dense.
                 let dense = |builder: &&RoundBuilder<'_, T>| {
@@ -243,36 +252,6 @@ impl<T: Real> PartFactor<T> {
             congruence.project_out_null(x);
         }
         Ok(())
-    }
-}
-
-/// How a part's factorization starts.
-enum Elimination<'a, T: Real> {
-    /// The remainder is this matrix whole.
-    Whole(Sddm<'a, T>),
-    /// A round eliminates the leading block, and the remainder is its complement.
-    Round(RoundBuilder<'a, T>),
-}
-
-impl<'a, T: Real> Elimination<'a, T> {
-    /// What the remainder factors: `M` itself, its cover, or a round's complement.
-    fn of(part: &'a Part<T>) -> Self {
-        match part.m() {
-            (OffDiagonal::General(adjacency), Balance::Balanced(grounding)) => {
-                let sddm = Sddm::new(
-                    Cow::Borrowed(adjacency),
-                    Cow::Borrowed(grounding),
-                    Sheets::One,
-                );
-                Self::Whole(sddm)
-            }
-            (OffDiagonal::General(adjacency), Balance::Frustrated(grounding)) => {
-                Self::Whole(Sddm::cover(adjacency, grounding))
-            }
-            (OffDiagonal::Bipartite(cross), balance) => {
-                Self::Round(RoundBuilder::new(cross, balance))
-            }
-        }
     }
 }
 

@@ -74,12 +74,12 @@ fn sampled_fill<T: Real, C: Copies>(
     todo!()
 }
 
-/// Row `k` of `D_k − Cᵀ D_e⁻¹ C` from `Cᵀ` row `k` into an `n_kept` workspace as `c_ke (c_je / d_e)`; no fill.
+/// Rows of the cover's complement: `|c_ke| (|c_je| / d_e)` to `j`'s same sheet when signs agree, else its other; none cancel.
 fn exact_rows<T: Real>(builder: &RoundBuilder<'_, T>) -> UpperAdjacency<T> {
     todo!()
 }
 
-/// `s_k + |C|ᵀ D_e⁻¹ s_e`: the exact complement's surplus, one product.
+/// `s_k + |C|ᵀ D_e⁻¹ s_e` per sheet, exact because no product of the cover's complement cancels.
 fn exact_surplus<T: Real>(builder: &RoundBuilder<'_, T>) -> Vec<T> {
     todo!()
 }

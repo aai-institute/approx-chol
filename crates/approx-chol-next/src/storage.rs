@@ -40,7 +40,7 @@ impl<T: Real> Rows<T> {
         (self.indices[span.clone()].iter().map(|&j| j as usize)).zip(&self.values[span])
     }
 
-    fn transpose(&self) -> Self {
+    pub(crate) fn transpose(&self) -> Self {
         todo!()
     }
 
@@ -57,7 +57,7 @@ pub(crate) struct UpperAdjacency<T> {
 }
 
 impl<T: Real> UpperAdjacency<T> {
-    /// Panics unless square with every column above its row and no stored zero.
+    /// Panics unless square, columns strictly ascending above their row, and no stored zero.
     pub(crate) fn new(rows: Rows<T>) -> Self {
         todo!()
     }
@@ -66,7 +66,7 @@ impl<T: Real> UpperAdjacency<T> {
         self.rows.n_rows()
     }
 
-    /// Stores `−w`, an edge to `n` adding `w` to `lo`'s returned ground weight; counting-sorts chunks unflattened.
+    /// Counting-sorts chunks unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.
     pub(crate) fn from_edges(n: usize, chunks: Vec<Fill<T>>) -> (Self, Vec<T>) {
         todo!()
     }
@@ -92,39 +92,6 @@ impl<T: Real> UpperAdjacency<T> {
     }
 }
 
-/// The biadjacency `C` of a factor-width-2 view, cancelled cells dropped: rows are `A`'s left vertices.
-#[derive(Clone, Debug)]
-pub(crate) struct Biadjacency<T> {
-    c: Rows<T>,
-}
-
-impl<T: Real> Biadjacency<T> {
-    /// Panics on a stored zero: a cancelled cell joins nothing.
-    pub(crate) fn new(c: Rows<T>) -> Self {
-        todo!()
-    }
-
-    pub(crate) fn n(&self) -> usize {
-        self.c.n_rows() + self.c.n_cols()
-    }
-
-    /// Each stored cell as an edge of `A`: left row `i` is vertex `i`, right column `j` is `n_left + j`.
-    pub(crate) fn joins(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
-        let n_left = self.c.n_rows();
-        (0..n_left).flat_map(move |i| self.c.row(i).map(move |(j, _)| (i, n_left + j)))
-    }
-
-    /// The whole input as one component's block, moved, transposed only when the right side is larger.
-    pub(crate) fn into_block(self) -> (Box<[u32]>, CrossBlock<T>) {
-        todo!()
-    }
-
-    /// One component's block, its larger side as rows, remapped through `position`; returns its local order.
-    pub(crate) fn block(&self, vertices: &[u32], position: &[u32]) -> (Box<[u32]>, CrossBlock<T>) {
-        todo!()
-    }
-}
-
 /// One component's `C` of `[D₁ C; Cᵀ D₂]`, rows the eliminated side, `Cᵀ` built on first read.
 #[derive(Clone, Debug)]
 pub(crate) struct CrossBlock<T> {
@@ -134,7 +101,7 @@ pub(crate) struct CrossBlock<T> {
 
 impl<T: Real> CrossBlock<T> {
     /// Panics unless both sides are nonempty, with no stored zero: a lone vertex is no bipartite component.
-    fn new(c: Rows<T>) -> Self {
+    pub(crate) fn new(c: Rows<T>) -> Self {
         assert!(c.n_rows() > 0 && c.n_cols() > 0, "both sides hold a vertex");
         assert!(!c.values.contains(&T::zero()), "no stored zero");
         Self {

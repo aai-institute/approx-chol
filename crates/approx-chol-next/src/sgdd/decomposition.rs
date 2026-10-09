@@ -1,10 +1,12 @@
 use num_traits::PrimInt;
 
-use super::components::{self, Partition};
+mod components;
+
 use super::{Component, Part};
 use crate::input::{Columns, Csr, CsrError, Gram, Graph};
-use crate::storage::Biadjacency;
+use crate::storage::{CrossBlock, Rows};
 use crate::{Real, ReduceError};
+use components::Partition;
 
 /// One input split into components: what each looks like unreduced, and which parts provably float.
 pub(super) struct Decomposition<'v, T, I> {
@@ -18,7 +20,7 @@ pub(super) struct Decomposition<'v, T, I> {
 enum Input<'v, T, I> {
     /// A signless Laplacian: its diagonal sums each vertex's column weights, so a negative one fails as not GDD.
     Signless,
-    /// A Gram, its diagonal given; floats when `fᵀGf ≤ 10u·fᵀDf`, summed as squares per column of `V`.
+    /// A Gram, its diagonal given; floats when `fᵀGf ≤ 10u·fᵀDf` per part, a straddling column adding `w(v f)²` to each side.
     Gram {
         columns: Columns<'v, T, I>,
         left: &'v [T],
@@ -84,4 +86,37 @@ fn assemble<T: Real, I: PrimInt>(
     columns: &Columns<'_, T, I>,
 ) -> Result<Biadjacency<T>, ReduceError> {
     todo!()
+}
+
+/// The biadjacency `C` of a factor-width-2 view, cancelled cells dropped: rows are `A`'s left vertices.
+#[derive(Clone, Debug)]
+pub(super) struct Biadjacency<T> {
+    c: Rows<T>,
+}
+
+impl<T: Real> Biadjacency<T> {
+    /// Panics on a stored zero: a cancelled cell joins nothing.
+    fn new(c: Rows<T>) -> Self {
+        todo!()
+    }
+
+    pub(super) fn n(&self) -> usize {
+        self.c.n_rows() + self.c.n_cols()
+    }
+
+    /// Each stored cell as an edge of `A`: left row `i` is vertex `i`, right column `j` is `n_left + j`.
+    pub(super) fn joins(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        let n_left = self.c.n_rows();
+        (0..n_left).flat_map(move |i| self.c.row(i).map(move |(j, _)| (i, n_left + j)))
+    }
+
+    /// The whole input as one component's block, moved, transposed only when the right side is larger.
+    pub(super) fn into_block(self) -> (Box<[u32]>, CrossBlock<T>) {
+        todo!()
+    }
+
+    /// One component's block, its larger side as rows, remapped through `position`; returns its local order.
+    pub(super) fn block(&self, vertices: &[u32], position: &[u32]) -> (Box<[u32]>, CrossBlock<T>) {
+        todo!()
+    }
 }

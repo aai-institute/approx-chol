@@ -46,10 +46,14 @@ impl<T: Real> SddmFactor<T> {
         }
     }
 
-    /// The lifted rows and a grounded factor's ground slot, for `kept` vertices.
+    /// One sheet substitutes on `x` in place; only the ground slot and a cover's lifted rows need scratch.
     pub(super) fn scratch_len(&self, kept: usize) -> usize {
         let ground = usize::from(matches!(self.gauge, Gauge::Grounded(_)));
-        self.sheets.count() * kept + ground
+        let lifted = match self.sheets {
+            Sheets::One => 0,
+            Sheets::Two => 2 * kept,
+        };
+        lifted + ground
     }
 
     /// Lifts to the sheets, fixes the gauge, substitutes, and descends.

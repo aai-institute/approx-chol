@@ -1,13 +1,12 @@
 use num_traits::PrimInt;
 
+use super::Biadjacency;
 use crate::input::{Csr, CsrError};
-use crate::storage::Biadjacency;
 use crate::Real;
 
+/// Unions the pattern while summing each row's `|a_ij|` and noting any positive entry, in one walk.
 pub(super) fn of_csr<T: Real, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<Partition, CsrError> {
-    let mut sets = UnionFind::new(csr.n());
-    csr.walk(|i, j| sets.union(i, j))?;
-    Ok(sets.into_partition())
+    todo!()
 }
 
 pub(super) fn of_cross<T: Real>(c: &Biadjacency<T>) -> Partition {

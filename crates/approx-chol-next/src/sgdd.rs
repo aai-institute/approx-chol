@@ -1,6 +1,5 @@
 //! `A` as one reduced part `M = F · A_c · F` per connected component, decided once per input.
 
-mod components;
 mod congruence;
 mod decomposition;
 mod scaling;
@@ -308,6 +307,10 @@ struct Component<T> {
     vertices: Box<[u32]>,
     off_diagonal: OffDiagonal<T>,
     diagonal: Vec<T>,
+    /// `Σ_j |a_ij|`, summed in the pass that found the component, so dominance and surplus reread nothing.
+    abs_row_sums: Vec<T>,
+    /// No positive off-diagonal: already a Z-matrix, so no signature is searched.
+    nonpositive: bool,
 }
 
 impl<T: Real> Component<T> {

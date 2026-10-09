@@ -4,7 +4,8 @@ mod cdf;
 mod copies;
 mod star;
 
-pub(super) use cdf::{Stream, Streams};
+use cdf::Stream;
+pub(super) use cdf::Streams;
 pub(super) use copies::{Copies, Multi, Single};
 pub(super) use star::Star;
 
