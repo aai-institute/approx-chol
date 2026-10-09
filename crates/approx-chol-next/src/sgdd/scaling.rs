@@ -1,6 +1,6 @@
 use super::{Component, OffDiagonal};
 use crate::storage::in_range;
-use crate::Real;
+use crate::{Real, ReduceError};
 
 /// Certification policy for a dominance scaling; a deficit left at hand-over is clamped and reported.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -54,27 +54,20 @@ struct Relaxation<T> {
     violation: T,
 }
 
-/// Why no scaling exists.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum NotScalable {
-    /// `diag − |offdiag|`, the diagonal signed, is not PSD: a nonpositive diagonal fails on its own.
-    NotGdd,
-    /// A scale or a scaled entry left [`in_range`].
-    ScaleOutOfRange,
-    /// A diagonal entry, given or summed, left [`in_range`].
-    DiagonalOutOfRange,
-}
-
 /// Every input's diagonal is screened here, before any dominance test.
 pub(super) fn dominance_scaling<T: Real>(
     a: &Component<T>,
     policy: &ScalingPolicy,
-) -> Result<Scaling<T>, NotScalable> {
-    if !a.diagonal.iter().all(|&d| in_range(d)) {
-        return Err(NotScalable::DiagonalOutOfRange);
+) -> Result<Scaling<T>, ReduceError> {
+    if let Some(i) = a.diagonal.iter().position(|&d| !in_range(d)) {
+        return Err(ReduceError::OutOfRange {
+            vertex: a.vertices[i],
+        });
     }
     if a.diagonal.iter().any(|&d| d <= T::zero()) {
-        return Err(NotScalable::NotGdd);
+        return Err(ReduceError::NotGdd {
+            vertex: a.vertices[0],
+        });
     }
     if already_dominant(a, policy) {
         return Ok(Scaling::AlreadyDominant);
@@ -100,7 +93,7 @@ fn already_dominant<T: Real>(a: &Component<T>, policy: &ScalingPolicy) -> bool {
 }
 
 /// Self-corrective iterations (Guan, Lu, Li, Shao 2016).
-fn sci<T: Real>(a: &Component<T>, policy: &ScalingPolicy) -> Result<Relaxation<T>, NotScalable> {
+fn sci<T: Real>(a: &Component<T>, policy: &ScalingPolicy) -> Result<Relaxation<T>, ReduceError> {
     todo!()
 }
 
@@ -108,6 +101,6 @@ fn sci<T: Real>(a: &Component<T>, policy: &ScalingPolicy) -> Result<Relaxation<T
 fn reduced_cg<T: Real>(
     a: &Component<T>,
     policy: &ScalingPolicy,
-) -> Result<Relaxation<T>, NotScalable> {
+) -> Result<Relaxation<T>, ReduceError> {
     todo!()
 }

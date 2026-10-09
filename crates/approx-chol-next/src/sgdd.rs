@@ -13,7 +13,6 @@ use num_traits::PrimInt;
 
 use congruence::Congruence;
 use decomposition::Decomposition;
-use scaling::NotScalable;
 pub use scaling::{ScalingPolicy, ScalingReport};
 
 use crate::input::{Csr, CsrError, Gram, Graph};
@@ -263,16 +262,11 @@ impl<T: Real> Sgdd<T> {
     ) -> Result<Self, ReduceError> {
         let (mut parts, mut dead) = (Vec::new(), Vec::new());
         for a in decomposition.components() {
-            let vertex = a.vertices[0];
             if a.is_dead() {
-                dead.push(vertex);
+                dead.push(a.vertices[0]);
                 continue;
             }
-            parts.push(a.reduce(policy).map_err(|e| match e {
-                NotScalable::NotGdd => ReduceError::NotGdd { vertex },
-                NotScalable::ScaleOutOfRange => ReduceError::Unscalable { vertex },
-                NotScalable::DiagonalOutOfRange => ReduceError::OutOfRange { vertex },
-            })?);
+            parts.push(a.reduce(policy)?);
         }
         decomposition.float(&mut parts);
         Ok(Self {
@@ -306,18 +300,18 @@ impl<T: Real> Component<T> {
         self.diagonal == [T::zero()]
     }
 
-    fn reduce(self, policy: &ScalingPolicy) -> Result<Part<T>, NotScalable> {
+    fn reduce(self, policy: &ScalingPolicy) -> Result<Part<T>, ReduceError> {
         let scaling = scaling::dominance_scaling(&self, policy)?;
-        let signature = signature::signature(&self.off_diagonal);
-        self.into_part(scaling, signature)
+        let signs = signature::signature(&self.off_diagonal);
+        self.into_part(scaling, signs)
     }
 
     /// `F = S R` folds and scales `A_c`, or only scales a frustrated one; deficits clamp to zero surplus.
     fn into_part(
         self,
         scaling: scaling::Scaling<T>,
-        signature: Option<signature::Signature>,
-    ) -> Result<Part<T>, NotScalable> {
+        signs: Option<Congruence<T>>,
+    ) -> Result<Part<T>, ReduceError> {
         todo!()
     }
 }
@@ -326,7 +320,7 @@ impl<T: Real> Component<T> {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReduceError {
-    /// No positive diagonal scaling makes the component weakly dominant.
+    /// No positive diagonal scaling makes the component weakly dominant: `diag − |offdiag|` is not PSD.
     NotGdd {
         /// The component's first vertex in local order, in `A`'s numbering.
         vertex: u32,
@@ -338,7 +332,7 @@ pub enum ReduceError {
     },
     /// An assembled entry or diagonal is non-finite, or nonzero below `MIN_POSITIVE/EPSILON`.
     OutOfRange {
-        /// A vertex of the entry, in `A`'s numbering.
+        /// The entry's vertex, in `A`'s numbering.
         vertex: u32,
     },
 }

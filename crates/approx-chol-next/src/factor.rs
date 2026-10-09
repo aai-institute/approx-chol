@@ -252,19 +252,10 @@ fn route<T: Real, M>(
     }
     match dense(&remainder) {
         Ok(factor) => Ok((factor, None)),
-        Err(declined) => {
-            let fallback = accept(config.on_dense_failure, declined)?;
-            Ok((sampled(remainder), Some(fallback)))
-        }
-    }
-}
-
-/// Only a pivot can be fatal: a remainder that will not fit falls back whatever the policy.
-fn accept(on_failure: OnDenseFailure, fallback: Fallback) -> Result<Fallback, FactorError> {
-    match (on_failure, fallback) {
-        (OnDenseFailure::Error, Fallback::UnusablePivot(pivot)) => {
+        // Only a pivot can be fatal: a remainder that will not fit falls back whatever the policy.
+        Err(Fallback::UnusablePivot(pivot)) if config.on_dense_failure == OnDenseFailure::Error => {
             Err(FactorError::UnusablePivot(pivot))
         }
-        _ => Ok(fallback),
+        Err(declined) => Ok((sampled(remainder), Some(declined))),
     }
 }

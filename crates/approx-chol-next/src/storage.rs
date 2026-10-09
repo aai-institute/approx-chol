@@ -66,8 +66,8 @@ impl<T: Real> UpperAdjacency<T> {
         self.rows.n_rows()
     }
 
-    /// Counting-sorts the tasks' chunks by `lo` without flattening (~10% at 1M edges), sums duplicates, drops zeros.
-    pub(crate) fn from_edges(n: usize, chunks: Vec<Fill<T>>) -> Self {
+    /// Stores `−w`, an edge to `n` adding `w` to `lo`'s returned ground weight; counting-sorts chunks unflattened.
+    pub(crate) fn from_edges(n: usize, chunks: Vec<Fill<T>>) -> (Self, Vec<T>) {
         todo!()
     }
 
@@ -112,6 +112,11 @@ impl<T: Real> Biadjacency<T> {
     pub(crate) fn joins(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
         let n_left = self.c.n_rows();
         (0..n_left).flat_map(move |i| self.c.row(i).map(move |(j, _)| (i, n_left + j)))
+    }
+
+    /// The whole input as one component's block, moved, transposed only when the right side is larger.
+    pub(crate) fn into_block(self) -> (Box<[u32]>, CrossBlock<T>) {
+        todo!()
     }
 
     /// One component's block, its larger side as rows, remapped through `position`; returns its local order.

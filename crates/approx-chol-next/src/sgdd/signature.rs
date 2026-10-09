@@ -1,17 +1,7 @@
-use super::OffDiagonal;
+use super::{Congruence, OffDiagonal};
 use crate::Real;
 
-/// The signs `S` that fold `A_c` into a Z-matrix.
-pub(super) enum Signature {
-    /// Already a Z-matrix.
-    Identity,
-    /// A positive bipartite block: every vertex from this one on is negated.
-    NegateFrom(usize),
-    /// `true` where the vertex is negated.
-    Negated(Box<[bool]>),
-}
-
-/// `None` for a frustrated component: a cycle with an odd number of positive entries admits no signature.
-pub(super) fn signature<T: Real>(off_diagonal: &OffDiagonal<T>) -> Option<Signature> {
+/// The signs `S` folding `A_c` into a Z-matrix; `None` when a cycle with an odd number of positive entries forbids it.
+pub(super) fn signature<T: Real>(off_diagonal: &OffDiagonal<T>) -> Option<Congruence<T>> {
     todo!()
 }

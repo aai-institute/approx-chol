@@ -25,6 +25,10 @@ pub(super) struct Partition {
 }
 
 impl Partition {
+    pub(super) fn n(&self) -> usize {
+        self.position.len()
+    }
+
     pub(super) fn position(&self) -> &[u32] {
         &self.position
     }

@@ -1,5 +1,3 @@
-use super::scaling::NotScalable;
-use super::signature::Signature;
 use super::OffDiagonal;
 use crate::Real;
 
@@ -16,8 +14,22 @@ enum Kind<T> {
 }
 
 impl<T: Real> Congruence<T> {
-    /// `S R`, `S = I` for a frustrated `A_c`; an SDDM keeps `F = I`, and only `NegateFrom` stays unmaterialized.
-    pub(super) fn new(signature: Option<Signature>, scales: Option<Box<[T]>>) -> Self {
+    pub(super) fn identity() -> Self {
+        Self(Kind::Identity)
+    }
+
+    /// A positive bipartite block's signature, unmaterialized: every vertex from `first` on is negated.
+    pub(super) fn negate_from(first: usize) -> Self {
+        Self(Kind::NegateFrom(first))
+    }
+
+    /// `true` where the vertex is negated.
+    pub(super) fn negated(signs: &[bool]) -> Self {
+        todo!()
+    }
+
+    /// `S R` for these signs and positive scales `R`.
+    pub(super) fn scaled(self, scales: &[T]) -> Self {
         todo!()
     }
 
@@ -30,11 +42,8 @@ impl<T: Real> Congruence<T> {
         }
     }
 
-    /// `F X F`: `M`'s off-diagonal from `A_c`'s, where an entry can leave the finite range.
-    pub(super) fn transform(
-        &self,
-        off_diagonal: OffDiagonal<T>,
-    ) -> Result<OffDiagonal<T>, NotScalable> {
+    /// `F X F`: `M`'s off-diagonal from `A_c`'s; `None` where an entry leaves [`in_range`](crate::storage::in_range).
+    pub(super) fn transform(&self, off_diagonal: OffDiagonal<T>) -> Option<OffDiagonal<T>> {
         todo!()
     }
 

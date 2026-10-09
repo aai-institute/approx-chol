@@ -6,7 +6,7 @@ use crate::clique_tree::{Copies, Streams};
 use crate::config::{CliqueRule, InnerParallelism};
 use crate::sddm::{self, Sddm};
 use crate::sgdd::Balance;
-use crate::storage::{CrossBlock, Fill};
+use crate::storage::{CrossBlock, Fill, UpperAdjacency};
 use crate::Real;
 
 /// `M`'s cross block and the pivots `d_e`, applied as two products because the block's steps commute.
@@ -55,7 +55,7 @@ impl<'a, T: Real> RoundBuilder<'a, T> {
         sddm::rank(rows, self.balance.grounding().is_grounded())
     }
 
-    /// The kept block's Schur complement on the part's sheets; stars run in parallel.
+    /// The kept block's Schur complement on the part's sheets: exact by kept row, sampled by star in parallel.
     pub(crate) fn complement(&self, rule: CliqueRule, streams: Streams) -> Sddm<'static, T> {
         todo!()
     }
@@ -65,16 +65,21 @@ impl<'a, T: Real> RoundBuilder<'a, T> {
     }
 }
 
-/// Each eliminated star's clique tree under its own stream, appended to one task's fill.
+/// Each eliminated star's clique tree under its own stream, the ground a final neighbor; one chunk per task.
 fn sampled_fill<T: Real, C: Copies>(
     builder: &RoundBuilder<'_, T>,
     split: C::Split,
     streams: Streams,
-) -> Fill<T> {
+) -> Vec<Fill<T>> {
     todo!()
 }
 
-/// The whole clique as `w_i (w_j / d)`, so no edge to the heaviest neighbor underflows; the ground is a neighbor.
-fn exact_clique<T: Real>(star: &[(u32, T)], fill: &mut Fill<T>) {
+/// Row `k` of `D_k − Cᵀ D_e⁻¹ C` from `Cᵀ` row `k` into an `n_kept` workspace as `c_ke (c_je / d_e)`; no fill.
+fn exact_rows<T: Real>(builder: &RoundBuilder<'_, T>) -> UpperAdjacency<T> {
+    todo!()
+}
+
+/// `s_k + |C|ᵀ D_e⁻¹ s_e`: the exact complement's surplus, one product.
+fn exact_surplus<T: Real>(builder: &RoundBuilder<'_, T>) -> Vec<T> {
     todo!()
 }

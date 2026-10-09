@@ -8,7 +8,6 @@ use crate::{Real, ReduceError};
 
 /// One input split into components: what each looks like unreduced, and which parts provably float.
 pub(super) struct Decomposition<'v, T, I> {
-    n: usize,
     partition: Partition,
     /// A view's assembled `C`, taken whole by a lone component instead of copied block by block.
     c: Option<Biadjacency<T>>,
@@ -33,7 +32,6 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
     /// Checks symmetry and range in the walk that finds the components.
     pub(super) fn csr(csr: Csr<'v, T, I>) -> Result<Self, CsrError> {
         Ok(Self {
-            n: csr.n(),
             partition: components::of_csr(&csr)?,
             c: None,
             input: Input::Csr(csr),
@@ -57,7 +55,6 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
 
     fn of_cross(c: Biadjacency<T>, input: Input<'v, T, I>) -> Result<Self, ReduceError> {
         Ok(Self {
-            n: c.n(),
             partition: components::of_cross(&c),
             c: Some(c),
             input,
@@ -65,7 +62,7 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
     }
 
     pub(super) fn n(&self) -> usize {
-        self.n
+        self.partition.n()
     }
 
     /// A lone vertex is general, so a bipartite component always has both sides.
