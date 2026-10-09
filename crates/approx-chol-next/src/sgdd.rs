@@ -335,8 +335,8 @@ pub enum ReduceError {
         /// The component's first vertex in local order, in `A`'s numbering.
         vertex: u32,
     },
-    /// A view's assembled entry is nonzero below `MIN_POSITIVE/EPSILON`, where products turn subnormal.
-    TooSmall {
+    /// A view's assembled entry is non-finite, or nonzero below `MIN_POSITIVE/EPSILON`.
+    OutOfRange {
         /// A vertex of the entry, in `A`'s numbering.
         vertex: u32,
     },
@@ -353,8 +353,11 @@ impl core::fmt::Display for ReduceError {
                 f,
                 "scaling the component of vertex {vertex} leaves the representable range"
             ),
-            Self::TooSmall { vertex } => {
-                write!(f, "an entry at vertex {vertex} is too small to stay normal")
+            Self::OutOfRange { vertex } => {
+                write!(
+                    f,
+                    "an entry at vertex {vertex} is outside the representable range"
+                )
             }
         }
     }

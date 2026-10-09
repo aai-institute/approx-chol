@@ -62,14 +62,15 @@ pub(super) enum NotScalable {
     OutOfRange,
 }
 
-/// SCI reads only row ratios, so it serves any pattern; the reduced CG needs the bipartite operator.
+/// A non-finite diagonal is `OutOfRange` and a nonpositive one `NotGdd` before any dominance test.
 pub(super) fn dominance_scaling<T: Real>(
     a: &Component<T>,
     policy: &ScalingPolicy,
 ) -> Result<Scaling<T>, NotScalable> {
-    if already_dominant(a) {
+    if already_dominant(a, policy) {
         return Ok(Scaling::AlreadyDominant);
     }
+    // SCI reads only row ratios, so it serves any pattern; the reduced CG needs the bipartite operator.
     let relaxation = match &a.off_diagonal {
         OffDiagonal::General(_) => sci(a, policy),
         OffDiagonal::Bipartite(_) => reduced_cg(a, policy),
@@ -84,8 +85,8 @@ impl ScalingPolicy {
     }
 }
 
-/// `Σ_j |a_ij| ≤ a_ii` against the signed diagonal, so a negative one never passes.
-fn already_dominant<T: Real>(a: &Component<T>) -> bool {
+/// `Σ_j |a_ij| ≤ a_ii (1 + tolerance)`: a rounded Laplacian stays bit for bit, its deficit clamped to zero surplus.
+fn already_dominant<T: Real>(a: &Component<T>, policy: &ScalingPolicy) -> bool {
     todo!()
 }
 

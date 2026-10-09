@@ -74,7 +74,7 @@ fn sampled_fill<T: Real, C: Copies>(
     todo!()
 }
 
-/// The whole clique: `w_i w_j / d` per pair, the ground a neighbor like any other.
+/// The whole clique as `w_i (w_j / d)`, so no edge to the heaviest neighbor underflows; the ground is a neighbor.
 fn exact_clique<T: Real>(star: &[(u32, T)], fill: &mut Fill<T>) {
     todo!()
 }

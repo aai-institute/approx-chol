@@ -31,7 +31,7 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
         todo!()
     }
 
-    /// Merges `neighbors`, samples their clique tree into `fill`, and returns the pivot.
+    /// Merges `neighbors`, samples their clique tree into `fill` as `w_i (w_j / d)`, and returns the pivot.
     pub(crate) fn eliminate(
         &mut self,
         neighbors: impl Iterator<Item = (u32, C, T)>,
