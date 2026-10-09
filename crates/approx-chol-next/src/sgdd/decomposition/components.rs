@@ -4,7 +4,7 @@ use super::Biadjacency;
 use crate::input::{Csr, CsrError};
 use crate::Real;
 
-/// Unions the pattern while summing each row's `|a_ij|` and noting any positive entry, in one walk.
+/// Unions the pattern in the walk that checks symmetry and range.
 pub(super) fn of_csr<T: Real, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<Partition, CsrError> {
     todo!()
 }

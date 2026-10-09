@@ -6,10 +6,9 @@ mod ordering;
 
 pub(super) use cholesky::SampledCholesky;
 
-use crate::factor::clique_tree::{CliqueSampler, Copies, Multi, Single, Streams};
+use crate::factor::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single, Streams};
 use crate::factor::config::Multiplicity;
 use crate::factor::sddm::Sddm;
-use crate::storage::Fill;
 use crate::Real;
 use cholesky::Steps;
 use graph::EliminationGraph;
@@ -48,7 +47,7 @@ fn run<T: Real, C: Copies>(
         for &(u, w, weight) in &fill {
             graph.add_fill(u, w, weight);
         }
-        ordering.update(clique.star(), &fill);
+        ordering.update(clique.degree_losses(), &fill);
     }
     steps.finish(ordering.next_vertex())
 }

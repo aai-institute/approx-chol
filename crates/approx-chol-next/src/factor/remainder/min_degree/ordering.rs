@@ -1,6 +1,5 @@
 use super::graph::EliminationGraph;
-use crate::factor::clique_tree::{Copies, Star};
-use crate::storage::Fill;
+use crate::factor::clique_tree::{Copies, Fill};
 use crate::Real;
 
 /// Bucket queue over live degree estimates (Julia's `ApproxCholPQ`).
@@ -33,7 +32,11 @@ impl DynamicOrdering {
     }
 
     /// The star's degree losses, then fill's gains.
-    pub(super) fn update<T: Real, C: Copies>(&mut self, star: &Star<T, C>, fill: &Fill<T>) {
+    pub(super) fn update<T: Real>(
+        &mut self,
+        losses: impl Iterator<Item = (u32, u32)>,
+        fill: &Fill<T>,
+    ) {
         todo!()
     }
 }

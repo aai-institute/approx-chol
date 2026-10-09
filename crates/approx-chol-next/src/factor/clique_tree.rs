@@ -4,14 +4,15 @@ mod cdf;
 mod copies;
 mod star;
 
+use crate::Real;
+use cdf::CdfSampler;
 use cdf::Stream;
 pub(super) use cdf::Streams;
 pub(super) use copies::{Copies, Multi, Single};
-pub(super) use star::Star;
+use star::Star;
 
-use crate::storage::Fill;
-use crate::Real;
-use cdf::CdfSampler;
+/// Fill edges `(lo, hi, weight)`, `lo < hi`, as an elimination emits them.
+pub(super) type Fill<T> = Vec<(u32, u32, T)>;
 
 /// A pivot's elimination, reused across pivots; AC and AC2 differ only in `C`.
 pub(super) struct CliqueSampler<T, C: Copies> {
@@ -41,9 +42,9 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
         todo!()
     }
 
-    /// The last pivot's star.
-    pub(super) fn star(&self) -> &Star<T, C> {
-        &self.star
+    /// Copies each neighbor of the last pivot lost.
+    pub(super) fn degree_losses(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
+        self.star.degree_losses()
     }
 
     pub(super) fn column(&self) -> &Column<T> {

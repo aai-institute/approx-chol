@@ -9,9 +9,6 @@ pub(crate) fn in_range<T: Real>(x: T) -> bool {
     x.is_finite() && (x == T::zero() || x.abs() >= T::min_positive_value() / T::epsilon())
 }
 
-/// Fill edges `(lo, hi, weight)`, `lo < hi`, as an elimination emits them.
-pub(crate) type Fill<T> = Vec<(u32, u32, T)>;
-
 /// Compressed sparse rows.
 #[derive(Clone, Debug)]
 pub(crate) struct Rows<T> {
@@ -64,11 +61,6 @@ impl<T: Real> UpperAdjacency<T> {
 
     pub(crate) fn n(&self) -> usize {
         self.rows.n_rows()
-    }
-
-    /// Counting-sorts chunks unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.
-    pub(crate) fn from_edges(n: usize, chunks: Vec<Fill<T>>) -> (Self, Vec<T>) {
-        todo!()
     }
 
     /// `Σ_j |x_ij|` over both triangles.

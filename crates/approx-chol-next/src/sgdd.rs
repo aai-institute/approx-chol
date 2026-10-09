@@ -270,7 +270,7 @@ impl<T: Real> Sgdd<T> {
         Self::reduce(Decomposition::gram(gram)?, &policy)
     }
 
-    /// Dead components produce no part; the floating test runs once, over the whole input.
+    /// Dead components produce no part; what a part's rows cannot prove floating, the input decides after.
     fn reduce<I: PrimInt>(
         mut decomposition: Decomposition<'_, T, I>,
         policy: &ScalingPolicy,
@@ -307,10 +307,20 @@ struct Component<T> {
     vertices: Box<[u32]>,
     off_diagonal: OffDiagonal<T>,
     diagonal: Vec<T>,
-    /// `Σ_j |a_ij|`, summed in the pass that found the component, so dominance and surplus reread nothing.
+    /// `Σ_j |a_ij|`, summed while its rows are extracted, so dominance and surplus reread nothing.
     abs_row_sums: Vec<T>,
     /// No positive off-diagonal: already a Z-matrix, so no signature is searched.
     nonpositive: bool,
+    singularity: Singularity,
+}
+
+/// What proves `A_c` singular.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Singularity {
+    /// Unscaled, each row's surplus within its own rounding; scaled, `1ᵀM1 ≤ 10u·tr M` before the clamp, as surpluses are `O(δ)` but sum to `O(δ²)`.
+    Rows,
+    /// The input, once every part is built.
+    Input,
 }
 
 impl<T: Real> Component<T> {
@@ -321,11 +331,14 @@ impl<T: Real> Component<T> {
 
     fn reduce(self, policy: &ScalingPolicy) -> Result<Part<T>, ReduceError> {
         let scaling = scaling::dominance_scaling(&self, policy)?;
-        let signs = signature::signature(&self.off_diagonal);
+        let signs = match self.nonpositive {
+            true => Some(Congruence::identity()),
+            false => signature::signature(&self.off_diagonal),
+        };
         self.into_part(scaling, signs)
     }
 
-    /// `F = S R` folds and scales `A_c`, or only scales a frustrated one; deficits clamp to zero surplus.
+    /// `F = S R` folds and scales `A_c`, or only scales a frustrated one; deficits clamp to zero surplus after the floating test.
     fn into_part(
         self,
         scaling: scaling::Scaling<T>,

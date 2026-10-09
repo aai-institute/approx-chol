@@ -11,22 +11,21 @@ use components::Partition;
 /// One input split into components: what each looks like unreduced, and which parts provably float.
 pub(super) struct Decomposition<'v, T, I> {
     partition: Partition,
-    /// A view's assembled `C`, taken whole by a lone component instead of copied block by block.
-    c: Option<Biadjacency<T>>,
     input: Input<'v, T, I>,
 }
 
-/// What the floating test reads.
+/// The input, and what its parts' own rows cannot prove: a view's `C` is taken whole by a lone component.
 enum Input<'v, T, I> {
-    /// A signless Laplacian: its diagonal sums each vertex's column weights, so a negative one fails as not GDD.
-    Signless,
+    /// A signless Laplacian: zero surplus by shape, and a negative weight fails as not GDD.
+    Signless(Option<Biadjacency<T>>),
     /// A Gram, its diagonal given; floats when `fᵀGf ≤ 10u·fᵀDf` per part, a straddling column adding `w(v f)²` to each side.
     Gram {
+        c: Option<Biadjacency<T>>,
         columns: Columns<'v, T, I>,
         left: &'v [T],
         right: &'v [T],
     },
-    /// Floats when each row's surplus is within the rounding its own additions can leave.
+    /// Each component's rows decide its floating.
     Csr(Csr<'v, T, I>),
 }
 
@@ -35,7 +34,6 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
     pub(super) fn csr(csr: Csr<'v, T, I>) -> Result<Self, CsrError> {
         Ok(Self {
             partition: components::of_csr(&csr)?,
-            c: None,
             input: Input::Csr(csr),
         })
     }
@@ -43,23 +41,23 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
     pub(super) fn gram(gram: Gram<'v, 'v, T, I>) -> Result<Self, ReduceError> {
         let (left, right) = gram.diagonals();
         let columns = gram.columns();
-        let input = Input::Gram {
-            columns,
-            left,
-            right,
-        };
-        Self::of_cross(assemble(&columns)?, input)
+        let c = assemble(&columns)?;
+        Ok(Self {
+            partition: components::of_cross(&c),
+            input: Input::Gram {
+                c: Some(c),
+                columns,
+                left,
+                right,
+            },
+        })
     }
 
     pub(super) fn signless(graph: Graph<'v, T, I>) -> Result<Self, ReduceError> {
-        Self::of_cross(assemble(&graph.columns())?, Input::Signless)
-    }
-
-    fn of_cross(c: Biadjacency<T>, input: Input<'v, T, I>) -> Result<Self, ReduceError> {
+        let c = assemble(&graph.columns())?;
         Ok(Self {
             partition: components::of_cross(&c),
-            c: Some(c),
-            input,
+            input: Input::Signless(Some(c)),
         })
     }
 
@@ -72,11 +70,12 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         (self.partition.components()).map(|vertices| -> Component<T> { todo!() })
     }
 
-    /// One pass over the input decides every part's ground, matching parts by their vertices.
+    /// What the parts' rows could not decide: a signless shape, or a Gram's columns in one pass.
     pub(super) fn float(&self, parts: &mut [Part<T>]) {
         match &self.input {
-            Input::Signless => (parts.iter_mut()).for_each(|part| part.m.float()),
-            Input::Gram { .. } | Input::Csr(_) => todo!(),
+            Input::Signless(_) => (parts.iter_mut()).for_each(|part| part.m.float()),
+            Input::Gram { .. } => todo!(),
+            Input::Csr(_) => {}
         }
     }
 }
@@ -90,7 +89,7 @@ fn assemble<T: Real, I: PrimInt>(
 
 /// The biadjacency `C` of a factor-width-2 view, cancelled cells dropped: rows are `A`'s left vertices.
 #[derive(Clone, Debug)]
-pub(super) struct Biadjacency<T> {
+struct Biadjacency<T> {
     c: Rows<T>,
 }
 
@@ -100,23 +99,23 @@ impl<T: Real> Biadjacency<T> {
         todo!()
     }
 
-    pub(super) fn n(&self) -> usize {
+    fn n(&self) -> usize {
         self.c.n_rows() + self.c.n_cols()
     }
 
     /// Each stored cell as an edge of `A`: left row `i` is vertex `i`, right column `j` is `n_left + j`.
-    pub(super) fn joins(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+    fn joins(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
         let n_left = self.c.n_rows();
         (0..n_left).flat_map(move |i| self.c.row(i).map(move |(j, _)| (i, n_left + j)))
     }
 
     /// The whole input as one component's block, moved, transposed only when the right side is larger.
-    pub(super) fn into_block(self) -> (Box<[u32]>, CrossBlock<T>) {
+    fn into_block(self) -> (Box<[u32]>, CrossBlock<T>) {
         todo!()
     }
 
     /// One component's block, its larger side as rows, remapped through `position`; returns its local order.
-    pub(super) fn block(&self, vertices: &[u32], position: &[u32]) -> (Box<[u32]>, CrossBlock<T>) {
+    fn block(&self, vertices: &[u32], position: &[u32]) -> (Box<[u32]>, CrossBlock<T>) {
         todo!()
     }
 }

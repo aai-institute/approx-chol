@@ -46,14 +46,13 @@ impl<T: Real> SddmFactor<T> {
         }
     }
 
-    /// One sheet substitutes on `x` in place; only the ground slot and a cover's lifted rows need scratch.
+    /// A floating sheet substitutes on `x` in place; the sampled order may read the ground mid-recurrence, so it sits beside the rows.
     pub(super) fn scratch_len(&self, kept: usize) -> usize {
-        let ground = usize::from(matches!(self.gauge, Gauge::Grounded(_)));
-        let lifted = match self.sheets {
-            Sheets::One => 0,
-            Sheets::Two => 2 * kept,
-        };
-        lifted + ground
+        match (self.sheets, &self.gauge) {
+            (Sheets::One, Gauge::Floating(_)) => 0,
+            (sheets, Gauge::Grounded(_)) => sheets.count() * kept + 1,
+            (Sheets::Two, Gauge::Floating(_)) => 2 * kept,
+        }
     }
 
     /// Lifts to the sheets, fixes the gauge, substitutes, and descends.

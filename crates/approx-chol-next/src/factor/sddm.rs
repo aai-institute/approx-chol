@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 
+use super::clique_tree::Fill;
 use crate::sgdd::{Balance, Grounding};
 use crate::storage::UpperAdjacency;
 use crate::Real;
@@ -63,6 +64,11 @@ impl<'a, T: Real> Sddm<'a, T> {
     pub(super) fn grounded_edges(&self) -> impl Iterator<Item = (u32, u32, T)> + '_ {
         std::iter::from_fn(|| -> Option<(u32, u32, T)> { todo!() })
     }
+}
+
+/// Counting-sorts chunks unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.
+pub(super) fn from_fill<T: Real>(n: usize, chunks: Vec<Fill<T>>) -> (UpperAdjacency<T>, Vec<T>) {
+    todo!()
 }
 
 /// Pivots a Cholesky over `rows` takes: without a ground one row stays free.

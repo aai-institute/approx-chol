@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
-use super::clique_tree::{Copies, Streams};
+use super::clique_tree::{Copies, Fill, Streams};
 use super::config::{CliqueRule, InnerParallelism};
 use super::sddm::{self, Sddm, Sheets};
 use crate::sgdd::Balance;
-use crate::storage::{CrossBlock, Fill, UpperAdjacency};
+use crate::storage::{CrossBlock, UpperAdjacency};
 use crate::Real;
 
 /// `M`'s cross block and the pivots `d_e`, applied as two products because the block's steps commute.
