@@ -13,6 +13,8 @@ pub(super) struct StarEntry<T, C> {
 pub(crate) struct Star<T, C> {
     entries: Vec<StarEntry<T, C>>,
     removed_copies: Vec<(u32, u32)>,
+    /// Grown to `n` on first need: above 32 entries, dedup scatters instead of sorting 16-byte entries twice.
+    scatter: Vec<u32>,
 }
 
 impl<T: Real, C: Copies> Star<T, C> {
@@ -20,6 +22,7 @@ impl<T: Real, C: Copies> Star<T, C> {
         Self {
             entries: Vec::new(),
             removed_copies: Vec::new(),
+            scatter: Vec::new(),
         }
     }
 

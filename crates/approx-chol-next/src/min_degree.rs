@@ -16,7 +16,7 @@ use graph::EliminationGraph;
 use ordering::DynamicOrdering;
 
 pub(crate) fn eliminate<T: Real>(
-    sddm: &Sddm<'_, T>,
+    sddm: Sddm<'_, T>,
     multiplicity: Multiplicity,
     streams: Streams,
 ) -> SampledCholesky<T> {
@@ -28,11 +28,12 @@ pub(crate) fn eliminate<T: Real>(
 
 /// One step short of `n`, leaving the vertex the solve zeroes.
 fn run<T: Real, C: Copies>(
-    sddm: &Sddm<'_, T>,
+    sddm: Sddm<'_, T>,
     streams: Streams,
     split: C::Split,
 ) -> SampledCholesky<T> {
-    let mut graph = EliminationGraph::<T, C>::of(sddm, split);
+    let mut graph = EliminationGraph::<T, C>::of(&sddm, split);
+    drop(sddm);
     let n = graph.n();
     let mut ordering = DynamicOrdering::new(&graph, split);
     let mut clique = CliqueSampler::<T, C>::new(streams.remainder(), split);

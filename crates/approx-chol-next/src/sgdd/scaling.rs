@@ -1,4 +1,5 @@
 use super::{Component, OffDiagonal};
+use crate::storage::in_range;
 use crate::Real;
 
 /// Certification policy for a dominance scaling; a deficit left at hand-over is clamped and reported.
@@ -58,15 +59,23 @@ struct Relaxation<T> {
 pub(super) enum NotScalable {
     /// `diag − |offdiag|`, the diagonal signed, is not PSD: a nonpositive diagonal fails on its own.
     NotGdd,
-    /// A scale or a scaled entry left [`in_range`](crate::storage::in_range).
-    OutOfRange,
+    /// A scale or a scaled entry left [`in_range`].
+    ScaleOutOfRange,
+    /// A diagonal entry, given or summed, left [`in_range`].
+    DiagonalOutOfRange,
 }
 
-/// A non-finite diagonal is `OutOfRange` and a nonpositive one `NotGdd` before any dominance test.
+/// Every input's diagonal is screened here, before any dominance test.
 pub(super) fn dominance_scaling<T: Real>(
     a: &Component<T>,
     policy: &ScalingPolicy,
 ) -> Result<Scaling<T>, NotScalable> {
+    if !a.diagonal.iter().all(|&d| in_range(d)) {
+        return Err(NotScalable::DiagonalOutOfRange);
+    }
+    if a.diagonal.iter().any(|&d| d <= T::zero()) {
+        return Err(NotScalable::NotGdd);
+    }
     if already_dominant(a, policy) {
         return Ok(Scaling::AlreadyDominant);
     }
@@ -85,7 +94,7 @@ impl ScalingPolicy {
     }
 }
 
-/// `Σ_j |a_ij| ≤ a_ii (1 + tolerance)`: a rounded Laplacian stays bit for bit, its deficit clamped to zero surplus.
+/// `Σ_j |a_ij| ≤ a_ii (1 + max(tolerance, 2 deg_i ε))`: a rounded Laplacian stays bit for bit, even in `f32`.
 fn already_dominant<T: Real>(a: &Component<T>, policy: &ScalingPolicy) -> bool {
     todo!()
 }

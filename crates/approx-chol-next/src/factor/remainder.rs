@@ -16,26 +16,28 @@ impl<T: Real> SddmFactor<T> {
     /// `vertices` names each base vertex in `A`, so a declined pivot is reported there.
     pub(super) fn dense(sddm: &Sddm<'_, T>, vertices: &[u32]) -> Result<Self, Fallback> {
         let dense = DenseCholesky::factor(sddm, vertices)?;
-        Ok(Self::of(sddm, Cholesky::Dense(dense)))
+        Ok(Self::of(sddm)(Cholesky::Dense(dense)))
     }
 
-    pub(super) fn sampled(
-        sddm: &Sddm<'_, T>,
-        multiplicity: Multiplicity,
-        streams: Streams,
-    ) -> Self {
-        let sampled = min_degree::eliminate(sddm, multiplicity, streams);
-        Self::of(sddm, Cholesky::Sampled(sampled))
+    /// Consumes `sddm`, so an owned cover or complement is freed before fill grows the graph.
+    pub(super) fn sampled(sddm: Sddm<'_, T>, multiplicity: Multiplicity, streams: Streams) -> Self {
+        let of = Self::of(&sddm);
+        of(Cholesky::Sampled(min_degree::eliminate(
+            sddm,
+            multiplicity,
+            streams,
+        )))
     }
 
-    fn of(sddm: &Sddm<'_, T>, cholesky: Cholesky<T>) -> Self {
-        let gauge = match sddm.grounded() {
-            true => Gauge::Grounded(cholesky),
-            false => Gauge::Floating(cholesky),
-        };
-        Self {
-            sheets: sddm.sheets(),
-            gauge,
+    /// The facts it keeps of its matrix, taken before the matrix is consumed.
+    fn of(sddm: &Sddm<'_, T>) -> impl FnOnce(Cholesky<T>) -> Self {
+        let (sheets, grounded) = (sddm.sheets(), sddm.grounded());
+        move |cholesky| {
+            let gauge = match grounded {
+                true => Gauge::Grounded(cholesky),
+                false => Gauge::Floating(cholesky),
+            };
+            Self { sheets, gauge }
         }
     }
 

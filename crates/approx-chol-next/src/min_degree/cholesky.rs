@@ -50,7 +50,7 @@ pub(crate) struct SampledCholesky<T> {
 }
 
 impl<T: Real> SampledCholesky<T> {
-    /// Forward, zero the uneliminated entry, backward.
+    /// Forward, zero the uneliminated entry, backward; the gather dispatches `[]`, `[_]`, lanes by row length.
     pub(crate) fn substitute(&self, y: &mut [T]) {
         todo!()
     }

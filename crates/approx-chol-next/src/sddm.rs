@@ -24,7 +24,7 @@ impl<'a, T: Real> Sddm<'a, T> {
         assert!(n > 0, "an SDDM has a vertex");
         assert!(grounding.fits(n), "one surplus per row");
         assert_eq!(n % sheets.count(), 0, "every sheet holds the same vertices");
-        assert!(adjacency.nonpositive(), "L's off-diagonal is nonpositive");
+        debug_assert!(adjacency.nonpositive(), "L's off-diagonal is nonpositive");
         Self {
             adjacency,
             grounding,

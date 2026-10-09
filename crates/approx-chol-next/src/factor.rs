@@ -9,7 +9,7 @@ use rayon::prelude::*;
 use crate::clique_tree::Streams;
 use crate::config::{CliqueRule, Config, InnerParallelism, OnDenseFailure};
 use crate::dense::{Fallback, PivotDefect, UnusablePivot};
-use crate::round::Round;
+use crate::round::{Round, RoundBuilder};
 use crate::sgdd::{Elimination, Frame, Part, Sgdd};
 use crate::Real;
 use remainder::SddmFactor;
@@ -151,20 +151,22 @@ impl<T: Real> PartFactor<T> {
         let streams = Streams::new(config.seed, vertices[0]);
         let (round, (remainder, fallback)) = match part.elimination() {
             Elimination::Whole(sddm) => {
-                let dense = || SddmFactor::dense(&sddm, vertices);
-                let sampled = || SddmFactor::sampled(&sddm, config.remainder, streams);
-                (None, route(sddm.rank(), dense, sampled, config)?)
+                let dense = |sddm: &_| SddmFactor::dense(sddm, vertices);
+                let sampled = |sddm| SddmFactor::sampled(sddm, config.remainder, streams);
+                (None, route(sddm.rank(), sddm, dense, sampled, config)?)
             }
             Elimination::Round(builder) => {
                 let kept = &vertices[builder.n_eliminated()..];
                 // A dense Cholesky spends nothing on sparsity, so only the exact complement goes dense.
-                let dense =
-                    || SddmFactor::dense(&builder.complement(CliqueRule::Exact, streams), kept);
-                let sampled = || {
-                    let complement = builder.complement(config.complement, streams);
-                    SddmFactor::sampled(&complement, config.remainder, streams)
+                let dense = |builder: &&RoundBuilder<'_, T>| {
+                    SddmFactor::dense(&builder.complement(CliqueRule::Exact, streams), kept)
                 };
-                let routed = route(builder.complement_rank(), dense, sampled, config)?;
+                let sampled = |builder: &RoundBuilder<'_, T>| {
+                    let complement = builder.complement(config.complement, streams);
+                    SddmFactor::sampled(complement, config.remainder, streams)
+                };
+                let rank = builder.complement_rank();
+                let routed = route(rank, &builder, dense, sampled, config)?;
                 (Some(builder.finish()), routed)
             }
         };
@@ -238,20 +240,21 @@ impl<T: Real> PartFactor<T> {
 }
 
 /// Dense when the rule says so; a declined pivot falls to the approximate arm, never to a second dense one.
-fn route<T: Real>(
+fn route<T: Real, M>(
     rank: usize,
-    dense: impl FnOnce() -> Result<SddmFactor<T>, Fallback>,
-    sampled: impl FnOnce() -> SddmFactor<T>,
+    remainder: M,
+    dense: impl FnOnce(&M) -> Result<SddmFactor<T>, Fallback>,
+    sampled: impl FnOnce(M) -> SddmFactor<T>,
     config: &Config,
 ) -> Result<(SddmFactor<T>, Option<Fallback>), FactorError> {
     if !config.routes_dense(rank) {
-        return Ok((sampled(), None));
+        return Ok((sampled(remainder), None));
     }
-    match dense() {
-        Ok(remainder) => Ok((remainder, None)),
+    match dense(&remainder) {
+        Ok(factor) => Ok((factor, None)),
         Err(declined) => {
             let fallback = accept(config.on_dense_failure, declined)?;
-            Ok((sampled(), Some(fallback)))
+            Ok((sampled(remainder), Some(fallback)))
         }
     }
 }

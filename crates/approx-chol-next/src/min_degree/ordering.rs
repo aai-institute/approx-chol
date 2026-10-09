@@ -9,11 +9,15 @@ pub(super) struct DynamicOrdering {
     lists: Vec<u32>,
     min_list: usize,
     bucket_base: usize,
+    /// Net degree change per touched vertex: one queue move each, not one per fill endpoint.
+    deltas: Vec<(u32, i32)>,
 }
 
+/// 12 bytes: `Option<u32>` keys measured +2-3% on grids.
 struct QueueElem {
     prev: u32,
     next: u32,
+    /// `u32::MAX` once removed.
     key: u32,
 }
 

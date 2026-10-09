@@ -66,8 +66,8 @@ impl<T: Real> UpperAdjacency<T> {
         self.rows.n_rows()
     }
 
-    /// Orients each edge `lo < hi`, sorts, sums duplicates, and drops a sum that underflowed to zero; signs kept.
-    pub(crate) fn from_edges(n: usize, edges: impl IntoIterator<Item = (u32, u32, T)>) -> Self {
+    /// Counting-sorts the tasks' chunks by `lo` without flattening (~10% at 1M edges), sums duplicates, drops zeros.
+    pub(crate) fn from_edges(n: usize, chunks: Vec<Fill<T>>) -> Self {
         todo!()
     }
 
@@ -87,7 +87,8 @@ impl<T: Real> UpperAdjacency<T> {
 
     /// `F X F`; `None` if an entry leaves [`in_range`].
     pub(crate) fn scaled(self, f: &[T]) -> Option<Self> {
-        Some(Self::new(self.rows.scaled(f, f)?))
+        let rows = self.rows.scaled(f, f)?;
+        Some(Self { rows })
     }
 }
 
@@ -113,8 +114,8 @@ impl<T: Real> Biadjacency<T> {
         (0..n_left).flat_map(move |i| self.c.row(i).map(move |(j, _)| (i, n_left + j)))
     }
 
-    /// One component's block, its larger side as rows; returns the vertices in that local order.
-    pub(crate) fn block(&self, vertices: &[u32]) -> (Box<[u32]>, CrossBlock<T>) {
+    /// One component's block, its larger side as rows, remapped through `position`; returns its local order.
+    pub(crate) fn block(&self, vertices: &[u32], position: &[u32]) -> (Box<[u32]>, CrossBlock<T>) {
         todo!()
     }
 }

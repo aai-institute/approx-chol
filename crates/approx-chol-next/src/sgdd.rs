@@ -258,7 +258,7 @@ impl<T: Real> Sgdd<T> {
 
     /// Dead components produce no part; the floating test runs once, over the whole input.
     fn reduce<I: PrimInt>(
-        decomposition: Decomposition<'_, T, I>,
+        mut decomposition: Decomposition<'_, T, I>,
         policy: &ScalingPolicy,
     ) -> Result<Self, ReduceError> {
         let (mut parts, mut dead) = (Vec::new(), Vec::new());
@@ -270,7 +270,8 @@ impl<T: Real> Sgdd<T> {
             }
             parts.push(a.reduce(policy).map_err(|e| match e {
                 NotScalable::NotGdd => ReduceError::NotGdd { vertex },
-                NotScalable::OutOfRange => ReduceError::Unscalable { vertex },
+                NotScalable::ScaleOutOfRange => ReduceError::Unscalable { vertex },
+                NotScalable::DiagonalOutOfRange => ReduceError::OutOfRange { vertex },
             })?);
         }
         decomposition.float(&mut parts);
@@ -335,7 +336,7 @@ pub enum ReduceError {
         /// The component's first vertex in local order, in `A`'s numbering.
         vertex: u32,
     },
-    /// A view's assembled entry is non-finite, or nonzero below `MIN_POSITIVE/EPSILON`.
+    /// An assembled entry or diagonal is non-finite, or nonzero below `MIN_POSITIVE/EPSILON`.
     OutOfRange {
         /// A vertex of the entry, in `A`'s numbering.
         vertex: u32,

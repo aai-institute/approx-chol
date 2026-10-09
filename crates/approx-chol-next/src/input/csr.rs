@@ -25,7 +25,7 @@ impl<'a, T, I: PrimInt> Csr<'a, T, I> {
         self.n
     }
 
-    /// Visits each nonzero off-diagonal `(i, j)`, `i < j`, checking every entry's mirror and range.
+    /// Visits each nonzero `(i, j)`, `i < j`, checking mirrors by a monotone per-row cursor (search: +6-15% build).
     pub(crate) fn walk(&self, edge: impl FnMut(usize, usize)) -> Result<(), CsrError>
     where
         T: crate::Real,

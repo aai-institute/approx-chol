@@ -20,9 +20,19 @@ pub(super) fn of_cross<T: Real>(c: &Biadjacency<T>) -> Partition {
 pub(super) struct Partition {
     order: Vec<u32>,
     ends: Vec<u32>,
+    /// Each vertex's index within its component: extraction remaps without a per-component map.
+    position: Vec<u32>,
 }
 
 impl Partition {
+    pub(super) fn position(&self) -> &[u32] {
+        &self.position
+    }
+
+    pub(super) fn is_whole(&self) -> bool {
+        self.ends.len() == 1
+    }
+
     pub(super) fn components(&self) -> impl Iterator<Item = &[u32]> + '_ {
         self.ends.iter().scan(0usize, |start, &end| {
             let component = &self.order[*start..end as usize];
