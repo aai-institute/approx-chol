@@ -1,0 +1,18 @@
+[package]
+name = "approx-chol-next"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Rewrite prototype of approx-chol, cut by the algorithm's stages"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+num-traits = "0.2"
+rand = "0.10.0"
+rayon = "1"

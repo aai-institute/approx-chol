@@ -2,6 +2,7 @@
 members = [
     "crates/approx-chol",
     "crates/approx-chol-py",
+    "crates/approx-chol-next",
 ]
 resolver = "2"
 

@@ -55,6 +55,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "approx-chol-next"
+version = "0.7.0"
+dependencies = [
+ "num-traits",
+ "rand 0.10.2",
+ "rayon",
+]
+
+[[package]]
 name = "approx-chol-py"
 version = "0.7.0"
 dependencies = [
