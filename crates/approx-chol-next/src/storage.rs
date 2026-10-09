@@ -2,6 +2,8 @@
 
 use std::sync::OnceLock;
 
+use crate::Real;
+
 /// Fill edges `(lo, hi, weight)`, `lo < hi`, as an elimination emits them.
 pub(crate) type Fill<T> = Vec<(u32, u32, T)>;
 
@@ -14,7 +16,7 @@ pub(crate) struct Rows<T> {
     n_cols: usize,
 }
 
-impl<T> Rows<T> {
+impl<T: Real> Rows<T> {
     /// Panics unless `ptrs` ascends from `0` to the entry count and every index is below `n_cols`.
     pub(crate) fn new(ptrs: Vec<u32>, indices: Vec<u32>, values: Vec<T>, n_cols: usize) -> Self {
         todo!()
@@ -33,18 +35,12 @@ impl<T> Rows<T> {
         (self.indices[span.clone()].iter().map(|&j| j as usize)).zip(&self.values[span])
     }
 
-    fn transpose(&self) -> Self
-    where
-        T: Copy,
-    {
+    fn transpose(&self) -> Self {
         todo!()
     }
 
-    /// `x_ij ← r_i x_ij c_j`.
-    fn scaled(self, r: &[T], c: &[T]) -> Self
-    where
-        T: num_traits::Float,
-    {
+    /// `x_ij ← r_i x_ij c_j`; `None` if an entry leaves the finite range.
+    fn scaled(self, r: &[T], c: &[T]) -> Option<Self> {
         todo!()
     }
 }
@@ -55,7 +51,7 @@ pub(crate) struct UpperAdjacency<T> {
     rows: Rows<T>,
 }
 
-impl<T> UpperAdjacency<T> {
+impl<T: Real> UpperAdjacency<T> {
     /// Panics unless square with every column above its row.
     pub(crate) fn new(rows: Rows<T>) -> Self {
         todo!()
@@ -70,34 +66,33 @@ impl<T> UpperAdjacency<T> {
         self.rows.row(i)
     }
 
-    /// `F X F`.
-    pub(crate) fn scaled(self, f: &[T]) -> Self
-    where
-        T: num_traits::Float,
-    {
-        Self {
-            rows: self.rows.scaled(f, f),
-        }
+    /// `F X F`; `None` if an entry leaves the finite range.
+    pub(crate) fn scaled(self, f: &[T]) -> Option<Self> {
+        let rows = self.rows.scaled(f, f)?;
+        Some(Self { rows })
     }
 }
 
-/// The biadjacency `C` of a factor-width-2 view as assembled: rows are `A`'s left vertices.
+/// The biadjacency `C` of a factor-width-2 view, cancelled cells dropped: rows are `A`'s left vertices.
 #[derive(Clone, Debug)]
 pub(crate) struct Biadjacency<T> {
     c: Rows<T>,
 }
 
-impl<T: Copy> Biadjacency<T> {
+impl<T: Real> Biadjacency<T> {
+    /// Panics on a stored zero: a cancelled cell joins nothing.
     pub(crate) fn new(c: Rows<T>) -> Self {
-        Self { c }
+        todo!()
     }
 
-    pub(crate) fn n_left(&self) -> usize {
-        self.c.n_rows()
+    pub(crate) fn n(&self) -> usize {
+        self.c.n_rows() + self.c.n_cols()
     }
 
-    pub(crate) fn n_right(&self) -> usize {
-        self.c.n_cols()
+    /// Each stored cell as an edge of `A`: left row `i` is vertex `i`, right column `j` is `n_left + j`.
+    pub(crate) fn joins(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        let n_left = self.c.n_rows();
+        (0..n_left).flat_map(move |i| self.c.row(i).map(move |(j, _)| (i, n_left + j)))
     }
 
     /// One component's block, its larger side as rows; returns the vertices in that local order.
@@ -113,7 +108,7 @@ pub(crate) struct CrossBlock<T> {
     ct: OnceLock<Rows<T>>,
 }
 
-impl<T: Copy> CrossBlock<T> {
+impl<T: Real> CrossBlock<T> {
     /// Panics unless both sides are nonempty: a lone vertex is no bipartite component.
     fn new(c: Rows<T>) -> Self {
         assert!(c.n_rows() > 0 && c.n_cols() > 0, "both sides hold a vertex");
@@ -143,12 +138,9 @@ impl<T: Copy> CrossBlock<T> {
         self.ct.get_or_init(|| self.c.transpose())
     }
 
-    /// `F C F` over the block's local order; a fresh block, so no stale `Cᵀ` survives.
-    pub(crate) fn scaled(self, f: &[T]) -> Self
-    where
-        T: num_traits::Float,
-    {
+    /// `F C F` over the block's local order, a fresh block so no stale `Cᵀ` survives; `None` on overflow.
+    pub(crate) fn scaled(self, f: &[T]) -> Option<Self> {
         let (eliminated, kept) = f.split_at(self.n_eliminated());
-        Self::new(self.c.scaled(eliminated, kept))
+        Some(Self::new(self.c.scaled(eliminated, kept)?))
     }
 }

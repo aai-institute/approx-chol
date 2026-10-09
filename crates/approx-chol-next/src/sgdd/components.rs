@@ -2,15 +2,18 @@ use num_traits::PrimInt;
 
 use crate::input::{Csr, CsrError};
 use crate::storage::Biadjacency;
+use crate::Real;
 
-/// Checks symmetry and finiteness in the walk that unions nonzeros; a stored zero joins nothing.
-pub(super) fn of_csr<T, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<Partition, CsrError> {
-    todo!()
+pub(super) fn of_csr<T: Real, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<Partition, CsrError> {
+    let mut sets = UnionFind::new(csr.n());
+    csr.walk(|i, j| sets.union(i, j))?;
+    Ok(sets.into_partition())
 }
 
-/// Vertices are left rows, then `n_left + j` for right ones; a cancelled cell joins nothing.
-pub(super) fn of_cross<T: Copy>(c: &Biadjacency<T>) -> Partition {
-    todo!()
+pub(super) fn of_cross<T: Real>(c: &Biadjacency<T>) -> Partition {
+    let mut sets = UnionFind::new(c.n());
+    c.joins().for_each(|(i, j)| sets.union(i, j));
+    sets.into_partition()
 }
 
 /// Every vertex once, components back to back.

@@ -2,15 +2,14 @@ use crate::clique_tree::Streams;
 use crate::config::Multiplicity;
 use crate::dense::{DenseCholesky, Fallback};
 use crate::min_degree::{self, SampledCholesky};
-use crate::sddm::{Grounding, Sddm, Sheets};
+use crate::sddm::{Sddm, Sheets};
 use crate::Real;
 
-/// The factor of the SDDM the kernel sees; it builds its own Cholesky, so its facts come from that matrix.
+/// The factor of what the elimination leaves; it builds its own Cholesky, so its facts come from that matrix.
 #[derive(Clone, Debug)]
 pub(super) struct SddmFactor<T> {
     sheets: Sheets,
-    floating: bool,
-    cholesky: Cholesky<T>,
+    block: Block<T>,
 }
 
 impl<T: Real> SddmFactor<T> {
@@ -30,22 +29,33 @@ impl<T: Real> SddmFactor<T> {
     }
 
     fn of(sddm: &Sddm<'_, T>, cholesky: Cholesky<T>) -> Self {
+        let block = match sddm.grounded() {
+            true => Block::Grounded(cholesky),
+            false => Block::Floating(cholesky),
+        };
         Self {
             sheets: sddm.sheets(),
-            floating: matches!(sddm.grounding(), Grounding::Floating),
-            cholesky,
+            block,
         }
     }
 
-    /// Only one floating sheet is singular on the solve's subspace: a cover's null vector is off it.
-    pub(super) fn singular(&self) -> bool {
-        self.sheets == Sheets::One && self.floating
+    /// The lifted rows and a grounded block's ground slot, for `kept` vertices.
+    pub(super) fn scratch_len(&self, kept: usize) -> usize {
+        let ground = usize::from(matches!(self.block, Block::Grounded(_)));
+        self.sheets.count() * kept + ground
     }
 
-    /// Lifts to the sheets, appends a grounded matrix's ground slot, substitutes, and descends.
+    /// Lifts to the sheets, appends a grounded block's ground slot, substitutes, and descends.
     pub(super) fn solve(&self, x: &mut [T], scratch: &mut [T]) {
         todo!()
     }
+}
+
+/// Grounded factors carry the ground as their uneliminated slot; floating ones leave a vertex free.
+#[derive(Clone, Debug)]
+enum Block<T> {
+    Grounded(Cholesky<T>),
+    Floating(Cholesky<T>),
 }
 
 /// Exact or sampled; both leave one slot uneliminated.

@@ -1,4 +1,4 @@
-use super::{OffDiagonal, Unreduced};
+use super::{Component, OffDiagonal};
 use crate::Real;
 
 /// Certification policy for a dominance scaling; a deficit left at hand-over is clamped and reported.
@@ -36,15 +36,18 @@ pub struct ScalingReport {
     pub violation: f64,
 }
 
-/// Positive scales `R` making `R|A|R` weakly dominant, with what the policy says of their violation.
-pub(super) struct Scaling<T> {
-    /// `None` when `A` already is: every SDDM input, so an SDDM CSR reduces bit for bit as before.
-    pub(super) scales: Option<Box<[T]>>,
-    pub(super) report: Option<ScalingReport>,
+/// Positive scales `R` making `R|A|R` weakly dominant.
+pub(super) enum Scaling<T> {
+    /// Every SDDM input, so an SDDM CSR reduces bit for bit as before.
+    AlreadyDominant,
+    Scaled {
+        scales: Box<[T]>,
+        report: Option<ScalingReport>,
+    },
 }
 
-/// Positive scales with `R|A|R` weakly dominant up to `violation`.
-struct Certificate<T> {
+/// What an iteration reached: scales and how far short of dominance they leave `A`.
+struct Relaxation<T> {
     scales: Box<[T]>,
     iterations: usize,
     violation: T,
@@ -61,42 +64,39 @@ pub(super) enum NotScalable {
 
 /// SCI reads only row ratios, so it serves any pattern; the reduced CG needs the bipartite operator.
 pub(super) fn dominance_scaling<T: Real>(
-    a: &Unreduced<T>,
+    a: &Component<T>,
     policy: &ScalingPolicy,
 ) -> Result<Scaling<T>, NotScalable> {
     if already_dominant(a) {
-        return Ok(Scaling {
-            scales: None,
-            report: None,
-        });
+        return Ok(Scaling::AlreadyDominant);
     }
-    let certificate = match &a.off_diagonal {
+    let relaxation = match &a.off_diagonal {
         OffDiagonal::General(_) => sci(a, policy),
         OffDiagonal::Bipartite(_) => reduced_cg(a, policy),
     }?;
-    Ok(policy.judge(certificate))
+    Ok(policy.certify(relaxation))
 }
 
 impl ScalingPolicy {
-    /// The one place the tolerance decides whether a certificate is reported.
-    fn judge<T: Real>(&self, certificate: Certificate<T>) -> Scaling<T> {
+    /// The one place the tolerance decides whether a relaxation is reported.
+    fn certify<T: Real>(&self, relaxation: Relaxation<T>) -> Scaling<T> {
         todo!()
     }
 }
 
-fn already_dominant<T: Real>(a: &Unreduced<T>) -> bool {
+fn already_dominant<T: Real>(a: &Component<T>) -> bool {
     todo!()
 }
 
 /// Self-corrective iterations (Guan, Lu, Li, Shao 2016).
-fn sci<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> Result<Certificate<T>, NotScalable> {
+fn sci<T: Real>(a: &Component<T>, policy: &ScalingPolicy) -> Result<Relaxation<T>, NotScalable> {
     todo!()
 }
 
 /// CG on `α² − NᵀN` over the smaller side, `α = 1 + tolerance/2` off the Perron vector.
 fn reduced_cg<T: Real>(
-    a: &Unreduced<T>,
+    a: &Component<T>,
     policy: &ScalingPolicy,
-) -> Result<Certificate<T>, NotScalable> {
+) -> Result<Relaxation<T>, NotScalable> {
     todo!()
 }

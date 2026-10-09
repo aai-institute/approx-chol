@@ -1,5 +1,5 @@
 use super::graph::EliminationGraph;
-use crate::clique_tree::{EdgeCount, Star};
+use crate::clique_tree::{Copies, Star};
 use crate::storage::Fill;
 use crate::Real;
 
@@ -18,7 +18,11 @@ struct QueueElem {
 }
 
 impl DynamicOrdering {
-    pub(super) fn new<C: EdgeCount, T: Real>(graph: &EliminationGraph<C, T>) -> Self {
+    /// Buckets span `factor · n`, Laplacians.jl's AC2 scale.
+    pub(super) fn new<T: Real, C: Copies>(
+        graph: &EliminationGraph<T, C>,
+        factor: C::Factor,
+    ) -> Self {
         todo!()
     }
 
@@ -27,8 +31,8 @@ impl DynamicOrdering {
         todo!()
     }
 
-    /// The star lost its pivot, merged copies collapsed, and fill raised degrees.
-    pub(super) fn update<C: EdgeCount, T: Real>(&mut self, star: &Star<T, C>, fill: &Fill<T>) {
+    /// The star's degree losses, then fill's gains.
+    pub(super) fn update<T: Real, C: Copies>(&mut self, star: &Star<T, C>, fill: &Fill<T>) {
         todo!()
     }
 }

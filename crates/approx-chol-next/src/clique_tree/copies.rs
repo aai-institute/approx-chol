@@ -1,10 +1,10 @@
 use crate::config::SplitFactor;
 use crate::Real;
 
-/// AC is AC2 at one copy per edge, so this trait is the whole difference.
-pub(crate) trait EdgeCount: Clone + Copy {
+/// An edge's virtual copies; AC is AC2 at one copy per edge, so this trait is the whole difference.
+pub(crate) trait Copies: Clone + Copy {
     /// `Single` cannot name a `k`, making AC over split multi-edges a type error.
-    type Split: Copy;
+    type Factor: Copy;
 
     const SINGLE_COPY: bool;
 
@@ -12,13 +12,13 @@ pub(crate) trait EdgeCount: Clone + Copy {
     fn one() -> Self;
 
     /// What an edge of the input carries once split.
-    fn split(split: Self::Split) -> Self;
+    fn initial(factor: Self::Factor) -> Self;
 
     fn get(&self) -> u32;
     fn per_copy<T: Real>(&self, total: T) -> T;
 
     /// The kept copies, and how many the cap discarded.
-    fn cap(copies: u32, limit: Self::Split) -> (Self, u32);
+    fn cap(copies: u32, factor: Self::Factor) -> (Self, u32);
 }
 
 #[derive(Clone, Copy)]
@@ -28,15 +28,15 @@ pub(crate) struct Single;
 #[derive(Clone, Copy)]
 pub(crate) struct Multi(u32);
 
-impl EdgeCount for Single {
-    type Split = ();
+impl Copies for Single {
+    type Factor = ();
     const SINGLE_COPY: bool = true;
 
     fn one() -> Self {
         Self
     }
 
-    fn split((): ()) -> Self {
+    fn initial((): ()) -> Self {
         Self
     }
 
@@ -53,16 +53,16 @@ impl EdgeCount for Single {
     }
 }
 
-impl EdgeCount for Multi {
-    type Split = SplitFactor;
+impl Copies for Multi {
+    type Factor = SplitFactor;
     const SINGLE_COPY: bool = false;
 
     fn one() -> Self {
         Self(1)
     }
 
-    fn split(split: SplitFactor) -> Self {
-        Self(split.get())
+    fn initial(factor: SplitFactor) -> Self {
+        Self(factor.get())
     }
 
     fn get(&self) -> u32 {
@@ -73,7 +73,7 @@ impl EdgeCount for Multi {
         todo!()
     }
 
-    fn cap(copies: u32, limit: SplitFactor) -> (Self, u32) {
+    fn cap(copies: u32, factor: SplitFactor) -> (Self, u32) {
         todo!()
     }
 }

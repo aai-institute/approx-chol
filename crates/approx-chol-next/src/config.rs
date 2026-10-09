@@ -3,10 +3,10 @@
 pub struct Config {
     /// Every sampler stream derives from this, keyed by part and star.
     pub seed: u64,
-    /// How a bipartite part's eliminated stars become its Schur complement.
-    pub schur: CliqueRule,
-    /// How minimum-degree elimination samples each star.
-    pub min_degree: Multiplicity,
+    /// How a bipartite part's eliminated stars become the kept block's Schur complement.
+    pub complement: CliqueRule,
+    /// How minimum-degree elimination of the remainder samples each star.
+    pub remainder: Multiplicity,
     /// Largest rank a remainder takes a dense Cholesky at; `0` never does.
     pub dense_up_to: usize,
     /// What a dense Cholesky's unusable pivot does.
@@ -24,8 +24,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             seed: 0,
-            schur: CliqueRule::Sampled(Multiplicity::Single),
-            min_degree: Multiplicity::Single,
+            complement: CliqueRule::Sampled(Multiplicity::Single),
+            remainder: Multiplicity::Single,
             dense_up_to: 24,
             on_dense_failure: OnDenseFailure::FallBackToApproximate,
         }

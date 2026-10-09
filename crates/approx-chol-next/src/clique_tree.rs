@@ -1,11 +1,11 @@
 //! One pivot's star eliminated by a sampled clique tree (GKS 2023, Algorithm 5): its column and fill.
 
 mod cdf;
-mod multiplicity;
+mod copies;
 mod star;
 
 pub(crate) use cdf::{Stream, Streams};
-pub(crate) use multiplicity::{EdgeCount, Multi, Single};
+pub(crate) use copies::{Copies, Multi, Single};
 pub(crate) use star::Star;
 
 use crate::storage::Fill;
@@ -13,15 +13,16 @@ use crate::Real;
 use cdf::CdfSampler;
 
 /// A pivot's elimination, reused across pivots; AC and AC2 differ only in `C`.
-pub(crate) struct CliqueSampler<T, C> {
+pub(crate) struct CliqueSampler<T, C: Copies> {
     star: Star<T, C>,
     draws: CdfSampler<T>,
     column: Column<T>,
-    fill: Fill<T>,
+    factor: C::Factor,
 }
 
-impl<T: Real, C: EdgeCount> CliqueSampler<T, C> {
-    pub(crate) fn new(stream: Stream) -> Self {
+impl<T: Real, C: Copies> CliqueSampler<T, C> {
+    /// `factor` caps every merge, so one sampler cannot mix two.
+    pub(crate) fn new(stream: Stream, factor: C::Factor) -> Self {
         todo!()
     }
 
@@ -30,26 +31,22 @@ impl<T: Real, C: EdgeCount> CliqueSampler<T, C> {
         todo!()
     }
 
-    /// Merges `neighbors` under the split's cap, samples their clique tree, and returns the pivot.
+    /// Merges `neighbors`, samples their clique tree into `fill`, and returns the pivot.
     pub(crate) fn eliminate(
         &mut self,
         neighbors: impl Iterator<Item = (u32, C, T)>,
-        split: C::Split,
+        fill: &mut Fill<T>,
     ) -> T {
         todo!()
     }
 
-    /// The last pivot's star, with what merging it cost each neighbor's degree.
+    /// The last pivot's star.
     pub(crate) fn star(&self) -> &Star<T, C> {
         &self.star
     }
 
     pub(crate) fn column(&self) -> &Column<T> {
         &self.column
-    }
-
-    pub(crate) fn fill(&self) -> &Fill<T> {
-        &self.fill
     }
 }
 

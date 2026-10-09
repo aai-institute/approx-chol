@@ -41,7 +41,7 @@ impl Streams {
         Self { seed, part }
     }
 
-    pub(crate) fn min_degree(self) -> Stream {
+    pub(crate) fn remainder(self) -> Stream {
         todo!()
     }
 

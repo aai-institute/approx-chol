@@ -1,36 +1,23 @@
+use super::scaling::NotScalable;
+use super::signature::Signature;
 use super::OffDiagonal;
-use crate::storage::CrossBlock;
 use crate::Real;
 
-/// `F` in `M = F A_c F`: signs and scales, finite and nonzero; `A_c`'s null vector is then `F·1`.
+/// `F` in `M = F A_c F`: signs and scales, finite and nonzero; a folded `A_c`'s null vector is then `F·1`.
 #[derive(Clone, Debug)]
 pub(crate) struct Congruence<T>(Kind<T>);
 
 #[derive(Clone, Debug)]
 enum Kind<T> {
     Identity,
-    /// A bipartite Laplacian's signature: every vertex from this one on is negated.
+    /// Every vertex from this one on is negated.
     NegateFrom(usize),
     Factors(Box<[T]>),
 }
 
 impl<T: Real> Congruence<T> {
-    pub(super) fn identity() -> Self {
-        Self(Kind::Identity)
-    }
-
-    /// Folds a positive cross block: the kept side negated.
-    pub(super) fn negate_kept(cross: &CrossBlock<T>) -> Self {
-        Self(Kind::NegateFrom(cross.n_eliminated()))
-    }
-
-    /// `true` where the vertex is negated.
-    pub(super) fn signs(negated: &[bool]) -> Self {
-        todo!()
-    }
-
-    /// `S R` for these signs `S` and positive scales `R`; `None` if a product leaves the finite range.
-    pub(super) fn then_scale(self, scales: &[T]) -> Option<Self> {
+    /// `S R`; unscaled signs stay unmaterialized, so an SDDM input keeps `F = I`.
+    pub(super) fn new(signature: Signature, scales: Option<Box<[T]>>) -> Self {
         todo!()
     }
 
@@ -43,8 +30,11 @@ impl<T: Real> Congruence<T> {
         }
     }
 
-    /// `F X F`: `M`'s off-diagonal from `A_c`'s.
-    pub(super) fn congruent(&self, off_diagonal: OffDiagonal<T>) -> OffDiagonal<T> {
+    /// `F X F`: `M`'s off-diagonal from `A_c`'s, where an entry can leave the finite range.
+    pub(super) fn transform(
+        &self,
+        off_diagonal: OffDiagonal<T>,
+    ) -> Result<OffDiagonal<T>, NotScalable> {
         todo!()
     }
 

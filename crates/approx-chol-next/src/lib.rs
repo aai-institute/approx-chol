@@ -22,7 +22,7 @@ use num_traits::Float;
 
 pub use config::{CliqueRule, Config, InnerParallelism, Multiplicity, OnDenseFailure, SplitFactor};
 pub use dense::{Fallback, PivotDefect, UnusablePivot};
-pub use factor::{ComponentFactor, Factor, FactorError, SolveError};
+pub use factor::{Factor, FactorError, PartFactor, SolveError};
 pub use sgdd::{FromCsrError, Part, ReduceError, ScalingPolicy, ScalingReport, Sgdd};
 
 /// The scalar every stage computes in.

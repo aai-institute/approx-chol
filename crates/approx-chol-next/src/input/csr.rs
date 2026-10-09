@@ -25,6 +25,14 @@ impl<'a, T, I: PrimInt> Csr<'a, T, I> {
         self.n
     }
 
+    /// Visits each nonzero off-diagonal `(i, j)`, `i < j`, checking every entry's mirror and finiteness.
+    pub(crate) fn walk(&self, edge: impl FnMut(usize, usize)) -> Result<(), CsrError>
+    where
+        T: crate::Real,
+    {
+        todo!()
+    }
+
     /// Row `i` as the caller stored it, unchecked beyond [`new`](Self::new)'s shape.
     pub(crate) fn row(&self, i: usize) -> impl Iterator<Item = (usize, &'a T)> + '_ {
         let index = |k: I| k.to_usize().expect("a shape-checked index fits usize");
@@ -55,17 +63,17 @@ pub enum CsrError {
     /// A column index is at least `n`, or a row's columns are not ascending.
     MalformedRow {
         /// The offending row.
-        row: usize,
+        row: u32,
     },
     /// An entry has no equal mirror.
     NotSymmetric {
         /// The offending row.
-        row: usize,
+        row: u32,
     },
     /// An entry is not finite.
     NotFinite {
         /// The offending row.
-        row: usize,
+        row: u32,
     },
 }
 

@@ -1,10 +1,10 @@
-use crate::clique_tree::EdgeCount;
+use crate::clique_tree::Copies;
 use crate::sddm::Sddm;
 use crate::Real;
 
 /// One half of an edge; `mirror` indexes the other half in `to`'s list, so removal is O(1).
 #[derive(Clone, Copy, Debug)]
-struct Edge<C, T> {
+struct Edge<T, C> {
     to: u32,
     mirror: u32,
     copies: C,
@@ -12,13 +12,13 @@ struct Edge<C, T> {
 }
 
 /// The mutable graph minimum-degree eliminates; a grounded one carries its ground as the last vertex.
-pub(super) struct EliminationGraph<C, T> {
-    lists: Vec<Vec<Edge<C, T>>>,
+pub(super) struct EliminationGraph<T, C> {
+    lists: Vec<Vec<Edge<T, C>>>,
 }
 
-impl<C: EdgeCount, T: Real> EliminationGraph<C, T> {
+impl<T: Real, C: Copies> EliminationGraph<T, C> {
     /// The ground is a vertex like any other: forcing it last measured +0-10% PCG iterations.
-    pub(super) fn of(sddm: &Sddm<'_, T>, split: C::Split) -> Self {
+    pub(super) fn of(sddm: &Sddm<'_, T>, factor: C::Factor) -> Self {
         todo!()
     }
 

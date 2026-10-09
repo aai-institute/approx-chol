@@ -1,4 +1,4 @@
-use super::multiplicity::EdgeCount;
+use super::copies::Copies;
 use crate::Real;
 
 /// Copies stored as the graph stores them, so a single-copy star pays no count or division.
@@ -15,7 +15,7 @@ pub(crate) struct Star<T, C> {
     removed_copies: Vec<(u32, u32)>,
 }
 
-impl<T: Real, C: EdgeCount> Star<T, C> {
+impl<T: Real, C: Copies> Star<T, C> {
     pub(super) fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -23,8 +23,12 @@ impl<T: Real, C: EdgeCount> Star<T, C> {
         }
     }
 
-    /// Merges duplicate neighbors under the split's cap, then sorts by per-copy weight.
-    pub(super) fn refill(&mut self, neighbors: impl Iterator<Item = (u32, C, T)>, split: C::Split) {
+    /// Merges duplicate neighbors under `factor`'s cap, then sorts by per-copy weight.
+    pub(super) fn refill(
+        &mut self,
+        neighbors: impl Iterator<Item = (u32, C, T)>,
+        factor: C::Factor,
+    ) {
         todo!()
     }
 
@@ -32,12 +36,9 @@ impl<T: Real, C: EdgeCount> Star<T, C> {
         &self.entries
     }
 
-    pub(crate) fn neighbors(&self) -> impl Iterator<Item = u32> + '_ {
-        self.entries.iter().map(|entry| entry.neighbor)
-    }
-
-    /// Collapsed duplicates or capped copies: both are one degree decrement.
-    pub(crate) fn removed_copies(&self) -> &[(u32, u32)] {
-        &self.removed_copies
+    /// Copies each neighbor lost: those to the pivot, and those merging or capping collapsed.
+    pub(crate) fn degree_losses(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
+        let to_pivot = (self.entries.iter()).map(|entry| (entry.neighbor, entry.copies.get()));
+        to_pivot.chain(self.removed_copies.iter().copied())
     }
 }

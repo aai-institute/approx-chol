@@ -1,23 +1,20 @@
 use num_traits::PrimInt;
 
 use super::components::{self, Partition};
-use super::{Part, Unreduced};
+use super::{Component, Part};
 use crate::input::{Columns, Csr, CsrError, Gram, Graph};
 use crate::storage::Biadjacency;
 use crate::Real;
 
-/// One input and its components: what each looks like unreduced, and which parts provably float.
-pub(super) struct Family<'v, T, I> {
+/// One input split into components: what each looks like unreduced, and which parts provably float.
+pub(super) struct Decomposition<'v, T, I> {
     input: Input<'v, T, I>,
     partition: Partition,
 }
 
 enum Input<'v, T, I> {
     /// A signless Laplacian: its diagonal is `|C|`'s row sums, so every part floats.
-    Signless {
-        columns: Columns<'v, T, I>,
-        c: Biadjacency<T>,
-    },
+    Signless(Biadjacency<T>),
     /// A Gram, its diagonal given; floats when `fᵀGf ≤ 10u·fᵀDf`, summed as squares per column of `V`.
     Gram {
         columns: Columns<'v, T, I>,
@@ -29,7 +26,7 @@ enum Input<'v, T, I> {
     Csr(Csr<'v, T, I>),
 }
 
-impl<'v, T: Real, I: PrimInt> Family<'v, T, I> {
+impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
     /// Checks symmetry and finiteness in the walk that finds the components.
     pub(super) fn csr(csr: Csr<'v, T, I>) -> Result<Self, CsrError> {
         let partition = components::of_csr(&csr)?;
@@ -56,33 +53,30 @@ impl<'v, T: Real, I: PrimInt> Family<'v, T, I> {
     }
 
     pub(super) fn signless(graph: Graph<'v, T, I>) -> Self {
-        let columns = graph.columns();
-        let c = columns.assemble();
+        let c = graph.columns().assemble();
         let partition = components::of_cross(&c);
         Self {
-            input: Input::Signless { columns, c },
+            input: Input::Signless(c),
             partition,
         }
     }
 
     pub(super) fn n(&self) -> usize {
         match &self.input {
-            Input::Signless { columns, .. } | Input::Gram { columns, .. } => columns.n(),
+            Input::Signless(c) | Input::Gram { c, .. } => c.n(),
             Input::Csr(csr) => csr.n(),
         }
     }
 
     /// A lone vertex is general, so a bipartite component always has both sides.
-    pub(super) fn components(&self) -> impl Iterator<Item = Unreduced<T>> + '_ {
-        self.partition
-            .components()
-            .map(|vertices| -> Unreduced<T> { todo!() })
+    pub(super) fn components(&self) -> impl Iterator<Item = Component<T>> + '_ {
+        (self.partition.components()).map(|vertices| -> Component<T> { todo!() })
     }
 
-    /// One pass over the family decides every part's ground.
+    /// One pass over the input decides every part's ground, matching parts by their vertices.
     pub(super) fn float(&self, parts: &mut [Part<T>]) {
         match &self.input {
-            Input::Signless { .. } => parts.iter_mut().for_each(|part| part.m.float()),
+            Input::Signless(_) => parts.iter_mut().for_each(|part| part.m.float()),
             Input::Gram { .. } | Input::Csr(_) => todo!(),
         }
     }

@@ -186,10 +186,6 @@ impl<T: Real, I: PrimInt> Columns<'_, T, I> {
         self.n_left
     }
 
-    pub(crate) fn n(&self) -> usize {
-        self.n_left + self.n_right
-    }
-
     pub(crate) fn observations(&self) -> impl Iterator<Item = Observation<T>> + '_ {
         (0..self.left.len()).map(|k| -> Observation<T> { todo!() })
     }

@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use crate::storage::UpperAdjacency;
 use crate::Real;
 
-/// `L + diag(s)`, borrowed from its part or owned when a cover or a complement built it.
+/// `L + diag(s)`, `L`'s off-diagonal nonpositive; borrowed from its part, or owned when derived.
 #[derive(Clone, Debug)]
 pub(crate) struct Sddm<'a, T: Real> {
     adjacency: Cow<'a, UpperAdjacency<T>>,
@@ -32,16 +32,16 @@ impl<'a, T: Real> Sddm<'a, T> {
     }
 
     /// The Gremban cover of signed `M`: a Laplacian on two sheets that acts as `M` on `[z; −z]`.
-    pub(crate) fn cover(signed: &UpperAdjacency<T>, grounding: &Grounding<T>) -> Sddm<'static, T> {
+    pub(crate) fn cover(signed: &UpperAdjacency<T>, surplus: &Surplus<T>) -> Sddm<'static, T> {
         todo!()
     }
 
-    pub(crate) fn adjacency(&self) -> &UpperAdjacency<T> {
-        &self.adjacency
+    pub(crate) fn n(&self) -> usize {
+        self.adjacency.n()
     }
 
-    pub(crate) fn grounding(&self) -> &Grounding<T> {
-        &self.grounding
+    pub(crate) fn grounded(&self) -> bool {
+        matches!(*self.grounding, Grounding::Grounded(_))
     }
 
     pub(crate) fn sheets(&self) -> Sheets {
@@ -49,53 +49,73 @@ impl<'a, T: Real> Sddm<'a, T> {
     }
 
     pub(crate) fn rank(&self) -> usize {
-        self.grounding.rank(self.adjacency.n())
+        rank(self.n(), self.grounded())
     }
 
     /// The vertex a row covers; sheets are stacked, so a cover's second sheet repeats the first.
     pub(crate) fn base_vertex(&self, row: usize) -> usize {
-        row % (self.adjacency.n() / self.sheets.count())
+        row % (self.n() / self.sheets.count())
+    }
+
+    /// Positive Laplacian weights, each edge once, the ground vertex `n` joined by each surplus.
+    pub(crate) fn grounded_edges(&self) -> impl Iterator<Item = (u32, u32, T)> + '_ {
+        std::iter::from_fn(|| -> Option<(u32, u32, T)> { todo!() })
     }
 }
 
-/// `M`'s surplus `s = diag(M) − Σ|offdiag|`, or none: a floating `M` is a Laplacian and singular.
+/// Pivots a Cholesky over `rows` takes: without a ground one row stays free.
+pub(crate) fn rank(rows: usize, grounded: bool) -> usize {
+    if grounded {
+        rows
+    } else {
+        rows - 1
+    }
+}
+
+/// What closes `L` into an SDDM: a surplus with a positive total, or nothing, leaving it singular.
 #[derive(Clone, Debug)]
 pub(crate) enum Grounding<T> {
     Grounded(Surplus<T>),
-    /// A proven alias anchors one vertex instead, whatever surplus rounding left.
     Floating,
 }
 
 impl<T: Real> Grounding<T> {
-    /// All-zero surplus floats; panics on a negative or non-finite entry.
-    pub(crate) fn of(surplus: Vec<T>) -> Self {
-        todo!()
-    }
-
-    pub(crate) fn surplus(&self) -> Option<&[T]> {
-        match self {
-            Self::Grounded(surplus) => Some(&surplus.0),
-            Self::Floating => None,
+    /// Floats exactly when nothing grounds: an all-zero surplus.
+    pub(crate) fn of(surplus: Surplus<T>) -> Self {
+        match surplus.grounds() {
+            true => Self::Grounded(surplus),
+            false => Self::Floating,
         }
     }
 
     /// Whether it grounds exactly `n` rows.
     pub(crate) fn fits(&self, n: usize) -> bool {
-        self.surplus().is_none_or(|s| s.len() == n)
-    }
-
-    /// Pivots a Cholesky over `n` rows takes: a floating one leaves one free.
-    pub(crate) fn rank(&self, n: usize) -> usize {
         match self {
-            Self::Grounded(_) => n,
-            Self::Floating => n - 1,
+            Self::Grounded(surplus) => surplus.0.len() == n,
+            Self::Floating => true,
         }
     }
 }
 
-/// Finite and nonnegative with a positive total; built only by [`Grounding::of`].
+/// `s = diag(M) − Σ|offdiag|`, finite and nonnegative.
 #[derive(Clone, Debug)]
 pub(crate) struct Surplus<T>(Box<[T]>);
+
+impl<T: Real> Surplus<T> {
+    /// Panics on a negative or non-finite entry.
+    pub(crate) fn new(values: Vec<T>) -> Self {
+        todo!()
+    }
+
+    pub(crate) fn values(&self) -> &[T] {
+        &self.0
+    }
+
+    /// Whether any entry is positive.
+    pub(crate) fn grounds(&self) -> bool {
+        self.0.iter().any(|&s| s > T::zero())
+    }
+}
 
 /// How many copies of each vertex a matrix holds: two for a Gremban cover, stacked by sheet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

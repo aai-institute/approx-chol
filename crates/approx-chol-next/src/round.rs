@@ -2,9 +2,10 @@
 
 use std::sync::Arc;
 
-use crate::clique_tree::{EdgeCount, Streams};
+use crate::clique_tree::{Copies, Streams};
 use crate::config::{CliqueRule, InnerParallelism};
-use crate::sddm::{Grounding, Sddm, Sheets};
+use crate::sddm::{self, Sddm};
+use crate::sgdd::Signs;
 use crate::storage::{CrossBlock, Fill};
 use crate::Real;
 
@@ -35,17 +36,12 @@ impl<T: Real> Round<T> {
 /// A round before its stored form is taken, so one pivot vector serves every complement and the solve.
 pub(crate) struct RoundBuilder<'a, T> {
     round: Round<T>,
-    grounding: &'a Grounding<T>,
-    sheets: Sheets,
+    signs: &'a Signs<T>,
 }
 
 impl<'a, T: Real> RoundBuilder<'a, T> {
     /// Pivots are `Σ|c_ek| + s_e`, the same on both sheets of a cover.
-    pub(crate) fn new(
-        cross: &Arc<CrossBlock<T>>,
-        grounding: &'a Grounding<T>,
-        sheets: Sheets,
-    ) -> Self {
+    pub(crate) fn new(cross: &Arc<CrossBlock<T>>, signs: &'a Signs<T>) -> Self {
         todo!()
     }
 
@@ -53,14 +49,14 @@ impl<'a, T: Real> RoundBuilder<'a, T> {
         self.round.n_eliminated()
     }
 
-    /// The complement is grounded iff the part is, so its rank is known before it is built.
+    /// Known before the complement is built: its surplus `s_k + |C|ᵀ D_e⁻¹ s_e` grounds iff the part's does.
     pub(crate) fn complement_rank(&self) -> usize {
-        let rows = self.sheets.count() * self.round.cross.n_kept();
-        self.grounding.rank(rows)
+        let rows = self.signs.sheets().count() * self.round.cross.n_kept();
+        sddm::rank(rows, self.signs.grounded())
     }
 
     /// The kept block's Schur complement on the part's sheets; stars run in parallel.
-    pub(crate) fn schur(&self, rule: CliqueRule, streams: Streams) -> Sddm<'static, T> {
+    pub(crate) fn complement(&self, rule: CliqueRule, streams: Streams) -> Sddm<'static, T> {
         todo!()
     }
 
@@ -69,16 +65,16 @@ impl<'a, T: Real> RoundBuilder<'a, T> {
     }
 }
 
-/// Each eliminated star's clique tree, the ground a final neighbor, under the star's own stream.
-fn sampled_fill<T: Real, C: EdgeCount>(
+/// Each eliminated star's clique tree under its own stream, appended to one task's fill.
+fn sampled_fill<T: Real, C: Copies>(
     builder: &RoundBuilder<'_, T>,
-    split: C::Split,
+    factor: C::Factor,
     streams: Streams,
 ) -> Fill<T> {
     todo!()
 }
 
-/// The whole clique: `w_i w_j / d` per pair, and each neighbor's share of the ground.
-fn exact_clique<T: Real>(star: &[(u32, T)], ground: T, fill: &mut Fill<T>) {
+/// The whole clique: `w_i w_j / d` per pair, the ground a neighbor like any other.
+fn exact_clique<T: Real>(star: &[(u32, T)], fill: &mut Fill<T>) {
     todo!()
 }

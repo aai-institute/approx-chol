@@ -2,7 +2,7 @@
 
 mod components;
 mod congruence;
-mod family;
+mod decomposition;
 mod scaling;
 mod signature;
 
@@ -12,13 +12,13 @@ use std::sync::Arc;
 use num_traits::PrimInt;
 
 pub(crate) use congruence::Congruence;
-use family::Family;
+use decomposition::Decomposition;
 use scaling::NotScalable;
 pub use scaling::{ScalingPolicy, ScalingReport};
 
 use crate::input::{Csr, CsrError, Gram, Graph};
 use crate::round::RoundBuilder;
-use crate::sddm::{Grounding, Sddm, Sheets};
+use crate::sddm::{Grounding, Sddm, Sheets, Surplus};
 use crate::storage::{CrossBlock, UpperAdjacency};
 use crate::Real;
 
@@ -26,13 +26,13 @@ use crate::Real;
 #[derive(Clone, Debug)]
 pub struct Part<T = f64> {
     frame: Arc<Frame<T>>,
-    m: Reduced<T>,
+    m: Sdd<T>,
     report: Option<ScalingReport>,
 }
 
 impl<T: Real> Part<T> {
     /// Panics unless `M` has one row per vertex of the frame.
-    fn new(frame: Frame<T>, m: Reduced<T>, report: Option<ScalingReport>) -> Self {
+    fn new(frame: Frame<T>, m: Sdd<T>, report: Option<ScalingReport>) -> Self {
         assert_eq!(m.n(), frame.vertices.len(), "one row per vertex");
         Self {
             frame: Arc::new(frame),
@@ -56,24 +56,27 @@ impl<T: Real> Part<T> {
         &self.frame
     }
 
-    /// What the kernel factors: `M` itself, its cover, or a round's complement.
+    /// Whether `A_c` is singular, so a solve returns `A_c⁺b`.
+    pub(crate) fn floats(&self) -> bool {
+        matches!(self.m.signs, Signs::Folded(Grounding::Floating))
+    }
+
+    /// What the remainder factors: `M` itself, its cover, or a round's complement.
     pub(crate) fn elimination(&self) -> Elimination<'_, T> {
-        let Reduced {
-            off_diagonal,
-            grounding,
-            sheets,
-        } = &self.m;
-        match off_diagonal {
-            OffDiagonal::General(adjacency) => Elimination::Whole(match sheets {
-                Sheets::One => Sddm::new(
+        match (&self.m.off_diagonal, &self.m.signs) {
+            (OffDiagonal::General(adjacency), Signs::Folded(grounding)) => {
+                let sddm = Sddm::new(
                     Cow::Borrowed(adjacency),
                     Cow::Borrowed(grounding),
                     Sheets::One,
-                ),
-                Sheets::Two => Sddm::cover(adjacency, grounding),
-            }),
-            OffDiagonal::Bipartite(cross) => {
-                Elimination::Round(RoundBuilder::new(cross, grounding, *sheets))
+                );
+                Elimination::Whole(sddm)
+            }
+            (OffDiagonal::General(adjacency), Signs::Frustrated(surplus)) => {
+                Elimination::Whole(Sddm::cover(adjacency, surplus))
+            }
+            (OffDiagonal::Bipartite(cross), signs) => {
+                Elimination::Round(RoundBuilder::new(cross, signs))
             }
         }
     }
@@ -81,9 +84,9 @@ impl<T: Real> Part<T> {
 
 /// How a part's factorization starts.
 pub(crate) enum Elimination<'a, T: Real> {
-    /// The kernel factors this matrix whole.
+    /// The remainder is this matrix whole.
     Whole(Sddm<'a, T>),
-    /// A round eliminates the leading block, and the kernel its complement.
+    /// A round eliminates the leading block, and the remainder is its complement.
     Round(RoundBuilder<'a, T>),
 }
 
@@ -115,23 +118,25 @@ impl<T> Frame<T> {
     }
 }
 
-/// `M`: its off-diagonal, its surplus, and the sheets its kernel factors it on.
+/// `M`, weakly dominant once scaled and clamped: its off-diagonal, and what its signs leave of the diagonal.
 #[derive(Clone, Debug)]
-struct Reduced<T> {
+struct Sdd<T> {
     off_diagonal: OffDiagonal<T>,
-    grounding: Grounding<T>,
-    /// Two when no signature folds `M`, so its kernel sees a cover.
-    sheets: Sheets,
+    signs: Signs<T>,
 }
 
-impl<T: Real> Reduced<T> {
-    /// Panics unless the grounding has one surplus per row.
-    fn new(off_diagonal: OffDiagonal<T>, grounding: Grounding<T>, sheets: Sheets) -> Self {
-        assert!(grounding.fits(off_diagonal.n()), "one surplus per row");
+impl<T: Real> Sdd<T> {
+    /// Panics unless the surplus has one entry per row.
+    fn new(off_diagonal: OffDiagonal<T>, signs: Signs<T>) -> Self {
+        let n = off_diagonal.n();
+        let fits = match &signs {
+            Signs::Folded(grounding) => grounding.fits(n),
+            Signs::Frustrated(surplus) => surplus.values().len() == n,
+        };
+        assert!(fits, "one surplus per row");
         Self {
             off_diagonal,
-            grounding,
-            sheets,
+            signs,
         }
     }
 
@@ -139,9 +144,40 @@ impl<T: Real> Reduced<T> {
         self.off_diagonal.n()
     }
 
-    /// A proven alias anchors one vertex instead of the surplus rounding left.
+    /// A proven alias anchors one vertex instead of the surplus rounding left; a frustrated `M` is definite.
     fn float(&mut self) {
-        self.grounding = Grounding::Floating;
+        if let Signs::Folded(grounding) = &mut self.signs {
+            *grounding = Grounding::Floating;
+        }
+    }
+}
+
+/// Whether a signature folded `M` to a Z-matrix, with its surplus: only a folded `M` can float.
+#[derive(Clone, Debug)]
+pub(crate) enum Signs<T> {
+    Folded(Grounding<T>),
+    /// No signature exists, so the remainder factors a two-sheet cover.
+    Frustrated(Surplus<T>),
+}
+
+impl<T: Real> Signs<T> {
+    pub(crate) fn sheets(&self) -> Sheets {
+        match self {
+            Self::Folded(_) => Sheets::One,
+            Self::Frustrated(_) => Sheets::Two,
+        }
+    }
+
+    pub(crate) fn surplus(&self) -> Option<&Surplus<T>> {
+        match self {
+            Self::Folded(Grounding::Grounded(surplus)) | Self::Frustrated(surplus) => Some(surplus),
+            Self::Folded(Grounding::Floating) => None,
+        }
+    }
+
+    /// Whether the remainder's matrix carries a ground.
+    pub(crate) fn grounded(&self) -> bool {
+        self.surplus().is_some_and(Surplus::grounds)
     }
 }
 
@@ -192,7 +228,7 @@ impl<T: Real> Sgdd<T> {
         csr: Csr<'_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, FromCsrError> {
-        Ok(Self::reduce(Family::csr(csr)?, &policy)?)
+        Ok(Self::reduce(Decomposition::csr(csr)?, &policy)?)
     }
 
     /// Scales, folds or covers each component of `V W Vᵀ`, deciding floating from `V`.
@@ -200,25 +236,25 @@ impl<T: Real> Sgdd<T> {
         gram: Gram<'_, '_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        Self::reduce(Family::gram(gram), &policy)
+        Self::reduce(Decomposition::gram(gram), &policy)
     }
 
-    /// Dead components produce no part; the floating test runs once, over the whole family.
+    /// Dead components produce no part; the floating test runs once, over the whole input.
     fn reduce<I: PrimInt>(
-        family: Family<'_, T, I>,
+        decomposition: Decomposition<'_, T, I>,
         policy: &ScalingPolicy,
     ) -> Result<Self, ReduceError> {
         let mut parts = Vec::new();
-        for a in family.components().filter(|a| !a.is_dead()) {
-            let vertex = a.vertices[0] as usize;
+        for a in decomposition.components().filter(|a| !a.is_dead()) {
+            let vertex = a.vertices[0];
             parts.push(a.reduce(policy).map_err(|e| match e {
                 NotScalable::NotGdd => ReduceError::NotGdd { vertex },
                 NotScalable::Overflow => ReduceError::Unscalable { vertex },
             })?);
         }
-        family.float(&mut parts);
+        decomposition.float(&mut parts);
         Ok(Self {
-            n: family.n(),
+            n: decomposition.n(),
             parts,
         })
     }
@@ -229,19 +265,19 @@ impl<'a, T: Real, I: PrimInt> TryFrom<Graph<'a, T, I>> for Sgdd<T> {
 
     /// A signless Laplacian has zero surplus by shape: every part floats untested.
     fn try_from(graph: Graph<'a, T, I>) -> Result<Self, Self::Error> {
-        Self::reduce(Family::signless(graph), &ScalingPolicy::default())
+        Self::reduce(Decomposition::signless(graph), &ScalingPolicy::default())
     }
 }
 
-/// One component of `A` as the input gave it: signed, unscaled, in the input's shape.
-struct Unreduced<T> {
+/// One component `A_c` as the input gave it: signed, unscaled, in the input's shape.
+struct Component<T> {
     /// In `A`'s numbering, in local order.
     vertices: Box<[u32]>,
     off_diagonal: OffDiagonal<T>,
     diagonal: Vec<T>,
 }
 
-impl<T: Real> Unreduced<T> {
+impl<T: Real> Component<T> {
     /// Components join only nonzeros, so a vertex with nothing to solve is alone with a zero diagonal.
     fn is_dead(&self) -> bool {
         self.diagonal == [T::zero()]
@@ -249,15 +285,15 @@ impl<T: Real> Unreduced<T> {
 
     fn reduce(self, policy: &ScalingPolicy) -> Result<Part<T>, NotScalable> {
         let scaling = scaling::dominance_scaling(&self, policy)?;
-        let signs = signature::signature(&self.off_diagonal);
-        self.congruence(scaling, signs)
+        let signature = signature::signature(&self.off_diagonal);
+        self.congruence(scaling, signature)
     }
 
-    /// `F = S R` folds and scales `A`, or only scales a frustrated one; deficits are clamped to zero surplus.
+    /// `F = S R` folds and scales `A_c`, or only scales a frustrated one; deficits clamp to zero surplus.
     fn congruence(
         self,
         scaling: scaling::Scaling<T>,
-        signs: Option<Congruence<T>>,
+        signature: Option<signature::Signature>,
     ) -> Result<Part<T>, NotScalable> {
         todo!()
     }
@@ -270,12 +306,12 @@ pub enum ReduceError {
     /// No positive diagonal scaling makes the component weakly dominant.
     NotGdd {
         /// The component's first vertex in local order, in `A`'s numbering.
-        vertex: usize,
+        vertex: u32,
     },
     /// A scale or a scaled entry left the finite range.
     Unscalable {
         /// The component's first vertex in local order, in `A`'s numbering.
-        vertex: usize,
+        vertex: u32,
     },
 }
 

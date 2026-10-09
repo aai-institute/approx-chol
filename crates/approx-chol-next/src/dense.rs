@@ -16,7 +16,7 @@ pub enum PivotDefect {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnusablePivot {
     /// The pivot's vertex in `A`.
-    pub vertex: usize,
+    pub vertex: u32,
     /// What was wrong with it.
     pub defect: PivotDefect,
 }

@@ -1,6 +1,6 @@
-//! Routes each part to its eliminations, and stores and applies `A_c⁺ ≈ F · Round · K⁺ · Round' · F`.
+//! Routes each part to its eliminations, and stores and applies `A_c⁺ ≈ F · Round · R⁺ · Round' · F`.
 
-mod kernel;
+mod remainder;
 
 use std::sync::Arc;
 
@@ -8,11 +8,11 @@ use rayon::prelude::*;
 
 use crate::clique_tree::Streams;
 use crate::config::{CliqueRule, Config, InnerParallelism, OnDenseFailure};
-use crate::dense::{Fallback, UnusablePivot};
+use crate::dense::{Fallback, PivotDefect, UnusablePivot};
 use crate::round::Round;
 use crate::sgdd::{Elimination, Frame, Part, Sgdd};
 use crate::Real;
-use kernel::SddmFactor;
+use remainder::SddmFactor;
 
 /// Why [`factorize`](crate::factorize) failed.
 #[non_exhaustive]
@@ -25,11 +25,16 @@ pub enum FactorError {
 impl core::fmt::Display for FactorError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::UnusablePivot(pivot) => write!(
-                f,
-                "dense Cholesky reached a {:?} pivot at vertex {}",
-                pivot.defect, pivot.vertex
-            ),
+            Self::UnusablePivot(UnusablePivot { vertex, defect }) => {
+                let defect = match defect {
+                    PivotDefect::NonFinite => "non-finite",
+                    PivotDefect::NonPositive => "non-positive",
+                };
+                write!(
+                    f,
+                    "dense Cholesky reached a {defect} pivot at vertex {vertex}"
+                )
+            }
         }
     }
 }
@@ -71,22 +76,19 @@ impl core::fmt::Display for SolveError {
 
 impl std::error::Error for SolveError {}
 
-/// Block-diagonal approximate inverse of `A`: one [`ComponentFactor`] per part.
+/// Block-diagonal approximate inverse of `A`: one [`PartFactor`] per [`Part`].
 #[derive(Clone, Debug)]
 pub struct Factor<T = f64> {
     n: usize,
-    components: Vec<ComponentFactor<T>>,
+    parts: Vec<PartFactor<T>>,
 }
 
 impl<T: Real> Factor<T> {
     pub(crate) fn build(sgdd: &Sgdd<T>, config: &Config) -> Result<Self, FactorError> {
-        let components = (sgdd.parts().par_iter())
-            .map(|part| ComponentFactor::build(part, config))
+        let parts = (sgdd.parts().par_iter())
+            .map(|part| PartFactor::build(part, config))
             .collect::<Result<_, _>>()?;
-        Ok(Self {
-            n: sgdd.n(),
-            components,
-        })
+        Ok(Self { n: sgdd.n(), parts })
     }
 
     /// Dimension of `A`.
@@ -94,19 +96,22 @@ impl<T: Real> Factor<T> {
         self.n
     }
 
-    /// Each part's factor, for a caller that solves them on its own, as Schwarz does.
-    pub fn components(&self) -> &[ComponentFactor<T>] {
-        &self.components
+    /// Each part's factor, in [`Sgdd::parts`]' order, for a caller that solves them on its own.
+    pub fn parts(&self) -> &[PartFactor<T>] {
+        &self.parts
     }
 
     /// Remainders routed dense and factored approximately instead.
     pub fn fallbacks(&self) -> impl Iterator<Item = Fallback> + '_ {
-        self.components.iter().filter_map(ComponentFactor::fallback)
+        self.parts.iter().filter_map(PartFactor::fallback)
     }
 
-    /// Scratch [`solve_in_place`](Self::solve_in_place) needs.
+    /// Scratch [`solve_in_place`](Self::solve_in_place) needs: a part's gathered values and its own scratch.
     pub fn scratch_len(&self) -> usize {
-        todo!()
+        (self.parts.iter())
+            .map(|part| part.vertices().len() + part.scratch_len())
+            .max()
+            .unwrap_or(0)
     }
 
     /// `A⁺b` on singular parts; vertices in no part solve to `0`.
@@ -125,31 +130,34 @@ impl<T: Real> Factor<T> {
 
 /// One part's factor over its vertices of `A`.
 #[derive(Clone, Debug)]
-pub struct ComponentFactor<T = f64> {
+pub struct PartFactor<T = f64> {
     frame: Arc<Frame<T>>,
+    /// The part's own fact, not its remainder's: an underflowed complement surplus never makes it singular.
+    floats: bool,
     round: Option<Round<T>>,
-    kernel: SddmFactor<T>,
+    remainder: SddmFactor<T>,
     fallback: Option<Fallback>,
 }
 
-impl<T: Real> ComponentFactor<T> {
+impl<T: Real> PartFactor<T> {
     fn build(part: &Part<T>, config: &Config) -> Result<Self, FactorError> {
         let frame = part.frame();
         let vertices = frame.vertices();
         let streams = Streams::new(config.seed, vertices[0]);
-        let (round, (kernel, fallback)) = match part.elimination() {
+        let (round, (remainder, fallback)) = match part.elimination() {
             Elimination::Whole(sddm) => {
                 let dense = || SddmFactor::dense(&sddm, vertices);
-                let sampled = || SddmFactor::sampled(&sddm, config.min_degree, streams);
+                let sampled = || SddmFactor::sampled(&sddm, config.remainder, streams);
                 (None, route(sddm.rank(), dense, sampled, config)?)
             }
             Elimination::Round(builder) => {
                 let kept = &vertices[builder.n_eliminated()..];
                 // A dense Cholesky spends nothing on sparsity, so only the exact complement goes dense.
-                let dense = || SddmFactor::dense(&builder.schur(CliqueRule::Exact, streams), kept);
+                let dense =
+                    || SddmFactor::dense(&builder.complement(CliqueRule::Exact, streams), kept);
                 let sampled = || {
-                    let complement = builder.schur(config.schur, streams);
-                    SddmFactor::sampled(&complement, config.min_degree, streams)
+                    let complement = builder.complement(config.complement, streams);
+                    SddmFactor::sampled(&complement, config.remainder, streams)
                 };
                 let routed = route(builder.complement_rank(), dense, sampled, config)?;
                 (Some(builder.finish()), routed)
@@ -157,8 +165,9 @@ impl<T: Real> ComponentFactor<T> {
         };
         Ok(Self {
             frame: Arc::clone(frame),
+            floats: part.floats(),
             round,
-            kernel,
+            remainder,
             fallback,
         })
     }
@@ -173,9 +182,11 @@ impl<T: Real> ComponentFactor<T> {
         self.fallback
     }
 
-    /// Scratch [`solve_local`](Self::solve_local) needs: the kernel's ground slot, a cover's sheets.
+    /// Scratch [`solve_local`](Self::solve_local) needs.
     pub fn scratch_len(&self) -> usize {
-        todo!()
+        let eliminated = self.round.as_ref().map_or(0, Round::n_eliminated);
+        self.remainder
+            .scratch_len(self.vertices().len() - eliminated)
     }
 
     /// Solves in local order: `x` holds `b` on entry and the solution on return.
@@ -200,22 +211,21 @@ impl<T: Real> ComponentFactor<T> {
             });
         }
         let congruence = self.frame.congruence();
-        let singular = self.kernel.singular();
-        if singular {
+        if self.floats {
             congruence.project_out_null(x);
         }
         congruence.apply(x);
         match &self.round {
-            None => self.kernel.solve(x, scratch),
+            None => self.remainder.solve(x, scratch),
             Some(round) => {
                 round.forward(x, inner);
                 let (eliminated, kept) = x.split_at_mut(round.n_eliminated());
-                self.kernel.solve(kept, scratch);
+                self.remainder.solve(kept, scratch);
                 round.backward(eliminated, kept, inner);
             }
         }
         congruence.apply(x);
-        if singular {
+        if self.floats {
             congruence.project_out_null(x);
         }
         Ok(())
@@ -233,7 +243,7 @@ fn route<T: Real>(
         return Ok((sampled(), None));
     }
     match dense() {
-        Ok(kernel) => Ok((kernel, None)),
+        Ok(remainder) => Ok((remainder, None)),
         Err(declined) => {
             let fallback = accept(config.on_dense_failure, declined)?;
             Ok((sampled(), Some(fallback)))
