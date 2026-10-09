@@ -1,13 +1,7 @@
-use super::Edges;
+use super::{Congruence, OffDiagonal};
 use crate::Real;
 
-/// The signs that fold `A`, or none: a negative cycle admits no signature.
-pub(super) enum Signature {
-    /// `true` where the vertex is negated.
-    Balanced(Box<[bool]>),
-    Frustrated,
-}
-
-pub(super) fn signature<T: Real>(edges: &Edges<T>) -> Signature {
+/// The signs that fold `A` into a Z-matrix, or `None`: a negative cycle admits no signature.
+pub(super) fn signature<T: Real>(off_diagonal: &OffDiagonal<T>) -> Option<Congruence<T>> {
     todo!()
 }

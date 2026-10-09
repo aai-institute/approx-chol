@@ -1,4 +1,4 @@
-//! Routes each part to its eliminations, and stores and applies `A_c⁺ ≈ F · Round · Kept⁺ · Round' · F`.
+//! Routes each part to its eliminations, and stores and applies `A_c⁺ ≈ F · Round · K⁺ · Round' · F`.
 
 mod kernel;
 
@@ -6,25 +6,31 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
-use crate::config::{CliqueRule, Config, ExactFailure, InnerParallelism};
-use crate::dense::Fallback;
-use crate::round::{Round, RoundBuilder};
-use crate::sampling::Streams;
-use crate::sgdd::{Body, Frame, Part, Sgdd};
-use crate::{Real, UnusablePivot};
-use kernel::Kept;
+use crate::clique_tree::Streams;
+use crate::config::{CliqueRule, Config, InnerParallelism, OnDenseFailure};
+use crate::dense::{Fallback, UnusablePivot};
+use crate::round::Round;
+use crate::sgdd::{Elimination, Frame, Part, Sgdd};
+use crate::Real;
+use kernel::SddmFactor;
 
 /// Why [`factorize`](crate::factorize) failed.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FactorError {
-    /// Under [`ExactFailure::Error`], a dense Cholesky reached an unusable pivot.
-    DenseFactorizationFailed(UnusablePivot),
+    /// Under [`OnDenseFailure::Error`], a dense Cholesky reached an unusable pivot.
+    UnusablePivot(UnusablePivot),
 }
 
 impl core::fmt::Display for FactorError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "factorization failed: {self:?}")
+        match self {
+            Self::UnusablePivot(pivot) => write!(
+                f,
+                "dense Cholesky reached a {:?} pivot at vertex {}",
+                pivot.defect, pivot.vertex
+            ),
+        }
     }
 }
 
@@ -34,25 +40,32 @@ impl std::error::Error for FactorError {}
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SolveError {
-    /// A right-hand side of a length other than the operator's.
+    /// A right-hand side of a length other than the operator's dimension.
     LengthMismatch {
-        /// Provided length.
-        len: usize,
         /// The operator's dimension.
-        dim: usize,
+        expected: usize,
+        /// The length provided.
+        found: usize,
     },
     /// Scratch shorter than the operator's `scratch_len`.
     ScratchTooSmall {
-        /// Provided scratch length.
-        len: usize,
-        /// Required scratch length.
+        /// The scratch the operator needs.
         needed: usize,
+        /// The length provided.
+        found: usize,
     },
 }
 
 impl core::fmt::Display for SolveError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "cannot solve: {self:?}")
+        match self {
+            Self::LengthMismatch { expected, found } => {
+                write!(f, "right-hand side has length {found}, expected {expected}")
+            }
+            Self::ScratchTooSmall { needed, found } => {
+                write!(f, "scratch has length {found}, needs {needed}")
+            }
+        }
     }
 }
 
@@ -63,25 +76,16 @@ impl std::error::Error for SolveError {}
 pub struct Factor<T = f64> {
     n: usize,
     components: Vec<ComponentFactor<T>>,
-    fallbacks: Vec<Fallback>,
 }
 
 impl<T: Real> Factor<T> {
     pub(crate) fn build(sgdd: &Sgdd<T>, config: &Config) -> Result<Self, FactorError> {
-        let built = (sgdd.parts().par_iter())
+        let components = (sgdd.parts().par_iter())
             .map(|part| ComponentFactor::build(part, config))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut fallbacks = Vec::new();
-        let components = (built.into_iter())
-            .map(|(component, fallback)| {
-                fallbacks.extend(fallback);
-                component
-            })
-            .collect();
+            .collect::<Result<_, _>>()?;
         Ok(Self {
             n: sgdd.n(),
             components,
-            fallbacks,
         })
     }
 
@@ -96,8 +100,8 @@ impl<T: Real> Factor<T> {
     }
 
     /// Remainders routed dense and factored approximately instead.
-    pub fn fallbacks(&self) -> &[Fallback] {
-        &self.fallbacks
+    pub fn fallbacks(&self) -> impl Iterator<Item = Fallback> + '_ {
+        self.components.iter().filter_map(ComponentFactor::fallback)
     }
 
     /// Scratch [`solve_in_place`](Self::solve_in_place) needs.
@@ -124,53 +128,49 @@ impl<T: Real> Factor<T> {
 pub struct ComponentFactor<T = f64> {
     frame: Arc<Frame<T>>,
     round: Option<Round<T>>,
-    kept: Kept<T>,
+    kernel: SddmFactor<T>,
+    fallback: Option<Fallback>,
 }
 
 impl<T: Real> ComponentFactor<T> {
-    fn build(part: &Part<T>, config: &Config) -> Result<(Self, Option<Fallback>), FactorError> {
+    fn build(part: &Part<T>, config: &Config) -> Result<Self, FactorError> {
         let frame = part.frame();
-        let streams = Streams::new(config.seed, frame.vertices()[0]);
         let vertices = frame.vertices();
-        let (round, (kept, fallback)) = match part.body() {
-            Body::Laplacian(sddm) => {
-                let dense = || Kept::dense(sddm, vertices);
-                let sampled = || Kept::sampled(sddm, config.kernel, streams);
-                (None, route(sddm.eliminated(), dense, sampled, config)?)
+        let streams = Streams::new(config.seed, vertices[0]);
+        let (round, (kernel, fallback)) = match part.elimination() {
+            Elimination::Whole(sddm) => {
+                let dense = || SddmFactor::dense(&sddm, vertices);
+                let sampled = || SddmFactor::sampled(&sddm, config.min_degree, streams);
+                (None, route(sddm.rank(), dense, sampled, config)?)
             }
-            Body::Signed(signed) => {
-                let cover = signed.cover();
-                let dense = || Kept::dense(&cover, vertices);
-                let sampled = || Kept::sampled(&cover, config.kernel, streams);
-                (None, route(cover.eliminated(), dense, sampled, config)?)
-            }
-            Body::Bipartite(bipartite) => {
-                let builder = RoundBuilder::new(bipartite);
-                let kept = &vertices[bipartite.n_eliminated()..];
+            Elimination::Round(builder) => {
+                let kept = &vertices[builder.n_eliminated()..];
                 // A dense Cholesky spends nothing on sparsity, so only the exact complement goes dense.
-                let dense = || Kept::dense(&builder.schur(CliqueRule::Exact, streams), kept);
+                let dense = || SddmFactor::dense(&builder.schur(CliqueRule::Exact, streams), kept);
                 let sampled = || {
-                    Kept::sampled(
-                        &builder.schur(config.round, streams),
-                        config.kernel,
-                        streams,
-                    )
+                    let complement = builder.schur(config.schur, streams);
+                    SddmFactor::sampled(&complement, config.min_degree, streams)
                 };
-                let routed = route(builder.complement_eliminated(), dense, sampled, config)?;
+                let routed = route(builder.complement_rank(), dense, sampled, config)?;
                 (Some(builder.finish()), routed)
             }
         };
-        let factor = Self {
+        Ok(Self {
             frame: Arc::clone(frame),
             round,
-            kept,
-        };
-        Ok((factor, fallback))
+            kernel,
+            fallback,
+        })
     }
 
     /// The part's vertices in `A`'s numbering, in local order.
     pub fn vertices(&self) -> &[u32] {
         self.frame.vertices()
+    }
+
+    /// Why this part is less accurate than its config asked, if it is.
+    pub fn fallback(&self) -> Option<Fallback> {
+        self.fallback
     }
 
     /// Scratch [`solve_local`](Self::solve_local) needs: the kernel's ground slot, a cover's sheets.
@@ -185,35 +185,38 @@ impl<T: Real> ComponentFactor<T> {
         scratch: &mut [T],
         inner: InnerParallelism,
     ) -> Result<(), SolveError> {
-        let dim = self.vertices().len();
-        if x.len() != dim {
-            return Err(SolveError::LengthMismatch { len: x.len(), dim });
+        let expected = self.vertices().len();
+        if x.len() != expected {
+            return Err(SolveError::LengthMismatch {
+                expected,
+                found: x.len(),
+            });
         }
         let needed = self.scratch_len();
         if scratch.len() < needed {
             return Err(SolveError::ScratchTooSmall {
-                len: scratch.len(),
                 needed,
+                found: scratch.len(),
             });
         }
         let congruence = self.frame.congruence();
-        let singular = self.kept.singular();
+        let singular = self.kernel.singular();
         if singular {
-            congruence.project_null(x);
+            congruence.project_out_null(x);
         }
         congruence.apply(x);
         match &self.round {
-            None => self.kept.solve(x, scratch),
+            None => self.kernel.solve(x, scratch),
             Some(round) => {
                 round.forward(x, inner);
                 let (eliminated, kept) = x.split_at_mut(round.n_eliminated());
-                self.kept.solve(kept, scratch);
+                self.kernel.solve(kept, scratch);
                 round.backward(eliminated, kept, inner);
             }
         }
         congruence.apply(x);
         if singular {
-            congruence.project_null(x);
+            congruence.project_out_null(x);
         }
         Ok(())
     }
@@ -221,16 +224,16 @@ impl<T: Real> ComponentFactor<T> {
 
 /// Dense when the rule says so; a declined pivot falls to the approximate arm, never to a second dense one.
 fn route<T: Real>(
-    eliminated: usize,
-    dense: impl FnOnce() -> Result<Kept<T>, Fallback>,
-    sampled: impl FnOnce() -> Kept<T>,
+    rank: usize,
+    dense: impl FnOnce() -> Result<SddmFactor<T>, Fallback>,
+    sampled: impl FnOnce() -> SddmFactor<T>,
     config: &Config,
-) -> Result<(Kept<T>, Option<Fallback>), FactorError> {
-    if !config.routes_dense(eliminated) {
+) -> Result<(SddmFactor<T>, Option<Fallback>), FactorError> {
+    if !config.routes_dense(rank) {
         return Ok((sampled(), None));
     }
     match dense() {
-        Ok(kept) => Ok((kept, None)),
+        Ok(kernel) => Ok((kernel, None)),
         Err(declined) => {
             let fallback = accept(config.on_dense_failure, declined)?;
             Ok((sampled(), Some(fallback)))
@@ -239,10 +242,10 @@ fn route<T: Real>(
 }
 
 /// Only a pivot can be fatal: a remainder that will not fit falls back whatever the policy.
-fn accept(on_failure: ExactFailure, fallback: Fallback) -> Result<Fallback, FactorError> {
+fn accept(on_failure: OnDenseFailure, fallback: Fallback) -> Result<Fallback, FactorError> {
     match (on_failure, fallback) {
-        (ExactFailure::Error, Fallback::InvalidPivot(pivot)) => {
-            Err(FactorError::DenseFactorizationFailed(pivot))
+        (OnDenseFailure::Error, Fallback::UnusablePivot(pivot)) => {
+            Err(FactorError::UnusablePivot(pivot))
         }
         _ => Ok(fallback),
     }

@@ -1,31 +1,24 @@
 //! Sampled elimination of a whole SDDM in minimum-degree order (Algorithm 8), and its stored columns.
 
-mod clique;
+mod cholesky;
 mod graph;
-mod multiplicity;
 mod ordering;
-mod sequence;
-mod star;
 
-pub(crate) use sequence::Sequence;
+pub(crate) use cholesky::SampledCholesky;
 
+use crate::clique_tree::{CliqueSampler, EdgeCount, Multi, Single, Streams};
 use crate::config::Multiplicity;
-use crate::laplacian::Sddm;
-use crate::sampling::Streams;
-use crate::storage::Fill;
+use crate::sddm::Sddm;
 use crate::Real;
-use clique::{sample_column, Column};
+use cholesky::Steps;
 use graph::EliminationGraph;
-use multiplicity::{EdgeCount, Multi, Single};
 use ordering::DynamicOrdering;
-use sequence::SequenceBuilder;
-use star::Star;
 
 pub(crate) fn eliminate<T: Real>(
-    sddm: &Sddm<T>,
+    sddm: &Sddm<'_, T>,
     multiplicity: Multiplicity,
     streams: Streams,
-) -> Sequence<T> {
+) -> SampledCholesky<T> {
     match multiplicity {
         Multiplicity::Single => run::<T, Single>(sddm, streams, ()),
         Multiplicity::Split(k) => run::<T, Multi>(sddm, streams, k),
@@ -33,24 +26,25 @@ pub(crate) fn eliminate<T: Real>(
 }
 
 /// One step short of `n`, leaving the vertex the solve zeroes.
-fn run<T: Real, C: EdgeCount>(sddm: &Sddm<T>, streams: Streams, split: C::Split) -> Sequence<T> {
+fn run<T: Real, C: EdgeCount>(
+    sddm: &Sddm<'_, T>,
+    streams: Streams,
+    split: C::Split,
+) -> SampledCholesky<T> {
     let mut graph = EliminationGraph::<C, T>::of(sddm, split);
     let n = graph.n();
     let mut ordering = DynamicOrdering::new(&graph);
-    let mut sampler = streams.kernel();
-    let (mut star, mut column, mut fill) = (Star::new(), Column::new(), Fill::new());
-    let mut sequence = SequenceBuilder::with_capacity(n);
+    let mut clique = CliqueSampler::<T, C>::new(streams.min_degree());
+    let mut steps = Steps::with_capacity(n);
     for _ in 1..n {
         let v = ordering.next_vertex();
-        star.refill(&graph, v, split);
-        fill.clear();
-        let pivot = sample_column(&star, &mut sampler, &mut column, &mut fill);
-        sequence.push(v, pivot, &column);
+        let pivot = clique.eliminate(graph.neighbors(v), split);
+        steps.push(v, pivot, clique.column());
         graph.eliminate_vertex(v);
-        for &(u, w, weight) in &fill {
+        for &(u, w, weight) in clique.fill() {
             graph.add_fill(u, w, weight);
         }
-        ordering.update(&star, &fill);
+        ordering.update(clique.star(), clique.fill());
     }
-    sequence.finish(ordering.next_vertex())
+    steps.finish(ordering.next_vertex())
 }

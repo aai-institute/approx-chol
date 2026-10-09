@@ -1,3 +1,5 @@
+use super::OffDiagonal;
+use crate::storage::CrossBlock;
 use crate::Real;
 
 /// `F` in `M = F A_c F`: signs and scales, finite and nonzero; `A_c`'s null vector is then `F·1`.
@@ -17,8 +19,19 @@ impl<T: Real> Congruence<T> {
         Self(Kind::Identity)
     }
 
-    pub(super) fn negate_from(first: usize) -> Self {
-        Self(Kind::NegateFrom(first))
+    /// Folds a positive cross block: the kept side negated.
+    pub(super) fn negate_kept(cross: &CrossBlock<T>) -> Self {
+        Self(Kind::NegateFrom(cross.n_eliminated()))
+    }
+
+    /// `true` where the vertex is negated.
+    pub(super) fn signs(negated: &[bool]) -> Self {
+        todo!()
+    }
+
+    /// `S R` for these signs `S` and positive scales `R`; `None` if a product leaves the finite range.
+    pub(super) fn then_scale(self, scales: &[T]) -> Option<Self> {
+        todo!()
     }
 
     /// Whether it scales exactly `n` vertices.
@@ -30,8 +43,8 @@ impl<T: Real> Congruence<T> {
         }
     }
 
-    /// `None` unless every factor is finite and nonzero.
-    pub(super) fn factors(factors: Vec<T>) -> Option<Self> {
+    /// `F X F`: `M`'s off-diagonal from `A_c`'s.
+    pub(super) fn congruent(&self, off_diagonal: OffDiagonal<T>) -> OffDiagonal<T> {
         todo!()
     }
 
@@ -40,8 +53,8 @@ impl<T: Real> Congruence<T> {
         todo!()
     }
 
-    /// Projects out `F·1`, max-normalized: the raw norm overflows at a 1e200 scale range.
-    pub(crate) fn project_null(&self, x: &mut [T]) {
+    /// Removes the component along `F·1`, max-normalized: the raw norm overflows at a 1e200 scale range.
+    pub(crate) fn project_out_null(&self, x: &mut [T]) {
         todo!()
     }
 }

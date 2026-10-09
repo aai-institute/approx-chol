@@ -1,4 +1,4 @@
-use super::{Edges, Unreduced};
+use super::{OffDiagonal, Unreduced};
 use crate::Real;
 
 /// Certification policy for a dominance scaling; a deficit left at hand-over is clamped and reported.
@@ -27,23 +27,30 @@ impl Default for ScalingPolicy {
     }
 }
 
-/// The worst uncertified scaling across parts; present iff some violation exceeded the tolerance.
+/// A part's uncertified scaling: present iff its violation exceeded the policy's tolerance.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScalingReport {
-    /// Scaling iterations spent on the worst part.
+    /// Scaling iterations spent.
     pub iterations: usize,
     /// Largest relative dominance violation, clamped away.
     pub violation: f64,
 }
 
-/// Positive scales `r` with `R|A|R` weakly dominant up to `violation`.
-pub(super) struct Certificate<T> {
-    scales: Vec<T>,
+/// Positive scales `R` making `R|A|R` weakly dominant, with what the policy says of their violation.
+pub(super) struct Scaling<T> {
+    /// `None` when `A` already is: every SDDM input, so an SDDM CSR reduces bit for bit as before.
+    pub(super) scales: Option<Box<[T]>>,
+    pub(super) report: Option<ScalingReport>,
+}
+
+/// Positive scales with `R|A|R` weakly dominant up to `violation`.
+struct Certificate<T> {
+    scales: Box<[T]>,
     iterations: usize,
     violation: T,
 }
 
-/// Why no certificate exists.
+/// Why no scaling exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum NotScalable {
     /// `M(A)` is not PSD: no positive diagonal reaches dominance.
@@ -56,18 +63,28 @@ pub(super) enum NotScalable {
 pub(super) fn dominance_scaling<T: Real>(
     a: &Unreduced<T>,
     policy: &ScalingPolicy,
-) -> Result<Certificate<T>, NotScalable> {
-    if let Some(identity) = already_dominant(a, policy) {
-        return Ok(identity);
+) -> Result<Scaling<T>, NotScalable> {
+    if already_dominant(a) {
+        return Ok(Scaling {
+            scales: None,
+            report: None,
+        });
     }
-    match &a.edges {
-        Edges::General(_) => sci(a, policy),
-        Edges::Bipartite(_) => reduced_cg(a, policy),
+    let certificate = match &a.off_diagonal {
+        OffDiagonal::General(_) => sci(a, policy),
+        OffDiagonal::Bipartite(_) => reduced_cg(a, policy),
+    }?;
+    Ok(policy.judge(certificate))
+}
+
+impl ScalingPolicy {
+    /// The one place the tolerance decides whether a certificate is reported.
+    fn judge<T: Real>(&self, certificate: Certificate<T>) -> Scaling<T> {
+        todo!()
     }
 }
 
-/// Zero iterations: every SDDM input, so an SDDM CSR reduces bit for bit as before.
-fn already_dominant<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> Option<Certificate<T>> {
+fn already_dominant<T: Real>(a: &Unreduced<T>) -> bool {
     todo!()
 }
 

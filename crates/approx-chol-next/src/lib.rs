@@ -7,21 +7,21 @@
     reason = "types-only skeleton; unfulfilled once the bodies land"
 )]
 
+mod clique_tree;
 mod config;
 mod dense;
 mod factor;
 pub mod input;
-mod laplacian;
 mod min_degree;
 mod round;
-mod sampling;
+mod sddm;
 mod sgdd;
 mod storage;
 
 use num_traits::Float;
 
-pub use config::{CliqueRule, Config, ExactFailure, InnerParallelism, Multiplicity, SplitFactor};
-pub use dense::{DenseFailure, Fallback, UnusablePivot};
+pub use config::{CliqueRule, Config, InnerParallelism, Multiplicity, OnDenseFailure, SplitFactor};
+pub use dense::{Fallback, PivotDefect, UnusablePivot};
 pub use factor::{ComponentFactor, Factor, FactorError, SolveError};
 pub use sgdd::{FromCsrError, Part, ReduceError, ScalingPolicy, ScalingReport, Sgdd};
 

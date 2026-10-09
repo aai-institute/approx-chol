@@ -1,47 +1,47 @@
 //! Exact Cholesky of a small SDDM: the packed factor and the code that builds and applies it.
 
-use crate::laplacian::Sddm;
+use crate::sddm::Sddm;
 use crate::Real;
 
-/// Why a dense pivot could not be used.
+/// What makes a dense pivot unusable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DenseFailure {
+pub enum PivotDefect {
     /// Infinite or NaN.
-    NonFinitePivot,
+    NonFinite,
     /// Zero or negative.
-    NonPositivePivot,
+    NonPositive,
 }
 
 /// An unusable dense pivot, named in `A`'s numbering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnusablePivot {
     /// The pivot's vertex in `A`.
-    pub vertex: u32,
+    pub vertex: usize,
     /// What was wrong with it.
-    pub failure: DenseFailure,
+    pub defect: PivotDefect,
 }
 
 /// A remainder routed dense and factored approximately instead: less accurate than asked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fallback {
     /// The dense Cholesky reached an unusable pivot.
-    InvalidPivot(UnusablePivot),
+    UnusablePivot(UnusablePivot),
     /// The packed triangle does not fit in memory.
     WillNotFit {
-        /// Rows of the declined remainder.
-        dim: usize,
+        /// Rank of the declined remainder.
+        rank: usize,
     },
 }
 
-/// Packed lower triangle, the free slot excluded: an upper one would double the factor.
+/// Packed lower triangle of `L` in `LLᵀ`, the free slot excluded: an upper one would double the factor.
 #[derive(Clone, Debug)]
-pub(crate) struct LowerTriangular<T> {
+pub(crate) struct DenseCholesky<T> {
     values: Vec<T>,
 }
 
-impl<T: Real> LowerTriangular<T> {
-    /// Assembles and factors in place; `vertices` names the rows' copied vertices in `A`.
-    pub(crate) fn factor(sddm: &Sddm<T>, vertices: &[u32]) -> Result<Self, Fallback> {
+impl<T: Real> DenseCholesky<T> {
+    /// Assembles and factors in place; `vertices` names each base vertex in `A`.
+    pub(crate) fn factor(sddm: &Sddm<'_, T>, vertices: &[u32]) -> Result<Self, Fallback> {
         todo!()
     }
 

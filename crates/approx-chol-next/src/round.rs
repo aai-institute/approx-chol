@@ -2,14 +2,13 @@
 
 use std::sync::Arc;
 
+use crate::clique_tree::{EdgeCount, Streams};
 use crate::config::{CliqueRule, InnerParallelism};
-use crate::laplacian::Sddm;
-use crate::sampling::{CdfSampler, Streams};
-use crate::sgdd::Bipartite;
+use crate::sddm::{Grounding, Sddm, Sheets};
 use crate::storage::{CrossBlock, Fill};
 use crate::Real;
 
-/// Stored columns `C / d_k`, applied as two products because the block's steps commute.
+/// Stored columns `C / d_e`, applied as two products because the block's steps commute.
 #[derive(Clone, Debug)]
 pub(crate) struct Round<T> {
     /// Shared with the part, signed for a frustrated one: the cover never doubles it.
@@ -36,23 +35,32 @@ impl<T: Real> Round<T> {
 /// A round before its stored form is taken, so one pivot vector serves every complement and the solve.
 pub(crate) struct RoundBuilder<'a, T> {
     round: Round<T>,
-    part: &'a Bipartite<T>,
+    grounding: &'a Grounding<T>,
+    sheets: Sheets,
 }
 
 impl<'a, T: Real> RoundBuilder<'a, T> {
-    /// Pivots are `Σ|c_kj| + s_k`, the same on both sheets of a cover.
-    pub(crate) fn new(part: &'a Bipartite<T>) -> Self {
+    /// Pivots are `Σ|c_ek| + s_e`, the same on both sheets of a cover.
+    pub(crate) fn new(
+        cross: &Arc<CrossBlock<T>>,
+        grounding: &'a Grounding<T>,
+        sheets: Sheets,
+    ) -> Self {
         todo!()
     }
 
-    /// What a Cholesky of the complement solves for, known before it is built.
-    pub(crate) fn complement_eliminated(&self) -> usize {
-        let rows = self.part.sheets().count() * self.part.cross().n_kept();
-        self.part.ground().eliminated(rows)
+    pub(crate) fn n_eliminated(&self) -> usize {
+        self.round.n_eliminated()
     }
 
-    /// The kept block's complement on the part's sheets, grounded iff the part is; stars run in parallel.
-    pub(crate) fn schur(&self, rule: CliqueRule, streams: Streams) -> Sddm<T> {
+    /// The complement is grounded iff the part is, so its rank is known before it is built.
+    pub(crate) fn complement_rank(&self) -> usize {
+        let rows = self.sheets.count() * self.round.cross.n_kept();
+        self.grounding.rank(rows)
+    }
+
+    /// The kept block's Schur complement on the part's sheets; stars run in parallel.
+    pub(crate) fn schur(&self, rule: CliqueRule, streams: Streams) -> Sddm<'static, T> {
         todo!()
     }
 
@@ -61,13 +69,12 @@ impl<'a, T: Real> RoundBuilder<'a, T> {
     }
 }
 
-/// A clique tree over the star, the ground sampled as a final vertex.
-fn sample_tree<T: Real>(
-    star: &[(u32, T)],
-    ground: T,
-    sampler: &mut CdfSampler<T>,
-    fill: &mut Fill<T>,
-) {
+/// Each eliminated star's clique tree, the ground a final neighbor, under the star's own stream.
+fn sampled_fill<T: Real, C: EdgeCount>(
+    builder: &RoundBuilder<'_, T>,
+    split: C::Split,
+    streams: Streams,
+) -> Fill<T> {
     todo!()
 }
 

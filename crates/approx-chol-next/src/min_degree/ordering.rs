@@ -1,6 +1,5 @@
 use super::graph::EliminationGraph;
-use super::multiplicity::EdgeCount;
-use super::star::Star;
+use crate::clique_tree::{EdgeCount, Star};
 use crate::storage::Fill;
 use crate::Real;
 

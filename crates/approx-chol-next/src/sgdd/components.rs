@@ -1,15 +1,15 @@
 use num_traits::PrimInt;
 
 use crate::input::{Csr, CsrError};
-use crate::storage::CrossTab;
+use crate::storage::Biadjacency;
 
-/// Checks symmetry and finiteness in the same walk that unions the pattern.
+/// Checks symmetry and finiteness in the walk that unions nonzeros; a stored zero joins nothing.
 pub(super) fn of_csr<T, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<Partition, CsrError> {
     todo!()
 }
 
-/// Vertices are left rows, then `n_left + j` for right ones.
-pub(super) fn of_cross<T>(tab: &CrossTab<T>) -> Partition {
+/// Vertices are left rows, then `n_left + j` for right ones; a cancelled cell joins nothing.
+pub(super) fn of_cross<T: Copy>(c: &Biadjacency<T>) -> Partition {
     todo!()
 }
 

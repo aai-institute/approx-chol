@@ -1,22 +1,22 @@
 /// Build settings for [`factorize`](crate::factorize); the reduction's policy is fixed by [`Sgdd`](crate::Sgdd).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Config {
-    /// Every sampler stream derives from this, keyed by component and pivot.
+    /// Every sampler stream derives from this, keyed by part and star.
     pub seed: u64,
-    /// How an independent leading block's stars become fill.
-    pub round: CliqueRule,
+    /// How a bipartite part's eliminated stars become its Schur complement.
+    pub schur: CliqueRule,
     /// How minimum-degree elimination samples each star.
-    pub kernel: Multiplicity,
-    /// Inclusive size at or below which the remainder takes a dense Cholesky; `0` never does.
-    pub dense_below: usize,
+    pub min_degree: Multiplicity,
+    /// Largest rank a remainder takes a dense Cholesky at; `0` never does.
+    pub dense_up_to: usize,
     /// What a dense Cholesky's unusable pivot does.
-    pub on_dense_failure: ExactFailure,
+    pub on_dense_failure: OnDenseFailure,
 }
 
 impl Config {
-    /// The one routing rule: a Cholesky solving for this many vertices goes dense.
-    pub(crate) fn routes_dense(&self, eliminated: usize) -> bool {
-        (1..=self.dense_below).contains(&eliminated)
+    /// The one routing rule: a remainder of this rank goes dense.
+    pub(crate) fn routes_dense(&self, rank: usize) -> bool {
+        (1..=self.dense_up_to).contains(&rank)
     }
 }
 
@@ -24,10 +24,10 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             seed: 0,
-            round: CliqueRule::Sampled(Multiplicity::Single),
-            kernel: Multiplicity::Single,
-            dense_below: 24,
-            on_dense_failure: ExactFailure::FallBackToApproximate,
+            schur: CliqueRule::Sampled(Multiplicity::Single),
+            min_degree: Multiplicity::Single,
+            dense_up_to: 24,
+            on_dense_failure: OnDenseFailure::FallBackToApproximate,
         }
     }
 }
@@ -69,11 +69,11 @@ impl SplitFactor {
 /// What a dense Cholesky's unusable pivot does.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ExactFailure {
+pub enum OnDenseFailure {
     /// Factor that remainder approximately and record a [`Fallback`](crate::Fallback).
     #[default]
     FallBackToApproximate,
-    /// Fail with [`FactorError::DenseFactorizationFailed`](crate::FactorError::DenseFactorizationFailed).
+    /// Fail with [`FactorError::UnusablePivot`](crate::FactorError::UnusablePivot).
     Error,
 }
 

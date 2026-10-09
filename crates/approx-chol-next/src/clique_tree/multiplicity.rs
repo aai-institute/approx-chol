@@ -2,13 +2,18 @@ use crate::config::SplitFactor;
 use crate::Real;
 
 /// AC is AC2 at one copy per edge, so this trait is the whole difference.
-pub(super) trait EdgeCount: Clone + Copy {
+pub(crate) trait EdgeCount: Clone + Copy {
     /// `Single` cannot name a `k`, making AC over split multi-edges a type error.
     type Split: Copy;
 
     const SINGLE_COPY: bool;
 
+    /// What a fill edge carries.
     fn one() -> Self;
+
+    /// What an edge of the input carries once split.
+    fn split(split: Self::Split) -> Self;
+
     fn get(&self) -> u32;
     fn per_copy<T: Real>(&self, total: T) -> T;
 
@@ -17,17 +22,21 @@ pub(super) trait EdgeCount: Clone + Copy {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct Single;
+pub(crate) struct Single;
 
 /// Virtual copy count, only ever lowered from a [`SplitFactor`] by the merge cap.
 #[derive(Clone, Copy)]
-pub(super) struct Multi(u32);
+pub(crate) struct Multi(u32);
 
 impl EdgeCount for Single {
     type Split = ();
     const SINGLE_COPY: bool = true;
 
     fn one() -> Self {
+        Self
+    }
+
+    fn split((): ()) -> Self {
         Self
     }
 
@@ -50,6 +59,10 @@ impl EdgeCount for Multi {
 
     fn one() -> Self {
         Self(1)
+    }
+
+    fn split(split: SplitFactor) -> Self {
+        Self(split.get())
     }
 
     fn get(&self) -> u32 {

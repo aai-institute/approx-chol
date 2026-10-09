@@ -10,7 +10,7 @@ pub struct Csr<'a, T, I = u32> {
 }
 
 impl<'a, T, I: PrimInt> Csr<'a, T, I> {
-    /// Checks the arrays' shape only.
+    /// Checks the arrays' shape, and that every vertex and entry fits a `u32` index.
     pub fn new(
         n: usize,
         row_ptrs: &'a [I],
@@ -47,6 +47,11 @@ pub enum CsrError {
         /// The length found.
         found: usize,
     },
+    /// More vertices or entries than a `u32` index reaches.
+    TooLarge {
+        /// The count that overflows.
+        count: usize,
+    },
     /// A column index is at least `n`, or a row's columns are not ascending.
     MalformedRow {
         /// The offending row.
@@ -66,7 +71,15 @@ pub enum CsrError {
 
 impl core::fmt::Display for CsrError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "invalid CSR: {self:?}")
+        match self {
+            Self::LengthMismatch { expected, found } => {
+                write!(f, "CSR array has length {found}, expected {expected}")
+            }
+            Self::TooLarge { count } => write!(f, "{count} exceeds a u32 index"),
+            Self::MalformedRow { row } => write!(f, "row {row} is out of range or unsorted"),
+            Self::NotSymmetric { row } => write!(f, "row {row} has an entry with no equal mirror"),
+            Self::NotFinite { row } => write!(f, "row {row} has a non-finite entry"),
+        }
     }
 }
 
