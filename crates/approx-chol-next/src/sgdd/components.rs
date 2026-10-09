@@ -1,7 +1,7 @@
 use num_traits::PrimInt;
 
 use crate::input::{Csr, CsrError};
-use crate::storage::CrossBlock;
+use crate::storage::CrossTab;
 
 /// Checks symmetry and finiteness in the same walk that unions the pattern.
 pub(super) fn of_csr<T, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<Partition, CsrError> {
@@ -9,7 +9,7 @@ pub(super) fn of_csr<T, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<Partition, Cs
 }
 
 /// Vertices are left rows, then `n_left + j` for right ones.
-pub(super) fn of_cross<T: Copy>(cross: &CrossBlock<T>) -> Partition {
+pub(super) fn of_cross<T>(tab: &CrossTab<T>) -> Partition {
     todo!()
 }
 

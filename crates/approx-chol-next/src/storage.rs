@@ -48,7 +48,23 @@ impl<T> UpperAdjacency<T> {
     }
 }
 
-/// `C` of `[D₁ C; Cᵀ D₂]`, rows the larger side, and `Cᵀ` built on first read.
+/// `C` of a factor-width-2 view as assembled: rows are `A`'s left vertices, columns its right ones.
+#[derive(Clone, Debug)]
+pub(crate) struct CrossTab<T> {
+    c: Rows<T>,
+}
+
+impl<T> CrossTab<T> {
+    pub(crate) fn n_left(&self) -> usize {
+        self.c.n_rows()
+    }
+
+    pub(crate) fn n_right(&self) -> usize {
+        self.c.n_cols()
+    }
+}
+
+/// One component's `C` of `[D₁ C; Cᵀ D₂]`, oriented so rows are the larger side, `Cᵀ` built on first read.
 #[derive(Clone, Debug)]
 pub(crate) struct CrossBlock<T> {
     c: Rows<T>,
@@ -56,6 +72,10 @@ pub(crate) struct CrossBlock<T> {
 }
 
 impl<T: Copy> CrossBlock<T> {
+    pub(crate) fn n(&self) -> usize {
+        self.n_eliminated() + self.n_kept()
+    }
+
     pub(crate) fn n_eliminated(&self) -> usize {
         self.c.n_rows()
     }

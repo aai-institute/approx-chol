@@ -1,4 +1,4 @@
-//! Routes each part to its eliminations, and stores and applies `A_c⁺ ≈ D · Round · Kept⁺ · Round' · D`.
+//! Routes each part to its eliminations, and stores and applies `A_c⁺ ≈ F · Round · Kept⁺ · Round' · F`.
 
 mod kernel;
 
@@ -7,14 +7,12 @@ use std::sync::Arc;
 use rayon::prelude::*;
 
 use crate::config::{CliqueRule, Config, ExactFailure, InnerParallelism};
-use crate::dense::{Fallback, LowerTriangular};
-use crate::laplacian::Sddm;
-use crate::min_degree;
+use crate::dense::Fallback;
 use crate::round::{Round, RoundBuilder};
 use crate::sampling::Streams;
 use crate::sgdd::{Body, Frame, Part, Sgdd};
 use crate::{Real, UnusablePivot};
-use kernel::{Cholesky, Kept};
+use kernel::Kept;
 
 /// Why [`factorize`](crate::factorize) failed.
 #[non_exhaustive]
@@ -133,29 +131,33 @@ impl<T: Real> ComponentFactor<T> {
     fn build(part: &Part<T>, config: &Config) -> Result<(Self, Option<Fallback>), FactorError> {
         let frame = part.frame();
         let streams = Streams::new(config.seed, frame.vertices()[0]);
+        let vertices = frame.vertices();
         let (round, (kept, fallback)) = match part.body() {
             Body::Laplacian(sddm) => {
-                let name = |row| frame.vertices()[row];
-                (
-                    None,
-                    factor_kernel(sddm, config, streams, config.on_dense_failure, name)?,
-                )
+                let dense = || Kept::dense(sddm, vertices);
+                let sampled = || Kept::sampled(sddm, config.kernel, streams);
+                (None, route(sddm.eliminated(), dense, sampled, config)?)
             }
             Body::Signed(signed) => {
                 let cover = signed.cover();
-                let m = frame.vertices().len();
-                let name = |row| frame.vertices()[cover.sheets().vertex(m, row)];
-                (
-                    None,
-                    factor_kernel(&cover, config, streams, config.on_dense_failure, name)?,
-                )
+                let dense = || Kept::dense(&cover, vertices);
+                let sampled = || Kept::sampled(&cover, config.kernel, streams);
+                (None, route(cover.eliminated(), dense, sampled, config)?)
             }
             Body::Bipartite(bipartite) => {
                 let builder = RoundBuilder::new(bipartite);
-                let (offset, m) = (bipartite.cross().n_eliminated(), bipartite.cross().n_kept());
-                let name = |row| frame.vertices()[offset + bipartite.sheets().vertex(m, row)];
-                let kept = factor_complement(&builder, config, streams, name)?;
-                (Some(builder.finish()), kept)
+                let kept = &vertices[bipartite.n_eliminated()..];
+                // A dense Cholesky spends nothing on sparsity, so only the exact complement goes dense.
+                let dense = || Kept::dense(&builder.schur(CliqueRule::Exact, streams), kept);
+                let sampled = || {
+                    Kept::sampled(
+                        &builder.schur(config.round, streams),
+                        config.kernel,
+                        streams,
+                    )
+                };
+                let routed = route(builder.complement_eliminated(), dense, sampled, config)?;
+                (Some(builder.finish()), routed)
             }
         };
         let factor = Self {
@@ -217,40 +219,23 @@ impl<T: Real> ComponentFactor<T> {
     }
 }
 
-/// A dense kernel spends nothing on sparsity, so it is handed the exact complement first.
-fn factor_complement<T: Real>(
-    builder: &RoundBuilder<'_, T>,
+/// Dense when the rule says so; a declined pivot falls to the approximate arm, never to a second dense one.
+fn route<T: Real>(
+    eliminated: usize,
+    dense: impl FnOnce() -> Result<Kept<T>, Fallback>,
+    sampled: impl FnOnce() -> Kept<T>,
     config: &Config,
-    streams: Streams,
-    name: impl Fn(usize) -> u32,
 ) -> Result<(Kept<T>, Option<Fallback>), FactorError> {
-    if config.routes_dense(builder.complement_eliminated()) {
-        let exact = builder.schur(CliqueRule::Exact, streams);
-        if let Ok(done) = factor_kernel(&exact, config, streams, ExactFailure::Error, &name) {
-            return Ok(done);
+    if !config.routes_dense(eliminated) {
+        return Ok((sampled(), None));
+    }
+    match dense() {
+        Ok(kept) => Ok((kept, None)),
+        Err(declined) => {
+            let fallback = accept(config.on_dense_failure, declined)?;
+            Ok((sampled(), Some(fallback)))
         }
     }
-    let reduced = builder.schur(config.round, streams);
-    factor_kernel(&reduced, config, streams, config.on_dense_failure, name)
-}
-
-/// Routes first, so a remainder the dense arm claims never builds an elimination graph.
-fn factor_kernel<T: Real>(
-    sddm: &Sddm<T>,
-    config: &Config,
-    streams: Streams,
-    on_failure: ExactFailure,
-    name: impl Fn(usize) -> u32,
-) -> Result<(Kept<T>, Option<Fallback>), FactorError> {
-    let mut fallback = None;
-    if config.routes_dense(sddm.eliminated()) {
-        match LowerTriangular::factor(sddm, name) {
-            Ok(lower) => return Ok((Kept::new(sddm, Cholesky::Dense(lower)), None)),
-            Err(declined) => fallback = Some(accept(on_failure, declined)?),
-        }
-    }
-    let sequence = min_degree::eliminate(sddm, config.kernel, streams);
-    Ok((Kept::new(sddm, Cholesky::Sequence(sequence)), fallback))
 }
 
 /// Only a pivot can be fatal: a remainder that will not fit falls back whatever the policy.

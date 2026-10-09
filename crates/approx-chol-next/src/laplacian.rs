@@ -12,13 +12,11 @@ pub(crate) struct Sddm<T> {
 }
 
 impl<T: Real> Sddm<T> {
-    /// Panics unless the surplus has one entry per vertex and the vertices split evenly into sheets.
+    /// Panics unless nonempty, with one surplus per vertex and the vertices split evenly into sheets.
     pub(crate) fn new(adjacency: UpperAdjacency<T>, ground: Ground<T>, sheets: Sheets) -> Self {
         let n = adjacency.n();
-        assert!(
-            ground.surplus().is_none_or(|s| s.len() == n),
-            "one surplus per vertex"
-        );
+        assert!(n > 0, "an SDDM has a vertex");
+        assert!(ground.fits(n), "one surplus per vertex");
         assert_eq!(n % sheets.count(), 0, "every sheet holds the same vertices");
         Self {
             adjacency,
@@ -42,6 +40,11 @@ impl<T: Real> Sddm<T> {
     pub(crate) fn eliminated(&self) -> usize {
         self.ground.eliminated(self.adjacency.n())
     }
+
+    /// The vertex a row copies; sheets are stacked, so a cover's second sheet repeats the first.
+    pub(crate) fn copied(&self, row: usize) -> usize {
+        row % (self.adjacency.n() / self.sheets.count())
+    }
 }
 
 /// `M`'s surplus `s = diag(M) − Σ|offdiag|`; without one `M` is a Laplacian and singular.
@@ -61,6 +64,11 @@ impl<T: Real> Ground<T> {
 
     pub(crate) fn surplus(&self) -> Option<&[T]> {
         self.0.as_ref().map(|surplus| &*surplus.0)
+    }
+
+    /// Whether it grounds exactly `n` vertices.
+    pub(crate) fn fits(&self, n: usize) -> bool {
+        self.surplus().is_none_or(|s| s.len() == n)
     }
 
     /// Vertices a Cholesky over `n` solves for: a floating one leaves one free.
@@ -89,17 +97,6 @@ impl Sheets {
             Self::One => 1,
             Self::Two => 2,
         }
-    }
-
-    /// `vertex`'s copy on `sheet`, among `m` vertices per sheet.
-    pub(crate) fn row(self, m: usize, vertex: usize, sheet: usize) -> usize {
-        debug_assert!(vertex < m && sheet < self.count());
-        sheet * m + vertex
-    }
-
-    /// The vertex a row copies.
-    pub(crate) fn vertex(self, m: usize, row: usize) -> usize {
-        row % m
     }
 
     /// `[x; −x]` into `rows`: the antisymmetric lift a cover solves on.

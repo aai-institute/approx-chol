@@ -1,4 +1,4 @@
-//! `A` as one reduced part `A_c = D · M · D` per connected component, decided once per input.
+//! `A` as one reduced part `M = F · A_c · F` per connected component, decided once per input.
 
 mod components;
 mod congruence;
@@ -18,14 +18,25 @@ pub use scaling::{ScalingPolicy, ScalingReport};
 
 use crate::input::{Csr, CsrError, Gram, Graph};
 use crate::laplacian::{Ground, Sddm, Sheets};
-use crate::storage::{CrossBlock, UpperAdjacency};
+use crate::storage::{CrossBlock, CrossTab, UpperAdjacency};
 use crate::Real;
 
-/// One component of `A`, reduced: `A_c = D · M · D` over its vertices, eliminated block first.
+/// One component of `A`, reduced: `M = F · A_c · F` over its vertices, eliminated block first.
 #[derive(Clone, Debug)]
 pub struct Part<T = f64> {
     frame: Arc<Frame<T>>,
     body: Body<T>,
+}
+
+impl<T: Real> Part<T> {
+    /// Panics unless the body has one row per vertex of the frame.
+    fn new(frame: Frame<T>, body: Body<T>) -> Self {
+        assert_eq!(body.n(), frame.vertices.len(), "one row per vertex");
+        Self {
+            frame: Arc::new(frame),
+            body,
+        }
+    }
 }
 
 impl<T> Part<T> {
@@ -51,6 +62,17 @@ pub(crate) struct Frame<T> {
     congruence: Congruence<T>,
 }
 
+impl<T: Real> Frame<T> {
+    /// Panics unless the congruence scales exactly these vertices.
+    fn new(vertices: Box<[u32]>, congruence: Congruence<T>) -> Self {
+        assert!(congruence.fits(vertices.len()), "one factor per vertex");
+        Self {
+            vertices,
+            congruence,
+        }
+    }
+}
+
 impl<T> Frame<T> {
     pub(crate) fn vertices(&self) -> &[u32] {
         &self.vertices
@@ -72,6 +94,16 @@ pub(crate) enum Body<T> {
     Bipartite(Bipartite<T>),
 }
 
+impl<T: Real> Body<T> {
+    fn n(&self) -> usize {
+        match self {
+            Self::Laplacian(sddm) => sddm.adjacency().n(),
+            Self::Signed(signed) => signed.adjacency.n(),
+            Self::Bipartite(bipartite) => bipartite.cross.n(),
+        }
+    }
+}
+
 /// A general SDD matrix no signature folds.
 #[derive(Clone, Debug)]
 pub(crate) struct SignedGeneral<T> {
@@ -88,18 +120,8 @@ pub(crate) struct Bipartite<T> {
 }
 
 impl<T: Real> Bipartite<T> {
-    /// Panics unless the surplus covers both blocks.
-    fn new(cross: Arc<CrossBlock<T>>, ground: Ground<T>, sheets: Sheets) -> Self {
-        let n = cross.n_eliminated() + cross.n_kept();
-        assert!(
-            ground.surplus().is_none_or(|s| s.len() == n),
-            "one surplus per vertex"
-        );
-        Self {
-            cross,
-            ground,
-            sheets,
-        }
+    pub(crate) fn n_eliminated(&self) -> usize {
+        self.cross.n_eliminated()
     }
 
     pub(crate) fn cross(&self) -> &Arc<CrossBlock<T>> {
@@ -150,7 +172,7 @@ impl<T: Real> Sgdd<T> {
             csr.n(),
             components,
             &policy,
-            Some(FloatingTest::RowFloor(csr)),
+            FloatingTest::RowFloor(csr),
         )?)
     }
 
@@ -161,21 +183,15 @@ impl<T: Real> Sgdd<T> {
     ) -> Result<Self, ReduceError> {
         let (left, right) = gram.diagonals();
         let columns = gram.columns();
-        let cross = columns.assemble(left.len(), right.len());
-        let partition = components::of_cross(&cross);
-        let components = (partition.components()).map(|vertices| {
-            Unreduced::of_cross(
-                &cross,
-                left.len(),
-                vertices,
-                CrossDiagonal::Given(left, right),
-            )
-        });
+        let tab = columns.assemble(left.len(), right.len());
+        let partition = components::of_cross(&tab);
+        let components = (partition.components())
+            .map(|vertices| Unreduced::of_cross(&tab, vertices, CrossDiagonal::Given(left, right)));
         Self::reduce(
             left.len() + right.len(),
             components,
             &policy,
-            Some(FloatingTest::Observations(columns)),
+            FloatingTest::Observations(columns),
         )
     }
 
@@ -184,7 +200,7 @@ impl<T: Real> Sgdd<T> {
         n: usize,
         components: impl Iterator<Item = Unreduced<T>>,
         policy: &ScalingPolicy,
-        test: Option<FloatingTest<'_, T, I>>,
+        test: FloatingTest<'_, T, I>,
     ) -> Result<Self, ReduceError> {
         let mut reduced = Vec::new();
         let mut report: Option<ScalingReport> = None;
@@ -201,13 +217,7 @@ impl<T: Real> Sgdd<T> {
             }
             reduced.push(part);
         }
-        let floating = match test {
-            Some(test) => test.floating(&reduced),
-            None => vec![false; reduced.len()],
-        };
-        let parts = (reduced.into_iter().zip(floating))
-            .map(|(part, floats)| part.into_part(floats))
-            .collect();
+        let parts = test.parts(reduced);
         Ok(Self { n, parts, report })
     }
 }
@@ -217,18 +227,16 @@ impl<'a, T: Real, I: PrimInt> TryFrom<Graph<'a, T, I>> for Sgdd<T> {
 
     /// A signless Laplacian has zero surplus by shape: every part floats untested.
     fn try_from(graph: Graph<'a, T, I>) -> Result<Self, Self::Error> {
-        let columns = graph.columns();
         let (n_left, n_right) = graph.sizes();
-        let cross = columns.assemble(n_left, n_right);
-        let partition = components::of_cross(&cross);
-        let components = (partition.components()).map(|vertices| {
-            Unreduced::of_cross(&cross, n_left, vertices, CrossDiagonal::Adjacency)
-        });
+        let tab = graph.columns().assemble(n_left, n_right);
+        let partition = components::of_cross(&tab);
+        let components = (partition.components())
+            .map(|vertices| Unreduced::of_cross(&tab, vertices, CrossDiagonal::Adjacency));
         Self::reduce::<I>(
             n_left + n_right,
             components,
             &ScalingPolicy::default(),
-            None,
+            FloatingTest::Signless,
         )
     }
 }
@@ -253,13 +261,8 @@ impl<T: Real> Unreduced<T> {
         todo!()
     }
 
-    /// `vertices` are left rows then right ones; the larger side is oriented first.
-    fn of_cross(
-        cross: &CrossBlock<T>,
-        n_left: usize,
-        vertices: &[u32],
-        diagonal: CrossDiagonal<'_, T>,
-    ) -> Self {
+    /// `vertices` are left rows then right ones; the component's larger side is oriented first.
+    fn of_cross(tab: &CrossTab<T>, vertices: &[u32], diagonal: CrossDiagonal<'_, T>) -> Self {
         todo!()
     }
 
@@ -277,7 +280,7 @@ impl<T: Real> Unreduced<T> {
         self.congruence(certificate, signature, policy)
     }
 
-    /// `D = signs · scales` folds and scales `A`; surplus is what dominance leaves, deficits clamped.
+    /// `F = signs · scales` folds and scales `A`; surplus is what dominance leaves, deficits clamped.
     fn congruence(
         self,
         certificate: scaling::Certificate<T>,
@@ -291,10 +294,8 @@ impl<T: Real> Unreduced<T> {
 /// A reduced component whose ground waits for the family's floating test.
 struct Reduced<T> {
     frame: Frame<T>,
-    edges: Edges<T>,
+    shape: Shape<T>,
     surplus: Vec<T>,
-    /// Two when no signature folded it.
-    sheets: Sheets,
 }
 
 impl<T: Real> Reduced<T> {
@@ -303,20 +304,36 @@ impl<T: Real> Reduced<T> {
             true => Ground::floating(),
             false => Ground::of(self.surplus),
         };
-        let body = match (self.edges, self.sheets) {
-            (Edges::General(adjacency), Sheets::One) => {
+        Part::new(self.frame, self.shape.with(ground))
+    }
+}
+
+/// `M`'s folded or signed off-diagonal, waiting for its ground.
+enum Shape<T> {
+    Laplacian(UpperAdjacency<T>),
+    Signed(UpperAdjacency<T>),
+    /// Two sheets when no signature folded it.
+    Bipartite(Arc<CrossBlock<T>>, Sheets),
+}
+
+impl<T: Real> Shape<T> {
+    /// Panics unless the ground has one surplus per vertex.
+    fn with(self, ground: Ground<T>) -> Body<T> {
+        let n = match &self {
+            Self::Laplacian(adjacency) | Self::Signed(adjacency) => adjacency.n(),
+            Self::Bipartite(cross, _) => cross.n(),
+        };
+        assert!(ground.fits(n), "one surplus per vertex");
+        match self {
+            Self::Laplacian(adjacency) => {
                 Body::Laplacian(Sddm::new(adjacency, ground, Sheets::One))
             }
-            (Edges::General(adjacency), Sheets::Two) => {
-                Body::Signed(SignedGeneral { adjacency, ground })
-            }
-            (Edges::Bipartite(cross), sheets) => {
-                Body::Bipartite(Bipartite::new(cross, ground, sheets))
-            }
-        };
-        Part {
-            frame: Arc::new(self.frame),
-            body,
+            Self::Signed(adjacency) => Body::Signed(SignedGeneral { adjacency, ground }),
+            Self::Bipartite(cross, sheets) => Body::Bipartite(Bipartite {
+                cross,
+                ground,
+                sheets,
+            }),
         }
     }
 }
@@ -329,18 +346,18 @@ enum CrossDiagonal<'a, T> {
     Given(&'a [T], &'a [T]),
 }
 
-/// Why a component has no SDDM form; `vertex` is its first vertex in `A`'s numbering.
+/// Why a component has no SDDM form; `vertex` is its first in local order, larger side first.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReduceError {
     /// No positive diagonal scaling makes the component weakly dominant.
     NotGdd {
-        /// First vertex of the component.
+        /// The component's first vertex in local order, in `A`'s numbering.
         vertex: u32,
     },
     /// A scale or a scaled entry left the finite range.
     Unscalable {
-        /// First vertex of the component.
+        /// The component's first vertex in local order, in `A`'s numbering.
         vertex: u32,
     },
 }

@@ -40,8 +40,8 @@ pub(crate) struct LowerTriangular<T> {
 }
 
 impl<T: Real> LowerTriangular<T> {
-    /// Assembles and factors in place; `vertex` names a failing row in `A`.
-    pub(crate) fn factor(sddm: &Sddm<T>, vertex: impl Fn(usize) -> u32) -> Result<Self, Fallback> {
+    /// Assembles and factors in place; `vertices` names the rows' copied vertices in `A`.
+    pub(crate) fn factor(sddm: &Sddm<T>, vertices: &[u32]) -> Result<Self, Fallback> {
         todo!()
     }
 

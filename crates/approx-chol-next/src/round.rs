@@ -51,7 +51,7 @@ impl<'a, T: Real> RoundBuilder<'a, T> {
         self.part.ground().eliminated(rows)
     }
 
-    /// The kept block's complement on the part's sheets; the stars share no edge, so they run in parallel.
+    /// The kept block's complement on the part's sheets, grounded iff the part is; stars run in parallel.
     pub(crate) fn schur(&self, rule: CliqueRule, streams: Streams) -> Sddm<T> {
         todo!()
     }

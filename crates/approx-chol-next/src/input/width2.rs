@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use num_traits::PrimInt;
 
-use crate::storage::CrossBlock;
+use crate::storage::CrossTab;
 use crate::Real;
 
 /// Why a view's `new` rejected its slices.
@@ -141,7 +141,7 @@ pub(crate) struct Columns<'a, T, I> {
 
 impl<T: Real, I: PrimInt> Columns<'_, T, I> {
     /// `C`, accumulated in a dense table when it is small: within measured +54% without it.
-    pub(crate) fn assemble(&self, n_left: usize, n_right: usize) -> CrossBlock<T> {
+    pub(crate) fn assemble(&self, n_left: usize, n_right: usize) -> CrossTab<T> {
         todo!()
     }
 }
