@@ -4,16 +4,16 @@ mod cdf;
 mod copies;
 mod star;
 
-pub(crate) use cdf::{Stream, Streams};
-pub(crate) use copies::{Copies, Multi, Single};
-pub(crate) use star::Star;
+pub(super) use cdf::{Stream, Streams};
+pub(super) use copies::{Copies, Multi, Single};
+pub(super) use star::Star;
 
 use crate::storage::Fill;
 use crate::Real;
 use cdf::CdfSampler;
 
 /// A pivot's elimination, reused across pivots; AC and AC2 differ only in `C`.
-pub(crate) struct CliqueSampler<T, C: Copies> {
+pub(super) struct CliqueSampler<T, C: Copies> {
     star: Star<T, C>,
     draws: CdfSampler<T>,
     column: Column<T>,
@@ -22,17 +22,17 @@ pub(crate) struct CliqueSampler<T, C: Copies> {
 
 impl<T: Real, C: Copies> CliqueSampler<T, C> {
     /// `split` caps every merge, so one sampler cannot mix two.
-    pub(crate) fn new(stream: Stream, split: C::Split) -> Self {
+    pub(super) fn new(stream: Stream, split: C::Split) -> Self {
         todo!()
     }
 
     /// Draws from `stream` next, so a star's tree does not depend on which task sampled it.
-    pub(crate) fn restart(&mut self, stream: Stream) {
+    pub(super) fn restart(&mut self, stream: Stream) {
         todo!()
     }
 
     /// Merges `neighbors`, samples their clique tree into `fill` as `w_i (S_{>i} / d)`, and returns the pivot.
-    pub(crate) fn eliminate(
+    pub(super) fn eliminate(
         &mut self,
         neighbors: impl Iterator<Item = (u32, C, T)>,
         fill: &mut Fill<T>,
@@ -41,17 +41,17 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
     }
 
     /// The last pivot's star.
-    pub(crate) fn star(&self) -> &Star<T, C> {
+    pub(super) fn star(&self) -> &Star<T, C> {
         &self.star
     }
 
-    pub(crate) fn column(&self) -> &Column<T> {
+    pub(super) fn column(&self) -> &Column<T> {
         &self.column
     }
 }
 
 /// One column of the factor: shares of the original pivot, the remainder named, not weighted.
-pub(crate) struct Column<T> {
+pub(super) struct Column<T> {
     shares: Vec<(u32, T)>,
     /// `None` keeps the whole pivot: an empty star hands nothing on.
     remainder: Option<u32>,
@@ -59,7 +59,7 @@ pub(crate) struct Column<T> {
 
 impl<T: Real> Column<T> {
     /// The shares and the neighbor that absorbs what they leave; nothing for an empty star.
-    pub(crate) fn shares(&self) -> Option<(&[(u32, T)], u32)> {
+    pub(super) fn shares(&self) -> Option<(&[(u32, T)], u32)> {
         Some((&self.shares, self.remainder?))
     }
 }

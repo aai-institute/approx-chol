@@ -1,4 +1,4 @@
-use crate::clique_tree::Column;
+use crate::factor::clique_tree::Column;
 use crate::Real;
 
 /// A step's neighbors start at the previous step's `end`, so no second array can disagree on count.
@@ -43,7 +43,7 @@ impl<T: Real> Steps<T> {
 
 /// `LDLᵀ` with sampled columns: a serial recurrence, so shares are composed against the original pivot.
 #[derive(Clone, Debug)]
-pub(crate) struct SampledCholesky<T> {
+pub(in crate::factor::remainder) struct SampledCholesky<T> {
     steps: Steps<T>,
     /// The one vertex no step eliminates, so nothing divides its entry by a pivot.
     uneliminated: u32,
@@ -51,7 +51,7 @@ pub(crate) struct SampledCholesky<T> {
 
 impl<T: Real> SampledCholesky<T> {
     /// Forward, zero the uneliminated entry, backward; the gather dispatches `[]`, `[_]`, lanes by row length.
-    pub(crate) fn substitute(&self, y: &mut [T]) {
+    pub(in crate::factor::remainder) fn substitute(&self, y: &mut [T]) {
         todo!()
     }
 }

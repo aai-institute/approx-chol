@@ -4,18 +4,18 @@ mod cholesky;
 mod graph;
 mod ordering;
 
-pub(crate) use cholesky::SampledCholesky;
+pub(super) use cholesky::SampledCholesky;
 
-use crate::clique_tree::{CliqueSampler, Copies, Multi, Single, Streams};
-use crate::config::Multiplicity;
-use crate::sddm::Sddm;
+use crate::factor::clique_tree::{CliqueSampler, Copies, Multi, Single, Streams};
+use crate::factor::config::Multiplicity;
+use crate::factor::sddm::Sddm;
 use crate::storage::Fill;
 use crate::Real;
 use cholesky::Steps;
 use graph::EliminationGraph;
 use ordering::DynamicOrdering;
 
-pub(crate) fn eliminate<T: Real>(
+pub(super) fn eliminate<T: Real>(
     sddm: Sddm<'_, T>,
     multiplicity: Multiplicity,
     streams: Streams,

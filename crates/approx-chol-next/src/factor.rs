@@ -1,18 +1,25 @@
 //! Routes each part to its eliminations, and applies `A_c⁺ ≈ P F · Round · Rem⁺ · Round' · F P`, `P` projecting out `F·1`.
 
+mod clique_tree;
+mod config;
 mod remainder;
+mod round;
+mod sddm;
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use rayon::prelude::*;
 
-use crate::clique_tree::Streams;
-use crate::config::{CliqueRule, Config, InnerParallelism, OnDenseFailure};
-use crate::dense::{Fallback, PivotDefect, UnusablePivot};
-use crate::round::{Round, RoundBuilder};
-use crate::sgdd::{Elimination, Frame, Part, Sgdd};
+pub use config::{CliqueRule, Config, InnerParallelism, Multiplicity, OnDenseFailure, SplitFactor};
+pub use remainder::{Fallback, PivotDefect, UnusablePivot};
+
+use crate::sgdd::{Balance, Frame, OffDiagonal, Part, Sgdd};
 use crate::Real;
+use clique_tree::Streams;
 use remainder::SddmFactor;
+use round::{Round, RoundBuilder};
+use sddm::{Sddm, Sheets};
 
 /// Why [`factorize`](crate::factorize) failed.
 #[non_exhaustive]
@@ -149,7 +156,7 @@ impl<T: Real> PartFactor<T> {
         let frame = part.frame();
         let vertices = frame.vertices();
         let streams = Streams::new(config.seed, vertices[0]);
-        let (round, (remainder, fallback)) = match part.elimination() {
+        let (round, (remainder, fallback)) = match Elimination::of(part) {
             Elimination::Whole(sddm) => {
                 let dense = |sddm: &_| SddmFactor::dense(sddm, vertices);
                 let sampled = |sddm| SddmFactor::sampled(sddm, config.remainder, streams);
@@ -236,6 +243,36 @@ impl<T: Real> PartFactor<T> {
             congruence.project_out_null(x);
         }
         Ok(())
+    }
+}
+
+/// How a part's factorization starts.
+enum Elimination<'a, T: Real> {
+    /// The remainder is this matrix whole.
+    Whole(Sddm<'a, T>),
+    /// A round eliminates the leading block, and the remainder is its complement.
+    Round(RoundBuilder<'a, T>),
+}
+
+impl<'a, T: Real> Elimination<'a, T> {
+    /// What the remainder factors: `M` itself, its cover, or a round's complement.
+    fn of(part: &'a Part<T>) -> Self {
+        match part.m() {
+            (OffDiagonal::General(adjacency), Balance::Balanced(grounding)) => {
+                let sddm = Sddm::new(
+                    Cow::Borrowed(adjacency),
+                    Cow::Borrowed(grounding),
+                    Sheets::One,
+                );
+                Self::Whole(sddm)
+            }
+            (OffDiagonal::General(adjacency), Balance::Frustrated(grounding)) => {
+                Self::Whole(Sddm::cover(adjacency, grounding))
+            }
+            (OffDiagonal::Bipartite(cross), balance) => {
+                Self::Round(RoundBuilder::new(cross, balance))
+            }
+        }
     }
 }
 

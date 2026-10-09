@@ -15,7 +15,7 @@ pub struct Config {
 
 impl Config {
     /// The one routing rule: a remainder of this rank goes dense.
-    pub(crate) fn routes_dense(&self, rank: usize) -> bool {
+    pub(super) fn routes_dense(&self, rank: usize) -> bool {
         (1..=self.dense_up_to).contains(&rank)
     }
 }

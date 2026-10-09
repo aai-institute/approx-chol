@@ -6,7 +6,6 @@ mod decomposition;
 mod scaling;
 mod signature;
 
-use std::borrow::Cow;
 use std::sync::Arc;
 
 use num_traits::PrimInt;
@@ -16,8 +15,6 @@ use decomposition::Decomposition;
 pub use scaling::{ScalingPolicy, ScalingReport};
 
 use crate::input::{Csr, CsrError, Gram, Graph};
-use crate::round::RoundBuilder;
-use crate::sddm::{Grounding, Sddm, Sheets};
 use crate::storage::{CrossBlock, UpperAdjacency};
 use crate::Real;
 
@@ -60,33 +57,10 @@ impl<T: Real> Part<T> {
         matches!(&self.m.balance, Balance::Balanced(grounding) if !grounding.is_grounded())
     }
 
-    /// What the remainder factors: `M` itself, its cover, or a round's complement.
-    pub(crate) fn elimination(&self) -> Elimination<'_, T> {
-        match (&self.m.off_diagonal, &self.m.balance) {
-            (OffDiagonal::General(adjacency), Balance::Balanced(grounding)) => {
-                let sddm = Sddm::new(
-                    Cow::Borrowed(adjacency),
-                    Cow::Borrowed(grounding),
-                    Sheets::One,
-                );
-                Elimination::Whole(sddm)
-            }
-            (OffDiagonal::General(adjacency), Balance::Frustrated(grounding)) => {
-                Elimination::Whole(Sddm::cover(adjacency, grounding))
-            }
-            (OffDiagonal::Bipartite(cross), balance) => {
-                Elimination::Round(RoundBuilder::new(cross, balance))
-            }
-        }
+    /// `M`: its off-diagonal and its balance.
+    pub(crate) fn m(&self) -> (&OffDiagonal<T>, &Balance<T>) {
+        (&self.m.off_diagonal, &self.m.balance)
     }
-}
-
-/// How a part's factorization starts.
-pub(crate) enum Elimination<'a, T: Real> {
-    /// The remainder is this matrix whole.
-    Whole(Sddm<'a, T>),
-    /// A round eliminates the leading block, and the remainder is its complement.
-    Round(RoundBuilder<'a, T>),
 }
 
 /// Where a part sits in `A`: its vertices, and the congruence between `A_c` and `M`.
@@ -162,13 +136,6 @@ pub(crate) enum Balance<T> {
 }
 
 impl<T: Real> Balance<T> {
-    pub(crate) fn sheets(&self) -> Sheets {
-        match self {
-            Self::Balanced(_) => Sheets::One,
-            Self::Frustrated(_) => Sheets::Two,
-        }
-    }
-
     pub(crate) fn grounding(&self) -> &Grounding<T> {
         match self {
             Self::Balanced(grounding) | Self::Frustrated(grounding) => grounding,
@@ -176,9 +143,58 @@ impl<T: Real> Balance<T> {
     }
 }
 
+/// What closes `L` into an SDDM: a surplus with a positive total, or none, leaving it singular.
+#[derive(Clone, Debug)]
+pub(crate) struct Grounding<T>(Option<Surplus<T>>);
+
+impl<T: Real> Grounding<T> {
+    /// Floats exactly when nothing grounds: an all-zero surplus.
+    pub(crate) fn of(surplus: Surplus<T>) -> Self {
+        Self(surplus.grounds().then_some(surplus))
+    }
+
+    /// A proven alias: one vertex anchors instead, whatever surplus rounding left.
+    fn floating() -> Self {
+        Self(None)
+    }
+
+    pub(crate) fn surplus(&self) -> Option<&Surplus<T>> {
+        self.0.as_ref()
+    }
+
+    pub(crate) fn is_grounded(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// Whether it grounds exactly `n` rows.
+    pub(crate) fn fits(&self, n: usize) -> bool {
+        self.0.as_ref().is_none_or(|surplus| surplus.0.len() == n)
+    }
+}
+
+/// `s = diag(M) − Σ|offdiag|`, finite and nonnegative.
+#[derive(Clone, Debug)]
+pub(crate) struct Surplus<T>(Box<[T]>);
+
+impl<T: Real> Surplus<T> {
+    /// Panics on a negative or non-finite entry.
+    pub(crate) fn new(values: Vec<T>) -> Self {
+        todo!()
+    }
+
+    pub(crate) fn values(&self) -> &[T] {
+        &self.0
+    }
+
+    /// Whether any entry is positive.
+    fn grounds(&self) -> bool {
+        self.0.iter().any(|&s| s > T::zero())
+    }
+}
+
 /// A component's off-diagonal by shape: `A_c`'s signed one, or `M`'s once congruent.
 #[derive(Clone, Debug)]
-enum OffDiagonal<T> {
+pub(crate) enum OffDiagonal<T> {
     General(UpperAdjacency<T>),
     /// Both sides nonempty, the larger eliminated first.
     Bipartite(Arc<CrossBlock<T>>),

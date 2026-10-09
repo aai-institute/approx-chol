@@ -7,22 +7,16 @@
     reason = "types-only skeleton; unfulfilled once the bodies land"
 )]
 
-mod clique_tree;
-mod config;
-mod dense;
 mod factor;
 pub mod input;
-mod min_degree;
-mod round;
-mod sddm;
 mod sgdd;
 mod storage;
 
 use num_traits::Float;
 
-pub use config::{CliqueRule, Config, InnerParallelism, Multiplicity, OnDenseFailure, SplitFactor};
-pub use dense::{Fallback, PivotDefect, UnusablePivot};
+pub use factor::{CliqueRule, Config, InnerParallelism, Multiplicity, OnDenseFailure, SplitFactor};
 pub use factor::{Factor, FactorError, PartFactor, SolveError};
+pub use factor::{Fallback, PivotDefect, UnusablePivot};
 pub use sgdd::{FromCsrError, Part, ReduceError, ScalingPolicy, ScalingReport, Sgdd};
 
 /// The scalar every stage computes in.

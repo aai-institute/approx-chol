@@ -1,9 +1,14 @@
-use crate::clique_tree::Streams;
-use crate::config::Multiplicity;
-use crate::dense::{DenseCholesky, Fallback};
-use crate::min_degree::{self, SampledCholesky};
-use crate::sddm::{Sddm, Sheets};
+mod dense;
+mod min_degree;
+
+pub use dense::{Fallback, PivotDefect, UnusablePivot};
+
+use super::clique_tree::Streams;
+use super::config::Multiplicity;
+use super::sddm::{Sddm, Sheets};
 use crate::Real;
+use dense::DenseCholesky;
+use min_degree::SampledCholesky;
 
 /// The factor of what the elimination leaves; it builds its own Cholesky, so its facts come from that matrix.
 #[derive(Clone, Debug)]

@@ -1,5 +1,5 @@
 use super::graph::EliminationGraph;
-use crate::clique_tree::{Copies, Star};
+use crate::factor::clique_tree::{Copies, Star};
 use crate::storage::Fill;
 use crate::Real;
 

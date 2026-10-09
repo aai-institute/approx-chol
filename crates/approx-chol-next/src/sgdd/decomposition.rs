@@ -46,11 +46,11 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
             left,
             right,
         };
-        Self::of_cross(columns.assemble()?, input)
+        Self::of_cross(assemble(&columns)?, input)
     }
 
     pub(super) fn signless(graph: Graph<'v, T, I>) -> Result<Self, ReduceError> {
-        Self::of_cross(graph.columns().assemble()?, Input::Signless)
+        Self::of_cross(assemble(&graph.columns())?, Input::Signless)
     }
 
     fn of_cross(c: Biadjacency<T>, input: Input<'v, T, I>) -> Result<Self, ReduceError> {
@@ -77,4 +77,11 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
             Input::Gram { .. } | Input::Csr(_) => todo!(),
         }
     }
+}
+
+/// `C`, accumulated in a dense table when it is small: within measured +54% without it.
+fn assemble<T: Real, I: PrimInt>(
+    columns: &Columns<'_, T, I>,
+) -> Result<Biadjacency<T>, ReduceError> {
+    todo!()
 }

@@ -1,8 +1,8 @@
-use crate::config::SplitFactor;
+use crate::factor::config::SplitFactor;
 use crate::Real;
 
 /// An edge's virtual copies; AC is AC2 at one copy per edge, so this trait is the whole difference.
-pub(crate) trait Copies: Copy + Send + Sync {
+pub(in crate::factor) trait Copies: Copy + Send + Sync {
     /// `Single` cannot name a `k`, making AC over split multi-edges a type error.
     type Split: Copy + Send + Sync;
 
@@ -22,11 +22,11 @@ pub(crate) trait Copies: Copy + Send + Sync {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct Single;
+pub(in crate::factor) struct Single;
 
 /// Virtual copy count, only ever lowered from a [`SplitFactor`] by the merge cap.
 #[derive(Clone, Copy)]
-pub(crate) struct Multi(u32);
+pub(in crate::factor) struct Multi(u32);
 
 impl Copies for Single {
     type Split = ();

@@ -10,7 +10,7 @@ pub(super) struct StarEntry<T, C> {
 }
 
 /// A pivot's deduplicated neighborhood in clique-tree order, and what collapsing it cost each degree.
-pub(crate) struct Star<T, C> {
+pub(in crate::factor) struct Star<T, C> {
     entries: Vec<StarEntry<T, C>>,
     removed_copies: Vec<(u32, u32)>,
     /// Grown to `n` on first need: above 32 entries, dedup scatters instead of sorting 16-byte entries twice.
@@ -36,7 +36,7 @@ impl<T: Real, C: Copies> Star<T, C> {
     }
 
     /// Copies each neighbor lost: those to the pivot, and those merging or capping collapsed.
-    pub(crate) fn degree_losses(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
+    pub(in crate::factor) fn degree_losses(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
         let to_pivot = (self.entries.iter()).map(|entry| (entry.neighbor, entry.copies.get()));
         to_pivot.chain(self.removed_copies.iter().copied())
     }

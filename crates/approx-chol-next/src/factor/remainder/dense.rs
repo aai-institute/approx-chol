@@ -1,6 +1,6 @@
 //! Exact Cholesky of a small SDDM: the packed factor and the code that builds and applies it.
 
-use crate::sddm::Sddm;
+use crate::factor::sddm::Sddm;
 use crate::Real;
 
 /// What makes a dense pivot unusable.
@@ -37,13 +37,13 @@ pub enum Fallback {
 
 /// Packed lower triangle of `L` in `LLᵀ`, the free slot excluded: an upper one would double the factor.
 #[derive(Clone, Debug)]
-pub(crate) struct DenseCholesky<T> {
+pub(super) struct DenseCholesky<T> {
     values: Vec<T>,
 }
 
 impl<T: Real> DenseCholesky<T> {
     /// Assembles and factors in place; `vertices` names each base vertex in `A`.
-    pub(crate) fn factor(sddm: &Sddm<'_, T>, vertices: &[u32]) -> Result<Self, Fallback> {
+    pub(super) fn factor(sddm: &Sddm<'_, T>, vertices: &[u32]) -> Result<Self, Fallback> {
         todo!()
     }
 
@@ -52,7 +52,7 @@ impl<T: Real> DenseCholesky<T> {
     }
 
     /// Forward, backward, and the free last slot pinned to `0`.
-    pub(crate) fn substitute(&self, values: &mut [T]) {
+    pub(super) fn substitute(&self, values: &mut [T]) {
         todo!()
     }
 }

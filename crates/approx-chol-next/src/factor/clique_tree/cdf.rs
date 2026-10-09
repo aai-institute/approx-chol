@@ -31,25 +31,25 @@ impl<T: Real> CdfSampler<T> {
 
 /// One part's streams, keyed so no draw depends on thread scheduling or on how other parts routed.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Streams {
+pub(in crate::factor) struct Streams {
     seed: u64,
     part: u32,
 }
 
 impl Streams {
-    pub(crate) fn new(seed: u64, part: u32) -> Self {
+    pub(in crate::factor) fn new(seed: u64, part: u32) -> Self {
         Self { seed, part }
     }
 
-    pub(crate) fn remainder(self) -> Stream {
+    pub(in crate::factor) fn remainder(self) -> Stream {
         todo!()
     }
 
-    pub(crate) fn star(self, eliminated: usize) -> Stream {
+    pub(in crate::factor) fn star(self, eliminated: usize) -> Stream {
         todo!()
     }
 }
 
 /// One seeded draw sequence.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Stream(u64);
+pub(in crate::factor) struct Stream(u64);

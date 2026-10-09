@@ -4,8 +4,7 @@ use std::sync::OnceLock;
 
 use num_traits::PrimInt;
 
-use crate::storage::Biadjacency;
-use crate::{Real, ReduceError};
+use crate::Real;
 
 /// Why a view's `new` rejected its slices.
 #[non_exhaustive]
@@ -196,8 +195,7 @@ impl<T: Real, I: PrimInt> Columns<'_, T, I> {
         (0..self.left.len()).map(|k| -> Observation<T> { todo!() })
     }
 
-    /// `C`, accumulated in a dense table when it is small: within measured +54% without it.
-    pub(crate) fn assemble(&self) -> Result<Biadjacency<T>, ReduceError> {
-        todo!()
+    pub(crate) fn n_right(&self) -> usize {
+        self.n_right
     }
 }
