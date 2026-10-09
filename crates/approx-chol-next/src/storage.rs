@@ -4,6 +4,11 @@ use std::sync::OnceLock;
 
 use crate::Real;
 
+/// Finite, and zero or at least `MIN_POSITIVE/EPSILON`: the 8-bit margin keeps every product out of subnormals (#163).
+pub(crate) fn in_range<T: Real>(x: T) -> bool {
+    x.is_finite() && (x == T::zero() || x.abs() >= T::min_positive_value() / T::epsilon())
+}
+
 /// Fill edges `(lo, hi, weight)`, `lo < hi`, as an elimination emits them.
 pub(crate) type Fill<T> = Vec<(u32, u32, T)>;
 
@@ -39,7 +44,7 @@ impl<T: Real> Rows<T> {
         todo!()
     }
 
-    /// `x_ij ← r_i x_ij c_j`; `None` if an entry leaves the finite range.
+    /// `x_ij ← r_i x_ij c_j`; `None` if an entry leaves [`in_range`].
     fn scaled(self, r: &[T], c: &[T]) -> Option<Self> {
         todo!()
     }
@@ -52,7 +57,7 @@ pub(crate) struct UpperAdjacency<T> {
 }
 
 impl<T: Real> UpperAdjacency<T> {
-    /// Panics unless square with every column above its row.
+    /// Panics unless square with every column above its row and no stored zero.
     pub(crate) fn new(rows: Rows<T>) -> Self {
         todo!()
     }
@@ -80,7 +85,7 @@ impl<T: Real> UpperAdjacency<T> {
         self.rows.row(i)
     }
 
-    /// `F X F`; `None` if an entry leaves the finite range.
+    /// `F X F`; `None` if an entry leaves [`in_range`].
     pub(crate) fn scaled(self, f: &[T]) -> Option<Self> {
         let rows = self.rows.scaled(f, f)?;
         Some(Self { rows })
@@ -123,7 +128,7 @@ pub(crate) struct CrossBlock<T> {
 }
 
 impl<T: Real> CrossBlock<T> {
-    /// Panics unless both sides are nonempty: a lone vertex is no bipartite component.
+    /// Panics unless both sides are nonempty, with no stored zero: a lone vertex is no bipartite component.
     fn new(c: Rows<T>) -> Self {
         assert!(c.n_rows() > 0 && c.n_cols() > 0, "both sides hold a vertex");
         Self {
@@ -161,7 +166,7 @@ impl<T: Real> CrossBlock<T> {
         todo!()
     }
 
-    /// `F C F` over the block's local order, a fresh block so no stale `Cᵀ` survives; `None` on overflow.
+    /// `F C F` over the block's local order, a fresh block so no stale `Cᵀ` survives; `None` out of range.
     pub(crate) fn scaled(self, f: &[T]) -> Option<Self> {
         let (eliminated, kept) = f.split_at(self.n_eliminated());
         Some(Self::new(self.c.scaled(eliminated, kept)?))

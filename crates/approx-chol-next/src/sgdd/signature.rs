@@ -11,7 +11,7 @@ pub(super) enum Signature {
     Negated(Box<[bool]>),
 }
 
-/// `None` for a frustrated component: a negative cycle admits no signature.
+/// `None` for a frustrated component: a cycle with an odd number of positive entries admits no signature.
 pub(super) fn signature<T: Real>(off_diagonal: &OffDiagonal<T>) -> Option<Signature> {
     todo!()
 }

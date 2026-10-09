@@ -16,7 +16,7 @@ enum Kind<T> {
 }
 
 impl<T: Real> Congruence<T> {
-    /// `S R`, `S = I` for a frustrated `A_c`; unscaled signs stay unmaterialized, so an SDDM keeps `F = I`.
+    /// `S R`, `S = I` for a frustrated `A_c`; an SDDM keeps `F = I`, and only `NegateFrom` stays unmaterialized.
     pub(super) fn new(signature: Option<Signature>, scales: Option<Box<[T]>>) -> Self {
         todo!()
     }

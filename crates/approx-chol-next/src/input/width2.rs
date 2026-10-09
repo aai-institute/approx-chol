@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use num_traits::PrimInt;
 
 use crate::storage::Biadjacency;
-use crate::Real;
+use crate::{Real, ReduceError};
 
 /// Why a view's `new` rejected its slices.
 #[non_exhaustive]
@@ -23,6 +23,11 @@ pub enum ViewError {
         /// The vertex count that overflows.
         count: usize,
     },
+    /// A column names a row its side does not have.
+    IndexOutOfRange {
+        /// The offending column of `V`.
+        column: usize,
+    },
     /// A Gram's two sides read different `W` slices.
     WeightsDiffer,
 }
@@ -34,6 +39,7 @@ impl core::fmt::Display for ViewError {
                 write!(f, "view slice has length {found}, expected {expected}")
             }
             Self::TooLarge { count } => write!(f, "{count} vertices exceed a u32 index"),
+            Self::IndexOutOfRange { column } => write!(f, "column {column} names a missing row"),
             Self::WeightsDiffer => write!(f, "a Gram's sides read different weights"),
         }
     }
@@ -70,7 +76,7 @@ pub struct Graph<'a, T, I = u32> {
 }
 
 impl<'a, T: Real, I: PrimInt> Graph<'a, T, I> {
-    /// Column `k` joins `left[k] < n_left` and `right[k] < n_right` under `weights`, unchecked.
+    /// Column `k` joins `left[k] < n_left` and `right[k] < n_right` under `weights`; indices are checked.
     pub fn new(
         n_left: usize,
         n_right: usize,
@@ -97,7 +103,7 @@ pub struct Sides<'a, T, I = u32> {
 }
 
 impl<'a, T: Real, I: PrimInt> Sides<'a, T, I> {
-    /// `n` rows; side `c` loads column `k` with `loadings[c][k]`, `1` for `None`; rows unchecked.
+    /// `n` rows; side `c` loads column `k` with `loadings[c][k]`, `1` for `None`; rows are checked.
     pub fn new(
         n: usize,
         rows: &'a [I],
@@ -191,7 +197,7 @@ impl<T: Real, I: PrimInt> Columns<'_, T, I> {
     }
 
     /// `C`, accumulated in a dense table when it is small: within measured +54% without it.
-    pub(crate) fn assemble(&self) -> Biadjacency<T> {
+    pub(crate) fn assemble(&self) -> Result<Biadjacency<T>, ReduceError> {
         todo!()
     }
 }

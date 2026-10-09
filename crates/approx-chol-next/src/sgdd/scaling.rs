@@ -56,10 +56,10 @@ struct Relaxation<T> {
 /// Why no scaling exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum NotScalable {
-    /// `M(A)` is not PSD: no positive diagonal reaches dominance.
+    /// The comparison matrix `|diag| − |offdiag|` is not PSD: no positive diagonal reaches dominance.
     NotGdd,
-    /// A scale or a scaled entry left the finite range.
-    Overflow,
+    /// A scale or a scaled entry left [`in_range`](crate::storage::in_range).
+    OutOfRange,
 }
 
 /// SCI reads only row ratios, so it serves any pattern; the reduced CG needs the bipartite operator.

@@ -25,7 +25,7 @@ impl<'a, T, I: PrimInt> Csr<'a, T, I> {
         self.n
     }
 
-    /// Visits each nonzero off-diagonal `(i, j)`, `i < j`, checking every entry's mirror and finiteness.
+    /// Visits each nonzero off-diagonal `(i, j)`, `i < j`, checking every entry's mirror and range.
     pub(crate) fn walk(&self, edge: impl FnMut(usize, usize)) -> Result<(), CsrError>
     where
         T: crate::Real,
@@ -75,6 +75,11 @@ pub enum CsrError {
         /// The offending row.
         row: u32,
     },
+    /// An entry is nonzero below `MIN_POSITIVE/EPSILON`, where products turn subnormal.
+    TooSmall {
+        /// The offending row.
+        row: u32,
+    },
 }
 
 impl core::fmt::Display for CsrError {
@@ -87,6 +92,7 @@ impl core::fmt::Display for CsrError {
             Self::MalformedRow { row } => write!(f, "row {row} is out of range or unsorted"),
             Self::NotSymmetric { row } => write!(f, "row {row} has an entry with no equal mirror"),
             Self::NotFinite { row } => write!(f, "row {row} has a non-finite entry"),
+            Self::TooSmall { row } => write!(f, "row {row} has an entry too small to stay normal"),
         }
     }
 }

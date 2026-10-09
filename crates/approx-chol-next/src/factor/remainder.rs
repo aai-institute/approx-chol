@@ -56,7 +56,7 @@ impl<T: Real> SddmFactor<T> {
 enum Gauge<T> {
     /// The ground is the appended slot, right-hand side `−Σb`; every entry then shifts so it reads zero.
     Grounded(Cholesky<T>),
-    /// The free slot reads zero; the part's projection fixes the rest.
+    /// The free slot reads zero; the part's projection, or a cover's descent, removes the constant.
     Floating(Cholesky<T>),
 }
 

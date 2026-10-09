@@ -253,7 +253,7 @@ impl<T: Real> Sgdd<T> {
         gram: Gram<'_, '_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        Self::reduce(Decomposition::gram(gram), &policy)
+        Self::reduce(Decomposition::gram(gram)?, &policy)
     }
 
     /// Dead components produce no part; the floating test runs once, over the whole input.
@@ -270,7 +270,7 @@ impl<T: Real> Sgdd<T> {
             }
             parts.push(a.reduce(policy).map_err(|e| match e {
                 NotScalable::NotGdd => ReduceError::NotGdd { vertex },
-                NotScalable::Overflow => ReduceError::Unscalable { vertex },
+                NotScalable::OutOfRange => ReduceError::Unscalable { vertex },
             })?);
         }
         decomposition.float(&mut parts);
@@ -287,7 +287,7 @@ impl<'a, T: Real, I: PrimInt> TryFrom<Graph<'a, T, I>> for Sgdd<T> {
 
     /// A signless Laplacian has zero surplus by shape: every part floats untested.
     fn try_from(graph: Graph<'a, T, I>) -> Result<Self, Self::Error> {
-        Self::reduce(Decomposition::signless(graph), &ScalingPolicy::default())
+        Self::reduce(Decomposition::signless(graph)?, &ScalingPolicy::default())
     }
 }
 
@@ -330,9 +330,14 @@ pub enum ReduceError {
         /// The component's first vertex in local order, in `A`'s numbering.
         vertex: u32,
     },
-    /// A scale or a scaled entry left the finite range.
+    /// A scale or a scaled entry overflowed, or fell nonzero below `MIN_POSITIVE/EPSILON`.
     Unscalable {
         /// The component's first vertex in local order, in `A`'s numbering.
+        vertex: u32,
+    },
+    /// A view's assembled entry is nonzero below `MIN_POSITIVE/EPSILON`, where products turn subnormal.
+    TooSmall {
+        /// A vertex of the entry, in `A`'s numbering.
         vertex: u32,
     },
 }
@@ -346,8 +351,11 @@ impl core::fmt::Display for ReduceError {
             ),
             Self::Unscalable { vertex } => write!(
                 f,
-                "scaling the component of vertex {vertex} leaves the finite range"
+                "scaling the component of vertex {vertex} leaves the representable range"
             ),
+            Self::TooSmall { vertex } => {
+                write!(f, "an entry at vertex {vertex} is too small to stay normal")
+            }
         }
     }
 }

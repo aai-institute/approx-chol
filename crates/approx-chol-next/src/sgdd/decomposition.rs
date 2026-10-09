@@ -4,7 +4,7 @@ use super::components::{self, Partition};
 use super::{Component, Part};
 use crate::input::{Columns, Csr, CsrError, Gram, Graph};
 use crate::storage::Biadjacency;
-use crate::Real;
+use crate::{Real, ReduceError};
 
 /// One input split into components: what each looks like unreduced, and which parts provably float.
 pub(super) struct Decomposition<'v, T, I> {
@@ -36,12 +36,12 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         })
     }
 
-    pub(super) fn gram(gram: Gram<'v, 'v, T, I>) -> Self {
+    pub(super) fn gram(gram: Gram<'v, 'v, T, I>) -> Result<Self, ReduceError> {
         let (left, right) = gram.diagonals();
         let columns = gram.columns();
-        let c = columns.assemble();
+        let c = columns.assemble()?;
         let partition = components::of_cross(&c);
-        Self {
+        Ok(Self {
             input: Input::Gram {
                 columns,
                 c,
@@ -49,16 +49,16 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
                 right,
             },
             partition,
-        }
+        })
     }
 
-    pub(super) fn signless(graph: Graph<'v, T, I>) -> Self {
-        let c = graph.columns().assemble();
+    pub(super) fn signless(graph: Graph<'v, T, I>) -> Result<Self, ReduceError> {
+        let c = graph.columns().assemble()?;
         let partition = components::of_cross(&c);
-        Self {
+        Ok(Self {
             input: Input::Signless(c),
             partition,
-        }
+        })
     }
 
     pub(super) fn n(&self) -> usize {
