@@ -56,7 +56,7 @@ struct Relaxation<T> {
 /// Why no scaling exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum NotScalable {
-    /// The comparison matrix `|diag| − |offdiag|` is not PSD: no positive diagonal reaches dominance.
+    /// `diag − |offdiag|`, the diagonal signed, is not PSD: a nonpositive diagonal fails on its own.
     NotGdd,
     /// A scale or a scaled entry left [`in_range`](crate::storage::in_range).
     OutOfRange,
@@ -84,6 +84,7 @@ impl ScalingPolicy {
     }
 }
 
+/// `Σ_j |a_ij| ≤ a_ii` against the signed diagonal, so a negative one never passes.
 fn already_dominant<T: Real>(a: &Component<T>) -> bool {
     todo!()
 }

@@ -321,7 +321,7 @@ impl<T: Real> Component<T> {
     }
 }
 
-/// Why a component has no SDDM form; `vertex` is its first in local order, larger side first.
+/// Why a component has no SDDM form; each `vertex` is in `A`'s numbering.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReduceError {

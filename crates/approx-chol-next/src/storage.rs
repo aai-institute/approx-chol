@@ -44,7 +44,7 @@ impl<T: Real> Rows<T> {
         todo!()
     }
 
-    /// `x_ij ← r_i x_ij c_j`; `None` if an entry leaves [`in_range`].
+    /// `x_ij ← r_i x_ij c_j`; `None` if a product leaves [`in_range`] or reaches zero: no entry is stored zero.
     fn scaled(self, r: &[T], c: &[T]) -> Option<Self> {
         todo!()
     }
@@ -66,7 +66,7 @@ impl<T: Real> UpperAdjacency<T> {
         self.rows.n_rows()
     }
 
-    /// Orients each edge `lo < hi`, sorts, and sums duplicates: fill and covers emit them in any order.
+    /// Orients each edge `lo < hi`, sorts, sums duplicates, and drops a sum that underflowed to zero; signs kept.
     pub(crate) fn from_edges(n: usize, edges: impl IntoIterator<Item = (u32, u32, T)>) -> Self {
         todo!()
     }
@@ -87,8 +87,7 @@ impl<T: Real> UpperAdjacency<T> {
 
     /// `F X F`; `None` if an entry leaves [`in_range`].
     pub(crate) fn scaled(self, f: &[T]) -> Option<Self> {
-        let rows = self.rows.scaled(f, f)?;
-        Some(Self { rows })
+        Some(Self::new(self.rows.scaled(f, f)?))
     }
 }
 
@@ -131,6 +130,7 @@ impl<T: Real> CrossBlock<T> {
     /// Panics unless both sides are nonempty, with no stored zero: a lone vertex is no bipartite component.
     fn new(c: Rows<T>) -> Self {
         assert!(c.n_rows() > 0 && c.n_cols() > 0, "both sides hold a vertex");
+        assert!(!c.values.contains(&T::zero()), "no stored zero");
         Self {
             c,
             ct: OnceLock::new(),
