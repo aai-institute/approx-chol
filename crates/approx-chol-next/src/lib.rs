@@ -11,6 +11,7 @@ mod config;
 mod dense;
 mod factor;
 pub mod input;
+mod laplacian;
 mod min_degree;
 mod round;
 mod sampling;
@@ -19,9 +20,9 @@ mod storage;
 
 use num_traits::Float;
 
-pub use config::{CliqueRule, Config, ExactFailure, Multiplicity, SplitFactor};
-pub use dense::{DenseFailure, UnusablePivot};
-pub use factor::{ComponentFactor, Factor, FactorError, Fallback, InnerParallelism, SolveError};
+pub use config::{CliqueRule, Config, ExactFailure, InnerParallelism, Multiplicity, SplitFactor};
+pub use dense::{DenseFailure, Fallback, UnusablePivot};
+pub use factor::{ComponentFactor, Factor, FactorError, SolveError};
 pub use sgdd::{FromCsrError, Part, ReduceError, ScalingPolicy, ScalingReport, Sgdd};
 
 /// The scalar every stage computes in.

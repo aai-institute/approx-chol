@@ -1,10 +1,8 @@
 use super::multiplicity::EdgeCount;
 use super::star::Star;
 use crate::sampling::CdfSampler;
+use crate::storage::Fill;
 use crate::Real;
-
-/// Fill edges `(lo, hi, weight)`, `lo < hi`.
-pub(super) type Fill<T> = Vec<(u32, u32, T)>;
 
 /// One column of the factor: shares of the original pivot, the remainder named, not weighted.
 pub(super) struct Column<T> {

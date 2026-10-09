@@ -10,10 +10,11 @@ mod star;
 pub(crate) use sequence::Sequence;
 
 use crate::config::Multiplicity;
+use crate::laplacian::Sddm;
 use crate::sampling::Streams;
-use crate::sgdd::Sddm;
+use crate::storage::Fill;
 use crate::Real;
-use clique::{sample_column, Column, Fill};
+use clique::{sample_column, Column};
 use graph::EliminationGraph;
 use multiplicity::{EdgeCount, Multi, Single};
 use ordering::DynamicOrdering;
@@ -21,7 +22,7 @@ use sequence::SequenceBuilder;
 use star::Star;
 
 pub(crate) fn eliminate<T: Real>(
-    sddm: &Sddm<'_, T>,
+    sddm: &Sddm<T>,
     multiplicity: Multiplicity,
     streams: Streams,
 ) -> Sequence<T> {
@@ -32,11 +33,7 @@ pub(crate) fn eliminate<T: Real>(
 }
 
 /// One step short of `n`, leaving the vertex the solve zeroes.
-fn run<T: Real, C: EdgeCount>(
-    sddm: &Sddm<'_, T>,
-    streams: Streams,
-    split: C::Split,
-) -> Sequence<T> {
+fn run<T: Real, C: EdgeCount>(sddm: &Sddm<T>, streams: Streams, split: C::Split) -> Sequence<T> {
     let mut graph = EliminationGraph::<C, T>::of(sddm, split);
     let n = graph.n();
     let mut ordering = DynamicOrdering::new(&graph);

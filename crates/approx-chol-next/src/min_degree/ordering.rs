@@ -1,7 +1,7 @@
-use super::clique::Fill;
 use super::graph::EliminationGraph;
 use super::multiplicity::EdgeCount;
 use super::star::Star;
+use crate::storage::Fill;
 use crate::Real;
 
 /// Bucket queue over live degree estimates (Julia's `ApproxCholPQ`).

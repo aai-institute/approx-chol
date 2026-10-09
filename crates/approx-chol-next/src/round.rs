@@ -2,20 +2,12 @@
 
 use std::sync::Arc;
 
-use crate::config::CliqueRule;
+use crate::config::{CliqueRule, InnerParallelism};
+use crate::laplacian::Sddm;
 use crate::sampling::{CdfSampler, Streams};
-use crate::sgdd::{Ground, Sddm, Sheets};
-use crate::storage::CrossBlock;
+use crate::sgdd::Bipartite;
+use crate::storage::{CrossBlock, Fill};
 use crate::Real;
-
-/// Whether a solve may split its own work across threads; an outer parallel loop says no.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum InnerParallelism {
-    /// Large rounds split their rows.
-    Allow,
-    /// Everything runs on the calling thread.
-    Forbid,
-}
 
 /// Stored columns `C / d_k`, applied as two products because the block's steps commute.
 #[derive(Clone, Debug)]
@@ -41,29 +33,26 @@ impl<T: Real> Round<T> {
     }
 }
 
-/// A round before its stored form is taken, so one pivot vector serves the complement and the solve.
+/// A round before its stored form is taken, so one pivot vector serves every complement and the solve.
 pub(crate) struct RoundBuilder<'a, T> {
     round: Round<T>,
-    ground: &'a Ground<T>,
+    part: &'a Bipartite<T>,
 }
 
 impl<'a, T: Real> RoundBuilder<'a, T> {
     /// Pivots are `Σ|c_kj| + s_k`, the same on both sheets of a cover.
-    pub(crate) fn new(cross: &Arc<CrossBlock<T>>, ground: &'a Ground<T>) -> Self {
+    pub(crate) fn new(part: &'a Bipartite<T>) -> Self {
         todo!()
     }
 
-    pub(crate) fn n_kept(&self) -> usize {
-        self.round.cross.n_kept()
+    /// What a Cholesky of the complement solves for, known before it is built.
+    pub(crate) fn complement_eliminated(&self) -> usize {
+        let rows = self.part.sheets().count() * self.part.cross().n_kept();
+        self.part.ground().eliminated(rows)
     }
 
-    /// The kept block's complement; the stars share no edge, so they run in parallel.
-    pub(crate) fn schur(
-        &self,
-        sheets: Sheets,
-        rule: CliqueRule,
-        streams: Streams,
-    ) -> Sddm<'static, T> {
+    /// The kept block's complement on the part's sheets; the stars share no edge, so they run in parallel.
+    pub(crate) fn schur(&self, rule: CliqueRule, streams: Streams) -> Sddm<T> {
         todo!()
     }
 
@@ -71,9 +60,6 @@ impl<'a, T: Real> RoundBuilder<'a, T> {
         self.round
     }
 }
-
-/// Fill edges `(lo, hi, weight)`, `lo < hi`.
-type Fill<T> = Vec<(u32, u32, T)>;
 
 /// A clique tree over the star, the ground sampled as a final vertex.
 fn sample_tree<T: Real>(

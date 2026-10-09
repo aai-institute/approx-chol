@@ -1,32 +1,20 @@
 //! Routes each part to its eliminations, and stores and applies `A_c⁺ ≈ D · Round · Kept⁺ · Round' · D`.
 
-mod cover;
 mod kernel;
+
+use std::sync::Arc;
 
 use rayon::prelude::*;
 
-pub use crate::round::InnerParallelism;
-
-use crate::config::{CliqueRule, Config, ExactFailure};
-use crate::dense::{LowerTriangular, PivotFailure, UnusablePivot};
+use crate::config::{CliqueRule, Config, ExactFailure, InnerParallelism};
+use crate::dense::{Fallback, LowerTriangular};
+use crate::laplacian::Sddm;
 use crate::min_degree;
 use crate::round::{Round, RoundBuilder};
 use crate::sampling::Streams;
-use crate::sgdd::{Diagonal, Edges, NullVector, Part, Sddm, Sgdd, Sheets};
-use crate::Real;
-use kernel::{Cholesky, Kept, Kernel};
-
-/// A remainder routed dense and factored approximately instead: less accurate than asked.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Fallback {
-    /// The dense Cholesky reached an unusable pivot.
-    InvalidPivot(UnusablePivot),
-    /// The packed triangle does not fit in memory.
-    WillNotFit {
-        /// Rows of the declined remainder.
-        dim: usize,
-    },
-}
+use crate::sgdd::{Body, Frame, Part, Sgdd};
+use crate::{Real, UnusablePivot};
+use kernel::{Cholesky, Kept};
 
 /// Why [`factorize`](crate::factorize) failed.
 #[non_exhaustive]
@@ -136,46 +124,51 @@ impl<T: Real> Factor<T> {
 /// One part's factor over its vertices of `A`.
 #[derive(Clone, Debug)]
 pub struct ComponentFactor<T = f64> {
-    vertices: Box<[u32]>,
-    diagonal: Diagonal<T>,
+    frame: Arc<Frame<T>>,
     round: Option<Round<T>>,
     kept: Kept<T>,
 }
 
 impl<T: Real> ComponentFactor<T> {
-    /// The round runs on the signed matrix, so a frustrated part covers only what the kernel sees.
     fn build(part: &Part<T>, config: &Config) -> Result<(Self, Option<Fallback>), FactorError> {
-        let streams = Streams::new(config.seed, part.vertices()[0]);
-        let (matrix, sheets) = part.matrix().split();
-        let (round, (kernel, fallback)) = match matrix.edges() {
-            Edges::General(adjacency) => {
-                let sddm = match sheets {
-                    Sheets::One => Sddm::borrowed(adjacency, matrix.ground()),
-                    Sheets::Two => cover::cover(adjacency, matrix.ground()),
-                };
-                let name = |row| kernel_vertex(part.vertices(), 0, sheets, row);
-                let kernel = factor_kernel(sddm, config, streams, config.on_dense_failure, name)?;
-                (None, kernel)
+        let frame = part.frame();
+        let streams = Streams::new(config.seed, frame.vertices()[0]);
+        let (round, (kept, fallback)) = match part.body() {
+            Body::Laplacian(sddm) => {
+                let name = |row| frame.vertices()[row];
+                (
+                    None,
+                    factor_kernel(sddm, config, streams, config.on_dense_failure, name)?,
+                )
             }
-            Edges::Bipartite(cross) => {
-                let builder = RoundBuilder::new(cross, matrix.ground());
-                let name = |row| kernel_vertex(part.vertices(), cross.n_eliminated(), sheets, row);
-                let kernel = factor_complement(&builder, sheets, config, streams, name)?;
-                (Some(builder.finish()), kernel)
+            Body::Signed(signed) => {
+                let cover = signed.cover();
+                let m = frame.vertices().len();
+                let name = |row| frame.vertices()[cover.sheets().vertex(m, row)];
+                (
+                    None,
+                    factor_kernel(&cover, config, streams, config.on_dense_failure, name)?,
+                )
+            }
+            Body::Bipartite(bipartite) => {
+                let builder = RoundBuilder::new(bipartite);
+                let (offset, m) = (bipartite.cross().n_eliminated(), bipartite.cross().n_kept());
+                let name = |row| frame.vertices()[offset + bipartite.sheets().vertex(m, row)];
+                let kept = factor_complement(&builder, config, streams, name)?;
+                (Some(builder.finish()), kept)
             }
         };
         let factor = Self {
-            vertices: part.vertices().into(),
-            diagonal: part.diagonal().clone(),
+            frame: Arc::clone(frame),
             round,
-            kept: Kept { sheets, kernel },
+            kept,
         };
         Ok((factor, fallback))
     }
 
     /// The part's vertices in `A`'s numbering, in local order.
     pub fn vertices(&self) -> &[u32] {
-        &self.vertices
+        self.frame.vertices()
     }
 
     /// Scratch [`solve_local`](Self::solve_local) needs: the kernel's ground slot, a cover's sheets.
@@ -190,11 +183,9 @@ impl<T: Real> ComponentFactor<T> {
         scratch: &mut [T],
         inner: InnerParallelism,
     ) -> Result<(), SolveError> {
-        if x.len() != self.vertices.len() {
-            return Err(SolveError::LengthMismatch {
-                len: x.len(),
-                dim: self.vertices.len(),
-            });
+        let dim = self.vertices().len();
+        if x.len() != dim {
+            return Err(SolveError::LengthMismatch { len: x.len(), dim });
         }
         let needed = self.scratch_len();
         if scratch.len() < needed {
@@ -203,9 +194,12 @@ impl<T: Real> ComponentFactor<T> {
                 needed,
             });
         }
-        let gauge = self.gauge();
-        gauge.project(x);
-        self.diagonal.apply(x);
+        let congruence = self.frame.congruence();
+        let singular = self.kept.singular();
+        if singular {
+            congruence.project_null(x);
+        }
+        congruence.apply(x);
         match &self.round {
             None => self.kept.solve(x, scratch),
             Some(round) => {
@@ -215,90 +209,48 @@ impl<T: Real> ComponentFactor<T> {
                 round.backward(eliminated, kept, inner);
             }
         }
-        self.diagonal.apply(x);
-        gauge.project(x);
+        congruence.apply(x);
+        if singular {
+            congruence.project_null(x);
+        }
         Ok(())
     }
-
-    /// Derived, never stored: only a folded floating `M` leaves `A_c` singular.
-    fn gauge(&self) -> Gauge<'_, T> {
-        match &self.kept {
-            Kept {
-                sheets: Sheets::One,
-                kernel: Kernel::Floating(_),
-            } => Gauge::Singular(self.diagonal.null_vector()),
-            _ => Gauge::Definite,
-        }
-    }
-}
-
-/// How the solve normalizes `A_c`'s null space so it returns `A⁺b`.
-enum Gauge<'a, T> {
-    Definite,
-    Singular(NullVector<'a, T>),
-}
-
-impl<T: Real> Gauge<'_, T> {
-    fn project(&self, x: &mut [T]) {
-        if let Self::Singular(null) = self {
-            null.project(x);
-        }
-    }
-}
-
-/// A kernel row's vertex in `A`: past the round's block, folded across the cover's sheets.
-fn kernel_vertex(vertices: &[u32], n_eliminated: usize, sheets: Sheets, row: usize) -> u32 {
-    todo!()
 }
 
 /// A dense kernel spends nothing on sparsity, so it is handed the exact complement first.
 fn factor_complement<T: Real>(
     builder: &RoundBuilder<'_, T>,
-    sheets: Sheets,
     config: &Config,
     streams: Streams,
     name: impl Fn(usize) -> u32,
-) -> Result<(Kernel<T>, Option<Fallback>), FactorError> {
-    if (1..=config.dense_below).contains(&(builder.n_kept() * sheets.count())) {
-        let exact = builder.schur(sheets, CliqueRule::Exact, streams);
-        if let Ok(done) = factor_kernel(exact, config, streams, ExactFailure::Error, &name) {
+) -> Result<(Kept<T>, Option<Fallback>), FactorError> {
+    if config.routes_dense(builder.complement_eliminated()) {
+        let exact = builder.schur(CliqueRule::Exact, streams);
+        if let Ok(done) = factor_kernel(&exact, config, streams, ExactFailure::Error, &name) {
             return Ok(done);
         }
     }
-    let reduced = builder.schur(sheets, config.round, streams);
-    factor_kernel(reduced, config, streams, config.on_dense_failure, name)
+    let reduced = builder.schur(config.round, streams);
+    factor_kernel(&reduced, config, streams, config.on_dense_failure, name)
 }
 
 /// Routes first, so a remainder the dense arm claims never builds an elimination graph.
 fn factor_kernel<T: Real>(
-    sddm: Sddm<'_, T>,
+    sddm: &Sddm<T>,
     config: &Config,
     streams: Streams,
     on_failure: ExactFailure,
     name: impl Fn(usize) -> u32,
-) -> Result<(Kernel<T>, Option<Fallback>), FactorError> {
+) -> Result<(Kept<T>, Option<Fallback>), FactorError> {
     let mut fallback = None;
-    if (1..=config.dense_below).contains(&sddm.eliminated()) {
-        match LowerTriangular::factor(&sddm) {
-            Ok(lower) => return Ok((Kernel::new(sddm.ground(), Cholesky::Dense(lower)), None)),
-            Err(failure) => fallback = Some(accept(on_failure, named(failure, name))?),
+    if config.routes_dense(sddm.eliminated()) {
+        match LowerTriangular::factor(sddm, name) {
+            Ok(lower) => return Ok((Kept::new(sddm, Cholesky::Dense(lower)), None)),
+            Err(declined) => fallback = Some(accept(on_failure, declined)?),
         }
     }
-    let sequence = min_degree::eliminate(&sddm, config.kernel, streams);
-    Ok((
-        Kernel::new(sddm.ground(), Cholesky::Sequence(sequence)),
-        fallback,
-    ))
-}
-
-fn named(failure: PivotFailure, vertex: impl Fn(usize) -> u32) -> Fallback {
-    match failure {
-        PivotFailure::Invalid { row, failure } => Fallback::InvalidPivot(UnusablePivot {
-            vertex: vertex(row),
-            failure,
-        }),
-        PivotFailure::WillNotFit { dim } => Fallback::WillNotFit { dim },
-    }
+    let sequence = min_degree::eliminate(sddm, config.kernel, streams);
+    Ok((Kept::new(sddm, Cholesky::Sequence(sequence)), fallback))
 }
 
 /// Only a pivot can be fatal: a remainder that will not fit falls back whatever the policy.

@@ -1,150 +1,117 @@
 //! `A` as one reduced part `A_c = D · M · D` per connected component, decided once per input.
 
 mod components;
-mod diagonal;
+mod congruence;
+mod cover;
 mod floating;
-mod ground;
 mod scaling;
 mod signature;
 
-use std::borrow::Cow;
 use std::sync::Arc;
 
 use num_traits::PrimInt;
 
-pub(crate) use diagonal::{Diagonal, NullVector};
+pub(crate) use congruence::Congruence;
 use floating::FloatingTest;
-pub(crate) use ground::Ground;
 use scaling::NotScalable;
 pub use scaling::{ScalingPolicy, ScalingReport};
 
 use crate::input::{Csr, CsrError, Gram, Graph};
+use crate::laplacian::{Ground, Sddm, Sheets};
 use crate::storage::{CrossBlock, UpperAdjacency};
 use crate::Real;
-
-/// `M`'s off-diagonal by shape; a bipartite one names its leading block independent.
-#[derive(Clone, Debug)]
-pub(crate) enum Edges<T> {
-    General(UpperAdjacency<T>),
-    Bipartite(Arc<CrossBlock<T>>),
-}
-
-/// `M = L + diag(s)`: its off-diagonal and its surplus.
-#[derive(Clone, Debug)]
-pub(crate) struct Matrix<T> {
-    edges: Edges<T>,
-    ground: Ground<T>,
-}
-
-impl<T> Matrix<T> {
-    pub(crate) fn edges(&self) -> &Edges<T> {
-        &self.edges
-    }
-
-    pub(crate) fn ground(&self) -> &Ground<T> {
-        &self.ground
-    }
-}
-
-/// A part's `M`; only this module builds one, so a `Laplacian` has Laplacian weights by construction.
-#[derive(Clone, Debug)]
-pub(crate) enum Sdd<T> {
-    /// Folded to a Z-matrix.
-    Laplacian(Matrix<T>),
-    /// Frustrated: no signature folds it, so the kernel factors its Gremban cover.
-    Signed(Matrix<T>),
-}
-
-impl<T> Sdd<T> {
-    pub(crate) fn split(&self) -> (&Matrix<T>, Sheets) {
-        match self {
-            Self::Laplacian(matrix) => (matrix, Sheets::One),
-            Self::Signed(matrix) => (matrix, Sheets::Two),
-        }
-    }
-
-    /// A proven alias anchors one vertex instead, so its surplus is dropped.
-    fn float(&mut self) {
-        let (Self::Laplacian(matrix) | Self::Signed(matrix)) = self;
-        matrix.ground = Ground::Floating;
-    }
-}
-
-/// How many copies of the kept vertices the kernel factors: two for a Gremban cover.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Sheets {
-    One,
-    Two,
-}
-
-impl Sheets {
-    pub(crate) fn count(self) -> usize {
-        match self {
-            Self::One => 1,
-            Self::Two => 2,
-        }
-    }
-}
-
-/// The kernel's only input: Laplacian weights in general storage, borrowed when nothing reduced it.
-#[derive(Clone, Debug)]
-pub(crate) struct Sddm<'a, T: Clone> {
-    adjacency: Cow<'a, UpperAdjacency<T>>,
-    ground: Cow<'a, Ground<T>>,
-}
-
-impl<'a, T: Real> Sddm<'a, T> {
-    pub(crate) fn borrowed(adjacency: &'a UpperAdjacency<T>, ground: &'a Ground<T>) -> Self {
-        Self {
-            adjacency: Cow::Borrowed(adjacency),
-            ground: Cow::Borrowed(ground),
-        }
-    }
-
-    pub(crate) fn owned(adjacency: UpperAdjacency<T>, ground: Ground<T>) -> Self {
-        Self {
-            adjacency: Cow::Owned(adjacency),
-            ground: Cow::Owned(ground),
-        }
-    }
-
-    pub(crate) fn adjacency(&self) -> &UpperAdjacency<T> {
-        &self.adjacency
-    }
-
-    pub(crate) fn ground(&self) -> &Ground<T> {
-        &self.ground
-    }
-
-    /// Vertices a Cholesky solves for: all of a grounded one, all but one of a floating one.
-    pub(crate) fn eliminated(&self) -> usize {
-        match *self.ground {
-            Ground::Grounded(_) => self.adjacency.n(),
-            Ground::Floating => self.adjacency.n() - 1,
-        }
-    }
-}
 
 /// One component of `A`, reduced: `A_c = D · M · D` over its vertices, eliminated block first.
 #[derive(Clone, Debug)]
 pub struct Part<T = f64> {
-    vertices: Box<[u32]>,
-    diagonal: Diagonal<T>,
-    matrix: Sdd<T>,
+    frame: Arc<Frame<T>>,
+    body: Body<T>,
 }
 
 impl<T> Part<T> {
     /// The part's vertices in `A`'s numbering, in local order.
     pub fn vertices(&self) -> &[u32] {
+        &self.frame.vertices
+    }
+
+    /// Shared with every factor of this part.
+    pub(crate) fn frame(&self) -> &Arc<Frame<T>> {
+        &self.frame
+    }
+
+    pub(crate) fn body(&self) -> &Body<T> {
+        &self.body
+    }
+}
+
+/// Where a part sits in `A`: its vertices, and the congruence between `A_c` and `M`.
+#[derive(Debug)]
+pub(crate) struct Frame<T> {
+    vertices: Box<[u32]>,
+    congruence: Congruence<T>,
+}
+
+impl<T> Frame<T> {
+    pub(crate) fn vertices(&self) -> &[u32] {
         &self.vertices
     }
 
-    pub(crate) fn diagonal(&self) -> &Diagonal<T> {
-        &self.diagonal
+    pub(crate) fn congruence(&self) -> &Congruence<T> {
+        &self.congruence
+    }
+}
+
+/// `M`, by what its factorization does with it; each payload states its own invariant.
+#[derive(Clone, Debug)]
+pub(crate) enum Body<T> {
+    /// Folded to a Z-matrix: the kernel's input as it stands.
+    Laplacian(Sddm<T>),
+    /// Frustrated, with no independent block: the kernel factors its cover.
+    Signed(SignedGeneral<T>),
+    /// A leading independent block, eliminated as one round before the kernel.
+    Bipartite(Bipartite<T>),
+}
+
+/// A general SDD matrix no signature folds.
+#[derive(Clone, Debug)]
+pub(crate) struct SignedGeneral<T> {
+    adjacency: UpperAdjacency<T>,
+    ground: Ground<T>,
+}
+
+/// `[D₁ C; Cᵀ D₂]`, signed when frustrated, which its kernel then sees on two sheets.
+#[derive(Clone, Debug)]
+pub(crate) struct Bipartite<T> {
+    cross: Arc<CrossBlock<T>>,
+    ground: Ground<T>,
+    sheets: Sheets,
+}
+
+impl<T: Real> Bipartite<T> {
+    /// Panics unless the surplus covers both blocks.
+    fn new(cross: Arc<CrossBlock<T>>, ground: Ground<T>, sheets: Sheets) -> Self {
+        let n = cross.n_eliminated() + cross.n_kept();
+        assert!(
+            ground.surplus().is_none_or(|s| s.len() == n),
+            "one surplus per vertex"
+        );
+        Self {
+            cross,
+            ground,
+            sheets,
+        }
     }
 
-    pub(crate) fn matrix(&self) -> &Sdd<T> {
-        &self.matrix
+    pub(crate) fn cross(&self) -> &Arc<CrossBlock<T>> {
+        &self.cross
+    }
+
+    pub(crate) fn ground(&self) -> &Ground<T> {
+        &self.ground
+    }
+
+    pub(crate) fn sheets(&self) -> Sheets {
+        self.sheets
     }
 }
 
@@ -212,14 +179,14 @@ impl<T: Real> Sgdd<T> {
         )
     }
 
-    /// Dead components produce no part; the floating test runs once, over every part.
+    /// Dead components produce no part; the floating test runs once, over the whole family.
     fn reduce<I: PrimInt>(
         n: usize,
         components: impl Iterator<Item = Unreduced<T>>,
         policy: &ScalingPolicy,
         test: Option<FloatingTest<'_, T, I>>,
     ) -> Result<Self, ReduceError> {
-        let mut parts = Vec::new();
+        let mut reduced = Vec::new();
         let mut report: Option<ScalingReport> = None;
         for a in components.filter(|a| !a.is_dead()) {
             let vertex = a.vertices[0];
@@ -232,14 +199,15 @@ impl<T: Real> Sgdd<T> {
                     report = Some(found);
                 }
             }
-            parts.push(part);
+            reduced.push(part);
         }
-        if let Some(test) = test {
-            let floating = test.floating(&parts);
-            for (part, _) in parts.iter_mut().zip(floating).filter(|(_, f)| *f) {
-                part.matrix.float();
-            }
-        }
+        let floating = match test {
+            Some(test) => test.floating(&reduced),
+            None => vec![false; reduced.len()],
+        };
+        let parts = (reduced.into_iter().zip(floating))
+            .map(|(part, floats)| part.into_part(floats))
+            .collect();
         Ok(Self { n, parts, report })
     }
 }
@@ -263,6 +231,12 @@ impl<'a, T: Real, I: PrimInt> TryFrom<Graph<'a, T, I>> for Sgdd<T> {
             None,
         )
     }
+}
+
+/// `A`'s off-diagonal by shape, before the body decides what it means.
+enum Edges<T> {
+    General(UpperAdjacency<T>),
+    Bipartite(Arc<CrossBlock<T>>),
 }
 
 /// One component of `A` as the input gave it: signed, unscaled, in the input's shape.
@@ -294,11 +268,10 @@ impl<T: Real> Unreduced<T> {
         todo!()
     }
 
-    /// Grounded wherever surplus remains; the family's floating test drops what it proves aliased.
     fn reduce(
         self,
         policy: &ScalingPolicy,
-    ) -> Result<(Part<T>, Option<ScalingReport>), NotScalable> {
+    ) -> Result<(Reduced<T>, Option<ScalingReport>), NotScalable> {
         let certificate = scaling::dominance_scaling(&self, policy)?;
         let signature = signature::signature(&self.edges);
         self.congruence(certificate, signature, policy)
@@ -310,8 +283,41 @@ impl<T: Real> Unreduced<T> {
         certificate: scaling::Certificate<T>,
         signature: signature::Signature,
         policy: &ScalingPolicy,
-    ) -> Result<(Part<T>, Option<ScalingReport>), NotScalable> {
+    ) -> Result<(Reduced<T>, Option<ScalingReport>), NotScalable> {
         todo!()
+    }
+}
+
+/// A reduced component whose ground waits for the family's floating test.
+struct Reduced<T> {
+    frame: Frame<T>,
+    edges: Edges<T>,
+    surplus: Vec<T>,
+    /// Two when no signature folded it.
+    sheets: Sheets,
+}
+
+impl<T: Real> Reduced<T> {
+    fn into_part(self, floats: bool) -> Part<T> {
+        let ground = match floats {
+            true => Ground::floating(),
+            false => Ground::of(self.surplus),
+        };
+        let body = match (self.edges, self.sheets) {
+            (Edges::General(adjacency), Sheets::One) => {
+                Body::Laplacian(Sddm::new(adjacency, ground, Sheets::One))
+            }
+            (Edges::General(adjacency), Sheets::Two) => {
+                Body::Signed(SignedGeneral { adjacency, ground })
+            }
+            (Edges::Bipartite(cross), sheets) => {
+                Body::Bipartite(Bipartite::new(cross, ground, sheets))
+            }
+        };
+        Part {
+            frame: Arc::new(self.frame),
+            body,
+        }
     }
 }
 

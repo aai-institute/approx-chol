@@ -1,6 +1,6 @@
 use num_traits::PrimInt;
 
-use super::Part;
+use super::Reduced;
 use crate::input::{Columns, Csr};
 use crate::Real;
 
@@ -14,7 +14,7 @@ pub(super) enum FloatingTest<'v, T, I> {
 
 impl<T: Real, I: PrimInt> FloatingTest<'_, T, I> {
     /// One pass for the whole family, in `parts`' order.
-    pub(super) fn floating(&self, parts: &[Part<T>]) -> Vec<bool> {
+    pub(super) fn floating(&self, parts: &[Reduced<T>]) -> Vec<bool> {
         todo!()
     }
 }

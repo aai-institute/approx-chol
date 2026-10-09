@@ -1,45 +1,32 @@
 use crate::dense::LowerTriangular;
+use crate::laplacian::{Sddm, Sheets};
 use crate::min_degree::Sequence;
-use crate::sgdd::{Ground, Sheets};
 use crate::Real;
 
-/// What factors the kept vertices; on two sheets it solves `[b; −b]` and returns half their difference.
+/// The kept vertices' factor, and the two facts its solve reads off the matrix it was built from.
 #[derive(Clone, Debug)]
 pub(super) struct Kept<T> {
-    pub(super) sheets: Sheets,
-    pub(super) kernel: Kernel<T>,
+    sheets: Sheets,
+    grounded: bool,
+    cholesky: Cholesky<T>,
 }
 
 impl<T: Real> Kept<T> {
-    pub(super) fn solve(&self, x: &mut [T], scratch: &mut [T]) {
-        todo!()
-    }
-}
-
-/// A Cholesky with one slot left free; the variant is how that slot is fixed.
-#[derive(Clone, Debug)]
-pub(super) enum Kernel<T> {
-    /// `L + diag(s)` as `L` plus a ground in the last slot, pinned to `0`.
-    Grounded(Cholesky<T>),
-    /// `L`, whose solution is the zero-mean one.
-    Floating(Cholesky<T>),
-}
-
-impl<T: Real> Kernel<T> {
-    pub(super) fn new(ground: &Ground<T>, cholesky: Cholesky<T>) -> Self {
-        match ground {
-            Ground::Grounded(_) => Self::Grounded(cholesky),
-            Ground::Floating => Self::Floating(cholesky),
+    pub(super) fn new(sddm: &Sddm<T>, cholesky: Cholesky<T>) -> Self {
+        Self {
+            sheets: sddm.sheets(),
+            grounded: sddm.ground().surplus().is_some(),
+            cholesky,
         }
     }
 
-    /// Input rows, then a grounded kernel's ground slot.
-    pub(super) fn slots(&self) -> usize {
-        todo!()
+    /// Only one floating sheet leaves `A_c` singular: a cover's null vector is off its range.
+    pub(super) fn singular(&self) -> bool {
+        self.sheets == Sheets::One && !self.grounded
     }
 
-    /// `slots` holds the right-hand side, then the solution.
-    pub(super) fn solve(&self, slots: &mut [T]) {
+    /// Lifts to the sheets, pins the ground or projects the mean, substitutes, and folds back.
+    pub(super) fn solve(&self, x: &mut [T], scratch: &mut [T]) {
         todo!()
     }
 }

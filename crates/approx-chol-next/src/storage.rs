@@ -2,6 +2,9 @@
 
 use std::sync::OnceLock;
 
+/// Fill edges `(lo, hi, weight)`, `lo < hi`, as an elimination emits them.
+pub(crate) type Fill<T> = Vec<(u32, u32, T)>;
+
 /// Compressed sparse rows.
 #[derive(Clone, Debug)]
 pub(crate) struct Rows<T> {

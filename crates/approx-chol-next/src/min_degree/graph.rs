@@ -1,5 +1,5 @@
 use super::multiplicity::EdgeCount;
-use crate::sgdd::Sddm;
+use crate::laplacian::Sddm;
 use crate::Real;
 
 /// One half of an edge; `mirror` indexes the other half in `to`'s list, so removal is O(1).
@@ -18,7 +18,7 @@ pub(super) struct EliminationGraph<C, T> {
 
 impl<C: EdgeCount, T: Real> EliminationGraph<C, T> {
     /// The ground is a vertex like any other: forcing it last measured +0-10% PCG iterations.
-    pub(super) fn of(sddm: &Sddm<'_, T>, split: C::Split) -> Self {
+    pub(super) fn of(sddm: &Sddm<T>, split: C::Split) -> Self {
         todo!()
     }
 

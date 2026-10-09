@@ -13,6 +13,13 @@ pub struct Config {
     pub on_dense_failure: ExactFailure,
 }
 
+impl Config {
+    /// The one routing rule: a Cholesky solving for this many vertices goes dense.
+    pub(crate) fn routes_dense(&self, eliminated: usize) -> bool {
+        (1..=self.dense_below).contains(&eliminated)
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -68,4 +75,13 @@ pub enum ExactFailure {
     FallBackToApproximate,
     /// Fail with [`FactorError::DenseFactorizationFailed`](crate::FactorError::DenseFactorizationFailed).
     Error,
+}
+
+/// Whether a solve may split its own work across threads; an outer parallel loop says no.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InnerParallelism {
+    /// Large rounds split their rows.
+    Allow,
+    /// Everything runs on the calling thread.
+    Forbid,
 }
