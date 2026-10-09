@@ -42,7 +42,7 @@ impl<T> Block<T> {
         }
     }
 
-    pub(crate) fn slots(&self) -> usize {
+    pub(super) fn slots(&self) -> usize {
         self.cholesky().eliminated() + 1
     }
 }
@@ -56,7 +56,7 @@ impl<T: num_traits::Float> Block<T> {
 
 impl<T: Real> Block<T> {
     /// `slots` holds the right-hand side, then the solution; a ground's input entry is unread.
-    pub(crate) fn solve(&self, slots: &mut [T]) {
+    pub(super) fn solve(&self, slots: &mut [T]) {
         let len = count_as_scalar::<T, _>(slots.len());
         match self {
             Self::Grounded(cholesky) => {

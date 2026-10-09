@@ -1,0 +1,347 @@
+//! Validated conversion from a signed bipartite Gram block to SDDM form.
+//!
+//! One signed diagonal coordinate map `S` makes `S A S` a Z-matrix and scales
+//! it to diagonal dominance. Surplus is retained as explicit ground-edge
+//! weight, so downstream reduction never has to infer rank or grounding from
+//! rounded diagonals. Plain components take a fast path: their Laplacian claim
+//! is validated and adopted without sign folding, scaling, or a data rewrite.
+//! Frustrated components — where no signature exists — keep their single
+//! *signed* matrix (dominance-scaled but not folded to a Z-matrix) and carry
+//! a [`MatrixForm::SignedPendingCover`] marker; the Gremban cover that makes the
+//! reduced Schur SDDM is built transiently at factor time (see
+//! [`super::super::block_elim`]), so the stored matrix stays single-sized.
+
+use crate::sgdd::cross_tab::CrossTab;
+use crate::sgdd::ScalingPolicy as ScalingConfig;
+
+mod scaling;
+mod sci;
+use scaling::dominance_scaling;
+
+/// Gauge of a reduced system: `Floating` anchors one node, `Grounded` factors the full complement.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Grounding {
+    #[default]
+    Floating,
+    Grounded,
+}
+
+/// Which form a component's signature left its matrix in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MatrixForm {
+    /// Folded to a Z-matrix: the minor reduces directly.
+    Laplacian,
+    /// Kept signed; a Gremban cover is built at factor time so the stored matrix never doubles.
+    SignedPendingCover,
+}
+
+/// Map between original and SDDM coordinates; `Canonical` negates the col block, not identity.
+#[derive(Clone, Debug, Default)]
+pub(crate) enum CoordinateMap {
+    #[default]
+    Canonical,
+    /// Diagonal congruence factors (sign · scale), leaving a frustrated component signed.
+    Scaled(Box<[f64]>),
+}
+
+impl CoordinateMap {
+    /// `values` spans the internal system, split at `n_eliminated`.
+    pub(crate) fn fold(&self, values: &mut [f64], n_eliminated: usize) {
+        match self {
+            CoordinateMap::Canonical => {
+                for value in &mut values[n_eliminated..] {
+                    *value = -*value;
+                }
+            }
+            CoordinateMap::Scaled(factors) => {
+                debug_assert_eq!(values.len(), factors.len());
+                for (value, &factor) in values.iter_mut().zip(factors.iter()) {
+                    *value *= factor;
+                }
+            }
+        }
+    }
+
+    /// The diagonal maps are involutions up to scale, so they re-apply `fold`.
+    pub(crate) fn unfold(&self, values: &mut [f64], n_eliminated: usize) {
+        self.fold(values, n_eliminated);
+    }
+
+    pub(super) fn factor(&self, local: usize, n_eliminated: usize) -> f64 {
+        match self {
+            CoordinateMap::Canonical if local < n_eliminated => 1.0,
+            CoordinateMap::Canonical => -1.0,
+            CoordinateMap::Scaled(factors) => factors[local],
+        }
+    }
+}
+
+/// Orient so the larger block is eliminated; arrays arrive `[rows | cols]`, leave eliminated-major.
+pub(crate) fn orient_for_elimination(
+    cross_tab: CrossTab,
+    mut diagonal: Option<Vec<f64>>,
+    mut globals: Vec<u32>,
+) -> (CrossTab, Option<Vec<f64>>, Vec<u32>) {
+    debug_assert_eq!(globals.len(), cross_tab.n_local());
+    debug_assert!(diagonal
+        .as_ref()
+        .is_none_or(|d| d.len() == cross_tab.n_local()));
+    if cross_tab.n_cols() <= cross_tab.n_rows() {
+        return (cross_tab, diagonal, globals);
+    }
+    if let Some(diagonal) = &mut diagonal {
+        diagonal.rotate_left(cross_tab.n_rows());
+    }
+    globals.rotate_left(cross_tab.n_rows());
+    let (c, ct) = cross_tab.into_parts();
+    (CrossTab::with_transpose(ct, c), diagonal, globals)
+}
+
+/// Bipartite SDDM in eliminated-major form; arrays are flat, split at `n_eliminated`.
+#[derive(Clone, Debug)]
+pub(crate) struct SddmMatrix {
+    pub(crate) cross_tab: CrossTab,
+    pub(crate) diagonal: Vec<f64>,
+    pub(crate) ground_edges: Vec<f64>,
+    pub(crate) grounding: Grounding,
+}
+
+impl SddmMatrix {
+    pub(crate) fn n_eliminated(&self) -> usize {
+        self.cross_tab.n_rows()
+    }
+
+    pub(crate) fn n_kept(&self) -> usize {
+        self.cross_tab.n_cols()
+    }
+
+    pub(crate) fn diagonal_kept(&self) -> &[f64] {
+        &self.diagonal[self.n_eliminated()..]
+    }
+
+    pub(crate) fn surplus_eliminated(&self) -> &[f64] {
+        &self.ground_edges[..self.n_eliminated()]
+    }
+
+    pub(crate) fn surplus_kept(&self) -> &[f64] {
+        &self.ground_edges[self.n_eliminated()..]
+    }
+
+    /// A floating matrix anchors one node instead, so it drops its surplus.
+    pub(super) fn float(&mut self) {
+        self.diagonal = magnitude_sums(&self.cross_tab);
+        self.ground_edges.fill(0.0);
+        self.grounding = Grounding::Floating;
+    }
+}
+
+/// A connected component of a view's cross-tab, converted to SDDM form.
+#[derive(Clone, Debug)]
+pub(crate) struct LocalComponent {
+    pub(crate) matrix: SddmMatrix,
+    pub(crate) form: MatrixForm,
+    pub(crate) coordinates: CoordinateMap,
+}
+
+/// No diagonal scaling reaches weak dominance (Boman), so no SDDM form exists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct NotScalable;
+
+/// Evidence a dominance scaling exceeded tolerance or budget; its deficit was clamped.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct UncertifiedScaling {
+    pub(crate) iterations: usize,
+    pub(crate) violation: f64,
+}
+
+/// A Graph is a Laplacian by type, so its adjacency sums are its diagonal unchecked.
+pub(super) fn convert_known_laplacian(cross_tab: CrossTab) -> LocalComponent {
+    let row_sums = adjacency_sums(&cross_tab);
+    LocalComponent {
+        matrix: SddmMatrix {
+            ground_edges: vec![0.0; cross_tab.n_local()],
+            cross_tab,
+            diagonal: row_sums,
+            grounding: Grounding::Floating,
+        },
+        form: MatrixForm::Laplacian,
+        coordinates: CoordinateMap::default(),
+    }
+}
+
+/// Converts as `Grounded`; the caller floats the component once its observations prove an alias.
+pub(super) fn convert_general(
+    cross_tab: CrossTab,
+    diagonal: Vec<f64>,
+    scaling: &ScalingConfig,
+) -> Result<(LocalComponent, Option<UncertifiedScaling>), NotScalable> {
+    let signs = folding_signs(&cross_tab);
+    let relaxation = dominance_scaling(&cross_tab, &diagonal, scaling)?;
+    let (component, clamped_deficit) = match signs {
+        Some(signs) => {
+            let factors: Vec<f64> = signs
+                .iter()
+                .zip(relaxation.scales.iter())
+                .map(|(&sign, &scale)| sign * scale)
+                .collect();
+            assemble(cross_tab, diagonal, factors, MatrixForm::Laplacian, scaling)?
+        }
+        None => {
+            let n_rows = cross_tab.n_rows();
+            let mut factors = relaxation.scales;
+            for factor in &mut factors[n_rows..] {
+                *factor = -*factor;
+            }
+            assemble(
+                cross_tab,
+                diagonal,
+                factors,
+                MatrixForm::SignedPendingCover,
+                scaling,
+            )?
+        }
+    };
+    let violation = relaxation.violation.max(clamped_deficit);
+    let uncertified = (violation > scaling.tolerance).then_some(UncertifiedScaling {
+        iterations: relaxation.iterations,
+        violation,
+    });
+    Ok((component, uncertified))
+}
+
+/// A [`MatrixForm::Laplacian`] must fold to a Z-matrix, so a positive off-diagonal is an error.
+fn assemble(
+    cross_tab: CrossTab,
+    diagonal: Vec<f64>,
+    factors: Vec<f64>,
+    form: MatrixForm,
+    scaling: &ScalingConfig,
+) -> Result<(LocalComponent, f64), NotScalable> {
+    let n_rows = cross_tab.n_rows();
+    let enforce_z = form == MatrixForm::Laplacian;
+    // The transpose is stale once `c` is folded; `_` drops it here, `..` would keep it to the end.
+    let (mut c, _) = cross_tab.into_parts();
+    for i in 0..n_rows {
+        let start = c.indptr[i] as usize;
+        let end = c.indptr[i + 1] as usize;
+        let columns = &c.indices[start..end];
+        for (&j, value) in columns.iter().zip(&mut c.data[start..end]) {
+            let folded = -factors[i] * factors[n_rows + j as usize] * *value;
+            if !folded.is_finite() || (enforce_z && folded < 0.0) {
+                return Err(NotScalable);
+            }
+            *value = folded;
+        }
+    }
+    let cross_tab = CrossTab::eager(c);
+
+    let scaled_diagonal: Vec<f64> = diagonal
+        .iter()
+        .zip(factors.iter())
+        .map(|(&entry, &factor)| entry * factor * factor)
+        .collect();
+
+    // Canonical bipartite factors need no stored map: `fold` applies that sign flip by default.
+    let canonical = factors
+        .iter()
+        .enumerate()
+        .all(|(i, &factor)| factor == if i < n_rows { 1.0 } else { -1.0 });
+    let coordinates = if canonical {
+        CoordinateMap::Canonical
+    } else {
+        CoordinateMap::Scaled(factors.into_boxed_slice())
+    };
+
+    let row_sums = magnitude_sums(&cross_tab);
+    finalize(
+        cross_tab,
+        scaled_diagonal,
+        row_sums,
+        coordinates,
+        form,
+        scaling,
+    )
+}
+
+/// Clamp roundoff deficits and retain surplus as ground edges.
+fn finalize(
+    cross_tab: CrossTab,
+    mut scaled_diagonal: Vec<f64>,
+    row_sums: Vec<f64>,
+    coordinates: CoordinateMap,
+    form: MatrixForm,
+    scaling: &ScalingConfig,
+) -> Result<(LocalComponent, f64), NotScalable> {
+    let n = cross_tab.n_local();
+    let mut ground_edges = vec![0.0; n];
+
+    let mut clamped_deficit = 0.0f64;
+    for ((diagonal, &row_sum), surplus) in scaled_diagonal
+        .iter_mut()
+        .zip(row_sums.iter())
+        .zip(ground_edges.iter_mut())
+    {
+        if !diagonal.is_finite() || *diagonal <= 0.0 {
+            return Err(NotScalable);
+        }
+        let deficit = (row_sum - *diagonal) / *diagonal;
+        if deficit > scaling.tolerance {
+            clamped_deficit = clamped_deficit.max(deficit);
+        }
+        *diagonal = diagonal.max(row_sum);
+        *surplus = (*diagonal - row_sum).max(0.0);
+    }
+    Ok((
+        LocalComponent {
+            matrix: SddmMatrix {
+                cross_tab,
+                diagonal: scaled_diagonal,
+                ground_edges,
+                grounding: Grounding::Grounded,
+            },
+            form,
+            coordinates,
+        },
+        clamped_deficit,
+    ))
+}
+
+/// `None` when the component is frustrated: a negative cycle admits no signature.
+fn folding_signs(cross_tab: &CrossTab) -> Option<Vec<f64>> {
+    let n = cross_tab.n_local();
+    let mut signs = vec![0.0; n];
+    if n == 0 {
+        return Some(signs);
+    }
+    for root in 0..n {
+        if signs[root] != 0.0 {
+            continue;
+        }
+        signs[root] = 1.0;
+        let mut stack = vec![root];
+        while let Some(i) = stack.pop() {
+            for (j, value) in cross_tab.neighbors(i) {
+                let expected = -signs[i] * value.signum();
+                if signs[j] == 0.0 {
+                    signs[j] = expected;
+                    stack.push(j);
+                } else if signs[j] != expected {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(signs)
+}
+
+fn adjacency_sums(cross_tab: &CrossTab) -> Vec<f64> {
+    (0..cross_tab.n_local())
+        .map(|i| cross_tab.neighbors(i).map(|(_, v)| v).sum())
+        .collect()
+}
+
+fn magnitude_sums(cross_tab: &CrossTab) -> Vec<f64> {
+    (0..cross_tab.n_local())
+        .map(|i| cross_tab.neighbors(i).map(|(_, v)| v.abs()).sum())
+        .collect()
+}

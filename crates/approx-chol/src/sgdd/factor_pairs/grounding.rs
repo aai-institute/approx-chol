@@ -1,9 +1,12 @@
-//! A Gram's components and their gauge, read from its columns, never from rounded totals.
+//! A Gram's components and their [`Grounding`], read from its observations, not its Gram.
 
-use super::bipartite::Gram;
-use super::cross::Block;
-use super::Gauge;
 use num_traits::PrimInt;
+
+use crate::sgdd::bipartite::Columns;
+use crate::sgdd::cross_tab::BipartiteComponent;
+use crate::sgdd::csr_block::{to_u32, CsrBlock};
+
+use super::Grounding;
 
 // `ρ ≥ λ_min`, so a well-conditioned block grounds; an exact alias reads `ρ ~ ε²`.
 const FLOATING_RAYLEIGH_BOUND: f64 = 1e-13;
@@ -11,27 +14,18 @@ const FLOATING_RAYLEIGH_BOUND: f64 = 1e-13;
 // 10u: a scaling that misses the kernel leaves surplus that floating would drop.
 const SCALED_FLOATING_BOUND: f64 = 5.0 * f64::EPSILON;
 
-/// A component's levels, each side ascending.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct Members {
-    pub(crate) rows: Vec<usize>,
-    pub(crate) cols: Vec<usize>,
-}
-
-/// `Floating` iff a folded component's scaling `f` has `fᵀAf ≤ 10u·fᵀDf`, summed as squares per column.
-pub(crate) fn scaled_gauges<I: PrimInt>(
-    gram: &Gram<'_, I>,
-    // Per level `[rows | cols]`: the tested component and its factor.
+/// `Floating` iff a component's scaling `f` has `fᵀGf ≤ 10u·fᵀDf`, summed as squares per observation.
+pub(super) fn scaled_groundings<I: PrimInt>(
+    columns: &Columns<'_, I>,
+    // Per level `[rows | cols]` of the pair: the tested component and its factor.
     levels: &[Option<(usize, f64)>],
     n_rows: usize,
     n_components: usize,
-) -> Vec<Gauge> {
+) -> Vec<Grounding> {
     let mut residual = vec![0.0; n_components];
     let mut diagonal = vec![0.0; n_components];
-    for o in (0..gram.n_columns()).map(|k| gram.observation(k)) {
-        if o.w == 0.0 {
-            continue;
-        }
+    let observations = (0..columns.n_obs()).map(|uid| columns.observation(uid));
+    for o in observations.filter(|o| o.w != 0.0) {
         match (levels[o.row], levels[n_rows + o.col]) {
             (Some((k, fi)), Some((l, fj))) if k == l => {
                 let (p, q) = (fi * o.x, fj * o.y);
@@ -57,16 +51,16 @@ pub(crate) fn scaled_gauges<I: PrimInt>(
         .zip(&diagonal)
         .map(|(&r, &d)| {
             if d.is_finite() && r <= SCALED_FLOATING_BOUND * d {
-                Gauge::Floating
+                Grounding::Floating
             } else {
-                Gauge::Grounded
+                Grounding::Grounded
             }
         })
         .collect()
 }
 
 /// Union-find over the levels `[rows | cols]` of `C`, scaled so `|x|·u_i = |y|·u_j` on each join.
-pub(crate) struct ScaledForest {
+pub(super) struct ScaledForest {
     n_rows: usize,
     parent: Vec<u32>,
     /// `u_node / u_parent`: the null vector along the joins, when one exists.
@@ -78,8 +72,8 @@ pub(crate) struct ScaledForest {
 }
 
 impl ScaledForest {
-    /// One pass over the columns, then one over the cells for their cancellation.
-    pub(crate) fn grow<I: PrimInt>(gram: &Gram<'_, I>, c: &Block) -> Self {
+    /// One pass over the observations, then one over the cells for their cancellation.
+    pub(super) fn grow<I: PrimInt>(columns: &Columns<'_, I>, c: &CsrBlock) -> Self {
         let n_local = c.nrows + c.ncols;
         let mut forest = Self {
             n_rows: c.nrows,
@@ -91,18 +85,12 @@ impl ScaledForest {
         };
         let mut magnitude = vec![0.0; c.nnz()];
         // uᵀ(D − |C|)u = Σ_o w(|x|u_i − |y|u_j)² + 2Σ_cells u_i·u_j(Σ|wxy| − |Σwxy|).
-        for o in (0..gram.n_columns()).map(|k| gram.observation(k)) {
-            if o.w == 0.0 {
-                continue;
-            }
+        let observations = (0..columns.n_obs()).map(|uid| columns.observation(uid));
+        for o in observations.filter(|o| o.w != 0.0) {
             let (i, j) = (o.row, c.nrows + o.col);
-            let stored = c.span(o.row);
+            let stored = c.indptr[o.row] as usize..c.indptr[o.row + 1] as usize;
             let cell = (o.x != 0.0 && o.y != 0.0)
-                .then(|| {
-                    c.indices[stored.clone()]
-                        .binary_search(&(o.col as u32))
-                        .ok()
-                })
+                .then(|| c.indices[stored.clone()].binary_search(&to_u32(o.col)).ok())
                 .flatten()
                 .map(|offset| stored.start + offset);
             let ((ri, ui), (rj, uj)) = match cell {
@@ -123,7 +111,7 @@ impl ScaledForest {
             forest.denominator[rj] += o.w * b * b;
         }
         for i in 0..c.nrows {
-            let cells = c.span(i);
+            let cells = c.indptr[i] as usize..c.indptr[i + 1] as usize;
             let (root, ui) = forest.find(i);
             for ((j, value), &magnitude) in c.row(i).zip(&magnitude[cells]) {
                 let cancelled = magnitude - value.abs();
@@ -172,66 +160,37 @@ impl ScaledForest {
     }
 
     /// Each set with its root, ordered by lowest level and with sorted members.
-    pub(crate) fn components(&mut self) -> Vec<(usize, Members)> {
+    pub(super) fn components(&mut self) -> Vec<(usize, BipartiteComponent)> {
         let mut slot = vec![usize::MAX; self.parent.len()];
-        let mut components: Vec<(usize, Members)> = Vec::new();
+        let mut components: Vec<(usize, BipartiteComponent)> = Vec::new();
         for node in 0..self.parent.len() {
             let (root, _) = self.find(node);
             if slot[root] == usize::MAX {
                 slot[root] = components.len();
-                components.push((root, Members::default()));
+                let empty = BipartiteComponent {
+                    rows: vec![],
+                    cols: vec![],
+                };
+                components.push((root, empty));
             }
-            let (_, members) = &mut components[slot[root]];
+            let (_, component) = &mut components[slot[root]];
             if node < self.n_rows {
-                members.rows.push(node);
+                component.rows.push(node);
             } else {
-                members.cols.push(node - self.n_rows);
+                component.cols.push(node - self.n_rows);
             }
         }
         components
     }
 
     /// `Floating` iff `ρ = uᵀ(D − |C|)u / uᵀDu ≤ λ*` over the set of `root`.
-    pub(crate) fn gauge(&self, root: usize) -> Gauge {
+    pub(super) fn grounding(&self, root: usize) -> Grounding {
         let (numerator, denominator) = (self.numerator[root], self.denominator[root]);
         // An overflowed `u` leaves the alias unproven, so it grounds.
         if denominator.is_finite() && numerator / denominator <= FLOATING_RAYLEIGH_BOUND {
-            Gauge::Floating
+            Grounding::Floating
         } else {
-            Gauge::Grounded
+            Grounding::Grounded
         }
     }
-}
-
-/// Components of a graph's `C` by DFS from each unvisited level, members sorted.
-pub(crate) fn graph_components(cross: &super::cross::Cross) -> Vec<Members> {
-    let n_rows = cross.n_rows();
-    let mut visited = vec![false; cross.n_local()];
-    let mut components = Vec::new();
-    let mut stack = Vec::new();
-    for start in 0..cross.n_local() {
-        if visited[start] {
-            continue;
-        }
-        visited[start] = true;
-        stack.push(start);
-        let mut members = Members::default();
-        while let Some(node) = stack.pop() {
-            if node < n_rows {
-                members.rows.push(node);
-            } else {
-                members.cols.push(node - n_rows);
-            }
-            for (j, _) in cross.neighbors(node) {
-                if !visited[j] {
-                    visited[j] = true;
-                    stack.push(j);
-                }
-            }
-        }
-        members.rows.sort_unstable();
-        members.cols.sort_unstable();
-        components.push(members);
-    }
-    components
 }

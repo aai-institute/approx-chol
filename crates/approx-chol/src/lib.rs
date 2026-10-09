@@ -59,7 +59,12 @@ pub use approx_chol::FACTOR_FORMAT_VERSION;
 pub use approx_chol::{Backend, Config, ExactFailure, Factor, SolveError};
 pub use csr::{CsrRef, OwnedCsr};
 pub use error::{CsrError, DenseFailure, Error, Fallback, IndexKind, UnusablePivot};
-pub use sgdd::{bipartite, ScalingPolicy, ScalingReport, SchurMode, Sgdd, SgddError, SgddFactor};
+#[doc(hidden)]
+pub use sgdd::probe as sgdd_probe;
+pub use sgdd::{
+    bipartite, ScalingPolicy, ScalingReport, SchurMode, Sgdd, SgddComponent, SgddError, SgddFactor,
+    SgddPart,
+};
 
 /// Factorize an SDDM matrix with [`Config::default`].
 pub fn factorize<'a, T, I, M>(sddm: M) -> Result<Factor<T>, Error>

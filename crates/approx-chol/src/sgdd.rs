@@ -1,23 +1,23 @@
 //! Prototype: factor-width-2 inputs `A = V W Vᵀ`, one part per connected component.
 //!
-//! Each part is scaled, folded or covered, and grounded from `V`; [`Sgdd::factorize`]
-//! batch-eliminates its larger side and factors the Schur complement with the kernel.
+//! within's pair pipeline, transplanted: each part is scaled, folded or covered, and grounded
+//! from `V`; [`Sgdd::factorize`] batch-eliminates its larger side and factors the Schur complement.
 
 pub mod bipartite;
-mod convert;
-mod cross;
-mod factor;
-mod forest;
-mod scaling;
-mod schur;
-
-pub use factor::SgddFactor;
+mod block_elim;
+mod cross_tab;
+mod csr_block;
+mod factor_pairs;
+#[doc(hidden)]
+pub mod probe;
 
 use bipartite::{Gram, Graph};
-use convert::{Class, Oriented, Uncertified};
-use cross::Cross;
-use forest::ScaledForest;
+use block_elim::{BlockElimSolver, LocalSolverConfig};
+use factor_pairs::{cross_tab, split_into_subdomains, LocalDomain};
 use num_traits::PrimInt;
+use rayon::prelude::*;
+
+use crate::{Backend, Config, Error, Fallback, SolveError};
 
 /// Certification policy for a dominance scaling; a deficit left at hand-over is clamped and reported.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -93,47 +93,11 @@ impl Default for SchurMode {
     }
 }
 
-pub(crate) struct NotScalable;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Gauge {
-    Floating,
-    Grounded,
-}
-
-/// Whether the part's core is the folded matrix or its Gremban cover.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Form {
-    Folded,
-    Cover,
-}
-
-/// The diagonal map from `A`'s coordinates to the core's: `x = F y`, `F` an involution up to scale.
-#[derive(Clone, Debug)]
-pub(crate) enum Coordinates {
-    /// `+1` on the eliminated side, `-1` on the kept one.
-    Canonical,
-    /// Sign times dominance scale per local vertex.
-    Scaled(Vec<f64>),
-}
-
-/// One component: `[D_e, −C; −Cᵀ, D_k]` in core coordinates, eliminated (larger) side first.
-#[derive(Clone, Debug)]
-pub(crate) struct Part {
-    pub(crate) cross: Cross,
-    pub(crate) diagonal: Vec<f64>,
-    pub(crate) surplus: Vec<f64>,
-    pub(crate) globals: Vec<u32>,
-    pub(crate) gauge: Gauge,
-    pub(crate) form: Form,
-    pub(crate) coordinates: Coordinates,
-}
-
 /// Symmetric generalized diagonally dominant matrix as one certified part per component.
 #[derive(Clone, Debug)]
 pub struct Sgdd {
     n: usize,
-    parts: Vec<Part>,
+    parts: Vec<LocalDomain>,
     report: Option<ScalingReport>,
 }
 
@@ -150,103 +114,79 @@ impl Sgdd {
 
     /// Scales, folds or covers each component, and grounds it from the Gram's columns.
     pub fn from_gram<I: PrimInt>(
-        gram: Gram<'_, I>,
+        gram: Gram<'_, '_, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, SgddError> {
         let (n_left, n_right) = gram.sizes();
-        let (cross, diagonal) = cross::of_gram(&gram);
-        let mut forest = ScaledForest::grow(&gram, &cross.c);
-        let components = forest.components();
-        let single = components.len() == 1;
-        let mut remap = vec![u32::MAX; n_right];
-        let mut levels: Vec<Option<(usize, f64)>> = vec![None; n_left + n_right];
-        let mut parts: Vec<(Part, Gauge)> = Vec::with_capacity(components.len());
-        let mut report: Option<ScalingReport> = None;
-        for (root, members) in &components {
-            let Some(oriented) = Oriented::new(members, &cross, &diagonal, &mut remap, single)
-            else {
-                continue;
-            };
-            let swapped = oriented.swapped;
-            let vertex = oriented.globals[0];
-            let forest_gauge = forest.gauge(*root);
-            let (part, uncertified) = oriented
-                .convert(Class::General, &policy)
-                .map_err(|NotScalable| SgddError::Unscalable { vertex })?;
-            if let Some(Uncertified {
-                iterations,
-                violation,
-            }) = uncertified
-            {
-                if report.is_none_or(|worst| violation > worst.violation) {
-                    report = Some(ScalingReport {
-                        iterations,
-                        violation,
-                    });
-                }
-            }
-            if part.form == Form::Folded {
-                let n_eliminated = part.cross.n_rows();
-                let (row_offset, col_offset) = if swapped {
-                    (n_eliminated, 0)
-                } else {
-                    (0, n_eliminated)
-                };
-                for (p, &i) in members.rows.iter().enumerate() {
-                    levels[i] = Some((parts.len(), part.factor(row_offset + p)));
-                }
-                for (q, &j) in members.cols.iter().enumerate() {
-                    levels[n_left + j] = Some((parts.len(), part.factor(col_offset + q)));
-                }
-            }
-            parts.push((part, forest_gauge));
-        }
-        let scaled = forest::scaled_gauges(&gram, &levels, n_left, parts.len());
-        let parts = (parts.into_iter().enumerate())
-            .map(|(k, (mut part, forest_gauge))| {
-                let gauge = match part.form {
-                    Form::Folded => scaled[k],
-                    Form::Cover => forest_gauge,
-                };
-                if gauge == Gauge::Floating {
-                    part.float();
-                }
-                part
-            })
-            .collect();
+        let full_ct = cross_tab(gram.columns(), n_left, n_right);
+        let (parts, report) =
+            split_into_subdomains(gram.columns(), full_ct, Some(gram.diagonals()), &policy)?;
         Ok(Self {
             n: n_left + n_right,
             parts,
             report,
         })
     }
+
+    /// Factors every part, in parallel; `config` routes each reduced system as [`Builder`](crate::low_level::Builder) routes a block.
+    pub fn factorize(self, config: &Config, mode: SchurMode) -> Result<SgddFactor, Error> {
+        let n = self.n;
+        let parts: Vec<SgddPart> = (self.into_components().into_par_iter())
+            .map(|component| component.factorize(config, mode))
+            .collect::<Result<_, Error>>()?;
+        let fallbacks = (parts.iter())
+            .flat_map(|part| part.solver.fallbacks().iter().copied())
+            .collect();
+        Ok(SgddFactor {
+            n,
+            parts,
+            fallbacks,
+        })
+    }
+
+    /// The converted parts, each factored on its own.
+    #[doc(hidden)]
+    pub fn into_components(self) -> Vec<SgddComponent> {
+        self.parts.into_iter().map(SgddComponent).collect()
+    }
+}
+
+/// One converted component, not yet factored.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct SgddComponent(LocalDomain);
+
+impl SgddComponent {
+    /// The component's vertices in `A`'s numbering, in local order.
+    pub fn globals(&self) -> &[u32] {
+        &self.0.globals
+    }
+
+    /// Eliminates the larger side and factors the rest, as [`Sgdd::factorize`] does per part.
+    pub fn factorize(self, config: &Config, mode: SchurMode) -> Result<SgddPart, Error> {
+        let local = LocalSolverConfig {
+            approx_chol: *config,
+            schur: mode,
+            dense_threshold: match config.backend {
+                Backend::ExactBelow { max_dim, .. } => max_dim,
+                Backend::Approximate => 0,
+            },
+        };
+        let LocalDomain { globals, component } = self.0;
+        let solver = BlockElimSolver::build(component, &local)?;
+        Ok(SgddPart { globals, solver })
+    }
 }
 
 impl<'a, I: PrimInt> TryFrom<Graph<'a, I>> for Sgdd {
     type Error = SgddError;
 
-    /// Bipartite, balanced and of zero surplus by shape: every part floats, `D = I`.
+    /// Bipartite, balanced and of zero surplus by shape: every part floats.
     fn try_from(graph: Graph<'a, I>) -> Result<Self, Self::Error> {
         let (n_left, n_right) = graph.sizes();
-        let cross = cross::of_graph(&graph);
-        let diagonal: Vec<f64> = (0..cross.n_local())
-            .map(|i| cross.neighbors(i).map(|(_, v)| v).sum())
-            .collect();
-        let components = forest::graph_components(&cross);
-        let single = components.len() == 1;
-        let mut remap = vec![u32::MAX; n_right];
-        let mut parts = Vec::with_capacity(components.len());
-        for members in &components {
-            let Some(oriented) = Oriented::new(members, &cross, &diagonal, &mut remap, single)
-            else {
-                continue;
-            };
-            let vertex = oriented.globals[0];
-            let (part, _) = oriented
-                .convert(Class::Known, &ScalingPolicy::default())
-                .map_err(|NotScalable| SgddError::Unscalable { vertex })?;
-            parts.push(part);
-        }
+        let full_ct = cross_tab(graph.columns(), n_left, n_right);
+        let (parts, _) =
+            split_into_subdomains(graph.columns(), full_ct, None, &ScalingPolicy::default())?;
         Ok(Self {
             n: n_left + n_right,
             parts,
@@ -255,18 +195,90 @@ impl<'a, I: PrimInt> TryFrom<Graph<'a, I>> for Sgdd {
     }
 }
 
-/// Neumaier compensated sum: a flat sum biases a large part's mean.
-pub(crate) fn compensated_sum(values: &[f64]) -> f64 {
-    let mut sum = 0.0;
-    let mut compensation = 0.0;
-    for &value in values {
-        let next = sum + value;
-        if sum.abs() >= value.abs() {
-            compensation += (sum - next) + value;
-        } else {
-            compensation += (value - next) + sum;
-        }
-        sum = next;
+/// Applies each part's solver in `A`'s coordinates; vertices in no part solve to `0`.
+#[derive(Clone, Debug)]
+pub struct SgddFactor {
+    n: usize,
+    parts: Vec<SgddPart>,
+    fallbacks: Vec<Fallback>,
+}
+
+impl SgddFactor {
+    /// Dimension of `A`.
+    pub fn n(&self) -> usize {
+        self.n
     }
-    sum + compensation
+
+    /// Reduced systems the dense arm declined, factored approximately instead.
+    pub fn fallbacks(&self) -> &[Fallback] {
+        &self.fallbacks
+    }
+
+    /// Solves part by part; panics unless `b` has length [`n`](Self::n).
+    pub fn solve(&self, b: &[f64]) -> Result<Vec<f64>, SolveError> {
+        assert_eq!(b.len(), self.n, "rhs length must equal n");
+        let mut x = vec![0.0; self.n];
+        let (mut rhs, mut sol) = (Vec::new(), Vec::new());
+        for part in &self.parts {
+            let size = part.scratch_size();
+            rhs.clear();
+            rhs.resize(size, 0.0);
+            sol.clear();
+            sol.resize(size, 0.0);
+            for (slot, &g) in rhs.iter_mut().zip(&part.globals) {
+                *slot = b[g as usize];
+            }
+            part.solve_local(&mut rhs, &mut sol, true)?;
+            for (&g, &value) in part.globals.iter().zip(&sol) {
+                x[g as usize] = value;
+            }
+        }
+        Ok(x)
+    }
+
+    /// The parts, each a Schwarz-ready local solver.
+    #[doc(hidden)]
+    pub fn into_parts(self) -> Vec<SgddPart> {
+        self.parts
+    }
+}
+
+/// One component's local solver over its vertices of `A`.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct SgddPart {
+    globals: Vec<u32>,
+    solver: BlockElimSolver,
+}
+
+impl SgddPart {
+    /// The part's vertices in `A`'s numbering, in local order.
+    pub fn globals(&self) -> &[u32] {
+        &self.globals
+    }
+
+    /// Local dimension.
+    pub fn n_local(&self) -> usize {
+        self.solver.n_local()
+    }
+
+    /// Length of both buffers [`solve_local`](Self::solve_local) takes.
+    pub fn scratch_size(&self) -> usize {
+        self.solver.scratch_size()
+    }
+
+    /// Work a nested parallel solve could split; `0` when there is none.
+    pub fn inner_parallelism_work_estimate(&self) -> usize {
+        self.solver.inner_parallelism_work_estimate()
+    }
+
+    /// Solves into `sol`; `rhs` is overwritten, both are [`scratch_size`](Self::scratch_size) long.
+    pub fn solve_local(
+        &self,
+        rhs: &mut [f64],
+        sol: &mut [f64],
+        allow_inner_parallelism: bool,
+    ) -> Result<(), SolveError> {
+        self.solver.solve_local(rhs, sol, allow_inner_parallelism)
+    }
 }

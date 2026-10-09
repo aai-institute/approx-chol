@@ -1,17 +1,19 @@
-//! Dominance scaling of a bipartite component by reduced CG on its smaller side, from within.
-
-use super::cross::{Block as CsrBlock, Cross as CrossTab};
-use super::{NotScalable, ScalingPolicy as ScalingConfig};
+use super::sci::{sci_scaling, Selection};
+use super::NotScalable;
+use crate::sgdd::cross_tab::CrossTab;
+use crate::sgdd::csr_block::CsrBlock;
+use crate::sgdd::probe;
+use crate::sgdd::ScalingPolicy as ScalingConfig;
 
 fn dot(left: &[f64], right: &[f64]) -> f64 {
     left.iter().zip(right).map(|(&x, &y)| x * y).sum()
 }
 
-pub(crate) struct DominanceScaling {
-    pub(crate) scales: Vec<f64>,
-    pub(crate) iterations: usize,
+pub(super) struct DominanceScaling {
+    pub(super) scales: Vec<f64>,
+    pub(super) iterations: usize,
     /// Largest relative dominance violation at hand-over, clamped at 0.
-    pub(crate) violation: f64,
+    pub(super) violation: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -40,7 +42,7 @@ impl<'a> NormalizedCrossOperator<'a> {
         let (small_to_large, large_to_small, small_inv_sqrt, large_inv_sqrt, small_side) =
             if cross_tab.n_rows() <= cross_tab.n_cols() {
                 (
-                    &cross_tab.ct,
+                    cross_tab.ct(),
                     &cross_tab.c,
                     row_inv_sqrt,
                     col_inv_sqrt,
@@ -49,7 +51,7 @@ impl<'a> NormalizedCrossOperator<'a> {
             } else {
                 (
                     &cross_tab.c,
-                    &cross_tab.ct,
+                    cross_tab.ct(),
                     col_inv_sqrt,
                     row_inv_sqrt,
                     BipartiteSide::Columns,
@@ -343,7 +345,31 @@ fn reduced_cg_scaling(
     })
 }
 
-pub(crate) fn dominance_scaling(
+pub(super) fn dominance_scaling(
+    cross_tab: &CrossTab,
+    diagonal: &[f64],
+    scaling: &ScalingConfig,
+) -> Result<DominanceScaling, NotScalable> {
+    if !probe::recording() {
+        return dispatch(cross_tab, diagonal, scaling);
+    }
+    let started = std::time::Instant::now();
+    let result = dispatch(cross_tab, diagonal, scaling);
+    if let Ok(done) = &result {
+        if done.iterations > 0 {
+            probe::record(probe::Record {
+                n: cross_tab.n_local(),
+                nnz: cross_tab.c.nnz(),
+                iterations: done.iterations,
+                violation: done.violation,
+                seconds: started.elapsed().as_secs_f64(),
+            });
+        }
+    }
+    result
+}
+
+fn dispatch(
     cross_tab: &CrossTab,
     diagonal: &[f64],
     scaling: &ScalingConfig,
@@ -364,6 +390,14 @@ pub(crate) fn dominance_scaling(
             iterations: 0,
             violation: 0.0,
         });
+    }
+
+    match probe::method() {
+        probe::Method::ReducedCg => {}
+        probe::Method::Sci => return sci_scaling(cross_tab, diagonal, scaling, Selection::All),
+        probe::Method::SciBalanced => {
+            return sci_scaling(cross_tab, diagonal, scaling, Selection::Balanced)
+        }
     }
 
     let inv_sqrt: Vec<f64> = diagonal.iter().map(|d| 1.0 / d.sqrt()).collect();

@@ -11,8 +11,8 @@ mod factor;
 mod permutation;
 
 pub use approximate::CliqueTreeSampler;
-pub(crate) use block::Block;
-pub(crate) use cholesky::Cholesky;
+pub(super) use block::Block;
+pub(super) use cholesky::Cholesky;
 #[cfg(feature = "serde")]
 pub use factor::FACTOR_FORMAT_VERSION;
 pub use factor::{Factor, SolveError};

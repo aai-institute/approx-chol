@@ -1,7 +1,6 @@
 use super::config::{Backend, Config, Route};
-use super::factorization::exact::{DenseRows, NotFactorable};
 use super::factorization::{approximate, exact, Block, Cholesky, Permutation};
-use crate::graph::{AdjListGraph, BlockVertices, CoreRows, EdgeCount, Ingestion, Multi, Single};
+use crate::graph::{BlockVertices, EdgeCount, Ingestion, Multi, Single};
 use crate::sampling::CdfSampler;
 use crate::types::Real;
 use crate::{CsrError, CsrRef, Error, Factor, Fallback};
@@ -115,13 +114,7 @@ impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
         ingestion: &Ingestion<'_, T, I>,
         block: &BlockVertices<'_>,
     ) -> Result<(Block<T>, Option<Fallback>), Error> {
-        let (cholesky, fallback) = self.cholesky(
-            block.first(),
-            block.len(),
-            &(ingestion, block),
-            || ingestion.block_graph::<C>(block),
-            |reason| reason.at(block),
-        )?;
+        let (cholesky, fallback) = self.cholesky(ingestion, block)?;
         let gauged = if ingestion.carries_ground(block) {
             Block::Grounded(cholesky)
         } else {
@@ -130,51 +123,30 @@ impl<T: Real, C: EdgeCount> BlockFactorizer<T, C> {
         Ok((gauged, fallback))
     }
 
-    fn core(&mut self, core: &CoreRows<T>) -> Result<(Cholesky<T>, Option<Fallback>), Error> {
-        let whole = BlockVertices::whole(core.n());
-        self.cholesky(
-            0,
-            core.n(),
-            core,
-            || core.graph::<C>(),
-            |reason| reason.at(&whole),
-        )
-    }
-
     /// Routes first, so a block the dense backend claims never builds an elimination graph.
-    fn cholesky(
+    fn cholesky<I: PrimInt>(
         &mut self,
-        key: u64,
-        len: usize,
-        rows: &impl DenseRows<T>,
-        graph: impl FnOnce() -> AdjListGraph<C, T>,
-        locate: impl FnOnce(NotFactorable) -> Fallback,
+        ingestion: &Ingestion<'_, T, I>,
+        block: &BlockVertices<'_>,
     ) -> Result<(Cholesky<T>, Option<Fallback>), Error> {
         // Every block restarts, so one block's draws never shift because another went exact.
-        self.sampler.restart(key);
+        self.sampler.restart(block.first());
 
-        let eliminated = len.checked_sub(1).expect("a block has at least one vertex");
+        let eliminated = block
+            .len()
+            .checked_sub(1)
+            .expect("a block has at least one vertex");
         let mut fallback = None;
         if let Route::Exact { on_failure } = self.backend.route(eliminated) {
-            match exact::factor(rows, eliminated) {
+            match exact::factor(ingestion, block, eliminated) {
                 Ok(lower) => return Ok((Cholesky::Exact(lower), None)),
                 Err(reason) => {
-                    fallback = Some(on_failure.accept(locate(reason))?);
+                    fallback = Some(on_failure.accept(reason.at(block))?);
                 }
             }
         }
-        let sequence = approximate::eliminate::<T, C>(graph(), &mut self.sampler, self.split);
+        let graph = ingestion.block_graph::<C>(block);
+        let sequence = approximate::eliminate::<T, C>(graph, &mut self.sampler, self.split);
         Ok((Cholesky::Approximate(sequence), fallback))
-    }
-}
-
-/// Factors one assembled block, routed as [`Builder`] routes each block of a CSR.
-pub(crate) fn factor_core<T: Real>(
-    config: Config,
-    core: &CoreRows<T>,
-) -> Result<(Cholesky<T>, Option<Fallback>), Error> {
-    match config.split_factor() {
-        None => BlockFactorizer::<T, Single>::new(config, ()).core(core),
-        Some(k) => BlockFactorizer::<T, Multi>::new(config, k).core(core),
     }
 }
