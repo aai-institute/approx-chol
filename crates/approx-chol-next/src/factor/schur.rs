@@ -49,7 +49,7 @@ impl<'a, T: Real> SchurComplement<'a, T> {
         self.elimination.n_eliminated()
     }
 
-    /// Known before `S` is built, so routing never builds it twice.
+    /// The Cholesky's dimension, a cover's two sheets counted; known before `S` is built, so routing never builds it twice.
     pub(super) fn dimension(&self) -> usize {
         Sheets::of(self.balance).count() * self.elimination.cross.n_kept()
     }

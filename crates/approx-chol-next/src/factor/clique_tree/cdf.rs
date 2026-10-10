@@ -42,14 +42,40 @@ impl Streams {
     }
 
     pub(in crate::factor) fn cholesky(self) -> Stream {
-        todo!()
+        self.stream(Stage::Cholesky)
     }
 
     pub(in crate::factor) fn star(self, eliminated: usize) -> Stream {
+        self.stream(Stage::Star(eliminated))
+    }
+
+    fn stream(self, stage: Stage) -> Stream {
+        Stream {
+            seed: self.seed,
+            part: self.part,
+            stage,
+        }
+    }
+}
+
+/// One seeded draw sequence, keyed whole and mixed once, so no two stages' sequences coincide.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::factor) struct Stream {
+    seed: u64,
+    part: u32,
+    stage: Stage,
+}
+
+impl Stream {
+    /// The whole key mixed once, the only place a stream becomes draws.
+    fn rng(self) -> SmallRng {
         todo!()
     }
 }
 
-/// One seeded draw sequence.
+/// Which draws of a part a stream feeds.
 #[derive(Clone, Copy, Debug)]
-pub(in crate::factor) struct Stream(u64);
+enum Stage {
+    Cholesky,
+    Star(usize),
+}

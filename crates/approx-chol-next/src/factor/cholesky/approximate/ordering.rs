@@ -8,8 +8,14 @@ pub(super) struct MinDegreeOrder {
     lists: Vec<u32>,
     min_list: usize,
     bucket_base: usize,
-    /// Net degree change per touched vertex: one queue move each, not one per fill endpoint.
-    deltas: Vec<(u32, i64)>,
+    deltas: DegreeDeltas,
+}
+
+/// Net degree change per touched vertex, so each moves once per pivot, not once per fill endpoint.
+struct DegreeDeltas {
+    /// One slot per vertex, zero at rest: a list would sort per pivot (measured 1.5-1.7x the star sort).
+    net: Vec<i64>,
+    touched: Vec<u32>,
 }
 
 /// 12 bytes: `Option<u32>` keys measured +2-3% on grids.

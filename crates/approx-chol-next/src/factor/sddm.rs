@@ -1,4 +1,4 @@
-//! The kernel's input: a Laplacian with its surplus, on one sheet or a Gremban cover's two.
+//! The Cholesky's input: a Laplacian with its surplus, on one sheet or a Gremban cover's two.
 
 use std::borrow::Cow;
 

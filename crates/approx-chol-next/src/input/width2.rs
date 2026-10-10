@@ -149,7 +149,7 @@ impl<T, I> Clone for Gram<'_, '_, T, I> {
 impl<T, I> Copy for Gram<'_, '_, T, I> {}
 
 impl<'s, 'a, T: Real, I: PrimInt> Gram<'s, 'a, T, I> {
-    /// Both sides must have the same column count and read the same `W`.
+    /// Both sides must have the same column count and read the same `W`, and `n_left + n_right` fit a `u32` index.
     pub fn new(left: Side<'s, 'a, T, I>, right: Side<'s, 'a, T, I>) -> Result<Self, ViewError> {
         todo!()
     }

@@ -1,4 +1,4 @@
-//! Each part as an optional block elimination `L` and a Cholesky of what it leaves: `A_c⁺ ≈ P F L⁻ᵀ diag(D_e⁻¹, S⁺) L⁻¹ F P`, `P` projecting out `F·1`.
+//! Each part as an optional block elimination `L` and a Cholesky of what it leaves: `A_c⁺ ≈ P F L⁻ᵀ diag(D_e⁻¹, S⁺) L⁻¹ F P`, `P` projecting out `F·1` when the part floats, else `I`.
 
 mod cholesky;
 mod clique_tree;
@@ -16,7 +16,7 @@ pub use config::{CliqueRule, Config, InnerParallelism, Multiplicity, OnDenseFail
 
 use crate::sgdd::{Balance, Frame, OffDiagonal, Part, Sgdd};
 use crate::Real;
-use cholesky::Cholesky;
+use cholesky::{Cholesky, DenseCholesky};
 use clique_tree::Streams;
 use schur::{BlockElimination, SchurComplement};
 use sddm::{Sddm, Sheets};
@@ -178,22 +178,22 @@ impl<T: Real> PartFactor<T> {
                     ),
                     Balance::Frustrated(grounding) => Sddm::cover(adjacency, grounding),
                 };
-                let dense = |sddm: &_| Cholesky::dense(sddm, vertices);
-                let sampled = |sddm| Cholesky::approximate(sddm, config.approximate, streams);
-                (None, route(sddm.n(), sddm, dense, sampled, config)?)
+                let dense = |sddm: &_, room| Cholesky::dense(room, sddm, vertices);
+                let approximate = |sddm| Cholesky::approximate(sddm, config.approximate, streams);
+                (None, route(sddm.n(), sddm, dense, approximate, config)?)
             }
             (OffDiagonal::Bipartite(cross), balance) => {
                 let schur = SchurComplement::new(cross, balance);
                 let kept = &vertices[schur.n_eliminated()..];
                 // A dense Cholesky spends nothing on sparsity, so only the exact complement goes dense.
-                let dense = |schur: &&SchurComplement<'_, T>| {
-                    Cholesky::dense(&schur.build(CliqueRule::Exact, streams), kept)
+                let dense = |schur: &&SchurComplement<'_, T>, room| {
+                    Cholesky::dense(room, &schur.build(CliqueRule::Exact, streams), kept)
                 };
-                let sampled = |schur: &SchurComplement<'_, T>| {
+                let approximate = |schur: &SchurComplement<'_, T>| {
                     let s = schur.build(config.complement, streams);
                     Cholesky::approximate(s, config.approximate, streams)
                 };
-                let routed = route(schur.dimension(), &schur, dense, sampled, config)?;
+                let routed = route(schur.dimension(), &schur, dense, approximate, config)?;
                 (Some(schur.finish()), routed)
             }
         };
@@ -266,23 +266,28 @@ impl<T: Real> PartFactor<T> {
     }
 }
 
-/// Dense when the rule says so; a declined pivot falls to the approximate arm, never to a second dense one.
+/// Dense when the rule says so, its room reserved before the matrix is built; a declined dense arm falls to the approximate one.
 fn route<T: Real, M>(
     dimension: usize,
     matrix: M,
-    dense: impl FnOnce(&M) -> Result<Cholesky<T>, Fallback>,
-    sampled: impl FnOnce(M) -> Cholesky<T>,
+    dense: impl FnOnce(&M, DenseCholesky<T>) -> Result<Cholesky<T>, UnusablePivot>,
+    approximate: impl FnOnce(M) -> Cholesky<T>,
     config: &Config,
 ) -> Result<(Cholesky<T>, Option<Fallback>), FactorError> {
     if !config.routes_dense(dimension) {
-        return Ok((sampled(matrix), None));
+        return Ok((approximate(matrix), None));
     }
-    match dense(&matrix) {
+    let Some(room) = DenseCholesky::reserve(dimension) else {
+        return Ok((
+            approximate(matrix),
+            Some(Fallback::WillNotFit { dimension }),
+        ));
+    };
+    match dense(&matrix, room) {
         Ok(factor) => Ok((factor, None)),
-        // Only a pivot can be fatal: a matrix that will not fit falls back whatever the policy.
-        Err(Fallback::UnusablePivot(pivot)) if config.on_dense_failure == OnDenseFailure::Error => {
+        Err(pivot) if config.on_dense_failure == OnDenseFailure::Error => {
             Err(FactorError::UnusablePivot(pivot))
         }
-        Err(declined) => Ok((sampled(matrix), Some(declined))),
+        Err(pivot) => Ok((approximate(matrix), Some(Fallback::UnusablePivot(pivot)))),
     }
 }

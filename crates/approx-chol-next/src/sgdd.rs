@@ -125,7 +125,7 @@ impl<T: Real> Sdd<T> {
     }
 }
 
-/// Whether a signature folds `M` (Harary), and the grounding of the matrix its remainder factors.
+/// Whether a signature folds `M` (Harary), and `M`'s grounding.
 #[derive(Clone, Debug)]
 pub(crate) enum Balance<T> {
     /// Folded to a Z-matrix: `M` itself, singular when it floats.
@@ -142,14 +142,14 @@ impl<T: Real> Balance<T> {
     }
 }
 
-/// What closes `L` into an SDDM: a surplus with a positive total, or none, leaving it singular.
+/// What closes `L` into an SDDM: a surplus `s = diag(M) − Σ|offdiag|` with a positive total, or none, leaving it singular.
 #[derive(Clone, Debug)]
-pub(crate) struct Grounding<T>(Option<Surplus<T>>);
+pub(crate) struct Grounding<T>(Option<Box<[T]>>);
 
 impl<T: Real> Grounding<T> {
-    /// Floats exactly when nothing grounds: an all-zero surplus.
-    pub(crate) fn of(surplus: Surplus<T>) -> Self {
-        Self(surplus.grounds().then_some(surplus))
+    /// Panics on a negative or non-finite entry; floats exactly when every entry is zero.
+    pub(crate) fn of(surplus: Vec<T>) -> Self {
+        todo!()
     }
 
     /// A proven alias: one vertex anchors instead, whatever surplus rounding left.
@@ -157,8 +157,8 @@ impl<T: Real> Grounding<T> {
         Self(None)
     }
 
-    pub(crate) fn surplus(&self) -> Option<&Surplus<T>> {
-        self.0.as_ref()
+    pub(crate) fn surplus(&self) -> Option<&[T]> {
+        self.0.as_deref()
     }
 
     pub(crate) fn is_grounded(&self) -> bool {
@@ -167,27 +167,7 @@ impl<T: Real> Grounding<T> {
 
     /// Whether it grounds exactly `n` rows.
     pub(crate) fn fits(&self, n: usize) -> bool {
-        self.0.as_ref().is_none_or(|surplus| surplus.0.len() == n)
-    }
-}
-
-/// `s = diag(M) − Σ|offdiag|`, finite and nonnegative.
-#[derive(Clone, Debug)]
-pub(crate) struct Surplus<T>(Box<[T]>);
-
-impl<T: Real> Surplus<T> {
-    /// Panics on a negative or non-finite entry.
-    pub(crate) fn new(values: Vec<T>) -> Self {
-        todo!()
-    }
-
-    pub(crate) fn values(&self) -> &[T] {
-        &self.0
-    }
-
-    /// Whether any entry is positive.
-    fn grounds(&self) -> bool {
-        self.0.iter().any(|&s| s > T::zero())
+        self.0.as_ref().is_none_or(|surplus| surplus.len() == n)
     }
 }
 
@@ -254,7 +234,7 @@ impl<T: Real> Sgdd<T> {
             .max_by(|a, b| a.violation.total_cmp(&b.violation))
     }
 
-    /// Checks symmetry, then scales each component to dominance unless it already is; a scaled one floats only if its clamped surplus vanishes.
+    /// Checks symmetry, then scales each component to dominance unless it already is; an unscaled row's surplus up to about `2tε·a_ii` (`t` its entries) counts as rounding, and a scaled part floats only if its clamped surplus vanishes.
     pub fn from_csr<I: PrimInt>(
         csr: Csr<'_, T, I>,
         policy: ScalingPolicy,

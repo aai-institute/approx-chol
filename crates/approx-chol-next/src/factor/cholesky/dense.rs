@@ -37,13 +37,22 @@ pub enum Fallback {
 
 /// Packed lower triangle of `L` in `LLᵀ`, the free slot excluded: an upper one would double the factor.
 #[derive(Clone, Debug)]
-pub(super) struct DenseCholesky<T> {
+pub(in crate::factor) struct DenseCholesky<T> {
     values: Vec<T>,
 }
 
 impl<T: Real> DenseCholesky<T> {
-    /// Assembles and factors in place; `vertices` names each base vertex in `A`.
-    pub(super) fn factor(sddm: &Sddm<'_, T>, vertices: &[u32]) -> Result<Self, Fallback> {
+    /// Room for a `dimension`-row matrix's triangle, taken before the matrix is built; `None` when it will not fit.
+    pub(in crate::factor) fn reserve(dimension: usize) -> Option<Self> {
+        todo!()
+    }
+
+    /// Assembles and factors into the reserved room; `vertices` names each base vertex in `A`.
+    pub(super) fn factor(
+        self,
+        sddm: &Sddm<'_, T>,
+        vertices: &[u32],
+    ) -> Result<Self, UnusablePivot> {
         todo!()
     }
 

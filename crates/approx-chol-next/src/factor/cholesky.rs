@@ -1,6 +1,7 @@
 mod approximate;
 mod dense;
 
+pub(super) use dense::DenseCholesky;
 pub use dense::{Fallback, PivotDefect, UnusablePivot};
 
 use super::clique_tree::Streams;
@@ -8,7 +9,6 @@ use super::config::Multiplicity;
 use super::sddm::{Sddm, Sheets};
 use crate::Real;
 use approximate::ApproximateCholesky;
-use dense::DenseCholesky;
 
 /// The factor of what the elimination leaves; it builds its own Triangular, so its facts come from that matrix.
 #[derive(Clone, Debug)]
@@ -19,8 +19,12 @@ pub(super) struct Cholesky<T> {
 
 impl<T: Real> Cholesky<T> {
     /// `vertices` names each base vertex in `A`, so a declined pivot is reported there.
-    pub(super) fn dense(sddm: &Sddm<'_, T>, vertices: &[u32]) -> Result<Self, Fallback> {
-        let dense = DenseCholesky::factor(sddm, vertices)?;
+    pub(super) fn dense(
+        room: DenseCholesky<T>,
+        sddm: &Sddm<'_, T>,
+        vertices: &[u32],
+    ) -> Result<Self, UnusablePivot> {
+        let dense = room.factor(sddm, vertices)?;
         Ok(Self::of(sddm)(Triangular::Dense(dense)))
     }
 
