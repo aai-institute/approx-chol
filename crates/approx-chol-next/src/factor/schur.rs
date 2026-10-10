@@ -96,7 +96,7 @@ fn sampled_fill<T: Real, C: Copies>(
     todo!()
 }
 
-/// Rows of the cover's complement: `|c_ke||c_je|/d_e` to `j`'s same sheet when signs agree, else its other, as the smaller times the larger's share, which underflows only below the floor.
+/// Rows of the cover's complement: `|c_ke||c_je|/d_e` to `j`'s same sheet when signs agree, else its other, as the smaller times the larger's share; a product underflowing to zero is dropped, as a stored zero couples nothing.
 fn exact_rows<T: Real>(schur: &SchurComplement<'_, T>) -> UpperAdjacency<T> {
     todo!()
 }
