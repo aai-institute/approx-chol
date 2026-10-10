@@ -84,7 +84,7 @@ impl<'a, T: Real> CholeskyInput<'a, T> for &SchurComplement<'_, T> {
     }
 }
 
-/// Each eliminated star's clique tree under its own stream, the ground a final neighbor; a row of `C` repeats no column, so stars skip the merge; chunks in star order, so merged duplicates sum alike at any thread count.
+/// Each eliminated star's clique tree under its own stream, the ground a final neighbor unless its share is zero; a row of `C` repeats no column, so stars skip the merge; chunks in star order, so merged duplicates sum alike at any thread count.
 fn sampled_fill<T: Real, C: Copies>(
     schur: &SchurComplement<'_, T>,
     split: C::Split,
