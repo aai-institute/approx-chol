@@ -13,7 +13,7 @@ impl<T: Real> Room<T> {
         todo!()
     }
 
-    /// Left-looking GTH on `−w`, the ground's `−s` or the anchor's row as free row `n`: entry `(r, j)` gains `Σ_{k<j} min·(max·p_k⁻¹)` by magnitude, `p_j = −Σ` of column `j` below the diagonal, `p_j⁻¹` kept in the tail, and one last pass scales by `√p⁻¹`; so nothing cancels, under- or overflows (`d − Σl²` cancelled to 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more factor time), and the free row and tail are truncated, leaving `n` rows grounded or `n − 1` anchored.
+    /// Left-looking GTH on `−w`, the ground's `−s` or the anchor's row as free row `n`: stored entry `(r, j)` subtracts `Σ_{k<j} min·(max·p_k⁻¹)` of the magnitudes `|a_rk|, |a_jk|`, so its weight grows, `p_j = −Σ` of column `j` below the diagonal, `p_j⁻¹` kept in the tail, and one last pass scales by `√p⁻¹`; so nothing cancels, under- or overflows (`d − Σl²` cancelled to 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more factor time), and the free row and tail are truncated, leaving `n` rows grounded or `n − 1` anchored.
     pub(super) fn factor(self, sddm: &Sddm<'_, T>) -> DenseCholesky<T> {
         todo!()
     }
