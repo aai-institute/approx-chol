@@ -142,7 +142,7 @@ impl<T: Real, I: PrimInt> Input<'_, T, I> {
     }
 }
 
-/// Per component, the Rayleigh certificate `uᵀAu ≤ 5ε·uᵀDu`, `D = diag(A)` and `ε` that of `T`: the signed alias `u` solves `v_a u_a + v_b u_b = 0` along a maximum spanning forest of `|bilinear(v_a, v_b)|` over coupling columns, grown in `f64` as `u = μ 2^η` with `(μ_b, δ) = frexp(−m(v_a) μ_a / m(v_b))`, `η_b = η_a + e(v_a) − e(v_b) + δ`, then shifted by one power of two to `max a_ii u_i² ∈ [1, 4)`; `uᵀAu = Σ_k bilinear_k(p_k, p_k)` with `p_k = v_a u_a + v_b u_b` formed on mantissas, a straddling column keeping its own end's term, summed in column order.
+/// Per component, the Rayleigh certificate `uᵀAu ≤ 5ε·uᵀDu`, `D = diag(A)` and `ε` that of `T`: the signed alias `u` solves `v_a u_a + v_b u_b = 0` along a maximum spanning forest of `|bilinear(v_a, v_b)|` over coupling columns, grown as `u = μ 2^η`, `μ: f64` and `η: i64` so no chain of `u32` columns wraps it, with `(μ_b, δ) = frexp(−m(v_a) μ_a / m(v_b))`, `η_b = η_a + e(v_a) − e(v_b) + δ`, then shifted by one power of two to `max a_ii u_i² ∈ [1, 4)`; `uᵀAu = Σ_k bilinear_k(p_k, p_k)` with `p_k = v_a u_a + v_b u_b` formed on mantissas, a straddling column keeping its own end's term, summed in column order.
 fn certify<T: Real, I: PrimInt>(
     columns: &Columns<'_, T, I>,
     partition: &Partition,
