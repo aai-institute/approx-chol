@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
-pub use cholesky::{Fallback, PivotDefect, UnusablePivot};
-pub use config::{CliqueRule, Config, InnerParallelism, Multiplicity, OnDenseFailure, SplitCount};
+pub use cholesky::Fallback;
+pub use config::{CliqueRule, Config, InnerParallelism, Multiplicity, SplitCount};
 
 use crate::sgdd::{Balance, Component, Frame, OffDiagonal, Sgdd};
 use crate::Real;
@@ -20,33 +20,6 @@ use cholesky::Cholesky;
 use clique_tree::Streams;
 use schur::{BlockElimination, SchurComplement};
 use sddm::{Sddm, Sheets};
-
-/// Why [`factorize`](crate::factorize) failed.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FactorError {
-    /// Under [`OnDenseFailure::Error`], a dense Cholesky reached an unusable pivot.
-    UnusablePivot(UnusablePivot),
-}
-
-impl core::fmt::Display for FactorError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::UnusablePivot(UnusablePivot { vertex, defect }) => {
-                let defect = match defect {
-                    PivotDefect::NonFinite => "non-finite",
-                    PivotDefect::NonPositive => "non-positive",
-                };
-                write!(
-                    f,
-                    "dense Cholesky reached a {defect} pivot at vertex {vertex}"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for FactorError {}
 
 /// Errors returned by fallible solves.
 #[non_exhaustive]
@@ -92,17 +65,15 @@ pub struct Factor<T = f64> {
 }
 
 impl<T: Real> Factor<T> {
-    pub(crate) fn build(sgdd: &Sgdd<T>, config: &Config) -> Result<Self, FactorError> {
-        // Collected whole first: the first failing component in order wins, not the first a worker saw.
-        let built: Vec<_> = (sgdd.components().par_iter())
+    pub(crate) fn build(sgdd: &Sgdd<T>, config: &Config) -> Self {
+        let components = (sgdd.components().par_iter())
             .map(|component| ComponentFactor::build(component, config))
             .collect();
-        let components = built.into_iter().collect::<Result<_, _>>()?;
-        Ok(Self {
+        Self {
             n: sgdd.n(),
             components,
             dead: sgdd.dead().into(),
-        })
+        }
     }
 
     /// Dimension of `A`.
@@ -164,7 +135,7 @@ pub struct ComponentFactor<T = f64> {
 }
 
 impl<T: Real> ComponentFactor<T> {
-    fn build(component: &Component<T>, config: &Config) -> Result<Self, FactorError> {
+    fn build(component: &Component<T>, config: &Config) -> Self {
         let frame = component.frame();
         let vertices = frame.vertices();
         let streams = Streams::new(config.seed, vertices[0]);
@@ -178,25 +149,22 @@ impl<T: Real> ComponentFactor<T> {
                     ),
                     Balance::Frustrated(grounding) => Sddm::cover(adjacency, grounding),
                 };
-                let factored = Cholesky::factor(sddm, vertices, streams.cholesky(), config);
-                (None, factored.map_err(FactorError::UnusablePivot)?)
+                (None, Cholesky::factor(sddm, streams.cholesky(), config))
             }
             (OffDiagonal::Bipartite(cross), balance) => {
                 let schur =
                     SchurComplement::new(cross, balance, config.complement, streams.stars());
-                let kept = &vertices[schur.n_eliminated()..];
-                let factored = Cholesky::factor(&schur, kept, streams.cholesky(), config);
-                let factored = factored.map_err(FactorError::UnusablePivot)?;
+                let factored = Cholesky::factor(&schur, streams.cholesky(), config);
                 (Some(schur.finish()), factored)
             }
         };
-        Ok(Self {
+        Self {
             frame: Arc::clone(frame),
             floats: component.floats(),
             elimination,
             cholesky,
             fallback,
-        })
+        }
     }
 
     /// The component's vertices in `A`'s numbering, in local order.

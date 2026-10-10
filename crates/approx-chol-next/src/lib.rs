@@ -14,9 +14,8 @@ mod storage;
 
 use std::fmt::Debug;
 
-pub use factor::{CliqueRule, Config, InnerParallelism, Multiplicity, OnDenseFailure, SplitCount};
-pub use factor::{ComponentFactor, Factor, FactorError, SolveError};
-pub use factor::{Fallback, PivotDefect, UnusablePivot};
+pub use factor::{CliqueRule, Config, InnerParallelism, Multiplicity, SplitCount};
+pub use factor::{ComponentFactor, Factor, Fallback, SolveError};
 pub use sgdd::{Component, FromCsrError, ReduceError, ScalingPolicy, ScalingReport, Sgdd};
 
 /// The scalar every stage computes in: any `Float` a factor can share across threads and print.
@@ -25,6 +24,6 @@ pub trait Real: num_traits::Float + Debug + Send + Sync + 'static {}
 impl<T: num_traits::Float + Debug + Send + Sync + 'static> Real for T {}
 
 /// Factors every component of `sgdd` in parallel; `sgdd` survives for another `config`.
-pub fn factorize<T: Real>(sgdd: &Sgdd<T>, config: &Config) -> Result<Factor<T>, FactorError> {
+pub fn factorize<T: Real>(sgdd: &Sgdd<T>, config: &Config) -> Factor<T> {
     Factor::build(sgdd, config)
 }

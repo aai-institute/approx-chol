@@ -9,8 +9,6 @@ pub struct Config {
     pub approximate: Multiplicity,
     /// Largest dimension, a cover's two sheets counted, that the Cholesky takes dense; `0` never does.
     pub dense_up_to: usize,
-    /// What a dense Cholesky's unusable pivot does.
-    pub on_dense_failure: OnDenseFailure,
 }
 
 impl Config {
@@ -27,7 +25,6 @@ impl Default for Config {
             complement: CliqueRule::Sampled(Multiplicity::Single),
             approximate: Multiplicity::Single,
             dense_up_to: 24,
-            on_dense_failure: OnDenseFailure::FallBackToApproximate,
         }
     }
 }
@@ -64,17 +61,6 @@ impl SplitCount {
     pub fn get(self) -> u32 {
         self.0
     }
-}
-
-/// What a dense Cholesky's unusable pivot does.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum OnDenseFailure {
-    /// Factor that matrix approximately and record a [`Fallback`](crate::Fallback).
-    #[default]
-    FallBackToApproximate,
-    /// Fail with [`FactorError::UnusablePivot`](crate::FactorError::UnusablePivot).
-    Error,
 }
 
 /// Whether a solve may split its own work across threads; an outer parallel loop says no.

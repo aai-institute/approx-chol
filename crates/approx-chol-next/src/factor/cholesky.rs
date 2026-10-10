@@ -1,10 +1,8 @@
 mod approximate;
 mod dense;
 
-pub use dense::{PivotDefect, UnusablePivot};
-
 use super::clique_tree::SequentialDraws;
-use super::config::{Config, Multiplicity, OnDenseFailure};
+use super::config::{Config, Multiplicity};
 use super::sddm::{Sddm, Sheets};
 use crate::Real;
 use approximate::ApproximateCholesky;
@@ -14,8 +12,6 @@ use dense::{DenseCholesky, Room};
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fallback {
-    /// The dense Cholesky reached an unusable pivot.
-    UnusablePivot(UnusablePivot),
     /// The packed triangle does not fit in memory.
     WillNotFit {
         /// Dimension of the declined matrix, a cover's two sheets counted.
@@ -29,7 +25,7 @@ pub(super) trait CholeskyInput<'a, T: Real> {
     fn dimension(&self) -> usize;
 
     /// Always exact: a dense Cholesky spends nothing on sparsity.
-    fn for_dense(&self) -> Sddm<'_, T>;
+    fn for_dense(self) -> Sddm<'a, T>;
 
     /// Consumed, so an owned matrix is freed before fill grows the graph.
     fn for_approximate(self) -> Sddm<'a, T>;
@@ -40,8 +36,8 @@ impl<'a, T: Real> CholeskyInput<'a, T> for Sddm<'a, T> {
         self.n()
     }
 
-    fn for_dense(&self) -> Sddm<'_, T> {
-        self.view()
+    fn for_dense(self) -> Sddm<'a, T> {
+        self
     }
 
     fn for_approximate(self) -> Sddm<'a, T> {
@@ -57,35 +53,24 @@ pub(super) struct Cholesky<T> {
 }
 
 impl<T: Real> Cholesky<T> {
-    /// Dense when the config says so and its room is reserved before the matrix is built, else approximate; `vertices` names each base vertex in `A`.
+    /// Dense when the config says so and its room is reserved before the matrix is built, else approximate.
     pub(super) fn factor<'a>(
         input: impl CholeskyInput<'a, T>,
-        vertices: &[u32],
         draws: SequentialDraws,
         config: &Config,
-    ) -> Result<(Self, Option<Fallback>), UnusablePivot> {
+    ) -> (Self, Option<Fallback>) {
         let approximate = |sddm| Self::approximate(sddm, config.approximate, draws);
         let dimension = input.dimension();
         if !config.routes_dense(dimension) {
-            return Ok((approximate(input.for_approximate()), None));
+            return (approximate(input.for_approximate()), None);
         }
         let Some(room) = Room::reserve(dimension) else {
             let declined = Fallback::WillNotFit { dimension };
-            return Ok((approximate(input.for_approximate()), Some(declined)));
+            return (approximate(input.for_approximate()), Some(declined));
         };
-        let dense = {
-            let exact = input.for_dense();
-            let factor = room.factor(&exact, vertices);
-            factor.map(|dense| Self::of(&exact)(Triangular::Dense(dense)))
-        };
-        match dense {
-            Ok(factor) => Ok((factor, None)),
-            Err(pivot) if config.on_dense_failure == OnDenseFailure::Error => Err(pivot),
-            Err(pivot) => {
-                let declined = Fallback::UnusablePivot(pivot);
-                Ok((approximate(input.for_approximate()), Some(declined)))
-            }
-        }
+        let exact = input.for_dense();
+        let dense = room.factor(&exact);
+        (Self::of(&exact)(Triangular::Dense(dense)), None)
     }
 
     fn approximate(sddm: Sddm<'_, T>, multiplicity: Multiplicity, draws: SequentialDraws) -> Self {

@@ -73,13 +73,13 @@ impl<'a, T: Real> SchurComplement<'a, T> {
     }
 }
 
-/// `S` built once its arm is chosen; only a declined dense arm builds it again.
+/// `S` built once, after its arm is chosen.
 impl<'a, T: Real> CholeskyInput<'a, T> for &SchurComplement<'_, T> {
     fn dimension(&self) -> usize {
         Sheets::of(self.balance).count() * self.elimination.cross.n_kept()
     }
 
-    fn for_dense(&self) -> Sddm<'_, T> {
+    fn for_dense(self) -> Sddm<'a, T> {
         self.build(CliqueRule::Exact)
     }
 
