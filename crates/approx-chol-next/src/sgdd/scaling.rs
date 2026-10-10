@@ -43,16 +43,14 @@ pub struct ScalingReport {
 pub(super) enum Scaling<T> {
     /// Every SDDM input, so an SDDM CSR reduces bit for bit as before.
     AlreadyDominant,
-    /// `f = μ/√a_ii` with `μ` peaking at `1`, so `M`'s diagonal `μ²` never exceeds `1`.
-    Scaled {
-        scales: Box<[T]>,
-        report: Option<ScalingReport>,
-    },
+    /// Uncertified until its hand-over clamps: the report weighs both.
+    Scaled(Relaxation<T>),
 }
 
 /// What an iteration reached: scales and how far short of dominance they leave `A`.
-struct Relaxation<T> {
-    scales: Box<[T]>,
+pub(super) struct Relaxation<T> {
+    /// `f = μ/√a_ii` with `μ` peaking at `1`, so `M`'s diagonal `μ²` never exceeds `1`.
+    pub(super) scales: Box<[T]>,
     iterations: usize,
     violation: T,
 }
@@ -89,22 +87,29 @@ pub(super) fn dominance_scaling<T: Real>(
             })
         }
     }?;
-    Ok(policy.certify(relaxation))
+    Ok(Scaling::Scaled(relaxation))
 }
 
 impl ScalingPolicy {
-    /// The one place the tolerance decides whether a relaxation is reported.
-    fn certify<T: Real>(&self, relaxation: Relaxation<T>) -> Scaling<T> {
-        let violation = widen(relaxation.violation);
-        let report = (violation > self.tolerance).then_some(ScalingReport {
+    /// The one place the tolerance decides whether a scaling is reported: its own violation or the deficit its hand-over clamped, whichever is worse.
+    pub(super) fn certify<T: Real>(
+        &self,
+        relaxation: &Relaxation<T>,
+        clamped: f64,
+    ) -> Option<ScalingReport> {
+        let violation = widen(relaxation.violation).max(clamped);
+        (violation > self.tolerance).then_some(ScalingReport {
             iterations: relaxation.iterations,
             violation,
-        });
-        Scaling::Scaled {
-            scales: relaxation.scales,
-            report,
-        }
+        })
     }
+}
+
+/// `max_i (Σ_j|m_ij| − m_ii)/m_ii`, at least `0`: what clamping `M`'s deficits to zero surplus adds.
+pub(super) fn clamped_deficit<T: Real>(diagonal: &[T], abs_row_sums: &[T]) -> f64 {
+    (diagonal.iter().zip(abs_row_sums))
+        .map(|(&d, &s)| (widen(s) - widen(d)) / widen(d))
+        .fold(0.0, f64::max)
 }
 
 /// Unscaled, a surplus inside its band `t_i ε a_ii + t_i ε Σ_j|a_ij|`, `t_i` the additions that formed it, or a certified deficit counts as zero, and the component floats when none remains; a scaled surplus is its scaling's residue, which no row bound tells from a real one.

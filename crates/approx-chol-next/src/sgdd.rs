@@ -273,7 +273,7 @@ impl<T: Real> Unreduced<T> {
             && signs.is_some()
             && scaling::rows_prove_singular(&self, &scaling);
         let vertex = self.vertices[0];
-        let mut component = self.into_component(scaling, signs)?;
+        let mut component = self.into_component(scaling, signs, policy)?;
         if singular {
             component.float();
         }
@@ -288,28 +288,36 @@ impl<T: Real> Unreduced<T> {
         self,
         scaling: scaling::Scaling<T>,
         signs: Option<Congruence<T>>,
+        policy: &ScalingPolicy,
     ) -> Result<Component<T>, ReduceError> {
         let vertex = self.vertices[0];
         let folds = signs.is_some();
         let signs = signs.unwrap_or_else(Congruence::identity);
-        let (congruence, scales, report) = match scaling {
-            scaling::Scaling::AlreadyDominant => (signs, None, None),
-            scaling::Scaling::Scaled { scales, report } => {
-                (signs.scaled(&scales), Some(scales), report)
+        let (congruence, relaxation) = match scaling {
+            scaling::Scaling::AlreadyDominant => (signs, None),
+            scaling::Scaling::Scaled(relaxation) => {
+                (signs.scaled(&relaxation.scales), Some(relaxation))
             }
         };
         let off_diagonal =
             (congruence.transform(self.off_diagonal)).ok_or(ReduceError::Unscalable { vertex })?;
         // Signs keep every magnitude, so only a scaling sums `M`'s rows again.
-        let (diagonal, abs_row_sums) = match scales {
+        let (diagonal, abs_row_sums) = match &relaxation {
             None => (self.diagonal, self.abs_row_sums),
-            Some(f) => {
-                let diagonal = (self.diagonal.iter().zip(&f[..]))
+            Some(relaxation) => {
+                let diagonal = (self.diagonal.iter().zip(&relaxation.scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();
                 (diagonal, off_diagonal.abs_row_sums())
             }
         };
+        // An unscaled deficit lies inside the rounding band `already_dominant` allowed.
+        let report = relaxation.and_then(|relaxation| {
+            policy.certify(
+                &relaxation,
+                scaling::clamped_deficit(&diagonal, &abs_row_sums),
+            )
+        });
         let surplus = (diagonal.iter().zip(&abs_row_sums))
             .map(|(&d, &s)| (d - s).max(T::zero()))
             .collect();
