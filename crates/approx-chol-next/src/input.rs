@@ -4,7 +4,6 @@ mod csr;
 mod width2;
 
 pub use csr::{Csr, CsrError};
+pub use width2::bipartite::{BipartiteGram, BipartiteGraph, Incidence, Side, Weights};
 pub(crate) use width2::Columns;
-pub use width2::{
-    BipartiteGram, BipartiteGraph, FactorWidth2, Incidence, Side, ViewError, Weights,
-};
+pub use width2::{FactorWidth2, ViewError};

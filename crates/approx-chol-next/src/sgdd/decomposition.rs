@@ -20,17 +20,15 @@ enum Input<'v, T, I> {
     Csr(Csr<'v, T, I>),
     /// A signless bipartite Laplacian, its diagonal `C`'s signed row and column sums: singular by shape, so every component floats untested.
     Signless(Option<Biadjacency<T>>),
-    /// `C` of `[D_l C; Cᵀ D_r]` with the sides' diagonals; a bipartite component takes the block elimination.
+    /// `C` of `[D_l C; Cᵀ D_r]`, the sides' diagonals read from the Gram; a bipartite component takes the block elimination.
     BipartiteGram {
         c: Option<Biadjacency<T>>,
-        left: &'v [T],
-        right: &'v [T],
-        columns: Columns<'v, T, I>,
+        gram: BipartiteGram<'v, T, I>,
     },
     /// A general factor-width-2 `A`, as its CSR would store it.
     Gram {
         a: Option<Assembled<T>>,
-        columns: Columns<'v, T, I>,
+        v: FactorWidth2<'v, T, I>,
     },
 }
 
@@ -44,35 +42,24 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
     }
 
     pub(super) fn gram(v: FactorWidth2<'v, T, I>) -> Result<Self, ReduceError> {
-        let columns = v.columns();
-        let a = assemble_general(&columns)?;
+        let a = assemble_general(&v)?;
         Ok(Self {
             partition: components::of_general(&a),
-            input: Input::Gram {
-                a: Some(a),
-                columns,
-            },
+            input: Input::Gram { a: Some(a), v },
         })
     }
 
     pub(super) fn bipartite_gram(gram: BipartiteGram<'v, T, I>) -> Result<Self, ReduceError> {
-        let (left, right) = gram.diagonals();
-        let columns = gram.columns();
-        let c = assemble_bipartite(&columns)?;
+        let c = assemble_bipartite(&gram, gram.n_left())?;
         Ok(Self {
             partition: components::of_cross(&c),
-            input: Input::BipartiteGram {
-                c: Some(c),
-                left,
-                right,
-                columns,
-            },
+            input: Input::BipartiteGram { c: Some(c), gram },
         })
     }
 
     /// A negative weight leaves a diagonal below its row, so it fails as not GDD.
     pub(super) fn signless(graph: BipartiteGraph<'v, T, I>) -> Result<Self, ReduceError> {
-        let c = assemble_bipartite(&graph.columns())?;
+        let c = assemble_bipartite(&graph, graph.n_left())?;
         Ok(Self {
             partition: components::of_cross(&c),
             input: Input::Signless(Some(c)),
@@ -100,9 +87,8 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         match &input {
             Input::Csr(_) => {}
             Input::Signless(_) => (components.iter_mut()).for_each(|component| component.m.float()),
-            Input::BipartiteGram { columns, .. } | Input::Gram { columns, .. } => {
-                float_certified(columns, &mut components)
-            }
+            Input::BipartiteGram { gram, .. } => float_certified(gram, &mut components),
+            Input::Gram { v, .. } => float_certified(v, &mut components),
         }
         Ok(Sgdd {
             n: partition.n(),
@@ -125,24 +111,20 @@ impl<T: Real, I: PrimInt> Input<'_, T, I> {
 }
 
 /// Floats each folded component whose scaling meets `A_c`'s kernel to rounding: with `f = F·1` over its vertices and `p_k = f_a v_a + f_b v_b`, `Σ_k bilinear_k(p_k, p_k) ≤ 5ε Σ_k [bilinear_k(f_a v_a, f_a v_a) + bilinear_k(f_b v_b, f_b v_b)]`, `ε` that of `T`, summed in `f64` in column order over nonzero weights, as a zero-weight column is no part of `A`; a column straddling components adds its own end's square to both sides, a zero or non-finite sum grounds, and a frustrated component is nonsingular and never floats.
-fn float_certified<T: Real, I: PrimInt>(
-    columns: &Columns<'_, T, I>,
-    components: &mut [Component<T>],
-) {
+fn float_certified<T: Real>(v: &impl Columns<T>, components: &mut [Component<T>]) {
     todo!()
 }
 
 /// `C`, accumulated in a dense table when it is small (+54% without it), unfiltered: a column that couples nothing adds an exact zero and zero cells drop; a cell leaving `in_range` is `OutOfRange`.
-fn assemble_bipartite<T: Real, I: PrimInt>(
-    columns: &Columns<'_, T, I>,
+fn assemble_bipartite<T: Real>(
+    v: &impl Columns<T>,
+    n_left: usize,
 ) -> Result<Biadjacency<T>, ReduceError> {
     todo!()
 }
 
 /// `A`'s strict upper triangle and diagonal, cells `bilinear(v_a, v_b)` summed by pair, zero cells dropped; a value leaving `in_range` is `OutOfRange`.
-fn assemble_general<T: Real, I: PrimInt>(
-    columns: &Columns<'_, T, I>,
-) -> Result<Assembled<T>, ReduceError> {
+fn assemble_general<T: Real>(v: &impl Columns<T>) -> Result<Assembled<T>, ReduceError> {
     todo!()
 }
 
