@@ -54,7 +54,7 @@ struct Relaxation<T> {
     violation: T,
 }
 
-/// Every input's diagonal is screened here, before any dominance test.
+/// Every input's diagonal is screened here, before any dominance test; a view's zero diagonal was already `OutOfRange`.
 pub(super) fn dominance_scaling<T: Real>(
     a: &Unreduced<T>,
     policy: &ScalingPolicy,

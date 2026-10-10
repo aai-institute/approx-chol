@@ -261,7 +261,7 @@ pub enum ReduceError {
         /// The component's first vertex in local order, in `A`'s numbering.
         vertex: u32,
     },
-    /// An assembled entry or diagonal is non-finite, or nonzero below `MIN_POSITIVE/EPSILON`.
+    /// An assembled entry or diagonal is non-finite, nonzero below `MIN_POSITIVE/EPSILON`, or a view's diagonal underflowed to zero.
     OutOfRange {
         /// The entry's vertex, in `A`'s numbering.
         vertex: u32,

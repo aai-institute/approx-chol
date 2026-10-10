@@ -8,12 +8,12 @@ use crate::Real;
 pub(super) struct Room<T>(Vec<T>);
 
 impl<T: Real> Room<T> {
-    /// A packed `dimension + 1` rows, the free slot's row holding the ground or anchor while GTH works; `None` when it will not fit.
+    /// A packed `dimension + 1` rows, the free slot's row holding the ground or anchor while GTH works, then `dimension` inverse pivots, contiguous as the fill reads them (strided in the diagonal measured +12-18% at n 16-24); `None` when it will not fit.
     pub(super) fn reserve(dimension: usize) -> Option<Self> {
         todo!()
     }
 
-    /// Pivot `p = Σ` remaining weights `+ s`, fill `w_jk` and surplus `s_j` each gain `min·(max/p)` by magnitude of their two factors (`w_ji, w_ki` or `w_ji, s_i`) on unscaled weights, as any other order under- or overflows, `√` taken in one last pass: `d − Σl²` cancelled to 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more factor time; inverse pivots wait in the untouched diagonal, and the free row is truncated, leaving `n` rows grounded or `n − 1` anchored.
+    /// Pivot `p = Σ` remaining weights `+ s`, fill `w_jk` and surplus `s_j` each gain `min·(max/p)` by magnitude of their two factors (`w_ji, w_ki` or `w_ji, s_i`) on unscaled weights, as any other order under- or overflows, `√` taken in one last pass: `d − Σl²` cancelled to 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more factor time; inverse pivots wait in the tail, and the free row is truncated, leaving `n` rows grounded or `n − 1` anchored.
     pub(super) fn factor(self, sddm: &Sddm<'_, T>) -> DenseCholesky<T> {
         todo!()
     }
