@@ -101,7 +101,7 @@ impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
         todo!()
     }
 
-    /// `A`'s diagonal, left rows then right ones; the first Gram of an incidence sums each side's.
+    /// `A`'s diagonal, left rows then right ones; the first Gram of an incidence sums each side's, serially, as a rayon initializer deadlocks when Grams reduce in parallel.
     pub(crate) fn diagonals(&self) -> (&'a [T], &'a [T]) {
         todo!()
     }
