@@ -79,13 +79,6 @@ pub(crate) struct Column<T> {
     pub(crate) weight: Weight<T>,
 }
 
-impl<T: Real> Column<T> {
-    /// Nonzero at both ends, tested factor by factor so no product underflows.
-    pub(crate) fn couples(&self) -> bool {
-        !self.weight.is_zero() && self.v_a != T::zero() && self.v_b != T::zero()
-    }
-}
-
 /// One column's entry of `W`, as the caller gave it; read only through [`bilinear`](Self::bilinear), so no `s²` is ever formed.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Weight<T> {

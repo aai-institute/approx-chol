@@ -19,7 +19,7 @@ pub enum Weights<'a, T> {
 }
 
 impl<T: Real> Weights<'_, T> {
-    /// One entry per column, each `w ≥ 0` or `s` finite; both views check it in `new`.
+    /// One entry per column, each `w` finite and nonnegative or `s` finite; both views check it in `new`.
     fn check(self, columns: usize) -> Result<(), ViewError> {
         todo!()
     }
