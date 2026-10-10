@@ -1,4 +1,4 @@
-//! Each part as an optional block elimination `L` and a Cholesky of what it leaves: `A_c⁺ ≈ P F L⁻ᵀ diag(D_e⁻¹, S⁺) L⁻¹ F P`, `P` projecting out `F·1` when the part floats, else `I`.
+//! Each component as an optional block elimination `L` and a Cholesky of what it leaves: `A_c⁺ ≈ P F L⁻ᵀ diag(D_e⁻¹, S⁺) L⁻¹ F P`, `P` projecting out `F·1` when the component floats, else `I`.
 
 mod cholesky;
 mod clique_tree;
@@ -14,7 +14,7 @@ use rayon::prelude::*;
 pub use cholesky::{Fallback, PivotDefect, UnusablePivot};
 pub use config::{CliqueRule, Config, InnerParallelism, Multiplicity, OnDenseFailure, SplitCount};
 
-use crate::sgdd::{Balance, Frame, OffDiagonal, Part, Sgdd};
+use crate::sgdd::{Balance, Component, Frame, OffDiagonal, Sgdd};
 use crate::Real;
 use cholesky::{Cholesky, DenseCholesky};
 use clique_tree::Streams;
@@ -83,24 +83,24 @@ impl core::fmt::Display for SolveError {
 
 impl std::error::Error for SolveError {}
 
-/// Block-diagonal approximate inverse of `A`: one [`PartFactor`] per [`Part`].
+/// Block-diagonal approximate inverse of `A`: one [`ComponentFactor`] per [`Component`].
 #[derive(Clone, Debug)]
 pub struct Factor<T = f64> {
     n: usize,
-    parts: Vec<PartFactor<T>>,
+    components: Vec<ComponentFactor<T>>,
     dead: Box<[u32]>,
 }
 
 impl<T: Real> Factor<T> {
     pub(crate) fn build(sgdd: &Sgdd<T>, config: &Config) -> Result<Self, FactorError> {
-        // Collected whole first: the first failing part in order wins, not the first a worker saw.
-        let built: Vec<_> = (sgdd.parts().par_iter())
-            .map(|part| PartFactor::build(part, config))
+        // Collected whole first: the first failing component in order wins, not the first a worker saw.
+        let built: Vec<_> = (sgdd.components().par_iter())
+            .map(|component| ComponentFactor::build(component, config))
             .collect();
-        let parts = built.into_iter().collect::<Result<_, _>>()?;
+        let components = built.into_iter().collect::<Result<_, _>>()?;
         Ok(Self {
             n: sgdd.n(),
-            parts,
+            components,
             dead: sgdd.dead().into(),
         })
     }
@@ -110,30 +110,30 @@ impl<T: Real> Factor<T> {
         self.n
     }
 
-    /// Each part's factor, in [`Sgdd::parts`]' order, for a caller that solves them on its own.
-    pub fn parts(&self) -> &[PartFactor<T>] {
-        &self.parts
+    /// Each component's factor, in [`Sgdd::components`]' order, for a caller that solves them on its own.
+    pub fn components(&self) -> &[ComponentFactor<T>] {
+        &self.components
     }
 
-    /// The parts, owned, for a caller that keeps one solver per part; dead vertices need none.
-    pub fn into_parts(self) -> Vec<PartFactor<T>> {
-        self.parts
+    /// The components, owned, for a caller that keeps one solver per component; dead vertices need none.
+    pub fn into_components(self) -> Vec<ComponentFactor<T>> {
+        self.components
     }
 
     /// Cholesky factors routed dense and factored approximately instead.
     pub fn fallbacks(&self) -> impl Iterator<Item = Fallback> + '_ {
-        self.parts.iter().filter_map(PartFactor::fallback)
+        self.components.iter().filter_map(ComponentFactor::fallback)
     }
 
-    /// Scratch [`solve_in_place`](Self::solve_in_place) needs: a part's gathered values and its own scratch.
+    /// Scratch [`solve_in_place`](Self::solve_in_place) needs: a component's gathered values and its own scratch.
     pub fn scratch_len(&self) -> usize {
-        (self.parts.iter())
-            .map(|part| part.vertices().len() + part.scratch_len())
+        (self.components.iter())
+            .map(|component| component.vertices().len() + component.scratch_len())
             .max()
             .unwrap_or(0)
     }
 
-    /// `A⁺b` on singular parts; vertices in no part solve to `0`.
+    /// `A⁺b` on singular components; vertices in no component solve to `0`.
     pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
         let mut x = b.to_vec();
         let mut scratch = vec![T::zero(); self.scratch_len()];
@@ -141,7 +141,7 @@ impl<T: Real> Factor<T> {
         Ok(x)
     }
 
-    /// `x` holds `b` on entry and the solution on return; parts solve in turn, each under `inner`.
+    /// `x` holds `b` on entry and the solution on return; components solve in turn, each under `inner`.
     pub fn solve_in_place(
         &self,
         x: &mut [T],
@@ -152,23 +152,23 @@ impl<T: Real> Factor<T> {
     }
 }
 
-/// One part's factor over its vertices of `A`.
+/// One component's factor over its vertices of `A`.
 #[derive(Clone, Debug)]
-pub struct PartFactor<T = f64> {
+pub struct ComponentFactor<T = f64> {
     frame: Arc<Frame<T>>,
-    /// The part's own fact, not its Cholesky's: an underflowed complement surplus never makes it singular.
+    /// The component's own fact, not its Cholesky's: an underflowed complement surplus never makes it singular.
     floats: bool,
     elimination: Option<BlockElimination<T>>,
     cholesky: Cholesky<T>,
     fallback: Option<Fallback>,
 }
 
-impl<T: Real> PartFactor<T> {
-    fn build(part: &Part<T>, config: &Config) -> Result<Self, FactorError> {
-        let frame = part.frame();
+impl<T: Real> ComponentFactor<T> {
+    fn build(component: &Component<T>, config: &Config) -> Result<Self, FactorError> {
+        let frame = component.frame();
         let vertices = frame.vertices();
         let streams = Streams::new(config.seed, vertices[0]);
-        let (elimination, (cholesky, fallback)) = match part.m() {
+        let (elimination, (cholesky, fallback)) = match component.m() {
             (OffDiagonal::General(adjacency), balance) => {
                 let sddm = match balance {
                     Balance::Balanced(grounding) => Sddm::new(
@@ -199,19 +199,19 @@ impl<T: Real> PartFactor<T> {
         };
         Ok(Self {
             frame: Arc::clone(frame),
-            floats: part.floats(),
+            floats: component.floats(),
             elimination,
             cholesky,
             fallback,
         })
     }
 
-    /// The part's vertices in `A`'s numbering, in local order.
+    /// The component's vertices in `A`'s numbering, in local order.
     pub fn vertices(&self) -> &[u32] {
         self.frame.vertices()
     }
 
-    /// Why this part is less accurate than its config asked, if it is.
+    /// Why this component is less accurate than its config asked, if it is.
     pub fn fallback(&self) -> Option<Fallback> {
         self.fallback
     }

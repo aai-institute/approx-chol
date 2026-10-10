@@ -29,16 +29,16 @@ impl<T: Real> CdfSampler<T> {
     }
 }
 
-/// One part's streams, keyed so no draw depends on thread scheduling or on how other parts routed.
+/// One component's streams, keyed so no draw depends on thread scheduling or on how other components routed.
 #[derive(Clone, Copy, Debug)]
 pub(in crate::factor) struct Streams {
     seed: u64,
-    part: u32,
+    component: u32,
 }
 
 impl Streams {
-    pub(in crate::factor) fn new(seed: u64, part: u32) -> Self {
-        Self { seed, part }
+    pub(in crate::factor) fn new(seed: u64, component: u32) -> Self {
+        Self { seed, component }
     }
 
     pub(in crate::factor) fn cholesky(self) -> Stream {
@@ -52,7 +52,7 @@ impl Streams {
     fn stream(self, stage: Stage) -> Stream {
         Stream {
             seed: self.seed,
-            part: self.part,
+            component: self.component,
             stage,
         }
     }
@@ -62,7 +62,7 @@ impl Streams {
 #[derive(Clone, Copy, Debug)]
 pub(in crate::factor) struct Stream {
     seed: u64,
-    part: u32,
+    component: u32,
     stage: Stage,
 }
 
@@ -73,7 +73,7 @@ impl Stream {
     }
 }
 
-/// Which draws of a part a stream feeds.
+/// Which draws of a component a stream feeds.
 #[derive(Clone, Copy, Debug)]
 enum Stage {
     Cholesky,

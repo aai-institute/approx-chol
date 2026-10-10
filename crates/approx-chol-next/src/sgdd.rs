@@ -1,4 +1,4 @@
-//! `A` as one reduced part `M = F · A_c · F` per connected component, decided once per input.
+//! `A` as its connected components, each reduced to `M = F · A_c · F`, decided once per input.
 
 mod congruence;
 mod decomposition;
@@ -19,13 +19,13 @@ use crate::Real;
 
 /// One component of `A`, reduced: `M = F · A_c · F` over its vertices, eliminated block first.
 #[derive(Clone, Debug)]
-pub struct Part<T = f64> {
+pub struct Component<T = f64> {
     frame: Arc<Frame<T>>,
     m: Sdd<T>,
     report: Option<ScalingReport>,
 }
 
-impl<T: Real> Part<T> {
+impl<T: Real> Component<T> {
     /// Panics unless `M` has one row per vertex of the frame.
     fn new(frame: Frame<T>, m: Sdd<T>, report: Option<ScalingReport>) -> Self {
         assert_eq!(m.n(), frame.vertices.len(), "one row per vertex");
@@ -36,17 +36,17 @@ impl<T: Real> Part<T> {
         }
     }
 
-    /// The part's vertices in `A`'s numbering, in local order.
+    /// The component's vertices in `A`'s numbering, in local order.
     pub fn vertices(&self) -> &[u32] {
         &self.frame.vertices
     }
 
-    /// Present iff this part's scaling was clamped beyond the policy's tolerance.
+    /// Present iff this component's scaling was clamped beyond the policy's tolerance.
     pub fn scaling_report(&self) -> Option<ScalingReport> {
         self.report
     }
 
-    /// Shared with every factor of this part.
+    /// Shared with every factor of this component.
     pub(crate) fn frame(&self) -> &Arc<Frame<T>> {
         &self.frame
     }
@@ -62,7 +62,7 @@ impl<T: Real> Part<T> {
     }
 }
 
-/// Where a part sits in `A`: its vertices, and the congruence between `A_c` and `M`.
+/// Where a component sits in `A`: its vertices, and the congruence between `A_c` and `M`.
 #[derive(Debug)]
 pub(crate) struct Frame<T> {
     vertices: Box<[u32]>,
@@ -203,11 +203,11 @@ impl<T: Real> OffDiagonal<T> {
     }
 }
 
-/// `A` as one reduced [`Part`] per connected component; vertices in no part solve to `0`.
+/// `A` as its connected [`Component`]s, each reduced; vertices in none solve to `0`.
 #[derive(Clone, Debug)]
 pub struct Sgdd<T = f64> {
     n: usize,
-    parts: Vec<Part<T>>,
+    components: Vec<Component<T>>,
     /// Lone vertices with a zero diagonal, recorded so a solve zeroes them without a pass over `n`.
     dead: Box<[u32]>,
 }
@@ -218,23 +218,23 @@ impl<T: Real> Sgdd<T> {
         self.n
     }
 
-    /// The parts, each factored and solved on its own.
-    pub fn parts(&self) -> &[Part<T>] {
-        &self.parts
+    /// The components, each factored and solved on its own.
+    pub fn components(&self) -> &[Component<T>] {
+        &self.components
     }
 
     pub(crate) fn dead(&self) -> &[u32] {
         &self.dead
     }
 
-    /// The worst part's report: present iff some scaling was clamped beyond the policy's tolerance.
+    /// The worst component's report: present iff some scaling was clamped beyond the policy's tolerance.
     pub fn scaling_report(&self) -> Option<ScalingReport> {
-        (self.parts.iter())
-            .filter_map(Part::scaling_report)
+        (self.components.iter())
+            .filter_map(Component::scaling_report)
             .max_by(|a, b| a.violation.total_cmp(&b.violation))
     }
 
-    /// Checks symmetry, then scales each component to dominance unless it already is; an unscaled row's surplus up to about `2tε·a_ii` (`t` its entries) counts as rounding, and a scaled part floats only if its clamped surplus vanishes.
+    /// Checks symmetry, then scales each component to dominance unless it already is; an unscaled row's surplus up to about `2tε·a_ii` (`t` its entries) counts as rounding, and a scaled component floats only if its clamped surplus vanishes.
     pub fn from_csr<I: PrimInt>(
         csr: Csr<'_, T, I>,
         policy: ScalingPolicy,
@@ -254,14 +254,14 @@ impl<T: Real> Sgdd<T> {
 impl<'a, T: Real, I: PrimInt> TryFrom<Graph<'a, T, I>> for Sgdd<T> {
     type Error = ReduceError;
 
-    /// A signless Laplacian has zero surplus by shape: every part floats untested.
+    /// A signless Laplacian has zero surplus by shape: every component floats untested.
     fn try_from(graph: Graph<'a, T, I>) -> Result<Self, Self::Error> {
         Decomposition::signless(graph)?.reduce(&ScalingPolicy::default())
     }
 }
 
 /// One component `A_c` as the input gave it: signed, unscaled, in the input's shape.
-struct Component<T> {
+struct Unreduced<T> {
     /// In `A`'s numbering, in local order.
     vertices: Box<[u32]>,
     off_diagonal: OffDiagonal<T>,
@@ -272,42 +272,42 @@ struct Component<T> {
     nonpositive: bool,
 }
 
-/// Who proves a component singular: its own rows, or its input once every part is built.
+/// Who proves a component singular: its own rows, or its input once every component is built.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Proof {
     Rows,
     Input,
 }
 
-impl<T: Real> Component<T> {
+impl<T: Real> Unreduced<T> {
     /// Components join only nonzeros, so a vertex with nothing to solve is alone with a zero diagonal.
     fn is_dead(&self) -> bool {
         self.diagonal == [T::zero()]
     }
 
-    fn reduce(self, policy: &ScalingPolicy, proof: Proof) -> Result<Part<T>, ReduceError> {
+    fn reduce(self, policy: &ScalingPolicy, proof: Proof) -> Result<Component<T>, ReduceError> {
         let scaling = scaling::dominance_scaling(&self, policy)?;
         let signs = match self.nonpositive {
             true => Some(Congruence::identity()),
             false => signature::signature(&self.off_diagonal),
         };
-        // A frustrated part is definite, so only a folded one asks its rows.
+        // A frustrated component is definite, so only a folded one asks its rows.
         let singular = proof == Proof::Rows
             && signs.is_some()
             && scaling::rows_prove_singular(&self, &scaling);
-        let mut part = self.into_part(scaling, signs)?;
+        let mut component = self.into_component(scaling, signs)?;
         if singular {
-            part.m.float();
+            component.m.float();
         }
-        Ok(part)
+        Ok(component)
     }
 
     /// `F = S R` folds and scales `A_c`, or only scales a frustrated one; deficits clamp to zero surplus.
-    fn into_part(
+    fn into_component(
         self,
         scaling: scaling::Scaling<T>,
         signs: Option<Congruence<T>>,
-    ) -> Result<Part<T>, ReduceError> {
+    ) -> Result<Component<T>, ReduceError> {
         todo!()
     }
 }

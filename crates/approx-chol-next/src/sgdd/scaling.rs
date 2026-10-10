@@ -1,4 +1,4 @@
-use super::{Component, OffDiagonal};
+use super::{OffDiagonal, Unreduced};
 use crate::storage::in_range;
 use crate::{Real, ReduceError};
 
@@ -28,7 +28,7 @@ impl Default for ScalingPolicy {
     }
 }
 
-/// A part's uncertified scaling: present iff its violation exceeded the policy's tolerance.
+/// A component's uncertified scaling: present iff its violation exceeded the policy's tolerance.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScalingReport {
     /// Scaling iterations spent.
@@ -56,7 +56,7 @@ struct Relaxation<T> {
 
 /// Every input's diagonal is screened here, before any dominance test.
 pub(super) fn dominance_scaling<T: Real>(
-    a: &Component<T>,
+    a: &Unreduced<T>,
     policy: &ScalingPolicy,
 ) -> Result<Scaling<T>, ReduceError> {
     if let Some(i) = a.diagonal.iter().position(|&d| !in_range(d)) {
@@ -92,8 +92,8 @@ impl ScalingPolicy {
     }
 }
 
-/// Unscaled, a surplus inside its band `t_i ε a_ii + t_i ε Σ_j|a_ij|`, `t_i` the additions that formed it, or a certified deficit counts as zero, and the part floats when none remains; a scaled surplus is its scaling's residue, which no row bound tells from a real one.
-pub(super) fn rows_prove_singular<T: Real>(a: &Component<T>, scaling: &Scaling<T>) -> bool {
+/// Unscaled, a surplus inside its band `t_i ε a_ii + t_i ε Σ_j|a_ij|`, `t_i` the additions that formed it, or a certified deficit counts as zero, and the component floats when none remains; a scaled surplus is its scaling's residue, which no row bound tells from a real one.
+pub(super) fn rows_prove_singular<T: Real>(a: &Unreduced<T>, scaling: &Scaling<T>) -> bool {
     match scaling {
         Scaling::AlreadyDominant => todo!(),
         Scaling::Scaled { .. } => false,
@@ -101,18 +101,18 @@ pub(super) fn rows_prove_singular<T: Real>(a: &Component<T>, scaling: &Scaling<T
 }
 
 /// `Σ_j |a_ij| ≤ a_ii (1 + max(tolerance, 2 deg_i ε))`: a rounded Laplacian stays bit for bit, even in `f32`.
-fn already_dominant<T: Real>(a: &Component<T>, policy: &ScalingPolicy) -> bool {
+fn already_dominant<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> bool {
     todo!()
 }
 
 /// Self-corrective iterations (Guan, Lu, Li, Shao 2016).
-fn sci<T: Real>(a: &Component<T>, policy: &ScalingPolicy) -> Result<Relaxation<T>, ReduceError> {
+fn sci<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> Result<Relaxation<T>, ReduceError> {
     todo!()
 }
 
 /// CG on `α² − NᵀN` over the smaller side, `α = 1 + tolerance/2` off the Perron vector.
 fn reduced_cg<T: Real>(
-    a: &Component<T>,
+    a: &Unreduced<T>,
     policy: &ScalingPolicy,
 ) -> Result<Relaxation<T>, ReduceError> {
     todo!()

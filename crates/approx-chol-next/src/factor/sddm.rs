@@ -7,7 +7,7 @@ use crate::sgdd::{Balance, Grounding};
 use crate::storage::UpperAdjacency;
 use crate::Real;
 
-/// `L + diag(s)`, `L`'s off-diagonal nonpositive; borrowed from its part, or owned when derived.
+/// `L + diag(s)`, `L`'s off-diagonal nonpositive; borrowed from its component, or owned when derived.
 #[derive(Clone, Debug)]
 pub(super) struct Sddm<'a, T: Real> {
     adjacency: Cow<'a, UpperAdjacency<T>>,

@@ -1,4 +1,4 @@
-//! Block elimination of a bipartite part's larger, independent side, and the Schur complement it leaves.
+//! Block elimination of a bipartite component's larger, independent side, and the Schur complement it leaves.
 
 use std::sync::Arc;
 
@@ -12,7 +12,7 @@ use crate::Real;
 /// `M`'s cross block and the pivots `d_e`, applied as two products because the block's steps commute.
 #[derive(Clone, Debug)]
 pub(super) struct BlockElimination<T> {
-    /// `M`'s own `C`, signs kept and shared with the part: a frustrated part's cover never doubles it.
+    /// `M`'s own `C`, signs kept and shared with the component: a frustrated component's cover never doubles it.
     cross: Arc<CrossBlock<T>>,
     inv_pivot: Box<[T]>,
 }
@@ -54,7 +54,7 @@ impl<'a, T: Real> SchurComplement<'a, T> {
         Sheets::of(self.balance).count() * self.elimination.cross.n_kept()
     }
 
-    /// `S` on the part's sheets: exact by kept row, sampled by star in parallel.
+    /// `S` on the component's sheets: exact by kept row, sampled by star in parallel.
     pub(super) fn build(&self, rule: CliqueRule, streams: Streams) -> Sddm<'static, T> {
         todo!()
     }

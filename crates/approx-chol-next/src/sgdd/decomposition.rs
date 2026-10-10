@@ -2,30 +2,30 @@ use num_traits::PrimInt;
 
 mod components;
 
-use super::{Component, Proof, ScalingPolicy, Sgdd};
+use super::{Proof, ScalingPolicy, Sgdd, Unreduced};
 use crate::input::{Columns, Csr, CsrError, Gram, Graph, Observation};
 use crate::storage::{CrossBlock, Rows};
 use crate::{Real, ReduceError};
 use components::Partition;
 
-/// One input split into components: what each looks like unreduced, and which parts provably float.
+/// One input split into components: what each looks like unreduced, and which components provably float.
 pub(super) struct Decomposition<'v, T, I> {
     partition: Partition,
     input: Input<'v, T, I>,
 }
 
-/// The input, and what its parts' own rows cannot prove: a view's `C` is taken whole by a lone component.
+/// The input, and what its components' own rows cannot prove: a view's `C` is taken whole by a lone component.
 enum Input<'v, T, I> {
     /// A signless Laplacian: zero surplus by shape, and a negative weight fails as not GDD.
     Signless(Option<Biadjacency<T>>),
-    /// Floats when the signed alias `u` (`v_l u_l + v_r u_r = 0` along joining columns inside a part; grown in `f64` whatever `T`, exponent tracked, then scaled by a power of two to `max_i a_ii u_i² ∈ [1, 4)` so neither sum leaves range) has `Σ (w p) p ≤ 1e-13·Σ ((w v_l u_l)(v_l u_l) + (w v_r u_r)(v_r u_r))`, `p = v_l u_l + v_r u_r`, summed in `f64` in column order; a straddling column adds only its own side's square.
+    /// Floats when the signed alias `u` (`v_l u_l + v_r u_r = 0` along joining columns inside a component; grown in `f64` whatever `T`, exponent tracked, then scaled by a power of two to `max_i a_ii u_i² ∈ [1, 4)` so neither sum leaves range) has `Σ (w p) p ≤ 1e-13·Σ ((w v_l u_l)(v_l u_l) + (w v_r u_r)(v_r u_r))`, `p = v_l u_l + v_r u_r`, summed in `f64` in column order; a straddling column adds only its own side's square.
     Gram {
         c: Option<Biadjacency<T>>,
         columns: Columns<'v, T, I>,
         left: &'v [T],
         right: &'v [T],
     },
-    /// Each part's own rows decide its floating.
+    /// Each component's own rows decide its floating.
     Csr(Csr<'v, T, I>),
 }
 
@@ -61,35 +61,35 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         })
     }
 
-    /// Dead components produce no part; a CSR's parts float on their own rows, a view's once every part is built.
+    /// Dead components are dropped; a CSR's float on their own rows, a view's once every one is reduced.
     pub(super) fn reduce(mut self, policy: &ScalingPolicy) -> Result<Sgdd<T>, ReduceError> {
         let proof = match self.input {
             Input::Csr(_) => Proof::Rows,
             Input::Signless(_) | Input::Gram { .. } => Proof::Input,
         };
-        let (mut parts, mut dead) = (Vec::new(), Vec::new());
+        let (mut components, mut dead) = (Vec::new(), Vec::new());
         for a in self.components() {
             if a.is_dead() {
                 dead.push(a.vertices[0]);
                 continue;
             }
-            parts.push(a.reduce(policy, proof)?);
+            components.push(a.reduce(policy, proof)?);
         }
         match &self.input {
-            Input::Signless(_) => (parts.iter_mut()).for_each(|part| part.m.float()),
+            Input::Signless(_) => (components.iter_mut()).for_each(|component| component.m.float()),
             Input::Gram { .. } => todo!(),
             Input::Csr(_) => {}
         }
         Ok(Sgdd {
             n: self.partition.n(),
-            parts,
+            components,
             dead: dead.into_boxed_slice(),
         })
     }
 
     /// A lone vertex is general, so a bipartite component always has both sides.
-    fn components(&mut self) -> impl Iterator<Item = Component<T>> + '_ {
-        (self.partition.components()).map(|vertices| -> Component<T> { todo!() })
+    fn components(&mut self) -> impl Iterator<Item = Unreduced<T>> + '_ {
+        (self.partition.components()).map(|vertices| -> Unreduced<T> { todo!() })
     }
 }
 

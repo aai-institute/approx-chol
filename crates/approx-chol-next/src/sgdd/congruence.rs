@@ -47,7 +47,7 @@ impl<T: Real> Congruence<T> {
         todo!()
     }
 
-    /// `x ← F x`; with `P` projecting out `F·1` when the part floats, else `I`, `A_c⁺ = P F M⁺ F P`, so the solve applies it on both sides.
+    /// `x ← F x`; with `P` projecting out `F·1` when the component floats, else `I`, `A_c⁺ = P F M⁺ F P`, so the solve applies it on both sides.
     pub(crate) fn apply(&self, x: &mut [T]) {
         todo!()
     }

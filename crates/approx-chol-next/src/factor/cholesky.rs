@@ -74,7 +74,7 @@ impl<T: Real> Cholesky<T> {
 enum Gauge<T> {
     /// The ground is the appended slot, right-hand side `−Σb`; every entry then shifts so it reads zero.
     Grounded(Triangular<T>),
-    /// The free slot reads zero; the part's projection, or a cover's descent, removes the constant.
+    /// The free slot reads zero; the component's projection, or a cover's descent, removes the constant.
     Floating(Triangular<T>),
 }
 

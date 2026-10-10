@@ -13,9 +13,9 @@ mod sgdd;
 mod storage;
 
 pub use factor::{CliqueRule, Config, InnerParallelism, Multiplicity, OnDenseFailure, SplitCount};
-pub use factor::{Factor, FactorError, PartFactor, SolveError};
+pub use factor::{ComponentFactor, Factor, FactorError, SolveError};
 pub use factor::{Fallback, PivotDefect, UnusablePivot};
-pub use sgdd::{FromCsrError, Part, ReduceError, ScalingPolicy, ScalingReport, Sgdd};
+pub use sgdd::{Component, FromCsrError, ReduceError, ScalingPolicy, ScalingReport, Sgdd};
 
 /// The scalar every stage computes in: `f32` or `f64`.
 pub trait Real: sealed::Sealed {}
@@ -31,7 +31,7 @@ mod sealed {
     impl Sealed for f64 {}
 }
 
-/// Factors every part of `sgdd` in parallel; `sgdd` survives for another `config`.
+/// Factors every component of `sgdd` in parallel; `sgdd` survives for another `config`.
 pub fn factorize<T: Real>(sgdd: &Sgdd<T>, config: &Config) -> Result<Factor<T>, FactorError> {
     Factor::build(sgdd, config)
 }
