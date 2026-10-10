@@ -3,7 +3,7 @@ use crate::factor::clique_tree::{Copies, Fill};
 use crate::Real;
 
 /// Bucket queue over live degree estimates (Julia's `ApproxCholPQ`).
-pub(super) struct DynamicOrdering {
+pub(super) struct MinDegreeOrder {
     elems: Vec<QueueElem>,
     lists: Vec<u32>,
     min_list: usize,
@@ -20,7 +20,7 @@ struct QueueElem {
     key: u32,
 }
 
-impl DynamicOrdering {
+impl MinDegreeOrder {
     /// Buckets span `split · n`, Laplacians.jl's AC2 scale.
     pub(super) fn new<T: Real, C: Copies>(graph: &EliminationGraph<T, C>, split: C::Split) -> Self {
         todo!()

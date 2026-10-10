@@ -1,9 +1,9 @@
-//! Routes each part to its eliminations, and applies `A_c⁺ ≈ P F · Round · Rem⁺ · Round' · F P`, `P` projecting out `F·1`.
+//! Each part as an optional block elimination `L` and a Cholesky of what it leaves: `A_c⁺ ≈ P F L⁻ᵀ diag(D_e⁻¹, S⁺) L⁻¹ F P`, `P` projecting out `F·1`.
 
+mod cholesky;
 mod clique_tree;
 mod config;
-mod remainder;
-mod round;
+mod schur;
 mod sddm;
 
 use std::borrow::Cow;
@@ -11,14 +11,14 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
+pub use cholesky::{Fallback, PivotDefect, UnusablePivot};
 pub use config::{CliqueRule, Config, InnerParallelism, Multiplicity, OnDenseFailure, SplitCount};
-pub use remainder::{Fallback, PivotDefect, UnusablePivot};
 
 use crate::sgdd::{Balance, Frame, OffDiagonal, Part, Sgdd};
 use crate::Real;
+use cholesky::Cholesky;
 use clique_tree::Streams;
-use remainder::SddmFactor;
-use round::{Round, RoundBuilder};
+use schur::{BlockElimination, SchurComplement};
 use sddm::{Sddm, Sheets};
 
 /// Why [`factorize`](crate::factorize) failed.
@@ -120,7 +120,7 @@ impl<T: Real> Factor<T> {
         self.parts
     }
 
-    /// Remainders routed dense and factored approximately instead.
+    /// Cholesky factors routed dense and factored approximately instead.
     pub fn fallbacks(&self) -> impl Iterator<Item = Fallback> + '_ {
         self.parts.iter().filter_map(PartFactor::fallback)
     }
@@ -156,10 +156,10 @@ impl<T: Real> Factor<T> {
 #[derive(Clone, Debug)]
 pub struct PartFactor<T = f64> {
     frame: Arc<Frame<T>>,
-    /// The part's own fact, not its remainder's: an underflowed complement surplus never makes it singular.
+    /// The part's own fact, not its Cholesky's: an underflowed complement surplus never makes it singular.
     floats: bool,
-    round: Option<Round<T>>,
-    remainder: SddmFactor<T>,
+    elimination: Option<BlockElimination<T>>,
+    cholesky: Cholesky<T>,
     fallback: Option<Fallback>,
 }
 
@@ -168,7 +168,7 @@ impl<T: Real> PartFactor<T> {
         let frame = part.frame();
         let vertices = frame.vertices();
         let streams = Streams::new(config.seed, vertices[0]);
-        let (round, (remainder, fallback)) = match part.m() {
+        let (elimination, (cholesky, fallback)) = match part.m() {
             (OffDiagonal::General(adjacency), balance) => {
                 let sddm = match balance {
                     Balance::Balanced(grounding) => Sddm::new(
@@ -178,31 +178,30 @@ impl<T: Real> PartFactor<T> {
                     ),
                     Balance::Frustrated(grounding) => Sddm::cover(adjacency, grounding),
                 };
-                let dense = |sddm: &_| SddmFactor::dense(sddm, vertices);
-                let sampled = |sddm| SddmFactor::sampled(sddm, config.remainder, streams);
+                let dense = |sddm: &_| Cholesky::dense(sddm, vertices);
+                let sampled = |sddm| Cholesky::approximate(sddm, config.approximate, streams);
                 (None, route(sddm.n(), sddm, dense, sampled, config)?)
             }
             (OffDiagonal::Bipartite(cross), balance) => {
-                let builder = RoundBuilder::new(cross, balance);
-                let kept = &vertices[builder.n_eliminated()..];
+                let schur = SchurComplement::new(cross, balance);
+                let kept = &vertices[schur.n_eliminated()..];
                 // A dense Cholesky spends nothing on sparsity, so only the exact complement goes dense.
-                let dense = |builder: &&RoundBuilder<'_, T>| {
-                    SddmFactor::dense(&builder.complement(CliqueRule::Exact, streams), kept)
+                let dense = |schur: &&SchurComplement<'_, T>| {
+                    Cholesky::dense(&schur.build(CliqueRule::Exact, streams), kept)
                 };
-                let sampled = |builder: &RoundBuilder<'_, T>| {
-                    let complement = builder.complement(config.complement, streams);
-                    SddmFactor::sampled(complement, config.remainder, streams)
+                let sampled = |schur: &SchurComplement<'_, T>| {
+                    let s = schur.build(config.complement, streams);
+                    Cholesky::approximate(s, config.approximate, streams)
                 };
-                let dimension = builder.complement_dimension();
-                let routed = route(dimension, &builder, dense, sampled, config)?;
-                (Some(builder.finish()), routed)
+                let routed = route(schur.dimension(), &schur, dense, sampled, config)?;
+                (Some(schur.finish()), routed)
             }
         };
         Ok(Self {
             frame: Arc::clone(frame),
             floats: part.floats(),
-            round,
-            remainder,
+            elimination,
+            cholesky,
             fallback,
         })
     }
@@ -219,8 +218,8 @@ impl<T: Real> PartFactor<T> {
 
     /// Scratch [`solve_local`](Self::solve_local) needs.
     pub fn scratch_len(&self) -> usize {
-        let eliminated = self.round.as_ref().map_or(0, Round::n_eliminated);
-        self.remainder
+        let eliminated = (self.elimination.as_ref()).map_or(0, BlockElimination::n_eliminated);
+        self.cholesky
             .scratch_len(self.vertices().len() - eliminated)
     }
 
@@ -250,13 +249,13 @@ impl<T: Real> PartFactor<T> {
             congruence.project_out_null(x);
         }
         congruence.apply(x);
-        match &self.round {
-            None => self.remainder.solve(x, scratch),
-            Some(round) => {
-                round.forward(x, inner);
-                let (eliminated, kept) = x.split_at_mut(round.n_eliminated());
-                self.remainder.solve(kept, scratch);
-                round.backward(eliminated, kept, inner);
+        match &self.elimination {
+            None => self.cholesky.solve(x, scratch),
+            Some(elimination) => {
+                elimination.forward(x, inner);
+                let (eliminated, kept) = x.split_at_mut(elimination.n_eliminated());
+                self.cholesky.solve(kept, scratch);
+                elimination.backward(eliminated, kept, inner);
             }
         }
         congruence.apply(x);
@@ -270,20 +269,20 @@ impl<T: Real> PartFactor<T> {
 /// Dense when the rule says so; a declined pivot falls to the approximate arm, never to a second dense one.
 fn route<T: Real, M>(
     dimension: usize,
-    remainder: M,
-    dense: impl FnOnce(&M) -> Result<SddmFactor<T>, Fallback>,
-    sampled: impl FnOnce(M) -> SddmFactor<T>,
+    matrix: M,
+    dense: impl FnOnce(&M) -> Result<Cholesky<T>, Fallback>,
+    sampled: impl FnOnce(M) -> Cholesky<T>,
     config: &Config,
-) -> Result<(SddmFactor<T>, Option<Fallback>), FactorError> {
+) -> Result<(Cholesky<T>, Option<Fallback>), FactorError> {
     if !config.routes_dense(dimension) {
-        return Ok((sampled(remainder), None));
+        return Ok((sampled(matrix), None));
     }
-    match dense(&remainder) {
+    match dense(&matrix) {
         Ok(factor) => Ok((factor, None)),
-        // Only a pivot can be fatal: a remainder that will not fit falls back whatever the policy.
+        // Only a pivot can be fatal: a matrix that will not fit falls back whatever the policy.
         Err(Fallback::UnusablePivot(pivot)) if config.on_dense_failure == OnDenseFailure::Error => {
             Err(FactorError::UnusablePivot(pivot))
         }
-        Err(declined) => Ok((sampled(remainder), Some(declined))),
+        Err(declined) => Ok((sampled(matrix), Some(declined))),
     }
 }

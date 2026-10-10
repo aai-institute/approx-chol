@@ -5,16 +5,16 @@ pub struct Config {
     pub seed: u64,
     /// How a bipartite part's eliminated stars become the kept block's Schur complement.
     pub complement: CliqueRule,
-    /// How minimum-degree elimination of the remainder samples each star.
-    pub remainder: Multiplicity,
-    /// Largest remainder dimension, a cover's two sheets counted, that takes a dense Cholesky; `0` never does.
+    /// How approximate Cholesky samples each star.
+    pub approximate: Multiplicity,
+    /// Largest dimension, a cover's two sheets counted, that the Cholesky takes dense; `0` never does.
     pub dense_up_to: usize,
     /// What a dense Cholesky's unusable pivot does.
     pub on_dense_failure: OnDenseFailure,
 }
 
 impl Config {
-    /// The one routing rule: a remainder of this dimension goes dense.
+    /// The one routing rule: a Cholesky of this dimension goes dense.
     pub(super) fn routes_dense(&self, dimension: usize) -> bool {
         dimension <= self.dense_up_to
     }
@@ -25,7 +25,7 @@ impl Default for Config {
         Self {
             seed: 0,
             complement: CliqueRule::Sampled(Multiplicity::Single),
-            remainder: Multiplicity::Single,
+            approximate: Multiplicity::Single,
             dense_up_to: 24,
             on_dense_failure: OnDenseFailure::FallBackToApproximate,
         }
@@ -70,7 +70,7 @@ impl SplitCount {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OnDenseFailure {
-    /// Factor that remainder approximately and record a [`Fallback`](crate::Fallback).
+    /// Factor that matrix approximately and record a [`Fallback`](crate::Fallback).
     #[default]
     FallBackToApproximate,
     /// Fail with [`FactorError::UnusablePivot`](crate::FactorError::UnusablePivot).
@@ -80,7 +80,7 @@ pub enum OnDenseFailure {
 /// Whether a solve may split its own work across threads; an outer parallel loop says no.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InnerParallelism {
-    /// Large rounds split their rows.
+    /// Large block eliminations split their rows.
     Allow,
     /// Everything runs on the calling thread.
     Forbid,

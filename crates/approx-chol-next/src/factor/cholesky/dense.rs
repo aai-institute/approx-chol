@@ -22,7 +22,7 @@ pub struct UnusablePivot {
     pub defect: PivotDefect,
 }
 
-/// A remainder routed dense and factored approximately instead: less accurate than asked.
+/// A Cholesky routed dense and factored approximately instead: less accurate than asked.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fallback {
@@ -30,7 +30,7 @@ pub enum Fallback {
     UnusablePivot(UnusablePivot),
     /// The packed triangle does not fit in memory.
     WillNotFit {
-        /// Dimension of the declined remainder, a cover's two sheets counted.
+        /// Dimension of the declined matrix, a cover's two sheets counted.
         dimension: usize,
     },
 }

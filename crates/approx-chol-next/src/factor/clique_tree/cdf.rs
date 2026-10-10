@@ -41,7 +41,7 @@ impl Streams {
         Self { seed, part }
     }
 
-    pub(in crate::factor) fn remainder(self) -> Stream {
+    pub(in crate::factor) fn cholesky(self) -> Stream {
         todo!()
     }
 

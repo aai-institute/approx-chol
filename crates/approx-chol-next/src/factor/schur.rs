@@ -1,4 +1,4 @@
-//! The leading independent block eliminated at once: its exact columns, and the kept block's complement.
+//! Block elimination of a bipartite part's larger, independent side, and the Schur complement it leaves.
 
 use std::sync::Arc;
 
@@ -11,13 +11,13 @@ use crate::Real;
 
 /// `M`'s cross block and the pivots `d_e`, applied as two products because the block's steps commute.
 #[derive(Clone, Debug)]
-pub(super) struct Round<T> {
+pub(super) struct BlockElimination<T> {
     /// `M`'s own `C`, signs kept and shared with the part: a frustrated part's cover never doubles it.
     cross: Arc<CrossBlock<T>>,
     inv_pivot: Box<[T]>,
 }
 
-impl<T: Real> Round<T> {
+impl<T: Real> BlockElimination<T> {
     pub(super) fn n_eliminated(&self) -> usize {
         self.inv_pivot.len()
     }
@@ -33,40 +33,40 @@ impl<T: Real> Round<T> {
     }
 }
 
-/// A round before its stored form is taken, so one pivot vector serves every complement and the solve.
-pub(super) struct RoundBuilder<'a, T> {
-    round: Round<T>,
+/// `S = D_k − Cᵀ D_e⁻¹ C` before the elimination's stored form is taken, so one pivot vector serves every complement and the solve.
+pub(super) struct SchurComplement<'a, T> {
+    elimination: BlockElimination<T>,
     balance: &'a Balance<T>,
 }
 
-impl<'a, T: Real> RoundBuilder<'a, T> {
+impl<'a, T: Real> SchurComplement<'a, T> {
     /// Pivots are `Σ|c_ek| + s_e`, the same on both sheets of a cover.
     pub(super) fn new(cross: &Arc<CrossBlock<T>>, balance: &'a Balance<T>) -> Self {
         todo!()
     }
 
     pub(super) fn n_eliminated(&self) -> usize {
-        self.round.n_eliminated()
+        self.elimination.n_eliminated()
     }
 
-    /// Known before the complement is built, so routing never builds one twice.
-    pub(super) fn complement_dimension(&self) -> usize {
-        Sheets::of(self.balance).count() * self.round.cross.n_kept()
+    /// Known before `S` is built, so routing never builds it twice.
+    pub(super) fn dimension(&self) -> usize {
+        Sheets::of(self.balance).count() * self.elimination.cross.n_kept()
     }
 
-    /// The kept block's Schur complement on the part's sheets: exact by kept row, sampled by star in parallel.
-    pub(super) fn complement(&self, rule: CliqueRule, streams: Streams) -> Sddm<'static, T> {
+    /// `S` on the part's sheets: exact by kept row, sampled by star in parallel.
+    pub(super) fn build(&self, rule: CliqueRule, streams: Streams) -> Sddm<'static, T> {
         todo!()
     }
 
-    pub(super) fn finish(self) -> Round<T> {
-        self.round
+    pub(super) fn finish(self) -> BlockElimination<T> {
+        self.elimination
     }
 }
 
 /// Each eliminated star's clique tree under its own stream, the ground a final neighbor; chunks in star order, so merged duplicates sum alike at any thread count.
 fn sampled_fill<T: Real, C: Copies>(
-    builder: &RoundBuilder<'_, T>,
+    schur: &SchurComplement<'_, T>,
     split: C::Split,
     streams: Streams,
 ) -> Vec<Fill<T>> {
@@ -74,11 +74,11 @@ fn sampled_fill<T: Real, C: Copies>(
 }
 
 /// Rows of the cover's complement: `|c_ke||c_je|/d_e` to `j`'s same sheet when signs agree, else its other, as the smaller times the larger's share, which underflows only below the floor.
-fn exact_rows<T: Real>(builder: &RoundBuilder<'_, T>) -> UpperAdjacency<T> {
+fn exact_rows<T: Real>(schur: &SchurComplement<'_, T>) -> UpperAdjacency<T> {
     todo!()
 }
 
 /// `s_k + |C|ᵀ D_e⁻¹ s_e` per sheet, exact as no product cancels; each `|c_ek| s_e/d_e` multiplied as the complement's are.
-fn exact_surplus<T: Real>(builder: &RoundBuilder<'_, T>) -> Vec<T> {
+fn exact_surplus<T: Real>(schur: &SchurComplement<'_, T>) -> Vec<T> {
     todo!()
 }

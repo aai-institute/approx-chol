@@ -1,24 +1,24 @@
-//! Sampled elimination of a whole SDDM in minimum-degree order (Algorithm 8), and its stored columns.
+//! Approximate Cholesky of a whole SDDM: clique-tree elimination in minimum-degree order (Algorithm 8).
 
-mod cholesky;
 mod graph;
 mod ordering;
+mod steps;
 
-pub(super) use cholesky::SampledCholesky;
+pub(super) use steps::ApproximateCholesky;
 
 use crate::factor::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single, Streams};
 use crate::factor::config::Multiplicity;
 use crate::factor::sddm::Sddm;
 use crate::Real;
-use cholesky::Steps;
 use graph::EliminationGraph;
-use ordering::DynamicOrdering;
+use ordering::MinDegreeOrder;
+use steps::Steps;
 
 pub(super) fn eliminate<T: Real>(
     sddm: Sddm<'_, T>,
     multiplicity: Multiplicity,
     streams: Streams,
-) -> SampledCholesky<T> {
+) -> ApproximateCholesky<T> {
     match multiplicity {
         Multiplicity::Single => run::<T, Single>(sddm, streams, ()),
         Multiplicity::Split(k) => run::<T, Multi>(sddm, streams, k),
@@ -30,12 +30,12 @@ fn run<T: Real, C: Copies>(
     sddm: Sddm<'_, T>,
     streams: Streams,
     split: C::Split,
-) -> SampledCholesky<T> {
+) -> ApproximateCholesky<T> {
     let mut graph = EliminationGraph::<T, C>::of(&sddm, split);
     drop(sddm);
     let n = graph.n();
-    let mut ordering = DynamicOrdering::new(&graph, split);
-    let mut clique = CliqueSampler::<T, C>::new(streams.remainder(), split);
+    let mut ordering = MinDegreeOrder::new(&graph, split);
+    let mut clique = CliqueSampler::<T, C>::new(streams.cholesky(), split);
     let mut fill = Fill::new();
     let mut steps = Steps::with_capacity(n);
     for _ in 1..n {

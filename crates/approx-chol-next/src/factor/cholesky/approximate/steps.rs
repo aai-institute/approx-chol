@@ -34,8 +34,8 @@ impl<T: Real> Steps<T> {
     }
 
     /// A factor cannot exist without naming the vertex its steps left behind.
-    pub(super) fn finish(self, uneliminated: usize) -> SampledCholesky<T> {
-        SampledCholesky {
+    pub(super) fn finish(self, uneliminated: usize) -> ApproximateCholesky<T> {
+        ApproximateCholesky {
             steps: self,
             uneliminated: uneliminated as u32,
         }
@@ -44,15 +44,15 @@ impl<T: Real> Steps<T> {
 
 /// `LDLᵀ` with sampled columns: a serial recurrence, so shares are composed against the original pivot.
 #[derive(Clone, Debug)]
-pub(in crate::factor::remainder) struct SampledCholesky<T> {
+pub(in crate::factor::cholesky) struct ApproximateCholesky<T> {
     steps: Steps<T>,
     /// The one vertex no step eliminates, so nothing divides its entry by a pivot.
     uneliminated: u32,
 }
 
-impl<T: Real> SampledCholesky<T> {
+impl<T: Real> ApproximateCholesky<T> {
     /// Forward, zero the uneliminated entry, backward; the gather dispatches `[]`, `[_]`, lanes by row length.
-    pub(in crate::factor::remainder) fn substitute(&self, y: &mut [T]) {
+    pub(in crate::factor::cholesky) fn substitute(&self, y: &mut [T]) {
         todo!()
     }
 }
