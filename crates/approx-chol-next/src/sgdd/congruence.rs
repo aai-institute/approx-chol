@@ -28,7 +28,11 @@ impl<T: Real> Congruence<T> {
 
     /// `true` where the vertex is negated.
     pub(super) fn negated(signs: &[bool]) -> Self {
-        todo!()
+        let sign = |&negated: &bool| match negated {
+            true => -T::one(),
+            false => T::one(),
+        };
+        Self(Kind::Factors(signs.iter().map(sign).collect()))
     }
 
     /// `S R` for these signs and positive scales `R`.
