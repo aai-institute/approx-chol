@@ -2,7 +2,9 @@ use num_traits::PrimInt;
 
 mod components;
 
-use super::{Component, Proof, ScalingPolicy, Sgdd, Unreduced};
+use std::sync::Arc;
+
+use super::{Component, OffDiagonal, Proof, ScalingPolicy, Sgdd, Unreduced};
 use crate::input::{BipartiteGram, BipartiteGraph, Csr, CsrError, FactorWidth2, IntoColumns};
 use crate::storage::{in_range, CrossBlock, Rows, UpperAdjacency};
 use crate::{Real, ReduceError};
@@ -97,16 +99,52 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
     }
 }
 
-impl<T: Real, I: PrimInt> Input<'_, T, I> {
+impl<'v, T: Real, I: PrimInt> Input<'v, T, I> {
     /// A lone vertex is general, so a bipartite component always has both sides.
     fn components<'s>(
         &'s mut self,
         partition: &'s Partition,
-    ) -> impl Iterator<Item = Unreduced<T>> + 's {
-        partition
-            .components()
-            .map(|vertices| -> Unreduced<T> { todo!() })
+    ) -> impl Iterator<Item = Unreduced<T>> + use<'s, 'v, T, I> {
+        partition.components().map(move |vertices| match self {
+            Self::BipartiteGram { c, gram } => {
+                let (left, right) = gram.diagonals();
+                let diagonal = |v: u32| match (v as usize).checked_sub(left.len()) {
+                    None => left[v as usize],
+                    Some(j) => right[j],
+                };
+                bipartite_component(c, vertices, partition, diagonal)
+            }
+            Self::Csr(_) | Self::Signless(_) | Self::Gram { .. } => todo!(),
+        })
     }
+}
+
+/// The whole input's block is moved, not copied: a lone component takes `C` out of the input.
+fn bipartite_component<T: Real>(
+    c: &mut Option<Biadjacency<T>>,
+    vertices: &[u32],
+    partition: &Partition,
+    diagonal: impl Fn(u32) -> T,
+) -> Unreduced<T> {
+    let (vertices, off_diagonal) = match vertices {
+        [v] => {
+            let empty = Rows::new(vec![0, 0], Vec::new(), Vec::new(), 1);
+            (
+                Box::from([*v]),
+                OffDiagonal::General(UpperAdjacency::new(empty)),
+            )
+        }
+        _ => {
+            let (vertices, cross) = match partition.is_whole() {
+                true => c.take().expect("one whole component").into_block(),
+                false => (c.as_ref().expect("C until the whole is taken"))
+                    .block(vertices, partition.position()),
+            };
+            (vertices, OffDiagonal::Bipartite(Arc::new(cross)))
+        }
+    };
+    let diagonal = vertices.iter().map(|&v| diagonal(v)).collect();
+    Unreduced::new(vertices, off_diagonal, diagonal)
 }
 
 /// Floats each folded component when `1ᵀM1 ≤ 5ε·tr M`, else grounds it on `s = M·1`, both summed by column as assembled rows cancel them: with `f = F·1` and `p_k = f_a v_a + f_b v_b`, `s_a = Σ_k bilinear_k(f_a v_a, p_k)` clamped at zero, `1ᵀM1 = Σ_k bilinear_k(p_k, p_k)` and `tr M = Σ_k [bilinear_k(f_a v_a, f_a v_a) + bilinear_k(f_b v_b, f_b v_b)]`, `ε` that of `T`; sums run in `f64` in column order over nonzero weights, the certificate's two sides as `ε·term`, an exact scaling under which neither overflows, each end's component and slot are read off the components' own vertices, an end at a dead vertex being in none; a column straddling components keeps only its own end's square, a frustrated component is definite and keeps its rows' surplus.
@@ -299,11 +337,42 @@ impl<T: Real> Biadjacency<T> {
 
     /// The whole input as one component's block, moved, transposed only when the right side is larger.
     fn into_block(self) -> (Box<[u32]>, CrossBlock<T>) {
-        todo!()
+        let n_left = self.c.n_rows() as u32;
+        let (lefts, rights) = (0..n_left, n_left..self.n() as u32);
+        larger_side_first(lefts.collect(), rights.collect(), self.c)
     }
 
     /// One component's block, its larger side as rows, remapped through `position`; returns its local order.
     fn block(&self, vertices: &[u32], position: &[u32]) -> (Box<[u32]>, CrossBlock<T>) {
-        todo!()
+        let n_left = self.c.n_rows();
+        let (lefts, rights) =
+            vertices.split_at(vertices.partition_point(|&v| (v as usize) < n_left));
+        let mut ptrs = Vec::with_capacity(lefts.len() + 1);
+        ptrs.push(0);
+        let (mut indices, mut values) = (Vec::new(), Vec::new());
+        for &i in lefts {
+            for (j, &x) in self.c.row(i as usize) {
+                indices.push(position[n_left + j] - lefts.len() as u32);
+                values.push(x);
+            }
+            ptrs.push(indices.len());
+        }
+        let c = Rows::new(ptrs, indices, values, rights.len());
+        larger_side_first(lefts.to_vec(), rights.to_vec(), c)
+    }
+}
+
+/// Eliminates the larger side, transposing `C` when it is the right one; returns the local order, eliminated first.
+fn larger_side_first<T: Real>(
+    lefts: Vec<u32>,
+    rights: Vec<u32>,
+    c: Rows<T>,
+) -> (Box<[u32]>, CrossBlock<T>) {
+    match lefts.len() >= rights.len() {
+        true => ([lefts, rights].concat().into(), CrossBlock::new(c)),
+        false => (
+            [rights, lefts].concat().into(),
+            CrossBlock::new(c.transpose()),
+        ),
     }
 }

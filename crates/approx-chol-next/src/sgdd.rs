@@ -220,6 +220,19 @@ enum Proof {
 }
 
 impl<T: Real> Unreduced<T> {
+    /// Panics unless one vertex and one diagonal per row.
+    fn new(vertices: Box<[u32]>, off_diagonal: OffDiagonal<T>, diagonal: Vec<T>) -> Self {
+        assert_eq!(vertices.len(), off_diagonal.n(), "one vertex per row");
+        assert_eq!(diagonal.len(), off_diagonal.n(), "one diagonal per row");
+        Self {
+            vertices,
+            abs_row_sums: off_diagonal.abs_row_sums(),
+            nonpositive: off_diagonal.nonpositive(),
+            off_diagonal,
+            diagonal,
+        }
+    }
+
     /// Components join only nonzeros, so a vertex with nothing to solve is alone with a zero diagonal.
     fn is_dead(&self) -> bool {
         self.diagonal == [T::zero()]

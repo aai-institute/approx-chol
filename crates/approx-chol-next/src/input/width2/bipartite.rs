@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 use num_traits::PrimInt;
 
 use super::{to_f64, Column, IntoColumns, ViewError, Weight};
+use crate::storage::narrow;
 use crate::Real;
 
 /// The diagonal `W`, one nonnegative entry per column of `V`.
@@ -119,9 +120,7 @@ impl<'a, T: Real, I: PrimInt> Incidence<'a, T, I> {
                     sums[index(*row)] += self.weights.at(k).bilinear(v, v);
                 }
             }
-            // A sum past `T::MAX` reads infinite, which the diagonal screen rejects.
-            let cast = |d: f64| T::from(d).unwrap_or_else(T::infinity);
-            sums.into_iter().map(cast).collect()
+            sums.into_iter().map(narrow).collect()
         })
     }
 }

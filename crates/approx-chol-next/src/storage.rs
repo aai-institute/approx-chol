@@ -9,6 +9,11 @@ pub(crate) fn in_range<T: Real>(x: T) -> bool {
     x.is_finite() && (x == T::zero() || x.abs() >= T::min_positive_value() / T::epsilon())
 }
 
+/// A nonnegative `f64` sum in `T`: past `T::MAX` it reads infinite, which every range screen rejects.
+pub(crate) fn narrow<T: Real>(sum: f64) -> T {
+    T::from(sum).unwrap_or_else(T::infinity)
+}
+
 /// In range and at most `MAX/4`: dominance then bounds its row by `MAX/2`, and elimination never grows a diagonal, so every reordered row sum, pivot and cast surplus stays finite; an entry bound would reject within's weights near `1e300`.
 pub(crate) fn diagonal_in_range<T: Real>(d: T) -> bool {
     in_range(d) && d <= T::max_value() / (T::one() + T::one() + T::one() + T::one())
@@ -62,6 +67,10 @@ impl<T: Real> Rows<T> {
         self.n_cols
     }
 
+    pub(crate) fn nnz(&self) -> usize {
+        self.indices.len()
+    }
+
     pub(crate) fn row(&self, i: usize) -> impl Iterator<Item = (usize, &T)> {
         let span = self.ptrs[i]..self.ptrs[i + 1];
         (self.indices[span.clone()].iter().map(|&j| j as usize)).zip(&self.values[span])
@@ -69,7 +78,50 @@ impl<T: Real> Rows<T> {
 
     /// Serial: `ct` builds it lazily inside parallel solves, where a rayon initializer deadlocks.
     pub(crate) fn transpose(&self) -> Self {
-        todo!()
+        let mut ptrs = vec![0; self.n_cols + 1];
+        for &j in &self.indices {
+            ptrs[j as usize + 1] += 1;
+        }
+        for j in 0..self.n_cols {
+            ptrs[j + 1] += ptrs[j];
+        }
+        let mut next = ptrs[..self.n_cols].to_vec();
+        let mut indices = vec![0; self.indices.len()];
+        let mut values = vec![T::zero(); self.values.len()];
+        for i in 0..self.n_rows() {
+            for (j, &x) in self.row(i) {
+                indices[next[j]] = i as u32;
+                values[next[j]] = x;
+                next[j] += 1;
+            }
+        }
+        Self {
+            ptrs,
+            indices,
+            values,
+            n_cols: self.n_rows(),
+        }
+    }
+
+    /// `Σ|x|` per row and per column, in `f64` in row order.
+    fn abs_sums(&self) -> (Vec<f64>, Vec<f64>) {
+        let mut cols = vec![0.0; self.n_cols];
+        let rows = (0..self.n_rows())
+            .map(|i| {
+                let mut sum = 0.0;
+                for (j, x) in self.row(i) {
+                    let x = x.abs().to_f64().expect("a float casts to f64");
+                    sum += x;
+                    cols[j] += x;
+                }
+                sum
+            })
+            .collect();
+        (rows, cols)
+    }
+
+    fn nonpositive(&self) -> bool {
+        self.values.iter().all(|&x| x <= T::zero())
     }
 
     /// `x_ij ← r_i x_ij c_j`; `None` if a product leaves [`in_range`] or reaches zero: no entry is stored zero.
@@ -87,7 +139,11 @@ pub(crate) struct UpperAdjacency<T> {
 impl<T: Real> UpperAdjacency<T> {
     /// Panics unless square, every column above its row, and no stored zero.
     pub(crate) fn new(rows: Rows<T>) -> Self {
-        todo!()
+        assert_eq!(rows.n_rows(), rows.n_cols, "square");
+        let upper = (0..rows.n_rows()).all(|i| rows.row(i).all(|(j, _)| j > i));
+        assert!(upper, "every column above its row");
+        assert!(!rows.values.contains(&T::zero()), "no stored zero");
+        Self { rows }
     }
 
     pub(crate) fn n(&self) -> usize {
@@ -96,11 +152,16 @@ impl<T: Real> UpperAdjacency<T> {
 
     /// `Σ_j |x_ij|` over both triangles.
     pub(crate) fn abs_row_sums(&self) -> Vec<T> {
-        todo!()
+        let (upper, lower) = self.rows.abs_sums();
+        upper
+            .iter()
+            .zip(lower)
+            .map(|(u, l)| narrow(u + l))
+            .collect()
     }
 
     pub(crate) fn nonpositive(&self) -> bool {
-        todo!()
+        self.rows.nonpositive()
     }
 
     /// Row `i`'s neighbors above it.
@@ -156,11 +217,12 @@ impl<T: Real> CrossBlock<T> {
 
     /// `Σ|c|` per row of `[0 C; Cᵀ 0]`: eliminated rows, then kept ones.
     pub(crate) fn abs_row_sums(&self) -> Vec<T> {
-        todo!()
+        let (eliminated, kept) = self.c.abs_sums();
+        eliminated.into_iter().chain(kept).map(narrow).collect()
     }
 
     pub(crate) fn nonpositive(&self) -> bool {
-        todo!()
+        self.c.nonpositive()
     }
 
     /// `F C F` over the block's local order, a fresh block so no stale `Cᵀ` survives; `None` out of range.

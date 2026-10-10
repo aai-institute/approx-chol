@@ -57,15 +57,70 @@ struct UnionFind {
 
 impl UnionFind {
     fn new(n: usize) -> Self {
-        todo!()
+        Self {
+            parent: (0..n as u32).collect(),
+            size: vec![1; n],
+        }
+    }
+
+    /// Path halving: every visited vertex skips to its grandparent.
+    fn find(&mut self, mut i: usize) -> usize {
+        while self.parent[i] as usize != i {
+            let grandparent = self.parent[self.parent[i] as usize];
+            self.parent[i] = grandparent;
+            i = grandparent as usize;
+        }
+        i
     }
 
     fn union(&mut self, i: usize, j: usize) {
-        todo!()
+        let (mut a, mut b) = (self.find(i), self.find(j));
+        if a == b {
+            return;
+        }
+        if self.size[a] < self.size[b] {
+            std::mem::swap(&mut a, &mut b);
+        }
+        self.parent[b] = a as u32;
+        self.size[a] += self.size[b];
     }
 
     /// Components ordered by lowest vertex, members ascending.
-    fn into_partition(self) -> Partition {
-        todo!()
+    fn into_partition(mut self) -> Partition {
+        let n = self.parent.len();
+        let mut label = vec![u32::MAX; n];
+        let mut counts: Vec<u32> = Vec::new();
+        let component: Vec<u32> = (0..n)
+            .map(|v| {
+                let root = self.find(v);
+                if label[root] == u32::MAX {
+                    label[root] = counts.len() as u32;
+                    counts.push(0);
+                }
+                counts[label[root] as usize] += 1;
+                label[root]
+            })
+            .collect();
+        let ends: Vec<u32> = (counts.iter())
+            .scan(0, |end, &count| {
+                *end += count;
+                Some(*end)
+            })
+            .collect();
+        let mut next: Vec<u32> = (ends.iter().zip(&counts))
+            .map(|(end, count)| end - count)
+            .collect();
+        let (mut order, mut position) = (vec![0; n], vec![0; n]);
+        for (v, &c) in component.iter().enumerate() {
+            let slot = &mut next[c as usize];
+            order[*slot as usize] = v as u32;
+            position[v] = *slot - (ends[c as usize] - counts[c as usize]);
+            *slot += 1;
+        }
+        Partition {
+            order,
+            ends,
+            position,
+        }
     }
 }

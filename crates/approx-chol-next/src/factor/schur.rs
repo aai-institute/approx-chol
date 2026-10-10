@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use rayon::prelude::*;
+
 use super::cholesky::CholeskyInput;
 use super::clique_tree::{Copies, Fill, StarStreams};
 use super::config::{CliqueRule, InnerParallelism};
@@ -25,17 +27,39 @@ impl<T: Real> BlockElimination<T> {
 
     /// `2·nnz(C) + n_eliminated + n_kept`, within's estimate, when it [`splits`](Self::splits), else `0`.
     pub(super) fn splittable_work(&self) -> usize {
-        todo!()
+        match self.splits() {
+            true => 2 * self.cross.c().nnz() + self.cross.n(),
+            false => 0,
+        }
     }
 
     /// The larger side past 10 000 rows (0.6's threshold): the one test `Allow` and the work estimate share.
     fn splits(&self) -> bool {
-        todo!()
+        self.cross.n_eliminated() > 10_000
     }
 
-    /// `y_e = D_e⁻¹ b_e`, then `b_k −= Cᵀ y_e`, gathered by kept row through `Cᵀ`, split under `Allow` when it [`splits`](Self::splits), so both modes give the same bits.
+    /// `y_e = D_e⁻¹ b_e`, then each `b_k` subtracts `c_ek y_e` term by term in ascending `e`: scattered through `C`, or gathered through `Cᵀ` when `Allow` splits it, the same bits either way, so only a split builds `Cᵀ`.
     pub(super) fn forward(&self, x: &mut [T], inner: InnerParallelism) {
-        todo!()
+        let (eliminated, kept) = x.split_at_mut(self.n_eliminated());
+        for (y, &inv_pivot) in eliminated.iter_mut().zip(&self.inv_pivot) {
+            *y = *y * inv_pivot;
+        }
+        let eliminated = &*eliminated;
+        if inner == InnerParallelism::Allow && self.splits() {
+            let ct = self.cross.ct();
+            kept.par_iter_mut().enumerate().for_each(|(k, b)| {
+                for (e, &c) in ct.row(k) {
+                    *b = *b - c * eliminated[e];
+                }
+            });
+        } else {
+            let c = self.cross.c();
+            for (e, &y) in eliminated.iter().enumerate() {
+                for (k, &c) in c.row(e) {
+                    kept[k] = kept[k] - c * y;
+                }
+            }
+        }
     }
 
     /// `x_e = y_e − D_e⁻¹ C x_k`, by eliminated row, split under `Allow` when it [`splits`](Self::splits).
