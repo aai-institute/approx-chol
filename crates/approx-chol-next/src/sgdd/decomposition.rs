@@ -66,7 +66,7 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         })
     }
 
-    /// Dead components are dropped; a CSR's float on their own rows, a view's once every one is reduced.
+    /// Dead components are dropped; a CSR's float on their own rows, a view's ground or float on its columns once every one is reduced.
     pub(super) fn reduce(self, policy: &ScalingPolicy) -> Result<Sgdd<T>, ReduceError> {
         let Self {
             partition,
@@ -87,8 +87,8 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         match &input {
             Input::Csr(_) => {}
             Input::Signless(_) => components.iter_mut().for_each(Component::float),
-            Input::BipartiteGram { gram, .. } => float_certified(*gram, &mut components),
-            Input::Gram { v, .. } => float_certified(*v, &mut components),
+            Input::BipartiteGram { gram, .. } => ground_or_float(*gram, &mut components)?,
+            Input::Gram { v, .. } => ground_or_float(*v, &mut components)?,
         }
         Ok(Sgdd {
             n: partition.n(),
@@ -110,8 +110,11 @@ impl<T: Real, I: PrimInt> Input<'_, T, I> {
     }
 }
 
-/// Floats each folded component whose scaling meets `A_c`'s kernel to rounding: with `f = F·1` over its vertices and `p_k = f_a v_a + f_b v_b`, `Σ_k bilinear_k(p_k, p_k) ≤ 5ε Σ_k [bilinear_k(f_a v_a, f_a v_a) + bilinear_k(f_b v_b, f_b v_b)]`, `ε` that of `T`, summed in `f64` in column order over nonzero weights, as a zero-weight column is no part of `A`; a column straddling components adds its own end's square to both sides, a zero or non-finite sum grounds, and a frustrated component is nonsingular and never floats.
-fn float_certified<T: Real>(v: impl IntoColumns<T>, components: &mut [Component<T>]) {
+/// Grounds each folded component on `s = M·1` by column, `s_a = Σ_k bilinear_k(f_a v_a, p_k)` with `f = F·1` and `p_k = f_a v_a + f_b v_b`, clamped at zero, as assembled rows cancel it; floats it instead when `Σ_k bilinear_k(p_k, p_k) ≤ 5ε Σ_k [bilinear_k(f_a v_a, f_a v_a) + bilinear_k(f_b v_b, f_b v_b)]`, `ε` that of `T`; sums run in `f64` in column order over nonzero weights, a column straddling components keeps only its own end's square, a frustrated component is definite and keeps its rows' surplus, a non-finite sum is `OutOfRange`, and a surplus vanishing in `T` is `Unscalable`.
+fn ground_or_float<T: Real>(
+    v: impl IntoColumns<T>,
+    components: &mut [Component<T>],
+) -> Result<(), ReduceError> {
     todo!()
 }
 

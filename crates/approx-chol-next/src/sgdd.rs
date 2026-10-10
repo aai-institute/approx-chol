@@ -23,8 +23,6 @@ pub struct Component<T = f64> {
     frame: Arc<Frame<T>>,
     m: Sdd<T>,
     report: Option<ScalingReport>,
-    /// Proven from rows or input, never read off `M`, whose surplus rounding can zero.
-    floats: bool,
 }
 
 impl<T: Real> Component<T> {
@@ -35,7 +33,6 @@ impl<T: Real> Component<T> {
             frame: Arc::new(frame),
             m,
             report,
-            floats: false,
         }
     }
 
@@ -54,18 +51,23 @@ impl<T: Real> Component<T> {
         &self.frame
     }
 
-    /// Whether `A_c` is proven singular, so a solve returns `A_c⁺b`.
+    /// Whether `A_c` is singular, so a solve returns `A_c⁺b`.
     pub(crate) fn floats(&self) -> bool {
-        self.floats
+        matches!(&self.m.balance, Balance::Balanced(grounding) if !grounding.is_grounded())
     }
 
     /// A proven alias anchors one vertex instead of the surplus rounding left.
     fn float(&mut self) {
-        let Balance::Balanced(grounding) = &mut self.m.balance else {
+        self.reground(Grounding::ungrounded());
+    }
+
+    /// Panics unless folded: only a Z-matrix's surplus is its row sums `M·1`.
+    fn reground(&mut self, grounding: Grounding<T>) {
+        assert!(grounding.fits(self.m.n()), "one surplus per row");
+        let Balance::Balanced(old) = &mut self.m.balance else {
             panic!("a frustrated component is definite");
         };
-        *grounding = Grounding::ungrounded();
-        self.floats = true;
+        *old = grounding;
     }
 
     /// `M`: its off-diagonal and its balance.
@@ -133,7 +135,7 @@ impl<T: Real> Sdd<T> {
 /// Whether a signature folds `M` (Harary), and `M`'s grounding.
 #[derive(Clone, Debug)]
 pub(crate) enum Balance<T> {
-    /// Folded to a Z-matrix: `M` itself, singular when ungrounded.
+    /// Folded to a Z-matrix: `M` itself, singular exactly when ungrounded, which reduction allows only on proof.
     Balanced(Grounding<T>),
     /// No signature exists: a two-sheet cover, definite on `[z; −z]` even ungrounded.
     Frustrated(Grounding<T>),
@@ -304,11 +306,11 @@ impl<T: Real> Unreduced<T> {
             false => signature::signature(&self.off_diagonal),
         };
         // A frustrated component is definite, so only a folded one asks its rows.
-        let rows = proof == Proof::Rows && signs.is_some();
-        let singular = rows && scaling::rows_prove_singular(&self, &scaling);
+        let singular = proof == Proof::Rows
+            && signs.is_some()
+            && scaling::rows_prove_singular(&self, &scaling);
         let mut component = self.into_component(scaling, signs)?;
-        // Rows are all a CSR has, so a scaled surplus clamped to nothing floats too.
-        if singular || (rows && !component.m.balance.grounding().is_grounded()) {
+        if singular {
             component.float();
         }
         Ok(component)
