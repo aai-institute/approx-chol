@@ -53,7 +53,14 @@ impl<'a, T: Real> Sddm<'a, T> {
 
     /// Positive Laplacian weights, each edge once, the ground vertex `n` joined by each surplus.
     pub(super) fn grounded_edges(&self) -> impl Iterator<Item = (u32, u32, T)> + '_ {
-        std::iter::from_fn(|| -> Option<(u32, u32, T)> { todo!() })
+        let n = self.n();
+        let laplacian = (0..n).flat_map(move |i| {
+            let row = self.adjacency.upper(i);
+            row.map(move |(j, &a)| (i as u32, j as u32, -a))
+        });
+        let surplus = self.grounding.surplus().unwrap_or_default();
+        let ground = surplus.iter().enumerate().filter(|(_, &s)| s > T::zero());
+        laplacian.chain(ground.map(move |(k, &s)| (k as u32, n as u32, s)))
     }
 }
 

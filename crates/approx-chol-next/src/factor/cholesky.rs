@@ -6,7 +6,7 @@ use super::config::{Config, Multiplicity};
 use super::sddm::{Sddm, Sheets};
 use crate::Real;
 use approximate::ApproximateCholesky;
-use dense::{DenseCholesky, Room};
+use dense::{DenseCholesky, PackedLaplacian};
 
 /// A Cholesky routed dense and factored approximately instead: less accurate than asked.
 #[non_exhaustive]
@@ -53,7 +53,7 @@ pub(super) struct Cholesky<T> {
 }
 
 impl<T: Real> Cholesky<T> {
-    /// Dense when the config says so and its room is reserved before the matrix is built, else approximate.
+    /// Dense when the config says so and its Laplacian is reserved before the matrix is built, else approximate.
     pub(super) fn factor<'a>(
         input: impl CholeskyInput<'a, T>,
         draws: SequentialDraws,
@@ -64,12 +64,12 @@ impl<T: Real> Cholesky<T> {
         if !config.routes_dense(dimension) {
             return (approximate(input.for_approximate()), None);
         }
-        let Some(room) = Room::reserve(dimension) else {
+        let Some(laplacian) = PackedLaplacian::reserve(dimension) else {
             let declined = Fallback::WillNotFit { dimension };
             return (approximate(input.for_approximate()), Some(declined));
         };
         let exact = input.for_dense();
-        let dense = room.factor(&exact);
+        let dense = laplacian.factor(&exact);
         (Self::of(&exact)(Triangular::Dense(dense)), None)
     }
 
