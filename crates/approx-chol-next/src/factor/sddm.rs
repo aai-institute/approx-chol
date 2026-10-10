@@ -51,11 +51,6 @@ impl<'a, T: Real> Sddm<'a, T> {
         self.sheets
     }
 
-    /// The vertex a row covers; sheets are stacked, so a cover's second sheet repeats the first.
-    pub(super) fn base_vertex(&self, row: usize) -> usize {
-        row % (self.n() / self.sheets.count())
-    }
-
     /// Positive Laplacian weights, each edge once, the ground vertex `n` joined by each surplus.
     pub(super) fn grounded_edges(&self) -> impl Iterator<Item = (u32, u32, T)> + '_ {
         std::iter::from_fn(|| -> Option<(u32, u32, T)> { todo!() })

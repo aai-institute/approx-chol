@@ -59,10 +59,6 @@ impl<'a, T: Real> SchurComplement<'a, T> {
         todo!()
     }
 
-    pub(super) fn n_eliminated(&self) -> usize {
-        self.elimination.n_eliminated()
-    }
-
     /// `S` on the component's sheets: exact by kept row, sampled by star in parallel.
     fn build(&self, rule: CliqueRule) -> Sddm<'static, T> {
         todo!()
