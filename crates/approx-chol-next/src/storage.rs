@@ -4,9 +4,12 @@ use std::sync::OnceLock;
 
 use crate::Real;
 
-/// Finite, and zero or at least `MIN_POSITIVE/EPSILON`: the 8-bit margin keeps every product out of subnormals (#163).
+/// Zero, or within `[MIN_POSITIVE/EPSILON, MAX·EPSILON]`: the floor keeps every product out of subnormals (#163), the ceiling every reordered row sum and cast surplus finite.
 pub(crate) fn in_range<T: Real>(x: T) -> bool {
-    x.is_finite() && (x == T::zero() || x.abs() >= T::min_positive_value() / T::epsilon())
+    let magnitude = x.abs();
+    x == T::zero()
+        || (magnitude >= T::min_positive_value() / T::epsilon()
+            && magnitude <= T::max_value() * T::epsilon())
 }
 
 /// Compressed sparse rows.
@@ -94,9 +97,10 @@ pub(crate) struct CrossBlock<T> {
 }
 
 impl<T: Real> CrossBlock<T> {
-    /// Panics unless both sides are nonempty, with no stored zero: a lone vertex is no bipartite component.
+    /// Panics unless both sides are nonempty, the larger as rows, with no stored zero: a lone vertex is no bipartite component.
     pub(crate) fn new(c: Rows<T>) -> Self {
         assert!(c.n_rows() > 0 && c.n_cols() > 0, "both sides hold a vertex");
+        assert!(c.n_rows() >= c.n_cols(), "the larger side is eliminated");
         assert!(!c.values.contains(&T::zero()), "no stored zero");
         Self {
             c,

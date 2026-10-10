@@ -80,13 +80,8 @@ pub enum CsrError {
         /// The offending row.
         row: u32,
     },
-    /// An entry is not finite.
-    NotFinite {
-        /// The offending row.
-        row: u32,
-    },
-    /// An entry is nonzero below `MIN_POSITIVE/EPSILON`, where products turn subnormal.
-    TooSmall {
+    /// An entry is not finite, or nonzero outside `[MIN_POSITIVE/EPSILON, MAX·EPSILON]`, where products turn subnormal or row sums overflow.
+    OutOfRange {
         /// The offending row.
         row: u32,
     },
@@ -110,8 +105,9 @@ impl core::fmt::Display for CsrError {
                 "row {row} has unsorted or repeated columns; scipy's sum_duplicates() canonicalizes"
             ),
             Self::NotSymmetric { row } => write!(f, "row {row} has an entry with no equal mirror"),
-            Self::NotFinite { row } => write!(f, "row {row} has a non-finite entry"),
-            Self::TooSmall { row } => write!(f, "row {row} has an entry too small to stay normal"),
+            Self::OutOfRange { row } => {
+                write!(f, "row {row} has an entry outside the representable range")
+            }
         }
     }
 }

@@ -256,12 +256,12 @@ pub enum ReduceError {
         /// The component's first vertex in local order, in `A`'s numbering.
         vertex: u32,
     },
-    /// A scale or a scaled entry overflowed, or fell nonzero below `MIN_POSITIVE/EPSILON`.
+    /// A scale or a scaled entry left `[MIN_POSITIVE/EPSILON, MAX·EPSILON]`.
     Unscalable {
         /// The component's first vertex in local order, in `A`'s numbering.
         vertex: u32,
     },
-    /// An assembled entry or diagonal is non-finite, nonzero below `MIN_POSITIVE/EPSILON`, or a view's diagonal underflowed to zero.
+    /// An assembled entry or diagonal is non-finite, nonzero outside `[MIN_POSITIVE/EPSILON, MAX·EPSILON]`, or a view's diagonal underflowed to zero.
     OutOfRange {
         /// The entry's vertex, in `A`'s numbering.
         vertex: u32,
