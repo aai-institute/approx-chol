@@ -32,7 +32,7 @@ impl<T: Real> Room<T> {
         todo!()
     }
 
-    /// Takes its rows from the matrix, `n` grounded or `n − 1` floating, and panics past the room; `vertices` names each base vertex in `A`.
+    /// Takes its rows from the matrix, `n` grounded or `n − 1` anchored, and panics past the room; `vertices` names each base vertex in `A`.
     pub(super) fn factor(
         self,
         sddm: &Sddm<'_, T>,

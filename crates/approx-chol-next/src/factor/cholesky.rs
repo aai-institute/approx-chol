@@ -103,18 +103,18 @@ impl<T: Real> Cholesky<T> {
         move |cholesky| {
             let gauge = match grounded {
                 true => Gauge::Grounded(cholesky),
-                false => Gauge::Floating(cholesky),
+                false => Gauge::Anchored(cholesky),
             };
             Self { sheets, gauge }
         }
     }
 
-    /// A floating sheet substitutes on `x` in place; the approximate order may read the ground mid-recurrence, so it sits beside the rows.
+    /// An anchored sheet substitutes on `x` in place; the approximate order may read the ground mid-recurrence, so it sits beside the rows.
     pub(super) fn scratch_len(&self, kept: usize) -> usize {
         match (self.sheets, &self.gauge) {
-            (Sheets::One, Gauge::Floating(_)) => 0,
+            (Sheets::One, Gauge::Anchored(_)) => 0,
             (sheets, Gauge::Grounded(_)) => sheets.count() * kept + 1,
-            (Sheets::Two, Gauge::Floating(_)) => 2 * kept,
+            (Sheets::Two, Gauge::Anchored(_)) => 2 * kept,
         }
     }
 
@@ -129,8 +129,8 @@ impl<T: Real> Cholesky<T> {
 enum Gauge<T> {
     /// The ground is the appended slot, right-hand side `−Σb`; every entry then shifts so it reads zero.
     Grounded(Triangular<T>),
-    /// The free slot reads zero; the component's projection, or a cover's descent, removes the constant.
-    Floating(Triangular<T>),
+    /// No surplus: the free slot reads zero, and only a floating component's projection or a cover's descent removes the constant.
+    Anchored(Triangular<T>),
 }
 
 /// The triangular factor, dense or approximate; both leave one slot uneliminated.
