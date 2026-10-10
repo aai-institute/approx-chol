@@ -1,4 +1,4 @@
-//! Factor-width-2 views `A = V W Vᵀ`, at most two nonzeros per column of `V`: general, or on two disjoint sides.
+//! Factor-width-2 views, at most two nonzeros per column of `V`: `A = V Vᵀ` in general, or `V W Vᵀ` on two disjoint sides.
 
 use std::sync::OnceLock;
 

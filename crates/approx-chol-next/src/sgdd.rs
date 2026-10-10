@@ -280,11 +280,11 @@ struct Unreduced<T> {
     nonpositive: bool,
 }
 
-/// Who proves a component singular: its own rows once scaled, or its input's verdict, taken before any matrix moved.
+/// Who proves a component singular: its own rows, or its input once every component is reduced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Proof {
     Rows,
-    Input(bool),
+    Input,
 }
 
 impl<T: Real> Unreduced<T> {
@@ -299,11 +299,10 @@ impl<T: Real> Unreduced<T> {
             true => Some(Congruence::identity()),
             false => signature::signature(&self.off_diagonal),
         };
-        let singular = match proof {
-            // A frustrated component is definite, so only a folded one asks its rows.
-            Proof::Rows => signs.is_some() && scaling::rows_prove_singular(&self, &scaling),
-            Proof::Input(floats) => floats,
-        };
+        // A frustrated component is definite, so only a folded one asks its rows.
+        let singular = proof == Proof::Rows
+            && signs.is_some()
+            && scaling::rows_prove_singular(&self, &scaling);
         let mut component = self.into_component(scaling, signs)?;
         if singular {
             component.m.float();

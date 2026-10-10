@@ -9,7 +9,7 @@ use crate::Real;
 use cdf::CdfSampler;
 pub(super) use copies::{Copies, Multi, Single};
 use star::Star;
-pub(super) use streams::{RunDraws, StarDraws, StarStreams, Streams};
+pub(super) use streams::{SequentialDraws, StarDraws, StarStreams, Streams};
 
 /// Fill edges `(lo, hi, weight)`, `lo < hi`, as an elimination emits them.
 pub(super) type Fill<T> = Vec<(u32, u32, T)>;
@@ -31,7 +31,7 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
     /// Merges `neighbors`, samples their clique tree into `fill` as `w_i (S_{>i} / d)` from the run's `draws`, and returns the pivot.
     pub(super) fn eliminate(
         &mut self,
-        draws: &mut RunDraws,
+        draws: &mut SequentialDraws,
         neighbors: impl Iterator<Item = (u32, C, T)>,
         fill: &mut Fill<T>,
     ) -> T {

@@ -12,9 +12,9 @@ impl Streams {
         Self { seed, component }
     }
 
-    /// The approximate Cholesky's one sequence, threaded through every pivot.
-    pub(in crate::factor) fn cholesky(self) -> RunDraws {
-        RunDraws(rng(self, Stage::Cholesky))
+    /// The approximate Cholesky's one sequence: pivot `t`'s sample is conditioned on every earlier one.
+    pub(in crate::factor) fn cholesky(self) -> SequentialDraws {
+        SequentialDraws(rng(self, Stage::Cholesky))
     }
 
     /// The Schur stars' keys alone, so a complement can never reach the Cholesky's sequence.
@@ -34,11 +34,11 @@ impl StarStreams {
     }
 }
 
-/// The Cholesky's draws, borrowed by each pivot in turn.
+/// One sequence for a sequential elimination, borrowed by each pivot in turn.
 #[derive(Debug)]
-pub(in crate::factor) struct RunDraws(pub(super) SmallRng);
+pub(in crate::factor) struct SequentialDraws(pub(super) SmallRng);
 
-/// One Schur star's draws, consumed by its elimination, so no two stars share one.
+/// One star's independent sample of the Schur complement, consumed by its elimination, so no two stars share one.
 #[derive(Debug)]
 pub(in crate::factor) struct StarDraws(pub(super) SmallRng);
 

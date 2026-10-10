@@ -2,52 +2,36 @@ use num_traits::PrimInt;
 
 mod components;
 
-use super::{Proof, ScalingPolicy, Sgdd, Unreduced};
+use super::{Component, Proof, ScalingPolicy, Sgdd, Unreduced};
 use crate::input::{BipartiteGram, BipartiteGraph, Columns, Csr, CsrError, FactorWidth2};
 use crate::storage::{CrossBlock, Rows, UpperAdjacency};
 use crate::{Real, ReduceError};
 use components::Partition;
 
-/// One input split into components: what each looks like unreduced, and who proves each singular.
+/// One input split into components: what each looks like unreduced, and which components provably float.
 pub(super) struct Decomposition<'v, T, I> {
     partition: Partition,
     input: Input<'v, T, I>,
-    proofs: Proofs,
 }
 
-/// What components are extracted from: the caller's CSR, or a view's assembled `A`, taken whole by a lone component.
+/// The input, and what its components' own rows cannot prove: an assembled `A` is taken whole by a lone component.
 enum Input<'v, T, I> {
+    /// Each component's own rows decide its floating.
     Csr(Csr<'v, T, I>),
-    /// `C` of `[D_l C; Cᵀ D_r]`; a bipartite component takes the block elimination.
-    Bipartite {
+    /// A signless bipartite Laplacian, its diagonal `C`'s signed row and column sums: singular by shape, so every component floats untested.
+    Signless(Option<Biadjacency<T>>),
+    /// `C` of `[D_l C; Cᵀ D_r]` with the sides' diagonals; a bipartite component takes the block elimination.
+    BipartiteGram {
         c: Option<Biadjacency<T>>,
-        diagonal: Diagonal<'v, T>,
+        left: &'v [T],
+        right: &'v [T],
+        columns: Columns<'v, T, I>,
     },
     /// A general factor-width-2 `A`, as its CSR would store it.
-    General(Option<Assembled<T>>),
-}
-
-/// A bipartite `A`'s diagonal: the sides' own, or a signless Laplacian's degrees, `|C|`'s row and column sums.
-enum Diagonal<'v, T> {
-    Sides(&'v [T], &'v [T]),
-    Degrees,
-}
-
-/// Who proves each component singular, settled while the whole input is still in hand.
-enum Proofs {
-    /// Each component's rows, once scaled.
-    Rows,
-    /// One verdict per component of the partition.
-    Verdicts(Box<[bool]>),
-}
-
-impl Proofs {
-    fn of(&self, component: usize) -> Proof {
-        match self {
-            Self::Rows => Proof::Rows,
-            Self::Verdicts(floats) => Proof::Input(floats[component]),
-        }
-    }
+    Gram {
+        a: Option<Assembled<T>>,
+        columns: Columns<'v, T, I>,
+    },
 }
 
 impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
@@ -56,19 +40,18 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         Ok(Self {
             partition: components::of_csr(&csr)?,
             input: Input::Csr(csr),
-            proofs: Proofs::Rows,
         })
     }
 
     pub(super) fn gram(v: FactorWidth2<'v, T, I>) -> Result<Self, ReduceError> {
         let columns = v.columns();
         let a = assemble_general(&columns)?;
-        let partition = components::of_general(&a);
-        let floats = certify(&columns, &partition, |i| a.diagonal[i]);
         Ok(Self {
-            partition,
-            input: Input::General(Some(a)),
-            proofs: Proofs::Verdicts(floats),
+            partition: components::of_general(&a),
+            input: Input::Gram {
+                a: Some(a),
+                columns,
+            },
         })
     }
 
@@ -76,51 +59,50 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         let (left, right) = gram.diagonals();
         let columns = gram.columns();
         let c = assemble_bipartite(&columns)?;
-        let partition = components::of_cross(&c);
-        let n_left = left.len();
-        let floats = certify(&columns, &partition, |i| match i.checked_sub(n_left) {
-            None => left[i],
-            Some(j) => right[j],
-        });
         Ok(Self {
-            partition,
-            input: Input::Bipartite {
+            partition: components::of_cross(&c),
+            input: Input::BipartiteGram {
                 c: Some(c),
-                diagonal: Diagonal::Sides(left, right),
+                left,
+                right,
+                columns,
             },
-            proofs: Proofs::Verdicts(floats),
         })
     }
 
-    /// A signless bipartite Laplacian has zero surplus by shape, and a negative weight fails as not GDD.
+    /// A negative weight leaves a diagonal below its row, so it fails as not GDD.
     pub(super) fn signless(graph: BipartiteGraph<'v, T, I>) -> Result<Self, ReduceError> {
         let c = assemble_bipartite(&graph.columns())?;
-        let partition = components::of_cross(&c);
-        let floats = vec![true; partition.components().count()].into_boxed_slice();
         Ok(Self {
-            partition,
-            input: Input::Bipartite {
-                c: Some(c),
-                diagonal: Diagonal::Degrees,
-            },
-            proofs: Proofs::Verdicts(floats),
+            partition: components::of_cross(&c),
+            input: Input::Signless(Some(c)),
         })
     }
 
-    /// Dead components are dropped; every other floats as its proof says.
+    /// Dead components are dropped; a CSR's float on their own rows, a view's once every one is reduced.
     pub(super) fn reduce(self, policy: &ScalingPolicy) -> Result<Sgdd<T>, ReduceError> {
         let Self {
             partition,
             mut input,
-            proofs,
         } = self;
+        let proof = match input {
+            Input::Csr(_) => Proof::Rows,
+            Input::Signless(_) | Input::BipartiteGram { .. } | Input::Gram { .. } => Proof::Input,
+        };
         let (mut components, mut dead) = (Vec::new(), Vec::new());
-        for (index, a) in input.components(&partition).enumerate() {
+        for a in input.components(&partition) {
             if a.is_dead() {
                 dead.push(a.vertices[0]);
                 continue;
             }
-            components.push(a.reduce(policy, proofs.of(index))?);
+            components.push(a.reduce(policy, proof)?);
+        }
+        match &input {
+            Input::Csr(_) => {}
+            Input::Signless(_) => (components.iter_mut()).for_each(|component| component.m.float()),
+            Input::BipartiteGram { columns, .. } | Input::Gram { columns, .. } => {
+                float_certified(columns, &mut components)
+            }
         }
         Ok(Sgdd {
             n: partition.n(),
@@ -142,12 +124,11 @@ impl<T: Real, I: PrimInt> Input<'_, T, I> {
     }
 }
 
-/// Per component, the Rayleigh certificate `uᵀAu ≤ 5ε·uᵀDu`, `D = diag(A)` and `ε` that of `T`: the signed alias `u` solves `v_a u_a + v_b u_b = 0` along a maximum spanning forest of `|bilinear(v_a, v_b)|` over coupling columns, grown as `u = μ 2^η`, `μ: f64` and `η: i64` so no chain of `u32` columns wraps it, with `(μ_b, δ) = frexp(−m(v_a) μ_a / m(v_b))`, `η_b = η_a + e(v_a) − e(v_b) + δ`, then shifted by one power of two to `max a_ii u_i² ∈ [1, 4)`; `uᵀAu = Σ_k bilinear_k(p_k, p_k)` with `p_k = v_a u_a + v_b u_b` formed on mantissas, a straddling column keeping its own end's term, summed in column order.
-fn certify<T: Real, I: PrimInt>(
+/// Floats each folded component whose scaling meets `A_c`'s kernel to rounding: with `f = F·1` over its vertices and `p_k = f_a v_a + f_b v_b`, `Σ_k bilinear_k(p_k, p_k) ≤ 5ε Σ_k [bilinear_k(f_a v_a, f_a v_a) + bilinear_k(f_b v_b, f_b v_b)]`, `ε` that of `T`, summed in `f64` in column order over nonzero weights, as a zero-weight column is no part of `A`; a column straddling components adds its own end's square to both sides, a zero or non-finite sum grounds, and a frustrated component is nonsingular and never floats.
+fn float_certified<T: Real, I: PrimInt>(
     columns: &Columns<'_, T, I>,
-    partition: &Partition,
-    diagonal: impl Fn(usize) -> T,
-) -> Box<[bool]> {
+    components: &mut [Component<T>],
+) {
     todo!()
 }
 

@@ -6,7 +6,7 @@ mod steps;
 
 pub(super) use steps::ApproximateCholesky;
 
-use crate::factor::clique_tree::{CliqueSampler, Copies, Fill, Multi, RunDraws, Single};
+use crate::factor::clique_tree::{CliqueSampler, Copies, Fill, Multi, SequentialDraws, Single};
 use crate::factor::config::Multiplicity;
 use crate::factor::sddm::Sddm;
 use crate::Real;
@@ -18,7 +18,7 @@ use steps::Steps;
 pub(super) fn factor<T: Real>(
     sddm: Sddm<'_, T>,
     multiplicity: Multiplicity,
-    draws: RunDraws,
+    draws: SequentialDraws,
 ) -> ApproximateCholesky<T> {
     match multiplicity {
         Multiplicity::Single => eliminate::<T, Single>(sddm, draws, ()),
@@ -29,7 +29,7 @@ pub(super) fn factor<T: Real>(
 /// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree (Algorithm 8); the last is the slot the solve zeroes.
 fn eliminate<T: Real, C: Copies>(
     sddm: Sddm<'_, T>,
-    draws: RunDraws,
+    draws: SequentialDraws,
     split: C::Split,
 ) -> ApproximateCholesky<T> {
     let mut graph = EliminationGraph::<T, C>::of(&sddm, split);
