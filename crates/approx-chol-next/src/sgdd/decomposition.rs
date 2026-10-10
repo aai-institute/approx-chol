@@ -5,7 +5,9 @@ mod components;
 use std::sync::Arc;
 
 use super::{Balance, Component, OffDiagonal, Proof, ScalingPolicy, Sgdd, Unreduced};
-use crate::input::{BipartiteGram, BipartiteGraph, Csr, CsrError, FactorWidth2, IntoColumns};
+use crate::input::{
+    BipartiteGram, BipartiteGraph, Canonical, Csr, CsrError, FactorWidth2, IntoColumns,
+};
 use crate::storage::{in_range, narrow, widen, CrossBlock, Rows, UpperAdjacency};
 use crate::{Real, ReduceError};
 use components::Partition;
@@ -19,7 +21,7 @@ pub(super) struct Decomposition<'v, T, I> {
 /// The input, and what its components' own rows cannot prove: an assembled `A` is taken whole by a lone component.
 enum Input<'v, T, I> {
     /// Each component's own rows decide its floating.
-    Csr(Csr<'v, T, I>),
+    Csr(Canonical<'v, T, I>),
     /// A signless bipartite Laplacian, its diagonal `C ≥ 0`'s row and column sums: balanced and singular by shape, so every component floats untested.
     Signless(Option<Biadjacency<T>>),
     /// `C` of `[D_l C; Cᵀ D_r]`, the sides' diagonals read from the Gram; a bipartite component takes the block elimination.
@@ -37,6 +39,7 @@ enum Input<'v, T, I> {
 impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
     /// Checks symmetry and range in the walk that finds the components.
     pub(super) fn csr(csr: Csr<'v, T, I>) -> Result<Self, CsrError> {
+        let csr = Canonical::of(csr)?;
         Ok(Self {
             partition: components::of_csr(&csr)?,
             input: Input::Csr(csr),
@@ -122,7 +125,8 @@ impl<'v, T: Real, I: PrimInt> Input<'v, T, I> {
                 };
                 Given::unreduced(bipartite_component(c, vertices, partition, diagonal))
             }
-            Self::Csr(_) | Self::Gram { .. } => todo!(),
+            Self::Csr(csr) => Given::unreduced(csr_component(csr, vertices, partition.position())),
+            Self::Gram { .. } => todo!(),
         })
     }
 }
@@ -143,6 +147,34 @@ impl<T: Real> Given<T> {
             false => Self::Unreduced(a),
         }
     }
+}
+
+/// Upper rows in local order, columns through `position`; a zero couples nothing, so it may name another component.
+fn csr_component<T: Real, I: PrimInt>(
+    csr: &Canonical<'_, T, I>,
+    vertices: &[u32],
+    position: &[u32],
+) -> Unreduced<T> {
+    let mut diagonal = Vec::with_capacity(vertices.len());
+    let (mut ptrs, mut indices, mut values) = (vec![0], Vec::new(), Vec::new());
+    for &v in vertices {
+        let v = v as usize;
+        let mut d = T::zero();
+        for (j, a) in csr.row(v).filter(|&(j, a)| j >= v && a != T::zero()) {
+            match j == v {
+                true => d = a,
+                false => {
+                    indices.push(position[j]);
+                    values.push(a);
+                }
+            }
+        }
+        diagonal.push(d);
+        ptrs.push(indices.len());
+    }
+    let rows = Rows::new(ptrs, indices, values, vertices.len());
+    let off_diagonal = OffDiagonal::General(UpperAdjacency::new(rows));
+    Unreduced::new(vertices.into(), off_diagonal, diagonal)
 }
 
 fn bipartite_component<T: Real>(

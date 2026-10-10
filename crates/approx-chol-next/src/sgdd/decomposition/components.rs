@@ -1,12 +1,16 @@
 use num_traits::PrimInt;
 
 use super::{Assembled, Biadjacency};
-use crate::input::{Csr, CsrError};
+use crate::input::{Canonical, CsrError};
 use crate::Real;
 
 /// Unions the pattern in the walk that checks symmetry and range.
-pub(super) fn of_csr<T: Real, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<Partition, CsrError> {
-    todo!()
+pub(super) fn of_csr<T: Real, I: PrimInt>(
+    csr: &Canonical<'_, T, I>,
+) -> Result<Partition, CsrError> {
+    let mut sets = UnionFind::new(csr.n());
+    csr.walk(|i, j, _| sets.union(i, j))?;
+    Ok(sets.into_partition())
 }
 
 pub(super) fn of_general<T: Real>(a: &Assembled<T>) -> Partition {
@@ -85,9 +89,28 @@ impl UnionFind {
         self.size[a] += self.size[b];
     }
 
+    /// Whether every vertex is already in one set, which is the connected case.
+    fn is_one_set(&mut self) -> bool {
+        let n = self.parent.len();
+        n > 0 && {
+            let root = self.find(0);
+            self.size[root] as usize == n
+        }
+    }
+
     /// Components ordered by lowest vertex, members ascending.
     fn into_partition(mut self) -> Partition {
         let n = self.parent.len();
+        // Connected, the common case, skips the counting sort: every vertex is its own position.
+        if self.is_one_set() {
+            let order: Vec<u32> = (0..n as u32).collect();
+            let ends = vec![n as u32];
+            return Partition {
+                position: order.clone(),
+                order,
+                ends,
+            };
+        }
         let mut label = vec![u32::MAX; n];
         let mut counts: Vec<u32> = Vec::new();
         let component: Vec<u32> = (0..n)

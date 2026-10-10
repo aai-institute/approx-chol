@@ -1,7 +1,7 @@
 mod cg;
 
 use super::{OffDiagonal, Unreduced};
-use crate::storage::{diagonal_in_range, narrow, widen, CrossBlock};
+use crate::storage::{diagonal_in_range, narrow, widen, CrossBlock, UpperAdjacency};
 use crate::{Real, ReduceError};
 
 /// Certification policy for a dominance scaling; a deficit left at hand-over is clamped and reported.
@@ -112,11 +112,13 @@ pub(super) fn clamped_deficit<T: Real>(diagonal: &[T], abs_row_sums: &[T]) -> f6
         .fold(0.0, f64::max)
 }
 
-/// Unscaled, a surplus inside its band `t_i ε a_ii + t_i ε Σ_j|a_ij|`, `t_i` the additions that formed it, or a certified deficit counts as zero, and the component floats when none remains; a scaled surplus is its scaling's residue, which no row bound tells from a real one.
-pub(super) fn rows_prove_singular<T: Real>(a: &Unreduced<T>, scaling: &Scaling<T>) -> bool {
-    match scaling {
-        Scaling::AlreadyDominant => todo!(),
-        Scaling::Scaled { .. } => false,
+/// Unscaled, a surplus inside its band `t ε (a_ii + Σ_j|a_ij|)`, `t = deg + 1` the terms that formed it, is rounding and reads zero, so a component whose every row balances floats (main's `RowBalance`).
+pub(super) fn unscaled_surplus<T: Real>(d: T, abs_row_sum: T, degree: usize) -> T {
+    let (d, s) = (widen(d), widen(abs_row_sum));
+    let band = widen(T::epsilon()) * (d + s) * (degree + 1) as f64;
+    match d - s > band {
+        true => narrow(d - s),
+        false => T::zero(),
     }
 }
 
@@ -124,16 +126,85 @@ pub(super) fn rows_prove_singular<T: Real>(a: &Unreduced<T>, scaling: &Scaling<T
 fn already_dominant<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> bool {
     let epsilon = widen(T::epsilon());
     let rows = a.diagonal.iter().zip(&a.abs_row_sums);
-    rows.zip(a.off_diagonal.degrees())
-        .all(|((&d, &s), degree)| {
-            let slack = policy.tolerance.max(2.0 * degree as f64 * epsilon);
-            widen(s) <= widen(d) * (1.0 + slack)
-        })
+    rows.zip(&a.degrees).all(|((&d, &s), &degree)| {
+        let slack = policy.tolerance.max(2.0 * degree as f64 * epsilon);
+        widen(s) <= widen(d) * (1.0 + slack)
+    })
 }
 
-/// Self-corrective iterations (Guan, Lu, Li, Shao 2016).
+/// Self-corrective iterations (Guan, Lu, Li, Shao 2016, Algorithm 3b), proto's: the best iterate is handed over, peaking `μ = f√a_ii` at `1` as the CG does.
 fn sci<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> Result<Relaxation<T>, ReduceError> {
-    todo!()
+    let unscalable = ReduceError::Unscalable {
+        vertex: a.vertices[0],
+    };
+    let OffDiagonal::General(adjacency) = &a.off_diagonal else {
+        unreachable!("only a general pattern takes SCI")
+    };
+    let diagonal: Vec<f64> = a.diagonal.iter().map(|&d| widen(d)).collect();
+    let n = diagonal.len();
+    let mut scales = vec![1.0f64; n];
+    let mut t = vec![0.0f64; n];
+    let mut best = (f64::INFINITY, scales.clone());
+    let mut iterations = 0;
+    loop {
+        ratios(adjacency, &diagonal, &scales, &mut t);
+        let (t_p, t_q) = t.iter().fold((f64::INFINITY, 0.0f64), |(lo, hi), &v| {
+            (lo.min(v), hi.max(v))
+        });
+        if !(t_p.is_finite() && t_q.is_finite()) {
+            return Err(unscalable);
+        }
+        let violation = (t_q - 1.0).max(0.0);
+        if violation < best.0 {
+            best = (violation, scales.clone());
+        }
+        // `t_p ≥ 1` everywhere off-dominant: no positive scaling certifies, so hand over the best seen.
+        if violation <= policy.tolerance || t_p >= 1.0 || iterations == policy.max_iterations {
+            break;
+        }
+        iterations += 1;
+        let towards_dominant = t_p * t_q <= 1.0;
+        for (f, &ti) in scales.iter_mut().zip(&t) {
+            let selected = match towards_dominant {
+                true => ti * t_q <= 1.0,
+                false => t_p * ti > 1.0,
+            };
+            if selected && ti > 0.0 {
+                *f *= ti;
+            }
+        }
+        let peak = scales.iter().copied().fold(0.0f64, f64::max);
+        if !(peak.is_finite() && peak > 0.0) {
+            return Err(unscalable);
+        }
+        scales.iter_mut().for_each(|f| *f /= peak);
+    }
+    let (violation, scales) = best;
+    let peak = (scales.iter().zip(&diagonal)).fold(0.0f64, |peak, (&f, &d)| peak.max(f * d.sqrt()));
+    let scales: Box<[T]> = scales.iter().map(|&f| narrow::<T>(f / peak)).collect();
+    if !scales.iter().all(|&f| f.is_finite() && f > T::zero()) {
+        return Err(unscalable);
+    }
+    Ok(Relaxation {
+        scales,
+        iterations,
+        violation: narrow(violation),
+    })
+}
+
+/// `t_i = Σ_j |a_ij| f_j / (a_ii f_i)`, each upper edge read for both its ends.
+fn ratios<T: Real>(adjacency: &UpperAdjacency<T>, diagonal: &[f64], scales: &[f64], t: &mut [f64]) {
+    t.fill(0.0);
+    for i in 0..adjacency.n() {
+        for (j, &a) in adjacency.upper(i) {
+            let a = widen(a.abs());
+            t[i] += a * scales[j];
+            t[j] += a * scales[i];
+        }
+    }
+    for ((ti, &d), &f) in t.iter_mut().zip(diagonal).zip(scales) {
+        *ti /= d * f;
+    }
 }
 
 /// CG on `α² − NᵀN` over the smaller side, `α = 1 + tolerance/2` off the Perron vector; `None` when no scale stays a positive `T`.

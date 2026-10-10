@@ -8,7 +8,7 @@ use rayon::prelude::*;
 use super::cholesky::CholeskyInput;
 use super::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single, StarDraws, StarStreams};
 use super::config::{CliqueRule, InnerParallelism, Multiplicity};
-use super::sddm::{from_fill, RowSums, Sddm, Sheets};
+use super::sddm::{crosses, from_fill, RowSums, Sddm, Sheets};
 use crate::sgdd::{Balance, Grounding};
 use crate::storage::{narrow, widen, CrossBlock, UpperAdjacency};
 use crate::Real;
@@ -266,11 +266,6 @@ fn exact_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Ve
         rows.end_row();
     }
     rows.finish()
-}
-
-/// A negative entry joins its ends on one sheet, a positive one across them.
-fn crosses<T: Real>(c: T) -> bool {
-    c > T::zero()
 }
 
 /// `x·y/d` as the smaller times the larger's share `max·d⁻¹ ≤ 1`, so no product overflows before the division.

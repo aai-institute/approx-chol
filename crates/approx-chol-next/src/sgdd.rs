@@ -227,6 +227,8 @@ struct Unreduced<T> {
     abs_row_sums: Vec<T>,
     /// No positive off-diagonal: already a Z-matrix, so no signature is searched.
     nonpositive: bool,
+    /// Entries per row: the rounding its sum can carry, read by the dominance test and the surplus band alike.
+    degrees: Vec<usize>,
 }
 
 /// Who proves a component singular: its own rows, or its input once every component is reduced.
@@ -245,6 +247,7 @@ impl<T: Real> Unreduced<T> {
             vertices,
             abs_row_sums: off_diagonal.abs_row_sums(),
             nonpositive: off_diagonal.nonpositive(),
+            degrees: off_diagonal.degrees(),
             off_diagonal,
             diagonal,
         }
@@ -268,15 +271,8 @@ impl<T: Real> Unreduced<T> {
             true => Some(Congruence::identity()),
             false => signature::signature(&self.off_diagonal),
         };
-        // A frustrated component is definite, so only a folded one asks its rows.
-        let singular = proof == Proof::Rows
-            && signs.is_some()
-            && scaling::rows_prove_singular(&self, &scaling);
         let vertex = self.vertices[0];
-        let mut component = self.into_component(scaling, signs, policy)?;
-        if singular {
-            component.float();
-        }
+        let component = self.into_component(scaling, signs, policy)?;
         if !component.m().1.ground_in_range() {
             return Err(ReduceError::OutOfRange { vertex });
         }
@@ -312,15 +308,20 @@ impl<T: Real> Unreduced<T> {
             }
         };
         // An unscaled deficit lies inside the rounding band `already_dominant` allowed.
-        let report = relaxation.and_then(|relaxation| {
+        let report = relaxation.as_ref().and_then(|relaxation| {
             policy.certify(
-                &relaxation,
+                relaxation,
                 scaling::clamped_deficit(&diagonal, &abs_row_sums),
             )
         });
-        let surplus = (diagonal.iter().zip(&abs_row_sums))
-            .map(|(&d, &s)| (d - s).max(T::zero()))
-            .collect();
+        let rows = diagonal.iter().zip(&abs_row_sums);
+        // A scaled surplus is its scaling's residue, which no row bound tells from a real one.
+        let surplus = match &relaxation {
+            None => (rows.zip(&self.degrees))
+                .map(|((&d, &s), &degree)| scaling::unscaled_surplus(d, s, degree))
+                .collect(),
+            Some(_) => rows.map(|(&d, &s)| (d - s).max(T::zero())).collect(),
+        };
         let grounding = Grounding::of(surplus);
         let balance = match folds {
             true => Balance::Balanced(grounding),

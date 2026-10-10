@@ -9,7 +9,15 @@ pub(super) fn signature<T: Real>(off_diagonal: &OffDiagonal<T>) -> Option<Congru
             Some(Congruence::negate_from(cross.n_eliminated()))
         }
         OffDiagonal::Bipartite(cross) => folding_signs(cross),
-        OffDiagonal::General(_) => todo!("a general pattern searches for signs"),
+        OffDiagonal::General(adjacency) => {
+            let mut forest = ParityForest::new(adjacency.n());
+            for i in 0..adjacency.n() {
+                for (j, &a) in adjacency.upper(i) {
+                    forest.join(i, j, a > T::zero())?;
+                }
+            }
+            Some(forest.signs())
+        }
     }
 }
 
@@ -23,8 +31,7 @@ fn folding_signs<T: Real>(cross: &CrossBlock<T>) -> Option<Congruence<T>> {
             forest.join(e, n_eliminated + k, c > T::zero())?;
         }
     }
-    let negated: Vec<bool> = (0..cross.n()).map(|i| forest.find(i).1).collect();
-    Some(Congruence::negated(&negated))
+    Some(forest.signs())
 }
 
 /// Union-find whose links carry whether the two ends' signs differ.
@@ -55,6 +62,12 @@ impl ParityForest {
             x = self.parent[x] as usize;
         }
         (x, parity)
+    }
+
+    /// Each vertex negated when odd to its root.
+    fn signs<T: Real>(mut self) -> Congruence<T> {
+        let negated: Vec<bool> = (0..self.parent.len()).map(|i| self.find(i).1).collect();
+        Congruence::negated(&negated)
     }
 
     /// `None` when `i` and `j` are already joined at the other parity.

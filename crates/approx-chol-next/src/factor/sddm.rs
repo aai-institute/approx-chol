@@ -36,7 +36,21 @@ impl<'a, T: Real> Sddm<'a, T> {
 
     /// The Gremban cover of signed `M`: a Laplacian on two sheets that acts as `M` on `[z; −z]`.
     pub(super) fn cover(signed: &UpperAdjacency<T>, grounding: &Grounding<T>) -> Sddm<'static, T> {
-        todo!()
+        let n = signed.n();
+        let mut rows = RowSums::new(2 * n);
+        for i in 0..n {
+            for (j, &a) in signed.upper(i) {
+                rows.add(Sheets::Two.vertex(j, usize::from(crosses(a))), a.abs());
+            }
+            if let Some(surplus) = grounding.surplus() {
+                rows.add(2 * n, surplus[i]);
+            }
+            rows.end_row();
+            rows.mirror_row();
+        }
+        let (adjacency, ground) = rows.finish();
+        let grounding = Grounding::of(ground);
+        Sddm::new(Cow::Owned(adjacency), Cow::Owned(grounding), Sheets::Two)
     }
 
     pub(super) fn n(&self) -> usize {
@@ -174,6 +188,11 @@ impl<T: Real> RowSums<T> {
         let rows = Rows::new(self.ptrs, self.indices, self.values, n);
         (UpperAdjacency::new(rows), self.ground)
     }
+}
+
+/// A negative entry joins its ends on one sheet, a positive one across them.
+pub(super) fn crosses<T: Real>(c: T) -> bool {
+    c > T::zero()
 }
 
 /// How many copies of each vertex a matrix holds: two for a Gremban cover, interleaved by vertex.
