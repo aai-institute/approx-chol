@@ -44,7 +44,7 @@ impl<T: Real> Component<T> {
         matches!(&self.m.balance, Balance::Balanced(grounding) if !grounding.is_grounded())
     }
 
-    /// A proven alias anchors one vertex instead of the surplus rounding left.
+    /// Proven singular: one vertex anchors instead of the surplus rounding left.
     pub(super) fn float(&mut self) {
         *self.balanced_grounding() = Grounding::ungrounded();
     }
@@ -52,12 +52,13 @@ impl<T: Real> Component<T> {
     /// An unproven component keeps a surplus: one that vanishes in `T` is `Unscalable`, never a float.
     pub(super) fn ground(&mut self, surplus: Vec<T>) -> Result<(), ReduceError> {
         assert_eq!(surplus.len(), self.m.n(), "one surplus per row");
+        let vertex = self.vertices()[0];
+        let slot = self.balanced_grounding();
         let grounding = Grounding::of(surplus);
         if !grounding.is_grounded() {
-            let vertex = self.vertices()[0];
             return Err(ReduceError::Unscalable { vertex });
         }
-        *self.balanced_grounding() = grounding;
+        *slot = grounding;
         Ok(())
     }
 

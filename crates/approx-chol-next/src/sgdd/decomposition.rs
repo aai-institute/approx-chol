@@ -65,7 +65,7 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         })
     }
 
-    /// Dead components are dropped; a CSR's float on their own rows, a view's ground or float on its columns once every one is reduced.
+    /// Dead components are dropped; a CSR's float on their own rows, a signless graph's all float, and a Gram's ground or float on its columns once every one is reduced.
     pub(super) fn reduce(self, policy: &ScalingPolicy) -> Result<Sgdd<T>, ReduceError> {
         let Self {
             partition,

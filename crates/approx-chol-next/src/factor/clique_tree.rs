@@ -28,7 +28,7 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
         todo!()
     }
 
-    /// Merges `neighbors`, samples their clique tree into `fill` as `w_i (S_{>i} / d)` from the run's `draws`, and returns the pivot.
+    /// Merges `neighbors`, samples their clique tree into `fill` as `w_i (S_{>i} / d)` from the sequential `draws`, and returns the pivot.
     pub(super) fn eliminate(
         &mut self,
         draws: &mut SequentialDraws,
