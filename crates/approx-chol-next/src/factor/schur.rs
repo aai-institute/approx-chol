@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use super::cholesky::CholeskyInput;
 use super::clique_tree::{Copies, Fill, Streams};
 use super::config::{CliqueRule, InnerParallelism};
 use super::sddm::{Sddm, Sheets};
@@ -37,11 +38,19 @@ impl<T: Real> BlockElimination<T> {
 pub(super) struct SchurComplement<'a, T> {
     elimination: BlockElimination<T>,
     balance: &'a Balance<T>,
+    /// How the approximate arm's `S` is built; a dense arm always takes it exact.
+    rule: CliqueRule,
+    streams: Streams,
 }
 
 impl<'a, T: Real> SchurComplement<'a, T> {
     /// Pivots are `Σ|c_ek| + s_e`, the same on both sheets of a cover.
-    pub(super) fn new(cross: &Arc<CrossBlock<T>>, balance: &'a Balance<T>) -> Self {
+    pub(super) fn new(
+        cross: &Arc<CrossBlock<T>>,
+        balance: &'a Balance<T>,
+        rule: CliqueRule,
+        streams: Streams,
+    ) -> Self {
         todo!()
     }
 
@@ -49,13 +58,8 @@ impl<'a, T: Real> SchurComplement<'a, T> {
         self.elimination.n_eliminated()
     }
 
-    /// The Cholesky's dimension, a cover's two sheets counted; known before `S` is built, so routing never builds it twice.
-    pub(super) fn dimension(&self) -> usize {
-        Sheets::of(self.balance).count() * self.elimination.cross.n_kept()
-    }
-
     /// `S` on the component's sheets: exact by kept row, sampled by star in parallel.
-    pub(super) fn build(&self, rule: CliqueRule, streams: Streams) -> Sddm<'static, T> {
+    fn build(&self, rule: CliqueRule) -> Sddm<'static, T> {
         todo!()
     }
 
@@ -64,11 +68,26 @@ impl<'a, T: Real> SchurComplement<'a, T> {
     }
 }
 
-/// Each eliminated star's clique tree under its own stream, the ground a final neighbor; chunks in star order, so merged duplicates sum alike at any thread count.
+/// `S` built only once its arm is chosen, so routing never builds it twice.
+impl<'a, T: Real> CholeskyInput<'a, T> for &SchurComplement<'_, T> {
+    fn dimension(&self) -> usize {
+        Sheets::of(self.balance).count() * self.elimination.cross.n_kept()
+    }
+
+    /// A dense Cholesky spends nothing on sparsity, so only the exact complement goes dense.
+    fn exact(&self) -> Sddm<'_, T> {
+        self.build(CliqueRule::Exact)
+    }
+
+    fn approximated(self) -> Sddm<'a, T> {
+        self.build(self.rule)
+    }
+}
+
+/// Each eliminated star's clique tree under its own stream, the ground a final neighbor; a row of `C` repeats no column, so stars skip the merge; chunks in star order, so merged duplicates sum alike at any thread count.
 fn sampled_fill<T: Real, C: Copies>(
     schur: &SchurComplement<'_, T>,
     split: C::Split,
-    streams: Streams,
 ) -> Vec<Fill<T>> {
     todo!()
 }

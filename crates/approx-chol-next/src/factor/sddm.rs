@@ -39,6 +39,15 @@ impl<'a, T: Real> Sddm<'a, T> {
         todo!()
     }
 
+    /// Borrows whatever this one owns, so a dense arm reads it without a copy.
+    pub(super) fn view(&self) -> Sddm<'_, T> {
+        Sddm {
+            adjacency: Cow::Borrowed(&*self.adjacency),
+            grounding: Cow::Borrowed(&*self.grounding),
+            sheets: self.sheets,
+        }
+    }
+
     pub(super) fn n(&self) -> usize {
         self.adjacency.n()
     }

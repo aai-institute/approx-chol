@@ -18,7 +18,7 @@ pub(super) struct Decomposition<'v, T, I> {
 enum Input<'v, T, I> {
     /// A signless Laplacian: zero surplus by shape, and a negative weight fails as not GDD.
     Signless(Option<Biadjacency<T>>),
-    /// Floats when the signed alias `u` (`v_l u_l + v_r u_r = 0` along joining columns inside a component; grown in `f64` whatever `T`, exponent tracked, then scaled by a power of two to `max_i a_ii u_i² ∈ [1, 4)` so neither sum leaves range) has `Σ (w p) p ≤ 1e-13·Σ ((w v_l u_l)(v_l u_l) + (w v_r u_r)(v_r u_r))`, `p = v_l u_l + v_r u_r`, summed in `f64` in column order; a straddling column adds only its own side's square.
+    /// Floats when the signed alias `u` (`v_l u_l + v_r u_r = 0` along joining columns inside a component, grown from one root as an `f64` mantissa and exponent: `m' = −(m_a m)/m_b`, `e' = e + e_a − e_b` over `frexp` of the loadings, so no ratio leaves range) leaves every vertex `i` with `Σ_{k∋i} (w p_k) p_k ≤ 1e-13·a_ii u_i²`, `p_k = v_l u_l + v_r u_r` scaled by `2^{−e_i}` and summed in `f64` in column order: per vertex, so a break on light vertices is not drowned by heavy ones; a straddling column's `p` is its own side's term.
     Gram {
         c: Option<Biadjacency<T>>,
         columns: Columns<'v, T, I>,

@@ -6,8 +6,7 @@ mod star;
 
 use crate::Real;
 use cdf::CdfSampler;
-use cdf::Stream;
-pub(super) use cdf::Streams;
+pub(super) use cdf::{Stream, Streams};
 pub(super) use copies::{Copies, Multi, Single};
 use star::Star;
 
@@ -35,6 +34,15 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
 
     /// Merges `neighbors`, samples their clique tree into `fill` as `w_i (S_{>i} / d)`, and returns the pivot.
     pub(super) fn eliminate(
+        &mut self,
+        neighbors: impl Iterator<Item = (u32, C, T)>,
+        fill: &mut Fill<T>,
+    ) -> T {
+        todo!()
+    }
+
+    /// A neighborhood with no duplicate, as a row of `C` is: sorted by weight once, nothing merged.
+    pub(super) fn eliminate_unique(
         &mut self,
         neighbors: impl Iterator<Item = (u32, C, T)>,
         fill: &mut Fill<T>,

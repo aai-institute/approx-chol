@@ -16,7 +16,7 @@ pub use config::{CliqueRule, Config, InnerParallelism, Multiplicity, OnDenseFail
 
 use crate::sgdd::{Balance, Component, Frame, OffDiagonal, Sgdd};
 use crate::Real;
-use cholesky::{Cholesky, DenseCholesky};
+use cholesky::Cholesky;
 use clique_tree::Streams;
 use schur::{BlockElimination, SchurComplement};
 use sddm::{Sddm, Sheets};
@@ -178,23 +178,15 @@ impl<T: Real> ComponentFactor<T> {
                     ),
                     Balance::Frustrated(grounding) => Sddm::cover(adjacency, grounding),
                 };
-                let dense = |sddm: &_, room| Cholesky::dense(room, sddm, vertices);
-                let approximate = |sddm| Cholesky::approximate(sddm, config.approximate, streams);
-                (None, route(sddm.n(), sddm, dense, approximate, config)?)
+                let factored = Cholesky::factor(sddm, vertices, streams.cholesky(), config);
+                (None, factored.map_err(FactorError::UnusablePivot)?)
             }
             (OffDiagonal::Bipartite(cross), balance) => {
-                let schur = SchurComplement::new(cross, balance);
+                let schur = SchurComplement::new(cross, balance, config.complement, streams);
                 let kept = &vertices[schur.n_eliminated()..];
-                // A dense Cholesky spends nothing on sparsity, so only the exact complement goes dense.
-                let dense = |schur: &&SchurComplement<'_, T>, room| {
-                    Cholesky::dense(room, &schur.build(CliqueRule::Exact, streams), kept)
-                };
-                let approximate = |schur: &SchurComplement<'_, T>| {
-                    let s = schur.build(config.complement, streams);
-                    Cholesky::approximate(s, config.approximate, streams)
-                };
-                let routed = route(schur.dimension(), &schur, dense, approximate, config)?;
-                (Some(schur.finish()), routed)
+                let factored = Cholesky::factor(&schur, kept, streams.cholesky(), config);
+                let factored = factored.map_err(FactorError::UnusablePivot)?;
+                (Some(schur.finish()), factored)
             }
         };
         Ok(Self {
@@ -263,31 +255,5 @@ impl<T: Real> ComponentFactor<T> {
             congruence.project_out_null(x);
         }
         Ok(())
-    }
-}
-
-/// Dense when the rule says so, its room reserved before the matrix is built; a declined dense arm falls to the approximate one.
-fn route<T: Real, M>(
-    dimension: usize,
-    matrix: M,
-    dense: impl FnOnce(&M, DenseCholesky<T>) -> Result<Cholesky<T>, UnusablePivot>,
-    approximate: impl FnOnce(M) -> Cholesky<T>,
-    config: &Config,
-) -> Result<(Cholesky<T>, Option<Fallback>), FactorError> {
-    if !config.routes_dense(dimension) {
-        return Ok((approximate(matrix), None));
-    }
-    let Some(room) = DenseCholesky::reserve(dimension) else {
-        return Ok((
-            approximate(matrix),
-            Some(Fallback::WillNotFit { dimension }),
-        ));
-    };
-    match dense(&matrix, room) {
-        Ok(factor) => Ok((factor, None)),
-        Err(pivot) if config.on_dense_failure == OnDenseFailure::Error => {
-            Err(FactorError::UnusablePivot(pivot))
-        }
-        Err(pivot) => Ok((approximate(matrix), Some(Fallback::UnusablePivot(pivot)))),
     }
 }

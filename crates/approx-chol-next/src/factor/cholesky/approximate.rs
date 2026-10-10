@@ -6,7 +6,7 @@ mod steps;
 
 pub(super) use steps::ApproximateCholesky;
 
-use crate::factor::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single, Streams};
+use crate::factor::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single, Stream};
 use crate::factor::config::Multiplicity;
 use crate::factor::sddm::Sddm;
 use crate::Real;
@@ -17,25 +17,25 @@ use steps::Steps;
 pub(super) fn eliminate<T: Real>(
     sddm: Sddm<'_, T>,
     multiplicity: Multiplicity,
-    streams: Streams,
+    stream: Stream,
 ) -> ApproximateCholesky<T> {
     match multiplicity {
-        Multiplicity::Single => run::<T, Single>(sddm, streams, ()),
-        Multiplicity::Split(k) => run::<T, Multi>(sddm, streams, k),
+        Multiplicity::Single => run::<T, Single>(sddm, stream, ()),
+        Multiplicity::Split(k) => run::<T, Multi>(sddm, stream, k),
     }
 }
 
 /// One step short of `n`, leaving the vertex the solve zeroes.
 fn run<T: Real, C: Copies>(
     sddm: Sddm<'_, T>,
-    streams: Streams,
+    stream: Stream,
     split: C::Split,
 ) -> ApproximateCholesky<T> {
     let mut graph = EliminationGraph::<T, C>::of(&sddm, split);
     drop(sddm);
     let n = graph.n();
     let mut ordering = MinDegreeOrder::new(&graph, split);
-    let mut clique = CliqueSampler::<T, C>::new(streams.cholesky(), split);
+    let mut clique = CliqueSampler::<T, C>::new(stream, split);
     let mut fill = Fill::new();
     let mut steps = Steps::with_capacity(n);
     for _ in 1..n {

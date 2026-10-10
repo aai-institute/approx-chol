@@ -1,14 +1,52 @@
 mod approximate;
 mod dense;
 
-pub(super) use dense::DenseCholesky;
-pub use dense::{Fallback, PivotDefect, UnusablePivot};
+pub use dense::{PivotDefect, UnusablePivot};
 
-use super::clique_tree::Streams;
-use super::config::Multiplicity;
+use super::clique_tree::Stream;
+use super::config::{Config, Multiplicity, OnDenseFailure};
 use super::sddm::{Sddm, Sheets};
 use crate::Real;
 use approximate::ApproximateCholesky;
+use dense::{DenseCholesky, Room};
+
+/// A Cholesky routed dense and factored approximately instead: less accurate than asked.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fallback {
+    /// The dense Cholesky reached an unusable pivot.
+    UnusablePivot(UnusablePivot),
+    /// The packed triangle does not fit in memory.
+    WillNotFit {
+        /// Dimension of the declined matrix, a cover's two sheets counted.
+        dimension: usize,
+    },
+}
+
+/// What the Cholesky factors, built in the form its arm asks for: exact for dense, as configured for approximate.
+pub(super) trait CholeskyInput<'a, T: Real> {
+    /// Known before either form is built, a cover's two sheets counted.
+    fn dimension(&self) -> usize;
+
+    fn exact(&self) -> Sddm<'_, T>;
+
+    /// Consumed, so an owned matrix is freed before fill grows the graph.
+    fn approximated(self) -> Sddm<'a, T>;
+}
+
+impl<'a, T: Real> CholeskyInput<'a, T> for Sddm<'a, T> {
+    fn dimension(&self) -> usize {
+        self.n()
+    }
+
+    fn exact(&self) -> Sddm<'_, T> {
+        self.view()
+    }
+
+    fn approximated(self) -> Sddm<'a, T> {
+        self
+    }
+}
 
 /// The factor of what the elimination leaves; it builds its own Triangular, so its facts come from that matrix.
 #[derive(Clone, Debug)]
@@ -18,27 +56,43 @@ pub(super) struct Cholesky<T> {
 }
 
 impl<T: Real> Cholesky<T> {
-    /// `vertices` names each base vertex in `A`, so a declined pivot is reported there.
-    pub(super) fn dense(
-        room: DenseCholesky<T>,
-        sddm: &Sddm<'_, T>,
+    /// Dense when the config says so and its room is reserved before the matrix is built, else approximate; `vertices` names each base vertex in `A`.
+    pub(super) fn factor<'a>(
+        input: impl CholeskyInput<'a, T>,
         vertices: &[u32],
-    ) -> Result<Self, UnusablePivot> {
-        let dense = room.factor(sddm, vertices)?;
-        Ok(Self::of(sddm)(Triangular::Dense(dense)))
+        stream: Stream,
+        config: &Config,
+    ) -> Result<(Self, Option<Fallback>), UnusablePivot> {
+        let approximate = |sddm| Self::approximate(sddm, config.approximate, stream);
+        let dimension = input.dimension();
+        if !config.routes_dense(dimension) {
+            return Ok((approximate(input.approximated()), None));
+        }
+        let Some(room) = Room::reserve(dimension) else {
+            let declined = Fallback::WillNotFit { dimension };
+            return Ok((approximate(input.approximated()), Some(declined)));
+        };
+        let dense = {
+            let exact = input.exact();
+            let factor = room.factor(&exact, vertices);
+            factor.map(|dense| Self::of(&exact)(Triangular::Dense(dense)))
+        };
+        match dense {
+            Ok(factor) => Ok((factor, None)),
+            Err(pivot) if config.on_dense_failure == OnDenseFailure::Error => Err(pivot),
+            Err(pivot) => {
+                let declined = Fallback::UnusablePivot(pivot);
+                Ok((approximate(input.approximated()), Some(declined)))
+            }
+        }
     }
 
-    /// Consumes `sddm`, so an owned cover or complement is freed before fill grows the graph.
-    pub(super) fn approximate(
-        sddm: Sddm<'_, T>,
-        multiplicity: Multiplicity,
-        streams: Streams,
-    ) -> Self {
+    fn approximate(sddm: Sddm<'_, T>, multiplicity: Multiplicity, stream: Stream) -> Self {
         let of = Self::of(&sddm);
         of(Triangular::Approximate(approximate::eliminate(
             sddm,
             multiplicity,
-            streams,
+            stream,
         )))
     }
 

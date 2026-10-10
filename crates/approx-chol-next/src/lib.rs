@@ -12,24 +12,17 @@ pub mod input;
 mod sgdd;
 mod storage;
 
+use std::fmt::Debug;
+
 pub use factor::{CliqueRule, Config, InnerParallelism, Multiplicity, OnDenseFailure, SplitCount};
 pub use factor::{ComponentFactor, Factor, FactorError, SolveError};
 pub use factor::{Fallback, PivotDefect, UnusablePivot};
 pub use sgdd::{Component, FromCsrError, ReduceError, ScalingPolicy, ScalingReport, Sgdd};
 
-/// The scalar every stage computes in: `f32` or `f64`.
-pub trait Real: sealed::Sealed {}
+/// The scalar every stage computes in: any `Float` a factor can share across threads and print.
+pub trait Real: num_traits::Float + Debug + Send + Sync + 'static {}
 
-impl Real for f32 {}
-impl Real for f64 {}
-
-/// Unnameable outside, so `num_traits` stays out of the public API and `Real` can grow.
-mod sealed {
-    pub trait Sealed: num_traits::Float + Send + Sync + 'static {}
-
-    impl Sealed for f32 {}
-    impl Sealed for f64 {}
-}
+impl<T: num_traits::Float + Debug + Send + Sync + 'static> Real for T {}
 
 /// Factors every component of `sgdd` in parallel; `sgdd` survives for another `config`.
 pub fn factorize<T: Real>(sgdd: &Sgdd<T>, config: &Config) -> Result<Factor<T>, FactorError> {

@@ -20,7 +20,7 @@ pub(crate) struct Rows<T> {
 }
 
 impl<T: Real> Rows<T> {
-    /// Panics unless `ptrs` ascends from `0` to the entry count and every index is below `n_cols`.
+    /// Panics unless `ptrs` ascends from `0` to the entry count and each row's columns strictly ascend below `n_cols`: no row repeats a column.
     pub(crate) fn new(ptrs: Vec<usize>, indices: Vec<u32>, values: Vec<T>, n_cols: usize) -> Self {
         todo!()
     }
@@ -55,7 +55,7 @@ pub(crate) struct UpperAdjacency<T> {
 }
 
 impl<T: Real> UpperAdjacency<T> {
-    /// Panics unless square, columns strictly ascending above their row, and no stored zero.
+    /// Panics unless square, every column above its row, and no stored zero.
     pub(crate) fn new(rows: Rows<T>) -> Self {
         todo!()
     }

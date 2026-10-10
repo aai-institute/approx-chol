@@ -22,40 +22,33 @@ pub struct UnusablePivot {
     pub defect: PivotDefect,
 }
 
-/// A Cholesky routed dense and factored approximately instead: less accurate than asked.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Fallback {
-    /// The dense Cholesky reached an unusable pivot.
-    UnusablePivot(UnusablePivot),
-    /// The packed triangle does not fit in memory.
-    WillNotFit {
-        /// Dimension of the declined matrix, a cover's two sheets counted.
-        dimension: usize,
-    },
-}
+/// Capacity for a packed triangle, taken before its matrix is built; not `Clone`, which would drop the capacity.
+#[derive(Debug)]
+pub(super) struct Room<T>(Vec<T>);
 
-/// Packed lower triangle of `L` in `LLᵀ`, the free slot excluded: an upper one would double the factor.
-#[derive(Clone, Debug)]
-pub(in crate::factor) struct DenseCholesky<T> {
-    values: Vec<T>,
-}
-
-impl<T: Real> DenseCholesky<T> {
-    /// Room for a `dimension`-row matrix's triangle, taken before the matrix is built; `None` when it will not fit.
-    pub(in crate::factor) fn reserve(dimension: usize) -> Option<Self> {
+impl<T: Real> Room<T> {
+    /// Enough for a `dimension`-row matrix, grounded or not; `None` when it will not fit.
+    pub(super) fn reserve(dimension: usize) -> Option<Self> {
         todo!()
     }
 
-    /// Assembles and factors into the reserved room; `vertices` names each base vertex in `A`.
+    /// Takes its rows from the matrix, `n` grounded or `n − 1` floating, and panics past the room; `vertices` names each base vertex in `A`.
     pub(super) fn factor(
         self,
         sddm: &Sddm<'_, T>,
         vertices: &[u32],
-    ) -> Result<Self, UnusablePivot> {
+    ) -> Result<DenseCholesky<T>, UnusablePivot> {
         todo!()
     }
+}
 
+/// Packed lower triangle of `L` in `LLᵀ`, the free slot excluded: an upper one would double the factor.
+#[derive(Clone, Debug)]
+pub(super) struct DenseCholesky<T> {
+    values: Vec<T>,
+}
+
+impl<T: Real> DenseCholesky<T> {
     fn rows(&self) -> usize {
         ((8 * self.values.len() + 1).isqrt() - 1) / 2
     }
