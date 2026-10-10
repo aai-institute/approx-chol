@@ -59,7 +59,10 @@ impl<T: Real> Component<T> {
             return Err(ReduceError::Unscalable { vertex });
         }
         *slot = grounding;
-        Ok(())
+        match self.m.balance.ground_in_range() {
+            true => Ok(()),
+            false => Err(ReduceError::OutOfRange { vertex }),
+        }
     }
 
     /// Panics unless folded: only a Z-matrix's surplus is its row sums `M·1`.

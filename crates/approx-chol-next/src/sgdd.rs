@@ -16,7 +16,7 @@ use decomposition::Decomposition;
 pub use scaling::{ScalingPolicy, ScalingReport};
 
 use crate::input::{BipartiteGram, BipartiteGraph, Csr, CsrError, FactorWidth2};
-use crate::storage::{CrossBlock, UpperAdjacency};
+use crate::storage::{diagonal_in_range, CrossBlock, UpperAdjacency};
 use crate::Real;
 
 /// Where a component sits in `A`: its vertices, and the congruence between `A_c` and `M`.
@@ -61,6 +61,17 @@ impl<T: Real> Balance<T> {
         match self {
             Self::Balanced(grounding) | Self::Frustrated(grounding) => grounding,
         }
+    }
+
+    /// The ground is a vertex too: its diagonal `Σs`, once per sheet, clears the same bound as any other.
+    fn ground_in_range(&self) -> bool {
+        let sheets = match self {
+            Self::Balanced(_) => T::one(),
+            Self::Frustrated(_) => T::one() + T::one(),
+        };
+        let total = |surplus: &[T]| surplus.iter().fold(T::zero(), |sum, &s| sum + s);
+        (self.grounding().surplus())
+            .is_none_or(|surplus| diagonal_in_range(sheets * total(surplus)))
     }
 }
 
@@ -195,7 +206,7 @@ struct Unreduced<T> {
     vertices: Box<[u32]>,
     off_diagonal: OffDiagonal<T>,
     diagonal: Vec<T>,
-    /// `Σ_j |a_ij|`, summed while its rows are extracted, so dominance and surplus reread no value.
+    /// `Σ_j |a_ij|`, summed in `f64` while its rows are extracted, so dominance and surplus reread no value and a long `f32` row is not undercounted.
     abs_row_sums: Vec<T>,
     /// No positive off-diagonal: already a Z-matrix, so no signature is searched.
     nonpositive: bool,
@@ -215,6 +226,11 @@ impl<T: Real> Unreduced<T> {
     }
 
     fn reduce(self, policy: &ScalingPolicy, proof: Proof) -> Result<Component<T>, ReduceError> {
+        // Past `1/ε` vertices, floor weights composed in series fall below `MIN_POSITIVE` (f32: 2^23).
+        if T::from(self.vertices.len()).is_none_or(|n| n * T::epsilon() >= T::one()) {
+            let vertex = self.vertices[0];
+            return Err(ReduceError::Unscalable { vertex });
+        }
         // A view's zero diagonal beside a cell is its terms underflowing, not a non-GDD input.
         let lost = self.diagonal.iter().position(|&d| d == T::zero());
         if let (Proof::Input, Some(i)) = (proof, lost) {
@@ -230,9 +246,13 @@ impl<T: Real> Unreduced<T> {
         let singular = proof == Proof::Rows
             && signs.is_some()
             && scaling::rows_prove_singular(&self, &scaling);
+        let vertex = self.vertices[0];
         let mut component = self.into_component(scaling, signs)?;
         if singular {
             component.float();
+        }
+        if !component.m().1.ground_in_range() {
+            return Err(ReduceError::OutOfRange { vertex });
         }
         Ok(component)
     }
@@ -256,12 +276,12 @@ pub enum ReduceError {
         /// The component's first vertex in local order, in `A`'s numbering.
         vertex: u32,
     },
-    /// A scale or a scaled entry overflowed, or fell nonzero below `MIN_POSITIVE/EPSILON`.
+    /// A scale or a scaled entry overflowed or fell nonzero below `MIN_POSITIVE/EPSILON`, or the component passes `1/ε` vertices.
     Unscalable {
         /// The component's first vertex in local order, in `A`'s numbering.
         vertex: u32,
     },
-    /// An assembled entry is non-finite or nonzero below `MIN_POSITIVE/EPSILON`, a diagonal exceeds `MAX/4`, or a view's diagonal underflowed to zero.
+    /// An assembled entry is non-finite or nonzero below `MIN_POSITIVE/EPSILON`, a diagonal, a row's `Σ|a_ij|` or the ground's `Σs` exceeds `MAX/4`, or a view's diagonal underflowed to zero.
     OutOfRange {
         /// The entry's vertex, in `A`'s numbering.
         vertex: u32,

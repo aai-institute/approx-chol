@@ -65,7 +65,7 @@ pub(super) fn dominance_scaling<T: Real>(
             vertex: a.vertices[i],
         });
     }
-    if let Some(i) = a.abs_row_sums.iter().position(|s| !s.is_finite()) {
+    if let Some(i) = a.abs_row_sums.iter().position(|&s| !diagonal_in_range(s)) {
         return Err(ReduceError::OutOfRange {
             vertex: a.vertices[i],
         });
