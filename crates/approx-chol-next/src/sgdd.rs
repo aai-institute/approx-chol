@@ -58,16 +58,27 @@ impl<T: Real> Component<T> {
 
     /// A proven alias anchors one vertex instead of the surplus rounding left.
     fn float(&mut self) {
-        self.reground(Grounding::ungrounded());
+        *self.balanced_grounding() = Grounding::ungrounded();
+    }
+
+    /// An unproven component keeps a surplus: one that vanishes in `T` is `Unscalable`, never a float.
+    fn ground(&mut self, surplus: Vec<T>) -> Result<(), ReduceError> {
+        assert_eq!(surplus.len(), self.m.n(), "one surplus per row");
+        let grounding = Grounding::of(surplus);
+        if !grounding.is_grounded() {
+            let vertex = self.vertices()[0];
+            return Err(ReduceError::Unscalable { vertex });
+        }
+        *self.balanced_grounding() = grounding;
+        Ok(())
     }
 
     /// Panics unless folded: only a Z-matrix's surplus is its row sums `M·1`.
-    fn reground(&mut self, grounding: Grounding<T>) {
-        assert!(grounding.fits(self.m.n()), "one surplus per row");
-        let Balance::Balanced(old) = &mut self.m.balance else {
-            panic!("a frustrated component is definite");
-        };
-        *old = grounding;
+    fn balanced_grounding(&mut self) -> &mut Grounding<T> {
+        match &mut self.m.balance {
+            Balance::Balanced(grounding) => grounding,
+            Balance::Frustrated(_) => panic!("a frustrated component is definite"),
+        }
     }
 
     /// `M`: its off-diagonal and its balance.
