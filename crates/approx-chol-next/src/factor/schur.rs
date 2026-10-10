@@ -23,7 +23,7 @@ impl<T: Real> BlockElimination<T> {
         self.inv_pivot.len()
     }
 
-    /// `2·nnz(C) + n_eliminated` once the larger side passes the split threshold, else `0`.
+    /// `2·nnz(C) + n_eliminated + n_kept`, within's estimate, once the larger side passes the split threshold, else `0`.
     pub(super) fn splittable_work(&self) -> usize {
         todo!()
     }
