@@ -4,6 +4,7 @@ pub(super) mod bipartite;
 
 use num_traits::PrimInt;
 
+use crate::storage::widen;
 use crate::Real;
 
 /// Why a view's `new` rejected its slices.
@@ -91,7 +92,7 @@ pub(crate) enum Weight<T> {
 impl<T: Real> Column<T> {
     /// `w·v_a·v_b` in `f64`: every assembly sums its cells there and casts once.
     pub(crate) fn cell(self) -> f64 {
-        (self.weight).bilinear(to_f64(self.v_a), to_f64(self.v_b))
+        (self.weight).bilinear(widen(self.v_a), widen(self.v_b))
     }
 }
 
@@ -138,8 +139,4 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for FactorWidth2<'_, T, I> {
     fn for_each_column(self, visit: impl FnMut(Column<T>)) {
         todo!()
     }
-}
-
-fn to_f64<T: Real>(x: T) -> f64 {
-    x.to_f64().expect("a float casts to f64")
 }

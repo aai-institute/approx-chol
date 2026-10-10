@@ -1,5 +1,5 @@
 use super::{OffDiagonal, Unreduced};
-use crate::storage::diagonal_in_range;
+use crate::storage::{diagonal_in_range, widen};
 use crate::{Real, ReduceError};
 
 /// Certification policy for a dominance scaling; a deficit left at hand-over is clamped and reported.
@@ -103,7 +103,13 @@ pub(super) fn rows_prove_singular<T: Real>(a: &Unreduced<T>, scaling: &Scaling<T
 
 /// `Σ_j |a_ij| ≤ a_ii (1 + max(tolerance, 2 deg_i ε))`: a rounded Laplacian stays bit for bit, even in `f32`.
 fn already_dominant<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> bool {
-    todo!()
+    let epsilon = widen(T::epsilon());
+    let rows = a.diagonal.iter().zip(&a.abs_row_sums);
+    rows.zip(a.off_diagonal.degrees())
+        .all(|((&d, &s), degree)| {
+            let slack = policy.tolerance.max(2.0 * degree as f64 * epsilon);
+            widen(s) <= widen(d) * (1.0 + slack)
+        })
 }
 
 /// Self-corrective iterations (Guan, Lu, Li, Shao 2016).

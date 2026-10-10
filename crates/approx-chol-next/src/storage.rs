@@ -9,6 +9,11 @@ pub(crate) fn in_range<T: Real>(x: T) -> bool {
     x.is_finite() && (x == T::zero() || x.abs() >= T::min_positive_value() / T::epsilon())
 }
 
+/// Every `f64` sum starts here: a `Float` always casts up.
+pub(crate) fn widen<T: Real>(x: T) -> f64 {
+    x.to_f64().expect("a float casts to f64")
+}
+
 /// A nonnegative `f64` sum in `T`: past `T::MAX` it reads infinite, which every range screen rejects.
 pub(crate) fn narrow<T: Real>(sum: f64) -> T {
     T::from(sum).unwrap_or_else(T::infinity)
@@ -110,7 +115,7 @@ impl<T: Real> Rows<T> {
             .map(|i| {
                 let mut sum = 0.0;
                 for (j, x) in self.row(i) {
-                    let x = x.abs().to_f64().expect("a float casts to f64");
+                    let x = widen(x.abs());
                     sum += x;
                     cols[j] += x;
                 }
@@ -124,9 +129,28 @@ impl<T: Real> Rows<T> {
         self.values.iter().all(|&x| x <= T::zero())
     }
 
+    /// Entries per row and per column.
+    fn degrees(&self) -> (Vec<usize>, Vec<usize>) {
+        let rows = self.ptrs.windows(2).map(|span| span[1] - span[0]).collect();
+        let mut cols = vec![0; self.n_cols];
+        for &j in &self.indices {
+            cols[j as usize] += 1;
+        }
+        (rows, cols)
+    }
+
     /// `x_ij ← r_i x_ij c_j`; `None` if a product leaves [`in_range`] or reaches zero: no entry is stored zero.
-    fn scaled(self, r: &[T], c: &[T]) -> Option<Self> {
-        todo!()
+    fn scaled(mut self, r: &[T], c: &[T]) -> Option<Self> {
+        for (i, span) in self.ptrs.windows(2).enumerate() {
+            for p in span[0]..span[1] {
+                let x = r[i] * self.values[p] * c[self.indices[p] as usize];
+                if x == T::zero() || !in_range(x) {
+                    return None;
+                }
+                self.values[p] = x;
+            }
+        }
+        Some(self)
     }
 }
 
@@ -162,6 +186,12 @@ impl<T: Real> UpperAdjacency<T> {
 
     pub(crate) fn nonpositive(&self) -> bool {
         self.rows.nonpositive()
+    }
+
+    /// Entries per row over both triangles.
+    pub(crate) fn degrees(&self) -> Vec<usize> {
+        let (upper, lower) = self.rows.degrees();
+        upper.iter().zip(lower).map(|(u, l)| u + l).collect()
     }
 
     /// Row `i`'s neighbors above it.
@@ -223,6 +253,17 @@ impl<T: Real> CrossBlock<T> {
 
     pub(crate) fn nonpositive(&self) -> bool {
         self.c.nonpositive()
+    }
+
+    /// Every entry positive: a signless block, folded by negating its kept side.
+    pub(crate) fn positive(&self) -> bool {
+        self.c.values.iter().all(|&x| x > T::zero())
+    }
+
+    /// Entries per row of `[0 C; Cᵀ 0]`: eliminated rows, then kept ones.
+    pub(crate) fn degrees(&self) -> Vec<usize> {
+        let (eliminated, kept) = self.c.degrees();
+        eliminated.into_iter().chain(kept).collect()
     }
 
     /// `F C F` over the block's local order, a fresh block so no stale `Cᵀ` survives; `None` out of range.

@@ -4,8 +4,8 @@ use std::sync::OnceLock;
 
 use num_traits::PrimInt;
 
-use super::{to_f64, Column, IntoColumns, ViewError, Weight};
-use crate::storage::narrow;
+use super::{Column, IntoColumns, ViewError, Weight};
+use crate::storage::{narrow, widen};
 use crate::Real;
 
 /// The diagonal `W`, one nonnegative entry per column of `V`.
@@ -116,7 +116,7 @@ impl<'a, T: Real, I: PrimInt> Incidence<'a, T, I> {
             let mut sums = vec![0.0_f64; self.values.len() * n];
             for (values, sums) in self.values.iter().zip(sums.chunks_exact_mut(n)) {
                 for (k, row) in self.rows.iter().enumerate() {
-                    let v = values.map_or(1.0, |values| to_f64(values[k]));
+                    let v = values.map_or(1.0, |values| widen(values[k]));
                     sums[index(*row)] += self.weights.at(k).bilinear(v, v);
                 }
             }

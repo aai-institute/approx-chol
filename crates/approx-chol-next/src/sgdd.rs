@@ -11,6 +11,7 @@ use std::sync::Arc;
 use num_traits::PrimInt;
 
 pub use component::Component;
+use component::Sdd;
 use congruence::Congruence;
 use decomposition::Decomposition;
 pub use scaling::{ScalingPolicy, ScalingReport};
@@ -82,7 +83,15 @@ pub(crate) struct Grounding<T>(Option<Box<[T]>>);
 impl<T: Real> Grounding<T> {
     /// Panics on a negative or non-finite entry; ungrounded exactly when every entry is zero.
     pub(crate) fn of(surplus: Vec<T>) -> Self {
-        todo!()
+        let valid = |&s: &T| s.is_finite() && s >= T::zero();
+        assert!(
+            surplus.iter().all(valid),
+            "a surplus is finite and nonnegative"
+        );
+        match surplus.iter().all(|&s| s == T::zero()) {
+            true => Self(None),
+            false => Self(Some(surplus.into())),
+        }
     }
 
     fn ungrounded() -> Self {
@@ -131,6 +140,14 @@ impl<T: Real> OffDiagonal<T> {
         match self {
             Self::General(adjacency) => adjacency.nonpositive(),
             Self::Bipartite(cross) => cross.nonpositive(),
+        }
+    }
+
+    /// Entries per row in local order: the rounding a row sum can carry.
+    fn degrees(&self) -> Vec<usize> {
+        match self {
+            Self::General(adjacency) => adjacency.degrees(),
+            Self::Bipartite(cross) => cross.degrees(),
         }
     }
 }
@@ -276,7 +293,41 @@ impl<T: Real> Unreduced<T> {
         scaling: scaling::Scaling<T>,
         signs: Option<Congruence<T>>,
     ) -> Result<Component<T>, ReduceError> {
-        todo!()
+        let vertex = self.vertices[0];
+        let folds = signs.is_some();
+        let signs = signs.unwrap_or_else(Congruence::identity);
+        let (congruence, scales, report) = match scaling {
+            scaling::Scaling::AlreadyDominant => (signs, None, None),
+            scaling::Scaling::Scaled { scales, report } => {
+                (signs.scaled(&scales), Some(scales), report)
+            }
+        };
+        let off_diagonal =
+            (congruence.transform(self.off_diagonal)).ok_or(ReduceError::Unscalable { vertex })?;
+        // Signs keep every magnitude, so only a scaling sums `M`'s rows again.
+        let (diagonal, abs_row_sums) = match scales {
+            None => (self.diagonal, self.abs_row_sums),
+            Some(f) => {
+                let diagonal = (self.diagonal.iter().zip(&f[..]))
+                    .map(|(&a, &f)| f * a * f)
+                    .collect();
+                (diagonal, off_diagonal.abs_row_sums())
+            }
+        };
+        let surplus = (diagonal.iter().zip(&abs_row_sums))
+            .map(|(&d, &s)| (d - s).max(T::zero()))
+            .collect();
+        let grounding = Grounding::of(surplus);
+        let balance = match folds {
+            true => Balance::Balanced(grounding),
+            false => Balance::Frustrated(grounding),
+        };
+        let frame = Frame::new(self.vertices, congruence);
+        Ok(Component::new(
+            frame,
+            Sdd::new(off_diagonal, balance),
+            report,
+        ))
     }
 }
 

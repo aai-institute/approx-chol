@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::OffDiagonal;
 use crate::Real;
 
@@ -30,7 +32,16 @@ impl<T: Real> Congruence<T> {
 
     /// `S R` for these signs and positive scales `R`.
     pub(super) fn scaled(self, scales: &[T]) -> Self {
-        todo!()
+        let factors = match self.0 {
+            Kind::Identity => scales.into(),
+            Kind::NegateFrom(first) => (signs::<T>(first, scales.len()).iter().zip(scales))
+                .map(|(&sign, &scale)| sign * scale)
+                .collect(),
+            Kind::Factors(signs) => (signs.iter().zip(scales))
+                .map(|(&sign, &scale)| sign * scale)
+                .collect(),
+        };
+        Self(Kind::Factors(factors))
     }
 
     /// Whether it scales exactly `n` vertices.
@@ -44,7 +55,21 @@ impl<T: Real> Congruence<T> {
 
     /// `F X F`: `M`'s off-diagonal from `A_c`'s; `None` where an entry leaves [`in_range`](crate::storage::in_range).
     pub(super) fn transform(&self, off_diagonal: OffDiagonal<T>) -> Option<OffDiagonal<T>> {
-        todo!()
+        let negated;
+        let factors = match &self.0 {
+            Kind::Identity => return Some(off_diagonal),
+            Kind::NegateFrom(first) => {
+                negated = signs(*first, off_diagonal.n());
+                &negated[..]
+            }
+            Kind::Factors(factors) => &factors[..],
+        };
+        Some(match off_diagonal {
+            OffDiagonal::General(adjacency) => OffDiagonal::General(adjacency.scaled(factors)?),
+            OffDiagonal::Bipartite(cross) => {
+                OffDiagonal::Bipartite(Arc::new(Arc::unwrap_or_clone(cross).scaled(factors)?))
+            }
+        })
     }
 
     /// `x ← F x`; with `P` projecting out `F·1` when the component floats, else `I`, `A_c⁺ = P F M⁺ F P`, so the solve applies it on both sides.
@@ -56,4 +81,13 @@ impl<T: Real> Congruence<T> {
     pub(crate) fn project_out_null(&self, x: &mut [T]) {
         todo!()
     }
+}
+
+/// `+1` before `first`, `−1` from it on: exact, so a sign never moves a magnitude.
+fn signs<T: Real>(first: usize, n: usize) -> Vec<T> {
+    let (plus, minus) = (
+        std::iter::repeat_n(T::one(), first),
+        std::iter::repeat_n(-T::one(), n - first),
+    );
+    plus.chain(minus).collect()
 }
