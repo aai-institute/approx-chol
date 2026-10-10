@@ -58,7 +58,7 @@ pub enum Weights<'a, T> {
 }
 
 impl<T> Weights<'_, T> {
-    /// The same slice read the same way: contents are never compared, so a NaN cannot split a family.
+    /// The same slice read the same way: contents are never compared, so a NaN cannot split two sides of one Gram.
     fn same(self, other: Self) -> bool {
         match (self, other) {
             (Self::Unit, Self::Unit) => true,
@@ -91,37 +91,37 @@ impl<'a, T: Real, I: PrimInt> Graph<'a, T, I> {
     }
 }
 
-/// Sides of `V` sharing one row vector, one per loading; their diagonals are summed together, once.
+/// Which row `rows[k]` each column of `V` hits, under `W`, with one value vector per side `V_c = P diag(values_c)`; each side's diagonal is summed once.
 #[derive(Debug)]
-pub struct Sides<'a, T, I = u32> {
+pub struct Incidence<'a, T, I = u32> {
     n: usize,
     rows: &'a [I],
-    loadings: Vec<Option<&'a [T]>>,
+    values: Vec<Option<&'a [T]>>,
     weights: Weights<'a, T>,
     diagonals: OnceLock<Box<[T]>>,
 }
 
-impl<'a, T: Real, I: PrimInt> Sides<'a, T, I> {
-    /// `n` rows; side `c` loads column `k` with `loadings[c][k]`, `1` for `None`; rows are checked.
+impl<'a, T: Real, I: PrimInt> Incidence<'a, T, I> {
+    /// `n` rows; side `c` puts `values[c][k]` in column `k`, `1` for `None`; rows are checked.
     pub fn new(
         n: usize,
         rows: &'a [I],
-        loadings: Vec<Option<&'a [T]>>,
+        values: Vec<Option<&'a [T]>>,
         weights: Weights<'a, T>,
     ) -> Result<Self, ViewError> {
         todo!()
     }
 
-    /// Side `c`, borrowing this family; panics unless the family has it.
+    /// Side `c`, borrowing this incidence; panics unless it has one.
     pub fn side(&self, c: usize) -> Side<'_, 'a, T, I> {
         todo!()
     }
 }
 
-/// One side of `V` under `W`, borrowed from its family.
+/// One side `V_c` of a Gram, borrowed from its incidence: one nonzero per column.
 #[derive(Debug)]
 pub struct Side<'s, 'a, T, I = u32> {
-    sides: &'s Sides<'a, T, I>,
+    incidence: &'s Incidence<'a, T, I>,
     index: usize,
 }
 
@@ -133,7 +133,7 @@ impl<T, I> Clone for Side<'_, '_, T, I> {
 
 impl<T, I> Copy for Side<'_, '_, T, I> {}
 
-/// `A = V W Vᵀ` over two borrowed sides, so one family serves every pair it is in; `A` numbers left rows first, then `n_left +` right ones.
+/// `A = V W Vᵀ`, `V = [V_l; V_r]` stacked from two borrowed sides, so one incidence serves every pair it is in; `A` numbers left rows first, then `n_left +` right ones.
 #[derive(Debug)]
 pub struct Gram<'s, 'a, T, I = u32> {
     left: Side<'s, 'a, T, I>,
@@ -154,7 +154,7 @@ impl<'s, 'a, T: Real, I: PrimInt> Gram<'s, 'a, T, I> {
         todo!()
     }
 
-    /// `A`'s diagonal, left rows then right ones; the first Gram of a family sums it.
+    /// `A`'s diagonal, left rows then right ones; the first Gram of an incidence sums each side's.
     pub(crate) fn diagonals(&self) -> (&'s [T], &'s [T]) {
         todo!()
     }
@@ -171,14 +171,14 @@ pub(crate) struct Columns<'a, T, I> {
     n_right: usize,
     left: &'a [I],
     right: &'a [I],
-    left_load: Option<&'a [T]>,
-    right_load: Option<&'a [T]>,
+    left_values: Option<&'a [T]>,
+    right_values: Option<&'a [T]>,
     weights: Weights<'a, T>,
 }
 
-/// Column `k` of `V`: `v_l e_left + v_r e_right` under its weight, unfolded, so the floating forest reads loadings exactly as given.
+/// Column `k` of `V`: `v_l e_left + v_r e_right` under its weight, unfolded, so the floating forest reads `V`'s values exactly as given.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Observation<T> {
+pub(crate) struct Column<T> {
     pub(crate) left: u32,
     pub(crate) right: u32,
     pub(crate) v_left: T,
@@ -186,7 +186,7 @@ pub(crate) struct Observation<T> {
     pub(crate) weight: Weight<T>,
 }
 
-/// One column's entry of `W`, as the caller gave it; assembly folds `s` into both loadings, so no `s²` overflows.
+/// One column's entry of `W`, as the caller gave it; only [`quadratic`](Self::quadratic) reads it, so no `s²` is ever formed.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Weight<T> {
     Of(T),
@@ -194,10 +194,26 @@ pub(crate) enum Weight<T> {
 }
 
 impl<T: Real> Weight<T> {
-    pub(crate) fn is_zero(self) -> bool {
+    /// `w·a·b` in `U`, as `(s·a)·(s·b)` under `SqrtOf`: every diagonal, cell, surplus and residue goes through it.
+    pub(crate) fn quadratic<U: Real>(self, a: U, b: U) -> U {
+        let to = |x: T| U::from(x).expect("a finite weight casts to a float");
+        match self {
+            Self::Of(w) => to(w) * a * b,
+            Self::SqrtOf(s) => (to(s) * a) * (to(s) * b),
+        }
+    }
+
+    fn is_zero(self) -> bool {
         match self {
             Self::Of(w) | Self::SqrtOf(w) => w == T::zero(),
         }
+    }
+}
+
+impl<T: Real> Column<T> {
+    /// Couples both rows, so the floating forest may grow along it; tested factor by factor so no product underflows.
+    pub(crate) fn joins(&self) -> bool {
+        !self.weight.is_zero() && self.v_left != T::zero() && self.v_right != T::zero()
     }
 }
 
@@ -206,8 +222,8 @@ impl<T: Real, I: PrimInt> Columns<'_, T, I> {
         self.n_left
     }
 
-    pub(crate) fn observations(&self) -> impl Iterator<Item = Observation<T>> + '_ {
-        (0..self.left.len()).map(|k| -> Observation<T> { todo!() })
+    pub(crate) fn iter(&self) -> impl Iterator<Item = Column<T>> + '_ {
+        (0..self.left.len()).map(|k| -> Column<T> { todo!() })
     }
 
     pub(crate) fn n_right(&self) -> usize {

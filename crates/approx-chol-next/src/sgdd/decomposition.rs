@@ -3,7 +3,7 @@ use num_traits::PrimInt;
 mod components;
 
 use super::{Proof, ScalingPolicy, Sgdd, Unreduced};
-use crate::input::{Columns, Csr, CsrError, Gram, Graph, Observation};
+use crate::input::{Columns, Csr, CsrError, Gram, Graph};
 use crate::storage::{CrossBlock, Rows};
 use crate::{Real, ReduceError};
 use components::Partition;
@@ -18,7 +18,7 @@ pub(super) struct Decomposition<'v, T, I> {
 enum Input<'v, T, I> {
     /// A signless Laplacian: zero surplus by shape, and a negative weight fails as not GDD.
     Signless(Option<Biadjacency<T>>),
-    /// Floats when the signed alias `u` (`v_l u_l + v_r u_r = 0` along joining columns inside a component, on the unfolded loadings, grown from one root in `f64` as `(m', δ) = frexp(−(m_a m)/m_b)`, `e' = e + e_a − e_b + δ`) passes every vertex `i` at rounding level, both sides scaled by `2^{−2e_i}`: its one-sided and straddling columns, an exact surplus, within the CSR band `t_i ε a_ii`, and its joining residues `Σ (w q_k) q_k`, `q_k = v_i m_i + ldexp(v_j m_j, e_j − e_i)`, within `(2dε)² a_ii m_i²`, `d` the deeper endpoint's growth depth; a column touches `i` only where `v_i ≠ 0`.
+    /// Floats when the signed alias `u` (`v_l u_l + v_r u_r = 0` along joining columns inside a component, on `V`'s unfolded values, grown from one root in `f64` as `(m', δ) = frexp(−(m_a m)/m_b)`, `e' = e + e_a − e_b + δ`) keeps every vertex's share of `uᵀAu / u_i²` inside its CSR band: `Σ_{k∋i} quadratic_k(v_i, v_i) ρ_k² ≤ t_i ε a_ii`, `ρ_k = 1 + ldexp(m(v_j) m_j / (m(v_i) m_i), e(v_j) + e_j − e(v_i) − e_i)` on mantissas for a joining column, `1` for a one-sided or straddling one, `t_i` the stored entries of `i`'s row and `ε` that of `T`; a column touches `i` only where `v_i ≠ 0`.
     Gram {
         c: Option<Biadjacency<T>>,
         columns: Columns<'v, T, I>,
@@ -98,13 +98,6 @@ fn assemble<T: Real, I: PrimInt>(
     columns: &Columns<'_, T, I>,
 ) -> Result<Biadjacency<T>, ReduceError> {
     todo!()
-}
-
-impl<T: Real> Observation<T> {
-    /// Couples both rows, so the floating forest may grow along it; tested factor by factor so no product underflows.
-    fn joins(&self) -> bool {
-        !self.weight.is_zero() && self.v_left != T::zero() && self.v_right != T::zero()
-    }
 }
 
 /// The biadjacency `C` of a factor-width-2 view, cancelled cells dropped: rows are `A`'s left vertices.

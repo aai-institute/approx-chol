@@ -36,13 +36,14 @@ fn eliminate<T: Real, C: Copies>(
     drop(sddm);
     let n = graph.n();
     let mut ordering = MinDegreeOrder::new(&graph, split);
-    let mut clique = CliqueSampler::<T, C>::new(stream, split);
+    let mut draws = stream.draws();
+    let mut clique = CliqueSampler::<T, C>::new(split);
     let mut fill = Fill::new();
     let mut steps = Steps::with_capacity(n);
     for _ in 1..n {
         let v = ordering.next_vertex();
         fill.clear();
-        let pivot = clique.eliminate(graph.neighbors(v), &mut fill);
+        let pivot = clique.eliminate(&mut draws, graph.neighbors(v), &mut fill);
         steps.push(v, pivot, clique.column());
         graph.eliminate_vertex(v);
         for &(u, w, weight) in &fill {

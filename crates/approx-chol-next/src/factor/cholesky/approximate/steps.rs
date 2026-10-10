@@ -1,4 +1,4 @@
-use crate::factor::clique_tree::Column;
+use crate::factor::clique_tree::PivotColumn;
 use crate::Real;
 
 /// A step's neighbors follow the previous step's, so the solve's running `usize` offset finds them at any size.
@@ -29,7 +29,7 @@ impl<T: Real> Steps<T> {
     }
 
     /// The one site deriving the remainder's share.
-    pub(super) fn push(&mut self, vertex: usize, pivot: T, column: &Column<T>) {
+    pub(super) fn push(&mut self, vertex: usize, pivot: T, column: &PivotColumn<T>) {
         todo!()
     }
 

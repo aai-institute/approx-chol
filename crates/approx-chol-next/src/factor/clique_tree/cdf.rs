@@ -2,20 +2,18 @@ use rand::rngs::SmallRng;
 
 use crate::Real;
 
-/// Inverse-CDF draws over a star's suffixes.
+/// Inverse-CDF draws over a star's suffixes; the draws themselves belong to the caller's stream.
 pub(super) struct CdfSampler<T> {
     neighbors: Vec<u32>,
     cumsum: Vec<T>,
-    rng: SmallRng,
 }
 
 impl<T: Real> CdfSampler<T> {
-    pub(super) fn new(stream: Stream) -> Self {
-        todo!()
-    }
-
-    pub(super) fn restart(&mut self, stream: Stream) {
-        todo!()
+    pub(super) fn new() -> Self {
+        Self {
+            neighbors: Vec::new(),
+            cumsum: Vec::new(),
+        }
     }
 
     /// Loads a star, heaviest last, so each suffix's draw range is one subtraction.
@@ -24,7 +22,7 @@ impl<T: Real> CdfSampler<T> {
     }
 
     /// A neighbor from the suffix past `position`, clamped to its last: an `f32` draw can round up to the total; a linear scan up to 32 entries (256 measured +4-5%).
-    pub(super) fn draw_after(&mut self, position: usize) -> u32 {
+    pub(super) fn draw_after(&self, draws: &mut Draws, position: usize) -> u32 {
         todo!()
     }
 }
@@ -68,10 +66,14 @@ pub(in crate::factor) struct Stream {
 
 impl Stream {
     /// The whole key mixed once, the only place a stream becomes draws.
-    fn rng(self) -> SmallRng {
+    pub(in crate::factor) fn draws(self) -> Draws {
         todo!()
     }
 }
+
+/// One stream's draws, owned by what consumes that stream: a whole elimination, or one Schur star.
+#[derive(Debug)]
+pub(in crate::factor) struct Draws(SmallRng);
 
 /// Which draws of a component a stream feeds.
 #[derive(Clone, Copy, Debug)]
