@@ -37,6 +37,11 @@ pub enum ViewError {
         /// The offending column of `V`.
         column: usize,
     },
+    /// A nonzero term's `w·v²` leaves `in_range`, so `A`'s diagonal would lose it; within range, every cell is in range too.
+    TermOutOfRange {
+        /// The offending column of `V`.
+        column: usize,
+    },
     /// A bipartite Gram's two sides read different `W` slices.
     WeightsDiffer,
 }
@@ -52,6 +57,12 @@ impl core::fmt::Display for ViewError {
             Self::RepeatedVertex { column } => write!(f, "column {column} names one vertex twice"),
             Self::InvalidWeight { column } => {
                 write!(f, "column {column} has a negative or non-finite weight")
+            }
+            Self::TermOutOfRange { column } => {
+                write!(
+                    f,
+                    "column {column} has a term outside the representable range"
+                )
             }
             Self::WeightsDiffer => write!(f, "a Gram's sides read different weights"),
         }
@@ -117,7 +128,7 @@ pub struct FactorWidth2<'a, T, I = u32> {
 }
 
 impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
-    /// `n` vertices; lengths, `a[k], b[k] < n` and `a[k] ≠ b[k]` are checked, so a zero value is how a column holds one nonzero.
+    /// `n` vertices; lengths, `a[k], b[k] < n`, `a[k] ≠ b[k]` and each nonzero `v²` in range are checked, so a zero value is how a column holds one nonzero.
     pub fn new(n: usize, a: &'a [I], b: &'a [I], values: [&'a [T]; 2]) -> Result<Self, ViewError> {
         todo!()
     }
