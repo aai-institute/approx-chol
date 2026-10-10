@@ -44,6 +44,16 @@ impl<T: Real> Congruence<T> {
         Self(Kind::Factors(factors))
     }
 
+    /// `f_i`, vertex `i`'s entry of `F·1`.
+    pub(super) fn factor(&self, i: usize) -> T {
+        match &self.0 {
+            Kind::Identity => T::one(),
+            Kind::NegateFrom(first) if i >= *first => -T::one(),
+            Kind::NegateFrom(_) => T::one(),
+            Kind::Factors(factors) => factors[i],
+        }
+    }
+
     /// Whether it scales exactly `n` vertices.
     pub(super) fn fits(&self, n: usize) -> bool {
         match &self.0 {

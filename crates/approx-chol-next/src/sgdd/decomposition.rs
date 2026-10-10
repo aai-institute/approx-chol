@@ -4,9 +4,9 @@ mod components;
 
 use std::sync::Arc;
 
-use super::{Component, OffDiagonal, Proof, ScalingPolicy, Sgdd, Unreduced};
+use super::{Balance, Component, OffDiagonal, Proof, ScalingPolicy, Sgdd, Unreduced};
 use crate::input::{BipartiteGram, BipartiteGraph, Csr, CsrError, FactorWidth2, IntoColumns};
-use crate::storage::{in_range, CrossBlock, Rows, UpperAdjacency};
+use crate::storage::{in_range, narrow, widen, CrossBlock, Rows, UpperAdjacency};
 use crate::{Real, ReduceError};
 use components::Partition;
 
@@ -152,7 +152,83 @@ fn ground_or_float<T: Real>(
     v: impl IntoColumns<T>,
     components: &mut [Component<T>],
 ) -> Result<(), ReduceError> {
-    todo!()
+    let mut ends = vec![None; v.n()];
+    for (c, component) in components.iter().enumerate() {
+        let congruence = component.frame().congruence();
+        for (slot, &vertex) in component.vertices().iter().enumerate() {
+            ends[vertex as usize] = Some(End {
+                component: c,
+                slot,
+                factor: widen(congruence.factor(slot)),
+            });
+        }
+    }
+    let mut surplus: Vec<Vec<f64>> = (components.iter())
+        .map(|component| vec![0.0; component.vertices().len()])
+        .collect();
+    let mut certificates = vec![Certificate::default(); components.len()];
+    let epsilon = widen(T::epsilon());
+    v.for_each_column(
+        #[inline(always)]
+        |column| {
+            if column.weight.is_zero() {
+                return;
+            }
+            let w = |x: f64, y: f64| column.weight.bilinear(x, y);
+            let a = ends[column.a as usize].map(|end| (end, end.factor * widen(column.v_a)));
+            let b = ends[column.b as usize].map(|end| (end, end.factor * widen(column.v_b)));
+            match (a, b) {
+                (Some((a, u_a)), Some((b, u_b))) if a.component == b.component => {
+                    let p = u_a + u_b;
+                    surplus[a.component][a.slot] += w(u_a, p);
+                    surplus[b.component][b.slot] += w(u_b, p);
+                    let certificate = &mut certificates[a.component];
+                    certificate.ones += w(epsilon * p, p);
+                    certificate.trace += w(epsilon * u_a, u_a) + w(epsilon * u_b, u_b);
+                }
+                (a, b) => {
+                    for (end, u) in [a, b].into_iter().flatten() {
+                        surplus[end.component][end.slot] += w(u, u);
+                        let certificate = &mut certificates[end.component];
+                        certificate.ones += w(epsilon * u, u);
+                        certificate.trace += w(epsilon * u, u);
+                    }
+                }
+            }
+        },
+    );
+    let decided = components.iter_mut().zip(surplus).zip(certificates);
+    for ((component, surplus), certificate) in decided {
+        if let (_, Balance::Frustrated(_)) = component.m() {
+            continue;
+        }
+        if certificate.ones <= 5.0 * epsilon * certificate.trace {
+            component.float();
+            continue;
+        }
+        let surplus: Vec<T> = surplus.into_iter().map(|s| narrow(s.max(0.0))).collect();
+        if let Some(slot) = surplus.iter().position(|&s| !in_range(s)) {
+            let vertex = component.vertices()[slot];
+            return Err(ReduceError::OutOfRange { vertex });
+        }
+        component.ground(surplus)?;
+    }
+    Ok(())
+}
+
+/// Where a column's end sits once reduced, and its `f_i`.
+#[derive(Clone, Copy)]
+struct End {
+    component: usize,
+    slot: usize,
+    factor: f64,
+}
+
+/// `ε·1ᵀM1` and `ε·tr M` of one component, summed by column.
+#[derive(Clone, Copy, Default)]
+struct Certificate {
+    ones: f64,
+    trace: f64,
 }
 
 /// `C`, accumulated in column order, in a dense table when it is small (+54% without it), unfiltered: a column that couples nothing adds an exact zero and zero cells drop; a cell leaving `in_range` is `OutOfRange`.
