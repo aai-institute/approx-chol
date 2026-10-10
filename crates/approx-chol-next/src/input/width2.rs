@@ -65,7 +65,7 @@ pub(crate) trait IntoColumns<T: Real>: Copy {
     /// Dimension of `A`, not the column count.
     fn n(&self) -> usize;
 
-    /// In column order, each column's ends in `A`'s numbering; a view matches its values and weights once, then loops per case, as a per-column branch measured ~2x.
+    /// In column order, each column's ends in `A`'s numbering; a view matches its values and weights once, then loops per case, and a caller marks `visit` `#[inline(always)]` or an outlined certificate pays the branch per column (1.6-1.9x).
     fn for_each_column(self, visit: impl FnMut(Column<T>));
 }
 
