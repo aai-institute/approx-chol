@@ -261,11 +261,47 @@ impl<'a, T: Real, I: PrimInt> BipartiteGraph<'a, T, I> {
         right: &'a [I],
         weights: Weights<'a, T>,
     ) -> Result<Self, ViewError> {
-        todo!()
+        if left.len() != right.len() {
+            return Err(ViewError::LengthMismatch {
+                expected: left.len(),
+                found: right.len(),
+            });
+        }
+        weights.check(left.len())?;
+        let count = n_left.saturating_add(n_right);
+        if u32::try_from(count).is_err() {
+            return Err(ViewError::TooLarge { count });
+        }
+        let in_range = |row: &I, n: usize| row.to_usize().is_some_and(|row| row < n);
+        let mut ends = left.iter().zip(right);
+        if let Some(column) = ends.position(|(l, r)| !in_range(l, n_left) || !in_range(r, n_right))
+        {
+            return Err(ViewError::IndexOutOfRange { column });
+        }
+        Ok(Self {
+            n_left,
+            n_right,
+            left,
+            right,
+            weights,
+        })
     }
 
     pub(crate) fn n_left(&self) -> usize {
         self.n_left
+    }
+
+    #[inline(always)]
+    fn columns(self, weight: impl Fn(usize) -> Weight<T>, mut visit: impl FnMut(Column<T>)) {
+        for (k, (a, b)) in self.left.iter().zip(self.right).enumerate() {
+            visit(Column {
+                a: index(*a) as u32,
+                b: (self.n_left + index(*b)) as u32,
+                v_a: T::one(),
+                v_b: T::one(),
+                weight: weight(k),
+            });
+        }
     }
 }
 
@@ -275,7 +311,11 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteGraph<'_, T, I> {
     }
 
     fn for_each_column(self, visit: impl FnMut(Column<T>)) {
-        todo!()
+        match self.weights {
+            Weights::Unit => self.columns(|_| Weight::Unit, visit),
+            Weights::Of(w) => self.columns(|k| Weight::Of(w[k]), visit),
+            Weights::SqrtOf(s) => self.columns(|k| Weight::SqrtOf(s[k]), visit),
+        }
     }
 }
 

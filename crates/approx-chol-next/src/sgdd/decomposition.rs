@@ -78,16 +78,17 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
             Input::Signless(_) | Input::BipartiteGram { .. } | Input::Gram { .. } => Proof::Input,
         };
         let (mut components, mut dead) = (Vec::new(), Vec::new());
-        for a in input.components(&partition) {
-            if a.is_dead() {
-                dead.push(a.vertices[0]);
-                continue;
+        for given in input.components(&partition) {
+            match given {
+                Given::Dead(vertex) => dead.push(vertex),
+                Given::Signless(vertices, cross) => {
+                    components.push(Component::signless(vertices, cross)?)
+                }
+                Given::Unreduced(a) => components.push(a.reduce(policy, proof)?),
             }
-            components.push(a.reduce(policy, proof)?);
         }
         match &input {
-            Input::Csr(_) => {}
-            Input::Signless(_) => components.iter_mut().for_each(Component::float),
+            Input::Csr(_) | Input::Signless(_) => {}
             Input::BipartiteGram { gram, .. } => ground_or_float(*gram, &mut components)?,
             Input::Gram { v, .. } => ground_or_float(*v, &mut components)?,
         }
@@ -104,22 +105,46 @@ impl<'v, T: Real, I: PrimInt> Input<'v, T, I> {
     fn components<'s>(
         &'s mut self,
         partition: &'s Partition,
-    ) -> impl Iterator<Item = Unreduced<T>> + use<'s, 'v, T, I> {
+    ) -> impl Iterator<Item = Given<T>> + use<'s, 'v, T, I> {
         partition.components().map(move |vertices| match self {
+            Self::Signless(c) => match vertices {
+                [v] => Given::Dead(*v),
+                _ => {
+                    let (vertices, cross) = bipartite_block(c, vertices, partition);
+                    Given::Signless(vertices, cross)
+                }
+            },
             Self::BipartiteGram { c, gram } => {
                 let (left, right) = gram.diagonals();
                 let diagonal = |v: u32| match (v as usize).checked_sub(left.len()) {
                     None => left[v as usize],
                     Some(j) => right[j],
                 };
-                bipartite_component(c, vertices, partition, diagonal)
+                Given::unreduced(bipartite_component(c, vertices, partition, diagonal))
             }
-            Self::Csr(_) | Self::Signless(_) | Self::Gram { .. } => todo!(),
+            Self::Csr(_) | Self::Gram { .. } => todo!(),
         })
     }
 }
 
-/// The whole input's block is moved, not copied: a lone component takes `C` out of the input.
+/// A component as its input gives it: what its shape proves decides how much reduction it takes.
+enum Given<T> {
+    /// A lone vertex with nothing to solve.
+    Dead(u32),
+    /// A signless Laplacian's block: folded, dominant and floating by shape.
+    Signless(Box<[u32]>, CrossBlock<T>),
+    Unreduced(Unreduced<T>),
+}
+
+impl<T: Real> Given<T> {
+    fn unreduced(a: Unreduced<T>) -> Self {
+        match a.is_dead() {
+            true => Self::Dead(a.vertices[0]),
+            false => Self::Unreduced(a),
+        }
+    }
+}
+
 fn bipartite_component<T: Real>(
     c: &mut Option<Biadjacency<T>>,
     vertices: &[u32],
@@ -135,16 +160,26 @@ fn bipartite_component<T: Real>(
             )
         }
         _ => {
-            let (vertices, cross) = match partition.is_whole() {
-                true => c.take().expect("one whole component").into_block(),
-                false => (c.as_ref().expect("C until the whole is taken"))
-                    .block(vertices, partition.position()),
-            };
+            let (vertices, cross) = bipartite_block(c, vertices, partition);
             (vertices, OffDiagonal::Bipartite(Arc::new(cross)))
         }
     };
     let diagonal = vertices.iter().map(|&v| diagonal(v)).collect();
     Unreduced::new(vertices, off_diagonal, diagonal)
+}
+
+/// The whole input's block is moved, not copied: a lone component takes `C` out of the input.
+fn bipartite_block<T: Real>(
+    c: &mut Option<Biadjacency<T>>,
+    vertices: &[u32],
+    partition: &Partition,
+) -> (Box<[u32]>, CrossBlock<T>) {
+    match partition.is_whole() {
+        true => c.take().expect("one whole component").into_block(),
+        false => {
+            (c.as_ref().expect("C until the whole is taken")).block(vertices, partition.position())
+        }
+    }
 }
 
 /// Floats each folded component when `1ᵀM1 ≤ 5ε·tr M`, else grounds it on `s = M·1`, both summed by column as assembled rows cancel them: with `f = F·1` and `p_k = f_a v_a + f_b v_b`, `s_a = Σ_k bilinear_k(f_a v_a, p_k)` clamped at zero, `1ᵀM1 = Σ_k bilinear_k(p_k, p_k)` and `tr M = Σ_k [bilinear_k(f_a v_a, f_a v_a) + bilinear_k(f_b v_b, f_b v_b)]`, `ε` that of `T`; sums run in `f64` in column order over nonzero weights, the certificate's two sides as `ε·term`, an exact scaling under which neither overflows, each end's component and slot are read off the components' own vertices, an end at a dead vertex being in none; a column straddling components keeps only its own end's square, a frustrated component is definite and keeps its rows' surplus.

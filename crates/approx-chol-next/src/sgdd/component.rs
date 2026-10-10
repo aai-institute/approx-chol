@@ -2,7 +2,11 @@
 
 use std::sync::Arc;
 
-use super::{Balance, Frame, Grounding, OffDiagonal, ReduceError, ScalingReport};
+use super::{
+    within_series_floor, Balance, Congruence, Frame, Grounding, OffDiagonal, ReduceError,
+    ScalingReport,
+};
+use crate::storage::{diagonal_in_range, CrossBlock};
 use crate::Real;
 
 /// One component of `A`, reduced: `M = F · A_c · F` over its vertices, eliminated block first.
@@ -22,6 +26,28 @@ impl<T: Real> Component<T> {
             m,
             report,
         }
+    }
+
+    /// Only the degrees are checked: the shape proves the signature, dominance and floating.
+    pub(super) fn signless(
+        vertices: Box<[u32]>,
+        cross: CrossBlock<T>,
+    ) -> Result<Self, ReduceError> {
+        within_series_floor::<T>(&vertices)?;
+        if let Some(i) = cross
+            .abs_row_sums()
+            .iter()
+            .position(|&d| !diagonal_in_range(d))
+        {
+            let vertex = vertices[i];
+            return Err(ReduceError::OutOfRange { vertex });
+        }
+        let vertex = vertices[0];
+        let congruence = Congruence::negate_from(cross.n_eliminated());
+        let off_diagonal = (congruence.transform(OffDiagonal::Bipartite(Arc::new(cross))))
+            .ok_or(ReduceError::Unscalable { vertex })?;
+        let m = Sdd::new(off_diagonal, Balance::Balanced(Grounding::ungrounded()));
+        Ok(Self::new(Frame::new(vertices, congruence), m, None))
     }
 
     /// The component's vertices in `A`'s numbering, in local order.

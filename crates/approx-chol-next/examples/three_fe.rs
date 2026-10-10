@@ -1,7 +1,7 @@
-//! Three fixed effects, no slopes: each pair of factors is one bipartite Gram, as within's Schwarz subdomains.
+//! Three fixed effects, no slopes: each pair of factors is one signless bipartite graph, as within's Schwarz subdomains.
 
-use approx_chol_next::input::{BipartiteGram, Incidence, Weights};
-use approx_chol_next::{factorize, Config, Factor, ScalingPolicy, Sgdd};
+use approx_chol_next::input::{BipartiteGraph, Weights};
+use approx_chol_next::{factorize, Config, Factor, Sgdd};
 
 /// Workers move between firms of their own region only, so (worker, firm) splits by region.
 const REGIONS: [(usize, usize); 5] = [(2000, 200), (40, 6), (30, 5), (20, 4), (10, 3)];
@@ -39,22 +39,17 @@ const NAMES: [&str; 3] = ["worker", "firm", "year"];
 
 fn main() {
     let panel = Panel::generate(7);
-    let incidences: Vec<Incidence<'_, f64>> = (0..3)
-        .map(|f| {
-            Incidence::new(
-                panel.n_levels[f],
-                &panel.levels[f],
-                vec![None],
-                Weights::Unit,
-            )
-        })
-        .collect::<Result<_, _>>()
-        .expect("valid incidence");
     for (l, r) in [(0, 1), (0, 2), (1, 2)] {
         println!("({}, {})", NAMES[l], NAMES[r]);
-        let gram =
-            BipartiteGram::new(incidences[l].side(0), incidences[r].side(0)).expect("valid gram");
-        let sgdd = Sgdd::from_bipartite_gram(gram, ScalingPolicy::default()).expect("reduces");
+        let graph = BipartiteGraph::<f64>::new(
+            panel.n_levels[l],
+            panel.n_levels[r],
+            &panel.levels[l],
+            &panel.levels[r],
+            Weights::Unit,
+        )
+        .expect("valid graph");
+        let sgdd = Sgdd::try_from(graph).expect("reduces");
         for component in sgdd.components() {
             let n = component.vertices().len();
             println!("  component: {n} vertices, floats {}", component.floats());
