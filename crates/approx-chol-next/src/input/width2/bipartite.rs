@@ -112,8 +112,8 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteGram<'_, T, I> {
         todo!()
     }
 
-    fn columns(self) -> impl Iterator<Item = Column<T>> {
-        std::iter::from_fn(|| -> Option<Column<T>> { todo!() })
+    fn for_each_column(self, visit: impl FnMut(Column<T>)) {
+        todo!()
     }
 }
 
@@ -149,7 +149,7 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteGraph<'_, T, I> {
         self.n_left + self.n_right
     }
 
-    fn columns(self) -> impl Iterator<Item = Column<T>> {
-        (0..self.left.len()).map(|k| -> Column<T> { todo!() })
+    fn for_each_column(self, visit: impl FnMut(Column<T>)) {
+        todo!()
     }
 }
