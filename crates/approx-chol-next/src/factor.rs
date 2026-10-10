@@ -209,6 +209,11 @@ impl<T: Real> ComponentFactor<T> {
         self.fallback
     }
 
+    /// Work [`InnerParallelism::Allow`] may split per solve, `0` when nothing does: an outer scheduler weighs it against its own parallelism.
+    pub fn splittable_work(&self) -> usize {
+        (self.elimination.as_ref()).map_or(0, BlockElimination::splittable_work)
+    }
+
     /// Scratch [`solve_local`](Self::solve_local) needs.
     pub fn scratch_len(&self) -> usize {
         let eliminated = (self.elimination.as_ref()).map_or(0, BlockElimination::n_eliminated);

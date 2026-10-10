@@ -23,6 +23,11 @@ impl<T: Real> BlockElimination<T> {
         self.inv_pivot.len()
     }
 
+    /// `2·nnz(C) + n_eliminated` once the larger side passes the split threshold, else `0`.
+    pub(super) fn splittable_work(&self) -> usize {
+        todo!()
+    }
+
     /// `y_e = D_e⁻¹ b_e`, then `b_k −= Cᵀ y_e`, gathered by kept row through `Cᵀ` under either mode so both give the same bits.
     pub(super) fn forward(&self, x: &mut [T], inner: InnerParallelism) {
         todo!()
