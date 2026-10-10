@@ -8,12 +8,12 @@ use crate::Real;
 pub(super) struct Room<T>(Vec<T>);
 
 impl<T: Real> Room<T> {
-    /// A packed `dimension + 1` rows, the free slot's row holding the ground or anchor while GTH works, then `dimension` inverse pivots, contiguous as every row's fill reads them (strided in the diagonal measured +12-18% at n 16-24); `None` when it will not fit.
+    /// A packed `dimension + 1` rows, room for either gauge's free row while GTH works, then `dimension` inverse pivots, contiguous as every row's fill reads them (strided in the diagonal measured +12-18% at n 16-24); `None` when it will not fit.
     pub(super) fn reserve(dimension: usize) -> Option<Self> {
         todo!()
     }
 
-    /// Left-looking GTH on `−w`, the ground's `−s` or the anchor's row as free row `n`: stored entry `(r, j)` subtracts `Σ_{k<j} min·(max·p_k⁻¹)` of the magnitudes `|a_rk|, |a_jk|`, so its weight grows, `p_j = −Σ` of column `j` below the diagonal, `p_j⁻¹` kept in the tail, and one last pass scales by `√p⁻¹`; so nothing cancels, under- or overflows (`d − Σl²` cancelled to 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more factor time), and the free row and tail are truncated, leaving `n` rows grounded or `n − 1` anchored.
+    /// Left-looking GTH on the packed lower `−w` with a free last row `m` never pivoted (`m = n` holding the ground's `−s` grounded, the anchor `m = n − 1` anchored): for each column `j < m` in order, every stored `(r, j)`, `r > j`, subtracts `Σ_{k<j} min·(max·p_k⁻¹)` of the magnitudes of the already updated `(r, k)` and `(j, k)`, then `p_j = −Σ_{r>j} (r, j)` and `p_j⁻¹` goes to the tail; a last pass scales each column `j` by `√p_j⁻¹` and writes `√p_j` on its diagonal, and truncating row `m` and the tail leaves `m` rows; nothing cancels, under- or overflows (`d − Σl²` cancelled to 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more factor time).
     pub(super) fn factor(self, sddm: &Sddm<'_, T>) -> DenseCholesky<T> {
         todo!()
     }
