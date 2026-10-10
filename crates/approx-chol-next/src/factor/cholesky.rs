@@ -118,7 +118,14 @@ impl<T: Real> Cholesky<T> {
                 let (ground, values) = rows.split_last().expect("the ground's slot");
                 (x.iter_mut().zip(values)).for_each(|(x, &v)| *x = v - *ground);
             }
-            (Sheets::Two, _) => todo!("a frustrated component's cover"),
+            (Sheets::Two, Gauge::Anchored(triangular) | Gauge::Grounded(triangular)) => {
+                let rows = &mut scratch[..self.scratch_len(x.len())];
+                Sheets::Two.lift(x, rows);
+                // A lift sums to zero, so the ground's right-hand side is zero and its shift cancels in the descent.
+                rows[2 * x.len()..].fill(T::zero());
+                triangular.substitute(rows);
+                Sheets::Two.descend(rows, x);
+            }
         }
     }
 }

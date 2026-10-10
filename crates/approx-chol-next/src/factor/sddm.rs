@@ -151,6 +151,24 @@ impl<T: Real> RowSums<T> {
         self.ptrs.push(self.indices.len());
     }
 
+    /// Repeats the row just ended on the other sheet, each column's sheet bit flipped.
+    pub(super) fn mirror_row(&mut self) {
+        let (start, end) = (self.ptrs[self.ptrs.len() - 2], self.indices.len());
+        self.ground.push(*self.ground.last().expect("a row ended"));
+        for i in start..end {
+            self.indices.push(self.indices[i] ^ 1);
+            self.values.push(self.values[i]);
+        }
+        for i in end + 1..self.indices.len() {
+            // A pair `2j, 2j + 1` arrives flipped, so only neighbors swap.
+            if self.indices[i - 1] > self.indices[i] {
+                self.indices.swap(i - 1, i);
+                self.values.swap(i - 1, i);
+            }
+        }
+        self.ptrs.push(self.indices.len());
+    }
+
     pub(super) fn finish(self) -> (UpperAdjacency<T>, Vec<T>) {
         let n = self.ground.len();
         let rows = Rows::new(self.ptrs, self.indices, self.values, n);
@@ -158,7 +176,7 @@ impl<T: Real> RowSums<T> {
     }
 }
 
-/// How many copies of each vertex a matrix holds: two for a Gremban cover, stacked by sheet.
+/// How many copies of each vertex a matrix holds: two for a Gremban cover, interleaved by vertex.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Sheets {
     One,
@@ -181,13 +199,31 @@ impl Sheets {
         }
     }
 
-    /// `[x; −x]` into `rows`: the antisymmetric lift a cover solves on.
+    /// Vertex `k`'s copy on `sheet`: sheets interleave, so a cover's row `k⁻` mirrors its `k⁺` by flipping each column's low bit.
+    pub(super) fn vertex(self, k: usize, sheet: usize) -> usize {
+        self.count() * k + sheet
+    }
+
+    /// `x` on the first sheet, `−x` on the second: the antisymmetric lift a cover solves on.
     pub(super) fn lift<T: Real>(self, x: &[T], rows: &mut [T]) {
-        todo!()
+        match self {
+            Self::One => rows[..x.len()].copy_from_slice(x),
+            Self::Two => (rows.chunks_exact_mut(2).zip(x)).for_each(|(r, &v)| {
+                r[0] = v;
+                r[1] = -v;
+            }),
+        }
     }
 
     /// Half the sheets' difference back into `x`, undoing [`lift`](Self::lift).
     pub(super) fn descend<T: Real>(self, rows: &[T], x: &mut [T]) {
-        todo!()
+        match self {
+            Self::One => x.copy_from_slice(&rows[..x.len()]),
+            Self::Two => {
+                let two = T::one() + T::one();
+                (x.iter_mut().zip(rows.chunks_exact(2)))
+                    .for_each(|(x, r)| *x = (r[0] - r[1]) / two);
+            }
+        }
     }
 }

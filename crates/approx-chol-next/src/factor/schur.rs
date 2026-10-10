@@ -6,7 +6,7 @@ use std::sync::Arc;
 use rayon::prelude::*;
 
 use super::cholesky::CholeskyInput;
-use super::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single, StarStreams};
+use super::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single, StarDraws, StarStreams};
 use super::config::{CliqueRule, InnerParallelism, Multiplicity};
 use super::sddm::{from_fill, RowSums, Sddm, Sheets};
 use crate::sgdd::{Balance, Grounding};
@@ -126,27 +126,30 @@ impl<'a, T: Real> SchurComplement<'a, T> {
 
     /// `S` on the component's sheets: exact by kept row, sampled by star in parallel.
     fn build(&self, rule: CliqueRule) -> Sddm<'static, T> {
-        let n_kept = self.elimination.cross.n_kept();
-        let (adjacency, ground) = match rule {
-            CliqueRule::Exact => exact_rows(self),
-            CliqueRule::Sampled(Multiplicity::Single) => {
-                from_fill(n_kept, sampled_fill::<T, Single>(self, ()))
+        let (n_kept, sheets) = (self.elimination.cross.n_kept(), Sheets::of(self.balance));
+        let n = sheets.count() * n_kept;
+        let (adjacency, ground) = match (rule, self.balance) {
+            (CliqueRule::Exact, Balance::Balanced(_)) => exact_rows(self),
+            (CliqueRule::Exact, Balance::Frustrated(_)) => cover_rows(self),
+            (CliqueRule::Sampled(Multiplicity::Single), _) => {
+                from_fill(n, sampled_fill::<T, Single>(self, ()))
             }
-            CliqueRule::Sampled(Multiplicity::Split(k)) => {
-                from_fill(n_kept, sampled_fill::<T, Multi>(self, k))
+            (CliqueRule::Sampled(Multiplicity::Split(k)), _) => {
+                from_fill(n, sampled_fill::<T, Multi>(self, k))
             }
         };
         let kept = (self.balance.grounding().surplus()).map(|s| &s[s.len() - n_kept..]);
         let surplus = match kept {
-            Some(kept) => (kept.iter().zip(ground)).map(|(&s, g)| s + g).collect(),
+            Some(kept) => {
+                let copies = kept
+                    .iter()
+                    .flat_map(|&s| std::iter::repeat_n(s, sheets.count()));
+                copies.zip(ground).map(|(s, g)| s + g).collect()
+            }
             None => ground,
         };
         let grounding = Grounding::of(surplus);
-        Sddm::new(
-            Cow::Owned(adjacency),
-            Cow::Owned(grounding),
-            Sheets::of(self.balance),
-        )
+        Sddm::new(Cow::Owned(adjacency), Cow::Owned(grounding), sheets)
     }
 
     pub(super) fn finish(self) -> BlockElimination<T> {
@@ -169,26 +172,49 @@ impl<'a, T: Real> CholeskyInput<'a, T> for &SchurComplement<'_, T> {
     }
 }
 
-/// Each eliminated star's clique tree under its own stream, the ground a final neighbor unless its share is zero; a row of `C` repeats no column, so stars skip the merge; chunks in star order, so merged duplicates sum alike at any thread count.
+/// Each eliminated star's clique tree on each sheet under its own stream, the ground a final neighbor unless its share is zero; one sheet maps no column, as the balanced loop pays for any map.
 fn sampled_fill<T: Real, C: Copies>(
     schur: &SchurComplement<'_, T>,
     split: C::Split,
 ) -> Vec<Fill<T>> {
-    if let Balance::Frustrated(_) = schur.balance {
-        todo!("a cover samples each star on both sheets");
-    }
     let cross = &schur.elimination.cross;
-    let (c, ground) = (cross.c(), cross.n_kept() as u32);
+    let (c, n_eliminated, n_kept) = (cross.c(), cross.n_eliminated(), cross.n_kept());
+    let sheets = Sheets::of(schur.balance);
+    let ground = (sheets.count() * n_kept) as u32;
     let surplus = schur.balance.grounding().surplus();
-    (0..cross.n_eliminated())
+    let ground_share = move |e: usize| {
+        let s_e = surplus.map(|s| s[e]).filter(|&s| s > T::zero());
+        s_e.map(|s| (ground, s))
+    };
+    match sheets {
+        Sheets::One => fill_stars::<T, C, _>(split, n_eliminated, |e| {
+            let neighbors = c.row(e).map(|(k, &c)| (k as u32, c.abs()));
+            (schur.stars.star(e), neighbors.chain(ground_share(e)))
+        }),
+        Sheets::Two => fill_stars::<T, C, _>(split, 2 * n_eliminated, |star| {
+            let (sheet, e) = (star / n_eliminated, star % n_eliminated);
+            let neighbors = c.row(e).map(move |(k, &c)| {
+                let on = sheet ^ usize::from(crosses(c));
+                (sheets.vertex(k, on) as u32, c.abs())
+            });
+            (schur.stars.star(star), neighbors.chain(ground_share(e)))
+        }),
+    }
+}
+
+/// A row of `C` repeats no column, so stars skip the merge; chunks in star order, so merged duplicates sum alike at any thread count.
+fn fill_stars<T: Real, C: Copies, N: Iterator<Item = (u32, T)>>(
+    split: C::Split,
+    n_stars: usize,
+    star: impl Fn(usize) -> (StarDraws, N) + Sync,
+) -> Vec<Fill<T>> {
+    (0..n_stars)
         .into_par_iter()
         .fold(
             || (CliqueSampler::<T, C>::new(split), Fill::new()),
-            |(mut sampler, mut fill), e| {
-                let s_e = surplus.map(|s| s[e]).filter(|&s| s > T::zero());
-                let neighbors = c.row(e).map(|(k, &c)| (k as u32, c.abs()));
-                let neighbors = neighbors.chain(s_e.map(|s| (ground, s)));
-                sampler.eliminate_unique(schur.stars.star(e), neighbors, &mut fill);
+            |(mut sampler, mut fill), i| {
+                let (draws, neighbors) = star(i);
+                sampler.eliminate_unique(draws, neighbors, &mut fill);
                 (sampler, fill)
             },
         )
@@ -196,11 +222,33 @@ fn sampled_fill<T: Real, C: Copies>(
         .collect()
 }
 
-/// Rows of the cover's complement: `|c_ke||c_je|/d_e` to `j`'s same sheet when signs agree, else its other, as the smaller times the larger's share, the ground's `|c_ke| s_e/d_e` as column `n_kept`; a product underflowing to zero is dropped, as a stored zero couples nothing.
-fn exact_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Vec<T>) {
-    if let Balance::Frustrated(_) = schur.balance {
-        todo!("a cover routes each product by its signs");
+/// Rows of the cover's complement: `|c_ke||c_je|/d_e` to `j`'s same sheet when signs agree, else its other; `k⁻` mirrors `k⁺`, so each sums only `j > k`; the ground's share as column `2·n_kept`.
+fn cover_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Vec<T>) {
+    let BlockElimination { cross, inv_pivot } = &schur.elimination;
+    let (c, ct, n_kept) = (cross.c(), cross.ct(), cross.n_kept());
+    let surplus = schur.balance.grounding().surplus();
+    let mut rows = RowSums::new(2 * n_kept);
+    for k in 0..n_kept {
+        for (e, &c_ek) in ct.row(k) {
+            for (j, &c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
+                let sheet = usize::from(crosses(c_ek) != crosses(c_ej));
+                rows.add(
+                    Sheets::Two.vertex(j, sheet),
+                    share(c_ek.abs(), c_ej.abs(), inv_pivot[e]),
+                );
+            }
+            if let Some(surplus) = surplus {
+                rows.add(2 * n_kept, share(c_ek.abs(), surplus[e], inv_pivot[e]));
+            }
+        }
+        rows.end_row();
+        rows.mirror_row();
     }
+    rows.finish()
+}
+
+/// Rows of a folded component's complement, `|c_ke||c_je|/d_e` as the smaller times the larger's share, the ground's `|c_ke| s_e/d_e` as column `n_kept`; a product underflowing to zero is dropped, as a stored zero couples nothing.
+fn exact_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Vec<T>) {
     let BlockElimination { cross, inv_pivot } = &schur.elimination;
     let (c, ct, n_kept) = (cross.c(), cross.ct(), cross.n_kept());
     let surplus = schur.balance.grounding().surplus();
@@ -218,6 +266,11 @@ fn exact_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Ve
         rows.end_row();
     }
     rows.finish()
+}
+
+/// A negative entry joins its ends on one sheet, a positive one across them.
+fn crosses<T: Real>(c: T) -> bool {
+    c > T::zero()
 }
 
 /// `x·y/d` as the smaller times the larger's share `max·d⁻¹ ≤ 1`, so no product overflows before the division.
