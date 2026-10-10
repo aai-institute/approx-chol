@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use super::OffDiagonal;
+use crate::storage::{narrow, widen};
 use crate::Real;
 
 /// `F` in `M = F A_c F`: signs and scales, finite and nonzero; a folded `A_c`'s null vector is then `F·1`.
@@ -84,12 +85,26 @@ impl<T: Real> Congruence<T> {
 
     /// `x ← F x`; with `P` projecting out `F·1` when the component floats, else `I`, `A_c⁺ = P F M⁺ F P`, so the solve applies it on both sides.
     pub(crate) fn apply(&self, x: &mut [T]) {
-        todo!()
+        match &self.0 {
+            Kind::Identity => {}
+            Kind::NegateFrom(first) => x[*first..].iter_mut().for_each(|x| *x = -*x),
+            Kind::Factors(factors) => (x.iter_mut().zip(factors)).for_each(|(x, &f)| *x = *x * f),
+        }
     }
 
     /// Removes the component along `F·1`, max-normalized: the raw norm overflows at a 1e200 scale range.
     pub(crate) fn project_out_null(&self, x: &mut [T]) {
-        todo!()
+        let largest = (0..x.len()).fold(T::zero(), |m, i| m.max(self.factor(i).abs()));
+        let u = |i: usize| self.factor(i) / largest;
+        let (mut ux, mut uu) = (0.0, 0.0);
+        for (i, &x) in x.iter().enumerate() {
+            ux += widen(u(i)) * widen(x);
+            uu += widen(u(i)) * widen(u(i));
+        }
+        let along = ux / uu;
+        for (i, x) in x.iter_mut().enumerate() {
+            *x = narrow::<T>(widen(*x) - widen(u(i)) * along);
+        }
     }
 }
 

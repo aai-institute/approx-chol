@@ -14,7 +14,7 @@ pub(crate) fn widen<T: Real>(x: T) -> f64 {
     x.to_f64().expect("a float casts to f64")
 }
 
-/// A nonnegative `f64` sum in `T`: past `T::MAX` it reads infinite, which every range screen rejects.
+/// An `f64` sum in `T`: past `T::MAX` it reads infinite, which every range screen rejects.
 pub(crate) fn narrow<T: Real>(sum: f64) -> T {
     T::from(sum).unwrap_or_else(T::infinity)
 }

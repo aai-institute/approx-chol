@@ -4,6 +4,7 @@ mod dense;
 use super::clique_tree::SequentialDraws;
 use super::config::{Config, Multiplicity};
 use super::sddm::{Sddm, Sheets};
+use crate::storage::{narrow, widen};
 use crate::Real;
 use approximate::ApproximateCholesky;
 use dense::{DenseCholesky, PackedLaplacian};
@@ -105,7 +106,20 @@ impl<T: Real> Cholesky<T> {
 
     /// Lifts to the sheets, fixes the gauge, substitutes, and descends.
     pub(super) fn solve(&self, x: &mut [T], scratch: &mut [T]) {
-        todo!()
+        match (self.sheets, &self.gauge) {
+            (Sheets::One, Gauge::Anchored(triangular)) => triangular.substitute(x),
+            (Sheets::One, Gauge::Grounded(triangular)) => {
+                let rows = &mut scratch[..=x.len()];
+                let (ground, values) = rows.split_last_mut().expect("the ground's slot");
+                values.copy_from_slice(x);
+                let total = x.iter().fold(0.0, |sum, &b| sum + widen(b));
+                *ground = narrow::<T>(-total);
+                triangular.substitute(rows);
+                let (ground, values) = rows.split_last().expect("the ground's slot");
+                (x.iter_mut().zip(values)).for_each(|(x, &v)| *x = v - *ground);
+            }
+            (Sheets::Two, _) => todo!("a frustrated component's cover"),
+        }
     }
 }
 
@@ -123,4 +137,13 @@ enum Gauge<T> {
 enum Triangular<T> {
     Dense(DenseCholesky<T>),
     Approximate(ApproximateCholesky<T>),
+}
+
+impl<T: Real> Triangular<T> {
+    fn substitute(&self, values: &mut [T]) {
+        match self {
+            Self::Dense(dense) => dense.substitute(values),
+            Self::Approximate(_) => todo!("the approximate substitution"),
+        }
+    }
 }

@@ -65,7 +65,25 @@ impl<T: Real> BlockElimination<T> {
 
     /// `x_e = y_e − D_e⁻¹ C x_k`, by eliminated row, split under `Allow` when it [`splits`](Self::splits).
     pub(super) fn backward(&self, eliminated: &mut [T], kept: &[T], inner: InnerParallelism) {
-        todo!()
+        let c = self.cross.c();
+        let row = |e: usize, y: &mut T| {
+            let mut cx = T::zero();
+            for (k, &c) in c.row(e) {
+                cx = cx + c * kept[k];
+            }
+            *y = *y - self.inv_pivot[e] * cx;
+        };
+        if inner == InnerParallelism::Allow && self.splits() {
+            eliminated
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(e, y)| row(e, y));
+        } else {
+            eliminated
+                .iter_mut()
+                .enumerate()
+                .for_each(|(e, y)| row(e, y));
+        }
     }
 }
 

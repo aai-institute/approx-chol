@@ -84,6 +84,25 @@ impl<T: Real> DenseCholesky<T> {
 
     /// Forward, backward, and the free last slot pinned to `0`.
     pub(super) fn substitute(&self, values: &mut [T]) {
-        todo!()
+        let (pinned, solved) = values.split_last_mut().expect("a free slot");
+        let m = solved.len();
+        debug_assert_eq!(m, self.rows(), "one value per row and the free slot");
+        for row in 0..m {
+            let entries = &self.values[row_start(row)..=row_start(row) + row];
+            let mut value = solved[row];
+            for (&entry, &solution) in entries[..row].iter().zip(&solved[..row]) {
+                value = value - entry * solution;
+            }
+            solved[row] = value / entries[row];
+        }
+        for row in (0..m).rev() {
+            let mut value = solved[row];
+            // Strided down column `row`, unlike the forward pass, which is why this keeps an index.
+            for (below, &solution) in (row + 1..m).zip(&solved[row + 1..]) {
+                value = value - self.values[row_start(below) + row] * solution;
+            }
+            solved[row] = value / self.values[row_start(row) + row];
+        }
+        *pinned = T::zero();
     }
 }

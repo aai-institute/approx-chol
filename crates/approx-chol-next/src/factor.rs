@@ -119,7 +119,30 @@ impl<T: Real> Factor<T> {
         scratch: &mut [T],
         inner: InnerParallelism,
     ) -> Result<(), SolveError> {
-        todo!()
+        if x.len() != self.n {
+            return Err(SolveError::LengthMismatch {
+                expected: self.n,
+                found: x.len(),
+            });
+        }
+        let needed = self.scratch_len();
+        if scratch.len() < needed {
+            return Err(SolveError::ScratchTooSmall {
+                needed,
+                found: scratch.len(),
+            });
+        }
+        for component in &self.components {
+            let vertices = component.vertices();
+            let (local, rest) = scratch.split_at_mut(vertices.len());
+            (local.iter_mut().zip(vertices)).for_each(|(v, &i)| *v = x[i as usize]);
+            component.solve_local(local, rest, inner)?;
+            (local.iter().zip(vertices)).for_each(|(&v, &i)| x[i as usize] = v);
+        }
+        for &i in &self.dead {
+            x[i as usize] = T::zero();
+        }
+        Ok(())
     }
 }
 
