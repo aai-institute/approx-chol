@@ -109,7 +109,7 @@ impl<T: Real, I: PrimInt> Input<'_, T, I> {
     }
 }
 
-/// Grounds each folded component on `s = M·1` by column, `s_a = Σ_k bilinear_k(f_a v_a, p_k)` with `f = F·1` and `p_k = f_a v_a + f_b v_b`, clamped at zero, as assembled rows cancel it; floats it instead when `Σ_k bilinear_k(p_k, p_k) ≤ 5ε Σ_k [bilinear_k(f_a v_a, f_a v_a) + bilinear_k(f_b v_b, f_b v_b)]`, `ε` that of `T`; sums run in `f64` in column order over nonzero weights, each end's component and slot are read off the components' own vertices, an end at a dead vertex being in none, and a column straddling components keeps only its own end's square, a frustrated component is definite and keeps its rows' surplus, a non-finite sum is `OutOfRange`, and a surplus vanishing in `T` is `Unscalable`.
+/// Floats each folded component when `1ᵀM1 ≤ 5ε·tr M`, else grounds it on `s = M·1`, both summed by column as assembled rows cancel them: with `f = F·1` and `p_k = f_a v_a + f_b v_b`, `s_a = Σ_k bilinear_k(f_a v_a, p_k)` clamped at zero, `1ᵀM1 = Σ_k bilinear_k(p_k, p_k)` and `tr M = Σ_k [bilinear_k(f_a v_a, f_a v_a) + bilinear_k(f_b v_b, f_b v_b)]`, `ε` that of `T`; sums run in `f64` in column order over nonzero weights, each end's component and slot are read off the components' own vertices, an end at a dead vertex being in none, and a column straddling components keeps only its own end's square, a frustrated component is definite and keeps its rows' surplus, a non-finite sum is `OutOfRange`, and a surplus vanishing in `T` is `Unscalable`.
 fn ground_or_float<T: Real>(
     v: impl IntoColumns<T>,
     components: &mut [Component<T>],
