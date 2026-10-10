@@ -86,7 +86,7 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         }
         match &input {
             Input::Csr(_) => {}
-            Input::Signless(_) => (components.iter_mut()).for_each(|component| component.m.float()),
+            Input::Signless(_) => components.iter_mut().for_each(Component::float),
             Input::BipartiteGram { gram, .. } => float_certified(*gram, &mut components),
             Input::Gram { v, .. } => float_certified(*v, &mut components),
         }
