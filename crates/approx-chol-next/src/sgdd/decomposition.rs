@@ -18,7 +18,7 @@ pub(super) struct Decomposition<'v, T, I> {
 enum Input<'v, T, I> {
     /// Each component's own rows decide its floating.
     Csr(Csr<'v, T, I>),
-    /// A signless bipartite Laplacian, its diagonal `C`'s signed row and column sums: singular by shape, so every component floats untested.
+    /// A signless bipartite Laplacian, its diagonal `C ≥ 0`'s row and column sums: balanced and singular by shape, so every component floats untested.
     Signless(Option<Biadjacency<T>>),
     /// `C` of `[D_l C; Cᵀ D_r]`, the sides' diagonals read from the Gram; a bipartite component takes the block elimination.
     BipartiteGram {
@@ -57,7 +57,6 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         })
     }
 
-    /// A negative weight leaves a diagonal below its row, so it fails as not GDD.
     pub(super) fn signless(graph: BipartiteGraph<'v, T, I>) -> Result<Self, ReduceError> {
         let c = assemble_bipartite(graph, graph.n_left())?;
         Ok(Self {

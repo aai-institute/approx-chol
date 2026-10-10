@@ -18,7 +18,12 @@ pub enum Weights<'a, T> {
     SqrtOf(&'a [T]),
 }
 
-impl<T> Weights<'_, T> {
+impl<T: Real> Weights<'_, T> {
+    /// One entry per column, each `w ≥ 0` or `s` finite; both views check it in `new`.
+    fn check(self, columns: usize) -> Result<(), ViewError> {
+        todo!()
+    }
+
     /// The same slice read the same way: contents are never compared, so a NaN cannot split two sides of one Gram.
     fn same(self, other: Self) -> bool {
         match (self, other) {
@@ -40,7 +45,7 @@ pub struct Incidence<'a, T, I = u32> {
 }
 
 impl<'a, T: Real, I: PrimInt> Incidence<'a, T, I> {
-    /// `n` rows; side `c` puts `values[c][k]` in column `k`, `1` for `None`; rows are checked.
+    /// `n` rows; side `c` puts `values[c][k]` in column `k`, `1` for `None`; rows and weights are checked.
     pub fn new(
         n: usize,
         rows: &'a [I],
@@ -123,7 +128,7 @@ pub struct BipartiteGraph<'a, T, I = u32> {
 }
 
 impl<'a, T: Real, I: PrimInt> BipartiteGraph<'a, T, I> {
-    /// Column `k` joins `left[k] < n_left` and `right[k] < n_right` under `weights`; indices are checked.
+    /// Column `k` joins `left[k] < n_left` and `right[k] < n_right` under `weights`; indices and weights are checked, so `C ≥ 0` folds.
     pub fn new(
         n_left: usize,
         n_right: usize,

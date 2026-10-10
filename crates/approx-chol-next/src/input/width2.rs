@@ -32,6 +32,11 @@ pub enum ViewError {
         /// The offending column of `V`.
         column: usize,
     },
+    /// A weight is negative or not finite.
+    InvalidWeight {
+        /// The offending column of `V`.
+        column: usize,
+    },
     /// A bipartite Gram's two sides read different `W` slices.
     WeightsDiffer,
 }
@@ -45,6 +50,9 @@ impl core::fmt::Display for ViewError {
             Self::TooLarge { count } => write!(f, "{count} vertices exceed a u32 index"),
             Self::IndexOutOfRange { column } => write!(f, "column {column} names a missing row"),
             Self::RepeatedVertex { column } => write!(f, "column {column} names one vertex twice"),
+            Self::InvalidWeight { column } => {
+                write!(f, "column {column} has a negative or non-finite weight")
+            }
             Self::WeightsDiffer => write!(f, "a Gram's sides read different weights"),
         }
     }
