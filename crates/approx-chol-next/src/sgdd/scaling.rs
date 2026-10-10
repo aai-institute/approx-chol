@@ -10,7 +10,7 @@ pub struct ScalingPolicy {
 }
 
 impl ScalingPolicy {
-    /// `None` unless `0 ≤ tolerance < 1`: a relative violation of one admits any matrix.
+    /// `None` unless `0 ≤ tolerance < 1`.
     pub fn new(tolerance: f64, max_iterations: usize) -> Option<Self> {
         (0.0..1.0).contains(&tolerance).then_some(Self {
             tolerance,
@@ -92,7 +92,7 @@ impl ScalingPolicy {
     }
 }
 
-/// Within rounding `t_i ε (m_ii + Σ_j|m_ij|)` over a row's `t_i` terms: per row unscaled, as the reference's `RowBalance`; summed once a near-singular scaling is polished to rounding.
+/// Band `t_i ε m_ii + t_i ε Σ_j|m_ij|` over a row's `t_i` terms, scaled before adding; unscaled, a surplus inside its band or a certified deficit counts as zero and the part floats when none remains; scaled, summed in row order once a near-singular scaling is polished to rounding.
 pub(super) fn rows_prove_singular<T: Real>(
     a: &Component<T>,
     scaling: &mut Scaling<T>,

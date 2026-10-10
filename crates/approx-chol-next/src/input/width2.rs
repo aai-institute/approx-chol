@@ -176,7 +176,7 @@ pub(crate) struct Columns<'a, T, I> {
     weights: Weights<'a, T>,
 }
 
-/// Column `k` of `V`: `v_l e_left + v_r e_right` under weight `w`.
+/// Column `k` of `V`: `v_l e_left + v_r e_right` under weight `w`; `SqrtOf` folds `s` into both loadings with `w = 1`, so no `s²` overflows.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Observation<T> {
     pub(crate) left: u32,
@@ -184,6 +184,13 @@ pub(crate) struct Observation<T> {
     pub(crate) v_left: T,
     pub(crate) v_right: T,
     pub(crate) weight: T,
+}
+
+impl<T: Real> Observation<T> {
+    /// Couples both rows: the one rule `C`'s cells and the floating forest share, tested factor by factor so no product underflows.
+    pub(crate) fn joins(&self) -> bool {
+        self.weight != T::zero() && self.v_left != T::zero() && self.v_right != T::zero()
+    }
 }
 
 impl<T: Real, I: PrimInt> Columns<'_, T, I> {
