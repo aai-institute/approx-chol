@@ -38,6 +38,7 @@ impl<T: Real> Rows<T> {
         (self.indices[span.clone()].iter().map(|&j| j as usize)).zip(&self.values[span])
     }
 
+    /// Serial: `ct` builds it lazily inside parallel solves, where a rayon initializer deadlocks.
     pub(crate) fn transpose(&self) -> Self {
         todo!()
     }
