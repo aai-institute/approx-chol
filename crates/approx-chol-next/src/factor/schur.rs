@@ -23,17 +23,22 @@ impl<T: Real> BlockElimination<T> {
         self.inv_pivot.len()
     }
 
-    /// `2·nnz(C) + n_eliminated + n_kept`, within's estimate, once the larger side passes the split threshold, else `0`.
+    /// `2·nnz(C) + n_eliminated + n_kept`, within's estimate, when it [`splits`](Self::splits), else `0`.
     pub(super) fn splittable_work(&self) -> usize {
         todo!()
     }
 
-    /// `y_e = D_e⁻¹ b_e`, then `b_k −= Cᵀ y_e`, gathered by kept row through `Cᵀ` under either mode so both give the same bits.
+    /// The larger side past 10 000 rows (0.6's threshold): the one test `Allow` and the work estimate share.
+    fn splits(&self) -> bool {
+        todo!()
+    }
+
+    /// `y_e = D_e⁻¹ b_e`, then `b_k −= Cᵀ y_e`, gathered by kept row through `Cᵀ`, split under `Allow` when it [`splits`](Self::splits), so both modes give the same bits.
     pub(super) fn forward(&self, x: &mut [T], inner: InnerParallelism) {
         todo!()
     }
 
-    /// `x_e = y_e − D_e⁻¹ C x_k`.
+    /// `x_e = y_e − D_e⁻¹ C x_k`, by eliminated row, split under `Allow` when it [`splits`](Self::splits).
     pub(super) fn backward(&self, eliminated: &mut [T], kept: &[T], inner: InnerParallelism) {
         todo!()
     }
