@@ -25,7 +25,15 @@ pub(super) struct CliqueSampler<T, C: Copies> {
 impl<T: Real, C: Copies> CliqueSampler<T, C> {
     /// `split` caps every merge, so one sampler cannot mix two.
     pub(super) fn new(split: C::Split) -> Self {
-        todo!()
+        Self {
+            star: Star::new(),
+            cdf: CdfSampler::new(),
+            column: PivotColumn {
+                shares: Vec::new(),
+                remainder: None,
+            },
+            split,
+        }
     }
 
     /// Merges `neighbors`, samples their clique tree into `fill` as `w_i (S_{>i} / d)` from the sequential `draws`, and returns the pivot.
@@ -38,14 +46,33 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
         todo!()
     }
 
-    /// A neighborhood with no duplicate, as a row of `C` is, consuming its star's own `draws` so no task boundary moves one; every neighbor splits alike, so raw weights sort once.
+    /// A neighborhood with no duplicate, as a row of `C` is, consuming its star's own `draws` so no task boundary moves one; every neighbor splits alike, so raw weights sort once; fill only, as the complement holds its pivots.
     pub(super) fn eliminate_unique(
         &mut self,
         draws: StarDraws,
         neighbors: impl Iterator<Item = (u32, T)>,
         fill: &mut Fill<T>,
-    ) -> T {
-        todo!()
+    ) {
+        let StarDraws(mut rng) = draws;
+        self.star.refill_unique(neighbors, C::initial(self.split));
+        let entries = self.star.entries();
+        let Some((_, rest)) = entries.split_last() else {
+            return;
+        };
+        self.cdf.prepare(entries.iter().map(|entry| entry.weight));
+        let d = self.cdf.suffix_past(None);
+        for (i, entry) in rest.iter().enumerate() {
+            let weight =
+                (entry.copies).per_copy(entry.weight * (self.cdf.suffix_past(Some(i)) / d));
+            // An underflowed share couples nothing, so it spends no draw.
+            if weight == T::zero() {
+                continue;
+            }
+            for _ in 0..entry.copies.get() {
+                let other = entries[self.cdf.draw_after(&mut rng, i)].neighbor;
+                fill.push((entry.neighbor.min(other), entry.neighbor.max(other), weight));
+            }
+        }
     }
 
     /// Copies each neighbor of the last pivot lost.

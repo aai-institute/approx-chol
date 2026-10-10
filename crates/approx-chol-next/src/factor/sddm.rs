@@ -4,7 +4,7 @@ use std::borrow::Cow;
 
 use super::clique_tree::Fill;
 use crate::sgdd::{Balance, Grounding};
-use crate::storage::UpperAdjacency;
+use crate::storage::{Rows, UpperAdjacency};
 use crate::Real;
 
 /// `L + diag(s)`, `L`'s off-diagonal nonpositive; borrowed from its component, or owned when derived.
@@ -66,7 +66,92 @@ impl<'a, T: Real> Sddm<'a, T> {
 
 /// Counting-sorts chunks unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.
 pub(super) fn from_fill<T: Real>(n: usize, chunks: Vec<Fill<T>>) -> (UpperAdjacency<T>, Vec<T>) {
-    todo!()
+    let mut starts = vec![0; n + 1];
+    // Nested loops, not `flatten()`: the flat iterator cost ~10% on both passes at 1M+ edges.
+    for chunk in &chunks {
+        for &(lo, _, _) in chunk {
+            starts[lo as usize + 1] += 1;
+        }
+    }
+    for i in 0..n {
+        starts[i + 1] += starts[i];
+    }
+    let mut next = starts[..n].to_vec();
+    let mut by_row = vec![(0, T::zero()); starts[n]];
+    for chunk in chunks {
+        for (lo, hi, w) in chunk {
+            by_row[next[lo as usize]] = (hi as usize, w);
+            next[lo as usize] += 1;
+        }
+    }
+    let mut rows = RowSums::new(n);
+    for span in starts.windows(2) {
+        for &(hi, w) in &by_row[span[0]..span[1]] {
+            rows.add(hi, w);
+        }
+        rows.end_row();
+    }
+    rows.finish()
+}
+
+/// `S` row by row, each column's addends summed in arrival order and stored as `−w` by column; column `n` is the row's ground weight.
+pub(super) struct RowSums<T> {
+    sums: Vec<T>,
+    touched: Vec<u32>,
+    ptrs: Vec<usize>,
+    indices: Vec<u32>,
+    values: Vec<T>,
+    ground: Vec<T>,
+}
+
+impl<T: Real> RowSums<T> {
+    pub(super) fn new(n: usize) -> Self {
+        Self {
+            sums: vec![T::zero(); n + 1],
+            touched: Vec::new(),
+            ptrs: vec![0],
+            indices: Vec::new(),
+            values: Vec::new(),
+            ground: Vec::new(),
+        }
+    }
+
+    /// A zero addend is dropped, as a stored zero couples nothing.
+    pub(super) fn add(&mut self, column: usize, w: T) {
+        if w == T::zero() {
+            return;
+        }
+        if self.sums[column] == T::zero() {
+            self.touched.push(column as u32);
+        }
+        self.sums[column] = self.sums[column] + w;
+    }
+
+    pub(super) fn end_row(&mut self) {
+        let n = self.sums.len() - 1;
+        self.touched.sort_unstable();
+        let ground = match self.touched.last() {
+            Some(&j) if j as usize == n => {
+                self.touched.pop();
+                std::mem::replace(&mut self.sums[n], T::zero())
+            }
+            _ => T::zero(),
+        };
+        self.ground.push(ground);
+        for &j in &self.touched {
+            self.indices.push(j);
+            self.values
+                .push(-std::mem::replace(&mut self.sums[j as usize], T::zero()));
+        }
+        self.touched.clear();
+        self.ptrs.push(self.indices.len());
+    }
+
+    pub(super) fn finish(self) -> (UpperAdjacency<T>, Vec<T>) {
+        let n = self.ground.len();
+        let rows = Rows::new(self.ptrs, self.indices, self.values, n);
+        (UpperAdjacency::new(rows), self.ground)
+    }
 }
 
 /// How many copies of each vertex a matrix holds: two for a Gremban cover, stacked by sheet.

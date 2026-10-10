@@ -70,7 +70,7 @@ impl Copies for Multi {
     }
 
     fn per_copy<T: Real>(&self, total: T) -> T {
-        todo!()
+        total / T::from(self.0).expect("a copy count is a float")
     }
 
     fn cap(copies: u32, split: SplitCount) -> (Self, u32) {
