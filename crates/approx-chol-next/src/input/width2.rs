@@ -186,13 +186,6 @@ pub(crate) struct Observation<T> {
     pub(crate) weight: T,
 }
 
-impl<T: Real> Observation<T> {
-    /// Couples both rows: the one rule `C`'s cells and the floating forest share, tested factor by factor so no product underflows.
-    pub(crate) fn joins(&self) -> bool {
-        self.weight != T::zero() && self.v_left != T::zero() && self.v_right != T::zero()
-    }
-}
-
 impl<T: Real, I: PrimInt> Columns<'_, T, I> {
     pub(crate) fn n_left(&self) -> usize {
         self.n_left

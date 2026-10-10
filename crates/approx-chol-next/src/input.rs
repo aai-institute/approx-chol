@@ -4,5 +4,5 @@ mod csr;
 mod width2;
 
 pub use csr::{Csr, CsrError};
-pub(crate) use width2::Columns;
+pub(crate) use width2::{Columns, Observation};
 pub use width2::{Gram, Graph, Side, Sides, ViewError, Weights};

@@ -254,7 +254,7 @@ impl<T: Real> Sgdd<T> {
             .max_by(|a, b| a.violation.total_cmp(&b.violation))
     }
 
-    /// Checks symmetry, then scales each component to dominance unless it already is; only an already dominant one can float.
+    /// Checks symmetry, then scales each component to dominance unless it already is; a scaled one floats only if its clamped surplus vanishes.
     pub fn from_csr<I: PrimInt>(
         csr: Csr<'_, T, I>,
         policy: ScalingPolicy,

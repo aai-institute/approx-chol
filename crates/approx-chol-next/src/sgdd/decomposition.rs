@@ -3,7 +3,7 @@ use num_traits::PrimInt;
 mod components;
 
 use super::{Component, Proof, ScalingPolicy, Sgdd};
-use crate::input::{Columns, Csr, CsrError, Gram, Graph};
+use crate::input::{Columns, Csr, CsrError, Gram, Graph, Observation};
 use crate::storage::{CrossBlock, Rows};
 use crate::{Real, ReduceError};
 use components::Partition;
@@ -93,11 +93,18 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
     }
 }
 
-/// `C` over joining columns only, accumulated in a dense table when it is small: within measured +54% without it.
+/// `C` over joining columns only, accumulated in a dense table when it is small: within measured +54% without it; a fold of nonzero factors leaving `in_range` is `OutOfRange`.
 fn assemble<T: Real, I: PrimInt>(
     columns: &Columns<'_, T, I>,
 ) -> Result<Biadjacency<T>, ReduceError> {
     todo!()
+}
+
+impl<T: Real> Observation<T> {
+    /// Couples both rows: the one rule `C`'s cells and the floating forest share, tested factor by factor so no product underflows.
+    fn joins(&self) -> bool {
+        self.weight != T::zero() && self.v_left != T::zero() && self.v_right != T::zero()
+    }
 }
 
 /// The biadjacency `C` of a factor-width-2 view, cancelled cells dropped: rows are `A`'s left vertices.

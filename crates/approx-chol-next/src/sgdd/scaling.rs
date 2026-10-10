@@ -92,7 +92,7 @@ impl ScalingPolicy {
     }
 }
 
-/// Unscaled, a surplus inside its band `t_i ε a_ii + t_i ε Σ_j|a_ij|` or a certified deficit counts as zero, and the part floats when none remains; a scaled surplus is its scaling's residue, which no row bound tells from a real one, so it grounds.
+/// Unscaled, a surplus inside its band `t_i ε a_ii + t_i ε Σ_j|a_ij|`, `t_i` the additions that formed it, or a certified deficit counts as zero, and the part floats when none remains; a scaled surplus is its scaling's residue, which no row bound tells from a real one.
 pub(super) fn rows_prove_singular<T: Real>(a: &Component<T>, scaling: &Scaling<T>) -> bool {
     match scaling {
         Scaling::AlreadyDominant => todo!(),

@@ -1,12 +1,12 @@
 use crate::factor::clique_tree::Column;
 use crate::Real;
 
-/// A step's neighbors start at the previous step's `end`, so no second array can disagree on count.
+/// A step's neighbors follow the previous step's, so the solve's running `usize` offset finds them at any size.
 #[derive(Clone, Copy, Debug)]
 struct StepHeader<T> {
     vertex: u32,
-    /// `usize` like `Rows`' pointers: a sampled exact complement can pass `u32::MAX` entries.
-    end: usize,
+    /// Below `n`, so `u32` always holds it and the header stays 16 bytes.
+    len: u32,
     /// `D⁻¹` premultiplied by the retained fraction, so no pass rebuilds it.
     pivot_scale: T,
 }

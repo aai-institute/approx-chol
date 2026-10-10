@@ -27,8 +27,11 @@ impl<T: Real, C: Copies> EliminationGraph<T, C> {
     }
 
     /// Virtual copies, not stored entries: AC2 orders by the multigraph's degree.
-    pub(super) fn degree(&self, v: usize) -> usize {
-        self.lists[v].iter().map(|e| e.copies.get() as usize).sum()
+    pub(super) fn degree(&self, v: usize) -> u64 {
+        self.lists[v]
+            .iter()
+            .map(|e| u64::from(e.copies.get()))
+            .sum()
     }
 
     pub(super) fn neighbors(&self, v: usize) -> impl Iterator<Item = (u32, C, T)> + '_ {
