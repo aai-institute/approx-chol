@@ -59,14 +59,20 @@ fn main() {
             let n = component.vertices().len();
             println!("  component: {n} vertices, floats {}", component.floats());
         }
-        let factor = factorize(&sgdd, &Config::default());
-        println!("  fallbacks: {}", factor.fallbacks().count());
         let a = PairGram {
             left: &panel.levels[l],
             right: &panel.levels[r],
             n_left: panel.n_levels[l],
         };
-        check(&a, &factor);
+        let dense = Config {
+            dense_up_to: usize::MAX,
+            ..Config::default()
+        };
+        for (name, config) in [("dense", dense), ("default", Config::default())] {
+            let factor = factorize(&sgdd, &config);
+            println!("  {name}: fallbacks {}", factor.fallbacks().count());
+            check(&a, &factor);
+        }
     }
 }
 

@@ -1,4 +1,5 @@
 use rand::rngs::SmallRng;
+use rand::SeedableRng;
 
 /// One component's keys, so no draw depends on thread scheduling or on how other components routed.
 #[derive(Clone, Copy, Debug)]
@@ -51,5 +52,20 @@ enum Stage {
 
 /// The whole key mixed once, the only place a key becomes draws.
 fn rng(streams: Streams, stage: Stage) -> SmallRng {
-    todo!()
+    let stage = match stage {
+        Stage::Cholesky => 0,
+        Stage::Star(eliminated) => eliminated as u64 + 1,
+    };
+    let key = [u64::from(streams.component), stage]
+        .into_iter()
+        .fold(splitmix(streams.seed), |key, part| splitmix(key ^ part));
+    SmallRng::seed_from_u64(key)
+}
+
+/// SplitMix64's finalizer: each part changes every bit of the key, so no two keys collide by addition.
+fn splitmix(x: u64) -> u64 {
+    let x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    let x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    let x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
 }

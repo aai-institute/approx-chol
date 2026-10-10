@@ -1,5 +1,6 @@
 //! Block elimination of a bipartite component's larger, independent side, and the Schur complement it leaves.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use rayon::prelude::*;
@@ -8,8 +9,8 @@ use super::cholesky::CholeskyInput;
 use super::clique_tree::{Copies, Fill, StarStreams};
 use super::config::{CliqueRule, InnerParallelism};
 use super::sddm::{Sddm, Sheets};
-use crate::sgdd::Balance;
-use crate::storage::{CrossBlock, UpperAdjacency};
+use crate::sgdd::{Balance, Grounding};
+use crate::storage::{narrow, widen, CrossBlock, Rows, UpperAdjacency};
 use crate::Real;
 
 /// `M`'s cross block and the pivots `d_e`, applied as two products because the block's steps commute.
@@ -85,12 +86,37 @@ impl<'a, T: Real> SchurComplement<'a, T> {
         rule: CliqueRule,
         stars: StarStreams,
     ) -> Self {
-        todo!()
+        let surplus = balance.grounding().surplus();
+        let c = cross.c();
+        let inv_pivot = (0..cross.n_eliminated())
+            .map(|e| {
+                let s_e = surplus.map_or(0.0, |s| widen(s[e]));
+                let d_e = c.row(e).fold(s_e, |d, (_, &c)| d + widen(c.abs()));
+                T::one() / narrow::<T>(d_e)
+            })
+            .collect();
+        Self {
+            elimination: BlockElimination {
+                cross: Arc::clone(cross),
+                inv_pivot,
+            },
+            balance,
+            rule,
+            stars,
+        }
     }
 
     /// `S` on the component's sheets: exact by kept row, sampled by star in parallel.
     fn build(&self, rule: CliqueRule) -> Sddm<'static, T> {
-        todo!()
+        let sheets = Sheets::of(self.balance);
+        match rule {
+            CliqueRule::Exact => Sddm::new(
+                Cow::Owned(exact_rows(self)),
+                Cow::Owned(Grounding::of(exact_surplus(self))),
+                sheets,
+            ),
+            CliqueRule::Sampled(_) => todo!(),
+        }
     }
 
     pub(super) fn finish(self) -> BlockElimination<T> {
@@ -123,10 +149,58 @@ fn sampled_fill<T: Real, C: Copies>(
 
 /// Rows of the cover's complement: `|c_ke||c_je|/d_e` to `j`'s same sheet when signs agree, else its other, as the smaller times the larger's share; a product underflowing to zero is dropped, as a stored zero couples nothing.
 fn exact_rows<T: Real>(schur: &SchurComplement<'_, T>) -> UpperAdjacency<T> {
-    todo!()
+    if let Balance::Frustrated(_) = schur.balance {
+        todo!("a cover routes each product by its signs");
+    }
+    let BlockElimination { cross, inv_pivot } = &schur.elimination;
+    let (c, ct, n_kept) = (cross.c(), cross.ct(), cross.n_kept());
+    let mut sums = vec![T::zero(); n_kept];
+    let mut touched: Vec<u32> = Vec::new();
+    let (mut ptrs, mut indices, mut values) = (vec![0], Vec::new(), Vec::new());
+    for k in 0..n_kept {
+        for (e, c_ek) in ct.row(k) {
+            for (j, c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
+                let w = share(c_ek.abs(), c_ej.abs(), inv_pivot[e]);
+                if w == T::zero() {
+                    continue;
+                }
+                if sums[j] == T::zero() {
+                    touched.push(j as u32);
+                }
+                sums[j] = sums[j] + w;
+            }
+        }
+        touched.sort_unstable();
+        for &j in &touched {
+            indices.push(j);
+            values.push(-std::mem::replace(&mut sums[j as usize], T::zero()));
+        }
+        touched.clear();
+        ptrs.push(indices.len());
+    }
+    UpperAdjacency::new(Rows::new(ptrs, indices, values, n_kept))
+}
+
+/// `x·y/d` as the smaller times the larger's share `max·d⁻¹ ≤ 1`, so no product overflows before the division.
+fn share<T: Real>(x: T, y: T, inv_pivot: T) -> T {
+    x.min(y) * (x.max(y) * inv_pivot)
 }
 
 /// `s_k + |C|ᵀ D_e⁻¹ s_e` per sheet, exact as no product cancels; each `|c_ek| s_e/d_e` multiplied as the complement's are.
 fn exact_surplus<T: Real>(schur: &SchurComplement<'_, T>) -> Vec<T> {
-    todo!()
+    if let Balance::Frustrated(_) = schur.balance {
+        todo!("a cover's surplus is one per sheet");
+    }
+    let BlockElimination { cross, inv_pivot } = &schur.elimination;
+    let n_eliminated = cross.n_eliminated();
+    let Some(surplus) = schur.balance.grounding().surplus() else {
+        return vec![T::zero(); cross.n_kept()];
+    };
+    let mut kept = surplus[n_eliminated..].to_vec();
+    for (e, &s_e) in surplus[..n_eliminated].iter().enumerate() {
+        for (k, &c_ek) in cross.c().row(e) {
+            kept[k] = kept[k] + share(c_ek.abs(), s_e, inv_pivot[e]);
+        }
+    }
+    kept
 }
