@@ -1,5 +1,7 @@
+mod cg;
+
 use super::{OffDiagonal, Unreduced};
-use crate::storage::{diagonal_in_range, widen};
+use crate::storage::{diagonal_in_range, narrow, widen, CrossBlock};
 use crate::{Real, ReduceError};
 
 /// Certification policy for a dominance scaling; a deficit left at hand-over is clamped and reported.
@@ -41,7 +43,7 @@ pub struct ScalingReport {
 pub(super) enum Scaling<T> {
     /// Every SDDM input, so an SDDM CSR reduces bit for bit as before.
     AlreadyDominant,
-    /// Scales peak at `1`, so `M`'s diagonal `f²·a_ii` never exceeds `A`'s.
+    /// `f = μ/√a_ii` with `μ` peaking at `1`, so `M`'s diagonal `μ²` never exceeds `1`.
     Scaled {
         scales: Box<[T]>,
         report: Option<ScalingReport>,
@@ -81,7 +83,11 @@ pub(super) fn dominance_scaling<T: Real>(
     // SCI reads only row ratios, so it serves any pattern; the reduced CG needs the bipartite operator.
     let relaxation = match &a.off_diagonal {
         OffDiagonal::General(_) => sci(a, policy),
-        OffDiagonal::Bipartite(_) => reduced_cg(a, policy),
+        OffDiagonal::Bipartite(cross) => {
+            reduced_cg(cross, &a.diagonal, policy).ok_or(ReduceError::Unscalable {
+                vertex: a.vertices[0],
+            })
+        }
     }?;
     Ok(policy.certify(relaxation))
 }
@@ -89,7 +95,15 @@ pub(super) fn dominance_scaling<T: Real>(
 impl ScalingPolicy {
     /// The one place the tolerance decides whether a relaxation is reported.
     fn certify<T: Real>(&self, relaxation: Relaxation<T>) -> Scaling<T> {
-        todo!()
+        let violation = widen(relaxation.violation);
+        let report = (violation > self.tolerance).then_some(ScalingReport {
+            iterations: relaxation.iterations,
+            violation,
+        });
+        Scaling::Scaled {
+            scales: relaxation.scales,
+            report,
+        }
     }
 }
 
@@ -117,10 +131,28 @@ fn sci<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> Result<Relaxation<T
     todo!()
 }
 
-/// CG on `α² − NᵀN` over the smaller side, `α = 1 + tolerance/2` off the Perron vector.
+/// CG on `α² − NᵀN` over the smaller side, `α = 1 + tolerance/2` off the Perron vector; `None` when no scale stays a positive `T`.
 fn reduced_cg<T: Real>(
-    a: &Unreduced<T>,
+    cross: &CrossBlock<T>,
+    diagonal: &[T],
     policy: &ScalingPolicy,
-) -> Result<Relaxation<T>, ReduceError> {
-    todo!()
+) -> Option<Relaxation<T>> {
+    let inv_sqrt: Vec<f64> = diagonal.iter().map(|&d| 1.0 / widen(d).sqrt()).collect();
+    let operator = cg::NormalizedCrossOperator::new(cross, &inv_sqrt, 1.0 + 0.5 * policy.tolerance);
+    let initial = cg::ScalingCandidate {
+        mu: vec![1.0; diagonal.len()],
+        violation: operator.unit_violation(),
+    };
+    let result = cg::reduced_cg_scaling(&operator, initial, policy).ok()?;
+    let scales: Box<[T]> = (result.candidate.mu.iter().zip(&inv_sqrt))
+        .map(|(&mu, &normalizer)| narrow::<T>(mu * normalizer))
+        .collect();
+    if !scales.iter().all(|&f| f.is_finite() && f > T::zero()) {
+        return None;
+    }
+    Some(Relaxation {
+        scales,
+        iterations: result.iterations,
+        violation: narrow(result.candidate.violation.max(0.0)),
+    })
 }
