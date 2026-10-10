@@ -215,6 +215,12 @@ impl<T: Real> Unreduced<T> {
     }
 
     fn reduce(self, policy: &ScalingPolicy, proof: Proof) -> Result<Component<T>, ReduceError> {
+        // A view's zero diagonal beside a cell is its terms underflowing, not a non-GDD input.
+        let lost = self.diagonal.iter().position(|&d| d == T::zero());
+        if let (Proof::Input, Some(i)) = (proof, lost) {
+            let vertex = self.vertices[i];
+            return Err(ReduceError::OutOfRange { vertex });
+        }
         let scaling = scaling::dominance_scaling(&self, policy)?;
         let signs = match self.nonpositive {
             true => Some(Congruence::identity()),

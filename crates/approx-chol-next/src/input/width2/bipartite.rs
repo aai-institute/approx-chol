@@ -45,7 +45,7 @@ pub struct Incidence<'a, T, I = u32> {
 }
 
 impl<'a, T: Real, I: PrimInt> Incidence<'a, T, I> {
-    /// `n` rows; side `c` puts `values[c][k]` in column `k`, `1` for `None`; rows, weights and each nonzero `w·v²` in range are checked.
+    /// `n` rows; side `c` puts `values[c][k]` in column `k`, `1` for `None`; rows and weights are checked.
     pub fn new(
         n: usize,
         rows: &'a [I],
@@ -128,7 +128,7 @@ pub struct BipartiteGraph<'a, T, I = u32> {
 }
 
 impl<'a, T: Real, I: PrimInt> BipartiteGraph<'a, T, I> {
-    /// Column `k` joins `left[k] < n_left` and `right[k] < n_right` under `weights`; indices, weights and each nonzero `w` in range are checked, so `C ≥ 0` folds.
+    /// Column `k` joins `left[k] < n_left` and `right[k] < n_right` under `weights`; indices and weights are checked, so `C ≥ 0` folds.
     pub fn new(
         n_left: usize,
         n_right: usize,
