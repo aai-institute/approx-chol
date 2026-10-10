@@ -4,12 +4,14 @@ use std::sync::OnceLock;
 
 use crate::Real;
 
-/// Zero, or within `[MIN_POSITIVE/EPSILON, MAX·EPSILON]`: the floor keeps every product out of subnormals (#163), the ceiling every reordered row sum and cast surplus finite.
+/// Finite, and zero or at least `MIN_POSITIVE/EPSILON`: the floor keeps every product out of subnormals (#163).
 pub(crate) fn in_range<T: Real>(x: T) -> bool {
-    let magnitude = x.abs();
-    x == T::zero()
-        || (magnitude >= T::min_positive_value() / T::epsilon()
-            && magnitude <= T::max_value() * T::epsilon())
+    x.is_finite() && (x == T::zero() || x.abs() >= T::min_positive_value() / T::epsilon())
+}
+
+/// In range and at most `MAX/4`: dominance then bounds its row by `MAX/2`, and elimination never grows a diagonal, so every reordered row sum, pivot and cast surplus stays finite; an entry bound would reject within's weights near `1e300`.
+pub(crate) fn diagonal_in_range<T: Real>(d: T) -> bool {
+    in_range(d) && d <= T::max_value() / (T::one() + T::one() + T::one() + T::one())
 }
 
 /// Compressed sparse rows.

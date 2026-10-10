@@ -1,5 +1,5 @@
 use super::{OffDiagonal, Unreduced};
-use crate::storage::in_range;
+use crate::storage::diagonal_in_range;
 use crate::{Real, ReduceError};
 
 /// Certification policy for a dominance scaling; a deficit left at hand-over is clamped and reported.
@@ -41,6 +41,7 @@ pub struct ScalingReport {
 pub(super) enum Scaling<T> {
     /// Every SDDM input, so an SDDM CSR reduces bit for bit as before.
     AlreadyDominant,
+    /// Scales peak at `1`, so `M`'s diagonal `f²·a_ii` never exceeds `A`'s.
     Scaled {
         scales: Box<[T]>,
         report: Option<ScalingReport>,
@@ -59,7 +60,7 @@ pub(super) fn dominance_scaling<T: Real>(
     a: &Unreduced<T>,
     policy: &ScalingPolicy,
 ) -> Result<Scaling<T>, ReduceError> {
-    if let Some(i) = a.diagonal.iter().position(|&d| !in_range(d)) {
+    if let Some(i) = a.diagonal.iter().position(|&d| !diagonal_in_range(d)) {
         return Err(ReduceError::OutOfRange {
             vertex: a.vertices[i],
         });

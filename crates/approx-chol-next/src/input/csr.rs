@@ -80,7 +80,7 @@ pub enum CsrError {
         /// The offending row.
         row: u32,
     },
-    /// An entry is not finite, or nonzero outside `[MIN_POSITIVE/EPSILON, MAX·EPSILON]`, where products turn subnormal or row sums overflow.
+    /// An entry is not finite, or nonzero below `MIN_POSITIVE/EPSILON`, where products turn subnormal.
     OutOfRange {
         /// The offending row.
         row: u32,
