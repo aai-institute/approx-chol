@@ -18,7 +18,7 @@ pub(super) struct Decomposition<'v, T, I> {
 enum Input<'v, T, I> {
     /// A signless Laplacian: zero surplus by shape, and a negative weight fails as not GDD.
     Signless(Option<Biadjacency<T>>),
-    /// Floats when the signed alias `u`, grown along joining columns inside a part so `v_l u_l + v_r u_r = 0`, has `Σ w (v_l u_l + v_r u_r)² ≤ 1e-13·Σ w (v_l² u_l² + v_r² u_r²)` in column order; a straddling column adds only its own side's square.
+    /// Floats when the signed alias `u` (`v_l u_l + v_r u_r = 0` along joining columns inside a part; grown in `f64` whatever `T`, exponent tracked, then scaled to `max|u| = 1`) has finite `Σ w (v_l u_l + v_r u_r)² ≤ 1e-13·Σ w (v_l² u_l² + v_r² u_r²)` in column order; a straddling column adds only its own side's square.
     Gram {
         c: Option<Biadjacency<T>>,
         columns: Columns<'v, T, I>,
