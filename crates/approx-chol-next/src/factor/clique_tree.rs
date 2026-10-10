@@ -5,6 +5,8 @@ mod copies;
 mod star;
 mod streams;
 
+use rand::rngs::SmallRng;
+
 use crate::Real;
 use cdf::CdfSampler;
 pub(super) use copies::{Copies, Multi, Single};
@@ -43,7 +45,19 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
         neighbors: impl Iterator<Item = (u32, C, T)>,
         fill: &mut Fill<T>,
     ) -> T {
-        todo!()
+        self.star.refill(neighbors, self.split);
+        self.sample(&mut draws.0, fill);
+        let column = &mut self.column;
+        column.shares.clear();
+        let Some((last, rest)) = self.star.entries().split_last() else {
+            column.remainder = None;
+            return T::zero();
+        };
+        let d = self.cdf.suffix_past(None);
+        let shares = rest.iter().map(|entry| (entry.neighbor, entry.weight / d));
+        column.shares.extend(shares);
+        column.remainder = Some(last.neighbor);
+        last.weight * (last.weight / d)
     }
 
     /// A neighborhood with no duplicate, as a row of `C` is, consuming its star's own `draws` so no task boundary moves one; every neighbor splits alike, so raw weights sort once; fill only, as the complement holds its pivots.
@@ -55,12 +69,21 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
     ) {
         let StarDraws(mut rng) = draws;
         self.star.refill_unique(neighbors, C::initial(self.split));
+        self.sample(&mut rng, fill);
+    }
+
+    /// Prepares the star's CDF, then fills `per_copy(w_i (S_{>i} / d))` per copy of each entry but the heaviest, each copy drawing past it.
+    fn sample(&mut self, rng: &mut SmallRng, fill: &mut Fill<T>) {
         let entries = self.star.entries();
         let Some((_, rest)) = entries.split_last() else {
             return;
         };
         self.cdf.prepare(entries.iter().map(|entry| entry.weight));
         let d = self.cdf.suffix_past(None);
+        debug_assert!(
+            d.is_finite() && d > T::zero(),
+            "positive weights under the diagonal bound"
+        );
         for (i, entry) in rest.iter().enumerate() {
             let weight =
                 (entry.copies).per_copy(entry.weight * (self.cdf.suffix_past(Some(i)) / d));
@@ -69,7 +92,7 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
                 continue;
             }
             for _ in 0..entry.copies.get() {
-                let other = entries[self.cdf.draw_after(&mut rng, i)].neighbor;
+                let other = entries[self.cdf.draw_after(rng, i)].neighbor;
                 fill.push((entry.neighbor.min(other), entry.neighbor.max(other), weight));
             }
         }

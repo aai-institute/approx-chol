@@ -2,6 +2,9 @@ use crate::factor::clique_tree::Copies;
 use crate::factor::sddm::Sddm;
 use crate::Real;
 
+/// Above this, an eliminated vertex's list is released rather than kept.
+const RETAIN_CAPACITY_MAX: usize = 64;
+
 /// One half of an edge; `mirror` indexes the other half in `to`'s list, so removal is O(1).
 #[derive(Clone, Copy, Debug)]
 struct Edge<T, C> {
@@ -19,7 +22,19 @@ pub(super) struct EliminationGraph<T, C> {
 impl<T: Real, C: Copies> EliminationGraph<T, C> {
     /// The ground is a vertex like any other: forcing it last measured +0-10% PCG iterations.
     pub(super) fn of(sddm: &Sddm<'_, T>, split: C::Split) -> Self {
-        todo!()
+        let n = sddm.n() + usize::from(sddm.grounded());
+        let mut degrees = vec![0; n];
+        for (k, j, _) in sddm.grounded_edges() {
+            degrees[k as usize] += 1;
+            degrees[j as usize] += 1;
+        }
+        let lists = degrees.into_iter().map(Vec::with_capacity).collect();
+        let mut graph = Self { lists };
+        let copies = C::initial(split);
+        for (k, j, w) in sddm.grounded_edges() {
+            graph.push_pair(k, j, copies, w);
+        }
+        graph
     }
 
     pub(super) fn n(&self) -> usize {
@@ -41,10 +56,40 @@ impl<T: Real, C: Copies> EliminationGraph<T, C> {
     /// Drops `v`'s edges from both sides.
     #[inline(never)] // Inlined into its one call site, it measured +1.6% of build.
     pub(super) fn eliminate_vertex(&mut self, v: usize) {
-        todo!()
+        while let Some(edge) = self.lists[v].pop() {
+            self.swap_remove(edge.to as usize, edge.mirror as usize);
+        }
+        if self.lists[v].capacity() > RETAIN_CAPACITY_MAX {
+            self.lists[v] = Vec::new();
+        }
     }
 
     pub(super) fn add_fill(&mut self, u: u32, w: u32, weight: T) {
-        todo!()
+        self.push_pair(u, w, C::one(), weight);
+    }
+
+    fn push_pair(&mut self, u: u32, v: u32, copies: C, weight: T) {
+        let (mirror_u, mirror_v) = (self.lists[v as usize].len(), self.lists[u as usize].len());
+        // Truncating a u32 mirror would corrupt removal, so this holds in release too.
+        assert!(
+            mirror_u.max(mirror_v) < u32::MAX as usize,
+            "a list exceeds u32 edges"
+        );
+        let edge = |to, mirror| Edge {
+            to,
+            mirror: mirror as u32,
+            copies,
+            weight,
+        };
+        self.lists[u as usize].push(edge(v, mirror_u));
+        self.lists[v as usize].push(edge(u, mirror_v));
+    }
+
+    /// Swap-removes `u`'s edge at `at`, repairing the moved edge's mirror.
+    fn swap_remove(&mut self, u: usize, at: usize) {
+        self.lists[u].swap_remove(at);
+        if let Some(&moved) = self.lists[u].get(at) {
+            self.lists[moved.to as usize][moved.mirror as usize].mirror = at as u32;
+        }
     }
 }

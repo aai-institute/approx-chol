@@ -143,7 +143,7 @@ impl<T: Real> Triangular<T> {
     fn substitute(&self, values: &mut [T]) {
         match self {
             Self::Dense(dense) => dense.substitute(values),
-            Self::Approximate(_) => todo!("the approximate substitution"),
+            Self::Approximate(approximate) => approximate.substitute(values),
         }
     }
 }

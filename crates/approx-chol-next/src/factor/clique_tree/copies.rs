@@ -74,6 +74,7 @@ impl Copies for Multi {
     }
 
     fn cap(copies: u32, split: SplitCount) -> (Self, u32) {
-        todo!()
+        let kept = copies.min(split.get());
+        (Self(kept), copies - kept)
     }
 }
