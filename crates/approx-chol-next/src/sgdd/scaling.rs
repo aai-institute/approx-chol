@@ -92,13 +92,12 @@ impl ScalingPolicy {
     }
 }
 
-/// Band `t_i ε m_ii + t_i ε Σ_j|m_ij|` over a row's `t_i` terms, scaled before adding; unscaled, a surplus inside its band or a certified deficit counts as zero and the part floats when none remains; scaled, summed in row order once a near-singular scaling is polished to rounding.
-pub(super) fn rows_prove_singular<T: Real>(
-    a: &Component<T>,
-    scaling: &mut Scaling<T>,
-    policy: &ScalingPolicy,
-) -> bool {
-    todo!()
+/// Unscaled, a surplus inside its band `t_i ε a_ii + t_i ε Σ_j|a_ij|` or a certified deficit counts as zero, and the part floats when none remains; a scaled surplus is its scaling's residue, which no row bound tells from a real one, so it grounds.
+pub(super) fn rows_prove_singular<T: Real>(a: &Component<T>, scaling: &Scaling<T>) -> bool {
+    match scaling {
+        Scaling::AlreadyDominant => todo!(),
+        Scaling::Scaled { .. } => false,
+    }
 }
 
 /// `Σ_j |a_ij| ≤ a_ii (1 + max(tolerance, 2 deg_i ε))`: a rounded Laplacian stays bit for bit, even in `f32`.

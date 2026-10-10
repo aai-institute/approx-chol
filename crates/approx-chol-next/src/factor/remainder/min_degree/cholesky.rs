@@ -5,7 +5,8 @@ use crate::Real;
 #[derive(Clone, Copy, Debug)]
 struct StepHeader<T> {
     vertex: u32,
-    end: u32,
+    /// `usize` like `Rows`' pointers: a sampled exact complement can pass `u32::MAX` entries.
+    end: usize,
     /// `D⁻¹` premultiplied by the retained fraction, so no pass rebuilds it.
     pivot_scale: T,
 }

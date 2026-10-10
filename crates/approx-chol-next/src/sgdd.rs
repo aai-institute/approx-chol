@@ -254,7 +254,7 @@ impl<T: Real> Sgdd<T> {
             .max_by(|a, b| a.violation.total_cmp(&b.violation))
     }
 
-    /// Checks symmetry, then scales each component to dominance unless it already is.
+    /// Checks symmetry, then scales each component to dominance unless it already is; only an already dominant one can float.
     pub fn from_csr<I: PrimInt>(
         csr: Csr<'_, T, I>,
         policy: ScalingPolicy,
@@ -306,7 +306,7 @@ impl<T: Real> Component<T> {
     }
 
     fn reduce(self, policy: &ScalingPolicy, proof: Proof) -> Result<Part<T>, ReduceError> {
-        let mut scaling = scaling::dominance_scaling(&self, policy)?;
+        let scaling = scaling::dominance_scaling(&self, policy)?;
         let signs = match self.nonpositive {
             true => Some(Congruence::identity()),
             false => signature::signature(&self.off_diagonal),
@@ -314,7 +314,7 @@ impl<T: Real> Component<T> {
         // A frustrated part is definite, so only a folded one asks its rows.
         let singular = proof == Proof::Rows
             && signs.is_some()
-            && scaling::rows_prove_singular(&self, &mut scaling, policy);
+            && scaling::rows_prove_singular(&self, &scaling);
         let mut part = self.into_part(scaling, signs)?;
         if singular {
             part.m.float();
