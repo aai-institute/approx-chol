@@ -27,7 +27,31 @@ pub(crate) struct Rows<T> {
 impl<T: Real> Rows<T> {
     /// Panics unless `ptrs` ascends from `0` to the entry count and each row's columns strictly ascend below `n_cols`: no row repeats a column.
     pub(crate) fn new(ptrs: Vec<usize>, indices: Vec<u32>, values: Vec<T>, n_cols: usize) -> Self {
-        todo!()
+        assert_eq!(ptrs.first(), Some(&0), "rows start at the first entry");
+        assert_eq!(
+            ptrs.last(),
+            Some(&indices.len()),
+            "rows end at the last entry"
+        );
+        assert_eq!(indices.len(), values.len(), "one value per entry");
+        for span in ptrs.windows(2) {
+            assert!(span[0] <= span[1], "row pointers ascend");
+            let row = &indices[span[0]..span[1]];
+            assert!(
+                row.windows(2).all(|j| j[0] < j[1]),
+                "columns strictly ascend"
+            );
+            assert!(
+                row.last().is_none_or(|&j| (j as usize) < n_cols),
+                "columns below n_cols"
+            );
+        }
+        Self {
+            ptrs,
+            indices,
+            values,
+            n_cols,
+        }
     }
 
     pub(crate) fn n_rows(&self) -> usize {

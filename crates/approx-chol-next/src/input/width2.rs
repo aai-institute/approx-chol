@@ -88,6 +88,13 @@ pub(crate) enum Weight<T> {
     SqrtOf(T),
 }
 
+impl<T: Real> Column<T> {
+    /// `w·v_a·v_b` in `f64`: every assembly sums its cells there and casts once.
+    pub(crate) fn cell(self) -> f64 {
+        (self.weight).bilinear(to_f64(self.v_a), to_f64(self.v_b))
+    }
+}
+
 impl<T: Real> Weight<T> {
     /// `w·x·y` in `U`, as `(s·x)·(s·y)` under `SqrtOf`: every diagonal, cell and residue goes through it.
     pub(crate) fn bilinear<U: Real>(self, x: U, y: U) -> U {
@@ -131,4 +138,8 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for FactorWidth2<'_, T, I> {
     fn for_each_column(self, visit: impl FnMut(Column<T>)) {
         todo!()
     }
+}
+
+fn to_f64<T: Real>(x: T) -> f64 {
+    x.to_f64().expect("a float casts to f64")
 }

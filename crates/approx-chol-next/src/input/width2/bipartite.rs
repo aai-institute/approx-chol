@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use num_traits::PrimInt;
 
-use super::{Column, IntoColumns, ViewError};
+use super::{to_f64, Column, IntoColumns, ViewError, Weight};
 use crate::Real;
 
 /// The diagonal `W`, one nonnegative entry per column of `V`.
@@ -21,7 +21,21 @@ pub enum Weights<'a, T> {
 impl<T: Real> Weights<'_, T> {
     /// One entry per column, each `w` finite and nonnegative or `s` finite; both views check it in `new`.
     fn check(self, columns: usize) -> Result<(), ViewError> {
-        todo!()
+        let (entries, valid): (&[T], fn(T) -> bool) = match self {
+            Self::Unit => return Ok(()),
+            Self::Of(w) => (w, |w| w.is_finite() && w >= T::zero()),
+            Self::SqrtOf(s) => (s, |s| s.is_finite()),
+        };
+        if entries.len() != columns {
+            return Err(ViewError::LengthMismatch {
+                expected: columns,
+                found: entries.len(),
+            });
+        }
+        match entries.iter().position(|&x| !valid(x)) {
+            Some(column) => Err(ViewError::InvalidWeight { column }),
+            None => Ok(()),
+        }
     }
 
     /// The same slice read the same way: contents are never compared, so a NaN cannot split two sides of one Gram.
@@ -30,6 +44,15 @@ impl<T: Real> Weights<'_, T> {
             (Self::Unit, Self::Unit) => true,
             (Self::Of(a), Self::Of(b)) | (Self::SqrtOf(a), Self::SqrtOf(b)) => core::ptr::eq(a, b),
             _ => false,
+        }
+    }
+
+    /// Column `k`'s entry, matched per call: for one-time passes, not the column visit.
+    fn at(self, k: usize) -> Weight<T> {
+        match self {
+            Self::Unit => Weight::Unit,
+            Self::Of(w) => Weight::Of(w[k]),
+            Self::SqrtOf(s) => Weight::SqrtOf(s[k]),
         }
     }
 }
@@ -52,12 +75,54 @@ impl<'a, T: Real, I: PrimInt> Incidence<'a, T, I> {
         values: Vec<Option<&'a [T]>>,
         weights: Weights<'a, T>,
     ) -> Result<Self, ViewError> {
-        todo!()
+        let columns = rows.len();
+        if let Some(found) = (values.iter().flatten())
+            .map(|v| v.len())
+            .find(|&len| len != columns)
+        {
+            return Err(ViewError::LengthMismatch {
+                expected: columns,
+                found,
+            });
+        }
+        weights.check(columns)?;
+        let in_range = |row: &I| row.to_usize().is_some_and(|row| row < n);
+        if let Some(column) = rows.iter().position(|row| !in_range(row)) {
+            return Err(ViewError::IndexOutOfRange { column });
+        }
+        Ok(Self {
+            n,
+            rows,
+            values,
+            weights,
+            diagonals: OnceLock::new(),
+        })
     }
 
     /// Side `c`, borrowing this incidence; panics unless it has one.
     pub fn side(&self, c: usize) -> Side<'_, T, I> {
-        todo!()
+        assert!(c < self.values.len(), "the incidence has no side {c}");
+        Side {
+            incidence: self,
+            index: c,
+        }
+    }
+
+    /// Every side's diagonal, side `c` at `c·n..(c+1)·n`, summed in `f64` on first read like `abs_row_sums`.
+    fn diagonals(&self) -> &[T] {
+        self.diagonals.get_or_init(|| {
+            let n = self.n;
+            let mut sums = vec![0.0_f64; self.values.len() * n];
+            for (values, sums) in self.values.iter().zip(sums.chunks_exact_mut(n)) {
+                for (k, row) in self.rows.iter().enumerate() {
+                    let v = values.map_or(1.0, |values| to_f64(values[k]));
+                    sums[index(*row)] += self.weights.at(k).bilinear(v, v);
+                }
+            }
+            // A sum past `T::MAX` reads infinite, which the diagonal screen rejects.
+            let cast = |d: f64| T::from(d).unwrap_or_else(T::infinity);
+            sums.into_iter().map(cast).collect()
+        })
     }
 }
 
@@ -75,6 +140,17 @@ impl<T, I> Clone for Side<'_, T, I> {
 }
 
 impl<T, I> Copy for Side<'_, T, I> {}
+
+impl<'a, T: Real, I: PrimInt> Side<'a, T, I> {
+    fn values(self) -> Option<&'a [T]> {
+        self.incidence.values[self.index]
+    }
+
+    fn diagonal(self) -> &'a [T] {
+        let n = self.incidence.n;
+        &self.incidence.diagonals()[self.index * n..][..n]
+    }
+}
 
 /// `A = V W Vᵀ` with `V = [V_l; V_r]`; `W` stays apart because every pair of an incidence's sides shares it.
 #[derive(Debug)]
@@ -94,26 +170,76 @@ impl<T, I> Copy for BipartiteGram<'_, T, I> {}
 impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
     /// Both sides must have the same column count and read the same `W`, and `n_left + n_right` fit a `u32` index.
     pub fn new(left: Side<'a, T, I>, right: Side<'a, T, I>) -> Result<Self, ViewError> {
-        todo!()
+        let (l, r) = (left.incidence, right.incidence);
+        if l.rows.len() != r.rows.len() {
+            return Err(ViewError::LengthMismatch {
+                expected: l.rows.len(),
+                found: r.rows.len(),
+            });
+        }
+        if !l.weights.same(r.weights) {
+            return Err(ViewError::WeightsDiffer);
+        }
+        let count = l.n.saturating_add(r.n);
+        if u32::try_from(count).is_err() {
+            return Err(ViewError::TooLarge { count });
+        }
+        Ok(Self { left, right })
     }
 
     pub(crate) fn n_left(&self) -> usize {
-        todo!()
+        self.left.incidence.n
     }
 
     /// `A`'s diagonal, left rows then right ones; the first Gram of an incidence sums each side's, serially, as a rayon initializer deadlocks when Grams reduce in parallel.
     pub(crate) fn diagonals(&self) -> (&'a [T], &'a [T]) {
-        todo!()
+        (self.left.diagonal(), self.right.diagonal())
+    }
+
+    #[inline(always)]
+    fn with_values(self, weight: impl Fn(usize) -> Weight<T>, visit: impl FnMut(Column<T>)) {
+        let one = |_| T::one();
+        match (self.left.values(), self.right.values()) {
+            (None, None) => self.columns(one, one, weight, visit),
+            (Some(a), None) => self.columns(|k| a[k], one, weight, visit),
+            (None, Some(b)) => self.columns(one, |k| b[k], weight, visit),
+            (Some(a), Some(b)) => self.columns(|k| a[k], |k| b[k], weight, visit),
+        }
+    }
+
+    #[inline(always)]
+    fn columns(
+        self,
+        v_a: impl Fn(usize) -> T,
+        v_b: impl Fn(usize) -> T,
+        weight: impl Fn(usize) -> Weight<T>,
+        mut visit: impl FnMut(Column<T>),
+    ) {
+        let n_left = self.n_left();
+        let (left, right) = (self.left.incidence.rows, self.right.incidence.rows);
+        for (k, (a, b)) in left.iter().zip(right).enumerate() {
+            visit(Column {
+                a: index(*a) as u32,
+                b: (n_left + index(*b)) as u32,
+                v_a: v_a(k),
+                v_b: v_b(k),
+                weight: weight(k),
+            });
+        }
     }
 }
 
 impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteGram<'_, T, I> {
     fn n(&self) -> usize {
-        todo!()
+        self.left.incidence.n + self.right.incidence.n
     }
 
     fn for_each_column(self, visit: impl FnMut(Column<T>)) {
-        todo!()
+        match self.left.incidence.weights {
+            Weights::Unit => self.with_values(|_| Weight::Unit, visit),
+            Weights::Of(w) => self.with_values(|k| Weight::Of(w[k]), visit),
+            Weights::SqrtOf(s) => self.with_values(|k| Weight::SqrtOf(s[k]), visit),
+        }
     }
 }
 
@@ -152,4 +278,9 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteGraph<'_, T, I> {
     fn for_each_column(self, visit: impl FnMut(Column<T>)) {
         todo!()
     }
+}
+
+/// A row `new` checked below `n`, which fits a `u32`.
+fn index<I: PrimInt>(row: I) -> usize {
+    row.to_usize().expect("a checked row")
 }

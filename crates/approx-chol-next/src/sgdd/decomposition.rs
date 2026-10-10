@@ -4,7 +4,7 @@ mod components;
 
 use super::{Component, Proof, ScalingPolicy, Sgdd, Unreduced};
 use crate::input::{BipartiteGram, BipartiteGraph, Csr, CsrError, FactorWidth2, IntoColumns};
-use crate::storage::{CrossBlock, Rows, UpperAdjacency};
+use crate::storage::{in_range, CrossBlock, Rows, UpperAdjacency};
 use crate::{Real, ReduceError};
 use components::Partition;
 
@@ -122,7 +122,144 @@ fn assemble_bipartite<T: Real>(
     v: impl IntoColumns<T>,
     n_left: usize,
 ) -> Result<Biadjacency<T>, ReduceError> {
-    todo!()
+    let n_right = v.n() - n_left;
+    let table = n_left.saturating_mul(n_right);
+    let c = if table <= DENSE_TABLE_MAX_CELLS {
+        dense_cross(v, n_left, n_right)
+    } else {
+        let counts = left_counts(v, n_left);
+        let columns: usize = counts.iter().sum();
+        // Past the cap, the table still wins whenever the buckets would take more memory.
+        match columns.saturating_mul(12) < table.saturating_mul(8) {
+            true => sparse_cross(v, n_left, n_right, &counts),
+            false => dense_cross(v, n_left, n_right),
+        }
+    }?;
+    Ok(Biadjacency::new(c))
+}
+
+/// within's cap on the dense accumulator, about 40 MB.
+const DENSE_TABLE_MAX_CELLS: usize = 5_000_000;
+
+fn dense_cross<T: Real>(
+    v: impl IntoColumns<T>,
+    n_left: usize,
+    n_right: usize,
+) -> Result<Rows<T>, ReduceError> {
+    let mut table = vec![0.0_f64; n_left * n_right];
+    v.for_each_column(
+        #[inline(always)]
+        |column| table[column.a as usize * n_right + column.b as usize - n_left] += column.cell(),
+    );
+    let mut rows = CellRows::with_capacity(n_left);
+    for i in 0..n_left {
+        let row = &table[i * n_right..][..n_right];
+        for (j, &x) in row.iter().enumerate() {
+            rows.push(j, x)?;
+        }
+        rows.end_row();
+    }
+    Ok(rows.finish(n_right))
+}
+
+fn left_counts<T: Real>(v: impl IntoColumns<T>, n_left: usize) -> Vec<usize> {
+    let mut counts = vec![0; n_left];
+    v.for_each_column(
+        #[inline(always)]
+        |column| counts[column.a as usize] += 1,
+    );
+    counts
+}
+
+/// Columns bucketed by left row in column order, so each cell sums the same addends in the same order as the table.
+fn sparse_cross<T: Real>(
+    v: impl IntoColumns<T>,
+    n_left: usize,
+    n_right: usize,
+    counts: &[usize],
+) -> Result<Rows<T>, ReduceError> {
+    let starts: Vec<usize> = std::iter::once(0)
+        .chain(counts.iter().scan(0, |end, &count| {
+            *end += count;
+            Some(*end)
+        }))
+        .collect();
+    let mut rights = vec![0_u32; starts[n_left]];
+    let mut cells = vec![0.0_f64; starts[n_left]];
+    let mut cursor = starts[..n_left].to_vec();
+    v.for_each_column(
+        #[inline(always)]
+        |column| {
+            let slot = &mut cursor[column.a as usize];
+            rights[*slot] = column.b - n_left as u32;
+            cells[*slot] = column.cell();
+            *slot += 1;
+        },
+    );
+    let mut sums = vec![0.0_f64; n_right];
+    let mut touched: Vec<u32> = Vec::new();
+    let mut rows = CellRows::with_capacity(n_left);
+    for span in starts.windows(2) {
+        for (&j, &x) in rights[span[0]..span[1]]
+            .iter()
+            .zip(&cells[span[0]..span[1]])
+        {
+            // A cell cancelling to zero mid-row is pushed again; the dedup absorbs it.
+            if sums[j as usize] == 0.0 {
+                touched.push(j);
+            }
+            sums[j as usize] += x;
+        }
+        touched.sort_unstable();
+        touched.dedup();
+        for &j in &touched {
+            rows.push(j as usize, std::mem::take(&mut sums[j as usize]))?;
+        }
+        touched.clear();
+        rows.end_row();
+    }
+    Ok(rows.finish(n_right))
+}
+
+/// Rows built in order from `f64` sums: a zero is dropped, any other is cast once and must stay [`in_range`].
+struct CellRows<T> {
+    ptrs: Vec<usize>,
+    indices: Vec<u32>,
+    values: Vec<T>,
+}
+
+impl<T: Real> CellRows<T> {
+    fn with_capacity(n_rows: usize) -> Self {
+        let mut ptrs = Vec::with_capacity(n_rows + 1);
+        ptrs.push(0);
+        Self {
+            ptrs,
+            indices: Vec::new(),
+            values: Vec::new(),
+        }
+    }
+
+    /// A nonzero sum cast to zero underflowed, so it is out of range too; the error names the row.
+    fn push(&mut self, j: usize, x: f64) -> Result<(), ReduceError> {
+        if x == 0.0 {
+            return Ok(());
+        }
+        let vertex = (self.ptrs.len() - 1) as u32;
+        let value = T::from(x)
+            .filter(|&value| value != T::zero() && in_range(value))
+            .ok_or(ReduceError::OutOfRange { vertex })?;
+        self.indices.push(j as u32);
+        self.values.push(value);
+        Ok(())
+    }
+
+    fn end_row(&mut self) {
+        self.ptrs.push(self.indices.len());
+    }
+
+    fn finish(self, n_cols: usize) -> Rows<T> {
+        Rows::new(self.ptrs, self.indices, self.values, n_cols)
+    }
 }
 
 /// `A`'s strict upper triangle and diagonal, cells `bilinear(v_a, v_b)` summed by pair in column order, zero cells dropped; a value leaving `in_range` is `OutOfRange`.
@@ -145,7 +282,9 @@ struct Biadjacency<T> {
 impl<T: Real> Biadjacency<T> {
     /// Panics on a stored zero: a cancelled cell couples nothing.
     fn new(c: Rows<T>) -> Self {
-        todo!()
+        let no_zero = (0..c.n_rows()).all(|i| c.row(i).all(|(_, &x)| x != T::zero()));
+        assert!(no_zero, "no stored zero");
+        Self { c }
     }
 
     fn n(&self) -> usize {
