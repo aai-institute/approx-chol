@@ -106,7 +106,7 @@ impl<T: Real> Weight<T> {
         }
     }
 
-    fn is_zero(self) -> bool {
+    pub(crate) fn is_zero(self) -> bool {
         match self {
             Self::Unit => false,
             Self::Of(w) | Self::SqrtOf(w) => w == T::zero(),
