@@ -14,19 +14,20 @@ use graph::EliminationGraph;
 use ordering::MinDegreeOrder;
 use steps::Steps;
 
-pub(super) fn eliminate<T: Real>(
+/// AC or AC2 by `multiplicity`, each its own monomorphized elimination.
+pub(super) fn factor<T: Real>(
     sddm: Sddm<'_, T>,
     multiplicity: Multiplicity,
     stream: Stream,
 ) -> ApproximateCholesky<T> {
     match multiplicity {
-        Multiplicity::Single => run::<T, Single>(sddm, stream, ()),
-        Multiplicity::Split(k) => run::<T, Multi>(sddm, stream, k),
+        Multiplicity::Single => eliminate::<T, Single>(sddm, stream, ()),
+        Multiplicity::Split(k) => eliminate::<T, Multi>(sddm, stream, k),
     }
 }
 
-/// One step short of `n`, leaving the vertex the solve zeroes.
-fn run<T: Real, C: Copies>(
+/// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree (Algorithm 8); the last is the slot the solve zeroes.
+fn eliminate<T: Real, C: Copies>(
     sddm: Sddm<'_, T>,
     stream: Stream,
     split: C::Split,

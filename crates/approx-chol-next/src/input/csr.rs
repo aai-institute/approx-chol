@@ -60,7 +60,7 @@ pub enum CsrError {
         /// The count that overflows.
         count: usize,
     },
-    /// A column index is at least `n`, or a row's columns are not ascending.
+    /// A column index is at least `n`, or a row's columns do not strictly ascend: a repeated column is malformed, not summed.
     MalformedRow {
         /// The offending row.
         row: u32,
@@ -89,7 +89,9 @@ impl core::fmt::Display for CsrError {
                 write!(f, "CSR array has length {found}, expected {expected}")
             }
             Self::TooLarge { count } => write!(f, "{count} exceeds a u32 index"),
-            Self::MalformedRow { row } => write!(f, "row {row} is out of range or unsorted"),
+            Self::MalformedRow { row } => {
+                write!(f, "row {row} is out of range, unsorted or repeats a column")
+            }
             Self::NotSymmetric { row } => write!(f, "row {row} has an entry with no equal mirror"),
             Self::NotFinite { row } => write!(f, "row {row} has a non-finite entry"),
             Self::TooSmall { row } => write!(f, "row {row} has an entry too small to stay normal"),

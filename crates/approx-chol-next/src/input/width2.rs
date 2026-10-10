@@ -176,14 +176,29 @@ pub(crate) struct Columns<'a, T, I> {
     weights: Weights<'a, T>,
 }
 
-/// Column `k` of `V`: `v_l e_left + v_r e_right` under weight `w`; `SqrtOf` folds `s` into both loadings with `w = 1`, so no `s²` overflows.
+/// Column `k` of `V`: `v_l e_left + v_r e_right` under its weight, unfolded, so the floating forest reads loadings exactly as given.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Observation<T> {
     pub(crate) left: u32,
     pub(crate) right: u32,
     pub(crate) v_left: T,
     pub(crate) v_right: T,
-    pub(crate) weight: T,
+    pub(crate) weight: Weight<T>,
+}
+
+/// One column's entry of `W`, as the caller gave it; assembly folds `s` into both loadings, so no `s²` overflows.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Weight<T> {
+    Of(T),
+    SqrtOf(T),
+}
+
+impl<T: Real> Weight<T> {
+    pub(crate) fn is_zero(self) -> bool {
+        match self {
+            Self::Of(w) | Self::SqrtOf(w) => w == T::zero(),
+        }
+    }
 }
 
 impl<T: Real, I: PrimInt> Columns<'_, T, I> {

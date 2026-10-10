@@ -68,18 +68,17 @@ impl<'a, T: Real> SchurComplement<'a, T> {
     }
 }
 
-/// `S` built only once its arm is chosen, so routing never builds it twice.
+/// `S` built once its arm is chosen; only a declined dense arm builds it again.
 impl<'a, T: Real> CholeskyInput<'a, T> for &SchurComplement<'_, T> {
     fn dimension(&self) -> usize {
         Sheets::of(self.balance).count() * self.elimination.cross.n_kept()
     }
 
-    /// A dense Cholesky spends nothing on sparsity, so only the exact complement goes dense.
-    fn exact(&self) -> Sddm<'_, T> {
+    fn for_dense(&self) -> Sddm<'_, T> {
         self.build(CliqueRule::Exact)
     }
 
-    fn approximated(self) -> Sddm<'a, T> {
+    fn for_approximate(self) -> Sddm<'a, T> {
         self.build(self.rule)
     }
 }

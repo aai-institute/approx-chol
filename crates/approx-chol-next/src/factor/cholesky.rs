@@ -28,10 +28,11 @@ pub(super) trait CholeskyInput<'a, T: Real> {
     /// Known before either form is built, a cover's two sheets counted.
     fn dimension(&self) -> usize;
 
-    fn exact(&self) -> Sddm<'_, T>;
+    /// Always exact: a dense Cholesky spends nothing on sparsity.
+    fn for_dense(&self) -> Sddm<'_, T>;
 
     /// Consumed, so an owned matrix is freed before fill grows the graph.
-    fn approximated(self) -> Sddm<'a, T>;
+    fn for_approximate(self) -> Sddm<'a, T>;
 }
 
 impl<'a, T: Real> CholeskyInput<'a, T> for Sddm<'a, T> {
@@ -39,11 +40,11 @@ impl<'a, T: Real> CholeskyInput<'a, T> for Sddm<'a, T> {
         self.n()
     }
 
-    fn exact(&self) -> Sddm<'_, T> {
+    fn for_dense(&self) -> Sddm<'_, T> {
         self.view()
     }
 
-    fn approximated(self) -> Sddm<'a, T> {
+    fn for_approximate(self) -> Sddm<'a, T> {
         self
     }
 }
@@ -66,14 +67,14 @@ impl<T: Real> Cholesky<T> {
         let approximate = |sddm| Self::approximate(sddm, config.approximate, stream);
         let dimension = input.dimension();
         if !config.routes_dense(dimension) {
-            return Ok((approximate(input.approximated()), None));
+            return Ok((approximate(input.for_approximate()), None));
         }
         let Some(room) = Room::reserve(dimension) else {
             let declined = Fallback::WillNotFit { dimension };
-            return Ok((approximate(input.approximated()), Some(declined)));
+            return Ok((approximate(input.for_approximate()), Some(declined)));
         };
         let dense = {
-            let exact = input.exact();
+            let exact = input.for_dense();
             let factor = room.factor(&exact, vertices);
             factor.map(|dense| Self::of(&exact)(Triangular::Dense(dense)))
         };
@@ -82,14 +83,14 @@ impl<T: Real> Cholesky<T> {
             Err(pivot) if config.on_dense_failure == OnDenseFailure::Error => Err(pivot),
             Err(pivot) => {
                 let declined = Fallback::UnusablePivot(pivot);
-                Ok((approximate(input.approximated()), Some(declined)))
+                Ok((approximate(input.for_approximate()), Some(declined)))
             }
         }
     }
 
     fn approximate(sddm: Sddm<'_, T>, multiplicity: Multiplicity, stream: Stream) -> Self {
         let of = Self::of(&sddm);
-        of(Triangular::Approximate(approximate::eliminate(
+        of(Triangular::Approximate(approximate::factor(
             sddm,
             multiplicity,
             stream,

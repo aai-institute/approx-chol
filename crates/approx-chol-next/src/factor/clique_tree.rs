@@ -22,13 +22,8 @@ pub(super) struct CliqueSampler<T, C: Copies> {
 }
 
 impl<T: Real, C: Copies> CliqueSampler<T, C> {
-    /// `split` caps every merge, so one sampler cannot mix two.
+    /// `split` caps every merge, so one sampler cannot mix two; `stream` feeds [`eliminate`](Self::eliminate) across pivots.
     pub(super) fn new(stream: Stream, split: C::Split) -> Self {
-        todo!()
-    }
-
-    /// Draws from `stream` next, so a star's tree does not depend on which task sampled it.
-    pub(super) fn restart(&mut self, stream: Stream) {
         todo!()
     }
 
@@ -41,10 +36,11 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
         todo!()
     }
 
-    /// A neighborhood with no duplicate, as a row of `C` is: sorted by weight once, nothing merged.
+    /// A neighborhood with no duplicate, as a row of `C` is, under its own `stream` so no task boundary moves a draw; every neighbor splits alike, so raw weights sort once.
     pub(super) fn eliminate_unique(
         &mut self,
-        neighbors: impl Iterator<Item = (u32, C, T)>,
+        stream: Stream,
+        neighbors: impl Iterator<Item = (u32, T)>,
         fill: &mut Fill<T>,
     ) -> T {
         todo!()

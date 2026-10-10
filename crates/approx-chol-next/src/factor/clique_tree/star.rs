@@ -31,8 +31,8 @@ impl<T: Real, C: Copies> Star<T, C> {
         todo!()
     }
 
-    /// Takes neighbors already unique, so only the sort by per-copy weight remains.
-    pub(super) fn refill_unique(&mut self, neighbors: impl Iterator<Item = (u32, C, T)>) {
+    /// Neighbors already unique under one `copies`, which keeps per-copy order the raw order: one sort, no scratch.
+    pub(super) fn refill_unique(&mut self, neighbors: impl Iterator<Item = (u32, T)>, copies: C) {
         todo!()
     }
 
