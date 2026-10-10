@@ -52,13 +52,13 @@ impl core::fmt::Display for ViewError {
 
 impl std::error::Error for ViewError {}
 
-/// `A = Σ_k w_k x_k x_kᵀ`, each `x_k` a column of `V` with at most two nonzeros, read one column at a time.
-pub(crate) trait Columns<T: Real> {
-    /// Dimension of `A`.
+/// `A = Σ_k w_k x_k x_kᵀ`, each `x_k` a column of `V` with at most two nonzeros; a cheap `Copy` view, as `IntoIterator` is for `&[T]`.
+pub(crate) trait IntoColumns<T: Real>: Copy {
+    /// Dimension of `A`, not the column count.
     fn n(&self) -> usize;
 
     /// In column order, each column's ends in `A`'s numbering.
-    fn columns(&self) -> impl Iterator<Item = Column<T>> + '_;
+    fn columns(self) -> impl Iterator<Item = Column<T>>;
 }
 
 /// Column `k` of `V`: `v_a e_a + v_b e_b` under its weight, unfolded, so the certificate reads `V`'s values exactly as given.
@@ -122,12 +122,12 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
     }
 }
 
-impl<T: Real, I: PrimInt> Columns<T> for FactorWidth2<'_, T, I> {
+impl<T: Real, I: PrimInt> IntoColumns<T> for FactorWidth2<'_, T, I> {
     fn n(&self) -> usize {
         self.n
     }
 
-    fn columns(&self) -> impl Iterator<Item = Column<T>> + '_ {
+    fn columns(self) -> impl Iterator<Item = Column<T>> {
         (0..self.a.len()).map(|k| -> Column<T> { todo!() })
     }
 }

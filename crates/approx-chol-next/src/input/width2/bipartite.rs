@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use num_traits::PrimInt;
 
-use super::{Column, Columns, ViewError};
+use super::{Column, IntoColumns, ViewError};
 use crate::Real;
 
 /// The diagonal `W`, one nonnegative entry per column of `V`.
@@ -102,12 +102,12 @@ impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
     }
 }
 
-impl<T: Real, I: PrimInt> Columns<T> for BipartiteGram<'_, T, I> {
+impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteGram<'_, T, I> {
     fn n(&self) -> usize {
         todo!()
     }
 
-    fn columns(&self) -> impl Iterator<Item = Column<T>> + '_ {
+    fn columns(self) -> impl Iterator<Item = Column<T>> {
         std::iter::from_fn(|| -> Option<Column<T>> { todo!() })
     }
 }
@@ -139,12 +139,12 @@ impl<'a, T: Real, I: PrimInt> BipartiteGraph<'a, T, I> {
     }
 }
 
-impl<T: Real, I: PrimInt> Columns<T> for BipartiteGraph<'_, T, I> {
+impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteGraph<'_, T, I> {
     fn n(&self) -> usize {
         self.n_left + self.n_right
     }
 
-    fn columns(&self) -> impl Iterator<Item = Column<T>> + '_ {
+    fn columns(self) -> impl Iterator<Item = Column<T>> {
         (0..self.left.len()).map(|k| -> Column<T> { todo!() })
     }
 }
