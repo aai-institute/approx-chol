@@ -7,16 +7,16 @@ pub struct Config {
     pub complement: CliqueRule,
     /// How minimum-degree elimination of the remainder samples each star.
     pub remainder: Multiplicity,
-    /// Largest rank a remainder takes a dense Cholesky at; `0` never does.
+    /// Largest remainder dimension, a cover's two sheets counted, that takes a dense Cholesky; `0` never does.
     pub dense_up_to: usize,
     /// What a dense Cholesky's unusable pivot does.
     pub on_dense_failure: OnDenseFailure,
 }
 
 impl Config {
-    /// The one routing rule: a remainder of this rank goes dense.
-    pub(super) fn routes_dense(&self, rank: usize) -> bool {
-        (1..=self.dense_up_to).contains(&rank)
+    /// The one routing rule: a remainder of this dimension goes dense.
+    pub(super) fn routes_dense(&self, dimension: usize) -> bool {
+        dimension <= self.dense_up_to
     }
 }
 
@@ -47,14 +47,14 @@ pub enum Multiplicity {
     /// AC: one copy.
     Single,
     /// AC2: `k` copies, merged back under a cap.
-    Split(SplitFactor),
+    Split(SplitCount),
 }
 
 /// AC2's copy count; only `k ≥ 2` exists, so no split is a no-op.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SplitFactor(u32);
+pub struct SplitCount(u32);
 
-impl SplitFactor {
+impl SplitCount {
     /// `None` below two.
     pub fn new(k: u32) -> Option<Self> {
         (k >= 2).then_some(Self(k))

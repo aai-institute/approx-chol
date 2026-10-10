@@ -14,7 +14,7 @@ mod storage;
 
 use num_traits::Float;
 
-pub use factor::{CliqueRule, Config, InnerParallelism, Multiplicity, OnDenseFailure, SplitFactor};
+pub use factor::{CliqueRule, Config, InnerParallelism, Multiplicity, OnDenseFailure, SplitCount};
 pub use factor::{Factor, FactorError, PartFactor, SolveError};
 pub use factor::{Fallback, PivotDefect, UnusablePivot};
 pub use sgdd::{FromCsrError, Part, ReduceError, ScalingPolicy, ScalingReport, Sgdd};

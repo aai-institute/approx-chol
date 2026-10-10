@@ -275,15 +275,15 @@ impl<T: Real> Sgdd<T> {
         mut decomposition: Decomposition<'_, T, I>,
         policy: &ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        let (mut parts, mut dead) = (Vec::new(), Vec::new());
+        let (mut reduced, mut dead) = (Vec::new(), Vec::new());
         for a in decomposition.components() {
             if a.is_dead() {
                 dead.push(a.vertices[0]);
                 continue;
             }
-            parts.push(a.reduce(policy)?);
+            reduced.push(a.reduce(policy)?);
         }
-        decomposition.float(&mut parts);
+        let parts = decomposition.float(reduced, policy);
         Ok(Self {
             n: decomposition.n(),
             parts,
@@ -311,16 +311,6 @@ struct Component<T> {
     abs_row_sums: Vec<T>,
     /// No positive off-diagonal: already a Z-matrix, so no signature is searched.
     nonpositive: bool,
-    singularity: Singularity,
-}
-
-/// What proves `A_c` singular.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Singularity {
-    /// Unscaled, each row's surplus within its own rounding; scaled, `1ᵀM1 ≤ 10u·tr M` before the clamp, as surpluses are `O(δ)` but sum to `O(δ²)`.
-    Rows,
-    /// The input, once every part is built.
-    Input,
 }
 
 impl<T: Real> Component<T> {
@@ -329,21 +319,23 @@ impl<T: Real> Component<T> {
         self.diagonal == [T::zero()]
     }
 
-    fn reduce(self, policy: &ScalingPolicy) -> Result<Part<T>, ReduceError> {
+    /// With whether its own rows prove it singular; only a CSR's decomposition trusts that verdict.
+    fn reduce(self, policy: &ScalingPolicy) -> Result<(Part<T>, bool), ReduceError> {
         let scaling = scaling::dominance_scaling(&self, policy)?;
         let signs = match self.nonpositive {
             true => Some(Congruence::identity()),
             false => signature::signature(&self.off_diagonal),
         };
-        self.into_part(scaling, signs)
+        self.into_part(scaling, signs, policy)
     }
 
-    /// `F = S R` folds and scales `A_c`, or only scales a frustrated one; deficits clamp to zero surplus after the floating test.
+    /// Rows prove `M` singular when `Σ s_i ≤ Σ (t_i u + τ²) r_i`, signed and before the clamp: `t_i` terms of scale `r_i` round each `s_i`, and a certified `τ` leaves `O(τ²)`.
     fn into_part(
         self,
         scaling: scaling::Scaling<T>,
         signs: Option<Congruence<T>>,
-    ) -> Result<Part<T>, ReduceError> {
+        policy: &ScalingPolicy,
+    ) -> Result<(Part<T>, bool), ReduceError> {
         todo!()
     }
 }

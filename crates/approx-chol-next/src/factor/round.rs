@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use super::clique_tree::{Copies, Fill, Streams};
 use super::config::{CliqueRule, InnerParallelism};
-use super::sddm::{self, Sddm, Sheets};
+use super::sddm::{Sddm, Sheets};
 use crate::sgdd::Balance;
 use crate::storage::{CrossBlock, UpperAdjacency};
 use crate::Real;
@@ -49,10 +49,9 @@ impl<'a, T: Real> RoundBuilder<'a, T> {
         self.round.n_eliminated()
     }
 
-    /// Known before the complement is built: its surplus `s_k + |C|ᵀ D_e⁻¹ s_e` grounds iff the part's does.
-    pub(super) fn complement_rank(&self) -> usize {
-        let rows = Sheets::of(self.balance).count() * self.round.cross.n_kept();
-        sddm::rank(rows, self.balance.grounding().is_grounded())
+    /// Known before the complement is built, so routing never builds one twice.
+    pub(super) fn complement_dimension(&self) -> usize {
+        Sheets::of(self.balance).count() * self.round.cross.n_kept()
     }
 
     /// The kept block's Schur complement on the part's sheets: exact by kept row, sampled by star in parallel.
@@ -65,7 +64,7 @@ impl<'a, T: Real> RoundBuilder<'a, T> {
     }
 }
 
-/// Each eliminated star's clique tree under its own stream, the ground a final neighbor; one chunk per task.
+/// Each eliminated star's clique tree under its own stream, the ground a final neighbor; chunks in star order, so merged duplicates sum alike at any thread count.
 fn sampled_fill<T: Real, C: Copies>(
     builder: &RoundBuilder<'_, T>,
     split: C::Split,

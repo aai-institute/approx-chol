@@ -9,14 +9,14 @@ pub(super) struct DynamicOrdering {
     min_list: usize,
     bucket_base: usize,
     /// Net degree change per touched vertex: one queue move each, not one per fill endpoint.
-    deltas: Vec<(u32, i32)>,
+    deltas: Vec<(u32, i64)>,
 }
 
 /// 12 bytes: `Option<u32>` keys measured +2-3% on grids.
 struct QueueElem {
     prev: u32,
     next: u32,
-    /// `u32::MAX` once removed.
+    /// `u32::MAX` once removed; a live key saturates below it, as only the order matters.
     key: u32,
 }
 

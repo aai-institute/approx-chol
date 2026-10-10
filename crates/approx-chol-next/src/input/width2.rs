@@ -133,7 +133,7 @@ impl<T, I> Clone for Side<'_, '_, T, I> {
 
 impl<T, I> Copy for Side<'_, '_, T, I> {}
 
-/// `A = V W Vᵀ` over two borrowed sides, so one family serves every pair it is in.
+/// `A = V W Vᵀ` over two borrowed sides, so one family serves every pair it is in; `A` numbers left rows first, then `n_left +` right ones.
 #[derive(Debug)]
 pub struct Gram<'s, 'a, T, I = u32> {
     left: Side<'s, 'a, T, I>,

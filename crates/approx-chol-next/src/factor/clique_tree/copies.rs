@@ -1,4 +1,4 @@
-use crate::factor::config::SplitFactor;
+use crate::factor::config::SplitCount;
 use crate::Real;
 
 /// An edge's virtual copies; AC is AC2 at one copy per edge, so this trait is the whole difference.
@@ -24,7 +24,7 @@ pub(in crate::factor) trait Copies: Copy + Send + Sync {
 #[derive(Clone, Copy)]
 pub(in crate::factor) struct Single;
 
-/// Virtual copy count, only ever lowered from a [`SplitFactor`] by the merge cap.
+/// Virtual copy count, only ever lowered from a [`SplitCount`] by the merge cap.
 #[derive(Clone, Copy)]
 pub(in crate::factor) struct Multi(u32);
 
@@ -54,14 +54,14 @@ impl Copies for Single {
 }
 
 impl Copies for Multi {
-    type Split = SplitFactor;
+    type Split = SplitCount;
     const SINGLE_COPY: bool = false;
 
     fn one() -> Self {
         Self(1)
     }
 
-    fn initial(split: SplitFactor) -> Self {
+    fn initial(split: SplitCount) -> Self {
         Self(split.get())
     }
 
@@ -73,7 +73,7 @@ impl Copies for Multi {
         todo!()
     }
 
-    fn cap(copies: u32, split: SplitFactor) -> (Self, u32) {
+    fn cap(copies: u32, split: SplitCount) -> (Self, u32) {
         todo!()
     }
 }

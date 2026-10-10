@@ -2,7 +2,7 @@ use num_traits::PrimInt;
 
 mod components;
 
-use super::{Component, Part};
+use super::{Component, Part, ScalingPolicy};
 use crate::input::{Columns, Csr, CsrError, Gram, Graph};
 use crate::storage::{CrossBlock, Rows};
 use crate::{Real, ReduceError};
@@ -18,14 +18,14 @@ pub(super) struct Decomposition<'v, T, I> {
 enum Input<'v, T, I> {
     /// A signless Laplacian: zero surplus by shape, and a negative weight fails as not GDD.
     Signless(Option<Biadjacency<T>>),
-    /// A Gram, its diagonal given; floats when `fᵀGf ≤ 10u·fᵀDf` per part, a straddling column adding `w(v f)²` to each side.
+    /// Floats when `fᵀA_c f ≤ (10u + τ²)·fᵀDf`, `f = F·1` per part, each normalized by its largest `f_i² d_i`; a straddling column adds `w(v_l f_l)²` to its left part and `w(v_r f_r)²` to its right.
     Gram {
         c: Option<Biadjacency<T>>,
         columns: Columns<'v, T, I>,
         left: &'v [T],
         right: &'v [T],
     },
-    /// Each component's rows decide its floating.
+    /// Each part's own rows decide its floating.
     Csr(Csr<'v, T, I>),
 }
 
@@ -70,13 +70,21 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         (self.partition.components()).map(|vertices| -> Component<T> { todo!() })
     }
 
-    /// What the parts' rows could not decide: a signless shape, or a Gram's columns in one pass.
-    pub(super) fn float(&self, parts: &mut [Part<T>]) {
+    /// The one floating rule per input: a signless shape, a Gram's columns in one pass, or a CSR part's own rows.
+    pub(super) fn float(
+        &self,
+        reduced: Vec<(Part<T>, bool)>,
+        policy: &ScalingPolicy,
+    ) -> Vec<Part<T>> {
+        let (mut parts, rows_singular): (Vec<_>, Vec<bool>) = reduced.into_iter().unzip();
         match &self.input {
             Input::Signless(_) => (parts.iter_mut()).for_each(|part| part.m.float()),
             Input::Gram { .. } => todo!(),
-            Input::Csr(_) => {}
+            Input::Csr(_) => (parts.iter_mut().zip(rows_singular))
+                .filter(|(_, singular)| *singular)
+                .for_each(|(part, _)| part.m.float()),
         }
+        parts
     }
 }
 

@@ -51,10 +51,6 @@ impl<'a, T: Real> Sddm<'a, T> {
         self.sheets
     }
 
-    pub(super) fn rank(&self) -> usize {
-        rank(self.n(), self.grounded())
-    }
-
     /// The vertex a row covers; sheets are stacked, so a cover's second sheet repeats the first.
     pub(super) fn base_vertex(&self, row: usize) -> usize {
         row % (self.n() / self.sheets.count())
@@ -69,15 +65,6 @@ impl<'a, T: Real> Sddm<'a, T> {
 /// Counting-sorts chunks unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.
 pub(super) fn from_fill<T: Real>(n: usize, chunks: Vec<Fill<T>>) -> (UpperAdjacency<T>, Vec<T>) {
     todo!()
-}
-
-/// Pivots a Cholesky over `rows` takes: without a ground one row stays free.
-pub(super) fn rank(rows: usize, grounded: bool) -> usize {
-    if grounded {
-        rows
-    } else {
-        rows - 1
-    }
 }
 
 /// How many copies of each vertex a matrix holds: two for a Gremban cover, stacked by sheet.

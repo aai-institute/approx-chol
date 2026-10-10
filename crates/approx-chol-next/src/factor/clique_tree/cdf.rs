@@ -23,7 +23,7 @@ impl<T: Real> CdfSampler<T> {
         todo!()
     }
 
-    /// A neighbor from the suffix past `position`; a linear scan up to 32 entries (256 measured +4-5%).
+    /// A neighbor from the suffix past `position`, clamped to its last: an `f32` draw can round up to the total; a linear scan up to 32 entries (256 measured +4-5%).
     pub(super) fn draw_after(&mut self, position: usize) -> u32 {
         todo!()
     }

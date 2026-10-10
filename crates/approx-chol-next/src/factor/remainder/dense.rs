@@ -30,8 +30,8 @@ pub enum Fallback {
     UnusablePivot(UnusablePivot),
     /// The packed triangle does not fit in memory.
     WillNotFit {
-        /// Rank of the declined remainder.
-        rank: usize,
+        /// Dimension of the declined remainder, a cover's two sheets counted.
+        dimension: usize,
     },
 }
 

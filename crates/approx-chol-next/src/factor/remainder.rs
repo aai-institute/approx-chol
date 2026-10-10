@@ -35,7 +35,7 @@ impl<T: Real> SddmFactor<T> {
     }
 
     /// The facts it keeps of its matrix, taken before the matrix is consumed.
-    fn of(sddm: &Sddm<'_, T>) -> impl FnOnce(Cholesky<T>) -> Self {
+    fn of(sddm: &Sddm<'_, T>) -> impl FnOnce(Cholesky<T>) -> Self + use<T> {
         let (sheets, grounded) = (sddm.sheets(), sddm.grounded());
         move |cholesky| {
             let gauge = match grounded {

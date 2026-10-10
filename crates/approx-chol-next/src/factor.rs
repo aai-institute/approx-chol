@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
-pub use config::{CliqueRule, Config, InnerParallelism, Multiplicity, OnDenseFailure, SplitFactor};
+pub use config::{CliqueRule, Config, InnerParallelism, Multiplicity, OnDenseFailure, SplitCount};
 pub use remainder::{Fallback, PivotDefect, UnusablePivot};
 
 use crate::sgdd::{Balance, Frame, OffDiagonal, Part, Sgdd};
@@ -93,9 +93,11 @@ pub struct Factor<T = f64> {
 
 impl<T: Real> Factor<T> {
     pub(crate) fn build(sgdd: &Sgdd<T>, config: &Config) -> Result<Self, FactorError> {
-        let parts = (sgdd.parts().par_iter())
+        // Collected whole first: the first failing part in order wins, not the first a worker saw.
+        let built: Vec<_> = (sgdd.parts().par_iter())
             .map(|part| PartFactor::build(part, config))
-            .collect::<Result<_, _>>()?;
+            .collect();
+        let parts = built.into_iter().collect::<Result<_, _>>()?;
         Ok(Self {
             n: sgdd.n(),
             parts,
@@ -111,6 +113,11 @@ impl<T: Real> Factor<T> {
     /// Each part's factor, in [`Sgdd::parts`]' order, for a caller that solves them on its own.
     pub fn parts(&self) -> &[PartFactor<T>] {
         &self.parts
+    }
+
+    /// The parts, owned, for a caller that keeps one solver per part; dead vertices need none.
+    pub fn into_parts(self) -> Vec<PartFactor<T>> {
+        self.parts
     }
 
     /// Remainders routed dense and factored approximately instead.
@@ -130,12 +137,17 @@ impl<T: Real> Factor<T> {
     pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
         let mut x = b.to_vec();
         let mut scratch = vec![T::zero(); self.scratch_len()];
-        self.solve_in_place(&mut x, &mut scratch)?;
+        self.solve_in_place(&mut x, &mut scratch, InnerParallelism::Allow)?;
         Ok(x)
     }
 
-    /// `x` holds `b` on entry and the solution on return; scratch is overwritten, never read.
-    pub fn solve_in_place(&self, x: &mut [T], scratch: &mut [T]) -> Result<(), SolveError> {
+    /// `x` holds `b` on entry and the solution on return; parts solve in turn, each under `inner`.
+    pub fn solve_in_place(
+        &self,
+        x: &mut [T],
+        scratch: &mut [T],
+        inner: InnerParallelism,
+    ) -> Result<(), SolveError> {
         todo!()
     }
 }
@@ -168,7 +180,7 @@ impl<T: Real> PartFactor<T> {
                 };
                 let dense = |sddm: &_| SddmFactor::dense(sddm, vertices);
                 let sampled = |sddm| SddmFactor::sampled(sddm, config.remainder, streams);
-                (None, route(sddm.rank(), sddm, dense, sampled, config)?)
+                (None, route(sddm.n(), sddm, dense, sampled, config)?)
             }
             (OffDiagonal::Bipartite(cross), balance) => {
                 let builder = RoundBuilder::new(cross, balance);
@@ -181,8 +193,8 @@ impl<T: Real> PartFactor<T> {
                     let complement = builder.complement(config.complement, streams);
                     SddmFactor::sampled(complement, config.remainder, streams)
                 };
-                let rank = builder.complement_rank();
-                let routed = route(rank, &builder, dense, sampled, config)?;
+                let dimension = builder.complement_dimension();
+                let routed = route(dimension, &builder, dense, sampled, config)?;
                 (Some(builder.finish()), routed)
             }
         };
@@ -257,13 +269,13 @@ impl<T: Real> PartFactor<T> {
 
 /// Dense when the rule says so; a declined pivot falls to the approximate arm, never to a second dense one.
 fn route<T: Real, M>(
-    rank: usize,
+    dimension: usize,
     remainder: M,
     dense: impl FnOnce(&M) -> Result<SddmFactor<T>, Fallback>,
     sampled: impl FnOnce(M) -> SddmFactor<T>,
     config: &Config,
 ) -> Result<(SddmFactor<T>, Option<Fallback>), FactorError> {
-    if !config.routes_dense(rank) {
+    if !config.routes_dense(dimension) {
         return Ok((sampled(remainder), None));
     }
     match dense(&remainder) {
