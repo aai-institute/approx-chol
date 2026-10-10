@@ -117,7 +117,7 @@ fn ground_or_float<T: Real>(
     todo!()
 }
 
-/// `C`, accumulated in a dense table when it is small (+54% without it), unfiltered: a column that couples nothing adds an exact zero and zero cells drop; a cell leaving `in_range` is `OutOfRange`.
+/// `C`, accumulated in column order, in a dense table when it is small (+54% without it), unfiltered: a column that couples nothing adds an exact zero and zero cells drop; a cell leaving `in_range` is `OutOfRange`.
 fn assemble_bipartite<T: Real>(
     v: impl IntoColumns<T>,
     n_left: usize,
@@ -125,7 +125,7 @@ fn assemble_bipartite<T: Real>(
     todo!()
 }
 
-/// `A`'s strict upper triangle and diagonal, cells `bilinear(v_a, v_b)` summed by pair, zero cells dropped; a value leaving `in_range` is `OutOfRange`.
+/// `A`'s strict upper triangle and diagonal, cells `bilinear(v_a, v_b)` summed by pair in column order, zero cells dropped; a value leaving `in_range` is `OutOfRange`.
 fn assemble_general<T: Real>(v: impl IntoColumns<T>) -> Result<Assembled<T>, ReduceError> {
     todo!()
 }
