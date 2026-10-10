@@ -259,7 +259,7 @@ impl<T: Real> Sgdd<T> {
         csr: Csr<'_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, FromCsrError> {
-        Ok(Self::reduce(Decomposition::csr(csr)?, &policy)?)
+        Ok(Decomposition::csr(csr)?.reduce(&policy)?)
     }
 
     /// Scales, folds or covers each component of `V W Vᵀ`, deciding floating from `V`.
@@ -267,28 +267,7 @@ impl<T: Real> Sgdd<T> {
         gram: Gram<'_, '_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        Self::reduce(Decomposition::gram(gram)?, &policy)
-    }
-
-    /// Dead components produce no part; what a part's rows cannot prove floating, the input decides after.
-    fn reduce<I: PrimInt>(
-        mut decomposition: Decomposition<'_, T, I>,
-        policy: &ScalingPolicy,
-    ) -> Result<Self, ReduceError> {
-        let (mut reduced, mut dead) = (Vec::new(), Vec::new());
-        for a in decomposition.components() {
-            if a.is_dead() {
-                dead.push(a.vertices[0]);
-                continue;
-            }
-            reduced.push(a.reduce(policy)?);
-        }
-        let parts = decomposition.float(reduced, policy);
-        Ok(Self {
-            n: decomposition.n(),
-            parts,
-            dead: dead.into_boxed_slice(),
-        })
+        Decomposition::gram(gram)?.reduce(&policy)
     }
 }
 
@@ -297,7 +276,7 @@ impl<'a, T: Real, I: PrimInt> TryFrom<Graph<'a, T, I>> for Sgdd<T> {
 
     /// A signless Laplacian has zero surplus by shape: every part floats untested.
     fn try_from(graph: Graph<'a, T, I>) -> Result<Self, Self::Error> {
-        Self::reduce(Decomposition::signless(graph)?, &ScalingPolicy::default())
+        Decomposition::signless(graph)?.reduce(&ScalingPolicy::default())
     }
 }
 
@@ -307,10 +286,17 @@ struct Component<T> {
     vertices: Box<[u32]>,
     off_diagonal: OffDiagonal<T>,
     diagonal: Vec<T>,
-    /// `Σ_j |a_ij|`, summed while its rows are extracted, so dominance and surplus reread nothing.
+    /// `Σ_j |a_ij|`, summed while its rows are extracted, so dominance and surplus reread no value.
     abs_row_sums: Vec<T>,
     /// No positive off-diagonal: already a Z-matrix, so no signature is searched.
     nonpositive: bool,
+}
+
+/// Who proves a component singular: its own rows, or its input once every part is built.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Proof {
+    Rows,
+    Input,
 }
 
 impl<T: Real> Component<T> {
@@ -319,23 +305,27 @@ impl<T: Real> Component<T> {
         self.diagonal == [T::zero()]
     }
 
-    /// With whether its own rows prove it singular; only a CSR's decomposition trusts that verdict.
-    fn reduce(self, policy: &ScalingPolicy) -> Result<(Part<T>, bool), ReduceError> {
-        let scaling = scaling::dominance_scaling(&self, policy)?;
+    fn reduce(self, policy: &ScalingPolicy, proof: Proof) -> Result<Part<T>, ReduceError> {
+        let mut scaling = scaling::dominance_scaling(&self, policy)?;
+        let singular =
+            proof == Proof::Rows && scaling::rows_prove_singular(&self, &mut scaling, policy);
         let signs = match self.nonpositive {
             true => Some(Congruence::identity()),
             false => signature::signature(&self.off_diagonal),
         };
-        self.into_part(scaling, signs, policy)
+        let mut part = self.into_part(scaling, signs)?;
+        if singular {
+            part.m.float();
+        }
+        Ok(part)
     }
 
-    /// Rows prove `M` singular when `Σ s_i ≤ Σ (t_i u + τ²) r_i`, signed and before the clamp: `t_i` terms of scale `r_i` round each `s_i`, and a certified `τ` leaves `O(τ²)`.
+    /// `F = S R` folds and scales `A_c`, or only scales a frustrated one; deficits clamp to zero surplus.
     fn into_part(
         self,
         scaling: scaling::Scaling<T>,
         signs: Option<Congruence<T>>,
-        policy: &ScalingPolicy,
-    ) -> Result<(Part<T>, bool), ReduceError> {
+    ) -> Result<Part<T>, ReduceError> {
         todo!()
     }
 }

@@ -22,7 +22,7 @@ impl<T: Real> Round<T> {
         self.inv_pivot.len()
     }
 
-    /// `y_e = D_e⁻¹ b_e`, then `b_k −= Cᵀ y_e`.
+    /// `y_e = D_e⁻¹ b_e`, then `b_k −= Cᵀ y_e`, gathered by kept row through `Cᵀ` under either mode so both give the same bits.
     pub(super) fn forward(&self, x: &mut [T], inner: InnerParallelism) {
         todo!()
     }
@@ -73,12 +73,12 @@ fn sampled_fill<T: Real, C: Copies>(
     todo!()
 }
 
-/// Rows of the cover's complement: `|c_ke| (|c_je| / d_e)` to `j`'s same sheet when signs agree, else its other; none cancel.
+/// Rows of the cover's complement: `|c_ke||c_je|/d_e` to `j`'s same sheet when signs agree, else its other, as the smaller times the larger's share, which underflows only below the floor.
 fn exact_rows<T: Real>(builder: &RoundBuilder<'_, T>) -> UpperAdjacency<T> {
     todo!()
 }
 
-/// `s_k + |C|ᵀ D_e⁻¹ s_e` per sheet, exact because no product of the cover's complement cancels.
+/// `s_k + |C|ᵀ D_e⁻¹ s_e` per sheet, exact as no product cancels; each `|c_ek| s_e/d_e` multiplied as the complement's are.
 fn exact_surplus<T: Real>(builder: &RoundBuilder<'_, T>) -> Vec<T> {
     todo!()
 }

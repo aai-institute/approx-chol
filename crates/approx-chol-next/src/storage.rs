@@ -12,7 +12,8 @@ pub(crate) fn in_range<T: Real>(x: T) -> bool {
 /// Compressed sparse rows.
 #[derive(Clone, Debug)]
 pub(crate) struct Rows<T> {
-    ptrs: Vec<u32>,
+    /// Per row, so `usize` costs nothing per entry: an exact complement can pass `u32::MAX` entries.
+    ptrs: Vec<usize>,
     indices: Vec<u32>,
     values: Vec<T>,
     n_cols: usize,
@@ -20,7 +21,7 @@ pub(crate) struct Rows<T> {
 
 impl<T: Real> Rows<T> {
     /// Panics unless `ptrs` ascends from `0` to the entry count and every index is below `n_cols`.
-    pub(crate) fn new(ptrs: Vec<u32>, indices: Vec<u32>, values: Vec<T>, n_cols: usize) -> Self {
+    pub(crate) fn new(ptrs: Vec<usize>, indices: Vec<u32>, values: Vec<T>, n_cols: usize) -> Self {
         todo!()
     }
 
@@ -33,7 +34,7 @@ impl<T: Real> Rows<T> {
     }
 
     pub(crate) fn row(&self, i: usize) -> impl Iterator<Item = (usize, &T)> {
-        let span = self.ptrs[i] as usize..self.ptrs[i + 1] as usize;
+        let span = self.ptrs[i]..self.ptrs[i + 1];
         (self.indices[span.clone()].iter().map(|&j| j as usize)).zip(&self.values[span])
     }
 

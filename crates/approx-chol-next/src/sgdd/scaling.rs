@@ -10,9 +10,9 @@ pub struct ScalingPolicy {
 }
 
 impl ScalingPolicy {
-    /// `None` unless `tolerance` is finite and non-negative.
+    /// `None` unless `0 ≤ tolerance < 1`: a relative violation of one admits any matrix.
     pub fn new(tolerance: f64, max_iterations: usize) -> Option<Self> {
-        (tolerance.is_finite() && tolerance >= 0.0).then_some(Self {
+        (0.0..1.0).contains(&tolerance).then_some(Self {
             tolerance,
             max_iterations,
         })
@@ -64,6 +64,11 @@ pub(super) fn dominance_scaling<T: Real>(
             vertex: a.vertices[i],
         });
     }
+    if let Some(i) = a.abs_row_sums.iter().position(|s| !s.is_finite()) {
+        return Err(ReduceError::OutOfRange {
+            vertex: a.vertices[i],
+        });
+    }
     if a.diagonal.iter().any(|&d| d <= T::zero()) {
         return Err(ReduceError::NotGdd {
             vertex: a.vertices[0],
@@ -85,6 +90,15 @@ impl ScalingPolicy {
     fn certify<T: Real>(&self, relaxation: Relaxation<T>) -> Scaling<T> {
         todo!()
     }
+}
+
+/// Within rounding `t_i ε (m_ii + Σ_j|m_ij|)` over a row's `t_i` terms: per row unscaled, as the reference's `RowBalance`; summed once a near-singular scaling is polished to rounding.
+pub(super) fn rows_prove_singular<T: Real>(
+    a: &Component<T>,
+    scaling: &mut Scaling<T>,
+    policy: &ScalingPolicy,
+) -> bool {
+    todo!()
 }
 
 /// `Σ_j |a_ij| ≤ a_ii (1 + max(tolerance, 2 deg_i ε))`: a rounded Laplacian stays bit for bit, even in `f32`.

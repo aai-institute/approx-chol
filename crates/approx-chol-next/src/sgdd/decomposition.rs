@@ -2,7 +2,7 @@ use num_traits::PrimInt;
 
 mod components;
 
-use super::{Component, Part, ScalingPolicy};
+use super::{Component, Proof, ScalingPolicy, Sgdd};
 use crate::input::{Columns, Csr, CsrError, Gram, Graph};
 use crate::storage::{CrossBlock, Rows};
 use crate::{Real, ReduceError};
@@ -18,7 +18,7 @@ pub(super) struct Decomposition<'v, T, I> {
 enum Input<'v, T, I> {
     /// A signless Laplacian: zero surplus by shape, and a negative weight fails as not GDD.
     Signless(Option<Biadjacency<T>>),
-    /// Floats when `fᵀA_c f ≤ (10u + τ²)·fᵀDf`, `f = F·1` per part, each normalized by its largest `f_i² d_i`; a straddling column adds `w(v_l f_l)²` to its left part and `w(v_r f_r)²` to its right.
+    /// Floats when the alias `u` grown along a spanning forest of `V`'s columns, `|v_l| u_l = |v_r| u_r`, has `uᵀA_c u ≤ 1e-13·uᵀDu`, summed per column in order; a straddling column adds each side's own term.
     Gram {
         c: Option<Biadjacency<T>>,
         columns: Columns<'v, T, I>,
@@ -61,30 +61,35 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         })
     }
 
-    pub(super) fn n(&self) -> usize {
-        self.partition.n()
-    }
-
-    /// A lone vertex is general, so a bipartite component always has both sides.
-    pub(super) fn components(&mut self) -> impl Iterator<Item = Component<T>> + '_ {
-        (self.partition.components()).map(|vertices| -> Component<T> { todo!() })
-    }
-
-    /// The one floating rule per input: a signless shape, a Gram's columns in one pass, or a CSR part's own rows.
-    pub(super) fn float(
-        &self,
-        reduced: Vec<(Part<T>, bool)>,
-        policy: &ScalingPolicy,
-    ) -> Vec<Part<T>> {
-        let (mut parts, rows_singular): (Vec<_>, Vec<bool>) = reduced.into_iter().unzip();
+    /// Dead components produce no part; a CSR's parts float on their own rows, a view's once every part is built.
+    pub(super) fn reduce(mut self, policy: &ScalingPolicy) -> Result<Sgdd<T>, ReduceError> {
+        let proof = match self.input {
+            Input::Csr(_) => Proof::Rows,
+            Input::Signless(_) | Input::Gram { .. } => Proof::Input,
+        };
+        let (mut parts, mut dead) = (Vec::new(), Vec::new());
+        for a in self.components() {
+            if a.is_dead() {
+                dead.push(a.vertices[0]);
+                continue;
+            }
+            parts.push(a.reduce(policy, proof)?);
+        }
         match &self.input {
             Input::Signless(_) => (parts.iter_mut()).for_each(|part| part.m.float()),
             Input::Gram { .. } => todo!(),
-            Input::Csr(_) => (parts.iter_mut().zip(rows_singular))
-                .filter(|(_, singular)| *singular)
-                .for_each(|(part, _)| part.m.float()),
+            Input::Csr(_) => {}
         }
-        parts
+        Ok(Sgdd {
+            n: self.partition.n(),
+            parts,
+            dead: dead.into_boxed_slice(),
+        })
+    }
+
+    /// A lone vertex is general, so a bipartite component always has both sides.
+    fn components(&mut self) -> impl Iterator<Item = Component<T>> + '_ {
+        (self.partition.components()).map(|vertices| -> Component<T> { todo!() })
     }
 }
 
