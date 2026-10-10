@@ -3,7 +3,7 @@ mod dense;
 
 pub use dense::{PivotDefect, UnusablePivot};
 
-use super::clique_tree::Stream;
+use super::clique_tree::RunDraws;
 use super::config::{Config, Multiplicity, OnDenseFailure};
 use super::sddm::{Sddm, Sheets};
 use crate::Real;
@@ -61,10 +61,10 @@ impl<T: Real> Cholesky<T> {
     pub(super) fn factor<'a>(
         input: impl CholeskyInput<'a, T>,
         vertices: &[u32],
-        stream: Stream,
+        draws: RunDraws,
         config: &Config,
     ) -> Result<(Self, Option<Fallback>), UnusablePivot> {
-        let approximate = |sddm| Self::approximate(sddm, config.approximate, stream);
+        let approximate = |sddm| Self::approximate(sddm, config.approximate, draws);
         let dimension = input.dimension();
         if !config.routes_dense(dimension) {
             return Ok((approximate(input.for_approximate()), None));
@@ -88,12 +88,12 @@ impl<T: Real> Cholesky<T> {
         }
     }
 
-    fn approximate(sddm: Sddm<'_, T>, multiplicity: Multiplicity, stream: Stream) -> Self {
+    fn approximate(sddm: Sddm<'_, T>, multiplicity: Multiplicity, draws: RunDraws) -> Self {
         let of = Self::of(&sddm);
         of(Triangular::Approximate(approximate::factor(
             sddm,
             multiplicity,
-            stream,
+            draws,
         )))
     }
 

@@ -182,7 +182,8 @@ impl<T: Real> ComponentFactor<T> {
                 (None, factored.map_err(FactorError::UnusablePivot)?)
             }
             (OffDiagonal::Bipartite(cross), balance) => {
-                let schur = SchurComplement::new(cross, balance, config.complement, streams);
+                let schur =
+                    SchurComplement::new(cross, balance, config.complement, streams.stars());
                 let kept = &vertices[schur.n_eliminated()..];
                 let factored = Cholesky::factor(&schur, kept, streams.cholesky(), config);
                 let factored = factored.map_err(FactorError::UnusablePivot)?;

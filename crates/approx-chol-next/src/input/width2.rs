@@ -1,4 +1,4 @@
-//! Factor-width-2 views `A = V W Vᵀ`, at most two nonzeros per column of `V`, on two disjoint sides.
+//! Factor-width-2 views `A = V W Vᵀ`, at most two nonzeros per column of `V`: general, or on two disjoint sides.
 
 use std::sync::OnceLock;
 
@@ -27,6 +27,11 @@ pub enum ViewError {
         /// The offending column of `V`.
         column: usize,
     },
+    /// A column names one vertex at both ends.
+    RepeatedVertex {
+        /// The offending column of `V`.
+        column: usize,
+    },
     /// A Gram's two sides read different `W` slices.
     WeightsDiffer,
 }
@@ -39,6 +44,7 @@ impl core::fmt::Display for ViewError {
             }
             Self::TooLarge { count } => write!(f, "{count} vertices exceed a u32 index"),
             Self::IndexOutOfRange { column } => write!(f, "column {column} names a missing row"),
+            Self::RepeatedVertex { column } => write!(f, "column {column} names one vertex twice"),
             Self::WeightsDiffer => write!(f, "a Gram's sides read different weights"),
         }
     }
@@ -68,13 +74,30 @@ impl<T> Weights<'_, T> {
     }
 }
 
-/// Weighted bipartite multigraph; its matrix is the signless Laplacian `B W Bᵀ`, left rows first.
+/// `V` with at most two nonzeros per column, by construction: `values[0][k]` at vertex `a[k]` and `values[1][k]` at `b[k] ≠ a[k]`; fold any weights into `V`.
 #[derive(Clone, Copy, Debug)]
-pub struct Graph<'a, T, I = u32> {
+pub struct FactorWidth2<'a, T, I = u32> {
     columns: Columns<'a, T, I>,
 }
 
-impl<'a, T: Real, I: PrimInt> Graph<'a, T, I> {
+impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
+    /// `n` vertices; lengths, `a[k], b[k] < n` and `a[k] ≠ b[k]` are checked, so a zero value is how a column holds one nonzero.
+    pub fn new(n: usize, a: &'a [I], b: &'a [I], values: [&'a [T]; 2]) -> Result<Self, ViewError> {
+        todo!()
+    }
+
+    pub(crate) fn columns(&self) -> Columns<'a, T, I> {
+        self.columns
+    }
+}
+
+/// Weighted bipartite multigraph; its matrix is the signless Laplacian `|B| W |B|ᵀ`, left rows first, singular by shape.
+#[derive(Clone, Copy, Debug)]
+pub struct BipartiteGraph<'a, T, I = u32> {
+    columns: Columns<'a, T, I>,
+}
+
+impl<'a, T: Real, I: PrimInt> BipartiteGraph<'a, T, I> {
     /// Column `k` joins `left[k] < n_left` and `right[k] < n_right` under `weights`; indices are checked.
     pub fn new(
         n_left: usize,
@@ -113,49 +136,49 @@ impl<'a, T: Real, I: PrimInt> Incidence<'a, T, I> {
     }
 
     /// Side `c`, borrowing this incidence; panics unless it has one.
-    pub fn side(&self, c: usize) -> Side<'_, 'a, T, I> {
+    pub fn side(&self, c: usize) -> Side<'_, T, I> {
         todo!()
     }
 }
 
-/// One side `V_c` of a Gram, borrowed from its incidence: one nonzero per column.
+/// One side `V_c` of a bipartite Gram, borrowed from its incidence: one nonzero per column.
 #[derive(Debug)]
-pub struct Side<'s, 'a, T, I = u32> {
-    incidence: &'s Incidence<'a, T, I>,
+pub struct Side<'a, T, I = u32> {
+    incidence: &'a Incidence<'a, T, I>,
     index: usize,
 }
 
-impl<T, I> Clone for Side<'_, '_, T, I> {
+impl<T, I> Clone for Side<'_, T, I> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T, I> Copy for Side<'_, '_, T, I> {}
+impl<T, I> Copy for Side<'_, T, I> {}
 
-/// `A = V W Vᵀ`, `V = [V_l; V_r]` stacked from two borrowed sides, so one incidence serves every pair it is in; `A` numbers left rows first, then `n_left +` right ones.
+/// `A = V W Vᵀ`, `V = [V_l; V_r]` on disjoint sides; `W` stays apart because every pair of an incidence's sides shares it, and `A` numbers left rows first, then `n_left +` right ones.
 #[derive(Debug)]
-pub struct Gram<'s, 'a, T, I = u32> {
-    left: Side<'s, 'a, T, I>,
-    right: Side<'s, 'a, T, I>,
+pub struct BipartiteGram<'a, T, I = u32> {
+    left: Side<'a, T, I>,
+    right: Side<'a, T, I>,
 }
 
-impl<T, I> Clone for Gram<'_, '_, T, I> {
+impl<T, I> Clone for BipartiteGram<'_, T, I> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T, I> Copy for Gram<'_, '_, T, I> {}
+impl<T, I> Copy for BipartiteGram<'_, T, I> {}
 
-impl<'s, 'a, T: Real, I: PrimInt> Gram<'s, 'a, T, I> {
+impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
     /// Both sides must have the same column count and read the same `W`, and `n_left + n_right` fit a `u32` index.
-    pub fn new(left: Side<'s, 'a, T, I>, right: Side<'s, 'a, T, I>) -> Result<Self, ViewError> {
+    pub fn new(left: Side<'a, T, I>, right: Side<'a, T, I>) -> Result<Self, ViewError> {
         todo!()
     }
 
     /// `A`'s diagonal, left rows then right ones; the first Gram of an incidence sums each side's.
-    pub(crate) fn diagonals(&self) -> (&'s [T], &'s [T]) {
+    pub(crate) fn diagonals(&self) -> (&'a [T], &'a [T]) {
         todo!()
     }
 
@@ -164,29 +187,29 @@ impl<'s, 'a, T: Real, I: PrimInt> Gram<'s, 'a, T, I> {
     }
 }
 
-/// Every pass over `V`: its columns, each joining one left row to one right row.
+/// Every pass over a factor-width-2 `V`: each column's two ends in `A`'s numbering, a bipartite view's `b` already offset by `n_left`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Columns<'a, T, I> {
-    n_left: usize,
-    n_right: usize,
-    left: &'a [I],
-    right: &'a [I],
-    left_values: Option<&'a [T]>,
-    right_values: Option<&'a [T]>,
+    n: usize,
+    /// `Some(n_left)` when every column joins a left row to a right one.
+    n_left: Option<usize>,
+    a: &'a [I],
+    b: &'a [I],
+    values: [Option<&'a [T]>; 2],
     weights: Weights<'a, T>,
 }
 
-/// Column `k` of `V`: `v_l e_left + v_r e_right` under its weight, unfolded, so the floating forest reads `V`'s values exactly as given.
+/// Column `k` of `V`: `v_a e_a + v_b e_b` under its weight, unfolded, so the floating forest reads `V`'s values exactly as given.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Column<T> {
-    pub(crate) left: u32,
-    pub(crate) right: u32,
-    pub(crate) v_left: T,
-    pub(crate) v_right: T,
+    pub(crate) a: u32,
+    pub(crate) b: u32,
+    pub(crate) v_a: T,
+    pub(crate) v_b: T,
     pub(crate) weight: Weight<T>,
 }
 
-/// One column's entry of `W`, as the caller gave it; only [`quadratic`](Self::quadratic) reads it, so no `s²` is ever formed.
+/// One column's entry of `W`, as the caller gave it; read only through [`bilinear`](Self::bilinear), so no `s²` is ever formed.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Weight<T> {
     Of(T),
@@ -194,12 +217,12 @@ pub(crate) enum Weight<T> {
 }
 
 impl<T: Real> Weight<T> {
-    /// `w·a·b` in `U`, as `(s·a)·(s·b)` under `SqrtOf`: every diagonal, cell, surplus and residue goes through it.
-    pub(crate) fn quadratic<U: Real>(self, a: U, b: U) -> U {
-        let to = |x: T| U::from(x).expect("a finite weight casts to a float");
+    /// `w·x·y` in `U`, as `(s·x)·(s·y)` under `SqrtOf`: every diagonal, cell and residue goes through it.
+    pub(crate) fn bilinear<U: Real>(self, x: U, y: U) -> U {
+        let to = |w: T| U::from(w).expect("a finite weight casts to a float");
         match self {
-            Self::Of(w) => to(w) * a * b,
-            Self::SqrtOf(s) => (to(s) * a) * (to(s) * b),
+            Self::Of(w) => to(w) * x * y,
+            Self::SqrtOf(s) => (to(s) * x) * (to(s) * y),
         }
     }
 
@@ -211,22 +234,22 @@ impl<T: Real> Weight<T> {
 }
 
 impl<T: Real> Column<T> {
-    /// Couples both rows, so the floating forest may grow along it; tested factor by factor so no product underflows.
-    pub(crate) fn joins(&self) -> bool {
-        !self.weight.is_zero() && self.v_left != T::zero() && self.v_right != T::zero()
+    /// Nonzero at both ends, so the floating forest may grow along it; tested factor by factor so no product underflows.
+    pub(crate) fn couples(&self) -> bool {
+        !self.weight.is_zero() && self.v_a != T::zero() && self.v_b != T::zero()
     }
 }
 
 impl<T: Real, I: PrimInt> Columns<'_, T, I> {
-    pub(crate) fn n_left(&self) -> usize {
+    pub(crate) fn n(&self) -> usize {
+        self.n
+    }
+
+    pub(crate) fn n_left(&self) -> Option<usize> {
         self.n_left
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = Column<T>> + '_ {
-        (0..self.left.len()).map(|k| -> Column<T> { todo!() })
-    }
-
-    pub(crate) fn n_right(&self) -> usize {
-        self.n_right
+        (0..self.a.len()).map(|k| -> Column<T> { todo!() })
     }
 }

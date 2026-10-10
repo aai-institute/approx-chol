@@ -13,7 +13,7 @@ use congruence::Congruence;
 use decomposition::Decomposition;
 pub use scaling::{ScalingPolicy, ScalingReport};
 
-use crate::input::{Csr, CsrError, Gram, Graph};
+use crate::input::{BipartiteGram, BipartiteGraph, Csr, CsrError, FactorWidth2};
 use crate::storage::{CrossBlock, UpperAdjacency};
 use crate::Real;
 
@@ -242,20 +242,28 @@ impl<T: Real> Sgdd<T> {
         Ok(Decomposition::csr(csr)?.reduce(&policy)?)
     }
 
-    /// Scales, folds or covers each component of `V W Vᵀ`, deciding floating from `V`.
+    /// `A = V Vᵀ`: scales, folds or covers each component as general, deciding floating from `V`.
     pub fn from_gram<I: PrimInt>(
-        gram: Gram<'_, '_, T, I>,
+        v: FactorWidth2<'_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        Decomposition::gram(gram)?.reduce(&policy)
+        Decomposition::gram(v)?.reduce(&policy)
+    }
+
+    /// `A = V W Vᵀ` on two disjoint sides: as [`from_gram`](Self::from_gram), a bipartite component then taking the block elimination.
+    pub fn from_bipartite_gram<I: PrimInt>(
+        gram: BipartiteGram<'_, T, I>,
+        policy: ScalingPolicy,
+    ) -> Result<Self, ReduceError> {
+        Decomposition::bipartite_gram(gram)?.reduce(&policy)
     }
 }
 
-impl<'a, T: Real, I: PrimInt> TryFrom<Graph<'a, T, I>> for Sgdd<T> {
+impl<'a, T: Real, I: PrimInt> TryFrom<BipartiteGraph<'a, T, I>> for Sgdd<T> {
     type Error = ReduceError;
 
-    /// A signless Laplacian has zero surplus by shape: every component floats untested.
-    fn try_from(graph: Graph<'a, T, I>) -> Result<Self, Self::Error> {
+    /// A signless bipartite Laplacian has zero surplus by shape: every component floats untested.
+    fn try_from(graph: BipartiteGraph<'a, T, I>) -> Result<Self, Self::Error> {
         Decomposition::signless(graph)?.reduce(&ScalingPolicy::default())
     }
 }
@@ -272,11 +280,11 @@ struct Unreduced<T> {
     nonpositive: bool,
 }
 
-/// Who proves a component singular: its own rows, or its input once every component is built.
+/// Who proves a component singular: its own rows once scaled, or its input's verdict, taken before any matrix moved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Proof {
     Rows,
-    Input,
+    Input(bool),
 }
 
 impl<T: Real> Unreduced<T> {
@@ -291,10 +299,11 @@ impl<T: Real> Unreduced<T> {
             true => Some(Congruence::identity()),
             false => signature::signature(&self.off_diagonal),
         };
-        // A frustrated component is definite, so only a folded one asks its rows.
-        let singular = proof == Proof::Rows
-            && signs.is_some()
-            && scaling::rows_prove_singular(&self, &scaling);
+        let singular = match proof {
+            // A frustrated component is definite, so only a folded one asks its rows.
+            Proof::Rows => signs.is_some() && scaling::rows_prove_singular(&self, &scaling),
+            Proof::Input(floats) => floats,
+        };
         let mut component = self.into_component(scaling, signs)?;
         if singular {
             component.m.float();

@@ -10,7 +10,7 @@ pub struct Csr<'a, T, I = u32> {
 }
 
 impl<'a, T, I: PrimInt> Csr<'a, T, I> {
-    /// Checks the arrays' shape, and that every vertex and entry fits a `u32` index.
+    /// Checks the arrays' shape, that `row_ptrs` ascends from `0`, and that every vertex and entry fits a `u32` index, so no row slice can fail.
     pub fn new(
         n: usize,
         row_ptrs: &'a [I],
@@ -60,7 +60,12 @@ pub enum CsrError {
         /// The count that overflows.
         count: usize,
     },
-    /// A column index is at least `n`.
+    /// `row_ptrs` does not start at `0`, or falls or turns negative at `row`.
+    RowPointers {
+        /// The first row whose span is not a range.
+        row: u32,
+    },
+    /// A column index lies outside `0..n`.
     ColumnOutOfRange {
         /// The offending row.
         row: u32,
@@ -94,8 +99,11 @@ impl core::fmt::Display for CsrError {
                 write!(f, "CSR array has length {found}, expected {expected}")
             }
             Self::TooLarge { count } => write!(f, "{count} exceeds a u32 index"),
+            Self::RowPointers { row } => {
+                write!(f, "row pointers do not ascend from 0 at row {row}")
+            }
             Self::ColumnOutOfRange { row } => {
-                write!(f, "row {row} has a column index of at least n")
+                write!(f, "row {row} has a column index outside 0..n")
             }
             Self::NotAscending { row } => write!(
                 f,

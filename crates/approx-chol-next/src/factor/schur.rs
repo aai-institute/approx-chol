@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use super::cholesky::CholeskyInput;
-use super::clique_tree::{Copies, Fill, Streams};
+use super::clique_tree::{Copies, Fill, StarStreams};
 use super::config::{CliqueRule, InnerParallelism};
 use super::sddm::{Sddm, Sheets};
 use crate::sgdd::Balance;
@@ -40,7 +40,7 @@ pub(super) struct SchurComplement<'a, T> {
     balance: &'a Balance<T>,
     /// How the approximate arm's `S` is built; a dense arm always takes it exact.
     rule: CliqueRule,
-    streams: Streams,
+    stars: StarStreams,
 }
 
 impl<'a, T: Real> SchurComplement<'a, T> {
@@ -49,7 +49,7 @@ impl<'a, T: Real> SchurComplement<'a, T> {
         cross: &Arc<CrossBlock<T>>,
         balance: &'a Balance<T>,
         rule: CliqueRule,
-        streams: Streams,
+        stars: StarStreams,
     ) -> Self {
         todo!()
     }

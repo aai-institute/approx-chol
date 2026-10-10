@@ -1,6 +1,6 @@
 use num_traits::PrimInt;
 
-use super::Biadjacency;
+use super::{Assembled, Biadjacency};
 use crate::input::{Csr, CsrError};
 use crate::Real;
 
@@ -9,9 +9,13 @@ pub(super) fn of_csr<T: Real, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<Partiti
     todo!()
 }
 
+pub(super) fn of_general<T: Real>(a: &Assembled<T>) -> Partition {
+    todo!()
+}
+
 pub(super) fn of_cross<T: Real>(c: &Biadjacency<T>) -> Partition {
     let mut sets = UnionFind::new(c.n());
-    c.joins().for_each(|(i, j)| sets.union(i, j));
+    c.cells().for_each(|(i, j)| sets.union(i, j));
     sets.into_partition()
 }
 

@@ -3,12 +3,13 @@
 mod cdf;
 mod copies;
 mod star;
+mod streams;
 
 use crate::Real;
 use cdf::CdfSampler;
-pub(super) use cdf::{Draws, Stream, Streams};
 pub(super) use copies::{Copies, Multi, Single};
 use star::Star;
+pub(super) use streams::{RunDraws, StarDraws, StarStreams, Streams};
 
 /// Fill edges `(lo, hi, weight)`, `lo < hi`, as an elimination emits them.
 pub(super) type Fill<T> = Vec<(u32, u32, T)>;
@@ -16,7 +17,7 @@ pub(super) type Fill<T> = Vec<(u32, u32, T)>;
 /// A pivot's elimination, reused across pivots; AC and AC2 differ only in `C`.
 pub(super) struct CliqueSampler<T, C: Copies> {
     star: Star<T, C>,
-    draws: CdfSampler<T>,
+    cdf: CdfSampler<T>,
     column: PivotColumn<T>,
     split: C::Split,
 }
@@ -30,7 +31,7 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
     /// Merges `neighbors`, samples their clique tree into `fill` as `w_i (S_{>i} / d)` from the run's `draws`, and returns the pivot.
     pub(super) fn eliminate(
         &mut self,
-        draws: &mut Draws,
+        draws: &mut RunDraws,
         neighbors: impl Iterator<Item = (u32, C, T)>,
         fill: &mut Fill<T>,
     ) -> T {
@@ -40,7 +41,7 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
     /// A neighborhood with no duplicate, as a row of `C` is, consuming its star's own `draws` so no task boundary moves one; every neighbor splits alike, so raw weights sort once.
     pub(super) fn eliminate_unique(
         &mut self,
-        draws: Draws,
+        draws: StarDraws,
         neighbors: impl Iterator<Item = (u32, T)>,
         fill: &mut Fill<T>,
     ) -> T {
