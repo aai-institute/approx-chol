@@ -3,7 +3,6 @@
 #![deny(missing_docs)]
 #![expect(
     dead_code,
-    unused_variables,
     reason = "types-only skeleton; unfulfilled once the bodies land"
 )]
 

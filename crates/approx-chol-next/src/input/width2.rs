@@ -127,7 +127,27 @@ pub struct FactorWidth2<'a, T, I = u32> {
 impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
     /// `n` vertices; lengths, `a[k], b[k] < n`, `a[k] ≠ b[k]` are checked, so a zero value is how a column holds one nonzero.
     pub fn new(n: usize, a: &'a [I], b: &'a [I], values: [&'a [T]; 2]) -> Result<Self, ViewError> {
-        todo!()
+        let columns = a.len();
+        let lengths = [b.len(), values[0].len(), values[1].len()];
+        if let Some(&found) = lengths.iter().find(|&&len| len != columns) {
+            return Err(ViewError::LengthMismatch {
+                expected: columns,
+                found,
+            });
+        }
+        if u32::try_from(n).is_err() {
+            return Err(ViewError::TooLarge { count: n });
+        }
+        let in_range = |end: &I| end.to_usize().is_some_and(|end| end < n);
+        for (column, (end_a, end_b)) in a.iter().zip(b).enumerate() {
+            if !in_range(end_a) || !in_range(end_b) {
+                return Err(ViewError::IndexOutOfRange { column });
+            }
+            if end_a == end_b {
+                return Err(ViewError::RepeatedVertex { column });
+            }
+        }
+        Ok(Self { n, a, b, values })
     }
 }
 
@@ -136,7 +156,21 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for FactorWidth2<'_, T, I> {
         self.n
     }
 
-    fn for_each_column(self, visit: impl FnMut(Column<T>)) {
-        todo!()
+    fn for_each_column(self, mut visit: impl FnMut(Column<T>)) {
+        let [v_a, v_b] = self.values;
+        for (k, (a, b)) in self.a.iter().zip(self.b).enumerate() {
+            visit(Column {
+                a: index(*a) as u32,
+                b: index(*b) as u32,
+                v_a: v_a[k],
+                v_b: v_b[k],
+                weight: Weight::Unit,
+            });
+        }
     }
+}
+
+/// A row `new` checked below `n`, which fits a `u32`.
+fn index<I: PrimInt>(row: I) -> usize {
+    row.to_usize().expect("a checked row")
 }

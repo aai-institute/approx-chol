@@ -126,7 +126,7 @@ impl<'v, T: Real, I: PrimInt> Input<'v, T, I> {
                 Given::unreduced(bipartite_component(c, vertices, partition, diagonal))
             }
             Self::Csr(csr) => Given::unreduced(csr_component(csr, vertices, partition.position())),
-            Self::Gram { .. } => todo!(),
+            Self::Gram { a, .. } => Given::unreduced(general_component(a, vertices, partition)),
         })
     }
 }
@@ -173,6 +173,37 @@ fn csr_component<T: Real, I: PrimInt>(
         ptrs.push(indices.len());
     }
     let rows = Rows::new(ptrs, indices, values, vertices.len());
+    let off_diagonal = OffDiagonal::General(UpperAdjacency::new(rows));
+    Unreduced::new(vertices.into(), off_diagonal, diagonal)
+}
+
+/// The whole input's rows are moved, not copied: a lone component takes `A` out of the input.
+fn general_component<T: Real>(
+    a: &mut Option<Assembled<T>>,
+    vertices: &[u32],
+    partition: &Partition,
+) -> Unreduced<T> {
+    if partition.is_whole() {
+        let Assembled {
+            adjacency,
+            diagonal,
+        } = a.take().expect("one whole component");
+        return Unreduced::new(vertices.into(), OffDiagonal::General(adjacency), diagonal);
+    }
+    let a = a.as_ref().expect("A until the whole is taken");
+    let position = partition.position();
+    let mut ptrs = Vec::with_capacity(vertices.len() + 1);
+    ptrs.push(0);
+    let (mut indices, mut values) = (Vec::new(), Vec::new());
+    for &v in vertices {
+        for (j, &x) in a.adjacency.upper(v as usize) {
+            indices.push(position[j]);
+            values.push(x);
+        }
+        ptrs.push(indices.len());
+    }
+    let rows = Rows::new(ptrs, indices, values, vertices.len());
+    let diagonal = vertices.iter().map(|&v| a.diagonal[v as usize]).collect();
     let off_diagonal = OffDiagonal::General(UpperAdjacency::new(rows));
     Unreduced::new(vertices.into(), off_diagonal, diagonal)
 }
@@ -352,54 +383,78 @@ fn left_counts<T: Real>(v: impl IntoColumns<T>, n_left: usize) -> Vec<usize> {
     counts
 }
 
-/// Columns bucketed by left row in column order, so each cell sums the same addends in the same order as the table.
 fn sparse_cross<T: Real>(
     v: impl IntoColumns<T>,
     n_left: usize,
     n_right: usize,
     counts: &[usize],
 ) -> Result<Rows<T>, ReduceError> {
-    let starts: Vec<usize> = std::iter::once(0)
-        .chain(counts.iter().scan(0, |end, &count| {
-            *end += count;
-            Some(*end)
-        }))
-        .collect();
-    let mut rights = vec![0_u32; starts[n_left]];
-    let mut cells = vec![0.0_f64; starts[n_left]];
-    let mut cursor = starts[..n_left].to_vec();
+    let mut buckets = Buckets::new(counts);
     v.for_each_column(
         #[inline(always)]
-        |column| {
-            let slot = &mut cursor[column.a as usize];
-            rights[*slot] = column.b - n_left as u32;
-            cells[*slot] = column.cell();
-            *slot += 1;
-        },
+        |column| buckets.push(column.a as usize, column.b - n_left as u32, column.cell()),
     );
-    let mut sums = vec![0.0_f64; n_right];
-    let mut touched: Vec<u32> = Vec::new();
-    let mut rows = CellRows::with_capacity(n_left);
-    for span in starts.windows(2) {
-        for (&j, &x) in rights[span[0]..span[1]]
-            .iter()
-            .zip(&cells[span[0]..span[1]])
-        {
-            // A cell cancelling to zero mid-row is pushed again; the dedup absorbs it.
-            if sums[j as usize] == 0.0 {
-                touched.push(j);
-            }
-            sums[j as usize] += x;
+    buckets.sum(n_right)
+}
+
+/// Cells bucketed by row in column order, so each sums the same addends in the same order as a dense table.
+struct Buckets {
+    starts: Vec<usize>,
+    cursor: Vec<usize>,
+    columns: Vec<u32>,
+    cells: Vec<f64>,
+}
+
+impl Buckets {
+    fn new(counts: &[usize]) -> Self {
+        let starts: Vec<usize> = std::iter::once(0)
+            .chain(counts.iter().scan(0, |end, &count| {
+                *end += count;
+                Some(*end)
+            }))
+            .collect();
+        let entries = starts[counts.len()];
+        Self {
+            cursor: starts[..counts.len()].to_vec(),
+            starts,
+            columns: vec![0; entries],
+            cells: vec![0.0; entries],
         }
-        touched.sort_unstable();
-        touched.dedup();
-        for &j in &touched {
-            rows.push(j as usize, std::mem::take(&mut sums[j as usize]))?;
-        }
-        touched.clear();
-        rows.end_row();
     }
-    Ok(rows.finish(n_right))
+
+    #[inline(always)]
+    fn push(&mut self, row: usize, column: u32, cell: f64) {
+        let slot = &mut self.cursor[row];
+        self.columns[*slot] = column;
+        self.cells[*slot] = cell;
+        *slot += 1;
+    }
+
+    fn sum<T: Real>(self, n_cols: usize) -> Result<Rows<T>, ReduceError> {
+        let mut sums = vec![0.0_f64; n_cols];
+        let mut touched: Vec<u32> = Vec::new();
+        let mut rows = CellRows::with_capacity(self.starts.len() - 1);
+        for span in self.starts.windows(2) {
+            for (&j, &x) in self.columns[span[0]..span[1]]
+                .iter()
+                .zip(&self.cells[span[0]..span[1]])
+            {
+                // A cell cancelling to zero mid-row is pushed again; the dedup absorbs it.
+                if sums[j as usize] == 0.0 {
+                    touched.push(j);
+                }
+                sums[j as usize] += x;
+            }
+            touched.sort_unstable();
+            touched.dedup();
+            for &j in &touched {
+                rows.push(j as usize, std::mem::take(&mut sums[j as usize]))?;
+            }
+            touched.clear();
+            rows.end_row();
+        }
+        Ok(rows.finish(n_cols))
+    }
 }
 
 /// Rows built in order from `f64` sums: a zero is dropped, any other is cast once and must stay [`in_range`].
@@ -445,7 +500,29 @@ impl<T: Real> CellRows<T> {
 
 /// `A`'s strict upper triangle and diagonal, cells `bilinear(v_a, v_b)` summed by pair in column order, zero cells dropped; a value leaving `in_range` is `OutOfRange`.
 fn assemble_general<T: Real>(v: impl IntoColumns<T>) -> Result<Assembled<T>, ReduceError> {
-    todo!()
+    let n = v.n();
+    let (mut counts, mut diagonal) = (vec![0; n], vec![0.0_f64; n]);
+    v.for_each_column(
+        #[inline(always)]
+        |column| {
+            counts[column.a.min(column.b) as usize] += 1;
+            let (v_a, v_b) = (widen(column.v_a), widen(column.v_b));
+            diagonal[column.a as usize] += column.weight.bilinear(v_a, v_a);
+            diagonal[column.b as usize] += column.weight.bilinear(v_b, v_b);
+        },
+    );
+    let mut buckets = Buckets::new(&counts);
+    v.for_each_column(
+        #[inline(always)]
+        |column| {
+            let (lo, hi) = (column.a.min(column.b), column.a.max(column.b));
+            buckets.push(lo as usize, hi, column.cell());
+        },
+    );
+    Ok(Assembled {
+        adjacency: UpperAdjacency::new(buckets.sum(n)?),
+        diagonal: diagonal.into_iter().map(narrow).collect(),
+    })
 }
 
 /// A general factor-width-2 `A`, assembled: the pattern its components are found in.

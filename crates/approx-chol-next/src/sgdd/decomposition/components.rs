@@ -14,7 +14,11 @@ pub(super) fn of_csr<T: Real, I: PrimInt>(
 }
 
 pub(super) fn of_general<T: Real>(a: &Assembled<T>) -> Partition {
-    todo!()
+    let mut sets = UnionFind::new(a.adjacency.n());
+    for i in 0..a.adjacency.n() {
+        a.adjacency.upper(i).for_each(|(j, _)| sets.union(i, j));
+    }
+    sets.into_partition()
 }
 
 pub(super) fn of_cross<T: Real>(c: &Biadjacency<T>) -> Partition {

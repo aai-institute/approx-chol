@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use num_traits::PrimInt;
 
-use super::{Column, IntoColumns, ViewError, Weight};
+use super::{index, Column, IntoColumns, ViewError, Weight};
 use crate::storage::{narrow, widen};
 use crate::Real;
 
@@ -317,9 +317,4 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteGraph<'_, T, I> {
             Weights::SqrtOf(s) => self.columns(|k| Weight::SqrtOf(s[k]), visit),
         }
     }
-}
-
-/// A row `new` checked below `n`, which fits a `u32`.
-fn index<I: PrimInt>(row: I) -> usize {
-    row.to_usize().expect("a checked row")
 }
