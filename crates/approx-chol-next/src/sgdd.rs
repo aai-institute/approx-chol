@@ -18,7 +18,7 @@ use decomposition::Decomposition;
 use null_vectors::{NullVectors, OnDemand};
 pub use scaling::{Existence, ScalingPolicy, ScalingReport};
 
-use crate::input::{BipartiteGram, BipartiteGraph, Csr, CsrError, FactorWidth2};
+use crate::input::{BipartiteGram, BipartiteGraph, Csr, CsrError, FactorWidth2, Laplacian};
 use crate::storage::{diagonal_in_range, CrossBlock, UpperAdjacency};
 use crate::Real;
 
@@ -207,6 +207,15 @@ impl<T: Real> Sgdd<T> {
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
         Decomposition::bipartite_gram(gram)?.reduce(&policy)
+    }
+}
+
+impl<'a, T: Real, I: PrimInt> TryFrom<Laplacian<'a, T, I>> for Sgdd<T> {
+    type Error = ReduceError;
+
+    /// A graph Laplacian is dominant with surplus `g` by shape: nothing is searched, and a component floats exactly when its ground is zero.
+    fn try_from(graph: Laplacian<'a, T, I>) -> Result<Self, Self::Error> {
+        Decomposition::laplacian(graph)?.reduce(&ScalingPolicy::default())
     }
 }
 

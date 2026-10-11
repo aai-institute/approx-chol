@@ -20,8 +20,8 @@ pub enum Weights<'a, T> {
 }
 
 impl<T: Real> Weights<'_, T> {
-    /// One entry per column, each `w` finite and nonnegative or `s` finite; both views check it in `new`.
-    fn check(self, columns: usize) -> Result<(), ViewError> {
+    /// One entry per column, each `w` finite and nonnegative or `s` finite; every weighted view checks it in `new`.
+    pub(super) fn check(self, columns: usize) -> Result<(), ViewError> {
         let (entries, valid): (&[T], fn(T) -> bool) = match self {
             Self::Unit => return Ok(()),
             Self::Of(w) => (w, |w| w.is_finite() && w >= T::zero()),

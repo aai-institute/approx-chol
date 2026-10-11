@@ -4,12 +4,13 @@ mod components;
 
 use std::sync::Arc;
 
+use super::component::ProvenLaplacian;
 use super::{
     Component, Congruent, Grounding, NullVectors, OffDiagonal, OnDemand, ScalingPolicy, Sgdd,
     Source, Unreduced,
 };
 use crate::input::{
-    BipartiteGram, BipartiteGraph, Canonical, Csr, CsrError, FactorWidth2, IntoColumns,
+    BipartiteGram, BipartiteGraph, Canonical, Csr, CsrError, FactorWidth2, IntoColumns, Laplacian,
 };
 use crate::storage::{in_range, narrow, widen, CrossBlock, Rows, UpperAdjacency};
 use crate::{Real, ReduceError};
@@ -25,32 +26,39 @@ pub(super) struct Decomposition<'v, T, I> {
 enum Stored<'v, T, I> {
     /// Rows only claim `A`: each component searches its signature and scaling, its own rows decide its floating, and no scaling is known to exist.
     Rows(Canonical<'v, T, I>),
-    /// A general factor-width-2 `A`, as its CSR would store it, and its `V`.
+    /// A general factor-width-2 `A`, as its CSR would store it.
     General {
         a: Option<Assembled<T>>,
-        v: FactorWidth2<'v, T, I>,
+        proof: Proof<FactorWidth2<'v, T, I>, GeneralShape<'v, T>>,
     },
     /// `C` of `[D_l C; Cᵀ D_r]`; a bipartite component takes the block elimination.
     Bipartite {
         c: Option<Biadjacency<T>>,
-        proof: Proof<BipartiteGram<'v, T, I>>,
+        proof: Proof<BipartiteGram<'v, T, I>, BipartiteShape>,
     },
 }
 
-/// What a view's type proves about `A`.
+/// What a view's type proves about `A`, each shape only on the storage it can take.
 #[derive(Clone, Copy)]
-enum Proof<V> {
+enum Proof<V, S> {
     /// `V`, factor width 2 and so GDD: each component searches its signature and scaling, and `V` decides floating once every one is reduced; the sides' diagonals are read from it.
     Factor(V),
-    /// Its signature, dominance and floating: nothing is searched.
-    Shape(Shape),
+    /// Its signature, dominance and grounding: nothing is searched.
+    Shape(S),
 }
 
-/// A shape proving its own signature, dominance and floating.
+/// A general shape proving its own signature, dominance and grounding.
 #[derive(Clone, Copy)]
-enum Shape {
+enum GeneralShape<'v, T> {
+    /// A graph Laplacian, grounded by `g` when given: a dominant Z-matrix whose surplus is `g`, so a component floats exactly when its `g` is zero.
+    Laplacian(Option<&'v [T]>),
+}
+
+/// A bipartite shape proving its own signature, dominance and grounding.
+#[derive(Clone, Copy)]
+enum BipartiteShape {
     /// A signless bipartite Laplacian, its diagonal `C ≥ 0`'s row and column sums: negating one side folds it, and it is balanced and singular, so every component floats untested.
-    SignlessBipartite,
+    Signless,
 }
 
 impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
@@ -67,7 +75,21 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         let (a, partition) = assemble_general(v)?;
         Ok(Self {
             partition,
-            stored: Stored::General { a: Some(a), v },
+            stored: Stored::General {
+                a: Some(a),
+                proof: Proof::Factor(v),
+            },
+        })
+    }
+
+    pub(super) fn laplacian(graph: Laplacian<'v, T, I>) -> Result<Self, ReduceError> {
+        let (a, partition) = assemble_general(graph)?;
+        Ok(Self {
+            partition,
+            stored: Stored::General {
+                a: Some(a),
+                proof: Proof::Shape(GeneralShape::Laplacian(graph.ground())),
+            },
         })
     }
 
@@ -88,19 +110,22 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
             partition,
             stored: Stored::Bipartite {
                 c: Some(c),
-                proof: Proof::Shape(Shape::SignlessBipartite),
+                proof: Proof::Shape(BipartiteShape::Signless),
             },
         })
     }
 
-    /// Dead components are dropped; rows float on their own rows, a shape's all float, and a factor's ground or float on `V` once every one is reduced.
+    /// Dead components are dropped; rows ground on their own rows, a shape's as it proves, and a factor's ground or float on `V` once every one is reduced.
     pub(super) fn reduce(self, policy: &ScalingPolicy) -> Result<Sgdd<T>, ReduceError> {
         let Self {
             partition,
             mut stored,
         } = self;
         let nulls: Option<OnDemand<'_>> = match &stored {
-            Stored::General { v, .. } => {
+            Stored::General {
+                proof: Proof::Factor(v),
+                ..
+            } => {
                 let (v, partition) = (*v, &partition);
                 Some(OnDemand::new(Box::new(move || {
                     NullVectors::of(v, partition.components())
@@ -119,18 +144,26 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
                 Given::Signless(vertices, cross) => {
                     components.push(Component::signless(vertices, cross)?)
                 }
+                Given::Laplacian(laplacian) => components.push(laplacian.into_component()?),
                 Given::Unreduced(a) => congruent.push(a.reduce(policy, source)?),
             }
         }
         let grounded = match &stored {
             Stored::Rows(_)
+            | Stored::General {
+                proof: Proof::Shape(_),
+                ..
+            }
             | Stored::Bipartite {
                 proof: Proof::Shape(_),
                 ..
             } => (congruent.into_iter())
                 .map(Congruent::by_rows)
                 .collect::<Result<Vec<_>, _>>()?,
-            Stored::General { v, .. } => ground_or_float(*v, congruent)?,
+            Stored::General {
+                proof: Proof::Factor(v),
+                ..
+            } => ground_or_float(*v, congruent)?,
             Stored::Bipartite {
                 proof: Proof::Factor(gram),
                 ..
@@ -154,7 +187,7 @@ impl<'v, T: Real, I: PrimInt> Stored<'v, T, I> {
         partition.components().map(move |vertices| match self {
             Self::Bipartite {
                 c,
-                proof: Proof::Shape(Shape::SignlessBipartite),
+                proof: Proof::Shape(BipartiteShape::Signless),
             } => match vertices {
                 [v] => Given::Dead(*v),
                 _ => {
@@ -174,7 +207,27 @@ impl<'v, T: Real, I: PrimInt> Stored<'v, T, I> {
                 Given::unreduced(bipartite_component(c, vertices, partition, diagonal))
             }
             Self::Rows(csr) => Given::unreduced(csr_component(csr, vertices, partition.position())),
-            Self::General { a, .. } => Given::unreduced(general_component(a, vertices, partition)),
+            Self::General {
+                a,
+                proof: Proof::Factor(_),
+            } => {
+                let (adjacency, diagonal) = general_block(a, vertices, partition);
+                let off_diagonal = OffDiagonal::General(adjacency);
+                Given::unreduced(Unreduced::new(vertices.into(), off_diagonal, diagonal))
+            }
+            Self::General {
+                a,
+                proof: Proof::Shape(GeneralShape::Laplacian(ground)),
+            } => {
+                let (adjacency, diagonal) = general_block(a, vertices, partition);
+                let ground = ground.map(|g| vertices.iter().map(|&v| g[v as usize]).collect());
+                Given::laplacian(ProvenLaplacian::new(
+                    vertices.into(),
+                    adjacency,
+                    diagonal,
+                    ground,
+                ))
+            }
         })
     }
 }
@@ -185,6 +238,8 @@ enum Given<T> {
     Dead(u32),
     /// A signless Laplacian's block: folded, dominant and floating by shape.
     Signless(Box<[u32]>, CrossBlock<T>),
+    /// A graph Laplacian's component: signed, dominant and grounded by shape.
+    Laplacian(ProvenLaplacian<T>),
     Unreduced(Unreduced<T>),
 }
 
@@ -193,6 +248,13 @@ impl<T: Real> Given<T> {
         match a.is_dead() {
             true => Self::Dead(a.vertices[0]),
             false => Self::Unreduced(a),
+        }
+    }
+
+    fn laplacian(laplacian: ProvenLaplacian<T>) -> Self {
+        match laplacian.dead() {
+            Some(vertex) => Self::Dead(vertex),
+            None => Self::Laplacian(laplacian),
         }
     }
 }
@@ -226,17 +288,17 @@ fn csr_component<T: Real, I: PrimInt>(
 }
 
 /// The whole input's rows are moved, not copied: a lone component takes `A` out of the input.
-fn general_component<T: Real>(
+fn general_block<T: Real>(
     a: &mut Option<Assembled<T>>,
     vertices: &[u32],
     partition: &Partition,
-) -> Unreduced<T> {
+) -> (UpperAdjacency<T>, Vec<T>) {
     if partition.is_whole() {
         let Assembled {
             adjacency,
             diagonal,
         } = a.take().expect("one whole component");
-        return Unreduced::new(vertices.into(), OffDiagonal::General(adjacency), diagonal);
+        return (adjacency, diagonal);
     }
     let a = a.as_ref().expect("A until the whole is taken");
     let position = partition.position();
@@ -252,8 +314,7 @@ fn general_component<T: Real>(
     }
     let rows = Rows::new(ptrs, indices, values, vertices.len());
     let diagonal = vertices.iter().map(|&v| a.diagonal[v as usize]).collect();
-    let off_diagonal = OffDiagonal::General(UpperAdjacency::new(rows));
-    Unreduced::new(vertices.into(), off_diagonal, diagonal)
+    (UpperAdjacency::new(rows), diagonal)
 }
 
 fn bipartite_component<T: Real>(

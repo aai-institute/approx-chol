@@ -1,6 +1,7 @@
 //! Factor-width-2 views, at most two nonzeros per column of `V`, and the one reading of them `sgdd` needs: column by column.
 
 pub(super) mod bipartite;
+pub(super) mod laplacian;
 
 use num_traits::PrimInt;
 
@@ -40,6 +41,11 @@ pub enum ViewError {
     },
     /// A bipartite Gram's two sides read different `W` slices.
     WeightsDiffer,
+    /// A ground is negative or not finite.
+    InvalidGround {
+        /// The offending vertex.
+        vertex: usize,
+    },
 }
 
 impl core::fmt::Display for ViewError {
@@ -55,6 +61,9 @@ impl core::fmt::Display for ViewError {
                 write!(f, "column {column} has a negative or non-finite weight")
             }
             Self::WeightsDiffer => write!(f, "a Gram's sides read different weights"),
+            Self::InvalidGround { vertex } => {
+                write!(f, "vertex {vertex} has a negative or non-finite ground")
+            }
         }
     }
 }
@@ -135,20 +144,26 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
                 found,
             });
         }
-        if u32::try_from(n).is_err() {
-            return Err(ViewError::TooLarge { count: n });
-        }
-        let in_range = |end: &I| end.to_usize().is_some_and(|end| end < n);
-        for (column, (end_a, end_b)) in a.iter().zip(b).enumerate() {
-            if !in_range(end_a) || !in_range(end_b) {
-                return Err(ViewError::IndexOutOfRange { column });
-            }
-            if end_a == end_b {
-                return Err(ViewError::RepeatedVertex { column });
-            }
-        }
+        check_ends(n, a, b)?;
         Ok(Self { n, a, b, values })
     }
+}
+
+/// `n` fits a `u32`, and each column's two ends are distinct rows below it.
+fn check_ends<I: PrimInt>(n: usize, a: &[I], b: &[I]) -> Result<(), ViewError> {
+    if u32::try_from(n).is_err() {
+        return Err(ViewError::TooLarge { count: n });
+    }
+    let in_range = |end: &I| end.to_usize().is_some_and(|end| end < n);
+    for (column, (end_a, end_b)) in a.iter().zip(b).enumerate() {
+        if !in_range(end_a) || !in_range(end_b) {
+            return Err(ViewError::IndexOutOfRange { column });
+        }
+        if end_a == end_b {
+            return Err(ViewError::RepeatedVertex { column });
+        }
+    }
+    Ok(())
 }
 
 impl<T: Real, I: PrimInt> IntoColumns<T> for FactorWidth2<'_, T, I> {
