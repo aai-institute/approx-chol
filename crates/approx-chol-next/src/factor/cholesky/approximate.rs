@@ -39,7 +39,7 @@ fn eliminate<T: Real, C: Copies>(
     let mut draws = draws;
     let mut clique = CliqueSampler::<T, C>::new(split);
     let mut fill = Fill::new();
-    let mut steps = Steps::with_capacity(n);
+    let mut steps = Steps::with_capacity(n, graph.edge_ends());
     for _ in 1..n {
         let v = ordering.next_vertex();
         fill.clear();

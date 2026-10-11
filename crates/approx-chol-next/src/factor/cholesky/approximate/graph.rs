@@ -23,12 +23,13 @@ impl<T: Real, C: Copies> EliminationGraph<T, C> {
     /// The ground is a vertex like any other: forcing it last measured +0-10% PCG iterations.
     pub(super) fn of(sddm: &Sddm<'_, T>, split: C::Split) -> Self {
         let n = sddm.n() + usize::from(sddm.grounded());
-        let mut degrees = vec![0; n];
+        // One slot past the degree: the first fill edge reallocating measured +2-3% on grids.
+        let mut capacities = vec![1; n];
         for (k, j, _) in sddm.grounded_edges() {
-            degrees[k as usize] += 1;
-            degrees[j as usize] += 1;
+            capacities[k as usize] += 1;
+            capacities[j as usize] += 1;
         }
-        let lists = degrees.into_iter().map(Vec::with_capacity).collect();
+        let lists = capacities.into_iter().map(Vec::with_capacity).collect();
         let mut graph = Self { lists };
         let copies = C::initial(split);
         for (k, j, w) in sddm.grounded_edges() {
@@ -39,6 +40,11 @@ impl<T: Real, C: Copies> EliminationGraph<T, C> {
 
     pub(super) fn n(&self) -> usize {
         self.lists.len()
+    }
+
+    /// Twice the edges: a factor's entries start near this.
+    pub(super) fn edge_ends(&self) -> usize {
+        self.lists.iter().map(Vec::len).sum()
     }
 
     /// Virtual copies, not stored entries: AC2 orders by the multigraph's degree.

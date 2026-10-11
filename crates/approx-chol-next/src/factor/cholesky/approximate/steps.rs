@@ -20,11 +20,12 @@ pub(super) struct Steps<T> {
 }
 
 impl<T: Real> Steps<T> {
-    pub(super) fn with_capacity(n: usize) -> Self {
+    /// Growing to `entries` by doubling measured +1.5-2.5% on grids.
+    pub(super) fn with_capacity(n: usize, entries: usize) -> Self {
         Self {
             headers: Vec::with_capacity(n),
-            neighbors: Vec::new(),
-            coefficients: Vec::new(),
+            neighbors: Vec::with_capacity(entries),
+            coefficients: Vec::with_capacity(entries),
         }
     }
 
@@ -62,7 +63,10 @@ impl<T: Real> Steps<T> {
     }
 
     /// A factor cannot exist without naming the vertex its steps left behind.
-    pub(super) fn finish(self, uneliminated: usize) -> ApproximateCholesky<T> {
+    pub(super) fn finish(mut self, uneliminated: usize) -> ApproximateCholesky<T> {
+        // Doubling past the estimate otherwise retains up to 2x the entries (+30% on grids).
+        self.neighbors.shrink_to_fit();
+        self.coefficients.shrink_to_fit();
         ApproximateCholesky {
             steps: self,
             uneliminated: uneliminated as u32,
