@@ -14,7 +14,7 @@ pub use component::Component;
 use component::Sdd;
 use congruence::Congruence;
 use decomposition::Decomposition;
-pub use scaling::{ScalingPolicy, ScalingReport};
+pub use scaling::{Existence, ScalingPolicy, ScalingReport};
 
 use crate::input::{BipartiteGram, BipartiteGraph, Csr, CsrError, FactorWidth2};
 use crate::storage::{diagonal_in_range, CrossBlock, UpperAdjacency};
@@ -231,11 +231,21 @@ struct Unreduced<T> {
     degrees: Vec<usize>,
 }
 
-/// Who proves a component singular: its own rows, or its input once every component is reduced.
+/// What a component came from: rows that only claim `A`, or a factor-width-2 Gram, GDD by type, whose `V` proves it singular once every component is reduced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Proof {
+enum Source {
     Rows,
-    Input,
+    Gram,
+}
+
+impl Source {
+    /// Factor width 2 is symmetric GDD (Boman, Chen, Parekh, Toledo 2005), so a Gram's scaling exists.
+    fn existence(self) -> Existence {
+        match self {
+            Self::Rows => Existence::Unknown,
+            Self::Gram => Existence::Guaranteed,
+        }
+    }
 }
 
 impl<T: Real> Unreduced<T> {
@@ -258,15 +268,15 @@ impl<T: Real> Unreduced<T> {
         self.diagonal == [T::zero()]
     }
 
-    fn reduce(self, policy: &ScalingPolicy, proof: Proof) -> Result<Congruent<T>, ReduceError> {
+    fn reduce(self, policy: &ScalingPolicy, source: Source) -> Result<Congruent<T>, ReduceError> {
         within_series_floor::<T>(&self.vertices)?;
         // A view's zero diagonal beside a cell is its terms underflowing, not a non-GDD input.
         let lost = self.diagonal.iter().position(|&d| d == T::zero());
-        if let (Proof::Input, Some(i)) = (proof, lost) {
+        if let (Source::Gram, Some(i)) = (source, lost) {
             let vertex = self.vertices[i];
             return Err(ReduceError::OutOfRange { vertex });
         }
-        let scaling = scaling::dominance_scaling(&self, policy)?;
+        let scaling = scaling::dominance_scaling(&self, policy, source.existence())?;
         let signs = match self.nonpositive {
             true => Some(Congruence::identity()),
             false => signature::signature(&self.off_diagonal),
@@ -286,9 +296,10 @@ impl<T: Real> Unreduced<T> {
         let signs = signs.unwrap_or_else(Congruence::identity);
         let (congruence, relaxation) = match scaling {
             scaling::Scaling::AlreadyDominant => (signs, None),
-            scaling::Scaling::Scaled(relaxation) => {
-                (signs.scaled(&relaxation.scales), Some(relaxation))
-            }
+            scaling::Scaling::Scaled(relaxation, existence) => (
+                signs.scaled(&relaxation.scales),
+                Some((relaxation, existence)),
+            ),
         };
         let off_diagonal =
             (congruence.transform(self.off_diagonal)).ok_or(ReduceError::Unscalable { vertex })?;
@@ -303,7 +314,7 @@ impl<T: Real> Unreduced<T> {
                 // An unscaled deficit lies inside the rounding band `already_dominant` allowed.
                 (rows, None)
             }
-            Some(relaxation) => {
+            Some((relaxation, existence)) => {
                 let diagonal: Vec<T> = (self.diagonal.iter().zip(&relaxation.scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();
@@ -314,7 +325,7 @@ impl<T: Real> Unreduced<T> {
                     abs,
                     surplus: RowSurplus::Residue,
                 };
-                (rows, policy.certify(&relaxation, deficit))
+                (rows, policy.certify(&relaxation, deficit, existence))
             }
         };
         Ok(Congruent {

@@ -15,7 +15,9 @@ use std::fmt::Debug;
 
 pub use factor::{CliqueRule, Config, InnerParallelism, Multiplicity, SplitCount};
 pub use factor::{ComponentFactor, Factor, Fallback, SolveError};
-pub use sgdd::{Component, FromCsrError, ReduceError, ScalingPolicy, ScalingReport, Sgdd};
+pub use sgdd::{
+    Component, Existence, FromCsrError, ReduceError, ScalingPolicy, ScalingReport, Sgdd,
+};
 
 /// The scalar every stage computes in: any `Float` a factor can share across threads and print.
 pub trait Real: num_traits::Float + Debug + Send + Sync + 'static {}

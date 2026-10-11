@@ -37,14 +37,25 @@ pub struct ScalingReport {
     pub iterations: usize,
     /// Largest relative dominance violation, clamped away.
     pub violation: f64,
+    /// Whether a certified scaling exists: the shortfall is the budget's, or perhaps the input's.
+    pub scaling: Existence,
+}
+
+/// Whether a dominance scaling is known to exist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Existence {
+    /// A factor-width-2 Gram, GDD by type: only the policy's budget ran out.
+    Guaranteed,
+    /// Rows: the input itself may not be GDD.
+    Unknown,
 }
 
 /// Positive scales `R` making `R|A|R` weakly dominant.
 pub(super) enum Scaling<T> {
     /// Every SDDM input, so an SDDM CSR reduces bit for bit as before.
     AlreadyDominant,
-    /// Uncertified until its hand-over clamps: the report weighs both.
-    Scaled(Relaxation<T>),
+    /// Uncertified until its hand-over clamps: the report weighs both, and says whether a certified one exists.
+    Scaled(Relaxation<T>, Existence),
 }
 
 /// What an iteration reached: scales and how far short of dominance they leave `A`.
@@ -59,6 +70,7 @@ pub(super) struct Relaxation<T> {
 pub(super) fn dominance_scaling<T: Real>(
     a: &Unreduced<T>,
     policy: &ScalingPolicy,
+    existence: Existence,
 ) -> Result<Scaling<T>, ReduceError> {
     if let Some(i) = a.diagonal.iter().position(|&d| !diagonal_in_range(d)) {
         return Err(ReduceError::OutOfRange {
@@ -87,7 +99,7 @@ pub(super) fn dominance_scaling<T: Real>(
             })
         }
     }?;
-    Ok(Scaling::Scaled(relaxation))
+    Ok(Scaling::Scaled(relaxation, existence))
 }
 
 impl ScalingPolicy {
@@ -96,11 +108,13 @@ impl ScalingPolicy {
         &self,
         relaxation: &Relaxation<T>,
         clamped: f64,
+        scaling: Existence,
     ) -> Option<ScalingReport> {
         let violation = widen(relaxation.violation).max(clamped);
         (violation > self.tolerance).then_some(ScalingReport {
             iterations: relaxation.iterations,
             violation,
+            scaling,
         })
     }
 }

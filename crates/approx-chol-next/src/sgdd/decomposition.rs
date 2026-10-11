@@ -4,7 +4,7 @@ mod components;
 
 use std::sync::Arc;
 
-use super::{Component, Congruent, Grounding, OffDiagonal, Proof, ScalingPolicy, Sgdd, Unreduced};
+use super::{Component, Congruent, Grounding, OffDiagonal, ScalingPolicy, Sgdd, Source, Unreduced};
 use crate::input::{
     BipartiteGram, BipartiteGraph, Canonical, Csr, CsrError, FactorWidth2, IntoColumns,
 };
@@ -76,9 +76,9 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
             partition,
             mut input,
         } = self;
-        let proof = match input {
-            Input::Csr(_) => Proof::Rows,
-            Input::Signless(_) | Input::BipartiteGram { .. } | Input::Gram { .. } => Proof::Input,
+        let source = match input {
+            Input::Csr(_) => Source::Rows,
+            Input::Signless(_) | Input::BipartiteGram { .. } | Input::Gram { .. } => Source::Gram,
         };
         let (mut components, mut congruent, mut dead) = (Vec::new(), Vec::new(), Vec::new());
         for given in input.components(&partition) {
@@ -87,7 +87,7 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
                 Given::Signless(vertices, cross) => {
                     components.push(Component::signless(vertices, cross)?)
                 }
-                Given::Unreduced(a) => congruent.push(a.reduce(policy, proof)?),
+                Given::Unreduced(a) => congruent.push(a.reduce(policy, source)?),
             }
         }
         let grounded = match &input {
