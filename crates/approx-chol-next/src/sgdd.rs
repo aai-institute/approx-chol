@@ -3,6 +3,7 @@
 mod component;
 mod congruence;
 mod decomposition;
+mod null_vectors;
 mod scaling;
 mod signature;
 
@@ -14,6 +15,7 @@ pub use component::Component;
 use component::Sdd;
 use congruence::Congruence;
 use decomposition::Decomposition;
+use null_vectors::{NullVectors, OnDemand};
 pub use scaling::{Existence, ScalingPolicy, ScalingReport};
 
 use crate::input::{BipartiteGram, BipartiteGraph, Csr, CsrError, FactorWidth2};
@@ -232,18 +234,19 @@ struct Unreduced<T> {
 }
 
 /// What a component came from: rows that only claim `A`, or a factor-width-2 Gram, GDD by type, whose `V` proves it singular once every component is reduced.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Source {
+#[derive(Clone, Copy)]
+enum Source<'n, 'v> {
     Rows,
-    Gram,
+    /// With its null vectors when its components are general.
+    Gram(Option<&'n OnDemand<'v>>),
 }
 
-impl Source {
+impl Source<'_, '_> {
     /// Factor width 2 is symmetric GDD (Boman, Chen, Parekh, Toledo 2005), so a Gram's scaling exists.
     fn existence(self) -> Existence {
         match self {
             Self::Rows => Existence::Unknown,
-            Self::Gram => Existence::Guaranteed,
+            Self::Gram(_) => Existence::Guaranteed,
         }
     }
 }
@@ -268,15 +271,19 @@ impl<T: Real> Unreduced<T> {
         self.diagonal == [T::zero()]
     }
 
-    fn reduce(self, policy: &ScalingPolicy, source: Source) -> Result<Congruent<T>, ReduceError> {
+    fn reduce(
+        self,
+        policy: &ScalingPolicy,
+        source: Source<'_, '_>,
+    ) -> Result<Congruent<T>, ReduceError> {
         within_series_floor::<T>(&self.vertices)?;
         // A view's zero diagonal beside a cell is its terms underflowing, not a non-GDD input.
         let lost = self.diagonal.iter().position(|&d| d == T::zero());
-        if let (Source::Gram, Some(i)) = (source, lost) {
+        if let (Source::Gram(_), Some(i)) = (source, lost) {
             let vertex = self.vertices[i];
             return Err(ReduceError::OutOfRange { vertex });
         }
-        let scaling = scaling::dominance_scaling(&self, policy, source.existence())?;
+        let scaling = scaling::dominance_scaling(&self, policy, source)?;
         let signs = match self.nonpositive {
             true => Some(Congruence::identity()),
             false => signature::signature(&self.off_diagonal),
@@ -319,7 +326,7 @@ impl<T: Real> Unreduced<T> {
                     .map(|(&a, &f)| f * a * f)
                     .collect();
                 let abs = off_diagonal.abs_row_sums();
-                let deficit = scaling::clamped_deficit(&diagonal, &abs);
+                let deficit = scaling::clamped_deficit(&diagonal, &abs, &self.degrees);
                 let rows = RowSums {
                     diagonal,
                     abs,

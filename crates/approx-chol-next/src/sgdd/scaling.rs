@@ -1,6 +1,8 @@
 mod cg;
 
-use super::{OffDiagonal, Unreduced};
+use std::cell::LazyCell;
+
+use super::{OffDiagonal, Source, Unreduced};
 use crate::storage::{diagonal_in_range, narrow, widen, CrossBlock, UpperAdjacency};
 use crate::{Real, ReduceError};
 
@@ -70,7 +72,7 @@ pub(super) struct Relaxation<T> {
 pub(super) fn dominance_scaling<T: Real>(
     a: &Unreduced<T>,
     policy: &ScalingPolicy,
-    existence: Existence,
+    source: Source<'_, '_>,
 ) -> Result<Scaling<T>, ReduceError> {
     if let Some(i) = a.diagonal.iter().position(|&d| !diagonal_in_range(d)) {
         return Err(ReduceError::OutOfRange {
@@ -91,15 +93,23 @@ pub(super) fn dominance_scaling<T: Real>(
         return Ok(Scaling::AlreadyDominant);
     }
     // SCI reads only row ratios, so it serves any pattern; the reduced CG needs the bipartite operator.
-    let relaxation = match &a.off_diagonal {
-        OffDiagonal::General(_) => sci(a, policy),
-        OffDiagonal::Bipartite(cross) => {
+    let relaxation = match (&a.off_diagonal, source) {
+        (OffDiagonal::General(_), Source::Gram(Some(nulls))) => {
+            match (LazyCell::force(nulls).on(&a.vertices))
+                .and_then(|u| null_scaling(&u, &a.diagonal))
+            {
+                Some(relaxation) => Ok(relaxation),
+                None => sci(a, policy),
+            }
+        }
+        (OffDiagonal::General(_), _) => sci(a, policy),
+        (OffDiagonal::Bipartite(cross), _) => {
             reduced_cg(cross, &a.diagonal, policy).ok_or(ReduceError::Unscalable {
                 vertex: a.vertices[0],
             })
         }
     }?;
-    Ok(Scaling::Scaled(relaxation, existence))
+    Ok(Scaling::Scaled(relaxation, source.existence()))
 }
 
 impl ScalingPolicy {
@@ -119,18 +129,32 @@ impl ScalingPolicy {
     }
 }
 
-/// `max_i (Σ_j|m_ij| − m_ii)/m_ii`, at least `0`: what clamping `M`'s deficits to zero surplus adds.
-pub(super) fn clamped_deficit<T: Real>(diagonal: &[T], abs_row_sums: &[T]) -> f64 {
-    (diagonal.iter().zip(abs_row_sums))
-        .map(|(&d, &s)| (widen(s) - widen(d)) / widen(d))
+/// `max_i (Σ_j|m_ij| − m_ii)/m_ii`, at least `0`: what clamping `M`'s deficits to zero surplus adds; a deficit inside its row's rounding band reads zero, as an unscaled row's does.
+pub(super) fn clamped_deficit<T: Real>(
+    diagonal: &[T],
+    abs_row_sums: &[T],
+    degrees: &[usize],
+) -> f64 {
+    (diagonal.iter().zip(abs_row_sums).zip(degrees))
+        .map(|((&d, &s), &degree)| {
+            let (d, s) = (widen(d), widen(s));
+            match s - d > rounding_band::<T>(d, s, degree) {
+                true => (s - d) / d,
+                false => 0.0,
+            }
+        })
         .fold(0.0, f64::max)
 }
 
-/// Unscaled, a surplus inside its band `t ε (a_ii + Σ_j|a_ij|)`, `t = deg + 1` the terms that formed it, is rounding and reads zero, so a component whose every row balances floats (main's `RowBalance`).
+/// `t ε (m_ii + Σ_j|m_ij|)`, `t = deg + 1` the terms that formed the row: how far rounding alone moves its surplus.
+fn rounding_band<T: Real>(d: f64, s: f64, degree: usize) -> f64 {
+    widen(T::epsilon()) * (d + s) * (degree + 1) as f64
+}
+
+/// Unscaled, a surplus inside its rounding band is rounding and reads zero, so a component whose every row balances floats (main's `RowBalance`).
 pub(super) fn unscaled_surplus<T: Real>(d: T, abs_row_sum: T, degree: usize) -> T {
     let (d, s) = (widen(d), widen(abs_row_sum));
-    let band = widen(T::epsilon()) * (d + s) * (degree + 1) as f64;
-    match d - s > band {
+    match d - s > rounding_band::<T>(d, s, degree) {
         true => narrow(d - s),
         false => T::zero(),
     }
@@ -143,6 +167,18 @@ fn already_dominant<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> bool {
     rows.zip(&a.degrees).all(|((&d, &s), &degree)| {
         let slack = policy.tolerance.max(2.0 * degree as f64 * epsilon);
         widen(s) <= widen(d) * (1.0 + slack)
+    })
+}
+
+/// `|u|` of a certified null vector makes `M`'s rows sum to zero, so no iteration runs; peaked as SCI's, `None` if a scale leaves `T`.
+fn null_scaling<T: Real>(u: &[f64], diagonal: &[T]) -> Option<Relaxation<T>> {
+    let peak =
+        (u.iter().zip(diagonal)).fold(0.0f64, |peak, (&x, &d)| peak.max(x.abs() * widen(d).sqrt()));
+    let scales: Box<[T]> = u.iter().map(|&x| narrow::<T>(x.abs() / peak)).collect();
+    (scales.iter().all(|&f| f.is_finite() && f > T::zero())).then(|| Relaxation {
+        scales,
+        iterations: 0,
+        violation: T::zero(),
     })
 }
 

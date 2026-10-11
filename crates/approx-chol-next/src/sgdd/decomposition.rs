@@ -4,7 +4,10 @@ mod components;
 
 use std::sync::Arc;
 
-use super::{Component, Congruent, Grounding, OffDiagonal, ScalingPolicy, Sgdd, Source, Unreduced};
+use super::{
+    Component, Congruent, Grounding, NullVectors, OffDiagonal, OnDemand, ScalingPolicy, Sgdd,
+    Source, Unreduced,
+};
 use crate::input::{
     BipartiteGram, BipartiteGraph, Canonical, Csr, CsrError, FactorWidth2, IntoColumns,
 };
@@ -76,9 +79,20 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
             partition,
             mut input,
         } = self;
-        let source = match input {
+        let nulls: Option<OnDemand<'_>> = match &input {
+            Input::Gram { v, .. } => {
+                let (v, partition) = (*v, &partition);
+                Some(OnDemand::new(Box::new(move || {
+                    NullVectors::of(v, partition.components())
+                })))
+            }
+            _ => None,
+        };
+        let source = match &input {
             Input::Csr(_) => Source::Rows,
-            Input::Signless(_) | Input::BipartiteGram { .. } | Input::Gram { .. } => Source::Gram,
+            Input::Signless(_) | Input::BipartiteGram { .. } | Input::Gram { .. } => {
+                Source::Gram(nulls.as_ref())
+            }
         };
         let (mut components, mut congruent, mut dead) = (Vec::new(), Vec::new(), Vec::new());
         for given in input.components(&partition) {
