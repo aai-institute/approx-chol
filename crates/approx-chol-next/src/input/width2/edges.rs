@@ -76,9 +76,14 @@ impl<'a, T: Real, I: PrimInt> Edges<'a, T, I> {
         Ok(Self { a, b, weights })
     }
 
-    /// Column `k` is `e_a + v_b e_(offset + b)`; matched once, then looped per case.
+    /// Column `k` is `e_a + v_b(k) e_(offset + b)`; matched once, then looped per case.
     #[inline(always)]
-    pub(super) fn for_each_column(self, offset: usize, v_b: T, visit: impl FnMut(Column<T>)) {
+    pub(super) fn for_each_column(
+        self,
+        offset: usize,
+        v_b: impl Fn(usize) -> T,
+        visit: impl FnMut(Column<T>),
+    ) {
         match self.weights {
             Weights::Unit => self.columns(offset, v_b, |_| Weight::Unit, visit),
             Weights::Of(w) => self.columns(offset, v_b, |k| Weight::Of(w[k]), visit),
@@ -90,7 +95,7 @@ impl<'a, T: Real, I: PrimInt> Edges<'a, T, I> {
     fn columns(
         self,
         offset: usize,
-        v_b: T,
+        v_b: impl Fn(usize) -> T,
         weight: impl Fn(usize) -> Weight<T>,
         mut visit: impl FnMut(Column<T>),
     ) {
@@ -99,7 +104,7 @@ impl<'a, T: Real, I: PrimInt> Edges<'a, T, I> {
                 a: index(*a) as u32,
                 b: (offset + index(*b)) as u32,
                 v_a: T::one(),
-                v_b,
+                v_b: v_b(k),
                 weight: weight(k),
             });
         }

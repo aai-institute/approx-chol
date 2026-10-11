@@ -3,6 +3,7 @@
 pub(super) mod bipartite;
 pub(super) mod edges;
 pub(super) mod laplacian;
+pub(super) mod signed;
 
 use num_traits::PrimInt;
 

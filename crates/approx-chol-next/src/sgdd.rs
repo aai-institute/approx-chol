@@ -20,7 +20,7 @@ pub use scaling::{Existence, ScalingPolicy, ScalingReport};
 
 use crate::input::{
     BipartiteGram, BipartiteGraph, BipartiteLaplacian, Csr, CsrError, FactorWidth2, Laplacian,
-    UpperCsr,
+    SignedGraph, UpperCsr,
 };
 use crate::storage::{diagonal_in_range, CrossBlock, UpperAdjacency};
 use crate::Real;
@@ -227,6 +227,15 @@ impl<'a, T: Real, I: PrimInt> TryFrom<Laplacian<'a, T, I>> for Sgdd<T> {
     /// A graph Laplacian is dominant with surplus `g` by shape: nothing is searched, and a component floats exactly when its ground is zero.
     fn try_from(graph: Laplacian<'a, T, I>) -> Result<Self, Self::Error> {
         decomposition::laplacian(graph)
+    }
+}
+
+impl<'a, T: Real, I: PrimInt> TryFrom<SignedGraph<'a, T, I>> for Sgdd<T> {
+    type Error = ReduceError;
+
+    /// A signed graph is a factor-width-2 Gram that is dominant by shape: its signs are searched and its `V` decides floating, but no scaling is, so no policy applies.
+    fn try_from(graph: SignedGraph<'a, T, I>) -> Result<Self, Self::Error> {
+        decomposition::gram(graph, &ScalingPolicy::default())
     }
 }
 

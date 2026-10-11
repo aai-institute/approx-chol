@@ -262,7 +262,7 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteLaplacian<'_, T, I> {
     fn for_each_column(self, visit: impl FnMut(Column<T>)) {
         self.0
             .edges
-            .for_each_column(self.0.n_left, -T::one(), visit)
+            .for_each_column(self.0.n_left, |_| -T::one(), visit)
     }
 }
 
@@ -272,6 +272,6 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteGraph<'_, T, I> {
     }
 
     fn for_each_column(self, visit: impl FnMut(Column<T>)) {
-        self.edges.for_each_column(self.n_left, T::one(), visit)
+        self.edges.for_each_column(self.n_left, |_| T::one(), visit)
     }
 }
