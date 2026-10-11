@@ -4,7 +4,7 @@ mod components;
 
 use std::sync::Arc;
 
-use super::{Balance, Component, OffDiagonal, Proof, ScalingPolicy, Sgdd, Unreduced};
+use super::{Component, Congruent, Grounding, OffDiagonal, Proof, ScalingPolicy, Sgdd, Unreduced};
 use crate::input::{
     BipartiteGram, BipartiteGraph, Canonical, Csr, CsrError, FactorWidth2, IntoColumns,
 };
@@ -80,21 +80,24 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
             Input::Csr(_) => Proof::Rows,
             Input::Signless(_) | Input::BipartiteGram { .. } | Input::Gram { .. } => Proof::Input,
         };
-        let (mut components, mut dead) = (Vec::new(), Vec::new());
+        let (mut components, mut congruent, mut dead) = (Vec::new(), Vec::new(), Vec::new());
         for given in input.components(&partition) {
             match given {
                 Given::Dead(vertex) => dead.push(vertex),
                 Given::Signless(vertices, cross) => {
                     components.push(Component::signless(vertices, cross)?)
                 }
-                Given::Unreduced(a) => components.push(a.reduce(policy, proof)?),
+                Given::Unreduced(a) => congruent.push(a.reduce(policy, proof)?),
             }
         }
-        match &input {
-            Input::Csr(_) | Input::Signless(_) => {}
-            Input::BipartiteGram { gram, .. } => ground_or_float(*gram, &mut components)?,
-            Input::Gram { v, .. } => ground_or_float(*v, &mut components)?,
-        }
+        let grounded = match &input {
+            Input::Csr(_) | Input::Signless(_) => (congruent.into_iter())
+                .map(Congruent::by_rows)
+                .collect::<Result<Vec<_>, _>>()?,
+            Input::BipartiteGram { gram, .. } => ground_or_float(*gram, congruent)?,
+            Input::Gram { v, .. } => ground_or_float(*v, congruent)?,
+        };
+        components.extend(grounded);
         Ok(Sgdd {
             n: partition.n(),
             components,
@@ -248,12 +251,12 @@ fn bipartite_block<T: Real>(
 /// Floats each folded component when `1ᵀM1 ≤ 5ε·tr M`, else grounds it on `s = M·1`, both summed by column as assembled rows cancel them: with `f = F·1` and `p_k = f_a v_a + f_b v_b`, `s_a = Σ_k bilinear_k(f_a v_a, p_k)` clamped at zero, `1ᵀM1 = Σ_k bilinear_k(p_k, p_k)` and `tr M = Σ_k [bilinear_k(f_a v_a, f_a v_a) + bilinear_k(f_b v_b, f_b v_b)]`, `ε` that of `T`; sums run in `f64` in column order over nonzero weights, the certificate's two sides as `ε·term`, an exact scaling under which neither overflows, each end's component and slot are read off the components' own vertices, an end at a dead vertex being in none; a column straddling components keeps only its own end's square, a frustrated component is definite and keeps its rows' surplus.
 fn ground_or_float<T: Real>(
     v: impl IntoColumns<T>,
-    components: &mut [Component<T>],
-) -> Result<(), ReduceError> {
+    components: Vec<Congruent<T>>,
+) -> Result<Vec<Component<T>>, ReduceError> {
     let mut ends = vec![None; v.n()];
     for (c, component) in components.iter().enumerate() {
         let congruence = component.frame().congruence();
-        for (slot, &vertex) in component.vertices().iter().enumerate() {
+        for (slot, &vertex) in component.frame().vertices().iter().enumerate() {
             ends[vertex as usize] = Some(End {
                 component: c,
                 slot,
@@ -262,7 +265,7 @@ fn ground_or_float<T: Real>(
         }
     }
     let mut surplus: Vec<Vec<f64>> = (components.iter())
-        .map(|component| vec![0.0; component.vertices().len()])
+        .map(|component| vec![0.0; component.frame().vertices().len()])
         .collect();
     let mut certificates = vec![Certificate::default(); components.len()];
     let epsilon = widen(T::epsilon());
@@ -295,23 +298,28 @@ fn ground_or_float<T: Real>(
             }
         },
     );
-    let decided = components.iter_mut().zip(surplus).zip(certificates);
-    for ((component, surplus), certificate) in decided {
-        if let (_, Balance::Frustrated(_)) = component.m() {
-            continue;
+    let decided = components.into_iter().zip(surplus).zip(certificates);
+    let decide = |((component, surplus), certificate): ((Congruent<T>, Vec<f64>), Certificate)| {
+        if !component.folds() {
+            return component.by_rows();
         }
         if certificate.ones <= 5.0 * epsilon * certificate.trace {
-            component.float();
-            continue;
+            return component.grounded(Grounding::ungrounded());
         }
+        let vertices = component.frame().vertices();
         let surplus: Vec<T> = surplus.into_iter().map(|s| narrow(s.max(0.0))).collect();
         if let Some(slot) = surplus.iter().position(|&s| !in_range(s)) {
-            let vertex = component.vertices()[slot];
+            let vertex = vertices[slot];
             return Err(ReduceError::OutOfRange { vertex });
         }
-        component.ground(surplus)?;
-    }
-    Ok(())
+        // Unproven, a surplus that vanishes in `T` is never a float.
+        let vertex = vertices[0];
+        match Grounding::of(surplus) {
+            grounding if grounding.is_grounded() => component.grounded(grounding),
+            _ => Err(ReduceError::Unscalable { vertex }),
+        }
+    };
+    decided.map(decide).collect()
 }
 
 /// Where a column's end sits once reduced, and its `f_i`.

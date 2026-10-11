@@ -1,4 +1,4 @@
-//! A reduced component, whose grounding only proof or a surviving surplus may change.
+//! A reduced component: `M` and where it sits in `A`.
 
 use std::sync::Arc;
 
@@ -68,35 +68,6 @@ impl<T: Real> Component<T> {
     /// Whether `A_c` is proven singular, so a solve returns `A_c⁺b`.
     pub fn floats(&self) -> bool {
         matches!(&self.m.balance, Balance::Balanced(grounding) if !grounding.is_grounded())
-    }
-
-    /// Proven singular: one vertex anchors instead of the surplus rounding left.
-    pub(super) fn float(&mut self) {
-        *self.balanced_grounding() = Grounding::ungrounded();
-    }
-
-    /// An unproven component keeps a surplus: one that vanishes in `T` is `Unscalable`, never a float.
-    pub(super) fn ground(&mut self, surplus: Vec<T>) -> Result<(), ReduceError> {
-        assert_eq!(surplus.len(), self.m.n(), "one surplus per row");
-        let vertex = self.vertices()[0];
-        let slot = self.balanced_grounding();
-        let grounding = Grounding::of(surplus);
-        if !grounding.is_grounded() {
-            return Err(ReduceError::Unscalable { vertex });
-        }
-        *slot = grounding;
-        match self.m.balance.ground_in_range() {
-            true => Ok(()),
-            false => Err(ReduceError::OutOfRange { vertex }),
-        }
-    }
-
-    /// Panics unless folded: only a Z-matrix's surplus is its row sums `M·1`.
-    fn balanced_grounding(&mut self) -> &mut Grounding<T> {
-        match &mut self.m.balance {
-            Balance::Balanced(grounding) => grounding,
-            Balance::Frustrated(_) => panic!("a frustrated component is definite"),
-        }
     }
 
     /// `M`: its off-diagonal and its balance.

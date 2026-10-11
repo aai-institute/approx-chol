@@ -258,7 +258,7 @@ impl<T: Real> Unreduced<T> {
         self.diagonal == [T::zero()]
     }
 
-    fn reduce(self, policy: &ScalingPolicy, proof: Proof) -> Result<Component<T>, ReduceError> {
+    fn reduce(self, policy: &ScalingPolicy, proof: Proof) -> Result<Congruent<T>, ReduceError> {
         within_series_floor::<T>(&self.vertices)?;
         // A view's zero diagonal beside a cell is its terms underflowing, not a non-GDD input.
         let lost = self.diagonal.iter().position(|&d| d == T::zero());
@@ -271,21 +271,16 @@ impl<T: Real> Unreduced<T> {
             true => Some(Congruence::identity()),
             false => signature::signature(&self.off_diagonal),
         };
-        let vertex = self.vertices[0];
-        let component = self.into_component(scaling, signs, policy)?;
-        if !component.m().1.ground_in_range() {
-            return Err(ReduceError::OutOfRange { vertex });
-        }
-        Ok(component)
+        self.into_congruent(scaling, signs, policy)
     }
 
-    /// `F = S R` folds and scales `A_c`, or only scales a frustrated one; deficits clamp to zero surplus.
-    fn into_component(
+    /// `F = S R` folds and scales `A_c`, or only scales a frustrated one.
+    fn into_congruent(
         self,
         scaling: scaling::Scaling<T>,
         signs: Option<Congruence<T>>,
         policy: &ScalingPolicy,
-    ) -> Result<Component<T>, ReduceError> {
+    ) -> Result<Congruent<T>, ReduceError> {
         let vertex = self.vertices[0];
         let folds = signs.is_some();
         let signs = signs.unwrap_or_else(Congruence::identity);
@@ -298,40 +293,99 @@ impl<T: Real> Unreduced<T> {
         let off_diagonal =
             (congruence.transform(self.off_diagonal)).ok_or(ReduceError::Unscalable { vertex })?;
         // Signs keep every magnitude, so only a scaling sums `M`'s rows again.
-        let (diagonal, abs_row_sums) = match &relaxation {
-            None => (self.diagonal, self.abs_row_sums),
+        let (rows, report) = match relaxation {
+            None => {
+                let rows = RowSums {
+                    diagonal: self.diagonal,
+                    abs: self.abs_row_sums,
+                    surplus: RowSurplus::Banded(self.degrees),
+                };
+                // An unscaled deficit lies inside the rounding band `already_dominant` allowed.
+                (rows, None)
+            }
             Some(relaxation) => {
-                let diagonal = (self.diagonal.iter().zip(&relaxation.scales[..]))
+                let diagonal: Vec<T> = (self.diagonal.iter().zip(&relaxation.scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();
-                (diagonal, off_diagonal.abs_row_sums())
+                let abs = off_diagonal.abs_row_sums();
+                let deficit = scaling::clamped_deficit(&diagonal, &abs);
+                let rows = RowSums {
+                    diagonal,
+                    abs,
+                    surplus: RowSurplus::Residue,
+                };
+                (rows, policy.certify(&relaxation, deficit))
             }
         };
-        // An unscaled deficit lies inside the rounding band `already_dominant` allowed.
-        let report = relaxation.as_ref().and_then(|relaxation| {
-            policy.certify(
-                relaxation,
-                scaling::clamped_deficit(&diagonal, &abs_row_sums),
-            )
-        });
-        let rows = diagonal.iter().zip(&abs_row_sums);
-        // A scaled surplus is its scaling's residue, which no row bound tells from a real one.
-        let surplus = match &relaxation {
-            None => (rows.zip(&self.degrees))
+        Ok(Congruent {
+            frame: Frame::new(self.vertices, congruence),
+            off_diagonal,
+            folds,
+            rows,
+            report,
+        })
+    }
+}
+
+/// `M = F · A_c · F` before its grounding is decided: by its rows, or for a folded view component by its input.
+pub(super) struct Congruent<T> {
+    frame: Frame<T>,
+    off_diagonal: OffDiagonal<T>,
+    folds: bool,
+    rows: RowSums<T>,
+    report: Option<ScalingReport>,
+}
+
+/// `M`'s diagonal and `Σ_j |m_ij|`, read only when the rows decide the surplus.
+struct RowSums<T> {
+    diagonal: Vec<T>,
+    abs: Vec<T>,
+    surplus: RowSurplus,
+}
+
+/// How a row's `m_ii − Σ_j |m_ij|` reads as surplus.
+enum RowSurplus {
+    /// Unscaled: inside the band its entries per row allow, it is rounding and reads zero.
+    Banded(Vec<usize>),
+    /// Scaled: the scaling's residue, which no row bound tells from a real surplus, deficits clamped to zero.
+    Residue,
+}
+
+impl<T: Real> Congruent<T> {
+    pub(super) fn frame(&self) -> &Frame<T> {
+        &self.frame
+    }
+
+    pub(super) fn folds(&self) -> bool {
+        self.folds
+    }
+
+    /// The surplus `M`'s own rows show.
+    pub(super) fn by_rows(self) -> Result<Component<T>, ReduceError> {
+        let rows = self.rows.diagonal.iter().zip(&self.rows.abs);
+        let surplus = match &self.rows.surplus {
+            RowSurplus::Banded(degrees) => (rows.zip(degrees))
                 .map(|((&d, &s), &degree)| scaling::unscaled_surplus(d, s, degree))
                 .collect(),
-            Some(_) => rows.map(|(&d, &s)| (d - s).max(T::zero())).collect(),
+            RowSurplus::Residue => rows.map(|(&d, &s)| (d - s).max(T::zero())).collect(),
         };
-        let grounding = Grounding::of(surplus);
-        let balance = match folds {
+        self.grounded(Grounding::of(surplus))
+    }
+
+    /// The ground's `Σs` must clear the bound any diagonal does.
+    pub(super) fn grounded(self, grounding: Grounding<T>) -> Result<Component<T>, ReduceError> {
+        let vertex = self.frame.vertices()[0];
+        let balance = match self.folds {
             true => Balance::Balanced(grounding),
             false => Balance::Frustrated(grounding),
         };
-        let frame = Frame::new(self.vertices, congruence);
+        if !balance.ground_in_range() {
+            return Err(ReduceError::OutOfRange { vertex });
+        }
         Ok(Component::new(
-            frame,
-            Sdd::new(off_diagonal, balance),
-            report,
+            self.frame,
+            Sdd::new(self.off_diagonal, balance),
+            self.report,
         ))
     }
 }
