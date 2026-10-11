@@ -14,7 +14,7 @@ use num_traits::PrimInt;
 pub use component::Component;
 use component::Sdd;
 use congruence::Congruence;
-use decomposition::{BipartiteShape, Decomposition};
+use decomposition::Fold;
 use null_vectors::{NullVectors, OnDemand};
 pub use scaling::{Existence, ScalingPolicy, ScalingReport};
 
@@ -193,7 +193,7 @@ impl<T: Real> Sgdd<T> {
         csr: Csr<'_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, FromCsrError> {
-        Ok(Decomposition::csr(csr)?.reduce(&policy)?)
+        decomposition::csr(csr, &policy)
     }
 
     /// As [`from_csr`](Self::from_csr), the triangle symmetric by storage: no mirror is checked.
@@ -201,7 +201,7 @@ impl<T: Real> Sgdd<T> {
         csr: UpperCsr<'_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, FromCsrError> {
-        Ok(Decomposition::upper_csr(csr)?.reduce(&policy)?)
+        decomposition::upper_csr(csr, &policy)
     }
 
     /// `A = V Vᵀ`: scales, folds or covers each component as general, deciding floating from `V`.
@@ -209,7 +209,7 @@ impl<T: Real> Sgdd<T> {
         v: FactorWidth2<'_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        Decomposition::gram(v)?.reduce(&policy)
+        decomposition::gram(v, &policy)
     }
 
     /// `A = V W Vᵀ` on two disjoint sides: as [`from_gram`](Self::from_gram), a bipartite component then taking the block elimination.
@@ -217,7 +217,7 @@ impl<T: Real> Sgdd<T> {
         gram: BipartiteGram<'_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        Decomposition::bipartite_gram(gram)?.reduce(&policy)
+        decomposition::bipartite_gram(gram, &policy)
     }
 }
 
@@ -226,7 +226,7 @@ impl<'a, T: Real, I: PrimInt> TryFrom<Laplacian<'a, T, I>> for Sgdd<T> {
 
     /// A graph Laplacian is dominant with surplus `g` by shape: nothing is searched, and a component floats exactly when its ground is zero.
     fn try_from(graph: Laplacian<'a, T, I>) -> Result<Self, Self::Error> {
-        Decomposition::laplacian(graph)?.reduce(&ScalingPolicy::default())
+        decomposition::laplacian(graph)
     }
 }
 
@@ -235,8 +235,7 @@ impl<'a, T: Real, I: PrimInt> TryFrom<BipartiteGraph<'a, T, I>> for Sgdd<T> {
 
     /// A signless bipartite Laplacian has zero surplus by shape: every component floats untested.
     fn try_from(graph: BipartiteGraph<'a, T, I>) -> Result<Self, Self::Error> {
-        Decomposition::<T, I>::bipartite_graph(graph, graph.n_left(), BipartiteShape::Signless)?
-            .reduce(&ScalingPolicy::default())
+        decomposition::bipartite_graph(graph, graph.n_left(), Fold::Signless)
     }
 }
 
@@ -245,8 +244,7 @@ impl<'a, T: Real, I: PrimInt> TryFrom<BipartiteLaplacian<'a, T, I>> for Sgdd<T> 
 
     /// A bipartite Laplacian is a Z-matrix with zero surplus by shape: every component floats untested.
     fn try_from(graph: BipartiteLaplacian<'a, T, I>) -> Result<Self, Self::Error> {
-        Decomposition::<T, I>::bipartite_graph(graph, graph.n_left(), BipartiteShape::Laplacian)?
-            .reduce(&ScalingPolicy::default())
+        decomposition::bipartite_graph(graph, graph.n_left(), Fold::Laplacian)
     }
 }
 

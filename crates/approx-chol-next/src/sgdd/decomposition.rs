@@ -6,64 +6,74 @@ use std::sync::Arc;
 
 use super::component::ProvenLaplacian;
 use super::{
-    Component, Congruence, Congruent, Grounding, NullVectors, OffDiagonal, OnDemand, ScalingPolicy,
-    Sgdd, Source, Unreduced,
+    Component, Congruence, Congruent, FromCsrError, Grounding, NullVectors, OffDiagonal, OnDemand,
+    ScalingPolicy, Sgdd, Source, Unreduced,
 };
-use crate::input::{
-    BipartiteGram, Canonical, Csr, CsrError, FactorWidth2, IntoColumns, Laplacian, UpperCsr,
-};
+use crate::input::{BipartiteGram, Canonical, Csr, IntoColumns, Laplacian, UpperCsr};
 use crate::storage::{in_range, narrow, widen, CrossBlock, Rows, UpperAdjacency};
 use crate::{Real, ReduceError};
 use components::{Partition, UnionFind};
 
-/// One input split into components, and where each component's entries are read.
-pub(super) struct Decomposition<'v, T, I> {
-    partition: Partition,
-    stored: Stored<'v, T, I>,
+/// One input's storage: what its type proves decides how each component is given, and how the ones it leaves unproven ground.
+trait Stored<T: Real> {
+    /// A view's Gram is GDD by type; rows only claim `A`.
+    fn source<'n, 'v>(nulls: Option<&'n OnDemand<'v>>) -> Source<'n, 'v> {
+        Source::Gram(nulls)
+    }
+
+    /// A general factor's null vectors, built by the first component that is not already dominant.
+    fn nulls<'p>(&self, _partition: &'p Partition) -> Option<OnDemand<'p>>
+    where
+        Self: 'p,
+    {
+        None
+    }
+
+    fn given(&mut self, vertices: &[u32], partition: &Partition) -> Result<Given<T>, ReduceError>;
+
+    /// Rows ground on their own rows; a factor grounds or floats on `V` once every component is reduced.
+    fn ground(&self, congruent: Vec<Congruent<T>>) -> Result<Vec<Component<T>>, ReduceError> {
+        congruent.into_iter().map(Congruent::by_rows).collect()
+    }
 }
 
-/// Where each component's entries are read, with what the input's type proves beyond them; a lone component takes an assembled input whole.
-enum Stored<'v, T, I> {
-    /// Rows only claim `A`: each component searches its signature and scaling, its own rows decide its floating, and no scaling is known to exist.
-    Rows(Canonical<'v, T, I>),
-    /// A general factor-width-2 `A`, as its CSR would store it.
-    General {
-        a: Option<Assembled<T>>,
-        proof: Proof<FactorWidth2<'v, T, I>, GeneralShape<'v, T>>,
-    },
-    /// `C` of `[D_l C; Cᵀ D_r]`; a bipartite component takes the block elimination.
-    Bipartite {
-        c: Option<Biadjacency<T>>,
-        proof: Proof<BipartiteGram<'v, T, I>, BipartiteShape>,
-    },
+/// Rows that only claim `A`: each component searches its signature and scaling, its own rows decide its floating, and no scaling is known to exist.
+struct ClaimedRows<'v, T, I>(Canonical<'v, T, I>);
+
+/// A factor-width-2 `V`, so GDD by type: each component searches its signature and scaling, and `V` decides floating once every one is reduced.
+struct GeneralFactor<T, V> {
+    a: Option<Assembled<T>>,
+    v: V,
 }
 
-/// What a view's type proves about `A`, each shape only on the storage it can take.
+/// A graph Laplacian, grounded by `g` when given: a dominant Z-matrix whose surplus is `g`, so nothing is searched and a component floats exactly when its `g` is zero.
+struct LaplacianShape<'v, T> {
+    a: Option<Assembled<T>>,
+    ground: Option<&'v [T]>,
+}
+
+/// `[D_l C; Cᵀ D_r]` of a bipartite Gram, GDD by type: each component searches as a factor's does, takes the block elimination, and reads its diagonal off the sides.
+struct BipartiteFactor<'v, T, I> {
+    c: Option<Biadjacency<T>>,
+    gram: BipartiteGram<'v, T, I>,
+}
+
+/// A bipartite graph: its diagonal is `|C|`'s row and column sums, so it is balanced and singular, its fold proves the signature, and every component floats untested.
+struct BipartiteShape<T> {
+    c: Option<Biadjacency<T>>,
+    fold: Fold,
+}
+
+/// How a bipartite graph's `C` folds into a Z-matrix.
 #[derive(Clone, Copy)]
-enum Proof<V, S> {
-    /// `V`, factor width 2 and so GDD: each component searches its signature and scaling, and `V` decides floating once every one is reduced; the sides' diagonals are read from it.
-    Factor(V),
-    /// Its signature, dominance and grounding: nothing is searched.
-    Shape(S),
-}
-
-/// A general shape proving its own signature, dominance and grounding.
-#[derive(Clone, Copy)]
-enum GeneralShape<'v, T> {
-    /// A graph Laplacian, grounded by `g` when given: a dominant Z-matrix whose surplus is `g`, so a component floats exactly when its `g` is zero.
-    Laplacian(Option<&'v [T]>),
-}
-
-/// A bipartite shape proving its own signature, dominance and grounding: its diagonal is `|C|`'s row and column sums, so it is balanced and singular, and every component floats untested.
-#[derive(Clone, Copy)]
-pub(super) enum BipartiteShape {
+pub(super) enum Fold {
     /// `C ≥ 0`: negating one side folds it.
     Signless,
     /// `C ≤ 0`: already a Z-matrix.
     Laplacian,
 }
 
-impl BipartiteShape {
+impl Fold {
     fn signs<T: Real>(self, n_eliminated: usize) -> Congruence<T> {
         match self {
             Self::Signless => Congruence::negate_from(n_eliminated),
@@ -72,199 +82,176 @@ impl BipartiteShape {
     }
 }
 
-impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
-    /// Checks symmetry and range in the walk that finds the components.
-    pub(super) fn csr(csr: Csr<'v, T, I>) -> Result<Self, CsrError> {
-        let csr = Canonical::of(csr)?;
-        Ok(Self {
-            partition: components::of_csr(&csr)?,
-            stored: Stored::Rows(csr),
-        })
+/// Checks symmetry and range in the walk that finds the components.
+pub(super) fn csr<T: Real, I: PrimInt>(
+    csr: Csr<'_, T, I>,
+    policy: &ScalingPolicy,
+) -> Result<Sgdd<T>, FromCsrError> {
+    let csr = Canonical::of(csr)?;
+    let partition = components::of_csr(&csr)?;
+    Ok(reduce(partition, ClaimedRows(csr), policy)?)
+}
+
+/// Checks position and range in the walk that finds the components: the triangle is symmetric by storage.
+pub(super) fn upper_csr<T: Real, I: PrimInt>(
+    csr: UpperCsr<'_, T, I>,
+    policy: &ScalingPolicy,
+) -> Result<Sgdd<T>, FromCsrError> {
+    let csr = Canonical::upper(csr)?;
+    let partition = components::of_upper(&csr)?;
+    Ok(reduce(
+        partition,
+        ClaimedRows(csr.into_canonical()),
+        policy,
+    )?)
+}
+
+pub(super) fn gram<T: Real>(
+    v: impl IntoColumns<T>,
+    policy: &ScalingPolicy,
+) -> Result<Sgdd<T>, ReduceError> {
+    let (a, partition) = assemble_general(v)?;
+    reduce(partition, GeneralFactor { a: Some(a), v }, policy)
+}
+
+pub(super) fn bipartite_gram<T: Real, I: PrimInt>(
+    gram: BipartiteGram<'_, T, I>,
+    policy: &ScalingPolicy,
+) -> Result<Sgdd<T>, ReduceError> {
+    let (c, partition) = assemble_bipartite(gram, gram.n_left())?;
+    reduce(partition, BipartiteFactor { c: Some(c), gram }, policy)
+}
+
+/// Nothing is searched, so no policy applies.
+pub(super) fn laplacian<T: Real, I: PrimInt>(
+    graph: Laplacian<'_, T, I>,
+) -> Result<Sgdd<T>, ReduceError> {
+    let (a, partition) = assemble_general(graph)?;
+    let ground = graph.ground();
+    let stored = LaplacianShape { a: Some(a), ground };
+    reduce(partition, stored, &ScalingPolicy::default())
+}
+
+/// Nothing is searched, so no policy applies.
+pub(super) fn bipartite_graph<T: Real>(
+    graph: impl IntoColumns<T>,
+    n_left: usize,
+    fold: Fold,
+) -> Result<Sgdd<T>, ReduceError> {
+    let (c, partition) = assemble_bipartite(graph, n_left)?;
+    let stored = BipartiteShape { c: Some(c), fold };
+    reduce(partition, stored, &ScalingPolicy::default())
+}
+
+/// Dead components are dropped, proven ones are built as their input proves, and the rest reduce, then ground as their input decides.
+fn reduce<T: Real, S: Stored<T>>(
+    partition: Partition,
+    mut stored: S,
+    policy: &ScalingPolicy,
+) -> Result<Sgdd<T>, ReduceError> {
+    let nulls = stored.nulls(&partition);
+    let source = S::source(nulls.as_ref());
+    let (mut components, mut congruent, mut dead) = (Vec::new(), Vec::new(), Vec::new());
+    for vertices in partition.components() {
+        match stored.given(vertices, &partition)? {
+            Given::Dead(vertex) => dead.push(vertex),
+            Given::Proven(component) => components.push(component),
+            Given::Unreduced(a) => congruent.push(a.reduce(policy, source)?),
+        }
+    }
+    components.extend(stored.ground(congruent)?);
+    Ok(Sgdd {
+        n: partition.n(),
+        components,
+        dead: dead.into_boxed_slice(),
+    })
+}
+
+impl<T: Real, I: PrimInt> Stored<T> for ClaimedRows<'_, T, I> {
+    fn source<'n, 'v>(_: Option<&'n OnDemand<'v>>) -> Source<'n, 'v> {
+        Source::Rows
     }
 
-    /// Checks position and range in the walk that finds the components: the triangle is symmetric by storage.
-    pub(super) fn upper_csr(csr: UpperCsr<'v, T, I>) -> Result<Self, CsrError> {
-        let csr = Canonical::upper(csr)?;
-        Ok(Self {
-            partition: components::of_upper(&csr)?,
-            stored: Stored::Rows(csr.into_canonical()),
-        })
+    fn given(&mut self, vertices: &[u32], partition: &Partition) -> Result<Given<T>, ReduceError> {
+        let a = csr_component(&self.0, vertices, partition.position());
+        Ok(Given::unreduced(a))
+    }
+}
+
+impl<T: Real, V: IntoColumns<T>> Stored<T> for GeneralFactor<T, V> {
+    fn nulls<'p>(&self, partition: &'p Partition) -> Option<OnDemand<'p>>
+    where
+        Self: 'p,
+    {
+        let v = self.v;
+        Some(OnDemand::new(Box::new(move || {
+            NullVectors::of(v, partition.components())
+        })))
     }
 
-    pub(super) fn gram(v: FactorWidth2<'v, T, I>) -> Result<Self, ReduceError> {
-        let (a, partition) = assemble_general(v)?;
-        Ok(Self {
-            partition,
-            stored: Stored::General {
-                a: Some(a),
-                proof: Proof::Factor(v),
-            },
-        })
+    fn given(&mut self, vertices: &[u32], partition: &Partition) -> Result<Given<T>, ReduceError> {
+        let (adjacency, diagonal) = general_block(&mut self.a, vertices, partition);
+        let off_diagonal = OffDiagonal::General(adjacency);
+        Ok(Given::unreduced(Unreduced::new(
+            vertices.into(),
+            off_diagonal,
+            diagonal,
+        )))
     }
 
-    pub(super) fn laplacian(graph: Laplacian<'v, T, I>) -> Result<Self, ReduceError> {
-        let (a, partition) = assemble_general(graph)?;
-        Ok(Self {
-            partition,
-            stored: Stored::General {
-                a: Some(a),
-                proof: Proof::Shape(GeneralShape::Laplacian(graph.ground())),
-            },
-        })
+    fn ground(&self, congruent: Vec<Congruent<T>>) -> Result<Vec<Component<T>>, ReduceError> {
+        ground_or_float(self.v, congruent)
     }
+}
 
-    pub(super) fn bipartite_gram(gram: BipartiteGram<'v, T, I>) -> Result<Self, ReduceError> {
-        let (c, partition) = assemble_bipartite(gram, gram.n_left())?;
-        Ok(Self {
-            partition,
-            stored: Stored::Bipartite {
-                c: Some(c),
-                proof: Proof::Factor(gram),
-            },
-        })
+impl<T: Real> Stored<T> for LaplacianShape<'_, T> {
+    fn given(&mut self, vertices: &[u32], partition: &Partition) -> Result<Given<T>, ReduceError> {
+        let (adjacency, diagonal) = general_block(&mut self.a, vertices, partition);
+        let ground = (self.ground).map(|g| vertices.iter().map(|&v| g[v as usize]).collect());
+        let laplacian = ProvenLaplacian::new(vertices.into(), adjacency, diagonal, ground);
+        match laplacian.dead() {
+            Some(vertex) => Ok(Given::Dead(vertex)),
+            None => Ok(Given::Proven(laplacian.into_component()?)),
+        }
     }
+}
 
-    pub(super) fn bipartite_graph(
-        graph: impl IntoColumns<T>,
-        n_left: usize,
-        shape: BipartiteShape,
-    ) -> Result<Self, ReduceError> {
-        let (c, partition) = assemble_bipartite(graph, n_left)?;
-        Ok(Self {
-            partition,
-            stored: Stored::Bipartite {
-                c: Some(c),
-                proof: Proof::Shape(shape),
-            },
-        })
-    }
-
-    /// Dead components are dropped; rows ground on their own rows, a shape's as it proves, and a factor's ground or float on `V` once every one is reduced.
-    pub(super) fn reduce(self, policy: &ScalingPolicy) -> Result<Sgdd<T>, ReduceError> {
-        let Self {
-            partition,
-            mut stored,
-        } = self;
-        let nulls: Option<OnDemand<'_>> = match &stored {
-            Stored::General {
-                proof: Proof::Factor(v),
-                ..
-            } => {
-                let (v, partition) = (*v, &partition);
-                Some(OnDemand::new(Box::new(move || {
-                    NullVectors::of(v, partition.components())
-                })))
-            }
-            _ => None,
+impl<T: Real, I: PrimInt> Stored<T> for BipartiteFactor<'_, T, I> {
+    fn given(&mut self, vertices: &[u32], partition: &Partition) -> Result<Given<T>, ReduceError> {
+        let (left, right) = self.gram.diagonals();
+        let diagonal = |v: u32| match (v as usize).checked_sub(left.len()) {
+            None => left[v as usize],
+            Some(j) => right[j],
         };
-        let source = match &stored {
-            Stored::Rows(_) => Source::Rows,
-            Stored::General { .. } | Stored::Bipartite { .. } => Source::Gram(nulls.as_ref()),
-        };
-        let (mut components, mut congruent, mut dead) = (Vec::new(), Vec::new(), Vec::new());
-        for given in stored.components(&partition) {
-            match given {
-                Given::Dead(vertex) => dead.push(vertex),
-                Given::Folded(vertices, cross, signs) => {
-                    components.push(Component::folded(vertices, cross, signs)?)
-                }
-                Given::Laplacian(laplacian) => components.push(laplacian.into_component()?),
-                Given::Unreduced(a) => congruent.push(a.reduce(policy, source)?),
+        let a = bipartite_component(&mut self.c, vertices, partition, diagonal);
+        Ok(Given::unreduced(a))
+    }
+
+    fn ground(&self, congruent: Vec<Congruent<T>>) -> Result<Vec<Component<T>>, ReduceError> {
+        ground_or_float(self.gram, congruent)
+    }
+}
+
+/// A lone vertex is general, so a bipartite component always has both sides.
+impl<T: Real> Stored<T> for BipartiteShape<T> {
+    fn given(&mut self, vertices: &[u32], partition: &Partition) -> Result<Given<T>, ReduceError> {
+        match vertices {
+            [v] => Ok(Given::Dead(*v)),
+            _ => {
+                let (vertices, cross) = bipartite_block(&mut self.c, vertices, partition);
+                let signs = self.fold.signs(cross.n_eliminated());
+                Ok(Given::Proven(Component::folded(vertices, cross, signs)?))
             }
         }
-        let grounded = match &stored {
-            Stored::Rows(_)
-            | Stored::General {
-                proof: Proof::Shape(_),
-                ..
-            }
-            | Stored::Bipartite {
-                proof: Proof::Shape(_),
-                ..
-            } => (congruent.into_iter())
-                .map(Congruent::by_rows)
-                .collect::<Result<Vec<_>, _>>()?,
-            Stored::General {
-                proof: Proof::Factor(v),
-                ..
-            } => ground_or_float(*v, congruent)?,
-            Stored::Bipartite {
-                proof: Proof::Factor(gram),
-                ..
-            } => ground_or_float(*gram, congruent)?,
-        };
-        components.extend(grounded);
-        Ok(Sgdd {
-            n: partition.n(),
-            components,
-            dead: dead.into_boxed_slice(),
-        })
     }
 }
 
-impl<'v, T: Real, I: PrimInt> Stored<'v, T, I> {
-    /// A lone vertex is general, so a bipartite component always has both sides.
-    fn components<'s>(
-        &'s mut self,
-        partition: &'s Partition,
-    ) -> impl Iterator<Item = Given<T>> + use<'s, 'v, T, I> {
-        partition.components().map(move |vertices| match self {
-            Self::Bipartite {
-                c,
-                proof: Proof::Shape(shape),
-            } => match vertices {
-                [v] => Given::Dead(*v),
-                _ => {
-                    let (vertices, cross) = bipartite_block(c, vertices, partition);
-                    let signs = shape.signs(cross.n_eliminated());
-                    Given::Folded(vertices, cross, signs)
-                }
-            },
-            Self::Bipartite {
-                c,
-                proof: Proof::Factor(gram),
-            } => {
-                let (left, right) = gram.diagonals();
-                let diagonal = |v: u32| match (v as usize).checked_sub(left.len()) {
-                    None => left[v as usize],
-                    Some(j) => right[j],
-                };
-                Given::unreduced(bipartite_component(c, vertices, partition, diagonal))
-            }
-            Self::Rows(csr) => Given::unreduced(csr_component(csr, vertices, partition.position())),
-            Self::General {
-                a,
-                proof: Proof::Factor(_),
-            } => {
-                let (adjacency, diagonal) = general_block(a, vertices, partition);
-                let off_diagonal = OffDiagonal::General(adjacency);
-                Given::unreduced(Unreduced::new(vertices.into(), off_diagonal, diagonal))
-            }
-            Self::General {
-                a,
-                proof: Proof::Shape(GeneralShape::Laplacian(ground)),
-            } => {
-                let (adjacency, diagonal) = general_block(a, vertices, partition);
-                let ground = ground.map(|g| vertices.iter().map(|&v| g[v as usize]).collect());
-                Given::laplacian(ProvenLaplacian::new(
-                    vertices.into(),
-                    adjacency,
-                    diagonal,
-                    ground,
-                ))
-            }
-        })
-    }
-}
-
-/// A component as its input gives it: what its shape proves decides how much reduction it takes.
+/// A component as its input gives it.
 enum Given<T> {
     /// A lone vertex with nothing to solve.
     Dead(u32),
-    /// A bipartite shape's block and the signs folding it: dominant and floating by shape.
-    Folded(Box<[u32]>, CrossBlock<T>, Congruence<T>),
-    /// A graph Laplacian's component: signed, dominant and grounded by shape.
-    Laplacian(ProvenLaplacian<T>),
+    /// Built as its input's type proves: nothing is searched.
+    Proven(Component<T>),
     Unreduced(Unreduced<T>),
 }
 
@@ -273,13 +260,6 @@ impl<T: Real> Given<T> {
         match a.is_dead() {
             true => Self::Dead(a.vertices[0]),
             false => Self::Unreduced(a),
-        }
-    }
-
-    fn laplacian(laplacian: ProvenLaplacian<T>) -> Self {
-        match laplacian.dead() {
-            Some(vertex) => Self::Dead(vertex),
-            None => Self::Laplacian(laplacian),
         }
     }
 }
