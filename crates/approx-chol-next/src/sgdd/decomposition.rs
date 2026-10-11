@@ -11,6 +11,7 @@ use super::{
 };
 use crate::input::{
     BipartiteGram, BipartiteGraph, Canonical, Csr, CsrError, FactorWidth2, IntoColumns, Laplacian,
+    UpperCsr,
 };
 use crate::storage::{in_range, narrow, widen, CrossBlock, Rows, UpperAdjacency};
 use crate::{Real, ReduceError};
@@ -68,6 +69,15 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         Ok(Self {
             partition: components::of_csr(&csr)?,
             stored: Stored::Rows(csr),
+        })
+    }
+
+    /// Checks position and range in the walk that finds the components: the triangle is symmetric by storage.
+    pub(super) fn upper_csr(csr: UpperCsr<'v, T, I>) -> Result<Self, CsrError> {
+        let csr = Canonical::upper(csr)?;
+        Ok(Self {
+            partition: components::of_upper(&csr)?,
+            stored: Stored::Rows(csr.into_canonical()),
         })
     }
 

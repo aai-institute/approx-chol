@@ -1,11 +1,20 @@
 use num_traits::PrimInt;
 
-use crate::input::{Canonical, CsrError};
+use crate::input::{Canonical, CsrError, UpperCanonical};
 use crate::Real;
 
 /// Unions the pattern in the walk that checks symmetry and range.
 pub(super) fn of_csr<T: Real, I: PrimInt>(
     csr: &Canonical<'_, T, I>,
+) -> Result<Partition, CsrError> {
+    let mut sets = UnionFind::new(csr.n());
+    csr.walk(|i, j, _| sets.union(i, j))?;
+    Ok(sets.into_partition())
+}
+
+/// Unions the pattern in the walk that checks range: upper storage has no mirror to check.
+pub(super) fn of_upper<T: Real, I: PrimInt>(
+    csr: &UpperCanonical<'_, T, I>,
 ) -> Result<Partition, CsrError> {
     let mut sets = UnionFind::new(csr.n());
     csr.walk(|i, j, _| sets.union(i, j))?;

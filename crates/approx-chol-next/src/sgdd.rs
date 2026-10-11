@@ -18,7 +18,9 @@ use decomposition::Decomposition;
 use null_vectors::{NullVectors, OnDemand};
 pub use scaling::{Existence, ScalingPolicy, ScalingReport};
 
-use crate::input::{BipartiteGram, BipartiteGraph, Csr, CsrError, FactorWidth2, Laplacian};
+use crate::input::{
+    BipartiteGram, BipartiteGraph, Csr, CsrError, FactorWidth2, Laplacian, UpperCsr,
+};
 use crate::storage::{diagonal_in_range, CrossBlock, UpperAdjacency};
 use crate::Real;
 
@@ -191,6 +193,14 @@ impl<T: Real> Sgdd<T> {
         policy: ScalingPolicy,
     ) -> Result<Self, FromCsrError> {
         Ok(Decomposition::csr(csr)?.reduce(&policy)?)
+    }
+
+    /// As [`from_csr`](Self::from_csr), the triangle symmetric by storage: no mirror is checked.
+    pub fn from_upper_csr<I: PrimInt>(
+        csr: UpperCsr<'_, T, I>,
+        policy: ScalingPolicy,
+    ) -> Result<Self, FromCsrError> {
+        Ok(Decomposition::upper_csr(csr)?.reduce(&policy)?)
     }
 
     /// `A = V Vᵀ`: scales, folds or covers each component as general, deciding floating from `V`.
