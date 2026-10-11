@@ -15,28 +15,42 @@ use crate::storage::{in_range, narrow, widen, CrossBlock, Rows, UpperAdjacency};
 use crate::{Real, ReduceError};
 use components::{Partition, UnionFind};
 
-/// One input split into components: what each looks like unreduced, and which components provably float.
+/// One input split into components, and where each component's entries are read.
 pub(super) struct Decomposition<'v, T, I> {
     partition: Partition,
-    input: Input<'v, T, I>,
+    stored: Stored<'v, T, I>,
 }
 
-/// The input, and what its components' own rows cannot prove: an assembled `A` is taken whole by a lone component.
-enum Input<'v, T, I> {
-    /// Each component's own rows decide its floating.
-    Csr(Canonical<'v, T, I>),
-    /// A signless bipartite Laplacian, its diagonal `C ≥ 0`'s row and column sums: balanced and singular by shape, so every component floats untested.
-    Signless(Option<Biadjacency<T>>),
-    /// `C` of `[D_l C; Cᵀ D_r]`, the sides' diagonals read from the Gram; a bipartite component takes the block elimination.
-    BipartiteGram {
-        c: Option<Biadjacency<T>>,
-        gram: BipartiteGram<'v, T, I>,
-    },
-    /// A general factor-width-2 `A`, as its CSR would store it.
-    Gram {
+/// Where each component's entries are read, with what the input's type proves beyond them; a lone component takes an assembled input whole.
+enum Stored<'v, T, I> {
+    /// Rows only claim `A`: each component searches its signature and scaling, its own rows decide its floating, and no scaling is known to exist.
+    Rows(Canonical<'v, T, I>),
+    /// A general factor-width-2 `A`, as its CSR would store it, and its `V`.
+    General {
         a: Option<Assembled<T>>,
         v: FactorWidth2<'v, T, I>,
     },
+    /// `C` of `[D_l C; Cᵀ D_r]`; a bipartite component takes the block elimination.
+    Bipartite {
+        c: Option<Biadjacency<T>>,
+        proof: Proof<BipartiteGram<'v, T, I>>,
+    },
+}
+
+/// What a view's type proves about `A`.
+#[derive(Clone, Copy)]
+enum Proof<V> {
+    /// `V`, factor width 2 and so GDD: each component searches its signature and scaling, and `V` decides floating once every one is reduced; the sides' diagonals are read from it.
+    Factor(V),
+    /// Its signature, dominance and floating: nothing is searched.
+    Shape(Shape),
+}
+
+/// A shape proving its own signature, dominance and floating.
+#[derive(Clone, Copy)]
+enum Shape {
+    /// A signless bipartite Laplacian, its diagonal `C ≥ 0`'s row and column sums: negating one side folds it, and it is balanced and singular, so every component floats untested.
+    SignlessBipartite,
 }
 
 impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
@@ -45,7 +59,7 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         let csr = Canonical::of(csr)?;
         Ok(Self {
             partition: components::of_csr(&csr)?,
-            input: Input::Csr(csr),
+            stored: Stored::Rows(csr),
         })
     }
 
@@ -53,7 +67,7 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         let (a, partition) = assemble_general(v)?;
         Ok(Self {
             partition,
-            input: Input::Gram { a: Some(a), v },
+            stored: Stored::General { a: Some(a), v },
         })
     }
 
@@ -61,7 +75,10 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         let (c, partition) = assemble_bipartite(gram, gram.n_left())?;
         Ok(Self {
             partition,
-            input: Input::BipartiteGram { c: Some(c), gram },
+            stored: Stored::Bipartite {
+                c: Some(c),
+                proof: Proof::Factor(gram),
+            },
         })
     }
 
@@ -69,18 +86,21 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         let (c, partition) = assemble_bipartite(graph, graph.n_left())?;
         Ok(Self {
             partition,
-            input: Input::Signless(Some(c)),
+            stored: Stored::Bipartite {
+                c: Some(c),
+                proof: Proof::Shape(Shape::SignlessBipartite),
+            },
         })
     }
 
-    /// Dead components are dropped; a CSR's float on their own rows, a signless graph's all float, and a Gram's ground or float on its columns once every one is reduced.
+    /// Dead components are dropped; rows float on their own rows, a shape's all float, and a factor's ground or float on `V` once every one is reduced.
     pub(super) fn reduce(self, policy: &ScalingPolicy) -> Result<Sgdd<T>, ReduceError> {
         let Self {
             partition,
-            mut input,
+            mut stored,
         } = self;
-        let nulls: Option<OnDemand<'_>> = match &input {
-            Input::Gram { v, .. } => {
+        let nulls: Option<OnDemand<'_>> = match &stored {
+            Stored::General { v, .. } => {
                 let (v, partition) = (*v, &partition);
                 Some(OnDemand::new(Box::new(move || {
                     NullVectors::of(v, partition.components())
@@ -88,14 +108,12 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
             }
             _ => None,
         };
-        let source = match &input {
-            Input::Csr(_) => Source::Rows,
-            Input::Signless(_) | Input::BipartiteGram { .. } | Input::Gram { .. } => {
-                Source::Gram(nulls.as_ref())
-            }
+        let source = match &stored {
+            Stored::Rows(_) => Source::Rows,
+            Stored::General { .. } | Stored::Bipartite { .. } => Source::Gram(nulls.as_ref()),
         };
         let (mut components, mut congruent, mut dead) = (Vec::new(), Vec::new(), Vec::new());
-        for given in input.components(&partition) {
+        for given in stored.components(&partition) {
             match given {
                 Given::Dead(vertex) => dead.push(vertex),
                 Given::Signless(vertices, cross) => {
@@ -104,12 +122,19 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
                 Given::Unreduced(a) => congruent.push(a.reduce(policy, source)?),
             }
         }
-        let grounded = match &input {
-            Input::Csr(_) | Input::Signless(_) => (congruent.into_iter())
+        let grounded = match &stored {
+            Stored::Rows(_)
+            | Stored::Bipartite {
+                proof: Proof::Shape(_),
+                ..
+            } => (congruent.into_iter())
                 .map(Congruent::by_rows)
                 .collect::<Result<Vec<_>, _>>()?,
-            Input::BipartiteGram { gram, .. } => ground_or_float(*gram, congruent)?,
-            Input::Gram { v, .. } => ground_or_float(*v, congruent)?,
+            Stored::General { v, .. } => ground_or_float(*v, congruent)?,
+            Stored::Bipartite {
+                proof: Proof::Factor(gram),
+                ..
+            } => ground_or_float(*gram, congruent)?,
         };
         components.extend(grounded);
         Ok(Sgdd {
@@ -120,21 +145,27 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
     }
 }
 
-impl<'v, T: Real, I: PrimInt> Input<'v, T, I> {
+impl<'v, T: Real, I: PrimInt> Stored<'v, T, I> {
     /// A lone vertex is general, so a bipartite component always has both sides.
     fn components<'s>(
         &'s mut self,
         partition: &'s Partition,
     ) -> impl Iterator<Item = Given<T>> + use<'s, 'v, T, I> {
         partition.components().map(move |vertices| match self {
-            Self::Signless(c) => match vertices {
+            Self::Bipartite {
+                c,
+                proof: Proof::Shape(Shape::SignlessBipartite),
+            } => match vertices {
                 [v] => Given::Dead(*v),
                 _ => {
                     let (vertices, cross) = bipartite_block(c, vertices, partition);
                     Given::Signless(vertices, cross)
                 }
             },
-            Self::BipartiteGram { c, gram } => {
+            Self::Bipartite {
+                c,
+                proof: Proof::Factor(gram),
+            } => {
                 let (left, right) = gram.diagonals();
                 let diagonal = |v: u32| match (v as usize).checked_sub(left.len()) {
                     None => left[v as usize],
@@ -142,8 +173,8 @@ impl<'v, T: Real, I: PrimInt> Input<'v, T, I> {
                 };
                 Given::unreduced(bipartite_component(c, vertices, partition, diagonal))
             }
-            Self::Csr(csr) => Given::unreduced(csr_component(csr, vertices, partition.position())),
-            Self::Gram { a, .. } => Given::unreduced(general_component(a, vertices, partition)),
+            Self::Rows(csr) => Given::unreduced(csr_component(csr, vertices, partition.position())),
+            Self::General { a, .. } => Given::unreduced(general_component(a, vertices, partition)),
         })
     }
 }
