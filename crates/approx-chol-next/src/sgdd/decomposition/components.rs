@@ -1,6 +1,5 @@
 use num_traits::PrimInt;
 
-use super::{Assembled, Biadjacency};
 use crate::input::{Canonical, CsrError};
 use crate::Real;
 
@@ -11,20 +10,6 @@ pub(super) fn of_csr<T: Real, I: PrimInt>(
     let mut sets = UnionFind::new(csr.n());
     csr.walk(|i, j, _| sets.union(i, j))?;
     Ok(sets.into_partition())
-}
-
-pub(super) fn of_general<T: Real>(a: &Assembled<T>) -> Partition {
-    let mut sets = UnionFind::new(a.adjacency.n());
-    for i in 0..a.adjacency.n() {
-        a.adjacency.upper(i).for_each(|(j, _)| sets.union(i, j));
-    }
-    sets.into_partition()
-}
-
-pub(super) fn of_cross<T: Real>(c: &Biadjacency<T>) -> Partition {
-    let mut sets = UnionFind::new(c.n());
-    c.cells().for_each(|(i, j)| sets.union(i, j));
-    sets.into_partition()
 }
 
 /// Every vertex once, components back to back.
@@ -58,13 +43,13 @@ impl Partition {
 }
 
 /// Union by size with path compression.
-struct UnionFind {
+pub(super) struct UnionFind {
     parent: Vec<u32>,
     size: Vec<u32>,
 }
 
 impl UnionFind {
-    fn new(n: usize) -> Self {
+    pub(super) fn new(n: usize) -> Self {
         Self {
             parent: (0..n as u32).collect(),
             size: vec![1; n],
@@ -81,7 +66,7 @@ impl UnionFind {
         i
     }
 
-    fn union(&mut self, i: usize, j: usize) {
+    pub(super) fn union(&mut self, i: usize, j: usize) {
         let (mut a, mut b) = (self.find(i), self.find(j));
         if a == b {
             return;
@@ -103,7 +88,7 @@ impl UnionFind {
     }
 
     /// Components ordered by lowest vertex, members ascending.
-    fn into_partition(mut self) -> Partition {
+    pub(super) fn into_partition(mut self) -> Partition {
         let n = self.parent.len();
         // Connected, the common case, skips the counting sort: every vertex is its own position.
         if self.is_one_set() {

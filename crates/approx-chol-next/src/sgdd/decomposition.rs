@@ -10,7 +10,7 @@ use crate::input::{
 };
 use crate::storage::{in_range, narrow, widen, CrossBlock, Rows, UpperAdjacency};
 use crate::{Real, ReduceError};
-use components::Partition;
+use components::{Partition, UnionFind};
 
 /// One input split into components: what each looks like unreduced, and which components provably float.
 pub(super) struct Decomposition<'v, T, I> {
@@ -47,25 +47,25 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
     }
 
     pub(super) fn gram(v: FactorWidth2<'v, T, I>) -> Result<Self, ReduceError> {
-        let a = assemble_general(v)?;
+        let (a, partition) = assemble_general(v)?;
         Ok(Self {
-            partition: components::of_general(&a),
+            partition,
             input: Input::Gram { a: Some(a), v },
         })
     }
 
     pub(super) fn bipartite_gram(gram: BipartiteGram<'v, T, I>) -> Result<Self, ReduceError> {
-        let c = assemble_bipartite(gram, gram.n_left())?;
+        let (c, partition) = assemble_bipartite(gram, gram.n_left())?;
         Ok(Self {
-            partition: components::of_cross(&c),
+            partition,
             input: Input::BipartiteGram { c: Some(c), gram },
         })
     }
 
     pub(super) fn signless(graph: BipartiteGraph<'v, T, I>) -> Result<Self, ReduceError> {
-        let c = assemble_bipartite(graph, graph.n_left())?;
+        let (c, partition) = assemble_bipartite(graph, graph.n_left())?;
         Ok(Self {
-            partition: components::of_cross(&c),
+            partition,
             input: Input::Signless(Some(c)),
         })
     }
@@ -337,11 +337,11 @@ struct Certificate {
     trace: f64,
 }
 
-/// `C`, accumulated in column order, in a dense table when it is small (+54% without it), unfiltered: a column that couples nothing adds an exact zero and zero cells drop; a cell leaving `in_range` is `OutOfRange`.
+/// `C` and its components, accumulated in column order, in a dense table when it is small (+54% without it), unfiltered: a column that couples nothing adds an exact zero and zero cells drop; a cell leaving `in_range` is `OutOfRange`.
 fn assemble_bipartite<T: Real>(
     v: impl IntoColumns<T>,
     n_left: usize,
-) -> Result<Biadjacency<T>, ReduceError> {
+) -> Result<(Biadjacency<T>, Partition), ReduceError> {
     let n_right = v.n() - n_left;
     let table = n_left.saturating_mul(n_right);
     let c = if table <= DENSE_TABLE_MAX_CELLS {
@@ -355,7 +355,7 @@ fn assemble_bipartite<T: Real>(
             false => dense_cross(v, n_left, n_right),
         }
     }?;
-    Ok(Biadjacency::new(c))
+    Ok((Biadjacency::new(c.0), c.1))
 }
 
 /// within's cap on the dense accumulator, about 40 MB.
@@ -365,13 +365,13 @@ fn dense_cross<T: Real>(
     v: impl IntoColumns<T>,
     n_left: usize,
     n_right: usize,
-) -> Result<Rows<T>, ReduceError> {
+) -> Result<(Rows<T>, Partition), ReduceError> {
     let mut table = vec![0.0_f64; n_left * n_right];
     v.for_each_column(
         #[inline(always)]
         |column| table[column.a as usize * n_right + column.b as usize - n_left] += column.cell(),
     );
-    let mut rows = CellRows::with_capacity(n_left);
+    let mut rows = CellRows::new(n_left, n_right, n_left);
     for i in 0..n_left {
         let row = &table[i * n_right..][..n_right];
         for (j, &x) in row.iter().enumerate() {
@@ -379,7 +379,7 @@ fn dense_cross<T: Real>(
         }
         rows.end_row();
     }
-    Ok(rows.finish(n_right))
+    Ok(rows.finish())
 }
 
 fn left_counts<T: Real>(v: impl IntoColumns<T>, n_left: usize) -> Vec<usize> {
@@ -396,13 +396,13 @@ fn sparse_cross<T: Real>(
     n_left: usize,
     n_right: usize,
     counts: &[usize],
-) -> Result<Rows<T>, ReduceError> {
+) -> Result<(Rows<T>, Partition), ReduceError> {
     let mut buckets = Buckets::new(counts);
     v.for_each_column(
         #[inline(always)]
         |column| buckets.push(column.a as usize, column.b - n_left as u32, column.cell()),
     );
-    buckets.sum(n_right)
+    buckets.sum(n_right, n_left)
 }
 
 /// Cells bucketed by row in column order, so each sums the same addends in the same order as a dense table.
@@ -438,10 +438,15 @@ impl Buckets {
         *slot += 1;
     }
 
-    fn sum<T: Real>(self, n_cols: usize) -> Result<Rows<T>, ReduceError> {
+    /// Column `j` is vertex `first_column + j`.
+    fn sum<T: Real>(
+        self,
+        n_cols: usize,
+        first_column: usize,
+    ) -> Result<(Rows<T>, Partition), ReduceError> {
         let mut sums = vec![0.0_f64; n_cols];
         let mut touched: Vec<u32> = Vec::new();
-        let mut rows = CellRows::with_capacity(self.starts.len() - 1);
+        let mut rows = CellRows::new(self.starts.len() - 1, n_cols, first_column);
         for span in self.starts.windows(2) {
             for (&j, &x) in self.columns[span[0]..span[1]]
                 .iter()
@@ -461,25 +466,32 @@ impl Buckets {
             touched.clear();
             rows.end_row();
         }
-        Ok(rows.finish(n_cols))
+        Ok(rows.finish())
     }
 }
 
-/// Rows built in order from `f64` sums: a zero is dropped, any other is cast once and must stay [`in_range`].
+/// Rows built in order from `f64` sums: a zero is dropped, any other is cast once, must stay [`in_range`], and joins its ends' components.
 struct CellRows<T> {
     ptrs: Vec<usize>,
     indices: Vec<u32>,
     values: Vec<T>,
+    n_cols: usize,
+    /// Column `j` is vertex `first_column + j`: `0` for `A`'s upper rows, `n_left` for `C`.
+    first_column: usize,
+    sets: UnionFind,
 }
 
 impl<T: Real> CellRows<T> {
-    fn with_capacity(n_rows: usize) -> Self {
+    fn new(n_rows: usize, n_cols: usize, first_column: usize) -> Self {
         let mut ptrs = Vec::with_capacity(n_rows + 1);
         ptrs.push(0);
         Self {
             ptrs,
             indices: Vec::new(),
             values: Vec::new(),
+            n_cols,
+            first_column,
+            sets: UnionFind::new(first_column + n_cols),
         }
     }
 
@@ -494,6 +506,7 @@ impl<T: Real> CellRows<T> {
             .ok_or(ReduceError::OutOfRange { vertex })?;
         self.indices.push(j as u32);
         self.values.push(value);
+        self.sets.union(vertex as usize, self.first_column + j);
         Ok(())
     }
 
@@ -501,13 +514,16 @@ impl<T: Real> CellRows<T> {
         self.ptrs.push(self.indices.len());
     }
 
-    fn finish(self, n_cols: usize) -> Rows<T> {
-        Rows::new(self.ptrs, self.indices, self.values, n_cols)
+    fn finish(self) -> (Rows<T>, Partition) {
+        let rows = Rows::new(self.ptrs, self.indices, self.values, self.n_cols);
+        (rows, self.sets.into_partition())
     }
 }
 
-/// `A`'s strict upper triangle and diagonal, cells `bilinear(v_a, v_b)` summed by pair in column order, zero cells dropped; a value leaving `in_range` is `OutOfRange`.
-fn assemble_general<T: Real>(v: impl IntoColumns<T>) -> Result<Assembled<T>, ReduceError> {
+/// `A`'s strict upper triangle, diagonal and components, cells `bilinear(v_a, v_b)` summed by pair in column order, zero cells dropped; a value leaving `in_range` is `OutOfRange`.
+fn assemble_general<T: Real>(
+    v: impl IntoColumns<T>,
+) -> Result<(Assembled<T>, Partition), ReduceError> {
     let n = v.n();
     let (mut counts, mut diagonal) = (vec![0; n], vec![0.0_f64; n]);
     v.for_each_column(
@@ -527,13 +543,15 @@ fn assemble_general<T: Real>(v: impl IntoColumns<T>) -> Result<Assembled<T>, Red
             buckets.push(lo as usize, hi, column.cell());
         },
     );
-    Ok(Assembled {
-        adjacency: UpperAdjacency::new(buckets.sum(n)?),
+    let (rows, partition) = buckets.sum(n, 0)?;
+    let a = Assembled {
+        adjacency: UpperAdjacency::new(rows),
         diagonal: diagonal.into_iter().map(narrow).collect(),
-    })
+    };
+    Ok((a, partition))
 }
 
-/// A general factor-width-2 `A`, assembled: the pattern its components are found in.
+/// A general factor-width-2 `A`, assembled.
 struct Assembled<T> {
     adjacency: UpperAdjacency<T>,
     diagonal: Vec<T>,
@@ -555,12 +573,6 @@ impl<T: Real> Biadjacency<T> {
 
     fn n(&self) -> usize {
         self.c.n_rows() + self.c.n_cols()
-    }
-
-    /// Each stored cell as an edge of `A`: left row `i` is vertex `i`, right column `j` is `n_left + j`.
-    fn cells(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
-        let n_left = self.c.n_rows();
-        (0..n_left).flat_map(move |i| self.c.row(i).map(move |(j, _)| (i, n_left + j)))
     }
 
     /// The whole input as one component's block, moved, transposed only when the right side is larger.
