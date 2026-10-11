@@ -132,7 +132,7 @@ fn already_dominant<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> bool {
     })
 }
 
-/// Self-corrective iterations (Guan, Lu, Li, Shao 2016, Algorithm 3b), proto's: the best iterate is handed over, peaking `μ = f√a_ii` at `1` as the CG does.
+/// Self-corrective iterations (Guan, Lu, Li, Shao 2016, Algorithm 3), proto's: the best iterate is handed over, peaking `μ = f√a_ii` at `1` as the CG does.
 fn sci<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> Result<Relaxation<T>, ReduceError> {
     let unscalable = ReduceError::Unscalable {
         vertex: a.vertices[0],
@@ -166,8 +166,8 @@ fn sci<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> Result<Relaxation<T
         let towards_dominant = t_p * t_q <= 1.0;
         for (f, &ti) in scales.iter_mut().zip(&t) {
             let selected = match towards_dominant {
-                true => ti * t_q <= 1.0,
-                false => t_p * ti > 1.0,
+                true => ti < 1.0,
+                false => ti > 1.0,
             };
             if selected && ti > 0.0 {
                 *f *= ti;
