@@ -1,6 +1,7 @@
 //! Factor-width-2 views, at most two nonzeros per column of `V`, and the one reading of them `sgdd` needs: column by column.
 
 pub(super) mod bipartite;
+pub(super) mod edges;
 pub(super) mod laplacian;
 
 use num_traits::PrimInt;

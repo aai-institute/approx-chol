@@ -2,17 +2,15 @@
 
 use num_traits::PrimInt;
 
-use super::bipartite::Weights;
-use super::{check_ends, index, Column, IntoColumns, ViewError, Weight};
+use super::edges::{Edges, Weights};
+use super::{check_ends, Column, IntoColumns, ViewError};
 use crate::Real;
 
 /// Weighted multigraph on `n` vertices, grounded by `g` when given: `A = Σ_k w_k (e_a − e_b)(e_a − e_b)ᵀ + diag(g)`.
 #[derive(Clone, Copy, Debug)]
 pub struct Laplacian<'a, T, I = u32> {
     n: usize,
-    a: &'a [I],
-    b: &'a [I],
-    weights: Weights<'a, T>,
+    edges: Edges<'a, T, I>,
     ground: Option<&'a [T]>,
 }
 
@@ -24,19 +22,11 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
         b: &'a [I],
         weights: Weights<'a, T>,
     ) -> Result<Self, ViewError> {
-        if a.len() != b.len() {
-            return Err(ViewError::LengthMismatch {
-                expected: a.len(),
-                found: b.len(),
-            });
-        }
-        weights.check(a.len())?;
+        let edges = Edges::new(a, b, weights)?;
         check_ends(n, a, b)?;
         Ok(Self {
             n,
-            a,
-            b,
-            weights,
+            edges,
             ground: None,
         })
     }
@@ -62,19 +52,6 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
     pub(crate) fn ground(&self) -> Option<&'a [T]> {
         self.ground
     }
-
-    #[inline(always)]
-    fn columns(self, weight: impl Fn(usize) -> Weight<T>, mut visit: impl FnMut(Column<T>)) {
-        for (k, (a, b)) in self.a.iter().zip(self.b).enumerate() {
-            visit(Column {
-                a: index(*a) as u32,
-                b: index(*b) as u32,
-                v_a: T::one(),
-                v_b: -T::one(),
-                weight: weight(k),
-            });
-        }
-    }
 }
 
 /// The ground is not a column: the shape grounds each component on it directly.
@@ -84,10 +61,6 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for Laplacian<'_, T, I> {
     }
 
     fn for_each_column(self, visit: impl FnMut(Column<T>)) {
-        match self.weights {
-            Weights::Unit => self.columns(|_| Weight::Unit, visit),
-            Weights::Of(w) => self.columns(|k| Weight::Of(w[k]), visit),
-            Weights::SqrtOf(s) => self.columns(|k| Weight::SqrtOf(s[k]), visit),
-        }
+        self.edges.for_each_column(0, -T::one(), visit)
     }
 }

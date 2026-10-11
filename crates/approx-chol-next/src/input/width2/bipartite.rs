@@ -4,59 +4,10 @@ use std::sync::OnceLock;
 
 use num_traits::PrimInt;
 
+use super::edges::{Edges, Weights};
 use super::{index, Column, IntoColumns, ViewError, Weight};
 use crate::storage::{narrow, widen};
 use crate::Real;
-
-/// The diagonal `W`, one nonnegative entry per column of `V`.
-#[derive(Clone, Copy, Debug)]
-pub enum Weights<'a, T> {
-    /// `W = I`.
-    Unit,
-    /// `W = diag(w)`.
-    Of(&'a [T]),
-    /// `W = diag(s²)`, for a caller that keeps square roots.
-    SqrtOf(&'a [T]),
-}
-
-impl<T: Real> Weights<'_, T> {
-    /// One entry per column, each `w` finite and nonnegative or `s` finite; every weighted view checks it in `new`.
-    pub(super) fn check(self, columns: usize) -> Result<(), ViewError> {
-        let (entries, valid): (&[T], fn(T) -> bool) = match self {
-            Self::Unit => return Ok(()),
-            Self::Of(w) => (w, |w| w.is_finite() && w >= T::zero()),
-            Self::SqrtOf(s) => (s, |s| s.is_finite()),
-        };
-        if entries.len() != columns {
-            return Err(ViewError::LengthMismatch {
-                expected: columns,
-                found: entries.len(),
-            });
-        }
-        match entries.iter().position(|&x| !valid(x)) {
-            Some(column) => Err(ViewError::InvalidWeight { column }),
-            None => Ok(()),
-        }
-    }
-
-    /// The same slice read the same way: contents are never compared, so a NaN cannot split two sides of one Gram.
-    fn same(self, other: Self) -> bool {
-        match (self, other) {
-            (Self::Unit, Self::Unit) => true,
-            (Self::Of(a), Self::Of(b)) | (Self::SqrtOf(a), Self::SqrtOf(b)) => core::ptr::eq(a, b),
-            _ => false,
-        }
-    }
-
-    /// Column `k`'s entry, matched per call: for one-time passes, not the column visit.
-    fn at(self, k: usize) -> Weight<T> {
-        match self {
-            Self::Unit => Weight::Unit,
-            Self::Of(w) => Weight::Of(w[k]),
-            Self::SqrtOf(s) => Weight::SqrtOf(s[k]),
-        }
-    }
-}
 
 /// Which row `rows[k]` each column of `V` hits, under `W`, with one value vector per side `V_c = P diag(values_c)`; each side's diagonal is summed once.
 #[derive(Debug)]
@@ -247,9 +198,7 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteGram<'_, T, I> {
 pub struct BipartiteGraph<'a, T, I = u32> {
     n_left: usize,
     n_right: usize,
-    left: &'a [I],
-    right: &'a [I],
-    weights: Weights<'a, T>,
+    edges: Edges<'a, T, I>,
 }
 
 impl<'a, T: Real, I: PrimInt> BipartiteGraph<'a, T, I> {
@@ -261,13 +210,7 @@ impl<'a, T: Real, I: PrimInt> BipartiteGraph<'a, T, I> {
         right: &'a [I],
         weights: Weights<'a, T>,
     ) -> Result<Self, ViewError> {
-        if left.len() != right.len() {
-            return Err(ViewError::LengthMismatch {
-                expected: left.len(),
-                found: right.len(),
-            });
-        }
-        weights.check(left.len())?;
+        let edges = Edges::new(left, right, weights)?;
         let count = n_left.saturating_add(n_right);
         if u32::try_from(count).is_err() {
             return Err(ViewError::TooLarge { count });
@@ -281,27 +224,12 @@ impl<'a, T: Real, I: PrimInt> BipartiteGraph<'a, T, I> {
         Ok(Self {
             n_left,
             n_right,
-            left,
-            right,
-            weights,
+            edges,
         })
     }
 
     pub(crate) fn n_left(&self) -> usize {
         self.n_left
-    }
-
-    #[inline(always)]
-    fn columns(self, weight: impl Fn(usize) -> Weight<T>, mut visit: impl FnMut(Column<T>)) {
-        for (k, (a, b)) in self.left.iter().zip(self.right).enumerate() {
-            visit(Column {
-                a: index(*a) as u32,
-                b: (self.n_left + index(*b)) as u32,
-                v_a: T::one(),
-                v_b: T::one(),
-                weight: weight(k),
-            });
-        }
     }
 }
 
@@ -311,10 +239,6 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteGraph<'_, T, I> {
     }
 
     fn for_each_column(self, visit: impl FnMut(Column<T>)) {
-        match self.weights {
-            Weights::Unit => self.columns(|_| Weight::Unit, visit),
-            Weights::Of(w) => self.columns(|k| Weight::Of(w[k]), visit),
-            Weights::SqrtOf(s) => self.columns(|k| Weight::SqrtOf(s[k]), visit),
-        }
+        self.edges.for_each_column(self.n_left, T::one(), visit)
     }
 }
