@@ -28,10 +28,11 @@ impl<T: Real> Component<T> {
         }
     }
 
-    /// Only the degrees are checked: the shape proves the signature, dominance and floating.
-    pub(super) fn signless(
+    /// Only the degrees are checked: the shape proves `signs`, dominance and floating.
+    pub(super) fn folded(
         vertices: Box<[u32]>,
         cross: CrossBlock<T>,
+        congruence: Congruence<T>,
     ) -> Result<Self, ReduceError> {
         within_series_floor::<T>(&vertices)?;
         if let Some(i) = cross
@@ -43,7 +44,6 @@ impl<T: Real> Component<T> {
             return Err(ReduceError::OutOfRange { vertex });
         }
         let vertex = vertices[0];
-        let congruence = Congruence::negate_from(cross.n_eliminated());
         let off_diagonal = (congruence.transform(OffDiagonal::Bipartite(Arc::new(cross))))
             .ok_or(ReduceError::Unscalable { vertex })?;
         let m = Sdd::new(off_diagonal, Balance::Balanced(Grounding::ungrounded()));

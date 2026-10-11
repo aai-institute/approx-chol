@@ -233,6 +233,39 @@ impl<'a, T: Real, I: PrimInt> BipartiteGraph<'a, T, I> {
     }
 }
 
+/// Weighted bipartite multigraph; its matrix is the Laplacian `B W Bᵀ`, a Z-matrix and singular by shape.
+#[derive(Clone, Copy, Debug)]
+pub struct BipartiteLaplacian<'a, T, I = u32>(BipartiteGraph<'a, T, I>);
+
+impl<'a, T: Real, I: PrimInt> BipartiteLaplacian<'a, T, I> {
+    /// The checks of [`BipartiteGraph::new`].
+    pub fn new(
+        n_left: usize,
+        n_right: usize,
+        left: &'a [I],
+        right: &'a [I],
+        weights: Weights<'a, T>,
+    ) -> Result<Self, ViewError> {
+        BipartiteGraph::new(n_left, n_right, left, right, weights).map(Self)
+    }
+
+    pub(crate) fn n_left(&self) -> usize {
+        self.0.n_left
+    }
+}
+
+impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteLaplacian<'_, T, I> {
+    fn n(&self) -> usize {
+        self.0.n()
+    }
+
+    fn for_each_column(self, visit: impl FnMut(Column<T>)) {
+        self.0
+            .edges
+            .for_each_column(self.0.n_left, -T::one(), visit)
+    }
+}
+
 impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteGraph<'_, T, I> {
     fn n(&self) -> usize {
         self.n_left + self.n_right

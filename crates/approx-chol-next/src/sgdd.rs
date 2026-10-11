@@ -14,12 +14,13 @@ use num_traits::PrimInt;
 pub use component::Component;
 use component::Sdd;
 use congruence::Congruence;
-use decomposition::Decomposition;
+use decomposition::{BipartiteShape, Decomposition};
 use null_vectors::{NullVectors, OnDemand};
 pub use scaling::{Existence, ScalingPolicy, ScalingReport};
 
 use crate::input::{
-    BipartiteGram, BipartiteGraph, Csr, CsrError, FactorWidth2, Laplacian, UpperCsr,
+    BipartiteGram, BipartiteGraph, BipartiteLaplacian, Csr, CsrError, FactorWidth2, Laplacian,
+    UpperCsr,
 };
 use crate::storage::{diagonal_in_range, CrossBlock, UpperAdjacency};
 use crate::Real;
@@ -234,7 +235,18 @@ impl<'a, T: Real, I: PrimInt> TryFrom<BipartiteGraph<'a, T, I>> for Sgdd<T> {
 
     /// A signless bipartite Laplacian has zero surplus by shape: every component floats untested.
     fn try_from(graph: BipartiteGraph<'a, T, I>) -> Result<Self, Self::Error> {
-        Decomposition::signless(graph)?.reduce(&ScalingPolicy::default())
+        Decomposition::<T, I>::bipartite_graph(graph, graph.n_left(), BipartiteShape::Signless)?
+            .reduce(&ScalingPolicy::default())
+    }
+}
+
+impl<'a, T: Real, I: PrimInt> TryFrom<BipartiteLaplacian<'a, T, I>> for Sgdd<T> {
+    type Error = ReduceError;
+
+    /// A bipartite Laplacian is a Z-matrix with zero surplus by shape: every component floats untested.
+    fn try_from(graph: BipartiteLaplacian<'a, T, I>) -> Result<Self, Self::Error> {
+        Decomposition::<T, I>::bipartite_graph(graph, graph.n_left(), BipartiteShape::Laplacian)?
+            .reduce(&ScalingPolicy::default())
     }
 }
 

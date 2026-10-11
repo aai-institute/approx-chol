@@ -6,12 +6,11 @@ use std::sync::Arc;
 
 use super::component::ProvenLaplacian;
 use super::{
-    Component, Congruent, Grounding, NullVectors, OffDiagonal, OnDemand, ScalingPolicy, Sgdd,
-    Source, Unreduced,
+    Component, Congruence, Congruent, Grounding, NullVectors, OffDiagonal, OnDemand, ScalingPolicy,
+    Sgdd, Source, Unreduced,
 };
 use crate::input::{
-    BipartiteGram, BipartiteGraph, Canonical, Csr, CsrError, FactorWidth2, IntoColumns, Laplacian,
-    UpperCsr,
+    BipartiteGram, Canonical, Csr, CsrError, FactorWidth2, IntoColumns, Laplacian, UpperCsr,
 };
 use crate::storage::{in_range, narrow, widen, CrossBlock, Rows, UpperAdjacency};
 use crate::{Real, ReduceError};
@@ -55,11 +54,22 @@ enum GeneralShape<'v, T> {
     Laplacian(Option<&'v [T]>),
 }
 
-/// A bipartite shape proving its own signature, dominance and grounding.
+/// A bipartite shape proving its own signature, dominance and grounding: its diagonal is `|C|`'s row and column sums, so it is balanced and singular, and every component floats untested.
 #[derive(Clone, Copy)]
-enum BipartiteShape {
-    /// A signless bipartite Laplacian, its diagonal `C ≥ 0`'s row and column sums: negating one side folds it, and it is balanced and singular, so every component floats untested.
+pub(super) enum BipartiteShape {
+    /// `C ≥ 0`: negating one side folds it.
     Signless,
+    /// `C ≤ 0`: already a Z-matrix.
+    Laplacian,
+}
+
+impl BipartiteShape {
+    fn signs<T: Real>(self, n_eliminated: usize) -> Congruence<T> {
+        match self {
+            Self::Signless => Congruence::negate_from(n_eliminated),
+            Self::Laplacian => Congruence::identity(),
+        }
+    }
 }
 
 impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
@@ -114,13 +124,17 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         })
     }
 
-    pub(super) fn signless(graph: BipartiteGraph<'v, T, I>) -> Result<Self, ReduceError> {
-        let (c, partition) = assemble_bipartite(graph, graph.n_left())?;
+    pub(super) fn bipartite_graph(
+        graph: impl IntoColumns<T>,
+        n_left: usize,
+        shape: BipartiteShape,
+    ) -> Result<Self, ReduceError> {
+        let (c, partition) = assemble_bipartite(graph, n_left)?;
         Ok(Self {
             partition,
             stored: Stored::Bipartite {
                 c: Some(c),
-                proof: Proof::Shape(BipartiteShape::Signless),
+                proof: Proof::Shape(shape),
             },
         })
     }
@@ -151,8 +165,8 @@ impl<'v, T: Real, I: PrimInt> Decomposition<'v, T, I> {
         for given in stored.components(&partition) {
             match given {
                 Given::Dead(vertex) => dead.push(vertex),
-                Given::Signless(vertices, cross) => {
-                    components.push(Component::signless(vertices, cross)?)
+                Given::Folded(vertices, cross, signs) => {
+                    components.push(Component::folded(vertices, cross, signs)?)
                 }
                 Given::Laplacian(laplacian) => components.push(laplacian.into_component()?),
                 Given::Unreduced(a) => congruent.push(a.reduce(policy, source)?),
@@ -197,12 +211,13 @@ impl<'v, T: Real, I: PrimInt> Stored<'v, T, I> {
         partition.components().map(move |vertices| match self {
             Self::Bipartite {
                 c,
-                proof: Proof::Shape(BipartiteShape::Signless),
+                proof: Proof::Shape(shape),
             } => match vertices {
                 [v] => Given::Dead(*v),
                 _ => {
                     let (vertices, cross) = bipartite_block(c, vertices, partition);
-                    Given::Signless(vertices, cross)
+                    let signs = shape.signs(cross.n_eliminated());
+                    Given::Folded(vertices, cross, signs)
                 }
             },
             Self::Bipartite {
@@ -246,8 +261,8 @@ impl<'v, T: Real, I: PrimInt> Stored<'v, T, I> {
 enum Given<T> {
     /// A lone vertex with nothing to solve.
     Dead(u32),
-    /// A signless Laplacian's block: folded, dominant and floating by shape.
-    Signless(Box<[u32]>, CrossBlock<T>),
+    /// A bipartite shape's block and the signs folding it: dominant and floating by shape.
+    Folded(Box<[u32]>, CrossBlock<T>, Congruence<T>),
     /// A graph Laplacian's component: signed, dominant and grounded by shape.
     Laplacian(ProvenLaplacian<T>),
     Unreduced(Unreduced<T>),
