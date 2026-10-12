@@ -1,6 +1,6 @@
 mod cg;
 
-use super::Unreduced;
+use super::reduction::SymmetricBlock;
 use crate::storage::{diagonal_in_range, narrow, widen, CrossBlock, UpperAdjacency};
 use crate::{Real, ReduceError};
 
@@ -88,7 +88,7 @@ pub(super) struct Relaxation<T> {
 
 /// Every input's diagonal is screened here, before any dominance test; past the row test `relax` runs, `None` when no scale stays a positive `T`; a Gram's scaling exists (Boman, Chen, Parekh, Toledo 2005).
 pub(super) fn dominance_scaling<T: Real>(
-    a: &Unreduced<T>,
+    a: &SymmetricBlock<T>,
     certification: Certification,
     relax: impl FnOnce() -> Option<Relaxation<T>>,
 ) -> Result<Scaling<T>, ReduceError> {
@@ -165,7 +165,7 @@ pub(super) fn unscaled_surplus<T: Real>(d: T, abs_row_sum: T, degree: usize) -> 
 }
 
 /// `Σ_j |a_ij| ≤ a_ii (1 + max(tolerance, 2 deg_i ε))`: a rounded Laplacian stays bit for bit, even in `f32`.
-fn already_dominant<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> bool {
+fn already_dominant<T: Real>(a: &SymmetricBlock<T>, policy: &ScalingPolicy) -> bool {
     let epsilon = widen(T::epsilon());
     let rows = a.diagonal.iter().zip(&a.abs_row_sums);
     rows.zip(&a.degrees).all(|((&d, &s), &degree)| {

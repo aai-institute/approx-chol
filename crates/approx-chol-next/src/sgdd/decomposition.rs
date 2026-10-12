@@ -4,11 +4,8 @@ mod components;
 
 use std::sync::Arc;
 
-use super::stage::{extract, Gdd};
-use super::{
-    folding_signs, Component, Congruence, Congruent, Folded, Frame, FromCsrError, Grounding,
-    OffDiagonal, Sgdd, Unreduced,
-};
+use super::reduction::{extract, folding_signs, Congruent, DirectSum, Folded, SymmetricBlock};
+use super::{Component, Congruence, Frame, FromCsrError, Grounding, OffDiagonal, Sgdd};
 use crate::input::{
     BipartiteGram, BipartiteGraph, BipartiteLaplacian, Canonical, Csr, IntoColumns, Laplacian,
     SignedGraph, UpperCsr,
@@ -20,7 +17,7 @@ use crate::{Real, ReduceError};
 pub(super) use components::Partition;
 use components::UnionFind;
 
-impl<T: Real> Gdd<T> {
+impl<T: Real> DirectSum<T> {
     /// Checks symmetry and range in the walk that finds the components.
     pub(super) fn from_csr<I: PrimInt>(csr: Csr<'_, T, I>) -> Result<Self, FromCsrError> {
         let csr = Canonical::of(csr)?;
@@ -51,7 +48,7 @@ impl<T: Real> Gdd<T> {
         let mut a = Some(a);
         Self::extract(partition, |vertices, partition| {
             let (adjacency, diagonal) = general_block(&mut a, vertices, partition);
-            Unreduced::new(vertices.into(), OffDiagonal::General(adjacency), diagonal)
+            SymmetricBlock::new(vertices.into(), OffDiagonal::General(adjacency), diagonal)
         })
     }
 
@@ -74,7 +71,7 @@ impl<T: Real> Gdd<T> {
     /// Each component's `A_c` as the input gives it, signed and unscaled; one with nothing to solve is dead.
     fn extract(
         partition: Partition,
-        mut block: impl FnMut(&[u32], &Partition) -> Unreduced<T>,
+        mut block: impl FnMut(&[u32], &Partition) -> SymmetricBlock<T>,
     ) -> Result<Self, ReduceError> {
         let (blocks, dead) = extract::<T, _>(&partition, |vertices| {
             let a = block(vertices, &partition);
@@ -230,7 +227,7 @@ fn csr_component<T: Real, I: PrimInt>(
     csr: &Canonical<'_, T, I>,
     vertices: &[u32],
     position: &[u32],
-) -> Unreduced<T> {
+) -> SymmetricBlock<T> {
     let mut diagonal = Vec::with_capacity(vertices.len());
     let (mut ptrs, mut indices, mut values) = (vec![0], Vec::new(), Vec::new());
     for &v in vertices {
@@ -250,7 +247,7 @@ fn csr_component<T: Real, I: PrimInt>(
     }
     let rows = Rows::new(ptrs, indices, values, vertices.len());
     let off_diagonal = OffDiagonal::General(UpperAdjacency::new(rows));
-    Unreduced::new(vertices.into(), off_diagonal, diagonal)
+    SymmetricBlock::new(vertices.into(), off_diagonal, diagonal)
 }
 
 /// The whole input's rows are moved, not copied: a lone component takes `A` out of the input.
@@ -288,7 +285,7 @@ fn bipartite_component<T: Real>(
     vertices: &[u32],
     partition: &Partition,
     diagonal: impl Fn(u32) -> T,
-) -> Unreduced<T> {
+) -> SymmetricBlock<T> {
     let (vertices, off_diagonal) = match vertices {
         [v] => {
             let empty = Rows::new(vec![0, 0], Vec::new(), Vec::new(), 1);
@@ -303,7 +300,7 @@ fn bipartite_component<T: Real>(
         }
     };
     let diagonal = vertices.iter().map(|&v| diagonal(v)).collect();
-    Unreduced::new(vertices, off_diagonal, diagonal)
+    SymmetricBlock::new(vertices, off_diagonal, diagonal)
 }
 
 /// The whole input's block is moved, not copied: a lone component takes `C` out of the input.

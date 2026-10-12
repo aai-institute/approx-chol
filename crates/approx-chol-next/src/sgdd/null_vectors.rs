@@ -5,7 +5,7 @@ use crate::storage::widen;
 use crate::Real;
 
 /// Built by the first component that is not already dominant, so a dominant input never reads its columns twice more.
-pub(super) type OnDemand<'v> = LazyCell<NullVectors, Box<dyn FnOnce() -> NullVectors + 'v>>;
+pub(super) type LazyNullVectors<'v> = LazyCell<NullVectors, Box<dyn FnOnce() -> NullVectors + 'v>>;
 
 /// Per vertex, a `u` its component's coupling columns, both ends nonzero in it, are orthogonal to, `NaN` where none is: `|u|` leaves `M` only the surplus `(g_i u_i)²` of the columns acting on one end, so it scales exactly, and `ground_or_float` floats it when that vanishes.
 pub(super) struct NullVectors {
