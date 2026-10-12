@@ -140,14 +140,37 @@ impl<T: Real> Rows<T> {
     }
 
     /// `x_ij ← r_i x_ij c_j`; `None` if a product leaves [`in_range`] or reaches zero: no entry is stored zero.
-    fn scaled(mut self, r: &[T], c: &[T]) -> Option<Self> {
+    fn scaled(self, r: &[T], c: &[T]) -> Option<Self> {
+        self.scaled_seeing(r, c, |_, _, _| {})
+    }
+
+    /// As [`scaled`](Self::scaled), with [`abs_sums`](Self::abs_sums) of the new entries summed as they are formed.
+    fn scaled_abs_sums(self, r: &[T], c: &[T]) -> Option<(Self, Vec<f64>, Vec<f64>)> {
+        let (mut rows, mut cols) = (vec![0.0; self.n_rows()], vec![0.0; self.n_cols]);
+        let scaled = self.scaled_seeing(r, c, |i, j, x| {
+            let x = widen(x.abs());
+            rows[i] += x;
+            cols[j] += x;
+        })?;
+        Some((scaled, rows, cols))
+    }
+
+    #[inline(always)]
+    fn scaled_seeing(
+        mut self,
+        r: &[T],
+        c: &[T],
+        mut seen: impl FnMut(usize, usize, T),
+    ) -> Option<Self> {
         for (i, span) in self.ptrs.windows(2).enumerate() {
             for p in span[0]..span[1] {
-                let x = r[i] * self.values[p] * c[self.indices[p] as usize];
+                let j = self.indices[p] as usize;
+                let x = r[i] * self.values[p] * c[j];
                 if x == T::zero() || !in_range(x) {
                     return None;
                 }
                 self.values[p] = x;
+                seen(i, j, x);
             }
         }
         Some(self)
@@ -203,6 +226,15 @@ impl<T: Real> UpperAdjacency<T> {
     pub(crate) fn scaled(self, f: &[T]) -> Option<Self> {
         let rows = self.rows.scaled(f, f)?;
         Some(Self { rows })
+    }
+
+    /// As [`scaled`](Self::scaled), with the result's [`abs_row_sums`](Self::abs_row_sums) from the same pass.
+    pub(crate) fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
+        let (rows, upper, lower) = self.rows.scaled_abs_sums(f, f)?;
+        let sums = (upper.iter().zip(lower))
+            .map(|(u, l)| narrow(u + l))
+            .collect();
+        Some((Self { rows }, sums))
     }
 }
 
@@ -270,5 +302,13 @@ impl<T: Real> CrossBlock<T> {
     pub(crate) fn scaled(self, f: &[T]) -> Option<Self> {
         let (eliminated, kept) = f.split_at(self.n_eliminated());
         Some(Self::new(self.c.scaled(eliminated, kept)?))
+    }
+
+    /// As [`scaled`](Self::scaled), with the result's [`abs_row_sums`](Self::abs_row_sums) from the same pass.
+    pub(crate) fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
+        let (eliminated, kept) = f.split_at(self.n_eliminated());
+        let (c, rows, cols) = self.c.scaled_abs_sums(eliminated, kept)?;
+        let sums = rows.into_iter().chain(cols).map(narrow).collect();
+        Some((Self::new(c), sums))
     }
 }

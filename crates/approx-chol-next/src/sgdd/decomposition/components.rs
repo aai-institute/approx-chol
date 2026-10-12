@@ -22,7 +22,7 @@ pub(super) fn of_upper<T: Real, I: PrimInt>(
 }
 
 /// Every vertex once, components back to back.
-pub(super) struct Partition {
+pub(in crate::sgdd) struct Partition {
     order: Vec<u32>,
     ends: Vec<u32>,
     /// Each vertex's index within its component: extraction remaps without a per-component map.
@@ -30,7 +30,7 @@ pub(super) struct Partition {
 }
 
 impl Partition {
-    pub(super) fn n(&self) -> usize {
+    pub(in crate::sgdd) fn n(&self) -> usize {
         self.position.len()
     }
 
@@ -42,7 +42,7 @@ impl Partition {
         self.ends.len() == 1
     }
 
-    pub(super) fn components(&self) -> impl Iterator<Item = &[u32]> + '_ {
+    pub(in crate::sgdd) fn components(&self) -> impl Iterator<Item = &[u32]> + '_ {
         self.ends.iter().scan(0usize, |start, &end| {
             let component = &self.order[*start..end as usize];
             *start = end as usize;

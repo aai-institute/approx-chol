@@ -6,7 +6,9 @@ mod decomposition;
 mod null_vectors;
 mod scaling;
 mod signature;
+mod stage;
 
+use std::cell::LazyCell;
 use std::sync::Arc;
 
 use num_traits::PrimInt;
@@ -14,9 +16,9 @@ use num_traits::PrimInt;
 pub use component::Component;
 use component::Sdd;
 use congruence::Congruence;
-use decomposition::Fold;
-use null_vectors::{NullVectors, OnDemand};
+use null_vectors::OnDemand;
 pub use scaling::{Existence, ScalingPolicy, ScalingReport};
+use stage::Gdd;
 
 use crate::input::{
     BipartiteGram, BipartiteGraph, BipartiteLaplacian, Csr, CsrError, FactorWidth2, Laplacian,
@@ -141,18 +143,42 @@ impl<T: Real> OffDiagonal<T> {
         }
     }
 
-    fn nonpositive(&self) -> bool {
-        match self {
-            Self::General(adjacency) => adjacency.nonpositive(),
-            Self::Bipartite(cross) => cross.nonpositive(),
-        }
-    }
-
     /// Entries per row in local order: the rounding a row sum can carry.
     fn degrees(&self) -> Vec<usize> {
         match self {
             Self::General(adjacency) => adjacency.degrees(),
             Self::Bipartite(cross) => cross.degrees(),
+        }
+    }
+
+    /// `F X F`; `None` if an entry leaves [`in_range`](crate::storage::in_range).
+    fn scaled(self, f: &[T]) -> Option<Self> {
+        Some(match self {
+            Self::General(adjacency) => Self::General(adjacency.scaled(f)?),
+            Self::Bipartite(cross) => {
+                Self::Bipartite(Arc::new(Arc::unwrap_or_clone(cross).scaled(f)?))
+            }
+        })
+    }
+
+    /// As [`scaled`](Self::scaled), with the result's [`abs_row_sums`](Self::abs_row_sums) from the same pass.
+    fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
+        Some(match self {
+            Self::General(adjacency) => {
+                let (adjacency, sums) = adjacency.scaled_abs_row_sums(f)?;
+                (Self::General(adjacency), sums)
+            }
+            Self::Bipartite(cross) => {
+                let (cross, sums) = Arc::unwrap_or_clone(cross).scaled_abs_row_sums(f)?;
+                (Self::Bipartite(Arc::new(cross)), sums)
+            }
+        })
+    }
+
+    fn nonpositive(&self) -> bool {
+        match self {
+            Self::General(adjacency) => adjacency.nonpositive(),
+            Self::Bipartite(cross) => cross.nonpositive(),
         }
     }
 }
@@ -193,7 +219,7 @@ impl<T: Real> Sgdd<T> {
         csr: Csr<'_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, FromCsrError> {
-        decomposition::csr(csr, &policy)
+        Ok(Gdd::from_csr(csr)?.scale(&policy)?.sign()?.by_rows()?)
     }
 
     /// As [`from_csr`](Self::from_csr), the triangle symmetric by storage: no mirror is checked.
@@ -201,7 +227,10 @@ impl<T: Real> Sgdd<T> {
         csr: UpperCsr<'_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, FromCsrError> {
-        decomposition::upper_csr(csr, &policy)
+        Ok(Gdd::from_upper_csr(csr)?
+            .scale(&policy)?
+            .sign()?
+            .by_rows()?)
     }
 
     /// `A = V Vᵀ`: scales, folds or covers each component as general, deciding floating from `V`.
@@ -209,7 +238,10 @@ impl<T: Real> Sgdd<T> {
         v: FactorWidth2<'_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        decomposition::gram(v, &policy)
+        Gdd::from_general(v)?
+            .scale_gram(&policy, v)?
+            .sign()?
+            .by_columns(v)
     }
 
     /// `A = V W Vᵀ` on two disjoint sides: as [`from_gram`](Self::from_gram), a bipartite component then taking the block elimination.
@@ -217,7 +249,10 @@ impl<T: Real> Sgdd<T> {
         gram: BipartiteGram<'_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        decomposition::bipartite_gram(gram, &policy)
+        Gdd::from_bipartite(gram)?
+            .scale_gram(&policy, gram)?
+            .sign()?
+            .by_columns(gram)
     }
 }
 
@@ -226,16 +261,16 @@ impl<'a, T: Real, I: PrimInt> TryFrom<Laplacian<'a, T, I>> for Sgdd<T> {
 
     /// A graph Laplacian is dominant with surplus `g` by shape: nothing is searched, and a component floats exactly when its ground is zero.
     fn try_from(graph: Laplacian<'a, T, I>) -> Result<Self, Self::Error> {
-        decomposition::laplacian(graph)
+        Self::from_laplacian(graph)
     }
 }
 
 impl<'a, T: Real, I: PrimInt> TryFrom<SignedGraph<'a, T, I>> for Sgdd<T> {
     type Error = ReduceError;
 
-    /// A signed graph is a factor-width-2 Gram that is dominant by shape: its signs are searched and its `V` decides floating, but no scaling is, so no policy applies.
+    /// A signed graph is dominant by shape, each end's surplus its pairs' cancelled mass: nothing is scaled, and its signs are searched.
     fn try_from(graph: SignedGraph<'a, T, I>) -> Result<Self, Self::Error> {
-        decomposition::gram(graph, &ScalingPolicy::default())
+        Self::from_signed_graph(graph)
     }
 }
 
@@ -244,7 +279,7 @@ impl<'a, T: Real, I: PrimInt> TryFrom<BipartiteGraph<'a, T, I>> for Sgdd<T> {
 
     /// A signless bipartite Laplacian has zero surplus by shape: every component floats untested.
     fn try_from(graph: BipartiteGraph<'a, T, I>) -> Result<Self, Self::Error> {
-        decomposition::bipartite_graph(graph, graph.n_left(), Fold::Signless)
+        Self::from_bipartite_graph(graph)
     }
 }
 
@@ -253,11 +288,11 @@ impl<'a, T: Real, I: PrimInt> TryFrom<BipartiteLaplacian<'a, T, I>> for Sgdd<T> 
 
     /// A bipartite Laplacian is a Z-matrix with zero surplus by shape: every component floats untested.
     fn try_from(graph: BipartiteLaplacian<'a, T, I>) -> Result<Self, Self::Error> {
-        decomposition::bipartite_graph(graph, graph.n_left(), Fold::Laplacian)
+        Self::from_bipartite_laplacian(graph)
     }
 }
 
-/// One component `A_c` as the input gave it: signed, unscaled, in the input's shape.
+/// One component `A_c` as the input gave it: signed, unscaled.
 struct Unreduced<T> {
     /// In `A`'s numbering, in local order.
     vertices: Box<[u32]>,
@@ -265,28 +300,8 @@ struct Unreduced<T> {
     diagonal: Vec<T>,
     /// `Σ_j |a_ij|`, summed in `f64` while its rows are extracted, so dominance and surplus reread no value and a long `f32` row is not undercounted.
     abs_row_sums: Vec<T>,
-    /// No positive off-diagonal: already a Z-matrix, so no signature is searched.
-    nonpositive: bool,
     /// Entries per row: the rounding its sum can carry, read by the dominance test and the surplus band alike.
     degrees: Vec<usize>,
-}
-
-/// What a component came from: rows that only claim `A`, or a factor-width-2 Gram, GDD by type, whose `V` proves it singular once every component is reduced.
-#[derive(Clone, Copy)]
-enum Source<'n, 'v> {
-    Rows,
-    /// With its null vectors when its components are general.
-    Gram(Option<&'n OnDemand<'v>>),
-}
-
-impl Source<'_, '_> {
-    /// Factor width 2 is symmetric GDD (Boman, Chen, Parekh, Toledo 2005), so a Gram's scaling exists.
-    fn existence(self) -> Existence {
-        match self {
-            Self::Rows => Existence::Unknown,
-            Self::Gram(_) => Existence::Guaranteed,
-        }
-    }
 }
 
 impl<T: Real> Unreduced<T> {
@@ -297,7 +312,6 @@ impl<T: Real> Unreduced<T> {
         Self {
             vertices,
             abs_row_sums: off_diagonal.abs_row_sums(),
-            nonpositive: off_diagonal.nonpositive(),
             degrees: off_diagonal.degrees(),
             off_diagonal,
             diagonal,
@@ -309,91 +323,151 @@ impl<T: Real> Unreduced<T> {
         self.diagonal == [T::zero()]
     }
 
-    fn reduce(
-        self,
+    /// Rows prove nothing: SCI past the row test, or the reduced CG on a bipartite block, its existence unknown.
+    fn scale(self, policy: &ScalingPolicy) -> Result<Dominant<T>, ReduceError> {
+        let certification = scaling::Certification::new(*policy, Existence::Unknown);
+        let scaling =
+            scaling::dominance_scaling(&self, certification, || match &self.off_diagonal {
+                OffDiagonal::General(adjacency) => scaling::sci(adjacency, &self.diagonal, policy),
+                OffDiagonal::Bipartite(cross) => scaling::reduced_cg(cross, &self.diagonal, policy),
+            })?;
+        Ok(Dominant { a: self, scaling })
+    }
+
+    /// `V` proves a scaling exists: a general block's certified null vector, else SCI; a bipartite block's reduced CG. A zero diagonal beside a cell is its terms underflowing, not a non-GDD input.
+    fn gram_scaling(
+        &self,
         policy: &ScalingPolicy,
-        source: Source<'_, '_>,
-    ) -> Result<Congruent<T>, ReduceError> {
-        within_series_floor::<T>(&self.vertices)?;
-        // A view's zero diagonal beside a cell is its terms underflowing, not a non-GDD input.
-        let lost = self.diagonal.iter().position(|&d| d == T::zero());
-        if let (Source::Gram(_), Some(i)) = (source, lost) {
+        nulls: &OnDemand<'_>,
+    ) -> Result<scaling::Scaling<T>, ReduceError> {
+        if let Some(i) = self.diagonal.iter().position(|&d| d == T::zero()) {
             let vertex = self.vertices[i];
             return Err(ReduceError::OutOfRange { vertex });
         }
-        let scaling = scaling::dominance_scaling(&self, policy, source)?;
-        let signs = match self.nonpositive {
-            true => Some(Congruence::identity()),
-            false => signature::signature(&self.off_diagonal),
-        };
-        self.into_congruent(scaling, signs, policy)
+        let certification = scaling::Certification::new(*policy, Existence::Guaranteed);
+        scaling::dominance_scaling(self, certification, || match &self.off_diagonal {
+            OffDiagonal::General(adjacency) => (LazyCell::force(nulls).on(&self.vertices))
+                .and_then(|u| scaling::null_scaling(&u, &self.diagonal))
+                .or_else(|| scaling::sci(adjacency, &self.diagonal, policy)),
+            OffDiagonal::Bipartite(cross) => scaling::reduced_cg(cross, &self.diagonal, policy),
+        })
+    }
+}
+
+/// `A_c` and the scales `R` making `R A_c R` weakly dominant once clamped, not yet applied: its signature is still open.
+pub(super) struct Dominant<T> {
+    a: Unreduced<T>,
+    scaling: scaling::Scaling<T>,
+}
+
+impl<T: Real> Dominant<T> {
+    fn signature(&self) -> Option<Congruence<T>> {
+        folding_signs(&self.a.off_diagonal)
     }
 
-    /// `F = S R` folds and scales `A_c`, or only scales a frustrated one.
-    fn into_congruent(
-        self,
-        scaling: scaling::Scaling<T>,
-        signs: Option<Congruence<T>>,
-        policy: &ScalingPolicy,
-    ) -> Result<Congruent<T>, ReduceError> {
-        let vertex = self.vertices[0];
-        let folds = signs.is_some();
-        let signs = signs.unwrap_or_else(Congruence::identity);
-        let (congruence, relaxation) = match scaling {
-            scaling::Scaling::AlreadyDominant => (signs, None),
-            scaling::Scaling::Scaled(relaxation, existence) => (
-                signs.scaled(&relaxation.scales),
-                Some((relaxation, existence)),
-            ),
-        };
-        let off_diagonal =
-            (congruence.transform(self.off_diagonal)).ok_or(ReduceError::Unscalable { vertex })?;
-        // Signs keep every magnitude, so only a scaling sums `M`'s rows again.
-        let (rows, report) = match relaxation {
-            None => {
+    /// `M = F A_c F` with `F = S R`, formed once with its rows, which decide the report; a frustrated `A_c` takes `S = I`.
+    fn congruent(self, signs: Congruence<T>) -> Result<(Congruent<T>, RowSums<T>), ReduceError> {
+        let Self { a, scaling } = self;
+        match scaling {
+            scaling::Scaling::AlreadyDominant => {
+                // Signs keep every magnitude, so `A_c`'s rows are `M`'s; its deficit lies inside the band `already_dominant` allowed.
                 let rows = RowSums {
-                    diagonal: self.diagonal,
-                    abs: self.abs_row_sums,
-                    surplus: RowSurplus::Banded(self.degrees),
+                    diagonal: a.diagonal,
+                    abs: a.abs_row_sums,
+                    surplus: RowSurplus::Banded(a.degrees),
                 };
-                // An unscaled deficit lies inside the rounding band `already_dominant` allowed.
-                (rows, None)
+                Ok((Congruent::new(a.vertices, a.off_diagonal, signs)?, rows))
             }
-            Some((relaxation, existence)) => {
-                let diagonal: Vec<T> = (self.diagonal.iter().zip(&relaxation.scales[..]))
+            scaling::Scaling::Scaled(relaxation, certify) => {
+                let vertex = a.vertices[0];
+                let congruence = signs.scaled(&relaxation.scales);
+                let (off_diagonal, abs) = (congruence.transform_abs_row_sums(a.off_diagonal))
+                    .ok_or(ReduceError::Unscalable { vertex })?;
+                let diagonal: Vec<T> = (a.diagonal.iter().zip(&relaxation.scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();
-                let abs = off_diagonal.abs_row_sums();
-                let deficit = scaling::clamped_deficit(&diagonal, &abs, &self.degrees);
+                let deficit = scaling::clamped_deficit(&diagonal, &abs, &a.degrees);
+                let m = Congruent {
+                    frame: Frame::new(a.vertices, congruence),
+                    off_diagonal,
+                    report: certify.report(&relaxation, deficit),
+                };
                 let rows = RowSums {
                     diagonal,
                     abs,
                     surplus: RowSurplus::Residue,
                 };
-                (rows, policy.certify(&relaxation, deficit, existence))
+                Ok((m, rows))
             }
-        };
-        Ok(Congruent {
-            frame: Frame::new(self.vertices, congruence),
-            off_diagonal,
-            folds,
-            rows,
-            report,
-        })
+        }
     }
 }
 
-/// `M = F · A_c · F` before its grounding is decided: by its rows, or for a folded view component by its input.
+/// The signs `S` folding `A_c`; `None` when frustrated. A Z-matrix folds as it is.
+fn folding_signs<T: Real>(off_diagonal: &OffDiagonal<T>) -> Option<Congruence<T>> {
+    match off_diagonal.nonpositive() {
+        true => Some(Congruence::identity()),
+        false => signature::signature(off_diagonal),
+    }
+}
+
+/// `M = F · A_c · F` over its frame, its surplus still to be decided.
 pub(super) struct Congruent<T> {
     frame: Frame<T>,
     off_diagonal: OffDiagonal<T>,
-    folds: bool,
-    rows: RowSums<T>,
     report: Option<ScalingReport>,
 }
 
-/// `M`'s diagonal and `Σ_j |m_ij|`, read only when the rows decide the surplus.
-struct RowSums<T> {
+impl<T: Real> Congruent<T> {
+    /// `F A_c F` unscaled, so nothing is reported.
+    fn new(
+        vertices: Box<[u32]>,
+        off_diagonal: OffDiagonal<T>,
+        congruence: Congruence<T>,
+    ) -> Result<Self, ReduceError> {
+        let vertex = vertices[0];
+        let off_diagonal =
+            (congruence.transform(off_diagonal)).ok_or(ReduceError::Unscalable { vertex })?;
+        Ok(Self {
+            frame: Frame::new(vertices, congruence),
+            off_diagonal,
+            report: None,
+        })
+    }
+
+    fn frustrated(self, grounding: Grounding<T>) -> Result<Component<T>, ReduceError> {
+        self.grounded(Balance::Frustrated(grounding))
+    }
+
+    /// The ground's `Σs` must clear the bound any diagonal does.
+    fn grounded(self, balance: Balance<T>) -> Result<Component<T>, ReduceError> {
+        if !balance.ground_in_range() {
+            let vertex = self.frame.vertices()[0];
+            return Err(ReduceError::OutOfRange { vertex });
+        }
+        Ok(Component::new(
+            self.frame,
+            Sdd::new(self.off_diagonal, balance),
+            self.report,
+        ))
+    }
+}
+
+/// `M` folded to a Z-matrix by a found signature or by its shape: only it grounds as balanced.
+pub(super) struct Folded<T>(Congruent<T>);
+
+impl<T: Real> Folded<T> {
+    pub(super) fn frame(&self) -> &Frame<T> {
+        &self.0.frame
+    }
+
+    fn balanced(self, grounding: Grounding<T>) -> Result<Component<T>, ReduceError> {
+        self.0.grounded(Balance::Balanced(grounding))
+    }
+}
+
+/// `M`'s diagonal and `Σ_j |m_ij|`: the surplus when no shape or `V` gives it.
+pub(super) struct RowSums<T> {
     diagonal: Vec<T>,
     abs: Vec<T>,
     surplus: RowSurplus,
@@ -407,42 +481,17 @@ enum RowSurplus {
     Residue,
 }
 
-impl<T: Real> Congruent<T> {
-    pub(super) fn frame(&self) -> &Frame<T> {
-        &self.frame
-    }
-
-    pub(super) fn folds(&self) -> bool {
-        self.folds
-    }
-
+impl<T: Real> RowSums<T> {
     /// The surplus `M`'s own rows show.
-    pub(super) fn by_rows(self) -> Result<Component<T>, ReduceError> {
-        let rows = self.rows.diagonal.iter().zip(&self.rows.abs);
-        let surplus = match &self.rows.surplus {
+    fn surplus(self) -> Grounding<T> {
+        let rows = self.diagonal.iter().zip(&self.abs);
+        let surplus = match &self.surplus {
             RowSurplus::Banded(degrees) => (rows.zip(degrees))
                 .map(|((&d, &s), &degree)| scaling::unscaled_surplus(d, s, degree))
                 .collect(),
             RowSurplus::Residue => rows.map(|(&d, &s)| (d - s).max(T::zero())).collect(),
         };
-        self.grounded(Grounding::of(surplus))
-    }
-
-    /// The ground's `Σs` must clear the bound any diagonal does.
-    pub(super) fn grounded(self, grounding: Grounding<T>) -> Result<Component<T>, ReduceError> {
-        let vertex = self.frame.vertices()[0];
-        let balance = match self.folds {
-            true => Balance::Balanced(grounding),
-            false => Balance::Frustrated(grounding),
-        };
-        if !balance.ground_in_range() {
-            return Err(ReduceError::OutOfRange { vertex });
-        }
-        Ok(Component::new(
-            self.frame,
-            Sdd::new(self.off_diagonal, balance),
-            self.report,
-        ))
+        Grounding::of(surplus)
     }
 }
 

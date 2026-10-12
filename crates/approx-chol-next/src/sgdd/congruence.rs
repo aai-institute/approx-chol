@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::borrow::Cow;
 
 use super::OffDiagonal;
 use crate::storage::{narrow, widen};
@@ -70,21 +70,33 @@ impl<T: Real> Congruence<T> {
 
     /// `F X F`: `M`'s off-diagonal from `A_c`'s; `None` where an entry leaves [`in_range`](crate::storage::in_range).
     pub(super) fn transform(&self, off_diagonal: OffDiagonal<T>) -> Option<OffDiagonal<T>> {
-        let negated;
-        let factors = match &self.0 {
-            Kind::Identity => return Some(off_diagonal),
-            Kind::NegateFrom(first) => {
-                negated = signs(*first, off_diagonal.n());
-                &negated[..]
+        match self.factors(off_diagonal.n()) {
+            None => Some(off_diagonal),
+            Some(factors) => off_diagonal.scaled(&factors),
+        }
+    }
+
+    /// As [`transform`](Self::transform), with `Σ_j |m_ij|` summed while `M` is formed.
+    pub(super) fn transform_abs_row_sums(
+        &self,
+        off_diagonal: OffDiagonal<T>,
+    ) -> Option<(OffDiagonal<T>, Vec<T>)> {
+        match self.factors(off_diagonal.n()) {
+            None => {
+                let sums = off_diagonal.abs_row_sums();
+                Some((off_diagonal, sums))
             }
-            Kind::Factors(factors) => &factors[..],
-        };
-        Some(match off_diagonal {
-            OffDiagonal::General(adjacency) => OffDiagonal::General(adjacency.scaled(factors)?),
-            OffDiagonal::Bipartite(cross) => {
-                OffDiagonal::Bipartite(Arc::new(Arc::unwrap_or_clone(cross).scaled(factors)?))
-            }
-        })
+            Some(factors) => off_diagonal.scaled_abs_row_sums(&factors),
+        }
+    }
+
+    /// `F·1` over `n` vertices, `None` for the identity.
+    fn factors(&self, n: usize) -> Option<Cow<'_, [T]>> {
+        match &self.0 {
+            Kind::Identity => None,
+            Kind::NegateFrom(first) => Some(Cow::Owned(signs(*first, n))),
+            Kind::Factors(factors) => Some(Cow::Borrowed(&factors[..])),
+        }
     }
 
     /// `x ← F x`; with `P` projecting out `F·1` when the component floats, else `I`, `A_c⁺ = P F M⁺ F P`, so the solve applies it on both sides.

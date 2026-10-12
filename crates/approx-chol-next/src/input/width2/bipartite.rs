@@ -231,6 +231,11 @@ impl<'a, T: Real, I: PrimInt> BipartiteGraph<'a, T, I> {
     pub(crate) fn n_left(&self) -> usize {
         self.n_left
     }
+
+    /// The same edges' Laplacian `B W Bᵀ`, congruent to this one by negating either side.
+    pub(crate) fn laplacian(self) -> BipartiteLaplacian<'a, T, I> {
+        BipartiteLaplacian(self)
+    }
 }
 
 /// Weighted bipartite multigraph; its matrix is the Laplacian `B W Bᵀ`, a Z-matrix and singular by shape.

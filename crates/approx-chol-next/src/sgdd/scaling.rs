@@ -1,8 +1,6 @@
 mod cg;
 
-use std::cell::LazyCell;
-
-use super::{OffDiagonal, Source, Unreduced};
+use super::Unreduced;
 use crate::storage::{diagonal_in_range, narrow, widen, CrossBlock, UpperAdjacency};
 use crate::{Real, ReduceError};
 
@@ -57,7 +55,27 @@ pub(super) enum Scaling<T> {
     /// Every SDDM input, so an SDDM CSR reduces bit for bit as before.
     AlreadyDominant,
     /// Uncertified until its hand-over clamps: the report weighs both, and says whether a certified one exists.
-    Scaled(Relaxation<T>, Existence),
+    Scaled(Relaxation<T>, Certification),
+}
+
+/// What a scaling is reported against once `M` shows its clamped deficit: the policy, and whether a certified scaling exists.
+pub(super) struct Certification {
+    policy: ScalingPolicy,
+    existence: Existence,
+}
+
+impl Certification {
+    pub(super) fn new(policy: ScalingPolicy, existence: Existence) -> Self {
+        Self { policy, existence }
+    }
+
+    pub(super) fn report<T: Real>(
+        &self,
+        relaxation: &Relaxation<T>,
+        clamped: f64,
+    ) -> Option<ScalingReport> {
+        self.policy.certify(relaxation, clamped, self.existence)
+    }
 }
 
 /// What an iteration reached: scales and how far short of dominance they leave `A`.
@@ -68,11 +86,11 @@ pub(super) struct Relaxation<T> {
     violation: T,
 }
 
-/// Every input's diagonal is screened here, before any dominance test; a view's zero diagonal was already `OutOfRange`.
+/// Every input's diagonal is screened here, before any dominance test; past the row test `relax` runs, `None` when no scale stays a positive `T`; a Gram's scaling exists (Boman, Chen, Parekh, Toledo 2005).
 pub(super) fn dominance_scaling<T: Real>(
     a: &Unreduced<T>,
-    policy: &ScalingPolicy,
-    source: Source<'_, '_>,
+    certification: Certification,
+    relax: impl FnOnce() -> Option<Relaxation<T>>,
 ) -> Result<Scaling<T>, ReduceError> {
     if let Some(i) = a.diagonal.iter().position(|&d| !diagonal_in_range(d)) {
         return Err(ReduceError::OutOfRange {
@@ -89,32 +107,18 @@ pub(super) fn dominance_scaling<T: Real>(
             vertex: a.vertices[0],
         });
     }
-    if already_dominant(a, policy) {
+    if already_dominant(a, &certification.policy) {
         return Ok(Scaling::AlreadyDominant);
     }
-    // SCI reads only row ratios, so it serves any pattern; the reduced CG needs the bipartite operator.
-    let relaxation = match (&a.off_diagonal, source) {
-        (OffDiagonal::General(_), Source::Gram(Some(nulls))) => {
-            match (LazyCell::force(nulls).on(&a.vertices))
-                .and_then(|u| null_scaling(&u, &a.diagonal))
-            {
-                Some(relaxation) => Ok(relaxation),
-                None => sci(a, policy),
-            }
-        }
-        (OffDiagonal::General(_), _) => sci(a, policy),
-        (OffDiagonal::Bipartite(cross), _) => {
-            reduced_cg(cross, &a.diagonal, policy).ok_or(ReduceError::Unscalable {
-                vertex: a.vertices[0],
-            })
-        }
-    }?;
-    Ok(Scaling::Scaled(relaxation, source.existence()))
+    let relaxation = relax().ok_or(ReduceError::Unscalable {
+        vertex: a.vertices[0],
+    })?;
+    Ok(Scaling::Scaled(relaxation, certification))
 }
 
 impl ScalingPolicy {
     /// The one place the tolerance decides whether a scaling is reported: its own violation or the deficit its hand-over clamped, whichever is worse.
-    pub(super) fn certify<T: Real>(
+    fn certify<T: Real>(
         &self,
         relaxation: &Relaxation<T>,
         clamped: f64,
@@ -171,7 +175,7 @@ fn already_dominant<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> bool {
 }
 
 /// `|u|` of a certified null vector makes `M`'s rows sum to zero, so no iteration runs; peaked as SCI's, `None` if a scale leaves `T`.
-fn null_scaling<T: Real>(u: &[f64], diagonal: &[T]) -> Option<Relaxation<T>> {
+pub(super) fn null_scaling<T: Real>(u: &[f64], diagonal: &[T]) -> Option<Relaxation<T>> {
     let peak =
         (u.iter().zip(diagonal)).fold(0.0f64, |peak, (&x, &d)| peak.max(x.abs() * widen(d).sqrt()));
     let scales: Box<[T]> = u.iter().map(|&x| narrow::<T>(x.abs() / peak)).collect();
@@ -183,14 +187,12 @@ fn null_scaling<T: Real>(u: &[f64], diagonal: &[T]) -> Option<Relaxation<T>> {
 }
 
 /// Self-corrective iterations (Guan, Lu, Li, Shao 2016, Algorithm 3), proto's: the best iterate is handed over, peaking `μ = f√a_ii` at `1` as the CG does.
-fn sci<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> Result<Relaxation<T>, ReduceError> {
-    let unscalable = ReduceError::Unscalable {
-        vertex: a.vertices[0],
-    };
-    let OffDiagonal::General(adjacency) = &a.off_diagonal else {
-        unreachable!("only a general pattern takes SCI")
-    };
-    let diagonal: Vec<f64> = a.diagonal.iter().map(|&d| widen(d)).collect();
+pub(super) fn sci<T: Real>(
+    adjacency: &UpperAdjacency<T>,
+    diagonal: &[T],
+    policy: &ScalingPolicy,
+) -> Option<Relaxation<T>> {
+    let diagonal: Vec<f64> = diagonal.iter().map(|&d| widen(d)).collect();
     let n = diagonal.len();
     let mut scales = vec![1.0f64; n];
     let mut t = vec![0.0f64; n];
@@ -202,7 +204,7 @@ fn sci<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> Result<Relaxation<T
             (lo.min(v), hi.max(v))
         });
         if !(t_p.is_finite() && t_q.is_finite()) {
-            return Err(unscalable);
+            return None;
         }
         let violation = (t_q - 1.0).max(0.0);
         if violation < best.0 {
@@ -225,7 +227,7 @@ fn sci<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> Result<Relaxation<T
         }
         let peak = scales.iter().copied().fold(0.0f64, f64::max);
         if !(peak.is_finite() && peak > 0.0) {
-            return Err(unscalable);
+            return None;
         }
         scales.iter_mut().for_each(|f| *f /= peak);
     }
@@ -233,9 +235,9 @@ fn sci<T: Real>(a: &Unreduced<T>, policy: &ScalingPolicy) -> Result<Relaxation<T
     let peak = (scales.iter().zip(&diagonal)).fold(0.0f64, |peak, (&f, &d)| peak.max(f * d.sqrt()));
     let scales: Box<[T]> = scales.iter().map(|&f| narrow::<T>(f / peak)).collect();
     if !scales.iter().all(|&f| f.is_finite() && f > T::zero()) {
-        return Err(unscalable);
+        return None;
     }
-    Ok(Relaxation {
+    Some(Relaxation {
         scales,
         iterations,
         violation: narrow(violation),
@@ -258,7 +260,7 @@ fn ratios<T: Real>(adjacency: &UpperAdjacency<T>, diagonal: &[f64], scales: &[f6
 }
 
 /// CG on `α² − NᵀN` over the smaller side, `α = 1 + tolerance/2` off the Perron vector; `None` when no scale stays a positive `T`.
-fn reduced_cg<T: Real>(
+pub(super) fn reduced_cg<T: Real>(
     cross: &CrossBlock<T>,
     diagonal: &[T],
     policy: &ScalingPolicy,

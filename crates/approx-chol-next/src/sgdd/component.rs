@@ -2,11 +2,7 @@
 
 use std::sync::Arc;
 
-use super::{
-    within_series_floor, Balance, Congruence, Frame, Grounding, OffDiagonal, ReduceError,
-    ScalingReport,
-};
-use crate::storage::{diagonal_in_range, in_range, narrow, widen, CrossBlock, UpperAdjacency};
+use super::{Balance, Frame, OffDiagonal, ScalingReport};
 use crate::Real;
 
 /// One component of `A`, reduced: `M = F · A_c · F` over its vertices, eliminated block first.
@@ -26,28 +22,6 @@ impl<T: Real> Component<T> {
             m,
             report,
         }
-    }
-
-    /// Only the degrees are checked: the shape proves `signs`, dominance and floating.
-    pub(super) fn folded(
-        vertices: Box<[u32]>,
-        cross: CrossBlock<T>,
-        congruence: Congruence<T>,
-    ) -> Result<Self, ReduceError> {
-        within_series_floor::<T>(&vertices)?;
-        if let Some(i) = cross
-            .abs_row_sums()
-            .iter()
-            .position(|&d| !diagonal_in_range(d))
-        {
-            let vertex = vertices[i];
-            return Err(ReduceError::OutOfRange { vertex });
-        }
-        let vertex = vertices[0];
-        let off_diagonal = (congruence.transform(OffDiagonal::Bipartite(Arc::new(cross))))
-            .ok_or(ReduceError::Unscalable { vertex })?;
-        let m = Sdd::new(off_diagonal, Balance::Balanced(Grounding::ungrounded()));
-        Ok(Self::new(Frame::new(vertices, congruence), m, None))
     }
 
     /// The component's vertices in `A`'s numbering, in local order.
@@ -73,77 +47,6 @@ impl<T: Real> Component<T> {
     /// `M`: its off-diagonal and its balance.
     pub(crate) fn m(&self) -> (&OffDiagonal<T>, &Balance<T>) {
         (&self.m.off_diagonal, &self.m.balance)
-    }
-}
-
-/// One component of a graph Laplacian's view: its edges prove the signature and dominance, and its ground `g` the grounding.
-pub(super) struct ProvenLaplacian<T> {
-    vertices: Box<[u32]>,
-    adjacency: UpperAdjacency<T>,
-    /// The edges' weights summed per vertex, read only for the range `A`'s diagonal must clear.
-    diagonal: Vec<T>,
-    ground: Option<Vec<T>>,
-}
-
-impl<T: Real> ProvenLaplacian<T> {
-    /// Panics unless one diagonal, and one ground when given, per vertex.
-    pub(super) fn new(
-        vertices: Box<[u32]>,
-        adjacency: UpperAdjacency<T>,
-        diagonal: Vec<T>,
-        ground: Option<Vec<T>>,
-    ) -> Self {
-        assert_eq!(vertices.len(), adjacency.n(), "one vertex per row");
-        assert_eq!(diagonal.len(), adjacency.n(), "one diagonal per row");
-        assert!(
-            (ground.as_ref()).is_none_or(|g| g.len() == adjacency.n()),
-            "one ground per row"
-        );
-        Self {
-            vertices,
-            adjacency,
-            diagonal,
-            ground,
-        }
-    }
-
-    /// The lone vertex, when it has nothing to solve: it has no edge, so only a ground makes it a component.
-    pub(super) fn dead(&self) -> Option<u32> {
-        let ground = |i: usize| (self.ground.as_ref()).map_or(T::zero(), |g| g[i]);
-        let dead = self.vertices.len() == 1 && self.diagonal[0] + ground(0) == T::zero();
-        dead.then_some(self.vertices[0])
-    }
-
-    /// Only ranges are checked: `A`'s diagonal `d + g`, summed in `f64`, and each ground like any entry.
-    pub(super) fn into_component(self) -> Result<Component<T>, ReduceError> {
-        let Self {
-            vertices,
-            adjacency,
-            diagonal,
-            ground,
-        } = self;
-        within_series_floor::<T>(&vertices)?;
-        let out_of_range = |i: usize| match &ground {
-            Some(g) => {
-                !in_range(g[i]) || !diagonal_in_range(narrow::<T>(widen(diagonal[i]) + widen(g[i])))
-            }
-            None => !diagonal_in_range(diagonal[i]),
-        };
-        if let Some(i) = (0..vertices.len()).find(|&i| out_of_range(i)) {
-            let vertex = vertices[i];
-            return Err(ReduceError::OutOfRange { vertex });
-        }
-        let balance = Balance::Balanced(ground.map_or_else(Grounding::ungrounded, Grounding::of));
-        if !balance.ground_in_range() {
-            let vertex = vertices[0];
-            return Err(ReduceError::OutOfRange { vertex });
-        }
-        let m = Sdd::new(OffDiagonal::General(adjacency), balance);
-        Ok(Component::new(
-            Frame::new(vertices, Congruence::identity()),
-            m,
-            None,
-        ))
     }
 }
 
