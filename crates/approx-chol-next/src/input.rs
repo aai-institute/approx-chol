@@ -9,5 +9,5 @@ pub use width2::bipartite::{BipartiteGram, BipartiteGraph, BipartiteLaplacian, I
 pub use width2::edges::Weights;
 pub use width2::laplacian::Laplacian;
 pub use width2::signed::SignedGraph;
-pub(crate) use width2::{Column, IntoColumns};
+pub(crate) use width2::{BipartiteColumns, Column, IntoColumns};
 pub use width2::{FactorWidth2, ViewError};

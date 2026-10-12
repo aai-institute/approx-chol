@@ -1,6 +1,5 @@
 //! `A` as its connected components, each reduced to `M = F · A_c · F`, decided once per input.
 
-mod component;
 mod congruence;
 mod decomposition;
 mod null_vectors;
@@ -12,17 +11,19 @@ use std::sync::Arc;
 
 use num_traits::PrimInt;
 
-pub use component::Component;
-use component::Sdd;
-use congruence::Congruence;
-use reduction::DirectSum;
+use congruence::{Congruence, Signature};
+use decomposition::{assemble_bipartite, assemble_laplacian, assemble_signed, of_csr, of_upper};
+use decomposition::{BipartiteComponent, Cells};
+pub use reduction::Component;
+use reduction::{Congruent, Folded, GramSum};
 pub use scaling::{Existence, ScalingPolicy, ScalingReport};
+use signature::folding_signs;
 
 use crate::input::{
-    BipartiteGram, BipartiteGraph, BipartiteLaplacian, Csr, CsrError, FactorWidth2, Laplacian,
-    SignedGraph, UpperCsr,
+    BipartiteGram, BipartiteGraph, BipartiteLaplacian, Canonical, Csr, CsrError, FactorWidth2,
+    Laplacian, SignedGraph, UpperCsr,
 };
-use crate::storage::{diagonal_in_range, CrossBlock, UpperAdjacency};
+use crate::storage::{diagonal_in_range, in_range, narrow, widen, CrossBlock, UpperAdjacency};
 use crate::Real;
 
 /// Where a component sits in `A`: its vertices, and the congruence between `A_c` and `M`.
@@ -211,13 +212,15 @@ impl<T: Real> Sgdd<T> {
             .filter_map(Component::scaling_report)
             .max_by(|a, b| a.violation.total_cmp(&b.violation))
     }
+}
 
+impl<T: Real> Sgdd<T> {
     /// Checks symmetry, then scales each component to dominance unless it already is; an unscaled row's surplus up to about `2tε·a_ii` (`t` its entries) counts as rounding, and a scaled component floats only if its clamped surplus vanishes.
     pub fn from_csr<I: PrimInt>(
         csr: Csr<'_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, FromCsrError> {
-        Ok(DirectSum::from_csr(csr)?.by_rows(&policy)?)
+        Ok(of_csr(Canonical::of(csr)?)?.reduce(&policy)?)
     }
 
     /// As [`from_csr`](Self::from_csr), the triangle symmetric by storage: no mirror is checked.
@@ -225,7 +228,7 @@ impl<T: Real> Sgdd<T> {
         csr: UpperCsr<'_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, FromCsrError> {
-        Ok(DirectSum::from_upper_csr(csr)?.by_rows(&policy)?)
+        Ok(of_upper(Canonical::upper(csr)?)?.reduce(&policy)?)
     }
 
     /// `A = V Vᵀ`: scales, folds or covers each component as general, deciding floating from `V`.
@@ -233,15 +236,15 @@ impl<T: Real> Sgdd<T> {
         v: FactorWidth2<'_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        DirectSum::from_general(v)?.by_columns(&policy, v)
+        GramSum::general(v)?.reduce(&policy)
     }
 
-    /// `A = V W Vᵀ` on two disjoint sides: as [`from_gram`](Self::from_gram), a bipartite component then taking the block elimination.
+    /// `A = V W Vᵀ` on two disjoint sides `[D_l C; Cᵀ D_r]`: as [`from_gram`](Self::from_gram), a bipartite component then taking the block elimination with its diagonal read off the sides.
     pub fn from_bipartite_gram<I: PrimInt>(
         gram: BipartiteGram<'_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        DirectSum::from_bipartite(gram)?.by_columns(&policy, gram)
+        GramSum::bipartite(gram)?.reduce(&policy)
     }
 }
 
@@ -250,25 +253,39 @@ impl<'a, T: Real, I: PrimInt> TryFrom<Laplacian<'a, T, I>> for Sgdd<T> {
 
     /// A graph Laplacian is dominant with surplus `g` by shape: nothing is searched, and a component floats exactly when its ground is zero.
     fn try_from(graph: Laplacian<'a, T, I>) -> Result<Self, Self::Error> {
-        Self::from_laplacian(graph)
-    }
-}
-
-impl<'a, T: Real, I: PrimInt> TryFrom<SignedGraph<'a, T, I>> for Sgdd<T> {
-    type Error = ReduceError;
-
-    /// A signed graph is dominant by shape, each end's surplus its pairs' cancelled mass: nothing is scaled, and its signs are searched.
-    fn try_from(graph: SignedGraph<'a, T, I>) -> Result<Self, Self::Error> {
-        Self::from_signed_graph(graph)
+        let sum = assemble_laplacian(graph)?.extract(|(cells, grounding)| {
+            let Cells {
+                vertices,
+                adjacency,
+                diagonal,
+            } = cells;
+            let g = |i: usize| grounding.surplus().map_or(T::zero(), |g| g[i]);
+            // A lone vertex has no edge, so only a ground makes it a component.
+            if vertices.len() == 1 && diagonal[0] + g(0) == T::zero() {
+                return Ok(None);
+            }
+            // `A`'s diagonal `d + g`, summed in `f64`, and each ground like any entry.
+            let out_of_range = |i: usize| {
+                !in_range(g(i)) || !diagonal_in_range(narrow::<T>(widen(diagonal[i]) + widen(g(i))))
+            };
+            if let Some(i) = (0..vertices.len()).find(|&i| out_of_range(i)) {
+                let vertex = vertices[i];
+                return Err(ReduceError::OutOfRange { vertex });
+            }
+            let off_diagonal = OffDiagonal::General(adjacency);
+            let m = Congruent::new(vertices, off_diagonal, Signature::identity())?;
+            Folded::new(m).balanced(grounding).map(Some)
+        })?;
+        Ok(sum.into())
     }
 }
 
 impl<'a, T: Real, I: PrimInt> TryFrom<BipartiteGraph<'a, T, I>> for Sgdd<T> {
     type Error = ReduceError;
 
-    /// A signless bipartite Laplacian has zero surplus by shape: every component floats untested.
+    /// A signless bipartite Laplacian has zero surplus by shape, and negating one side folds it: every component floats untested.
     fn try_from(graph: BipartiteGraph<'a, T, I>) -> Result<Self, Self::Error> {
-        Self::from_bipartite_graph(graph)
+        folded_bipartite(graph.laplacian(), Signature::negate_from)
     }
 }
 
@@ -277,7 +294,64 @@ impl<'a, T: Real, I: PrimInt> TryFrom<BipartiteLaplacian<'a, T, I>> for Sgdd<T> 
 
     /// A bipartite Laplacian is a Z-matrix with zero surplus by shape: every component floats untested.
     fn try_from(graph: BipartiteLaplacian<'a, T, I>) -> Result<Self, Self::Error> {
-        Self::from_bipartite_laplacian(graph)
+        folded_bipartite(graph, |_| Signature::identity())
+    }
+}
+
+/// `M`, a bipartite Laplacian, with `signs` the `S` folding `A` into it; a lone vertex is dead, and only the degrees are checked.
+fn folded_bipartite<T: Real, I: PrimInt>(
+    m: BipartiteLaplacian<'_, T, I>,
+    signs: impl Fn(usize) -> Signature<T>,
+) -> Result<Sgdd<T>, ReduceError> {
+    let sum = assemble_bipartite(m)?.extract(|component| {
+        let BipartiteComponent::Sides(vertices, cross) = component else {
+            return Ok(None);
+        };
+        if let Some(i) = (cross.abs_row_sums().iter()).position(|&d| !diagonal_in_range(d)) {
+            let vertex = vertices[i];
+            return Err(ReduceError::OutOfRange { vertex });
+        }
+        let signs = signs(cross.n_eliminated());
+        let m = Congruent {
+            frame: Frame::new(vertices, Congruence::Signed(signs)),
+            off_diagonal: OffDiagonal::Bipartite(Arc::new(cross)),
+        };
+        Folded::new(m).balanced(Grounding::ungrounded()).map(Some)
+    })?;
+    Ok(sum.into())
+}
+
+impl<'a, T: Real, I: PrimInt> TryFrom<SignedGraph<'a, T, I>> for Sgdd<T> {
+    type Error = ReduceError;
+
+    /// A signed graph is dominant by shape, each end's surplus its pairs' cancelled mass: nothing is scaled, and its signs are searched.
+    fn try_from(graph: SignedGraph<'a, T, I>) -> Result<Self, Self::Error> {
+        let sum = assemble_signed(graph)?.extract(|(cells, grounding)| {
+            let Cells {
+                vertices,
+                adjacency,
+                diagonal,
+            } = cells;
+            if diagonal == [T::zero()] {
+                return Ok(None);
+            }
+            // A zero diagonal beside a cell is its terms underflowing.
+            let out_of_range = |&d: &T| d == T::zero() || !diagonal_in_range(d);
+            if let Some(i) = diagonal.iter().position(out_of_range) {
+                let vertex = vertices[i];
+                return Err(ReduceError::OutOfRange { vertex });
+            }
+            let off_diagonal = OffDiagonal::General(adjacency);
+            let component = match folding_signs(&off_diagonal) {
+                Some(signs) => {
+                    Folded::new(Congruent::new(vertices, off_diagonal, signs)?).balanced(grounding)
+                }
+                None => (Congruent::new(vertices, off_diagonal, Signature::identity())?)
+                    .frustrated(grounding),
+            };
+            component.map(Some)
+        })?;
+        Ok(sum.into())
     }
 }
 

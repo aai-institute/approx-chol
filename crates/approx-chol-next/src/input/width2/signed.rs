@@ -46,6 +46,6 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for SignedGraph<'_, T, I> {
             true => T::one(),
             false => -T::one(),
         };
-        self.edges.for_each_column(0, sign, visit)
+        self.edges.for_each_column(0, |_| T::one(), sign, visit)
     }
 }

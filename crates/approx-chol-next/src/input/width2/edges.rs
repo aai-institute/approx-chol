@@ -76,18 +76,24 @@ impl<'a, T: Real, I: PrimInt> Edges<'a, T, I> {
         Ok(Self { a, b, weights })
     }
 
-    /// Column `k` is `e_a + v_b(k) e_(offset + b)`; matched once, then looped per case.
+    /// Ends, lengths and weights another view already checked.
+    pub(super) fn checked(a: &'a [I], b: &'a [I], weights: Weights<'a, T>) -> Self {
+        Self { a, b, weights }
+    }
+
+    /// Column `k` is `v_a(k) e_a + v_b(k) e_(offset + b)`; matched once, then looped per case.
     #[inline(always)]
     pub(super) fn for_each_column(
         self,
         offset: usize,
+        v_a: impl Fn(usize) -> T,
         v_b: impl Fn(usize) -> T,
         visit: impl FnMut(Column<T>),
     ) {
         match self.weights {
-            Weights::Unit => self.columns(offset, v_b, |_| Weight::Unit, visit),
-            Weights::Of(w) => self.columns(offset, v_b, |k| Weight::Of(w[k]), visit),
-            Weights::SqrtOf(s) => self.columns(offset, v_b, |k| Weight::SqrtOf(s[k]), visit),
+            Weights::Unit => self.columns(offset, v_a, v_b, |_| Weight::Unit, visit),
+            Weights::Of(w) => self.columns(offset, v_a, v_b, |k| Weight::Of(w[k]), visit),
+            Weights::SqrtOf(s) => self.columns(offset, v_a, v_b, |k| Weight::SqrtOf(s[k]), visit),
         }
     }
 
@@ -95,6 +101,7 @@ impl<'a, T: Real, I: PrimInt> Edges<'a, T, I> {
     fn columns(
         self,
         offset: usize,
+        v_a: impl Fn(usize) -> T,
         v_b: impl Fn(usize) -> T,
         weight: impl Fn(usize) -> Weight<T>,
         mut visit: impl FnMut(Column<T>),
@@ -103,7 +110,7 @@ impl<'a, T: Real, I: PrimInt> Edges<'a, T, I> {
             visit(Column {
                 a: index(*a) as u32,
                 b: (offset + index(*b)) as u32,
-                v_a: T::one(),
+                v_a: v_a(k),
                 v_b: v_b(k),
                 weight: weight(k),
             });

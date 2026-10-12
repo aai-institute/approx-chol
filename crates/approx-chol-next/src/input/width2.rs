@@ -81,6 +81,11 @@ pub(crate) trait IntoColumns<T: Real>: Copy {
     fn for_each_column(self, visit: impl FnMut(Column<T>));
 }
 
+/// `V = [V_l; V_r]`: every column joins a left row to a right one, right rows numbered after the left.
+pub(crate) trait BipartiteColumns<T: Real>: IntoColumns<T> {
+    fn n_left(&self) -> usize;
+}
+
 /// Column `k` of `V`: `v_a e_a + v_b e_b` under its weight, unfolded, so the floating test reads `V`'s values exactly as given.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Column<T> {

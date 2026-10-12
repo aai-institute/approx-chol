@@ -1,14 +1,18 @@
-use super::{Congruence, OffDiagonal};
+use super::congruence::Signature;
+use super::OffDiagonal;
 use crate::storage::CrossBlock;
 use crate::Real;
 
-/// The signs `S` folding `A_c` into a Z-matrix; `None` when frustrated.
-pub(super) fn signature<T: Real>(off_diagonal: &OffDiagonal<T>) -> Option<Congruence<T>> {
+/// The signs `S` folding `A_c` into a Z-matrix, `I` when it already is one; `None` when frustrated.
+pub(super) fn folding_signs<T: Real>(off_diagonal: &OffDiagonal<T>) -> Option<Signature<T>> {
+    if off_diagonal.nonpositive() {
+        return Some(Signature::identity());
+    }
     match off_diagonal {
         OffDiagonal::Bipartite(cross) if cross.positive() => {
-            Some(Congruence::negate_from(cross.n_eliminated()))
+            Some(Signature::negate_from(cross.n_eliminated()))
         }
-        OffDiagonal::Bipartite(cross) => folding_signs(cross),
+        OffDiagonal::Bipartite(cross) => cross_signs(cross),
         OffDiagonal::General(adjacency) => {
             let mut forest = ParityForest::new(adjacency.n());
             for i in 0..adjacency.n() {
@@ -22,7 +26,7 @@ pub(super) fn signature<T: Real>(off_diagonal: &OffDiagonal<T>) -> Option<Congru
 }
 
 /// `None` when the component is frustrated: a negative cycle admits no signature; parities by union-find over `C` alone, as a search through `Cᵀ` cost a transpose `scaled` drops.
-fn folding_signs<T: Real>(cross: &CrossBlock<T>) -> Option<Congruence<T>> {
+fn cross_signs<T: Real>(cross: &CrossBlock<T>) -> Option<Signature<T>> {
     let n_eliminated = cross.n_eliminated();
     let mut forest = ParityForest::new(cross.n());
     for e in 0..n_eliminated {
@@ -65,9 +69,9 @@ impl ParityForest {
     }
 
     /// Each vertex negated when odd to its root.
-    fn signs<T: Real>(mut self) -> Congruence<T> {
+    fn signs<T: Real>(mut self) -> Signature<T> {
         let negated: Vec<bool> = (0..self.parent.len()).map(|i| self.find(i).1).collect();
-        Congruence::negated(&negated)
+        Signature::negated(&negated)
     }
 
     /// `None` when `i` and `j` are already joined at the other parity.

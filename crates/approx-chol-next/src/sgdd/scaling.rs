@@ -69,12 +69,18 @@ impl Certification {
         Self { policy, existence }
     }
 
+    /// The one place the tolerance decides whether a scaling is reported: its own violation or the deficit its hand-over clamped, whichever is worse.
     pub(super) fn report<T: Real>(
         &self,
         relaxation: &Relaxation<T>,
         clamped: f64,
     ) -> Option<ScalingReport> {
-        self.policy.certify(relaxation, clamped, self.existence)
+        let violation = widen(relaxation.violation).max(clamped);
+        (violation > self.policy.tolerance).then_some(ScalingReport {
+            iterations: relaxation.iterations,
+            violation,
+            scaling: self.existence,
+        })
     }
 }
 
@@ -114,23 +120,6 @@ pub(super) fn dominance_scaling<T: Real>(
         vertex: a.vertices[0],
     })?;
     Ok(Scaling::Scaled(relaxation, certification))
-}
-
-impl ScalingPolicy {
-    /// The one place the tolerance decides whether a scaling is reported: its own violation or the deficit its hand-over clamped, whichever is worse.
-    fn certify<T: Real>(
-        &self,
-        relaxation: &Relaxation<T>,
-        clamped: f64,
-        scaling: Existence,
-    ) -> Option<ScalingReport> {
-        let violation = widen(relaxation.violation).max(clamped);
-        (violation > self.tolerance).then_some(ScalingReport {
-            iterations: relaxation.iterations,
-            violation,
-            scaling,
-        })
-    }
 }
 
 /// `max_i (Σ_j|m_ij| − m_ii)/m_ii`, at least `0`: what clamping `M`'s deficits to zero surplus adds; a deficit inside its row's rounding band reads zero, as an unscaled row's does.

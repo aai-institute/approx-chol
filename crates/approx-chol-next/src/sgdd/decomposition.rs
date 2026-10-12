@@ -2,82 +2,89 @@ use num_traits::PrimInt;
 
 mod components;
 
-use std::sync::Arc;
+use std::borrow::Cow;
 
-use super::reduction::{extract, folding_signs, Congruent, DirectSum, Folded, SymmetricBlock};
-use super::{Component, Congruence, Frame, FromCsrError, Grounding, OffDiagonal, Sgdd};
-use crate::input::{
-    BipartiteGram, BipartiteGraph, BipartiteLaplacian, Canonical, Csr, IntoColumns, Laplacian,
-    SignedGraph, UpperCsr,
-};
-use crate::storage::{
-    diagonal_in_range, in_range, narrow, widen, CrossBlock, Rows, UpperAdjacency,
-};
+use super::{within_series_floor, Component, Grounding, Sgdd};
+use crate::input::{BipartiteColumns, Canonical, IntoColumns, Laplacian, SignedGraph};
+use crate::storage::{in_range, narrow, widen, CrossBlock, Rows, UpperAdjacency};
 use crate::{Real, ReduceError};
-pub(super) use components::Partition;
 use components::UnionFind;
+pub(super) use components::{of_csr, of_upper, Partition};
 
-impl<T: Real> DirectSum<T> {
-    /// Checks symmetry and range in the walk that finds the components.
-    pub(super) fn from_csr<I: PrimInt>(csr: Csr<'_, T, I>) -> Result<Self, FromCsrError> {
-        let csr = Canonical::of(csr)?;
-        let partition = components::of_csr(&csr)?;
-        Ok(Self::of_rows(&csr, partition)?)
-    }
+/// An assembled `A` and its connected components, found from the same cells.
+pub(super) struct Partitioned<A> {
+    a: A,
+    partition: Partition,
+}
 
-    /// Checks position and range in the walk that finds the components: the triangle is symmetric by storage.
-    pub(super) fn from_upper_csr<I: PrimInt>(
-        csr: UpperCsr<'_, T, I>,
-    ) -> Result<Self, FromCsrError> {
-        let csr = Canonical::upper(csr)?;
-        let partition = components::of_upper(&csr)?;
-        Ok(Self::of_rows(&csr.into_canonical(), partition)?)
-    }
+/// `⊕ B_c` over a partition's live components; a dead one's vertices solve to `0`.
+pub(super) struct DirectSum<B> {
+    partition: Partition,
+    blocks: Vec<B>,
+    dead: Vec<u32>,
+}
 
-    fn of_rows<I: PrimInt>(
-        csr: &Canonical<'_, T, I>,
-        partition: Partition,
-    ) -> Result<Self, ReduceError> {
-        Self::extract(partition, |vertices, partition| {
-            csr_component(csr, vertices, partition.position())
+impl<B> DirectSum<B> {
+    /// Every block at once, for a pass that crosses components.
+    pub(super) fn reduce_all<C>(
+        self,
+        reduce: impl FnOnce(&Partition, Vec<B>) -> Result<Vec<C>, ReduceError>,
+    ) -> Result<DirectSum<C>, ReduceError> {
+        let blocks = reduce(&self.partition, self.blocks)?;
+        Ok(DirectSum {
+            partition: self.partition,
+            blocks,
+            dead: self.dead,
         })
     }
+}
 
-    pub(super) fn from_general(v: impl IntoColumns<T>) -> Result<Self, ReduceError> {
-        let (a, partition) = assemble_general(v)?;
+impl<T> From<DirectSum<Component<T>>> for Sgdd<T> {
+    fn from(sum: DirectSum<Component<T>>) -> Self {
+        Self {
+            n: sum.partition.n(),
+            components: sum.blocks,
+            dead: sum.dead.into_boxed_slice(),
+        }
+    }
+}
+
+/// An assembled `A` cut into its components' blocks.
+pub(super) trait Assembly<T> {
+    type Block;
+
+    /// The whole input as one component, moved where it is owned: its vertices are their own positions.
+    fn whole(self, vertices: &[u32]) -> Self::Block;
+
+    /// One component, its columns remapped through `position`.
+    fn component(&self, vertices: &[u32], position: &[u32]) -> Self::Block;
+}
+
+impl<A> Partitioned<A> {
+    /// Each component's block, `None` when it is dead; a component past `1/ε` vertices of `T` is rejected first, which a dead one, alone, never is.
+    pub(super) fn extract<T: Real, B>(
+        self,
+        mut block: impl FnMut(<A as Assembly<T>>::Block) -> Result<Option<B>, ReduceError>,
+    ) -> Result<DirectSum<B>, ReduceError>
+    where
+        A: Assembly<T>,
+    {
+        let Self { a, partition } = self;
         let mut a = Some(a);
-        Self::extract(partition, |vertices, partition| {
-            let (adjacency, diagonal) = general_block(&mut a, vertices, partition);
-            SymmetricBlock::new(vertices.into(), OffDiagonal::General(adjacency), diagonal)
-        })
-    }
-
-    /// `[D_l C; Cᵀ D_r]`: each component takes the block elimination and reads its diagonal off the sides.
-    pub(super) fn from_bipartite<I: PrimInt>(
-        gram: BipartiteGram<'_, T, I>,
-    ) -> Result<Self, ReduceError> {
-        let (c, partition) = assemble_bipartite(gram, gram.n_left())?;
-        let (left, right) = gram.diagonals();
-        let diagonal = |v: u32| match (v as usize).checked_sub(left.len()) {
-            None => left[v as usize],
-            Some(j) => right[j],
-        };
-        let mut c = Some(c);
-        Self::extract(partition, |vertices, partition| {
-            bipartite_component(&mut c, vertices, partition, diagonal)
-        })
-    }
-
-    /// Each component's `A_c` as the input gives it, signed and unscaled; one with nothing to solve is dead.
-    fn extract(
-        partition: Partition,
-        mut block: impl FnMut(&[u32], &Partition) -> SymmetricBlock<T>,
-    ) -> Result<Self, ReduceError> {
-        let (blocks, dead) = extract::<T, _>(&partition, |vertices| {
-            let a = block(vertices, &partition);
-            Ok((!a.is_dead()).then_some(a))
-        })?;
-        Ok(Self {
+        let (mut blocks, mut dead) = (Vec::new(), Vec::new());
+        for vertices in partition.components() {
+            within_series_floor::<T>(vertices)?;
+            let cut = match partition.is_whole() {
+                true => a.take().expect("one whole component").whole(vertices),
+                false => (a.as_ref().expect("A until the whole is taken"))
+                    .component(vertices, partition.position()),
+            };
+            match block(cut)? {
+                Some(b) => blocks.push(b),
+                None => dead.extend_from_slice(vertices),
+            }
+        }
+        Ok(DirectSum {
             partition,
             blocks,
             dead,
@@ -85,356 +92,221 @@ impl<T: Real> DirectSum<T> {
     }
 }
 
-impl<T: Real> Sgdd<T> {
-    /// A graph Laplacian, grounded by `g` when given: a dominant Z-matrix whose surplus is `g`, so only ranges are checked.
-    pub(super) fn from_laplacian<I: PrimInt>(
-        graph: Laplacian<'_, T, I>,
-    ) -> Result<Self, ReduceError> {
-        let (balanced, ground) = graph.parts();
-        let (a, partition) = assemble_general(balanced)?;
-        let mut a = Some(a);
-        let (components, dead) = extract::<T, _>(&partition, |vertices| {
-            let (adjacency, diagonal) = general_block(&mut a, vertices, &partition);
-            let g = |i: usize| ground.map(|g| g[vertices[i] as usize]);
-            // A lone vertex has no edge, so only a ground makes it a component.
-            if vertices.len() == 1 && diagonal[0] + g(0).unwrap_or(T::zero()) == T::zero() {
-                return Ok(None);
-            }
-            // `A`'s diagonal `d + g`, summed in `f64`, and each ground like any entry.
-            let out_of_range = |i: usize| match g(i) {
-                Some(g) => {
-                    !in_range(g) || !diagonal_in_range(narrow::<T>(widen(diagonal[i]) + widen(g)))
-                }
-                None => !diagonal_in_range(diagonal[i]),
-            };
-            if let Some(i) = (0..vertices.len()).find(|&i| out_of_range(i)) {
-                let vertex = vertices[i];
-                return Err(ReduceError::OutOfRange { vertex });
-            }
-            let grounding = match ground {
-                Some(g) => Grounding::of(vertices.iter().map(|&v| g[v as usize]).collect()),
-                None => Grounding::ungrounded(),
-            };
-            let m = Congruent {
-                frame: Frame::new(vertices.into(), Congruence::identity()),
-                off_diagonal: OffDiagonal::General(adjacency),
-                report: None,
-            };
-            Folded(m).balanced(grounding).map(Some)
-        })?;
-        Ok(Self {
-            n: partition.n(),
-            components,
-            dead: dead.into_boxed_slice(),
-        })
-    }
-
-    /// Its diagonal is `|C|`'s row and column sums, so it is balanced and singular, and negating one side folds it.
-    pub(super) fn from_bipartite_graph<I: PrimInt>(
-        graph: BipartiteGraph<'_, T, I>,
-    ) -> Result<Self, ReduceError> {
-        Self::folded_bipartite(graph.laplacian(), graph.n_left(), Congruence::negate_from)
-    }
-
-    /// Its diagonal is `|C|`'s row and column sums, and `C ≤ 0` is already a Z-matrix.
-    pub(super) fn from_bipartite_laplacian<I: PrimInt>(
-        graph: BipartiteLaplacian<'_, T, I>,
-    ) -> Result<Self, ReduceError> {
-        Self::folded_bipartite(graph, graph.n_left(), |_| Congruence::identity())
-    }
-
-    /// `m` holds `M`'s columns, a bipartite Laplacian, and `signs` the `F` folding `A` into it; a lone vertex is general, so a bipartite component always has both sides, and only the degrees are checked.
-    fn folded_bipartite(
-        m: impl IntoColumns<T>,
-        n_left: usize,
-        signs: impl Fn(usize) -> Congruence<T>,
-    ) -> Result<Self, ReduceError> {
-        let (c, partition) = assemble_bipartite(m, n_left)?;
-        let mut c = Some(c);
-        let (components, dead) = extract::<T, _>(&partition, |vertices| {
-            if let [_] = vertices {
-                return Ok(None);
-            }
-            let (vertices, cross) = bipartite_block(&mut c, vertices, &partition);
-            if let Some(i) = (cross.abs_row_sums().iter()).position(|&d| !diagonal_in_range(d)) {
-                let vertex = vertices[i];
-                return Err(ReduceError::OutOfRange { vertex });
-            }
-            let congruence = signs(cross.n_eliminated());
-            let m = Congruent {
-                frame: Frame::new(vertices, congruence),
-                off_diagonal: OffDiagonal::Bipartite(Arc::new(cross)),
-                report: None,
-            };
-            Folded(m).balanced(Grounding::ungrounded()).map(Some)
-        })?;
-        Ok(Self {
-            n: partition.n(),
-            components,
-            dead: dead.into_boxed_slice(),
-        })
-    }
+/// One component of a bipartite assembly.
+pub(super) enum BipartiteComponent<T> {
+    /// A vertex no cell couples.
+    Lone(u32),
+    /// Both sides in local order, the larger eliminated first, and `C` between them.
+    Sides(Box<[u32]>, CrossBlock<T>),
 }
 
-impl<T: Real> Sgdd<T> {
-    /// Dominant by shape, its surplus each pair's cancelled mass: only ranges are checked, and its signs are searched.
-    pub(super) fn from_signed_graph<I: PrimInt>(
-        graph: SignedGraph<'_, T, I>,
-    ) -> Result<Self, ReduceError> {
-        let mut surplus = vec![0.0_f64; graph.n()];
-        let (a, partition) = assemble::<T, Masses>(graph, |i, j, masses: Masses| {
-            let s = masses.surplus();
-            surplus[i] += s;
-            surplus[j] += s;
-        })?;
-        let surplus: Vec<T> = surplus.into_iter().map(narrow).collect();
-        if let Some(vertex) = surplus.iter().position(|&s| !in_range(s)) {
-            let vertex = vertex as u32;
-            return Err(ReduceError::OutOfRange { vertex });
-        }
-        let mut a = Some(a);
-        let (components, dead) = extract::<T, _>(&partition, |vertices| {
-            let (adjacency, diagonal) = general_block(&mut a, vertices, &partition);
-            if diagonal == [T::zero()] {
-                return Ok(None);
-            }
-            // A zero diagonal beside a cell is its terms underflowing.
-            let out_of_range = |&d: &T| d == T::zero() || !diagonal_in_range(d);
-            if let Some(i) = diagonal.iter().position(out_of_range) {
-                let vertex = vertices[i];
-                return Err(ReduceError::OutOfRange { vertex });
-            }
-            let off_diagonal = OffDiagonal::General(adjacency);
-            let grounding = Grounding::of(vertices.iter().map(|&v| surplus[v as usize]).collect());
-            let component = match folding_signs(&off_diagonal) {
-                Some(signs) => Folded(Congruent::new(vertices.into(), off_diagonal, signs)?)
-                    .balanced(grounding),
-                None => (Congruent::new(vertices.into(), off_diagonal, Congruence::identity())?)
-                    .frustrated(grounding),
-            };
-            component.map(Some)
-        })?;
-        Ok(Self {
-            n: partition.n(),
-            components,
-            dead: dead.into_boxed_slice(),
-        })
-    }
+/// One component's cells as the input gives them: its vertices in local order, strict upper triangle and diagonal.
+pub(super) struct Cells<T> {
+    pub(super) vertices: Box<[u32]>,
+    pub(super) adjacency: UpperAdjacency<T>,
+    pub(super) diagonal: Vec<T>,
 }
 
-/// Upper rows in local order, columns through `position`; a zero couples nothing, so it may name another component.
-fn csr_component<T: Real, I: PrimInt>(
-    csr: &Canonical<'_, T, I>,
-    vertices: &[u32],
-    position: &[u32],
-) -> SymmetricBlock<T> {
-    let mut diagonal = Vec::with_capacity(vertices.len());
-    let (mut ptrs, mut indices, mut values) = (vec![0], Vec::new(), Vec::new());
-    for &v in vertices {
-        let v = v as usize;
-        let mut d = T::zero();
-        for (j, a) in csr.row(v).filter(|&(j, a)| j >= v && a != T::zero()) {
-            match j == v {
-                true => d = a,
-                false => {
-                    indices.push(position[j]);
-                    values.push(a);
-                }
-            }
-        }
-        diagonal.push(d);
-        ptrs.push(indices.len());
-    }
-    let rows = Rows::new(ptrs, indices, values, vertices.len());
-    let off_diagonal = OffDiagonal::General(UpperAdjacency::new(rows));
-    SymmetricBlock::new(vertices.into(), off_diagonal, diagonal)
+/// A shape's assembled `A`, dominant by shape, with the surplus its cells decide: a Laplacian's ground (none if ungrounded), a signed graph's cancelled mass.
+pub(super) struct ShapeDominant<'s, T: Clone> {
+    a: Assembled<T>,
+    surplus: Option<Cow<'s, [T]>>,
 }
 
-/// The whole input's rows are moved, not copied: a lone component takes `A` out of the input.
-fn general_block<T: Real>(
-    a: &mut Option<Assembled<T>>,
-    vertices: &[u32],
-    partition: &Partition,
-) -> (UpperAdjacency<T>, Vec<T>) {
-    if partition.is_whole() {
-        let Assembled {
-            adjacency,
-            diagonal,
-        } = a.take().expect("one whole component");
-        return (adjacency, diagonal);
-    }
-    let a = a.as_ref().expect("A until the whole is taken");
-    let position = partition.position();
-    let mut ptrs = Vec::with_capacity(vertices.len() + 1);
-    ptrs.push(0);
-    let (mut indices, mut values) = (Vec::new(), Vec::new());
-    for &v in vertices {
-        for (j, &x) in a.adjacency.upper(v as usize) {
-            indices.push(position[j]);
-            values.push(x);
-        }
-        ptrs.push(indices.len());
-    }
-    let rows = Rows::new(ptrs, indices, values, vertices.len());
-    let diagonal = vertices.iter().map(|&v| a.diagonal[v as usize]).collect();
-    (UpperAdjacency::new(rows), diagonal)
+/// A graph Laplacian's cells, grounded by `g` when given.
+pub(super) fn assemble_laplacian<'g, T: Real, I: PrimInt>(
+    graph: Laplacian<'g, T, I>,
+) -> Result<Partitioned<ShapeDominant<'g, T>>, ReduceError> {
+    let (balanced, ground) = graph.parts();
+    let Partitioned { a, partition } = assemble_general(balanced)?;
+    let surplus = ground.map(Cow::Borrowed);
+    Ok(Partitioned {
+        a: ShapeDominant { a, surplus },
+        partition,
+    })
 }
 
-fn bipartite_component<T: Real>(
-    c: &mut Option<Biadjacency<T>>,
-    vertices: &[u32],
-    partition: &Partition,
-    diagonal: impl Fn(u32) -> T,
-) -> SymmetricBlock<T> {
-    let (vertices, off_diagonal) = match vertices {
-        [v] => {
-            let empty = Rows::new(vec![0, 0], Vec::new(), Vec::new(), 1);
-            (
-                Box::from([*v]),
-                OffDiagonal::General(UpperAdjacency::new(empty)),
-            )
-        }
-        _ => {
-            let (vertices, cross) = bipartite_block(c, vertices, partition);
-            (vertices, OffDiagonal::Bipartite(Arc::new(cross)))
-        }
-    };
-    let diagonal = vertices.iter().map(|&v| diagonal(v)).collect();
-    SymmetricBlock::new(vertices, off_diagonal, diagonal)
+/// The signed graph's cells, each vertex's surplus its pairs' cancelled mass.
+pub(super) fn assemble_signed<T: Real, I: PrimInt>(
+    graph: SignedGraph<'_, T, I>,
+) -> Result<Partitioned<ShapeDominant<'static, T>>, ReduceError> {
+    let mut surplus = vec![0.0_f64; graph.n()];
+    let Partitioned { a, partition } = assemble(graph, |i, j, masses: Masses| {
+        let s = masses.surplus();
+        surplus[i] += s;
+        surplus[j] += s;
+    })?;
+    let surplus: Vec<T> = surplus.into_iter().map(narrow).collect();
+    if let Some(vertex) = surplus.iter().position(|&s| !in_range(s)) {
+        let vertex = vertex as u32;
+        return Err(ReduceError::OutOfRange { vertex });
+    }
+    let surplus = Some(Cow::Owned(surplus));
+    Ok(Partitioned {
+        a: ShapeDominant { a, surplus },
+        partition,
+    })
 }
 
-/// The whole input's block is moved, not copied: a lone component takes `C` out of the input.
-fn bipartite_block<T: Real>(
-    c: &mut Option<Biadjacency<T>>,
-    vertices: &[u32],
-    partition: &Partition,
-) -> (Box<[u32]>, CrossBlock<T>) {
-    match partition.is_whole() {
-        true => c.take().expect("one whole component").into_block(),
-        false => {
-            (c.as_ref().expect("C until the whole is taken")).block(vertices, partition.position())
-        }
-    }
-}
+impl<T: Real, I: PrimInt> Assembly<T> for Canonical<'_, T, I> {
+    type Block = Cells<T>;
 
-/// Floats each folded component when `1ᵀM1 ≤ 5ε·tr M`, else grounds it on `s = M·1`, both summed by column as assembled rows cancel them: with `f = F·1` and `p_k = f_a v_a + f_b v_b`, `s_a = Σ_k bilinear_k(f_a v_a, p_k)` clamped at zero, `1ᵀM1 = Σ_k bilinear_k(p_k, p_k)` and `tr M = Σ_k [bilinear_k(f_a v_a, f_a v_a) + bilinear_k(f_b v_b, f_b v_b)]`, `ε` that of `T`; sums run in `f64` in column order over nonzero weights, the certificate's two sides as `ε·term`, an exact scaling under which neither overflows, each end's component and slot are read off the components' own vertices, an end at a dead vertex or in a frustrated component being in none; a column straddling components keeps only its own end's square.
-pub(super) fn ground_or_float<T: Real>(
-    v: impl IntoColumns<T>,
-    components: Vec<Folded<T>>,
-) -> Result<Vec<Component<T>>, ReduceError> {
-    if components.is_empty() {
-        return Ok(Vec::new());
+    fn whole(self, vertices: &[u32]) -> Self::Block {
+        self.component(vertices, vertices)
     }
-    let mut ends = vec![None; v.n()];
-    for (c, component) in components.iter().enumerate() {
-        let congruence = component.frame().congruence();
-        for (slot, &vertex) in component.frame().vertices().iter().enumerate() {
-            ends[vertex as usize] = Some(End {
-                component: c,
-                slot,
-                factor: widen(congruence.factor(slot)),
-            });
-        }
-    }
-    let mut surplus: Vec<Vec<f64>> = (components.iter())
-        .map(|component| vec![0.0; component.frame().vertices().len()])
-        .collect();
-    let mut certificates = vec![Certificate::default(); components.len()];
-    let epsilon = widen(T::epsilon());
-    v.for_each_column(
-        #[inline(always)]
-        |column| {
-            if column.weight.is_zero() {
-                return;
-            }
-            let w = |x: f64, y: f64| column.weight.bilinear(x, y);
-            let a = ends[column.a as usize].map(|end| (end, end.factor * widen(column.v_a)));
-            let b = ends[column.b as usize].map(|end| (end, end.factor * widen(column.v_b)));
-            match (a, b) {
-                (Some((a, u_a)), Some((b, u_b))) if a.component == b.component => {
-                    let p = u_a + u_b;
-                    surplus[a.component][a.slot] += w(u_a, p);
-                    surplus[b.component][b.slot] += w(u_b, p);
-                    let certificate = &mut certificates[a.component];
-                    certificate.ones += w(epsilon * p, p);
-                    certificate.trace += w(epsilon * u_a, u_a) + w(epsilon * u_b, u_b);
-                }
-                (a, b) => {
-                    for (end, u) in [a, b].into_iter().flatten() {
-                        surplus[end.component][end.slot] += w(u, u);
-                        let certificate = &mut certificates[end.component];
-                        certificate.ones += w(epsilon * u, u);
-                        certificate.trace += w(epsilon * u, u);
+
+    /// Upper rows in local order; a zero couples nothing, so it may name another component.
+    fn component(&self, vertices: &[u32], position: &[u32]) -> Self::Block {
+        let mut diagonal = Vec::with_capacity(vertices.len());
+        let (mut ptrs, mut indices, mut values) = (vec![0], Vec::new(), Vec::new());
+        for &v in vertices {
+            let v = v as usize;
+            let mut d = T::zero();
+            for (j, a) in self.row(v).filter(|&(j, a)| j >= v && a != T::zero()) {
+                match j == v {
+                    true => d = a,
+                    false => {
+                        indices.push(position[j]);
+                        values.push(a);
                     }
                 }
             }
-        },
-    );
-    let decided = components.into_iter().zip(surplus).zip(certificates);
-    let decide = |((component, surplus), certificate): ((Folded<T>, Vec<f64>), Certificate)| {
-        if certificate.ones <= 5.0 * epsilon * certificate.trace {
-            return component.balanced(Grounding::ungrounded());
+            diagonal.push(d);
+            ptrs.push(indices.len());
         }
-        let vertices = component.frame().vertices();
-        let surplus: Vec<T> = surplus.into_iter().map(|s| narrow(s.max(0.0))).collect();
-        if let Some(slot) = surplus.iter().position(|&s| !in_range(s)) {
-            let vertex = vertices[slot];
-            return Err(ReduceError::OutOfRange { vertex });
+        let rows = Rows::new(ptrs, indices, values, vertices.len());
+        Cells {
+            vertices: vertices.into(),
+            adjacency: UpperAdjacency::new(rows),
+            diagonal,
         }
-        // Unproven, a surplus that vanishes in `T` is never a float.
-        let vertex = vertices[0];
-        match Grounding::of(surplus) {
-            grounding if grounding.is_grounded() => component.balanced(grounding),
-            _ => Err(ReduceError::Unscalable { vertex }),
-        }
-    };
-    decided.map(decide).collect()
+    }
 }
 
-/// Where a column's end sits once reduced, and its `f_i`.
-#[derive(Clone, Copy)]
-struct End {
-    component: usize,
-    slot: usize,
-    factor: f64,
+impl<T: Real> Assembly<T> for Assembled<T> {
+    type Block = Cells<T>;
+
+    fn whole(self, vertices: &[u32]) -> Self::Block {
+        Cells {
+            vertices: vertices.into(),
+            adjacency: self.adjacency,
+            diagonal: self.diagonal,
+        }
+    }
+
+    fn component(&self, vertices: &[u32], position: &[u32]) -> Self::Block {
+        let mut ptrs = Vec::with_capacity(vertices.len() + 1);
+        ptrs.push(0);
+        let (mut indices, mut values) = (Vec::new(), Vec::new());
+        for &v in vertices {
+            for (j, &x) in self.adjacency.upper(v as usize) {
+                indices.push(position[j]);
+                values.push(x);
+            }
+            ptrs.push(indices.len());
+        }
+        let rows = Rows::new(ptrs, indices, values, vertices.len());
+        Cells {
+            vertices: vertices.into(),
+            adjacency: UpperAdjacency::new(rows),
+            diagonal: vertices
+                .iter()
+                .map(|&v| self.diagonal[v as usize])
+                .collect(),
+        }
+    }
 }
 
-/// `ε·1ᵀM1` and `ε·tr M` of one component, summed by column.
-#[derive(Clone, Copy, Default)]
-struct Certificate {
-    ones: f64,
-    trace: f64,
+impl<T: Real> Assembly<T> for ShapeDominant<'_, T> {
+    type Block = (Cells<T>, Grounding<T>);
+
+    fn whole(self, vertices: &[u32]) -> Self::Block {
+        let grounding =
+            (self.surplus).map_or_else(Grounding::ungrounded, |s| Grounding::of(s.into_owned()));
+        (self.a.whole(vertices), grounding)
+    }
+
+    fn component(&self, vertices: &[u32], position: &[u32]) -> Self::Block {
+        let gather =
+            |s: &Cow<'_, [T]>| Grounding::of(vertices.iter().map(|&v| s[v as usize]).collect());
+        let grounding = self
+            .surplus
+            .as_ref()
+            .map_or_else(Grounding::ungrounded, gather);
+        (self.a.component(vertices, position), grounding)
+    }
+}
+
+impl<T: Real> Assembly<T> for Biadjacency<T> {
+    type Block = BipartiteComponent<T>;
+
+    /// Transposed only when the right side is larger.
+    fn whole(self, vertices: &[u32]) -> Self::Block {
+        if let [v] = vertices {
+            return BipartiteComponent::Lone(*v);
+        }
+        let n_left = self.c.n_rows() as u32;
+        let (lefts, rights) = (
+            0..n_left,
+            n_left..(self.c.n_rows() + self.c.n_cols()) as u32,
+        );
+        let (vertices, cross) = larger_side_first(lefts.collect(), rights.collect(), self.c);
+        BipartiteComponent::Sides(vertices, cross)
+    }
+
+    /// Its larger side as rows.
+    fn component(&self, vertices: &[u32], position: &[u32]) -> Self::Block {
+        if let [v] = vertices {
+            return BipartiteComponent::Lone(*v);
+        }
+        let n_left = self.c.n_rows();
+        let (lefts, rights) =
+            vertices.split_at(vertices.partition_point(|&v| (v as usize) < n_left));
+        let mut ptrs = Vec::with_capacity(lefts.len() + 1);
+        ptrs.push(0);
+        let (mut indices, mut values) = (Vec::new(), Vec::new());
+        for &i in lefts {
+            for (j, &x) in self.c.row(i as usize) {
+                indices.push(position[n_left + j] - lefts.len() as u32);
+                values.push(x);
+            }
+            ptrs.push(indices.len());
+        }
+        let c = Rows::new(ptrs, indices, values, rights.len());
+        let (vertices, cross) = larger_side_first(lefts.to_vec(), rights.to_vec(), c);
+        BipartiteComponent::Sides(vertices, cross)
+    }
 }
 
 /// `C` and its components, accumulated in column order, in a dense table when it is small (+54% without it), unfiltered: a column that couples nothing adds an exact zero and zero cells drop; a cell leaving `in_range` is `OutOfRange`.
-fn assemble_bipartite<T: Real>(
-    v: impl IntoColumns<T>,
-    n_left: usize,
-) -> Result<(Biadjacency<T>, Partition), ReduceError> {
+pub(super) fn assemble_bipartite<T: Real>(
+    v: impl BipartiteColumns<T>,
+) -> Result<Partitioned<Biadjacency<T>>, ReduceError> {
+    let n_left = v.n_left();
     let n_right = v.n() - n_left;
     let table = n_left.saturating_mul(n_right);
     let c = if table <= DENSE_TABLE_MAX_CELLS {
-        dense_cross(v, n_left, n_right)
+        dense_cross(v)
     } else {
-        let counts = left_counts(v, n_left);
+        let counts = left_counts(v);
         let columns: usize = counts.iter().sum();
         // Past the cap, the table still wins whenever the buckets would take more memory.
         match columns.saturating_mul(12) < table.saturating_mul(8) {
-            true => sparse_cross(v, n_left, n_right, &counts),
-            false => dense_cross(v, n_left, n_right),
+            true => sparse_cross(v, &counts),
+            false => dense_cross(v),
         }
     }?;
-    Ok((Biadjacency::new(c.0), c.1))
+    Ok(Partitioned {
+        a: Biadjacency { c: c.0 },
+        partition: c.1,
+    })
 }
 
 /// within's cap on the dense accumulator, about 40 MB.
 const DENSE_TABLE_MAX_CELLS: usize = 5_000_000;
 
-fn dense_cross<T: Real>(
-    v: impl IntoColumns<T>,
-    n_left: usize,
-    n_right: usize,
-) -> Result<(Rows<T>, Partition), ReduceError> {
+fn dense_cross<T: Real>(v: impl BipartiteColumns<T>) -> Result<(Rows<T>, Partition), ReduceError> {
+    let (n_left, n_right) = (v.n_left(), v.n() - v.n_left());
     let mut table = vec![0.0_f64; n_left * n_right];
     v.for_each_column(
         #[inline(always)]
@@ -451,8 +323,8 @@ fn dense_cross<T: Real>(
     Ok(rows.finish())
 }
 
-fn left_counts<T: Real>(v: impl IntoColumns<T>, n_left: usize) -> Vec<usize> {
-    let mut counts = vec![0; n_left];
+fn left_counts<T: Real>(v: impl BipartiteColumns<T>) -> Vec<usize> {
+    let mut counts = vec![0; v.n_left()];
     v.for_each_column(
         #[inline(always)]
         |column| counts[column.a as usize] += 1,
@@ -461,11 +333,10 @@ fn left_counts<T: Real>(v: impl IntoColumns<T>, n_left: usize) -> Vec<usize> {
 }
 
 fn sparse_cross<T: Real>(
-    v: impl IntoColumns<T>,
-    n_left: usize,
-    n_right: usize,
+    v: impl BipartiteColumns<T>,
     counts: &[usize],
 ) -> Result<(Rows<T>, Partition), ReduceError> {
+    let (n_left, n_right) = (v.n_left(), v.n() - v.n_left());
     let mut buckets = Buckets::new(counts);
     v.for_each_column(
         #[inline(always)]
@@ -637,17 +508,19 @@ impl<T: Real> CellRows<T> {
 }
 
 /// `A`'s strict upper triangle, diagonal and components, cells `bilinear(v_a, v_b)` summed by pair in column order, zero cells dropped; a value leaving `in_range` is `OutOfRange`.
-fn assemble_general<T: Real>(
+pub(super) fn assemble_general<T: Real>(
     v: impl IntoColumns<T>,
-) -> Result<(Assembled<T>, Partition), ReduceError> {
+) -> Result<Partitioned<Assembled<T>>, ReduceError> {
     assemble::<T, f64>(v, |_, _, _| {})
 }
 
 /// As [`assemble_general`], each cell summed as `C` and seen by `pair` with its two ends.
+// Out of line, the Laplacian entry measured 3–4% slower: the same work, laid out worse.
+#[inline(always)]
 fn assemble<T: Real, C: CellSum>(
     v: impl IntoColumns<T>,
     pair: impl FnMut(usize, usize, C),
-) -> Result<(Assembled<T>, Partition), ReduceError> {
+) -> Result<Partitioned<Assembled<T>>, ReduceError> {
     let n = v.n();
     let (mut counts, mut diagonal) = (vec![0; n], vec![0.0_f64; n]);
     v.for_each_column(
@@ -672,58 +545,19 @@ fn assemble<T: Real, C: CellSum>(
         adjacency: UpperAdjacency::new(rows),
         diagonal: diagonal.into_iter().map(narrow).collect(),
     };
-    Ok((a, partition))
+    Ok(Partitioned { a, partition })
 }
 
 /// A general factor-width-2 `A`, assembled.
-struct Assembled<T> {
+pub(super) struct Assembled<T> {
     adjacency: UpperAdjacency<T>,
     diagonal: Vec<T>,
 }
 
 /// The biadjacency `C` of a factor-width-2 view, cancelled cells dropped: rows are `A`'s left vertices.
 #[derive(Clone, Debug)]
-struct Biadjacency<T> {
+pub(super) struct Biadjacency<T> {
     c: Rows<T>,
-}
-
-impl<T: Real> Biadjacency<T> {
-    /// Panics on a stored zero: a cancelled cell couples nothing.
-    fn new(c: Rows<T>) -> Self {
-        let no_zero = (0..c.n_rows()).all(|i| c.row(i).all(|(_, &x)| x != T::zero()));
-        assert!(no_zero, "no stored zero");
-        Self { c }
-    }
-
-    fn n(&self) -> usize {
-        self.c.n_rows() + self.c.n_cols()
-    }
-
-    /// The whole input as one component's block, moved, transposed only when the right side is larger.
-    fn into_block(self) -> (Box<[u32]>, CrossBlock<T>) {
-        let n_left = self.c.n_rows() as u32;
-        let (lefts, rights) = (0..n_left, n_left..self.n() as u32);
-        larger_side_first(lefts.collect(), rights.collect(), self.c)
-    }
-
-    /// One component's block, its larger side as rows, remapped through `position`; returns its local order.
-    fn block(&self, vertices: &[u32], position: &[u32]) -> (Box<[u32]>, CrossBlock<T>) {
-        let n_left = self.c.n_rows();
-        let (lefts, rights) =
-            vertices.split_at(vertices.partition_point(|&v| (v as usize) < n_left));
-        let mut ptrs = Vec::with_capacity(lefts.len() + 1);
-        ptrs.push(0);
-        let (mut indices, mut values) = (Vec::new(), Vec::new());
-        for &i in lefts {
-            for (j, &x) in self.c.row(i as usize) {
-                indices.push(position[n_left + j] - lefts.len() as u32);
-                values.push(x);
-            }
-            ptrs.push(indices.len());
-        }
-        let c = Rows::new(ptrs, indices, values, rights.len());
-        larger_side_first(lefts.to_vec(), rights.to_vec(), c)
-    }
 }
 
 /// Eliminates the larger side, transposing `C` when it is the right one; returns the local order, eliminated first.

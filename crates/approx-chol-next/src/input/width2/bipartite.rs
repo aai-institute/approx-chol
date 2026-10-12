@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use num_traits::PrimInt;
 
 use super::edges::{Edges, Weights};
-use super::{index, Column, IntoColumns, ViewError, Weight};
+use super::{index, BipartiteColumns, Column, IntoColumns, ViewError};
 use crate::storage::{narrow, widen};
 use crate::Real;
 
@@ -137,45 +137,9 @@ impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
         Ok(Self { left, right })
     }
 
-    pub(crate) fn n_left(&self) -> usize {
-        self.left.incidence.n
-    }
-
     /// `A`'s diagonal, left rows then right ones; the first Gram of an incidence sums each side's, serially, as a rayon initializer deadlocks when Grams reduce in parallel.
     pub(crate) fn diagonals(&self) -> (&'a [T], &'a [T]) {
         (self.left.diagonal(), self.right.diagonal())
-    }
-
-    #[inline(always)]
-    fn with_values(self, weight: impl Fn(usize) -> Weight<T>, visit: impl FnMut(Column<T>)) {
-        let one = |_| T::one();
-        match (self.left.values(), self.right.values()) {
-            (None, None) => self.columns(one, one, weight, visit),
-            (Some(a), None) => self.columns(|k| a[k], one, weight, visit),
-            (None, Some(b)) => self.columns(one, |k| b[k], weight, visit),
-            (Some(a), Some(b)) => self.columns(|k| a[k], |k| b[k], weight, visit),
-        }
-    }
-
-    #[inline(always)]
-    fn columns(
-        self,
-        v_a: impl Fn(usize) -> T,
-        v_b: impl Fn(usize) -> T,
-        weight: impl Fn(usize) -> Weight<T>,
-        mut visit: impl FnMut(Column<T>),
-    ) {
-        let n_left = self.n_left();
-        let (left, right) = (self.left.incidence.rows, self.right.incidence.rows);
-        for (k, (a, b)) in left.iter().zip(right).enumerate() {
-            visit(Column {
-                a: index(*a) as u32,
-                b: (n_left + index(*b)) as u32,
-                v_a: v_a(k),
-                v_b: v_b(k),
-                weight: weight(k),
-            });
-        }
     }
 }
 
@@ -185,24 +149,50 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteGram<'_, T, I> {
     }
 
     fn for_each_column(self, visit: impl FnMut(Column<T>)) {
-        match self.left.incidence.weights {
-            Weights::Unit => self.with_values(|_| Weight::Unit, visit),
-            Weights::Of(w) => self.with_values(|k| Weight::Of(w[k]), visit),
-            Weights::SqrtOf(s) => self.with_values(|k| Weight::SqrtOf(s[k]), visit),
+        let (l, r) = (self.left.incidence, self.right.incidence);
+        let edges = Edges::checked(l.rows, r.rows, l.weights);
+        let one = |_| T::one();
+        match (self.left.values(), self.right.values()) {
+            (None, None) => edges.for_each_column(l.n, one, one, visit),
+            (Some(a), None) => edges.for_each_column(l.n, |k| a[k], one, visit),
+            (None, Some(b)) => edges.for_each_column(l.n, one, |k| b[k], visit),
+            (Some(a), Some(b)) => edges.for_each_column(l.n, |k| a[k], |k| b[k], visit),
         }
     }
 }
 
 /// Weighted bipartite multigraph; its matrix is the signless Laplacian `|B| W |B|ᵀ`, singular by shape.
 #[derive(Clone, Copy, Debug)]
-pub struct BipartiteGraph<'a, T, I = u32> {
+pub struct BipartiteGraph<'a, T, I = u32>(BipartiteLaplacian<'a, T, I>);
+
+impl<'a, T: Real, I: PrimInt> BipartiteGraph<'a, T, I> {
+    /// The checks of [`BipartiteLaplacian::new`], so `C ≥ 0` folds.
+    pub fn new(
+        n_left: usize,
+        n_right: usize,
+        left: &'a [I],
+        right: &'a [I],
+        weights: Weights<'a, T>,
+    ) -> Result<Self, ViewError> {
+        BipartiteLaplacian::new(n_left, n_right, left, right, weights).map(Self)
+    }
+
+    /// The same edges' Laplacian `B W Bᵀ`, congruent to this one by negating either side.
+    pub(crate) fn laplacian(self) -> BipartiteLaplacian<'a, T, I> {
+        self.0
+    }
+}
+
+/// Weighted bipartite multigraph; its matrix is the Laplacian `B W Bᵀ`, a Z-matrix and singular by shape.
+#[derive(Clone, Copy, Debug)]
+pub struct BipartiteLaplacian<'a, T, I = u32> {
     n_left: usize,
     n_right: usize,
     edges: Edges<'a, T, I>,
 }
 
-impl<'a, T: Real, I: PrimInt> BipartiteGraph<'a, T, I> {
-    /// Column `k` joins `left[k] < n_left` and `right[k] < n_right` under `weights`; indices and weights are checked, so `C ≥ 0` folds.
+impl<'a, T: Real, I: PrimInt> BipartiteLaplacian<'a, T, I> {
+    /// Column `k` joins `left[k] < n_left` and `right[k] < n_right` under `weights`; indices and weights are checked.
     pub fn new(
         n_left: usize,
         n_right: usize,
@@ -227,56 +217,26 @@ impl<'a, T: Real, I: PrimInt> BipartiteGraph<'a, T, I> {
             edges,
         })
     }
-
-    pub(crate) fn n_left(&self) -> usize {
-        self.n_left
-    }
-
-    /// The same edges' Laplacian `B W Bᵀ`, congruent to this one by negating either side.
-    pub(crate) fn laplacian(self) -> BipartiteLaplacian<'a, T, I> {
-        BipartiteLaplacian(self)
-    }
-}
-
-/// Weighted bipartite multigraph; its matrix is the Laplacian `B W Bᵀ`, a Z-matrix and singular by shape.
-#[derive(Clone, Copy, Debug)]
-pub struct BipartiteLaplacian<'a, T, I = u32>(BipartiteGraph<'a, T, I>);
-
-impl<'a, T: Real, I: PrimInt> BipartiteLaplacian<'a, T, I> {
-    /// The checks of [`BipartiteGraph::new`].
-    pub fn new(
-        n_left: usize,
-        n_right: usize,
-        left: &'a [I],
-        right: &'a [I],
-        weights: Weights<'a, T>,
-    ) -> Result<Self, ViewError> {
-        BipartiteGraph::new(n_left, n_right, left, right, weights).map(Self)
-    }
-
-    pub(crate) fn n_left(&self) -> usize {
-        self.0.n_left
-    }
 }
 
 impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteLaplacian<'_, T, I> {
-    fn n(&self) -> usize {
-        self.0.n()
-    }
-
-    fn for_each_column(self, visit: impl FnMut(Column<T>)) {
-        self.0
-            .edges
-            .for_each_column(self.0.n_left, |_| -T::one(), visit)
-    }
-}
-
-impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteGraph<'_, T, I> {
     fn n(&self) -> usize {
         self.n_left + self.n_right
     }
 
     fn for_each_column(self, visit: impl FnMut(Column<T>)) {
-        self.edges.for_each_column(self.n_left, |_| T::one(), visit)
+        (self.edges).for_each_column(self.n_left, |_| T::one(), |_| -T::one(), visit)
+    }
+}
+
+impl<T: Real, I: PrimInt> BipartiteColumns<T> for BipartiteGram<'_, T, I> {
+    fn n_left(&self) -> usize {
+        self.left.incidence.n
+    }
+}
+
+impl<T: Real, I: PrimInt> BipartiteColumns<T> for BipartiteLaplacian<'_, T, I> {
+    fn n_left(&self) -> usize {
+        self.n_left
     }
 }

@@ -6,8 +6,6 @@ pub(in crate::factor) trait Copies: Copy + Send + Sync {
     /// `Single` cannot name a `k`, making AC over split multi-edges a type error.
     type Split: Copy + Send + Sync;
 
-    const SINGLE_COPY: bool;
-
     /// What a fill edge carries.
     fn one() -> Self;
 
@@ -30,8 +28,6 @@ pub(in crate::factor) struct Multi(u32);
 
 impl Copies for Single {
     type Split = ();
-    const SINGLE_COPY: bool = true;
-
     fn one() -> Self {
         Self
     }
@@ -55,8 +51,6 @@ impl Copies for Single {
 
 impl Copies for Multi {
     type Split = SplitCount;
-    const SINGLE_COPY: bool = false;
-
     fn one() -> Self {
         Self(1)
     }

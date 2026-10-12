@@ -66,6 +66,7 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for Balanced<'_, T, I> {
     }
 
     fn for_each_column(self, visit: impl FnMut(Column<T>)) {
-        self.edges.for_each_column(0, |_| -T::one(), visit)
+        self.edges
+            .for_each_column(0, |_| T::one(), |_| -T::one(), visit)
     }
 }

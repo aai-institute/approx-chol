@@ -1,10 +1,6 @@
 //! Approximate Cholesky of symmetric generalized diagonally dominant `A`, one component at a time.
 
 #![deny(missing_docs)]
-#![expect(
-    dead_code,
-    reason = "types-only skeleton; unfulfilled once the bodies land"
-)]
 
 mod factor;
 pub mod input;
