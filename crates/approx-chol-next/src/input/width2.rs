@@ -1,4 +1,4 @@
-//! Factor-width-2 views, at most two nonzeros per column of `V`, and the one reading of them `sgdd` needs: column by column.
+//! Factor-width-2 views: at most two nonzeros per column of `V`, read column by column.
 
 pub(super) mod bipartite;
 pub(super) mod edges;
@@ -72,12 +72,12 @@ impl core::fmt::Display for ViewError {
 
 impl std::error::Error for ViewError {}
 
-/// `A = Σ_k w_k x_k x_kᵀ`, each `x_k` a column of `V` with at most two nonzeros; a cheap `Copy` view, consumed by visiting its columns.
+/// `A = Σ_k w_k x_k x_kᵀ`, each `x_k` a column of `V` with at most two nonzeros.
 pub(crate) trait IntoColumns<T: Real>: Copy {
     /// Dimension of `A`, not the column count.
     fn n(&self) -> usize;
 
-    /// In column order, each column's ends in `A`'s numbering; a view matches its values and weights once, then loops per case, and a caller writes `visit` inline as `#[inline(always)] |column| …`, or an outlined visitor pays the branch per column (1.6-1.9x).
+    /// Each column in order; write `visit` as `#[inline(always)] |column| …` (outlined: 1.6-1.9x).
     fn for_each_column(self, visit: impl FnMut(Column<T>));
 }
 
@@ -86,7 +86,7 @@ pub(crate) trait BipartiteColumns<T: Real>: IntoColumns<T> {
     fn n_left(&self) -> usize;
 }
 
-/// Column `k` of `V`: `v_a e_a + v_b e_b` under its weight, unfolded, so the floating test reads `V`'s values exactly as given.
+/// Column `k` of `V` under its weight, unfolded, so the floating test reads `V` exactly as given.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Column<T> {
     pub(crate) a: u32,
@@ -96,7 +96,7 @@ pub(crate) struct Column<T> {
     pub(crate) weight: Weight<T>,
 }
 
-/// One column's entry of `W`, as the caller gave it; read only through [`bilinear`](Self::bilinear), so no `s²` is ever formed.
+/// One column's entry of `W`; read only through [`bilinear`](Self::bilinear), so no `s²` is formed.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Weight<T> {
     /// A view without `W`.
@@ -113,7 +113,7 @@ impl<T: Real> Column<T> {
 }
 
 impl<T: Real> Weight<T> {
-    /// `w·x·y` in `U`, as `(s·x)·(s·y)` under `SqrtOf`: every diagonal, cell and residue goes through it.
+    /// `w·x·y`, as `(s·x)·(s·y)` under `SqrtOf`.
     pub(crate) fn bilinear<U: Real>(self, x: U, y: U) -> U {
         let to = |w: T| U::from(w).expect("a finite weight casts to a float");
         match self {
@@ -131,7 +131,7 @@ impl<T: Real> Weight<T> {
     }
 }
 
-/// `V` with at most two nonzeros per column, by construction: `values[0][k]` at vertex `a[k]` and `values[1][k]` at `b[k] ≠ a[k]`; fold any weights into `V`.
+/// `V` with at most two nonzeros per column: `values[0][k]` at `a[k]`, `values[1][k]` at `b[k] ≠ a[k]`.
 #[derive(Clone, Copy, Debug)]
 pub struct FactorWidth2<'a, T, I = u32> {
     n: usize,
@@ -141,7 +141,7 @@ pub struct FactorWidth2<'a, T, I = u32> {
 }
 
 impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
-    /// `n` vertices; lengths, `a[k], b[k] < n`, `a[k] ≠ b[k]` are checked, so a zero value is how a column holds one nonzero.
+    /// `n` vertices; lengths and `a[k] ≠ b[k] < n` are checked, so a zero value leaves one nonzero.
     pub fn new(n: usize, a: &'a [I], b: &'a [I], values: [&'a [T]; 2]) -> Result<Self, ViewError> {
         let columns = a.len();
         let lengths = [b.len(), values[0].len(), values[1].len()];

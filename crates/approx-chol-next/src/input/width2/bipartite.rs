@@ -1,4 +1,4 @@
-//! `V = [V_l; V_r]`: two width-1 sides on disjoint rows, so `A` numbers left rows first, then `n_left +` right ones.
+//! `V = [V_l; V_r]`: two width-1 sides on disjoint rows, left rows numbered first.
 
 use std::sync::OnceLock;
 
@@ -9,7 +9,7 @@ use super::{index, BipartiteColumns, Column, IntoColumns, ViewError};
 use crate::storage::{narrow, widen};
 use crate::Real;
 
-/// Which row `rows[k]` each column of `V` hits, under `W`, with one value vector per side `V_c = P diag(values_c)`; each side's diagonal is summed once.
+/// Each column's row `rows[k]` under `W`, one value vector per side, each side's diagonal summed once.
 #[derive(Debug)]
 pub struct Incidence<'a, T, I = u32> {
     n: usize,
@@ -60,7 +60,7 @@ impl<'a, T: Real, I: PrimInt> Incidence<'a, T, I> {
         }
     }
 
-    /// Every side's diagonal, side `c` at `c·n..(c+1)·n`, summed in `f64` on first read like `abs_row_sums`.
+    /// Every side's diagonal, side `c` at `c·n..(c+1)·n`, summed in `f64` on first read.
     fn diagonals(&self) -> &[T] {
         self.diagonals.get_or_init(|| {
             let n = self.n;
@@ -102,7 +102,7 @@ impl<'a, T: Real, I: PrimInt> Side<'a, T, I> {
     }
 }
 
-/// `A = V W Vᵀ` with `V = [V_l; V_r]`; `W` stays apart because every pair of an incidence's sides shares it.
+/// `A = V W Vᵀ` with `V = [V_l; V_r]`; `W` stays apart as every pair of sides shares it.
 #[derive(Debug)]
 pub struct BipartiteGram<'a, T, I = u32> {
     left: Side<'a, T, I>,
@@ -118,7 +118,7 @@ impl<T, I> Clone for BipartiteGram<'_, T, I> {
 impl<T, I> Copy for BipartiteGram<'_, T, I> {}
 
 impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
-    /// Both sides must have the same column count and read the same `W`, and `n_left + n_right` fit a `u32` index.
+    /// Both sides share the column count and `W`, and `n_left + n_right` fits a `u32` index.
     pub fn new(left: Side<'a, T, I>, right: Side<'a, T, I>) -> Result<Self, ViewError> {
         let (l, r) = (left.incidence, right.incidence);
         if l.rows.len() != r.rows.len() {
@@ -137,7 +137,7 @@ impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
         Ok(Self { left, right })
     }
 
-    /// `A`'s diagonal, left rows then right ones; the first Gram of an incidence sums each side's, serially, as a rayon initializer deadlocks when Grams reduce in parallel.
+    /// `A`'s diagonal, left rows then right; summed serially, as a rayon initializer deadlocks.
     pub(crate) fn diagonals(&self) -> (&'a [T], &'a [T]) {
         (self.left.diagonal(), self.right.diagonal())
     }
@@ -192,7 +192,7 @@ pub struct BipartiteLaplacian<'a, T, I = u32> {
 }
 
 impl<'a, T: Real, I: PrimInt> BipartiteLaplacian<'a, T, I> {
-    /// Column `k` joins `left[k] < n_left` and `right[k] < n_right` under `weights`; indices and weights are checked.
+    /// Column `k` joins `left[k] < n_left` and `right[k] < n_right`; indices and weights are checked.
     pub fn new(
         n_left: usize,
         n_right: usize,

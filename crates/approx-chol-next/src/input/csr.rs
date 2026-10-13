@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use num_traits::PrimInt;
 
 use crate::storage::in_range;
@@ -13,7 +15,7 @@ pub struct Csr<'a, T, I = u32> {
 }
 
 impl<'a, T, I: PrimInt> Csr<'a, T, I> {
-    /// Checks the arrays' shape, that `row_ptrs` ascends from `0`, and that every vertex and entry fits a `u32` index, so no row slice can fail.
+    /// Checks the arrays' shape and that every index fits a `u32`, so no row slice can fail.
     pub fn new(
         n: usize,
         row_ptrs: &'a [I],
@@ -65,12 +67,12 @@ impl<'a, T, I: PrimInt> Csr<'a, T, I> {
     }
 }
 
-/// Borrowed CSR claiming the upper triangle, diagonal included, of a symmetric `A`; the claim is checked when it becomes an [`Sgdd`](crate::Sgdd).
+/// Borrowed CSR of the upper triangle of a symmetric `A`, diagonal included.
 #[derive(Clone, Copy, Debug)]
 pub struct UpperCsr<'a, T, I = u32>(Csr<'a, T, I>);
 
 impl<'a, T, I: PrimInt> UpperCsr<'a, T, I> {
-    /// The shape checks of [`Csr::new`]; an entry below the diagonal is caught when it becomes an [`Sgdd`](crate::Sgdd).
+    /// The shape checks of [`Csr::new`]; an entry below the diagonal is caught at reduction.
     pub fn new(
         n: usize,
         row_ptrs: &'a [I],
@@ -92,23 +94,25 @@ fn index<I: PrimInt>(k: I) -> usize {
 }
 
 /// Strictly ascending columns per row; scipy already emits them, so only rare input pays for a copy.
-pub(crate) struct Canonical<'a, T, I> {
-    input: Csr<'a, T, I>,
-    /// `None` when the caller's arrays are already canonical.
-    rewritten: Option<Rewritten<T, I>>,
+pub(crate) struct Canonical<'a, T: Clone, I: Clone> {
+    n: usize,
+    row_ptrs: Cow<'a, [I]>,
+    col_indices: Cow<'a, [I]>,
+    values: Cow<'a, [T]>,
 }
 
 impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
-    /// Reads no value on the canonical path, sparing a stream: [`walk`](Self::walk) checks each as it reads it.
+    /// Reads no value, sparing a stream: [`walk`](Self::walk) checks each as it reads it.
     pub(crate) fn of(csr: Csr<'a, T, I>) -> Result<Self, CsrError> {
-        let rewritten = match is_canonical(&csr)? {
-            true => None,
-            false => Some(rewrite(&csr)?),
-        };
-        Ok(Self {
-            input: csr,
-            rewritten,
-        })
+        match is_canonical(&csr)? {
+            true => Ok(Self {
+                n: csr.n,
+                row_ptrs: Cow::Borrowed(csr.row_ptrs),
+                col_indices: Cow::Borrowed(csr.col_indices),
+                values: Cow::Borrowed(csr.values),
+            }),
+            false => rewrite(&csr),
+        }
     }
 
     /// Columns ascend once canonical, so each row's first decides that none lies below the diagonal.
@@ -126,18 +130,11 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
     }
 
     pub(crate) fn n(&self) -> usize {
-        self.input.n
+        self.n
     }
 
     fn arrays(&self) -> (&[I], &[I], &[T]) {
-        match &self.rewritten {
-            Some(r) => (&r.row_ptrs, &r.col_indices, &r.values),
-            None => (
-                self.input.row_ptrs,
-                self.input.col_indices,
-                self.input.values,
-            ),
-        }
+        (&self.row_ptrs, &self.col_indices, &self.values)
     }
 
     /// Row `i`'s canonical entries, stored zeros included.
@@ -147,7 +144,7 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
         (col_indices[span.clone()].iter().map(|&j| index(j))).zip(values[span].iter().copied())
     }
 
-    /// Visits each nonzero `(i, j)`, `i < j`, with its upper value, checking mirrors by a monotone per-row cursor (search: +6-15% build).
+    /// Each nonzero `(i, j)`, `i < j`, mirrors checked by a per-row cursor (binary search: +6-15% build).
     pub(crate) fn walk(&self, mut edge: impl FnMut(usize, usize, T)) -> Result<(), CsrError> {
         let (row_ptrs, col_indices, values) = self.arrays();
         let mut mirrors = Mirrors::new(row_ptrs, col_indices, values);
@@ -182,7 +179,7 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
 }
 
 /// Canonical rows with no column below its row: symmetric by storage, so its walk has no mirror to find.
-pub(crate) struct UpperCanonical<'a, T, I>(Canonical<'a, T, I>);
+pub(crate) struct UpperCanonical<'a, T: Clone, I: Clone>(Canonical<'a, T, I>);
 
 impl<'a, T: Real, I: PrimInt> UpperCanonical<'a, T, I> {
     pub(crate) fn n(&self) -> usize {
@@ -275,7 +272,7 @@ fn approximately_equal<T: Real>(left: T, right: T) -> bool {
     (left - right).abs() <= ulps * T::epsilon() * scale
 }
 
-/// Accumulated, not short-circuited: measured 0.4-2% of the build over the `all` form; a column outside `0..n` ends it.
+/// Accumulated, not short-circuited: the `all` form measured 0.4-2% slower.
 fn is_canonical<T, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<bool, CsrError> {
     // `None` means `I` cannot represent `n`, so every `I` value is below it.
     let limit = I::from(csr.n);
@@ -295,15 +292,8 @@ fn is_canonical<T, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<bool, CsrError> {
     Ok(canonical)
 }
 
-/// Canonical arrays rebuilt from non-canonical input, in its own index type.
-struct Rewritten<T, I> {
-    row_ptrs: Vec<I>,
-    col_indices: Vec<I>,
-    values: Vec<T>,
-}
-
-/// Only non-canonical input pays this copy.
-fn rewrite<T: Real, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<Rewritten<T, I>, CsrError> {
+/// Only non-canonical input pays this copy, in its own index type.
+fn rewrite<'a, T: Real, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<Canonical<'a, T, I>, CsrError> {
     let nnz = csr.col_indices.len();
     let mut row_ptrs = Vec::with_capacity(csr.n + 1);
     let mut col_indices = Vec::with_capacity(nnz);
@@ -333,10 +323,11 @@ fn rewrite<T: Real, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<Rewritten<T, I>, 
         // At most the caller's own `nnz`, which its last row pointer already holds in `I`.
         row_ptrs.push(I::from(col_indices.len()).expect("a coalesced count fits the input's type"));
     }
-    Ok(Rewritten {
-        row_ptrs,
-        col_indices,
-        values,
+    Ok(Canonical {
+        n: csr.n,
+        row_ptrs: Cow::Owned(row_ptrs),
+        col_indices: Cow::Owned(col_indices),
+        values: Cow::Owned(values),
     })
 }
 
@@ -376,7 +367,7 @@ pub enum CsrError {
         /// The offending row.
         row: u32,
     },
-    /// An entry, or a repeated column's sum, is not finite, or nonzero below `MIN_POSITIVE/EPSILON`, where products turn subnormal.
+    /// An entry or a repeated column's sum is not finite, or nonzero below `MIN_POSITIVE/EPSILON`.
     OutOfRange {
         /// The offending row.
         row: u32,

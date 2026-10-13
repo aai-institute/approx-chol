@@ -1,15 +1,15 @@
 use num_traits::PrimInt;
 
-mod components;
+mod partition;
 
-use std::borrow::Cow;
-
-use super::{within_series_floor, Component, Grounding, Sgdd};
-use crate::input::{BipartiteColumns, Canonical, IntoColumns, Laplacian, SignedGraph};
+use super::component::{Component, ReduceError, Sgdd};
+use crate::input::{
+    BipartiteColumns, Canonical, CsrError, IntoColumns, SignedGraph, UpperCanonical,
+};
 use crate::storage::{in_range, narrow, widen, CrossBlock, Rows, UpperAdjacency};
-use crate::{Real, ReduceError};
-use components::UnionFind;
-pub(super) use components::{of_csr, of_upper, Partition};
+use crate::Real;
+pub(super) use partition::Partition;
+use partition::UnionFind;
 
 /// An assembled `A` and its connected components, found from the same cells.
 pub(super) struct Partitioned<A> {
@@ -17,36 +17,27 @@ pub(super) struct Partitioned<A> {
     partition: Partition,
 }
 
-/// `⊕ B_c` over a partition's live components; a dead one's vertices solve to `0`.
-pub(super) struct DirectSum<B> {
-    partition: Partition,
-    blocks: Vec<B>,
-    dead: Vec<u32>,
+/// Unions the pattern in the walk that checks symmetry and range.
+pub(super) fn of_csr<T: Real, I: PrimInt>(
+    csr: Canonical<'_, T, I>,
+) -> Result<Partitioned<Canonical<'_, T, I>>, CsrError> {
+    let mut sets = UnionFind::new(csr.n());
+    csr.walk(|i, j, _| sets.union(i, j))?;
+    let partition = sets.into_partition();
+    Ok(Partitioned { a: csr, partition })
 }
 
-impl<B> DirectSum<B> {
-    /// Every block at once, for a pass that crosses components.
-    pub(super) fn reduce_all<C>(
-        self,
-        reduce: impl FnOnce(&Partition, Vec<B>) -> Result<Vec<C>, ReduceError>,
-    ) -> Result<DirectSum<C>, ReduceError> {
-        let blocks = reduce(&self.partition, self.blocks)?;
-        Ok(DirectSum {
-            partition: self.partition,
-            blocks,
-            dead: self.dead,
-        })
-    }
-}
-
-impl<T> From<DirectSum<Component<T>>> for Sgdd<T> {
-    fn from(sum: DirectSum<Component<T>>) -> Self {
-        Self {
-            n: sum.partition.n(),
-            components: sum.blocks,
-            dead: sum.dead.into_boxed_slice(),
-        }
-    }
+/// Unions the pattern in the walk that checks range: upper storage has no mirror to check.
+pub(super) fn of_upper<T: Real, I: PrimInt>(
+    csr: UpperCanonical<'_, T, I>,
+) -> Result<Partitioned<Canonical<'_, T, I>>, CsrError> {
+    let mut sets = UnionFind::new(csr.n());
+    csr.walk(|i, j, _| sets.union(i, j))?;
+    let partition = sets.into_partition();
+    Ok(Partitioned {
+        a: csr.into_canonical(),
+        partition,
+    })
 }
 
 /// An assembled `A` cut into its components' blocks.
@@ -61,11 +52,23 @@ pub(super) trait Assembly<T> {
 }
 
 impl<A> Partitioned<A> {
-    /// Each component's block, `None` when it is dead; a component past `1/ε` vertices of `T` is rejected first, which a dead one, alone, never is.
-    pub(super) fn extract<T: Real, B>(
+    /// Each component reduced on its own.
+    pub(super) fn extract<T: Real>(
+        self,
+        component: impl FnMut(<A as Assembly<T>>::Block) -> Result<Option<Component<T>>, ReduceError>,
+    ) -> Result<Sgdd<T>, ReduceError>
+    where
+        A: Assembly<T>,
+    {
+        self.extract_all(component, |_, components| Ok(components))
+    }
+
+    /// Each live component's block, `None` when dead; `across` then sees them all with the assembly freed.
+    pub(super) fn extract_all<T: Real, B>(
         self,
         mut block: impl FnMut(<A as Assembly<T>>::Block) -> Result<Option<B>, ReduceError>,
-    ) -> Result<DirectSum<B>, ReduceError>
+        across: impl FnOnce(&Partition, Vec<B>) -> Result<Vec<Component<T>>, ReduceError>,
+    ) -> Result<Sgdd<T>, ReduceError>
     where
         A: Assembly<T>,
     {
@@ -73,7 +76,12 @@ impl<A> Partitioned<A> {
         let mut a = Some(a);
         let (mut blocks, mut dead) = (Vec::new(), Vec::new());
         for vertices in partition.components() {
-            within_series_floor::<T>(vertices)?;
+            // Past `1/ε` vertices, floor weights in series fall below `MIN_POSITIVE`; a dead one is alone.
+            if T::from(vertices.len()).is_none_or(|n| n * T::epsilon() >= T::one()) {
+                return Err(ReduceError::Unscalable {
+                    vertex: vertices[0],
+                });
+            }
             let cut = match partition.is_whole() {
                 true => a.take().expect("one whole component").whole(vertices),
                 false => (a.as_ref().expect("A until the whole is taken"))
@@ -84,11 +92,9 @@ impl<A> Partitioned<A> {
                 None => dead.extend_from_slice(vertices),
             }
         }
-        Ok(DirectSum {
-            partition,
-            blocks,
-            dead,
-        })
+        // Kept through `across`, an owned assembly raised the Gram peak 11–22%.
+        drop(a);
+        Ok(Sgdd::new(partition.n(), across(&partition, blocks)?, dead))
     }
 }
 
@@ -100,38 +106,19 @@ pub(super) enum BipartiteComponent<T> {
     Sides(Box<[u32]>, CrossBlock<T>),
 }
 
-/// One component's cells as the input gives them: its vertices in local order, strict upper triangle and diagonal.
+/// One component's vertices in local order, strict upper triangle and diagonal.
 pub(super) struct Cells<T> {
     pub(super) vertices: Box<[u32]>,
     pub(super) adjacency: UpperAdjacency<T>,
     pub(super) diagonal: Vec<T>,
 }
 
-/// A shape's assembled `A`, dominant by shape, with the surplus its cells decide: a Laplacian's ground (none if ungrounded), a signed graph's cancelled mass.
-pub(super) struct ShapeDominant<'s, T: Clone> {
-    a: Assembled<T>,
-    surplus: Option<Cow<'s, [T]>>,
-}
-
-/// A graph Laplacian's cells, grounded by `g` when given.
-pub(super) fn assemble_laplacian<'g, T: Real, I: PrimInt>(
-    graph: Laplacian<'g, T, I>,
-) -> Result<Partitioned<ShapeDominant<'g, T>>, ReduceError> {
-    let (balanced, ground) = graph.parts();
-    let Partitioned { a, partition } = assemble_general(balanced)?;
-    let surplus = ground.map(Cow::Borrowed);
-    Ok(Partitioned {
-        a: ShapeDominant { a, surplus },
-        partition,
-    })
-}
-
 /// The signed graph's cells, each vertex's surplus its pairs' cancelled mass.
 pub(super) fn assemble_signed<T: Real, I: PrimInt>(
     graph: SignedGraph<'_, T, I>,
-) -> Result<Partitioned<ShapeDominant<'static, T>>, ReduceError> {
+) -> Result<(Partitioned<Assembled<T>>, Vec<T>), ReduceError> {
     let mut surplus = vec![0.0_f64; graph.n()];
-    let Partitioned { a, partition } = assemble(graph, |i, j, masses: Masses| {
+    let a = assemble(graph, |i, j, masses: Masses| {
         let s = masses.surplus();
         surplus[i] += s;
         surplus[j] += s;
@@ -141,11 +128,7 @@ pub(super) fn assemble_signed<T: Real, I: PrimInt>(
         let vertex = vertex as u32;
         return Err(ReduceError::OutOfRange { vertex });
     }
-    let surplus = Some(Cow::Owned(surplus));
-    Ok(Partitioned {
-        a: ShapeDominant { a, surplus },
-        partition,
-    })
+    Ok((a, surplus))
 }
 
 impl<T: Real, I: PrimInt> Assembly<T> for Canonical<'_, T, I> {
@@ -217,26 +200,6 @@ impl<T: Real> Assembly<T> for Assembled<T> {
     }
 }
 
-impl<T: Real> Assembly<T> for ShapeDominant<'_, T> {
-    type Block = (Cells<T>, Grounding<T>);
-
-    fn whole(self, vertices: &[u32]) -> Self::Block {
-        let grounding =
-            (self.surplus).map_or_else(Grounding::ungrounded, |s| Grounding::of(s.into_owned()));
-        (self.a.whole(vertices), grounding)
-    }
-
-    fn component(&self, vertices: &[u32], position: &[u32]) -> Self::Block {
-        let gather =
-            |s: &Cow<'_, [T]>| Grounding::of(vertices.iter().map(|&v| s[v as usize]).collect());
-        let grounding = self
-            .surplus
-            .as_ref()
-            .map_or_else(Grounding::ungrounded, gather);
-        (self.a.component(vertices, position), grounding)
-    }
-}
-
 impl<T: Real> Assembly<T> for Biadjacency<T> {
     type Block = BipartiteComponent<T>;
 
@@ -278,7 +241,7 @@ impl<T: Real> Assembly<T> for Biadjacency<T> {
     }
 }
 
-/// `C` and its components, accumulated in column order, in a dense table when it is small (+54% without it), unfiltered: a column that couples nothing adds an exact zero and zero cells drop; a cell leaving `in_range` is `OutOfRange`.
+/// `C` and its components, in a dense table when small (+54% without it).
 pub(super) fn assemble_bipartite<T: Real>(
     v: impl BipartiteColumns<T>,
 ) -> Result<Partitioned<Biadjacency<T>>, ReduceError> {
@@ -370,7 +333,7 @@ impl CellSum for f64 {
     }
 }
 
-/// A pair's positive and negative weight summed apart: its cell is `p − q`, and each end's surplus `2·min(p, q)` is zero exactly when nothing cancels.
+/// A pair's positive and negative weight apart: cell `p − q`, each end's surplus `2·min(p, q)`.
 #[derive(Clone, Copy, Default)]
 struct Masses {
     positive: f64,
@@ -457,7 +420,7 @@ impl Buckets {
     }
 }
 
-/// Rows built in order from `f64` sums: a zero is dropped, any other is cast once, must stay [`in_range`], and joins its ends' components.
+/// Rows from `f64` sums: a zero drops, any other is cast once, range-checked and joins its ends.
 struct CellRows<T> {
     ptrs: Vec<usize>,
     indices: Vec<u32>,
@@ -507,7 +470,7 @@ impl<T: Real> CellRows<T> {
     }
 }
 
-/// `A`'s strict upper triangle, diagonal and components, cells `bilinear(v_a, v_b)` summed by pair in column order, zero cells dropped; a value leaving `in_range` is `OutOfRange`.
+/// `A`'s strict upper triangle, diagonal and components, cells summed by pair in column order.
 pub(super) fn assemble_general<T: Real>(
     v: impl IntoColumns<T>,
 ) -> Result<Partitioned<Assembled<T>>, ReduceError> {
@@ -560,7 +523,7 @@ pub(super) struct Biadjacency<T> {
     c: Rows<T>,
 }
 
-/// Eliminates the larger side, transposing `C` when it is the right one; returns the local order, eliminated first.
+/// Eliminates the larger side first, transposing `C` when it is the right one.
 fn larger_side_first<T: Real>(
     lefts: Vec<u32>,
     rights: Vec<u32>,

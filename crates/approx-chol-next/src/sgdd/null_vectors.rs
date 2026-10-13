@@ -1,19 +1,14 @@
-use std::cell::LazyCell;
-
 use crate::input::{Column, IntoColumns};
 use crate::storage::widen;
 use crate::Real;
 
-/// Built by the first component that is not already dominant, so a dominant input never reads its columns twice more.
-pub(super) type LazyNullVectors<'v> = LazyCell<NullVectors, Box<dyn FnOnce() -> NullVectors + 'v>>;
-
-/// Per vertex, a `u` its component's coupling columns, both ends nonzero in it, are orthogonal to, `NaN` where none is: `|u|` leaves `M` only the surplus `(g_i u_i)²` of the columns acting on one end, so it scales exactly, and `ground_or_float` floats it when that vanishes.
+/// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is.
 pub(super) struct NullVectors {
     u: Vec<f64>,
 }
 
 impl NullVectors {
-    /// One pass joins each component's coupling columns by `u_b = −v_a u_a / v_b`; a cycle off by more than `√ε` relative dooms it, which bounds `Σ (x_kᵀu)²` by `ε·tr M`, inside `ground_or_float`'s `5ε`; a doomed component's columns are skipped, and the pass ends once every component is doomed.
+    /// One union-find pass; a cycle off by more than `√ε` relative dooms its component.
     pub(super) fn of<'c, T: Real>(
         v: impl IntoColumns<T>,
         components: impl Iterator<Item = &'c [u32]>,
@@ -62,7 +57,7 @@ impl NullVectors {
     }
 }
 
-/// A column's component when it couples two of its vertices; a zero end or a cancelled cell leaves a one-ended column, which only adds surplus.
+/// A column's component when both ends are nonzero in it.
 fn coupling<T: Real>(column: &Column<T>, component: &[u32]) -> Option<usize> {
     let c = component[column.a as usize];
     let couples = !column.weight.is_zero()

@@ -1,4 +1,4 @@
-//! A graph Laplacian by its edges: each column of `V` is `e_a − e_b`, so `A` is a dominant Z-matrix, balanced but for its ground, by shape.
+//! A graph Laplacian by its edges: each column of `V` is `e_a − e_b`.
 
 use num_traits::PrimInt;
 
@@ -6,22 +6,16 @@ use super::edges::{Edges, Weights};
 use super::{check_ends, Column, IntoColumns, ViewError};
 use crate::Real;
 
-/// Weighted multigraph on `n` vertices, grounded by `g` when given: `A = Σ_k w_k (e_a − e_b)(e_a − e_b)ᵀ + diag(g)`.
+/// Weighted multigraph on `n` vertices, grounded by `g`: `A = Σ_k w_k (e_a − e_b)(e_a − e_b)ᵀ + diag(g)`.
 #[derive(Clone, Copy, Debug)]
 pub struct Laplacian<'a, T, I = u32> {
-    balanced: Balanced<'a, T, I>,
+    n: usize,
+    edges: Edges<'a, T, I>,
     ground: Option<&'a [T]>,
 }
 
-/// `L = Σ_k w_k (e_a − e_b)(e_a − e_b)ᵀ`, a [`Laplacian`] without its ground, so its columns are all of it.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Balanced<'a, T, I> {
-    n: usize,
-    edges: Edges<'a, T, I>,
-}
-
 impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
-    /// Edge `k` joins `a[k] ≠ b[k]`, both below `n`, under `weights`; lengths, ends and weights are checked.
+    /// Edge `k` joins `a[k] ≠ b[k] < n` under `weights`; lengths, ends and weights are checked.
     pub fn new(
         n: usize,
         a: &'a [I],
@@ -31,16 +25,17 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
         let edges = Edges::new(a, b, weights)?;
         check_ends(n, a, b)?;
         Ok(Self {
-            balanced: Balanced { n, edges },
+            n,
+            edges,
             ground: None,
         })
     }
 
     /// `L + diag(g)`, one finite nonnegative `g_i` per vertex.
     pub fn grounded(self, ground: &'a [T]) -> Result<Self, ViewError> {
-        if ground.len() != self.balanced.n {
+        if ground.len() != self.n {
             return Err(ViewError::LengthMismatch {
-                expected: self.balanced.n,
+                expected: self.n,
                 found: ground.len(),
             });
         }
@@ -54,13 +49,14 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
         })
     }
 
-    /// `L` and `g`: the ground is no column, so the shape grounds each component on it directly.
-    pub(crate) fn parts(&self) -> (Balanced<'a, T, I>, Option<&'a [T]>) {
-        (self.balanced, self.ground)
+    /// `g`, which is no column of `V`.
+    pub(crate) fn ground(&self) -> Option<&'a [T]> {
+        self.ground
     }
 }
 
-impl<T: Real, I: PrimInt> IntoColumns<T> for Balanced<'_, T, I> {
+/// The columns of `L` alone: the ground is read through [`Laplacian::ground`].
+impl<T: Real, I: PrimInt> IntoColumns<T> for Laplacian<'_, T, I> {
     fn n(&self) -> usize {
         self.n
     }

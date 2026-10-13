@@ -1,14 +1,11 @@
 use crate::storage::{widen, CrossBlock, Rows};
 use crate::Real;
 
-use super::ScalingPolicy;
+use super::{Relaxation, ScalingPolicy};
 
 fn dot(left: &[f64], right: &[f64]) -> f64 {
     left.iter().zip(right).map(|(&x, &y)| x * y).sum()
 }
-
-/// No diagonal scaling reaches weak dominance (Boman), or an iterate left `f64`.
-pub(super) struct NotScalable;
 
 /// `N = D^{-1/2}|C|D^{-1/2}` between the kept (small) and eliminated (large) sides.
 pub(super) struct NormalizedCrossOperator<'a, T> {
@@ -138,19 +135,23 @@ impl<'a, T: Real> NormalizedCrossOperator<'a, T> {
         small: &[f64],
         large: &[f64],
         violation: f64,
-    ) -> Result<ScalingCandidate, NotScalable> {
+    ) -> Option<Relaxation<f64>> {
         let mut mu: Vec<f64> = large.iter().chain(small).copied().collect();
         let peak = mu.iter().copied().fold(0.0f64, f64::max);
         if !peak.is_finite() || peak <= 0.0 {
-            return Err(NotScalable);
+            return None;
         }
         for value in mu.iter_mut() {
             *value /= peak;
         }
         if !mu.iter().all(|value| value.is_finite() && *value > 0.0) {
-            return Err(NotScalable);
+            return None;
         }
-        Ok(ScalingCandidate { mu, violation })
+        Some(Relaxation {
+            scales: mu.into(),
+            iterations: 0,
+            violation,
+        })
     }
 }
 
@@ -173,17 +174,6 @@ fn multiply_normalized<T: Real>(
     }
 }
 
-/// `μ` in local order, peaking at `1`.
-pub(super) struct ScalingCandidate {
-    pub(super) mu: Vec<f64>,
-    pub(super) violation: f64,
-}
-
-pub(super) struct ScalingResult {
-    pub(super) candidate: ScalingCandidate,
-    pub(super) iterations: usize,
-}
-
 #[derive(Clone, Copy)]
 enum ReducedCgStep {
     Advanced,
@@ -200,13 +190,13 @@ struct ReducedCg {
 }
 
 impl ReducedCg {
-    fn new(rhs: Vec<f64>) -> Result<Self, NotScalable> {
+    fn new(rhs: Vec<f64>) -> Option<Self> {
         let dimension = rhs.len();
         let residual_norm_squared = dot(&rhs, &rhs);
         if !residual_norm_squared.is_finite() {
-            return Err(NotScalable);
+            return None;
         }
-        Ok(Self {
+        Some(Self {
             solution: vec![0.0; dimension],
             residual: rhs.clone(),
             direction: rhs,
@@ -219,21 +209,21 @@ impl ReducedCg {
         &mut self,
         operator: &NormalizedCrossOperator<'_, T>,
         large_work: &mut [f64],
-    ) -> Result<ReducedCgStep, NotScalable> {
+    ) -> Option<ReducedCgStep> {
         operator.apply_reduced(&self.direction, large_work, &mut self.reduced_image);
         let direction_norm_squared = dot(&self.direction, &self.direction);
         let curvature = dot(&self.direction, &self.reduced_image);
         if !direction_norm_squared.is_finite() || !curvature.is_finite() {
-            return Err(NotScalable);
+            return None;
         }
         let slack = 64.0 * f64::EPSILON * direction_norm_squared;
         if curvature <= slack {
-            return Ok(ReducedCgStep::NonPositiveCurvature);
+            return Some(ReducedCgStep::NonPositiveCurvature);
         }
 
         let alpha = self.residual_norm_squared / curvature;
         if !alpha.is_finite() {
-            return Err(NotScalable);
+            return None;
         }
         for ((value, residual), (&direction, &image)) in self
             .solution
@@ -247,25 +237,25 @@ impl ReducedCg {
 
         let next_residual_norm_squared = dot(&self.residual, &self.residual);
         if !next_residual_norm_squared.is_finite() {
-            return Err(NotScalable);
+            return None;
         }
         if next_residual_norm_squared == 0.0 {
-            return Ok(ReducedCgStep::ResidualExhausted);
+            return Some(ReducedCgStep::ResidualExhausted);
         }
         let beta = next_residual_norm_squared / self.residual_norm_squared;
         for (direction, &residual) in self.direction.iter_mut().zip(&self.residual) {
             *direction = residual + beta * *direction;
         }
         self.residual_norm_squared = next_residual_norm_squared;
-        Ok(ReducedCgStep::Advanced)
+        Some(ReducedCgStep::Advanced)
     }
 }
 
 pub(super) fn reduced_cg_scaling<T: Real>(
     operator: &NormalizedCrossOperator<'_, T>,
-    initial: ScalingCandidate,
+    initial: Relaxation<f64>,
     scaling: &ScalingPolicy,
-) -> Result<ScalingResult, NotScalable> {
+) -> Option<Relaxation<f64>> {
     let mut large_work = vec![0.0; operator.large_len()];
     let rhs = operator.reduced_rhs(&mut large_work);
     let mut cg = ReducedCg::new(rhs)?;
@@ -284,16 +274,16 @@ pub(super) fn reduced_cg_scaling<T: Real>(
                 &mut small_image,
             ) {
                 if violation < best.violation {
-                    if let Ok(candidate) =
+                    if let Some(candidate) =
                         operator.materialize_candidate(&boundary_small, &large_work, violation)
                     {
                         best = candidate;
                     }
                 }
             }
-            return Ok(ScalingResult {
-                candidate: best,
+            return Some(Relaxation {
                 iterations: iteration,
+                ..best
             });
         }
 
@@ -308,30 +298,30 @@ pub(super) fn reduced_cg_scaling<T: Real>(
                 &mut small_image,
             ) {
                 if violation < best.violation {
-                    if let Ok(candidate) =
+                    if let Some(candidate) =
                         operator.materialize_candidate(&cg.solution, &large_work, violation)
                     {
                         best = candidate;
                     }
                 }
                 if best.violation <= scaling.tolerance {
-                    return Ok(ScalingResult {
-                        candidate: best,
+                    return Some(Relaxation {
                         iterations: iteration,
+                        ..best
                     });
                 }
             }
         }
 
         if matches!(step, ReducedCgStep::ResidualExhausted) {
-            return Ok(ScalingResult {
-                candidate: best,
+            return Some(Relaxation {
                 iterations: iteration,
+                ..best
             });
         }
     }
-    Ok(ScalingResult {
-        candidate: best,
+    Some(Relaxation {
         iterations: scaling.max_iterations,
+        ..best
     })
 }

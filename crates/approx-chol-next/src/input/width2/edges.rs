@@ -1,4 +1,4 @@
-//! A weighted edge list, `W` and the two ends of each column, shared by the views whose `V` holds fixed signs.
+//! A weighted edge list: `W` and the two ends of each column.
 
 use num_traits::PrimInt;
 
@@ -17,7 +17,7 @@ pub enum Weights<'a, T> {
 }
 
 impl<T: Real> Weights<'_, T> {
-    /// One entry per column, each `w` finite and nonnegative or `s` finite; every weighted view checks it in `new`.
+    /// One entry per column, each `w` finite and nonnegative or `s` finite.
     pub(super) fn check(self, columns: usize) -> Result<(), ViewError> {
         let (entries, valid): (&[T], fn(T) -> bool) = match self {
             Self::Unit => return Ok(()),
@@ -36,7 +36,7 @@ impl<T: Real> Weights<'_, T> {
         }
     }
 
-    /// The same slice read the same way: contents are never compared, so a NaN cannot split two sides of one Gram.
+    /// The same slice: contents are never compared, so a NaN cannot split one Gram's sides.
     pub(super) fn same(self, other: Self) -> bool {
         match (self, other) {
             (Self::Unit, Self::Unit) => true,

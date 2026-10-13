@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use crate::Real;
 
-/// Finite, and zero or at least `MIN_POSITIVE/EPSILON`: the floor keeps every product out of subnormals (#163).
+/// Finite, and zero or at least `MIN_POSITIVE/EPSILON`, so no product turns subnormal (#163).
 pub(crate) fn in_range<T: Real>(x: T) -> bool {
     x.is_finite() && (x == T::zero() || x.abs() >= T::min_positive_value() / T::epsilon())
 }
@@ -19,7 +19,7 @@ pub(crate) fn narrow<T: Real>(sum: f64) -> T {
     T::from(sum).unwrap_or_else(T::infinity)
 }
 
-/// In range and at most `MAX/4`: dominance then bounds its row by `MAX/2`, and elimination never grows a diagonal, so every reordered row sum, pivot and cast surplus stays finite; an entry bound would reject within's weights near `1e300`.
+/// In range and at most `MAX/4`, so every row sum, pivot and surplus stays finite.
 pub(crate) fn diagonal_in_range<T: Real>(d: T) -> bool {
     in_range(d) && d <= T::max_value() / (T::one() + T::one() + T::one() + T::one())
 }
@@ -35,7 +35,7 @@ pub(crate) struct Rows<T> {
 }
 
 impl<T: Real> Rows<T> {
-    /// Panics unless `ptrs` ascends from `0` to the entry count and each row's columns strictly ascend below `n_cols`: no row repeats a column.
+    /// Panics unless `ptrs` ascends from `0` and each row's columns strictly ascend below `n_cols`.
     pub(crate) fn new(ptrs: Vec<usize>, indices: Vec<u32>, values: Vec<T>, n_cols: usize) -> Self {
         assert_eq!(ptrs.first(), Some(&0), "rows start at the first entry");
         assert_eq!(
@@ -139,12 +139,12 @@ impl<T: Real> Rows<T> {
         (rows, cols)
     }
 
-    /// `x_ij ← r_i x_ij c_j`; `None` if a product leaves [`in_range`] or reaches zero: no entry is stored zero.
+    /// `x_ij ← r_i x_ij c_j`; `None` if a product leaves [`in_range`] or reaches zero.
     fn scaled(self, r: &[T], c: &[T]) -> Option<Self> {
         self.scaled_seeing(r, c, |_, _, _| {})
     }
 
-    /// As [`scaled`](Self::scaled), with [`abs_sums`](Self::abs_sums) of the new entries summed as they are formed.
+    /// As [`scaled`](Self::scaled), with the new [`abs_sums`](Self::abs_sums) from the same pass.
     fn scaled_abs_sums(self, r: &[T], c: &[T]) -> Option<(Self, Vec<f64>, Vec<f64>)> {
         let (mut rows, mut cols) = (vec![0.0; self.n_rows()], vec![0.0; self.n_cols]);
         let scaled = self.scaled_seeing(r, c, |i, j, x| {
@@ -228,7 +228,7 @@ impl<T: Real> UpperAdjacency<T> {
         Some(Self { rows })
     }
 
-    /// As [`scaled`](Self::scaled), with the result's [`abs_row_sums`](Self::abs_row_sums) from the same pass.
+    /// As [`scaled`](Self::scaled), with the new row sums from the same pass.
     pub(crate) fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
         let (rows, upper, lower) = self.rows.scaled_abs_sums(f, f)?;
         let sums = (upper.iter().zip(lower))
@@ -246,7 +246,7 @@ pub(crate) struct CrossBlock<T> {
 }
 
 impl<T: Real> CrossBlock<T> {
-    /// Panics unless both sides are nonempty, the larger as rows, with no stored zero: a lone vertex is no bipartite component.
+    /// Panics unless both sides are nonempty, the larger as rows, with no stored zero.
     pub(crate) fn new(c: Rows<T>) -> Self {
         assert!(c.n_rows() > 0 && c.n_cols() > 0, "both sides hold a vertex");
         assert!(c.n_rows() >= c.n_cols(), "the larger side is eliminated");
@@ -304,7 +304,7 @@ impl<T: Real> CrossBlock<T> {
         Some(Self::new(self.c.scaled(eliminated, kept)?))
     }
 
-    /// As [`scaled`](Self::scaled), with the result's [`abs_row_sums`](Self::abs_row_sums) from the same pass.
+    /// As [`scaled`](Self::scaled), with the new row sums from the same pass.
     pub(crate) fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
         let (eliminated, kept) = f.split_at(self.n_eliminated());
         let (c, rows, cols) = self.c.scaled_abs_sums(eliminated, kept)?;

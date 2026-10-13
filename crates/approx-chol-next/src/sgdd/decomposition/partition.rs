@@ -1,32 +1,3 @@
-use num_traits::PrimInt;
-
-use super::Partitioned;
-use crate::input::{Canonical, CsrError, UpperCanonical};
-use crate::Real;
-
-/// Unions the pattern in the walk that checks symmetry and range.
-pub(in crate::sgdd) fn of_csr<T: Real, I: PrimInt>(
-    csr: Canonical<'_, T, I>,
-) -> Result<Partitioned<Canonical<'_, T, I>>, CsrError> {
-    let mut sets = UnionFind::new(csr.n());
-    csr.walk(|i, j, _| sets.union(i, j))?;
-    let partition = sets.into_partition();
-    Ok(Partitioned { a: csr, partition })
-}
-
-/// Unions the pattern in the walk that checks range: upper storage has no mirror to check.
-pub(in crate::sgdd) fn of_upper<T: Real, I: PrimInt>(
-    csr: UpperCanonical<'_, T, I>,
-) -> Result<Partitioned<Canonical<'_, T, I>>, CsrError> {
-    let mut sets = UnionFind::new(csr.n());
-    csr.walk(|i, j, _| sets.union(i, j))?;
-    let partition = sets.into_partition();
-    Ok(Partitioned {
-        a: csr.into_canonical(),
-        partition,
-    })
-}
-
 /// Every vertex once, components back to back.
 pub(in crate::sgdd) struct Partition {
     order: Vec<u32>,
