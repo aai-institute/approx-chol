@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 
 use super::clique_tree::Fill;
-use crate::sgdd::{Balance, Grounding};
+use crate::sgdd::Grounding;
 use crate::storage::{Rows, UpperAdjacency};
 use crate::Real;
 
@@ -203,14 +203,6 @@ pub(super) enum Sheets {
 }
 
 impl Sheets {
-    /// A frustrated `M` factors on a cover's two sheets.
-    pub(super) fn of<T: Real>(balance: &Balance<T>) -> Self {
-        match balance {
-            Balance::Balanced(_) => Self::One,
-            Balance::Frustrated(_) => Self::Two,
-        }
-    }
-
     pub(super) fn count(self) -> usize {
         match self {
             Self::One => 1,

@@ -219,9 +219,12 @@ impl<T: Real> Component<T> {
         matches!(&self.balance, Balance::Balanced(grounding) if !grounding.is_grounded())
     }
 
-    /// `M`: its off-diagonal and its balance.
-    pub(crate) fn m(&self) -> (&OffDiagonal<T>, &Balance<T>) {
-        (&self.off_diagonal, &self.balance)
+    pub(crate) fn off_diagonal(&self) -> &OffDiagonal<T> {
+        &self.off_diagonal
+    }
+
+    pub(crate) fn balance(&self) -> &Balance<T> {
+        &self.balance
     }
 }
 

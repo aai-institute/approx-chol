@@ -136,7 +136,7 @@ impl<T: Real> Factor<T> {
             let vertices = component.vertices();
             let (local, rest) = scratch.split_at_mut(vertices.len());
             (local.iter_mut().zip(vertices)).for_each(|(v, &i)| *v = x[i as usize]);
-            component.solve_local(local, rest, inner)?;
+            component.solve_unchecked(local, rest, inner);
             (local.iter().zip(vertices)).for_each(|(&v, &i)| x[i as usize] = v);
         }
         for &i in &self.dead {
@@ -162,21 +162,28 @@ impl<T: Real> ComponentFactor<T> {
         let frame = component.frame();
         let vertices = frame.vertices();
         let streams = Streams::new(config.seed, vertices[0]);
-        let (elimination, (cholesky, fallback)) = match component.m() {
-            (OffDiagonal::General(adjacency), balance) => {
-                let sddm = match balance {
-                    Balance::Balanced(grounding) => Sddm::new(
-                        Cow::Borrowed(adjacency),
-                        Cow::Borrowed(grounding),
-                        Sheets::One,
-                    ),
-                    Balance::Frustrated(grounding) => Sddm::cover(adjacency, grounding),
+        let (sheets, grounding) = match component.balance() {
+            Balance::Balanced(grounding) => (Sheets::One, grounding),
+            Balance::Frustrated(grounding) => (Sheets::Two, grounding),
+        };
+        let (elimination, (cholesky, fallback)) = match component.off_diagonal() {
+            OffDiagonal::General(adjacency) => {
+                let sddm = match sheets {
+                    Sheets::One => {
+                        Sddm::new(Cow::Borrowed(adjacency), Cow::Borrowed(grounding), sheets)
+                    }
+                    Sheets::Two => Sddm::cover(adjacency, grounding),
                 };
                 (None, Cholesky::factor(sddm, streams.cholesky(), config))
             }
-            (OffDiagonal::Bipartite(cross), balance) => {
-                let schur =
-                    SchurComplement::new(cross, balance, config.complement, streams.stars());
+            OffDiagonal::Bipartite(cross) => {
+                let schur = SchurComplement::new(
+                    cross,
+                    sheets,
+                    grounding,
+                    config.complement,
+                    streams.stars(),
+                );
                 let factored = Cholesky::factor(&schur, streams.cholesky(), config);
                 (Some(schur.finish()), factored)
             }
@@ -233,6 +240,11 @@ impl<T: Real> ComponentFactor<T> {
                 found: scratch.len(),
             });
         }
+        self.solve_unchecked(x, scratch, inner);
+        Ok(())
+    }
+
+    fn solve_unchecked(&self, x: &mut [T], scratch: &mut [T], inner: InnerParallelism) {
         let congruence = self.frame.congruence();
         if self.floats {
             congruence.project_out_null(x);
@@ -251,6 +263,5 @@ impl<T: Real> ComponentFactor<T> {
         if self.floats {
             congruence.project_out_null(x);
         }
-        Ok(())
     }
 }
