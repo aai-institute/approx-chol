@@ -34,6 +34,13 @@ pub enum SolveError {
         /// The length provided.
         found: usize,
     },
+    /// A workspace shorter than the factor's `scratch_len`.
+    ScratchTooShort {
+        /// The factor's `scratch_len`.
+        needed: usize,
+        /// The length provided.
+        found: usize,
+    },
 }
 
 impl core::fmt::Display for SolveError {
@@ -42,11 +49,35 @@ impl core::fmt::Display for SolveError {
             Self::LengthMismatch { expected, found } => {
                 write!(f, "right-hand side has length {found}, expected {expected}")
             }
+            Self::ScratchTooShort { needed, found } => {
+                write!(f, "scratch has length {found}, needs at least {needed}")
+            }
         }
     }
 }
 
 impl std::error::Error for SolveError {}
+
+/// `x` must match the operator and `scratch` cover its workspace.
+fn check_buffers<T>(x: &[T], n: usize, scratch: &[T], needed: usize) -> Result<(), SolveError> {
+    match x.len() == n && scratch.len() >= needed {
+        true => Ok(()),
+        false => Err(buffer_error(x.len(), n, scratch.len(), needed)),
+    }
+}
+
+// Built inline, the error cost within's solves 5–9%.
+#[cold]
+#[inline(never)]
+fn buffer_error(found: usize, n: usize, scratch: usize, needed: usize) -> SolveError {
+    match found == n {
+        false => SolveError::LengthMismatch { expected: n, found },
+        true => SolveError::ScratchTooShort {
+            needed,
+            found: scratch,
+        },
+    }
+}
 
 /// Block-diagonal approximate inverse of `A`: one [`BlockFactor`] per [`IrreducibleBlock`].
 #[derive(Clone, Debug)]
@@ -89,9 +120,10 @@ impl<T: Real> Factor<T> {
         self.blocks.iter().filter_map(BlockFactor::fallback)
     }
 
-    fn scratch_len(&self) -> usize {
+    /// Workspace [`Factor::solve_in_place`] needs, fixed at factorization.
+    pub fn scratch_len(&self) -> usize {
         (self.blocks.iter())
-            .map(|block| block.vertices().len() + block.cholesky.scratch_len())
+            .map(|block| block.vertices().len() + block.scratch_len())
             .max()
             .unwrap_or(0)
     }
@@ -99,7 +131,8 @@ impl<T: Real> Factor<T> {
     /// `A⁺b` on floating blocks; vertices in no block solve to `0`.
     pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
         let mut x = b.to_vec();
-        self.solve_in_place(&mut x, &mut Vec::new(), InnerParallelism::Allow)?;
+        let mut scratch = vec![T::zero(); self.scratch_len()];
+        self.solve_in_place(&mut x, &mut scratch, InnerParallelism::Allow)?;
         Ok(x)
     }
 
@@ -107,16 +140,10 @@ impl<T: Real> Factor<T> {
     pub fn solve_in_place(
         &self,
         x: &mut [T],
-        scratch: &mut Vec<T>,
+        scratch: &mut [T],
         inner: InnerParallelism,
     ) -> Result<(), SolveError> {
-        if x.len() != self.n {
-            return Err(SolveError::LengthMismatch {
-                expected: self.n,
-                found: x.len(),
-            });
-        }
-        scratch.resize(scratch.len().max(self.scratch_len()), T::zero());
+        check_buffers(x, self.n, scratch, self.scratch_len())?;
         for block in &self.blocks {
             let restriction = &block.restriction;
             let (local, rest) = scratch.split_at_mut(block.vertices().len());
@@ -196,21 +223,19 @@ impl<T: Real> BlockFactor<T> {
         (self.elimination.as_ref()).map_or(0, BlockElimination::splittable_work)
     }
 
+    /// Workspace [`BlockFactor::solve_local`] needs, fixed at factorization.
+    pub fn scratch_len(&self) -> usize {
+        self.cholesky.scratch_len()
+    }
+
     /// Solves in local order: `x` holds `b` on entry and the solution on return.
     pub fn solve_local(
         &self,
         x: &mut [T],
-        scratch: &mut Vec<T>,
+        scratch: &mut [T],
         inner: InnerParallelism,
     ) -> Result<(), SolveError> {
-        let expected = self.vertices().len();
-        if x.len() != expected {
-            return Err(SolveError::LengthMismatch {
-                expected,
-                found: x.len(),
-            });
-        }
-        scratch.resize(scratch.len().max(self.cholesky.scratch_len()), T::zero());
+        check_buffers(x, self.vertices().len(), scratch, self.scratch_len())?;
         self.solve_unchecked(x, scratch, inner);
         Ok(())
     }

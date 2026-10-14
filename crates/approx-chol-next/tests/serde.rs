@@ -51,7 +51,8 @@ fn solve(block: &BlockFactor, inner: InnerParallelism) -> Vec<u64> {
     let mut x: Vec<f64> = (0..block.vertices().len())
         .map(|i| (i % 7) as f64 - 3.0)
         .collect();
-    block.solve_local(&mut x, &mut Vec::new(), inner).unwrap();
+    let mut scratch = vec![0.0; block.scratch_len()];
+    block.solve_local(&mut x, &mut scratch, inner).unwrap();
     x.iter().map(|v| v.to_bits()).collect()
 }
 
