@@ -194,16 +194,17 @@ impl<T: Real, I: Index> BlockFactor<T, I> {
                     }
                     Sheets::Two => Sddm::cover(adjacency, grounding),
                 };
-                (
-                    None,
-                    Cholesky::factor(sddm, streams.cholesky(), config, anchor(0)),
-                )
+                let wide = block.restriction().spans_wide(0);
+                let factored = Cholesky::factor(sddm, streams.cholesky(), config, anchor(0), wide);
+                (None, factored)
             }
             OffDiagonal::Bipartite(cross) => {
                 let elimination = BlockElimination::new(cross, grounding);
                 let schur = elimination.complement(sheets, grounding, config.complement, streams);
-                let anchor = anchor(elimination.n_eliminated());
-                let factored = Cholesky::factor(schur, streams.cholesky(), config, anchor);
+                let from = elimination.n_eliminated();
+                let wide = block.restriction().spans_wide(from);
+                let factored =
+                    Cholesky::factor(schur, streams.cholesky(), config, anchor(from), wide);
                 (Some(elimination), factored)
             }
         };

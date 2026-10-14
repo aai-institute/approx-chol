@@ -71,8 +71,14 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         draws: Xoshiro256PlusPlus,
         config: &Config,
         anchor: Option<usize>,
+        wide: bool,
     ) -> (Self, Option<Fallback>) {
-        let approximate = |sddm| Self::approximate(sddm, config.approximate, draws);
+        let approximate = |sddm: Sddm<'a, T, I>| {
+            // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
+            let pinned = anchor.or_else(|| sddm.grounded().then(|| sddm.n()));
+            let last = pinned.filter(|_| wide);
+            Self::approximate(sddm, config.approximate, draws, last)
+        };
         let dimension = input.dimension();
         if dimension > config.dense_up_to {
             return (approximate(input.for_approximate()), None);
@@ -98,9 +104,11 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         sddm: Sddm<'_, T, I>,
         multiplicity: Multiplicity,
         draws: Xoshiro256PlusPlus,
+        last: Option<usize>,
     ) -> Self {
         let (sheets, grounded, n) = (sddm.sheets(), sddm.grounded(), sddm.n());
-        let triangular = Triangular::Approximate(approximate::factor(sddm, multiplicity, draws));
+        let triangular =
+            Triangular::Approximate(approximate::factor(sddm, multiplicity, draws, last));
         Self {
             sheets,
             grounded,

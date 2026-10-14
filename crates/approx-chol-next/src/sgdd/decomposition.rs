@@ -131,6 +131,12 @@ pub(super) type General<T, I> = Partitioned<Assembled<T, UpperAdjacency<T, I>>, 
 /// A bipartite Gram assembled as `C` and the diagonal, and its components.
 pub(super) type BipartiteGram<T, I> = Partitioned<Assembled<T, Rows<T, I>>, I>;
 
+/// A Laplacian or signed graph assembled as `C` and `σ`, and its components.
+pub(super) type DominantGraph<'a, T, I> = Partitioned<Dominant<'a, T, UpperAdjacency<T, I>>, I>;
+
+/// A bipartite Laplacian assembled as `C`, and its components.
+pub(super) type DominantBipartite<T, I> = Partitioned<Dominant<'static, T, Rows<T, I>>, I>;
+
 /// One component's vertices in local order, off-diagonal and diagonal.
 pub(super) type Cells<T, I> = (Box<[I]>, OffDiagonal<T, I>, Vec<T>);
 
@@ -178,8 +184,8 @@ pub(super) struct Assembled<T, C> {
 }
 
 /// `A = L(C) + diag(σ)`, dominant by shape: no diagonal is stored, each pivot is `Σ_j |c_ij| + σ_i`.
-pub(super) struct Dominant<'a, T: Clone, I> {
-    adjacency: UpperAdjacency<T, I>,
+pub(super) struct Dominant<'a, T: Clone, C> {
+    adjacency: C,
     surplus: Option<Cow<'a, [T]>>,
 }
 
@@ -211,22 +217,10 @@ impl<T: Real, I: Index> PrincipalBlocks<T, I> for UpperAdjacency<T, I> {
     }
 }
 
-impl<T: Real, I: Index> PrincipalBlocks<T, I> for Assembled<T, UpperAdjacency<T, I>> {
-    type Block = Cells<T, I>;
-
-    fn whole(self, vertices: &[I]) -> Self::Block {
-        let (vertices, off_diagonal) = self.adjacency.whole(vertices);
-        (vertices, off_diagonal, self.diagonal)
-    }
-
-    fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
-        let (vertices, off_diagonal) = self.adjacency.component(vertices, position);
-        let diagonal = vertices.iter().map(|&v| self.diagonal[v.index()]).collect();
-        (vertices, off_diagonal, diagonal)
-    }
-}
-
-impl<T: Real, I: Index> PrincipalBlocks<T, I> for Dominant<'_, T, I> {
+impl<T: Real, I: Index, C> PrincipalBlocks<T, I> for Dominant<'_, T, C>
+where
+    C: PrincipalBlocks<T, I, Block = (Box<[I]>, OffDiagonal<T, I>)>,
+{
     type Block = (Box<[I]>, OffDiagonal<T, I>, Grounding<T>);
 
     fn whole(self, vertices: &[I]) -> Self::Block {
@@ -275,7 +269,10 @@ impl<T: Real, I: Index> PrincipalBlocks<T, I> for Rows<T, I> {
     }
 }
 
-impl<T: Real, I: Index> PrincipalBlocks<T, I> for Assembled<T, Rows<T, I>> {
+impl<T: Real, I: Index, C> PrincipalBlocks<T, I> for Assembled<T, C>
+where
+    C: PrincipalBlocks<T, I, Block = (Box<[I]>, OffDiagonal<T, I>)>,
+{
     type Block = Cells<T, I>;
 
     fn whole(self, vertices: &[I]) -> Self::Block {

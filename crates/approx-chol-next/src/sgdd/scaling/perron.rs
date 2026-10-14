@@ -112,7 +112,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
     }
 
     /// `α = 1 + tolerance/2` until a step certifies or refutes (as `M⁻¹𝟙` does: Ahmadinejad et al., arXiv:1810.02348 §3.1), then each step from the bracket's [`shift`](Bracket::shift).
-    pub(super) fn run(mut self) -> (Vec<f64>, usize, f64) {
+    pub(super) fn run(mut self) -> (Vec<f64>, usize, f64, bool) {
         let (tolerance, band) = (self.tolerance, self.band);
         let polished =
             |b: &Bracket| (b.certifies(tolerance) && b.settled(band)) || b.refutes(tolerance);
@@ -129,7 +129,8 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             }
         }
         let (y, bracket) = self.best;
-        (y, self.iterations, bracket.violation())
+        let settled = bracket.certifies(tolerance) && bracket.settled(band);
+        (y, self.iterations, bracket.violation(), settled)
     }
 
     /// CG on `(αI − N) y = b`; each probed iterate, and a vanishing curvature's or refuting Rayleigh quotient's direction, replaces `best` when it ranks above it. Whether one did.
@@ -185,10 +186,11 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
                 }
                 residual_norm_squared = next_residual_norm_squared;
             }
-            // A probe costs one more pass; past the cheap early exits, probe on a stride.
+            // A probe costs one more pass: past the cheap early exits, a stride of `k/8` sees a goal within 12.5% more steps.
             let k = self.iterations - start;
             let last = exhausted || self.iterations == self.max_iterations;
-            if (last || k <= 8 || k % 4 == 0) && self.consider(&system.solution(&solution), &goal) {
+            let on_stride = k % (k / 8).max(4) == 0;
+            if (last || k <= 8 || on_stride) && self.consider(&system.solution(&solution), &goal) {
                 adopted = true;
                 last_adoption = self.iterations;
             }

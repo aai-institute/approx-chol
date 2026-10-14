@@ -5,7 +5,10 @@ use num_traits::PrimInt;
 use super::partition::{Partition, UnionFind};
 use std::borrow::Cow;
 
-use super::{indexable, Assembled, BipartiteGram, Dominant, General, Partitioned};
+use super::{
+    indexable, Assembled, BipartiteGram, Dominant, DominantBipartite, DominantGraph, General,
+    Partitioned,
+};
 use crate::input::{BipartiteColumns, Column, IntoColumns, Laplacian, SignedGraph};
 use crate::sgdd::block::ReduceError;
 use crate::storage::{Rows, UpperAdjacency};
@@ -14,7 +17,7 @@ use crate::{diagonal_in_range, in_range, narrow, widen, Index, Real};
 /// The signed graph's cells, each vertex's surplus its pairs' cancelled mass.
 pub(in crate::sgdd) fn assemble_signed<T: Real, J: PrimInt, I: Index>(
     graph: SignedGraph<'_, T, J>,
-) -> Result<Partitioned<Dominant<'static, T, I>, I>, ReduceError> {
+) -> Result<DominantGraph<'static, T, I>, ReduceError> {
     let (mut abs, mut surplus) = (vec![0.0_f64; graph.n()], vec![0.0_f64; graph.n()]);
     let a = assemble(
         graph,
@@ -25,19 +28,14 @@ pub(in crate::sgdd) fn assemble_signed<T: Real, J: PrimInt, I: Index>(
             (surplus[i], surplus[j]) = (surplus[i] + s, surplus[j] + s);
         },
     )?;
-    let surplus = (surplus.iter().enumerate())
-        .map(|(i, &s)| match narrow::<T>(s) {
-            s if s == T::zero() || in_range(s) => Ok(s),
-            _ => Err(ReduceError::OutOfRange { vertex: i }),
-        })
-        .collect::<Result<Vec<T>, _>>()?;
+    let surplus = surplus.into_iter().map(narrow).collect();
     dominant(a, &abs, Some(Cow::Owned(surplus)))
 }
 
 /// The Laplacian's cells, each vertex's surplus its ground.
 pub(in crate::sgdd) fn assemble_laplacian<'a, T: Real, J: PrimInt, I: Index>(
     graph: Laplacian<'a, T, J>,
-) -> Result<Partitioned<Dominant<'a, T, I>, I>, ReduceError> {
+) -> Result<DominantGraph<'a, T, I>, ReduceError> {
     let ground = graph.ground();
     let mut abs = vec![0.0_f64; graph.n()];
     let a = assemble(
@@ -51,16 +49,18 @@ pub(in crate::sgdd) fn assemble_laplacian<'a, T: Real, J: PrimInt, I: Index>(
 }
 
 /// Each pivot `Σ_j |c_ij| + σ_i` screened in the assembly's own sums, `A`'s diagonal never stored.
-fn dominant<'a, T: Real, I: Index>(
-    a: Partitioned<UpperAdjacency<T, I>, I>,
+fn dominant<'a, T: Real, I: Index, C>(
+    a: Partitioned<C, I>,
     abs: &[f64],
     surplus: Option<Cow<'a, [T]>>,
-) -> Result<Partitioned<Dominant<'a, T, I>, I>, ReduceError> {
+) -> Result<Partitioned<Dominant<'a, T, C>, I>, ReduceError> {
     let s = |i: usize| surplus.as_ref().map_or(0.0, |s| widen(s[i]));
     if let Some(vertex) = (0..abs.len()).find(|&i| !diagonal_in_range(narrow::<T>(abs[i] + s(i)))) {
         return Err(ReduceError::OutOfRange { vertex });
     }
     let Partitioned { a, partition } = a;
+    // An all-zero surplus grounds nothing: dropped once here, not copied into every block.
+    let surplus = surplus.filter(|s| s.iter().any(|&x| x != T::zero()));
     let a = Dominant {
         adjacency: a,
         surplus,
@@ -105,11 +105,13 @@ fn assemble<T: Real, I: Index, C: CellSum>(
     })
 }
 
-/// `C` and its components.
+/// `C` and its components, each pivot its row's or column's `Σ|c|`.
 pub(in crate::sgdd) fn assemble_bipartite<T: Real, I: Index>(
     v: impl BipartiteColumns<T>,
-) -> Result<Partitioned<Rows<T, I>, I>, ReduceError> {
-    cross(v, |_| {})
+) -> Result<DominantBipartite<T, I>, ReduceError> {
+    let a = cross(v, |_| {})?;
+    let (rows, columns) = a.a.abs_sums();
+    dominant(a, &[rows, columns].concat(), None)
 }
 
 /// As [`assemble_bipartite`], with `A`'s diagonal summed in the same column pass.

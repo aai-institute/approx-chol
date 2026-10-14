@@ -49,6 +49,15 @@ impl<T: Real, I: Index> Restriction<T, I> {
         }) - from
     }
 
+    /// Whether `|f|` from `from` on spans past `1/√ε`, where a solve pinned at a small `|f|` loses more than half its digits.
+    pub(crate) fn spans_wide(&self, from: usize) -> bool {
+        let magnitudes = (from..self.vertices.len()).map(|i| self.congruence.factor(i).abs());
+        let (least, most) = magnitudes.fold((T::infinity(), T::zero()), |(least, most), m| {
+            (least.min(m), most.max(m))
+        });
+        least < most * T::epsilon().sqrt()
+    }
+
     /// `x ← F x` on a gathered `x`, `F·1` projected out first when `M` is singular.
     pub(crate) fn restrict(&self, x: &mut [T], singular: bool) {
         if singular {

@@ -17,23 +17,25 @@ pub(super) fn factor<T: Real, I: Index>(
     sddm: Sddm<'_, T, I>,
     multiplicity: Multiplicity,
     draws: Xoshiro256PlusPlus,
+    last: Option<usize>,
 ) -> ApproximateCholesky<T, I> {
     match multiplicity {
-        Multiplicity::Single => eliminate::<T, I, Single>(sddm, draws, ()),
-        Multiplicity::Split(k) => eliminate::<T, I, Multi>(sddm, draws, k),
+        Multiplicity::Single => eliminate::<T, I, Single>(sddm, draws, (), last),
+        Multiplicity::Split(k) => eliminate::<T, I, Multi>(sddm, draws, k, last),
     }
 }
 
-/// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree (Algorithm 8); the last is the slot the solve zeroes.
+/// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree (Algorithm 8); the last, `last` when given, is the slot the solve zeroes.
 fn eliminate<T: Real, I: Index, C: Copies>(
     sddm: Sddm<'_, T, I>,
     draws: Xoshiro256PlusPlus,
     split: C::Split,
+    last: Option<usize>,
 ) -> ApproximateCholesky<T, I> {
     let mut graph = EliminationGraph::<T, I, C>::of(&sddm, split);
     drop(sddm);
     let n = graph.n();
-    let mut ordering = MinDegreeOrder::<I>::new(&graph, split);
+    let mut ordering = MinDegreeOrder::<I>::new(&graph, split, last);
     let mut draws = draws;
     let mut clique = CliqueSampler::<T, I, C>::new(split);
     let mut fill = Fill::new();
@@ -49,7 +51,7 @@ fn eliminate<T: Real, I: Index, C: Copies>(
         }
         ordering.update(clique.degree_losses(), &fill);
     }
-    steps.finish(ordering.next_vertex())
+    steps.finish(last.unwrap_or_else(|| ordering.next_vertex()))
 }
 
 /// A step's neighbors follow the previous step's, so the solve's running `usize` offset finds them at any size.

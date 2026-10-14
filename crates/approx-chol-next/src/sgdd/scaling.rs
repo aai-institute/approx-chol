@@ -33,7 +33,7 @@ impl Default for ScalingPolicy {
     }
 }
 
-/// A block's uncertified scaling: present iff its violation exceeded the policy's tolerance.
+/// A block's uncertified or unsettled scaling: present iff its violation exceeded the policy's tolerance or its float decision is unproven.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScalingReport {
@@ -43,6 +43,8 @@ pub struct ScalingReport {
     pub violation: f64,
     /// Whether a certified scaling exists: the shortfall is the budget's, or perhaps the input's.
     pub scaling: Existence,
+    /// Whether `y` settled, proving the float decision; else a singular block may have been grounded.
+    pub settled: bool,
 }
 
 /// Whether a dominance scaling is known to exist.
@@ -70,10 +72,11 @@ impl ScalingPolicy {
         clamped: f64,
     ) -> Option<ScalingReport> {
         let violation = widen(relaxation.violation).max(clamped);
-        (violation > self.tolerance).then_some(ScalingReport {
+        (violation > self.tolerance || !relaxation.settled).then_some(ScalingReport {
             iterations: relaxation.iterations,
             violation,
             scaling: existence,
+            settled: relaxation.settled,
         })
     }
 }
@@ -92,16 +95,18 @@ pub(super) struct Relaxation<T> {
     pub(super) scales: Box<[T]>,
     iterations: usize,
     violation: T,
+    settled: bool,
 }
 
 impl<T: Real> Relaxation<T> {
     /// `None` unless every scale is a positive `T`.
-    fn new(scales: Box<[T]>, iterations: usize, violation: T) -> Option<Self> {
+    fn new(scales: Box<[T]>, iterations: usize, violation: T, settled: bool) -> Option<Self> {
         let positive = scales.iter().all(|&f| f.is_finite() && f > T::zero());
         positive.then_some(Self {
             scales,
             iterations,
             violation,
+            settled,
         })
     }
 }
@@ -114,7 +119,7 @@ pub(super) fn null_scaling<T: Real>(
     let peak =
         (u.clone().zip(diagonal)).fold(0.0f64, |peak, (x, &d)| peak.max(x.abs() * widen(d).sqrt()));
     let scales: Box<[T]> = u.map(|x| narrow::<T>(x.abs() / peak)).collect();
-    Relaxation::new(scales, 0, T::zero())
+    Relaxation::new(scales, 0, T::zero(), true)
 }
 
 /// How far, in `ε`, a row ratio `Σ_j|a_ij|f_j / (a_ii f_i)` may sit from `1`: a settled residual and the dominance slack's floor.
@@ -131,6 +136,6 @@ pub(super) fn relax<T: Real, I: Index>(
     let rounding = (off_diagonal.max_degree() + 3) as f64 * f64::EPSILON;
     let band = (RATIO_BAND * widen(T::epsilon())).max(rounding);
     let iteration = InverseIteration::new(&n, policy.tolerance, band, policy.max_iterations)?;
-    let (y, iterations, violation) = iteration.run();
-    Relaxation::new(n.scales(&y), iterations, narrow(violation))
+    let (y, iterations, violation, settled) = iteration.run();
+    Relaxation::new(n.scales(&y), iterations, narrow(violation), settled)
 }

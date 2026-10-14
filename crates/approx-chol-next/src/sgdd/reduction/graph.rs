@@ -2,12 +2,12 @@ use num_traits::PrimInt;
 
 use super::{into_sgdd, Congruent};
 use crate::input::{BipartiteLaplacian, Laplacian, SignedGraph};
-use crate::sgdd::block::{Grounding, ReduceError, Sgdd};
+use crate::sgdd::block::{ReduceError, Sgdd};
 use crate::sgdd::congruence::Congruence;
 use crate::sgdd::decomposition::{assemble_bipartite, assemble_laplacian, assemble_signed};
 use crate::sgdd::signature;
 use crate::storage::OffDiagonal;
-use crate::{diagonal_in_range, Index, Real};
+use crate::{Index, Real};
 
 impl<'a, T: Real, J: PrimInt, I: Index> TryFrom<Laplacian<'a, T, J>> for Sgdd<T, I> {
     type Error = ReduceError;
@@ -33,23 +33,17 @@ impl<'a, T: Real, J: PrimInt, I: Index> TryFrom<BipartiteLaplacian<'a, T, J>> fo
     /// `M`, a bipartite Laplacian, with the kept side negated folding `A` into it; a lone vertex is dead.
     fn try_from(m: BipartiteLaplacian<'a, T, J>) -> Result<Self, Self::Error> {
         assemble_bipartite::<T, I>(m)?
-            .extract(|(vertices, off_diagonal)| {
+            .extract(|(vertices, off_diagonal, grounding)| {
                 let OffDiagonal::Bipartite(cross) = &off_diagonal else {
                     return Ok(None);
                 };
                 let signs = Congruence::NegateFrom(cross.n_rows());
-                if let Some(i) =
-                    (off_diagonal.abs_row_sums().iter()).position(|&d| !diagonal_in_range(d))
-                {
-                    let vertex = vertices[i].index();
-                    return Err(ReduceError::OutOfRange { vertex });
-                }
                 let m = Congruent {
                     vertices,
                     congruence: signs,
                     off_diagonal,
                 };
-                m.balanced(Grounding::ungrounded()).map(Some)
+                m.balanced(grounding).map(Some)
             })
             .map(into_sgdd)
     }

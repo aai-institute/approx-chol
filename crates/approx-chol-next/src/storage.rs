@@ -143,7 +143,7 @@ impl<T: Real, I: Index> Rows<T, I> {
     }
 
     /// `Σ|x|` per row and per column, in `f64` in row order.
-    fn abs_sums(&self) -> (Vec<f64>, Vec<f64>) {
+    pub(crate) fn abs_sums(&self) -> (Vec<f64>, Vec<f64>) {
         let mut cols = vec![0.0; self.n_cols];
         let rows = (0..self.n_rows())
             .map(|i| {
