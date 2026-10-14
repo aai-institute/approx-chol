@@ -11,10 +11,9 @@ impl<T: Real, I: PrimInt + Sync> Partitioned<Canonical<'_, T, I>> {
     /// Scales and signs each block's `A_c`, closing its surplus from the same rows.
     fn reduce(self, policy: &ScalingPolicy) -> Result<Sgdd<T>, ReduceError> {
         self.extract(|cells| {
-            let a = SymmetricBlock::from(cells);
-            if a.is_dead() {
+            let Some(a) = SymmetricBlock::live(cells) else {
                 return Ok(None);
-            }
+            };
             let scaling = a.scale(policy)?;
             let block = match a.sign(scaling, policy)? {
                 Signed::Folded(m, rows) => {

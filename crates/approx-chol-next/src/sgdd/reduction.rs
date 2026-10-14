@@ -30,28 +30,17 @@ struct SymmetricBlock<T> {
     abs_row_sums: Vec<T>,
 }
 
-impl<T: Real> From<Cells<T>> for SymmetricBlock<T> {
-    fn from((vertices, off_diagonal, diagonal): Cells<T>) -> Self {
-        Self::new(vertices, off_diagonal, diagonal)
-    }
-}
-
 impl<T: Real> SymmetricBlock<T> {
-    /// Panics unless one vertex and one diagonal per row.
-    fn new(vertices: Box<[u32]>, off_diagonal: OffDiagonal<T>, diagonal: Vec<T>) -> Self {
+    /// `None` when dead: components join only nonzeros, so a vertex with nothing to solve is alone with a zero diagonal.
+    fn live((vertices, off_diagonal, diagonal): Cells<T>) -> Option<Self> {
         assert_eq!(vertices.len(), off_diagonal.n(), "one vertex per row");
         assert_eq!(diagonal.len(), off_diagonal.n(), "one diagonal per row");
-        Self {
+        (diagonal != [T::zero()]).then(|| Self {
             vertices,
             abs_row_sums: off_diagonal.abs_row_sums(),
             off_diagonal,
             diagonal,
-        }
-    }
-
-    /// Components join only nonzeros, so a vertex with nothing to solve is alone with a zero diagonal.
-    fn is_dead(&self) -> bool {
-        self.diagonal == [T::zero()]
+        })
     }
 
     /// Rows prove nothing: relaxed past the row test.

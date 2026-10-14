@@ -2,17 +2,13 @@ use std::cell::LazyCell;
 
 use num_traits::PrimInt;
 
-use super::{into_sgdd, Congruent, Signed, SymmetricBlock, SINGULAR_BAND};
-use crate::input::{BipartiteGram, BipartiteLaplacian, FactorWidth2, IntoColumns};
+use super::{Congruent, Signed, SymmetricBlock, SINGULAR_BAND};
+use crate::input::{BipartiteGram, FactorWidth2, IntoColumns};
 use crate::sgdd::block::{Grounding, IrreducibleBlock, ReduceError, Sgdd};
-use crate::sgdd::congruence::Congruence;
-use crate::sgdd::decomposition::{
-    assemble_bipartite, assemble_bipartite_gram, assemble_general, Partition,
-};
+use crate::sgdd::decomposition::{assemble_bipartite_gram, assemble_general, Partition};
 use crate::sgdd::null_vectors::null_vectors;
 use crate::sgdd::scaling::ScalingPolicy;
-use crate::storage::OffDiagonal;
-use crate::{diagonal_in_range, narrow, widen, Real};
+use crate::{narrow, widen, Real};
 
 impl<T: Real> Sgdd<T> {
     /// `A = V Vᵀ`: scales, folds or covers each block as general, deciding floating from `V`.
@@ -20,10 +16,7 @@ impl<T: Real> Sgdd<T> {
         v: FactorWidth2<'_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        let blocks = assemble_general(v)?.extract(|cells| {
-            let a = SymmetricBlock::from(cells);
-            Ok((!a.is_dead()).then_some(a))
-        })?;
+        let blocks = assemble_general(v)?.extract(|cells| Ok(SymmetricBlock::live(cells)))?;
         reduce_gram_blocks(v, blocks, &policy)
     }
 
@@ -34,15 +27,10 @@ impl<T: Real> Sgdd<T> {
     ) -> Result<Self, ReduceError> {
         // Incidence on both sides folds by shape, so `policy` has nothing to scale.
         if let Some(laplacian) = gram.laplacian() {
-            return folded_bipartite(laplacian);
+            return Self::try_from(laplacian);
         }
-        let (c, diagonal) = assemble_bipartite_gram(gram)?;
-        let blocks = c.extract(|(vertices, off_diagonal)| {
-            let diagonal = vertices.iter().map(|&v| diagonal[v as usize]).collect();
-            let a = SymmetricBlock::new(vertices, off_diagonal, diagonal);
-            Ok((!a.is_dead()).then_some(a))
-        })?;
-        drop(diagonal);
+        let blocks =
+            assemble_bipartite_gram(gram)?.extract(|cells| Ok(SymmetricBlock::live(cells)))?;
         reduce_gram_blocks(gram, blocks, &policy)
     }
 }
@@ -66,32 +54,6 @@ fn reduce_gram_blocks<T: Real>(
     let mut blocks = ground_or_float(v, folded)?;
     blocks.extend(frustrated);
     Ok(Sgdd::new(partition.n(), blocks, dead))
-}
-
-/// `M`, a bipartite Laplacian, with the kept side negated folding `A` into it; a lone vertex is dead.
-fn folded_bipartite<T: Real, I: PrimInt>(
-    m: BipartiteLaplacian<'_, T, I>,
-) -> Result<Sgdd<T>, ReduceError> {
-    assemble_bipartite(m)?
-        .extract(|(vertices, off_diagonal)| {
-            let OffDiagonal::Bipartite(cross) = &off_diagonal else {
-                return Ok(None);
-            };
-            let signs = Congruence::NegateFrom(cross.n_rows());
-            if let Some(i) =
-                (off_diagonal.abs_row_sums().iter()).position(|&d| !diagonal_in_range(d))
-            {
-                let vertex = vertices[i];
-                return Err(ReduceError::OutOfRange { vertex });
-            }
-            let m = Congruent {
-                vertices,
-                congruence: signs,
-                off_diagonal,
-            };
-            m.balanced(Grounding::ungrounded()).map(Some)
-        })
-        .map(into_sgdd)
 }
 
 /// Floats each folded block as [`RowSums::folded_surplus`](super::RowSums::folded_surplus) does, else grounds it on `s = M·1`.

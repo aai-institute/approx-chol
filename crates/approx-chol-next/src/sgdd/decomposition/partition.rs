@@ -1,3 +1,6 @@
+use crate::storage::Rows;
+use crate::Real;
+
 /// Every vertex once, components back to back.
 pub(in crate::sgdd) struct Partition {
     order: Vec<u32>,
@@ -7,6 +10,43 @@ pub(in crate::sgdd) struct Partition {
 }
 
 impl Partition {
+    /// The components of `C`'s bipartite graph, its rows numbered before its columns.
+    pub(super) fn of_bipartite<T: Real>(c: &Rows<T>) -> Self {
+        let (n_left, n_right) = (c.n_rows(), c.n_cols());
+        // A row joins its columns; once they are one set, no cell joins anything new.
+        let (mut columns, mut links) = (UnionFind::new(n_right), n_right.saturating_sub(1));
+        'rows: for i in 0..n_left {
+            let mut root = None;
+            for (j, _) in c.row(i) {
+                if links == 0 {
+                    break 'rows;
+                }
+                let other = columns.find(j);
+                root = match root {
+                    Some(root) if root != other => {
+                        links -= 1;
+                        Some(columns.join(root, other))
+                    }
+                    _ => Some(other),
+                };
+            }
+        }
+        // Columns in one set and no empty row: connected without a union per row.
+        if n_left > 0 && links == 0 && (0..n_left).all(|i| c.row_len(i) > 0) {
+            return Self::whole(n_left + n_right);
+        }
+        let mut sets = UnionFind::new(n_left + n_right);
+        for j in 0..n_right {
+            sets.union(n_left + j, n_left + columns.find(j));
+        }
+        for i in 0..n_left {
+            if let Some((j, _)) = c.row(i).next() {
+                sets.union(i, n_left + j);
+            }
+        }
+        sets.into_partition()
+    }
+
     /// One component of `n > 0` vertices: every vertex is its own position.
     pub(super) fn whole(n: usize) -> Self {
         let order: Vec<u32> = (0..n as u32).collect();
