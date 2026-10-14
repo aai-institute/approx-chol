@@ -4,8 +4,8 @@ mod dense;
 use super::clique_tree::SequentialDraws;
 use super::config::{Config, Multiplicity};
 use super::sddm::{Sddm, Sheets};
-use crate::storage::{narrow, widen};
-use crate::Real;
+use crate::narrow;
+use crate::{widen, Real};
 use approximate::ApproximateCholesky;
 use dense::{DenseCholesky, PackedLaplacian};
 
@@ -50,7 +50,10 @@ impl<'a, T: Real> CholeskyInput<'a, T> for Sddm<'a, T> {
 #[derive(Clone, Debug)]
 pub(super) struct Cholesky<T> {
     sheets: Sheets,
-    gauge: Gauge<T>,
+    gauge: Gauge,
+    /// The matrix's dimension over its sheets, ground excluded.
+    n: usize,
+    triangular: Triangular<T>,
 }
 
 impl<T: Real> Cholesky<T> {
@@ -70,45 +73,43 @@ impl<T: Real> Cholesky<T> {
             return (approximate(input.for_approximate()), Some(declined));
         };
         let exact = input.for_dense();
-        let dense = laplacian.factor(&exact);
-        (Self::of(&exact)(Triangular::Dense(dense)), None)
+        let (sheets, gauge, n) = (exact.sheets(), Gauge::of(&exact), exact.n());
+        let triangular = Triangular::Dense(laplacian.factor(&exact));
+        let dense = Self {
+            sheets,
+            gauge,
+            n,
+            triangular,
+        };
+        (dense, None)
     }
 
     fn approximate(sddm: Sddm<'_, T>, multiplicity: Multiplicity, draws: SequentialDraws) -> Self {
-        let of = Self::of(&sddm);
-        of(Triangular::Approximate(approximate::factor(
-            sddm,
-            multiplicity,
-            draws,
-        )))
-    }
-
-    /// The facts it keeps of its matrix, taken before the matrix is consumed.
-    fn of(sddm: &Sddm<'_, T>) -> impl FnOnce(Triangular<T>) -> Self + use<T> {
-        let (sheets, grounded) = (sddm.sheets(), sddm.grounded());
-        move |cholesky| {
-            let gauge = match grounded {
-                true => Gauge::Grounded(cholesky),
-                false => Gauge::Anchored(cholesky),
-            };
-            Self { sheets, gauge }
+        let (sheets, gauge, n) = (sddm.sheets(), Gauge::of(&sddm), sddm.n());
+        let triangular = Triangular::Approximate(approximate::factor(sddm, multiplicity, draws));
+        Self {
+            sheets,
+            gauge,
+            n,
+            triangular,
         }
     }
 
     /// An anchored sheet substitutes on `x` in place; the approximate order may read the ground mid-recurrence, so it sits beside the rows.
-    pub(super) fn scratch_len(&self, kept: usize) -> usize {
-        match (self.sheets, &self.gauge) {
-            (Sheets::One, Gauge::Anchored(_)) => 0,
-            (sheets, Gauge::Grounded(_)) => sheets.count() * kept + 1,
-            (Sheets::Two, Gauge::Anchored(_)) => 2 * kept,
+    pub(super) fn scratch_len(&self) -> usize {
+        match (self.sheets, self.gauge) {
+            (Sheets::One, Gauge::Anchored) => 0,
+            (_, Gauge::Grounded) => self.n + 1,
+            (Sheets::Two, Gauge::Anchored) => self.n,
         }
     }
 
     /// Lifts to the sheets, fixes the gauge, substitutes, and descends.
     pub(super) fn solve(&self, x: &mut [T], scratch: &mut [T]) {
-        match (self.sheets, &self.gauge) {
-            (Sheets::One, Gauge::Anchored(triangular)) => triangular.substitute(x),
-            (Sheets::One, Gauge::Grounded(triangular)) => {
+        let triangular = &self.triangular;
+        match (self.sheets, self.gauge) {
+            (Sheets::One, Gauge::Anchored) => triangular.substitute(x),
+            (Sheets::One, Gauge::Grounded) => {
                 let rows = &mut scratch[..=x.len()];
                 let (ground, values) = rows.split_last_mut().expect("the ground's slot");
                 values.copy_from_slice(x);
@@ -118,8 +119,8 @@ impl<T: Real> Cholesky<T> {
                 let (ground, values) = rows.split_last().expect("the ground's slot");
                 (x.iter_mut().zip(values)).for_each(|(x, &v)| *x = v - *ground);
             }
-            (Sheets::Two, Gauge::Anchored(triangular) | Gauge::Grounded(triangular)) => {
-                let rows = &mut scratch[..self.scratch_len(x.len())];
+            (Sheets::Two, _) => {
+                let rows = &mut scratch[..self.scratch_len()];
                 Sheets::Two.lift(x, rows);
                 // A lift sums to zero, so the ground's right-hand side is zero and its shift cancels in the descent.
                 rows[2 * x.len()..].fill(T::zero());
@@ -131,12 +132,21 @@ impl<T: Real> Cholesky<T> {
 }
 
 /// How the factor's free slot is fixed.
-#[derive(Clone, Debug)]
-enum Gauge<T> {
+#[derive(Clone, Copy, Debug)]
+enum Gauge {
     /// The ground is the appended slot, right-hand side `−Σb`; every entry then shifts so it reads zero.
-    Grounded(Triangular<T>),
+    Grounded,
     /// No surplus: the free slot reads zero, and only a floating component's projection or a cover's descent removes the constant.
-    Anchored(Triangular<T>),
+    Anchored,
+}
+
+impl Gauge {
+    fn of<T: Real>(sddm: &Sddm<'_, T>) -> Self {
+        match sddm.grounded() {
+            true => Self::Grounded,
+            false => Self::Anchored,
+        }
+    }
 }
 
 /// The triangular factor, dense or approximate; both leave one slot uneliminated.

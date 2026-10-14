@@ -2,7 +2,6 @@
 
 use std::borrow::Cow;
 
-use super::clique_tree::Fill;
 use crate::sgdd::Grounding;
 use crate::storage::{Rows, UpperAdjacency};
 use crate::Real;
@@ -76,36 +75,6 @@ impl<'a, T: Real> Sddm<'a, T> {
         let ground = surplus.iter().enumerate().filter(|(_, &s)| s > T::zero());
         laplacian.chain(ground.map(move |(k, &s)| (k as u32, n as u32, s)))
     }
-}
-
-/// Counting-sorts chunks unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.
-pub(super) fn from_fill<T: Real>(n: usize, chunks: Vec<Fill<T>>) -> (UpperAdjacency<T>, Vec<T>) {
-    let mut starts = vec![0; n + 1];
-    // Nested loops, not `flatten()`: the flat iterator cost ~10% on both passes at 1M+ edges.
-    for chunk in &chunks {
-        for &(lo, _, _) in chunk {
-            starts[lo as usize + 1] += 1;
-        }
-    }
-    for i in 0..n {
-        starts[i + 1] += starts[i];
-    }
-    let mut next = starts[..n].to_vec();
-    let mut by_row = vec![(0, T::zero()); starts[n]];
-    for chunk in chunks {
-        for (lo, hi, w) in chunk {
-            by_row[next[lo as usize]] = (hi as usize, w);
-            next[lo as usize] += 1;
-        }
-    }
-    let mut rows = RowSums::new(n);
-    for span in starts.windows(2) {
-        for &(hi, w) in &by_row[span[0]..span[1]] {
-            rows.add(hi, w);
-        }
-        rows.end_row();
-    }
-    rows.finish()
 }
 
 /// `S` row by row, each column's addends summed in arrival order and stored as `−w` by column; column `n` is the row's ground weight.

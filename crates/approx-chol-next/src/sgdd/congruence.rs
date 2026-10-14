@@ -1,8 +1,8 @@
 use std::borrow::Cow;
 
 use super::scaling::ScalingReport;
-use crate::storage::{narrow, widen};
-use crate::Real;
+use crate::narrow;
+use crate::{widen, Real};
 
 /// `F` in `M = F A_c F`, finite and nonzero; a folded `A_c`'s null vector is then `F·1`.
 #[derive(Clone, Debug)]

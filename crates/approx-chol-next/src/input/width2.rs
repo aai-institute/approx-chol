@@ -7,8 +7,9 @@ pub(super) mod signed;
 
 use num_traits::PrimInt;
 
-use crate::storage::widen;
+use crate::widen;
 use crate::Real;
+use edges::Weight;
 
 /// Why a view's `new` rejected its slices.
 #[non_exhaustive]
@@ -41,8 +42,6 @@ pub enum ViewError {
         /// The offending column of `V`.
         column: usize,
     },
-    /// A bipartite Gram's two sides read different `W` slices.
-    WeightsDiffer,
     /// A ground is negative or not finite.
     InvalidGround {
         /// The offending vertex.
@@ -62,7 +61,6 @@ impl core::fmt::Display for ViewError {
             Self::InvalidWeight { column } => {
                 write!(f, "column {column} has a negative or non-finite weight")
             }
-            Self::WeightsDiffer => write!(f, "a Gram's sides read different weights"),
             Self::InvalidGround { vertex } => {
                 write!(f, "vertex {vertex} has a negative or non-finite ground")
             }
@@ -96,15 +94,6 @@ pub(crate) struct Column<T> {
     pub(crate) weight: Weight<T>,
 }
 
-/// One column's entry of `W`; read only through [`bilinear`](Self::bilinear), so no `s²` is formed.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum Weight<T> {
-    /// A view without `W`.
-    Unit,
-    Of(T),
-    SqrtOf(T),
-}
-
 impl<T: Real> Column<T> {
     /// `w·v_a·v_b` in `f64`: every assembly sums its cells there and casts once.
     pub(crate) fn cell(self) -> f64 {
@@ -131,7 +120,7 @@ impl<T: Real> Weight<T> {
     }
 }
 
-/// `V` with at most two nonzeros per column: `values[0][k]` at `a[k]`, `values[1][k]` at `b[k] ≠ a[k]`.
+/// `V` with at most two nonzeros per column: `x[k]` at `a[k]`, `y[k]` at `b[k] ≠ a[k]`.
 #[derive(Clone, Copy, Debug)]
 pub struct FactorWidth2<'a, T, I = u32> {
     n: usize,
@@ -142,9 +131,15 @@ pub struct FactorWidth2<'a, T, I = u32> {
 
 impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
     /// `n` vertices; lengths and `a[k] ≠ b[k] < n` are checked, so a zero value leaves one nonzero.
-    pub fn new(n: usize, a: &'a [I], b: &'a [I], values: [&'a [T]; 2]) -> Result<Self, ViewError> {
+    pub fn new(
+        n: usize,
+        a: &'a [I],
+        b: &'a [I],
+        x: &'a [T],
+        y: &'a [T],
+    ) -> Result<Self, ViewError> {
         let columns = a.len();
-        let lengths = [b.len(), values[0].len(), values[1].len()];
+        let lengths = [b.len(), x.len(), y.len()];
         if let Some(&found) = lengths.iter().find(|&&len| len != columns) {
             return Err(ViewError::LengthMismatch {
                 expected: columns,
@@ -152,7 +147,12 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
             });
         }
         check_ends(n, a, b)?;
-        Ok(Self { n, a, b, values })
+        Ok(Self {
+            n,
+            a,
+            b,
+            values: [x, y],
+        })
     }
 }
 

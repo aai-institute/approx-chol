@@ -1,222 +1,107 @@
 //! `V = [V_l; V_r]`: two width-1 sides on disjoint rows, left rows numbered first.
 
-use std::sync::OnceLock;
-
 use num_traits::PrimInt;
 
 use super::edges::{Edges, Weights};
-use super::{index, BipartiteColumns, Column, IntoColumns, ViewError};
-use crate::storage::{narrow, widen};
+use super::{BipartiteColumns, Column, IntoColumns, ViewError};
 use crate::Real;
 
-/// Each column's row `rows[k]` under `W`, one value vector per side, each side's diagonal summed once.
+/// `V_c` with at most one nonzero per column: `values[k]` at `rows[k]`, `1` for `None`.
 #[derive(Debug)]
-pub struct Incidence<'a, T, I = u32> {
+pub struct FactorWidth1<'a, T, I = u32> {
     n: usize,
     rows: &'a [I],
-    values: Vec<Option<&'a [T]>>,
-    weights: Weights<'a, T>,
-    diagonals: OnceLock<Box<[T]>>,
+    values: Option<&'a [T]>,
 }
 
-impl<'a, T: Real, I: PrimInt> Incidence<'a, T, I> {
-    /// `n` rows; side `c` puts `values[c][k]` in column `k`, `1` for `None`; rows and weights are checked.
-    pub fn new(
-        n: usize,
-        rows: &'a [I],
-        values: Vec<Option<&'a [T]>>,
-        weights: Weights<'a, T>,
-    ) -> Result<Self, ViewError> {
-        let columns = rows.len();
-        if let Some(found) = (values.iter().flatten())
-            .map(|v| v.len())
-            .find(|&len| len != columns)
-        {
-            return Err(ViewError::LengthMismatch {
-                expected: columns,
-                found,
-            });
+impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
+    /// `n` rows; each column's row is below `n`, and values, if any, are one per column.
+    pub fn new(n: usize, rows: &'a [I], values: Option<&'a [T]>) -> Result<Self, ViewError> {
+        let expected = rows.len();
+        if let Some(found) = values.map(<[T]>::len).filter(|&len| len != expected) {
+            return Err(ViewError::LengthMismatch { expected, found });
         }
-        weights.check(columns)?;
         let in_range = |row: &I| row.to_usize().is_some_and(|row| row < n);
         if let Some(column) = rows.iter().position(|row| !in_range(row)) {
             return Err(ViewError::IndexOutOfRange { column });
         }
-        Ok(Self {
-            n,
-            rows,
-            values,
-            weights,
-            diagonals: OnceLock::new(),
-        })
-    }
-
-    /// Side `c`, borrowing this incidence; panics unless it has one.
-    pub fn side(&self, c: usize) -> Side<'_, T, I> {
-        assert!(c < self.values.len(), "the incidence has no side {c}");
-        Side {
-            incidence: self,
-            index: c,
-        }
-    }
-
-    /// Every side's diagonal, side `c` at `c·n..(c+1)·n`, summed in `f64` on first read.
-    fn diagonals(&self) -> &[T] {
-        self.diagonals.get_or_init(|| {
-            let n = self.n;
-            let mut sums = vec![0.0_f64; self.values.len() * n];
-            for (values, sums) in self.values.iter().zip(sums.chunks_exact_mut(n)) {
-                for (k, row) in self.rows.iter().enumerate() {
-                    let v = values.map_or(1.0, |values| widen(values[k]));
-                    sums[index(*row)] += self.weights.at(k).bilinear(v, v);
-                }
-            }
-            sums.into_iter().map(narrow).collect()
-        })
+        Ok(Self { n, rows, values })
     }
 }
 
-/// One side `V_c` of a bipartite Gram, borrowed from its incidence: one nonzero per column.
-#[derive(Debug)]
-pub struct Side<'a, T, I = u32> {
-    incidence: &'a Incidence<'a, T, I>,
-    index: usize,
-}
-
-impl<T, I> Clone for Side<'_, T, I> {
+impl<T, I> Clone for FactorWidth1<'_, T, I> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T, I> Copy for Side<'_, T, I> {}
+impl<T, I> Copy for FactorWidth1<'_, T, I> {}
 
-impl<'a, T: Real, I: PrimInt> Side<'a, T, I> {
-    fn values(self) -> Option<&'a [T]> {
-        self.incidence.values[self.index]
-    }
-
-    fn diagonal(self) -> &'a [T] {
-        let n = self.incidence.n;
-        &self.incidence.diagonals()[self.index * n..][..n]
-    }
-}
-
-/// `A = V W Vᵀ` with `V = [V_l; V_r]`; `W` stays apart as every pair of sides shares it.
-#[derive(Debug)]
+/// `A = V W Vᵀ` with `V = [V_l; V_r]`, both width 1 on disjoint rows, left rows numbered first.
+#[derive(Clone, Copy, Debug)]
 pub struct BipartiteGram<'a, T, I = u32> {
-    left: Side<'a, T, I>,
-    right: Side<'a, T, I>,
+    n_left: usize,
+    edges: Edges<'a, T, I>,
+    values: [Option<&'a [T]>; 2],
+    n: usize,
 }
-
-impl<T, I> Clone for BipartiteGram<'_, T, I> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T, I> Copy for BipartiteGram<'_, T, I> {}
 
 impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
-    /// Both sides share the column count and `W`, and `n_left + n_right` fits a `u32` index.
-    pub fn new(left: Side<'a, T, I>, right: Side<'a, T, I>) -> Result<Self, ViewError> {
-        let (l, r) = (left.incidence, right.incidence);
-        if l.rows.len() != r.rows.len() {
-            return Err(ViewError::LengthMismatch {
-                expected: l.rows.len(),
-                found: r.rows.len(),
-            });
-        }
-        if !l.weights.same(r.weights) {
-            return Err(ViewError::WeightsDiffer);
-        }
-        let count = l.n.saturating_add(r.n);
+    /// Both factors share the column count, the weights are checked, and `n_left + n_right` fits a `u32` index.
+    pub fn new(
+        left: FactorWidth1<'a, T, I>,
+        right: FactorWidth1<'a, T, I>,
+        weights: Weights<'a, T>,
+    ) -> Result<Self, ViewError> {
+        let edges = Edges::new(left.rows, right.rows, weights)?;
+        let count = left.n.saturating_add(right.n);
         if u32::try_from(count).is_err() {
             return Err(ViewError::TooLarge { count });
         }
-        Ok(Self { left, right })
+        Ok(Self {
+            n_left: left.n,
+            edges,
+            values: [left.values, right.values],
+            n: count,
+        })
     }
 
-    /// `A`'s diagonal, left rows then right; summed serially, as a rayon initializer deadlocks.
-    pub(crate) fn diagonals(&self) -> (&'a [T], &'a [T]) {
-        (self.left.diagonal(), self.right.diagonal())
+    /// Both factors incidence: `A = |B| W |B|ᵀ`, read as the Laplacian it folds from.
+    pub(crate) fn laplacian(self) -> Option<BipartiteLaplacian<'a, T, I>> {
+        let [None, None] = self.values else {
+            return None;
+        };
+        Some(BipartiteLaplacian {
+            n_left: self.n_left,
+            n_right: self.n - self.n_left,
+            edges: self.edges,
+        })
     }
 }
 
 impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteGram<'_, T, I> {
     fn n(&self) -> usize {
-        self.left.incidence.n + self.right.incidence.n
+        self.n
     }
 
     fn for_each_column(self, visit: impl FnMut(Column<T>)) {
-        let (l, r) = (self.left.incidence, self.right.incidence);
-        let edges = Edges::checked(l.rows, r.rows, l.weights);
+        let (edges, n_left) = (self.edges, self.n_left);
         let one = |_| T::one();
-        match (self.left.values(), self.right.values()) {
-            (None, None) => edges.for_each_column(l.n, one, one, visit),
-            (Some(a), None) => edges.for_each_column(l.n, |k| a[k], one, visit),
-            (None, Some(b)) => edges.for_each_column(l.n, one, |k| b[k], visit),
-            (Some(a), Some(b)) => edges.for_each_column(l.n, |k| a[k], |k| b[k], visit),
+        match self.values {
+            [None, None] => edges.for_each_column(n_left, one, one, visit),
+            [Some(a), None] => edges.for_each_column(n_left, |k| a[k], one, visit),
+            [None, Some(b)] => edges.for_each_column(n_left, one, |k| b[k], visit),
+            [Some(a), Some(b)] => edges.for_each_column(n_left, |k| a[k], |k| b[k], visit),
         }
     }
 }
 
-/// Weighted bipartite multigraph; its matrix is the signless Laplacian `|B| W |B|ᵀ`, singular by shape.
+/// The same columns' Laplacian `B W Bᵀ`, which negating one side folds back into `|B| W |B|ᵀ`.
 #[derive(Clone, Copy, Debug)]
-pub struct BipartiteGraph<'a, T, I = u32>(BipartiteLaplacian<'a, T, I>);
-
-impl<'a, T: Real, I: PrimInt> BipartiteGraph<'a, T, I> {
-    /// The checks of [`BipartiteLaplacian::new`], so `C ≥ 0` folds.
-    pub fn new(
-        n_left: usize,
-        n_right: usize,
-        left: &'a [I],
-        right: &'a [I],
-        weights: Weights<'a, T>,
-    ) -> Result<Self, ViewError> {
-        BipartiteLaplacian::new(n_left, n_right, left, right, weights).map(Self)
-    }
-
-    /// The same edges' Laplacian `B W Bᵀ`, congruent to this one by negating either side.
-    pub(crate) fn laplacian(self) -> BipartiteLaplacian<'a, T, I> {
-        self.0
-    }
-}
-
-/// Weighted bipartite multigraph; its matrix is the Laplacian `B W Bᵀ`, a Z-matrix and singular by shape.
-#[derive(Clone, Copy, Debug)]
-pub struct BipartiteLaplacian<'a, T, I = u32> {
+pub(crate) struct BipartiteLaplacian<'a, T, I = u32> {
     n_left: usize,
     n_right: usize,
     edges: Edges<'a, T, I>,
-}
-
-impl<'a, T: Real, I: PrimInt> BipartiteLaplacian<'a, T, I> {
-    /// Column `k` joins `left[k] < n_left` and `right[k] < n_right`; indices and weights are checked.
-    pub fn new(
-        n_left: usize,
-        n_right: usize,
-        left: &'a [I],
-        right: &'a [I],
-        weights: Weights<'a, T>,
-    ) -> Result<Self, ViewError> {
-        let edges = Edges::new(left, right, weights)?;
-        let count = n_left.saturating_add(n_right);
-        if u32::try_from(count).is_err() {
-            return Err(ViewError::TooLarge { count });
-        }
-        let in_range = |row: &I, n: usize| row.to_usize().is_some_and(|row| row < n);
-        let mut ends = left.iter().zip(right);
-        if let Some(column) = ends.position(|(l, r)| !in_range(l, n_left) || !in_range(r, n_right))
-        {
-            return Err(ViewError::IndexOutOfRange { column });
-        }
-        Ok(Self {
-            n_left,
-            n_right,
-            edges,
-        })
-    }
 }
 
 impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteLaplacian<'_, T, I> {
@@ -231,7 +116,7 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteLaplacian<'_, T, I> {
 
 impl<T: Real, I: PrimInt> BipartiteColumns<T> for BipartiteGram<'_, T, I> {
     fn n_left(&self) -> usize {
-        self.left.incidence.n
+        self.n_left
     }
 }
 

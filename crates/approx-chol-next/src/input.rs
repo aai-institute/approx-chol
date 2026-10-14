@@ -5,7 +5,8 @@ mod width2;
 
 pub(crate) use csr::{Canonical, UpperCanonical};
 pub use csr::{Csr, CsrError, UpperCsr};
-pub use width2::bipartite::{BipartiteGram, BipartiteGraph, BipartiteLaplacian, Incidence, Side};
+pub(crate) use width2::bipartite::BipartiteLaplacian;
+pub use width2::bipartite::{BipartiteGram, FactorWidth1};
 pub use width2::edges::Weights;
 pub use width2::laplacian::Laplacian;
 pub use width2::signed::SignedGraph;

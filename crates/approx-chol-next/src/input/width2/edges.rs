@@ -2,56 +2,72 @@
 
 use num_traits::PrimInt;
 
-use super::{index, Column, ViewError, Weight};
+use super::{index, Column, ViewError};
 use crate::Real;
 
-/// The diagonal `W`, one nonnegative entry per column of `V`.
+/// The diagonal `W`: per column of `V` as a slice, or one column's entry.
 #[derive(Clone, Copy, Debug)]
-pub enum Weights<'a, T> {
+pub(crate) enum Weighting<S> {
     /// `W = I`.
     Unit,
     /// `W = diag(w)`.
-    Of(&'a [T]),
+    Of(S),
     /// `W = diag(s²)`, for a caller that keeps square roots.
-    SqrtOf(&'a [T]),
+    SqrtOf(S),
 }
 
-impl<T: Real> Weights<'_, T> {
-    /// One entry per column, each `w` finite and nonnegative or `s` finite.
+/// One column's entry of `W`; read only through [`bilinear`](Self::bilinear), so no `s²` is formed.
+pub(crate) type Weight<T> = Weighting<T>;
+
+/// `W`, one nonnegative entry per column of `V`, checked once so every view over the same columns can share it.
+#[derive(Clone, Copy, Debug)]
+pub struct Weights<'a, T>(Weighting<&'a [T]>);
+
+impl<'a, T: Real> Weights<'a, T> {
+    /// `W = I`.
+    pub fn unit() -> Self {
+        Self(Weighting::Unit)
+    }
+
+    /// `W = diag(w)`; each `w` finite and nonnegative.
+    pub fn of(w: &'a [T]) -> Result<Self, ViewError> {
+        check(w, |w| w.is_finite() && w >= T::zero())?;
+        Ok(Self(Weighting::Of(w)))
+    }
+
+    /// `W = diag(s²)`, for a caller that keeps square roots; each `s` finite.
+    pub fn sqrt_of(s: &'a [T]) -> Result<Self, ViewError> {
+        check(s, |s| s.is_finite())?;
+        Ok(Self(Weighting::SqrtOf(s)))
+    }
+
+    /// One entry per column.
     pub(super) fn check(self, columns: usize) -> Result<(), ViewError> {
-        let (entries, valid): (&[T], fn(T) -> bool) = match self {
-            Self::Unit => return Ok(()),
-            Self::Of(w) => (w, |w| w.is_finite() && w >= T::zero()),
-            Self::SqrtOf(s) => (s, |s| s.is_finite()),
+        let found = match self.0 {
+            Weighting::Unit => return Ok(()),
+            Weighting::Of(entries) | Weighting::SqrtOf(entries) => entries.len(),
         };
-        if entries.len() != columns {
-            return Err(ViewError::LengthMismatch {
+        match found == columns {
+            true => Ok(()),
+            false => Err(ViewError::LengthMismatch {
                 expected: columns,
-                found: entries.len(),
-            });
-        }
-        match entries.iter().position(|&x| !valid(x)) {
-            Some(column) => Err(ViewError::InvalidWeight { column }),
-            None => Ok(()),
+                found,
+            }),
         }
     }
+}
 
-    /// The same slice: contents are never compared, so a NaN cannot split one Gram's sides.
-    pub(super) fn same(self, other: Self) -> bool {
-        match (self, other) {
-            (Self::Unit, Self::Unit) => true,
-            (Self::Of(a), Self::Of(b)) | (Self::SqrtOf(a), Self::SqrtOf(b)) => core::ptr::eq(a, b),
-            _ => false,
-        }
+impl<T> Default for Weights<'_, T> {
+    /// `W = I`.
+    fn default() -> Self {
+        Self(Weighting::Unit)
     }
+}
 
-    /// Column `k`'s entry, matched per call: for one-time passes, not the column visit.
-    pub(super) fn at(self, k: usize) -> Weight<T> {
-        match self {
-            Self::Unit => Weight::Unit,
-            Self::Of(w) => Weight::Of(w[k]),
-            Self::SqrtOf(s) => Weight::SqrtOf(s[k]),
-        }
+fn check<T: Real>(entries: &[T], valid: fn(T) -> bool) -> Result<(), ViewError> {
+    match entries.iter().position(|&x| !valid(x)) {
+        Some(column) => Err(ViewError::InvalidWeight { column }),
+        None => Ok(()),
     }
 }
 
@@ -76,11 +92,6 @@ impl<'a, T: Real, I: PrimInt> Edges<'a, T, I> {
         Ok(Self { a, b, weights })
     }
 
-    /// Ends, lengths and weights another view already checked.
-    pub(super) fn checked(a: &'a [I], b: &'a [I], weights: Weights<'a, T>) -> Self {
-        Self { a, b, weights }
-    }
-
     /// Column `k` is `v_a(k) e_a + v_b(k) e_(offset + b)`; matched once, then looped per case.
     #[inline(always)]
     pub(super) fn for_each_column(
@@ -90,10 +101,10 @@ impl<'a, T: Real, I: PrimInt> Edges<'a, T, I> {
         v_b: impl Fn(usize) -> T,
         visit: impl FnMut(Column<T>),
     ) {
-        match self.weights {
-            Weights::Unit => self.columns(offset, v_a, v_b, |_| Weight::Unit, visit),
-            Weights::Of(w) => self.columns(offset, v_a, v_b, |k| Weight::Of(w[k]), visit),
-            Weights::SqrtOf(s) => self.columns(offset, v_a, v_b, |k| Weight::SqrtOf(s[k]), visit),
+        match self.weights.0 {
+            Weighting::Unit => self.columns(offset, v_a, v_b, |_| Weight::Unit, visit),
+            Weighting::Of(w) => self.columns(offset, v_a, v_b, |k| Weight::Of(w[k]), visit),
+            Weighting::SqrtOf(s) => self.columns(offset, v_a, v_b, |k| Weight::SqrtOf(s[k]), visit),
         }
     }
 

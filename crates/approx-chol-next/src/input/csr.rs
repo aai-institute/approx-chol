@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use num_traits::PrimInt;
 
-use crate::storage::in_range;
+use crate::in_range;
 use crate::Real;
 
 /// Borrowed CSR claiming a symmetric `A`; the claim is checked when it becomes an [`Sgdd`](crate::Sgdd).

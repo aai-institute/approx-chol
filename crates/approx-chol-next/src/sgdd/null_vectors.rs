@@ -1,5 +1,5 @@
 use crate::input::{Column, IntoColumns};
-use crate::storage::widen;
+use crate::widen;
 use crate::Real;
 
 /// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is.

@@ -1,28 +1,6 @@
 //! Sparse storage shapes every stage reads.
 
-use std::sync::OnceLock;
-
 use crate::Real;
-
-/// Finite, and zero or at least `MIN_POSITIVE/EPSILON`, so no product turns subnormal (#163).
-pub(crate) fn in_range<T: Real>(x: T) -> bool {
-    x.is_finite() && (x == T::zero() || x.abs() >= T::min_positive_value() / T::epsilon())
-}
-
-/// Every `f64` sum starts here: a `Float` always casts up.
-pub(crate) fn widen<T: Real>(x: T) -> f64 {
-    x.to_f64().expect("a float casts to f64")
-}
-
-/// An `f64` sum in `T`: past `T::MAX` it reads infinite, which every range screen rejects.
-pub(crate) fn narrow<T: Real>(sum: f64) -> T {
-    T::from(sum).unwrap_or_else(T::infinity)
-}
-
-/// In range and at most `MAX/4`, so every row sum, pivot and surplus stays finite.
-pub(crate) fn diagonal_in_range<T: Real>(d: T) -> bool {
-    in_range(d) && d <= T::max_value() / (T::one() + T::one() + T::one() + T::one())
-}
 
 /// Compressed sparse rows.
 #[derive(Clone, Debug)]
@@ -44,6 +22,7 @@ impl<T: Real> Rows<T> {
             "rows end at the last entry"
         );
         assert_eq!(indices.len(), values.len(), "one value per entry");
+        #[cfg(debug_assertions)]
         for span in ptrs.windows(2) {
             assert!(span[0] <= span[1], "row pointers ascend");
             let row = &indices[span[0]..span[1]];
@@ -81,7 +60,17 @@ impl<T: Real> Rows<T> {
         (self.indices[span.clone()].iter().map(|&j| j as usize)).zip(&self.values[span])
     }
 
-    /// Serial: `ct` builds it lazily inside parallel solves, where a rayon initializer deadlocks.
+    /// Each value mapped, the pattern kept.
+    pub(crate) fn map<U: Real>(self, f: impl FnMut(T) -> U) -> Rows<U> {
+        Rows {
+            ptrs: self.ptrs,
+            indices: self.indices,
+            values: self.values.into_iter().map(f).collect(),
+            n_cols: self.n_cols,
+        }
+    }
+
+    /// Serial: a factor builds it lazily inside parallel solves, where a rayon initializer deadlocks.
     pub(crate) fn transpose(&self) -> Self {
         let mut ptrs = vec![0; self.n_cols + 1];
         for &j in &self.indices {
@@ -115,7 +104,7 @@ impl<T: Real> Rows<T> {
             .map(|i| {
                 let mut sum = 0.0;
                 for (j, x) in self.row(i) {
-                    let x = widen(x.abs());
+                    let x = crate::widen(x.abs());
                     sum += x;
                     cols[j] += x;
                 }
@@ -139,16 +128,16 @@ impl<T: Real> Rows<T> {
         (rows, cols)
     }
 
-    /// `x_ij ← r_i x_ij c_j`; `None` if a product leaves [`in_range`] or reaches zero.
-    fn scaled(self, r: &[T], c: &[T]) -> Option<Self> {
-        self.scaled_seeing(r, c, |_, _, _| {})
+    /// `x_ij ← r_i x_ij c_j` for signs `r`, `c`: exact, so never out of range.
+    fn signed(self, r: &[T], c: &[T]) -> Self {
+        (self.scaled_seeing(r, c, |_, _, _| {})).expect("a sign moves no magnitude")
     }
 
     /// As [`scaled`](Self::scaled), with the new [`abs_sums`](Self::abs_sums) from the same pass.
     fn scaled_abs_sums(self, r: &[T], c: &[T]) -> Option<(Self, Vec<f64>, Vec<f64>)> {
         let (mut rows, mut cols) = (vec![0.0; self.n_rows()], vec![0.0; self.n_cols]);
         let scaled = self.scaled_seeing(r, c, |i, j, x| {
-            let x = widen(x.abs());
+            let x = crate::widen(x.abs());
             rows[i] += x;
             cols[j] += x;
         })?;
@@ -166,7 +155,7 @@ impl<T: Real> Rows<T> {
             for p in span[0]..span[1] {
                 let j = self.indices[p] as usize;
                 let x = r[i] * self.values[p] * c[j];
-                if x == T::zero() || !in_range(x) {
+                if x == T::zero() || !crate::in_range(x) {
                     return None;
                 }
                 self.values[p] = x;
@@ -187,9 +176,11 @@ impl<T: Real> UpperAdjacency<T> {
     /// Panics unless square, every column above its row, and no stored zero.
     pub(crate) fn new(rows: Rows<T>) -> Self {
         assert_eq!(rows.n_rows(), rows.n_cols, "square");
-        let upper = (0..rows.n_rows()).all(|i| rows.row(i).all(|(j, _)| j > i));
-        assert!(upper, "every column above its row");
-        assert!(!rows.values.contains(&T::zero()), "no stored zero");
+        debug_assert!(
+            (0..rows.n_rows()).all(|i| rows.row(i).all(|(j, _)| j > i)),
+            "every column above its row"
+        );
+        debug_assert!(!rows.values.contains(&T::zero()), "no stored zero");
         Self { rows }
     }
 
@@ -203,7 +194,7 @@ impl<T: Real> UpperAdjacency<T> {
         upper
             .iter()
             .zip(lower)
-            .map(|(u, l)| narrow(u + l))
+            .map(|(u, l)| crate::narrow(u + l))
             .collect()
     }
 
@@ -222,27 +213,27 @@ impl<T: Real> UpperAdjacency<T> {
         self.rows.row(i)
     }
 
-    /// `F X F`; `None` if an entry leaves [`in_range`].
-    pub(crate) fn scaled(self, f: &[T]) -> Option<Self> {
-        let rows = self.rows.scaled(f, f)?;
-        Some(Self { rows })
+    /// `S X S` for signs `S`.
+    pub(crate) fn signed(self, s: &[T]) -> Self {
+        Self {
+            rows: self.rows.signed(s, s),
+        }
     }
 
     /// As [`scaled`](Self::scaled), with the new row sums from the same pass.
     pub(crate) fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
         let (rows, upper, lower) = self.rows.scaled_abs_sums(f, f)?;
         let sums = (upper.iter().zip(lower))
-            .map(|(u, l)| narrow(u + l))
+            .map(|(u, l)| crate::narrow(u + l))
             .collect();
         Some((Self { rows }, sums))
     }
 }
 
-/// One component's `C` of `[D₁ C; Cᵀ D₂]`, rows the eliminated side, `Cᵀ` built on first read.
+/// One component's `C` of `[D₁ C; Cᵀ D₂]`, rows the eliminated side.
 #[derive(Clone, Debug)]
 pub(crate) struct CrossBlock<T> {
     c: Rows<T>,
-    ct: OnceLock<Rows<T>>,
 }
 
 impl<T: Real> CrossBlock<T> {
@@ -250,11 +241,8 @@ impl<T: Real> CrossBlock<T> {
     pub(crate) fn new(c: Rows<T>) -> Self {
         assert!(c.n_rows() > 0 && c.n_cols() > 0, "both sides hold a vertex");
         assert!(c.n_rows() >= c.n_cols(), "the larger side is eliminated");
-        assert!(!c.values.contains(&T::zero()), "no stored zero");
-        Self {
-            c,
-            ct: OnceLock::new(),
-        }
+        debug_assert!(!c.values.contains(&T::zero()), "no stored zero");
+        Self { c }
     }
 
     pub(crate) fn n(&self) -> usize {
@@ -273,14 +261,14 @@ impl<T: Real> CrossBlock<T> {
         &self.c
     }
 
-    pub(crate) fn ct(&self) -> &Rows<T> {
-        self.ct.get_or_init(|| self.c.transpose())
-    }
-
     /// `Σ|c|` per row of `[0 C; Cᵀ 0]`: eliminated rows, then kept ones.
     pub(crate) fn abs_row_sums(&self) -> Vec<T> {
         let (eliminated, kept) = self.c.abs_sums();
-        eliminated.into_iter().chain(kept).map(narrow).collect()
+        eliminated
+            .into_iter()
+            .chain(kept)
+            .map(crate::narrow)
+            .collect()
     }
 
     pub(crate) fn nonpositive(&self) -> bool {
@@ -298,17 +286,17 @@ impl<T: Real> CrossBlock<T> {
         eliminated.into_iter().chain(kept).collect()
     }
 
-    /// `F C F` over the block's local order, a fresh block so no stale `Cᵀ` survives; `None` out of range.
-    pub(crate) fn scaled(self, f: &[T]) -> Option<Self> {
-        let (eliminated, kept) = f.split_at(self.n_eliminated());
-        Some(Self::new(self.c.scaled(eliminated, kept)?))
+    /// `S C S` over the block's local order.
+    pub(crate) fn signed(self, s: &[T]) -> Self {
+        let (eliminated, kept) = s.split_at(self.n_eliminated());
+        Self::new(self.c.signed(eliminated, kept))
     }
 
     /// As [`scaled`](Self::scaled), with the new row sums from the same pass.
     pub(crate) fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
         let (eliminated, kept) = f.split_at(self.n_eliminated());
         let (c, rows, cols) = self.c.scaled_abs_sums(eliminated, kept)?;
-        let sums = rows.into_iter().chain(cols).map(narrow).collect();
+        let sums = rows.into_iter().chain(cols).map(crate::narrow).collect();
         Some((Self::new(c), sums))
     }
 }

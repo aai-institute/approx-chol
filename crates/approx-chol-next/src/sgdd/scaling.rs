@@ -1,7 +1,9 @@
 mod cg;
 
-use crate::storage::{narrow, widen, CrossBlock, UpperAdjacency};
-use crate::Real;
+pub(super) use cg::reduced_cg;
+
+use crate::storage::UpperAdjacency;
+use crate::{narrow, widen, Real};
 
 /// Certification policy for a dominance scaling; a deficit left at hand-over is clamped and reported.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -202,31 +204,4 @@ fn ratios<T: Real>(adjacency: &UpperAdjacency<T>, diagonal: &[f64], scales: &[f6
     for ((ti, &d), &f) in t.iter_mut().zip(diagonal).zip(scales) {
         *ti /= d * f;
     }
-}
-
-/// CG on `α² − NᵀN` over the smaller side; `None` when no scale stays a positive `T`.
-pub(super) fn reduced_cg<T: Real>(
-    cross: &CrossBlock<T>,
-    diagonal: &[T],
-    policy: &ScalingPolicy,
-) -> Option<Relaxation<T>> {
-    let inv_sqrt: Vec<f64> = diagonal.iter().map(|&d| 1.0 / widen(d).sqrt()).collect();
-    let operator = cg::NormalizedCrossOperator::new(cross, &inv_sqrt, 1.0 + 0.5 * policy.tolerance);
-    let initial = Relaxation {
-        scales: vec![1.0; diagonal.len()].into(),
-        iterations: 0,
-        violation: operator.unit_violation(),
-    };
-    let relaxation = cg::reduced_cg_scaling(&operator, initial, policy)?;
-    let scales: Box<[T]> = (relaxation.scales.iter().zip(&inv_sqrt))
-        .map(|(&mu, &normalizer)| narrow::<T>(mu * normalizer))
-        .collect();
-    if !scales.iter().all(|&f| f.is_finite() && f > T::zero()) {
-        return None;
-    }
-    Some(Relaxation {
-        scales,
-        iterations: relaxation.iterations,
-        violation: narrow(relaxation.violation.max(0.0)),
-    })
 }

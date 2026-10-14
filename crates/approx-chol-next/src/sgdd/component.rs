@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use super::congruence::Congruence;
 use super::scaling::ScalingReport;
-use crate::storage::{diagonal_in_range, CrossBlock, UpperAdjacency};
-use crate::Real;
+use crate::input::CsrError;
+use crate::storage::{CrossBlock, UpperAdjacency};
+use crate::{diagonal_in_range, Real};
 
 /// Where a component sits in `A`: its vertices, and the congruence between `A_c` and `M`.
 #[derive(Debug)]
@@ -63,7 +64,7 @@ impl<T: Real> Balance<T> {
     }
 }
 
-/// The surplus `s = diag(M) − Σ|offdiag(M)|` closing `M` into an SDDM; none leaves it singular.
+/// The surplus `s = diag(M) − Σ|offdiag(M)|` closing `M` into an SDDM; none is `σ = 0`, singular only when balanced.
 #[derive(Clone, Debug)]
 pub(crate) struct Grounding<T>(Option<Box<[T]>>);
 
@@ -115,53 +116,6 @@ impl<T: Real> OffDiagonal<T> {
         }
     }
 
-    /// `Σ_j |a_ij|` per row in local order: dominance, surplus and pivots all start here.
-    pub(super) fn abs_row_sums(&self) -> Vec<T> {
-        match self {
-            Self::General(adjacency) => adjacency.abs_row_sums(),
-            Self::Bipartite(cross) => cross.abs_row_sums(),
-        }
-    }
-
-    /// Entries per row in local order: the rounding a row sum can carry.
-    pub(super) fn degrees(&self) -> Vec<usize> {
-        match self {
-            Self::General(adjacency) => adjacency.degrees(),
-            Self::Bipartite(cross) => cross.degrees(),
-        }
-    }
-
-    /// `F X F`; `None` where an entry leaves [`in_range`](crate::storage::in_range).
-    pub(super) fn congruent(self, f: &Congruence<T>) -> Option<Self> {
-        match f.factors(self.n()) {
-            None => Some(self),
-            Some(factors) => self.scaled(&factors),
-        }
-    }
-
-    fn scaled(self, f: &[T]) -> Option<Self> {
-        Some(match self {
-            Self::General(adjacency) => Self::General(adjacency.scaled(f)?),
-            Self::Bipartite(cross) => {
-                Self::Bipartite(Arc::new(Arc::unwrap_or_clone(cross).scaled(f)?))
-            }
-        })
-    }
-
-    /// As [`scaled`](Self::scaled), with the new row sums from the same pass.
-    pub(super) fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
-        Some(match self {
-            Self::General(adjacency) => {
-                let (adjacency, sums) = adjacency.scaled_abs_row_sums(f)?;
-                (Self::General(adjacency), sums)
-            }
-            Self::Bipartite(cross) => {
-                let (cross, sums) = Arc::unwrap_or_clone(cross).scaled_abs_row_sums(f)?;
-                (Self::Bipartite(Arc::new(cross)), sums)
-            }
-        })
-    }
-
     pub(super) fn nonpositive(&self) -> bool {
         match self {
             Self::General(adjacency) => adjacency.nonpositive(),
@@ -188,6 +142,9 @@ impl<T: Real> Component<T> {
         let n = frame.vertices().len();
         assert_eq!(off_diagonal.n(), n, "one row per vertex");
         assert!(balance.grounding().fits(n), "one surplus per row");
+        if let Balance::Balanced(_) = balance {
+            debug_assert!(off_diagonal.nonpositive(), "a balanced M is a Z-matrix");
+        }
         if !balance.ground_in_range() {
             let vertex = frame.vertices()[0];
             return Err(ReduceError::OutOfRange { vertex });
@@ -272,9 +229,9 @@ impl<T: Real> Sgdd<T> {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReduceError {
-    /// No positive diagonal scaling makes the component weakly dominant: `diag − |offdiag|` is not PSD.
-    NotGdd {
-        /// The component's first vertex in local order, in `A`'s numbering.
+    /// A diagonal entry is not positive, so no positive scaling makes its row dominant.
+    NonpositiveDiagonal {
+        /// The entry's vertex, in `A`'s numbering.
         vertex: u32,
     },
     /// A scale or scaled entry left the representable range, or the component passes `1/ε` vertices.
@@ -292,10 +249,9 @@ pub enum ReduceError {
 impl core::fmt::Display for ReduceError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::NotGdd { vertex } => write!(
-                f,
-                "the component of vertex {vertex} is not generalized diagonally dominant"
-            ),
+            Self::NonpositiveDiagonal { vertex } => {
+                write!(f, "vertex {vertex} has a nonpositive diagonal")
+            }
             Self::Unscalable { vertex } => write!(
                 f,
                 "scaling the component of vertex {vertex} leaves the representable range"
@@ -311,3 +267,40 @@ impl core::fmt::Display for ReduceError {
 }
 
 impl std::error::Error for ReduceError {}
+
+/// Why a CSR did not become an [`Sgdd`].
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FromCsrError {
+    /// The arrays are not a symmetric matrix.
+    Csr(CsrError),
+    /// A component has no SDDM form.
+    Reduce(ReduceError),
+}
+
+impl From<CsrError> for FromCsrError {
+    fn from(error: CsrError) -> Self {
+        Self::Csr(error)
+    }
+}
+
+impl From<ReduceError> for FromCsrError {
+    fn from(error: ReduceError) -> Self {
+        Self::Reduce(error)
+    }
+}
+
+impl core::fmt::Display for FromCsrError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("cannot convert CSR to Sgdd")
+    }
+}
+
+impl std::error::Error for FromCsrError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Csr(error) => Some(error),
+            Self::Reduce(error) => Some(error),
+        }
+    }
+}

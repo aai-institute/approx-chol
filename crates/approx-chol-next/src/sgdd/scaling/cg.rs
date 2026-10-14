@@ -1,5 +1,5 @@
-use crate::storage::{widen, CrossBlock, Rows};
-use crate::Real;
+use crate::storage::{CrossBlock, Rows};
+use crate::{narrow, widen, Real};
 
 use super::{Relaxation, ScalingPolicy};
 
@@ -8,9 +8,9 @@ fn dot(left: &[f64], right: &[f64]) -> f64 {
 }
 
 /// `N = D^{-1/2}|C|D^{-1/2}` between the kept (small) and eliminated (large) sides.
-pub(super) struct NormalizedCrossOperator<'a, T> {
+struct NormalizedCrossOperator<'a, T> {
     small_to_large: &'a Rows<T>,
-    large_to_small: &'a Rows<T>,
+    large_to_small: Rows<T>,
     small_inv_sqrt: &'a [f64],
     large_inv_sqrt: &'a [f64],
     /// `α > 1` keeps `α² − NᵀN` definite, so a singular component never lands on its Perron vector.
@@ -25,11 +25,11 @@ enum CandidateKind {
 
 impl<'a, T: Real> NormalizedCrossOperator<'a, T> {
     /// `inv_sqrt` in local order, eliminated rows first.
-    pub(super) fn new(cross: &'a CrossBlock<T>, inv_sqrt: &'a [f64], shift: f64) -> Self {
+    fn new(cross: &'a CrossBlock<T>, inv_sqrt: &'a [f64], shift: f64) -> Self {
         let (large_inv_sqrt, small_inv_sqrt) = inv_sqrt.split_at(cross.n_eliminated());
         Self {
             small_to_large: cross.c(),
-            large_to_small: cross.ct(),
+            large_to_small: cross.c().transpose(),
             small_inv_sqrt,
             large_inv_sqrt,
             shift,
@@ -56,7 +56,7 @@ impl<'a, T: Real> NormalizedCrossOperator<'a, T> {
 
     fn apply_small(&self, input: &[f64], output: &mut [f64]) {
         multiply_normalized(
-            self.large_to_small,
+            &self.large_to_small,
             self.small_inv_sqrt,
             self.large_inv_sqrt,
             input,
@@ -85,7 +85,7 @@ impl<'a, T: Real> NormalizedCrossOperator<'a, T> {
     }
 
     /// `max_i (N·1)_i − 1`, the violation of `μ = 1`.
-    pub(super) fn unit_violation(&self) -> f64 {
+    fn unit_violation(&self) -> f64 {
         let mut large = vec![0.0; self.large_len()];
         let mut small = vec![0.0; self.small_len()];
         self.apply_large(&vec![1.0; self.small_len()], &mut large);
@@ -251,7 +251,7 @@ impl ReducedCg {
     }
 }
 
-pub(super) fn reduced_cg_scaling<T: Real>(
+fn reduced_cg_scaling<T: Real>(
     operator: &NormalizedCrossOperator<'_, T>,
     initial: Relaxation<f64>,
     scaling: &ScalingPolicy,
@@ -323,5 +323,32 @@ pub(super) fn reduced_cg_scaling<T: Real>(
     Some(Relaxation {
         iterations: scaling.max_iterations,
         ..best
+    })
+}
+
+/// CG on `α² − NᵀN` over the smaller side; `None` when no scale stays a positive `T`.
+pub(in crate::sgdd) fn reduced_cg<T: Real>(
+    cross: &CrossBlock<T>,
+    diagonal: &[T],
+    policy: &ScalingPolicy,
+) -> Option<Relaxation<T>> {
+    let inv_sqrt: Vec<f64> = diagonal.iter().map(|&d| 1.0 / widen(d).sqrt()).collect();
+    let operator = NormalizedCrossOperator::new(cross, &inv_sqrt, 1.0 + 0.5 * policy.tolerance);
+    let initial = Relaxation {
+        scales: vec![1.0; diagonal.len()].into(),
+        iterations: 0,
+        violation: operator.unit_violation(),
+    };
+    let relaxation = reduced_cg_scaling(&operator, initial, policy)?;
+    let scales: Box<[T]> = (relaxation.scales.iter().zip(&inv_sqrt))
+        .map(|(&mu, &normalizer)| narrow::<T>(mu * normalizer))
+        .collect();
+    if !scales.iter().all(|&f| f.is_finite() && f > T::zero()) {
+        return None;
+    }
+    Some(Relaxation {
+        scales,
+        iterations: relaxation.iterations,
+        violation: narrow(relaxation.violation.max(0.0)),
     })
 }

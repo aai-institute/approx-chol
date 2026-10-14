@@ -1,6 +1,5 @@
 use approx_chol_next::input::{
-    BipartiteGram, BipartiteGraph, BipartiteLaplacian, Csr, FactorWidth2, Incidence, Laplacian,
-    SignedGraph, UpperCsr, Weights,
+    BipartiteGram, Csr, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsr, Weights,
 };
 use approx_chol_next::{factorize, CliqueRule, Config, Existence, ScalingPolicy, Sgdd};
 
@@ -99,7 +98,7 @@ fn csr_and_upper_share_reduction_and_solve_bits() {
 fn gram_separates_folded_scaled_and_frustrated_components() {
     let (a, b) = ([0, 1, 3, 4, 3], [1, 2, 4, 5, 5]);
     let (x, y) = ([1.3, 2.7, 1.0, 1.0, 1.0], [-2.7, -4.1, 1.0, 1.0, 1.0]);
-    let gram = FactorWidth2::new(7, &a, &b, [&x, &y]).unwrap();
+    let gram = FactorWidth2::new(7, &a, &b, &x, &y).unwrap();
     let reduced = Sgdd::from_gram(gram, ScalingPolicy::new(0.0, 0).unwrap()).unwrap();
     assert_eq!(
         reduced
@@ -119,7 +118,7 @@ fn shape_ground_and_signature_match_their_gram_matrices() {
     let weights = [1.0, 4.0, 9.0, 16.0];
     let (x, y) = ([1.0, 2.0, 3.0, 4.0], [-1.0, -2.0, -3.0, -4.0]);
     let ground = [0.25, 0.0, 0.0, 0.0];
-    let laplacian = Laplacian::new(4, &a, &b, Weights::Of(&weights)).unwrap();
+    let laplacian = Laplacian::new(4, &a, &b, Weights::of(&weights).unwrap()).unwrap();
     let floating = Sgdd::try_from(laplacian).unwrap();
     assert!(floating.components()[0].floats());
     let grounded = Sgdd::try_from(laplacian.grounded(&ground).unwrap()).unwrap();
@@ -129,7 +128,7 @@ fn shape_ground_and_signature_match_their_gram_matrices() {
     expected[0][0] += ground[0];
     solve_residual(&grounded, &expected);
     let signs = [true, false, true, false];
-    let signed = SignedGraph::new(4, &a, &b, &signs, Weights::Of(&weights)).unwrap();
+    let signed = SignedGraph::new(4, &a, &b, &signs, Weights::of(&weights).unwrap()).unwrap();
     let signed = Sgdd::try_from(signed).unwrap();
     let y = [1.0, -2.0, 3.0, -4.0];
     assert!(signed.components()[0].floats());
@@ -137,32 +136,34 @@ fn shape_ground_and_signature_match_their_gram_matrices() {
 }
 
 #[test]
-fn bipartite_shapes_and_gram_preserve_both_sides() {
+fn bipartite_incidence_and_valued_grams_preserve_both_sides() {
     let (left, right) = ([0, 0, 1, 1, 2, 2], [0, 1, 0, 1, 0, 1]);
-    let graph = BipartiteGraph::<f64>::new(3, 2, &left, &right, Weights::Unit).unwrap();
-    let lap = BipartiteLaplacian::<f64>::new(3, 2, &left, &right, Weights::Unit).unwrap();
-    let li = Incidence::new(3, &left, vec![None], Weights::<f64>::Unit).unwrap();
-    let ri = Incidence::new(2, &right, vec![None], Weights::<f64>::Unit).unwrap();
-    let gram = BipartiteGram::new(li.side(0), ri.side(0)).unwrap();
-    let graph = Sgdd::try_from(graph).unwrap();
-    let lap = Sgdd::try_from(lap).unwrap();
-    let gram = Sgdd::from_bipartite_gram(gram, ScalingPolicy::default()).unwrap();
-    assert!(graph.components()[0].floats());
-    assert!(lap.components()[0].floats());
-    assert!(gram.components()[0].floats());
+    let (ones, minus) = ([1.0; 6], [-1.0; 6]);
+    let gram = |values_l, values_r| {
+        let l = FactorWidth1::new(3, &left, values_l).unwrap();
+        let r = FactorWidth1::new(2, &right, values_r).unwrap();
+        let gram = BipartiteGram::new(l, r, Weights::default()).unwrap();
+        Sgdd::from_bipartite_gram(gram, ScalingPolicy::default()).unwrap()
+    };
+    let incidence = gram(None, None);
+    let valued = gram(Some(&ones[..]), Some(&ones[..]));
+    let laplacian = gram(None, Some(&minus[..]));
+    for sgdd in [&incidence, &valued, &laplacian] {
+        assert!(sgdd.components()[0].floats());
+    }
     let right = right.map(|j| j + 3);
-    let positive = matrix(5, &left, &right, &[1.0; 6], &[1.0; 6]);
-    let negative = matrix(5, &left, &right, &[1.0; 6], &[-1.0; 6]);
-    solve_residual(&graph, &positive);
-    solve_residual(&gram, &positive);
-    solve_residual(&lap, &negative);
+    let positive = matrix(5, &left, &right, &ones, &ones);
+    let negative = matrix(5, &left, &right, &ones, &minus);
+    solve_residual(&incidence, &positive);
+    solve_residual(&valued, &positive);
+    solve_residual(&laplacian, &negative);
 }
 
 #[test]
 fn exhausted_scaling_reports_the_inputs_existence_guarantee() {
     let (a, b) = ([0, 1, 0], [1, 2, 2]);
     let (x, y) = ([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
-    let gram = FactorWidth2::new(3, &a, &b, [&x, &y]).unwrap();
+    let gram = FactorWidth2::new(3, &a, &b, &x, &y).unwrap();
     let policy = ScalingPolicy::new(0.0, 0).unwrap();
     let sgdd = Sgdd::from_gram(gram, policy).unwrap();
     assert_eq!(

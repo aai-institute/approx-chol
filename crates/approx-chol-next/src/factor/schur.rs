@@ -8,10 +8,10 @@ use rayon::prelude::*;
 use super::cholesky::CholeskyInput;
 use super::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single, StarDraws, StarStreams};
 use super::config::{CliqueRule, InnerParallelism, Multiplicity};
-use super::sddm::{crosses, from_fill, RowSums, Sddm, Sheets};
+use super::sddm::{crosses, RowSums, Sddm, Sheets};
 use crate::sgdd::Grounding;
-use crate::storage::{narrow, widen, CrossBlock, UpperAdjacency};
-use crate::Real;
+use crate::storage::{CrossBlock, Rows, UpperAdjacency};
+use crate::{narrow, widen, Real};
 
 /// `M`'s cross block and the pivots `d_e`, applied as two products because the block's steps commute.
 #[derive(Clone, Debug)]
@@ -19,35 +19,72 @@ pub(super) struct BlockElimination<T> {
     /// `M`'s own `C`, signs kept and shared with the component: a frustrated component's cover never doubles it.
     cross: Arc<CrossBlock<T>>,
     inv_pivot: Box<[T]>,
+    /// `Cᵀ` where the larger side passes 10 000 rows (0.6's threshold), so `Allow` may split the solve by kept row.
+    ct: Option<Rows<T>>,
 }
 
 impl<T: Real> BlockElimination<T> {
+    /// Pivots are `Σ|c_ek| + s_e`, the same on both sheets of a cover.
+    pub(super) fn new(cross: &Arc<CrossBlock<T>>, grounding: &Grounding<T>) -> Self {
+        let surplus = grounding.surplus();
+        let c = cross.c();
+        let inv_pivot = (0..cross.n_eliminated())
+            .map(|e| {
+                let s_e = surplus.map_or(0.0, |s| widen(s[e]));
+                let d_e = c.row(e).fold(s_e, |d, (_, &c)| d + widen(c.abs()));
+                T::one() / narrow::<T>(d_e)
+            })
+            .collect();
+        let ct = (cross.n_eliminated() > 10_000).then(|| c.transpose());
+        Self {
+            cross: Arc::clone(cross),
+            inv_pivot,
+            ct,
+        }
+    }
+
+    /// `S` on `sheets`, built only once its Cholesky arm is chosen.
+    pub(super) fn complement<'a>(
+        &'a self,
+        sheets: Sheets,
+        grounding: &'a Grounding<T>,
+        rule: CliqueRule,
+        stars: StarStreams,
+    ) -> SchurComplement<'a, T> {
+        SchurComplement {
+            elimination: self,
+            sheets,
+            grounding,
+            rule,
+            stars,
+        }
+    }
+
     pub(super) fn n_eliminated(&self) -> usize {
         self.inv_pivot.len()
     }
 
-    /// `2·nnz(C) + n_eliminated + n_kept`, within's estimate, when it [`splits`](Self::splits), else `0`.
+    /// `2·nnz(C) + n_eliminated + n_kept`, within's estimate, when it splits, else `0`.
     pub(super) fn splittable_work(&self) -> usize {
-        match self.splits() {
-            true => 2 * self.cross.c().nnz() + self.cross.n(),
-            false => 0,
+        match self.ct {
+            Some(_) => 2 * self.cross.c().nnz() + self.cross.n(),
+            None => 0,
         }
     }
 
-    /// The larger side past 10 000 rows (0.6's threshold): the one test `Allow` and the work estimate share.
-    fn splits(&self) -> bool {
-        self.cross.n_eliminated() > 10_000
+    /// `Cᵀ`, borrowed where it is kept.
+    fn transpose(&self) -> Cow<'_, Rows<T>> {
+        (self.ct.as_ref()).map_or_else(|| Cow::Owned(self.cross.c().transpose()), Cow::Borrowed)
     }
 
-    /// `y_e = D_e⁻¹ b_e`, then each `b_k` subtracts `c_ek y_e` term by term in ascending `e`: scattered through `C`, or gathered through `Cᵀ` when `Allow` splits it, the same bits either way, so only a split builds `Cᵀ`.
+    /// `y_e = D_e⁻¹ b_e`, then each `b_k` subtracts `c_ek y_e` term by term in ascending `e`: scattered through `C`, or gathered through `Cᵀ` under `Allow` where it is kept, the same bits either way.
     pub(super) fn forward(&self, x: &mut [T], inner: InnerParallelism) {
         let (eliminated, kept) = x.split_at_mut(self.n_eliminated());
         for (y, &inv_pivot) in eliminated.iter_mut().zip(&self.inv_pivot) {
             *y = *y * inv_pivot;
         }
         let eliminated = &*eliminated;
-        if inner == InnerParallelism::Allow && self.splits() {
-            let ct = self.cross.ct();
+        if let (InnerParallelism::Allow, Some(ct)) = (inner, &self.ct) {
             kept.par_iter_mut().enumerate().for_each(|(k, b)| {
                 for (e, &c) in ct.row(k) {
                     *b = *b - c * eliminated[e];
@@ -63,7 +100,7 @@ impl<T: Real> BlockElimination<T> {
         }
     }
 
-    /// `x_e = y_e − D_e⁻¹ C x_k`, by eliminated row, split under `Allow` when it [`splits`](Self::splits).
+    /// `x_e = y_e − D_e⁻¹ C x_k`, by eliminated row, split under `Allow` where `Cᵀ` is kept.
     pub(super) fn backward(&self, eliminated: &mut [T], kept: &[T], inner: InnerParallelism) {
         let c = self.cross.c();
         let row = |e: usize, y: &mut T| {
@@ -73,7 +110,7 @@ impl<T: Real> BlockElimination<T> {
             }
             *y = *y - self.inv_pivot[e] * cx;
         };
-        if inner == InnerParallelism::Allow && self.splits() {
+        if inner == InnerParallelism::Allow && self.ct.is_some() {
             eliminated
                 .par_iter_mut()
                 .enumerate()
@@ -87,9 +124,9 @@ impl<T: Real> BlockElimination<T> {
     }
 }
 
-/// `S = D_k − Cᵀ D_e⁻¹ C` before the elimination's stored form is taken, so one pivot vector serves every complement and the solve.
+/// `S = D_k − Cᵀ D_e⁻¹ C` of a borrowed elimination, so one pivot vector serves every complement and the solve.
 pub(super) struct SchurComplement<'a, T> {
-    elimination: BlockElimination<T>,
+    elimination: &'a BlockElimination<T>,
     sheets: Sheets,
     grounding: &'a Grounding<T>,
     /// How the approximate arm's `S` is built; a dense arm always takes it exact.
@@ -97,36 +134,7 @@ pub(super) struct SchurComplement<'a, T> {
     stars: StarStreams,
 }
 
-impl<'a, T: Real> SchurComplement<'a, T> {
-    /// Pivots are `Σ|c_ek| + s_e`, the same on both sheets of a cover.
-    pub(super) fn new(
-        cross: &Arc<CrossBlock<T>>,
-        sheets: Sheets,
-        grounding: &'a Grounding<T>,
-        rule: CliqueRule,
-        stars: StarStreams,
-    ) -> Self {
-        let surplus = grounding.surplus();
-        let c = cross.c();
-        let inv_pivot = (0..cross.n_eliminated())
-            .map(|e| {
-                let s_e = surplus.map_or(0.0, |s| widen(s[e]));
-                let d_e = c.row(e).fold(s_e, |d, (_, &c)| d + widen(c.abs()));
-                T::one() / narrow::<T>(d_e)
-            })
-            .collect();
-        Self {
-            elimination: BlockElimination {
-                cross: Arc::clone(cross),
-                inv_pivot,
-            },
-            sheets,
-            grounding,
-            rule,
-            stars,
-        }
-    }
-
+impl<T: Real> SchurComplement<'_, T> {
     /// `S` on the component's sheets: exact by kept row, sampled by star in parallel.
     fn build(&self, rule: CliqueRule) -> Sddm<'static, T> {
         let (n_kept, sheets) = (self.elimination.cross.n_kept(), self.sheets);
@@ -154,14 +162,10 @@ impl<'a, T: Real> SchurComplement<'a, T> {
         let grounding = Grounding::of(surplus);
         Sddm::new(Cow::Owned(adjacency), Cow::Owned(grounding), sheets)
     }
-
-    pub(super) fn finish(self) -> BlockElimination<T> {
-        self.elimination
-    }
 }
 
 /// `S` built once, after its arm is chosen.
-impl<'a, T: Real> CholeskyInput<'a, T> for &SchurComplement<'_, T> {
+impl<'a, T: Real> CholeskyInput<'a, T> for SchurComplement<'_, T> {
     fn dimension(&self) -> usize {
         self.sheets.count() * self.elimination.cross.n_kept()
     }
@@ -173,6 +177,36 @@ impl<'a, T: Real> CholeskyInput<'a, T> for &SchurComplement<'_, T> {
     fn for_approximate(self) -> Sddm<'a, T> {
         self.build(self.rule)
     }
+}
+
+/// Counting-sorts chunks unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.
+fn from_fill<T: Real>(n: usize, chunks: Vec<Fill<T>>) -> (UpperAdjacency<T>, Vec<T>) {
+    let mut starts = vec![0; n + 1];
+    // Nested loops, not `flatten()`: the flat iterator cost ~10% on both passes at 1M+ edges.
+    for chunk in &chunks {
+        for &(lo, _, _) in chunk {
+            starts[lo as usize + 1] += 1;
+        }
+    }
+    for i in 0..n {
+        starts[i + 1] += starts[i];
+    }
+    let mut next = starts[..n].to_vec();
+    let mut by_row = vec![(0, T::zero()); starts[n]];
+    for chunk in chunks {
+        for (lo, hi, w) in chunk {
+            by_row[next[lo as usize]] = (hi as usize, w);
+            next[lo as usize] += 1;
+        }
+    }
+    let mut rows = RowSums::new(n);
+    for span in starts.windows(2) {
+        for &(hi, w) in &by_row[span[0]..span[1]] {
+            rows.add(hi, w);
+        }
+        rows.end_row();
+    }
+    rows.finish()
 }
 
 /// Each eliminated star's clique tree on each sheet under its own stream, the ground a final neighbor unless its share is zero; one sheet maps no column, as the balanced loop pays for any map.
@@ -227,8 +261,11 @@ fn fill_stars<T: Real, C: Copies, N: Iterator<Item = (u32, T)>>(
 
 /// Rows of the cover's complement: `|c_ke||c_je|/d_e` to `j`'s same sheet when signs agree, else its other; `k⁻` mirrors `k⁺`, so each sums only `j > k`; the ground's share as column `2·n_kept`.
 fn cover_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Vec<T>) {
-    let BlockElimination { cross, inv_pivot } = &schur.elimination;
-    let (c, ct, n_kept) = (cross.c(), cross.ct(), cross.n_kept());
+    let elimination = schur.elimination;
+    let BlockElimination {
+        cross, inv_pivot, ..
+    } = elimination;
+    let (c, ct, n_kept) = (cross.c(), elimination.transpose(), cross.n_kept());
     let surplus = schur.grounding.surplus();
     let mut rows = RowSums::new(2 * n_kept);
     for k in 0..n_kept {
@@ -252,8 +289,11 @@ fn cover_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Ve
 
 /// Rows of a folded component's complement, `|c_ke||c_je|/d_e` as the smaller times the larger's share, the ground's `|c_ke| s_e/d_e` as column `n_kept`; a product underflowing to zero is dropped, as a stored zero couples nothing.
 fn exact_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Vec<T>) {
-    let BlockElimination { cross, inv_pivot } = &schur.elimination;
-    let (c, ct, n_kept) = (cross.c(), cross.ct(), cross.n_kept());
+    let elimination = schur.elimination;
+    let BlockElimination {
+        cross, inv_pivot, ..
+    } = elimination;
+    let (c, ct, n_kept) = (cross.c(), elimination.transpose(), cross.n_kept());
     let surplus = schur.grounding.surplus();
     let mut rows = RowSums::new(n_kept);
     for k in 0..n_kept {

@@ -1,7 +1,7 @@
-//! Three fixed effects, no slopes: each pair of factors is one signless bipartite graph, as within's Schwarz subdomains.
+//! Three fixed effects, no slopes: each pair of factors is one incidence-only bipartite Gram, as within's Schwarz subdomains.
 
-use approx_chol_next::input::{BipartiteGraph, Weights};
-use approx_chol_next::{factorize, Config, Factor, Sgdd};
+use approx_chol_next::input::{BipartiteGram, FactorWidth1, Weights};
+use approx_chol_next::{factorize, Config, Factor, ScalingPolicy, Sgdd};
 
 /// Workers move between firms of their own region only, so (worker, firm) splits by region.
 const REGIONS: [(usize, usize); 5] = [(2000, 200), (40, 6), (30, 5), (20, 4), (10, 3)];
@@ -41,15 +41,10 @@ fn main() {
     let panel = Panel::generate(7);
     for (l, r) in [(0, 1), (0, 2), (1, 2)] {
         println!("({}, {})", NAMES[l], NAMES[r]);
-        let graph = BipartiteGraph::<f64>::new(
-            panel.n_levels[l],
-            panel.n_levels[r],
-            &panel.levels[l],
-            &panel.levels[r],
-            Weights::Unit,
-        )
-        .expect("valid graph");
-        let sgdd = Sgdd::try_from(graph).expect("reduces");
+        let side = |t: usize| FactorWidth1::<f64>::new(panel.n_levels[t], &panel.levels[t], None);
+        let (left, right) = (side(l).expect("valid side"), side(r).expect("valid side"));
+        let gram = BipartiteGram::new(left, right, Weights::default()).expect("valid gram");
+        let sgdd = Sgdd::from_bipartite_gram(gram, ScalingPolicy::default()).expect("reduces");
         for component in sgdd.components() {
             let n = component.vertices().len();
             println!("  component: {n} vertices, floats {}", component.floats());

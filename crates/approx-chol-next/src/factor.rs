@@ -18,7 +18,7 @@ use crate::sgdd::{Balance, Component, Frame, OffDiagonal, Sgdd};
 use crate::Real;
 use cholesky::Cholesky;
 use clique_tree::Streams;
-use schur::{BlockElimination, SchurComplement};
+use schur::BlockElimination;
 use sddm::{Sddm, Sheets};
 
 /// Errors returned by fallible solves.
@@ -32,13 +32,6 @@ pub enum SolveError {
         /// The length provided.
         found: usize,
     },
-    /// Scratch shorter than the operator's `scratch_len`.
-    ScratchTooSmall {
-        /// The scratch the operator needs.
-        needed: usize,
-        /// The length provided.
-        found: usize,
-    },
 }
 
 impl core::fmt::Display for SolveError {
@@ -46,9 +39,6 @@ impl core::fmt::Display for SolveError {
         match self {
             Self::LengthMismatch { expected, found } => {
                 write!(f, "right-hand side has length {found}, expected {expected}")
-            }
-            Self::ScratchTooSmall { needed, found } => {
-                write!(f, "scratch has length {found}, needs {needed}")
             }
         }
     }
@@ -64,18 +54,19 @@ pub struct Factor<T = f64> {
     dead: Box<[u32]>,
 }
 
-impl<T: Real> Factor<T> {
-    pub(crate) fn build(sgdd: &Sgdd<T>, config: &Config) -> Self {
-        let components = (sgdd.components().par_iter())
-            .map(|component| ComponentFactor::build(component, config))
-            .collect();
-        Self {
-            n: sgdd.n(),
-            components,
-            dead: sgdd.dead().into(),
-        }
+/// Factors every component of `sgdd` in parallel; `sgdd` survives for another `config`.
+pub fn factorize<T: Real>(sgdd: &Sgdd<T>, config: &Config) -> Factor<T> {
+    let components = (sgdd.components().par_iter())
+        .map(|component| ComponentFactor::build(component, config))
+        .collect();
+    Factor {
+        n: sgdd.n(),
+        components,
+        dead: sgdd.dead().into(),
     }
+}
 
+impl<T: Real> Factor<T> {
     /// Dimension of `A`.
     pub fn n(&self) -> usize {
         self.n
@@ -96,8 +87,7 @@ impl<T: Real> Factor<T> {
         self.components.iter().filter_map(ComponentFactor::fallback)
     }
 
-    /// Scratch [`solve_in_place`](Self::solve_in_place) needs: a component's gathered values and its own scratch.
-    pub fn scratch_len(&self) -> usize {
+    fn scratch_len(&self) -> usize {
         (self.components.iter())
             .map(|component| component.vertices().len() + component.scratch_len())
             .max()
@@ -107,8 +97,7 @@ impl<T: Real> Factor<T> {
     /// `A⁺b` on singular components; vertices in no component solve to `0`.
     pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
         let mut x = b.to_vec();
-        let mut scratch = vec![T::zero(); self.scratch_len()];
-        self.solve_in_place(&mut x, &mut scratch, InnerParallelism::Allow)?;
+        self.solve_in_place(&mut x, &mut Vec::new(), InnerParallelism::Allow)?;
         Ok(x)
     }
 
@@ -116,7 +105,7 @@ impl<T: Real> Factor<T> {
     pub fn solve_in_place(
         &self,
         x: &mut [T],
-        scratch: &mut [T],
+        scratch: &mut Vec<T>,
         inner: InnerParallelism,
     ) -> Result<(), SolveError> {
         if x.len() != self.n {
@@ -125,13 +114,7 @@ impl<T: Real> Factor<T> {
                 found: x.len(),
             });
         }
-        let needed = self.scratch_len();
-        if scratch.len() < needed {
-            return Err(SolveError::ScratchTooSmall {
-                needed,
-                found: scratch.len(),
-            });
-        }
+        scratch.resize(scratch.len().max(self.scratch_len()), T::zero());
         for component in &self.components {
             let vertices = component.vertices();
             let (local, rest) = scratch.split_at_mut(vertices.len());
@@ -177,15 +160,11 @@ impl<T: Real> ComponentFactor<T> {
                 (None, Cholesky::factor(sddm, streams.cholesky(), config))
             }
             OffDiagonal::Bipartite(cross) => {
-                let schur = SchurComplement::new(
-                    cross,
-                    sheets,
-                    grounding,
-                    config.complement,
-                    streams.stars(),
-                );
-                let factored = Cholesky::factor(&schur, streams.cholesky(), config);
-                (Some(schur.finish()), factored)
+                let elimination = BlockElimination::new(cross, grounding);
+                let schur =
+                    elimination.complement(sheets, grounding, config.complement, streams.stars());
+                let factored = Cholesky::factor(schur, streams.cholesky(), config);
+                (Some(elimination), factored)
             }
         };
         Self {
@@ -212,18 +191,15 @@ impl<T: Real> ComponentFactor<T> {
         (self.elimination.as_ref()).map_or(0, BlockElimination::splittable_work)
     }
 
-    /// Scratch [`solve_local`](Self::solve_local) needs.
-    pub fn scratch_len(&self) -> usize {
-        let eliminated = (self.elimination.as_ref()).map_or(0, BlockElimination::n_eliminated);
-        self.cholesky
-            .scratch_len(self.vertices().len() - eliminated)
+    fn scratch_len(&self) -> usize {
+        self.cholesky.scratch_len()
     }
 
     /// Solves in local order: `x` holds `b` on entry and the solution on return.
     pub fn solve_local(
         &self,
         x: &mut [T],
-        scratch: &mut [T],
+        scratch: &mut Vec<T>,
         inner: InnerParallelism,
     ) -> Result<(), SolveError> {
         let expected = self.vertices().len();
@@ -233,13 +209,7 @@ impl<T: Real> ComponentFactor<T> {
                 found: x.len(),
             });
         }
-        let needed = self.scratch_len();
-        if scratch.len() < needed {
-            return Err(SolveError::ScratchTooSmall {
-                needed,
-                found: scratch.len(),
-            });
-        }
+        scratch.resize(scratch.len().max(self.scratch_len()), T::zero());
         self.solve_unchecked(x, scratch, inner);
         Ok(())
     }
