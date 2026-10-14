@@ -61,9 +61,9 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
             return Err(ReduceError::OutOfRange { vertex });
         }
         self.scaling(policy, Existence::Guaranteed, || {
-            let u: Vec<f64> = (self.vertices.iter()).map(|&v| nulls[v.index()]).collect();
-            (u.iter().all(|x| x.is_finite()))
-                .then(|| scaling::null_scaling(&u, &self.diagonal))
+            let u = (self.vertices.iter()).map(|&v| nulls[v.index()]);
+            (u.clone().all(f64::is_finite))
+                .then(|| scaling::null_scaling(u, &self.diagonal))
                 .flatten()
                 .or_else(|| scaling::relax(&self.off_diagonal, &self.diagonal, policy))
         })

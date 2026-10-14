@@ -38,26 +38,10 @@ impl<'a, T: Real, I: Index> Normalized<'a, T, I> {
         }
     }
 
-    /// `[min_i, max_i] (Ny)_i / y_i` and `‖Ny − y‖_∞ / ‖y‖_∞`; `None` unless `y` is positive and every ratio finite.
-    pub(super) fn ratio_range(
-        &self,
-        y: &[f64],
-        work: &mut [f64],
-        out: &mut [f64],
-    ) -> Option<(f64, f64, f64)> {
-        if !y.iter().all(|&v| v.is_finite() && v > 0.0) {
-            return None;
-        }
-        self.unscaled(y, work, out);
-        let (mut low, mut high) = (f64::INFINITY, 0.0f64);
-        let (mut residual, mut peak) = (0.0f64, 0.0f64);
-        for ((&o, &y), &s) in out.iter().zip(y).zip(&self.inv_sqrt[..]) {
-            let t = s * o / y;
-            (low, high) = (low.min(t), high.max(t));
-            residual = residual.max((s * o - y).abs());
-            peak = peak.max(y);
-        }
-        (low.is_finite() && high.is_finite()).then_some((low, high, residual / peak))
+    /// `out = |offdiag(A_c)| D^{-1/2} y`, returning the outer `D^{-1/2}` that makes it `N y`.
+    pub(super) fn unscaled(&self, y: &[f64], out: &mut [f64]) -> &[f64] {
+        self.off_diagonal.abs_times(&self.inv_sqrt, y, out);
+        &self.inv_sqrt
     }
 
     /// `R = D^{-1/2} y` with `y` peaking at `1`, so `M`'s diagonal never exceeds `1`.
@@ -66,14 +50,6 @@ impl<'a, T: Real, I: Index> Normalized<'a, T, I> {
         (y.iter().zip(&self.inv_sqrt[..]))
             .map(|(&y, &s)| narrow::<T>(y / peak * s))
             .collect()
-    }
-
-    /// `out = |O| D^{-1/2} y`, `work` holding `D^{-1/2} y`: `N y` but for the outer `D^{-1/2}`.
-    fn unscaled(&self, y: &[f64], work: &mut [f64], out: &mut [f64]) {
-        for ((w, &y), &s) in work.iter_mut().zip(y).zip(&self.inv_sqrt[..]) {
-            *w = y * s;
-        }
-        self.off_diagonal.abs_times(work, out);
     }
 }
 
@@ -90,13 +66,10 @@ pub(super) enum Shifted<'n, 'a, T, I> {
 
 impl<T: Real, I: Index> Shifted<'_, '_, T, I> {
     /// `out = S p` for the system's matrix `S`, returning `pᵀp` and `pᵀSp` from the same pass.
-    pub(super) fn apply(&self, p: &[f64], work: &mut [f64], out: &mut [f64]) -> (f64, f64) {
+    pub(super) fn apply(&self, p: &[f64], out: &mut [f64]) -> (f64, f64) {
         let (shift, s) = match self {
-            Self::Whole { n, alpha } => {
-                n.unscaled(p, work, out);
-                (*alpha, &n.inv_sqrt[..])
-            }
-            Self::Kept(kept) => kept.unscaled(p, work, out),
+            Self::Whole { n, alpha } => (*alpha, n.unscaled(p, out)),
+            Self::Kept(kept) => kept.unscaled(p, out),
         };
         let (mut pp, mut curvature) = (0.0, 0.0);
         for ((o, &p), &s) in out.iter_mut().zip(p).zip(s) {
@@ -164,13 +137,9 @@ impl<'n, 'a, T: Real, I: Index> Kept<'n, 'a, T, I> {
     }
 
     /// `out = |C|ᵀ D_e^{-1} |C| D_k^{-1/2} p`, with the shift `α²` and the outer `D_k^{-1/2}` left to the caller.
-    fn unscaled(&self, p: &[f64], work: &mut [f64], out: &mut [f64]) -> (f64, &[f64]) {
-        let s_k = &self.n.inv_sqrt[self.cross.n_rows()..];
-        for ((w, &p), &s) in work.iter_mut().zip(p).zip(s_k) {
-            *w = p * s;
-        }
-        let s_e = &self.n.inv_sqrt[..self.cross.n_rows()];
-        self.cross.abs_gram_times(s_e, work, out);
+    fn unscaled(&self, p: &[f64], out: &mut [f64]) -> (f64, &[f64]) {
+        let (s_e, s_k) = self.n.inv_sqrt.split_at(self.cross.n_rows());
+        self.cross.abs_gram_times(s_e, s_k, p, out);
         (self.alpha * self.alpha, s_k)
     }
 

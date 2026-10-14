@@ -3,10 +3,11 @@
 use std::sync::Arc;
 
 use super::congruence::Congruence;
+use super::decomposition::indexable;
 use super::scaling::ScalingReport;
 use crate::input::CsrError;
 use crate::storage::OffDiagonal;
-use crate::{diagonal_in_range, fits, Index, Real};
+use crate::{diagonal_in_range, Index, Real};
 
 /// `R = F Pᵀ`, so `M = R A Rᵀ`: `Pᵀ` picks the block's vertices of `A`, `F` is the congruence.
 #[cfg_attr(
@@ -33,6 +34,19 @@ impl<T: Real, I: Index> Restriction<T, I> {
     /// `x ← P local` on the block's vertices, the rest untouched.
     pub(crate) fn scatter(&self, local: &[T], x: &mut [T]) {
         (local.iter().zip(self.vertices.iter())).for_each(|(&v, &i)| x[i.index()] = v);
+    }
+
+    /// The slot from `from` on a singular solve pins: the largest `|f|`, so the gauge's rounding is not amplified by `1/f` (ties keep the last).
+    pub(crate) fn anchor(&self, from: usize) -> usize {
+        let magnitude = |i: usize| self.congruence.factor(i).abs();
+        let last = self.vertices.len() - 1;
+        (from..last).fold(last, |best, i| {
+            if magnitude(i) > magnitude(best) {
+                i
+            } else {
+                best
+            }
+        }) - from
     }
 
     /// `x ← F x` on a gathered `x`, `F·1` projected out first when `M` is singular.
@@ -74,11 +88,6 @@ impl<T: Real> Balance<T> {
             Self::Balanced(_) => 1,
             Self::Frustrated(_) => 2,
         }
-    }
-
-    /// The factor's vertices: each of `n` once per sheet, and the ground.
-    fn factor_vertices(&self, n: usize) -> usize {
-        n.saturating_mul(self.sheets()).saturating_add(1)
     }
 
     /// The ground is a vertex too: its diagonal `Σs`, once per sheet, clears the same bound as any other.
@@ -149,10 +158,8 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         if let Balance::Balanced(_) = balance {
             debug_assert!(off_diagonal.nonpositive(), "a balanced M is a Z-matrix");
         }
-        let count = balance.factor_vertices(n);
-        if !fits::<I>(count) {
-            return Err(ReduceError::IndexOverflow { count });
-        }
+        // Each vertex once per sheet, and the ground.
+        indexable::<I>(n.saturating_mul(balance.sheets()).saturating_add(1))?;
         let surplus = balance.grounding().surplus().unwrap_or_default();
         if let Some(i) = surplus.iter().position(|&s| !crate::in_range(s)) {
             let vertex = vertices[i].index();

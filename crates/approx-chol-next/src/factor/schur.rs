@@ -297,7 +297,7 @@ fn cover_rows<T: Real, I: Index>(
     } = elimination;
     let (c, ct, n_kept) = (cross, elimination.transpose(), cross.n_cols());
     let surplus = schur.grounding.surplus();
-    SddmRows::split(Sheets::Two, n_kept, rows_per_task(c), |rows, k| {
+    SddmRows::split(Sheets::Two, n_kept, rows_per_task(c), |mut rows, k| {
         for (e, &c_ek) in ct.row(k) {
             for (j, &c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
                 let sheet = usize::from(crosses(c_ek) != crosses(c_ej));
@@ -310,8 +310,6 @@ fn cover_rows<T: Real, I: Index>(
                 rows.add(2 * n_kept, share(c_ek.abs(), surplus[e], inv_pivot[e]));
             }
         }
-        rows.end_row();
-        rows.mirror_row();
     })
 }
 
@@ -325,7 +323,7 @@ fn exact_rows<T: Real, I: Index>(
     } = elimination;
     let (c, ct, n_kept) = (cross, elimination.transpose(), cross.n_cols());
     let surplus = schur.grounding.surplus();
-    SddmRows::split(Sheets::One, n_kept, rows_per_task(c), |rows, k| {
+    SddmRows::split(Sheets::One, n_kept, rows_per_task(c), |mut rows, k| {
         for (e, c_ek) in ct.row(k) {
             let c_ek = c_ek.abs();
             for (j, c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
@@ -335,7 +333,6 @@ fn exact_rows<T: Real, I: Index>(
                 rows.add(n_kept, share(c_ek, surplus[e], inv_pivot[e]));
             }
         }
-        rows.end_row();
     })
 }
 

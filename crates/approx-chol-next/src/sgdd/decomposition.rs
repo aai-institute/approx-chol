@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use num_traits::PrimInt;
@@ -6,12 +7,13 @@ use rayon::prelude::*;
 mod assembly;
 mod partition;
 
-use super::block::ReduceError;
+use super::block::{Grounding, ReduceError};
 use crate::input::{Canonical, CsrError, UpperCanonical};
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
-use crate::{fits, Index, Real};
+use crate::{Index, Real};
 pub(super) use assembly::{
-    assemble_bipartite, assemble_bipartite_gram, assemble_general, assemble_signed,
+    assemble_bipartite, assemble_bipartite_gram, assemble_general, assemble_laplacian,
+    assemble_signed,
 };
 pub(super) use partition::Partition;
 use partition::UnionFind;
@@ -45,11 +47,11 @@ pub(super) fn of_upper<T: Real, J: PrimInt, I: Index>(
     })
 }
 
-/// `I` indexes each of `A`'s `n` vertices before any is stored.
-pub(super) fn indexable<I: Index>(n: usize) -> Result<(), ReduceError> {
-    match fits::<I>(n) {
-        true => Ok(()),
-        false => Err(ReduceError::IndexOverflow { count: n }),
+/// `I` holds `0..count` below its `MAX`, which stays free as a sentinel.
+pub(super) fn indexable<I: Index>(count: usize) -> Result<(), ReduceError> {
+    match num_traits::cast::<usize, I>(count) {
+        Some(_) => Ok(()),
+        None => Err(ReduceError::IndexOverflow { count }),
     }
 }
 
@@ -123,7 +125,7 @@ const PARALLEL_VERTICES: usize = 1 << 12;
 /// The partition, each live component's block, and the dead vertices.
 pub(super) type Components<B, I> = (Partition<I>, Vec<B>, Vec<I>);
 
-/// A general `A` assembled, and its components.
+/// A general `A` assembled with its diagonal, and its components.
 pub(super) type General<T, I> = Partitioned<Assembled<T, UpperAdjacency<T, I>>, I>;
 
 /// A bipartite Gram assembled as `C` and the diagonal, and its components.
@@ -175,33 +177,70 @@ pub(super) struct Assembled<T, C> {
     diagonal: Vec<T>,
 }
 
-impl<T: Real, I: Index> PrincipalBlocks<T, I> for Assembled<T, UpperAdjacency<T, I>> {
-    type Block = Cells<T, I>;
+/// `A = L(C) + diag(σ)`, dominant by shape: no diagonal is stored, each pivot is `Σ_j |c_ij| + σ_i`.
+pub(super) struct Dominant<'a, T: Clone, I> {
+    adjacency: UpperAdjacency<T, I>,
+    surplus: Option<Cow<'a, [T]>>,
+}
+
+/// The upper triangle, cancelled cells dropped.
+impl<T: Real, I: Index> PrincipalBlocks<T, I> for UpperAdjacency<T, I> {
+    type Block = (Box<[I]>, OffDiagonal<T, I>);
 
     fn whole(self, vertices: &[I]) -> Self::Block {
-        let off_diagonal = OffDiagonal::General(self.adjacency);
-        (vertices.into(), off_diagonal, self.diagonal)
+        (vertices.into(), OffDiagonal::General(self))
     }
 
     fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
         let mut ptrs = Vec::with_capacity(vertices.len() + 1);
         ptrs.push(0);
-        let entries = vertices
-            .iter()
-            .map(|&v| self.adjacency.upper_len(v.index()))
-            .sum();
+        let entries = vertices.iter().map(|&v| self.upper_len(v.index())).sum();
         let (mut indices, mut values) = (Vec::with_capacity(entries), Vec::with_capacity(entries));
         for &v in vertices {
-            for (j, &x) in self.adjacency.upper(v.index()) {
+            for (j, &x) in self.upper(v.index()) {
                 indices.push(position[j]);
                 values.push(x);
             }
             ptrs.push(indices.len());
         }
         let rows = Rows::new(ptrs, indices, values, vertices.len());
+        (
+            vertices.into(),
+            OffDiagonal::General(UpperAdjacency::new(rows)),
+        )
+    }
+}
+
+impl<T: Real, I: Index> PrincipalBlocks<T, I> for Assembled<T, UpperAdjacency<T, I>> {
+    type Block = Cells<T, I>;
+
+    fn whole(self, vertices: &[I]) -> Self::Block {
+        let (vertices, off_diagonal) = self.adjacency.whole(vertices);
+        (vertices, off_diagonal, self.diagonal)
+    }
+
+    fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
+        let (vertices, off_diagonal) = self.adjacency.component(vertices, position);
         let diagonal = vertices.iter().map(|&v| self.diagonal[v.index()]).collect();
-        let off_diagonal = OffDiagonal::General(UpperAdjacency::new(rows));
-        (vertices.into(), off_diagonal, diagonal)
+        (vertices, off_diagonal, diagonal)
+    }
+}
+
+impl<T: Real, I: Index> PrincipalBlocks<T, I> for Dominant<'_, T, I> {
+    type Block = (Box<[I]>, OffDiagonal<T, I>, Grounding<T>);
+
+    fn whole(self, vertices: &[I]) -> Self::Block {
+        let (vertices, off_diagonal) = self.adjacency.whole(vertices);
+        let grounding =
+            (self.surplus).map_or_else(Grounding::ungrounded, |s| Grounding::of(s.into_owned()));
+        (vertices, off_diagonal, grounding)
+    }
+
+    fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
+        let (vertices, off_diagonal) = self.adjacency.component(vertices, position);
+        let at = |s: &Cow<'_, [T]>| Grounding::of(vertices.iter().map(|&v| s[v.index()]).collect());
+        let grounding = self.surplus.as_ref().map_or_else(Grounding::ungrounded, at);
+        (vertices, off_diagonal, grounding)
     }
 }
 

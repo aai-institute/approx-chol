@@ -7,21 +7,32 @@ struct Bracket {
     low: f64,
     high: f64,
     /// `‖Ny − y‖_∞ / ‖y‖_∞`, the eigen-residual at `ρ = 1` (Jia, Lin, Liu's outer stop).
-    residual: f64,
+    eigen_residual: f64,
 }
 
 impl Bracket {
-    /// Of a positive `y`; `None` where a ratio is not finite.
+    /// Of a positive `y`; `None` unless every ratio is finite.
     fn of<T: Real, I: Index>(
         n: &Normalized<'_, T, I>,
         y: &[f64],
-        work: &mut (Vec<f64>, Vec<f64>),
+        work: &mut [f64],
     ) -> Option<Self> {
-        let (low, high, residual) = n.ratio_range(y, &mut work.0, &mut work.1)?;
-        Some(Self {
+        if !y.iter().all(|&v| v.is_finite() && v > 0.0) {
+            return None;
+        }
+        let scales = n.unscaled(y, work);
+        let (mut low, mut high) = (f64::INFINITY, 0.0f64);
+        let (mut residual, mut peak) = (0.0f64, 0.0f64);
+        for ((&o, &y), &s) in work.iter().zip(y).zip(scales) {
+            let t = s * o / y;
+            (low, high) = (low.min(t), high.max(t));
+            residual = residual.max((s * o - y).abs());
+            peak = peak.max(y);
+        }
+        (low.is_finite() && high.is_finite()).then_some(Self {
             low,
             high,
-            residual,
+            eigen_residual: residual / peak,
         })
     }
 
@@ -42,7 +53,12 @@ impl Bracket {
     /// `ρ < 1` proven, or `y` a Perron vector of `ρ = 1` to rounding: no later `y` moves the float decision.
     fn settled(&self, band: f64) -> bool {
         // Not the width, which never closes once `y` has components below `ε` (Li & Li, arXiv:2111.12642 §3).
-        self.high < 1.0 - band || self.residual <= band
+        self.high < 1.0 - band || self.eigen_residual <= band
+    }
+
+    /// Certified and within a few ulps of settling, which a long CG run may never close.
+    fn nearly_settled(&self, tolerance: f64, band: f64) -> bool {
+        self.certifies(tolerance) && self.eigen_residual <= 4.0 * band
     }
 
     /// Just above `ρ`: `1` once certified, as a scalable block's `ρ ≤ 1`, else the top (Noda 1971).
@@ -60,7 +76,7 @@ impl Bracket {
 pub(super) struct InverseIteration<'n, 'a, T, I> {
     n: &'n Normalized<'a, T, I>,
     tolerance: f64,
-    /// How close to `1` a settled residual closes.
+    /// The rounding band a settled bracket closes to, around `ρ = 1`.
     band: f64,
     max_iterations: usize,
     iterations: usize,
@@ -68,8 +84,8 @@ pub(super) struct InverseIteration<'n, 'a, T, I> {
     refuted: bool,
     /// The best positive `y` so far and its bracket.
     best: (Vec<f64>, Bracket),
-    /// `D^{-1/2} p` and the product, for every product with `N`.
-    work: (Vec<f64>, Vec<f64>),
+    /// The product of every product with `N`.
+    work: Vec<f64>,
 }
 
 impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
@@ -80,7 +96,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
         band: f64,
         max_iterations: usize,
     ) -> Option<Self> {
-        let mut work = (vec![0.0; n.n()], vec![0.0; n.n()]);
+        let mut work = vec![0.0; n.n()];
         let unit = vec![1.0; n.n()];
         let bracket = Bracket::of(n, &unit, &mut work)?;
         Some(Self {
@@ -125,11 +141,12 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
         let mut solution: Vec<f64> = vec![0.0; rhs.len()];
         let (mut residual, mut direction) = (rhs.clone(), rhs);
         let start = self.iterations;
+        let mut last_adoption = start;
         while self.iterations < self.max_iterations && !goal(&self.best.1) {
             self.iterations += 1;
             let m = direction.len();
-            let (work, image) = (&mut self.work.0[..m], &mut self.work.1[..m]);
-            let (direction_norm_squared, curvature) = system.apply(&direction, work, image);
+            let image = &mut self.work[..m];
+            let (direction_norm_squared, curvature) = system.apply(&direction, image);
             if !(direction_norm_squared.is_finite() && curvature.is_finite()) {
                 break;
             }
@@ -148,7 +165,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             let step = residual_norm_squared / curvature;
             let mut next_residual_norm_squared = 0.0;
             for ((value, residual), (&direction, &image)) in
-                (solution.iter_mut().zip(&mut residual)).zip(direction.iter().zip(&self.work.1[..]))
+                (solution.iter_mut().zip(&mut residual)).zip(direction.iter().zip(&self.work[..]))
             {
                 *value += step * direction;
                 *residual -= step * image;
@@ -157,7 +174,10 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             if !next_residual_norm_squared.is_finite() {
                 break;
             }
-            let exhausted = next_residual_norm_squared == 0.0;
+            // A long run's iterate stalls a few ulps above the band; a fresh solve from `best` polishes it.
+            let stalled = self.best.1.nearly_settled(self.tolerance, self.band)
+                && self.iterations - last_adoption >= 64;
+            let exhausted = next_residual_norm_squared == 0.0 || stalled;
             if !exhausted {
                 let beta = next_residual_norm_squared / residual_norm_squared;
                 for (direction, &residual) in direction.iter_mut().zip(&residual) {
@@ -168,8 +188,9 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             // A probe costs one more pass; past the cheap early exits, probe on a stride.
             let k = self.iterations - start;
             let last = exhausted || self.iterations == self.max_iterations;
-            if last || k <= 8 || k % 4 == 0 {
-                adopted |= self.consider(&system.solution(&solution), &goal);
+            if (last || k <= 8 || k % 4 == 0) && self.consider(&system.solution(&solution), &goal) {
+                adopted = true;
+                last_adoption = self.iterations;
             }
             if exhausted {
                 break;

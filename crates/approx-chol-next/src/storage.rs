@@ -92,14 +92,14 @@ impl<T: Real, I: Index> Rows<T, I> {
         }
     }
 
-    /// `out = |X|ᵀ diag(s)² |X| x` in one pass, each row read twice while cached.
-    pub(crate) fn abs_gram_times(&self, s: &[f64], x: &[f64], out: &mut [f64]) {
+    /// `out = |X|ᵀ diag(s)² |X| diag(t) x` in one pass, each row read twice while cached.
+    pub(crate) fn abs_gram_times(&self, s: &[f64], t: &[f64], x: &[f64], out: &mut [f64]) {
         out.fill(0.0);
         for (span, &s) in self.ptrs.windows(2).zip(s) {
             let row = (self.indices[span[0]..span[1]].iter()).zip(&self.values[span[0]..span[1]]);
             let sum: f64 = row
                 .clone()
-                .map(|(&j, &a)| widen(a.abs()) * x[j.index()])
+                .map(|(&j, &a)| widen(a.abs()) * (x[j.index()] * t[j.index()]))
                 .sum();
             let sum = s * s * sum;
             row.for_each(|(&j, &a)| out[j.index()] += widen(a.abs()) * sum);
@@ -322,19 +322,19 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
         degree.into_iter().max().unwrap_or(0)
     }
 
-    /// `out = |X| x`, each stored entry read for both its ends.
-    pub(crate) fn abs_times(&self, x: &[f64], out: &mut [f64]) {
+    /// `out = |X| diag(s) y`, each stored entry read for both its ends.
+    pub(crate) fn abs_times(&self, s: &[f64], y: &[f64], out: &mut [f64]) {
         let (rows, offset) = self.stored();
         out.fill(0.0);
         for (i, span) in rows.ptrs.windows(2).enumerate() {
-            let x_i = x[i];
+            let x_i = y[i] * s[i];
             let mut sum = 0.0;
             for (&j, &a) in rows.indices[span[0]..span[1]]
                 .iter()
                 .zip(&rows.values[span[0]..span[1]])
             {
                 let (a, j) = (widen(a.abs()), offset + j.index());
-                sum += a * x[j];
+                sum += a * (y[j] * s[j]);
                 out[j] += a * x_i;
             }
             out[i] += sum;

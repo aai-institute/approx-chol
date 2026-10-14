@@ -88,11 +88,6 @@ macro_rules! index {
 index!(u32);
 index!(u64);
 
-/// Whether `I` holds `0..count` below its `MAX`, which stays free as a sentinel.
-pub(crate) fn fits<I: Index>(count: usize) -> bool {
-    num_traits::cast::<usize, I>(count).is_some()
-}
-
 /// Finite, and zero or at least `MIN_POSITIVE/EPSILON`, so no product turns subnormal (#163).
 pub(crate) fn in_range<T: Real>(x: T) -> bool {
     x.is_finite() && (x == T::zero() || x.abs() >= T::min_positive_value() / T::epsilon())

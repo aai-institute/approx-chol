@@ -104,16 +104,15 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         }
     }
 
-    /// No zero test on `w`: it costs the exact rows 6-8%, so `end_row` drops what a zero addend leaves.
     pub(super) fn add(&mut self, column: usize, w: T) {
-        debug_assert!(
-            w >= T::zero(),
-            "a column reads zero only before its first nonzero addend"
-        );
-        if self.sums[column] == T::zero() {
-            self.touched.push(I::from_index(column));
+        self.row().add(column, w);
+    }
+
+    fn row(&mut self) -> Row<'_, T, I> {
+        Row {
+            sums: &mut self.sums,
+            touched: &mut self.touched,
         }
-        self.sums[column] = self.sums[column] + w;
     }
 
     pub(super) fn end_row(&mut self) {
@@ -162,13 +161,17 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         sheets: Sheets,
         n_kept: usize,
         min_kept: usize,
-        row: impl Fn(&mut Self, usize) + Sync,
+        row: impl Fn(Row<'_, T, I>, usize) + Sync,
     ) -> (UpperAdjacency<T, I>, Vec<T>) {
         let n = sheets.count() * n_kept;
         let rows = (0..n_kept).into_par_iter().with_min_len(min_kept).fold(
             || Self::new(n),
             |mut rows, k| {
-                row(&mut rows, k);
+                row(rows.row(), k);
+                rows.end_row();
+                if sheets == Sheets::Two {
+                    rows.mirror_row();
+                }
                 rows
             },
         );
@@ -187,6 +190,26 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         let n = self.ground.len();
         let rows = Rows::new(self.ptrs, self.indices, self.values, n);
         (UpperAdjacency::new(rows), self.ground)
+    }
+}
+
+/// One row's open column sums, borrowed apart from the finished rows so the sums stay in registers.
+pub(super) struct Row<'a, T, I> {
+    sums: &'a mut [T],
+    touched: &'a mut Vec<I>,
+}
+
+impl<T: Real, I: Index> Row<'_, T, I> {
+    /// No zero test on `w`: it costs the exact rows 6-8%, so `end_row` drops what a zero addend leaves.
+    pub(super) fn add(&mut self, column: usize, w: T) {
+        debug_assert!(
+            w >= T::zero(),
+            "a column reads zero only before its first nonzero addend"
+        );
+        if self.sums[column] == T::zero() {
+            self.touched.push(I::from_index(column));
+        }
+        self.sums[column] = self.sums[column] + w;
     }
 }
 

@@ -70,6 +70,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         input: impl CholeskyInput<'a, T, I>,
         draws: Xoshiro256PlusPlus,
         config: &Config,
+        anchor: Option<usize>,
     ) -> (Self, Option<Fallback>) {
         let approximate = |sddm| Self::approximate(sddm, config.approximate, draws);
         let dimension = input.dimension();
@@ -82,7 +83,8 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         };
         let exact = input.for_dense();
         let (sheets, grounded, n) = (exact.sheets(), exact.grounded(), exact.n());
-        let triangular = Triangular::Dense(laplacian.factor(&exact));
+        let (factor, free) = laplacian.factor(&exact, anchor);
+        let triangular = Triangular::Dense(factor, free);
         let dense = Self {
             sheets,
             grounded,
@@ -152,15 +154,15 @@ impl<T: Real, I: Index> Cholesky<T, I> {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 enum Triangular<T, I> {
-    /// Packed lower triangle of `L` in `LLᵀ`.
-    Dense(Vec<T>),
+    /// Packed lower triangle of `L` in `LLᵀ`, and the slot it pins.
+    Dense(Vec<T>, usize),
     Approximate(ApproximateCholesky<T, I>),
 }
 
 impl<T: Real, I: Index> Triangular<T, I> {
     fn substitute(&self, values: &mut [T]) {
         match self {
-            Self::Dense(factor) => dense::substitute(factor, values),
+            Self::Dense(factor, free) => dense::substitute(factor, *free, values),
             Self::Approximate(approximate) => approximate.substitute(values),
         }
     }
@@ -177,7 +179,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         }
         let slots = self.n.checked_add(usize::from(self.grounded))?;
         let fits = match &self.triangular {
-            Triangular::Dense(dense) => dense::fits(dense, slots),
+            Triangular::Dense(dense, free) => *free < slots && dense::fits(dense, slots),
             Triangular::Approximate(approximate) => approximate.fits(slots),
         };
         fits.then_some(self)

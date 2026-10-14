@@ -3,42 +3,95 @@
 use num_traits::PrimInt;
 
 use super::partition::{Partition, UnionFind};
-use super::{indexable, Assembled, BipartiteGram, General, Partitioned};
-use crate::input::{BipartiteColumns, Column, IntoColumns, SignedGraph};
+use std::borrow::Cow;
+
+use super::{indexable, Assembled, BipartiteGram, Dominant, General, Partitioned};
+use crate::input::{BipartiteColumns, Column, IntoColumns, Laplacian, SignedGraph};
 use crate::sgdd::block::ReduceError;
 use crate::storage::{Rows, UpperAdjacency};
-use crate::{in_range, narrow, widen, Index, Real};
+use crate::{diagonal_in_range, in_range, narrow, widen, Index, Real};
 
 /// The signed graph's cells, each vertex's surplus its pairs' cancelled mass.
 pub(in crate::sgdd) fn assemble_signed<T: Real, J: PrimInt, I: Index>(
     graph: SignedGraph<'_, T, J>,
-) -> Result<(General<T, I>, Vec<T>), ReduceError> {
-    let mut surplus = vec![0.0_f64; graph.n()];
-    let a = assemble(graph, |i, j, masses: Masses| {
-        let s = masses.surplus();
-        surplus[i] += s;
-        surplus[j] += s;
-    })?;
-    Ok((a, surplus.into_iter().map(narrow).collect()))
+) -> Result<Partitioned<Dominant<'static, T, I>, I>, ReduceError> {
+    let (mut abs, mut surplus) = (vec![0.0_f64; graph.n()], vec![0.0_f64; graph.n()]);
+    let a = assemble(
+        graph,
+        |_| {},
+        |i, j, masses: Masses| {
+            let (c, s) = (masses.value().abs(), masses.surplus());
+            (abs[i], abs[j]) = (abs[i] + c, abs[j] + c);
+            (surplus[i], surplus[j]) = (surplus[i] + s, surplus[j] + s);
+        },
+    )?;
+    let surplus = (surplus.iter().enumerate())
+        .map(|(i, &s)| match narrow::<T>(s) {
+            s if s == T::zero() || in_range(s) => Ok(s),
+            _ => Err(ReduceError::OutOfRange { vertex: i }),
+        })
+        .collect::<Result<Vec<T>, _>>()?;
+    dominant(a, &abs, Some(Cow::Owned(surplus)))
+}
+
+/// The Laplacian's cells, each vertex's surplus its ground.
+pub(in crate::sgdd) fn assemble_laplacian<'a, T: Real, J: PrimInt, I: Index>(
+    graph: Laplacian<'a, T, J>,
+) -> Result<Partitioned<Dominant<'a, T, I>, I>, ReduceError> {
+    let ground = graph.ground();
+    let mut abs = vec![0.0_f64; graph.n()];
+    let a = assemble(
+        graph,
+        |_| {},
+        |i, j, c: f64| {
+            (abs[i], abs[j]) = (abs[i] + c.abs(), abs[j] + c.abs());
+        },
+    )?;
+    dominant(a, &abs, ground.map(Cow::Borrowed))
+}
+
+/// Each pivot `Σ_j |c_ij| + σ_i` screened in the assembly's own sums, `A`'s diagonal never stored.
+fn dominant<'a, T: Real, I: Index>(
+    a: Partitioned<UpperAdjacency<T, I>, I>,
+    abs: &[f64],
+    surplus: Option<Cow<'a, [T]>>,
+) -> Result<Partitioned<Dominant<'a, T, I>, I>, ReduceError> {
+    let s = |i: usize| surplus.as_ref().map_or(0.0, |s| widen(s[i]));
+    if let Some(vertex) = (0..abs.len()).find(|&i| !diagonal_in_range(narrow::<T>(abs[i] + s(i)))) {
+        return Err(ReduceError::OutOfRange { vertex });
+    }
+    let Partitioned { a, partition } = a;
+    let a = Dominant {
+        adjacency: a,
+        surplus,
+    };
+    Ok(Partitioned { a, partition })
 }
 
 /// `A`'s strict upper triangle, diagonal and components, cells summed by pair in column order.
 pub(in crate::sgdd) fn assemble_general<T: Real, I: Index>(
     v: impl IntoColumns<T>,
 ) -> Result<General<T, I>, ReduceError> {
-    assemble::<T, I, f64>(v, |_, _, _| {})
+    let mut sums = vec![0.0_f64; v.n()];
+    let Partitioned { a, partition } =
+        assemble::<T, I, f64>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
+    let a = Assembled {
+        adjacency: a,
+        diagonal: diagonal_of(sums)?,
+    };
+    Ok(Partitioned { a, partition })
 }
 
-/// As [`assemble_general`], each cell summed as `C` and seen by `pair` with its two ends.
+/// `A`'s strict upper triangle and components, `seen` visiting each column once and `pair` each cell summed as `C` with its two ends.
 // Out of line, the Laplacian entry measured 3–4% slower: the same work, laid out worse.
 #[inline(always)]
 fn assemble<T: Real, I: Index, C: CellSum>(
     v: impl IntoColumns<T>,
+    seen: impl FnMut(&Column<T, I>),
     mut pair: impl FnMut(usize, usize, C),
-) -> Result<General<T, I>, ReduceError> {
+) -> Result<Partitioned<UpperAdjacency<T, I>, I>, ReduceError> {
     indexable::<I>(v.n())?;
-    let mut diagonal = vec![0.0_f64; v.n()];
-    let counts = counts::<T, I>(v, v.n(), |column| add_squares(&mut diagonal, column));
+    let counts = counts::<T, I>(v, v.n(), seen);
     let mut sets = UnionFind::<I>::new(v.n());
     let rows = sum_cells::<T, I, C>(v, &counts, 0, |i, j, cell| {
         if cell.value() != 0.0 {
@@ -46,12 +99,8 @@ fn assemble<T: Real, I: Index, C: CellSum>(
         }
         pair(i, j, cell);
     })?;
-    let a = Assembled {
-        adjacency: UpperAdjacency::new(rows),
-        diagonal: diagonal_of(diagonal)?,
-    };
     Ok(Partitioned {
-        a,
+        a: UpperAdjacency::new(rows),
         partition: sets.into_partition(),
     })
 }

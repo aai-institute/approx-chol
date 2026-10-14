@@ -107,10 +107,13 @@ impl<T: Real> Relaxation<T> {
 }
 
 /// `|u|` of a certified null vector: no iteration runs; `None` if a scale leaves `T`.
-pub(super) fn null_scaling<T: Real>(u: &[f64], diagonal: &[T]) -> Option<Relaxation<T>> {
+pub(super) fn null_scaling<T: Real>(
+    u: impl Iterator<Item = f64> + Clone,
+    diagonal: &[T],
+) -> Option<Relaxation<T>> {
     let peak =
-        (u.iter().zip(diagonal)).fold(0.0f64, |peak, (&x, &d)| peak.max(x.abs() * widen(d).sqrt()));
-    let scales: Box<[T]> = u.iter().map(|&x| narrow::<T>(x.abs() / peak)).collect();
+        (u.clone().zip(diagonal)).fold(0.0f64, |peak, (x, &d)| peak.max(x.abs() * widen(d).sqrt()));
+    let scales: Box<[T]> = u.map(|x| narrow::<T>(x.abs() / peak)).collect();
     Relaxation::new(scales, 0, T::zero())
 }
 

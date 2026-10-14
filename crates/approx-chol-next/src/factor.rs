@@ -185,6 +185,7 @@ impl<T: Real, I: Index> BlockFactor<T, I> {
             Balance::Balanced(grounding) => (Sheets::One, grounding),
             Balance::Frustrated(grounding) => (Sheets::Two, grounding),
         };
+        let anchor = |from: usize| block.floats().then(|| block.restriction().anchor(from));
         let (elimination, (cholesky, fallback)) = match block.off_diagonal() {
             OffDiagonal::General(adjacency) => {
                 let sddm = match sheets {
@@ -193,12 +194,16 @@ impl<T: Real, I: Index> BlockFactor<T, I> {
                     }
                     Sheets::Two => Sddm::cover(adjacency, grounding),
                 };
-                (None, Cholesky::factor(sddm, streams.cholesky(), config))
+                (
+                    None,
+                    Cholesky::factor(sddm, streams.cholesky(), config, anchor(0)),
+                )
             }
             OffDiagonal::Bipartite(cross) => {
                 let elimination = BlockElimination::new(cross, grounding);
                 let schur = elimination.complement(sheets, grounding, config.complement, streams);
-                let factored = Cholesky::factor(schur, streams.cholesky(), config);
+                let anchor = anchor(elimination.n_eliminated());
+                let factored = Cholesky::factor(schur, streams.cholesky(), config, anchor);
                 (Some(elimination), factored)
             }
         };
