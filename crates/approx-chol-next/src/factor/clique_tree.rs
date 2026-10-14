@@ -6,26 +6,26 @@ mod star;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use crate::Real;
+use crate::{Index, Real};
 use cdf::{draw_after, suffix_past};
 pub(super) use copies::{Copies, Multi, Single};
 use star::Star;
 
 /// Fill edges `(lo, hi, weight)`, `lo < hi`, as an elimination emits them.
-pub(super) type Fill<T> = Vec<(u32, u32, T)>;
+pub(super) type Fill<T, I> = Vec<(I, I, T)>;
 
 /// A pivot's elimination, reused across pivots; AC and AC2 differ only in `C`.
-pub(super) struct CliqueSampler<T, C: Copies> {
-    star: Star<T, C>,
+pub(super) struct CliqueSampler<T, I, C: Copies> {
+    star: Star<T, I, C>,
     /// The star's weights' prefix sums, heaviest last, so each suffix's draw range is one subtraction.
     cumsum: Vec<T>,
-    shares: Vec<(u32, T)>,
+    shares: Vec<(I, T)>,
     /// `None` keeps the whole pivot: an empty star hands nothing on.
-    remainder: Option<u32>,
+    remainder: Option<I>,
     split: C::Split,
 }
 
-impl<T: Real, C: Copies> CliqueSampler<T, C> {
+impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
     /// `split` caps every merge, so one sampler cannot mix two.
     pub(super) fn new(split: C::Split) -> Self {
         Self {
@@ -41,8 +41,8 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
     pub(super) fn eliminate(
         &mut self,
         draws: &mut Xoshiro256PlusPlus,
-        neighbors: impl Iterator<Item = (u32, C, T)>,
-        fill: &mut Fill<T>,
+        neighbors: impl Iterator<Item = (I, C, T)>,
+        fill: &mut Fill<T, I>,
     ) -> T {
         self.star.refill(neighbors, self.split);
         self.sample(draws, fill);
@@ -62,15 +62,15 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
     pub(super) fn eliminate_unique(
         &mut self,
         mut rng: Xoshiro256PlusPlus,
-        neighbors: impl Iterator<Item = (u32, T)>,
-        fill: &mut Fill<T>,
+        neighbors: impl Iterator<Item = (I, T)>,
+        fill: &mut Fill<T, I>,
     ) {
         self.star.refill_unique(neighbors, C::initial(self.split));
         self.sample(&mut rng, fill);
     }
 
     /// Prepares the star's CDF, then fills `per_copy(w_i (S_{>i} / d))` per copy of each entry but the heaviest, each copy drawing past it.
-    fn sample(&mut self, rng: &mut Xoshiro256PlusPlus, fill: &mut Fill<T>) {
+    fn sample(&mut self, rng: &mut Xoshiro256PlusPlus, fill: &mut Fill<T, I>) {
         let entries = self.star.entries();
         let Some((_, rest)) = entries.split_last() else {
             return;
@@ -101,12 +101,12 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
     }
 
     /// Copies each neighbor of the last pivot lost.
-    pub(super) fn degree_losses(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
+    pub(super) fn degree_losses(&self) -> impl Iterator<Item = (I, u32)> + '_ {
         self.star.degree_losses()
     }
 
     /// The factor column the last pivot left: shares of the original pivot and the neighbor absorbing what they leave; nothing for an empty star.
-    pub(super) fn column(&self) -> Option<(&[(u32, T)], u32)> {
+    pub(super) fn column(&self) -> Option<(&[(I, T)], I)> {
         Some((&self.shares, self.remainder?))
     }
 }

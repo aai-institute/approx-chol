@@ -1,32 +1,35 @@
 use super::graph::EliminationGraph;
 use crate::factor::clique_tree::{Copies, Fill};
-use crate::Real;
+use crate::{Index, Real};
 
 /// Bucket queue over live degree estimates (Julia's `ApproxCholPQ`).
-pub(super) struct MinDegreeOrder {
-    elems: Vec<QueueElem>,
-    lists: Vec<u32>,
+pub(super) struct MinDegreeOrder<I> {
+    elems: Vec<QueueElem<I>>,
+    lists: Vec<I>,
     min_list: usize,
     bucket_base: usize,
     /// Net degree change per vertex, zero at rest, so each moves once per pivot: a list would sort per pivot (measured 1.5-1.7x the star sort).
     net: Vec<i64>,
-    touched: Vec<u32>,
+    touched: Vec<I>,
 }
 
-/// 12 bytes: `Option<u32>` keys measured +2-3% on grids.
-struct QueueElem {
-    prev: u32,
-    next: u32,
+/// 12 bytes at `u32`: `Option<u32>` keys measured +2-3% on grids.
+struct QueueElem<I> {
+    prev: I,
+    next: I,
     /// `u32::MAX` once removed; a live key saturates below it, as only the order matters.
     key: u32,
 }
 
-impl MinDegreeOrder {
+impl<I: Index> MinDegreeOrder<I> {
     /// Buckets span `split · n`, Laplacians.jl's AC2 scale.
-    pub(super) fn new<T: Real, C: Copies>(graph: &EliminationGraph<T, C>, split: C::Split) -> Self {
+    pub(super) fn new<T: Real, C: Copies>(
+        graph: &EliminationGraph<T, I, C>,
+        split: C::Split,
+    ) -> Self {
         let n = graph.n();
         let bucket_base = (C::initial(split).get() as usize).saturating_mul(n).max(1);
-        let mut lists = vec![SENTINEL; n_buckets(bucket_base)];
+        let mut lists: Vec<I> = vec![sentinel(); n_buckets(bucket_base)];
         let mut elems = Vec::with_capacity(n);
         let mut min_list = lists.len();
         for v in 0..n {
@@ -34,14 +37,14 @@ impl MinDegreeOrder {
             let list = key_map(key, bucket_base);
             let head = lists[list];
             elems.push(QueueElem {
-                prev: SENTINEL,
+                prev: sentinel(),
                 next: head,
                 key,
             });
-            if head != SENTINEL {
-                elems[head as usize].prev = v as u32;
+            if head != sentinel() {
+                elems[head.index()].prev = I::from_index(v);
             }
-            lists[list] = v as u32;
+            lists[list] = I::from_index(v);
             min_list = min_list.min(list);
         }
         Self {
@@ -56,14 +59,14 @@ impl MinDegreeOrder {
 
     /// Panics on an empty queue: every step leaves at least one vertex behind.
     pub(super) fn next_vertex(&mut self) -> usize {
-        while self.lists[self.min_list] == SENTINEL {
+        while self.lists[self.min_list] == sentinel() {
             self.min_list += 1;
         }
-        let v = self.lists[self.min_list] as usize;
+        let v = self.lists[self.min_list].index();
         let next = self.elems[v].next;
         self.lists[self.min_list] = next;
-        if next != SENTINEL {
-            self.elems[next as usize].prev = SENTINEL;
+        if next != sentinel() {
+            self.elems[next.index()].prev = sentinel();
         }
         self.elems[v].key = REMOVED;
         v
@@ -72,8 +75,8 @@ impl MinDegreeOrder {
     /// The star's degree losses, then fill's gains.
     pub(super) fn update<T: Real>(
         &mut self,
-        losses: impl Iterator<Item = (u32, u32)>,
-        fill: &Fill<T>,
+        losses: impl Iterator<Item = (I, u32)>,
+        fill: &Fill<T, I>,
     ) {
         for (u, copies) in losses {
             self.add(u, -i64::from(copies));
@@ -83,15 +86,15 @@ impl MinDegreeOrder {
             self.add(w, 1);
         }
         for i in 0..self.touched.len() {
-            let v = self.touched[i] as usize;
+            let v = self.touched[i].index();
             let delta = std::mem::take(&mut self.net[v]);
             self.apply_delta(v, delta);
         }
         self.touched.clear();
     }
 
-    fn add(&mut self, v: u32, delta: i64) {
-        let slot = &mut self.net[v as usize];
+    fn add(&mut self, v: I, delta: i64) {
+        let slot = &mut self.net[v.index()];
         if *slot == 0 {
             self.touched.push(v);
         }
@@ -116,26 +119,28 @@ impl MinDegreeOrder {
             return;
         }
         let QueueElem { prev, next, .. } = self.elems[v];
-        match prev {
-            SENTINEL => self.lists[old] = next,
-            prev => self.elems[prev as usize].next = next,
+        match prev == sentinel() {
+            true => self.lists[old] = next,
+            false => self.elems[prev.index()].next = next,
         }
-        if next != SENTINEL {
-            self.elems[next as usize].prev = prev;
+        if next != sentinel() {
+            self.elems[next.index()].prev = prev;
         }
         let head = self.lists[new];
-        self.elems[v].prev = SENTINEL;
+        self.elems[v].prev = sentinel();
         self.elems[v].next = head;
-        if head != SENTINEL {
-            self.elems[head as usize].prev = v as u32;
+        if head != sentinel() {
+            self.elems[head.index()].prev = I::from_index(v);
         }
-        self.lists[new] = v as u32;
+        self.lists[new] = I::from_index(v);
         self.min_list = self.min_list.min(new);
     }
 }
 
 /// Linked-list terminator.
-const SENTINEL: u32 = u32::MAX;
+fn sentinel<I: Index>() -> I {
+    I::max_value()
+}
 
 /// A popped vertex's key, which [`MinDegreeOrder::apply_delta`] skips.
 const REMOVED: u32 = u32::MAX;

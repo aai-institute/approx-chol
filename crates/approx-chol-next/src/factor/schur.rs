@@ -14,28 +14,30 @@ use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
 use super::Streams;
 use crate::sgdd::Grounding;
 use crate::storage::{Rows, UpperAdjacency};
-use crate::{narrow, widen, Real};
+use crate::{narrow, widen, Index, Real};
 
 /// `M`'s cross block and the pivots `d_e`, applied as two products because the block's steps commute.
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
     serde(remote = "Self"),
-    serde(bound(deserialize = "T: crate::Real + serde::Deserialize<'de>"))
+    serde(bound(
+        deserialize = "T: crate::Real + serde::Deserialize<'de>, I: crate::Index + serde::Deserialize<'de>"
+    ))
 )]
 #[derive(Clone, Debug)]
-pub(super) struct BlockElimination<T> {
+pub(super) struct BlockElimination<T, I> {
     /// `M`'s own `C`, signs kept and shared with the block: a frustrated block's cover never doubles it.
-    cross: Arc<Rows<T>>,
+    cross: Arc<Rows<T, I>>,
     inv_pivot: Box<[T]>,
     /// `Cᵀ` where the larger side passes 10 000 rows (0.6's threshold), so `Allow` may split the solve by kept row.
     #[cfg_attr(feature = "serde", serde(skip))]
-    ct: Option<Rows<T>>,
+    ct: Option<Rows<T, I>>,
 }
 
-impl<T: Real> BlockElimination<T> {
+impl<T: Real, I: Index> BlockElimination<T, I> {
     /// Pivots are `Σ|c_ek| + s_e`, the same on both sheets of a cover.
-    pub(super) fn new(cross: &Arc<Rows<T>>, grounding: &Grounding<T>) -> Self {
+    pub(super) fn new(cross: &Arc<Rows<T, I>>, grounding: &Grounding<T>) -> Self {
         let surplus = grounding.surplus();
         let c = &**cross;
         let inv_pivot = (0..c.n_rows())
@@ -48,7 +50,7 @@ impl<T: Real> BlockElimination<T> {
         Self::with_pivots(Arc::clone(cross), inv_pivot)
     }
 
-    fn with_pivots(cross: Arc<Rows<T>>, inv_pivot: Box<[T]>) -> Self {
+    fn with_pivots(cross: Arc<Rows<T, I>>, inv_pivot: Box<[T]>) -> Self {
         let ct = (cross.n_rows() > 10_000).then(|| cross.transpose());
         Self {
             cross,
@@ -64,7 +66,7 @@ impl<T: Real> BlockElimination<T> {
         grounding: &'a Grounding<T>,
         rule: CliqueRule,
         stars: Streams,
-    ) -> SchurComplement<'a, T> {
+    ) -> SchurComplement<'a, T, I> {
         SchurComplement {
             elimination: self,
             sheets,
@@ -87,7 +89,7 @@ impl<T: Real> BlockElimination<T> {
     }
 
     /// `Cᵀ`, borrowed where it is kept.
-    fn transpose(&self) -> Cow<'_, Rows<T>> {
+    fn transpose(&self) -> Cow<'_, Rows<T, I>> {
         (self.ct.as_ref()).map_or_else(|| Cow::Owned(self.cross.transpose()), Cow::Borrowed)
     }
 
@@ -139,8 +141,8 @@ impl<T: Real> BlockElimination<T> {
 }
 
 /// `S = D_k − Cᵀ D_e⁻¹ C` of a borrowed elimination, so one pivot vector serves every complement and the solve.
-pub(super) struct SchurComplement<'a, T> {
-    elimination: &'a BlockElimination<T>,
+pub(super) struct SchurComplement<'a, T, I> {
+    elimination: &'a BlockElimination<T, I>,
     sheets: Sheets,
     grounding: &'a Grounding<T>,
     /// How the approximate arm's `S` is built; a dense arm always takes it exact.
@@ -148,19 +150,19 @@ pub(super) struct SchurComplement<'a, T> {
     stars: Streams,
 }
 
-impl<T: Real> SchurComplement<'_, T> {
+impl<T: Real, I: Index> SchurComplement<'_, T, I> {
     /// `S` on the block's sheets: exact by kept row, sampled by star in parallel.
-    fn build(&self, rule: CliqueRule) -> Sddm<'static, T> {
+    fn build(&self, rule: CliqueRule) -> Sddm<'static, T, I> {
         let (n_kept, sheets) = (self.elimination.cross.n_cols(), self.sheets);
         let n = sheets.count() * n_kept;
         let (adjacency, ground) = match (rule, sheets) {
             (CliqueRule::Exact, Sheets::One) => exact_rows(self),
             (CliqueRule::Exact, Sheets::Two) => cover_rows(self),
             (CliqueRule::Sampled(Multiplicity::Single), _) => {
-                from_fill(n, sampled_fill::<T, Single>(self, ()))
+                from_fill(n, sampled_fill::<T, I, Single>(self, ()))
             }
             (CliqueRule::Sampled(Multiplicity::Split(k)), _) => {
-                from_fill(n, sampled_fill::<T, Multi>(self, k))
+                from_fill(n, sampled_fill::<T, I, Multi>(self, k))
             }
         };
         let kept = (self.grounding.surplus()).map(|s| &s[s.len() - n_kept..]);
@@ -179,40 +181,43 @@ impl<T: Real> SchurComplement<'_, T> {
 }
 
 /// `S` built once, after its arm is chosen.
-impl<'a, T: Real> CholeskyInput<'a, T> for SchurComplement<'_, T> {
+impl<'a, T: Real, I: Index> CholeskyInput<'a, T, I> for SchurComplement<'_, T, I> {
     fn dimension(&self) -> usize {
         self.sheets.count() * self.elimination.cross.n_cols()
     }
 
-    fn for_dense(self) -> Sddm<'a, T> {
+    fn for_dense(self) -> Sddm<'a, T, I> {
         self.build(CliqueRule::Exact)
     }
 
-    fn for_approximate(self) -> Sddm<'a, T> {
+    fn for_approximate(self) -> Sddm<'a, T, I> {
         self.build(self.rule)
     }
 }
 
 /// Counting-sorts chunks unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.
-fn from_fill<T: Real>(n: usize, chunks: Vec<Fill<T>>) -> (UpperAdjacency<T>, Vec<T>) {
+fn from_fill<T: Real, I: Index>(
+    n: usize,
+    chunks: Vec<Fill<T, I>>,
+) -> (UpperAdjacency<T, I>, Vec<T>) {
     let mut starts = vec![0; n + 1];
     // Nested loops, not `flatten()`: the flat iterator cost ~10% on both passes at 1M+ edges.
     for chunk in &chunks {
         for &(lo, _, _) in chunk {
-            starts[lo as usize + 1] += 1;
+            starts[lo.index() + 1] += 1;
         }
     }
     for i in 0..n {
         starts[i + 1] += starts[i];
     }
     let mut next = starts[..n].to_vec();
-    let (mut columns, mut weights) = (vec![0u32; starts[n]], vec![T::zero(); starts[n]]);
+    let (mut columns, mut weights) = (vec![I::zero(); starts[n]], vec![T::zero(); starts[n]]);
     for chunk in chunks {
         for (lo, hi, w) in chunk {
-            let at = next[lo as usize];
+            let at = next[lo.index()];
             columns[at] = hi;
             weights[at] = w;
-            next[lo as usize] += 1;
+            next[lo.index()] += 1;
         }
     }
     drop(next);
@@ -222,7 +227,7 @@ fn from_fill<T: Real>(n: usize, chunks: Vec<Fill<T>>) -> (UpperAdjacency<T>, Vec
             .iter()
             .zip(&weights[span[0]..span[1]])
         {
-            rows.add(hi as usize, w);
+            rows.add(hi.index(), w);
         }
         rows.end_row();
     }
@@ -230,29 +235,29 @@ fn from_fill<T: Real>(n: usize, chunks: Vec<Fill<T>>) -> (UpperAdjacency<T>, Vec
 }
 
 /// Each eliminated star's clique tree on each sheet under its own stream, the ground a final neighbor unless its share is zero; one sheet maps no column, as the balanced loop pays for any map.
-fn sampled_fill<T: Real, C: Copies>(
-    schur: &SchurComplement<'_, T>,
+fn sampled_fill<T: Real, I: Index, C: Copies>(
+    schur: &SchurComplement<'_, T, I>,
     split: C::Split,
-) -> Vec<Fill<T>> {
+) -> Vec<Fill<T, I>> {
     let c = &schur.elimination.cross;
     let (n_eliminated, n_kept) = (c.n_rows(), c.n_cols());
     let sheets = schur.sheets;
-    let ground = (sheets.count() * n_kept) as u32;
+    let ground = I::from_index(sheets.count() * n_kept);
     let surplus = schur.grounding.surplus();
     let ground_share = move |e: usize| {
         let s_e = surplus.map(|s| s[e]).filter(|&s| s > T::zero());
         s_e.map(|s| (ground, s))
     };
     match sheets {
-        Sheets::One => fill_stars::<T, C, _>(split, n_eliminated, |e| {
-            let neighbors = c.row(e).map(|(k, &c)| (k as u32, c.abs()));
+        Sheets::One => fill_stars::<T, I, C, _>(split, n_eliminated, |e| {
+            let neighbors = c.row(e).map(|(k, &c)| (I::from_index(k), c.abs()));
             (schur.stars.star(e), neighbors.chain(ground_share(e)))
         }),
-        Sheets::Two => fill_stars::<T, C, _>(split, 2 * n_eliminated, |star| {
+        Sheets::Two => fill_stars::<T, I, C, _>(split, 2 * n_eliminated, |star| {
             let (sheet, e) = (star / n_eliminated, star % n_eliminated);
             let neighbors = c.row(e).map(move |(k, &c)| {
                 let on = sheet ^ usize::from(crosses(c));
-                (cover_vertex(k, on) as u32, c.abs())
+                (I::from_index(cover_vertex(k, on)), c.abs())
             });
             (schur.stars.star(star), neighbors.chain(ground_share(e)))
         }),
@@ -260,15 +265,15 @@ fn sampled_fill<T: Real, C: Copies>(
 }
 
 /// A row of `C` repeats no column, so stars skip the merge; chunks in star order, so merged duplicates sum alike at any thread count.
-fn fill_stars<T: Real, C: Copies, N: Iterator<Item = (u32, T)>>(
+fn fill_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
     split: C::Split,
     n_stars: usize,
     star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
-) -> Vec<Fill<T>> {
+) -> Vec<Fill<T, I>> {
     (0..n_stars)
         .into_par_iter()
         .fold(
-            || (CliqueSampler::<T, C>::new(split), Fill::new()),
+            || (CliqueSampler::<T, I, C>::new(split), Fill::new()),
             |(mut sampler, mut fill), i| {
                 let (draws, neighbors) = star(i);
                 sampler.eliminate_unique(draws, neighbors, &mut fill);
@@ -283,7 +288,9 @@ fn fill_stars<T: Real, C: Copies, N: Iterator<Item = (u32, T)>>(
 }
 
 /// Rows of the cover's complement: `|c_ke||c_je|/d_e` to `j`'s same sheet when signs agree, else its other; `k⁻` mirrors `k⁺`, so each sums only `j > k`; the ground's share as column `2·n_kept`.
-fn cover_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Vec<T>) {
+fn cover_rows<T: Real, I: Index>(
+    schur: &SchurComplement<'_, T, I>,
+) -> (UpperAdjacency<T, I>, Vec<T>) {
     let elimination = schur.elimination;
     let BlockElimination {
         cross, inv_pivot, ..
@@ -309,7 +316,9 @@ fn cover_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Ve
 }
 
 /// Rows of a folded block's complement, `|c_ke||c_je|/d_e` as the smaller times the larger's share, the ground's `|c_ke| s_e/d_e` as column `n_kept`; a product underflowing to zero is dropped, as a stored zero couples nothing.
-fn exact_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Vec<T>) {
+fn exact_rows<T: Real, I: Index>(
+    schur: &SchurComplement<'_, T, I>,
+) -> (UpperAdjacency<T, I>, Vec<T>) {
     let elimination = schur.elimination;
     let BlockElimination {
         cross, inv_pivot, ..
@@ -331,7 +340,7 @@ fn exact_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Ve
 }
 
 /// Kept rows per task so each carries `2^17` of the complement's `nnz·(nnz/n_e)/2` multiply-adds, below which a split costs more than it saves.
-fn rows_per_task<T: Real>(c: &Rows<T>) -> usize {
+fn rows_per_task<T: Real, I: Index>(c: &Rows<T, I>) -> usize {
     let work = c.nnz() * (c.nnz() / c.n_rows().max(1)) / 2;
     (c.n_cols() << 17).div_ceil(work.max(1))
 }
@@ -345,7 +354,7 @@ fn share<T: Real>(x: T, y: T, inv_pivot: T) -> T {
 checked_serde!(BlockElimination);
 
 #[cfg(feature = "serde")]
-impl<T: Real> BlockElimination<T> {
+impl<T: Real, I: Index> BlockElimination<T, I> {
     pub(super) fn n_kept(&self) -> usize {
         self.cross.n_cols()
     }

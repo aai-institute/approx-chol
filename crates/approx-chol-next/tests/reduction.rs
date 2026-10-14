@@ -65,8 +65,8 @@ fn csr_and_upper_share_reduction_and_solve_bits() {
     }
     let csr = Csr::new(7, &ptrs[0], &indices[0], &values[0]).unwrap();
     let upper = UpperCsr::new(7, &ptrs[1], &indices[1], &values[1]).unwrap();
-    let full = Sgdd::from_csr(csr, ScalingPolicy::default()).unwrap();
-    let upper = Sgdd::from_upper_csr(upper, ScalingPolicy::default()).unwrap();
+    let full: Sgdd = Sgdd::from_csr(csr, ScalingPolicy::default()).unwrap();
+    let upper: Sgdd = Sgdd::from_upper_csr(upper, ScalingPolicy::default()).unwrap();
     assert_eq!(format!("{full:?}"), format!("{upper:?}"));
     assert_eq!(
         full.blocks().iter().map(|c| c.floats()).collect::<Vec<_>>(),
@@ -162,7 +162,7 @@ fn exhausted_scaling_reports_the_inputs_existence_guarantee() {
     let (x, y) = ([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
     let gram = FactorWidth2::new(3, &a, &b, &x, &y).unwrap();
     let policy = ScalingPolicy::new(0.0, 0).unwrap();
-    let sgdd = Sgdd::from_gram(gram, policy).unwrap();
+    let sgdd: Sgdd = Sgdd::from_gram(gram, policy).unwrap();
     assert_eq!(
         sgdd.scaling_report().unwrap().scaling,
         Existence::Guaranteed
@@ -172,7 +172,7 @@ fn exhausted_scaling_reports_the_inputs_existence_guarantee() {
     let indices = [0, 1, 2, 0, 1, 2, 0, 1, 2];
     let values: Vec<f64> = matrix.into_iter().flatten().collect();
     let csr = Csr::new(3, &ptrs, &indices, &values).unwrap();
-    let sgdd = Sgdd::from_csr(csr, policy).unwrap();
+    let sgdd: Sgdd = Sgdd::from_csr(csr, policy).unwrap();
     assert_eq!(sgdd.scaling_report().unwrap().scaling, Existence::Unknown);
 }
 

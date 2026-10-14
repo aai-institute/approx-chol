@@ -6,7 +6,7 @@ use super::congruence::Congruence;
 use super::scaling::ScalingReport;
 use crate::input::CsrError;
 use crate::storage::OffDiagonal;
-use crate::{diagonal_in_range, Real};
+use crate::{diagonal_in_range, fits, Index, Real};
 
 /// `R = F Pᵀ`, so `M = R A Rᵀ`: `Pᵀ` picks the block's vertices of `A`, `F` is the congruence.
 #[cfg_attr(
@@ -15,24 +15,24 @@ use crate::{diagonal_in_range, Real};
     serde(remote = "Self")
 )]
 #[derive(Debug)]
-pub(crate) struct Restriction<T> {
-    vertices: Box<[u32]>,
+pub(crate) struct Restriction<T, I> {
+    vertices: Box<[I]>,
     congruence: Congruence<T>,
 }
 
-impl<T: Real> Restriction<T> {
-    pub(crate) fn vertices(&self) -> &[u32] {
+impl<T: Real, I: Index> Restriction<T, I> {
+    pub(crate) fn vertices(&self) -> &[I] {
         &self.vertices
     }
 
     /// `local ← Pᵀ x`.
     pub(crate) fn gather(&self, x: &[T], local: &mut [T]) {
-        (local.iter_mut().zip(self.vertices.iter())).for_each(|(v, &i)| *v = x[i as usize]);
+        (local.iter_mut().zip(self.vertices.iter())).for_each(|(v, &i)| *v = x[i.index()]);
     }
 
     /// `x ← P local` on the block's vertices, the rest untouched.
     pub(crate) fn scatter(&self, local: &[T], x: &mut [T]) {
-        (local.iter().zip(self.vertices.iter())).for_each(|(&v, &i)| x[i as usize] = v);
+        (local.iter().zip(self.vertices.iter())).for_each(|(&v, &i)| x[i.index()] = v);
     }
 
     /// `x ← F x` on a gathered `x`, `F·1` projected out first when `M` is singular.
@@ -68,12 +68,22 @@ impl<T: Real> Balance<T> {
         }
     }
 
+    /// Copies of each vertex its factor holds: a cover has two.
+    fn sheets(&self) -> usize {
+        match self {
+            Self::Balanced(_) => 1,
+            Self::Frustrated(_) => 2,
+        }
+    }
+
+    /// The factor's vertices: each of `n` once per sheet, and the ground.
+    fn factor_vertices(&self, n: usize) -> usize {
+        n.saturating_mul(self.sheets()).saturating_add(1)
+    }
+
     /// The ground is a vertex too: its diagonal `Σs`, once per sheet, clears the same bound as any other.
     fn ground_in_range(&self) -> bool {
-        let sheets = match self {
-            Self::Balanced(_) => T::one(),
-            Self::Frustrated(_) => T::one() + T::one(),
-        };
+        let sheets = T::from(self.sheets()).expect("a sheet count is a float");
         let total = |surplus: &[T]| surplus.iter().fold(T::zero(), |sum, &s| sum + s);
         (self.grounding().surplus())
             .is_none_or(|surplus| diagonal_in_range(sheets * total(surplus)))
@@ -118,18 +128,18 @@ impl<T: Real> Grounding<T> {
 
 /// One irreducible principal block `A_c` of `A`, reduced: `M = F · A_c · F` weakly diagonally dominant, eliminated side first.
 #[derive(Clone, Debug)]
-pub struct IrreducibleBlock<T = f64> {
-    restriction: Arc<Restriction<T>>,
-    off_diagonal: OffDiagonal<T>,
+pub struct IrreducibleBlock<T = f64, I = u32> {
+    restriction: Arc<Restriction<T, I>>,
+    off_diagonal: OffDiagonal<T, I>,
     balance: Balance<T>,
 }
 
-impl<T: Real> IrreducibleBlock<T> {
-    /// Panics unless one factor, row and surplus per vertex; the ground's `Σs` must clear the bound any diagonal does.
+impl<T: Real, I: Index> IrreducibleBlock<T, I> {
+    /// Panics unless one factor, row and surplus per vertex; the ground's `Σs` must clear the bound any diagonal does, and `I` must index the factor's vertices.
     pub(super) fn new(
-        vertices: Box<[u32]>,
+        vertices: Box<[I]>,
         congruence: Congruence<T>,
-        off_diagonal: OffDiagonal<T>,
+        off_diagonal: OffDiagonal<T, I>,
         balance: Balance<T>,
     ) -> Result<Self, ReduceError> {
         let n = vertices.len();
@@ -139,13 +149,17 @@ impl<T: Real> IrreducibleBlock<T> {
         if let Balance::Balanced(_) = balance {
             debug_assert!(off_diagonal.nonpositive(), "a balanced M is a Z-matrix");
         }
+        let count = balance.factor_vertices(n);
+        if !fits::<I>(count) {
+            return Err(ReduceError::IndexOverflow { count });
+        }
         let surplus = balance.grounding().surplus().unwrap_or_default();
         if let Some(i) = surplus.iter().position(|&s| !crate::in_range(s)) {
-            let vertex = vertices[i];
+            let vertex = vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
         }
         if !balance.ground_in_range() {
-            let vertex = vertices[0];
+            let vertex = vertices[0].index();
             return Err(ReduceError::OutOfRange { vertex });
         }
         let restriction = Restriction {
@@ -160,7 +174,7 @@ impl<T: Real> IrreducibleBlock<T> {
     }
 
     /// The block's vertices in `A`'s numbering, in local order.
-    pub fn vertices(&self) -> &[u32] {
+    pub fn vertices(&self) -> &[I] {
         &self.restriction.vertices
     }
 
@@ -170,7 +184,7 @@ impl<T: Real> IrreducibleBlock<T> {
     }
 
     /// Shared with every factor of this block.
-    pub(crate) fn restriction(&self) -> &Arc<Restriction<T>> {
+    pub(crate) fn restriction(&self) -> &Arc<Restriction<T, I>> {
         &self.restriction
     }
 
@@ -179,7 +193,7 @@ impl<T: Real> IrreducibleBlock<T> {
         matches!(&self.balance, Balance::Balanced(grounding) if !grounding.is_grounded())
     }
 
-    pub(crate) fn off_diagonal(&self) -> &OffDiagonal<T> {
+    pub(crate) fn off_diagonal(&self) -> &OffDiagonal<T, I> {
         &self.off_diagonal
     }
 
@@ -190,15 +204,15 @@ impl<T: Real> IrreducibleBlock<T> {
 
 /// `A` as its [`IrreducibleBlock`]s, each reduced; vertices in none solve to `0`.
 #[derive(Clone, Debug)]
-pub struct Sgdd<T = f64> {
+pub struct Sgdd<T = f64, I = u32> {
     n: usize,
-    blocks: Vec<IrreducibleBlock<T>>,
+    blocks: Vec<IrreducibleBlock<T, I>>,
     /// Lone vertices with a zero diagonal, recorded so a solve zeroes them without a pass over `n`.
-    dead: Box<[u32]>,
+    dead: Box<[I]>,
 }
 
-impl<T: Real> Sgdd<T> {
-    pub(super) fn new(n: usize, blocks: Vec<IrreducibleBlock<T>>, dead: Vec<u32>) -> Self {
+impl<T: Real, I: Index> Sgdd<T, I> {
+    pub(super) fn new(n: usize, blocks: Vec<IrreducibleBlock<T, I>>, dead: Vec<I>) -> Self {
         Self {
             n,
             blocks,
@@ -212,11 +226,11 @@ impl<T: Real> Sgdd<T> {
     }
 
     /// The irreducible blocks, each factored and solved on its own.
-    pub fn blocks(&self) -> &[IrreducibleBlock<T>] {
+    pub fn blocks(&self) -> &[IrreducibleBlock<T, I>] {
         &self.blocks
     }
 
-    pub(crate) fn dead(&self) -> &[u32] {
+    pub(crate) fn dead(&self) -> &[I] {
         &self.dead
     }
 
@@ -235,22 +249,27 @@ pub enum ReduceError {
     /// A diagonal entry is not positive, so no positive scaling makes its row dominant.
     NonpositiveDiagonal {
         /// The entry's vertex, in `A`'s numbering.
-        vertex: u32,
+        vertex: usize,
     },
     /// A scale or scaled entry left the representable range.
     Unscalable {
         /// The block's first vertex in local order, in `A`'s numbering.
-        vertex: u32,
+        vertex: usize,
     },
     /// The block passes `1/ε` vertices: floor weights in series would fall below `MIN_POSITIVE`.
     TooLarge {
         /// The block's first vertex, in `A`'s numbering.
-        vertex: u32,
+        vertex: usize,
+    },
+    /// More vertices than the index type `I` holds below its `MAX`: all of `A`'s, or a block's factor's, a cover's two sheets and its ground counted.
+    IndexOverflow {
+        /// The vertices to index.
+        count: usize,
     },
     /// An assembled entry, diagonal, row sum or ground left the representable range.
     OutOfRange {
         /// The entry's vertex, in `A`'s numbering.
-        vertex: u32,
+        vertex: usize,
     },
 }
 
@@ -266,6 +285,9 @@ impl core::fmt::Display for ReduceError {
             ),
             Self::TooLarge { vertex } => {
                 write!(f, "the block of vertex {vertex} passes 1/ε vertices")
+            }
+            Self::IndexOverflow { count } => {
+                write!(f, "{count} vertices exceed the index type")
             }
             Self::OutOfRange { vertex } => {
                 write!(
@@ -320,7 +342,7 @@ impl std::error::Error for FromCsrError {
 checked_serde!(Restriction);
 
 #[cfg(feature = "serde")]
-impl<T: Real> Restriction<T> {
+impl<T: Real, I: Index> Restriction<T, I> {
     fn checked(self) -> Option<Self> {
         let factors = match &self.congruence {
             Congruence::Signs(f) => f.iter().all(|f| f.abs() == T::one()),

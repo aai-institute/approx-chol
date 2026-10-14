@@ -1,16 +1,16 @@
 use std::borrow::Cow;
 
 use crate::storage::{OffDiagonal, Rows};
-use crate::{narrow, widen, Real};
+use crate::{narrow, widen, Index, Real};
 
 /// `N = D^{-1/2}|offdiag(A_c)|D^{-1/2}`: scales `R` make `R|A_c|R` dominant iff `N y ≤ y` for `y = R√D`, so iff `ρ(N) ≤ 1` (Boman, Chen, Parekh, Toledo, LAA 2005).
-pub(super) struct Normalized<'a, T> {
-    off_diagonal: &'a OffDiagonal<T>,
+pub(super) struct Normalized<'a, T, I> {
+    off_diagonal: &'a OffDiagonal<T, I>,
     inv_sqrt: Box<[f64]>,
 }
 
-impl<'a, T: Real> Normalized<'a, T> {
-    pub(super) fn new(off_diagonal: &'a OffDiagonal<T>, diagonal: &[T]) -> Self {
+impl<'a, T: Real, I: Index> Normalized<'a, T, I> {
+    pub(super) fn new(off_diagonal: &'a OffDiagonal<T, I>, diagonal: &[T]) -> Self {
         let inv_sqrt = diagonal.iter().map(|&d| 1.0 / widen(d).sqrt()).collect();
         Self {
             off_diagonal,
@@ -27,7 +27,7 @@ impl<'a, T: Real> Normalized<'a, T> {
         &'s self,
         alpha: f64,
         b: &'s [f64],
-    ) -> (Shifted<'s, 'a, T>, Vec<f64>) {
+    ) -> (Shifted<'s, 'a, T, I>, Vec<f64>) {
         match self.off_diagonal {
             OffDiagonal::General(_) => (Shifted::Whole { n: self, alpha }, b.to_vec()),
             OffDiagonal::Bipartite(cross) => {
@@ -78,17 +78,17 @@ impl<'a, T: Real> Normalized<'a, T> {
 }
 
 /// The system CG iterates on for one shift `α`.
-pub(super) enum Shifted<'n, 'a, T> {
+pub(super) enum Shifted<'n, 'a, T, I> {
     /// `(αI − N) y = b` over every vertex.
     Whole {
-        n: &'n Normalized<'a, T>,
+        n: &'n Normalized<'a, T, I>,
         alpha: f64,
     },
     /// A bipartite `N` with its eliminated side solved out.
-    Kept(Kept<'n, 'a, T>),
+    Kept(Kept<'n, 'a, T, I>),
 }
 
-impl<T: Real> Shifted<'_, '_, T> {
+impl<T: Real, I: Index> Shifted<'_, '_, T, I> {
     /// `out = S p` for the system's matrix `S`, returning `pᵀp` and `pᵀSp` from the same pass.
     pub(super) fn apply(&self, p: &[f64], work: &mut [f64], out: &mut [f64]) -> (f64, f64) {
         let (shift, s) = match self {
@@ -133,15 +133,15 @@ impl<T: Real> Shifted<'_, '_, T> {
 }
 
 /// `N = [0 B; Bᵀ 0]`: `(α² − BᵀB) y_k = α b_k + Bᵀ b_e`, then `y_e = (b_e + B y_k)/α`; half the steps of the whole system.
-pub(super) struct Kept<'n, 'a, T> {
-    n: &'n Normalized<'a, T>,
-    cross: &'a Rows<T>,
+pub(super) struct Kept<'n, 'a, T, I> {
+    n: &'n Normalized<'a, T, I>,
+    cross: &'a Rows<T, I>,
     alpha: f64,
     b_e: &'n [f64],
 }
 
-impl<'n, 'a, T: Real> Kept<'n, 'a, T> {
-    fn new(n: &'n Normalized<'a, T>, cross: &'a Rows<T>, alpha: f64, b: &'n [f64]) -> Self {
+impl<'n, 'a, T: Real, I: Index> Kept<'n, 'a, T, I> {
+    fn new(n: &'n Normalized<'a, T, I>, cross: &'a Rows<T, I>, alpha: f64, b: &'n [f64]) -> Self {
         let b_e = &b[..cross.n_rows()];
         Self {
             n,

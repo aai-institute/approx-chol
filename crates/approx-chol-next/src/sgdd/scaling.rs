@@ -5,7 +5,7 @@ use normalized::Normalized;
 use perron::InverseIteration;
 
 use crate::storage::OffDiagonal;
-use crate::{narrow, widen, Real};
+use crate::{narrow, widen, Index, Real};
 
 /// Certification policy for a dominance scaling; a deficit left at hand-over is clamped and reported.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -118,8 +118,8 @@ pub(super) fn null_scaling<T: Real>(u: &[f64], diagonal: &[T]) -> Option<Relaxat
 const RATIO_BAND: f64 = 16.0;
 
 /// Scales from `N`'s Perron vector, iterated until `ρ < 1` is proven, pinned at `1`, or refuted past the tolerance.
-pub(super) fn relax<T: Real>(
-    off_diagonal: &OffDiagonal<T>,
+pub(super) fn relax<T: Real, I: Index>(
+    off_diagonal: &OffDiagonal<T, I>,
     diagonal: &[T],
     policy: &ScalingPolicy,
 ) -> Option<Relaxation<T>> {

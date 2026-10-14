@@ -15,16 +15,13 @@ pub struct Csr<'a, T, I = u32> {
 }
 
 impl<'a, T, I: PrimInt> Csr<'a, T, I> {
-    /// Checks the arrays' shape and that `n` and the entry count fit a `u32`, so no row slice can fail.
+    /// Checks the arrays' shape, so no row slice can fail.
     pub fn new(
         n: usize,
         row_ptrs: &'a [I],
         col_indices: &'a [I],
         values: &'a [T],
     ) -> Result<Self, CsrError> {
-        if n > u32::MAX as usize {
-            return Err(CsrError::TooLarge { count: n });
-        }
         if row_ptrs.len() != n + 1 {
             let found = row_ptrs.len();
             return Err(CsrError::LengthMismatch {
@@ -37,14 +34,11 @@ impl<'a, T, I: PrimInt> Csr<'a, T, I> {
         }
         // Compared in `I`, so a negative pointer fails at the first row it closes.
         if let Some(row) = (0..n).find(|&i| row_ptrs[i] > row_ptrs[i + 1]) {
-            return Err(CsrError::RowPointers { row: row as u32 });
+            return Err(CsrError::RowPointers { row });
         }
         let nnz = row_ptrs[n]
             .to_usize()
-            .ok_or(CsrError::RowPointers { row: n as u32 })?;
-        if nnz > u32::MAX as usize {
-            return Err(CsrError::TooLarge { count: nnz });
-        }
+            .ok_or(CsrError::RowPointers { row: n })?;
         for found in [col_indices.len(), values.len()] {
             if found != nnz {
                 return Err(CsrError::LengthMismatch {
@@ -140,24 +134,21 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
     /// Each nonzero `(i, j)`, `i < j`, mirrors checked by a per-row cursor (binary search: +6-15% build).
     pub(crate) fn walk(&self, mut edge: impl FnMut(usize, usize, T)) -> Result<(), CsrError> {
         let (row_ptrs, col_indices, values) = self.arrays();
-        let mut cursors: Vec<u32> = row_ptrs[..self.n]
-            .iter()
-            .map(|&p| index(p) as u32)
-            .collect();
+        let mut cursors = row_ptrs[..self.n].to_vec();
         for row in 0..self.n() {
-            let row_end = index(row_ptrs[row + 1]) as u32;
+            let row_end = row_ptrs[row + 1];
             // Claimed like any mirror: claiming diagonals up front would skip those below.
             let diagonal = self.claim(&mut cursors, row, row)?;
             if !in_range(diagonal) {
-                return Err(CsrError::OutOfRange { row: row as u32 });
+                return Err(CsrError::OutOfRange { row });
             }
             let mut cursor = cursors[row];
             while cursor < row_end {
-                let col = index(col_indices[cursor as usize]);
-                let upper = values[cursor as usize];
-                cursor += 1;
+                let col = index(col_indices[index(cursor)]);
+                let upper = values[index(cursor)];
+                cursor = cursor + I::one();
                 if !in_range(upper) {
-                    return Err(CsrError::OutOfRange { row: row as u32 });
+                    return Err(CsrError::OutOfRange { row });
                 }
                 // Duplicates can coalesce to exactly zero, which contributes no edge.
                 if upper == T::zero() {
@@ -165,7 +156,7 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
                 }
                 let lower = self.claim(&mut cursors, col, row)?;
                 if !approximately_equal(upper, lower) {
-                    return Err(CsrError::NotSymmetric { row: row as u32 });
+                    return Err(CsrError::NotSymmetric { row });
                 }
                 edge(row, col, upper);
             }
@@ -174,21 +165,21 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
     }
 
     /// Advances row `row`'s cursor to `col`; a merge-join only because each entry is claimed once. Stored zeros count as absent.
-    fn claim(&self, cursors: &mut [u32], row: usize, col: usize) -> Result<T, CsrError> {
+    fn claim(&self, cursors: &mut [I], row: usize, col: usize) -> Result<T, CsrError> {
         let (row_ptrs, col_indices, values) = self.arrays();
-        let row_end = index(row_ptrs[row + 1]) as u32;
+        let row_end = row_ptrs[row + 1];
         let mut cursor = cursors[row];
         let mut found = T::zero();
         while cursor < row_end {
-            let at = index(col_indices[cursor as usize]);
+            let at = index(col_indices[index(cursor)]);
             if at > col {
                 break;
             }
-            let value = values[cursor as usize];
+            let value = values[index(cursor)];
             if !value.is_finite() {
-                return Err(CsrError::OutOfRange { row: row as u32 });
+                return Err(CsrError::OutOfRange { row });
             }
-            cursor += 1;
+            cursor = cursor + I::one();
             if at == col {
                 found = value;
                 break;
@@ -196,7 +187,7 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
             // Skipped a stored entry whose own mirror above the diagonal is missing.
             if value != T::zero() {
                 cursors[row] = cursor;
-                return Err(CsrError::NotSymmetric { row: row as u32 });
+                return Err(CsrError::NotSymmetric { row });
             }
         }
         cursors[row] = cursor;
@@ -217,7 +208,7 @@ impl<'a, T: Real, I: PrimInt> UpperCanonical<'a, T, I> {
             start < index(row_ptrs[row + 1]) && index(col_indices[start]) < row
         };
         match (0..canonical.n()).find(|&row| below(row)) {
-            Some(row) => Err(CsrError::BelowDiagonal { row: row as u32 }),
+            Some(row) => Err(CsrError::BelowDiagonal { row }),
             None => Ok(Self(canonical)),
         }
     }
@@ -233,7 +224,7 @@ impl<'a, T: Real, I: PrimInt> UpperCanonical<'a, T, I> {
             let span = index(row_ptrs[row])..index(row_ptrs[row + 1]);
             for (&col, &value) in col_indices[span.clone()].iter().zip(&values[span]) {
                 if !in_range(value) {
-                    return Err(CsrError::OutOfRange { row: row as u32 });
+                    return Err(CsrError::OutOfRange { row });
                 }
                 let col = index(col);
                 if col > row && value != T::zero() {
@@ -271,7 +262,7 @@ fn is_canonical<T, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<bool, CsrError> {
             .iter()
             .any(|&j| j < I::zero() || limit.is_some_and(|limit| j >= limit))
         {
-            return Err(CsrError::ColumnOutOfRange { row: row as u32 });
+            return Err(CsrError::ColumnOutOfRange { row });
         }
         for pair in columns.windows(2) {
             canonical &= pair[0] < pair[1];
@@ -303,7 +294,7 @@ fn rewrite<'a, T: Real, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<Canonical<'a,
             let folded = group[1..].iter().fold(group[0].1, |sum, &(_, v)| sum + v);
             // Only this fold can overflow; caught here so downstream stays all-finite.
             if !folded.is_finite() {
-                return Err(CsrError::OutOfRange { row: row as u32 });
+                return Err(CsrError::OutOfRange { row });
             }
             col_indices.push(group[0].0);
             values.push(folded);
@@ -330,35 +321,30 @@ pub enum CsrError {
         /// The length found.
         found: usize,
     },
-    /// More vertices or entries than a `u32` index reaches.
-    TooLarge {
-        /// The count that overflows.
-        count: usize,
-    },
     /// `row_ptrs` does not start at `0`, or falls or turns negative at `row`.
     RowPointers {
         /// The first row whose span is not a range.
-        row: u32,
+        row: usize,
     },
     /// A column index lies outside `0..n`.
     ColumnOutOfRange {
         /// The offending row.
-        row: u32,
+        row: usize,
     },
     /// An entry has no mirror within 8 ulps.
     NotSymmetric {
         /// The offending row.
-        row: u32,
+        row: usize,
     },
     /// An upper triangle stores an entry, or a repeated column's sum, below its diagonal.
     BelowDiagonal {
         /// The offending row.
-        row: u32,
+        row: usize,
     },
     /// An entry or a repeated column's sum is not finite, or nonzero below `MIN_POSITIVE/EPSILON`.
     OutOfRange {
         /// The offending row.
-        row: u32,
+        row: usize,
     },
 }
 
@@ -368,7 +354,6 @@ impl core::fmt::Display for CsrError {
             Self::LengthMismatch { expected, found } => {
                 write!(f, "CSR array has length {found}, expected {expected}")
             }
-            Self::TooLarge { count } => write!(f, "{count} exceeds a u32 index"),
             Self::RowPointers { row } => {
                 write!(f, "row pointers do not ascend from 0 at row {row}")
             }

@@ -8,7 +8,7 @@ pub(super) mod signed;
 use num_traits::PrimInt;
 
 use crate::widen;
-use crate::Real;
+use crate::{Index, Real};
 
 /// Why a view's `new` rejected its slices.
 #[non_exhaustive]
@@ -20,11 +20,6 @@ pub enum ViewError {
         expected: usize,
         /// The length found.
         found: usize,
-    },
-    /// More vertices than a `u32` index reaches.
-    TooLarge {
-        /// The vertex count that overflows.
-        count: usize,
     },
     /// A column names a row its view does not have.
     IndexOutOfRange {
@@ -54,7 +49,6 @@ impl core::fmt::Display for ViewError {
             Self::LengthMismatch { expected, found } => {
                 write!(f, "view slice has length {found}, expected {expected}")
             }
-            Self::TooLarge { count } => write!(f, "{count} vertices exceed a u32 index"),
             Self::IndexOutOfRange { column } => write!(f, "column {column} names a missing row"),
             Self::RepeatedVertex { column } => write!(f, "column {column} names one vertex twice"),
             Self::InvalidWeight { column } => {
@@ -75,7 +69,7 @@ pub(crate) trait IntoColumns<T: Real>: Copy {
     fn n(&self) -> usize;
 
     /// Each column in order; write `visit` as `#[inline(always)] |column| …` (outlined: 1.6-1.9x).
-    fn for_each_column(self, visit: impl FnMut(Column<T>));
+    fn for_each_column<I: Index>(self, visit: impl FnMut(Column<T, I>));
 }
 
 /// `V = [V_l; V_r]`: every column joins a left row to a right one, right rows numbered after the left.
@@ -85,15 +79,15 @@ pub(crate) trait BipartiteColumns<T: Real>: IntoColumns<T> {
 
 /// Column `k` of `V` under its weight, unfolded, so the floating test reads `V` exactly as given.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Column<T> {
-    pub(crate) a: u32,
-    pub(crate) b: u32,
+pub(crate) struct Column<T, I> {
+    pub(crate) a: I,
+    pub(crate) b: I,
     pub(crate) v_a: T,
     pub(crate) v_b: T,
     pub(crate) weight: Weighting<T>,
 }
 
-impl<T: Real> Column<T> {
+impl<T: Real, I> Column<T, I> {
     /// `w·v_a·v_b` in `f64`: every assembly sums its cells there and casts once.
     pub(crate) fn cell(self) -> f64 {
         (self.weight).bilinear(widen(self.v_a), widen(self.v_b))
@@ -166,11 +160,8 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
     }
 }
 
-/// `n` fits a `u32`, and each column's two ends are distinct rows below it.
+/// Each column's two ends are distinct rows below `n`.
 fn check_ends<I: PrimInt>(n: usize, a: &[I], b: &[I]) -> Result<(), ViewError> {
-    if u32::try_from(n).is_err() {
-        return Err(ViewError::TooLarge { count: n });
-    }
     let in_range = |end: &I| end.to_usize().is_some_and(|end| end < n);
     for (column, (end_a, end_b)) in a.iter().zip(b).enumerate() {
         if !in_range(end_a) || !in_range(end_b) {
@@ -188,12 +179,12 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for FactorWidth2<'_, T, I> {
         self.n
     }
 
-    fn for_each_column(self, mut visit: impl FnMut(Column<T>)) {
+    fn for_each_column<S: Index>(self, mut visit: impl FnMut(Column<T, S>)) {
         let [v_a, v_b] = self.values;
         for (k, (a, b)) in self.a.iter().zip(self.b).enumerate() {
             visit(Column {
-                a: index(*a) as u32,
-                b: index(*b) as u32,
+                a: S::from_index(index(*a)),
+                b: S::from_index(index(*b)),
                 v_a: v_a[k],
                 v_b: v_b[k],
                 weight: Weighting::Unit,
@@ -202,7 +193,7 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for FactorWidth2<'_, T, I> {
     }
 }
 
-/// A row `new` checked below `n`, which fits a `u32`.
+/// A row `new` checked below `n`.
 fn index<I: PrimInt>(row: I) -> usize {
     row.to_usize().expect("a checked row")
 }

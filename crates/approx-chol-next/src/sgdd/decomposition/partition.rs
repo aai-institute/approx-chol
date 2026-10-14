@@ -1,20 +1,20 @@
 use crate::storage::Rows;
-use crate::Real;
+use crate::{Index, Real};
 
 /// Every vertex once, components back to back.
-pub(in crate::sgdd) struct Partition {
-    order: Vec<u32>,
-    ends: Vec<u32>,
+pub(in crate::sgdd) struct Partition<I> {
+    order: Vec<I>,
+    ends: Vec<I>,
     /// Each vertex's index within its component: extraction remaps without a per-component map.
-    position: Vec<u32>,
+    position: Vec<I>,
 }
 
-impl Partition {
+impl<I: Index> Partition<I> {
     /// The components of `C`'s bipartite graph, its rows numbered before its columns.
-    pub(super) fn of_bipartite<T: Real>(c: &Rows<T>) -> Self {
+    pub(super) fn of_bipartite<T: Real>(c: &Rows<T, I>) -> Self {
         let (n_left, n_right) = (c.n_rows(), c.n_cols());
         // A row joins its columns; once they are one set, no cell joins anything new.
-        let (mut columns, mut links) = (UnionFind::new(n_right), n_right.saturating_sub(1));
+        let (mut columns, mut links) = (UnionFind::<I>::new(n_right), n_right.saturating_sub(1));
         'rows: for i in 0..n_left {
             let mut root = None;
             for (j, _) in c.row(i) {
@@ -49,11 +49,11 @@ impl Partition {
 
     /// One component of `n > 0` vertices: every vertex is its own position.
     pub(super) fn whole(n: usize) -> Self {
-        let order: Vec<u32> = (0..n as u32).collect();
+        let order: Vec<I> = (0..n).map(I::from_index).collect();
         Self {
             position: order.clone(),
             order,
-            ends: vec![n as u32],
+            ends: vec![I::from_index(n)],
         }
     }
 
@@ -61,7 +61,7 @@ impl Partition {
         self.position.len()
     }
 
-    pub(super) fn position(&self) -> &[u32] {
+    pub(super) fn position(&self) -> &[I] {
         &self.position
     }
 
@@ -69,35 +69,35 @@ impl Partition {
         self.ends.len() == 1
     }
 
-    pub(in crate::sgdd) fn components(&self) -> impl Iterator<Item = &[u32]> + '_ {
+    pub(in crate::sgdd) fn components(&self) -> impl Iterator<Item = &[I]> + '_ {
         self.ends.iter().scan(0usize, |start, &end| {
-            let component = &self.order[*start..end as usize];
-            *start = end as usize;
+            let component = &self.order[*start..end.index()];
+            *start = end.index();
             Some(component)
         })
     }
 }
 
 /// Union by size with path compression.
-pub(super) struct UnionFind {
-    parent: Vec<u32>,
-    size: Vec<u32>,
+pub(super) struct UnionFind<I> {
+    parent: Vec<I>,
+    size: Vec<I>,
 }
 
-impl UnionFind {
+impl<I: Index> UnionFind<I> {
     pub(super) fn new(n: usize) -> Self {
         Self {
-            parent: (0..n as u32).collect(),
-            size: vec![1; n],
+            parent: (0..n).map(I::from_index).collect(),
+            size: vec![I::one(); n],
         }
     }
 
     /// Path halving: every visited vertex skips to its grandparent.
     pub(super) fn find(&mut self, mut i: usize) -> usize {
-        while self.parent[i] as usize != i {
-            let grandparent = self.parent[self.parent[i] as usize];
+        while self.parent[i].index() != i {
+            let grandparent = self.parent[self.parent[i].index()];
             self.parent[i] = grandparent;
-            i = grandparent as usize;
+            i = grandparent.index();
         }
         i
     }
@@ -114,8 +114,8 @@ impl UnionFind {
         if self.size[a] < self.size[b] {
             std::mem::swap(&mut a, &mut b);
         }
-        self.parent[b] = a as u32;
-        self.size[a] += self.size[b];
+        self.parent[b] = I::from_index(a);
+        self.size[a] = self.size[a] + self.size[b];
         a
     }
 
@@ -124,45 +124,47 @@ impl UnionFind {
         let n = self.parent.len();
         n > 0 && {
             let root = self.find(0);
-            self.size[root] as usize == n
+            self.size[root].index() == n
         }
     }
 
     /// Components ordered by lowest vertex, members ascending.
-    pub(super) fn into_partition(mut self) -> Partition {
+    pub(super) fn into_partition(mut self) -> Partition<I> {
         let n = self.parent.len();
         // Connected, the common case, skips the counting sort: every vertex is its own position.
         if self.is_one_set() {
             return Partition::whole(n);
         }
-        let mut label = vec![u32::MAX; n];
-        let mut counts: Vec<u32> = Vec::new();
-        let component: Vec<u32> = (0..n)
+        let mut label = vec![I::max_value(); n];
+        let mut counts: Vec<I> = Vec::new();
+        let component: Vec<I> = (0..n)
             .map(|v| {
                 let root = self.find(v);
-                if label[root] == u32::MAX {
-                    label[root] = counts.len() as u32;
-                    counts.push(0);
+                if label[root] == I::max_value() {
+                    label[root] = I::from_index(counts.len());
+                    counts.push(I::zero());
                 }
-                counts[label[root] as usize] += 1;
+                let count = &mut counts[label[root].index()];
+                *count = *count + I::one();
                 label[root]
             })
             .collect();
-        let ends: Vec<u32> = (counts.iter())
-            .scan(0, |end, &count| {
-                *end += count;
+        let ends: Vec<I> = (counts.iter())
+            .scan(I::zero(), |end, &count| {
+                *end = *end + count;
                 Some(*end)
             })
             .collect();
-        let mut next: Vec<u32> = (ends.iter().zip(&counts))
-            .map(|(end, count)| end - count)
+        let mut next: Vec<I> = (ends.iter().zip(&counts))
+            .map(|(&end, &count)| end - count)
             .collect();
-        let (mut order, mut position) = (vec![0; n], vec![0; n]);
+        let (mut order, mut position) = (vec![I::zero(); n], vec![I::zero(); n]);
         for (v, &c) in component.iter().enumerate() {
-            let slot = &mut next[c as usize];
-            order[*slot as usize] = v as u32;
-            position[v] = *slot - (ends[c as usize] - counts[c as usize]);
-            *slot += 1;
+            let c = c.index();
+            let slot = &mut next[c];
+            order[slot.index()] = I::from_index(v);
+            position[v] = *slot - (ends[c] - counts[c]);
+            *slot = *slot + I::one();
         }
         Partition {
             order,

@@ -1,5 +1,5 @@
 use super::normalized::Normalized;
-use crate::Real;
+use crate::{Index, Real};
 
 /// `[min_i, max_i] (Ny)_i / y_i` of a positive `y`, which brackets `ρ(N)` (Collatz 1942, Wielandt 1950).
 #[derive(Clone, Copy)]
@@ -12,8 +12,8 @@ struct Bracket {
 
 impl Bracket {
     /// Of a positive `y`; `None` where a ratio is not finite.
-    fn of<T: Real>(
-        n: &Normalized<'_, T>,
+    fn of<T: Real, I: Index>(
+        n: &Normalized<'_, T, I>,
         y: &[f64],
         work: &mut (Vec<f64>, Vec<f64>),
     ) -> Option<Self> {
@@ -57,8 +57,8 @@ impl Bracket {
 }
 
 /// Inverse iteration towards `N`'s Perron vector, each step `(αI − N) y' = y` solved by CG from `y' = 0` (Jia, Lin, Liu, arXiv:1309.3926).
-pub(super) struct InverseIteration<'n, 'a, T> {
-    n: &'n Normalized<'a, T>,
+pub(super) struct InverseIteration<'n, 'a, T, I> {
+    n: &'n Normalized<'a, T, I>,
     tolerance: f64,
     /// How close to `1` a settled residual closes.
     band: f64,
@@ -72,10 +72,10 @@ pub(super) struct InverseIteration<'n, 'a, T> {
     work: (Vec<f64>, Vec<f64>),
 }
 
-impl<'n, 'a, T: Real> InverseIteration<'n, 'a, T> {
+impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
     /// From `y = 1`; `None` if its bracket is not finite.
     pub(super) fn new(
-        n: &'n Normalized<'a, T>,
+        n: &'n Normalized<'a, T, I>,
         tolerance: f64,
         band: f64,
         max_iterations: usize,

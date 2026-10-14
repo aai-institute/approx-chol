@@ -4,7 +4,7 @@ use num_traits::PrimInt;
 
 use super::edges::{Edges, Weights};
 use super::{check_ends, Column, IntoColumns, ViewError};
-use crate::Real;
+use crate::{Index, Real};
 
 /// `A = Σ_k w_k (e_a − σ_k e_b)(e_a − σ_k e_b)ᵀ`, `σ_k = −1` where `positive[k]`.
 #[derive(Clone, Copy, Debug)]
@@ -40,7 +40,7 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for SignedGraph<'_, T, I> {
         self.n
     }
 
-    fn for_each_column(self, visit: impl FnMut(Column<T>)) {
+    fn for_each_column<S: Index>(self, visit: impl FnMut(Column<T, S>)) {
         let positive = self.positive;
         let sign = |k: usize| match positive[k] {
             true => T::one(),

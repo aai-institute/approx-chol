@@ -6,20 +6,20 @@ use rayon::prelude::*;
 
 use crate::sgdd::Grounding;
 use crate::storage::{Rows, UpperAdjacency};
-use crate::Real;
+use crate::{Index, Real};
 
 /// `L + diag(s)`, `L`'s off-diagonal nonpositive; borrowed from its block, or owned when derived.
 #[derive(Clone, Debug)]
-pub(super) struct Sddm<'a, T: Real> {
-    adjacency: Cow<'a, UpperAdjacency<T>>,
+pub(super) struct Sddm<'a, T: Real, I: Index> {
+    adjacency: Cow<'a, UpperAdjacency<T, I>>,
     grounding: Cow<'a, Grounding<T>>,
     sheets: Sheets,
 }
 
-impl<'a, T: Real> Sddm<'a, T> {
+impl<'a, T: Real, I: Index> Sddm<'a, T, I> {
     /// Panics unless nonempty, with one surplus per row and the rows split evenly into sheets.
     pub(super) fn new(
-        adjacency: Cow<'a, UpperAdjacency<T>>,
+        adjacency: Cow<'a, UpperAdjacency<T, I>>,
         grounding: Cow<'a, Grounding<T>>,
         sheets: Sheets,
     ) -> Self {
@@ -36,7 +36,10 @@ impl<'a, T: Real> Sddm<'a, T> {
     }
 
     /// The Gremban cover of signed `M`: a Laplacian on two sheets that acts as `M` on `[z; −z]`.
-    pub(super) fn cover(signed: &UpperAdjacency<T>, grounding: &Grounding<T>) -> Sddm<'static, T> {
+    pub(super) fn cover(
+        signed: &UpperAdjacency<T, I>,
+        grounding: &Grounding<T>,
+    ) -> Sddm<'static, T, I> {
         let n = signed.n();
         let mut rows = SddmRows::new(2 * n);
         for i in 0..n {
@@ -67,29 +70,29 @@ impl<'a, T: Real> Sddm<'a, T> {
     }
 
     /// Positive Laplacian weights, each edge once, the ground vertex `n` joined by each surplus.
-    pub(super) fn grounded_edges(&self) -> impl Iterator<Item = (u32, u32, T)> + '_ {
+    pub(super) fn grounded_edges(&self) -> impl Iterator<Item = (I, I, T)> + '_ {
         let n = self.n();
         let laplacian = (0..n).flat_map(move |i| {
             let row = self.adjacency.upper(i);
-            row.map(move |(j, &a)| (i as u32, j as u32, -a))
+            row.map(move |(j, &a)| (I::from_index(i), I::from_index(j), -a))
         });
         let surplus = self.grounding.surplus().unwrap_or_default();
         let ground = surplus.iter().enumerate().filter(|(_, &s)| s > T::zero());
-        laplacian.chain(ground.map(move |(k, &s)| (k as u32, n as u32, s)))
+        laplacian.chain(ground.map(move |(k, &s)| (I::from_index(k), I::from_index(n), s)))
     }
 }
 
 /// An SDDM row by row, each column's addends summed in arrival order and stored as `−w` by column; column `n` is the row's ground weight.
-pub(super) struct SddmRows<T> {
+pub(super) struct SddmRows<T, I> {
     sums: Vec<T>,
-    touched: Vec<u32>,
+    touched: Vec<I>,
     ptrs: Vec<usize>,
-    indices: Vec<u32>,
+    indices: Vec<I>,
     values: Vec<T>,
     ground: Vec<T>,
 }
 
-impl<T: Real> SddmRows<T> {
+impl<T: Real, I: Index> SddmRows<T, I> {
     pub(super) fn new(n: usize) -> Self {
         Self {
             sums: vec![T::zero(); n + 1],
@@ -108,7 +111,7 @@ impl<T: Real> SddmRows<T> {
             "a column reads zero only before its first nonzero addend"
         );
         if self.sums[column] == T::zero() {
-            self.touched.push(column as u32);
+            self.touched.push(I::from_index(column));
         }
         self.sums[column] = self.sums[column] + w;
     }
@@ -117,7 +120,7 @@ impl<T: Real> SddmRows<T> {
         let n = self.sums.len() - 1;
         self.touched.sort_unstable();
         let ground = match self.touched.last() {
-            Some(&j) if j as usize == n => {
+            Some(&j) if j.index() == n => {
                 self.touched.pop();
                 std::mem::replace(&mut self.sums[n], T::zero())
             }
@@ -125,7 +128,7 @@ impl<T: Real> SddmRows<T> {
         };
         self.ground.push(ground);
         for &j in &self.touched {
-            let sum = std::mem::replace(&mut self.sums[j as usize], T::zero());
+            let sum = std::mem::replace(&mut self.sums[j.index()], T::zero());
             // A stored zero couples nothing, and a column pushed twice reads zero the second time.
             if sum != T::zero() {
                 self.indices.push(j);
@@ -141,7 +144,7 @@ impl<T: Real> SddmRows<T> {
         let (start, end) = (self.ptrs[self.ptrs.len() - 2], self.indices.len());
         self.ground.push(*self.ground.last().expect("a row ended"));
         for i in start..end {
-            self.indices.push(self.indices[i] ^ 1);
+            self.indices.push(self.indices[i] ^ I::one());
             self.values.push(self.values[i]);
         }
         for i in end + 1..self.indices.len() {
@@ -160,7 +163,7 @@ impl<T: Real> SddmRows<T> {
         n_kept: usize,
         min_kept: usize,
         row: impl Fn(&mut Self, usize) + Sync,
-    ) -> (UpperAdjacency<T>, Vec<T>) {
+    ) -> (UpperAdjacency<T, I>, Vec<T>) {
         let n = sheets.count() * n_kept;
         let rows = (0..n_kept).into_par_iter().with_min_len(min_kept).fold(
             || Self::new(n),
@@ -180,7 +183,7 @@ impl<T: Real> SddmRows<T> {
         rows.unwrap_or_else(|| Self::new(n)).finish()
     }
 
-    pub(super) fn finish(self) -> (UpperAdjacency<T>, Vec<T>) {
+    pub(super) fn finish(self) -> (UpperAdjacency<T, I>, Vec<T>) {
         let n = self.ground.len();
         let rows = Rows::new(self.ptrs, self.indices, self.values, n);
         (UpperAdjacency::new(rows), self.ground)

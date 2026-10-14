@@ -3,7 +3,7 @@
 use num_traits::PrimInt;
 
 use super::{index, Column, ViewError, Weighting};
-use crate::Real;
+use crate::{Index, Real};
 
 /// `W`, one nonnegative entry per column of `V`, checked once so every view over the same columns can share it.
 #[derive(Clone, Copy, Debug)]
@@ -80,12 +80,12 @@ impl<'a, T: Real, I: PrimInt> Edges<'a, T, I> {
 
     /// Column `k` is `v_a(k) e_a + v_b(k) e_(offset + b)`; matched once, then looped per case.
     #[inline(always)]
-    pub(super) fn for_each_column(
+    pub(super) fn for_each_column<S: Index>(
         self,
         offset: usize,
         v_a: impl Fn(usize) -> T,
         v_b: impl Fn(usize) -> T,
-        visit: impl FnMut(Column<T>),
+        visit: impl FnMut(Column<T, S>),
     ) {
         match self.weights.0 {
             Weighting::Unit => self.columns(offset, v_a, v_b, |_| Weighting::Unit, visit),
@@ -97,18 +97,18 @@ impl<'a, T: Real, I: PrimInt> Edges<'a, T, I> {
     }
 
     #[inline(always)]
-    fn columns(
+    fn columns<S: Index>(
         self,
         offset: usize,
         v_a: impl Fn(usize) -> T,
         v_b: impl Fn(usize) -> T,
         weight: impl Fn(usize) -> Weighting<T>,
-        mut visit: impl FnMut(Column<T>),
+        mut visit: impl FnMut(Column<T, S>),
     ) {
         for (k, (a, b)) in self.a.iter().zip(self.b).enumerate() {
             visit(Column {
-                a: index(*a) as u32,
-                b: (offset + index(*b)) as u32,
+                a: S::from_index(index(*a)),
+                b: S::from_index(offset + index(*b)),
                 v_a: v_a(k),
                 v_b: v_b(k),
                 weight: weight(k),

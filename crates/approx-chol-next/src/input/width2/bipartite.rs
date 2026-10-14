@@ -4,7 +4,7 @@ use num_traits::PrimInt;
 
 use super::edges::{Edges, Weights};
 use super::{BipartiteColumns, Column, IntoColumns, ViewError};
-use crate::Real;
+use crate::{Index, Real};
 
 /// One side of `V`, with at most one nonzero per column: `values[k]` at `rows[k]`, `1` for `None`.
 #[derive(Debug)]
@@ -47,7 +47,7 @@ pub struct BipartiteGram<'a, T, I = u32> {
 }
 
 impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
-    /// Both factors share the column count, the weights are checked, and `n_left + n_right` fits a `u32` index.
+    /// Both factors share the column count and the weights are checked.
     pub fn new(
         left: FactorWidth1<'a, T, I>,
         right: FactorWidth1<'a, T, I>,
@@ -55,9 +55,6 @@ impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
     ) -> Result<Self, ViewError> {
         let edges = Edges::new(left.rows, right.rows, weights)?;
         let count = left.n.saturating_add(right.n);
-        if u32::try_from(count).is_err() {
-            return Err(ViewError::TooLarge { count });
-        }
         Ok(Self {
             n_left: left.n,
             edges,
@@ -84,7 +81,7 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteGram<'_, T, I> {
         self.n
     }
 
-    fn for_each_column(self, visit: impl FnMut(Column<T>)) {
+    fn for_each_column<S: Index>(self, visit: impl FnMut(Column<T, S>)) {
         let (edges, n_left) = (self.edges, self.n_left);
         let one = |_| T::one();
         match self.values {
@@ -109,7 +106,7 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteLaplacian<'_, T, I> {
         self.n_left + self.n_right
     }
 
-    fn for_each_column(self, visit: impl FnMut(Column<T>)) {
+    fn for_each_column<S: Index>(self, visit: impl FnMut(Column<T, S>)) {
         (self.edges).for_each_column(self.n_left, |_| T::one(), |_| -T::one(), visit)
     }
 }

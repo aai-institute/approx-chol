@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::{narrow, widen, Real};
+use crate::{narrow, widen, Index, Real};
 
 /// Compressed sparse rows.
 #[cfg_attr(
@@ -11,17 +11,17 @@ use crate::{narrow, widen, Real};
     serde(remote = "Self")
 )]
 #[derive(Clone, Debug)]
-pub(crate) struct Rows<T> {
-    /// Per row, so `usize` costs nothing per entry: an exact complement can pass `u32::MAX` entries.
+pub(crate) struct Rows<T, I> {
+    /// Per row, so `usize` costs nothing per entry: an exact complement can pass `I::MAX` entries.
     ptrs: Vec<usize>,
-    indices: Vec<u32>,
+    indices: Vec<I>,
     values: Vec<T>,
     n_cols: usize,
 }
 
-impl<T: Real> Rows<T> {
+impl<T: Real, I: Index> Rows<T, I> {
     /// Panics unless `ptrs` ascends from `0` and each row's columns strictly ascend below `n_cols`.
-    pub(crate) fn new(ptrs: Vec<usize>, indices: Vec<u32>, values: Vec<T>, n_cols: usize) -> Self {
+    pub(crate) fn new(ptrs: Vec<usize>, indices: Vec<I>, values: Vec<T>, n_cols: usize) -> Self {
         assert_eq!(ptrs.first(), Some(&0), "rows start at the first entry");
         assert_eq!(
             ptrs.last(),
@@ -52,7 +52,7 @@ impl<T: Real> Rows<T> {
             && self.ptrs.windows(2).all(|span| {
                 let row = &self.indices[span[0]..span[1]];
                 row.windows(2).all(|j| j[0] < j[1])
-                    && row.last().is_none_or(|&j| (j as usize) < self.n_cols)
+                    && row.last().is_none_or(|&j| j.index() < self.n_cols)
             })
     }
 
@@ -74,7 +74,7 @@ impl<T: Real> Rows<T> {
 
     pub(crate) fn row(&self, i: usize) -> impl Iterator<Item = (usize, &T)> {
         let span = self.ptrs[i]..self.ptrs[i + 1];
-        (self.indices[span.clone()].iter().map(|&j| j as usize)).zip(&self.values[span])
+        (self.indices[span.clone()].iter().map(|&j| j.index())).zip(&self.values[span])
     }
 
     /// `out = |X| x`.
@@ -99,15 +99,15 @@ impl<T: Real> Rows<T> {
             let row = (self.indices[span[0]..span[1]].iter()).zip(&self.values[span[0]..span[1]]);
             let sum: f64 = row
                 .clone()
-                .map(|(&j, &a)| widen(a.abs()) * x[j as usize])
+                .map(|(&j, &a)| widen(a.abs()) * x[j.index()])
                 .sum();
             let sum = s * s * sum;
-            row.for_each(|(&j, &a)| out[j as usize] += widen(a.abs()) * sum);
+            row.for_each(|(&j, &a)| out[j.index()] += widen(a.abs()) * sum);
         }
     }
 
     /// Each value mapped, the pattern kept.
-    pub(crate) fn map<U: Real>(self, f: impl FnMut(T) -> U) -> Rows<U> {
+    pub(crate) fn map<U: Real>(self, f: impl FnMut(T) -> U) -> Rows<U, I> {
         Rows {
             ptrs: self.ptrs,
             indices: self.indices,
@@ -119,17 +119,17 @@ impl<T: Real> Rows<T> {
     pub(crate) fn transpose(&self) -> Self {
         let mut ptrs = vec![0; self.n_cols + 1];
         for &j in &self.indices {
-            ptrs[j as usize + 1] += 1;
+            ptrs[j.index() + 1] += 1;
         }
         for j in 0..self.n_cols {
             ptrs[j + 1] += ptrs[j];
         }
         let mut next = ptrs[..self.n_cols].to_vec();
-        let mut indices = vec![0; self.indices.len()];
+        let mut indices = vec![I::zero(); self.indices.len()];
         let mut values = vec![T::zero(); self.values.len()];
         for i in 0..self.n_rows() {
             for (j, &x) in self.row(i) {
-                indices[next[j]] = i as u32;
+                indices[next[j]] = I::from_index(i);
                 values[next[j]] = x;
                 next[j] += 1;
             }
@@ -196,7 +196,7 @@ impl<T: Real> Rows<T> {
     ) -> Option<Self> {
         for (i, span) in self.ptrs.windows(2).enumerate() {
             for p in span[0]..span[1] {
-                let j = self.indices[p] as usize;
+                let j = self.indices[p].index();
                 let x = r[i] * self.values[p] * c[j];
                 if x == T::zero() || !crate::in_range(x) {
                     return None;
@@ -211,13 +211,13 @@ impl<T: Real> Rows<T> {
 
 /// A symmetric off-diagonal's strict upper triangle by rows: each edge once.
 #[derive(Clone, Debug)]
-pub(crate) struct UpperAdjacency<T> {
-    rows: Rows<T>,
+pub(crate) struct UpperAdjacency<T, I> {
+    rows: Rows<T, I>,
 }
 
-impl<T: Real> UpperAdjacency<T> {
+impl<T: Real, I: Index> UpperAdjacency<T, I> {
     /// Panics unless square, every column above its row, and no stored zero.
-    pub(crate) fn new(rows: Rows<T>) -> Self {
+    pub(crate) fn new(rows: Rows<T, I>) -> Self {
         assert_eq!(rows.n_rows(), rows.n_cols, "square");
         debug_assert!(
             (0..rows.n_rows()).all(|i| rows.row(i).all(|(j, _)| j > i)),
@@ -247,13 +247,13 @@ impl<T: Real> UpperAdjacency<T> {
 
 /// A block's off-diagonal by shape: `A_c`'s signed one, or `M`'s once congruent.
 #[derive(Clone, Debug)]
-pub(crate) enum OffDiagonal<T> {
-    General(UpperAdjacency<T>),
+pub(crate) enum OffDiagonal<T, I> {
+    General(UpperAdjacency<T, I>),
     /// `C` of `[D_e C; Cᵀ D_k]`, both sides nonempty, the larger eliminated first as its rows.
-    Bipartite(Arc<Rows<T>>),
+    Bipartite(Arc<Rows<T, I>>),
 }
 
-impl<T: Real> OffDiagonal<T> {
+impl<T: Real, I: Index> OffDiagonal<T, I> {
     pub(crate) fn n(&self) -> usize {
         match self {
             Self::General(adjacency) => adjacency.n(),
@@ -316,7 +316,7 @@ impl<T: Real> OffDiagonal<T> {
         for (i, span) in rows.ptrs.windows(2).enumerate() {
             degree[i] += span[1] - span[0];
             for &j in &rows.indices[span[0]..span[1]] {
-                degree[offset + j as usize] += 1;
+                degree[offset + j.index()] += 1;
             }
         }
         degree.into_iter().max().unwrap_or(0)
@@ -333,7 +333,7 @@ impl<T: Real> OffDiagonal<T> {
                 .iter()
                 .zip(&rows.values[span[0]..span[1]])
             {
-                let (a, j) = (widen(a.abs()), offset + j as usize);
+                let (a, j) = (widen(a.abs()), offset + j.index());
                 sum += a * x[j];
                 out[j] += a * x_i;
             }
@@ -342,14 +342,14 @@ impl<T: Real> OffDiagonal<T> {
     }
 
     /// The stored entries, and where their columns start in local order.
-    fn stored(&self) -> (&Rows<T>, usize) {
+    fn stored(&self) -> (&Rows<T, I>, usize) {
         match self {
             Self::General(adjacency) => (&adjacency.rows, 0),
             Self::Bipartite(cross) => (cross, cross.n_rows()),
         }
     }
 
-    fn rows(&self) -> &Rows<T> {
+    fn rows(&self) -> &Rows<T, I> {
         match self {
             Self::General(adjacency) => &adjacency.rows,
             Self::Bipartite(cross) => cross,
@@ -371,7 +371,7 @@ impl<T: Real> OffDiagonal<T> {
 checked_serde!(Rows);
 
 #[cfg(feature = "serde")]
-impl<T: Real> Rows<T> {
+impl<T: Real, I: Index> Rows<T, I> {
     fn checked(self) -> Option<Self> {
         let values =
             self.values.len() == self.indices.len() && self.values.iter().all(|v| v.is_finite());

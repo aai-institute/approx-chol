@@ -1,9 +1,11 @@
 use super::congruence::Congruence;
 use crate::storage::{OffDiagonal, Rows};
-use crate::Real;
+use crate::{Index, Real};
 
 /// The signs `S` folding `A_c` into a Z-matrix, `I` when it already is one; `None` when frustrated.
-pub(super) fn folding_signs<T: Real>(off_diagonal: &OffDiagonal<T>) -> Option<Congruence<T>> {
+pub(super) fn folding_signs<T: Real, I: Index>(
+    off_diagonal: &OffDiagonal<T, I>,
+) -> Option<Congruence<T>> {
     if off_diagonal.nonpositive() {
         return Some(Congruence::Identity);
     }
@@ -13,7 +15,7 @@ pub(super) fn folding_signs<T: Real>(off_diagonal: &OffDiagonal<T>) -> Option<Co
         }
         OffDiagonal::Bipartite(cross) => cross_signs(cross),
         OffDiagonal::General(adjacency) => {
-            let mut forest = ParityForest::new(adjacency.n());
+            let mut forest = ParityForest::<I>::new(adjacency.n());
             for i in 0..adjacency.n() {
                 for (j, &a) in adjacency.upper(i) {
                     forest.join(i, j, a > T::zero())?;
@@ -25,9 +27,9 @@ pub(super) fn folding_signs<T: Real>(off_diagonal: &OffDiagonal<T>) -> Option<Co
 }
 
 /// `None` when frustrated; union-find over `C` alone, as searching `Cᵀ` costs a transpose.
-fn cross_signs<T: Real>(cross: &Rows<T>) -> Option<Congruence<T>> {
+fn cross_signs<T: Real, I: Index>(cross: &Rows<T, I>) -> Option<Congruence<T>> {
     let n_eliminated = cross.n_rows();
-    let mut forest = ParityForest::new(n_eliminated + cross.n_cols());
+    let mut forest = ParityForest::<I>::new(n_eliminated + cross.n_cols());
     for e in 0..n_eliminated {
         for (k, &c) in cross.row(e) {
             // A positive entry folds only across opposite signs.
@@ -38,31 +40,31 @@ fn cross_signs<T: Real>(cross: &Rows<T>) -> Option<Congruence<T>> {
 }
 
 /// Union-find whose links carry whether the two ends' signs differ.
-struct ParityForest {
-    parent: Vec<u32>,
+struct ParityForest<I> {
+    parent: Vec<I>,
     /// Parity to the parent; `false` at a root.
     odd: Vec<bool>,
-    size: Vec<u32>,
+    size: Vec<I>,
 }
 
-impl ParityForest {
+impl<I: Index> ParityForest<I> {
     fn new(n: usize) -> Self {
         Self {
-            parent: (0..n as u32).collect(),
+            parent: (0..n).map(I::from_index).collect(),
             odd: vec![false; n],
-            size: vec![1; n],
+            size: vec![I::one(); n],
         }
     }
 
     /// Root and parity to it, halving the path.
     fn find(&mut self, mut x: usize) -> (usize, bool) {
         let mut parity = false;
-        while self.parent[x] as usize != x {
-            let up = self.parent[x] as usize;
+        while self.parent[x].index() != x {
+            let up = self.parent[x].index();
             self.odd[x] ^= self.odd[up];
             self.parent[x] = self.parent[up];
             parity ^= self.odd[x];
-            x = self.parent[x] as usize;
+            x = self.parent[x].index();
         }
         (x, parity)
     }
@@ -83,9 +85,9 @@ impl ParityForest {
             true => (ri, rj),
             false => (rj, ri),
         };
-        self.parent[small] = big as u32;
+        self.parent[small] = I::from_index(big);
         self.odd[small] = pi ^ pj ^ differ;
-        self.size[big] += self.size[small];
+        self.size[big] = self.size[big] + self.size[small];
         Some(())
     }
 }

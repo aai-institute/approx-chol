@@ -8,31 +8,31 @@ use std::cell::LazyCell;
 
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
 use super::congruence::Congruence;
-use super::decomposition::{Cells, Partition};
+use super::decomposition::{Cells, Components};
 use super::scaling::{self, Existence, Scaling, ScalingPolicy};
 use super::signature;
 use crate::storage::OffDiagonal;
-use crate::{diagonal_in_range, widen, Real};
+use crate::{diagonal_in_range, widen, Index, Real};
 
-fn into_sgdd<T: Real>(
-    (partition, live, dead): (Partition, Vec<IrreducibleBlock<T>>, Vec<u32>),
-) -> Sgdd<T> {
+fn into_sgdd<T: Real, I: Index>(
+    (partition, live, dead): Components<IrreducibleBlock<T, I>, I>,
+) -> Sgdd<T, I> {
     Sgdd::new(partition.n(), live, dead)
 }
 
 /// One block `A_c` as the input gave it, with its rows' `Σ_j |a_ij|` and entry counts.
-struct SymmetricBlock<T> {
+struct SymmetricBlock<T, I> {
     /// In `A`'s numbering, in local order.
-    vertices: Box<[u32]>,
-    off_diagonal: OffDiagonal<T>,
+    vertices: Box<[I]>,
+    off_diagonal: OffDiagonal<T, I>,
     diagonal: Vec<T>,
     /// Summed in `f64`: a long `f32` row is not undercounted.
     abs_row_sums: Vec<T>,
 }
 
-impl<T: Real> SymmetricBlock<T> {
+impl<T: Real, I: Index> SymmetricBlock<T, I> {
     /// `None` when dead: components join only nonzeros, so a vertex with nothing to solve is alone with a zero diagonal.
-    fn live((vertices, off_diagonal, diagonal): Cells<T>) -> Option<Self> {
+    fn live((vertices, off_diagonal, diagonal): Cells<T, I>) -> Option<Self> {
         assert_eq!(vertices.len(), off_diagonal.n(), "one vertex per row");
         assert_eq!(diagonal.len(), off_diagonal.n(), "one diagonal per row");
         (diagonal != [T::zero()]).then(|| Self {
@@ -57,11 +57,11 @@ impl<T: Real> SymmetricBlock<T> {
         nulls: &LazyCell<Vec<f64>, impl FnOnce() -> Vec<f64>>,
     ) -> Result<Scaling<T>, ReduceError> {
         if let Some(i) = self.diagonal.iter().position(|&d| d == T::zero()) {
-            let vertex = self.vertices[i];
+            let vertex = self.vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
         }
         self.scaling(policy, Existence::Guaranteed, || {
-            let u: Vec<f64> = (self.vertices.iter()).map(|&v| nulls[v as usize]).collect();
+            let u: Vec<f64> = (self.vertices.iter()).map(|&v| nulls[v.index()]).collect();
             (u.iter().all(|x| x.is_finite()))
                 .then(|| scaling::null_scaling(&u, &self.diagonal))
                 .flatten()
@@ -77,7 +77,7 @@ impl<T: Real> SymmetricBlock<T> {
         relax: impl FnOnce() -> Option<scaling::Relaxation<T>>,
     ) -> Result<Scaling<T>, ReduceError> {
         if let Some(i) = self.diagonal.iter().position(|&d| !diagonal_in_range(d)) {
-            let vertex = self.vertices[i];
+            let vertex = self.vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
         }
         if let Some(i) = self
@@ -85,14 +85,14 @@ impl<T: Real> SymmetricBlock<T> {
             .iter()
             .position(|&s| !diagonal_in_range(s))
         {
-            let vertex = self.vertices[i];
+            let vertex = self.vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
         }
         if let Some(i) = self.diagonal.iter().position(|&d| d <= T::zero()) {
-            let vertex = self.vertices[i];
+            let vertex = self.vertices[i].index();
             return Err(ReduceError::NonpositiveDiagonal { vertex });
         }
-        let vertex = self.vertices[0];
+        let vertex = self.vertices[0].index();
         let mut rows = self.diagonal.iter().zip(&self.abs_row_sums);
         if rows.all(|(&d, &s)| policy.dominates(d, s)) {
             return Ok(Scaling::AlreadyDominant);
@@ -102,7 +102,11 @@ impl<T: Real> SymmetricBlock<T> {
     }
 
     /// `M = F A_c F` with `F = S R`; a frustrated `A_c` takes `S = I` and grounds on its rows at once.
-    fn sign(self, scaling: Scaling<T>, policy: &ScalingPolicy) -> Result<Signed<T>, ReduceError> {
+    fn sign(
+        self,
+        scaling: Scaling<T>,
+        policy: &ScalingPolicy,
+    ) -> Result<Signed<T, I>, ReduceError> {
         match signature::folding_signs(&self.off_diagonal) {
             Some(signs) => {
                 let (m, rows) = self.congruent(signs, scaling, policy)?;
@@ -121,7 +125,7 @@ impl<T: Real> SymmetricBlock<T> {
         signs: Congruence<T>,
         scaling: Scaling<T>,
         policy: &ScalingPolicy,
-    ) -> Result<(Congruent<T>, RowSums<T>), ReduceError> {
+    ) -> Result<(Congruent<T, I>, RowSums<T>), ReduceError> {
         match scaling {
             Scaling::AlreadyDominant => {
                 // Signs keep every magnitude, so `A_c`'s rows are `M`'s.
@@ -135,7 +139,7 @@ impl<T: Real> SymmetricBlock<T> {
                 ))
             }
             Scaling::Scaled(relaxation, existence) => {
-                let vertex = self.vertices[0];
+                let vertex = self.vertices[0].index();
                 let factors = signs.times(&relaxation.scales);
                 let (off_diagonal, abs) = (self.off_diagonal.scaled_abs_row_sums(&factors))
                     .ok_or(ReduceError::Unscalable { vertex })?;
@@ -157,21 +161,21 @@ impl<T: Real> SymmetricBlock<T> {
 }
 
 /// Only a folded `M` can still take a surplus from `V`.
-enum Signed<T> {
-    Folded(Congruent<T>, RowSums<T>),
-    Frustrated(IrreducibleBlock<T>),
+enum Signed<T, I> {
+    Folded(Congruent<T, I>, RowSums<T>),
+    Frustrated(IrreducibleBlock<T, I>),
 }
 
 /// `M = F · A_c · F` over its vertices, its surplus still to be decided.
-struct Congruent<T> {
-    vertices: Box<[u32]>,
+struct Congruent<T, I> {
+    vertices: Box<[I]>,
     congruence: Congruence<T>,
-    off_diagonal: OffDiagonal<T>,
+    off_diagonal: OffDiagonal<T, I>,
 }
 
-impl<T: Real> Congruent<T> {
+impl<T: Real, I: Index> Congruent<T, I> {
     /// `S A_c S`, unscaled.
-    fn new(vertices: Box<[u32]>, off_diagonal: OffDiagonal<T>, signs: Congruence<T>) -> Self {
+    fn new(vertices: Box<[I]>, off_diagonal: OffDiagonal<T, I>, signs: Congruence<T>) -> Self {
         let off_diagonal = match signs.factors(off_diagonal.n()) {
             Some(s) => off_diagonal.signed(&s),
             None => off_diagonal,
@@ -183,12 +187,12 @@ impl<T: Real> Congruent<T> {
         }
     }
 
-    fn frustrated(self, grounding: Grounding<T>) -> Result<IrreducibleBlock<T>, ReduceError> {
+    fn frustrated(self, grounding: Grounding<T>) -> Result<IrreducibleBlock<T, I>, ReduceError> {
         let balance = Balance::Frustrated(grounding);
         IrreducibleBlock::new(self.vertices, self.congruence, self.off_diagonal, balance)
     }
 
-    fn balanced(self, grounding: Grounding<T>) -> Result<IrreducibleBlock<T>, ReduceError> {
+    fn balanced(self, grounding: Grounding<T>) -> Result<IrreducibleBlock<T, I>, ReduceError> {
         let balance = Balance::Balanced(grounding);
         IrreducibleBlock::new(self.vertices, self.congruence, self.off_diagonal, balance)
     }
@@ -202,7 +206,7 @@ struct RowSums<T> {
 
 impl<T: Real> RowSums<T> {
     /// A folded `M`'s row sums are `M1`, so `1ᵀM1 = tr M − Σ|offdiag(M)|`, both compensated.
-    fn folded_surplus(self, off_diagonal: &OffDiagonal<T>) -> Grounding<T> {
+    fn folded_surplus<I: Index>(self, off_diagonal: &OffDiagonal<T, I>) -> Grounding<T> {
         let trace = crate::compensated_sum(self.diagonal.iter().map(|&d| widen(d)));
         let ones = trace - off_diagonal.abs_total();
         match ones <= SINGULAR_BAND * widen(T::epsilon()) * trace {

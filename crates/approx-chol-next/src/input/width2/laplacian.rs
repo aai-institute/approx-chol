@@ -4,7 +4,7 @@ use num_traits::PrimInt;
 
 use super::edges::{Edges, Weights};
 use super::{check_ends, Column, IntoColumns, ViewError};
-use crate::Real;
+use crate::{Index, Real};
 
 /// Weighted multigraph on `n` vertices, grounded by `g`: `A = Σ_k w_k (e_a − e_b)(e_a − e_b)ᵀ + diag(g)`.
 #[derive(Clone, Copy, Debug)]
@@ -61,7 +61,7 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for Laplacian<'_, T, I> {
         self.n
     }
 
-    fn for_each_column(self, visit: impl FnMut(Column<T>)) {
+    fn for_each_column<S: Index>(self, visit: impl FnMut(Column<T, S>)) {
         self.edges
             .for_each_column(0, |_| T::one(), |_| -T::one(), visit)
     }

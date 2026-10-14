@@ -1,7 +1,7 @@
 //! Exact Cholesky of a small SDDM by GTH elimination: every pivot a sum of nonnegative terms, so none cancels or fails.
 
 use crate::factor::sddm::Sddm;
-use crate::Real;
+use crate::{Index, Real};
 
 /// A Laplacian's packed strict lower triangle, free vertex last, then `p⁻¹`; reserved before its matrix is built, not `Clone`, which would drop the capacity.
 #[derive(Debug)]
@@ -22,7 +22,7 @@ impl<T: Real> PackedLaplacian<T> {
 
     /// Left-looking GTH on the packed lower `−w` with a free last row `m` never pivoted (`m = n` holding the ground's `−s` grounded, the anchor `m = n − 1` anchored): for each column `j < m` in order, every stored `(r, j)`, `r > j`, subtracts `Σ_{k<j} min·(max·p_k⁻¹)` of the magnitudes of the already updated `(r, k)` and `(j, k)`, then `p_j = −Σ_{r>j} (r, j)` and `p_j⁻¹` goes to the tail; a last pass scales each column `j` by `√p_j⁻¹` and writes `√p_j` on its diagonal, and truncating row `m` and the tail leaves `m` rows; nothing cancels, under- or overflows (`d − Σl²` cancelled to 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more factor time).
     /// Packed lower triangle of `L` in `LLᵀ`, the free slot excluded: an upper one would double the factor.
-    pub(super) fn factor(self, sddm: &Sddm<'_, T>) -> Vec<T> {
+    pub(super) fn factor<I: Index>(self, sddm: &Sddm<'_, T, I>) -> Vec<T> {
         let Self {
             mut values,
             dimension,
@@ -32,7 +32,7 @@ impl<T: Real> PackedLaplacian<T> {
         let packed = row_start(m + 1);
         values.resize(packed + m, T::zero());
         for (k, j, w) in sddm.grounded_edges() {
-            let (k, j) = (k as usize, j as usize);
+            let (k, j) = (k.index(), j.index());
             values[row_start(j) + k] = -w;
         }
         let (matrix, inverse_pivots) = values.split_at_mut(packed);

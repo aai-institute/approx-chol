@@ -5,15 +5,15 @@ use num_traits::PrimInt;
 use super::{Congruent, Signed, SymmetricBlock, SINGULAR_BAND};
 use crate::input::{BipartiteGram, FactorWidth2, IntoColumns};
 use crate::sgdd::block::{Grounding, IrreducibleBlock, ReduceError, Sgdd};
-use crate::sgdd::decomposition::{assemble_bipartite_gram, assemble_general, Partition};
+use crate::sgdd::decomposition::{assemble_bipartite_gram, assemble_general, Components};
 use crate::sgdd::null_vectors::null_vectors;
 use crate::sgdd::scaling::ScalingPolicy;
-use crate::{narrow, widen, Real};
+use crate::{narrow, widen, Index, Real};
 
-impl<T: Real> Sgdd<T> {
+impl<T: Real, I: Index> Sgdd<T, I> {
     /// `A = V Vᵀ`: scales, folds or covers each block as general, deciding floating from `V`.
-    pub fn from_gram<I: PrimInt>(
-        v: FactorWidth2<'_, T, I>,
+    pub fn from_gram<J: PrimInt>(
+        v: FactorWidth2<'_, T, J>,
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
         let blocks = assemble_general(v)?.extract(|cells| Ok(SymmetricBlock::live(cells)))?;
@@ -21,8 +21,8 @@ impl<T: Real> Sgdd<T> {
     }
 
     /// `A = V W Vᵀ` on two disjoint sides `[D_l C; Cᵀ D_r]`, as [`from_gram`](Self::from_gram).
-    pub fn from_bipartite_gram<I: PrimInt>(
-        gram: BipartiteGram<'_, T, I>,
+    pub fn from_bipartite_gram<J: PrimInt>(
+        gram: BipartiteGram<'_, T, J>,
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
         // Incidence on both sides folds by shape, so `policy` has nothing to scale.
@@ -36,11 +36,11 @@ impl<T: Real> Sgdd<T> {
 }
 
 /// Scaled by `V`'s null vectors on demand; folded blocks drop their rows for one pass over `V`.
-fn reduce_gram_blocks<T: Real>(
+fn reduce_gram_blocks<T: Real, I: Index>(
     v: impl IntoColumns<T>,
-    (partition, live, dead): (Partition, Vec<SymmetricBlock<T>>, Vec<u32>),
+    (partition, live, dead): Components<SymmetricBlock<T, I>, I>,
     policy: &ScalingPolicy,
-) -> Result<Sgdd<T>, ReduceError> {
+) -> Result<Sgdd<T, I>, ReduceError> {
     // Built by the first block not already dominant, so a dominant input reads no extra pass.
     let nulls = LazyCell::new(|| null_vectors(v, partition.components()));
     let (mut folded, mut frustrated) = (Vec::new(), Vec::new());
@@ -57,36 +57,36 @@ fn reduce_gram_blocks<T: Real>(
 }
 
 /// Floats each folded block as [`RowSums::folded_surplus`](super::RowSums::folded_surplus) does, else grounds it on `s = M·1`.
-fn ground_or_float<T: Real>(
+fn ground_or_float<T: Real, I: Index>(
     v: impl IntoColumns<T>,
-    blocks: Vec<Congruent<T>>,
-) -> Result<Vec<IrreducibleBlock<T>>, ReduceError> {
+    blocks: Vec<Congruent<T, I>>,
+) -> Result<Vec<IrreducibleBlock<T, I>>, ReduceError> {
     if blocks.is_empty() {
         return Ok(Vec::new());
     }
     // By vertex: blocks are disjoint, so one slot per vertex holds its block, `f_i` and surplus.
-    let mut block_of = vec![u32::MAX; v.n()];
+    let mut block_of = vec![I::max_value(); v.n()];
     let mut factor = vec![0.0; v.n()];
     for (c, block) in blocks.iter().enumerate() {
         for (slot, &vertex) in block.vertices.iter().enumerate() {
-            block_of[vertex as usize] = c as u32;
-            factor[vertex as usize] = widen(block.congruence.factor(slot));
+            block_of[vertex.index()] = I::from_index(c);
+            factor[vertex.index()] = widen(block.congruence.factor(slot));
         }
     }
     let mut surplus = vec![0.0f64; v.n()];
     // `ε·1ᵀM1` and `ε·tr M` per block.
     let (mut ones, mut trace) = (vec![0.0f64; blocks.len()], vec![0.0f64; blocks.len()]);
     let epsilon = widen(T::epsilon());
-    v.for_each_column(
+    v.for_each_column::<I>(
         #[inline(always)]
         |column| {
             if column.weight.is_zero() {
                 return;
             }
             let w = |x: f64, y: f64| column.weight.bilinear(x, y);
-            let end = |i: u32, v_i: T| match block_of[i as usize] {
-                u32::MAX => None,
-                c => Some((i as usize, c as usize, factor[i as usize] * widen(v_i))),
+            let end = |i: I, v_i: T| match block_of[i.index()] {
+                c if c == I::max_value() => None,
+                c => Some((i.index(), c.index(), factor[i.index()] * widen(v_i))),
             };
             match (end(column.a, column.v_a), end(column.b, column.v_b)) {
                 (Some((a, c, u_a)), Some((b, c_b, u_b))) if c == c_b => {
@@ -109,16 +109,16 @@ fn ground_or_float<T: Real>(
     );
     drop((block_of, factor));
     let decided = blocks.into_iter().zip(ones).zip(trace);
-    let decide = |((block, ones), trace): ((Congruent<T>, f64), f64)| {
+    let decide = |((block, ones), trace): ((Congruent<T, I>, f64), f64)| {
         if ones <= SINGULAR_BAND * epsilon * trace {
             return block.balanced(Grounding::ungrounded());
         }
         let vertices = &block.vertices;
         let surplus: Vec<T> = (vertices.iter())
-            .map(|&v| narrow(surplus[v as usize].max(0.0)))
+            .map(|&v| narrow(surplus[v.index()].max(0.0)))
             .collect();
         // Unproven, a surplus that vanishes in `T` is never a float.
-        let vertex = vertices[0];
+        let vertex = vertices[0].index();
         match Grounding::of(surplus) {
             grounding if grounding.is_grounded() => block.balanced(grounding),
             _ => Err(ReduceError::Unscalable { vertex }),

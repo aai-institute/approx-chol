@@ -9,7 +9,7 @@ mod partition;
 use super::block::ReduceError;
 use crate::input::{Canonical, CsrError, UpperCanonical};
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
-use crate::Real;
+use crate::{fits, Index, Real};
 pub(super) use assembly::{
     assemble_bipartite, assemble_bipartite_gram, assemble_general, assemble_signed,
 };
@@ -17,26 +17,26 @@ pub(super) use partition::Partition;
 use partition::UnionFind;
 
 /// An assembled `A` and its connected components, found from the same cells.
-pub(super) struct Partitioned<A> {
+pub(super) struct Partitioned<A, I> {
     a: A,
-    partition: Partition,
+    partition: Partition<I>,
 }
 
 /// Unions the pattern in the walk that checks symmetry and range.
-pub(super) fn of_csr<T: Real, I: PrimInt>(
-    csr: Canonical<'_, T, I>,
-) -> Result<Partitioned<Canonical<'_, T, I>>, CsrError> {
-    let mut sets = UnionFind::new(csr.n());
+pub(super) fn of_csr<T: Real, J: PrimInt, I: Index>(
+    csr: Canonical<'_, T, J>,
+) -> Result<Partitioned<Canonical<'_, T, J>, I>, CsrError> {
+    let mut sets = UnionFind::<I>::new(csr.n());
     csr.walk(|i, j, _| sets.union(i, j))?;
     let partition = sets.into_partition();
     Ok(Partitioned { a: csr, partition })
 }
 
 /// Unions the pattern in the walk that checks range: upper storage has no mirror to check.
-pub(super) fn of_upper<T: Real, I: PrimInt>(
-    csr: UpperCanonical<'_, T, I>,
-) -> Result<Partitioned<Canonical<'_, T, I>>, CsrError> {
-    let mut sets = UnionFind::new(csr.n());
+pub(super) fn of_upper<T: Real, J: PrimInt, I: Index>(
+    csr: UpperCanonical<'_, T, J>,
+) -> Result<Partitioned<Canonical<'_, T, J>, I>, CsrError> {
+    let mut sets = UnionFind::<I>::new(csr.n());
     csr.walk(|i, j, _| sets.union(i, j))?;
     let partition = sets.into_partition();
     Ok(Partitioned {
@@ -45,32 +45,40 @@ pub(super) fn of_upper<T: Real, I: PrimInt>(
     })
 }
 
+/// `I` indexes each of `A`'s `n` vertices before any is stored.
+pub(super) fn indexable<I: Index>(n: usize) -> Result<(), ReduceError> {
+    match fits::<I>(n) {
+        true => Ok(()),
+        false => Err(ReduceError::IndexOverflow { count: n }),
+    }
+}
+
 /// An assembled `A` cut into its components' blocks.
-pub(super) trait PrincipalBlocks<T> {
+pub(super) trait PrincipalBlocks<T, I> {
     type Block;
 
     /// The whole input as one component, moved where it is owned: its vertices are their own positions.
-    fn whole(self, vertices: &[u32]) -> Self::Block;
+    fn whole(self, vertices: &[I]) -> Self::Block;
 
     /// One component, its columns remapped through `position`.
-    fn component(&self, vertices: &[u32], position: &[u32]) -> Self::Block;
+    fn component(&self, vertices: &[I], position: &[I]) -> Self::Block;
 }
 
-impl<A> Partitioned<A> {
+impl<A, I: Index> Partitioned<A, I> {
     /// The partition, each live component's block and the dead vertices, the assembly freed; a connected input moves its assembly in whole.
     pub(super) fn extract<T: Real, B: Send>(
         self,
-        block: impl Fn(<A as PrincipalBlocks<T>>::Block) -> Result<Option<B>, ReduceError> + Sync,
-    ) -> Result<(Partition, Vec<B>, Vec<u32>), ReduceError>
+        block: impl Fn(<A as PrincipalBlocks<T, I>>::Block) -> Result<Option<B>, ReduceError> + Sync,
+    ) -> Result<Components<B, I>, ReduceError>
     where
-        A: PrincipalBlocks<T> + Sync,
+        A: PrincipalBlocks<T, I> + Sync,
     {
         let Self { a, partition } = self;
         // Past `1/ε` vertices, floor weights in series fall below `MIN_POSITIVE`; a dead one is alone.
         let too_long =
-            |vertices: &[u32]| T::from(vertices.len()).is_none_or(|n| n * T::epsilon() >= T::one());
+            |vertices: &[I]| T::from(vertices.len()).is_none_or(|n| n * T::epsilon() >= T::one());
         if let Some(vertices) = partition.components().find(|&vertices| too_long(vertices)) {
-            let vertex = vertices[0];
+            let vertex = vertices[0].index();
             return Err(ReduceError::TooLarge { vertex });
         }
         if partition.is_whole() {
@@ -81,8 +89,8 @@ impl<A> Partitioned<A> {
             };
             return Ok((partition, live, dead));
         }
-        let components: Vec<&[u32]> = partition.components().collect();
-        let cut = |vertices: &&[u32]| block(a.component(vertices, partition.position()));
+        let components: Vec<&[I]> = partition.components().collect();
+        let cut = |vertices: &&[I]| block(a.component(vertices, partition.position()));
         // About `PARALLEL_VERTICES` vertices a task: waking the pool for less costs more than it saves.
         let per_task = (PARALLEL_VERTICES * components.len()).div_ceil(partition.n());
         let blocks: Vec<_> = match per_task < components.len() && rayon::current_num_threads() > 1 {
@@ -112,25 +120,34 @@ impl<A> Partitioned<A> {
 
 const PARALLEL_VERTICES: usize = 1 << 12;
 
+/// The partition, each live component's block, and the dead vertices.
+pub(super) type Components<B, I> = (Partition<I>, Vec<B>, Vec<I>);
+
+/// A general `A` assembled, and its components.
+pub(super) type General<T, I> = Partitioned<Assembled<T, UpperAdjacency<T, I>>, I>;
+
+/// A bipartite Gram assembled as `C` and the diagonal, and its components.
+pub(super) type BipartiteGram<T, I> = Partitioned<Assembled<T, Rows<T, I>>, I>;
+
 /// One component's vertices in local order, off-diagonal and diagonal.
-pub(super) type Cells<T> = (Box<[u32]>, OffDiagonal<T>, Vec<T>);
+pub(super) type Cells<T, I> = (Box<[I]>, OffDiagonal<T, I>, Vec<T>);
 
-impl<T: Real, I: PrimInt> PrincipalBlocks<T> for Canonical<'_, T, I> {
-    type Block = Cells<T>;
+impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Canonical<'_, T, J> {
+    type Block = Cells<T, I>;
 
-    fn whole(self, vertices: &[u32]) -> Self::Block {
+    fn whole(self, vertices: &[I]) -> Self::Block {
         self.component(vertices, vertices)
     }
 
     /// Upper rows in local order; a zero couples nothing, so it may name another component.
-    fn component(&self, vertices: &[u32], position: &[u32]) -> Self::Block {
+    fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
         let mut diagonal = Vec::with_capacity(vertices.len());
         let mut ptrs = Vec::with_capacity(vertices.len() + 1);
         ptrs.push(0);
-        let entries = vertices.iter().map(|&v| self.upper_len(v as usize)).sum();
+        let entries = vertices.iter().map(|&v| self.upper_len(v.index())).sum();
         let (mut indices, mut values) = (Vec::with_capacity(entries), Vec::with_capacity(entries));
         for &v in vertices {
-            let v = v as usize;
+            let v = v.index();
             let mut d = T::zero();
             for (j, a) in self.row(v).filter(|&(j, a)| j >= v && a != T::zero()) {
                 match j == v {
@@ -153,64 +170,60 @@ impl<T: Real, I: PrimInt> PrincipalBlocks<T> for Canonical<'_, T, I> {
 }
 
 /// A factor-width-2 `A`, assembled: general, or bipartite as `C`.
-pub(super) struct Assembled<T, C = UpperAdjacency<T>> {
+pub(super) struct Assembled<T, C> {
     adjacency: C,
     diagonal: Vec<T>,
 }
 
-impl<T: Real> PrincipalBlocks<T> for Assembled<T> {
-    type Block = Cells<T>;
+impl<T: Real, I: Index> PrincipalBlocks<T, I> for Assembled<T, UpperAdjacency<T, I>> {
+    type Block = Cells<T, I>;
 
-    fn whole(self, vertices: &[u32]) -> Self::Block {
+    fn whole(self, vertices: &[I]) -> Self::Block {
         let off_diagonal = OffDiagonal::General(self.adjacency);
         (vertices.into(), off_diagonal, self.diagonal)
     }
 
-    fn component(&self, vertices: &[u32], position: &[u32]) -> Self::Block {
+    fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
         let mut ptrs = Vec::with_capacity(vertices.len() + 1);
         ptrs.push(0);
         let entries = vertices
             .iter()
-            .map(|&v| self.adjacency.upper_len(v as usize))
+            .map(|&v| self.adjacency.upper_len(v.index()))
             .sum();
         let (mut indices, mut values) = (Vec::with_capacity(entries), Vec::with_capacity(entries));
         for &v in vertices {
-            for (j, &x) in self.adjacency.upper(v as usize) {
+            for (j, &x) in self.adjacency.upper(v.index()) {
                 indices.push(position[j]);
                 values.push(x);
             }
             ptrs.push(indices.len());
         }
         let rows = Rows::new(ptrs, indices, values, vertices.len());
-        let diagonal = vertices
-            .iter()
-            .map(|&v| self.diagonal[v as usize])
-            .collect();
+        let diagonal = vertices.iter().map(|&v| self.diagonal[v.index()]).collect();
         let off_diagonal = OffDiagonal::General(UpperAdjacency::new(rows));
         (vertices.into(), off_diagonal, diagonal)
     }
 }
 
 /// The biadjacency `C`, cancelled cells dropped: rows are `A`'s left vertices.
-impl<T: Real> PrincipalBlocks<T> for Rows<T> {
-    type Block = (Box<[u32]>, OffDiagonal<T>);
+impl<T: Real, I: Index> PrincipalBlocks<T, I> for Rows<T, I> {
+    type Block = (Box<[I]>, OffDiagonal<T, I>);
 
-    fn whole(self, vertices: &[u32]) -> Self::Block {
+    fn whole(self, vertices: &[I]) -> Self::Block {
         let (lefts, rights) = vertices.split_at(self.n_rows());
         sides(lefts, rights, self)
     }
 
-    fn component(&self, vertices: &[u32], position: &[u32]) -> Self::Block {
+    fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
         let n_left = self.n_rows();
-        let (lefts, rights) =
-            vertices.split_at(vertices.partition_point(|&v| (v as usize) < n_left));
+        let (lefts, rights) = vertices.split_at(vertices.partition_point(|&v| v.index() < n_left));
         let mut ptrs = Vec::with_capacity(lefts.len() + 1);
         ptrs.push(0);
-        let entries = lefts.iter().map(|&i| self.row_len(i as usize)).sum();
+        let entries = lefts.iter().map(|&i| self.row_len(i.index())).sum();
         let (mut indices, mut values) = (Vec::with_capacity(entries), Vec::with_capacity(entries));
         for &i in lefts {
-            for (j, &x) in self.row(i as usize) {
-                indices.push(position[n_left + j] - lefts.len() as u32);
+            for (j, &x) in self.row(i.index()) {
+                indices.push(position[n_left + j] - I::from_index(lefts.len()));
                 values.push(x);
             }
             ptrs.push(indices.len());
@@ -223,30 +236,28 @@ impl<T: Real> PrincipalBlocks<T> for Rows<T> {
     }
 }
 
-impl<T: Real> PrincipalBlocks<T> for Assembled<T, Rows<T>> {
-    type Block = Cells<T>;
+impl<T: Real, I: Index> PrincipalBlocks<T, I> for Assembled<T, Rows<T, I>> {
+    type Block = Cells<T, I>;
 
-    fn whole(self, vertices: &[u32]) -> Self::Block {
+    fn whole(self, vertices: &[I]) -> Self::Block {
         let (vertices, off_diagonal) = self.adjacency.whole(vertices);
-        let diagonal = vertices
-            .iter()
-            .map(|&v| self.diagonal[v as usize])
-            .collect();
+        let diagonal = vertices.iter().map(|&v| self.diagonal[v.index()]).collect();
         (vertices, off_diagonal, diagonal)
     }
 
-    fn component(&self, vertices: &[u32], position: &[u32]) -> Self::Block {
+    fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
         let (vertices, off_diagonal) = self.adjacency.component(vertices, position);
-        let diagonal = vertices
-            .iter()
-            .map(|&v| self.diagonal[v as usize])
-            .collect();
+        let diagonal = vertices.iter().map(|&v| self.diagonal[v.index()]).collect();
         (vertices, off_diagonal, diagonal)
     }
 }
 
 /// The larger side eliminated first, `C` transposed when it is the right one; a side alone is one uncoupled vertex.
-fn sides<T: Real>(lefts: &[u32], rights: &[u32], c: Rows<T>) -> (Box<[u32]>, OffDiagonal<T>) {
+fn sides<T: Real, I: Index>(
+    lefts: &[I],
+    rights: &[I],
+    c: Rows<T, I>,
+) -> (Box<[I]>, OffDiagonal<T, I>) {
     if lefts.is_empty() || rights.is_empty() {
         debug_assert_eq!(
             lefts.len() + rights.len(),

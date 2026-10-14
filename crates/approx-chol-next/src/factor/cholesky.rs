@@ -6,7 +6,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 use super::config::{Config, Multiplicity};
 use super::sddm::{descend, lift, Sddm, Sheets};
 use crate::narrow;
-use crate::{widen, Real};
+use crate::{widen, Index, Real};
 use approximate::ApproximateCholesky;
 use dense::PackedLaplacian;
 
@@ -23,27 +23,27 @@ pub enum Fallback {
 }
 
 /// What the Cholesky factors, built in the form its arm asks for: exact for dense, as configured for approximate.
-pub(super) trait CholeskyInput<'a, T: Real> {
+pub(super) trait CholeskyInput<'a, T: Real, I: Index> {
     /// Known before either form is built, a cover's two sheets counted.
     fn dimension(&self) -> usize;
 
     /// Always exact: a dense Cholesky spends nothing on sparsity.
-    fn for_dense(self) -> Sddm<'a, T>;
+    fn for_dense(self) -> Sddm<'a, T, I>;
 
     /// Consumed, so an owned matrix is freed before fill grows the graph.
-    fn for_approximate(self) -> Sddm<'a, T>;
+    fn for_approximate(self) -> Sddm<'a, T, I>;
 }
 
-impl<'a, T: Real> CholeskyInput<'a, T> for Sddm<'a, T> {
+impl<'a, T: Real, I: Index> CholeskyInput<'a, T, I> for Sddm<'a, T, I> {
     fn dimension(&self) -> usize {
         self.n()
     }
 
-    fn for_dense(self) -> Sddm<'a, T> {
+    fn for_dense(self) -> Sddm<'a, T, I> {
         self
     }
 
-    fn for_approximate(self) -> Sddm<'a, T> {
+    fn for_approximate(self) -> Sddm<'a, T, I> {
         self
     }
 }
@@ -55,19 +55,19 @@ impl<'a, T: Real> CholeskyInput<'a, T> for Sddm<'a, T> {
     serde(remote = "Self")
 )]
 #[derive(Clone, Debug)]
-pub(super) struct Cholesky<T> {
+pub(super) struct Cholesky<T, I> {
     sheets: Sheets,
     /// The ground is the appended slot, right-hand side `−Σb`, every entry then shifted so it reads zero; else the free slot reads zero.
     grounded: bool,
     /// The matrix's dimension over its sheets, ground excluded.
     n: usize,
-    triangular: Triangular<T>,
+    triangular: Triangular<T, I>,
 }
 
-impl<T: Real> Cholesky<T> {
+impl<T: Real, I: Index> Cholesky<T, I> {
     /// Dense when the config says so and its Laplacian is reserved before the matrix is built, else approximate.
     pub(super) fn factor<'a>(
-        input: impl CholeskyInput<'a, T>,
+        input: impl CholeskyInput<'a, T, I>,
         draws: Xoshiro256PlusPlus,
         config: &Config,
     ) -> (Self, Option<Fallback>) {
@@ -93,7 +93,7 @@ impl<T: Real> Cholesky<T> {
     }
 
     fn approximate(
-        sddm: Sddm<'_, T>,
+        sddm: Sddm<'_, T, I>,
         multiplicity: Multiplicity,
         draws: Xoshiro256PlusPlus,
     ) -> Self {
@@ -151,13 +151,13 @@ impl<T: Real> Cholesky<T> {
 /// The triangular factor, dense or approximate; both leave one slot uneliminated.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
-enum Triangular<T> {
+enum Triangular<T, I> {
     /// Packed lower triangle of `L` in `LLᵀ`.
     Dense(Vec<T>),
-    Approximate(ApproximateCholesky<T>),
+    Approximate(ApproximateCholesky<T, I>),
 }
 
-impl<T: Real> Triangular<T> {
+impl<T: Real, I: Index> Triangular<T, I> {
     fn substitute(&self, values: &mut [T]) {
         match self {
             Self::Dense(factor) => dense::substitute(factor, values),
@@ -170,7 +170,7 @@ impl<T: Real> Triangular<T> {
 checked_serde!(Cholesky);
 
 #[cfg(feature = "serde")]
-impl<T: Real> Cholesky<T> {
+impl<T: Real, I: Index> Cholesky<T, I> {
     fn checked(self) -> Option<Self> {
         if self.n == 0 {
             return None;

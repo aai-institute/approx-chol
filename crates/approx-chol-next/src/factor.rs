@@ -18,7 +18,7 @@ pub use config::{CliqueRule, Config, InnerParallelism, Multiplicity, SplitCount}
 
 use crate::sgdd::{Balance, IrreducibleBlock, Restriction, Sgdd};
 use crate::storage::OffDiagonal;
-use crate::Real;
+use crate::{Index, Real};
 use cholesky::Cholesky;
 use schur::BlockElimination;
 use sddm::{Sddm, Sheets};
@@ -81,14 +81,14 @@ fn buffer_error(found: usize, n: usize, scratch: usize, needed: usize) -> SolveE
 
 /// Block-diagonal approximate inverse of `A`: one [`BlockFactor`] per [`IrreducibleBlock`].
 #[derive(Clone, Debug)]
-pub struct Factor<T = f64> {
+pub struct Factor<T = f64, I = u32> {
     n: usize,
-    blocks: Vec<BlockFactor<T>>,
-    dead: Box<[u32]>,
+    blocks: Vec<BlockFactor<T, I>>,
+    dead: Box<[I]>,
 }
 
 /// Factors every irreducible block of `sgdd` in parallel; `sgdd` survives for another `config`.
-pub fn factorize<T: Real>(sgdd: &Sgdd<T>, config: &Config) -> Factor<T> {
+pub fn factorize<T: Real, I: Index>(sgdd: &Sgdd<T, I>, config: &Config) -> Factor<T, I> {
     let blocks = (sgdd.blocks().par_iter())
         .map(|block| BlockFactor::build(block, config))
         .collect();
@@ -99,19 +99,19 @@ pub fn factorize<T: Real>(sgdd: &Sgdd<T>, config: &Config) -> Factor<T> {
     }
 }
 
-impl<T: Real> Factor<T> {
+impl<T: Real, I: Index> Factor<T, I> {
     /// Dimension of `A`.
     pub fn n(&self) -> usize {
         self.n
     }
 
     /// Each block's factor, in [`Sgdd::blocks`]' order, for a caller that solves them on its own.
-    pub fn blocks(&self) -> &[BlockFactor<T>] {
+    pub fn blocks(&self) -> &[BlockFactor<T, I>] {
         &self.blocks
     }
 
     /// The blocks' factors, owned, for a caller that keeps one solver per block; dead vertices need none.
-    pub fn into_blocks(self) -> Vec<BlockFactor<T>> {
+    pub fn into_blocks(self) -> Vec<BlockFactor<T, I>> {
         self.blocks
     }
 
@@ -152,7 +152,7 @@ impl<T: Real> Factor<T> {
             restriction.scatter(local, x);
         }
         for &i in &self.dead {
-            x[i as usize] = T::zero();
+            x[i.index()] = T::zero();
         }
         Ok(())
     }
@@ -163,21 +163,23 @@ impl<T: Real> Factor<T> {
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
     serde(remote = "Self"),
-    serde(bound(deserialize = "T: crate::Real + serde::Deserialize<'de>"))
+    serde(bound(
+        deserialize = "T: crate::Real + serde::Deserialize<'de>, I: crate::Index + serde::Deserialize<'de>"
+    ))
 )]
 #[derive(Clone, Debug)]
-pub struct BlockFactor<T = f64> {
-    restriction: Arc<Restriction<T>>,
-    elimination: Option<BlockElimination<T>>,
-    cholesky: Cholesky<T>,
+pub struct BlockFactor<T = f64, I = u32> {
+    restriction: Arc<Restriction<T, I>>,
+    elimination: Option<BlockElimination<T, I>>,
+    cholesky: Cholesky<T, I>,
     fallback: Option<Fallback>,
 }
 
-impl<T: Real> BlockFactor<T> {
-    fn build(block: &IrreducibleBlock<T>, config: &Config) -> Self {
+impl<T: Real, I: Index> BlockFactor<T, I> {
+    fn build(block: &IrreducibleBlock<T, I>, config: &Config) -> Self {
         let streams = Streams {
             seed: config.seed,
-            block: block.vertices()[0],
+            block: block.vertices()[0].index() as u64,
         };
         let (sheets, grounding) = match block.balance() {
             Balance::Balanced(grounding) => (Sheets::One, grounding),
@@ -209,7 +211,7 @@ impl<T: Real> BlockFactor<T> {
     }
 
     /// The block's vertices in `A`'s numbering, in local order.
-    pub fn vertices(&self) -> &[u32] {
+    pub fn vertices(&self) -> &[I] {
         self.restriction.vertices()
     }
 
@@ -260,7 +262,7 @@ impl<T: Real> BlockFactor<T> {
 #[derive(Clone, Copy, Debug)]
 struct Streams {
     seed: u64,
-    block: u32,
+    block: u64,
 }
 
 impl Streams {
@@ -277,7 +279,7 @@ impl Streams {
 
 /// The whole key mixed once, the only place a key becomes draws; stage `0` is the Cholesky's, `e + 1` star `e`'s.
 fn rng(streams: Streams, stage: u64) -> Xoshiro256PlusPlus {
-    let key = [u64::from(streams.block), stage]
+    let key = [streams.block, stage]
         .into_iter()
         .fold(splitmix(streams.seed), |key, part| splitmix(key ^ part));
     Xoshiro256PlusPlus::seed_from_u64(key)
@@ -295,7 +297,7 @@ fn splitmix(x: u64) -> u64 {
 checked_serde!(BlockFactor);
 
 #[cfg(feature = "serde")]
-impl<T: Real> BlockFactor<T> {
+impl<T: Real, I: Index> BlockFactor<T, I> {
     fn checked(self) -> Option<Self> {
         let n = self.vertices().len();
         let kept = match &self.elimination {

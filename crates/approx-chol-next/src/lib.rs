@@ -6,12 +6,16 @@
 #[cfg(feature = "serde")]
 macro_rules! checked_serde {
     ($ty:ident) => {
-        impl<T: serde::Serialize> serde::Serialize for $ty<T> {
+        impl<T: serde::Serialize, I: serde::Serialize> serde::Serialize for $ty<T, I> {
             fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
                 $ty::serialize(self, serializer)
             }
         }
-        impl<'de, T: crate::Real + serde::Deserialize<'de>> serde::Deserialize<'de> for $ty<T> {
+        impl<'de, T, I> serde::Deserialize<'de> for $ty<T, I>
+        where
+            T: crate::Real + serde::Deserialize<'de>,
+            I: crate::Index + serde::Deserialize<'de>,
+        {
             fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
                 let corrupt = || serde::de::Error::custom(concat!("corrupt ", stringify!($ty)));
                 let value = $ty::deserialize(deserializer)?;
@@ -28,16 +32,66 @@ mod storage;
 
 use std::fmt::Debug;
 
+use num_traits::{PrimInt, Unsigned};
+
 pub use factor::{factorize, BlockFactor, Factor, Fallback, SolveError};
 pub use factor::{CliqueRule, Config, InnerParallelism, Multiplicity, SplitCount};
 pub use sgdd::{
     Existence, FromCsrError, IrreducibleBlock, ReduceError, ScalingPolicy, ScalingReport, Sgdd,
 };
 
-/// The scalar every stage computes in: any `Float` a factor can share across threads and print.
-pub trait Real: num_traits::Float + Debug + Send + Sync + 'static {}
+/// The scalar every stage computes in: `f32` or `f64`, each summed in `f64`, which holds it exactly.
+pub trait Real: num_traits::Float + Debug + Send + Sync + 'static + seal::Real {}
 
-impl<T: num_traits::Float + Debug + Send + Sync + 'static> Real for T {}
+impl Real for f32 {}
+impl Real for f64 {}
+
+/// The unsigned integer a reduction and its factor store each vertex index in: `u32` by default, `u64` past `u32::MAX` vertices.
+pub trait Index: PrimInt + Unsigned + Send + Sync + 'static + seal::Index {
+    /// `self` as `usize`, so `x[v.index()]` reads vertex `v` of any `x` over `A`'s vertices.
+    fn index(self) -> usize;
+}
+
+mod seal {
+    /// Only the crate implements [`Real`](super::Real), so every `T` widens to `f64` exactly.
+    pub trait Real {}
+
+    impl Real for f32 {}
+    impl Real for f64 {}
+
+    /// Only the crate implements [`Index`](super::Index), so its conversions are plain casts.
+    pub trait Index: Copy {
+        /// `k` as `Self`, truncating: every caller passes a value a checked count bounds.
+        fn from_index(k: usize) -> Self;
+    }
+}
+
+macro_rules! index {
+    ($int:ty) => {
+        impl Index for $int {
+            #[inline(always)]
+            fn index(self) -> usize {
+                self as usize
+            }
+        }
+
+        impl seal::Index for $int {
+            #[inline(always)]
+            fn from_index(k: usize) -> Self {
+                debug_assert!(<$int>::try_from(k).is_ok(), "{k} fits the index");
+                k as $int
+            }
+        }
+    };
+}
+
+index!(u32);
+index!(u64);
+
+/// Whether `I` holds `0..count` below its `MAX`, which stays free as a sentinel.
+pub(crate) fn fits<I: Index>(count: usize) -> bool {
+    num_traits::cast::<usize, I>(count).is_some()
+}
 
 /// Finite, and zero or at least `MIN_POSITIVE/EPSILON`, so no product turns subnormal (#163).
 pub(crate) fn in_range<T: Real>(x: T) -> bool {
