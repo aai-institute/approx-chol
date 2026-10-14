@@ -101,7 +101,7 @@ impl<T: Real> Rows<T> {
     }
 
     /// `Σ|x|` per row and per column, in `f64` in row order.
-    fn abs_sums(&self) -> (Vec<f64>, Vec<f64>) {
+    pub(crate) fn abs_sums(&self) -> (Vec<f64>, Vec<f64>) {
         let mut cols = vec![0.0; self.n_cols];
         let rows = (0..self.n_rows())
             .map(|i| {
@@ -117,27 +117,25 @@ impl<T: Real> Rows<T> {
         (rows, cols)
     }
 
-    fn nonpositive(&self) -> bool {
+    pub(crate) fn nonpositive(&self) -> bool {
         self.values.iter().all(|&x| x <= T::zero())
     }
 
-    /// Entries per row and per column.
-    fn degrees(&self) -> (Vec<usize>, Vec<usize>) {
-        let rows = self.ptrs.windows(2).map(|span| span[1] - span[0]).collect();
-        let mut cols = vec![0; self.n_cols];
-        for &j in &self.indices {
-            cols[j as usize] += 1;
-        }
-        (rows, cols)
+    pub(crate) fn positive(&self) -> bool {
+        self.values.iter().all(|&x| x > T::zero())
+    }
+
+    pub(crate) fn abs_total(&self) -> f64 {
+        crate::compensated_sum(self.values.iter().map(|&x| crate::widen(x.abs())))
     }
 
     /// `x_ij ← r_i x_ij c_j` for signs `r`, `c`: exact, so never out of range.
-    fn signed(self, r: &[T], c: &[T]) -> Self {
+    pub(crate) fn signed(self, r: &[T], c: &[T]) -> Self {
         (self.scaled_seeing(r, c, |_, _, _| {})).expect("a sign moves no magnitude")
     }
 
     /// Scaled by `r` on rows and `c` on columns, with the new [`abs_sums`](Self::abs_sums) from the same pass.
-    fn scaled_abs_sums(self, r: &[T], c: &[T]) -> Option<(Self, Vec<f64>, Vec<f64>)> {
+    pub(crate) fn scaled_abs_sums(self, r: &[T], c: &[T]) -> Option<(Self, Vec<f64>, Vec<f64>)> {
         let (mut rows, mut cols) = (vec![0.0; self.n_rows()], vec![0.0; self.n_cols]);
         let scaled = self.scaled_seeing(r, c, |i, j, x| {
             let x = crate::widen(x.abs());
@@ -205,11 +203,9 @@ impl<T: Real> UpperAdjacency<T> {
         self.rows.nonpositive()
     }
 
-    /// Entries per row over both triangles.
-    pub(crate) fn degrees(&self) -> Vec<usize> {
-        let (mut upper, lower) = self.rows.degrees();
-        upper.iter_mut().zip(lower).for_each(|(u, l)| *u += l);
-        upper
+    /// `Σ_ij |x_ij|` over both triangles, compensated.
+    pub(crate) fn abs_total(&self) -> f64 {
+        2.0 * self.rows.abs_total()
     }
 
     pub(crate) fn upper_len(&self, i: usize) -> usize {
@@ -235,77 +231,5 @@ impl<T: Real> UpperAdjacency<T> {
             .map(|(u, l)| crate::narrow(u + l))
             .collect();
         Some((Self { rows }, sums))
-    }
-}
-
-/// One component's `C` of `[D₁ C; Cᵀ D₂]`, rows the eliminated side.
-#[derive(Clone, Debug)]
-pub(crate) struct CrossBlock<T> {
-    c: Rows<T>,
-}
-
-impl<T: Real> CrossBlock<T> {
-    /// Panics unless both sides are nonempty, the larger as rows, with no stored zero.
-    pub(crate) fn new(c: Rows<T>) -> Self {
-        assert!(c.n_rows() > 0 && c.n_cols() > 0, "both sides hold a vertex");
-        assert!(c.n_rows() >= c.n_cols(), "the larger side is eliminated");
-        debug_assert!(!c.values.contains(&T::zero()), "no stored zero");
-        Self { c }
-    }
-
-    pub(crate) fn n(&self) -> usize {
-        self.n_eliminated() + self.n_kept()
-    }
-
-    pub(crate) fn n_eliminated(&self) -> usize {
-        self.c.n_rows()
-    }
-
-    pub(crate) fn n_kept(&self) -> usize {
-        self.c.n_cols()
-    }
-
-    pub(crate) fn c(&self) -> &Rows<T> {
-        &self.c
-    }
-
-    /// `Σ|c|` per row of `[0 C; Cᵀ 0]`: eliminated rows, then kept ones.
-    pub(crate) fn abs_row_sums(&self) -> Vec<T> {
-        let (eliminated, kept) = self.c.abs_sums();
-        eliminated
-            .into_iter()
-            .chain(kept)
-            .map(crate::narrow)
-            .collect()
-    }
-
-    pub(crate) fn nonpositive(&self) -> bool {
-        self.c.nonpositive()
-    }
-
-    /// Every entry positive: a signless block, folded by negating its kept side.
-    pub(crate) fn positive(&self) -> bool {
-        self.c.values.iter().all(|&x| x > T::zero())
-    }
-
-    /// Entries per row of `[0 C; Cᵀ 0]`: eliminated rows, then kept ones.
-    pub(crate) fn degrees(&self) -> Vec<usize> {
-        let (mut eliminated, kept) = self.c.degrees();
-        eliminated.extend(kept);
-        eliminated
-    }
-
-    /// `S C S` over the block's local order.
-    pub(crate) fn signed(self, s: &[T]) -> Self {
-        let (eliminated, kept) = s.split_at(self.n_eliminated());
-        Self::new(self.c.signed(eliminated, kept))
-    }
-
-    /// Scaled by `f` on both sides, with the new row sums from the same pass.
-    pub(crate) fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
-        let (eliminated, kept) = f.split_at(self.n_eliminated());
-        let (c, rows, cols) = self.c.scaled_abs_sums(eliminated, kept)?;
-        let sums = rows.into_iter().chain(cols).map(crate::narrow).collect();
-        Some((Self::new(c), sums))
     }
 }

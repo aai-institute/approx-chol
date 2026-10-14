@@ -5,7 +5,7 @@ use std::sync::Arc;
 use super::congruence::Congruence;
 use super::scaling::ScalingReport;
 use crate::input::CsrError;
-use crate::storage::{CrossBlock, UpperAdjacency};
+use crate::storage::{Rows, UpperAdjacency};
 use crate::{diagonal_in_range, Real};
 
 /// Where a component sits in `A`: its vertices, and the congruence between `A_c` and `M`.
@@ -104,15 +104,15 @@ impl<T: Real> Grounding<T> {
 #[derive(Clone, Debug)]
 pub(crate) enum OffDiagonal<T> {
     General(UpperAdjacency<T>),
-    /// Both sides nonempty, the larger eliminated first.
-    Bipartite(Arc<CrossBlock<T>>),
+    /// `C` of `[D_e C; Cᵀ D_k]`, both sides nonempty, the larger eliminated first as its rows.
+    Bipartite(Arc<Rows<T>>),
 }
 
 impl<T: Real> OffDiagonal<T> {
     pub(super) fn n(&self) -> usize {
         match self {
             Self::General(adjacency) => adjacency.n(),
-            Self::Bipartite(cross) => cross.n(),
+            Self::Bipartite(cross) => cross.n_rows() + cross.n_cols(),
         }
     }
 
@@ -171,7 +171,7 @@ impl<T: Real> Component<T> {
         &self.frame
     }
 
-    /// Whether `A_c` is singular within the rounding of its entries, so a solve returns `A_c⁺b`.
+    /// Whether `A_c` is solved as singular, `A_c⁺b`: its `M`, clamped if not dominant, has `1ᵀM1 ≤ 5ε·tr M`, exactly `0` for a given ground.
     pub fn floats(&self) -> bool {
         matches!(&self.balance, Balance::Balanced(grounding) if !grounding.is_grounded())
     }

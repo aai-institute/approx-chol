@@ -1,7 +1,7 @@
 mod approximate;
 mod dense;
 
-use rand::rngs::SmallRng;
+use rand::rngs::Xoshiro256PlusPlus;
 
 use super::config::{Config, Multiplicity};
 use super::sddm::{Sddm, Sheets};
@@ -51,7 +51,8 @@ impl<'a, T: Real> CholeskyInput<'a, T> for Sddm<'a, T> {
 #[derive(Clone, Debug)]
 pub(super) struct Cholesky<T> {
     sheets: Sheets,
-    gauge: Gauge,
+    /// The ground is the appended slot, right-hand side `−Σb`, every entry then shifted so it reads zero; else the free slot reads zero.
+    grounded: bool,
     /// The matrix's dimension over its sheets, ground excluded.
     n: usize,
     triangular: Triangular<T>,
@@ -61,7 +62,7 @@ impl<T: Real> Cholesky<T> {
     /// Dense when the config says so and its Laplacian is reserved before the matrix is built, else approximate.
     pub(super) fn factor<'a>(
         input: impl CholeskyInput<'a, T>,
-        draws: SmallRng,
+        draws: Xoshiro256PlusPlus,
         config: &Config,
     ) -> (Self, Option<Fallback>) {
         let approximate = |sddm| Self::approximate(sddm, config.approximate, draws);
@@ -74,23 +75,27 @@ impl<T: Real> Cholesky<T> {
             return (approximate(input.for_approximate()), Some(declined));
         };
         let exact = input.for_dense();
-        let (sheets, gauge, n) = (exact.sheets(), Gauge::of(&exact), exact.n());
+        let (sheets, grounded, n) = (exact.sheets(), exact.grounded(), exact.n());
         let triangular = Triangular::Dense(laplacian.factor(&exact));
         let dense = Self {
             sheets,
-            gauge,
+            grounded,
             n,
             triangular,
         };
         (dense, None)
     }
 
-    fn approximate(sddm: Sddm<'_, T>, multiplicity: Multiplicity, draws: SmallRng) -> Self {
-        let (sheets, gauge, n) = (sddm.sheets(), Gauge::of(&sddm), sddm.n());
+    fn approximate(
+        sddm: Sddm<'_, T>,
+        multiplicity: Multiplicity,
+        draws: Xoshiro256PlusPlus,
+    ) -> Self {
+        let (sheets, grounded, n) = (sddm.sheets(), sddm.grounded(), sddm.n());
         let triangular = Triangular::Approximate(approximate::factor(sddm, multiplicity, draws));
         Self {
             sheets,
-            gauge,
+            grounded,
             n,
             triangular,
         }
@@ -98,19 +103,19 @@ impl<T: Real> Cholesky<T> {
 
     /// An anchored sheet substitutes on `x` in place; the approximate order may read the ground mid-recurrence, so it sits beside the rows.
     pub(super) fn scratch_len(&self) -> usize {
-        match (self.sheets, self.gauge) {
-            (Sheets::One, Gauge::Anchored) => 0,
-            (_, Gauge::Grounded) => self.n + 1,
-            (Sheets::Two, Gauge::Anchored) => self.n,
+        match (self.sheets, self.grounded) {
+            (Sheets::One, false) => 0,
+            (_, true) => self.n + 1,
+            (Sheets::Two, false) => self.n,
         }
     }
 
     /// Lifts to the sheets, fixes the gauge, substitutes, and descends.
     pub(super) fn solve(&self, x: &mut [T], scratch: &mut [T]) {
         let triangular = &self.triangular;
-        match (self.sheets, self.gauge) {
-            (Sheets::One, Gauge::Anchored) => triangular.substitute(x),
-            (Sheets::One, Gauge::Grounded) => {
+        match (self.sheets, self.grounded) {
+            (Sheets::One, false) => triangular.substitute(x),
+            (Sheets::One, true) => {
                 let rows = &mut scratch[..=x.len()];
                 let (ground, values) = rows.split_last_mut().expect("the ground's slot");
                 values.copy_from_slice(x);
@@ -128,24 +133,6 @@ impl<T: Real> Cholesky<T> {
                 triangular.substitute(rows);
                 Sheets::Two.descend(rows, x);
             }
-        }
-    }
-}
-
-/// How the factor's free slot is fixed.
-#[derive(Clone, Copy, Debug)]
-enum Gauge {
-    /// The ground is the appended slot, right-hand side `−Σb`; every entry then shifts so it reads zero.
-    Grounded,
-    /// No surplus: the free slot reads zero, and only a floating component's projection or a cover's descent removes the constant.
-    Anchored,
-}
-
-impl Gauge {
-    fn of<T: Real>(sddm: &Sddm<'_, T>) -> Self {
-        match sddm.grounded() {
-            true => Self::Grounded,
-            false => Self::Anchored,
         }
     }
 }

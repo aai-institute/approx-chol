@@ -3,15 +3,13 @@
 mod cdf;
 mod copies;
 mod star;
-mod streams;
 
-use rand::rngs::SmallRng;
+use rand::rngs::Xoshiro256PlusPlus;
 
 use crate::Real;
 use cdf::CdfSampler;
 pub(super) use copies::{Copies, Multi, Single};
 use star::Star;
-pub(super) use streams::Streams;
 
 /// Fill edges `(lo, hi, weight)`, `lo < hi`, as an elimination emits them.
 pub(super) type Fill<T> = Vec<(u32, u32, T)>;
@@ -20,7 +18,9 @@ pub(super) type Fill<T> = Vec<(u32, u32, T)>;
 pub(super) struct CliqueSampler<T, C: Copies> {
     star: Star<T, C>,
     cdf: CdfSampler<T>,
-    column: PivotColumn<T>,
+    shares: Vec<(u32, T)>,
+    /// `None` keeps the whole pivot: an empty star hands nothing on.
+    remainder: Option<u32>,
     split: C::Split,
 }
 
@@ -30,10 +30,8 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
         Self {
             star: Star::new(),
             cdf: CdfSampler::new(),
-            column: PivotColumn {
-                shares: Vec::new(),
-                remainder: None,
-            },
+            shares: Vec::new(),
+            remainder: None,
             split,
         }
     }
@@ -41,29 +39,28 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
     /// Merges `neighbors`, samples their clique tree into `fill` as `w_i (S_{>i} / d)` from the sequential `draws`, and returns the pivot.
     pub(super) fn eliminate(
         &mut self,
-        draws: &mut SmallRng,
+        draws: &mut Xoshiro256PlusPlus,
         neighbors: impl Iterator<Item = (u32, C, T)>,
         fill: &mut Fill<T>,
     ) -> T {
         self.star.refill(neighbors, self.split);
         self.sample(draws, fill);
-        let column = &mut self.column;
-        column.shares.clear();
+        self.shares.clear();
         let Some((last, rest)) = self.star.entries().split_last() else {
-            column.remainder = None;
+            self.remainder = None;
             return T::zero();
         };
         let d = self.cdf.suffix_past(None);
         let shares = rest.iter().map(|entry| (entry.neighbor, entry.weight / d));
-        column.shares.extend(shares);
-        column.remainder = Some(last.neighbor);
+        self.shares.extend(shares);
+        self.remainder = Some(last.neighbor);
         last.weight * (last.weight / d)
     }
 
     /// A neighborhood with no duplicate, as a row of `C` is, consuming its star's own `draws` so no task boundary moves one; every neighbor splits alike, so raw weights sort once; fill only, as the complement holds its pivots.
     pub(super) fn eliminate_unique(
         &mut self,
-        mut rng: SmallRng,
+        mut rng: Xoshiro256PlusPlus,
         neighbors: impl Iterator<Item = (u32, T)>,
         fill: &mut Fill<T>,
     ) {
@@ -72,7 +69,7 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
     }
 
     /// Prepares the star's CDF, then fills `per_copy(w_i (S_{>i} / d))` per copy of each entry but the heaviest, each copy drawing past it.
-    fn sample(&mut self, rng: &mut SmallRng, fill: &mut Fill<T>) {
+    fn sample(&mut self, rng: &mut Xoshiro256PlusPlus, fill: &mut Fill<T>) {
         let entries = self.star.entries();
         let Some((_, rest)) = entries.split_last() else {
             return;
@@ -102,21 +99,8 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
         self.star.degree_losses()
     }
 
-    pub(super) fn column(&self) -> &PivotColumn<T> {
-        &self.column
-    }
-}
-
-/// The factor column a pivot leaves: shares of the original pivot, the remainder named, not weighted.
-pub(super) struct PivotColumn<T> {
-    shares: Vec<(u32, T)>,
-    /// `None` keeps the whole pivot: an empty star hands nothing on.
-    remainder: Option<u32>,
-}
-
-impl<T: Real> PivotColumn<T> {
-    /// The shares and the neighbor that absorbs what they leave; nothing for an empty star.
-    pub(super) fn shares(&self) -> Option<(&[(u32, T)], u32)> {
+    /// The factor column the last pivot left: shares of the original pivot and the neighbor absorbing what they leave; nothing for an empty star.
+    pub(super) fn column(&self) -> Option<(&[(u32, T)], u32)> {
         Some((&self.shares, self.remainder?))
     }
 }

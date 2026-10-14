@@ -6,7 +6,7 @@ use super::partition::{Partition, UnionFind};
 use super::{Cells, Partitioned, PrincipalBlocks};
 use crate::input::{BipartiteColumns, Column, IntoColumns, SignedGraph};
 use crate::sgdd::component::ReduceError;
-use crate::storage::{CrossBlock, Rows, UpperAdjacency};
+use crate::storage::{Rows, UpperAdjacency};
 use crate::{in_range, narrow, widen, Real};
 
 /// The signed graph's cells, each vertex's surplus its pairs' cancelled mass.
@@ -71,14 +71,14 @@ fn assemble<T: Real, C: CellSum>(
 /// `C` and its components.
 pub(in crate::sgdd) fn assemble_bipartite<T: Real>(
     v: impl BipartiteColumns<T>,
-) -> Result<Partitioned<Biadjacency<T>>, ReduceError> {
+) -> Result<Partitioned<Rows<T>>, ReduceError> {
     biadjacency(v, |_| {})
 }
 
 /// As [`assemble_bipartite`], with `A`'s diagonal summed in the same column pass.
 pub(in crate::sgdd) fn assemble_bipartite_gram<T: Real>(
     v: impl BipartiteColumns<T>,
-) -> Result<(Partitioned<Biadjacency<T>>, Vec<T>), ReduceError> {
+) -> Result<(Partitioned<Rows<T>>, Vec<T>), ReduceError> {
     let mut sums = vec![0.0_f64; v.n()];
     let a = biadjacency(
         v,
@@ -106,12 +106,9 @@ fn diagonal_of<T: Real>(sums: Vec<f64>) -> Result<Vec<T>, ReduceError> {
 fn biadjacency<T: Real>(
     v: impl BipartiteColumns<T>,
     seen: impl FnMut(&Column<T>),
-) -> Result<Partitioned<Biadjacency<T>>, ReduceError> {
+) -> Result<Partitioned<Rows<T>>, ReduceError> {
     let (c, partition) = cross(v, seen)?;
-    Ok(Partitioned {
-        a: Biadjacency { c },
-        partition,
-    })
+    Ok(Partitioned { a: c, partition })
 }
 
 /// A general factor-width-2 `A`, assembled.
@@ -120,18 +117,12 @@ pub(in crate::sgdd) struct Assembled<T> {
     diagonal: Vec<T>,
 }
 
-/// The biadjacency `C` of a factor-width-2 view, cancelled cells dropped: rows are `A`'s left vertices.
-#[derive(Clone, Debug)]
-pub(in crate::sgdd) struct Biadjacency<T> {
-    c: Rows<T>,
-}
-
 /// One component of a bipartite assembly.
 pub(in crate::sgdd) enum BipartiteComponent<T> {
     /// A vertex no cell couples.
     Lone(u32),
     /// Both sides in local order, the larger eliminated first, and `C` between them.
-    Sides(Box<[u32]>, CrossBlock<T>),
+    Sides(Box<[u32]>, Rows<T>),
 }
 
 impl<T: Real> PrincipalBlocks<T> for Assembled<T> {
@@ -172,7 +163,8 @@ impl<T: Real> PrincipalBlocks<T> for Assembled<T> {
     }
 }
 
-impl<T: Real> PrincipalBlocks<T> for Biadjacency<T> {
+/// The biadjacency `C`, cancelled cells dropped: rows are `A`'s left vertices.
+impl<T: Real> PrincipalBlocks<T> for Rows<T> {
     type Block = BipartiteComponent<T>;
 
     /// Transposed only when the right side is larger.
@@ -180,12 +172,9 @@ impl<T: Real> PrincipalBlocks<T> for Biadjacency<T> {
         if let [v] = vertices {
             return BipartiteComponent::Lone(*v);
         }
-        let n_left = self.c.n_rows() as u32;
-        let (lefts, rights) = (
-            0..n_left,
-            n_left..(self.c.n_rows() + self.c.n_cols()) as u32,
-        );
-        let (vertices, cross) = larger_side_first(lefts.collect(), rights.collect(), self.c);
+        let n_left = self.n_rows() as u32;
+        let (lefts, rights) = (0..n_left, n_left..(self.n_rows() + self.n_cols()) as u32);
+        let (vertices, cross) = larger_side_first(lefts.collect(), rights.collect(), self);
         BipartiteComponent::Sides(vertices, cross)
     }
 
@@ -194,15 +183,15 @@ impl<T: Real> PrincipalBlocks<T> for Biadjacency<T> {
         if let [v] = vertices {
             return BipartiteComponent::Lone(*v);
         }
-        let n_left = self.c.n_rows();
+        let n_left = self.n_rows();
         let (lefts, rights) =
             vertices.split_at(vertices.partition_point(|&v| (v as usize) < n_left));
         let mut ptrs = Vec::with_capacity(lefts.len() + 1);
         ptrs.push(0);
-        let entries = lefts.iter().map(|&i| self.c.row_len(i as usize)).sum();
+        let entries = lefts.iter().map(|&i| self.row_len(i as usize)).sum();
         let (mut indices, mut values) = (Vec::with_capacity(entries), Vec::with_capacity(entries));
         for &i in lefts {
-            for (j, &x) in self.c.row(i as usize) {
+            for (j, &x) in self.row(i as usize) {
                 indices.push(position[n_left + j] - lefts.len() as u32);
                 values.push(x);
             }
@@ -219,13 +208,14 @@ fn larger_side_first<T: Real>(
     lefts: Vec<u32>,
     rights: Vec<u32>,
     c: Rows<T>,
-) -> (Box<[u32]>, CrossBlock<T>) {
+) -> (Box<[u32]>, Rows<T>) {
+    assert!(
+        !lefts.is_empty() && !rights.is_empty(),
+        "both sides hold a vertex"
+    );
     match lefts.len() >= rights.len() {
-        true => ([lefts, rights].concat().into(), CrossBlock::new(c)),
-        false => (
-            [rights, lefts].concat().into(),
-            CrossBlock::new(c.transpose()),
-        ),
+        true => ([lefts, rights].concat().into(), c),
+        false => ([rights, lefts].concat().into(), c.transpose()),
     }
 }
 

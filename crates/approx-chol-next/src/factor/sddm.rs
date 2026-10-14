@@ -77,7 +77,7 @@ impl<'a, T: Real> Sddm<'a, T> {
     }
 }
 
-/// `S` row by row, each column's addends summed in arrival order and stored as `−w` by column; column `n` is the row's ground weight.
+/// An SDDM row by row, each column's addends summed in arrival order and stored as `−w` by column; column `n` is the row's ground weight.
 pub(super) struct SddmRows<T> {
     sums: Vec<T>,
     touched: Vec<u32>,

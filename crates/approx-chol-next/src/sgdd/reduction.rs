@@ -13,7 +13,7 @@ use super::decomposition::{
     assemble_bipartite, assemble_bipartite_gram, assemble_general, assemble_signed, of_csr,
     of_upper, BipartiteComponent, Cells, Extracted, Partitioned,
 };
-use super::null_vectors::NullVectors;
+use super::null_vectors::null_vectors;
 use super::scaling::{self, Existence, Scaling, ScalingPolicy};
 use super::signature;
 use crate::input::{
@@ -34,7 +34,10 @@ impl<T: Real, I: PrimInt> Partitioned<Canonical<'_, T, I>> {
                 }
                 let scaling = a.scale(policy)?;
                 let component = match a.sign(scaling, policy)? {
-                    Signed::Folded(m, rows) => m.balanced(rows.folded_surplus())?,
+                    Signed::Folded(m, rows) => {
+                        let grounding = rows.folded_surplus(&m.off_diagonal);
+                        m.balanced(grounding)?
+                    }
                     Signed::Frustrated(component) => component,
                 };
                 Ok(Some(component))
@@ -155,9 +158,7 @@ impl<'a, T: Real, I: PrimInt> TryFrom<SignedGraph<'a, T, I>> for Sgdd<T> {
             if diagonal == [T::zero()] {
                 return Ok(None);
             }
-            // A zero diagonal beside a cell is its terms underflowing.
-            let out_of_range = |&d: &T| d == T::zero() || !diagonal_in_range(d);
-            if let Some(i) = diagonal.iter().position(out_of_range) {
+            if let Some(i) = diagonal.iter().position(|&d| !diagonal_in_range(d)) {
                 let vertex = vertices[i];
                 return Err(ReduceError::OutOfRange { vertex });
             }
@@ -186,7 +187,7 @@ fn reduce_gram_blocks<T: Real>(
         dead,
     } = blocks;
     // Built by the first block not already dominant, so a dominant input reads no extra pass.
-    let nulls = LazyCell::new(|| NullVectors::of(v, partition.components()));
+    let nulls = LazyCell::new(|| null_vectors(v, partition.components()));
     let (mut folded, mut frustrated) = (Vec::new(), Vec::new());
     for a in live {
         let scaling = a.scale_gram(policy, &nulls)?;
@@ -209,14 +210,17 @@ fn folded_bipartite<T: Real, I: PrimInt>(
             let BipartiteComponent::Sides(vertices, cross) = component else {
                 return Ok(None);
             };
-            if let Some(i) = (cross.abs_row_sums().iter()).position(|&d| !diagonal_in_range(d)) {
+            let signs = Congruence::NegateFrom(cross.n_rows());
+            let off_diagonal = OffDiagonal::Bipartite(Arc::new(cross));
+            if let Some(i) =
+                (off_diagonal.abs_row_sums().iter()).position(|&d| !diagonal_in_range(d))
+            {
                 let vertex = vertices[i];
                 return Err(ReduceError::OutOfRange { vertex });
             }
-            let signs = Congruence::NegateFrom(cross.n_eliminated());
             let m = Congruent {
                 frame: Frame::new(vertices, signs),
-                off_diagonal: OffDiagonal::Bipartite(Arc::new(cross)),
+                off_diagonal,
             };
             m.balanced(Grounding::ungrounded()).map(Some)
         })?
@@ -237,8 +241,6 @@ struct SymmetricBlock<T> {
     diagonal: Vec<T>,
     /// Summed in `f64`: a long `f32` row is not undercounted.
     abs_row_sums: Vec<T>,
-    /// The rounding a row sum can carry.
-    degrees: Vec<usize>,
 }
 
 impl<T: Real> From<Cells<T>> for SymmetricBlock<T> {
@@ -256,7 +258,6 @@ impl<T: Real> SymmetricBlock<T> {
         Self {
             vertices,
             abs_row_sums: off_diagonal.abs_row_sums(),
-            degrees: off_diagonal.degrees(),
             off_diagonal,
             diagonal,
         }
@@ -267,35 +268,35 @@ impl<T: Real> SymmetricBlock<T> {
         self.diagonal == [T::zero()]
     }
 
-    /// Rows prove nothing: SCI past the row test, or the reduced CG on a bipartite block.
+    /// Rows prove nothing: SCI past the row test.
     fn scale(&self, policy: &ScalingPolicy) -> Result<Scaling<T>, ReduceError> {
-        self.scaling(policy, Existence::Unknown, || match &self.off_diagonal {
+        self.scaling(policy, Existence::Unknown, || self.relax(policy))
+    }
+
+    /// SCI on general rows, the reduced CG on a bipartite block.
+    fn relax(&self, policy: &ScalingPolicy) -> Option<scaling::Relaxation<T>> {
+        match &self.off_diagonal {
             OffDiagonal::General(adjacency) => scaling::sci(adjacency, &self.diagonal, policy),
             OffDiagonal::Bipartite(cross) => scaling::reduced_cg(cross, &self.diagonal, policy),
-        })
+        }
     }
 
     /// `V` proves a scaling exists; a zero diagonal beside a cell is its terms underflowing.
     fn scale_gram(
         &self,
         policy: &ScalingPolicy,
-        nulls: &LazyCell<NullVectors, impl FnOnce() -> NullVectors>,
+        nulls: &LazyCell<Vec<f64>, impl FnOnce() -> Vec<f64>>,
     ) -> Result<Scaling<T>, ReduceError> {
         if let Some(i) = self.diagonal.iter().position(|&d| d == T::zero()) {
             let vertex = self.vertices[i];
             return Err(ReduceError::OutOfRange { vertex });
         }
         self.scaling(policy, Existence::Guaranteed, || {
-            (LazyCell::force(nulls).on(&self.vertices))
-                .and_then(|u| scaling::null_scaling(&u, &self.diagonal))
-                .or_else(|| match &self.off_diagonal {
-                    OffDiagonal::General(adjacency) => {
-                        scaling::sci(adjacency, &self.diagonal, policy)
-                    }
-                    OffDiagonal::Bipartite(cross) => {
-                        scaling::reduced_cg(cross, &self.diagonal, policy)
-                    }
-                })
+            let u: Vec<f64> = (self.vertices.iter()).map(|&v| nulls[v as usize]).collect();
+            (u.iter().all(|x| x.is_finite()))
+                .then(|| scaling::null_scaling(&u, &self.diagonal))
+                .flatten()
+                .or_else(|| self.relax(policy))
         })
     }
 
@@ -323,8 +324,8 @@ impl<T: Real> SymmetricBlock<T> {
             return Err(ReduceError::NonpositiveDiagonal { vertex });
         }
         let vertex = self.vertices[0];
-        let mut rows = (self.diagonal.iter().zip(&self.abs_row_sums)).zip(&self.degrees);
-        if rows.all(|((&d, &s), &degree)| policy.dominates(d, s, degree)) {
+        let mut rows = self.diagonal.iter().zip(&self.abs_row_sums);
+        if rows.all(|(&d, &s)| policy.dominates(d, s)) {
             return Ok(Scaling::AlreadyDominant);
         }
         let relaxation = relax().ok_or(ReduceError::Unscalable { vertex })?;
@@ -358,7 +359,6 @@ impl<T: Real> SymmetricBlock<T> {
                 let rows = RowSums {
                     diagonal: self.diagonal,
                     abs: self.abs_row_sums,
-                    surplus: RowSurplus::Banded(self.degrees),
                 };
                 Ok((
                     Congruent::new(self.vertices, self.off_diagonal, signs),
@@ -373,17 +373,13 @@ impl<T: Real> SymmetricBlock<T> {
                 let diagonal: Vec<T> = (self.diagonal.iter().zip(&relaxation.scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();
-                let deficit = scaling::clamped_deficit(&diagonal, &abs, &self.degrees);
+                let deficit = clamped_deficit(&diagonal, &abs);
                 let report = policy.report(&relaxation, existence, deficit);
                 let m = Congruent {
                     frame: Frame::new(self.vertices, Congruence::Scaled(factors, report)),
                     off_diagonal,
                 };
-                let rows = RowSums {
-                    diagonal,
-                    abs,
-                    surplus: RowSurplus::Residue(self.degrees),
-                };
+                let rows = RowSums { diagonal, abs };
                 Ok((m, rows))
             }
         }
@@ -395,15 +391,17 @@ impl<T: Real> OffDiagonal<T> {
     fn abs_row_sums(&self) -> Vec<T> {
         match self {
             Self::General(adjacency) => adjacency.abs_row_sums(),
-            Self::Bipartite(cross) => cross.abs_row_sums(),
+            Self::Bipartite(cross) => {
+                let (eliminated, kept) = cross.abs_sums();
+                eliminated.into_iter().chain(kept).map(narrow).collect()
+            }
         }
     }
 
-    /// Entries per row in local order: the rounding a row sum can carry.
-    fn degrees(&self) -> Vec<usize> {
+    fn abs_total(&self) -> f64 {
         match self {
-            Self::General(adjacency) => adjacency.degrees(),
-            Self::Bipartite(cross) => cross.degrees(),
+            Self::General(adjacency) => adjacency.abs_total(),
+            Self::Bipartite(c) => 2.0 * c.abs_total(),
         }
     }
 
@@ -415,7 +413,10 @@ impl<T: Real> OffDiagonal<T> {
         match self {
             Self::General(adjacency) => Self::General(adjacency.signed(&s)),
             Self::Bipartite(cross) => {
-                Self::Bipartite(Arc::new(Arc::unwrap_or_clone(cross).signed(&s)))
+                let (eliminated, kept) = s.split_at(cross.n_rows());
+                Self::Bipartite(Arc::new(
+                    Arc::unwrap_or_clone(cross).signed(eliminated, kept),
+                ))
             }
         }
     }
@@ -428,7 +429,10 @@ impl<T: Real> OffDiagonal<T> {
                 (Self::General(adjacency), sums)
             }
             Self::Bipartite(cross) => {
-                let (cross, sums) = Arc::unwrap_or_clone(cross).scaled_abs_row_sums(f)?;
+                let (eliminated, kept) = f.split_at(cross.n_rows());
+                let (cross, rows, cols) =
+                    Arc::unwrap_or_clone(cross).scaled_abs_sums(eliminated, kept)?;
+                let sums = rows.into_iter().chain(cols).map(narrow).collect();
                 (Self::Bipartite(Arc::new(cross)), sums)
             }
         })
@@ -473,48 +477,27 @@ impl<T: Real> Congruent<T> {
 struct RowSums<T> {
     diagonal: Vec<T>,
     abs: Vec<T>,
-    surplus: RowSurplus,
-}
-
-/// How a row's `m_ii − Σ_j |m_ij|` reads as surplus.
-enum RowSurplus {
-    /// Unscaled: inside its rounding band it reads zero.
-    Banded(Vec<usize>),
-    /// Scaled: the scaling's residue, deficits clamped to zero.
-    Residue(Vec<usize>),
 }
 
 impl<T: Real> RowSums<T> {
-    /// Collatz–Wielandt: every row within its band of balanced puts `ρ` there too, so `M` floats.
-    fn folded_surplus(self) -> Grounding<T> {
-        let RowSurplus::Residue(degrees) = &self.surplus else {
-            return self.surplus();
-        };
-        let band = scaling::FLOAT_BAND * widen(T::epsilon());
-        let rows = self.diagonal.iter().zip(&self.abs).zip(degrees);
-        let flat = rows.into_iter().all(|((&d, &s), &degree)| {
-            let (d, s) = (widen(d), widen(s));
-            d - s <= scaling::rounding_band::<T>(d, s, degree).max(band * d)
-        });
-        match flat {
+    /// A folded `M`'s row sums are `M1`, so `1ᵀM1 = tr M − Σ|offdiag(M)|`, both compensated.
+    fn folded_surplus(self, off_diagonal: &OffDiagonal<T>) -> Grounding<T> {
+        let trace = crate::compensated_sum(self.diagonal.iter().map(|&d| widen(d)));
+        let ones = trace - off_diagonal.abs_total();
+        match ones <= SINGULAR_BAND * widen(T::epsilon()) * trace {
             true => Grounding::ungrounded(),
             false => self.surplus(),
         }
     }
 
+    /// Each row's residue, deficits clamped to zero.
     fn surplus(self) -> Grounding<T> {
         let rows = self.diagonal.iter().zip(&self.abs);
-        let surplus = match &self.surplus {
-            RowSurplus::Banded(degrees) => (rows.zip(degrees))
-                .map(|((&d, &s), &degree)| scaling::unscaled_surplus(d, s, degree))
-                .collect(),
-            RowSurplus::Residue(_) => rows.map(|(&d, &s)| (d - s).max(T::zero())).collect(),
-        };
-        Grounding::of(surplus)
+        Grounding::of(rows.map(|(&d, &s)| (d - s).max(T::zero())).collect())
     }
 }
 
-/// Floats each folded component when `1ᵀM1 ≤ 5ε·tr M`, else grounds it on `s = M·1`.
+/// Floats each folded component as [`RowSums::folded_surplus`] does, else grounds it on `s = M·1`.
 fn ground_or_float<T: Real>(
     v: impl IntoColumns<T>,
     components: Vec<Congruent<T>>,
@@ -522,21 +505,22 @@ fn ground_or_float<T: Real>(
     if components.is_empty() {
         return Ok(Vec::new());
     }
-    let mut ends = vec![None; v.n()];
+    // By vertex: components are disjoint, so one slot per vertex holds its component, `f_i` and surplus.
+    let mut component_of = vec![u32::MAX; v.n()];
+    let mut factor = vec![0.0; v.n()];
     for (c, component) in components.iter().enumerate() {
         let congruence = component.frame.congruence();
         for (slot, &vertex) in component.frame.vertices().iter().enumerate() {
-            ends[vertex as usize] = Some(End {
-                component: c,
-                slot,
-                factor: widen(congruence.factor(slot)),
-            });
+            component_of[vertex as usize] = c as u32;
+            factor[vertex as usize] = widen(congruence.factor(slot));
         }
     }
-    let mut surplus: Vec<Vec<f64>> = (components.iter())
-        .map(|component| vec![0.0; component.frame.vertices().len()])
-        .collect();
-    let mut certificates = vec![Certificate::default(); components.len()];
+    let mut surplus = vec![0.0f64; v.n()];
+    // `ε·1ᵀM1` and `ε·tr M` per component.
+    let (mut ones, mut trace) = (
+        vec![0.0f64; components.len()],
+        vec![0.0f64; components.len()],
+    );
     let epsilon = widen(T::epsilon());
     v.for_each_column(
         #[inline(always)]
@@ -545,36 +529,39 @@ fn ground_or_float<T: Real>(
                 return;
             }
             let w = |x: f64, y: f64| column.weight.bilinear(x, y);
-            let a = ends[column.a as usize].map(|end| (end, end.factor * widen(column.v_a)));
-            let b = ends[column.b as usize].map(|end| (end, end.factor * widen(column.v_b)));
-            match (a, b) {
-                (Some((a, u_a)), Some((b, u_b))) if a.component == b.component => {
+            let end = |i: u32, v_i: T| match component_of[i as usize] {
+                u32::MAX => None,
+                c => Some((i as usize, c as usize, factor[i as usize] * widen(v_i))),
+            };
+            match (end(column.a, column.v_a), end(column.b, column.v_b)) {
+                (Some((a, c, u_a)), Some((b, c_b, u_b))) if c == c_b => {
                     let p = u_a + u_b;
-                    surplus[a.component][a.slot] += w(u_a, p);
-                    surplus[b.component][b.slot] += w(u_b, p);
-                    let certificate = &mut certificates[a.component];
-                    certificate.ones += w(epsilon * p, p);
-                    certificate.trace += w(epsilon * u_a, u_a) + w(epsilon * u_b, u_b);
+                    surplus[a] += w(u_a, p);
+                    surplus[b] += w(u_b, p);
+                    ones[c] += w(epsilon * p, p);
+                    trace[c] += w(epsilon * u_a, u_a) + w(epsilon * u_b, u_b);
                 }
                 // A column straddling components keeps only its own end's square.
                 (a, b) => {
-                    for (end, u) in [a, b].into_iter().flatten() {
-                        surplus[end.component][end.slot] += w(u, u);
-                        let certificate = &mut certificates[end.component];
-                        certificate.ones += w(epsilon * u, u);
-                        certificate.trace += w(epsilon * u, u);
+                    for (i, c, u) in [a, b].into_iter().flatten() {
+                        surplus[i] += w(u, u);
+                        ones[c] += w(epsilon * u, u);
+                        trace[c] += w(epsilon * u, u);
                     }
                 }
             }
         },
     );
-    let decided = components.into_iter().zip(surplus).zip(certificates);
-    let decide = |((component, surplus), certificate): ((Congruent<T>, Vec<f64>), Certificate)| {
-        if certificate.ones <= 5.0 * epsilon * certificate.trace {
+    drop((component_of, factor));
+    let decided = components.into_iter().zip(ones).zip(trace);
+    let decide = |((component, ones), trace): ((Congruent<T>, f64), f64)| {
+        if ones <= SINGULAR_BAND * epsilon * trace {
             return component.balanced(Grounding::ungrounded());
         }
         let vertices = component.frame.vertices();
-        let surplus: Vec<T> = surplus.into_iter().map(|s| narrow(s.max(0.0))).collect();
+        let surplus: Vec<T> = (vertices.iter())
+            .map(|&v| narrow(surplus[v as usize].max(0.0)))
+            .collect();
         if let Some(slot) = surplus.iter().position(|&s| !in_range(s)) {
             let vertex = vertices[slot];
             return Err(ReduceError::OutOfRange { vertex });
@@ -589,17 +576,14 @@ fn ground_or_float<T: Real>(
     decided.map(decide).collect()
 }
 
-/// Where a column's end sits once reduced, and its `f_i`.
-#[derive(Clone, Copy)]
-struct End {
-    component: usize,
-    slot: usize,
-    factor: f64,
+/// `max_i (Σ_j|m_ij| − m_ii)/m_ii` past the entries' rounding: what clamping adds.
+fn clamped_deficit<T: Real>(diagonal: &[T], abs_row_sums: &[T]) -> f64 {
+    let band = SINGULAR_BAND * widen(T::epsilon());
+    (diagonal.iter().zip(abs_row_sums))
+        .map(|(&d, &s)| (widen(s) - widen(d)) / widen(d))
+        .filter(|&deficit| deficit > band)
+        .fold(0.0, f64::max)
 }
 
-/// `ε·1ᵀM1` and `ε·tr M` of one component.
-#[derive(Clone, Copy, Default)]
-struct Certificate {
-    ones: f64,
-    trace: f64,
-}
+/// `1ᵀM1 ≤ SINGULAR_BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh), so `M` floats.
+const SINGULAR_BAND: f64 = 5.0;

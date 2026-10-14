@@ -1,4 +1,4 @@
-use crate::storage::{CrossBlock, Rows};
+use crate::storage::Rows;
 use crate::{narrow, widen, Real};
 
 use super::{Relaxation, ScalingPolicy};
@@ -25,11 +25,11 @@ enum CandidateKind {
 
 impl<'a, T: Real> NormalizedCrossOperator<'a, T> {
     /// `inv_sqrt` in local order, eliminated rows first.
-    fn new(cross: &'a CrossBlock<T>, inv_sqrt: &'a [f64], shift: f64) -> Self {
-        let (large_inv_sqrt, small_inv_sqrt) = inv_sqrt.split_at(cross.n_eliminated());
+    fn new(cross: &'a Rows<T>, inv_sqrt: &'a [f64], shift: f64) -> Self {
+        let (large_inv_sqrt, small_inv_sqrt) = inv_sqrt.split_at(cross.n_rows());
         Self {
-            small_to_large: cross.c(),
-            large_to_small: cross.c().transpose(),
+            small_to_large: cross,
+            large_to_small: cross.transpose(),
             small_inv_sqrt,
             large_inv_sqrt,
             shift,
@@ -144,14 +144,7 @@ impl<'a, T: Real> NormalizedCrossOperator<'a, T> {
         for value in mu.iter_mut() {
             *value /= peak;
         }
-        if !mu.iter().all(|value| value.is_finite() && *value > 0.0) {
-            return None;
-        }
-        Some(Relaxation {
-            scales: mu.into(),
-            iterations: 0,
-            violation,
-        })
+        Relaxation::new(mu.into(), 0, violation)
     }
 }
 
@@ -284,7 +277,7 @@ fn reduced_cg_scaling<T: Real>(
 
 /// CG on `α² − NᵀN` over the smaller side; `None` when no scale stays a positive `T`.
 pub(in crate::sgdd) fn reduced_cg<T: Real>(
-    cross: &CrossBlock<T>,
+    cross: &Rows<T>,
     diagonal: &[T],
     policy: &ScalingPolicy,
 ) -> Option<Relaxation<T>> {
@@ -299,12 +292,9 @@ pub(in crate::sgdd) fn reduced_cg<T: Real>(
     let scales: Box<[T]> = (relaxation.scales.iter().zip(&inv_sqrt))
         .map(|(&mu, &normalizer)| narrow::<T>(mu * normalizer))
         .collect();
-    if !scales.iter().all(|&f| f.is_finite() && f > T::zero()) {
-        return None;
-    }
-    Some(Relaxation {
+    Relaxation::new(
         scales,
-        iterations: relaxation.iterations,
-        violation: narrow(relaxation.violation.max(0.0)),
-    })
+        relaxation.iterations,
+        narrow(relaxation.violation.max(0.0)),
+    )
 }

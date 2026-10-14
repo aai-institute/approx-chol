@@ -2,59 +2,45 @@ use crate::input::{Column, IntoColumns};
 use crate::widen;
 use crate::Real;
 
-/// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is.
-pub(super) struct NullVectors {
-    u: Vec<f64>,
-}
-
-impl NullVectors {
-    /// One union-find pass; a cycle off by more than `√ε` relative dooms its component.
-    pub(super) fn of<'c, T: Real>(
-        v: impl IntoColumns<T>,
-        components: impl Iterator<Item = &'c [u32]>,
-    ) -> Self {
-        let n = v.n();
-        let mut component = vec![0u32; n];
-        // A lone vertex is dead or definite, never a candidate.
-        let mut doomed = Vec::new();
-        for (c, vertices) in components.enumerate() {
-            vertices
-                .iter()
-                .for_each(|&v| component[v as usize] = c as u32);
-            doomed.push(vertices.len() == 1);
-        }
-        let mut alive = doomed.iter().filter(|&&doomed| !doomed).count();
-        let mut forest = RatioForest::new(n, widen(T::epsilon()).sqrt());
-        v.for_each_column(
-            #[inline(always)]
-            |column| {
-                if alive == 0 {
-                    return;
-                }
-                let Some(c) = coupling(&column, &component) else {
-                    return;
-                };
-                let k = -widen(column.v_a) / widen(column.v_b);
-                if !doomed[c] && !forest.join(column.a as usize, column.b as usize, k) {
-                    doomed[c] = true;
-                    alive -= 1;
-                }
-            },
-        );
-        let u = (0..n)
-            .map(|i| match doomed[component[i] as usize] {
-                true => f64::NAN,
-                false => forest.find(i).1,
-            })
-            .collect();
-        Self { u }
+/// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is: one union-find pass; a cycle off by more than `√ε` relative dooms its component.
+pub(super) fn null_vectors<'c, T: Real>(
+    v: impl IntoColumns<T>,
+    components: impl Iterator<Item = &'c [u32]>,
+) -> Vec<f64> {
+    let n = v.n();
+    let mut component = vec![0u32; n];
+    // A lone vertex is dead or definite, never a candidate.
+    let mut doomed = Vec::new();
+    for (c, vertices) in components.enumerate() {
+        vertices
+            .iter()
+            .for_each(|&v| component[v as usize] = c as u32);
+        doomed.push(vertices.len() == 1);
     }
-
-    /// The component's `u`, unless it was doomed.
-    pub(super) fn on(&self, vertices: &[u32]) -> Option<Vec<f64>> {
-        let u: Vec<f64> = vertices.iter().map(|&v| self.u[v as usize]).collect();
-        u.iter().all(|x| x.is_finite()).then_some(u)
-    }
+    let mut alive = doomed.iter().filter(|&&doomed| !doomed).count();
+    let mut forest = RatioForest::new(n, widen(T::epsilon()).sqrt());
+    v.for_each_column(
+        #[inline(always)]
+        |column| {
+            if alive == 0 {
+                return;
+            }
+            let Some(c) = coupling(&column, &component) else {
+                return;
+            };
+            let k = -widen(column.v_a) / widen(column.v_b);
+            if !doomed[c] && !forest.join(column.a as usize, column.b as usize, k) {
+                doomed[c] = true;
+                alive -= 1;
+            }
+        },
+    );
+    (0..n)
+        .map(|i| match doomed[component[i] as usize] {
+            true => f64::NAN,
+            false => forest.find(i).1,
+        })
+        .collect()
 }
 
 /// A column's component when both ends are nonzero in it.

@@ -39,3 +39,13 @@ pub(crate) fn narrow<T: Real>(sum: f64) -> T {
 pub(crate) fn diagonal_in_range<T: Real>(d: T) -> bool {
     in_range(d) && d <= T::max_value() / (T::one() + T::one() + T::one() + T::one())
 }
+
+/// `Σ x` with each addition's rounding carried (Knuth's TwoSum): within `ε` of exact for nonnegative terms.
+pub(crate) fn compensated_sum(terms: impl Iterator<Item = f64>) -> f64 {
+    let (sum, carry) = terms.fold((0.0f64, 0.0f64), |(sum, carry), x| {
+        let next = sum + x;
+        let x_part = next - sum;
+        (next, carry + ((sum - (next - x_part)) + (x - x_part)))
+    });
+    sum + carry
+}

@@ -52,9 +52,9 @@ pub enum Existence {
 }
 
 impl ScalingPolicy {
-    /// `Σ_j |a_ij| ≤ a_ii (1 + max(tolerance, 2 deg_i ε))`: a rounded Laplacian stays bit for bit.
-    pub(super) fn dominates<T: Real>(&self, d: T, abs_row_sum: T, degree: usize) -> bool {
-        let slack = (self.tolerance).max(2.0 * degree as f64 * widen(T::epsilon()));
+    /// `Σ_j |a_ij| ≤ a_ii (1 + max(tolerance, FLOAT_BAND ε))`: a rounded Laplacian stays bit for bit.
+    pub(super) fn dominates<T: Real>(&self, d: T, abs_row_sum: T) -> bool {
+        let slack = (self.tolerance).max(FLOAT_BAND * widen(T::epsilon()));
         widen(abs_row_sum) <= widen(d) * (1.0 + slack)
     }
 
@@ -90,34 +90,15 @@ pub(super) struct Relaxation<T> {
     violation: T,
 }
 
-/// `max_i (Σ_j|m_ij| − m_ii)/m_ii` outside each row's rounding band: what clamping adds.
-pub(super) fn clamped_deficit<T: Real>(
-    diagonal: &[T],
-    abs_row_sums: &[T],
-    degrees: &[usize],
-) -> f64 {
-    (diagonal.iter().zip(abs_row_sums).zip(degrees))
-        .map(|((&d, &s), &degree)| {
-            let (d, s) = (widen(d), widen(s));
-            match s - d > rounding_band::<T>(d, s, degree) {
-                true => (s - d) / d,
-                false => 0.0,
-            }
+impl<T: Real> Relaxation<T> {
+    /// `None` unless every scale is a positive `T`.
+    fn new(scales: Box<[T]>, iterations: usize, violation: T) -> Option<Self> {
+        let positive = scales.iter().all(|&f| f.is_finite() && f > T::zero());
+        positive.then_some(Self {
+            scales,
+            iterations,
+            violation,
         })
-        .fold(0.0, f64::max)
-}
-
-/// `t ε (m_ii + Σ_j|m_ij|)`, `t = deg + 1`: how far rounding alone moves a surplus.
-pub(super) fn rounding_band<T: Real>(d: f64, s: f64, degree: usize) -> f64 {
-    widen(T::epsilon()) * (d + s) * (degree + 1) as f64
-}
-
-/// A surplus inside its rounding band reads zero, so a balanced component floats.
-pub(super) fn unscaled_surplus<T: Real>(d: T, abs_row_sum: T, degree: usize) -> T {
-    let (d, s) = (widen(d), widen(abs_row_sum));
-    match d - s > rounding_band::<T>(d, s, degree) {
-        true => narrow(d - s),
-        false => T::zero(),
     }
 }
 
@@ -126,15 +107,14 @@ pub(super) fn null_scaling<T: Real>(u: &[f64], diagonal: &[T]) -> Option<Relaxat
     let peak =
         (u.iter().zip(diagonal)).fold(0.0f64, |peak, (&x, &d)| peak.max(x.abs() * widen(d).sqrt()));
     let scales: Box<[T]> = u.iter().map(|&x| narrow::<T>(x.abs() / peak)).collect();
-    (scales.iter().all(|&f| f.is_finite() && f > T::zero())).then(|| Relaxation {
-        scales,
-        iterations: 0,
-        violation: T::zero(),
-    })
+    Relaxation::new(scales, 0, T::zero())
 }
 
-/// How far `ρ(D⁻¹|B|)` may sit from `1`, in `ε`, for a scaled `M` to float.
-pub(super) const FLOAT_BAND: f64 = 16.0;
+/// SCI's closing width on `[t_p, t_q]` around `1`, in `ε`, and the floor of the dominance slack.
+const FLOAT_BAND: f64 = 16.0;
+
+/// Iterations without either bound moving before SCI stops: `t_q` pinned at `1` cannot prove `ρ < 1`.
+const STALL: usize = 32;
 
 /// Self-corrective iterations (Guan, Lu, Li, Shao 2016, Algorithm 3), handing over the best iterate.
 pub(super) fn sci<T: Real>(
@@ -148,6 +128,8 @@ pub(super) fn sci<T: Real>(
     let mut t = vec![0.0f64; n];
     let mut best = (f64::INFINITY, scales.clone());
     let mut iterations = 0;
+    let mut bracket = (f64::NEG_INFINITY, f64::INFINITY);
+    let mut flat = 0;
     loop {
         ratios(adjacency, &diagonal, &scales, &mut t);
         let (t_p, t_q) = t.iter().fold((f64::INFINITY, 0.0f64), |(lo, hi), &v| {
@@ -160,9 +142,13 @@ pub(super) fn sci<T: Real>(
         if violation < best.0 || violation <= policy.tolerance {
             best = (violation, scales.clone());
         }
-        // Certified, iterate until `t_q < 1` proves `ρ < 1` or `[t_p, t_q] ∋ ρ` closes on `1`.
+        // A bound may wobble by ulps, so progress is a bound past its record.
+        let progressed = t_p > bracket.0 || t_q < bracket.1;
+        bracket = (bracket.0.max(t_p), bracket.1.min(t_q));
+        flat = if progressed { 0 } else { flat + 1 };
+        // Certified: stop once `t_q < 1` proves `ρ < 1`, `[t_p, t_q]` closes on `1`, or neither bound moves.
         let band = FLOAT_BAND * widen(T::epsilon());
-        let settled = t_q < 1.0 - band || t_q - t_p <= band;
+        let settled = t_q < 1.0 - band || t_q - t_p <= band || flat >= STALL;
         let off_dominant = t_p >= 1.0 && violation > policy.tolerance;
         if (violation <= policy.tolerance && settled)
             || off_dominant
@@ -190,14 +176,7 @@ pub(super) fn sci<T: Real>(
     let (violation, scales) = best;
     let peak = (scales.iter().zip(&diagonal)).fold(0.0f64, |peak, (&f, &d)| peak.max(f * d.sqrt()));
     let scales: Box<[T]> = scales.iter().map(|&f| narrow::<T>(f / peak)).collect();
-    if !scales.iter().all(|&f| f.is_finite() && f > T::zero()) {
-        return None;
-    }
-    Some(Relaxation {
-        scales,
-        iterations,
-        violation: narrow(violation),
-    })
+    Relaxation::new(scales, iterations, narrow(violation))
 }
 
 /// `t_i = Σ_j |a_ij| f_j / (a_ii f_i)`, each upper edge read for both its ends.

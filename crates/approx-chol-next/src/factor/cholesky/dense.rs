@@ -62,6 +62,7 @@ impl<T: Real> PackedLaplacian<T> {
             matrix[start + row] = T::one() / inverse_pivots[row];
         }
         values.truncate(row_start(m));
+        values.shrink_to_fit();
         DenseCholesky { values }
     }
 }

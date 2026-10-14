@@ -1,4 +1,4 @@
-use rand::rngs::SmallRng;
+use rand::rngs::Xoshiro256PlusPlus;
 use rand::Rng;
 
 use crate::Real;
@@ -32,7 +32,7 @@ impl<T: Real> CdfSampler<T> {
     }
 
     /// A position in the suffix past `position`, clamped to its last: an `f32` draw can round up to the total; a linear scan up to 32 entries (256 measured +4-5%).
-    pub(super) fn draw_after(&self, rng: &mut SmallRng, position: usize) -> usize {
+    pub(super) fn draw_after(&self, rng: &mut Xoshiro256PlusPlus, position: usize) -> usize {
         let (start, end) = (position + 1, self.cumsum.len());
         // 53 bits times a power of two is exact, so never 1.0.
         let u = ((rng.next_u64() >> 11) as f64) * (1.0 / (1u64 << 53) as f64);
