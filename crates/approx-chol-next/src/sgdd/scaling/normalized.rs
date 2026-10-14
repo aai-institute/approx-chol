@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use crate::storage::{OffDiagonal, Rows};
 use crate::{narrow, widen, Real};
 
-/// `N = D^{-1/2}|offdiag(A_c)|D^{-1/2}`: scales `R` make `R|A_c|R` dominant iff `N y ≤ y` for `y = R√D`.
+/// `N = D^{-1/2}|offdiag(A_c)|D^{-1/2}`: scales `R` make `R|A_c|R` dominant iff `N y ≤ y` for `y = R√D`, so iff `ρ(N) ≤ 1` (Boman, Chen, Parekh, Toledo, LAA 2005).
 pub(super) struct Normalized<'a, T> {
     off_diagonal: &'a OffDiagonal<T>,
     inv_sqrt: Box<[f64]>,
@@ -38,23 +38,26 @@ impl<'a, T: Real> Normalized<'a, T> {
         }
     }
 
-    /// `[min_i, max_i] (Ny)_i / y_i`; `None` unless `y` is positive and every ratio finite.
+    /// `[min_i, max_i] (Ny)_i / y_i` and `‖Ny − y‖_∞ / ‖y‖_∞`; `None` unless `y` is positive and every ratio finite.
     pub(super) fn ratio_range(
         &self,
         y: &[f64],
         work: &mut [f64],
         out: &mut [f64],
-    ) -> Option<(f64, f64)> {
+    ) -> Option<(f64, f64, f64)> {
         if !y.iter().all(|&v| v.is_finite() && v > 0.0) {
             return None;
         }
         self.unscaled(y, work, out);
         let (mut low, mut high) = (f64::INFINITY, 0.0f64);
+        let (mut residual, mut peak) = (0.0f64, 0.0f64);
         for ((&o, &y), &s) in out.iter().zip(y).zip(&self.inv_sqrt[..]) {
             let t = s * o / y;
             (low, high) = (low.min(t), high.max(t));
+            residual = residual.max((s * o - y).abs());
+            peak = peak.max(y);
         }
-        (low.is_finite() && high.is_finite()).then_some((low, high))
+        (low.is_finite() && high.is_finite()).then_some((low, high, residual / peak))
     }
 
     /// `R = D^{-1/2} y` with `y` peaking at `1`, so `M`'s diagonal never exceeds `1`.

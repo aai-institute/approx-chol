@@ -1,11 +1,13 @@
 use super::normalized::Normalized;
 use crate::Real;
 
-/// `[min_i, max_i] (Ny)_i / y_i` of a positive `y`, which brackets `ρ(N)` (Collatz–Wielandt).
+/// `[min_i, max_i] (Ny)_i / y_i` of a positive `y`, which brackets `ρ(N)` (Collatz 1942, Wielandt 1950).
 #[derive(Clone, Copy)]
 struct Bracket {
     low: f64,
     high: f64,
+    /// `‖Ny − y‖_∞ / ‖y‖_∞`, the eigen-residual at `ρ = 1` (Jia, Lin, Liu's outer stop).
+    residual: f64,
 }
 
 impl Bracket {
@@ -15,8 +17,12 @@ impl Bracket {
         y: &[f64],
         work: &mut (Vec<f64>, Vec<f64>),
     ) -> Option<Self> {
-        let (low, high) = n.ratio_range(y, &mut work.0, &mut work.1)?;
-        Some(Self { low, high })
+        let (low, high, residual) = n.ratio_range(y, &mut work.0, &mut work.1)?;
+        Some(Self {
+            low,
+            high,
+            residual,
+        })
     }
 
     /// How far `y` leaves `M` short of dominance.
@@ -28,17 +34,18 @@ impl Bracket {
         self.violation() <= tolerance
     }
 
-    /// `ρ ≥ low` past `1 + tolerance`: no scaling certifies.
+    /// `ρ ≥ low` past `1 + tolerance`: no scaling certifies (Guan, Lu, Li, Shao, JCAM 302 (2016), Thm 2.1).
     fn refutes(&self, tolerance: f64) -> bool {
         self.low > 1.0 + tolerance
     }
 
-    /// `ρ < 1` proven, or the bracket closed on `ρ`: no later `y` moves the float decision.
+    /// `ρ < 1` proven, or `y` a Perron vector of `ρ = 1` to rounding: no later `y` moves the float decision.
     fn settled(&self, band: f64) -> bool {
-        self.high < 1.0 - band || self.high - self.low <= band
+        // Not the width, which never closes once `y` has components below `ε` (Li & Li, arXiv:2111.12642 §3).
+        self.high < 1.0 - band || self.residual <= band
     }
 
-    /// Just above `ρ`: `1` once certified, as a scalable block's `ρ ≤ 1`, else the top (Noda).
+    /// Just above `ρ`: `1` once certified, as a scalable block's `ρ ≤ 1`, else the top (Noda 1971).
     fn shift(&self, tolerance: f64) -> f64 {
         let top = if self.certifies(tolerance) {
             1.0
@@ -49,11 +56,11 @@ impl Bracket {
     }
 }
 
-/// Inverse iteration towards `N`'s Perron vector, each step `(αI − N) y' = y` solved by CG from `y' = 0`.
+/// Inverse iteration towards `N`'s Perron vector, each step `(αI − N) y' = y` solved by CG from `y' = 0` (Jia, Lin, Liu, arXiv:1309.3926).
 pub(super) struct InverseIteration<'n, 'a, T> {
     n: &'n Normalized<'a, T>,
     tolerance: f64,
-    /// How close to `1` a settled bracket closes.
+    /// How close to `1` a settled residual closes.
     band: f64,
     max_iterations: usize,
     iterations: usize,
@@ -88,7 +95,7 @@ impl<'n, 'a, T: Real> InverseIteration<'n, 'a, T> {
         })
     }
 
-    /// `α = 1 + tolerance/2` until a step certifies or refutes, then each step from the bracket's [`shift`](Bracket::shift).
+    /// `α = 1 + tolerance/2` until a step certifies or refutes (as `M⁻¹𝟙` does: Ahmadinejad et al., arXiv:1810.02348 §3.1), then each step from the bracket's [`shift`](Bracket::shift).
     pub(super) fn run(mut self) -> (Vec<f64>, usize, f64) {
         let (tolerance, band) = (self.tolerance, self.band);
         let polished =

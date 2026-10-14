@@ -78,7 +78,7 @@ impl ScalingPolicy {
     }
 }
 
-/// Positive scales `R` making `R|A|R` weakly dominant.
+/// Positive scales `R` making `R|A|R` weakly dominant, reducing GDD to SDDM (Daitch, Spielman, arXiv:0803.0988 §4).
 pub(super) enum Scaling<T> {
     /// Every SDDM input, so an SDDM CSR reduces bit for bit as before.
     AlreadyDominant,
@@ -114,7 +114,7 @@ pub(super) fn null_scaling<T: Real>(u: &[f64], diagonal: &[T]) -> Option<Relaxat
     Relaxation::new(scales, 0, T::zero())
 }
 
-/// How far, in `ε`, a row ratio `Σ_j|a_ij|f_j / (a_ii f_i)` may sit from `1`: a settled bracket's width and the dominance slack's floor.
+/// How far, in `ε`, a row ratio `Σ_j|a_ij|f_j / (a_ii f_i)` may sit from `1`: a settled residual and the dominance slack's floor.
 const RATIO_BAND: f64 = 16.0;
 
 /// Scales from `N`'s Perron vector, iterated until `ρ < 1` is proven, pinned at `1`, or refuted past the tolerance.
