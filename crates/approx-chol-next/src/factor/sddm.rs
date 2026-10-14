@@ -8,7 +8,7 @@ use crate::sgdd::Grounding;
 use crate::storage::{Rows, UpperAdjacency};
 use crate::Real;
 
-/// `L + diag(s)`, `L`'s off-diagonal nonpositive; borrowed from its component, or owned when derived.
+/// `L + diag(s)`, `L`'s off-diagonal nonpositive; borrowed from its block, or owned when derived.
 #[derive(Clone, Debug)]
 pub(super) struct Sddm<'a, T: Real> {
     adjacency: Cow<'a, UpperAdjacency<T>>,
@@ -154,14 +154,15 @@ impl<T: Real> SddmRows<T> {
         self.ptrs.push(self.indices.len());
     }
 
-    /// Rows `0..n_rows` of an SDDM on `n` vertices, `row` writing every row it owns; split by row across threads, at least `min_rows` a task, so each sums alone and the bits match at any count.
+    /// An SDDM on `n_kept` vertices per sheet, `row` writing kept vertex `k`'s row on each sheet; split by vertex across threads, at least `min_kept` a task, so each sums alone and the bits match at any count.
     pub(super) fn split(
-        n: usize,
-        n_rows: usize,
-        min_rows: usize,
+        sheets: Sheets,
+        n_kept: usize,
+        min_kept: usize,
         row: impl Fn(&mut Self, usize) + Sync,
     ) -> (UpperAdjacency<T>, Vec<T>) {
-        let rows = (0..n_rows).into_par_iter().with_min_len(min_rows).fold(
+        let n = sheets.count() * n_kept;
+        let rows = (0..n_kept).into_par_iter().with_min_len(min_kept).fold(
             || Self::new(n),
             |mut rows, k| {
                 row(&mut rows, k);

@@ -73,7 +73,7 @@ impl<T: Real> Congruence<T> {
     }
 
     /// `x ← F x`: the solve applies it on both sides, `A_c⁺ = P F M⁺ F P`.
-    pub(crate) fn apply(&self, x: &mut [T]) {
+    pub(super) fn apply(&self, x: &mut [T]) {
         match self {
             Self::Identity => {}
             Self::NegateFrom(first) => x[*first..].iter_mut().for_each(|x| *x = -*x),
@@ -84,7 +84,7 @@ impl<T: Real> Congruence<T> {
     }
 
     /// Removes the component along `F·1`, max-normalized: the raw norm overflows at a 1e200 scale range.
-    pub(crate) fn project_out_null(&self, x: &mut [T]) {
+    pub(super) fn project_out_null(&self, x: &mut [T]) {
         match self {
             Self::Signs(factors) | Self::Scaled(factors, _) => project_out(x, |i| factors[i]),
             _ => project_out(x, |i| self.factor(i)),

@@ -16,7 +16,7 @@ use rayon::prelude::*;
 pub use cholesky::Fallback;
 pub use config::{CliqueRule, Config, InnerParallelism, Multiplicity, SplitCount};
 
-use crate::sgdd::{Balance, Frame, IrreducibleBlock, Sgdd};
+use crate::sgdd::{Balance, IrreducibleBlock, Restriction, Sgdd};
 use crate::storage::OffDiagonal;
 use crate::Real;
 use cholesky::Cholesky;
@@ -59,7 +59,7 @@ pub struct Factor<T = f64> {
 /// Factors every irreducible block of `sgdd` in parallel; `sgdd` survives for another `config`.
 pub fn factorize<T: Real>(sgdd: &Sgdd<T>, config: &Config) -> Factor<T> {
     let blocks = (sgdd.blocks().par_iter())
-        .map(|component| BlockFactor::build(component, config))
+        .map(|block| BlockFactor::build(block, config))
         .collect();
     Factor {
         n: sgdd.n(),
@@ -91,7 +91,7 @@ impl<T: Real> Factor<T> {
 
     fn scratch_len(&self) -> usize {
         (self.blocks.iter())
-            .map(|component| component.vertices().len() + component.cholesky.scratch_len())
+            .map(|block| block.vertices().len() + block.cholesky.scratch_len())
             .max()
             .unwrap_or(0)
     }
@@ -117,12 +117,12 @@ impl<T: Real> Factor<T> {
             });
         }
         scratch.resize(scratch.len().max(self.scratch_len()), T::zero());
-        for component in &self.blocks {
-            let vertices = component.vertices();
-            let (local, rest) = scratch.split_at_mut(vertices.len());
-            (local.iter_mut().zip(vertices)).for_each(|(v, &i)| *v = x[i as usize]);
-            component.solve_unchecked(local, rest, inner);
-            (local.iter().zip(vertices)).for_each(|(&v, &i)| x[i as usize] = v);
+        for block in &self.blocks {
+            let restriction = &block.restriction;
+            let (local, rest) = scratch.split_at_mut(block.vertices().len());
+            restriction.gather(x, local);
+            block.solve_unchecked(local, rest, inner);
+            restriction.scatter(local, x);
         }
         for &i in &self.dead {
             x[i as usize] = T::zero();
@@ -140,27 +140,23 @@ impl<T: Real> Factor<T> {
 )]
 #[derive(Clone, Debug)]
 pub struct BlockFactor<T = f64> {
-    frame: Arc<Frame<T>>,
-    /// The block's own fact, not its Cholesky's: an underflowed complement surplus never makes it singular.
-    floats: bool,
+    restriction: Arc<Restriction<T>>,
     elimination: Option<BlockElimination<T>>,
     cholesky: Cholesky<T>,
     fallback: Option<Fallback>,
 }
 
 impl<T: Real> BlockFactor<T> {
-    fn build(component: &IrreducibleBlock<T>, config: &Config) -> Self {
-        let frame = component.frame();
-        let vertices = frame.vertices();
+    fn build(block: &IrreducibleBlock<T>, config: &Config) -> Self {
         let streams = Streams {
             seed: config.seed,
-            component: vertices[0],
+            block: block.vertices()[0],
         };
-        let (sheets, grounding) = match component.balance() {
+        let (sheets, grounding) = match block.balance() {
             Balance::Balanced(grounding) => (Sheets::One, grounding),
             Balance::Frustrated(grounding) => (Sheets::Two, grounding),
         };
-        let (elimination, (cholesky, fallback)) = match component.off_diagonal() {
+        let (elimination, (cholesky, fallback)) = match block.off_diagonal() {
             OffDiagonal::General(adjacency) => {
                 let sddm = match sheets {
                     Sheets::One => {
@@ -178,8 +174,7 @@ impl<T: Real> BlockFactor<T> {
             }
         };
         Self {
-            frame: Arc::clone(frame),
-            floats: component.floats(),
+            restriction: Arc::clone(block.restriction()),
             elimination,
             cholesky,
             fallback,
@@ -188,7 +183,7 @@ impl<T: Real> BlockFactor<T> {
 
     /// The block's vertices in `A`'s numbering, in local order.
     pub fn vertices(&self) -> &[u32] {
-        self.frame.vertices()
+        self.restriction.vertices()
     }
 
     /// Why this block is less accurate than its config asked, if it is.
@@ -221,11 +216,8 @@ impl<T: Real> BlockFactor<T> {
     }
 
     fn solve_unchecked(&self, x: &mut [T], scratch: &mut [T], inner: InnerParallelism) {
-        let congruence = self.frame.congruence();
-        if self.floats {
-            congruence.project_out_null(x);
-        }
-        congruence.apply(x);
+        let singular = self.cholesky.singular();
+        self.restriction.restrict(x, singular);
         match &self.elimination {
             None => self.cholesky.solve(x, scratch),
             Some(elimination) => {
@@ -235,10 +227,7 @@ impl<T: Real> BlockFactor<T> {
                 elimination.backward(eliminated, kept, inner);
             }
         }
-        congruence.apply(x);
-        if self.floats {
-            congruence.project_out_null(x);
-        }
+        self.restriction.prolongate(x, singular);
     }
 }
 
@@ -246,7 +235,7 @@ impl<T: Real> BlockFactor<T> {
 #[derive(Clone, Copy, Debug)]
 struct Streams {
     seed: u64,
-    component: u32,
+    block: u32,
 }
 
 impl Streams {
@@ -263,7 +252,7 @@ impl Streams {
 
 /// The whole key mixed once, the only place a key becomes draws; stage `0` is the Cholesky's, `e + 1` star `e`'s.
 fn rng(streams: Streams, stage: u64) -> Xoshiro256PlusPlus {
-    let key = [u64::from(streams.component), stage]
+    let key = [u64::from(streams.block), stage]
         .into_iter()
         .fold(splitmix(streams.seed), |key, part| splitmix(key ^ part));
     Xoshiro256PlusPlus::seed_from_u64(key)

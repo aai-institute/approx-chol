@@ -8,6 +8,6 @@ mod reduction;
 mod scaling;
 mod signature;
 
-pub(crate) use block::{Balance, Frame, Grounding};
+pub(crate) use block::{Balance, Grounding, Restriction};
 pub use block::{FromCsrError, IrreducibleBlock, ReduceError, Sgdd};
 pub use scaling::{Existence, ScalingPolicy, ScalingReport};

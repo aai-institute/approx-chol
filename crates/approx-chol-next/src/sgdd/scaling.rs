@@ -1,8 +1,10 @@
-mod cg;
+mod normalized;
+mod perron;
 
-pub(super) use cg::reduced_cg;
+use normalized::Normalized;
+use perron::InverseIteration;
 
-use crate::storage::UpperAdjacency;
+use crate::storage::OffDiagonal;
 use crate::{narrow, widen, Real};
 
 /// Certification policy for a dominance scaling; a deficit left at hand-over is clamped and reported.
@@ -31,7 +33,7 @@ impl Default for ScalingPolicy {
     }
 }
 
-/// A component's uncertified scaling: present iff its violation exceeded the policy's tolerance.
+/// A block's uncertified scaling: present iff its violation exceeded the policy's tolerance.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScalingReport {
@@ -112,86 +114,20 @@ pub(super) fn null_scaling<T: Real>(u: &[f64], diagonal: &[T]) -> Option<Relaxat
     Relaxation::new(scales, 0, T::zero())
 }
 
-/// How far, in `ε`, a row ratio `Σ_j|a_ij|f_j / (a_ii f_i)` may sit from `1`: SCI's closing width and the dominance slack's floor.
+/// How far, in `ε`, a row ratio `Σ_j|a_ij|f_j / (a_ii f_i)` may sit from `1`: a settled bracket's width and the dominance slack's floor.
 const RATIO_BAND: f64 = 16.0;
 
-/// Iterations without either bound moving before SCI stops: `t_q` pinned at `1` cannot prove `ρ < 1`.
-const STALL: usize = 32;
-
-/// Self-corrective iterations (Guan, Lu, Li, Shao 2016, Algorithm 3), handing over the best iterate.
-pub(super) fn sci<T: Real>(
-    adjacency: &UpperAdjacency<T>,
+/// Scales from `N`'s Perron vector, iterated until `ρ < 1` is proven, pinned at `1`, or refuted past the tolerance.
+pub(super) fn relax<T: Real>(
+    off_diagonal: &OffDiagonal<T>,
     diagonal: &[T],
     policy: &ScalingPolicy,
 ) -> Option<Relaxation<T>> {
-    let diagonal: Vec<f64> = diagonal.iter().map(|&d| widen(d)).collect();
-    let n = diagonal.len();
-    let mut scales = vec![1.0f64; n];
-    let mut t = vec![0.0f64; n];
-    let mut best = (f64::INFINITY, scales.clone());
-    let mut iterations = 0;
-    let mut bracket = (f64::NEG_INFINITY, f64::INFINITY);
-    let mut flat = 0;
-    loop {
-        ratios(adjacency, &diagonal, &scales, &mut t);
-        let (t_p, t_q) = t.iter().fold((f64::INFINITY, 0.0f64), |(lo, hi), &v| {
-            (lo.min(v), hi.max(v))
-        });
-        if !(t_p.is_finite() && t_q.is_finite()) {
-            return None;
-        }
-        let violation = (t_q - 1.0).max(0.0);
-        if violation < best.0 || violation <= policy.tolerance {
-            best = (violation, scales.clone());
-        }
-        // A bound may wobble by ulps, so progress is a bound past its record.
-        let progressed = t_p > bracket.0 || t_q < bracket.1;
-        bracket = (bracket.0.max(t_p), bracket.1.min(t_q));
-        flat = if progressed { 0 } else { flat + 1 };
-        // Certified: stop once `t_q < 1` proves `ρ < 1`, `[t_p, t_q]` closes on `1`, or neither bound moves.
-        let band = RATIO_BAND * widen(T::epsilon());
-        let settled = t_q < 1.0 - band || t_q - t_p <= band || flat >= STALL;
-        let off_dominant = t_p >= 1.0 && violation > policy.tolerance;
-        if (violation <= policy.tolerance && settled)
-            || off_dominant
-            || iterations == policy.max_iterations
-        {
-            break;
-        }
-        iterations += 1;
-        let towards_dominant = t_p * t_q <= 1.0;
-        for (f, &ti) in scales.iter_mut().zip(&t) {
-            let selected = match towards_dominant {
-                true => ti < 1.0,
-                false => ti > 1.0,
-            };
-            if selected && ti > 0.0 {
-                *f *= ti;
-            }
-        }
-        let peak = scales.iter().copied().fold(0.0f64, f64::max);
-        if !(peak.is_finite() && peak > 0.0) {
-            return None;
-        }
-        scales.iter_mut().for_each(|f| *f /= peak);
-    }
-    let (violation, scales) = best;
-    let peak = (scales.iter().zip(&diagonal)).fold(0.0f64, |peak, (&f, &d)| peak.max(f * d.sqrt()));
-    let scales: Box<[T]> = scales.iter().map(|&f| narrow::<T>(f / peak)).collect();
-    Relaxation::new(scales, iterations, narrow(violation))
-}
-
-/// `t_i = Σ_j |a_ij| f_j / (a_ii f_i)`, each upper edge read for both its ends.
-fn ratios<T: Real>(adjacency: &UpperAdjacency<T>, diagonal: &[f64], scales: &[f64], t: &mut [f64]) {
-    t.fill(0.0);
-    for i in 0..adjacency.n() {
-        for (j, &a) in adjacency.upper(i) {
-            let a = widen(a.abs());
-            t[i] += a * scales[j];
-            t[j] += a * scales[i];
-        }
-    }
-    for ((ti, &d), &f) in t.iter_mut().zip(diagonal).zip(scales) {
-        *ti /= d * f;
-    }
+    let n = Normalized::new(off_diagonal, diagonal);
+    // A ratio over `k` positive terms rounds by `(k + 3)ε`: no bracket closes tighter.
+    let rounding = (off_diagonal.max_degree() + 3) as f64 * f64::EPSILON;
+    let band = (RATIO_BAND * widen(T::epsilon())).max(rounding);
+    let iteration = InverseIteration::new(&n, policy.tolerance, band, policy.max_iterations)?;
+    let (y, iterations, violation) = iteration.run();
+    Relaxation::new(n.scales(&y), iterations, narrow(violation))
 }

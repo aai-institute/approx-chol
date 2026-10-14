@@ -1,12 +1,14 @@
 //! `A` summed from `V`'s columns, row by row in column order, and cut into its components' blocks.
 
+use std::sync::Arc;
+
 use num_traits::PrimInt;
 
 use super::partition::{Partition, UnionFind};
 use super::{Cells, Partitioned, PrincipalBlocks};
 use crate::input::{BipartiteColumns, Column, IntoColumns, SignedGraph};
 use crate::sgdd::block::ReduceError;
-use crate::storage::{Rows, UpperAdjacency};
+use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::{in_range, narrow, widen, Real};
 
 /// The signed graph's cells, each vertex's surplus its pairs' cancelled mass.
@@ -19,12 +21,7 @@ pub(in crate::sgdd) fn assemble_signed<T: Real, I: PrimInt>(
         surplus[i] += s;
         surplus[j] += s;
     })?;
-    let surplus: Vec<T> = surplus.into_iter().map(narrow).collect();
-    if let Some(vertex) = surplus.iter().position(|&s| !in_range(s)) {
-        let vertex = vertex as u32;
-        return Err(ReduceError::OutOfRange { vertex });
-    }
-    Ok((a, surplus))
+    Ok((a, surplus.into_iter().map(narrow).collect()))
 }
 
 /// `A`'s strict upper triangle, diagonal and components, cells summed by pair in column order.
@@ -41,26 +38,9 @@ fn assemble<T: Real, C: CellSum>(
     v: impl IntoColumns<T>,
     pair: impl FnMut(usize, usize, C),
 ) -> Result<Partitioned<Assembled<T>>, ReduceError> {
-    let n = v.n();
-    let (mut counts, mut diagonal) = (vec![0; n], vec![0.0_f64; n]);
-    v.for_each_column(
-        #[inline(always)]
-        |column| {
-            counts[column.a.min(column.b) as usize] += 1;
-            let (v_a, v_b) = (widen(column.v_a), widen(column.v_b));
-            diagonal[column.a as usize] += square(&column, v_a);
-            diagonal[column.b as usize] += square(&column, v_b);
-        },
-    );
-    let mut buckets = Buckets::new(&counts);
-    v.for_each_column(
-        #[inline(always)]
-        |column| {
-            let (lo, hi) = (column.a.min(column.b), column.a.max(column.b));
-            buckets.push(lo as usize, hi, column.cell());
-        },
-    );
-    let (rows, partition) = buckets.sum::<T, C>(n, 0, pair)?;
+    let mut diagonal = vec![0.0_f64; v.n()];
+    let counts = counts(v, v.n(), |column| add_squares(&mut diagonal, column));
+    let (rows, partition) = Buckets::new(v, &counts, 0).sum::<T, C>(pair)?;
     let a = Assembled {
         adjacency: UpperAdjacency::new(rows),
         diagonal: diagonal_of(diagonal)?,
@@ -72,7 +52,7 @@ fn assemble<T: Real, C: CellSum>(
 pub(in crate::sgdd) fn assemble_bipartite<T: Real>(
     v: impl BipartiteColumns<T>,
 ) -> Result<Partitioned<Rows<T>>, ReduceError> {
-    biadjacency(v, |_| {})
+    cross(v, |_| {})
 }
 
 /// As [`assemble_bipartite`], with `A`'s diagonal summed in the same column pass.
@@ -80,26 +60,20 @@ pub(in crate::sgdd) fn assemble_bipartite_gram<T: Real>(
     v: impl BipartiteColumns<T>,
 ) -> Result<(Partitioned<Rows<T>>, Vec<T>), ReduceError> {
     let mut sums = vec![0.0_f64; v.n()];
-    let a = biadjacency(
-        v,
-        #[inline(always)]
-        |column: &Column<T>| {
-            let (v_a, v_b) = (widen(column.v_a), widen(column.v_b));
-            sums[column.a as usize] += square(column, v_a);
-            sums[column.b as usize] += square(column, v_b);
-        },
-    )?;
+    let a = cross(v, |column| add_squares(&mut sums, column))?;
     Ok((a, diagonal_of(sums)?))
 }
 
-/// `w v²`, `NaN` where a nonzero term underflowed in `f64`, so the range screen names its vertex.
+/// Adds `w v²` at both ends, `NaN` where a nonzero term underflowed in `f64`, so the range screen names its vertex.
 #[inline(always)]
-fn square<T: Real>(column: &Column<T>, v: f64) -> f64 {
-    let term = column.weight.bilinear(v, v);
-    match term == 0.0 && v != 0.0 && !column.weight.is_zero() {
-        true => f64::NAN,
-        false => term,
-    }
+fn add_squares<T: Real>(sums: &mut [f64], column: &Column<T>) {
+    let square = |v: f64| match column.weight.bilinear(v, v) {
+        0.0 if v != 0.0 && !column.weight.is_zero() => f64::NAN,
+        term => term,
+    };
+    // Two straight-line ends: a loop over them costs signed_F 7–10% and bip_sparse 18–20%.
+    sums[column.a as usize] += square(widen(column.v_a));
+    sums[column.b as usize] += square(widen(column.v_b));
 }
 
 /// Each sum as `T` stores it; a nonzero one cast to zero underflowed, so it is out of range.
@@ -112,34 +86,18 @@ fn diagonal_of<T: Real>(sums: Vec<f64>) -> Result<Vec<T>, ReduceError> {
         .collect()
 }
 
-/// `C` and its components, `seen` visiting each column once.
-fn biadjacency<T: Real>(
-    v: impl BipartiteColumns<T>,
-    seen: impl FnMut(&Column<T>),
-) -> Result<Partitioned<Rows<T>>, ReduceError> {
-    let (c, partition) = cross(v, seen)?;
-    Ok(Partitioned { a: c, partition })
-}
-
 /// A general factor-width-2 `A`, assembled.
 pub(in crate::sgdd) struct Assembled<T> {
     adjacency: UpperAdjacency<T>,
     diagonal: Vec<T>,
 }
 
-/// One component of a bipartite assembly.
-pub(in crate::sgdd) enum BipartiteComponent<T> {
-    /// A vertex no cell couples.
-    Lone(u32),
-    /// Both sides in local order, the larger eliminated first, and `C` between them.
-    Sides(Box<[u32]>, Rows<T>),
-}
-
 impl<T: Real> PrincipalBlocks<T> for Assembled<T> {
     type Block = Cells<T>;
 
     fn whole(self, vertices: &[u32]) -> Self::Block {
-        (vertices.into(), self.adjacency, self.diagonal)
+        let off_diagonal = OffDiagonal::General(self.adjacency);
+        (vertices.into(), off_diagonal, self.diagonal)
     }
 
     fn component(&self, vertices: &[u32], position: &[u32]) -> Self::Block {
@@ -162,30 +120,21 @@ impl<T: Real> PrincipalBlocks<T> for Assembled<T> {
             .iter()
             .map(|&v| self.diagonal[v as usize])
             .collect();
-        (vertices.into(), UpperAdjacency::new(rows), diagonal)
+        let off_diagonal = OffDiagonal::General(UpperAdjacency::new(rows));
+        (vertices.into(), off_diagonal, diagonal)
     }
 }
 
 /// The biadjacency `C`, cancelled cells dropped: rows are `A`'s left vertices.
 impl<T: Real> PrincipalBlocks<T> for Rows<T> {
-    type Block = BipartiteComponent<T>;
+    type Block = (Box<[u32]>, OffDiagonal<T>);
 
-    /// Transposed only when the right side is larger.
     fn whole(self, vertices: &[u32]) -> Self::Block {
-        if let [v] = vertices {
-            return BipartiteComponent::Lone(*v);
-        }
-        let n_left = self.n_rows() as u32;
-        let (lefts, rights) = (0..n_left, n_left..(self.n_rows() + self.n_cols()) as u32);
-        let (vertices, cross) = larger_side_first(lefts.collect(), rights.collect(), self);
-        BipartiteComponent::Sides(vertices, cross)
+        let (lefts, rights) = vertices.split_at(self.n_rows());
+        sides(lefts, rights, self)
     }
 
-    /// Its larger side as rows.
     fn component(&self, vertices: &[u32], position: &[u32]) -> Self::Block {
-        if let [v] = vertices {
-            return BipartiteComponent::Lone(*v);
-        }
         let n_left = self.n_rows();
         let (lefts, rights) =
             vertices.split_at(vertices.partition_point(|&v| (v as usize) < n_left));
@@ -200,56 +149,69 @@ impl<T: Real> PrincipalBlocks<T> for Rows<T> {
             }
             ptrs.push(indices.len());
         }
-        let c = Rows::new(ptrs, indices, values, rights.len());
-        let (vertices, cross) = larger_side_first(lefts.to_vec(), rights.to_vec(), c);
-        BipartiteComponent::Sides(vertices, cross)
+        sides(
+            lefts,
+            rights,
+            Rows::new(ptrs, indices, values, rights.len()),
+        )
     }
 }
 
-/// Eliminates the larger side first, transposing `C` when it is the right one.
-fn larger_side_first<T: Real>(
-    lefts: Vec<u32>,
-    rights: Vec<u32>,
-    c: Rows<T>,
-) -> (Box<[u32]>, Rows<T>) {
-    assert!(
-        !lefts.is_empty() && !rights.is_empty(),
-        "both sides hold a vertex"
-    );
+/// The larger side eliminated first, `C` transposed when it is the right one; a side alone is one uncoupled vertex.
+fn sides<T: Real>(lefts: &[u32], rights: &[u32], c: Rows<T>) -> (Box<[u32]>, OffDiagonal<T>) {
+    if lefts.is_empty() || rights.is_empty() {
+        debug_assert_eq!(
+            lefts.len() + rights.len(),
+            1,
+            "a connected side alone is one vertex"
+        );
+        let empty = Rows::new(vec![0, 0], Vec::new(), Vec::new(), 1);
+        let vertices = [lefts, rights].concat().into();
+        return (vertices, OffDiagonal::General(UpperAdjacency::new(empty)));
+    }
     match lefts.len() >= rights.len() {
-        true => ([lefts, rights].concat().into(), c),
-        false => ([rights, lefts].concat().into(), c.transpose()),
+        true => (
+            [lefts, rights].concat().into(),
+            OffDiagonal::Bipartite(Arc::new(c)),
+        ),
+        false => {
+            let c = c.transpose();
+            (
+                [rights, lefts].concat().into(),
+                OffDiagonal::Bipartite(Arc::new(c)),
+            )
+        }
     }
 }
 
-/// Row `i`'s nonzero sum as `T` stores it, its ends joined; one cast to zero underflowed, so it is out of range too.
+/// Row `i`'s nonzero sum as `T` stores it; one cast to zero underflowed, so it is out of range too.
 #[inline(always)]
-fn admit<T: Real>(sets: &mut UnionFind, i: usize, end: usize, x: f64) -> Result<f64, ReduceError> {
-    let value = T::from(x)
+fn admit<T: Real>(i: usize, x: f64) -> Result<T, ReduceError> {
+    T::from(x)
         .filter(|&value| value != T::zero() && in_range(value))
-        .ok_or(ReduceError::OutOfRange { vertex: i as u32 })?;
-    sets.union(i, end);
-    Ok(widen(value))
+        .ok_or(ReduceError::OutOfRange { vertex: i as u32 })
 }
 
-/// `C`'s summed cells, in a dense table when small (+54% without it).
+/// `C`'s summed cells and components, in a dense table when small (+54% without it), `seen` visiting each column once.
 fn cross<T: Real>(
     v: impl BipartiteColumns<T>,
     seen: impl FnMut(&Column<T>),
-) -> Result<(Rows<T>, Partition), ReduceError> {
+) -> Result<Partitioned<Rows<T>>, ReduceError> {
     let n_left = v.n_left();
-    let n_right = v.n() - n_left;
-    let table = n_left.saturating_mul(n_right);
-    if table <= DENSE_TABLE_MAX_CELLS {
-        return dense_cross(v, seen);
-    }
-    let counts = left_counts(v, seen);
-    let columns: usize = counts.iter().sum();
-    // Past the cap, the table still wins whenever the buckets would take more memory.
-    match columns.saturating_mul(12) < table.saturating_mul(8) {
-        true => sparse_cross(v, &counts),
-        false => dense_cross(v, |_| {}),
-    }
+    let table = n_left.saturating_mul(v.n() - n_left);
+    let (a, partition) = match table <= DENSE_TABLE_MAX_CELLS {
+        true => dense_cross(v, seen)?,
+        false => {
+            let counts = counts(v, n_left, seen);
+            let columns: usize = counts.iter().sum();
+            // Past the cap, the table still wins whenever the buckets would take more memory.
+            match columns.saturating_mul(12) < table.saturating_mul(8) {
+                true => Buckets::new(v, &counts, n_left).sum::<T, f64>(|_, _, _| {})?,
+                false => dense_cross(v, |_| {})?,
+            }
+        }
+    };
+    Ok(Partitioned { a, partition })
 }
 
 /// within's cap on the dense accumulator, about 40 MB.
@@ -268,56 +230,73 @@ fn dense_cross<T: Real>(
             seen(&column);
         },
     );
-    let mut sets = UnionFind::new(n_left + n_right);
+    // A row joins its columns; once they are one set, no cell joins anything new.
+    let (mut columns, mut links) = (UnionFind::new(n_right), n_right.saturating_sub(1));
     let mut ptrs = Vec::with_capacity(n_left + 1);
     ptrs.push(0);
     let (mut indices, mut cells) = (Vec::new(), Vec::new());
     for i in 0..n_left {
         let row = &table[i * n_right..][..n_right];
+        let mut root = None;
         for (j, &x) in row.iter().enumerate().filter(|&(_, &x)| x != 0.0) {
             indices.push(j as u32);
-            cells.push(admit::<T>(&mut sets, i, n_left + j, x)?);
+            cells.push(admit::<T>(i, x)?);
+            if links > 0 {
+                let other = columns.find(j);
+                root = match root {
+                    Some(root) if root != other => {
+                        links -= 1;
+                        Some(columns.join(root, other))
+                    }
+                    _ => Some(other),
+                };
+            }
         }
         ptrs.push(indices.len());
     }
-    let c = Rows::new(ptrs, indices, cells, n_right).map(narrow);
-    Ok((c, sets.into_partition()))
+    drop(table);
+    // Columns in one set and no empty row: connected without a union per row.
+    let partition = match n_left > 0 && links == 0 && ptrs.windows(2).all(|row| row[1] > row[0]) {
+        true => Partition::whole(n_left + n_right),
+        false => {
+            let mut sets = UnionFind::new(n_left + n_right);
+            for j in 0..n_right {
+                sets.union(n_left + j, n_left + columns.find(j));
+            }
+            for i in (0..n_left).filter(|&i| ptrs[i + 1] > ptrs[i]) {
+                sets.union(i, n_left + indices[ptrs[i]] as usize);
+            }
+            sets.into_partition()
+        }
+    };
+    Ok((Rows::new(ptrs, indices, cells, n_right), partition))
 }
 
-fn left_counts<T: Real>(
-    v: impl BipartiteColumns<T>,
+/// Each row's cell count, a column's row its lower end, `seen` visiting each column once.
+fn counts<T: Real>(
+    v: impl IntoColumns<T>,
+    n_rows: usize,
     mut seen: impl FnMut(&Column<T>),
 ) -> Vec<usize> {
-    let mut counts = vec![0; v.n_left()];
+    let mut counts = vec![0; n_rows];
     v.for_each_column(
         #[inline(always)]
         |column| {
-            counts[column.a as usize] += 1;
+            counts[column.a.min(column.b) as usize] += 1;
             seen(&column);
         },
     );
     counts
 }
 
-fn sparse_cross<T: Real>(
-    v: impl BipartiteColumns<T>,
-    counts: &[usize],
-) -> Result<(Rows<T>, Partition), ReduceError> {
-    let (n_left, n_right) = (v.n_left(), v.n() - v.n_left());
-    let mut buckets = Buckets::new(counts);
-    v.for_each_column(
-        #[inline(always)]
-        |column| buckets.push(column.a as usize, column.b - n_left as u32, column.cell()),
-    );
-    buckets.sum::<T, f64>(n_right, n_left, |_, _, _| {})
-}
-
 /// Cells bucketed by row in column order, so each sums the same addends in the same order as a dense table.
 struct Buckets {
     starts: Vec<usize>,
-    cursor: Vec<usize>,
     columns: Vec<u32>,
     cells: Vec<f64>,
+    /// Column `j` is vertex `first_column + j`.
+    first_column: usize,
+    n_cols: usize,
 }
 
 /// What one cell's terms sum to: their value, or a signed graph's two masses kept apart.
@@ -365,7 +344,8 @@ impl Masses {
 }
 
 impl Buckets {
-    fn new(counts: &[usize]) -> Self {
+    /// One row per count, at a column's lower end; its higher end is the column, less `first_column`.
+    fn new<T: Real>(v: impl IntoColumns<T>, counts: &[usize], first_column: usize) -> Self {
         let starts: Vec<usize> = std::iter::once(0)
             .chain(counts.iter().scan(0, |end, &count| {
                 *end += count;
@@ -373,36 +353,39 @@ impl Buckets {
             }))
             .collect();
         let entries = starts[counts.len()];
+        let mut cursor = starts[..counts.len()].to_vec();
+        let (mut columns, mut cells) = (vec![0; entries], vec![0.0; entries]);
+        v.for_each_column(
+            #[inline(always)]
+            |column| {
+                let (lo, hi) = (column.a.min(column.b), column.a.max(column.b));
+                let slot = &mut cursor[lo as usize];
+                columns[*slot] = hi - first_column as u32;
+                cells[*slot] = column.cell();
+                *slot += 1;
+            },
+        );
         Self {
-            cursor: starts[..counts.len()].to_vec(),
             starts,
-            columns: vec![0; entries],
-            cells: vec![0.0; entries],
+            columns,
+            cells,
+            first_column,
+            n_cols: v.n() - first_column,
         }
     }
 
-    #[inline(always)]
-    fn push(&mut self, row: usize, column: u32, cell: f64) {
-        let slot = &mut self.cursor[row];
-        self.columns[*slot] = column;
-        self.cells[*slot] = cell;
-        *slot += 1;
-    }
-
-    /// `pair` sees every summed cell with its two ends, a cancelled one too; column `j` is vertex `first_column + j`.
+    /// `pair` sees every summed cell with its two ends, a cancelled one too.
     fn sum<T: Real, C: CellSum>(
         self,
-        n_cols: usize,
-        first_column: usize,
         mut pair: impl FnMut(usize, usize, C),
     ) -> Result<(Rows<T>, Partition), ReduceError> {
         let Self {
             starts,
-            cursor,
             mut columns,
             mut cells,
+            first_column,
+            n_cols,
         } = self;
-        drop(cursor);
         let mut sets = UnionFind::new(first_column + n_cols);
         let mut sums = vec![C::default(); n_cols];
         let mut touched: Vec<u32> = Vec::new();
@@ -426,7 +409,8 @@ impl Buckets {
                 pair(i, first_column + j as usize, cell);
                 if cell.value() != 0.0 {
                     columns[out] = j;
-                    cells[out] = admit::<T>(&mut sets, i, first_column + j as usize, cell.value())?;
+                    cells[out] = widen(admit::<T>(i, cell.value())?);
+                    sets.union(i, first_column + j as usize);
                     out += 1;
                 }
             }

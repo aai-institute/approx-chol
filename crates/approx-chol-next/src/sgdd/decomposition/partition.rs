@@ -7,6 +7,16 @@ pub(in crate::sgdd) struct Partition {
 }
 
 impl Partition {
+    /// One component of `n > 0` vertices: every vertex is its own position.
+    pub(super) fn whole(n: usize) -> Self {
+        let order: Vec<u32> = (0..n as u32).collect();
+        Self {
+            position: order.clone(),
+            order,
+            ends: vec![n as u32],
+        }
+    }
+
     pub(in crate::sgdd) fn n(&self) -> usize {
         self.position.len()
     }
@@ -43,7 +53,7 @@ impl UnionFind {
     }
 
     /// Path halving: every visited vertex skips to its grandparent.
-    fn find(&mut self, mut i: usize) -> usize {
+    pub(super) fn find(&mut self, mut i: usize) -> usize {
         while self.parent[i] as usize != i {
             let grandparent = self.parent[self.parent[i] as usize];
             self.parent[i] = grandparent;
@@ -53,15 +63,20 @@ impl UnionFind {
     }
 
     pub(super) fn union(&mut self, i: usize, j: usize) {
-        let (mut a, mut b) = (self.find(i), self.find(j));
-        if a == b {
-            return;
+        let (a, b) = (self.find(i), self.find(j));
+        if a != b {
+            self.join(a, b);
         }
+    }
+
+    /// Links two distinct roots by size, returning the joined root.
+    pub(super) fn join(&mut self, mut a: usize, mut b: usize) -> usize {
         if self.size[a] < self.size[b] {
             std::mem::swap(&mut a, &mut b);
         }
         self.parent[b] = a as u32;
         self.size[a] += self.size[b];
+        a
     }
 
     /// Whether every vertex is already in one set, which is the connected case.
@@ -78,13 +93,7 @@ impl UnionFind {
         let n = self.parent.len();
         // Connected, the common case, skips the counting sort: every vertex is its own position.
         if self.is_one_set() {
-            let order: Vec<u32> = (0..n as u32).collect();
-            let ends = vec![n as u32];
-            return Partition {
-                position: order.clone(),
-                order,
-                ends,
-            };
+            return Partition::whole(n);
         }
         let mut label = vec![u32::MAX; n];
         let mut counts: Vec<u32> = Vec::new();

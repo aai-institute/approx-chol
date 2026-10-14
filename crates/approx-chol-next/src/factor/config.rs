@@ -1,9 +1,9 @@
 /// Build settings for [`factorize`](crate::factorize); the reduction's policy is fixed by [`Sgdd`](crate::Sgdd).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Config {
-    /// Every sampler stream derives from this, keyed by component and star.
+    /// Every sampler stream derives from this, keyed by block and star.
     pub seed: u64,
-    /// How a bipartite component's eliminated stars become the kept block's Schur complement.
+    /// How a bipartite block's eliminated stars become the kept block's Schur complement.
     pub complement: CliqueRule,
     /// How approximate Cholesky samples each star.
     pub approximate: Multiplicity,

@@ -45,9 +45,9 @@ fn main() {
         let (left, right) = (side(l).expect("valid side"), side(r).expect("valid side"));
         let gram = BipartiteGram::new(left, right, Weights::default()).expect("valid gram");
         let sgdd = Sgdd::from_bipartite_gram(gram, ScalingPolicy::default()).expect("reduces");
-        for component in sgdd.blocks() {
-            let n = component.vertices().len();
-            println!("  component: {n} vertices, floats {}", component.floats());
+        for block in sgdd.blocks() {
+            let n = block.vertices().len();
+            println!("  block: {n} vertices, floats {}", block.floats());
         }
         let a = PairGram {
             left: &panel.levels[l],

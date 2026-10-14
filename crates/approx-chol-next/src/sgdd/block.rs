@@ -8,36 +8,47 @@ use crate::input::CsrError;
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, Real};
 
-/// Where a block sits in `A`: its vertices, and the congruence between `A_c` and `M`.
+/// `R = F Pᵀ`, so `M = R A Rᵀ`: `Pᵀ` picks the block's vertices of `A`, `F` is the congruence.
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
     serde(remote = "Self")
 )]
 #[derive(Debug)]
-pub(crate) struct Frame<T> {
+pub(crate) struct Restriction<T> {
     vertices: Box<[u32]>,
     congruence: Congruence<T>,
 }
 
-impl<T: Real> Frame<T> {
-    /// Panics unless the congruence scales exactly these vertices.
-    pub(super) fn new(vertices: Box<[u32]>, congruence: Congruence<T>) -> Self {
-        assert!(congruence.fits(vertices.len()), "one factor per vertex");
-        Self {
-            vertices,
-            congruence,
-        }
-    }
-}
-
-impl<T> Frame<T> {
+impl<T: Real> Restriction<T> {
     pub(crate) fn vertices(&self) -> &[u32] {
         &self.vertices
     }
 
-    pub(crate) fn congruence(&self) -> &Congruence<T> {
-        &self.congruence
+    /// `local ← Pᵀ x`.
+    pub(crate) fn gather(&self, x: &[T], local: &mut [T]) {
+        (local.iter_mut().zip(self.vertices.iter())).for_each(|(v, &i)| *v = x[i as usize]);
+    }
+
+    /// `x ← P local` on the block's vertices, the rest untouched.
+    pub(crate) fn scatter(&self, local: &[T], x: &mut [T]) {
+        (local.iter().zip(self.vertices.iter())).for_each(|(&v, &i)| x[i as usize] = v);
+    }
+
+    /// `x ← F x` on a gathered `x`, `F·1` projected out first when `M` is singular.
+    pub(crate) fn restrict(&self, x: &mut [T], singular: bool) {
+        if singular {
+            self.congruence.project_out_null(x);
+        }
+        self.congruence.apply(x);
+    }
+
+    /// `x ← F x` back in `A_c`'s scale, `F·1` projected out last when `M` is singular.
+    pub(crate) fn prolongate(&self, x: &mut [T], singular: bool) {
+        self.congruence.apply(x);
+        if singular {
+            self.congruence.project_out_null(x);
+        }
     }
 }
 
@@ -108,19 +119,21 @@ impl<T: Real> Grounding<T> {
 /// One irreducible principal block `A_c` of `A`, reduced: `M = F · A_c · F` weakly diagonally dominant, eliminated side first.
 #[derive(Clone, Debug)]
 pub struct IrreducibleBlock<T = f64> {
-    frame: Arc<Frame<T>>,
+    restriction: Arc<Restriction<T>>,
     off_diagonal: OffDiagonal<T>,
     balance: Balance<T>,
 }
 
 impl<T: Real> IrreducibleBlock<T> {
-    /// Panics unless one row and one surplus per vertex; the ground's `Σs` must clear the bound any diagonal does.
+    /// Panics unless one factor, row and surplus per vertex; the ground's `Σs` must clear the bound any diagonal does.
     pub(super) fn new(
-        frame: Frame<T>,
+        vertices: Box<[u32]>,
+        congruence: Congruence<T>,
         off_diagonal: OffDiagonal<T>,
         balance: Balance<T>,
     ) -> Result<Self, ReduceError> {
-        let n = frame.vertices().len();
+        let n = vertices.len();
+        assert!(congruence.fits(n), "one factor per vertex");
         assert_eq!(off_diagonal.n(), n, "one row per vertex");
         assert!(balance.grounding().fits(n), "one surplus per row");
         if let Balance::Balanced(_) = balance {
@@ -128,15 +141,19 @@ impl<T: Real> IrreducibleBlock<T> {
         }
         let surplus = balance.grounding().surplus().unwrap_or_default();
         if let Some(i) = surplus.iter().position(|&s| !crate::in_range(s)) {
-            let vertex = frame.vertices()[i];
+            let vertex = vertices[i];
             return Err(ReduceError::OutOfRange { vertex });
         }
         if !balance.ground_in_range() {
-            let vertex = frame.vertices()[0];
+            let vertex = vertices[0];
             return Err(ReduceError::OutOfRange { vertex });
         }
+        let restriction = Restriction {
+            vertices,
+            congruence,
+        };
         Ok(Self {
-            frame: Arc::new(frame),
+            restriction: Arc::new(restriction),
             off_diagonal,
             balance,
         })
@@ -144,17 +161,17 @@ impl<T: Real> IrreducibleBlock<T> {
 
     /// The block's vertices in `A`'s numbering, in local order.
     pub fn vertices(&self) -> &[u32] {
-        self.frame.vertices()
+        &self.restriction.vertices
     }
 
     /// Present iff this block's scaling was clamped beyond the policy's tolerance.
     pub fn scaling_report(&self) -> Option<ScalingReport> {
-        self.frame.congruence().report()
+        self.restriction.congruence.report()
     }
 
     /// Shared with every factor of this block.
-    pub(crate) fn frame(&self) -> &Arc<Frame<T>> {
-        &self.frame
+    pub(crate) fn restriction(&self) -> &Arc<Restriction<T>> {
+        &self.restriction
     }
 
     /// Whether `A_c` is folded and solved as singular, `A_c⁺b`: before any clamp its `M` has `1ᵀM1 ≤ 5ε·tr M`, so a net deficit floats; a Laplacian's `g` or a signed graph's cancelled mass must be exactly `0`.
@@ -220,9 +237,14 @@ pub enum ReduceError {
         /// The entry's vertex, in `A`'s numbering.
         vertex: u32,
     },
-    /// A scale or scaled entry left the representable range, or the block passes `1/ε` vertices.
+    /// A scale or scaled entry left the representable range.
     Unscalable {
         /// The block's first vertex in local order, in `A`'s numbering.
+        vertex: u32,
+    },
+    /// The block passes `1/ε` vertices: floor weights in series would fall below `MIN_POSITIVE`.
+    TooLarge {
+        /// The block's first vertex, in `A`'s numbering.
         vertex: u32,
     },
     /// An assembled entry, diagonal, row sum or ground left the representable range.
@@ -240,8 +262,11 @@ impl core::fmt::Display for ReduceError {
             }
             Self::Unscalable { vertex } => write!(
                 f,
-                "scaling the component of vertex {vertex} leaves the representable range"
+                "scaling the block of vertex {vertex} leaves the representable range"
             ),
+            Self::TooLarge { vertex } => {
+                write!(f, "the block of vertex {vertex} passes 1/ε vertices")
+            }
             Self::OutOfRange { vertex } => {
                 write!(
                     f,
@@ -292,10 +317,10 @@ impl std::error::Error for FromCsrError {
 }
 
 #[cfg(feature = "serde")]
-checked_serde!(Frame);
+checked_serde!(Restriction);
 
 #[cfg(feature = "serde")]
-impl<T: Real> Frame<T> {
+impl<T: Real> Restriction<T> {
     fn checked(self) -> Option<Self> {
         let factors = match &self.congruence {
             Congruence::Signs(f) => f.iter().all(|f| f.abs() == T::one()),

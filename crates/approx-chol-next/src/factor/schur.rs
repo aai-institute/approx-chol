@@ -1,4 +1,4 @@
-//! Block elimination of a bipartite component's larger, independent side, and the Schur complement it leaves.
+//! Block elimination of a bipartite block's larger, independent side, and the Schur complement it leaves.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -25,7 +25,7 @@ use crate::{narrow, widen, Real};
 )]
 #[derive(Clone, Debug)]
 pub(super) struct BlockElimination<T> {
-    /// `M`'s own `C`, signs kept and shared with the component: a frustrated component's cover never doubles it.
+    /// `M`'s own `C`, signs kept and shared with the block: a frustrated block's cover never doubles it.
     cross: Arc<Rows<T>>,
     inv_pivot: Box<[T]>,
     /// `Cᵀ` where the larger side passes 10 000 rows (0.6's threshold), so `Allow` may split the solve by kept row.
@@ -149,7 +149,7 @@ pub(super) struct SchurComplement<'a, T> {
 }
 
 impl<T: Real> SchurComplement<'_, T> {
-    /// `S` on the component's sheets: exact by kept row, sampled by star in parallel.
+    /// `S` on the block's sheets: exact by kept row, sampled by star in parallel.
     fn build(&self, rule: CliqueRule) -> Sddm<'static, T> {
         let (n_kept, sheets) = (self.elimination.cross.n_cols(), self.sheets);
         let n = sheets.count() * n_kept;
@@ -290,7 +290,7 @@ fn cover_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Ve
     } = elimination;
     let (c, ct, n_kept) = (cross, elimination.transpose(), cross.n_cols());
     let surplus = schur.grounding.surplus();
-    SddmRows::split(2 * n_kept, n_kept, rows_per_task(c), |rows, k| {
+    SddmRows::split(Sheets::Two, n_kept, rows_per_task(c), |rows, k| {
         for (e, &c_ek) in ct.row(k) {
             for (j, &c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
                 let sheet = usize::from(crosses(c_ek) != crosses(c_ej));
@@ -308,7 +308,7 @@ fn cover_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Ve
     })
 }
 
-/// Rows of a folded component's complement, `|c_ke||c_je|/d_e` as the smaller times the larger's share, the ground's `|c_ke| s_e/d_e` as column `n_kept`; a product underflowing to zero is dropped, as a stored zero couples nothing.
+/// Rows of a folded block's complement, `|c_ke||c_je|/d_e` as the smaller times the larger's share, the ground's `|c_ke| s_e/d_e` as column `n_kept`; a product underflowing to zero is dropped, as a stored zero couples nothing.
 fn exact_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Vec<T>) {
     let elimination = schur.elimination;
     let BlockElimination {
@@ -316,7 +316,7 @@ fn exact_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Ve
     } = elimination;
     let (c, ct, n_kept) = (cross, elimination.transpose(), cross.n_cols());
     let surplus = schur.grounding.surplus();
-    SddmRows::split(n_kept, n_kept, rows_per_task(c), |rows, k| {
+    SddmRows::split(Sheets::One, n_kept, rows_per_task(c), |rows, k| {
         for (e, c_ek) in ct.row(k) {
             let c_ek = c_ek.abs();
             for (j, c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {

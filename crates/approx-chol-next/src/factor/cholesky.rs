@@ -107,6 +107,11 @@ impl<T: Real> Cholesky<T> {
         }
     }
 
+    /// Whether it solves a singular Laplacian: one sheet, no ground.
+    pub(super) fn singular(&self) -> bool {
+        self.sheets == Sheets::One && !self.grounded
+    }
+
     /// An anchored sheet substitutes on `x` in place; the approximate order may read the ground mid-recurrence, so it sits beside the rows.
     pub(super) fn scratch_len(&self) -> usize {
         match (self.sheets, self.grounded) {
@@ -178,7 +183,7 @@ impl<T: Real> Cholesky<T> {
         fits.then_some(self)
     }
 
-    /// Whether it solves a component of `kept` vertices on its sheets.
+    /// Whether it solves a block of `kept` vertices on its sheets.
     pub(super) fn solves(&self, kept: usize) -> bool {
         Some(self.n) == self.sheets.count().checked_mul(kept)
     }

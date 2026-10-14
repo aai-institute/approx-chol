@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::{narrow, Real};
+use crate::{narrow, widen, Real};
 
 /// Compressed sparse rows.
 #[cfg_attr(
@@ -77,6 +77,35 @@ impl<T: Real> Rows<T> {
         (self.indices[span.clone()].iter().map(|&j| j as usize)).zip(&self.values[span])
     }
 
+    /// `out = |X| x`.
+    pub(crate) fn abs_times(&self, x: &[f64], out: &mut [f64]) {
+        for (i, out) in out.iter_mut().enumerate() {
+            *out = self.row(i).map(|(j, &a)| widen(a.abs()) * x[j]).sum();
+        }
+    }
+
+    /// `out = |X|ᵀ x`.
+    pub(crate) fn abs_transpose_times(&self, x: &[f64], out: &mut [f64]) {
+        out.fill(0.0);
+        for (i, &x) in x.iter().enumerate() {
+            self.row(i).for_each(|(j, &a)| out[j] += widen(a.abs()) * x);
+        }
+    }
+
+    /// `out = |X|ᵀ diag(s)² |X| x` in one pass, each row read twice while cached.
+    pub(crate) fn abs_gram_times(&self, s: &[f64], x: &[f64], out: &mut [f64]) {
+        out.fill(0.0);
+        for (span, &s) in self.ptrs.windows(2).zip(s) {
+            let row = (self.indices[span[0]..span[1]].iter()).zip(&self.values[span[0]..span[1]]);
+            let sum: f64 = row
+                .clone()
+                .map(|(&j, &a)| widen(a.abs()) * x[j as usize])
+                .sum();
+            let sum = s * s * sum;
+            row.for_each(|(&j, &a)| out[j as usize] += widen(a.abs()) * sum);
+        }
+    }
+
     /// Each value mapped, the pattern kept.
     pub(crate) fn map<U: Real>(self, f: impl FnMut(T) -> U) -> Rows<U> {
         Rows {
@@ -120,7 +149,7 @@ impl<T: Real> Rows<T> {
             .map(|i| {
                 let mut sum = 0.0;
                 for (j, x) in self.row(i) {
-                    let x = crate::widen(x.abs());
+                    let x = widen(x.abs());
                     sum += x;
                     cols[j] += x;
                 }
@@ -139,7 +168,7 @@ impl<T: Real> Rows<T> {
     }
 
     fn abs_total(&self) -> f64 {
-        crate::compensated_sum(self.values.iter().map(|&x| crate::widen(x.abs())))
+        crate::compensated_sum(self.values.iter().map(|&x| widen(x.abs())))
     }
 
     /// `x_ij ← r_i x_ij c_j` for signs `r`, `c`: exact, so never out of range.
@@ -151,7 +180,7 @@ impl<T: Real> Rows<T> {
     fn scaled_abs_sums(self, r: &[T], c: &[T]) -> Option<(Self, Vec<f64>, Vec<f64>)> {
         let (mut rows, mut cols) = (vec![0.0; self.n_rows()], vec![0.0; self.n_cols]);
         let scaled = self.scaled_seeing(r, c, |i, j, x| {
-            let x = crate::widen(x.abs());
+            let x = widen(x.abs());
             rows[i] += x;
             cols[j] += x;
         })?;
@@ -216,7 +245,7 @@ impl<T: Real> UpperAdjacency<T> {
     }
 }
 
-/// A component's off-diagonal by shape: `A_c`'s signed one, or `M`'s once congruent.
+/// A block's off-diagonal by shape: `A_c`'s signed one, or `M`'s once congruent.
 #[derive(Clone, Debug)]
 pub(crate) enum OffDiagonal<T> {
     General(UpperAdjacency<T>),
@@ -278,6 +307,46 @@ impl<T: Real> OffDiagonal<T> {
         };
         let sums = scaled.merged(first, second);
         Some((scaled, sums))
+    }
+
+    /// The most entries in any row, both triangles counted.
+    pub(crate) fn max_degree(&self) -> usize {
+        let (rows, offset) = self.stored();
+        let mut degree = vec![0usize; self.n()];
+        for (i, span) in rows.ptrs.windows(2).enumerate() {
+            degree[i] += span[1] - span[0];
+            for &j in &rows.indices[span[0]..span[1]] {
+                degree[offset + j as usize] += 1;
+            }
+        }
+        degree.into_iter().max().unwrap_or(0)
+    }
+
+    /// `out = |X| x`, each stored entry read for both its ends.
+    pub(crate) fn abs_times(&self, x: &[f64], out: &mut [f64]) {
+        let (rows, offset) = self.stored();
+        out.fill(0.0);
+        for (i, span) in rows.ptrs.windows(2).enumerate() {
+            let x_i = x[i];
+            let mut sum = 0.0;
+            for (&j, &a) in rows.indices[span[0]..span[1]]
+                .iter()
+                .zip(&rows.values[span[0]..span[1]])
+            {
+                let (a, j) = (widen(a.abs()), offset + j as usize);
+                sum += a * x[j];
+                out[j] += a * x_i;
+            }
+            out[i] += sum;
+        }
+    }
+
+    /// The stored entries, and where their columns start in local order.
+    fn stored(&self) -> (&Rows<T>, usize) {
+        match self {
+            Self::General(adjacency) => (&adjacency.rows, 0),
+            Self::Bipartite(cross) => (cross, cross.n_rows()),
+        }
     }
 
     fn rows(&self) -> &Rows<T> {

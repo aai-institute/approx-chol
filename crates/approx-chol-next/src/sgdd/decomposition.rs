@@ -1,15 +1,15 @@
 use num_traits::PrimInt;
+use rayon::prelude::*;
 
 mod assembly;
 mod partition;
 
 use super::block::ReduceError;
 use crate::input::{Canonical, CsrError, UpperCanonical};
-use crate::storage::{Rows, UpperAdjacency};
+use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::Real;
 pub(super) use assembly::{
     assemble_bipartite, assemble_bipartite_gram, assemble_general, assemble_signed,
-    BipartiteComponent,
 };
 pub(super) use partition::Partition;
 use partition::UnionFind;
@@ -56,12 +56,12 @@ pub(super) trait PrincipalBlocks<T> {
 
 impl<A> Partitioned<A> {
     /// The partition, each live component's block and the dead vertices, the assembly freed; a connected input moves its assembly in whole.
-    pub(super) fn extract<T: Real, B>(
+    pub(super) fn extract<T: Real, B: Send>(
         self,
-        mut block: impl FnMut(<A as PrincipalBlocks<T>>::Block) -> Result<Option<B>, ReduceError>,
+        block: impl Fn(<A as PrincipalBlocks<T>>::Block) -> Cut<B> + Sync,
     ) -> Result<(Partition, Vec<B>, Vec<u32>), ReduceError>
     where
-        A: PrincipalBlocks<T>,
+        A: PrincipalBlocks<T> + Sync,
     {
         let Self { a, partition } = self;
         // Past `1/ε` vertices, floor weights in series fall below `MIN_POSITIVE`; a dead one is alone.
@@ -69,32 +69,60 @@ impl<A> Partitioned<A> {
             |vertices: &[u32]| T::from(vertices.len()).is_none_or(|n| n * T::epsilon() >= T::one());
         if let Some(vertices) = partition.components().find(|&vertices| too_long(vertices)) {
             let vertex = vertices[0];
-            return Err(ReduceError::Unscalable { vertex });
+            return Err(ReduceError::TooLarge { vertex });
         }
-        let (mut live, mut dead) = (Vec::new(), Vec::new());
-        let mut sort = |vertices: &[u32], cut| -> Result<(), ReduceError> {
-            match block(cut)? {
-                Some(b) => live.push(b),
-                None => dead.extend_from_slice(vertices),
-            }
-            Ok(())
-        };
         if partition.is_whole() {
             let vertices = partition.components().next().expect("one component");
-            sort(vertices, a.whole(vertices))?;
-        } else {
-            for vertices in partition.components() {
-                sort(vertices, a.component(vertices, partition.position()))?;
-            }
-            // Kept past extraction, an owned assembly raised the Gram peak 11–22%.
-            drop(a);
+            let (live, dead) = match block(a.whole(vertices))? {
+                Some(b) => (vec![b], Vec::new()),
+                None => (Vec::new(), vertices.to_vec()),
+            };
+            return Ok((partition, live, dead));
         }
+        let components: Vec<&[u32]> = partition.components().collect();
+        let cut = |vertices: &[u32]| block(a.component(vertices, partition.position()));
+        let blocks = cut_each(&components, partition.n(), &cut);
+        // Kept past extraction, an owned assembly raised the Gram peak 11–22%.
+        drop(a);
+        if let Some(&error) = blocks.iter().find_map(|b| b.as_ref().err()) {
+            return Err(error);
+        }
+        let dead = (components.iter().zip(&blocks))
+            .filter(|(_, b)| matches!(b, Ok(None)))
+            .flat_map(|(vertices, _)| vertices.iter().copied())
+            .collect();
+        // In place: a block's result is the block's own size.
+        let live = blocks
+            .into_iter()
+            .filter_map(|b| b.ok().flatten())
+            .collect();
         Ok((partition, live, dead))
     }
 }
 
-/// One component's vertices in local order, strict upper triangle and diagonal.
-pub(super) type Cells<T> = (Box<[u32]>, UpperAdjacency<T>, Vec<T>);
+/// Each component's block, about `PARALLEL_VERTICES` vertices a task: waking the pool for less costs more than it saves.
+fn cut_each<B: Send>(
+    components: &[&[u32]],
+    n: usize,
+    cut: &(dyn Fn(&[u32]) -> Cut<B> + Sync),
+) -> Vec<Cut<B>> {
+    let per_task = (PARALLEL_VERTICES * components.len()).div_ceil(n);
+    match per_task < components.len() && rayon::current_num_threads() > 1 {
+        true => (components.par_iter())
+            .with_min_len(per_task)
+            .map(|v| cut(v))
+            .collect(),
+        false => components.iter().map(|v| cut(v)).collect(),
+    }
+}
+
+const PARALLEL_VERTICES: usize = 1 << 12;
+
+/// A component's block, `None` when it is dead.
+type Cut<B> = Result<Option<B>, ReduceError>;
+
+/// One component's vertices in local order, off-diagonal and diagonal.
+pub(super) type Cells<T> = (Box<[u32]>, OffDiagonal<T>, Vec<T>);
 
 impl<T: Real, I: PrimInt> PrincipalBlocks<T> for Canonical<'_, T, I> {
     type Block = Cells<T>;
@@ -128,6 +156,7 @@ impl<T: Real, I: PrimInt> PrincipalBlocks<T> for Canonical<'_, T, I> {
         indices.shrink_to_fit();
         values.shrink_to_fit();
         let rows = Rows::new(ptrs, indices, values, vertices.len());
-        (vertices.into(), UpperAdjacency::new(rows), diagonal)
+        let off_diagonal = OffDiagonal::General(UpperAdjacency::new(rows));
+        (vertices.into(), off_diagonal, diagonal)
     }
 }
