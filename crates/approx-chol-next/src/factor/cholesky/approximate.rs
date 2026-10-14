@@ -45,7 +45,7 @@ fn eliminate<T: Real, C: Copies>(
         steps.push(v, pivot, clique.column());
         graph.eliminate_vertex(v);
         for &(u, w, weight) in &fill {
-            graph.add_fill(u, w, weight);
+            graph.push_pair(u, w, C::one(), weight);
         }
         ordering.update(clique.degree_losses(), &fill);
     }
@@ -53,6 +53,7 @@ fn eliminate<T: Real, C: Copies>(
 }
 
 /// A step's neighbors follow the previous step's, so the solve's running `usize` offset finds them at any size.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug)]
 struct StepHeader<T> {
     vertex: u32,
@@ -63,6 +64,7 @@ struct StepHeader<T> {
 }
 
 /// The eliminated columns, appended in pivot order.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 struct Steps<T> {
     headers: Vec<StepHeader<T>>,
@@ -126,6 +128,7 @@ impl<T: Real> Steps<T> {
 }
 
 /// `LDLᵀ` with sampled columns: a serial recurrence, so shares are composed against the original pivot.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub(super) struct ApproximateCholesky<T> {
     steps: Steps<T>,
@@ -194,3 +197,41 @@ impl<T: Real> ApproximateCholesky<T> {
 
 /// The split reassociates the row's sum, so this is part of a factor's solve output.
 const LANES: usize = 4;
+
+#[cfg(feature = "serde")]
+impl<T: Real> ApproximateCholesky<T> {
+    /// Each slot but the uneliminated one pivots once, giving only to slots not yet pivoted.
+    pub(super) fn fits(&self, slots: usize) -> bool {
+        let Steps {
+            headers,
+            neighbors,
+            coefficients,
+        } = &self.steps;
+        let last = self.uneliminated as usize;
+        if headers.len() + 1 != slots || last >= slots || neighbors.len() != coefficients.len() {
+            return false;
+        }
+        let mut pivoted = vec![false; slots];
+        let mut end = 0;
+        for header in headers {
+            let (v, start) = (header.vertex as usize, end);
+            end += header.len as usize;
+            if v == last
+                || v >= slots
+                || std::mem::replace(&mut pivoted[v], true)
+                || end > neighbors.len()
+            {
+                return false;
+            }
+            let later = neighbors[start..end]
+                .iter()
+                .all(|&j| (j as usize) < slots && !pivoted[j as usize]);
+            let shares = &coefficients[start..end];
+            let finite = header.pivot_scale.is_finite() && shares.iter().all(|c| c.is_finite());
+            if !later || !finite || matches!(shares, [c] if *c != T::one()) {
+                return false;
+            }
+        }
+        end == neighbors.len()
+    }
+}

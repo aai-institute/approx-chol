@@ -2,6 +2,8 @@
 
 use std::borrow::Cow;
 
+use rayon::prelude::*;
+
 use crate::sgdd::Grounding;
 use crate::storage::{Rows, UpperAdjacency};
 use crate::Real;
@@ -39,7 +41,7 @@ impl<'a, T: Real> Sddm<'a, T> {
         let mut rows = SddmRows::new(2 * n);
         for i in 0..n {
             for (j, &a) in signed.upper(i) {
-                rows.add(Sheets::Two.vertex(j, usize::from(crosses(a))), a.abs());
+                rows.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
             }
             if let Some(surplus) = grounding.surplus() {
                 rows.add(2 * n, surplus[i]);
@@ -152,6 +154,31 @@ impl<T: Real> SddmRows<T> {
         self.ptrs.push(self.indices.len());
     }
 
+    /// Rows `0..n_rows` of an SDDM on `n` vertices, `row` writing every row it owns; split by row across threads, at least `min_rows` a task, so each sums alone and the bits match at any count.
+    pub(super) fn split(
+        n: usize,
+        n_rows: usize,
+        min_rows: usize,
+        row: impl Fn(&mut Self, usize) + Sync,
+    ) -> (UpperAdjacency<T>, Vec<T>) {
+        let rows = (0..n_rows).into_par_iter().with_min_len(min_rows).fold(
+            || Self::new(n),
+            |mut rows, k| {
+                row(&mut rows, k);
+                rows
+            },
+        );
+        let rows = rows.reduce_with(|mut rows, part| {
+            let offset = rows.indices.len();
+            rows.ptrs.extend(part.ptrs[1..].iter().map(|&p| p + offset));
+            rows.indices.extend(part.indices);
+            rows.values.extend(part.values);
+            rows.ground.extend(part.ground);
+            rows
+        });
+        rows.unwrap_or_else(|| Self::new(n)).finish()
+    }
+
     pub(super) fn finish(self) -> (UpperAdjacency<T>, Vec<T>) {
         let n = self.ground.len();
         let rows = Rows::new(self.ptrs, self.indices, self.values, n);
@@ -165,6 +192,7 @@ pub(super) fn crosses<T: Real>(c: T) -> bool {
 }
 
 /// How many copies of each vertex a matrix holds: two for a Gremban cover, interleaved by vertex.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Sheets {
     One,
@@ -178,32 +206,23 @@ impl Sheets {
             Self::Two => 2,
         }
     }
+}
 
-    /// Vertex `k`'s copy on `sheet`: sheets interleave, so a cover's row `k⁻` mirrors its `k⁺` by flipping each column's low bit.
-    pub(super) fn vertex(self, k: usize, sheet: usize) -> usize {
-        self.count() * k + sheet
-    }
+/// Vertex `k`'s copy on `sheet` of a cover: sheets interleave, so row `k⁻` mirrors its `k⁺` by flipping each column's low bit.
+pub(super) fn cover_vertex(k: usize, sheet: usize) -> usize {
+    2 * k + sheet
+}
 
-    /// `x` on the first sheet, `−x` on the second: the antisymmetric lift a cover solves on.
-    pub(super) fn lift<T: Real>(self, x: &[T], rows: &mut [T]) {
-        match self {
-            Self::One => rows[..x.len()].copy_from_slice(x),
-            Self::Two => (rows.chunks_exact_mut(2).zip(x)).for_each(|(r, &v)| {
-                r[0] = v;
-                r[1] = -v;
-            }),
-        }
-    }
+/// `x` on the first sheet, `−x` on the second: the antisymmetric lift a cover solves on.
+pub(super) fn lift<T: Real>(x: &[T], rows: &mut [T]) {
+    (rows.chunks_exact_mut(2).zip(x)).for_each(|(r, &v)| {
+        r[0] = v;
+        r[1] = -v;
+    });
+}
 
-    /// Half the sheets' difference back into `x`, undoing [`lift`](Self::lift).
-    pub(super) fn descend<T: Real>(self, rows: &[T], x: &mut [T]) {
-        match self {
-            Self::One => x.copy_from_slice(&rows[..x.len()]),
-            Self::Two => {
-                let two = T::one() + T::one();
-                (x.iter_mut().zip(rows.chunks_exact(2)))
-                    .for_each(|(x, r)| *x = (r[0] - r[1]) / two);
-            }
-        }
-    }
+/// Half the sheets' difference back into `x`, undoing [`lift`].
+pub(super) fn descend<T: Real>(rows: &[T], x: &mut [T]) {
+    let two = T::one() + T::one();
+    (x.iter_mut().zip(rows.chunks_exact(2))).for_each(|(x, r)| *x = (r[0] - r[1]) / two);
 }

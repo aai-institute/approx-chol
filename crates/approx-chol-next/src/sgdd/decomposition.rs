@@ -3,7 +3,7 @@ use num_traits::PrimInt;
 mod assembly;
 mod partition;
 
-use super::component::ReduceError;
+use super::block::ReduceError;
 use crate::input::{Canonical, CsrError, UpperCanonical};
 use crate::storage::{Rows, UpperAdjacency};
 use crate::Real;
@@ -54,19 +54,12 @@ pub(super) trait PrincipalBlocks<T> {
     fn component(&self, vertices: &[u32], position: &[u32]) -> Self::Block;
 }
 
-/// Each live component's block, the dead vertices and the partition, with the assembly freed.
-pub(super) struct Extracted<B> {
-    pub(super) partition: Partition,
-    pub(super) live: Vec<B>,
-    pub(super) dead: Vec<u32>,
-}
-
 impl<A> Partitioned<A> {
-    /// Each component's block, `None` when dead; a connected input moves its assembly in whole.
+    /// The partition, each live component's block and the dead vertices, the assembly freed; a connected input moves its assembly in whole.
     pub(super) fn extract<T: Real, B>(
         self,
         mut block: impl FnMut(<A as PrincipalBlocks<T>>::Block) -> Result<Option<B>, ReduceError>,
-    ) -> Result<Extracted<B>, ReduceError>
+    ) -> Result<(Partition, Vec<B>, Vec<u32>), ReduceError>
     where
         A: PrincipalBlocks<T>,
     {
@@ -96,20 +89,12 @@ impl<A> Partitioned<A> {
             // Kept past extraction, an owned assembly raised the Gram peak 11–22%.
             drop(a);
         }
-        Ok(Extracted {
-            partition,
-            live,
-            dead,
-        })
+        Ok((partition, live, dead))
     }
 }
 
 /// One component's vertices in local order, strict upper triangle and diagonal.
-pub(super) struct Cells<T> {
-    pub(super) vertices: Box<[u32]>,
-    pub(super) adjacency: UpperAdjacency<T>,
-    pub(super) diagonal: Vec<T>,
-}
+pub(super) type Cells<T> = (Box<[u32]>, UpperAdjacency<T>, Vec<T>);
 
 impl<T: Real, I: PrimInt> PrincipalBlocks<T> for Canonical<'_, T, I> {
     type Block = Cells<T>;
@@ -143,10 +128,6 @@ impl<T: Real, I: PrimInt> PrincipalBlocks<T> for Canonical<'_, T, I> {
         indices.shrink_to_fit();
         values.shrink_to_fit();
         let rows = Rows::new(ptrs, indices, values, vertices.len());
-        Cells {
-            vertices: vertices.into(),
-            adjacency: UpperAdjacency::new(rows),
-            diagonal,
-        }
+        (vertices.into(), UpperAdjacency::new(rows), diagonal)
     }
 }

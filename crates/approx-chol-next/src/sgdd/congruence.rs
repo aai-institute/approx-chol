@@ -5,6 +5,7 @@ use crate::narrow;
 use crate::{widen, Real};
 
 /// `F` in `M = F A_c F`, finite and nonzero; a folded `A_c`'s null vector is then `F·1`.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub(crate) enum Congruence<T> {
     Identity,

@@ -11,13 +11,6 @@ pub struct Config {
     pub dense_up_to: usize,
 }
 
-impl Config {
-    /// The one routing rule: a Cholesky of this dimension goes dense.
-    pub(super) fn routes_dense(&self, dimension: usize) -> bool {
-        dimension <= self.dense_up_to
-    }
-}
-
 impl Default for Config {
     fn default() -> Self {
         Self {

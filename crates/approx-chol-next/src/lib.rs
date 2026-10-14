@@ -1,6 +1,25 @@
-//! Approximate Cholesky of symmetric generalized diagonally dominant `A`, one component at a time.
+//! Approximate Cholesky of symmetric generalized diagonally dominant `A`, one irreducible block at a time.
 
 #![deny(missing_docs)]
+
+/// Serde through `remote = "Self"`, every decoded value passed through its type's `checked`.
+#[cfg(feature = "serde")]
+macro_rules! checked_serde {
+    ($ty:ident) => {
+        impl<T: serde::Serialize> serde::Serialize for $ty<T> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                $ty::serialize(self, serializer)
+            }
+        }
+        impl<'de, T: crate::Real + serde::Deserialize<'de>> serde::Deserialize<'de> for $ty<T> {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let corrupt = || serde::de::Error::custom(concat!("corrupt ", stringify!($ty)));
+                let value = $ty::deserialize(deserializer)?;
+                value.checked().ok_or_else(corrupt)
+            }
+        }
+    };
+}
 
 mod factor;
 pub mod input;
@@ -9,10 +28,10 @@ mod storage;
 
 use std::fmt::Debug;
 
-pub use factor::{factorize, ComponentFactor, Factor, Fallback, SolveError};
+pub use factor::{factorize, BlockFactor, Factor, Fallback, SolveError};
 pub use factor::{CliqueRule, Config, InnerParallelism, Multiplicity, SplitCount};
 pub use sgdd::{
-    Component, Existence, FromCsrError, ReduceError, ScalingPolicy, ScalingReport, Sgdd,
+    Existence, FromCsrError, IrreducibleBlock, ReduceError, ScalingPolicy, ScalingReport, Sgdd,
 };
 
 /// The scalar every stage computes in: any `Float` a factor can share across threads and print.

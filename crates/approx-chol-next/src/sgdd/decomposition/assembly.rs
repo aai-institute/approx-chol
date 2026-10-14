@@ -5,7 +5,7 @@ use num_traits::PrimInt;
 use super::partition::{Partition, UnionFind};
 use super::{Cells, Partitioned, PrincipalBlocks};
 use crate::input::{BipartiteColumns, Column, IntoColumns, SignedGraph};
-use crate::sgdd::component::ReduceError;
+use crate::sgdd::block::ReduceError;
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{in_range, narrow, widen, Real};
 
@@ -48,8 +48,8 @@ fn assemble<T: Real, C: CellSum>(
         |column| {
             counts[column.a.min(column.b) as usize] += 1;
             let (v_a, v_b) = (widen(column.v_a), widen(column.v_b));
-            diagonal[column.a as usize] += column.weight.bilinear(v_a, v_a);
-            diagonal[column.b as usize] += column.weight.bilinear(v_b, v_b);
+            diagonal[column.a as usize] += square(&column, v_a);
+            diagonal[column.b as usize] += square(&column, v_b);
         },
     );
     let mut buckets = Buckets::new(&counts);
@@ -85,11 +85,21 @@ pub(in crate::sgdd) fn assemble_bipartite_gram<T: Real>(
         #[inline(always)]
         |column: &Column<T>| {
             let (v_a, v_b) = (widen(column.v_a), widen(column.v_b));
-            sums[column.a as usize] += column.weight.bilinear(v_a, v_a);
-            sums[column.b as usize] += column.weight.bilinear(v_b, v_b);
+            sums[column.a as usize] += square(column, v_a);
+            sums[column.b as usize] += square(column, v_b);
         },
     )?;
     Ok((a, diagonal_of(sums)?))
+}
+
+/// `w v²`, `NaN` where a nonzero term underflowed in `f64`, so the range screen names its vertex.
+#[inline(always)]
+fn square<T: Real>(column: &Column<T>, v: f64) -> f64 {
+    let term = column.weight.bilinear(v, v);
+    match term == 0.0 && v != 0.0 && !column.weight.is_zero() {
+        true => f64::NAN,
+        false => term,
+    }
 }
 
 /// Each sum as `T` stores it; a nonzero one cast to zero underflowed, so it is out of range.
@@ -129,11 +139,7 @@ impl<T: Real> PrincipalBlocks<T> for Assembled<T> {
     type Block = Cells<T>;
 
     fn whole(self, vertices: &[u32]) -> Self::Block {
-        Cells {
-            vertices: vertices.into(),
-            adjacency: self.adjacency,
-            diagonal: self.diagonal,
-        }
+        (vertices.into(), self.adjacency, self.diagonal)
     }
 
     fn component(&self, vertices: &[u32], position: &[u32]) -> Self::Block {
@@ -152,14 +158,11 @@ impl<T: Real> PrincipalBlocks<T> for Assembled<T> {
             ptrs.push(indices.len());
         }
         let rows = Rows::new(ptrs, indices, values, vertices.len());
-        Cells {
-            vertices: vertices.into(),
-            adjacency: UpperAdjacency::new(rows),
-            diagonal: vertices
-                .iter()
-                .map(|&v| self.diagonal[v as usize])
-                .collect(),
-        }
+        let diagonal = vertices
+            .iter()
+            .map(|&v| self.diagonal[v as usize])
+            .collect();
+        (vertices.into(), UpperAdjacency::new(rows), diagonal)
     }
 }
 

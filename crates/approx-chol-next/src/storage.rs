@@ -1,8 +1,15 @@
 //! Sparse storage shapes every stage reads.
 
-use crate::Real;
+use std::sync::Arc;
+
+use crate::{narrow, Real};
 
 /// Compressed sparse rows.
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(remote = "Self")
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct Rows<T> {
     /// Per row, so `usize` costs nothing per entry: an exact complement can pass `u32::MAX` entries.
@@ -22,25 +29,31 @@ impl<T: Real> Rows<T> {
             "rows end at the last entry"
         );
         assert_eq!(indices.len(), values.len(), "one value per entry");
-        #[cfg(debug_assertions)]
-        for span in ptrs.windows(2) {
-            assert!(span[0] <= span[1], "row pointers ascend");
-            let row = &indices[span[0]..span[1]];
-            assert!(
-                row.windows(2).all(|j| j[0] < j[1]),
-                "columns strictly ascend"
-            );
-            assert!(
-                row.last().is_none_or(|&j| (j as usize) < n_cols),
-                "columns below n_cols"
-            );
-        }
-        Self {
+        let rows = Self {
             ptrs,
             indices,
             values,
             n_cols,
-        }
+        };
+        debug_assert!(
+            rows.shaped(),
+            "pointers and columns ascend, columns below n_cols"
+        );
+        rows
+    }
+
+    /// Pointers span `indices` and ascend; each row's columns strictly ascend below `n_cols`.
+    fn shaped(&self) -> bool {
+        let nnz = self.indices.len();
+        let bounded = self.ptrs.first() == Some(&0) && self.ptrs.last() == Some(&nnz);
+        // Every pointer ascends before any row is sliced: a middle one past `nnz` would panic.
+        bounded
+            && self.ptrs.windows(2).all(|span| span[0] <= span[1])
+            && self.ptrs.windows(2).all(|span| {
+                let row = &self.indices[span[0]..span[1]];
+                row.windows(2).all(|j| j[0] < j[1])
+                    && row.last().is_none_or(|&j| (j as usize) < self.n_cols)
+            })
     }
 
     pub(crate) fn n_rows(&self) -> usize {
@@ -101,7 +114,7 @@ impl<T: Real> Rows<T> {
     }
 
     /// `Σ|x|` per row and per column, in `f64` in row order.
-    pub(crate) fn abs_sums(&self) -> (Vec<f64>, Vec<f64>) {
+    fn abs_sums(&self) -> (Vec<f64>, Vec<f64>) {
         let mut cols = vec![0.0; self.n_cols];
         let rows = (0..self.n_rows())
             .map(|i| {
@@ -117,7 +130,7 @@ impl<T: Real> Rows<T> {
         (rows, cols)
     }
 
-    pub(crate) fn nonpositive(&self) -> bool {
+    fn nonpositive(&self) -> bool {
         self.values.iter().all(|&x| x <= T::zero())
     }
 
@@ -125,17 +138,17 @@ impl<T: Real> Rows<T> {
         self.values.iter().all(|&x| x > T::zero())
     }
 
-    pub(crate) fn abs_total(&self) -> f64 {
+    fn abs_total(&self) -> f64 {
         crate::compensated_sum(self.values.iter().map(|&x| crate::widen(x.abs())))
     }
 
     /// `x_ij ← r_i x_ij c_j` for signs `r`, `c`: exact, so never out of range.
-    pub(crate) fn signed(self, r: &[T], c: &[T]) -> Self {
+    fn signed(self, r: &[T], c: &[T]) -> Self {
         (self.scaled_seeing(r, c, |_, _, _| {})).expect("a sign moves no magnitude")
     }
 
     /// Scaled by `r` on rows and `c` on columns, with the new [`abs_sums`](Self::abs_sums) from the same pass.
-    pub(crate) fn scaled_abs_sums(self, r: &[T], c: &[T]) -> Option<(Self, Vec<f64>, Vec<f64>)> {
+    fn scaled_abs_sums(self, r: &[T], c: &[T]) -> Option<(Self, Vec<f64>, Vec<f64>)> {
         let (mut rows, mut cols) = (vec![0.0; self.n_rows()], vec![0.0; self.n_cols]);
         let scaled = self.scaled_seeing(r, c, |i, j, x| {
             let x = crate::widen(x.abs());
@@ -189,23 +202,8 @@ impl<T: Real> UpperAdjacency<T> {
         self.rows.n_rows()
     }
 
-    /// `Σ_j |x_ij|` over both triangles.
-    pub(crate) fn abs_row_sums(&self) -> Vec<T> {
-        let (upper, lower) = self.rows.abs_sums();
-        upper
-            .iter()
-            .zip(lower)
-            .map(|(u, l)| crate::narrow(u + l))
-            .collect()
-    }
-
     pub(crate) fn nonpositive(&self) -> bool {
         self.rows.nonpositive()
-    }
-
-    /// `Σ_ij |x_ij|` over both triangles, compensated.
-    pub(crate) fn abs_total(&self) -> f64 {
-        2.0 * self.rows.abs_total()
     }
 
     pub(crate) fn upper_len(&self, i: usize) -> usize {
@@ -216,20 +214,98 @@ impl<T: Real> UpperAdjacency<T> {
     pub(crate) fn upper(&self, i: usize) -> impl Iterator<Item = (usize, &T)> {
         self.rows.row(i)
     }
+}
 
-    /// `S X S` for signs `S`.
-    pub(crate) fn signed(self, s: &[T]) -> Self {
-        Self {
-            rows: self.rows.signed(s, s),
+/// A component's off-diagonal by shape: `A_c`'s signed one, or `M`'s once congruent.
+#[derive(Clone, Debug)]
+pub(crate) enum OffDiagonal<T> {
+    General(UpperAdjacency<T>),
+    /// `C` of `[D_e C; Cᵀ D_k]`, both sides nonempty, the larger eliminated first as its rows.
+    Bipartite(Arc<Rows<T>>),
+}
+
+impl<T: Real> OffDiagonal<T> {
+    pub(crate) fn n(&self) -> usize {
+        match self {
+            Self::General(adjacency) => adjacency.n(),
+            Self::Bipartite(cross) => cross.n_rows() + cross.n_cols(),
         }
     }
 
-    /// Scaled by `f` on both sides, with the new row sums from the same pass.
+    pub(crate) fn nonpositive(&self) -> bool {
+        self.rows().nonpositive()
+    }
+
+    /// `Σ_j |a_ij|` per row in local order: dominance, surplus and pivots all start here.
+    pub(crate) fn abs_row_sums(&self) -> Vec<T> {
+        let (first, second) = self.rows().abs_sums();
+        self.merged(first, second)
+    }
+
+    /// `Σ_ij |a_ij|` over both triangles, compensated.
+    pub(crate) fn abs_total(&self) -> f64 {
+        2.0 * self.rows().abs_total()
+    }
+
+    /// `S X S` for signs `S`: a sign moves no magnitude, so no entry leaves range.
+    pub(crate) fn signed(self, s: &[T]) -> Self {
+        match self {
+            Self::General(adjacency) => Self::General(UpperAdjacency {
+                rows: adjacency.rows.signed(s, s),
+            }),
+            Self::Bipartite(cross) => {
+                let (eliminated, kept) = s.split_at(cross.n_rows());
+                Self::Bipartite(Arc::new(
+                    Arc::unwrap_or_clone(cross).signed(eliminated, kept),
+                ))
+            }
+        }
+    }
+
+    /// `F X F` with the new row sums from the same pass; `None` where an entry leaves range.
     pub(crate) fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
-        let (rows, upper, lower) = self.rows.scaled_abs_sums(f, f)?;
-        let sums = (upper.iter().zip(lower))
-            .map(|(u, l)| crate::narrow(u + l))
-            .collect();
-        Some((Self { rows }, sums))
+        let (scaled, first, second) = match self {
+            Self::General(adjacency) => {
+                let (rows, upper, lower) = adjacency.rows.scaled_abs_sums(f, f)?;
+                (Self::General(UpperAdjacency { rows }), upper, lower)
+            }
+            Self::Bipartite(cross) => {
+                let (eliminated, kept) = f.split_at(cross.n_rows());
+                let (cross, rows, cols) =
+                    Arc::unwrap_or_clone(cross).scaled_abs_sums(eliminated, kept)?;
+                (Self::Bipartite(Arc::new(cross)), rows, cols)
+            }
+        };
+        let sums = scaled.merged(first, second);
+        Some((scaled, sums))
+    }
+
+    fn rows(&self) -> &Rows<T> {
+        match self {
+            Self::General(adjacency) => &adjacency.rows,
+            Self::Bipartite(cross) => cross,
+        }
+    }
+
+    /// An upper triangle's row and column sums add; a bipartite block's sides chain.
+    fn merged(&self, first: Vec<f64>, second: Vec<f64>) -> Vec<T> {
+        match self {
+            Self::General(_) => (first.iter().zip(second))
+                .map(|(u, l)| narrow(u + l))
+                .collect(),
+            Self::Bipartite(_) => first.into_iter().chain(second).map(narrow).collect(),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+checked_serde!(Rows);
+
+#[cfg(feature = "serde")]
+impl<T: Real> Rows<T> {
+    fn checked(self) -> Option<Self> {
+        let values =
+            self.values.len() == self.indices.len() && self.values.iter().all(|v| v.is_finite());
+        (self.shaped() && values).then_some(self)
     }
 }

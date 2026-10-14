@@ -10,7 +10,6 @@ fn dot(left: &[f64], right: &[f64]) -> f64 {
 /// `N = D^{-1/2}|C|D^{-1/2}` between the kept (small) and eliminated (large) sides.
 struct NormalizedCrossOperator<'a, T> {
     small_to_large: &'a Rows<T>,
-    large_to_small: Rows<T>,
     small_inv_sqrt: &'a [f64],
     large_inv_sqrt: &'a [f64],
     /// `α > 1` keeps `α² − NᵀN` definite, so a singular component never lands on its Perron vector.
@@ -29,7 +28,6 @@ impl<'a, T: Real> NormalizedCrossOperator<'a, T> {
         let (large_inv_sqrt, small_inv_sqrt) = inv_sqrt.split_at(cross.n_rows());
         Self {
             small_to_large: cross,
-            large_to_small: cross.transpose(),
             small_inv_sqrt,
             large_inv_sqrt,
             shift,
@@ -55,13 +53,16 @@ impl<'a, T: Real> NormalizedCrossOperator<'a, T> {
     }
 
     fn apply_small(&self, input: &[f64], output: &mut [f64]) {
-        multiply_normalized(
-            &self.large_to_small,
-            self.small_inv_sqrt,
-            self.large_inv_sqrt,
-            input,
-            output,
-        );
+        output.fill(0.0);
+        for (i, (&x, &s)) in input.iter().zip(self.large_inv_sqrt).enumerate() {
+            let x = x * s;
+            for (j, &entry) in self.small_to_large.row(i) {
+                output[j] += widen(entry.abs()) * x;
+            }
+        }
+        for (value, &s) in output.iter_mut().zip(self.small_inv_sqrt) {
+            *value *= s;
+        }
     }
 
     fn apply_reduced(&self, input: &[f64], large_work: &mut [f64], output: &mut [f64]) {
@@ -141,8 +142,9 @@ impl<'a, T: Real> NormalizedCrossOperator<'a, T> {
         if !peak.is_finite() || peak <= 0.0 {
             return None;
         }
-        for value in mu.iter_mut() {
-            *value /= peak;
+        let inv_sqrt = self.large_inv_sqrt.iter().chain(self.small_inv_sqrt);
+        for (value, &normalizer) in mu.iter_mut().zip(inv_sqrt) {
+            *value = *value / peak * normalizer;
         }
         Relaxation::new(mu.into(), 0, violation)
     }
@@ -157,13 +159,17 @@ fn multiply_normalized<T: Real>(
 ) {
     debug_assert_eq!(matrix.n_rows(), output.len());
     debug_assert_eq!(matrix.n_cols(), input.len());
+    let scaled: Vec<f64> = input
+        .iter()
+        .zip(input_inv_sqrt)
+        .map(|(&x, &s)| x * s)
+        .collect();
     for (i, value) in output.iter_mut().enumerate() {
-        *value = matrix
+        let sum: f64 = matrix
             .row(i)
-            .map(|(j, &entry)| {
-                widen(entry.abs()) * output_inv_sqrt[i] * input_inv_sqrt[j] * input[j]
-            })
+            .map(|(j, &entry)| widen(entry.abs()) * scaled[j])
             .sum();
+        *value = output_inv_sqrt[i] * sum;
     }
 }
 
@@ -284,14 +290,12 @@ pub(in crate::sgdd) fn reduced_cg<T: Real>(
     let inv_sqrt: Vec<f64> = diagonal.iter().map(|&d| 1.0 / widen(d).sqrt()).collect();
     let operator = NormalizedCrossOperator::new(cross, &inv_sqrt, 1.0 + 0.5 * policy.tolerance);
     let initial = Relaxation {
-        scales: vec![1.0; diagonal.len()].into(),
+        scales: inv_sqrt.clone().into(),
         iterations: 0,
         violation: operator.unit_violation(),
     };
     let relaxation = reduced_cg_scaling(&operator, initial, policy)?;
-    let scales: Box<[T]> = (relaxation.scales.iter().zip(&inv_sqrt))
-        .map(|(&mu, &normalizer)| narrow::<T>(mu * normalizer))
-        .collect();
+    let scales: Box<[T]> = relaxation.scales.iter().map(|&f| narrow::<T>(f)).collect();
     Relaxation::new(
         scales,
         relaxation.iterations,

@@ -21,7 +21,8 @@ impl<T: Real> PackedLaplacian<T> {
     }
 
     /// Left-looking GTH on the packed lower `−w` with a free last row `m` never pivoted (`m = n` holding the ground's `−s` grounded, the anchor `m = n − 1` anchored): for each column `j < m` in order, every stored `(r, j)`, `r > j`, subtracts `Σ_{k<j} min·(max·p_k⁻¹)` of the magnitudes of the already updated `(r, k)` and `(j, k)`, then `p_j = −Σ_{r>j} (r, j)` and `p_j⁻¹` goes to the tail; a last pass scales each column `j` by `√p_j⁻¹` and writes `√p_j` on its diagonal, and truncating row `m` and the tail leaves `m` rows; nothing cancels, under- or overflows (`d − Σl²` cancelled to 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more factor time).
-    pub(super) fn factor(self, sddm: &Sddm<'_, T>) -> DenseCholesky<T> {
+    /// Packed lower triangle of `L` in `LLᵀ`, the free slot excluded: an upper one would double the factor.
+    pub(super) fn factor(self, sddm: &Sddm<'_, T>) -> Vec<T> {
         let Self {
             mut values,
             dimension,
@@ -63,7 +64,7 @@ impl<T: Real> PackedLaplacian<T> {
         }
         values.truncate(row_start(m));
         values.shrink_to_fit();
-        DenseCholesky { values }
+        values
     }
 }
 
@@ -72,38 +73,41 @@ fn row_start(row: usize) -> usize {
     row * (row + 1) / 2
 }
 
-/// Packed lower triangle of `L` in `LLᵀ`, the free slot excluded: an upper one would double the factor.
-#[derive(Clone, Debug)]
-pub(super) struct DenseCholesky<T> {
-    values: Vec<T>,
+/// Forward, backward on a packed factor, and the free last slot pinned to `0`.
+pub(super) fn substitute<T: Real>(factor: &[T], values: &mut [T]) {
+    let (pinned, solved) = values.split_last_mut().expect("a free slot");
+    let m = solved.len();
+    debug_assert_eq!(
+        row_start(m),
+        factor.len(),
+        "one value per row and the free slot"
+    );
+    for row in 0..m {
+        let entries = &factor[row_start(row)..=row_start(row) + row];
+        let mut value = solved[row];
+        for (&entry, &solution) in entries[..row].iter().zip(&solved[..row]) {
+            value = value - entry * solution;
+        }
+        solved[row] = value / entries[row];
+    }
+    for row in (0..m).rev() {
+        let mut value = solved[row];
+        // Strided down column `row`, unlike the forward pass, which is why this keeps an index.
+        for (below, &solution) in (row + 1..m).zip(&solved[row + 1..]) {
+            value = value - factor[row_start(below) + row] * solution;
+        }
+        solved[row] = value / factor[row_start(row) + row];
+    }
+    *pinned = T::zero();
 }
 
-impl<T: Real> DenseCholesky<T> {
-    fn rows(&self) -> usize {
-        ((8 * self.values.len() + 1).isqrt() - 1) / 2
-    }
-
-    /// Forward, backward, and the free last slot pinned to `0`.
-    pub(super) fn substitute(&self, values: &mut [T]) {
-        let (pinned, solved) = values.split_last_mut().expect("a free slot");
-        let m = solved.len();
-        debug_assert_eq!(m, self.rows(), "one value per row and the free slot");
-        for row in 0..m {
-            let entries = &self.values[row_start(row)..=row_start(row) + row];
-            let mut value = solved[row];
-            for (&entry, &solution) in entries[..row].iter().zip(&solved[..row]) {
-                value = value - entry * solution;
-            }
-            solved[row] = value / entries[row];
-        }
-        for row in (0..m).rev() {
-            let mut value = solved[row];
-            // Strided down column `row`, unlike the forward pass, which is why this keeps an index.
-            for (below, &solution) in (row + 1..m).zip(&solved[row + 1..]) {
-                value = value - self.values[row_start(below) + row] * solution;
-            }
-            solved[row] = value / self.values[row_start(row) + row];
-        }
-        *pinned = T::zero();
-    }
+#[cfg(feature = "serde")]
+/// A packed factor decoded from bytes: one row per slot but the free one, finite, positive pivots.
+pub(super) fn fits<T: Real>(factor: &[T], slots: usize) -> bool {
+    let Some(m) = slots.checked_sub(1) else {
+        return false;
+    };
+    m.checked_mul(slots).map(|p| p / 2) == Some(factor.len())
+        && factor.iter().all(|v| v.is_finite())
+        && (0..m).all(|row| factor[row_start(row) + row] > T::zero())
 }

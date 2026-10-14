@@ -32,6 +32,7 @@ impl Default for ScalingPolicy {
 }
 
 /// A component's uncertified scaling: present iff its violation exceeded the policy's tolerance.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScalingReport {
     /// Scaling iterations spent.
@@ -43,6 +44,7 @@ pub struct ScalingReport {
 }
 
 /// Whether a dominance scaling is known to exist.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Existence {
     /// A factor-width-2 Gram, GDD by type: only the policy's budget ran out.
@@ -52,9 +54,9 @@ pub enum Existence {
 }
 
 impl ScalingPolicy {
-    /// `Σ_j |a_ij| ≤ a_ii (1 + max(tolerance, FLOAT_BAND ε))`: a rounded Laplacian stays bit for bit.
+    /// `Σ_j |a_ij| ≤ a_ii (1 + max(tolerance, RATIO_BAND ε))`: a rounded Laplacian stays bit for bit.
     pub(super) fn dominates<T: Real>(&self, d: T, abs_row_sum: T) -> bool {
-        let slack = (self.tolerance).max(FLOAT_BAND * widen(T::epsilon()));
+        let slack = (self.tolerance).max(RATIO_BAND * widen(T::epsilon()));
         widen(abs_row_sum) <= widen(d) * (1.0 + slack)
     }
 
@@ -110,8 +112,8 @@ pub(super) fn null_scaling<T: Real>(u: &[f64], diagonal: &[T]) -> Option<Relaxat
     Relaxation::new(scales, 0, T::zero())
 }
 
-/// SCI's closing width on `[t_p, t_q]` around `1`, in `ε`, and the floor of the dominance slack.
-const FLOAT_BAND: f64 = 16.0;
+/// How far, in `ε`, a row ratio `Σ_j|a_ij|f_j / (a_ii f_i)` may sit from `1`: SCI's closing width and the dominance slack's floor.
+const RATIO_BAND: f64 = 16.0;
 
 /// Iterations without either bound moving before SCI stops: `t_q` pinned at `1` cannot prove `ρ < 1`.
 const STALL: usize = 32;
@@ -147,7 +149,7 @@ pub(super) fn sci<T: Real>(
         bracket = (bracket.0.max(t_p), bracket.1.min(t_q));
         flat = if progressed { 0 } else { flat + 1 };
         // Certified: stop once `t_q < 1` proves `ρ < 1`, `[t_p, t_q]` closes on `1`, or neither bound moves.
-        let band = FLOAT_BAND * widen(T::epsilon());
+        let band = RATIO_BAND * widen(T::epsilon());
         let settled = t_q < 1.0 - band || t_q - t_p <= band || flat >= STALL;
         let off_dominant = t_p >= 1.0 && violation > policy.tolerance;
         if (violation <= policy.tolerance && settled)

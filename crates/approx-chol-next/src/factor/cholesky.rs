@@ -4,14 +4,15 @@ mod dense;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use super::config::{Config, Multiplicity};
-use super::sddm::{Sddm, Sheets};
+use super::sddm::{descend, lift, Sddm, Sheets};
 use crate::narrow;
 use crate::{widen, Real};
 use approximate::ApproximateCholesky;
-use dense::{DenseCholesky, PackedLaplacian};
+use dense::PackedLaplacian;
 
 /// A Cholesky routed dense and factored approximately instead: less accurate than asked.
 #[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fallback {
     /// The packed triangle does not fit in memory.
@@ -48,6 +49,11 @@ impl<'a, T: Real> CholeskyInput<'a, T> for Sddm<'a, T> {
 }
 
 /// The factor of what the elimination leaves; it builds its own Triangular, so its facts come from that matrix.
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(remote = "Self")
+)]
 #[derive(Clone, Debug)]
 pub(super) struct Cholesky<T> {
     sheets: Sheets,
@@ -67,7 +73,7 @@ impl<T: Real> Cholesky<T> {
     ) -> (Self, Option<Fallback>) {
         let approximate = |sddm| Self::approximate(sddm, config.approximate, draws);
         let dimension = input.dimension();
-        if !config.routes_dense(dimension) {
+        if dimension > config.dense_up_to {
             return (approximate(input.for_approximate()), None);
         }
         let Some(laplacian) = PackedLaplacian::reserve(dimension) else {
@@ -127,28 +133,53 @@ impl<T: Real> Cholesky<T> {
             }
             (Sheets::Two, _) => {
                 let rows = &mut scratch[..self.scratch_len()];
-                Sheets::Two.lift(x, rows);
+                lift(x, rows);
                 // A lift sums to zero, so the ground's right-hand side is zero and its shift cancels in the descent.
                 rows[2 * x.len()..].fill(T::zero());
                 triangular.substitute(rows);
-                Sheets::Two.descend(rows, x);
+                descend(rows, x);
             }
         }
     }
 }
 
 /// The triangular factor, dense or approximate; both leave one slot uneliminated.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 enum Triangular<T> {
-    Dense(DenseCholesky<T>),
+    /// Packed lower triangle of `L` in `LLᵀ`.
+    Dense(Vec<T>),
     Approximate(ApproximateCholesky<T>),
 }
 
 impl<T: Real> Triangular<T> {
     fn substitute(&self, values: &mut [T]) {
         match self {
-            Self::Dense(dense) => dense.substitute(values),
+            Self::Dense(factor) => dense::substitute(factor, values),
             Self::Approximate(approximate) => approximate.substitute(values),
         }
+    }
+}
+
+#[cfg(feature = "serde")]
+checked_serde!(Cholesky);
+
+#[cfg(feature = "serde")]
+impl<T: Real> Cholesky<T> {
+    fn checked(self) -> Option<Self> {
+        if self.n == 0 {
+            return None;
+        }
+        let slots = self.n.checked_add(usize::from(self.grounded))?;
+        let fits = match &self.triangular {
+            Triangular::Dense(dense) => dense::fits(dense, slots),
+            Triangular::Approximate(approximate) => approximate.fits(slots),
+        };
+        fits.then_some(self)
+    }
+
+    /// Whether it solves a component of `kept` vertices on its sheets.
+    pub(super) fn solves(&self, kept: usize) -> bool {
+        Some(self.n) == self.sheets.count().checked_mul(kept)
     }
 }

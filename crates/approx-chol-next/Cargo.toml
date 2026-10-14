@@ -16,3 +16,10 @@ workspace = true
 num-traits = "0.2"
 rand = "0.10.0"
 rayon = "1"
+serde = { version = "1", features = ["derive", "rc"], optional = true }
+
+[features]
+serde = ["dep:serde"]
+
+[dev-dependencies]
+postcard = { version = "1", features = ["use-std"] }

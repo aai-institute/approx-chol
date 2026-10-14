@@ -2,7 +2,7 @@
 
 use num_traits::PrimInt;
 
-use super::{index, Column, ViewError, Weight, Weighting};
+use super::{index, Column, ViewError, Weighting};
 use crate::Real;
 
 /// `W`, one nonnegative entry per column of `V`, checked once so every view over the same columns can share it.
@@ -88,9 +88,11 @@ impl<'a, T: Real, I: PrimInt> Edges<'a, T, I> {
         visit: impl FnMut(Column<T>),
     ) {
         match self.weights.0 {
-            Weighting::Unit => self.columns(offset, v_a, v_b, |_| Weight::Unit, visit),
-            Weighting::Of(w) => self.columns(offset, v_a, v_b, |k| Weight::Of(w[k]), visit),
-            Weighting::SqrtOf(s) => self.columns(offset, v_a, v_b, |k| Weight::SqrtOf(s[k]), visit),
+            Weighting::Unit => self.columns(offset, v_a, v_b, |_| Weighting::Unit, visit),
+            Weighting::Of(w) => self.columns(offset, v_a, v_b, |k| Weighting::Of(w[k]), visit),
+            Weighting::SqrtOf(s) => {
+                self.columns(offset, v_a, v_b, |k| Weighting::SqrtOf(s[k]), visit)
+            }
         }
     }
 
@@ -100,7 +102,7 @@ impl<'a, T: Real, I: PrimInt> Edges<'a, T, I> {
         offset: usize,
         v_a: impl Fn(usize) -> T,
         v_b: impl Fn(usize) -> T,
-        weight: impl Fn(usize) -> Weight<T>,
+        weight: impl Fn(usize) -> Weighting<T>,
         mut visit: impl FnMut(Column<T>),
     ) {
         for (k, (a, b)) in self.a.iter().zip(self.b).enumerate() {

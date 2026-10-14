@@ -10,19 +10,26 @@ use rand::rngs::Xoshiro256PlusPlus;
 
 use super::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single};
 use super::config::{CliqueRule, InnerParallelism, Multiplicity};
-use super::sddm::{crosses, Sddm, SddmRows, Sheets};
+use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
 use super::Streams;
 use crate::sgdd::Grounding;
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, widen, Real};
 
 /// `M`'s cross block and the pivots `d_e`, applied as two products because the block's steps commute.
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(remote = "Self"),
+    serde(bound(deserialize = "T: crate::Real + serde::Deserialize<'de>"))
+)]
 #[derive(Clone, Debug)]
 pub(super) struct BlockElimination<T> {
     /// `M`'s own `C`, signs kept and shared with the component: a frustrated component's cover never doubles it.
     cross: Arc<Rows<T>>,
     inv_pivot: Box<[T]>,
     /// `Cᵀ` where the larger side passes 10 000 rows (0.6's threshold), so `Allow` may split the solve by kept row.
+    #[cfg_attr(feature = "serde", serde(skip))]
     ct: Option<Rows<T>>,
 }
 
@@ -38,9 +45,13 @@ impl<T: Real> BlockElimination<T> {
                 T::one() / narrow::<T>(d_e)
             })
             .collect();
-        let ct = (c.n_rows() > 10_000).then(|| c.transpose());
+        Self::with_pivots(Arc::clone(cross), inv_pivot)
+    }
+
+    fn with_pivots(cross: Arc<Rows<T>>, inv_pivot: Box<[T]>) -> Self {
+        let ct = (cross.n_rows() > 10_000).then(|| cross.transpose());
         Self {
-            cross: Arc::clone(cross),
+            cross,
             inv_pivot,
             ct,
         }
@@ -241,7 +252,7 @@ fn sampled_fill<T: Real, C: Copies>(
             let (sheet, e) = (star / n_eliminated, star % n_eliminated);
             let neighbors = c.row(e).map(move |(k, &c)| {
                 let on = sheet ^ usize::from(crosses(c));
-                (sheets.vertex(k, on) as u32, c.abs())
+                (cover_vertex(k, on) as u32, c.abs())
             });
             (schur.stars.star(star), neighbors.chain(ground_share(e)))
         }),
@@ -279,13 +290,12 @@ fn cover_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Ve
     } = elimination;
     let (c, ct, n_kept) = (cross, elimination.transpose(), cross.n_cols());
     let surplus = schur.grounding.surplus();
-    let mut rows = SddmRows::new(2 * n_kept);
-    for k in 0..n_kept {
+    SddmRows::split(2 * n_kept, n_kept, rows_per_task(c), |rows, k| {
         for (e, &c_ek) in ct.row(k) {
             for (j, &c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
                 let sheet = usize::from(crosses(c_ek) != crosses(c_ej));
                 rows.add(
-                    Sheets::Two.vertex(j, sheet),
+                    cover_vertex(j, sheet),
                     share(c_ek.abs(), c_ej.abs(), inv_pivot[e]),
                 );
             }
@@ -295,8 +305,7 @@ fn cover_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Ve
         }
         rows.end_row();
         rows.mirror_row();
-    }
-    rows.finish()
+    })
 }
 
 /// Rows of a folded component's complement, `|c_ke||c_je|/d_e` as the smaller times the larger's share, the ground's `|c_ke| s_e/d_e` as column `n_kept`; a product underflowing to zero is dropped, as a stored zero couples nothing.
@@ -307,8 +316,7 @@ fn exact_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Ve
     } = elimination;
     let (c, ct, n_kept) = (cross, elimination.transpose(), cross.n_cols());
     let surplus = schur.grounding.surplus();
-    let mut rows = SddmRows::new(n_kept);
-    for k in 0..n_kept {
+    SddmRows::split(n_kept, n_kept, rows_per_task(c), |rows, k| {
         for (e, c_ek) in ct.row(k) {
             let c_ek = c_ek.abs();
             for (j, c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
@@ -319,11 +327,36 @@ fn exact_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Ve
             }
         }
         rows.end_row();
-    }
-    rows.finish()
+    })
+}
+
+/// Kept rows per task so each carries `2^17` of the complement's `nnz·(nnz/n_e)/2` multiply-adds, below which a split costs more than it saves.
+fn rows_per_task<T: Real>(c: &Rows<T>) -> usize {
+    let work = c.nnz() * (c.nnz() / c.n_rows().max(1)) / 2;
+    (c.n_cols() << 17).div_ceil(work.max(1))
 }
 
 /// `x·y/d` as the smaller times the larger's share `max·d⁻¹ ≤ 1`, so no product overflows before the division.
 fn share<T: Real>(x: T, y: T, inv_pivot: T) -> T {
     x.min(y) * (x.max(y) * inv_pivot)
+}
+
+#[cfg(feature = "serde")]
+checked_serde!(BlockElimination);
+
+#[cfg(feature = "serde")]
+impl<T: Real> BlockElimination<T> {
+    pub(super) fn n_kept(&self) -> usize {
+        self.cross.n_cols()
+    }
+
+    /// `Cᵀ` is derived, so it is rebuilt rather than read: a stored one could disagree with `C`.
+    fn checked(self) -> Option<Self> {
+        let pivots = self.inv_pivot.len() == self.cross.n_rows()
+            && self
+                .inv_pivot
+                .iter()
+                .all(|p| p.is_finite() && *p > T::zero());
+        pivots.then(|| Self::with_pivots(self.cross, self.inv_pivot))
+    }
 }

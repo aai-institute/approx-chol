@@ -1,14 +1,19 @@
-//! `A` as its reduced components: what the factorization consumes.
+//! `A` as its reduced irreducible blocks: what the factorization consumes.
 
 use std::sync::Arc;
 
 use super::congruence::Congruence;
 use super::scaling::ScalingReport;
 use crate::input::CsrError;
-use crate::storage::{Rows, UpperAdjacency};
+use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, Real};
 
-/// Where a component sits in `A`: its vertices, and the congruence between `A_c` and `M`.
+/// Where a block sits in `A`: its vertices, and the congruence between `A_c` and `M`.
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(remote = "Self")
+)]
 #[derive(Debug)]
 pub(crate) struct Frame<T> {
     vertices: Box<[u32]>,
@@ -100,39 +105,15 @@ impl<T: Real> Grounding<T> {
     }
 }
 
-/// A component's off-diagonal by shape: `A_c`'s signed one, or `M`'s once congruent.
+/// One irreducible principal block `A_c` of `A`, reduced: `M = F · A_c · F` weakly diagonally dominant, eliminated side first.
 #[derive(Clone, Debug)]
-pub(crate) enum OffDiagonal<T> {
-    General(UpperAdjacency<T>),
-    /// `C` of `[D_e C; Cᵀ D_k]`, both sides nonempty, the larger eliminated first as its rows.
-    Bipartite(Arc<Rows<T>>),
-}
-
-impl<T: Real> OffDiagonal<T> {
-    pub(super) fn n(&self) -> usize {
-        match self {
-            Self::General(adjacency) => adjacency.n(),
-            Self::Bipartite(cross) => cross.n_rows() + cross.n_cols(),
-        }
-    }
-
-    pub(super) fn nonpositive(&self) -> bool {
-        match self {
-            Self::General(adjacency) => adjacency.nonpositive(),
-            Self::Bipartite(cross) => cross.nonpositive(),
-        }
-    }
-}
-
-/// One component of `A`, reduced: `M = F · A_c · F` over its vertices, eliminated block first.
-#[derive(Clone, Debug)]
-pub struct Component<T = f64> {
+pub struct IrreducibleBlock<T = f64> {
     frame: Arc<Frame<T>>,
     off_diagonal: OffDiagonal<T>,
     balance: Balance<T>,
 }
 
-impl<T: Real> Component<T> {
+impl<T: Real> IrreducibleBlock<T> {
     /// Panics unless one row and one surplus per vertex; the ground's `Σs` must clear the bound any diagonal does.
     pub(super) fn new(
         frame: Frame<T>,
@@ -145,6 +126,11 @@ impl<T: Real> Component<T> {
         if let Balance::Balanced(_) = balance {
             debug_assert!(off_diagonal.nonpositive(), "a balanced M is a Z-matrix");
         }
+        let surplus = balance.grounding().surplus().unwrap_or_default();
+        if let Some(i) = surplus.iter().position(|&s| !crate::in_range(s)) {
+            let vertex = frame.vertices()[i];
+            return Err(ReduceError::OutOfRange { vertex });
+        }
         if !balance.ground_in_range() {
             let vertex = frame.vertices()[0];
             return Err(ReduceError::OutOfRange { vertex });
@@ -156,22 +142,22 @@ impl<T: Real> Component<T> {
         })
     }
 
-    /// The component's vertices in `A`'s numbering, in local order.
+    /// The block's vertices in `A`'s numbering, in local order.
     pub fn vertices(&self) -> &[u32] {
         self.frame.vertices()
     }
 
-    /// Present iff this component's scaling was clamped beyond the policy's tolerance.
+    /// Present iff this block's scaling was clamped beyond the policy's tolerance.
     pub fn scaling_report(&self) -> Option<ScalingReport> {
         self.frame.congruence().report()
     }
 
-    /// Shared with every factor of this component.
+    /// Shared with every factor of this block.
     pub(crate) fn frame(&self) -> &Arc<Frame<T>> {
         &self.frame
     }
 
-    /// Whether `A_c` is solved as singular, `A_c⁺b`: its `M`, clamped if not dominant, has `1ᵀM1 ≤ 5ε·tr M`, exactly `0` for a given ground.
+    /// Whether `A_c` is folded and solved as singular, `A_c⁺b`: before any clamp its `M` has `1ᵀM1 ≤ 5ε·tr M`, so a net deficit floats; a Laplacian's `g` or a signed graph's cancelled mass must be exactly `0`.
     pub fn floats(&self) -> bool {
         matches!(&self.balance, Balance::Balanced(grounding) if !grounding.is_grounded())
     }
@@ -185,20 +171,20 @@ impl<T: Real> Component<T> {
     }
 }
 
-/// `A` as its connected [`Component`]s, each reduced; vertices in none solve to `0`.
+/// `A` as its [`IrreducibleBlock`]s, each reduced; vertices in none solve to `0`.
 #[derive(Clone, Debug)]
 pub struct Sgdd<T = f64> {
     n: usize,
-    components: Vec<Component<T>>,
+    blocks: Vec<IrreducibleBlock<T>>,
     /// Lone vertices with a zero diagonal, recorded so a solve zeroes them without a pass over `n`.
     dead: Box<[u32]>,
 }
 
 impl<T: Real> Sgdd<T> {
-    pub(super) fn new(n: usize, components: Vec<Component<T>>, dead: Vec<u32>) -> Self {
+    pub(super) fn new(n: usize, blocks: Vec<IrreducibleBlock<T>>, dead: Vec<u32>) -> Self {
         Self {
             n,
-            components,
+            blocks,
             dead: dead.into_boxed_slice(),
         }
     }
@@ -208,24 +194,24 @@ impl<T: Real> Sgdd<T> {
         self.n
     }
 
-    /// The components, each factored and solved on its own.
-    pub fn components(&self) -> &[Component<T>] {
-        &self.components
+    /// The irreducible blocks, each factored and solved on its own.
+    pub fn blocks(&self) -> &[IrreducibleBlock<T>] {
+        &self.blocks
     }
 
     pub(crate) fn dead(&self) -> &[u32] {
         &self.dead
     }
 
-    /// The worst component's report: present iff some scaling was clamped beyond the policy's tolerance.
+    /// The worst block's report: present iff some scaling was clamped beyond the policy's tolerance.
     pub fn scaling_report(&self) -> Option<ScalingReport> {
-        (self.components.iter())
-            .filter_map(Component::scaling_report)
+        (self.blocks.iter())
+            .filter_map(IrreducibleBlock::scaling_report)
             .max_by(|a, b| a.violation.total_cmp(&b.violation))
     }
 }
 
-/// Why a component has no SDDM form; each `vertex` is in `A`'s numbering.
+/// Why a block has no SDDM form; each `vertex` is in `A`'s numbering.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReduceError {
@@ -234,9 +220,9 @@ pub enum ReduceError {
         /// The entry's vertex, in `A`'s numbering.
         vertex: u32,
     },
-    /// A scale or scaled entry left the representable range, or the component passes `1/ε` vertices.
+    /// A scale or scaled entry left the representable range, or the block passes `1/ε` vertices.
     Unscalable {
-        /// The component's first vertex in local order, in `A`'s numbering.
+        /// The block's first vertex in local order, in `A`'s numbering.
         vertex: u32,
     },
     /// An assembled entry, diagonal, row sum or ground left the representable range.
@@ -274,7 +260,7 @@ impl std::error::Error for ReduceError {}
 pub enum FromCsrError {
     /// The arrays are not a symmetric matrix.
     Csr(CsrError),
-    /// A component has no SDDM form.
+    /// A block has no SDDM form.
     Reduce(ReduceError),
 }
 
@@ -302,5 +288,21 @@ impl std::error::Error for FromCsrError {
             Self::Csr(error) => Some(error),
             Self::Reduce(error) => Some(error),
         }
+    }
+}
+
+#[cfg(feature = "serde")]
+checked_serde!(Frame);
+
+#[cfg(feature = "serde")]
+impl<T: Real> Frame<T> {
+    fn checked(self) -> Option<Self> {
+        let factors = match &self.congruence {
+            Congruence::Signs(f) => f.iter().all(|f| f.abs() == T::one()),
+            Congruence::Scaled(f, _) => f.iter().all(|f| f.is_finite() && *f != T::zero()),
+            Congruence::Identity | Congruence::NegateFrom(_) => true,
+        };
+        let fits = !self.vertices.is_empty() && self.congruence.fits(self.vertices.len());
+        (fits && factors).then_some(self)
     }
 }

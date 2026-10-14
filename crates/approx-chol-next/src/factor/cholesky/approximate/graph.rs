@@ -2,9 +2,6 @@ use crate::factor::clique_tree::Copies;
 use crate::factor::sddm::Sddm;
 use crate::Real;
 
-/// Above this, an eliminated vertex's list is released rather than kept.
-const RETAIN_CAPACITY_MAX: usize = 64;
-
 /// One half of an edge; `mirror` indexes the other half in `to`'s list, so removal is O(1).
 #[derive(Clone, Copy, Debug)]
 struct Edge<T, C> {
@@ -65,16 +62,10 @@ impl<T: Real, C: Copies> EliminationGraph<T, C> {
         while let Some(edge) = self.lists[v].pop() {
             self.swap_remove(edge.to as usize, edge.mirror as usize);
         }
-        if self.lists[v].capacity() > RETAIN_CAPACITY_MAX {
-            self.lists[v] = Vec::new();
-        }
+        self.lists[v] = Vec::new();
     }
 
-    pub(super) fn add_fill(&mut self, u: u32, w: u32, weight: T) {
-        self.push_pair(u, w, C::one(), weight);
-    }
-
-    fn push_pair(&mut self, u: u32, v: u32, copies: C, weight: T) {
+    pub(super) fn push_pair(&mut self, u: u32, v: u32, copies: C, weight: T) {
         let (mirror_u, mirror_v) = (self.lists[v as usize].len(), self.lists[u as usize].len());
         // Truncating a u32 mirror would corrupt removal, so this holds in release too.
         assert!(

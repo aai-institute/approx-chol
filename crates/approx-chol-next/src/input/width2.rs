@@ -90,7 +90,7 @@ pub(crate) struct Column<T> {
     pub(crate) b: u32,
     pub(crate) v_a: T,
     pub(crate) v_b: T,
-    pub(crate) weight: Weight<T>,
+    pub(crate) weight: Weighting<T>,
 }
 
 impl<T: Real> Column<T> {
@@ -111,10 +111,7 @@ pub(crate) enum Weighting<S> {
     SqrtOf(S),
 }
 
-/// One column's entry of `W`; read only through [`bilinear`](Self::bilinear), so no `s²` is formed.
-pub(crate) type Weight<T> = Weighting<T>;
-
-impl<T: Real> Weight<T> {
+impl<T: Real> Weighting<T> {
     /// `w·x·y`, as `(s·x)·(s·y)` under `SqrtOf`.
     pub(crate) fn bilinear<U: Real>(self, x: U, y: U) -> U {
         let to = |w: T| U::from(w).expect("a finite weight casts to a float");
@@ -199,7 +196,7 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for FactorWidth2<'_, T, I> {
                 b: index(*b) as u32,
                 v_a: v_a[k],
                 v_b: v_b[k],
-                weight: Weight::Unit,
+                weight: Weighting::Unit,
             });
         }
     }

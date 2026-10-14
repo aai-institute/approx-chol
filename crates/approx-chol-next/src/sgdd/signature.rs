@@ -1,6 +1,5 @@
-use super::component::OffDiagonal;
 use super::congruence::Congruence;
-use crate::storage::Rows;
+use crate::storage::{OffDiagonal, Rows};
 use crate::Real;
 
 /// The signs `S` folding `A_c` into a Z-matrix, `I` when it already is one; `None` when frustrated.

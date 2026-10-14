@@ -69,10 +69,7 @@ fn csr_and_upper_share_reduction_and_solve_bits() {
     let upper = Sgdd::from_upper_csr(upper, ScalingPolicy::default()).unwrap();
     assert_eq!(format!("{full:?}"), format!("{upper:?}"));
     assert_eq!(
-        full.components()
-            .iter()
-            .map(|c| c.floats())
-            .collect::<Vec<_>>(),
+        full.blocks().iter().map(|c| c.floats()).collect::<Vec<_>>(),
         [true, false]
     );
     let rhs = [1.0; 7];
@@ -102,7 +99,7 @@ fn gram_separates_folded_scaled_and_frustrated_components() {
     let reduced = Sgdd::from_gram(gram, ScalingPolicy::new(0.0, 0).unwrap()).unwrap();
     assert_eq!(
         reduced
-            .components()
+            .blocks()
             .iter()
             .map(|c| c.floats())
             .collect::<Vec<_>>(),
@@ -120,9 +117,9 @@ fn shape_ground_and_signature_match_their_gram_matrices() {
     let ground = [0.25, 0.0, 0.0, 0.0];
     let laplacian = Laplacian::new(4, &a, &b, Weights::of(&weights).unwrap()).unwrap();
     let floating = Sgdd::try_from(laplacian).unwrap();
-    assert!(floating.components()[0].floats());
+    assert!(floating.blocks()[0].floats());
     let grounded = Sgdd::try_from(laplacian.grounded(&ground).unwrap()).unwrap();
-    assert!(!grounded.components()[0].floats());
+    assert!(!grounded.blocks()[0].floats());
     let mut expected = matrix(4, &a, &b, &x, &y);
     solve_residual(&floating, &expected);
     expected[0][0] += ground[0];
@@ -131,7 +128,7 @@ fn shape_ground_and_signature_match_their_gram_matrices() {
     let signed = SignedGraph::new(4, &a, &b, &signs, Weights::of(&weights).unwrap()).unwrap();
     let signed = Sgdd::try_from(signed).unwrap();
     let y = [1.0, -2.0, 3.0, -4.0];
-    assert!(signed.components()[0].floats());
+    assert!(signed.blocks()[0].floats());
     solve_residual(&signed, &matrix(4, &a, &b, &x, &y));
 }
 
@@ -149,7 +146,7 @@ fn bipartite_incidence_and_valued_grams_preserve_both_sides() {
     let valued = gram(Some(&ones[..]), Some(&ones[..]));
     let laplacian = gram(None, Some(&minus[..]));
     for sgdd in [&incidence, &valued, &laplacian] {
-        assert!(sgdd.components()[0].floats());
+        assert!(sgdd.blocks()[0].floats());
     }
     let right = right.map(|j| j + 3);
     let positive = matrix(5, &left, &right, &ones, &ones);
@@ -186,6 +183,6 @@ fn row_surplus_keeps_a_definite_component_grounded() {
     let values = [3.0, -1.0, -1.0, 3.0];
     let csr = Csr::new(2, &ptrs, &indices, &values).unwrap();
     let reduced = Sgdd::from_csr(csr, ScalingPolicy::default()).unwrap();
-    assert!(!reduced.components()[0].floats());
+    assert!(!reduced.blocks()[0].floats());
     solve_residual(&reduced, &[vec![3.0, -1.0], vec![-1.0, 3.0]]);
 }

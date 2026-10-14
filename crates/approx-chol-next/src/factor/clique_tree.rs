@@ -7,7 +7,7 @@ mod star;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use crate::Real;
-use cdf::CdfSampler;
+use cdf::{draw_after, suffix_past};
 pub(super) use copies::{Copies, Multi, Single};
 use star::Star;
 
@@ -17,7 +17,8 @@ pub(super) type Fill<T> = Vec<(u32, u32, T)>;
 /// A pivot's elimination, reused across pivots; AC and AC2 differ only in `C`.
 pub(super) struct CliqueSampler<T, C: Copies> {
     star: Star<T, C>,
-    cdf: CdfSampler<T>,
+    /// The star's weights' prefix sums, heaviest last, so each suffix's draw range is one subtraction.
+    cumsum: Vec<T>,
     shares: Vec<(u32, T)>,
     /// `None` keeps the whole pivot: an empty star hands nothing on.
     remainder: Option<u32>,
@@ -29,7 +30,7 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
     pub(super) fn new(split: C::Split) -> Self {
         Self {
             star: Star::new(),
-            cdf: CdfSampler::new(),
+            cumsum: Vec::new(),
             shares: Vec::new(),
             remainder: None,
             split,
@@ -50,7 +51,7 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
             self.remainder = None;
             return T::zero();
         };
-        let d = self.cdf.suffix_past(None);
+        let d = suffix_past(&self.cumsum, None);
         let shares = rest.iter().map(|entry| (entry.neighbor, entry.weight / d));
         self.shares.extend(shares);
         self.remainder = Some(last.neighbor);
@@ -74,21 +75,26 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
         let Some((_, rest)) = entries.split_last() else {
             return;
         };
-        self.cdf.prepare(entries.iter().map(|entry| entry.weight));
-        let d = self.cdf.suffix_past(None);
+        self.cumsum.clear();
+        let mut acc = T::zero();
+        for entry in entries {
+            acc = acc + entry.weight;
+            self.cumsum.push(acc);
+        }
+        let d = suffix_past(&self.cumsum, None);
         debug_assert!(
             d.is_finite() && d > T::zero(),
             "positive weights under the diagonal bound"
         );
         for (i, entry) in rest.iter().enumerate() {
             let weight =
-                (entry.copies).per_copy(entry.weight * (self.cdf.suffix_past(Some(i)) / d));
+                (entry.copies).per_copy(entry.weight * (suffix_past(&self.cumsum, Some(i)) / d));
             // An underflowed share couples nothing, so it spends no draw.
             if weight == T::zero() {
                 continue;
             }
             for _ in 0..entry.copies.get() {
-                let other = entries[self.cdf.draw_after(rng, i)].neighbor;
+                let other = entries[draw_after(&self.cumsum, rng, i)].neighbor;
                 fill.push((entry.neighbor.min(other), entry.neighbor.max(other), weight));
             }
         }
