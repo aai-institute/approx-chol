@@ -108,7 +108,7 @@ pub(super) fn clamped_deficit<T: Real>(
 }
 
 /// `t ε (m_ii + Σ_j|m_ij|)`, `t = deg + 1`: how far rounding alone moves a surplus.
-fn rounding_band<T: Real>(d: f64, s: f64, degree: usize) -> f64 {
+pub(super) fn rounding_band<T: Real>(d: f64, s: f64, degree: usize) -> f64 {
     widen(T::epsilon()) * (d + s) * (degree + 1) as f64
 }
 
@@ -133,6 +133,9 @@ pub(super) fn null_scaling<T: Real>(u: &[f64], diagonal: &[T]) -> Option<Relaxat
     })
 }
 
+/// How far `ρ(D⁻¹|B|)` may sit from `1`, in `ε`, for a scaled `M` to float.
+pub(super) const FLOAT_BAND: f64 = 16.0;
+
 /// Self-corrective iterations (Guan, Lu, Li, Shao 2016, Algorithm 3), handing over the best iterate.
 pub(super) fn sci<T: Real>(
     adjacency: &UpperAdjacency<T>,
@@ -154,11 +157,17 @@ pub(super) fn sci<T: Real>(
             return None;
         }
         let violation = (t_q - 1.0).max(0.0);
-        if violation < best.0 {
+        if violation < best.0 || violation <= policy.tolerance {
             best = (violation, scales.clone());
         }
-        // `t_p ≥ 1` everywhere off-dominant: no positive scaling certifies, so hand over the best seen.
-        if violation <= policy.tolerance || t_p >= 1.0 || iterations == policy.max_iterations {
+        // Certified, iterate until `t_q < 1` proves `ρ < 1` or `[t_p, t_q] ∋ ρ` closes on `1`.
+        let band = FLOAT_BAND * widen(T::epsilon());
+        let settled = t_q < 1.0 - band || t_q - t_p <= band;
+        let off_dominant = t_p >= 1.0 && violation > policy.tolerance;
+        if (violation <= policy.tolerance && settled)
+            || off_dominant
+            || iterations == policy.max_iterations
+        {
             break;
         }
         iterations += 1;

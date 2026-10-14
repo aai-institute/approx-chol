@@ -174,83 +174,6 @@ fn multiply_normalized<T: Real>(
     }
 }
 
-#[derive(Clone, Copy)]
-enum ReducedCgStep {
-    Advanced,
-    ResidualExhausted,
-    NonPositiveCurvature,
-}
-
-struct ReducedCg {
-    solution: Vec<f64>,
-    residual: Vec<f64>,
-    direction: Vec<f64>,
-    reduced_image: Vec<f64>,
-    residual_norm_squared: f64,
-}
-
-impl ReducedCg {
-    fn new(rhs: Vec<f64>) -> Option<Self> {
-        let dimension = rhs.len();
-        let residual_norm_squared = dot(&rhs, &rhs);
-        if !residual_norm_squared.is_finite() {
-            return None;
-        }
-        Some(Self {
-            solution: vec![0.0; dimension],
-            residual: rhs.clone(),
-            direction: rhs,
-            reduced_image: vec![0.0; dimension],
-            residual_norm_squared,
-        })
-    }
-
-    fn step<T: Real>(
-        &mut self,
-        operator: &NormalizedCrossOperator<'_, T>,
-        large_work: &mut [f64],
-    ) -> Option<ReducedCgStep> {
-        operator.apply_reduced(&self.direction, large_work, &mut self.reduced_image);
-        let direction_norm_squared = dot(&self.direction, &self.direction);
-        let curvature = dot(&self.direction, &self.reduced_image);
-        if !direction_norm_squared.is_finite() || !curvature.is_finite() {
-            return None;
-        }
-        let slack = 64.0 * f64::EPSILON * direction_norm_squared;
-        if curvature <= slack {
-            return Some(ReducedCgStep::NonPositiveCurvature);
-        }
-
-        let alpha = self.residual_norm_squared / curvature;
-        if !alpha.is_finite() {
-            return None;
-        }
-        for ((value, residual), (&direction, &image)) in self
-            .solution
-            .iter_mut()
-            .zip(&mut self.residual)
-            .zip(self.direction.iter().zip(&self.reduced_image))
-        {
-            *value += alpha * direction;
-            *residual -= alpha * image;
-        }
-
-        let next_residual_norm_squared = dot(&self.residual, &self.residual);
-        if !next_residual_norm_squared.is_finite() {
-            return None;
-        }
-        if next_residual_norm_squared == 0.0 {
-            return Some(ReducedCgStep::ResidualExhausted);
-        }
-        let beta = next_residual_norm_squared / self.residual_norm_squared;
-        for (direction, &residual) in self.direction.iter_mut().zip(&self.residual) {
-            *direction = residual + beta * *direction;
-        }
-        self.residual_norm_squared = next_residual_norm_squared;
-        Some(ReducedCgStep::Advanced)
-    }
-}
-
 fn reduced_cg_scaling<T: Real>(
     operator: &NormalizedCrossOperator<'_, T>,
     initial: Relaxation<f64>,
@@ -258,15 +181,26 @@ fn reduced_cg_scaling<T: Real>(
 ) -> Option<Relaxation<f64>> {
     let mut large_work = vec![0.0; operator.large_len()];
     let rhs = operator.reduced_rhs(&mut large_work);
-    let mut cg = ReducedCg::new(rhs)?;
+    let mut residual_norm_squared = dot(&rhs, &rhs);
+    if !residual_norm_squared.is_finite() {
+        return None;
+    }
+    let mut solution = vec![0.0; rhs.len()];
+    let mut reduced_image = vec![0.0; rhs.len()];
+    let (mut residual, mut direction) = (rhs.clone(), rhs);
     let mut best = initial;
     let mut small_image = vec![0.0; operator.small_len()];
 
     for iteration in 1..=scaling.max_iterations {
-        let step = cg.step(operator, &mut large_work)?;
-        if matches!(step, ReducedCgStep::NonPositiveCurvature) {
+        operator.apply_reduced(&direction, &mut large_work, &mut reduced_image);
+        let direction_norm_squared = dot(&direction, &direction);
+        let curvature = dot(&direction, &reduced_image);
+        if !direction_norm_squared.is_finite() || !curvature.is_finite() {
+            return None;
+        }
+        if curvature <= 64.0 * f64::EPSILON * direction_norm_squared {
             // A singular boundary exposes its Perron vector as the zero-curvature direction.
-            let boundary_small: Vec<f64> = cg.direction.iter().map(|value| value.abs()).collect();
+            let boundary_small: Vec<f64> = direction.iter().map(|value| value.abs()).collect();
             if let Some(violation) = operator.candidate_violation(
                 &boundary_small,
                 CandidateKind::Boundary,
@@ -287,19 +221,41 @@ fn reduced_cg_scaling<T: Real>(
             });
         }
 
+        let alpha = residual_norm_squared / curvature;
+        if !alpha.is_finite() {
+            return None;
+        }
+        for ((value, residual), (&direction, &image)) in
+            (solution.iter_mut().zip(&mut residual)).zip(direction.iter().zip(&reduced_image))
+        {
+            *value += alpha * direction;
+            *residual -= alpha * image;
+        }
+        let next_residual_norm_squared = dot(&residual, &residual);
+        if !next_residual_norm_squared.is_finite() {
+            return None;
+        }
+        let exhausted = next_residual_norm_squared == 0.0;
+        if !exhausted {
+            let beta = next_residual_norm_squared / residual_norm_squared;
+            for (direction, &residual) in direction.iter_mut().zip(&residual) {
+                *direction = residual + beta * *direction;
+            }
+            residual_norm_squared = next_residual_norm_squared;
+        }
+
         // A certificate check costs two extra passes; past the cheap early exits, probe on a stride.
-        let last =
-            matches!(step, ReducedCgStep::ResidualExhausted) || iteration == scaling.max_iterations;
+        let last = exhausted || iteration == scaling.max_iterations;
         if last || iteration <= 8 || iteration % 4 == 0 {
             if let Some(violation) = operator.candidate_violation(
-                &cg.solution,
+                &solution,
                 CandidateKind::Strict,
                 &mut large_work,
                 &mut small_image,
             ) {
                 if violation < best.violation {
                     if let Some(candidate) =
-                        operator.materialize_candidate(&cg.solution, &large_work, violation)
+                        operator.materialize_candidate(&solution, &large_work, violation)
                     {
                         best = candidate;
                     }
@@ -313,7 +269,7 @@ fn reduced_cg_scaling<T: Real>(
             }
         }
 
-        if matches!(step, ReducedCgStep::ResidualExhausted) {
+        if exhausted {
             return Some(Relaxation {
                 iterations: iteration,
                 ..best

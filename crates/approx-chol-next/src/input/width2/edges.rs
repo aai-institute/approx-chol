@@ -2,22 +2,8 @@
 
 use num_traits::PrimInt;
 
-use super::{index, Column, ViewError};
+use super::{index, Column, ViewError, Weight, Weighting};
 use crate::Real;
-
-/// The diagonal `W`: per column of `V` as a slice, or one column's entry.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum Weighting<S> {
-    /// `W = I`.
-    Unit,
-    /// `W = diag(w)`.
-    Of(S),
-    /// `W = diag(s²)`, for a caller that keeps square roots.
-    SqrtOf(S),
-}
-
-/// One column's entry of `W`; read only through [`bilinear`](Self::bilinear), so no `s²` is formed.
-pub(crate) type Weight<T> = Weighting<T>;
 
 /// `W`, one nonnegative entry per column of `V`, checked once so every view over the same columns can share it.
 #[derive(Clone, Copy, Debug)]

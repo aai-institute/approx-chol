@@ -18,7 +18,7 @@ use super::scaling::{self, Existence, Scaling, ScalingPolicy};
 use super::signature;
 use crate::input::{
     BipartiteGram, BipartiteLaplacian, Canonical, Csr, FactorWidth2, IntoColumns, Laplacian,
-    SignedGraph, UpperCsr,
+    SignedGraph, UpperCanonical, UpperCsr,
 };
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{diagonal_in_range, in_range, narrow, widen, Real};
@@ -34,7 +34,7 @@ impl<T: Real, I: PrimInt> Partitioned<Canonical<'_, T, I>> {
                 }
                 let scaling = a.scale(policy)?;
                 let component = match a.sign(scaling, policy)? {
-                    Signed::Folded(m, rows) => m.balanced(rows.surplus())?,
+                    Signed::Folded(m, rows) => m.balanced(rows.folded_surplus())?,
                     Signed::Frustrated(component) => component,
                 };
                 Ok(Some(component))
@@ -57,7 +57,7 @@ impl<T: Real> Sgdd<T> {
         csr: UpperCsr<'_, T, I>,
         policy: ScalingPolicy,
     ) -> Result<Self, FromCsrError> {
-        Ok(of_upper(Canonical::upper(csr)?)?.reduce(&policy)?)
+        Ok(of_upper(UpperCanonical::of(csr)?)?.reduce(&policy)?)
     }
 
     /// `A = V Vᵀ`: scales, folds or covers each component as general, deciding floating from `V`.
@@ -97,6 +97,7 @@ impl<T: Real> Sgdd<T> {
             let a = SymmetricBlock::new(vertices, off_diagonal, diagonal);
             Ok((!a.is_dead()).then_some(a))
         })?;
+        drop(diagonal);
         reduce_gram_blocks(gram, blocks, &policy)
     }
 }
@@ -199,7 +200,7 @@ fn reduce_gram_blocks<T: Real>(
     Ok(Sgdd::new(partition.n(), components, dead))
 }
 
-/// `M`, a bipartite Laplacian, with the eliminated side negated folding `A` into it; a lone vertex is dead.
+/// `M`, a bipartite Laplacian, with the kept side negated folding `A` into it; a lone vertex is dead.
 fn folded_bipartite<T: Real, I: PrimInt>(
     m: BipartiteLaplacian<'_, T, I>,
 ) -> Result<Sgdd<T>, ReduceError> {
@@ -220,6 +221,12 @@ fn folded_bipartite<T: Real, I: PrimInt>(
             m.balanced(Grounding::ungrounded()).map(Some)
         })?
         .into_sgdd())
+}
+
+impl<T: Real> Extracted<Component<T>> {
+    fn into_sgdd(self) -> Sgdd<T> {
+        Sgdd::new(self.partition.n(), self.live, self.dead)
+    }
 }
 
 /// One component `A_c` as the input gave it, with its rows' `Σ_j |a_ij|` and entry counts.
@@ -375,7 +382,7 @@ impl<T: Real> SymmetricBlock<T> {
                 let rows = RowSums {
                     diagonal,
                     abs,
-                    surplus: RowSurplus::Residue,
+                    surplus: RowSurplus::Residue(self.degrees),
                 };
                 Ok((m, rows))
             }
@@ -474,17 +481,34 @@ enum RowSurplus {
     /// Unscaled: inside its rounding band it reads zero.
     Banded(Vec<usize>),
     /// Scaled: the scaling's residue, deficits clamped to zero.
-    Residue,
+    Residue(Vec<usize>),
 }
 
 impl<T: Real> RowSums<T> {
+    /// Collatz–Wielandt: every row within its band of balanced puts `ρ` there too, so `M` floats.
+    fn folded_surplus(self) -> Grounding<T> {
+        let RowSurplus::Residue(degrees) = &self.surplus else {
+            return self.surplus();
+        };
+        let band = scaling::FLOAT_BAND * widen(T::epsilon());
+        let rows = self.diagonal.iter().zip(&self.abs).zip(degrees);
+        let flat = rows.into_iter().all(|((&d, &s), &degree)| {
+            let (d, s) = (widen(d), widen(s));
+            d - s <= scaling::rounding_band::<T>(d, s, degree).max(band * d)
+        });
+        match flat {
+            true => Grounding::ungrounded(),
+            false => self.surplus(),
+        }
+    }
+
     fn surplus(self) -> Grounding<T> {
         let rows = self.diagonal.iter().zip(&self.abs);
         let surplus = match &self.surplus {
             RowSurplus::Banded(degrees) => (rows.zip(degrees))
                 .map(|((&d, &s), &degree)| scaling::unscaled_surplus(d, s, degree))
                 .collect(),
-            RowSurplus::Residue => rows.map(|(&d, &s)| (d - s).max(T::zero())).collect(),
+            RowSurplus::Residue(_) => rows.map(|(&d, &s)| (d - s).max(T::zero())).collect(),
         };
         Grounding::of(surplus)
     }

@@ -1,7 +1,8 @@
 mod approximate;
 mod dense;
 
-use super::clique_tree::SequentialDraws;
+use rand::rngs::SmallRng;
+
 use super::config::{Config, Multiplicity};
 use super::sddm::{Sddm, Sheets};
 use crate::narrow;
@@ -60,7 +61,7 @@ impl<T: Real> Cholesky<T> {
     /// Dense when the config says so and its Laplacian is reserved before the matrix is built, else approximate.
     pub(super) fn factor<'a>(
         input: impl CholeskyInput<'a, T>,
-        draws: SequentialDraws,
+        draws: SmallRng,
         config: &Config,
     ) -> (Self, Option<Fallback>) {
         let approximate = |sddm| Self::approximate(sddm, config.approximate, draws);
@@ -84,7 +85,7 @@ impl<T: Real> Cholesky<T> {
         (dense, None)
     }
 
-    fn approximate(sddm: Sddm<'_, T>, multiplicity: Multiplicity, draws: SequentialDraws) -> Self {
+    fn approximate(sddm: Sddm<'_, T>, multiplicity: Multiplicity, draws: SmallRng) -> Self {
         let (sheets, gauge, n) = (sddm.sheets(), Gauge::of(&sddm), sddm.n());
         let triangular = Triangular::Approximate(approximate::factor(sddm, multiplicity, draws));
         Self {

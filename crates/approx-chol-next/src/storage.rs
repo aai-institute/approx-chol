@@ -55,6 +55,10 @@ impl<T: Real> Rows<T> {
         self.indices.len()
     }
 
+    pub(crate) fn row_len(&self, i: usize) -> usize {
+        self.ptrs[i + 1] - self.ptrs[i]
+    }
+
     pub(crate) fn row(&self, i: usize) -> impl Iterator<Item = (usize, &T)> {
         let span = self.ptrs[i]..self.ptrs[i + 1];
         (self.indices[span.clone()].iter().map(|&j| j as usize)).zip(&self.values[span])
@@ -70,7 +74,6 @@ impl<T: Real> Rows<T> {
         }
     }
 
-    /// Serial: a factor builds it lazily inside parallel solves, where a rayon initializer deadlocks.
     pub(crate) fn transpose(&self) -> Self {
         let mut ptrs = vec![0; self.n_cols + 1];
         for &j in &self.indices {
@@ -133,7 +136,7 @@ impl<T: Real> Rows<T> {
         (self.scaled_seeing(r, c, |_, _, _| {})).expect("a sign moves no magnitude")
     }
 
-    /// As [`scaled`](Self::scaled), with the new [`abs_sums`](Self::abs_sums) from the same pass.
+    /// Scaled by `r` on rows and `c` on columns, with the new [`abs_sums`](Self::abs_sums) from the same pass.
     fn scaled_abs_sums(self, r: &[T], c: &[T]) -> Option<(Self, Vec<f64>, Vec<f64>)> {
         let (mut rows, mut cols) = (vec![0.0; self.n_rows()], vec![0.0; self.n_cols]);
         let scaled = self.scaled_seeing(r, c, |i, j, x| {
@@ -204,8 +207,13 @@ impl<T: Real> UpperAdjacency<T> {
 
     /// Entries per row over both triangles.
     pub(crate) fn degrees(&self) -> Vec<usize> {
-        let (upper, lower) = self.rows.degrees();
-        upper.iter().zip(lower).map(|(u, l)| u + l).collect()
+        let (mut upper, lower) = self.rows.degrees();
+        upper.iter_mut().zip(lower).for_each(|(u, l)| *u += l);
+        upper
+    }
+
+    pub(crate) fn upper_len(&self, i: usize) -> usize {
+        self.rows.row_len(i)
     }
 
     /// Row `i`'s neighbors above it.
@@ -220,7 +228,7 @@ impl<T: Real> UpperAdjacency<T> {
         }
     }
 
-    /// As [`scaled`](Self::scaled), with the new row sums from the same pass.
+    /// Scaled by `f` on both sides, with the new row sums from the same pass.
     pub(crate) fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
         let (rows, upper, lower) = self.rows.scaled_abs_sums(f, f)?;
         let sums = (upper.iter().zip(lower))
@@ -282,8 +290,9 @@ impl<T: Real> CrossBlock<T> {
 
     /// Entries per row of `[0 C; Cᵀ 0]`: eliminated rows, then kept ones.
     pub(crate) fn degrees(&self) -> Vec<usize> {
-        let (eliminated, kept) = self.c.degrees();
-        eliminated.into_iter().chain(kept).collect()
+        let (mut eliminated, kept) = self.c.degrees();
+        eliminated.extend(kept);
+        eliminated
     }
 
     /// `S C S` over the block's local order.
@@ -292,7 +301,7 @@ impl<T: Real> CrossBlock<T> {
         Self::new(self.c.signed(eliminated, kept))
     }
 
-    /// As [`scaled`](Self::scaled), with the new row sums from the same pass.
+    /// Scaled by `f` on both sides, with the new row sums from the same pass.
     pub(crate) fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
         let (eliminated, kept) = f.split_at(self.n_eliminated());
         let (c, rows, cols) = self.c.scaled_abs_sums(eliminated, kept)?;

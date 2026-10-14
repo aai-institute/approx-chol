@@ -8,12 +8,7 @@ pub(super) struct MinDegreeOrder {
     lists: Vec<u32>,
     min_list: usize,
     bucket_base: usize,
-    deltas: DegreeDeltas,
-}
-
-/// Net degree change per touched vertex, so each moves once per pivot, not once per fill endpoint.
-struct DegreeDeltas {
-    /// One slot per vertex, zero at rest: a list would sort per pivot (measured 1.5-1.7x the star sort).
+    /// Net degree change per vertex, zero at rest, so each moves once per pivot: a list would sort per pivot (measured 1.5-1.7x the star sort).
     net: Vec<i64>,
     touched: Vec<u32>,
 }
@@ -54,10 +49,8 @@ impl MinDegreeOrder {
             lists,
             min_list,
             bucket_base,
-            deltas: DegreeDeltas {
-                net: vec![0; n],
-                touched: Vec::new(),
-            },
+            net: vec![0; n],
+            touched: Vec::new(),
         }
     }
 
@@ -83,18 +76,26 @@ impl MinDegreeOrder {
         fill: &Fill<T>,
     ) {
         for (u, copies) in losses {
-            self.deltas.add(u, -i64::from(copies));
+            self.add(u, -i64::from(copies));
         }
         for &(u, w, _) in fill {
-            self.deltas.add(u, 1);
-            self.deltas.add(w, 1);
+            self.add(u, 1);
+            self.add(w, 1);
         }
-        for i in 0..self.deltas.touched.len() {
-            let v = self.deltas.touched[i] as usize;
-            let delta = std::mem::take(&mut self.deltas.net[v]);
+        for i in 0..self.touched.len() {
+            let v = self.touched[i] as usize;
+            let delta = std::mem::take(&mut self.net[v]);
             self.apply_delta(v, delta);
         }
-        self.deltas.touched.clear();
+        self.touched.clear();
+    }
+
+    fn add(&mut self, v: u32, delta: i64) {
+        let slot = &mut self.net[v as usize];
+        if *slot == 0 {
+            self.touched.push(v);
+        }
+        *slot += delta;
     }
 
     /// `i64` so negating a full-range `u32` count cannot sign-flip as an `i32` would.
@@ -130,16 +131,6 @@ impl MinDegreeOrder {
         }
         self.lists[new] = v as u32;
         self.min_list = self.min_list.min(new);
-    }
-}
-
-impl DegreeDeltas {
-    fn add(&mut self, v: u32, delta: i64) {
-        let slot = &mut self.net[v as usize];
-        if *slot == 0 {
-            self.touched.push(v);
-        }
-        *slot += delta;
     }
 }
 

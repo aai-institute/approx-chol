@@ -15,7 +15,7 @@ pub struct Csr<'a, T, I = u32> {
 }
 
 impl<'a, T, I: PrimInt> Csr<'a, T, I> {
-    /// Checks the arrays' shape and that every index fits a `u32`, so no row slice can fail.
+    /// Checks the arrays' shape and that `n` and the entry count fit a `u32`, so no row slice can fail.
     pub fn new(
         n: usize,
         row_ptrs: &'a [I],
@@ -115,20 +115,6 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
         }
     }
 
-    /// Columns ascend once canonical, so each row's first decides that none lies below the diagonal.
-    pub(crate) fn upper(csr: UpperCsr<'a, T, I>) -> Result<UpperCanonical<'a, T, I>, CsrError> {
-        let canonical = Self::of(csr.0)?;
-        let (row_ptrs, col_indices, _) = canonical.arrays();
-        let below = |row: usize| {
-            let start = index(row_ptrs[row]);
-            start < index(row_ptrs[row + 1]) && index(col_indices[start]) < row
-        };
-        match (0..canonical.n()).find(|&row| below(row)) {
-            Some(row) => Err(CsrError::BelowDiagonal { row: row as u32 }),
-            None => Ok(UpperCanonical(canonical)),
-        }
-    }
-
     pub(crate) fn n(&self) -> usize {
         self.n
     }
@@ -144,18 +130,28 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
         (col_indices[span.clone()].iter().map(|&j| index(j))).zip(values[span].iter().copied())
     }
 
+    /// Row `i`'s stored entries above its diagonal, stored zeros included.
+    pub(crate) fn upper_len(&self, i: usize) -> usize {
+        let (row_ptrs, col_indices, _) = self.arrays();
+        let row = &col_indices[index(row_ptrs[i])..index(row_ptrs[i + 1])];
+        row.len() - row.partition_point(|&j| index(j) <= i)
+    }
+
     /// Each nonzero `(i, j)`, `i < j`, mirrors checked by a per-row cursor (binary search: +6-15% build).
     pub(crate) fn walk(&self, mut edge: impl FnMut(usize, usize, T)) -> Result<(), CsrError> {
         let (row_ptrs, col_indices, values) = self.arrays();
-        let mut mirrors = Mirrors::new(row_ptrs, col_indices, values);
+        let mut cursors: Vec<u32> = row_ptrs[..self.n]
+            .iter()
+            .map(|&p| index(p) as u32)
+            .collect();
         for row in 0..self.n() {
             let row_end = index(row_ptrs[row + 1]) as u32;
             // Claimed like any mirror: claiming diagonals up front would skip those below.
-            let diagonal = mirrors.claim(row, row)?;
+            let diagonal = self.claim(&mut cursors, row, row)?;
             if !in_range(diagonal) {
                 return Err(CsrError::OutOfRange { row: row as u32 });
             }
-            let mut cursor = mirrors.cursors[row];
+            let mut cursor = cursors[row];
             while cursor < row_end {
                 let col = index(col_indices[cursor as usize]);
                 let upper = values[cursor as usize];
@@ -167,7 +163,7 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
                 if upper == T::zero() {
                     continue;
                 }
-                let lower = mirrors.claim(col, row)?;
+                let lower = self.claim(&mut cursors, col, row)?;
                 if !approximately_equal(upper, lower) {
                     return Err(CsrError::NotSymmetric { row: row as u32 });
                 }
@@ -176,12 +172,56 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
         }
         Ok(())
     }
+
+    /// Advances row `row`'s cursor to `col`; a merge-join only because each entry is claimed once. Stored zeros count as absent.
+    fn claim(&self, cursors: &mut [u32], row: usize, col: usize) -> Result<T, CsrError> {
+        let (row_ptrs, col_indices, values) = self.arrays();
+        let row_end = index(row_ptrs[row + 1]) as u32;
+        let mut cursor = cursors[row];
+        let mut found = T::zero();
+        while cursor < row_end {
+            let at = index(col_indices[cursor as usize]);
+            if at > col {
+                break;
+            }
+            let value = values[cursor as usize];
+            if !value.is_finite() {
+                return Err(CsrError::OutOfRange { row: row as u32 });
+            }
+            cursor += 1;
+            if at == col {
+                found = value;
+                break;
+            }
+            // Skipped a stored entry whose own mirror above the diagonal is missing.
+            if value != T::zero() {
+                cursors[row] = cursor;
+                return Err(CsrError::NotSymmetric { row: row as u32 });
+            }
+        }
+        cursors[row] = cursor;
+        Ok(found)
+    }
 }
 
 /// Canonical rows with no column below its row: symmetric by storage, so its walk has no mirror to find.
 pub(crate) struct UpperCanonical<'a, T: Clone, I: Clone>(Canonical<'a, T, I>);
 
 impl<'a, T: Real, I: PrimInt> UpperCanonical<'a, T, I> {
+    /// Columns ascend once canonical, so each row's first decides that none lies below the diagonal.
+    pub(crate) fn of(csr: UpperCsr<'a, T, I>) -> Result<Self, CsrError> {
+        let canonical = Canonical::of(csr.0)?;
+        let (row_ptrs, col_indices, _) = canonical.arrays();
+        let below = |row: usize| {
+            let start = index(row_ptrs[row]);
+            start < index(row_ptrs[row + 1]) && index(col_indices[start]) < row
+        };
+        match (0..canonical.n()).find(|&row| below(row)) {
+            Some(row) => Err(CsrError::BelowDiagonal { row: row as u32 }),
+            None => Ok(Self(canonical)),
+        }
+    }
+
     pub(crate) fn n(&self) -> usize {
         self.0.n()
     }
@@ -207,58 +247,6 @@ impl<'a, T: Real, I: PrimInt> UpperCanonical<'a, T, I> {
     /// Components read only `j ≥ i`, so upper storage is the same rows.
     pub(crate) fn into_canonical(self) -> Canonical<'a, T, I> {
         self.0
-    }
-}
-
-/// A merge-join only because [`Canonical`] guarantees each entry is claimed once.
-struct Mirrors<'a, T, I> {
-    row_ptrs: &'a [I],
-    col_indices: &'a [I],
-    values: &'a [T],
-    cursors: Vec<u32>,
-}
-
-impl<'a, T: Real, I: PrimInt> Mirrors<'a, T, I> {
-    fn new(row_ptrs: &'a [I], col_indices: &'a [I], values: &'a [T]) -> Self {
-        let cursors = row_ptrs[..row_ptrs.len() - 1]
-            .iter()
-            .map(|&ptr| index(ptr) as u32)
-            .collect();
-        Self {
-            row_ptrs,
-            col_indices,
-            values,
-            cursors,
-        }
-    }
-
-    /// Stored zeros count as absent.
-    fn claim(&mut self, row: usize, col: usize) -> Result<T, CsrError> {
-        let row_end = index(self.row_ptrs[row + 1]) as u32;
-        let mut cursor = self.cursors[row];
-        let mut found = T::zero();
-        while cursor < row_end {
-            let at = index(self.col_indices[cursor as usize]);
-            if at > col {
-                break;
-            }
-            let value = self.values[cursor as usize];
-            if !value.is_finite() {
-                return Err(CsrError::OutOfRange { row: row as u32 });
-            }
-            cursor += 1;
-            if at == col {
-                found = value;
-                break;
-            }
-            // Skipped a stored entry whose own mirror above the diagonal is missing.
-            if value != T::zero() {
-                self.cursors[row] = cursor;
-                return Err(CsrError::NotSymmetric { row: row as u32 });
-            }
-        }
-        self.cursors[row] = cursor;
-        Ok(found)
     }
 }
 

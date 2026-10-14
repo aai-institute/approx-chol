@@ -94,7 +94,7 @@ impl<T: Real> Factor<T> {
             .unwrap_or(0)
     }
 
-    /// `A⁺b` on singular components; vertices in no component solve to `0`.
+    /// `A⁺b` on components singular within rounding; vertices in no component solve to `0`.
     pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
         let mut x = b.to_vec();
         self.solve_in_place(&mut x, &mut Vec::new(), InnerParallelism::Allow)?;
@@ -161,8 +161,7 @@ impl<T: Real> ComponentFactor<T> {
             }
             OffDiagonal::Bipartite(cross) => {
                 let elimination = BlockElimination::new(cross, grounding);
-                let schur =
-                    elimination.complement(sheets, grounding, config.complement, streams.stars());
+                let schur = elimination.complement(sheets, grounding, config.complement, streams);
                 let factored = Cholesky::factor(schur, streams.cholesky(), config);
                 (Some(elimination), factored)
             }

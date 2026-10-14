@@ -36,7 +36,7 @@ impl<'a, T: Real> Sddm<'a, T> {
     /// The Gremban cover of signed `M`: a Laplacian on two sheets that acts as `M` on `[z; −z]`.
     pub(super) fn cover(signed: &UpperAdjacency<T>, grounding: &Grounding<T>) -> Sddm<'static, T> {
         let n = signed.n();
-        let mut rows = RowSums::new(2 * n);
+        let mut rows = SddmRows::new(2 * n);
         for i in 0..n {
             for (j, &a) in signed.upper(i) {
                 rows.add(Sheets::Two.vertex(j, usize::from(crosses(a))), a.abs());
@@ -78,7 +78,7 @@ impl<'a, T: Real> Sddm<'a, T> {
 }
 
 /// `S` row by row, each column's addends summed in arrival order and stored as `−w` by column; column `n` is the row's ground weight.
-pub(super) struct RowSums<T> {
+pub(super) struct SddmRows<T> {
     sums: Vec<T>,
     touched: Vec<u32>,
     ptrs: Vec<usize>,
@@ -87,7 +87,7 @@ pub(super) struct RowSums<T> {
     ground: Vec<T>,
 }
 
-impl<T: Real> RowSums<T> {
+impl<T: Real> SddmRows<T> {
     pub(super) fn new(n: usize) -> Self {
         Self {
             sums: vec![T::zero(); n + 1],

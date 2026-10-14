@@ -171,7 +171,7 @@ impl<T: Real> Component<T> {
         &self.frame
     }
 
-    /// Whether `A_c` is proven singular, so a solve returns `A_c⁺b`.
+    /// Whether `A_c` is singular within the rounding of its entries, so a solve returns `A_c⁺b`.
     pub fn floats(&self) -> bool {
         matches!(&self.balance, Balance::Balanced(grounding) if !grounding.is_grounded())
     }

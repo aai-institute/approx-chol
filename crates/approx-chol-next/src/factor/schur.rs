@@ -6,9 +6,11 @@ use std::sync::Arc;
 use rayon::prelude::*;
 
 use super::cholesky::CholeskyInput;
-use super::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single, StarDraws, StarStreams};
+use rand::rngs::SmallRng;
+
+use super::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single, Streams};
 use super::config::{CliqueRule, InnerParallelism, Multiplicity};
-use super::sddm::{crosses, RowSums, Sddm, Sheets};
+use super::sddm::{crosses, Sddm, SddmRows, Sheets};
 use crate::sgdd::Grounding;
 use crate::storage::{CrossBlock, Rows, UpperAdjacency};
 use crate::{narrow, widen, Real};
@@ -49,7 +51,7 @@ impl<T: Real> BlockElimination<T> {
         sheets: Sheets,
         grounding: &'a Grounding<T>,
         rule: CliqueRule,
-        stars: StarStreams,
+        stars: Streams,
     ) -> SchurComplement<'a, T> {
         SchurComplement {
             elimination: self,
@@ -131,7 +133,7 @@ pub(super) struct SchurComplement<'a, T> {
     grounding: &'a Grounding<T>,
     /// How the approximate arm's `S` is built; a dense arm always takes it exact.
     rule: CliqueRule,
-    stars: StarStreams,
+    stars: Streams,
 }
 
 impl<T: Real> SchurComplement<'_, T> {
@@ -199,7 +201,7 @@ fn from_fill<T: Real>(n: usize, chunks: Vec<Fill<T>>) -> (UpperAdjacency<T>, Vec
             next[lo as usize] += 1;
         }
     }
-    let mut rows = RowSums::new(n);
+    let mut rows = SddmRows::new(n);
     for span in starts.windows(2) {
         for &(hi, w) in &by_row[span[0]..span[1]] {
             rows.add(hi, w);
@@ -243,7 +245,7 @@ fn sampled_fill<T: Real, C: Copies>(
 fn fill_stars<T: Real, C: Copies, N: Iterator<Item = (u32, T)>>(
     split: C::Split,
     n_stars: usize,
-    star: impl Fn(usize) -> (StarDraws, N) + Sync,
+    star: impl Fn(usize) -> (SmallRng, N) + Sync,
 ) -> Vec<Fill<T>> {
     (0..n_stars)
         .into_par_iter()
@@ -255,7 +257,10 @@ fn fill_stars<T: Real, C: Copies, N: Iterator<Item = (u32, T)>>(
                 (sampler, fill)
             },
         )
-        .map(|(_, fill)| fill)
+        .map(|(_, mut fill)| {
+            fill.shrink_to_fit();
+            fill
+        })
         .collect()
 }
 
@@ -267,7 +272,7 @@ fn cover_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Ve
     } = elimination;
     let (c, ct, n_kept) = (cross.c(), elimination.transpose(), cross.n_kept());
     let surplus = schur.grounding.surplus();
-    let mut rows = RowSums::new(2 * n_kept);
+    let mut rows = SddmRows::new(2 * n_kept);
     for k in 0..n_kept {
         for (e, &c_ek) in ct.row(k) {
             for (j, &c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
@@ -295,7 +300,7 @@ fn exact_rows<T: Real>(schur: &SchurComplement<'_, T>) -> (UpperAdjacency<T>, Ve
     } = elimination;
     let (c, ct, n_kept) = (cross.c(), elimination.transpose(), cross.n_kept());
     let surplus = schur.grounding.surplus();
-    let mut rows = RowSums::new(n_kept);
+    let mut rows = SddmRows::new(n_kept);
     for k in 0..n_kept {
         for (e, c_ek) in ct.row(k) {
             let c_ek = c_ek.abs();

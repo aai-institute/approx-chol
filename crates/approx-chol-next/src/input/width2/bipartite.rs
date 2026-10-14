@@ -6,7 +6,7 @@ use super::edges::{Edges, Weights};
 use super::{BipartiteColumns, Column, IntoColumns, ViewError};
 use crate::Real;
 
-/// `V_c` with at most one nonzero per column: `values[k]` at `rows[k]`, `1` for `None`.
+/// One side of `V`, with at most one nonzero per column: `values[k]` at `rows[k]`, `1` for `None`.
 #[derive(Debug)]
 pub struct FactorWidth1<'a, T, I = u32> {
     n: usize,

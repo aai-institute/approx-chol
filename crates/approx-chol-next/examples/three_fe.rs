@@ -41,7 +41,7 @@ fn main() {
     let panel = Panel::generate(7);
     for (l, r) in [(0, 1), (0, 2), (1, 2)] {
         println!("({}, {})", NAMES[l], NAMES[r]);
-        let side = |t: usize| FactorWidth1::<f64>::new(panel.n_levels[t], &panel.levels[t], None);
+        let side = |t: usize| FactorWidth1::new(panel.n_levels[t], &panel.levels[t], None);
         let (left, right) = (side(l).expect("valid side"), side(r).expect("valid side"));
         let gram = BipartiteGram::new(left, right, Weights::default()).expect("valid gram");
         let sgdd = Sgdd::from_bipartite_gram(gram, ScalingPolicy::default()).expect("reduces");

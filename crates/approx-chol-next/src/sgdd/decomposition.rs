@@ -3,7 +3,7 @@ use num_traits::PrimInt;
 mod assembly;
 mod partition;
 
-use super::component::{Component, ReduceError, Sgdd};
+use super::component::ReduceError;
 use crate::input::{Canonical, CsrError, UpperCanonical};
 use crate::storage::{Rows, UpperAdjacency};
 use crate::Real;
@@ -59,12 +59,6 @@ pub(super) struct Extracted<B> {
     pub(super) partition: Partition,
     pub(super) live: Vec<B>,
     pub(super) dead: Vec<u32>,
-}
-
-impl<T: Real> Extracted<Component<T>> {
-    pub(super) fn into_sgdd(self) -> Sgdd<T> {
-        Sgdd::new(self.partition.n(), self.live, self.dead)
-    }
 }
 
 impl<A> Partitioned<A> {
@@ -127,7 +121,10 @@ impl<T: Real, I: PrimInt> PrincipalBlocks<T> for Canonical<'_, T, I> {
     /// Upper rows in local order; a zero couples nothing, so it may name another component.
     fn component(&self, vertices: &[u32], position: &[u32]) -> Self::Block {
         let mut diagonal = Vec::with_capacity(vertices.len());
-        let (mut ptrs, mut indices, mut values) = (vec![0], Vec::new(), Vec::new());
+        let mut ptrs = Vec::with_capacity(vertices.len() + 1);
+        ptrs.push(0);
+        let entries = vertices.iter().map(|&v| self.upper_len(v as usize)).sum();
+        let (mut indices, mut values) = (Vec::with_capacity(entries), Vec::with_capacity(entries));
         for &v in vertices {
             let v = v as usize;
             let mut d = T::zero();

@@ -11,7 +11,7 @@ use crate::Real;
 use cdf::CdfSampler;
 pub(super) use copies::{Copies, Multi, Single};
 use star::Star;
-pub(super) use streams::{SequentialDraws, StarDraws, StarStreams, Streams};
+pub(super) use streams::Streams;
 
 /// Fill edges `(lo, hi, weight)`, `lo < hi`, as an elimination emits them.
 pub(super) type Fill<T> = Vec<(u32, u32, T)>;
@@ -41,12 +41,12 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
     /// Merges `neighbors`, samples their clique tree into `fill` as `w_i (S_{>i} / d)` from the sequential `draws`, and returns the pivot.
     pub(super) fn eliminate(
         &mut self,
-        draws: &mut SequentialDraws,
+        draws: &mut SmallRng,
         neighbors: impl Iterator<Item = (u32, C, T)>,
         fill: &mut Fill<T>,
     ) -> T {
         self.star.refill(neighbors, self.split);
-        self.sample(&mut draws.0, fill);
+        self.sample(draws, fill);
         let column = &mut self.column;
         column.shares.clear();
         let Some((last, rest)) = self.star.entries().split_last() else {
@@ -63,11 +63,10 @@ impl<T: Real, C: Copies> CliqueSampler<T, C> {
     /// A neighborhood with no duplicate, as a row of `C` is, consuming its star's own `draws` so no task boundary moves one; every neighbor splits alike, so raw weights sort once; fill only, as the complement holds its pivots.
     pub(super) fn eliminate_unique(
         &mut self,
-        draws: StarDraws,
+        mut rng: SmallRng,
         neighbors: impl Iterator<Item = (u32, T)>,
         fill: &mut Fill<T>,
     ) {
-        let StarDraws(mut rng) = draws;
         self.star.refill_unique(neighbors, C::initial(self.split));
         self.sample(&mut rng, fill);
     }

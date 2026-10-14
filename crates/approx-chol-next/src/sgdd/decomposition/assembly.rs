@@ -60,10 +60,10 @@ fn assemble<T: Real, C: CellSum>(
             buckets.push(lo as usize, hi, column.cell());
         },
     );
-    let (rows, partition) = buckets.sum::<T, C>(n, Pattern::new(n, 0), pair)?;
+    let (rows, partition) = buckets.sum::<T, C>(n, 0, pair)?;
     let a = Assembled {
         adjacency: UpperAdjacency::new(rows),
-        diagonal: diagonal.into_iter().map(narrow).collect(),
+        diagonal: diagonal_of(diagonal)?,
     };
     Ok(Partitioned { a, partition })
 }
@@ -89,7 +89,17 @@ pub(in crate::sgdd) fn assemble_bipartite_gram<T: Real>(
             sums[column.b as usize] += column.weight.bilinear(v_b, v_b);
         },
     )?;
-    Ok((a, sums.into_iter().map(narrow).collect()))
+    Ok((a, diagonal_of(sums)?))
+}
+
+/// Each sum as `T` stores it; a nonzero one cast to zero underflowed, so it is out of range.
+fn diagonal_of<T: Real>(sums: Vec<f64>) -> Result<Vec<T>, ReduceError> {
+    (sums.into_iter().enumerate())
+        .map(|(i, sum)| match narrow::<T>(sum) {
+            d if sum != 0.0 && d == T::zero() => Err(ReduceError::OutOfRange { vertex: i as u32 }),
+            d => Ok(d),
+        })
+        .collect()
 }
 
 /// `C` and its components, `seen` visiting each column once.
@@ -138,7 +148,11 @@ impl<T: Real> PrincipalBlocks<T> for Assembled<T> {
     fn component(&self, vertices: &[u32], position: &[u32]) -> Self::Block {
         let mut ptrs = Vec::with_capacity(vertices.len() + 1);
         ptrs.push(0);
-        let (mut indices, mut values) = (Vec::new(), Vec::new());
+        let entries = vertices
+            .iter()
+            .map(|&v| self.adjacency.upper_len(v as usize))
+            .sum();
+        let (mut indices, mut values) = (Vec::with_capacity(entries), Vec::with_capacity(entries));
         for &v in vertices {
             for (j, &x) in self.adjacency.upper(v as usize) {
                 indices.push(position[j]);
@@ -185,7 +199,8 @@ impl<T: Real> PrincipalBlocks<T> for Biadjacency<T> {
             vertices.split_at(vertices.partition_point(|&v| (v as usize) < n_left));
         let mut ptrs = Vec::with_capacity(lefts.len() + 1);
         ptrs.push(0);
-        let (mut indices, mut values) = (Vec::new(), Vec::new());
+        let entries = lefts.iter().map(|&i| self.c.row_len(i as usize)).sum();
+        let (mut indices, mut values) = (Vec::with_capacity(entries), Vec::with_capacity(entries));
         for &i in lefts {
             for (j, &x) in self.c.row(i as usize) {
                 indices.push(position[n_left + j] - lefts.len() as u32);
@@ -214,34 +229,14 @@ fn larger_side_first<T: Real>(
     }
 }
 
-/// `A`'s pattern as summed cells arrive: each cast once and range-checked, its ends joined.
-struct Pattern {
-    sets: UnionFind,
-    /// Column `j` is vertex `first_column + j`: `0` for `A`'s upper rows, `n_left` for `C`.
-    first_column: usize,
-}
-
-impl Pattern {
-    fn new(n: usize, first_column: usize) -> Self {
-        Self {
-            sets: UnionFind::new(n),
-            first_column,
-        }
-    }
-
-    /// Row `i`'s nonzero sum as `T` stores it; one cast to zero underflowed, so it is out of range too.
-    #[inline(always)]
-    fn admit<T: Real>(&mut self, i: usize, j: u32, x: f64) -> Result<f64, ReduceError> {
-        let value = T::from(x)
-            .filter(|&value| value != T::zero() && in_range(value))
-            .ok_or(ReduceError::OutOfRange { vertex: i as u32 })?;
-        self.sets.union(i, self.first_column + j as usize);
-        Ok(widen(value))
-    }
-
-    fn finish<T: Real>(self, sums: Rows<f64>) -> (Rows<T>, Partition) {
-        (sums.map(narrow), self.sets.into_partition())
-    }
+/// Row `i`'s nonzero sum as `T` stores it, its ends joined; one cast to zero underflowed, so it is out of range too.
+#[inline(always)]
+fn admit<T: Real>(sets: &mut UnionFind, i: usize, end: usize, x: f64) -> Result<f64, ReduceError> {
+    let value = T::from(x)
+        .filter(|&value| value != T::zero() && in_range(value))
+        .ok_or(ReduceError::OutOfRange { vertex: i as u32 })?;
+    sets.union(i, end);
+    Ok(widen(value))
 }
 
 /// `C`'s summed cells, in a dense table when small (+54% without it).
@@ -280,7 +275,7 @@ fn dense_cross<T: Real>(
             seen(&column);
         },
     );
-    let mut pattern = Pattern::new(n_left + n_right, n_left);
+    let mut sets = UnionFind::new(n_left + n_right);
     let mut ptrs = Vec::with_capacity(n_left + 1);
     ptrs.push(0);
     let (mut indices, mut cells) = (Vec::new(), Vec::new());
@@ -288,11 +283,12 @@ fn dense_cross<T: Real>(
         let row = &table[i * n_right..][..n_right];
         for (j, &x) in row.iter().enumerate().filter(|&(_, &x)| x != 0.0) {
             indices.push(j as u32);
-            cells.push(pattern.admit::<T>(i, j as u32, x)?);
+            cells.push(admit::<T>(&mut sets, i, n_left + j, x)?);
         }
         ptrs.push(indices.len());
     }
-    Ok(pattern.finish(Rows::new(ptrs, indices, cells, n_right)))
+    let c = Rows::new(ptrs, indices, cells, n_right).map(narrow);
+    Ok((c, sets.into_partition()))
 }
 
 fn left_counts<T: Real>(
@@ -320,8 +316,7 @@ fn sparse_cross<T: Real>(
         #[inline(always)]
         |column| buckets.push(column.a as usize, column.b - n_left as u32, column.cell()),
     );
-    let pattern = Pattern::new(n_left + n_right, n_left);
-    buckets.sum::<T, f64>(n_right, pattern, |_, _, _| {})
+    buckets.sum::<T, f64>(n_right, n_left, |_, _, _| {})
 }
 
 /// Cells bucketed by row in column order, so each sums the same addends in the same order as a dense table.
@@ -401,11 +396,11 @@ impl Buckets {
         *slot += 1;
     }
 
-    /// `pair` sees every summed cell with its two ends, a cancelled one too.
+    /// `pair` sees every summed cell with its two ends, a cancelled one too; column `j` is vertex `first_column + j`.
     fn sum<T: Real, C: CellSum>(
         self,
         n_cols: usize,
-        mut pattern: Pattern,
+        first_column: usize,
         mut pair: impl FnMut(usize, usize, C),
     ) -> Result<(Rows<T>, Partition), ReduceError> {
         let Self {
@@ -415,6 +410,7 @@ impl Buckets {
             mut cells,
         } = self;
         drop(cursor);
+        let mut sets = UnionFind::new(first_column + n_cols);
         let mut sums = vec![C::default(); n_cols];
         let mut touched: Vec<u32> = Vec::new();
         let mut ptrs = Vec::with_capacity(starts.len());
@@ -434,10 +430,10 @@ impl Buckets {
             // Written in place: a row's sums never outnumber its own bucket, already read.
             for &j in &touched {
                 let cell = std::mem::take(&mut sums[j as usize]);
-                pair(i, pattern.first_column + j as usize, cell);
+                pair(i, first_column + j as usize, cell);
                 if cell.value() != 0.0 {
                     columns[out] = j;
-                    cells[out] = pattern.admit::<T>(i, j, cell.value())?;
+                    cells[out] = admit::<T>(&mut sets, i, first_column + j as usize, cell.value())?;
                     out += 1;
                 }
             }
@@ -450,6 +446,7 @@ impl Buckets {
         columns.shrink_to_fit();
         cells.truncate(out);
         cells.shrink_to_fit();
-        Ok(pattern.finish(Rows::new(ptrs, columns, cells, n_cols)))
+        let rows = Rows::new(ptrs, columns, cells, n_cols).map(narrow);
+        Ok((rows, sets.into_partition()))
     }
 }

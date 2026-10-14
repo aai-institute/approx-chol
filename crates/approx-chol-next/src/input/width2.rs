@@ -9,7 +9,6 @@ use num_traits::PrimInt;
 
 use crate::widen;
 use crate::Real;
-use edges::Weight;
 
 /// Why a view's `new` rejected its slices.
 #[non_exhaustive]
@@ -100,6 +99,20 @@ impl<T: Real> Column<T> {
         (self.weight).bilinear(widen(self.v_a), widen(self.v_b))
     }
 }
+
+/// The diagonal `W`: per column of `V` as a slice, or one column's entry.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Weighting<S> {
+    /// `W = I`.
+    Unit,
+    /// `W = diag(w)`.
+    Of(S),
+    /// `W = diag(s²)`, for a caller that keeps square roots.
+    SqrtOf(S),
+}
+
+/// One column's entry of `W`; read only through [`bilinear`](Self::bilinear), so no `s²` is formed.
+pub(crate) type Weight<T> = Weighting<T>;
 
 impl<T: Real> Weight<T> {
     /// `w·x·y`, as `(s·x)·(s·y)` under `SqrtOf`.
