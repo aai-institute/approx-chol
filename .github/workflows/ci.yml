@@ -43,6 +43,13 @@ jobs:
             pixi run -e ci cargo clippy -p approx-chol --all-targets --no-default-features --features "$features" --locked -- -D warnings
             echo "::endgroup::"
           done
+      - name: cargo clippy (approx-chol-next feature subsets)
+        run: |
+          for features in "" serde sprs faer; do
+            echo "::group::features=[$features]"
+            pixi run -e ci cargo clippy -p approx-chol-next --all-targets --no-default-features --features "$features" --locked -- -D warnings
+            echo "::endgroup::"
+          done
       # Coverage tests only --all-features, which hides breakage with features off.
       - name: cargo test (default features)
         run: pixi run -e ci cargo test --workspace --locked
