@@ -14,6 +14,7 @@ serde = { version = "1", features = ["derive"] }
 
 [dependencies.approx-chol-next]
 path = ".."
+features = ["serde"]
 
 # The build script writes the seed corpus.
 [build-dependencies]
@@ -22,10 +23,18 @@ serde = { version = "1", features = ["derive"] }
 
 [build-dependencies.approx-chol-next]
 path = ".."
+features = ["serde"]
 
 [[bin]]
 name = "factor_from_bytes"
 path = "fuzz_targets/factor_from_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "block_factor_from_bytes"
+path = "fuzz_targets/block_factor_from_bytes.rs"
 test = false
 doc = false
 bench = false

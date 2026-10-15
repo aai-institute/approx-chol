@@ -3,8 +3,8 @@ use std::error::Error;
 use approx_chol_next::input::{
     BipartiteGram, Csr, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsr, Weights,
 };
-use approx_chol_next::{factorize, CliqueRule, Config, Index, InnerParallelism, Multiplicity};
-use approx_chol_next::{Real, ScalingPolicy, Sgdd, SplitCount};
+use approx_chol_next::{factorize, CliqueRule, Config, Factor, Index, InnerParallelism};
+use approx_chol_next::{Multiplicity, Real, ScalingPolicy, Sgdd, SplitCount};
 use serde::{Deserialize, Serialize};
 
 /// The precision is a variant, so one byte string never decodes as both.
@@ -135,8 +135,12 @@ impl<T: Real> Side<T> {
 }
 
 impl<T: Real> Case<T> {
+    pub fn factor(&self) -> Result<Factor<T>, Box<dyn Error>> {
+        Ok(factorize(&self.reduce()?, &self.build.config()))
+    }
+
     fn run(&self) -> Result<(), Box<dyn Error>> {
-        let factor = factorize(&self.reduce()?, &self.build.config());
+        let factor = self.factor()?;
         let b = vec![T::one(); factor.n()];
         let solved = factor
             .solve(&b)

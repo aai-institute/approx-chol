@@ -1,24 +1,39 @@
 use std::fs;
 use std::path::Path;
 
+use approx_chol_next::BlockFactor;
+
 mod case;
 
 use case::{Build, Case, Input, Rows, Side, View, Weighting};
 
-/// Written at build time rather than committed, so a seed never outlives the encoding of `Input`.
+/// Written at build time rather than committed, so a seed never outlives the encoding of `Input` or `BlockFactor`.
 fn main() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/factor_from_bytes");
-    // Watching the corpus is what makes a pruned or deleted one come back.
-    println!("cargo::rerun-if-changed={}", dir.display());
+    let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let (views, factors) = (
+        corpus.join("factor_from_bytes"),
+        corpus.join("block_factor_from_bytes"),
+    );
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-changed=case.rs");
-    fs::create_dir_all(&dir).expect("create the corpus directory");
+    for dir in [&views, &factors] {
+        // Watching the corpus is what makes a pruned or deleted one come back.
+        println!("cargo::rerun-if-changed={}", dir.display());
+        fs::create_dir_all(dir).expect("create the corpus directory");
+    }
     for (name, input) in seeds() {
         let bytes = postcard::to_stdvec(&input).expect("serialize the seed");
         let decoded = postcard::from_bytes::<Input>(&bytes).expect("a seed decodes");
         // A rejected seed starts the fuzzer outside the factorization.
         (decoded.run()).unwrap_or_else(|e| panic!("seed {name} reaches the solve: {e}"));
-        fs::write(dir.join(format!("{name}.bin")), bytes).expect("write the seed");
+        fs::write(views.join(format!("{name}.bin")), bytes).expect("write the seed");
+        if let Input::F64(case) = decoded {
+            let blocks = case.factor().expect("the seed factors").into_blocks();
+            let bytes = postcard::to_stdvec(&blocks).expect("serialize the blocks");
+            // A seed the validator rejects starts the fuzzer outside the solve.
+            postcard::from_bytes::<Vec<BlockFactor>>(&bytes).expect("a real factor decodes");
+            fs::write(factors.join(format!("{name}.bin")), bytes).expect("write the seed");
+        }
     }
 }
 
@@ -114,6 +129,7 @@ fn seeds() -> Vec<(&'static str, Input)> {
             "bipartite_gram_slopes",
             f64(bipartite(true), exact_complement()),
         ),
+        ("bipartite_gram_sampled_ac2", f64(bipartite(true), split(3))),
         (
             "bipartite_gram_incidence",
             f64(bipartite(false), approximate()),
