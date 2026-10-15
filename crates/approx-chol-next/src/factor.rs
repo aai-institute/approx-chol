@@ -127,14 +127,6 @@ impl<T: Real, I: Index> Factor<T, I> {
 }
 
 /// One irreducible block's factor over its vertices of `A`.
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(remote = "Self"),
-    serde(bound(
-        deserialize = "T: crate::Real + serde::Deserialize<'de>, I: crate::Index + serde::Deserialize<'de>"
-    ))
-)]
 #[derive(Clone, Debug)]
 pub struct BlockFactor<T = f64, I = u32> {
     restriction: Arc<Restriction<T, I>>,
@@ -291,7 +283,31 @@ fn splitmix(x: u64) -> u64 {
 }
 
 #[cfg(feature = "serde")]
-checked_serde!(BlockFactor);
+impl<T: serde::Serialize, I: serde::Serialize> serde::Serialize for BlockFactor<T, I> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let body = (&self.restriction, &self.elimination, &self.cholesky);
+        crate::wire::serialize(serializer, body)
+    }
+}
+
+// Not `remote = "Self"`: on a `pub` type it exports an unchecked, unversioned inherent `deserialize`.
+#[cfg(feature = "serde")]
+impl<'de, T, I> serde::Deserialize<'de> for BlockFactor<T, I>
+where
+    T: Real + serde::Deserialize<'de>,
+    I: Index + serde::Deserialize<'de>,
+{
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (restriction, elimination, cholesky) = crate::wire::deserialize(deserializer)?;
+        let value = Self {
+            restriction,
+            elimination,
+            cholesky,
+        };
+        let corrupt = || serde::de::Error::custom("corrupt BlockFactor");
+        value.checked().ok_or_else(corrupt)
+    }
+}
 
 #[cfg(feature = "serde")]
 impl<T: Real, I: Index> BlockFactor<T, I> {
