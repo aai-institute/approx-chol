@@ -45,9 +45,9 @@ fn grounded<T: Real>(sgdd: &Sgdd<T>) -> bool {
 }
 
 /// Error order is not the contract: a rejection need only name one of the input's defects.
-fn assert_names_a_defect<E: PartialEq + Debug>(label: &str, observed: E, defects: &[E]) {
+fn assert_names_a_defect<E: PartialEq + Debug>(observed: E, defects: &[E]) {
     assert!(
         defects.contains(&observed),
-        "{label}: {observed:?} names none of {defects:?}"
+        "{observed:?} names none of {defects:?}"
     );
 }

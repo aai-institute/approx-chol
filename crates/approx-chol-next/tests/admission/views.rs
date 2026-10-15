@@ -2,6 +2,7 @@ use approx_chol_next::input::{
     BipartiteGram, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, ViewError, Weights,
 };
 use approx_chol_next::{ReduceError, ScalingPolicy, Sgdd};
+use rstest::rstest;
 
 use super::assert_names_a_defect;
 
@@ -18,28 +19,38 @@ fn out_of_range(vertices: &[usize]) -> Vec<ReduceError> {
         .collect()
 }
 
-#[test]
-fn weights_of_rejects_a_negative_or_non_finite_weight_at_its_column() {
-    for (label, w) in [
-        ("negative", [1.0, -1.0, 1.0]),
-        ("NaN", [1.0, f64::NAN, 1.0]),
-        ("infinite", [1.0, f64::INFINITY, 1.0]),
-    ] {
-        let error = Weights::of(&w).expect_err(label);
-        assert_eq!(error, ViewError::InvalidWeight { column: 1 }, "{label}");
-    }
-    Weights::of(&[0.0, 1.0]).expect("a zero weight drops its column");
+fn two_edges_but(found: usize) -> ViewError {
+    ViewError::LengthMismatch { expected: 2, found }
+}
+
+fn unit_path() -> Laplacian<'static, f64> {
+    Laplacian::new(3, &PATH_A, &PATH_B, Weights::unit()).unwrap()
+}
+
+#[rstest]
+#[case::negative(-1.0)]
+#[case::nan(f64::NAN)]
+#[case::infinite(f64::INFINITY)]
+fn weights_of_rejects_a_negative_or_non_finite_weight_at_its_column(#[case] weight: f64) {
+    let error = Weights::of(&[1.0, weight, 1.0]).expect_err("invalid weight");
+    assert_eq!(error, ViewError::InvalidWeight { column: 1 });
 }
 
 #[test]
-fn weights_sqrt_of_rejects_a_non_finite_root_at_its_column() {
-    for (label, s) in [
-        ("NaN", [1.0, 1.0, f64::NAN]),
-        ("infinite", [1.0, 1.0, f64::NEG_INFINITY]),
-    ] {
-        let error = Weights::sqrt_of(&s).expect_err(label);
-        assert_eq!(error, ViewError::InvalidWeight { column: 2 }, "{label}");
-    }
+fn weights_of_admits_a_zero_weight() {
+    Weights::of(&[0.0, 1.0]).expect("a zero weight drops its column");
+}
+
+#[rstest]
+#[case::nan(f64::NAN)]
+#[case::infinite(f64::NEG_INFINITY)]
+fn weights_sqrt_of_rejects_a_non_finite_root_at_its_column(#[case] root: f64) {
+    let error = Weights::sqrt_of(&[1.0, 1.0, root]).expect_err("invalid root");
+    assert_eq!(error, ViewError::InvalidWeight { column: 2 });
+}
+
+#[test]
+fn weights_sqrt_of_admits_a_negative_root() {
     Weights::sqrt_of(&[-2.0, 0.0]).expect("a negative root squares to a weight");
 }
 
@@ -48,44 +59,36 @@ fn a_weight_below_min_positive_over_epsilon_is_out_of_range_at_its_edge() {
     let w = [1.0, tiny()];
     let graph = Laplacian::new(3, &PATH_A, &PATH_B, Weights::of(&w).unwrap()).unwrap();
     let error = Sgdd::<f64>::try_from(graph).expect_err("tiny weight");
-    assert_names_a_defect("tiny weight", error, &out_of_range(&[1, 2]));
+    assert_names_a_defect(error, &out_of_range(&[1, 2]));
+}
+
+#[rstest]
+#[case::ends_of_unequal_length(
+    Laplacian::<f64>::new(3, &[0, 1], &[1], Weights::unit()).err(),
+    two_edges_but(1)
+)]
+#[case::a_weight_per_edge(
+    Laplacian::new(3, &PATH_A, &PATH_B, Weights::of(&[1.0, 2.0, 3.0]).unwrap()).err(),
+    two_edges_but(3)
+)]
+#[case::end_past_n(
+    Laplacian::<f64>::new(3, &[0, 1], &[1, 3], Weights::unit()).err(),
+    ViewError::IndexOutOfRange { column: 1 }
+)]
+#[case::self_loop(
+    Laplacian::<f64>::new(3, &[0, 2], &[1, 2], Weights::unit()).err(),
+    ViewError::RepeatedVertex { column: 1 }
+)]
+fn laplacian_new_rejects_mismatched_lengths_and_bad_ends_at_their_column(
+    #[case] observed: Option<ViewError>,
+    #[case] expected: ViewError,
+) {
+    assert_eq!(observed, Some(expected));
 }
 
 #[test]
-fn laplacian_new_rejects_mismatched_lengths_and_bad_ends_at_their_column() {
-    let w = [1.0, 2.0, 3.0];
-    let mismatch = |found| ViewError::LengthMismatch { expected: 2, found };
-    let cases = [
-        (
-            "ends of unequal length",
-            Laplacian::<f64>::new(3, &[0, 1], &[1], Weights::unit()).err(),
-            mismatch(1),
-        ),
-        (
-            "a weight per edge",
-            Laplacian::new(3, &PATH_A, &PATH_B, Weights::of(&w).unwrap()).err(),
-            mismatch(3),
-        ),
-        (
-            "end past n",
-            Laplacian::<f64>::new(3, &[0, 1], &[1, 3], Weights::unit()).err(),
-            ViewError::IndexOutOfRange { column: 1 },
-        ),
-        (
-            "self-loop",
-            Laplacian::<f64>::new(3, &[0, 2], &[1, 2], Weights::unit()).err(),
-            ViewError::RepeatedVertex { column: 1 },
-        ),
-    ];
-    for (label, observed, expected) in cases {
-        assert_eq!(observed, Some(expected), "{label}");
-    }
-}
-
-#[test]
-fn laplacian_grounded_rejects_a_bad_ground_at_its_vertex() {
-    let graph = Laplacian::<f64>::new(3, &PATH_A, &PATH_B, Weights::unit()).unwrap();
-    let short = graph
+fn laplacian_grounded_rejects_a_ground_per_vertex_short() {
+    let short = unit_path()
         .grounded(&[1.0, 1.0])
         .expect_err("one ground per vertex");
     assert_eq!(
@@ -95,66 +98,50 @@ fn laplacian_grounded_rejects_a_bad_ground_at_its_vertex() {
             found: 2
         }
     );
-    for (label, ground) in [
-        ("negative", [0.0, 0.0, -1.0]),
-        ("NaN", [0.0, 0.0, f64::NAN]),
-        ("infinite", [0.0, 0.0, f64::INFINITY]),
-    ] {
-        let error = graph.grounded(&ground).expect_err(label);
-        assert_eq!(error, ViewError::InvalidGround { vertex: 2 }, "{label}");
-    }
 }
 
-#[test]
-fn an_out_of_range_ground_is_rejected_at_its_vertex() {
-    let graph = Laplacian::<f64>::new(3, &PATH_A, &PATH_B, Weights::unit()).unwrap();
-    for (label, ground) in [
-        ("below MIN_POSITIVE/EPSILON", [0.0, 0.0, tiny()]),
-        ("past a quarter of the maximum", [0.0, 0.0, f64::MAX / 2.0]),
-    ] {
-        let grounded = graph.grounded(&ground).expect(label);
-        let error = Sgdd::<f64>::try_from(grounded).expect_err(label);
-        assert_names_a_defect(label, error, &out_of_range(&[2]));
-    }
+#[rstest]
+#[case::negative(-1.0)]
+#[case::nan(f64::NAN)]
+#[case::infinite(f64::INFINITY)]
+fn laplacian_grounded_rejects_a_bad_ground_at_its_vertex(#[case] ground: f64) {
+    let error = unit_path()
+        .grounded(&[0.0, 0.0, ground])
+        .expect_err("invalid ground");
+    assert_eq!(error, ViewError::InvalidGround { vertex: 2 });
 }
 
-#[test]
-fn signed_graph_new_rejects_mismatched_lengths_and_bad_ends_at_their_column() {
-    let signs = [true, false];
-    let new = |a: &[u32], b: &[u32], positive: &[bool]| {
-        SignedGraph::<f64>::new(3, a, b, positive, Weights::unit()).err()
-    };
-    let w = [1.0, f64::NAN];
-    let mismatch = ViewError::LengthMismatch {
-        expected: 2,
-        found: 1,
-    };
-    let cases = [
-        ("a sign per edge", new(&PATH_A, &PATH_B, &[true]), mismatch),
-        (
-            "ends of unequal length",
-            new(&PATH_A, &[1], &signs),
-            mismatch,
-        ),
-        (
-            "end past n",
-            new(&[0, 3], &PATH_B, &signs),
-            ViewError::IndexOutOfRange { column: 1 },
-        ),
-        (
-            "self-loop",
-            new(&[1, 1], &PATH_B, &signs),
-            ViewError::RepeatedVertex { column: 0 },
-        ),
-        (
-            "NaN weight",
-            Weights::of(&w).err(),
-            ViewError::InvalidWeight { column: 1 },
-        ),
-    ];
-    for (label, observed, expected) in cases {
-        assert_eq!(observed, Some(expected), "{label}");
-    }
+#[rstest]
+#[case::below_min_positive_over_epsilon(tiny())]
+#[case::past_a_quarter_of_the_maximum(f64::MAX / 2.0)]
+fn an_out_of_range_ground_is_rejected_at_its_vertex(#[case] ground: f64) {
+    let ground = [0.0, 0.0, ground];
+    let grounded = unit_path().grounded(&ground).expect("a valid ground");
+    let error = Sgdd::<f64>::try_from(grounded).expect_err("ground out of range");
+    assert_names_a_defect(error, &out_of_range(&[2]));
+}
+
+fn signed(a: &[u32], b: &[u32], positive: &[bool]) -> Option<ViewError> {
+    SignedGraph::<f64>::new(3, a, b, positive, Weights::unit()).err()
+}
+
+#[rstest]
+#[case::a_sign_per_edge(signed(&PATH_A, &PATH_B, &[true]), two_edges_but(1))]
+#[case::ends_of_unequal_length(signed(&PATH_A, &[1], &[true, false]), two_edges_but(1))]
+#[case::end_past_n(
+    signed(&[0, 3], &PATH_B, &[true, false]),
+    ViewError::IndexOutOfRange { column: 1 }
+)]
+#[case::self_loop(
+    signed(&[1, 1], &PATH_B, &[true, false]),
+    ViewError::RepeatedVertex { column: 0 }
+)]
+#[case::nan_weight(Weights::of(&[1.0, f64::NAN]).err(), ViewError::InvalidWeight { column: 1 })]
+fn signed_graph_new_rejects_mismatched_lengths_and_bad_ends_at_their_column(
+    #[case] observed: Option<ViewError>,
+    #[case] expected: ViewError,
+) {
+    assert_eq!(observed, Some(expected));
 }
 
 #[test]
@@ -173,48 +160,41 @@ fn factor_width_1_new_rejects_mismatched_values_and_rows_past_n() {
     assert_eq!(negative, ViewError::IndexOutOfRange { column: 2 });
 }
 
-#[test]
-fn factor_width_2_new_rejects_mismatched_lengths_and_bad_ends_at_their_column() {
-    let (x, y, short) = ([1.0, 1.0], [-1.0, -1.0], [1.0]);
-    let new = |a: &[u32], b: &[u32], x: &[f64], y: &[f64]| FactorWidth2::new(3, a, b, x, y).err();
-    let mismatch = ViewError::LengthMismatch {
-        expected: 2,
-        found: 1,
-    };
-    let cases = [
-        ("b", new(&PATH_A, &[1], &x, &y), mismatch),
-        ("x", new(&PATH_A, &PATH_B, &short, &y), mismatch),
-        ("y", new(&PATH_A, &PATH_B, &x, &short), mismatch),
-        (
-            "end past n",
-            new(&PATH_A, &[1, 3], &x, &y),
-            ViewError::IndexOutOfRange { column: 1 },
-        ),
-        (
-            "repeated vertex",
-            new(&[0, 2], &PATH_B, &x, &y),
-            ViewError::RepeatedVertex { column: 1 },
-        ),
-    ];
-    for (label, observed, expected) in cases {
-        assert_eq!(observed, Some(expected), "{label}");
-    }
+fn gram(a: &[u32], b: &[u32], x: &[f64], y: &[f64]) -> Option<ViewError> {
+    FactorWidth2::new(3, a, b, x, y).err()
+}
+
+#[rstest]
+#[case::b_one_short(gram(&PATH_A, &[1], &[1.0, 1.0], &[-1.0, -1.0]), two_edges_but(1))]
+#[case::x_one_short(gram(&PATH_A, &PATH_B, &[1.0], &[-1.0, -1.0]), two_edges_but(1))]
+#[case::y_one_short(gram(&PATH_A, &PATH_B, &[1.0, 1.0], &[1.0]), two_edges_but(1))]
+#[case::end_past_n(
+    gram(&PATH_A, &[1, 3], &[1.0, 1.0], &[-1.0, -1.0]),
+    ViewError::IndexOutOfRange { column: 1 }
+)]
+#[case::repeated_vertex(
+    gram(&[0, 2], &PATH_B, &[1.0, 1.0], &[-1.0, -1.0]),
+    ViewError::RepeatedVertex { column: 1 }
+)]
+fn factor_width_2_new_rejects_mismatched_lengths_and_bad_ends_at_their_column(
+    #[case] observed: Option<ViewError>,
+    #[case] expected: ViewError,
+) {
+    assert_eq!(observed, Some(expected));
 }
 
 /// The constructor checks only the shape: a loading outside the range is caught where it is summed.
-#[test]
-fn an_out_of_range_loading_is_rejected_at_its_vertex() {
-    for (label, value) in [
-        ("NaN", f64::NAN),
-        ("infinite", f64::INFINITY),
-        ("below MIN_POSITIVE/EPSILON", tiny()),
-        ("past a quarter of the maximum", f64::MAX),
-    ] {
-        let (x, y) = ([1.0, value], [-1.0, -1.0]);
-        let gram = FactorWidth2::new(3, &PATH_A, &PATH_B, &x, &y).unwrap();
-        let error = Sgdd::<f64>::from_gram(gram, ScalingPolicy::default()).expect_err(label);
-        assert_names_a_defect(label, error, &out_of_range(&[1, 2]));
-    }
+#[rstest]
+#[case::nan(f64::NAN)]
+#[case::infinite(f64::INFINITY)]
+#[case::below_min_positive_over_epsilon(tiny())]
+#[case::past_a_quarter_of_the_maximum(f64::MAX)]
+fn an_out_of_range_loading_is_rejected_at_its_vertex(#[case] value: f64) {
+    let (x, y) = ([1.0, value], [-1.0, -1.0]);
+    let gram = FactorWidth2::new(3, &PATH_A, &PATH_B, &x, &y).unwrap();
+    let error =
+        Sgdd::<f64>::from_gram(gram, ScalingPolicy::default()).expect_err("loading out of range");
+    assert_names_a_defect(error, &out_of_range(&[1, 2]));
 }
 
 #[test]
@@ -242,19 +222,16 @@ fn bipartite_gram_new_rejects_sides_of_unequal_column_count_and_mismatched_weigh
     );
 }
 
-#[test]
-fn an_out_of_range_bipartite_loading_is_rejected_at_its_vertex() {
-    for (label, value) in [
-        ("NaN", f64::NAN),
-        ("below MIN_POSITIVE/EPSILON", tiny()),
-        ("past a quarter of the maximum", f64::MAX),
-    ] {
-        let values = [1.0, value];
-        let left = FactorWidth1::new(2, &[0u32, 1], Some(&values[..])).unwrap();
-        let right = FactorWidth1::<f64>::new(1, &[0u32, 0], None).unwrap();
-        let gram = BipartiteGram::new(left, right, Weights::unit()).unwrap();
-        let error =
-            Sgdd::<f64>::from_bipartite_gram(gram, ScalingPolicy::default()).expect_err(label);
-        assert_names_a_defect(label, error, &out_of_range(&[1, 2]));
-    }
+#[rstest]
+#[case::nan(f64::NAN)]
+#[case::below_min_positive_over_epsilon(tiny())]
+#[case::past_a_quarter_of_the_maximum(f64::MAX)]
+fn an_out_of_range_bipartite_loading_is_rejected_at_its_vertex(#[case] value: f64) {
+    let values = [1.0, value];
+    let left = FactorWidth1::new(2, &[0u32, 1], Some(&values[..])).unwrap();
+    let right = FactorWidth1::<f64>::new(1, &[0u32, 0], None).unwrap();
+    let gram = BipartiteGram::new(left, right, Weights::unit()).unwrap();
+    let error = Sgdd::<f64>::from_bipartite_gram(gram, ScalingPolicy::default())
+        .expect_err("loading out of range");
+    assert_names_a_defect(error, &out_of_range(&[1, 2]));
 }

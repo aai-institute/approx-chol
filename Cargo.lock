@@ -62,6 +62,7 @@ dependencies = [
  "proptest",
  "rand 0.10.2",
  "rayon",
+ "rstest",
  "serde",
 ]
 

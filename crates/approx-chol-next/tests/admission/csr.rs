@@ -4,11 +4,11 @@ use approx_chol_next::input::{
 };
 use approx_chol_next::{factorize, Config, FromCsrError, ReduceError, ScalingPolicy, Sgdd};
 use num_traits::PrimInt;
+use rstest::rstest;
 
 use super::{assert_names_a_defect, grounded, reduce, reduce_upper};
 
-type Rejected<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64], &'a [FromCsrError]);
-type Admitted<'a> = (&'a str, &'a [u32], &'a [u32], &'a [f64]);
+const F32_FLOOR: f32 = f32::MIN_POSITIVE / f32::EPSILON;
 
 fn csr(error: CsrError) -> FromCsrError {
     FromCsrError::Csr(error)
@@ -34,310 +34,230 @@ fn reversed_rows<T: Copy>(row_ptrs: &[u32], columns: &[u32], values: &[T]) -> (V
     (reversed_columns, reversed_values)
 }
 
-#[test]
-fn out_of_class_input_is_rejected_at_its_reported_position() {
-    let (max, quarter, tiny) = (f64::MAX, f64::MAX / 4.0, 1e-310);
-    let over_eight_ulps = 1.0 + 9.0 * f64::EPSILON;
-    let cases: [Rejected<'_>; 18] = [
-        (
-            "missing transpose",
-            &[0, 2, 3],
-            &[0, 1, 1],
-            &[1.0, -1.0, 1.0],
-            &[
-                csr(CsrError::NotSymmetric { row: 0 }),
-                csr(CsrError::NotSymmetric { row: 1 }),
-            ],
-        ),
-        // The lower entry is stored and its upper is absent: the mirror cursor skips past it.
-        (
-            "missing upper mirror",
-            &[0, 1, 3],
-            &[0, 0, 1],
-            &[1.0, -1.0, 1.0],
-            &[
-                csr(CsrError::NotSymmetric { row: 0 }),
-                csr(CsrError::NotSymmetric { row: 1 }),
-            ],
-        ),
-        (
-            "unequal transpose",
-            &[0, 2, 4],
-            &[0, 1, 0, 1],
-            &[1.0, -1.0, -2.0, 2.0],
-            &[
-                csr(CsrError::NotSymmetric { row: 0 }),
-                csr(CsrError::NotSymmetric { row: 1 }),
-            ],
-        ),
-        (
-            "mirrors nine ulps apart",
-            &[0, 2, 4],
-            &[0, 1, 0, 1],
-            &[2.0, -1.0, -over_eight_ulps, 2.0],
-            &[
-                csr(CsrError::NotSymmetric { row: 0 }),
-                csr(CsrError::NotSymmetric { row: 1 }),
-            ],
-        ),
-        (
-            "stored NaN",
-            &[0, 1],
-            &[0],
-            &[f64::NAN],
-            &[csr(CsrError::OutOfRange { row: 0 })],
-        ),
-        (
-            "stored infinity off the diagonal",
-            &[0, 2, 4],
-            &[0, 1, 0, 1],
-            &[1.0, f64::NEG_INFINITY, f64::NEG_INFINITY, 1.0],
-            &[
-                csr(CsrError::OutOfRange { row: 0 }),
-                csr(CsrError::OutOfRange { row: 1 }),
-            ],
-        ),
-        // Descending columns in row 0, so the row must be the caller's, not the canonical copy's.
-        (
-            "stored NaN in a later row of non-canonical input",
-            &[0, 2, 5, 7],
-            &[1, 0, 2, 1, 0, 2, 1],
-            &[-1.0, 1.0, -1.0, 2.0, f64::NAN, 1.0, -1.0],
-            &[csr(CsrError::OutOfRange { row: 1 })],
-        ),
-        (
-            "overflow via coalesced duplicates",
-            &[0, 3, 6],
-            &[0, 1, 1, 0, 0, 1],
-            &[max, -max, -max, -max, -max, max],
-            &[
-                csr(CsrError::OutOfRange { row: 0 }),
-                csr(CsrError::OutOfRange { row: 1 }),
-            ],
-        ),
-        (
-            "overflow via duplicate diagonal",
-            &[0, 2],
-            &[0, 0],
-            &[max, max],
-            &[csr(CsrError::OutOfRange { row: 0 })],
-        ),
-        // Every entry in range and the matrix GDD, but the centre's `Σ|a_ij|` passes `MAX/4`.
-        (
-            "absolute row sum past a quarter of the maximum",
-            &[0, 3, 5, 7],
-            &[0, 1, 2, 0, 1, 0, 2],
-            &[
-                quarter,
-                -0.6 * quarter,
-                -0.6 * quarter,
-                -0.6 * quarter,
-                quarter,
-                -0.6 * quarter,
-                quarter,
-            ],
-            &[out_of_range(0)],
-        ),
-        (
-            "diagonal past a quarter of the maximum",
-            &[0, 1],
-            &[0],
-            &[max],
-            &[out_of_range(0)],
-        ),
-        // Normal diagonals; the edge's pivot alone would have no finite inverse (#163).
-        (
-            "subnormal edge",
-            &[0, 2, 4],
-            &[0, 1, 0, 1],
-            &[1.0, -tiny, -tiny, 1.0],
-            &[
-                csr(CsrError::OutOfRange { row: 0 }),
-                csr(CsrError::OutOfRange { row: 1 }),
-            ],
-        ),
-        (
-            "subnormal diagonal",
-            &[0, 1],
-            &[0],
-            &[tiny],
-            &[csr(CsrError::OutOfRange { row: 0 })],
-        ),
-        (
-            "normal edge below MIN_POSITIVE/EPSILON",
-            &[0, 2, 4],
-            &[0, 1, 0, 1],
-            &[1.0, -floor() / 2.0, -floor() / 2.0, 1.0],
-            &[
-                csr(CsrError::OutOfRange { row: 0 }),
-                csr(CsrError::OutOfRange { row: 1 }),
-            ],
-        ),
-        (
-            "subnormal edge in a later row",
-            &[0, 1, 3, 5],
-            &[0, 1, 2, 1, 2],
-            &[1.0, 1.0, -tiny, -tiny, 1.0],
-            &[
-                csr(CsrError::OutOfRange { row: 1 }),
-                csr(CsrError::OutOfRange { row: 2 }),
-            ],
-        ),
-        (
-            "negative diagonal",
-            &[0, 1],
-            &[0],
-            &[-1.0],
-            &[FromCsrError::Reduce(ReduceError::NonpositiveDiagonal {
-                vertex: 0,
-            })],
-        ),
-        (
-            "zero diagonal beside an edge",
-            &[0, 2, 4],
-            &[0, 1, 0, 1],
-            &[0.0, -1.0, -1.0, 1.0],
-            &[FromCsrError::Reduce(ReduceError::NonpositiveDiagonal {
-                vertex: 0,
-            })],
-        ),
-        // Components {0, 2} and {1, 3}: the vertex is in the caller's numbering, not the block's.
-        (
-            "nonpositive diagonal in an interleaved later block",
-            &[0, 2, 4, 6, 8],
-            &[0, 2, 1, 3, 0, 2, 1, 3],
-            &[1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, -1.0],
-            &[FromCsrError::Reduce(ReduceError::NonpositiveDiagonal {
-                vertex: 3,
-            })],
-        ),
-    ];
-
-    for (label, row_ptrs, columns, values, defects) in cases {
-        let observed = reduce(row_ptrs, columns, values).expect_err(label);
-        assert_names_a_defect(label, observed, defects);
-    }
+#[rstest]
+#[case::missing_transpose(
+    &[0, 2, 3],
+    &[0, 1, 1],
+    &[1.0, -1.0, 1.0],
+    &[csr(CsrError::NotSymmetric { row: 0 }), csr(CsrError::NotSymmetric { row: 1 })],
+)]
+// The lower entry is stored and its upper is absent: the mirror cursor skips past it.
+#[case::missing_upper_mirror(
+    &[0, 1, 3],
+    &[0, 0, 1],
+    &[1.0, -1.0, 1.0],
+    &[csr(CsrError::NotSymmetric { row: 0 }), csr(CsrError::NotSymmetric { row: 1 })],
+)]
+#[case::unequal_transpose(
+    &[0, 2, 4],
+    &[0, 1, 0, 1],
+    &[1.0, -1.0, -2.0, 2.0],
+    &[csr(CsrError::NotSymmetric { row: 0 }), csr(CsrError::NotSymmetric { row: 1 })],
+)]
+#[case::mirrors_nine_ulps_apart(
+    &[0, 2, 4],
+    &[0, 1, 0, 1],
+    &[2.0, -1.0, -(1.0 + 9.0 * f64::EPSILON), 2.0],
+    &[csr(CsrError::NotSymmetric { row: 0 }), csr(CsrError::NotSymmetric { row: 1 })],
+)]
+#[case::stored_nan(&[0, 1], &[0], &[f64::NAN], &[csr(CsrError::OutOfRange { row: 0 })])]
+#[case::stored_infinity_off_the_diagonal(
+    &[0, 2, 4],
+    &[0, 1, 0, 1],
+    &[1.0, f64::NEG_INFINITY, f64::NEG_INFINITY, 1.0],
+    &[csr(CsrError::OutOfRange { row: 0 }), csr(CsrError::OutOfRange { row: 1 })],
+)]
+// Descending columns in row 0, so the row must be the caller's, not the canonical copy's.
+#[case::stored_nan_in_a_later_row_of_non_canonical_input(
+    &[0, 2, 5, 7],
+    &[1, 0, 2, 1, 0, 2, 1],
+    &[-1.0, 1.0, -1.0, 2.0, f64::NAN, 1.0, -1.0],
+    &[csr(CsrError::OutOfRange { row: 1 })],
+)]
+#[case::overflow_via_coalesced_duplicates(
+    &[0, 3, 6],
+    &[0, 1, 1, 0, 0, 1],
+    &[f64::MAX, -f64::MAX, -f64::MAX, -f64::MAX, -f64::MAX, f64::MAX],
+    &[csr(CsrError::OutOfRange { row: 0 }), csr(CsrError::OutOfRange { row: 1 })],
+)]
+#[case::overflow_via_duplicate_diagonal(
+    &[0, 2],
+    &[0, 0],
+    &[f64::MAX, f64::MAX],
+    &[csr(CsrError::OutOfRange { row: 0 })],
+)]
+// Every entry in range and the matrix GDD, but the centre's `Σ|a_ij|` passes `MAX/4`.
+#[case::absolute_row_sum_past_a_quarter_of_the_maximum(
+    &[0, 3, 5, 7],
+    &[0, 1, 2, 0, 1, 0, 2],
+    &[
+        f64::MAX / 4.0,
+        -0.6 * (f64::MAX / 4.0),
+        -0.6 * (f64::MAX / 4.0),
+        -0.6 * (f64::MAX / 4.0),
+        f64::MAX / 4.0,
+        -0.6 * (f64::MAX / 4.0),
+        f64::MAX / 4.0,
+    ],
+    &[out_of_range(0)],
+)]
+#[case::diagonal_past_a_quarter_of_the_maximum(&[0, 1], &[0], &[f64::MAX], &[out_of_range(0)])]
+// Normal diagonals; the edge's pivot alone would have no finite inverse (#163).
+#[case::subnormal_edge(
+    &[0, 2, 4],
+    &[0, 1, 0, 1],
+    &[1.0, -1e-310, -1e-310, 1.0],
+    &[csr(CsrError::OutOfRange { row: 0 }), csr(CsrError::OutOfRange { row: 1 })],
+)]
+#[case::subnormal_diagonal(&[0, 1], &[0], &[1e-310], &[csr(CsrError::OutOfRange { row: 0 })])]
+#[case::normal_edge_below_min_positive_over_epsilon(
+    &[0, 2, 4],
+    &[0, 1, 0, 1],
+    &[1.0, -floor() / 2.0, -floor() / 2.0, 1.0],
+    &[csr(CsrError::OutOfRange { row: 0 }), csr(CsrError::OutOfRange { row: 1 })],
+)]
+#[case::subnormal_edge_in_a_later_row(
+    &[0, 1, 3, 5],
+    &[0, 1, 2, 1, 2],
+    &[1.0, 1.0, -1e-310, -1e-310, 1.0],
+    &[csr(CsrError::OutOfRange { row: 1 }), csr(CsrError::OutOfRange { row: 2 })],
+)]
+#[case::negative_diagonal(
+    &[0, 1],
+    &[0],
+    &[-1.0],
+    &[FromCsrError::Reduce(ReduceError::NonpositiveDiagonal { vertex: 0 })],
+)]
+#[case::zero_diagonal_beside_an_edge(
+    &[0, 2, 4],
+    &[0, 1, 0, 1],
+    &[0.0, -1.0, -1.0, 1.0],
+    &[FromCsrError::Reduce(ReduceError::NonpositiveDiagonal { vertex: 0 })],
+)]
+// Components {0, 2} and {1, 3}: the vertex is in the caller's numbering, not the block's.
+#[case::nonpositive_diagonal_in_an_interleaved_later_block(
+    &[0, 2, 4, 6, 8],
+    &[0, 2, 1, 3, 0, 2, 1, 3],
+    &[1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, -1.0],
+    &[FromCsrError::Reduce(ReduceError::NonpositiveDiagonal { vertex: 3 })],
+)]
+fn out_of_class_input_is_rejected_at_its_reported_position(
+    #[case] row_ptrs: &[u32],
+    #[case] columns: &[u32],
+    #[case] values: &[f64],
+    #[case] defects: &[FromCsrError],
+) {
+    let observed = reduce(row_ptrs, columns, values).expect_err("out of class");
+    assert_names_a_defect(observed, defects);
 }
 
-#[test]
-fn out_of_class_upper_storage_is_rejected_at_its_reported_position() {
-    let cases: [Rejected<'_>; 3] = [
-        (
-            "entry below the diagonal",
-            &[0, 1, 3],
-            &[0, 0, 1],
-            &[1.0, -1.0, 1.0],
-            &[csr(CsrError::BelowDiagonal { row: 1 })],
-        ),
-        (
-            "entry below the diagonal in non-canonical input",
-            &[0, 2, 4],
-            &[1, 0, 1, 0],
-            &[-1.0, 1.0, 1.0, -1.0],
-            &[csr(CsrError::BelowDiagonal { row: 1 })],
-        ),
-        (
-            "stored NaN",
-            &[0, 2, 3],
-            &[0, 1, 1],
-            &[1.0, f64::NAN, 1.0],
-            &[csr(CsrError::OutOfRange { row: 0 })],
-        ),
-    ];
-    for (label, row_ptrs, columns, values, defects) in cases {
-        let observed = reduce_upper(row_ptrs, columns, values).expect_err(label);
-        assert_names_a_defect(label, observed, defects);
-    }
+#[rstest]
+#[case::entry_below_the_diagonal(
+    &[0, 1, 3],
+    &[0, 0, 1],
+    &[1.0, -1.0, 1.0],
+    &[csr(CsrError::BelowDiagonal { row: 1 })],
+)]
+#[case::entry_below_the_diagonal_in_non_canonical_input(
+    &[0, 2, 4],
+    &[1, 0, 1, 0],
+    &[-1.0, 1.0, 1.0, -1.0],
+    &[csr(CsrError::BelowDiagonal { row: 1 })],
+)]
+#[case::stored_nan(
+    &[0, 2, 3],
+    &[0, 1, 1],
+    &[1.0, f64::NAN, 1.0],
+    &[csr(CsrError::OutOfRange { row: 0 })],
+)]
+fn out_of_class_upper_storage_is_rejected_at_its_reported_position(
+    #[case] row_ptrs: &[u32],
+    #[case] columns: &[u32],
+    #[case] values: &[f64],
+    #[case] defects: &[FromCsrError],
+) {
+    let observed = reduce_upper(row_ptrs, columns, values).expect_err("out of class");
+    assert_names_a_defect(observed, defects);
 }
 
 /// Shapes a stricter check would reject, admitted as given and through the canonicalizing copy.
-#[test]
-fn in_class_input_is_admitted_on_both_paths() {
-    let next_after_one = f64::from_bits(1.0f64.to_bits() + 1);
-    let eight_ulps = 1.0 + 8.0 * f64::EPSILON;
-    let quarter = f64::MAX / 4.0;
-    let cases: [Admitted<'_>; 8] = [
-        (
-            "one-ulp transpose difference",
-            &[0, 2, 4],
-            &[0, 1, 0, 1],
-            &[2.0, -1.0, -next_after_one, 2.0],
-        ),
-        (
-            "eight-ulp transpose difference",
-            &[0, 2, 4],
-            &[0, 1, 0, 1],
-            &[2.0, -1.0, -eight_ulps, 2.0],
-        ),
-        (
-            "transposes equal only after coalescing",
-            &[0, 3, 6],
-            &[0, 1, 1, 0, 0, 1],
-            &[2.0, -0.25, -0.75, -0.5, -0.5, 2.0],
-        ),
-        (
-            "stored zero without a mirror",
-            &[0, 2, 3],
-            &[0, 1, 1],
-            &[1.0, 0.0, 1.0],
-        ),
-        (
-            "block-diagonal SDDM",
-            &[0, 2, 4, 6, 8],
-            &[0, 1, 0, 1, 2, 3, 2, 3],
-            &[5.0, -1.0, -1.0, 4.0, 5.0, -1.0, -1.0, 4.0],
-        ),
-        // Generalized dominance: a signature folds it into a Z-matrix.
-        (
-            "positive off-diagonal",
-            &[0, 2, 4],
-            &[0, 1, 0, 1],
-            &[5.0, 1.0, 1.0, 4.0],
-        ),
-        (
-            "diagonal at a quarter of the maximum",
-            &[0, 2, 4],
-            &[0, 1, 0, 1],
-            &[quarter, -quarter / 2.0, -quarter / 2.0, quarter],
-        ),
-        (
-            "edge at MIN_POSITIVE/EPSILON",
-            &[0, 2, 4],
-            &[0, 1, 0, 1],
-            &[1.0, -floor(), -floor(), 1.0],
-        ),
-    ];
-
-    for (label, row_ptrs, columns, values) in cases {
-        let (reversed_columns, reversed_values) = reversed_rows(row_ptrs, columns, values);
-        let given = reduce(row_ptrs, columns, values).unwrap_or_else(|e| panic!("{label}: {e:?}"));
-        let copied = reduce(row_ptrs, &reversed_columns, &reversed_values)
-            .unwrap_or_else(|e| panic!("{label}, reversed: {e:?}"));
-        assert_eq!(format!("{given:?}"), format!("{copied:?}"), "{label}");
-    }
+#[rstest]
+#[case::one_ulp_transpose_difference(
+    &[0, 2, 4],
+    &[0, 1, 0, 1],
+    &[2.0, -1.0, -f64::from_bits(1.0f64.to_bits() + 1), 2.0],
+)]
+#[case::eight_ulp_transpose_difference(
+    &[0, 2, 4],
+    &[0, 1, 0, 1],
+    &[2.0, -1.0, -(1.0 + 8.0 * f64::EPSILON), 2.0],
+)]
+#[case::transposes_equal_only_after_coalescing(
+    &[0, 3, 6],
+    &[0, 1, 1, 0, 0, 1],
+    &[2.0, -0.25, -0.75, -0.5, -0.5, 2.0],
+)]
+#[case::stored_zero_without_a_mirror(&[0, 2, 3], &[0, 1, 1], &[1.0, 0.0, 1.0])]
+#[case::block_diagonal_sddm(
+    &[0, 2, 4, 6, 8],
+    &[0, 1, 0, 1, 2, 3, 2, 3],
+    &[5.0, -1.0, -1.0, 4.0, 5.0, -1.0, -1.0, 4.0],
+)]
+// Generalized dominance: a signature folds it into a Z-matrix.
+#[case::positive_off_diagonal(&[0, 2, 4], &[0, 1, 0, 1], &[5.0, 1.0, 1.0, 4.0])]
+#[case::diagonal_at_a_quarter_of_the_maximum(
+    &[0, 2, 4],
+    &[0, 1, 0, 1],
+    &[f64::MAX / 4.0, -(f64::MAX / 4.0) / 2.0, -(f64::MAX / 4.0) / 2.0, f64::MAX / 4.0],
+)]
+#[case::edge_at_min_positive_over_epsilon(
+    &[0, 2, 4],
+    &[0, 1, 0, 1],
+    &[1.0, -floor(), -floor(), 1.0],
+)]
+fn in_class_input_is_admitted_on_both_paths(
+    #[case] row_ptrs: &[u32],
+    #[case] columns: &[u32],
+    #[case] values: &[f64],
+) {
+    let (reversed_columns, reversed_values) = reversed_rows(row_ptrs, columns, values);
+    let given = reduce(row_ptrs, columns, values).expect("as given");
+    let copied = reduce(row_ptrs, &reversed_columns, &reversed_values).expect("reversed");
+    assert_eq!(format!("{given:?}"), format!("{copied:?}"));
 }
 
-#[test]
-fn an_empty_system_is_admitted_by_every_entry_point() {
-    let policy = ScalingPolicy::default();
-    let csr = Csr::<f64>::new(0, &[0], &[], &[]).unwrap();
-    let upper = UpperCsr::<f64>::new(0, &[0], &[], &[]).unwrap();
-    let laplacian = Laplacian::<f64>::new(0, &[], &[], Weights::unit()).unwrap();
-    let signed = SignedGraph::<f64>::new(0, &[], &[], &[], Weights::unit()).unwrap();
-    let gram = FactorWidth2::<f64>::new(0, &[], &[], &[], &[]).unwrap();
-    let side = FactorWidth1::<f64>::new(0, &[], None).unwrap();
-    let bipartite = BipartiteGram::new(side, side, Weights::unit()).unwrap();
-    let reduced: [Sgdd; 6] = [
-        Sgdd::from_csr(csr, policy).expect("CSR"),
-        Sgdd::from_upper_csr(upper, policy).expect("upper CSR"),
-        Sgdd::try_from(laplacian).expect("Laplacian"),
-        Sgdd::try_from(signed).expect("signed graph"),
-        Sgdd::from_gram(gram, policy).expect("Gram"),
-        Sgdd::from_bipartite_gram(bipartite, policy).expect("bipartite Gram"),
-    ];
-    for sgdd in reduced {
-        assert_eq!((sgdd.n(), sgdd.blocks().len()), (0, 0));
-    }
+#[rstest]
+#[case::csr(
+    Sgdd::from_csr(Csr::<f64>::new(0, &[0], &[], &[]).unwrap(), ScalingPolicy::default())
+        .expect("CSR")
+)]
+#[case::upper_csr(
+    Sgdd::from_upper_csr(UpperCsr::<f64>::new(0, &[0], &[], &[]).unwrap(), ScalingPolicy::default())
+        .expect("upper CSR")
+)]
+#[case::laplacian(
+    Sgdd::try_from(Laplacian::<f64>::new(0, &[], &[], Weights::unit()).unwrap()).expect("Laplacian")
+)]
+#[case::signed_graph(
+    Sgdd::try_from(SignedGraph::<f64>::new(0, &[], &[], &[], Weights::unit()).unwrap())
+        .expect("signed graph")
+)]
+#[case::gram(
+    Sgdd::from_gram(FactorWidth2::<f64>::new(0, &[], &[], &[], &[]).unwrap(), ScalingPolicy::default())
+        .expect("Gram")
+)]
+#[case::bipartite_gram(Sgdd::from_bipartite_gram(
+    BipartiteGram::new(
+        FactorWidth1::<f64>::new(0, &[], None).unwrap(),
+        FactorWidth1::<f64>::new(0, &[], None).unwrap(),
+        Weights::unit(),
+    )
+    .unwrap(),
+    ScalingPolicy::default(),
+)
+.expect("bipartite Gram"))]
+fn an_empty_system_is_admitted_by_every_entry_point(#[case] sgdd: Sgdd) {
+    assert_eq!((sgdd.n(), sgdd.blocks().len()), (0, 0));
 }
 
 #[test]
@@ -364,39 +284,40 @@ fn a_diagonal_at_a_quarter_of_the_maximum_still_solves() {
 }
 
 /// The #163 range in `f32`'s own bounds: `MIN_POSITIVE/EPSILON` is `2^-103`, not `f64`'s `2^-970`.
-#[test]
-fn f32_range_is_judged_in_f32() {
-    let (floor, quarter) = (f32::MIN_POSITIVE / f32::EPSILON, f32::MAX / 4.0);
-    let pair = |diagonal: f32, edge: f32| {
-        reduce(&[0, 2, 4], &[0, 1, 0, 1], &[diagonal, edge, edge, diagonal])
-    };
-    let rows = [
-        csr(CsrError::OutOfRange { row: 0 }),
-        csr(CsrError::OutOfRange { row: 1 }),
-    ];
-    for (label, diagonal, edge, defects) in [
-        ("subnormal edge", 1.0, -1e-40, &rows[..]),
-        ("normal edge below the floor", 1.0, -floor / 2.0, &rows[..]),
-        (
-            "diagonal past a quarter of the maximum",
-            f32::MAX,
-            -1.0,
-            &[out_of_range(0), out_of_range(1)][..],
-        ),
-    ] {
-        let observed = pair(diagonal, edge).expect_err(label);
-        assert_names_a_defect(label, observed, defects);
-    }
-    for (label, diagonal, edge) in [
-        ("edge at the floor", 1.0, -floor),
-        (
-            "diagonal at a quarter of the maximum",
-            quarter,
-            -quarter / 2.0,
-        ),
-    ] {
-        pair(diagonal, edge).unwrap_or_else(|e| panic!("{label}: {e:?}"));
-    }
+fn f32_pair(diagonal: f32, edge: f32) -> Result<Sgdd<f32>, FromCsrError> {
+    reduce(&[0, 2, 4], &[0, 1, 0, 1], &[diagonal, edge, edge, diagonal])
+}
+
+#[rstest]
+#[case::subnormal_edge(
+    1.0,
+    -1e-40,
+    &[csr(CsrError::OutOfRange { row: 0 }), csr(CsrError::OutOfRange { row: 1 })],
+)]
+#[case::normal_edge_below_the_floor(
+    1.0,
+    -F32_FLOOR / 2.0,
+    &[csr(CsrError::OutOfRange { row: 0 }), csr(CsrError::OutOfRange { row: 1 })],
+)]
+#[case::diagonal_past_a_quarter_of_the_maximum(
+    f32::MAX,
+    -1.0,
+    &[out_of_range(0), out_of_range(1)],
+)]
+fn f32_out_of_range_input_is_rejected(
+    #[case] diagonal: f32,
+    #[case] edge: f32,
+    #[case] defects: &[FromCsrError],
+) {
+    let observed = f32_pair(diagonal, edge).expect_err("out of f32 range");
+    assert_names_a_defect(observed, defects);
+}
+
+#[rstest]
+#[case::edge_at_the_floor(1.0, -F32_FLOOR)]
+#[case::diagonal_at_a_quarter_of_the_maximum(f32::MAX / 4.0, -(f32::MAX / 4.0) / 2.0)]
+fn f32_in_range_input_is_admitted(#[case] diagonal: f32, #[case] edge: f32) {
+    f32_pair(diagonal, edge).expect("inside f32 range");
 }
 
 fn grid_laplacian(rows: usize, cols: usize) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
