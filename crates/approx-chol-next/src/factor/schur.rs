@@ -80,16 +80,32 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
             true => CliqueRule::Exact,
             false => config.complement,
         };
+        let (c, ground) = (&self.cross, I::from_index(n));
+        let ground_share = move |e: usize| {
+            let s_e = surplus.map(|s| s[e]).filter(|&s| s > T::zero());
+            s_e.map(|s| (ground, s))
+        };
         let (adjacency, ground) = match (rule, sheets) {
             (CliqueRule::Exact, Sheets::One) => exact_rows(self, surplus),
             (CliqueRule::Exact, Sheets::Two) => cover_rows(self, surplus),
-            (CliqueRule::Sampled(Multiplicity::Single), _) => from_fill(
+            // One sheet maps no column, as the balanced loop pays for any map.
+            (CliqueRule::Sampled(copies), Sheets::One) => from_fill(
                 n,
-                sampled_fill::<T, I, Single>(self, sheets, surplus, stars, ()),
+                fill_stars(copies, c.n_rows(), |e| {
+                    let neighbors = c.row(e).map(|(k, &c)| (I::from_index(k), c.abs()));
+                    (stars.star(e), neighbors.chain(ground_share(e)))
+                }),
             ),
-            (CliqueRule::Sampled(Multiplicity::Split(k)), _) => from_fill(
+            (CliqueRule::Sampled(copies), Sheets::Two) => from_fill(
                 n,
-                sampled_fill::<T, I, Multi>(self, sheets, surplus, stars, k),
+                fill_stars(copies, 2 * c.n_rows(), |star| {
+                    let (sheet, e) = (star / c.n_rows(), star % c.n_rows());
+                    let neighbors = c.row(e).map(move |(k, &c)| {
+                        let on = sheet ^ usize::from(crosses(c));
+                        (I::from_index(cover_vertex(k, on)), c.abs())
+                    });
+                    (stars.star(star), neighbors.chain(ground_share(e)))
+                }),
             ),
         };
         let kept = surplus.map(|s| &s[s.len() - n_kept..]);
@@ -217,39 +233,20 @@ fn from_fill<T: Real, I: Index>(
     rows.finish()
 }
 
-/// Each eliminated star's clique tree on each sheet under its own stream, the ground a final neighbor unless its share is zero; one sheet maps no column, as the balanced loop pays for any map.
-fn sampled_fill<T: Real, I: Index, C: Copies>(
-    elimination: &BlockElimination<T, I>,
-    sheets: Sheets,
-    surplus: Option<&[T]>,
-    stars: Streams,
-    split: C::Split,
+/// A row of `C` repeats no column, so stars skip the merge; chunks in star order, so merged duplicates sum alike at any thread count.
+fn fill_stars<T: Real, I: Index, N: Iterator<Item = (I, T)>>(
+    copies: Multiplicity,
+    n_stars: usize,
+    star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
 ) -> Vec<Fill<T, I>> {
-    let c = &elimination.cross;
-    let (n_eliminated, n_kept) = (c.n_rows(), c.n_cols());
-    let ground = I::from_index(sheets.count() * n_kept);
-    let ground_share = move |e: usize| {
-        let s_e = surplus.map(|s| s[e]).filter(|&s| s > T::zero());
-        s_e.map(|s| (ground, s))
-    };
-    match sheets {
-        Sheets::One => fill_stars::<T, I, C, _>(split, n_eliminated, |e| {
-            let neighbors = c.row(e).map(|(k, &c)| (I::from_index(k), c.abs()));
-            (stars.star(e), neighbors.chain(ground_share(e)))
-        }),
-        Sheets::Two => fill_stars::<T, I, C, _>(split, 2 * n_eliminated, |star| {
-            let (sheet, e) = (star / n_eliminated, star % n_eliminated);
-            let neighbors = c.row(e).map(move |(k, &c)| {
-                let on = sheet ^ usize::from(crosses(c));
-                (I::from_index(cover_vertex(k, on)), c.abs())
-            });
-            (stars.star(star), neighbors.chain(ground_share(e)))
-        }),
+    match copies {
+        Multiplicity::Single => sample_stars::<T, I, Single, N>((), n_stars, star),
+        Multiplicity::Split(k) => sample_stars::<T, I, Multi, N>(k, n_stars, star),
     }
 }
 
-/// A row of `C` repeats no column, so stars skip the merge; chunks in star order, so merged duplicates sum alike at any thread count.
-fn fill_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
+/// Each eliminated star's clique tree on each sheet under its own stream, the ground a final neighbor unless its share is zero.
+fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
     split: C::Split,
     n_stars: usize,
     star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,

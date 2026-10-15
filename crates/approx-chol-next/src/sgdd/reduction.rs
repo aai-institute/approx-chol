@@ -15,9 +15,9 @@ use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, widen, Index, Real};
 
 fn into_sgdd<T: Real, I: Index>(
-    (partition, live, dead): Components<IrreducibleBlock<T, I>, I>,
+    (partition, live): Components<IrreducibleBlock<T, I>, I>,
 ) -> Sgdd<T, I> {
-    Sgdd::new(partition.n(), live, dead)
+    Sgdd::new(partition.n(), live)
 }
 
 /// One block `A_c` as the input gave it, with its rows' `Σ_j |a_ij|` and entry counts.

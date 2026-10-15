@@ -46,7 +46,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
                 // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
                 let last = spans_wide(scales).then(|| pinned(&sddm, scales));
                 let (steps, last) = approximate::factor(sddm, config.approximate, draws, last);
-                (Triangular::Approximate(steps), last)
+                (Triangular::Approximate(Box::new(steps)), last)
             }
         };
         Self {
@@ -99,7 +99,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
     }
 }
 
-/// The slot the solve pins: the ground, else the largest `|f|` on the first sheet, so the gauge's rounding is not amplified by `1/f` (ties keep the last).
+/// The slot the solve pins: the ground, else the largest `|f|` on the first sheet, so the gauge's rounding is not amplified by `1/f`.
 fn pinned<T: Real, I: Index>(sddm: &Sddm<'_, T, I>, scales: Option<&[T]>) -> usize {
     match sddm.grounded() {
         true => sddm.n(),
@@ -123,7 +123,7 @@ fn spans_wide<T: Real>(scales: Option<&[T]>) -> bool {
 enum Triangular<T, I> {
     /// Packed lower triangle of `L` in `LLᵀ`.
     Dense(Vec<T>),
-    Approximate(ApproximateCholesky<T, I>),
+    Approximate(Box<ApproximateCholesky<T, I>>),
 }
 
 impl<T: Real, I: Index> Triangular<T, I> {

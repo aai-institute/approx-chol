@@ -209,17 +209,11 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
 pub struct Sgdd<T = f64, I = u32> {
     n: usize,
     blocks: Vec<IrreducibleBlock<T, I>>,
-    /// Lone vertices with a zero diagonal, recorded so a solve zeroes them without a pass over `n`.
-    dead: Box<[I]>,
 }
 
 impl<T: Real, I: Index> Sgdd<T, I> {
-    pub(super) fn new(n: usize, blocks: Vec<IrreducibleBlock<T, I>>, dead: Vec<I>) -> Self {
-        Self {
-            n,
-            blocks,
-            dead: dead.into_boxed_slice(),
-        }
+    pub(super) fn new(n: usize, blocks: Vec<IrreducibleBlock<T, I>>) -> Self {
+        Self { n, blocks }
     }
 
     /// Dimension of `A`.
@@ -230,10 +224,6 @@ impl<T: Real, I: Index> Sgdd<T, I> {
     /// The irreducible blocks, each factored and solved on its own.
     pub fn blocks(&self) -> &[IrreducibleBlock<T, I>] {
         &self.blocks
-    }
-
-    pub(crate) fn dead(&self) -> &[I] {
-        &self.dead
     }
 }
 

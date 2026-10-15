@@ -64,7 +64,7 @@ pub(super) trait PrincipalBlocks<T, I> {
 }
 
 impl<A, I: Index> Partitioned<A, I> {
-    /// The partition, each live component's block and the dead vertices, the assembly freed; a connected input moves its assembly in whole.
+    /// The partition and each live component's block, the assembly freed; a connected input moves its assembly in whole.
     pub(super) fn extract<T: Real, B: Send>(
         self,
         block: impl Fn(<A as PrincipalBlocks<T, I>>::Block) -> Result<Option<B>, ReduceError> + Sync,
@@ -82,11 +82,8 @@ impl<A, I: Index> Partitioned<A, I> {
         }
         if partition.is_whole() {
             let vertices = partition.components().next().expect("one component");
-            let (live, dead) = match block(a.whole(vertices))? {
-                Some(b) => (vec![b], Vec::new()),
-                None => (Vec::new(), vertices.to_vec()),
-            };
-            return Ok((partition, live, dead));
+            let live = block(a.whole(vertices))?.into_iter().collect();
+            return Ok((partition, live));
         }
         let components: Vec<&[I]> = partition.components().collect();
         let cut = |vertices: &&[I]| block(a.component(vertices, partition.position()));
@@ -104,23 +101,19 @@ impl<A, I: Index> Partitioned<A, I> {
         if let Some(&error) = blocks.iter().find_map(|b| b.as_ref().err()) {
             return Err(error);
         }
-        let dead = (components.iter().zip(&blocks))
-            .filter(|(_, b)| matches!(b, Ok(None)))
-            .flat_map(|(vertices, _)| vertices.iter().copied())
-            .collect();
         // In place: a block's result is the block's own size.
         let live = blocks
             .into_iter()
             .filter_map(|b| b.ok().flatten())
             .collect();
-        Ok((partition, live, dead))
+        Ok((partition, live))
     }
 }
 
 const PARALLEL_VERTICES: usize = 1 << 12;
 
-/// The partition, each live component's block, and the dead vertices.
-pub(super) type Components<B, I> = (Partition<I>, Vec<B>, Vec<I>);
+/// The partition and each live component's block.
+pub(super) type Components<B, I> = (Partition<I>, Vec<B>);
 
 /// A general `A` assembled with its diagonal, and its components.
 pub(super) type General<T, I> = Partitioned<Assembled<T, UpperAdjacency<T, I>>, I>;

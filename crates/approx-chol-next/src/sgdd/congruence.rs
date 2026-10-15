@@ -27,7 +27,7 @@ impl<T: Real> Congruence<T> {
         Self::Signs(signs.iter().map(sign).collect())
     }
 
-    /// `F R`'s factors for positive scales `R`.
+    /// `F = S R`'s factors, `self` the signs `S`, for positive scales `R`.
     pub(super) fn times(&self, scales: &[T]) -> Box<[T]> {
         match self.factors(scales.len()) {
             None => scales.into(),

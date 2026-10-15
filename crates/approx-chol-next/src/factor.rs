@@ -83,7 +83,6 @@ fn buffer_error(found: usize, n: usize, scratch: usize, needed: usize) -> SolveE
 pub struct Factor<T = f64, I = u32> {
     n: usize,
     blocks: Vec<BlockFactor<T, I>>,
-    dead: Box<[I]>,
 }
 
 /// Factors every irreducible block of `sgdd` in parallel; `sgdd` survives for another `config`.
@@ -94,7 +93,6 @@ pub fn factorize<T: Real, I: Index>(sgdd: &Sgdd<T, I>, config: &Config) -> Facto
     Factor {
         n: sgdd.n(),
         blocks,
-        dead: sgdd.dead().into(),
     }
 }
 
@@ -116,16 +114,13 @@ impl<T: Real, I: Index> Factor<T, I> {
             .map(|block| block.vertices().len() + block.scratch_len())
             .max();
         let mut scratch = vec![T::zero(); scratch_len.unwrap_or(0)];
-        let mut x = b.to_vec();
+        let mut x = vec![T::zero(); self.n];
         for block in &self.blocks {
             let restriction = &block.restriction;
             let (local, rest) = scratch.split_at_mut(block.vertices().len());
-            restriction.gather(&x, local);
+            restriction.gather(b, local);
             block.solve_unchecked(local, rest, InnerParallelism::Allow);
             restriction.scatter(local, &mut x);
-        }
-        for &i in &self.dead {
-            x[i.index()] = T::zero();
         }
         Ok(x)
     }
@@ -143,7 +138,7 @@ impl<T: Real, I: Index> Factor<T, I> {
 #[derive(Clone, Debug)]
 pub struct BlockFactor<T = f64, I = u32> {
     restriction: Arc<Restriction<T, I>>,
-    elimination: Option<BlockElimination<T, I>>,
+    elimination: Option<Box<BlockElimination<T, I>>>,
     cholesky: Cholesky<T, I>,
 }
 
@@ -174,7 +169,7 @@ impl<T: Real, I: Index> BlockFactor<T, I> {
                 let schur = elimination.complement(sheets, grounding, config, streams);
                 let from = elimination.n_eliminated();
                 let factored = Cholesky::factor(schur, streams.cholesky(), config, scales(from));
-                (Some(elimination), factored)
+                (Some(Box::new(elimination)), factored)
             }
         };
         Self {
@@ -191,7 +186,7 @@ impl<T: Real, I: Index> BlockFactor<T, I> {
 
     /// Work [`InnerParallelism::Allow`] may split per solve, `0` when nothing does: an outer scheduler weighs it against its own parallelism.
     pub fn splittable_work(&self) -> usize {
-        (self.elimination.as_ref()).map_or(0, BlockElimination::splittable_work)
+        (self.elimination.as_deref()).map_or(0, BlockElimination::splittable_work)
     }
 
     /// Workspace [`BlockFactor::solve_local`] needs, fixed at factorization.
@@ -230,7 +225,7 @@ impl<T: Real, I: Index> BlockFactor<T, I> {
     }
 }
 
-/// The last index of the largest `|f|`, where pinning the gauge leaves its rounding unamplified by `1/f`.
+/// An index of the largest `|f|`, where pinning the gauge leaves its rounding unamplified by `1/f`.
 fn largest<T: Real>(f: &[T]) -> usize {
     let last = f.len() - 1;
     (0..last).fold(last, |best, i| match f[i].abs() > f[best].abs() {
