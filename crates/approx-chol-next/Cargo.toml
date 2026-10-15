@@ -26,7 +26,24 @@ sprs = ["dep:sprs"]
 faer = ["dep:faer"]
 
 [dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
 faer = { version = "0.24", default-features = false }
 postcard = { version = "1", features = ["use-std"] }
 proptest = "1.6"
 rstest = { version = "0.26.1", default-features = false }
+
+[[bench]]
+name = "backend"
+harness = false
+
+[[bench]]
+name = "sampling"
+harness = false
+
+[[bench]]
+name = "solve"
+harness = false
+
+[[bench]]
+name = "wallclock_banded"
+harness = false
