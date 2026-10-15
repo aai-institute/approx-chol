@@ -2,6 +2,8 @@ import warnings
 
 import numpy as np
 import pytest
+import scipy.sparse as sp
+from scipy.linalg import block_diag
 
 import approx_chol
 from tests._laplacians import grid_laplacian
@@ -72,15 +74,32 @@ def test_seed_and_split_reach_the_factorization():
     )
 
 
-def test_a_clamped_deficit_warns():
-    # |a_01| = 2 exceeds both diagonals, and no positive scaling repairs that.
-    row_ptrs = np.array([0, 2, 4], dtype=np.uint32)
-    col_indices = np.array([0, 1, 0, 1], dtype=np.uint32)
-    values = np.array([1.0, -2.0, -2.0, 1.0], dtype=np.float64)
+def _pair(off_diagonal: float) -> np.ndarray:
+    return np.array([[1.0, off_diagonal], [off_diagonal, 1.0]])
 
-    with pytest.warns(RuntimeWarning, match="fell short of diagonal dominance"):
-        factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
-    assert factor.shape == (2, 2)
+
+def _warning(matrix) -> str:
+    with pytest.warns(RuntimeWarning) as record:
+        approx_chol.factorize(sp.csr_matrix(matrix))
+    (warning,) = record
+    return str(warning.message)
+
+
+def test_a_slight_deficit_warns_only_that_it_was_clamped():
+    message = _warning(_pair(-(1.0 + 1e-10)))
+    assert message.startswith("1 block(s) fell short of diagonal dominance by up to")
+    assert message.endswith("the deficit was clamped")
+
+
+def test_each_cause_counts_its_own_blocks():
+    # The first pair's scaling settles; no positive scaling repairs |a_01| = 2 in the second.
+    message = _warning(block_diag(_pair(-(1.0 + 1e-10)), _pair(-2.0)))
+    assert message.startswith(
+        "2 block(s) fell short of diagonal dominance by up to 1.000e0"
+    )
+    assert message.endswith(
+        "; 1 block(s) did not settle, so a singular one may have been grounded"
+    )
 
 
 def test_a_dominant_matrix_does_not_warn():

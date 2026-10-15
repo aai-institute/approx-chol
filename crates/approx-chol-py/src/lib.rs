@@ -153,21 +153,29 @@ fn warn_on_scaling(py: Python<'_>, sgdd: &Sgdd<f64, u32>) -> PyResult<()> {
     let reports: Vec<ScalingReport> = (sgdd.blocks().iter())
         .filter_map(|block| block.scaling_report())
         .collect();
-    if reports.is_empty() {
-        return Ok(());
-    }
-    let worst = (reports.iter()).fold(0.0f64, |worst, report| worst.max(report.violation));
+    let clamped: Vec<f64> = (reports.iter())
+        .map(|report| report.violation)
+        .filter(|&violation| violation > 0.0)
+        .collect();
     let unsettled = reports.iter().filter(|report| !report.settled).count();
-    let mut message = format!(
-        "{} block(s) fell short of diagonal dominance by up to {worst:.3e} \
-         of a diagonal; the deficit was clamped",
-        reports.len()
-    );
-    if unsettled > 0 {
-        message.push_str(&format!(
-            "; {unsettled} block(s) did not settle, so a singular one may have been grounded"
+    let mut causes = Vec::new();
+    if !clamped.is_empty() {
+        let worst = clamped.iter().fold(0.0f64, |worst, &v| worst.max(v));
+        causes.push(format!(
+            "{} block(s) fell short of diagonal dominance by up to {worst:.3e} \
+             of a diagonal; the deficit was clamped",
+            clamped.len()
         ));
     }
+    if unsettled > 0 {
+        causes.push(format!(
+            "{unsettled} block(s) did not settle, so a singular one may have been grounded"
+        ));
+    }
+    if causes.is_empty() {
+        return Ok(());
+    }
+    let message = causes.join("; ");
     let warnings = py.import("warnings")?;
     warnings.call_method1(
         "warn",
