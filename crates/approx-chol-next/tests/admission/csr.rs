@@ -318,7 +318,6 @@ fn in_class_input_is_admitted_on_both_paths() {
 }
 
 #[test]
-#[ignore = "every entry point panics dividing by zero vertices in Partitioned::extract"]
 fn an_empty_system_is_admitted_by_every_entry_point() {
     let policy = ScalingPolicy::default();
     let csr = Csr::<f64>::new(0, &[0], &[], &[]).unwrap();
