@@ -332,6 +332,11 @@ pub enum CsrError {
     },
     /// A converted sparse matrix is stored by columns (CSC), not rows.
     Csc,
+    /// A converted sparse matrix leaves unused slots after `row`'s entries.
+    RowGap {
+        /// The first row with unused slots.
+        row: usize,
+    },
 }
 
 impl core::fmt::Display for CsrError {
@@ -360,6 +365,7 @@ impl core::fmt::Display for CsrError {
                 write!(f, "matrix is {rows}x{cols}, not square")
             }
             Self::Csc => f.write_str("matrix is stored by columns (CSC), not rows"),
+            Self::RowGap { row } => write!(f, "row {row} leaves unused slots after its entries"),
         }
     }
 }

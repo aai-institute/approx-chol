@@ -41,7 +41,14 @@ impl<'a, T, I: faer::Index + num_traits::PrimInt> TryFrom<faer::sparse::SparseRo
     fn try_from(matrix: faer::sparse::SparseRowMatRef<'a, I, T>) -> Result<Self, CsrError> {
         let n = square(matrix.nrows(), matrix.ncols())?;
         let symbolic = matrix.symbolic();
-        Csr::new(n, symbolic.row_ptr(), symbolic.col_idx(), matrix.val())
+        let row_ptrs = symbolic.row_ptr();
+        // Row counts filling every span are compact storage, so the arrays still borrow as CSR.
+        if let Some(row_nnz) = symbolic.row_nnz() {
+            if let Some(row) = (0..n).find(|&i| row_ptrs[i] + row_nnz[i] != row_ptrs[i + 1]) {
+                return Err(CsrError::RowGap { row });
+            }
+        }
+        Csr::new(n, row_ptrs, symbolic.col_idx(), matrix.val())
     }
 }
 

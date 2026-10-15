@@ -36,6 +36,19 @@ fn sprs_factorize_rejects_csc_with_error() {
     assert_eq!(err, FromCsrError::Csr(CsrError::Csc));
 }
 
+/// Rows 2..4 of a 4x2 matrix are a square view whose row pointers start past zero.
+#[test]
+fn sprs_outer_slice_with_offset_rows_is_rejected() {
+    let mat = CsMatI::<f64, u32>::new(
+        (4, 2),
+        vec![0, 1, 2, 4, 6],
+        vec![0, 1, 0, 1, 0, 1],
+        vec![1.0, 1.0, 1.0, -1.0, -1.0, 1.0],
+    );
+    let err = factorize_matrix(mat.slice_outer(2..4)).expect_err("offset rows must be rejected");
+    assert_eq!(err, FromCsrError::Csr(CsrError::RowPointers { row: 0 }));
+}
+
 #[test]
 fn sprs_try_from_non_square_returns_error() {
     let mat = CsMatI::<f64, u32>::new((3, 4), vec![0, 1, 2, 3], vec![0, 1, 2], vec![1.0; 3]);
