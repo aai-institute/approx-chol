@@ -8,7 +8,7 @@ use rayon::prelude::*;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use super::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single};
-use super::config::{CliqueRule, Config, InnerParallelism, Multiplicity};
+use super::config::{InnerParallelism, Multiplicity};
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
 use super::{largest, Streams};
 use crate::sgdd::Grounding;
@@ -29,7 +29,7 @@ pub(super) struct BlockElimination<T, I> {
     /// `M`'s own `C`, signs kept and shared with the block: a frustrated block's cover never doubles it.
     cross: Arc<Rows<T, I>>,
     inv_pivot: Box<[T]>,
-    /// `Cᵀ` where the larger side passes 10 000 rows (0.6's threshold), so `Allow` may split the solve by kept row.
+    /// `Cᵀ` where [`Self::transposes`], so `Allow` may split the solve by kept row.
     #[cfg_attr(feature = "serde", serde(skip))]
     ct: Option<Rows<T, I>>,
     /// The block's largest `|f|`, re-gauged after a singular solve: `S`'s Cholesky pins only a kept slot.
@@ -56,8 +56,13 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         Self::with_pivots(Arc::clone(cross), inv_pivot, gauge)
     }
 
+    /// Whether an elimination of `c` keeps `Cᵀ`: past 10 000 rows (0.6's threshold).
+    pub(super) fn transposes(c: &Rows<T, I>) -> bool {
+        c.n_rows() > 10_000
+    }
+
     fn with_pivots(cross: Arc<Rows<T, I>>, inv_pivot: Box<[T]>, gauge: Option<I>) -> Self {
-        let ct = (cross.n_rows() > 10_000).then(|| cross.transpose());
+        let ct = Self::transposes(&cross).then(|| cross.transpose());
         Self {
             cross,
             inv_pivot,
@@ -66,60 +71,18 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         }
     }
 
-    /// `S = D_k − Cᵀ D_e⁻¹ C` on `sheets`, exact where its Cholesky is dense, else by the config's rule: exact by kept row, sampled by star in parallel.
+    /// `S = D_k − Cᵀ D_e⁻¹ C` on `sheets`, exact by kept row.
     pub(super) fn complement(
         &self,
         sheets: Sheets,
         grounding: &Grounding<T>,
-        config: &Config,
-        stars: Streams,
     ) -> Sddm<'static, T, I> {
-        let (n_kept, surplus) = (self.cross.n_cols(), grounding.surplus());
-        let n = sheets.count() * n_kept;
-        let rule = match config.dense(n) {
-            true => CliqueRule::Exact,
-            false => config.complement,
+        let surplus = grounding.surplus();
+        let rows = match sheets {
+            Sheets::One => exact_rows(self, surplus),
+            Sheets::Two => cover_rows(self, surplus),
         };
-        let (c, ground) = (&self.cross, I::from_index(n));
-        let ground_share = move |e: usize| {
-            let s_e = surplus.map(|s| s[e]).filter(|&s| s > T::zero());
-            s_e.map(|s| (ground, s))
-        };
-        let (adjacency, ground) = match (rule, sheets) {
-            (CliqueRule::Exact, Sheets::One) => exact_rows(self, surplus),
-            (CliqueRule::Exact, Sheets::Two) => cover_rows(self, surplus),
-            // One sheet maps no column, as the balanced loop pays for any map.
-            (CliqueRule::Sampled(copies), Sheets::One) => from_fill(
-                n,
-                fill_stars(copies, c.n_rows(), |e| {
-                    let neighbors = c.row(e).map(|(k, &c)| (I::from_index(k), c.abs()));
-                    (stars.star(e), neighbors.chain(ground_share(e)))
-                }),
-            ),
-            (CliqueRule::Sampled(copies), Sheets::Two) => from_fill(
-                n,
-                fill_stars(copies, 2 * c.n_rows(), |star| {
-                    let (sheet, e) = (star / c.n_rows(), star % c.n_rows());
-                    let neighbors = c.row(e).map(move |(k, &c)| {
-                        let on = sheet ^ usize::from(crosses(c));
-                        (I::from_index(cover_vertex(k, on)), c.abs())
-                    });
-                    (stars.star(star), neighbors.chain(ground_share(e)))
-                }),
-            ),
-        };
-        let kept = surplus.map(|s| &s[s.len() - n_kept..]);
-        let surplus = match kept {
-            Some(kept) => {
-                let copies = kept
-                    .iter()
-                    .flat_map(|&s| std::iter::repeat_n(s, sheets.count()));
-                copies.zip(ground).map(|(s, g)| s + g).collect()
-            }
-            None => ground,
-        };
-        let grounding = Grounding::of(surplus);
-        Sddm::new(Cow::Owned(adjacency), Cow::Owned(grounding), sheets)
+        schur(rows, self.cross.n_cols(), sheets, surplus)
     }
 
     pub(super) fn n_eliminated(&self) -> usize {
@@ -192,6 +155,63 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
                 .for_each(|(e, y)| row(e, y));
         }
     }
+}
+
+/// `S` sampled by star in parallel; clique trees need no pivots, so no elimination exists yet.
+pub(super) fn sampled<T: Real, I: Index>(
+    c: &Rows<T, I>,
+    copies: Multiplicity,
+    sheets: Sheets,
+    grounding: &Grounding<T>,
+    stars: Streams,
+) -> Sddm<'static, T, I> {
+    let (n_kept, surplus) = (c.n_cols(), grounding.surplus());
+    let n = sheets.count() * n_kept;
+    let ground = I::from_index(n);
+    let ground_share = move |e: usize| {
+        let s_e = surplus.map(|s| s[e]).filter(|&s| s > T::zero());
+        s_e.map(|s| (ground, s))
+    };
+    let fill = match sheets {
+        // One sheet maps no column, as the balanced loop pays for any map.
+        Sheets::One => fill_stars(copies, c.n_rows(), |e| {
+            let neighbors = c.row(e).map(|(k, &c)| (I::from_index(k), c.abs()));
+            (stars.star(e), neighbors.chain(ground_share(e)))
+        }),
+        Sheets::Two => fill_stars(copies, 2 * c.n_rows(), |star| {
+            let (sheet, e) = (star / c.n_rows(), star % c.n_rows());
+            let neighbors = c.row(e).map(move |(k, &c)| {
+                let on = sheet ^ usize::from(crosses(c));
+                (I::from_index(cover_vertex(k, on)), c.abs())
+            });
+            (stars.star(star), neighbors.chain(ground_share(e)))
+        }),
+    };
+    schur(from_fill(n, fill), n_kept, sheets, surplus)
+}
+
+/// The kept rows with each kept vertex's surplus added to its ground share.
+fn schur<T: Real, I: Index>(
+    (adjacency, ground): (UpperAdjacency<T, I>, Vec<T>),
+    n_kept: usize,
+    sheets: Sheets,
+    surplus: Option<&[T]>,
+) -> Sddm<'static, T, I> {
+    let kept = surplus.map(|s| &s[s.len() - n_kept..]);
+    let surplus = match kept {
+        Some(kept) => {
+            let copies = kept
+                .iter()
+                .flat_map(|&s| std::iter::repeat_n(s, sheets.count()));
+            copies.zip(ground).map(|(s, g)| s + g).collect()
+        }
+        None => ground,
+    };
+    Sddm::new(
+        Cow::Owned(adjacency),
+        Cow::Owned(Grounding::of(surplus)),
+        sheets,
+    )
 }
 
 /// Counting-sorts chunks unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.
