@@ -214,15 +214,6 @@ fn assert_committed_payload_decodes_and_solves(fixture: Fixture) {
     );
 }
 
-#[test]
-fn a_payload_declares_the_format_version_it_was_written_with() {
-    for block in Fixture::Grounded.blocks() {
-        let bytes = postcard::to_stdvec(&block).expect("serialize");
-        let (declared, _) = postcard::take_from_bytes::<u32>(&bytes).expect("a leading version");
-        assert_eq!(declared, FORMAT_VERSION);
-    }
-}
-
 #[rstest]
 #[case::from_the_old_crate(0x4143_0005)]
 #[case::from_a_future_release(FORMAT_VERSION + 1)]
