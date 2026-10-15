@@ -322,3 +322,77 @@ impl<T: Real, I: Index> BlockFactor<T, I> {
         (kept > 0 && self.cholesky.solves(kept)).then_some(self)
     }
 }
+
+#[cfg(all(test, feature = "serde"))]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+    use crate::input::{BipartiteGram, Csr, FactorWidth1, Weights};
+    use crate::ScalingPolicy;
+
+    fn only_block(sgdd: Sgdd, config: &Config) -> BlockFactor {
+        let mut blocks = factorize(&sgdd, config).into_blocks();
+        assert_eq!(blocks.len(), 1);
+        blocks.pop().expect("one block")
+    }
+
+    fn csr_block(row_ptrs: &[u32], columns: &[u32], values: &[f64]) -> BlockFactor {
+        let csr = Csr::new(row_ptrs.len() - 1, row_ptrs, columns, values).expect("valid csr");
+        let sgdd = Sgdd::from_csr(csr, ScalingPolicy::default()).expect("reduces");
+        only_block(sgdd, &Config::default())
+    }
+
+    /// A 2-vertex floating block's restriction over a 3-vertex grounded block's Cholesky.
+    fn mismatched_cholesky() -> BlockFactor {
+        let floating = csr_block(&[0, 2, 4], &[0, 1, 0, 1], &[1.0, -1.0, -1.0, 1.0]);
+        let grounded = csr_block(
+            &[0, 2, 5, 7],
+            &[0, 1, 0, 1, 2, 1, 2],
+            &[2.0, -1.0, -1.0, 3.0, -1.0, -1.0, 2.0],
+        );
+        BlockFactor {
+            cholesky: grounded.cholesky,
+            ..floating
+        }
+    }
+
+    /// A sampled AC2 bipartite block stripped of the elimination its Cholesky follows.
+    fn sampled_without_elimination() -> BlockFactor {
+        let (left, right, per_row) = (10u32, 6u32, 3u32);
+        let (rows, cols): (Vec<u32>, Vec<u32>) = (0..left * per_row)
+            .map(|k| (k / per_row, (k * 5 + k / per_row) % right))
+            .unzip();
+        let gram = BipartiteGram::new(
+            FactorWidth1::new(left as usize, &rows, None).expect("valid rows"),
+            FactorWidth1::new(right as usize, &cols, None).expect("valid columns"),
+            Weights::unit(),
+        )
+        .expect("valid gram");
+        let sgdd = Sgdd::from_bipartite_gram(gram, ScalingPolicy::default()).expect("reduces");
+        let ac2 = Multiplicity::Split(SplitCount::new(2).expect("k = 2"));
+        let config = Config {
+            complement: CliqueRule::Sampled(ac2),
+            approximate: ac2,
+            dense_up_to: 0,
+            ..Config::default()
+        };
+        let block = only_block(sgdd, &config);
+        assert!(block.elimination.is_some());
+        BlockFactor {
+            elimination: None,
+            ..block
+        }
+    }
+
+    #[rstest]
+    #[case::mismatched_cholesky(mismatched_cholesky())]
+    #[case::sampled_without_elimination(sampled_without_elimination())]
+    fn a_block_whose_parts_disagree_is_rejected_on_decode(#[case] spliced: BlockFactor) {
+        let bytes = postcard::to_stdvec(&spliced).expect("serialize");
+        assert_eq!(
+            postcard::from_bytes::<BlockFactor>(&bytes).expect_err("parts that disagree"),
+            postcard::Error::SerdeDeCustom
+        );
+    }
+}
