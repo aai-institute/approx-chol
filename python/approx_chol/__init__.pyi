@@ -127,24 +127,25 @@ def factorize(
     ...
 
 def factorize_raw(
-    row_ptrs: npt.NDArray[np.uint32],
-    col_indices: npt.NDArray[np.uint32],
-    values: npt.NDArray[np.float64],
+    row_ptrs: npt.ArrayLike,
+    col_indices: npt.ArrayLike,
+    values: npt.ArrayLike,
     n: int,
     config: Config | None = None,
 ) -> Factor:
     """Factorize an SDDM matrix from raw CSR arrays.
 
     Args:
-        row_ptrs: CSR row pointer array (uint32).
-        col_indices: CSR column index array (uint32).
-        values: CSR value array (float64).
+        row_ptrs: CSR row pointer array, any integer dtype.
+        col_indices: CSR column index array, any integer dtype.
+        values: CSR value array, integer or floating-point.
         n: Matrix dimension.
         config: Optional factorization configuration.
 
     Raises:
-        ValueError: If the CSR structure is invalid, or the matrix is not
-            symmetric or has a nonpositive diagonal.
+        ValueError: If an array is not 1-D or has a dtype it cannot carry, the
+            CSR structure is invalid, or the matrix is not symmetric or has a
+            nonpositive diagonal.
 
     Warns:
         RuntimeWarning: As :func:`factorize`.

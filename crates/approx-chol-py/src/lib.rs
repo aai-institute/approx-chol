@@ -181,18 +181,6 @@ fn warn_on_scaling(py: Python<'_>, sgdd: &Sgdd<f64, u32>) -> PyResult<()> {
     Ok(())
 }
 
-fn factorize_csr<J: PrimInt + Sync>(
-    py: Python<'_>,
-    csr: Csr<'_, f64, J>,
-    config: Option<&PyConfig>,
-) -> PyResult<PyFactor> {
-    let sgdd = Sgdd::from_csr(csr, ScalingPolicy::default()).map_err(|e| error_to_py(&e))?;
-    warn_on_scaling(py, &sgdd)?;
-    let config = config.map_or_else(Config::default, |config| config.0);
-    let inner = approx_chol::factorize(&sgdd, &config);
-    Ok(PyFactor { inner })
-}
-
 #[pymethods]
 impl PyFactor {
     #[getter]
@@ -279,24 +267,21 @@ impl PyFactor {
 #[pyo3(signature = (row_ptrs, col_indices, values, n, config=None))]
 fn factorize_raw<'py>(
     py: Python<'py>,
-    row_ptrs: PyReadonlyArray1<'py, u32>,
-    col_indices: PyReadonlyArray1<'py, u32>,
-    values: PyReadonlyArray1<'py, f64>,
-    n: u32,
+    row_ptrs: &Bound<'py, PyAny>,
+    col_indices: &Bound<'py, PyAny>,
+    values: &Bound<'py, PyAny>,
+    n: usize,
     config: Option<&PyConfig>,
 ) -> PyResult<PyFactor> {
-    let rp = row_ptrs
-        .as_slice()
-        .map_err(|_| value_error("row_ptrs must be contiguous"))?;
-    let ci = col_indices
-        .as_slice()
-        .map_err(|_| value_error("col_indices must be contiguous"))?;
-    let vals = values
-        .as_slice()
-        .map_err(|_| value_error("values must be contiguous"))?;
-
-    let csr = Csr::new(n as usize, rp, ci, vals).map_err(|e| error_to_py(&e))?;
-    factorize_csr(py, csr, config)
+    let np = py.import("numpy")?;
+    CsrArrays {
+        n,
+        indptr: as_1d(&np, row_ptrs, "row_ptrs", Column::Index)?,
+        indices: as_1d(&np, col_indices, "col_indices", Column::Index)?,
+        data: as_contiguous(&np, &as_1d(&np, values, "values", Column::Value)?)?,
+        np,
+    }
+    .factorize(config)
 }
 
 #[pyfunction]
@@ -306,39 +291,23 @@ fn factorize(
     matrix: &Bound<'_, PyAny>,
     config: Option<&PyConfig>,
 ) -> PyResult<PyFactor> {
-    let indptr = matrix.getattr("indptr")?.extract::<Bound<'_, PyAny>>()?;
-    let indices = matrix.getattr("indices")?.extract::<Bound<'_, PyAny>>()?;
-    let data = matrix.getattr("data")?.extract::<Bound<'_, PyAny>>()?;
-    let shape = matrix.getattr("shape")?.extract::<(usize, usize)>()?;
-
-    if shape.0 != shape.1 {
+    let (n, columns) = matrix.getattr("shape")?.extract::<(usize, usize)>()?;
+    if n != columns {
         return Err(value_error("matrix must be square"));
     }
-    if u32::try_from(shape.0).is_err() {
-        return Err(value_error("matrix dimension exceeds u32::MAX"));
-    }
-
     let np = py.import("numpy")?;
-    let arrays = CsrArrays {
-        n: shape.0,
-        indptr: as_1d(&np, &indptr, "indptr", Column::Index)?,
-        indices: as_1d(&np, &indices, "indices", Column::Index)?,
-        data: as_contiguous::<f64>(&np, &as_1d(&np, &data, "data", Column::Value)?)?,
+    let data = as_1d(&np, &matrix.getattr("data")?, "data", Column::Value)?;
+    CsrArrays {
+        n,
+        indptr: as_1d(&np, &matrix.getattr("indptr")?, "indptr", Column::Index)?,
+        indices: as_1d(&np, &matrix.getattr("indices")?, "indices", Column::Index)?,
+        data: as_contiguous(&np, &data)?,
         np,
-    };
-    let dtype = arrays.index_dtype()?;
-    let kind = dtype.getattr("kind")?.extract::<String>()?;
-    let width = dtype.getattr("itemsize")?.extract::<usize>()?;
-    match (kind.as_str(), width) {
-        ("i", 4) => arrays.factorize::<i32>(config),
-        ("u", 4) => arrays.factorize::<u32>(config),
-        ("u", 8) => arrays.factorize::<u64>(config),
-        // Narrower integers widen; int64 beside uint64 promotes to float, and i64 holds any valid index.
-        _ => arrays.factorize::<i64>(config),
     }
+    .factorize(config)
 }
 
-/// A scipy CSR's checked arrays: values already `f64`, indices still in the caller's dtype.
+/// A CSR's checked arrays: values already `f64`, indices still in the caller's dtype.
 struct CsrArrays<'py> {
     np: Bound<'py, PyModule>,
     n: usize,
@@ -348,16 +317,29 @@ struct CsrArrays<'py> {
 }
 
 impl CsrArrays<'_> {
-    fn index_dtype(&self) -> PyResult<Bound<'_, PyAny>> {
+    fn factorize(&self, config: Option<&PyConfig>) -> PyResult<PyFactor> {
+        // Also keeps `Csr::new` from overflowing `n + 1`.
+        if u32::try_from(self.n).is_err() {
+            return Err(value_error("matrix dimension exceeds u32::MAX"));
+        }
         let dtypes = (
             self.indptr.getattr("dtype")?,
             self.indices.getattr("dtype")?,
         );
-        self.np.call_method1("result_type", dtypes)
+        let dtype = self.np.call_method1("result_type", dtypes)?;
+        let kind = dtype.getattr("kind")?.extract::<String>()?;
+        let width = dtype.getattr("itemsize")?.extract::<usize>()?;
+        match (kind.as_str(), width) {
+            ("i", 4) => self.factorize_as::<i32>(config),
+            ("u", 4) => self.factorize_as::<u32>(config),
+            ("u", 8) => self.factorize_as::<u64>(config),
+            // Narrower integers widen; int64 beside uint64 promotes to float, and i64 holds any valid index.
+            _ => self.factorize_as::<i64>(config),
+        }
     }
 
     /// Borrows the index arrays whenever they already are contiguous `J`.
-    fn factorize<J: Element + PrimInt + Sync>(
+    fn factorize_as<J: Element + PrimInt + Sync>(
         &self,
         config: Option<&PyConfig>,
     ) -> PyResult<PyFactor> {
@@ -372,7 +354,11 @@ impl CsrArrays<'_> {
             data.as_slice().map_err(|_| contiguous("data"))?,
         )
         .map_err(|e| error_to_py(&e))?;
-        factorize_csr(self.np.py(), csr, config)
+        let sgdd = Sgdd::from_csr(csr, ScalingPolicy::default()).map_err(|e| error_to_py(&e))?;
+        warn_on_scaling(self.np.py(), &sgdd)?;
+        let config = config.map_or_else(Config::default, |config| config.0);
+        let inner = approx_chol::factorize(&sgdd, &config);
+        Ok(PyFactor { inner })
     }
 }
 
