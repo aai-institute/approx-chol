@@ -25,7 +25,9 @@ fn main() {
         let bytes = postcard::to_stdvec(&input).expect("serialize the seed");
         let decoded = postcard::from_bytes::<Input>(&bytes).expect("a seed decodes");
         // A rejected seed starts the fuzzer outside the factorization.
-        (decoded.run()).unwrap_or_else(|e| panic!("seed {name} reaches the solve: {e}"));
+        let blocks =
+            (decoded.run()).unwrap_or_else(|e| panic!("seed {name} reaches the solve: {e}"));
+        assert!(blocks > 0, "seed {name} reaches no block");
         fs::write(views.join(format!("{name}.bin")), bytes).expect("write the seed");
         if let Input::F64(case) = decoded {
             let blocks = case.factor().expect("the seed factors").into_blocks();

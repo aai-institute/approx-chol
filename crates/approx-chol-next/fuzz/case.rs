@@ -15,8 +15,8 @@ pub enum Input {
 }
 
 impl Input {
-    /// `Err` is a typed rejection; a panic is the defect the target hunts.
-    pub fn run(&self) -> Result<(), Box<dyn Error>> {
+    /// The blocks solved, or a typed rejection; a panic is the defect the target hunts.
+    pub fn run(&self) -> Result<usize, Box<dyn Error>> {
         match self {
             Self::F64(case) => case.run(),
             Self::F32(case) => case.run(),
@@ -139,14 +139,15 @@ impl<T: Real> Case<T> {
         Ok(factorize(&self.reduce()?, &self.build.config()))
     }
 
-    fn run(&self) -> Result<(), Box<dyn Error>> {
+    fn run(&self) -> Result<usize, Box<dyn Error>> {
         let factor = self.factor()?;
         let b = vec![T::one(); factor.n()];
         let solved = factor
             .solve(&b)
             .expect("a right-hand side of length n is accepted");
+        let blocks = factor.into_blocks();
         // NaN scratch reaches the solution if any slot is read before written.
-        for block in factor.into_blocks() {
+        for block in &blocks {
             let mut local = vec![T::one(); block.vertices().len()];
             let mut scratch = vec![T::nan(); block.scratch_len()];
             block
@@ -156,7 +157,7 @@ impl<T: Real> Case<T> {
                 .all(|(v, x)| solved[v.index()].integer_decode() == x.integer_decode());
             assert!(agrees, "dirty scratch changed the solution");
         }
-        Ok(())
+        Ok(blocks.len())
     }
 
     fn reduce(&self) -> Result<Sgdd<T>, Box<dyn Error>> {
