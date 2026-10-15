@@ -9,7 +9,7 @@ use std::cell::LazyCell;
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
 use super::congruence::Congruence;
 use super::decomposition::{Cells, Components};
-use super::scaling::{self, Existence, ScalingPolicy, ScalingReport, RATIO_BAND};
+use super::scaling::{self, Existence, ScaleVector, ScalingPolicy, ScalingReport, RATIO_BAND};
 use super::signature;
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, widen, Index, Real};
@@ -97,8 +97,9 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         let (m, rows) = match relaxation {
             None => {
                 // Signs keep every magnitude, so `A_c`'s rows are `M`'s.
+                let (diagonal, abs) = (&self.diagonal, &self.abs_row_sums);
                 let deficit =
-                    clamped_deficit(&self.diagonal, &self.abs_row_sums, &self.off_diagonal, 0.0);
+                    clamped_deficit(diagonal, abs, &self.off_diagonal, ScaleVector::Identity);
                 let mut m = Congruent::new(self.vertices, self.off_diagonal, signs);
                 m.report = policy.report(ScalingReport::unscaled(existence), deficit);
                 let rows = RowSums {
@@ -114,7 +115,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 let diagonal: Vec<T> = (self.diagonal.iter().zip(&relaxation.scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();
-                let deficit = clamped_deficit(&diagonal, &abs, &off_diagonal, relaxation.band);
+                let deficit = clamped_deficit(&diagonal, &abs, &off_diagonal, relaxation.vector);
                 let m = Congruent {
                     vertices: self.vertices,
                     congruence: Congruence::Scaled(factors),
@@ -207,12 +208,12 @@ impl<T: Real> RowSums<T> {
     }
 }
 
-/// `max_i (Σ_j|m_ij| − m_ii)/m_ii` past row `i`'s band, `max(RATIO_BAND ε, (k_i + 3) ε + settle/√m_ii)`: forming its `k_i` entries plus how far the scaling settled.
+/// `max_i (Σ_j|m_ij| − m_ii)/m_ii` past row `i`'s band, which its `k_i` entries and the scale vector set.
 fn clamped_deficit<T: Real, I: Index>(
     diagonal: &[T],
     abs_row_sums: &[T],
     off_diagonal: &OffDiagonal<T, I>,
-    settle: f64,
+    vector: ScaleVector,
 ) -> f64 {
     let epsilon = widen(T::epsilon());
     let deficits =
@@ -225,10 +226,7 @@ fn clamped_deficit<T: Real, I: Index>(
         return 0.0;
     }
     (deficits.zip(off_diagonal.degrees()).zip(diagonal))
-        .filter(|&((deficit, k), &d)| {
-            let settled = settle / widen(d).sqrt();
-            deficit > (RATIO_BAND * epsilon).max((k + 3) as f64 * epsilon + settled)
-        })
+        .filter(|&((deficit, k), &d)| deficit > vector.row_band(k, widen(d), epsilon))
         .fold(0.0, |worst, ((deficit, _), _)| worst.max(deficit))
 }
 

@@ -94,8 +94,31 @@ pub(super) struct Relaxation<T> {
     iterations: usize,
     violation: T,
     settled: bool,
-    /// The eigen-residual band, relative to `μ`'s peak, the scales settled against: a row of `M_ii = μ_i²` may sit `band/μ_i` off.
-    pub(super) band: f64,
+    /// What `μ` is, which decides how far off balance it may leave a row.
+    pub(super) vector: ScaleVector,
+}
+
+/// The vector the scales are taken from, and so how far past rounding each row of `M` may sit.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ScaleVector {
+    /// `R = I`: a row rounds by its `k_i` entries, never tighter than a settled residual.
+    Identity,
+    /// `|u|` of a certified null vector, accurate relative to each entry.
+    NullVector,
+    /// An inverse-iteration Perron vector settled to `band` relative to its peak: a row of `M_ii = μ_i²` sits within `band/μ_i`.
+    PerronVector { band: f64 },
+}
+
+impl ScaleVector {
+    /// Row `i`'s band for its `k_i` entries and diagonal `m_ii`, in units where `T`'s rounding is `epsilon`.
+    pub(super) fn row_band(self, k: usize, m_ii: f64, epsilon: f64) -> f64 {
+        let rounding = (k + 3) as f64 * epsilon;
+        match self {
+            Self::Identity => rounding.max(RATIO_BAND * epsilon),
+            Self::NullVector => rounding + RATIO_BAND * epsilon,
+            Self::PerronVector { band } => rounding + band / m_ii.sqrt(),
+        }
+    }
 }
 
 impl<T: Real> Relaxation<T> {
@@ -115,7 +138,7 @@ impl<T: Real> Relaxation<T> {
         iterations: usize,
         violation: T,
         settled: bool,
-        band: f64,
+        vector: ScaleVector,
     ) -> Option<Self> {
         let positive = scales.iter().all(|&f| f.is_finite() && f > T::zero());
         positive.then_some(Self {
@@ -123,7 +146,7 @@ impl<T: Real> Relaxation<T> {
             iterations,
             violation,
             settled,
-            band,
+            vector,
         })
     }
 }
@@ -136,7 +159,7 @@ pub(super) fn null_scaling<T: Real>(
     let peak =
         (u.clone().zip(diagonal)).fold(0.0f64, |peak, (x, &d)| peak.max(x.abs() * widen(d).sqrt()));
     let scales: Box<[T]> = u.map(|x| narrow::<T>(x.abs() / peak)).collect();
-    Relaxation::new(scales, 0, T::zero(), true, RATIO_BAND * widen(T::epsilon()))
+    Relaxation::new(scales, 0, T::zero(), true, ScaleVector::NullVector)
 }
 
 /// How far, in `ε`, a row ratio `Σ_j|a_ij|f_j / (a_ii f_i)` may sit from `1`: a settled residual and the dominance slack's floor.
@@ -154,5 +177,6 @@ pub(super) fn relax<T: Real, I: Index>(
     let band = (RATIO_BAND * widen(T::epsilon())).max(rounding);
     let iteration = InverseIteration::new(&n, policy.tolerance, band, policy.max_iterations)?;
     let (y, iterations, violation, settled) = iteration.run();
-    Relaxation::new(n.scales(&y), iterations, narrow(violation), settled, band)
+    let vector = ScaleVector::PerronVector { band };
+    Relaxation::new(n.scales(&y), iterations, narrow(violation), settled, vector)
 }
