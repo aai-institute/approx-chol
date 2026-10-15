@@ -260,6 +260,17 @@ fn an_empty_system_is_admitted_by_every_entry_point(#[case] sgdd: Sgdd) {
     assert_eq!((sgdd.n(), sgdd.blocks().len()), (0, 0));
 }
 
+#[rstest]
+#[case::csr(Csr::<f64>::new(usize::MAX, &[0], &[], &[]).err())]
+#[case::upper_csr(UpperCsr::<f64>::new(usize::MAX, &[0], &[], &[]).err())]
+fn a_dimension_past_the_largest_row_count_is_a_length_mismatch(#[case] error: Option<CsrError>) {
+    let expected = CsrError::LengthMismatch {
+        expected: usize::MAX,
+        found: 1,
+    };
+    assert_eq!(error, Some(expected));
+}
+
 #[test]
 fn singleton_systems_are_admitted() {
     let zero = reduce(&[0, 1], &[0], &[0.0]).expect("zero singleton");

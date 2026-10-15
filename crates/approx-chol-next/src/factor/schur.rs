@@ -362,8 +362,10 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
                 .inv_pivot
                 .iter()
                 .all(|p| p.is_finite() && *p > T::zero());
-        let n = self.cross.n_rows() + self.cross.n_cols();
-        let gauge = self.gauge.is_none_or(|q| q.index() < n);
+        let (n_rows, n_cols) = (self.cross.n_rows(), self.cross.n_cols());
+        // The larger side is eliminated, which bounds `n_cols` by decoded rows before `n` or `Cᵀ` exists.
+        let sides = n_cols <= n_rows;
+        let gauge = sides && self.gauge.is_none_or(|q| q.index() < n_rows + n_cols);
         (pivots && gauge).then(|| Self::with_pivots(self.cross, self.inv_pivot, self.gauge))
     }
 }
