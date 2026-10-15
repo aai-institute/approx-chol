@@ -1,3 +1,5 @@
+#[path = "common/cases.rs"]
+mod cases;
 #[path = "common/dense.rs"]
 mod dense;
 #[path = "common/entry.rs"]
@@ -24,13 +26,13 @@ mod spectrum;
 use std::ops::RangeInclusive;
 
 use approx_chol_next::Config;
+use cases::cases;
 use dense::dense;
 use entry::{by_type, Entry, Types};
 use graph::{Edge, Graph};
 use interleaved::interleaved_components;
 use modes::Mode;
 use proptest::prelude::*;
-use rstest::rstest;
 use runner::{check, stated_by};
 use sparse::Sparse;
 
@@ -114,36 +116,19 @@ fn n(factor: &entry::Factored) -> usize {
     by_type!(&factor.factor, factor => factor.n())
 }
 
-#[rstest]
-fn factor_spectrum_on_the_range_is_bounded(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    let graphs = stated_by(entry, prop_oneof![balanced(), frustrated(balanced())]);
-    check(graphs, |graph| {
-        let violation = spectrum_violation(entry, &graph, types, mode);
-        prop_assert!(violation.is_none(), "{}", violation.unwrap_or_default());
-        Ok(())
-    });
+cases! {
+    fn factor_spectrum_on_the_range_is_bounded(
+        entry in entries(all),
+        types in types(all),
+        mode in modes,
+    ) {
+        let graphs = stated_by(entry, prop_oneof![balanced(), frustrated(balanced())]);
+        check(graphs, |graph| {
+            let violation = spectrum_violation(entry, &graph, types, mode);
+            prop_assert!(violation.is_none(), "{}", violation.unwrap_or_default());
+            Ok(())
+        });
+    }
 }
 
 /// A 3-star sampled as a path: one apply's residual 1.04 at seed 7, `λ_max` 2.37 under a sampled complement.
@@ -176,34 +161,17 @@ fn tied_eight_vertices() -> Graph {
     Graph::new(8, edges.map(|(a, b, w)| Edge::negative(a, b, w)).to_vec())
 }
 
-#[rstest]
-#[case::three_star_tree(three_star_tree())]
-#[case::tied_eight_vertices(tied_eight_vertices())]
-fn a_sampled_complement_past_twice_its_clique_keeps_the_spectrum_bounded(
-    #[case] graph: Graph,
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    assert_eq!(spectrum_violation(entry, &graph, types, mode), None);
+cases! {
+    #[case::three_star_tree(three_star_tree())]
+    #[case::tied_eight_vertices(tied_eight_vertices())]
+    fn a_sampled_complement_past_twice_its_clique_keeps_the_spectrum_bounded(
+        #[case] graph: Graph,
+        entry in entries(all),
+        types in types(all),
+        mode in modes,
+    ) {
+        assert_eq!(spectrum_violation(entry, &graph, types, mode), None);
+    }
 }
 
 /// A frustrated `K_5`, heavy around vertex 4: `λ_max` 3.94 under AC at seed 7, so a doubled cover solve leaves the range.
@@ -227,138 +195,77 @@ fn frustrated_heavy_k5() -> Graph {
     Graph::new(5, edges.to_vec())
 }
 
-#[rstest]
-fn a_frustrated_cover_keeps_the_spectrum_bounded(
-    #[values(Entry::Csr, Entry::UpperCsr, Entry::Gram, Entry::SignedGraph)] entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    let violation = spectrum_violation(entry, &frustrated_heavy_k5(), types, mode);
-    assert_eq!(violation, None);
+cases! {
+    fn a_frustrated_cover_keeps_the_spectrum_bounded(
+        entry in entries(frustrated),
+        types in types(all),
+        mode in modes,
+    ) {
+        let violation = spectrum_violation(entry, &frustrated_heavy_k5(), types, mode);
+        assert_eq!(violation, None);
+    }
 }
 
-/// A balanced graph without surplus floats on every entry point, signed or not.
-#[rstest]
-fn laplacian_factor_has_input_dimension_and_floats(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    check(stated_by(entry, laplacian()), |graph| {
-        let reduced = entry.reduce(&graph, types);
-        let floats = reduced.floats();
-        prop_assert!(floats.iter().all(|&f| f), "{types:?}: {floats:?}");
-        prop_assert_eq!(n(&reduced.factorize(&mode.config())), graph.n);
-        Ok(())
-    });
+cases! {
+    /// A balanced graph without surplus floats on every entry point, signed or not.
+    fn laplacian_factor_has_input_dimension_and_floats(
+        entry in entries(all),
+        types in types(all),
+        mode in modes,
+    ) {
+        check(stated_by(entry, laplacian()), |graph| {
+            let reduced = entry.reduce(&graph, types);
+            let floats = reduced.floats();
+            prop_assert!(floats.iter().all(|&f| f), "{types:?}: {floats:?}");
+            prop_assert_eq!(n(&reduced.factorize(&mode.config())), graph.n);
+            Ok(())
+        });
+    }
 }
 
-#[rstest]
-fn sddm_factor_is_grounded_and_solves_finitely(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::GroundedLaplacian
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    let config = mode.config();
-    check(stated_by(entry, sddm()), |graph| {
-        let rhs: Vec<f64> = (0..graph.n).map(|i| (i as f64 * 1.7).sin()).collect();
-        let reduced = entry.reduce(&graph, types);
-        let floats = reduced.floats();
-        prop_assert!(floats.iter().all(|&f| !f), "{types:?}: {floats:?}");
-        let factor = reduced.factorize(&config);
-        prop_assert_eq!(n(&factor), graph.n);
-        let x = factor.solve(&rhs);
-        prop_assert!(
-            x.iter().all(|x| x.is_finite()),
-            "{types:?} {config:?}: {x:?}"
-        );
-        Ok(())
-    });
+cases! {
+    fn sddm_factor_is_grounded_and_solves_finitely(
+        entry in entries(grounded),
+        types in types(all),
+        mode in modes,
+    ) {
+        let config = mode.config();
+        check(stated_by(entry, sddm()), |graph| {
+            let rhs: Vec<f64> = (0..graph.n).map(|i| (i as f64 * 1.7).sin()).collect();
+            let reduced = entry.reduce(&graph, types);
+            let floats = reduced.floats();
+            prop_assert!(floats.iter().all(|&f| !f), "{types:?}: {floats:?}");
+            let factor = reduced.factorize(&config);
+            prop_assert_eq!(n(&factor), graph.n);
+            let x = factor.solve(&rhs);
+            prop_assert!(
+                x.iter().all(|x| x.is_finite()),
+                "{types:?} {config:?}: {x:?}"
+            );
+            Ok(())
+        });
+    }
 }
 
-/// Two reductions and factorizations of one input at one seed agree bit for bit.
-#[rstest]
-fn deterministic_with_fixed_seed(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    let graphs = stated_by(entry, balanced());
-    let config = Config {
-        seed: 42,
-        ..mode.config()
-    };
-    check(graphs, |graph| {
-        let rhs: Vec<f64> = (0..graph.n).map(|i| (i as f64 * 1.7).sin()).collect();
-        let first = entry.reduce(&graph, types);
-        let second = entry.reduce(&graph, types);
-        let x1 = first.factorize(&config).solve(&rhs);
-        let x2 = second.factorize(&config).solve(&rhs);
-        let bits = |x: &[f64]| x.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
-        prop_assert_eq!(bits(&x1), bits(&x2), "{:?} {:?}", types, config);
-        Ok(())
-    });
+cases! {
+    /// Two reductions and factorizations of one input at one seed agree bit for bit.
+    fn deterministic_with_fixed_seed(entry in entries(all), types in types(all), mode in modes) {
+        let graphs = stated_by(entry, balanced());
+        let config = Config {
+            seed: 42,
+            ..mode.config()
+        };
+        check(graphs, |graph| {
+            let rhs: Vec<f64> = (0..graph.n).map(|i| (i as f64 * 1.7).sin()).collect();
+            let first = entry.reduce(&graph, types);
+            let second = entry.reduce(&graph, types);
+            let x1 = first.factorize(&config).solve(&rhs);
+            let x2 = second.factorize(&config).solve(&rhs);
+            let bits = |x: &[f64]| x.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+            prop_assert_eq!(bits(&x1), bits(&x2), "{:?} {:?}", types, config);
+            Ok(())
+        });
+    }
 }
 
 /// Class `0` alone carries surplus, so a grounded block sits among floating ones; reading it as floating solves the wrong system on its rows.
@@ -377,29 +284,23 @@ fn one_grounded_component() -> impl Strategy<Value = Graph> {
     })
 }
 
-#[rstest]
-fn a_grounded_block_beside_floating_ones_solves_its_own_rows(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::GroundedLaplacian
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-) {
-    check(stated_by(entry, one_grounded_component()), |graph| {
-        let raw: Vec<f64> = (0..graph.n).map(|i| (i as f64 * 1.7).sin() * 3.0).collect();
-        let rhs = graph.project_to_range(&raw);
-        let reduced = entry.reduce(&graph, types);
-        let x = reduced.factorize(&dense()).solve(&rhs);
-        let residual = graph.relative_residual(&x, &rhs);
-        // Measured at most 3.4ε; a grounded block solved as floating misses by order one.
-        prop_assert!(
-            residual < 64.0 * types.epsilon(),
-            "{types:?}: grounded block solved as floating: residual {residual:e}"
-        );
-        Ok(())
-    });
+cases! {
+    fn a_grounded_block_beside_floating_ones_solves_its_own_rows(
+        entry in entries(grounded),
+        types in types(all),
+    ) {
+        check(stated_by(entry, one_grounded_component()), |graph| {
+            let raw: Vec<f64> = (0..graph.n).map(|i| (i as f64 * 1.7).sin() * 3.0).collect();
+            let rhs = graph.project_to_range(&raw);
+            let reduced = entry.reduce(&graph, types);
+            let x = reduced.factorize(&dense()).solve(&rhs);
+            let residual = graph.relative_residual(&x, &rhs);
+            // Measured at most 3.4ε; a grounded block solved as floating misses by order one.
+            prop_assert!(
+                residual < 64.0 * types.epsilon(),
+                "{types:?}: grounded block solved as floating: residual {residual:e}"
+            );
+            Ok(())
+        });
+    }
 }

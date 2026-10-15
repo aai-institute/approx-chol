@@ -1,3 +1,5 @@
+#[path = "common/cases.rs"]
+mod cases;
 #[path = "common/dense.rs"]
 mod dense;
 #[path = "common/entry.rs"]
@@ -16,10 +18,10 @@ mod sparse;
 use approx_chol_next::{
     CliqueRule, Config, Factor, Index, InnerParallelism, Multiplicity, Real, SolveError, SplitCount,
 };
+use cases::cases;
 use entry::{by_type, cast, Entry, Factored, Types};
 use graph::{Edge, Graph};
 use modes::Mode;
-use rstest::rstest;
 use sparse::Sparse;
 
 fn assert_close(label: &str, x: &[f64], want: &[f64], tolerance: f64) {
@@ -60,41 +62,26 @@ fn splitting(config: Config, k: u32) -> Config {
     }
 }
 
-/// A grounded singleton is a star at every `k`, so no clique edge is sampled and the solve is `M⁻¹b` to rounding.
-#[rstest]
-#[case::positive_rhs([1.0, 2.0, 3.0])]
-#[case::mixed_sign_rhs([1.0, -2.0, 4.0])]
-fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
-    #[case] b: [f64; 3],
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::GroundedLaplacian
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-    #[values(2, 3, 7)] k: u32,
-) {
-    let graph = diagonal_sddm();
-    let reduced = entry.reduce(&graph, types);
-    assert_eq!(reduced.floats(), [false; 3], "{types:?}");
-    let config = splitting(mode.config(), k);
-    let factor = reduced.factorize(&config);
-    let want: Vec<f64> = b.iter().zip(&graph.ground).map(|(b, d)| b / d).collect();
-    let label = format!("{types:?} {config:?}");
-    assert_close(&label, &factor.solve(&b), &want, 4.0 * types.epsilon());
+cases! {
+    /// A grounded singleton is a star at every `k`, so no clique edge is sampled and the solve is `M⁻¹b` to rounding.
+    #[case::positive_rhs([1.0, 2.0, 3.0])]
+    #[case::mixed_sign_rhs([1.0, -2.0, 4.0])]
+    fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
+        #[case] b: [f64; 3],
+        entry in entries(grounded),
+        types in types(all),
+        mode in modes,
+        #[values(2, 3, 7)] k: u32,
+    ) {
+        let graph = diagonal_sddm();
+        let reduced = entry.reduce(&graph, types);
+        assert_eq!(reduced.floats(), [false; 3], "{types:?}");
+        let config = splitting(mode.config(), k);
+        let factor = reduced.factorize(&config);
+        let want: Vec<f64> = b.iter().zip(&graph.ground).map(|(b, d)| b / d).collect();
+        let label = format!("{types:?} {config:?}");
+        assert_close(&label, &factor.solve(&b), &want, 4.0 * types.epsilon());
+    }
 }
 
 fn assert_buffers_checked<T: Real, I: Index>(factor: &Factor<T, I>) {
@@ -130,30 +117,15 @@ fn assert_buffers_checked<T: Real, I: Index>(factor: &Factor<T, I>) {
     }
 }
 
-#[rstest]
-fn every_solve_checks_its_buffer_lengths(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::GroundedLaplacian
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    let reduced = entry.reduce(&diagonal_sddm(), types);
-    by_type!(&reduced.factorize(&mode.config()).factor, factor => assert_buffers_checked(factor));
+cases! {
+    fn every_solve_checks_its_buffer_lengths(
+        entry in entries(grounded),
+        types in types(all),
+        mode in modes,
+    ) {
+        let reduced = entry.reduce(&diagonal_sddm(), types);
+        by_type!(&reduced.factorize(&mode.config()).factor, factor => assert_buffers_checked(factor));
+    }
 }
 
 /// Each block through `solve_local` on a NaN-filled scratch, scattered back.
@@ -195,101 +167,61 @@ fn assert_dirty_scratch_matches_the_solve(label: &str, factor: &Factored) {
     }
 }
 
-#[rstest]
-fn dirty_scratch_does_not_change_a_grounded_solution(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::GroundedLaplacian
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    let graph = Graph {
-        ground: vec![1.0, 1.0],
-        ..Graph::new(2, vec![Edge::negative(0, 1, 1.0)])
-    };
-    let config = mode.config();
-    let factor = entry.reduce(&graph, types).factorize(&config);
-    assert!(
-        uses_scratch(&factor),
-        "grounded: the solve goes through scratch"
-    );
-    assert_dirty_scratch_matches_the_solve(&format!("grounded {types:?} {config:?}"), &factor);
+cases! {
+    fn dirty_scratch_does_not_change_a_grounded_solution(
+        entry in entries(grounded),
+        types in types(all),
+        mode in modes,
+    ) {
+        let graph = Graph {
+            ground: vec![1.0, 1.0],
+            ..Graph::new(2, vec![Edge::negative(0, 1, 1.0)])
+        };
+        let config = mode.config();
+        let factor = entry.reduce(&graph, types).factorize(&config);
+        assert!(
+            uses_scratch(&factor),
+            "grounded: the solve goes through scratch"
+        );
+        assert_dirty_scratch_matches_the_solve(&format!("grounded {types:?} {config:?}"), &factor);
+    }
 }
 
-#[rstest]
-fn dirty_scratch_does_not_change_a_frustrated_solution(
-    #[values(Entry::Csr, Entry::UpperCsr, Entry::Gram, Entry::SignedGraph)] entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    let positive = |a, b| Edge {
-        positive: true,
-        ..Edge::negative(a, b, 1.0)
-    };
-    let graph = Graph::new(3, vec![positive(0, 1), positive(1, 2), positive(0, 2)]);
-    let config = mode.config();
-    let factor = entry.reduce(&graph, types).factorize(&config);
-    assert!(
-        uses_scratch(&factor),
-        "frustrated: the solve goes through scratch"
-    );
-    assert_dirty_scratch_matches_the_solve(&format!("frustrated {types:?} {config:?}"), &factor);
+cases! {
+    fn dirty_scratch_does_not_change_a_frustrated_solution(
+        entry in entries(frustrated),
+        types in types(all),
+        mode in modes,
+    ) {
+        let positive = |a, b| Edge {
+            positive: true,
+            ..Edge::negative(a, b, 1.0)
+        };
+        let graph = Graph::new(3, vec![positive(0, 1), positive(1, 2), positive(0, 2)]);
+        let config = mode.config();
+        let factor = entry.reduce(&graph, types).factorize(&config);
+        assert!(
+            uses_scratch(&factor),
+            "frustrated: the solve goes through scratch"
+        );
+        assert_dirty_scratch_matches_the_solve(&format!("frustrated {types:?} {config:?}"), &factor);
+    }
 }
 
-/// Floating blocks solve in place; this case exercises the gather and scatter.
-#[rstest]
-fn dirty_scratch_does_not_change_an_interleaved_components_solution(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    let edges = vec![Edge::negative(0, 2, 1.0), Edge::negative(1, 3, 1.0)];
-    let graph = Graph::new(4, edges);
-    let config = mode.config();
-    let factor = entry.reduce(&graph, types).factorize(&config);
-    let label = format!("interleaved components {types:?} {config:?}");
-    assert_dirty_scratch_matches_the_solve(&label, &factor);
+cases! {
+    /// Floating blocks solve in place; this case exercises the gather and scatter.
+    fn dirty_scratch_does_not_change_an_interleaved_components_solution(
+        entry in entries(all),
+        types in types(all),
+        mode in modes,
+    ) {
+        let edges = vec![Edge::negative(0, 2, 1.0), Edge::negative(1, 3, 1.0)];
+        let graph = Graph::new(4, edges);
+        let config = mode.config();
+        let factor = entry.reduce(&graph, types).factorize(&config);
+        let label = format!("interleaved components {types:?} {config:?}");
+        assert_dirty_scratch_matches_the_solve(&label, &factor);
+    }
 }
 
 fn path(weight: f64) -> Graph {
@@ -312,251 +244,126 @@ fn assert_scaled_path_solves(entry: Entry, types: Types, mode: Mode, exponent: i
     );
 }
 
-/// The two scalars bottom out at different exponents, so each gets the range its solution is still representable in.
-#[rstest]
-fn a_scaled_f64_laplacian_solves_wherever_its_solution_is_representable(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-    #[values(0, -5, -15, -100, -250)] exponent: i32,
-) {
-    assert_scaled_path_solves(entry, types, mode, exponent);
+cases! {
+    /// The two scalars bottom out at different exponents, so each gets the range its solution is still representable in.
+    fn a_scaled_f64_laplacian_solves_wherever_its_solution_is_representable(
+        entry in entries(all),
+        types in types(f64),
+        mode in modes,
+        #[values(0, -5, -15, -100, -250)] exponent: i32,
+    ) {
+        assert_scaled_path_solves(entry, types, mode, exponent);
+    }
 }
 
-#[rstest]
-fn a_scaled_f32_laplacian_solves_wherever_its_solution_is_representable(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-    #[values(0, -3, -10, -25)] exponent: i32,
-) {
-    assert_scaled_path_solves(entry, types, mode, exponent);
+cases! {
+    fn a_scaled_f32_laplacian_solves_wherever_its_solution_is_representable(
+        entry in entries(all),
+        types in types(f32),
+        mode in modes,
+        #[values(0, -3, -10, -25)] exponent: i32,
+    ) {
+        assert_scaled_path_solves(entry, types, mode, exponent);
+    }
 }
 
-#[rstest]
-fn many_zero_singletons_factor_as_trivial_components(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    let graph = Graph::new(128, Vec::new());
-    let reduced = entry.reduce(&graph, types);
-    assert!(
-        reduced.floats().is_empty(),
-        "{types:?}: a zero vertex is no block"
-    );
-    let factor = reduced.factorize(&mode.config());
-    assert_eq!(by_type!(&factor.factor, f => f.n()), 128);
-    assert_eq!(bits(&factor.solve(&[1.0; 128])), bits(&[0.0; 128]));
+cases! {
+    fn many_zero_singletons_factor_as_trivial_components(
+        entry in entries(all),
+        types in types(all),
+        mode in modes,
+    ) {
+        let graph = Graph::new(128, Vec::new());
+        let reduced = entry.reduce(&graph, types);
+        assert!(
+            reduced.floats().is_empty(),
+            "{types:?}: a zero vertex is no block"
+        );
+        let factor = reduced.factorize(&mode.config());
+        assert_eq!(by_type!(&factor.factor, f => f.n()), 128);
+        assert_eq!(bits(&factor.solve(&[1.0; 128])), bits(&[0.0; 128]));
+    }
 }
 
-#[rstest]
-fn mixed_grounded_and_floating_components_solve_independently(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::GroundedLaplacian
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    let graph = Graph {
-        ground: vec![2.0, 0.0, 0.0],
-        ..Graph::new(3, vec![Edge::negative(1, 2, 1.0)])
-    };
-    let reduced = entry.reduce(&graph, types);
-    let mut floats = reduced.floats();
-    floats.sort();
-    assert_eq!(floats, [false, true], "{types:?}");
-    let config = mode.config();
-    let x = reduced.factorize(&config).solve(&[4.0, 1.0, -1.0]);
-    let label = format!("{types:?} {config:?}");
-    assert_close(&label, &x, &[2.0, 0.5, -0.5], 4.0 * types.epsilon());
+cases! {
+    fn mixed_grounded_and_floating_components_solve_independently(
+        entry in entries(grounded),
+        types in types(all),
+        mode in modes,
+    ) {
+        let graph = Graph {
+            ground: vec![2.0, 0.0, 0.0],
+            ..Graph::new(3, vec![Edge::negative(1, 2, 1.0)])
+        };
+        let reduced = entry.reduce(&graph, types);
+        let mut floats = reduced.floats();
+        floats.sort();
+        assert_eq!(floats, [false, true], "{types:?}");
+        let config = mode.config();
+        let x = reduced.factorize(&config).solve(&[4.0, 1.0, -1.0]);
+        let label = format!("{types:?} {config:?}");
+        assert_close(&label, &x, &[2.0, 0.5, -0.5], 4.0 * types.epsilon());
+    }
 }
 
-/// Components `{0, 2}` and `{1, 3}` interleave; an rhs not zero-sum per block has no exact solution, so the second case is the least-squares one.
-#[rstest]
-#[case::zero_sum_per_block([1.0, 2.0, -1.0, -2.0], [0.5, 1.0, -0.5, -1.0])]
-#[case::inconsistent([3.0, 5.0, -1.0, -2.0], [1.0, 1.75, -1.0, -1.75])]
-fn interleaved_components_solve_in_input_order(
-    #[case] rhs: [f64; 4],
-    #[case] want: [f64; 4],
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    let edges = vec![Edge::negative(0, 2, 1.0), Edge::negative(1, 3, 1.0)];
-    let graph = Graph::new(4, edges);
-    let config = mode.config();
-    let factor = entry.reduce(&graph, types).factorize(&config);
-    let label = format!("{types:?} {config:?}");
-    assert_close(&label, &factor.solve(&rhs), &want, 8.0 * types.epsilon());
+cases! {
+    /// Components `{0, 2}` and `{1, 3}` interleave; an rhs not zero-sum per block has no exact solution, so the second case is the least-squares one.
+    #[case::zero_sum_per_block([1.0, 2.0, -1.0, -2.0], [0.5, 1.0, -0.5, -1.0])]
+    #[case::inconsistent([3.0, 5.0, -1.0, -2.0], [1.0, 1.75, -1.0, -1.75])]
+    fn interleaved_components_solve_in_input_order(
+        #[case] rhs: [f64; 4],
+        #[case] want: [f64; 4],
+        entry in entries(all),
+        types in types(all),
+        mode in modes,
+    ) {
+        let edges = vec![Edge::negative(0, 2, 1.0), Edge::negative(1, 3, 1.0)];
+        let graph = Graph::new(4, edges);
+        let config = mode.config();
+        let factor = entry.reduce(&graph, types).factorize(&config);
+        let label = format!("{types:?} {config:?}");
+        assert_close(&label, &factor.solve(&rhs), &want, 8.0 * types.epsilon());
+    }
 }
 
-#[rstest]
-fn a_zero_singleton_has_a_defined_solve(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    let graph = Graph::new(1, Vec::new());
-    let config = mode.config();
-    let x = entry.reduce(&graph, types).factorize(&config).solve(&[7.0]);
-    let label = format!("zero singleton {types:?} {config:?}");
-    assert_close(&label, &x, &[0.0], types.epsilon());
+cases! {
+    fn a_zero_singleton_has_a_defined_solve(
+        entry in entries(all),
+        types in types(all),
+        mode in modes,
+    ) {
+        let graph = Graph::new(1, Vec::new());
+        let config = mode.config();
+        let x = entry.reduce(&graph, types).factorize(&config).solve(&[7.0]);
+        let label = format!("zero singleton {types:?} {config:?}");
+        assert_close(&label, &x, &[0.0], types.epsilon());
+    }
 }
 
-#[rstest]
-fn a_positive_singleton_has_a_defined_solve(
-    #[values(Entry::Csr, Entry::UpperCsr, Entry::GroundedLaplacian)] entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    let graph = Graph {
-        ground: vec![2.0],
-        ..Graph::new(1, Vec::new())
-    };
-    let config = mode.config();
-    let x = entry.reduce(&graph, types).factorize(&config).solve(&[7.0]);
-    let label = format!("positive singleton {types:?} {config:?}");
-    assert_close(&label, &x, &[3.5], types.epsilon());
+cases! {
+    fn a_positive_singleton_has_a_defined_solve(
+        entry in entries(lone_ground),
+        types in types(all),
+        mode in modes,
+    ) {
+        let graph = Graph {
+            ground: vec![2.0],
+            ..Graph::new(1, Vec::new())
+        };
+        let config = mode.config();
+        let x = entry.reduce(&graph, types).factorize(&config).solve(&[7.0]);
+        let label = format!("positive singleton {types:?} {config:?}");
+        assert_close(&label, &x, &[3.5], types.epsilon());
+    }
 }
 
-#[rstest]
-fn an_empty_system_solves_to_an_empty_vector(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    let reduced = entry.reduce(&Graph::new(0, Vec::new()), types);
-    assert!(reduced.factorize(&mode.config()).solve(&[]).is_empty());
+cases! {
+    fn an_empty_system_solves_to_an_empty_vector(
+        entry in entries(all),
+        types in types(all),
+        mode in modes,
+    ) {
+        let reduced = entry.reduce(&Graph::new(0, Vec::new()), types);
+        assert!(reduced.factorize(&mode.config()).solve(&[]).is_empty());
+    }
 }

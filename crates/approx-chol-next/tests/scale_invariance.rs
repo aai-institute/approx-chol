@@ -1,3 +1,5 @@
+#[path = "common/cases.rs"]
+mod cases;
 #[path = "common/dense.rs"]
 mod dense;
 #[path = "common/entry.rs"]
@@ -9,10 +11,10 @@ mod modes;
 #[path = "common/sparse.rs"]
 mod sparse;
 
+use cases::cases;
 use entry::{Entry, Types};
 use graph::{Edge, Graph};
 use modes::Mode;
-use rstest::rstest;
 use sparse::Sparse;
 
 const RHS: [f64; 6] = [1.0, -1.0, 2.0, -2.0, 0.5, -0.5];
@@ -66,55 +68,22 @@ fn assert_invariant_under_scaling(
     }
 }
 
-#[rstest]
-fn factorization_is_invariant_under_uniform_scaling(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    assert_invariant_under_scaling(entry, complete, types, mode);
+cases! {
+    fn factorization_is_invariant_under_uniform_scaling(
+        entry in entries(non_bipartite),
+        types in types(all),
+        mode in modes,
+    ) {
+        assert_invariant_under_scaling(entry, complete, types, mode);
+    }
 }
 
-#[rstest]
-fn bipartite_factorization_is_invariant_under_uniform_scaling(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    assert_invariant_under_scaling(entry, complete_bipartite, types, mode);
+cases! {
+    fn bipartite_factorization_is_invariant_under_uniform_scaling(
+        entry in entries(all),
+        types in types(all),
+        mode in modes,
+    ) {
+        assert_invariant_under_scaling(entry, complete_bipartite, types, mode);
+    }
 }
