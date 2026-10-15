@@ -3,7 +3,7 @@ use approx_chol::{
     CliqueRule, Config, Factor, Multiplicity, ScalingPolicy, ScalingReport, Sgdd, SplitCount,
 };
 use num_traits::PrimInt;
-use numpy::{BorrowError, Element, PyArray1, PyArrayMethods, PyReadonlyArray1};
+use numpy::{BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
 use std::error::Error;
 use std::mem::size_of;
@@ -195,9 +195,8 @@ impl PyFactor {
     }
 
     #[getter]
-    fn dtype<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let np = py.import("numpy")?;
-        np.getattr("float64")
+    fn dtype<'py>(&self, py: Python<'py>) -> Bound<'py, PyArrayDescr> {
+        f64::get_dtype(py)
     }
 
     fn matvec<'py>(
