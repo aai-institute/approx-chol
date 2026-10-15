@@ -3,50 +3,11 @@ mod dense;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use super::config::{Config, Multiplicity};
+use super::config::Config;
 use super::sddm::{descend, lift, Sddm, Sheets};
 use crate::narrow;
 use crate::{widen, Index, Real};
 use approximate::ApproximateCholesky;
-use dense::PackedLaplacian;
-
-/// A Cholesky routed dense and factored approximately instead: less accurate than asked.
-#[non_exhaustive]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Fallback {
-    /// The packed triangle does not fit in memory.
-    WillNotFit {
-        /// Dimension of the declined matrix, a cover's two sheets counted.
-        dimension: usize,
-    },
-}
-
-/// What the Cholesky factors, built in the form its arm asks for: exact for dense, as configured for approximate.
-pub(super) trait CholeskyInput<'a, T: Real, I: Index> {
-    /// Known before either form is built, a cover's two sheets counted.
-    fn dimension(&self) -> usize;
-
-    /// Always exact: a dense Cholesky spends nothing on sparsity.
-    fn for_dense(self) -> Sddm<'a, T, I>;
-
-    /// Consumed, so an owned matrix is freed before fill grows the graph.
-    fn for_approximate(self) -> Sddm<'a, T, I>;
-}
-
-impl<'a, T: Real, I: Index> CholeskyInput<'a, T, I> for Sddm<'a, T, I> {
-    fn dimension(&self) -> usize {
-        self.n()
-    }
-
-    fn for_dense(self) -> Sddm<'a, T, I> {
-        self
-    }
-
-    fn for_approximate(self) -> Sddm<'a, T, I> {
-        self
-    }
-}
 
 /// The factor of what the elimination leaves; it builds its own Triangular, so its facts come from that matrix.
 #[cfg_attr(
@@ -61,58 +22,37 @@ pub(super) struct Cholesky<T, I> {
     grounded: bool,
     /// The matrix's dimension over its sheets, ground excluded.
     n: usize,
+    /// The one slot no pivot eliminates, zeroed between the sweeps.
+    pinned: usize,
     triangular: Triangular<T, I>,
 }
 
 impl<T: Real, I: Index> Cholesky<T, I> {
-    /// Dense when the config says so and its Laplacian is reserved before the matrix is built, else approximate.
-    pub(super) fn factor<'a>(
-        input: impl CholeskyInput<'a, T, I>,
+    /// Dense up to the config's dimension, else approximate; `scales` is `F` on its vertices, `None` when every `|f|` is `1`.
+    pub(super) fn factor(
+        sddm: Sddm<'_, T, I>,
         draws: Xoshiro256PlusPlus,
         config: &Config,
-        anchor: Option<usize>,
-        wide: bool,
-    ) -> (Self, Option<Fallback>) {
-        let approximate = |sddm: Sddm<'a, T, I>| {
-            // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
-            let pinned = anchor.or_else(|| sddm.grounded().then(|| sddm.n()));
-            let last = pinned.filter(|_| wide);
-            Self::approximate(sddm, config.approximate, draws, last)
-        };
-        let dimension = input.dimension();
-        if dimension > config.dense_up_to {
-            return (approximate(input.for_approximate()), None);
-        }
-        let Some(laplacian) = PackedLaplacian::reserve(dimension) else {
-            let declined = Fallback::WillNotFit { dimension };
-            return (approximate(input.for_approximate()), Some(declined));
-        };
-        let exact = input.for_dense();
-        let (sheets, grounded, n) = (exact.sheets(), exact.grounded(), exact.n());
-        let (factor, free) = laplacian.factor(&exact, anchor);
-        let triangular = Triangular::Dense(factor, free);
-        let dense = Self {
-            sheets,
-            grounded,
-            n,
-            triangular,
-        };
-        (dense, None)
-    }
-
-    fn approximate(
-        sddm: Sddm<'_, T, I>,
-        multiplicity: Multiplicity,
-        draws: Xoshiro256PlusPlus,
-        last: Option<usize>,
+        scales: Option<&[T]>,
     ) -> Self {
         let (sheets, grounded, n) = (sddm.sheets(), sddm.grounded(), sddm.n());
-        let triangular =
-            Triangular::Approximate(approximate::factor(sddm, multiplicity, draws, last));
+        let (triangular, pinned) = match config.dense(n) {
+            true => {
+                let free = pinned(&sddm, scales).unwrap_or(n - 1);
+                (Triangular::Dense(dense::factor(&sddm, free)), free)
+            }
+            false => {
+                // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
+                let last = spans_wide(scales).then(|| pinned(&sddm, scales)).flatten();
+                let (steps, last) = approximate::factor(sddm, config.approximate, draws, last);
+                (Triangular::Approximate(steps), last)
+            }
+        };
         Self {
             sheets,
             grounded,
             n,
+            pinned,
             triangular,
         }
     }
@@ -135,14 +75,14 @@ impl<T: Real, I: Index> Cholesky<T, I> {
     pub(super) fn solve(&self, x: &mut [T], scratch: &mut [T]) {
         let triangular = &self.triangular;
         match (self.sheets, self.grounded) {
-            (Sheets::One, false) => triangular.substitute(x),
+            (Sheets::One, false) => triangular.substitute(x, self.pinned),
             (Sheets::One, true) => {
                 let rows = &mut scratch[..=x.len()];
                 let (ground, values) = rows.split_last_mut().expect("the ground's slot");
                 values.copy_from_slice(x);
                 let total = x.iter().fold(0.0, |sum, &b| sum + widen(b));
                 *ground = narrow::<T>(-total);
-                triangular.substitute(rows);
+                triangular.substitute(rows, self.pinned);
                 let (ground, values) = rows.split_last().expect("the ground's slot");
                 (x.iter_mut().zip(values)).for_each(|(x, &v)| *x = v - *ground);
             }
@@ -151,27 +91,53 @@ impl<T: Real, I: Index> Cholesky<T, I> {
                 lift(x, rows);
                 // A lift sums to zero, so the ground's right-hand side is zero and its shift cancels in the descent.
                 rows[2 * x.len()..].fill(T::zero());
-                triangular.substitute(rows);
+                triangular.substitute(rows, self.pinned);
                 descend(rows, x);
             }
         }
     }
 }
 
-/// The triangular factor, dense or approximate; both leave one slot uneliminated.
+/// The slot the solve pins: the ground, else a singular sheet's largest `|f|`, so the gauge's rounding is not amplified by `1/f` (ties keep the last).
+fn pinned<T: Real, I: Index>(sddm: &Sddm<'_, T, I>, scales: Option<&[T]>) -> Option<usize> {
+    let last = sddm.n() - 1;
+    let largest = |f: &[T]| {
+        (0..last).fold(last, |best, i| match f[i].abs() > f[best].abs() {
+            true => i,
+            false => best,
+        })
+    };
+    match (sddm.sheets(), sddm.grounded()) {
+        (_, true) => Some(sddm.n()),
+        (Sheets::One, false) => Some(scales.map_or(last, largest)),
+        (Sheets::Two, false) => None,
+    }
+}
+
+/// Whether `|f|` spans past `1/√ε`, where a solve pinned at a small `|f|` loses more than half its digits.
+fn spans_wide<T: Real>(scales: Option<&[T]>) -> bool {
+    scales.is_some_and(|f| {
+        let (least, most) = (f.iter()).fold((T::infinity(), T::zero()), |(least, most), f| {
+            (least.min(f.abs()), most.max(f.abs()))
+        });
+        least < most * T::epsilon().sqrt()
+    })
+}
+
+/// The triangular factor, dense or approximate.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 enum Triangular<T, I> {
-    /// Packed lower triangle of `L` in `LLᵀ`, and the slot it pins.
-    Dense(Vec<T>, usize),
+    /// Packed lower triangle of `L` in `LLᵀ`.
+    Dense(Vec<T>),
     Approximate(ApproximateCholesky<T, I>),
 }
 
 impl<T: Real, I: Index> Triangular<T, I> {
-    fn substitute(&self, values: &mut [T]) {
+    fn substitute(&self, values: &mut [T], pinned: usize) {
         match self {
-            Self::Dense(factor, free) => dense::substitute(factor, *free, values),
-            Self::Approximate(approximate) => approximate.substitute(values),
+            Self::Dense(factor) => dense::substitute(factor, pinned, values),
+            Self::Approximate(approximate) => approximate.substitute(values, pinned),
         }
     }
 }
@@ -187,10 +153,10 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         }
         let slots = self.n.checked_add(usize::from(self.grounded))?;
         let fits = match &self.triangular {
-            Triangular::Dense(dense, free) => *free < slots && dense::fits(dense, slots),
-            Triangular::Approximate(approximate) => approximate.fits(slots),
+            Triangular::Dense(dense) => dense::fits(dense, slots),
+            Triangular::Approximate(approximate) => approximate.fits(slots, self.pinned),
         };
-        fits.then_some(self)
+        (self.pinned < slots && fits).then_some(self)
     }
 
     /// Whether it solves a block of `kept` vertices on its sheets.

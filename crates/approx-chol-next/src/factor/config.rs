@@ -11,6 +11,13 @@ pub struct Config {
     pub dense_up_to: usize,
 }
 
+impl Config {
+    /// Whether a Cholesky of `dimension`, a cover's two sheets counted, is dense: it then takes `S` exact, spending nothing on sparsity.
+    pub(super) fn dense(&self, dimension: usize) -> bool {
+        dimension <= self.dense_up_to
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {

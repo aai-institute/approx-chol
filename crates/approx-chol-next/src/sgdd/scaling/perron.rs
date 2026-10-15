@@ -86,6 +86,8 @@ pub(super) struct InverseIteration<'n, 'a, T, I> {
     best: (Vec<f64>, Bracket),
     /// The product of every product with `N`.
     work: Vec<f64>,
+    /// Steps a nearly settled `best` may go unimproved; doubles per restart, so stalls cannot chain.
+    patience: usize,
 }
 
 impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
@@ -108,6 +110,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             refuted: false,
             best: (unit, bracket),
             work,
+            patience: 64,
         })
     }
 
@@ -127,6 +130,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             if !self.solve(bracket.shift(tolerance), rhs, polished) {
                 break;
             }
+            self.patience = self.patience.saturating_mul(2);
         }
         let (y, bracket) = self.best;
         let settled = bracket.certifies(tolerance) && bracket.settled(band);
@@ -177,7 +181,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             }
             // A long run's iterate stalls a few ulps above the band; a fresh solve from `best` polishes it.
             let stalled = self.best.1.nearly_settled(self.tolerance, self.band)
-                && self.iterations - last_adoption >= 64;
+                && self.iterations - last_adoption >= self.patience;
             let exhausted = next_residual_norm_squared == 0.0 || stalled;
             if !exhausted {
                 let beta = next_residual_norm_squared / residual_norm_squared;

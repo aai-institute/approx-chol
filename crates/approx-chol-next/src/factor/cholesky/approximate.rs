@@ -18,7 +18,7 @@ pub(super) fn factor<T: Real, I: Index>(
     multiplicity: Multiplicity,
     draws: Xoshiro256PlusPlus,
     last: Option<usize>,
-) -> ApproximateCholesky<T, I> {
+) -> (ApproximateCholesky<T, I>, usize) {
     match multiplicity {
         Multiplicity::Single => eliminate::<T, I, Single>(sddm, draws, (), last),
         Multiplicity::Split(k) => eliminate::<T, I, Multi>(sddm, draws, k, last),
@@ -31,7 +31,7 @@ fn eliminate<T: Real, I: Index, C: Copies>(
     draws: Xoshiro256PlusPlus,
     split: C::Split,
     last: Option<usize>,
-) -> ApproximateCholesky<T, I> {
+) -> (ApproximateCholesky<T, I>, usize) {
     let mut graph = EliminationGraph::<T, I, C>::of(&sddm, split);
     drop(sddm);
     let n = graph.n();
@@ -39,7 +39,7 @@ fn eliminate<T: Real, I: Index, C: Copies>(
     let mut draws = draws;
     let mut clique = CliqueSampler::<T, I, C>::new(split);
     let mut fill = Fill::new();
-    let mut steps = Steps::with_capacity(n, graph.edge_ends());
+    let mut steps = ApproximateCholesky::with_capacity(n, graph.edge_ends());
     for _ in 1..n {
         let v = ordering.next_vertex();
         fill.clear();
@@ -51,7 +51,10 @@ fn eliminate<T: Real, I: Index, C: Copies>(
         }
         ordering.update(clique.degree_losses(), &fill);
     }
-    steps.finish(last.unwrap_or_else(|| ordering.next_vertex()))
+    // Doubling past the estimate otherwise retains up to 2x the entries (+30% on grids).
+    steps.neighbors.shrink_to_fit();
+    steps.coefficients.shrink_to_fit();
+    (steps, last.unwrap_or_else(|| ordering.next_vertex()))
 }
 
 /// A step's neighbors follow the previous step's, so the solve's running `usize` offset finds them at any size.
@@ -65,16 +68,16 @@ struct StepHeader<T, I> {
     pivot_scale: T,
 }
 
-/// The eliminated columns, appended in pivot order.
+/// `LDLᵀ` with sampled columns, appended in pivot order: a serial recurrence, so shares are composed against the original pivot.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
-struct Steps<T, I> {
+pub(super) struct ApproximateCholesky<T, I> {
     headers: Vec<StepHeader<T, I>>,
     neighbors: Vec<I>,
     coefficients: Vec<T>,
 }
 
-impl<T: Real, I: Index> Steps<T, I> {
+impl<T: Real, I: Index> ApproximateCholesky<T, I> {
     /// Growing to `entries` by doubling measured +1.5-2.5% on grids.
     fn with_capacity(n: usize, entries: usize) -> Self {
         Self {
@@ -116,36 +119,16 @@ impl<T: Real, I: Index> Steps<T, I> {
             pivot_scale: retained * inverse,
         });
     }
-
-    /// A factor cannot exist without naming the vertex its steps left behind.
-    fn finish(mut self, uneliminated: usize) -> ApproximateCholesky<T, I> {
-        // Doubling past the estimate otherwise retains up to 2x the entries (+30% on grids).
-        self.neighbors.shrink_to_fit();
-        self.coefficients.shrink_to_fit();
-        ApproximateCholesky {
-            steps: self,
-            uneliminated: I::from_index(uneliminated),
-        }
-    }
-}
-
-/// `LDLᵀ` with sampled columns: a serial recurrence, so shares are composed against the original pivot.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug)]
-pub(super) struct ApproximateCholesky<T, I> {
-    steps: Steps<T, I>,
-    /// The one vertex no step eliminates, so nothing divides its entry by a pivot.
-    uneliminated: I,
 }
 
 impl<T: Real, I: Index> ApproximateCholesky<T, I> {
-    /// Forward, zero the uneliminated entry, backward; the gather dispatches `[]`, `[_]`, lanes by row length.
-    pub(super) fn substitute(&self, y: &mut [T]) {
-        let Steps {
+    /// Forward, zero the `pinned` entry, backward; the gather dispatches `[]`, `[_]`, lanes by row length.
+    pub(super) fn substitute(&self, y: &mut [T], pinned: usize) {
+        let Self {
             headers,
             neighbors,
             coefficients,
-        } = &self.steps;
+        } = self;
         let mut end = 0;
         for header in headers {
             let span = end..end + header.len.index();
@@ -165,7 +148,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
             }
             y[header.vertex.index()] = pivot * header.pivot_scale;
         }
-        y[self.uneliminated.index()] = T::zero();
+        y[pinned] = T::zero();
         for header in headers.iter().rev() {
             let span = end - header.len.index()..end;
             end = span.start;
@@ -202,15 +185,14 @@ const LANES: usize = 4;
 
 #[cfg(feature = "serde")]
 impl<T: Real, I: Index> ApproximateCholesky<T, I> {
-    /// Each slot but the uneliminated one pivots once, giving only to slots not yet pivoted.
-    pub(super) fn fits(&self, slots: usize) -> bool {
-        let Steps {
+    /// Each slot but `last` pivots once, giving only to slots not yet pivoted.
+    pub(super) fn fits(&self, slots: usize, last: usize) -> bool {
+        let Self {
             headers,
             neighbors,
             coefficients,
-        } = &self.steps;
-        let last = self.uneliminated.index();
-        if headers.len() + 1 != slots || last >= slots || neighbors.len() != coefficients.len() {
+        } = self;
+        if headers.len() + 1 != slots || neighbors.len() != coefficients.len() {
             return false;
         }
         let mut pivoted = vec![false; slots];

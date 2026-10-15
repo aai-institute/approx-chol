@@ -3,7 +3,7 @@
 mod csr;
 mod width2;
 
-pub(crate) use csr::{Canonical, UpperCanonical};
+pub(crate) use csr::Canonical;
 pub use csr::{Csr, CsrError, UpperCsr};
 pub(crate) use width2::bipartite::BipartiteLaplacian;
 pub use width2::bipartite::{BipartiteGram, FactorWidth1};

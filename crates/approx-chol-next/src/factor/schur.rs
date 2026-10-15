@@ -5,11 +5,10 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
-use super::cholesky::CholeskyInput;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use super::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single};
-use super::config::{CliqueRule, InnerParallelism, Multiplicity};
+use super::config::{CliqueRule, Config, InnerParallelism, Multiplicity};
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
 use super::Streams;
 use crate::sgdd::Grounding;
@@ -59,21 +58,25 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         }
     }
 
-    /// `S` on `sheets`, built only once its Cholesky arm is chosen.
-    pub(super) fn complement<'a>(
-        &'a self,
+    /// `S` on `sheets`, exact where its Cholesky is dense, else by the config's rule.
+    pub(super) fn complement(
+        &self,
         sheets: Sheets,
-        grounding: &'a Grounding<T>,
-        rule: CliqueRule,
+        grounding: &Grounding<T>,
+        config: &Config,
         stars: Streams,
-    ) -> SchurComplement<'a, T, I> {
-        SchurComplement {
+    ) -> Sddm<'static, T, I> {
+        let rule = match config.dense(sheets.count() * self.cross.n_cols()) {
+            true => CliqueRule::Exact,
+            false => config.complement,
+        };
+        let schur = SchurComplement {
             elimination: self,
             sheets,
             grounding,
-            rule,
             stars,
-        }
+        };
+        schur.build(rule)
     }
 
     pub(super) fn n_eliminated(&self) -> usize {
@@ -145,8 +148,6 @@ pub(super) struct SchurComplement<'a, T, I> {
     elimination: &'a BlockElimination<T, I>,
     sheets: Sheets,
     grounding: &'a Grounding<T>,
-    /// How the approximate arm's `S` is built; a dense arm always takes it exact.
-    rule: CliqueRule,
     stars: Streams,
 }
 
@@ -177,21 +178,6 @@ impl<T: Real, I: Index> SchurComplement<'_, T, I> {
         };
         let grounding = Grounding::of(surplus);
         Sddm::new(Cow::Owned(adjacency), Cow::Owned(grounding), sheets)
-    }
-}
-
-/// `S` built once, after its arm is chosen.
-impl<'a, T: Real, I: Index> CholeskyInput<'a, T, I> for SchurComplement<'_, T, I> {
-    fn dimension(&self) -> usize {
-        self.sheets.count() * self.elimination.cross.n_cols()
-    }
-
-    fn for_dense(self) -> Sddm<'a, T, I> {
-        self.build(CliqueRule::Exact)
-    }
-
-    fn for_approximate(self) -> Sddm<'a, T, I> {
-        self.build(self.rule)
     }
 }
 

@@ -1,10 +1,10 @@
 use num_traits::PrimInt;
 
 use super::{into_sgdd, Signed, SymmetricBlock};
-use crate::input::{Canonical, Csr, UpperCanonical, UpperCsr};
+use crate::input::{Canonical, Csr, UpperCsr};
 use crate::sgdd::block::{FromCsrError, ReduceError, Sgdd};
 use crate::sgdd::decomposition::{indexable, of_csr, of_upper, Partitioned};
-use crate::sgdd::scaling::ScalingPolicy;
+use crate::sgdd::scaling::{self, Existence, ScalingPolicy};
 use crate::{Index, Real};
 
 impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
@@ -14,8 +14,9 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
             let Some(a) = SymmetricBlock::live(cells) else {
                 return Ok(None);
             };
-            let scaling = a.scale(policy)?;
-            let block = match a.sign(scaling, policy)? {
+            let relax =
+                |a: &SymmetricBlock<T, I>| scaling::relax(&a.off_diagonal, &a.diagonal, policy);
+            let block = match a.reduce(policy, Existence::Unknown, relax)? {
                 Signed::Folded(m, rows) => {
                     let grounding = rows.folded_surplus(&m.off_diagonal);
                     m.balanced(grounding)?
@@ -44,6 +45,6 @@ impl<T: Real, I: Index> Sgdd<T, I> {
         policy: ScalingPolicy,
     ) -> Result<Self, FromCsrError> {
         indexable::<I>(csr.n())?;
-        Ok(of_upper(UpperCanonical::of(csr)?)?.reduce(&policy)?)
+        Ok(of_upper(Canonical::of(csr.0)?)?.reduce(&policy)?)
     }
 }

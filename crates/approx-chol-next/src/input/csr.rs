@@ -63,7 +63,7 @@ impl<'a, T, I: PrimInt> Csr<'a, T, I> {
 
 /// Borrowed CSR of the upper triangle of a symmetric `A`, diagonal included.
 #[derive(Clone, Copy, Debug)]
-pub struct UpperCsr<'a, T, I = u32>(Csr<'a, T, I>);
+pub struct UpperCsr<'a, T, I = u32>(pub(crate) Csr<'a, T, I>);
 
 impl<'a, T, I: PrimInt> UpperCsr<'a, T, I> {
     /// The shape checks of [`Csr::new`]; an entry below the diagonal is caught at reduction.
@@ -193,36 +193,18 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
         cursors[row] = cursor;
         Ok(found)
     }
-}
 
-/// Canonical rows with no column below its row: symmetric by storage, so its walk has no mirror to find.
-pub(crate) struct UpperCanonical<'a, T: Clone, I: Clone>(Canonical<'a, T, I>);
-
-impl<'a, T: Real, I: PrimInt> UpperCanonical<'a, T, I> {
-    /// Columns ascend once canonical, so each row's first decides that none lies below the diagonal.
-    pub(crate) fn of(csr: UpperCsr<'a, T, I>) -> Result<Self, CsrError> {
-        let canonical = Canonical::of(csr.0)?;
-        let (row_ptrs, col_indices, _) = canonical.arrays();
-        let below = |row: usize| {
-            let start = index(row_ptrs[row]);
-            start < index(row_ptrs[row + 1]) && index(col_indices[start]) < row
-        };
-        match (0..canonical.n()).find(|&row| below(row)) {
-            Some(row) => Err(CsrError::BelowDiagonal { row }),
-            None => Ok(Self(canonical)),
-        }
-    }
-
-    pub(crate) fn n(&self) -> usize {
-        self.0.n()
-    }
-
-    /// [`Canonical::walk`]'s visits in its order, checking only range.
-    pub(crate) fn walk(&self, mut edge: impl FnMut(usize, usize, T)) -> Result<(), CsrError> {
-        let (row_ptrs, col_indices, values) = self.0.arrays();
+    /// Each nonzero `(i, j)`, `i < j`, of upper storage, symmetric by shape: no mirror is found, only a row's first column checked.
+    pub(crate) fn walk_upper(&self, mut edge: impl FnMut(usize, usize, T)) -> Result<(), CsrError> {
+        let (row_ptrs, col_indices, values) = self.arrays();
         for row in 0..self.n() {
             let span = index(row_ptrs[row])..index(row_ptrs[row + 1]);
-            for (&col, &value) in col_indices[span.clone()].iter().zip(&values[span]) {
+            let columns = &col_indices[span.clone()];
+            // Columns ascend once canonical, so the first decides that none lies below the diagonal.
+            if columns.first().is_some_and(|&j| index(j) < row) {
+                return Err(CsrError::BelowDiagonal { row });
+            }
+            for (&col, &value) in columns.iter().zip(&values[span]) {
                 if !in_range(value) {
                     return Err(CsrError::OutOfRange { row });
                 }
@@ -233,11 +215,6 @@ impl<'a, T: Real, I: PrimInt> UpperCanonical<'a, T, I> {
             }
         }
         Ok(())
-    }
-
-    /// Components read only `j ≥ i`, so upper storage is the same rows.
-    pub(crate) fn into_canonical(self) -> Canonical<'a, T, I> {
-        self.0
     }
 }
 

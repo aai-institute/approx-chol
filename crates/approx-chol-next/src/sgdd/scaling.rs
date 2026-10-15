@@ -81,15 +81,7 @@ impl ScalingPolicy {
     }
 }
 
-/// Positive scales `R` making `R|A|R` weakly dominant, reducing GDD to SDDM (Daitch, Spielman, arXiv:0803.0988 §4).
-pub(super) enum Scaling<T> {
-    /// Every SDDM input, so an SDDM CSR reduces bit for bit as before.
-    AlreadyDominant,
-    /// Uncertified until the hand-over shows its clamped deficit.
-    Scaled(Relaxation<T>, Existence),
-}
-
-/// What an iteration reached: scales and how far short of dominance they leave `A`.
+/// Positive scales `R` making `R|A|R` weakly dominant (Daitch, Spielman, arXiv:0803.0988 §4), and how far short they fall.
 pub(super) struct Relaxation<T> {
     /// `f = μ/√a_ii` with `μ` peaking at `1`, so `M`'s diagonal `μ²` never exceeds `1`.
     pub(super) scales: Box<[T]>,

@@ -59,8 +59,8 @@ fn main() {
             ..Config::default()
         };
         for (name, config) in [("dense", dense), ("default", Config::default())] {
+            println!("  {name}:");
             let factor = factorize(&sgdd, &config);
-            println!("  {name}: fallbacks {}", factor.fallbacks().count());
             check(&a, &factor);
         }
     }

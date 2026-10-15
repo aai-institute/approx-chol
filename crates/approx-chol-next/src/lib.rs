@@ -34,7 +34,7 @@ use std::fmt::Debug;
 
 use num_traits::{PrimInt, Unsigned};
 
-pub use factor::{factorize, BlockFactor, Factor, Fallback, SolveError};
+pub use factor::{factorize, BlockFactor, Factor, SolveError};
 pub use factor::{CliqueRule, Config, InnerParallelism, Multiplicity, SplitCount};
 pub use sgdd::{
     Existence, FromCsrError, IrreducibleBlock, ReduceError, ScalingPolicy, ScalingReport, Sgdd,

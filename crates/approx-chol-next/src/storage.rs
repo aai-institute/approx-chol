@@ -342,7 +342,7 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
     }
 
     /// The stored entries, and where their columns start in local order.
-    fn stored(&self) -> (&Rows<T, I>, usize) {
+    pub(crate) fn stored(&self) -> (&Rows<T, I>, usize) {
         match self {
             Self::General(adjacency) => (&adjacency.rows, 0),
             Self::Bipartite(cross) => (cross, cross.n_rows()),

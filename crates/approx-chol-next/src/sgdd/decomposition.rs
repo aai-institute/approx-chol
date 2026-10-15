@@ -8,7 +8,7 @@ mod assembly;
 mod partition;
 
 use super::block::{Grounding, ReduceError};
-use crate::input::{Canonical, CsrError, UpperCanonical};
+use crate::input::{Canonical, CsrError};
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::{Index, Real};
 pub(super) use assembly::{
@@ -36,15 +36,12 @@ pub(super) fn of_csr<T: Real, J: PrimInt, I: Index>(
 
 /// Unions the pattern in the walk that checks range: upper storage has no mirror to check.
 pub(super) fn of_upper<T: Real, J: PrimInt, I: Index>(
-    csr: UpperCanonical<'_, T, J>,
+    csr: Canonical<'_, T, J>,
 ) -> Result<Partitioned<Canonical<'_, T, J>, I>, CsrError> {
     let mut sets = UnionFind::<I>::new(csr.n());
-    csr.walk(|i, j, _| sets.union(i, j))?;
+    csr.walk_upper(|i, j, _| sets.union(i, j))?;
     let partition = sets.into_partition();
-    Ok(Partitioned {
-        a: csr.into_canonical(),
-        partition,
-    })
+    Ok(Partitioned { a: csr, partition })
 }
 
 /// `I` holds `0..count` below its `MAX`, which stays free as a sentinel.

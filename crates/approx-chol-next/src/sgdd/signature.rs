@@ -1,5 +1,5 @@
 use super::congruence::Congruence;
-use crate::storage::{OffDiagonal, Rows};
+use crate::storage::OffDiagonal;
 use crate::{Index, Real};
 
 /// The signs `S` folding `A_c` into a Z-matrix, `I` when it already is one; `None` when frustrated.
@@ -9,31 +9,18 @@ pub(super) fn folding_signs<T: Real, I: Index>(
     if off_diagonal.nonpositive() {
         return Some(Congruence::Identity);
     }
-    match off_diagonal {
-        OffDiagonal::Bipartite(cross) if cross.positive() => {
-            Some(Congruence::NegateFrom(cross.n_rows()))
-        }
-        OffDiagonal::Bipartite(cross) => cross_signs(cross),
-        OffDiagonal::General(adjacency) => {
-            let mut forest = ParityForest::<I>::new(adjacency.n());
-            for i in 0..adjacency.n() {
-                for (j, &a) in adjacency.upper(i) {
-                    forest.join(i, j, a > T::zero())?;
-                }
-            }
-            Some(forest.signs())
+    if let OffDiagonal::Bipartite(cross) = off_diagonal {
+        if cross.positive() {
+            return Some(Congruence::NegateFrom(cross.n_rows()));
         }
     }
-}
-
-/// `None` when frustrated; union-find over `C` alone, as searching `Cᵀ` costs a transpose.
-fn cross_signs<T: Real, I: Index>(cross: &Rows<T, I>) -> Option<Congruence<T>> {
-    let n_eliminated = cross.n_rows();
-    let mut forest = ParityForest::<I>::new(n_eliminated + cross.n_cols());
-    for e in 0..n_eliminated {
-        for (k, &c) in cross.row(e) {
+    // Each stored entry once: a bipartite block searches `C` alone, as `Cᵀ` costs a transpose.
+    let (rows, offset) = off_diagonal.stored();
+    let mut forest = ParityForest::<I>::new(off_diagonal.n());
+    for i in 0..rows.n_rows() {
+        for (j, &a) in rows.row(i) {
             // A positive entry folds only across opposite signs.
-            forest.join(e, n_eliminated + k, c > T::zero())?;
+            forest.join(i, offset + j, a > T::zero())?;
         }
     }
     Some(forest.signs())

@@ -36,26 +36,12 @@ impl<T: Real, I: Index> Restriction<T, I> {
         (local.iter().zip(self.vertices.iter())).for_each(|(&v, &i)| x[i.index()] = v);
     }
 
-    /// The slot from `from` on a singular solve pins: the largest `|f|`, so the gauge's rounding is not amplified by `1/f` (ties keep the last).
-    pub(crate) fn anchor(&self, from: usize) -> usize {
-        let magnitude = |i: usize| self.congruence.factor(i).abs();
-        let last = self.vertices.len() - 1;
-        (from..last).fold(last, |best, i| {
-            if magnitude(i) > magnitude(best) {
-                i
-            } else {
-                best
-            }
-        }) - from
-    }
-
-    /// Whether `|f|` from `from` on spans past `1/√ε`, where a solve pinned at a small `|f|` loses more than half its digits.
-    pub(crate) fn spans_wide(&self, from: usize) -> bool {
-        let magnitudes = (from..self.vertices.len()).map(|i| self.congruence.factor(i).abs());
-        let (least, most) = magnitudes.fold((T::infinity(), T::zero()), |(least, most), m| {
-            (least.min(m), most.max(m))
-        });
-        least < most * T::epsilon().sqrt()
+    /// `F`'s entries from `from` on, `None` when every `|f|` is `1`.
+    pub(crate) fn scales(&self, from: usize) -> Option<&[T]> {
+        match &self.congruence {
+            Congruence::Scaled(factors, _) => Some(&factors[from..]),
+            _ => None,
+        }
     }
 
     /// `x ← F x` on a gathered `x`, `F·1` projected out first when `M` is singular.

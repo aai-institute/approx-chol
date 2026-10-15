@@ -13,7 +13,6 @@ use rand::rngs::Xoshiro256PlusPlus;
 use rand::SeedableRng;
 use rayon::prelude::*;
 
-pub use cholesky::Fallback;
 pub use config::{CliqueRule, Config, InnerParallelism, Multiplicity, SplitCount};
 
 use crate::sgdd::{Balance, IrreducibleBlock, Restriction, Sgdd};
@@ -115,11 +114,6 @@ impl<T: Real, I: Index> Factor<T, I> {
         self.blocks
     }
 
-    /// Cholesky factors routed dense and factored approximately instead.
-    pub fn fallbacks(&self) -> impl Iterator<Item = Fallback> + '_ {
-        self.blocks.iter().filter_map(BlockFactor::fallback)
-    }
-
     /// Workspace [`Factor::solve_in_place`] needs, fixed at factorization.
     pub fn scratch_len(&self) -> usize {
         (self.blocks.iter())
@@ -172,7 +166,6 @@ pub struct BlockFactor<T = f64, I = u32> {
     restriction: Arc<Restriction<T, I>>,
     elimination: Option<BlockElimination<T, I>>,
     cholesky: Cholesky<T, I>,
-    fallback: Option<Fallback>,
 }
 
 impl<T: Real, I: Index> BlockFactor<T, I> {
@@ -185,8 +178,8 @@ impl<T: Real, I: Index> BlockFactor<T, I> {
             Balance::Balanced(grounding) => (Sheets::One, grounding),
             Balance::Frustrated(grounding) => (Sheets::Two, grounding),
         };
-        let anchor = |from: usize| block.floats().then(|| block.restriction().anchor(from));
-        let (elimination, (cholesky, fallback)) = match block.off_diagonal() {
+        let scales = |from: usize| block.restriction().scales(from);
+        let (elimination, cholesky) = match block.off_diagonal() {
             OffDiagonal::General(adjacency) => {
                 let sddm = match sheets {
                     Sheets::One => {
@@ -194,17 +187,14 @@ impl<T: Real, I: Index> BlockFactor<T, I> {
                     }
                     Sheets::Two => Sddm::cover(adjacency, grounding),
                 };
-                let wide = block.restriction().spans_wide(0);
-                let factored = Cholesky::factor(sddm, streams.cholesky(), config, anchor(0), wide);
+                let factored = Cholesky::factor(sddm, streams.cholesky(), config, scales(0));
                 (None, factored)
             }
             OffDiagonal::Bipartite(cross) => {
                 let elimination = BlockElimination::new(cross, grounding);
-                let schur = elimination.complement(sheets, grounding, config.complement, streams);
+                let schur = elimination.complement(sheets, grounding, config, streams);
                 let from = elimination.n_eliminated();
-                let wide = block.restriction().spans_wide(from);
-                let factored =
-                    Cholesky::factor(schur, streams.cholesky(), config, anchor(from), wide);
+                let factored = Cholesky::factor(schur, streams.cholesky(), config, scales(from));
                 (Some(elimination), factored)
             }
         };
@@ -212,18 +202,12 @@ impl<T: Real, I: Index> BlockFactor<T, I> {
             restriction: Arc::clone(block.restriction()),
             elimination,
             cholesky,
-            fallback,
         }
     }
 
     /// The block's vertices in `A`'s numbering, in local order.
     pub fn vertices(&self) -> &[I] {
         self.restriction.vertices()
-    }
-
-    /// Why this block is less accurate than its config asked, if it is.
-    pub fn fallback(&self) -> Option<Fallback> {
-        self.fallback
     }
 
     /// Work [`InnerParallelism::Allow`] may split per solve, `0` when nothing does: an outer scheduler weighs it against its own parallelism.

@@ -45,8 +45,7 @@ fn reduce_gram_blocks<T: Real, I: Index>(
     let nulls = LazyCell::new(|| null_vectors(v, partition.components()));
     let (mut folded, mut frustrated) = (Vec::new(), Vec::new());
     for a in live {
-        let scaling = a.scale_gram(policy, &nulls)?;
-        match a.sign(scaling, policy)? {
+        match a.reduce_gram(policy, &nulls)? {
             Signed::Folded(m, _) => folded.push(m),
             Signed::Frustrated(block) => frustrated.push(block),
         }

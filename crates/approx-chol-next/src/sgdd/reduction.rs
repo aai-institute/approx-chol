@@ -9,7 +9,7 @@ use std::cell::LazyCell;
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
 use super::congruence::Congruence;
 use super::decomposition::{Cells, Components};
-use super::scaling::{self, Existence, Scaling, ScalingPolicy};
+use super::scaling::{self, Existence, ScalingPolicy};
 use super::signature;
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, widen, Index, Real};
@@ -43,39 +43,32 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         })
     }
 
-    /// Rows prove nothing: relaxed past the row test.
-    fn scale(&self, policy: &ScalingPolicy) -> Result<Scaling<T>, ReduceError> {
-        self.scaling(policy, Existence::Unknown, || {
-            scaling::relax(&self.off_diagonal, &self.diagonal, policy)
-        })
-    }
-
     /// `V` proves a scaling exists; a zero diagonal beside a cell is its terms underflowing.
-    fn scale_gram(
-        &self,
+    fn reduce_gram(
+        self,
         policy: &ScalingPolicy,
         nulls: &LazyCell<Vec<f64>, impl FnOnce() -> Vec<f64>>,
-    ) -> Result<Scaling<T>, ReduceError> {
+    ) -> Result<Signed<T, I>, ReduceError> {
         if let Some(i) = self.diagonal.iter().position(|&d| d == T::zero()) {
             let vertex = self.vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
         }
-        self.scaling(policy, Existence::Guaranteed, || {
-            let u = (self.vertices.iter()).map(|&v| nulls[v.index()]);
+        self.reduce(policy, Existence::Guaranteed, |a| {
+            let u = (a.vertices.iter()).map(|&v| nulls[v.index()]);
             (u.clone().all(f64::is_finite))
-                .then(|| scaling::null_scaling(u, &self.diagonal))
+                .then(|| scaling::null_scaling(u, &a.diagonal))
                 .flatten()
-                .or_else(|| scaling::relax(&self.off_diagonal, &self.diagonal, policy))
+                .or_else(|| scaling::relax(&a.off_diagonal, &a.diagonal, policy))
         })
     }
 
-    /// Screens the diagonal and row sums; `relax` runs only past the row test.
-    fn scaling(
-        &self,
+    /// `M = F A_c F` with `F = S R`, formed once with its rows, which decide the report; `relax` runs only past the row test, and a frustrated `A_c` takes `S = I` and grounds on its rows at once.
+    fn reduce(
+        self,
         policy: &ScalingPolicy,
         existence: Existence,
-        relax: impl FnOnce() -> Option<scaling::Relaxation<T>>,
-    ) -> Result<Scaling<T>, ReduceError> {
+        relax: impl FnOnce(&Self) -> Option<scaling::Relaxation<T>>,
+    ) -> Result<Signed<T, I>, ReduceError> {
         if let Some(i) = self.diagonal.iter().position(|&d| !diagonal_in_range(d)) {
             let vertex = self.vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
@@ -94,52 +87,26 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         }
         let vertex = self.vertices[0].index();
         let mut rows = self.diagonal.iter().zip(&self.abs_row_sums);
-        if rows.all(|(&d, &s)| policy.dominates(d, s)) {
-            return Ok(Scaling::AlreadyDominant);
-        }
-        let relaxation = relax().ok_or(ReduceError::Unscalable { vertex })?;
-        Ok(Scaling::Scaled(relaxation, existence))
-    }
-
-    /// `M = F A_c F` with `F = S R`; a frustrated `A_c` takes `S = I` and grounds on its rows at once.
-    fn sign(
-        self,
-        scaling: Scaling<T>,
-        policy: &ScalingPolicy,
-    ) -> Result<Signed<T, I>, ReduceError> {
-        match signature::folding_signs(&self.off_diagonal) {
-            Some(signs) => {
-                let (m, rows) = self.congruent(signs, scaling, policy)?;
-                Ok(Signed::Folded(m, rows))
-            }
+        let relaxation = match rows.all(|(&d, &s)| policy.dominates(d, s)) {
+            true => None,
+            false => Some(relax(&self).ok_or(ReduceError::Unscalable { vertex })?),
+        };
+        let folding = signature::folding_signs(&self.off_diagonal);
+        let folded = folding.is_some();
+        let signs = folding.unwrap_or(Congruence::Identity);
+        let (m, rows) = match relaxation {
             None => {
-                let (m, rows) = self.congruent(Congruence::Identity, scaling, policy)?;
-                Ok(Signed::Frustrated(m.frustrated(rows.surplus())?))
-            }
-        }
-    }
-
-    /// `M` formed once with its rows, which decide the report.
-    fn congruent(
-        self,
-        signs: Congruence<T>,
-        scaling: Scaling<T>,
-        policy: &ScalingPolicy,
-    ) -> Result<(Congruent<T, I>, RowSums<T>), ReduceError> {
-        match scaling {
-            Scaling::AlreadyDominant => {
                 // Signs keep every magnitude, so `A_c`'s rows are `M`'s.
                 let rows = RowSums {
                     diagonal: self.diagonal,
                     abs: self.abs_row_sums,
                 };
-                Ok((
+                (
                     Congruent::new(self.vertices, self.off_diagonal, signs),
                     rows,
-                ))
+                )
             }
-            Scaling::Scaled(relaxation, existence) => {
-                let vertex = self.vertices[0].index();
+            Some(relaxation) => {
                 let factors = signs.times(&relaxation.scales);
                 let (off_diagonal, abs) = (self.off_diagonal.scaled_abs_row_sums(&factors))
                     .ok_or(ReduceError::Unscalable { vertex })?;
@@ -153,9 +120,12 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                     congruence: Congruence::Scaled(factors, report),
                     off_diagonal,
                 };
-                let rows = RowSums { diagonal, abs };
-                Ok((m, rows))
+                (m, RowSums { diagonal, abs })
             }
+        };
+        match folded {
+            true => Ok(Signed::Folded(m, rows)),
+            false => Ok(Signed::Frustrated(m.frustrated(rows.surplus())?)),
         }
     }
 }
