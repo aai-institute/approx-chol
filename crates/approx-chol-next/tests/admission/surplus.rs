@@ -112,6 +112,25 @@ fn a_rows_rounding_band_grows_with_its_degree() {
         .is_some());
 }
 
+/// No scaling settled, so no settle band widens the row's: a degree-13 centre short by 24ε passes `max(16, 16)ε`.
+#[test]
+fn an_unscaled_deficit_past_its_row_rounding_is_reported() {
+    let leaves = 13u32;
+    let mut row_ptrs = vec![0u32, leaves + 1];
+    let mut columns: Vec<u32> = (0..=leaves).collect();
+    let mut values = vec![f64::from(leaves) * (1.0 - 24.0 * f64::EPSILON)];
+    values.extend(std::iter::repeat_n(-1.0, leaves as usize));
+    for leaf in 1..=leaves {
+        columns.extend([0, leaf]);
+        values.extend([-1.0, 1.0]);
+        row_ptrs.push(columns.len() as u32);
+    }
+    let sgdd = reduce(&row_ptrs, &columns, &values).expect("a star is admitted");
+    let report = sgdd.blocks()[0].scaling_report().expect("reported");
+    assert_eq!(report.iterations, 0, "unscaled");
+    assert!(report.violation > 16.0 * f64::EPSILON, "{report:?}");
+}
+
 /// Main rejected these as not dominant; the rewrite admits them clamped and reports the violation.
 #[rstest]
 #[case::f64_pair_2e_9_short(drifted(-2e-9_f64).blocks()[0].scaling_report(), 2e-9)]

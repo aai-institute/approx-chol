@@ -98,7 +98,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
             None => {
                 // Signs keep every magnitude, so `A_c`'s rows are `M`'s.
                 let deficit =
-                    clamped_deficit(&self.diagonal, &self.abs_row_sums, &self.off_diagonal);
+                    clamped_deficit(&self.diagonal, &self.abs_row_sums, &self.off_diagonal, 0.0);
                 let mut m = Congruent::new(self.vertices, self.off_diagonal, signs);
                 m.report = policy.report(ScalingReport::unscaled(existence), deficit);
                 let rows = RowSums {
@@ -114,7 +114,8 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 let diagonal: Vec<T> = (self.diagonal.iter().zip(&relaxation.scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();
-                let deficit = clamped_deficit(&diagonal, &abs, &off_diagonal);
+                let settle = RATIO_BAND * widen(T::epsilon());
+                let deficit = clamped_deficit(&diagonal, &abs, &off_diagonal, settle);
                 let m = Congruent {
                     vertices: self.vertices,
                     congruence: Congruence::Scaled(factors),
@@ -207,11 +208,12 @@ impl<T: Real> RowSums<T> {
     }
 }
 
-/// `max_i (Σ_j|m_ij| − m_ii)/m_ii` past row `i`'s rounding, `(RATIO_BAND + k_i + 3) ε`: a settled scaling's band plus forming its `k_i` entries.
+/// `max_i (Σ_j|m_ij| − m_ii)/m_ii` past row `i`'s band, `max(RATIO_BAND ε, (k_i + 3) ε + settle)`: forming its `k_i` entries plus how far the scaling settled.
 fn clamped_deficit<T: Real, I: Index>(
     diagonal: &[T],
     abs_row_sums: &[T],
     off_diagonal: &OffDiagonal<T, I>,
+    settle: f64,
 ) -> f64 {
     let epsilon = widen(T::epsilon());
     let deficits =
@@ -224,7 +226,9 @@ fn clamped_deficit<T: Real, I: Index>(
         return 0.0;
     }
     (deficits.zip(off_diagonal.degrees()))
-        .filter(|&(deficit, k)| deficit > (RATIO_BAND + (k + 3) as f64) * epsilon)
+        .filter(|&(deficit, k)| {
+            deficit > (RATIO_BAND * epsilon).max((k + 3) as f64 * epsilon + settle)
+        })
         .fold(0.0, |worst, (deficit, _)| worst.max(deficit))
 }
 
