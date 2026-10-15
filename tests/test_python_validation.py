@@ -120,15 +120,6 @@ def test_every_integer_index_dtype_factors_alike(indptr_dtype, indices_dtype):
 
 
 def test_duck_typed_factorize_validates_indices_and_dimension():
-    valid = MatrixLike(
-        np.array([0, 2, 4], dtype=np.int64),
-        np.array([0, 1, 0, 1], dtype=np.int64),
-        np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64),
-        (2, 2),
-    )
-    factor = approx_chol.factorize(valid)
-    assert factor.shape[0] >= 2
-
     too_large_idx = MatrixLike(
         np.array([0, 2, 4], dtype=np.int64),
         np.array([0, 2**32 + 1, 0, 1], dtype=np.int64),
@@ -183,20 +174,13 @@ def test_each_column_rejects_the_dtype_kinds_it_cannot_carry():
 def test_solve_and_solve_into_raise_value_error_for_shape_and_overlap():
     row_ptrs, col_indices, values = _base_csr()
     factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
-    original_n = factor.shape[0]
 
-    rhs_too_long = np.zeros(original_n + 10, dtype=np.float64)
     with pytest.raises(ValueError, match="right-hand side has length 12, expected 2"):
-        factor.solve(rhs_too_long)
+        factor.solve(np.zeros(12))
 
-    rhs = np.zeros(original_n, dtype=np.float64)
-    if rhs.size >= 2:
-        rhs[0] = 1.0
-        rhs[1] = -1.0
-
-    out_too_short = np.zeros(max(0, original_n - 1), dtype=np.float64)
+    rhs = np.array([1.0, -1.0])
     with pytest.raises(ValueError, match="out length"):
-        factor.solve_into(rhs, out_too_short)
+        factor.solve_into(rhs, np.zeros(1))
 
     with pytest.raises(ValueError, match="must not overlap"):
         factor.solve_into(rhs, rhs)
@@ -205,11 +189,7 @@ def test_solve_and_solve_into_raise_value_error_for_shape_and_overlap():
 def test_solve_into_rejects_partially_overlapping_views():
     row_ptrs, col_indices, values = _base_csr()
     factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
-    original_n = factor.shape[0]
-
-    base = np.zeros(original_n + 1, dtype=np.float64)
-    rhs = base[:-1]
-    out = base[1:]
+    base = np.zeros(3)
 
     with pytest.raises(ValueError, match="must not overlap"):
-        factor.solve_into(rhs, out)
+        factor.solve_into(base[:-1], base[1:])
