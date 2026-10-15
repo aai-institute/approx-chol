@@ -15,31 +15,40 @@ use serde::Deserialize;
 /// The leading field this build writes; a bump points the reader at new fixture files.
 const FORMAT_VERSION: u32 = 0x4143_0006;
 
-#[derive(Clone, Copy, Debug)]
-enum Fixture {
-    Grounded,
-    Floating,
-    Cover,
-    SampledAc2,
+/// One list declares each fixture, its file name and its rstest case, so none is kept in step by hand.
+macro_rules! fixtures {
+    ($($variant:ident => $name:ident),+ $(,)?) => {
+        #[derive(Clone, Copy, Debug)]
+        enum Fixture {
+            $($variant),+
+        }
+
+        const FIXTURES: &[Fixture] = &[$(Fixture::$variant),+];
+
+        impl Fixture {
+            fn name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => stringify!($name)),+
+                }
+            }
+        }
+
+        #[rstest]
+        $(#[case::$name(Fixture::$variant)])+
+        fn a_committed_payload_decodes_and_still_solves(#[case] fixture: Fixture) {
+            assert_committed_payload_decodes_and_solves(fixture);
+        }
+    };
 }
 
-const FIXTURES: [Fixture; 4] = [
-    Fixture::Grounded,
-    Fixture::Floating,
-    Fixture::Cover,
-    Fixture::SampledAc2,
-];
+fixtures! {
+    Grounded => grounded,
+    Floating => floating,
+    Cover => cover,
+    SampledAc2 => sampled_ac2,
+}
 
 impl Fixture {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Grounded => "grounded",
-            Self::Floating => "floating",
-            Self::Cover => "cover",
-            Self::SampledAc2 => "sampled_ac2",
-        }
-    }
-
     /// The matrix of a fixture factored exactly; a sampled factor only preconditions, so it has none to meet.
     fn exact_matrix(self) -> Option<&'static [&'static [f64]]> {
         match self {
@@ -156,10 +165,9 @@ fn relative_residual(matrix: &[&[f64]], x: &[f64], b: &[f64]) -> f64 {
     norm(&mut error) / norm(&mut b.iter().copied())
 }
 
-/// Adding a fixture means adding a case below; without this its file is written but never read back.
+/// `fixtures!` gives every fixture its case; this ties the committed payloads to those fixtures, so none is written but never read.
 #[test]
 fn every_fixture_has_a_case() {
-    assert_eq!(FIXTURES.len(), 4, "one rstest case per fixture");
     let suffix = format!("_{FORMAT_VERSION:#010x}.postcard");
     let directory = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
     let committed: BTreeSet<String> = std::fs::read_dir(directory)
@@ -174,12 +182,7 @@ fn every_fixture_has_a_case() {
     );
 }
 
-#[rstest]
-#[case::grounded(Fixture::Grounded)]
-#[case::floating(Fixture::Floating)]
-#[case::cover(Fixture::Cover)]
-#[case::sampled_ac2(Fixture::SampledAc2)]
-fn a_committed_payload_decodes_and_still_solves(#[case] fixture: Fixture) {
+fn assert_committed_payload_decodes_and_solves(fixture: Fixture) {
     let committed = std::fs::read(fixture.path())
         .expect("no committed payload for this version; regenerate if the version moved");
     let restored: Vec<BlockFactor> =
@@ -250,7 +253,7 @@ fn a_payload_of_another_format_version_is_rejected_by_version(#[case] declared: 
 #[test]
 #[ignore = "writes fixtures; run deliberately after a format version bump or a new fixture"]
 fn regenerate_missing_wire_format_fixtures() {
-    for fixture in FIXTURES {
+    for &fixture in FIXTURES {
         let path = fixture.path();
         // Rewriting a committed payload with today's encoder is how this test comes to agree with the drift it exists to catch.
         let file = std::fs::OpenOptions::new()
