@@ -3,6 +3,7 @@ import pytest
 import scipy.sparse as sp
 
 import approx_chol
+from tests._laplacians import grid_laplacian
 
 
 def _base_csr():
@@ -21,8 +22,22 @@ class MatrixLike:
 
 
 @pytest.mark.parametrize("split", [0, 1])
-def test_split_below_two_is_rejected(split):
-    with pytest.raises(ValueError, match=f"split must be at least 2, got {split}"):
+def test_split_below_two_selects_standard_ac(split):
+    lap = grid_laplacian(8, 8)
+    b = np.zeros(lap.shape[0])
+    b[0], b[-1] = 1.0, -1.0
+
+    def solve(split):
+        config = approx_chol.Config(split=split, dense_up_to=0)
+        return approx_chol.factorize(lap, config).solve(b)
+
+    np.testing.assert_array_equal(solve(split), solve(None))
+    assert not np.array_equal(solve(2), solve(None))
+
+
+@pytest.mark.parametrize("split", [-1, 2**32])
+def test_split_outside_u32_raises(split):
+    with pytest.raises(OverflowError):
         approx_chol.Config(split=split)
 
 

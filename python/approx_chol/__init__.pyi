@@ -11,12 +11,10 @@ __all__ = ["Config", "Factor", "factorize", "factorize_raw"]
 class Config:
     """Configuration for approximate Cholesky factorization.
 
-    ``seed`` keys every sampler stream. ``split`` is AC2's copy count per edge,
-    at least 2; ``None`` selects AC. ``dense_up_to`` is the largest block
-    dimension factored by exact dense Cholesky; ``0`` never does.
-
-    Raises:
-        ValueError: If ``split`` is below 2.
+    ``seed`` keys every sampler stream. ``split`` is the AC2 multi-edge
+    multiplicity. Splitting an edge fewer than twice is standard AC, so
+    ``None``, ``0`` and ``1`` all select AC. ``dense_up_to`` is the largest
+    block dimension factored by exact dense Cholesky; ``0`` never does.
     """
 
     def __new__(

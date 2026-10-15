@@ -126,21 +126,15 @@ struct PyConfig(Config);
 impl PyConfig {
     #[new]
     #[pyo3(signature = (seed=0, split=None, dense_up_to=24))]
-    fn new(seed: u64, split: Option<u32>, dense_up_to: usize) -> PyResult<Self> {
-        let approximate = match split {
-            None => Multiplicity::Single,
-            Some(k) => Multiplicity::Split(SplitCount::new(k).ok_or_else(|| {
-                value_error(format!(
-                    "split must be at least 2, got {k}; None selects AC"
-                ))
-            })?),
-        };
-        Ok(Self(Config {
+    fn new(seed: u64, split: Option<u32>, dense_up_to: usize) -> Self {
+        let approximate =
+            (split.and_then(SplitCount::new)).map_or(Multiplicity::Single, Multiplicity::Split);
+        Self(Config {
             seed,
             complement: CliqueRule::Sampled(approximate),
             approximate,
             dense_up_to,
-        }))
+        })
     }
 
     #[getter]
