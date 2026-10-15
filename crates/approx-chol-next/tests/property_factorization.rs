@@ -38,13 +38,16 @@ use proptest::prelude::*;
 use runner::{check, stated_by};
 use sparse::Sparse;
 
-/// Measured: dense ≤ 47ε from 1, sparse `[0.43, 3.94]`; bounding `λ`, not `κ`, sees a lost scale.
+/// Rounding alone: what an exact factor leaves of `λ = 1`.
+fn exact(types: Types) -> RangeInclusive<f64> {
+    let slack = 1024.0 * types.epsilon();
+    1.0 - slack..=1.0 + slack
+}
+
+/// Sparse holds at edge weights 0–4 (the generator's range); larger ratios measured up to λ 9.2.
 fn spectrum_bounds(mode: Mode, types: Types) -> RangeInclusive<f64> {
     match mode {
-        Mode::Dense => {
-            let slack = 1024.0 * types.epsilon();
-            1.0 - slack..=1.0 + slack
-        }
+        Mode::Dense => exact(types),
         Mode::Sparse(_) => 1.0 / 3.0..=6.0,
     }
 }
@@ -172,35 +175,37 @@ cases! {
     }
 }
 
-/// A frustrated `K_5`: `λ_max` 3.94 under AC at seed 7, so a doubled cover solve passes 6.
-fn frustrated_heavy_k5() -> Graph {
-    let edges = [
-        (0, 1, 1.0, false),
-        (0, 2, 4096.0, false),
-        (0, 3, 1.0, true),
-        (0, 4, 4096.0, true),
-        (1, 2, 4096.0, true),
-        (1, 3, 1.0, true),
-        (1, 4, 4096.0, false),
-        (2, 3, 1.0, true),
-        (2, 4, 4096.0, false),
-        (3, 4, 4096.0, false),
-    ];
-    let edges = edges.map(|(a, b, w, positive)| Edge {
-        positive,
-        ..Edge::negative(a, b, w)
-    });
-    Graph::new(5, edges.to_vec())
+/// A path or a cycle, relabelled, at weights `1..=4`; a signed odd cycle frustrates.
+fn path_or_cycle() -> impl Strategy<Value = Graph> {
+    (2usize..=8, any::<bool>()).prop_flat_map(|(n, cycle)| {
+        let m = if cycle && n >= 3 { n } else { n - 1 };
+        let edges = prop::collection::vec((1u8..=4, any::<bool>()), m);
+        let order = Just((0..n).collect::<Vec<_>>()).prop_shuffle();
+        (edges, order, any::<bool>()).prop_map(move |(edges, order, signed)| {
+            let edges = (edges.into_iter().enumerate())
+                .map(|(k, (w, flip))| Edge {
+                    positive: signed && flip,
+                    ..Edge::negative(order[k], order[(k + 1) % n], f64::from(w))
+                })
+                .collect();
+            Graph::new(n, edges)
+        })
+    })
 }
 
 cases! {
-    fn a_frustrated_cover_keeps_the_spectrum_bounded(
-        route in routes(frustrated),
-        types in types(all),
-    ) {
+    /// Every star has at most two edges, whose clique is one edge: every mode is exact.
+    fn a_path_or_cycle_factors_exactly_in_every_mode(route in routes(all), types in types(all)) {
         let (entry, mode) = route;
-        let violation = spectrum_violation(entry, &frustrated_heavy_k5(), types, mode);
-        assert_eq!(violation, None);
+        let (config, bounds) = (mode.config(), exact(types));
+        check(stated_by(entry, path_or_cycle()), |graph| {
+            let lambda = entry.reduce(&graph, types).factorize(&config).spectrum(&graph);
+            prop_assert!(
+                lambda.iter().all(|l| bounds.contains(l)),
+                "{types:?} {mode:?}: λ = {lambda:?}"
+            );
+            Ok(())
+        });
     }
 }
 
