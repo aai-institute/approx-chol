@@ -344,7 +344,14 @@ impl CsrArrays<'_> {
     ) -> PyResult<PyFactor> {
         let indptr = as_contiguous::<J>(&self.np, &self.indptr)?;
         let indices = as_contiguous::<J>(&self.np, &self.indices)?;
-        let (indptr, indices, data) = (indptr.readonly(), indices.readonly(), self.data.readonly());
+        // Borrowed arrays are the caller's, so another thread may hold one mutably.
+        let indptr = indptr
+            .try_readonly()
+            .map_err(|e| borrow_error("indptr", e))?;
+        let indices = indices
+            .try_readonly()
+            .map_err(|e| borrow_error("indices", e))?;
+        let data = (self.data.try_readonly()).map_err(|e| borrow_error("data", e))?;
         let contiguous = |name: &str| value_error(format!("{name} must be contiguous"));
         let csr = Csr::new(
             self.n,
