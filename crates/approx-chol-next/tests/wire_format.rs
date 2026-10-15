@@ -240,12 +240,13 @@ fn a_payload_of_another_format_version_is_rejected_by_version(#[case] declared: 
     }
 }
 
-/// `cargo test -p approx-chol-next --features serde --test wire_format -- --ignored`, after a version bump or a new fixture.
+/// After a version bump or a new fixture; a factorization change deletes and regenerates the affected fixture, with no version bump.
 #[test]
-#[ignore = "writes fixtures; run deliberately after a format version bump or a new fixture"]
+#[ignore = "writes fixtures: cargo test -p approx-chol-next --features serde --test wire_format -- --ignored"]
 fn regenerate_missing_wire_format_fixtures() {
     for &fixture in FIXTURES {
         let path = fixture.path();
+        let bytes = postcard::to_stdvec(&fixture.blocks()).expect("serialize the fixture");
         // Rewriting a committed payload with today's encoder is how this test comes to agree with the drift it exists to catch.
         let file = std::fs::OpenOptions::new()
             .write(true)
@@ -253,7 +254,6 @@ fn regenerate_missing_wire_format_fixtures() {
             .open(&path);
         match file {
             Ok(mut file) => {
-                let bytes = postcard::to_stdvec(&fixture.blocks()).expect("serialize the fixture");
                 std::io::Write::write_all(&mut file, &bytes).expect("write the fixture");
                 println!("wrote {path}");
             }
