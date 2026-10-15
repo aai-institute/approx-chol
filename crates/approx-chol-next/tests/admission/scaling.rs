@@ -84,7 +84,7 @@ fn grid(k: usize) -> Vec<(usize, usize)> {
     right.chain(down).collect()
 }
 
-/// CG stalls past 4× the settle band at n = 5000; 6144 steps cover the path, which 2048 do not (#194).
+/// A ~5000-step CG run stalls past 4× the settle band; 6144 steps cover this path, which 2048 do not (#194).
 #[rstest]
 #[case::spread_1e_6(1e-6)]
 #[case::spread_1e_3(1e-3)]

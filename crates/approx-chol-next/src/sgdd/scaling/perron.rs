@@ -56,7 +56,7 @@ impl Bracket {
         self.high < 1.0 - band || self.eigen_residual <= band
     }
 
-    /// Certified and near settling: a long CG run stalls at a floor that grows with `n`, past `4×` the band at `n ≈ 5000`.
+    /// Certified and near settling: a CG run stalls at a floor that grows with its steps, past `4×` the band after ~5000.
     fn nearly_settled(&self, tolerance: f64, band: f64) -> bool {
         self.certifies(tolerance) && self.eigen_residual <= 64.0 * band
     }
