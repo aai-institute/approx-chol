@@ -82,34 +82,41 @@ fn deficit_beyond_summation_roundoff_is_reported() {
     let reported = |sgdd: &Sgdd<f64>| sgdd.blocks()[0].scaling_report().is_some();
     assert!(reported(&drifted(-5e-11_f64)), "1e-9 tolerance is no cover");
     assert!(reported(&drifted(-32.0 * f64::EPSILON)));
-    assert!(!reported(&drifted(-12.0 * f64::EPSILON)), "inside 20 eps");
+    assert!(!reported(&drifted(-12.0 * f64::EPSILON)), "inside 16 eps");
     let f32_reported = |drift: f32| drifted(drift).blocks()[0].scaling_report().is_some();
     assert!(f32_reported(-32.0 * f32::EPSILON));
-    assert!(!f32_reported(-12.0 * f32::EPSILON), "inside 20 eps");
+    assert!(!f32_reported(-12.0 * f32::EPSILON), "inside 16 eps");
+}
+
+/// Unit leaves, centre short of their sum by `short_ulps` ε; the leaves balance exactly.
+fn star(leaves: u32, short_ulps: f64) -> Sgdd<f64> {
+    let mut row_ptrs = vec![0u32, leaves + 1];
+    let mut columns: Vec<u32> = (0..=leaves).collect();
+    let mut values = vec![f64::from(leaves) * (1.0 - short_ulps * f64::EPSILON)];
+    values.extend(std::iter::repeat_n(-1.0, leaves as usize));
+    for leaf in 1..=leaves {
+        columns.extend([0, leaf]);
+        values.extend([-1.0, 1.0]);
+        row_ptrs.push(columns.len() as u32);
+    }
+    reduce(&row_ptrs, &columns, &values).expect("a star is admitted")
 }
 
 /// A row of `k` entries rounds by `(k + 3)ε`: a degree-100 centre short by 50ε is rounding, by 200ε a deficit.
 #[test]
 fn a_rows_rounding_band_grows_with_its_degree() {
-    let star = |short: f64| {
-        let leaves = 100u32;
-        let mut row_ptrs = vec![0u32, leaves + 1];
-        let mut columns: Vec<u32> = (0..=leaves).collect();
-        let mut values = vec![f64::from(leaves) * (1.0 - short)];
-        values.extend(std::iter::repeat_n(-1.0, leaves as usize));
-        for leaf in 1..=leaves {
-            columns.extend([0, leaf]);
-            values.extend([-1.0, 1.0]);
-            row_ptrs.push(columns.len() as u32);
-        }
-        reduce(&row_ptrs, &columns, &values).expect("a star is admitted")
-    };
-    assert!(star(50.0 * f64::EPSILON).blocks()[0]
+    assert!(star(100, 50.0).blocks()[0].scaling_report().is_none());
+    assert!(star(100, 200.0).blocks()[0].scaling_report().is_some());
+}
+
+/// No scaling settled, so no settle band widens the row's: a degree-13 centre short by 24ε passes `max(16, 16)ε`.
+#[test]
+fn an_unscaled_deficit_past_its_row_rounding_is_reported() {
+    let report = star(13, 24.0).blocks()[0]
         .scaling_report()
-        .is_none());
-    assert!(star(200.0 * f64::EPSILON).blocks()[0]
-        .scaling_report()
-        .is_some());
+        .expect("reported");
+    assert_eq!(report.iterations, 0, "unscaled");
+    assert!(report.violation > 16.0 * f64::EPSILON, "{report:?}");
 }
 
 /// Main rejected these as not dominant; the rewrite admits them clamped and reports the violation.

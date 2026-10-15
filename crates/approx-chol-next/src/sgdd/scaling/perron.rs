@@ -56,7 +56,7 @@ impl Bracket {
         self.high < 1.0 - band || self.eigen_residual <= band
     }
 
-    /// Certified and near settling: a long CG run stalls at a floor that grows with `n`, past `4×` the band at `n ≈ 5000`.
+    /// Certified and near settling: a CG run stalls at a floor that grows with its steps, past `4×` the band after ~5000.
     fn nearly_settled(&self, tolerance: f64, band: f64) -> bool {
         self.certifies(tolerance) && self.eigen_residual <= 64.0 * band
     }
@@ -205,12 +205,22 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
         adopted
     }
 
-    /// Adopts a positive `y` whose bracket ranks above the best's: meeting `goal` first, then the smaller violation.
+    /// Adopts a positive `y` whose bracket ranks above the best's: meeting `goal` first, then certified by the smaller eigen-residual, else by the smaller violation.
     fn consider(&mut self, y: &[f64], goal: &impl Fn(&Bracket) -> bool) -> bool {
         let Some(bracket) = Bracket::of(self.n, y, &mut self.work) else {
             return false;
         };
-        let rank = |b: &Bracket| (goal(b), -b.violation());
+        let tolerance = self.tolerance;
+        // Certified, only the eigen-residual moves towards settling; a smaller violation alone resumes a restart from a stale best.
+        let rank = |b: &Bracket| {
+            let certified = b.certifies(tolerance);
+            let progress = if certified {
+                -b.eigen_residual
+            } else {
+                -b.violation()
+            };
+            (goal(b), certified, progress)
+        };
         let better = rank(&bracket) > rank(&self.best.1);
         if better {
             self.best.0.clear();
