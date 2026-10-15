@@ -86,6 +86,9 @@ impl<A, I: Index> Partitioned<A, I> {
             return Ok((partition, live));
         }
         let components: Vec<&[I]> = partition.components().collect();
+        if components.is_empty() {
+            return Ok((partition, Vec::new()));
+        }
         let cut = |vertices: &&[I]| block(a.component(vertices, partition.position()));
         // About `PARALLEL_VERTICES` vertices a task: waking the pool for less costs more than it saves.
         let per_task = (PARALLEL_VERTICES * components.len()).div_ceil(partition.n());

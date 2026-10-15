@@ -9,7 +9,7 @@ use std::cell::LazyCell;
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
 use super::congruence::Congruence;
 use super::decomposition::{Cells, Components};
-use super::scaling::{self, Existence, ScalingPolicy};
+use super::scaling::{self, Existence, ScalingPolicy, ScalingReport, RATIO_BAND};
 use super::signature;
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, widen, Index, Real};
@@ -97,14 +97,15 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         let (m, rows) = match relaxation {
             None => {
                 // Signs keep every magnitude, so `A_c`'s rows are `M`'s.
+                let deficit =
+                    clamped_deficit(&self.diagonal, &self.abs_row_sums, &self.off_diagonal);
+                let mut m = Congruent::new(self.vertices, self.off_diagonal, signs);
+                m.report = policy.report(ScalingReport::unscaled(existence), deficit);
                 let rows = RowSums {
                     diagonal: self.diagonal,
                     abs: self.abs_row_sums,
                 };
-                (
-                    Congruent::new(self.vertices, self.off_diagonal, signs),
-                    rows,
-                )
+                (m, rows)
             }
             Some(relaxation) => {
                 let factors = signs.times(&relaxation.scales);
@@ -113,12 +114,12 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 let diagonal: Vec<T> = (self.diagonal.iter().zip(&relaxation.scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();
-                let deficit = clamped_deficit(&diagonal, &abs);
-                let report = policy.report(&relaxation, existence, deficit);
+                let deficit = clamped_deficit(&diagonal, &abs, &off_diagonal);
                 let m = Congruent {
                     vertices: self.vertices,
-                    congruence: Congruence::Scaled(factors, report),
+                    congruence: Congruence::Scaled(factors),
                     off_diagonal,
+                    report: policy.report(relaxation.shortfall(existence), deficit),
                 };
                 (m, RowSums { diagonal, abs })
             }
@@ -141,6 +142,7 @@ struct Congruent<T, I> {
     vertices: Box<[I]>,
     congruence: Congruence<T>,
     off_diagonal: OffDiagonal<T, I>,
+    report: Option<ScalingReport>,
 }
 
 impl<T: Real, I: Index> Congruent<T, I> {
@@ -154,17 +156,30 @@ impl<T: Real, I: Index> Congruent<T, I> {
             vertices,
             congruence: signs,
             off_diagonal,
+            report: None,
         }
     }
 
     fn frustrated(self, grounding: Grounding<T>) -> Result<IrreducibleBlock<T, I>, ReduceError> {
         let balance = Balance::Frustrated(grounding);
-        IrreducibleBlock::new(self.vertices, self.congruence, self.off_diagonal, balance)
+        IrreducibleBlock::new(
+            self.vertices,
+            self.congruence,
+            self.off_diagonal,
+            balance,
+            self.report,
+        )
     }
 
     fn balanced(self, grounding: Grounding<T>) -> Result<IrreducibleBlock<T, I>, ReduceError> {
         let balance = Balance::Balanced(grounding);
-        IrreducibleBlock::new(self.vertices, self.congruence, self.off_diagonal, balance)
+        IrreducibleBlock::new(
+            self.vertices,
+            self.congruence,
+            self.off_diagonal,
+            balance,
+            self.report,
+        )
     }
 }
 
@@ -192,13 +207,25 @@ impl<T: Real> RowSums<T> {
     }
 }
 
-/// `max_i (Σ_j|m_ij| − m_ii)/m_ii` past the entries' rounding: what clamping adds.
-fn clamped_deficit<T: Real>(diagonal: &[T], abs_row_sums: &[T]) -> f64 {
-    let band = SINGULAR_BAND * widen(T::epsilon());
-    (diagonal.iter().zip(abs_row_sums))
-        .map(|(&d, &s)| (widen(s) - widen(d)) / widen(d))
-        .filter(|&deficit| deficit > band)
-        .fold(0.0, f64::max)
+/// `max_i (Σ_j|m_ij| − m_ii)/m_ii` past row `i`'s rounding, `max(RATIO_BAND, k_i + 3) ε` over its `k_i` entries: what clamping adds.
+fn clamped_deficit<T: Real, I: Index>(
+    diagonal: &[T],
+    abs_row_sums: &[T],
+    off_diagonal: &OffDiagonal<T, I>,
+) -> f64 {
+    let epsilon = widen(T::epsilon());
+    let deficits =
+        (diagonal.iter().zip(abs_row_sums)).map(|(&d, &s)| (widen(s) - widen(d)) / widen(d));
+    // Degrees cost a pass over the entries, so only a row past the floor pays for them.
+    if deficits
+        .clone()
+        .all(|deficit| deficit <= RATIO_BAND * epsilon)
+    {
+        return 0.0;
+    }
+    (deficits.zip(off_diagonal.degrees()))
+        .filter(|&(deficit, k)| deficit > RATIO_BAND.max((k + 3) as f64) * epsilon)
+        .fold(0.0, |worst, (deficit, _)| worst.max(deficit))
 }
 
 /// `1ᵀM1 ≤ SINGULAR_BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh), so `M` floats.

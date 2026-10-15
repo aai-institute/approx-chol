@@ -42,6 +42,7 @@ impl<'a, T: Real, J: PrimInt, I: Index> TryFrom<BipartiteLaplacian<'a, T, J>> fo
                     vertices,
                     congruence: signs,
                     off_diagonal,
+                    report: None,
                 };
                 m.balanced(grounding).map(Some)
             })

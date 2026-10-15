@@ -59,8 +59,10 @@ version = "0.7.0"
 dependencies = [
  "num-traits",
  "postcard",
+ "proptest",
  "rand 0.10.2",
  "rayon",
+ "rstest",
  "serde",
 ]
 

@@ -39,7 +39,7 @@ impl<T: Real, I: Index> Restriction<T, I> {
     /// `F`'s entries from `from` on, `None` when every `|f|` is `1`.
     pub(crate) fn scales(&self, from: usize) -> Option<&[T]> {
         match &self.congruence {
-            Congruence::Scaled(factors, _) => Some(&factors[from..]),
+            Congruence::Scaled(factors) => Some(&factors[from..]),
             _ => None,
         }
     }
@@ -136,6 +136,7 @@ pub struct IrreducibleBlock<T = f64, I = u32> {
     restriction: Arc<Restriction<T, I>>,
     off_diagonal: OffDiagonal<T, I>,
     balance: Balance<T>,
+    report: Option<ScalingReport>,
 }
 
 impl<T: Real, I: Index> IrreducibleBlock<T, I> {
@@ -145,6 +146,7 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         congruence: Congruence<T>,
         off_diagonal: OffDiagonal<T, I>,
         balance: Balance<T>,
+        report: Option<ScalingReport>,
     ) -> Result<Self, ReduceError> {
         let n = vertices.len();
         assert!(congruence.fits(n), "one factor per vertex");
@@ -172,6 +174,7 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
             restriction: Arc::new(restriction),
             off_diagonal,
             balance,
+            report,
         })
     }
 
@@ -180,9 +183,9 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         &self.restriction.vertices
     }
 
-    /// Present iff this block's scaling was clamped beyond the policy's tolerance or did not settle.
+    /// Present iff a deficit past rounding was clamped, its scaling fell short beyond the policy's tolerance, or did not settle.
     pub fn scaling_report(&self) -> Option<ScalingReport> {
-        self.restriction.congruence.report()
+        self.report
     }
 
     /// Shared with every factor of this block.
@@ -331,7 +334,7 @@ impl<T: Real, I: Index> Restriction<T, I> {
     fn checked(self) -> Option<Self> {
         let factors = match &self.congruence {
             Congruence::Signs(f) => f.iter().all(|f| f.abs() == T::one()),
-            Congruence::Scaled(f, _) => f.iter().all(|f| f.is_finite() && *f != T::zero()),
+            Congruence::Scaled(f) => f.iter().all(|f| f.is_finite() && *f != T::zero()),
             Congruence::Identity | Congruence::NegateFrom(_) => true,
         };
         let fits = !self.vertices.is_empty() && self.congruence.fits(self.vertices.len());
