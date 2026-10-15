@@ -22,6 +22,7 @@ serde = { version = "1", features = ["derive", "rc"], optional = true }
 serde = ["dep:serde"]
 
 [dev-dependencies]
+faer = { version = "0.24", default-features = false }
 postcard = { version = "1", features = ["use-std"] }
 proptest = "1.6"
 rstest = { version = "0.26.1", default-features = false }
