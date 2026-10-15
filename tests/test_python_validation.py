@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import scipy.sparse as sp
 
 import approx_chol
 
@@ -23,6 +24,97 @@ class MatrixLike:
 def test_split_below_two_is_rejected(split):
     with pytest.raises(ValueError, match=f"split must be at least 2, got {split}"):
         approx_chol.Config(split=split)
+
+
+def _u32(*xs):
+    return np.array(xs, dtype=np.uint32)
+
+
+def _f64(*xs):
+    return np.array(xs, dtype=np.float64)
+
+
+@pytest.mark.parametrize(
+    ("row_ptrs", "col_indices", "values", "n", "message"),
+    [
+        pytest.param(
+            _u32(0, 2),
+            _u32(0, 1),
+            _f64(2, -1),
+            2,
+            "CSR array has length 2, expected 3",
+            id="row_ptrs_length",
+        ),
+        pytest.param(
+            _u32(0, 2, 4),
+            _u32(0, 1, 0, 1),
+            _f64(2, -1, -1),
+            2,
+            "CSR array has length 3, expected 4",
+            id="values_length",
+        ),
+        pytest.param(
+            _u32(0, 3, 2, 4),
+            _u32(0, 1, 0, 1),
+            _f64(2, -1, -1, 2),
+            3,
+            "row pointers do not ascend from 0 at row 1",
+            id="falling_row_ptrs",
+        ),
+        pytest.param(
+            _u32(0, 2, 4),
+            _u32(0, 2, 0, 1),
+            _f64(2, -1, -1, 2),
+            2,
+            "row 0 has a column index outside 0..n",
+            id="column_out_of_range",
+        ),
+        pytest.param(
+            _u32(0, 2, 4),
+            _u32(0, 1, 0, 1),
+            _f64(2, -1, -2, 2),
+            2,
+            "row 0 has an entry with no equal mirror",
+            id="not_symmetric",
+        ),
+        pytest.param(
+            _u32(0, 1),
+            _u32(0),
+            _f64(np.nan),
+            1,
+            "row 0 has an entry outside the representable range",
+            id="nan_entry",
+        ),
+        pytest.param(
+            _u32(0, 1),
+            _u32(0),
+            _f64(-1),
+            1,
+            "vertex 0 has a nonpositive diagonal",
+            id="negative_diagonal",
+        ),
+        pytest.param(
+            _u32(0, 1),
+            _u32(0),
+            _f64(np.finfo(np.float64).max),
+            1,
+            "an entry at vertex 0 is outside the representable range",
+            id="diagonal_past_a_quarter_of_the_maximum",
+        ),
+    ],
+)
+def test_factorize_raw_names_the_defect(row_ptrs, col_indices, values, n, message):
+    with pytest.raises(ValueError, match=f"^{message}$"):
+        approx_chol.factorize_raw(row_ptrs, col_indices, values, n)
+
+
+def test_factorize_names_the_defect_of_a_scipy_matrix():
+    asymmetric = sp.csr_matrix(np.array([[2.0, -1.0], [0.0, 2.0]]))
+    with pytest.raises(ValueError, match="^row 0 has an entry with no equal mirror$"):
+        approx_chol.factorize(asymmetric)
+
+    with pytest.raises(ValueError, match="^matrix must be square$"):
+        approx_chol.factorize(sp.csr_matrix(np.ones((2, 3))))
 
 
 def test_duck_typed_factorize_validates_indices_and_dimension():
