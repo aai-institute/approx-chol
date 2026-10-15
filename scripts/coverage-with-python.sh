@@ -9,4 +9,5 @@ maturin develop --uv --locked
 pytest tests/ -v
 
 # A floor, not a target: headroom below measured coverage so one untested branch doesn't fail.
-cargo llvm-cov report --summary-only --fail-under-lines 90
+# approx-chol-next is gated once it replaces approx-chol (#182).
+cargo llvm-cov report --summary-only --fail-under-lines 90 --ignore-filename-regex 'approx-chol-next/'
