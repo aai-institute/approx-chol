@@ -7,7 +7,7 @@ use perron::InverseIteration;
 use crate::storage::OffDiagonal;
 use crate::{narrow, widen, Index, Real};
 
-/// Certification policy for a dominance scaling; a deficit left at hand-over is clamped and reported.
+/// Certification policy for a dominance scaling; a deficit past rounding left at hand-over is clamped and reported.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScalingPolicy {
     tolerance: f64,
@@ -33,7 +33,7 @@ impl Default for ScalingPolicy {
     }
 }
 
-/// A block's uncertified or unsettled scaling: present iff its violation exceeded the policy's tolerance or its float decision is unproven.
+/// A block's clamped deficit or uncertified or unsettled scaling: present iff a deficit past rounding was clamped, its violation exceeded the policy's tolerance, or its float decision is unproven.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScalingReport {
@@ -64,20 +64,26 @@ impl ScalingPolicy {
         widen(abs_row_sum) <= widen(d) * (1.0 + slack)
     }
 
-    /// Reported when its violation or clamped deficit, whichever is worse, passes the tolerance.
-    pub(super) fn report<T: Real>(
-        &self,
-        relaxation: &Relaxation<T>,
-        existence: Existence,
-        clamped: f64,
-    ) -> Option<ScalingReport> {
-        let violation = widen(relaxation.violation).max(clamped);
-        (violation > self.tolerance || !relaxation.settled).then_some(ScalingReport {
-            iterations: relaxation.iterations,
-            violation,
+    /// Kept when a deficit past rounding was clamped, the scaling's violation passes the tolerance, or it did not settle.
+    pub(super) fn report(&self, scaling: ScalingReport, clamped: f64) -> Option<ScalingReport> {
+        (clamped > 0.0 || scaling.violation > self.tolerance || !scaling.settled).then_some(
+            ScalingReport {
+                violation: scaling.violation.max(clamped),
+                ..scaling
+            },
+        )
+    }
+}
+
+impl ScalingReport {
+    /// No scaling ran: nothing spent, nothing short, and the rows decide floating exactly.
+    pub(super) fn unscaled(existence: Existence) -> Self {
+        Self {
+            iterations: 0,
+            violation: 0.0,
             scaling: existence,
-            settled: relaxation.settled,
-        })
+            settled: true,
+        }
     }
 }
 
@@ -91,6 +97,16 @@ pub(super) struct Relaxation<T> {
 }
 
 impl<T: Real> Relaxation<T> {
+    /// What the scaling spent and left, before the policy judges it.
+    pub(super) fn shortfall(&self, existence: Existence) -> ScalingReport {
+        ScalingReport {
+            iterations: self.iterations,
+            violation: widen(self.violation),
+            scaling: existence,
+            settled: self.settled,
+        }
+    }
+
     /// `None` unless every scale is a positive `T`.
     fn new(scales: Box<[T]>, iterations: usize, violation: T, settled: bool) -> Option<Self> {
         let positive = scales.iter().all(|&f| f.is_finite() && f > T::zero());
@@ -115,7 +131,7 @@ pub(super) fn null_scaling<T: Real>(
 }
 
 /// How far, in `ε`, a row ratio `Σ_j|a_ij|f_j / (a_ii f_i)` may sit from `1`: a settled residual and the dominance slack's floor.
-const RATIO_BAND: f64 = 16.0;
+pub(super) const RATIO_BAND: f64 = 16.0;
 
 /// Scales from `N`'s Perron vector, iterated until `ρ < 1` is proven, pinned at `1`, or refuted past the tolerance.
 pub(super) fn relax<T: Real, I: Index>(

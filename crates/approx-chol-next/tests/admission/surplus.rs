@@ -74,20 +74,40 @@ fn surplus_beyond_summation_roundoff_augments() {
     assert!(grounded(&drifted(5e-11_f64)));
 }
 
-/// A real deficit is reported, not zeroed (#91); the rewrite's report is a clamp's scaling report.
+/// A deficit past rounding is reported, not zeroed (#91), even well inside the scaling tolerance.
 #[test]
-#[ignore = "a deficit within max(tolerance 1e-9, 16 eps) of the diagonal floats unreported; main rejected 4 eps"]
-fn deficit_beyond_summation_roundoff_is_rejected() {
-    let f32_pair = drifted(-1e-6_f32);
-    assert!(
-        f32_pair.blocks()[0].scaling_report().is_some(),
-        "{f32_pair:?}"
-    );
-    let f64_pair = drifted(-5e-11_f64);
-    assert!(
-        f64_pair.blocks()[0].scaling_report().is_some(),
-        "{f64_pair:?}"
-    );
+fn deficit_beyond_summation_roundoff_is_reported() {
+    let reported = |sgdd: &Sgdd<f64>| sgdd.blocks()[0].scaling_report().is_some();
+    assert!(reported(&drifted(-5e-11_f64)), "1e-9 tolerance is no cover");
+    assert!(reported(&drifted(-20.0 * f64::EPSILON)));
+    assert!(!reported(&drifted(-12.0 * f64::EPSILON)), "inside 16 eps");
+    let f32_reported = |drift: f32| drifted(drift).blocks()[0].scaling_report().is_some();
+    assert!(f32_reported(-20.0 * f32::EPSILON));
+    assert!(!f32_reported(-12.0 * f32::EPSILON), "inside 16 eps");
+}
+
+/// A row of `k` entries rounds by `(k + 3)ε`: a degree-100 centre short by 50ε is rounding, by 200ε a deficit.
+#[test]
+fn a_rows_rounding_band_grows_with_its_degree() {
+    let star = |short: f64| {
+        let leaves = 100u32;
+        let mut row_ptrs = vec![0u32, leaves + 1];
+        let mut columns: Vec<u32> = (0..=leaves).collect();
+        let mut values = vec![f64::from(leaves) * (1.0 - short)];
+        values.extend(std::iter::repeat_n(-1.0, leaves as usize));
+        for leaf in 1..=leaves {
+            columns.extend([0, leaf]);
+            values.extend([-1.0, 1.0]);
+            row_ptrs.push(columns.len() as u32);
+        }
+        reduce(&row_ptrs, &columns, &values).expect("a star is admitted")
+    };
+    assert!(star(50.0 * f64::EPSILON).blocks()[0]
+        .scaling_report()
+        .is_none());
+    assert!(star(200.0 * f64::EPSILON).blocks()[0]
+        .scaling_report()
+        .is_some());
 }
 
 /// Main rejected these as not dominant; the rewrite admits them clamped and reports the violation.

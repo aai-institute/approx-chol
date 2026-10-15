@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 
-use super::scaling::ScalingReport;
 use crate::narrow;
 use crate::{widen, Real};
 
@@ -13,8 +12,8 @@ pub(crate) enum Congruence<T> {
     NegateFrom(usize),
     /// Signs only, exact, so a sign never moves a magnitude.
     Signs(Box<[T]>),
-    /// `S R`, and how far `R` fell short when that exceeded the policy's tolerance.
-    Scaled(Box<[T]>, Option<ScalingReport>),
+    /// `S R`.
+    Scaled(Box<[T]>),
 }
 
 impl<T: Real> Congruence<T> {
@@ -37,20 +36,13 @@ impl<T: Real> Congruence<T> {
         }
     }
 
-    pub(super) fn report(&self) -> Option<ScalingReport> {
-        match self {
-            Self::Scaled(_, report) => *report,
-            _ => None,
-        }
-    }
-
     /// `f_i`, vertex `i`'s entry of `F·1`.
     pub(super) fn factor(&self, i: usize) -> T {
         match self {
             Self::Identity => T::one(),
             Self::NegateFrom(first) if i >= *first => -T::one(),
             Self::NegateFrom(_) => T::one(),
-            Self::Signs(factors) | Self::Scaled(factors, _) => factors[i],
+            Self::Signs(factors) | Self::Scaled(factors) => factors[i],
         }
     }
 
@@ -59,7 +51,7 @@ impl<T: Real> Congruence<T> {
         match self {
             Self::Identity => true,
             Self::NegateFrom(first) => *first <= n,
-            Self::Signs(factors) | Self::Scaled(factors, _) => factors.len() == n,
+            Self::Signs(factors) | Self::Scaled(factors) => factors.len() == n,
         }
     }
 
@@ -68,7 +60,7 @@ impl<T: Real> Congruence<T> {
         match self {
             Self::Identity => None,
             Self::NegateFrom(first) => Some(Cow::Owned(signs(*first, n))),
-            Self::Signs(factors) | Self::Scaled(factors, _) => Some(Cow::Borrowed(&factors[..])),
+            Self::Signs(factors) | Self::Scaled(factors) => Some(Cow::Borrowed(&factors[..])),
         }
     }
 
@@ -77,7 +69,7 @@ impl<T: Real> Congruence<T> {
         match self {
             Self::Identity => {}
             Self::NegateFrom(first) => x[*first..].iter_mut().for_each(|x| *x = -*x),
-            Self::Signs(factors) | Self::Scaled(factors, _) => {
+            Self::Signs(factors) | Self::Scaled(factors) => {
                 (x.iter_mut().zip(factors)).for_each(|(x, &f)| *x = *x * f)
             }
         }
@@ -86,7 +78,7 @@ impl<T: Real> Congruence<T> {
     /// Removes the component along `F·1`, max-normalized: the raw norm overflows at a 1e200 scale range.
     pub(super) fn project_out_null(&self, x: &mut [T]) {
         match self {
-            Self::Signs(factors) | Self::Scaled(factors, _) => project_out(x, |i| factors[i]),
+            Self::Signs(factors) | Self::Scaled(factors) => project_out(x, |i| factors[i]),
             _ => project_out(x, |i| self.factor(i)),
         }
     }

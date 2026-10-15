@@ -311,6 +311,11 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
 
     /// The most entries in any row, both triangles counted.
     pub(crate) fn max_degree(&self) -> usize {
+        self.degrees().into_iter().max().unwrap_or(0)
+    }
+
+    /// Each row's off-diagonal count, both triangles.
+    pub(crate) fn degrees(&self) -> Vec<usize> {
         let (rows, offset) = self.stored();
         let mut degree = vec![0usize; self.n()];
         for (i, span) in rows.ptrs.windows(2).enumerate() {
@@ -319,7 +324,7 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
                 degree[offset + j.index()] += 1;
             }
         }
-        degree.into_iter().max().unwrap_or(0)
+        degree
     }
 
     /// `out = |X| diag(s) y`, each stored entry read for both its ends.
