@@ -2,8 +2,10 @@ use approx_chol::input::Csr;
 use approx_chol::{
     CliqueRule, Config, Factor, Multiplicity, ScalingPolicy, ScalingReport, Sgdd, SplitCount,
 };
+use num_traits::PrimInt;
 use numpy::{BorrowError, Element, PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
+use pyo3::types::IntoPyDict;
 use std::error::Error;
 use std::mem::size_of;
 
@@ -32,76 +34,57 @@ fn borrow_error(name: &str, err: BorrowError) -> PyErr {
     }
 }
 
-/// An associated element type stops a call site pairing an index column with a float element.
-trait Column {
-    type Element: numpy::Element;
+/// A CSR array's role, which fixes the dtype kinds it may hold without truncation.
+#[derive(Clone, Copy)]
+enum Column {
+    Index,
+    Value,
+}
 
-    fn accepts(kind: &str) -> bool;
+impl Column {
+    fn accepts(self, kind: &str) -> bool {
+        match self {
+            Self::Index => kind == "i" || kind == "u",
+            Self::Value => kind == "i" || kind == "u" || kind == "f",
+        }
+    }
 
-    fn expected() -> &'static str;
-
-    fn check_range(_arr: &Bound<'_, PyAny>, _name: &str) -> PyResult<()> {
-        Ok(())
+    fn expected(self) -> &'static str {
+        match self {
+            Self::Index => "an integer dtype",
+            Self::Value => "an integer or floating-point dtype",
+        }
     }
 }
 
-struct Index;
-
-impl Column for Index {
-    type Element = u32;
-
-    fn accepts(kind: &str) -> bool {
-        kind == "i" || kind == "u"
-    }
-
-    fn expected() -> &'static str {
-        "an integer dtype"
-    }
-
-    fn check_range(arr: &Bound<'_, PyAny>, name: &str) -> PyResult<()> {
-        if arr.getattr("size")?.extract::<usize>()? == 0 {
-            return Ok(());
-        }
-        let wide = arr.call_method1("astype", (i64::get_dtype(arr.py()),))?;
-        if wide.call_method0("min")?.extract::<i64>()? < 0 {
-            return Err(value_error(format!("{name} must be non-negative")));
-        }
-        if wide.call_method0("max")?.extract::<i64>()? > u32::MAX as i64 {
-            return Err(value_error(format!("{name} exceeds u32::MAX")));
-        }
-        Ok(())
-    }
-}
-
-struct Value;
-
-impl Column for Value {
-    type Element = f64;
-
-    fn accepts(kind: &str) -> bool {
-        kind == "i" || kind == "u" || kind == "f"
-    }
-
-    fn expected() -> &'static str {
-        "an integer or floating-point dtype"
-    }
-}
-
-fn as_contiguous_1d<'py, C: Column>(
+/// `array_like` as a 1-D array of a kind `column` accepts, not yet cast or copied.
+fn as_1d<'py>(
     np: &Bound<'py, PyModule>,
     array_like: &Bound<'py, PyAny>,
     name: &str,
-) -> PyResult<Bound<'py, PyArray1<C::Element>>> {
+    column: Column,
+) -> PyResult<Bound<'py, PyAny>> {
     let arr = np.call_method1("asarray", (array_like,))?;
     if arr.getattr("ndim")?.extract::<usize>()? != 1 {
         return Err(value_error(format!("{name} must be a 1-D array")));
     }
     let kind = arr.getattr("dtype")?.getattr("kind")?.extract::<String>()?;
-    if !C::accepts(&kind) {
-        return Err(value_error(format!("{name} must have {}", C::expected())));
+    if !column.accepts(&kind) {
+        return Err(value_error(format!(
+            "{name} must have {}",
+            column.expected()
+        )));
     }
-    C::check_range(&arr, name)?;
-    let cast = arr.call_method1("astype", (C::Element::get_dtype(arr.py()),))?;
+    Ok(arr)
+}
+
+/// `arr` as contiguous `E`, copied only when its dtype or layout differs.
+fn as_contiguous<'py, E: Element>(
+    np: &Bound<'py, PyModule>,
+    arr: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyArray1<E>>> {
+    let copy = [("copy", false)].into_py_dict(arr.py())?;
+    let cast = arr.call_method("astype", (E::get_dtype(arr.py()),), Some(&copy))?;
     np.call_method1("ascontiguousarray", (cast,))?
         .cast_into()
         .map_err(Into::into)
@@ -193,9 +176,9 @@ fn warn_on_scaling(py: Python<'_>, sgdd: &Sgdd<f64, u32>) -> PyResult<()> {
     Ok(())
 }
 
-fn factorize_csr(
+fn factorize_csr<J: PrimInt + Sync>(
     py: Python<'_>,
-    csr: Csr<'_, f64, u32>,
+    csr: Csr<'_, f64, J>,
     config: Option<&PyConfig>,
 ) -> PyResult<PyFactor> {
     let sgdd = Sgdd::from_csr(csr, ScalingPolicy::default()).map_err(|e| error_to_py(&e))?;
@@ -331,26 +314,61 @@ fn factorize(
     }
 
     let np = py.import("numpy")?;
-    let rp_arr = as_contiguous_1d::<Index>(&np, &indptr, "indptr")?;
-    let ci_arr = as_contiguous_1d::<Index>(&np, &indices, "indices")?;
-    let val_arr = as_contiguous_1d::<Value>(&np, &data, "data")?;
+    let arrays = CsrArrays {
+        n: shape.0,
+        indptr: as_1d(&np, &indptr, "indptr", Column::Index)?,
+        indices: as_1d(&np, &indices, "indices", Column::Index)?,
+        data: as_contiguous::<f64>(&np, &as_1d(&np, &data, "data", Column::Value)?)?,
+        np,
+    };
+    let dtype = arrays.index_dtype()?;
+    let kind = dtype.getattr("kind")?.extract::<String>()?;
+    let width = dtype.getattr("itemsize")?.extract::<usize>()?;
+    match (kind.as_str(), width) {
+        ("i", 4) => arrays.factorize::<i32>(config),
+        ("u", 4) => arrays.factorize::<u32>(config),
+        ("u", 8) => arrays.factorize::<u64>(config),
+        // Narrower integers widen; int64 beside uint64 promotes to float, and i64 holds any valid index.
+        _ => arrays.factorize::<i64>(config),
+    }
+}
 
-    let rp_ro = rp_arr.readonly();
-    let ci_ro = ci_arr.readonly();
-    let vals_ro = val_arr.readonly();
+/// A scipy CSR's checked arrays: values already `f64`, indices still in the caller's dtype.
+struct CsrArrays<'py> {
+    np: Bound<'py, PyModule>,
+    n: usize,
+    indptr: Bound<'py, PyAny>,
+    indices: Bound<'py, PyAny>,
+    data: Bound<'py, PyArray1<f64>>,
+}
 
-    let rp = rp_ro
-        .as_slice()
-        .map_err(|_| value_error("indptr must be contiguous"))?;
-    let ci = ci_ro
-        .as_slice()
-        .map_err(|_| value_error("indices must be contiguous"))?;
-    let vals = vals_ro
-        .as_slice()
-        .map_err(|_| value_error("data must be contiguous"))?;
+impl CsrArrays<'_> {
+    fn index_dtype(&self) -> PyResult<Bound<'_, PyAny>> {
+        let dtypes = (
+            self.indptr.getattr("dtype")?,
+            self.indices.getattr("dtype")?,
+        );
+        self.np.call_method1("result_type", dtypes)
+    }
 
-    let csr = Csr::new(shape.0, rp, ci, vals).map_err(|e| error_to_py(&e))?;
-    factorize_csr(py, csr, config)
+    /// Borrows the index arrays whenever they already are contiguous `J`.
+    fn factorize<J: Element + PrimInt + Sync>(
+        &self,
+        config: Option<&PyConfig>,
+    ) -> PyResult<PyFactor> {
+        let indptr = as_contiguous::<J>(&self.np, &self.indptr)?;
+        let indices = as_contiguous::<J>(&self.np, &self.indices)?;
+        let (indptr, indices, data) = (indptr.readonly(), indices.readonly(), self.data.readonly());
+        let contiguous = |name: &str| value_error(format!("{name} must be contiguous"));
+        let csr = Csr::new(
+            self.n,
+            indptr.as_slice().map_err(|_| contiguous("indptr"))?,
+            indices.as_slice().map_err(|_| contiguous("indices"))?,
+            data.as_slice().map_err(|_| contiguous("data"))?,
+        )
+        .map_err(|e| error_to_py(&e))?;
+        factorize_csr(self.np.py(), csr, config)
+    }
 }
 
 /// Approximate Cholesky factorization for SDDM/Laplacian systems.

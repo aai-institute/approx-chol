@@ -132,6 +132,33 @@ def test_factorize_names_the_defect_of_a_scipy_matrix():
         approx_chol.factorize(sp.csr_matrix(np.ones((2, 3))))
 
 
+@pytest.mark.parametrize(
+    ("indptr_dtype", "indices_dtype"),
+    [
+        (np.int32, np.int32),
+        (np.int64, np.int64),
+        (np.uint32, np.uint32),
+        (np.uint64, np.uint64),
+        (np.int16, np.int16),
+        (np.int32, np.int64),
+        (np.int64, np.uint64),
+    ],
+)
+def test_every_integer_index_dtype_factors_alike(indptr_dtype, indices_dtype):
+    lap = grid_laplacian(8, 8)
+    b = np.zeros(lap.shape[0])
+    b[0], b[-1] = 1.0, -1.0
+    expected = approx_chol.factorize(lap).solve(b)
+
+    typed = MatrixLike(
+        lap.indptr.astype(indptr_dtype),
+        lap.indices.astype(indices_dtype),
+        lap.data,
+        lap.shape,
+    )
+    np.testing.assert_array_equal(approx_chol.factorize(typed).solve(b), expected)
+
+
 def test_duck_typed_factorize_validates_indices_and_dimension():
     valid = MatrixLike(
         np.array([0, 2, 4], dtype=np.int64),
@@ -148,7 +175,7 @@ def test_duck_typed_factorize_validates_indices_and_dimension():
         np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64),
         (2, 2),
     )
-    with pytest.raises(ValueError, match="indices exceeds u32::MAX"):
+    with pytest.raises(ValueError, match="^row 0 has a column index outside 0..n$"):
         approx_chol.factorize(too_large_idx)
 
     negative_idx = MatrixLike(
@@ -157,7 +184,7 @@ def test_duck_typed_factorize_validates_indices_and_dimension():
         np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64),
         (2, 2),
     )
-    with pytest.raises(ValueError, match="indices must be non-negative"):
+    with pytest.raises(ValueError, match="^row 0 has a column index outside 0..n$"):
         approx_chol.factorize(negative_idx)
 
     oversized_dim = MatrixLike(
