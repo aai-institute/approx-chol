@@ -1,11 +1,25 @@
-use approx_chol::{Backend, Config, CsrRef, DenseFailure, Error, ExactFailure, Fallback};
-use numpy::{BorrowError, Element, PyArray1, PyArrayMethods, PyReadonlyArray1};
+use approx_chol::input::Csr;
+use approx_chol::{
+    CliqueRule, Config, Factor, Multiplicity, ScalingPolicy, ScalingReport, Sgdd, SplitCount,
+};
+use num_traits::PrimInt;
+use numpy::{BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
+use std::error::Error;
 use std::mem::size_of;
 
 #[inline]
 fn value_error(message: impl Into<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.into())
+}
+
+/// The innermost cause, so the message names the defect and its row or vertex.
+fn error_to_py(error: &dyn Error) -> PyErr {
+    let mut cause = error;
+    while let Some(source) = cause.source() {
+        cause = source;
+    }
+    value_error(cause.to_string())
 }
 
 #[inline]
@@ -19,77 +33,56 @@ fn borrow_error(name: &str, err: BorrowError) -> PyErr {
     }
 }
 
-/// An associated element type stops a call site pairing an index column with a float element.
-trait Column {
-    type Element: numpy::Element;
+/// A CSR array's role, which fixes the dtype kinds it may hold without truncation.
+#[derive(Clone, Copy)]
+enum Column {
+    Index,
+    Value,
+}
 
-    fn accepts(kind: &str) -> bool;
+impl Column {
+    fn accepts(self, kind: &str) -> bool {
+        match self {
+            Self::Index => kind == "i" || kind == "u",
+            Self::Value => kind == "i" || kind == "u" || kind == "f",
+        }
+    }
 
-    fn expected() -> &'static str;
-
-    fn check_range(_arr: &Bound<'_, PyAny>, _name: &str) -> PyResult<()> {
-        Ok(())
+    fn expected(self) -> &'static str {
+        match self {
+            Self::Index => "an integer dtype",
+            Self::Value => "an integer or floating-point dtype",
+        }
     }
 }
 
-struct Index;
-
-impl Column for Index {
-    type Element = u32;
-
-    fn accepts(kind: &str) -> bool {
-        kind == "i" || kind == "u"
-    }
-
-    fn expected() -> &'static str {
-        "an integer dtype"
-    }
-
-    fn check_range(arr: &Bound<'_, PyAny>, name: &str) -> PyResult<()> {
-        if arr.getattr("size")?.extract::<usize>()? == 0 {
-            return Ok(());
-        }
-        let wide = arr.call_method1("astype", (i64::get_dtype(arr.py()),))?;
-        if wide.call_method0("min")?.extract::<i64>()? < 0 {
-            return Err(value_error(format!("{name} must be non-negative")));
-        }
-        if wide.call_method0("max")?.extract::<i64>()? > u32::MAX as i64 {
-            return Err(value_error(format!("{name} exceeds u32::MAX")));
-        }
-        Ok(())
-    }
-}
-
-struct Value;
-
-impl Column for Value {
-    type Element = f64;
-
-    fn accepts(kind: &str) -> bool {
-        kind == "i" || kind == "u" || kind == "f"
-    }
-
-    fn expected() -> &'static str {
-        "an integer or floating-point dtype"
-    }
-}
-
-fn as_contiguous_1d<'py, C: Column>(
+/// `array_like` as a 1-D array of a kind `column` accepts, not yet cast or copied.
+fn as_1d<'py>(
     np: &Bound<'py, PyModule>,
     array_like: &Bound<'py, PyAny>,
     name: &str,
-) -> PyResult<Bound<'py, PyArray1<C::Element>>> {
+    column: Column,
+) -> PyResult<Bound<'py, PyAny>> {
     let arr = np.call_method1("asarray", (array_like,))?;
     if arr.getattr("ndim")?.extract::<usize>()? != 1 {
         return Err(value_error(format!("{name} must be a 1-D array")));
     }
     let kind = arr.getattr("dtype")?.getattr("kind")?.extract::<String>()?;
-    if !C::accepts(&kind) {
-        return Err(value_error(format!("{name} must have {}", C::expected())));
+    if !column.accepts(&kind) {
+        return Err(value_error(format!(
+            "{name} must have {}",
+            column.expected()
+        )));
     }
-    C::check_range(&arr, name)?;
-    let cast = arr.call_method1("astype", (C::Element::get_dtype(arr.py()),))?;
-    np.call_method1("ascontiguousarray", (cast,))?
+    Ok(arr)
+}
+
+/// `arr` as contiguous `E`, copied only when its dtype or layout differs.
+fn as_contiguous<'py, E: Element>(
+    np: &Bound<'py, PyModule>,
+    arr: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyArray1<E>>> {
+    np.call_method1("ascontiguousarray", (arr, E::get_dtype(arr.py())))?
         .cast_into()
         .map_err(Into::into)
 }
@@ -106,180 +99,86 @@ fn slices_overlap<T>(lhs: &[T], rhs: &[T]) -> bool {
     lhs_start < rhs_end && rhs_start < lhs_end
 }
 
-#[pyclass(frozen, eq, eq_int, from_py_object, name = "ExactFailure")]
-#[derive(Clone, PartialEq, Eq)]
-enum PyExactFailure {
-    FallBackToApproximate,
-    Error,
-}
-
-#[pyclass(frozen, eq, from_py_object, name = "Backend")]
-#[derive(Clone, PartialEq, Eq)]
-enum PyBackend {
-    Approximate {},
-    ExactBelow {
-        max_dim: usize,
-        on_failure: PyExactFailure,
-    },
-}
-
-impl From<PyBackend> for Backend {
-    fn from(backend: PyBackend) -> Self {
-        match backend {
-            PyBackend::Approximate {} => Self::Approximate,
-            PyBackend::ExactBelow {
-                max_dim,
-                on_failure,
-            } => Self::ExactBelow {
-                max_dim,
-                on_failure: match on_failure {
-                    PyExactFailure::FallBackToApproximate => ExactFailure::FallBackToApproximate,
-                    PyExactFailure::Error => ExactFailure::Error,
-                },
-            },
-        }
-    }
-}
-
-impl Default for PyBackend {
-    fn default() -> Self {
-        match Backend::default() {
-            Backend::ExactBelow {
-                max_dim,
-                on_failure,
-            } => Self::ExactBelow {
-                max_dim,
-                on_failure: match on_failure {
-                    ExactFailure::Error => PyExactFailure::Error,
-                    _ => PyExactFailure::FallBackToApproximate,
-                },
-            },
-            _ => Self::Approximate {},
-        }
-    }
-}
-
-#[pyclass(frozen, from_py_object, name = "Config")]
-#[derive(Clone)]
-struct PyConfig {
-    #[pyo3(get)]
-    seed: u64,
-    #[pyo3(get)]
-    split: Option<u32>,
-    #[pyo3(get)]
-    backend: PyBackend,
-}
+#[pyclass(frozen, name = "Config")]
+struct PyConfig(Config);
 
 #[pymethods]
 impl PyConfig {
     #[new]
-    #[pyo3(signature = (seed=0, split=None, backend=None))]
-    fn new(seed: u64, split: Option<u32>, backend: Option<PyBackend>) -> Self {
-        Self {
-            seed,
-            split,
-            backend: backend.unwrap_or_default(),
+    #[pyo3(signature = (seed=None, split=None, dense_up_to=None))]
+    fn new(seed: Option<u64>, split: Option<u32>, dense_up_to: Option<usize>) -> Self {
+        let default = Config::default();
+        let mut config = Config {
+            seed: seed.unwrap_or(default.seed),
+            dense_up_to: dense_up_to.unwrap_or(default.dense_up_to),
+            ..default
+        };
+        if let Some(k) = split {
+            let approximate = SplitCount::new(k).map_or(Multiplicity::Single, Multiplicity::Split);
+            config.approximate = approximate;
+            config.complement = CliqueRule::Sampled(approximate);
+        }
+        Self(config)
+    }
+
+    #[getter]
+    fn seed(&self) -> u64 {
+        self.0.seed
+    }
+
+    #[getter]
+    fn split(&self) -> Option<u32> {
+        match self.0.approximate {
+            Multiplicity::Single => None,
+            Multiplicity::Split(k) => Some(k.get()),
         }
     }
-}
 
-impl PyConfig {
-    fn to_native(&self) -> Config {
-        Config {
-            seed: self.seed,
-            split_merge: self.split,
-            backend: self.backend.clone().into(),
-        }
-    }
-}
-
-// Not skippable: `Fallback::InvalidPivot`'s generated constructor takes it as an argument.
-#[pyclass(frozen, eq, eq_int, from_py_object, name = "DenseFailure")]
-#[derive(Clone, PartialEq, Eq)]
-enum PyDenseFailure {
-    NonPositivePivot,
-    NonFinitePivot,
-    Unknown,
-}
-
-impl From<DenseFailure> for PyDenseFailure {
-    fn from(failure: DenseFailure) -> Self {
-        match failure {
-            DenseFailure::NonPositivePivot => Self::NonPositivePivot,
-            DenseFailure::NonFinitePivot => Self::NonFinitePivot,
-            _ => Self::Unknown,
-        }
-    }
-}
-
-#[pyclass(frozen, eq, skip_from_py_object, name = "Fallback")]
-#[derive(Clone, PartialEq, Eq)]
-enum PyFallback {
-    InvalidPivot {
-        vertex: usize,
-        failure: PyDenseFailure,
-    },
-    WillNotFit {
-        dim: usize,
-    },
-    // `Fallback` is `non_exhaustive`, so its wildcard arm needs a target.
-    Other {
-        reason: String,
-    },
-}
-
-impl From<&Fallback> for PyFallback {
-    fn from(fallback: &Fallback) -> Self {
-        match *fallback {
-            Fallback::InvalidPivot(pivot) => Self::InvalidPivot {
-                vertex: pivot.vertex,
-                failure: pivot.failure.into(),
-            },
-            Fallback::WillNotFit { dim } => Self::WillNotFit { dim },
-            ref other => Self::Other {
-                reason: other.to_string(),
-            },
-        }
+    #[getter]
+    fn dense_up_to(&self) -> usize {
+        self.0.dense_up_to
     }
 }
 
 #[pyclass(frozen, name = "Factor")]
 struct PyFactor {
-    inner: approx_chol::Factor<f64>,
+    inner: Factor<f64, u32>,
 }
 
-/// Without this, the default `ExactFailure`'s downgrade to approximate elimination is silent.
-fn warn_on_fallback(py: Python<'_>, factor: &approx_chol::Factor<f64>) -> PyResult<()> {
-    let fallbacks = factor.fallbacks();
-    if fallbacks.is_empty() {
+/// Without this, a deficit the reduction clamped to make a block dominant is silent.
+fn warn_on_scaling(py: Python<'_>, sgdd: &Sgdd<f64, u32>) -> PyResult<()> {
+    let reports: Vec<ScalingReport> = (sgdd.blocks().iter())
+        .filter_map(|block| block.scaling_report())
+        .collect();
+    let clamped: Vec<f64> = (reports.iter())
+        .map(|report| report.violation)
+        .filter(|&violation| violation > 0.0)
+        .collect();
+    let unsettled = reports.iter().filter(|report| !report.settled).count();
+    let mut causes = Vec::new();
+    if !clamped.is_empty() {
+        let worst = clamped.iter().fold(0.0f64, |worst, &v| worst.max(v));
+        causes.push(format!(
+            "{} block(s) fell short of diagonal dominance by up to {worst:.3e} \
+             of a diagonal; the deficit was clamped",
+            clamped.len()
+        ));
+    }
+    if unsettled > 0 {
+        causes.push(format!(
+            "{unsettled} block(s) did not settle, so a singular one may have been grounded"
+        ));
+    }
+    if causes.is_empty() {
         return Ok(());
     }
-    let detail = fallbacks
-        .iter()
-        .map(Fallback::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let message = format!(
-        "{} block(s) routed to exact Cholesky fell back to approximate elimination: {detail}",
-        fallbacks.len()
-    );
+    let message = causes.join("; ");
     let warnings = py.import("warnings")?;
     warnings.call_method1(
         "warn",
         (message, py.get_type::<pyo3::exceptions::PyRuntimeWarning>()),
     )?;
     Ok(())
-}
-
-fn factorize_csr(
-    py: Python<'_>,
-    csr: CsrRef<'_, f64, u32>,
-    config: Option<&PyConfig>,
-) -> PyResult<PyFactor> {
-    let config = config.map(PyConfig::to_native).unwrap_or_default();
-    let inner = approx_chol::factorize_with(csr, config).map_err(approx_chol_err_to_py)?;
-    warn_on_fallback(py, &inner)?;
-    Ok(PyFactor { inner })
 }
 
 #[pymethods]
@@ -290,29 +189,14 @@ impl PyFactor {
     }
 
     #[getter]
-    fn n_steps(&self) -> usize {
-        self.inner.n_steps()
-    }
-
-    #[getter]
-    fn fallbacks(&self) -> Vec<PyFallback> {
-        self.inner
-            .fallbacks()
-            .iter()
-            .map(PyFallback::from)
-            .collect()
-    }
-
-    #[getter]
     fn shape(&self) -> (usize, usize) {
         let n = self.inner.n();
         (n, n)
     }
 
     #[getter]
-    fn dtype<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let np = py.import("numpy")?;
-        np.getattr("float64")
+    fn dtype<'py>(&self, py: Python<'py>) -> Bound<'py, PyArrayDescr> {
+        f64::get_dtype(py)
     }
 
     fn matvec<'py>(
@@ -339,10 +223,7 @@ impl PyFactor {
         let b_slice = b
             .as_slice()
             .map_err(|_| value_error("b must be contiguous"))?;
-        let x = self
-            .inner
-            .solve(b_slice)
-            .map_err(|e| value_error(e.to_string()))?;
+        let x = self.inner.solve(b_slice).map_err(|e| error_to_py(&e))?;
         Ok(PyArray1::from_vec(py, x))
     }
 
@@ -370,10 +251,7 @@ impl PyFactor {
             return Err(value_error("b and out must not overlap"));
         }
         drop(out_ro);
-        let x = self
-            .inner
-            .solve(b_slice)
-            .map_err(|e| value_error(e.to_string()))?;
+        let x = self.inner.solve(b_slice).map_err(|e| error_to_py(&e))?;
 
         let mut out_rw = out.try_readwrite().map_err(|e| borrow_error("out", e))?;
         let out_slice = out_rw
@@ -384,32 +262,25 @@ impl PyFactor {
     }
 }
 
-fn approx_chol_err_to_py(e: Error) -> PyErr {
-    value_error(e.to_string())
-}
-
 #[pyfunction]
 #[pyo3(signature = (row_ptrs, col_indices, values, n, config=None))]
 fn factorize_raw<'py>(
     py: Python<'py>,
-    row_ptrs: PyReadonlyArray1<'py, u32>,
-    col_indices: PyReadonlyArray1<'py, u32>,
-    values: PyReadonlyArray1<'py, f64>,
-    n: u32,
+    row_ptrs: &Bound<'py, PyAny>,
+    col_indices: &Bound<'py, PyAny>,
+    values: &Bound<'py, PyAny>,
+    n: usize,
     config: Option<&PyConfig>,
 ) -> PyResult<PyFactor> {
-    let rp = row_ptrs
-        .as_slice()
-        .map_err(|_| value_error("row_ptrs must be contiguous"))?;
-    let ci = col_indices
-        .as_slice()
-        .map_err(|_| value_error("col_indices must be contiguous"))?;
-    let vals = values
-        .as_slice()
-        .map_err(|_| value_error("values must be contiguous"))?;
-
-    let csr = CsrRef::new(rp, ci, vals, n).map_err(approx_chol_err_to_py)?;
-    factorize_csr(py, csr, config)
+    let np = py.import("numpy")?;
+    CsrArrays {
+        n,
+        indptr: as_1d(&np, row_ptrs, "row_ptrs", Column::Index)?,
+        indices: as_1d(&np, col_indices, "col_indices", Column::Index)?,
+        data: as_contiguous(&np, &as_1d(&np, values, "values", Column::Value)?)?,
+        np,
+    }
+    .factorize(config)
 }
 
 #[pyfunction]
@@ -419,49 +290,90 @@ fn factorize(
     matrix: &Bound<'_, PyAny>,
     config: Option<&PyConfig>,
 ) -> PyResult<PyFactor> {
-    let indptr = matrix.getattr("indptr")?.extract::<Bound<'_, PyAny>>()?;
-    let indices = matrix.getattr("indices")?.extract::<Bound<'_, PyAny>>()?;
-    let data = matrix.getattr("data")?.extract::<Bound<'_, PyAny>>()?;
-    let shape = matrix.getattr("shape")?.extract::<(usize, usize)>()?;
-
-    if shape.0 != shape.1 {
+    let (n, columns) = matrix.getattr("shape")?.extract::<(usize, usize)>()?;
+    if n != columns {
         return Err(value_error("matrix must be square"));
     }
-    let n = u32::try_from(shape.0).map_err(|_| value_error("matrix dimension exceeds u32::MAX"))?;
-
     let np = py.import("numpy")?;
-    let rp_arr = as_contiguous_1d::<Index>(&np, &indptr, "indptr")?;
-    let ci_arr = as_contiguous_1d::<Index>(&np, &indices, "indices")?;
-    let val_arr = as_contiguous_1d::<Value>(&np, &data, "data")?;
+    let data = as_1d(&np, &matrix.getattr("data")?, "data", Column::Value)?;
+    CsrArrays {
+        n,
+        indptr: as_1d(&np, &matrix.getattr("indptr")?, "indptr", Column::Index)?,
+        indices: as_1d(&np, &matrix.getattr("indices")?, "indices", Column::Index)?,
+        data: as_contiguous(&np, &data)?,
+        np,
+    }
+    .factorize(config)
+}
 
-    let rp_ro = rp_arr.readonly();
-    let ci_ro = ci_arr.readonly();
-    let vals_ro = val_arr.readonly();
+/// A CSR's checked arrays: values already `f64`, indices still in the caller's dtype.
+struct CsrArrays<'py> {
+    np: Bound<'py, PyModule>,
+    n: usize,
+    indptr: Bound<'py, PyAny>,
+    indices: Bound<'py, PyAny>,
+    data: Bound<'py, PyArray1<f64>>,
+}
 
-    let rp = rp_ro
-        .as_slice()
-        .map_err(|_| value_error("indptr must be contiguous"))?;
-    let ci = ci_ro
-        .as_slice()
-        .map_err(|_| value_error("indices must be contiguous"))?;
-    let vals = vals_ro
-        .as_slice()
-        .map_err(|_| value_error("data must be contiguous"))?;
+impl CsrArrays<'_> {
+    fn factorize(&self, config: Option<&PyConfig>) -> PyResult<PyFactor> {
+        // Also keeps `Csr::new` from overflowing `n + 1`.
+        if u32::try_from(self.n).is_err() {
+            return Err(value_error("matrix dimension exceeds u32::MAX"));
+        }
+        let dtypes = (
+            self.indptr.getattr("dtype")?,
+            self.indices.getattr("dtype")?,
+        );
+        let dtype = self.np.call_method1("result_type", dtypes)?;
+        let kind = dtype.getattr("kind")?.extract::<String>()?;
+        let width = dtype.getattr("itemsize")?.extract::<usize>()?;
+        match (kind.as_str(), width) {
+            ("i", 4) => self.factorize_as::<i32>(config),
+            ("u", 4) => self.factorize_as::<u32>(config),
+            ("u", 8) => self.factorize_as::<u64>(config),
+            // Narrower integers widen; int64 beside uint64 promotes to float, and i64 holds any valid index.
+            _ => self.factorize_as::<i64>(config),
+        }
+    }
 
-    let csr = CsrRef::new(rp, ci, vals, n).map_err(approx_chol_err_to_py)?;
-    factorize_csr(py, csr, config)
+    /// Borrows the index arrays whenever they already are contiguous `J`.
+    fn factorize_as<J: Element + PrimInt + Sync>(
+        &self,
+        config: Option<&PyConfig>,
+    ) -> PyResult<PyFactor> {
+        let indptr = as_contiguous::<J>(&self.np, &self.indptr)?;
+        let indices = as_contiguous::<J>(&self.np, &self.indices)?;
+        // Borrowed arrays are the caller's, so another thread may hold one mutably.
+        let indptr = indptr
+            .try_readonly()
+            .map_err(|e| borrow_error("indptr", e))?;
+        let indices = indices
+            .try_readonly()
+            .map_err(|e| borrow_error("indices", e))?;
+        let data = (self.data.try_readonly()).map_err(|e| borrow_error("data", e))?;
+        let contiguous = |name: &str| value_error(format!("{name} must be contiguous"));
+        let csr = Csr::new(
+            self.n,
+            indptr.as_slice().map_err(|_| contiguous("indptr"))?,
+            indices.as_slice().map_err(|_| contiguous("indices"))?,
+            data.as_slice().map_err(|_| contiguous("data"))?,
+        )
+        .map_err(|e| error_to_py(&e))?;
+        let sgdd = Sgdd::from_csr(csr, ScalingPolicy::default()).map_err(|e| error_to_py(&e))?;
+        warn_on_scaling(self.np.py(), &sgdd)?;
+        let config = config.map_or_else(Config::default, |config| config.0);
+        let inner = approx_chol::factorize(&sgdd, &config);
+        Ok(PyFactor { inner })
+    }
 }
 
 /// Approximate Cholesky factorization for SDDM/Laplacian systems.
 // GIL-free is sound: every pyclass is `frozen` with `Sync` state and the module holds none.
 #[pymodule(gil_used = false)]
 fn _approx_chol(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyBackend>()?;
     m.add_class::<PyConfig>()?;
-    m.add_class::<PyDenseFailure>()?;
-    m.add_class::<PyExactFailure>()?;
     m.add_class::<PyFactor>()?;
-    m.add_class::<PyFallback>()?;
     m.add_function(wrap_pyfunction!(factorize, m)?)?;
     m.add_function(wrap_pyfunction!(factorize_raw, m)?)?;
     Ok(())

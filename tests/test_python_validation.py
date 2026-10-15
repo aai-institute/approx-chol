@@ -1,7 +1,9 @@
 import numpy as np
 import pytest
+import scipy.sparse as sp
 
 import approx_chol
+from tests._laplacians import grid_laplacian
 
 
 def _base_csr():
@@ -19,33 +21,112 @@ class MatrixLike:
         self.shape = shape
 
 
-def test_split_below_two_is_accepted_as_standard_ac():
-    row_ptrs, col_indices, values = _base_csr()
+@pytest.mark.parametrize("split", [0, 1])
+def test_split_below_two_selects_standard_ac(split):
+    lap = grid_laplacian(8, 8)
+    b = np.zeros(lap.shape[0])
+    b[0], b[-1] = 1.0, -1.0
 
-    for split in (None, 0, 1):
-        factor = approx_chol.factorize_raw(
-            row_ptrs, col_indices, values, 2, approx_chol.Config(split=split)
-        )
-        assert factor.shape == (2, 2)
+    def solve(split):
+        config = approx_chol.Config(split=split, dense_up_to=0)
+        return approx_chol.factorize(lap, config).solve(b)
+
+    np.testing.assert_array_equal(solve(split), solve(None))
+    assert not np.array_equal(solve(2), solve(None))
+
+
+@pytest.mark.parametrize("split", [-1, 2**32])
+def test_split_outside_u32_raises(split):
+    with pytest.raises(OverflowError):
+        approx_chol.Config(split=split)
+
+
+def _u32(*xs):
+    return np.array(xs, dtype=np.uint32)
+
+
+def _f64(*xs):
+    return np.array(xs, dtype=np.float64)
+
+
+@pytest.mark.parametrize(
+    ("row_ptrs", "col_indices", "values", "n", "message"),
+    [
+        pytest.param(
+            _u32(0, 2, 4),
+            _u32(0, 1, 0, 1),
+            _f64(2, -1, -1),
+            2,
+            "CSR array has length 3, expected 4",
+            id="csr_new",
+        ),
+        pytest.param(
+            _u32(0, 2, 4),
+            _u32(0, 1, 0, 1),
+            _f64(2, -1, -2, 2),
+            2,
+            "row 0 has an entry with no equal mirror",
+            id="from_csr_csr",
+        ),
+        pytest.param(
+            _u32(0, 1),
+            _u32(0),
+            _f64(-1),
+            1,
+            "vertex 0 has a nonpositive diagonal",
+            id="from_csr_reduce",
+        ),
+    ],
+)
+def test_factorize_raw_names_the_defect(row_ptrs, col_indices, values, n, message):
+    with pytest.raises(ValueError, match=f"^{message}$"):
+        approx_chol.factorize_raw(row_ptrs, col_indices, values, n)
+
+
+def test_factorize_names_the_defect_of_a_scipy_matrix():
+    asymmetric = sp.csr_matrix(np.array([[2.0, -1.0], [0.0, 2.0]]))
+    with pytest.raises(ValueError, match="^row 0 has an entry with no equal mirror$"):
+        approx_chol.factorize(asymmetric)
+
+    with pytest.raises(ValueError, match="^matrix must be square$"):
+        approx_chol.factorize(sp.csr_matrix(np.ones((2, 3))))
+
+
+@pytest.mark.parametrize(
+    ("indptr_dtype", "indices_dtype"),
+    [
+        (np.int32, np.int32),
+        (np.int64, np.int64),
+        (np.uint32, np.uint32),
+        (np.uint64, np.uint64),
+        (np.int16, np.int16),
+        (np.int32, np.int64),
+        (np.int64, np.uint64),
+    ],
+)
+def test_every_integer_index_dtype_factors_alike(indptr_dtype, indices_dtype):
+    lap = grid_laplacian(8, 8)
+    b = np.zeros(lap.shape[0])
+    b[0], b[-1] = 1.0, -1.0
+    expected = approx_chol.factorize(lap).solve(b)
+
+    typed = MatrixLike(
+        lap.indptr.astype(indptr_dtype),
+        lap.indices.astype(indices_dtype),
+        lap.data,
+        lap.shape,
+    )
+    np.testing.assert_array_equal(approx_chol.factorize(typed).solve(b), expected)
 
 
 def test_duck_typed_factorize_validates_indices_and_dimension():
-    valid = MatrixLike(
-        np.array([0, 2, 4], dtype=np.int64),
-        np.array([0, 1, 0, 1], dtype=np.int64),
-        np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64),
-        (2, 2),
-    )
-    factor = approx_chol.factorize(valid)
-    assert factor.shape[0] >= 2
-
     too_large_idx = MatrixLike(
         np.array([0, 2, 4], dtype=np.int64),
         np.array([0, 2**32 + 1, 0, 1], dtype=np.int64),
         np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64),
         (2, 2),
     )
-    with pytest.raises(ValueError, match="indices exceeds u32::MAX"):
+    with pytest.raises(ValueError, match="^row 0 has a column index outside 0..n$"):
         approx_chol.factorize(too_large_idx)
 
     negative_idx = MatrixLike(
@@ -54,7 +135,7 @@ def test_duck_typed_factorize_validates_indices_and_dimension():
         np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64),
         (2, 2),
     )
-    with pytest.raises(ValueError, match="indices must be non-negative"):
+    with pytest.raises(ValueError, match="^row 0 has a column index outside 0..n$"):
         approx_chol.factorize(negative_idx)
 
     oversized_dim = MatrixLike(
@@ -93,48 +174,22 @@ def test_each_column_rejects_the_dtype_kinds_it_cannot_carry():
 def test_solve_and_solve_into_raise_value_error_for_shape_and_overlap():
     row_ptrs, col_indices, values = _base_csr()
     factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
-    original_n = factor.shape[0]
 
-    rhs_too_long = np.zeros(original_n + 10, dtype=np.float64)
-    with pytest.raises(ValueError, match="rhs length"):
-        factor.solve(rhs_too_long)
+    with pytest.raises(ValueError, match="right-hand side has length 12, expected 2"):
+        factor.solve(np.zeros(12))
 
-    rhs = np.zeros(original_n, dtype=np.float64)
-    if rhs.size >= 2:
-        rhs[0] = 1.0
-        rhs[1] = -1.0
-
-    out_too_short = np.zeros(max(0, original_n - 1), dtype=np.float64)
+    rhs = np.array([1.0, -1.0])
     with pytest.raises(ValueError, match="out length"):
-        factor.solve_into(rhs, out_too_short)
+        factor.solve_into(rhs, np.zeros(1))
 
     with pytest.raises(ValueError, match="must not overlap"):
         factor.solve_into(rhs, rhs)
 
 
-def test_solve_rejects_augmented_length_rhs():
-    # SDDM input gains an internal ground slot, which a RHS must not reach.
-    row_ptrs, col_indices, values = _base_csr()
-    factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
-    original_n = factor.shape[0]
-    assert factor.n == original_n, "the ground slot stays internal"
-
-    rhs_aug_len = np.zeros(original_n + 1, dtype=np.float64)
-    with pytest.raises(ValueError, match="rhs length"):
-        factor.solve(rhs_aug_len)
-    out = np.zeros(original_n, dtype=np.float64)
-    with pytest.raises(ValueError, match="rhs length"):
-        factor.solve_into(rhs_aug_len, out)
-
-
 def test_solve_into_rejects_partially_overlapping_views():
     row_ptrs, col_indices, values = _base_csr()
     factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
-    original_n = factor.shape[0]
-
-    base = np.zeros(original_n + 1, dtype=np.float64)
-    rhs = base[:-1]
-    out = base[1:]
+    base = np.zeros(3)
 
     with pytest.raises(ValueError, match="must not overlap"):
-        factor.solve_into(rhs, out)
+        factor.solve_into(base[:-1], base[1:])

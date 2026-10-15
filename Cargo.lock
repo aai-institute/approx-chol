@@ -72,7 +72,8 @@ dependencies = [
 name = "approx-chol-py"
 version = "0.7.0"
 dependencies = [
- "approx-chol",
+ "approx-chol-next",
+ "num-traits",
  "numpy",
  "pyo3",
 ]

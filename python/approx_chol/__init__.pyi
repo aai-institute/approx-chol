@@ -1,69 +1,38 @@
 """Type stubs for approx_chol."""
 
-from typing import Any
+from typing import Any, final
 
 import numpy as np
 import numpy.typing as npt
 
-class ExactFailure:
-    """What to do about a block whose exact Cholesky reaches an unusable pivot."""
+__all__ = ["Config", "Factor", "factorize", "factorize_raw"]
 
-    FallBackToApproximate: ExactFailure
-    Error: ExactFailure
-
-class Backend:
-    """Which factorization each connected block gets."""
-
-    class Approximate(Backend): ...
-
-    class ExactBelow(Backend):
-        """Exact dense Cholesky at or below ``max_dim`` solved variables.
-
-        A ``max_dim`` of ``0`` claims no block, so it selects ``Approximate``.
-        """
-
-        max_dim: int
-        on_failure: ExactFailure
-        def __init__(self, max_dim: int, on_failure: ExactFailure) -> None: ...
-
-class DenseFailure:
-    """Why an exact dense Cholesky pivot was unusable."""
-
-    NonPositivePivot: DenseFailure
-    NonFinitePivot: DenseFailure
-    Unknown: DenseFailure
-
-class Fallback:
-    """Why a block routed to exact Cholesky was factored approximately instead."""
-
-    class InvalidPivot(Fallback):
-        vertex: int
-        failure: DenseFailure
-
-    class WillNotFit(Fallback):
-        dim: int
-
-    class Other(Fallback):
-        reason: str
-
+@final
 class Config:
     """Configuration for approximate Cholesky factorization.
 
-    ``split`` is the AC2 multi-edge multiplicity. Splitting an edge fewer than
-    twice is standard AC, so ``None``, ``0`` and ``1`` all select AC.
+    ``seed`` keys every sampler stream. ``split`` is the AC2 multi-edge
+    multiplicity. Splitting an edge fewer than twice is standard AC, so
+    ``None``, ``0`` and ``1`` all select AC. ``dense_up_to`` is the largest
+    block dimension factored by exact dense Cholesky; ``0`` never does.
+    A frustrated block, whose signs no ±1 scaling folds, counts twice: its cover has two sheets.
+    An argument left out or ``None`` keeps the default, which the getters report.
     """
 
-    seed: int
-    split: int | None
-    backend: Backend
+    def __new__(
+        cls,
+        seed: int | None = ...,
+        split: int | None = ...,
+        dense_up_to: int | None = ...,
+    ) -> Config: ...
+    @property
+    def seed(self) -> int: ...
+    @property
+    def split(self) -> int | None: ...
+    @property
+    def dense_up_to(self) -> int: ...
 
-    def __init__(
-        self,
-        seed: int = 0,
-        split: int | None = None,
-        backend: Backend | None = None,
-    ) -> None: ...
-
+@final
 class Factor:
     """Approximate Cholesky factor (LDL^T decomposition).
 
@@ -79,20 +48,6 @@ class Factor:
         """Matrix dimension; a Gremban ground vertex stays internal.
 
         Use this to size output buffers for :meth:`solve_into`.
-        """
-        ...
-
-    @property
-    def n_steps(self) -> int:
-        """Number of elimination steps."""
-        ...
-
-    @property
-    def fallbacks(self) -> list[Fallback]:
-        """Blocks routed to exact Cholesky and factored approximately anyway.
-
-        Non-empty means the factor is less accurate than the configured backend
-        asked for; :func:`factorize` also emits a ``RuntimeWarning``.
         """
         ...
 
@@ -161,28 +116,39 @@ def factorize(
         config: Optional factorization configuration.
 
     Raises:
-        ValueError: If the matrix is not square, has invalid dtypes/ranges,
-            exceeds index limits, or has invalid CSR structure.
+        ValueError: If the matrix is not square or symmetric, has invalid
+            dtypes/ranges, exceeds index limits, has invalid CSR structure, or
+            has a nonpositive diagonal.
+
+    Warns:
+        RuntimeWarning: If a block falls short of diagonal dominance after
+            scaling, so its deficit was clamped, or its scaling did not settle,
+            so a singular block may have been grounded.
     """
     ...
 
 def factorize_raw(
-    row_ptrs: npt.NDArray[np.uint32],
-    col_indices: npt.NDArray[np.uint32],
-    values: npt.NDArray[np.float64],
+    row_ptrs: npt.ArrayLike,
+    col_indices: npt.ArrayLike,
+    values: npt.ArrayLike,
     n: int,
     config: Config | None = None,
 ) -> Factor:
     """Factorize an SDDM matrix from raw CSR arrays.
 
     Args:
-        row_ptrs: CSR row pointer array (uint32).
-        col_indices: CSR column index array (uint32).
-        values: CSR value array (float64).
+        row_ptrs: CSR row pointer array, any integer dtype.
+        col_indices: CSR column index array, any integer dtype.
+        values: CSR value array, integer or floating-point.
         n: Matrix dimension.
         config: Optional factorization configuration.
 
     Raises:
-        ValueError: If the CSR structure or config is invalid.
+        ValueError: If an array is not 1-D or has a dtype it cannot carry, the
+            CSR structure is invalid, or the matrix is not symmetric or has a
+            nonpositive diagonal.
+
+    Warns:
+        RuntimeWarning: As :func:`factorize`.
     """
     ...

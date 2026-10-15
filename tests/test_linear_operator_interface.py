@@ -30,6 +30,7 @@ class TestFactorShapeAndDtype:
     def test_dtype_is_float64(self):
         a = grid_laplacian(3, 3)
         factor = approx_chol.factorize(a)
+        assert isinstance(factor.dtype, np.dtype)
         assert factor.dtype == np.float64
 
 
