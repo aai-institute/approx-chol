@@ -323,6 +323,15 @@ pub enum CsrError {
         /// The offending row.
         row: usize,
     },
+    /// A converted sparse matrix is not square.
+    NotSquare {
+        /// Its row count.
+        rows: usize,
+        /// Its column count.
+        cols: usize,
+    },
+    /// A converted sparse matrix is stored by columns (CSC), not rows.
+    Csc,
 }
 
 impl core::fmt::Display for CsrError {
@@ -347,6 +356,10 @@ impl core::fmt::Display for CsrError {
             Self::OutOfRange { row } => {
                 write!(f, "row {row} has an entry outside the representable range")
             }
+            Self::NotSquare { rows, cols } => {
+                write!(f, "matrix is {rows}x{cols}, not square")
+            }
+            Self::Csc => f.write_str("matrix is stored by columns (CSC), not rows"),
         }
     }
 }

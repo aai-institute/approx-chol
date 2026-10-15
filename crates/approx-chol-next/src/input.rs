@@ -1,6 +1,8 @@
 //! What the caller states about `A`, each view by its type.
 
 mod csr;
+#[cfg(any(feature = "sprs", feature = "faer"))]
+mod interop;
 mod width2;
 
 pub(crate) use csr::Canonical;

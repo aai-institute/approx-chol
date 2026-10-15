@@ -17,9 +17,13 @@ num-traits = "0.2"
 rand = "0.10.0"
 rayon = "1"
 serde = { version = "1", features = ["derive", "rc"], optional = true }
+sprs = { version = "0.11", optional = true, default-features = false }
+faer = { version = "0.24", optional = true, default-features = false }
 
 [features]
 serde = ["dep:serde"]
+sprs = ["dep:sprs"]
+faer = ["dep:faer"]
 
 [dev-dependencies]
 postcard = { version = "1", features = ["use-std"] }

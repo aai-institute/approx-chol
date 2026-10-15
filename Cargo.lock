@@ -57,6 +57,7 @@ dependencies = [
 name = "approx-chol-next"
 version = "0.7.0"
 dependencies = [
+ "faer",
  "num-traits",
  "postcard",
  "proptest",
@@ -64,6 +65,7 @@ dependencies = [
  "rayon",
  "rstest",
  "serde",
+ "sprs",
 ]
 
 [[package]]
