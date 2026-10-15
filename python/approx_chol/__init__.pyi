@@ -1,69 +1,38 @@
 """Type stubs for approx_chol."""
 
-from typing import Any
+from typing import Any, final
 
 import numpy as np
 import numpy.typing as npt
 
-class ExactFailure:
-    """What to do about a block whose exact Cholesky reaches an unusable pivot."""
+__all__ = ["Config", "Factor", "factorize", "factorize_raw"]
 
-    FallBackToApproximate: ExactFailure
-    Error: ExactFailure
-
-class Backend:
-    """Which factorization each connected block gets."""
-
-    class Approximate(Backend): ...
-
-    class ExactBelow(Backend):
-        """Exact dense Cholesky at or below ``max_dim`` solved variables.
-
-        A ``max_dim`` of ``0`` claims no block, so it selects ``Approximate``.
-        """
-
-        max_dim: int
-        on_failure: ExactFailure
-        def __init__(self, max_dim: int, on_failure: ExactFailure) -> None: ...
-
-class DenseFailure:
-    """Why an exact dense Cholesky pivot was unusable."""
-
-    NonPositivePivot: DenseFailure
-    NonFinitePivot: DenseFailure
-    Unknown: DenseFailure
-
-class Fallback:
-    """Why a block routed to exact Cholesky was factored approximately instead."""
-
-    class InvalidPivot(Fallback):
-        vertex: int
-        failure: DenseFailure
-
-    class WillNotFit(Fallback):
-        dim: int
-
-    class Other(Fallback):
-        reason: str
-
+@final
 class Config:
     """Configuration for approximate Cholesky factorization.
 
-    ``split`` is the AC2 multi-edge multiplicity. Splitting an edge fewer than
-    twice is standard AC, so ``None``, ``0`` and ``1`` all select AC.
+    ``seed`` keys every sampler stream. ``split`` is AC2's copy count per edge,
+    at least 2; ``None`` selects AC. ``dense_up_to`` is the largest block
+    dimension factored by exact dense Cholesky; ``0`` never does.
+
+    Raises:
+        ValueError: If ``split`` is below 2.
     """
 
-    seed: int
-    split: int | None
-    backend: Backend
-
-    def __init__(
-        self,
+    def __new__(
+        cls,
         seed: int = 0,
         split: int | None = None,
-        backend: Backend | None = None,
-    ) -> None: ...
+        dense_up_to: int = 24,
+    ) -> Config: ...
+    @property
+    def seed(self) -> int: ...
+    @property
+    def split(self) -> int | None: ...
+    @property
+    def dense_up_to(self) -> int: ...
 
+@final
 class Factor:
     """Approximate Cholesky factor (LDL^T decomposition).
 
@@ -79,20 +48,6 @@ class Factor:
         """Matrix dimension; a Gremban ground vertex stays internal.
 
         Use this to size output buffers for :meth:`solve_into`.
-        """
-        ...
-
-    @property
-    def n_steps(self) -> int:
-        """Number of elimination steps."""
-        ...
-
-    @property
-    def fallbacks(self) -> list[Fallback]:
-        """Blocks routed to exact Cholesky and factored approximately anyway.
-
-        Non-empty means the factor is less accurate than the configured backend
-        asked for; :func:`factorize` also emits a ``RuntimeWarning``.
         """
         ...
 
@@ -161,8 +116,13 @@ def factorize(
         config: Optional factorization configuration.
 
     Raises:
-        ValueError: If the matrix is not square, has invalid dtypes/ranges,
-            exceeds index limits, or has invalid CSR structure.
+        ValueError: If the matrix is not square or symmetric, has invalid
+            dtypes/ranges, exceeds index limits, has invalid CSR structure, or
+            has a nonpositive diagonal.
+
+    Warns:
+        RuntimeWarning: If a block falls short of diagonal dominance after
+            scaling, so its deficit was clamped.
     """
     ...
 
@@ -183,6 +143,10 @@ def factorize_raw(
         config: Optional factorization configuration.
 
     Raises:
-        ValueError: If the CSR structure or config is invalid.
+        ValueError: If the CSR structure is invalid, or the matrix is not
+            symmetric or has a nonpositive diagonal.
+
+    Warns:
+        RuntimeWarning: As :func:`factorize`.
     """
     ...

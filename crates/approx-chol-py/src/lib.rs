@@ -1,11 +1,24 @@
-use approx_chol::{Backend, Config, CsrRef, DenseFailure, Error, ExactFailure, Fallback};
+use approx_chol::input::Csr;
+use approx_chol::{
+    CliqueRule, Config, Factor, Multiplicity, ScalingPolicy, ScalingReport, Sgdd, SplitCount,
+};
 use numpy::{BorrowError, Element, PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
+use std::error::Error;
 use std::mem::size_of;
 
 #[inline]
 fn value_error(message: impl Into<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.into())
+}
+
+/// The innermost cause, so the message names the defect and its row or vertex.
+fn error_to_py(error: &dyn Error) -> PyErr {
+    let mut cause = error;
+    while let Some(source) = cause.source() {
+        cause = source;
+    }
+    value_error(cause.to_string())
 }
 
 #[inline]
@@ -106,163 +119,74 @@ fn slices_overlap<T>(lhs: &[T], rhs: &[T]) -> bool {
     lhs_start < rhs_end && rhs_start < lhs_end
 }
 
-#[pyclass(frozen, eq, eq_int, from_py_object, name = "ExactFailure")]
-#[derive(Clone, PartialEq, Eq)]
-enum PyExactFailure {
-    FallBackToApproximate,
-    Error,
-}
-
-#[pyclass(frozen, eq, from_py_object, name = "Backend")]
-#[derive(Clone, PartialEq, Eq)]
-enum PyBackend {
-    Approximate {},
-    ExactBelow {
-        max_dim: usize,
-        on_failure: PyExactFailure,
-    },
-}
-
-impl From<PyBackend> for Backend {
-    fn from(backend: PyBackend) -> Self {
-        match backend {
-            PyBackend::Approximate {} => Self::Approximate,
-            PyBackend::ExactBelow {
-                max_dim,
-                on_failure,
-            } => Self::ExactBelow {
-                max_dim,
-                on_failure: match on_failure {
-                    PyExactFailure::FallBackToApproximate => ExactFailure::FallBackToApproximate,
-                    PyExactFailure::Error => ExactFailure::Error,
-                },
-            },
-        }
-    }
-}
-
-impl Default for PyBackend {
-    fn default() -> Self {
-        match Backend::default() {
-            Backend::ExactBelow {
-                max_dim,
-                on_failure,
-            } => Self::ExactBelow {
-                max_dim,
-                on_failure: match on_failure {
-                    ExactFailure::Error => PyExactFailure::Error,
-                    _ => PyExactFailure::FallBackToApproximate,
-                },
-            },
-            _ => Self::Approximate {},
-        }
-    }
-}
-
-#[pyclass(frozen, from_py_object, name = "Config")]
-#[derive(Clone)]
-struct PyConfig {
-    #[pyo3(get)]
-    seed: u64,
-    #[pyo3(get)]
-    split: Option<u32>,
-    #[pyo3(get)]
-    backend: PyBackend,
-}
+#[pyclass(frozen, name = "Config")]
+struct PyConfig(Config);
 
 #[pymethods]
 impl PyConfig {
     #[new]
-    #[pyo3(signature = (seed=0, split=None, backend=None))]
-    fn new(seed: u64, split: Option<u32>, backend: Option<PyBackend>) -> Self {
-        Self {
+    #[pyo3(signature = (seed=0, split=None, dense_up_to=24))]
+    fn new(seed: u64, split: Option<u32>, dense_up_to: usize) -> PyResult<Self> {
+        let approximate = match split {
+            None => Multiplicity::Single,
+            Some(k) => Multiplicity::Split(SplitCount::new(k).ok_or_else(|| {
+                value_error(format!(
+                    "split must be at least 2, got {k}; None selects AC"
+                ))
+            })?),
+        };
+        Ok(Self(Config {
             seed,
-            split,
-            backend: backend.unwrap_or_default(),
+            complement: CliqueRule::Sampled(approximate),
+            approximate,
+            dense_up_to,
+        }))
+    }
+
+    #[getter]
+    fn seed(&self) -> u64 {
+        self.0.seed
+    }
+
+    #[getter]
+    fn split(&self) -> Option<u32> {
+        match self.0.approximate {
+            Multiplicity::Single => None,
+            Multiplicity::Split(k) => Some(k.get()),
         }
     }
-}
 
-impl PyConfig {
-    fn to_native(&self) -> Config {
-        Config {
-            seed: self.seed,
-            split_merge: self.split,
-            backend: self.backend.clone().into(),
-        }
-    }
-}
-
-// Not skippable: `Fallback::InvalidPivot`'s generated constructor takes it as an argument.
-#[pyclass(frozen, eq, eq_int, from_py_object, name = "DenseFailure")]
-#[derive(Clone, PartialEq, Eq)]
-enum PyDenseFailure {
-    NonPositivePivot,
-    NonFinitePivot,
-    Unknown,
-}
-
-impl From<DenseFailure> for PyDenseFailure {
-    fn from(failure: DenseFailure) -> Self {
-        match failure {
-            DenseFailure::NonPositivePivot => Self::NonPositivePivot,
-            DenseFailure::NonFinitePivot => Self::NonFinitePivot,
-            _ => Self::Unknown,
-        }
-    }
-}
-
-#[pyclass(frozen, eq, skip_from_py_object, name = "Fallback")]
-#[derive(Clone, PartialEq, Eq)]
-enum PyFallback {
-    InvalidPivot {
-        vertex: usize,
-        failure: PyDenseFailure,
-    },
-    WillNotFit {
-        dim: usize,
-    },
-    // `Fallback` is `non_exhaustive`, so its wildcard arm needs a target.
-    Other {
-        reason: String,
-    },
-}
-
-impl From<&Fallback> for PyFallback {
-    fn from(fallback: &Fallback) -> Self {
-        match *fallback {
-            Fallback::InvalidPivot(pivot) => Self::InvalidPivot {
-                vertex: pivot.vertex,
-                failure: pivot.failure.into(),
-            },
-            Fallback::WillNotFit { dim } => Self::WillNotFit { dim },
-            ref other => Self::Other {
-                reason: other.to_string(),
-            },
-        }
+    #[getter]
+    fn dense_up_to(&self) -> usize {
+        self.0.dense_up_to
     }
 }
 
 #[pyclass(frozen, name = "Factor")]
 struct PyFactor {
-    inner: approx_chol::Factor<f64>,
+    inner: Factor<f64, u32>,
 }
 
-/// Without this, the default `ExactFailure`'s downgrade to approximate elimination is silent.
-fn warn_on_fallback(py: Python<'_>, factor: &approx_chol::Factor<f64>) -> PyResult<()> {
-    let fallbacks = factor.fallbacks();
-    if fallbacks.is_empty() {
+/// Without this, a deficit the reduction clamped to make a block dominant is silent.
+fn warn_on_scaling(py: Python<'_>, sgdd: &Sgdd<f64, u32>) -> PyResult<()> {
+    let reports: Vec<ScalingReport> = (sgdd.blocks().iter())
+        .filter_map(|block| block.scaling_report())
+        .collect();
+    if reports.is_empty() {
         return Ok(());
     }
-    let detail = fallbacks
-        .iter()
-        .map(Fallback::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let message = format!(
-        "{} block(s) routed to exact Cholesky fell back to approximate elimination: {detail}",
-        fallbacks.len()
+    let worst = (reports.iter()).fold(0.0f64, |worst, report| worst.max(report.violation));
+    let unsettled = reports.iter().filter(|report| !report.settled).count();
+    let mut message = format!(
+        "{} block(s) fell short of diagonal dominance by up to {worst:.3e} \
+         of a diagonal; the deficit was clamped",
+        reports.len()
     );
+    if unsettled > 0 {
+        message.push_str(&format!(
+            "; {unsettled} block(s) did not settle, so a singular one may have been grounded"
+        ));
+    }
     let warnings = py.import("warnings")?;
     warnings.call_method1(
         "warn",
@@ -273,12 +197,13 @@ fn warn_on_fallback(py: Python<'_>, factor: &approx_chol::Factor<f64>) -> PyResu
 
 fn factorize_csr(
     py: Python<'_>,
-    csr: CsrRef<'_, f64, u32>,
+    csr: Csr<'_, f64, u32>,
     config: Option<&PyConfig>,
 ) -> PyResult<PyFactor> {
-    let config = config.map(PyConfig::to_native).unwrap_or_default();
-    let inner = approx_chol::factorize_with(csr, config).map_err(approx_chol_err_to_py)?;
-    warn_on_fallback(py, &inner)?;
+    let sgdd = Sgdd::from_csr(csr, ScalingPolicy::default()).map_err(|e| error_to_py(&e))?;
+    warn_on_scaling(py, &sgdd)?;
+    let config = config.map_or_else(Config::default, |config| config.0);
+    let inner = approx_chol::factorize(&sgdd, &config);
     Ok(PyFactor { inner })
 }
 
@@ -287,20 +212,6 @@ impl PyFactor {
     #[getter]
     fn n(&self) -> usize {
         self.inner.n()
-    }
-
-    #[getter]
-    fn n_steps(&self) -> usize {
-        self.inner.n_steps()
-    }
-
-    #[getter]
-    fn fallbacks(&self) -> Vec<PyFallback> {
-        self.inner
-            .fallbacks()
-            .iter()
-            .map(PyFallback::from)
-            .collect()
     }
 
     #[getter]
@@ -339,10 +250,7 @@ impl PyFactor {
         let b_slice = b
             .as_slice()
             .map_err(|_| value_error("b must be contiguous"))?;
-        let x = self
-            .inner
-            .solve(b_slice)
-            .map_err(|e| value_error(e.to_string()))?;
+        let x = self.inner.solve(b_slice).map_err(|e| error_to_py(&e))?;
         Ok(PyArray1::from_vec(py, x))
     }
 
@@ -370,10 +278,7 @@ impl PyFactor {
             return Err(value_error("b and out must not overlap"));
         }
         drop(out_ro);
-        let x = self
-            .inner
-            .solve(b_slice)
-            .map_err(|e| value_error(e.to_string()))?;
+        let x = self.inner.solve(b_slice).map_err(|e| error_to_py(&e))?;
 
         let mut out_rw = out.try_readwrite().map_err(|e| borrow_error("out", e))?;
         let out_slice = out_rw
@@ -382,10 +287,6 @@ impl PyFactor {
         out_slice[..n].copy_from_slice(&x);
         Ok(())
     }
-}
-
-fn approx_chol_err_to_py(e: Error) -> PyErr {
-    value_error(e.to_string())
 }
 
 #[pyfunction]
@@ -408,7 +309,7 @@ fn factorize_raw<'py>(
         .as_slice()
         .map_err(|_| value_error("values must be contiguous"))?;
 
-    let csr = CsrRef::new(rp, ci, vals, n).map_err(approx_chol_err_to_py)?;
+    let csr = Csr::new(n as usize, rp, ci, vals).map_err(|e| error_to_py(&e))?;
     factorize_csr(py, csr, config)
 }
 
@@ -427,7 +328,9 @@ fn factorize(
     if shape.0 != shape.1 {
         return Err(value_error("matrix must be square"));
     }
-    let n = u32::try_from(shape.0).map_err(|_| value_error("matrix dimension exceeds u32::MAX"))?;
+    if u32::try_from(shape.0).is_err() {
+        return Err(value_error("matrix dimension exceeds u32::MAX"));
+    }
 
     let np = py.import("numpy")?;
     let rp_arr = as_contiguous_1d::<Index>(&np, &indptr, "indptr")?;
@@ -448,7 +351,7 @@ fn factorize(
         .as_slice()
         .map_err(|_| value_error("data must be contiguous"))?;
 
-    let csr = CsrRef::new(rp, ci, vals, n).map_err(approx_chol_err_to_py)?;
+    let csr = Csr::new(shape.0, rp, ci, vals).map_err(|e| error_to_py(&e))?;
     factorize_csr(py, csr, config)
 }
 
@@ -456,12 +359,8 @@ fn factorize(
 // GIL-free is sound: every pyclass is `frozen` with `Sync` state and the module holds none.
 #[pymodule(gil_used = false)]
 fn _approx_chol(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyBackend>()?;
     m.add_class::<PyConfig>()?;
-    m.add_class::<PyDenseFailure>()?;
-    m.add_class::<PyExactFailure>()?;
     m.add_class::<PyFactor>()?;
-    m.add_class::<PyFallback>()?;
     m.add_function(wrap_pyfunction!(factorize, m)?)?;
     m.add_function(wrap_pyfunction!(factorize_raw, m)?)?;
     Ok(())

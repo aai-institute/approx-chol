@@ -19,14 +19,10 @@ class MatrixLike:
         self.shape = shape
 
 
-def test_split_below_two_is_accepted_as_standard_ac():
-    row_ptrs, col_indices, values = _base_csr()
-
-    for split in (None, 0, 1):
-        factor = approx_chol.factorize_raw(
-            row_ptrs, col_indices, values, 2, approx_chol.Config(split=split)
-        )
-        assert factor.shape == (2, 2)
+@pytest.mark.parametrize("split", [0, 1])
+def test_split_below_two_is_rejected(split):
+    with pytest.raises(ValueError, match=f"split must be at least 2, got {split}"):
+        approx_chol.Config(split=split)
 
 
 def test_duck_typed_factorize_validates_indices_and_dimension():
@@ -96,7 +92,7 @@ def test_solve_and_solve_into_raise_value_error_for_shape_and_overlap():
     original_n = factor.shape[0]
 
     rhs_too_long = np.zeros(original_n + 10, dtype=np.float64)
-    with pytest.raises(ValueError, match="rhs length"):
+    with pytest.raises(ValueError, match="right-hand side has length 12, expected 2"):
         factor.solve(rhs_too_long)
 
     rhs = np.zeros(original_n, dtype=np.float64)
@@ -120,10 +116,10 @@ def test_solve_rejects_augmented_length_rhs():
     assert factor.n == original_n, "the ground slot stays internal"
 
     rhs_aug_len = np.zeros(original_n + 1, dtype=np.float64)
-    with pytest.raises(ValueError, match="rhs length"):
+    with pytest.raises(ValueError, match="right-hand side has length 3, expected 2"):
         factor.solve(rhs_aug_len)
     out = np.zeros(original_n, dtype=np.float64)
-    with pytest.raises(ValueError, match="rhs length"):
+    with pytest.raises(ValueError, match="right-hand side has length 3, expected 2"):
         factor.solve_into(rhs_aug_len, out)
 
 
