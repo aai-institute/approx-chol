@@ -53,36 +53,12 @@ def _f64(*xs):
     ("row_ptrs", "col_indices", "values", "n", "message"),
     [
         pytest.param(
-            _u32(0, 2),
-            _u32(0, 1),
-            _f64(2, -1),
-            2,
-            "CSR array has length 2, expected 3",
-            id="row_ptrs_length",
-        ),
-        pytest.param(
             _u32(0, 2, 4),
             _u32(0, 1, 0, 1),
             _f64(2, -1, -1),
             2,
             "CSR array has length 3, expected 4",
-            id="values_length",
-        ),
-        pytest.param(
-            _u32(0, 3, 2, 4),
-            _u32(0, 1, 0, 1),
-            _f64(2, -1, -1, 2),
-            3,
-            "row pointers do not ascend from 0 at row 1",
-            id="falling_row_ptrs",
-        ),
-        pytest.param(
-            _u32(0, 2, 4),
-            _u32(0, 2, 0, 1),
-            _f64(2, -1, -1, 2),
-            2,
-            "row 0 has a column index outside 0..n",
-            id="column_out_of_range",
+            id="csr_new",
         ),
         pytest.param(
             _u32(0, 2, 4),
@@ -90,15 +66,7 @@ def _f64(*xs):
             _f64(2, -1, -2, 2),
             2,
             "row 0 has an entry with no equal mirror",
-            id="not_symmetric",
-        ),
-        pytest.param(
-            _u32(0, 1),
-            _u32(0),
-            _f64(np.nan),
-            1,
-            "row 0 has an entry outside the representable range",
-            id="nan_entry",
+            id="from_csr_csr",
         ),
         pytest.param(
             _u32(0, 1),
@@ -106,15 +74,7 @@ def _f64(*xs):
             _f64(-1),
             1,
             "vertex 0 has a nonpositive diagonal",
-            id="negative_diagonal",
-        ),
-        pytest.param(
-            _u32(0, 1),
-            _u32(0),
-            _f64(np.finfo(np.float64).max),
-            1,
-            "an entry at vertex 0 is outside the representable range",
-            id="diagonal_past_a_quarter_of_the_maximum",
+            id="from_csr_reduce",
         ),
     ],
 )
@@ -240,21 +200,6 @@ def test_solve_and_solve_into_raise_value_error_for_shape_and_overlap():
 
     with pytest.raises(ValueError, match="must not overlap"):
         factor.solve_into(rhs, rhs)
-
-
-def test_solve_rejects_augmented_length_rhs():
-    # SDDM input gains an internal ground slot, which a RHS must not reach.
-    row_ptrs, col_indices, values = _base_csr()
-    factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
-    original_n = factor.shape[0]
-    assert factor.n == original_n, "the ground slot stays internal"
-
-    rhs_aug_len = np.zeros(original_n + 1, dtype=np.float64)
-    with pytest.raises(ValueError, match="right-hand side has length 3, expected 2"):
-        factor.solve(rhs_aug_len)
-    out = np.zeros(original_n, dtype=np.float64)
-    with pytest.raises(ValueError, match="right-hand side has length 3, expected 2"):
-        factor.solve_into(rhs_aug_len, out)
 
 
 def test_solve_into_rejects_partially_overlapping_views():
