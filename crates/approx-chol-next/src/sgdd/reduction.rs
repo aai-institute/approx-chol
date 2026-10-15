@@ -7,7 +7,7 @@ mod graph;
 use std::cell::LazyCell;
 
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
-use super::congruence::Congruence;
+use super::congruence::{Congruence, Scales};
 use super::decomposition::{Cells, Components};
 use super::scaling::{self, Existence, ScaleVector, ScalingPolicy, ScalingReport, RATIO_BAND};
 use super::signature;
@@ -118,7 +118,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 let deficit = clamped_deficit(&diagonal, &abs, &off_diagonal, relaxation.vector);
                 let m = Congruent {
                     vertices: self.vertices,
-                    congruence: Congruence::Scaled(factors),
+                    congruence: Congruence::Scaled(Scales::new(factors)),
                     off_diagonal,
                     report: policy.report(relaxation.shortfall(existence), deficit),
                 };
