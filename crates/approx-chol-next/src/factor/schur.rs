@@ -58,7 +58,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         }
     }
 
-    /// `S` on `sheets`, exact where its Cholesky is dense, else by the config's rule.
+    /// `S = D_k − Cᵀ D_e⁻¹ C` on `sheets`, exact where its Cholesky is dense, else by the config's rule: exact by kept row, sampled by star in parallel.
     pub(super) fn complement(
         &self,
         sheets: Sheets,
@@ -66,17 +66,36 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         config: &Config,
         stars: Streams,
     ) -> Sddm<'static, T, I> {
-        let rule = match config.dense(sheets.count() * self.cross.n_cols()) {
+        let (n_kept, surplus) = (self.cross.n_cols(), grounding.surplus());
+        let n = sheets.count() * n_kept;
+        let rule = match config.dense(n) {
             true => CliqueRule::Exact,
             false => config.complement,
         };
-        let schur = SchurComplement {
-            elimination: self,
-            sheets,
-            grounding,
-            stars,
+        let (adjacency, ground) = match (rule, sheets) {
+            (CliqueRule::Exact, Sheets::One) => exact_rows(self, surplus),
+            (CliqueRule::Exact, Sheets::Two) => cover_rows(self, surplus),
+            (CliqueRule::Sampled(Multiplicity::Single), _) => from_fill(
+                n,
+                sampled_fill::<T, I, Single>(self, sheets, surplus, stars, ()),
+            ),
+            (CliqueRule::Sampled(Multiplicity::Split(k)), _) => from_fill(
+                n,
+                sampled_fill::<T, I, Multi>(self, sheets, surplus, stars, k),
+            ),
         };
-        schur.build(rule)
+        let kept = surplus.map(|s| &s[s.len() - n_kept..]);
+        let surplus = match kept {
+            Some(kept) => {
+                let copies = kept
+                    .iter()
+                    .flat_map(|&s| std::iter::repeat_n(s, sheets.count()));
+                copies.zip(ground).map(|(s, g)| s + g).collect()
+            }
+            None => ground,
+        };
+        let grounding = Grounding::of(surplus);
+        Sddm::new(Cow::Owned(adjacency), Cow::Owned(grounding), sheets)
     }
 
     pub(super) fn n_eliminated(&self) -> usize {
@@ -143,44 +162,6 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     }
 }
 
-/// `S = D_k − Cᵀ D_e⁻¹ C` of a borrowed elimination, so one pivot vector serves every complement and the solve.
-pub(super) struct SchurComplement<'a, T, I> {
-    elimination: &'a BlockElimination<T, I>,
-    sheets: Sheets,
-    grounding: &'a Grounding<T>,
-    stars: Streams,
-}
-
-impl<T: Real, I: Index> SchurComplement<'_, T, I> {
-    /// `S` on the block's sheets: exact by kept row, sampled by star in parallel.
-    fn build(&self, rule: CliqueRule) -> Sddm<'static, T, I> {
-        let (n_kept, sheets) = (self.elimination.cross.n_cols(), self.sheets);
-        let n = sheets.count() * n_kept;
-        let (adjacency, ground) = match (rule, sheets) {
-            (CliqueRule::Exact, Sheets::One) => exact_rows(self),
-            (CliqueRule::Exact, Sheets::Two) => cover_rows(self),
-            (CliqueRule::Sampled(Multiplicity::Single), _) => {
-                from_fill(n, sampled_fill::<T, I, Single>(self, ()))
-            }
-            (CliqueRule::Sampled(Multiplicity::Split(k)), _) => {
-                from_fill(n, sampled_fill::<T, I, Multi>(self, k))
-            }
-        };
-        let kept = (self.grounding.surplus()).map(|s| &s[s.len() - n_kept..]);
-        let surplus = match kept {
-            Some(kept) => {
-                let copies = kept
-                    .iter()
-                    .flat_map(|&s| std::iter::repeat_n(s, sheets.count()));
-                copies.zip(ground).map(|(s, g)| s + g).collect()
-            }
-            None => ground,
-        };
-        let grounding = Grounding::of(surplus);
-        Sddm::new(Cow::Owned(adjacency), Cow::Owned(grounding), sheets)
-    }
-}
-
 /// Counting-sorts chunks unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.
 fn from_fill<T: Real, I: Index>(
     n: usize,
@@ -222,14 +203,15 @@ fn from_fill<T: Real, I: Index>(
 
 /// Each eliminated star's clique tree on each sheet under its own stream, the ground a final neighbor unless its share is zero; one sheet maps no column, as the balanced loop pays for any map.
 fn sampled_fill<T: Real, I: Index, C: Copies>(
-    schur: &SchurComplement<'_, T, I>,
+    elimination: &BlockElimination<T, I>,
+    sheets: Sheets,
+    surplus: Option<&[T]>,
+    stars: Streams,
     split: C::Split,
 ) -> Vec<Fill<T, I>> {
-    let c = &schur.elimination.cross;
+    let c = &elimination.cross;
     let (n_eliminated, n_kept) = (c.n_rows(), c.n_cols());
-    let sheets = schur.sheets;
     let ground = I::from_index(sheets.count() * n_kept);
-    let surplus = schur.grounding.surplus();
     let ground_share = move |e: usize| {
         let s_e = surplus.map(|s| s[e]).filter(|&s| s > T::zero());
         s_e.map(|s| (ground, s))
@@ -237,7 +219,7 @@ fn sampled_fill<T: Real, I: Index, C: Copies>(
     match sheets {
         Sheets::One => fill_stars::<T, I, C, _>(split, n_eliminated, |e| {
             let neighbors = c.row(e).map(|(k, &c)| (I::from_index(k), c.abs()));
-            (schur.stars.star(e), neighbors.chain(ground_share(e)))
+            (stars.star(e), neighbors.chain(ground_share(e)))
         }),
         Sheets::Two => fill_stars::<T, I, C, _>(split, 2 * n_eliminated, |star| {
             let (sheet, e) = (star / n_eliminated, star % n_eliminated);
@@ -245,7 +227,7 @@ fn sampled_fill<T: Real, I: Index, C: Copies>(
                 let on = sheet ^ usize::from(crosses(c));
                 (I::from_index(cover_vertex(k, on)), c.abs())
             });
-            (schur.stars.star(star), neighbors.chain(ground_share(e)))
+            (stars.star(star), neighbors.chain(ground_share(e)))
         }),
     }
 }
@@ -275,14 +257,13 @@ fn fill_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
 
 /// Rows of the cover's complement: `|c_ke||c_je|/d_e` to `j`'s same sheet when signs agree, else its other; `k⁻` mirrors `k⁺`, so each sums only `j > k`; the ground's share as column `2·n_kept`.
 fn cover_rows<T: Real, I: Index>(
-    schur: &SchurComplement<'_, T, I>,
+    elimination: &BlockElimination<T, I>,
+    surplus: Option<&[T]>,
 ) -> (UpperAdjacency<T, I>, Vec<T>) {
-    let elimination = schur.elimination;
     let BlockElimination {
         cross, inv_pivot, ..
     } = elimination;
     let (c, ct, n_kept) = (cross, elimination.transpose(), cross.n_cols());
-    let surplus = schur.grounding.surplus();
     SddmRows::split(Sheets::Two, n_kept, rows_per_task(c), |mut rows, k| {
         for (e, &c_ek) in ct.row(k) {
             for (j, &c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
@@ -301,14 +282,13 @@ fn cover_rows<T: Real, I: Index>(
 
 /// Rows of a folded block's complement, `|c_ke||c_je|/d_e` as the smaller times the larger's share, the ground's `|c_ke| s_e/d_e` as column `n_kept`; a product underflowing to zero is dropped, as a stored zero couples nothing.
 fn exact_rows<T: Real, I: Index>(
-    schur: &SchurComplement<'_, T, I>,
+    elimination: &BlockElimination<T, I>,
+    surplus: Option<&[T]>,
 ) -> (UpperAdjacency<T, I>, Vec<T>) {
-    let elimination = schur.elimination;
     let BlockElimination {
         cross, inv_pivot, ..
     } = elimination;
     let (c, ct, n_kept) = (cross, elimination.transpose(), cross.n_cols());
-    let surplus = schur.grounding.surplus();
     SddmRows::split(Sheets::One, n_kept, rows_per_task(c), |mut rows, k| {
         for (e, c_ek) in ct.row(k) {
             let c_ek = c_ek.abs();

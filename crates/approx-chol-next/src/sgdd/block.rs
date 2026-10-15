@@ -180,7 +180,7 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         &self.restriction.vertices
     }
 
-    /// Present iff this block's scaling was clamped beyond the policy's tolerance.
+    /// Present iff this block's scaling was clamped beyond the policy's tolerance or did not settle.
     pub fn scaling_report(&self) -> Option<ScalingReport> {
         self.restriction.congruence.report()
     }
@@ -234,13 +234,6 @@ impl<T: Real, I: Index> Sgdd<T, I> {
 
     pub(crate) fn dead(&self) -> &[I] {
         &self.dead
-    }
-
-    /// The worst block's report: present iff some scaling was clamped beyond the policy's tolerance.
-    pub fn scaling_report(&self) -> Option<ScalingReport> {
-        (self.blocks.iter())
-            .filter_map(IrreducibleBlock::scaling_report)
-            .max_by(|a, b| a.violation.total_cmp(&b.violation))
     }
 }
 

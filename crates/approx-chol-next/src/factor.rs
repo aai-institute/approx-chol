@@ -104,51 +104,30 @@ impl<T: Real, I: Index> Factor<T, I> {
         self.n
     }
 
-    /// Each block's factor, in [`Sgdd::blocks`]' order, for a caller that solves them on its own.
-    pub fn blocks(&self) -> &[BlockFactor<T, I>] {
-        &self.blocks
-    }
-
     /// The blocks' factors, owned, for a caller that keeps one solver per block; dead vertices need none.
     pub fn into_blocks(self) -> Vec<BlockFactor<T, I>> {
         self.blocks
     }
 
-    /// Workspace [`Factor::solve_in_place`] needs, fixed at factorization.
-    pub fn scratch_len(&self) -> usize {
-        (self.blocks.iter())
-            .map(|block| block.vertices().len() + block.scratch_len())
-            .max()
-            .unwrap_or(0)
-    }
-
     /// `A⁺b` on floating blocks; vertices in no block solve to `0`.
     pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
+        check_buffers(b, self.n, &[], 0)?;
+        let scratch_len = (self.blocks.iter())
+            .map(|block| block.vertices().len() + block.scratch_len())
+            .max();
+        let mut scratch = vec![T::zero(); scratch_len.unwrap_or(0)];
         let mut x = b.to_vec();
-        let mut scratch = vec![T::zero(); self.scratch_len()];
-        self.solve_in_place(&mut x, &mut scratch, InnerParallelism::Allow)?;
-        Ok(x)
-    }
-
-    /// `x` holds `b` on entry and the solution on return; blocks solve in turn, each under `inner`.
-    pub fn solve_in_place(
-        &self,
-        x: &mut [T],
-        scratch: &mut [T],
-        inner: InnerParallelism,
-    ) -> Result<(), SolveError> {
-        check_buffers(x, self.n, scratch, self.scratch_len())?;
         for block in &self.blocks {
             let restriction = &block.restriction;
             let (local, rest) = scratch.split_at_mut(block.vertices().len());
-            restriction.gather(x, local);
-            block.solve_unchecked(local, rest, inner);
-            restriction.scatter(local, x);
+            restriction.gather(&x, local);
+            block.solve_unchecked(local, rest, InnerParallelism::Allow);
+            restriction.scatter(local, &mut x);
         }
         for &i in &self.dead {
             x[i.index()] = T::zero();
         }
-        Ok(())
+        Ok(x)
     }
 }
 
@@ -166,6 +145,8 @@ pub struct BlockFactor<T = f64, I = u32> {
     restriction: Arc<Restriction<T, I>>,
     elimination: Option<BlockElimination<T, I>>,
     cholesky: Cholesky<T, I>,
+    /// A split block's largest `|f|`, re-gauged after the solve: its Cholesky pins only a kept slot.
+    gauge: Option<I>,
 }
 
 impl<T: Real, I: Index> BlockFactor<T, I> {
@@ -198,10 +179,14 @@ impl<T: Real, I: Index> BlockFactor<T, I> {
                 (Some(elimination), factored)
             }
         };
+        let gauge = (elimination.as_ref())
+            .and(scales(0))
+            .map(|f| I::from_index(largest(f)));
         Self {
             restriction: Arc::clone(block.restriction()),
             elimination,
             cholesky,
+            gauge,
         }
     }
 
@@ -244,8 +229,21 @@ impl<T: Real, I: Index> BlockFactor<T, I> {
                 elimination.backward(eliminated, kept, inner);
             }
         }
+        if let (true, Some(q)) = (singular, self.gauge) {
+            let gauge = x[q.index()];
+            x.iter_mut().for_each(|x| *x = *x - gauge);
+        }
         self.restriction.prolongate(x, singular);
     }
+}
+
+/// The last index of the largest `|f|`, where pinning the gauge leaves its rounding unamplified by `1/f`.
+fn largest<T: Real>(f: &[T]) -> usize {
+    let last = f.len() - 1;
+    (0..last).fold(last, |best, i| match f[i].abs() > f[best].abs() {
+        true => i,
+        false => best,
+    })
 }
 
 /// One block's keys, so no draw depends on thread scheduling or on how other blocks routed.
@@ -296,6 +294,7 @@ impl<T: Real, I: Index> BlockFactor<T, I> {
                 .checked_sub(elimination.n_eliminated())
                 .filter(|&kept| kept == elimination.n_kept())?,
         };
-        (kept > 0 && self.cholesky.solves(kept)).then_some(self)
+        let gauge = self.gauge.is_none_or(|q| q.index() < n);
+        (kept > 0 && gauge && self.cholesky.solves(kept)).then_some(self)
     }
 }

@@ -105,7 +105,10 @@ fn gram_separates_folded_scaled_and_frustrated_components() {
             .collect::<Vec<_>>(),
         [true, false]
     );
-    assert!(reduced.scaling_report().is_none());
+    assert!(reduced
+        .blocks()
+        .iter()
+        .all(|c| c.scaling_report().is_none()));
     solve_residual(&reduced, &matrix(7, &a, &b, &x, &y));
 }
 
@@ -164,7 +167,7 @@ fn exhausted_scaling_reports_the_inputs_existence_guarantee() {
     let policy = ScalingPolicy::new(0.0, 0).unwrap();
     let sgdd: Sgdd = Sgdd::from_gram(gram, policy).unwrap();
     assert_eq!(
-        sgdd.scaling_report().unwrap().scaling,
+        sgdd.blocks()[0].scaling_report().unwrap().scaling,
         Existence::Guaranteed
     );
     let matrix = matrix(3, &a, &b, &x, &y);
@@ -173,7 +176,10 @@ fn exhausted_scaling_reports_the_inputs_existence_guarantee() {
     let values: Vec<f64> = matrix.into_iter().flatten().collect();
     let csr = Csr::new(3, &ptrs, &indices, &values).unwrap();
     let sgdd: Sgdd = Sgdd::from_csr(csr, policy).unwrap();
-    assert_eq!(sgdd.scaling_report().unwrap().scaling, Existence::Unknown);
+    assert_eq!(
+        sgdd.blocks()[0].scaling_report().unwrap().scaling,
+        Existence::Unknown
+    );
 }
 
 #[test]

@@ -4,6 +4,7 @@ mod dense;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use super::config::Config;
+use super::largest;
 use super::sddm::{descend, lift, Sddm, Sheets};
 use crate::narrow;
 use crate::{widen, Index, Real};
@@ -38,12 +39,12 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         let (sheets, grounded, n) = (sddm.sheets(), sddm.grounded(), sddm.n());
         let (triangular, pinned) = match config.dense(n) {
             true => {
-                let free = pinned(&sddm, scales).unwrap_or(n - 1);
+                let free = pinned(&sddm, scales);
                 (Triangular::Dense(dense::factor(&sddm, free)), free)
             }
             false => {
                 // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
-                let last = spans_wide(scales).then(|| pinned(&sddm, scales)).flatten();
+                let last = spans_wide(scales).then(|| pinned(&sddm, scales));
                 let (steps, last) = approximate::factor(sddm, config.approximate, draws, last);
                 (Triangular::Approximate(steps), last)
             }
@@ -98,19 +99,11 @@ impl<T: Real, I: Index> Cholesky<T, I> {
     }
 }
 
-/// The slot the solve pins: the ground, else a singular sheet's largest `|f|`, so the gauge's rounding is not amplified by `1/f` (ties keep the last).
-fn pinned<T: Real, I: Index>(sddm: &Sddm<'_, T, I>, scales: Option<&[T]>) -> Option<usize> {
-    let last = sddm.n() - 1;
-    let largest = |f: &[T]| {
-        (0..last).fold(last, |best, i| match f[i].abs() > f[best].abs() {
-            true => i,
-            false => best,
-        })
-    };
-    match (sddm.sheets(), sddm.grounded()) {
-        (_, true) => Some(sddm.n()),
-        (Sheets::One, false) => Some(scales.map_or(last, largest)),
-        (Sheets::Two, false) => None,
+/// The slot the solve pins: the ground, else the largest `|f|` on the first sheet, so the gauge's rounding is not amplified by `1/f` (ties keep the last).
+fn pinned<T: Real, I: Index>(sddm: &Sddm<'_, T, I>, scales: Option<&[T]>) -> usize {
+    match sddm.grounded() {
+        true => sddm.n(),
+        false => scales.map_or(sddm.n() - 1, |f| sddm.sheets().count() * largest(f)),
     }
 }
 
