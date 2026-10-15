@@ -53,7 +53,8 @@ floor = { features = ["floor"] }
 
 [tasks]
 test = "maturin develop --uv --locked && pytest tests/ -v"
-develop = "maturin develop --uv --release --locked"
+# Unstripped: rustc 1.93's strip under ld-27037 leaves a misaligned LINKEDIT string pool that dlopen rejects.
+develop = { cmd = "maturin develop --uv --release --locked", env = { CARGO_PROFILE_RELEASE_STRIP = "false" } }
 bench-wallclock = "cargo bench -p approx-chol --bench wallclock_banded --locked"
 coverage = "./scripts/coverage-with-python.sh"
 deny = "cargo deny --locked check"
