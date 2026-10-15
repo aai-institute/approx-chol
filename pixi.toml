@@ -61,3 +61,14 @@ deny = "cargo deny --locked check"
 semver = "cargo semver-checks --package approx-chol --all-features"
 # Mutants in compiled-out code survive trivially, so serde is enabled and sprs/faer adapters excluded.
 mutants = "cargo mutants -C --locked --features serde"
+
+# Advisory, not a gate: its own target dir keeps the stricter thresholds out of everyday clippy's cache.
+[tasks.smells]
+args = [{ arg = "package", default = "approx-chol-next" }]
+env = { CLIPPY_CONF_DIR = "$PIXI_PROJECT_ROOT/scripts/smells", CARGO_TARGET_DIR = "$PIXI_PROJECT_ROOT/target/smells" }
+cmd = """cargo clippy -p {{ package }} --all-targets --all-features --locked -- \
+  -W clippy::too_many_arguments -W clippy::too_many_lines -W clippy::cognitive_complexity \
+  -W clippy::type_complexity -W clippy::fn_params_excessive_bools -W clippy::struct_excessive_bools \
+  -W clippy::large_enum_variant -W clippy::large_types_passed_by_value -W clippy::needless_pass_by_value \
+  -W clippy::trivially_copy_pass_by_ref -W clippy::unused_self -W clippy::similar_names \
+  -W clippy::many_single_char_names -W clippy::match_bool -W clippy::redundant_closure_for_method_calls"""

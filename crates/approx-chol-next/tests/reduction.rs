@@ -1,0 +1,194 @@
+use approx_chol_next::input::{
+    BipartiteGram, Csr, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsr, Weights,
+};
+use approx_chol_next::{factorize, CliqueRule, Config, Existence, ScalingPolicy, Sgdd};
+
+fn dense() -> Config {
+    Config {
+        dense_up_to: usize::MAX,
+        complement: CliqueRule::Exact,
+        ..Config::default()
+    }
+}
+
+fn solve_residual(sgdd: &Sgdd, matrix: &[Vec<f64>]) {
+    let exact: Vec<f64> = (0..sgdd.n()).map(|i| (i % 5) as f64 - 2.0).collect();
+    let apply = |x: &[f64]| -> Vec<f64> {
+        matrix
+            .iter()
+            .map(|row| row.iter().zip(x).map(|(a, x)| a * x).sum())
+            .collect()
+    };
+    let rhs = apply(&exact);
+    let factor = factorize(sgdd, &dense());
+    let solution = factor.solve(&rhs).unwrap();
+    let residual = apply(&solution);
+    for (actual, expected) in residual.iter().zip(&rhs) {
+        assert!((actual - expected).abs() < 1e-10 * (1.0 + expected.abs()));
+    }
+}
+
+fn matrix(n: usize, a: &[u32], b: &[u32], x: &[f64], y: &[f64]) -> Vec<Vec<f64>> {
+    let mut matrix = vec![vec![0.0; n]; n];
+    for k in 0..a.len() {
+        let (i, j) = (a[k] as usize, b[k] as usize);
+        matrix[i][i] += x[k] * x[k];
+        matrix[j][j] += y[k] * y[k];
+        matrix[i][j] += x[k] * y[k];
+        matrix[j][i] += x[k] * y[k];
+    }
+    matrix
+}
+
+#[test]
+fn csr_and_upper_share_reduction_and_solve_bits() {
+    let (a, b) = ([0, 1, 3, 4, 3], [1, 2, 4, 5, 5]);
+    let (x, y) = ([1.0; 5], [-1.0, -1.0, 1.0, 1.0, 1.0]);
+    let matrix = matrix(7, &a, &b, &x, &y);
+    let mut ptrs = [vec![0u32], vec![0u32]];
+    let mut indices = [Vec::new(), Vec::new()];
+    let mut values = [Vec::new(), Vec::new()];
+    for (i, row) in matrix.iter().enumerate() {
+        for (j, &value) in row.iter().enumerate() {
+            if value != 0.0 {
+                for upper in 0..2 {
+                    if upper == 0 || j >= i {
+                        indices[upper].push(j as u32);
+                        values[upper].push(value);
+                    }
+                }
+            }
+        }
+        for upper in 0..2 {
+            ptrs[upper].push(indices[upper].len() as u32);
+        }
+    }
+    let csr = Csr::new(7, &ptrs[0], &indices[0], &values[0]).unwrap();
+    let upper = UpperCsr::new(7, &ptrs[1], &indices[1], &values[1]).unwrap();
+    let full: Sgdd = Sgdd::from_csr(csr, ScalingPolicy::default()).unwrap();
+    let upper: Sgdd = Sgdd::from_upper_csr(upper, ScalingPolicy::default()).unwrap();
+    assert_eq!(format!("{full:?}"), format!("{upper:?}"));
+    assert_eq!(
+        full.blocks().iter().map(|c| c.floats()).collect::<Vec<_>>(),
+        [true, false]
+    );
+    let rhs = [1.0; 7];
+    for config in [
+        Config {
+            dense_up_to: 0,
+            ..Config::default()
+        },
+        dense(),
+    ] {
+        let a = factorize(&full, &config).solve(&rhs).unwrap();
+        let b = factorize(&upper, &config).solve(&rhs).unwrap();
+        assert_eq!(
+            a.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+            b.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+        );
+        assert_eq!(a[6], 0.0);
+    }
+    solve_residual(&full, &matrix);
+}
+
+#[test]
+fn gram_separates_folded_scaled_and_frustrated_components() {
+    let (a, b) = ([0, 1, 3, 4, 3], [1, 2, 4, 5, 5]);
+    let (x, y) = ([1.3, 2.7, 1.0, 1.0, 1.0], [-2.7, -4.1, 1.0, 1.0, 1.0]);
+    let gram = FactorWidth2::new(7, &a, &b, &x, &y).unwrap();
+    let reduced = Sgdd::from_gram(gram, ScalingPolicy::new(0.0, 0).unwrap()).unwrap();
+    assert_eq!(
+        reduced
+            .blocks()
+            .iter()
+            .map(|c| c.floats())
+            .collect::<Vec<_>>(),
+        [true, false]
+    );
+    assert!(reduced
+        .blocks()
+        .iter()
+        .all(|c| c.scaling_report().is_none()));
+    solve_residual(&reduced, &matrix(7, &a, &b, &x, &y));
+}
+
+#[test]
+fn shape_ground_and_signature_match_their_gram_matrices() {
+    let (a, b) = ([0, 1, 2, 0], [1, 2, 3, 3]);
+    let weights = [1.0, 4.0, 9.0, 16.0];
+    let (x, y) = ([1.0, 2.0, 3.0, 4.0], [-1.0, -2.0, -3.0, -4.0]);
+    let ground = [0.25, 0.0, 0.0, 0.0];
+    let laplacian = Laplacian::new(4, &a, &b, Weights::of(&weights).unwrap()).unwrap();
+    let floating = Sgdd::try_from(laplacian).unwrap();
+    assert!(floating.blocks()[0].floats());
+    let grounded = Sgdd::try_from(laplacian.grounded(&ground).unwrap()).unwrap();
+    assert!(!grounded.blocks()[0].floats());
+    let mut expected = matrix(4, &a, &b, &x, &y);
+    solve_residual(&floating, &expected);
+    expected[0][0] += ground[0];
+    solve_residual(&grounded, &expected);
+    let signs = [true, false, true, false];
+    let signed = SignedGraph::new(4, &a, &b, &signs, Weights::of(&weights).unwrap()).unwrap();
+    let signed = Sgdd::try_from(signed).unwrap();
+    let y = [1.0, -2.0, 3.0, -4.0];
+    assert!(signed.blocks()[0].floats());
+    solve_residual(&signed, &matrix(4, &a, &b, &x, &y));
+}
+
+#[test]
+fn bipartite_incidence_and_valued_grams_preserve_both_sides() {
+    let (left, right) = ([0, 0, 1, 1, 2, 2], [0, 1, 0, 1, 0, 1]);
+    let (ones, minus) = ([1.0; 6], [-1.0; 6]);
+    let gram = |values_l, values_r| {
+        let l = FactorWidth1::new(3, &left, values_l).unwrap();
+        let r = FactorWidth1::new(2, &right, values_r).unwrap();
+        let gram = BipartiteGram::new(l, r, Weights::default()).unwrap();
+        Sgdd::from_bipartite_gram(gram, ScalingPolicy::default()).unwrap()
+    };
+    let incidence = gram(None, None);
+    let valued = gram(Some(&ones[..]), Some(&ones[..]));
+    let laplacian = gram(None, Some(&minus[..]));
+    for sgdd in [&incidence, &valued, &laplacian] {
+        assert!(sgdd.blocks()[0].floats());
+    }
+    let right = right.map(|j| j + 3);
+    let positive = matrix(5, &left, &right, &ones, &ones);
+    let negative = matrix(5, &left, &right, &ones, &minus);
+    solve_residual(&incidence, &positive);
+    solve_residual(&valued, &positive);
+    solve_residual(&laplacian, &negative);
+}
+
+#[test]
+fn exhausted_scaling_reports_the_inputs_existence_guarantee() {
+    let (a, b) = ([0, 1, 0], [1, 2, 2]);
+    let (x, y) = ([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
+    let gram = FactorWidth2::new(3, &a, &b, &x, &y).unwrap();
+    let policy = ScalingPolicy::new(0.0, 0).unwrap();
+    let sgdd: Sgdd = Sgdd::from_gram(gram, policy).unwrap();
+    assert_eq!(
+        sgdd.blocks()[0].scaling_report().unwrap().scaling,
+        Existence::Guaranteed
+    );
+    let matrix = matrix(3, &a, &b, &x, &y);
+    let ptrs = [0, 3, 6, 9];
+    let indices = [0, 1, 2, 0, 1, 2, 0, 1, 2];
+    let values: Vec<f64> = matrix.into_iter().flatten().collect();
+    let csr = Csr::new(3, &ptrs, &indices, &values).unwrap();
+    let sgdd: Sgdd = Sgdd::from_csr(csr, policy).unwrap();
+    assert_eq!(
+        sgdd.blocks()[0].scaling_report().unwrap().scaling,
+        Existence::Unknown
+    );
+}
+
+#[test]
+fn row_surplus_keeps_a_definite_component_grounded() {
+    let ptrs = [0, 2, 4];
+    let indices = [0, 1, 0, 1];
+    let values = [3.0, -1.0, -1.0, 3.0];
+    let csr = Csr::new(2, &ptrs, &indices, &values).unwrap();
+    let reduced = Sgdd::from_csr(csr, ScalingPolicy::default()).unwrap();
+    assert!(!reduced.blocks()[0].floats());
+    solve_residual(&reduced, &[vec![3.0, -1.0], vec![-1.0, 3.0]]);
+}
