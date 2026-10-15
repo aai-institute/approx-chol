@@ -29,6 +29,8 @@ mod factor;
 pub mod input;
 mod sgdd;
 mod storage;
+#[cfg(feature = "serde")]
+mod wire;
 
 use std::fmt::Debug;
 

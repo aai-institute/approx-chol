@@ -127,14 +127,6 @@ impl<T: Real, I: Index> Factor<T, I> {
 }
 
 /// One irreducible block's factor over its vertices of `A`.
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(remote = "Self"),
-    serde(bound(
-        deserialize = "T: crate::Real + serde::Deserialize<'de>, I: crate::Index + serde::Deserialize<'de>"
-    ))
-)]
 #[derive(Clone, Debug)]
 pub struct BlockFactor<T = f64, I = u32> {
     restriction: Arc<Restriction<T, I>>,
@@ -291,7 +283,31 @@ fn splitmix(x: u64) -> u64 {
 }
 
 #[cfg(feature = "serde")]
-checked_serde!(BlockFactor);
+impl<T: serde::Serialize, I: serde::Serialize> serde::Serialize for BlockFactor<T, I> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let body = (&self.restriction, &self.elimination, &self.cholesky);
+        crate::wire::serialize(serializer, body)
+    }
+}
+
+// Not `remote = "Self"`: on a `pub` type it exports an unchecked, unversioned inherent `deserialize`.
+#[cfg(feature = "serde")]
+impl<'de, T, I> serde::Deserialize<'de> for BlockFactor<T, I>
+where
+    T: Real + serde::Deserialize<'de>,
+    I: Index + serde::Deserialize<'de>,
+{
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (restriction, elimination, cholesky) = crate::wire::deserialize(deserializer)?;
+        let value = Self {
+            restriction,
+            elimination,
+            cholesky,
+        };
+        let corrupt = || serde::de::Error::custom("corrupt BlockFactor");
+        value.checked().ok_or_else(corrupt)
+    }
+}
 
 #[cfg(feature = "serde")]
 impl<T: Real, I: Index> BlockFactor<T, I> {
@@ -304,5 +320,93 @@ impl<T: Real, I: Index> BlockFactor<T, I> {
                 .filter(|&kept| kept == elimination.n_kept())?,
         };
         (kept > 0 && self.cholesky.solves(kept)).then_some(self)
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+    use crate::input::{BipartiteGram, Csr, FactorWidth1, Weights};
+    use crate::ScalingPolicy;
+
+    fn only_block(sgdd: Sgdd, config: &Config) -> BlockFactor {
+        let mut blocks = factorize(&sgdd, config).into_blocks();
+        assert_eq!(blocks.len(), 1);
+        blocks.pop().expect("one block")
+    }
+
+    fn csr_block(row_ptrs: &[u32], columns: &[u32], values: &[f64]) -> BlockFactor {
+        let csr = Csr::new(row_ptrs.len() - 1, row_ptrs, columns, values).expect("valid csr");
+        let sgdd = Sgdd::from_csr(csr, ScalingPolicy::default()).expect("reduces");
+        only_block(sgdd, &Config::default())
+    }
+
+    fn grounded_block() -> BlockFactor {
+        let values = [2.0, -1.0, -1.0, 3.0, -1.0, -1.0, 2.0];
+        csr_block(&[0, 2, 5, 7], &[0, 1, 0, 1, 2, 1, 2], &values)
+    }
+
+    /// A 2-vertex floating block's restriction over a 3-vertex grounded block's Cholesky.
+    fn mismatched_cholesky() -> BlockFactor {
+        let floating = csr_block(&[0, 2, 4], &[0, 1, 0, 1], &[1.0, -1.0, -1.0, 1.0]);
+        BlockFactor {
+            cholesky: grounded_block().cholesky,
+            ..floating
+        }
+    }
+
+    /// A bipartite block, so it carries a block elimination.
+    fn bipartite_block() -> BlockFactor {
+        let gram = BipartiteGram::new(
+            FactorWidth1::new(2, &[0u32, 0, 1, 1], None).expect("valid rows"),
+            FactorWidth1::new(2, &[0u32, 1, 0, 1], None).expect("valid columns"),
+            Weights::unit(),
+        )
+        .expect("valid gram");
+        let sgdd = Sgdd::from_bipartite_gram(gram, ScalingPolicy::default()).expect("reduces");
+        let block = only_block(sgdd, &Config::default());
+        assert!(block.elimination.is_some());
+        block
+    }
+
+    /// A bipartite block stripped of the elimination its Cholesky follows.
+    fn without_elimination() -> BlockFactor {
+        BlockFactor {
+            elimination: None,
+            ..bipartite_block()
+        }
+    }
+
+    /// An elimination of 2 keeping 2, between a 5-vertex restriction and a 3-vertex Cholesky.
+    fn elimination_keeping_another_count() -> BlockFactor {
+        let elimination = bipartite_block().elimination;
+        let counts = elimination.as_ref().map(|e| (e.n_eliminated(), e.n_kept()));
+        assert_eq!(counts, Some((2, 2)));
+        let path = csr_block(
+            &[0, 2, 5, 8, 11, 13],
+            &[0, 1, 0, 1, 2, 1, 2, 3, 2, 3, 4, 3, 4],
+            &[
+                3.0, -1.0, -1.0, 3.0, -1.0, -1.0, 3.0, -1.0, -1.0, 3.0, -1.0, -1.0, 3.0,
+            ],
+        );
+        BlockFactor {
+            restriction: path.restriction,
+            elimination,
+            cholesky: grounded_block().cholesky,
+        }
+    }
+
+    #[rstest]
+    #[case::mismatched_cholesky(mismatched_cholesky())]
+    #[case::without_elimination(without_elimination())]
+    #[case::elimination_keeping_another_count(elimination_keeping_another_count())]
+    fn a_block_whose_parts_disagree_is_rejected_on_decode(#[case] spliced: BlockFactor) {
+        let bytes = postcard::to_stdvec(&spliced).expect("serialize");
+        assert_eq!(
+            postcard::from_bytes::<BlockFactor>(&bytes).expect_err("parts that disagree"),
+            postcard::Error::SerdeDeCustom
+        );
     }
 }
