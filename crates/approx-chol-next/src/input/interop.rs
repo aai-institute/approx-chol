@@ -18,7 +18,7 @@ pub enum ConvertError {
     /// The matrix is stored by columns (CSC), not rows.
     #[cfg(feature = "sprs")]
     Csc,
-    /// Row pointers start past `0`, as in a row slice; an owned copy converts.
+    /// Row pointers start past `0`, as in a row slice.
     OffsetRows,
     /// A row leaves unused slots after its entries.
     #[cfg(feature = "faer")]
@@ -42,7 +42,7 @@ impl core::fmt::Display for ConvertError {
             Self::NotSquare { rows, cols } => write!(f, "matrix is {rows}x{cols}, not square"),
             #[cfg(feature = "sprs")]
             Self::Csc => f.write_str("matrix is stored by columns (CSC), not rows"),
-            Self::OffsetRows => f.write_str("row pointers start past 0; convert an owned copy"),
+            Self::OffsetRows => f.write_str("row pointers start past 0, as in a row slice"),
             #[cfg(feature = "faer")]
             Self::RowGap { row } => write!(f, "row {row} leaves unused slots after its entries"),
             Self::Csr(_) => f.write_str("matrix storage is not a CSR"),
@@ -67,7 +67,7 @@ fn square(rows: usize, cols: usize) -> Result<usize, ConvertError> {
 }
 
 fn starts_at_zero<I: PrimInt>(row_ptrs: &[I]) -> Result<(), ConvertError> {
-    match row_ptrs.first().is_none_or(|&start| start == I::zero()) {
+    match row_ptrs[0] == I::zero() {
         true => Ok(()),
         false => Err(ConvertError::OffsetRows),
     }
@@ -109,24 +109,13 @@ impl<'a, T, I: faer::Index + PrimInt> TryFrom<faer::sparse::SparseRowMatRef<'a, 
         let row_ptrs = symbolic.row_ptr();
         starts_at_zero(row_ptrs)?;
         // Row counts filling every span are compact storage, so the arrays still borrow as CSR.
-        if let Some(row_nnz) = symbolic.row_nnz() {
-            let gap = |i: usize| {
-                let span = row_ptrs[i + 1].checked_sub(&row_ptrs[i]);
-                span.is_some_and(|span| row_nnz[i] != span)
-            };
-            if let Some(row) = (0..n).find(|&i| gap(i)) {
-                return Err(ConvertError::RowGap { row });
-            }
+        if let Some(row) = (0..n).find(|&i| symbolic.row_range(i).end != row_ptrs[i + 1].zx()) {
+            return Err(ConvertError::RowGap { row });
         }
-        // faer may keep spare capacity past the last row; a short array is left to `Csr::new`.
-        let end = (row_ptrs.last()).map_or(0, |end| end.to_usize().unwrap_or(usize::MAX));
-        let (col_indices, values) = (symbolic.col_idx(), matrix.val());
-        Ok(Csr::new(
-            n,
-            row_ptrs,
-            &col_indices[..end.min(col_indices.len())],
-            &values[..end.min(values.len())],
-        )?)
+        // faer may keep spare capacity past the last row.
+        let end = row_ptrs[n].zx();
+        let (col_indices, values) = (&symbolic.col_idx()[..end], &matrix.val()[..end]);
+        Ok(Csr::new(n, row_ptrs, col_indices, values)?)
     }
 }
 
