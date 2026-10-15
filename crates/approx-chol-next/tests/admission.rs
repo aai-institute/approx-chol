@@ -1,5 +1,7 @@
 #[path = "admission/csr.rs"]
 mod csr;
+#[path = "admission/scaling.rs"]
+mod scaling;
 #[path = "admission/surplus.rs"]
 mod surplus;
 #[path = "admission/views.rs"]

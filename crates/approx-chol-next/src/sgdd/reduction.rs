@@ -207,7 +207,7 @@ impl<T: Real> RowSums<T> {
     }
 }
 
-/// `max_i (Σ_j|m_ij| − m_ii)/m_ii` past row `i`'s rounding, `max(RATIO_BAND, k_i + 3) ε` over its `k_i` entries: what clamping adds.
+/// `max_i (Σ_j|m_ij| − m_ii)/m_ii` past row `i`'s rounding, `(RATIO_BAND + k_i + 3) ε`: a settled scaling's band plus forming its `k_i` entries.
 fn clamped_deficit<T: Real, I: Index>(
     diagonal: &[T],
     abs_row_sums: &[T],
@@ -224,7 +224,7 @@ fn clamped_deficit<T: Real, I: Index>(
         return 0.0;
     }
     (deficits.zip(off_diagonal.degrees()))
-        .filter(|&(deficit, k)| deficit > RATIO_BAND.max((k + 3) as f64) * epsilon)
+        .filter(|&(deficit, k)| deficit > (RATIO_BAND + (k + 3) as f64) * epsilon)
         .fold(0.0, |worst, (deficit, _)| worst.max(deficit))
 }
 
