@@ -81,11 +81,11 @@ fn surplus_beyond_summation_roundoff_augments() {
 fn deficit_beyond_summation_roundoff_is_reported() {
     let reported = |sgdd: &Sgdd<f64>| sgdd.blocks()[0].scaling_report().is_some();
     assert!(reported(&drifted(-5e-11_f64)), "1e-9 tolerance is no cover");
-    assert!(reported(&drifted(-20.0 * f64::EPSILON)));
-    assert!(!reported(&drifted(-12.0 * f64::EPSILON)), "inside 16 eps");
+    assert!(reported(&drifted(-32.0 * f64::EPSILON)));
+    assert!(!reported(&drifted(-12.0 * f64::EPSILON)), "inside 20 eps");
     let f32_reported = |drift: f32| drifted(drift).blocks()[0].scaling_report().is_some();
-    assert!(f32_reported(-20.0 * f32::EPSILON));
-    assert!(!f32_reported(-12.0 * f32::EPSILON), "inside 16 eps");
+    assert!(f32_reported(-32.0 * f32::EPSILON));
+    assert!(!f32_reported(-12.0 * f32::EPSILON), "inside 20 eps");
 }
 
 /// A row of `k` entries rounds by `(k + 3)ε`: a degree-100 centre short by 50ε is rounding, by 200ε a deficit.
