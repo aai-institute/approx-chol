@@ -1,29 +1,223 @@
 #![cfg(feature = "serde")]
+//! Frozen payloads from earlier builds; `serde.rs` writes and reads with one build, so an encoding shift is invisible to it and visible here.
 
-use approx_chol_next::input::Csr;
-use approx_chol_next::{factorize, BlockFactor, Config, ScalingPolicy, Sgdd};
+use std::collections::BTreeSet;
+
+use approx_chol_next::input::{BipartiteGram, Csr, FactorWidth1, Weights};
+use approx_chol_next::{
+    factorize, BlockFactor, CliqueRule, Config, InnerParallelism, Multiplicity, ScalingPolicy,
+    Sgdd, SplitCount,
+};
 use rstest::rstest;
 use serde::de::value::{Error, SeqDeserializer};
 use serde::Deserialize;
 
-/// The leading field this build writes.
+/// The leading field this build writes; a bump points the reader at new fixture files.
 const FORMAT_VERSION: u32 = 0x4143_0006;
 
-/// Strictly dominant, so it reduces to one grounded block.
-fn grounded_block() -> BlockFactor {
-    let (row_ptrs, columns) = ([0u32, 2, 5, 7], [0u32, 1, 0, 1, 2, 1, 2]);
-    let values = [2.0, -1.0, -1.0, 3.0, -1.0, -1.0, 2.0];
-    let csr = Csr::new(3, &row_ptrs, &columns, &values).expect("valid csr");
-    let sgdd: Sgdd = Sgdd::from_csr(csr, ScalingPolicy::default()).expect("reduces");
-    let mut blocks = factorize(&sgdd, &Config::default()).into_blocks();
-    blocks.pop().expect("one block")
+#[derive(Clone, Copy, Debug)]
+enum Fixture {
+    Grounded,
+    Floating,
+    Cover,
+    SampledAc2,
+}
+
+const FIXTURES: [Fixture; 4] = [
+    Fixture::Grounded,
+    Fixture::Floating,
+    Fixture::Cover,
+    Fixture::SampledAc2,
+];
+
+impl Fixture {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Grounded => "grounded",
+            Self::Floating => "floating",
+            Self::Cover => "cover",
+            Self::SampledAc2 => "sampled_ac2",
+        }
+    }
+
+    /// The matrix of a fixture factored exactly; a sampled factor only preconditions, so it has none to meet.
+    fn exact_matrix(self) -> Option<&'static [&'static [f64]]> {
+        match self {
+            // Strictly dominant, so it reduces to a grounded block.
+            Self::Grounded => Some(&[&[2.0, -1.0, 0.0], &[-1.0, 3.0, -1.0], &[0.0, -1.0, 2.0]]),
+            // Two interleaved floating components, so each block's vertices skip the other's.
+            Self::Floating => Some(&[
+                &[1.0, 0.0, -1.0, 0.0],
+                &[0.0, 1.0, 0.0, -1.0],
+                &[-1.0, 0.0, 1.0, 0.0],
+                &[0.0, -1.0, 0.0, 1.0],
+            ]),
+            // A triangle with one positive edge: frustrated, so it factors on the double cover.
+            Self::Cover => Some(&[&[2.0, -1.0, 1.0], &[-1.0, 2.0, -1.0], &[1.0, -1.0, 2.0]]),
+            Self::SampledAc2 => None,
+        }
+    }
+
+    fn sgdd(self) -> Sgdd {
+        let Some(matrix) = self.exact_matrix() else {
+            return sampled_gram();
+        };
+        let (mut row_ptrs, mut columns, mut values) = (vec![0u32], Vec::new(), Vec::new());
+        for row in matrix {
+            for (j, &value) in row.iter().enumerate().filter(|(_, &v)| v != 0.0) {
+                columns.push(j as u32);
+                values.push(value);
+            }
+            row_ptrs.push(columns.len() as u32);
+        }
+        let csr = Csr::new(matrix.len(), &row_ptrs, &columns, &values).expect("valid csr");
+        Sgdd::from_csr(csr, ScalingPolicy::default()).expect("reduces")
+    }
+
+    fn config(self) -> Config {
+        let ac2 = Multiplicity::Split(SplitCount::new(2).expect("k = 2"));
+        match self {
+            Self::SampledAc2 => Config {
+                complement: CliqueRule::Sampled(ac2),
+                approximate: ac2,
+                dense_up_to: 0,
+                ..Config::default()
+            },
+            _ => Config::default(),
+        }
+    }
+
+    /// What the payload's `Debug` must show, so a fixture cannot quietly stop covering its kind.
+    fn covers(self) -> &'static [&'static str] {
+        match self {
+            Self::Grounded => &["grounded: true"],
+            Self::Floating => &["sheets: One, grounded: false"],
+            Self::Cover => &["sheets: Two"],
+            Self::SampledAc2 => &["elimination: Some", "Approximate("],
+        }
+    }
+
+    /// The one place a fixture path is spelled, so the reader and the regenerator agree on the version.
+    fn path(self) -> String {
+        format!(
+            "{}/tests/fixtures/{}_{FORMAT_VERSION:#010x}.postcard",
+            env!("CARGO_MANIFEST_DIR"),
+            self.name()
+        )
+    }
+
+    fn blocks(self) -> Vec<BlockFactor> {
+        factorize(&self.sgdd(), &self.config()).into_blocks()
+    }
+}
+
+/// Small enough for AC2 to keep a few eliminations, large enough that its samples differ from AC's.
+fn sampled_gram() -> Sgdd {
+    let (left, right, per_row) = (10u32, 6u32, 3u32);
+    let (rows, cols): (Vec<u32>, Vec<u32>) = (0..left * per_row)
+        .map(|k| (k / per_row, (k * 5 + k / per_row) % right))
+        .unzip();
+    let gram = BipartiteGram::new(
+        FactorWidth1::new(left as usize, &rows, None).expect("valid rows"),
+        FactorWidth1::new(right as usize, &cols, None).expect("valid columns"),
+        Weights::unit(),
+    )
+    .expect("valid gram");
+    Sgdd::from_bipartite_gram(gram, ScalingPolicy::default()).expect("reduces")
+}
+
+/// Zero-sum over every fixture's floating component, so each has an exact solution.
+fn rhs(n: usize) -> Vec<f64> {
+    (0..n).map(|i| [1.0, 2.0, -1.0, -2.0][i % 4]).collect()
+}
+
+fn solve(blocks: &[BlockFactor], b: &[f64]) -> Vec<f64> {
+    let mut x = vec![0.0; b.len()];
+    for block in blocks {
+        let vertices = block.vertices();
+        let mut local: Vec<f64> = vertices.iter().map(|&v| b[v as usize]).collect();
+        let mut scratch = vec![0.0; block.scratch_len()];
+        (block.solve_local(&mut local, &mut scratch, InnerParallelism::Forbid))
+            .expect("buffers fit");
+        vertices
+            .iter()
+            .zip(local)
+            .for_each(|(&v, xv)| x[v as usize] = xv);
+    }
+    x
+}
+
+fn relative_residual(matrix: &[&[f64]], x: &[f64], b: &[f64]) -> f64 {
+    let norm = |v: &mut dyn Iterator<Item = f64>| v.map(|e| e * e).sum::<f64>().sqrt();
+    let mut error = matrix.iter().zip(b).map(|(row, bi)| {
+        let ax: f64 = row.iter().zip(x).map(|(a, xj)| a * xj).sum();
+        ax - bi
+    });
+    norm(&mut error) / norm(&mut b.iter().copied())
+}
+
+/// Adding a fixture means adding a case below; without this its file is written but never read back.
+#[test]
+fn every_fixture_has_a_case() {
+    assert_eq!(FIXTURES.len(), 4, "one rstest case per fixture");
+    let suffix = format!("_{FORMAT_VERSION:#010x}.postcard");
+    let directory = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+    let committed: BTreeSet<String> = std::fs::read_dir(directory)
+        .expect("a fixtures directory")
+        .map(|entry| entry.expect("a readable entry").file_name())
+        .filter_map(|name| Some(name.to_str()?.strip_suffix(&suffix)?.to_owned()))
+        .collect();
+    let named: BTreeSet<String> = FIXTURES.iter().map(|f| f.name().to_owned()).collect();
+    assert_eq!(
+        committed, named,
+        "every committed payload of this version is a fixture"
+    );
+}
+
+#[rstest]
+#[case::grounded(Fixture::Grounded)]
+#[case::floating(Fixture::Floating)]
+#[case::cover(Fixture::Cover)]
+#[case::sampled_ac2(Fixture::SampledAc2)]
+fn a_committed_payload_decodes_and_still_solves(#[case] fixture: Fixture) {
+    let committed = std::fs::read(fixture.path())
+        .expect("no committed payload for this version; regenerate if the version moved");
+    let restored: Vec<BlockFactor> =
+        postcard::from_bytes(&committed).expect("committed payload must decode");
+    assert_eq!(
+        postcard::to_stdvec(&restored).expect("serialize"),
+        committed
+    );
+    let shown = format!("{restored:?}");
+    for marker in fixture.covers() {
+        assert!(shown.contains(marker), "{fixture:?} lost {marker:?}");
+    }
+
+    let sgdd = fixture.sgdd();
+    let b = rhs(sgdd.n());
+    let x = solve(&restored, &b);
+    if let Some(matrix) = fixture.exact_matrix() {
+        let residual = relative_residual(matrix, &x, &b);
+        assert!(residual < 1e-12, "relative residual {residual:e}");
+    }
+
+    // The residual alone is met by any valid factor, not only the one that wrote these bytes.
+    let expected = solve(&factorize(&sgdd, &fixture.config()).into_blocks(), &b);
+    assert!(
+        x.iter()
+            .zip(&expected)
+            .all(|(got, want)| (got - want).abs() < 1e-12),
+        "the committed payload solves differently from this build: {x:?} against {expected:?}"
+    );
 }
 
 #[test]
 fn a_payload_declares_the_format_version_it_was_written_with() {
-    let bytes = postcard::to_stdvec(&grounded_block()).expect("serialize");
-    let (declared, _) = postcard::take_from_bytes::<u32>(&bytes).expect("a leading version");
-    assert_eq!(declared, FORMAT_VERSION);
+    for block in Fixture::Grounded.blocks() {
+        let bytes = postcard::to_stdvec(&block).expect("serialize");
+        let (declared, _) = postcard::take_from_bytes::<u32>(&bytes).expect("a leading version");
+        assert_eq!(declared, FORMAT_VERSION);
+    }
 }
 
 #[rstest]
@@ -31,7 +225,8 @@ fn a_payload_declares_the_format_version_it_was_written_with() {
 #[case::from_a_future_release(FORMAT_VERSION + 1)]
 #[case::zero(0)]
 fn a_payload_of_another_format_version_is_rejected_by_version(#[case] declared: u32) {
-    let bytes = postcard::to_stdvec(&grounded_block()).expect("serialize");
+    let block = Fixture::Grounded.blocks().pop().expect("one block");
+    let bytes = postcard::to_stdvec(&block).expect("serialize");
     let (_, body) = postcard::take_from_bytes::<u32>(&bytes).expect("a leading version");
     let mut payload = postcard::to_stdvec(&declared).expect("serialize the version");
     payload.extend_from_slice(body);
@@ -48,5 +243,22 @@ fn a_payload_of_another_format_version_is_rejected_by_version(#[case] declared: 
     for version in [declared, FORMAT_VERSION] {
         let named = format!("format version {version:#010x}");
         assert!(error.contains(&named), "expected {named:?}, got: {error}");
+    }
+}
+
+/// `cargo test -p approx-chol-next --features serde --test wire_format -- --ignored`, after a version bump.
+#[test]
+#[ignore = "writes fixtures; run deliberately after a format version bump"]
+fn regenerate_wire_format_fixtures() {
+    for fixture in FIXTURES {
+        let path = fixture.path();
+        // Rewriting a committed payload with today's encoder is how this test comes to agree with the drift it exists to catch.
+        assert!(
+            !std::path::Path::new(&path).exists(),
+            "{path} already exists; delete it first if you really mean to unfreeze it"
+        );
+        let bytes = postcard::to_stdvec(&fixture.blocks()).expect("serialize the fixture");
+        std::fs::write(&path, bytes).expect("write the fixture");
+        println!("wrote {path}");
     }
 }
