@@ -3,10 +3,12 @@ macro_rules! cases {
     ($(#[$meta:meta])* fn $name:ident($($params:tt)*) $body:block) => {
         $crate::cases::cases!(@param [$(#[$meta])* fn $name] [] [$($params)*] $body);
     };
-    (@param $head:tt $done:tt [$arg:ident in $list:ident $(($subset:ident))? $(, $($rest:tt)*)?] $body:block) => {
+    (@param $head:tt $done:tt [$arg:ident in $list:ident $(($subset:ident))? $(, $($rest:tt)*)?]
+        $body:block) => {
         $crate::cases::cases!(@list $list [$($subset)?] [$arg $head $done [$($($rest)*)?] $body]);
     };
-    (@param $head:tt [$($done:tt)*] [#[$attr:meta] $arg:ident: $ty:ty $(, $($rest:tt)*)?] $body:block) => {
+    (@param $head:tt [$($done:tt)*] [#[$attr:meta] $arg:ident: $ty:ty $(, $($rest:tt)*)?]
+        $body:block) => {
         $crate::cases::cases!(@param $head [$($done)* #[$attr] $arg: $ty,] [$($($rest)*)?] $body);
     };
     (@param [$(#[$meta:meta])* fn $name:ident] [$($done:tt)*] [] $body:block) => {
@@ -15,34 +17,61 @@ macro_rules! cases {
         fn $name($($done)*) $body
     };
     (@values $ty:tt [$($values:tt)*] [$arg:ident $head:tt [$($done:tt)*] $rest:tt $body:block]) => {
-        $crate::cases::cases!(@param $head [$($done)* #[values($($values)*)] $arg: $ty,] $rest $body);
+        $crate::cases::cases!(@param $head [$($done)* #[values($($values)*)] $arg: $ty,]
+            $rest $body);
     };
 
     (@list entries [$subset:ident] $k:tt) => {
-        $crate::cases::cases!(@keep $subset [] [
-            Csr UpperCsr Gram BipartiteGram Laplacian GroundedLaplacian SignedGraph
-        ] [@named Entry $k]);
+        $crate::cases::cases!(@entries $subset [@named Entry $k]);
     };
     (@list types [$subset:ident] $k:tt) => {
         $crate::cases::cases!(@keep $subset [] [F32U32 F32U64 F64U32 F64U64] [@named Types $k]);
     };
-    (@list sparse [] $k:tt) => {
-        $crate::cases::cases!(@sparse [@named Sparse $k]);
+    (@list routes [$subset:ident] $k:tt) => {
+        $crate::cases::cases!(@entries $subset [@routes modes [] $k]);
     };
-    (@list modes [] $k:tt) => {
-        $crate::cases::cases!(@sparse [@modes $k]);
+    (@list sparse_routes [$subset:ident] $k:tt) => {
+        $crate::cases::cases!(@entries $subset [@routes sparse [] $k]);
     };
-    (@sparse [@$step:ident $($then:tt)*]) => {
-        $crate::cases::cases!(@$step [
-            AcExactComplement AcComplementAc AcComplementAc2
-            Ac2ExactComplement Ac2ComplementAc Ac2ComplementAc2
-        ] $($then)*);
+    (@entries $subset:ident $then:tt) => {
+        $crate::cases::cases!(@keep $subset [] [
+            Csr UpperCsr Gram BipartiteGram Laplacian GroundedLaplacian SignedGraph
+        ] $then);
     };
     (@named [$($member:ident)*] $ty:ident $k:tt) => {
         $crate::cases::cases!(@values $ty [$($ty::$member),*] $k);
     };
-    (@modes [$($sparse:ident)*] $k:tt) => {
-        $crate::cases::cases!(@values Mode [Mode::Dense, $(Mode::Sparse(Sparse::$sparse)),*] $k);
+
+    // Only a bipartite block reads the complement rule, and only a bipartite Gram builds one.
+    (@routes [BipartiteGram $($rest:ident)*] $kind:ident $acc:tt $k:tt) => {
+        $crate::cases::cases!(@sparse [@route $kind BipartiteGram [$($rest)*] $acc $k]);
+    };
+    (@routes [$entry:ident $($rest:ident)*] $kind:ident $acc:tt $k:tt) => {
+        $crate::cases::cases!(@route $kind $entry [$($rest)*] $acc $k
+            [AcExactComplement Ac2ExactComplement]);
+    };
+    (@routes [] modes [$($acc:tt)*] $k:tt) => {
+        $crate::cases::cases!(@values (Entry, Mode) [$($acc)*] $k);
+    };
+    (@routes [] sparse [$($acc:tt)*] $k:tt) => {
+        $crate::cases::cases!(@values (Entry, Sparse) [$($acc)*] $k);
+    };
+    (@route modes $entry:ident $rest:tt [$($acc:tt)*] $k:tt [$($sparse:ident)*]) => {
+        $crate::cases::cases!(@routes $rest modes [$($acc)*
+            (Entry::$entry, Mode::Dense),
+            $((Entry::$entry, Mode::Sparse(Sparse::$sparse)),)*
+        ] $k);
+    };
+    (@route sparse $entry:ident $rest:tt [$($acc:tt)*] $k:tt [$($sparse:ident)*]) => {
+        $crate::cases::cases!(@routes $rest sparse [$($acc)*
+            $((Entry::$entry, Sparse::$sparse),)*
+        ] $k);
+    };
+    (@sparse [@$step:ident $($then:tt)*]) => {
+        $crate::cases::cases!(@$step $($then)* [
+            AcExactComplement AcComplementAc AcComplementAc2
+            Ac2ExactComplement Ac2ComplementAc Ac2ComplementAc2
+        ]);
     };
 
     (@keep $subset:ident [$($kept:ident)*] [$member:ident $($rest:ident)*] $then:tt) => {

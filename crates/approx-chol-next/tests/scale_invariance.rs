@@ -70,20 +70,20 @@ fn assert_invariant_under_scaling(
 
 cases! {
     fn factorization_is_invariant_under_uniform_scaling(
-        entry in entries(non_bipartite),
+        route in routes(non_bipartite),
         types in types(all),
-        mode in modes,
     ) {
+        let (entry, mode) = route;
         assert_invariant_under_scaling(entry, complete, types, mode);
     }
 }
 
 cases! {
     fn bipartite_factorization_is_invariant_under_uniform_scaling(
-        entry in entries(all),
+        route in routes(all),
         types in types(all),
-        mode in modes,
     ) {
+        let (entry, mode) = route;
         assert_invariant_under_scaling(entry, complete_bipartite, types, mode);
     }
 }

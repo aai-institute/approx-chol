@@ -118,10 +118,10 @@ fn n(factor: &entry::Factored) -> usize {
 
 cases! {
     fn factor_spectrum_on_the_range_is_bounded(
-        entry in entries(all),
+        route in routes(all),
         types in types(all),
-        mode in modes,
     ) {
+        let (entry, mode) = route;
         let graphs = stated_by(entry, prop_oneof![balanced(), frustrated(balanced())]);
         check(graphs, |graph| {
             let violation = spectrum_violation(entry, &graph, types, mode);
@@ -166,10 +166,10 @@ cases! {
     #[case::tied_eight_vertices(tied_eight_vertices())]
     fn a_sampled_complement_past_twice_its_clique_keeps_the_spectrum_bounded(
         #[case] graph: Graph,
-        entry in entries(all),
+        route in routes(all),
         types in types(all),
-        mode in modes,
     ) {
+        let (entry, mode) = route;
         assert_eq!(spectrum_violation(entry, &graph, types, mode), None);
     }
 }
@@ -197,10 +197,10 @@ fn frustrated_heavy_k5() -> Graph {
 
 cases! {
     fn a_frustrated_cover_keeps_the_spectrum_bounded(
-        entry in entries(frustrated),
+        route in routes(frustrated),
         types in types(all),
-        mode in modes,
     ) {
+        let (entry, mode) = route;
         let violation = spectrum_violation(entry, &frustrated_heavy_k5(), types, mode);
         assert_eq!(violation, None);
     }
@@ -208,16 +208,12 @@ cases! {
 
 cases! {
     /// A balanced graph without surplus floats on every entry point, signed or not.
-    fn laplacian_factor_has_input_dimension_and_floats(
-        entry in entries(all),
-        types in types(all),
-        mode in modes,
-    ) {
+    fn laplacian_factor_has_input_dimension_and_floats(entry in entries(all), types in types(all)) {
         check(stated_by(entry, laplacian()), |graph| {
             let reduced = entry.reduce(&graph, types);
             let floats = reduced.floats();
             prop_assert!(floats.iter().all(|&f| f), "{types:?}: {floats:?}");
-            prop_assert_eq!(n(&reduced.factorize(&mode.config())), graph.n);
+            prop_assert_eq!(n(&reduced.factorize(&Config::default())), graph.n);
             Ok(())
         });
     }
@@ -225,10 +221,10 @@ cases! {
 
 cases! {
     fn sddm_factor_is_grounded_and_solves_finitely(
-        entry in entries(grounded),
+        route in routes(grounded),
         types in types(all),
-        mode in modes,
     ) {
+        let (entry, mode) = route;
         let config = mode.config();
         check(stated_by(entry, sddm()), |graph| {
             let rhs: Vec<f64> = (0..graph.n).map(|i| (i as f64 * 1.7).sin()).collect();
@@ -249,7 +245,8 @@ cases! {
 
 cases! {
     /// Two reductions and factorizations of one input at one seed agree bit for bit.
-    fn deterministic_with_fixed_seed(entry in entries(all), types in types(all), mode in modes) {
+    fn deterministic_with_fixed_seed(route in routes(all), types in types(all)) {
+        let (entry, mode) = route;
         let graphs = stated_by(entry, balanced());
         let config = Config {
             seed: 42,

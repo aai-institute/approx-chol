@@ -70,13 +70,12 @@ cases! {
         #[case] b: [f64; 3],
         entry in entries(grounded),
         types in types(all),
-        mode in modes,
         #[values(2, 3, 7)] k: u32,
     ) {
         let graph = diagonal_sddm();
         let reduced = entry.reduce(&graph, types);
         assert_eq!(reduced.floats(), [false; 3], "{types:?}");
-        let config = splitting(mode.config(), k);
+        let config = splitting(Sparse::Ac2ExactComplement.config(), k);
         let factor = reduced.factorize(&config);
         let want: Vec<f64> = b.iter().zip(&graph.ground).map(|(b, d)| b / d).collect();
         let label = format!("{types:?} {config:?}");
@@ -118,13 +117,10 @@ fn assert_buffers_checked<T: Real, I: Index>(factor: &Factor<T, I>) {
 }
 
 cases! {
-    fn every_solve_checks_its_buffer_lengths(
-        entry in entries(grounded),
-        types in types(all),
-        mode in modes,
-    ) {
+    fn every_solve_checks_its_buffer_lengths(entry in entries(grounded), types in types(all)) {
         let reduced = entry.reduce(&diagonal_sddm(), types);
-        by_type!(&reduced.factorize(&mode.config()).factor, factor => assert_buffers_checked(factor));
+        let factor = reduced.factorize(&Config::default());
+        by_type!(&factor.factor, factor => assert_buffers_checked(factor));
     }
 }
 
@@ -169,10 +165,10 @@ fn assert_dirty_scratch_matches_the_solve(label: &str, factor: &Factored) {
 
 cases! {
     fn dirty_scratch_does_not_change_a_grounded_solution(
-        entry in entries(grounded),
+        route in routes(grounded),
         types in types(all),
-        mode in modes,
     ) {
+        let (entry, mode) = route;
         let graph = Graph {
             ground: vec![1.0, 1.0],
             ..Graph::new(2, vec![Edge::negative(0, 1, 1.0)])
@@ -189,10 +185,10 @@ cases! {
 
 cases! {
     fn dirty_scratch_does_not_change_a_frustrated_solution(
-        entry in entries(frustrated),
+        route in routes(frustrated),
         types in types(all),
-        mode in modes,
     ) {
+        let (entry, mode) = route;
         let positive = |a, b| Edge {
             positive: true,
             ..Edge::negative(a, b, 1.0)
@@ -204,17 +200,18 @@ cases! {
             uses_scratch(&factor),
             "frustrated: the solve goes through scratch"
         );
-        assert_dirty_scratch_matches_the_solve(&format!("frustrated {types:?} {config:?}"), &factor);
+        let label = format!("frustrated {types:?} {config:?}");
+        assert_dirty_scratch_matches_the_solve(&label, &factor);
     }
 }
 
 cases! {
     /// Floating blocks solve in place; this case exercises the gather and scatter.
     fn dirty_scratch_does_not_change_an_interleaved_components_solution(
-        entry in entries(all),
+        route in routes(all),
         types in types(all),
-        mode in modes,
     ) {
+        let (entry, mode) = route;
         let edges = vec![Edge::negative(0, 2, 1.0), Edge::negative(1, 3, 1.0)];
         let graph = Graph::new(4, edges);
         let config = mode.config();
@@ -247,22 +244,22 @@ fn assert_scaled_path_solves(entry: Entry, types: Types, mode: Mode, exponent: i
 cases! {
     /// The two scalars bottom out at different exponents, so each gets the range its solution is still representable in.
     fn a_scaled_f64_laplacian_solves_wherever_its_solution_is_representable(
-        entry in entries(all),
+        route in routes(all),
         types in types(f64),
-        mode in modes,
         #[values(0, -5, -15, -100, -250)] exponent: i32,
     ) {
+        let (entry, mode) = route;
         assert_scaled_path_solves(entry, types, mode, exponent);
     }
 }
 
 cases! {
     fn a_scaled_f32_laplacian_solves_wherever_its_solution_is_representable(
-        entry in entries(all),
+        route in routes(all),
         types in types(f32),
-        mode in modes,
         #[values(0, -3, -10, -25)] exponent: i32,
     ) {
+        let (entry, mode) = route;
         assert_scaled_path_solves(entry, types, mode, exponent);
     }
 }
@@ -271,7 +268,6 @@ cases! {
     fn many_zero_singletons_factor_as_trivial_components(
         entry in entries(all),
         types in types(all),
-        mode in modes,
     ) {
         let graph = Graph::new(128, Vec::new());
         let reduced = entry.reduce(&graph, types);
@@ -279,7 +275,7 @@ cases! {
             reduced.floats().is_empty(),
             "{types:?}: a zero vertex is no block"
         );
-        let factor = reduced.factorize(&mode.config());
+        let factor = reduced.factorize(&Config::default());
         assert_eq!(by_type!(&factor.factor, f => f.n()), 128);
         assert_eq!(bits(&factor.solve(&[1.0; 128])), bits(&[0.0; 128]));
     }
@@ -287,10 +283,10 @@ cases! {
 
 cases! {
     fn mixed_grounded_and_floating_components_solve_independently(
-        entry in entries(grounded),
+        route in routes(grounded),
         types in types(all),
-        mode in modes,
     ) {
+        let (entry, mode) = route;
         let graph = Graph {
             ground: vec![2.0, 0.0, 0.0],
             ..Graph::new(3, vec![Edge::negative(1, 2, 1.0)])
@@ -313,10 +309,10 @@ cases! {
     fn interleaved_components_solve_in_input_order(
         #[case] rhs: [f64; 4],
         #[case] want: [f64; 4],
-        entry in entries(all),
+        route in routes(all),
         types in types(all),
-        mode in modes,
     ) {
+        let (entry, mode) = route;
         let edges = vec![Edge::negative(0, 2, 1.0), Edge::negative(1, 3, 1.0)];
         let graph = Graph::new(4, edges);
         let config = mode.config();
@@ -327,25 +323,20 @@ cases! {
 }
 
 cases! {
-    fn a_zero_singleton_has_a_defined_solve(
-        entry in entries(all),
-        types in types(all),
-        mode in modes,
-    ) {
+    fn a_zero_singleton_has_a_defined_solve(entry in entries(all), types in types(all)) {
         let graph = Graph::new(1, Vec::new());
-        let config = mode.config();
-        let x = entry.reduce(&graph, types).factorize(&config).solve(&[7.0]);
-        let label = format!("zero singleton {types:?} {config:?}");
+        let x = entry.reduce(&graph, types).factorize(&Config::default()).solve(&[7.0]);
+        let label = format!("zero singleton {types:?}");
         assert_close(&label, &x, &[0.0], types.epsilon());
     }
 }
 
 cases! {
     fn a_positive_singleton_has_a_defined_solve(
-        entry in entries(lone_ground),
+        route in routes(lone_ground),
         types in types(all),
-        mode in modes,
     ) {
+        let (entry, mode) = route;
         let graph = Graph {
             ground: vec![2.0],
             ..Graph::new(1, Vec::new())
@@ -358,12 +349,8 @@ cases! {
 }
 
 cases! {
-    fn an_empty_system_solves_to_an_empty_vector(
-        entry in entries(all),
-        types in types(all),
-        mode in modes,
-    ) {
+    fn an_empty_system_solves_to_an_empty_vector(entry in entries(all), types in types(all)) {
         let reduced = entry.reduce(&Graph::new(0, Vec::new()), types);
-        assert!(reduced.factorize(&mode.config()).solve(&[]).is_empty());
+        assert!(reduced.factorize(&Config::default()).solve(&[]).is_empty());
     }
 }

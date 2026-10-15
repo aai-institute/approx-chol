@@ -133,20 +133,20 @@ fn assert_a_constant_leaves_the_solution(entry: Entry, types: Types, sparse: Spa
 cases! {
     /// A floating block solves `b` with its null component projected out, so adding a constant to `b` must leave `x`; only the solve's own sums can lose it.
     fn a_constant_added_to_a_floating_rhs_leaves_the_solution(
-        entry in entries(all),
+        route in sparse_routes(all),
         types in types(f64),
-        sparse in sparse,
     ) {
+        let (entry, sparse) = route;
         assert_a_constant_leaves_the_solution(entry, types, sparse, 2f64.powi(30));
     }
 }
 
 cases! {
     fn a_constant_added_to_a_floating_f32_rhs_leaves_the_solution(
-        entry in entries(all),
+        route in sparse_routes(all),
         types in types(f32),
-        sparse in sparse,
     ) {
+        let (entry, sparse) = route;
         assert_a_constant_leaves_the_solution(entry, types, sparse, 2f64.powi(12));
     }
 }
