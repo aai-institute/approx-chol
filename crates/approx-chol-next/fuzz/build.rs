@@ -246,8 +246,8 @@ fn bipartite(slopes: bool) -> View<f64> {
 fn build(dense_up_to: u8) -> Build {
     Build {
         seed: 0,
-        exact_complement: false,
-        copies: 1,
+        complement: Some(1),
+        approximate: 1,
         dense_up_to,
     }
 }
@@ -262,14 +262,15 @@ fn dense() -> Build {
 
 fn split(copies: u8) -> Build {
     Build {
-        copies,
+        complement: Some(copies),
+        approximate: copies,
         ..approximate()
     }
 }
 
 fn exact_complement() -> Build {
     Build {
-        exact_complement: true,
+        complement: None,
         ..approximate()
     }
 }

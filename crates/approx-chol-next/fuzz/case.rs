@@ -88,27 +88,24 @@ pub enum Weighting<T> {
     SqrtOf(Vec<T>),
 }
 
-/// `Config` without serde; `copies` below two samples once, and a `u8` caps AC2's fill.
+/// `Config` without serde, field for field: `None` is `Exact`, under two copies sample once, a `u8` caps AC2.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Build {
     pub seed: u64,
-    pub exact_complement: bool,
-    pub copies: u8,
+    pub complement: Option<u8>,
+    pub approximate: u8,
     pub dense_up_to: u8,
 }
 
 impl Build {
     pub fn config(&self) -> Config {
         let copies =
-            SplitCount::new(self.copies.into()).map_or(Multiplicity::Single, Multiplicity::Split);
-        let complement = match self.exact_complement {
-            true => CliqueRule::Exact,
-            false => CliqueRule::Sampled(copies),
-        };
+            |k: u8| SplitCount::new(k.into()).map_or(Multiplicity::Single, Multiplicity::Split);
         Config {
             seed: self.seed,
-            complement,
-            approximate: copies,
+            complement: (self.complement)
+                .map_or(CliqueRule::Exact, |k| CliqueRule::Sampled(copies(k))),
+            approximate: copies(self.approximate),
             dense_up_to: self.dense_up_to.into(),
         }
     }
