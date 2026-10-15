@@ -1,3 +1,5 @@
+#[path = "common/dense.rs"]
+mod dense;
 #[path = "common/entry.rs"]
 mod entry;
 #[path = "common/floats.rs"]
@@ -14,16 +16,19 @@ mod range;
 mod residual;
 #[path = "common/runner.rs"]
 mod runner;
+#[path = "common/sparse.rs"]
+mod sparse;
 
 use approx_chol_next::Config;
+use dense::dense;
 use entry::{by_type, Entry, Types};
 use graph::{Edge, Graph};
 use interleaved::interleaved_components;
-use modes::{exact, modes_for};
+use modes::Mode;
 use proptest::prelude::*;
-use proptest::test_runner::TestCaseError;
 use rstest::rstest;
-use runner::check;
+use runner::{check, stated_by};
+use sparse::Sparse;
 
 /// `x = 0` scores exactly `1`: the weakest bound that demands beating no answer; measured max 0.45.
 const RESIDUAL_LIMIT: f64 = 1.0;
@@ -64,10 +69,6 @@ fn sddm() -> impl Strategy<Value = Graph> {
     })
 }
 
-fn not_stated() -> TestCaseError {
-    TestCaseError::reject("the entry point cannot state this graph")
-}
-
 fn norm(values: &[f64]) -> f64 {
     values.iter().map(|value| value * value).sum::<f64>().sqrt()
 }
@@ -77,110 +78,159 @@ fn n(factor: &entry::Factored) -> usize {
 }
 
 #[rstest]
-#[case::csr(Entry::Csr)]
-#[case::upper_csr(Entry::UpperCsr)]
-#[case::gram(Entry::Gram)]
-#[case::bipartite_gram(Entry::BipartiteGram)]
-#[case::laplacian(Entry::Laplacian)]
-#[case::grounded_laplacian(Entry::GroundedLaplacian)]
-#[case::signed_graph(Entry::SignedGraph)]
-fn residual_is_bounded(#[case] entry: Entry) {
-    let graphs = prop_oneof![3 => laplacian(), 1 => sddm()];
+fn residual_is_bounded(
+    #[values(
+        Entry::Csr,
+        Entry::UpperCsr,
+        Entry::Gram,
+        Entry::BipartiteGram,
+        Entry::Laplacian,
+        Entry::GroundedLaplacian,
+        Entry::SignedGraph
+    )]
+    entry: Entry,
+    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
+    #[values(
+        Mode::Dense,
+        Mode::Sparse(Sparse::AcExactComplement),
+        Mode::Sparse(Sparse::AcComplementAc),
+        Mode::Sparse(Sparse::AcComplementAc2),
+        Mode::Sparse(Sparse::Ac2ExactComplement),
+        Mode::Sparse(Sparse::Ac2ComplementAc),
+        Mode::Sparse(Sparse::Ac2ComplementAc2)
+    )]
+    mode: Mode,
+) {
+    let graphs = stated_by(entry, prop_oneof![3 => laplacian(), 1 => sddm()]);
     let rhs = prop::collection::vec(-10.0f64..10.0, 8);
+    let config = mode.config();
     check((graphs, rhs), |(graph, rhs)| {
         let rhs = graph.project_to_range(&rhs[..graph.n]);
         // `relative_residual` divides by `‖b‖`.
         prop_assume!(norm(&rhs) > 1e-9);
-        for types in Types::ALL {
-            let reduced = entry.reduce(&graph, types).ok_or_else(not_stated)?;
-            for config in modes_for(&graph) {
-                let x = reduced.factorize(&config).solve(&rhs);
-                // A non-finite solve gives a non-finite ratio, so this subsumes a finiteness check.
-                let relative = graph.relative_residual(&x, &rhs);
-                prop_assert!(
-                    relative < RESIDUAL_LIMIT,
-                    "{types:?} {config:?}: relative residual {relative:e}"
-                );
-            }
-        }
+        let reduced = entry.reduce(&graph, types);
+        let x = reduced.factorize(&config).solve(&rhs);
+        // A non-finite solve gives a non-finite ratio, so this subsumes a finiteness check.
+        let relative = graph.relative_residual(&x, &rhs);
+        prop_assert!(
+            relative < RESIDUAL_LIMIT,
+            "{types:?} {config:?}: relative residual {relative:e}"
+        );
         Ok(())
     });
 }
 
 /// A balanced graph without surplus floats on every entry point, signed or not.
 #[rstest]
-#[case::csr(Entry::Csr)]
-#[case::upper_csr(Entry::UpperCsr)]
-#[case::gram(Entry::Gram)]
-#[case::bipartite_gram(Entry::BipartiteGram)]
-#[case::laplacian(Entry::Laplacian)]
-#[case::grounded_laplacian(Entry::GroundedLaplacian)]
-#[case::signed_graph(Entry::SignedGraph)]
-fn laplacian_factor_has_input_dimension_and_floats(#[case] entry: Entry) {
-    check(laplacian(), |graph| {
-        for types in Types::ALL {
-            let reduced = entry.reduce(&graph, types).ok_or_else(not_stated)?;
-            let floats = reduced.floats();
-            prop_assert!(floats.iter().all(|&f| f), "{types:?}: {floats:?}");
-            for config in modes_for(&graph) {
-                prop_assert_eq!(n(&reduced.factorize(&config)), graph.n);
-            }
-        }
+fn laplacian_factor_has_input_dimension_and_floats(
+    #[values(
+        Entry::Csr,
+        Entry::UpperCsr,
+        Entry::Gram,
+        Entry::BipartiteGram,
+        Entry::Laplacian,
+        Entry::GroundedLaplacian,
+        Entry::SignedGraph
+    )]
+    entry: Entry,
+    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
+    #[values(
+        Mode::Dense,
+        Mode::Sparse(Sparse::AcExactComplement),
+        Mode::Sparse(Sparse::AcComplementAc),
+        Mode::Sparse(Sparse::AcComplementAc2),
+        Mode::Sparse(Sparse::Ac2ExactComplement),
+        Mode::Sparse(Sparse::Ac2ComplementAc),
+        Mode::Sparse(Sparse::Ac2ComplementAc2)
+    )]
+    mode: Mode,
+) {
+    check(stated_by(entry, laplacian()), |graph| {
+        let reduced = entry.reduce(&graph, types);
+        let floats = reduced.floats();
+        prop_assert!(floats.iter().all(|&f| f), "{types:?}: {floats:?}");
+        prop_assert_eq!(n(&reduced.factorize(&mode.config())), graph.n);
         Ok(())
     });
 }
 
 #[rstest]
-#[case::csr(Entry::Csr)]
-#[case::upper_csr(Entry::UpperCsr)]
-#[case::gram(Entry::Gram)]
-#[case::bipartite_gram(Entry::BipartiteGram)]
-#[case::grounded_laplacian(Entry::GroundedLaplacian)]
-fn sddm_factor_is_grounded_and_solves_finitely(#[case] entry: Entry) {
-    check(sddm(), |graph| {
+fn sddm_factor_is_grounded_and_solves_finitely(
+    #[values(
+        Entry::Csr,
+        Entry::UpperCsr,
+        Entry::Gram,
+        Entry::BipartiteGram,
+        Entry::GroundedLaplacian
+    )]
+    entry: Entry,
+    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
+    #[values(
+        Mode::Dense,
+        Mode::Sparse(Sparse::AcExactComplement),
+        Mode::Sparse(Sparse::AcComplementAc),
+        Mode::Sparse(Sparse::AcComplementAc2),
+        Mode::Sparse(Sparse::Ac2ExactComplement),
+        Mode::Sparse(Sparse::Ac2ComplementAc),
+        Mode::Sparse(Sparse::Ac2ComplementAc2)
+    )]
+    mode: Mode,
+) {
+    let config = mode.config();
+    check(stated_by(entry, sddm()), |graph| {
         let rhs: Vec<f64> = (0..graph.n).map(|i| (i as f64 * 1.7).sin()).collect();
-        for types in Types::ALL {
-            let reduced = entry.reduce(&graph, types).ok_or_else(not_stated)?;
-            let floats = reduced.floats();
-            prop_assert!(floats.iter().all(|&f| !f), "{types:?}: {floats:?}");
-            for config in modes_for(&graph) {
-                let factor = reduced.factorize(&config);
-                prop_assert_eq!(n(&factor), graph.n);
-                let x = factor.solve(&rhs);
-                prop_assert!(
-                    x.iter().all(|x| x.is_finite()),
-                    "{types:?} {config:?}: {x:?}"
-                );
-            }
-        }
+        let reduced = entry.reduce(&graph, types);
+        let floats = reduced.floats();
+        prop_assert!(floats.iter().all(|&f| !f), "{types:?}: {floats:?}");
+        let factor = reduced.factorize(&config);
+        prop_assert_eq!(n(&factor), graph.n);
+        let x = factor.solve(&rhs);
+        prop_assert!(
+            x.iter().all(|x| x.is_finite()),
+            "{types:?} {config:?}: {x:?}"
+        );
         Ok(())
     });
 }
 
 /// Two reductions and factorizations of one input at one seed agree bit for bit.
 #[rstest]
-#[case::csr(Entry::Csr)]
-#[case::upper_csr(Entry::UpperCsr)]
-#[case::gram(Entry::Gram)]
-#[case::bipartite_gram(Entry::BipartiteGram)]
-#[case::laplacian(Entry::Laplacian)]
-#[case::grounded_laplacian(Entry::GroundedLaplacian)]
-#[case::signed_graph(Entry::SignedGraph)]
-fn deterministic_with_fixed_seed(#[case] entry: Entry) {
-    let graphs = prop_oneof![3 => laplacian(), 1 => sddm()];
+fn deterministic_with_fixed_seed(
+    #[values(
+        Entry::Csr,
+        Entry::UpperCsr,
+        Entry::Gram,
+        Entry::BipartiteGram,
+        Entry::Laplacian,
+        Entry::GroundedLaplacian,
+        Entry::SignedGraph
+    )]
+    entry: Entry,
+    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
+    #[values(
+        Mode::Dense,
+        Mode::Sparse(Sparse::AcExactComplement),
+        Mode::Sparse(Sparse::AcComplementAc),
+        Mode::Sparse(Sparse::AcComplementAc2),
+        Mode::Sparse(Sparse::Ac2ExactComplement),
+        Mode::Sparse(Sparse::Ac2ComplementAc),
+        Mode::Sparse(Sparse::Ac2ComplementAc2)
+    )]
+    mode: Mode,
+) {
+    let graphs = stated_by(entry, prop_oneof![3 => laplacian(), 1 => sddm()]);
+    let config = Config {
+        seed: 42,
+        ..mode.config()
+    };
     check(graphs, |graph| {
         let rhs: Vec<f64> = (0..graph.n).map(|i| (i as f64 * 1.7).sin()).collect();
-        for types in Types::ALL {
-            let first = entry.reduce(&graph, types).ok_or_else(not_stated)?;
-            let second = entry.reduce(&graph, types).expect("states it again");
-            for config in modes_for(&graph) {
-                let config = Config { seed: 42, ..config };
-                let x1 = first.factorize(&config).solve(&rhs);
-                let x2 = second.factorize(&config).solve(&rhs);
-                let bits = |x: &[f64]| x.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
-                prop_assert_eq!(bits(&x1), bits(&x2), "{:?} {:?}", types, config);
-            }
-        }
+        let first = entry.reduce(&graph, types);
+        let second = entry.reduce(&graph, types);
+        let x1 = first.factorize(&config).solve(&rhs);
+        let x2 = second.factorize(&config).solve(&rhs);
+        let bits = |x: &[f64]| x.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        prop_assert_eq!(bits(&x1), bits(&x2), "{:?} {:?}", types, config);
         Ok(())
     });
 }
@@ -202,25 +252,28 @@ fn one_grounded_component() -> impl Strategy<Value = Graph> {
 }
 
 #[rstest]
-#[case::csr(Entry::Csr)]
-#[case::upper_csr(Entry::UpperCsr)]
-#[case::gram(Entry::Gram)]
-#[case::bipartite_gram(Entry::BipartiteGram)]
-#[case::grounded_laplacian(Entry::GroundedLaplacian)]
-fn a_grounded_block_beside_floating_ones_solves_its_own_rows(#[case] entry: Entry) {
-    check(one_grounded_component(), |graph| {
+fn a_grounded_block_beside_floating_ones_solves_its_own_rows(
+    #[values(
+        Entry::Csr,
+        Entry::UpperCsr,
+        Entry::Gram,
+        Entry::BipartiteGram,
+        Entry::GroundedLaplacian
+    )]
+    entry: Entry,
+    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
+) {
+    check(stated_by(entry, one_grounded_component()), |graph| {
         let raw: Vec<f64> = (0..graph.n).map(|i| (i as f64 * 1.7).sin() * 3.0).collect();
         let rhs = graph.project_to_range(&raw);
-        for types in Types::ALL {
-            let reduced = entry.reduce(&graph, types).ok_or_else(not_stated)?;
-            let x = reduced.factorize(&exact()).solve(&rhs);
-            let residual = graph.relative_residual(&x, &rhs);
-            // Measured at most 3.4ε; a grounded block solved as floating misses by order one.
-            prop_assert!(
-                residual < 64.0 * types.epsilon(),
-                "{types:?}: grounded block solved as floating: residual {residual:e}"
-            );
-        }
+        let reduced = entry.reduce(&graph, types);
+        let x = reduced.factorize(&dense()).solve(&rhs);
+        let residual = graph.relative_residual(&x, &rhs);
+        // Measured at most 3.4ε; a grounded block solved as floating misses by order one.
+        prop_assert!(
+            residual < 64.0 * types.epsilon(),
+            "{types:?}: grounded block solved as floating: residual {residual:e}"
+        );
         Ok(())
     });
 }

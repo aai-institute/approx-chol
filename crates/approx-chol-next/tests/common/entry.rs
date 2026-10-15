@@ -6,7 +6,7 @@ use num_traits::NumCast;
 
 use crate::graph::Graph;
 
-/// The rewrite's input entry points; each reads the same [`Graph`] where it can state it.
+/// The rewrite's input entry points; each reads the same [`Graph`] where it [`states`](Entry::states) it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Entry {
     Csr,
@@ -28,8 +28,6 @@ pub enum Types {
 }
 
 impl Types {
-    pub const ALL: [Self; 4] = [Self::F32U32, Self::F32U64, Self::F64U32, Self::F64U64];
-
     pub fn epsilon(self) -> f64 {
         match self {
             Self::F32U32 | Self::F32U64 => f32::EPSILON.into(),
@@ -153,35 +151,48 @@ pub fn cast_all<S: NumCast + Copy, D: NumCast>(xs: &[S]) -> Vec<D> {
 }
 
 impl Entry {
-    /// `None` when this entry point cannot state `graph`.
-    pub fn reduce(self, graph: &Graph, types: Types) -> Option<Reduced> {
+    /// A Gram states a ground only beside a second vertex; no Laplacian view states a positive edge.
+    pub fn states(self, graph: &Graph) -> bool {
+        let signed = graph.edges.iter().any(|edge| edge.positive);
+        let lone_ground = graph.n < 2 && graph.is_grounded();
+        match self {
+            Entry::Csr | Entry::UpperCsr => true,
+            Entry::Gram => !lone_ground,
+            Entry::BipartiteGram => !lone_ground && bipartition(graph).is_some(),
+            Entry::Laplacian => !signed && !graph.is_grounded(),
+            Entry::GroundedLaplacian => !signed,
+            Entry::SignedGraph => !graph.is_grounded(),
+        }
+    }
+
+    pub fn reduce(self, graph: &Graph, types: Types) -> Reduced {
+        assert!(self.states(graph), "{self:?} cannot state {graph:?}");
         let (labels, n_left) = match self {
-            Entry::BipartiteGram => bipartition(graph)?,
+            Entry::BipartiteGram => bipartition(graph).expect("states a bipartite graph"),
             _ => (Labels((0..graph.n).collect()), 0),
         };
         let local = labels.graph(graph);
         let sgdd = match types {
-            Types::F32U32 => ByType::F32U32(self.reduce_as(&local, n_left)?),
-            Types::F32U64 => ByType::F32U64(self.reduce_as(&local, n_left)?),
-            Types::F64U32 => ByType::F64U32(self.reduce_as(&local, n_left)?),
-            Types::F64U64 => ByType::F64U64(self.reduce_as(&local, n_left)?),
+            Types::F32U32 => ByType::F32U32(self.reduce_as(&local, n_left)),
+            Types::F32U64 => ByType::F32U64(self.reduce_as(&local, n_left)),
+            Types::F64U32 => ByType::F64U32(self.reduce_as(&local, n_left)),
+            Types::F64U64 => ByType::F64U64(self.reduce_as(&local, n_left)),
         };
-        Some(Reduced { sgdd, labels })
+        Reduced { sgdd, labels }
     }
 
-    fn reduce_as<T: Real, I: Index>(self, graph: &Graph, n_left: usize) -> Option<Sgdd<T, I>> {
+    fn reduce_as<T: Real, I: Index>(self, graph: &Graph, n_left: usize) -> Sgdd<T, I> {
         let n = graph.n;
         let policy = ScalingPolicy::default();
         let rejected = |error: &dyn std::fmt::Debug| -> Sgdd<T, I> {
             panic!("{self:?} rejected {graph:?}: {error:?}")
         };
-        let laplacian = graph.edges.iter().all(|edge| !edge.positive);
         let (a, b): (Vec<I>, Vec<I>) = (graph.edges.iter())
             .map(|edge| (cast::<usize, I>(edge.a), cast::<usize, I>(edge.b)))
             .unzip();
         let weights: Vec<T> = graph.edges.iter().map(|edge| cast(edge.weight)).collect();
         let weights = Weights::of(&weights).expect("nonnegative weights");
-        let sgdd = match self {
+        match self {
             Entry::Csr | Entry::UpperCsr => {
                 let upper = self == Entry::UpperCsr;
                 let (mut ptrs, mut columns, mut values) = (vec![I::zero()], vec![], vec![]);
@@ -216,9 +227,6 @@ impl Entry {
                 }
                 for (i, &g) in graph.ground.iter().enumerate().filter(|(_, &g)| g != 0.0) {
                     // A zero partner leaves the column one nonzero: the ground.
-                    if n < 2 {
-                        return None;
-                    }
                     a.push(cast(i));
                     b.push(cast((i + 1) % n));
                     x.push(cast(g.sqrt()));
@@ -245,9 +253,8 @@ impl Entry {
                 for (i, &g) in graph.ground.iter().enumerate().filter(|(_, &g)| g != 0.0) {
                     // A zero on the other side leaves the column one nonzero: the ground.
                     let (l, r, x_i, y_i) = match i < n_left {
-                        true if n_right > 0 => (i, 0, 1.0, 0.0),
-                        false if n_left > 0 => (0, i - n_left, 0.0, 1.0),
-                        _ => return None,
+                        true => (i, 0, 1.0, 0.0),
+                        false => (0, i - n_left, 0.0, 1.0),
                     };
                     left.push(cast(l));
                     right.push(cast(r));
@@ -271,31 +278,23 @@ impl Entry {
                 Sgdd::from_bipartite_gram(gram, policy).unwrap_or_else(|error| rejected(&error))
             }
             Entry::Laplacian | Entry::GroundedLaplacian => {
-                if !laplacian {
-                    return None;
-                }
                 let view = Laplacian::new(n, &a, &b, weights).expect("valid Laplacian");
                 let ground: Vec<T> = cast_all(&graph.ground);
                 match self {
                     Entry::GroundedLaplacian => {
                         Sgdd::try_from(view.grounded(&ground).expect("valid ground"))
                     }
-                    _ if graph.is_grounded() => return None,
                     _ => Sgdd::try_from(view),
                 }
                 .unwrap_or_else(|error| rejected(&error))
             }
             Entry::SignedGraph => {
-                if graph.is_grounded() {
-                    return None;
-                }
                 let positive: Vec<bool> = graph.edges.iter().map(|edge| edge.positive).collect();
                 let view =
                     SignedGraph::new(n, &a, &b, &positive, weights).expect("valid signed graph");
                 Sgdd::try_from(view).unwrap_or_else(|error| rejected(&error))
             }
-        };
-        Some(sgdd)
+        }
     }
 }
 
