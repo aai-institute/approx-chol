@@ -18,6 +18,10 @@ mod residual;
 mod runner;
 #[path = "common/sparse.rs"]
 mod sparse;
+#[path = "common/spectrum.rs"]
+mod spectrum;
+
+use std::ops::RangeInclusive;
 
 use approx_chol_next::Config;
 use dense::dense;
@@ -30,8 +34,8 @@ use rstest::rstest;
 use runner::{check, stated_by};
 use sparse::Sparse;
 
-/// `x = 0` scores exactly `1`: the weakest bound that demands beating no answer; measured max 0.45.
-const RESIDUAL_LIMIT: f64 = 1.0;
+/// Measured `[0.429, 3.44]`, both at BipartiteGram's sampled complement; bounding `λ`, not `κ`, also catches a dropped scale.
+const SPECTRUM: RangeInclusive<f64> = 1.0 / 3.0..=6.0;
 
 /// Up to eight vertices, each pair joined at weight `0..=4`; a bipartite shape keeps only pairs across a cut, and a signed one is `S A S`, balanced: `S` flips one side of a bipartite cut (the incidence Gram), else random vertices.
 fn laplacian() -> impl Strategy<Value = Graph> {
@@ -69,16 +73,12 @@ fn sddm() -> impl Strategy<Value = Graph> {
     })
 }
 
-fn norm(values: &[f64]) -> f64 {
-    values.iter().map(|value| value * value).sum::<f64>().sqrt()
-}
-
 fn n(factor: &entry::Factored) -> usize {
     by_type!(&factor.factor, factor => factor.n())
 }
 
 #[rstest]
-fn residual_is_bounded(
+fn factor_spectrum_on_the_range_is_bounded(
     #[values(
         Entry::Csr,
         Entry::UpperCsr,
@@ -102,22 +102,89 @@ fn residual_is_bounded(
     mode: Mode,
 ) {
     let graphs = stated_by(entry, prop_oneof![3 => laplacian(), 1 => sddm()]);
-    let rhs = prop::collection::vec(-10.0f64..10.0, 8);
     let config = mode.config();
-    check((graphs, rhs), |(graph, rhs)| {
-        let rhs = graph.project_to_range(&rhs[..graph.n]);
-        // `relative_residual` divides by `‖b‖`.
-        prop_assume!(norm(&rhs) > 1e-9);
-        let reduced = entry.reduce(&graph, types);
-        let x = reduced.factorize(&config).solve(&rhs);
-        // A non-finite solve gives a non-finite ratio, so this subsumes a finiteness check.
-        let relative = graph.relative_residual(&x, &rhs);
+    check(graphs, |graph| {
+        let lambda = entry
+            .reduce(&graph, types)
+            .factorize(&config)
+            .spectrum(&graph);
+        // `A = 0` has no range to bound.
+        prop_assume!(!lambda.is_empty());
+        // A non-finite solve gives a non-finite `λ`, which no range contains.
         prop_assert!(
-            relative < RESIDUAL_LIMIT,
-            "{types:?} {config:?}: relative residual {relative:e}"
+            lambda.iter().all(|l| SPECTRUM.contains(l)),
+            "{types:?} {config:?}: λ = {lambda:?}"
         );
         Ok(())
     });
+}
+
+/// A 3-star sampled as a path: one apply's residual 1.04 at seed 7, `λ_max` 2.37 under a sampled complement.
+fn three_star_tree() -> Graph {
+    let edges = [
+        (0, 4, 1.0),
+        (1, 5, 1.0),
+        (2, 3, 3.0),
+        (2, 4, 3.0),
+        (2, 5, 3.0),
+    ];
+    Graph::new(6, edges.map(|(a, b, w)| Edge::negative(a, b, w)).to_vec())
+}
+
+/// Sides of four each: one apply's residual 1.53 at seed 7, `λ_max` 2.57 under a sampled complement.
+fn tied_eight_vertices() -> Graph {
+    let edges = [
+        (0, 4, 4.0),
+        (0, 5, 1.0),
+        (0, 6, 4.0),
+        (0, 7, 4.0),
+        (1, 5, 1.0),
+        (2, 4, 2.0),
+        (2, 5, 1.0),
+        (2, 6, 3.0),
+        (2, 7, 4.0),
+        (3, 4, 1.0),
+        (3, 5, 2.0),
+    ];
+    Graph::new(8, edges.map(|(a, b, w)| Edge::negative(a, b, w)).to_vec())
+}
+
+#[rstest]
+#[case::three_star_tree(three_star_tree())]
+#[case::tied_eight_vertices(tied_eight_vertices())]
+fn a_sampled_complement_past_twice_its_clique_keeps_the_spectrum_bounded(
+    #[case] graph: Graph,
+    #[values(
+        Entry::Csr,
+        Entry::UpperCsr,
+        Entry::Gram,
+        Entry::BipartiteGram,
+        Entry::Laplacian,
+        Entry::GroundedLaplacian,
+        Entry::SignedGraph
+    )]
+    entry: Entry,
+    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
+    #[values(
+        Mode::Dense,
+        Mode::Sparse(Sparse::AcExactComplement),
+        Mode::Sparse(Sparse::AcComplementAc),
+        Mode::Sparse(Sparse::AcComplementAc2),
+        Mode::Sparse(Sparse::Ac2ExactComplement),
+        Mode::Sparse(Sparse::Ac2ComplementAc),
+        Mode::Sparse(Sparse::Ac2ComplementAc2)
+    )]
+    mode: Mode,
+) {
+    let config = mode.config();
+    let lambda = entry
+        .reduce(&graph, types)
+        .factorize(&config)
+        .spectrum(&graph);
+    assert!(
+        lambda.iter().all(|l| SPECTRUM.contains(l)),
+        "{types:?} {config:?}: λ = {lambda:?}"
+    );
 }
 
 /// A balanced graph without surplus floats on every entry point, signed or not.
