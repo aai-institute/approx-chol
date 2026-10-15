@@ -122,7 +122,8 @@ def factorize(
 
     Warns:
         RuntimeWarning: If a block falls short of diagonal dominance after
-            scaling, so its deficit was clamped.
+            scaling, so its deficit was clamped, or its scaling did not settle,
+            so a singular block may have been grounded.
     """
     ...
 
