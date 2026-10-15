@@ -2,6 +2,7 @@
 
 use approx_chol_next::input::{BipartiteGram, FactorWidth1, Laplacian, SignedGraph, Weights};
 use approx_chol_next::{factorize, BlockFactor, CliqueRule, Config, InnerParallelism, Sgdd};
+use rstest::rstest;
 
 fn inputs() -> Vec<Sgdd> {
     let (left, right, per_row) = (12_000u32, 400u32, 3u32);
@@ -110,4 +111,50 @@ fn corrupt_bytes_error_instead_of_panicking() {
             }
         }
     }
+}
+
+fn varint(mut x: u64, bytes: &mut Vec<u8>) {
+    while x >= 0x80 {
+        bytes.push(x as u8 | 0x80);
+        x >>= 7;
+    }
+    bytes.push(x as u8);
+}
+
+/// One block on vertices `[64, 0]` whose elimination has `rows` empty rows of `C`, cut off before its Cholesky.
+fn truncated_elimination(rows: u64, n_cols: u64) -> Vec<u8> {
+    let mut bytes = vec![1];
+    varint(0x4143_0006, &mut bytes);
+    bytes.extend([2, 64, 0, 0, 1]);
+    varint(rows + 1, &mut bytes);
+    bytes.extend(std::iter::repeat_n(0, rows as usize + 1));
+    bytes.extend([0, 0]);
+    varint(n_cols, &mut bytes);
+    varint(rows, &mut bytes);
+    (0..rows).for_each(|_| bytes.extend(1.0f64.to_le_bytes()));
+    bytes.push(0);
+    bytes
+}
+
+#[rstest]
+#[case::dimension_overflows(3, u64::MAX)]
+#[case::transpose_overflows(10_001, 1 << 62)]
+#[case::one_more_kept(3, 4)]
+fn an_elimination_keeping_more_columns_than_rows_is_corrupt(
+    #[case] rows: u64,
+    #[case] n_cols: u64,
+) {
+    let error = postcard::from_bytes::<Vec<BlockFactor>>(&truncated_elimination(rows, n_cols));
+    assert_eq!(error.unwrap_err(), postcard::Error::SerdeDeCustom);
+}
+
+#[rstest]
+#[case::kept_in_place(3)]
+#[case::transposed(10_001)]
+fn an_elimination_keeping_at_most_its_rows_decodes_up_to_the_cut(#[case] rows: u64) {
+    let error = postcard::from_bytes::<Vec<BlockFactor>>(&truncated_elimination(rows, rows));
+    assert_eq!(
+        error.unwrap_err(),
+        postcard::Error::DeserializeUnexpectedEnd
+    );
 }
