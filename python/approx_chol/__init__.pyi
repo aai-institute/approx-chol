@@ -15,6 +15,7 @@ class Config:
     multiplicity. Splitting an edge fewer than twice is standard AC, so
     ``None``, ``0`` and ``1`` all select AC. ``dense_up_to`` is the largest
     block dimension factored by exact dense Cholesky; ``0`` never does.
+    A frustrated block, whose signs no ±1 scaling folds, counts twice: its cover has two sheets.
     An argument left out or ``None`` keeps the default, which the getters report.
     """
 

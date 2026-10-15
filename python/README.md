@@ -69,7 +69,7 @@ x = factor.solve(b)
 - `factorize_raw(row_ptrs, col_indices, values, n, config=None)` — Factorize from raw CSR arrays.
 - `Factor.solve(b)` — Solve LDL^T x = b, returning a new array.
 - `Factor.solve_into(b, out)` — Solve in-place into a pre-allocated array.
-- `Config(seed=0, split=None, dense_up_to=24)` — Configuration for the factorization; blocks of at most `dense_up_to` vertices are factored exactly by dense Cholesky.
+- `Config(seed=0, split=None, dense_up_to=24)` — Configuration for the factorization; blocks of at most `dense_up_to` vertices, a frustrated block's two-sheet cover counted twice, are factored exactly by dense Cholesky.
 
 ## Attribution
 
