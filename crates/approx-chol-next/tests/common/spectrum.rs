@@ -19,6 +19,17 @@ impl Factored {
             .collect();
         let pinv = Mat::from_fn(n, n, |i, j| columns[j][i]);
         let sandwich = &w * pinv * w.transpose();
+        // The eigensolver reads one triangle, so an asymmetric `M⁺` would pass unseen.
+        let m = range.len();
+        let pairs = (0..m).flat_map(|i| (0..m).map(move |j| (i, j)));
+        let (skew, top) = pairs.fold((0.0f64, 0.0f64), |(skew, top), (i, j)| {
+            let g = sandwich[(i, j)];
+            (skew.max((g - sandwich[(j, i)]).abs()), top.max(g.abs()))
+        });
+        assert!(
+            skew <= 1e-3 * top,
+            "M⁺ is asymmetric: {skew:e} against {top:e}"
+        );
         sandwich
             .self_adjoint_eigenvalues(Side::Lower)
             .expect("M⁺ is symmetric")
