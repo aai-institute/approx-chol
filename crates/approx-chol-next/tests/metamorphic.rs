@@ -1,5 +1,7 @@
-//! Equivariance holds on the exact mode alone: relabeling redraws the sampler, which moved sampled solutions 6-37%.
+//! Exact mode only: relabeling redraws the sampler, which moved sampled solutions 6-37%.
 
+#[path = "common/cases.rs"]
+mod cases;
 #[path = "common/dense.rs"]
 mod dense;
 #[path = "common/entry.rs"]
@@ -19,13 +21,13 @@ mod runner;
 #[path = "common/sparse.rs"]
 mod sparse;
 
+use cases::cases;
 use dense::dense;
 use entry::{Entry, Types};
 use graph::{Edge, Graph};
 use grid::grid;
 use interleaved::interleaved_components;
 use proptest::prelude::*;
-use rstest::rstest;
 use runner::{check, stated_by};
 use sparse::Sparse;
 
@@ -58,74 +60,58 @@ fn interleaved_case(entry: Entry) -> impl Strategy<Value = (Graph, Vec<f64>, Vec
     })
 }
 
-/// `(P A Pᵀ)(P x) = P b`; interleaved components drive a non-identity block order through the solve.
-#[rstest]
-fn permuting_interleaved_components_permutes_the_solution(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-) {
-    check(interleaved_case(entry), |(graph, rhs, p)| {
-        let mut permuted_rhs = vec![0.0; rhs.len()];
-        (rhs.iter().enumerate()).for_each(|(v, &value)| permuted_rhs[p[v]] = value);
-        let relabeled = permuted(&graph, &p);
-        let base = entry.reduce(&graph, types);
-        let got = entry.reduce(&relabeled, types);
-        let base = base.factorize(&dense()).solve(&rhs);
-        let got = got.factorize(&dense()).solve(&permuted_rhs);
-        let scale = base.iter().fold(1.0f64, |scale, x| scale.max(x.abs()));
-        for (v, &want) in base.iter().enumerate() {
-            let got = got[p[v]];
-            // Measured at most 6.3ε·‖x‖∞; a broken permutation is off by order one.
+cases! {
+    /// `(P A Pᵀ)(P x) = P b`; interleaved components force a non-identity block order.
+    fn permuting_interleaved_components_permutes_the_solution(
+        entry in entries(all),
+        types in types(all),
+    ) {
+        check(interleaved_case(entry), |(graph, rhs, p)| {
+            let mut permuted_rhs = vec![0.0; rhs.len()];
+            (rhs.iter().enumerate()).for_each(|(v, &value)| permuted_rhs[p[v]] = value);
+            let relabeled = permuted(&graph, &p);
+            let base = entry.reduce(&graph, types);
+            let got = entry.reduce(&relabeled, types);
+            let base = base.factorize(&dense()).solve(&rhs);
+            let got = got.factorize(&dense()).solve(&permuted_rhs);
+            let scale = base.iter().fold(1.0f64, |scale, x| scale.max(x.abs()));
+            for (v, &want) in base.iter().enumerate() {
+                let got = got[p[v]];
+                // Measured at most 6.3ε·‖x‖∞; a broken permutation is off by order one.
+                prop_assert!(
+                    (got - want).abs() <= 64.0 * types.epsilon() * scale,
+                    "{types:?} x[{v}] -> x'[{}]: {got:e} vs {want:e} (p={p:?})",
+                    p[v]
+                );
+            }
+            Ok(())
+        });
+    }
+}
+
+cases! {
+    /// Equivariance survives an error made alike both times; this checks the solve itself.
+    fn interleaved_components_are_solved_not_just_relabelled_consistently(
+        entry in entries(all),
+        types in types(all),
+    ) {
+        check(interleaved_case(entry), |(graph, rhs, _p)| {
+            let rhs = graph.project_to_range(&rhs);
+            prop_assume!(rhs.iter().map(|value| value * value).sum::<f64>().sqrt() > 1e-9);
+            let reduced = entry.reduce(&graph, types);
+            let x = reduced.factorize(&dense()).solve(&rhs);
+            let relative = graph.relative_residual(&x, &rhs);
+            // Measured at most 9ε.
             prop_assert!(
-                (got - want).abs() <= 64.0 * types.epsilon() * scale,
-                "{types:?} x[{v}] -> x'[{}]: {got:e} vs {want:e} (p={p:?})",
-                p[v]
+                relative < 64.0 * types.epsilon(),
+                "{types:?}: components left residual {relative:e}"
             );
-        }
-        Ok(())
-    });
+            Ok(())
+        });
+    }
 }
 
-/// Equivariance survives anything wrong the same way both times; this is the direct claim that the components are solved.
-#[rstest]
-fn interleaved_components_are_solved_not_just_relabelled_consistently(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-) {
-    check(interleaved_case(entry), |(graph, rhs, _p)| {
-        let rhs = graph.project_to_range(&rhs);
-        prop_assume!(rhs.iter().map(|value| value * value).sum::<f64>().sqrt() > 1e-9);
-        let reduced = entry.reduce(&graph, types);
-        let x = reduced.factorize(&dense()).solve(&rhs);
-        let relative = graph.relative_residual(&x, &rhs);
-        // Measured at most 9ε.
-        prop_assert!(
-            relative < 64.0 * types.epsilon(),
-            "{types:?}: components left residual {relative:e}"
-        );
-        Ok(())
-    });
-}
-
-/// Dyadic, so `value + shift` is exact while the shift stays below the scalar's spare mantissa bits.
+/// Dyadic, so `value + shift` is exact below the scalar's spare mantissa bits.
 fn assert_a_constant_leaves_the_solution(entry: Entry, types: Types, sparse: Sparse, shift: f64) {
     let graph = grid(100, 100);
     let norm = |values: &[f64]| values.iter().map(|v| v * v).sum::<f64>().sqrt();
@@ -144,55 +130,23 @@ fn assert_a_constant_leaves_the_solution(entry: Entry, types: Types, sparse: Spa
     );
 }
 
-/// A floating block solves `b` with its null component projected out, so adding a constant to `b` must leave `x`; only the solve's own sums can lose it.
-#[rstest]
-fn a_constant_added_to_a_floating_rhs_leaves_the_solution(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Sparse::AcExactComplement,
-        Sparse::AcComplementAc,
-        Sparse::AcComplementAc2,
-        Sparse::Ac2ExactComplement,
-        Sparse::Ac2ComplementAc,
-        Sparse::Ac2ComplementAc2
-    )]
-    sparse: Sparse,
-) {
-    assert_a_constant_leaves_the_solution(entry, types, sparse, 2f64.powi(30));
+cases! {
+    /// A floating block projects a constant out of `b`; only the solve's own sums can lose it.
+    fn a_constant_added_to_a_floating_rhs_leaves_the_solution(
+        route in sparse_routes(all),
+        types in types(f64),
+    ) {
+        let (entry, sparse) = route;
+        assert_a_constant_leaves_the_solution(entry, types, sparse, 2f64.powi(30));
+    }
 }
 
-#[rstest]
-fn a_constant_added_to_a_floating_f32_rhs_leaves_the_solution(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64)] types: Types,
-    #[values(
-        Sparse::AcExactComplement,
-        Sparse::AcComplementAc,
-        Sparse::AcComplementAc2,
-        Sparse::Ac2ExactComplement,
-        Sparse::Ac2ComplementAc,
-        Sparse::Ac2ComplementAc2
-    )]
-    sparse: Sparse,
-) {
-    assert_a_constant_leaves_the_solution(entry, types, sparse, 2f64.powi(12));
+cases! {
+    fn a_constant_added_to_a_floating_f32_rhs_leaves_the_solution(
+        route in sparse_routes(all),
+        types in types(f32),
+    ) {
+        let (entry, sparse) = route;
+        assert_a_constant_leaves_the_solution(entry, types, sparse, 2f64.powi(12));
+    }
 }

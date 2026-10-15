@@ -1,13 +1,12 @@
 use crate::graph::Graph;
 
 impl Graph {
-    /// `b` with each floating component's null vector projected out, so `A x = b` has an exact solution.
+    /// `b` with each floating component's null vector projected out, so `A x = b` is consistent.
     pub fn project_to_range(&self, b: &[f64]) -> Vec<f64> {
         let mut adjacency = vec![Vec::new(); self.n];
         for edge in self.edges.iter().filter(|edge| edge.weight != 0.0) {
-            let sign = if edge.positive { -1.0 } else { 1.0 };
-            adjacency[edge.a].push((edge.b, sign));
-            adjacency[edge.b].push((edge.a, sign));
+            adjacency[edge.a].push((edge.b, -edge.sign()));
+            adjacency[edge.b].push((edge.a, -edge.sign()));
         }
         let mut projected = b.to_vec();
         let mut null = vec![0.0f64; self.n];
@@ -15,7 +14,7 @@ impl Graph {
             if null[root] != 0.0 {
                 continue;
             }
-            // The null vector `s` has `s_b = s_a` across a negative edge and `s_b = −s_a` across a positive one.
+            // The null vector `s` has `s_b = −σ s_a` across an edge of sign `σ`.
             null[root] = 1.0;
             let (mut component, mut stack, mut balanced) = (vec![], vec![root], true);
             while let Some(v) = stack.pop() {

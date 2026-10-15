@@ -1,15 +1,11 @@
+#[path = "common/dense.rs"]
+mod dense;
+
 use approx_chol_next::input::{
     BipartiteGram, Csr, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsr, Weights,
 };
-use approx_chol_next::{factorize, CliqueRule, Config, Existence, ScalingPolicy, Sgdd};
-
-fn dense() -> Config {
-    Config {
-        dense_up_to: usize::MAX,
-        complement: CliqueRule::Exact,
-        ..Config::default()
-    }
-}
+use approx_chol_next::{factorize, Config, Existence, ScalingPolicy, Sgdd};
+use dense::dense;
 
 fn solve_residual(sgdd: &Sgdd, matrix: &[Vec<f64>]) {
     let exact: Vec<f64> = (0..sgdd.n()).map(|i| (i % 5) as f64 - 2.0).collect();

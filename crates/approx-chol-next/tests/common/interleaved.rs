@@ -2,7 +2,7 @@ use proptest::prelude::*;
 
 use crate::graph::{Edge, Graph};
 
-/// Components are the residue classes mod the returned `parts`, so they interleave and no block is contiguous; each class is complete, or complete bipartite between its alternate members.
+/// Components are the residue classes mod the returned `parts`, so no block is contiguous.
 pub fn interleaved_components() -> impl Strategy<Value = (Graph, usize)> {
     (2usize..=3, 5usize..=9, any::<bool>()).prop_flat_map(|(parts, n, bipartite)| {
         let pairs = n * (n - 1) / 2;

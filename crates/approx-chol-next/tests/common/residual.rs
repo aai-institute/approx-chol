@@ -5,7 +5,7 @@ impl Graph {
     pub fn apply(&self, x: &[f64]) -> Vec<f64> {
         let mut y: Vec<f64> = (self.ground.iter().zip(x)).map(|(g, x)| g * x).collect();
         for edge in &self.edges {
-            let sign = if edge.positive { 1.0 } else { -1.0 };
+            let sign = edge.sign();
             let t = edge.weight * (x[edge.a] + sign * x[edge.b]);
             y[edge.a] += t;
             y[edge.b] += sign * t;

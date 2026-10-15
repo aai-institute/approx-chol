@@ -1,3 +1,5 @@
+#[path = "common/cases.rs"]
+mod cases;
 #[path = "common/dense.rs"]
 mod dense;
 #[path = "common/entry.rs"]
@@ -9,10 +11,10 @@ mod modes;
 #[path = "common/sparse.rs"]
 mod sparse;
 
+use cases::cases;
 use entry::{Entry, Types};
 use graph::{Edge, Graph};
 use modes::Mode;
-use rstest::rstest;
 use sparse::Sparse;
 
 const RHS: [f64; 6] = [1.0, -1.0, 2.0, -2.0, 0.5, -0.5];
@@ -34,14 +36,14 @@ const F64_EXPONENTS: [i32; 20] = [
 ];
 const F32_EXPONENTS: [i32; 14] = [-30, -20, -12, -8, -7, -6, -5, -2, -1, 7, 10, 12, 20, 30];
 
-/// `M x = b` scaled by `w` has solution `x / w`, so `w · x(w)` is invariant for any scale-free method at a fixed seed: an absolute floor shows as a deviation of order one; each scalar runs the exponents its solution is representable at.
+/// `w · x(w)` is invariant at a fixed seed, so an absolute floor deviates by order one.
 fn assert_invariant_under_scaling(
     entry: Entry,
     fixture: fn(f64) -> Graph,
     types: Types,
     mode: Mode,
 ) {
-    // Measured at most 290ε, flat across exponents; a floor that ignores the scale deviates by order one.
+    // Measured at most 290ε, flat across exponents.
     let tolerance = 1024.0 * types.epsilon();
     let config = mode.config();
     let solve = |w: f64| {
@@ -66,55 +68,22 @@ fn assert_invariant_under_scaling(
     }
 }
 
-#[rstest]
-fn factorization_is_invariant_under_uniform_scaling(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    assert_invariant_under_scaling(entry, complete, types, mode);
+cases! {
+    fn factorization_is_invariant_under_uniform_scaling(
+        route in routes(non_bipartite),
+        types in types(all),
+    ) {
+        let (entry, mode) = route;
+        assert_invariant_under_scaling(entry, complete, types, mode);
+    }
 }
 
-#[rstest]
-fn bipartite_factorization_is_invariant_under_uniform_scaling(
-    #[values(
-        Entry::Csr,
-        Entry::UpperCsr,
-        Entry::Gram,
-        Entry::BipartiteGram,
-        Entry::Laplacian,
-        Entry::GroundedLaplacian,
-        Entry::SignedGraph
-    )]
-    entry: Entry,
-    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
-    #[values(
-        Mode::Dense,
-        Mode::Sparse(Sparse::AcExactComplement),
-        Mode::Sparse(Sparse::AcComplementAc),
-        Mode::Sparse(Sparse::AcComplementAc2),
-        Mode::Sparse(Sparse::Ac2ExactComplement),
-        Mode::Sparse(Sparse::Ac2ComplementAc),
-        Mode::Sparse(Sparse::Ac2ComplementAc2)
-    )]
-    mode: Mode,
-) {
-    assert_invariant_under_scaling(entry, complete_bipartite, types, mode);
+cases! {
+    fn bipartite_factorization_is_invariant_under_uniform_scaling(
+        route in routes(all),
+        types in types(all),
+    ) {
+        let (entry, mode) = route;
+        assert_invariant_under_scaling(entry, complete_bipartite, types, mode);
+    }
 }
