@@ -22,12 +22,11 @@ impl<'a, T, I: PrimInt> Csr<'a, T, I> {
         col_indices: &'a [I],
         values: &'a [T],
     ) -> Result<Self, CsrError> {
-        if row_ptrs.len() != n + 1 {
+        // Past `usize::MAX`, `n + 1` reads as the largest length, which no slice reaches.
+        let expected = n.saturating_add(1);
+        if row_ptrs.len() != expected {
             let found = row_ptrs.len();
-            return Err(CsrError::LengthMismatch {
-                expected: n + 1,
-                found,
-            });
+            return Err(CsrError::LengthMismatch { expected, found });
         }
         if row_ptrs[0] != I::zero() {
             return Err(CsrError::RowPointers { row: 0 });
