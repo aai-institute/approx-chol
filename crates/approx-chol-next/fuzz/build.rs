@@ -7,7 +7,7 @@ mod case;
 
 use case::{Build, Case, Input, Rows, Side, View, Weighting};
 
-/// Written at build time rather than committed, so a seed never outlives the encoding of `Input` or `BlockFactor`.
+/// Written at build time, never committed; a removed or renamed seed's old file stays in `corpus/` until deleted.
 fn main() {
     let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
     let (views, factors) = (
@@ -49,10 +49,6 @@ fn seeds() -> Vec<(&'static str, Input)> {
         )
     };
     vec![
-        (
-            "csr_path_approximate",
-            f64(View::Csr(path()), approximate()),
-        ),
         ("csr_path_dense", f64(View::Csr(path()), dense())),
         (
             "csr_path_f32",

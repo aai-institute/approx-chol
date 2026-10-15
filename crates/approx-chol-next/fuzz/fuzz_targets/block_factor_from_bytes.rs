@@ -21,8 +21,8 @@ fuzz_target!(|data: &[u8]| {
             x
         };
         // NaN scratch reaches the solution if any slot is read before written.
-        let agrees = (solve(0.0).iter().zip(solve(f64::NAN)))
-            .all(|(a, b)| a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan()));
+        let agrees =
+            (solve(0.0).iter().zip(solve(f64::NAN))).all(|(a, b)| a.to_bits() == b.to_bits());
         assert!(agrees, "dirty scratch changed the solution");
     }
 });
