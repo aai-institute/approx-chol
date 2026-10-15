@@ -34,7 +34,7 @@ use rstest::rstest;
 use runner::{check, stated_by};
 use sparse::Sparse;
 
-/// Dense is exact to rounding (measured ≤ 34ε); sparse measured `[0.429, 3.44]`; bounding `λ`, not `κ`, catches a dropped scale.
+/// Dense is exact to rounding (measured ≤ 47ε); sparse measured `[0.43, 3.94]`; bounding `λ`, not `κ`, catches a dropped scale.
 fn spectrum_bounds(mode: Mode, types: Types) -> RangeInclusive<f64> {
     match mode {
         Mode::Dense => {
@@ -43,6 +43,15 @@ fn spectrum_bounds(mode: Mode, types: Types) -> RangeInclusive<f64> {
         }
         Mode::Sparse(_) => 1.0 / 3.0..=6.0,
     }
+}
+
+/// The spectrum past its bounds, if it is; a non-finite solve gives a non-finite `λ`, which no range contains.
+fn spectrum_violation(entry: Entry, graph: &Graph, types: Types, mode: Mode) -> Option<String> {
+    let reduced = entry.reduce(graph, types);
+    let lambda = reduced.factorize(&mode.config()).spectrum(graph);
+    let bounds = spectrum_bounds(mode, types);
+    let inside = lambda.iter().all(|l| bounds.contains(l));
+    (!inside).then(|| format!("{types:?} {mode:?}: λ = {lambda:?}"))
 }
 
 /// Up to eight vertices, each pair joined at weight `0..=4`; a bipartite shape keeps only pairs across a cut, and a signed one is `S A S`, balanced: `S` flips one side of a bipartite cut (the incidence Gram), else random vertices.
@@ -81,6 +90,26 @@ fn sddm() -> impl Strategy<Value = Graph> {
     })
 }
 
+/// Laplacians and SDDMs alike.
+fn balanced() -> impl Strategy<Value = Graph> {
+    prop_oneof![3 => laplacian(), 1 => sddm()]
+}
+
+/// As `graphs`, every edge's sign drawn at random, so blocks frustrate and factor on two sheets.
+fn frustrated(graphs: impl Strategy<Value = Graph>) -> impl Strategy<Value = Graph> {
+    graphs.prop_flat_map(|graph| {
+        prop::collection::vec(any::<bool>(), graph.edges.len()).prop_map(move |signs| {
+            let edges = (graph.edges.iter().zip(signs))
+                .map(|(&edge, positive)| Edge { positive, ..edge })
+                .collect();
+            Graph {
+                edges,
+                ..graph.clone()
+            }
+        })
+    })
+}
+
 fn n(factor: &entry::Factored) -> usize {
     by_type!(&factor.factor, factor => factor.n())
 }
@@ -109,20 +138,10 @@ fn factor_spectrum_on_the_range_is_bounded(
     )]
     mode: Mode,
 ) {
-    let graphs = stated_by(entry, prop_oneof![3 => laplacian(), 1 => sddm()]);
-    let (config, bounds) = (mode.config(), spectrum_bounds(mode, types));
+    let graphs = stated_by(entry, prop_oneof![balanced(), frustrated(balanced())]);
     check(graphs, |graph| {
-        let lambda = entry
-            .reduce(&graph, types)
-            .factorize(&config)
-            .spectrum(&graph);
-        // `A = 0` has no range to bound.
-        prop_assume!(!lambda.is_empty());
-        // A non-finite solve gives a non-finite `λ`, which no range contains.
-        prop_assert!(
-            lambda.iter().all(|l| bounds.contains(l)),
-            "{types:?} {config:?}: λ = {lambda:?}"
-        );
+        let violation = spectrum_violation(entry, &graph, types, mode);
+        prop_assert!(violation.is_none(), "{}", violation.unwrap_or_default());
         Ok(())
     });
 }
@@ -184,15 +203,47 @@ fn a_sampled_complement_past_twice_its_clique_keeps_the_spectrum_bounded(
     )]
     mode: Mode,
 ) {
-    let (config, bounds) = (mode.config(), spectrum_bounds(mode, types));
-    let lambda = entry
-        .reduce(&graph, types)
-        .factorize(&config)
-        .spectrum(&graph);
-    assert!(
-        lambda.iter().all(|l| bounds.contains(l)),
-        "{types:?} {config:?}: λ = {lambda:?}"
-    );
+    assert_eq!(spectrum_violation(entry, &graph, types, mode), None);
+}
+
+/// A frustrated `K_5`, heavy around vertex 4: `λ_max` 3.94 under AC at seed 7, so a doubled cover solve leaves the range.
+fn frustrated_heavy_k5() -> Graph {
+    let edges = [
+        (0, 1, 1.0, false),
+        (0, 2, 4096.0, false),
+        (0, 3, 1.0, true),
+        (0, 4, 4096.0, true),
+        (1, 2, 4096.0, true),
+        (1, 3, 1.0, true),
+        (1, 4, 4096.0, false),
+        (2, 3, 1.0, true),
+        (2, 4, 4096.0, false),
+        (3, 4, 4096.0, false),
+    ];
+    let edges = edges.map(|(a, b, w, positive)| Edge {
+        positive,
+        ..Edge::negative(a, b, w)
+    });
+    Graph::new(5, edges.to_vec())
+}
+
+#[rstest]
+fn a_frustrated_cover_keeps_the_spectrum_bounded(
+    #[values(Entry::Csr, Entry::UpperCsr, Entry::Gram, Entry::SignedGraph)] entry: Entry,
+    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
+    #[values(
+        Mode::Dense,
+        Mode::Sparse(Sparse::AcExactComplement),
+        Mode::Sparse(Sparse::AcComplementAc),
+        Mode::Sparse(Sparse::AcComplementAc2),
+        Mode::Sparse(Sparse::Ac2ExactComplement),
+        Mode::Sparse(Sparse::Ac2ComplementAc),
+        Mode::Sparse(Sparse::Ac2ComplementAc2)
+    )]
+    mode: Mode,
+) {
+    let violation = spectrum_violation(entry, &frustrated_heavy_k5(), types, mode);
+    assert_eq!(violation, None);
 }
 
 /// A balanced graph without surplus floats on every entry point, signed or not.
@@ -293,7 +344,7 @@ fn deterministic_with_fixed_seed(
     )]
     mode: Mode,
 ) {
-    let graphs = stated_by(entry, prop_oneof![3 => laplacian(), 1 => sddm()]);
+    let graphs = stated_by(entry, balanced());
     let config = Config {
         seed: 42,
         ..mode.config()
