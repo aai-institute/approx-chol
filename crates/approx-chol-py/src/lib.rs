@@ -5,7 +5,6 @@ use approx_chol::{
 use num_traits::PrimInt;
 use numpy::{BorrowError, Element, PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
-use pyo3::types::IntoPyDict;
 use std::error::Error;
 use std::mem::size_of;
 
@@ -83,9 +82,7 @@ fn as_contiguous<'py, E: Element>(
     np: &Bound<'py, PyModule>,
     arr: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyArray1<E>>> {
-    let copy = [("copy", false)].into_py_dict(arr.py())?;
-    let cast = arr.call_method("astype", (E::get_dtype(arr.py()),), Some(&copy))?;
-    np.call_method1("ascontiguousarray", (cast,))?
+    np.call_method1("ascontiguousarray", (arr, E::get_dtype(arr.py())))?
         .cast_into()
         .map_err(Into::into)
 }
