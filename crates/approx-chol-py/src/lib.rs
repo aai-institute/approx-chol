@@ -107,7 +107,7 @@ fn slices_overlap<T>(lhs: &[T], rhs: &[T]) -> bool {
 }
 
 #[pyclass(frozen, eq, eq_int, from_py_object, name = "ExactFailure")]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum PyExactFailure {
     FallBackToApproximate,
     Error,
@@ -195,7 +195,7 @@ impl PyConfig {
 
 // Not skippable: `Fallback::InvalidPivot`'s generated constructor takes it as an argument.
 #[pyclass(frozen, eq, eq_int, from_py_object, name = "DenseFailure")]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum PyDenseFailure {
     NonPositivePivot,
     NonFinitePivot,
