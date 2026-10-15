@@ -65,6 +65,7 @@ dependencies = [
  "rayon",
  "rstest",
  "serde",
+ "sprs",
 ]
 
 [[package]]
