@@ -1,7 +1,5 @@
 //! The format version a persisted [`BlockFactor`](crate::BlockFactor) leads with.
 
-use std::fmt;
-
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Continues `approx-chol`'s `0x4143_xxxx`; bump it whenever a persisted factor's bytes change.
@@ -21,17 +19,10 @@ impl<'de> Deserialize<'de> for FormatVersion {
         let found = u32::deserialize(deserializer)?;
         match found == FORMAT_VERSION {
             true => Ok(Self),
-            false => Err(serde::de::Error::invalid_value(
-                serde::de::Unexpected::Other(&format!("format version {found:#010x}")),
-                &Self,
-            )),
+            false => Err(serde::de::Error::custom(format_args!(
+                "format version {found:#010x}, expected format version {FORMAT_VERSION:#010x}"
+            ))),
         }
-    }
-}
-
-impl serde::de::Expected for FormatVersion {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "format version {FORMAT_VERSION:#010x}")
     }
 }
 
