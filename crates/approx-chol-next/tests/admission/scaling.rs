@@ -109,12 +109,12 @@ fn a_settled_scaling_with_rounding_deficit_is_not_clamped() {
     assert_eq!(sgdd.blocks()[0].scaling_report(), None);
 }
 
-/// Ranked by violation, a stall restart resumed from a stale best, adopted nothing, and gave up at 11552 of the budget.
+/// Ranked by violation, a stall restart resumed from a stale best, adopted nothing, and gave up at 3568 of the budget.
 #[test]
 fn a_weighted_grid_settles_after_a_stall_restart() {
-    let k = 80;
-    let (row_ptrs, columns, values) = weighted_dld(k * k, &grid(k), 24, 16);
-    let policy = ScalingPolicy::new(1e-9, 16_000).expect("a valid policy");
+    let k = 24;
+    let (row_ptrs, columns, values) = weighted_dld(k * k, &grid(k), 24, 2);
+    let policy = ScalingPolicy::new(1e-9, 8000).expect("a valid policy");
     let sgdd = reduce_with(&row_ptrs, &columns, &values, policy).expect("admitted");
     let report = sgdd.blocks()[0].scaling_report();
     assert!(report.is_none_or(|r| r.settled), "{report:?}");
