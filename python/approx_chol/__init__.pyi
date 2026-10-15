@@ -15,13 +15,14 @@ class Config:
     multiplicity. Splitting an edge fewer than twice is standard AC, so
     ``None``, ``0`` and ``1`` all select AC. ``dense_up_to`` is the largest
     block dimension factored by exact dense Cholesky; ``0`` never does.
+    An argument left out or ``None`` keeps the default, which the getters report.
     """
 
     def __new__(
         cls,
-        seed: int = 0,
-        split: int | None = None,
-        dense_up_to: int = 24,
+        seed: int | None = ...,
+        split: int | None = ...,
+        dense_up_to: int | None = ...,
     ) -> Config: ...
     @property
     def seed(self) -> int: ...

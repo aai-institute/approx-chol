@@ -125,16 +125,20 @@ struct PyConfig(Config);
 #[pymethods]
 impl PyConfig {
     #[new]
-    #[pyo3(signature = (seed=0, split=None, dense_up_to=24))]
-    fn new(seed: u64, split: Option<u32>, dense_up_to: usize) -> Self {
-        let approximate =
-            (split.and_then(SplitCount::new)).map_or(Multiplicity::Single, Multiplicity::Split);
-        Self(Config {
-            seed,
-            complement: CliqueRule::Sampled(approximate),
-            approximate,
-            dense_up_to,
-        })
+    #[pyo3(signature = (seed=None, split=None, dense_up_to=None))]
+    fn new(seed: Option<u64>, split: Option<u32>, dense_up_to: Option<usize>) -> Self {
+        let default = Config::default();
+        let mut config = Config {
+            seed: seed.unwrap_or(default.seed),
+            dense_up_to: dense_up_to.unwrap_or(default.dense_up_to),
+            ..default
+        };
+        if let Some(k) = split {
+            let approximate = SplitCount::new(k).map_or(Multiplicity::Single, Multiplicity::Split);
+            config.approximate = approximate;
+            config.complement = CliqueRule::Sampled(approximate);
+        }
+        Self(config)
     }
 
     #[getter]

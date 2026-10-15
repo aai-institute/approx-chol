@@ -44,6 +44,16 @@ def test_config_defaults_and_getters():
     assert (config.seed, config.split, config.dense_up_to) == (7, 3, 0)
 
 
+def test_no_config_and_a_default_config_factor_alike():
+    lap = grid_laplacian(8, 8)
+    b = np.zeros(lap.shape[0])
+    b[0], b[-1] = 1.0, -1.0
+    np.testing.assert_array_equal(
+        approx_chol.factorize(lap).solve(b),
+        approx_chol.factorize(lap, approx_chol.Config()).solve(b),
+    )
+
+
 def test_dense_up_to_reaches_the_factorization():
     assert _grid_residual(approx_chol.Config(dense_up_to=16)) < 1e-12
     assert _grid_residual(approx_chol.Config(dense_up_to=15)) > 1e-3
