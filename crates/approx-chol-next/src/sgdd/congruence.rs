@@ -87,11 +87,9 @@ impl<T: Real> Congruence<T> {
 fn project_out<T: Real>(x: &mut [T], factor: impl Fn(usize) -> T) {
     let largest = (0..x.len()).fold(T::zero(), |m, i| m.max(factor(i).abs()));
     let u = |i: usize| factor(i) / largest;
-    let (mut ux, mut uu) = (0.0, 0.0);
-    for (i, &x) in x.iter().enumerate() {
-        ux += widen(u(i)) * widen(x);
-        uu += widen(u(i)) * widen(u(i));
-    }
+    // Compensated, or a constant added to a floating `b` moves the solution (#147).
+    let ux = crate::compensated_sum(x.iter().enumerate().map(|(i, &x)| widen(u(i)) * widen(x)));
+    let uu = crate::compensated_sum((0..x.len()).map(|i| widen(u(i)) * widen(u(i))));
     let along = ux / uu;
     for (i, x) in x.iter_mut().enumerate() {
         *x = narrow::<T>(widen(*x) - widen(u(i)) * along);

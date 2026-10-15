@@ -147,18 +147,12 @@ fn assert_a_constant_leaves_the_solution(entry: Entry, types: [Types; 2], shift:
 
 /// A floating block solves `b` with its null component projected out, so adding a constant to `b` must leave `x`; only the solve's own sums can lose it.
 #[rstest]
-#[ignore = "project_out sums F·1ᵀx in a plain fold: moved 4.6e-2 (compensated: 3.5e-5)"]
 #[case::csr(Entry::Csr)]
-#[ignore = "project_out sums F·1ᵀx in a plain fold: moved 4.6e-2 (compensated: 3.5e-5)"]
 #[case::upper_csr(Entry::UpperCsr)]
-#[ignore = "project_out sums F·1ᵀx in a plain fold: moved 4.6e-2 (compensated: 3.5e-5)"]
 #[case::gram(Entry::Gram)]
 #[case::bipartite_gram(Entry::BipartiteGram)]
-#[ignore = "project_out sums F·1ᵀx in a plain fold: moved 4.6e-2 (compensated: 3.5e-5)"]
 #[case::laplacian(Entry::Laplacian)]
-#[ignore = "project_out sums F·1ᵀx in a plain fold: moved 4.6e-2 (compensated: 3.5e-5)"]
 #[case::grounded_laplacian(Entry::GroundedLaplacian)]
-#[ignore = "project_out sums F·1ᵀx in a plain fold: moved 4.6e-2 (compensated: 3.5e-5)"]
 #[case::signed_graph(Entry::SignedGraph)]
 fn a_constant_added_to_a_floating_rhs_leaves_the_solution(#[case] entry: Entry) {
     assert_a_constant_leaves_the_solution(entry, [Types::F64U32, Types::F64U64], 2f64.powi(30));
