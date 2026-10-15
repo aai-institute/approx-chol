@@ -2,6 +2,8 @@
 mod cases;
 #[path = "common/dense.rs"]
 mod dense;
+#[path = "common/dimension.rs"]
+mod dimension;
 #[path = "common/entry.rs"]
 mod entry;
 #[path = "common/floats.rs"]
@@ -28,7 +30,7 @@ use std::ops::RangeInclusive;
 use approx_chol_next::Config;
 use cases::cases;
 use dense::dense;
-use entry::{by_type, Entry, Types};
+use entry::{Entry, Types};
 use graph::{Edge, Graph};
 use interleaved::interleaved_components;
 use modes::Mode;
@@ -36,7 +38,7 @@ use proptest::prelude::*;
 use runner::{check, stated_by};
 use sparse::Sparse;
 
-/// Dense is exact to rounding (measured ≤ 47ε); sparse measured `[0.43, 3.94]`; bounding `λ`, not `κ`, catches a dropped scale.
+/// Measured: dense ≤ 47ε from 1, sparse `[0.43, 3.94]`; bounding `λ`, not `κ`, sees a lost scale.
 fn spectrum_bounds(mode: Mode, types: Types) -> RangeInclusive<f64> {
     match mode {
         Mode::Dense => {
@@ -47,7 +49,7 @@ fn spectrum_bounds(mode: Mode, types: Types) -> RangeInclusive<f64> {
     }
 }
 
-/// The spectrum past its bounds, if it is; a non-finite solve gives a non-finite `λ`, which no range contains.
+/// The spectrum if it leaves its bounds, as a non-finite solve always does.
 fn spectrum_violation(entry: Entry, graph: &Graph, types: Types, mode: Mode) -> Option<String> {
     let reduced = entry.reduce(graph, types);
     let lambda = reduced.factorize(&mode.config()).spectrum(graph);
@@ -56,7 +58,7 @@ fn spectrum_violation(entry: Entry, graph: &Graph, types: Types, mode: Mode) -> 
     (!inside).then(|| format!("{types:?} {mode:?}: λ = {lambda:?}"))
 }
 
-/// Up to eight vertices, each pair joined at weight `0..=4`; a bipartite shape keeps only pairs across a cut, and a signed one is `S A S`, balanced: `S` flips one side of a bipartite cut (the incidence Gram), else random vertices.
+/// Up to eight vertices at weights `0..=4`, some bipartite, some signed as a balanced `S A S`.
 fn laplacian() -> impl Strategy<Value = Graph> {
     (1usize..=8).prop_flat_map(|n| {
         let pairs = n * (n - 1) / 2;
@@ -112,10 +114,6 @@ fn frustrated(graphs: impl Strategy<Value = Graph>) -> impl Strategy<Value = Gra
     })
 }
 
-fn n(factor: &entry::Factored) -> usize {
-    by_type!(&factor.factor, factor => factor.n())
-}
-
 cases! {
     fn factor_spectrum_on_the_range_is_bounded(
         route in routes(all),
@@ -131,7 +129,7 @@ cases! {
     }
 }
 
-/// A 3-star sampled as a path: one apply's residual 1.04 at seed 7, `λ_max` 2.37 under a sampled complement.
+/// A 3-star sampled as a path: `λ_max` 2.37 at seed 7 under a sampled complement.
 fn three_star_tree() -> Graph {
     let edges = [
         (0, 4, 1.0),
@@ -143,7 +141,7 @@ fn three_star_tree() -> Graph {
     Graph::new(6, edges.map(|(a, b, w)| Edge::negative(a, b, w)).to_vec())
 }
 
-/// Sides of four each: one apply's residual 1.53 at seed 7, `λ_max` 2.57 under a sampled complement.
+/// Sides of four each: `λ_max` 2.57 at seed 7 under a sampled complement.
 fn tied_eight_vertices() -> Graph {
     let edges = [
         (0, 4, 4.0),
@@ -174,7 +172,7 @@ cases! {
     }
 }
 
-/// A frustrated `K_5`, heavy around vertex 4: `λ_max` 3.94 under AC at seed 7, so a doubled cover solve leaves the range.
+/// A frustrated `K_5`: `λ_max` 3.94 under AC at seed 7, so a doubled cover solve passes 6.
 fn frustrated_heavy_k5() -> Graph {
     let edges = [
         (0, 1, 1.0, false),
@@ -213,7 +211,7 @@ cases! {
             let reduced = entry.reduce(&graph, types);
             let floats = reduced.floats();
             prop_assert!(floats.iter().all(|&f| f), "{types:?}: {floats:?}");
-            prop_assert_eq!(n(&reduced.factorize(&Config::default())), graph.n);
+            prop_assert_eq!(reduced.factorize(&Config::default()).n(), graph.n);
             Ok(())
         });
     }
@@ -232,7 +230,7 @@ cases! {
             let floats = reduced.floats();
             prop_assert!(floats.iter().all(|&f| !f), "{types:?}: {floats:?}");
             let factor = reduced.factorize(&config);
-            prop_assert_eq!(n(&factor), graph.n);
+            prop_assert_eq!(factor.n(), graph.n);
             let x = factor.solve(&rhs);
             prop_assert!(
                 x.iter().all(|x| x.is_finite()),
@@ -265,7 +263,7 @@ cases! {
     }
 }
 
-/// Class `0` alone carries surplus, so a grounded block sits among floating ones; reading it as floating solves the wrong system on its rows.
+/// Only class `0` carries surplus; solving its block as floating misses its rows.
 fn one_grounded_component() -> impl Strategy<Value = Graph> {
     interleaved_components().prop_flat_map(|(graph, parts)| {
         let n = graph.n;

@@ -36,14 +36,14 @@ const F64_EXPONENTS: [i32; 20] = [
 ];
 const F32_EXPONENTS: [i32; 14] = [-30, -20, -12, -8, -7, -6, -5, -2, -1, 7, 10, 12, 20, 30];
 
-/// `M x = b` scaled by `w` has solution `x / w`, so `w · x(w)` is invariant for any scale-free method at a fixed seed: an absolute floor shows as a deviation of order one; each scalar runs the exponents its solution is representable at.
+/// `w · x(w)` is invariant at a fixed seed, so an absolute floor deviates by order one.
 fn assert_invariant_under_scaling(
     entry: Entry,
     fixture: fn(f64) -> Graph,
     types: Types,
     mode: Mode,
 ) {
-    // Measured at most 290ε, flat across exponents; a floor that ignores the scale deviates by order one.
+    // Measured at most 290ε, flat across exponents.
     let tolerance = 1024.0 * types.epsilon();
     let config = mode.config();
     let solve = |w: f64| {

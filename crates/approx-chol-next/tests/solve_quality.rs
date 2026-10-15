@@ -2,6 +2,8 @@
 mod cases;
 #[path = "common/dense.rs"]
 mod dense;
+#[path = "common/dimension.rs"]
+mod dimension;
 #[path = "common/entry.rs"]
 mod entry;
 #[path = "common/floats.rs"]
@@ -63,7 +65,7 @@ fn splitting(config: Config, k: u32) -> Config {
 }
 
 cases! {
-    /// A grounded singleton is a star at every `k`, so no clique edge is sampled and the solve is `M⁻¹b` to rounding.
+    /// A grounded singleton is a star at every `k`: AC2 samples no edge and solves `M⁻¹b`.
     #[case::positive_rhs([1.0, 2.0, 3.0])]
     #[case::mixed_sign_rhs([1.0, -2.0, 4.0])]
     fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
@@ -150,9 +152,9 @@ fn uses_scratch(factor: &Factored) -> bool {
         .any(|block| block.scratch_len() > 0))
 }
 
-/// NaN reaches the result if any slot, a ground's or a cover's included, is read before it is written.
+/// NaN reaches the result if any slot, ground or cover, is read before it is written.
 fn assert_dirty_scratch_matches_the_solve(label: &str, factor: &Factored) {
-    let n = by_type!(&factor.factor, f => f.n());
+    let n = factor.n();
     let rhs: Vec<f64> = (0..n).map(|i| i as f64 - 1.5).collect();
     let want = factor.solve(&rhs);
     for inner in [InnerParallelism::Allow, InnerParallelism::Forbid] {
@@ -228,7 +230,7 @@ fn path(weight: f64) -> Graph {
     )
 }
 
-/// Scaling a Laplacian by `t` scales its solution by `1/t`, so a factor that drops the scale is wrong by that whole factor.
+/// `t A` solves to `x / t`, so a factor that drops the scale misses by `t`.
 fn assert_scaled_path_solves(entry: Entry, types: Types, mode: Mode, exponent: i32) {
     let graph = path(10f64.powi(exponent));
     let b = [1.0, 0.0, 0.0, -1.0];
@@ -242,7 +244,7 @@ fn assert_scaled_path_solves(entry: Entry, types: Types, mode: Mode, exponent: i
 }
 
 cases! {
-    /// The two scalars bottom out at different exponents, so each gets the range its solution is still representable in.
+    /// Each scalar runs the exponents its solution is representable at.
     fn a_scaled_f64_laplacian_solves_wherever_its_solution_is_representable(
         route in routes(all),
         types in types(f64),
@@ -276,7 +278,7 @@ cases! {
             "{types:?}: a zero vertex is no block"
         );
         let factor = reduced.factorize(&Config::default());
-        assert_eq!(by_type!(&factor.factor, f => f.n()), 128);
+        assert_eq!(factor.n(), 128);
         assert_eq!(bits(&factor.solve(&[1.0; 128])), bits(&[0.0; 128]));
     }
 }
@@ -303,7 +305,7 @@ cases! {
 }
 
 cases! {
-    /// Components `{0, 2}` and `{1, 3}` interleave; an rhs not zero-sum per block has no exact solution, so the second case is the least-squares one.
+    /// Components `{0, 2}` and `{1, 3}` interleave; the inconsistent rhs solves least-squares.
     #[case::zero_sum_per_block([1.0, 2.0, -1.0, -2.0], [0.5, 1.0, -0.5, -1.0])]
     #[case::inconsistent([3.0, 5.0, -1.0, -2.0], [1.0, 1.75, -1.0, -1.75])]
     fn interleaved_components_solve_in_input_order(

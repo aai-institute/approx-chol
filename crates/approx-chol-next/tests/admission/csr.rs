@@ -7,6 +7,7 @@ use num_traits::PrimInt;
 use rstest::rstest;
 
 use super::{assert_names_a_defect, grounded, reduce, reduce_upper};
+use crate::grid::grid;
 
 const F32_FLOOR: f32 = f32::MIN_POSITIVE / f32::EPSILON;
 
@@ -332,33 +333,9 @@ fn f32_in_range_input_is_admitted(#[case] diagonal: f32, #[case] edge: f32) {
 }
 
 fn grid_laplacian(rows: usize, cols: usize) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
-    let (mut row_ptrs, mut columns, mut values) = (vec![0u32], Vec::new(), Vec::new());
-    for r in 0..rows {
-        for c in 0..cols {
-            let v = r * cols + c;
-            let mut neighbours = Vec::new();
-            if r > 0 {
-                neighbours.push(v - cols);
-            }
-            if c > 0 {
-                neighbours.push(v - 1);
-            }
-            let degree = neighbours.len() + usize::from(c + 1 < cols) + usize::from(r + 1 < rows);
-            neighbours.push(v);
-            if c + 1 < cols {
-                neighbours.push(v + 1);
-            }
-            if r + 1 < rows {
-                neighbours.push(v + cols);
-            }
-            for j in neighbours {
-                columns.push(j as u32);
-                values.push(if j == v { degree as f64 } else { -1.0 });
-            }
-            row_ptrs.push(columns.len() as u32);
-        }
-    }
-    (row_ptrs, columns, values)
+    let (row_ptrs, columns, values) = grid(rows, cols).csr(false);
+    let narrow = |indices: Vec<usize>| indices.into_iter().map(|i| i as u32).collect();
+    (narrow(row_ptrs), narrow(columns), values)
 }
 
 fn widen<I: PrimInt>(indices: &[u32]) -> Vec<I> {

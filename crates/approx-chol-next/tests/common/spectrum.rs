@@ -4,7 +4,7 @@ use crate::entry::Factored;
 use crate::graph::Graph;
 
 impl Factored {
-    /// Eigenvalues of `M⁺A` on `range(A)`, ascending: those of `W M⁺ Wᵀ` for `A = Wᵀ W`, `W = S^{1/2} Uᵀ` over `A`'s nonzero eigenpairs.
+    /// Eigenvalues of `M⁺A` on `range(A)`, ascending, as those of `W M⁺ Wᵀ` for `A = Wᵀ W`.
     pub fn spectrum(&self, graph: &Graph) -> Vec<f64> {
         let n = graph.n;
         let entries = graph.entries();

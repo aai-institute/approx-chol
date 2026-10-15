@@ -1,5 +1,9 @@
 #[path = "admission/csr.rs"]
 mod csr;
+#[path = "common/graph.rs"]
+mod graph;
+#[path = "common/grid.rs"]
+mod grid;
 #[path = "admission/scaling.rs"]
 mod scaling;
 #[path = "admission/surplus.rs"]

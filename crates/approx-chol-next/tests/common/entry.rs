@@ -6,7 +6,7 @@ use num_traits::NumCast;
 
 use crate::graph::Graph;
 
-/// The rewrite's input entry points; each reads the same [`Graph`] where it [`states`](Entry::states) it.
+/// The input entry points; each reads one [`Graph`] where it [`states`](Entry::states) it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Entry {
     Csr,
@@ -151,17 +151,18 @@ pub fn cast_all<S: NumCast + Copy, D: NumCast>(xs: &[S]) -> Vec<D> {
 }
 
 impl Entry {
-    /// A Gram states a ground only beside a second vertex; no Laplacian view states a positive edge.
+    /// A Gram needs a second vertex beside a ground; a Laplacian view states no positive edge.
     pub fn states(self, graph: &Graph) -> bool {
         let signed = graph.edges.iter().any(|edge| edge.positive);
-        let lone_ground = graph.n < 2 && graph.is_grounded();
+        let grounded = graph.ground.iter().any(|&g| g != 0.0);
+        let lone_ground = graph.n < 2 && grounded;
         match self {
             Entry::Csr | Entry::UpperCsr => true,
             Entry::Gram => !lone_ground,
             Entry::BipartiteGram => !lone_ground && bipartition(graph).is_some(),
-            Entry::Laplacian => !signed && !graph.is_grounded(),
+            Entry::Laplacian => !signed && !grounded,
             Entry::GroundedLaplacian => !signed,
-            Entry::SignedGraph => !graph.is_grounded(),
+            Entry::SignedGraph => !grounded,
         }
     }
 
@@ -195,17 +196,9 @@ impl Entry {
         match self {
             Entry::Csr | Entry::UpperCsr => {
                 let upper = self == Entry::UpperCsr;
-                let (mut ptrs, mut columns, mut values) = (vec![I::zero()], vec![], vec![]);
-                let mut entries = graph.entries().into_iter().peekable();
-                for row in 0..n {
-                    while let Some(((_, j), value)) = entries.next_if(|((i, _), _)| *i == row) {
-                        if !upper || j >= row {
-                            columns.push(cast::<usize, I>(j));
-                            values.push(cast::<f64, T>(value));
-                        }
-                    }
-                    ptrs.push(cast::<usize, I>(columns.len()));
-                }
+                let (ptrs, columns, values) = graph.csr(upper);
+                let (ptrs, columns): (Vec<I>, Vec<I>) = (cast_all(&ptrs), cast_all(&columns));
+                let values: Vec<T> = cast_all(&values);
                 match upper {
                     false => {
                         let csr = Csr::new(n, &ptrs, &columns, &values).expect("valid CSR");
@@ -221,9 +214,9 @@ impl Entry {
             Entry::Gram => {
                 let (mut a, mut b, mut x, mut y) = (a, b, vec![], vec![]);
                 for edge in &graph.edges {
-                    let root = cast::<f64, T>(edge.weight.sqrt());
-                    x.push(root);
-                    y.push(if edge.positive { root } else { -root });
+                    let root = edge.weight.sqrt();
+                    x.push(cast::<f64, T>(root));
+                    y.push(cast(edge.sign() * root));
                 }
                 for (i, &g) in graph.ground.iter().enumerate().filter(|(_, &g)| g != 0.0) {
                     // A zero partner leaves the column one nonzero: the ground.
@@ -247,7 +240,7 @@ impl Entry {
                     left.push(cast(l));
                     right.push(cast(r - n_left));
                     x.push(1.0);
-                    y.push(if edge.positive { 1.0 } else { -1.0 });
+                    y.push(edge.sign());
                     w.push(edge.weight);
                 }
                 for (i, &g) in graph.ground.iter().enumerate().filter(|(_, &g)| g != 0.0) {

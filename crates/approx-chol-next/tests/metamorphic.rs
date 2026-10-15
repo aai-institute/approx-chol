@@ -1,4 +1,4 @@
-//! Equivariance holds on the exact mode alone: relabeling redraws the sampler, which moved sampled solutions 6-37%.
+//! Exact mode only: relabeling redraws the sampler, which moved sampled solutions 6-37%.
 
 #[path = "common/cases.rs"]
 mod cases;
@@ -61,7 +61,7 @@ fn interleaved_case(entry: Entry) -> impl Strategy<Value = (Graph, Vec<f64>, Vec
 }
 
 cases! {
-    /// `(P A Pᵀ)(P x) = P b`; interleaved components drive a non-identity block order through the solve.
+    /// `(P A Pᵀ)(P x) = P b`; interleaved components force a non-identity block order.
     fn permuting_interleaved_components_permutes_the_solution(
         entry in entries(all),
         types in types(all),
@@ -90,7 +90,7 @@ cases! {
 }
 
 cases! {
-    /// Equivariance survives anything wrong the same way both times; this is the direct claim that the components are solved.
+    /// Equivariance survives an error made alike both times; this checks the solve itself.
     fn interleaved_components_are_solved_not_just_relabelled_consistently(
         entry in entries(all),
         types in types(all),
@@ -111,7 +111,7 @@ cases! {
     }
 }
 
-/// Dyadic, so `value + shift` is exact while the shift stays below the scalar's spare mantissa bits.
+/// Dyadic, so `value + shift` is exact below the scalar's spare mantissa bits.
 fn assert_a_constant_leaves_the_solution(entry: Entry, types: Types, sparse: Sparse, shift: f64) {
     let graph = grid(100, 100);
     let norm = |values: &[f64]| values.iter().map(|v| v * v).sum::<f64>().sqrt();
@@ -131,7 +131,7 @@ fn assert_a_constant_leaves_the_solution(entry: Entry, types: Types, sparse: Spa
 }
 
 cases! {
-    /// A floating block solves `b` with its null component projected out, so adding a constant to `b` must leave `x`; only the solve's own sums can lose it.
+    /// A floating block projects a constant out of `b`; only the solve's own sums can lose it.
     fn a_constant_added_to_a_floating_rhs_leaves_the_solution(
         route in sparse_routes(all),
         types in types(f64),

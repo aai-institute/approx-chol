@@ -17,7 +17,7 @@ use grid::grid;
 use sparse::Sparse;
 
 cases! {
-    /// The scale at which bucket layout and fill-in bookkeeping carry load the property suite's eight-vertex graphs never reach.
+    /// Bucket layout and fill bookkeeping carry load only past the property graphs' size.
     fn smoke_medium_grid(route in sparse_routes(all), types in types(all)) {
         let (entry, sparse) = route;
         let graph = grid(100, 100);
