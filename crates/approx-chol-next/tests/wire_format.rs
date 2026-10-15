@@ -246,19 +246,27 @@ fn a_payload_of_another_format_version_is_rejected_by_version(#[case] declared: 
     }
 }
 
-/// `cargo test -p approx-chol-next --features serde --test wire_format -- --ignored`, after a version bump.
+/// `cargo test -p approx-chol-next --features serde --test wire_format -- --ignored`, after a version bump or a new fixture.
 #[test]
-#[ignore = "writes fixtures; run deliberately after a format version bump"]
-fn regenerate_wire_format_fixtures() {
+#[ignore = "writes fixtures; run deliberately after a format version bump or a new fixture"]
+fn regenerate_missing_wire_format_fixtures() {
     for fixture in FIXTURES {
         let path = fixture.path();
         // Rewriting a committed payload with today's encoder is how this test comes to agree with the drift it exists to catch.
-        assert!(
-            !std::path::Path::new(&path).exists(),
-            "{path} already exists; delete it first if you really mean to unfreeze it"
-        );
-        let bytes = postcard::to_stdvec(&fixture.blocks()).expect("serialize the fixture");
-        std::fs::write(&path, bytes).expect("write the fixture");
-        println!("wrote {path}");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path);
+        match file {
+            Ok(mut file) => {
+                let bytes = postcard::to_stdvec(&fixture.blocks()).expect("serialize the fixture");
+                std::io::Write::write_all(&mut file, &bytes).expect("write the fixture");
+                println!("wrote {path}");
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                println!("kept {path}");
+            }
+            Err(error) => panic!("cannot create {path}: {error}"),
+        }
     }
 }
