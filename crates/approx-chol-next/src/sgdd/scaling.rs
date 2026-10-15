@@ -94,6 +94,8 @@ pub(super) struct Relaxation<T> {
     iterations: usize,
     violation: T,
     settled: bool,
+    /// The eigen-residual band, relative to `μ`'s peak, the scales settled against: a row of `M_ii = μ_i²` may sit `band/μ_i` off.
+    pub(super) band: f64,
 }
 
 impl<T: Real> Relaxation<T> {
@@ -108,13 +110,20 @@ impl<T: Real> Relaxation<T> {
     }
 
     /// `None` unless every scale is a positive `T`.
-    fn new(scales: Box<[T]>, iterations: usize, violation: T, settled: bool) -> Option<Self> {
+    fn new(
+        scales: Box<[T]>,
+        iterations: usize,
+        violation: T,
+        settled: bool,
+        band: f64,
+    ) -> Option<Self> {
         let positive = scales.iter().all(|&f| f.is_finite() && f > T::zero());
         positive.then_some(Self {
             scales,
             iterations,
             violation,
             settled,
+            band,
         })
     }
 }
@@ -127,7 +136,7 @@ pub(super) fn null_scaling<T: Real>(
     let peak =
         (u.clone().zip(diagonal)).fold(0.0f64, |peak, (x, &d)| peak.max(x.abs() * widen(d).sqrt()));
     let scales: Box<[T]> = u.map(|x| narrow::<T>(x.abs() / peak)).collect();
-    Relaxation::new(scales, 0, T::zero(), true)
+    Relaxation::new(scales, 0, T::zero(), true, RATIO_BAND * widen(T::epsilon()))
 }
 
 /// How far, in `ε`, a row ratio `Σ_j|a_ij|f_j / (a_ii f_i)` may sit from `1`: a settled residual and the dominance slack's floor.
@@ -145,5 +154,5 @@ pub(super) fn relax<T: Real, I: Index>(
     let band = (RATIO_BAND * widen(T::epsilon())).max(rounding);
     let iteration = InverseIteration::new(&n, policy.tolerance, band, policy.max_iterations)?;
     let (y, iterations, violation, settled) = iteration.run();
-    Relaxation::new(n.scales(&y), iterations, narrow(violation), settled)
+    Relaxation::new(n.scales(&y), iterations, narrow(violation), settled, band)
 }

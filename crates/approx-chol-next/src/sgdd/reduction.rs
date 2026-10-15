@@ -114,8 +114,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 let diagonal: Vec<T> = (self.diagonal.iter().zip(&relaxation.scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();
-                let settle = RATIO_BAND * widen(T::epsilon());
-                let deficit = clamped_deficit(&diagonal, &abs, &off_diagonal, settle);
+                let deficit = clamped_deficit(&diagonal, &abs, &off_diagonal, relaxation.band);
                 let m = Congruent {
                     vertices: self.vertices,
                     congruence: Congruence::Scaled(factors),
@@ -208,7 +207,7 @@ impl<T: Real> RowSums<T> {
     }
 }
 
-/// `max_i (Σ_j|m_ij| − m_ii)/m_ii` past row `i`'s band, `max(RATIO_BAND ε, (k_i + 3) ε + settle)`: forming its `k_i` entries plus how far the scaling settled.
+/// `max_i (Σ_j|m_ij| − m_ii)/m_ii` past row `i`'s band, `max(RATIO_BAND ε, (k_i + 3) ε + settle/√m_ii)`: forming its `k_i` entries plus how far the scaling settled.
 fn clamped_deficit<T: Real, I: Index>(
     diagonal: &[T],
     abs_row_sums: &[T],
@@ -225,11 +224,12 @@ fn clamped_deficit<T: Real, I: Index>(
     {
         return 0.0;
     }
-    (deficits.zip(off_diagonal.degrees()))
-        .filter(|&(deficit, k)| {
-            deficit > (RATIO_BAND * epsilon).max((k + 3) as f64 * epsilon + settle)
+    (deficits.zip(off_diagonal.degrees()).zip(diagonal))
+        .filter(|&((deficit, k), &d)| {
+            let settled = settle / widen(d).sqrt();
+            deficit > (RATIO_BAND * epsilon).max((k + 3) as f64 * epsilon + settled)
         })
-        .fold(0.0, |worst, (deficit, _)| worst.max(deficit))
+        .fold(0.0, |worst, ((deficit, _), _)| worst.max(deficit))
 }
 
 /// `1ᵀM1 ≤ SINGULAR_BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh), so `M` floats.

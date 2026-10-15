@@ -118,3 +118,12 @@ fn a_weighted_grid_settles_after_a_stall_restart() {
     let report = sgdd.blocks()[0].scaling_report();
     assert!(report.is_none_or(|r| r.settled), "{report:?}");
 }
+
+/// A settled eigen-residual is relative to the Perron vector's peak, so a row at `μ_i` may sit `band/μ_i` off.
+#[test]
+fn a_settled_scaling_with_an_uneven_perron_vector_is_not_clamped() {
+    let k = 30;
+    let (row_ptrs, columns, values) = weighted_dld(k * k, &grid(k), 10, 0);
+    let sgdd = reduce(&row_ptrs, &columns, &values).expect("admitted");
+    assert_eq!(sgdd.blocks()[0].scaling_report(), None);
+}
