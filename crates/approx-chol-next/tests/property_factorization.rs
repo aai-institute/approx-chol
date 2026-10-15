@@ -34,8 +34,16 @@ use rstest::rstest;
 use runner::{check, stated_by};
 use sparse::Sparse;
 
-/// Measured `[0.429, 3.44]`, both at BipartiteGram's sampled complement; bounding `λ`, not `κ`, also catches a dropped scale.
-const SPECTRUM: RangeInclusive<f64> = 1.0 / 3.0..=6.0;
+/// Dense is exact to rounding (measured ≤ 34ε); sparse measured `[0.429, 3.44]`; bounding `λ`, not `κ`, catches a dropped scale.
+fn spectrum_bounds(mode: Mode, types: Types) -> RangeInclusive<f64> {
+    match mode {
+        Mode::Dense => {
+            let slack = 1024.0 * types.epsilon();
+            1.0 - slack..=1.0 + slack
+        }
+        Mode::Sparse(_) => 1.0 / 3.0..=6.0,
+    }
+}
 
 /// Up to eight vertices, each pair joined at weight `0..=4`; a bipartite shape keeps only pairs across a cut, and a signed one is `S A S`, balanced: `S` flips one side of a bipartite cut (the incidence Gram), else random vertices.
 fn laplacian() -> impl Strategy<Value = Graph> {
@@ -102,7 +110,7 @@ fn factor_spectrum_on_the_range_is_bounded(
     mode: Mode,
 ) {
     let graphs = stated_by(entry, prop_oneof![3 => laplacian(), 1 => sddm()]);
-    let config = mode.config();
+    let (config, bounds) = (mode.config(), spectrum_bounds(mode, types));
     check(graphs, |graph| {
         let lambda = entry
             .reduce(&graph, types)
@@ -112,7 +120,7 @@ fn factor_spectrum_on_the_range_is_bounded(
         prop_assume!(!lambda.is_empty());
         // A non-finite solve gives a non-finite `λ`, which no range contains.
         prop_assert!(
-            lambda.iter().all(|l| SPECTRUM.contains(l)),
+            lambda.iter().all(|l| bounds.contains(l)),
             "{types:?} {config:?}: λ = {lambda:?}"
         );
         Ok(())
@@ -176,13 +184,13 @@ fn a_sampled_complement_past_twice_its_clique_keeps_the_spectrum_bounded(
     )]
     mode: Mode,
 ) {
-    let config = mode.config();
+    let (config, bounds) = (mode.config(), spectrum_bounds(mode, types));
     let lambda = entry
         .reduce(&graph, types)
         .factorize(&config)
         .spectrum(&graph);
     assert!(
-        lambda.iter().all(|l| SPECTRUM.contains(l)),
+        lambda.iter().all(|l| bounds.contains(l)),
         "{types:?} {config:?}: λ = {lambda:?}"
     );
 }
