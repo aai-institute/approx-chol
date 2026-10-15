@@ -10,7 +10,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 use super::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single};
 use super::config::{CliqueRule, Config, InnerParallelism, Multiplicity};
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
-use super::Streams;
+use super::{largest, Streams};
 use crate::sgdd::Grounding;
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, widen, Index, Real};
@@ -32,11 +32,17 @@ pub(super) struct BlockElimination<T, I> {
     /// `Cᵀ` where the larger side passes 10 000 rows (0.6's threshold), so `Allow` may split the solve by kept row.
     #[cfg_attr(feature = "serde", serde(skip))]
     ct: Option<Rows<T, I>>,
+    /// The block's largest `|f|`, re-gauged after a singular solve: `S`'s Cholesky pins only a kept slot.
+    gauge: Option<I>,
 }
 
 impl<T: Real, I: Index> BlockElimination<T, I> {
     /// Pivots are `Σ|c_ek| + s_e`, the same on both sheets of a cover.
-    pub(super) fn new(cross: &Arc<Rows<T, I>>, grounding: &Grounding<T>) -> Self {
+    pub(super) fn new(
+        cross: &Arc<Rows<T, I>>,
+        grounding: &Grounding<T>,
+        scales: Option<&[T]>,
+    ) -> Self {
         let surplus = grounding.surplus();
         let c = &**cross;
         let inv_pivot = (0..c.n_rows())
@@ -46,15 +52,17 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
                 T::one() / narrow::<T>(d_e)
             })
             .collect();
-        Self::with_pivots(Arc::clone(cross), inv_pivot)
+        let gauge = scales.map(|f| I::from_index(largest(f)));
+        Self::with_pivots(Arc::clone(cross), inv_pivot, gauge)
     }
 
-    fn with_pivots(cross: Arc<Rows<T, I>>, inv_pivot: Box<[T]>) -> Self {
+    fn with_pivots(cross: Arc<Rows<T, I>>, inv_pivot: Box<[T]>, gauge: Option<I>) -> Self {
         let ct = (cross.n_rows() > 10_000).then(|| cross.transpose());
         Self {
             cross,
             inv_pivot,
             ct,
+            gauge,
         }
     }
 
@@ -135,6 +143,14 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
                     kept[k] = kept[k] - c * y;
                 }
             }
+        }
+    }
+
+    /// `x ← x − x_q·1` at the gauge, where the block floats.
+    pub(super) fn regauge(&self, x: &mut [T]) {
+        if let Some(q) = self.gauge {
+            let gauge = x[q.index()];
+            x.iter_mut().for_each(|x| *x = *x - gauge);
         }
     }
 
@@ -329,6 +345,8 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
                 .inv_pivot
                 .iter()
                 .all(|p| p.is_finite() && *p > T::zero());
-        pivots.then(|| Self::with_pivots(self.cross, self.inv_pivot))
+        let n = self.cross.n_rows() + self.cross.n_cols();
+        let gauge = self.gauge.is_none_or(|q| q.index() < n);
+        (pivots && gauge).then(|| Self::with_pivots(self.cross, self.inv_pivot, self.gauge))
     }
 }

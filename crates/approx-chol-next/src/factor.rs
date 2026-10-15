@@ -145,8 +145,6 @@ pub struct BlockFactor<T = f64, I = u32> {
     restriction: Arc<Restriction<T, I>>,
     elimination: Option<BlockElimination<T, I>>,
     cholesky: Cholesky<T, I>,
-    /// A split block's largest `|f|`, re-gauged after the solve: its Cholesky pins only a kept slot.
-    gauge: Option<I>,
 }
 
 impl<T: Real, I: Index> BlockFactor<T, I> {
@@ -172,21 +170,17 @@ impl<T: Real, I: Index> BlockFactor<T, I> {
                 (None, factored)
             }
             OffDiagonal::Bipartite(cross) => {
-                let elimination = BlockElimination::new(cross, grounding);
+                let elimination = BlockElimination::new(cross, grounding, scales(0));
                 let schur = elimination.complement(sheets, grounding, config, streams);
                 let from = elimination.n_eliminated();
                 let factored = Cholesky::factor(schur, streams.cholesky(), config, scales(from));
                 (Some(elimination), factored)
             }
         };
-        let gauge = (elimination.as_ref())
-            .and(scales(0))
-            .map(|f| I::from_index(largest(f)));
         Self {
             restriction: Arc::clone(block.restriction()),
             elimination,
             cholesky,
-            gauge,
         }
     }
 
@@ -227,11 +221,10 @@ impl<T: Real, I: Index> BlockFactor<T, I> {
                 let (eliminated, kept) = x.split_at_mut(elimination.n_eliminated());
                 self.cholesky.solve(kept, scratch);
                 elimination.backward(eliminated, kept, inner);
+                if singular {
+                    elimination.regauge(x);
+                }
             }
-        }
-        if let (true, Some(q)) = (singular, self.gauge) {
-            let gauge = x[q.index()];
-            x.iter_mut().for_each(|x| *x = *x - gauge);
         }
         self.restriction.prolongate(x, singular);
     }
@@ -294,7 +287,6 @@ impl<T: Real, I: Index> BlockFactor<T, I> {
                 .checked_sub(elimination.n_eliminated())
                 .filter(|&kept| kept == elimination.n_kept())?,
         };
-        let gauge = self.gauge.is_none_or(|q| q.index() < n);
-        (kept > 0 && gauge && self.cholesky.solves(kept)).then_some(self)
+        (kept > 0 && self.cholesky.solves(kept)).then_some(self)
     }
 }
