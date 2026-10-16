@@ -1,0 +1,718 @@
+//! Each irreducible block as an optional block elimination `L` and a Cholesky of what it leaves: `A_c⁺ ≈ P F L⁻ᵀ diag(D_e⁻¹, S⁺) L⁻¹ F P`, `P` projecting out `F·1` when the block floats, else `I`.
+
+mod cholesky;
+mod clique_tree;
+mod config;
+mod schur;
+mod sddm;
+
+use std::borrow::Cow;
+use std::sync::Arc;
+
+use rand::rngs::Xoshiro256PlusPlus;
+use rand::SeedableRng;
+use rayon::prelude::*;
+
+use config::CliqueRule;
+pub use config::{Backend, Config, InnerParallelism, SchurMode};
+
+use crate::sgdd::{Balance, IrreducibleBlock, Restriction, Sgdd};
+use crate::storage::OffDiagonal;
+use crate::ScalingReport;
+use crate::{Index, Real};
+use cholesky::Cholesky;
+use schur::BlockElimination;
+use sddm::{Sddm, Sheets};
+
+/// Errors returned by fallible solves.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SolveError {
+    /// A right-hand side of a length other than the operator's dimension.
+    LengthMismatch {
+        /// The operator's dimension.
+        expected: usize,
+        /// The length provided.
+        found: usize,
+    },
+    /// A workspace shorter than the factor's `scratch_len`.
+    ScratchTooShort {
+        /// The factor's `scratch_len`.
+        needed: usize,
+        /// The length provided.
+        found: usize,
+    },
+}
+
+impl core::fmt::Display for SolveError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::LengthMismatch { expected, found } => {
+                write!(f, "right-hand side has length {found}, expected {expected}")
+            }
+            Self::ScratchTooShort { needed, found } => {
+                write!(f, "scratch has length {found}, needs at least {needed}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SolveError {}
+
+/// `x` must match the operator and `scratch` cover its workspace.
+fn check_buffers<T>(x: &[T], n: usize, scratch: &[T], needed: usize) -> Result<(), SolveError> {
+    match x.len() == n && scratch.len() >= needed {
+        true => Ok(()),
+        false => Err(buffer_error(x.len(), n, scratch.len(), needed)),
+    }
+}
+
+// Built inline, the error cost within's solves 5–9%.
+#[cold]
+#[inline(never)]
+fn buffer_error(found: usize, n: usize, scratch: usize, needed: usize) -> SolveError {
+    match found == n {
+        false => SolveError::LengthMismatch { expected: n, found },
+        true => SolveError::ScratchTooShort {
+            needed,
+            found: scratch,
+        },
+    }
+}
+
+/// Block-diagonal approximate inverse of `A`: one [`BlockFactor`] per irreducible block.
+#[derive(Clone, Debug)]
+pub struct Factor<T = f64> {
+    n: usize,
+    blocks: Vec<BlockFactor<T>>,
+    /// Vertices in no block, which solve to `0`.
+    dead: Box<[usize]>,
+}
+
+impl<T: Real> Factor<T> {
+    /// Factors every irreducible block of `sgdd` in parallel.
+    pub(crate) fn build<I: Index>(sgdd: &Sgdd<T, I>, config: &Config) -> Self
+    where
+        Storage<T>: From<Block<T, I>>,
+    {
+        let blocks: Vec<BlockFactor<T>> = (sgdd.blocks().par_iter())
+            .map(|block| BlockFactor(Block::build(block, config).into()))
+            .collect();
+        let mut covered = vec![false; sgdd.n()];
+        (blocks.iter().flat_map(BlockFactor::vertices)).for_each(|v| covered[v] = true);
+        let dead = (0..sgdd.n()).filter(|&v| !covered[v]).collect();
+        Self {
+            n: sgdd.n(),
+            blocks,
+            dead,
+        }
+    }
+
+    /// Dimension of `A`.
+    pub fn n(&self) -> usize {
+        self.n
+    }
+
+    /// Total elimination steps: every slot but one per block, whichever arm factored it.
+    pub fn n_steps(&self) -> usize {
+        self.blocks
+            .iter()
+            .map(|block| on!(block, b => b.n_steps()))
+            .sum()
+    }
+
+    /// The blocks' factors, one per irreducible block of `A`; dead vertices have none.
+    pub fn blocks(&self) -> &[BlockFactor<T>] {
+        &self.blocks
+    }
+
+    /// The blocks' factors, owned, for a caller that keeps one solver per block; dead vertices need none.
+    pub fn into_blocks(self) -> Vec<BlockFactor<T>> {
+        self.blocks
+    }
+
+    /// Workspace [`solve_in_place`](Self::solve_in_place) needs: the largest block's vertices plus its own scratch.
+    pub fn scratch_len(&self) -> usize {
+        (self.blocks.iter())
+            .map(|block| block.vertices().len() + block.scratch_len())
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// `A⁺b` on floating blocks; vertices in no block solve to `0`.
+    pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
+        check_buffers(b, self.n, &[], 0)?;
+        let mut x = b.to_vec();
+        let mut scratch = vec![T::zero(); self.scratch_len()];
+        self.solve_in_place(&mut x, &mut scratch)?;
+        Ok(x)
+    }
+
+    /// As [`solve`](Self::solve), allocating nothing: `x` holds `b` on entry and the solution on return.
+    pub fn solve_in_place(&self, x: &mut [T], scratch: &mut [T]) -> Result<(), SolveError> {
+        check_buffers(x, self.n, scratch, self.scratch_len())?;
+        for block in &self.blocks {
+            on!(block, b => b.solve_global(x, scratch));
+        }
+        self.dead.iter().for_each(|&v| x[v] = T::zero());
+        Ok(())
+    }
+}
+
+/// Runs `$body` on a [`BlockFactor`]'s block, whichever index type stores it.
+macro_rules! on {
+    ($factor:expr, $block:ident => $body:expr) => {
+        match &$factor.0 {
+            Storage::U32($block) => $body,
+            Storage::U64($block) => $body,
+        }
+    };
+}
+use on;
+
+/// One irreducible block's factor over its vertices of `A`.
+#[derive(Clone, Debug)]
+pub struct BlockFactor<T = f64>(Storage<T>);
+
+/// The block's vertex indices in `u32` when its factor's vertices fit, else in `u64`.
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(bound(
+        serialize = "T: serde::Serialize",
+        deserialize = "T: Real + serde::Deserialize<'de>"
+    ))
+)]
+#[derive(Clone, Debug)]
+pub(crate) enum Storage<T> {
+    U32(Block<T, u32>),
+    U64(Block<T, u64>),
+}
+
+impl<T> From<Block<T, u32>> for Storage<T> {
+    fn from(block: Block<T, u32>) -> Self {
+        Self::U32(block)
+    }
+}
+
+impl<T> From<Block<T, u64>> for Storage<T> {
+    fn from(block: Block<T, u64>) -> Self {
+        Self::U64(block)
+    }
+}
+
+impl<T: Real> BlockFactor<T> {
+    /// The block's vertices in `A`'s numbering, in local order.
+    pub fn vertices(&self) -> Vertices<'_> {
+        match &self.0 {
+            Storage::U32(block) => Vertices(Stored::U32(block.vertices().iter())),
+            Storage::U64(block) => Vertices(Stored::U64(block.vertices().iter())),
+        }
+    }
+
+    /// Present iff a deficit past rounding was clamped, the block's scaling fell short beyond the policy's tolerance, or did not settle.
+    pub fn scaling_report(&self) -> Option<ScalingReport> {
+        on!(self, block => block.report)
+    }
+
+    /// Whether the block is folded and solved as singular, `A_c⁺b`.
+    pub fn floats(&self) -> bool {
+        on!(self, block => block.cholesky.singular())
+    }
+
+    /// Work [`InnerParallelism::Allow`] may split per solve, `0` when nothing does: an outer scheduler weighs it against its own parallelism.
+    pub fn splittable_work(&self) -> usize {
+        on!(self, block => block.splittable_work())
+    }
+
+    /// Workspace [`BlockFactor::solve_local`] needs, fixed at factorization.
+    pub fn scratch_len(&self) -> usize {
+        on!(self, block => block.scratch_len())
+    }
+
+    /// Solves in local order: `x` holds `b` on entry and the solution on return.
+    pub fn solve_local(
+        &self,
+        x: &mut [T],
+        scratch: &mut [T],
+        inner: InnerParallelism,
+    ) -> Result<(), SolveError> {
+        check_buffers(x, self.vertices().len(), scratch, self.scratch_len())?;
+        on!(self, block => block.solve_unchecked(x, scratch, inner));
+        Ok(())
+    }
+}
+
+/// A [`BlockFactor`]'s vertices as `usize`, whichever index type stores them.
+#[derive(Clone, Debug)]
+pub struct Vertices<'a>(Stored<'a>);
+
+#[derive(Clone, Debug)]
+enum Stored<'a> {
+    U32(std::slice::Iter<'a, u32>),
+    U64(std::slice::Iter<'a, u64>),
+}
+
+impl Iterator for Vertices<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<usize> {
+        match &mut self.0 {
+            Stored::U32(vertices) => vertices.next().map(|&v| v.index()),
+            Stored::U64(vertices) => vertices.next().map(|&v| v.index()),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match &self.0 {
+            Stored::U32(vertices) => vertices.size_hint(),
+            Stored::U64(vertices) => vertices.size_hint(),
+        }
+    }
+}
+
+impl ExactSizeIterator for Vertices<'_> {}
+
+/// One irreducible block's factor, its vertices stored in `I`.
+#[derive(Clone, Debug)]
+pub(crate) struct Block<T, I> {
+    restriction: Arc<Restriction<T, I>>,
+    elimination: Option<Box<BlockElimination<T, I>>>,
+    cholesky: Cholesky<T, I>,
+    report: Option<ScalingReport>,
+}
+
+impl<T: Real, I: Index> Block<T, I> {
+    fn build(block: &IrreducibleBlock<T, I>, config: &Config) -> Self {
+        let streams = Streams {
+            seed: config.seed,
+            block: block.vertices()[0].index() as u64,
+        };
+        let (sheets, grounding) = match block.balance() {
+            Balance::Balanced(grounding) => (Sheets::One, grounding),
+            Balance::Frustrated(grounding) => (Sheets::Two, grounding),
+        };
+        let scales = |from: usize| block.restriction().scales(from);
+        let (elimination, cholesky) = match block.off_diagonal() {
+            OffDiagonal::General(adjacency) => {
+                let sddm = match sheets {
+                    Sheets::One => {
+                        Sddm::new(Cow::Borrowed(adjacency), Cow::Borrowed(grounding), sheets)
+                    }
+                    Sheets::Two => Sddm::cover(adjacency, grounding),
+                };
+                let factored = Cholesky::factor(sddm, streams.cholesky(), config, scales(0));
+                (None, factored)
+            }
+            OffDiagonal::Bipartite(cross) => {
+                let factor =
+                    |s| Cholesky::factor(s, streams.cholesky(), config, scales(cross.n_rows()));
+                let rule = match config.dense(sheets.count() * cross.n_cols()) {
+                    true => CliqueRule::Exact,
+                    false => config.complement(),
+                };
+                let (elimination, factored) = match rule {
+                    CliqueRule::Exact => {
+                        let elimination = BlockElimination::new(cross, grounding, scales(0));
+                        let factored = factor(elimination.complement(sheets, grounding));
+                        (elimination, factored)
+                    }
+                    // A kept `Cᵀ` is built once `S` is factored, so it never shares that peak.
+                    CliqueRule::Sampled(copies) if BlockElimination::transposes(cross) => {
+                        let s = schur::sampled(cross, copies, sheets, grounding, streams);
+                        let factored = factor(s);
+                        (BlockElimination::new(cross, grounding, scales(0)), factored)
+                    }
+                    // Otherwise the pivot pass reads `C` while it is still warm.
+                    CliqueRule::Sampled(copies) => {
+                        let elimination = BlockElimination::new(cross, grounding, scales(0));
+                        let s = schur::sampled(cross, copies, sheets, grounding, streams);
+                        (elimination, factor(s))
+                    }
+                };
+                (Some(Box::new(elimination)), factored)
+            }
+        };
+        debug_assert_eq!(
+            cholesky.singular(),
+            block.floats(),
+            "a factor floats as its block"
+        );
+        Self {
+            restriction: Arc::clone(block.restriction()),
+            elimination,
+            cholesky,
+            report: block.scaling_report(),
+        }
+    }
+
+    fn vertices(&self) -> &[I] {
+        self.restriction.vertices()
+    }
+
+    /// Every slot but one, eliminated ones and the Cholesky's alike.
+    fn n_steps(&self) -> usize {
+        let eliminated = (self.elimination.as_deref()).map_or(0, BlockElimination::n_eliminated);
+        eliminated + self.cholesky.n_steps()
+    }
+
+    fn splittable_work(&self) -> usize {
+        (self.elimination.as_deref()).map_or(0, BlockElimination::splittable_work)
+    }
+
+    fn scratch_len(&self) -> usize {
+        self.cholesky.scratch_len()
+    }
+
+    /// Solves the block's restriction of `x` in place, through `scratch` of its vertices plus [`scratch_len`](Self::scratch_len).
+    fn solve_global(&self, x: &mut [T], scratch: &mut [T]) {
+        let (local, rest) = scratch.split_at_mut(self.vertices().len());
+        self.restriction.gather(x, local);
+        self.solve_unchecked(local, rest, InnerParallelism::Allow);
+        self.restriction.scatter(local, x);
+    }
+
+    fn solve_unchecked(&self, x: &mut [T], scratch: &mut [T], inner: InnerParallelism) {
+        let singular = self.cholesky.singular();
+        self.restriction.restrict(x, singular);
+        match &self.elimination {
+            None => self.cholesky.solve(x, scratch),
+            Some(elimination) => {
+                elimination.forward(x, inner);
+                let (eliminated, kept) = x.split_at_mut(elimination.n_eliminated());
+                self.cholesky.solve(kept, scratch);
+                elimination.backward(eliminated, kept, inner);
+                if singular {
+                    elimination.regauge(x);
+                }
+            }
+        }
+        self.restriction.prolongate(x, singular);
+    }
+}
+
+/// An index of the largest `|f|`, where pinning the gauge leaves its rounding unamplified by `1/f`.
+fn largest<T: Real>(f: &[T]) -> usize {
+    let last = f.len() - 1;
+    (0..last).fold(last, |best, i| match f[i].abs() > f[best].abs() {
+        true => i,
+        false => best,
+    })
+}
+
+/// One block's keys, so no draw depends on thread scheduling or on how other blocks routed.
+#[derive(Clone, Copy, Debug)]
+struct Streams {
+    seed: u64,
+    block: u64,
+}
+
+impl Streams {
+    /// The approximate Cholesky's one sequence: pivot `t`'s sample is conditioned on every earlier one.
+    fn cholesky(self) -> Xoshiro256PlusPlus {
+        rng(self, 0)
+    }
+
+    /// Star `eliminated`'s own sequence, by its index in the block, never by task.
+    fn star(self, eliminated: usize) -> Xoshiro256PlusPlus {
+        rng(self, eliminated as u64 + 1)
+    }
+}
+
+/// The whole key mixed once, the only place a key becomes draws; stage `0` is the Cholesky's, `e + 1` star `e`'s.
+fn rng(streams: Streams, stage: u64) -> Xoshiro256PlusPlus {
+    let key = [streams.block, stage]
+        .into_iter()
+        .fold(splitmix(streams.seed), |key, part| splitmix(key ^ part));
+    Xoshiro256PlusPlus::seed_from_u64(key)
+}
+
+/// SplitMix64's finalizer: each part changes every bit of the key, so no two keys collide by addition.
+fn splitmix(x: u64) -> u64 {
+    let x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    let x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    let x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+
+/// `(FORMAT_VERSION, (n, dead, blocks))`: every vertex of `A` is in the bytes, so decoding allocates nothing they do not hold.
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize> serde::Serialize for Factor<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        struct Bodies<'a, T>(&'a [BlockFactor<T>]);
+        impl<T: serde::Serialize> serde::Serialize for Bodies<'_, T> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.collect_seq(self.0.iter().map(|block| &block.0))
+            }
+        }
+        let body = (self.n, &self.dead, Bodies(&self.blocks));
+        crate::wire::serialize(serializer, body)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for Factor<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (n, dead, blocks): (usize, Box<[usize]>, Vec<Storage<T>>) =
+            crate::wire::deserialize(deserializer)?;
+        let blocks = blocks.into_iter().map(BlockFactor).collect();
+        let value = Self { n, blocks, dead };
+        let corrupt = || serde::de::Error::custom("corrupt Factor");
+        value.checked().ok_or_else(corrupt)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T: Real> Factor<T> {
+    /// The blocks' vertices and the dead ones cover `0..n` once each.
+    fn checked(self) -> Option<Self> {
+        let mut vertices = self.dead.to_vec();
+        vertices.extend(self.blocks.iter().flat_map(BlockFactor::vertices));
+        if vertices.len() != self.n {
+            return None;
+        }
+        vertices.sort_unstable();
+        (vertices.iter().enumerate())
+            .all(|(i, &v)| i == v)
+            .then_some(self)
+    }
+}
+
+/// `(FORMAT_VERSION, storage)`: the version leads, so no future format has to keep the storage tag first.
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize> serde::Serialize for BlockFactor<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::wire::serialize(serializer, &self.0)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for BlockFactor<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        crate::wire::deserialize(deserializer).map(Self)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize, I: serde::Serialize> serde::Serialize for Block<T, I> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        (
+            &self.restriction,
+            &self.elimination,
+            &self.cholesky,
+            &self.report,
+        )
+            .serialize(serializer)
+    }
+}
+
+// Not `remote = "Self"`: it would export an unchecked inherent `deserialize`.
+#[cfg(feature = "serde")]
+impl<'de, T, I> serde::Deserialize<'de> for Block<T, I>
+where
+    T: Real + serde::Deserialize<'de>,
+    I: Index + serde::Deserialize<'de>,
+{
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (restriction, elimination, cholesky, report) =
+            serde::Deserialize::deserialize(deserializer)?;
+        let value = Self {
+            restriction,
+            elimination,
+            cholesky,
+            report,
+        };
+        let corrupt = || serde::de::Error::custom("corrupt BlockFactor");
+        value.checked().ok_or_else(corrupt)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T: Real, I: Index> Block<T, I> {
+    fn checked(self) -> Option<Self> {
+        let n = self.vertices().len();
+        let kept = match &self.elimination {
+            None => n,
+            Some(elimination) => n
+                .checked_sub(elimination.n_eliminated())
+                .filter(|&kept| kept == elimination.n_kept())?,
+        };
+        (kept > 0 && self.cholesky.solves(kept)).then_some(self)
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+    use crate::input::{BipartiteGram, CsrRef, FactorWidth1, Weights};
+    use crate::ScalingPolicy;
+
+    fn only_block(sgdd: Sgdd, config: &Config) -> Block<f64, u32> {
+        let mut blocks = Factor::build(&sgdd, config).into_blocks();
+        assert_eq!(blocks.len(), 1);
+        match blocks.pop().expect("one block").0 {
+            Storage::U32(block) => block,
+            Storage::U64(_) => unreachable!("a u32 reduction stores u32"),
+        }
+    }
+
+    fn csr_block(row_ptrs: &[u32], columns: &[u32], values: &[f64]) -> Block<f64, u32> {
+        let n = (row_ptrs.len() - 1) as u32;
+        let csr = CsrRef::new(row_ptrs, columns, values, n).expect("valid csr");
+        let sgdd = Sgdd::from_csr(csr, ScalingPolicy::default()).expect("reduces");
+        only_block(sgdd, &Config::default())
+    }
+
+    fn grounded_block() -> Block<f64, u32> {
+        let values = [2.0, -1.0, -1.0, 3.0, -1.0, -1.0, 2.0];
+        csr_block(&[0, 2, 5, 7], &[0, 1, 0, 1, 2, 1, 2], &values)
+    }
+
+    /// A 2-vertex floating block's restriction over a 3-vertex grounded block's Cholesky.
+    fn mismatched_cholesky() -> Block<f64, u32> {
+        let floating = csr_block(&[0, 2, 4], &[0, 1, 0, 1], &[1.0, -1.0, -1.0, 1.0]);
+        Block {
+            cholesky: grounded_block().cholesky,
+            ..floating
+        }
+    }
+
+    /// A bipartite block, so it carries a block elimination.
+    fn bipartite_block() -> Block<f64, u32> {
+        let gram = BipartiteGram::new(
+            FactorWidth1::new(2, &[0u32, 0, 1, 1], None).expect("valid rows"),
+            FactorWidth1::new(2, &[0u32, 1, 0, 1], None).expect("valid columns"),
+            Weights::unit(),
+        )
+        .expect("valid gram");
+        let sgdd = Sgdd::from_bipartite_gram(gram, ScalingPolicy::default()).expect("reduces");
+        let block = only_block(sgdd, &Config::default());
+        assert!(block.elimination.is_some());
+        block
+    }
+
+    /// A bipartite block stripped of the elimination its Cholesky follows.
+    fn without_elimination() -> Block<f64, u32> {
+        Block {
+            elimination: None,
+            ..bipartite_block()
+        }
+    }
+
+    /// An elimination of 2 keeping 2, between a 5-vertex restriction and a 3-vertex Cholesky.
+    fn elimination_keeping_another_count() -> Block<f64, u32> {
+        let elimination = bipartite_block().elimination;
+        let counts = elimination.as_ref().map(|e| (e.n_eliminated(), e.n_kept()));
+        assert_eq!(counts, Some((2, 2)));
+        let path = csr_block(
+            &[0, 2, 5, 8, 11, 13],
+            &[0, 1, 0, 1, 2, 1, 2, 3, 2, 3, 4, 3, 4],
+            &[
+                3.0, -1.0, -1.0, 3.0, -1.0, -1.0, 3.0, -1.0, -1.0, 3.0, -1.0, -1.0, 3.0,
+            ],
+        );
+        Block {
+            restriction: path.restriction,
+            elimination,
+            cholesky: grounded_block().cholesky,
+            report: None,
+        }
+    }
+
+    #[rstest]
+    #[case::mismatched_cholesky(mismatched_cholesky())]
+    #[case::without_elimination(without_elimination())]
+    #[case::elimination_keeping_another_count(elimination_keeping_another_count())]
+    fn a_block_whose_parts_disagree_is_rejected_on_decode(#[case] spliced: Block<f64, u32>) {
+        let bytes = postcard::to_stdvec(&BlockFactor(Storage::U32(spliced))).expect("serialize");
+        assert_eq!(
+            postcard::from_bytes::<BlockFactor>(&bytes).expect_err("parts that disagree"),
+            postcard::Error::SerdeDeCustom
+        );
+    }
+}
+
+#[cfg(test)]
+mod storage {
+    use super::*;
+    use crate::input::{BipartiteGram, CsrRef, FactorWidth1, Input, Weights};
+    use crate::{ScalingPolicy, SchurMode};
+
+    fn bits(factor: &Factor, b: &[f64]) -> Vec<u64> {
+        let x = factor.solve(b).expect("b has length n");
+        x.iter().map(|x| x.to_bits()).collect()
+    }
+
+    fn assert_storage_agrees(input: Input<'_, f64, u32>) {
+        let policy = ScalingPolicy::default();
+        let n = input.n();
+        let b: Vec<f64> = (0..n).map(|i| (i as f64 * 0.37).sin()).collect();
+        let configs = [
+            Config::default(),
+            Config {
+                backend: Backend::Approximate,
+                split_merge: Some(2),
+                ..Config::default()
+            },
+            Config {
+                backend: Backend::Approximate,
+                complement: SchurMode::Exact,
+                ..Config::default()
+            },
+        ];
+        for config in configs {
+            let narrow = Factor::build(&input.reduce::<u32>(policy).expect("reduces"), &config);
+            let wide = Factor::build(&input.reduce::<u64>(policy).expect("reduces"), &config);
+            assert!(matches!(wide.blocks[0].0, Storage::U64(_)));
+            assert_eq!(bits(&narrow, &b), bits(&wide, &b), "{config:?}");
+        }
+    }
+
+    /// `rows × cols` grid, `-1` off the diagonal but `sign` on row 0's edges, each diagonal `diagonal` times its degree.
+    fn grid(rows: u32, cols: u32, sign: f64, diagonal: f64) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
+        let (mut row_ptrs, mut columns, mut values) = (vec![0], vec![], vec![]);
+        for r in 0..rows {
+            for c in 0..cols {
+                let v = r * cols + c;
+                let mut neighbours = vec![];
+                (c > 0).then(|| neighbours.push(v - 1));
+                (c + 1 < cols).then(|| neighbours.push(v + 1));
+                (r > 0).then(|| neighbours.push(v - cols));
+                (r + 1 < rows).then(|| neighbours.push(v + cols));
+                let degree = neighbours.len() as f64;
+                neighbours.push(v);
+                neighbours.sort_unstable();
+                for &u in &neighbours {
+                    columns.push(u);
+                    let row_zero = u < cols && v < cols;
+                    let off = if row_zero { sign } else { -1.0 };
+                    values.push(if u == v { diagonal * degree } else { off });
+                }
+                row_ptrs.push(columns.len() as u32);
+            }
+        }
+        (row_ptrs, columns, values)
+    }
+
+    #[test]
+    fn u64_storage_solves_bit_identically_to_u32() {
+        // Floating Laplacian, signs no ±1 folds (a cover), and a block scaled to dominance.
+        for (sign, diagonal) in [(-1.0, 1.0), (1.0, 1.0), (-1.0, 0.8)] {
+            let (row_ptrs, columns, values) = grid(7, 6, sign, diagonal);
+            let csr = CsrRef::new(&row_ptrs, &columns, &values, 42).expect("valid CSR");
+            assert_storage_agrees(csr.into());
+        }
+        let rows: Vec<u32> = (0..60).map(|k| k % 12).collect();
+        let cols: Vec<u32> = (0..60).map(|k| (k * 7 + k / 12) % 9).collect();
+        let weights: Vec<f64> = (0..60).map(|k| 1.0 + (k % 5) as f64).collect();
+        let gram = BipartiteGram::new(
+            FactorWidth1::new(12, &rows, None).expect("valid rows"),
+            FactorWidth1::new(9, &cols, None).expect("valid columns"),
+            Weights::of(&weights).expect("nonnegative"),
+        )
+        .expect("valid gram");
+        assert_storage_agrees(gram.into());
+    }
+}

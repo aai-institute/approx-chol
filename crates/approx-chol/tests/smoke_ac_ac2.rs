@@ -1,33 +1,38 @@
+#[path = "common/cases.rs"]
+mod cases;
+#[path = "common/entry.rs"]
+mod entry;
+#[path = "common/floats.rs"]
+mod floats;
+#[path = "common/graph.rs"]
+mod graph;
 #[path = "common/grid.rs"]
 mod grid;
-use grid::grid_laplacian;
+#[path = "common/sparse.rs"]
+mod sparse;
 
-use approx_chol::low_level::Builder;
-use approx_chol::Config;
-use rstest::rstest;
+use cases::cases;
+use entry::{Entry, Types};
+use grid::grid;
+use sparse::Sparse;
 
-/// The scale at which bucket layout and fill-in bookkeeping carry load the property
-/// suite's eight-vertex graphs never reach.
-#[rstest]
-#[case::ac(Config::default())]
-#[case::ac2(Config { seed: 42, split_merge: Some(2), ..Config::default() })]
-fn smoke_medium_grid(#[case] config: Config) {
-    let lap = grid_laplacian(100, 100);
-    let factor = Builder::new(config)
-        .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
-        .expect("factorization should succeed");
-
-    let n = factor.n();
-    assert_eq!(
-        factor.n_steps(),
-        n - 1,
-        "a connected Laplacian pins one vertex"
-    );
-    let mut rhs = vec![0.0; n];
-    rhs[0] = 1.0;
-    rhs[n - 1] = -1.0;
-
-    let work = factor.solve(&rhs).expect("solve should succeed");
-    assert!(work.iter().all(|x| x.is_finite()));
-    assert!(work.iter().any(|x| x.abs() > 1e-12));
+cases! {
+    /// Bucket layout and fill bookkeeping carry load only past the property graphs' size.
+    fn smoke_medium_grid(route in sparse_routes(all), types in types(all)) {
+        let (entry, sparse) = route;
+        let graph = grid(100, 100);
+        let mut rhs = vec![0.0; graph.n];
+        (rhs[0], rhs[graph.n - 1]) = (1.0, -1.0);
+        let reduced = entry.reduce(&graph, types);
+        assert_eq!(
+            reduced.floats(),
+            [true],
+            "{types:?}: a connected Laplacian floats"
+        );
+        let config = sparse.config();
+        let x = reduced.factorize(&config).solve(&rhs);
+        let label = format!("{types:?} {config:?}");
+        assert!(x.iter().all(|x| x.is_finite()), "{label}");
+        assert!(x.iter().any(|x| x.abs() > types.epsilon()), "{label}");
+    }
 }

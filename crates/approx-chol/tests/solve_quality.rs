@@ -1,262 +1,383 @@
-#[path = "common/grounded.rs"]
-mod grounded;
-#[path = "common/path.rs"]
-mod path;
+#[path = "common/cases.rs"]
+mod cases;
+#[path = "common/dense.rs"]
+mod dense;
+#[path = "common/dimension.rs"]
+mod dimension;
+#[path = "common/entry.rs"]
+mod entry;
+#[path = "common/floats.rs"]
+mod floats;
+#[path = "common/graph.rs"]
+mod graph;
+#[path = "common/modes.rs"]
+mod modes;
 #[path = "common/residual.rs"]
 mod residual;
-use grounded::is_grounded;
-use residual::relative_residual_over;
+#[path = "common/sparse.rs"]
+mod sparse;
 
-use approx_chol::low_level::Builder;
-use approx_chol::{Backend, Config, CsrRef, Error, SolveError};
-use num_traits::Float;
-use rstest::rstest;
+use approx_chol::{Config, Factor, InnerParallelism, Real, SchurMode, SolveError};
+use cases::cases;
+use entry::{by_type, cast, cast_all, Entry, Factored, Types};
+use graph::{Edge, Graph};
+use modes::Mode;
+use sparse::Sparse;
 
-/// Routes `[[1+drift, -1], [-1, 1+drift]]`: `Ok(true)` when the drift is real dominance
-/// and earns a ground vertex, `Ok(false)` when it is within the row's own summation
-/// error, `Err` when it is a real deficit. Row scale is 2 over 2 stored terms, so the
-/// floor is `4 * eps` either way.
-fn route_at_drift<T: Float + Send + Sync + 'static>(drift: T) -> Result<bool, Error> {
-    let one = T::one();
-    let row_ptrs = [0u32, 2, 4];
-    let col_indices = [0u32, 1, 0, 1];
-    let values = [one + drift, -one, -one, one + drift];
-    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 2).expect("valid csr");
-    Builder::<T>::new(Config::default())
-        .build(csr)
-        .map(|factor| is_grounded(&factor))
-}
-
-/// Augmentation is decided in ingestion, before routing, so the default suffices. One
-/// ULP either way is drift a single addition accounts for, so the row is left floating.
-#[test]
-fn summation_roundoff_does_not_augment() {
-    for drift in [f32::EPSILON, -f32::EPSILON] {
-        assert!(!route_at_drift(drift).expect("f32 roundoff is in class"));
-    }
-    for drift in [f64::EPSILON, -f64::EPSILON] {
-        assert!(!route_at_drift(drift).expect("f64 roundoff is in class"));
-    }
-}
-
-/// Past that the surplus is real dominance (#85). Both drifts land mid-window for their
-/// precision — 8 ULPs of this row in `f32`, 2.25e5 in `f64` — which no two-term sum
-/// invents, yet through 0.3.1 both were answered as a singular Laplacian.
-#[test]
-fn surplus_beyond_summation_roundoff_augments() {
-    assert!(route_at_drift(1e-6_f32).expect("f32 dominance"));
-    assert!(route_at_drift(5e-11_f64).expect("f64 dominance"));
-}
-
-/// The same magnitude with the sign flipped is real *non*-dominance, and is reported
-/// rather than zeroed (#91). Through 0.3.1 a coarser deficit tolerance forgave these,
-/// which left a matrix drifting both ways factored partially grounded.
-#[test]
-fn deficit_beyond_summation_roundoff_is_rejected() {
-    for err in [
-        route_at_drift(-1e-6_f32).expect_err("f32 deficit must be reported"),
-        route_at_drift(-5e-11_f64).expect_err("f64 deficit must be reported"),
-    ] {
+fn assert_close(label: &str, x: &[f64], want: &[f64], tolerance: f64) {
+    assert_eq!(x.len(), want.len(), "{label}");
+    for (i, (&got, &want)) in x.iter().zip(want).enumerate() {
         assert!(
-            matches!(err, Error::NotDiagonallyDominant { row: 0 }),
-            "{err:?}"
+            (got - want).abs() <= tolerance * want.abs().max(1.0),
+            "{label}: x[{i}] = {got:e}, expected {want:e} ({x:?})"
         );
     }
 }
 
-/// A 4-vertex star whose centre diagonal is `offset` ULPs above its exactly-dyadic
-/// off-diagonal mass, so the drift is the offset and nothing else. Leaves balance
-/// exactly, leaving only the centre row in question.
-fn star_augments_at_ulp_offset(offset: u64) -> bool {
-    let centre = f64::from_bits(4e8f64.to_bits() + offset);
-    let row_ptrs = [0u32, 4, 6, 8, 10];
-    let col_indices = [0u32, 1, 2, 3, 0, 1, 0, 2, 0, 3];
-    let values = [centre, -1e8, -2e8, -1e8, -1e8, 1e8, -2e8, 2e8, -1e8, 1e8];
-    let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4).expect("valid csr");
-    let factor = Builder::<f64>::new(Config::default())
-        .build(csr)
-        .expect("factorization should succeed");
-    is_grounded(&factor)
+fn bits(x: &[f64]) -> Vec<u64> {
+    x.iter().map(|x| x.to_bits()).collect()
 }
 
-/// Brackets the floor at a large row scale, where an absolute threshold would misjudge
-/// both ends. Scale is `8e8` and the row has 4 stored terms, so the floor is
-/// `eps * 8e8 * 4 = 7.1e-7`, or 11.9 ULPs of the centre diagonal.
-#[test]
-fn surplus_below_the_row_noise_floor_does_not_augment() {
-    assert!(!star_augments_at_ulp_offset(4), "4 ULP is inside the floor");
-    assert!(star_augments_at_ulp_offset(24), "24 ULP is real dominance");
-}
-
-// A diagonal SDDM matrix augments to a star, which is a tree, so AC is exact here —
-// that isolates Gremban recovery from sampling error. The RHS sums non-zero, the case
-// the old global zero-mean projection got wrong.
-
-fn diagonal_sddm() -> (Vec<u32>, Vec<u32>, Vec<f64>, u32) {
-    (vec![0, 1, 2, 3], vec![0, 1, 2], vec![2.0, 3.0, 5.0], 3)
-}
-
-/// A star is a tree at every `k`, so no clique edge is sampled and the tight
-/// tolerance holds — the only closed-form check on the AC2 arithmetic.
-#[rstest]
-#[case::approximate(Backend::Approximate)]
-#[case::exact(Backend::default())]
-fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
-    #[case] backend: Backend,
-    #[values(None, Some(2), Some(3), Some(7))] split_merge: Option<u32>,
-    #[values([1.0, 2.0, 3.0], [1.0, -2.0, 4.0])] b: [f64; 3],
-) {
-    let (rp, ci, vals, n) = diagonal_sddm();
-    let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid diagonal SDDM");
-    let factor = Builder::new(Config {
-        backend,
-        split_merge,
-        ..Config::default()
-    })
-    .build(csr)
-    .expect("factorization should succeed");
-
-    assert!(is_grounded(&factor), "diagonal SDDM should be augmented");
-
-    let x = factor.solve(&b).expect("solve should succeed");
-    assert_eq!(x.len(), n as usize);
-    for i in 0..n as usize {
-        let want = b[i] / vals[i];
-        assert!(
-            (x[i] - want).abs() < 1e-9,
-            "x[{i}] = {:.6}, expected {want:.6} (M^-1 b)",
-            x[i]
-        );
+/// Every vertex its own grounded block.
+fn diagonal_sddm() -> Graph {
+    Graph {
+        ground: vec![2.0, 3.0, 5.0],
+        ..Graph::new(3, Vec::new())
     }
 }
 
-/// The ground slot is internal, so `n + 1` is too long even though scratch holds `n + 1` slots.
-#[test]
-fn every_solve_checks_its_buffer_lengths() {
-    let (rp, ci, vals, n) = diagonal_sddm();
-    let csr = CsrRef::new(&rp, &ci, &vals, n).expect("valid diagonal SDDM");
-    let factor = Builder::new(Config::default())
-        .build(csr)
-        .expect("factorization should succeed");
+/// `config` with AC2's copy count, wherever it splits, set to `k`.
+fn splitting(config: Config, k: u32) -> Config {
+    let split = |split_merge: Option<u32>| split_merge.filter(|&k| k >= 2).map(|_| k);
+    Config {
+        split_merge: split(config.split_merge),
+        complement: match config.complement {
+            SchurMode::Approximate { split_merge } => SchurMode::Approximate {
+                split_merge: split(split_merge),
+            },
+            other => other,
+        },
+        ..config
+    }
+}
+
+cases! {
+    /// A grounded singleton is a star at every `k`: AC2 samples no edge and solves `M⁻¹b`.
+    #[case::positive_rhs([1.0, 2.0, 3.0])]
+    #[case::mixed_sign_rhs([1.0, -2.0, 4.0])]
+    fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
+        #[case] b: [f64; 3],
+        entry in entries(grounded),
+        types in types(all),
+        #[values(2, 3, 7)] k: u32,
+    ) {
+        let graph = diagonal_sddm();
+        let reduced = entry.reduce(&graph, types);
+        assert_eq!(reduced.floats(), [false; 3], "{types:?}");
+        let config = splitting(Sparse::Ac2ExactComplement.config(), k);
+        let factor = reduced.factorize(&config);
+        let want: Vec<f64> = b.iter().zip(&graph.ground).map(|(b, d)| b / d).collect();
+        let label = format!("{types:?} {config:?}");
+        assert_close(&label, &factor.solve(&b), &want, 4.0 * types.epsilon());
+    }
+}
+
+fn assert_buffers_checked<T: Real>(factor: &Factor<T>) {
+    let n = factor.n();
+    for found in [n - 1, n + 1] {
+        let error = SolveError::LengthMismatch { expected: n, found };
+        assert_eq!(factor.solve(&vec![T::zero(); found]), Err(error));
+        let mut scratch = vec![T::zero(); factor.scratch_len()];
+        let solved = factor.solve_in_place(&mut vec![T::zero(); found], &mut scratch);
+        assert_eq!(solved, Err(error));
+    }
     let needed = factor.scratch_len();
-    assert!(
-        needed > factor.n(),
-        "a grounded factor solves through scratch"
+    let short = &mut vec![T::zero(); needed - 1];
+    let error = SolveError::ScratchTooShort {
+        needed,
+        found: needed - 1,
+    };
+    assert_eq!(
+        factor.solve_in_place(&mut vec![T::one(); n], short),
+        Err(error)
     );
-
-    let mut scratch = vec![0.0; needed];
-    for len in [factor.n() - 1, factor.n() + 1] {
-        let mut x = vec![0.0; len];
-        for err in [
-            factor.solve(&x).expect_err("solve must reject the length"),
-            factor
-                .solve_in_place(&mut x, &mut scratch)
-                .expect_err("solve_in_place must reject the length"),
-        ] {
-            assert_eq!(
-                err,
-                SolveError::LengthMismatch {
-                    len,
-                    factor_dim: factor.n()
-                }
-            );
+    let blocks = factor.clone().into_blocks();
+    assert!(
+        blocks.iter().any(|block| block.scratch_len() > 0),
+        "a grounded block solves through scratch"
+    );
+    for block in blocks {
+        let (m, needed) = (block.vertices().len(), block.scratch_len());
+        let mut scratch = vec![T::zero(); needed];
+        for found in [m - 1, m + 1] {
+            let mut x = vec![T::zero(); found];
+            let error = SolveError::LengthMismatch { expected: m, found };
+            let solved = block.solve_local(&mut x, &mut scratch, InnerParallelism::Forbid);
+            assert_eq!(solved, Err(error));
+        }
+        if needed > 0 {
+            let mut x = vec![T::one(); m];
+            let short = &mut scratch[..needed - 1];
+            let error = SolveError::ScratchTooShort {
+                needed,
+                found: needed - 1,
+            };
+            let solved = block.solve_local(&mut x, short, InnerParallelism::Forbid);
+            assert_eq!(solved, Err(error));
         }
     }
-
-    let mut x = vec![1.0; factor.n()];
-    assert_eq!(
-        factor.solve_in_place(&mut x, &mut scratch[..needed - 1]),
-        Err(SolveError::ScratchTooSmall {
-            scratch_len: needed - 1,
-            needed
-        })
-    );
 }
 
-/// NaN reaches the result if any slot, a ground included, is read before it is written.
-#[rstest]
-#[case::grounded(&[0, 2, 4], &[0, 1, 0, 1], &[2.0, -1.0, -1.0, 2.0])]
-#[case::interleaved_components(
-    &[0, 2, 4, 6, 8],
-    &[0, 2, 1, 3, 0, 2, 1, 3],
-    &[1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0]
-)]
-fn dirty_scratch_does_not_change_the_solution(
-    #[case] row_ptrs: &[u32],
-    #[case] columns: &[u32],
-    #[case] values: &[f64],
-    #[values(Backend::Approximate, Backend::default())] backend: Backend,
-) {
-    let n = row_ptrs.len() - 1;
-    let csr = CsrRef::new(row_ptrs, columns, values, n as u32).expect("valid CSR");
-    let factor = Builder::<f64>::new(Config {
-        seed: 7,
-        backend,
-        ..Config::default()
-    })
-    .build(csr)
-    .expect("factorization should succeed");
-    assert!(factor.scratch_len() > 0, "the solve goes through scratch");
-
-    let rhs: Vec<f64> = (0..n).map(|i| i as f64 - 1.5).collect();
-    let mut in_place = rhs.clone();
-    let mut scratch = vec![f64::NAN; factor.scratch_len() + 1];
-    factor
-        .solve_in_place(&mut in_place, &mut scratch)
-        .expect("solve_in_place should succeed");
-    assert_eq!(in_place, factor.solve(&rhs).expect("solve"));
+cases! {
+    fn every_solve_checks_its_buffer_lengths(entry in entries(grounded), types in types(all)) {
+        let reduced = entry.reduce(&diagonal_sddm(), types);
+        let factor = reduced.factorize(&Config::default());
+        by_type!(&factor.factor, factor => assert_buffers_checked(factor));
+    }
 }
 
-/// Scaling a Laplacian by `t` scales its solution by `1/t`, so a factor that drops
-/// the scale is wrong by that whole factor rather than slightly less accurate.
-fn assert_scaled_path_solves<T>(exponent: i32, backend: Backend)
-where
-    T: Float + Send + Sync + 'static + std::fmt::LowerExp,
-{
-    let ten = T::from(10.0).expect("10 is representable");
-    let scale = ten.powi(exponent);
-    let values: Vec<T> = path::VALUES
+/// Each block through `solve_local` on a NaN-filled scratch, scattered back.
+fn solve_on_dirty_scratch<T: Real>(
+    factor: &Factor<T>,
+    b: &[f64],
+    inner: InnerParallelism,
+) -> Vec<f64> {
+    let mut x = vec![0.0; factor.n()];
+    for block in factor.clone().into_blocks() {
+        let mut local: Vec<T> = block.vertices().map(|v| cast(b[v])).collect();
+        let mut scratch = vec![T::nan(); block.scratch_len() + 1];
+        let solved = block.solve_local(&mut local, &mut scratch, inner);
+        solved.expect("buffers fit");
+        (block.vertices().zip(&local)).for_each(|(v, &value)| x[v] = cast(value));
+    }
+    x
+}
+
+fn uses_scratch(factor: &Factored) -> bool {
+    by_type!(&factor.factor, factor => factor
+        .clone()
+        .into_blocks()
         .iter()
-        .map(|&value| T::from(value).expect("fixture weight is representable") * scale)
-        .collect();
-    let csr = CsrRef::new(&path::ROW_PTRS, &path::COL_INDICES, &values, path::N)
-        .expect("scaled path is valid CSR");
-    let one = T::one();
-    let b = [one, T::zero(), T::zero(), -one];
+        .any(|block| block.scratch_len() > 0))
+}
 
-    let factor = Builder::<T>::new(Config {
-        backend,
-        ..Config::default()
-    })
-    .build(csr)
-    .expect("factorization should succeed");
-    let x = factor.solve(&b).expect("solve");
+/// NaN reaches the result if any slot, ground or cover, is read before it is written.
+fn assert_dirty_scratch_matches_the_solve(label: &str, factor: &Factored) {
+    let n = factor.n();
+    let rhs: Vec<f64> = (0..n).map(|i| i as f64 - 1.5).collect();
+    let want = factor.solve(&rhs);
+    for inner in [InnerParallelism::Allow, InnerParallelism::Forbid] {
+        let local = factor.labels.to_local(&rhs);
+        let x = by_type!(&factor.factor, f => solve_on_dirty_scratch(f, &local, inner));
+        let x = factor.labels.to_caller(&x);
+        assert_eq!(bits(&x), bits(&want), "{label} {inner:?}");
+    }
+    let local = factor.labels.to_local(&rhs);
+    let x = by_type!(&factor.factor, f => solve_in_place_on_dirty_scratch(f, &local));
+    let x = factor.labels.to_caller(&x);
+    assert_eq!(bits(&x), bits(&want), "{label} in place");
+}
 
-    let relative = relative_residual_over(csr, &x, &b, 0..b.len());
+/// The whole factor through `solve_in_place` on a NaN-filled scratch.
+fn solve_in_place_on_dirty_scratch<T: Real>(factor: &Factor<T>, b: &[f64]) -> Vec<f64> {
+    let mut x: Vec<T> = cast_all(b);
+    let mut scratch = vec![T::nan(); factor.scratch_len() + 1];
+    factor
+        .solve_in_place(&mut x, &mut scratch)
+        .expect("buffers fit");
+    cast_all(&x)
+}
+
+cases! {
+    fn dirty_scratch_does_not_change_a_grounded_solution(
+        route in routes(grounded),
+        types in types(all),
+    ) {
+        let (entry, mode) = route;
+        let graph = Graph {
+            ground: vec![1.0, 1.0],
+            ..Graph::new(2, vec![Edge::negative(0, 1, 1.0)])
+        };
+        let config = mode.config();
+        let factor = entry.reduce(&graph, types).factorize(&config);
+        assert!(
+            uses_scratch(&factor),
+            "grounded: the solve goes through scratch"
+        );
+        assert_dirty_scratch_matches_the_solve(&format!("grounded {types:?} {config:?}"), &factor);
+    }
+}
+
+cases! {
+    fn dirty_scratch_does_not_change_a_frustrated_solution(
+        route in routes(frustrated),
+        types in types(all),
+    ) {
+        let (entry, mode) = route;
+        let positive = |a, b| Edge {
+            positive: true,
+            ..Edge::negative(a, b, 1.0)
+        };
+        let graph = Graph::new(3, vec![positive(0, 1), positive(1, 2), positive(0, 2)]);
+        let config = mode.config();
+        let factor = entry.reduce(&graph, types).factorize(&config);
+        assert!(
+            uses_scratch(&factor),
+            "frustrated: the solve goes through scratch"
+        );
+        let label = format!("frustrated {types:?} {config:?}");
+        assert_dirty_scratch_matches_the_solve(&label, &factor);
+    }
+}
+
+cases! {
+    /// Floating blocks solve in place; this case exercises the gather and scatter.
+    fn dirty_scratch_does_not_change_an_interleaved_components_solution(
+        route in routes(all),
+        types in types(all),
+    ) {
+        let (entry, mode) = route;
+        let edges = vec![Edge::negative(0, 2, 1.0), Edge::negative(1, 3, 1.0)];
+        let graph = Graph::new(4, edges);
+        let config = mode.config();
+        let factor = entry.reduce(&graph, types).factorize(&config);
+        let label = format!("interleaved components {types:?} {config:?}");
+        assert_dirty_scratch_matches_the_solve(&label, &factor);
+    }
+}
+
+fn path(weight: f64) -> Graph {
+    Graph::new(
+        4,
+        (0..3).map(|i| Edge::negative(i, i + 1, weight)).collect(),
+    )
+}
+
+/// `t A` solves to `x / t`, so a factor that drops the scale misses by `t`.
+fn assert_scaled_path_solves(entry: Entry, types: Types, mode: Mode, exponent: i32) {
+    let graph = path(10f64.powi(exponent));
+    let b = [1.0, 0.0, 0.0, -1.0];
+    let config = mode.config();
+    let x = entry.reduce(&graph, types).factorize(&config).solve(&b);
+    let relative = graph.relative_residual(&x, &b);
     assert!(
-        relative < T::from(1e-6).expect("tolerance is representable"),
-        "relative residual {relative:e}"
+        relative < 1e-6,
+        "{types:?} {config:?} 1e{exponent}: relative residual {relative:e}"
     );
 }
 
-/// The two scalars bottom out at different exponents, so each gets the range its
-/// solution is still representable in.
-#[rstest]
-#[case::approximate(Backend::Approximate)]
-#[case::exact(Backend::default())]
-fn a_scaled_f64_laplacian_solves_wherever_its_solution_is_representable(
-    #[case] backend: Backend,
-    #[values(0, -5, -15, -100, -250)] exponent: i32,
-) {
-    assert_scaled_path_solves::<f64>(exponent, backend);
+cases! {
+    /// Each scalar runs the exponents its solution is representable at.
+    fn a_scaled_f64_laplacian_solves_wherever_its_solution_is_representable(
+        route in routes(all),
+        types in types(f64),
+        #[values(0, -5, -15, -100, -250)] exponent: i32,
+    ) {
+        let (entry, mode) = route;
+        assert_scaled_path_solves(entry, types, mode, exponent);
+    }
 }
 
-#[rstest]
-#[case::approximate(Backend::Approximate)]
-#[case::exact(Backend::default())]
-fn a_scaled_f32_laplacian_solves_wherever_its_solution_is_representable(
-    #[case] backend: Backend,
-    #[values(0, -3, -10, -25)] exponent: i32,
-) {
-    assert_scaled_path_solves::<f32>(exponent, backend);
+cases! {
+    fn a_scaled_f32_laplacian_solves_wherever_its_solution_is_representable(
+        route in routes(all),
+        types in types(f32),
+        #[values(0, -3, -10, -25)] exponent: i32,
+    ) {
+        let (entry, mode) = route;
+        assert_scaled_path_solves(entry, types, mode, exponent);
+    }
+}
+
+cases! {
+    fn many_zero_singletons_factor_as_trivial_components(
+        entry in entries(all),
+        types in types(all),
+    ) {
+        let graph = Graph::new(128, Vec::new());
+        let reduced = entry.reduce(&graph, types);
+        assert!(
+            reduced.floats().is_empty(),
+            "{types:?}: a zero vertex is no block"
+        );
+        let factor = reduced.factorize(&Config::default());
+        assert_eq!(factor.n(), 128);
+        assert_eq!(bits(&factor.solve(&[1.0; 128])), bits(&[0.0; 128]));
+        let x = by_type!(&factor.factor, f => solve_in_place_on_dirty_scratch(f, &[1.0; 128]));
+        assert_eq!(bits(&x), bits(&[0.0; 128]), "{types:?}: in place zeroes every dead vertex");
+    }
+}
+
+cases! {
+    fn mixed_grounded_and_floating_components_solve_independently(
+        route in routes(grounded),
+        types in types(all),
+    ) {
+        let (entry, mode) = route;
+        let graph = Graph {
+            ground: vec![2.0, 0.0, 0.0],
+            ..Graph::new(3, vec![Edge::negative(1, 2, 1.0)])
+        };
+        let reduced = entry.reduce(&graph, types);
+        let mut floats = reduced.floats();
+        floats.sort();
+        assert_eq!(floats, [false, true], "{types:?}");
+        let config = mode.config();
+        let x = reduced.factorize(&config).solve(&[4.0, 1.0, -1.0]);
+        let label = format!("{types:?} {config:?}");
+        assert_close(&label, &x, &[2.0, 0.5, -0.5], 4.0 * types.epsilon());
+    }
+}
+
+cases! {
+    /// Components `{0, 2}` and `{1, 3}` interleave; the inconsistent rhs solves least-squares.
+    #[case::zero_sum_per_block([1.0, 2.0, -1.0, -2.0], [0.5, 1.0, -0.5, -1.0])]
+    #[case::inconsistent([3.0, 5.0, -1.0, -2.0], [1.0, 1.75, -1.0, -1.75])]
+    fn interleaved_components_solve_in_input_order(
+        #[case] rhs: [f64; 4],
+        #[case] want: [f64; 4],
+        route in routes(all),
+        types in types(all),
+    ) {
+        let (entry, mode) = route;
+        let edges = vec![Edge::negative(0, 2, 1.0), Edge::negative(1, 3, 1.0)];
+        let graph = Graph::new(4, edges);
+        let config = mode.config();
+        let factor = entry.reduce(&graph, types).factorize(&config);
+        let label = format!("{types:?} {config:?}");
+        assert_close(&label, &factor.solve(&rhs), &want, 8.0 * types.epsilon());
+    }
+}
+
+cases! {
+    fn a_zero_singleton_has_a_defined_solve(entry in entries(all), types in types(all)) {
+        let graph = Graph::new(1, Vec::new());
+        let x = entry.reduce(&graph, types).factorize(&Config::default()).solve(&[7.0]);
+        let label = format!("zero singleton {types:?}");
+        assert_close(&label, &x, &[0.0], types.epsilon());
+    }
+}
+
+cases! {
+    fn a_positive_singleton_has_a_defined_solve(
+        route in routes(lone_ground),
+        types in types(all),
+    ) {
+        let (entry, mode) = route;
+        let graph = Graph {
+            ground: vec![2.0],
+            ..Graph::new(1, Vec::new())
+        };
+        let config = mode.config();
+        let x = entry.reduce(&graph, types).factorize(&config).solve(&[7.0]);
+        let label = format!("positive singleton {types:?} {config:?}");
+        assert_close(&label, &x, &[3.5], types.epsilon());
+    }
+}
+
+cases! {
+    fn an_empty_system_solves_to_an_empty_vector(entry in entries(all), types in types(all)) {
+        let reduced = entry.reduce(&Graph::new(0, Vec::new()), types);
+        assert!(reduced.factorize(&Config::default()).solve(&[]).is_empty());
+    }
 }

@@ -1,24 +1,22 @@
-use approx_chol::CsrRef;
-use num_traits::{Float, PrimInt};
+use crate::graph::Graph;
 
-/// `||(Ax - b)[rows]|| / ||b[rows]||`, restricted to a row range so one block's
-/// claim can be judged without the error the other blocks left.
-pub fn relative_residual_over<T: Float, I: PrimInt>(
-    csr: CsrRef<'_, T, I>,
-    x: &[T],
-    b: &[T],
-    rows: core::ops::Range<usize>,
-) -> T {
-    let (row_ptrs, columns, values) = (csr.row_ptrs(), csr.col_indices(), csr.values());
-    let (mut error, mut scale) = (T::zero(), T::zero());
-    let at = |index: I| index.to_usize().expect("a CSR index fits usize");
-    for (row, &target) in rows.clone().zip(&b[rows]) {
-        let mut product = T::zero();
-        for index in at(row_ptrs[row])..at(row_ptrs[row + 1]) {
-            product = product + values[index] * x[at(columns[index])];
+impl Graph {
+    /// `A x` from the edges, independent of every entry point under test.
+    pub fn apply(&self, x: &[f64]) -> Vec<f64> {
+        let mut y: Vec<f64> = (self.ground.iter().zip(x)).map(|(g, x)| g * x).collect();
+        for edge in &self.edges {
+            let sign = edge.sign();
+            let t = edge.weight * (x[edge.a] + sign * x[edge.b]);
+            y[edge.a] += t;
+            y[edge.b] += sign * t;
         }
-        error = error + (product - target) * (product - target);
-        scale = scale + target * target;
+        y
     }
-    (error / scale).sqrt()
+
+    /// `‖A x − b‖ / ‖b‖`.
+    pub fn relative_residual(&self, x: &[f64], b: &[f64]) -> f64 {
+        let norm = |v: &mut dyn Iterator<Item = f64>| v.map(|v| v * v).sum::<f64>().sqrt();
+        let ax = self.apply(x);
+        norm(&mut ax.iter().zip(b).map(|(ax, b)| ax - b)) / norm(&mut b.iter().copied())
+    }
 }

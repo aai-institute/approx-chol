@@ -1,7 +1,4 @@
-use approx_chol::input::Csr;
-use approx_chol::{
-    CliqueRule, Config, Factor, Multiplicity, ScalingPolicy, ScalingReport, Sgdd, SplitCount,
-};
+use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, ScalingReport, SchurMode};
 use num_traits::PrimInt;
 use numpy::{BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
@@ -99,26 +96,85 @@ fn slices_overlap<T>(lhs: &[T], rhs: &[T]) -> bool {
     lhs_start < rhs_end && rhs_start < lhs_end
 }
 
+#[pyclass(frozen, eq, from_py_object, name = "Backend")]
+#[derive(Clone, PartialEq, Eq)]
+enum PyBackend {
+    Approximate {},
+    ExactBelow { max_dim: usize },
+}
+
+impl From<PyBackend> for Backend {
+    fn from(backend: PyBackend) -> Self {
+        match backend {
+            PyBackend::Approximate {} => Self::Approximate,
+            PyBackend::ExactBelow { max_dim } => Self::ExactBelow { max_dim },
+        }
+    }
+}
+
+impl From<Backend> for PyBackend {
+    fn from(backend: Backend) -> Self {
+        match backend {
+            Backend::ExactBelow { max_dim } => Self::ExactBelow { max_dim },
+            // `Backend` is `non_exhaustive`, so a newer core may route a way these bindings do not model yet.
+            _ => Self::Approximate {},
+        }
+    }
+}
+
+#[pyclass(frozen, eq, from_py_object, name = "SchurMode")]
+#[derive(Clone, PartialEq, Eq)]
+enum PySchurMode {
+    Exact {},
+    #[pyo3(constructor = (split = None))]
+    Approximate {
+        split: Option<u32>,
+    },
+    Same {},
+}
+
+impl From<PySchurMode> for SchurMode {
+    fn from(mode: PySchurMode) -> Self {
+        match mode {
+            PySchurMode::Exact {} => Self::Exact,
+            PySchurMode::Approximate { split } => Self::Approximate { split_merge: split },
+            PySchurMode::Same {} => Self::Same,
+        }
+    }
+}
+
+impl From<SchurMode> for PySchurMode {
+    fn from(mode: SchurMode) -> Self {
+        match mode {
+            SchurMode::Exact => Self::Exact {},
+            SchurMode::Approximate { split_merge } => Self::Approximate { split: split_merge },
+            // `SchurMode` is `non_exhaustive`, as `Backend` is.
+            _ => Self::Same {},
+        }
+    }
+}
+
 #[pyclass(frozen, name = "Config")]
 struct PyConfig(Config);
 
 #[pymethods]
 impl PyConfig {
     #[new]
-    #[pyo3(signature = (seed=None, split=None, dense_up_to=None))]
-    fn new(seed: Option<u64>, split: Option<u32>, dense_up_to: Option<usize>) -> Self {
+    #[pyo3(signature = (seed=None, split=None, backend=None, complement=None))]
+    fn new(
+        seed: Option<u64>,
+        split: Option<u32>,
+        backend: Option<PyBackend>,
+        complement: Option<PySchurMode>,
+    ) -> Self {
         let default = Config::default();
-        let mut config = Config {
+        Self(Config {
             seed: seed.unwrap_or(default.seed),
-            dense_up_to: dense_up_to.unwrap_or(default.dense_up_to),
+            split_merge: split.or(default.split_merge),
+            backend: backend.map_or(default.backend, Backend::from),
+            complement: complement.map_or(default.complement, SchurMode::from),
             ..default
-        };
-        if let Some(k) = split {
-            let approximate = SplitCount::new(k).map_or(Multiplicity::Single, Multiplicity::Split);
-            config.approximate = approximate;
-            config.complement = CliqueRule::Sampled(approximate);
-        }
-        Self(config)
+        })
     }
 
     #[getter]
@@ -128,26 +184,28 @@ impl PyConfig {
 
     #[getter]
     fn split(&self) -> Option<u32> {
-        match self.0.approximate {
-            Multiplicity::Single => None,
-            Multiplicity::Split(k) => Some(k.get()),
-        }
+        self.0.split_merge
     }
 
     #[getter]
-    fn dense_up_to(&self) -> usize {
-        self.0.dense_up_to
+    fn backend(&self) -> PyBackend {
+        self.0.backend.into()
+    }
+
+    #[getter]
+    fn complement(&self) -> PySchurMode {
+        self.0.complement.into()
     }
 }
 
 #[pyclass(frozen, name = "Factor")]
 struct PyFactor {
-    inner: Factor<f64, u32>,
+    inner: Factor<f64>,
 }
 
 /// Without this, a deficit the reduction clamped to make a block dominant is silent.
-fn warn_on_scaling(py: Python<'_>, sgdd: &Sgdd<f64, u32>) -> PyResult<()> {
-    let reports: Vec<ScalingReport> = (sgdd.blocks().iter())
+fn warn_on_scaling(py: Python<'_>, factor: &Factor<f64>) -> PyResult<()> {
+    let reports: Vec<ScalingReport> = (factor.blocks().iter())
         .filter_map(|block| block.scaling_report())
         .collect();
     let clamped: Vec<f64> = (reports.iter())
@@ -186,6 +244,11 @@ impl PyFactor {
     #[getter]
     fn n(&self) -> usize {
         self.inner.n()
+    }
+
+    #[getter]
+    fn n_steps(&self) -> usize {
+        self.inner.n_steps()
     }
 
     #[getter]
@@ -317,7 +380,7 @@ struct CsrArrays<'py> {
 
 impl CsrArrays<'_> {
     fn factorize(&self, config: Option<&PyConfig>) -> PyResult<PyFactor> {
-        // Also keeps `Csr::new` from overflowing `n + 1`.
+        // Also keeps `CsrRef::new` from overflowing `n + 1`.
         if u32::try_from(self.n).is_err() {
             return Err(value_error("matrix dimension exceeds u32::MAX"));
         }
@@ -353,17 +416,16 @@ impl CsrArrays<'_> {
             .map_err(|e| borrow_error("indices", e))?;
         let data = (self.data.try_readonly()).map_err(|e| borrow_error("data", e))?;
         let contiguous = |name: &str| value_error(format!("{name} must be contiguous"));
-        let csr = Csr::new(
-            self.n,
+        let csr = CsrRef::new(
             indptr.as_slice().map_err(|_| contiguous("indptr"))?,
             indices.as_slice().map_err(|_| contiguous("indices"))?,
             data.as_slice().map_err(|_| contiguous("data"))?,
+            self.n as u32,
         )
         .map_err(|e| error_to_py(&e))?;
-        let sgdd = Sgdd::from_csr(csr, ScalingPolicy::default()).map_err(|e| error_to_py(&e))?;
-        warn_on_scaling(self.np.py(), &sgdd)?;
         let config = config.map_or_else(Config::default, |config| config.0);
-        let inner = approx_chol::factorize(&sgdd, &config);
+        let inner = factorize_with(csr, config).map_err(|e| error_to_py(&e))?;
+        warn_on_scaling(self.np.py(), &inner)?;
         Ok(PyFactor { inner })
     }
 }
@@ -372,8 +434,10 @@ impl CsrArrays<'_> {
 // GIL-free is sound: every pyclass is `frozen` with `Sync` state and the module holds none.
 #[pymodule(gil_used = false)]
 fn _approx_chol(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyBackend>()?;
     m.add_class::<PyConfig>()?;
     m.add_class::<PyFactor>()?;
+    m.add_class::<PySchurMode>()?;
     m.add_function(wrap_pyfunction!(factorize, m)?)?;
     m.add_function(wrap_pyfunction!(factorize_raw, m)?)?;
     Ok(())

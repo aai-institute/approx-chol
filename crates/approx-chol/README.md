@@ -1,6 +1,6 @@
 # approx-chol
 
-Approximate Cholesky factorization for SDDM and graph Laplacian systems.
+Approximate Cholesky factorization for symmetric generalized diagonally dominant systems, graph Laplacians among them.
 
 This crate implements AC and AC(k), porting key algorithmic ideas from [Laplacians.jl](https://github.com/danspielman/Laplacians.jl) to make these algorithms accessible in the Rust ecosystem and through Python bindings.
 
@@ -14,7 +14,7 @@ suitable as a preconditioner for iterative solvers on symmetric diagonally domin
 
 ```toml
 [dependencies]
-approx-chol = "0.3"
+approx-chol = "0.7"
 ```
 
 Or with Cargo:
@@ -28,28 +28,29 @@ cargo add approx-chol
 ```rust
 use approx_chol::{factorize, CsrRef};
 
-// 4-node path graph Laplacian (0-1-2-3)
+// 4-vertex path graph Laplacian (0-1-2-3)
 let row_ptrs    = [0u32, 2, 5, 8, 10];
 let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
 let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
 
 let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
-let decomp = factorize(csr)?;
+let factor = factorize(csr)?;
 
-// RHS must lie in the range of the Laplacian (sum to zero)
+// A Laplacian is singular: b sums to zero, and x is orthogonal to the all-ones vector
 let b = [1.0, -1.0, 1.0, -1.0];
-let x = decomp.solve(&b).expect("rhs length must be <= original matrix dimension");
-assert!(x.iter().all(|v| v.is_finite()));
+let x = factor.solve(&b)?;
+assert!(x.iter().all(|v| f64::is_finite(*v)));
 ```
 
-For a larger example with a grid Laplacian, see [`examples/basic_solve.rs`](examples/basic_solve.rs).
+Graph Laplacians, signed graphs and factor-width-2 Grams also factor from their edges, through the views in `approx_chol::input`; see [`examples/basic_solve.rs`](examples/basic_solve.rs).
 
 ## Feature flags
 
 | Feature | Effect |
 |---------|--------|
-| `sprs`  | Zero-copy `CsrRef` conversion from `sprs` matrices via `TryFrom`. |
-| `faer`  | Zero-copy `CsrRef` conversion from `faer` matrices via `TryFrom`. |
+| `sprs`  | Zero-copy `input::Csr` conversion from `sprs` matrices via `TryFrom`. |
+| `faer`  | Zero-copy `input::Csr` conversion from `faer` matrices via `TryFrom`. |
+| `serde` | Serialize and deserialize `Factor` and `BlockFactor`, led by their format version. |
 
 ## Attribution
 

@@ -1,8 +1,7 @@
 [workspace]
 members = [
-    "crates/approx-chol",
     "crates/approx-chol-py",
-    "crates/approx-chol-next",
+    "crates/approx-chol",
 ]
 resolver = "2"
 

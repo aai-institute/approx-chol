@@ -1,3 +1,5 @@
+import re
+
 import numpy as np
 import pytest
 import scipy.sparse as sp
@@ -28,7 +30,9 @@ def test_split_below_two_selects_standard_ac(split):
     b[0], b[-1] = 1.0, -1.0
 
     def solve(split):
-        config = approx_chol.Config(split=split, dense_up_to=0)
+        config = approx_chol.Config(
+            split=split, backend=approx_chol.Backend.Approximate()
+        )
         return approx_chol.factorize(lap, config).solve(b)
 
     np.testing.assert_array_equal(solve(split), solve(None))
@@ -57,7 +61,7 @@ def _f64(*xs):
             _u32(0, 1, 0, 1),
             _f64(2, -1, -1),
             2,
-            "CSR array has length 3, expected 4",
+            "col_indices and values have different lengths (4 != 3)",
             id="csr_new",
         ),
         pytest.param(
@@ -79,7 +83,7 @@ def _f64(*xs):
     ],
 )
 def test_factorize_raw_names_the_defect(row_ptrs, col_indices, values, n, message):
-    with pytest.raises(ValueError, match=f"^{message}$"):
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
         approx_chol.factorize_raw(row_ptrs, col_indices, values, n)
 
 
@@ -126,7 +130,9 @@ def test_duck_typed_factorize_validates_indices_and_dimension():
         np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64),
         (2, 2),
     )
-    with pytest.raises(ValueError, match="^row 0 has a column index outside 0..n$"):
+    with pytest.raises(
+        ValueError, match="^column index out of bounds at position 1: 4294967297 >= 2$"
+    ):
         approx_chol.factorize(too_large_idx)
 
     negative_idx = MatrixLike(
@@ -135,7 +141,10 @@ def test_duck_typed_factorize_validates_indices_and_dimension():
         np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64),
         (2, 2),
     )
-    with pytest.raises(ValueError, match="^row 0 has a column index outside 0..n$"):
+    with pytest.raises(
+        ValueError,
+        match="^col_index value at position 1 cannot be represented as usize$",
+    ):
         approx_chol.factorize(negative_idx)
 
     oversized_dim = MatrixLike(

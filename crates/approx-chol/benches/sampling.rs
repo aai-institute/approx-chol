@@ -1,16 +1,18 @@
-#[path = "../tests/common/grid.rs"]
+#[path = "common/csr.rs"]
+mod csr;
+#[path = "common/grid.rs"]
 mod grid;
 
-use approx_chol::low_level::{Builder, CliqueTreeSampler};
-use approx_chol::Config;
+use approx_chol::input::{BipartiteGram, FactorWidth1, Weights};
+use approx_chol::{factorize_with, Backend, Config};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use csr::{build, OwnedCsr};
+use grid::grid_laplacian;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 use std::collections::BTreeSet;
 
-use grid::{grid_laplacian, GridLaplacian};
-
-fn barabasi_albert(n: usize, m: usize, seed: u64) -> GridLaplacian {
+fn barabasi_albert(n: usize, m: usize, seed: u64) -> OwnedCsr {
     assert!(m >= 1 && n > m);
     let mut rng = SmallRng::seed_from_u64(seed);
 
@@ -45,78 +47,30 @@ fn barabasi_albert(n: usize, m: usize, seed: u64) -> GridLaplacian {
         }
     }
 
-    let mut row_ptrs: Vec<u32> = Vec::with_capacity(n + 1);
-    let mut col_indices = Vec::new();
-    let mut values = Vec::new();
-    row_ptrs.push(0);
-
-    for (v, neighbors) in adj.iter().enumerate().take(n) {
-        let v_u32 = v as u32;
-        let degree = neighbors.len() as f64;
-
-        for &nbr in neighbors {
-            if nbr < v_u32 {
-                col_indices.push(nbr);
-                values.push(-1.0);
-            }
-        }
-        col_indices.push(v_u32);
-        values.push(degree);
-        for &nbr in neighbors {
-            if nbr > v_u32 {
-                col_indices.push(nbr);
-                values.push(-1.0);
-            }
-        }
-        row_ptrs.push(col_indices.len() as u32);
-    }
-
-    GridLaplacian {
-        row_ptrs,
-        col_indices,
-        values,
-        n: n as u32,
-    }
+    OwnedCsr::laplacian(
+        adj.iter()
+            .map(|neighbors| neighbors.iter().map(|&u| u as usize)),
+    )
 }
 
 fn bench_factorization_grid(c: &mut Criterion) {
     let mut group = c.benchmark_group("factorization_grid");
     group.sample_size(10);
 
-    for &size in &[50, 100, 200] {
+    let ac2 = Config {
+        split_merge: Some(2),
+        ..Config::default()
+    };
+    // 1000x1000 holds 5M nonzeros, so its timing runs out of cache.
+    for &size in &[50, 100, 200, 1000] {
         let lap = grid_laplacian(size, size);
-        let config = Config::default();
-        let builder = Builder::new(config);
-
-        group.bench_with_input(
-            BenchmarkId::new("AC", format!("{size}x{size}")),
-            &lap,
-            |b, lap| {
-                b.iter(|| {
-                    builder
-                        .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
-                        .expect("factorization should succeed")
-                });
-            },
-        );
-
-        let ac2_config = Config {
-            split_merge: Some(2),
-            ..Default::default()
-        };
-        let ac2_builder = Builder::new(ac2_config);
-
-        group.bench_with_input(
-            BenchmarkId::new("AC2", format!("{size}x{size}")),
-            &lap,
-            |b, lap| {
-                b.iter(|| {
-                    ac2_builder
-                        .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
-                        .expect("factorization should succeed")
-                });
-            },
-        );
+        for (label, config) in [("AC", Config::default()), ("AC2", ac2)] {
+            group.bench_with_input(
+                BenchmarkId::new(label, format!("{size}x{size}")),
+                &lap,
+                |b, lap| b.iter(|| build(lap.csr(), config)),
+            );
+        }
     }
     group.finish();
 }
@@ -134,43 +88,43 @@ fn bench_factorization_powerlaw(c: &mut Criterion) {
     ] {
         let lap = barabasi_albert(n, m, 0xDEAD);
         let config = Config::default();
-        let builder = Builder::new(config);
-
         group.bench_with_input(BenchmarkId::new("AC", label), &lap, |b, lap| {
-            b.iter(|| {
-                builder
-                    .build(lap.as_csr().expect("grid_laplacian must build valid CSR"))
-                    .expect("factorization should succeed")
-            });
+            b.iter(|| build(lap.csr(), config));
         });
     }
     group.finish();
 }
 
-/// A consumer eliminating its own stars pays this per star, outside any `Builder::build`.
-fn bench_star_sampler(c: &mut Criterion) {
+/// A whole factorize of a bipartite block, reduction included, not main's bare sampler: no sampler is public.
+fn bench_bipartite_stars(c: &mut Criterion) {
     const STARS: usize = 10_000;
 
-    let mut group = c.benchmark_group("star_sampler");
+    let mut group = c.benchmark_group("bipartite_stars");
     for degree in [4usize, 10, 32] {
         let mut rng = SmallRng::seed_from_u64(0x5EED);
-        // Neighbors distinct within a star, as `sample` requires; only weights vary.
-        let flat: Vec<(u32, f64)> = (0..STARS * degree)
-            .map(|i| ((i % degree) as u32, rng.random_range(0.25..1.25f64)))
+        // Every star on the same `degree` kept vertices, as main's; only weights vary.
+        let stars: Vec<u32> = (0..STARS * degree).map(|i| (i / degree) as u32).collect();
+        let kept: Vec<u32> = (0..STARS * degree).map(|i| (i % degree) as u32).collect();
+        let weights: Vec<f64> = (0..STARS * degree)
+            .map(|_| rng.random_range(0.25..1.25f64))
             .collect();
+        let gram = BipartiteGram::new(
+            FactorWidth1::new(STARS, &stars, None).expect("valid side"),
+            FactorWidth1::new(degree, &kept, None).expect("valid side"),
+            Weights::of(&weights).expect("valid weights"),
+        )
+        .expect("valid gram");
 
         group.throughput(criterion::Throughput::Elements(STARS as u64));
         for (label, split_merge) in [("AC", None), ("AC2 k=4", Some(4))] {
-            group.bench_with_input(BenchmarkId::new(label, degree), &flat, |b, flat| {
-                let mut sampler = CliqueTreeSampler::new(0, split_merge);
-                let mut out = Vec::new();
-                b.iter(|| {
-                    for (index, star) in flat.chunks(degree).enumerate() {
-                        out.clear();
-                        sampler.sample(index as u64, star, &mut out);
-                        std::hint::black_box(&out);
-                    }
-                });
+            // Dense would take the complement exact: the kept block has only `degree` vertices.
+            let config = Config {
+                split_merge,
+                backend: Backend::Approximate,
+                ..Config::default()
+            };
+            group.bench_with_input(BenchmarkId::new(label, degree), &gram, |b, &gram| {
+                b.iter(|| factorize_with(gram, config).expect("factors"));
             });
         }
     }
@@ -181,6 +135,6 @@ criterion_group!(
     benches,
     bench_factorization_grid,
     bench_factorization_powerlaw,
-    bench_star_sampler,
+    bench_bipartite_stars,
 );
 criterion_main!(benches);

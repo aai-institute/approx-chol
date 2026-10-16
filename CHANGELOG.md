@@ -9,26 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (breaking)
 
-- `Factor::n` is the input dimension; ground slots are internal. ([#140])
-- `Factor::original_n` is removed. ([#140])
+- `Config` gains `complement: SchurMode` and `scaling: ScalingPolicy`. ([#182])
+- A `Config` serialized by 0.6.0 reads back only from a self-describing format such as JSON. ([#182])
+- `Backend::ExactBelow` has no `on_failure`; `ExactFailure`, `Fallback`, `DenseFailure`, `UnusablePivot` and `Factor::fallbacks` are removed, as the exact arm never fails a pivot. ([#182])
+- `Error` is `InvalidCsr(CsrError)` or `Reduce(ReduceError)`; a value defect is `CsrError::{NotSymmetric, BelowDiagonal, OutOfRange}`, naming its row. ([#182])
+- A column outside `0..n` is reported by `factorize`, not `CsrRef::new`; `CsrError::InputConversionPanicked` is removed. ([#182])
+- `factorize` takes any `TryInto<Input>`; a type converting only into `CsrRef` converts first. ([#182])
+- `low_level` is removed. ([#182])
+- `Factor::n` is the input dimension; `Factor::original_n` is removed. ([#140])
 - `Factor::solve_into` is removed. ([#146])
-- `Factor::solve_in_place` takes `x` of length `Factor::n` and caller scratch of at least
-  `Factor::scratch_len`. ([#146])
+- `Factor::solve_in_place` takes `x` of length `Factor::n` and caller scratch of at least `Factor::scratch_len`. ([#146])
 - `Factor::solve` rejects a right-hand side whose length is not `Factor::n`. ([#146])
-- `SolveError` is `LengthMismatch` or `ScratchTooSmall`. ([#146])
-- Python `Factor.solve`, `solve_into` and `matvec` reject a `b` whose length is not `n`. ([#146])
-- `Factor::solve_in_place` returns the zero-mean solution on floating blocks. ([#135])
-- A persisted block is grounded or floating with no stored dimension, and
-  `FACTOR_FORMAT_VERSION` is `0x41430005`. ([#148])
+- `SolveError` is `LengthMismatch` or `ScratchTooShort`. ([#146])
+- `Factor::solve_in_place` returns the zero-mean solution `solve` returns; 0.6.0 pinned an elimination-dependent vertex of each floating block to zero instead. ([#135])
+- `FACTOR_FORMAT_VERSION` is `0x41430006`, and no other version decodes. ([#148], [#179])
+- Python `Backend.ExactBelow` takes only `max_dim`; `ExactFailure`, `DenseFailure`, `Fallback` and `Factor.fallbacks` are removed. ([#182])
+- Python `Factor.n` is the matrix dimension, and `Factor.solve`, `solve_into` and `matvec` reject a `b` whose length is not `n`. ([#140], [#146])
+
+### Changed
+
+- `Backend::ExactBelow { max_dim }` bounds a block's dimension, not its solved variables: a floating block of `max_dim + 1` vertices factors approximately. ([#182])
+- `factorize` admits symmetric generalized diagonally dominant input: positive off-diagonals fold by a ±1 scaling or factor on a double cover, and a block short of dominance is scaled under `Config::scaling`. ([#183])
 
 ### Added
 
+- `Input`, and the views `input::Laplacian`, `input::SignedGraph`, `input::FactorWidth2`, `input::BipartiteGram` and `UpperCsrRef` it takes. ([#183])
+- `SchurMode`, `ScalingPolicy`, `ScalingReport` and `ReduceError`. ([#182])
+- `Factor::blocks` and `BlockFactor`, which solves one block in place and persists on its own. ([#183])
 - `Factor::scratch_len`. ([#146])
+- A factor of more than `(u32::MAX - 1) / 2` vertices stores `u64` indices. ([#182])
+- Python `SchurMode` and `Config(complement=...)`. ([#182])
+- Python `factorize` warns when a block's deficit is clamped or its scaling does not settle. ([#181])
+- Python `factorize_raw` takes arrays of any integer index dtype. ([#181])
 
 ### Fixed
 
 - Solves sum each block's right-hand side with compensation. ([#147])
-- A nonzero entry below `MIN_POSITIVE / EPSILON` in magnitude is rejected with `Error::MagnitudeTooSmall`. ([#163])
+- An entry below `MIN_POSITIVE / EPSILON` in magnitude is rejected. ([#163])
 
 ## [0.6.0] - 2026-08-24
 
@@ -224,5 +241,10 @@ for graph Laplacians in Rust with Python bindings.
 [#140]: https://github.com/aai-institute/approx-chol/issues/140
 [#146]: https://github.com/aai-institute/approx-chol/issues/146
 [#147]: https://github.com/aai-institute/approx-chol/issues/147
-[#148]: https://github.com/aai-institute/approx-chol/issues/148
 [#163]: https://github.com/aai-institute/approx-chol/issues/163
+[#179]: https://github.com/aai-institute/approx-chol/issues/179
+[#180]: https://github.com/aai-institute/approx-chol/issues/180
+[#181]: https://github.com/aai-institute/approx-chol/issues/181
+[#183]: https://github.com/aai-institute/approx-chol/issues/183
+[#182]: https://github.com/aai-institute/approx-chol/issues/182
+[#148]: https://github.com/aai-institute/approx-chol/issues/148

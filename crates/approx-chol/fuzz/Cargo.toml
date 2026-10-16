@@ -10,6 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 postcard = { version = "1", features = ["use-std"] }
+serde = { version = "1", features = ["derive"] }
 
 [dependencies.approx-chol]
 path = ".."
@@ -18,6 +19,7 @@ features = ["serde"]
 # The build script writes the seed corpus.
 [build-dependencies]
 postcard = { version = "1", features = ["use-std"] }
+serde = { version = "1", features = ["derive"] }
 
 [build-dependencies.approx-chol]
 path = ".."
@@ -26,6 +28,20 @@ features = ["serde"]
 [[bin]]
 name = "factor_from_bytes"
 path = "fuzz_targets/factor_from_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "block_factor_from_bytes"
+path = "fuzz_targets/block_factor_from_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "whole_factor_from_bytes"
+path = "fuzz_targets/whole_factor_from_bytes.rs"
 test = false
 doc = false
 bench = false

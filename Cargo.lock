@@ -45,8 +45,10 @@ dependencies = [
  "criterion",
  "faer",
  "num-traits",
+ "postcard",
  "proptest",
  "rand 0.10.2",
+ "rayon",
  "rstest",
  "serde",
  "serde_json",
@@ -54,26 +56,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "approx-chol-next"
-version = "0.7.0"
-dependencies = [
- "criterion",
- "faer",
- "num-traits",
- "postcard",
- "proptest",
- "rand 0.10.2",
- "rayon",
- "rstest",
- "serde",
- "sprs",
-]
-
-[[package]]
 name = "approx-chol-py"
 version = "0.7.0"
 dependencies = [
- "approx-chol-next",
+ "approx-chol",
  "num-traits",
  "numpy",
  "pyo3",
