@@ -227,3 +227,56 @@ fn a_factor_not_covering_n_once_is_rejected(#[case] n: usize, #[case] dead: &[us
     let error = postcard::from_bytes::<Factor>(&respliced(&factor, n, dead)).unwrap_err();
     assert_eq!(error, postcard::Error::SerdeDeCustom);
 }
+
+/// Each `Config` as 0.6.0 serialized it to JSON and to postcard, beside what it reads as now.
+fn released_configs() -> [(&'static str, &'static [u8], Config); 4] {
+    let exact_below = |max_dim| Backend::ExactBelow { max_dim };
+    [
+        (
+            r#"{"seed":0,"split_merge":null,"backend":{"ExactBelow":{"max_dim":24,"on_failure":"FallBackToApproximate"}}}"#,
+            &[0, 0, 1, 24, 0],
+            Config::default(),
+        ),
+        (
+            r#"{"seed":7,"split_merge":3,"backend":{"ExactBelow":{"max_dim":24,"on_failure":"FallBackToApproximate"}}}"#,
+            &[7, 1, 3, 1, 24, 0],
+            Config {
+                seed: 7,
+                split_merge: Some(3),
+                ..Config::default()
+            },
+        ),
+        (
+            r#"{"seed":0,"split_merge":null,"backend":"Approximate"}"#,
+            &[0, 0, 0],
+            Config {
+                backend: Backend::Approximate,
+                ..Config::default()
+            },
+        ),
+        (
+            r#"{"seed":0,"split_merge":null,"backend":{"ExactBelow":{"max_dim":64,"on_failure":"Error"}}}"#,
+            &[0, 0, 1, 64, 1],
+            Config {
+                backend: exact_below(64),
+                ..Config::default()
+            },
+        ),
+    ]
+}
+
+#[test]
+fn a_released_json_config_reads_as_its_new_config() {
+    for (json, _, expected) in released_configs() {
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config, expected, "{json}");
+    }
+}
+
+// Postcard is not self-describing, so a 0.6.0 config must fail rather than misread its `on_failure` as `complement`.
+#[test]
+fn a_released_postcard_config_is_rejected() {
+    for (json, bytes, _) in released_configs() {
+        assert!(postcard::from_bytes::<Config>(bytes).is_err(), "{json}");
+    }
+}

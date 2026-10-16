@@ -74,6 +74,6 @@ fn faer_try_from_non_square_returns_error() {
     let err = CsrRef::try_from(&mat).expect_err("non-square matrix must be rejected");
     assert_eq!(
         err,
-        Error::InvalidCsr(CsrError::NotSquare { rows: 3, cols: 4 })
+        Error::InvalidCsr(CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 })
     );
 }

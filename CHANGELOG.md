@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed (breaking)
 
 - `Config` gains `complement: SchurMode` and `scaling: ScalingPolicy`. ([#182])
+- A `Config` serialized by 0.6.0 reads back only from a self-describing format such as JSON. ([#182])
 - `Backend::ExactBelow` has no `on_failure`; `ExactFailure`, `Fallback`, `DenseFailure`, `UnusablePivot` and `Factor::fallbacks` are removed, as the exact arm never fails a pivot. ([#182])
 - `Error` is `InvalidCsr(CsrError)` or `Reduce(ReduceError)`, and `CsrError`'s variants name the offending row. ([#182])
 - `factorize` takes any `TryInto<Input>`; a type converting only into `CsrRef` converts first. ([#182])

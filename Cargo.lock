@@ -51,6 +51,7 @@ dependencies = [
  "rayon",
  "rstest",
  "serde",
+ "serde_json",
  "sprs",
 ]
 

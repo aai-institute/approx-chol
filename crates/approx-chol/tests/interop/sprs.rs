@@ -30,7 +30,7 @@ fn sprs_csr_factorizes_over_index_types(#[case] run: fn()) {
 fn sprs_try_from_csc_returns_error() {
     let csc = path_laplacian::<u32>().to_csc();
     let err = CsrRef::try_from(&csc).expect_err("CSC must be rejected");
-    assert_eq!(err, Error::InvalidCsr(CsrError::Csc));
+    assert_eq!(err, Error::InvalidCsr(CsrError::ExpectedCsrMatrixGotCsc));
 }
 
 /// Rows 2..4 of a 4x2 matrix are a square view whose row pointers start past zero.
@@ -52,6 +52,6 @@ fn sprs_try_from_non_square_returns_error() {
     let err = CsrRef::try_from(&mat).expect_err("non-square matrix must be rejected");
     assert_eq!(
         err,
-        Error::InvalidCsr(CsrError::NotSquare { rows: 3, cols: 4 })
+        Error::InvalidCsr(CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 })
     );
 }

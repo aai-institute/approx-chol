@@ -435,14 +435,14 @@ pub enum CsrError {
         row: usize,
     },
     /// A converted matrix is not square.
-    NotSquare {
+    ExpectedSquareMatrix {
         /// Its row count.
         rows: usize,
         /// Its column count.
         cols: usize,
     },
     /// A converted matrix is stored by columns (CSC), not rows.
-    Csc,
+    ExpectedCsrMatrixGotCsc,
     /// A converted matrix's row pointers start past `0`, as in a row slice.
     OffsetRows,
     /// A converted matrix's row leaves unused slots after its entries.
@@ -484,8 +484,12 @@ impl core::fmt::Display for CsrError {
             Self::OutOfRange { row } => {
                 write!(f, "row {row} has an entry outside the representable range")
             }
-            Self::NotSquare { rows, cols } => write!(f, "matrix is {rows}x{cols}, not square"),
-            Self::Csc => f.write_str("matrix is stored by columns (CSC), not rows"),
+            Self::ExpectedSquareMatrix { rows, cols } => {
+                write!(f, "matrix is {rows}x{cols}, not square")
+            }
+            Self::ExpectedCsrMatrixGotCsc => {
+                f.write_str("matrix is stored by columns (CSC), not rows")
+            }
             Self::OffsetRows => f.write_str("row pointers start past 0, as in a row slice"),
             Self::RowGap { row } => write!(f, "row {row} leaves unused slots after its entries"),
             Self::IndexExceedsIndexType { kind } => {

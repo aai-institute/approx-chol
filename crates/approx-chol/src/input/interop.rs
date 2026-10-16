@@ -7,7 +7,7 @@ use crate::Error;
 
 fn square(rows: usize, cols: usize) -> Result<u32, CsrError> {
     if rows != cols {
-        return Err(CsrError::NotSquare { rows, cols });
+        return Err(CsrError::ExpectedSquareMatrix { rows, cols });
     }
     u32::try_from(rows).map_err(|_| CsrError::MatrixDimensionExceedsIndexType { n: rows })
 }
@@ -25,7 +25,7 @@ impl<'a, T, I: sprs::SpIndex> TryFrom<sprs::CsMatViewI<'a, T, I>> for CsrRef<'a,
 
     fn try_from(matrix: sprs::CsMatViewI<'a, T, I>) -> Result<Self, Error> {
         if !matrix.is_csr() {
-            return Err(CsrError::Csc.into());
+            return Err(CsrError::ExpectedCsrMatrixGotCsc.into());
         }
         let n = square(matrix.rows(), matrix.cols())?;
         let (row_ptrs, col_indices, values) = matrix.into_raw_storage();
