@@ -3,9 +3,9 @@ mod csr;
 #[path = "common/grid.rs"]
 mod grid;
 
-use approx_chol::{factorize, Config};
+use approx_chol::{Backend, Config};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use csr::{reduce, OwnedCsr};
+use csr::{build, OwnedCsr};
 
 type Shape = (&'static str, fn(usize) -> OwnedCsr);
 
@@ -22,20 +22,22 @@ fn complete_laplacian(n: usize) -> OwnedCsr {
     OwnedCsr::laplacian((0..n).map(|row| (0..n).filter(move |&col| col != row)))
 }
 
-/// Pinned `dense_up_to`: the default would route some sizes to the other arm.
+/// Pinned backend: the default would route some sizes to the other arm.
 fn choleskies() -> [(&'static str, Config); 2] {
     [
         (
             "approximate",
             Config {
-                dense_up_to: 0,
+                backend: Backend::Approximate,
                 ..Config::default()
             },
         ),
         (
             "exact",
             Config {
-                dense_up_to: usize::MAX,
+                backend: Backend::ExactBelow {
+                    max_dim: usize::MAX,
+                },
                 ..Config::default()
             },
         ),
@@ -53,7 +55,7 @@ fn bench_backend_build(c: &mut Criterion) {
             for (label, config) in choleskies() {
                 let id = BenchmarkId::new(format!("{shape}/{label}"), n);
                 group.bench_with_input(id, &csr, |b, csr| {
-                    b.iter(|| factorize(&reduce(*csr), &config));
+                    b.iter(|| build(*csr, config));
                 });
             }
         }
@@ -70,7 +72,7 @@ fn bench_backend_solve(c: &mut Criterion) {
             rhs[0] = 1.0;
             rhs[n - 1] = -1.0;
             for (label, config) in choleskies() {
-                let factor = factorize(&reduce(lap.csr()), &config);
+                let factor = build(lap.csr(), config);
                 let id = BenchmarkId::new(format!("{shape}/{label}"), n);
                 group.bench_with_input(id, &rhs, |b, rhs| {
                     b.iter(|| factor.solve(rhs).expect("solve should succeed"));

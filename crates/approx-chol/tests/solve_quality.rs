@@ -17,11 +17,9 @@ mod residual;
 #[path = "common/sparse.rs"]
 mod sparse;
 
-use approx_chol::{
-    CliqueRule, Config, Factor, Index, InnerParallelism, Multiplicity, Real, SolveError, SplitCount,
-};
+use approx_chol::{Config, Factor, InnerParallelism, Real, SchurMode, SolveError};
 use cases::cases;
-use entry::{by_type, cast, Entry, Factored, Types};
+use entry::{by_type, cast, cast_all, Entry, Factored, Types};
 use graph::{Edge, Graph};
 use modes::Mode;
 use sparse::Sparse;
@@ -50,15 +48,14 @@ fn diagonal_sddm() -> Graph {
 
 /// `config` with AC2's copy count, wherever it splits, set to `k`.
 fn splitting(config: Config, k: u32) -> Config {
-    let split = |multiplicity| match multiplicity {
-        Multiplicity::Split(_) => Multiplicity::Split(SplitCount::new(k).expect("k ≥ 2")),
-        single => single,
-    };
+    let split = |split_merge: Option<u32>| split_merge.filter(|&k| k >= 2).map(|_| k);
     Config {
-        approximate: split(config.approximate),
+        split_merge: split(config.split_merge),
         complement: match config.complement {
-            CliqueRule::Sampled(multiplicity) => CliqueRule::Sampled(split(multiplicity)),
-            exact => exact,
+            SchurMode::Approximate { split_merge } => SchurMode::Approximate {
+                split_merge: split(split_merge),
+            },
+            other => other,
         },
         ..config
     }
@@ -85,12 +82,25 @@ cases! {
     }
 }
 
-fn assert_buffers_checked<T: Real, I: Index>(factor: &Factor<T, I>) {
+fn assert_buffers_checked<T: Real>(factor: &Factor<T>) {
     let n = factor.n();
     for found in [n - 1, n + 1] {
         let error = SolveError::LengthMismatch { expected: n, found };
         assert_eq!(factor.solve(&vec![T::zero(); found]), Err(error));
+        let mut scratch = vec![T::zero(); factor.scratch_len()];
+        let solved = factor.solve_in_place(&mut vec![T::zero(); found], &mut scratch);
+        assert_eq!(solved, Err(error));
     }
+    let needed = factor.scratch_len();
+    let short = &mut vec![T::zero(); needed - 1];
+    let error = SolveError::ScratchTooShort {
+        needed,
+        found: needed - 1,
+    };
+    assert_eq!(
+        factor.solve_in_place(&mut vec![T::one(); n], short),
+        Err(error)
+    );
     let blocks = factor.clone().into_blocks();
     assert!(
         blocks.iter().any(|block| block.scratch_len() > 0),
@@ -127,19 +137,18 @@ cases! {
 }
 
 /// Each block through `solve_local` on a NaN-filled scratch, scattered back.
-fn solve_on_dirty_scratch<T: Real, I: Index>(
-    factor: &Factor<T, I>,
+fn solve_on_dirty_scratch<T: Real>(
+    factor: &Factor<T>,
     b: &[f64],
     inner: InnerParallelism,
 ) -> Vec<f64> {
     let mut x = vec![0.0; factor.n()];
     for block in factor.clone().into_blocks() {
-        let vertices = block.vertices();
-        let mut local: Vec<T> = vertices.iter().map(|&v| cast(b[v.index()])).collect();
+        let mut local: Vec<T> = block.vertices().map(|v| cast(b[v])).collect();
         let mut scratch = vec![T::nan(); block.scratch_len() + 1];
         let solved = block.solve_local(&mut local, &mut scratch, inner);
         solved.expect("buffers fit");
-        (vertices.iter().zip(&local)).for_each(|(&v, &value)| x[v.index()] = cast(value));
+        (block.vertices().zip(&local)).for_each(|(v, &value)| x[v] = cast(value));
     }
     x
 }
@@ -163,6 +172,20 @@ fn assert_dirty_scratch_matches_the_solve(label: &str, factor: &Factored) {
         let x = factor.labels.to_caller(&x);
         assert_eq!(bits(&x), bits(&want), "{label} {inner:?}");
     }
+    let local = factor.labels.to_local(&rhs);
+    let x = by_type!(&factor.factor, f => solve_in_place_on_dirty_scratch(f, &local));
+    let x = factor.labels.to_caller(&x);
+    assert_eq!(bits(&x), bits(&want), "{label} in place");
+}
+
+/// The whole factor through `solve_in_place` on a NaN-filled scratch.
+fn solve_in_place_on_dirty_scratch<T: Real>(factor: &Factor<T>, b: &[f64]) -> Vec<f64> {
+    let mut x: Vec<T> = cast_all(b);
+    let mut scratch = vec![T::nan(); factor.scratch_len() + 1];
+    factor
+        .solve_in_place(&mut x, &mut scratch)
+        .expect("buffers fit");
+    cast_all(&x)
 }
 
 cases! {
@@ -280,6 +303,8 @@ cases! {
         let factor = reduced.factorize(&Config::default());
         assert_eq!(factor.n(), 128);
         assert_eq!(bits(&factor.solve(&[1.0; 128])), bits(&[0.0; 128]));
+        let x = by_type!(&factor.factor, f => solve_in_place_on_dirty_scratch(f, &[1.0; 128]));
+        assert_eq!(bits(&x), bits(&[0.0; 128]), "{types:?}: in place zeroes every dead vertex");
     }
 }
 

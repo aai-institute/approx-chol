@@ -1,29 +1,37 @@
 use std::borrow::Cow;
 
-use num_traits::PrimInt;
+use num_traits::{cast, PrimInt};
 
 use crate::in_range;
-use crate::Real;
+use crate::{Error, Real};
 
-/// Borrowed CSR claiming a symmetric `A`; the claim is checked when it becomes an [`Sgdd`](crate::Sgdd).
+/// Borrowed CSR claiming a symmetric `A`; shape is checked here, the claim when it factors.
 #[derive(Clone, Copy, Debug)]
-pub struct Csr<'a, T, I = u32> {
+pub struct CsrRef<'a, T = f64, I = u32> {
     n: usize,
     row_ptrs: &'a [I],
     col_indices: &'a [I],
     values: &'a [T],
 }
 
-impl<'a, T, I: PrimInt> Csr<'a, T, I> {
+impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
     /// Checks the arrays' shape, so no row slice can fail.
     pub fn new(
+        row_ptrs: &'a [I],
+        col_indices: &'a [I],
+        values: &'a [T],
+        n: u32,
+    ) -> Result<Self, Error> {
+        Ok(Self::checked(n as usize, row_ptrs, col_indices, values)?)
+    }
+
+    fn checked(
         n: usize,
         row_ptrs: &'a [I],
         col_indices: &'a [I],
         values: &'a [T],
     ) -> Result<Self, CsrError> {
-        // Past `usize::MAX`, `n + 1` reads as the largest length, which no slice reaches.
-        let expected = n.saturating_add(1);
+        let expected = n + 1;
         if row_ptrs.len() != expected {
             let found = row_ptrs.len();
             return Err(CsrError::LengthMismatch { expected, found });
@@ -54,30 +62,132 @@ impl<'a, T, I: PrimInt> Csr<'a, T, I> {
         })
     }
 
+    /// Row pointer array (length `n + 1`).
+    pub fn row_ptrs(&self) -> &'a [I] {
+        self.row_ptrs
+    }
+
+    /// Column index array (length `nnz`).
+    pub fn col_indices(&self) -> &'a [I] {
+        self.col_indices
+    }
+
+    /// Value array (length `nnz`).
+    pub fn values(&self) -> &'a [T] {
+        self.values
+    }
+
     /// Dimension of `A`.
     pub fn n(&self) -> usize {
         self.n
     }
 }
 
+impl<T: Clone, I: PrimInt> CsrRef<'_, T, I> {
+    /// Owned copy with `u32` indices; [`CsrError::IndexExceedsIndexType`] if an index does not fit.
+    pub fn to_owned_u32(&self) -> Result<OwnedCsr<T, u32>, Error> {
+        Ok(OwnedCsr {
+            row_ptrs: cast_slice(self.row_ptrs, IndexKind::RowPtr)?,
+            col_indices: cast_slice(self.col_indices, IndexKind::ColIndex)?,
+            values: self.values.to_vec(),
+            n: self.n as u32,
+        })
+    }
+}
+
 /// Borrowed CSR of the upper triangle of a symmetric `A`, diagonal included.
 #[derive(Clone, Copy, Debug)]
-pub struct UpperCsr<'a, T, I = u32>(pub(crate) Csr<'a, T, I>);
+pub struct UpperCsrRef<'a, T = f64, I = u32>(pub(crate) CsrRef<'a, T, I>);
 
-impl<'a, T, I: PrimInt> UpperCsr<'a, T, I> {
-    /// The shape checks of [`Csr::new`]; an entry below the diagonal is caught at reduction.
+impl<'a, T, I: PrimInt> UpperCsrRef<'a, T, I> {
+    /// The shape checks of [`CsrRef::new`]; an entry below the diagonal is caught when it factors.
     pub fn new(
-        n: usize,
         row_ptrs: &'a [I],
         col_indices: &'a [I],
         values: &'a [T],
-    ) -> Result<Self, CsrError> {
-        Csr::new(n, row_ptrs, col_indices, values).map(Self)
+        n: u32,
+    ) -> Result<Self, Error> {
+        CsrRef::new(row_ptrs, col_indices, values, n).map(Self)
     }
 
     /// Dimension of `A`.
     pub fn n(&self) -> usize {
         self.0.n
+    }
+}
+
+/// Owned CSR matrix, for sources that index in `usize`.
+#[derive(Clone, Debug)]
+pub struct OwnedCsr<T = f64, I = u32> {
+    row_ptrs: Vec<I>,
+    col_indices: Vec<I>,
+    values: Vec<T>,
+    n: u32,
+}
+
+impl<T: Clone, I: PrimInt> OwnedCsr<T, I> {
+    /// Owned CSR from `usize` arrays, shape-checked as [`CsrRef::new`]; an index past `I` is an error.
+    pub fn try_from_usize(
+        row_ptrs: &[usize],
+        col_indices: &[usize],
+        values: &[T],
+        n: usize,
+    ) -> Result<Self, Error> {
+        let n = u32::try_from(n).map_err(|_| CsrError::MatrixDimensionExceedsIndexType { n })?;
+        let row_ptrs = cast_slice(row_ptrs, IndexKind::RowPtr)?;
+        let col_indices = cast_slice(col_indices, IndexKind::ColIndex)?;
+        CsrRef::new(&row_ptrs, &col_indices, values, n)?;
+        Ok(Self {
+            row_ptrs,
+            col_indices,
+            values: values.to_vec(),
+            n,
+        })
+    }
+}
+
+impl<T, I: PrimInt> OwnedCsr<T, I> {
+    /// Infallible: the constructors check shape and the fields are private.
+    pub fn as_csr_ref(&self) -> CsrRef<'_, T, I> {
+        CsrRef {
+            n: self.n as usize,
+            row_ptrs: &self.row_ptrs,
+            col_indices: &self.col_indices,
+            values: &self.values,
+        }
+    }
+}
+
+impl<'a, T, I: PrimInt> From<&'a OwnedCsr<T, I>> for CsrRef<'a, T, I> {
+    fn from(owned: &'a OwnedCsr<T, I>) -> Self {
+        owned.as_csr_ref()
+    }
+}
+
+/// Reserves up front: collecting into `Option<Vec<_>>` drops the size hint and cost 3.5x the traffic.
+fn cast_slice<S: PrimInt, D: PrimInt>(src: &[S], kind: IndexKind) -> Result<Vec<D>, CsrError> {
+    let mut out = Vec::with_capacity(src.len());
+    for &value in src {
+        out.push(cast::<S, D>(value).ok_or(CsrError::IndexExceedsIndexType { kind })?);
+    }
+    Ok(out)
+}
+
+/// Which CSR array an index belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexKind {
+    /// `row_ptrs` array.
+    RowPtr,
+    /// `col_indices` array.
+    ColIndex,
+}
+
+impl core::fmt::Display for IndexKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::RowPtr => f.write_str("row_ptr"),
+            Self::ColIndex => f.write_str("col_index"),
+        }
     }
 }
 
@@ -96,7 +206,7 @@ pub(crate) struct Canonical<'a, T: Clone, I: Clone> {
 
 impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
     /// Reads no value, sparing a stream: [`walk`](Self::walk) checks each as it reads it.
-    pub(crate) fn of(csr: Csr<'a, T, I>) -> Result<Self, CsrError> {
+    pub(crate) fn of(csr: CsrRef<'a, T, I>) -> Result<Self, CsrError> {
         match is_canonical(&csr)? {
             true => Ok(Self {
                 n: csr.n,
@@ -228,7 +338,7 @@ fn approximately_equal<T: Real>(left: T, right: T) -> bool {
 }
 
 /// Accumulated, not short-circuited: the `all` form measured 0.4-2% slower.
-fn is_canonical<T, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<bool, CsrError> {
+fn is_canonical<T, I: PrimInt>(csr: &CsrRef<'_, T, I>) -> Result<bool, CsrError> {
     // `None` means `I` cannot represent `n`, so every `I` value is below it.
     let limit = I::from(csr.n);
     let mut canonical = true;
@@ -248,7 +358,9 @@ fn is_canonical<T, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<bool, CsrError> {
 }
 
 /// Only non-canonical input pays this copy, in its own index type.
-fn rewrite<'a, T: Real, I: PrimInt>(csr: &Csr<'_, T, I>) -> Result<Canonical<'a, T, I>, CsrError> {
+fn rewrite<'a, T: Real, I: PrimInt>(
+    csr: &CsrRef<'_, T, I>,
+) -> Result<Canonical<'a, T, I>, CsrError> {
     let nnz = csr.col_indices.len();
     let mut row_ptrs = Vec::with_capacity(csr.n + 1);
     let mut col_indices = Vec::with_capacity(nnz);
@@ -322,6 +434,32 @@ pub enum CsrError {
         /// The offending row.
         row: usize,
     },
+    /// A converted matrix is not square.
+    NotSquare {
+        /// Its row count.
+        rows: usize,
+        /// Its column count.
+        cols: usize,
+    },
+    /// A converted matrix is stored by columns (CSC), not rows.
+    Csc,
+    /// A converted matrix's row pointers start past `0`, as in a row slice.
+    OffsetRows,
+    /// A converted matrix's row leaves unused slots after its entries.
+    RowGap {
+        /// The first row with unused slots.
+        row: usize,
+    },
+    /// An index does not fit the target index type.
+    IndexExceedsIndexType {
+        /// Which array the index came from.
+        kind: IndexKind,
+    },
+    /// The dimension does not fit `u32`.
+    MatrixDimensionExceedsIndexType {
+        /// The dimension.
+        n: usize,
+    },
 }
 
 impl core::fmt::Display for CsrError {
@@ -345,6 +483,16 @@ impl core::fmt::Display for CsrError {
             }
             Self::OutOfRange { row } => {
                 write!(f, "row {row} has an entry outside the representable range")
+            }
+            Self::NotSquare { rows, cols } => write!(f, "matrix is {rows}x{cols}, not square"),
+            Self::Csc => f.write_str("matrix is stored by columns (CSC), not rows"),
+            Self::OffsetRows => f.write_str("row pointers start past 0, as in a row slice"),
+            Self::RowGap { row } => write!(f, "row {row} leaves unused slots after its entries"),
+            Self::IndexExceedsIndexType { kind } => {
+                write!(f, "a {kind} index does not fit the index type")
+            }
+            Self::MatrixDimensionExceedsIndexType { n } => {
+                write!(f, "dimension {n} does not fit u32")
             }
         }
     }

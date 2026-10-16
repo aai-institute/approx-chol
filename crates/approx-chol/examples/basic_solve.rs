@@ -3,8 +3,8 @@
 #[path = "shared/grid.rs"]
 mod grid;
 
+use approx_chol::factorize;
 use approx_chol::input::{Laplacian, Weights};
-use approx_chol::{factorize, Config, Sgdd};
 use grid::Grid;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,10 +12,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Grid Laplacian: 10×10 ({} vertices)", grid.n);
 
     let laplacian = Laplacian::new(grid.n, &grid.a, &grid.b, Weights::<f64>::unit())?;
-    let sgdd: Sgdd = Sgdd::try_from(laplacian)?;
-    println!("Irreducible blocks: {}", sgdd.blocks().len());
-
-    let factor = factorize(&sgdd, &Config::default());
+    let factor = factorize(laplacian)?;
+    println!("Irreducible blocks: {}", factor.blocks().len());
     let (x, iterations) = grid.pcg(&factor, &grid.split_rhs(), 1e-10);
 
     let mean = x.iter().sum::<f64>() / grid.n as f64;

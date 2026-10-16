@@ -1,10 +1,12 @@
 #![cfg(feature = "serde")]
 
 use approx_chol::input::{BipartiteGram, FactorWidth1, Laplacian, SignedGraph, Weights};
-use approx_chol::{factorize, BlockFactor, CliqueRule, Config, InnerParallelism, Sgdd};
+use approx_chol::{
+    factorize_with, Backend, BlockFactor, Config, Factor, InnerParallelism, SchurMode,
+};
 use rstest::rstest;
 
-fn inputs() -> Vec<Sgdd> {
+fn factors(config: Config) -> Vec<Factor> {
     let (left, right, per_row) = (12_000u32, 400u32, 3u32);
     let rows: Vec<u32> = (0..left * per_row).map(|k| k / per_row).collect();
     let cols: Vec<u32> = (0..left * per_row)
@@ -19,7 +21,7 @@ fn inputs() -> Vec<Sgdd> {
         Weights::unit(),
     )
     .unwrap();
-    let bipartite = Sgdd::from_bipartite_gram(gram, Default::default()).unwrap();
+    let bipartite = factorize_with(gram, config).unwrap();
 
     let (a, b): (Vec<u32>, Vec<u32>) = (0..60u32)
         .filter(|i| i % 20 != 19)
@@ -30,19 +32,19 @@ fn inputs() -> Vec<Sgdd> {
         .unwrap()
         .grounded(&ground)
         .unwrap();
-    let laplacian = Sgdd::try_from(laplacian).unwrap();
+    let laplacian = factorize_with(laplacian, config).unwrap();
 
     let (c, d): (Vec<u32>, Vec<u32>) = (0..58u32).map(|i| (i, i + 1 + i % 2)).unzip();
     let positive: Vec<bool> = (0..c.len()).map(|k| k % 3 == 0).collect();
     let signed = SignedGraph::new(60, &c, &d, &positive, Weights::unit()).unwrap();
-    let signed = Sgdd::try_from(signed).unwrap();
+    let signed = factorize_with(signed, config).unwrap();
     vec![bipartite, laplacian, signed]
 }
 
 fn configs() -> [Config; 2] {
     let exact = Config {
-        complement: CliqueRule::Exact,
-        dense_up_to: 0,
+        complement: SchurMode::Exact,
+        backend: Backend::Approximate,
         ..Config::default()
     };
     [Config::default(), exact]
@@ -59,19 +61,21 @@ fn solve(block: &BlockFactor, inner: InnerParallelism) -> Vec<u64> {
 
 #[test]
 fn round_trip_solves_bit_identically() {
-    let inputs = inputs();
-    assert!(inputs
+    let defaults = factors(Config::default());
+    assert!(defaults
         .iter()
-        .flat_map(Sgdd::blocks)
+        .flat_map(Factor::blocks)
         .any(|block| block.floats()));
-    let split = factorize(&inputs[0], &Config::default()).into_blocks();
     assert!(
-        split.iter().any(|block| block.splittable_work() > 0),
+        defaults[0]
+            .blocks()
+            .iter()
+            .any(|block| block.splittable_work() > 0),
         "a block keeps Cᵀ, which loading rebuilds"
     );
-    for sgdd in inputs {
-        for config in configs() {
-            let blocks = factorize(&sgdd, &config).into_blocks();
+    for config in configs() {
+        for factor in factors(config) {
+            let blocks = factor.into_blocks();
             let bytes = postcard::to_stdvec(&blocks).unwrap();
             let back: Vec<BlockFactor> = postcard::from_bytes(&bytes).unwrap();
             assert_eq!(postcard::to_stdvec(&back).unwrap(), bytes);
@@ -93,9 +97,8 @@ fn corrupt_bytes_error_instead_of_panicking() {
         state ^= state << 17;
         state as usize
     };
-    for sgdd in inputs() {
-        let bytes =
-            postcard::to_stdvec(&factorize(&sgdd, &Config::default()).into_blocks()).unwrap();
+    for factor in factors(Config::default()) {
+        let bytes = postcard::to_stdvec(&factor.into_blocks()).unwrap();
         for trial in 0..500 {
             let mut corrupt = bytes.clone();
             let at = next() % corrupt.len();
@@ -121,11 +124,11 @@ fn varint(mut x: u64, bytes: &mut Vec<u8>) {
     bytes.push(x as u8);
 }
 
-/// One block on vertices `[64, 0]` whose elimination has `rows` empty rows of `C`, cut off before its Cholesky.
+/// One `u32` block on vertices `[64, 0]` whose elimination has `rows` empty rows of `C`, cut off before its Cholesky.
 fn truncated_elimination(rows: u64, n_cols: u64) -> Vec<u8> {
     let mut bytes = vec![1];
     varint(0x4143_0006, &mut bytes);
-    bytes.extend([2, 64, 0, 0, 1]);
+    bytes.extend([0, 2, 64, 0, 0, 1]);
     varint(rows + 1, &mut bytes);
     bytes.extend(std::iter::repeat_n(0, rows as usize + 1));
     bytes.extend([0, 0]);
@@ -157,4 +160,70 @@ fn an_elimination_keeping_at_most_its_rows_decodes_up_to_the_cut(#[case] rows: u
         error.unwrap_err(),
         postcard::Error::DeserializeUnexpectedEnd
     );
+}
+
+/// A Laplacian on `0..4` beside two zero vertices, so the factor carries dead vertices.
+fn with_dead_vertices() -> Factor {
+    let laplacian = Laplacian::new(6, &[0u32, 1, 2], &[1u32, 2, 3], Weights::unit()).unwrap();
+    factorize_with(laplacian, Config::default()).unwrap()
+}
+
+fn solve_factor(factor: &Factor) -> Vec<u64> {
+    let b: Vec<f64> = (0..factor.n()).map(|i| (i % 5) as f64 - 2.0).collect();
+    let x = factor.solve(&b).unwrap();
+    x.iter().map(|v| v.to_bits()).collect()
+}
+
+#[test]
+fn a_factor_round_trips_bit_identically() {
+    let all = configs()
+        .into_iter()
+        .flat_map(factors)
+        .chain([with_dead_vertices()]);
+    for factor in all {
+        let bytes = postcard::to_stdvec(&factor).unwrap();
+        let version = postcard::to_stdvec(&approx_chol::FACTOR_FORMAT_VERSION).unwrap();
+        assert!(bytes.starts_with(&version), "the version leads");
+        let decoded: Factor = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            (decoded.n(), decoded.n_steps()),
+            (factor.n(), factor.n_steps())
+        );
+        assert_eq!(solve_factor(&decoded), solve_factor(&factor));
+    }
+}
+
+/// The factor's bytes with `n` and the dead vertices replaced, its blocks kept.
+fn respliced(factor: &Factor, n: usize, dead: &[usize]) -> Vec<u8> {
+    let bytes = postcard::to_stdvec(factor).unwrap();
+    let version = approx_chol::FACTOR_FORMAT_VERSION;
+    let own_dead: Vec<usize> = (0..factor.n())
+        .filter(|&v| {
+            factor
+                .blocks()
+                .iter()
+                .all(|block| block.vertices().all(|u| u != v))
+        })
+        .collect();
+    let head = postcard::to_stdvec(&(version, factor.n(), &own_dead)).unwrap();
+    assert_eq!(
+        &bytes[..head.len()],
+        &head[..],
+        "the head is version, n, dead"
+    );
+    let mut spliced = postcard::to_stdvec(&(version, n, dead)).unwrap();
+    spliced.extend_from_slice(&bytes[head.len()..]);
+    spliced
+}
+
+#[rstest]
+#[case::a_vertex_missing(6, &[4])]
+#[case::one_past_n(7, &[4, 5])]
+#[case::dead_inside_a_block(6, &[4, 3])]
+#[case::dead_out_of_range(6, &[4, 6])]
+fn a_factor_not_covering_n_once_is_rejected(#[case] n: usize, #[case] dead: &[usize]) {
+    let factor = with_dead_vertices();
+    assert!(postcard::from_bytes::<Factor>(&respliced(&factor, 6, &[4, 5])).is_ok());
+    let error = postcard::from_bytes::<Factor>(&respliced(&factor, n, dead)).unwrap_err();
+    assert_eq!(error, postcard::Error::SerdeDeCustom);
 }

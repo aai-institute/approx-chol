@@ -4,8 +4,8 @@ mod csr;
 use std::hint::black_box;
 use std::time::Instant;
 
-use approx_chol::{factorize, Config};
-use csr::{reduce, OwnedCsr};
+use approx_chol::Config;
+use csr::{build, OwnedCsr};
 
 const N: usize = 160_000;
 // Degree 12, where `within`'s factors sit; at degree 4 ingestion is ~17% of the build.
@@ -26,7 +26,7 @@ fn main() {
     let mut best = u128::MAX;
     for _ in 0..RUNS {
         let start = Instant::now();
-        let factor = factorize(&reduce(csr), &config);
+        let factor = build(csr, config);
         // Min, not mean: contention only ever slows a run.
         best = best.min(start.elapsed().as_nanos());
         black_box(&factor);

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use approx_chol::BlockFactor;
+use approx_chol::{BlockFactor, Factor};
 
 mod case;
 
@@ -10,13 +10,14 @@ use case::{Build, Case, Input, Rows, Side, View, Weighting};
 /// Written at build time, never committed; a removed or renamed seed's old file stays in `corpus/` until deleted.
 fn main() {
     let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
-    let (views, factors) = (
+    let (views, factors, wholes) = (
         corpus.join("factor_from_bytes"),
         corpus.join("block_factor_from_bytes"),
+        corpus.join("whole_factor_from_bytes"),
     );
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-changed=case.rs");
-    for dir in [&views, &factors] {
+    for dir in [&views, &factors, &wholes] {
         // Watching the corpus is what makes a pruned or deleted one come back.
         println!("cargo::rerun-if-changed={}", dir.display());
         fs::create_dir_all(dir).expect("create the corpus directory");
@@ -30,7 +31,11 @@ fn main() {
         assert!(blocks > 0, "seed {name} reaches no block");
         fs::write(views.join(format!("{name}.bin")), bytes).expect("write the seed");
         if let Input::F64(case) = decoded {
-            let blocks = case.factor().expect("the seed factors").into_blocks();
+            let factor = case.factor().expect("the seed factors");
+            let bytes = postcard::to_stdvec(&factor).expect("serialize the factor");
+            postcard::from_bytes::<Factor>(&bytes).expect("a real factor decodes");
+            fs::write(wholes.join(format!("{name}.bin")), bytes).expect("write the seed");
+            let blocks = factor.into_blocks();
             let bytes = postcard::to_stdvec(&blocks).expect("serialize the blocks");
             // A seed the validator rejects starts the fuzzer outside the solve.
             postcard::from_bytes::<Vec<BlockFactor>>(&bytes).expect("a real factor decodes");

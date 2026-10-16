@@ -26,25 +26,23 @@ cargo add approx-chol
 ## Example
 
 ```rust
-use approx_chol::input::Csr;
-use approx_chol::{factorize, Config, ScalingPolicy, Sgdd};
+use approx_chol::{factorize, CsrRef};
 
 // 4-vertex path graph Laplacian (0-1-2-3)
 let row_ptrs    = [0u32, 2, 5, 8, 10];
 let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
 let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
 
-let csr = Csr::new(4, &row_ptrs, &col_indices, &values)?;
-let sgdd: Sgdd = Sgdd::from_csr(csr, ScalingPolicy::default())?;
-let factor = factorize(&sgdd, &Config::default());
+let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
+let factor = factorize(csr)?;
 
 // A Laplacian is singular: b sums to zero, and x is orthogonal to the all-ones vector
 let b = [1.0, -1.0, 1.0, -1.0];
 let x = factor.solve(&b)?;
-assert!(x.iter().all(|v| v.is_finite()));
+assert!(x.iter().all(|v| f64::is_finite(*v)));
 ```
 
-For a grid Laplacian built from its edges and used to precondition CG, see [`examples/basic_solve.rs`](examples/basic_solve.rs).
+Graph Laplacians, signed graphs and factor-width-2 Grams also factor from their edges, through the views in `approx_chol::input`; see [`examples/basic_solve.rs`](examples/basic_solve.rs).
 
 ## Feature flags
 
@@ -52,7 +50,7 @@ For a grid Laplacian built from its edges and used to precondition CG, see [`exa
 |---------|--------|
 | `sprs`  | Zero-copy `input::Csr` conversion from `sprs` matrices via `TryFrom`. |
 | `faer`  | Zero-copy `input::Csr` conversion from `faer` matrices via `TryFrom`. |
-| `serde` | Serialize and deserialize `BlockFactor`, tagged with its format version. |
+| `serde` | Serialize and deserialize `Factor` and `BlockFactor`, led by their format version. |
 
 ## Attribution
 

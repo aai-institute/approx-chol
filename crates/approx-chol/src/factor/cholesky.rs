@@ -45,7 +45,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
             false => {
                 // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
                 let last = spans_wide(scales).then(|| pinned(&sddm, scales));
-                let (steps, last) = approximate::factor(sddm, config.approximate, draws, last);
+                let (steps, last) = approximate::factor(sddm, config.approximate(), draws, last);
                 (Triangular::Approximate(Box::new(steps)), last)
             }
         };
@@ -56,6 +56,11 @@ impl<T: Real, I: Index> Cholesky<T, I> {
             pinned,
             triangular,
         }
+    }
+
+    /// Pivots eliminated: every slot, the ground's included, but the pinned one.
+    pub(super) fn n_steps(&self) -> usize {
+        self.n + usize::from(self.grounded) - 1
     }
 
     /// Whether it solves a singular Laplacian: one sheet, no ground.

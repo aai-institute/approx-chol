@@ -1,8 +1,8 @@
 use approx_chol::input::{
-    BipartiteGram, Csr, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsr, Weights,
+    BipartiteGram, CsrRef, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsrRef, Weights,
 };
-use approx_chol::{factorize, Config, Factor, Index, Real, ScalingPolicy, Sgdd};
-use num_traits::NumCast;
+use approx_chol::{factorize_with, Config, Factor, Real};
+use num_traits::{NumCast, PrimInt};
 
 use crate::graph::Graph;
 
@@ -18,7 +18,7 @@ pub enum Entry {
     SignedGraph,
 }
 
-/// The scalar and index type a reduction stores.
+/// The scalar a factor computes in and the index type its input view states.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Types {
     F32U32,
@@ -56,19 +56,7 @@ macro_rules! by_type {
 }
 pub(crate) use by_type;
 
-macro_rules! map_by_type {
-    ($value:expr, $x:ident => $body:expr) => {
-        match $value {
-            ByType::F32U32($x) => ByType::F32U32($body),
-            ByType::F32U64($x) => ByType::F32U64($body),
-            ByType::F64U32($x) => ByType::F64U32($body),
-            ByType::F64U64($x) => ByType::F64U64($body),
-        }
-    };
-}
-
-pub type Sgdds = ByType<Sgdd<f32, u32>, Sgdd<f32, u64>, Sgdd<f64, u32>, Sgdd<f64, u64>>;
-pub type Factors = ByType<Factor<f32, u32>, Factor<f32, u64>, Factor<f64, u32>, Factor<f64, u64>>;
+pub type Factors = ByType<Factor<f32>, Factor<f32>, Factor<f64>, Factor<f64>>;
 
 /// `labels.0[v]` is caller vertex `v`'s index in the entry point's numbering.
 #[derive(Clone, Debug)]
@@ -172,20 +160,23 @@ impl Entry {
             Entry::BipartiteGram => bipartition(graph).expect("states a bipartite graph"),
             _ => (Labels((0..graph.n).collect()), 0),
         };
-        let local = labels.graph(graph);
-        let sgdd = match types {
-            Types::F32U32 => ByType::F32U32(self.reduce_as(&local, n_left)),
-            Types::F32U64 => ByType::F32U64(self.reduce_as(&local, n_left)),
-            Types::F64U32 => ByType::F64U32(self.reduce_as(&local, n_left)),
-            Types::F64U64 => ByType::F64U64(self.reduce_as(&local, n_left)),
-        };
-        Reduced { sgdd, labels }
+        Reduced {
+            entry: self,
+            local: labels.graph(graph),
+            n_left,
+            types,
+            labels,
+        }
     }
 
-    fn reduce_as<T: Real, I: Index>(self, graph: &Graph, n_left: usize) -> Sgdd<T, I> {
+    fn factorize_as<T: Real, I: PrimInt + Sync>(
+        self,
+        graph: &Graph,
+        n_left: usize,
+        config: Config,
+    ) -> Factor<T> {
         let n = graph.n;
-        let policy = ScalingPolicy::default();
-        let rejected = |error: &dyn std::fmt::Debug| -> Sgdd<T, I> {
+        let rejected = |error: &dyn std::fmt::Debug| -> Factor<T> {
             panic!("{self:?} rejected {graph:?}: {error:?}")
         };
         let (a, b): (Vec<I>, Vec<I>) = (graph.edges.iter())
@@ -201,12 +192,14 @@ impl Entry {
                 let values: Vec<T> = cast_all(&values);
                 match upper {
                     false => {
-                        let csr = Csr::new(n, &ptrs, &columns, &values).expect("valid CSR");
-                        Sgdd::from_csr(csr, policy)
+                        let csr =
+                            CsrRef::new(&ptrs, &columns, &values, n as u32).expect("valid CSR");
+                        factorize_with(csr, config)
                     }
                     true => {
-                        let csr = UpperCsr::new(n, &ptrs, &columns, &values).expect("valid CSR");
-                        Sgdd::from_upper_csr(csr, policy)
+                        let csr = UpperCsrRef::new(&ptrs, &columns, &values, n as u32)
+                            .expect("valid CSR");
+                        factorize_with(csr, config)
                     }
                 }
                 .unwrap_or_else(|error| rejected(&error))
@@ -226,7 +219,7 @@ impl Entry {
                     y.push(T::zero());
                 }
                 let v = FactorWidth2::new(n, &a, &b, &x, &y).expect("valid factor");
-                Sgdd::from_gram(v, policy).unwrap_or_else(|error| rejected(&error))
+                factorize_with(v, config).unwrap_or_else(|error| rejected(&error))
             }
             Entry::BipartiteGram => {
                 let n_right = n - n_left;
@@ -268,16 +261,16 @@ impl Entry {
                     weights,
                 )
                 .expect("valid bipartite Gram");
-                Sgdd::from_bipartite_gram(gram, policy).unwrap_or_else(|error| rejected(&error))
+                factorize_with(gram, config).unwrap_or_else(|error| rejected(&error))
             }
             Entry::Laplacian | Entry::GroundedLaplacian => {
                 let view = Laplacian::new(n, &a, &b, weights).expect("valid Laplacian");
                 let ground: Vec<T> = cast_all(&graph.ground);
                 match self {
                     Entry::GroundedLaplacian => {
-                        Sgdd::try_from(view.grounded(&ground).expect("valid ground"))
+                        factorize_with(view.grounded(&ground).expect("valid ground"), config)
                     }
-                    _ => Sgdd::try_from(view),
+                    _ => factorize_with(view, config),
                 }
                 .unwrap_or_else(|error| rejected(&error))
             }
@@ -285,22 +278,32 @@ impl Entry {
                 let positive: Vec<bool> = graph.edges.iter().map(|edge| edge.positive).collect();
                 let view =
                     SignedGraph::new(n, &a, &b, &positive, weights).expect("valid signed graph");
-                Sgdd::try_from(view).unwrap_or_else(|error| rejected(&error))
+                factorize_with(view, config).unwrap_or_else(|error| rejected(&error))
             }
         }
     }
 }
 
-/// A reduction in the entry point's numbering.
+/// A graph as its entry point states it, in that entry point's numbering.
 pub struct Reduced {
-    pub sgdd: Sgdds,
-    pub labels: Labels,
+    entry: Entry,
+    local: Graph,
+    n_left: usize,
+    types: Types,
+    labels: Labels,
 }
 
 impl Reduced {
     pub fn factorize(&self, config: &Config) -> Factored {
+        let (entry, graph, n_left, config) = (self.entry, &self.local, self.n_left, *config);
+        let factor = match self.types {
+            Types::F32U32 => ByType::F32U32(entry.factorize_as::<f32, u32>(graph, n_left, config)),
+            Types::F32U64 => ByType::F32U64(entry.factorize_as::<f32, u64>(graph, n_left, config)),
+            Types::F64U32 => ByType::F64U32(entry.factorize_as::<f64, u32>(graph, n_left, config)),
+            Types::F64U64 => ByType::F64U64(entry.factorize_as::<f64, u64>(graph, n_left, config)),
+        };
         Factored {
-            factor: map_by_type!(&self.sgdd, sgdd => factorize(sgdd, config)),
+            factor,
             labels: self.labels.clone(),
         }
     }
@@ -320,7 +323,7 @@ impl Factored {
     }
 }
 
-fn solve<T: Real, I: Index>(factor: &Factor<T, I>, b: &[f64]) -> Vec<f64> {
+fn solve<T: Real>(factor: &Factor<T>, b: &[f64]) -> Vec<f64> {
     let x = factor
         .solve(&cast_all::<f64, T>(b))
         .expect("b has length n");

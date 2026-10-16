@@ -154,8 +154,8 @@ cases! {
 /// `D L D` floats with null vector `D⁻¹·1` and needs scaling, so both projections run on scaled factors.
 #[test]
 fn a_scaled_floating_block_projects_its_null_vector_out() {
-    use approx_chol::input::Csr;
-    use approx_chol::{factorize, Config, ScalingPolicy, Sgdd};
+    use approx_chol::input::CsrRef;
+    use approx_chol::{factorize, Factor};
 
     let graph = grid(30, 30);
     let d: Vec<f64> = (0..graph.n)
@@ -166,10 +166,9 @@ fn a_scaled_floating_block_projects_its_null_vector_out() {
         .flat_map(|i| (ptrs[i]..ptrs[i + 1]).map(move |k| (i, k)))
         .map(|(i, k)| d[i] * values[k] * d[columns[k]])
         .collect();
-    let csr = Csr::new(graph.n, &ptrs, &columns, &scaled).unwrap();
-    let sgdd: Sgdd = Sgdd::from_csr(csr, ScalingPolicy::default()).unwrap();
-    assert!(sgdd.blocks().iter().all(|block| block.floats()));
-    let factor = factorize(&sgdd, &Config::default());
+    let csr = CsrRef::new(&ptrs, &columns, &scaled, graph.n as u32).unwrap();
+    let factor: Factor = factorize(csr).unwrap();
+    assert!(factor.blocks().iter().all(|block| block.floats()));
 
     let norm = |v: &[f64]| v.iter().map(|v| v * v).sum::<f64>().sqrt();
     let dot = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(a, b)| a * b).sum::<f64>();

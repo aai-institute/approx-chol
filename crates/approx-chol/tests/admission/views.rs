@@ -1,7 +1,7 @@
 use approx_chol::input::{
     BipartiteGram, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, ViewError, Weights,
 };
-use approx_chol::{ReduceError, ScalingPolicy, Sgdd};
+use approx_chol::{factorize, Error, ReduceError};
 use rstest::rstest;
 
 use super::assert_names_a_defect;
@@ -13,9 +13,9 @@ fn tiny() -> f64 {
     f64::MIN_POSITIVE / f64::EPSILON / 2.0
 }
 
-fn out_of_range(vertices: &[usize]) -> Vec<ReduceError> {
+fn out_of_range(vertices: &[usize]) -> Vec<Error> {
     (vertices.iter())
-        .map(|&vertex| ReduceError::OutOfRange { vertex })
+        .map(|&vertex| Error::Reduce(ReduceError::OutOfRange { vertex }))
         .collect()
 }
 
@@ -58,7 +58,7 @@ fn weights_sqrt_of_admits_a_negative_root() {
 fn a_weight_below_min_positive_over_epsilon_is_out_of_range_at_its_edge() {
     let w = [1.0, tiny()];
     let graph = Laplacian::new(3, &PATH_A, &PATH_B, Weights::of(&w).unwrap()).unwrap();
-    let error = Sgdd::<f64>::try_from(graph).expect_err("tiny weight");
+    let error = factorize(graph).expect_err("tiny weight");
     assert_names_a_defect(error, &out_of_range(&[1, 2]));
 }
 
@@ -117,7 +117,7 @@ fn laplacian_grounded_rejects_a_bad_ground_at_its_vertex(#[case] ground: f64) {
 fn an_out_of_range_ground_is_rejected_at_its_vertex(#[case] ground: f64) {
     let ground = [0.0, 0.0, ground];
     let grounded = unit_path().grounded(&ground).expect("a valid ground");
-    let error = Sgdd::<f64>::try_from(grounded).expect_err("ground out of range");
+    let error = factorize(grounded).expect_err("ground out of range");
     assert_names_a_defect(error, &out_of_range(&[2]));
 }
 
@@ -192,8 +192,7 @@ fn factor_width_2_new_rejects_mismatched_lengths_and_bad_ends_at_their_column(
 fn an_out_of_range_loading_is_rejected_at_its_vertex(#[case] value: f64) {
     let (x, y) = ([1.0, value], [-1.0, -1.0]);
     let gram = FactorWidth2::new(3, &PATH_A, &PATH_B, &x, &y).unwrap();
-    let error =
-        Sgdd::<f64>::from_gram(gram, ScalingPolicy::default()).expect_err("loading out of range");
+    let error = factorize(gram).expect_err("loading out of range");
     assert_names_a_defect(error, &out_of_range(&[1, 2]));
 }
 
@@ -231,7 +230,6 @@ fn an_out_of_range_bipartite_loading_is_rejected_at_its_vertex(#[case] value: f6
     let left = FactorWidth1::new(2, &[0u32, 1], Some(&values[..])).unwrap();
     let right = FactorWidth1::<f64>::new(1, &[0u32, 0], None).unwrap();
     let gram = BipartiteGram::new(left, right, Weights::unit()).unwrap();
-    let error = Sgdd::<f64>::from_bipartite_gram(gram, ScalingPolicy::default())
-        .expect_err("loading out of range");
+    let error = factorize(gram).expect_err("loading out of range");
     assert_names_a_defect(error, &out_of_range(&[1, 2]));
 }

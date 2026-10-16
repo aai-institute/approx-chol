@@ -1,5 +1,5 @@
-use approx_chol::input::Csr;
-use approx_chol::{ScalingPolicy, Sgdd};
+use approx_chol::input::CsrRef;
+use approx_chol::{factorize_with, Config, Factor};
 
 /// A unit-weight graph Laplacian held as owned u32 CSR arrays.
 pub struct OwnedCsr {
@@ -29,13 +29,13 @@ impl OwnedCsr {
         }
     }
 
-    pub fn csr(&self) -> Csr<'_, f64> {
-        let n = self.row_ptrs.len() - 1;
-        Csr::new(n, &self.row_ptrs, &self.col_indices, &self.values).expect("valid CSR")
+    pub fn csr(&self) -> CsrRef<'_, f64> {
+        let n = (self.row_ptrs.len() - 1) as u32;
+        CsrRef::new(&self.row_ptrs, &self.col_indices, &self.values, n).expect("valid CSR")
     }
 }
 
 /// Symmetry check and reduction belong to the timed build: every caller pays them.
-pub fn reduce(csr: Csr<'_, f64>) -> Sgdd {
-    Sgdd::from_csr(csr, ScalingPolicy::default()).expect("reduces")
+pub fn build(csr: CsrRef<'_, f64>, config: Config) -> Factor {
+    factorize_with(csr, config).expect("factors")
 }

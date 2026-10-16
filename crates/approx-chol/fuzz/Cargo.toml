@@ -39,6 +39,13 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "whole_factor_from_bytes"
+path = "fuzz_targets/whole_factor_from_bytes.rs"
+test = false
+doc = false
+bench = false
+
 # Its own workspace: cargo-fuzz needs nightly, and this keeps that requirement from
 # reaching the crates the released build is compiled from.
 [workspace]

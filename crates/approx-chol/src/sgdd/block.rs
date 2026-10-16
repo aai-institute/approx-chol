@@ -5,7 +5,6 @@ use std::sync::Arc;
 use super::congruence::Congruence;
 use super::decomposition::indexable;
 use super::scaling::ScalingReport;
-use crate::input::CsrError;
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, Index, Real};
 
@@ -289,43 +288,6 @@ impl core::fmt::Display for ReduceError {
 }
 
 impl std::error::Error for ReduceError {}
-
-/// Why a CSR did not become an [`Sgdd`].
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FromCsrError {
-    /// The arrays are not a symmetric matrix.
-    Csr(CsrError),
-    /// A block has no SDDM form.
-    Reduce(ReduceError),
-}
-
-impl From<CsrError> for FromCsrError {
-    fn from(error: CsrError) -> Self {
-        Self::Csr(error)
-    }
-}
-
-impl From<ReduceError> for FromCsrError {
-    fn from(error: ReduceError) -> Self {
-        Self::Reduce(error)
-    }
-}
-
-impl core::fmt::Display for FromCsrError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("cannot convert CSR to Sgdd")
-    }
-}
-
-impl std::error::Error for FromCsrError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Csr(error) => Some(error),
-            Self::Reduce(error) => Some(error),
-        }
-    }
-}
 
 #[cfg(feature = "serde")]
 checked_serde!(Restriction);

@@ -59,7 +59,9 @@ def test_sddm_solve_matches_dense_inverse():
     a = sp.csr_matrix(m)
     b = np.array([1.0, 2.0, 3.0])  # sum = 6 != 0
 
-    factor = approx_chol.factorize(a, approx_chol.Config(seed=0, dense_up_to=0))
+    factor = approx_chol.factorize(
+        a, approx_chol.Config(seed=0, backend=approx_chol.Backend.Approximate())
+    )
     x = factor.solve(b)
 
     assert np.linalg.norm(x - np.linalg.solve(m, b)) < 1e-9

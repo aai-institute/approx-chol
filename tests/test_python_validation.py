@@ -28,7 +28,9 @@ def test_split_below_two_selects_standard_ac(split):
     b[0], b[-1] = 1.0, -1.0
 
     def solve(split):
-        config = approx_chol.Config(split=split, dense_up_to=0)
+        config = approx_chol.Config(
+            split=split, backend=approx_chol.Backend.Approximate()
+        )
         return approx_chol.factorize(lap, config).solve(b)
 
     np.testing.assert_array_equal(solve(split), solve(None))

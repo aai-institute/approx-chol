@@ -1,17 +1,15 @@
-use approx_chol::{factorize, Config, Real, ScalingReport, Sgdd};
+use approx_chol::{Factor, Real, ScalingReport};
 use rstest::rstest;
 
 use super::{grounded, reduce};
 
 /// `[[a+s, -a], [-a, a+s]]`: dominant by `s` on both rows, so it floats exactly when `s` is noise.
-fn surplus_pair<T: Real>(a: T, s: T) -> Sgdd<T> {
+fn surplus_pair<T: Real>(a: T, s: T) -> Factor<T> {
     reduce(&[0, 2, 4], &[0, 1, 0, 1], &[a + s, -a, -a, a + s]).expect("a pair is admitted")
 }
 
-fn solves_to<T: Real + std::fmt::LowerExp>(sgdd: &Sgdd<T>, rhs: &[T], expected: &[T]) {
-    let solution = factorize(sgdd, &Config::default())
-        .solve(rhs)
-        .expect("solve");
+fn solves_to<T: Real + std::fmt::LowerExp>(factor: &Factor<T>, rhs: &[T], expected: &[T]) {
+    let solution = factor.solve(rhs).expect("solve");
     let tolerance = T::from(1e-3).unwrap();
     for (&got, &want) in solution.iter().zip(expected) {
         assert!(
@@ -28,9 +26,9 @@ fn solves_to<T: Real + std::fmt::LowerExp>(sgdd: &Sgdd<T>, rhs: &[T], expected: 
 // A floor 1e6 coarser than rounding once answered this as a singular Laplacian.
 #[case::just_above_the_floor(6e-18)]
 fn surplus_above_summation_error_grounds_and_solves(#[case] surplus: f64) {
-    let sgdd = surplus_pair(1e-6, surplus);
-    assert!(grounded(&sgdd), "surplus {surplus:e}");
-    solves_to(&sgdd, &[1.0, 1.0], &[1.0 / surplus; 2]);
+    let factor = surplus_pair(1e-6, surplus);
+    assert!(grounded(&factor), "surplus {surplus:e}");
+    solves_to(&factor, &[1.0, 1.0], &[1.0 / surplus; 2]);
 }
 
 #[rstest]
@@ -51,11 +49,11 @@ fn f32_surplus_is_judged_against_summation_error_alone(
     #[case] surplus: f32,
     #[case] expected: bool,
 ) {
-    let sgdd = surplus_pair(1e-3f32, surplus);
-    assert_eq!(grounded(&sgdd), expected, "surplus {surplus:e}");
+    let factor = surplus_pair(1e-3f32, surplus);
+    assert_eq!(grounded(&factor), expected, "surplus {surplus:e}");
 }
 
-fn drifted<T: Real>(drift: T) -> Sgdd<T> {
+fn drifted<T: Real>(drift: T) -> Factor<T> {
     surplus_pair(T::one(), drift)
 }
 
@@ -79,7 +77,7 @@ fn surplus_beyond_summation_roundoff_augments() {
 /// A deficit past rounding is reported, not zeroed (#91), even well inside the scaling tolerance.
 #[test]
 fn deficit_beyond_summation_roundoff_is_reported() {
-    let reported = |sgdd: &Sgdd<f64>| sgdd.blocks()[0].scaling_report().is_some();
+    let reported = |factor: &Factor<f64>| factor.blocks()[0].scaling_report().is_some();
     assert!(reported(&drifted(-5e-11_f64)), "1e-9 tolerance is no cover");
     assert!(reported(&drifted(-32.0 * f64::EPSILON)));
     assert!(!reported(&drifted(-12.0 * f64::EPSILON)), "inside 16 eps");
@@ -89,7 +87,7 @@ fn deficit_beyond_summation_roundoff_is_reported() {
 }
 
 /// Unit leaves, centre short of their sum by `short_ulps` ε; the leaves balance exactly.
-fn star(leaves: u32, short_ulps: f64) -> Sgdd<f64> {
+fn star(leaves: u32, short_ulps: f64) -> Factor<f64> {
     let mut row_ptrs = vec![0u32, leaves + 1];
     let mut columns: Vec<u32> = (0..=leaves).collect();
     let mut values = vec![f64::from(leaves) * (1.0 - short_ulps * f64::EPSILON)];
@@ -142,8 +140,8 @@ fn a_deficit_past_the_dominance_band_is_admitted_clamped_and_reported(
 fn star_grounds_at_ulp_offset(offset: u64) -> bool {
     let centre = f64::from_bits(4e8f64.to_bits() + offset);
     let values = [centre, -1e8, -2e8, -1e8, -1e8, 1e8, -2e8, 2e8, -1e8, 1e8];
-    let sgdd = reduce(&[0, 4, 6, 8, 10], &[0, 1, 2, 3, 0, 1, 0, 2, 0, 3], &values).expect("star");
-    grounded(&sgdd)
+    let factor = reduce(&[0, 4, 6, 8, 10], &[0, 1, 2, 3, 0, 1, 0, 2, 0, 3], &values).expect("star");
+    grounded(&factor)
 }
 
 /// Brackets the floor at a large row scale, where an absolute threshold misjudges both ends.
@@ -160,8 +158,8 @@ const OFF_BY_FIVE_ULPS: f64 = 1.0 + 5.0 * f64::EPSILON;
 #[case::upper_holds_the_smaller([1.0, -1.0, -OFF_BY_FIVE_ULPS, OFF_BY_FIVE_ULPS])]
 #[case::lower_holds_the_smaller([OFF_BY_FIVE_ULPS, -OFF_BY_FIVE_ULPS, -1.0, 1.0])]
 fn tolerated_mirror_difference_is_not_one_row_s_surplus(#[case] values: [f64; 4]) {
-    let sgdd = reduce(&[0, 2, 4], &[0, 1, 0, 1], &values).expect("tolerated mirrors");
-    assert!(!grounded(&sgdd), "every stored row sums to zero");
+    let factor = reduce(&[0, 2, 4], &[0, 1, 0, 1], &values).expect("tolerated mirrors");
+    assert!(!grounded(&factor), "every stored row sums to zero");
 }
 
 /// Ten sub-ulp duplicates are absorbed one way and accumulate the other: no surplus on a row summing to zero.
@@ -178,9 +176,9 @@ fn coalescing_additions_are_inside_the_error_allowance() {
         values.extend(std::iter::repeat_n(-half, 10));
         row_ptrs.push(columns.len() as u32);
     }
-    let sgdd = reduce(&row_ptrs, &columns, &values).expect("coalesced duplicates");
+    let factor = reduce(&row_ptrs, &columns, &values).expect("coalesced duplicates");
     assert!(
-        !grounded(&sgdd),
+        !grounded(&factor),
         "duplicates coalescing to a balanced Laplacian"
     );
 }
@@ -210,7 +208,7 @@ fn genuine_surplus_at_either_scale_is_augmented_and_solves(
     #[case] rhs: [f64; 2],
     #[case] expected: [f64; 2],
 ) {
-    let sgdd = reduce(row_ptrs, columns, values).expect("genuine surplus");
-    assert!(sgdd.blocks().iter().all(|block| !block.floats()));
-    solves_to(&sgdd, &rhs, &expected);
+    let factor = reduce(row_ptrs, columns, values).expect("genuine surplus");
+    assert!(factor.blocks().iter().all(|block| !block.floats()));
+    solves_to(&factor, &rhs, &expected);
 }

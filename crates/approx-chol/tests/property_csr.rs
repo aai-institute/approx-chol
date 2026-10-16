@@ -1,5 +1,5 @@
-use approx_chol::input::{Csr, CsrError, UpperCsr};
-use approx_chol::{FromCsrError, ScalingPolicy, Sgdd};
+use approx_chol::input::{CsrError, CsrRef, UpperCsrRef};
+use approx_chol::{factorize, Error, Factor};
 use num_traits::PrimInt;
 use proptest::prelude::*;
 
@@ -65,10 +65,14 @@ fn shape_errors<I: PrimInt + std::fmt::Debug>(
     col_indices: &[I],
     values: &[f64],
 ) -> [CsrError; 2] {
-    let full = Csr::new(n, row_ptrs, col_indices, values).expect_err("full storage must fail");
+    let n = n as u32;
+    let full = CsrRef::new(row_ptrs, col_indices, values, n).expect_err("full storage must fail");
     let upper =
-        UpperCsr::new(n, row_ptrs, col_indices, values).expect_err("upper storage must fail");
-    [full, upper]
+        UpperCsrRef::new(row_ptrs, col_indices, values, n).expect_err("upper storage must fail");
+    [full, upper].map(|error| match error {
+        Error::InvalidCsr(error) => error,
+        other => panic!("a shape defect is a CSR error, not {other:?}"),
+    })
 }
 
 /// Columns are checked at reduction, where both storages canonicalize.
@@ -77,13 +81,12 @@ fn column_errors<I: PrimInt + Sync + std::fmt::Debug>(
     row_ptrs: &[I],
     col_indices: &[I],
     values: &[f64],
-) -> [FromCsrError; 2] {
-    let policy = ScalingPolicy::default();
-    let csr = Csr::new(n, row_ptrs, col_indices, values).expect("valid shape");
-    let upper = UpperCsr::new(n, row_ptrs, col_indices, values).expect("valid shape");
+) -> [Error; 2] {
+    let csr = CsrRef::new(row_ptrs, col_indices, values, n as u32).expect("valid shape");
+    let upper = UpperCsrRef::new(row_ptrs, col_indices, values, n as u32).expect("valid shape");
     [
-        Sgdd::<f64>::from_csr(csr, policy).expect_err("full storage must fail"),
-        Sgdd::<f64>::from_upper_csr(upper, policy).expect_err("upper storage must fail"),
+        factorize(csr).expect_err("full storage must fail"),
+        factorize(upper).expect_err("upper storage must fail"),
     ]
 }
 
@@ -92,10 +95,10 @@ proptest! {
     fn generated_laplacians_reduce_alike_from_full_and_upper_storage(csr in laplacian_csr_strategy()) {
         let (row_ptrs, col_indices, values, n) = &csr;
         let (upper_ptrs, upper_columns, upper_values, _) = upper(&csr);
-        let full = Csr::new(*n, row_ptrs, col_indices, values).expect("valid shape");
-        let triangle = UpperCsr::new(*n, &upper_ptrs, &upper_columns, &upper_values).expect("valid shape");
-        let full: Sgdd = Sgdd::from_csr(full, ScalingPolicy::default()).expect("a Laplacian is admitted");
-        let triangle: Sgdd = Sgdd::from_upper_csr(triangle, ScalingPolicy::default()).expect("a Laplacian is admitted");
+        let full = CsrRef::new(row_ptrs, col_indices, values, *n as u32).expect("valid shape");
+        let triangle = UpperCsrRef::new(&upper_ptrs, &upper_columns, &upper_values, *n as u32).expect("valid shape");
+        let full: Factor = factorize(full).expect("a Laplacian is admitted");
+        let triangle: Factor = factorize(triangle).expect("a Laplacian is admitted");
         prop_assert_eq!(format!("{full:?}"), format!("{triangle:?}"));
         prop_assert!(full.blocks().iter().all(|block| block.floats()));
     }
@@ -171,7 +174,7 @@ proptest! {
         (row_ptrs, mut col_indices, values, n) in laplacian_csr_strategy()
     ) {
         col_indices[0] = n as u32;
-        let expected = FromCsrError::Csr(CsrError::ColumnOutOfRange { row: 0 });
+        let expected = Error::InvalidCsr(CsrError::ColumnOutOfRange { row: 0 });
         prop_assert_eq!(column_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
@@ -182,7 +185,7 @@ proptest! {
         let (row_ptrs, mut col_indices) = (widen::<i64>(&row_ptrs), widen::<i64>(&col_indices));
         let last = col_indices.len() - 1;
         col_indices[last] = -1;
-        let expected = FromCsrError::Csr(CsrError::ColumnOutOfRange { row: n - 1 });
+        let expected = Error::InvalidCsr(CsrError::ColumnOutOfRange { row: n - 1 });
         prop_assert_eq!(column_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 }

@@ -1,6 +1,6 @@
-use approx_chol::{CliqueRule, Config, Multiplicity, SplitCount};
+use approx_chol::{Backend, Config, SchurMode};
 
-/// `dense_up_to = 0` under AC or AC2, each complement exact or sampled either way.
+/// [`Backend::Approximate`] under AC or AC2, each complement exact or sampled either way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sparse {
     AcExactComplement,
@@ -13,23 +13,25 @@ pub enum Sparse {
 
 impl Sparse {
     pub fn config(self) -> Config {
-        let (single, split) = (
-            Multiplicity::Single,
-            Multiplicity::Split(SplitCount::new(2).expect("two copies split")),
-        );
-        let (complement, approximate) = match self {
-            Sparse::AcExactComplement => (CliqueRule::Exact, single),
-            Sparse::AcComplementAc => (CliqueRule::Sampled(single), single),
-            Sparse::AcComplementAc2 => (CliqueRule::Sampled(split), single),
-            Sparse::Ac2ExactComplement => (CliqueRule::Exact, split),
-            Sparse::Ac2ComplementAc => (CliqueRule::Sampled(single), split),
-            Sparse::Ac2ComplementAc2 => (CliqueRule::Sampled(split), split),
+        let (complement, split_merge) = match self {
+            Sparse::AcExactComplement => (SchurMode::Exact, None),
+            Sparse::AcComplementAc => (SchurMode::Same, None),
+            Sparse::AcComplementAc2 => (
+                SchurMode::Approximate {
+                    split_merge: Some(2),
+                },
+                None,
+            ),
+            Sparse::Ac2ExactComplement => (SchurMode::Exact, Some(2)),
+            Sparse::Ac2ComplementAc => (SchurMode::Approximate { split_merge: None }, Some(2)),
+            Sparse::Ac2ComplementAc2 => (SchurMode::Same, Some(2)),
         };
         Config {
             seed: 7,
+            split_merge,
+            backend: Backend::Approximate,
             complement,
-            approximate,
-            dense_up_to: 0,
+            ..Config::default()
         }
     }
 }

@@ -3,11 +3,8 @@
 
 use std::collections::BTreeSet;
 
-use approx_chol::input::{BipartiteGram, Csr, FactorWidth1, Weights};
-use approx_chol::{
-    factorize, BlockFactor, CliqueRule, Config, InnerParallelism, Multiplicity, ScalingPolicy,
-    Sgdd, SplitCount,
-};
+use approx_chol::input::{BipartiteGram, CsrRef, FactorWidth1, Weights};
+use approx_chol::{factorize_with, Backend, BlockFactor, Config, Factor, InnerParallelism};
 use rstest::rstest;
 use serde::de::value::{Error, SeqDeserializer};
 use serde::Deserialize;
@@ -67,9 +64,9 @@ impl Fixture {
         }
     }
 
-    fn sgdd(self) -> Sgdd {
+    fn factor(self) -> Factor {
         let Some(matrix) = self.exact_matrix() else {
-            return sampled_gram();
+            return sampled_gram(self.config());
         };
         let (mut row_ptrs, mut columns, mut values) = (vec![0u32], Vec::new(), Vec::new());
         for row in matrix {
@@ -79,17 +76,16 @@ impl Fixture {
             }
             row_ptrs.push(columns.len() as u32);
         }
-        let csr = Csr::new(matrix.len(), &row_ptrs, &columns, &values).expect("valid csr");
-        Sgdd::from_csr(csr, ScalingPolicy::default()).expect("reduces")
+        let n = matrix.len() as u32;
+        let csr = CsrRef::new(&row_ptrs, &columns, &values, n).expect("valid csr");
+        factorize_with(csr, self.config()).expect("factors")
     }
 
     fn config(self) -> Config {
-        let ac2 = Multiplicity::Split(SplitCount::new(2).expect("k = 2"));
         match self {
             Self::SampledAc2 => Config {
-                complement: CliqueRule::Sampled(ac2),
-                approximate: ac2,
-                dense_up_to: 0,
+                split_merge: Some(2),
+                backend: Backend::Approximate,
                 ..Config::default()
             },
             _ => Config::default(),
@@ -116,12 +112,12 @@ impl Fixture {
     }
 
     fn blocks(self) -> Vec<BlockFactor> {
-        factorize(&self.sgdd(), &self.config()).into_blocks()
+        self.factor().into_blocks()
     }
 }
 
 /// Small enough for AC2 to keep a few eliminations, large enough that its samples differ from AC's.
-fn sampled_gram() -> Sgdd {
+fn sampled_gram(config: Config) -> Factor {
     let (left, right, per_row) = (10u32, 6u32, 3u32);
     let (rows, cols): (Vec<u32>, Vec<u32>) = (0..left * per_row)
         .map(|k| (k / per_row, (k * 5 + k / per_row) % right))
@@ -132,7 +128,7 @@ fn sampled_gram() -> Sgdd {
         Weights::unit(),
     )
     .expect("valid gram");
-    Sgdd::from_bipartite_gram(gram, ScalingPolicy::default()).expect("reduces")
+    factorize_with(gram, config).expect("factors")
 }
 
 /// Zero-sum over every fixture's floating component, so each has an exact solution.
@@ -143,15 +139,12 @@ fn rhs(n: usize) -> Vec<f64> {
 fn solve(blocks: &[BlockFactor], b: &[f64]) -> Vec<f64> {
     let mut x = vec![0.0; b.len()];
     for block in blocks {
-        let vertices = block.vertices();
-        let mut local: Vec<f64> = vertices.iter().map(|&v| b[v as usize]).collect();
+        let vertices: Vec<usize> = block.vertices().collect();
+        let mut local: Vec<f64> = vertices.iter().map(|&v| b[v]).collect();
         let mut scratch = vec![0.0; block.scratch_len()];
         (block.solve_local(&mut local, &mut scratch, InnerParallelism::Forbid))
             .expect("buffers fit");
-        vertices
-            .iter()
-            .zip(local)
-            .for_each(|(&v, xv)| x[v as usize] = xv);
+        vertices.iter().zip(local).for_each(|(&v, xv)| x[v] = xv);
     }
     x
 }
@@ -196,8 +189,8 @@ fn assert_committed_payload_decodes_and_solves(fixture: Fixture) {
         assert!(shown.contains(marker), "{fixture:?} lost {marker:?}");
     }
 
-    let sgdd = fixture.sgdd();
-    let b = rhs(sgdd.n());
+    let factor = fixture.factor();
+    let b = rhs(factor.n());
     let x = solve(&restored, &b);
     if let Some(matrix) = fixture.exact_matrix() {
         let residual = relative_residual(matrix, &x, &b);
@@ -205,7 +198,7 @@ fn assert_committed_payload_decodes_and_solves(fixture: Fixture) {
     }
 
     // The residual alone is met by any valid factor, not only the one that wrote these bytes.
-    let expected = solve(&factorize(&sgdd, &fixture.config()).into_blocks(), &b);
+    let expected = solve(&factor.into_blocks(), &b);
     assert!(
         x.iter()
             .zip(&expected)

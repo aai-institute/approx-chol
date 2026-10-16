@@ -1,8 +1,8 @@
 use approx_chol::input::{
-    BipartiteGram, Csr, CsrError, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsr,
-    Weights,
+    BipartiteGram, CsrError, CsrRef, FactorWidth1, FactorWidth2, Laplacian, SignedGraph,
+    UpperCsrRef, Weights,
 };
-use approx_chol::{factorize, Config, FromCsrError, ReduceError, ScalingPolicy, Sgdd};
+use approx_chol::{factorize, Error, Factor, ReduceError};
 use num_traits::PrimInt;
 use rstest::rstest;
 
@@ -11,12 +11,12 @@ use crate::grid::grid;
 
 const F32_FLOOR: f32 = f32::MIN_POSITIVE / f32::EPSILON;
 
-fn csr(error: CsrError) -> FromCsrError {
-    FromCsrError::Csr(error)
+fn csr(error: CsrError) -> Error {
+    Error::InvalidCsr(error)
 }
 
-fn out_of_range(vertex: usize) -> FromCsrError {
-    FromCsrError::Reduce(ReduceError::OutOfRange { vertex })
+fn out_of_range(vertex: usize) -> Error {
+    Error::Reduce(ReduceError::OutOfRange { vertex })
 }
 
 /// The smallest nonzero magnitude admitted (#163).
@@ -127,26 +127,26 @@ fn reversed_rows<T: Copy>(row_ptrs: &[u32], columns: &[u32], values: &[T]) -> (V
     &[0, 1],
     &[0],
     &[-1.0],
-    &[FromCsrError::Reduce(ReduceError::NonpositiveDiagonal { vertex: 0 })],
+    &[Error::Reduce(ReduceError::NonpositiveDiagonal { vertex: 0 })],
 )]
 #[case::zero_diagonal_beside_an_edge(
     &[0, 2, 4],
     &[0, 1, 0, 1],
     &[0.0, -1.0, -1.0, 1.0],
-    &[FromCsrError::Reduce(ReduceError::NonpositiveDiagonal { vertex: 0 })],
+    &[Error::Reduce(ReduceError::NonpositiveDiagonal { vertex: 0 })],
 )]
 // Components {0, 2} and {1, 3}: the vertex is in the caller's numbering, not the block's.
 #[case::nonpositive_diagonal_in_an_interleaved_later_block(
     &[0, 2, 4, 6, 8],
     &[0, 2, 1, 3, 0, 2, 1, 3],
     &[1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, -1.0],
-    &[FromCsrError::Reduce(ReduceError::NonpositiveDiagonal { vertex: 3 })],
+    &[Error::Reduce(ReduceError::NonpositiveDiagonal { vertex: 3 })],
 )]
 fn out_of_class_input_is_rejected_at_its_reported_position(
     #[case] row_ptrs: &[u32],
     #[case] columns: &[u32],
     #[case] values: &[f64],
-    #[case] defects: &[FromCsrError],
+    #[case] defects: &[Error],
 ) {
     let observed = reduce(row_ptrs, columns, values).expect_err("out of class");
     assert_names_a_defect(observed, defects);
@@ -175,7 +175,7 @@ fn out_of_class_upper_storage_is_rejected_at_its_reported_position(
     #[case] row_ptrs: &[u32],
     #[case] columns: &[u32],
     #[case] values: &[f64],
-    #[case] defects: &[FromCsrError],
+    #[case] defects: &[Error],
 ) {
     let observed = reduce_upper(row_ptrs, columns, values).expect_err("out of class");
     assert_names_a_defect(observed, defects);
@@ -228,48 +228,40 @@ fn in_class_input_is_admitted_on_both_paths(
 }
 
 #[rstest]
-#[case::csr(
-    Sgdd::from_csr(Csr::<f64>::new(0, &[0], &[], &[]).unwrap(), ScalingPolicy::default())
-        .expect("CSR")
-)]
-#[case::upper_csr(
-    Sgdd::from_upper_csr(UpperCsr::<f64>::new(0, &[0], &[], &[]).unwrap(), ScalingPolicy::default())
-        .expect("upper CSR")
-)]
+#[case::csr(factorize(CsrRef::<f64>::new(&[0], &[], &[], 0).unwrap()).expect("CSR"))]
+#[case::upper_csr(factorize(UpperCsrRef::<f64>::new(&[0], &[], &[], 0).unwrap()).expect("upper CSR"))]
 #[case::laplacian(
-    Sgdd::try_from(Laplacian::<f64>::new(0, &[], &[], Weights::unit()).unwrap()).expect("Laplacian")
+    factorize(Laplacian::<f64>::new(0, &[], &[], Weights::unit()).unwrap()).expect("Laplacian")
 )]
 #[case::signed_graph(
-    Sgdd::try_from(SignedGraph::<f64>::new(0, &[], &[], &[], Weights::unit()).unwrap())
+    factorize(SignedGraph::<f64>::new(0, &[], &[], &[], Weights::unit()).unwrap())
         .expect("signed graph")
 )]
 #[case::gram(
-    Sgdd::from_gram(FactorWidth2::<f64>::new(0, &[], &[], &[], &[]).unwrap(), ScalingPolicy::default())
-        .expect("Gram")
+    factorize(FactorWidth2::<f64>::new(0, &[], &[], &[], &[]).unwrap()).expect("Gram")
 )]
-#[case::bipartite_gram(Sgdd::from_bipartite_gram(
+#[case::bipartite_gram(factorize(
     BipartiteGram::new(
         FactorWidth1::<f64>::new(0, &[], None).unwrap(),
         FactorWidth1::<f64>::new(0, &[], None).unwrap(),
         Weights::unit(),
     )
     .unwrap(),
-    ScalingPolicy::default(),
 )
 .expect("bipartite Gram"))]
-fn an_empty_system_is_admitted_by_every_entry_point(#[case] sgdd: Sgdd) {
-    assert_eq!((sgdd.n(), sgdd.blocks().len()), (0, 0));
+fn an_empty_system_is_admitted_by_every_entry_point(#[case] factor: Factor) {
+    assert_eq!((factor.n(), factor.blocks().len()), (0, 0));
 }
 
 #[rstest]
-#[case::csr(Csr::<f64>::new(usize::MAX, &[0], &[], &[]).err())]
-#[case::upper_csr(UpperCsr::<f64>::new(usize::MAX, &[0], &[], &[]).err())]
-fn a_dimension_past_the_largest_row_count_is_a_length_mismatch(#[case] error: Option<CsrError>) {
+#[case::csr(CsrRef::<f64>::new(&[0], &[], &[], u32::MAX).err())]
+#[case::upper_csr(UpperCsrRef::<f64>::new(&[0], &[], &[], u32::MAX).err())]
+fn a_dimension_past_the_largest_row_count_is_a_length_mismatch(#[case] error: Option<Error>) {
     let expected = CsrError::LengthMismatch {
-        expected: usize::MAX,
+        expected: u32::MAX as usize + 1,
         found: 1,
     };
-    assert_eq!(error, Some(expected));
+    assert_eq!(error, Some(csr(expected)));
 }
 
 #[test]
@@ -288,15 +280,13 @@ fn singleton_systems_are_admitted() {
 #[test]
 fn a_diagonal_at_a_quarter_of_the_maximum_still_solves() {
     let quarter = f64::MAX / 4.0;
-    let sgdd = reduce(&[0, 1], &[0], &[quarter]).expect("diagonal at the bound");
-    let solution = factorize(&sgdd, &Config::default())
-        .solve(&[quarter])
-        .expect("solve");
+    let factor = reduce(&[0, 1], &[0], &[quarter]).expect("diagonal at the bound");
+    let solution = factor.solve(&[quarter]).expect("solve");
     assert!((solution[0] - 1.0).abs() < 1e-12, "{solution:?}");
 }
 
 /// The #163 range in `f32`'s own bounds: `MIN_POSITIVE/EPSILON` is `2^-103`, not `f64`'s `2^-970`.
-fn f32_pair(diagonal: f32, edge: f32) -> Result<Sgdd<f32>, FromCsrError> {
+fn f32_pair(diagonal: f32, edge: f32) -> Result<Factor<f32>, Error> {
     reduce(&[0, 2, 4], &[0, 1, 0, 1], &[diagonal, edge, edge, diagonal])
 }
 
@@ -319,7 +309,7 @@ fn f32_pair(diagonal: f32, edge: f32) -> Result<Sgdd<f32>, FromCsrError> {
 fn f32_out_of_range_input_is_rejected(
     #[case] diagonal: f32,
     #[case] edge: f32,
-    #[case] defects: &[FromCsrError],
+    #[case] defects: &[Error],
 ) {
     let observed = f32_pair(diagonal, edge).expect_err("out of f32 range");
     assert_names_a_defect(observed, defects);
@@ -344,12 +334,10 @@ fn widen<I: PrimInt>(indices: &[u32]) -> Vec<I> {
         .collect()
 }
 
-fn bits(sgdd: &Sgdd, rhs: &[f64]) -> (String, Vec<u64>) {
-    let solution = factorize(sgdd, &Config::default())
-        .solve(rhs)
-        .expect("solve");
+fn bits(factor: &Factor, rhs: &[f64]) -> (String, Vec<u64>) {
+    let solution = factor.solve(rhs).expect("solve");
     (
-        format!("{sgdd:?}"),
+        format!("{factor:?}"),
         solution.iter().map(|x| x.to_bits()).collect(),
     )
 }
@@ -358,23 +346,20 @@ fn bits(sgdd: &Sgdd, rhs: &[f64]) -> (String, Vec<u64>) {
 #[test]
 fn canonical_and_reordered_ingestion_agree_bit_for_bit() {
     let (row_ptrs, columns, values) = grid_laplacian(6, 7);
-    let n = row_ptrs.len() - 1;
+    let n = (row_ptrs.len() - 1) as u32;
     let (reversed_columns, reversed_values) = reversed_rows(&row_ptrs, &columns, &values);
     let rhs: Vec<f64> = (0..n).map(|i| (i % 5) as f64 - 2.0).collect();
-    let policy = ScalingPolicy::default();
-    let reduce = |csr| Sgdd::from_csr(csr, policy).expect("grid");
 
     let canonical = bits(
-        &reduce(Csr::new(n, &row_ptrs, &columns, &values).unwrap()),
+        &factorize(CsrRef::new(&row_ptrs, &columns, &values, n).unwrap()).expect("grid"),
         &rhs,
     );
-    let reordered = Csr::new(n, &row_ptrs, &reversed_columns, &reversed_values).unwrap();
-    assert_eq!(canonical, bits(&reduce(reordered), &rhs));
+    let reordered = CsrRef::new(&row_ptrs, &reversed_columns, &reversed_values, n).unwrap();
+    assert_eq!(canonical, bits(&factorize(reordered).expect("grid"), &rhs));
 
     let (wide_row_ptrs, wide_columns) = (widen::<u64>(&row_ptrs), widen::<u64>(&reversed_columns));
-    let wide = Csr::new(n, &wide_row_ptrs, &wide_columns, &reversed_values).unwrap();
-    let wide = Sgdd::from_csr(wide, policy).expect("grid");
-    assert_eq!(canonical, bits(&wide, &rhs));
+    let wide = CsrRef::new(&wide_row_ptrs, &wide_columns, &reversed_values, n).unwrap();
+    assert_eq!(canonical, bits(&factorize(wide).expect("grid"), &rhs));
 
     let upper = |row_ptrs: &[u32], columns: &[u32], values: &[f64]| {
         let (mut ptrs, mut kept_columns, mut kept_values) = (vec![0u32], Vec::new(), Vec::new());
@@ -394,8 +379,8 @@ fn canonical_and_reordered_ingestion_agree_bit_for_bit() {
         ("reversed", &reversed_columns, &reversed_values),
     ] {
         let (ptrs, kept_columns, kept_values) = upper(&row_ptrs, columns, values);
-        let triangle = UpperCsr::new(n, &ptrs, &kept_columns, &kept_values).unwrap();
-        let triangle = Sgdd::from_upper_csr(triangle, policy).expect("grid");
+        let triangle = UpperCsrRef::new(&ptrs, &kept_columns, &kept_values, n).unwrap();
+        let triangle = factorize(triangle).expect("grid");
         assert_eq!(canonical, bits(&triangle, &rhs), "{label} upper storage");
     }
 }

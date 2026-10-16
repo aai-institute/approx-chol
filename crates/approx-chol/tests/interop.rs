@@ -7,8 +7,8 @@ mod faer;
 #[path = "interop/sprs.rs"]
 mod sprs;
 
-use approx_chol::input::{ConvertError, Csr};
-use approx_chol::{factorize, Config, ScalingPolicy, Sgdd};
+use approx_chol::input::{CsrRef, Input};
+use approx_chol::{factorize, Error, Factor};
 use num_traits::PrimInt;
 
 /// The 4-vertex path 0-1-2-3 with unit weights.
@@ -25,15 +25,21 @@ fn indices<I: PrimInt>(fixture: &[usize]) -> Vec<I> {
 fn assert_solves_fixture<'a, I, M>(matrix: M)
 where
     I: PrimInt + Sync + 'a,
-    M: TryInto<Csr<'a, f64, I>, Error = ConvertError>,
+    M: Copy
+        + TryInto<CsrRef<'a, f64, I>, Error = Error>
+        + TryInto<Input<'a, f64, I>, Error = Error>,
 {
-    let csr = matrix.try_into().expect("valid CSR view");
+    let csr: CsrRef<'a, f64, I> = matrix.try_into().expect("valid CSR view");
     assert_eq!(csr.n(), N);
-    let sgdd = Sgdd::<f64>::from_csr(csr, ScalingPolicy::default()).expect("the path is SDDM");
     let b = [1.0, -1.0, 1.0, -1.0];
-    let x = factorize(&sgdd, &Config::default())
+    let x = factorize(csr)
+        .expect("the path is SDDM")
         .solve(&b)
         .expect("solve");
+    // The matrix factors directly too, as `factorize(&matrix)` did before 0.7.
+    let direct: Factor = factorize(matrix).expect("the path is SDDM");
+    let bits = |x: &[f64]| x.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(&direct.solve(&b).expect("solve")), bits(&x));
     for (row, &b) in b.iter().enumerate() {
         let lx: f64 = (ROW_PTRS[row]..ROW_PTRS[row + 1])
             .map(|k| VALUES[k] * x[COL_INDICES[k]])

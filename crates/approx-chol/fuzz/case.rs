@@ -1,10 +1,10 @@
 use std::error::Error;
 
 use approx_chol::input::{
-    BipartiteGram, Csr, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsr, Weights,
+    BipartiteGram, CsrRef, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsrRef, Weights,
 };
-use approx_chol::{factorize, CliqueRule, Config, Factor, Index, InnerParallelism};
-use approx_chol::{Multiplicity, Real, ScalingPolicy, Sgdd, SplitCount};
+use approx_chol::{factorize_with, Backend, Config, Factor, InnerParallelism};
+use approx_chol::{Real, ScalingPolicy, SchurMode};
 use serde::{Deserialize, Serialize};
 
 /// The precision is a variant, so one byte string never decodes as both.
@@ -88,7 +88,7 @@ pub enum Weighting<T> {
     SqrtOf(Vec<T>),
 }
 
-/// `Config` without serde, field for field: `None` is `Exact`, under two copies sample once, a `u8` caps AC2.
+/// `Config` in a `u8` per knob: `None` is an exact complement, under two copies sample once, a `u8` caps AC2.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Build {
     pub seed: u64,
@@ -98,15 +98,18 @@ pub struct Build {
 }
 
 impl Build {
-    pub fn config(&self) -> Config {
-        let copies =
-            |k: u8| SplitCount::new(k.into()).map_or(Multiplicity::Single, Multiplicity::Split);
+    pub fn config(&self, scaling: ScalingPolicy) -> Config {
+        let complement = (self.complement).map_or(SchurMode::Exact, |k| SchurMode::Approximate {
+            split_merge: Some(k.into()),
+        });
         Config {
             seed: self.seed,
-            complement: (self.complement)
-                .map_or(CliqueRule::Exact, |k| CliqueRule::Sampled(copies(k))),
-            approximate: copies(self.approximate),
-            dense_up_to: self.dense_up_to.into(),
+            split_merge: Some(self.approximate.into()),
+            backend: Backend::ExactBelow {
+                max_dim: self.dense_up_to.into(),
+            },
+            complement,
+            scaling,
         }
     }
 }
@@ -133,7 +136,54 @@ impl<T: Real> Side<T> {
 
 impl<T: Real> Case<T> {
     pub fn factor(&self) -> Result<Factor<T>, Box<dyn Error>> {
-        Ok(factorize(&self.reduce()?, &self.build.config()))
+        let policy = ScalingPolicy::new(self.tolerance, self.max_iterations.into())
+            .ok_or("tolerance outside [0, 1)")?;
+        let config = self.build.config(policy);
+        Ok(match &self.view {
+            View::Csr(r) => {
+                let csr = CsrRef::new(&r.row_ptrs, &r.columns, &r.values, r.n.into())?;
+                factorize_with(csr, config)?
+            }
+            View::UpperCsr(r) => {
+                let csr = UpperCsrRef::new(&r.row_ptrs, &r.columns, &r.values, r.n.into())?;
+                factorize_with(csr, config)?
+            }
+            View::Gram { n, a, b, x, y } => {
+                factorize_with(FactorWidth2::new((*n).into(), a, b, x, y)?, config)?
+            }
+            View::BipartiteGram {
+                left,
+                right,
+                weights,
+            } => {
+                let gram = BipartiteGram::new(left.factor()?, right.factor()?, weights.weights()?)?;
+                factorize_with(gram, config)?
+            }
+            View::Laplacian {
+                n,
+                a,
+                b,
+                weights,
+                ground,
+            } => {
+                let graph = Laplacian::new((*n).into(), a, b, weights.weights()?)?;
+                let graph = match ground {
+                    Some(g) => graph.grounded(g)?,
+                    None => graph,
+                };
+                factorize_with(graph, config)?
+            }
+            View::SignedGraph {
+                n,
+                a,
+                b,
+                positive,
+                weights,
+            } => {
+                let graph = SignedGraph::new((*n).into(), a, b, positive, weights.weights()?)?;
+                factorize_with(graph, config)?
+            }
+        })
     }
 
     fn run(&self) -> Result<usize, Box<dyn Error>> {
@@ -150,63 +200,10 @@ impl<T: Real> Case<T> {
             block
                 .solve_local(&mut local, &mut scratch, InnerParallelism::Allow)
                 .expect("buffers of the block's own lengths are accepted");
-            let agrees = (block.vertices().iter().zip(&local))
-                .all(|(v, x)| solved[v.index()].integer_decode() == x.integer_decode());
+            let agrees = (block.vertices().zip(&local))
+                .all(|(v, x)| solved[v].integer_decode() == x.integer_decode());
             assert!(agrees, "dirty scratch changed the solution");
         }
         Ok(blocks.len())
-    }
-
-    fn reduce(&self) -> Result<Sgdd<T>, Box<dyn Error>> {
-        let policy = ScalingPolicy::new(self.tolerance, self.max_iterations.into())
-            .ok_or("tolerance outside [0, 1)")?;
-        Ok(match &self.view {
-            View::Csr(r) => Sgdd::from_csr(
-                Csr::new(r.n.into(), &r.row_ptrs, &r.columns, &r.values)?,
-                policy,
-            )?,
-            View::UpperCsr(r) => {
-                let csr = UpperCsr::new(r.n.into(), &r.row_ptrs, &r.columns, &r.values)?;
-                Sgdd::from_upper_csr(csr, policy)?
-            }
-            View::Gram { n, a, b, x, y } => {
-                Sgdd::from_gram(FactorWidth2::new((*n).into(), a, b, x, y)?, policy)?
-            }
-            View::BipartiteGram {
-                left,
-                right,
-                weights,
-            } => {
-                let gram = BipartiteGram::new(left.factor()?, right.factor()?, weights.weights()?)?;
-                Sgdd::from_bipartite_gram(gram, policy)?
-            }
-            View::Laplacian {
-                n,
-                a,
-                b,
-                weights,
-                ground,
-            } => {
-                let graph = Laplacian::new((*n).into(), a, b, weights.weights()?)?;
-                let graph = match ground {
-                    Some(g) => graph.grounded(g)?,
-                    None => graph,
-                };
-                Sgdd::try_from(graph)?
-            }
-            View::SignedGraph {
-                n,
-                a,
-                b,
-                positive,
-                weights,
-            } => Sgdd::try_from(SignedGraph::new(
-                (*n).into(),
-                a,
-                b,
-                positive,
-                weights.weights()?,
-            )?)?,
-        })
     }
 }

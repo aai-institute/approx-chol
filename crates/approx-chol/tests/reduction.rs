@@ -2,13 +2,25 @@
 mod dense;
 
 use approx_chol::input::{
-    BipartiteGram, Csr, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsr, Weights,
+    BipartiteGram, CsrRef, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsrRef, Weights,
 };
-use approx_chol::{factorize, Config, Existence, ScalingPolicy, Sgdd};
+use approx_chol::{factorize_with, Backend, Config, Existence, Factor, ScalingPolicy};
 use dense::dense;
 
-fn solve_residual(sgdd: &Sgdd, matrix: &[Vec<f64>]) {
-    let exact: Vec<f64> = (0..sgdd.n()).map(|i| (i % 5) as f64 - 2.0).collect();
+/// Every Cholesky dense under `policy`, so a residual reads the reduction alone.
+fn exact(policy: ScalingPolicy) -> Config {
+    Config {
+        scaling: policy,
+        ..dense()
+    }
+}
+
+fn floats(factor: &Factor) -> Vec<bool> {
+    factor.blocks().iter().map(|block| block.floats()).collect()
+}
+
+fn solve_residual(factor: &Factor, matrix: &[Vec<f64>]) {
+    let exact: Vec<f64> = (0..factor.n()).map(|i| (i % 5) as f64 - 2.0).collect();
     let apply = |x: &[f64]| -> Vec<f64> {
         matrix
             .iter()
@@ -16,7 +28,6 @@ fn solve_residual(sgdd: &Sgdd, matrix: &[Vec<f64>]) {
             .collect()
     };
     let rhs = apply(&exact);
-    let factor = factorize(sgdd, &dense());
     let solution = factor.solve(&rhs).unwrap();
     let residual = apply(&solution);
     for (actual, expected) in residual.iter().zip(&rhs) {
@@ -59,32 +70,29 @@ fn csr_and_upper_share_reduction_and_solve_bits() {
             ptrs[upper].push(indices[upper].len() as u32);
         }
     }
-    let csr = Csr::new(7, &ptrs[0], &indices[0], &values[0]).unwrap();
-    let upper = UpperCsr::new(7, &ptrs[1], &indices[1], &values[1]).unwrap();
-    let full: Sgdd = Sgdd::from_csr(csr, ScalingPolicy::default()).unwrap();
-    let upper: Sgdd = Sgdd::from_upper_csr(upper, ScalingPolicy::default()).unwrap();
-    assert_eq!(format!("{full:?}"), format!("{upper:?}"));
-    assert_eq!(
-        full.blocks().iter().map(|c| c.floats()).collect::<Vec<_>>(),
-        [true, false]
-    );
+    let csr = CsrRef::new(&ptrs[0], &indices[0], &values[0], 7).unwrap();
+    let upper = UpperCsrRef::new(&ptrs[1], &indices[1], &values[1], 7).unwrap();
     let rhs = [1.0; 7];
     for config in [
         Config {
-            dense_up_to: 0,
+            backend: Backend::Approximate,
             ..Config::default()
         },
         dense(),
     ] {
-        let a = factorize(&full, &config).solve(&rhs).unwrap();
-        let b = factorize(&upper, &config).solve(&rhs).unwrap();
+        let full: Factor = factorize_with(csr, config).unwrap();
+        let upper: Factor = factorize_with(upper, config).unwrap();
+        assert_eq!(format!("{full:?}"), format!("{upper:?}"));
+        assert_eq!(floats(&full), [true, false]);
+        let a = full.solve(&rhs).unwrap();
+        let b = upper.solve(&rhs).unwrap();
         assert_eq!(
             a.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
             b.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
         );
         assert_eq!(a[6], 0.0);
     }
-    solve_residual(&full, &matrix);
+    solve_residual(&factorize_with(csr, dense()).unwrap(), &matrix);
 }
 
 #[test]
@@ -92,15 +100,8 @@ fn gram_separates_folded_scaled_and_frustrated_components() {
     let (a, b) = ([0, 1, 3, 4, 3], [1, 2, 4, 5, 5]);
     let (x, y) = ([1.3, 2.7, 1.0, 1.0, 1.0], [-2.7, -4.1, 1.0, 1.0, 1.0]);
     let gram = FactorWidth2::new(7, &a, &b, &x, &y).unwrap();
-    let reduced = Sgdd::from_gram(gram, ScalingPolicy::new(0.0, 0).unwrap()).unwrap();
-    assert_eq!(
-        reduced
-            .blocks()
-            .iter()
-            .map(|c| c.floats())
-            .collect::<Vec<_>>(),
-        [true, false]
-    );
+    let reduced = factorize_with(gram, exact(ScalingPolicy::new(0.0, 0).unwrap())).unwrap();
+    assert_eq!(floats(&reduced), [true, false]);
     assert!(reduced
         .blocks()
         .iter()
@@ -115,9 +116,9 @@ fn shape_ground_and_signature_match_their_gram_matrices() {
     let (x, y) = ([1.0, 2.0, 3.0, 4.0], [-1.0, -2.0, -3.0, -4.0]);
     let ground = [0.25, 0.0, 0.0, 0.0];
     let laplacian = Laplacian::new(4, &a, &b, Weights::of(&weights).unwrap()).unwrap();
-    let floating = Sgdd::try_from(laplacian).unwrap();
+    let floating = factorize_with(laplacian, dense()).unwrap();
     assert!(floating.blocks()[0].floats());
-    let grounded = Sgdd::try_from(laplacian.grounded(&ground).unwrap()).unwrap();
+    let grounded = factorize_with(laplacian.grounded(&ground).unwrap(), dense()).unwrap();
     assert!(!grounded.blocks()[0].floats());
     let mut expected = matrix(4, &a, &b, &x, &y);
     solve_residual(&floating, &expected);
@@ -125,7 +126,7 @@ fn shape_ground_and_signature_match_their_gram_matrices() {
     solve_residual(&grounded, &expected);
     let signs = [true, false, true, false];
     let signed = SignedGraph::new(4, &a, &b, &signs, Weights::of(&weights).unwrap()).unwrap();
-    let signed = Sgdd::try_from(signed).unwrap();
+    let signed = factorize_with(signed, dense()).unwrap();
     let y = [1.0, -2.0, 3.0, -4.0];
     assert!(signed.blocks()[0].floats());
     solve_residual(&signed, &matrix(4, &a, &b, &x, &y));
@@ -139,7 +140,7 @@ fn bipartite_incidence_and_valued_grams_preserve_both_sides() {
         let l = FactorWidth1::new(3, &left, values_l).unwrap();
         let r = FactorWidth1::new(2, &right, values_r).unwrap();
         let gram = BipartiteGram::new(l, r, Weights::default()).unwrap();
-        Sgdd::from_bipartite_gram(gram, ScalingPolicy::default()).unwrap()
+        factorize_with(gram, dense()).unwrap()
     };
     let incidence = gram(None, None);
     let valued = gram(Some(&ones[..]), Some(&ones[..]));
@@ -161,19 +162,19 @@ fn exhausted_scaling_reports_the_inputs_existence_guarantee() {
     let (x, y) = ([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
     let gram = FactorWidth2::new(3, &a, &b, &x, &y).unwrap();
     let policy = ScalingPolicy::new(0.0, 0).unwrap();
-    let sgdd: Sgdd = Sgdd::from_gram(gram, policy).unwrap();
+    let factor: Factor = factorize_with(gram, exact(policy)).unwrap();
     assert_eq!(
-        sgdd.blocks()[0].scaling_report().unwrap().scaling,
+        factor.blocks()[0].scaling_report().unwrap().scaling,
         Existence::Guaranteed
     );
     let matrix = matrix(3, &a, &b, &x, &y);
     let ptrs = [0, 3, 6, 9];
     let indices = [0, 1, 2, 0, 1, 2, 0, 1, 2];
     let values: Vec<f64> = matrix.into_iter().flatten().collect();
-    let csr = Csr::new(3, &ptrs, &indices, &values).unwrap();
-    let sgdd: Sgdd = Sgdd::from_csr(csr, policy).unwrap();
+    let csr = CsrRef::new(&ptrs, &indices, &values, 3).unwrap();
+    let factor: Factor = factorize_with(csr, exact(policy)).unwrap();
     assert_eq!(
-        sgdd.blocks()[0].scaling_report().unwrap().scaling,
+        factor.blocks()[0].scaling_report().unwrap().scaling,
         Existence::Unknown
     );
 }
@@ -183,8 +184,8 @@ fn row_surplus_keeps_a_definite_component_grounded() {
     let ptrs = [0, 2, 4];
     let indices = [0, 1, 0, 1];
     let values = [3.0, -1.0, -1.0, 3.0];
-    let csr = Csr::new(2, &ptrs, &indices, &values).unwrap();
-    let reduced = Sgdd::from_csr(csr, ScalingPolicy::default()).unwrap();
+    let csr = CsrRef::new(&ptrs, &indices, &values, 2).unwrap();
+    let reduced = factorize_with(csr, dense()).unwrap();
     assert!(!reduced.blocks()[0].floats());
     solve_residual(&reduced, &[vec![3.0, -1.0], vec![-1.0, 3.0]]);
 }

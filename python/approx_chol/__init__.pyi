@@ -4,8 +4,63 @@ from typing import Any, final
 
 import numpy as np
 import numpy.typing as npt
+from typing_extensions import disjoint_base
 
-__all__ = ["Config", "Factor", "factorize", "factorize_raw"]
+__all__ = ["Backend", "Config", "Factor", "SchurMode", "factorize", "factorize_raw"]
+
+@disjoint_base
+class Backend:
+    """Which factorization each block gets."""
+
+    @final
+    class Approximate(Backend):
+        """Approximate elimination for every block."""
+
+        __match_args__ = ()
+        def __new__(cls) -> Backend.Approximate: ...
+
+    @final
+    class ExactBelow(Backend):
+        """Exact dense Cholesky at or below ``max_dim``, approximate above.
+
+        A frustrated block, whose signs no ±1 scaling folds, counts twice: its
+        cover has two sheets. A ``max_dim`` of ``0`` selects ``Approximate``.
+        """
+
+        __match_args__ = ("max_dim",)
+        def __new__(cls, max_dim: int) -> Backend.ExactBelow: ...
+        @property
+        def max_dim(self) -> int: ...
+
+@disjoint_base
+class SchurMode:
+    """How a bipartite block's eliminated side becomes the kept side's Schur complement.
+
+    Only a bipartite block has one, and a CSR input never reduces to one.
+    """
+
+    @final
+    class Exact(SchurMode):
+        """Each star's whole clique: the exact Schur complement."""
+
+        __match_args__ = ()
+        def __new__(cls) -> SchurMode.Exact: ...
+
+    @final
+    class Approximate(SchurMode):
+        """A clique tree sampled from each star, with its own AC2 multiplicity ``split``."""
+
+        __match_args__ = ("split",)
+        def __new__(cls, split: int | None = None) -> SchurMode.Approximate: ...
+        @property
+        def split(self) -> int | None: ...
+
+    @final
+    class Same(SchurMode):
+        """Sampled with the config's own ``split``."""
+
+        __match_args__ = ()
+        def __new__(cls) -> SchurMode.Same: ...
 
 @final
 class Config:
@@ -13,9 +68,9 @@ class Config:
 
     ``seed`` keys every sampler stream. ``split`` is the AC2 multi-edge
     multiplicity. Splitting an edge fewer than twice is standard AC, so
-    ``None``, ``0`` and ``1`` all select AC. ``dense_up_to`` is the largest
-    block dimension factored by exact dense Cholesky; ``0`` never does.
-    A frustrated block, whose signs no ±1 scaling folds, counts twice: its cover has two sheets.
+    ``None``, ``0`` and ``1`` all select AC. ``backend`` picks which blocks
+    are factored exactly, and ``complement`` how a bipartite block's Schur
+    complement is formed.
     An argument left out or ``None`` keeps the default, which the getters report.
     """
 
@@ -23,14 +78,17 @@ class Config:
         cls,
         seed: int | None = ...,
         split: int | None = ...,
-        dense_up_to: int | None = ...,
+        backend: Backend | None = ...,
+        complement: SchurMode | None = ...,
     ) -> Config: ...
     @property
     def seed(self) -> int: ...
     @property
     def split(self) -> int | None: ...
     @property
-    def dense_up_to(self) -> int: ...
+    def backend(self) -> Backend: ...
+    @property
+    def complement(self) -> SchurMode: ...
 
 @final
 class Factor:
@@ -49,6 +107,11 @@ class Factor:
 
         Use this to size output buffers for :meth:`solve_into`.
         """
+        ...
+
+    @property
+    def n_steps(self) -> int:
+        """Number of elimination steps."""
         ...
 
     @property

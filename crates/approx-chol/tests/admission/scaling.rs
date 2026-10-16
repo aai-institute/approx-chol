@@ -1,5 +1,5 @@
 use approx_chol::input::FactorWidth2;
-use approx_chol::{ScalingPolicy, Sgdd};
+use approx_chol::{factorize, ScalingPolicy};
 use rstest::rstest;
 
 use super::{reduce, reduce_with};
@@ -94,8 +94,8 @@ fn a_settled_dld_path_is_not_reported(#[case] spread: f64) {
     let n = 5000;
     let (row_ptrs, columns, values) = dld(n, &path(n), spread, 0);
     let policy = ScalingPolicy::new(1e-9, 6144).expect("a valid policy");
-    let sgdd = reduce_with(&row_ptrs, &columns, &values, policy).expect("admitted");
-    let block = &sgdd.blocks()[0];
+    let factor = reduce_with(&row_ptrs, &columns, &values, policy).expect("admitted");
+    let block = &factor.blocks()[0];
     assert_eq!(block.scaling_report(), None, "spread {spread:e}");
     assert!(block.floats(), "spread {spread:e}");
 }
@@ -105,8 +105,8 @@ fn a_settled_dld_path_is_not_reported(#[case] spread: f64) {
 fn a_settled_scaling_with_rounding_deficit_is_not_clamped() {
     let k = 22;
     let (row_ptrs, columns, values) = dld(k * k, &grid(k), 1e-3, 30);
-    let sgdd = reduce(&row_ptrs, &columns, &values).expect("admitted");
-    assert_eq!(sgdd.blocks()[0].scaling_report(), None);
+    let factor = reduce(&row_ptrs, &columns, &values).expect("admitted");
+    assert_eq!(factor.blocks()[0].scaling_report(), None);
 }
 
 /// Ranked by violation, a stall restart resumed from a stale best, adopted nothing, and gave up at 3568 of the budget.
@@ -115,8 +115,8 @@ fn a_weighted_grid_settles_after_a_stall_restart() {
     let k = 24;
     let (row_ptrs, columns, values) = weighted_dld(k * k, &grid(k), 24, 2);
     let policy = ScalingPolicy::new(1e-9, 8000).expect("a valid policy");
-    let sgdd = reduce_with(&row_ptrs, &columns, &values, policy).expect("admitted");
-    let report = sgdd.blocks()[0].scaling_report();
+    let factor = reduce_with(&row_ptrs, &columns, &values, policy).expect("admitted");
+    let report = factor.blocks()[0].scaling_report();
     assert!(report.is_none_or(|r| r.settled), "{report:?}");
 }
 
@@ -126,8 +126,8 @@ fn a_stall_before_any_adoption_keeps_iterating() {
     let k = 30;
     let (row_ptrs, columns, values) = weighted_dld(k * k, &grid(k), 24, 14);
     let policy = ScalingPolicy::new(1e-9, 12_000).expect("a valid policy");
-    let sgdd = reduce_with(&row_ptrs, &columns, &values, policy).expect("admitted");
-    let report = sgdd.blocks()[0].scaling_report();
+    let factor = reduce_with(&row_ptrs, &columns, &values, policy).expect("admitted");
+    let report = factor.blocks()[0].scaling_report();
     assert!(report.is_none_or(|r| r.settled), "{report:?}");
 }
 
@@ -136,8 +136,8 @@ fn a_stall_before_any_adoption_keeps_iterating() {
 fn a_settled_scaling_with_an_uneven_perron_vector_is_not_clamped() {
     let k = 30;
     let (row_ptrs, columns, values) = weighted_dld(k * k, &grid(k), 10, 0);
-    let sgdd = reduce(&row_ptrs, &columns, &values).expect("admitted");
-    assert_eq!(sgdd.blocks()[0].scaling_report(), None);
+    let factor = reduce(&row_ptrs, &columns, &values).expect("admitted");
+    assert_eq!(factor.blocks()[0].scaling_report(), None);
 }
 
 /// A Gram cycle whose null vector `u = 2^min(i, L−1−i)` peaks mid-cycle; its error is relative per entry, so no row's band grows by `1/μ_i`.
@@ -151,7 +151,7 @@ fn a_gram_null_vector_deficit_past_its_row_rounding_is_reported() {
     let y: Vec<f64> = a.iter().map(|&i| -u(i)).collect();
     x[cycle as usize - 1] *= 1.0 + miss;
     let gram = FactorWidth2::new(cycle as usize, &a, &b, &x, &y).expect("valid columns");
-    let sgdd: Sgdd = Sgdd::from_gram(gram, ScalingPolicy::default()).expect("admitted");
-    let report = sgdd.blocks()[0].scaling_report().expect("reported");
+    let factor = factorize(gram).expect("admitted");
+    let report = factor.blocks()[0].scaling_report().expect("reported");
     assert!(report.violation > miss / 10.0, "{report:?}");
 }

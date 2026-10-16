@@ -4,9 +4,9 @@ mod csr;
 mod grid;
 
 use approx_chol::input::{BipartiteGram, FactorWidth1, Weights};
-use approx_chol::{factorize, CliqueRule, Config, Multiplicity, ScalingPolicy, Sgdd, SplitCount};
+use approx_chol::{factorize_with, Backend, Config};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use csr::{reduce, OwnedCsr};
+use csr::{build, OwnedCsr};
 use grid::grid_laplacian;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -53,16 +53,12 @@ fn barabasi_albert(n: usize, m: usize, seed: u64) -> OwnedCsr {
     )
 }
 
-fn split(k: u32) -> Multiplicity {
-    Multiplicity::Split(SplitCount::new(k).expect("k ≥ 2"))
-}
-
 fn bench_factorization_grid(c: &mut Criterion) {
     let mut group = c.benchmark_group("factorization_grid");
     group.sample_size(10);
 
     let ac2 = Config {
-        approximate: split(2),
+        split_merge: Some(2),
         ..Config::default()
     };
     // 1000x1000 holds 5M nonzeros, so its timing runs out of cache.
@@ -72,7 +68,7 @@ fn bench_factorization_grid(c: &mut Criterion) {
             group.bench_with_input(
                 BenchmarkId::new(label, format!("{size}x{size}")),
                 &lap,
-                |b, lap| b.iter(|| factorize(&reduce(lap.csr()), &config)),
+                |b, lap| b.iter(|| build(lap.csr(), config)),
             );
         }
     }
@@ -93,13 +89,13 @@ fn bench_factorization_powerlaw(c: &mut Criterion) {
         let lap = barabasi_albert(n, m, 0xDEAD);
         let config = Config::default();
         group.bench_with_input(BenchmarkId::new("AC", label), &lap, |b, lap| {
-            b.iter(|| factorize(&reduce(lap.csr()), &config));
+            b.iter(|| build(lap.csr(), config));
         });
     }
     group.finish();
 }
 
-/// A whole factorize of a bipartite block, not main's bare sampler: no sampler is public.
+/// A whole factorize of a bipartite block, reduction included, not main's bare sampler: no sampler is public.
 fn bench_bipartite_stars(c: &mut Criterion) {
     const STARS: usize = 10_000;
 
@@ -118,20 +114,17 @@ fn bench_bipartite_stars(c: &mut Criterion) {
             Weights::of(&weights).expect("valid weights"),
         )
         .expect("valid gram");
-        let sgdd: Sgdd =
-            Sgdd::from_bipartite_gram(gram, ScalingPolicy::default()).expect("reduces");
 
         group.throughput(criterion::Throughput::Elements(STARS as u64));
-        for (label, copies) in [("AC", Multiplicity::Single), ("AC2 k=4", split(4))] {
+        for (label, split_merge) in [("AC", None), ("AC2 k=4", Some(4))] {
             // Dense would take the complement exact: the kept block has only `degree` vertices.
             let config = Config {
-                complement: CliqueRule::Sampled(copies),
-                approximate: copies,
-                dense_up_to: 0,
+                split_merge,
+                backend: Backend::Approximate,
                 ..Config::default()
             };
-            group.bench_with_input(BenchmarkId::new(label, degree), &sgdd, |b, sgdd| {
-                b.iter(|| factorize(sgdd, &config));
+            group.bench_with_input(BenchmarkId::new(label, degree), &gram, |b, &gram| {
+                b.iter(|| factorize_with(gram, config).expect("factors"));
             });
         }
     }

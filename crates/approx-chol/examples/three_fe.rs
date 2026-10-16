@@ -1,7 +1,7 @@
 //! Three fixed effects, no slopes: each pair of factors is one incidence-only bipartite Gram, as within's Schwarz subdomains.
 
 use approx_chol::input::{BipartiteGram, FactorWidth1, Weights};
-use approx_chol::{factorize, Config, Factor, ScalingPolicy, Sgdd};
+use approx_chol::{factorize_with, Backend, Config, Factor};
 
 /// Workers move between firms of their own region only, so (worker, firm) splits by region.
 const REGIONS: [(usize, usize); 5] = [(2000, 200), (40, 6), (30, 5), (20, 4), (10, 3)];
@@ -44,24 +44,27 @@ fn main() {
         let side = |t: usize| FactorWidth1::new(panel.n_levels[t], &panel.levels[t], None);
         let (left, right) = (side(l).expect("valid side"), side(r).expect("valid side"));
         let gram = BipartiteGram::new(left, right, Weights::default()).expect("valid gram");
-        let sgdd = Sgdd::from_bipartite_gram(gram, ScalingPolicy::default()).expect("reduces");
-        for block in sgdd.blocks() {
-            let n = block.vertices().len();
-            println!("  block: {n} vertices, floats {}", block.floats());
-        }
         let a = PairGram {
             left: &panel.levels[l],
             right: &panel.levels[r],
             n_left: panel.n_levels[l],
         };
         let dense = Config {
-            dense_up_to: usize::MAX,
+            backend: Backend::ExactBelow {
+                max_dim: usize::MAX,
+            },
             ..Config::default()
         };
-        for (name, config) in [("dense", dense), ("default", Config::default())] {
+        let factors = [("dense", dense), ("default", Config::default())]
+            .map(|(name, config)| (name, factorize_with(gram, config).expect("factors")));
+        // Blocks are the reduction's, so either config's factor lists the same ones.
+        for block in factors[0].1.blocks() {
+            let n = block.vertices().len();
+            println!("  block: {n} vertices, floats {}", block.floats());
+        }
+        for (name, factor) in &factors {
             println!("  {name}:");
-            let factor = factorize(&sgdd, &config);
-            check(&a, &factor);
+            check(&a, factor);
         }
     }
 }

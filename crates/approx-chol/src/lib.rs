@@ -1,4 +1,18 @@
 //! Approximate Cholesky of symmetric generalized diagonally dominant `A`, one irreducible block at a time.
+//!
+//! ```
+//! use approx_chol::{factorize, CsrRef};
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let row_ptrs    = [0u32, 2, 5, 8, 10];
+//! let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
+//! let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
+//!
+//! let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
+//! let x = factorize(csr)?.solve(&[1.0, -1.0, 1.0, -1.0])?;
+//! assert!(x.iter().all(|v| f64::is_finite(*v)));
+//! # Ok(())
+//! # }
+//! ```
 
 #![deny(missing_docs)]
 
@@ -25,6 +39,7 @@ macro_rules! checked_serde {
     };
 }
 
+mod error;
 mod factor;
 pub mod input;
 mod sgdd;
@@ -36,11 +51,42 @@ use std::fmt::Debug;
 
 use num_traits::{PrimInt, Unsigned};
 
-pub use factor::{factorize, BlockFactor, Factor, SolveError};
-pub use factor::{CliqueRule, Config, InnerParallelism, Multiplicity, SplitCount};
-pub use sgdd::{
-    Existence, FromCsrError, IrreducibleBlock, ReduceError, ScalingPolicy, ScalingReport, Sgdd,
+pub use error::Error;
+pub use factor::{
+    Backend, BlockFactor, Config, Factor, InnerParallelism, SchurMode, SolveError, Vertices,
 };
+pub use input::{CsrError, CsrRef, IndexKind, Input, OwnedCsr};
+pub use sgdd::{Existence, ReduceError, ScalingPolicy, ScalingReport};
+#[cfg(feature = "serde")]
+pub use wire::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
+
+/// Factorizes any [`Input`] view with [`Config::default`].
+pub fn factorize<'a, T, I, M>(input: M) -> Result<Factor<T>, Error>
+where
+    T: Real,
+    I: PrimInt + Sync + 'a,
+    M: TryInto<Input<'a, T, I>>,
+    <M as TryInto<Input<'a, T, I>>>::Error: Into<Error>,
+{
+    factorize_with(input, Config::default())
+}
+
+/// Factorizes any [`Input`] view: reduces it to its irreducible blocks, then factors each in parallel.
+pub fn factorize_with<'a, T, I, M>(input: M, config: Config) -> Result<Factor<T>, Error>
+where
+    T: Real,
+    I: PrimInt + Sync + 'a,
+    M: TryInto<Input<'a, T, I>>,
+    <M as TryInto<Input<'a, T, I>>>::Error: Into<Error>,
+{
+    let input = input.try_into().map_err(Into::into)?;
+    // A cover's two sheets and its ground are the most slots any block indexes.
+    let slots = input.n().saturating_mul(2).saturating_add(1);
+    Ok(match u32::try_from(slots).is_ok() {
+        true => Factor::build(&input.reduce::<u32>(config.scaling)?, &config),
+        false => Factor::build(&input.reduce::<u64>(config.scaling)?, &config),
+    })
+}
 
 /// The scalar every stage computes in: `f32` or `f64`, each summed in `f64`, which holds it exactly.
 pub trait Real: num_traits::Float + Debug + Send + Sync + 'static + seal::Real {}
@@ -49,7 +95,7 @@ impl Real for f32 {}
 impl Real for f64 {}
 
 /// The unsigned integer a reduction and its factor store each vertex index in: `u32` by default, `u64` past `u32::MAX` vertices.
-pub trait Index: PrimInt + Unsigned + Send + Sync + 'static + seal::Index {
+pub(crate) trait Index: PrimInt + Unsigned + Send + Sync + 'static + seal::Index {
     /// `self` as `usize`, so `x[v.index()]` reads vertex `v` of any `x` over `A`'s vertices.
     fn index(self) -> usize;
 }

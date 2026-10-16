@@ -6,9 +6,9 @@ mod grid;
 use std::hint::black_box;
 use std::time::Duration;
 
-use approx_chol::{factorize, Config};
+use approx_chol::Config;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use csr::{reduce, OwnedCsr};
+use csr::{build, OwnedCsr};
 use grid::grid_laplacian;
 
 /// `k` interleaved paths: the only shape whose blocks are not contiguous.
@@ -22,7 +22,7 @@ fn interleaved_paths(n: usize, k: usize) -> OwnedCsr {
 
 fn bench_solve_for_size(c: &mut Criterion, size: usize) {
     let lap = grid_laplacian(size, size);
-    let factor = factorize(&reduce(lap.csr()), &Config::default());
+    let factor = build(lap.csr(), Config::default());
     let n = factor.n();
 
     let mut rhs = vec![0.0f64; n];
@@ -44,7 +44,7 @@ fn bench_solve_for_size(c: &mut Criterion, size: usize) {
 /// Guards the per-block gather, solve and scatter against the grid solves above.
 fn bench_disconnected_solve(c: &mut Criterion, n: usize, k: usize) {
     let lap = interleaved_paths(n, k);
-    let factor = factorize(&reduce(lap.csr()), &Config::default());
+    let factor = build(lap.csr(), Config::default());
     let dim = factor.n();
 
     let mut rhs = vec![0.0f64; dim];

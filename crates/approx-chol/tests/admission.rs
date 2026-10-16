@@ -13,15 +13,11 @@ mod views;
 
 use std::fmt::Debug;
 
-use approx_chol::input::{Csr, UpperCsr};
-use approx_chol::{FromCsrError, Real, ScalingPolicy, Sgdd};
+use approx_chol::input::{CsrRef, UpperCsrRef};
+use approx_chol::{factorize, factorize_with, Config, Error, Factor, Real, ScalingPolicy};
 
 /// `n` follows from `row_ptrs`, so no case can disagree with its own row count.
-fn reduce<T: Real>(
-    row_ptrs: &[u32],
-    columns: &[u32],
-    values: &[T],
-) -> Result<Sgdd<T>, FromCsrError> {
+fn reduce<T: Real>(row_ptrs: &[u32], columns: &[u32], values: &[T]) -> Result<Factor<T>, Error> {
     reduce_with(row_ptrs, columns, values, ScalingPolicy::default())
 }
 
@@ -30,24 +26,30 @@ fn reduce_with<T: Real>(
     columns: &[u32],
     values: &[T],
     policy: ScalingPolicy,
-) -> Result<Sgdd<T>, FromCsrError> {
-    let csr = Csr::new(row_ptrs.len() - 1, row_ptrs, columns, values).expect("valid shape");
-    Sgdd::from_csr(csr, policy)
+) -> Result<Factor<T>, Error> {
+    let n = (row_ptrs.len() - 1) as u32;
+    let csr = CsrRef::new(row_ptrs, columns, values, n).expect("valid shape");
+    let config = Config {
+        scaling: policy,
+        ..Config::default()
+    };
+    factorize_with(csr, config)
 }
 
 fn reduce_upper<T: Real>(
     row_ptrs: &[u32],
     columns: &[u32],
     values: &[T],
-) -> Result<Sgdd<T>, FromCsrError> {
-    let csr = UpperCsr::new(row_ptrs.len() - 1, row_ptrs, columns, values).expect("valid shape");
-    Sgdd::from_upper_csr(csr, ScalingPolicy::default())
+) -> Result<Factor<T>, Error> {
+    let n = (row_ptrs.len() - 1) as u32;
+    let csr = UpperCsrRef::new(row_ptrs, columns, values, n).expect("valid shape");
+    factorize(csr)
 }
 
 /// For input reducing to one balanced block: grounded exactly when it does not float.
-fn grounded<T: Real>(sgdd: &Sgdd<T>) -> bool {
-    assert_eq!(sgdd.blocks().len(), 1, "one block");
-    !sgdd.blocks()[0].floats()
+fn grounded<T: Real>(factor: &Factor<T>) -> bool {
+    assert_eq!(factor.blocks().len(), 1, "one block");
+    !factor.blocks()[0].floats()
 }
 
 /// Error order is not the contract: a rejection need only name one of the input's defects.

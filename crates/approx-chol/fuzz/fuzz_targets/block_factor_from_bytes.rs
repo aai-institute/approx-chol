@@ -5,7 +5,7 @@ use libfuzzer_sys::fuzz_target;
 
 // Postcard is how `within` persists its factor, so these bytes really do arrive from another process.
 fuzz_target!(|data: &[u8]| {
-    let Ok(blocks) = postcard::from_bytes::<Vec<BlockFactor<f64, u32>>>(data) else {
+    let Ok(blocks) = postcard::from_bytes::<Vec<BlockFactor<f64>>>(data) else {
         return;
     };
     for block in &blocks {

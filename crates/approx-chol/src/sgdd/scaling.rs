@@ -8,10 +8,31 @@ use crate::storage::OffDiagonal;
 use crate::{narrow, widen, Index, Real};
 
 /// Certification policy for a dominance scaling; a deficit past rounding left at hand-over is clamped and reported.
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(try_from = "Unchecked")
+)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScalingPolicy {
     tolerance: f64,
     max_iterations: usize,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Clone, Copy, serde::Deserialize)]
+struct Unchecked {
+    tolerance: f64,
+    max_iterations: usize,
+}
+
+#[cfg(feature = "serde")]
+impl TryFrom<Unchecked> for ScalingPolicy {
+    type Error = &'static str;
+
+    fn try_from(policy: Unchecked) -> Result<Self, Self::Error> {
+        Self::new(policy.tolerance, policy.max_iterations).ok_or("tolerance outside [0, 1)")
+    }
 }
 
 impl ScalingPolicy {

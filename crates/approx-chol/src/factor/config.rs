@@ -1,37 +1,96 @@
-/// Build settings for [`factorize`](crate::factorize); the reduction's policy is fixed by [`Sgdd`](crate::Sgdd).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+use crate::ScalingPolicy;
+
+/// Build settings for [`factorize_with`](crate::factorize_with).
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Config {
     /// Every sampler stream derives from this, keyed by block and star.
     pub seed: u64,
-    /// How a bipartite block's eliminated stars become the kept block's Schur complement.
-    pub complement: CliqueRule,
-    /// How approximate Cholesky samples each star.
-    pub approximate: Multiplicity,
-    /// Largest dimension, a cover's two sheets counted, that the Cholesky takes dense; `0` never does.
-    pub dense_up_to: usize,
+    /// AC2 multi-edge multiplicity `k`. Splitting an edge fewer than twice is
+    /// standard AC, so `None`, `Some(0)` and `Some(1)` all select AC.
+    pub split_merge: Option<u32>,
+    /// Which factorization each block gets.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub backend: Backend,
+    /// How a bipartite block's eliminated side becomes the kept side's Schur complement.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub complement: SchurMode,
+    /// How a block not diagonally dominant is scaled to dominance.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub scaling: ScalingPolicy,
 }
 
 impl Config {
+    pub(super) fn approximate(&self) -> Multiplicity {
+        multiplicity(self.split_merge)
+    }
+
+    pub(super) fn complement(&self) -> CliqueRule {
+        match self.complement {
+            SchurMode::Exact => CliqueRule::Exact,
+            SchurMode::Approximate { split_merge } => {
+                CliqueRule::Sampled(multiplicity(split_merge))
+            }
+            SchurMode::Same => CliqueRule::Sampled(self.approximate()),
+        }
+    }
+
     /// Whether a Cholesky of `dimension`, a cover's two sheets counted, is dense: it then takes `S` exact, spending nothing on sparsity.
     pub(super) fn dense(&self, dimension: usize) -> bool {
-        dimension <= self.dense_up_to
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            seed: 0,
-            complement: CliqueRule::Sampled(Multiplicity::Single),
-            approximate: Multiplicity::Single,
-            dense_up_to: 24,
+        match self.backend {
+            Backend::Approximate => false,
+            Backend::ExactBelow { max_dim } => dimension <= max_dim,
         }
     }
 }
 
+/// The one place a `split_merge` becomes the algorithm: below two copies is AC.
+fn multiplicity(split_merge: Option<u32>) -> Multiplicity {
+    split_merge
+        .and_then(SplitCount::new)
+        .map_or(Multiplicity::Single, Multiplicity::Split)
+}
+
+/// Which factorization each block gets.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backend {
+    /// Approximate elimination for every block.
+    Approximate,
+    /// Exact dense Cholesky at or below `max_dim`, a cover's two sheets counted, approximate elimination above.
+    ExactBelow {
+        /// Inclusive bound on the dimension, costing `O(max_dim³)` time; `0` selects [`Approximate`](Backend::Approximate).
+        max_dim: usize,
+    },
+}
+
+impl Default for Backend {
+    fn default() -> Self {
+        Self::ExactBelow { max_dim: 24 }
+    }
+}
+
+/// How a bipartite block's eliminated stars become the kept side's Schur complement; a dense kept side always takes it exact.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SchurMode {
+    /// Each star's whole clique: the exact Schur complement.
+    Exact,
+    /// A clique tree sampled from each star.
+    Approximate {
+        /// Multiplicity `k`, as [`Config::split_merge`]: `None`, `Some(0)` and `Some(1)` select AC.
+        split_merge: Option<u32>,
+    },
+    /// Sampled with [`Config::split_merge`]'s multiplicity, as the kept side's own factor is.
+    #[default]
+    Same,
+}
+
 /// How a pivot's star becomes fill.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CliqueRule {
+pub(crate) enum CliqueRule {
     /// The star's whole clique: the exact Schur complement.
     Exact,
     /// A clique tree sampled from the star.
@@ -40,7 +99,7 @@ pub enum CliqueRule {
 
 /// How many virtual copies each edge splits into while sampling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Multiplicity {
+pub(crate) enum Multiplicity {
     /// AC: one copy.
     Single,
     /// AC2: `k` copies, merged back under a cap.
@@ -49,16 +108,16 @@ pub enum Multiplicity {
 
 /// AC2's copy count; only `k ≥ 2` exists, so no split is a no-op.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SplitCount(u32);
+pub(crate) struct SplitCount(u32);
 
 impl SplitCount {
     /// `None` below two.
-    pub fn new(k: u32) -> Option<Self> {
+    pub(crate) fn new(k: u32) -> Option<Self> {
         (k >= 2).then_some(Self(k))
     }
 
     /// The copy count.
-    pub fn get(self) -> u32 {
+    pub(crate) fn get(self) -> u32 {
         self.0
     }
 }

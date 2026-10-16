@@ -1,4 +1,5 @@
-use approx_chol::input::{ConvertError, Csr};
+use approx_chol::input::{CsrError, CsrRef};
+use approx_chol::Error;
 use faer::sparse::{SparseRowMat, SymbolicSparseRowMat};
 use num_traits::PrimInt;
 use rstest::rstest;
@@ -51,8 +52,8 @@ fn faer_try_from_rows_with_unused_slots_returns_error() {
         vec![0, 1, 1, 0],
     );
     let mat = SparseRowMat::new(symbolic, vec![1.0, -1.0, 1.0, -1.0]);
-    let err = Csr::try_from(&mat).expect_err("unused slots must be rejected");
-    assert_eq!(err, ConvertError::RowGap { row: 0 });
+    let err = CsrRef::try_from(&mat).expect_err("unused slots must be rejected");
+    assert_eq!(err, Error::InvalidCsr(CsrError::RowGap { row: 0 }));
 }
 
 /// A 2x2 whose rows occupy slots 2..6, behind two slots no row owns.
@@ -61,8 +62,8 @@ fn faer_try_from_offset_rows_returns_error() {
     let symbolic =
         SymbolicSparseRowMat::<u32>::new_checked(2, 2, vec![2, 4, 6], None, vec![0, 1, 0, 1, 0, 1]);
     let mat = SparseRowMat::new(symbolic, vec![9.0, 9.0, 1.0, -1.0, -1.0, 1.0]);
-    let err = Csr::try_from(&mat).expect_err("offset rows must be rejected");
-    assert_eq!(err, ConvertError::OffsetRows);
+    let err = CsrRef::try_from(&mat).expect_err("offset rows must be rejected");
+    assert_eq!(err, Error::InvalidCsr(CsrError::OffsetRows));
 }
 
 #[test]
@@ -70,6 +71,9 @@ fn faer_try_from_non_square_returns_error() {
     let symbolic =
         SymbolicSparseRowMat::<u32>::new_checked(3, 4, vec![0, 1, 2, 3], None, vec![0, 1, 0]);
     let mat = SparseRowMat::new(symbolic, vec![1.0, 1.0, 1.0]);
-    let err = Csr::try_from(&mat).expect_err("non-square matrix must be rejected");
-    assert_eq!(err, ConvertError::NotSquare { rows: 3, cols: 4 });
+    let err = CsrRef::try_from(&mat).expect_err("non-square matrix must be rejected");
+    assert_eq!(
+        err,
+        Error::InvalidCsr(CsrError::NotSquare { rows: 3, cols: 4 })
+    );
 }
