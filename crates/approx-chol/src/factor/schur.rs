@@ -1,7 +1,6 @@
 //! Block elimination of a bipartite block's larger, independent side, and the Schur complement it leaves.
 
 use std::borrow::Cow;
-use std::sync::Arc;
 
 use rayon::prelude::*;
 
@@ -27,7 +26,7 @@ use crate::{narrow, widen, Index, Real};
 #[derive(Clone, Debug)]
 pub(super) struct BlockElimination<T, I> {
     /// `M`'s own `C`, signs kept and shared with the block: a frustrated block's cover never doubles it.
-    cross: Arc<Rows<T, I>>,
+    cross: Rows<T, I>,
     inv_pivot: Box<[T]>,
     /// `Cᵀ` where [`Self::transposes`], so `Allow` may split the solve by kept row.
     #[cfg_attr(feature = "serde", serde(skip))]
@@ -36,9 +35,9 @@ pub(super) struct BlockElimination<T, I> {
 
 impl<T: Real, I: Index> BlockElimination<T, I> {
     /// Pivots are `Σ|c_ek| + s_e`, the same on both sheets of a cover.
-    pub(super) fn new(cross: &Arc<Rows<T, I>>, grounding: &Grounding<T>) -> Self {
+    pub(super) fn new(cross: Rows<T, I>, grounding: &Grounding<T>) -> Self {
         let surplus = grounding.surplus();
-        let c = &**cross;
+        let c = &cross;
         let inv_pivot = (0..c.n_rows())
             .map(|e| {
                 let s_e = surplus.map_or(0.0, |s| widen(s[e]));
@@ -46,7 +45,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
                 T::one() / narrow::<T>(d_e)
             })
             .collect();
-        Self::with_pivots(Arc::clone(cross), inv_pivot)
+        Self::with_pivots(cross, inv_pivot)
     }
 
     /// Whether an elimination of `c` keeps `Cᵀ`: past 10 000 rows (0.6's threshold).
@@ -54,13 +53,18 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         c.n_rows() > 10_000
     }
 
-    fn with_pivots(cross: Arc<Rows<T, I>>, inv_pivot: Box<[T]>) -> Self {
+    fn with_pivots(cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
         let ct = Self::transposes(&cross).then(|| cross.transpose());
         Self {
             cross,
             inv_pivot,
             ct,
         }
+    }
+
+    /// `C`, for `S` sampled after the pivots.
+    pub(super) fn cross(&self) -> &Rows<T, I> {
+        &self.cross
     }
 
     /// `S = D_k − Cᵀ D_e⁻¹ C` on `sheets`, exact by kept row.

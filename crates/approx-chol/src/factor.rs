@@ -6,8 +6,6 @@ mod config;
 mod schur;
 mod sddm;
 
-use std::sync::Arc;
-
 use rand::rngs::Xoshiro256PlusPlus;
 use rand::SeedableRng;
 use rayon::iter::Either;
@@ -264,7 +262,7 @@ impl ExactSizeIterator for Vertices<'_> {}
 )]
 #[derive(Clone, Debug)]
 pub(crate) struct Block<T, I> {
-    restriction: Arc<Restriction<T, I>>,
+    restriction: Box<Restriction<T, I>>,
     elimination: Option<Box<BlockElimination<T, I>>>,
     cholesky: Cholesky<T, I>,
     report: Option<Box<ScalingReport>>,
@@ -297,15 +295,15 @@ impl<T: Real, I: Index> Block<T, I> {
                 (None, factored)
             }
             OffDiagonal::Bipartite(cross) => {
-                let factor =
-                    |s| Cholesky::factor(s, streams.cholesky(), config, scales(cross.n_rows()));
+                let kept = scales(cross.n_rows());
+                let factor = |s| Cholesky::factor(s, streams.cholesky(), config, kept);
                 let rule = match config.dense(sheets.count() * cross.n_cols()) {
                     true => CliqueRule::Exact,
                     false => config.complement(),
                 };
                 let (elimination, factored) = match rule {
                     CliqueRule::Exact => {
-                        let elimination = BlockElimination::new(&cross, &grounding);
+                        let elimination = BlockElimination::new(cross, &grounding);
                         let factored = factor(elimination.complement(sheets, &grounding));
                         (elimination, factored)
                     }
@@ -313,12 +311,18 @@ impl<T: Real, I: Index> Block<T, I> {
                     CliqueRule::Sampled(copies) if BlockElimination::transposes(&cross) => {
                         let s = schur::sampled(&cross, copies, sheets, &grounding, streams);
                         let factored = factor(s);
-                        (BlockElimination::new(&cross, &grounding), factored)
+                        (BlockElimination::new(cross, &grounding), factored)
                     }
                     // Otherwise the pivot pass reads `C` while it is still warm.
                     CliqueRule::Sampled(copies) => {
-                        let elimination = BlockElimination::new(&cross, &grounding);
-                        let s = schur::sampled(&cross, copies, sheets, &grounding, streams);
+                        let elimination = BlockElimination::new(cross, &grounding);
+                        let s = schur::sampled(
+                            elimination.cross(),
+                            copies,
+                            sheets,
+                            &grounding,
+                            streams,
+                        );
                         (elimination, factor(s))
                     }
                 };

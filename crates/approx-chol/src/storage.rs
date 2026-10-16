@@ -1,7 +1,5 @@
 //! Sparse storage shapes every stage reads.
 
-use std::sync::Arc;
-
 use crate::{narrow, widen, Index, Real};
 
 /// Compressed sparse rows.
@@ -250,7 +248,7 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
 pub(crate) enum OffDiagonal<T, I> {
     General(UpperAdjacency<T, I>),
     /// `C` of `[D_e C; Cᵀ D_k]`, both sides nonempty, the larger eliminated first as its rows.
-    Bipartite(Arc<Rows<T, I>>),
+    Bipartite(Rows<T, I>),
 }
 
 impl<T: Real, I: Index> OffDiagonal<T, I> {
@@ -284,9 +282,7 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
             }),
             Self::Bipartite(cross) => {
                 let (eliminated, kept) = s.split_at(cross.n_rows());
-                Self::Bipartite(Arc::new(
-                    Arc::unwrap_or_clone(cross).signed(eliminated, kept),
-                ))
+                Self::Bipartite(cross.signed(eliminated, kept))
             }
         }
     }
@@ -300,9 +296,8 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
             }
             Self::Bipartite(cross) => {
                 let (eliminated, kept) = f.split_at(cross.n_rows());
-                let (cross, rows, cols) =
-                    Arc::unwrap_or_clone(cross).scaled_abs_sums(eliminated, kept)?;
-                (Self::Bipartite(Arc::new(cross)), rows, cols)
+                let (cross, rows, cols) = cross.scaled_abs_sums(eliminated, kept)?;
+                (Self::Bipartite(cross), rows, cols)
             }
         };
         let sums = scaled.merged(first, second);
