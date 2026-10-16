@@ -8,37 +8,29 @@ use crate::storage::OffDiagonal;
 use crate::{narrow, widen, Index, Real};
 
 /// Certification policy for a dominance scaling; a deficit past rounding left at hand-over is clamped and reported.
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(try_from = "Unchecked")
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScalingPolicy {
+    #[cfg_attr(feature = "serde", serde(deserialize_with = "tolerance"))]
     tolerance: f64,
     max_iterations: usize,
 }
 
-#[cfg(feature = "serde")]
-#[derive(Clone, Copy, serde::Deserialize)]
-struct Unchecked {
-    tolerance: f64,
-    max_iterations: usize,
+fn admits(tolerance: f64) -> bool {
+    (0.0..1.0).contains(&tolerance)
 }
 
 #[cfg(feature = "serde")]
-impl TryFrom<Unchecked> for ScalingPolicy {
-    type Error = &'static str;
-
-    fn try_from(policy: Unchecked) -> Result<Self, Self::Error> {
-        Self::new(policy.tolerance, policy.max_iterations).ok_or("tolerance outside [0, 1)")
-    }
+fn tolerance<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    let tolerance = <f64 as serde::Deserialize>::deserialize(deserializer)?;
+    (admits(tolerance).then_some(tolerance))
+        .ok_or_else(|| serde::de::Error::custom("tolerance outside [0, 1)"))
 }
 
 impl ScalingPolicy {
     /// `None` unless `0 ≤ tolerance < 1`.
     pub fn new(tolerance: f64, max_iterations: usize) -> Option<Self> {
-        (0.0..1.0).contains(&tolerance).then_some(Self {
+        admits(tolerance).then_some(Self {
             tolerance,
             max_iterations,
         })
