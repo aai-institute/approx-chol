@@ -150,3 +150,45 @@ cases! {
         assert_a_constant_leaves_the_solution(entry, types, sparse, 2f64.powi(12));
     }
 }
+
+/// `D L D` floats with null vector `D⁻¹·1` and needs scaling, so both projections run on scaled factors.
+#[test]
+fn a_scaled_floating_block_projects_its_null_vector_out() {
+    use approx_chol_next::input::Csr;
+    use approx_chol_next::{factorize, Config, ScalingPolicy, Sgdd};
+
+    let graph = grid(30, 30);
+    let d: Vec<f64> = (0..graph.n)
+        .map(|i| 1e-3f64.powf((i * 37 % 101) as f64 / 100.0))
+        .collect();
+    let (ptrs, columns, values) = graph.csr(false);
+    let scaled: Vec<f64> = (0..graph.n)
+        .flat_map(|i| (ptrs[i]..ptrs[i + 1]).map(move |k| (i, k)))
+        .map(|(i, k)| d[i] * values[k] * d[columns[k]])
+        .collect();
+    let csr = Csr::new(graph.n, &ptrs, &columns, &scaled).unwrap();
+    let sgdd: Sgdd = Sgdd::from_csr(csr, ScalingPolicy::default()).unwrap();
+    assert!(sgdd.blocks().iter().all(|block| block.floats()));
+    let factor = factorize(&sgdd, &Config::default());
+
+    let norm = |v: &[f64]| v.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let dot = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(a, b)| a * b).sum::<f64>();
+    let null: Vec<f64> = d.iter().map(|d| 1.0 / d).collect();
+    let rhs: Vec<f64> = (0..graph.n)
+        .map(|i| (i * 37 % 2001) as f64 / 1024.0 - 1.0)
+        .collect();
+    let shifted: Vec<f64> = rhs.iter().zip(&null).map(|(b, z)| b + z).collect();
+    let (x, moved_x) = (factor.solve(&rhs).unwrap(), factor.solve(&shifted).unwrap());
+    let along = dot(&null, &x).abs() / (norm(&null) * norm(&x));
+    let difference: Vec<f64> = moved_x.iter().zip(&x).map(|(a, b)| a - b).collect();
+    let moved = norm(&difference) / norm(&x);
+    // Measured 5e-16 and 5e-11; with the projections skipped, 0.97 and 1e4.
+    assert!(
+        along < 1e-12,
+        "the solution keeps {along:e} of the null vector"
+    );
+    assert!(
+        moved < 1e-8,
+        "the null vector in b moved the solution by {moved:e}"
+    );
+}
