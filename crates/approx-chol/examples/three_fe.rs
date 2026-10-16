@@ -1,7 +1,7 @@
 //! Three fixed effects, no slopes: each pair of factors is one incidence-only bipartite Gram, as within's Schwarz subdomains.
 
-use approx_chol_next::input::{BipartiteGram, FactorWidth1, Weights};
-use approx_chol_next::{factorize, Config, Factor, ScalingPolicy, Sgdd};
+use approx_chol::input::{BipartiteGram, FactorWidth1, Weights};
+use approx_chol::{factorize, Config, Factor, ScalingPolicy, Sgdd};
 
 /// Workers move between firms of their own region only, so (worker, firm) splits by region.
 const REGIONS: [(usize, usize); 5] = [(2000, 200), (40, 6), (30, 5), (20, 4), (10, 3)];

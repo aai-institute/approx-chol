@@ -3,7 +3,7 @@ mod csr;
 #[path = "common/grid.rs"]
 mod grid;
 
-use approx_chol_next::{factorize, Config};
+use approx_chol::{factorize, Config};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use csr::{reduce, OwnedCsr};
 

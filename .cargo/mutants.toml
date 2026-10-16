@@ -1,7 +1,6 @@
 examine_globs = ["crates/approx-chol/src/**/*.rs"]
 # Thin sprs/faer conversion adapters, outside the kernel this gate targets.
 exclude_re = [
-    "validate_square_dims",
     "sprs::",
     "faer::",
 ]

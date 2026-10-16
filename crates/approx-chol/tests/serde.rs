@@ -1,7 +1,7 @@
 #![cfg(feature = "serde")]
 
-use approx_chol_next::input::{BipartiteGram, FactorWidth1, Laplacian, SignedGraph, Weights};
-use approx_chol_next::{factorize, BlockFactor, CliqueRule, Config, InnerParallelism, Sgdd};
+use approx_chol::input::{BipartiteGram, FactorWidth1, Laplacian, SignedGraph, Weights};
+use approx_chol::{factorize, BlockFactor, CliqueRule, Config, InnerParallelism, Sgdd};
 use rstest::rstest;
 
 fn inputs() -> Vec<Sgdd> {

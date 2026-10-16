@@ -1,7 +1,7 @@
-use approx_chol_next::input::{
+use approx_chol::input::{
     BipartiteGram, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, ViewError, Weights,
 };
-use approx_chol_next::{ReduceError, ScalingPolicy, Sgdd};
+use approx_chol::{ReduceError, ScalingPolicy, Sgdd};
 use rstest::rstest;
 
 use super::assert_names_a_defect;

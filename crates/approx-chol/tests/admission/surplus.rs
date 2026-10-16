@@ -1,4 +1,4 @@
-use approx_chol_next::{factorize, Config, Real, ScalingReport, Sgdd};
+use approx_chol::{factorize, Config, Real, ScalingReport, Sgdd};
 use rstest::rstest;
 
 use super::{grounded, reduce};

@@ -1,5 +1,5 @@
-use approx_chol_next::input::FactorWidth2;
-use approx_chol_next::{ScalingPolicy, Sgdd};
+use approx_chol::input::FactorWidth2;
+use approx_chol::{ScalingPolicy, Sgdd};
 use rstest::rstest;
 
 use super::{reduce, reduce_with};

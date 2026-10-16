@@ -27,7 +27,7 @@ mod spectrum;
 
 use std::ops::RangeInclusive;
 
-use approx_chol_next::Config;
+use approx_chol::Config;
 use cases::cases;
 use dense::dense;
 use entry::{Entry, Types};

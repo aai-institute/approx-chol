@@ -1,4 +1,4 @@
-use approx_chol_next::{CliqueRule, Config, Multiplicity, SplitCount};
+use approx_chol::{CliqueRule, Config, Multiplicity, SplitCount};
 
 /// `dense_up_to = 0` under AC or AC2, each complement exact or sampled either way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

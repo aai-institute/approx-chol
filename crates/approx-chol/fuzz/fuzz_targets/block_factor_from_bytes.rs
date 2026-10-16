@@ -1,6 +1,6 @@
 #![no_main]
 
-use approx_chol_next::{BlockFactor, InnerParallelism};
+use approx_chol::{BlockFactor, InnerParallelism};
 use libfuzzer_sys::fuzz_target;
 
 // Postcard is how `within` persists its factor, so these bytes really do arrive from another process.

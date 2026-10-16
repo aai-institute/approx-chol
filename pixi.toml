@@ -67,7 +67,7 @@ mutants = "cargo mutants -C --locked --features serde"
 
 # Advisory, not a gate: its own target dir keeps the stricter thresholds out of everyday clippy's cache.
 [tasks.smells]
-args = [{ arg = "package", default = "approx-chol-next" }]
+args = [{ arg = "package", default = "approx-chol" }]
 env = { CLIPPY_CONF_DIR = "$PIXI_PROJECT_ROOT/scripts/smells", CARGO_TARGET_DIR = "$PIXI_PROJECT_ROOT/target/smells" }
 cmd = """cargo clippy -p {{ package }} --all-targets --all-features --locked -- \
   -W clippy::too_many_arguments -W clippy::too_many_lines -W clippy::cognitive_complexity \

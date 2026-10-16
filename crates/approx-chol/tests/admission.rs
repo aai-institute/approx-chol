@@ -13,8 +13,8 @@ mod views;
 
 use std::fmt::Debug;
 
-use approx_chol_next::input::{Csr, UpperCsr};
-use approx_chol_next::{FromCsrError, Real, ScalingPolicy, Sgdd};
+use approx_chol::input::{Csr, UpperCsr};
+use approx_chol::{FromCsrError, Real, ScalingPolicy, Sgdd};
 
 /// `n` follows from `row_ptrs`, so no case can disagree with its own row count.
 fn reduce<T: Real>(

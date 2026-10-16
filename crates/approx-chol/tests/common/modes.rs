@@ -1,4 +1,4 @@
-use approx_chol_next::Config;
+use approx_chol::Config;
 
 use crate::dense::dense;
 use crate::sparse::Sparse;

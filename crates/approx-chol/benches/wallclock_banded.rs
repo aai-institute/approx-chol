@@ -4,7 +4,7 @@ mod csr;
 use std::hint::black_box;
 use std::time::Instant;
 
-use approx_chol_next::{factorize, Config};
+use approx_chol::{factorize, Config};
 use csr::{reduce, OwnedCsr};
 
 const N: usize = 160_000;

@@ -7,8 +7,8 @@ mod faer;
 #[path = "interop/sprs.rs"]
 mod sprs;
 
-use approx_chol_next::input::{ConvertError, Csr};
-use approx_chol_next::{factorize, Config, ScalingPolicy, Sgdd};
+use approx_chol::input::{ConvertError, Csr};
+use approx_chol::{factorize, Config, ScalingPolicy, Sgdd};
 use num_traits::PrimInt;
 
 /// The 4-vertex path 0-1-2-3 with unit weights.

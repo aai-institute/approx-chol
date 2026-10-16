@@ -1,13 +1,17 @@
 [package]
-name = "approx-chol-next"
+name = "approx-chol"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "Rewrite prototype of approx-chol, cut by the algorithm's stages"
+description = "Approximate Cholesky factorization for symmetric generalized diagonally dominant matrices"
 license.workspace = true
+readme = "README.md"
 repository.workspace = true
-publish = false
+keywords = ["laplacian", "sparse", "cholesky", "preconditioner", "sddm"]
+categories.workspace = true
+# A nested workspace nothing in the published crate reads.
+exclude = ["fuzz"]
 
 [lints]
 workspace = true

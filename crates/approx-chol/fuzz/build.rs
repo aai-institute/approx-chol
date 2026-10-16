@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use approx_chol_next::BlockFactor;
+use approx_chol::BlockFactor;
 
 mod case;
 

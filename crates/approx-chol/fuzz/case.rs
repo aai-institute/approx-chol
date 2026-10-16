@@ -1,10 +1,10 @@
 use std::error::Error;
 
-use approx_chol_next::input::{
+use approx_chol::input::{
     BipartiteGram, Csr, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsr, Weights,
 };
-use approx_chol_next::{factorize, CliqueRule, Config, Factor, Index, InnerParallelism};
-use approx_chol_next::{Multiplicity, Real, ScalingPolicy, Sgdd, SplitCount};
+use approx_chol::{factorize, CliqueRule, Config, Factor, Index, InnerParallelism};
+use approx_chol::{Multiplicity, Real, ScalingPolicy, Sgdd, SplitCount};
 use serde::{Deserialize, Serialize};
 
 /// The precision is a variant, so one byte string never decodes as both.

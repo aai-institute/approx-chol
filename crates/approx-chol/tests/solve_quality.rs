@@ -17,7 +17,7 @@ mod residual;
 #[path = "common/sparse.rs"]
 mod sparse;
 
-use approx_chol_next::{
+use approx_chol::{
     CliqueRule, Config, Factor, Index, InnerParallelism, Multiplicity, Real, SolveError, SplitCount,
 };
 use cases::cases;

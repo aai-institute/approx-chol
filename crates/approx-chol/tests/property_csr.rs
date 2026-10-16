@@ -1,5 +1,5 @@
-use approx_chol_next::input::{Csr, CsrError, UpperCsr};
-use approx_chol_next::{FromCsrError, ScalingPolicy, Sgdd};
+use approx_chol::input::{Csr, CsrError, UpperCsr};
+use approx_chol::{FromCsrError, ScalingPolicy, Sgdd};
 use num_traits::PrimInt;
 use proptest::prelude::*;
 

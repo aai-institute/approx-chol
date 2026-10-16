@@ -154,8 +154,8 @@ cases! {
 /// `D L D` floats with null vector `D⁻¹·1` and needs scaling, so both projections run on scaled factors.
 #[test]
 fn a_scaled_floating_block_projects_its_null_vector_out() {
-    use approx_chol_next::input::Csr;
-    use approx_chol_next::{factorize, Config, ScalingPolicy, Sgdd};
+    use approx_chol::input::Csr;
+    use approx_chol::{factorize, Config, ScalingPolicy, Sgdd};
 
     let graph = grid(30, 30);
     let d: Vec<f64> = (0..graph.n)

@@ -1,4 +1,4 @@
-use approx_chol_next::{CliqueRule, Config};
+use approx_chol::{CliqueRule, Config};
 
 /// Every Cholesky dense, every Schur complement exact.
 pub fn dense() -> Config {

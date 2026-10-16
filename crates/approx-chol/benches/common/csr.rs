@@ -1,5 +1,5 @@
-use approx_chol_next::input::Csr;
-use approx_chol_next::{ScalingPolicy, Sgdd};
+use approx_chol::input::Csr;
+use approx_chol::{ScalingPolicy, Sgdd};
 
 /// A unit-weight graph Laplacian held as owned u32 CSR arrays.
 pub struct OwnedCsr {

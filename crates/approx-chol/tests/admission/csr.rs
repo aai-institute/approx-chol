@@ -1,8 +1,8 @@
-use approx_chol_next::input::{
+use approx_chol::input::{
     BipartiteGram, Csr, CsrError, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsr,
     Weights,
 };
-use approx_chol_next::{factorize, Config, FromCsrError, ReduceError, ScalingPolicy, Sgdd};
+use approx_chol::{factorize, Config, FromCsrError, ReduceError, ScalingPolicy, Sgdd};
 use num_traits::PrimInt;
 use rstest::rstest;
 

@@ -1,4 +1,4 @@
-use approx_chol_next::input::{ConvertError, Csr};
+use approx_chol::input::{ConvertError, Csr};
 use faer::sparse::{SparseRowMat, SymbolicSparseRowMat};
 use num_traits::PrimInt;
 use rstest::rstest;

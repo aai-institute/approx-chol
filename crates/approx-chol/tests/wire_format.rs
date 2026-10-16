@@ -3,8 +3,8 @@
 
 use std::collections::BTreeSet;
 
-use approx_chol_next::input::{BipartiteGram, Csr, FactorWidth1, Weights};
-use approx_chol_next::{
+use approx_chol::input::{BipartiteGram, Csr, FactorWidth1, Weights};
+use approx_chol::{
     factorize, BlockFactor, CliqueRule, Config, InnerParallelism, Multiplicity, ScalingPolicy,
     Sgdd, SplitCount,
 };
@@ -242,7 +242,7 @@ fn a_payload_of_another_format_version_is_rejected_by_version(#[case] declared: 
 
 /// After a version bump or a new fixture; a factorization change deletes and regenerates the affected fixture, with no version bump.
 #[test]
-#[ignore = "writes fixtures: cargo test -p approx-chol-next --features serde --test wire_format -- --ignored"]
+#[ignore = "writes fixtures: cargo test -p approx-chol --features serde --test wire_format -- --ignored"]
 fn regenerate_missing_wire_format_fixtures() {
     for &fixture in FIXTURES {
         let path = fixture.path();

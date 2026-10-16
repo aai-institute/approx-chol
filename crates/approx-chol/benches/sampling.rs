@@ -3,10 +3,8 @@ mod csr;
 #[path = "common/grid.rs"]
 mod grid;
 
-use approx_chol_next::input::{BipartiteGram, FactorWidth1, Weights};
-use approx_chol_next::{
-    factorize, CliqueRule, Config, Multiplicity, ScalingPolicy, Sgdd, SplitCount,
-};
+use approx_chol::input::{BipartiteGram, FactorWidth1, Weights};
+use approx_chol::{factorize, CliqueRule, Config, Multiplicity, ScalingPolicy, Sgdd, SplitCount};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use csr::{reduce, OwnedCsr};
 use grid::grid_laplacian;

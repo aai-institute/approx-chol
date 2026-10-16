@@ -1,7 +1,7 @@
-use approx_chol_next::input::{
+use approx_chol::input::{
     BipartiteGram, Csr, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsr, Weights,
 };
-use approx_chol_next::{factorize, Config, Factor, Index, Real, ScalingPolicy, Sgdd};
+use approx_chol::{factorize, Config, Factor, Index, Real, ScalingPolicy, Sgdd};
 use num_traits::NumCast;
 
 use crate::graph::Graph;
