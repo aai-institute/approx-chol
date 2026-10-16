@@ -6,8 +6,7 @@ use super::partition::{Partition, UnionFind};
 use std::borrow::Cow;
 
 use super::{
-    indexable, Assembled, BipartiteGram, Dominant, DominantBipartite, DominantGraph, General,
-    Partitioned,
+    Assembled, BipartiteGram, Dominant, DominantBipartite, DominantGraph, General, Partitioned,
 };
 use crate::input::{BipartiteColumns, Column, IntoColumns, Laplacian, SignedGraph};
 use crate::sgdd::block::ReduceError;
@@ -90,7 +89,6 @@ fn assemble<T: Real, I: Index, C: CellSum>(
     seen: impl FnMut(&Column<T, I>),
     mut pair: impl FnMut(usize, usize, C),
 ) -> Result<Partitioned<UpperAdjacency<T, I>, I>, ReduceError> {
-    indexable::<I>(v.n())?;
     let counts = counts::<T, I>(v, v.n(), seen);
     let mut sets = UnionFind::<I>::new(v.n());
     let rows = sum_cells::<T, I, C>(v, &counts, 0, |i, j, cell| {
@@ -162,7 +160,6 @@ fn cross<T: Real, I: Index>(
     v: impl BipartiteColumns<T>,
     seen: impl FnMut(&Column<T, I>),
 ) -> Result<Partitioned<Rows<T, I>, I>, ReduceError> {
-    indexable::<I>(v.n())?;
     let n_left = v.n_left();
     let table = n_left.saturating_mul(v.n() - n_left);
     let a = match table <= DENSE_TABLE_MAX_CELLS {

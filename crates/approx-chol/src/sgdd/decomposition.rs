@@ -44,14 +44,6 @@ pub(super) fn of_upper<T: Real, J: PrimInt, I: Index>(
     Ok(Partitioned { a: csr, partition })
 }
 
-/// `I` holds `0..count` below its `MAX`, which stays free as a sentinel.
-pub(super) fn indexable<I: Index>(count: usize) -> Result<(), ReduceError> {
-    match num_traits::cast::<usize, I>(count) {
-        Some(_) => Ok(()),
-        None => Err(ReduceError::IndexOverflow { count }),
-    }
-}
-
 /// An assembled `A` cut into its components' blocks.
 pub(super) trait PrincipalBlocks<T, I> {
     type Block;
