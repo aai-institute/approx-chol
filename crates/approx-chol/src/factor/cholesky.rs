@@ -40,7 +40,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         let (triangular, pinned) = match config.dense(n) {
             true => {
                 let free = pinned(&sddm, scales);
-                (Triangular::Dense(dense::factor(&sddm, free)), free)
+                (Triangular::Dense(dense::factor(&sddm, free).into()), free)
             }
             false => {
                 // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
@@ -127,7 +127,7 @@ fn spans_wide<T: Real>(scales: Option<&[T]>) -> bool {
 #[derive(Clone, Debug)]
 enum Triangular<T, I> {
     /// Packed lower triangle of `L` in `LLᵀ`.
-    Dense(Vec<T>),
+    Dense(Box<[T]>),
     Approximate(Box<ApproximateCholesky<T, I>>),
 }
 

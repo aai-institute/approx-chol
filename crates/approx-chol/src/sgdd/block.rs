@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use super::congruence::Congruence;
-use super::decomposition::indexable;
 use super::scaling::ScalingReport;
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, Index, Real};
@@ -155,8 +154,6 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         if let Balance::Balanced(_) = balance {
             debug_assert!(off_diagonal.nonpositive(), "a balanced M is a Z-matrix");
         }
-        // Each vertex once per sheet, and the ground.
-        indexable::<I>(n.saturating_mul(balance.sheets()).saturating_add(1))?;
         let surplus = balance.grounding().surplus().unwrap_or_default();
         if let Some(i) = surplus.iter().position(|&s| !crate::in_range(s)) {
             let vertex = vertices[i].index();
@@ -249,11 +246,6 @@ pub enum ReduceError {
         /// The block's first vertex, in `A`'s numbering.
         vertex: usize,
     },
-    /// More vertices than the index type `I` holds below its `MAX`: all of `A`'s, or a block's factor's, a cover's two sheets and its ground counted.
-    IndexOverflow {
-        /// The vertices to index.
-        count: usize,
-    },
     /// An assembled entry, diagonal, row sum or ground left the representable range.
     OutOfRange {
         /// The entry's vertex, in `A`'s numbering.
@@ -273,9 +265,6 @@ impl core::fmt::Display for ReduceError {
             ),
             Self::TooLarge { vertex } => {
                 write!(f, "the block of vertex {vertex} passes 1/ε vertices")
-            }
-            Self::IndexOverflow { count } => {
-                write!(f, "{count} vertices exceed the index type")
             }
             Self::OutOfRange { vertex } => {
                 write!(

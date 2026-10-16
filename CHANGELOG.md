@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Error` is `InvalidCsr(CsrError)` or `Reduce(ReduceError)`; a value defect is `CsrError::{NotSymmetric, BelowDiagonal, OutOfRange}`, naming its row. ([#182])
 - A column outside `0..n` is reported by `factorize`, not `CsrRef::new`; `CsrError::InputConversionPanicked` is removed. ([#182])
 - `factorize` takes any `TryInto<Input>`; a type converting only into `CsrRef` converts first. ([#182])
+- `factorize` and `Factor`'s methods take `T: Real`, implemented only for `f32` and `f64`, and `factorize` an index `I: Sync`. ([#182])
 - `low_level` is removed. ([#182])
 - `Factor::n` is the input dimension; `Factor::original_n` is removed. ([#140])
 - `Factor::solve_into` is removed. ([#146])

@@ -3,7 +3,7 @@ use num_traits::PrimInt;
 use super::{into_sgdd, Signed, SymmetricBlock};
 use crate::input::{Canonical, CsrRef, UpperCsrRef};
 use crate::sgdd::block::{ReduceError, Sgdd};
-use crate::sgdd::decomposition::{indexable, of_csr, of_upper, Partitioned};
+use crate::sgdd::decomposition::{of_csr, of_upper, Partitioned};
 use crate::sgdd::scaling::{self, Existence, ScalingPolicy};
 use crate::Error;
 use crate::{Index, Real};
@@ -36,7 +36,6 @@ impl<T: Real, I: Index> Sgdd<T, I> {
         csr: CsrRef<'_, T, J>,
         policy: ScalingPolicy,
     ) -> Result<Self, Error> {
-        indexable::<I>(csr.n())?;
         Ok(of_csr(Canonical::of(csr)?)?.reduce(&policy)?)
     }
 
@@ -45,7 +44,6 @@ impl<T: Real, I: Index> Sgdd<T, I> {
         csr: UpperCsrRef<'_, T, J>,
         policy: ScalingPolicy,
     ) -> Result<Self, Error> {
-        indexable::<I>(csr.n())?;
         Ok(of_upper(Canonical::of(csr.0)?)?.reduce(&policy)?)
     }
 }

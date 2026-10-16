@@ -46,9 +46,10 @@ impl Config {
 
 /// The one place a `split_merge` becomes the algorithm: below two copies is AC.
 fn multiplicity(split_merge: Option<u32>) -> Multiplicity {
-    split_merge
-        .and_then(SplitCount::new)
-        .map_or(Multiplicity::Single, Multiplicity::Split)
+    match split_merge {
+        Some(k) if k >= 2 => Multiplicity::Split(k),
+        _ => Multiplicity::Single,
+    }
 }
 
 /// Which factorization each block gets.
@@ -102,24 +103,8 @@ pub(crate) enum CliqueRule {
 pub(crate) enum Multiplicity {
     /// AC: one copy.
     Single,
-    /// AC2: `k` copies, merged back under a cap.
-    Split(SplitCount),
-}
-
-/// AC2's copy count; only `k ≥ 2` exists, so no split is a no-op.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SplitCount(u32);
-
-impl SplitCount {
-    /// `None` below two.
-    pub(crate) fn new(k: u32) -> Option<Self> {
-        (k >= 2).then_some(Self(k))
-    }
-
-    /// The copy count.
-    pub(crate) fn get(self) -> u32 {
-        self.0
-    }
+    /// AC2: `k ≥ 2` copies, merged back under a cap.
+    Split(u32),
 }
 
 /// Whether a solve may split its own work across threads; an outer parallel loop says no.
