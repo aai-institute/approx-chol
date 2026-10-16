@@ -18,7 +18,7 @@ pub(super) struct EliminationGraph<T, I, C> {
 
 impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
     /// The ground is a vertex like any other: forcing it last measured +0-10% PCG iterations.
-    pub(super) fn of(sddm: &Sddm<'_, T, I>, split: C::Split) -> Self {
+    pub(super) fn of(sddm: &Sddm<T, I>, split: C::Split) -> Self {
         let n = sddm.n() + usize::from(sddm.grounded());
         // One slot past the degree: the first fill edge reallocating measured +2-3% on grids.
         let mut capacities = vec![1; n];

@@ -5,7 +5,7 @@ use crate::{Index, Real};
 
 /// Left-looking GTH on the packed lower `−w` with a free last row `m` never pivoted (`m = n` holding the ground's `−s` grounded, the anchor `m = n − 1` anchored): for each column `j < m` in order, every stored `(r, j)`, `r > j`, subtracts `Σ_{k<j} min·(max·p_k⁻¹)` of the magnitudes of the already updated `(r, k)` and `(j, k)`, then `p_j = −Σ_{r>j} (r, j)` and `p_j⁻¹` goes to the tail; a last pass scales each column `j` by `√p_j⁻¹` and writes `√p_j` on its diagonal, and truncating row `m` and the tail leaves `m` rows; nothing cancels, under- or overflows (`d − Σl²` cancelled to 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more factor time).
 /// Packed lower triangle of `L` in `LLᵀ`, the free slot excluded: an upper one would double the factor; the inverse pivots trail the rows, contiguous as every row's fill reads them (strided in the diagonal measured +12-18% at n 16-24).
-pub(super) fn factor<T: Real, I: Index>(sddm: &Sddm<'_, T, I>, free: usize) -> Vec<T> {
+pub(super) fn factor<T: Real, I: Index>(sddm: &Sddm<T, I>, free: usize) -> Vec<T> {
     let m = sddm.n() - usize::from(!sddm.grounded());
     let packed = row_start(m + 1);
     let mut values = Vec::with_capacity(packed + m);

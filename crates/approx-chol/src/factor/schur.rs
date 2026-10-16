@@ -10,7 +10,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 use super::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single};
 use super::config::{InnerParallelism, Multiplicity};
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
-use super::{largest, Streams};
+use super::Streams;
 use crate::sgdd::Grounding;
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, widen, Index, Real};
@@ -32,17 +32,11 @@ pub(super) struct BlockElimination<T, I> {
     /// `Cᵀ` where [`Self::transposes`], so `Allow` may split the solve by kept row.
     #[cfg_attr(feature = "serde", serde(skip))]
     ct: Option<Rows<T, I>>,
-    /// The block's largest `|f|`, re-gauged after a singular solve: `S`'s Cholesky pins only a kept slot.
-    gauge: Option<I>,
 }
 
 impl<T: Real, I: Index> BlockElimination<T, I> {
     /// Pivots are `Σ|c_ek| + s_e`, the same on both sheets of a cover.
-    pub(super) fn new(
-        cross: &Arc<Rows<T, I>>,
-        grounding: &Grounding<T>,
-        scales: Option<&[T]>,
-    ) -> Self {
+    pub(super) fn new(cross: &Arc<Rows<T, I>>, grounding: &Grounding<T>) -> Self {
         let surplus = grounding.surplus();
         let c = &**cross;
         let inv_pivot = (0..c.n_rows())
@@ -52,8 +46,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
                 T::one() / narrow::<T>(d_e)
             })
             .collect();
-        let gauge = scales.map(|f| I::from_index(largest(f)));
-        Self::with_pivots(Arc::clone(cross), inv_pivot, gauge)
+        Self::with_pivots(Arc::clone(cross), inv_pivot)
     }
 
     /// Whether an elimination of `c` keeps `Cᵀ`: past 10 000 rows (0.6's threshold).
@@ -61,22 +54,17 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         c.n_rows() > 10_000
     }
 
-    fn with_pivots(cross: Arc<Rows<T, I>>, inv_pivot: Box<[T]>, gauge: Option<I>) -> Self {
+    fn with_pivots(cross: Arc<Rows<T, I>>, inv_pivot: Box<[T]>) -> Self {
         let ct = Self::transposes(&cross).then(|| cross.transpose());
         Self {
             cross,
             inv_pivot,
             ct,
-            gauge,
         }
     }
 
     /// `S = D_k − Cᵀ D_e⁻¹ C` on `sheets`, exact by kept row.
-    pub(super) fn complement(
-        &self,
-        sheets: Sheets,
-        grounding: &Grounding<T>,
-    ) -> Sddm<'static, T, I> {
+    pub(super) fn complement(&self, sheets: Sheets, grounding: &Grounding<T>) -> Sddm<T, I> {
         let surplus = grounding.surplus();
         let rows = match sheets {
             Sheets::One => exact_rows(self, surplus),
@@ -125,14 +113,6 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         }
     }
 
-    /// `x ← x − x_q·1` at the gauge, where the block floats.
-    pub(super) fn regauge(&self, x: &mut [T]) {
-        if let Some(q) = self.gauge {
-            let gauge = x[q.index()];
-            x.iter_mut().for_each(|x| *x = *x - gauge);
-        }
-    }
-
     /// `x_e = y_e − D_e⁻¹ C x_k`, by eliminated row, split under `Allow` where `Cᵀ` is kept.
     pub(super) fn backward(&self, eliminated: &mut [T], kept: &[T], inner: InnerParallelism) {
         let c = &self.cross;
@@ -164,7 +144,7 @@ pub(super) fn sampled<T: Real, I: Index>(
     sheets: Sheets,
     grounding: &Grounding<T>,
     stars: Streams,
-) -> Sddm<'static, T, I> {
+) -> Sddm<T, I> {
     let (n_kept, surplus) = (c.n_cols(), grounding.surplus());
     let n = sheets.count() * n_kept;
     let ground = I::from_index(n);
@@ -196,7 +176,7 @@ fn schur<T: Real, I: Index>(
     n_kept: usize,
     sheets: Sheets,
     surplus: Option<&[T]>,
-) -> Sddm<'static, T, I> {
+) -> Sddm<T, I> {
     let kept = surplus.map(|s| &s[s.len() - n_kept..]);
     let surplus = match kept {
         Some(kept) => {
@@ -207,11 +187,7 @@ fn schur<T: Real, I: Index>(
         }
         None => ground,
     };
-    Sddm::new(
-        Cow::Owned(adjacency),
-        Cow::Owned(Grounding::of(surplus)),
-        sheets,
-    )
+    Sddm::new(adjacency, Grounding::of(surplus), sheets)
 }
 
 /// Counting-sorts chunks unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.
@@ -365,7 +341,6 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         let (n_rows, n_cols) = (self.cross.n_rows(), self.cross.n_cols());
         // The larger side is eliminated, which bounds `n_cols` by decoded rows before `n` or `Cᵀ` exists.
         let sides = n_cols <= n_rows;
-        let gauge = sides && self.gauge.is_none_or(|q| q.index() < n_rows + n_cols);
-        (pivots && gauge).then(|| Self::with_pivots(self.cross, self.inv_pivot, self.gauge))
+        (pivots && sides).then(|| Self::with_pivots(self.cross, self.inv_pivot))
     }
 }

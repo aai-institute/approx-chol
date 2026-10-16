@@ -8,37 +8,29 @@ use crate::storage::OffDiagonal;
 use crate::{narrow, widen, Index, Real};
 
 /// Certification policy for a dominance scaling; a deficit past rounding left at hand-over is clamped and reported.
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(try_from = "Unchecked")
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScalingPolicy {
+    #[cfg_attr(feature = "serde", serde(deserialize_with = "tolerance"))]
     tolerance: f64,
     max_iterations: usize,
 }
 
-#[cfg(feature = "serde")]
-#[derive(Clone, Copy, serde::Deserialize)]
-struct Unchecked {
-    tolerance: f64,
-    max_iterations: usize,
+fn admits(tolerance: f64) -> bool {
+    (0.0..1.0).contains(&tolerance)
 }
 
 #[cfg(feature = "serde")]
-impl TryFrom<Unchecked> for ScalingPolicy {
-    type Error = &'static str;
-
-    fn try_from(policy: Unchecked) -> Result<Self, Self::Error> {
-        Self::new(policy.tolerance, policy.max_iterations).ok_or("tolerance outside [0, 1)")
-    }
+fn tolerance<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    let tolerance = <f64 as serde::Deserialize>::deserialize(deserializer)?;
+    (admits(tolerance).then_some(tolerance))
+        .ok_or_else(|| serde::de::Error::custom("tolerance outside [0, 1)"))
 }
 
 impl ScalingPolicy {
     /// `None` unless `0 ≤ tolerance < 1`.
     pub fn new(tolerance: f64, max_iterations: usize) -> Option<Self> {
-        (0.0..1.0).contains(&tolerance).then_some(Self {
+        admits(tolerance).then_some(Self {
             tolerance,
             max_iterations,
         })
@@ -62,47 +54,36 @@ pub struct ScalingReport {
     pub iterations: usize,
     /// Largest relative dominance violation, clamped away.
     pub violation: f64,
-    /// Whether a certified scaling exists: the shortfall is the budget's, or perhaps the input's.
-    pub scaling: Existence,
     /// Whether `y` settled, proving the float decision; else a singular block may have been grounded.
     pub settled: bool,
-}
-
-/// Whether a dominance scaling is known to exist.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Existence {
-    /// A factor-width-2 Gram, GDD by type: only the policy's budget ran out.
-    Guaranteed,
-    /// Rows: the input itself may not be GDD.
-    Unknown,
 }
 
 impl ScalingPolicy {
     /// `Σ_j |a_ij| ≤ a_ii (1 + max(tolerance, RATIO_BAND ε))`: a rounded Laplacian stays bit for bit.
     pub(super) fn dominates<T: Real>(&self, d: T, abs_row_sum: T) -> bool {
-        let slack = (self.tolerance).max(RATIO_BAND * widen(T::epsilon()));
-        widen(abs_row_sum) <= widen(d) * (1.0 + slack)
+        widen(abs_row_sum) <= widen(d) * (1.0 + self.slack(widen(T::epsilon())))
     }
 
-    /// Kept when a deficit past rounding was clamped, the scaling's violation passes the tolerance, or it did not settle.
+    /// The tolerance, never below what `T`'s rounding of a dominant row leaves.
+    fn slack(&self, epsilon: f64) -> f64 {
+        self.tolerance.max(RATIO_BAND * epsilon)
+    }
+
+    /// Kept when a deficit past rounding was clamped or the scaling did not settle, which a violation past the slack prevents.
     pub(super) fn report(&self, scaling: ScalingReport, clamped: f64) -> Option<ScalingReport> {
-        (clamped > 0.0 || scaling.violation > self.tolerance || !scaling.settled).then_some(
-            ScalingReport {
-                violation: scaling.violation.max(clamped),
-                ..scaling
-            },
-        )
+        (clamped > 0.0 || !scaling.settled).then_some(ScalingReport {
+            violation: scaling.violation.max(clamped),
+            ..scaling
+        })
     }
 }
 
 impl ScalingReport {
     /// No scaling ran: nothing spent, nothing short, and the rows decide floating exactly.
-    pub(super) fn unscaled(existence: Existence) -> Self {
+    pub(super) fn unscaled() -> Self {
         Self {
             iterations: 0,
             violation: 0.0,
-            scaling: existence,
             settled: true,
         }
     }
@@ -144,11 +125,10 @@ impl ScaleVector {
 
 impl<T: Real> Relaxation<T> {
     /// What the scaling spent and left, before the policy judges it.
-    pub(super) fn shortfall(&self, existence: Existence) -> ScalingReport {
+    pub(super) fn shortfall(&self) -> ScalingReport {
         ScalingReport {
             iterations: self.iterations,
             violation: widen(self.violation),
-            scaling: existence,
             settled: self.settled,
         }
     }
@@ -196,7 +176,8 @@ pub(super) fn relax<T: Real, I: Index>(
     // A ratio over `k` positive terms rounds by `(k + 3)ε`: no bracket closes tighter.
     let rounding = (off_diagonal.max_degree() + 3) as f64 * f64::EPSILON;
     let band = (RATIO_BAND * widen(T::epsilon())).max(rounding);
-    let iteration = InverseIteration::new(&n, policy.tolerance, band, policy.max_iterations)?;
+    let slack = policy.slack(widen(T::epsilon()));
+    let iteration = InverseIteration::new(&n, slack, band, policy.max_iterations)?;
     let (y, iterations, violation, settled) = iteration.run();
     let vector = ScaleVector::PerronVector { band };
     Relaxation::new(n.scales(&y), iterations, narrow(violation), settled, vector)

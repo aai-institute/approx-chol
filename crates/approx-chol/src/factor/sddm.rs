@@ -1,26 +1,24 @@
 //! The Cholesky's input: a Laplacian with its surplus, on one sheet or a Gremban cover's two.
 
-use std::borrow::Cow;
-
 use rayon::prelude::*;
 
 use crate::sgdd::Grounding;
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{Index, Real};
 
-/// `L + diag(s)`, `L`'s off-diagonal nonpositive; borrowed from its block, or owned when derived.
+/// `L + diag(s)`, `L`'s off-diagonal nonpositive.
 #[derive(Clone, Debug)]
-pub(super) struct Sddm<'a, T: Real, I: Index> {
-    adjacency: Cow<'a, UpperAdjacency<T, I>>,
-    grounding: Cow<'a, Grounding<T>>,
+pub(super) struct Sddm<T, I> {
+    adjacency: UpperAdjacency<T, I>,
+    grounding: Grounding<T>,
     sheets: Sheets,
 }
 
-impl<'a, T: Real, I: Index> Sddm<'a, T, I> {
+impl<T: Real, I: Index> Sddm<T, I> {
     /// Panics unless nonempty, with one surplus per row and the rows split evenly into sheets.
     pub(super) fn new(
-        adjacency: Cow<'a, UpperAdjacency<T, I>>,
-        grounding: Cow<'a, Grounding<T>>,
+        adjacency: UpperAdjacency<T, I>,
+        grounding: Grounding<T>,
         sheets: Sheets,
     ) -> Self {
         let n = adjacency.n();
@@ -36,10 +34,7 @@ impl<'a, T: Real, I: Index> Sddm<'a, T, I> {
     }
 
     /// The Gremban cover of signed `M`: a Laplacian on two sheets that acts as `M` on `[z; −z]`.
-    pub(super) fn cover(
-        signed: &UpperAdjacency<T, I>,
-        grounding: &Grounding<T>,
-    ) -> Sddm<'static, T, I> {
+    pub(super) fn cover(signed: &UpperAdjacency<T, I>, grounding: &Grounding<T>) -> Self {
         let n = signed.n();
         let mut rows = SddmRows::new(2 * n);
         for i in 0..n {
@@ -54,7 +49,7 @@ impl<'a, T: Real, I: Index> Sddm<'a, T, I> {
         }
         let (adjacency, ground) = rows.finish();
         let grounding = Grounding::of(ground);
-        Sddm::new(Cow::Owned(adjacency), Cow::Owned(grounding), Sheets::Two)
+        Self::new(adjacency, grounding, Sheets::Two)
     }
 
     pub(super) fn n(&self) -> usize {

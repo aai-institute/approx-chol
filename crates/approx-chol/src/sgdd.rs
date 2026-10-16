@@ -11,4 +11,4 @@ mod signature;
 pub use block::ReduceError;
 pub(crate) use block::{Balance, Grounding, Restriction};
 pub(crate) use block::{IrreducibleBlock, Sgdd};
-pub use scaling::{Existence, ScalingPolicy, ScalingReport};
+pub use scaling::{ScalingPolicy, ScalingReport};

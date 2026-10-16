@@ -2,7 +2,8 @@
 
 use approx_chol::input::{BipartiteGram, FactorWidth1, Laplacian, SignedGraph, Weights};
 use approx_chol::{
-    factorize_with, Backend, BlockFactor, Config, Factor, InnerParallelism, SchurMode,
+    factorize_with, Backend, BlockFactor, Config, Factor, InnerParallelism, ScalingPolicy,
+    SchurMode,
 };
 use rstest::rstest;
 
@@ -127,7 +128,7 @@ fn varint(mut x: u64, bytes: &mut Vec<u8>) {
 /// One `u32` block on vertices `[64, 0]` whose elimination has `rows` empty rows of `C`, cut off before its Cholesky.
 fn truncated_elimination(rows: u64, n_cols: u64) -> Vec<u8> {
     let mut bytes = vec![1];
-    varint(0x4143_0006, &mut bytes);
+    varint(0x4143_0007, &mut bytes);
     bytes.extend([0, 2, 64, 0, 0, 1]);
     varint(rows + 1, &mut bytes);
     bytes.extend(std::iter::repeat_n(0, rows as usize + 1));
@@ -135,7 +136,6 @@ fn truncated_elimination(rows: u64, n_cols: u64) -> Vec<u8> {
     varint(n_cols, &mut bytes);
     varint(rows, &mut bytes);
     (0..rows).for_each(|_| bytes.extend(1.0f64.to_le_bytes()));
-    bytes.push(0);
     bytes
 }
 
@@ -279,4 +279,19 @@ fn a_released_postcard_config_is_rejected() {
     for (json, bytes, _) in released_configs() {
         assert!(postcard::from_bytes::<Config>(bytes).is_err(), "{json}");
     }
+}
+
+#[test]
+fn a_scaling_policy_decode_rejects_tolerance_outside_unit_interval() {
+    for tolerance in [2.0f64, -0.5, 1.0, f64::NAN] {
+        let bytes = postcard::to_stdvec(&(tolerance, 7usize)).unwrap();
+        assert!(
+            postcard::from_bytes::<ScalingPolicy>(&bytes).is_err(),
+            "{tolerance}"
+        );
+    }
+    let bytes = postcard::to_stdvec(&(0.25f64, 7usize)).unwrap();
+    let policy: ScalingPolicy = postcard::from_bytes(&bytes).unwrap();
+    assert_eq!(policy, ScalingPolicy::new(0.25, 7).unwrap());
+    assert_eq!(postcard::to_stdvec(&policy).unwrap(), bytes);
 }

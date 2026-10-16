@@ -14,7 +14,7 @@ use ordering::MinDegreeOrder;
 
 /// AC or AC2 by `multiplicity`, each its own monomorphized elimination.
 pub(super) fn factor<T: Real, I: Index>(
-    sddm: Sddm<'_, T, I>,
+    sddm: Sddm<T, I>,
     multiplicity: Multiplicity,
     draws: Xoshiro256PlusPlus,
     last: Option<usize>,
@@ -27,7 +27,7 @@ pub(super) fn factor<T: Real, I: Index>(
 
 /// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree (Algorithm 8); the last, `last` when given, is the slot the solve zeroes.
 fn eliminate<T: Real, I: Index, C: Copies>(
-    sddm: Sddm<'_, T, I>,
+    sddm: Sddm<T, I>,
     draws: Xoshiro256PlusPlus,
     split: C::Split,
     last: Option<usize>,

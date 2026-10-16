@@ -4,7 +4,7 @@ use super::{into_sgdd, Signed, SymmetricBlock};
 use crate::input::{Canonical, CsrRef, UpperCsrRef};
 use crate::sgdd::block::{ReduceError, Sgdd};
 use crate::sgdd::decomposition::{of_csr, of_upper, Partitioned};
-use crate::sgdd::scaling::{self, Existence, ScalingPolicy};
+use crate::sgdd::scaling::{self, ScalingPolicy};
 use crate::Error;
 use crate::{Index, Real};
 
@@ -17,7 +17,7 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
             };
             let relax =
                 |a: &SymmetricBlock<T, I>| scaling::relax(&a.off_diagonal, &a.diagonal, policy);
-            let block = match a.reduce(policy, Existence::Unknown, relax)? {
+            let block = match a.reduce(policy, relax)? {
                 Signed::Folded(m, rows) => {
                     let grounding = rows.folded_surplus(&m.off_diagonal);
                     m.balanced(grounding)?
