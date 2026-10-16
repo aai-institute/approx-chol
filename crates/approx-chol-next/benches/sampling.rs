@@ -49,12 +49,10 @@ fn barabasi_albert(n: usize, m: usize, seed: u64) -> OwnedCsr {
         }
     }
 
-    OwnedCsr::from_rows(adj.iter().enumerate().map(|(v, neighbors)| {
-        let below = neighbors.range(..v as u32).map(|&u| (u as usize, -1.0));
-        let above = neighbors.range(v as u32 + 1..).map(|&u| (u as usize, -1.0));
-        let diagonal = std::iter::once((v, neighbors.len() as f64));
-        below.chain(diagonal).chain(above).collect()
-    }))
+    OwnedCsr::laplacian(
+        adj.iter()
+            .map(|neighbors| neighbors.iter().map(|&u| u as usize)),
+    )
 }
 
 fn split(k: u32) -> Multiplicity {
@@ -65,15 +63,14 @@ fn bench_factorization_grid(c: &mut Criterion) {
     let mut group = c.benchmark_group("factorization_grid");
     group.sample_size(10);
 
+    let ac2 = Config {
+        approximate: split(2),
+        ..Config::default()
+    };
     // 1000x1000 holds 5M nonzeros, so its timing runs out of cache.
     for &size in &[50, 100, 200, 1000] {
         let lap = grid_laplacian(size, size);
-        let ac = Config::default();
-        let ac2 = Config {
-            approximate: split(2),
-            ..Config::default()
-        };
-        for (label, config) in [("AC", ac), ("AC2", ac2)] {
+        for (label, config) in [("AC", Config::default()), ("AC2", ac2)] {
             group.bench_with_input(
                 BenchmarkId::new(label, format!("{size}x{size}")),
                 &lap,
@@ -104,11 +101,11 @@ fn bench_factorization_powerlaw(c: &mut Criterion) {
     group.finish();
 }
 
-/// A bipartite block's sampled complement pays this per eliminated star; no sampler is public.
-fn bench_star_sampler(c: &mut Criterion) {
+/// A whole factorize of a bipartite block, not main's bare sampler: no sampler is public.
+fn bench_bipartite_stars(c: &mut Criterion) {
     const STARS: usize = 10_000;
 
-    let mut group = c.benchmark_group("star_sampler");
+    let mut group = c.benchmark_group("bipartite_stars");
     for degree in [4usize, 10, 32] {
         let mut rng = SmallRng::seed_from_u64(0x5EED);
         // Every star on the same `degree` kept vertices, as main's; only weights vary.
@@ -147,6 +144,6 @@ criterion_group!(
     benches,
     bench_factorization_grid,
     bench_factorization_powerlaw,
-    bench_star_sampler,
+    bench_bipartite_stars,
 );
 criterion_main!(benches);

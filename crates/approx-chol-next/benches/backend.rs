@@ -19,14 +19,10 @@ fn shapes() -> [Shape; 2] {
 
 /// The densest block either Cholesky can be handed.
 fn complete_laplacian(n: usize) -> OwnedCsr {
-    OwnedCsr::from_rows((0..n).map(|row| {
-        (0..n)
-            .map(|col| (col, if row == col { (n - 1) as f64 } else { -1.0 }))
-            .collect()
-    }))
+    OwnedCsr::laplacian((0..n).map(|row| (0..n).filter(move |&col| col != row)))
 }
 
-/// Unbounded `dense_up_to`: the default would route the larger sizes to the other arm.
+/// Pinned `dense_up_to`: the default would route some sizes to the other arm.
 fn choleskies() -> [(&'static str, Config); 2] {
     [
         (
@@ -53,7 +49,6 @@ fn bench_backend_build(c: &mut Criterion) {
     for (shape, build_lap) in shapes() {
         for n in DIMENSIONS {
             let lap = build_lap(n);
-            // CSR shape checks would swamp the exact arm at the small sizes compared here.
             let csr = lap.csr();
             for (label, config) in choleskies() {
                 let id = BenchmarkId::new(format!("{shape}/{label}"), n);

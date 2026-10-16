@@ -13,18 +13,10 @@ use grid::grid_laplacian;
 
 /// `k` interleaved paths: the only shape whose blocks are not contiguous.
 fn interleaved_paths(n: usize, k: usize) -> OwnedCsr {
-    OwnedCsr::from_rows((0..n).map(|vertex| {
-        let mut row = Vec::with_capacity(3);
-        if vertex >= k {
-            row.push((vertex - k, -1.0));
-        }
-        let diagonal = row.len();
-        row.push((vertex, 0.0));
-        if vertex + k < n {
-            row.push((vertex + k, -1.0));
-        }
-        row[diagonal].1 = (row.len() - 1) as f64;
-        row
+    OwnedCsr::laplacian((0..n).map(|vertex| {
+        [vertex.checked_sub(k), Some(vertex + k).filter(|&u| u < n)]
+            .into_iter()
+            .flatten()
     }))
 }
 
@@ -42,7 +34,7 @@ fn bench_solve_for_size(c: &mut Criterion, size: usize) {
     group.warm_up_time(Duration::from_millis(200));
     group.measurement_time(Duration::from_secs(1));
 
-    group.bench_with_input(BenchmarkId::new("solve", n), &n, |b, _| {
+    group.bench_function(BenchmarkId::new("solve", n), |b| {
         b.iter(|| black_box(factor.solve(black_box(&rhs)).expect("solve should succeed")));
     });
 
@@ -63,7 +55,7 @@ fn bench_disconnected_solve(c: &mut Criterion, n: usize, k: usize) {
     group.sample_size(50);
     group.warm_up_time(Duration::from_millis(200));
     group.measurement_time(Duration::from_secs(2));
-    group.bench_with_input(BenchmarkId::new("solve", n), &n, |b, _| {
+    group.bench_function(BenchmarkId::new("solve", n), |b| {
         b.iter(|| black_box(factor.solve(black_box(&rhs)).expect("solve should succeed")));
     });
     group.finish();

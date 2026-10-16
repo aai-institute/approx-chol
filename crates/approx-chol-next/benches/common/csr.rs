@@ -1,27 +1,28 @@
 use approx_chol_next::input::Csr;
 use approx_chol_next::{ScalingPolicy, Sgdd};
 
-/// A symmetric `A` held as owned CSR arrays, as main's benches hand it over.
+/// A unit-weight graph Laplacian held as owned u32 CSR arrays.
 pub struct OwnedCsr {
-    pub n: usize,
-    pub row_ptrs: Vec<u32>,
-    pub col_indices: Vec<u32>,
-    pub values: Vec<f64>,
+    row_ptrs: Vec<u32>,
+    col_indices: Vec<u32>,
+    values: Vec<f64>,
 }
 
 impl OwnedCsr {
-    /// Rows of `(column, value)` in column order, the diagonal included.
-    pub fn from_rows(rows: impl IntoIterator<Item = Vec<(usize, f64)>>) -> Self {
+    /// Each vertex's neighbours in increasing order, itself excluded.
+    pub fn laplacian(neighbors: impl IntoIterator<Item = impl IntoIterator<Item = usize>>) -> Self {
         let (mut row_ptrs, mut col_indices, mut values) = (vec![0u32], Vec::new(), Vec::new());
-        for row in rows {
-            for (col, value) in row {
-                col_indices.push(col as u32);
-                values.push(value);
-            }
+        for (vertex, row) in neighbors.into_iter().enumerate() {
+            let start = col_indices.len();
+            col_indices.extend(row.into_iter().map(|u| u as u32));
+            let degree = col_indices.len() - start;
+            values.resize(col_indices.len(), -1.0);
+            let diagonal = start + col_indices[start..].partition_point(|&u| (u as usize) < vertex);
+            col_indices.insert(diagonal, vertex as u32);
+            values.insert(diagonal, degree as f64);
             row_ptrs.push(col_indices.len() as u32);
         }
         Self {
-            n: row_ptrs.len() - 1,
             row_ptrs,
             col_indices,
             values,
@@ -29,11 +30,12 @@ impl OwnedCsr {
     }
 
     pub fn csr(&self) -> Csr<'_, f64> {
-        Csr::new(self.n, &self.row_ptrs, &self.col_indices, &self.values).expect("valid CSR")
+        let n = self.row_ptrs.len() - 1;
+        Csr::new(n, &self.row_ptrs, &self.col_indices, &self.values).expect("valid CSR")
     }
 }
 
-/// What main's `Builder::build` did before eliminating: check symmetry and reduce.
+/// Symmetry check and reduction belong to the timed build: every caller pays them.
 pub fn reduce(csr: Csr<'_, f64>) -> Sgdd {
     Sgdd::from_csr(csr, ScalingPolicy::default()).expect("reduces")
 }
