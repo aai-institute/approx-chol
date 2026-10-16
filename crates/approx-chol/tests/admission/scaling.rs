@@ -155,3 +155,24 @@ fn a_gram_null_vector_deficit_past_its_row_rounding_is_reported() {
     let report = factor.blocks()[0].scaling_report().expect("reported");
     assert!(report.violation > miss / 10.0, "{report:?}");
 }
+
+/// `f32` rounds a singular block's `ρ(N)` ulps past `1`, so only a bracket within the `16ε` band certifies; under `1e-9` these spent 2048 steps and reported.
+#[rstest]
+#[case::path(path(1000), 1)]
+#[case::grid(grid(30), 0)]
+fn a_settled_f32_scaling_is_judged_against_its_band(
+    #[case] edges: Vec<(usize, usize)>,
+    #[case] seed: u64,
+) {
+    let n = edges
+        .iter()
+        .map(|&(i, j)| i.max(j) + 1)
+        .max()
+        .expect("edges");
+    let (row_ptrs, columns, values) = weighted_dld(n, &edges, 10, seed);
+    let values: Vec<f32> = values.iter().map(|&v| v as f32).collect();
+    let factor = reduce(&row_ptrs, &columns, &values).expect("admitted");
+    let block = &factor.blocks()[0];
+    assert_eq!(block.scaling_report(), None);
+    assert!(block.floats());
+}
