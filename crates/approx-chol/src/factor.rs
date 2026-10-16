@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use rand::rngs::Xoshiro256PlusPlus;
 use rand::SeedableRng;
+use rayon::iter::Either;
 use rayon::prelude::*;
 
 use config::CliqueRule;
@@ -192,10 +193,10 @@ pub(crate) enum Storage<T> {
 
 impl<T: Real> BlockFactor<T> {
     /// The block's vertices in `A`'s numbering, in local order.
-    pub fn vertices(&self) -> Vertices<'_> {
+    pub fn vertices(&self) -> impl ExactSizeIterator<Item = usize> + Clone + '_ {
         match &self.0 {
-            Storage::U32(block) => Vertices(Stored::U32(block.vertices().iter())),
-            Storage::U64(block) => Vertices(Stored::U64(block.vertices().iter())),
+            Storage::U32(block) => Either::Left(block.vertices().iter().map(|&v| v.index())),
+            Storage::U64(block) => Either::Right(block.vertices().iter().map(|&v| v.index())),
         }
     }
 
@@ -231,36 +232,6 @@ impl<T: Real> BlockFactor<T> {
         Ok(())
     }
 }
-
-/// A [`BlockFactor`]'s vertices as `usize`, whichever index type stores them.
-#[derive(Clone, Debug)]
-pub struct Vertices<'a>(Stored<'a>);
-
-#[derive(Clone, Debug)]
-enum Stored<'a> {
-    U32(std::slice::Iter<'a, u32>),
-    U64(std::slice::Iter<'a, u64>),
-}
-
-impl Iterator for Vertices<'_> {
-    type Item = usize;
-
-    fn next(&mut self) -> Option<usize> {
-        match &mut self.0 {
-            Stored::U32(vertices) => vertices.next().map(|&v| v.index()),
-            Stored::U64(vertices) => vertices.next().map(|&v| v.index()),
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match &self.0 {
-            Stored::U32(vertices) => vertices.size_hint(),
-            Stored::U64(vertices) => vertices.size_hint(),
-        }
-    }
-}
-
-impl ExactSizeIterator for Vertices<'_> {}
 
 /// One irreducible block's factor, its vertices stored in `I`.
 #[derive(Clone, Debug)]
