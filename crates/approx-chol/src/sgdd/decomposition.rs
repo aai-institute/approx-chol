@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::sync::Arc;
 
 use num_traits::PrimInt;
 use rayon::prelude::*;
@@ -290,16 +289,10 @@ fn sides<T: Real, I: Index>(
         return (vertices, OffDiagonal::General(UpperAdjacency::new(empty)));
     }
     match lefts.len() >= rights.len() {
-        true => (
-            [lefts, rights].concat().into(),
-            OffDiagonal::Bipartite(Arc::new(c)),
-        ),
+        true => ([lefts, rights].concat().into(), OffDiagonal::Bipartite(c)),
         false => {
             let c = c.transpose();
-            (
-                [rights, lefts].concat().into(),
-                OffDiagonal::Bipartite(Arc::new(c)),
-            )
+            ([rights, lefts].concat().into(), OffDiagonal::Bipartite(c))
         }
     }
 }

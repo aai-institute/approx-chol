@@ -1,7 +1,5 @@
 //! `A` as its reduced irreducible blocks: what the factorization consumes.
 
-use std::sync::Arc;
-
 use super::congruence::Congruence;
 use super::scaling::ScalingReport;
 use crate::storage::OffDiagonal;
@@ -14,7 +12,7 @@ use crate::{diagonal_in_range, Index, Real};
     serde(remote = "Self"),
     serde(bound(deserialize = "T: Real + serde::Deserialize<'de>, I: serde::Deserialize<'de>"))
 )]
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Restriction<T, I> {
     vertices: Box<[I]>,
     congruence: Congruence<T>,
@@ -137,7 +135,7 @@ impl<T: Real> Grounding<T> {
 /// One irreducible principal block `A_c` of `A`, reduced: `M = F · A_c · F` weakly diagonally dominant, eliminated side first.
 #[derive(Clone, Debug)]
 pub struct IrreducibleBlock<T = f64, I = u32> {
-    restriction: Arc<Restriction<T, I>>,
+    restriction: Box<Restriction<T, I>>,
     off_diagonal: OffDiagonal<T, I>,
     balance: Balance<T>,
     report: Option<ScalingReport>,
@@ -173,7 +171,7 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
             congruence,
         };
         Ok(Self {
-            restriction: Arc::new(restriction),
+            restriction: Box::new(restriction),
             off_diagonal,
             balance,
             report,
@@ -197,7 +195,7 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
 }
 
 pub(crate) type BlockParts<T, I> = (
-    Arc<Restriction<T, I>>,
+    Box<Restriction<T, I>>,
     OffDiagonal<T, I>,
     Balance<T>,
     Option<ScalingReport>,
