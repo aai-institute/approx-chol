@@ -1,4 +1,4 @@
-use approx_chol::input::{CsrError, CsrRef, UpperCsrRef};
+use approx_chol::input::{CsrError, CsrRef, IndexKind, UpperCsrRef};
 use approx_chol::{factorize, Error, Factor};
 use num_traits::PrimInt;
 use proptest::prelude::*;
@@ -104,48 +104,48 @@ proptest! {
     }
 
     #[test]
-    fn row_pointers_one_short_are_a_length_mismatch(
+    fn row_pointers_one_short_are_a_row_pointer_length_mismatch(
         (mut row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         row_ptrs.pop();
-        let expected = CsrError::LengthMismatch { expected: n + 1, found: n };
+        let expected = CsrError::RowPtrsLenMismatch { expected: n + 1, got: n };
         prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
     #[test]
-    fn values_one_short_are_a_length_mismatch(
+    fn values_one_short_mismatch_the_columns(
         (row_ptrs, col_indices, mut values, n) in laplacian_csr_strategy()
     ) {
         values.pop();
-        let expected = CsrError::LengthMismatch { expected: col_indices.len(), found: values.len() };
+        let expected = CsrError::ColIndicesValuesLenMismatch { col_indices_len: col_indices.len(), values_len: values.len() };
         prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
     #[test]
-    fn columns_one_short_are_a_length_mismatch(
+    fn columns_one_short_mismatch_the_values(
         (row_ptrs, mut col_indices, values, n) in laplacian_csr_strategy()
     ) {
         col_indices.pop();
-        let expected = CsrError::LengthMismatch { expected: values.len(), found: col_indices.len() };
+        let expected = CsrError::ColIndicesValuesLenMismatch { col_indices_len: col_indices.len(), values_len: values.len() };
         prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
     // A nonzero start leaves the first entry in no row, so accepting it would reduce another matrix.
     #[test]
-    fn row_pointers_not_starting_at_zero_are_rejected_at_row_zero(
+    fn row_pointers_not_starting_at_zero_report_their_start(
         (mut row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         row_ptrs[0] = 1;
-        let expected = CsrError::RowPointers { row: 0 };
+        let expected = CsrError::RowPtrsMustStartAtZero { got: 1 };
         prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
     #[test]
-    fn row_pointer_end_short_of_the_entries_is_a_length_mismatch(
+    fn row_pointer_end_short_of_the_entries_mismatches_nnz(
         (mut row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         row_ptrs[n] -= 1;
-        let expected = CsrError::LengthMismatch { expected: row_ptrs[n] as usize, found: col_indices.len() };
+        let expected = CsrError::RowPtrsEndMismatchNnz { row_ptr_end: row_ptrs[n] as usize, nnz: col_indices.len() };
         prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
@@ -155,37 +155,37 @@ proptest! {
     ) {
         prop_assume!(n >= 2);
         row_ptrs[1] = row_ptrs[2] + 1;
-        let expected = CsrError::RowPointers { row: 1 };
+        let expected = CsrError::RowPtrsNotNonDecreasing { row: 1, prev: row_ptrs[1] as usize, next: row_ptrs[2] as usize };
         prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
     #[test]
-    fn a_negative_row_pointer_is_rejected_at_the_row_it_closes(
+    fn a_negative_row_pointer_is_not_representable_at_its_position(
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         let (mut row_ptrs, col_indices) = (widen::<i64>(&row_ptrs), widen::<i64>(&col_indices));
         row_ptrs[n] = -1;
-        let expected = CsrError::RowPointers { row: n - 1 };
+        let expected = CsrError::IndexNotRepresentableAsUsize { kind: IndexKind::RowPtr, position: n };
         prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
     #[test]
-    fn a_column_past_n_is_rejected_at_its_row(
+    fn a_column_past_n_is_out_of_bounds_at_its_position(
         (row_ptrs, mut col_indices, values, n) in laplacian_csr_strategy()
     ) {
         col_indices[0] = n as u32;
-        let expected = Error::InvalidCsr(CsrError::ColumnOutOfRange { row: 0 });
+        let expected = Error::InvalidCsr(CsrError::ColumnIndexOutOfBounds { position: 0, col: n, n });
         prop_assert_eq!(column_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
     #[test]
-    fn a_negative_column_is_rejected_at_its_row(
+    fn a_negative_column_is_not_representable_at_its_position(
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         let (row_ptrs, mut col_indices) = (widen::<i64>(&row_ptrs), widen::<i64>(&col_indices));
         let last = col_indices.len() - 1;
         col_indices[last] = -1;
-        let expected = Error::InvalidCsr(CsrError::ColumnOutOfRange { row: n - 1 });
+        let expected = Error::InvalidCsr(CsrError::IndexNotRepresentableAsUsize { kind: IndexKind::ColIndex, position: last });
         prop_assert_eq!(column_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 }

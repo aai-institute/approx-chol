@@ -25,34 +25,44 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
         Ok(Self::checked(n as usize, row_ptrs, col_indices, values)?)
     }
 
+    /// 0.6.0's checks in 0.6.0's order, so each shape defect reports as it did.
     fn checked(
         n: usize,
         row_ptrs: &'a [I],
         col_indices: &'a [I],
         values: &'a [T],
     ) -> Result<Self, CsrError> {
-        let expected = n + 1;
-        if row_ptrs.len() != expected {
-            let found = row_ptrs.len();
-            return Err(CsrError::LengthMismatch { expected, found });
+        if row_ptrs.len() != n + 1 {
+            return Err(CsrError::RowPtrsLenMismatch {
+                expected: n + 1,
+                got: row_ptrs.len(),
+            });
         }
+        if col_indices.len() != values.len() {
+            return Err(CsrError::ColIndicesValuesLenMismatch {
+                col_indices_len: col_indices.len(),
+                values_len: values.len(),
+            });
+        }
+        let row_ptr_last = as_usize(row_ptrs[n], IndexKind::RowPtr, n)?;
         if row_ptrs[0] != I::zero() {
-            return Err(CsrError::RowPointers { row: 0 });
+            return Err(CsrError::RowPtrsMustStartAtZero {
+                got: as_usize(row_ptrs[0], IndexKind::RowPtr, 0)?,
+            });
         }
-        // Compared in `I`, so a negative pointer fails at the first row it closes.
+        if row_ptr_last != col_indices.len() {
+            return Err(CsrError::RowPtrsEndMismatchNnz {
+                row_ptr_end: row_ptr_last,
+                nnz: col_indices.len(),
+            });
+        }
+        // Compared in `I`, so only the error arm converts a pointer to `usize`.
         if let Some(row) = (0..n).find(|&i| row_ptrs[i] > row_ptrs[i + 1]) {
-            return Err(CsrError::RowPointers { row });
-        }
-        let nnz = row_ptrs[n]
-            .to_usize()
-            .ok_or(CsrError::RowPointers { row: n })?;
-        for found in [col_indices.len(), values.len()] {
-            if found != nnz {
-                return Err(CsrError::LengthMismatch {
-                    expected: nnz,
-                    found,
-                });
-            }
+            return Err(CsrError::RowPtrsNotNonDecreasing {
+                row,
+                prev: as_usize(row_ptrs[row], IndexKind::RowPtr, row)?,
+                next: as_usize(row_ptrs[row + 1], IndexKind::RowPtr, row + 1)?,
+            });
         }
         Ok(Self {
             n,
@@ -162,6 +172,10 @@ impl<'a, T, I: PrimInt> From<&'a OwnedCsr<T, I>> for CsrRef<'a, T, I> {
     fn from(owned: &'a OwnedCsr<T, I>) -> Self {
         owned.as_csr_ref()
     }
+}
+
+fn as_usize<I: PrimInt>(value: I, kind: IndexKind, position: usize) -> Result<usize, CsrError> {
+    (value.to_usize()).ok_or(CsrError::IndexNotRepresentableAsUsize { kind, position })
 }
 
 /// Reserves up front: collecting into `Option<Vec<_>>` drops the size hint and cost 3.5x the traffic.
@@ -342,19 +356,34 @@ fn is_canonical<T, I: PrimInt>(csr: &CsrRef<'_, T, I>) -> Result<bool, CsrError>
     // `None` means `I` cannot represent `n`, so every `I` value is below it.
     let limit = I::from(csr.n);
     let mut canonical = true;
-    for (row, bounds) in csr.row_ptrs.windows(2).enumerate() {
-        let columns = &csr.col_indices[index(bounds[0])..index(bounds[1])];
-        if columns
-            .iter()
-            .any(|&j| j < I::zero() || limit.is_some_and(|limit| j >= limit))
-        {
-            return Err(CsrError::ColumnOutOfRange { row });
+    let outside = |j: I| j < I::zero() || limit.is_some_and(|limit| j >= limit);
+    for bounds in csr.row_ptrs.windows(2) {
+        let start = index(bounds[0]);
+        let columns = &csr.col_indices[start..index(bounds[1])];
+        if columns.iter().any(|&j| outside(j)) {
+            let at = columns
+                .iter()
+                .position(|&j| outside(j))
+                .expect("one lies outside");
+            return Err(column_error(start + at, columns[at], csr.n));
         }
         for pair in columns.windows(2) {
             canonical &= pair[0] < pair[1];
         }
     }
     Ok(canonical)
+}
+
+/// 0.6.0's report of a column outside `0..n`; built only on the error path.
+#[cold]
+fn column_error<I: PrimInt>(position: usize, col: I, n: usize) -> CsrError {
+    match (col >= I::zero()).then(|| col.to_usize()).flatten() {
+        Some(col) => CsrError::ColumnIndexOutOfBounds { position, col, n },
+        None => CsrError::IndexNotRepresentableAsUsize {
+            kind: IndexKind::ColIndex,
+            position,
+        },
+    }
 }
 
 /// Only non-canonical input pays this copy, in its own index type.
@@ -398,26 +427,79 @@ fn rewrite<'a, T: Real, I: PrimInt>(
     })
 }
 
-/// Why a CSR is not a symmetric matrix; `row` is in the caller's numbering.
+/// Why a CSR is not a symmetric matrix; the variants 0.6.0 had come first, in its order.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CsrError {
-    /// An array's length disagrees with `n` or with `row_ptrs`.
-    LengthMismatch {
-        /// The length the other arrays fix.
+    /// `row_ptrs.len()` does not equal `n + 1`.
+    RowPtrsLenMismatch {
+        /// Expected `row_ptrs` length (`n + 1`).
         expected: usize,
-        /// The length found.
-        found: usize,
+        /// Actual `row_ptrs` length.
+        got: usize,
     },
-    /// `row_ptrs` does not start at `0`, or falls or turns negative at `row`.
-    RowPointers {
-        /// The first row whose span is not a range.
-        row: usize,
+    /// `col_indices.len()` does not equal `values.len()`.
+    ColIndicesValuesLenMismatch {
+        /// Length of the column-index array.
+        col_indices_len: usize,
+        /// Length of the values array.
+        values_len: usize,
     },
-    /// A column index lies outside `0..n`.
-    ColumnOutOfRange {
-        /// The offending row.
+    /// An index value cannot be represented as `usize`.
+    IndexNotRepresentableAsUsize {
+        /// Which CSR array the bad value came from.
+        kind: IndexKind,
+        /// Position in the source array.
+        position: usize,
+    },
+    /// `row_ptrs[0]` must be zero.
+    RowPtrsMustStartAtZero {
+        /// The observed non-zero start pointer.
+        got: usize,
+    },
+    /// `row_ptrs[n]` must match nnz.
+    RowPtrsEndMismatchNnz {
+        /// Value of `row_ptrs[n]`.
+        row_ptr_end: usize,
+        /// Number of non-zeros (`col_indices.len()`).
+        nnz: usize,
+    },
+    /// `row_ptrs` must be non-decreasing.
+    RowPtrsNotNonDecreasing {
+        /// Row index `i` where `row_ptrs[i] > row_ptrs[i + 1]`.
         row: usize,
+        /// Value of `row_ptrs[i]`.
+        prev: usize,
+        /// Value of `row_ptrs[i + 1]`.
+        next: usize,
+    },
+    /// Column index is out of bounds; found when the input factors.
+    ColumnIndexOutOfBounds {
+        /// Position in `col_indices`.
+        position: usize,
+        /// Out-of-bounds column value.
+        col: usize,
+        /// Matrix dimension.
+        n: usize,
+    },
+    /// An index does not fit the target index type.
+    IndexExceedsIndexType {
+        /// Which array the index came from.
+        kind: IndexKind,
+    },
+    /// The dimension does not fit `u32`.
+    MatrixDimensionExceedsIndexType {
+        /// The dimension.
+        n: usize,
+    },
+    /// A converted matrix is stored by columns (CSC), not rows.
+    ExpectedCsrMatrixGotCsc,
+    /// A converted matrix is not square.
+    ExpectedSquareMatrix {
+        /// Its row count.
+        rows: usize,
+        /// Its column count.
+        cols: usize,
     },
     /// An entry has no mirror within 8 ulps.
     NotSymmetric {
@@ -434,15 +516,6 @@ pub enum CsrError {
         /// The offending row.
         row: usize,
     },
-    /// A converted matrix is not square.
-    ExpectedSquareMatrix {
-        /// Its row count.
-        rows: usize,
-        /// Its column count.
-        cols: usize,
-    },
-    /// A converted matrix is stored by columns (CSC), not rows.
-    ExpectedCsrMatrixGotCsc,
     /// A converted matrix's row pointers start past `0`, as in a row slice.
     OffsetRows,
     /// A converted matrix's row leaves unused slots after its entries.
@@ -450,54 +523,58 @@ pub enum CsrError {
         /// The first row with unused slots.
         row: usize,
     },
-    /// An index does not fit the target index type.
-    IndexExceedsIndexType {
-        /// Which array the index came from.
-        kind: IndexKind,
-    },
-    /// The dimension does not fit `u32`.
-    MatrixDimensionExceedsIndexType {
-        /// The dimension.
-        n: usize,
-    },
 }
 
 impl core::fmt::Display for CsrError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::LengthMismatch { expected, found } => {
-                write!(f, "CSR array has length {found}, expected {expected}")
+            Self::RowPtrsLenMismatch { expected, got } => write!(
+                f,
+                "row_ptrs length != n + 1 (expected {expected}, got {got})"
+            ),
+            Self::ColIndicesValuesLenMismatch {
+                col_indices_len,
+                values_len,
+            } => write!(
+                f,
+                "col_indices and values have different lengths ({col_indices_len} != {values_len})"
+            ),
+            Self::IndexNotRepresentableAsUsize { kind, position } => write!(
+                f,
+                "{kind} value at position {position} cannot be represented as usize"
+            ),
+            Self::RowPtrsMustStartAtZero { got } => write!(f, "row_ptrs[0] must be 0 (got {got})"),
+            Self::RowPtrsEndMismatchNnz { row_ptr_end, nnz } => {
+                write!(f, "row_ptrs[n] must equal nnz ({row_ptr_end} != {nnz})")
             }
-            Self::RowPointers { row } => {
-                write!(f, "row pointers do not ascend from 0 at row {row}")
+            Self::RowPtrsNotNonDecreasing { row, prev, next } => write!(
+                f,
+                "row_ptrs is not non-decreasing at row {row}: {prev} > {next}"
+            ),
+            Self::ColumnIndexOutOfBounds { position, col, n } => write!(
+                f,
+                "column index out of bounds at position {position}: {col} >= {n}"
+            ),
+            Self::IndexExceedsIndexType { kind } => {
+                write!(f, "{kind} exceeds target index type capacity")
             }
-            Self::ColumnOutOfRange { row } => {
-                write!(f, "row {row} has a column index outside 0..n")
+            Self::MatrixDimensionExceedsIndexType { n } => {
+                write!(f, "matrix dimension exceeds index type capacity (n={n})")
+            }
+            Self::ExpectedCsrMatrixGotCsc => f.write_str("expected CSR matrix, got CSC"),
+            Self::ExpectedSquareMatrix { rows, cols } => {
+                write!(f, "expected square matrix (got {rows}x{cols})")
             }
             Self::NotSymmetric { row } => write!(f, "row {row} has an entry with no equal mirror"),
-            Self::BelowDiagonal { row } => {
-                write!(
-                    f,
-                    "row {row} of an upper triangle has an entry below the diagonal"
-                )
-            }
+            Self::BelowDiagonal { row } => write!(
+                f,
+                "row {row} of an upper triangle has an entry below the diagonal"
+            ),
             Self::OutOfRange { row } => {
                 write!(f, "row {row} has an entry outside the representable range")
             }
-            Self::ExpectedSquareMatrix { rows, cols } => {
-                write!(f, "matrix is {rows}x{cols}, not square")
-            }
-            Self::ExpectedCsrMatrixGotCsc => {
-                f.write_str("matrix is stored by columns (CSC), not rows")
-            }
             Self::OffsetRows => f.write_str("row pointers start past 0, as in a row slice"),
             Self::RowGap { row } => write!(f, "row {row} leaves unused slots after its entries"),
-            Self::IndexExceedsIndexType { kind } => {
-                write!(f, "a {kind} index does not fit the index type")
-            }
-            Self::MatrixDimensionExceedsIndexType { n } => {
-                write!(f, "dimension {n} does not fit u32")
-            }
         }
     }
 }

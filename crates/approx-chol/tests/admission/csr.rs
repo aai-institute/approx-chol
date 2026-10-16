@@ -256,10 +256,12 @@ fn an_empty_system_is_admitted_by_every_entry_point(#[case] factor: Factor) {
 #[rstest]
 #[case::csr(CsrRef::<f64>::new(&[0], &[], &[], u32::MAX).err())]
 #[case::upper_csr(UpperCsrRef::<f64>::new(&[0], &[], &[], u32::MAX).err())]
-fn a_dimension_past_the_largest_row_count_is_a_length_mismatch(#[case] error: Option<Error>) {
-    let expected = CsrError::LengthMismatch {
+fn a_dimension_past_the_largest_row_count_is_a_row_pointer_length_mismatch(
+    #[case] error: Option<Error>,
+) {
+    let expected = CsrError::RowPtrsLenMismatch {
         expected: u32::MAX as usize + 1,
-        found: 1,
+        got: 1,
     };
     assert_eq!(error, Some(csr(expected)));
 }
