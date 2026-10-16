@@ -53,7 +53,9 @@ use num_traits::{PrimInt, Unsigned};
 
 pub use error::Error;
 use factor::Storage;
-pub use factor::{Backend, BlockFactor, Config, Factor, InnerParallelism, SchurMode, SolveError};
+pub use factor::{
+    Backend, BlockFactor, Config, Factor, InnerParallelism, SchurMode, SolveError, Vertices,
+};
 pub use input::{CsrError, CsrRef, IndexKind, Input, OwnedCsr};
 pub use sgdd::{ReduceError, ScalingPolicy, ScalingReport};
 #[cfg(feature = "serde")]

@@ -193,10 +193,10 @@ pub(crate) enum Storage<T> {
 
 impl<T: Real> BlockFactor<T> {
     /// The block's vertices in `A`'s numbering, in local order.
-    pub fn vertices(&self) -> impl ExactSizeIterator<Item = usize> + Clone + '_ {
+    pub fn vertices(&self) -> Vertices<'_> {
         match &self.0 {
-            Storage::U32(block) => Either::Left(block.vertices().iter().map(|&v| v.index())),
-            Storage::U64(block) => Either::Right(block.vertices().iter().map(|&v| v.index())),
+            Storage::U32(block) => Vertices(Either::Left(block.vertices().iter())),
+            Storage::U64(block) => Vertices(Either::Right(block.vertices().iter())),
         }
     }
 
@@ -232,6 +232,30 @@ impl<T: Real> BlockFactor<T> {
         Ok(())
     }
 }
+
+/// A [`BlockFactor`]'s vertices in `A`'s numbering; named, so a caller may move the block after its last use.
+#[derive(Clone, Debug)]
+pub struct Vertices<'a>(Either<std::slice::Iter<'a, u32>, std::slice::Iter<'a, u64>>);
+
+impl Iterator for Vertices<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<usize> {
+        match &mut self.0 {
+            Either::Left(vertices) => vertices.next().map(|&v| v.index()),
+            Either::Right(vertices) => vertices.next().map(|&v| v.index()),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match &self.0 {
+            Either::Left(vertices) => vertices.size_hint(),
+            Either::Right(vertices) => vertices.size_hint(),
+        }
+    }
+}
+
+impl ExactSizeIterator for Vertices<'_> {}
 
 /// One irreducible block's factor, its vertices stored in `I`.
 #[cfg_attr(
