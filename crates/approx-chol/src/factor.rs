@@ -6,7 +6,6 @@ mod config;
 mod schur;
 mod sddm;
 
-use std::borrow::Cow;
 use std::sync::Arc;
 
 use rand::rngs::Xoshiro256PlusPlus;
@@ -93,21 +92,18 @@ pub struct Factor<T = f64> {
 impl<T: Real> Factor<T> {
     /// Factors every irreducible block of `sgdd` in parallel.
     pub(crate) fn build<I: Index>(
-        sgdd: &Sgdd<T, I>,
+        sgdd: Sgdd<T, I>,
         config: &Config,
         store: fn(Block<T, I>) -> Storage<T>,
     ) -> Self {
-        let blocks: Vec<BlockFactor<T>> = (sgdd.blocks().par_iter())
+        let n = sgdd.n();
+        let blocks: Vec<BlockFactor<T>> = (sgdd.into_blocks().into_par_iter())
             .map(|block| BlockFactor(store(Block::build(block, config))))
             .collect();
-        let mut covered = vec![false; sgdd.n()];
+        let mut covered = vec![false; n];
         (blocks.iter().flat_map(BlockFactor::vertices)).for_each(|v| covered[v] = true);
-        let dead = (0..sgdd.n()).filter(|&v| !covered[v]).collect();
-        Self {
-            n: sgdd.n(),
-            blocks,
-            dead,
-        }
+        let dead = (0..n).filter(|&v| !covered[v]).collect();
+        Self { n, blocks, dead }
     }
 
     /// Dimension of `A`.
@@ -275,23 +271,27 @@ pub(crate) struct Block<T, I> {
 }
 
 impl<T: Real, I: Index> Block<T, I> {
-    fn build(block: &IrreducibleBlock<T, I>, config: &Config) -> Self {
+    fn build(block: IrreducibleBlock<T, I>, config: &Config) -> Self {
+        let floats = block.floats();
+        let (restriction, off_diagonal, balance, report) = block.into_parts();
         let streams = Streams {
             seed: config.seed,
-            block: block.vertices()[0].index() as u64,
+            block: restriction.vertices()[0].index() as u64,
         };
-        let (sheets, grounding) = match block.balance() {
+        let (sheets, grounding) = match balance {
             Balance::Balanced(grounding) => (Sheets::One, grounding),
             Balance::Frustrated(grounding) => (Sheets::Two, grounding),
         };
-        let scales = |from: usize| block.restriction().scales(from);
-        let (elimination, cholesky) = match block.off_diagonal() {
+        let scales = |from: usize| restriction.scales(from);
+        let (elimination, cholesky) = match off_diagonal {
             OffDiagonal::General(adjacency) => {
                 let sddm = match sheets {
-                    Sheets::One => {
-                        Sddm::new(Cow::Borrowed(adjacency), Cow::Borrowed(grounding), sheets)
+                    Sheets::One => Sddm::new(adjacency, grounding, sheets),
+                    Sheets::Two => {
+                        let cover = Sddm::cover(&adjacency, &grounding);
+                        drop(adjacency);
+                        cover
                     }
-                    Sheets::Two => Sddm::cover(adjacency, grounding),
                 };
                 let factored = Cholesky::factor(sddm, streams.cholesky(), config, scales(0));
                 (None, factored)
@@ -305,36 +305,32 @@ impl<T: Real, I: Index> Block<T, I> {
                 };
                 let (elimination, factored) = match rule {
                     CliqueRule::Exact => {
-                        let elimination = BlockElimination::new(cross, grounding);
-                        let factored = factor(elimination.complement(sheets, grounding));
+                        let elimination = BlockElimination::new(&cross, &grounding);
+                        let factored = factor(elimination.complement(sheets, &grounding));
                         (elimination, factored)
                     }
                     // A kept `Cᵀ` is built once `S` is factored, so it never shares that peak.
-                    CliqueRule::Sampled(copies) if BlockElimination::transposes(cross) => {
-                        let s = schur::sampled(cross, copies, sheets, grounding, streams);
+                    CliqueRule::Sampled(copies) if BlockElimination::transposes(&cross) => {
+                        let s = schur::sampled(&cross, copies, sheets, &grounding, streams);
                         let factored = factor(s);
-                        (BlockElimination::new(cross, grounding), factored)
+                        (BlockElimination::new(&cross, &grounding), factored)
                     }
                     // Otherwise the pivot pass reads `C` while it is still warm.
                     CliqueRule::Sampled(copies) => {
-                        let elimination = BlockElimination::new(cross, grounding);
-                        let s = schur::sampled(cross, copies, sheets, grounding, streams);
+                        let elimination = BlockElimination::new(&cross, &grounding);
+                        let s = schur::sampled(&cross, copies, sheets, &grounding, streams);
                         (elimination, factor(s))
                     }
                 };
                 (Some(Box::new(elimination)), factored)
             }
         };
-        debug_assert_eq!(
-            cholesky.singular(),
-            block.floats(),
-            "a factor floats as its block"
-        );
+        debug_assert_eq!(cholesky.singular(), floats, "a factor floats as its block");
         Self {
-            restriction: Arc::clone(block.restriction()),
+            restriction,
             elimination,
             cholesky,
-            report: block.scaling_report().map(Box::new),
+            report: report.map(Box::new),
         }
     }
 
@@ -511,7 +507,7 @@ mod tests {
     use crate::ScalingPolicy;
 
     fn only_block(sgdd: Sgdd, config: &Config) -> Block<f64, u32> {
-        let mut blocks = Factor::build(&sgdd, config, Storage::U32).into_blocks();
+        let mut blocks = Factor::build(sgdd, config, Storage::U32).into_blocks();
         assert_eq!(blocks.len(), 1);
         match blocks.pop().expect("one block").0 {
             Storage::U32(block) => block,
@@ -625,12 +621,12 @@ mod storage {
         ];
         for config in configs {
             let narrow = Factor::build(
-                &input.reduce(policy).expect("reduces"),
+                input.reduce(policy).expect("reduces"),
                 &config,
                 Storage::U32,
             );
             let wide = Factor::build(
-                &input.reduce(policy).expect("reduces"),
+                input.reduce(policy).expect("reduces"),
                 &config,
                 Storage::U64,
             );

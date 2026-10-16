@@ -180,34 +180,28 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         })
     }
 
-    /// The block's vertices in `A`'s numbering, in local order.
-    pub fn vertices(&self) -> &[I] {
-        &self.restriction.vertices
-    }
-
-    /// Present iff a deficit past rounding was clamped, its scaling fell short beyond the policy's tolerance, or did not settle.
-    pub fn scaling_report(&self) -> Option<ScalingReport> {
-        self.report
-    }
-
-    /// Shared with every factor of this block.
-    pub(crate) fn restriction(&self) -> &Arc<Restriction<T, I>> {
-        &self.restriction
-    }
-
     /// Whether `A_c` is folded and solved as singular, `A_c⁺b`: before any clamp its `M` has `1ᵀM1 ≤ 5ε·tr M`, so a net deficit floats; a Laplacian's `g` or a signed graph's cancelled mass must be exactly `0`.
     pub fn floats(&self) -> bool {
         matches!(&self.balance, Balance::Balanced(grounding) if !grounding.is_grounded())
     }
 
-    pub(crate) fn off_diagonal(&self) -> &OffDiagonal<T, I> {
-        &self.off_diagonal
-    }
-
-    pub(crate) fn balance(&self) -> &Balance<T> {
-        &self.balance
+    /// Moved out, so each part is freed once its factor stops reading it.
+    pub(crate) fn into_parts(self) -> BlockParts<T, I> {
+        (
+            self.restriction,
+            self.off_diagonal,
+            self.balance,
+            self.report,
+        )
     }
 }
+
+pub(crate) type BlockParts<T, I> = (
+    Arc<Restriction<T, I>>,
+    OffDiagonal<T, I>,
+    Balance<T>,
+    Option<ScalingReport>,
+);
 
 /// `A` as its [`IrreducibleBlock`]s, each reduced; vertices in none solve to `0`.
 #[derive(Clone, Debug)]
@@ -227,8 +221,8 @@ impl<T: Real, I: Index> Sgdd<T, I> {
     }
 
     /// The irreducible blocks, each factored and solved on its own.
-    pub fn blocks(&self) -> &[IrreducibleBlock<T, I>] {
-        &self.blocks
+    pub fn into_blocks(self) -> Vec<IrreducibleBlock<T, I>> {
+        self.blocks
     }
 }
 

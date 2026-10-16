@@ -64,11 +64,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     }
 
     /// `S = D_k − Cᵀ D_e⁻¹ C` on `sheets`, exact by kept row.
-    pub(super) fn complement(
-        &self,
-        sheets: Sheets,
-        grounding: &Grounding<T>,
-    ) -> Sddm<'static, T, I> {
+    pub(super) fn complement(&self, sheets: Sheets, grounding: &Grounding<T>) -> Sddm<T, I> {
         let surplus = grounding.surplus();
         let rows = match sheets {
             Sheets::One => exact_rows(self, surplus),
@@ -148,7 +144,7 @@ pub(super) fn sampled<T: Real, I: Index>(
     sheets: Sheets,
     grounding: &Grounding<T>,
     stars: Streams,
-) -> Sddm<'static, T, I> {
+) -> Sddm<T, I> {
     let (n_kept, surplus) = (c.n_cols(), grounding.surplus());
     let n = sheets.count() * n_kept;
     let ground = I::from_index(n);
@@ -180,7 +176,7 @@ fn schur<T: Real, I: Index>(
     n_kept: usize,
     sheets: Sheets,
     surplus: Option<&[T]>,
-) -> Sddm<'static, T, I> {
+) -> Sddm<T, I> {
     let kept = surplus.map(|s| &s[s.len() - n_kept..]);
     let surplus = match kept {
         Some(kept) => {
@@ -191,11 +187,7 @@ fn schur<T: Real, I: Index>(
         }
         None => ground,
     };
-    Sddm::new(
-        Cow::Owned(adjacency),
-        Cow::Owned(Grounding::of(surplus)),
-        sheets,
-    )
+    Sddm::new(adjacency, Grounding::of(surplus), sheets)
 }
 
 /// Counting-sorts chunks unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.

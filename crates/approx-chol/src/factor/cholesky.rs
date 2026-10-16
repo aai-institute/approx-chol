@@ -31,7 +31,7 @@ pub(super) struct Cholesky<T, I> {
 impl<T: Real, I: Index> Cholesky<T, I> {
     /// Dense up to the config's dimension, else approximate; `scales` is `F` on its vertices, `None` when every `|f|` is `1`.
     pub(super) fn factor(
-        sddm: Sddm<'_, T, I>,
+        sddm: Sddm<T, I>,
         draws: Xoshiro256PlusPlus,
         config: &Config,
         scales: Option<&[T]>,
@@ -105,7 +105,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
 }
 
 /// The slot the solve pins: the ground, else the largest `|f|` on the first sheet, so the gauge's rounding is not amplified by `1/f`.
-fn pinned<T: Real, I: Index>(sddm: &Sddm<'_, T, I>, scales: Option<&[T]>) -> usize {
+fn pinned<T: Real, I: Index>(sddm: &Sddm<T, I>, scales: Option<&[T]>) -> usize {
     match sddm.grounded() {
         true => sddm.n(),
         false => scales.map_or(sddm.n() - 1, |f| sddm.sheets().count() * largest(f)),
