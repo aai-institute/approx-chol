@@ -86,7 +86,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
                 let rows = &mut scratch[..=x.len()];
                 let (ground, values) = rows.split_last_mut().expect("the ground's slot");
                 values.copy_from_slice(x);
-                let total = x.iter().fold(0.0, |sum, &b| sum + widen(b));
+                let total = crate::compensated_sum(x.iter().map(|&b| widen(b)));
                 *ground = narrow::<T>(-total);
                 triangular.substitute(rows, self.pinned);
                 let (ground, values) = rows.split_last().expect("the ground's slot");

@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Config` gains `complement: SchurMode` and `scaling: ScalingPolicy`. ([#182])
 - A `Config` serialized by 0.6.0 reads back only from a self-describing format such as JSON. ([#182])
 - `Backend::ExactBelow` has no `on_failure`; `ExactFailure`, `Fallback`, `DenseFailure`, `UnusablePivot` and `Factor::fallbacks` are removed, as the exact arm never fails a pivot. ([#182])
-- `Error` is `InvalidCsr(CsrError)` or `Reduce(ReduceError)`. ([#182])
+- `Error` is `InvalidCsr(CsrError)` or `Reduce(ReduceError)`; a value defect is `CsrError::{NotSymmetric, BelowDiagonal, OutOfRange}`, naming its row. ([#182])
 - A column outside `0..n` is reported by `factorize`, not `CsrRef::new`; `CsrError::InputConversionPanicked` is removed. ([#182])
 - `factorize` takes any `TryInto<Input>`; a type converting only into `CsrRef` converts first. ([#182])
 - `low_level` is removed. ([#182])
@@ -21,22 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Factor::solve_in_place` takes `x` of length `Factor::n` and caller scratch of at least `Factor::scratch_len`. ([#146])
 - `Factor::solve` rejects a right-hand side whose length is not `Factor::n`. ([#146])
 - `SolveError` is `LengthMismatch` or `ScratchTooShort`. ([#146])
-- A floating block's solve is orthogonal to its null vector. ([#135])
+- `Factor::solve_in_place` returns `solve`'s solution, orthogonal to a floating block's null vector, not 0.6.0's anchored one. ([#135])
 - `FACTOR_FORMAT_VERSION` is `0x41430006`, and no other version decodes. ([#148], [#179])
 - Python `Backend.ExactBelow` takes only `max_dim`; `ExactFailure`, `DenseFailure`, `Fallback` and `Factor.fallbacks` are removed. ([#182])
 - Python `Factor.n` is the matrix dimension, and `Factor.solve`, `solve_into` and `matvec` reject a `b` whose length is not `n`. ([#140], [#146])
 
 ### Changed
 
+- `Backend::ExactBelow { max_dim }` bounds a block's dimension, not its solved variables: a floating block of `max_dim + 1` vertices factors approximately. ([#182])
 - `factorize` admits symmetric generalized diagonally dominant input: positive off-diagonals fold by a ±1 scaling or factor on a double cover, and a block short of dominance is scaled under `Config::scaling`. ([#183])
 
 ### Added
 
-- Input views `input::Laplacian`, `input::SignedGraph`, `input::FactorWidth2`, `input::BipartiteGram` and `UpperCsrRef`. ([#183])
+- `Input`, and the views `input::Laplacian`, `input::SignedGraph`, `input::FactorWidth2`, `input::BipartiteGram` and `UpperCsrRef` it takes. ([#183])
 - `SchurMode`, `ScalingPolicy`, `ScalingReport` and `ReduceError`. ([#182])
 - `Factor::blocks` and `BlockFactor`, which solves one block in place and persists on its own. ([#183])
 - `Factor::scratch_len`. ([#146])
-- A block past `u32` indices stores `u64` ones. ([#182])
+- A factor of more than `(u32::MAX - 1) / 2` vertices stores `u64` indices. ([#182])
 - Python `SchurMode` and `Config(complement=...)`. ([#182])
 - Python `factorize` warns when a block's deficit is clamped or its scaling does not settle. ([#181])
 - Python `factorize_raw` takes arrays of any integer index dtype. ([#181])
