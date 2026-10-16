@@ -31,11 +31,17 @@ impl Graph {
             }
             let floats = balanced && component.iter().all(|&v| self.ground[v] == 0.0);
             if floats {
-                let along = component.iter().map(|&v| null[v] * b[v]).sum::<f64>();
-                let along = along / component.len() as f64;
-                component
-                    .iter()
-                    .for_each(|&v| projected[v] -= along * null[v]);
+                // Twice: on a nearly null `b`, one pass leaves rounding at `ε‖b‖`, far above `ε‖projected‖`.
+                for _ in 0..2 {
+                    let along = component
+                        .iter()
+                        .map(|&v| null[v] * projected[v])
+                        .sum::<f64>();
+                    let along = along / component.len() as f64;
+                    component
+                        .iter()
+                        .for_each(|&v| projected[v] -= along * null[v]);
+                }
             }
         }
         projected
