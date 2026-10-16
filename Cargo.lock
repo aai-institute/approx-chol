@@ -57,6 +57,7 @@ dependencies = [
 name = "approx-chol-next"
 version = "0.7.0"
 dependencies = [
+ "criterion",
  "faer",
  "num-traits",
  "postcard",
