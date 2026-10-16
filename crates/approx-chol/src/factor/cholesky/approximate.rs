@@ -104,7 +104,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
                 left
             }
         };
-        // Admitted input reaches this only past ~2^1074 range in one star (#168); `one` drops the scale.
+        // Needs an empty star, or `w_max²/d` under `1/MAX`: fill decay or `1/ε` neighbors (#168); `one` drops the scale.
         debug_assert!(
             (T::one() / pivot).is_finite(),
             "pivot has no finite inverse"
