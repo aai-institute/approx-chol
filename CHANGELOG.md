@@ -9,26 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (breaking)
 
-- The crate is rewritten around `Sgdd`: an input view reduces to irreducible blocks, and `factorize(&sgdd, &config)` factors each one. ([#183])
-- Input is symmetric generalized diagonally dominant: positive off-diagonals are folded by a ±1 scaling or factored on a double cover. ([#183])
-- Input views are `input::Csr`, `input::UpperCsr`, `input::Laplacian`, `input::SignedGraph`, `input::FactorWidth2` and `input::BipartiteGram`. ([#183])
-- A block not diagonally dominant is scaled to dominance under `ScalingPolicy`, and `IrreducibleBlock::scaling_report` says how. ([#183])
-- `Config` is `seed`, `complement`, `approximate` and `dense_up_to`; `Backend`, `ExactFailure` and `Fallback` are removed. ([#183])
-- `factorize` no longer fails; reduction errors are `ReduceError` and `FromCsrError`. ([#183])
-- `Factor<T, I>` stores indices in `u32` or `u64`, independent of the input's index type. ([#183])
-- `Factor::n` is the input dimension; `Factor::original_n` and `Factor::n_steps` are removed. ([#140])
+- `Config` gains `complement: SchurMode` and `scaling: ScalingPolicy`. ([#182])
+- `Backend::ExactBelow` has no `on_failure`; `ExactFailure`, `Fallback`, `DenseFailure`, `UnusablePivot` and `Factor::fallbacks` are removed, as the exact arm never fails a pivot. ([#182])
+- `Error` is `InvalidCsr(CsrError)` or `Reduce(ReduceError)`, and `CsrError`'s variants name the offending row. ([#182])
+- `factorize` takes any `TryInto<Input>`; a type converting only into `CsrRef` converts first. ([#182])
+- `low_level` is removed. ([#182])
+- `Factor::n` is the input dimension; `Factor::original_n` is removed. ([#140])
+- `Factor::solve_into` is removed. ([#146])
+- `Factor::solve_in_place` takes `x` of length `Factor::n` and caller scratch of at least `Factor::scratch_len`. ([#146])
 - `Factor::solve` rejects a right-hand side whose length is not `Factor::n`. ([#146])
-- `BlockFactor::solve_local` solves one block in place with caller scratch of `BlockFactor::scratch_len`. ([#146])
 - `SolveError` is `LengthMismatch` or `ScratchTooShort`. ([#146])
 - A floating block's solve is orthogonal to its null vector. ([#135])
-- `low_level`, `CsrRef`, `OwnedCsr`, `factorize_with` and `Error` are removed. ([#183])
-- `sprs` and `faer` matrices convert into `input::Csr`. ([#180])
-- `serde` persists `BlockFactor`, not `Factor`, under format version `0x41430006`; no other version decodes. ([#179])
-- Python `Config` takes `seed`, `split` and `dense_up_to`; `Backend`, `ExactFailure`, `DenseFailure`, `Fallback`, `Factor.n_steps` and `Factor.fallbacks` are removed. ([#181])
-- Python `Factor.solve`, `solve_into` and `matvec` reject a `b` whose length is not `n`. ([#146])
+- `FACTOR_FORMAT_VERSION` is `0x41430006`, and no other version decodes. ([#148], [#179])
+- Python `Backend.ExactBelow` takes only `max_dim`; `ExactFailure`, `DenseFailure`, `Fallback` and `Factor.fallbacks` are removed. ([#182])
+- Python `Factor.n` is the matrix dimension, and `Factor.solve`, `solve_into` and `matvec` reject a `b` whose length is not `n`. ([#140], [#146])
+
+### Changed
+
+- `factorize` admits symmetric generalized diagonally dominant input: positive off-diagonals fold by a ±1 scaling or factor on a double cover, and a block short of dominance is scaled under `Config::scaling`. ([#183])
 
 ### Added
 
+- Input views `input::Laplacian`, `input::SignedGraph`, `input::FactorWidth2`, `input::BipartiteGram` and `UpperCsrRef`. ([#183])
+- `SchurMode`, `ScalingPolicy`, `ScalingReport` and `ReduceError`. ([#182])
+- `Factor::blocks` and `BlockFactor`, which solves one block in place and persists on its own. ([#183])
+- `Factor::scratch_len`. ([#146])
+- A block past `u32` indices stores `u64` ones. ([#182])
+- Python `SchurMode` and `Config(complement=...)`. ([#182])
 - Python `factorize` warns when a block's deficit is clamped or its scaling does not settle. ([#181])
 - Python `factorize_raw` takes arrays of any integer index dtype. ([#181])
 
@@ -236,3 +243,5 @@ for graph Laplacians in Rust with Python bindings.
 [#180]: https://github.com/aai-institute/approx-chol/issues/180
 [#181]: https://github.com/aai-institute/approx-chol/issues/181
 [#183]: https://github.com/aai-institute/approx-chol/issues/183
+[#182]: https://github.com/aai-institute/approx-chol/issues/182
+[#148]: https://github.com/aai-institute/approx-chol/issues/148
