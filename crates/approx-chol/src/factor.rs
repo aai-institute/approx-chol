@@ -281,7 +281,7 @@ impl<T: Real, I: Index> Block<T, I> {
                 };
                 let (elimination, factored) = match rule {
                     CliqueRule::Exact => {
-                        let elimination = BlockElimination::new(cross, grounding, scales(0));
+                        let elimination = BlockElimination::new(cross, grounding);
                         let factored = factor(elimination.complement(sheets, grounding));
                         (elimination, factored)
                     }
@@ -289,11 +289,11 @@ impl<T: Real, I: Index> Block<T, I> {
                     CliqueRule::Sampled(copies) if BlockElimination::transposes(cross) => {
                         let s = schur::sampled(cross, copies, sheets, grounding, streams);
                         let factored = factor(s);
-                        (BlockElimination::new(cross, grounding, scales(0)), factored)
+                        (BlockElimination::new(cross, grounding), factored)
                     }
                     // Otherwise the pivot pass reads `C` while it is still warm.
                     CliqueRule::Sampled(copies) => {
-                        let elimination = BlockElimination::new(cross, grounding, scales(0));
+                        let elimination = BlockElimination::new(cross, grounding);
                         let s = schur::sampled(cross, copies, sheets, grounding, streams);
                         (elimination, factor(s))
                     }
@@ -351,7 +351,7 @@ impl<T: Real, I: Index> Block<T, I> {
                 self.cholesky.solve(kept, scratch);
                 elimination.backward(eliminated, kept, inner);
                 if singular {
-                    elimination.regauge(x);
+                    self.restriction.regauge(x);
                 }
             }
         }
@@ -360,8 +360,8 @@ impl<T: Real, I: Index> Block<T, I> {
 }
 
 /// An index of the largest `|f|`, where pinning the gauge leaves its rounding unamplified by `1/f`.
-fn largest<T: Real>(f: &[T]) -> usize {
-    let last = f.len() - 1;
+pub(crate) fn largest<T: Real>(f: &[T]) -> usize {
+    let last = f.len().saturating_sub(1);
     (0..last).fold(last, |best, i| match f[i].abs() > f[best].abs() {
         true => i,
         false => best,

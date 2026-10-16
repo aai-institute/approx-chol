@@ -10,7 +10,7 @@ use serde::de::value::{Error, SeqDeserializer};
 use serde::Deserialize;
 
 /// The leading field this build writes; a bump points the reader at new fixture files.
-const FORMAT_VERSION: u32 = 0x4143_0006;
+const FORMAT_VERSION: u32 = 0x4143_0007;
 
 /// One list declares each fixture, its file name and its rstest case, so none is kept in step by hand.
 macro_rules! fixtures {

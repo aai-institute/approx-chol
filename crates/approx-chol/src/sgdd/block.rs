@@ -51,6 +51,11 @@ impl<T: Real, I: Index> Restriction<T, I> {
         self.congruence.apply(x);
     }
 
+    /// `x ← x − x_q·1` at the largest `|f|`, where a split block's singular solve fixes `M`'s gauge.
+    pub(crate) fn regauge(&self, x: &mut [T]) {
+        self.congruence.regauge(x);
+    }
+
     /// `x ← F x` back in `A_c`'s scale, `F·1` projected out last when `M` is singular.
     pub(crate) fn prolongate(&self, x: &mut [T], singular: bool) {
         self.congruence.apply(x);

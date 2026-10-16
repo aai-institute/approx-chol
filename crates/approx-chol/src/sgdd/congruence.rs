@@ -20,16 +20,17 @@ pub(crate) enum Congruence<T> {
     Scaled(Scales<T>),
 }
 
-/// `F = S R`'s factors and `F·1`'s normalization, computed once: every singular solve projects `F·1` out.
+/// `F = S R`'s factors, the largest `|f|`'s index and `F·1`'s normalization, computed once: every singular solve projects `F·1` out.
 #[derive(Clone, Debug)]
 pub(crate) struct Scales<T> {
     factors: Box<[T]>,
-    largest: T,
+    peak: usize,
     norm: f64,
 }
 
 impl<T: Real> Scales<T> {
     pub(super) fn new(factors: Box<[T]>) -> Self {
+        let peak = crate::factor::largest(&factors);
         let largest = factors.iter().fold(T::zero(), |m, f| m.max(f.abs()));
         let unit = |&f: &T| {
             let u = widen(f / largest);
@@ -38,7 +39,7 @@ impl<T: Real> Scales<T> {
         let norm = crate::compensated_sum(factors.iter().map(unit));
         Self {
             factors,
-            largest,
+            peak,
             norm,
         }
     }
@@ -135,8 +136,17 @@ impl<T: Real> Congruence<T> {
             }
             Self::Signs(factors) => project_out(x, |i| factors[i], n),
             Self::Scaled(scales) => {
-                project_out(x, |i| scales.factors[i] / scales.largest, scales.norm)
+                let largest = scales.factors[scales.peak].abs();
+                project_out(x, |i| scales.factors[i] / largest, scales.norm)
             }
+        }
+    }
+
+    /// `x ← x − x_q·1` at the largest `|f|`, where a split block's singular solve fixes `M`'s gauge.
+    pub(super) fn regauge(&self, x: &mut [T]) {
+        if let Self::Scaled(scales) = self {
+            let gauge = x[scales.peak];
+            x.iter_mut().for_each(|x| *x = *x - gauge);
         }
     }
 }

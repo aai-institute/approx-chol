@@ -127,7 +127,7 @@ fn varint(mut x: u64, bytes: &mut Vec<u8>) {
 /// One `u32` block on vertices `[64, 0]` whose elimination has `rows` empty rows of `C`, cut off before its Cholesky.
 fn truncated_elimination(rows: u64, n_cols: u64) -> Vec<u8> {
     let mut bytes = vec![1];
-    varint(0x4143_0006, &mut bytes);
+    varint(0x4143_0007, &mut bytes);
     bytes.extend([0, 2, 64, 0, 0, 1]);
     varint(rows + 1, &mut bytes);
     bytes.extend(std::iter::repeat_n(0, rows as usize + 1));
@@ -135,7 +135,6 @@ fn truncated_elimination(rows: u64, n_cols: u64) -> Vec<u8> {
     varint(n_cols, &mut bytes);
     varint(rows, &mut bytes);
     (0..rows).for_each(|_| bytes.extend(1.0f64.to_le_bytes()));
-    bytes.push(0);
     bytes
 }
 
