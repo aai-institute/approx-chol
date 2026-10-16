@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Factor::solve_in_place` takes `x` of length `Factor::n` and caller scratch of at least `Factor::scratch_len`. ([#146])
 - `Factor::solve` rejects a right-hand side whose length is not `Factor::n`. ([#146])
 - `SolveError` is `LengthMismatch` or `ScratchTooShort`. ([#146])
-- `Factor::solve_in_place` returns `solve`'s solution, orthogonal to a floating block's null vector, not 0.6.0's anchored one. ([#135])
+- `Factor::solve_in_place` returns the zero-mean solution `solve` returns; 0.6.0 pinned an elimination-dependent vertex of each floating block to zero instead. ([#135])
 - `FACTOR_FORMAT_VERSION` is `0x41430006`, and no other version decodes. ([#148], [#179])
 - Python `Backend.ExactBelow` takes only `max_dim`; `ExactFailure`, `DenseFailure`, `Fallback` and `Factor.fallbacks` are removed. ([#182])
 - Python `Factor.n` is the matrix dimension, and `Factor.solve`, `solve_into` and `matvec` reject a `b` whose length is not `n`. ([#140], [#146])
