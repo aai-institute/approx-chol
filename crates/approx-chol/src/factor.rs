@@ -212,7 +212,7 @@ impl<T: Real> BlockFactor<T> {
 
     /// Present iff a deficit past rounding was clamped, the block's scaling fell short beyond the policy's tolerance, or did not settle.
     pub fn scaling_report(&self) -> Option<ScalingReport> {
-        on!(self, block => block.report)
+        on!(self, block => block.report.as_deref().copied())
     }
 
     /// Whether the block is folded and solved as singular, `A_c⁺b`.
@@ -279,7 +279,7 @@ pub(crate) struct Block<T, I> {
     restriction: Arc<Restriction<T, I>>,
     elimination: Option<Box<BlockElimination<T, I>>>,
     cholesky: Cholesky<T, I>,
-    report: Option<ScalingReport>,
+    report: Option<Box<ScalingReport>>,
 }
 
 impl<T: Real, I: Index> Block<T, I> {
@@ -342,7 +342,7 @@ impl<T: Real, I: Index> Block<T, I> {
             restriction: Arc::clone(block.restriction()),
             elimination,
             cholesky,
-            report: block.scaling_report(),
+            report: block.scaling_report().map(Box::new),
         }
     }
 
