@@ -69,18 +69,20 @@ pub struct ScalingReport {
 impl ScalingPolicy {
     /// `Σ_j |a_ij| ≤ a_ii (1 + max(tolerance, RATIO_BAND ε))`: a rounded Laplacian stays bit for bit.
     pub(super) fn dominates<T: Real>(&self, d: T, abs_row_sum: T) -> bool {
-        let slack = (self.tolerance).max(RATIO_BAND * widen(T::epsilon()));
-        widen(abs_row_sum) <= widen(d) * (1.0 + slack)
+        widen(abs_row_sum) <= widen(d) * (1.0 + self.slack(widen(T::epsilon())))
     }
 
-    /// Kept when a deficit past rounding was clamped, the scaling's violation passes the tolerance, or it did not settle.
+    /// The tolerance, never below what `T`'s rounding of a dominant row leaves.
+    fn slack(&self, epsilon: f64) -> f64 {
+        self.tolerance.max(RATIO_BAND * epsilon)
+    }
+
+    /// Kept when a deficit past rounding was clamped or the scaling did not settle, which a violation past the slack prevents.
     pub(super) fn report(&self, scaling: ScalingReport, clamped: f64) -> Option<ScalingReport> {
-        (clamped > 0.0 || scaling.violation > self.tolerance || !scaling.settled).then_some(
-            ScalingReport {
-                violation: scaling.violation.max(clamped),
-                ..scaling
-            },
-        )
+        (clamped > 0.0 || !scaling.settled).then_some(ScalingReport {
+            violation: scaling.violation.max(clamped),
+            ..scaling
+        })
     }
 }
 
@@ -182,7 +184,8 @@ pub(super) fn relax<T: Real, I: Index>(
     // A ratio over `k` positive terms rounds by `(k + 3)ε`: no bracket closes tighter.
     let rounding = (off_diagonal.max_degree() + 3) as f64 * f64::EPSILON;
     let band = (RATIO_BAND * widen(T::epsilon())).max(rounding);
-    let iteration = InverseIteration::new(&n, policy.tolerance, band, policy.max_iterations)?;
+    let slack = policy.slack(widen(T::epsilon()));
+    let iteration = InverseIteration::new(&n, slack, band, policy.max_iterations)?;
     let (y, iterations, violation, settled) = iteration.run();
     let vector = ScaleVector::PerronVector { band };
     Relaxation::new(n.scales(&y), iterations, narrow(violation), settled, vector)
