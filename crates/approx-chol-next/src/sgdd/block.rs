@@ -13,7 +13,8 @@ use crate::{diagonal_in_range, Index, Real};
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
-    serde(remote = "Self")
+    serde(remote = "Self"),
+    serde(bound(deserialize = "T: Real + serde::Deserialize<'de>, I: serde::Deserialize<'de>"))
 )]
 #[derive(Debug)]
 pub(crate) struct Restriction<T, I> {
@@ -39,7 +40,7 @@ impl<T: Real, I: Index> Restriction<T, I> {
     /// `F`'s entries from `from` on, `None` when every `|f|` is `1`.
     pub(crate) fn scales(&self, from: usize) -> Option<&[T]> {
         match &self.congruence {
-            Congruence::Scaled(factors) => Some(&factors[from..]),
+            Congruence::Scaled(scales) => Some(&scales.factors()[from..]),
             _ => None,
         }
     }
@@ -334,7 +335,7 @@ impl<T: Real, I: Index> Restriction<T, I> {
     fn checked(self) -> Option<Self> {
         let factors = match &self.congruence {
             Congruence::Signs(f) => f.iter().all(|f| f.abs() == T::one()),
-            Congruence::Scaled(f) => f.iter().all(|f| f.is_finite() && *f != T::zero()),
+            Congruence::Scaled(s) => s.factors().iter().all(|f| f.is_finite() && *f != T::zero()),
             Congruence::Identity | Congruence::NegateFrom(_) => true,
         };
         let fits = !self.vertices.is_empty() && self.congruence.fits(self.vertices.len());
