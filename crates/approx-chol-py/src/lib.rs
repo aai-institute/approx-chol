@@ -314,14 +314,19 @@ impl PyFactor {
             return Err(value_error("b and out must not overlap"));
         }
         drop(out_ro);
-        let x = self.inner.solve(b_slice).map_err(|e| error_to_py(&e))?;
-
+        if b_slice.len() != n {
+            return Err(value_error(format!(
+                "right-hand side has length {}, expected {n}",
+                b_slice.len()
+            )));
+        }
         let mut out_rw = out.try_readwrite().map_err(|e| borrow_error("out", e))?;
-        let out_slice = out_rw
+        let x = &mut out_rw
             .as_slice_mut()
-            .map_err(|_| value_error("out must be contiguous"))?;
-        out_slice[..n].copy_from_slice(&x);
-        Ok(())
+            .map_err(|_| value_error("out must be contiguous"))?[..n];
+        x.copy_from_slice(b_slice);
+        let mut scratch = vec![0.0; self.inner.scratch_len()];
+        (self.inner.solve_in_place(x, &mut scratch)).map_err(|e| error_to_py(&e))
     }
 }
 
