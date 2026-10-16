@@ -234,6 +234,14 @@ impl<T: Real> BlockFactor<T> {
 }
 
 /// One irreducible block's factor, its vertices stored in `I`.
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(remote = "Self"),
+    serde(bound(
+        deserialize = "T: Real + serde::Deserialize<'de>, I: Index + serde::Deserialize<'de>"
+    ))
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct Block<T, I> {
     restriction: Arc<Restriction<T, I>>,
@@ -454,38 +462,7 @@ impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for BlockFa
 }
 
 #[cfg(feature = "serde")]
-impl<T: serde::Serialize, I: serde::Serialize> serde::Serialize for Block<T, I> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        (
-            &self.restriction,
-            &self.elimination,
-            &self.cholesky,
-            &self.report,
-        )
-            .serialize(serializer)
-    }
-}
-
-// Not `remote = "Self"`: it would export an unchecked inherent `deserialize`.
-#[cfg(feature = "serde")]
-impl<'de, T, I> serde::Deserialize<'de> for Block<T, I>
-where
-    T: Real + serde::Deserialize<'de>,
-    I: Index + serde::Deserialize<'de>,
-{
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let (restriction, elimination, cholesky, report) =
-            serde::Deserialize::deserialize(deserializer)?;
-        let value = Self {
-            restriction,
-            elimination,
-            cholesky,
-            report,
-        };
-        let corrupt = || serde::de::Error::custom("corrupt BlockFactor");
-        value.checked().ok_or_else(corrupt)
-    }
-}
+checked_serde!(Block);
 
 #[cfg(feature = "serde")]
 impl<T: Real, I: Index> Block<T, I> {
