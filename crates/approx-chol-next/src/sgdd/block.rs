@@ -335,7 +335,7 @@ impl<T: Real, I: Index> Restriction<T, I> {
     fn checked(self) -> Option<Self> {
         let factors = match &self.congruence {
             Congruence::Signs(f) => f.iter().all(|f| f.abs() == T::one()),
-            Congruence::Scaled(s) => (s.factors().iter()).all(|f| f.is_finite() && *f != T::zero()),
+            Congruence::Scaled(s) => s.factors().iter().all(|f| f.is_finite() && *f != T::zero()),
             Congruence::Identity | Congruence::NegateFrom(_) => true,
         };
         let fits = !self.vertices.is_empty() && self.congruence.fits(self.vertices.len());

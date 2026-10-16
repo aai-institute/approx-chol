@@ -31,7 +31,10 @@ pub(crate) struct Scales<T> {
 impl<T: Real> Scales<T> {
     pub(super) fn new(factors: Box<[T]>) -> Self {
         let largest = factors.iter().fold(T::zero(), |m, f| m.max(f.abs()));
-        let unit = |&f: &T| widen(f / largest) * widen(f / largest);
+        let unit = |&f: &T| {
+            let u = widen(f / largest);
+            u * u
+        };
         let norm = crate::compensated_sum(factors.iter().map(unit));
         Self {
             factors,
@@ -85,8 +88,7 @@ impl<T: Real> Congruence<T> {
             Self::Identity => T::one(),
             Self::NegateFrom(first) if i >= *first => -T::one(),
             Self::NegateFrom(_) => T::one(),
-            Self::Signs(factors) => factors[i],
-            Self::Scaled(scales) => scales.factors[i],
+            Self::Signs(factors) | Self::Scaled(Scales { factors, .. }) => factors[i],
         }
     }
 
@@ -95,8 +97,7 @@ impl<T: Real> Congruence<T> {
         match self {
             Self::Identity => true,
             Self::NegateFrom(first) => *first <= n,
-            Self::Signs(factors) => factors.len() == n,
-            Self::Scaled(scales) => scales.factors.len() == n,
+            Self::Signs(factors) | Self::Scaled(Scales { factors, .. }) => factors.len() == n,
         }
     }
 
@@ -105,8 +106,9 @@ impl<T: Real> Congruence<T> {
         match self {
             Self::Identity => None,
             Self::NegateFrom(first) => Some(Cow::Owned(signs(*first, n))),
-            Self::Signs(factors) => Some(Cow::Borrowed(&factors[..])),
-            Self::Scaled(scales) => Some(Cow::Borrowed(&scales.factors[..])),
+            Self::Signs(factors) | Self::Scaled(Scales { factors, .. }) => {
+                Some(Cow::Borrowed(&factors[..]))
+            }
         }
     }
 
@@ -115,9 +117,8 @@ impl<T: Real> Congruence<T> {
         match self {
             Self::Identity => {}
             Self::NegateFrom(first) => x[*first..].iter_mut().for_each(|x| *x = -*x),
-            Self::Signs(factors) => (x.iter_mut().zip(factors)).for_each(|(x, &f)| *x = *x * f),
-            Self::Scaled(scales) => {
-                (x.iter_mut().zip(&scales.factors)).for_each(|(x, &f)| *x = *x * f)
+            Self::Signs(factors) | Self::Scaled(Scales { factors, .. }) => {
+                (x.iter_mut().zip(factors)).for_each(|(x, &f)| *x = *x * f)
             }
         }
     }
@@ -140,7 +141,6 @@ impl<T: Real> Congruence<T> {
     }
 }
 
-/// `x ← x − u (uᵀx / uᵀu)`.
 fn project_out<T: Real>(x: &mut [T], u: impl Fn(usize) -> T, uu: f64) {
     // Compensated, or a constant added to a floating `b` moves the solution (#147).
     let ux = crate::compensated_sum(x.iter().enumerate().map(|(i, &x)| widen(u(i)) * widen(x)));
