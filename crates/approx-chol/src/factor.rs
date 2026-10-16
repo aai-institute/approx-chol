@@ -91,12 +91,13 @@ pub struct Factor<T = f64> {
 
 impl<T: Real> Factor<T> {
     /// Factors every irreducible block of `sgdd` in parallel.
-    pub(crate) fn build<I: Index>(sgdd: &Sgdd<T, I>, config: &Config) -> Self
-    where
-        Storage<T>: From<Block<T, I>>,
-    {
+    pub(crate) fn build<I: Index>(
+        sgdd: &Sgdd<T, I>,
+        config: &Config,
+        store: fn(Block<T, I>) -> Storage<T>,
+    ) -> Self {
         let blocks: Vec<BlockFactor<T>> = (sgdd.blocks().par_iter())
-            .map(|block| BlockFactor(Block::build(block, config).into()))
+            .map(|block| BlockFactor(store(Block::build(block, config))))
             .collect();
         let mut covered = vec![false; sgdd.n()];
         (blocks.iter().flat_map(BlockFactor::vertices)).for_each(|v| covered[v] = true);
@@ -187,18 +188,6 @@ pub struct BlockFactor<T = f64>(Storage<T>);
 pub(crate) enum Storage<T> {
     U32(Block<T, u32>),
     U64(Block<T, u64>),
-}
-
-impl<T> From<Block<T, u32>> for Storage<T> {
-    fn from(block: Block<T, u32>) -> Self {
-        Self::U32(block)
-    }
-}
-
-impl<T> From<Block<T, u64>> for Storage<T> {
-    fn from(block: Block<T, u64>) -> Self {
-        Self::U64(block)
-    }
 }
 
 impl<T: Real> BlockFactor<T> {
@@ -550,7 +539,7 @@ mod tests {
     use crate::ScalingPolicy;
 
     fn only_block(sgdd: Sgdd, config: &Config) -> Block<f64, u32> {
-        let mut blocks = Factor::build(&sgdd, config).into_blocks();
+        let mut blocks = Factor::build(&sgdd, config, Storage::U32).into_blocks();
         assert_eq!(blocks.len(), 1);
         match blocks.pop().expect("one block").0 {
             Storage::U32(block) => block,
@@ -663,8 +652,16 @@ mod storage {
             },
         ];
         for config in configs {
-            let narrow = Factor::build(&input.reduce::<u32>(policy).expect("reduces"), &config);
-            let wide = Factor::build(&input.reduce::<u64>(policy).expect("reduces"), &config);
+            let narrow = Factor::build(
+                &input.reduce(policy).expect("reduces"),
+                &config,
+                Storage::U32,
+            );
+            let wide = Factor::build(
+                &input.reduce(policy).expect("reduces"),
+                &config,
+                Storage::U64,
+            );
             assert!(matches!(wide.blocks[0].0, Storage::U64(_)));
             assert_eq!(bits(&narrow, &b), bits(&wide, &b), "{config:?}");
         }

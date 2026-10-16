@@ -52,6 +52,7 @@ use std::fmt::Debug;
 use num_traits::{PrimInt, Unsigned};
 
 pub use error::Error;
+use factor::Storage;
 pub use factor::{
     Backend, BlockFactor, Config, Factor, InnerParallelism, SchurMode, SolveError, Vertices,
 };
@@ -83,8 +84,8 @@ where
     // A cover's two sheets and its ground are the most slots any block indexes.
     let slots = input.n().saturating_mul(2).saturating_add(1);
     Ok(match u32::try_from(slots).is_ok() {
-        true => Factor::build(&input.reduce::<u32>(config.scaling)?, &config),
-        false => Factor::build(&input.reduce::<u64>(config.scaling)?, &config),
+        true => Factor::build(&input.reduce(config.scaling)?, &config, Storage::U32),
+        false => Factor::build(&input.reduce(config.scaling)?, &config, Storage::U64),
     })
 }
 
