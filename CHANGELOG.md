@@ -9,26 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (breaking)
 
-- `Factor::n` is the input dimension; ground slots are internal. ([#140])
-- `Factor::original_n` is removed. ([#140])
-- `Factor::solve_into` is removed. ([#146])
-- `Factor::solve_in_place` takes `x` of length `Factor::n` and caller scratch of at least
-  `Factor::scratch_len`. ([#146])
+- The crate is rewritten around `Sgdd`: an input view reduces to irreducible blocks, and `factorize(&sgdd, &config)` factors each one. ([#183])
+- Input is symmetric generalized diagonally dominant: positive off-diagonals are folded by a ±1 scaling or factored on a double cover. ([#183])
+- Input views are `input::Csr`, `input::UpperCsr`, `input::Laplacian`, `input::SignedGraph`, `input::FactorWidth2` and `input::BipartiteGram`. ([#183])
+- A block not diagonally dominant is scaled to dominance under `ScalingPolicy`, and `IrreducibleBlock::scaling_report` says how. ([#183])
+- `Config` is `seed`, `complement`, `approximate` and `dense_up_to`; `Backend`, `ExactFailure` and `Fallback` are removed. ([#183])
+- `factorize` no longer fails; reduction errors are `ReduceError` and `FromCsrError`. ([#183])
+- `Factor<T, I>` stores indices in `u32` or `u64`, independent of the input's index type. ([#183])
+- `Factor::n` is the input dimension; `Factor::original_n` and `Factor::n_steps` are removed. ([#140])
 - `Factor::solve` rejects a right-hand side whose length is not `Factor::n`. ([#146])
-- `SolveError` is `LengthMismatch` or `ScratchTooSmall`. ([#146])
+- `BlockFactor::solve_local` solves one block in place with caller scratch of `BlockFactor::scratch_len`. ([#146])
+- `SolveError` is `LengthMismatch` or `ScratchTooShort`. ([#146])
+- A floating block's solve is orthogonal to its null vector. ([#135])
+- `low_level`, `CsrRef`, `OwnedCsr`, `factorize_with` and `Error` are removed. ([#183])
+- `sprs` and `faer` matrices convert into `input::Csr`. ([#180])
+- `serde` persists `BlockFactor`, not `Factor`, under format version `0x41430006`; no other version decodes. ([#179])
+- Python `Config` takes `seed`, `split` and `dense_up_to`; `Backend`, `ExactFailure`, `DenseFailure`, `Fallback`, `Factor.n_steps` and `Factor.fallbacks` are removed. ([#181])
 - Python `Factor.solve`, `solve_into` and `matvec` reject a `b` whose length is not `n`. ([#146])
-- `Factor::solve_in_place` returns the zero-mean solution on floating blocks. ([#135])
-- A persisted block is grounded or floating with no stored dimension, and
-  `FACTOR_FORMAT_VERSION` is `0x41430005`. ([#148])
 
 ### Added
 
-- `Factor::scratch_len`. ([#146])
+- Python `factorize` warns when a block's deficit is clamped or its scaling does not settle. ([#181])
+- Python `factorize_raw` takes arrays of any integer index dtype. ([#181])
 
 ### Fixed
 
 - Solves sum each block's right-hand side with compensation. ([#147])
-- A nonzero entry below `MIN_POSITIVE / EPSILON` in magnitude is rejected with `Error::MagnitudeTooSmall`. ([#163])
+- An entry below `MIN_POSITIVE / EPSILON` in magnitude is rejected. ([#163])
 
 ## [0.6.0] - 2026-08-24
 
@@ -224,5 +231,8 @@ for graph Laplacians in Rust with Python bindings.
 [#140]: https://github.com/aai-institute/approx-chol/issues/140
 [#146]: https://github.com/aai-institute/approx-chol/issues/146
 [#147]: https://github.com/aai-institute/approx-chol/issues/147
-[#148]: https://github.com/aai-institute/approx-chol/issues/148
 [#163]: https://github.com/aai-institute/approx-chol/issues/163
+[#179]: https://github.com/aai-institute/approx-chol/issues/179
+[#180]: https://github.com/aai-institute/approx-chol/issues/180
+[#181]: https://github.com/aai-institute/approx-chol/issues/181
+[#183]: https://github.com/aai-institute/approx-chol/issues/183
