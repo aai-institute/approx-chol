@@ -127,9 +127,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             let (y, bracket) = &self.best;
             let peak = y.iter().copied().fold(0.0f64, f64::max);
             let rhs = y.iter().map(|&y| y / peak).collect();
-            if !self.solve(bracket.shift(tolerance), rhs, polished) {
-                break;
-            }
+            self.solve(bracket.shift(tolerance), rhs, polished);
             self.patience = self.patience.saturating_mul(2);
         }
         let (y, bracket) = self.best;
@@ -137,11 +135,10 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
         (y, self.iterations, bracket.violation(), settled)
     }
 
-    /// CG on `(αI − N) y = b`; each probed iterate, and a vanishing curvature's or refuting Rayleigh quotient's direction, replaces `best` when it ranks above it. Whether one did.
-    fn solve(&mut self, alpha: f64, b: Vec<f64>, goal: impl Fn(&Bracket) -> bool) -> bool {
+    /// CG on `(αI − N) y = b`; each probed iterate, and a vanishing curvature's or refuting Rayleigh quotient's direction, replaces `best` when it ranks above it.
+    fn solve(&mut self, alpha: f64, b: Vec<f64>, goal: impl Fn(&Bracket) -> bool) {
         let n = self.n;
         let (system, rhs) = n.shifted(alpha, &b);
-        let mut adopted = false;
         let mut residual_norm_squared: f64 = rhs.iter().map(|x| x * x).sum();
         let mut solution: Vec<f64> = vec![0.0; rhs.len()];
         let (mut residual, mut direction) = (rhs.clone(), rhs);
@@ -162,9 +159,11 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             if vanishing || self.refuted {
                 // Either exposes a near-Perron vector: a singular boundary's zero curvature, or the refuting direction.
                 let witness: Vec<f64> = direction.iter().map(|value| value.abs()).collect();
-                adopted |= self.consider(&system.direction(&witness), &goal);
-                let iterate: Vec<f64> = solution.iter().map(|value| value.abs()).collect();
-                adopted |= self.refuted && self.consider(&system.solution(&iterate), &goal);
+                self.consider(&system.direction(&witness), &goal);
+                if self.refuted {
+                    let iterate: Vec<f64> = solution.iter().map(|value| value.abs()).collect();
+                    self.consider(&system.solution(&iterate), &goal);
+                }
                 break;
             }
             let step = residual_norm_squared / curvature;
@@ -195,14 +194,12 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             let last = exhausted || self.iterations == self.max_iterations;
             let on_stride = k % (k / 8).max(4) == 0;
             if (last || k <= 8 || on_stride) && self.consider(&system.solution(&solution), &goal) {
-                adopted = true;
                 last_adoption = self.iterations;
             }
             if exhausted {
                 break;
             }
         }
-        adopted
     }
 
     /// Adopts a positive `y` whose bracket ranks above the best's: meeting `goal` first, then certified by the smaller eigen-residual, else by the smaller violation.

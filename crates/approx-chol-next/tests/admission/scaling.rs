@@ -120,6 +120,20 @@ fn a_weighted_grid_settles_after_a_stall_restart() {
     assert!(report.is_none_or(|r| r.settled), "{report:?}");
 }
 
+/// After a restart, CG could not beat best's eigen-residual within its patience; the run gave up at 5144 of 12000.
+#[test]
+fn a_restart_that_adopts_nothing_keeps_iterating() {
+    let (k, budget) = (30, 12_000);
+    let (row_ptrs, columns, values) = weighted_dld(k * k, &grid(k), 24, 14);
+    let policy = ScalingPolicy::new(1e-9, budget).expect("a valid policy");
+    let sgdd = reduce_with(&row_ptrs, &columns, &values, policy).expect("admitted");
+    let report = sgdd.blocks()[0].scaling_report();
+    assert!(
+        report.is_none_or(|r| r.settled || r.iterations == budget),
+        "{report:?}"
+    );
+}
+
 /// A settled eigen-residual is relative to the Perron vector's peak, so a row at `μ_i` may sit `band/μ_i` off.
 #[test]
 fn a_settled_scaling_with_an_uneven_perron_vector_is_not_clamped() {
