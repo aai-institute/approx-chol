@@ -9,7 +9,7 @@ use std::cell::LazyCell;
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
 use super::congruence::{Congruence, Scales};
 use super::decomposition::{Cells, Components};
-use super::scaling::{self, Existence, ScaleVector, ScalingPolicy, ScalingReport, RATIO_BAND};
+use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport, RATIO_BAND};
 use super::signature;
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, widen, Index, Real};
@@ -53,7 +53,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
             let vertex = self.vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
         }
-        self.reduce(policy, Existence::Guaranteed, |a| {
+        self.reduce(policy, |a| {
             let u = (a.vertices.iter()).map(|&v| nulls[v.index()]);
             (u.clone().all(f64::is_finite))
                 .then(|| scaling::null_scaling(u, &a.diagonal))
@@ -66,7 +66,6 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
     fn reduce(
         self,
         policy: &ScalingPolicy,
-        existence: Existence,
         relax: impl FnOnce(&Self) -> Option<scaling::Relaxation<T>>,
     ) -> Result<Signed<T, I>, ReduceError> {
         if let Some(i) = self.diagonal.iter().position(|&d| !diagonal_in_range(d)) {
@@ -101,7 +100,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 let deficit =
                     clamped_deficit(diagonal, abs, &self.off_diagonal, ScaleVector::Identity);
                 let mut m = Congruent::new(self.vertices, self.off_diagonal, signs);
-                m.report = policy.report(ScalingReport::unscaled(existence), deficit);
+                m.report = policy.report(ScalingReport::unscaled(), deficit);
                 let rows = RowSums {
                     diagonal: self.diagonal,
                     abs: self.abs_row_sums,
@@ -120,7 +119,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                     vertices: self.vertices,
                     congruence: Congruence::Scaled(Scales::new(factors)),
                     off_diagonal,
-                    report: policy.report(relaxation.shortfall(existence), deficit),
+                    report: policy.report(relaxation.shortfall(), deficit),
                 };
                 (m, RowSums { diagonal, abs })
             }

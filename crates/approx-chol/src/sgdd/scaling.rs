@@ -62,20 +62,8 @@ pub struct ScalingReport {
     pub iterations: usize,
     /// Largest relative dominance violation, clamped away.
     pub violation: f64,
-    /// Whether a certified scaling exists: the shortfall is the budget's, or perhaps the input's.
-    pub scaling: Existence,
     /// Whether `y` settled, proving the float decision; else a singular block may have been grounded.
     pub settled: bool,
-}
-
-/// Whether a dominance scaling is known to exist.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Existence {
-    /// A factor-width-2 Gram, GDD by type: only the policy's budget ran out.
-    Guaranteed,
-    /// Rows: the input itself may not be GDD.
-    Unknown,
 }
 
 impl ScalingPolicy {
@@ -98,11 +86,10 @@ impl ScalingPolicy {
 
 impl ScalingReport {
     /// No scaling ran: nothing spent, nothing short, and the rows decide floating exactly.
-    pub(super) fn unscaled(existence: Existence) -> Self {
+    pub(super) fn unscaled() -> Self {
         Self {
             iterations: 0,
             violation: 0.0,
-            scaling: existence,
             settled: true,
         }
     }
@@ -144,11 +131,10 @@ impl ScaleVector {
 
 impl<T: Real> Relaxation<T> {
     /// What the scaling spent and left, before the policy judges it.
-    pub(super) fn shortfall(&self, existence: Existence) -> ScalingReport {
+    pub(super) fn shortfall(&self) -> ScalingReport {
         ScalingReport {
             iterations: self.iterations,
             violation: widen(self.violation),
-            scaling: existence,
             settled: self.settled,
         }
     }

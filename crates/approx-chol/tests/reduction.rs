@@ -4,7 +4,7 @@ mod dense;
 use approx_chol::input::{
     BipartiteGram, CsrRef, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsrRef, Weights,
 };
-use approx_chol::{factorize_with, Backend, Config, Existence, Factor, ScalingPolicy};
+use approx_chol::{factorize_with, Backend, Config, Factor, ScalingPolicy};
 use dense::dense;
 
 /// Every Cholesky dense under `policy`, so a residual reads the reduction alone.
@@ -157,26 +157,20 @@ fn bipartite_incidence_and_valued_grams_preserve_both_sides() {
 }
 
 #[test]
-fn exhausted_scaling_reports_the_inputs_existence_guarantee() {
+fn exhausted_scaling_reports_on_grams_and_rows() {
     let (a, b) = ([0, 1, 0], [1, 2, 2]);
     let (x, y) = ([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
     let gram = FactorWidth2::new(3, &a, &b, &x, &y).unwrap();
     let policy = ScalingPolicy::new(0.0, 0).unwrap();
     let factor: Factor = factorize_with(gram, exact(policy)).unwrap();
-    assert_eq!(
-        factor.blocks()[0].scaling_report().unwrap().scaling,
-        Existence::Guaranteed
-    );
+    assert!(factor.blocks()[0].scaling_report().is_some());
     let matrix = matrix(3, &a, &b, &x, &y);
     let ptrs = [0, 3, 6, 9];
     let indices = [0, 1, 2, 0, 1, 2, 0, 1, 2];
     let values: Vec<f64> = matrix.into_iter().flatten().collect();
     let csr = CsrRef::new(&ptrs, &indices, &values, 3).unwrap();
     let factor: Factor = factorize_with(csr, exact(policy)).unwrap();
-    assert_eq!(
-        factor.blocks()[0].scaling_report().unwrap().scaling,
-        Existence::Unknown
-    );
+    assert!(factor.blocks()[0].scaling_report().is_some());
 }
 
 #[test]
