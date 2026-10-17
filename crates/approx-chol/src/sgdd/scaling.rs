@@ -93,9 +93,8 @@ impl ScalingReport {
 pub(super) struct Relaxation<T> {
     /// `f = μ/√a_ii`, `μ` peaking at `1` for a Perron vector and centred on `1` by a power of two for a null vector.
     pub(super) scales: Box<[T]>,
-    iterations: usize,
-    violation: T,
-    settled: bool,
+    /// What the scaling spent and left, before the policy judges it.
+    pub(super) shortfall: ScalingReport,
     /// What `μ` is, which decides how far off balance it may leave a row.
     pub(super) vector: ScaleVector,
 }
@@ -124,29 +123,12 @@ impl ScaleVector {
 }
 
 impl<T: Real> Relaxation<T> {
-    /// What the scaling spent and left, before the policy judges it.
-    pub(super) fn shortfall(&self) -> ScalingReport {
-        ScalingReport {
-            iterations: self.iterations,
-            violation: widen(self.violation),
-            settled: self.settled,
-        }
-    }
-
     /// `None` unless every scale is a positive `T`.
-    fn new(
-        scales: Box<[T]>,
-        iterations: usize,
-        violation: T,
-        settled: bool,
-        vector: ScaleVector,
-    ) -> Option<Self> {
+    fn new(scales: Box<[T]>, shortfall: ScalingReport, vector: ScaleVector) -> Option<Self> {
         let positive = scales.iter().all(|&f| f.is_finite() && f > T::zero());
         positive.then_some(Self {
             scales,
-            iterations,
-            violation,
-            settled,
+            shortfall,
             vector,
         })
     }
@@ -165,7 +147,7 @@ pub(super) fn null_scaling<T: Real>(
     // Centred by a power of two, not peaked at 1: `μ²` spans `(high/low)²`, past `f32`'s range from `2^52` on.
     let peak = high * 2f64.powi(-((high / low).log2() / 2.0).floor() as i32);
     let scales: Box<[T]> = u.map(|x| narrow::<T>(x.abs() / peak)).collect();
-    Relaxation::new(scales, 0, T::zero(), true, ScaleVector::NullVector)
+    Relaxation::new(scales, ScalingReport::unscaled(), ScaleVector::NullVector)
 }
 
 /// How far, in `ε`, a row ratio `Σ_j|a_ij|f_j / (a_ii f_i)` may sit from `1`: a settled residual and the dominance slack's floor.
@@ -183,7 +165,7 @@ pub(super) fn relax<T: Real, I: Index>(
     let band = (RATIO_BAND * widen(T::epsilon())).max(rounding);
     let slack = policy.slack(widen(T::epsilon()));
     let iteration = InverseIteration::new(&n, slack, band, policy.max_iterations)?;
-    let (y, iterations, violation, settled) = iteration.run();
+    let (y, shortfall) = iteration.run();
     let vector = ScaleVector::PerronVector { band };
-    Relaxation::new(n.scales(&y), iterations, narrow(violation), settled, vector)
+    Relaxation::new(n.scales(&y), shortfall, vector)
 }

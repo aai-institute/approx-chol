@@ -2,7 +2,7 @@ use num_traits::PrimInt;
 
 use super::{into_sgdd, Congruent};
 use crate::input::{BipartiteLaplacian, Laplacian, SignedGraph};
-use crate::sgdd::block::{ReduceError, Sgdd};
+use crate::sgdd::block::{Balance, ReduceError, Sgdd};
 use crate::sgdd::congruence::Congruence;
 use crate::sgdd::decomposition::{assemble_bipartite, assemble_laplacian, assemble_signed};
 use crate::sgdd::signature;
@@ -21,7 +21,7 @@ impl<'a, T: Real, J: PrimInt, I: Index> TryFrom<Laplacian<'a, T, J>> for Sgdd<T,
                     return Ok(None);
                 }
                 let m = Congruent::new(vertices, off_diagonal, Congruence::Identity);
-                m.balanced(grounding).map(Some)
+                m.block(Balance::Balanced(grounding)).map(Some)
             })
             .map(into_sgdd)
     }
@@ -44,7 +44,7 @@ impl<'a, T: Real, J: PrimInt, I: Index> TryFrom<BipartiteLaplacian<'a, T, J>> fo
                     off_diagonal,
                     report: None,
                 };
-                m.balanced(grounding).map(Some)
+                m.block(Balance::Balanced(grounding)).map(Some)
             })
             .map(into_sgdd)
     }
@@ -62,11 +62,10 @@ impl<'a, T: Real, J: PrimInt, I: Index> TryFrom<SignedGraph<'a, T, J>> for Sgdd<
                     return Ok(None);
                 }
                 let block = match signature::folding_signs(&off_diagonal) {
-                    Some(signs) => {
-                        Congruent::new(vertices, off_diagonal, signs).balanced(grounding)
-                    }
+                    Some(signs) => Congruent::new(vertices, off_diagonal, signs)
+                        .block(Balance::Balanced(grounding)),
                     None => Congruent::new(vertices, off_diagonal, Congruence::Identity)
-                        .frustrated(grounding),
+                        .block(Balance::Frustrated(grounding)),
                 };
                 block.map(Some)
             })

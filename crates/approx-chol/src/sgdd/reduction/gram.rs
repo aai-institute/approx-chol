@@ -4,7 +4,7 @@ use num_traits::PrimInt;
 
 use super::{Congruent, Signed, SymmetricBlock, SINGULAR_BAND};
 use crate::input::{BipartiteGram, FactorWidth2, IntoColumns};
-use crate::sgdd::block::{Grounding, IrreducibleBlock, ReduceError, Sgdd};
+use crate::sgdd::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
 use crate::sgdd::decomposition::{assemble_bipartite_gram, assemble_general, Components};
 use crate::sgdd::null_vectors::null_vectors;
 use crate::sgdd::scaling::ScalingPolicy;
@@ -110,7 +110,7 @@ fn ground_or_float<T: Real, I: Index>(
     let decided = blocks.into_iter().zip(ones).zip(trace);
     let decide = |((block, ones), trace): ((Congruent<T, I>, f64), f64)| {
         if ones <= SINGULAR_BAND * epsilon * trace {
-            return block.balanced(Grounding::ungrounded());
+            return block.block(Balance::Balanced(Grounding::ungrounded()));
         }
         let vertices = &block.vertices;
         let surplus: Vec<T> = (vertices.iter())
@@ -119,7 +119,7 @@ fn ground_or_float<T: Real, I: Index>(
         // Unproven, a surplus that vanishes in `T` is never a float.
         let vertex = vertices[0].index();
         match Grounding::of(surplus) {
-            grounding if grounding.is_grounded() => block.balanced(grounding),
+            grounding if grounding.is_grounded() => block.block(Balance::Balanced(grounding)),
             _ => Err(ReduceError::Unscalable { vertex }),
         }
     };

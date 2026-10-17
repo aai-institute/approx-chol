@@ -141,7 +141,7 @@ impl<T: Real> Factor<T> {
         self.blocks
     }
 
-    /// Workspace [`solve_in_place`](Self::solve_in_place) needs: the largest block's vertices plus its own scratch.
+    /// Workspace [`solve_in_place`](Self::solve_in_place) needs: the most any one block's vertices plus its own scratch take.
     pub fn scratch_len(&self) -> usize {
         self.scratch_len
     }
@@ -330,6 +330,7 @@ impl<T: Real, I: Index> Block<T, I> {
                             &grounding,
                             streams,
                         );
+                        drop(grounding);
                         (elimination, factor(s))
                     }
                 };

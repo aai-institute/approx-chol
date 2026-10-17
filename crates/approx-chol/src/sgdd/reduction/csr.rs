@@ -2,7 +2,7 @@ use num_traits::PrimInt;
 
 use super::{into_sgdd, Signed, SymmetricBlock};
 use crate::input::{Canonical, CsrRef, UpperCsrRef};
-use crate::sgdd::block::{ReduceError, Sgdd};
+use crate::sgdd::block::{Balance, ReduceError, Sgdd};
 use crate::sgdd::decomposition::{of_csr, of_upper, Partitioned};
 use crate::sgdd::scaling::{self, ScalingPolicy};
 use crate::Error;
@@ -20,7 +20,7 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
             let block = match a.reduce(policy, relax)? {
                 Signed::Folded(m, rows) => {
                     let grounding = rows.folded_surplus(&m.off_diagonal);
-                    m.balanced(grounding)?
+                    m.block(Balance::Balanced(grounding))?
                 }
                 Signed::Frustrated(block) => block,
             };
