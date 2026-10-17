@@ -68,6 +68,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         self,
         policy: &ScalingPolicy,
         nulls: &LazyCell<Vec<f64>, impl FnOnce() -> Vec<f64>>,
+        rounding: &dyn Fn(usize) -> f64,
     ) -> Result<Signed<T, I>, ReduceError> {
         if let Some(i) = self.diagonal.iter().position(|&d| d == T::zero()) {
             let vertex = self.vertices[i].index();
@@ -76,17 +77,17 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         self.reduce(policy, |a| {
             let u = (a.vertices.iter()).map(|&v| nulls[v.index()]);
             (u.clone().all(f64::is_finite))
-                .then(|| scaling::null_scaling(u, &a.diagonal))
+                .then(|| scaling::null_scaling(u, &a.diagonal, rounding))
                 .flatten()
                 .or_else(|| scaling::relax(&a.off_diagonal, &a.diagonal, policy))
         })
     }
 
     /// `M = F A_c F` with `F = S R`, formed once with its rows, which decide the report; `relax` runs only past the row test, and a frustrated `A_c` takes `S = I` and grounds on its rows at once.
-    fn reduce(
+    fn reduce<'r>(
         self,
         policy: &ScalingPolicy,
-        relax: impl FnOnce(&Self) -> Option<scaling::Relaxation<T>>,
+        relax: impl FnOnce(&Self) -> Option<scaling::Relaxation<'r, T>>,
     ) -> Result<Signed<T, I>, ReduceError> {
         if let Some(i) = self.diagonal.iter().position(|&d| !diagonal_in_range(d)) {
             let vertex = self.vertices[i].index();
@@ -117,8 +118,8 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
             None => {
                 // Signs keep every magnitude, so `A_c`'s rows are `M`'s.
                 let (diagonal, abs) = (&self.diagonal, &self.abs_row_sums);
-                let deficit =
-                    clamped_deficit(diagonal, abs, &self.off_diagonal, ScaleVector::Identity);
+                let (off_diagonal, vector) = (&self.off_diagonal, ScaleVector::Identity);
+                let deficit = clamped_deficit(diagonal, abs, off_diagonal, &self.vertices, vector);
                 let mut m = Congruent::new(self.vertices, self.off_diagonal, signs);
                 m.report = ScaleVector::Identity.shortfall().clamped(deficit);
                 let rows = RowSums {
@@ -134,7 +135,13 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 let diagonal: Vec<T> = (self.diagonal.iter().zip(&relaxation.scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();
-                let deficit = clamped_deficit(&diagonal, &abs, &off_diagonal, relaxation.vector);
+                let deficit = clamped_deficit(
+                    &diagonal,
+                    &abs,
+                    &off_diagonal,
+                    &self.vertices,
+                    relaxation.vector,
+                );
                 let m = Congruent {
                     vertices: self.vertices,
                     congruence: Congruence::Scaled(Scales::new(factors)),
@@ -218,11 +225,12 @@ impl<T: Real> RowSums<T> {
     }
 }
 
-/// `max_i (Σ_j|m_ij| − m_ii)/m_ii` past row `i`'s band, which its `k_i` entries and the scale vector set.
+/// `max_i (Σ_j|m_ij| − m_ii)/m_ii` past row `i`'s band, which its `k_i` entries and the scale vector set; a null vector's row must stay past it once unrounded.
 fn clamped_deficit<T: Real, I: Index>(
     diagonal: &[T],
     abs_row_sums: &[T],
     off_diagonal: &OffDiagonal<T, I>,
+    vertices: &[I],
     vector: ScaleVector,
 ) -> f64 {
     let epsilon = widen(T::epsilon());
@@ -235,9 +243,26 @@ fn clamped_deficit<T: Real, I: Index>(
     {
         return 0.0;
     }
-    (deficits.zip(off_diagonal.degrees()).zip(diagonal))
-        .filter(|&((deficit, k), &d)| deficit > vector.row_band(k, widen(d), epsilon))
-        .fold(0.0, |worst, ((deficit, _), _)| worst.max(deficit))
+    let bands = (off_diagonal.degrees().into_iter().zip(diagonal))
+        .map(|(k, &d)| vector.row_band(k, widen(d), epsilon));
+    let past = (deficits.zip(bands).enumerate()).filter(|&(_, (deficit, band))| deficit > band);
+    let worst = |worst: f64, (_, (deficit, _)): (usize, (f64, f64))| worst.max(deficit);
+    let ScaleVector::NullVector(rounding) = vector else {
+        return past.fold(0.0, worst);
+    };
+    if past.clone().next().is_none() {
+        return 0.0;
+    }
+    let rho: Vec<f64> = vertices.iter().map(|&v| rounding(v.index())).collect();
+    let mut spread = vec![0.0; rho.len()];
+    off_diagonal.abs_times(&rho, &vec![1.0; rho.len()], &mut spread);
+    // Row `i` of `RMR`, `R = I − diag(ρ)`: `M`'s row with `|u|` unrounded.
+    let unrounded = |i: usize| {
+        let (d, s) = (widen(diagonal[i]), widen(abs_row_sums[i]));
+        ((s - d) - spread[i] + d * rho[i]) / (d * (1.0 - rho[i]))
+    };
+    past.filter(|&(i, (_, band))| unrounded(i) > band)
+        .fold(0.0, worst)
 }
 
 /// `1ᵀM1 ≤ SINGULAR_BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh), so `M` floats.
