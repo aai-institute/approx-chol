@@ -29,7 +29,6 @@ def test_package_surface_and_basic_factorize_raw_roundtrip():
         "Backend",
         "Config",
         "Factor",
-        "SchurMode",
         "factorize",
         "factorize_raw",
     ]
@@ -49,17 +48,10 @@ def test_config_defaults_and_getters():
     default = approx_chol.Config()
     assert (default.seed, default.split) == (0, None)
     assert default.backend == approx_chol.Backend.ExactBelow(max_dim=24)
-    assert default.complement == approx_chol.SchurMode.Same()
 
-    config = approx_chol.Config(
-        seed=7,
-        split=3,
-        backend=approx_chol.Backend.Approximate(),
-        complement=approx_chol.SchurMode.Approximate(split=2),
-    )
+    config = approx_chol.Config(seed=7, split=3, backend=approx_chol.Backend.Approximate())
     assert (config.seed, config.split) == (7, 3)
     assert config.backend == approx_chol.Backend.Approximate()
-    assert config.complement == approx_chol.SchurMode.Approximate(split=2)
 
 
 def test_no_config_and_a_default_config_factor_alike():
@@ -88,18 +80,6 @@ def test_seed_and_split_reach_the_factorization():
     np.testing.assert_array_equal(base, solution(seed=0))
     assert not np.array_equal(base, solution(seed=1))
     assert not np.array_equal(base, solution(seed=0, split=2))
-
-
-def test_complement_leaves_a_csr_input_unchanged():
-    # A CSR reduces to general blocks; only a bipartite block has a Schur complement to sample.
-    def solution(complement):
-        config = approx_chol.Config(
-            backend=approx_chol.Backend.Approximate(), complement=complement
-        )
-        return _grid_solution(config)
-
-    base = solution(approx_chol.SchurMode.Same())
-    np.testing.assert_array_equal(base, solution(approx_chol.SchurMode.Exact()))
 
 
 def _pair(off_diagonal: float) -> np.ndarray:

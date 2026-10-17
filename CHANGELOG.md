@@ -39,7 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Factor::blocks` and `BlockFactor`, which solves one block in place and persists on its own. ([#183])
 - `Factor::scratch_len`. ([#146])
 - A factor of more than `(u32::MAX - 1) / 2` vertices stores `u64` indices. ([#182])
-- Python `SchurMode` and `Config(complement=...)`. ([#182])
 - Python `factorize` warns when a block's deficit is clamped or its scaling does not settle. ([#181])
 - Python `factorize_raw` takes arrays of any integer index dtype. ([#181])
 
