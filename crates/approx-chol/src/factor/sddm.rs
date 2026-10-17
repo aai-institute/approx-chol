@@ -134,7 +134,7 @@ impl<T: Real, I: Index> SddmRows<T, I> {
     }
 
     /// Repeats the row just ended on the other sheet, each column's sheet bit flipped.
-    pub(super) fn mirror_row(&mut self) {
+    fn mirror_row(&mut self) {
         let (start, end) = (self.ptrs[self.ptrs.len() - 2], self.indices.len());
         self.ground.push(*self.ground.last().expect("a row ended"));
         for i in start..end {

@@ -14,7 +14,7 @@ pub(super) use assembly::{
     assemble_bipartite, assemble_bipartite_gram, assemble_general, assemble_laplacian,
     assemble_signed,
 };
-pub(super) use partition::Partition;
+use partition::Partition;
 use partition::UnionFind;
 
 /// An assembled `A` and its connected components, found from the same cells.
@@ -110,16 +110,16 @@ const PARALLEL_VERTICES: usize = 1 << 12;
 pub(super) type Components<B, I> = (Partition<I>, Vec<B>);
 
 /// A general `A` assembled with its diagonal, and its components.
-pub(super) type General<T, I> = Partitioned<Assembled<T, UpperAdjacency<T, I>>, I>;
+type General<T, I> = Partitioned<Assembled<T, UpperAdjacency<T, I>>, I>;
 
 /// A bipartite Gram assembled as `C` and the diagonal, and its components.
-pub(super) type BipartiteGram<T, I> = Partitioned<Assembled<T, Rows<T, I>>, I>;
+type BipartiteGram<T, I> = Partitioned<Assembled<T, Rows<T, I>>, I>;
 
 /// A Laplacian or signed graph assembled as `C` and `σ`, and its components.
-pub(super) type DominantGraph<'a, T, I> = Partitioned<Dominant<'a, T, UpperAdjacency<T, I>>, I>;
+type DominantGraph<'a, T, I> = Partitioned<Dominant<'a, T, UpperAdjacency<T, I>>, I>;
 
 /// A bipartite Laplacian assembled as `C`, and its components.
-pub(super) type DominantBipartite<T, I> = Partitioned<Dominant<'static, T, Rows<T, I>>, I>;
+type DominantBipartite<T, I> = Partitioned<Dominant<'static, T, Rows<T, I>>, I>;
 
 /// One component's vertices in local order, off-diagonal and diagonal.
 pub(super) type Cells<T, I> = (Box<[I]>, OffDiagonal<T, I>, Vec<T>);

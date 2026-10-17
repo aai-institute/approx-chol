@@ -73,7 +73,7 @@ pub(crate) enum Balance<T> {
 }
 
 impl<T: Real> Balance<T> {
-    pub(crate) fn grounding(&self) -> &Grounding<T> {
+    fn grounding(&self) -> &Grounding<T> {
         match self {
             Self::Balanced(grounding) | Self::Frustrated(grounding) => grounding,
         }
@@ -194,7 +194,7 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
     }
 }
 
-pub(crate) type BlockParts<T, I> = (
+type BlockParts<T, I> = (
     Box<Restriction<T, I>>,
     OffDiagonal<T, I>,
     Balance<T>,
