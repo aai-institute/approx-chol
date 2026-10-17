@@ -91,7 +91,7 @@ impl ScalingReport {
 
 /// Positive scales `R` making `R|A|R` weakly dominant (Daitch, Spielman, arXiv:0803.0988 §4), and how far short they fall.
 pub(super) struct Relaxation<T> {
-    /// `f = μ/√a_ii` with `μ` peaking at `1`, so `M`'s diagonal `μ²` never exceeds `1`.
+    /// `f = μ/√a_ii`, `μ` peaking at `1` for a Perron vector and centred on `1` by a power of two for a null vector.
     pub(super) scales: Box<[T]>,
     iterations: usize,
     violation: T,
@@ -157,8 +157,13 @@ pub(super) fn null_scaling<T: Real>(
     u: impl Iterator<Item = f64> + Clone,
     diagonal: &[T],
 ) -> Option<Relaxation<T>> {
-    let peak =
-        (u.clone().zip(diagonal)).fold(0.0f64, |peak, (x, &d)| peak.max(x.abs() * widen(d).sqrt()));
+    let (low, high) =
+        (u.clone().zip(diagonal)).fold((f64::INFINITY, 0.0f64), |(low, high), (x, &d)| {
+            let mu = x.abs() * widen(d).sqrt();
+            (low.min(mu), high.max(mu))
+        });
+    // Centred by a power of two, not peaked at 1: `μ²` spans `(high/low)²`, past `f32`'s range from `2^52` on.
+    let peak = high * 2f64.powi(-((high / low).log2() / 2.0).floor() as i32);
     let scales: Box<[T]> = u.map(|x| narrow::<T>(x.abs() / peak)).collect();
     Relaxation::new(scales, 0, T::zero(), true, ScaleVector::NullVector)
 }

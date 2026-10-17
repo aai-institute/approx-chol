@@ -57,6 +57,7 @@ pub use factor::{
     Backend, BlockFactor, Config, Factor, InnerParallelism, SchurMode, SolveError, Vertices,
 };
 pub use input::{CsrError, CsrRef, IndexKind, Input, OwnedCsr};
+use sgdd::Sgdd;
 pub use sgdd::{ReduceError, ScalingPolicy, ScalingReport};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
@@ -84,8 +85,8 @@ where
     // A cover's two sheets and its ground are the most slots any block indexes.
     let slots = input.n().saturating_mul(2).saturating_add(1);
     Ok(match u32::try_from(slots).is_ok() {
-        true => Factor::build(input.reduce(config.scaling)?, &config, Storage::U32),
-        false => Factor::build(input.reduce(config.scaling)?, &config, Storage::U64),
+        true => Factor::build(Sgdd::reduce(input, config.scaling)?, &config, Storage::U32),
+        false => Factor::build(Sgdd::reduce(input, config.scaling)?, &config, Storage::U64),
     })
 }
 
@@ -136,6 +137,15 @@ macro_rules! index {
 
 index!(u32);
 index!(u64);
+
+/// An index of the largest `|f|`, where pinning the gauge leaves its rounding unamplified by `1/f`.
+pub(crate) fn largest<T: Real>(f: &[T]) -> usize {
+    let last = f.len().saturating_sub(1);
+    (0..last).fold(last, |best, i| match f[i].abs() > f[best].abs() {
+        true => i,
+        false => best,
+    })
+}
 
 /// Finite, and zero or at least `MIN_POSITIVE/EPSILON`, so no product turns subnormal (#163).
 pub(crate) fn in_range<T: Real>(x: T) -> bool {

@@ -85,6 +85,7 @@ pub struct Factor<T = f64> {
     blocks: Vec<BlockFactor<T>>,
     /// Vertices in no block, which solve to `0`.
     dead: Box<[usize]>,
+    scratch_len: usize,
 }
 
 impl<T: Real> Factor<T> {
@@ -101,7 +102,20 @@ impl<T: Real> Factor<T> {
         let mut covered = vec![false; n];
         (blocks.iter().flat_map(BlockFactor::vertices)).for_each(|v| covered[v] = true);
         let dead = (0..n).filter(|&v| !covered[v]).collect();
-        Self { n, blocks, dead }
+        Self::new(n, blocks, dead)
+    }
+
+    fn new(n: usize, blocks: Vec<BlockFactor<T>>, dead: Box<[usize]>) -> Self {
+        let scratch_len = (blocks.iter())
+            .map(|block| block.vertices().len() + block.scratch_len())
+            .max()
+            .unwrap_or(0);
+        Self {
+            n,
+            blocks,
+            dead,
+            scratch_len,
+        }
     }
 
     /// Dimension of `A`.
@@ -129,10 +143,7 @@ impl<T: Real> Factor<T> {
 
     /// Workspace [`solve_in_place`](Self::solve_in_place) needs: the largest block's vertices plus its own scratch.
     pub fn scratch_len(&self) -> usize {
-        (self.blocks.iter())
-            .map(|block| block.vertices().len() + block.scratch_len())
-            .max()
-            .unwrap_or(0)
+        self.scratch_len
     }
 
     /// `A⁺b` on floating blocks; vertices in no block solve to `0`.
@@ -285,11 +296,7 @@ impl<T: Real, I: Index> Block<T, I> {
             OffDiagonal::General(adjacency) => {
                 let sddm = match sheets {
                     Sheets::One => Sddm::new(adjacency, grounding, sheets),
-                    Sheets::Two => {
-                        let cover = Sddm::cover(&adjacency, &grounding);
-                        drop(adjacency);
-                        cover
-                    }
+                    Sheets::Two => Sddm::cover(adjacency, grounding),
                 };
                 let factored = Cholesky::factor(sddm, streams.cholesky(), config, scales(0));
                 (None, factored)
@@ -304,7 +311,7 @@ impl<T: Real, I: Index> Block<T, I> {
                 let (elimination, factored) = match rule {
                     CliqueRule::Exact => {
                         let elimination = BlockElimination::new(cross, &grounding);
-                        let factored = factor(elimination.complement(sheets, &grounding));
+                        let factored = factor(elimination.complement(sheets, grounding));
                         (elimination, factored)
                     }
                     // A kept `Cᵀ` is built once `S` is factored, so it never shares that peak.
@@ -383,15 +390,6 @@ impl<T: Real, I: Index> Block<T, I> {
     }
 }
 
-/// An index of the largest `|f|`, where pinning the gauge leaves its rounding unamplified by `1/f`.
-pub(crate) fn largest<T: Real>(f: &[T]) -> usize {
-    let last = f.len().saturating_sub(1);
-    (0..last).fold(last, |best, i| match f[i].abs() > f[best].abs() {
-        true => i,
-        false => best,
-    })
-}
-
 /// One block's keys, so no draw depends on thread scheduling or on how other blocks routed.
 #[derive(Clone, Copy, Debug)]
 struct Streams {
@@ -448,7 +446,7 @@ impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for Factor<
         let (n, dead, blocks): (usize, Box<[usize]>, Vec<Storage<T>>) =
             crate::wire::deserialize(deserializer)?;
         let blocks = blocks.into_iter().map(BlockFactor).collect();
-        let value = Self { n, blocks, dead };
+        let value = Self::new(n, blocks, dead);
         let corrupt = || serde::de::Error::custom("corrupt Factor");
         value.checked().ok_or_else(corrupt)
     }
@@ -625,12 +623,12 @@ mod storage {
         ];
         for config in configs {
             let narrow = Factor::build(
-                input.reduce(policy).expect("reduces"),
+                Sgdd::reduce(input, policy).expect("reduces"),
                 &config,
                 Storage::U32,
             );
             let wide = Factor::build(
-                input.reduce(policy).expect("reduces"),
+                Sgdd::reduce(input, policy).expect("reduces"),
                 &config,
                 Storage::U64,
             );

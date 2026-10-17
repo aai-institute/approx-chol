@@ -48,7 +48,7 @@ impl<I: Index> Partition<I> {
     }
 
     /// One component of `n > 0` vertices: every vertex is its own position.
-    pub(super) fn whole(n: usize) -> Self {
+    fn whole(n: usize) -> Self {
         let order: Vec<I> = (0..n).map(I::from_index).collect();
         Self {
             position: order.clone(),
@@ -93,7 +93,7 @@ impl<I: Index> UnionFind<I> {
     }
 
     /// Path halving: every visited vertex skips to its grandparent.
-    pub(super) fn find(&mut self, mut i: usize) -> usize {
+    fn find(&mut self, mut i: usize) -> usize {
         while self.parent[i].index() != i {
             let grandparent = self.parent[self.parent[i].index()];
             self.parent[i] = grandparent;
@@ -110,7 +110,7 @@ impl<I: Index> UnionFind<I> {
     }
 
     /// Links two distinct roots by size, returning the joined root.
-    pub(super) fn join(&mut self, mut a: usize, mut b: usize) -> usize {
+    fn join(&mut self, mut a: usize, mut b: usize) -> usize {
         if self.size[a] < self.size[b] {
             std::mem::swap(&mut a, &mut b);
         }

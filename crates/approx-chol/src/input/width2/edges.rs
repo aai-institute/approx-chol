@@ -28,7 +28,7 @@ impl<'a, T: Real> Weights<'a, T> {
     }
 
     /// One entry per column.
-    pub(super) fn check(self, columns: usize) -> Result<(), ViewError> {
+    fn check(self, columns: usize) -> Result<(), ViewError> {
         let found = match self.0 {
             Weighting::Unit => return Ok(()),
             Weighting::Of(entries) | Weighting::SqrtOf(entries) => entries.len(),

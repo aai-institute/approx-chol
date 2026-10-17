@@ -8,7 +8,7 @@ use approx_chol::{
 use rstest::rstest;
 
 fn factors(config: Config) -> Vec<Factor> {
-    let (left, right, per_row) = (12_000u32, 400u32, 3u32);
+    let (left, right, per_row) = (12_000u32, 400u32, 12u32);
     let rows: Vec<u32> = (0..left * per_row).map(|k| k / per_row).collect();
     let cols: Vec<u32> = (0..left * per_row)
         .map(|k| (k * 7 + k / per_row) % right)

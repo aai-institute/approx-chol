@@ -120,8 +120,7 @@ impl<'a, T, I: PrimInt> UpperCsrRef<'a, T, I> {
         CsrRef::new(row_ptrs, col_indices, values, n).map(Self)
     }
 
-    /// Dimension of `A`.
-    pub fn n(&self) -> usize {
+    pub(crate) fn n(&self) -> usize {
         self.0.n
     }
 }

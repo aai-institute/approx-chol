@@ -1,4 +1,4 @@
-use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, ScalingReport, SchurMode};
+use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, ScalingReport};
 use num_traits::PrimInt;
 use numpy::{BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
@@ -122,57 +122,19 @@ impl From<Backend> for PyBackend {
     }
 }
 
-#[pyclass(frozen, eq, from_py_object, name = "SchurMode")]
-#[derive(Clone, PartialEq, Eq)]
-enum PySchurMode {
-    Exact {},
-    #[pyo3(constructor = (split = None))]
-    Approximate {
-        split: Option<u32>,
-    },
-    Same {},
-}
-
-impl From<PySchurMode> for SchurMode {
-    fn from(mode: PySchurMode) -> Self {
-        match mode {
-            PySchurMode::Exact {} => Self::Exact,
-            PySchurMode::Approximate { split } => Self::Approximate { split_merge: split },
-            PySchurMode::Same {} => Self::Same,
-        }
-    }
-}
-
-impl From<SchurMode> for PySchurMode {
-    fn from(mode: SchurMode) -> Self {
-        match mode {
-            SchurMode::Exact => Self::Exact {},
-            SchurMode::Approximate { split_merge } => Self::Approximate { split: split_merge },
-            // `SchurMode` is `non_exhaustive`, as `Backend` is.
-            _ => Self::Same {},
-        }
-    }
-}
-
 #[pyclass(frozen, name = "Config")]
 struct PyConfig(Config);
 
 #[pymethods]
 impl PyConfig {
     #[new]
-    #[pyo3(signature = (seed=None, split=None, backend=None, complement=None))]
-    fn new(
-        seed: Option<u64>,
-        split: Option<u32>,
-        backend: Option<PyBackend>,
-        complement: Option<PySchurMode>,
-    ) -> Self {
+    #[pyo3(signature = (seed=None, split=None, backend=None))]
+    fn new(seed: Option<u64>, split: Option<u32>, backend: Option<PyBackend>) -> Self {
         let default = Config::default();
         Self(Config {
             seed: seed.unwrap_or(default.seed),
             split_merge: split.or(default.split_merge),
             backend: backend.map_or(default.backend, Backend::from),
-            complement: complement.map_or(default.complement, SchurMode::from),
             ..default
         })
     }
@@ -190,11 +152,6 @@ impl PyConfig {
     #[getter]
     fn backend(&self) -> PyBackend {
         self.0.backend.into()
-    }
-
-    #[getter]
-    fn complement(&self) -> PySchurMode {
-        self.0.complement.into()
     }
 }
 
@@ -442,7 +399,6 @@ fn _approx_chol(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBackend>()?;
     m.add_class::<PyConfig>()?;
     m.add_class::<PyFactor>()?;
-    m.add_class::<PySchurMode>()?;
     m.add_function(wrap_pyfunction!(factorize, m)?)?;
     m.add_function(wrap_pyfunction!(factorize_raw, m)?)?;
     Ok(())

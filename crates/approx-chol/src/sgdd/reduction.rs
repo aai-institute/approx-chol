@@ -6,13 +6,33 @@ mod graph;
 
 use std::cell::LazyCell;
 
+use num_traits::PrimInt;
+
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
 use super::congruence::{Congruence, Scales};
 use super::decomposition::{Cells, Components};
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport, RATIO_BAND};
 use super::signature;
+use crate::input::Input;
 use crate::storage::OffDiagonal;
-use crate::{diagonal_in_range, widen, Index, Real};
+use crate::{diagonal_in_range, widen, Error, Index, Real};
+
+impl<T: Real, I: Index> Sgdd<T, I> {
+    /// The view's irreducible blocks, each reduced; `policy` scales those not already dominant.
+    pub(crate) fn reduce<J: PrimInt + Sync>(
+        input: Input<'_, T, J>,
+        policy: ScalingPolicy,
+    ) -> Result<Self, Error> {
+        Ok(match input {
+            Input::Csr(csr) => Self::from_csr(csr, policy)?,
+            Input::UpperCsr(csr) => Self::from_upper_csr(csr, policy)?,
+            Input::Laplacian(laplacian) => Self::try_from(laplacian)?,
+            Input::SignedGraph(graph) => Self::try_from(graph)?,
+            Input::Gram(v) => Self::from_gram(v, policy)?,
+            Input::BipartiteGram(gram) => Self::from_bipartite_gram(gram, policy)?,
+        })
+    }
+}
 
 fn into_sgdd<T: Real, I: Index>(
     (partition, live): Components<IrreducibleBlock<T, I>, I>,
