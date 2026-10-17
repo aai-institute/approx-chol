@@ -191,3 +191,37 @@ fn a_wide_f32_gram_null_vector_scales_in_range() {
     let factor = factorize(gram).expect("admitted");
     assert!(factor.blocks()[0].floats());
 }
+
+/// The forest composes each `u_i` from rounded ratios, so a long cycle's rows miss by tens of `ε` though `V` is exact; a `1e-12` miss is not rounding.
+#[rstest]
+#[case::ring(ring(100_000), 0.0)]
+#[case::ring_missed(ring(100_000), 1e-12)]
+#[case::grid(grid(700), 0.0)]
+#[case::grid_missed(grid(700), 1e-10)]
+fn a_long_cycles_null_vector_rounding_is_not_reported(
+    #[case] edges: Vec<(usize, usize)>,
+    #[case] miss: f64,
+) {
+    let n = edges
+        .iter()
+        .map(|&(i, j)| i.max(j) + 1)
+        .max()
+        .expect("edges");
+    let mut draws = Draws(2);
+    let u: Vec<f64> = (0..n).map(|_| draws.log_uniform(24)).collect();
+    let a: Vec<u32> = edges.iter().map(|&(i, _)| i as u32).collect();
+    let b: Vec<u32> = edges.iter().map(|&(_, j)| j as u32).collect();
+    let mut x: Vec<f64> = edges.iter().map(|&(_, j)| u[j]).collect();
+    let y: Vec<f64> = edges.iter().map(|&(i, _)| -u[i]).collect();
+    *x.last_mut().expect("edges") *= 1.0 + miss;
+    let gram = FactorWidth2::new(n, &a, &b, &x, &y).expect("valid columns");
+    let factor = factorize(gram).expect("admitted");
+    let report = factor.blocks()[0].scaling_report();
+    assert_eq!(report.is_some(), miss > 0.0, "{report:?}");
+}
+
+fn ring(n: usize) -> Vec<(usize, usize)> {
+    let mut edges = path(n);
+    edges.push((n - 1, 0));
+    edges
+}
