@@ -1,3 +1,5 @@
+use std::ops::{Div, Mul};
+
 use crate::input::{Column, IntoColumns};
 use crate::widen;
 use crate::{Index, Real};
@@ -7,6 +9,22 @@ pub(super) fn null_vectors<'c, T: Real, I: Index>(
     v: impl IntoColumns<T>,
     components: impl Iterator<Item = &'c [I]>,
 ) -> Vec<f64> {
+    walk(v, components)
+}
+
+/// Per vertex, [`null_vectors`]' relative rounding to first order, from a second pass that links the same forest.
+pub(super) fn null_vector_roundings<'c, T: Real, I: Index>(
+    v: impl IntoColumns<T>,
+    components: impl Iterator<Item = &'c [I]>,
+) -> Vec<f64> {
+    let tracked: Vec<Tracked> = walk(v, components);
+    tracked.into_iter().map(|x| x.rounding).collect()
+}
+
+fn walk<'c, T: Real, I: Index, R: Ratio>(
+    v: impl IntoColumns<T>,
+    components: impl Iterator<Item = &'c [I]>,
+) -> Vec<R> {
     let n = v.n();
     let mut component = vec![I::zero(); n];
     // A lone vertex is dead or definite, never a candidate.
@@ -18,7 +36,7 @@ pub(super) fn null_vectors<'c, T: Real, I: Index>(
         doomed.push(vertices.len() == 1);
     }
     let mut alive = doomed.iter().filter(|&&doomed| !doomed).count();
-    let mut forest = RatioForest::<I>::new(n, widen(T::epsilon()).sqrt());
+    let mut forest = RatioForest::<I, R>::new(n, widen(T::epsilon()).sqrt());
     v.for_each_column::<I>(
         #[inline(always)]
         |column| {
@@ -28,7 +46,7 @@ pub(super) fn null_vectors<'c, T: Real, I: Index>(
             let Some(c) = coupling(&column, &component) else {
                 return;
             };
-            let k = -widen(column.v_a) / widen(column.v_b);
+            let k = R::from(-widen(column.v_a)) / R::from(widen(column.v_b));
             if !doomed[c] && !forest.join(column.a.index(), column.b.index(), k) {
                 doomed[c] = true;
                 alive -= 1;
@@ -37,7 +55,7 @@ pub(super) fn null_vectors<'c, T: Real, I: Index>(
     );
     (0..n)
         .map(|i| match doomed[component[i].index()] {
-            true => f64::NAN,
+            true => R::from(f64::NAN),
             false => forest.find(i).1,
         })
         .collect()
@@ -53,48 +71,95 @@ fn coupling<T: Real, I: Index>(column: &Column<T, I>, component: &[I]) -> Option
     couples.then_some(c.index())
 }
 
+/// A rounded ratio and its relative error to first order, `value = exact·(1 + rounding)`: FMA recovers each operation's own rounding.
+#[derive(Clone, Copy)]
+struct Tracked {
+    value: f64,
+    rounding: f64,
+}
+
+impl From<f64> for Tracked {
+    fn from(value: f64) -> Self {
+        let rounding = 0.0;
+        Self { value, rounding }
+    }
+}
+
+impl From<Tracked> for f64 {
+    fn from(x: Tracked) -> Self {
+        x.value
+    }
+}
+
+impl Mul for Tracked {
+    type Output = Self;
+
+    fn mul(self, y: Self) -> Self {
+        let value = self.value * y.value;
+        let own = -self.value.mul_add(y.value, -value) / value;
+        let rounding = self.rounding + y.rounding + own;
+        Self { value, rounding }
+    }
+}
+
+impl Div for Tracked {
+    type Output = Self;
+
+    fn div(self, q: Self) -> Self {
+        let value = self.value / q.value;
+        let own = value.mul_add(q.value, -self.value) / self.value;
+        let rounding = self.rounding - q.rounding + own;
+        Self { value, rounding }
+    }
+}
+
+/// What a forest composes its ratios with: `f64`, or [`Tracked`] to carry their rounding.
+trait Ratio: Copy + From<f64> + Into<f64> + Mul<Output = Self> + Div<Output = Self> {}
+
+impl<R: Copy + From<f64> + Into<f64> + Mul<Output = R> + Div<Output = R>> Ratio for R {}
+
 /// Union-find whose links carry `u_child / u_parent`.
-struct RatioForest<I> {
+struct RatioForest<I, R> {
     parent: Vec<I>,
     /// `1` at a root.
-    ratio: Vec<f64>,
+    ratio: Vec<R>,
     size: Vec<I>,
     /// How far a closing cycle may miss, relative.
     tolerance: f64,
 }
 
-impl<I: Index> RatioForest<I> {
+impl<I: Index, R: Ratio> RatioForest<I, R> {
     fn new(n: usize, tolerance: f64) -> Self {
         Self {
             parent: (0..n).map(I::from_index).collect(),
-            ratio: vec![1.0; n],
+            ratio: vec![R::from(1.0); n],
             size: vec![I::one(); n],
             tolerance,
         }
     }
 
     /// Root and `u_i / u_root`, halving the path.
-    fn find(&mut self, mut i: usize) -> (usize, f64) {
-        let mut x = 1.0;
+    fn find(&mut self, mut i: usize) -> (usize, R) {
+        let mut x = R::from(1.0);
         while self.parent[i].index() != i {
             let up = self.parent[i].index();
-            self.ratio[i] *= self.ratio[up];
+            self.ratio[i] = self.ratio[i] * self.ratio[up];
             self.parent[i] = self.parent[up];
-            x *= self.ratio[i];
+            x = x * self.ratio[i];
             i = self.parent[i].index();
         }
         (i, x)
     }
 
     /// Joins `u_b = k·u_a`; `false` on a broken cycle or a ratio leaving the finite nonzero range.
-    fn join(&mut self, a: usize, b: usize, k: f64) -> bool {
+    fn join(&mut self, a: usize, b: usize, k: R) -> bool {
         // An overflowed `v_a/v_b` would compare `∞ ≤ tolerance·∞` and pass.
-        if !k.is_finite() {
+        if !k.into().is_finite() {
             return false;
         }
         let ((ra, xa), (rb, xb)) = (self.find(a), self.find(b));
         if ra == rb {
-            let (want, have) = (k * xa, xb);
+            let (want, have): (f64, f64) = ((k * xa).into(), xb.into());
             return (want - have).abs() <= self.tolerance * want.abs().max(have.abs());
         }
         // `u_rb = (k·xa/xb)·u_ra`, inverted when `ra` goes under `rb`.
@@ -105,6 +170,7 @@ impl<I: Index> RatioForest<I> {
         self.parent[small] = I::from_index(big);
         self.ratio[small] = ratio;
         self.size[big] = self.size[big] + self.size[small];
+        let ratio: f64 = ratio.into();
         ratio.is_finite() && ratio != 0.0
     }
 }

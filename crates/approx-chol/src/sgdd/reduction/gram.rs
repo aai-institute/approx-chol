@@ -6,7 +6,7 @@ use super::{Congruent, Signed, SymmetricBlock, SINGULAR_BAND};
 use crate::input::{BipartiteGram, FactorWidth2, IntoColumns};
 use crate::sgdd::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
 use crate::sgdd::decomposition::{assemble_bipartite_gram, assemble_general, Components};
-use crate::sgdd::null_vectors::null_vectors;
+use crate::sgdd::null_vectors::{null_vector_roundings, null_vectors};
 use crate::sgdd::scaling::ScalingPolicy;
 use crate::{narrow, widen, Index, Real};
 
@@ -43,9 +43,12 @@ fn reduce_gram_blocks<T: Real, I: Index>(
 ) -> Result<Sgdd<T, I>, ReduceError> {
     // Built by the first block not already dominant, so a dominant input reads no extra pass.
     let nulls = LazyCell::new(|| null_vectors(v, partition.components()));
+    // Walked again only for a null-scaled row past its band, so a dominant or settled input pays nothing.
+    let roundings = LazyCell::new(|| null_vector_roundings(v, partition.components()));
+    let rounding = |vertex: usize| roundings[vertex];
     let (mut folded, mut frustrated) = (Vec::new(), Vec::new());
     for a in live {
-        match a.reduce_gram(policy, &nulls)? {
+        match a.reduce_gram(policy, &nulls, &rounding)? {
             Signed::Folded(m, _) => folded.push(m),
             Signed::Frustrated(block) => frustrated.push(block),
         }
