@@ -140,21 +140,19 @@ impl<T: Real, I: Index> Rows<T, I> {
         }
     }
 
-    /// `Σ|x|` per row and per column, in `f64` in row order.
-    pub(crate) fn abs_sums(&self) -> (Vec<f64>, Vec<f64>) {
-        let mut cols = vec![0.0; self.n_cols];
-        let rows = (0..self.n_rows())
-            .map(|i| {
-                let mut sum = 0.0;
-                for (j, x) in self.row(i) {
-                    let x = widen(x.abs());
-                    sum += x;
-                    cols[j] += x;
-                }
-                sum
-            })
-            .collect();
-        (rows, cols)
+    /// `Σ|x|` in `f64`, row `i`'s at `i`, column `j`'s at `offset + j`: a row lands whole, after any column sharing its slot.
+    pub(crate) fn abs_sums(&self, offset: usize) -> Vec<f64> {
+        let mut sums = vec![0.0; offset + self.n_cols];
+        for i in 0..self.n_rows() {
+            let mut sum = 0.0;
+            for (j, x) in self.row(i) {
+                let x = widen(x.abs());
+                sum += x;
+                sums[offset + j] += x;
+            }
+            sums[i] += sum;
+        }
+        sums
     }
 
     fn nonpositive(&self) -> bool {
@@ -175,14 +173,20 @@ impl<T: Real, I: Index> Rows<T, I> {
     }
 
     /// Scaled by `r` on rows and `c` on columns, with the new [`abs_sums`](Self::abs_sums) from the same pass.
-    fn scaled_abs_sums(self, r: &[T], c: &[T]) -> Option<(Self, Vec<f64>, Vec<f64>)> {
-        let (mut rows, mut cols) = (vec![0.0; self.n_rows()], vec![0.0; self.n_cols]);
+    fn scaled_abs_sums(self, r: &[T], c: &[T], offset: usize) -> Option<(Self, Vec<f64>)> {
+        let mut sums = vec![0.0; offset + self.n_cols];
+        let mut row = (0, 0.0);
         let scaled = self.scaled_seeing(r, c, |i, j, x| {
             let x = widen(x.abs());
-            rows[i] += x;
-            cols[j] += x;
+            if i != row.0 {
+                sums[row.0] += row.1;
+                row = (i, 0.0);
+            }
+            row.1 += x;
+            sums[offset + j] += x;
         })?;
-        Some((scaled, rows, cols))
+        sums[row.0] += row.1;
+        Some((scaled, sums))
     }
 
     #[inline(always)]
@@ -265,23 +269,8 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
 
     /// `Σ_j |a_ij|` per row in local order: dominance, surplus and pivots all start here.
     pub(crate) fn abs_row_sums(&self) -> Vec<T> {
-        let (rows, general) = (self.rows(), matches!(self, Self::General(_)));
-        // A general row's column share is complete when it is reached: the upper triangle feeds only later rows.
-        let mut columns = vec![0.0_f64; rows.n_cols];
-        let mut sums: Vec<T> = Vec::with_capacity(self.n());
-        for i in 0..rows.n_rows() {
-            let mut sum = 0.0;
-            for (j, x) in rows.row(i) {
-                let x = widen(x.abs());
-                sum += x;
-                columns[j] += x;
-            }
-            sums.push(narrow(if general { sum + columns[i] } else { sum }));
-        }
-        if !general {
-            sums.extend(columns.into_iter().map(narrow::<T>));
-        }
-        sums
+        let (rows, offset) = self.stored();
+        rows.abs_sums(offset).into_iter().map(narrow).collect()
     }
 
     /// `Σ_ij |a_ij|` over both triangles, compensated.
@@ -304,19 +293,18 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
 
     /// `F X F` with the new row sums from the same pass; `None` where an entry leaves range.
     pub(crate) fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
-        let (scaled, first, second) = match self {
+        let (scaled, sums) = match self {
             Self::General(adjacency) => {
-                let (rows, upper, lower) = adjacency.rows.scaled_abs_sums(f, f)?;
-                (Self::General(UpperAdjacency { rows }), upper, lower)
+                let (rows, sums) = adjacency.rows.scaled_abs_sums(f, f, 0)?;
+                (Self::General(UpperAdjacency { rows }), sums)
             }
             Self::Bipartite(cross) => {
                 let (eliminated, kept) = f.split_at(cross.n_rows());
-                let (cross, rows, cols) = cross.scaled_abs_sums(eliminated, kept)?;
-                (Self::Bipartite(cross), rows, cols)
+                let (cross, sums) = cross.scaled_abs_sums(eliminated, kept, eliminated.len())?;
+                (Self::Bipartite(cross), sums)
             }
         };
-        let sums = scaled.merged(first, second);
-        Some((scaled, sums))
+        Some((scaled, sums.into_iter().map(narrow).collect()))
     }
 
     /// The most entries in any row, both triangles counted.
@@ -368,16 +356,6 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
         match self {
             Self::General(adjacency) => &adjacency.rows,
             Self::Bipartite(cross) => cross,
-        }
-    }
-
-    /// An upper triangle's row and column sums add; a bipartite block's sides chain.
-    fn merged(&self, first: Vec<f64>, second: Vec<f64>) -> Vec<T> {
-        match self {
-            Self::General(_) => (first.iter().zip(second))
-                .map(|(u, l)| narrow(u + l))
-                .collect(),
-            Self::Bipartite(_) => first.into_iter().chain(second).map(narrow).collect(),
         }
     }
 }

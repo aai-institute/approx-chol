@@ -108,8 +108,8 @@ pub(in crate::sgdd) fn assemble_bipartite<T: Real, I: Index>(
     v: impl BipartiteColumns<T>,
 ) -> Result<DominantBipartite<T, I>, ReduceError> {
     let a = cross(v, |_| {})?;
-    let (rows, columns) = a.a.abs_sums();
-    dominant(a, &[rows, columns].concat(), None)
+    let sums = a.a.abs_sums(a.a.n_rows());
+    dominant(a, &sums, None)
 }
 
 /// As [`assemble_bipartite`], with `A`'s diagonal summed in the same column pass.
