@@ -139,7 +139,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                     vertices: self.vertices,
                     congruence: Congruence::Scaled(Scales::new(factors)),
                     off_diagonal,
-                    report: policy.report(relaxation.shortfall(), deficit),
+                    report: policy.report(relaxation.shortfall, deficit),
                 };
                 (m, RowSums { diagonal, abs })
             }
