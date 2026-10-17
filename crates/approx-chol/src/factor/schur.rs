@@ -48,9 +48,9 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         Self::with_pivots(cross, inv_pivot)
     }
 
-    /// Whether an elimination of `c` keeps `Cᵀ`: past 10 000 rows (0.6's threshold).
+    /// Whether an elimination of `c` keeps `Cᵀ`: past `2^17` entries, the forward's work, as `rows_per_task` splits it.
     pub(super) fn transposes(c: &Rows<T, I>) -> bool {
-        c.n_rows() > 10_000
+        c.nnz() > 1 << 17
     }
 
     fn with_pivots(cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
