@@ -330,6 +330,7 @@ impl<T: Real, I: Index> Block<T, I> {
                             &grounding,
                             streams,
                         );
+                        drop(grounding);
                         (elimination, factor(s))
                     }
                 };
