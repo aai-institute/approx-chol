@@ -68,7 +68,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     }
 
     /// `S = D_k − Cᵀ D_e⁻¹ C` on `sheets`, exact by kept row.
-    pub(super) fn complement(&self, sheets: Sheets, grounding: &Grounding<T>) -> Sddm<T, I> {
+    pub(super) fn complement(&self, sheets: Sheets, grounding: Grounding<T>) -> Sddm<T, I> {
         let surplus = grounding.surplus();
         let rows = match sheets {
             Sheets::One => exact_rows(self, surplus),

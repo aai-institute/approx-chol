@@ -285,11 +285,7 @@ impl<T: Real, I: Index> Block<T, I> {
             OffDiagonal::General(adjacency) => {
                 let sddm = match sheets {
                     Sheets::One => Sddm::new(adjacency, grounding, sheets),
-                    Sheets::Two => {
-                        let cover = Sddm::cover(&adjacency, &grounding);
-                        drop(adjacency);
-                        cover
-                    }
+                    Sheets::Two => Sddm::cover(adjacency, grounding),
                 };
                 let factored = Cholesky::factor(sddm, streams.cholesky(), config, scales(0));
                 (None, factored)
@@ -304,7 +300,7 @@ impl<T: Real, I: Index> Block<T, I> {
                 let (elimination, factored) = match rule {
                     CliqueRule::Exact => {
                         let elimination = BlockElimination::new(cross, &grounding);
-                        let factored = factor(elimination.complement(sheets, &grounding));
+                        let factored = factor(elimination.complement(sheets, grounding));
                         (elimination, factored)
                     }
                     // A kept `Cᵀ` is built once `S` is factored, so it never shares that peak.
