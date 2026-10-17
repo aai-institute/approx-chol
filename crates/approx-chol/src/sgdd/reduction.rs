@@ -146,7 +146,9 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         };
         match folded {
             true => Ok(Signed::Folded(m, rows)),
-            false => Ok(Signed::Frustrated(m.frustrated(rows.surplus())?)),
+            false => Ok(Signed::Frustrated(
+                m.block(Balance::Frustrated(rows.surplus()))?,
+            )),
         }
     }
 }
@@ -180,26 +182,14 @@ impl<T: Real, I: Index> Congruent<T, I> {
         }
     }
 
-    fn frustrated(self, grounding: Grounding<T>) -> Result<IrreducibleBlock<T, I>, ReduceError> {
-        let balance = Balance::Frustrated(grounding);
-        IrreducibleBlock::new(
-            self.vertices,
-            self.congruence,
-            self.off_diagonal,
-            balance,
-            self.report,
-        )
-    }
-
-    fn balanced(self, grounding: Grounding<T>) -> Result<IrreducibleBlock<T, I>, ReduceError> {
-        let balance = Balance::Balanced(grounding);
-        IrreducibleBlock::new(
-            self.vertices,
-            self.congruence,
-            self.off_diagonal,
-            balance,
-            self.report,
-        )
+    fn block(self, balance: Balance<T>) -> Result<IrreducibleBlock<T, I>, ReduceError> {
+        let Self {
+            vertices,
+            congruence,
+            off_diagonal,
+            report,
+        } = self;
+        IrreducibleBlock::new(vertices, congruence, off_diagonal, balance, report)
     }
 }
 
