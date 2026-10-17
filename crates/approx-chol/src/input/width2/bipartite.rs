@@ -7,7 +7,7 @@ use super::{BipartiteColumns, Column, IntoColumns, ViewError};
 use crate::{Index, Real};
 
 /// One side of `V`, with at most one nonzero per column: `values[k]` at `rows[k]`, `1` for `None`.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct FactorWidth1<'a, T, I = u32> {
     n: usize,
     rows: &'a [I],
@@ -28,14 +28,6 @@ impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
         Ok(Self { n, rows, values })
     }
 }
-
-impl<T, I> Clone for FactorWidth1<'_, T, I> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T, I> Copy for FactorWidth1<'_, T, I> {}
 
 /// `A = V W Vᵀ` with `V = [V_l; V_r]`, both width 1 on disjoint rows, left rows numbered first.
 #[derive(Clone, Copy, Debug)]
