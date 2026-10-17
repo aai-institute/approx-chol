@@ -6,7 +6,7 @@ use super::partition::{Partition, UnionFind};
 use std::borrow::Cow;
 
 use super::{
-    Assembled, BipartiteGram, Dominant, DominantBipartite, DominantGraph, General, Partitioned,
+    Assembled, AssembledBipartite, Dominant, DominantBipartite, DominantGraph, General, Partitioned,
 };
 use crate::input::{BipartiteColumns, Column, IntoColumns, Laplacian, SignedGraph};
 use crate::sgdd::block::ReduceError;
@@ -115,7 +115,7 @@ pub(in crate::sgdd) fn assemble_bipartite<T: Real, I: Index>(
 /// As [`assemble_bipartite`], with `A`'s diagonal summed in the same column pass.
 pub(in crate::sgdd) fn assemble_bipartite_gram<T: Real, I: Index>(
     v: impl BipartiteColumns<T>,
-) -> Result<BipartiteGram<T, I>, ReduceError> {
+) -> Result<AssembledBipartite<T, I>, ReduceError> {
     let mut sums = vec![0.0_f64; v.n()];
     let Partitioned { a, partition } = cross(v, |column| add_squares(&mut sums, column))?;
     let a = Assembled {
