@@ -206,6 +206,10 @@ fn from_fill<T: Real, I: Index>(
     shift: u32,
     pieces: Vec<Vec<Fill<T, I>>>,
 ) -> (UpperAdjacency<T, I>, Vec<T>) {
+    let bucket = |b: usize| pieces.iter().map(|p| p.get(b).map_or(0, Vec::len)).sum();
+    let most = (0..n.div_ceil(1 << shift)).map(bucket).max().unwrap_or(0);
+    let (mut columns, mut weights) = (vec![I::zero(); most], vec![T::zero(); most]);
+    let (mut starts, mut next) = (Vec::new(), Vec::new());
     let mut pieces: Vec<_> = pieces.into_iter().map(Vec::into_iter).collect();
     let mut rows = SddmRows::new(n);
     for first in (0..n).step_by(1 << shift) {
@@ -213,7 +217,8 @@ fn from_fill<T: Real, I: Index>(
             .map(|p| p.next().unwrap_or_default())
             .collect();
         let len = (n - first).min(1 << shift);
-        let mut starts = vec![0; len + 1];
+        starts.clear();
+        starts.resize(len + 1, 0);
         // Nested loops, not `flatten()`: the flat iterator cost ~10% on both passes at 1M+ edges.
         for chunk in &chunks {
             for &(lo, _, _) in chunk {
@@ -223,9 +228,8 @@ fn from_fill<T: Real, I: Index>(
         for i in 0..len {
             starts[i + 1] += starts[i];
         }
-        let mut next = starts[..len].to_vec();
-        let (mut columns, mut weights) =
-            (vec![I::zero(); starts[len]], vec![T::zero(); starts[len]]);
+        next.clear();
+        next.extend_from_slice(&starts[..len]);
         for chunk in chunks {
             for (lo, hi, w) in chunk {
                 let at = next[lo.index() - first];
@@ -234,7 +238,6 @@ fn from_fill<T: Real, I: Index>(
                 next[lo.index() - first] += 1;
             }
         }
-        drop(next);
         for span in starts.windows(2) {
             for (&hi, &w) in columns[span[0]..span[1]]
                 .iter()
