@@ -265,8 +265,23 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
 
     /// `Σ_j |a_ij|` per row in local order: dominance, surplus and pivots all start here.
     pub(crate) fn abs_row_sums(&self) -> Vec<T> {
-        let (first, second) = self.rows().abs_sums();
-        self.merged(first, second)
+        let (rows, general) = (self.rows(), matches!(self, Self::General(_)));
+        // A general row's column share is complete when it is reached: the upper triangle feeds only later rows.
+        let mut columns = vec![0.0_f64; rows.n_cols];
+        let mut sums: Vec<T> = Vec::with_capacity(self.n());
+        for i in 0..rows.n_rows() {
+            let mut sum = 0.0;
+            for (j, x) in rows.row(i) {
+                let x = widen(x.abs());
+                sum += x;
+                columns[j] += x;
+            }
+            sums.push(narrow(if general { sum + columns[i] } else { sum }));
+        }
+        if !general {
+            sums.extend(columns.into_iter().map(narrow::<T>));
+        }
+        sums
     }
 
     /// `Σ_ij |a_ij|` over both triangles, compensated.

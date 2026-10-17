@@ -222,8 +222,9 @@ impl<T: Real> RowSums<T> {
 
     /// Each row's residue, deficits clamped to zero.
     fn surplus(self) -> Grounding<T> {
-        let rows = self.diagonal.iter().zip(&self.abs);
-        Grounding::of(rows.map(|(&d, &s)| (d - s).max(T::zero())).collect())
+        let Self { mut diagonal, abs } = self;
+        (diagonal.iter_mut().zip(&abs)).for_each(|(d, &s)| *d = (*d - s).max(T::zero()));
+        Grounding::of(diagonal)
     }
 }
 
