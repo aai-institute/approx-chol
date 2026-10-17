@@ -176,3 +176,18 @@ fn a_settled_f32_scaling_is_judged_against_its_band(
     assert_eq!(block.scaling_report(), None);
     assert!(block.floats());
 }
+
+/// A null vector spanning `2^28` puts `μ²` across `2^112`, past `f32`'s range when peaked at `1`; every entry of `V` is in range.
+#[test]
+fn a_wide_f32_gram_null_vector_scales_in_range() {
+    let n = 1000u32;
+    let mut draws = Draws(0);
+    let u: Vec<f64> = (0..n).map(|_| draws.log_uniform(28)).collect();
+    let a: Vec<u32> = (0..n).collect();
+    let b: Vec<u32> = (0..n).map(|i| (i + 1) % n).collect();
+    let x: Vec<f32> = b.iter().map(|&j| u[j as usize] as f32).collect();
+    let y: Vec<f32> = a.iter().map(|&i| -u[i as usize] as f32).collect();
+    let gram = FactorWidth2::new(n as usize, &a, &b, &x, &y).expect("valid columns");
+    let factor = factorize(gram).expect("admitted");
+    assert!(factor.blocks()[0].floats());
+}
