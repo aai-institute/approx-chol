@@ -30,7 +30,7 @@ pub(crate) struct Scales<T> {
 
 impl<T: Real> Scales<T> {
     pub(super) fn new(factors: Box<[T]>) -> Self {
-        let peak = crate::factor::largest(&factors);
+        let peak = crate::largest(&factors);
         let largest = factors.iter().fold(T::zero(), |m, f| m.max(f.abs()));
         let unit = |&f: &T| {
             let u = widen(f / largest);

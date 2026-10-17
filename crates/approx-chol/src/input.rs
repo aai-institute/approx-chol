@@ -17,8 +17,7 @@ pub use width2::signed::SignedGraph;
 pub(crate) use width2::{BipartiteColumns, Column, IntoColumns};
 pub use width2::{FactorWidth2, ViewError};
 
-use crate::sgdd::Sgdd;
-use crate::{Error, Index, Real, ScalingPolicy};
+use crate::Real;
 
 /// Any view [`factorize`](crate::factorize) takes, each converted by `From`.
 #[non_exhaustive]
@@ -49,18 +48,6 @@ impl<T: Real, J: PrimInt + Sync> Input<'_, T, J> {
             Self::Gram(v) => v.n(),
             Self::BipartiteGram(gram) => gram.n(),
         }
-    }
-
-    /// The view's irreducible blocks, each reduced; `policy` scales those not already dominant.
-    pub(crate) fn reduce<I: Index>(self, policy: ScalingPolicy) -> Result<Sgdd<T, I>, Error> {
-        Ok(match self {
-            Self::Csr(csr) => Sgdd::from_csr(csr, policy)?,
-            Self::UpperCsr(csr) => Sgdd::from_upper_csr(csr, policy)?,
-            Self::Laplacian(laplacian) => Sgdd::try_from(laplacian)?,
-            Self::SignedGraph(graph) => Sgdd::try_from(graph)?,
-            Self::Gram(v) => Sgdd::from_gram(v, policy)?,
-            Self::BipartiteGram(gram) => Sgdd::from_bipartite_gram(gram, policy)?,
-        })
     }
 }
 

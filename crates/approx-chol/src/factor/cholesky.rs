@@ -4,9 +4,8 @@ mod dense;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use super::config::Config;
-use super::largest;
 use super::sddm::{descend, lift, Sddm, Sheets};
-use crate::narrow;
+use crate::{largest, narrow};
 use crate::{widen, Index, Real};
 use approximate::ApproximateCholesky;
 

@@ -379,15 +379,6 @@ impl<T: Real, I: Index> Block<T, I> {
     }
 }
 
-/// An index of the largest `|f|`, where pinning the gauge leaves its rounding unamplified by `1/f`.
-pub(crate) fn largest<T: Real>(f: &[T]) -> usize {
-    let last = f.len().saturating_sub(1);
-    (0..last).fold(last, |best, i| match f[i].abs() > f[best].abs() {
-        true => i,
-        false => best,
-    })
-}
-
 /// One block's keys, so no draw depends on thread scheduling or on how other blocks routed.
 #[derive(Clone, Copy, Debug)]
 struct Streams {
@@ -621,12 +612,12 @@ mod storage {
         ];
         for config in configs {
             let narrow = Factor::build(
-                input.reduce(policy).expect("reduces"),
+                Sgdd::reduce(input, policy).expect("reduces"),
                 &config,
                 Storage::U32,
             );
             let wide = Factor::build(
-                input.reduce(policy).expect("reduces"),
+                Sgdd::reduce(input, policy).expect("reduces"),
                 &config,
                 Storage::U64,
             );
