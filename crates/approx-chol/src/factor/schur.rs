@@ -156,14 +156,13 @@ pub(super) fn sampled<T: Real, I: Index>(
         let s_e = surplus.map(|s| s[e]).filter(|&s| s > T::zero());
         s_e.map(|s| (ground, s))
     };
-    let shift = bucket_shift(n);
     let fill = match sheets {
         // One sheet maps no column, as the balanced loop pays for any map.
-        Sheets::One => fill_stars(copies, c.n_rows(), shift, |e| {
+        Sheets::One => fill_stars(copies, c.n_rows(), n, |e| {
             let neighbors = c.row(e).map(|(k, &c)| (I::from_index(k), c.abs()));
             (stars.star(e), neighbors.chain(ground_share(e)))
         }),
-        Sheets::Two => fill_stars(copies, 2 * c.n_rows(), shift, |star| {
+        Sheets::Two => fill_stars(copies, 2 * c.n_rows(), n, |star| {
             let (sheet, e) = (star / c.n_rows(), star % c.n_rows());
             let neighbors = c.row(e).map(move |(k, &c)| {
                 let on = sheet ^ usize::from(crosses(c));
@@ -172,12 +171,30 @@ pub(super) fn sampled<T: Real, I: Index>(
             (stars.star(star), neighbors.chain(ground_share(e)))
         }),
     };
-    schur(from_fill(n, shift, fill), n_kept, sheets, surplus)
+    schur(from_fill(n, fill), n_kept, sheets, surplus)
 }
 
 /// Rows per fill bucket, as a shift: at most 16 buckets, so one bucket's sorted copy is all the fill ever copied at once.
 fn bucket_shift(n: usize) -> u32 {
     (usize::BITS - n.saturating_sub(1).leading_zeros()).saturating_sub(4)
+}
+
+/// One thread's fill over `n` rows, split by `lo` into the ranges of [`bucket_shift`].
+struct Buckets<T, I> {
+    shift: u32,
+    fill: Vec<Fill<T, I>>,
+}
+
+impl<T, I: Index> Buckets<T, I> {
+    fn new(n: usize) -> Self {
+        let shift = bucket_shift(n);
+        let fill = (0..n.div_ceil(1 << shift)).map(|_| Fill::new()).collect();
+        Self { shift, fill }
+    }
+
+    fn push(&mut self, edge: (I, I, T)) {
+        self.fill[edge.0.index() >> self.shift].push(edge);
+    }
 }
 
 /// The kept rows with each kept vertex's surplus added to its ground share.
@@ -203,20 +220,21 @@ fn schur<T: Real, I: Index>(
 /// Bucket by bucket, counting-sorts the chunks' rows unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.
 fn from_fill<T: Real, I: Index>(
     n: usize,
-    shift: u32,
-    pieces: Vec<Vec<Fill<T, I>>>,
+    mut pieces: Vec<Buckets<T, I>>,
 ) -> (UpperAdjacency<T, I>, Vec<T>) {
-    let bucket = |b: usize| pieces.iter().map(|p| p.get(b).map_or(0, Vec::len)).sum();
-    let most = (0..n.div_ceil(1 << shift)).map(bucket).max().unwrap_or(0);
+    let stride = 1 << bucket_shift(n);
+    let count = n.div_ceil(stride);
+    let bucket = |b: usize| pieces.iter().map(|p| p.fill[b].len()).sum();
+    let most = (0..count).map(bucket).max().unwrap_or(0);
     let (mut columns, mut weights) = (vec![I::zero(); most], vec![T::zero(); most]);
     let (mut starts, mut next) = (Vec::new(), Vec::new());
-    let mut pieces: Vec<_> = pieces.into_iter().map(Vec::into_iter).collect();
     let mut rows = SddmRows::new(n);
-    for first in (0..n).step_by(1 << shift) {
+    for b in 0..count {
         let chunks: Vec<Fill<T, I>> = (pieces.iter_mut())
-            .map(|p| p.next().unwrap_or_default())
+            .map(|p| std::mem::take(&mut p.fill[b]))
             .collect();
-        let len = (n - first).min(1 << shift);
+        let first = b * stride;
+        let len = (n - first).min(stride);
         starts.clear();
         starts.resize(len + 1, 0);
         // Nested loops, not `flatten()`: the flat iterator cost ~10% on both passes at 1M+ edges.
@@ -255,40 +273,34 @@ fn from_fill<T: Real, I: Index>(
 fn fill_stars<T: Real, I: Index, N: Iterator<Item = (I, T)>>(
     copies: Multiplicity,
     n_stars: usize,
-    shift: u32,
+    n: usize,
     star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
-) -> Vec<Vec<Fill<T, I>>> {
+) -> Vec<Buckets<T, I>> {
     match copies {
-        Multiplicity::Single => sample_stars::<T, I, Single, N>((), n_stars, shift, star),
-        Multiplicity::Split(k) => sample_stars::<T, I, Multi, N>(k, n_stars, shift, star),
+        Multiplicity::Single => sample_stars::<T, I, Single, N>((), n_stars, n, star),
+        Multiplicity::Split(k) => sample_stars::<T, I, Multi, N>(k, n_stars, n, star),
     }
 }
 
-/// Each eliminated star's clique tree on each sheet under its own stream, the ground a final neighbor unless its share is zero; fill bucketed by `lo >> shift`.
+/// Each eliminated star's clique tree on each sheet under its own stream, the ground a final neighbor unless its share is zero; fill bucketed over `n` rows.
 fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
     split: C::Split,
     n_stars: usize,
-    shift: u32,
+    n: usize,
     star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
-) -> Vec<Vec<Fill<T, I>>> {
+) -> Vec<Buckets<T, I>> {
     (0..n_stars)
         .into_par_iter()
         .fold(
-            || (CliqueSampler::<T, I, C>::new(split), Vec::new()),
-            |(mut sampler, mut buckets): (_, Vec<Fill<T, I>>), i| {
+            || (CliqueSampler::<T, I, C>::new(split), Buckets::new(n)),
+            |(mut sampler, mut buckets), i| {
                 let (draws, neighbors) = star(i);
-                sampler.eliminate_unique(draws, neighbors, |edge: (I, I, T)| {
-                    let b = edge.0.index() >> shift;
-                    if b >= buckets.len() {
-                        buckets.resize_with(b + 1, Fill::new);
-                    }
-                    buckets[b].push(edge);
-                });
+                sampler.eliminate_unique(draws, neighbors, |edge| buckets.push(edge));
                 (sampler, buckets)
             },
         )
         .map(|(_, mut buckets)| {
-            buckets.iter_mut().for_each(Vec::shrink_to_fit);
+            buckets.fill.iter_mut().for_each(Vec::shrink_to_fit);
             buckets
         })
         .collect()
