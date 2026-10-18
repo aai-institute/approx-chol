@@ -1,7 +1,5 @@
 //! Block elimination of a bipartite block's larger, independent side, and the Schur complement it leaves.
 
-use std::borrow::Cow;
-
 use rayon::prelude::*;
 
 use rand::rngs::Xoshiro256PlusPlus;
@@ -34,11 +32,6 @@ pub(super) struct BlockElimination<T, I> {
 }
 
 impl<T: Real, I: Index> BlockElimination<T, I> {
-    pub(super) fn new(cross: Rows<T, I>, grounding: &Grounding<T>) -> Self {
-        let inv_pivot = Self::pivots(&cross, grounding);
-        Self::with_pivots(cross, inv_pivot)
-    }
-
     /// Inverse pivots `1/(Σ|c_ek| + s_e)`, the same on both sheets of a cover.
     pub(super) fn pivots(c: &Rows<T, I>, grounding: &Grounding<T>) -> Box<[T]> {
         let surplus = grounding.surplus();
@@ -52,7 +45,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     }
 
     /// Whether an elimination of `c` keeps `Cᵀ`: past `2^17` entries, the forward's work, as `rows_per_task` splits it.
-    pub(super) fn transposes(c: &Rows<T, I>) -> bool {
+    fn transposes(c: &Rows<T, I>) -> bool {
         c.nnz() > 1 << 17
     }
 
@@ -65,21 +58,6 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         }
     }
 
-    /// `C`, for `S` sampled after the pivots.
-    pub(super) fn cross(&self) -> &Rows<T, I> {
-        &self.cross
-    }
-
-    /// `S = D_k − Cᵀ D_e⁻¹ C` on `sheets`, exact by kept row.
-    pub(super) fn complement(&self, sheets: Sheets, grounding: Grounding<T>) -> Sddm<T, I> {
-        let surplus = grounding.surplus();
-        let rows = match sheets {
-            Sheets::One => exact_rows(self, surplus),
-            Sheets::Two => cover_rows(self, surplus),
-        };
-        schur(rows, self.cross.n_cols(), sheets, surplus)
-    }
-
     pub(super) fn n_eliminated(&self) -> usize {
         self.inv_pivot.len()
     }
@@ -90,11 +68,6 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
             Some(_) => 2 * self.cross.nnz() + self.cross.n_rows() + self.cross.n_cols(),
             None => 0,
         }
-    }
-
-    /// `Cᵀ`, borrowed where it is kept.
-    fn transpose(&self) -> Cow<'_, Rows<T, I>> {
-        (self.ct.as_ref()).map_or_else(|| Cow::Owned(self.cross.transpose()), Cow::Borrowed)
     }
 
     /// `y_e = D_e⁻¹ b_e`, then each `b_k` subtracts `c_ek y_e` term by term in ascending `e`: scattered through `C`, or gathered through `Cᵀ` under `Allow` where it is kept, the same bits either way.
@@ -142,6 +115,21 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
                 .for_each(|(e, y)| row(e, y));
         }
     }
+}
+
+/// `S = D_k − Cᵀ D_e⁻¹ C` on `sheets`, exact by kept row through a `Cᵀ` freed before `S` is factored.
+pub(super) fn exact<T: Real, I: Index>(
+    c: &Rows<T, I>,
+    inv_pivot: &[T],
+    sheets: Sheets,
+    grounding: Grounding<T>,
+) -> Sddm<T, I> {
+    let (ct, surplus) = (c.transpose(), grounding.surplus());
+    let rows = match sheets {
+        Sheets::One => exact_rows(c, &ct, inv_pivot, surplus),
+        Sheets::Two => cover_rows(c, &ct, inv_pivot, surplus),
+    };
+    schur(rows, c.n_cols(), sheets, surplus)
 }
 
 /// `S` sampled by star in parallel; clique trees need no pivots, so no elimination exists yet. σ is read last here, so it is freed before `S` is factored.
@@ -311,13 +299,12 @@ fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
 
 /// Rows of the cover's complement: `|c_ke||c_je|/d_e` to `j`'s same sheet when signs agree, else its other; `k⁻` mirrors `k⁺`, so each sums only `j > k`; the ground's share as column `2·n_kept`.
 fn cover_rows<T: Real, I: Index>(
-    elimination: &BlockElimination<T, I>,
+    c: &Rows<T, I>,
+    ct: &Rows<T, I>,
+    inv_pivot: &[T],
     surplus: Option<&[T]>,
 ) -> (UpperAdjacency<T, I>, Vec<T>) {
-    let BlockElimination {
-        cross, inv_pivot, ..
-    } = elimination;
-    let (c, ct, n_kept) = (cross, elimination.transpose(), cross.n_cols());
+    let n_kept = c.n_cols();
     SddmRows::split(Sheets::Two, n_kept, rows_per_task(c), |mut rows, k| {
         for (e, &c_ek) in ct.row(k) {
             for (j, &c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
@@ -336,13 +323,12 @@ fn cover_rows<T: Real, I: Index>(
 
 /// Rows of a folded block's complement, `|c_ke||c_je|/d_e` as the smaller times the larger's share, the ground's `|c_ke| s_e/d_e` as column `n_kept`; a product underflowing to zero is dropped, as a stored zero couples nothing.
 fn exact_rows<T: Real, I: Index>(
-    elimination: &BlockElimination<T, I>,
+    c: &Rows<T, I>,
+    ct: &Rows<T, I>,
+    inv_pivot: &[T],
     surplus: Option<&[T]>,
 ) -> (UpperAdjacency<T, I>, Vec<T>) {
-    let BlockElimination {
-        cross, inv_pivot, ..
-    } = elimination;
-    let (c, ct, n_kept) = (cross, elimination.transpose(), cross.n_cols());
+    let n_kept = c.n_cols();
     SddmRows::split(Sheets::One, n_kept, rows_per_task(c), |mut rows, k| {
         for (e, c_ek) in ct.row(k) {
             let c_ek = c_ek.abs();
