@@ -34,18 +34,21 @@ pub(super) struct BlockElimination<T, I> {
 }
 
 impl<T: Real, I: Index> BlockElimination<T, I> {
-    /// Pivots are `Σ|c_ek| + s_e`, the same on both sheets of a cover.
     pub(super) fn new(cross: Rows<T, I>, grounding: &Grounding<T>) -> Self {
+        let inv_pivot = Self::pivots(&cross, grounding);
+        Self::with_pivots(cross, inv_pivot)
+    }
+
+    /// Inverse pivots `1/(Σ|c_ek| + s_e)`, the same on both sheets of a cover.
+    pub(super) fn pivots(c: &Rows<T, I>, grounding: &Grounding<T>) -> Box<[T]> {
         let surplus = grounding.surplus();
-        let c = &cross;
-        let inv_pivot = (0..c.n_rows())
+        (0..c.n_rows())
             .map(|e| {
                 let s_e = surplus.map_or(0.0, |s| widen(s[e]));
                 let d_e = c.row(e).fold(s_e, |d, (_, &c)| d + widen(c.abs()));
                 T::one() / narrow::<T>(d_e)
             })
-            .collect();
-        Self::with_pivots(cross, inv_pivot)
+            .collect()
     }
 
     /// Whether an elimination of `c` keeps `Cᵀ`: past `2^17` entries, the forward's work, as `rows_per_task` splits it.
@@ -53,7 +56,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         c.nnz() > 1 << 17
     }
 
-    fn with_pivots(cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
+    pub(super) fn with_pivots(cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
         let ct = Self::transposes(&cross).then(|| cross.transpose());
         Self {
             cross,
@@ -141,12 +144,12 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     }
 }
 
-/// `S` sampled by star in parallel; clique trees need no pivots, so no elimination exists yet.
+/// `S` sampled by star in parallel; clique trees need no pivots, so no elimination exists yet. σ is read last here, so it is freed before `S` is factored.
 pub(super) fn sampled<T: Real, I: Index>(
     c: &Rows<T, I>,
     copies: Multiplicity,
     sheets: Sheets,
-    grounding: &Grounding<T>,
+    grounding: Grounding<T>,
     stars: Streams,
 ) -> Sddm<T, I> {
     let (n_kept, surplus) = (c.n_cols(), grounding.surplus());

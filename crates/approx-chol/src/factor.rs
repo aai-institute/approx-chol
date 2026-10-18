@@ -316,21 +316,16 @@ impl<T: Real, I: Index> Block<T, I> {
                     }
                     // A kept `Cᵀ` is built once `S` is factored, so it never shares that peak.
                     CliqueRule::Sampled(copies) if BlockElimination::transposes(&cross) => {
-                        let s = schur::sampled(&cross, copies, sheets, &grounding, streams);
+                        let inv_pivot = BlockElimination::pivots(&cross, &grounding);
+                        let s = schur::sampled(&cross, copies, sheets, grounding, streams);
                         let factored = factor(s);
-                        (BlockElimination::new(cross, &grounding), factored)
+                        (BlockElimination::with_pivots(cross, inv_pivot), factored)
                     }
                     // Otherwise the pivot pass reads `C` while it is still warm.
                     CliqueRule::Sampled(copies) => {
                         let elimination = BlockElimination::new(cross, &grounding);
-                        let s = schur::sampled(
-                            elimination.cross(),
-                            copies,
-                            sheets,
-                            &grounding,
-                            streams,
-                        );
-                        drop(grounding);
+                        let s =
+                            schur::sampled(elimination.cross(), copies, sheets, grounding, streams);
                         (elimination, factor(s))
                     }
                 };
