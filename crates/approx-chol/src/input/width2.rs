@@ -7,6 +7,7 @@ pub(super) mod signed;
 
 use num_traits::PrimInt;
 
+use super::index;
 use crate::widen;
 use crate::{Index, Real};
 
@@ -191,9 +192,4 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for FactorWidth2<'_, T, I> {
             });
         }
     }
-}
-
-/// A row `new` checked below `n`.
-fn index<I: PrimInt>(row: I) -> usize {
-    row.to_usize().expect("a checked row")
 }

@@ -1,7 +1,5 @@
 //! Block elimination of a bipartite block's larger, independent side, and the Schur complement it leaves.
 
-use std::borrow::Cow;
-
 use rayon::prelude::*;
 
 use rand::rngs::Xoshiro256PlusPlus;
@@ -34,11 +32,6 @@ pub(super) struct BlockElimination<T, I> {
 }
 
 impl<T: Real, I: Index> BlockElimination<T, I> {
-    pub(super) fn new(cross: Rows<T, I>, grounding: &Grounding<T>) -> Self {
-        let inv_pivot = Self::pivots(&cross, grounding);
-        Self::with_pivots(cross, inv_pivot)
-    }
-
     /// Inverse pivots `1/(Σ|c_ek| + s_e)`, the same on both sheets of a cover.
     pub(super) fn pivots(c: &Rows<T, I>, grounding: &Grounding<T>) -> Box<[T]> {
         let surplus = grounding.surplus();
@@ -52,7 +45,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     }
 
     /// Whether an elimination of `c` keeps `Cᵀ`: past `2^17` entries, the forward's work, as `rows_per_task` splits it.
-    pub(super) fn transposes(c: &Rows<T, I>) -> bool {
+    fn transposes(c: &Rows<T, I>) -> bool {
         c.nnz() > 1 << 17
     }
 
@@ -65,21 +58,6 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         }
     }
 
-    /// `C`, for `S` sampled after the pivots.
-    pub(super) fn cross(&self) -> &Rows<T, I> {
-        &self.cross
-    }
-
-    /// `S = D_k − Cᵀ D_e⁻¹ C` on `sheets`, exact by kept row.
-    pub(super) fn complement(&self, sheets: Sheets, grounding: Grounding<T>) -> Sddm<T, I> {
-        let surplus = grounding.surplus();
-        let rows = match sheets {
-            Sheets::One => exact_rows(self, surplus),
-            Sheets::Two => cover_rows(self, surplus),
-        };
-        schur(rows, self.cross.n_cols(), sheets, surplus)
-    }
-
     pub(super) fn n_eliminated(&self) -> usize {
         self.inv_pivot.len()
     }
@@ -90,11 +68,6 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
             Some(_) => 2 * self.cross.nnz() + self.cross.n_rows() + self.cross.n_cols(),
             None => 0,
         }
-    }
-
-    /// `Cᵀ`, borrowed where it is kept.
-    fn transpose(&self) -> Cow<'_, Rows<T, I>> {
-        (self.ct.as_ref()).map_or_else(|| Cow::Owned(self.cross.transpose()), Cow::Borrowed)
     }
 
     /// `y_e = D_e⁻¹ b_e`, then each `b_k` subtracts `c_ek y_e` term by term in ascending `e`: scattered through `C`, or gathered through `Cᵀ` under `Allow` where it is kept, the same bits either way.
@@ -144,6 +117,21 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     }
 }
 
+/// `S = D_k − Cᵀ D_e⁻¹ C` on `sheets`, exact by kept row through a `Cᵀ` freed before `S` is factored.
+pub(super) fn exact<T: Real, I: Index>(
+    c: &Rows<T, I>,
+    inv_pivot: &[T],
+    sheets: Sheets,
+    grounding: Grounding<T>,
+) -> Sddm<T, I> {
+    let (ct, surplus) = (c.transpose(), grounding.surplus());
+    let rows = match sheets {
+        Sheets::One => exact_rows(c, &ct, inv_pivot, surplus),
+        Sheets::Two => cover_rows(c, &ct, inv_pivot, surplus),
+    };
+    schur(rows, c.n_cols(), sheets, surplus)
+}
+
 /// `S` sampled by star in parallel; clique trees need no pivots, so no elimination exists yet. σ is read last here, so it is freed before `S` is factored.
 pub(super) fn sampled<T: Real, I: Index>(
     c: &Rows<T, I>,
@@ -183,41 +171,21 @@ fn bucket_shift(n: usize) -> u32 {
 }
 
 /// One thread's fill over `n` rows, split by `lo` into the ranges of [`bucket_shift`].
-struct Buckets<T, I> {
-    shift: u32,
-    fill: Vec<Fill<T, I>>,
-}
-
-impl<T, I: Index> Buckets<T, I> {
-    fn new(n: usize) -> Self {
-        let shift = bucket_shift(n);
-        let fill = (0..n.div_ceil(1 << shift)).map(|_| Fill::new()).collect();
-        Self { shift, fill }
-    }
-
-    fn push(&mut self, edge: (I, I, T)) {
-        self.fill[edge.0.index() >> self.shift].push(edge);
-    }
-}
+type Buckets<T, I> = Vec<Fill<T, I>>;
 
 /// The kept rows with each kept vertex's surplus added to its ground share.
 fn schur<T: Real, I: Index>(
-    (adjacency, ground): (UpperAdjacency<T, I>, Vec<T>),
+    (adjacency, mut ground): (UpperAdjacency<T, I>, Vec<T>),
     n_kept: usize,
     sheets: Sheets,
     surplus: Option<&[T]>,
 ) -> Sddm<T, I> {
-    let kept = surplus.map(|s| &s[s.len() - n_kept..]);
-    let surplus = match kept {
-        Some(kept) => {
-            let copies = kept
-                .iter()
-                .flat_map(|&s| std::iter::repeat_n(s, sheets.count()));
-            copies.zip(ground).map(|(s, g)| s + g).collect()
-        }
-        None => ground,
-    };
-    Sddm::new(adjacency, Grounding::of(surplus), sheets)
+    if let Some(surplus) = surplus {
+        let kept = surplus[surplus.len() - n_kept..].iter();
+        let copies = kept.flat_map(|&s| std::iter::repeat_n(s, sheets.count()));
+        (ground.iter_mut().zip(copies)).for_each(|(g, s)| *g = s + *g);
+    }
+    Sddm::new(adjacency, Grounding::of(ground), sheets)
 }
 
 /// Bucket by bucket, counting-sorts the chunks' rows unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.
@@ -227,22 +195,19 @@ fn from_fill<T: Real, I: Index>(
 ) -> (UpperAdjacency<T, I>, Vec<T>) {
     let stride = 1 << bucket_shift(n);
     let count = n.div_ceil(stride);
-    let bucket = |b: usize| pieces.iter().map(|p| p.fill[b].len()).sum();
+    let bucket = |b: usize| pieces.iter().map(|p| p[b].len()).sum();
     let most = (0..count).map(bucket).max().unwrap_or(0);
     let (mut columns, mut weights) = (vec![I::zero(); most], vec![T::zero(); most]);
     let (mut starts, mut next) = (Vec::new(), Vec::new());
     let mut rows = SddmRows::new(n);
     for b in 0..count {
-        let chunks: Vec<Fill<T, I>> = (pieces.iter_mut())
-            .map(|p| std::mem::take(&mut p.fill[b]))
-            .collect();
         let first = b * stride;
         let len = (n - first).min(stride);
         starts.clear();
         starts.resize(len + 1, 0);
         // Nested loops, not `flatten()`: the flat iterator cost ~10% on both passes at 1M+ edges.
-        for chunk in &chunks {
-            for &(lo, _, _) in chunk {
+        for piece in &pieces {
+            for &(lo, _, _) in &piece[b] {
                 starts[lo.index() - first + 1] += 1;
             }
         }
@@ -251,8 +216,8 @@ fn from_fill<T: Real, I: Index>(
         }
         next.clear();
         next.extend_from_slice(&starts[..len]);
-        for chunk in chunks {
-            for (lo, hi, w) in chunk {
+        for piece in &mut pieces {
+            for (lo, hi, w) in std::mem::take(&mut piece[b]) {
                 let at = next[lo.index() - first];
                 columns[at] = hi;
                 weights[at] = w;
@@ -292,18 +257,24 @@ fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
     n: usize,
     star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
 ) -> Vec<Buckets<T, I>> {
+    let shift = bucket_shift(n);
+    let count = n.div_ceil(1 << shift);
+    let empty = || {
+        (
+            CliqueSampler::<T, I, C>::new(split),
+            vec![Fill::new(); count],
+        )
+    };
     (0..n_stars)
         .into_par_iter()
-        .fold(
-            || (CliqueSampler::<T, I, C>::new(split), Buckets::new(n)),
-            |(mut sampler, mut buckets), i| {
-                let (draws, neighbors) = star(i);
-                sampler.eliminate_unique(draws, neighbors, |edge| buckets.push(edge));
-                (sampler, buckets)
-            },
-        )
+        .fold(empty, |(mut sampler, mut buckets), i| {
+            let (draws, neighbors) = star(i);
+            let push = |edge: (I, I, T)| buckets[edge.0.index() >> shift].push(edge);
+            sampler.eliminate_unique(draws, neighbors, push);
+            (sampler, buckets)
+        })
         .map(|(_, mut buckets)| {
-            buckets.fill.iter_mut().for_each(Vec::shrink_to_fit);
+            buckets.iter_mut().for_each(Vec::shrink_to_fit);
             buckets
         })
         .collect()
@@ -311,13 +282,12 @@ fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
 
 /// Rows of the cover's complement: `|c_ke||c_je|/d_e` to `j`'s same sheet when signs agree, else its other; `k⁻` mirrors `k⁺`, so each sums only `j > k`; the ground's share as column `2·n_kept`.
 fn cover_rows<T: Real, I: Index>(
-    elimination: &BlockElimination<T, I>,
+    c: &Rows<T, I>,
+    ct: &Rows<T, I>,
+    inv_pivot: &[T],
     surplus: Option<&[T]>,
 ) -> (UpperAdjacency<T, I>, Vec<T>) {
-    let BlockElimination {
-        cross, inv_pivot, ..
-    } = elimination;
-    let (c, ct, n_kept) = (cross, elimination.transpose(), cross.n_cols());
+    let n_kept = c.n_cols();
     SddmRows::split(Sheets::Two, n_kept, rows_per_task(c), |mut rows, k| {
         for (e, &c_ek) in ct.row(k) {
             for (j, &c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
@@ -336,13 +306,12 @@ fn cover_rows<T: Real, I: Index>(
 
 /// Rows of a folded block's complement, `|c_ke||c_je|/d_e` as the smaller times the larger's share, the ground's `|c_ke| s_e/d_e` as column `n_kept`; a product underflowing to zero is dropped, as a stored zero couples nothing.
 fn exact_rows<T: Real, I: Index>(
-    elimination: &BlockElimination<T, I>,
+    c: &Rows<T, I>,
+    ct: &Rows<T, I>,
+    inv_pivot: &[T],
     surplus: Option<&[T]>,
 ) -> (UpperAdjacency<T, I>, Vec<T>) {
-    let BlockElimination {
-        cross, inv_pivot, ..
-    } = elimination;
-    let (c, ct, n_kept) = (cross, elimination.transpose(), cross.n_cols());
+    let n_kept = c.n_cols();
     SddmRows::split(Sheets::One, n_kept, rows_per_task(c), |mut rows, k| {
         for (e, c_ek) in ct.row(k) {
             let c_ek = c_ek.abs();

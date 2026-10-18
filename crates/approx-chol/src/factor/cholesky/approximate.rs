@@ -5,7 +5,7 @@ mod ordering;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use crate::factor::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single};
+use crate::factor::clique_tree::{CliqueSampler, Copies, Fill, Multi, PivotColumn, Single};
 use crate::factor::config::Multiplicity;
 use crate::factor::sddm::Sddm;
 use crate::{Index, Real};
@@ -43,8 +43,8 @@ fn eliminate<T: Real, I: Index, C: Copies>(
     for _ in 1..n {
         let v = ordering.next_vertex();
         fill.clear();
-        let pivot = clique.eliminate(&mut draws, graph.neighbors(v), &mut fill);
-        steps.push(v, pivot, clique.column());
+        let column = clique.eliminate(&mut draws, graph.neighbors(v), &mut fill);
+        steps.push(v, column);
         graph.eliminate_vertex(v);
         for &(u, w, weight) in &fill {
             graph.push_pair(u, w, C::one(), weight);
@@ -88,11 +88,11 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
     }
 
     /// The one site deriving the remainder's share.
-    fn push(&mut self, vertex: usize, pivot: T, column: Option<(&[(I, T)], I)>) {
+    fn push(&mut self, vertex: usize, column: Option<PivotColumn<'_, T, I>>) {
         let start = self.neighbors.len();
-        let retained = match column {
-            None => T::one(),
-            Some((shares, remainder)) => {
+        let (pivot, retained) = match column {
+            None => (T::zero(), T::one()),
+            Some((pivot, shares, remainder)) => {
                 let mut left = T::one();
                 for &(neighbor, share) in shares {
                     self.neighbors.push(neighbor);
@@ -101,7 +101,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
                 }
                 self.neighbors.push(remainder);
                 self.coefficients.push(left);
-                left
+                (pivot, left)
             }
         };
         // Needs an empty star, or `w_max²/d` under `1/MAX`: fill decay or `1/ε` neighbors (#168); `one` drops the scale.
@@ -119,9 +119,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
             pivot_scale: retained * inverse,
         });
     }
-}
 
-impl<T: Real, I: Index> ApproximateCholesky<T, I> {
     /// Forward, zero the `pinned` entry, backward; the gather dispatches `[]`, `[_]`, lanes by row length.
     pub(super) fn substitute(&self, y: &mut [T], pinned: usize) {
         let Self {

@@ -308,27 +308,16 @@ impl<T: Real, I: Index> Block<T, I> {
                     true => CliqueRule::Exact,
                     false => config.complement(),
                 };
-                let (elimination, factored) = match rule {
-                    CliqueRule::Exact => {
-                        let elimination = BlockElimination::new(cross, &grounding);
-                        let factored = factor(elimination.complement(sheets, grounding));
-                        (elimination, factored)
-                    }
-                    // A kept `Cᵀ` is built once `S` is factored, so it never shares that peak.
-                    CliqueRule::Sampled(copies) if BlockElimination::transposes(&cross) => {
-                        let inv_pivot = BlockElimination::pivots(&cross, &grounding);
-                        let s = schur::sampled(&cross, copies, sheets, grounding, streams);
-                        let factored = factor(s);
-                        (BlockElimination::with_pivots(cross, inv_pivot), factored)
-                    }
-                    // Otherwise the pivot pass reads `C` while it is still warm.
+                let inv_pivot = BlockElimination::pivots(&cross, &grounding);
+                let s = match rule {
+                    CliqueRule::Exact => schur::exact(&cross, &inv_pivot, sheets, grounding),
                     CliqueRule::Sampled(copies) => {
-                        let elimination = BlockElimination::new(cross, &grounding);
-                        let s =
-                            schur::sampled(elimination.cross(), copies, sheets, grounding, streams);
-                        (elimination, factor(s))
+                        schur::sampled(&cross, copies, sheets, grounding, streams)
                     }
                 };
+                // A kept `Cᵀ` is built once `S` is factored, so it never shares that peak.
+                let factored = factor(s);
+                let elimination = BlockElimination::with_pivots(cross, inv_pivot);
                 (Some(Box::new(elimination)), factored)
             }
         };
