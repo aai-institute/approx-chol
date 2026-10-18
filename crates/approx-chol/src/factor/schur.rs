@@ -171,22 +171,7 @@ fn bucket_shift(n: usize) -> u32 {
 }
 
 /// One thread's fill over `n` rows, split by `lo` into the ranges of [`bucket_shift`].
-struct Buckets<T, I> {
-    shift: u32,
-    fill: Vec<Fill<T, I>>,
-}
-
-impl<T, I: Index> Buckets<T, I> {
-    fn new(n: usize) -> Self {
-        let shift = bucket_shift(n);
-        let fill = (0..n.div_ceil(1 << shift)).map(|_| Fill::new()).collect();
-        Self { shift, fill }
-    }
-
-    fn push(&mut self, edge: (I, I, T)) {
-        self.fill[edge.0.index() >> self.shift].push(edge);
-    }
-}
+type Buckets<T, I> = Vec<Fill<T, I>>;
 
 /// The kept rows with each kept vertex's surplus added to its ground share.
 fn schur<T: Real, I: Index>(
@@ -215,14 +200,14 @@ fn from_fill<T: Real, I: Index>(
 ) -> (UpperAdjacency<T, I>, Vec<T>) {
     let stride = 1 << bucket_shift(n);
     let count = n.div_ceil(stride);
-    let bucket = |b: usize| pieces.iter().map(|p| p.fill[b].len()).sum();
+    let bucket = |b: usize| pieces.iter().map(|p| p[b].len()).sum();
     let most = (0..count).map(bucket).max().unwrap_or(0);
     let (mut columns, mut weights) = (vec![I::zero(); most], vec![T::zero(); most]);
     let (mut starts, mut next) = (Vec::new(), Vec::new());
     let mut rows = SddmRows::new(n);
     for b in 0..count {
         let chunks: Vec<Fill<T, I>> = (pieces.iter_mut())
-            .map(|p| std::mem::take(&mut p.fill[b]))
+            .map(|p| std::mem::take(&mut p[b]))
             .collect();
         let first = b * stride;
         let len = (n - first).min(stride);
@@ -280,18 +265,24 @@ fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
     n: usize,
     star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
 ) -> Vec<Buckets<T, I>> {
+    let shift = bucket_shift(n);
+    let count = n.div_ceil(1 << shift);
+    let empty = || {
+        (
+            CliqueSampler::<T, I, C>::new(split),
+            vec![Fill::new(); count],
+        )
+    };
     (0..n_stars)
         .into_par_iter()
-        .fold(
-            || (CliqueSampler::<T, I, C>::new(split), Buckets::new(n)),
-            |(mut sampler, mut buckets), i| {
-                let (draws, neighbors) = star(i);
-                sampler.eliminate_unique(draws, neighbors, |edge| buckets.push(edge));
-                (sampler, buckets)
-            },
-        )
+        .fold(empty, |(mut sampler, mut buckets), i| {
+            let (draws, neighbors) = star(i);
+            let push = |edge: (I, I, T)| buckets[edge.0.index() >> shift].push(edge);
+            sampler.eliminate_unique(draws, neighbors, push);
+            (sampler, buckets)
+        })
         .map(|(_, mut buckets)| {
-            buckets.fill.iter_mut().for_each(Vec::shrink_to_fit);
+            buckets.iter_mut().for_each(Vec::shrink_to_fit);
             buckets
         })
         .collect()
