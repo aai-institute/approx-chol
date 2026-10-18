@@ -113,7 +113,7 @@ pub(super) type Components<B, I> = (Partition<I>, Vec<B>);
 type General<T, I> = Partitioned<Assembled<T, UpperAdjacency<T, I>>, I>;
 
 /// A bipartite Gram assembled as `C` and the diagonal, and its components.
-type BipartiteGram<T, I> = Partitioned<Assembled<T, Rows<T, I>>, I>;
+type AssembledBipartite<T, I> = Partitioned<Assembled<T, Rows<T, I>>, I>;
 
 /// A Laplacian or signed graph assembled as `C` and `σ`, and its components.
 type DominantGraph<'a, T, I> = Partitioned<Dominant<'a, T, UpperAdjacency<T, I>>, I>;

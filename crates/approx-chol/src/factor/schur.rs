@@ -34,18 +34,21 @@ pub(super) struct BlockElimination<T, I> {
 }
 
 impl<T: Real, I: Index> BlockElimination<T, I> {
-    /// Pivots are `Σ|c_ek| + s_e`, the same on both sheets of a cover.
     pub(super) fn new(cross: Rows<T, I>, grounding: &Grounding<T>) -> Self {
+        let inv_pivot = Self::pivots(&cross, grounding);
+        Self::with_pivots(cross, inv_pivot)
+    }
+
+    /// Inverse pivots `1/(Σ|c_ek| + s_e)`, the same on both sheets of a cover.
+    pub(super) fn pivots(c: &Rows<T, I>, grounding: &Grounding<T>) -> Box<[T]> {
         let surplus = grounding.surplus();
-        let c = &cross;
-        let inv_pivot = (0..c.n_rows())
+        (0..c.n_rows())
             .map(|e| {
                 let s_e = surplus.map_or(0.0, |s| widen(s[e]));
                 let d_e = c.row(e).fold(s_e, |d, (_, &c)| d + widen(c.abs()));
                 T::one() / narrow::<T>(d_e)
             })
-            .collect();
-        Self::with_pivots(cross, inv_pivot)
+            .collect()
     }
 
     /// Whether an elimination of `c` keeps `Cᵀ`: past `2^17` entries, the forward's work, as `rows_per_task` splits it.
@@ -53,7 +56,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         c.nnz() > 1 << 17
     }
 
-    fn with_pivots(cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
+    pub(super) fn with_pivots(cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
         let ct = Self::transposes(&cross).then(|| cross.transpose());
         Self {
             cross,
@@ -141,12 +144,12 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     }
 }
 
-/// `S` sampled by star in parallel; clique trees need no pivots, so no elimination exists yet.
+/// `S` sampled by star in parallel; clique trees need no pivots, so no elimination exists yet. σ is read last here, so it is freed before `S` is factored.
 pub(super) fn sampled<T: Real, I: Index>(
     c: &Rows<T, I>,
     copies: Multiplicity,
     sheets: Sheets,
-    grounding: &Grounding<T>,
+    grounding: Grounding<T>,
     stars: Streams,
 ) -> Sddm<T, I> {
     let (n_kept, surplus) = (c.n_cols(), grounding.surplus());
@@ -158,11 +161,11 @@ pub(super) fn sampled<T: Real, I: Index>(
     };
     let fill = match sheets {
         // One sheet maps no column, as the balanced loop pays for any map.
-        Sheets::One => fill_stars(copies, c.n_rows(), |e| {
+        Sheets::One => fill_stars(copies, c.n_rows(), n, |e| {
             let neighbors = c.row(e).map(|(k, &c)| (I::from_index(k), c.abs()));
             (stars.star(e), neighbors.chain(ground_share(e)))
         }),
-        Sheets::Two => fill_stars(copies, 2 * c.n_rows(), |star| {
+        Sheets::Two => fill_stars(copies, 2 * c.n_rows(), n, |star| {
             let (sheet, e) = (star / c.n_rows(), star % c.n_rows());
             let neighbors = c.row(e).map(move |(k, &c)| {
                 let on = sheet ^ usize::from(crosses(c));
@@ -172,6 +175,29 @@ pub(super) fn sampled<T: Real, I: Index>(
         }),
     };
     schur(from_fill(n, fill), n_kept, sheets, surplus)
+}
+
+/// Rows per fill bucket, as a shift: at most 16 buckets, so one bucket's sorted copy is all the fill ever copied at once.
+fn bucket_shift(n: usize) -> u32 {
+    (usize::BITS - n.saturating_sub(1).leading_zeros()).saturating_sub(4)
+}
+
+/// One thread's fill over `n` rows, split by `lo` into the ranges of [`bucket_shift`].
+struct Buckets<T, I> {
+    shift: u32,
+    fill: Vec<Fill<T, I>>,
+}
+
+impl<T, I: Index> Buckets<T, I> {
+    fn new(n: usize) -> Self {
+        let shift = bucket_shift(n);
+        let fill = (0..n.div_ceil(1 << shift)).map(|_| Fill::new()).collect();
+        Self { shift, fill }
+    }
+
+    fn push(&mut self, edge: (I, I, T)) {
+        self.fill[edge.0.index() >> self.shift].push(edge);
+    }
 }
 
 /// The kept rows with each kept vertex's surplus added to its ground share.
@@ -194,41 +220,54 @@ fn schur<T: Real, I: Index>(
     Sddm::new(adjacency, Grounding::of(surplus), sheets)
 }
 
-/// Counting-sorts chunks unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.
+/// Bucket by bucket, counting-sorts the chunks' rows unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.
 fn from_fill<T: Real, I: Index>(
     n: usize,
-    chunks: Vec<Fill<T, I>>,
+    mut pieces: Vec<Buckets<T, I>>,
 ) -> (UpperAdjacency<T, I>, Vec<T>) {
-    let mut starts = vec![0; n + 1];
-    // Nested loops, not `flatten()`: the flat iterator cost ~10% on both passes at 1M+ edges.
-    for chunk in &chunks {
-        for &(lo, _, _) in chunk {
-            starts[lo.index() + 1] += 1;
-        }
-    }
-    for i in 0..n {
-        starts[i + 1] += starts[i];
-    }
-    let mut next = starts[..n].to_vec();
-    let (mut columns, mut weights) = (vec![I::zero(); starts[n]], vec![T::zero(); starts[n]]);
-    for chunk in chunks {
-        for (lo, hi, w) in chunk {
-            let at = next[lo.index()];
-            columns[at] = hi;
-            weights[at] = w;
-            next[lo.index()] += 1;
-        }
-    }
-    drop(next);
+    let stride = 1 << bucket_shift(n);
+    let count = n.div_ceil(stride);
+    let bucket = |b: usize| pieces.iter().map(|p| p.fill[b].len()).sum();
+    let most = (0..count).map(bucket).max().unwrap_or(0);
+    let (mut columns, mut weights) = (vec![I::zero(); most], vec![T::zero(); most]);
+    let (mut starts, mut next) = (Vec::new(), Vec::new());
     let mut rows = SddmRows::new(n);
-    for span in starts.windows(2) {
-        for (&hi, &w) in columns[span[0]..span[1]]
-            .iter()
-            .zip(&weights[span[0]..span[1]])
-        {
-            rows.add(hi.index(), w);
+    for b in 0..count {
+        let chunks: Vec<Fill<T, I>> = (pieces.iter_mut())
+            .map(|p| std::mem::take(&mut p.fill[b]))
+            .collect();
+        let first = b * stride;
+        let len = (n - first).min(stride);
+        starts.clear();
+        starts.resize(len + 1, 0);
+        // Nested loops, not `flatten()`: the flat iterator cost ~10% on both passes at 1M+ edges.
+        for chunk in &chunks {
+            for &(lo, _, _) in chunk {
+                starts[lo.index() - first + 1] += 1;
+            }
         }
-        rows.end_row();
+        for i in 0..len {
+            starts[i + 1] += starts[i];
+        }
+        next.clear();
+        next.extend_from_slice(&starts[..len]);
+        for chunk in chunks {
+            for (lo, hi, w) in chunk {
+                let at = next[lo.index() - first];
+                columns[at] = hi;
+                weights[at] = w;
+                next[lo.index() - first] += 1;
+            }
+        }
+        for span in starts.windows(2) {
+            for (&hi, &w) in columns[span[0]..span[1]]
+                .iter()
+                .zip(&weights[span[0]..span[1]])
+            {
+                rows.add(hi.index(), w);
+            }
+            rows.end_row();
+        }
     }
     rows.finish()
 }
@@ -237,33 +276,35 @@ fn from_fill<T: Real, I: Index>(
 fn fill_stars<T: Real, I: Index, N: Iterator<Item = (I, T)>>(
     copies: Multiplicity,
     n_stars: usize,
+    n: usize,
     star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
-) -> Vec<Fill<T, I>> {
+) -> Vec<Buckets<T, I>> {
     match copies {
-        Multiplicity::Single => sample_stars::<T, I, Single, N>((), n_stars, star),
-        Multiplicity::Split(k) => sample_stars::<T, I, Multi, N>(k, n_stars, star),
+        Multiplicity::Single => sample_stars::<T, I, Single, N>((), n_stars, n, star),
+        Multiplicity::Split(k) => sample_stars::<T, I, Multi, N>(k, n_stars, n, star),
     }
 }
 
-/// Each eliminated star's clique tree on each sheet under its own stream, the ground a final neighbor unless its share is zero.
+/// Each eliminated star's clique tree on each sheet under its own stream, the ground a final neighbor unless its share is zero; fill bucketed over `n` rows.
 fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
     split: C::Split,
     n_stars: usize,
+    n: usize,
     star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
-) -> Vec<Fill<T, I>> {
+) -> Vec<Buckets<T, I>> {
     (0..n_stars)
         .into_par_iter()
         .fold(
-            || (CliqueSampler::<T, I, C>::new(split), Fill::new()),
-            |(mut sampler, mut fill), i| {
+            || (CliqueSampler::<T, I, C>::new(split), Buckets::new(n)),
+            |(mut sampler, mut buckets), i| {
                 let (draws, neighbors) = star(i);
-                sampler.eliminate_unique(draws, neighbors, &mut fill);
-                (sampler, fill)
+                sampler.eliminate_unique(draws, neighbors, |edge| buckets.push(edge));
+                (sampler, buckets)
             },
         )
-        .map(|(_, mut fill)| {
-            fill.shrink_to_fit();
-            fill
+        .map(|(_, mut buckets)| {
+            buckets.fill.iter_mut().for_each(Vec::shrink_to_fit);
+            buckets
         })
         .collect()
 }

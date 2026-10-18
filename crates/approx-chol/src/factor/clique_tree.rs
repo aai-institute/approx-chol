@@ -45,7 +45,7 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
         fill: &mut Fill<T, I>,
     ) -> T {
         self.star.refill(neighbors, self.split);
-        self.sample(draws, fill);
+        self.sample(draws, |edge| fill.push(edge));
         self.shares.clear();
         let Some((last, rest)) = self.star.entries().split_last() else {
             self.remainder = None;
@@ -63,14 +63,14 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
         &mut self,
         mut rng: Xoshiro256PlusPlus,
         neighbors: impl Iterator<Item = (I, T)>,
-        fill: &mut Fill<T, I>,
+        fill: impl FnMut((I, I, T)),
     ) {
         self.star.refill_unique(neighbors, C::initial(self.split));
         self.sample(&mut rng, fill);
     }
 
     /// Prepares the star's CDF, then fills `per_copy(w_i (S_{>i} / d))` per copy of each entry but the heaviest, each copy drawing past it.
-    fn sample(&mut self, rng: &mut Xoshiro256PlusPlus, fill: &mut Fill<T, I>) {
+    fn sample(&mut self, rng: &mut Xoshiro256PlusPlus, mut fill: impl FnMut((I, I, T))) {
         let entries = self.star.entries();
         let Some((_, rest)) = entries.split_last() else {
             return;
@@ -95,7 +95,7 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
             }
             for _ in 0..entry.copies.get() {
                 let other = entries[draw_after(&self.cumsum, rng, i)].neighbor;
-                fill.push((entry.neighbor.min(other), entry.neighbor.max(other), weight));
+                fill((entry.neighbor.min(other), entry.neighbor.max(other), weight));
             }
         }
     }

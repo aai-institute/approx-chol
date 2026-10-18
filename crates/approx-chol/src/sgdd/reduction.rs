@@ -120,7 +120,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 let deficit =
                     clamped_deficit(diagonal, abs, &self.off_diagonal, ScaleVector::Identity);
                 let mut m = Congruent::new(self.vertices, self.off_diagonal, signs);
-                m.report = policy.report(ScalingReport::unscaled(), deficit);
+                m.report = ScaleVector::Identity.shortfall().clamped(deficit);
                 let rows = RowSums {
                     diagonal: self.diagonal,
                     abs: self.abs_row_sums,
@@ -139,14 +139,16 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                     vertices: self.vertices,
                     congruence: Congruence::Scaled(Scales::new(factors)),
                     off_diagonal,
-                    report: policy.report(relaxation.shortfall(), deficit),
+                    report: relaxation.vector.shortfall().clamped(deficit),
                 };
                 (m, RowSums { diagonal, abs })
             }
         };
         match folded {
             true => Ok(Signed::Folded(m, rows)),
-            false => Ok(Signed::Frustrated(m.frustrated(rows.surplus())?)),
+            false => Ok(Signed::Frustrated(
+                m.block(Balance::Frustrated(rows.surplus()))?,
+            )),
         }
     }
 }
@@ -180,26 +182,14 @@ impl<T: Real, I: Index> Congruent<T, I> {
         }
     }
 
-    fn frustrated(self, grounding: Grounding<T>) -> Result<IrreducibleBlock<T, I>, ReduceError> {
-        let balance = Balance::Frustrated(grounding);
-        IrreducibleBlock::new(
-            self.vertices,
-            self.congruence,
-            self.off_diagonal,
-            balance,
-            self.report,
-        )
-    }
-
-    fn balanced(self, grounding: Grounding<T>) -> Result<IrreducibleBlock<T, I>, ReduceError> {
-        let balance = Balance::Balanced(grounding);
-        IrreducibleBlock::new(
-            self.vertices,
-            self.congruence,
-            self.off_diagonal,
-            balance,
-            self.report,
-        )
+    fn block(self, balance: Balance<T>) -> Result<IrreducibleBlock<T, I>, ReduceError> {
+        let Self {
+            vertices,
+            congruence,
+            off_diagonal,
+            report,
+        } = self;
+        IrreducibleBlock::new(vertices, congruence, off_diagonal, balance, report)
     }
 }
 
@@ -222,8 +212,9 @@ impl<T: Real> RowSums<T> {
 
     /// Each row's residue, deficits clamped to zero.
     fn surplus(self) -> Grounding<T> {
-        let rows = self.diagonal.iter().zip(&self.abs);
-        Grounding::of(rows.map(|(&d, &s)| (d - s).max(T::zero())).collect())
+        let Self { mut diagonal, abs } = self;
+        (diagonal.iter_mut().zip(&abs)).for_each(|(d, &s)| *d = (*d - s).max(T::zero()));
+        Grounding::of(diagonal)
     }
 }
 
