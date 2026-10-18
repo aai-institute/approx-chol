@@ -19,6 +19,11 @@ pub use width2::{FactorWidth2, ViewError};
 
 use crate::Real;
 
+/// A shape-checked index is non-negative and fits `usize`.
+fn index<I: PrimInt>(k: I) -> usize {
+    k.to_usize().expect("a shape-checked index fits usize")
+}
+
 /// Any view [`factorize`](crate::factorize) takes, each converted by `From`.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
@@ -42,7 +47,7 @@ impl<T: Real, J: PrimInt + Sync> Input<'_, T, J> {
     pub(crate) fn n(&self) -> usize {
         match self {
             Self::Csr(csr) => csr.n(),
-            Self::UpperCsr(csr) => csr.n(),
+            Self::UpperCsr(csr) => csr.0.n(),
             Self::Laplacian(laplacian) => laplacian.n(),
             Self::SignedGraph(graph) => graph.n(),
             Self::Gram(v) => v.n(),

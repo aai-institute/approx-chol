@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use num_traits::{cast, PrimInt};
 
+use super::index;
 use crate::in_range;
 use crate::{Error, Real};
 
@@ -119,10 +120,6 @@ impl<'a, T, I: PrimInt> UpperCsrRef<'a, T, I> {
     ) -> Result<Self, Error> {
         CsrRef::new(row_ptrs, col_indices, values, n).map(Self)
     }
-
-    pub(crate) fn n(&self) -> usize {
-        self.0.n
-    }
 }
 
 /// Owned CSR matrix, for sources that index in `usize`.
@@ -202,11 +199,6 @@ impl core::fmt::Display for IndexKind {
             Self::ColIndex => f.write_str("col_index"),
         }
     }
-}
-
-/// A shape-checked index is non-negative and fits `usize`.
-fn index<I: PrimInt>(k: I) -> usize {
-    k.to_usize().expect("a shape-checked index fits usize")
 }
 
 /// Strictly ascending columns per row; scipy already emits them, so only rare input pays for a copy.
