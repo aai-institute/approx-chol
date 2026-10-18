@@ -1,6 +1,6 @@
 use super::normalized::Normalized;
 use super::ScalingReport;
-use crate::{narrow, widen, Index, Real};
+use crate::{Index, Real};
 
 /// `[min_i, max_i] (Ny)_i / y_i` of a positive `y`, which brackets `ρ(N)` (Collatz 1942, Wielandt 1950).
 #[derive(Clone, Copy)]
@@ -136,7 +136,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
         let (y, bracket) = self.best;
         let report = ScalingReport {
             iterations: self.iterations,
-            violation: widen(narrow::<T>(bracket.violation())),
+            violation: bracket.violation(),
             settled: bracket.certifies(tolerance) && bracket.settled(band),
         };
         (y, report)
