@@ -68,24 +68,15 @@ impl ScalingPolicy {
     fn slack(&self, epsilon: f64) -> f64 {
         self.tolerance.max(RATIO_BAND * epsilon)
     }
-
-    /// Kept when a deficit past rounding was clamped or the scaling did not settle, which a violation past the slack prevents.
-    pub(super) fn report(&self, scaling: ScalingReport, clamped: f64) -> Option<ScalingReport> {
-        (clamped > 0.0 || !scaling.settled).then_some(ScalingReport {
-            violation: scaling.violation.max(clamped),
-            ..scaling
-        })
-    }
 }
 
 impl ScalingReport {
-    /// No scaling ran: nothing spent, nothing short, and the rows decide floating exactly.
-    pub(super) fn unscaled() -> Self {
-        Self {
-            iterations: 0,
-            violation: 0.0,
-            settled: true,
-        }
+    /// Kept when a deficit past rounding was clamped or the scaling did not settle, which a violation past the slack prevents.
+    pub(super) fn clamped(self, deficit: f64) -> Option<Self> {
+        (deficit > 0.0 || !self.settled).then_some(Self {
+            violation: self.violation.max(deficit),
+            ..self
+        })
     }
 }
 
@@ -93,8 +84,6 @@ impl ScalingReport {
 pub(super) struct Relaxation<T> {
     /// `f = μ/√a_ii`, `μ` peaking at `1` for a Perron vector and centred on `1` by a power of two for a null vector.
     pub(super) scales: Box<[T]>,
-    /// What the scaling spent and left, before the policy judges it.
-    pub(super) shortfall: ScalingReport,
     /// What `μ` is, which decides how far off balance it may leave a row.
     pub(super) vector: ScaleVector,
 }
@@ -107,7 +96,7 @@ pub(super) enum ScaleVector {
     /// `|u|` of a certified null vector, accurate relative to each entry.
     NullVector,
     /// An inverse-iteration Perron vector settled to `band` relative to its peak: a row of `M_ii = μ_i²` sits within `band/μ_i`.
-    PerronVector { band: f64 },
+    PerronVector { band: f64, shortfall: ScalingReport },
 }
 
 impl ScaleVector {
@@ -117,20 +106,28 @@ impl ScaleVector {
         match self {
             Self::Identity => rounding.max(RATIO_BAND * epsilon),
             Self::NullVector => rounding + RATIO_BAND * epsilon,
-            Self::PerronVector { band } => rounding + band / m_ii.sqrt(),
+            Self::PerronVector { band, .. } => rounding + band / m_ii.sqrt(),
+        }
+    }
+
+    /// What the scaling spent and left before clamping: an exact vector spends nothing, and its rows decide floating exactly.
+    pub(super) fn shortfall(self) -> ScalingReport {
+        match self {
+            Self::Identity | Self::NullVector => ScalingReport {
+                iterations: 0,
+                violation: 0.0,
+                settled: true,
+            },
+            Self::PerronVector { shortfall, .. } => shortfall,
         }
     }
 }
 
 impl<T: Real> Relaxation<T> {
     /// `None` unless every scale is a positive `T`.
-    fn new(scales: Box<[T]>, shortfall: ScalingReport, vector: ScaleVector) -> Option<Self> {
+    fn new(scales: Box<[T]>, vector: ScaleVector) -> Option<Self> {
         let positive = scales.iter().all(|&f| f.is_finite() && f > T::zero());
-        positive.then_some(Self {
-            scales,
-            shortfall,
-            vector,
-        })
+        positive.then_some(Self { scales, vector })
     }
 }
 
@@ -147,7 +144,7 @@ pub(super) fn null_scaling<T: Real>(
     // Centred by a power of two, not peaked at 1: `μ²` spans `(high/low)²`, past `f32`'s range from `2^52` on.
     let peak = high * 2f64.powi(-((high / low).log2() / 2.0).floor() as i32);
     let scales: Box<[T]> = u.map(|x| narrow::<T>(x.abs() / peak)).collect();
-    Relaxation::new(scales, ScalingReport::unscaled(), ScaleVector::NullVector)
+    Relaxation::new(scales, ScaleVector::NullVector)
 }
 
 /// How far, in `ε`, a row ratio `Σ_j|a_ij|f_j / (a_ii f_i)` may sit from `1`: a settled residual and the dominance slack's floor.
@@ -166,6 +163,6 @@ pub(super) fn relax<T: Real, I: Index>(
     let slack = policy.slack(widen(T::epsilon()));
     let iteration = InverseIteration::new(&n, slack, band, policy.max_iterations)?;
     let (y, shortfall) = iteration.run();
-    let vector = ScaleVector::PerronVector { band };
-    Relaxation::new(n.scales(&y), shortfall, vector)
+    let vector = ScaleVector::PerronVector { band, shortfall };
+    Relaxation::new(n.scales(&y), vector)
 }

@@ -52,9 +52,9 @@ impl Bracket {
     }
 
     /// `ρ < 1` proven, or `y` a Perron vector of `ρ = 1` to rounding: no later `y` moves the float decision.
-    fn settled(&self, band: f64) -> bool {
+    fn settled(&self, tolerance: f64, band: f64) -> bool {
         // Not the width, which never closes once `y` has components below `ε` (Li & Li, arXiv:2111.12642 §3).
-        self.high < 1.0 - band || self.eigen_residual <= band
+        self.certifies(tolerance) && (self.high < 1.0 - band || self.eigen_residual <= band)
     }
 
     /// Certified and near settling: a CG run stalls at a floor that grows with its steps, past `4×` the band after ~5000.
@@ -118,8 +118,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
     /// `α = 1 + tolerance/2` until a step certifies or refutes (as `M⁻¹𝟙` does: Ahmadinejad et al., arXiv:1810.02348 §3.1), then each step from the bracket's [`shift`](Bracket::shift).
     pub(super) fn run(mut self) -> (Vec<f64>, ScalingReport) {
         let (tolerance, band) = (self.tolerance, self.band);
-        let polished =
-            |b: &Bracket| (b.certifies(tolerance) && b.settled(band)) || b.refutes(tolerance);
+        let polished = |b: &Bracket| b.settled(tolerance, band) || b.refutes(tolerance);
         let unit = vec![1.0; self.n.n()];
         self.solve(1.0 + 0.5 * tolerance, unit, |b| {
             b.certifies(tolerance) || b.refutes(tolerance)
@@ -137,7 +136,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
         let report = ScalingReport {
             iterations: self.iterations,
             violation: bracket.violation(),
-            settled: bracket.certifies(tolerance) && bracket.settled(band),
+            settled: bracket.settled(tolerance, band),
         };
         (y, report)
     }

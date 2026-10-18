@@ -120,7 +120,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 let deficit =
                     clamped_deficit(diagonal, abs, &self.off_diagonal, ScaleVector::Identity);
                 let mut m = Congruent::new(self.vertices, self.off_diagonal, signs);
-                m.report = policy.report(ScalingReport::unscaled(), deficit);
+                m.report = ScaleVector::Identity.shortfall().clamped(deficit);
                 let rows = RowSums {
                     diagonal: self.diagonal,
                     abs: self.abs_row_sums,
@@ -139,7 +139,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                     vertices: self.vertices,
                     congruence: Congruence::Scaled(Scales::new(factors)),
                     off_diagonal,
-                    report: policy.report(relaxation.shortfall, deficit),
+                    report: relaxation.vector.shortfall().clamped(deficit),
                 };
                 (m, RowSums { diagonal, abs })
             }
