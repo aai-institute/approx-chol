@@ -175,22 +175,17 @@ type Buckets<T, I> = Vec<Fill<T, I>>;
 
 /// The kept rows with each kept vertex's surplus added to its ground share.
 fn schur<T: Real, I: Index>(
-    (adjacency, ground): (UpperAdjacency<T, I>, Vec<T>),
+    (adjacency, mut ground): (UpperAdjacency<T, I>, Vec<T>),
     n_kept: usize,
     sheets: Sheets,
     surplus: Option<&[T]>,
 ) -> Sddm<T, I> {
-    let kept = surplus.map(|s| &s[s.len() - n_kept..]);
-    let surplus = match kept {
-        Some(kept) => {
-            let copies = kept
-                .iter()
-                .flat_map(|&s| std::iter::repeat_n(s, sheets.count()));
-            copies.zip(ground).map(|(s, g)| s + g).collect()
-        }
-        None => ground,
-    };
-    Sddm::new(adjacency, Grounding::of(surplus), sheets)
+    if let Some(surplus) = surplus {
+        let kept = surplus[surplus.len() - n_kept..].iter();
+        let copies = kept.flat_map(|&s| std::iter::repeat_n(s, sheets.count()));
+        (ground.iter_mut().zip(copies)).for_each(|(g, s)| *g = s + *g);
+    }
+    Sddm::new(adjacency, Grounding::of(ground), sheets)
 }
 
 /// Bucket by bucket, counting-sorts the chunks' rows unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.
@@ -206,16 +201,13 @@ fn from_fill<T: Real, I: Index>(
     let (mut starts, mut next) = (Vec::new(), Vec::new());
     let mut rows = SddmRows::new(n);
     for b in 0..count {
-        let chunks: Vec<Fill<T, I>> = (pieces.iter_mut())
-            .map(|p| std::mem::take(&mut p[b]))
-            .collect();
         let first = b * stride;
         let len = (n - first).min(stride);
         starts.clear();
         starts.resize(len + 1, 0);
         // Nested loops, not `flatten()`: the flat iterator cost ~10% on both passes at 1M+ edges.
-        for chunk in &chunks {
-            for &(lo, _, _) in chunk {
+        for piece in &pieces {
+            for &(lo, _, _) in &piece[b] {
                 starts[lo.index() - first + 1] += 1;
             }
         }
@@ -224,8 +216,8 @@ fn from_fill<T: Real, I: Index>(
         }
         next.clear();
         next.extend_from_slice(&starts[..len]);
-        for chunk in chunks {
-            for (lo, hi, w) in chunk {
+        for piece in &mut pieces {
+            for (lo, hi, w) in std::mem::take(&mut piece[b]) {
                 let at = next[lo.index() - first];
                 columns[at] = hi;
                 weights[at] = w;
