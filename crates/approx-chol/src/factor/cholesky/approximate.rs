@@ -119,9 +119,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
             pivot_scale: retained * inverse,
         });
     }
-}
 
-impl<T: Real, I: Index> ApproximateCholesky<T, I> {
     /// Forward, zero the `pinned` entry, backward; the gather dispatches `[]`, `[_]`, lanes by row length.
     pub(super) fn substitute(&self, y: &mut [T], pinned: usize) {
         let Self {
