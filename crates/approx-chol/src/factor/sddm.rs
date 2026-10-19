@@ -36,7 +36,9 @@ impl<T: Real, I: Index> Sddm<T, I> {
     /// The Gremban cover of signed `M`: a Laplacian on two sheets that acts as `M` on `[z; −z]`.
     pub(super) fn cover(signed: UpperAdjacency<T, I>, grounding: Grounding<T>) -> Self {
         let n = signed.n();
+        let entries: usize = (0..n).map(|i| signed.upper_len(i)).sum();
         let mut rows = SddmRows::new(2 * n);
+        rows.reserve(2 * n, 2 * entries);
         for i in 0..n {
             for (j, &a) in signed.upper(i) {
                 rows.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
@@ -104,6 +106,13 @@ impl<T: Real, I: Index> SddmRows<T, I> {
 
     pub(super) fn add(&mut self, column: usize, w: T) {
         self.row().add(column, w);
+    }
+
+    fn reserve(&mut self, rows: usize, entries: usize) {
+        self.ptrs.reserve_exact(rows);
+        self.ground.reserve_exact(rows);
+        self.indices.reserve_exact(entries);
+        self.values.reserve_exact(entries);
     }
 
     fn row(&mut self) -> Row<'_, T, I> {
