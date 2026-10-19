@@ -217,3 +217,9 @@ def test_solve_takes_any_1d_array_like_as_the_stub_declares():
     np.testing.assert_array_equal(
         sla.aslinearoperator(factor) @ block, np.column_stack([expected, 2 * expected])
     )
+
+
+def test_an_all_zero_row_factors_and_solves_to_zero():
+    dead = sp.csr_matrix(np.array([[0.0, 0, 0], [0, 2, -1], [0, -1, 2]]))
+    x = approx_chol.factorize(dead).solve(np.ones(3))
+    np.testing.assert_array_equal(x, [0.0, 1.0, 1.0])

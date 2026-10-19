@@ -147,7 +147,7 @@ def factorize(
     Raises:
         ValueError: If the matrix is not square or symmetric, has invalid
             dtypes/ranges, exceeds index limits, has invalid CSR structure, or
-            has a nonpositive diagonal.
+            has a nonpositive diagonal on a nonzero row; an all-zero row solves to 0.
 
     Warns:
         RuntimeWarning: If a block falls short of diagonal dominance after
@@ -175,7 +175,7 @@ def factorize_raw(
     Raises:
         ValueError: If an array is not 1-D or has a dtype it cannot carry, the
             CSR structure is invalid, or the matrix is not symmetric or has a
-            nonpositive diagonal.
+            nonpositive diagonal on a nonzero row.
 
     Warns:
         RuntimeWarning: As :func:`factorize`.
