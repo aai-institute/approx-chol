@@ -64,6 +64,11 @@ impl<T: Real> Grounding<T> {
         self.0.as_deref()
     }
 
+    /// Row `i`'s ground edge: none where its surplus is zero, which a clamped share would add.
+    pub(crate) fn edge(&self, i: usize) -> Option<T> {
+        self.surplus().map(|s| s[i]).filter(|&s| s > T::zero())
+    }
+
     pub(crate) fn is_grounded(&self) -> bool {
         self.0.is_some()
     }

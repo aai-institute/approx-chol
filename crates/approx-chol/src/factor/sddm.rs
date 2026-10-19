@@ -41,8 +41,8 @@ impl<T: Real, I: Index> Sddm<T, I> {
             for (j, &a) in signed.upper(i) {
                 rows.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
             }
-            if let Some(surplus) = grounding.surplus() {
-                rows.add(2 * n, surplus[i]);
+            if let Some(s) = grounding.edge(i) {
+                rows.add(2 * n, s);
             }
             rows.end_row();
             rows.mirror_row();
@@ -71,9 +71,8 @@ impl<T: Real, I: Index> Sddm<T, I> {
             let row = self.adjacency.upper(i);
             row.map(move |(j, &a)| (I::from_index(i), I::from_index(j), -a))
         });
-        let surplus = self.grounding.surplus().unwrap_or_default();
-        let ground = surplus.iter().enumerate().filter(|(_, &s)| s > T::zero());
-        laplacian.chain(ground.map(move |(k, &s)| (I::from_index(k), I::from_index(n), s)))
+        let ground = (0..n).filter_map(move |k| Some((k, self.grounding.edge(k)?)));
+        laplacian.chain(ground.map(move |(k, s)| (I::from_index(k), I::from_index(n), s)))
     }
 }
 
