@@ -63,6 +63,17 @@ fn a_weight_below_min_positive_over_epsilon_is_out_of_range_at_its_edge() {
     assert_names_a_defect(error, &out_of_range(&[1, 2]));
 }
 
+/// Its cell `s·s` underflows to zero, which must not drop the edge.
+#[test]
+fn a_root_weight_whose_square_underflows_is_out_of_range_at_its_edge() {
+    let s = Weights::sqrt_of(&[1.0, 1e-170]).unwrap();
+    let laplacian = Laplacian::new(3, &PATH_A, &PATH_B, s).unwrap();
+    let signed = SignedGraph::new(3, &PATH_A, &PATH_B, &[true, false], s).unwrap();
+    for factor in [factorize(laplacian), factorize(signed)] {
+        assert_names_a_defect(factor.expect_err("tiny root"), &out_of_range(&[1, 2]));
+    }
+}
+
 #[rstest]
 #[case::ends_of_unequal_length(
     Laplacian::<f64>::new(3, &[0, 1], &[1], Weights::unit()).err(),
@@ -266,6 +277,15 @@ fn a_gram_loading_whose_square_underflows_beside_an_in_range_column_factors_and_
     let gram = FactorWidth2::new(3, &[0u32, 0], &PATH_B, &x, &y).unwrap();
     let factor = factorize(gram).expect("every diagonal and cell is in range");
     solve_residual(&factor, &matrix(3, &[0, 0], &PATH_B, &x, &y));
+}
+
+/// Both vertices are in range, but their cell's product underflows below the floor.
+#[test]
+fn a_gram_cell_whose_product_underflows_is_out_of_range() {
+    let (x, y) = ([1e-170, 1.0, 1.0], [1e-170, -1.0, -1.0]);
+    let gram = FactorWidth2::new(4, &[0u32, 0, 1], &[1, 2, 3], &x, &y).unwrap();
+    let error = factorize(gram).expect_err("cell below the floor");
+    assert_names_a_defect(error, &out_of_range(&[0, 1]));
 }
 
 /// Its cell underflows too, so the vertex is out of range, not dead.
