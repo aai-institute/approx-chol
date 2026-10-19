@@ -142,6 +142,12 @@ fn largest<T: Real>(f: &[T]) -> usize {
     })
 }
 
+/// `units` per task so each carries `2^bits` of `work`, in `u64` as a 32-bit `usize` wraps past `2^(32-bits)` units.
+fn per_task(units: usize, work: u64, bits: u32) -> usize {
+    let per = ((units as u64) << bits).div_ceil(work.max(1));
+    usize::try_from(per).unwrap_or(usize::MAX).max(1)
+}
+
 /// Finite, and zero or at least `MIN_POSITIVE/EPSILON`, so no product turns subnormal (#163).
 fn in_range<T: Real>(x: T) -> bool {
     x.is_finite() && (x == T::zero() || x.abs() >= T::min_positive_value() / T::epsilon())

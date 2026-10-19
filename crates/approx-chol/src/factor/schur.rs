@@ -10,7 +10,7 @@ use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
 use super::Streams;
 use crate::sgdd::Grounding;
 use crate::storage::{Rows, UpperAdjacency};
-use crate::{narrow, widen, Index, Real};
+use crate::{narrow, per_task, widen, Index, Real};
 
 /// `M`'s cross block and the pivots `d_e`, applied as two products because the block's steps commute.
 #[cfg_attr(
@@ -333,12 +333,6 @@ fn exact_rows<T: Real, I: Index>(
 fn rows_per_task<T: Real, I: Index>(c: &Rows<T, I>) -> usize {
     let work = c.nnz() as u64 * (c.nnz() / c.n_rows().max(1)) as u64 / 2;
     per_task(c.n_cols(), work, 17)
-}
-
-/// `units` per task so each carries `2^bits` of `work`, in `u64` as a 32-bit `usize` wraps past `2^(32-bits)` units.
-fn per_task(units: usize, work: u64, bits: u32) -> usize {
-    let per = ((units as u64) << bits).div_ceil(work.max(1));
-    usize::try_from(per).unwrap_or(usize::MAX).max(1)
 }
 
 /// `x·y/d` as the smaller times the larger's share `max·d⁻¹ ≤ 1`, so no product overflows before the division.

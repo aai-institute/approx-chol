@@ -81,8 +81,8 @@ impl<A, I: Index> Partitioned<A, I> {
             return Ok((partition, Vec::new()));
         }
         let cut = |vertices: &&[I]| block(a.component(vertices, partition.position()));
-        // About `PARALLEL_VERTICES` vertices a task: waking the pool for less costs more than it saves.
-        let per_task = (PARALLEL_VERTICES * components.len()).div_ceil(partition.n());
+        // About `2^PARALLEL_BITS` vertices a task: waking the pool for less costs more than it saves.
+        let per_task = crate::per_task(components.len(), partition.n() as u64, PARALLEL_BITS);
         let blocks: Vec<_> = match per_task < components.len() && rayon::current_num_threads() > 1 {
             true => (components.par_iter())
                 .with_min_len(per_task)
@@ -104,7 +104,7 @@ impl<A, I: Index> Partitioned<A, I> {
     }
 }
 
-const PARALLEL_VERTICES: usize = 1 << 12;
+const PARALLEL_BITS: u32 = 12;
 
 /// The partition and each live component's block.
 pub(super) type Components<B, I> = (Partition<I>, Vec<B>);
