@@ -65,7 +65,7 @@ impl Copies for Single {
 
 impl Copies for Multi {
     type Split = u32;
-    type Tally = Vec<usize>;
+    type Tally = Vec<(usize, u32)>;
 
     fn initial(split: u32) -> Self {
         Self(split)
@@ -86,17 +86,23 @@ impl Copies for Multi {
 
     fn draw<'a, T: Real>(
         self,
-        drawn: &'a mut Vec<usize>,
+        drawn: &'a mut Vec<(usize, u32)>,
         per_copy: T,
-        draw: impl FnMut() -> usize,
+        mut draw: impl FnMut() -> usize,
     ) -> impl Iterator<Item = (usize, Self, T)> + 'a {
         drawn.clear();
-        drawn.extend(std::iter::repeat_with(draw).take(self.0 as usize));
-        drawn.sort_unstable();
-        drawn.chunk_by(|a, b| a == b).map(move |run| {
-            let copies = Self(run.len() as u32);
-            let weight = per_copy * T::from(copies.0).expect("a copy count is a float");
-            (run[0], copies, weight)
+        drawn.push((draw(), 1));
+        // Scanned, not sorted: sorting random draws mispredicts (bip_wide +26% cycles).
+        for _ in 1..self.0 {
+            let at = draw();
+            match drawn.iter_mut().find(|(seen, _)| *seen == at) {
+                Some((_, copies)) => *copies += 1,
+                None => drawn.push((at, 1)),
+            }
+        }
+        drawn.iter().map(move |&(at, copies)| {
+            let weight = per_copy * T::from(copies).expect("a copy count is a float");
+            (at, Self(copies), weight)
         })
     }
 }
