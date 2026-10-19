@@ -12,6 +12,7 @@ pub(super) fn suffix_past<T: Real>(cumsum: &[T], position: Option<usize>) -> T {
 }
 
 /// A position in the suffix past `position`, clamped to its last: an `f32` draw can round up to the total; a linear scan up to 32 entries (256 measured +4-5%).
+#[inline(always)] // Otherwise LLVM outlines it from an AC fold: a call per draw.
 pub(super) fn draw_after<T: Real>(
     cumsum: &[T],
     rng: &mut Xoshiro256PlusPlus,

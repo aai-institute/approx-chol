@@ -11,8 +11,8 @@ use cdf::{draw_after, suffix_past};
 pub(super) use copies::{Copies, Multi, Single};
 use star::Star;
 
-/// Fill edges `(lo, hi, weight)`, `lo < hi`, as an elimination emits them.
-pub(super) type Fill<T, I> = Vec<(I, I, T)>;
+/// Fill edges `(lo, hi, copies, weight)`, `lo < hi`, as an elimination emits them: one per entry and partner, its weight summed over its copies.
+pub(super) type Fill<T, I, C> = Vec<(I, I, C, T)>;
 
 /// A pivot's column: its heaviest weight, its other neighbors' shares, and the heaviest neighbor, which absorbs what they leave.
 pub(super) type PivotColumn<'a, T, I> = (T, &'a [(I, T)], I);
@@ -24,6 +24,7 @@ pub(super) struct CliqueSampler<T, I, C: Copies> {
     cumsum: Vec<T>,
     shares: Vec<(I, T)>,
     split: C::Split,
+    tally: C::Tally,
 }
 
 impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
@@ -34,6 +35,7 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
             cumsum: Vec::new(),
             shares: Vec::new(),
             split,
+            tally: C::Tally::default(),
         }
     }
 
@@ -42,7 +44,7 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
         &mut self,
         draws: &mut Xoshiro256PlusPlus,
         neighbors: impl Iterator<Item = (I, C, T)>,
-        fill: &mut Fill<T, I>,
+        fill: &mut Fill<T, I, C>,
     ) -> PivotColumn<'_, T, I> {
         self.star.refill(neighbors, self.split);
         self.sample(draws, |edge| fill.push(edge));
@@ -60,14 +62,14 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
         &mut self,
         mut rng: Xoshiro256PlusPlus,
         neighbors: impl Iterator<Item = (I, T)>,
-        fill: impl FnMut((I, I, T)),
+        fill: impl FnMut((I, I, C, T)),
     ) {
         self.star.refill_unique(neighbors, C::initial(self.split));
         self.sample(&mut rng, fill);
     }
 
     /// Prepares the star's CDF, then fills `per_copy(w_i (S_{>i} / d))` per copy of each entry but the heaviest, each copy drawing past it.
-    fn sample(&mut self, rng: &mut Xoshiro256PlusPlus, mut fill: impl FnMut((I, I, T))) {
+    fn sample(&mut self, rng: &mut Xoshiro256PlusPlus, mut fill: impl FnMut((I, I, C, T))) {
         let entries = self.star.entries();
         let Some((_, rest)) = entries.split_last() else {
             return;
@@ -90,10 +92,16 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
             if weight == T::zero() {
                 continue;
             }
-            for _ in 0..entry.copies.get() {
-                let other = entries[draw_after(&self.cumsum, rng, i)].neighbor;
-                fill((entry.neighbor.min(other), entry.neighbor.max(other), weight));
-            }
+            let draw = || draw_after(&self.cumsum, rng, i);
+            (entry.copies).draw(&mut self.tally, weight, draw, |at, copies, weight| {
+                let other = entries[at].neighbor;
+                fill((
+                    entry.neighbor.min(other),
+                    entry.neighbor.max(other),
+                    copies,
+                    weight,
+                ));
+            });
         }
     }
 

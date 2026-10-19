@@ -4,7 +4,7 @@ use rayon::prelude::*;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use super::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single};
+use super::clique_tree::{CliqueSampler, Copies, Multi, Single};
 use super::config::{InnerParallelism, Multiplicity};
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
 use super::Streams;
@@ -170,8 +170,8 @@ fn bucket_shift(n: usize) -> u32 {
     (usize::BITS - n.saturating_sub(1).leading_zeros()).saturating_sub(4)
 }
 
-/// One thread's fill over `n` rows, split by `lo` into the ranges of [`bucket_shift`].
-type Buckets<T, I> = Vec<Fill<T, I>>;
+/// One thread's fill edges `(lo, hi, weight)` over `n` rows, split by `lo` into the ranges of [`bucket_shift`].
+type Buckets<T, I> = Vec<Vec<(I, I, T)>>;
 
 /// The kept rows with each kept vertex's surplus added to its ground share.
 fn schur<T: Real, I: Index>(
@@ -264,14 +264,15 @@ fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
     let empty = || {
         (
             CliqueSampler::<T, I, C>::new(split),
-            vec![Fill::new(); count],
+            vec![Vec::new(); count],
         )
     };
     (0..n_stars)
         .into_par_iter()
         .fold_chunks(per_task, empty, |(mut sampler, mut buckets), i| {
             let (draws, neighbors) = star(i);
-            let push = |edge: (I, I, T)| buckets[edge.0.index() >> shift].push(edge);
+            let push =
+                |(lo, hi, _, w): (I, I, C, T)| buckets[lo.index() >> shift].push((lo, hi, w));
             sampler.eliminate_unique(draws, neighbors, push);
             (sampler, buckets)
         })

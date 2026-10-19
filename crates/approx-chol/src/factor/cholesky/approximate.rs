@@ -46,8 +46,8 @@ fn eliminate<T: Real, I: Index, C: Copies>(
         let column = clique.eliminate(&mut draws, graph.neighbors(v), &mut fill);
         steps.push(v, column);
         graph.eliminate_vertex(v);
-        for &(u, w, weight) in &fill {
-            graph.push_pair(u, w, C::one(), weight);
+        for &(u, w, copies, weight) in &fill {
+            graph.push_pair(u, w, copies, weight);
         }
         ordering.update(clique.degree_losses(), &fill);
     }
