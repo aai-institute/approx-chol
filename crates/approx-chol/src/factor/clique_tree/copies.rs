@@ -90,6 +90,7 @@ impl Copies for Multi {
         per_copy: T,
         mut draw: impl FnMut() -> usize,
     ) -> impl Iterator<Item = (usize, Self, T)> + 'a {
+        debug_assert!(self.0 > 0, "a capped entry keeps a copy");
         drawn.clear();
         drawn.push((draw(), 1));
         // Scanned, not sorted: sorting random draws mispredicts (bip_wide +26% cycles).

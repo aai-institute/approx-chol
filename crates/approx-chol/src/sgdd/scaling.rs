@@ -70,7 +70,7 @@ impl ScalingPolicy {
     }
 }
 
-/// Positive scales `R = μ/√a_ii` making `R|A|R` weakly dominant (Daitch, Spielman, arXiv:0803.0988 §4), and what `μ` is.
+/// Scales `R = μ/√a_ii`, positive once [`positive`] admits them, making `R|A|R` weakly dominant (Daitch, Spielman, arXiv:0803.0988 §4), and what `μ` is.
 pub(super) type Relaxation<T> = (Box<[T]>, ScaleVector);
 
 /// The vector the scales are taken from, and so how far past rounding each row of `M` may sit.
@@ -142,8 +142,8 @@ fn clamped_deficit<T: Real, I: Index>(
 
 /// `None` unless every scale is a positive `T`.
 fn positive<T: Real>(scales: Box<[T]>, vector: ScaleVector) -> Option<Relaxation<T>> {
-    let positive = scales.iter().all(|&f| f.is_finite() && f > T::zero());
-    positive.then_some((scales, vector))
+    let admitted = scales.iter().all(|&f| f.is_finite() && f > T::zero());
+    admitted.then_some((scales, vector))
 }
 
 /// `|u|` of a certified null vector: no iteration runs; `None` if a scale leaves `T`.

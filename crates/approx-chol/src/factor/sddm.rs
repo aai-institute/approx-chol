@@ -71,8 +71,10 @@ impl<T: Real, I: Index> Sddm<T, I> {
             let row = self.adjacency.upper(i);
             row.map(move |(j, &a)| (I::from_index(i), I::from_index(j), -a))
         });
-        let ground = (0..n).filter_map(move |k| Some((k, self.grounding.edge(k)?)));
-        laplacian.chain(ground.map(move |(k, s)| (I::from_index(k), I::from_index(n), s)))
+        let ground = (0..n).filter_map(move |k| {
+            Some((I::from_index(k), I::from_index(n), self.grounding.edge(k)?))
+        });
+        laplacian.chain(ground)
     }
 }
 

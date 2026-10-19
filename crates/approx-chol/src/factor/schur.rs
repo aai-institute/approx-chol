@@ -54,6 +54,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     }
 
     fn scaled(cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
+        debug_assert!(rows_within_one(&cross), "a D_e⁻¹C row sums past one");
         let ct = Self::transposes(&cross).then(|| cross.transpose());
         Self {
             cross,
@@ -119,6 +120,14 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
                 .for_each(|(e, y)| row(e, y));
         }
     }
+}
+
+/// Each `|D_e⁻¹C|` row sums to at most one, up to its rounding: the backward sum cannot overflow where the solution fits.
+fn rows_within_one<T: Real, I: Index>(cross: &Rows<T, I>) -> bool {
+    (0..cross.n_rows()).all(|e| {
+        let bound = 1.0 + 4.0 * (cross.row_len(e) + 2) as f64 * widen(T::epsilon());
+        cross.row(e).map(|(_, c)| widen(c.abs())).sum::<f64>() <= bound
+    })
 }
 
 /// `S = D_k − Cᵀ D_e⁻¹ C` on `sheets`, exact by kept row through a `Cᵀ` freed before `S` is factored.
@@ -360,9 +369,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         let (n_rows, n_cols) = (self.cross.n_rows(), self.cross.n_cols());
         // The larger side is eliminated, which bounds `n_cols` by decoded rows before `n` or `Cᵀ` exists.
         let sides = n_cols <= n_rows;
-        let bound = |e: usize| 1.0 + 4.0 * (self.cross.row_len(e) + 2) as f64 * widen(T::epsilon());
-        let scaled = (0..n_rows)
-            .all(|e| self.cross.row(e).map(|(_, c)| widen(c.abs())).sum::<f64>() <= bound(e));
-        (pivots && sides && scaled).then(|| Self::scaled(self.cross, self.inv_pivot))
+        (pivots && sides && rows_within_one(&self.cross))
+            .then(|| Self::scaled(self.cross, self.inv_pivot))
     }
 }
