@@ -101,7 +101,7 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
                 .per_copy(entry.weight * (suffix_past(&self.cumsum, Some(i)) / d))
                 .max(T::min_positive_value());
             let draw = || draw_after(&self.cumsum, rng, i);
-            (entry.copies).draw(&mut self.tally, weight, draw, |at, copies, weight| {
+            for (at, copies, weight) in (entry.copies).draw(&mut self.tally, weight, draw) {
                 let other = entries[at].neighbor;
                 fill((
                     entry.neighbor.min(other),
@@ -109,7 +109,7 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
                     copies,
                     weight,
                 ));
-            });
+            }
         }
     }
 }
