@@ -91,7 +91,7 @@ pub(crate) struct Column<T, I> {
 impl<T: Real, I> Column<T, I> {
     /// `w·v_a·v_b` in `f64`: every assembly sums its cells there and casts once.
     pub(crate) fn cell(self) -> f64 {
-        (self.weight).bilinear(widen(self.v_a), widen(self.v_b))
+        (self.weight).bilinear_unflushed(widen(self.v_a), widen(self.v_b))
     }
 }
 
@@ -114,6 +114,15 @@ impl<T: Real> Weighting<T> {
             Self::Unit => x * y,
             Self::Of(w) => to(w) * x * y,
             Self::SqrtOf(s) => (to(s) * x) * (to(s) * y),
+        }
+    }
+
+    /// As `bilinear`, a nonzero product that underflows kept as the least subnormal, so the range screen rejects it (#163).
+    pub(crate) fn bilinear_unflushed(self, x: f64, y: f64) -> f64 {
+        let product = self.bilinear(x, y);
+        match product == 0.0 && x != 0.0 && y != 0.0 && !self.is_zero() {
+            true => f64::from_bits(1).copysign(product),
+            false => product,
         }
     }
 
