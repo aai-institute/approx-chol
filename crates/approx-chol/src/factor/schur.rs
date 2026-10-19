@@ -147,13 +147,14 @@ pub(super) fn sampled<T: Real, I: Index>(
         let s_e = surplus.map(|s| s[e]).filter(|&s| s > T::zero());
         s_e.map(|s| (ground, s))
     };
+    let stars_per_task = per_task(c.n_rows(), c.nnz() as u64, 14);
     let fill = match sheets {
         // One sheet maps no column, as the balanced loop pays for any map.
-        Sheets::One => fill_stars(copies, c.n_rows(), stars_per_task(c), n, |e| {
+        Sheets::One => fill_stars(copies, c.n_rows(), stars_per_task, n, |e| {
             let neighbors = c.row(e).map(|(k, &c)| (I::from_index(k), c.abs()));
             (stars.star(e), neighbors.chain(ground_share(e)))
         }),
-        Sheets::Two => fill_stars(copies, 2 * c.n_rows(), stars_per_task(c), n, |star| {
+        Sheets::Two => fill_stars(copies, 2 * c.n_rows(), stars_per_task, n, |star| {
             let (sheet, e) = (star / c.n_rows(), star % c.n_rows());
             let neighbors = c.row(e).map(move |(k, &c)| {
                 let on = sheet ^ usize::from(crosses(c));
@@ -283,11 +284,6 @@ fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
         .collect()
 }
 
-/// Stars per task so each samples about `2^14` entries of `C`: fixed chunks, so the fill's pieces do not multiply with threads.
-fn stars_per_task<T: Real, I: Index>(c: &Rows<T, I>) -> usize {
-    (c.n_rows() << 14).div_ceil(c.nnz().max(1)).max(1)
-}
-
 /// Rows of the cover's complement: `|c_ke||c_je|/d_e` to `j`'s same sheet when signs agree, else its other; `k⁻` mirrors `k⁺`, so each sums only `j > k`; the ground's share as column `2·n_kept`.
 fn cover_rows<T: Real, I: Index>(
     c: &Rows<T, I>,
@@ -335,8 +331,14 @@ fn exact_rows<T: Real, I: Index>(
 
 /// Kept rows per task so each carries `2^17` of the complement's `nnz·(nnz/n_e)/2` multiply-adds, below which a split costs more than it saves.
 fn rows_per_task<T: Real, I: Index>(c: &Rows<T, I>) -> usize {
-    let work = c.nnz() * (c.nnz() / c.n_rows().max(1)) / 2;
-    (c.n_cols() << 17).div_ceil(work.max(1))
+    let work = c.nnz() as u64 * (c.nnz() / c.n_rows().max(1)) as u64 / 2;
+    per_task(c.n_cols(), work, 17)
+}
+
+/// `units` per task so each carries `2^bits` of `work`, in `u64` as a 32-bit `usize` wraps past `2^(32-bits)` units.
+fn per_task(units: usize, work: u64, bits: u32) -> usize {
+    let per = ((units as u64) << bits).div_ceil(work.max(1));
+    usize::try_from(per).unwrap_or(usize::MAX).max(1)
 }
 
 /// `x·y/d` as the smaller times the larger's share `max·d⁻¹ ≤ 1`, so no product overflows before the division.
