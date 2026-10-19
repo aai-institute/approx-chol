@@ -11,7 +11,7 @@ use num_traits::PrimInt;
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
 use super::congruence::{Congruence, Scales};
 use super::decomposition::{Cells, Components};
-use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport, RATIO_BAND};
+use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
 use super::signature;
 use crate::input::Input;
 use crate::storage::OffDiagonal;
@@ -117,10 +117,9 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
             None => {
                 // Signs keep every magnitude, so `A_c`'s rows are `M`'s.
                 let (diagonal, abs) = (&self.diagonal, &self.abs_row_sums);
-                let deficit =
-                    clamped_deficit(diagonal, abs, &self.off_diagonal, ScaleVector::Identity);
+                let report = ScaleVector::Identity.report(diagonal, abs, &self.off_diagonal);
                 let mut m = Congruent::new(self.vertices, self.off_diagonal, signs);
-                m.report = ScaleVector::Identity.shortfall().clamped(deficit);
+                m.report = report;
                 let rows = RowSums {
                     diagonal: self.diagonal,
                     abs: self.abs_row_sums,
@@ -134,12 +133,12 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 let diagonal: Vec<T> = (self.diagonal.iter().zip(&relaxation.scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();
-                let deficit = clamped_deficit(&diagonal, &abs, &off_diagonal, relaxation.vector);
+                let report = relaxation.vector.report(&diagonal, &abs, &off_diagonal);
                 let m = Congruent {
                     vertices: self.vertices,
                     congruence: Congruence::Scaled(Scales::new(factors)),
                     off_diagonal,
-                    report: relaxation.vector.shortfall().clamped(deficit),
+                    report,
                 };
                 (m, RowSums { diagonal, abs })
             }
@@ -216,28 +215,6 @@ impl<T: Real> RowSums<T> {
         (diagonal.iter_mut().zip(&abs)).for_each(|(d, &s)| *d = (*d - s).max(T::zero()));
         Grounding::of(diagonal)
     }
-}
-
-/// `max_i (Σ_j|m_ij| − m_ii)/m_ii` past row `i`'s band, which its `k_i` entries and the scale vector set.
-fn clamped_deficit<T: Real, I: Index>(
-    diagonal: &[T],
-    abs_row_sums: &[T],
-    off_diagonal: &OffDiagonal<T, I>,
-    vector: ScaleVector,
-) -> f64 {
-    let epsilon = widen(T::epsilon());
-    let deficits =
-        (diagonal.iter().zip(abs_row_sums)).map(|(&d, &s)| (widen(s) - widen(d)) / widen(d));
-    // Degrees cost a pass over the entries, so only a row past the floor pays for them.
-    if deficits
-        .clone()
-        .all(|deficit| deficit <= RATIO_BAND * epsilon)
-    {
-        return 0.0;
-    }
-    (deficits.zip(off_diagonal.degrees()).zip(diagonal))
-        .filter(|&((deficit, k), &d)| deficit > vector.row_band(k, widen(d), epsilon))
-        .fold(0.0, |worst, ((deficit, _), _)| worst.max(deficit))
 }
 
 /// `1ᵀM1 ≤ SINGULAR_BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh), so `M` floats.
