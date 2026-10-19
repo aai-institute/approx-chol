@@ -148,10 +148,7 @@ pub(super) fn sampled<T: Real, I: Index>(
     let (n_kept, surplus) = (c.n_cols(), grounding.surplus());
     let n = sheets.count() * n_kept;
     let ground = I::from_index(n);
-    let ground_share = move |e: usize| {
-        let s_e = surplus.map(|s| s[e]).filter(|&s| s > T::zero());
-        s_e.map(|s| (ground, s))
-    };
+    let ground_share = move |e: usize| grounds(surplus, e).map(|s| (ground, s));
     let stars_per_task = per_task(c.n_rows(), c.nnz() as u64, 14);
     let fill = match sheets {
         // One sheet maps no column, as the balanced loop pays for any map.
@@ -306,8 +303,8 @@ fn cover_rows<T: Real, I: Index>(
                     share(c_ek.abs(), c_ej.abs(), inv_pivot[e]),
                 );
             }
-            if let Some(surplus) = surplus {
-                rows.add(2 * n_kept, share(c_ek.abs(), surplus[e], inv_pivot[e]));
+            if let Some(s_e) = grounds(surplus, e) {
+                rows.add(2 * n_kept, share(c_ek.abs(), s_e, inv_pivot[e]));
             }
         }
     })
@@ -327,8 +324,8 @@ fn exact_rows<T: Real, I: Index>(
             for (j, c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
                 rows.add(j, share(c_ek, c_ej.abs(), inv_pivot[e]));
             }
-            if let Some(surplus) = surplus {
-                rows.add(n_kept, share(c_ek, surplus[e], inv_pivot[e]));
+            if let Some(s_e) = grounds(surplus, e) {
+                rows.add(n_kept, share(c_ek, s_e, inv_pivot[e]));
             }
         }
     })
@@ -338,6 +335,11 @@ fn exact_rows<T: Real, I: Index>(
 fn rows_per_task<T: Real, I: Index>(c: &Rows<T, I>) -> usize {
     let work = c.nnz() as u64 * (c.nnz() / c.n_rows().max(1)) as u64 / 2;
     per_task(c.n_cols(), work, 17)
+}
+
+/// Row `e`'s surplus where it grounds anything: a zero surplus is no ground edge, which a clamped [`share`] would add.
+fn grounds<T: Real>(surplus: Option<&[T]>, e: usize) -> Option<T> {
+    surplus.map(|s| s[e]).filter(|&s| s > T::zero())
 }
 
 /// `x·y/d` as the smaller times the larger's share `max·d⁻¹ ≤ 1`, so no product overflows before the division; at least `MIN_POSITIVE`, so no edge of `S` drops and every pivot's inverse is finite.
