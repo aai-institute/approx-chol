@@ -70,16 +70,6 @@ impl ScalingPolicy {
     }
 }
 
-impl ScalingReport {
-    /// Kept when a deficit past rounding was clamped or the scaling did not settle, which a violation past the slack prevents.
-    fn clamped(self, deficit: f64) -> Option<Self> {
-        (deficit > 0.0 || !self.settled).then_some(Self {
-            violation: self.violation.max(deficit),
-            ..self
-        })
-    }
-}
-
 /// Positive scales `R` making `R|A|R` weakly dominant (Daitch, Spielman, arXiv:0803.0988 §4), and how far short they fall.
 pub(super) struct Relaxation<T> {
     /// `f = μ/√a_ii`, `μ` peaking at `1` for a Perron vector and centred on `1` by a power of two for a null vector.
@@ -110,19 +100,7 @@ impl ScaleVector {
         }
     }
 
-    /// What the scaling spent and left before clamping: an exact vector spends nothing, and its rows decide floating exactly.
-    fn shortfall(self) -> ScalingReport {
-        match self {
-            Self::Identity | Self::NullVector => ScalingReport {
-                iterations: 0,
-                violation: 0.0,
-                settled: true,
-            },
-            Self::PerronVector { shortfall, .. } => shortfall,
-        }
-    }
-
-    /// `M`'s report from its rows: the shortfall, kept with any deficit past a row's band.
+    /// `M`'s report from its rows, kept when a deficit past a row's band was clamped or the scaling did not settle; an exact vector spends nothing.
     pub(super) fn report<T: Real, I: Index>(
         self,
         diagonal: &[T],
@@ -130,7 +108,18 @@ impl ScaleVector {
         off_diagonal: &OffDiagonal<T, I>,
     ) -> Option<ScalingReport> {
         let deficit = clamped_deficit(diagonal, abs_row_sums, off_diagonal, self);
-        self.shortfall().clamped(deficit)
+        let shortfall = match self {
+            Self::Identity | Self::NullVector => ScalingReport {
+                iterations: 0,
+                violation: 0.0,
+                settled: true,
+            },
+            Self::PerronVector { shortfall, .. } => shortfall,
+        };
+        (deficit > 0.0 || !shortfall.settled).then_some(ScalingReport {
+            violation: shortfall.violation.max(deficit),
+            ..shortfall
+        })
     }
 }
 
