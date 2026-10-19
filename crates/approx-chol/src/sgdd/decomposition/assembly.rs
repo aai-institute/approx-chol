@@ -333,5 +333,6 @@ fn sum_cells<T: Real, I: Index, C: CellSum>(
     columns.shrink_to_fit();
     cells.truncate(out);
     cells.shrink_to_fit();
-    Ok(Rows::new(ptrs, columns, cells, n_cols).map(narrow))
+    let values = cells.into_iter().map(narrow).collect();
+    Ok(Rows::new(ptrs, columns, values, n_cols))
 }

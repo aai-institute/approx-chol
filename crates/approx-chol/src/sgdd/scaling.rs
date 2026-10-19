@@ -158,7 +158,8 @@ pub(super) fn relax<T: Real, I: Index>(
 ) -> Option<Relaxation<T>> {
     let n = Normalized::new(off_diagonal, diagonal);
     // A ratio over `k` positive terms rounds by `(k + 3)ε`: no bracket closes tighter.
-    let rounding = (off_diagonal.max_degree() + 3) as f64 * f64::EPSILON;
+    let rounding =
+        (off_diagonal.degrees().into_iter().max().unwrap_or(0) + 3) as f64 * f64::EPSILON;
     let band = (RATIO_BAND * widen(T::epsilon())).max(rounding);
     let slack = policy.slack(widen(T::epsilon()));
     let iteration = InverseIteration::new(&n, slack, band, policy.max_iterations)?;
