@@ -74,7 +74,7 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
         neighbors: impl Iterator<Item = (I, T)>,
         fill: impl FnMut((I, I, C, T)),
     ) {
-        self.refill_unique(neighbors, C::initial(self.split));
+        self.refill_unique(neighbors);
         self.sample(&mut rng, fill);
     }
 

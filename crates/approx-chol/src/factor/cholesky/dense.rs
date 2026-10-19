@@ -65,9 +65,9 @@ pub(super) fn substitute<T: Real>(factor: &[T], free: usize, values: &mut [T]) {
         "one value per row and the free slot"
     );
     for row in 0..m {
-        let entries = &factor[row_start(row)..=row_start(row) + row];
+        let entries = &factor[row_start(row)..row_start(row) + row];
         let mut value = solved[row];
-        for (&entry, &solution) in entries[..row].iter().zip(&solved[..row]) {
+        for (&entry, &solution) in entries.iter().zip(&solved[..row]) {
             value = value - entry * solution;
         }
         solved[row] = value;

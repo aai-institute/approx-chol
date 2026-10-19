@@ -38,13 +38,13 @@ fn by_per_copy_then_neighbor<T: Real, I: Index, C: Copies>(
 /// At or below this many entries, sorting beats the scatter path's random access.
 const SCATTER_THRESHOLD: usize = 32;
 
-/// Rests in every slot of [`Star::scatter`] between merges.
+/// Rests in every slot of [`CliqueSampler::scatter`] between merges.
 fn unseen<I: Index>() -> I {
     I::max_value()
 }
 
 impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
-    /// Merges duplicate neighbors under `split`'s cap, then sorts by per-copy weight.
+    /// Merges duplicate neighbors under the sampler's `split` cap, then sorts by per-copy weight.
     pub(super) fn refill(&mut self, neighbors: impl Iterator<Item = (I, C, T)>) {
         self.entries.clear();
         self.removed_copies.clear();
@@ -119,8 +119,9 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
         self.counts[position] = self.counts[position].saturating_add(duplicate.copies.get());
     }
 
-    /// Neighbors already unique under one `copies`, which keeps per-copy order the raw order: one sort, no scratch.
-    pub(super) fn refill_unique(&mut self, neighbors: impl Iterator<Item = (I, T)>, copies: C) {
+    /// Neighbors already unique, each at the split's initial copies, which keeps per-copy order the raw order: one sort, no scratch.
+    pub(super) fn refill_unique(&mut self, neighbors: impl Iterator<Item = (I, T)>) {
+        let copies = C::initial(self.split);
         self.entries.clear();
         self.removed_copies.clear();
         let entries = neighbors.map(|(neighbor, weight)| StarEntry {
