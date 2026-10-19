@@ -1,6 +1,6 @@
 use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, ScalingReport};
 use num_traits::PrimInt;
-use numpy::{BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyReadonlyArray1};
+use numpy::{BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods};
 use pyo3::prelude::*;
 use std::error::Error;
 use std::mem::size_of;
@@ -82,6 +82,15 @@ fn as_contiguous<'py, E: Element>(
     np.call_method1("ascontiguousarray", (arr, E::get_dtype(arr.py())))?
         .cast_into()
         .map_err(Into::into)
+}
+
+/// Any 1-D array-like as contiguous `f64`, copied only when its dtype or layout differs.
+fn right_hand_side<'py>(
+    py: Python<'py>,
+    b: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let np = py.import("numpy")?;
+    as_contiguous(&np, &as_1d(&np, b, "b", Column::Value)?)
 }
 
 #[inline]
@@ -222,7 +231,7 @@ impl PyFactor {
     fn matvec<'py>(
         &self,
         py: Python<'py>,
-        x: PyReadonlyArray1<'py, f64>,
+        x: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         self.solve(py, x)
     }
@@ -230,7 +239,7 @@ impl PyFactor {
     fn rmatvec<'py>(
         &self,
         py: Python<'py>,
-        x: PyReadonlyArray1<'py, f64>,
+        x: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         self.solve(py, x)
     }
@@ -238,8 +247,10 @@ impl PyFactor {
     fn solve<'py>(
         &self,
         py: Python<'py>,
-        b: PyReadonlyArray1<'py, f64>,
+        b: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let b = right_hand_side(py, b)?;
+        let b = b.try_readonly().map_err(|e| borrow_error("b", e))?;
         let b_slice = b
             .as_slice()
             .map_err(|_| value_error("b must be contiguous"))?;
@@ -249,9 +260,12 @@ impl PyFactor {
 
     fn solve_into<'py>(
         &self,
-        b: PyReadonlyArray1<'py, f64>,
+        py: Python<'py>,
+        b: &Bound<'py, PyAny>,
         out: &Bound<'py, PyArray1<f64>>,
     ) -> PyResult<()> {
+        let b = right_hand_side(py, b)?;
+        let b = b.try_readonly().map_err(|e| borrow_error("b", e))?;
         let b_slice = b
             .as_slice()
             .map_err(|_| value_error("b must be contiguous"))?;

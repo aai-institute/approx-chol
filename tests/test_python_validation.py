@@ -3,6 +3,7 @@ import re
 import numpy as np
 import pytest
 import scipy.sparse as sp
+import scipy.sparse.linalg as sla
 
 import approx_chol
 from tests._laplacians import grid_laplacian
@@ -202,3 +203,17 @@ def test_solve_into_rejects_partially_overlapping_views():
 
     with pytest.raises(ValueError, match="must not overlap"):
         factor.solve_into(base[:-1], base[1:])
+
+
+def test_solve_takes_any_1d_array_like_as_the_stub_declares():
+    lap = grid_laplacian(4, 4)
+    factor = approx_chol.factorize(lap)
+    b = np.zeros(lap.shape[0])
+    b[0], b[-1] = 1.0, -1.0
+    expected = factor.solve(b)
+    np.testing.assert_array_equal(factor.solve(b.tolist()), expected)
+    np.testing.assert_array_equal(factor.matvec(b.astype(np.float32)), expected)
+    block = np.column_stack([b, 2 * b])
+    np.testing.assert_array_equal(
+        sla.aslinearoperator(factor) @ block, np.column_stack([expected, 2 * expected])
+    )
