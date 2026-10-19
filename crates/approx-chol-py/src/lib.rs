@@ -1,6 +1,6 @@
 use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, ScalingReport};
 use num_traits::PrimInt;
-use numpy::{BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods};
+use numpy::{BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use std::error::Error;
 use std::mem::size_of;
@@ -84,11 +84,16 @@ fn as_contiguous<'py, E: Element>(
         .map_err(Into::into)
 }
 
-/// Any 1-D array-like as contiguous `f64`, copied only when its dtype or layout differs.
+/// Any 1-D array-like as contiguous `f64`; a CG's own `f64` vector skips every numpy call.
 fn right_hand_side<'py>(
     py: Python<'py>,
     b: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    if let Ok(array) = b.cast::<PyArray1<f64>>() {
+        if array.is_contiguous() {
+            return Ok(array.clone());
+        }
+    }
     let np = py.import("numpy")?;
     as_contiguous(&np, &as_1d(&np, b, "b", Column::Value)?)
 }
