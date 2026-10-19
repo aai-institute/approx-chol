@@ -88,7 +88,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
     }
 
     /// The one site deriving the remainder's share.
-    fn push(&mut self, vertex: usize, (heaviest, shares, remainder): PivotColumn<'_, T, I>) {
+    fn push(&mut self, vertex: usize, (weight, shares, remainder): PivotColumn<'_, T, I>) {
         let start = self.neighbors.len();
         let mut retained = T::one();
         for &(neighbor, share) in shares {
@@ -98,12 +98,12 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
         }
         self.neighbors.push(remainder);
         self.coefficients.push(retained);
-        // `retained / (w_max²/d)` is `1/w_max`; needs `w_max` under `1/MAX`, fill decay past the range floor (#168); `one` drops the scale.
+        // `retained / (w²/d)` is `1/w` for the remainder's `w`; needs `w` under `1/MAX`, fill decay past the range floor (#168); `one` drops the scale.
         debug_assert!(
-            (T::one() / heaviest).is_finite(),
+            (T::one() / weight).is_finite(),
             "pivot has no finite inverse"
         );
-        let inverse = match T::one() / heaviest {
+        let inverse = match T::one() / weight {
             inverse if inverse.is_finite() => inverse,
             _ => T::one(),
         };

@@ -14,7 +14,7 @@ use star::Star;
 /// Fill edges `(lo, hi, copies, weight)`, `lo < hi`, as an elimination emits them: one per entry and partner, its weight summed over its copies.
 pub(super) type Fill<T, I, C> = Vec<(I, I, C, T)>;
 
-/// A pivot's column: its heaviest weight, its other neighbors' shares, and the heaviest neighbor, which absorbs what they leave.
+/// A pivot's column: the last star entry's weight, the other entries' shares, and the last entry's neighbor, which absorbs what they leave.
 pub(super) type PivotColumn<'a, T, I> = (T, &'a [(I, T)], I);
 
 /// A pivot's elimination, reused across pivots; AC and AC2 differ only in `C`.

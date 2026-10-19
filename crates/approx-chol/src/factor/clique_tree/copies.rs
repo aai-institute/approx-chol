@@ -30,7 +30,7 @@ pub(in crate::factor) trait Copies: Copy + Send + Sync {
 #[derive(Clone, Copy)]
 pub(in crate::factor) struct Single;
 
-/// Virtual copy count, only ever lowered from `Multiplicity::Split`'s `k` by the merge cap.
+/// Virtual copy count: `Multiplicity::Split`'s `k`, lowered by the merge cap, or the copies of one entry that drew one partner.
 #[derive(Clone, Copy)]
 pub(in crate::factor) struct Multi(u32);
 
