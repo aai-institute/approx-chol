@@ -1,6 +1,7 @@
 use core::cmp::Ordering;
 
 use super::copies::Copies;
+use super::CliqueSampler;
 use crate::{Index, Real};
 
 /// Copies stored as the graph stores them, so a single-copy star pays no count or division.
@@ -42,28 +43,9 @@ fn unseen<I: Index>() -> I {
     I::max_value()
 }
 
-/// A pivot's deduplicated neighborhood in clique-tree order, and what collapsing it cost each degree.
-pub(super) struct Star<T, I, C> {
-    entries: Vec<StarEntry<T, I, C>>,
-    removed_copies: Vec<(I, u32)>,
-    /// Grown to `n` on first need: above 32 entries, dedup scatters instead of sorting 16-byte entries twice.
-    scatter: Vec<I>,
-    /// Each merged entry's summed copies before the cap: `C` cannot add.
-    counts: Vec<u32>,
-}
-
-impl<T: Real, I: Index, C: Copies> Star<T, I, C> {
-    pub(super) fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-            removed_copies: Vec::new(),
-            scatter: Vec::new(),
-            counts: Vec::new(),
-        }
-    }
-
+impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
     /// Merges duplicate neighbors under `split`'s cap, then sorts by per-copy weight.
-    pub(super) fn refill(&mut self, neighbors: impl Iterator<Item = (I, C, T)>, split: C::Split) {
+    pub(super) fn refill(&mut self, neighbors: impl Iterator<Item = (I, C, T)>) {
         self.entries.clear();
         self.removed_copies.clear();
         self.counts.clear();
@@ -79,7 +61,7 @@ impl<T: Real, I: Index, C: Copies> Star<T, I, C> {
         };
         self.entries.truncate(merged);
         for (entry, &count) in self.entries.iter_mut().zip(&self.counts) {
-            let (copies, dropped) = C::cap(count, split);
+            let (copies, dropped) = C::cap(count, self.split);
             entry.copies = copies;
             if dropped > 0 {
                 self.removed_copies.push((entry.neighbor, dropped));
@@ -150,12 +132,8 @@ impl<T: Real, I: Index, C: Copies> Star<T, I, C> {
         self.entries.sort_unstable_by(by_weight_then_neighbor);
     }
 
-    pub(super) fn entries(&self) -> &[StarEntry<T, I, C>] {
-        &self.entries
-    }
-
     /// Copies each neighbor lost: those to the pivot, and those merging or capping collapsed.
-    pub(super) fn degree_losses(&self) -> impl Iterator<Item = (I, u32)> + '_ {
+    pub(in crate::factor) fn degree_losses(&self) -> impl Iterator<Item = (I, u32)> + '_ {
         let to_pivot = (self.entries.iter()).map(|entry| (entry.neighbor, entry.copies.get()));
         to_pivot.chain(self.removed_copies.iter().copied())
     }
