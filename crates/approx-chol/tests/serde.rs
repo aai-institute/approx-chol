@@ -295,3 +295,45 @@ fn a_scaling_policy_decode_rejects_tolerance_outside_unit_interval() {
     assert_eq!(policy, ScalingPolicy::new(0.25, 7).unwrap());
     assert_eq!(postcard::to_stdvec(&policy).unwrap(), bytes);
 }
+
+/// Each stored `|D_e⁻¹C|` row sums to at most one; past it the backward sum can overflow.
+#[test]
+fn an_elimination_whose_rows_sum_past_one_is_corrupt() {
+    fn scale_cross(v: &mut serde_json::Value, by: f64) -> usize {
+        match v {
+            serde_json::Value::Object(map) => {
+                let mut scaled = 0;
+                if map.contains_key("inv_pivot") {
+                    let values = map["cross"]["values"].as_array_mut().unwrap();
+                    values
+                        .iter_mut()
+                        .for_each(|x| *x = (x.as_f64().unwrap() * by).into());
+                    scaled += 1;
+                }
+                scaled + map.values_mut().map(|v| scale_cross(v, by)).sum::<usize>()
+            }
+            serde_json::Value::Array(items) => items.iter_mut().map(|v| scale_cross(v, by)).sum(),
+            _ => 0,
+        }
+    }
+    let rows: Vec<u32> = (0..300).map(|o| o % 60).collect();
+    let cols: Vec<u32> = (0..300).map(|o| (o * 7 + o / 13) % 30).collect();
+    let weights: Vec<f64> = (0..300).map(|o| 1.0 + (o % 5) as f64).collect();
+    let gram = BipartiteGram::new(
+        FactorWidth1::new(60, &rows, None).unwrap(),
+        FactorWidth1::new(30, &cols, None).unwrap(),
+        Weights::of(&weights).unwrap(),
+    )
+    .unwrap();
+    let factor = approx_chol::factorize(gram).unwrap();
+    let decode = |by: f64| {
+        let mut v = serde_json::to_value(&factor).unwrap();
+        assert!(
+            scale_cross(&mut v, by) > 0,
+            "the factor stores an elimination"
+        );
+        serde_json::from_value::<Factor>(v)
+    };
+    decode(1.0).expect("a stored elimination decodes");
+    decode(2.0).expect_err("rows summing to two are corrupt");
+}

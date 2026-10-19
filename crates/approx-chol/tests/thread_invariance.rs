@@ -3,9 +3,9 @@ use approx_chol::{factorize_with, Config, InnerParallelism, SchurMode};
 
 const DEGREE: usize = 48;
 
-/// `(left, right, frustrated)` per block: the first passes the `Cᵀ` gate, each splits its star fold and exact rows, together they split the components.
+/// `(left, right, frustrated)` per block: the first's 3200·48 entries clear the `Cᵀ` gate (2¹⁷) by 17%, each splits its star fold and exact rows, together they split the components.
 const GROUPS: [(usize, usize, bool); 3] =
-    [(2800, 700, false), (420, 1000, true), (420, 1000, false)];
+    [(3200, 700, false), (420, 1000, true), (420, 1000, false)];
 
 struct Gram {
     left: Vec<u32>,
@@ -69,7 +69,7 @@ fn solve_bits(g: &Gram, config: Config) -> Vec<u64> {
 }
 
 #[test]
-fn factors_and_solves_are_bit_identical_across_thread_counts() {
+fn solves_are_bit_identical_across_thread_counts() {
     let g = gram();
     let configs = [
         ("AC", Config::default()),
