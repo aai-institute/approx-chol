@@ -5,9 +5,6 @@ pub(in crate::factor) trait Copies: Copy + Send + Sync {
     /// `Single` cannot name a `k`, making AC over split multi-edges a type error.
     type Split: Copy + Send + Sync;
 
-    /// Scratch [`Copies::draw`] reuses across entries: nothing for one copy.
-    type Tally: Default + Send;
-
     /// What an edge of the input carries once split.
     fn initial(split: Self::Split) -> Self;
 
@@ -20,7 +17,7 @@ pub(in crate::factor) trait Copies: Copy + Send + Sync {
     /// Draws a partner position per copy; yields each distinct one once, with the copies that drew it and their summed `per_copy` weight.
     fn draw<'a, T: Real>(
         self,
-        tally: &'a mut Self::Tally,
+        tally: &'a mut Vec<(usize, u32)>,
         per_copy: T,
         draw: impl FnMut() -> usize,
     ) -> impl Iterator<Item = (usize, Self, T)> + 'a;
@@ -35,7 +32,6 @@ pub(in crate::factor) struct Multi(u32);
 
 impl Copies for Single {
     type Split = ();
-    type Tally = ();
 
     fn initial((): ()) -> Self {
         Self
@@ -55,7 +51,7 @@ impl Copies for Single {
 
     fn draw<'a, T: Real>(
         self,
-        (): &'a mut (),
+        _: &'a mut Vec<(usize, u32)>,
         per_copy: T,
         mut draw: impl FnMut() -> usize,
     ) -> impl Iterator<Item = (usize, Self, T)> + 'a {
@@ -65,7 +61,6 @@ impl Copies for Single {
 
 impl Copies for Multi {
     type Split = u32;
-    type Tally = Vec<(usize, u32)>;
 
     fn initial(split: u32) -> Self {
         Self(split)
