@@ -20,22 +20,6 @@ impl<T: Real> Balance<T> {
             Self::Balanced(grounding) | Self::Frustrated(grounding) => grounding,
         }
     }
-
-    /// Copies of each vertex its factor holds: a cover has two.
-    fn sheets(&self) -> usize {
-        match self {
-            Self::Balanced(_) => 1,
-            Self::Frustrated(_) => 2,
-        }
-    }
-
-    /// The ground is a vertex too: its diagonal `Σs`, once per sheet, clears the same bound as any other.
-    fn ground_in_range(&self) -> bool {
-        let sheets = T::from(self.sheets()).expect("a sheet count is a float");
-        let total = |surplus: &[T]| surplus.iter().fold(T::zero(), |sum, &s| sum + s);
-        (self.grounding().surplus())
-            .is_none_or(|surplus| diagonal_in_range(sheets * total(surplus)))
-    }
 }
 
 /// The surplus `s = diag(M) − Σ|offdiag(M)|` closing `M` into an SDDM; none is `σ = 0`, singular only when balanced.
@@ -62,6 +46,11 @@ impl<T: Real> Grounding<T> {
 
     pub(crate) fn surplus(&self) -> Option<&[T]> {
         self.0.as_deref()
+    }
+
+    /// Row `i`'s ground edge; a zero surplus couples nothing, so it is none.
+    pub(crate) fn edge(&self, i: usize) -> Option<T> {
+        self.surplus().map(|s| s[i]).filter(|&s| s > T::zero())
     }
 
     pub(crate) fn is_grounded(&self) -> bool {
@@ -97,15 +86,21 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         let n = vertices.len();
         assert_eq!(off_diagonal.n(), n, "one row per vertex");
         assert!(balance.grounding().fits(n), "one surplus per row");
-        if let Balance::Balanced(_) = balance {
-            debug_assert!(off_diagonal.nonpositive(), "a balanced M is a Z-matrix");
-        }
+        let sheets = match balance {
+            Balance::Balanced(_) => {
+                debug_assert!(off_diagonal.nonpositive(), "a balanced M is a Z-matrix");
+                T::one()
+            }
+            Balance::Frustrated(_) => T::one() + T::one(),
+        };
         let surplus = balance.grounding().surplus().unwrap_or_default();
         if let Some(i) = surplus.iter().position(|&s| !crate::in_range(s)) {
             let vertex = vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
         }
-        if !balance.ground_in_range() {
+        // The ground is a vertex too: its diagonal `Σs`, once per sheet, clears the same bound as any other.
+        let total = surplus.iter().fold(T::zero(), |sum, &s| sum + s);
+        if !diagonal_in_range(sheets * total) {
             let vertex = vertices[0].index();
             return Err(ReduceError::OutOfRange { vertex });
         }

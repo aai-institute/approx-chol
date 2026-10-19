@@ -58,8 +58,12 @@ impl<I: Index> ParityForest<I> {
 
     /// Each vertex negated when odd to its root.
     fn signs<T: Real>(mut self) -> Congruence<T> {
-        let negated: Vec<bool> = (0..self.parent.len()).map(|i| self.find(i).1).collect();
-        Congruence::negated(&negated)
+        let sign = |negated: bool| if negated { -T::one() } else { T::one() };
+        Congruence::Signs(
+            (0..self.parent.len())
+                .map(|i| sign(self.find(i).1))
+                .collect(),
+        )
     }
 
     /// `None` when `i` and `j` are already joined at the other parity.

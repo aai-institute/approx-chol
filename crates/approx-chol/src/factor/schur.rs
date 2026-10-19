@@ -34,10 +34,9 @@ pub(super) struct BlockElimination<T, I> {
 impl<T: Real, I: Index> BlockElimination<T, I> {
     /// Inverse pivots `1/(Σ|c_ek| + s_e)`, the same on both sheets of a cover.
     pub(super) fn pivots(c: &Rows<T, I>, grounding: &Grounding<T>) -> Box<[T]> {
-        let surplus = grounding.surplus();
         (0..c.n_rows())
             .map(|e| {
-                let s_e = surplus.map_or(0.0, |s| widen(s[e]));
+                let s_e = grounding.edge(e).map_or(0.0, widen);
                 let d_e = c.row(e).fold(s_e, |d, (_, &c)| d + widen(c.abs()));
                 T::one() / narrow::<T>(d_e)
             })
@@ -55,6 +54,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     }
 
     fn scaled(cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
+        debug_assert!(rows_within_one(&cross), "a D_e⁻¹C row sums past one");
         let ct = Self::transposes(&cross).then(|| cross.transpose());
         Self {
             cross,
@@ -122,6 +122,14 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     }
 }
 
+/// Each `|D_e⁻¹C|` row sums to at most one, up to its rounding: the backward sum cannot overflow where the solution fits.
+fn rows_within_one<T: Real, I: Index>(cross: &Rows<T, I>) -> bool {
+    (0..cross.n_rows()).all(|e| {
+        let bound = 1.0 + 4.0 * (cross.row_len(e) + 2) as f64 * widen(T::epsilon());
+        cross.row(e).map(|(_, c)| widen(c.abs())).sum::<f64>() <= bound
+    })
+}
+
 /// `S = D_k − Cᵀ D_e⁻¹ C` on `sheets`, exact by kept row through a `Cᵀ` freed before `S` is factored.
 pub(super) fn exact<T: Real, I: Index>(
     c: &Rows<T, I>,
@@ -129,12 +137,12 @@ pub(super) fn exact<T: Real, I: Index>(
     sheets: Sheets,
     grounding: Grounding<T>,
 ) -> Sddm<T, I> {
-    let (ct, surplus) = (c.transpose(), grounding.surplus());
+    let ct = c.transpose();
     let rows = match sheets {
-        Sheets::One => exact_rows(c, &ct, inv_pivot, surplus),
-        Sheets::Two => cover_rows(c, &ct, inv_pivot, surplus),
+        Sheets::One => exact_rows(c, &ct, inv_pivot, &grounding),
+        Sheets::Two => cover_rows(c, &ct, inv_pivot, &grounding),
     };
-    schur(rows, c.n_cols(), sheets, surplus)
+    schur(rows, c.n_cols(), sheets, &grounding)
 }
 
 /// `S` sampled by star in parallel; clique trees need no pivots, so no elimination exists yet. σ is read last here, so it is freed before `S` is factored.
@@ -145,10 +153,10 @@ pub(super) fn sampled<T: Real, I: Index>(
     grounding: Grounding<T>,
     stars: Streams,
 ) -> Sddm<T, I> {
-    let (n_kept, surplus) = (c.n_cols(), grounding.surplus());
+    let n_kept = c.n_cols();
     let n = sheets.count() * n_kept;
     let ground = I::from_index(n);
-    let ground_share = move |e: usize| grounds(surplus, e).map(|s| (ground, s));
+    let ground_share = |e: usize| grounding.edge(e).map(|s| (ground, s));
     let stars_per_task = per_task(c.n_rows(), c.nnz() as u64, 14);
     let fill = match sheets {
         // One sheet maps no column, as the balanced loop pays for any map.
@@ -165,7 +173,7 @@ pub(super) fn sampled<T: Real, I: Index>(
             (stars.star(star), neighbors.chain(ground_share(e)))
         }),
     };
-    schur(from_fill(n, fill), n_kept, sheets, surplus)
+    schur(from_fill(n, fill), n_kept, sheets, &grounding)
 }
 
 /// Rows per fill bucket, as a shift: at most 16 buckets, so one bucket's sorted copy is all the fill ever copied at once.
@@ -181,9 +189,9 @@ fn schur<T: Real, I: Index>(
     (adjacency, mut ground): (UpperAdjacency<T, I>, Vec<T>),
     n_kept: usize,
     sheets: Sheets,
-    surplus: Option<&[T]>,
+    grounding: &Grounding<T>,
 ) -> Sddm<T, I> {
-    if let Some(surplus) = surplus {
+    if let Some(surplus) = grounding.surplus() {
         let kept = surplus[surplus.len() - n_kept..].iter();
         let copies = kept.flat_map(|&s| std::iter::repeat_n(s, sheets.count()));
         (ground.iter_mut().zip(copies)).for_each(|(g, s)| *g = s + *g);
@@ -291,7 +299,7 @@ fn cover_rows<T: Real, I: Index>(
     c: &Rows<T, I>,
     ct: &Rows<T, I>,
     inv_pivot: &[T],
-    surplus: Option<&[T]>,
+    grounding: &Grounding<T>,
 ) -> (UpperAdjacency<T, I>, Vec<T>) {
     let n_kept = c.n_cols();
     SddmRows::split(Sheets::Two, n_kept, rows_per_task(c), |mut rows, k| {
@@ -303,7 +311,7 @@ fn cover_rows<T: Real, I: Index>(
                     share(c_ek.abs(), c_ej.abs(), inv_pivot[e]),
                 );
             }
-            if let Some(s_e) = grounds(surplus, e) {
+            if let Some(s_e) = grounding.edge(e) {
                 rows.add(2 * n_kept, share(c_ek.abs(), s_e, inv_pivot[e]));
             }
         }
@@ -315,7 +323,7 @@ fn exact_rows<T: Real, I: Index>(
     c: &Rows<T, I>,
     ct: &Rows<T, I>,
     inv_pivot: &[T],
-    surplus: Option<&[T]>,
+    grounding: &Grounding<T>,
 ) -> (UpperAdjacency<T, I>, Vec<T>) {
     let n_kept = c.n_cols();
     SddmRows::split(Sheets::One, n_kept, rows_per_task(c), |mut rows, k| {
@@ -324,7 +332,7 @@ fn exact_rows<T: Real, I: Index>(
             for (j, c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
                 rows.add(j, share(c_ek, c_ej.abs(), inv_pivot[e]));
             }
-            if let Some(s_e) = grounds(surplus, e) {
+            if let Some(s_e) = grounding.edge(e) {
                 rows.add(n_kept, share(c_ek, s_e, inv_pivot[e]));
             }
         }
@@ -335,11 +343,6 @@ fn exact_rows<T: Real, I: Index>(
 fn rows_per_task<T: Real, I: Index>(c: &Rows<T, I>) -> usize {
     let work = c.nnz() as u64 * (c.nnz() / c.n_rows().max(1)) as u64 / 2;
     per_task(c.n_cols(), work, 17)
-}
-
-/// Row `e`'s surplus where it grounds anything: a zero surplus is no ground edge, which a clamped [`share`] would add.
-fn grounds<T: Real>(surplus: Option<&[T]>, e: usize) -> Option<T> {
-    surplus.map(|s| s[e]).filter(|&s| s > T::zero())
 }
 
 /// `x·y/d` as the smaller times the larger's share `max·d⁻¹ ≤ 1`, so no product overflows before the division; at least `MIN_POSITIVE`, so no edge of `S` drops and every pivot's inverse is finite.
@@ -366,6 +369,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         let (n_rows, n_cols) = (self.cross.n_rows(), self.cross.n_cols());
         // The larger side is eliminated, which bounds `n_cols` by decoded rows before `n` or `Cᵀ` exists.
         let sides = n_cols <= n_rows;
-        (pivots && sides).then(|| Self::scaled(self.cross, self.inv_pivot))
+        (pivots && sides && rows_within_one(&self.cross))
+            .then(|| Self::scaled(self.cross, self.inv_pivot))
     }
 }

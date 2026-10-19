@@ -126,14 +126,14 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 };
                 (m, rows)
             }
-            Some(relaxation) => {
-                let factors = signs.times(&relaxation.scales);
+            Some((scales, vector)) => {
+                let factors = signs.times(&scales);
                 let (off_diagonal, abs) = (self.off_diagonal.scaled_abs_row_sums(&factors))
                     .ok_or(ReduceError::Unscalable { vertex })?;
-                let diagonal: Vec<T> = (self.diagonal.iter().zip(&relaxation.scales[..]))
+                let diagonal: Vec<T> = (self.diagonal.iter().zip(&scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();
-                let report = relaxation.vector.report(&diagonal, &abs, &off_diagonal);
+                let report = vector.report(&diagonal, &abs, &off_diagonal);
                 let m = Congruent {
                     vertices: self.vertices,
                     congruence: Congruence::Scaled(Scales::new(factors)),

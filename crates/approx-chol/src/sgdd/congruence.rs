@@ -58,7 +58,10 @@ impl<T: Real, I: Index> Restriction<T, I> {
 
     /// `x ← x − x_q·1` at the largest `|f|`, where a split block's singular solve fixes `M`'s gauge.
     pub(crate) fn regauge(&self, x: &mut [T]) {
-        self.congruence.regauge(x);
+        if let Congruence::Scaled(scales) = &self.congruence {
+            let gauge = x[scales.peak];
+            x.iter_mut().for_each(|x| *x = *x - gauge);
+        }
     }
 
     /// `x ← F x` back in `A_c`'s scale, `F·1` projected out last when `M` is singular.
@@ -143,23 +146,11 @@ impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for Scales<
 }
 
 impl<T: Real> Congruence<T> {
-    /// `true` where the vertex is negated.
-    pub(super) fn negated(signs: &[bool]) -> Self {
-        let sign = |&negated: &bool| match negated {
-            true => -T::one(),
-            false => T::one(),
-        };
-        Self::Signs(signs.iter().map(sign).collect())
-    }
-
     /// `F = S R`'s factors, `self` the signs `S`, for positive scales `R`.
     pub(super) fn times(&self, scales: &[T]) -> Box<[T]> {
-        match self.factors(scales.len()) {
-            None => scales.into(),
-            Some(factors) => (factors.iter().zip(scales))
-                .map(|(&factor, &scale)| factor * scale)
-                .collect(),
-        }
+        (scales.iter().enumerate())
+            .map(|(i, &scale)| self.factor(i) * scale)
+            .collect()
     }
 
     /// `f_i`, vertex `i`'s entry of `F·1`.
@@ -218,14 +209,6 @@ impl<T: Real> Congruence<T> {
                 let largest = scales.factors[scales.peak].abs();
                 project_out(x, |i| scales.factors[i] / largest, scales.norm)
             }
-        }
-    }
-
-    /// `x ← x − x_q·1` at the largest `|f|`, where a split block's singular solve fixes `M`'s gauge.
-    fn regauge(&self, x: &mut [T]) {
-        if let Self::Scaled(scales) = self {
-            let gauge = x[scales.peak];
-            x.iter_mut().for_each(|x| *x = *x - gauge);
         }
     }
 }
