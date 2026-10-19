@@ -405,3 +405,12 @@ fn unsorted_and_split_entries_reduce_bit_identically() {
     let rhs = [1.0, 0.0, -1.0];
     assert_eq!(bits(&canonical, &rhs), bits(&shuffled, &rhs));
 }
+
+/// The chain's null vector `(1, 1e200, 1e400)` passes `f64`: out of range, not a solve wrong by 174 decades.
+#[test]
+fn a_floating_csr_whose_null_vector_passes_the_range_is_out_of_range() {
+    let values = [1e200, -1.0, -1.0, 1e200, -1.0, -1.0, 1e-200];
+    let csr = CsrRef::new(&[0u32, 2, 5, 7], &[0, 1, 0, 1, 2, 1, 2], &values, 3).unwrap();
+    let error = factorize(csr).expect_err("the null vector leaves the range");
+    assert_names_a_defect(error, &[0, 1, 2].map(out_of_range));
+}

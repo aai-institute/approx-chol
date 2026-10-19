@@ -179,12 +179,25 @@ struct RowSums<T> {
 
 impl<T: Real> RowSums<T> {
     /// A folded `M`'s row sums are `M1`, so `1ᵀM1 = tr M − Σ|offdiag(M)|`, both compensated.
-    fn folded_surplus<I: Index>(self, off_diagonal: &OffDiagonal<T, I>) -> Grounding<T> {
+    fn folded_surplus<I: Index>(
+        self,
+        off_diagonal: &OffDiagonal<T, I>,
+        vertices: &[I],
+    ) -> Result<Grounding<T>, ReduceError> {
         let trace = crate::compensated_sum(self.diagonal.iter().map(|&d| widen(d)));
         let ones = trace - off_diagonal.abs_total();
-        match ones <= SINGULAR_BAND * widen(T::epsilon()) * trace {
-            true => Grounding::ungrounded(),
-            false => self.surplus(),
+        if ones > SINGULAR_BAND * widen(T::epsilon()) * trace {
+            return Ok(self.surplus());
+        }
+        let rows = self.diagonal.iter().zip(&self.abs);
+        match rows
+            .map(|(&d, &s)| (widen(d) - widen(s), widen(s)))
+            .position(unfloatable)
+        {
+            Some(i) => Err(ReduceError::OutOfRange {
+                vertex: vertices[i].index(),
+            }),
+            None => Ok(Grounding::ungrounded()),
         }
     }
 
@@ -198,3 +211,8 @@ impl<T: Real> RowSums<T> {
 
 /// `1ᵀM1 ≤ SINGULAR_BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh), so `M` floats.
 const SINGULAR_BAND: f64 = 5.0;
+
+/// A floating row's `(surplus, Σ|m_ij|)` whose surplus outweighs its coupling: `F𝟙` misses the null vector there, as its spread passes `T`'s range.
+fn unfloatable((surplus, abs): (f64, f64)) -> bool {
+    surplus > abs
+}

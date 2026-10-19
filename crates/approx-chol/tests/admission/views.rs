@@ -305,3 +305,18 @@ fn a_gram_vertex_whose_every_term_underflows_is_out_of_range() {
     let error = factorize(gram).expect_err("every term underflows");
     assert_names_a_defect(error, &out_of_range(&[0, 1]));
 }
+
+/// `V`'s null vector spans past `f64`, so no scaling floats every row: out of range, not a NaN solve.
+#[rstest]
+#[case::underflowed_square([1, 2], [0, 0], [1e150, -1e150], [-1e80, -1e-170])]
+#[case::chain(PATH_A, PATH_B, [1e100, 1e100], [-1e-100, -1e-100])]
+fn a_gram_null_vector_past_the_range_is_out_of_range(
+    #[case] a: [u32; 2],
+    #[case] b: [u32; 2],
+    #[case] x: [f64; 2],
+    #[case] y: [f64; 2],
+) {
+    let gram = FactorWidth2::new(3, &a, &b, &x, &y).unwrap();
+    let error = factorize(gram).expect_err("the null vector leaves the range");
+    assert_names_a_defect(error, &out_of_range(&[0, 1, 2]));
+}

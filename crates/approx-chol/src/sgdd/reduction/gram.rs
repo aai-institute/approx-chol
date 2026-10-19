@@ -118,6 +118,14 @@ fn ground_or_float<T: Real, I: Index>(
     let decided = blocks.into_iter().zip(ones).zip(trace);
     let decide = |((block, ones), trace): ((Congruent<T, I>, f64), f64)| {
         if ones <= SINGULAR_BAND * epsilon * trace {
+            let abs = block.off_diagonal.abs_row_sums();
+            let mut rows =
+                (block.vertices.iter().zip(&abs)).map(|(&v, &s)| (surplus[v.index()], widen(s)));
+            if let Some(i) = rows.position(super::unfloatable) {
+                return Err(ReduceError::OutOfRange {
+                    vertex: block.vertices[i].index(),
+                });
+            }
             return block.block(Balance::Balanced(Grounding::ungrounded()));
         }
         let vertices = &block.vertices;

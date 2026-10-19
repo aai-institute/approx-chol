@@ -19,7 +19,7 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
                 |a: &SymmetricBlock<T, I>| scaling::relax(&a.off_diagonal, &a.diagonal, policy);
             let block = match a.reduce(policy, relax)? {
                 Signed::Folded(m, rows) => {
-                    let grounding = rows.folded_surplus(&m.off_diagonal);
+                    let grounding = rows.folded_surplus(&m.off_diagonal, &m.vertices)?;
                     m.block(Balance::Balanced(grounding))?
                 }
                 Signed::Frustrated(block) => block,
