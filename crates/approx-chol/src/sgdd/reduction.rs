@@ -4,8 +4,6 @@ mod csr;
 mod gram;
 mod graph;
 
-use std::cell::LazyCell;
-
 use num_traits::PrimInt;
 
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
@@ -60,25 +58,6 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
             abs_row_sums: off_diagonal.abs_row_sums(),
             off_diagonal,
             diagonal,
-        })
-    }
-
-    /// `V` proves a scaling exists; a zero diagonal beside a cell is its terms underflowing.
-    fn reduce_gram(
-        self,
-        policy: &ScalingPolicy,
-        nulls: &LazyCell<Vec<f64>, impl FnOnce() -> Vec<f64>>,
-    ) -> Result<Signed<T, I>, ReduceError> {
-        if let Some(i) = self.diagonal.iter().position(|&d| d == T::zero()) {
-            let vertex = self.vertices[i].index();
-            return Err(ReduceError::OutOfRange { vertex });
-        }
-        self.reduce(policy, |a| {
-            let u = (a.vertices.iter()).map(|&v| nulls[v.index()]);
-            (u.clone().all(f64::is_finite))
-                .then(|| scaling::null_scaling(u, &a.diagonal))
-                .flatten()
-                .or_else(|| scaling::relax(&a.off_diagonal, &a.diagonal, policy))
         })
     }
 
