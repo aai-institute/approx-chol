@@ -22,16 +22,14 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         let n = sddm.n() + usize::from(sddm.grounded());
         // One slot past the degree: the first fill edge reallocating measured +2-3% on grids.
         let mut capacities = vec![1; n];
-        for (k, j, _) in sddm.grounded_edges() {
+        sddm.grounded_edges(|k, j, _| {
             capacities[k.index()] += 1;
             capacities[j.index()] += 1;
-        }
+        });
         let lists = capacities.into_iter().map(Vec::with_capacity).collect();
         let mut graph = Self { lists };
         let copies = C::initial(split);
-        for (k, j, w) in sddm.grounded_edges() {
-            graph.push_pair(k, j, copies, w);
-        }
+        sddm.grounded_edges(|k, j, w| graph.push_pair(k, j, copies, w));
         graph
     }
 

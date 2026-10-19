@@ -16,10 +16,10 @@ pub(super) fn factor<T: Real, I: Index>(sddm: &Sddm<T, I>, free: usize) -> Vec<T
         i if i == m => free,
         i => i,
     };
-    for (k, j, w) in sddm.grounded_edges() {
+    sddm.grounded_edges(|k, j, w| {
         let (k, j) = (slot(k.index()), slot(j.index()));
         values[row_start(k.max(j)) + k.min(j)] = -w;
-    }
+    });
     let (matrix, inverse_pivots) = values.split_at_mut(packed);
     for col in 0..m {
         let pivot_row = row_start(col);

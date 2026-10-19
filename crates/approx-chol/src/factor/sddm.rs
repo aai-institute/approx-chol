@@ -65,16 +65,18 @@ impl<T: Real, I: Index> Sddm<T, I> {
     }
 
     /// Positive Laplacian weights, each edge once, the ground vertex `n` joined by each surplus.
-    pub(super) fn grounded_edges(&self) -> impl Iterator<Item = (I, I, T)> + '_ {
+    pub(super) fn grounded_edges(&self, mut edge: impl FnMut(I, I, T)) {
         let n = self.n();
-        let laplacian = (0..n).flat_map(move |i| {
-            let row = self.adjacency.upper(i);
-            row.map(move |(j, &a)| (I::from_index(i), I::from_index(j), -a))
-        });
-        let ground = (0..n).filter_map(move |k| {
-            Some((I::from_index(k), I::from_index(n), self.grounding.edge(k)?))
-        });
-        laplacian.chain(ground)
+        for i in 0..n {
+            for (j, &a) in self.adjacency.upper(i) {
+                edge(I::from_index(i), I::from_index(j), -a);
+            }
+        }
+        for k in 0..n {
+            if let Some(s) = self.grounding.edge(k) {
+                edge(I::from_index(k), I::from_index(n), s);
+            }
+        }
     }
 }
 
