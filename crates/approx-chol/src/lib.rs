@@ -97,9 +97,12 @@ impl Real for f32 {}
 impl Real for f64 {}
 
 /// The unsigned integer a reduction and its factor store each vertex index in: `u32` by default, `u64` past `u32::MAX` vertices.
-pub(crate) trait Index: PrimInt + Unsigned + Send + Sync + 'static + seal::Index {
+pub(crate) trait Index: PrimInt + Unsigned + Send + Sync + 'static {
     /// `self` as `usize`, so `x[v.index()]` reads vertex `v` of any `x` over `A`'s vertices.
     fn index(self) -> usize;
+
+    /// `k` as `Self`, truncating: every caller passes a value a checked count bounds.
+    fn from_index(k: usize) -> Self;
 }
 
 mod seal {
@@ -108,12 +111,6 @@ mod seal {
 
     impl Real for f32 {}
     impl Real for f64 {}
-
-    /// Only the crate implements [`Index`](super::Index), so its conversions are plain casts.
-    pub trait Index: Copy {
-        /// `k` as `Self`, truncating: every caller passes a value a checked count bounds.
-        fn from_index(k: usize) -> Self;
-    }
 }
 
 macro_rules! index {
@@ -123,9 +120,7 @@ macro_rules! index {
             fn index(self) -> usize {
                 self as usize
             }
-        }
 
-        impl seal::Index for $int {
             #[inline(always)]
             fn from_index(k: usize) -> Self {
                 debug_assert!(<$int>::try_from(k).is_ok(), "{k} fits the index");
