@@ -146,23 +146,11 @@ impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for Scales<
 }
 
 impl<T: Real> Congruence<T> {
-    /// `true` where the vertex is negated.
-    pub(super) fn negated(signs: &[bool]) -> Self {
-        let sign = |&negated: &bool| match negated {
-            true => -T::one(),
-            false => T::one(),
-        };
-        Self::Signs(signs.iter().map(sign).collect())
-    }
-
     /// `F = S R`'s factors, `self` the signs `S`, for positive scales `R`.
     pub(super) fn times(&self, scales: &[T]) -> Box<[T]> {
-        match self.factors(scales.len()) {
-            None => scales.into(),
-            Some(factors) => (factors.iter().zip(scales))
-                .map(|(&factor, &scale)| factor * scale)
-                .collect(),
-        }
+        (scales.iter().enumerate())
+            .map(|(i, &scale)| self.factor(i) * scale)
+            .collect()
     }
 
     /// `f_i`, vertex `i`'s entry of `F·1`.
