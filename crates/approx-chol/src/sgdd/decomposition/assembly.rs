@@ -125,11 +125,11 @@ pub(in crate::sgdd) fn assemble_bipartite_gram<T: Real, I: Index>(
     Ok(Partitioned { a, partition })
 }
 
-/// Adds `w v²` at both ends, `NaN` where a nonzero term underflowed in `f64`, so the range screen names its vertex.
+/// Adds `w v²` at both ends; an underflowed nonzero term counts as the least subnormal, so a row of only such terms fails the range screen.
 #[inline(always)]
 fn add_squares<T: Real, I: Index>(sums: &mut [f64], column: &Column<T, I>) {
     let square = |v: f64| match column.weight.bilinear(v, v) {
-        0.0 if v != 0.0 && !column.weight.is_zero() => f64::NAN,
+        0.0 if v != 0.0 && !column.weight.is_zero() => f64::from_bits(1),
         term => term,
     };
     // Two straight-line ends: a loop over them costs signed_F 7–10% and bip_sparse 18–20%.
