@@ -5,6 +5,7 @@ use approx_chol::{factorize, Error, ReduceError};
 use rstest::rstest;
 
 use super::assert_names_a_defect;
+use super::gram::{matrix, solve_residual};
 
 const PATH_A: [u32; 2] = [0, 1];
 const PATH_B: [u32; 2] = [1, 2];
@@ -236,19 +237,51 @@ fn an_out_of_range_bipartite_loading_is_rejected_at_its_vertex(#[case] value: f6
 
 /// Its square underflows, but the vertex's other column keeps the diagonal in range.
 #[rstest]
-#[case::square_just_underflows(1e-162)]
-#[case::loading_just_above_the_floor(1e-290)]
-fn a_loading_whose_square_underflows_beside_an_in_range_column_factors_and_solves(#[case] z: f64) {
-    let values = [z, 1.0];
+#[case::square_just_underflows(1e-162, 1.0)]
+#[case::loading_at_the_floor(2.0 * tiny(), 1.0)]
+#[case::weighted(1e-162, 0.5)]
+fn a_bipartite_loading_whose_square_underflows_beside_an_in_range_column_factors_and_solves(
+    #[case] z: f64,
+    #[case] w: f64,
+) {
+    let (values, weights) = ([z, 1.0], [w, 1.0]);
     let left = FactorWidth1::new(1, &[0u32, 0], Some(&values[..])).unwrap();
     let right = FactorWidth1::<f64>::new(2, &[0u32, 1], None).unwrap();
-    let gram = BipartiteGram::new(left, right, Weights::unit()).unwrap();
+    let gram = BipartiteGram::new(left, right, Weights::of(&weights).unwrap()).unwrap();
     let factor = factorize(gram).expect("every diagonal and cell is in range");
+    let root = w.sqrt();
+    solve_residual(
+        &factor,
+        &matrix(3, &[0, 0], &PATH_B, &[root * z, 1.0], &[root, 1.0]),
+    );
+}
 
-    let a = [[z * z + 1.0, z, 1.0], [z, 1.0, 0.0], [1.0, 0.0, 1.0]];
-    let product = |x: &[f64]| a.map(|row| row.iter().zip(x).map(|(a, x)| a * x).sum::<f64>());
-    let b = product(&[0.3, -0.2, 0.5]);
-    let x = factor.solve(&b).expect("b lies in the range");
-    let residual = (product(&x).iter().zip(&b)).fold(0.0_f64, |m, (ax, b)| m.max((ax - b).abs()));
-    assert!(residual <= 1e-12, "residual {residual:e}");
+#[rstest]
+#[case::square_just_underflows(1e-162)]
+#[case::loading_at_the_floor(2.0 * tiny())]
+fn a_gram_loading_whose_square_underflows_beside_an_in_range_column_factors_and_solves(
+    #[case] z: f64,
+) {
+    let (x, y) = ([z, 1.0], [-1.0, -1.0]);
+    let gram = FactorWidth2::new(3, &[0u32, 0], &PATH_B, &x, &y).unwrap();
+    let factor = factorize(gram).expect("every diagonal and cell is in range");
+    solve_residual(&factor, &matrix(3, &[0, 0], &PATH_B, &x, &y));
+}
+
+/// Its cell underflows too, so the vertex is out of range, not dead.
+#[test]
+fn a_bipartite_vertex_whose_every_term_underflows_is_out_of_range() {
+    let values = [1e-170];
+    let side = || FactorWidth1::new(1, &[0u32], Some(&values[..])).unwrap();
+    let gram = BipartiteGram::new(side(), side(), Weights::unit()).unwrap();
+    let error = factorize(gram).expect_err("every term underflows");
+    assert_names_a_defect(error, &out_of_range(&[0, 1]));
+}
+
+#[test]
+fn a_gram_vertex_whose_every_term_underflows_is_out_of_range() {
+    let (x, y) = ([1e-170, 1.0], [1e-170, -1.0]);
+    let gram = FactorWidth2::new(4, &[0u32, 2], &[1, 3], &x, &y).unwrap();
+    let error = factorize(gram).expect_err("every term underflows");
+    assert_names_a_defect(error, &out_of_range(&[0, 1]));
 }

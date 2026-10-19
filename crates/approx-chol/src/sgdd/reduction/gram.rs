@@ -7,7 +7,7 @@ use crate::input::{BipartiteGram, FactorWidth2, IntoColumns};
 use crate::sgdd::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
 use crate::sgdd::decomposition::{assemble_bipartite_gram, assemble_general, Components};
 use crate::sgdd::null_vectors::null_vectors;
-use crate::sgdd::scaling::ScalingPolicy;
+use crate::sgdd::scaling::{self, ScalingPolicy};
 use crate::{narrow, widen, Index, Real};
 
 impl<T: Real, I: Index> Sgdd<T, I> {
@@ -45,7 +45,15 @@ fn reduce_gram_blocks<T: Real, I: Index>(
     let nulls = LazyCell::new(|| null_vectors(v, partition.components()));
     let (mut folded, mut frustrated) = (Vec::new(), Vec::new());
     for a in live {
-        match a.reduce_gram(policy, &nulls)? {
+        // `V` proves a scaling exists.
+        let reduced = a.reduce(policy, |a| {
+            let u = (a.vertices.iter()).map(|&v| nulls[v.index()]);
+            (u.clone().all(f64::is_finite))
+                .then(|| scaling::null_scaling(u, &a.diagonal))
+                .flatten()
+                .or_else(|| scaling::relax(&a.off_diagonal, &a.diagonal, policy))
+        })?;
+        match reduced {
             Signed::Folded(m, _) => folded.push(m),
             Signed::Frustrated(block) => frustrated.push(block),
         }
