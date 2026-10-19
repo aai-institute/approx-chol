@@ -37,21 +37,22 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
         }
     }
 
-    /// Merges `neighbors`, samples their clique tree into `fill` as `w_i (S_{>i} / d)` from the sequential `draws`, and returns the pivot's column: the pivot, its shares and the neighbor absorbing what they leave; nothing for an empty star.
+    /// Merges `neighbors`, samples their clique tree into `fill` as `w_i (S_{>i} / d)` from the sequential `draws`, and returns the pivot's column: the pivot, its shares and the neighbor absorbing what they leave.
     pub(super) fn eliminate(
         &mut self,
         draws: &mut Xoshiro256PlusPlus,
         neighbors: impl Iterator<Item = (I, C, T)>,
         fill: &mut Fill<T, I>,
-    ) -> Option<PivotColumn<'_, T, I>> {
+    ) -> PivotColumn<'_, T, I> {
         self.star.refill(neighbors, self.split);
         self.sample(draws, |edge| fill.push(edge));
         self.shares.clear();
-        let (last, rest) = self.star.entries().split_last()?;
+        let (last, rest) = (self.star.entries().split_last())
+            .expect("a pivot of a connected graph has a neighbor");
         let d = suffix_past(&self.cumsum, None);
         let shares = rest.iter().map(|entry| (entry.neighbor, entry.weight / d));
         self.shares.extend(shares);
-        Some((last.weight * (last.weight / d), &self.shares, last.neighbor))
+        (last.weight * (last.weight / d), &self.shares, last.neighbor)
     }
 
     /// A neighborhood with no duplicate, as a row of `C` is, consuming its star's own `draws` so no task boundary moves one; every neighbor splits alike, so raw weights sort once; fill only, as the complement holds its pivots.
