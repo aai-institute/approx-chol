@@ -111,7 +111,8 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         const ROWS_PER_TASK: usize = 4096;
         let c = &self.cross;
         // Scaled here: a serial pass after the parallel gather rewrites lines its workers hold.
-        let rows = |first: usize, ys: &mut [T], inv_pivots: &[T]| {
+        let rows = |first: usize, ys: &mut [T]| {
+            let inv_pivots = &self.inv_pivot[first..][..ys.len()];
             for (e, (y, &inv_pivot)) in (first..).zip(ys.iter_mut().zip(inv_pivots)) {
                 let mut cx = T::zero();
                 for (k, &c) in c.row(e) {
@@ -120,17 +121,13 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
                 *y = *y * inv_pivot - cx;
             }
         };
-        match (inner, &self.ct) {
-            (InnerParallelism::Allow, Some(_)) => {
-                // A fixed grain, as TBB's simple partitioner: concurrent blocks share the pool; a short block still splits 16 ways.
-                let per = ROWS_PER_TASK.min(c.n_rows().div_ceil(16));
-                let pieces = eliminated
-                    .par_chunks_mut(per)
-                    .zip(self.inv_pivot.par_chunks(per));
-                (pieces.enumerate())
-                    .for_each(|(task, (ys, inv_pivots))| rows(task * per, ys, inv_pivots));
-            }
-            _ => rows(0, eliminated, &self.inv_pivot),
+        if inner == InnerParallelism::Allow && self.ct.is_some() {
+            // A fixed grain, as TBB's simple partitioner: concurrent blocks share the pool; a short block still splits 16 ways.
+            let per = ROWS_PER_TASK.min(c.n_rows().div_ceil(16));
+            (eliminated.par_chunks_mut(per).enumerate())
+                .for_each(|(task, ys)| rows(task * per, ys));
+        } else {
+            rows(0, eliminated);
         }
     }
 }
