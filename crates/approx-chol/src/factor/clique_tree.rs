@@ -14,7 +14,7 @@ use star::Star;
 /// Fill edges `(lo, hi, weight)`, `lo < hi`, as an elimination emits them.
 pub(super) type Fill<T, I> = Vec<(I, I, T)>;
 
-/// A pivot's column: the pivot, its neighbors' shares, and the neighbor absorbing what they leave.
+/// A pivot's column: its heaviest weight, its other neighbors' shares, and the heaviest neighbor, which absorbs what they leave.
 pub(super) type PivotColumn<'a, T, I> = (T, &'a [(I, T)], I);
 
 /// A pivot's elimination, reused across pivots; AC and AC2 differ only in `C`.
@@ -37,7 +37,7 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
         }
     }
 
-    /// Merges `neighbors`, samples their clique tree into `fill` as `w_i (S_{>i} / d)` from the sequential `draws`, and returns the pivot's column: the pivot, its shares and the neighbor absorbing what they leave.
+    /// Merges `neighbors`, samples their clique tree into `fill` as `w_i (S_{>i} / d)` from the sequential `draws`, and returns the pivot's column.
     pub(super) fn eliminate(
         &mut self,
         draws: &mut Xoshiro256PlusPlus,
@@ -52,7 +52,7 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
         let d = suffix_past(&self.cumsum, None);
         let shares = rest.iter().map(|entry| (entry.neighbor, entry.weight / d));
         self.shares.extend(shares);
-        (last.weight * (last.weight / d), &self.shares, last.neighbor)
+        (last.weight, &self.shares, last.neighbor)
     }
 
     /// A neighborhood with no duplicate, as a row of `C` is, consuming its star's own `draws` so no task boundary moves one; every neighbor splits alike, so raw weights sort once; fill only, as the complement holds its pivots.
