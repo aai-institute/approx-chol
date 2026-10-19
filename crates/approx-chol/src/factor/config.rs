@@ -91,7 +91,7 @@ pub enum SchurMode {
 
 /// How a pivot's star becomes fill.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CliqueRule {
+pub(super) enum CliqueRule {
     /// The star's whole clique: the exact Schur complement.
     Exact,
     /// A clique tree sampled from the star.
@@ -100,7 +100,7 @@ pub(crate) enum CliqueRule {
 
 /// How many virtual copies each edge splits into while sampling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Multiplicity {
+pub(super) enum Multiplicity {
     /// AC: one copy.
     Single,
     /// AC2: `k ≥ 2` copies, merged back under a cap.

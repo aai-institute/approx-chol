@@ -93,7 +93,7 @@ impl<T: Real, I: Index> Restriction<T, I> {
     serde(bound(deserialize = "T: Real + serde::Deserialize<'de>"))
 )]
 #[derive(Clone, Debug)]
-pub(crate) enum Congruence<T> {
+pub(super) enum Congruence<T> {
     Identity,
     /// Every vertex from this one on is negated.
     NegateFrom(usize),
@@ -105,7 +105,7 @@ pub(crate) enum Congruence<T> {
 
 /// `F = S R`'s factors, the largest `|f|`'s index and `F·1`'s normalization, computed once: every singular solve projects `F·1` out.
 #[derive(Clone, Debug)]
-pub(crate) struct Scales<T> {
+pub(super) struct Scales<T> {
     factors: Box<[T]>,
     peak: usize,
     norm: f64,
