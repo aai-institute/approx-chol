@@ -8,6 +8,8 @@ const GROUPS: [(usize, usize, bool); 3] =
     [(3200, 700, false), (420, 1000, true), (420, 1000, false)];
 
 struct Gram {
+    n_left: usize,
+    n_right: usize,
     left: Vec<u32>,
     right: Vec<u32>,
     left_values: Vec<f64>,
@@ -16,6 +18,8 @@ struct Gram {
 
 fn gram() -> Gram {
     let mut g = Gram {
+        n_left: 0,
+        n_right: 0,
         left: Vec::new(),
         right: Vec::new(),
         left_values: Vec::new(),
@@ -37,21 +41,24 @@ fn gram() -> Gram {
         }
         (first_left, first_right) = (first_left + left, first_right + right);
     }
+    (g.n_left, g.n_right) = (first_left, first_right);
     g
 }
 
 /// `Factor::solve`, then each block's `solve_local` under `Allow` and `Forbid`, as bits.
 fn solve_bits(g: &Gram, config: Config) -> Vec<u64> {
-    let n_left = GROUPS.iter().map(|g| g.0).sum();
-    let n_right = GROUPS.iter().map(|g| g.1).sum();
     let gram = BipartiteGram::new(
-        FactorWidth1::new(n_left, &g.left, Some(&g.left_values)).unwrap(),
-        FactorWidth1::new(n_right, &g.right, Some(&g.right_values)).unwrap(),
+        FactorWidth1::new(g.n_left, &g.left, Some(&g.left_values)).unwrap(),
+        FactorWidth1::new(g.n_right, &g.right, Some(&g.right_values)).unwrap(),
         Weights::unit(),
     )
     .unwrap();
     let factor = factorize_with(gram, config).unwrap();
     assert_eq!(factor.blocks().len(), GROUPS.len());
+    assert!(
+        factor.blocks().iter().any(|b| b.splittable_work() > 0),
+        "a block stores Cᵀ, so Allow splits its solve"
+    );
     let b: Vec<f64> = (0..factor.n())
         .map(|i| ((i * 7919) % 101) as f64 / 50.0 - 1.0)
         .collect();
