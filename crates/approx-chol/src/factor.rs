@@ -11,7 +11,7 @@ use rand::SeedableRng;
 use rayon::iter::Either;
 use rayon::prelude::*;
 
-use config::CliqueRule;
+use config::multiplicity;
 pub use config::{Backend, Config, InnerParallelism, SchurMode};
 
 use crate::sgdd::{Balance, IrreducibleBlock, Restriction, Sgdd};
@@ -304,14 +304,18 @@ impl<T: Real, I: Index> Block<T, I> {
             OffDiagonal::Bipartite(cross) => {
                 let kept = scales(cross.n_rows());
                 let factor = |s| Cholesky::factor(s, streams.cholesky(), config, kept);
-                let rule = match config.dense(sheets.count() * cross.n_cols()) {
-                    true => CliqueRule::Exact,
-                    false => config.complement(),
-                };
+                let dense = config.dense(sheets.count() * cross.n_cols());
                 let inv_pivot = BlockElimination::pivots(&cross, &grounding);
-                let s = match rule {
-                    CliqueRule::Exact => schur::exact(&cross, &inv_pivot, sheets, grounding),
-                    CliqueRule::Sampled(copies) => {
+                let s = match (dense, config.complement) {
+                    (true, _) | (false, SchurMode::Exact) => {
+                        schur::exact(&cross, &inv_pivot, sheets, grounding)
+                    }
+                    (false, SchurMode::Approximate { split_merge }) => {
+                        let copies = multiplicity(split_merge);
+                        schur::sampled(&cross, copies, sheets, grounding, streams)
+                    }
+                    (false, SchurMode::Same) => {
+                        let copies = config.approximate();
                         schur::sampled(&cross, copies, sheets, grounding, streams)
                     }
                 };
