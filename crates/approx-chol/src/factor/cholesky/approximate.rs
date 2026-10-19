@@ -98,19 +98,11 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
         }
         self.neighbors.push(remainder);
         self.coefficients.push(retained);
-        // `retained / (w²/d)` is `1/w` for the remainder's `w`; needs `w` under `1/MAX`, fill decay past the range floor (#168); `one` drops the scale.
-        debug_assert!(
-            (T::one() / weight).is_finite(),
-            "pivot has no finite inverse"
-        );
-        let inverse = match T::one() / weight {
-            inverse if inverse.is_finite() => inverse,
-            _ => T::one(),
-        };
+        // `retained / (w²/d)` is `1/w` for the remainder's `w`, finite as fill and `S` never weigh below `MIN_POSITIVE`.
         self.headers.push(StepHeader {
             vertex: I::from_index(vertex),
             len: I::from_index(self.neighbors.len() - start),
-            pivot_scale: inverse,
+            pivot_scale: T::one() / weight,
         });
     }
 

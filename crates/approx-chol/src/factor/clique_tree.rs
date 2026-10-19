@@ -86,12 +86,10 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
             "positive weights under the diagonal bound"
         );
         for (i, entry) in rest.iter().enumerate() {
-            let weight =
-                (entry.copies).per_copy(entry.weight * (suffix_past(&self.cumsum, Some(i)) / d));
-            // An underflowed share couples nothing, so it spends no draw.
-            if weight == T::zero() {
-                continue;
-            }
+            // Clamped, never dropped: the clique tree keeps the star's neighbors connected, and every weight's inverse finite.
+            let weight = (entry.copies)
+                .per_copy(entry.weight * (suffix_past(&self.cumsum, Some(i)) / d))
+                .max(T::min_positive_value());
             let draw = || draw_after(&self.cumsum, rng, i);
             (entry.copies).draw(&mut self.tally, weight, draw, |at, copies, weight| {
                 let other = entries[at].neighbor;
