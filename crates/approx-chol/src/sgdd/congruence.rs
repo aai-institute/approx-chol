@@ -58,7 +58,10 @@ impl<T: Real, I: Index> Restriction<T, I> {
 
     /// `x ← x − x_q·1` at the largest `|f|`, where a split block's singular solve fixes `M`'s gauge.
     pub(crate) fn regauge(&self, x: &mut [T]) {
-        self.congruence.regauge(x);
+        if let Congruence::Scaled(scales) = &self.congruence {
+            let gauge = x[scales.peak];
+            x.iter_mut().for_each(|x| *x = *x - gauge);
+        }
     }
 
     /// `x ← F x` back in `A_c`'s scale, `F·1` projected out last when `M` is singular.
@@ -218,14 +221,6 @@ impl<T: Real> Congruence<T> {
                 let largest = scales.factors[scales.peak].abs();
                 project_out(x, |i| scales.factors[i] / largest, scales.norm)
             }
-        }
-    }
-
-    /// `x ← x − x_q·1` at the largest `|f|`, where a split block's singular solve fixes `M`'s gauge.
-    fn regauge(&self, x: &mut [T]) {
-        if let Self::Scaled(scales) = self {
-            let gauge = x[scales.peak];
-            x.iter_mut().for_each(|x| *x = *x - gauge);
         }
     }
 }
