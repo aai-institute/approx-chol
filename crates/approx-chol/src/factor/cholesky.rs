@@ -125,7 +125,7 @@ fn spans_wide<T: Real>(scales: Option<&[T]>) -> bool {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 enum Triangular<T, I> {
-    /// Packed lower triangle of `L` in `LLᵀ`.
+    /// Packed unit lower `L` of `L D Lᵀ`, `D⁻¹` on its diagonal.
     Dense(Box<[T]>),
     Approximate(Box<ApproximateCholesky<T, I>>),
 }

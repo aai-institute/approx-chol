@@ -72,7 +72,7 @@ impl ScalingPolicy {
 
 impl ScalingReport {
     /// Kept when a deficit past rounding was clamped or the scaling did not settle, which a violation past the slack prevents.
-    pub(super) fn clamped(self, deficit: f64) -> Option<Self> {
+    fn clamped(self, deficit: f64) -> Option<Self> {
         (deficit > 0.0 || !self.settled).then_some(Self {
             violation: self.violation.max(deficit),
             ..self
@@ -101,7 +101,7 @@ pub(super) enum ScaleVector {
 
 impl ScaleVector {
     /// Row `i`'s band for its `k_i` entries and diagonal `m_ii`, in units where `T`'s rounding is `epsilon`.
-    pub(super) fn row_band(self, k: usize, m_ii: f64, epsilon: f64) -> f64 {
+    fn row_band(self, k: usize, m_ii: f64, epsilon: f64) -> f64 {
         let rounding = (k + 3) as f64 * epsilon;
         match self {
             Self::Identity => rounding.max(RATIO_BAND * epsilon),
@@ -111,7 +111,7 @@ impl ScaleVector {
     }
 
     /// What the scaling spent and left before clamping: an exact vector spends nothing, and its rows decide floating exactly.
-    pub(super) fn shortfall(self) -> ScalingReport {
+    fn shortfall(self) -> ScalingReport {
         match self {
             Self::Identity | Self::NullVector => ScalingReport {
                 iterations: 0,
@@ -121,6 +121,39 @@ impl ScaleVector {
             Self::PerronVector { shortfall, .. } => shortfall,
         }
     }
+
+    /// `M`'s report from its rows: the shortfall, kept with any deficit past a row's band.
+    pub(super) fn report<T: Real, I: Index>(
+        self,
+        diagonal: &[T],
+        abs_row_sums: &[T],
+        off_diagonal: &OffDiagonal<T, I>,
+    ) -> Option<ScalingReport> {
+        let deficit = clamped_deficit(diagonal, abs_row_sums, off_diagonal, self);
+        self.shortfall().clamped(deficit)
+    }
+}
+
+/// `max_i (Σ_j|m_ij| − m_ii)/m_ii` past row `i`'s band, which its `k_i` entries and the scale vector set.
+fn clamped_deficit<T: Real, I: Index>(
+    diagonal: &[T],
+    abs_row_sums: &[T],
+    off_diagonal: &OffDiagonal<T, I>,
+    vector: ScaleVector,
+) -> f64 {
+    let epsilon = widen(T::epsilon());
+    let deficits =
+        (diagonal.iter().zip(abs_row_sums)).map(|(&d, &s)| (widen(s) - widen(d)) / widen(d));
+    // Degrees cost a pass over the entries, so only a row past the floor pays for them.
+    if deficits
+        .clone()
+        .all(|deficit| deficit <= RATIO_BAND * epsilon)
+    {
+        return 0.0;
+    }
+    (deficits.zip(off_diagonal.degrees()).zip(diagonal))
+        .filter(|&((deficit, k), &d)| deficit > vector.row_band(k, widen(d), epsilon))
+        .fold(0.0, |worst, ((deficit, _), _)| worst.max(deficit))
 }
 
 impl<T: Real> Relaxation<T> {
@@ -148,7 +181,7 @@ pub(super) fn null_scaling<T: Real>(
 }
 
 /// How far, in `ε`, a row ratio `Σ_j|a_ij|f_j / (a_ii f_i)` may sit from `1`: a settled residual and the dominance slack's floor.
-pub(super) const RATIO_BAND: f64 = 16.0;
+const RATIO_BAND: f64 = 16.0;
 
 /// Scales from `N`'s Perron vector, iterated until `ρ < 1` is proven, pinned at `1`, or refuted past the tolerance.
 pub(super) fn relax<T: Real, I: Index>(

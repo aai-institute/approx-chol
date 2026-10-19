@@ -25,16 +25,6 @@ impl Config {
         multiplicity(self.split_merge)
     }
 
-    pub(super) fn complement(&self) -> CliqueRule {
-        match self.complement {
-            SchurMode::Exact => CliqueRule::Exact,
-            SchurMode::Approximate { split_merge } => {
-                CliqueRule::Sampled(multiplicity(split_merge))
-            }
-            SchurMode::Same => CliqueRule::Sampled(self.approximate()),
-        }
-    }
-
     /// Whether a Cholesky of `dimension`, a cover's two sheets counted, is dense: it then takes `S` exact, spending nothing on sparsity.
     pub(super) fn dense(&self, dimension: usize) -> bool {
         match self.backend {
@@ -45,7 +35,7 @@ impl Config {
 }
 
 /// The one place a `split_merge` becomes the algorithm: below two copies is AC.
-fn multiplicity(split_merge: Option<u32>) -> Multiplicity {
+pub(super) fn multiplicity(split_merge: Option<u32>) -> Multiplicity {
     match split_merge {
         Some(k) if k >= 2 => Multiplicity::Split(k),
         _ => Multiplicity::Single,
@@ -89,18 +79,9 @@ pub enum SchurMode {
     Same,
 }
 
-/// How a pivot's star becomes fill.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CliqueRule {
-    /// The star's whole clique: the exact Schur complement.
-    Exact,
-    /// A clique tree sampled from the star.
-    Sampled(Multiplicity),
-}
-
 /// How many virtual copies each edge splits into while sampling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Multiplicity {
+pub(super) enum Multiplicity {
     /// AC: one copy.
     Single,
     /// AC2: `k ≥ 2` copies, merged back under a cap.

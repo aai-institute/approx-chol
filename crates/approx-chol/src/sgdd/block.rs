@@ -1,67 +1,9 @@
 //! `A` as its reduced irreducible blocks: what the factorization consumes.
 
-use super::congruence::Congruence;
+use super::congruence::{Congruence, Restriction};
 use super::scaling::ScalingReport;
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, Index, Real};
-
-/// `R = F Pᵀ`, so `M = R A Rᵀ`: `Pᵀ` picks the block's vertices of `A`, `F` is the congruence.
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(remote = "Self"),
-    serde(bound(deserialize = "T: Real + serde::Deserialize<'de>, I: serde::Deserialize<'de>"))
-)]
-#[derive(Clone, Debug)]
-pub(crate) struct Restriction<T, I> {
-    vertices: Box<[I]>,
-    congruence: Congruence<T>,
-}
-
-impl<T: Real, I: Index> Restriction<T, I> {
-    pub(crate) fn vertices(&self) -> &[I] {
-        &self.vertices
-    }
-
-    /// `local ← Pᵀ x`.
-    pub(crate) fn gather(&self, x: &[T], local: &mut [T]) {
-        (local.iter_mut().zip(self.vertices.iter())).for_each(|(v, &i)| *v = x[i.index()]);
-    }
-
-    /// `x ← P local` on the block's vertices, the rest untouched.
-    pub(crate) fn scatter(&self, local: &[T], x: &mut [T]) {
-        (local.iter().zip(self.vertices.iter())).for_each(|(&v, &i)| x[i.index()] = v);
-    }
-
-    /// `F`'s entries from `from` on, `None` when every `|f|` is `1`.
-    pub(crate) fn scales(&self, from: usize) -> Option<&[T]> {
-        match &self.congruence {
-            Congruence::Scaled(scales) => Some(&scales.factors()[from..]),
-            _ => None,
-        }
-    }
-
-    /// `x ← F x` on a gathered `x`, `F·1` projected out first when `M` is singular.
-    pub(crate) fn restrict(&self, x: &mut [T], singular: bool) {
-        if singular {
-            self.congruence.project_out_null(x);
-        }
-        self.congruence.apply(x);
-    }
-
-    /// `x ← x − x_q·1` at the largest `|f|`, where a split block's singular solve fixes `M`'s gauge.
-    pub(crate) fn regauge(&self, x: &mut [T]) {
-        self.congruence.regauge(x);
-    }
-
-    /// `x ← F x` back in `A_c`'s scale, `F·1` projected out last when `M` is singular.
-    pub(crate) fn prolongate(&self, x: &mut [T], singular: bool) {
-        self.congruence.apply(x);
-        if singular {
-            self.congruence.project_out_null(x);
-        }
-    }
-}
 
 /// Whether a signature folds `M` (Harary), and `M`'s grounding.
 #[derive(Clone, Debug)]
@@ -150,8 +92,9 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         balance: Balance<T>,
         report: Option<ScalingReport>,
     ) -> Result<Self, ReduceError> {
+        let restriction = Restriction::new(vertices, congruence);
+        let vertices = restriction.vertices();
         let n = vertices.len();
-        assert!(congruence.fits(n), "one factor per vertex");
         assert_eq!(off_diagonal.n(), n, "one row per vertex");
         assert!(balance.grounding().fits(n), "one surplus per row");
         if let Balance::Balanced(_) = balance {
@@ -166,10 +109,6 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
             let vertex = vertices[0].index();
             return Err(ReduceError::OutOfRange { vertex });
         }
-        let restriction = Restriction {
-            vertices,
-            congruence,
-        };
         Ok(Self {
             restriction: Box::new(restriction),
             off_diagonal,
@@ -274,19 +213,3 @@ impl core::fmt::Display for ReduceError {
 }
 
 impl std::error::Error for ReduceError {}
-
-#[cfg(feature = "serde")]
-checked_serde!(Restriction);
-
-#[cfg(feature = "serde")]
-impl<T: Real, I: Index> Restriction<T, I> {
-    fn checked(self) -> Option<Self> {
-        let factors = match &self.congruence {
-            Congruence::Signs(f) => f.iter().all(|f| f.abs() == T::one()),
-            Congruence::Scaled(s) => s.factors().iter().all(|f| f.is_finite() && *f != T::zero()),
-            Congruence::Identity | Congruence::NegateFrom(_) => true,
-        };
-        let fits = !self.vertices.is_empty() && self.congruence.fits(self.vertices.len());
-        (fits && factors).then_some(self)
-    }
-}

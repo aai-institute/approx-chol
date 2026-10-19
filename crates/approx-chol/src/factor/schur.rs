@@ -12,7 +12,7 @@ use crate::sgdd::Grounding;
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, per_task, widen, Index, Real};
 
-/// `M`'s cross block and the pivots `d_e`, applied as two products because the block's steps commute.
+/// `M`'s cross block scaled by its pivots, `D_e⁻¹ C`, and the pivots, applied as two products because the block's steps commute.
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -23,7 +23,7 @@ use crate::{narrow, per_task, widen, Index, Real};
 )]
 #[derive(Clone, Debug)]
 pub(super) struct BlockElimination<T, I> {
-    /// `M`'s own `C`, signs kept and shared with the block: a frustrated block's cover never doubles it.
+    /// `D_e⁻¹ C`, signs kept and shared with the block: a frustrated block's cover never doubles it; each row's magnitudes sum to at most one, so no product with a solution overflows.
     cross: Rows<T, I>,
     inv_pivot: Box<[T]>,
     /// `Cᵀ` where [`Self::transposes`], so `Allow` may split the solve by kept row.
@@ -49,7 +49,12 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         c.nnz() > 1 << 17
     }
 
-    pub(super) fn with_pivots(cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
+    pub(super) fn with_pivots(mut cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
+        cross.scale_rows(&inv_pivot);
+        Self::scaled(cross, inv_pivot)
+    }
+
+    fn scaled(cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
         let ct = Self::transposes(&cross).then(|| cross.transpose());
         Self {
             cross,
@@ -70,26 +75,26 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         }
     }
 
-    /// `y_e = D_e⁻¹ b_e`, then each `b_k` subtracts `c_ek y_e` term by term in ascending `e`: scattered through `C`, or gathered through `Cᵀ` under `Allow` where it is kept, the same bits either way.
+    /// Each `b_k` subtracts `(D_e⁻¹ C)_ek b_e` term by term in ascending `e`: scattered through `C`, or gathered through `Cᵀ` under `Allow` where it is kept, the same bits either way; then `y_e = D_e⁻¹ b_e`.
     pub(super) fn forward(&self, x: &mut [T], inner: InnerParallelism) {
         let (eliminated, kept) = x.split_at_mut(self.n_eliminated());
-        for (y, &inv_pivot) in eliminated.iter_mut().zip(&self.inv_pivot) {
-            *y = *y * inv_pivot;
-        }
-        let eliminated = &*eliminated;
+        let b = &*eliminated;
         if let (InnerParallelism::Allow, Some(ct)) = (inner, &self.ct) {
-            kept.par_iter_mut().enumerate().for_each(|(k, b)| {
+            kept.par_iter_mut().enumerate().for_each(|(k, b_k)| {
                 for (e, &c) in ct.row(k) {
-                    *b = *b - c * eliminated[e];
+                    *b_k = *b_k - c * b[e];
                 }
             });
         } else {
             let c = &self.cross;
-            for (e, &y) in eliminated.iter().enumerate() {
+            for (e, &b_e) in b.iter().enumerate() {
                 for (k, &c) in c.row(e) {
-                    kept[k] = kept[k] - c * y;
+                    kept[k] = kept[k] - c * b_e;
                 }
             }
+        }
+        for (y, &inv_pivot) in eliminated.iter_mut().zip(&self.inv_pivot) {
+            *y = *y * inv_pivot;
         }
     }
 
@@ -101,7 +106,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
             for (k, &c) in c.row(e) {
                 cx = cx + c * kept[k];
             }
-            *y = *y - self.inv_pivot[e] * cx;
+            *y = *y - cx;
         };
         if inner == InnerParallelism::Allow && self.ct.is_some() {
             eliminated
@@ -143,10 +148,7 @@ pub(super) fn sampled<T: Real, I: Index>(
     let (n_kept, surplus) = (c.n_cols(), grounding.surplus());
     let n = sheets.count() * n_kept;
     let ground = I::from_index(n);
-    let ground_share = move |e: usize| {
-        let s_e = surplus.map(|s| s[e]).filter(|&s| s > T::zero());
-        s_e.map(|s| (ground, s))
-    };
+    let ground_share = move |e: usize| grounds(surplus, e).map(|s| (ground, s));
     let stars_per_task = per_task(c.n_rows(), c.nnz() as u64, 14);
     let fill = match sheets {
         // One sheet maps no column, as the balanced loop pays for any map.
@@ -298,17 +300,17 @@ fn cover_rows<T: Real, I: Index>(
                 let sheet = usize::from(crosses(c_ek) != crosses(c_ej));
                 rows.add(
                     cover_vertex(j, sheet),
-                    coupling(c_ek.abs(), c_ej.abs(), inv_pivot[e]),
+                    share(c_ek.abs(), c_ej.abs(), inv_pivot[e]),
                 );
             }
-            if let Some(surplus) = surplus {
-                rows.add(2 * n_kept, share(c_ek.abs(), surplus[e], inv_pivot[e]));
+            if let Some(s_e) = grounds(surplus, e) {
+                rows.add(2 * n_kept, share(c_ek.abs(), s_e, inv_pivot[e]));
             }
         }
     })
 }
 
-/// Rows of a folded block's complement, `|c_ke||c_je|/d_e` as a [`coupling`], the ground's `|c_ke| s_e/d_e` as column `n_kept`.
+/// Rows of a folded block's complement, `|c_ke||c_je|/d_e` as a [`share`], the ground's `|c_ke| s_e/d_e` as column `n_kept`.
 fn exact_rows<T: Real, I: Index>(
     c: &Rows<T, I>,
     ct: &Rows<T, I>,
@@ -320,10 +322,10 @@ fn exact_rows<T: Real, I: Index>(
         for (e, c_ek) in ct.row(k) {
             let c_ek = c_ek.abs();
             for (j, c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
-                rows.add(j, coupling(c_ek, c_ej.abs(), inv_pivot[e]));
+                rows.add(j, share(c_ek, c_ej.abs(), inv_pivot[e]));
             }
-            if let Some(surplus) = surplus {
-                rows.add(n_kept, share(c_ek, surplus[e], inv_pivot[e]));
+            if let Some(s_e) = grounds(surplus, e) {
+                rows.add(n_kept, share(c_ek, s_e, inv_pivot[e]));
             }
         }
     })
@@ -335,14 +337,14 @@ fn rows_per_task<T: Real, I: Index>(c: &Rows<T, I>) -> usize {
     per_task(c.n_cols(), work, 17)
 }
 
-/// A [`share`] between two kept vertices, at least `MIN_POSITIVE`: an underflow would drop an edge of `S` and could split it.
-fn coupling<T: Real>(x: T, y: T, inv_pivot: T) -> T {
-    share(x, y, inv_pivot).max(T::min_positive_value())
+/// Row `e`'s surplus where it grounds anything: a zero surplus is no ground edge, which a clamped [`share`] would add.
+fn grounds<T: Real>(surplus: Option<&[T]>, e: usize) -> Option<T> {
+    surplus.map(|s| s[e]).filter(|&s| s > T::zero())
 }
 
-/// `x·y/d` as the smaller times the larger's share `max·d⁻¹ ≤ 1`, so no product overflows before the division.
+/// `x·y/d` as the smaller times the larger's share `max·d⁻¹ ≤ 1`, so no product overflows before the division; at least `MIN_POSITIVE`, so no edge of `S` drops and every pivot's inverse is finite.
 fn share<T: Real>(x: T, y: T, inv_pivot: T) -> T {
-    x.min(y) * (x.max(y) * inv_pivot)
+    (x.min(y) * (x.max(y) * inv_pivot)).max(T::min_positive_value())
 }
 
 #[cfg(feature = "serde")]
@@ -364,6 +366,6 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         let (n_rows, n_cols) = (self.cross.n_rows(), self.cross.n_cols());
         // The larger side is eliminated, which bounds `n_cols` by decoded rows before `n` or `Cᵀ` exists.
         let sides = n_cols <= n_rows;
-        (pivots && sides).then(|| Self::with_pivots(self.cross, self.inv_pivot))
+        (pivots && sides).then(|| Self::scaled(self.cross, self.inv_pivot))
     }
 }

@@ -3,8 +3,8 @@
 use crate::factor::sddm::Sddm;
 use crate::{Index, Real};
 
-/// Left-looking GTH on the packed lower `−w` with a free last row `m` never pivoted (`m = n` holding the ground's `−s` grounded, the anchor `m = n − 1` anchored): for each column `j < m` in order, every stored `(r, j)`, `r > j`, subtracts `Σ_{k<j} min·(max·p_k⁻¹)` of the magnitudes of the already updated `(r, k)` and `(j, k)`, then `p_j = −Σ_{r>j} (r, j)` and `p_j⁻¹` goes to the tail; a last pass scales each column `j` by `√p_j⁻¹` and writes `√p_j` on its diagonal, and truncating row `m` and the tail leaves `m` rows; nothing cancels, under- or overflows (`d − Σl²` cancelled to 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more factor time).
-/// Packed lower triangle of `L` in `LLᵀ`, the free slot excluded: an upper one would double the factor; the inverse pivots trail the rows, contiguous as every row's fill reads them (strided in the diagonal measured +12-18% at n 16-24).
+/// Left-looking GTH on the packed lower `−w` with a free last row `m` never pivoted (`m = n` holding the ground's `−s` grounded, the anchor `m = n − 1` anchored): for each column `j < m` in order, every stored `(r, j)`, `r > j`, subtracts `Σ_{k<j} min·(max·p_k⁻¹)` of the magnitudes of the already updated `(r, k)` and `(j, k)`, then `p_j = −Σ_{r>j} (r, j)` and `p_j⁻¹` goes to the tail; a last pass scales each column `j` by `p_j⁻¹`, so each `|l| ≤ 1` and no product with a solution overflows, and writes `p_j⁻¹` on its diagonal, and truncating row `m` and the tail leaves `m` rows; nothing cancels, under- or overflows (`d − Σl²` cancelled to 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more factor time).
+/// Packed unit lower `L` of `L D Lᵀ` with `D⁻¹` on its diagonal, the free slot excluded: an upper one would double the factor; the inverse pivots trail the rows, contiguous as every row's fill reads them (strided in the diagonal measured +12-18% at n 16-24).
 pub(super) fn factor<T: Real, I: Index>(sddm: &Sddm<T, I>, free: usize) -> Vec<T> {
     let m = sddm.n() - usize::from(!sddm.grounded());
     let packed = row_start(m + 1);
@@ -36,15 +36,12 @@ pub(super) fn factor<T: Real, I: Index>(sddm: &Sddm<T, I>, free: usize) -> Vec<T
         }
         inverse_pivots[col] = T::one() / diagonal;
     }
-    for share in inverse_pivots.iter_mut() {
-        *share = share.sqrt();
-    }
     for row in 0..m {
         let start = row_start(row);
         for (value, &scale) in matrix[start..start + row].iter_mut().zip(&*inverse_pivots) {
             *value = *value * scale;
         }
-        matrix[start + row] = T::one() / inverse_pivots[row];
+        matrix[start + row] = inverse_pivots[row];
     }
     values.truncate(row_start(m));
     values.shrink_to_fit();
@@ -68,20 +65,20 @@ pub(super) fn substitute<T: Real>(factor: &[T], free: usize, values: &mut [T]) {
         "one value per row and the free slot"
     );
     for row in 0..m {
-        let entries = &factor[row_start(row)..=row_start(row) + row];
+        let entries = &factor[row_start(row)..row_start(row) + row];
         let mut value = solved[row];
-        for (&entry, &solution) in entries[..row].iter().zip(&solved[..row]) {
+        for (&entry, &solution) in entries.iter().zip(&solved[..row]) {
             value = value - entry * solution;
         }
-        solved[row] = value / entries[row];
+        solved[row] = value;
     }
     for row in (0..m).rev() {
-        let mut value = solved[row];
+        let mut value = solved[row] * factor[row_start(row) + row];
         // Strided down column `row`, unlike the forward pass, which is why this keeps an index.
         for (below, &solution) in (row + 1..m).zip(&solved[row + 1..]) {
             value = value - factor[row_start(below) + row] * solution;
         }
-        solved[row] = value / factor[row_start(row) + row];
+        solved[row] = value;
     }
     *pinned = T::zero();
     values.swap(free, last);

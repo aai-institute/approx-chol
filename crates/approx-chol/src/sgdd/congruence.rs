@@ -1,7 +1,90 @@
 use std::borrow::Cow;
 
 use crate::narrow;
-use crate::{widen, Real};
+use crate::{widen, Index, Real};
+
+/// `R = F Pᵀ`, so `M = R A Rᵀ`: `Pᵀ` picks the block's vertices of `A`, `F` is the congruence.
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(remote = "Self"),
+    serde(bound(deserialize = "T: Real + serde::Deserialize<'de>, I: serde::Deserialize<'de>"))
+)]
+#[derive(Clone, Debug)]
+pub(crate) struct Restriction<T, I> {
+    vertices: Box<[I]>,
+    congruence: Congruence<T>,
+}
+
+impl<T: Real, I: Index> Restriction<T, I> {
+    /// Panics unless one factor per vertex.
+    pub(super) fn new(vertices: Box<[I]>, congruence: Congruence<T>) -> Self {
+        assert!(congruence.fits(vertices.len()), "one factor per vertex");
+        Self {
+            vertices,
+            congruence,
+        }
+    }
+
+    pub(crate) fn vertices(&self) -> &[I] {
+        &self.vertices
+    }
+
+    /// `local ← Pᵀ x`.
+    pub(crate) fn gather(&self, x: &[T], local: &mut [T]) {
+        (local.iter_mut().zip(self.vertices.iter())).for_each(|(v, &i)| *v = x[i.index()]);
+    }
+
+    /// `x ← P local` on the block's vertices, the rest untouched.
+    pub(crate) fn scatter(&self, local: &[T], x: &mut [T]) {
+        (local.iter().zip(self.vertices.iter())).for_each(|(&v, &i)| x[i.index()] = v);
+    }
+
+    /// `F`'s entries from `from` on, `None` when every `|f|` is `1`.
+    pub(crate) fn scales(&self, from: usize) -> Option<&[T]> {
+        match &self.congruence {
+            Congruence::Scaled(scales) => Some(&scales.factors[from..]),
+            _ => None,
+        }
+    }
+
+    /// `x ← F x` on a gathered `x`, `F·1` projected out first when `M` is singular.
+    pub(crate) fn restrict(&self, x: &mut [T], singular: bool) {
+        if singular {
+            self.congruence.project_out_null(x);
+        }
+        self.congruence.apply(x);
+    }
+
+    /// `x ← x − x_q·1` at the largest `|f|`, where a split block's singular solve fixes `M`'s gauge.
+    pub(crate) fn regauge(&self, x: &mut [T]) {
+        self.congruence.regauge(x);
+    }
+
+    /// `x ← F x` back in `A_c`'s scale, `F·1` projected out last when `M` is singular.
+    pub(crate) fn prolongate(&self, x: &mut [T], singular: bool) {
+        self.congruence.apply(x);
+        if singular {
+            self.congruence.project_out_null(x);
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+checked_serde!(Restriction);
+
+#[cfg(feature = "serde")]
+impl<T: Real, I: Index> Restriction<T, I> {
+    fn checked(self) -> Option<Self> {
+        let factors = match &self.congruence {
+            Congruence::Signs(f) => f.iter().all(|f| f.abs() == T::one()),
+            Congruence::Scaled(s) => s.factors.iter().all(|f| f.is_finite() && *f != T::zero()),
+            Congruence::Identity | Congruence::NegateFrom(_) => true,
+        };
+        let fits = !self.vertices.is_empty() && self.congruence.fits(self.vertices.len());
+        (fits && factors).then_some(self)
+    }
+}
 
 /// `F` in `M = F A_c F`, finite and nonzero; a folded `A_c`'s null vector is then `F·1`.
 #[cfg_attr(
@@ -10,7 +93,7 @@ use crate::{widen, Real};
     serde(bound(deserialize = "T: Real + serde::Deserialize<'de>"))
 )]
 #[derive(Clone, Debug)]
-pub(crate) enum Congruence<T> {
+pub(super) enum Congruence<T> {
     Identity,
     /// Every vertex from this one on is negated.
     NegateFrom(usize),
@@ -22,7 +105,7 @@ pub(crate) enum Congruence<T> {
 
 /// `F = S R`'s factors, the largest `|f|`'s index and `F·1`'s normalization, computed once: every singular solve projects `F·1` out.
 #[derive(Clone, Debug)]
-pub(crate) struct Scales<T> {
+pub(super) struct Scales<T> {
     factors: Box<[T]>,
     peak: usize,
     norm: f64,
@@ -42,10 +125,6 @@ impl<T: Real> Scales<T> {
             peak,
             norm,
         }
-    }
-
-    pub(crate) fn factors(&self) -> &[T] {
-        &self.factors
     }
 }
 
@@ -94,7 +173,7 @@ impl<T: Real> Congruence<T> {
     }
 
     /// Whether it scales exactly `n` vertices.
-    pub(super) fn fits(&self, n: usize) -> bool {
+    fn fits(&self, n: usize) -> bool {
         match self {
             Self::Identity => true,
             Self::NegateFrom(first) => *first <= n,
@@ -114,7 +193,7 @@ impl<T: Real> Congruence<T> {
     }
 
     /// `x ← F x`: the solve applies it on both sides, `A_c⁺ = P F M⁺ F P`.
-    pub(super) fn apply(&self, x: &mut [T]) {
+    fn apply(&self, x: &mut [T]) {
         match self {
             Self::Identity => {}
             Self::NegateFrom(first) => x[*first..].iter_mut().for_each(|x| *x = -*x),
@@ -125,7 +204,7 @@ impl<T: Real> Congruence<T> {
     }
 
     /// Removes the component along `F·1`, max-normalized: the raw norm overflows at a 1e200 scale range.
-    pub(super) fn project_out_null(&self, x: &mut [T]) {
+    fn project_out_null(&self, x: &mut [T]) {
         // Every unit `F·1` is its own normalization, with `uᵀu = n` exact below 2⁵³.
         let n = x.len() as f64;
         match self {
@@ -143,7 +222,7 @@ impl<T: Real> Congruence<T> {
     }
 
     /// `x ← x − x_q·1` at the largest `|f|`, where a split block's singular solve fixes `M`'s gauge.
-    pub(super) fn regauge(&self, x: &mut [T]) {
+    fn regauge(&self, x: &mut [T]) {
         if let Self::Scaled(scales) = self {
             let gauge = x[scales.peak];
             x.iter_mut().for_each(|x| *x = *x - gauge);

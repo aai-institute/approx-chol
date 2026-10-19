@@ -9,7 +9,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 use crate::{Index, Real};
 use cdf::{draw_after, suffix_past};
 pub(super) use copies::{Copies, Multi, Single};
-use star::Star;
+use star::StarEntry;
 
 /// Fill edges `(lo, hi, copies, weight)`, `lo < hi`, as an elimination emits them: one per entry and partner, its weight summed over its copies.
 pub(super) type Fill<T, I, C> = Vec<(I, I, C, T)>;
@@ -19,7 +19,14 @@ pub(super) type PivotColumn<'a, T, I> = (T, &'a [(I, T)], I);
 
 /// A pivot's elimination, reused across pivots; AC and AC2 differ only in `C`.
 pub(super) struct CliqueSampler<T, I, C: Copies> {
-    star: Star<T, I, C>,
+    /// A pivot's deduplicated neighborhood in clique-tree order.
+    entries: Vec<StarEntry<T, I, C>>,
+    /// What merging or capping collapsed, per neighbor.
+    removed_copies: Vec<(I, u32)>,
+    /// Grown to `n` on first need: above 32 entries, dedup scatters instead of sorting 16-byte entries twice.
+    scatter: Vec<I>,
+    /// Each merged entry's summed copies before the cap: `C` cannot add.
+    counts: Vec<u32>,
     /// The star's weights' prefix sums, heaviest last, so each suffix's draw range is one subtraction.
     cumsum: Vec<T>,
     shares: Vec<(I, T)>,
@@ -31,7 +38,10 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
     /// `split` caps every merge, so one sampler cannot mix two.
     pub(super) fn new(split: C::Split) -> Self {
         Self {
-            star: Star::new(),
+            entries: Vec::new(),
+            removed_copies: Vec::new(),
+            scatter: Vec::new(),
+            counts: Vec::new(),
             cumsum: Vec::new(),
             shares: Vec::new(),
             split,
@@ -46,11 +56,11 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
         neighbors: impl Iterator<Item = (I, C, T)>,
         fill: &mut Fill<T, I, C>,
     ) -> PivotColumn<'_, T, I> {
-        self.star.refill(neighbors, self.split);
+        self.refill(neighbors);
         self.sample(draws, |edge| fill.push(edge));
         self.shares.clear();
-        let (last, rest) = (self.star.entries().split_last())
-            .expect("a pivot of a connected graph has a neighbor");
+        let (last, rest) =
+            (self.entries.split_last()).expect("a pivot of a connected graph has a neighbor");
         let d = suffix_past(&self.cumsum, None);
         let shares = rest.iter().map(|entry| (entry.neighbor, entry.weight / d));
         self.shares.extend(shares);
@@ -64,13 +74,13 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
         neighbors: impl Iterator<Item = (I, T)>,
         fill: impl FnMut((I, I, C, T)),
     ) {
-        self.star.refill_unique(neighbors, C::initial(self.split));
+        self.refill_unique(neighbors);
         self.sample(&mut rng, fill);
     }
 
     /// Prepares the star's CDF, then fills `per_copy(w_i (S_{>i} / d))` per copy of each entry but the heaviest, each copy drawing past it.
     fn sample(&mut self, rng: &mut Xoshiro256PlusPlus, mut fill: impl FnMut((I, I, C, T))) {
-        let entries = self.star.entries();
+        let entries = &self.entries;
         let Some((_, rest)) = entries.split_last() else {
             return;
         };
@@ -91,7 +101,7 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
                 .per_copy(entry.weight * (suffix_past(&self.cumsum, Some(i)) / d))
                 .max(T::min_positive_value());
             let draw = || draw_after(&self.cumsum, rng, i);
-            (entry.copies).draw(&mut self.tally, weight, draw, |at, copies, weight| {
+            for (at, copies, weight) in (entry.copies).draw(&mut self.tally, weight, draw) {
                 let other = entries[at].neighbor;
                 fill((
                     entry.neighbor.min(other),
@@ -99,12 +109,7 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
                     copies,
                     weight,
                 ));
-            });
+            }
         }
-    }
-
-    /// Copies each neighbor of the last pivot lost.
-    pub(super) fn degree_losses(&self) -> impl Iterator<Item = (I, u32)> + '_ {
-        self.star.degree_losses()
     }
 }

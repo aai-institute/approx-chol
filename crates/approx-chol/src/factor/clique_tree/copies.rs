@@ -17,14 +17,13 @@ pub(in crate::factor) trait Copies: Copy + Send + Sync {
     /// The kept copies, and how many the cap discarded.
     fn cap(copies: u32, split: Self::Split) -> (Self, u32);
 
-    /// Draws a partner position per copy and emits each distinct one once, with the copies that drew it and their summed `per_copy` weight.
-    fn draw<T: Real>(
+    /// Draws a partner position per copy; yields each distinct one once, with the copies that drew it and their summed `per_copy` weight.
+    fn draw<'a, T: Real>(
         self,
-        tally: &mut Self::Tally,
+        tally: &'a mut Self::Tally,
         per_copy: T,
         draw: impl FnMut() -> usize,
-        emit: impl FnMut(usize, Self, T),
-    );
+    ) -> impl Iterator<Item = (usize, Self, T)> + 'a;
 }
 
 #[derive(Clone, Copy)]
@@ -54,14 +53,13 @@ impl Copies for Single {
         (Self, copies - 1)
     }
 
-    fn draw<T: Real>(
+    fn draw<'a, T: Real>(
         self,
-        (): &mut (),
+        (): &'a mut (),
         per_copy: T,
         mut draw: impl FnMut() -> usize,
-        mut emit: impl FnMut(usize, Self, T),
-    ) {
-        emit(draw(), self, per_copy);
+    ) -> impl Iterator<Item = (usize, Self, T)> + 'a {
+        std::iter::once((draw(), self, per_copy))
     }
 }
 
@@ -86,23 +84,19 @@ impl Copies for Multi {
         (Self(kept), copies - kept)
     }
 
-    fn draw<T: Real>(
+    fn draw<'a, T: Real>(
         self,
-        drawn: &mut Vec<usize>,
+        drawn: &'a mut Vec<usize>,
         per_copy: T,
         draw: impl FnMut() -> usize,
-        mut emit: impl FnMut(usize, Self, T),
-    ) {
+    ) -> impl Iterator<Item = (usize, Self, T)> + 'a {
+        drawn.clear();
         drawn.extend(std::iter::repeat_with(draw).take(self.0 as usize));
         drawn.sort_unstable();
-        for run in drawn.chunk_by(|a, b| a == b) {
+        drawn.chunk_by(|a, b| a == b).map(move |run| {
             let copies = Self(run.len() as u32);
-            emit(
-                run[0],
-                copies,
-                per_copy * T::from(copies.0).expect("a copy count is a float"),
-            );
-        }
-        drawn.clear();
+            let weight = per_copy * T::from(copies.0).expect("a copy count is a float");
+            (run[0], copies, weight)
+        })
     }
 }
