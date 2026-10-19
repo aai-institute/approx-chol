@@ -12,7 +12,7 @@ use crate::sgdd::Grounding;
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, per_task, widen, Index, Real};
 
-/// `M`'s cross block and the pivots `d_e`, applied as two products because the block's steps commute.
+/// `M`'s cross block scaled by its pivots, `D_e⁻¹ C`, and the pivots, applied as two products because the block's steps commute.
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -23,7 +23,7 @@ use crate::{narrow, per_task, widen, Index, Real};
 )]
 #[derive(Clone, Debug)]
 pub(super) struct BlockElimination<T, I> {
-    /// `M`'s own `C`, signs kept and shared with the block: a frustrated block's cover never doubles it.
+    /// `D_e⁻¹ C`, signs kept and shared with the block: a frustrated block's cover never doubles it; each row's magnitudes sum to at most one, so no product with a solution overflows.
     cross: Rows<T, I>,
     inv_pivot: Box<[T]>,
     /// `Cᵀ` where [`Self::transposes`], so `Allow` may split the solve by kept row.
@@ -49,7 +49,12 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         c.nnz() > 1 << 17
     }
 
-    pub(super) fn with_pivots(cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
+    pub(super) fn with_pivots(mut cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
+        cross.scale_rows(&inv_pivot);
+        Self::scaled(cross, inv_pivot)
+    }
+
+    fn scaled(cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
         let ct = Self::transposes(&cross).then(|| cross.transpose());
         Self {
             cross,
@@ -70,26 +75,26 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         }
     }
 
-    /// `y_e = D_e⁻¹ b_e`, then each `b_k` subtracts `c_ek y_e` term by term in ascending `e`: scattered through `C`, or gathered through `Cᵀ` under `Allow` where it is kept, the same bits either way.
+    /// Each `b_k` subtracts `(D_e⁻¹ C)_ek b_e` term by term in ascending `e`: scattered through `C`, or gathered through `Cᵀ` under `Allow` where it is kept, the same bits either way; then `y_e = D_e⁻¹ b_e`.
     pub(super) fn forward(&self, x: &mut [T], inner: InnerParallelism) {
         let (eliminated, kept) = x.split_at_mut(self.n_eliminated());
-        for (y, &inv_pivot) in eliminated.iter_mut().zip(&self.inv_pivot) {
-            *y = *y * inv_pivot;
-        }
-        let eliminated = &*eliminated;
+        let b = &*eliminated;
         if let (InnerParallelism::Allow, Some(ct)) = (inner, &self.ct) {
-            kept.par_iter_mut().enumerate().for_each(|(k, b)| {
+            kept.par_iter_mut().enumerate().for_each(|(k, b_k)| {
                 for (e, &c) in ct.row(k) {
-                    *b = *b - c * eliminated[e];
+                    *b_k = *b_k - c * b[e];
                 }
             });
         } else {
             let c = &self.cross;
-            for (e, &y) in eliminated.iter().enumerate() {
+            for (e, &b_e) in b.iter().enumerate() {
                 for (k, &c) in c.row(e) {
-                    kept[k] = kept[k] - c * y;
+                    kept[k] = kept[k] - c * b_e;
                 }
             }
+        }
+        for (y, &inv_pivot) in eliminated.iter_mut().zip(&self.inv_pivot) {
+            *y = *y * inv_pivot;
         }
     }
 
@@ -101,7 +106,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
             for (k, &c) in c.row(e) {
                 cx = cx + c * kept[k];
             }
-            *y = *y - self.inv_pivot[e] * cx;
+            *y = *y - cx;
         };
         if inner == InnerParallelism::Allow && self.ct.is_some() {
             eliminated
@@ -359,6 +364,6 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         let (n_rows, n_cols) = (self.cross.n_rows(), self.cross.n_cols());
         // The larger side is eliminated, which bounds `n_cols` by decoded rows before `n` or `Cᵀ` exists.
         let sides = n_cols <= n_rows;
-        (pivots && sides).then(|| Self::with_pivots(self.cross, self.inv_pivot))
+        (pivots && sides).then(|| Self::scaled(self.cross, self.inv_pivot))
     }
 }

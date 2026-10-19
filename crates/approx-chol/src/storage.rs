@@ -104,6 +104,15 @@ impl<T: Real, I: Index> Rows<T, I> {
         }
     }
 
+    /// Row `i` times `by[i]`.
+    pub(crate) fn scale_rows(&mut self, by: &[T]) {
+        for (span, &s) in self.ptrs.windows(2).zip(by) {
+            self.values[span[0]..span[1]]
+                .iter_mut()
+                .for_each(|v| *v = *v * s);
+        }
+    }
+
     pub(crate) fn transpose(&self) -> Self {
         let mut ptrs = vec![0; self.n_cols + 1];
         for &j in &self.indices {

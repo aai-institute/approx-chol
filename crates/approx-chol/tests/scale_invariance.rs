@@ -87,3 +87,36 @@ cases! {
         assert_invariant_under_scaling(entry, complete_bipartite, types, mode);
     }
 }
+
+/// A bipartite path whose eliminated row joins `big` to the range floor: `Σ c_ek x_k` overflowed before `D_e⁻¹` scaled it.
+fn path_solves_as_its_scaled_rhs<T: approx_chol::Real>(big: T, down: i32) {
+    use approx_chol::input::{BipartiteGram, FactorWidth1, Weights};
+    let floor = T::min_positive_value() / T::epsilon();
+    let w = [big, floor, floor, floor];
+    let solve = |b: &[T]| {
+        let gram = BipartiteGram::new(
+            FactorWidth1::new(3, &[0u32, 1, 1, 2], None).unwrap(),
+            FactorWidth1::new(2, &[0u32, 0, 1, 1], None).unwrap(),
+            Weights::of(&w).unwrap(),
+        )
+        .unwrap();
+        approx_chol::factorize(gram).unwrap().solve(b).unwrap()
+    };
+    let b: Vec<T> = [1.0, -1.0, 0.0, 0.0, 0.0]
+        .map(|v| T::from(v).unwrap())
+        .to_vec();
+    let scale = T::from(2f64.powi(down)).unwrap();
+    let x = solve(&b);
+    let scaled = solve(&b.iter().map(|&v| v * scale).collect::<Vec<_>>());
+    let peak = x.iter().fold(T::zero(), |m, v| m.max(v.abs()));
+    assert!(peak.is_finite(), "{x:?}");
+    for (x, s) in x.iter().zip(&scaled) {
+        assert!((*x * scale - *s).abs() <= T::epsilon() * peak * scale * T::from(16).unwrap());
+    }
+}
+
+#[test]
+fn an_eliminated_row_spanning_the_range_solves_finite() {
+    path_solves_as_its_scaled_rhs::<f32>(2f32.powi(112), -120);
+    path_solves_as_its_scaled_rhs::<f64>(2f64.powi(1018), -1010);
+}
