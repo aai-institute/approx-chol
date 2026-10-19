@@ -298,7 +298,7 @@ fn cover_rows<T: Real, I: Index>(
                 let sheet = usize::from(crosses(c_ek) != crosses(c_ej));
                 rows.add(
                     cover_vertex(j, sheet),
-                    coupling(c_ek.abs(), c_ej.abs(), inv_pivot[e]),
+                    share(c_ek.abs(), c_ej.abs(), inv_pivot[e]),
                 );
             }
             if let Some(surplus) = surplus {
@@ -308,7 +308,7 @@ fn cover_rows<T: Real, I: Index>(
     })
 }
 
-/// Rows of a folded block's complement, `|c_ke||c_je|/d_e` as a [`coupling`], the ground's `|c_ke| s_e/d_e` as column `n_kept`.
+/// Rows of a folded block's complement, `|c_ke||c_je|/d_e` as a [`share`], the ground's `|c_ke| s_e/d_e` as column `n_kept`.
 fn exact_rows<T: Real, I: Index>(
     c: &Rows<T, I>,
     ct: &Rows<T, I>,
@@ -320,7 +320,7 @@ fn exact_rows<T: Real, I: Index>(
         for (e, c_ek) in ct.row(k) {
             let c_ek = c_ek.abs();
             for (j, c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
-                rows.add(j, coupling(c_ek, c_ej.abs(), inv_pivot[e]));
+                rows.add(j, share(c_ek, c_ej.abs(), inv_pivot[e]));
             }
             if let Some(surplus) = surplus {
                 rows.add(n_kept, share(c_ek, surplus[e], inv_pivot[e]));
@@ -335,14 +335,9 @@ fn rows_per_task<T: Real, I: Index>(c: &Rows<T, I>) -> usize {
     per_task(c.n_cols(), work, 17)
 }
 
-/// A [`share`] between two kept vertices, at least `MIN_POSITIVE`: an underflow would drop an edge of `S` and could split it.
-fn coupling<T: Real>(x: T, y: T, inv_pivot: T) -> T {
-    share(x, y, inv_pivot).max(T::min_positive_value())
-}
-
-/// `x·y/d` as the smaller times the larger's share `max·d⁻¹ ≤ 1`, so no product overflows before the division.
+/// `x·y/d` as the smaller times the larger's share `max·d⁻¹ ≤ 1`, so no product overflows before the division; at least `MIN_POSITIVE`, so no edge of `S` drops and every pivot's inverse is finite.
 fn share<T: Real>(x: T, y: T, inv_pivot: T) -> T {
-    x.min(y) * (x.max(y) * inv_pivot)
+    (x.min(y) * (x.max(y) * inv_pivot)).max(T::min_positive_value())
 }
 
 #[cfg(feature = "serde")]
