@@ -5,7 +5,7 @@ pub(in crate::factor) trait Copies: Copy + Send + Sync {
     /// `Single` cannot name a `k`, making AC over split multi-edges a type error.
     type Split: Copy + Send + Sync;
 
-    /// What [`Copies::draw`] keeps between entries: nothing for one copy.
+    /// Scratch [`Copies::draw`] reuses across entries: nothing for one copy.
     type Tally: Default + Send;
 
     /// What an edge of the input carries once split.
@@ -65,16 +65,9 @@ impl Copies for Single {
     }
 }
 
-/// Per star position, how many of one entry's copies drew it, zero between entries; and the positions drawn, in first-draw order.
-#[derive(Default)]
-pub(in crate::factor) struct Tally {
-    counts: Vec<u32>,
-    drawn: Vec<usize>,
-}
-
 impl Copies for Multi {
     type Split = u32;
-    type Tally = Tally;
+    type Tally = Vec<usize>;
 
     fn initial(split: u32) -> Self {
         Self(split)
@@ -95,25 +88,21 @@ impl Copies for Multi {
 
     fn draw<T: Real>(
         self,
-        tally: &mut Tally,
+        drawn: &mut Vec<usize>,
         per_copy: T,
-        mut draw: impl FnMut() -> usize,
+        draw: impl FnMut() -> usize,
         mut emit: impl FnMut(usize, Self, T),
     ) {
-        for _ in 0..self.0 {
-            let position = draw();
-            if position >= tally.counts.len() {
-                tally.counts.resize(position + 1, 0);
-            }
-            if tally.counts[position] == 0 {
-                tally.drawn.push(position);
-            }
-            tally.counts[position] += 1;
+        drawn.extend(std::iter::repeat_with(draw).take(self.0 as usize));
+        drawn.sort_unstable();
+        for run in drawn.chunk_by(|a, b| a == b) {
+            let copies = Self(run.len() as u32);
+            emit(
+                run[0],
+                copies,
+                per_copy * T::from(copies.0).expect("a copy count is a float"),
+            );
         }
-        for position in tally.drawn.drain(..) {
-            let copies = std::mem::take(&mut tally.counts[position]);
-            let total = per_copy * T::from(copies).expect("a copy count is a float");
-            emit(position, Self(copies), total);
-        }
+        drawn.clear();
     }
 }
