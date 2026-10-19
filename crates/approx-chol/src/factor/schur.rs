@@ -75,10 +75,21 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         }
     }
 
-    /// Each `b_k` subtracts `(D_e⁻¹ C)_ek b_e` term by term in ascending `e`: scattered through `C`, or gathered through `Cᵀ` under `Allow` where it is kept, the same bits either way; then `y_e = D_e⁻¹ b_e`.
-    pub(super) fn forward(&self, x: &mut [T], inner: InnerParallelism) {
+    /// `x ← M⁻¹x`, with `reduced` solving `S` in place on the kept half between the two products.
+    pub(super) fn solve(
+        &self,
+        x: &mut [T],
+        inner: InnerParallelism,
+        reduced: impl FnOnce(&mut [T]),
+    ) {
         let (eliminated, kept) = x.split_at_mut(self.n_eliminated());
-        let b = &*eliminated;
+        self.forward(eliminated, kept, inner);
+        reduced(kept);
+        self.backward(eliminated, kept, inner);
+    }
+
+    /// Each `b_k` subtracts `(D_e⁻¹ C)_ek b_e` term by term in ascending `e`: scattered through `C`, or gathered through `Cᵀ` under `Allow` where it is kept, the same bits either way.
+    fn forward(&self, b: &[T], kept: &mut [T], inner: InnerParallelism) {
         if let (InnerParallelism::Allow, Some(ct)) = (inner, &self.ct) {
             kept.par_iter_mut().enumerate().for_each(|(k, b_k)| {
                 for (e, &c) in ct.row(k) {
@@ -93,31 +104,30 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
                 }
             }
         }
-        for (y, &inv_pivot) in eliminated.iter_mut().zip(&self.inv_pivot) {
-            *y = *y * inv_pivot;
-        }
     }
 
-    /// `x_e = y_e − D_e⁻¹ C x_k`, by eliminated row, split under `Allow` where `Cᵀ` is kept.
-    pub(super) fn backward(&self, eliminated: &mut [T], kept: &[T], inner: InnerParallelism) {
+    /// `x_e = D_e⁻¹ b_e − D_e⁻¹ C x_k` by eliminated row, split under `Allow` where `Cᵀ` is kept.
+    fn backward(&self, eliminated: &mut [T], kept: &[T], inner: InnerParallelism) {
+        const ROWS_PER_TASK: usize = 4096;
         let c = &self.cross;
-        let row = |e: usize, y: &mut T| {
-            let mut cx = T::zero();
-            for (k, &c) in c.row(e) {
-                cx = cx + c * kept[k];
+        // Scaled here: a serial pass after the parallel gather rewrites lines its workers hold.
+        let rows = |first: usize, ys: &mut [T]| {
+            let inv_pivots = &self.inv_pivot[first..][..ys.len()];
+            for (e, (y, &inv_pivot)) in (first..).zip(ys.iter_mut().zip(inv_pivots)) {
+                let mut cx = T::zero();
+                for (k, &c) in c.row(e) {
+                    cx = cx + c * kept[k];
+                }
+                *y = *y * inv_pivot - cx;
             }
-            *y = *y - cx;
         };
         if inner == InnerParallelism::Allow && self.ct.is_some() {
-            eliminated
-                .par_iter_mut()
-                .enumerate()
-                .for_each(|(e, y)| row(e, y));
+            // A fixed grain, as TBB's simple partitioner: concurrent blocks share the pool; a short block still splits 16 ways.
+            let per = ROWS_PER_TASK.min(c.n_rows().div_ceil(16));
+            (eliminated.par_chunks_mut(per).enumerate())
+                .for_each(|(task, ys)| rows(task * per, ys));
         } else {
-            eliminated
-                .iter_mut()
-                .enumerate()
-                .for_each(|(e, y)| row(e, y));
+            rows(0, eliminated);
         }
     }
 }

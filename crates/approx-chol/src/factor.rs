@@ -358,10 +358,7 @@ impl<T: Real, I: Index> Block<T, I> {
         match &self.elimination {
             None => self.cholesky.solve(x, scratch),
             Some(elimination) => {
-                elimination.forward(x, inner);
-                let (eliminated, kept) = x.split_at_mut(elimination.n_eliminated());
-                self.cholesky.solve(kept, scratch);
-                elimination.backward(eliminated, kept, inner);
+                elimination.solve(x, inner, |kept| self.cholesky.solve(kept, scratch));
                 if singular {
                     self.restriction.regauge(x);
                 }
