@@ -337,3 +337,48 @@ fn an_elimination_whose_rows_sum_past_one_is_corrupt() {
     decode(1.0).expect("a stored elimination decodes");
     decode(2.0).expect_err("rows summing to two are corrupt");
 }
+
+/// Each column of a dense `|L|` and each step of an approximate one sums to at most one; past it the substitution can overflow.
+#[rstest]
+#[case::dense("Dense", Backend::ExactBelow { max_dim: 24 })]
+#[case::approximate("coefficients", Backend::Approximate)]
+fn a_cholesky_whose_multipliers_pass_one_is_corrupt(#[case] key: &str, #[case] backend: Backend) {
+    fn scale(v: &mut serde_json::Value, key: &str, by: f64) -> usize {
+        match v {
+            serde_json::Value::Object(map) => {
+                let own = match map.get_mut(key) {
+                    Some(serde_json::Value::Array(values)) => {
+                        let inner = values
+                            .iter_mut()
+                            .filter(|x| x.as_f64().is_some_and(|f| f < 1.0));
+                        inner.for_each(|x| *x = (x.as_f64().unwrap() * by).into());
+                        1
+                    }
+                    _ => 0,
+                };
+                own + map.values_mut().map(|v| scale(v, key, by)).sum::<usize>()
+            }
+            serde_json::Value::Array(items) => items.iter_mut().map(|v| scale(v, key, by)).sum(),
+            _ => 0,
+        }
+    }
+    let (a, b): (Vec<u32>, Vec<u32>) = (0..16u32)
+        .flat_map(|v| [(v, v + 1), (v, v + 4)])
+        .filter(|&(v, w)| w < 16 && (w != v + 1 || w % 4 != 0))
+        .unzip();
+    let ground: Vec<f64> = (0..16).map(|i| if i == 0 { 1.0 } else { 0.0 }).collect();
+    let grid = Laplacian::new(16, &a, &b, Weights::unit()).unwrap();
+    let grid = grid.grounded(&ground).unwrap();
+    let config = Config {
+        backend,
+        ..Config::default()
+    };
+    let factor = factorize_with(grid, config).unwrap();
+    let decode = |by: f64| {
+        let mut v = serde_json::to_value(&factor).unwrap();
+        assert!(scale(&mut v, key, by) > 0, "the factor stores {key}");
+        serde_json::from_value::<Factor>(v)
+    };
+    decode(1.0).expect("a stored Cholesky decodes");
+    decode(2.0).expect_err("multipliers summing to two are corrupt");
+}

@@ -8,6 +8,8 @@ use rand::rngs::Xoshiro256PlusPlus;
 use crate::factor::clique_tree::{CliqueSampler, Copies, Fill, Multi, PivotColumn, Single};
 use crate::factor::config::Multiplicity;
 use crate::factor::sddm::Sddm;
+#[cfg(feature = "serde")]
+use crate::factor::within_one;
 use crate::{Index, Real};
 use graph::EliminationGraph;
 use ordering::MinDegreeOrder;
@@ -169,7 +171,7 @@ const LANES: usize = 4;
 
 #[cfg(feature = "serde")]
 impl<T: Real, I: Index> ApproximateCholesky<T, I> {
-    /// Each slot but `last` pivots once, giving only to slots not yet pivoted.
+    /// Each slot but `last` pivots once, giving only to slots not yet pivoted, shares of at most its whole.
     pub(super) fn fits(&self, slots: usize, last: usize) -> bool {
         let Self {
             headers,
@@ -195,7 +197,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
                 .iter()
                 .all(|&j| j.index() < slots && !pivoted[j.index()]);
             let shares = &coefficients[start..end];
-            let finite = header.pivot_scale.is_finite() && shares.iter().all(|c| c.is_finite());
+            let finite = header.pivot_scale.is_finite() && within_one(shares.iter().copied());
             if !later || !finite || matches!(shares, [c] if *c != T::one()) {
                 return false;
             }
