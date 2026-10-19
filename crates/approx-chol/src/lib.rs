@@ -97,7 +97,7 @@ impl Real for f32 {}
 impl Real for f64 {}
 
 /// The unsigned integer a reduction and its factor store each vertex index in: `u32` by default, `u64` past `u32::MAX` vertices.
-pub(crate) trait Index: PrimInt + Unsigned + Send + Sync + 'static {
+trait Index: PrimInt + Unsigned + Send + Sync + 'static {
     /// `self` as `usize`, so `x[v.index()]` reads vertex `v` of any `x` over `A`'s vertices.
     fn index(self) -> usize;
 
@@ -134,7 +134,7 @@ index!(u32);
 index!(u64);
 
 /// An index of the largest `|f|`, where pinning the gauge leaves its rounding unamplified by `1/f`.
-pub(crate) fn largest<T: Real>(f: &[T]) -> usize {
+fn largest<T: Real>(f: &[T]) -> usize {
     let last = f.len().saturating_sub(1);
     (0..last).fold(last, |best, i| match f[i].abs() > f[best].abs() {
         true => i,
@@ -143,27 +143,27 @@ pub(crate) fn largest<T: Real>(f: &[T]) -> usize {
 }
 
 /// Finite, and zero or at least `MIN_POSITIVE/EPSILON`, so no product turns subnormal (#163).
-pub(crate) fn in_range<T: Real>(x: T) -> bool {
+fn in_range<T: Real>(x: T) -> bool {
     x.is_finite() && (x == T::zero() || x.abs() >= T::min_positive_value() / T::epsilon())
 }
 
 /// Every `f64` sum starts here: a `Float` always casts up.
-pub(crate) fn widen<T: Real>(x: T) -> f64 {
+fn widen<T: Real>(x: T) -> f64 {
     x.to_f64().expect("a float casts to f64")
 }
 
 /// An `f64` sum in `T`: past `T::MAX` it reads infinite, which every range screen rejects.
-pub(crate) fn narrow<T: Real>(sum: f64) -> T {
+fn narrow<T: Real>(sum: f64) -> T {
     T::from(sum).unwrap_or_else(T::infinity)
 }
 
 /// In range and at most `MAX/4`, so every row sum, pivot and surplus stays finite.
-pub(crate) fn diagonal_in_range<T: Real>(d: T) -> bool {
+fn diagonal_in_range<T: Real>(d: T) -> bool {
     in_range(d) && d <= T::max_value() / (T::one() + T::one() + T::one() + T::one())
 }
 
 /// `Σ x` with each addition's rounding carried (Knuth's TwoSum): within `ε` of exact for nonnegative terms.
-pub(crate) fn compensated_sum(terms: impl Iterator<Item = f64>) -> f64 {
+fn compensated_sum(terms: impl Iterator<Item = f64>) -> f64 {
     let (sum, carry) = terms.fold((0.0f64, 0.0f64), |(sum, carry), x| {
         let next = sum + x;
         let x_part = next - sum;
