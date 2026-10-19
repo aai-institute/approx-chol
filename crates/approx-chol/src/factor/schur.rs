@@ -149,11 +149,11 @@ pub(super) fn sampled<T: Real, I: Index>(
     };
     let fill = match sheets {
         // One sheet maps no column, as the balanced loop pays for any map.
-        Sheets::One => fill_stars(copies, c.n_rows(), n, |e| {
+        Sheets::One => fill_stars(copies, c.n_rows(), stars_per_task(c), n, |e| {
             let neighbors = c.row(e).map(|(k, &c)| (I::from_index(k), c.abs()));
             (stars.star(e), neighbors.chain(ground_share(e)))
         }),
-        Sheets::Two => fill_stars(copies, 2 * c.n_rows(), n, |star| {
+        Sheets::Two => fill_stars(copies, 2 * c.n_rows(), stars_per_task(c), n, |star| {
             let (sheet, e) = (star / c.n_rows(), star % c.n_rows());
             let neighbors = c.row(e).map(move |(k, &c)| {
                 let on = sheet ^ usize::from(crosses(c));
@@ -241,12 +241,13 @@ fn from_fill<T: Real, I: Index>(
 fn fill_stars<T: Real, I: Index, N: Iterator<Item = (I, T)>>(
     copies: Multiplicity,
     n_stars: usize,
+    per_task: usize,
     n: usize,
     star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
 ) -> Vec<Buckets<T, I>> {
     match copies {
-        Multiplicity::Single => sample_stars::<T, I, Single, N>((), n_stars, n, star),
-        Multiplicity::Split(k) => sample_stars::<T, I, Multi, N>(k, n_stars, n, star),
+        Multiplicity::Single => sample_stars::<T, I, Single, N>((), n_stars, per_task, n, star),
+        Multiplicity::Split(k) => sample_stars::<T, I, Multi, N>(k, n_stars, per_task, n, star),
     }
 }
 
@@ -254,6 +255,7 @@ fn fill_stars<T: Real, I: Index, N: Iterator<Item = (I, T)>>(
 fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
     split: C::Split,
     n_stars: usize,
+    per_task: usize,
     n: usize,
     star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
 ) -> Vec<Buckets<T, I>> {
@@ -267,7 +269,7 @@ fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
     };
     (0..n_stars)
         .into_par_iter()
-        .fold(empty, |(mut sampler, mut buckets), i| {
+        .fold_chunks(per_task, empty, |(mut sampler, mut buckets), i| {
             let (draws, neighbors) = star(i);
             let push = |edge: (I, I, T)| buckets[edge.0.index() >> shift].push(edge);
             sampler.eliminate_unique(draws, neighbors, push);
@@ -278,6 +280,11 @@ fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
             buckets
         })
         .collect()
+}
+
+/// Stars per task so each samples about `2^14` entries of `C`: fixed chunks, so the fill's pieces do not multiply with threads.
+fn stars_per_task<T: Real, I: Index>(c: &Rows<T, I>) -> usize {
+    (c.n_rows() << 14).div_ceil(c.nnz().max(1)).max(1)
 }
 
 /// Rows of the cover's complement: `|c_ke||c_je|/d_e` to `j`'s same sheet when signs agree, else its other; `k⁻` mirrors `k⁺`, so each sums only `j > k`; the ground's share as column `2·n_kept`.
