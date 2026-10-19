@@ -4,13 +4,13 @@ use rayon::prelude::*;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use super::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single};
+use super::clique_tree::{CliqueSampler, Copies, Multi, Single};
 use super::config::{InnerParallelism, Multiplicity};
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
 use super::Streams;
 use crate::sgdd::Grounding;
 use crate::storage::{Rows, UpperAdjacency};
-use crate::{narrow, widen, Index, Real};
+use crate::{narrow, per_task, widen, Index, Real};
 
 /// `M`'s cross block and the pivots `d_e`, applied as two products because the block's steps commute.
 #[cfg_attr(
@@ -147,13 +147,14 @@ pub(super) fn sampled<T: Real, I: Index>(
         let s_e = surplus.map(|s| s[e]).filter(|&s| s > T::zero());
         s_e.map(|s| (ground, s))
     };
+    let stars_per_task = per_task(c.n_rows(), c.nnz() as u64, 14);
     let fill = match sheets {
         // One sheet maps no column, as the balanced loop pays for any map.
-        Sheets::One => fill_stars(copies, c.n_rows(), n, |e| {
+        Sheets::One => fill_stars(copies, c.n_rows(), stars_per_task, n, |e| {
             let neighbors = c.row(e).map(|(k, &c)| (I::from_index(k), c.abs()));
             (stars.star(e), neighbors.chain(ground_share(e)))
         }),
-        Sheets::Two => fill_stars(copies, 2 * c.n_rows(), n, |star| {
+        Sheets::Two => fill_stars(copies, 2 * c.n_rows(), stars_per_task, n, |star| {
             let (sheet, e) = (star / c.n_rows(), star % c.n_rows());
             let neighbors = c.row(e).map(move |(k, &c)| {
                 let on = sheet ^ usize::from(crosses(c));
@@ -170,8 +171,8 @@ fn bucket_shift(n: usize) -> u32 {
     (usize::BITS - n.saturating_sub(1).leading_zeros()).saturating_sub(4)
 }
 
-/// One thread's fill over `n` rows, split by `lo` into the ranges of [`bucket_shift`].
-type Buckets<T, I> = Vec<Fill<T, I>>;
+/// One thread's fill edges `(lo, hi, weight)` over `n` rows, split by `lo` into the ranges of [`bucket_shift`].
+type Buckets<T, I> = Vec<Vec<(I, I, T)>>;
 
 /// The kept rows with each kept vertex's surplus added to its ground share.
 fn schur<T: Real, I: Index>(
@@ -241,12 +242,13 @@ fn from_fill<T: Real, I: Index>(
 fn fill_stars<T: Real, I: Index, N: Iterator<Item = (I, T)>>(
     copies: Multiplicity,
     n_stars: usize,
+    per_task: usize,
     n: usize,
     star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
 ) -> Vec<Buckets<T, I>> {
     match copies {
-        Multiplicity::Single => sample_stars::<T, I, Single, N>((), n_stars, n, star),
-        Multiplicity::Split(k) => sample_stars::<T, I, Multi, N>(k, n_stars, n, star),
+        Multiplicity::Single => sample_stars::<T, I, Single, N>((), n_stars, per_task, n, star),
+        Multiplicity::Split(k) => sample_stars::<T, I, Multi, N>(k, n_stars, per_task, n, star),
     }
 }
 
@@ -254,6 +256,7 @@ fn fill_stars<T: Real, I: Index, N: Iterator<Item = (I, T)>>(
 fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
     split: C::Split,
     n_stars: usize,
+    per_task: usize,
     n: usize,
     star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
 ) -> Vec<Buckets<T, I>> {
@@ -262,14 +265,15 @@ fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
     let empty = || {
         (
             CliqueSampler::<T, I, C>::new(split),
-            vec![Fill::new(); count],
+            vec![Vec::new(); count],
         )
     };
     (0..n_stars)
         .into_par_iter()
-        .fold(empty, |(mut sampler, mut buckets), i| {
+        .fold_chunks(per_task, empty, |(mut sampler, mut buckets), i| {
             let (draws, neighbors) = star(i);
-            let push = |edge: (I, I, T)| buckets[edge.0.index() >> shift].push(edge);
+            let push =
+                |(lo, hi, _, w): (I, I, C, T)| buckets[lo.index() >> shift].push((lo, hi, w));
             sampler.eliminate_unique(draws, neighbors, push);
             (sampler, buckets)
         })
@@ -294,7 +298,7 @@ fn cover_rows<T: Real, I: Index>(
                 let sheet = usize::from(crosses(c_ek) != crosses(c_ej));
                 rows.add(
                     cover_vertex(j, sheet),
-                    share(c_ek.abs(), c_ej.abs(), inv_pivot[e]),
+                    coupling(c_ek.abs(), c_ej.abs(), inv_pivot[e]),
                 );
             }
             if let Some(surplus) = surplus {
@@ -304,7 +308,7 @@ fn cover_rows<T: Real, I: Index>(
     })
 }
 
-/// Rows of a folded block's complement, `|c_ke||c_je|/d_e` as the smaller times the larger's share, the ground's `|c_ke| s_e/d_e` as column `n_kept`; a product underflowing to zero is dropped, as a stored zero couples nothing.
+/// Rows of a folded block's complement, `|c_ke||c_je|/d_e` as a [`coupling`], the ground's `|c_ke| s_e/d_e` as column `n_kept`.
 fn exact_rows<T: Real, I: Index>(
     c: &Rows<T, I>,
     ct: &Rows<T, I>,
@@ -316,7 +320,7 @@ fn exact_rows<T: Real, I: Index>(
         for (e, c_ek) in ct.row(k) {
             let c_ek = c_ek.abs();
             for (j, c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
-                rows.add(j, share(c_ek, c_ej.abs(), inv_pivot[e]));
+                rows.add(j, coupling(c_ek, c_ej.abs(), inv_pivot[e]));
             }
             if let Some(surplus) = surplus {
                 rows.add(n_kept, share(c_ek, surplus[e], inv_pivot[e]));
@@ -327,8 +331,13 @@ fn exact_rows<T: Real, I: Index>(
 
 /// Kept rows per task so each carries `2^17` of the complement's `nnz·(nnz/n_e)/2` multiply-adds, below which a split costs more than it saves.
 fn rows_per_task<T: Real, I: Index>(c: &Rows<T, I>) -> usize {
-    let work = c.nnz() * (c.nnz() / c.n_rows().max(1)) / 2;
-    (c.n_cols() << 17).div_ceil(work.max(1))
+    let work = c.nnz() as u64 * (c.nnz() / c.n_rows().max(1)) as u64 / 2;
+    per_task(c.n_cols(), work, 17)
+}
+
+/// A [`share`] between two kept vertices, at least `MIN_POSITIVE`: an underflow would drop an edge of `S` and could split it.
+fn coupling<T: Real>(x: T, y: T, inv_pivot: T) -> T {
+    share(x, y, inv_pivot).max(T::min_positive_value())
 }
 
 /// `x·y/d` as the smaller times the larger's share `max·d⁻¹ ≤ 1`, so no product overflows before the division.

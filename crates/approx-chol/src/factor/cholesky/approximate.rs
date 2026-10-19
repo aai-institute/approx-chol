@@ -46,8 +46,8 @@ fn eliminate<T: Real, I: Index, C: Copies>(
         let column = clique.eliminate(&mut draws, graph.neighbors(v), &mut fill);
         steps.push(v, column);
         graph.eliminate_vertex(v);
-        for &(u, w, weight) in &fill {
-            graph.push_pair(u, w, C::one(), weight);
+        for &(u, w, copies, weight) in &fill {
+            graph.push_pair(u, w, copies, weight);
         }
         ordering.update(clique.degree_losses(), &fill);
     }
@@ -88,35 +88,21 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
     }
 
     /// The one site deriving the remainder's share.
-    fn push(&mut self, vertex: usize, column: Option<PivotColumn<'_, T, I>>) {
+    fn push(&mut self, vertex: usize, (weight, shares, remainder): PivotColumn<'_, T, I>) {
         let start = self.neighbors.len();
-        let (pivot, retained) = match column {
-            None => (T::zero(), T::one()),
-            Some((pivot, shares, remainder)) => {
-                let mut left = T::one();
-                for &(neighbor, share) in shares {
-                    self.neighbors.push(neighbor);
-                    self.coefficients.push(share);
-                    left = left - share;
-                }
-                self.neighbors.push(remainder);
-                self.coefficients.push(left);
-                (pivot, left)
-            }
-        };
-        // Needs an empty star, or `w_max²/d` under `1/MAX`: fill decay or `1/ε` neighbors (#168); `one` drops the scale.
-        debug_assert!(
-            (T::one() / pivot).is_finite(),
-            "pivot has no finite inverse"
-        );
-        let inverse = match T::one() / pivot {
-            inverse if inverse.is_finite() => inverse,
-            _ => T::one(),
-        };
+        let mut retained = T::one();
+        for &(neighbor, share) in shares {
+            self.neighbors.push(neighbor);
+            self.coefficients.push(share);
+            retained = retained - share;
+        }
+        self.neighbors.push(remainder);
+        self.coefficients.push(retained);
+        // `retained / (w²/d)` is `1/w` for the remainder's `w`, finite as fill and `S` never weigh below `MIN_POSITIVE`.
         self.headers.push(StepHeader {
             vertex: I::from_index(vertex),
             len: I::from_index(self.neighbors.len() - start),
-            pivot_scale: retained * inverse,
+            pivot_scale: T::one() / weight,
         });
     }
 

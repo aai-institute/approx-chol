@@ -104,16 +104,6 @@ impl<T: Real, I: Index> Rows<T, I> {
         }
     }
 
-    /// Each value mapped, the pattern kept.
-    pub(crate) fn map<U: Real>(self, f: impl FnMut(T) -> U) -> Rows<U, I> {
-        Rows {
-            ptrs: self.ptrs,
-            indices: self.indices,
-            values: self.values.into_iter().map(f).collect(),
-            n_cols: self.n_cols,
-        }
-    }
-
     pub(crate) fn transpose(&self) -> Self {
         let mut ptrs = vec![0; self.n_cols + 1];
         for &j in &self.indices {
@@ -264,7 +254,7 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
     }
 
     pub(crate) fn nonpositive(&self) -> bool {
-        self.rows().nonpositive()
+        self.stored().0.nonpositive()
     }
 
     /// `Σ_j |a_ij|` per row in local order: dominance, surplus and pivots all start here.
@@ -275,7 +265,7 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
 
     /// `Σ_ij |a_ij|` over both triangles, compensated.
     pub(crate) fn abs_total(&self) -> f64 {
-        2.0 * self.rows().abs_total()
+        2.0 * self.stored().0.abs_total()
     }
 
     /// `S X S` for signs `S`: a sign moves no magnitude, so no entry leaves range.
@@ -305,11 +295,6 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
             }
         };
         Some((scaled, sums.into_iter().map(narrow).collect()))
-    }
-
-    /// The most entries in any row, both triangles counted.
-    pub(crate) fn max_degree(&self) -> usize {
-        self.degrees().into_iter().max().unwrap_or(0)
     }
 
     /// Each row's off-diagonal count, both triangles.
@@ -349,13 +334,6 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
         match self {
             Self::General(adjacency) => (&adjacency.rows, 0),
             Self::Bipartite(cross) => (cross, cross.n_rows()),
-        }
-    }
-
-    fn rows(&self) -> &Rows<T, I> {
-        match self {
-            Self::General(adjacency) => &adjacency.rows,
-            Self::Bipartite(cross) => cross,
         }
     }
 }

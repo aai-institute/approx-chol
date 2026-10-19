@@ -82,17 +82,17 @@ impl<I: Index> MinDegreeOrder<I> {
     }
 
     /// The star's degree losses, then fill's gains.
-    pub(super) fn update<T: Real>(
+    pub(super) fn update<T: Real, C: Copies>(
         &mut self,
         losses: impl Iterator<Item = (I, u32)>,
-        fill: &Fill<T, I>,
+        fill: &Fill<T, I, C>,
     ) {
         for (u, copies) in losses {
             self.add(u, -i64::from(copies));
         }
-        for &(u, w, _) in fill {
-            self.add(u, 1);
-            self.add(w, 1);
+        for &(u, w, copies, _) in fill {
+            self.add(u, i64::from(copies.get()));
+            self.add(w, i64::from(copies.get()));
         }
         for i in 0..self.touched.len() {
             let v = self.touched[i].index();

@@ -5,8 +5,8 @@ pub(in crate::factor) trait Copies: Copy + Send + Sync {
     /// `Single` cannot name a `k`, making AC over split multi-edges a type error.
     type Split: Copy + Send + Sync;
 
-    /// What a fill edge carries.
-    fn one() -> Self;
+    /// Scratch [`Copies::draw`] reuses across entries: nothing for one copy.
+    type Tally: Default + Send;
 
     /// What an edge of the input carries once split.
     fn initial(split: Self::Split) -> Self;
@@ -16,20 +16,27 @@ pub(in crate::factor) trait Copies: Copy + Send + Sync {
 
     /// The kept copies, and how many the cap discarded.
     fn cap(copies: u32, split: Self::Split) -> (Self, u32);
+
+    /// Draws a partner position per copy and emits each distinct one once, with the copies that drew it and their summed `per_copy` weight.
+    fn draw<T: Real>(
+        self,
+        tally: &mut Self::Tally,
+        per_copy: T,
+        draw: impl FnMut() -> usize,
+        emit: impl FnMut(usize, Self, T),
+    );
 }
 
 #[derive(Clone, Copy)]
 pub(in crate::factor) struct Single;
 
-/// Virtual copy count, only ever lowered from `Multiplicity::Split`'s `k` by the merge cap.
+/// Virtual copy count: `Multiplicity::Split`'s `k`, lowered by the merge cap, or the copies of one entry that drew one partner.
 #[derive(Clone, Copy)]
 pub(in crate::factor) struct Multi(u32);
 
 impl Copies for Single {
     type Split = ();
-    fn one() -> Self {
-        Self
-    }
+    type Tally = ();
 
     fn initial((): ()) -> Self {
         Self
@@ -46,13 +53,21 @@ impl Copies for Single {
     fn cap(copies: u32, (): ()) -> (Self, u32) {
         (Self, copies - 1)
     }
+
+    fn draw<T: Real>(
+        self,
+        (): &mut (),
+        per_copy: T,
+        mut draw: impl FnMut() -> usize,
+        mut emit: impl FnMut(usize, Self, T),
+    ) {
+        emit(draw(), self, per_copy);
+    }
 }
 
 impl Copies for Multi {
     type Split = u32;
-    fn one() -> Self {
-        Self(1)
-    }
+    type Tally = Vec<usize>;
 
     fn initial(split: u32) -> Self {
         Self(split)
@@ -69,5 +84,25 @@ impl Copies for Multi {
     fn cap(copies: u32, split: u32) -> (Self, u32) {
         let kept = copies.min(split);
         (Self(kept), copies - kept)
+    }
+
+    fn draw<T: Real>(
+        self,
+        drawn: &mut Vec<usize>,
+        per_copy: T,
+        draw: impl FnMut() -> usize,
+        mut emit: impl FnMut(usize, Self, T),
+    ) {
+        drawn.extend(std::iter::repeat_with(draw).take(self.0 as usize));
+        drawn.sort_unstable();
+        for run in drawn.chunk_by(|a, b| a == b) {
+            let copies = Self(run.len() as u32);
+            emit(
+                run[0],
+                copies,
+                per_copy * T::from(copies.0).expect("a copy count is a float"),
+            );
+        }
+        drawn.clear();
     }
 }
