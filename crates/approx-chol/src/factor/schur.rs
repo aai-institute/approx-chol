@@ -75,10 +75,10 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         }
     }
 
-    /// Each `b_k` subtracts `(D_e⁻¹ C)_ek b_e` term by term in ascending `e`: scattered through `C`, or gathered through `Cᵀ` under `Allow` where it is kept, the same bits either way; then `y_e = D_e⁻¹ b_e`.
+    /// Each `b_k` subtracts `(D_e⁻¹ C)_ek b_e` term by term in ascending `e`: scattered through `C`, or gathered through `Cᵀ` under `Allow` where it is kept, the same bits either way; `b_e` is left for [`Self::backward`] to scale.
     pub(super) fn forward(&self, x: &mut [T], inner: InnerParallelism) {
-        let (eliminated, kept) = x.split_at_mut(self.n_eliminated());
-        let b = &*eliminated;
+        let (b, kept) = x.split_at_mut(self.n_eliminated());
+        let b = &*b;
         if let (InnerParallelism::Allow, Some(ct)) = (inner, &self.ct) {
             kept.par_iter_mut().enumerate().for_each(|(k, b_k)| {
                 for (e, &c) in ct.row(k) {
@@ -93,26 +93,26 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
                 }
             }
         }
-        for (y, &inv_pivot) in eliminated.iter_mut().zip(&self.inv_pivot) {
-            *y = *y * inv_pivot;
-        }
     }
 
-    /// `x_e = y_e − D_e⁻¹ C x_k`, by eliminated row, split under `Allow` where `Cᵀ` is kept.
+    /// `x_e = D_e⁻¹ b_e − D_e⁻¹ C x_k`, by eliminated row, split under `Allow` where `Cᵀ` is kept.
     pub(super) fn backward(&self, eliminated: &mut [T], kept: &[T], inner: InnerParallelism) {
+        // Fixed pieces: rayon's adaptive split by row cost a zipf block's backward 0.68 vs 0.44 ms.
+        const ROWS_PER_TASK: usize = 4096;
         let c = &self.cross;
         let row = |e: usize, y: &mut T| {
             let mut cx = T::zero();
             for (k, &c) in c.row(e) {
                 cx = cx + c * kept[k];
             }
-            *y = *y - cx;
+            // Scaled here: a serial pass after the parallel gather rewrote lines other cores held (+1.0 ms on 2FE).
+            *y = *y * self.inv_pivot[e] - cx;
         };
         if inner == InnerParallelism::Allow && self.ct.is_some() {
-            eliminated
-                .par_iter_mut()
-                .enumerate()
-                .for_each(|(e, y)| row(e, y));
+            (eliminated.par_chunks_mut(ROWS_PER_TASK).enumerate()).for_each(|(task, ys)| {
+                let first = task * ROWS_PER_TASK;
+                (ys.iter_mut().enumerate()).for_each(|(i, y)| row(first + i, y))
+            });
         } else {
             eliminated
                 .iter_mut()
