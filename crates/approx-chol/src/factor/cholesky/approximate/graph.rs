@@ -25,7 +25,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
     }
 
     /// The ground is a vertex like any other: forcing it last measured +0-10% PCG iterations.
-    pub(super) fn load(&mut self, sddm: &Sddm<T, I>, split: C::Split) {
+    pub(super) fn load(&mut self, sddm: &Sddm<T, I>, split: C) {
         let n = sddm.n() + usize::from(sddm.grounded());
         // One slot past the degree: the first fill edge reallocating measured +2-3% on grids.
         let mut capacities = vec![1; n];
@@ -37,8 +37,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         let reused = self.lists.len();
         (self.lists.iter_mut().zip(&capacities)).for_each(|(list, &c)| list.reserve_exact(c));
         (self.lists).extend(capacities[reused..].iter().map(|&c| Vec::with_capacity(c)));
-        let copies = C::initial(split);
-        sddm.grounded_edges(|k, j, w| self.push_pair(k, j, copies, w));
+        sddm.grounded_edges(|k, j, w| self.push_pair(k, j, split, w));
     }
 
     pub(super) fn n(&self) -> usize {

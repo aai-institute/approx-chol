@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use super::clique_tree::{CliqueSampler, Copies, Multi, Single};
-use super::config::{InnerParallelism, Multiplicity};
+use super::config::InnerParallelism;
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
 use super::{within_one, Streams};
 use crate::sgdd::Grounding;
@@ -155,7 +155,7 @@ pub(super) fn exact<T: Real, I: Index>(
 /// `S` sampled by star in parallel; clique trees need no pivots, so no elimination exists yet. σ is read last here, so it is freed before `S` is factored.
 pub(super) fn sampled<T: Real, I: Index>(
     c: &Rows<T, I>,
-    copies: Multiplicity,
+    copies: Option<Multi>,
     sheets: Sheets,
     grounding: Grounding<T>,
     stars: Streams,
@@ -257,21 +257,21 @@ fn from_fill<T: Real, I: Index>(
 
 /// A row of `C` repeats no column, so stars skip the merge; chunks in star order, so merged duplicates sum alike at any thread count.
 fn fill_stars<T: Real, I: Index, N: Iterator<Item = (I, T)>>(
-    copies: Multiplicity,
+    copies: Option<Multi>,
     n_stars: usize,
     per_task: usize,
     n: usize,
     star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
 ) -> Vec<Buckets<T, I>> {
     match copies {
-        Multiplicity::Single => sample_stars::<T, I, Single, N>((), n_stars, per_task, n, star),
-        Multiplicity::Split(k) => sample_stars::<T, I, Multi, N>(k, n_stars, per_task, n, star),
+        None => sample_stars(Single, n_stars, per_task, n, star),
+        Some(copies) => sample_stars(copies, n_stars, per_task, n, star),
     }
 }
 
 /// Each eliminated star's clique tree on each sheet under its own stream, the ground a final neighbor unless its share is zero; fill bucketed over `n` rows.
 fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
-    split: C::Split,
+    split: C,
     n_stars: usize,
     per_task: usize,
     n: usize,
@@ -279,12 +279,7 @@ fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
 ) -> Vec<Buckets<T, I>> {
     let shift = bucket_shift(n);
     let count = n.div_ceil(1 << shift);
-    let empty = || {
-        (
-            CliqueSampler::<T, I, C>::new(split),
-            vec![Vec::new(); count],
-        )
-    };
+    let empty = || (CliqueSampler::new(split), vec![Vec::new(); count]);
     (0..n_stars)
         .into_par_iter()
         .fold_chunks(per_task, empty, |(mut sampler, mut buckets), i| {

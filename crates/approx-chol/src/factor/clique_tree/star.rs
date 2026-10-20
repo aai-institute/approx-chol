@@ -57,7 +57,7 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
         };
         self.entries.truncate(merged);
         for (entry, &count) in self.entries.iter_mut().zip(&self.counts) {
-            let (copies, dropped) = C::cap(count, self.split);
+            let (copies, dropped) = self.split.cap(count);
             entry.copies = copies;
             if dropped > 0 {
                 self.removed_copies.push((entry.neighbor, dropped));
@@ -115,9 +115,9 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
         self.counts[position] = self.counts[position].saturating_add(duplicate.copies.get());
     }
 
-    /// Neighbors already unique, each at the split's initial copies, which keeps per-copy order the raw order: one sort, no scratch.
+    /// Neighbors already unique, each at the split's copies, which keeps per-copy order the raw order: one sort, no scratch.
     pub(super) fn refill_unique(&mut self, neighbors: impl Iterator<Item = (I, T)>) {
-        let copies = C::initial(self.split);
+        let copies = self.split;
         self.entries.clear();
         self.removed_copies.clear();
         let entries = neighbors.map(|(neighbor, weight)| StarEntry {
