@@ -114,7 +114,7 @@ fn bipartite_incidence_and_valued_grams_preserve_both_sides() {
     let gram = |values_l, values_r| {
         let l = FactorWidth1::new(3, &left, values_l).unwrap();
         let r = FactorWidth1::new(2, &right, values_r).unwrap();
-        let gram = BipartiteGram::new(l, r, Weights::default()).unwrap();
+        let gram = BipartiteGram::new(l, r, Weights::unit()).unwrap();
         factorize_with(gram, dense()).unwrap()
     };
     let incidence = gram(None, None);

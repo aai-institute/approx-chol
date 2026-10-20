@@ -43,13 +43,6 @@ impl<'a, T: Real> Weights<'a, T> {
     }
 }
 
-impl<T> Default for Weights<'_, T> {
-    /// `W = I`.
-    fn default() -> Self {
-        Self(Weighting::Unit)
-    }
-}
-
 fn check<T: Real>(entries: &[T], valid: fn(T) -> bool) -> Result<(), ViewError> {
     match entries.iter().position(|&x| !valid(x)) {
         Some(column) => Err(ViewError::InvalidWeight { column }),
