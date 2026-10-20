@@ -197,7 +197,8 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
                 .iter()
                 .all(|&j| j.index() < slots && !pivoted[j.index()]);
             let shares = &coefficients[start..end];
-            let bounded = header.pivot_scale.is_finite() && within_one(shares.iter().copied());
+            let pivot = header.pivot_scale.is_finite() && header.pivot_scale > T::zero();
+            let bounded = pivot && within_one(shares.iter().copied());
             if !later || !bounded || matches!(shares, [c] if *c != T::one()) {
                 return false;
             }

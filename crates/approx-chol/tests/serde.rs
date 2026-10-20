@@ -366,6 +366,33 @@ fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
     decode_scaled(&factor, stored, 2.0).expect_err("multipliers summing to two are corrupt");
 }
 
+/// An approximate step's pivot scale is positive, as every other stored pivot; a negated one solves indefinite.
+#[rstest]
+#[case::negative(-1.0)]
+#[case::zero(0.0)]
+fn an_approximate_pivot_scale_not_positive_is_corrupt(#[case] by: f64) {
+    fn scale(v: &mut serde_json::Value, by: f64) {
+        match v {
+            serde_json::Value::Object(map) => map.iter_mut().for_each(|(key, v)| match key {
+                k if k == "pivot_scale" => *v = (v.as_f64().unwrap() * by).into(),
+                _ => scale(v, by),
+            }),
+            serde_json::Value::Array(items) => items.iter_mut().for_each(|v| scale(v, by)),
+            _ => {}
+        }
+    }
+    let (a, b): (Vec<u32>, Vec<u32>) = (0..29u32).map(|v| (v, v + 1)).unzip();
+    let path = Laplacian::new(30, &a, &b, Weights::unit()).unwrap();
+    let config = Config {
+        backend: Backend::Approximate,
+        ..Config::default()
+    };
+    let factor: Factor = factorize_with(path, config).unwrap();
+    let mut v = serde_json::to_value(&factor).unwrap();
+    scale(&mut v, by);
+    serde_json::from_value::<Factor>(v).expect_err("a pivot scale not positive is corrupt");
+}
+
 /// A factor holding an isolated vertex reads back from a self-describing format too.
 #[test]
 fn an_isolated_vertex_round_trips_through_json() {
