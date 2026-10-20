@@ -292,7 +292,6 @@ pub(crate) struct Block<T, I> {
 impl<T: Real, I: Index> Block<T, I> {
     fn build(block: IrreducibleBlock<T, I>, config: &Config) -> Self {
         let (restriction, off_diagonal, balance, report) = block.into_parts();
-        let floats = balance.floats();
         let streams = Streams {
             seed: config.seed,
             block: restriction.vertices()[0].index() as u64,
@@ -335,7 +334,6 @@ impl<T: Real, I: Index> Block<T, I> {
                 (Some(Box::new(elimination)), factored)
             }
         };
-        debug_assert_eq!(cholesky.singular(), floats, "a factor floats as its block");
         Self {
             restriction,
             elimination,

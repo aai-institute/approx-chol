@@ -15,11 +15,6 @@ pub(crate) enum Balance<T> {
 }
 
 impl<T: Real> Balance<T> {
-    /// Folded and ungrounded, so solved as singular, `A_c⁺b`.
-    pub(crate) fn floats(&self) -> bool {
-        matches!(self, Self::Balanced(grounding) if !grounding.is_grounded())
-    }
-
     fn grounding(&self) -> &Grounding<T> {
         match self {
             Self::Balanced(grounding) | Self::Frustrated(grounding) => grounding,
