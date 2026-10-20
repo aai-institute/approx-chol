@@ -1,4 +1,4 @@
-//! [`CsrRef`] views of `sprs` and `faer` matrices, checked square and row-major before [`CsrRef::new`].
+//! [`CsrRef`] views of `sprs` and `faer` matrices, checked square before [`CsrRef::new`]; a CSC matrix is read as its transpose, which a symmetric one equals.
 
 #[cfg(feature = "faer")]
 use num_traits::PrimInt;
@@ -18,9 +18,6 @@ impl<'a, T, I: sprs::SpIndex> TryFrom<sprs::CsMatViewI<'a, T, I>> for CsrRef<'a,
     type Error = Error;
 
     fn try_from(matrix: sprs::CsMatViewI<'a, T, I>) -> Result<Self, Error> {
-        if !matrix.is_csr() {
-            return Err(CsrError::ExpectedCsrMatrixGotCsc.into());
-        }
         let n = square(matrix.rows(), matrix.cols())?;
         let (row_ptrs, col_indices, values) = matrix.into_raw_storage();
         CsrRef::new(row_ptrs, col_indices, values, n)
@@ -69,6 +66,29 @@ impl<'a, T, I: faer::Index + PrimInt> TryFrom<&'a faer::sparse::SparseRowMat<I, 
     }
 }
 
+#[cfg(feature = "faer")]
+impl<'a, T, I: faer::Index + PrimInt> TryFrom<faer::sparse::SparseColMatRef<'a, I, T>>
+    for CsrRef<'a, T, I>
+{
+    type Error = Error;
+
+    fn try_from(matrix: faer::sparse::SparseColMatRef<'a, I, T>) -> Result<Self, Error> {
+        square(matrix.nrows(), matrix.ncols())?;
+        Self::try_from(matrix.transpose())
+    }
+}
+
+#[cfg(feature = "faer")]
+impl<'a, T, I: faer::Index + PrimInt> TryFrom<&'a faer::sparse::SparseColMat<I, T>>
+    for CsrRef<'a, T, I>
+{
+    type Error = Error;
+
+    fn try_from(matrix: &'a faer::sparse::SparseColMat<I, T>) -> Result<Self, Error> {
+        Self::try_from(matrix.as_ref())
+    }
+}
+
 /// Each conversion into [`Input`] goes through its [`CsrRef`], so `factorize(&matrix)` reads as before.
 macro_rules! input_via_csr {
     ($($matrix:ty where $($bound:path),+;)+) => {$(
@@ -92,4 +112,6 @@ input_via_csr! {
 input_via_csr! {
     faer::sparse::SparseRowMatRef<'a, I, T> where faer::Index, PrimInt;
     &'a faer::sparse::SparseRowMat<I, T> where faer::Index, PrimInt;
+    faer::sparse::SparseColMatRef<'a, I, T> where faer::Index, PrimInt;
+    &'a faer::sparse::SparseColMat<I, T> where faer::Index, PrimInt;
 }

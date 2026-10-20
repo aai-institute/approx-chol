@@ -1,6 +1,6 @@
 use approx_chol::input::{CsrError, CsrRef};
 use approx_chol::Error;
-use faer::sparse::{SparseRowMat, SymbolicSparseRowMat};
+use faer::sparse::{SparseColMat, SparseRowMat, SymbolicSparseColMat, SymbolicSparseRowMat};
 use num_traits::PrimInt;
 use rstest::rstest;
 
@@ -28,6 +28,31 @@ fn faer_csr_factorizes_over_index_types(#[case] run: fn()) {
 fn faer_csr_with_full_row_counts_factorizes() {
     let spans: Vec<usize> = ROW_PTRS.windows(2).map(|span| span[1] - span[0]).collect();
     assert_solves_fixture(&path_laplacian::<u32>(Some(indices(&spans))));
+}
+
+/// A symmetric matrix's CSC arrays are its CSR arrays, so both factor alike.
+#[test]
+fn faer_csc_factorizes_as_its_csr() {
+    let symbolic = SymbolicSparseColMat::<u32>::new_checked(
+        N,
+        N,
+        indices(&ROW_PTRS),
+        None,
+        indices(&COL_INDICES),
+    );
+    assert_solves_fixture(&SparseColMat::new(symbolic, VALUES.to_vec()));
+}
+
+#[test]
+fn faer_csc_non_square_reports_its_own_shape() {
+    let symbolic =
+        SymbolicSparseColMat::<u32>::new_checked(3, 4, vec![0, 1, 2, 3, 3], None, vec![0, 1, 2]);
+    let mat = SparseColMat::new(symbolic, vec![1.0, 1.0, 1.0]);
+    let err = CsrRef::try_from(&mat).expect_err("non-square matrix must be rejected");
+    assert_eq!(
+        err,
+        Error::InvalidCsr(CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 })
+    );
 }
 
 /// The spare slots hold `-1`s that would connect vertices 0 and 3 if read.

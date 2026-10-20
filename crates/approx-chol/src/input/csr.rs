@@ -466,8 +466,6 @@ pub enum CsrError {
         /// The dimension.
         n: usize,
     },
-    /// A converted matrix is stored by columns (CSC), not rows.
-    ExpectedCsrMatrixGotCsc,
     /// A converted matrix is not square.
     ExpectedSquareMatrix {
         /// Its row count.
@@ -533,7 +531,6 @@ impl core::fmt::Display for CsrError {
             Self::MatrixDimensionExceedsIndexType { n } => {
                 write!(f, "matrix dimension exceeds index type capacity (n={n})")
             }
-            Self::ExpectedCsrMatrixGotCsc => f.write_str("expected CSR matrix, got CSC"),
             Self::ExpectedSquareMatrix { rows, cols } => {
                 write!(f, "expected square matrix (got {rows}x{cols})")
             }
