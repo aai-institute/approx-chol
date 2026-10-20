@@ -97,7 +97,12 @@ impl<T: Real> Factor<T> {
     ) -> Self {
         let n = sgdd.n();
         let blocks: Vec<BlockFactor<T>> = (sgdd.into_blocks().into_par_iter())
-            .map(|block| BlockFactor(store(Block::build(block, config))))
+            .map(|block| match block.isolated() {
+                Some((vertex, pivot)) => {
+                    BlockFactor(Storage::Isolated(Isolated::new(vertex, pivot)))
+                }
+                None => BlockFactor(store(Block::build(block, config))),
+            })
             .collect();
         let mut covered = vec![false; n];
         (blocks.iter().flat_map(BlockFactor::vertices)).for_each(|v| covered[v] = true);
@@ -172,6 +177,7 @@ macro_rules! on {
         match &$factor.0 {
             Storage::U32($block) => $body,
             Storage::U64($block) => $body,
+            Storage::Isolated($block) => $body,
         }
     };
 }
@@ -194,6 +200,7 @@ pub struct BlockFactor<T = f64>(Storage<T>);
 pub(crate) enum Storage<T> {
     U32(Block<T, u32>),
     U64(Block<T, u64>),
+    Isolated(Isolated<T>),
 }
 
 impl<T: Real> BlockFactor<T> {
@@ -202,27 +209,30 @@ impl<T: Real> BlockFactor<T> {
         match &self.0 {
             Storage::U32(block) => Vertices(Either::Left(block.vertices().iter())),
             Storage::U64(block) => Vertices(Either::Right(block.vertices().iter())),
+            Storage::Isolated(block) => {
+                Vertices(Either::Right(std::slice::from_ref(&block.vertex).iter()))
+            }
         }
     }
 
     /// Present iff a deficit past rounding was clamped, the block's scaling fell short beyond the policy's tolerance, or did not settle.
     pub fn scaling_report(&self) -> Option<ScalingReport> {
-        on!(self, block => block.report.as_deref().copied())
+        on!(self, block => block.scaling_report())
     }
 
     /// Whether the block is folded and solved as singular, `A_c⁺b`.
     pub fn floats(&self) -> bool {
-        on!(self, block => block.cholesky.singular())
+        on!(self, block => block.floats())
     }
 
     /// Work [`InnerParallelism::Allow`] may split per solve, `0` when nothing does: an outer scheduler weighs it against its own parallelism.
     pub fn splittable_work(&self) -> usize {
-        on!(self, block => (block.elimination.as_deref()).map_or(0, BlockElimination::splittable_work))
+        on!(self, block => block.splittable_work())
     }
 
     /// Workspace [`BlockFactor::solve_local`] needs, fixed at factorization.
     pub fn scratch_len(&self) -> usize {
-        on!(self, block => block.cholesky.scratch_len())
+        on!(self, block => block.scratch_len())
     }
 
     /// Solves in local order: `x` holds `b` on entry and the solution on return.
@@ -338,6 +348,22 @@ impl<T: Real, I: Index> Block<T, I> {
         self.restriction.vertices()
     }
 
+    fn scaling_report(&self) -> Option<ScalingReport> {
+        self.report.as_deref().copied()
+    }
+
+    fn floats(&self) -> bool {
+        self.cholesky.singular()
+    }
+
+    fn splittable_work(&self) -> usize {
+        (self.elimination.as_deref()).map_or(0, BlockElimination::splittable_work)
+    }
+
+    fn scratch_len(&self) -> usize {
+        self.cholesky.scratch_len()
+    }
+
     /// Every slot but one, eliminated ones and the Cholesky's alike.
     fn n_steps(&self) -> usize {
         let eliminated = (self.elimination.as_deref()).map_or(0, BlockElimination::n_eliminated);
@@ -365,6 +391,66 @@ impl<T: Real, I: Index> Block<T, I> {
             }
         }
         self.restriction.prolongate(x, singular);
+    }
+}
+
+/// A vertex no entry couples: its whole factor is `1/σ`, so it holds no heap part.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub(crate) struct Isolated<T> {
+    vertex: u64,
+    inverse_pivot: T,
+}
+
+impl<T: Real> Isolated<T> {
+    fn new<I: Index>(vertex: I, pivot: T) -> Self {
+        Self {
+            vertex: vertex.index() as u64,
+            inverse_pivot: T::one() / pivot,
+        }
+    }
+
+    fn n_steps(&self) -> usize {
+        1
+    }
+
+    fn scaling_report(&self) -> Option<ScalingReport> {
+        None
+    }
+
+    fn floats(&self) -> bool {
+        false
+    }
+
+    fn splittable_work(&self) -> usize {
+        0
+    }
+
+    fn scratch_len(&self) -> usize {
+        0
+    }
+
+    fn solve_global(&self, x: &mut [T], _: &mut [T]) {
+        let v = &mut x[self.vertex as usize];
+        *v = *v * self.inverse_pivot;
+    }
+
+    fn solve_unchecked(&self, x: &mut [T], _: &mut [T], _: InnerParallelism) {
+        x[0] = x[0] * self.inverse_pivot;
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for Isolated<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (vertex, inverse_pivot) = <(u64, T)>::deserialize(deserializer)?;
+        match inverse_pivot.is_finite() && inverse_pivot > T::zero() {
+            true => Ok(Self {
+                vertex,
+                inverse_pivot,
+            }),
+            false => Err(serde::de::Error::custom("corrupt Isolated")),
+        }
     }
 }
 
@@ -499,7 +585,9 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         match blocks.pop().expect("one block").0 {
             Storage::U32(block) => block,
-            Storage::U64(_) => unreachable!("a u32 reduction stores u32"),
+            Storage::U64(_) | Storage::Isolated(_) => {
+                unreachable!("a coupled u32 block stores u32")
+            }
         }
     }
 

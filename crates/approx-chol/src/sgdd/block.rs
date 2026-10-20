@@ -112,6 +112,18 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         })
     }
 
+    /// The vertex and its surplus when no entry couples it and `|F| = 1`: its factor is then `1/σ`.
+    pub(crate) fn isolated(&self) -> Option<(I, T)> {
+        let [vertex] = *self.restriction.vertices() else {
+            return None;
+        };
+        let unit = self.restriction.scaled_factors(0).is_none() && self.report.is_none();
+        match &self.balance {
+            Balance::Balanced(grounding) if unit => grounding.edge(0).map(|s| (vertex, s)),
+            _ => None,
+        }
+    }
+
     /// Moved out, so each part is freed once its factor stops reading it.
     pub(crate) fn into_parts(self) -> BlockParts<T, I> {
         (

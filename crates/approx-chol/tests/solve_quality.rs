@@ -130,7 +130,11 @@ fn assert_buffers_checked<T: Real>(factor: &Factor<T>) {
 
 cases! {
     fn every_solve_checks_its_buffer_lengths(entry in entries(grounded), types in types(all)) {
-        let reduced = entry.reduce(&diagonal_sddm(), types);
+        let graph = Graph {
+            ground: vec![2.0, 3.0, 5.0],
+            ..Graph::new(3, vec![Edge::negative(0, 1, 1.0)])
+        };
+        let reduced = entry.reduce(&graph, types);
         let factor = reduced.factorize(&Config::default());
         by_type!(&factor.factor, factor => assert_buffers_checked(factor));
     }
