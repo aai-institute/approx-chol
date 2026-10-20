@@ -36,11 +36,7 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
     /// Scales and signs each block's `A_c`, closing its surplus from the same rows.
     fn reduce(self, policy: &ScalingPolicy) -> Result<Sgdd<T, I>, ReduceError> {
         self.extract(|cells| {
-            let a = SymmetricBlock::new(cells);
-            let relax = |a: &SymmetricBlock<T, I>| {
-                scaling::relax(&a.off_diagonal, &a.rows.diagonal, policy)
-            };
-            let block = match a.reduce(policy, relax)? {
+            let block = match SymmetricBlock::new(cells).reduce(policy, |_| None)? {
                 Signed::Folded(m, rows) => {
                     let grounding = rows.folded_surplus(&m.off_diagonal);
                     m.block(Balance::Balanced(grounding))?
@@ -75,11 +71,11 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         }
     }
 
-    /// `M = F A_c F` with `F = S R`, formed once with its rows, which decide the report; `relax` runs only past the row test, and a frustrated `A_c` takes `S = I` and grounds on its rows at once.
+    /// `M = F A_c F` with `F = S R`, formed once with its rows, which decide the report; past the row test, `null` scales before the Perron vector, and a frustrated `A_c` takes `S = I` and grounds on its rows at once.
     fn reduce(
         self,
         policy: &ScalingPolicy,
-        relax: impl FnOnce(&Self) -> Option<scaling::Relaxation<T>>,
+        null: impl FnOnce(&Self) -> Option<scaling::Relaxation<T>>,
     ) -> Result<Signed<T, I>, ReduceError> {
         let RowSums { diagonal, abs } = &self.rows;
         let in_range = |(&d, &s): (&T, &T)| diagonal_in_range(d) && diagonal_in_range(s);
@@ -98,7 +94,11 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
             .all(|(&d, &s)| policy.dominates(d, s))
         {
             true => None,
-            false => Some(relax(&self).ok_or(ReduceError::Unscalable { vertex })?),
+            false => Some(
+                null(&self)
+                    .or_else(|| scaling::relax(&self.off_diagonal, &self.rows.diagonal, policy))
+                    .ok_or(ReduceError::Unscalable { vertex })?,
+            ),
         };
         let folding = signature::folding_signs(&self.off_diagonal);
         let folded = folding.is_some();
