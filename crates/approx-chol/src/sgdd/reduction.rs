@@ -6,7 +6,7 @@ mod graph;
 use num_traits::PrimInt;
 
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
-use super::congruence::{Congruence, Scales};
+use super::congruence::{Congruence, ScaledFactors};
 use super::decomposition::{of_csr, of_upper, Cells, Partitioned};
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
 use super::signature;
@@ -120,7 +120,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                     .collect();
                 let m = Congruent {
                     vertices: self.vertices,
-                    congruence: Congruence::Scaled(Scales::new(factors)),
+                    congruence: Congruence::Scaled(ScaledFactors::new(factors)),
                     off_diagonal,
                     report: None,
                 };
