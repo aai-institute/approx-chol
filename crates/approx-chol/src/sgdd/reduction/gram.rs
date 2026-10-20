@@ -49,9 +49,9 @@ fn reduce_gram_blocks<T: Real, I: Index>(
         let reduced = a.reduce(policy, |a| {
             let u = (a.vertices.iter()).map(|&v| nulls[v.index()]);
             (u.clone().all(f64::is_finite))
-                .then(|| scaling::null_scaling(u, &a.diagonal))
+                .then(|| scaling::null_scaling(u, &a.rows.diagonal))
                 .flatten()
-                .or_else(|| scaling::relax(&a.off_diagonal, &a.diagonal, policy))
+                .or_else(|| scaling::relax(&a.off_diagonal, &a.rows.diagonal, policy))
         })?;
         match reduced {
             Signed::Folded(m, _) => folded.push(m),
