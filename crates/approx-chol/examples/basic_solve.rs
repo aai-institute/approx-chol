@@ -21,11 +21,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     for (name, config) in [("AC", Config::default()), ("AC2 (k=2)", ac2)] {
         let factor = factorize_with(laplacian, config)?;
+        println!("{name:>9}: {} irreducible block(s)", factor.blocks().len());
         let (x, iterations) = grid.pcg(&factor, &b, 1e-10);
         let mean = x.iter().sum::<f64>() / grid.n as f64;
-        println!("{name:>9}: {iterations} PCG iterations to 1e-10, solution mean {mean:.2e}");
+        println!("{name:>9}: {iterations} PCG iterations to 1e-10, solution mean {mean:.2e} (orthogonal to 1)");
     }
-    println!("The floating Laplacian's solve is orthogonal to 1.");
 
     Ok(())
 }
