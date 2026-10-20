@@ -25,11 +25,11 @@ impl<I: Index> MinDegreeOrder<I> {
     /// Buckets span `split · n`, Laplacians.jl's AC2 scale; `pin` is never queued.
     pub(super) fn new<T: Real, C: Copies>(
         graph: &EliminationGraph<T, I, C>,
-        split: C::Split,
+        split: C,
         pin: Option<usize>,
     ) -> Self {
         let n = graph.n();
-        let bucket_base = (C::initial(split).get() as usize).saturating_mul(n).max(1);
+        let bucket_base = (split.get() as usize).saturating_mul(n).max(1);
         let mut lists: Vec<I> = vec![sentinel(); n_buckets(bucket_base)];
         let mut elems = Vec::with_capacity(n);
         let mut min_list = lists.len();

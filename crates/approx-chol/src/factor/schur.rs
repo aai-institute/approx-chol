@@ -264,14 +264,14 @@ fn fill_stars<T: Real, I: Index, N: Iterator<Item = (I, T)>>(
     star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
 ) -> Vec<Buckets<T, I>> {
     match copies {
-        Multiplicity::Single => sample_stars::<T, I, Single, N>((), n_stars, per_task, n, star),
-        Multiplicity::Split(k) => sample_stars::<T, I, Multi, N>(k, n_stars, per_task, n, star),
+        Multiplicity::Single => sample_stars(Single, n_stars, per_task, n, star),
+        Multiplicity::Split(k) => sample_stars(Multi(k), n_stars, per_task, n, star),
     }
 }
 
 /// Each eliminated star's clique tree on each sheet under its own stream, the ground a final neighbor unless its share is zero; fill bucketed over `n` rows.
 fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
-    split: C::Split,
+    split: C,
     n_stars: usize,
     per_task: usize,
     n: usize,
@@ -279,12 +279,7 @@ fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
 ) -> Vec<Buckets<T, I>> {
     let shift = bucket_shift(n);
     let count = n.div_ceil(1 << shift);
-    let empty = || {
-        (
-            CliqueSampler::<T, I, C>::new(split),
-            vec![Vec::new(); count],
-        )
-    };
+    let empty = || (CliqueSampler::new(split), vec![Vec::new(); count]);
     (0..n_stars)
         .into_par_iter()
         .fold_chunks(per_task, empty, |(mut sampler, mut buckets), i| {

@@ -23,8 +23,8 @@ pub(in crate::factor) enum Elimination<T, I> {
 impl<T: Real, I: Index> Elimination<T, I> {
     pub(in crate::factor) fn new(multiplicity: Multiplicity) -> Self {
         match multiplicity {
-            Multiplicity::Single => Self::Single(CliqueTreeElimination::new(())),
-            Multiplicity::Split(k) => Self::Split(CliqueTreeElimination::new(k)),
+            Multiplicity::Single => Self::Single(CliqueTreeElimination::new(Single)),
+            Multiplicity::Split(k) => Self::Split(CliqueTreeElimination::new(Multi(k))),
         }
     }
 
@@ -42,14 +42,14 @@ impl<T: Real, I: Index> Elimination<T, I> {
 }
 
 pub(in crate::factor) struct CliqueTreeElimination<T, I, C: Copies> {
-    split: C::Split,
+    split: C,
     graph: EliminationGraph<T, I, C>,
     clique: CliqueSampler<T, I, C>,
     fill: Fill<T, I, C>,
 }
 
 impl<T: Real, I: Index, C: Copies> CliqueTreeElimination<T, I, C> {
-    fn new(split: C::Split) -> Self {
+    fn new(split: C) -> Self {
         Self {
             split,
             graph: EliminationGraph::new(),

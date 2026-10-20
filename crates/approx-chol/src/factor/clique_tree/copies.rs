@@ -2,17 +2,11 @@ use crate::Real;
 
 /// An edge's virtual copies; AC is AC2 at one copy per edge, so this trait is the whole difference.
 pub(in crate::factor) trait Copies: Copy + Send + Sync {
-    /// `Single` cannot name a `k`, making AC over split multi-edges a type error.
-    type Split: Copy + Send + Sync;
-
-    /// What an edge of the input carries once split.
-    fn initial(split: Self::Split) -> Self;
-
     fn get(&self) -> u32;
     fn per_copy<T: Real>(&self, total: T) -> T;
 
     /// The kept copies, and how many the cap discarded.
-    fn cap(copies: u32, split: Self::Split) -> (Self, u32);
+    fn cap(copies: u32, split: Self) -> (Self, u32);
 
     /// Draws a partner position per copy; yields each distinct one once, with the copies that drew it and their summed `per_copy` weight.
     fn draw<'a, T: Real>(
@@ -28,15 +22,9 @@ pub(in crate::factor) struct Single;
 
 /// Virtual copy count: `Multiplicity::Split`'s `k`, lowered by the merge cap, or the copies of one entry that drew one partner.
 #[derive(Clone, Copy)]
-pub(in crate::factor) struct Multi(u32);
+pub(in crate::factor) struct Multi(pub(in crate::factor) u32);
 
 impl Copies for Single {
-    type Split = ();
-
-    fn initial((): ()) -> Self {
-        Self
-    }
-
     fn get(&self) -> u32 {
         1
     }
@@ -45,7 +33,7 @@ impl Copies for Single {
         total
     }
 
-    fn cap(copies: u32, (): ()) -> (Self, u32) {
+    fn cap(copies: u32, Single: Self) -> (Self, u32) {
         (Self, copies - 1)
     }
 
@@ -60,12 +48,6 @@ impl Copies for Single {
 }
 
 impl Copies for Multi {
-    type Split = u32;
-
-    fn initial(split: u32) -> Self {
-        Self(split)
-    }
-
     fn get(&self) -> u32 {
         self.0
     }
@@ -74,7 +56,7 @@ impl Copies for Multi {
         total / T::from(self.0).expect("a copy count is a float")
     }
 
-    fn cap(copies: u32, split: u32) -> (Self, u32) {
+    fn cap(copies: u32, Self(split): Self) -> (Self, u32) {
         let kept = copies.min(split);
         (Self(kept), copies - kept)
     }

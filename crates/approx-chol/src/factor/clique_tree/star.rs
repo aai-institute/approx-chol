@@ -117,7 +117,7 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
 
     /// Neighbors already unique, each at the split's initial copies, which keeps per-copy order the raw order: one sort, no scratch.
     pub(super) fn refill_unique(&mut self, neighbors: impl Iterator<Item = (I, T)>) {
-        let copies = C::initial(self.split);
+        let copies = self.split;
         self.entries.clear();
         self.removed_copies.clear();
         let entries = neighbors.map(|(neighbor, weight)| StarEntry {

@@ -26,14 +26,14 @@ pub(super) struct CliqueSampler<T, I, C: Copies> {
     counts: Vec<u32>,
     /// The star's weights' prefix sums, heaviest last, so each suffix's draw range is one subtraction.
     cumsum: Vec<T>,
-    split: C::Split,
+    split: C,
     /// Scratch [`Copies::draw`] reuses across entries; one copy never touches it.
     tally: Vec<(usize, u32)>,
 }
 
 impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
     /// `split` caps every merge, so one sampler cannot mix two.
-    pub(super) fn new(split: C::Split) -> Self {
+    pub(super) fn new(split: C) -> Self {
         Self {
             entries: Vec::new(),
             removed_copies: Vec::new(),
