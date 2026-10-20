@@ -15,7 +15,7 @@ use star::StarEntry;
 pub(super) type Fill<T, I, C> = Vec<(I, I, C, T)>;
 
 /// A pivot's elimination, reused across pivots; AC and AC2 differ only in `C`.
-pub(super) struct CliqueSampler<T, I, C: Copies> {
+pub(super) struct CliqueTreeSampler<T, I, C: Copies> {
     /// A pivot's deduplicated neighborhood in clique-tree order.
     entries: Vec<StarEntry<T, I, C>>,
     /// What merging or capping collapsed, per neighbor.
@@ -31,7 +31,7 @@ pub(super) struct CliqueSampler<T, I, C: Copies> {
     tally: Vec<(usize, u32)>,
 }
 
-impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
+impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
     /// `split` caps every merge, so one sampler cannot mix two.
     pub(super) fn new(split: C) -> Self {
         Self {

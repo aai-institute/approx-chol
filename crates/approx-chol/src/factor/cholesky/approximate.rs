@@ -5,7 +5,7 @@ mod ordering;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use crate::factor::clique_tree::{CliqueSampler, Copies, Fill};
+use crate::factor::clique_tree::{CliqueTreeSampler, Copies, Fill};
 use crate::factor::sddm::Sddm;
 #[cfg(feature = "serde")]
 use crate::factor::within_one;
@@ -17,7 +17,7 @@ use ordering::MinDegreeOrder;
 pub(in crate::factor) struct CliqueTreeElimination<T, I, C: Copies> {
     split: C,
     graph: EliminationGraph<T, I, C>,
-    clique: CliqueSampler<T, I, C>,
+    clique: CliqueTreeSampler<T, I, C>,
     fill: Fill<T, I, C>,
     order: MinDegreeOrder<I>,
 }
@@ -27,7 +27,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeElimination<T, I, C> {
         Self {
             split,
             graph: EliminationGraph::new(),
-            clique: CliqueSampler::new(split),
+            clique: CliqueTreeSampler::new(split),
             fill: Fill::new(),
             order: MinDegreeOrder::new(),
         }

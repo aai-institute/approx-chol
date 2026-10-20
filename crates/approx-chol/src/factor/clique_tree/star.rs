@@ -1,7 +1,7 @@
 use core::cmp::Ordering;
 
 use super::copies::Copies;
-use super::CliqueSampler;
+use super::CliqueTreeSampler;
 use crate::{Index, Real};
 
 /// Copies stored as the graph stores them, so a single-copy star pays no count or division.
@@ -34,12 +34,12 @@ fn by_per_copy_then_neighbor<T: Real, I: Index, C: Copies>(
 /// At or below this many entries, sorting beats the scatter path's random access.
 const SCATTER_THRESHOLD: usize = 32;
 
-/// Rests in every slot of [`CliqueSampler::scatter`] between merges.
+/// Rests in every slot of [`CliqueTreeSampler::scatter`] between merges.
 fn unseen<I: Index>() -> I {
     I::max_value()
 }
 
-impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
+impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
     /// Merges duplicate neighbors under the sampler's `split` cap, then sorts by per-copy weight.
     pub(super) fn refill(&mut self, neighbors: impl Iterator<Item = (I, C, T)>) {
         self.entries.clear();

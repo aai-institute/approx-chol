@@ -4,7 +4,7 @@ use rayon::prelude::*;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use super::clique_tree::{CliqueSampler, Copies, Multi, Single};
+use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::InnerParallelism;
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
 use super::{within_one, Streams};
@@ -279,7 +279,7 @@ fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
 ) -> Vec<Buckets<T, I>> {
     let shift = bucket_shift(n);
     let count = n.div_ceil(1 << shift);
-    let empty = || (CliqueSampler::new(split), vec![Vec::new(); count]);
+    let empty = || (CliqueTreeSampler::new(split), vec![Vec::new(); count]);
     (0..n_stars)
         .into_par_iter()
         .fold_chunks(per_task, empty, |(mut sampler, mut buckets), i| {
