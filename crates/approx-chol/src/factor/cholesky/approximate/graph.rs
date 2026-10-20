@@ -16,9 +16,16 @@ pub(super) struct EliminationGraph<T, I, C> {
     lists: Vec<Vec<Edge<T, I, C>>>,
 }
 
+/// A block this small keeps its buffers for the task's next; a larger one frees them (peak −11…−14%).
+pub(super) const REUSED_UP_TO: usize = 1024;
+
 impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
+    pub(super) fn new() -> Self {
+        Self { lists: Vec::new() }
+    }
+
     /// The ground is a vertex like any other: forcing it last measured +0-10% PCG iterations.
-    pub(super) fn of(sddm: &Sddm<T, I>, split: C::Split) -> Self {
+    pub(super) fn load(&mut self, sddm: &Sddm<T, I>, split: C::Split) {
         let n = sddm.n() + usize::from(sddm.grounded());
         // One slot past the degree: the first fill edge reallocating measured +2-3% on grids.
         let mut capacities = vec![1; n];
@@ -26,11 +33,12 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
             capacities[k.index()] += 1;
             capacities[j.index()] += 1;
         });
-        let lists = capacities.into_iter().map(Vec::with_capacity).collect();
-        let mut graph = Self { lists };
+        self.lists.truncate(n);
+        let reused = self.lists.len();
+        (self.lists.iter_mut().zip(&capacities)).for_each(|(list, &c)| list.reserve_exact(c));
+        (self.lists).extend(capacities[reused..].iter().map(|&c| Vec::with_capacity(c)));
         let copies = C::initial(split);
-        sddm.grounded_edges(|k, j, w| graph.push_pair(k, j, copies, w));
-        graph
+        sddm.grounded_edges(|k, j, w| self.push_pair(k, j, copies, w));
     }
 
     pub(super) fn n(&self) -> usize {
@@ -60,7 +68,9 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         while let Some(edge) = self.lists[v].pop() {
             self.swap_remove(edge.to.index(), edge.mirror as usize);
         }
-        self.lists[v] = Vec::new();
+        if self.lists.len() > REUSED_UP_TO {
+            self.lists[v] = Vec::new();
+        }
     }
 
     pub(super) fn push_pair(&mut self, u: I, v: I, copies: C, weight: T) {

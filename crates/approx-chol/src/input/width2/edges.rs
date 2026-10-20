@@ -26,14 +26,6 @@ impl<'a, T: Real> Weights<'a, T> {
         check(s, |s| s.is_finite())?;
         Ok(Self(Weighting::SqrtOf(s)))
     }
-
-    /// One entry per column.
-    fn check(self, columns: usize) -> Result<(), ViewError> {
-        match self.0 {
-            Weighting::Unit => Ok(()),
-            Weighting::Of(entries) | Weighting::SqrtOf(entries) => length(columns, entries.len()),
-        }
-    }
 }
 
 fn check<T: Real>(entries: &[T], valid: fn(T) -> bool) -> Result<(), ViewError> {
@@ -55,7 +47,9 @@ impl<'a, T: Real, I: PrimInt> Edges<'a, T, I> {
     /// Lengths and weights are checked; the ends are the view's to check.
     pub(super) fn new(a: &'a [I], b: &'a [I], weights: Weights<'a, T>) -> Result<Self, ViewError> {
         length(a.len(), b.len())?;
-        weights.check(a.len())?;
+        if let Weighting::Of(w) | Weighting::SqrtOf(w) = weights.0 {
+            length(a.len(), w.len())?;
+        }
         Ok(Self { a, b, weights })
     }
 

@@ -3,11 +3,12 @@ mod dense;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use super::config::{multiplicity, Config};
+use super::config::Config;
 use super::sddm::{descend, lift, Sddm, Sheets};
 use crate::{largest, narrow};
 use crate::{widen, Index, Real};
 use approximate::ApproximateCholesky;
+pub(super) use approximate::Elimination;
 
 /// The factor of what the elimination leaves; it builds its own Triangular, so its facts come from that matrix.
 #[cfg_attr(
@@ -34,6 +35,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         draws: Xoshiro256PlusPlus,
         config: &Config,
         factors: Option<&[T]>,
+        elimination: &mut Elimination<T, I>,
     ) -> Self {
         let (sheets, grounded, n) = (sddm.sheets(), sddm.grounded(), sddm.n());
         let (triangular, pinned) = match config.dense(n) {
@@ -43,9 +45,9 @@ impl<T: Real, I: Index> Cholesky<T, I> {
             }
             false => {
                 // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
-                let pin = spans_wide(factors).then(|| pinned(&sddm, factors));
-                let copies = multiplicity(config.split_merge);
-                let (steps, pin) = approximate::factor(sddm, copies, draws, pin);
+                let pin =
+                    (spans_wide(factors) || grounds_wide(&sddm)).then(|| pinned(&sddm, factors));
+                let (steps, pin) = elimination.factor(sddm, draws, pin);
                 (Triangular::Approximate(Box::new(steps)), pin)
             }
         };
@@ -120,6 +122,21 @@ fn spans_wide<T: Real>(factors: Option<&[T]>) -> bool {
         });
         least < most * T::epsilon().sqrt()
     })
+}
+
+/// A sink behind an edge past `1/ε` lighter than the heaviest would divide the ground's `−Σb` rounding.
+fn grounds_wide<T: Real, I: Index>(sddm: &Sddm<T, I>) -> bool {
+    if !sddm.grounded() || sddm.sheets() != Sheets::One {
+        return false;
+    }
+    let (n, mut least, mut most) = (sddm.n(), T::infinity(), T::zero());
+    sddm.grounded_edges(|_, j, w| {
+        most = most.max(w);
+        if j.index() < n {
+            least = least.min(w);
+        }
+    });
+    least < most * T::epsilon()
 }
 
 /// The triangular factor, dense or approximate.

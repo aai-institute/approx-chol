@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Solves sum each block's right-hand side with compensation. ([#147])
 - An entry below `MIN_POSITIVE / EPSILON` in magnitude is rejected. ([#163])
+- A grounded block whose weights span past `1/ε` ends its approximate elimination at the ground; it could solve to ±inf. ([#228])
 
 ## [0.6.0] - 2026-08-24
 
@@ -250,3 +251,4 @@ for graph Laplacians in Rust with Python bindings.
 [#183]: https://github.com/aai-institute/approx-chol/issues/183
 [#182]: https://github.com/aai-institute/approx-chol/issues/182
 [#148]: https://github.com/aai-institute/approx-chol/issues/148
+[#228]: https://github.com/aai-institute/approx-chol/pull/228

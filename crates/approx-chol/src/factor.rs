@@ -18,7 +18,7 @@ use crate::sgdd::{Balance, IrreducibleBlock, Restriction, Sgdd};
 use crate::storage::OffDiagonal;
 use crate::ScalingReport;
 use crate::{Index, Real};
-use cholesky::Cholesky;
+use cholesky::{Cholesky, Elimination};
 use schur::BlockElimination;
 use sddm::{Sddm, Sheets};
 
@@ -98,8 +98,9 @@ impl<T: Real> Factor<T> {
         let n = sgdd.n();
         let (coupled, lone) = sgdd.into_blocks();
         let mut blocks = Vec::with_capacity(coupled.len() + lone.len());
-        let build = |block| BlockFactor(store(Block::build(block, config)));
-        blocks.par_extend(coupled.into_par_iter().map(build));
+        let build = |reused: &mut _, block| BlockFactor(store(Block::build(block, config, reused)));
+        let elimination = || Elimination::new(multiplicity(config.split_merge));
+        blocks.par_extend(coupled.into_par_iter().map_init(elimination, build));
         let isolated = |(v, pivot)| BlockFactor(Storage::Isolated(Isolated::new(v, pivot)));
         blocks.extend(lone.into_iter().map(isolated));
         let mut covered = vec![false; n];
@@ -287,7 +288,11 @@ pub(crate) struct Block<T, I> {
 }
 
 impl<T: Real, I: Index> Block<T, I> {
-    fn build(block: IrreducibleBlock<T, I>, config: &Config) -> Self {
+    fn build(
+        block: IrreducibleBlock<T, I>,
+        config: &Config,
+        reused: &mut Elimination<T, I>,
+    ) -> Self {
         let (restriction, off_diagonal, balance, report) = block.into_parts();
         let streams = Streams {
             seed: config.seed,
@@ -304,12 +309,12 @@ impl<T: Real, I: Index> Block<T, I> {
                     Sheets::One => Sddm::new(adjacency, grounding, sheets),
                     Sheets::Two => Sddm::cover(adjacency, grounding),
                 };
-                let factored = Cholesky::factor(sddm, streams.cholesky(), config, factors(0));
+                let draws = streams.cholesky();
+                let factored = Cholesky::factor(sddm, draws, config, factors(0), reused);
                 (None, factored)
             }
             OffDiagonal::Bipartite(cross) => {
                 let kept = factors(cross.n_rows());
-                let factor = |s| Cholesky::factor(s, streams.cholesky(), config, kept);
                 let dense = config.dense(sheets.count() * cross.n_cols());
                 let inv_pivot = BlockElimination::inverse_pivots(&cross, &grounding);
                 let s = match (dense, config.complement) {
@@ -325,7 +330,7 @@ impl<T: Real, I: Index> Block<T, I> {
                     }
                 };
                 // A kept `Cᵀ` is built once `S` is factored, so it never shares that peak.
-                let factored = factor(s);
+                let factored = Cholesky::factor(s, streams.cholesky(), config, kept, reused);
                 let elimination = BlockElimination::with_inverse_pivots(cross, inv_pivot);
                 (Some(Box::new(elimination)), factored)
             }
@@ -558,7 +563,7 @@ mod tests {
     fn csr_block(row_ptrs: &[u32], columns: &[u32], values: &[f64]) -> Block<f64, u32> {
         let n = (row_ptrs.len() - 1) as u32;
         let csr = CsrRef::new(row_ptrs, columns, values, n).expect("valid csr");
-        let sgdd = Sgdd::from_csr(csr, ScalingPolicy::default()).expect("reduces");
+        let sgdd = Sgdd::reduce(csr.into(), ScalingPolicy::default()).expect("reduces");
         only_block(sgdd, &Config::default())
     }
 

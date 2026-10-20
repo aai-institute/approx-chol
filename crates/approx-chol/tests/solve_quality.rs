@@ -376,6 +376,28 @@ fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
 }
 
 #[test]
+fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
+    use approx_chol::input::{Laplacian, Weights};
+    use approx_chol::{factorize_with, Backend};
+    // Min-degree eliminates the ground first and leaves vertex 0 as the sink; `−Σb` then cancels to 1e24 over a 1e-290 pivot.
+    let (a, b, w, ground) = ([0u32, 1], [1u32, 2], [1e-290, 1e30], [0.0, 1e40, 0.0]);
+    let x = [1.0, 0.75, -0.5];
+    let rhs = [2.5e-291, 0.75e40 + 1.25e30, -1.25e30];
+    let config = Config {
+        backend: Backend::Approximate,
+        ..Config::default()
+    };
+    let path = Laplacian::new(3, &a, &b, Weights::of(&w).unwrap()).unwrap();
+    let factor = factorize_with(path.grounded(&ground).unwrap(), config).unwrap();
+    assert_close(
+        "light sink",
+        &factor.solve(&rhs).unwrap(),
+        &x,
+        64.0 * f64::EPSILON,
+    );
+}
+
+#[test]
 fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
     use approx_chol::input::{BipartiteGram, FactorWidth1, Weights};
     use approx_chol::{factorize_with, Backend};

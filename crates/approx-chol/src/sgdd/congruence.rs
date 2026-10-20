@@ -146,13 +146,6 @@ impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for Scales<
 }
 
 impl<T: Real> Congruence<T> {
-    /// `F = S R`'s factors, `self` the signs `S`, for positive scales `R`.
-    pub(super) fn times(&self, scales: &[T]) -> Box<[T]> {
-        (scales.iter().enumerate())
-            .map(|(i, &scale)| self.factor(i) * scale)
-            .collect()
-    }
-
     /// `f_i`, vertex `i`'s entry of `F·1`.
     pub(super) fn factor(&self, i: usize) -> T {
         match self {
