@@ -167,7 +167,7 @@ fn sentinel<I: Index>() -> I {
 /// A popped vertex's key, which [`MinDegreeOrder::apply_delta`] skips.
 const REMOVED: u32 = u32::MAX;
 
-/// Sole derivation of the bucket count, so `key_map`'s cap and `new` agree on the last bucket.
+/// Sole derivation of the bucket count, so `key_map`'s cap and `load` agree on the last bucket.
 fn n_buckets(bucket_base: usize) -> usize {
     bucket_base.saturating_mul(2).saturating_add(1)
 }

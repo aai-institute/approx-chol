@@ -63,7 +63,10 @@ fn faer_try_from_offset_rows_returns_error() {
         SymbolicSparseRowMat::<u32>::new_checked(2, 2, vec![2, 4, 6], None, vec![0, 1, 0, 1, 0, 1]);
     let mat = SparseRowMat::new(symbolic, vec![9.0, 9.0, 1.0, -1.0, -1.0, 1.0]);
     let err = CsrRef::try_from(&mat).expect_err("offset rows must be rejected");
-    assert_eq!(err, Error::InvalidCsr(CsrError::OffsetRows));
+    assert_eq!(
+        err,
+        Error::InvalidCsr(CsrError::RowPtrsMustStartAtZero { got: 2 })
+    );
 }
 
 #[test]

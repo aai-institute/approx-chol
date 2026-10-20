@@ -1,11 +1,11 @@
-//! Approximate Cholesky of a whole SDDM: clique-tree elimination in minimum-degree order (Algorithm 8).
+//! Approximate Cholesky of a whole SDDM: clique-tree elimination in minimum-degree order (GKS 2023, Algorithm 8, stars by Algorithm 6).
 
 mod graph;
 mod ordering;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use crate::factor::clique_tree::{CliqueSampler, Copies, Fill};
+use crate::factor::clique_tree::{CliqueTreeSampler, Copies, Fill};
 use crate::factor::sddm::Sddm;
 #[cfg(feature = "serde")]
 use crate::factor::within_one;
@@ -17,7 +17,7 @@ use ordering::MinDegreeOrder;
 pub(in crate::factor) struct CliqueTreeElimination<T, I, C: Copies> {
     split: C,
     graph: EliminationGraph<T, I, C>,
-    clique: CliqueSampler<T, I, C>,
+    clique: CliqueTreeSampler<T, I, C>,
     fill: Fill<T, I, C>,
     order: MinDegreeOrder<I>,
 }
@@ -27,13 +27,13 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeElimination<T, I, C> {
         Self {
             split,
             graph: EliminationGraph::new(),
-            clique: CliqueSampler::new(split),
+            clique: CliqueTreeSampler::new(split),
             fill: Fill::new(),
             order: MinDegreeOrder::new(),
         }
     }
 
-    /// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree (Algorithm 8); the last, `pin` when given, is the slot the solve zeroes.
+    /// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree; the last, `pin` when given, is the slot the solve zeroes.
     pub(super) fn eliminate(
         &mut self,
         sddm: Sddm<T, I>,
@@ -86,7 +86,7 @@ struct StepHeader<T, I> {
     vertex: I,
     /// Below `n`, so `I` always holds it and a `u32` header stays 16 bytes.
     len: I,
-    /// `D⁻¹` premultiplied by the retained fraction, so no pass rebuilds it.
+    /// `D⁻¹` over the retained fraction, `1/w`, as the backward multiplies by that fraction.
     pivot_scale: T,
 }
 
@@ -124,7 +124,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
         }
         self.neighbors.push(remainder);
         self.coefficients.push(retained);
-        // `retained / (w²/d)` is `1/w` for the remainder's `w`, finite as fill and `S` never weigh below `MIN_POSITIVE`.
+        // Finite, as fill and `S` never weigh below `MIN_POSITIVE`.
         self.headers.push(StepHeader {
             vertex: I::from_index(vertex),
             len: I::from_index(self.neighbors.len() - start),

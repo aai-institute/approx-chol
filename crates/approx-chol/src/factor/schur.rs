@@ -4,7 +4,7 @@ use rayon::prelude::*;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use super::clique_tree::{CliqueSampler, Copies, Multi, Single};
+use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::InnerParallelism;
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
 use super::{within_one, Streams};
@@ -155,7 +155,7 @@ pub(super) fn exact<T: Real, I: Index>(
 /// `S` sampled by star in parallel; clique trees need no pivots, so no elimination exists yet. σ is read last here, so it is freed before `S` is factored.
 pub(super) fn sampled<T: Real, I: Index>(
     c: &Rows<T, I>,
-    copies: Option<Multi>,
+    split: Option<Multi>,
     sheets: Sheets,
     grounding: Grounding<T>,
     stars: Streams,
@@ -167,11 +167,11 @@ pub(super) fn sampled<T: Real, I: Index>(
     let stars_per_task = per_task(c.n_rows(), c.nnz() as u64, 14);
     let fill = match sheets {
         // One sheet maps no column, as the balanced loop pays for any map.
-        Sheets::One => fill_stars(copies, c.n_rows(), stars_per_task, n, |e| {
+        Sheets::One => fill_stars(split, c.n_rows(), stars_per_task, n, |e| {
             let neighbors = c.row(e).map(|(k, &c)| (I::from_index(k), c.abs()));
             (stars.star(e), neighbors.chain(ground_share(e)))
         }),
-        Sheets::Two => fill_stars(copies, 2 * c.n_rows(), stars_per_task, n, |star| {
+        Sheets::Two => fill_stars(split, 2 * c.n_rows(), stars_per_task, n, |star| {
             let (sheet, e) = (star / c.n_rows(), star % c.n_rows());
             let neighbors = c.row(e).map(move |(k, &c)| {
                 let on = sheet ^ usize::from(crosses(c));
@@ -257,15 +257,15 @@ fn from_fill<T: Real, I: Index>(
 
 /// A row of `C` repeats no column, so stars skip the merge; chunks in star order, so merged duplicates sum alike at any thread count.
 fn fill_stars<T: Real, I: Index, N: Iterator<Item = (I, T)>>(
-    copies: Option<Multi>,
+    split: Option<Multi>,
     n_stars: usize,
     per_task: usize,
     n: usize,
     star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
 ) -> Vec<Buckets<T, I>> {
-    match copies {
+    match split {
         None => sample_stars(Single, n_stars, per_task, n, star),
-        Some(copies) => sample_stars(copies, n_stars, per_task, n, star),
+        Some(split) => sample_stars(split, n_stars, per_task, n, star),
     }
 }
 
@@ -279,7 +279,7 @@ fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
 ) -> Vec<Buckets<T, I>> {
     let shift = bucket_shift(n);
     let count = n.div_ceil(1 << shift);
-    let empty = || (CliqueSampler::new(split), vec![Vec::new(); count]);
+    let empty = || (CliqueTreeSampler::new(split), vec![Vec::new(); count]);
     (0..n_stars)
         .into_par_iter()
         .fold_chunks(per_task, empty, |(mut sampler, mut buckets), i| {

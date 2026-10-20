@@ -103,18 +103,18 @@ pub(super) enum Congruence<T> {
     /// Signs only, exact, so a sign never moves a magnitude.
     Signs(Box<[T]>),
     /// `S R`.
-    Scaled(Scales<T>),
+    Scaled(ScaledFactors<T>),
 }
 
 /// `F = S R`'s factors, the largest `|f|`'s index and `F·1`'s normalization, computed once: every singular solve projects `F·1` out.
 #[derive(Clone, Debug)]
-pub(super) struct Scales<T> {
+pub(super) struct ScaledFactors<T> {
     factors: Box<[T]>,
     peak: usize,
     norm: f64,
 }
 
-impl<T: Real> Scales<T> {
+impl<T: Real> ScaledFactors<T> {
     pub(super) fn new(factors: Box<[T]>) -> Self {
         let peak = crate::largest(&factors);
         let largest = factors.get(peak).map_or(T::zero(), |f| f.abs());
@@ -132,14 +132,14 @@ impl<T: Real> Scales<T> {
 }
 
 #[cfg(feature = "serde")]
-impl<T: serde::Serialize> serde::Serialize for Scales<T> {
+impl<T: serde::Serialize> serde::Serialize for ScaledFactors<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.factors.serialize(serializer)
     }
 }
 
 #[cfg(feature = "serde")]
-impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for Scales<T> {
+impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ScaledFactors<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         <Box<[T]>>::deserialize(deserializer).map(Self::new)
     }
@@ -152,7 +152,7 @@ impl<T: Real> Congruence<T> {
             Self::Identity => T::one(),
             Self::NegateFrom(first) if i >= *first => -T::one(),
             Self::NegateFrom(_) => T::one(),
-            Self::Signs(factors) | Self::Scaled(Scales { factors, .. }) => factors[i],
+            Self::Signs(factors) | Self::Scaled(ScaledFactors { factors, .. }) => factors[i],
         }
     }
 
@@ -161,7 +161,9 @@ impl<T: Real> Congruence<T> {
         match self {
             Self::Identity => true,
             Self::NegateFrom(first) => *first <= n,
-            Self::Signs(factors) | Self::Scaled(Scales { factors, .. }) => factors.len() == n,
+            Self::Signs(factors) | Self::Scaled(ScaledFactors { factors, .. }) => {
+                factors.len() == n
+            }
         }
     }
 
@@ -170,7 +172,7 @@ impl<T: Real> Congruence<T> {
         match self {
             Self::Identity => None,
             Self::NegateFrom(_) => Some(Cow::Owned((0..n).map(|i| self.factor(i)).collect())),
-            Self::Signs(factors) | Self::Scaled(Scales { factors, .. }) => {
+            Self::Signs(factors) | Self::Scaled(ScaledFactors { factors, .. }) => {
                 Some(Cow::Borrowed(&factors[..]))
             }
         }
@@ -181,7 +183,7 @@ impl<T: Real> Congruence<T> {
         match self {
             Self::Identity => {}
             Self::NegateFrom(first) => x[*first..].iter_mut().for_each(|x| *x = -*x),
-            Self::Signs(factors) | Self::Scaled(Scales { factors, .. }) => {
+            Self::Signs(factors) | Self::Scaled(ScaledFactors { factors, .. }) => {
                 (x.iter_mut().zip(factors)).for_each(|(x, &f)| *x = *x * f)
             }
         }

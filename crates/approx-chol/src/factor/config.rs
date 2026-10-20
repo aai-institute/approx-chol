@@ -1,4 +1,3 @@
-use super::clique_tree::Multi;
 use crate::ScalingPolicy;
 
 /// Build settings for [`factorize_with`](crate::factorize_with).
@@ -29,11 +28,6 @@ impl Config {
             Backend::ExactBelow { max_dim } => dimension <= max_dim,
         }
     }
-}
-
-/// The one place a `split_merge` becomes the algorithm: AC2's copies, or `None`, AC.
-pub(super) fn multiplicity(split_merge: Option<u32>) -> Option<Multi> {
-    split_merge.and_then(Multi::split)
 }
 
 /// Which factorization each block gets.

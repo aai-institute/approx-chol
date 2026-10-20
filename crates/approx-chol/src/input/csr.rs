@@ -490,8 +490,6 @@ pub enum CsrError {
         /// The offending row.
         row: usize,
     },
-    /// A converted matrix's row pointers start past `0`, as in a row slice.
-    OffsetRows,
     /// A converted matrix's row leaves unused slots after its entries.
     RowGap {
         /// The first row with unused slots.
@@ -547,7 +545,6 @@ impl core::fmt::Display for CsrError {
             Self::OutOfRange { row } => {
                 write!(f, "row {row} has an entry outside the representable range")
             }
-            Self::OffsetRows => f.write_str("row pointers start past 0, as in a row slice"),
             Self::RowGap { row } => write!(f, "row {row} leaves unused slots after its entries"),
         }
     }
