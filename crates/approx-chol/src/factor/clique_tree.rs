@@ -31,7 +31,8 @@ pub(super) struct CliqueSampler<T, I, C: Copies> {
     cumsum: Vec<T>,
     shares: Vec<(I, T)>,
     split: C::Split,
-    tally: C::Tally,
+    /// Scratch [`Copies::draw`] reuses across entries; one copy never touches it.
+    tally: Vec<(usize, u32)>,
 }
 
 impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
@@ -45,7 +46,7 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
             cumsum: Vec::new(),
             shares: Vec::new(),
             split,
-            tally: C::Tally::default(),
+            tally: Vec::new(),
         }
     }
 

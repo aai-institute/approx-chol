@@ -7,7 +7,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 use super::clique_tree::{CliqueSampler, Copies, Multi, Single};
 use super::config::{InnerParallelism, Multiplicity};
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
-use super::Streams;
+use super::{within_one, Streams};
 use crate::sgdd::Grounding;
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, per_task, widen, Index, Real};
@@ -132,12 +132,9 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     }
 }
 
-/// Each `|D_e⁻¹C|` row sums to at most one, up to its rounding: the backward sum cannot overflow where the solution fits.
+/// Each `|D_e⁻¹C|` row sums to at most one: the backward sum cannot overflow where the solution fits.
 fn rows_within_one<T: Real, I: Index>(cross: &Rows<T, I>) -> bool {
-    (0..cross.n_rows()).all(|e| {
-        let bound = 1.0 + 4.0 * (cross.row_len(e) + 2) as f64 * widen(T::epsilon());
-        cross.row(e).map(|(_, c)| widen(c.abs())).sum::<f64>() <= bound
-    })
+    (0..cross.n_rows()).all(|e| within_one(cross.row(e).map(|(_, &c)| c)))
 }
 
 /// `S = D_k − Cᵀ D_e⁻¹ C` on `sheets`, exact by kept row through a `Cᵀ` freed before `S` is factored.

@@ -296,26 +296,38 @@ fn a_scaling_policy_decode_rejects_tolerance_outside_unit_interval() {
     assert_eq!(postcard::to_stdvec(&policy).unwrap(), bytes);
 }
 
-/// Each stored `|D_e⁻¹C|` row sums to at most one; past it the backward sum can overflow.
-#[test]
-fn an_elimination_whose_rows_sum_past_one_is_corrupt() {
-    fn scale_cross(v: &mut serde_json::Value, by: f64) -> usize {
-        match v {
-            serde_json::Value::Object(map) => {
-                let mut scaled = 0;
-                if map.contains_key("inv_pivot") {
-                    let values = map["cross"]["values"].as_array_mut().unwrap();
-                    values
-                        .iter_mut()
-                        .for_each(|x| *x = (x.as_f64().unwrap() * by).into());
-                    scaled += 1;
-                }
-                scaled + map.values_mut().map(|v| scale_cross(v, by)).sum::<usize>()
+/// Decodes `factor` after scaling by `by` every multiplier (a stored value below one) in each array at `pointer` below any node.
+fn decode_scaled(factor: &Factor, pointer: &str, by: f64) -> Result<Factor, serde_json::Error> {
+    fn scale(v: &mut serde_json::Value, pointer: &str, by: f64) -> usize {
+        let own = match v.pointer_mut(pointer).and_then(|a| a.as_array_mut()) {
+            Some(values) => {
+                let multipliers = values
+                    .iter_mut()
+                    .filter(|x| x.as_f64().is_some_and(|f| f < 1.0));
+                multipliers.for_each(|x| *x = (x.as_f64().unwrap() * by).into());
+                1
             }
-            serde_json::Value::Array(items) => items.iter_mut().map(|v| scale_cross(v, by)).sum(),
+            None => 0,
+        };
+        own + match v {
+            serde_json::Value::Object(map) => map.values_mut().map(|v| scale(v, pointer, by)).sum(),
+            serde_json::Value::Array(items) => {
+                items.iter_mut().map(|v| scale(v, pointer, by)).sum()
+            }
             _ => 0,
         }
     }
+    let mut v = serde_json::to_value(factor).unwrap();
+    assert!(
+        scale(&mut v, pointer, by) > 0,
+        "the factor stores {pointer}"
+    );
+    serde_json::from_value::<Factor>(v)
+}
+
+/// Each stored `|D_e⁻¹C|` row sums to at most one; past it the backward sum can overflow.
+#[test]
+fn an_elimination_whose_rows_sum_past_one_is_corrupt() {
     let rows: Vec<u32> = (0..300).map(|o| o % 60).collect();
     let cols: Vec<u32> = (0..300).map(|o| (o * 7 + o / 13) % 30).collect();
     let weights: Vec<f64> = (0..300).map(|o| 1.0 + (o % 5) as f64).collect();
@@ -326,14 +338,30 @@ fn an_elimination_whose_rows_sum_past_one_is_corrupt() {
     )
     .unwrap();
     let factor = approx_chol::factorize(gram).unwrap();
-    let decode = |by: f64| {
-        let mut v = serde_json::to_value(&factor).unwrap();
-        assert!(
-            scale_cross(&mut v, by) > 0,
-            "the factor stores an elimination"
-        );
-        serde_json::from_value::<Factor>(v)
+    decode_scaled(&factor, "/cross/values", 1.0).expect("a stored elimination decodes");
+    decode_scaled(&factor, "/cross/values", 2.0).expect_err("rows summing to two are corrupt");
+}
+
+/// Each column of a dense `|L|` and each step of an approximate one sums to at most one; past it the substitution can overflow.
+#[rstest]
+#[case::dense("/Dense", Backend::ExactBelow { max_dim: 24 })]
+#[case::approximate("/coefficients", Backend::Approximate)]
+fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
+    #[case] stored: &str,
+    #[case] backend: Backend,
+) {
+    let (a, b): (Vec<u32>, Vec<u32>) = (0..16u32)
+        .flat_map(|v| [(v, v + 1), (v, v + 4)])
+        .filter(|&(v, w)| w < 16 && (w != v + 1 || w % 4 != 0))
+        .unzip();
+    let ground: Vec<f64> = (0..16).map(|i| if i == 0 { 1.0 } else { 0.0 }).collect();
+    let grid = Laplacian::new(16, &a, &b, Weights::unit()).unwrap();
+    let grid = grid.grounded(&ground).unwrap();
+    let config = Config {
+        backend,
+        ..Config::default()
     };
-    decode(1.0).expect("a stored elimination decodes");
-    decode(2.0).expect_err("rows summing to two are corrupt");
+    let factor = factorize_with(grid, config).unwrap();
+    decode_scaled(&factor, stored, 1.0).expect("a stored Cholesky decodes");
+    decode_scaled(&factor, stored, 2.0).expect_err("multipliers summing to two are corrupt");
 }

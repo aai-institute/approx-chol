@@ -36,7 +36,7 @@ impl<T: Real, I: Index> Sddm<T, I> {
     /// The Gremban cover of signed `M`: a Laplacian on two sheets that acts as `M` on `[z; −z]`.
     pub(super) fn cover(signed: UpperAdjacency<T, I>, grounding: Grounding<T>) -> Self {
         let n = signed.n();
-        let mut rows = SddmRows::new(2 * n);
+        let mut rows = SddmRows::with_capacity(2 * n, 2 * signed.nnz());
         for i in 0..n {
             for (j, &a) in signed.upper(i) {
                 rows.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
@@ -65,16 +65,18 @@ impl<T: Real, I: Index> Sddm<T, I> {
     }
 
     /// Positive Laplacian weights, each edge once, the ground vertex `n` joined by each surplus.
-    pub(super) fn grounded_edges(&self) -> impl Iterator<Item = (I, I, T)> + '_ {
+    pub(super) fn grounded_edges(&self, mut edge: impl FnMut(I, I, T)) {
         let n = self.n();
-        let laplacian = (0..n).flat_map(move |i| {
-            let row = self.adjacency.upper(i);
-            row.map(move |(j, &a)| (I::from_index(i), I::from_index(j), -a))
-        });
-        let ground = (0..n).filter_map(move |k| {
-            Some((I::from_index(k), I::from_index(n), self.grounding.edge(k)?))
-        });
-        laplacian.chain(ground)
+        for i in 0..n {
+            for (j, &a) in self.adjacency.upper(i) {
+                edge(I::from_index(i), I::from_index(j), -a);
+            }
+        }
+        for k in 0..n {
+            if let Some(s) = self.grounding.edge(k) {
+                edge(I::from_index(k), I::from_index(n), s);
+            }
+        }
     }
 }
 
@@ -102,6 +104,16 @@ impl<T: Real, I: Index> SddmRows<T, I> {
 
     pub(super) fn add(&mut self, column: usize, w: T) {
         self.row().add(column, w);
+    }
+
+    /// `new` with room for exactly `n` rows of `entries` in all, when the caller knows them.
+    fn with_capacity(n: usize, entries: usize) -> Self {
+        let mut rows = Self::new(n);
+        rows.ptrs.reserve_exact(n);
+        rows.ground.reserve_exact(n);
+        rows.indices.reserve_exact(entries);
+        rows.values.reserve_exact(entries);
+        rows
     }
 
     fn row(&mut self) -> Row<'_, T, I> {

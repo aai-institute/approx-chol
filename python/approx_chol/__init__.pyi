@@ -99,14 +99,16 @@ class Factor:
     def matvec(self, x: npt.ArrayLike) -> npt.NDArray[np.float64]:
         """Apply the preconditioner (alias for :meth:`solve`).
 
-        Part of the scipy ``LinearOperator`` duck-type interface.
+        Part of the scipy ``LinearOperator`` duck-type interface; ``x`` may be
+        an ``(n, 1)`` column.
         """
         ...
 
     def rmatvec(self, x: npt.ArrayLike) -> npt.NDArray[np.float64]:
         """Apply the preconditioner transpose (alias for :meth:`solve`; symmetric).
 
-        Part of the scipy ``LinearOperator`` duck-type interface.
+        Part of the scipy ``LinearOperator`` duck-type interface; ``x`` may be
+        an ``(n, 1)`` column.
         """
         ...
 
@@ -114,7 +116,7 @@ class Factor:
         """Solve LDL^T x = b, returning a new array of the original matrix dimension.
 
         Raises:
-            ValueError: If ``b`` is not contiguous or ``len(b) != n``.
+            ValueError: If ``b`` is not 1-D integer or float, or ``len(b) != n``.
         """
         ...
 
@@ -128,7 +130,8 @@ class Factor:
         ``b`` must have length ``shape[0]``, and *out* at least that length.
 
         Raises:
-            ValueError: If ``b``/``out`` are not contiguous, sizes are invalid,
+            ValueError: If ``b`` is not 1-D integer or float, ``out`` is not
+                contiguous, sizes are invalid,
                 ``out`` is not writeable, or ``b`` and ``out`` overlap in memory.
             BufferError: If ``out`` is already borrowed.
         """
@@ -147,7 +150,7 @@ def factorize(
     Raises:
         ValueError: If the matrix is not square or symmetric, has invalid
             dtypes/ranges, exceeds index limits, has invalid CSR structure, or
-            has a nonpositive diagonal.
+            has a nonpositive diagonal on a nonzero row; an all-zero row solves to 0.
 
     Warns:
         RuntimeWarning: If a block falls short of diagonal dominance after
@@ -175,7 +178,7 @@ def factorize_raw(
     Raises:
         ValueError: If an array is not 1-D or has a dtype it cannot carry, the
             CSR structure is invalid, or the matrix is not symmetric or has a
-            nonpositive diagonal.
+            nonpositive diagonal on a nonzero row; an all-zero row solves to 0.
 
     Warns:
         RuntimeWarning: As :func:`factorize`.

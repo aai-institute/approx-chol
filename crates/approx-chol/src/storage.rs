@@ -70,6 +70,8 @@ impl<T: Real, I: Index> Rows<T, I> {
         self.ptrs[i + 1] - self.ptrs[i]
     }
 
+    // Outlined, every short row pays a call: solves through degree-2 eliminations cost 18% more.
+    #[inline(always)]
     pub(crate) fn row(&self, i: usize) -> impl Iterator<Item = (usize, &T)> {
         let span = self.ptrs[i]..self.ptrs[i + 1];
         (self.indices[span.clone()].iter().map(|&j| j.index())).zip(&self.values[span])
@@ -238,6 +240,10 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
 
     pub(crate) fn upper_len(&self, i: usize) -> usize {
         self.rows.row_len(i)
+    }
+
+    pub(crate) fn nnz(&self) -> usize {
+        self.rows.nnz()
     }
 
     /// Row `i`'s neighbors above it.

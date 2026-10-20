@@ -9,7 +9,6 @@ use crate::{Error, Real};
 /// Borrowed CSR claiming a symmetric `A`; shape is checked here, the claim when it factors.
 #[derive(Clone, Copy, Debug)]
 pub struct CsrRef<'a, T = f64, I = u32> {
-    n: usize,
     row_ptrs: &'a [I],
     col_indices: &'a [I],
     values: &'a [T],
@@ -66,7 +65,6 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
             });
         }
         Ok(Self {
-            n,
             row_ptrs,
             col_indices,
             values,
@@ -90,7 +88,7 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
 
     /// Dimension of `A`.
     pub fn n(&self) -> usize {
-        self.n
+        self.row_ptrs.len() - 1
     }
 }
 
@@ -101,7 +99,6 @@ impl<T: Clone, I: PrimInt> CsrRef<'_, T, I> {
             row_ptrs: cast_slice(self.row_ptrs, IndexKind::RowPtr)?,
             col_indices: cast_slice(self.col_indices, IndexKind::ColIndex)?,
             values: self.values.to_vec(),
-            n: self.n as u32,
         })
     }
 }
@@ -128,7 +125,6 @@ pub struct OwnedCsr<T = f64, I = u32> {
     row_ptrs: Vec<I>,
     col_indices: Vec<I>,
     values: Vec<T>,
-    n: u32,
 }
 
 impl<T: Clone, I: PrimInt> OwnedCsr<T, I> {
@@ -147,7 +143,6 @@ impl<T: Clone, I: PrimInt> OwnedCsr<T, I> {
             row_ptrs,
             col_indices,
             values: values.to_vec(),
-            n,
         })
     }
 }
@@ -156,7 +151,6 @@ impl<T, I: PrimInt> OwnedCsr<T, I> {
     /// Infallible: the constructors check shape and the fields are private.
     pub fn as_csr_ref(&self) -> CsrRef<'_, T, I> {
         CsrRef {
-            n: self.n as usize,
             row_ptrs: &self.row_ptrs,
             col_indices: &self.col_indices,
             values: &self.values,
@@ -203,7 +197,6 @@ impl core::fmt::Display for IndexKind {
 
 /// Strictly ascending columns per row; scipy already emits them, so only rare input pays for a copy.
 pub(crate) struct Canonical<'a, T: Clone, I: Clone> {
-    n: usize,
     row_ptrs: Cow<'a, [I]>,
     col_indices: Cow<'a, [I]>,
     values: Cow<'a, [T]>,
@@ -214,7 +207,6 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
     pub(crate) fn of(csr: CsrRef<'a, T, I>) -> Result<Self, CsrError> {
         match is_canonical(&csr)? {
             true => Ok(Self {
-                n: csr.n,
                 row_ptrs: Cow::Borrowed(csr.row_ptrs),
                 col_indices: Cow::Borrowed(csr.col_indices),
                 values: Cow::Borrowed(csr.values),
@@ -224,7 +216,7 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
     }
 
     pub(crate) fn n(&self) -> usize {
-        self.n
+        self.row_ptrs.len() - 1
     }
 
     fn arrays(&self) -> (&[I], &[I], &[T]) {
@@ -248,7 +240,7 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
     /// Each nonzero `(i, j)`, `i < j`, mirrors checked by a per-row cursor (binary search: +6-15% build).
     pub(crate) fn walk(&self, mut edge: impl FnMut(usize, usize, T)) -> Result<(), CsrError> {
         let (row_ptrs, col_indices, values) = self.arrays();
-        let mut cursors = row_ptrs[..self.n].to_vec();
+        let mut cursors = row_ptrs[..self.n()].to_vec();
         for row in 0..self.n() {
             let row_end = row_ptrs[row + 1];
             // Claimed like any mirror: claiming diagonals up front would skip those below.
@@ -345,7 +337,7 @@ fn approximately_equal<T: Real>(left: T, right: T) -> bool {
 /// Accumulated, not short-circuited: the `all` form measured 0.4-2% slower.
 fn is_canonical<T, I: PrimInt>(csr: &CsrRef<'_, T, I>) -> Result<bool, CsrError> {
     // `None` means `I` cannot represent `n`, so every `I` value is below it.
-    let limit = I::from(csr.n);
+    let limit = I::from(csr.n());
     let mut canonical = true;
     let outside = |j: I| j < I::zero() || limit.is_some_and(|limit| j >= limit);
     for bounds in csr.row_ptrs.windows(2) {
@@ -356,7 +348,7 @@ fn is_canonical<T, I: PrimInt>(csr: &CsrRef<'_, T, I>) -> Result<bool, CsrError>
                 .iter()
                 .position(|&j| outside(j))
                 .expect("one lies outside");
-            return Err(column_error(start + at, columns[at], csr.n));
+            return Err(column_error(start + at, columns[at], csr.n()));
         }
         for pair in columns.windows(2) {
             canonical &= pair[0] < pair[1];
@@ -382,7 +374,7 @@ fn rewrite<'a, T: Real, I: PrimInt>(
     csr: &CsrRef<'_, T, I>,
 ) -> Result<Canonical<'a, T, I>, CsrError> {
     let nnz = csr.col_indices.len();
-    let mut row_ptrs = Vec::with_capacity(csr.n + 1);
+    let mut row_ptrs = Vec::with_capacity(csr.row_ptrs.len());
     let mut col_indices = Vec::with_capacity(nnz);
     let mut values = Vec::with_capacity(nnz);
     let mut entries: Vec<(I, T)> = Vec::new();
@@ -411,7 +403,6 @@ fn rewrite<'a, T: Real, I: PrimInt>(
         row_ptrs.push(I::from(col_indices.len()).expect("a coalesced count fits the input's type"));
     }
     Ok(Canonical {
-        n: csr.n,
         row_ptrs: Cow::Owned(row_ptrs),
         col_indices: Cow::Owned(col_indices),
         values: Cow::Owned(values),

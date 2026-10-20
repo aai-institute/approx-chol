@@ -368,6 +368,14 @@ impl<T: Real, I: Index> Block<T, I> {
     }
 }
 
+/// `Σ|t| ≤ 1` up to the terms' rounding: a substitution through such multipliers cannot overflow where its solution fits.
+fn within_one<T: Real>(terms: impl Iterator<Item = T>) -> bool {
+    let (sum, len) = terms.fold((0.0, 0), |(sum, len), t| {
+        (sum + crate::widen(t.abs()), len + 1)
+    });
+    sum <= 1.0 + 4.0 * (len + 2) as f64 * crate::widen(T::epsilon())
+}
+
 /// One block's keys, so no draw depends on thread scheduling or on how other blocks routed.
 #[derive(Clone, Copy, Debug)]
 struct Streams {
