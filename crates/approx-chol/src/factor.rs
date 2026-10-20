@@ -112,7 +112,7 @@ impl<T: Real> Factor<T> {
 
     fn new(n: usize, blocks: Vec<BlockFactor<T>>, dead: Box<[usize]>) -> Self {
         let scratch_len = (blocks.iter())
-            .map(|block| on!(block, b => b.global_scratch_len()))
+            .map(|block| on!(block, b => b.vertices().len() + b.cholesky.scratch_len(), _ => 0))
             .max()
             .unwrap_or(0);
         Self {
@@ -132,7 +132,7 @@ impl<T: Real> Factor<T> {
     pub fn n_steps(&self) -> usize {
         self.blocks
             .iter()
-            .map(|block| on!(block, b => b.n_steps()))
+            .map(|block| on!(block, b => b.n_steps(), _ => 1))
             .sum()
     }
 
@@ -164,20 +164,20 @@ impl<T: Real> Factor<T> {
     pub fn solve_in_place(&self, x: &mut [T], scratch: &mut [T]) -> Result<(), SolveError> {
         check_buffers(x, self.n, scratch, self.scratch_len())?;
         for block in &self.blocks {
-            on!(block, b => b.solve_global(x, scratch));
+            on!(block, b => b.solve_global(x, scratch), i => i.solve_global(x));
         }
         self.dead.iter().for_each(|&v| x[v] = T::zero());
         Ok(())
     }
 }
 
-/// Runs `$body` on a [`BlockFactor`]'s block, whichever index type stores it.
+/// Runs `$body` on a [`BlockFactor`]'s block, whichever index type stores it, or `$alone` on an isolated vertex.
 macro_rules! on {
-    ($factor:expr, $block:ident => $body:expr) => {
+    ($factor:expr, $block:ident => $body:expr, $isolated:pat => $alone:expr) => {
         match &$factor.0 {
             Storage::U32($block) => $body,
             Storage::U64($block) => $body,
-            Storage::Isolated($block) => $body,
+            Storage::Isolated($isolated) => $alone,
         }
     };
 }
@@ -217,22 +217,22 @@ impl<T: Real> BlockFactor<T> {
 
     /// Present iff a deficit past rounding was clamped, the block's scaling fell short beyond the policy's tolerance, or did not settle.
     pub fn scaling_report(&self) -> Option<ScalingReport> {
-        on!(self, block => block.scaling_report())
+        on!(self, block => block.report.as_deref().copied(), _ => None)
     }
 
     /// Whether the block is folded and solved as singular, `A_c⁺b`.
     pub fn floats(&self) -> bool {
-        on!(self, block => block.floats())
+        on!(self, block => block.cholesky.singular(), _ => false)
     }
 
     /// Work [`InnerParallelism::Allow`] may split per solve, `0` when nothing does: an outer scheduler weighs it against its own parallelism.
     pub fn splittable_work(&self) -> usize {
-        on!(self, block => block.splittable_work())
+        on!(self, block => (block.elimination.as_deref()).map_or(0, BlockElimination::splittable_work), _ => 0)
     }
 
     /// Workspace [`BlockFactor::solve_local`] needs, fixed at factorization.
     pub fn scratch_len(&self) -> usize {
-        on!(self, block => block.scratch_len())
+        on!(self, block => block.cholesky.scratch_len(), _ => 0)
     }
 
     /// Solves in local order: `x` holds `b` on entry and the solution on return.
@@ -243,7 +243,7 @@ impl<T: Real> BlockFactor<T> {
         inner: InnerParallelism,
     ) -> Result<(), SolveError> {
         check_buffers(x, self.vertices().len(), scratch, self.scratch_len())?;
-        on!(self, block => block.solve_unchecked(x, scratch, inner));
+        on!(self, block => block.solve_unchecked(x, scratch, inner), i => i.solve_local(x));
         Ok(())
     }
 }
@@ -292,7 +292,7 @@ pub(crate) struct Block<T, I> {
 impl<T: Real, I: Index> Block<T, I> {
     fn build(block: IrreducibleBlock<T, I>, config: &Config) -> Self {
         let (restriction, off_diagonal, balance, report) = block.into_parts();
-        let floats = matches!(&balance, Balance::Balanced(g) if !g.is_grounded());
+        let floats = balance.floats();
         let streams = Streams {
             seed: config.seed,
             block: restriction.vertices()[0].index() as u64,
@@ -348,30 +348,10 @@ impl<T: Real, I: Index> Block<T, I> {
         self.restriction.vertices()
     }
 
-    fn scaling_report(&self) -> Option<ScalingReport> {
-        self.report.as_deref().copied()
-    }
-
-    fn floats(&self) -> bool {
-        self.cholesky.singular()
-    }
-
-    fn splittable_work(&self) -> usize {
-        (self.elimination.as_deref()).map_or(0, BlockElimination::splittable_work)
-    }
-
-    fn scratch_len(&self) -> usize {
-        self.cholesky.scratch_len()
-    }
-
     /// Every slot but one, eliminated ones and the Cholesky's alike.
     fn n_steps(&self) -> usize {
         let eliminated = (self.elimination.as_deref()).map_or(0, BlockElimination::n_eliminated);
         eliminated + self.cholesky.n_steps()
-    }
-
-    fn global_scratch_len(&self) -> usize {
-        self.vertices().len() + self.scratch_len()
     }
 
     /// Solves the block's restriction of `x` in place, through `scratch` of its vertices plus its Cholesky's.
@@ -413,36 +393,12 @@ impl<T: Real> Isolated<T> {
         }
     }
 
-    fn n_steps(&self) -> usize {
-        1
-    }
-
-    fn scaling_report(&self) -> Option<ScalingReport> {
-        None
-    }
-
-    fn floats(&self) -> bool {
-        false
-    }
-
-    fn splittable_work(&self) -> usize {
-        0
-    }
-
-    fn scratch_len(&self) -> usize {
-        0
-    }
-
-    fn global_scratch_len(&self) -> usize {
-        0
-    }
-
-    fn solve_global(&self, x: &mut [T], _: &mut [T]) {
+    fn solve_global(&self, x: &mut [T]) {
         let v = &mut x[self.vertex as usize];
         *v = *v * self.inverse_pivot;
     }
 
-    fn solve_unchecked(&self, x: &mut [T], _: &mut [T], _: InnerParallelism) {
+    fn solve_local(&self, x: &mut [T]) {
         x[0] = x[0] * self.inverse_pivot;
     }
 }
