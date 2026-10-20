@@ -115,20 +115,12 @@ impl<I: Index> UnionFind<I> {
         a
     }
 
-    /// Whether every vertex is already in one set, which is the connected case.
-    fn is_one_set(&mut self) -> bool {
-        let n = self.parent.len();
-        n > 0 && {
-            let root = self.find(0);
-            self.size[root].index() == n
-        }
-    }
-
     /// Components ordered by lowest vertex, members ascending.
     pub(super) fn into_partition(mut self) -> Partition<I> {
         let n = self.parent.len();
         // Connected, the common case, skips the counting sort: every vertex is its own position.
-        if self.is_one_set() {
+        let root = (n > 0).then(|| self.find(0));
+        if root.is_some_and(|root| self.size[root].index() == n) {
             return Partition::whole(n);
         }
         let mut label = vec![I::max_value(); n];
