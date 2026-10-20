@@ -99,14 +99,16 @@ class Factor:
     def matvec(self, x: npt.ArrayLike) -> npt.NDArray[np.float64]:
         """Apply the preconditioner (alias for :meth:`solve`).
 
-        Part of the scipy ``LinearOperator`` duck-type interface.
+        Part of the scipy ``LinearOperator`` duck-type interface: an ``(n, 1)``
+        column returns an ``(n, 1)`` column.
         """
         ...
 
     def rmatvec(self, x: npt.ArrayLike) -> npt.NDArray[np.float64]:
         """Apply the preconditioner transpose (alias for :meth:`solve`; symmetric).
 
-        Part of the scipy ``LinearOperator`` duck-type interface.
+        Part of the scipy ``LinearOperator`` duck-type interface: an ``(n, 1)``
+        column returns an ``(n, 1)`` column.
         """
         ...
 
@@ -176,7 +178,7 @@ def factorize_raw(
     Raises:
         ValueError: If an array is not 1-D or has a dtype it cannot carry, the
             CSR structure is invalid, or the matrix is not symmetric or has a
-            nonpositive diagonal on a nonzero row.
+            nonpositive diagonal on a nonzero row; an all-zero row solves to 0.
 
     Warns:
         RuntimeWarning: As :func:`factorize`.
