@@ -1,4 +1,4 @@
-//! A signed graph by its edges: each column of `V` is `e_a ∓ e_b`.
+//! A signed graph by its edges: each column of `V` is `e_a ± e_b`.
 
 use num_traits::PrimInt;
 
@@ -6,7 +6,7 @@ use super::edges::{Edges, Weights};
 use super::{check_ends, length, Column, IntoColumns, ViewError};
 use crate::{Index, Real};
 
-/// `A = Σ_k w_k (e_a − σ_k e_b)(e_a − σ_k e_b)ᵀ`, `σ_k = −1` where `positive[k]`.
+/// `A = Σ_k w_k (e_a ± e_b)(e_a ± e_b)ᵀ`: `+` where `positive[k]`, so edge `k` adds `+w_k` to `a_ab`, else `−w_k`.
 #[derive(Clone, Copy, Debug)]
 pub struct SignedGraph<'a, T, I = u32> {
     n: usize,
