@@ -11,8 +11,7 @@ use rand::SeedableRng;
 use rayon::iter::Either;
 use rayon::prelude::*;
 
-use clique_tree::{Copies, Single};
-use config::multiplicity;
+use clique_tree::{Copies, Multi, Single};
 pub use config::{Backend, Config, InnerParallelism, SchurMode};
 
 use crate::sgdd::{Balance, IrreducibleBlock, Restriction, Sgdd};
@@ -96,7 +95,7 @@ impl<T: Real> Factor<T> {
         config: &Config,
         store: fn(Block<T, I>) -> Storage<T>,
     ) -> Self {
-        match multiplicity(config.split_merge) {
+        match config.split_merge.and_then(Multi::split) {
             None => Self::build_with(sgdd, config, store, Single),
             Some(split) => Self::build_with(sgdd, config, store, split),
         }
@@ -335,10 +334,11 @@ impl<T: Real, I: Index> Block<T, I> {
                         schur::exact(&cross, &inv_pivot, sheets, grounding)
                     }
                     (false, sampled) => {
-                        let split = multiplicity(match sampled {
+                        let split = match sampled {
                             SchurMode::Approximate { split_merge } => split_merge,
                             _ => config.split_merge,
-                        });
+                        }
+                        .and_then(Multi::split);
                         schur::sampled(&cross, split, sheets, grounding, streams)
                     }
                 };
