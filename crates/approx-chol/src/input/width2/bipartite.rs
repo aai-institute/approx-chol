@@ -3,7 +3,7 @@
 use num_traits::PrimInt;
 
 use super::edges::{Edges, Weights};
-use super::{BipartiteColumns, Column, IntoColumns, ViewError};
+use super::{length, BipartiteColumns, Column, IntoColumns, ViewError};
 use crate::{Index, Real};
 
 /// One side of `V`, with at most one nonzero per column: `values[k]` at `rows[k]`, `1` for `None`.
@@ -17,10 +17,7 @@ pub struct FactorWidth1<'a, T, I = u32> {
 impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
     /// `n` rows; each column's row is below `n`, and values, if any, are one per column.
     pub fn new(n: usize, rows: &'a [I], values: Option<&'a [T]>) -> Result<Self, ViewError> {
-        let expected = rows.len();
-        if let Some(found) = values.map(<[T]>::len).filter(|&len| len != expected) {
-            return Err(ViewError::LengthMismatch { expected, found });
-        }
+        values.map_or(Ok(()), |values| length(rows.len(), values.len()))?;
         let in_range = |row: &I| row.to_usize().is_some_and(|row| row < n);
         if let Some(column) = rows.iter().position(|row| !in_range(row)) {
             return Err(ViewError::IndexOutOfRange { column });

@@ -152,13 +152,8 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         x: &'a [T],
         y: &'a [T],
     ) -> Result<Self, ViewError> {
-        let columns = a.len();
-        let lengths = [b.len(), x.len(), y.len()];
-        if let Some(&found) = lengths.iter().find(|&&len| len != columns) {
-            return Err(ViewError::LengthMismatch {
-                expected: columns,
-                found,
-            });
+        for found in [b.len(), x.len(), y.len()] {
+            length(a.len(), found)?;
         }
         check_ends(n, a, b)?;
         Ok(Self {
@@ -167,6 +162,14 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
             b,
             values: [x, y],
         })
+    }
+}
+
+/// A slice of `found` entries where the view fixed `expected`.
+fn length(expected: usize, found: usize) -> Result<(), ViewError> {
+    match found == expected {
+        true => Ok(()),
+        false => Err(ViewError::LengthMismatch { expected, found }),
     }
 }
 
