@@ -15,14 +15,6 @@ pub(crate) enum Balance<T> {
     Frustrated(Grounding<T>),
 }
 
-impl<T: Real> Balance<T> {
-    fn grounding(&self) -> &Grounding<T> {
-        match self {
-            Self::Balanced(grounding) | Self::Frustrated(grounding) => grounding,
-        }
-    }
-}
-
 /// The surplus `s = diag(M) − Σ|offdiag(M)|` closing `M` into an SDDM; none is `σ = 0`, singular only when balanced.
 #[derive(Clone, Debug)]
 pub(crate) struct Grounding<T>(Option<Box<[T]>>);
@@ -86,15 +78,15 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         let vertices = restriction.vertices();
         let n = vertices.len();
         assert_eq!(off_diagonal.n(), n, "one row per vertex");
-        assert!(balance.grounding().fits(n), "one surplus per row");
-        let sheets = match balance {
-            Balance::Balanced(_) => {
+        let (sheets, grounding) = match &balance {
+            Balance::Balanced(grounding) => {
                 debug_assert!(off_diagonal.nonpositive(), "a balanced M is a Z-matrix");
-                T::one()
+                (T::one(), grounding)
             }
-            Balance::Frustrated(_) => T::one() + T::one(),
+            Balance::Frustrated(grounding) => (T::one() + T::one(), grounding),
         };
-        let surplus = balance.grounding().surplus().unwrap_or_default();
+        assert!(grounding.fits(n), "one surplus per row");
+        let surplus = grounding.surplus().unwrap_or_default();
         if let Some(i) = surplus.iter().position(|&s| !crate::in_range(s)) {
             let vertex = vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
