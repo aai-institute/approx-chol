@@ -2,10 +2,11 @@ use num_traits::PrimInt;
 
 use super::Congruent;
 use crate::input::{BipartiteLaplacian, Laplacian, SignedGraph};
-use crate::sgdd::block::{Balance, ReduceError, Sgdd};
+use crate::sgdd::block::{Balance, ReduceError};
 use crate::sgdd::congruence::Congruence;
 use crate::sgdd::decomposition::{assemble_bipartite, assemble_laplacian, assemble_signed};
 use crate::sgdd::signature;
+use crate::sgdd::Sgdd;
 use crate::{Index, Real};
 
 impl<T: Real, I: Index> Sgdd<T, I> {

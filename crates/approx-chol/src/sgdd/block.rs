@@ -1,7 +1,6 @@
 //! `A` as its reduced irreducible blocks: what the factorization consumes.
 
 use super::congruence::{Congruence, Restriction};
-use super::decomposition::Components;
 use super::scaling::ScalingReport;
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, Index, Real};
@@ -132,35 +131,6 @@ pub(crate) struct Summands<B, I, T> {
     pub(crate) lone: Vec<(I, T)>,
     /// One-vertex components whose pivot is zero: an in-place solve zeroes them.
     pub(crate) dead: Vec<I>,
-}
-
-/// `A` as its reduced summands; built only from extraction, so they cover `A` once.
-#[derive(Clone, Debug)]
-pub(crate) struct Sgdd<T = f64, I = u32> {
-    n: usize,
-    summands: Summands<IrreducibleBlock<T, I>, I, T>,
-}
-
-impl<T: Real, I: Index> Sgdd<T, I> {
-    pub(super) fn new(components: Components<IrreducibleBlock<T, I>, I, T>) -> Self {
-        let Components {
-            partition,
-            summands,
-        } = components;
-        Self {
-            n: partition.n(),
-            summands,
-        }
-    }
-
-    /// Dimension of `A`.
-    pub(crate) fn n(&self) -> usize {
-        self.n
-    }
-
-    pub(crate) fn into_summands(self) -> Summands<IrreducibleBlock<T, I>, I, T> {
-        self.summands
-    }
 }
 
 /// Why a block has no SDDM form; each `vertex` is in `A`'s numbering.

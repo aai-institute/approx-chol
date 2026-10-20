@@ -5,11 +5,12 @@ mod graph;
 
 use num_traits::PrimInt;
 
-use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
+use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError};
 use super::congruence::{Congruence, ScaledFactors};
 use super::decomposition::{of_csr, of_upper, Cells, Partitioned};
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
 use super::signature;
+use super::Sgdd;
 use crate::input::{Canonical, Input};
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, widen, Error, Index, Real};
