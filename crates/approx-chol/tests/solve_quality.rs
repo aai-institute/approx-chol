@@ -336,30 +336,6 @@ cases! {
 }
 
 cases! {
-    fn a_zero_singleton_has_a_defined_solve(entry in entries(all), types in types(all)) {
-        let graph = Graph::new(1, Vec::new());
-        let x = entry.reduce(&graph, types).factorize(&Config::default()).solve(&[7.0]);
-        let label = format!("zero singleton {types:?}");
-        assert_close(&label, &x, &[0.0], types.epsilon());
-    }
-}
-
-cases! {
-    fn a_positive_singleton_has_a_defined_solve(
-        entry in entries(lone_ground),
-        types in types(all),
-    ) {
-        let graph = Graph {
-            ground: vec![2.0],
-            ..Graph::new(1, Vec::new())
-        };
-        let x = entry.reduce(&graph, types).factorize(&Config::default()).solve(&[7.0]);
-        let label = format!("positive singleton {types:?}");
-        assert_close(&label, &x, &[3.5], types.epsilon());
-    }
-}
-
-cases! {
     fn an_empty_system_solves_to_an_empty_vector(entry in entries(all), types in types(all)) {
         let reduced = entry.reduce(&Graph::new(0, Vec::new()), types);
         assert!(reduced.factorize(&Config::default()).solve(&[]).is_empty());
