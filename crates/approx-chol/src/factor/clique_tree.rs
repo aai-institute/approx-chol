@@ -1,4 +1,4 @@
-//! One pivot's star eliminated by a sampled clique tree (GKS 2023, Algorithm 5): its column and fill.
+//! One pivot's star eliminated by a sampled clique tree (GKS 2023, Algorithm 6; AC is its `k = l = 1`): its column and fill.
 
 mod cdf;
 mod copies;

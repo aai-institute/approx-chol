@@ -86,7 +86,7 @@ struct StepHeader<T, I> {
     vertex: I,
     /// Below `n`, so `I` always holds it and a `u32` header stays 16 bytes.
     len: I,
-    /// `D⁻¹` premultiplied by the retained fraction, so no pass rebuilds it.
+    /// `D⁻¹` over the retained fraction, `1/w`, as the backward multiplies by that fraction.
     pivot_scale: T,
 }
 
