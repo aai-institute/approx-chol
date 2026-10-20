@@ -62,7 +62,7 @@ fn splitting(config: Config, k: u32) -> Config {
 }
 
 cases! {
-    /// A grounded singleton is a star at every `k`: AC2 samples no edge and solves `M⁻¹b`.
+    /// A grounded singleton factors to `1/σ` whatever AC2's `k`, so it solves `M⁻¹b` exactly.
     #[case::positive_rhs([1.0, 2.0, 3.0])]
     #[case::mixed_sign_rhs([1.0, -2.0, 4.0])]
     fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
@@ -130,7 +130,11 @@ fn assert_buffers_checked<T: Real>(factor: &Factor<T>) {
 
 cases! {
     fn every_solve_checks_its_buffer_lengths(entry in entries(grounded), types in types(all)) {
-        let reduced = entry.reduce(&diagonal_sddm(), types);
+        let graph = Graph {
+            ground: vec![2.0, 3.0, 5.0],
+            ..Graph::new(3, vec![Edge::negative(0, 1, 1.0)])
+        };
+        let reduced = entry.reduce(&graph, types);
         let factor = reduced.factorize(&Config::default());
         by_type!(&factor.factor, factor => assert_buffers_checked(factor));
     }

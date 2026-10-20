@@ -22,11 +22,11 @@ struct QueueElem<I> {
 }
 
 impl<I: Index> MinDegreeOrder<I> {
-    /// Buckets span `split · n`, Laplacians.jl's AC2 scale; `last` is never queued.
+    /// Buckets span `split · n`, Laplacians.jl's AC2 scale; `pin` is never queued.
     pub(super) fn new<T: Real, C: Copies>(
         graph: &EliminationGraph<T, I, C>,
         split: C::Split,
-        last: Option<usize>,
+        pin: Option<usize>,
     ) -> Self {
         let n = graph.n();
         let bucket_base = (C::initial(split).get() as usize).saturating_mul(n).max(1);
@@ -34,7 +34,7 @@ impl<I: Index> MinDegreeOrder<I> {
         let mut elems = Vec::with_capacity(n);
         let mut min_list = lists.len();
         for v in 0..n {
-            if Some(v) == last {
+            if Some(v) == pin {
                 elems.push(QueueElem {
                     prev: sentinel(),
                     next: sentinel(),

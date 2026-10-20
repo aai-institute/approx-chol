@@ -15,8 +15,9 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
             let Some(a) = SymmetricBlock::live(cells) else {
                 return Ok(None);
             };
-            let relax =
-                |a: &SymmetricBlock<T, I>| scaling::relax(&a.off_diagonal, &a.diagonal, policy);
+            let relax = |a: &SymmetricBlock<T, I>| {
+                scaling::relax(&a.off_diagonal, &a.rows.diagonal, policy)
+            };
             let block = match a.reduce(policy, relax)? {
                 Signed::Folded(m, rows) => {
                     let grounding = rows.folded_surplus(&m.off_diagonal);

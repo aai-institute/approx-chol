@@ -97,7 +97,12 @@ impl<T: Real> Factor<T> {
     ) -> Self {
         let n = sgdd.n();
         let blocks: Vec<BlockFactor<T>> = (sgdd.into_blocks().into_par_iter())
-            .map(|block| BlockFactor(store(Block::build(block, config))))
+            .map(|block| match block.isolated() {
+                Some((vertex, pivot)) => {
+                    BlockFactor(Storage::Isolated(Isolated::new(vertex, pivot)))
+                }
+                None => BlockFactor(store(Block::build(block, config))),
+            })
             .collect();
         let mut covered = vec![false; n];
         (blocks.iter().flat_map(BlockFactor::vertices)).for_each(|v| covered[v] = true);
@@ -107,7 +112,7 @@ impl<T: Real> Factor<T> {
 
     fn new(n: usize, blocks: Vec<BlockFactor<T>>, dead: Box<[usize]>) -> Self {
         let scratch_len = (blocks.iter())
-            .map(|block| block.vertices().len() + block.scratch_len())
+            .map(|block| on!(block, b => b.vertices().len() + b.cholesky.scratch_len(), _ => 0))
             .max()
             .unwrap_or(0);
         Self {
@@ -127,7 +132,7 @@ impl<T: Real> Factor<T> {
     pub fn n_steps(&self) -> usize {
         self.blocks
             .iter()
-            .map(|block| on!(block, b => b.n_steps()))
+            .map(|block| on!(block, b => b.n_steps(), _ => 1))
             .sum()
     }
 
@@ -159,19 +164,20 @@ impl<T: Real> Factor<T> {
     pub fn solve_in_place(&self, x: &mut [T], scratch: &mut [T]) -> Result<(), SolveError> {
         check_buffers(x, self.n, scratch, self.scratch_len())?;
         for block in &self.blocks {
-            on!(block, b => b.solve_global(x, scratch));
+            on!(block, b => b.solve_global(x, scratch), i => i.solve_global(x));
         }
         self.dead.iter().for_each(|&v| x[v] = T::zero());
         Ok(())
     }
 }
 
-/// Runs `$body` on a [`BlockFactor`]'s block, whichever index type stores it.
+/// Runs `$body` on a [`BlockFactor`]'s block, whichever index type stores it, or `$alone` on an isolated vertex.
 macro_rules! on {
-    ($factor:expr, $block:ident => $body:expr) => {
+    ($factor:expr, $block:ident => $body:expr, $isolated:pat => $alone:expr) => {
         match &$factor.0 {
             Storage::U32($block) => $body,
             Storage::U64($block) => $body,
+            Storage::Isolated($isolated) => $alone,
         }
     };
 }
@@ -181,7 +187,7 @@ use on;
 #[derive(Clone, Debug)]
 pub struct BlockFactor<T = f64>(Storage<T>);
 
-/// The block's vertex indices in `u32` when its factor's vertices fit, else in `u64`.
+/// A block's factor with its vertex indices in `u32` when they fit, else in `u64`; an isolated vertex stores only its inverse pivot.
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -194,6 +200,7 @@ pub struct BlockFactor<T = f64>(Storage<T>);
 pub(crate) enum Storage<T> {
     U32(Block<T, u32>),
     U64(Block<T, u64>),
+    Isolated(Isolated<T>),
 }
 
 impl<T: Real> BlockFactor<T> {
@@ -202,27 +209,30 @@ impl<T: Real> BlockFactor<T> {
         match &self.0 {
             Storage::U32(block) => Vertices(Either::Left(block.vertices().iter())),
             Storage::U64(block) => Vertices(Either::Right(block.vertices().iter())),
+            Storage::Isolated(block) => {
+                Vertices(Either::Right(std::slice::from_ref(&block.vertex).iter()))
+            }
         }
     }
 
     /// Present iff a deficit past rounding was clamped, the block's scaling fell short beyond the policy's tolerance, or did not settle.
     pub fn scaling_report(&self) -> Option<ScalingReport> {
-        on!(self, block => block.report.as_deref().copied())
+        on!(self, block => block.report.as_deref().copied(), _ => None)
     }
 
     /// Whether the block is folded and solved as singular, `A_c⁺b`.
     pub fn floats(&self) -> bool {
-        on!(self, block => block.cholesky.singular())
+        on!(self, block => block.cholesky.singular(), _ => false)
     }
 
     /// Work [`InnerParallelism::Allow`] may split per solve, `0` when nothing does: an outer scheduler weighs it against its own parallelism.
     pub fn splittable_work(&self) -> usize {
-        on!(self, block => (block.elimination.as_deref()).map_or(0, BlockElimination::splittable_work))
+        on!(self, block => (block.elimination.as_deref()).map_or(0, BlockElimination::splittable_work), _ => 0)
     }
 
     /// Workspace [`BlockFactor::solve_local`] needs, fixed at factorization.
     pub fn scratch_len(&self) -> usize {
-        on!(self, block => block.cholesky.scratch_len())
+        on!(self, block => block.cholesky.scratch_len(), _ => 0)
     }
 
     /// Solves in local order: `x` holds `b` on entry and the solution on return.
@@ -233,7 +243,7 @@ impl<T: Real> BlockFactor<T> {
         inner: InnerParallelism,
     ) -> Result<(), SolveError> {
         check_buffers(x, self.vertices().len(), scratch, self.scratch_len())?;
-        on!(self, block => block.solve_unchecked(x, scratch, inner));
+        on!(self, block => block.solve_unchecked(x, scratch, inner), i => i.solve_local(x));
         Ok(())
     }
 }
@@ -281,8 +291,8 @@ pub(crate) struct Block<T, I> {
 
 impl<T: Real, I: Index> Block<T, I> {
     fn build(block: IrreducibleBlock<T, I>, config: &Config) -> Self {
-        let floats = block.floats();
         let (restriction, off_diagonal, balance, report) = block.into_parts();
+        let floats = balance.floats();
         let streams = Streams {
             seed: config.seed,
             block: restriction.vertices()[0].index() as u64,
@@ -291,21 +301,21 @@ impl<T: Real, I: Index> Block<T, I> {
             Balance::Balanced(grounding) => (Sheets::One, grounding),
             Balance::Frustrated(grounding) => (Sheets::Two, grounding),
         };
-        let scales = |from: usize| restriction.scales(from);
+        let factors = |from: usize| restriction.scaled_factors(from);
         let (elimination, cholesky) = match off_diagonal {
             OffDiagonal::General(adjacency) => {
                 let sddm = match sheets {
                     Sheets::One => Sddm::new(adjacency, grounding, sheets),
                     Sheets::Two => Sddm::cover(adjacency, grounding),
                 };
-                let factored = Cholesky::factor(sddm, streams.cholesky(), config, scales(0));
+                let factored = Cholesky::factor(sddm, streams.cholesky(), config, factors(0));
                 (None, factored)
             }
             OffDiagonal::Bipartite(cross) => {
-                let kept = scales(cross.n_rows());
+                let kept = factors(cross.n_rows());
                 let factor = |s| Cholesky::factor(s, streams.cholesky(), config, kept);
                 let dense = config.dense(sheets.count() * cross.n_cols());
-                let inv_pivot = BlockElimination::pivots(&cross, &grounding);
+                let inv_pivot = BlockElimination::inverse_pivots(&cross, &grounding);
                 let s = match (dense, config.complement) {
                     (true, _) | (false, SchurMode::Exact) => {
                         schur::exact(&cross, &inv_pivot, sheets, grounding)
@@ -321,7 +331,7 @@ impl<T: Real, I: Index> Block<T, I> {
                 };
                 // A kept `Cᵀ` is built once `S` is factored, so it never shares that peak.
                 let factored = factor(s);
-                let elimination = BlockElimination::with_pivots(cross, inv_pivot);
+                let elimination = BlockElimination::with_inverse_pivots(cross, inv_pivot);
                 (Some(Box::new(elimination)), factored)
             }
         };
@@ -330,7 +340,7 @@ impl<T: Real, I: Index> Block<T, I> {
             restriction,
             elimination,
             cholesky,
-            report: report.map(Box::new),
+            report,
         }
     }
 
@@ -365,6 +375,52 @@ impl<T: Real, I: Index> Block<T, I> {
             }
         }
         self.restriction.prolongate(x, singular);
+    }
+}
+
+/// A vertex no entry couples: its whole factor is `1/σ`, so it holds no heap part.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Isolated<T> {
+    vertex: u64,
+    inverse_pivot: T,
+}
+
+impl<T: Real> Isolated<T> {
+    fn new<I: Index>(vertex: I, pivot: T) -> Self {
+        Self {
+            vertex: vertex.index() as u64,
+            inverse_pivot: T::one() / pivot,
+        }
+    }
+
+    fn solve_global(&self, x: &mut [T]) {
+        let v = &mut x[self.vertex as usize];
+        *v = *v * self.inverse_pivot;
+    }
+
+    fn solve_local(&self, x: &mut [T]) {
+        x[0] = x[0] * self.inverse_pivot;
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize> serde::Serialize for Isolated<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        (&self.vertex, &self.inverse_pivot).serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for Isolated<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (vertex, inverse_pivot) = <(u64, T)>::deserialize(deserializer)?;
+        match inverse_pivot.is_finite() && inverse_pivot > T::zero() {
+            true => Ok(Self {
+                vertex,
+                inverse_pivot,
+            }),
+            false => Err(serde::de::Error::custom("corrupt Isolated")),
+        }
     }
 }
 
@@ -499,7 +555,9 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         match blocks.pop().expect("one block").0 {
             Storage::U32(block) => block,
-            Storage::U64(_) => unreachable!("a u32 reduction stores u32"),
+            Storage::U64(_) | Storage::Isolated(_) => {
+                unreachable!("a coupled u32 block stores u32")
+            }
         }
     }
 

@@ -15,6 +15,11 @@ pub(crate) enum Balance<T> {
 }
 
 impl<T: Real> Balance<T> {
+    /// Folded and ungrounded, so solved as singular, `A_c⁺b`.
+    pub(crate) fn floats(&self) -> bool {
+        matches!(self, Self::Balanced(grounding) if !grounding.is_grounded())
+    }
+
     fn grounding(&self) -> &Grounding<T> {
         match self {
             Self::Balanced(grounding) | Self::Frustrated(grounding) => grounding,
@@ -69,7 +74,7 @@ pub struct IrreducibleBlock<T = f64, I = u32> {
     restriction: Box<Restriction<T, I>>,
     off_diagonal: OffDiagonal<T, I>,
     balance: Balance<T>,
-    report: Option<ScalingReport>,
+    report: Option<Box<ScalingReport>>,
 }
 
 impl<T: Real, I: Index> IrreducibleBlock<T, I> {
@@ -108,13 +113,20 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
             restriction: Box::new(restriction),
             off_diagonal,
             balance,
-            report,
+            report: report.map(Box::new),
         })
     }
 
-    /// Whether `A_c` is folded and solved as singular, `A_c⁺b`: before any clamp its `M` has `1ᵀM1 ≤ 5ε·tr M`, so a net deficit floats; a Laplacian's `g` or a signed graph's cancelled mass must be exactly `0`.
-    pub fn floats(&self) -> bool {
-        matches!(&self.balance, Balance::Balanced(grounding) if !grounding.is_grounded())
+    /// The vertex and its surplus when no entry couples it and `|F| = 1`: its factor is then `1/σ`.
+    pub(crate) fn isolated(&self) -> Option<(I, T)> {
+        let [vertex] = *self.restriction.vertices() else {
+            return None;
+        };
+        let unit = self.restriction.scaled_factors(0).is_none() && self.report.is_none();
+        match &self.balance {
+            Balance::Balanced(grounding) if unit => grounding.edge(0).map(|s| (vertex, s)),
+            _ => None,
+        }
     }
 
     /// Moved out, so each part is freed once its factor stops reading it.
@@ -132,7 +144,7 @@ type BlockParts<T, I> = (
     Box<Restriction<T, I>>,
     OffDiagonal<T, I>,
     Balance<T>,
-    Option<ScalingReport>,
+    Option<Box<ScalingReport>>,
 );
 
 /// `A` as its [`IrreducibleBlock`]s, each reduced; vertices in none solve to `0`.

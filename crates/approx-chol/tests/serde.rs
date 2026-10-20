@@ -365,3 +365,15 @@ fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
     decode_scaled(&factor, stored, 1.0).expect("a stored Cholesky decodes");
     decode_scaled(&factor, stored, 2.0).expect_err("multipliers summing to two are corrupt");
 }
+
+/// A factor holding an isolated vertex reads back from a self-describing format too.
+#[test]
+fn an_isolated_vertex_round_trips_through_json() {
+    let edge = Laplacian::new(3, &[0u32], &[1], Weights::unit()).unwrap();
+    let grounded = edge.grounded(&[1.0, 0.0, 2.0]).unwrap();
+    let factor = factorize_with(grounded, Config::default()).unwrap();
+    let json = serde_json::to_string(&factor).unwrap();
+    let back: Factor = serde_json::from_str(&json).unwrap();
+    let b = [1.0, 2.0, 3.0];
+    assert_eq!(factor.solve(&b).unwrap(), back.solve(&b).unwrap());
+}

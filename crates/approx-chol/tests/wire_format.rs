@@ -10,7 +10,7 @@ use serde::de::value::{Error, SeqDeserializer};
 use serde::Deserialize;
 
 /// The leading field this build writes; a bump points the reader at new fixture files.
-const FORMAT_VERSION: u32 = 0x4143_0008;
+const FORMAT_VERSION: u32 = 0x4143_0009;
 
 /// One list declares each fixture, its file name and its rstest case, so none is kept in step by hand.
 macro_rules! fixtures {
@@ -40,6 +40,7 @@ macro_rules! fixtures {
 
 fixtures! {
     Grounded => grounded,
+    Isolated => isolated,
     Floating => floating,
     Cover => cover,
     SampledAc2 => sampled_ac2,
@@ -51,6 +52,8 @@ impl Fixture {
         match self {
             // Strictly dominant, so it reduces to a grounded block.
             Self::Grounded => Some(&[&[2.0, -1.0, 0.0], &[-1.0, 3.0, -1.0], &[0.0, -1.0, 2.0]]),
+            // Two vertices no entry couples, so each factor is its inverse pivot.
+            Self::Isolated => Some(&[&[2.0, 0.0], &[0.0, 4.0]]),
             // Two interleaved floating components, so each block's vertices skip the other's.
             Self::Floating => Some(&[
                 &[1.0, 0.0, -1.0, 0.0],
@@ -96,6 +99,7 @@ impl Fixture {
     fn covers(self) -> &'static [&'static str] {
         match self {
             Self::Grounded => &["grounded: true"],
+            Self::Isolated => &["Isolated("],
             Self::Floating => &["sheets: One, grounded: false"],
             Self::Cover => &["sheets: Two"],
             Self::SampledAc2 => &["elimination: Some", "Approximate("],

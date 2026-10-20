@@ -24,8 +24,8 @@ impl<T: Real, I: Index> Sgdd<T, I> {
         Ok(match input {
             Input::Csr(csr) => Self::from_csr(csr, policy)?,
             Input::UpperCsr(csr) => Self::from_upper_csr(csr, policy)?,
-            Input::Laplacian(laplacian) => Self::try_from(laplacian)?,
-            Input::SignedGraph(graph) => Self::try_from(graph)?,
+            Input::Laplacian(laplacian) => Self::from_laplacian(laplacian)?,
+            Input::SignedGraph(graph) => Self::from_signed_graph(graph)?,
             Input::Gram(v) => Self::from_gram(v, policy)?,
             Input::BipartiteGram(gram) => Self::from_bipartite_gram(gram, policy)?,
         })
@@ -43,9 +43,7 @@ struct SymmetricBlock<T, I> {
     /// In `A`'s numbering, in local order.
     vertices: Box<[I]>,
     off_diagonal: OffDiagonal<T, I>,
-    diagonal: Vec<T>,
-    /// Summed in `f64`: a long `f32` row is not undercounted.
-    abs_row_sums: Vec<T>,
+    rows: RowSums<T>,
 }
 
 impl<T: Real, I: Index> SymmetricBlock<T, I> {
@@ -55,9 +53,11 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         assert_eq!(diagonal.len(), off_diagonal.n(), "one diagonal per row");
         (diagonal != [T::zero()]).then(|| Self {
             vertices,
-            abs_row_sums: off_diagonal.abs_row_sums(),
+            rows: RowSums {
+                diagonal,
+                abs: off_diagonal.abs_row_sums(),
+            },
             off_diagonal,
-            diagonal,
         })
     }
 
@@ -67,61 +67,55 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         policy: &ScalingPolicy,
         relax: impl FnOnce(&Self) -> Option<scaling::Relaxation<T>>,
     ) -> Result<Signed<T, I>, ReduceError> {
-        if let Some(i) = self.diagonal.iter().position(|&d| !diagonal_in_range(d)) {
+        let RowSums { diagonal, abs } = &self.rows;
+        if let Some(i) = diagonal.iter().position(|&d| !diagonal_in_range(d)) {
             let vertex = self.vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
         }
-        if let Some(i) = self
-            .abs_row_sums
-            .iter()
-            .position(|&s| !diagonal_in_range(s))
-        {
+        if let Some(i) = abs.iter().position(|&s| !diagonal_in_range(s)) {
             let vertex = self.vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
         }
-        if let Some(i) = self.diagonal.iter().position(|&d| d <= T::zero()) {
+        if let Some(i) = diagonal.iter().position(|&d| d <= T::zero()) {
             let vertex = self.vertices[i].index();
             return Err(ReduceError::NonpositiveDiagonal { vertex });
         }
         let vertex = self.vertices[0].index();
-        let mut rows = self.diagonal.iter().zip(&self.abs_row_sums);
-        let relaxation = match rows.all(|(&d, &s)| policy.dominates(d, s)) {
+        let relaxation = match diagonal
+            .iter()
+            .zip(abs)
+            .all(|(&d, &s)| policy.dominates(d, s))
+        {
             true => None,
             false => Some(relax(&self).ok_or(ReduceError::Unscalable { vertex })?),
         };
         let folding = signature::folding_signs(&self.off_diagonal);
         let folded = folding.is_some();
         let signs = folding.unwrap_or(Congruence::Identity);
-        let (m, rows) = match relaxation {
+        let (m, rows, vector) = match relaxation {
+            // Signs keep every magnitude, so `A_c`'s rows are `M`'s.
             None => {
-                // Signs keep every magnitude, so `A_c`'s rows are `M`'s.
-                let (diagonal, abs) = (&self.diagonal, &self.abs_row_sums);
-                let report = ScaleVector::Identity.report(diagonal, abs, &self.off_diagonal);
-                let mut m = Congruent::new(self.vertices, self.off_diagonal, signs);
-                m.report = report;
-                let rows = RowSums {
-                    diagonal: self.diagonal,
-                    abs: self.abs_row_sums,
-                };
-                (m, rows)
+                let m = Congruent::new(self.vertices, self.off_diagonal, signs);
+                (m, self.rows, ScaleVector::Identity)
             }
             Some((scales, vector)) => {
                 let factors = signs.times(&scales);
                 let (off_diagonal, abs) = (self.off_diagonal.scaled_abs_row_sums(&factors))
                     .ok_or(ReduceError::Unscalable { vertex })?;
-                let diagonal: Vec<T> = (self.diagonal.iter().zip(&scales[..]))
+                let diagonal = (self.rows.diagonal.iter().zip(&scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();
-                let report = vector.report(&diagonal, &abs, &off_diagonal);
                 let m = Congruent {
                     vertices: self.vertices,
                     congruence: Congruence::Scaled(Scales::new(factors)),
                     off_diagonal,
-                    report,
+                    report: None,
                 };
-                (m, RowSums { diagonal, abs })
+                (m, RowSums { diagonal, abs }, vector)
             }
         };
+        let report = vector.report(&rows.diagonal, &rows.abs, &m.off_diagonal);
+        let m = Congruent { report, ..m };
         match folded {
             true => Ok(Signed::Folded(m, rows)),
             false => Ok(Signed::Frustrated(
