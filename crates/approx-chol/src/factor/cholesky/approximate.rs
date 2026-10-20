@@ -182,10 +182,10 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
             return false;
         }
         let mut pivoted = vec![false; slots];
-        let mut end = 0;
+        let mut end = 0usize;
         for header in headers {
             let (v, start) = (header.vertex.index(), end);
-            end += header.len.index();
+            end = end.saturating_add(header.len.index());
             if v == pin
                 || v >= slots
                 || std::mem::replace(&mut pivoted[v], true)
