@@ -80,9 +80,8 @@ fn path(n: usize) -> Vec<(usize, usize)> {
 }
 
 fn grid(k: usize) -> Vec<(usize, usize)> {
-    let right = (0..k * k).filter(|v| v % k + 1 < k).map(|v| (v, v + 1));
-    let down = (0..k * (k - 1)).map(|v| (v, v + k));
-    right.chain(down).collect()
+    let edges = crate::grid::grid(k, k).edges;
+    edges.iter().map(|edge| (edge.a, edge.b)).collect()
 }
 
 /// A ~5000-step CG run stalls past 4× the settle band; 6144 steps cover this path, which 2048 do not (#194).
