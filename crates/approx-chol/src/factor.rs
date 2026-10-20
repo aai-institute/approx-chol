@@ -98,7 +98,7 @@ impl<T: Real> Factor<T> {
     ) -> Self {
         match multiplicity(config.split_merge) {
             None => Self::build_with(sgdd, config, store, Single),
-            Some(copies) => Self::build_with(sgdd, config, store, copies),
+            Some(split) => Self::build_with(sgdd, config, store, split),
         }
     }
 
@@ -335,11 +335,11 @@ impl<T: Real, I: Index> Block<T, I> {
                         schur::exact(&cross, &inv_pivot, sheets, grounding)
                     }
                     (false, sampled) => {
-                        let copies = multiplicity(match sampled {
+                        let split = multiplicity(match sampled {
                             SchurMode::Approximate { split_merge } => split_merge,
                             _ => config.split_merge,
                         });
-                        schur::sampled(&cross, copies, sheets, grounding, streams)
+                        schur::sampled(&cross, split, sheets, grounding, streams)
                     }
                 };
                 // A kept `Cᵀ` is built once `S` is factored, so it never shares that peak.
