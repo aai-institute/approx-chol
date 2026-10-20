@@ -85,32 +85,26 @@ impl<A, I: Index> Partitioned<A, I> {
             let vertex = vertices[0].index();
             return Err(ReduceError::TooLarge { vertex });
         }
-        let Some(position) = partition.position() else {
-            let vertices = partition.components().next().expect("one component");
-            if let Some(lone) = isolated(vertices, &a) {
-                return Ok((partition, Vec::new(), vec![lone]));
-            }
-            let live = block(a.whole(vertices))?.into_iter().collect();
-            return Ok((partition, live, Vec::new()));
-        };
-        let mut components: Vec<&[I]> = partition.components().collect();
         let mut lone = Vec::new();
-        components.retain(|vertices| match isolated(vertices, &a) {
-            Some(isolated) => {
-                lone.push(isolated);
-                false
-            }
-            None => true,
-        });
+        let components: Vec<&[I]> = (partition.components())
+            .filter(|vertices| match isolated(vertices, &a) {
+                Some(isolated) => {
+                    lone.push(isolated);
+                    false
+                }
+                None => true,
+            })
+            .collect();
         if components.is_empty() {
             return Ok((partition, Vec::new(), lone));
         }
+        let Some(position) = partition.position() else {
+            let live = block(a.whole(components[0]))?.into_iter().collect();
+            return Ok((partition, live, lone));
+        };
         let cut = |vertices: &&[I]| block(a.component(vertices, position));
         // About `2^PARALLEL_BITS` vertices a task: waking the pool for less costs more than it saves.
-        let work = components
-            .iter()
-            .map(|vertices| vertices.len() as u64)
-            .sum();
+        let work = (partition.n() - lone.len()) as u64;
         let per_task = crate::per_task(components.len(), work, PARALLEL_BITS);
         let blocks: Vec<_> = match per_task < components.len() && rayon::current_num_threads() > 1 {
             true => (components.par_iter())

@@ -371,14 +371,19 @@ fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
 #[case::negative(-1.0)]
 #[case::zero(0.0)]
 fn an_approximate_pivot_scale_not_positive_is_corrupt(#[case] by: f64) {
-    fn scale(v: &mut serde_json::Value, by: f64) {
+    fn scale(v: &mut serde_json::Value, by: f64) -> usize {
         match v {
-            serde_json::Value::Object(map) => map.iter_mut().for_each(|(key, v)| match key {
-                k if k == "pivot_scale" => *v = (v.as_f64().unwrap() * by).into(),
-                _ => scale(v, by),
-            }),
-            serde_json::Value::Array(items) => items.iter_mut().for_each(|v| scale(v, by)),
-            _ => {}
+            serde_json::Value::Object(map) => (map.iter_mut())
+                .map(|(key, v)| match key.as_str() {
+                    "pivot_scale" => {
+                        *v = (v.as_f64().unwrap() * by).into();
+                        1
+                    }
+                    _ => scale(v, by),
+                })
+                .sum(),
+            serde_json::Value::Array(items) => items.iter_mut().map(|v| scale(v, by)).sum(),
+            _ => 0,
         }
     }
     let (a, b): (Vec<u32>, Vec<u32>) = (0..29u32).map(|v| (v, v + 1)).unzip();
@@ -389,7 +394,7 @@ fn an_approximate_pivot_scale_not_positive_is_corrupt(#[case] by: f64) {
     };
     let factor: Factor = factorize_with(path, config).unwrap();
     let mut v = serde_json::to_value(&factor).unwrap();
-    scale(&mut v, by);
+    assert!(scale(&mut v, by) > 0, "the factor stores pivot scales");
     serde_json::from_value::<Factor>(v).expect_err("a pivot scale not positive is corrupt");
 }
 

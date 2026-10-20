@@ -40,7 +40,8 @@ impl<T: Real, I: Index> Sddm<T, I> {
             let total = crate::compensated_sum(s.iter().map(|&s| widen(s)));
             within_band::<T>(total, total + signed.abs_total())
         });
-        let mut rows = SddmRows::with_capacity(2 * n, 2 * signed.nnz() + n);
+        let twists = if twisted { n } else { 0 };
+        let mut rows = SddmRows::with_capacity(2 * n, 2 * signed.nnz() + twists);
         let half = T::one() / (T::one() + T::one());
         for i in 0..n {
             let surplus = grounding.edge(i);
