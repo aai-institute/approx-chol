@@ -28,22 +28,22 @@ pub(super) struct Cholesky<T, I> {
 }
 
 impl<T: Real, I: Index> Cholesky<T, I> {
-    /// Dense up to the config's dimension, else approximate; `scales` is `F` on its vertices, `None` when every `|f|` is `1`.
+    /// Dense up to the config's dimension, else approximate; `factors` is `F` on its vertices, `None` when every `|f|` is `1`.
     pub(super) fn factor(
         sddm: Sddm<T, I>,
         draws: Xoshiro256PlusPlus,
         config: &Config,
-        scales: Option<&[T]>,
+        factors: Option<&[T]>,
     ) -> Self {
         let (sheets, grounded, n) = (sddm.sheets(), sddm.grounded(), sddm.n());
         let (triangular, pinned) = match config.dense(n) {
             true => {
-                let free = pinned(&sddm, scales);
+                let free = pinned(&sddm, factors);
                 (Triangular::Dense(dense::factor(&sddm, free).into()), free)
             }
             false => {
                 // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
-                let last = spans_wide(scales).then(|| pinned(&sddm, scales));
+                let last = spans_wide(factors).then(|| pinned(&sddm, factors));
                 let (steps, last) = approximate::factor(sddm, config.approximate(), draws, last);
                 (Triangular::Approximate(Box::new(steps)), last)
             }
@@ -104,16 +104,16 @@ impl<T: Real, I: Index> Cholesky<T, I> {
 }
 
 /// The slot the solve pins: the ground, else the largest `|f|` on the first sheet, so the gauge's rounding is not amplified by `1/f`.
-fn pinned<T: Real, I: Index>(sddm: &Sddm<T, I>, scales: Option<&[T]>) -> usize {
+fn pinned<T: Real, I: Index>(sddm: &Sddm<T, I>, factors: Option<&[T]>) -> usize {
     match sddm.grounded() {
         true => sddm.n(),
-        false => scales.map_or(sddm.n() - 1, |f| sddm.sheets().count() * largest(f)),
+        false => factors.map_or(sddm.n() - 1, |f| sddm.sheets().count() * largest(f)),
     }
 }
 
 /// Whether `|f|` spans past `1/√ε`, where a solve pinned at a small `|f|` loses more than half its digits.
-fn spans_wide<T: Real>(scales: Option<&[T]>) -> bool {
-    scales.is_some_and(|f| {
+fn spans_wide<T: Real>(factors: Option<&[T]>) -> bool {
+    factors.is_some_and(|f| {
         let (least, most) = (f.iter()).fold((T::infinity(), T::zero()), |(least, most), f| {
             (least.min(f.abs()), most.max(f.abs()))
         });

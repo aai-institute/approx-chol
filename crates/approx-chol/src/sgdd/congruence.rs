@@ -40,8 +40,8 @@ impl<T: Real, I: Index> Restriction<T, I> {
         (local.iter().zip(self.vertices.iter())).for_each(|(&v, &i)| x[i.index()] = v);
     }
 
-    /// `F`'s entries from `from` on, `None` when every `|f|` is `1`.
-    pub(crate) fn scales(&self, from: usize) -> Option<&[T]> {
+    /// `F`'s entries from `from` on, `None` unless scaled, so every `|f|` is `1`.
+    pub(crate) fn scaled_factors(&self, from: usize) -> Option<&[T]> {
         match &self.congruence {
             Congruence::Scaled(scales) => Some(&scales.factors[from..]),
             _ => None,
