@@ -2,7 +2,7 @@
 
 use num_traits::PrimInt;
 
-use super::{index, length, Column, ViewError, Weighting};
+use super::{check, index, length, Column, ViewError, Weighting};
 use crate::{Index, Real};
 
 /// `W`, one nonnegative entry per column of `V`, checked once so every view over the same columns can share it.
@@ -17,22 +17,19 @@ impl<'a, T: Real> Weights<'a, T> {
 
     /// `W = diag(w)`; each `w` finite and nonnegative.
     pub fn of(w: &'a [T]) -> Result<Self, ViewError> {
-        check(w, |w| w.is_finite() && w >= T::zero())?;
+        check(w, |w| w.is_finite() && w >= T::zero(), weight)?;
         Ok(Self(Weighting::Of(w)))
     }
 
     /// `W = diag(s²)`, for a caller that keeps square roots; each `s` finite.
     pub fn sqrt_of(s: &'a [T]) -> Result<Self, ViewError> {
-        check(s, |s| s.is_finite())?;
+        check(s, |s| s.is_finite(), weight)?;
         Ok(Self(Weighting::SqrtOf(s)))
     }
 }
 
-fn check<T: Real>(entries: &[T], valid: fn(T) -> bool) -> Result<(), ViewError> {
-    match entries.iter().position(|&x| !valid(x)) {
-        Some(column) => Err(ViewError::InvalidWeight { column }),
-        None => Ok(()),
-    }
+fn weight(column: usize) -> ViewError {
+    ViewError::InvalidWeight { column }
 }
 
 /// Edge `k` joins `a[k]` and `b[k]` under `weights`; the view fixes the numbering and the signs.

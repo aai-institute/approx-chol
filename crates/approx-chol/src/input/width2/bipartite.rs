@@ -4,7 +4,7 @@ use num_traits::PrimInt;
 
 use super::edges::{Edges, Weights};
 use super::gram::{Bipartite, BipartiteEnds, Gram, One, Values};
-use super::{check_diagonal, length, ViewError};
+use super::{length, IntoColumns, ViewError};
 use crate::Real;
 
 /// One side of `V`, with at most one nonzero per column: `values[k]` at `rows[k]`, `1` for `None`.
@@ -30,11 +30,9 @@ impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
 /// `A = V W Vᵀ + diag(d)` with `V = [V_l; V_r]`, both width 1 on disjoint rows, left rows numbered first.
 #[derive(Clone, Copy, Debug)]
 pub struct BipartiteGram<'a, T, I = u32> {
-    n_left: usize,
-    edges: Edges<'a, T, I>,
+    /// The same columns with both sides' values `1`.
+    incidence: Gram<'a, T, I, Bipartite, One, One>,
     values: [Option<&'a [T]>; 2],
-    n: usize,
-    diagonal: Option<&'a [T]>,
 }
 
 impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
@@ -45,45 +43,30 @@ impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
         weights: Weights<'a, T>,
     ) -> Result<Self, ViewError> {
         let edges = Edges::new(left.rows, right.rows, weights)?;
-        let count = left.n.saturating_add(right.n);
+        let (n, graph) = (left.n.saturating_add(right.n), Bipartite { n_left: left.n });
         Ok(Self {
-            n_left: left.n,
-            edges,
+            incidence: Gram::new(n, graph, edges, One, One, None),
             values: [left.values, right.values],
-            n: count,
-            diagonal: None,
         })
     }
 
     /// `V W Vᵀ + diag(d)`, one finite nonnegative `d_i` per vertex, left rows first.
     pub fn with_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
-        check_diagonal(self.n, diagonal)?;
-        Ok(Self {
-            diagonal: Some(diagonal),
-            ..self
-        })
+        let incidence = self.incidence.with_diagonal(diagonal)?;
+        Ok(Self { incidence, ..self })
     }
 
     pub(crate) fn n(&self) -> usize {
-        self.n
+        self.incidence.n()
     }
 
     pub(crate) fn gram(self) -> BipartiteEnds<'a, T, I> {
-        let graph = Bipartite {
-            n_left: self.n_left,
-        };
-        let (n, edges, d) = (self.n, self.edges, self.diagonal);
+        let v = self.incidence;
         match self.values {
-            [None, None] => BipartiteEnds::Incidence(Gram::new(n, graph, edges, One, One, d)),
-            [Some(x), None] => {
-                BipartiteEnds::LeftValues(Gram::new(n, graph, edges, Values(x), One, d))
-            }
-            [None, Some(y)] => {
-                BipartiteEnds::RightValues(Gram::new(n, graph, edges, One, Values(y), d))
-            }
-            [Some(x), Some(y)] => {
-                BipartiteEnds::Values(Gram::new(n, graph, edges, Values(x), Values(y), d))
-            }
+            [None, None] => BipartiteEnds::Incidence(v),
+            [Some(x), None] => BipartiteEnds::LeftValues(v.with_ends(Values(x), One)),
+            [None, Some(y)] => BipartiteEnds::RightValues(v.with_ends(One, Values(y))),
+            [Some(x), Some(y)] => BipartiteEnds::Values(v.with_ends(Values(x), Values(y))),
         }
     }
 }

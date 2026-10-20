@@ -9,14 +9,19 @@ use crate::sgdd::Sgdd;
 use crate::{Index, Real};
 
 impl<T: Real, I: Index> Sgdd<T, I> {
-    /// `V` an incidence matrix, so dominant by shape: `read` names the fold its columns were read under, else the signs are searched.
+    /// `V` an incidence matrix, so dominant by shape: a fold its shape fixes is read into the cells, else the signs are searched.
     pub(super) fn from_incidence<J: PrimInt, G: Shape, A: End<T>, B: End<T>>(
         v: Gram<'_, T, J, G, A, B>,
-        read: Option<Fold>,
     ) -> Result<Self, ReduceError> {
-        assemble_incidence(v)?
+        let fold = v.fold();
+        let cells = match fold {
+            // Read negated, the head's part folds every cell as it is summed.
+            Some(Fold::NegatedHead) => assemble_incidence(v.negated_head())?,
+            _ => assemble_incidence(v)?,
+        };
+        cells
             .extract(|(vertices, off_diagonal, grounding)| {
-                let congruence = match read {
+                let congruence = match fold {
                     Some(Fold::Identity) => Congruence::Identity,
                     Some(Fold::NegatedHead) => Congruence::NegateFrom(off_diagonal.stored().1),
                     None => {

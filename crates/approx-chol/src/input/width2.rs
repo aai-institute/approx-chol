@@ -70,7 +70,7 @@ impl core::fmt::Display for ViewError {
 
 impl std::error::Error for ViewError {}
 
-/// `A = Σ_k w_k x_k x_kᵀ`, each `x_k` a column of `V` with at most two nonzeros.
+/// `V W Vᵀ = Σ_k w_k x_k x_kᵀ`, each `x_k` a column of `V` with at most two nonzeros; `σ` is never a column.
 pub(crate) trait IntoColumns<T: Real>: Copy {
     /// Dimension of `A`, not the column count.
     fn n(&self) -> usize;
@@ -136,12 +136,7 @@ impl<T: Real> Weighting<T> {
 
 /// `A = V W Vᵀ`, `V` with at most two nonzeros per column: `x[k]` at `a[k]`, `y[k]` at `b[k] ≠ a[k]`.
 #[derive(Clone, Copy, Debug)]
-pub struct FactorWidth2<'a, T, I = u32> {
-    n: usize,
-    edges: Edges<'a, T, I>,
-    values: [&'a [T]; 2],
-    diagonal: Option<&'a [T]>,
-}
+pub struct FactorWidth2<'a, T, I = u32>(Gram<'a, T, I, General, Values<'a, T>, Values<'a, T>>);
 
 impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
     /// `n` vertices; lengths and `a[k] ≠ b[k] < n` are checked, so a zero value leaves one nonzero.
@@ -158,37 +153,27 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         }
         let edges = Edges::new(a, b, weights)?;
         check_ends(n, a, b)?;
-        Ok(Self {
+        Ok(Self(Gram::new(
             n,
+            General,
             edges,
-            values: [x, y],
-            diagonal: None,
-        })
+            Values(x),
+            Values(y),
+            None,
+        )))
     }
 
     /// `V W Vᵀ + diag(d)`, one finite nonnegative `d_i` per vertex.
     pub fn with_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
-        check_diagonal(self.n, diagonal)?;
-        Ok(Self {
-            diagonal: Some(diagonal),
-            ..self
-        })
+        self.0.with_diagonal(diagonal).map(Self)
     }
 
     pub(crate) fn n(&self) -> usize {
-        self.n
+        self.0.n()
     }
 
     pub(crate) fn gram(self) -> Gram<'a, T, I, General, Values<'a, T>, Values<'a, T>> {
-        let [x, y] = self.values;
-        Gram::new(
-            self.n,
-            General,
-            self.edges,
-            Values(x),
-            Values(y),
-            self.diagonal,
-        )
+        self.0
     }
 }
 
@@ -200,12 +185,14 @@ fn length(expected: usize, found: usize) -> Result<(), ViewError> {
     }
 }
 
-/// One finite nonnegative entry per vertex.
-fn check_diagonal<T: Real>(n: usize, diagonal: &[T]) -> Result<(), ViewError> {
-    length(n, diagonal.len())?;
-    let valid = |d: &T| d.is_finite() && *d >= T::zero();
-    match diagonal.iter().position(|d| !valid(d)) {
-        Some(vertex) => Err(ViewError::InvalidDiagonal { vertex }),
+/// The first entry `valid` rejects, reported by `error` at its index.
+fn check<T: Real>(
+    entries: &[T],
+    valid: fn(T) -> bool,
+    error: fn(usize) -> ViewError,
+) -> Result<(), ViewError> {
+    match entries.iter().position(|&x| !valid(x)) {
+        Some(at) => Err(error(at)),
         None => Ok(()),
     }
 }

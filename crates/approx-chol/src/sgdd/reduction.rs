@@ -10,7 +10,7 @@ use super::congruence::{Congruence, ScaledFactors};
 use super::decomposition::{of_csr, of_upper, Cells, Partitioned, Shape};
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
 use super::Sgdd;
-use crate::input::{BipartiteEnds, Canonical, End, Fold, Gram, Input};
+use crate::input::{BipartiteEnds, Canonical, End, Gram, Input};
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, widen, Error, Index, Real};
 
@@ -36,19 +36,14 @@ impl<T: Real, I: Index> Sgdd<T, I> {
         })
     }
 
-    /// An incidence `V` reads the fold its shape fixes, the head negated when that folds it; values are scaled under `policy`.
+    /// An incidence `V` is dominant by shape; values are scaled under `policy`.
     fn from_gram<J: PrimInt, G: Shape, A: End<T>, B: End<T>>(
         v: Gram<'_, T, J, G, A, B>,
         policy: &ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        if !v.is_incidence() {
-            return Self::from_values(v, policy);
-        }
-        match v.fold() {
-            Some(Fold::NegatedHead) => {
-                Self::from_incidence(v.negated_head(), Some(Fold::NegatedHead))
-            }
-            fold => Self::from_incidence(v, fold),
+        match v.is_incidence() {
+            true => Self::from_incidence(v),
+            false => Self::from_values(v, policy),
         }
     }
 }

@@ -3,7 +3,7 @@
 use num_traits::PrimInt;
 
 use super::edges::Edges;
-use super::{Column, IntoColumns};
+use super::{check, length, Column, IntoColumns, ViewError};
 use crate::{Index, Real};
 
 /// What every entry of `V` at one end is.
@@ -198,16 +198,39 @@ impl<'a, T: Real, I: PrimInt, G: Graph, A: End<T>, B: End<T>> Gram<'a, T, I, G, 
         }
     }
 
-    /// The same columns with the head negated: `S A S` for `S` negating the head's part.
-    pub(crate) fn negated_head(self) -> Gram<'a, T, I, G, A, Negated<B>> {
+    /// `A + diag(σ)`, one finite nonnegative `σ_i` per vertex.
+    pub(super) fn with_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
+        length(self.n, diagonal.len())?;
+        let valid = |d: T| d.is_finite() && d >= T::zero();
+        check(diagonal, valid, |vertex| ViewError::InvalidDiagonal {
+            vertex,
+        })?;
+        Ok(Self {
+            diagonal: Some(diagonal),
+            ..self
+        })
+    }
+
+    /// The same columns and diagonal, their ends read as `tail` and `head`.
+    pub(super) fn with_ends<C: End<T>, D: End<T>>(
+        self,
+        tail: C,
+        head: D,
+    ) -> Gram<'a, T, I, G, C, D> {
         Gram {
             n: self.n,
             graph: self.graph,
             edges: self.edges,
-            tail: self.tail,
-            head: Negated(self.head),
+            tail,
+            head,
             diagonal: self.diagonal,
         }
+    }
+
+    /// The same columns with the head negated: `S A S` for `S` negating the head's part.
+    pub(crate) fn negated_head(self) -> Gram<'a, T, I, G, A, Negated<B>> {
+        let head = Negated(self.head);
+        self.with_ends(self.tail, head)
     }
 }
 
