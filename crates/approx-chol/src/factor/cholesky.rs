@@ -43,7 +43,8 @@ impl<T: Real, I: Index> Cholesky<T, I> {
             }
             false => {
                 // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
-                let pin = spans_wide(factors).then(|| pinned(&sddm, factors));
+                let pin =
+                    (spans_wide(factors) || grounds_wide(&sddm)).then(|| pinned(&sddm, factors));
                 let copies = multiplicity(config.split_merge);
                 let (steps, pin) = approximate::factor(sddm, copies, draws, pin);
                 (Triangular::Approximate(Box::new(steps)), pin)
@@ -120,6 +121,20 @@ fn spans_wide<T: Real>(factors: Option<&[T]>) -> bool {
         });
         least < most * T::epsilon().sqrt()
     })
+}
+
+/// Whether a grounded sheet's heaviest weight passes `1/ε` times its lightest edge: a sink behind that edge divides the ground's `−Σb` rounding by it.
+fn grounds_wide<T: Real, I: Index>(sddm: &Sddm<T, I>) -> bool {
+    let (n, mut least, mut most) = (sddm.n(), T::infinity(), T::zero());
+    if sddm.grounded() && sddm.sheets() == Sheets::One {
+        sddm.grounded_edges(|_, j, w| {
+            most = most.max(w);
+            if j.index() < n {
+                least = least.min(w);
+            }
+        });
+    }
+    least < most * T::epsilon()
 }
 
 /// The triangular factor, dense or approximate.
