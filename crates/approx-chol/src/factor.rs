@@ -340,7 +340,7 @@ impl<T: Real, I: Index> Block<T, I> {
             restriction,
             elimination,
             cholesky,
-            report: report.map(Box::new),
+            report,
         }
     }
 
