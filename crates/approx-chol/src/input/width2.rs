@@ -10,6 +10,7 @@ use num_traits::PrimInt;
 use super::index;
 use crate::widen;
 use crate::{Index, Real};
+use edges::{Edges, Weights};
 
 /// Why a view's `new` rejected its slices.
 #[non_exhaustive]
@@ -133,32 +134,32 @@ impl<T: Real> Weighting<T> {
     }
 }
 
-/// `V` with at most two nonzeros per column: `x[k]` at `a[k]`, `y[k]` at `b[k] ≠ a[k]`.
+/// `A = V W Vᵀ`, `V` with at most two nonzeros per column: `x[k]` at `a[k]`, `y[k]` at `b[k] ≠ a[k]`.
 #[derive(Clone, Copy, Debug)]
 pub struct FactorWidth2<'a, T, I = u32> {
     n: usize,
-    a: &'a [I],
-    b: &'a [I],
+    edges: Edges<'a, T, I>,
     values: [&'a [T]; 2],
 }
 
 impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
-    /// `n` vertices; lengths and `a[k] ≠ b[k] < n` are checked, so a zero value leaves one nonzero.
+    /// `n` vertices; lengths, weights and `a[k] ≠ b[k] < n` are checked, so a zero value leaves one nonzero.
     pub fn new(
         n: usize,
         a: &'a [I],
         b: &'a [I],
         x: &'a [T],
         y: &'a [T],
+        weights: Weights<'a, T>,
     ) -> Result<Self, ViewError> {
-        for found in [b.len(), x.len(), y.len()] {
+        for found in [x.len(), y.len()] {
             length(a.len(), found)?;
         }
+        let edges = Edges::new(a, b, weights)?;
         check_ends(n, a, b)?;
         Ok(Self {
             n,
-            a,
-            b,
+            edges,
             values: [x, y],
         })
     }
@@ -191,16 +192,8 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for FactorWidth2<'_, T, I> {
         self.n
     }
 
-    fn for_each_column<S: Index>(self, mut visit: impl FnMut(Column<T, S>)) {
-        let [v_a, v_b] = self.values;
-        for (k, (a, b)) in self.a.iter().zip(self.b).enumerate() {
-            visit(Column {
-                a: S::from_index(index(*a)),
-                b: S::from_index(index(*b)),
-                v_a: v_a[k],
-                v_b: v_b[k],
-                weight: Weighting::Unit,
-            });
-        }
+    fn for_each_column<S: Index>(self, visit: impl FnMut(Column<T, S>)) {
+        let [x, y] = self.values;
+        self.edges.for_each_column(0, |k| x[k], |k| y[k], visit)
     }
 }

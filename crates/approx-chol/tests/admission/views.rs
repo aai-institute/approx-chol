@@ -173,7 +173,7 @@ fn factor_width_1_new_rejects_mismatched_values_and_rows_past_n() {
 }
 
 fn gram(a: &[u32], b: &[u32], x: &[f64], y: &[f64]) -> Option<ViewError> {
-    FactorWidth2::new(3, a, b, x, y).err()
+    FactorWidth2::new(3, a, b, x, y, Weights::unit()).err()
 }
 
 #[rstest]
@@ -203,7 +203,7 @@ fn factor_width_2_new_rejects_mismatched_lengths_and_bad_ends_at_their_column(
 #[case::past_a_quarter_of_the_maximum(f64::MAX)]
 fn an_out_of_range_loading_is_rejected_at_its_vertex(#[case] value: f64) {
     let (x, y) = ([1.0, value], [-1.0, -1.0]);
-    let gram = FactorWidth2::new(3, &PATH_A, &PATH_B, &x, &y).unwrap();
+    let gram = FactorWidth2::new(3, &PATH_A, &PATH_B, &x, &y, Weights::unit()).unwrap();
     let error = factorize(gram).expect_err("loading out of range");
     assert_names_a_defect(error, &out_of_range(&[1, 2]));
 }
@@ -274,16 +274,37 @@ fn a_gram_loading_whose_square_underflows_beside_an_in_range_column_factors_and_
     #[case] z: f64,
 ) {
     let (x, y) = ([z, 1.0], [-1.0, -1.0]);
-    let gram = FactorWidth2::new(3, &[0u32, 0], &PATH_B, &x, &y).unwrap();
+    let gram = FactorWidth2::new(3, &[0u32, 0], &PATH_B, &x, &y, Weights::unit()).unwrap();
     let factor = factorize(gram).expect("every diagonal and cell is in range");
     solve_residual(&factor, &matrix(3, &[0, 0], &PATH_B, &x, &y));
+}
+
+#[test]
+fn a_weighted_gram_solves_v_w_vt() {
+    let (x, y, w) = ([1.0, 2.0], [-1.0, 0.5], [3.0, 0.5]);
+    let gram = FactorWidth2::new(3, &PATH_A, &PATH_B, &x, &y, Weights::of(&w).unwrap()).unwrap();
+    let factor = factorize(gram).expect("a weighted Gram");
+    let root = w.map(f64::sqrt);
+    let (x, y) = (
+        [root[0] * x[0], root[1] * x[1]],
+        [root[0] * y[0], root[1] * y[1]],
+    );
+    solve_residual(&factor, &matrix(3, &PATH_A, &PATH_B, &x, &y));
+}
+
+#[test]
+fn factor_width_2_rejects_weights_of_another_column_count() {
+    let (x, y, w) = ([1.0, 1.0], [-1.0, -1.0], [1.0]);
+    let weights = Weights::of(&w).unwrap();
+    let error = FactorWidth2::new(3, &PATH_A, &PATH_B, &x, &y, weights).expect_err("weights");
+    assert_eq!(error, two_edges_but(1));
 }
 
 /// Both vertices are in range, but their cell's product underflows below the floor.
 #[test]
 fn a_gram_cell_whose_product_underflows_is_out_of_range() {
     let (x, y) = ([1e-170, 1.0, 1.0], [1e-170, -1.0, -1.0]);
-    let gram = FactorWidth2::new(4, &[0u32, 0, 1], &[1, 2, 3], &x, &y).unwrap();
+    let gram = FactorWidth2::new(4, &[0u32, 0, 1], &[1, 2, 3], &x, &y, Weights::unit()).unwrap();
     let error = factorize(gram).expect_err("cell below the floor");
     assert_names_a_defect(error, &out_of_range(&[0, 1]));
 }
@@ -301,7 +322,7 @@ fn a_bipartite_vertex_whose_every_term_underflows_is_out_of_range() {
 #[test]
 fn a_gram_vertex_whose_every_term_underflows_is_out_of_range() {
     let (x, y) = ([1e-170, 1.0], [1e-170, -1.0]);
-    let gram = FactorWidth2::new(4, &[0u32, 2], &[1, 3], &x, &y).unwrap();
+    let gram = FactorWidth2::new(4, &[0u32, 2], &[1, 3], &x, &y, Weights::unit()).unwrap();
     let error = factorize(gram).expect_err("every term underflows");
     assert_names_a_defect(error, &out_of_range(&[0, 1]));
 }

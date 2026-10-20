@@ -218,7 +218,8 @@ impl Entry {
                     x.push(cast(g.sqrt()));
                     y.push(T::zero());
                 }
-                let v = FactorWidth2::new(n, &a, &b, &x, &y).expect("valid factor");
+                let v =
+                    FactorWidth2::new(n, &a, &b, &x, &y, Weights::unit()).expect("valid factor");
                 factorize_with(v, config).unwrap_or_else(|error| rejected(&error))
             }
             Entry::BipartiteGram => {

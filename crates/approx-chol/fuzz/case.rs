@@ -44,6 +44,7 @@ pub enum View<T> {
         b: Vec<u32>,
         x: Vec<T>,
         y: Vec<T>,
+        weights: Weighting<T>,
     },
     BipartiteGram {
         left: Side<T>,
@@ -148,8 +149,16 @@ impl<T: Real> Case<T> {
                 let csr = UpperCsrRef::new(&r.row_ptrs, &r.columns, &r.values, r.n.into())?;
                 factorize_with(csr, config)?
             }
-            View::Gram { n, a, b, x, y } => {
-                factorize_with(FactorWidth2::new((*n).into(), a, b, x, y)?, config)?
+            View::Gram {
+                n,
+                a,
+                b,
+                x,
+                y,
+                weights,
+            } => {
+                let v = FactorWidth2::new((*n).into(), a, b, x, y, weights.weights()?)?;
+                factorize_with(v, config)?
             }
             View::BipartiteGram {
                 left,

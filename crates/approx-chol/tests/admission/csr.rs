@@ -238,7 +238,7 @@ fn in_class_input_is_admitted_on_both_paths(
         .expect("signed graph")
 )]
 #[case::gram(
-    factorize(FactorWidth2::<f64>::new(0, &[], &[], &[], &[]).unwrap()).expect("Gram")
+    factorize(FactorWidth2::<f64>::new(0, &[], &[], &[], &[], Weights::unit()).unwrap()).expect("Gram")
 )]
 #[case::bipartite_gram(factorize(
     BipartiteGram::new(

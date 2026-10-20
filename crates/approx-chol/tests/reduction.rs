@@ -74,7 +74,7 @@ fn csr_and_upper_share_reduction_and_solve_bits() {
 fn gram_separates_folded_scaled_and_frustrated_components() {
     let (a, b) = ([0, 1, 3, 4, 3], [1, 2, 4, 5, 5]);
     let (x, y) = ([1.3, 2.7, 1.0, 1.0, 1.0], [-2.7, -4.1, 1.0, 1.0, 1.0]);
-    let gram = FactorWidth2::new(7, &a, &b, &x, &y).unwrap();
+    let gram = FactorWidth2::new(7, &a, &b, &x, &y, Weights::unit()).unwrap();
     let reduced = factorize_with(gram, exact(ScalingPolicy::new(0.0, 0).unwrap())).unwrap();
     assert_eq!(floats(&reduced), [true, false]);
     assert!(reduced
@@ -135,7 +135,7 @@ fn bipartite_incidence_and_valued_grams_preserve_both_sides() {
 fn exhausted_scaling_reports_on_grams_and_rows() {
     let (a, b) = ([0, 1, 0], [1, 2, 2]);
     let (x, y) = ([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
-    let gram = FactorWidth2::new(3, &a, &b, &x, &y).unwrap();
+    let gram = FactorWidth2::new(3, &a, &b, &x, &y, Weights::unit()).unwrap();
     let policy = ScalingPolicy::new(0.0, 0).unwrap();
     let factor: Factor = factorize_with(gram, exact(policy)).unwrap();
     assert!(factor.blocks()[0].scaling_report().is_some());
