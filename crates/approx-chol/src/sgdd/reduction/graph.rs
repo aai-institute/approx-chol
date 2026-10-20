@@ -1,6 +1,6 @@
 use num_traits::PrimInt;
 
-use super::Congruent;
+use super::{folding_signs, Congruent};
 use crate::input::{BipartiteLaplacian, Laplacian, SignedGraph};
 use crate::sgdd::block::{Balance, ReduceError};
 use crate::sgdd::congruence::Congruence;
@@ -43,14 +43,14 @@ impl<T: Real, I: Index> Sgdd<T, I> {
         graph: SignedGraph<'_, T, J>,
     ) -> Result<Self, ReduceError> {
         assemble_signed(graph)?
-            .extract(|(vertices, off_diagonal, grounding)| {
-                match super::folding_signs(&off_diagonal) {
+            .extract(
+                |(vertices, off_diagonal, grounding)| match folding_signs(&off_diagonal) {
                     Some(signs) => Congruent::new(vertices, off_diagonal, signs)
                         .block(Balance::Balanced(grounding)),
                     None => Congruent::new(vertices, off_diagonal, Congruence::Identity)
                         .block(Balance::Frustrated(grounding)),
-                }
-            })
+                },
+            )
             .map(Sgdd::new)
     }
 }

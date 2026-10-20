@@ -163,6 +163,11 @@ fn an_elimination_keeping_at_most_its_rows_decodes_up_to_the_cut(#[case] rows: u
 }
 
 /// A Laplacian on `0..4` beside two zero vertices, so the factor carries dead vertices.
+fn with_isolated_vertex() -> Factor {
+    let edge = Laplacian::new(3, &[0u32], &[1], Weights::unit()).unwrap();
+    factorize_with(edge.grounded(&[1.0, 0.0, 2.0]).unwrap(), Config::default()).unwrap()
+}
+
 fn with_dead_vertices() -> Factor {
     let laplacian = Laplacian::new(6, &[0u32, 1, 2], &[1u32, 2, 3], Weights::unit()).unwrap();
     factorize_with(laplacian, Config::default()).unwrap()
@@ -383,9 +388,7 @@ fn an_approximate_pivot_scale_not_positive_is_corrupt(#[case] by: f64) {
 /// A factor holding an isolated vertex reads back from a self-describing format too.
 #[test]
 fn an_isolated_vertex_round_trips_through_json() {
-    let edge = Laplacian::new(3, &[0u32], &[1], Weights::unit()).unwrap();
-    let grounded = edge.grounded(&[1.0, 0.0, 2.0]).unwrap();
-    let factor = factorize_with(grounded, Config::default()).unwrap();
+    let factor = with_isolated_vertex();
     let json = serde_json::to_string(&factor).unwrap();
     let back: Factor = serde_json::from_str(&json).unwrap();
     let b = [1.0, 2.0, 3.0];
@@ -426,22 +429,14 @@ fn an_approximate_step_length_past_its_neighbors_is_corrupt() {
     postcard::from_bytes::<BlockFactor>(&bytes).expect_err("a step past its neighbors is corrupt");
 }
 
-/// An isolated vertex's inverse pivot outside what a stored pivot inverts to is corrupt.
+/// An isolated vertex's inverse pivot, `0.5` here, scaled outside what a stored pivot inverts to is corrupt.
 #[rstest]
 #[case::zero(0.0)]
-#[case::negative(-0.5)]
-#[case::subnormal(5e-324)]
+#[case::negative(-1.0)]
+#[case::subnormal(1e-323)]
 #[case::past_any_pivot(1e308)]
-fn an_isolated_inverse_pivot_out_of_range_is_corrupt(#[case] inverse: f64) {
-    let edge = Laplacian::new(3, &[0u32], &[1], Weights::unit()).unwrap();
-    let factor =
-        factorize_with(edge.grounded(&[1.0, 0.0, 2.0]).unwrap(), Config::default()).unwrap();
-    let mut v = serde_json::to_value(&factor).unwrap();
-    serde_json::from_value::<Factor>(v.clone()).expect("a stored isolated vertex decodes");
-    let mut forge = |x: &mut serde_json::Value| *x = inverse.into();
-    assert!(
-        edit(&mut v, "/Isolated/inverse_pivot", &mut forge) > 0,
-        "the factor stores one"
-    );
-    serde_json::from_value::<Factor>(v).expect_err("its inverse pivot is out of range");
+fn an_isolated_inverse_pivot_out_of_range_is_corrupt(#[case] by: f64) {
+    let factor = with_isolated_vertex();
+    decode_scaled(&factor, "/Isolated/inverse_pivot", by)
+        .expect_err("its inverse pivot is out of range");
 }

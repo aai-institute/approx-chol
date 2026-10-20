@@ -159,6 +159,12 @@ fn diagonal_in_range<T: Real>(d: T) -> bool {
     in_range(d) && d <= T::max_value() / (T::one() + T::one() + T::one() + T::one())
 }
 
+/// `1/d` for a `d` that is [`diagonal_in_range`]: normal, and at most `ε/MIN_POSITIVE`.
+#[cfg(feature = "serde")]
+fn inverse_pivot_in_range<T: Real>(inverse: T) -> bool {
+    inverse >= T::min_positive_value() && inverse <= T::epsilon() / T::min_positive_value()
+}
+
 /// `Σ x` with each addition's rounding carried (Knuth's TwoSum): within `ε` of exact for nonnegative terms.
 fn compensated_sum(terms: impl Iterator<Item = f64>) -> f64 {
     let (sum, carry) = terms.fold((0.0f64, 0.0f64), |(sum, carry), x| {
