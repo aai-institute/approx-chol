@@ -112,7 +112,7 @@ impl<T: Real> Factor<T> {
 
     fn new(n: usize, blocks: Vec<BlockFactor<T>>, dead: Box<[usize]>) -> Self {
         let scratch_len = (blocks.iter())
-            .map(|block| block.vertices().len() + block.scratch_len())
+            .map(|block| on!(block, b => b.global_scratch_len()))
             .max()
             .unwrap_or(0);
         Self {
@@ -187,7 +187,7 @@ use on;
 #[derive(Clone, Debug)]
 pub struct BlockFactor<T = f64>(Storage<T>);
 
-/// The block's vertex indices in `u32` when its factor's vertices fit, else in `u64`.
+/// A block's factor with its vertex indices in `u32` when they fit, else in `u64`; an isolated vertex stores only its inverse pivot.
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -370,6 +370,10 @@ impl<T: Real, I: Index> Block<T, I> {
         eliminated + self.cholesky.n_steps()
     }
 
+    fn global_scratch_len(&self) -> usize {
+        self.vertices().len() + self.scratch_len()
+    }
+
     /// Solves the block's restriction of `x` in place, through `scratch` of its vertices plus its Cholesky's.
     fn solve_global(&self, x: &mut [T], scratch: &mut [T]) {
         let (local, rest) = scratch.split_at_mut(self.vertices().len());
@@ -396,7 +400,6 @@ impl<T: Real, I: Index> Block<T, I> {
 
 /// A vertex no entry couples: its whole factor is `1/σ`, so it holds no heap part.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub(crate) struct Isolated<T> {
     vertex: u64,
     inverse_pivot: T,
@@ -430,6 +433,10 @@ impl<T: Real> Isolated<T> {
         0
     }
 
+    fn global_scratch_len(&self) -> usize {
+        0
+    }
+
     fn solve_global(&self, x: &mut [T], _: &mut [T]) {
         let v = &mut x[self.vertex as usize];
         *v = *v * self.inverse_pivot;
@@ -437,6 +444,13 @@ impl<T: Real> Isolated<T> {
 
     fn solve_unchecked(&self, x: &mut [T], _: &mut [T], _: InnerParallelism) {
         x[0] = x[0] * self.inverse_pivot;
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize> serde::Serialize for Isolated<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        (&self.vertex, &self.inverse_pivot).serialize(serializer)
     }
 }
 
