@@ -8,7 +8,7 @@ use num_traits::PrimInt;
 
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
 use super::congruence::{Congruence, Scales};
-use super::decomposition::{Cells, Components};
+use super::decomposition::Cells;
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
 use super::signature;
 use crate::input::Input;
@@ -30,12 +30,6 @@ impl<T: Real, I: Index> Sgdd<T, I> {
             Input::BipartiteGram(gram) => Self::from_bipartite_gram(gram, policy)?,
         })
     }
-}
-
-fn into_sgdd<T: Real, I: Index>(
-    (partition, live, lone): Components<IrreducibleBlock<T, I>, I, T>,
-) -> Sgdd<T, I> {
-    Sgdd::new(partition.n(), live, lone)
 }
 
 /// One block `A_c` as the input gave it, with its rows' `Σ_j |a_ij|` and entry counts.

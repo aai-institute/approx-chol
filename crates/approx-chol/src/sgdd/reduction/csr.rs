@@ -1,6 +1,6 @@
 use num_traits::PrimInt;
 
-use super::{into_sgdd, Signed, SymmetricBlock};
+use super::{Signed, SymmetricBlock};
 use crate::input::{Canonical, CsrRef, UpperCsrRef};
 use crate::sgdd::block::{Balance, ReduceError, Sgdd};
 use crate::sgdd::decomposition::{of_csr, of_upper, Partitioned};
@@ -25,7 +25,7 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
             };
             Ok(block)
         })
-        .map(into_sgdd)
+        .map(Sgdd::new)
     }
 }
 

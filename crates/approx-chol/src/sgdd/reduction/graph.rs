@@ -1,6 +1,6 @@
 use num_traits::PrimInt;
 
-use super::{into_sgdd, Congruent};
+use super::Congruent;
 use crate::input::{BipartiteLaplacian, Laplacian, SignedGraph};
 use crate::sgdd::block::{Balance, ReduceError, Sgdd};
 use crate::sgdd::congruence::Congruence;
@@ -16,7 +16,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
                 let m = Congruent::new(vertices, off_diagonal, Congruence::Identity);
                 m.block(Balance::Balanced(grounding))
             })
-            .map(into_sgdd)
+            .map(Sgdd::new)
     }
 
     /// `M`, a bipartite Laplacian, with the kept side negated folding `A` into it.
@@ -33,7 +33,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
                 };
                 m.block(Balance::Balanced(grounding))
             })
-            .map(into_sgdd)
+            .map(Sgdd::new)
     }
 
     /// Dominant by shape, each end's surplus its pairs' cancelled mass; its signs are searched.
@@ -49,6 +49,6 @@ impl<T: Real, I: Index> Sgdd<T, I> {
                         .block(Balance::Frustrated(grounding)),
                 }
             })
-            .map(into_sgdd)
+            .map(Sgdd::new)
     }
 }

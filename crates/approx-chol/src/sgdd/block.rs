@@ -1,6 +1,7 @@
 //! `A` as its reduced irreducible blocks: what the factorization consumes.
 
 use super::congruence::{Congruence, Restriction};
+use super::decomposition::Components;
 use super::scaling::ScalingReport;
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, Index, Real};
@@ -140,7 +141,8 @@ pub struct Sgdd<T = f64, I = u32> {
 }
 
 impl<T: Real, I: Index> Sgdd<T, I> {
-    pub(super) fn new(n: usize, blocks: Vec<IrreducibleBlock<T, I>>, lone: Vec<(I, T)>) -> Self {
+    pub(super) fn new((partition, blocks, lone): Components<IrreducibleBlock<T, I>, I, T>) -> Self {
+        let n = partition.n();
         Self { n, blocks, lone }
     }
 
