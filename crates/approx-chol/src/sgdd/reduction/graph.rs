@@ -5,7 +5,6 @@ use crate::input::{BipartiteLaplacian, Laplacian, SignedGraph};
 use crate::sgdd::block::{Balance, ReduceError};
 use crate::sgdd::congruence::Congruence;
 use crate::sgdd::decomposition::{assemble_bipartite, assemble_laplacian, assemble_signed};
-use crate::sgdd::signature;
 use crate::sgdd::Sgdd;
 use crate::{Index, Real};
 
@@ -45,7 +44,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
     ) -> Result<Self, ReduceError> {
         assemble_signed(graph)?
             .extract(|(vertices, off_diagonal, grounding)| {
-                match signature::folding_signs(&off_diagonal) {
+                match super::folding_signs(&off_diagonal) {
                     Some(signs) => Congruent::new(vertices, off_diagonal, signs)
                         .block(Balance::Balanced(grounding)),
                     None => Congruent::new(vertices, off_diagonal, Congruence::Identity)

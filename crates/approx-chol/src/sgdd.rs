@@ -3,10 +3,8 @@
 mod block;
 mod congruence;
 mod decomposition;
-mod null_vectors;
 mod reduction;
 mod scaling;
-mod signature;
 
 pub use block::ReduceError;
 pub(crate) use block::{Balance, Grounding};
