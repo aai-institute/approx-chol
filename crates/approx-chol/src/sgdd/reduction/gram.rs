@@ -78,9 +78,10 @@ fn ground_or_float<T: Real, I: Index>(
             // `σ_i` is a one-entry column at `i`, so `M` holds it scaled by `f_i²`.
             if let Some(d) = diagonal {
                 let d = widen(d[i]);
+                let scaled = d * (epsilon * f) * f;
                 surplus[i] += d * f * f;
-                ones[c] += d * (epsilon * f) * f;
-                trace[c] += d * (epsilon * f) * f;
+                ones[c] += scaled;
+                trace[c] += scaled;
             }
         }
     }

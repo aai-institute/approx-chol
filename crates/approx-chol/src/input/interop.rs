@@ -1,4 +1,4 @@
-//! [`CsrRef`] views of `sprs` and `faer` matrices, checked square before [`CsrRef::new`]; a CSC matrix is read as its transpose, which a symmetric one equals.
+//! [`CsrRef`] views of `sprs` and `faer` matrices, checked square before [`CsrRef::new`]; a CSC matrix is read as its transpose, which a symmetric one equals, so a storage defect names its column as the row.
 
 #[cfg(feature = "faer")]
 use num_traits::PrimInt;

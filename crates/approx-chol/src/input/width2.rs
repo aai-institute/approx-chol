@@ -144,7 +144,7 @@ pub struct FactorWidth2<'a, T, I = u32> {
 }
 
 impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
-    /// `n` vertices; lengths, weights and `a[k] ≠ b[k] < n` are checked, so a zero value leaves one nonzero.
+    /// `n` vertices; lengths and `a[k] ≠ b[k] < n` are checked, so a zero value leaves one nonzero.
     pub fn new(
         n: usize,
         a: &'a [I],

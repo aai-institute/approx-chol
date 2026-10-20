@@ -112,10 +112,7 @@ where
         )?;
         return dominant(a, &abs, ground.map(Cow::Borrowed));
     }
-    let mut surplus = match ground {
-        Some(g) => g.iter().map(|&g| widen(g)).collect(),
-        None => vec![0.0_f64; v.n()],
-    };
+    let mut surplus = sigma_sums(ground, v.n());
     let a = v.graph().sum(
         v,
         |_| {},
@@ -161,13 +158,18 @@ where
     A: End<T>,
     B: End<T>,
 {
-    let mut sums = match v.diagonal() {
-        Some(d) => d.iter().map(|&d| widen(d)).collect(),
-        None => vec![0.0_f64; v.n()],
-    };
+    let mut sums = sigma_sums(v.diagonal(), v.n());
     let a =
         (v.graph()).sum::<T, I, f64>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
     assembled(a, sums)
+}
+
+/// Each vertex's `σ_i` in `f64`, where its column sums start.
+fn sigma_sums<T: Real>(sigma: Option<&[T]>, n: usize) -> Vec<f64> {
+    match sigma {
+        Some(s) => s.iter().map(|&s| widen(s)).collect(),
+        None => vec![0.0; n],
+    }
 }
 
 /// Adds `w v²` at both ends, so a row of only underflowed terms fails the range screen.
@@ -208,7 +210,7 @@ fn admit<T: Real>(i: usize, x: f64) -> Result<T, ReduceError> {
 /// within's cap on the dense accumulator.
 const DENSE_TABLE_MAX_BYTES: usize = 40_000_000;
 
-/// `pair` sees each summed cell, a cancelled one too.
+/// `pair` sees each cell not [`CellSum::is_empty`].
 fn dense_cross<T: Real, I: Index, C: CellSum>(
     v: impl IntoColumns<T>,
     n_left: usize,
@@ -263,7 +265,7 @@ fn counts<T: Real, I: Index>(
 pub(in crate::sgdd) trait CellSum: Copy + Default {
     fn add(&mut self, x: f64);
     fn value(self) -> f64;
-    /// No term landed, so the cell couples nothing and cancelled nothing.
+    /// Nothing left to report: a plain sum that cancelled is empty too, as only kept masses outlive it.
     fn is_empty(self) -> bool;
 }
 
