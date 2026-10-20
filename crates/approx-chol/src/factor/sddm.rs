@@ -36,9 +36,7 @@ impl<T: Real, I: Index> Sddm<T, I> {
     /// The Gremban cover of signed `M`: a Laplacian on two sheets that acts as `M` on `[z; −z]`.
     pub(super) fn cover(signed: UpperAdjacency<T, I>, grounding: Grounding<T>) -> Self {
         let n = signed.n();
-        let entries: usize = (0..n).map(|i| signed.upper_len(i)).sum();
-        let mut rows = SddmRows::new(2 * n);
-        rows.reserve(2 * n, 2 * entries);
+        let mut rows = SddmRows::with_capacity(2 * n, 2 * signed.nnz());
         for i in 0..n {
             for (j, &a) in signed.upper(i) {
                 rows.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
@@ -108,11 +106,14 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         self.row().add(column, w);
     }
 
-    fn reserve(&mut self, rows: usize, entries: usize) {
-        self.ptrs.reserve_exact(rows);
-        self.ground.reserve_exact(rows);
-        self.indices.reserve_exact(entries);
-        self.values.reserve_exact(entries);
+    /// `new` with room for exactly `n` rows of `entries` in all, when the caller knows them.
+    fn with_capacity(n: usize, entries: usize) -> Self {
+        let mut rows = Self::new(n);
+        rows.ptrs.reserve_exact(n);
+        rows.ground.reserve_exact(n);
+        rows.indices.reserve_exact(entries);
+        rows.values.reserve_exact(entries);
+        rows
     }
 
     fn row(&mut self) -> Row<'_, T, I> {

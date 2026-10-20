@@ -242,6 +242,10 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
         self.rows.row_len(i)
     }
 
+    pub(crate) fn nnz(&self) -> usize {
+        self.rows.nnz()
+    }
+
     /// Row `i`'s neighbors above it.
     pub(crate) fn upper(&self, i: usize) -> impl Iterator<Item = (usize, &T)> {
         self.rows.row(i)
