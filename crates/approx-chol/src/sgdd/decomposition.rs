@@ -252,9 +252,12 @@ where
 }
 
 fn surplus_at<T: Real, I: Index>(surplus: Option<&Cow<'_, [T]>>, vertices: &[I]) -> Grounding<T> {
-    surplus.map_or_else(Grounding::ungrounded, |s| {
-        Grounding::of(vertices.iter().map(|&v| s[v.index()]).collect())
-    })
+    surplus.map_or_else(Grounding::ungrounded, |s| Grounding::of(at(s, vertices)))
+}
+
+/// `values` in `vertices`' order.
+fn at<T: Copy, I: Index>(values: &[T], vertices: &[I]) -> Vec<T> {
+    vertices.iter().map(|&v| values[v.index()]).collect()
 }
 
 /// The biadjacency `C`, cancelled cells dropped: rows are `A`'s left vertices.
@@ -296,13 +299,13 @@ where
 
     fn whole(self, vertices: &[I]) -> Self::Block {
         let (vertices, off_diagonal) = self.adjacency.whole(vertices);
-        let diagonal = vertices.iter().map(|&v| self.diagonal[v.index()]).collect();
+        let diagonal = at(&self.diagonal, &vertices);
         (vertices, off_diagonal, diagonal)
     }
 
     fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
         let (vertices, off_diagonal) = self.adjacency.component(vertices, position);
-        let diagonal = vertices.iter().map(|&v| self.diagonal[v.index()]).collect();
+        let diagonal = at(&self.diagonal, &vertices);
         (vertices, off_diagonal, diagonal)
     }
 }

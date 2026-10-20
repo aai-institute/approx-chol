@@ -66,22 +66,21 @@ fn ground_or_float<T: Real, I: Index>(
     // By vertex: blocks are disjoint, so one slot per vertex holds its block, `f_i` and surplus.
     let mut block_of = vec![I::max_value(); v.n()];
     let mut factor = vec![0.0; v.n()];
-    let mut surplus = vec![0.0f64; v.n()];
-    // `ε·1ᵀM1` and `ε·tr M` per block.
-    let (mut ones, mut trace) = (vec![0.0f64; blocks.len()], vec![0.0f64; blocks.len()]);
-    let epsilon = widen(T::epsilon());
+    let mut sums = OneSums {
+        surplus: vec![0.0; v.n()],
+        ones: vec![0.0; blocks.len()],
+        trace: vec![0.0; blocks.len()],
+        epsilon: widen(T::epsilon()),
+    };
     for (c, block) in blocks.iter().enumerate() {
         for (slot, &vertex) in block.vertices.iter().enumerate() {
             let (i, f) = (vertex.index(), widen(block.congruence.factor(slot)));
             block_of[i] = I::from_index(c);
             factor[i] = f;
-            // `σ_i` is a one-entry column at `i`, so `M` holds it scaled by `f_i²`.
+            // `σ_i` is a one-entry column at `i` under weight `σ_i`.
             if let Some(d) = diagonal {
                 let d = widen(d[i]);
-                let scaled = d * (epsilon * f) * f;
-                surplus[i] += d * f * f;
-                ones[c] += scaled;
-                trace[c] += scaled;
+                sums.end(|x, y| d * x * y, (i, c, f));
             }
         }
     }
@@ -98,24 +97,27 @@ fn ground_or_float<T: Real, I: Index>(
             };
             match (end(column.a, column.v_a), end(column.b, column.v_b)) {
                 (Some((a, c, u_a)), Some((b, c_b, u_b))) if c == c_b => {
-                    let p = u_a + u_b;
-                    surplus[a] += w(u_a, p);
-                    surplus[b] += w(u_b, p);
-                    ones[c] += w(epsilon * p, p);
-                    trace[c] += w(epsilon * u_a, u_a) + w(epsilon * u_b, u_b);
+                    let (p, epsilon) = (u_a + u_b, sums.epsilon);
+                    sums.surplus[a] += w(u_a, p);
+                    sums.surplus[b] += w(u_b, p);
+                    sums.ones[c] += w(epsilon * p, p);
+                    sums.trace[c] += w(epsilon * u_a, u_a) + w(epsilon * u_b, u_b);
                 }
                 // A column straddling blocks keeps only its own end's square.
-                (a, b) => {
-                    for (i, c, u) in [a, b].into_iter().flatten() {
-                        surplus[i] += w(u, u);
-                        ones[c] += w(epsilon * u, u);
-                        trace[c] += w(epsilon * u, u);
-                    }
-                }
+                (a, b) => [a, b]
+                    .into_iter()
+                    .flatten()
+                    .for_each(|end| sums.end(w, end)),
             }
         },
     );
     drop((block_of, factor));
+    let OneSums {
+        surplus,
+        ones,
+        trace,
+        ..
+    } = sums;
     let decided = blocks.into_iter().zip(ones).zip(trace);
     let decide = |((block, ones), trace): ((Congruent<T, I>, f64), f64)| {
         if within_band::<T>(ones, trace) {
@@ -133,6 +135,24 @@ fn ground_or_float<T: Real, I: Index>(
         }
     };
     decided.map(decide).collect()
+}
+
+/// `M·1` per vertex and `ε·1ᵀM1`, `ε·tr M` per block, summed over `V`'s columns.
+struct OneSums {
+    surplus: Vec<f64>,
+    ones: Vec<f64>,
+    trace: Vec<f64>,
+    epsilon: f64,
+}
+
+impl OneSums {
+    /// End `i` of block `c` alone, `u = f_i v_i`: only its square `w u²` reaches `M`.
+    #[inline(always)]
+    fn end(&mut self, w: impl Fn(f64, f64) -> f64, (i, c, u): (usize, usize, f64)) {
+        self.surplus[i] += w(u, u);
+        self.ones[c] += w(self.epsilon * u, u);
+        self.trace[c] += w(self.epsilon * u, u);
+    }
 }
 
 /// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is: one union-find pass; a cycle off by more than `√ε` relative dooms its component.
