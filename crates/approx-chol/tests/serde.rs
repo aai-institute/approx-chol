@@ -1,6 +1,6 @@
 #![cfg(feature = "serde")]
 
-use approx_chol::input::{BipartiteGram, FactorWidth1, Laplacian, SignedGraph, Weights};
+use approx_chol::input::{BipartiteGram, CsrRef, FactorWidth1, Laplacian, SignedGraph, Weights};
 use approx_chol::{
     factorize_with, Backend, BlockFactor, Config, Factor, InnerParallelism, ScalingPolicy,
     SchurMode,
@@ -395,4 +395,26 @@ fn an_isolated_vertex_round_trips_through_json() {
     let back: Factor = serde_json::from_str(&json).unwrap();
     let b = [1.0, 2.0, 3.0];
     assert_eq!(factor.solve(&b).unwrap(), back.solve(&b).unwrap());
+}
+
+/// A forged empty `F` is a decode error, never a panic while its peak is read.
+#[test]
+fn empty_scales_are_corrupt() {
+    fn empty(v: &mut serde_json::Value) -> usize {
+        match v {
+            serde_json::Value::Object(map) => {
+                let own = map
+                    .get_mut("Scaled")
+                    .map(|s| *s = serde_json::json!([]))
+                    .is_some();
+                usize::from(own) + map.values_mut().map(empty).sum::<usize>()
+            }
+            serde_json::Value::Array(items) => items.iter_mut().map(empty).sum(),
+            _ => 0,
+        }
+    }
+    let csr = CsrRef::new(&[0u32, 2, 4], &[0u32, 1, 0, 1], &[1.0, -2.0, -2.0, 5.0], 2).unwrap();
+    let mut v = serde_json::to_value(approx_chol::factorize(csr).unwrap()).unwrap();
+    assert!(empty(&mut v) > 0, "the factor stores scales");
+    serde_json::from_value::<Factor>(v).expect_err("empty scales are corrupt");
 }
