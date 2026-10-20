@@ -4,7 +4,7 @@ use num_traits::PrimInt;
 
 use super::{within_band, Congruent, Signed, SymmetricBlock};
 use crate::input::{BipartiteGram, FactorWidth2, IntoColumns};
-use crate::sgdd::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
+use crate::sgdd::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd, Summands};
 use crate::sgdd::decomposition::{assemble_bipartite_gram, assemble_general, Components};
 use crate::sgdd::null_vectors::null_vectors;
 use crate::sgdd::scaling::{self, ScalingPolicy};
@@ -38,9 +38,18 @@ impl<T: Real, I: Index> Sgdd<T, I> {
 /// Scaled by `V`'s null vectors on demand; folded blocks drop their rows for one pass over `V`.
 fn reduce_gram_blocks<T: Real, I: Index>(
     v: impl IntoColumns<T>,
-    (partition, live, lone): Components<SymmetricBlock<T, I>, I, T>,
+    components: Components<SymmetricBlock<T, I>, I, T>,
     policy: &ScalingPolicy,
 ) -> Result<Sgdd<T, I>, ReduceError> {
+    let Components {
+        partition,
+        summands,
+    } = components;
+    let Summands {
+        blocks: live,
+        lone,
+        dead,
+    } = summands;
     // Built by the first block not already dominant, so a dominant input reads no extra pass.
     let nulls = LazyCell::new(|| null_vectors(v, partition.components()));
     // Doubling, the folded blocks held up to 2x their size beside `live` (+12% peak at 99k blocks).
@@ -61,7 +70,11 @@ fn reduce_gram_blocks<T: Real, I: Index>(
     }
     let mut blocks = ground_or_float(v, folded)?;
     blocks.extend(frustrated);
-    Ok(Sgdd::new((partition, blocks, lone)))
+    let summands = Summands { blocks, lone, dead };
+    Ok(Sgdd::new(Components {
+        partition,
+        summands,
+    }))
 }
 
 /// Floats each folded block as [`RowSums::folded_surplus`](super::RowSums::folded_surplus) does, else grounds it on `s = M·1`.

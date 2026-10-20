@@ -6,7 +6,7 @@ use rayon::prelude::*;
 mod assembly;
 mod partition;
 
-use super::block::{Grounding, ReduceError};
+use super::block::{Grounding, ReduceError, Summands};
 use crate::input::{Canonical, CsrError};
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::{Index, Real};
@@ -60,7 +60,7 @@ pub(super) trait PrincipalBlocks<T, I> {
 }
 
 impl<A, I: Index> Partitioned<A, I> {
-    /// The partition and each live component's block, the assembly freed; a connected input moves its assembly in whole.
+    /// The partition, each live component's block, and the lone and dead vertices, the assembly freed; a connected input moves its assembly in whole.
     pub(super) fn extract<T: Real, B: Send>(
         self,
         block: impl Fn(<A as PrincipalBlocks<T, I>>::Block) -> Result<B, ReduceError> + Sync,
@@ -76,11 +76,14 @@ impl<A, I: Index> Partitioned<A, I> {
             let vertex = vertices[0].index();
             return Err(ReduceError::TooLarge { vertex });
         }
-        let mut lone = Vec::new();
+        let (mut lone, mut dead) = (Vec::new(), Vec::new());
         let components: Vec<&[I]> = (partition.components())
             .filter(|vertices| match **vertices {
                 [v] => match a.lone(v.index()) {
-                    pivot if pivot == T::zero() => false,
+                    pivot if pivot == T::zero() => {
+                        dead.push(v);
+                        false
+                    }
                     pivot if pivot > T::zero() && crate::diagonal_in_range(pivot) => {
                         lone.push((v, pivot));
                         false
@@ -90,39 +93,46 @@ impl<A, I: Index> Partitioned<A, I> {
                 _ => true,
             })
             .collect();
-        if components.is_empty() {
-            return Ok((partition, Vec::new(), lone));
-        }
-        let Some(position) = partition.position() else {
-            let live = vec![block(a.whole(components[0]))?];
-            return Ok((partition, live, lone));
+        let blocks = match (components.first(), partition.position()) {
+            (None, _) => Vec::new(),
+            (Some(&whole), None) => vec![block(a.whole(whole))?],
+            (Some(_), Some(position)) => {
+                let cut = |vertices: &&[I]| block(a.component(vertices, position));
+                // About `2^PARALLEL_BITS` vertices a task: waking the pool for less costs more than it saves.
+                let work = components.iter().map(|c| c.len() as u64).sum();
+                let per_task = crate::per_task(components.len(), work, PARALLEL_BITS);
+                let parallel = per_task < components.len() && rayon::current_num_threads() > 1;
+                let blocks: Vec<_> = match parallel {
+                    true => (components.par_iter())
+                        .with_min_len(per_task)
+                        .map(cut)
+                        .collect(),
+                    false => components.iter().map(cut).collect(),
+                };
+                // Kept past extraction, an owned assembly raised the Gram peak 11–22%.
+                drop(a);
+                if let Some(&error) = blocks.iter().find_map(|b| b.as_ref().err()) {
+                    return Err(error);
+                }
+                // In place: a block's result is the block's own size.
+                blocks.into_iter().filter_map(Result::ok).collect()
+            }
         };
-        let cut = |vertices: &&[I]| block(a.component(vertices, position));
-        // About `2^PARALLEL_BITS` vertices a task: waking the pool for less costs more than it saves.
-        let work = components.iter().map(|c| c.len() as u64).sum();
-        let per_task = crate::per_task(components.len(), work, PARALLEL_BITS);
-        let blocks: Vec<_> = match per_task < components.len() && rayon::current_num_threads() > 1 {
-            true => (components.par_iter())
-                .with_min_len(per_task)
-                .map(cut)
-                .collect(),
-            false => components.iter().map(cut).collect(),
-        };
-        // Kept past extraction, an owned assembly raised the Gram peak 11–22%.
-        drop(a);
-        if let Some(&error) = blocks.iter().find_map(|b| b.as_ref().err()) {
-            return Err(error);
-        }
-        // In place: a block's result is the block's own size.
-        let live = blocks.into_iter().filter_map(Result::ok).collect();
-        Ok((partition, live, lone))
+        let summands = Summands { blocks, lone, dead };
+        Ok(Components {
+            partition,
+            summands,
+        })
     }
 }
 
 const PARALLEL_BITS: u32 = 12;
 
-/// The partition, each live component's block, and each isolated vertex with its pivot.
-pub(super) type Components<B, I, T> = (Partition<I>, Vec<B>, Vec<(I, T)>);
+/// The partition, and `A`'s summands cut along it.
+pub(super) struct Components<B, I, T> {
+    pub(super) partition: Partition<I>,
+    pub(super) summands: Summands<B, I, T>,
+}
 
 /// A general `A` assembled with its diagonal, and its components.
 type General<T, I> = Partitioned<Assembled<T, UpperAdjacency<T, I>>, I>;

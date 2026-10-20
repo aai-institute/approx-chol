@@ -131,19 +131,34 @@ type BlockParts<T, I> = (
     Option<Box<ScalingReport>>,
 );
 
-/// `A` as its [`IrreducibleBlock`]s, each reduced; vertices in none solve to `0`.
+/// `A`'s direct summands by kind, each factored and solved on its own.
+#[derive(Clone, Debug)]
+pub(crate) struct Summands<B, I, T> {
+    /// Each coupled component's block.
+    pub(crate) blocks: Vec<B>,
+    /// Vertices no entry couples, each with its surplus `σ`, which is its whole pivot.
+    pub(crate) lone: Vec<(I, T)>,
+    /// One-vertex components whose pivot is zero: an in-place solve zeroes them.
+    pub(crate) dead: Vec<I>,
+}
+
+/// `A` as its reduced summands; built only from extraction, so they cover `A` once.
 #[derive(Clone, Debug)]
 pub(crate) struct Sgdd<T = f64, I = u32> {
     n: usize,
-    blocks: Vec<IrreducibleBlock<T, I>>,
-    /// Vertices no entry couples, each with its surplus `σ`, which is its whole pivot.
-    lone: Vec<(I, T)>,
+    summands: Summands<IrreducibleBlock<T, I>, I, T>,
 }
 
 impl<T: Real, I: Index> Sgdd<T, I> {
-    pub(super) fn new((partition, blocks, lone): Components<IrreducibleBlock<T, I>, I, T>) -> Self {
-        let n = partition.n();
-        Self { n, blocks, lone }
+    pub(super) fn new(components: Components<IrreducibleBlock<T, I>, I, T>) -> Self {
+        let Components {
+            partition,
+            summands,
+        } = components;
+        Self {
+            n: partition.n(),
+            summands,
+        }
     }
 
     /// Dimension of `A`.
@@ -151,14 +166,10 @@ impl<T: Real, I: Index> Sgdd<T, I> {
         self.n
     }
 
-    /// The coupled irreducible blocks, each factored and solved on its own, and the isolated vertices with their pivots.
-    pub(crate) fn into_blocks(self) -> Blocks<T, I> {
-        (self.blocks, self.lone)
+    pub(crate) fn into_summands(self) -> Summands<IrreducibleBlock<T, I>, I, T> {
+        self.summands
     }
 }
-
-/// The coupled blocks, then each lone vertex with its pivot.
-pub(crate) type Blocks<T, I> = (Vec<IrreducibleBlock<T, I>>, Vec<(I, T)>);
 
 /// Why a block has no SDDM form; each `vertex` is in `A`'s numbering.
 #[non_exhaustive]

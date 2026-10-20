@@ -14,7 +14,7 @@ use rayon::prelude::*;
 use clique_tree::{Copies, Multi, Single};
 pub use config::{Backend, Config, InnerParallelism, SchurMode};
 
-use crate::sgdd::{Balance, IrreducibleBlock, Restriction, Sgdd};
+use crate::sgdd::{Balance, IrreducibleBlock, Restriction, Sgdd, Summands};
 use crate::storage::OffDiagonal;
 use crate::ScalingReport;
 use crate::{Index, Real};
@@ -108,17 +108,18 @@ impl<T: Real> Factor<T> {
         split: C,
     ) -> Self {
         let n = sgdd.n();
-        let (coupled, lone) = sgdd.into_blocks();
+        let Summands {
+            blocks: coupled,
+            lone,
+            dead,
+        } = sgdd.into_summands();
         let mut blocks = Vec::with_capacity(coupled.len() + lone.len());
         let build = |reused: &mut _, block| BlockFactor(store(Block::build(block, config, reused)));
         let elimination = || CliqueTreeElimination::new(split);
         blocks.par_extend(coupled.into_par_iter().map_init(elimination, build));
         let isolated = |(v, pivot)| BlockFactor(Storage::Isolated(Isolated::new(v, pivot)));
         blocks.extend(lone.into_iter().map(isolated));
-        let mut covered = vec![false; n];
-        (blocks.iter().flat_map(BlockFactor::vertices)).for_each(|v| covered[v] = true);
-        let dead = (0..n).filter(|&v| !covered[v]).collect();
-        Self::new(n, blocks, dead)
+        Self::new(n, blocks, dead.into_iter().map(I::index).collect())
     }
 
     fn new(n: usize, blocks: Vec<BlockFactor<T>>, dead: Box<[usize]>) -> Self {
