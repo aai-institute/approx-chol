@@ -60,11 +60,7 @@ impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
         let [None, None] = self.values else {
             return None;
         };
-        Some(BipartiteLaplacian {
-            n_left: self.n_left,
-            n_right: self.n - self.n_left,
-            edges: self.edges,
-        })
+        Some(BipartiteLaplacian(self))
     }
 }
 
@@ -87,19 +83,15 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteGram<'_, T, I> {
 
 /// The same columns' Laplacian `B W Bᵀ`, which negating one side folds back into `|B| W |B|ᵀ`.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct BipartiteLaplacian<'a, T, I = u32> {
-    n_left: usize,
-    n_right: usize,
-    edges: Edges<'a, T, I>,
-}
+pub(crate) struct BipartiteLaplacian<'a, T, I = u32>(BipartiteGram<'a, T, I>);
 
 impl<T: Real, I: PrimInt> IntoColumns<T> for BipartiteLaplacian<'_, T, I> {
     fn n(&self) -> usize {
-        self.n_left + self.n_right
+        self.0.n
     }
 
     fn for_each_column<S: Index>(self, visit: impl FnMut(Column<T, S>)) {
-        (self.edges).for_each_column(self.n_left, |_| T::one(), |_| -T::one(), visit)
+        (self.0.edges).for_each_column(self.0.n_left, |_| T::one(), |_| -T::one(), visit)
     }
 }
 
@@ -111,6 +103,6 @@ impl<T: Real, I: PrimInt> BipartiteColumns<T> for BipartiteGram<'_, T, I> {
 
 impl<T: Real, I: PrimInt> BipartiteColumns<T> for BipartiteLaplacian<'_, T, I> {
     fn n_left(&self) -> usize {
-        self.n_left
+        self.0.n_left
     }
 }
