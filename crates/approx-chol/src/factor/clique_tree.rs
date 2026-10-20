@@ -45,7 +45,7 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
         }
     }
 
-    /// Merges `neighbors`, samples their clique tree into `fill` as `w_i (S_{>i} / d)` from the sequential `draws`, and returns the pivot's column: the last entry's weight, the others' shares, and the last entry's neighbor, which absorbs what they leave.
+    /// Samples the merged star's clique tree into `fill` as `w_i (S_{>i} / d)`; the last neighbor absorbs what the shares leave.
     pub(super) fn eliminate(
         &mut self,
         draws: &mut Xoshiro256PlusPlus,

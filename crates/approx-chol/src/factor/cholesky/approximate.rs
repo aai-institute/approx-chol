@@ -14,7 +14,7 @@ use crate::{Index, Real};
 use graph::EliminationGraph;
 use ordering::MinDegreeOrder;
 
-/// A task's AC or AC2 elimination, each monomorphized; a small block reuses the last one's buffers (malloc was 17% of 20-vertex covers).
+/// A task's AC or AC2 elimination; small blocks reuse its buffers (malloc was 17% of 20-vertex covers).
 pub(in crate::factor) enum Elimination<T, I> {
     Single(CliqueTreeElimination<T, I, Single>),
     Split(CliqueTreeElimination<T, I, Multi>),
@@ -74,6 +74,9 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeElimination<T, I, C> {
         // Doubling past the estimate otherwise retains up to 2x the entries (+30% on grids).
         steps.neighbors.shrink_to_fit();
         steps.coefficients.shrink_to_fit();
+        if n > graph::REUSED_UP_TO {
+            *self = Self::new(self.split);
+        }
         (steps, pin.unwrap_or_else(|| ordering.next_vertex()))
     }
 

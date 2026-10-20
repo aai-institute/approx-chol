@@ -124,7 +124,7 @@ fn spans_wide<T: Real>(factors: Option<&[T]>) -> bool {
     })
 }
 
-/// Whether a grounded sheet's heaviest weight passes `1/ε` times its lightest edge: a sink behind that edge divides the ground's `−Σb` rounding by it.
+/// A sink behind an edge past `1/ε` lighter than the heaviest would divide the ground's `−Σb` rounding.
 fn grounds_wide<T: Real, I: Index>(sddm: &Sddm<T, I>) -> bool {
     let (n, mut least, mut most) = (sddm.n(), T::infinity(), T::zero());
     if sddm.grounded() && sddm.sheets() == Sheets::One {

@@ -98,11 +98,9 @@ impl<T: Real> Factor<T> {
         let n = sgdd.n();
         let (coupled, lone) = sgdd.into_blocks();
         let mut blocks = Vec::with_capacity(coupled.len() + lone.len());
-        let elimination = || Elimination::new(multiplicity(config.split_merge));
-        let build = |elimination: &mut _, block| {
-            BlockFactor(store(Block::build(block, config, elimination)))
-        };
-        blocks.par_extend(coupled.into_par_iter().map_init(elimination, build));
+        let reused = || Elimination::new(multiplicity(config.split_merge));
+        let build = |reused: &mut _, block| BlockFactor(store(Block::build(block, config, reused)));
+        blocks.par_extend(coupled.into_par_iter().map_init(reused, build));
         let isolated = |(v, pivot)| BlockFactor(Storage::Isolated(Isolated::new(v, pivot)));
         blocks.extend(lone.into_iter().map(isolated));
         let mut covered = vec![false; n];
@@ -293,7 +291,7 @@ impl<T: Real, I: Index> Block<T, I> {
     fn build(
         block: IrreducibleBlock<T, I>,
         config: &Config,
-        elimination: &mut Elimination<T, I>,
+        reused: &mut Elimination<T, I>,
     ) -> Self {
         let (restriction, off_diagonal, balance, report) = block.into_parts();
         let streams = Streams {
@@ -312,7 +310,7 @@ impl<T: Real, I: Index> Block<T, I> {
                     Sheets::Two => Sddm::cover(adjacency, grounding),
                 };
                 let draws = streams.cholesky();
-                let factored = Cholesky::factor(sddm, draws, config, factors(0), elimination);
+                let factored = Cholesky::factor(sddm, draws, config, factors(0), reused);
                 (None, factored)
             }
             OffDiagonal::Bipartite(cross) => {
@@ -332,7 +330,7 @@ impl<T: Real, I: Index> Block<T, I> {
                     }
                 };
                 // A kept `Cᵀ` is built once `S` is factored, so it never shares that peak.
-                let factored = Cholesky::factor(s, streams.cholesky(), config, kept, elimination);
+                let factored = Cholesky::factor(s, streams.cholesky(), config, kept, reused);
                 let elimination = BlockElimination::with_inverse_pivots(cross, inv_pivot);
                 (Some(Box::new(elimination)), factored)
             }
