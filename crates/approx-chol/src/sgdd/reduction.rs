@@ -24,8 +24,8 @@ impl<T: Real, I: Index> Sgdd<T, I> {
         Ok(match input {
             Input::Csr(csr) => Self::from_csr(csr, policy)?,
             Input::UpperCsr(csr) => Self::from_upper_csr(csr, policy)?,
-            Input::Laplacian(laplacian) => Self::try_from(laplacian)?,
-            Input::SignedGraph(graph) => Self::try_from(graph)?,
+            Input::Laplacian(laplacian) => Self::from_laplacian(laplacian)?,
+            Input::SignedGraph(graph) => Self::from_signed_graph(graph)?,
             Input::Gram(v) => Self::from_gram(v, policy)?,
             Input::BipartiteGram(gram) => Self::from_bipartite_gram(gram, policy)?,
         })

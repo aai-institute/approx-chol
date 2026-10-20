@@ -9,11 +9,9 @@ use crate::sgdd::signature;
 use crate::storage::OffDiagonal;
 use crate::{Index, Real};
 
-impl<'a, T: Real, J: PrimInt, I: Index> TryFrom<Laplacian<'a, T, J>> for Sgdd<T, I> {
-    type Error = ReduceError;
-
+impl<T: Real, I: Index> Sgdd<T, I> {
     /// Dominant with surplus `g` by shape: a block floats exactly when its ground is zero.
-    fn try_from(graph: Laplacian<'a, T, J>) -> Result<Self, Self::Error> {
+    pub fn from_laplacian<J: PrimInt>(graph: Laplacian<'_, T, J>) -> Result<Self, ReduceError> {
         assemble_laplacian(graph)?
             .extract(|(vertices, off_diagonal, grounding)| {
                 // A lone vertex has no cell, so only a ground makes it a block.
@@ -25,13 +23,11 @@ impl<'a, T: Real, J: PrimInt, I: Index> TryFrom<Laplacian<'a, T, J>> for Sgdd<T,
             })
             .map(into_sgdd)
     }
-}
-
-impl<'a, T: Real, J: PrimInt, I: Index> TryFrom<BipartiteLaplacian<'a, T, J>> for Sgdd<T, I> {
-    type Error = ReduceError;
 
     /// `M`, a bipartite Laplacian, with the kept side negated folding `A` into it; a lone vertex is dead.
-    fn try_from(m: BipartiteLaplacian<'a, T, J>) -> Result<Self, Self::Error> {
+    pub fn from_bipartite_laplacian<J: PrimInt>(
+        m: BipartiteLaplacian<'_, T, J>,
+    ) -> Result<Self, ReduceError> {
         assemble_bipartite::<T, I>(m)?
             .extract(|(vertices, off_diagonal, grounding)| {
                 let OffDiagonal::Bipartite(cross) = &off_diagonal else {
@@ -48,13 +44,11 @@ impl<'a, T: Real, J: PrimInt, I: Index> TryFrom<BipartiteLaplacian<'a, T, J>> fo
             })
             .map(into_sgdd)
     }
-}
-
-impl<'a, T: Real, J: PrimInt, I: Index> TryFrom<SignedGraph<'a, T, J>> for Sgdd<T, I> {
-    type Error = ReduceError;
 
     /// Dominant by shape, each end's surplus its pairs' cancelled mass; its signs are searched.
-    fn try_from(graph: SignedGraph<'a, T, J>) -> Result<Self, Self::Error> {
+    pub fn from_signed_graph<J: PrimInt>(
+        graph: SignedGraph<'_, T, J>,
+    ) -> Result<Self, ReduceError> {
         assemble_signed(graph)?
             .extract(|(vertices, off_diagonal, grounding)| {
                 // A lone vertex has no cell, so only its cancelled pairs make it a block.

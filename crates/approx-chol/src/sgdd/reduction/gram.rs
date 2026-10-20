@@ -27,7 +27,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
     ) -> Result<Self, ReduceError> {
         // Incidence on both sides folds by shape, so `policy` has nothing to scale.
         if let Some(laplacian) = gram.laplacian() {
-            return Self::try_from(laplacian);
+            return Self::from_bipartite_laplacian(laplacian);
         }
         let blocks =
             assemble_bipartite_gram(gram)?.extract(|cells| Ok(SymmetricBlock::live(cells)))?;
