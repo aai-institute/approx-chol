@@ -418,3 +418,33 @@ fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
         );
     }
 }
+
+#[test]
+fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
+    use approx_chol::input::{BipartiteGram, FactorWidth1, Weights};
+    use approx_chol::{factorize_with, Backend};
+    // Three left vertices on one right vertex, each by a cancelling pair: `S` is one grounded slot, so AC2 samples no edge.
+    let (left, right) = ([0u32, 0, 1, 1, 2, 2], [0u32; 6]);
+    let loadings = [1.0, -1.0, 1.0, -1.0, 1.0, -1.0];
+    let weights = [2.0, 1.0, 3.0, 1.0, 1.0, 4.0];
+    let x = [1.0, -1.0, 2.0, 0.5];
+    let b = [3.5, -3.0, 8.5, -1.0];
+    for k in [2, 3] {
+        for complement in [SchurMode::Same, SchurMode::Exact] {
+            let config = Config {
+                split_merge: Some(k),
+                backend: Backend::Approximate,
+                complement,
+                ..Config::default()
+            };
+            let gram = BipartiteGram::new(
+                FactorWidth1::new(3, &left, Some(&loadings[..])).unwrap(),
+                FactorWidth1::<f64>::new(1, &right, None).unwrap(),
+                Weights::of(&weights).unwrap(),
+            )
+            .unwrap();
+            let solved = factorize_with(gram, config).unwrap().solve(&b).unwrap();
+            assert_close(&format!("{config:?}"), &solved, &x, 64.0 * f64::EPSILON);
+        }
+    }
+}
