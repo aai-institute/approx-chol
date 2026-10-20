@@ -296,48 +296,33 @@ fn a_scaling_policy_decode_rejects_tolerance_outside_unit_interval() {
     assert_eq!(postcard::to_stdvec(&policy).unwrap(), bytes);
 }
 
-type Picks =
-    fn(&mut serde_json::Map<String, serde_json::Value>) -> Option<&mut Vec<serde_json::Value>>;
-
-/// Decodes `factor` after scaling by `by` every multiplier (a stored value below one) in each array `pick` finds, at any depth.
-fn decode_scaled(factor: &Factor, pick: Picks, by: f64) -> Result<Factor, serde_json::Error> {
-    fn scale(v: &mut serde_json::Value, pick: Picks, by: f64) -> usize {
-        match v {
-            serde_json::Value::Object(map) => {
-                let own = match pick(map) {
-                    Some(values) => {
-                        let multipliers = values
-                            .iter_mut()
-                            .filter(|x| x.as_f64().is_some_and(|f| f < 1.0));
-                        multipliers.for_each(|x| *x = (x.as_f64().unwrap() * by).into());
-                        1
-                    }
-                    None => 0,
-                };
-                own + map.values_mut().map(|v| scale(v, pick, by)).sum::<usize>()
+/// Decodes `factor` after scaling by `by` every multiplier (a stored value below one) in each array at `pointer` below any node.
+fn decode_scaled(factor: &Factor, pointer: &str, by: f64) -> Result<Factor, serde_json::Error> {
+    fn scale(v: &mut serde_json::Value, pointer: &str, by: f64) -> usize {
+        let own = match v.pointer_mut(pointer).and_then(|a| a.as_array_mut()) {
+            Some(values) => {
+                let multipliers = values
+                    .iter_mut()
+                    .filter(|x| x.as_f64().is_some_and(|f| f < 1.0));
+                multipliers.for_each(|x| *x = (x.as_f64().unwrap() * by).into());
+                1
             }
-            serde_json::Value::Array(items) => items.iter_mut().map(|v| scale(v, pick, by)).sum(),
+            None => 0,
+        };
+        own + match v {
+            serde_json::Value::Object(map) => map.values_mut().map(|v| scale(v, pointer, by)).sum(),
+            serde_json::Value::Array(items) => {
+                items.iter_mut().map(|v| scale(v, pointer, by)).sum()
+            }
             _ => 0,
         }
     }
     let mut v = serde_json::to_value(factor).unwrap();
     assert!(
-        scale(&mut v, pick, by) > 0,
-        "the factor stores the picked multipliers"
+        scale(&mut v, pointer, by) > 0,
+        "the factor stores {pointer}"
     );
     serde_json::from_value::<Factor>(v)
-}
-
-fn dense(
-    map: &mut serde_json::Map<String, serde_json::Value>,
-) -> Option<&mut Vec<serde_json::Value>> {
-    map.get_mut("Dense")?.as_array_mut()
-}
-
-fn coefficients(
-    map: &mut serde_json::Map<String, serde_json::Value>,
-) -> Option<&mut Vec<serde_json::Value>> {
-    map.get_mut("coefficients")?.as_array_mut()
 }
 
 /// Each stored `|D_e⁻¹C|` row sums to at most one; past it the backward sum can overflow.
@@ -353,24 +338,16 @@ fn an_elimination_whose_rows_sum_past_one_is_corrupt() {
     )
     .unwrap();
     let factor = approx_chol::factorize(gram).unwrap();
-    fn cross(
-        map: &mut serde_json::Map<String, serde_json::Value>,
-    ) -> Option<&mut Vec<serde_json::Value>> {
-        match map.contains_key("inv_pivot") {
-            true => map["cross"]["values"].as_array_mut(),
-            false => None,
-        }
-    }
-    decode_scaled(&factor, cross, 1.0).expect("a stored elimination decodes");
-    decode_scaled(&factor, cross, 2.0).expect_err("rows summing to two are corrupt");
+    decode_scaled(&factor, "/cross/values", 1.0).expect("a stored elimination decodes");
+    decode_scaled(&factor, "/cross/values", 2.0).expect_err("rows summing to two are corrupt");
 }
 
 /// Each column of a dense `|L|` and each step of an approximate one sums to at most one; past it the substitution can overflow.
 #[rstest]
-#[case::dense(dense, Backend::ExactBelow { max_dim: 24 })]
-#[case::approximate(coefficients, Backend::Approximate)]
+#[case::dense("/Dense", Backend::ExactBelow { max_dim: 24 })]
+#[case::approximate("/coefficients", Backend::Approximate)]
 fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
-    #[case] stored: Picks,
+    #[case] stored: &str,
     #[case] backend: Backend,
 ) {
     let (a, b): (Vec<u32>, Vec<u32>) = (0..16u32)
