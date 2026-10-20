@@ -115,7 +115,7 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
         self.counts[position] = self.counts[position].saturating_add(duplicate.copies.get());
     }
 
-    /// Neighbors already unique, each at the split's initial copies, which keeps per-copy order the raw order: one sort, no scratch.
+    /// Neighbors already unique, each at the split's copies, which keeps per-copy order the raw order: one sort, no scratch.
     pub(super) fn refill_unique(&mut self, neighbors: impl Iterator<Item = (I, T)>) {
         let copies = self.split;
         self.entries.clear();
