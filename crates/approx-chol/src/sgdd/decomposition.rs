@@ -48,14 +48,6 @@ pub(super) trait LonePivot<T> {
     fn lone(&self, v: usize) -> T;
 }
 
-/// A one-vertex component with its pivot; `extract` reads it as dead, lone or a block.
-fn isolated<T: Real, I: Index>(vertices: &[I], a: &impl LonePivot<T>) -> Option<(I, T)> {
-    let &[v] = vertices else {
-        return None;
-    };
-    Some((v, a.lone(v.index())))
-}
-
 /// An assembled `A` cut into its components' blocks.
 pub(super) trait PrincipalBlocks<T, I> {
     type Block;
@@ -86,12 +78,15 @@ impl<A, I: Index> Partitioned<A, I> {
         }
         let mut lone = Vec::new();
         let components: Vec<&[I]> = (partition.components())
-            .filter(|vertices| match isolated(vertices, &a) {
-                Some((_, pivot)) if pivot == T::zero() => false,
-                Some((v, pivot)) if pivot > T::zero() && crate::diagonal_in_range(pivot) => {
-                    lone.push((v, pivot));
-                    false
-                }
+            .filter(|vertices| match **vertices {
+                [v] => match a.lone(v.index()) {
+                    pivot if pivot == T::zero() => false,
+                    pivot if pivot > T::zero() && crate::diagonal_in_range(pivot) => {
+                        lone.push((v, pivot));
+                        false
+                    }
+                    _ => true,
+                },
                 _ => true,
             })
             .collect();
@@ -104,7 +99,7 @@ impl<A, I: Index> Partitioned<A, I> {
         };
         let cut = |vertices: &&[I]| block(a.component(vertices, position));
         // About `2^PARALLEL_BITS` vertices a task: waking the pool for less costs more than it saves.
-        let work = (partition.n() - lone.len()) as u64;
+        let work = components.iter().map(|c| c.len() as u64).sum();
         let per_task = crate::per_task(components.len(), work, PARALLEL_BITS);
         let blocks: Vec<_> = match per_task < components.len() && rayon::current_num_threads() > 1 {
             true => (components.par_iter())
