@@ -3,12 +3,13 @@ mod dense;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
+use super::clique_tree::Copies;
 use super::config::Config;
 use super::sddm::{descend, lift, Sddm, Sheets};
 use crate::{largest, narrow};
 use crate::{widen, Index, Real};
 use approximate::ApproximateCholesky;
-pub(super) use approximate::Elimination;
+pub(super) use approximate::CliqueTreeElimination;
 
 /// The factor of what the elimination leaves; it builds its own Triangular, so its facts come from that matrix.
 #[cfg_attr(
@@ -30,12 +31,12 @@ pub(super) struct Cholesky<T, I> {
 
 impl<T: Real, I: Index> Cholesky<T, I> {
     /// Dense up to the config's dimension, else approximate; `factors` is `F` on its vertices, `None` when every `|f|` is `1`.
-    pub(super) fn factor(
+    pub(super) fn factor<C: Copies>(
         sddm: Sddm<T, I>,
         draws: Xoshiro256PlusPlus,
         config: &Config,
         factors: Option<&[T]>,
-        elimination: &mut Elimination<T, I>,
+        elimination: &mut CliqueTreeElimination<T, I, C>,
     ) -> Self {
         let (sheets, grounded, n) = (sddm.sheets(), sddm.grounded(), sddm.n());
         let (triangular, pinned) = match config.dense(n) {
@@ -47,7 +48,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
                 // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
                 let pin =
                     (spans_wide(factors) || grounds_wide(&sddm)).then(|| pinned(&sddm, factors));
-                let (steps, pin) = elimination.factor(sddm, draws, pin);
+                let (steps, pin) = elimination.eliminate(sddm, draws, pin);
                 (Triangular::Approximate(Box::new(steps)), pin)
             }
         };

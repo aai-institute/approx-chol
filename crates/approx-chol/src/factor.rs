@@ -11,14 +11,15 @@ use rand::SeedableRng;
 use rayon::iter::Either;
 use rayon::prelude::*;
 
-use config::multiplicity;
+use clique_tree::{Copies, Multi, Single};
+use config::{multiplicity, Multiplicity};
 pub use config::{Backend, Config, InnerParallelism, SchurMode};
 
 use crate::sgdd::{Balance, IrreducibleBlock, Restriction, Sgdd};
 use crate::storage::OffDiagonal;
 use crate::ScalingReport;
 use crate::{Index, Real};
-use cholesky::{Cholesky, Elimination};
+use cholesky::{Cholesky, CliqueTreeElimination};
 use schur::BlockElimination;
 use sddm::{Sddm, Sheets};
 
@@ -95,11 +96,23 @@ impl<T: Real> Factor<T> {
         config: &Config,
         store: fn(Block<T, I>) -> Storage<T>,
     ) -> Self {
+        match multiplicity(config.split_merge) {
+            Multiplicity::Single => Self::build_with(sgdd, config, store, Single),
+            Multiplicity::Split(k) => Self::build_with(sgdd, config, store, Multi(k)),
+        }
+    }
+
+    fn build_with<I: Index, C: Copies>(
+        sgdd: Sgdd<T, I>,
+        config: &Config,
+        store: fn(Block<T, I>) -> Storage<T>,
+        split: C,
+    ) -> Self {
         let n = sgdd.n();
         let (coupled, lone) = sgdd.into_blocks();
         let mut blocks = Vec::with_capacity(coupled.len() + lone.len());
         let build = |reused: &mut _, block| BlockFactor(store(Block::build(block, config, reused)));
-        let elimination = || Elimination::new(multiplicity(config.split_merge));
+        let elimination = || CliqueTreeElimination::new(split);
         blocks.par_extend(coupled.into_par_iter().map_init(elimination, build));
         let isolated = |(v, pivot)| BlockFactor(Storage::Isolated(Isolated::new(v, pivot)));
         blocks.extend(lone.into_iter().map(isolated));
@@ -288,10 +301,10 @@ pub(crate) struct Block<T, I> {
 }
 
 impl<T: Real, I: Index> Block<T, I> {
-    fn build(
+    fn build<C: Copies>(
         block: IrreducibleBlock<T, I>,
         config: &Config,
-        reused: &mut Elimination<T, I>,
+        reused: &mut CliqueTreeElimination<T, I, C>,
     ) -> Self {
         let (restriction, off_diagonal, balance, report) = block.into_parts();
         let streams = Streams {

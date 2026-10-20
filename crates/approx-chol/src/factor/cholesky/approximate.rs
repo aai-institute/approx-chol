@@ -5,8 +5,7 @@ mod ordering;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use crate::factor::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single};
-use crate::factor::config::Multiplicity;
+use crate::factor::clique_tree::{CliqueSampler, Copies, Fill};
 use crate::factor::sddm::Sddm;
 #[cfg(feature = "serde")]
 use crate::factor::within_one;
@@ -15,32 +14,6 @@ use graph::EliminationGraph;
 use ordering::MinDegreeOrder;
 
 /// A task's AC or AC2 elimination; small blocks reuse its buffers (malloc was 17% of 20-vertex covers).
-pub(in crate::factor) enum Elimination<T, I> {
-    Single(CliqueTreeElimination<T, I, Single>),
-    Split(CliqueTreeElimination<T, I, Multi>),
-}
-
-impl<T: Real, I: Index> Elimination<T, I> {
-    pub(in crate::factor) fn new(multiplicity: Multiplicity) -> Self {
-        match multiplicity {
-            Multiplicity::Single => Self::Single(CliqueTreeElimination::new(Single)),
-            Multiplicity::Split(k) => Self::Split(CliqueTreeElimination::new(Multi(k))),
-        }
-    }
-
-    pub(super) fn factor(
-        &mut self,
-        sddm: Sddm<T, I>,
-        draws: Xoshiro256PlusPlus,
-        pin: Option<usize>,
-    ) -> (ApproximateCholesky<T, I>, usize) {
-        match self {
-            Self::Single(elimination) => elimination.eliminate(sddm, draws, pin),
-            Self::Split(elimination) => elimination.eliminate(sddm, draws, pin),
-        }
-    }
-}
-
 pub(in crate::factor) struct CliqueTreeElimination<T, I, C: Copies> {
     split: C,
     graph: EliminationGraph<T, I, C>,
@@ -49,7 +22,7 @@ pub(in crate::factor) struct CliqueTreeElimination<T, I, C: Copies> {
 }
 
 impl<T: Real, I: Index, C: Copies> CliqueTreeElimination<T, I, C> {
-    fn new(split: C) -> Self {
+    pub(in crate::factor) fn new(split: C) -> Self {
         Self {
             split,
             graph: EliminationGraph::new(),
@@ -59,7 +32,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeElimination<T, I, C> {
     }
 
     /// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree (Algorithm 8); the last, `pin` when given, is the slot the solve zeroes.
-    fn eliminate(
+    pub(super) fn eliminate(
         &mut self,
         sddm: Sddm<T, I>,
         mut draws: Xoshiro256PlusPlus,
