@@ -12,7 +12,7 @@ use crate::sgdd::Grounding;
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, per_task, widen, Index, Real};
 
-/// `M`'s cross block scaled by its pivots, `D_e⁻¹ C`, and the pivots, applied as two products because the block's steps commute.
+/// `M`'s cross block scaled by its inverse pivots, `D_e⁻¹ C`, and `D_e⁻¹`, applied as two products because the block's steps commute.
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -33,7 +33,7 @@ pub(super) struct BlockElimination<T, I> {
 
 impl<T: Real, I: Index> BlockElimination<T, I> {
     /// Inverse pivots `1/(Σ|c_ek| + s_e)`, the same on both sheets of a cover.
-    pub(super) fn pivots(c: &Rows<T, I>, grounding: &Grounding<T>) -> Box<[T]> {
+    pub(super) fn inverse_pivots(c: &Rows<T, I>, grounding: &Grounding<T>) -> Box<[T]> {
         (0..c.n_rows())
             .map(|e| {
                 let s_e = grounding.edge(e).map_or(0.0, widen);
@@ -48,7 +48,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         c.nnz() > 1 << 17
     }
 
-    pub(super) fn with_pivots(mut cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
+    pub(super) fn with_inverse_pivots(mut cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
         cross.scale_rows(&inv_pivot);
         Self::scaled(cross, inv_pivot)
     }

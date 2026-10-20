@@ -305,7 +305,7 @@ impl<T: Real, I: Index> Block<T, I> {
                 let kept = scales(cross.n_rows());
                 let factor = |s| Cholesky::factor(s, streams.cholesky(), config, kept);
                 let dense = config.dense(sheets.count() * cross.n_cols());
-                let inv_pivot = BlockElimination::pivots(&cross, &grounding);
+                let inv_pivot = BlockElimination::inverse_pivots(&cross, &grounding);
                 let s = match (dense, config.complement) {
                     (true, _) | (false, SchurMode::Exact) => {
                         schur::exact(&cross, &inv_pivot, sheets, grounding)
@@ -321,7 +321,7 @@ impl<T: Real, I: Index> Block<T, I> {
                 };
                 // A kept `Cᵀ` is built once `S` is factored, so it never shares that peak.
                 let factored = factor(s);
-                let elimination = BlockElimination::with_pivots(cross, inv_pivot);
+                let elimination = BlockElimination::with_inverse_pivots(cross, inv_pivot);
                 (Some(Box::new(elimination)), factored)
             }
         };
