@@ -343,11 +343,7 @@ fn is_canonical<T, I: PrimInt>(csr: &CsrRef<'_, T, I>) -> Result<bool, CsrError>
     for bounds in csr.row_ptrs.windows(2) {
         let start = index(bounds[0]);
         let columns = &csr.col_indices[start..index(bounds[1])];
-        if columns.iter().any(|&j| outside(j)) {
-            let at = columns
-                .iter()
-                .position(|&j| outside(j))
-                .expect("one lies outside");
+        if let Some(at) = columns.iter().position(|&j| outside(j)) {
             return Err(column_error(start + at, columns[at], csr.n()));
         }
         for pair in columns.windows(2) {
