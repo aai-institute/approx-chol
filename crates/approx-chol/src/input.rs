@@ -11,7 +11,8 @@ pub(crate) use csr::Canonical;
 pub use csr::{CsrError, CsrRef, IndexKind, OwnedCsr, UpperCsrRef};
 pub use width2::bipartite::{BipartiteGram, FactorWidth1};
 pub use width2::edges::Weights;
-pub(crate) use width2::gram::{Bipartite, BipartiteEnds, End, Fold, General, Gram, Graph};
+pub(crate) use width2::gram::Fold;
+pub use width2::gram::{End, Gram, Shape};
 pub use width2::laplacian::Laplacian;
 pub use width2::signed::SignedGraph;
 pub(crate) use width2::{Column, IntoColumns};
@@ -32,14 +33,8 @@ pub enum Input<'a, T, I = u32> {
     Csr(CsrRef<'a, T, I>),
     /// A symmetric matrix stored by its upper triangle.
     UpperCsr(UpperCsrRef<'a, T, I>),
-    /// A graph Laplacian by its edges.
-    Laplacian(Laplacian<'a, T, I>),
-    /// A signed graph by its edges.
-    SignedGraph(SignedGraph<'a, T, I>),
-    /// `V Vᵀ`, `V` of factor width 2.
-    Gram(FactorWidth2<'a, T, I>),
-    /// `V W Vᵀ` on two disjoint sides.
-    BipartiteGram(BipartiteGram<'a, T, I>),
+    /// `V W Vᵀ + diag(d)`, `V` of factor width 2: every factor view.
+    Gram(Gram<'a, T, I>),
 }
 
 impl<T: Real, J: PrimInt + Sync> Input<'_, T, J> {
@@ -48,10 +43,7 @@ impl<T: Real, J: PrimInt + Sync> Input<'_, T, J> {
         match self {
             Self::Csr(csr) => csr.n(),
             Self::UpperCsr(csr) => csr.0.n(),
-            Self::Laplacian(laplacian) => laplacian.n(),
-            Self::SignedGraph(graph) => graph.n(),
             Self::Gram(v) => v.n(),
-            Self::BipartiteGram(gram) => gram.n(),
         }
     }
 }
@@ -69,11 +61,21 @@ macro_rules! input_from {
 input_from! {
     Csr(CsrRef),
     UpperCsr(UpperCsrRef),
-    Laplacian(Laplacian),
-    SignedGraph(SignedGraph),
-    Gram(FactorWidth2),
-    BipartiteGram(BipartiteGram),
+    Gram(Gram),
 }
+
+/// Each factor view is its [`Gram`].
+macro_rules! input_from_gram {
+    ($($view:ident),+) => {$(
+        impl<'a, T, I> From<$view<'a, T, I>> for Input<'a, T, I> {
+            fn from(view: $view<'a, T, I>) -> Self {
+                Self::Gram(view.into())
+            }
+        }
+    )+};
+}
+
+input_from_gram!(Laplacian, SignedGraph, FactorWidth2, BipartiteGram);
 
 impl<'a, T, I: PrimInt> From<&'a OwnedCsr<T, I>> for Input<'a, T, I> {
     fn from(owned: &'a OwnedCsr<T, I>) -> Self {

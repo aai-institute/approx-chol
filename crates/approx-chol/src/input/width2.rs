@@ -11,8 +11,8 @@ use num_traits::PrimInt;
 use super::index;
 use crate::widen;
 use crate::{Index, Real};
-use edges::{Edges, Weights};
-use gram::{General, Gram, Values};
+use edges::Weights;
+use gram::{End, Gram, Shape};
 
 /// Why a view's `new` rejected its slices.
 #[non_exhaustive]
@@ -45,6 +45,13 @@ pub enum ViewError {
         /// The offending vertex.
         vertex: usize,
     },
+    /// A bipartite shape's left part has more rows than `A`.
+    LeftPartTooLarge {
+        /// The left part's size.
+        n_left: usize,
+        /// `A`'s dimension.
+        n: usize,
+    },
 }
 
 impl core::fmt::Display for ViewError {
@@ -63,6 +70,9 @@ impl core::fmt::Display for ViewError {
                     f,
                     "vertex {vertex} has a negative or non-finite diagonal entry"
                 )
+            }
+            Self::LeftPartTooLarge { n_left, n } => {
+                write!(f, "left part of {n_left} rows exceeds dimension {n}")
             }
         }
     }
@@ -136,7 +146,7 @@ impl<T: Real> Weighting<T> {
 
 /// `A = V W Vᵀ`, `V` with at most two nonzeros per column: `x[k]` at `a[k]`, `y[k]` at `b[k] ≠ a[k]`.
 #[derive(Clone, Copy, Debug)]
-pub struct FactorWidth2<'a, T, I = u32>(Gram<'a, T, I, General, Values<'a, T>, Values<'a, T>>);
+pub struct FactorWidth2<'a, T, I = u32>(Gram<'a, T, I>);
 
 impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
     /// `n` vertices; lengths and `a[k] ≠ b[k] < n` are checked, so a zero value leaves one nonzero.
@@ -147,19 +157,8 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         x: &'a [T],
         y: &'a [T],
     ) -> Result<Self, ViewError> {
-        for found in [x.len(), y.len()] {
-            length(a.len(), found)?;
-        }
-        let edges = Edges::new(a, b)?;
-        check_ends(n, a, b)?;
-        Ok(Self(Gram::new(
-            n,
-            General,
-            edges,
-            Values(x),
-            Values(y),
-            None,
-        )))
+        let (tail, head) = (End::Values(x), End::Values(y));
+        Gram::new(n, Shape::General, a, b, tail, head).map(Self)
     }
 
     /// `V W Vᵀ` under `weights`, one per column; `W = I` without it.
@@ -171,13 +170,11 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
     pub fn plus_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
         self.0.plus_diagonal(diagonal).map(Self)
     }
+}
 
-    pub(crate) fn n(&self) -> usize {
-        self.0.n()
-    }
-
-    pub(crate) fn gram(self) -> Gram<'a, T, I, General, Values<'a, T>, Values<'a, T>> {
-        self.0
+impl<'a, T, I> From<FactorWidth2<'a, T, I>> for Gram<'a, T, I> {
+    fn from(v: FactorWidth2<'a, T, I>) -> Self {
+        v.0
     }
 }
 

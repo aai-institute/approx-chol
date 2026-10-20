@@ -2,23 +2,20 @@
 
 use num_traits::PrimInt;
 
-use super::edges::{Edges, Weights};
-use super::gram::{General, Gram, Incidences, One};
-use super::{check_ends, length, IntoColumns, ViewError};
+use super::edges::Weights;
+use super::gram::{End, Gram, Shape};
+use super::ViewError;
 use crate::Real;
 
 /// `A = Σ_k w_k (e_a ± e_b)(e_a ± e_b)ᵀ + diag(g)`: `+` where `positive[k]`, so edge `k` adds `+w_k` to `a_ab`, else `−w_k`.
 #[derive(Clone, Copy, Debug)]
-pub struct SignedGraph<'a, T, I = u32>(Gram<'a, T, I, General, One, Incidences<'a>>);
+pub struct SignedGraph<'a, T, I = u32>(Gram<'a, T, I>);
 
 impl<'a, T: Real, I: PrimInt> SignedGraph<'a, T, I> {
     /// Edge `k` joins `a[k] ≠ b[k] < n`, unit weight; lengths and ends are checked.
     pub fn new(n: usize, a: &'a [I], b: &'a [I], positive: &'a [bool]) -> Result<Self, ViewError> {
-        length(a.len(), positive.len())?;
-        let edges = Edges::new(a, b)?;
-        check_ends(n, a, b)?;
-        let head = Incidences(positive);
-        Ok(Self(Gram::new(n, General, edges, One, head, None)))
+        let head = End::Signs(positive);
+        Gram::new(n, Shape::General, a, b, End::One, head).map(Self)
     }
 
     /// `A` under `weights`, one per edge; `W = I` without it.
@@ -30,12 +27,10 @@ impl<'a, T: Real, I: PrimInt> SignedGraph<'a, T, I> {
     pub fn plus_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
         self.0.plus_diagonal(diagonal).map(Self)
     }
+}
 
-    pub(crate) fn n(&self) -> usize {
-        self.0.n()
-    }
-
-    pub(crate) fn gram(self) -> Gram<'a, T, I, General, One, Incidences<'a>> {
-        self.0
+impl<'a, T, I> From<SignedGraph<'a, T, I>> for Gram<'a, T, I> {
+    fn from(graph: SignedGraph<'a, T, I>) -> Self {
+        graph.0
     }
 }

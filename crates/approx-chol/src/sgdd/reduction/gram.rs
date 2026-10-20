@@ -3,23 +3,24 @@ use std::cell::LazyCell;
 use num_traits::PrimInt;
 
 use super::{within_band, Congruent, Signed, SymmetricBlock};
-use crate::input::{Column, End, Gram, IntoColumns};
+use crate::input::{Column, Gram, IntoColumns};
 use crate::sgdd::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Summands};
-use crate::sgdd::decomposition::{assemble_values, Components, Shape};
+use crate::sgdd::decomposition::{assemble_values, CellLayout, Components};
 use crate::sgdd::scaling::{self, ScalingPolicy};
 use crate::sgdd::Sgdd;
 use crate::{narrow, widen, Index, Real};
 
 impl<T: Real, I: Index> Sgdd<T, I> {
     /// `V` with values: scaled by its null vectors on demand, folded blocks dropping their rows for one pass over `V` that decides floating.
-    pub(super) fn from_values<J: PrimInt, G: Shape, A: End<T>, B: End<T>>(
-        v: Gram<'_, T, J, G, A, B>,
+    pub(super) fn from_values<J: PrimInt, S: CellLayout>(
+        cells: S,
+        v: Gram<'_, T, J>,
         policy: &ScalingPolicy,
     ) -> Result<Self, ReduceError> {
         let Components {
             partition,
             summands,
-        } = assemble_values::<T, J, I, G, A, B>(v)?
+        } = assemble_values::<T, J, I, S>(cells, v)?
             .extract(|cells| Ok(SymmetricBlock::new(cells)))?;
         let Summands {
             blocks: live,

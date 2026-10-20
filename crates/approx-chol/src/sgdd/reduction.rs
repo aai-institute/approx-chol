@@ -7,10 +7,12 @@ use num_traits::PrimInt;
 
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError};
 use super::congruence::{Congruence, ScaledFactors};
-use super::decomposition::{of_csr, of_upper, Cells, Partitioned, Shape};
+use super::decomposition::{
+    of_csr, of_upper, Biadjacency, CellLayout, Cells, Partitioned, Triangle,
+};
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
 use super::Sgdd;
-use crate::input::{BipartiteEnds, Canonical, End, Gram, Input};
+use crate::input::{Canonical, Gram, Input, Shape};
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, widen, Error, Index, Real};
 
@@ -24,26 +26,22 @@ impl<T: Real, I: Index> Sgdd<T, I> {
             // Symmetry is checked in the walk that unions the pattern; upper storage has no mirror.
             Input::Csr(csr) => of_csr(Canonical::of(csr)?)?.reduce(&policy)?,
             Input::UpperCsr(csr) => of_upper(Canonical::of(csr.0)?)?.reduce(&policy)?,
-            Input::Laplacian(graph) => Self::from_gram(graph.gram(), &policy)?,
-            Input::SignedGraph(graph) => Self::from_gram(graph.gram(), &policy)?,
-            Input::Gram(v) => Self::from_gram(v.gram(), &policy)?,
-            Input::BipartiteGram(gram) => match gram.gram() {
-                BipartiteEnds::Incidence(v) => Self::from_gram(v, &policy)?,
-                BipartiteEnds::LeftValues(v) => Self::from_gram(v, &policy)?,
-                BipartiteEnds::RightValues(v) => Self::from_gram(v, &policy)?,
-                BipartiteEnds::Values(v) => Self::from_gram(v, &policy)?,
+            Input::Gram(v) => match v.shape() {
+                Shape::General => Self::from_gram(Triangle, v, &policy)?,
+                Shape::Bipartite { n_left } => Self::from_gram(Biadjacency { n_left }, v, &policy)?,
             },
         })
     }
 
     /// An incidence `V` is dominant by shape; values are scaled under `policy`.
-    fn from_gram<J: PrimInt, G: Shape, A: End<T>, B: End<T>>(
-        v: Gram<'_, T, J, G, A, B>,
+    fn from_gram<J: PrimInt, S: CellLayout>(
+        cells: S,
+        v: Gram<'_, T, J>,
         policy: &ScalingPolicy,
     ) -> Result<Self, ReduceError> {
         match v.is_incidence() {
-            true => Self::from_incidence(v),
-            false => Self::from_values(v, policy),
+            true => Self::from_incidence(cells, v),
+            false => Self::from_values(cells, v, policy),
         }
     }
 }

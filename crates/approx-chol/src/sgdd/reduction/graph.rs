@@ -1,25 +1,24 @@
 use num_traits::PrimInt;
 
 use super::{folding_signs, Congruent};
-use crate::input::{End, Fold, Gram};
+use crate::input::{Fold, Gram};
 use crate::sgdd::block::{Balance, ReduceError};
 use crate::sgdd::congruence::Congruence;
-use crate::sgdd::decomposition::{assemble_incidence, Shape};
+use crate::sgdd::decomposition::{assemble_incidence, CellLayout};
 use crate::sgdd::Sgdd;
 use crate::{Index, Real};
 
 impl<T: Real, I: Index> Sgdd<T, I> {
     /// `V` an incidence matrix, so dominant by shape: a fold its shape fixes is read into the cells, else the signs are searched.
-    pub(super) fn from_incidence<J: PrimInt, G: Shape, A: End<T>, B: End<T>>(
-        v: Gram<'_, T, J, G, A, B>,
+    pub(super) fn from_incidence<J: PrimInt, S: CellLayout>(
+        cells: S,
+        v: Gram<'_, T, J>,
     ) -> Result<Self, ReduceError> {
-        let fold = v.fold();
-        let cells = match fold {
-            // Read negated, the head's part folds every cell as it is summed.
-            Some(Fold::NegatedHead) => assemble_incidence(v.negated_head())?,
-            _ => assemble_incidence(v)?,
-        };
-        cells
+        // Under `NegatedHead`, the head's part is read negated, so every cell folds as it is summed.
+        let (fold, v) = v
+            .fold()
+            .map_or((None, v), |(fold, read)| (Some(fold), read));
+        assemble_incidence(cells, v)?
             .extract(|(vertices, off_diagonal, grounding)| {
                 let congruence = match fold {
                     Some(Fold::Identity) => Congruence::Identity,

@@ -6,13 +6,13 @@ use num_traits::PrimInt;
 
 use super::partition::{Partition, UnionFind};
 use super::{Assembled, Dominant, Partitioned, PrincipalBlocks};
-use crate::input::{Bipartite, Column, End, General, Gram, Graph, IntoColumns};
+use crate::input::{Column, Gram, IntoColumns};
 use crate::sgdd::block::ReduceError;
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::{diagonal_in_range, in_range, narrow, widen, Index, Real};
 
-/// How a graph's summed cells are stored, and its components found from them.
-pub(in crate::sgdd) trait Shape: Graph {
+/// How a shape's summed cells are stored, and its components found from them.
+pub(in crate::sgdd) trait CellLayout: Copy {
     type Adjacency<T: Real, I: Index>: PrincipalBlocks<T, I, Block = (Box<[I]>, OffDiagonal<T, I>)>
         + Sync;
 
@@ -25,10 +25,19 @@ pub(in crate::sgdd) trait Shape: Graph {
     ) -> Result<Partitioned<Self::Adjacency<T, I>, I>, ReduceError>;
 }
 
-impl Shape for General {
+/// A general `V`'s cells: `A`'s strict upper triangle.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::sgdd) struct Triangle;
+
+/// A bipartite `V`'s cells: the biadjacency `C` from the left part's rows.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::sgdd) struct Biadjacency {
+    pub(in crate::sgdd) n_left: usize,
+}
+
+impl CellLayout for Triangle {
     type Adjacency<T: Real, I: Index> = UpperAdjacency<T, I>;
 
-    /// `A`'s strict upper triangle.
     // Out of line, the Laplacian entry measured 3–4% slower: the same work, laid out worse.
     #[inline(always)]
     fn sum<T: Real, I: Index, C: CellSum>(
@@ -52,7 +61,7 @@ impl Shape for General {
     }
 }
 
-impl Shape for Bipartite {
+impl CellLayout for Biadjacency {
     type Adjacency<T: Real, I: Index> = Rows<T, I>;
 
     /// `C`, summed in a dense table when small (+54% without it).
@@ -83,27 +92,21 @@ impl Shape for Bipartite {
 }
 
 /// An incidence `V`'s summed cells beside `σ`, and their components.
-type IncidenceCells<'a, T, I, G> = Partitioned<Dominant<'a, T, <G as Shape>::Adjacency<T, I>>, I>;
+type IncidenceCells<'a, T, I, S> =
+    Partitioned<Dominant<'a, T, <S as CellLayout>::Adjacency<T, I>>, I>;
 
 /// A valued `V`'s summed cells beside `A`'s diagonal, and their components.
-type ValueCells<T, I, G> = Partitioned<Assembled<T, <G as Shape>::Adjacency<T, I>>, I>;
+type ValueCells<T, I, S> = Partitioned<Assembled<T, <S as CellLayout>::Adjacency<T, I>>, I>;
 
 /// D: each pivot `Σ_j |c_ij| + σ_i`, plus its pairs' cancelled mass where cells cancel; `A`'s diagonal never stored.
-pub(in crate::sgdd) fn assemble_incidence<'a, T, J, I, G, A, B>(
-    v: Gram<'a, T, J, G, A, B>,
-) -> Result<IncidenceCells<'a, T, I, G>, ReduceError>
-where
-    T: Real,
-    J: PrimInt,
-    I: Index,
-    G: Shape,
-    A: End<T>,
-    B: End<T>,
-{
+pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: CellLayout>(
+    cells: S,
+    v: Gram<'a, T, J>,
+) -> Result<IncidenceCells<'a, T, I, S>, ReduceError> {
     let mut abs = vec![0.0_f64; v.n()];
     let ground = v.diagonal();
     if !v.cancels() {
-        let a = v.graph().sum(
+        let a = cells.sum(
             v,
             |_| {},
             |i, j, c: f64| {
@@ -113,7 +116,7 @@ where
         return dominant(a, &abs, ground.map(Cow::Borrowed));
     }
     let mut surplus = sigma_sums(ground, v.n());
-    let a = v.graph().sum(
+    let a = cells.sum(
         v,
         |_| {},
         |i, j, masses: Masses| {
@@ -147,20 +150,12 @@ fn dominant<'a, T: Real, I: Index, C>(
 }
 
 /// `A`'s cells, its diagonal `σ_i + Σ_k w_k v_ik²` and its components, summed in one column pass.
-pub(in crate::sgdd) fn assemble_values<'a, T, J, I, G, A, B>(
-    v: Gram<'a, T, J, G, A, B>,
-) -> Result<ValueCells<T, I, G>, ReduceError>
-where
-    T: Real,
-    J: PrimInt,
-    I: Index,
-    G: Shape,
-    A: End<T>,
-    B: End<T>,
-{
+pub(in crate::sgdd) fn assemble_values<T: Real, J: PrimInt, I: Index, S: CellLayout>(
+    cells: S,
+    v: Gram<'_, T, J>,
+) -> Result<ValueCells<T, I, S>, ReduceError> {
     let mut sums = sigma_sums(v.diagonal(), v.n());
-    let a =
-        (v.graph()).sum::<T, I, f64>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
+    let a = cells.sum::<T, I, f64>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
     assembled(a, sums)
 }
 
@@ -315,7 +310,7 @@ impl Masses {
     }
 }
 
-/// Cells bucketed at their lower end in column order, so each sums as a dense table would; `pair` sees each summed cell, a cancelled one too.
+/// CellLayout bucketed at their lower end in column order, so each sums as a dense table would; `pair` sees each summed cell, a cancelled one too.
 fn sum_cells<T: Real, I: Index, C: CellSum>(
     v: impl IntoColumns<T>,
     counts: &[usize],

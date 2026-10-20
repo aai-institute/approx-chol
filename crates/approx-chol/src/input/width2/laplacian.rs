@@ -2,21 +2,19 @@
 
 use num_traits::PrimInt;
 
-use super::edges::{Edges, Weights};
-use super::gram::{General, Gram, MinusOne, One};
-use super::{check_ends, IntoColumns, ViewError};
+use super::edges::Weights;
+use super::gram::{End, Gram, Shape};
+use super::ViewError;
 use crate::Real;
 
 /// Weighted multigraph on `n` vertices, grounded by `g`: `A = Σ_k w_k (e_a − e_b)(e_a − e_b)ᵀ + diag(g)`.
 #[derive(Clone, Copy, Debug)]
-pub struct Laplacian<'a, T, I = u32>(Gram<'a, T, I, General, One, MinusOne>);
+pub struct Laplacian<'a, T, I = u32>(Gram<'a, T, I>);
 
 impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
     /// Edge `k` joins `a[k] ≠ b[k] < n`, unit weight; lengths and ends are checked.
     pub fn new(n: usize, a: &'a [I], b: &'a [I]) -> Result<Self, ViewError> {
-        let edges = Edges::new(a, b)?;
-        check_ends(n, a, b)?;
-        Ok(Self(Gram::new(n, General, edges, One, MinusOne, None)))
+        Gram::new(n, Shape::General, a, b, End::One, End::MinusOne).map(Self)
     }
 
     /// `L` under `weights`, one per edge; `W = I` without it.
@@ -28,12 +26,10 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
     pub fn plus_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
         self.0.plus_diagonal(diagonal).map(Self)
     }
+}
 
-    pub(crate) fn n(&self) -> usize {
-        self.0.n()
-    }
-
-    pub(crate) fn gram(self) -> Gram<'a, T, I, General, One, MinusOne> {
-        self.0
+impl<'a, T, I> From<Laplacian<'a, T, I>> for Gram<'a, T, I> {
+    fn from(laplacian: Laplacian<'a, T, I>) -> Self {
+        laplacian.0
     }
 }
