@@ -1,10 +1,10 @@
-//! Factorize a 10×10 grid Laplacian and use it to precondition CG.
+//! Factorize a 10×10 grid Laplacian with AC and AC2, and use each to precondition CG.
 
 #[path = "shared/grid.rs"]
 mod grid;
 
-use approx_chol::factorize;
 use approx_chol::input::{Laplacian, Weights};
+use approx_chol::{factorize_with, Config};
 use grid::Grid;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,13 +12,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Grid Laplacian: 10×10 ({} vertices)", grid.n);
 
     let laplacian = Laplacian::new(grid.n, &grid.a, &grid.b, Weights::<f64>::unit())?;
-    let factor = factorize(laplacian)?;
-    println!("Irreducible blocks: {}", factor.blocks().len());
-    let (x, iterations) = grid.pcg(&factor, &grid.split_rhs(), 1e-10);
+    let b = grid.split_rhs();
 
-    let mean = x.iter().sum::<f64>() / grid.n as f64;
-    println!("PCG: {iterations} iterations to 1e-10");
-    println!("Solution mean: {mean:.2e}  (the floating Laplacian's solve is orthogonal to 1)");
+    // AC2's `k` copies per edge trade more fill-in for lower factor variance.
+    let ac2 = Config {
+        split_merge: Some(2),
+        ..Config::default()
+    };
+    for (name, config) in [("AC", Config::default()), ("AC2 (k=2)", ac2)] {
+        let factor = factorize_with(laplacian, config)?;
+        let (x, iterations) = grid.pcg(&factor, &b, 1e-10);
+        let mean = x.iter().sum::<f64>() / grid.n as f64;
+        println!("{name:>9}: {iterations} PCG iterations to 1e-10, solution mean {mean:.2e}");
+    }
+    println!("The floating Laplacian's solve is orthogonal to 1.");
 
     Ok(())
 }
