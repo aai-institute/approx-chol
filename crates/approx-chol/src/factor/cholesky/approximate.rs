@@ -33,7 +33,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeElimination<T, I, C> {
         }
     }
 
-    /// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree (Algorithms 8 and 6); the last, `pin` when given, is the slot the solve zeroes.
+    /// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree; the last, `pin` when given, is the slot the solve zeroes.
     pub(super) fn eliminate(
         &mut self,
         sddm: Sddm<T, I>,
@@ -124,7 +124,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
         }
         self.neighbors.push(remainder);
         self.coefficients.push(retained);
-        // `D⁻¹ / retained` is `1/w` for the remainder's `w`, finite as fill and `S` never weigh below `MIN_POSITIVE`.
+        // Finite, as fill and `S` never weigh below `MIN_POSITIVE`.
         self.headers.push(StepHeader {
             vertex: I::from_index(vertex),
             len: I::from_index(self.neighbors.len() - start),
