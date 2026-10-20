@@ -24,9 +24,9 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
         Ok(Self(Gram::new(n, General, edges, One, MinusOne, None)))
     }
 
-    /// `L + diag(g)`, one finite nonnegative `g_i` per vertex.
-    pub fn with_ground(self, ground: &'a [T]) -> Result<Self, ViewError> {
-        self.0.with_diagonal(ground).map(Self)
+    /// `L + diag(d)`, one finite nonnegative `d_i` per vertex.
+    pub fn with_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
+        self.0.with_diagonal(diagonal).map(Self)
     }
 
     pub(crate) fn n(&self) -> usize {

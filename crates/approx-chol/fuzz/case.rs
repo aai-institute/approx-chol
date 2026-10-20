@@ -190,7 +190,7 @@ impl<T: Real> Case<T> {
             } => {
                 let graph = Laplacian::new((*n).into(), a, b, weights.weights()?)?;
                 let graph = match ground {
-                    Some(g) => graph.with_ground(g)?,
+                    Some(g) => graph.with_diagonal(g)?,
                     None => graph,
                 };
                 factorize_with(graph, config)?
@@ -205,7 +205,7 @@ impl<T: Real> Case<T> {
             } => {
                 let graph = SignedGraph::new((*n).into(), a, b, positive, weights.weights()?)?;
                 let graph = match ground {
-                    Some(g) => graph.with_ground(g)?,
+                    Some(g) => graph.with_diagonal(g)?,
                     None => graph,
                 };
                 factorize_with(graph, config)?

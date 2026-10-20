@@ -243,7 +243,7 @@ impl Entry {
                 let ground: Vec<T> = cast_all(&graph.ground);
                 match self {
                     Entry::GroundedLaplacian => {
-                        factorize_with(view.with_ground(&ground).expect("valid ground"), config)
+                        factorize_with(view.with_diagonal(&ground).expect("valid ground"), config)
                     }
                     _ => factorize_with(view, config),
                 }
@@ -253,7 +253,7 @@ impl Entry {
                 let positive: Vec<bool> = graph.edges.iter().map(|edge| edge.positive).collect();
                 let ground: Vec<T> = cast_all(&graph.ground);
                 let view = SignedGraph::new(n, &a, &b, &positive, weights)
-                    .and_then(|view| view.with_ground(&ground))
+                    .and_then(|view| view.with_diagonal(&ground))
                     .expect("valid signed graph");
                 factorize_with(view, config).unwrap_or_else(|error| rejected(&error))
             }

@@ -31,7 +31,7 @@ fn factors(config: Config) -> Vec<Factor> {
     let ground: Vec<f64> = (0..61).map(|i| if i < 20 { 0.0 } else { 0.5 }).collect();
     let laplacian = Laplacian::new(61, &a, &b, Weights::unit())
         .unwrap()
-        .with_ground(&ground)
+        .with_diagonal(&ground)
         .unwrap();
     let laplacian = factorize_with(laplacian, config).unwrap();
 
@@ -166,7 +166,7 @@ fn an_elimination_keeping_at_most_its_rows_decodes_up_to_the_cut(#[case] rows: u
 fn with_isolated_vertex() -> Factor {
     let edge = Laplacian::new(3, &[0u32], &[1], Weights::unit()).unwrap();
     factorize_with(
-        edge.with_ground(&[1.0, 0.0, 2.0]).unwrap(),
+        edge.with_diagonal(&[1.0, 0.0, 2.0]).unwrap(),
         Config::default(),
     )
     .unwrap()
@@ -364,7 +364,7 @@ fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
         .unzip();
     let ground: Vec<f64> = (0..16).map(|i| if i == 0 { 1.0 } else { 0.0 }).collect();
     let grid = Laplacian::new(16, &a, &b, Weights::unit()).unwrap();
-    let grid = grid.with_ground(&ground).unwrap();
+    let grid = grid.with_diagonal(&ground).unwrap();
     let config = Config {
         backend,
         ..Config::default()

@@ -372,7 +372,7 @@ fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
         ..Config::default()
     };
     let path = Laplacian::new(3, &a, &b, Weights::of(&w).unwrap()).unwrap();
-    let factor = factorize_with(path.with_ground(&ground).unwrap(), config).unwrap();
+    let factor = factorize_with(path.with_diagonal(&ground).unwrap(), config).unwrap();
     assert_close(
         "light sink",
         &factor.solve(&rhs).unwrap(),

@@ -27,9 +27,9 @@ impl<'a, T: Real, I: PrimInt> SignedGraph<'a, T, I> {
         Ok(Self(Gram::new(n, General, edges, One, head, None)))
     }
 
-    /// `A + diag(g)`, one finite nonnegative `g_i` per vertex.
-    pub fn with_ground(self, ground: &'a [T]) -> Result<Self, ViewError> {
-        self.0.with_diagonal(ground).map(Self)
+    /// `A + diag(d)`, one finite nonnegative `d_i` per vertex.
+    pub fn with_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
+        self.0.with_diagonal(diagonal).map(Self)
     }
 
     pub(crate) fn n(&self) -> usize {

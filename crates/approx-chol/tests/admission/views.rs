@@ -99,9 +99,9 @@ fn laplacian_new_rejects_mismatched_lengths_and_bad_ends_at_their_column(
 }
 
 #[test]
-fn laplacian_with_ground_rejects_a_ground_per_vertex_short() {
+fn laplacian_with_diagonal_rejects_a_ground_per_vertex_short() {
     let short = unit_path()
-        .with_ground(&[1.0, 1.0])
+        .with_diagonal(&[1.0, 1.0])
         .expect_err("one ground per vertex");
     assert_eq!(
         short,
@@ -116,9 +116,9 @@ fn laplacian_with_ground_rejects_a_ground_per_vertex_short() {
 #[case::negative(-1.0)]
 #[case::nan(f64::NAN)]
 #[case::infinite(f64::INFINITY)]
-fn laplacian_with_ground_rejects_a_bad_ground_at_its_vertex(#[case] ground: f64) {
+fn laplacian_with_diagonal_rejects_a_bad_ground_at_its_vertex(#[case] ground: f64) {
     let error = unit_path()
-        .with_ground(&[0.0, 0.0, ground])
+        .with_diagonal(&[0.0, 0.0, ground])
         .expect_err("invalid ground");
     assert_eq!(error, ViewError::InvalidDiagonal { vertex: 2 });
 }
@@ -128,7 +128,7 @@ fn laplacian_with_ground_rejects_a_bad_ground_at_its_vertex(#[case] ground: f64)
 #[case::past_a_quarter_of_the_maximum(f64::MAX / 2.0)]
 fn an_out_of_range_ground_is_rejected_at_its_vertex(#[case] ground: f64) {
     let ground = [0.0, 0.0, ground];
-    let grounded = unit_path().with_ground(&ground).expect("a valid ground");
+    let grounded = unit_path().with_diagonal(&ground).expect("a valid ground");
     let error = factorize(grounded).expect_err("ground out of range");
     assert_names_a_defect(error, &out_of_range(&[2]));
 }
@@ -346,7 +346,7 @@ fn a_grounded_signed_graph_solves_its_matrix(
 ) {
     let ground = [0.5, 0.0, 0.25];
     let graph = SignedGraph::new(3, a, b, positive, Weights::unit())
-        .and_then(|graph| graph.with_ground(&ground))
+        .and_then(|graph| graph.with_diagonal(&ground))
         .unwrap();
     let factor = factorize(graph).expect("a grounded signed graph");
     let x = vec![1.0; a.len()];
@@ -409,9 +409,9 @@ fn every_factor_view_rejects_a_bad_diagonal(#[case] diagonal: &[f64], #[case] ex
     let bipartite = BipartiteGram::new(left, right, Weights::unit()).unwrap();
     let errors = [
         gram.with_diagonal(diagonal).err(),
-        signed.with_ground(diagonal).err(),
+        signed.with_diagonal(diagonal).err(),
         bipartite.with_diagonal(diagonal).err(),
-        unit_path().with_ground(diagonal).err(),
+        unit_path().with_diagonal(diagonal).err(),
     ];
     assert_eq!(errors, [Some(expected); 4]);
 }
