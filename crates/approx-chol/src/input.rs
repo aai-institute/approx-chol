@@ -11,7 +11,7 @@ pub(crate) use csr::Canonical;
 pub use csr::{CsrError, CsrRef, IndexKind, OwnedCsr, UpperCsrRef};
 pub use width2::bipartite::{BipartiteGram, FactorWidth1};
 pub use width2::edges::Weights;
-pub(crate) use width2::gram::{Bipartite, End, Fold, General, Gram, Graph, OnBipartite};
+pub(crate) use width2::gram::{Bipartite, BipartiteEnds, End, Fold, General, Gram, Graph};
 pub use width2::laplacian::Laplacian;
 pub use width2::signed::SignedGraph;
 pub(crate) use width2::{Column, IntoColumns};

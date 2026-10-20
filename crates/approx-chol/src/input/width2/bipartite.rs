@@ -3,7 +3,7 @@
 use num_traits::PrimInt;
 
 use super::edges::{Edges, Weights};
-use super::gram::{Bipartite, Gram, OnBipartite, One, Values};
+use super::gram::{Bipartite, BipartiteEnds, Gram, One, Values};
 use super::{check_diagonal, length, ViewError};
 use crate::Real;
 
@@ -68,17 +68,22 @@ impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
         self.n
     }
 
-    /// `on` run on this Gram, its sides' ends read as given.
-    pub(crate) fn lower<R: OnBipartite<'a, T, I>>(self, on: R) -> R::Output {
+    pub(crate) fn gram(self) -> BipartiteEnds<'a, T, I> {
         let graph = Bipartite {
             n_left: self.n_left,
         };
         let (n, edges, d) = (self.n, self.edges, self.diagonal);
         match self.values {
-            [None, None] => on.run(Gram::new(n, graph, edges, One, One, d)),
-            [Some(x), None] => on.run(Gram::new(n, graph, edges, Values(x), One, d)),
-            [None, Some(y)] => on.run(Gram::new(n, graph, edges, One, Values(y), d)),
-            [Some(x), Some(y)] => on.run(Gram::new(n, graph, edges, Values(x), Values(y), d)),
+            [None, None] => BipartiteEnds::Incidence(Gram::new(n, graph, edges, One, One, d)),
+            [Some(x), None] => {
+                BipartiteEnds::LeftValues(Gram::new(n, graph, edges, Values(x), One, d))
+            }
+            [None, Some(y)] => {
+                BipartiteEnds::RightValues(Gram::new(n, graph, edges, One, Values(y), d))
+            }
+            [Some(x), Some(y)] => {
+                BipartiteEnds::Values(Gram::new(n, graph, edges, Values(x), Values(y), d))
+            }
         }
     }
 }

@@ -3,8 +3,6 @@
 mod gram;
 mod graph;
 
-use std::marker::PhantomData;
-
 use num_traits::PrimInt;
 
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError};
@@ -12,7 +10,7 @@ use super::congruence::{Congruence, ScaledFactors};
 use super::decomposition::{of_csr, of_upper, Cells, Partitioned, Shape};
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
 use super::Sgdd;
-use crate::input::{Bipartite, Canonical, End, Fold, Gram, Input, OnBipartite};
+use crate::input::{BipartiteEnds, Canonical, End, Fold, Gram, Input};
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, widen, Error, Index, Real};
 
@@ -29,7 +27,12 @@ impl<T: Real, I: Index> Sgdd<T, I> {
             Input::Laplacian(graph) => Self::from_gram(graph.gram(), &policy)?,
             Input::SignedGraph(graph) => Self::from_gram(graph.gram(), &policy)?,
             Input::Gram(v) => Self::from_gram(v.gram(), &policy)?,
-            Input::BipartiteGram(gram) => gram.lower(Reduction(&policy, PhantomData))?,
+            Input::BipartiteGram(gram) => match gram.gram() {
+                BipartiteEnds::Incidence(v) => Self::from_gram(v, &policy)?,
+                BipartiteEnds::LeftValues(v) => Self::from_gram(v, &policy)?,
+                BipartiteEnds::RightValues(v) => Self::from_gram(v, &policy)?,
+                BipartiteEnds::Values(v) => Self::from_gram(v, &policy)?,
+            },
         })
     }
 
@@ -47,17 +50,6 @@ impl<T: Real, I: Index> Sgdd<T, I> {
             }
             fold => Self::from_incidence(v, fold),
         }
-    }
-}
-
-/// [`Sgdd::from_gram`] under `policy`, whichever ends a bipartite Gram's sides give.
-struct Reduction<'p, I>(&'p ScalingPolicy, PhantomData<I>);
-
-impl<'a, T: Real, J: PrimInt, I: Index> OnBipartite<'a, T, J> for Reduction<'_, I> {
-    type Output = Result<Sgdd<T, I>, ReduceError>;
-
-    fn run<A: End<T>, B: End<T>>(self, gram: Gram<'a, T, J, Bipartite, A, B>) -> Self::Output {
-        Sgdd::from_gram(gram, self.0)
     }
 }
 

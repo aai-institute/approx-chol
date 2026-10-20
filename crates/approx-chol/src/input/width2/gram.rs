@@ -138,7 +138,7 @@ pub(crate) enum Fold {
     NegatedHead,
 }
 
-/// `A = V W Vᵀ + diag(σ)` on `n` vertices, `σ` none when every entry is zero.
+/// `A = V W Vᵀ + diag(σ)` on `n` vertices, `σ` none when not given.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Gram<'a, T, I, G, A, B> {
     n: usize,
@@ -230,9 +230,10 @@ impl<T: Real, I: PrimInt, G: Graph, A: End<T>, B: End<T>> IntoColumns<T>
     }
 }
 
-/// What runs on a bipartite Gram, whichever ends its sides give `V`.
-pub(crate) trait OnBipartite<'a, T, I> {
-    type Output;
-
-    fn run<A: End<T>, B: End<T>>(self, gram: Gram<'a, T, I, Bipartite, A, B>) -> Self::Output;
+/// A bipartite Gram by what each side puts in `V`: `1` per column, or values.
+pub(crate) enum BipartiteEnds<'a, T, I> {
+    Incidence(Gram<'a, T, I, Bipartite, One, One>),
+    LeftValues(Gram<'a, T, I, Bipartite, Values<'a, T>, One>),
+    RightValues(Gram<'a, T, I, Bipartite, One, Values<'a, T>>),
+    Values(Gram<'a, T, I, Bipartite, Values<'a, T>, Values<'a, T>>),
 }
