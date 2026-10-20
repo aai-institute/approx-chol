@@ -6,7 +6,6 @@ use crate::sgdd::block::{Balance, ReduceError, Sgdd};
 use crate::sgdd::congruence::Congruence;
 use crate::sgdd::decomposition::{assemble_bipartite, assemble_laplacian, assemble_signed};
 use crate::sgdd::signature;
-use crate::storage::OffDiagonal;
 use crate::{Index, Real};
 
 impl<T: Real, I: Index> Sgdd<T, I> {
@@ -14,33 +13,25 @@ impl<T: Real, I: Index> Sgdd<T, I> {
     pub fn from_laplacian<J: PrimInt>(graph: Laplacian<'_, T, J>) -> Result<Self, ReduceError> {
         assemble_laplacian(graph)?
             .extract(|(vertices, off_diagonal, grounding)| {
-                // A lone vertex has no cell, so only a ground makes it a block.
-                if vertices.len() == 1 && !grounding.is_grounded() {
-                    return Ok(None);
-                }
                 let m = Congruent::new(vertices, off_diagonal, Congruence::Identity);
-                m.block(Balance::Balanced(grounding)).map(Some)
+                m.block(Balance::Balanced(grounding))
             })
             .map(into_sgdd)
     }
 
-    /// `M`, a bipartite Laplacian, with the kept side negated folding `A` into it; a lone vertex is dead.
+    /// `M`, a bipartite Laplacian, with the kept side negated folding `A` into it.
     pub fn from_bipartite_laplacian<J: PrimInt>(
         m: BipartiteLaplacian<'_, T, J>,
     ) -> Result<Self, ReduceError> {
         assemble_bipartite::<T, I>(m)?
             .extract(|(vertices, off_diagonal, grounding)| {
-                let OffDiagonal::Bipartite(cross) = &off_diagonal else {
-                    return Ok(None);
-                };
-                let signs = Congruence::NegateFrom(cross.n_rows());
                 let m = Congruent {
                     vertices,
-                    congruence: signs,
+                    congruence: Congruence::NegateFrom(off_diagonal.stored().1),
                     off_diagonal,
                     report: None,
                 };
-                m.block(Balance::Balanced(grounding)).map(Some)
+                m.block(Balance::Balanced(grounding))
             })
             .map(into_sgdd)
     }
@@ -51,17 +42,12 @@ impl<T: Real, I: Index> Sgdd<T, I> {
     ) -> Result<Self, ReduceError> {
         assemble_signed(graph)?
             .extract(|(vertices, off_diagonal, grounding)| {
-                // A lone vertex has no cell, so only its cancelled pairs make it a block.
-                if vertices.len() == 1 && !grounding.is_grounded() {
-                    return Ok(None);
-                }
-                let block = match signature::folding_signs(&off_diagonal) {
+                match signature::folding_signs(&off_diagonal) {
                     Some(signs) => Congruent::new(vertices, off_diagonal, signs)
                         .block(Balance::Balanced(grounding)),
                     None => Congruent::new(vertices, off_diagonal, Congruence::Identity)
                         .block(Balance::Frustrated(grounding)),
-                };
-                block.map(Some)
+                }
             })
             .map(into_sgdd)
     }

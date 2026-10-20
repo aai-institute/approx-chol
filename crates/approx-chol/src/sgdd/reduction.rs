@@ -47,18 +47,17 @@ struct SymmetricBlock<T, I> {
 }
 
 impl<T: Real, I: Index> SymmetricBlock<T, I> {
-    /// `None` when dead: components join only nonzeros, so a vertex with nothing to solve is alone with a zero diagonal.
-    fn live((vertices, off_diagonal, diagonal): Cells<T, I>) -> Option<Self> {
+    fn new((vertices, off_diagonal, diagonal): Cells<T, I>) -> Self {
         assert_eq!(vertices.len(), off_diagonal.n(), "one vertex per row");
         assert_eq!(diagonal.len(), off_diagonal.n(), "one diagonal per row");
-        (diagonal != [T::zero()]).then(|| Self {
+        Self {
             vertices,
             rows: RowSums {
                 diagonal,
                 abs: off_diagonal.abs_row_sums(),
             },
             off_diagonal,
-        })
+        }
     }
 
     /// `M = F A_c F` with `F = S R`, formed once with its rows, which decide the report; `relax` runs only past the row test, and a frustrated `A_c` takes `S = I` and grounds on its rows at once.

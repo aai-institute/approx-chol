@@ -12,9 +12,7 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
     /// Scales and signs each block's `A_c`, closing its surplus from the same rows.
     fn reduce(self, policy: &ScalingPolicy) -> Result<Sgdd<T, I>, ReduceError> {
         self.extract(|cells| {
-            let Some(a) = SymmetricBlock::live(cells) else {
-                return Ok(None);
-            };
+            let a = SymmetricBlock::new(cells);
             let relax = |a: &SymmetricBlock<T, I>| {
                 scaling::relax(&a.off_diagonal, &a.rows.diagonal, policy)
             };
@@ -25,7 +23,7 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
                 }
                 Signed::Frustrated(block) => block,
             };
-            Ok(Some(block))
+            Ok(block)
         })
         .map(into_sgdd)
     }

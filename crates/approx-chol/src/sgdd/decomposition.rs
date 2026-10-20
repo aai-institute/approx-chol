@@ -48,13 +48,12 @@ pub(super) trait LonePivot<T> {
     fn lone(&self, v: usize) -> T;
 }
 
-/// A lone vertex reduces to `(vertex, σ)` when its pivot is a positive in-range surplus; anything else takes the block path.
+/// A one-vertex component with its pivot; `extract` reads it as dead, lone or a block.
 fn isolated<T: Real, I: Index>(vertices: &[I], a: &impl LonePivot<T>) -> Option<(I, T)> {
     let &[v] = vertices else {
         return None;
     };
-    let pivot = a.lone(v.index());
-    (pivot > T::zero() && crate::diagonal_in_range(pivot)).then_some((v, pivot))
+    Some((v, a.lone(v.index())))
 }
 
 /// An assembled `A` cut into its components' blocks.
@@ -72,7 +71,7 @@ impl<A, I: Index> Partitioned<A, I> {
     /// The partition and each live component's block, the assembly freed; a connected input moves its assembly in whole.
     pub(super) fn extract<T: Real, B: Send>(
         self,
-        block: impl Fn(<A as PrincipalBlocks<T, I>>::Block) -> Result<Option<B>, ReduceError> + Sync,
+        block: impl Fn(<A as PrincipalBlocks<T, I>>::Block) -> Result<B, ReduceError> + Sync,
     ) -> Result<Components<B, I, T>, ReduceError>
     where
         A: PrincipalBlocks<T, I> + LonePivot<T> + Sync,
@@ -88,18 +87,19 @@ impl<A, I: Index> Partitioned<A, I> {
         let mut lone = Vec::new();
         let components: Vec<&[I]> = (partition.components())
             .filter(|vertices| match isolated(vertices, &a) {
-                Some(isolated) => {
-                    lone.push(isolated);
+                Some((_, pivot)) if pivot == T::zero() => false,
+                Some((v, pivot)) if pivot > T::zero() && crate::diagonal_in_range(pivot) => {
+                    lone.push((v, pivot));
                     false
                 }
-                None => true,
+                _ => true,
             })
             .collect();
         if components.is_empty() {
             return Ok((partition, Vec::new(), lone));
         }
         let Some(position) = partition.position() else {
-            let live = block(a.whole(components[0]))?.into_iter().collect();
+            let live = vec![block(a.whole(components[0]))?];
             return Ok((partition, live, lone));
         };
         let cut = |vertices: &&[I]| block(a.component(vertices, position));
@@ -119,10 +119,7 @@ impl<A, I: Index> Partitioned<A, I> {
             return Err(error);
         }
         // In place: a block's result is the block's own size.
-        let live = blocks
-            .into_iter()
-            .filter_map(|b| b.ok().flatten())
-            .collect();
+        let live = blocks.into_iter().filter_map(Result::ok).collect();
         Ok((partition, live, lone))
     }
 }
