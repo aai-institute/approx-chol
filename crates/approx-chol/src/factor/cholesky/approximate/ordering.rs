@@ -22,16 +22,33 @@ struct QueueElem<I> {
 }
 
 impl<I: Index> MinDegreeOrder<I> {
+    pub(super) fn new() -> Self {
+        Self {
+            elems: Vec::new(),
+            lists: Vec::new(),
+            min_list: 0,
+            bucket_base: 1,
+            net: Vec::new(),
+            touched: Vec::new(),
+        }
+    }
+
     /// Buckets span `split · n`, Laplacians.jl's AC2 scale; `pin` is never queued.
-    pub(super) fn new<T: Real, C: Copies>(
+    pub(super) fn load<T: Real, C: Copies>(
+        &mut self,
         graph: &EliminationGraph<T, I, C>,
         split: C,
         pin: Option<usize>,
-    ) -> Self {
+    ) {
         let n = graph.n();
         let bucket_base = (split.get() as usize).saturating_mul(n).max(1);
-        let mut lists: Vec<I> = vec![sentinel(); n_buckets(bucket_base)];
-        let mut elems = Vec::with_capacity(n);
+        let Self {
+            elems, lists, net, ..
+        } = self;
+        lists.clear();
+        lists.resize(n_buckets(bucket_base), sentinel());
+        elems.clear();
+        elems.reserve(n);
         let mut min_list = lists.len();
         for v in 0..n {
             if Some(v) == pin {
@@ -56,14 +73,10 @@ impl<I: Index> MinDegreeOrder<I> {
             lists[list] = I::from_index(v);
             min_list = min_list.min(list);
         }
-        Self {
-            elems,
-            lists,
-            min_list,
-            bucket_base,
-            net: vec![0; n],
-            touched: Vec::new(),
-        }
+        net.clear();
+        net.resize(n, 0);
+        self.min_list = min_list;
+        self.bucket_base = bucket_base;
     }
 
     /// Panics on an empty queue: every step leaves at least one vertex behind.

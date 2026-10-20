@@ -19,6 +19,7 @@ pub(in crate::factor) struct CliqueTreeElimination<T, I, C: Copies> {
     graph: EliminationGraph<T, I, C>,
     clique: CliqueSampler<T, I, C>,
     fill: Fill<T, I, C>,
+    order: MinDegreeOrder<I>,
 }
 
 impl<T: Real, I: Index, C: Copies> CliqueTreeElimination<T, I, C> {
@@ -28,6 +29,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeElimination<T, I, C> {
             graph: EliminationGraph::new(),
             clique: CliqueSampler::new(split),
             fill: Fill::new(),
+            order: MinDegreeOrder::new(),
         }
     }
 
@@ -41,26 +43,22 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeElimination<T, I, C> {
         self.graph.load(&sddm, self.split);
         drop(sddm);
         let n = self.graph.n();
-        let mut ordering = MinDegreeOrder::<I>::new(&self.graph, self.split, pin);
+        self.order.load(&self.graph, self.split, pin);
         let mut steps = ApproximateCholesky::with_capacity(n, self.graph.edge_ends());
-        self.pivot_all(&mut ordering, &mut draws, &mut steps);
+        self.pivot_all(&mut draws, &mut steps);
         // Doubling past the estimate otherwise retains up to 2x the entries (+30% on grids).
         steps.neighbors.shrink_to_fit();
         steps.coefficients.shrink_to_fit();
-        (steps, pin.unwrap_or_else(|| ordering.next_vertex()))
+        (steps, pin.unwrap_or_else(|| self.order.next_vertex()))
     }
 
     #[inline(never)] // Inlined, its codegen moves with the buffer handling: grids +1-3%.
-    fn pivot_all(
-        &mut self,
-        ordering: &mut MinDegreeOrder<I>,
-        draws: &mut Xoshiro256PlusPlus,
-        steps: &mut ApproximateCholesky<T, I>,
-    ) {
+    fn pivot_all(&mut self, draws: &mut Xoshiro256PlusPlus, steps: &mut ApproximateCholesky<T, I>) {
         let Self {
             graph,
             clique,
             fill,
+            order: ordering,
             ..
         } = self;
         for _ in 1..graph.n() {
