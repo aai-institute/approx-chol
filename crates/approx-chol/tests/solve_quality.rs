@@ -62,7 +62,7 @@ fn splitting(config: Config, k: u32) -> Config {
 }
 
 cases! {
-    /// A grounded singleton is a star at every `k`: AC2 samples no edge and solves `M⁻¹b`.
+    /// A grounded singleton factors to `1/σ` whatever AC2's `k`, so it solves `M⁻¹b` exactly.
     #[case::positive_rhs([1.0, 2.0, 3.0])]
     #[case::mixed_sign_rhs([1.0, -2.0, 4.0])]
     fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
