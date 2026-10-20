@@ -315,7 +315,7 @@ impl<T: Real, I: Index> Block<T, I> {
             Balance::Balanced(grounding) => (Sheets::One, grounding),
             Balance::Frustrated(grounding) => (Sheets::Two, grounding),
         };
-        let factors = |from: usize| restriction.scaled_factors(from);
+        let tail = |from: usize| restriction.factor_tail(from);
         let (elimination, cholesky) = match off_diagonal {
             OffDiagonal::General(adjacency) => {
                 let sddm = match sheets {
@@ -323,11 +323,11 @@ impl<T: Real, I: Index> Block<T, I> {
                     Sheets::Two => Sddm::cover(adjacency, grounding),
                 };
                 let draws = streams.cholesky();
-                let factored = Cholesky::factor(sddm, draws, config, factors(0), reused);
+                let factored = Cholesky::factor(sddm, draws, config, tail(0), reused);
                 (None, factored)
             }
             OffDiagonal::Bipartite(cross) => {
-                let kept = factors(cross.n_rows());
+                let kept = tail(cross.n_rows());
                 let dense = config.dense(sheets.count() * cross.n_cols());
                 let inv_pivot = BlockElimination::inverse_pivots(&cross, &grounding);
                 let s = match (dense, config.complement) {

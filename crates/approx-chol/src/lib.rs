@@ -133,15 +133,6 @@ macro_rules! index {
 index!(u32);
 index!(u64);
 
-/// An index of the largest `|f|`, where pinning the gauge leaves its rounding unamplified by `1/f`.
-fn largest<T: Real>(f: &[T]) -> usize {
-    let last = f.len().saturating_sub(1);
-    (0..last).fold(last, |best, i| match f[i].abs() > f[best].abs() {
-        true => i,
-        false => best,
-    })
-}
-
 /// `units` per task so each carries `2^bits` of `work`, in `u64` as a 32-bit `usize` wraps past `2^(32-bits)` units.
 fn per_task(units: usize, work: u64, bits: u32) -> usize {
     let per = ((units as u64) << bits).div_ceil(work.max(1));
