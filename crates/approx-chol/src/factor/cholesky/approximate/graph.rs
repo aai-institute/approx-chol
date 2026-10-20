@@ -17,7 +17,7 @@ pub(super) struct EliminationGraph<T, I, C> {
 }
 
 /// A block this small keeps its buffers for the task's next; a larger one frees them (peak −11…−14%).
-pub(super) const REUSED_UP_TO: usize = 1024;
+const REUSED_UP_TO: usize = 1024;
 
 impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
     pub(super) fn new() -> Self {
