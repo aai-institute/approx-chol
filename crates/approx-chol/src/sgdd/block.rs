@@ -1,7 +1,6 @@
-//! `A` as its reduced irreducible blocks: what the factorization consumes.
+//! One reduced irreducible block, its balance and grounding, and the summands extraction yields.
 
 use super::congruence::{Congruence, Restriction};
-use super::decomposition::Components;
 use super::scaling::ScalingReport;
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, Index, Real};
@@ -13,14 +12,6 @@ pub(crate) enum Balance<T> {
     Balanced(Grounding<T>),
     /// No signature exists: a two-sheet cover, definite on `[z; −z]` even ungrounded.
     Frustrated(Grounding<T>),
-}
-
-impl<T: Real> Balance<T> {
-    fn grounding(&self) -> &Grounding<T> {
-        match self {
-            Self::Balanced(grounding) | Self::Frustrated(grounding) => grounding,
-        }
-    }
 }
 
 /// The surplus `s = diag(M) − Σ|offdiag(M)|` closing `M` into an SDDM; none is `σ = 0`, singular only when balanced.
@@ -86,15 +77,15 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         let vertices = restriction.vertices();
         let n = vertices.len();
         assert_eq!(off_diagonal.n(), n, "one row per vertex");
-        assert!(balance.grounding().fits(n), "one surplus per row");
-        let sheets = match balance {
-            Balance::Balanced(_) => {
+        let (sheets, grounding) = match &balance {
+            Balance::Balanced(grounding) => {
                 debug_assert!(off_diagonal.nonpositive(), "a balanced M is a Z-matrix");
-                T::one()
+                (T::one(), grounding)
             }
-            Balance::Frustrated(_) => T::one() + T::one(),
+            Balance::Frustrated(grounding) => (T::one() + T::one(), grounding),
         };
-        let surplus = balance.grounding().surplus().unwrap_or_default();
+        assert!(grounding.fits(n), "one surplus per row");
+        let surplus = grounding.surplus().unwrap_or_default();
         if let Some(i) = surplus.iter().position(|&s| !crate::in_range(s)) {
             let vertex = vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
@@ -140,35 +131,6 @@ pub(crate) struct Summands<B, I, T> {
     pub(crate) lone: Vec<(I, T)>,
     /// One-vertex components whose pivot is zero: an in-place solve zeroes them.
     pub(crate) dead: Vec<I>,
-}
-
-/// `A` as its reduced summands; built only from extraction, so they cover `A` once.
-#[derive(Clone, Debug)]
-pub(crate) struct Sgdd<T = f64, I = u32> {
-    n: usize,
-    summands: Summands<IrreducibleBlock<T, I>, I, T>,
-}
-
-impl<T: Real, I: Index> Sgdd<T, I> {
-    pub(super) fn new(components: Components<IrreducibleBlock<T, I>, I, T>) -> Self {
-        let Components {
-            partition,
-            summands,
-        } = components;
-        Self {
-            n: partition.n(),
-            summands,
-        }
-    }
-
-    /// Dimension of `A`.
-    pub(crate) fn n(&self) -> usize {
-        self.n
-    }
-
-    pub(crate) fn into_summands(self) -> Summands<IrreducibleBlock<T, I>, I, T> {
-        self.summands
-    }
 }
 
 /// Why a block has no SDDM form; each `vertex` is in `A`'s numbering.

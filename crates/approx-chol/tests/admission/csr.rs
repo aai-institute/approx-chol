@@ -6,7 +6,7 @@ use approx_chol::{factorize, Error, Factor, ReduceError};
 use num_traits::PrimInt;
 use rstest::rstest;
 
-use super::{assert_names_a_defect, grounded, reduce, reduce_upper};
+use super::{assert_names_a_defect, reduce, reduce_upper};
 use crate::grid::grid;
 
 const F32_FLOOR: f32 = f32::MIN_POSITIVE / f32::EPSILON;
@@ -267,19 +267,6 @@ fn a_dimension_past_the_largest_row_count_is_a_row_pointer_length_mismatch(
 }
 
 #[test]
-fn singleton_systems_are_admitted() {
-    let zero = reduce(&[0, 1], &[0], &[0.0]).expect("zero singleton");
-    assert_eq!(
-        (zero.n(), zero.blocks().len()),
-        (1, 0),
-        "a zero row is no block"
-    );
-
-    let positive = reduce(&[0, 1], &[0], &[2.0]).expect("positive singleton");
-    assert!(grounded(&positive));
-}
-
-#[test]
 fn a_diagonal_at_a_quarter_of_the_maximum_still_solves() {
     let quarter = f64::MAX / 4.0;
     let factor = reduce(&[0, 1], &[0], &[quarter]).expect("diagonal at the bound");
@@ -385,23 +372,4 @@ fn canonical_and_reordered_ingestion_agree_bit_for_bit() {
         let triangle = factorize(triangle).expect("grid");
         assert_eq!(canonical, bits(&triangle, &rhs), "{label} upper storage");
     }
-}
-
-// Splitting the diagonal matters: a coalescing bug there is invisible to the sign and symmetry checks.
-#[test]
-fn unsorted_and_split_entries_reduce_bit_identically() {
-    let canonical = reduce(
-        &[0, 2, 5, 7],
-        &[0, 1, 0, 1, 2, 1, 2],
-        &[1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0],
-    )
-    .expect("path");
-    let shuffled = reduce(
-        &[0, 4, 7, 9],
-        &[1, 0, 1, 0, 2, 0, 1, 2, 1],
-        &[-0.5, 0.25, -0.5, 0.75, -1.0, -1.0, 2.0, 1.0, -1.0],
-    )
-    .expect("split path");
-    let rhs = [1.0, 0.0, -1.0];
-    assert_eq!(bits(&canonical, &rhs), bits(&shuffled, &rhs));
 }

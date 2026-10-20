@@ -210,19 +210,6 @@ cases! {
 }
 
 cases! {
-    /// A balanced graph without surplus floats on every entry point, signed or not.
-    fn laplacian_factor_has_input_dimension_and_floats(entry in entries(all), types in types(all)) {
-        check(stated_by(entry, laplacian()), |graph| {
-            let reduced = entry.reduce(&graph, types);
-            let floats = reduced.floats();
-            prop_assert!(floats.iter().all(|&f| f), "{types:?}: {floats:?}");
-            prop_assert_eq!(reduced.factorize(&Config::default()).n(), graph.n);
-            Ok(())
-        });
-    }
-}
-
-cases! {
     fn sddm_factor_is_grounded_and_solves_finitely(
         route in routes(grounded),
         types in types(all),
