@@ -138,8 +138,11 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
     }
 
     /// The one site deriving the remainder's share.
-    fn push(&mut self, vertex: usize, column: (T, impl Iterator<Item = (I, T)>, I)) {
-        let (weight, shares, remainder) = column;
+    fn push(
+        &mut self,
+        vertex: usize,
+        (weight, shares, remainder): (T, impl Iterator<Item = (I, T)>, I),
+    ) {
         let start = self.neighbors.len();
         let mut retained = T::one();
         for (neighbor, share) in shares {

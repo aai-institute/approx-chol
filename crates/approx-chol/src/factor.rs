@@ -98,9 +98,9 @@ impl<T: Real> Factor<T> {
         let n = sgdd.n();
         let (coupled, lone) = sgdd.into_blocks();
         let mut blocks = Vec::with_capacity(coupled.len() + lone.len());
-        let reused = || Elimination::new(multiplicity(config.split_merge));
         let build = |reused: &mut _, block| BlockFactor(store(Block::build(block, config, reused)));
-        blocks.par_extend(coupled.into_par_iter().map_init(reused, build));
+        let elimination = || Elimination::new(multiplicity(config.split_merge));
+        blocks.par_extend(coupled.into_par_iter().map_init(elimination, build));
         let isolated = |(v, pivot)| BlockFactor(Storage::Isolated(Isolated::new(v, pivot)));
         blocks.extend(lone.into_iter().map(isolated));
         let mut covered = vec![false; n];
