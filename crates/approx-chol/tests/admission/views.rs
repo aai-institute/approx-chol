@@ -378,6 +378,24 @@ fn a_bipartite_gram_with_a_diagonal_solves_v_w_vt_plus_it(#[case] slopes: Option
     );
 }
 
+/// One left vertex on two right ones: the block puts the right side first, so `σ` must follow it.
+#[test]
+fn a_bipartite_incidence_diagonal_follows_the_larger_side_first() {
+    let (rows, cols) = ([0u32, 0], [0u32, 1]);
+    let left = FactorWidth1::<f64>::new(1, &rows, None).unwrap();
+    let right = FactorWidth1::<f64>::new(2, &cols, None).unwrap();
+    let diagonal = [1.0, 1.0, 2.0];
+    let gram = BipartiteGram::new(left, right, Weights::unit())
+        .and_then(|gram| gram.with_diagonal(&diagonal))
+        .unwrap();
+    let factor = factorize(gram).expect("a grounded star");
+    let heads = [1u32, 2];
+    solve_residual(
+        &factor,
+        &plus_diagonal(matrix(3, &rows, &heads, &[1.0; 2], &[1.0; 2]), &diagonal),
+    );
+}
+
 #[rstest]
 #[case::short(&[1.0, 1.0], ViewError::LengthMismatch { expected: 3, found: 2 })]
 #[case::negative(&[0.0, -1.0, 0.0], ViewError::InvalidDiagonal { vertex: 1 })]

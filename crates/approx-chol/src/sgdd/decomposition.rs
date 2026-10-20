@@ -237,19 +237,24 @@ where
 {
     type Block = (Box<[I]>, OffDiagonal<T, I>, Grounding<T>);
 
+    /// The surplus gathered in the block's order, as a bipartite block puts its larger side first.
     fn whole(self, vertices: &[I]) -> Self::Block {
         let (vertices, off_diagonal) = self.adjacency.whole(vertices);
-        let grounding =
-            (self.surplus).map_or_else(Grounding::ungrounded, |s| Grounding::of(s.into_owned()));
+        let grounding = surplus_at(self.surplus.as_ref(), &vertices);
         (vertices, off_diagonal, grounding)
     }
 
     fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
         let (vertices, off_diagonal) = self.adjacency.component(vertices, position);
-        let at = |s: &Cow<'_, [T]>| Grounding::of(vertices.iter().map(|&v| s[v.index()]).collect());
-        let grounding = self.surplus.as_ref().map_or_else(Grounding::ungrounded, at);
+        let grounding = surplus_at(self.surplus.as_ref(), &vertices);
         (vertices, off_diagonal, grounding)
     }
+}
+
+fn surplus_at<T: Real, I: Index>(surplus: Option<&Cow<'_, [T]>>, vertices: &[I]) -> Grounding<T> {
+    surplus.map_or_else(Grounding::ungrounded, |s| {
+        Grounding::of(vertices.iter().map(|&v| s[v.index()]).collect())
+    })
 }
 
 /// The biadjacency `C`, cancelled cells dropped: rows are `A`'s left vertices.
