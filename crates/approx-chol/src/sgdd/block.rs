@@ -1,4 +1,4 @@
-//! `A` as its reduced irreducible blocks: what the factorization consumes.
+//! One reduced irreducible block, its balance and grounding, and the summands extraction yields.
 
 use super::congruence::{Congruence, Restriction};
 use super::scaling::ScalingReport;

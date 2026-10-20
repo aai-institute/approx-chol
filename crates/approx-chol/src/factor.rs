@@ -395,12 +395,15 @@ impl<T: Real, I: Index> Block<T, I> {
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
-    serde(bound(deserialize = "T: Real + serde::Deserialize<'de>"))
+    serde(
+        bound(deserialize = "T: Real + serde::Deserialize<'de>"),
+        deny_unknown_fields
+    )
 )]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Isolated<T> {
     vertex: u64,
-    #[cfg_attr(feature = "serde", serde(deserialize_with = "positive"))]
+    #[cfg_attr(feature = "serde", serde(deserialize_with = "inverse_of_a_pivot"))]
     inverse_pivot: T,
 }
 
@@ -422,13 +425,15 @@ impl<T: Real> Isolated<T> {
     }
 }
 
+/// `1/σ` for a pivot in `[MIN_POSITIVE/ε, MAX/4]`, so it is normal and at most `ε/MIN_POSITIVE`.
 #[cfg(feature = "serde")]
-fn positive<'de, D: serde::Deserializer<'de>, T: Real + serde::Deserialize<'de>>(
+fn inverse_of_a_pivot<'de, D: serde::Deserializer<'de>, T: Real + serde::Deserialize<'de>>(
     deserializer: D,
 ) -> Result<T, D::Error> {
-    let pivot = T::deserialize(deserializer)?;
-    (pivot.is_finite() && pivot > T::zero())
-        .then_some(pivot)
+    let inverse = T::deserialize(deserializer)?;
+    let largest = T::epsilon() / T::min_positive_value();
+    (inverse >= T::min_positive_value() && inverse <= largest)
+        .then_some(inverse)
         .ok_or_else(|| serde::de::Error::custom("corrupt Isolated"))
 }
 

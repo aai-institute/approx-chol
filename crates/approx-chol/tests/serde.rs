@@ -425,3 +425,23 @@ fn an_approximate_step_length_past_its_neighbors_is_corrupt() {
     bytes.push(0); // no report
     postcard::from_bytes::<BlockFactor>(&bytes).expect_err("a step past its neighbors is corrupt");
 }
+
+/// An isolated vertex's inverse pivot outside what a stored pivot inverts to is corrupt.
+#[rstest]
+#[case::zero(0.0)]
+#[case::negative(-0.5)]
+#[case::subnormal(5e-324)]
+#[case::past_any_pivot(1e308)]
+fn an_isolated_inverse_pivot_out_of_range_is_corrupt(#[case] inverse: f64) {
+    let edge = Laplacian::new(3, &[0u32], &[1], Weights::unit()).unwrap();
+    let factor =
+        factorize_with(edge.grounded(&[1.0, 0.0, 2.0]).unwrap(), Config::default()).unwrap();
+    let mut v = serde_json::to_value(&factor).unwrap();
+    serde_json::from_value::<Factor>(v.clone()).expect("a stored isolated vertex decodes");
+    let mut forge = |x: &mut serde_json::Value| *x = inverse.into();
+    assert!(
+        edit(&mut v, "/Isolated/inverse_pivot", &mut forge) > 0,
+        "the factor stores one"
+    );
+    serde_json::from_value::<Factor>(v).expect_err("its inverse pivot is out of range");
+}
