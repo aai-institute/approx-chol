@@ -5,16 +5,11 @@ use num_traits::PrimInt;
 use super::{check, index, length, Column, ViewError, Weighting};
 use crate::{Index, Real};
 
-/// `W`, one nonnegative entry per column of `V`, checked once so every view over the same columns can share it.
+/// `W`, one nonnegative entry per column of `V`, checked once so every view over the same columns can share it; a view without it has `W = I`.
 #[derive(Clone, Copy, Debug)]
 pub struct Weights<'a, T>(Weighting<&'a [T]>);
 
 impl<'a, T: Real> Weights<'a, T> {
-    /// `W = I`.
-    pub fn unit() -> Self {
-        Self(Weighting::Unit)
-    }
-
     /// `W = diag(w)`; each `w` finite and nonnegative.
     pub fn of(w: &'a [T]) -> Result<Self, ViewError> {
         check(w, |w| w.is_finite() && w >= T::zero(), weight)?;
@@ -32,7 +27,7 @@ fn weight(column: usize) -> ViewError {
     ViewError::InvalidWeight { column }
 }
 
-/// Edge `k` joins `a[k]` and `b[k]` under `weights`; the view fixes the numbering and the signs.
+/// Edge `k` joins `a[k]` and `b[k]` under `weights`, `W = I` until given; the view fixes the numbering and the signs.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Edges<'a, T, I> {
     a: &'a [I],
@@ -41,13 +36,19 @@ pub(super) struct Edges<'a, T, I> {
 }
 
 impl<'a, T: Real, I: PrimInt> Edges<'a, T, I> {
-    /// Lengths and weights are checked; the ends are the view's to check.
-    pub(super) fn new(a: &'a [I], b: &'a [I], weights: Weights<'a, T>) -> Result<Self, ViewError> {
+    /// Lengths are checked; the ends are the view's to check.
+    pub(super) fn new(a: &'a [I], b: &'a [I]) -> Result<Self, ViewError> {
         length(a.len(), b.len())?;
-        if let Weighting::Of(w) | Weighting::SqrtOf(w) = weights.0 {
-            length(a.len(), w.len())?;
-        }
+        let weights = Weights(Weighting::Unit);
         Ok(Self { a, b, weights })
+    }
+
+    /// One weight per column.
+    pub(super) fn with_weights(self, weights: Weights<'a, T>) -> Result<Self, ViewError> {
+        if let Weighting::Of(w) | Weighting::SqrtOf(w) = weights.0 {
+            length(self.a.len(), w.len())?;
+        }
+        Ok(Self { weights, ..self })
     }
 
     /// Column `k` is `v_a(k) e_a + v_b(k) e_(offset + b)`; matched once, then looped per case.

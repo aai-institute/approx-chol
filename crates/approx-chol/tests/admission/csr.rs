@@ -1,6 +1,6 @@
 use approx_chol::input::{
     BipartiteGram, CsrError, CsrRef, FactorWidth1, FactorWidth2, Laplacian, SignedGraph,
-    UpperCsrRef, Weights,
+    UpperCsrRef,
 };
 use approx_chol::{factorize, Error, Factor, ReduceError};
 use num_traits::PrimInt;
@@ -231,21 +231,18 @@ fn in_class_input_is_admitted_on_both_paths(
 #[case::csr(factorize(CsrRef::<f64>::new(&[0], &[], &[], 0).unwrap()).expect("CSR"))]
 #[case::upper_csr(factorize(UpperCsrRef::<f64>::new(&[0], &[], &[], 0).unwrap()).expect("upper CSR"))]
 #[case::laplacian(
-    factorize(Laplacian::<f64>::new(0, &[], &[], Weights::unit()).unwrap()).expect("Laplacian")
+    factorize(Laplacian::<f64>::new(0, &[], &[]).unwrap()).expect("Laplacian")
 )]
 #[case::signed_graph(
-    factorize(SignedGraph::<f64>::new(0, &[], &[], &[], Weights::unit()).unwrap())
+    factorize(SignedGraph::<f64>::new(0, &[], &[], &[]).unwrap())
         .expect("signed graph")
 )]
 #[case::gram(
-    factorize(FactorWidth2::<f64>::new(0, &[], &[], &[], &[], Weights::unit()).unwrap()).expect("Gram")
+    factorize(FactorWidth2::<f64>::new(0, &[], &[], &[], &[]).unwrap()).expect("Gram")
 )]
 #[case::bipartite_gram(factorize(
-    BipartiteGram::new(
-        FactorWidth1::<f64>::new(0, &[], None).unwrap(),
-        FactorWidth1::<f64>::new(0, &[], None).unwrap(),
-        Weights::unit(),
-    )
+    BipartiteGram::new(FactorWidth1::<f64>::new(0, &[], None).unwrap(),
+        FactorWidth1::<f64>::new(0, &[], None).unwrap())
     .unwrap(),
 )
 .expect("bipartite Gram"))]

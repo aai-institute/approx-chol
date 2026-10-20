@@ -346,7 +346,9 @@ fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
         ..Config::default()
     };
     for config in [Config::default(), exact] {
-        let graph = SignedGraph::new(3, &a, &b, &pos, Weights::of(&w).unwrap()).unwrap();
+        let graph = SignedGraph::new(3, &a, &b, &pos)
+            .and_then(|v| v.with_weights(Weights::of(&w)?))
+            .unwrap();
         let x = factorize_with(graph, config).unwrap().solve(&rhs).unwrap();
         let residual = (m.iter().zip(&rhs))
             .map(|(row, b)| (row.iter().zip(&x).map(|(m, x)| m * x).sum::<f64>() - b).abs())
@@ -371,8 +373,10 @@ fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
         backend: Backend::Approximate,
         ..Config::default()
     };
-    let path = Laplacian::new(3, &a, &b, Weights::of(&w).unwrap()).unwrap();
-    let factor = factorize_with(path.with_diagonal(&ground).unwrap(), config).unwrap();
+    let path = Laplacian::new(3, &a, &b)
+        .and_then(|v| v.with_weights(Weights::of(&w)?))
+        .unwrap();
+    let factor = factorize_with(path.plus_diagonal(&ground).unwrap(), config).unwrap();
     assert_close(
         "light sink",
         &factor.solve(&rhs).unwrap(),
@@ -402,8 +406,8 @@ fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
             let gram = BipartiteGram::new(
                 FactorWidth1::new(3, &left, Some(&loadings[..])).unwrap(),
                 FactorWidth1::<f64>::new(1, &right, None).unwrap(),
-                Weights::of(&weights).unwrap(),
             )
+            .and_then(|v| v.with_weights(Weights::of(&weights)?))
             .unwrap();
             let solved = factorize_with(gram, config).unwrap().solve(&b).unwrap();
             assert_close(&format!("{config:?}"), &solved, &x, 64.0 * f64::EPSILON);

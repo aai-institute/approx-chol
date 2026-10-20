@@ -12,24 +12,23 @@ use crate::Real;
 pub struct SignedGraph<'a, T, I = u32>(Gram<'a, T, I, General, One, Incidences<'a>>);
 
 impl<'a, T: Real, I: PrimInt> SignedGraph<'a, T, I> {
-    /// Edge `k` joins `a[k] ≠ b[k] < n` under `weights`; lengths, ends and weights are checked.
-    pub fn new(
-        n: usize,
-        a: &'a [I],
-        b: &'a [I],
-        positive: &'a [bool],
-        weights: Weights<'a, T>,
-    ) -> Result<Self, ViewError> {
+    /// Edge `k` joins `a[k] ≠ b[k] < n`, unit weight; lengths and ends are checked.
+    pub fn new(n: usize, a: &'a [I], b: &'a [I], positive: &'a [bool]) -> Result<Self, ViewError> {
         length(a.len(), positive.len())?;
-        let edges = Edges::new(a, b, weights)?;
+        let edges = Edges::new(a, b)?;
         check_ends(n, a, b)?;
         let head = Incidences(positive);
         Ok(Self(Gram::new(n, General, edges, One, head, None)))
     }
 
+    /// `A` under `weights`, one per edge; `W = I` without it.
+    pub fn with_weights(self, weights: Weights<'a, T>) -> Result<Self, ViewError> {
+        self.0.with_weights(weights).map(Self)
+    }
+
     /// `A + diag(d)`, one finite nonnegative `d_i` per vertex.
-    pub fn with_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
-        self.0.with_diagonal(diagonal).map(Self)
+    pub fn plus_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
+        self.0.plus_diagonal(diagonal).map(Self)
     }
 
     pub(crate) fn n(&self) -> usize {

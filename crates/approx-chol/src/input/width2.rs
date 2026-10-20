@@ -146,12 +146,11 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         b: &'a [I],
         x: &'a [T],
         y: &'a [T],
-        weights: Weights<'a, T>,
     ) -> Result<Self, ViewError> {
         for found in [x.len(), y.len()] {
             length(a.len(), found)?;
         }
-        let edges = Edges::new(a, b, weights)?;
+        let edges = Edges::new(a, b)?;
         check_ends(n, a, b)?;
         Ok(Self(Gram::new(
             n,
@@ -163,9 +162,14 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         )))
     }
 
+    /// `V W Vᵀ` under `weights`, one per column; `W = I` without it.
+    pub fn with_weights(self, weights: Weights<'a, T>) -> Result<Self, ViewError> {
+        self.0.with_weights(weights).map(Self)
+    }
+
     /// `V W Vᵀ + diag(d)`, one finite nonnegative `d_i` per vertex.
-    pub fn with_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
-        self.0.with_diagonal(diagonal).map(Self)
+    pub fn plus_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
+        self.0.plus_diagonal(diagonal).map(Self)
     }
 
     pub(crate) fn n(&self) -> usize {

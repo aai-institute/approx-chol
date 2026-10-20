@@ -36,13 +36,12 @@ pub struct BipartiteGram<'a, T, I = u32> {
 }
 
 impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
-    /// Both factors share the column count and the weights are checked.
+    /// Both factors share the column count; `W = I`.
     pub fn new(
         left: FactorWidth1<'a, T, I>,
         right: FactorWidth1<'a, T, I>,
-        weights: Weights<'a, T>,
     ) -> Result<Self, ViewError> {
-        let edges = Edges::new(left.rows, right.rows, weights)?;
+        let edges = Edges::new(left.rows, right.rows)?;
         let (n, graph) = (left.n.saturating_add(right.n), Bipartite { n_left: left.n });
         Ok(Self {
             incidence: Gram::new(n, graph, edges, One, One, None),
@@ -50,9 +49,15 @@ impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
         })
     }
 
+    /// `V W Vᵀ` under `weights`, one per column.
+    pub fn with_weights(self, weights: Weights<'a, T>) -> Result<Self, ViewError> {
+        let incidence = self.incidence.with_weights(weights)?;
+        Ok(Self { incidence, ..self })
+    }
+
     /// `V W Vᵀ + diag(d)`, one finite nonnegative `d_i` per vertex, left rows first.
-    pub fn with_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
-        let incidence = self.incidence.with_diagonal(diagonal)?;
+    pub fn plus_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
+        let incidence = self.incidence.plus_diagonal(diagonal)?;
         Ok(Self { incidence, ..self })
     }
 

@@ -3,7 +3,7 @@
 #[path = "shared/grid.rs"]
 mod grid;
 
-use approx_chol::input::{Laplacian, Weights};
+use approx_chol::input::Laplacian;
 use approx_chol::{factorize_with, Config};
 use grid::Grid;
 
@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grid = Grid::new(10, 10);
     println!("Grid Laplacian: 10×10 ({} vertices)", grid.n);
 
-    let laplacian = Laplacian::new(grid.n, &grid.a, &grid.b, Weights::<f64>::unit())?;
+    let laplacian = Laplacian::<f64>::new(grid.n, &grid.a, &grid.b)?;
     let b = grid.split_rhs();
 
     // AC2's `k` copies per edge trade more fill-in for lower factor variance.

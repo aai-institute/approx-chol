@@ -558,7 +558,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::input::{BipartiteGram, CsrRef, FactorWidth1, Weights};
+    use crate::input::{BipartiteGram, CsrRef, FactorWidth1};
     use crate::ScalingPolicy;
 
     fn only_block(sgdd: Sgdd, config: &Config) -> Block<f64, u32> {
@@ -598,7 +598,6 @@ mod tests {
         let gram = BipartiteGram::new(
             FactorWidth1::new(2, &[0u32, 0, 1, 1], None).expect("valid rows"),
             FactorWidth1::new(2, &[0u32, 1, 0, 1], None).expect("valid columns"),
-            Weights::unit(),
         )
         .expect("valid gram");
         let sgdd = Sgdd::reduce(gram.into(), ScalingPolicy::default()).expect("reduces");
@@ -732,8 +731,8 @@ mod storage {
         let gram = BipartiteGram::new(
             FactorWidth1::new(12, &rows, None).expect("valid rows"),
             FactorWidth1::new(9, &cols, None).expect("valid columns"),
-            Weights::of(&weights).expect("nonnegative"),
         )
+        .and_then(|v| v.with_weights(Weights::of(&weights)?))
         .expect("valid gram");
         assert_storage_agrees(gram.into());
     }

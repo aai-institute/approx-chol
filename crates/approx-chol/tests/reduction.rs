@@ -74,7 +74,7 @@ fn csr_and_upper_share_reduction_and_solve_bits() {
 fn gram_separates_folded_scaled_and_frustrated_components() {
     let (a, b) = ([0, 1, 3, 4, 3], [1, 2, 4, 5, 5]);
     let (x, y) = ([1.3, 2.7, 1.0, 1.0, 1.0], [-2.7, -4.1, 1.0, 1.0, 1.0]);
-    let gram = FactorWidth2::new(7, &a, &b, &x, &y, Weights::unit()).unwrap();
+    let gram = FactorWidth2::new(7, &a, &b, &x, &y).unwrap();
     let reduced = factorize_with(gram, exact(ScalingPolicy::new(0.0, 0).unwrap())).unwrap();
     assert_eq!(floats(&reduced), [true, false]);
     assert!(reduced
@@ -90,17 +90,21 @@ fn shape_ground_and_signature_match_their_gram_matrices() {
     let weights = [1.0, 4.0, 9.0, 16.0];
     let (x, y) = ([1.0, 2.0, 3.0, 4.0], [-1.0, -2.0, -3.0, -4.0]);
     let ground = [0.25, 0.0, 0.0, 0.0];
-    let laplacian = Laplacian::new(4, &a, &b, Weights::of(&weights).unwrap()).unwrap();
+    let laplacian = Laplacian::new(4, &a, &b)
+        .and_then(|v| v.with_weights(Weights::of(&weights)?))
+        .unwrap();
     let floating = factorize_with(laplacian, dense()).unwrap();
     assert!(floating.blocks()[0].floats());
-    let grounded = factorize_with(laplacian.with_diagonal(&ground).unwrap(), dense()).unwrap();
+    let grounded = factorize_with(laplacian.plus_diagonal(&ground).unwrap(), dense()).unwrap();
     assert!(!grounded.blocks()[0].floats());
     let mut expected = matrix(4, &a, &b, &x, &y);
     solve_residual(&floating, &expected);
     expected[0][0] += ground[0];
     solve_residual(&grounded, &expected);
     let signs = [true, false, true, false];
-    let signed = SignedGraph::new(4, &a, &b, &signs, Weights::of(&weights).unwrap()).unwrap();
+    let signed = SignedGraph::new(4, &a, &b, &signs)
+        .and_then(|v| v.with_weights(Weights::of(&weights)?))
+        .unwrap();
     let signed = factorize_with(signed, dense()).unwrap();
     let y = [1.0, -2.0, 3.0, -4.0];
     assert!(signed.blocks()[0].floats());
@@ -114,7 +118,7 @@ fn bipartite_incidence_and_valued_grams_preserve_both_sides() {
     let gram = |values_l, values_r| {
         let l = FactorWidth1::new(3, &left, values_l).unwrap();
         let r = FactorWidth1::new(2, &right, values_r).unwrap();
-        let gram = BipartiteGram::new(l, r, Weights::unit()).unwrap();
+        let gram = BipartiteGram::new(l, r).unwrap();
         factorize_with(gram, dense()).unwrap()
     };
     let incidence = gram(None, None);
@@ -135,7 +139,7 @@ fn bipartite_incidence_and_valued_grams_preserve_both_sides() {
 fn exhausted_scaling_reports_on_grams_and_rows() {
     let (a, b) = ([0, 1, 0], [1, 2, 2]);
     let (x, y) = ([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
-    let gram = FactorWidth2::new(3, &a, &b, &x, &y, Weights::unit()).unwrap();
+    let gram = FactorWidth2::new(3, &a, &b, &x, &y).unwrap();
     let policy = ScalingPolicy::new(0.0, 0).unwrap();
     let factor: Factor = factorize_with(gram, exact(policy)).unwrap();
     assert!(factor.blocks()[0].scaling_report().is_some());

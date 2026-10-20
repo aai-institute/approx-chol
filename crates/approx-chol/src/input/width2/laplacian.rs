@@ -12,21 +12,21 @@ use crate::Real;
 pub struct Laplacian<'a, T, I = u32>(Gram<'a, T, I, General, One, MinusOne>);
 
 impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
-    /// Edge `k` joins `a[k] ≠ b[k] < n` under `weights`; lengths, ends and weights are checked.
-    pub fn new(
-        n: usize,
-        a: &'a [I],
-        b: &'a [I],
-        weights: Weights<'a, T>,
-    ) -> Result<Self, ViewError> {
-        let edges = Edges::new(a, b, weights)?;
+    /// Edge `k` joins `a[k] ≠ b[k] < n`, unit weight; lengths and ends are checked.
+    pub fn new(n: usize, a: &'a [I], b: &'a [I]) -> Result<Self, ViewError> {
+        let edges = Edges::new(a, b)?;
         check_ends(n, a, b)?;
         Ok(Self(Gram::new(n, General, edges, One, MinusOne, None)))
     }
 
+    /// `L` under `weights`, one per edge; `W = I` without it.
+    pub fn with_weights(self, weights: Weights<'a, T>) -> Result<Self, ViewError> {
+        self.0.with_weights(weights).map(Self)
+    }
+
     /// `L + diag(d)`, one finite nonnegative `d_i` per vertex.
-    pub fn with_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
-        self.0.with_diagonal(diagonal).map(Self)
+    pub fn plus_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
+        self.0.plus_diagonal(diagonal).map(Self)
     }
 
     pub(crate) fn n(&self) -> usize {

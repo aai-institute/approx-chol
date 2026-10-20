@@ -2,7 +2,7 @@
 
 use num_traits::PrimInt;
 
-use super::edges::Edges;
+use super::edges::{Edges, Weights};
 use super::{check, length, Column, IntoColumns, ViewError};
 use crate::{Index, Real};
 
@@ -198,8 +198,14 @@ impl<'a, T: Real, I: PrimInt, G: Graph, A: End<T>, B: End<T>> Gram<'a, T, I, G, 
         }
     }
 
+    /// `V W Vᵀ` under `weights`, one per column.
+    pub(super) fn with_weights(self, weights: Weights<'a, T>) -> Result<Self, ViewError> {
+        let edges = self.edges.with_weights(weights)?;
+        Ok(Self { edges, ..self })
+    }
+
     /// `A + diag(σ)`, one finite nonnegative `σ_i` per vertex.
-    pub(super) fn with_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
+    pub(super) fn plus_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
         length(self.n, diagonal.len())?;
         let valid = |d: T| d.is_finite() && d >= T::zero();
         check(diagonal, valid, |vertex| ViewError::InvalidDiagonal {

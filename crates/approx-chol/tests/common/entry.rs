@@ -201,8 +201,8 @@ impl Entry {
                     y.push(cast(edge.sign() * root));
                 }
                 let ground: Vec<T> = cast_all(&graph.ground);
-                let v = FactorWidth2::new(n, &a, &b, &x, &y, Weights::unit())
-                    .and_then(|v| v.with_diagonal(&ground))
+                let v = FactorWidth2::new(n, &a, &b, &x, &y)
+                    .and_then(|v| v.plus_diagonal(&ground))
                     .expect("valid factor");
                 factorize_with(v, config).unwrap_or_else(|error| rejected(&error))
             }
@@ -232,18 +232,20 @@ impl Entry {
                 let gram = BipartiteGram::new(
                     left.expect("valid left factor"),
                     right.expect("valid right factor"),
-                    weights,
                 )
-                .and_then(|gram| gram.with_diagonal(&ground))
+                .and_then(|v| v.with_weights(weights))
+                .and_then(|gram| gram.plus_diagonal(&ground))
                 .expect("valid bipartite Gram");
                 factorize_with(gram, config).unwrap_or_else(|error| rejected(&error))
             }
             Entry::Laplacian | Entry::GroundedLaplacian => {
-                let view = Laplacian::new(n, &a, &b, weights).expect("valid Laplacian");
+                let view = Laplacian::new(n, &a, &b)
+                    .and_then(|v| v.with_weights(weights))
+                    .expect("valid Laplacian");
                 let ground: Vec<T> = cast_all(&graph.ground);
                 match self {
                     Entry::GroundedLaplacian => {
-                        factorize_with(view.with_diagonal(&ground).expect("valid ground"), config)
+                        factorize_with(view.plus_diagonal(&ground).expect("valid ground"), config)
                     }
                     _ => factorize_with(view, config),
                 }
@@ -252,8 +254,9 @@ impl Entry {
             Entry::SignedGraph => {
                 let positive: Vec<bool> = graph.edges.iter().map(|edge| edge.positive).collect();
                 let ground: Vec<T> = cast_all(&graph.ground);
-                let view = SignedGraph::new(n, &a, &b, &positive, weights)
-                    .and_then(|view| view.with_diagonal(&ground))
+                let view = SignedGraph::new(n, &a, &b, &positive)
+                    .and_then(|v| v.with_weights(weights))
+                    .and_then(|view| view.plus_diagonal(&ground))
                     .expect("valid signed graph");
                 factorize_with(view, config).unwrap_or_else(|error| rejected(&error))
             }

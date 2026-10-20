@@ -58,7 +58,7 @@ pub enum View<T> {
         a: Vec<u32>,
         b: Vec<u32>,
         weights: Weighting<T>,
-        ground: Option<Vec<T>>,
+        diagonal: Option<Vec<T>>,
     },
     SignedGraph {
         n: u8,
@@ -66,7 +66,7 @@ pub enum View<T> {
         b: Vec<u32>,
         positive: Vec<bool>,
         weights: Weighting<T>,
-        ground: Option<Vec<T>>,
+        diagonal: Option<Vec<T>>,
     },
 }
 
@@ -119,11 +119,12 @@ impl Build {
 }
 
 impl<T: Real> Weighting<T> {
-    fn weights(&self) -> Result<Weights<'_, T>, Box<dyn Error>> {
+    /// `None` for `W = I`, which a view has without weights.
+    fn weights(&self) -> Result<Option<Weights<'_, T>>, Box<dyn Error>> {
         Ok(match self {
-            Self::Unit => Weights::unit(),
-            Self::Of(w) => Weights::of(w)?,
-            Self::SqrtOf(s) => Weights::sqrt_of(s)?,
+            Self::Unit => None,
+            Self::Of(w) => Some(Weights::of(w)?),
+            Self::SqrtOf(s) => Some(Weights::sqrt_of(s)?),
         })
     }
 }
@@ -161,9 +162,13 @@ impl<T: Real> Case<T> {
                 weights,
                 diagonal,
             } => {
-                let v = FactorWidth2::new((*n).into(), a, b, x, y, weights.weights()?)?;
+                let v = FactorWidth2::new((*n).into(), a, b, x, y)?;
+                let v = match weights.weights()? {
+                    Some(w) => v.with_weights(w)?,
+                    None => v,
+                };
                 let v = match diagonal {
-                    Some(d) => v.with_diagonal(d)?,
+                    Some(d) => v.plus_diagonal(d)?,
                     None => v,
                 };
                 factorize_with(v, config)?
@@ -174,9 +179,13 @@ impl<T: Real> Case<T> {
                 weights,
                 diagonal,
             } => {
-                let gram = BipartiteGram::new(left.factor()?, right.factor()?, weights.weights()?)?;
+                let gram = BipartiteGram::new(left.factor()?, right.factor()?)?;
+                let gram = match weights.weights()? {
+                    Some(w) => gram.with_weights(w)?,
+                    None => gram,
+                };
                 let gram = match diagonal {
-                    Some(d) => gram.with_diagonal(d)?,
+                    Some(d) => gram.plus_diagonal(d)?,
                     None => gram,
                 };
                 factorize_with(gram, config)?
@@ -186,11 +195,15 @@ impl<T: Real> Case<T> {
                 a,
                 b,
                 weights,
-                ground,
+                diagonal,
             } => {
-                let graph = Laplacian::new((*n).into(), a, b, weights.weights()?)?;
-                let graph = match ground {
-                    Some(g) => graph.with_diagonal(g)?,
+                let graph = Laplacian::new((*n).into(), a, b)?;
+                let graph = match weights.weights()? {
+                    Some(w) => graph.with_weights(w)?,
+                    None => graph,
+                };
+                let graph = match diagonal {
+                    Some(d) => graph.plus_diagonal(d)?,
                     None => graph,
                 };
                 factorize_with(graph, config)?
@@ -201,11 +214,15 @@ impl<T: Real> Case<T> {
                 b,
                 positive,
                 weights,
-                ground,
+                diagonal,
             } => {
-                let graph = SignedGraph::new((*n).into(), a, b, positive, weights.weights()?)?;
-                let graph = match ground {
-                    Some(g) => graph.with_diagonal(g)?,
+                let graph = SignedGraph::new((*n).into(), a, b, positive)?;
+                let graph = match weights.weights()? {
+                    Some(w) => graph.with_weights(w)?,
+                    None => graph,
+                };
+                let graph = match diagonal {
+                    Some(d) => graph.plus_diagonal(d)?,
                     None => graph,
                 };
                 factorize_with(graph, config)?
