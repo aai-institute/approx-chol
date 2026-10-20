@@ -40,10 +40,10 @@ impl<T: Real, I: Index> Restriction<T, I> {
         (local.iter().zip(self.vertices.iter())).for_each(|(&v, &i)| x[i.index()] = v);
     }
 
-    /// `F`'s entries from `from` on, `None` unless scaled, so every `|f|` is `1`.
-    pub(crate) fn scaled_factors(&self, from: usize) -> Option<&[T]> {
+    /// `F` from vertex `from` on, `None` unless scaled, so every `|f|` is `1`.
+    pub(crate) fn factor_tail(&self, from: usize) -> Option<FactorTail<'_, T>> {
         match &self.congruence {
-            Congruence::Scaled(scales) => Some(&scales.factors[from..]),
+            Congruence::Scaled(scales) => Some(FactorTail(&scales.factors[from..])),
             _ => None,
         }
     }
@@ -114,9 +114,37 @@ pub(super) struct ScaledFactors<T> {
     norm: f64,
 }
 
+/// `F` on a block's vertices from an offset on, asked only where its gauge goes.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FactorTail<'f, T>(&'f [T]);
+
+impl<T: Real> FactorTail<'_, T> {
+    /// The offset of the largest `|f|`.
+    pub(crate) fn largest(self) -> usize {
+        largest(self.0)
+    }
+
+    /// Whether `|f|` spans past `1/√ε`, where a solve pinned at a small `|f|` loses more than half its digits.
+    pub(crate) fn spans_wide(self) -> bool {
+        let (least, most) = (self.0.iter()).fold((T::infinity(), T::zero()), |(least, most), f| {
+            (least.min(f.abs()), most.max(f.abs()))
+        });
+        least < most * T::epsilon().sqrt()
+    }
+}
+
+/// An index of the largest `|f|`, where pinning the gauge leaves its rounding unamplified by `1/f`.
+fn largest<T: Real>(f: &[T]) -> usize {
+    let last = f.len().saturating_sub(1);
+    (0..last).fold(last, |best, i| match f[i].abs() > f[best].abs() {
+        true => i,
+        false => best,
+    })
+}
+
 impl<T: Real> ScaledFactors<T> {
     pub(super) fn new(factors: Box<[T]>) -> Self {
-        let peak = crate::largest(&factors);
+        let peak = largest(&factors);
         let largest = factors.get(peak).map_or(T::zero(), |f| f.abs());
         let unit = |&f: &T| {
             let u = widen(f / largest);

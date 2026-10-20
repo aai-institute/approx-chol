@@ -6,7 +6,8 @@ use rand::rngs::Xoshiro256PlusPlus;
 use super::clique_tree::Copies;
 use super::config::Config;
 use super::sddm::{descend, lift, Sddm, Sheets};
-use crate::{largest, narrow};
+use crate::narrow;
+use crate::sgdd::FactorTail;
 use crate::{widen, Index, Real};
 use approximate::ApproximateCholesky;
 pub(super) use approximate::CliqueTreeElimination;
@@ -30,24 +31,24 @@ pub(super) struct Cholesky<T, I> {
 }
 
 impl<T: Real, I: Index> Cholesky<T, I> {
-    /// Dense up to the config's dimension, else approximate; `factors` is `F` on its vertices, `None` when every `|f|` is `1`.
+    /// Dense up to the config's dimension, else approximate; `tail` is `F` on its vertices, `None` when every `|f|` is `1`.
     pub(super) fn factor<C: Copies>(
         sddm: Sddm<T, I>,
         draws: Xoshiro256PlusPlus,
         config: &Config,
-        factors: Option<&[T]>,
+        tail: Option<FactorTail<'_, T>>,
         elimination: &mut CliqueTreeElimination<T, I, C>,
     ) -> Self {
         let (sheets, grounded, n) = (sddm.sheets(), sddm.grounded(), sddm.n());
         let (triangular, pinned) = match config.dense(n) {
             true => {
-                let pin = pinned(&sddm, factors);
+                let pin = pinned(&sddm, tail);
                 (Triangular::Dense(dense::factor(&sddm, pin).into()), pin)
             }
             false => {
                 // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
-                let pin =
-                    (spans_wide(factors) || grounds_wide(&sddm)).then(|| pinned(&sddm, factors));
+                let spans_wide = tail.is_some_and(FactorTail::spans_wide);
+                let pin = (spans_wide || grounds_wide(&sddm)).then(|| pinned(&sddm, tail));
                 let (steps, pin) = elimination.eliminate(sddm, draws, pin);
                 (Triangular::Approximate(Box::new(steps)), pin)
             }
@@ -108,21 +109,11 @@ impl<T: Real, I: Index> Cholesky<T, I> {
 }
 
 /// The slot the solve pins: the ground, else the largest `|f|` on the first sheet, so the gauge's rounding is not amplified by `1/f`.
-fn pinned<T: Real, I: Index>(sddm: &Sddm<T, I>, factors: Option<&[T]>) -> usize {
+fn pinned<T: Real, I: Index>(sddm: &Sddm<T, I>, tail: Option<FactorTail<'_, T>>) -> usize {
     match sddm.grounded() {
         true => sddm.n(),
-        false => factors.map_or(sddm.n() - 1, |f| sddm.sheets().count() * largest(f)),
+        false => tail.map_or(sddm.n() - 1, |tail| sddm.sheets().count() * tail.largest()),
     }
-}
-
-/// Whether `|f|` spans past `1/√ε`, where a solve pinned at a small `|f|` loses more than half its digits.
-fn spans_wide<T: Real>(factors: Option<&[T]>) -> bool {
-    factors.is_some_and(|f| {
-        let (least, most) = (f.iter()).fold((T::infinity(), T::zero()), |(least, most), f| {
-            (least.min(f.abs()), most.max(f.abs()))
-        });
-        least < most * T::epsilon().sqrt()
-    })
 }
 
 /// A sink behind an edge past `1/ε` lighter than the heaviest would divide the ground's `−Σb` rounding.
