@@ -2,6 +2,7 @@
 
 pub(super) mod bipartite;
 pub(super) mod edges;
+pub(super) mod gram;
 pub(super) mod laplacian;
 pub(super) mod signed;
 
@@ -11,6 +12,7 @@ use super::index;
 use crate::widen;
 use crate::{Index, Real};
 use edges::{Edges, Weights};
+use gram::{General, Gram, Values};
 
 /// Why a view's `new` rejected its slices.
 #[non_exhaustive]
@@ -72,11 +74,6 @@ pub(crate) trait IntoColumns<T: Real>: Copy {
 
     /// Each column in order; write `visit` as `#[inline(always)] |column| …` (outlined: 1.6-1.9x).
     fn for_each_column<I: Index>(self, visit: impl FnMut(Column<T, I>));
-}
-
-/// `V = [V_l; V_r]`: every column joins a left row to a right one, right rows numbered after the left.
-pub(crate) trait BipartiteColumns<T: Real>: IntoColumns<T> {
-    fn n_left(&self) -> usize;
 }
 
 /// Column `k` of `V` under its weight, unfolded, so the floating test reads `V` exactly as given.
@@ -163,6 +160,15 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
             values: [x, y],
         })
     }
+
+    pub(crate) fn n(&self) -> usize {
+        self.n
+    }
+
+    pub(crate) fn gram(self) -> Gram<'a, T, I, General, Values<'a, T>, Values<'a, T>> {
+        let [x, y] = self.values;
+        Gram::new(self.n, General, self.edges, Values(x), Values(y), None)
+    }
 }
 
 /// A slice of `found` entries where the view fixed `expected`.
@@ -185,15 +191,4 @@ fn check_ends<I: PrimInt>(n: usize, a: &[I], b: &[I]) -> Result<(), ViewError> {
         }
     }
     Ok(())
-}
-
-impl<T: Real, I: PrimInt> IntoColumns<T> for FactorWidth2<'_, T, I> {
-    fn n(&self) -> usize {
-        self.n
-    }
-
-    fn for_each_column<S: Index>(self, visit: impl FnMut(Column<T, S>)) {
-        let [x, y] = self.values;
-        self.edges.for_each_column(0, |k| x[k], |k| y[k], visit)
-    }
 }

@@ -3,8 +3,9 @@
 use num_traits::PrimInt;
 
 use super::edges::{Edges, Weights};
-use super::{check_ends, length, Column, IntoColumns, ViewError};
-use crate::{Index, Real};
+use super::gram::{General, Gram, Incidences, One};
+use super::{check_ends, length, ViewError};
+use crate::Real;
 
 /// `A = Σ_k w_k (e_a ± e_b)(e_a ± e_b)ᵀ`: `+` where `positive[k]`, so edge `k` adds `+w_k` to `a_ab`, else `−w_k`.
 #[derive(Clone, Copy, Debug)]
@@ -28,19 +29,19 @@ impl<'a, T: Real, I: PrimInt> SignedGraph<'a, T, I> {
         check_ends(n, a, b)?;
         Ok(Self { n, edges, positive })
     }
-}
 
-impl<T: Real, I: PrimInt> IntoColumns<T> for SignedGraph<'_, T, I> {
-    fn n(&self) -> usize {
+    pub(crate) fn n(&self) -> usize {
         self.n
     }
 
-    fn for_each_column<S: Index>(self, visit: impl FnMut(Column<T, S>)) {
-        let positive = self.positive;
-        let sign = |k: usize| match positive[k] {
-            true => T::one(),
-            false => -T::one(),
-        };
-        self.edges.for_each_column(0, |_| T::one(), sign, visit)
+    pub(crate) fn gram(self) -> Gram<'a, T, I, General, One, Incidences<'a>> {
+        Gram::new(
+            self.n,
+            General,
+            self.edges,
+            One,
+            Incidences(self.positive),
+            None,
+        )
     }
 }

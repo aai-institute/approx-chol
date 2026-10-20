@@ -3,14 +3,16 @@
 mod gram;
 mod graph;
 
+use std::marker::PhantomData;
+
 use num_traits::PrimInt;
 
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError};
 use super::congruence::{Congruence, ScaledFactors};
-use super::decomposition::{of_csr, of_upper, Cells, Partitioned};
+use super::decomposition::{of_csr, of_upper, Cells, Partitioned, Shape};
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
 use super::Sgdd;
-use crate::input::{Canonical, Input};
+use crate::input::{Bipartite, Canonical, End, Fold, Gram, Input, OnBipartite};
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, widen, Error, Index, Real};
 
@@ -24,11 +26,38 @@ impl<T: Real, I: Index> Sgdd<T, I> {
             // Symmetry is checked in the walk that unions the pattern; upper storage has no mirror.
             Input::Csr(csr) => of_csr(Canonical::of(csr)?)?.reduce(&policy)?,
             Input::UpperCsr(csr) => of_upper(Canonical::of(csr.0)?)?.reduce(&policy)?,
-            Input::Laplacian(laplacian) => Self::from_laplacian(laplacian)?,
-            Input::SignedGraph(graph) => Self::from_signed_graph(graph)?,
-            Input::Gram(v) => Self::from_gram(v, policy)?,
-            Input::BipartiteGram(gram) => Self::from_bipartite_gram(gram, policy)?,
+            Input::Laplacian(graph) => Self::from_gram(graph.gram(), &policy)?,
+            Input::SignedGraph(graph) => Self::from_gram(graph.gram(), &policy)?,
+            Input::Gram(v) => Self::from_gram(v.gram(), &policy)?,
+            Input::BipartiteGram(gram) => gram.lower(Reduction(&policy, PhantomData))?,
         })
+    }
+
+    /// An incidence `V` reads the fold its shape fixes, the head negated when that folds it; values are scaled under `policy`.
+    fn from_gram<J: PrimInt, G: Shape, A: End<T>, B: End<T>>(
+        v: Gram<'_, T, J, G, A, B>,
+        policy: &ScalingPolicy,
+    ) -> Result<Self, ReduceError> {
+        if !v.is_incidence() {
+            return Self::from_values(v, policy);
+        }
+        match v.fold() {
+            Some(Fold::NegatedHead) => {
+                Self::from_incidence(v.negated_head(), Some(Fold::NegatedHead))
+            }
+            fold => Self::from_incidence(v, fold),
+        }
+    }
+}
+
+/// [`Sgdd::from_gram`] under `policy`, whichever ends a bipartite Gram's sides give.
+struct Reduction<'p, I>(&'p ScalingPolicy, PhantomData<I>);
+
+impl<'a, T: Real, J: PrimInt, I: Index> OnBipartite<'a, T, J> for Reduction<'_, I> {
+    type Output = Result<Sgdd<T, I>, ReduceError>;
+
+    fn run<A: End<T>, B: End<T>>(self, gram: Gram<'a, T, J, Bipartite, A, B>) -> Self::Output {
+        Sgdd::from_gram(gram, self.0)
     }
 }
 

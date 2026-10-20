@@ -601,7 +601,7 @@ mod tests {
             Weights::unit(),
         )
         .expect("valid gram");
-        let sgdd = Sgdd::from_bipartite_gram(gram, ScalingPolicy::default()).expect("reduces");
+        let sgdd = Sgdd::reduce(gram.into(), ScalingPolicy::default()).expect("reduces");
         let block = only_block(sgdd, &Config::default());
         assert!(block.elimination.is_some());
         block

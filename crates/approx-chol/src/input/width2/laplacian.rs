@@ -3,8 +3,9 @@
 use num_traits::PrimInt;
 
 use super::edges::{Edges, Weights};
-use super::{check_ends, length, Column, IntoColumns, ViewError};
-use crate::{Index, Real};
+use super::gram::{General, Gram, MinusOne, One};
+use super::{check_ends, length, ViewError};
+use crate::Real;
 
 /// Weighted multigraph on `n` vertices, grounded by `g`: `A = Σ_k w_k (e_a − e_b)(e_a − e_b)ᵀ + diag(g)`.
 #[derive(Clone, Copy, Debug)]
@@ -44,20 +45,11 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
         })
     }
 
-    /// `g`, which is no column of `V`.
-    pub(crate) fn ground(&self) -> Option<&'a [T]> {
-        self.ground
-    }
-}
-
-/// The columns of `L` alone: the ground is read through [`Laplacian::ground`].
-impl<T: Real, I: PrimInt> IntoColumns<T> for Laplacian<'_, T, I> {
-    fn n(&self) -> usize {
+    pub(crate) fn n(&self) -> usize {
         self.n
     }
 
-    fn for_each_column<S: Index>(self, visit: impl FnMut(Column<T, S>)) {
-        self.edges
-            .for_each_column(0, |_| T::one(), |_| -T::one(), visit)
+    pub(crate) fn gram(self) -> Gram<'a, T, I, General, One, MinusOne> {
+        Gram::new(self.n, General, self.edges, One, MinusOne, self.ground)
     }
 }

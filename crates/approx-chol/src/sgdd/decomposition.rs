@@ -10,10 +10,7 @@ use super::block::{Grounding, ReduceError, Summands};
 use crate::input::{Canonical, CsrError};
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::{Index, Real};
-pub(super) use assembly::{
-    assemble_bipartite, assemble_bipartite_gram, assemble_general, assemble_laplacian,
-    assemble_signed,
-};
+pub(super) use assembly::{assemble_incidence, assemble_values, Shape};
 use partition::Partition;
 use partition::UnionFind;
 
@@ -133,18 +130,6 @@ pub(super) struct Components<B, I, T> {
     pub(super) partition: Partition<I>,
     pub(super) summands: Summands<B, I, T>,
 }
-
-/// A general `A` assembled with its diagonal, and its components.
-type General<T, I> = Partitioned<Assembled<T, UpperAdjacency<T, I>>, I>;
-
-/// A bipartite Gram assembled as `C` and the diagonal, and its components.
-type AssembledBipartite<T, I> = Partitioned<Assembled<T, Rows<T, I>>, I>;
-
-/// A Laplacian or signed graph assembled as `C` and `σ`, and its components.
-type DominantGraph<'a, T, I> = Partitioned<Dominant<'a, T, UpperAdjacency<T, I>>, I>;
-
-/// A bipartite Laplacian assembled as `C`, and its components.
-type DominantBipartite<T, I> = Partitioned<Dominant<'static, T, Rows<T, I>>, I>;
 
 /// One component's vertices in local order, off-diagonal and diagonal.
 pub(super) type Cells<T, I> = (Box<[I]>, OffDiagonal<T, I>, Vec<T>);
