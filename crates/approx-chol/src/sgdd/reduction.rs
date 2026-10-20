@@ -176,7 +176,7 @@ impl<T: Real> RowSums<T> {
     fn folded_surplus<I: Index>(self, off_diagonal: &OffDiagonal<T, I>) -> Grounding<T> {
         let trace = crate::compensated_sum(self.diagonal.iter().map(|&d| widen(d)));
         let ones = trace - off_diagonal.abs_total();
-        match ones <= SINGULAR_BAND * widen(T::epsilon()) * trace {
+        match within_band::<T>(ones, trace) {
             true => Grounding::ungrounded(),
             false => self.surplus(),
         }
@@ -191,4 +191,9 @@ impl<T: Real> RowSums<T> {
 }
 
 /// `1ᵀM1 ≤ SINGULAR_BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh), so `M` floats.
-pub(crate) const SINGULAR_BAND: f64 = 5.0;
+const SINGULAR_BAND: f64 = 5.0;
+
+/// Whether `ones = 1ᵀM1` is within the band of `trace = tr M`, so `M` is singular to working precision.
+pub(crate) fn within_band<T: Real>(ones: f64, trace: f64) -> bool {
+    ones <= SINGULAR_BAND * widen(T::epsilon()) * trace
+}

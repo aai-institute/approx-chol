@@ -134,7 +134,7 @@ impl<T: Real> Factor<T> {
             .sum()
     }
 
-    /// The blocks' factors, one per irreducible block of `A`; dead vertices have none.
+    /// The blocks' factors, one per irreducible block of `A`, coupled blocks before isolated vertices; dead vertices have none.
     pub fn blocks(&self) -> &[BlockFactor<T>] {
         &self.blocks
     }

@@ -107,7 +107,11 @@ impl<A, I: Index> Partitioned<A, I> {
         }
         let cut = |vertices: &&[I]| block(a.component(vertices, position));
         // About `2^PARALLEL_BITS` vertices a task: waking the pool for less costs more than it saves.
-        let per_task = crate::per_task(components.len(), partition.n() as u64, PARALLEL_BITS);
+        let work = components
+            .iter()
+            .map(|vertices| vertices.len() as u64)
+            .sum();
+        let per_task = crate::per_task(components.len(), work, PARALLEL_BITS);
         let blocks: Vec<_> = match per_task < components.len() && rayon::current_num_threads() > 1 {
             true => (components.par_iter())
                 .with_min_len(per_task)

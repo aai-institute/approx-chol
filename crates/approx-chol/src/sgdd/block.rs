@@ -149,7 +149,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
         self.n
     }
 
-    /// The irreducible blocks, each factored and solved on its own.
+    /// The coupled irreducible blocks, each factored and solved on its own, and the isolated vertices with their pivots.
     pub fn into_blocks(self) -> Blocks<T, I> {
         (self.blocks, self.lone)
     }

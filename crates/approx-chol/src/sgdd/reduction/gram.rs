@@ -2,7 +2,7 @@ use std::cell::LazyCell;
 
 use num_traits::PrimInt;
 
-use super::{Congruent, Signed, SymmetricBlock, SINGULAR_BAND};
+use super::{within_band, Congruent, Signed, SymmetricBlock};
 use crate::input::{BipartiteGram, FactorWidth2, IntoColumns};
 use crate::sgdd::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
 use crate::sgdd::decomposition::{assemble_bipartite_gram, assemble_general, Components};
@@ -118,7 +118,7 @@ fn ground_or_float<T: Real, I: Index>(
     drop((block_of, factor));
     let decided = blocks.into_iter().zip(ones).zip(trace);
     let decide = |((block, ones), trace): ((Congruent<T, I>, f64), f64)| {
-        if ones <= SINGULAR_BAND * epsilon * trace {
+        if within_band::<T>(ones, trace) {
             return block.block(Balance::Balanced(Grounding::ungrounded()));
         }
         let vertices = &block.vertices;

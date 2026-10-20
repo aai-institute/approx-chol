@@ -194,6 +194,13 @@ fn assert_committed_payload_decodes_and_solves(fixture: Fixture) {
     }
 
     let factor = fixture.factor();
+    let built = format!("{:?}", factor.blocks());
+    for marker in fixture.covers() {
+        assert!(
+            built.contains(marker),
+            "this build's {fixture:?} lost {marker:?}"
+        );
+    }
     let b = rhs(factor.n());
     let x = solve(&restored, &b);
     if let Some(matrix) = fixture.exact_matrix() {

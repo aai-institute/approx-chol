@@ -2,7 +2,7 @@
 
 use rayon::prelude::*;
 
-use crate::sgdd::{Grounding, SINGULAR_BAND};
+use crate::sgdd::{within_band, Grounding};
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{widen, Index, Real};
 
@@ -38,7 +38,7 @@ impl<T: Real, I: Index> Sddm<T, I> {
         let n = signed.n();
         let twisted = grounding.surplus().is_some_and(|s| {
             let total = crate::compensated_sum(s.iter().map(|&s| widen(s)));
-            total <= SINGULAR_BAND * widen(T::epsilon()) * (total + signed.abs_total())
+            within_band::<T>(total, total + signed.abs_total())
         });
         let mut rows = SddmRows::with_capacity(2 * n, 2 * signed.nnz() + n);
         let half = T::one() / (T::one() + T::one());
