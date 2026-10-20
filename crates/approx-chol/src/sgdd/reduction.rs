@@ -89,7 +89,9 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 (m, self.rows, ScaleVector::Identity)
             }
             Some((scales, vector)) => {
-                let factors = signs.times(&scales);
+                let factors: Box<[T]> = (scales.iter().enumerate())
+                    .map(|(i, &scale)| signs.factor(i) * scale)
+                    .collect();
                 let (off_diagonal, abs) = (self.off_diagonal.scaled_abs_row_sums(&factors))
                     .ok_or(ReduceError::Unscalable { vertex })?;
                 let diagonal = (self.rows.diagonal.iter().zip(&scales[..]))
