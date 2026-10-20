@@ -1,6 +1,9 @@
 use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, ScalingReport};
 use num_traits::PrimInt;
-use numpy::{BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyUntypedArrayMethods};
+use numpy::{
+    BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyReadonlyArray1,
+    PyUntypedArrayMethods,
+};
 use pyo3::prelude::*;
 use std::error::Error;
 use std::mem::size_of;
@@ -84,18 +87,24 @@ fn as_contiguous<'py, E: Element>(
         .map_err(Into::into)
 }
 
-/// Any 1-D array-like as contiguous `f64`; a CG's own `f64` vector skips every numpy call.
+/// Any 1-D array-like, or scipy's `(n, 1)` column, as contiguous `f64`; a CG's own `f64` vector skips every numpy call.
 fn right_hand_side<'py>(
     py: Python<'py>,
     b: &Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyArray1<f64>>> {
-    if let Ok(array) = b.cast::<PyArray1<f64>>() {
-        if array.is_contiguous() {
-            return Ok(array.clone());
+) -> PyResult<PyReadonlyArray1<'py, f64>> {
+    let b = match b.cast::<PyArray1<f64>>() {
+        Ok(array) if array.is_contiguous() => array.clone(),
+        _ => {
+            let np = py.import("numpy")?;
+            let b = np.call_method1("asarray", (b,))?;
+            // LinearOperator's default matmat before scipy 1.18 passes columns and reshapes the result itself.
+            let column = b.getattr("ndim")?.extract::<usize>()? == 2
+                && b.getattr("shape")?.get_item(1)?.extract::<usize>()? == 1;
+            let b = if column { b.call_method0("ravel")? } else { b };
+            as_contiguous(&np, &as_1d(&np, &b, "b", Column::Value)?)?
         }
-    }
-    let np = py.import("numpy")?;
-    as_contiguous(&np, &as_1d(&np, b, "b", Column::Value)?)
+    };
+    b.try_readonly().map_err(|e| borrow_error("b", e))
 }
 
 #[inline]
@@ -210,20 +219,6 @@ fn warn_on_scaling(py: Python<'_>, factor: &Factor<f64>) -> PyResult<()> {
     Ok(())
 }
 
-impl PyFactor {
-    /// scipy's `LinearOperator` passes `(n, 1)` columns to `matvec` (default `matmat` before scipy 1.18) and expects that shape back.
-    fn apply<'py>(&self, py: Python<'py>, x: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
-        if x.cast::<PyArray1<f64>>().is_err() && x.hasattr("ndim")? {
-            let shape = x.getattr("shape")?;
-            if shape.len()? == 2 && shape.get_item(1)?.extract::<usize>()? == 1 {
-                let y = self.solve(py, &x.call_method0("ravel")?)?;
-                return y.call_method1("reshape", (shape,));
-            }
-        }
-        Ok(self.solve(py, x)?.into_any())
-    }
-}
-
 #[pymethods]
 impl PyFactor {
     #[getter]
@@ -247,12 +242,20 @@ impl PyFactor {
         f64::get_dtype(py)
     }
 
-    fn matvec<'py>(&self, py: Python<'py>, x: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
-        self.apply(py, x)
+    fn matvec<'py>(
+        &self,
+        py: Python<'py>,
+        x: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.solve(py, x)
     }
 
-    fn rmatvec<'py>(&self, py: Python<'py>, x: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
-        self.apply(py, x)
+    fn rmatvec<'py>(
+        &self,
+        py: Python<'py>,
+        x: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.solve(py, x)
     }
 
     fn solve<'py>(
@@ -261,7 +264,6 @@ impl PyFactor {
         b: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let b = right_hand_side(py, b)?;
-        let b = b.try_readonly().map_err(|e| borrow_error("b", e))?;
         let b_slice = b.as_slice().expect("right_hand_side is contiguous");
         let x = self.inner.solve(b_slice).map_err(|e| error_to_py(&e))?;
         Ok(PyArray1::from_vec(py, x))
@@ -274,7 +276,6 @@ impl PyFactor {
         out: &Bound<'py, PyArray1<f64>>,
     ) -> PyResult<()> {
         let b = right_hand_side(py, b)?;
-        let b = b.try_readonly().map_err(|e| borrow_error("b", e))?;
         let b_slice = b.as_slice().expect("right_hand_side is contiguous");
         let n = self.inner.n();
         let out_ro = out.try_readonly().map_err(|e| borrow_error("out", e))?;

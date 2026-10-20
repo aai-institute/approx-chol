@@ -99,16 +99,16 @@ class Factor:
     def matvec(self, x: npt.ArrayLike) -> npt.NDArray[np.float64]:
         """Apply the preconditioner (alias for :meth:`solve`).
 
-        Part of the scipy ``LinearOperator`` duck-type interface: an ``(n, 1)``
-        column returns an ``(n, 1)`` column.
+        Part of the scipy ``LinearOperator`` duck-type interface; ``x`` may be
+        an ``(n, 1)`` column.
         """
         ...
 
     def rmatvec(self, x: npt.ArrayLike) -> npt.NDArray[np.float64]:
         """Apply the preconditioner transpose (alias for :meth:`solve`; symmetric).
 
-        Part of the scipy ``LinearOperator`` duck-type interface: an ``(n, 1)``
-        column returns an ``(n, 1)`` column.
+        Part of the scipy ``LinearOperator`` duck-type interface; ``x`` may be
+        an ``(n, 1)`` column.
         """
         ...
 

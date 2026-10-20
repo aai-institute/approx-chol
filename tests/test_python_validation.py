@@ -219,16 +219,12 @@ def test_solve_takes_any_1d_array_like_as_the_stub_declares():
     )
 
 
-def test_matvec_keeps_a_column_shape_as_scipy_before_1_18_passes_it():
+def test_matvec_takes_the_column_scipy_before_1_18_passes():
     lap = grid_laplacian(4, 4)
     factor = approx_chol.factorize(lap)
     b = np.zeros(lap.shape[0])
     b[0], b[-1] = 1.0, -1.0
-    block = np.column_stack([b, 2 * b])
-    columns = np.hstack([factor.matvec(col.reshape(-1, 1)) for col in block.T])
-    np.testing.assert_array_equal(
-        columns, np.column_stack([factor.solve(b), factor.solve(2 * b)])
-    )
+    np.testing.assert_array_equal(factor.matvec(b.reshape(-1, 1)), factor.solve(b))
 
 
 def test_an_all_zero_row_factors_and_solves_to_zero():
