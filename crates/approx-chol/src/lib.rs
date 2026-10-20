@@ -96,7 +96,7 @@ pub trait Real: num_traits::Float + Debug + Send + Sync + 'static + seal::Real {
 impl Real for f32 {}
 impl Real for f64 {}
 
-/// The unsigned integer a reduction and its factor store each vertex index in: `u32` by default, `u64` past `u32::MAX` vertices.
+/// The unsigned integer a reduction and its factor store each vertex index in: `u32` while a cover's `2n + 1` slots fit it, else `u64`.
 trait Index: PrimInt + Unsigned + Send + Sync + 'static {
     /// `self` as `usize`, so `x[v.index()]` reads vertex `v` of any `x` over `A`'s vertices.
     fn index(self) -> usize;
