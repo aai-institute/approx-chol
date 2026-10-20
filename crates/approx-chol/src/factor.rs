@@ -96,14 +96,12 @@ impl<T: Real> Factor<T> {
         store: fn(Block<T, I>) -> Storage<T>,
     ) -> Self {
         let n = sgdd.n();
-        let blocks: Vec<BlockFactor<T>> = (sgdd.into_blocks().into_par_iter())
-            .map(|block| match block.isolated() {
-                Some((vertex, pivot)) => {
-                    BlockFactor(Storage::Isolated(Isolated::new(vertex, pivot)))
-                }
-                None => BlockFactor(store(Block::build(block, config))),
-            })
-            .collect();
+        let (coupled, lone) = sgdd.into_blocks();
+        let mut blocks = Vec::with_capacity(coupled.len() + lone.len());
+        let build = |block| BlockFactor(store(Block::build(block, config)));
+        blocks.par_extend(coupled.into_par_iter().map(build));
+        let isolated = |(v, pivot)| BlockFactor(Storage::Isolated(Isolated::new(v, pivot)));
+        blocks.extend(lone.into_iter().map(isolated));
         let mut covered = vec![false; n];
         (blocks.iter().flat_map(BlockFactor::vertices)).for_each(|v| covered[v] = true);
         let dead = (0..n).filter(|&v| !covered[v]).collect();

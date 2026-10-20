@@ -112,18 +112,6 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         })
     }
 
-    /// The vertex and its surplus when no entry couples it and `|F| = 1`: its factor is then `1/σ`.
-    pub(crate) fn isolated(&self) -> Option<(I, T)> {
-        let [vertex] = *self.restriction.vertices() else {
-            return None;
-        };
-        let unit = self.restriction.scaled_factors(0).is_none() && self.report.is_none();
-        match &self.balance {
-            Balance::Balanced(grounding) if unit => grounding.edge(0).map(|s| (vertex, s)),
-            _ => None,
-        }
-    }
-
     /// Moved out, so each part is freed once its factor stops reading it.
     pub(crate) fn into_parts(self) -> BlockParts<T, I> {
         (
@@ -147,11 +135,13 @@ type BlockParts<T, I> = (
 pub struct Sgdd<T = f64, I = u32> {
     n: usize,
     blocks: Vec<IrreducibleBlock<T, I>>,
+    /// Vertices no entry couples, each with its surplus `σ`, which is its whole pivot.
+    lone: Vec<(I, T)>,
 }
 
 impl<T: Real, I: Index> Sgdd<T, I> {
-    pub(super) fn new(n: usize, blocks: Vec<IrreducibleBlock<T, I>>) -> Self {
-        Self { n, blocks }
+    pub(super) fn new(n: usize, blocks: Vec<IrreducibleBlock<T, I>>, lone: Vec<(I, T)>) -> Self {
+        Self { n, blocks, lone }
     }
 
     /// Dimension of `A`.
@@ -160,10 +150,13 @@ impl<T: Real, I: Index> Sgdd<T, I> {
     }
 
     /// The irreducible blocks, each factored and solved on its own.
-    pub fn into_blocks(self) -> Vec<IrreducibleBlock<T, I>> {
-        self.blocks
+    pub fn into_blocks(self) -> Blocks<T, I> {
+        (self.blocks, self.lone)
     }
 }
+
+/// The coupled blocks, then each lone vertex with its pivot.
+pub(crate) type Blocks<T, I> = (Vec<IrreducibleBlock<T, I>>, Vec<(I, T)>);
 
 /// Why a block has no SDDM form; each `vertex` is in `A`'s numbering.
 #[non_exhaustive]

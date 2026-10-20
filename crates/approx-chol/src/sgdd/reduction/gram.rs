@@ -38,7 +38,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
 /// Scaled by `V`'s null vectors on demand; folded blocks drop their rows for one pass over `V`.
 fn reduce_gram_blocks<T: Real, I: Index>(
     v: impl IntoColumns<T>,
-    (partition, live): Components<SymmetricBlock<T, I>, I>,
+    (partition, live, lone): Components<SymmetricBlock<T, I>, I, T>,
     policy: &ScalingPolicy,
 ) -> Result<Sgdd<T, I>, ReduceError> {
     // Built by the first block not already dominant, so a dominant input reads no extra pass.
@@ -61,7 +61,7 @@ fn reduce_gram_blocks<T: Real, I: Index>(
     }
     let mut blocks = ground_or_float(v, folded)?;
     blocks.extend(frustrated);
-    Ok(Sgdd::new(partition.n(), blocks))
+    Ok(Sgdd::new(partition.n(), blocks, lone))
 }
 
 /// Floats each folded block as [`RowSums::folded_surplus`](super::RowSums::folded_surplus) does, else grounds it on `s = M·1`.
