@@ -62,11 +62,11 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeElimination<T, I, C> {
             graph,
             clique,
             fill,
-            order: ordering,
+            order,
             ..
         } = self;
         for _ in 1..graph.n() {
-            let v = ordering.next_vertex();
+            let v = order.next_vertex();
             fill.clear();
             let column = clique.eliminate(draws, graph.neighbors(v), fill);
             steps.push(v, column);
@@ -74,7 +74,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeElimination<T, I, C> {
             for &(u, w, copies, weight) in fill.iter() {
                 graph.push_pair(u, w, copies, weight);
             }
-            ordering.update(clique.degree_losses(), fill);
+            order.update(clique.degree_losses(), fill);
         }
     }
 }

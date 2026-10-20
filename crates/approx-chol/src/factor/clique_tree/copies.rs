@@ -6,7 +6,7 @@ pub(in crate::factor) trait Copies: Copy + Send + Sync {
     fn per_copy<T: Real>(&self, total: T) -> T;
 
     /// The kept copies, and how many the cap discarded.
-    fn cap(copies: u32, split: Self) -> (Self, u32);
+    fn cap(self, copies: u32) -> (Self, u32);
 
     /// Draws a partner position per copy; yields each distinct one once, with the copies that drew it and their summed `per_copy` weight.
     fn draw<'a, T: Real>(
@@ -20,9 +20,16 @@ pub(in crate::factor) trait Copies: Copy + Send + Sync {
 #[derive(Clone, Copy)]
 pub(in crate::factor) struct Single;
 
-/// Virtual copy count: `Multiplicity::Split`'s `k`, lowered by the merge cap, or the copies of one entry that drew one partner.
+/// Virtual copy count: AC2's `k`, lowered by the merge cap, or the copies of one entry that drew one partner.
 #[derive(Clone, Copy)]
-pub(in crate::factor) struct Multi(pub(in crate::factor) u32);
+pub(in crate::factor) struct Multi(u32);
+
+impl Multi {
+    /// AC2 at `k ≥ 2` copies; fewer is AC.
+    pub(in crate::factor) fn split(k: u32) -> Option<Self> {
+        (k >= 2).then_some(Self(k))
+    }
+}
 
 impl Copies for Single {
     fn get(&self) -> u32 {
@@ -33,7 +40,7 @@ impl Copies for Single {
         total
     }
 
-    fn cap(copies: u32, Single: Self) -> (Self, u32) {
+    fn cap(self, copies: u32) -> (Self, u32) {
         (Self, copies - 1)
     }
 
@@ -56,8 +63,8 @@ impl Copies for Multi {
         total / T::from(self.0).expect("a copy count is a float")
     }
 
-    fn cap(copies: u32, Self(split): Self) -> (Self, u32) {
-        let kept = copies.min(split);
+    fn cap(self, copies: u32) -> (Self, u32) {
+        let kept = copies.min(self.0);
         (Self(kept), copies - kept)
     }
 

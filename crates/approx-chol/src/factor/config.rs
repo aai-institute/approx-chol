@@ -1,3 +1,4 @@
+use super::clique_tree::Multi;
 use crate::ScalingPolicy;
 
 /// Build settings for [`factorize_with`](crate::factorize_with).
@@ -30,12 +31,9 @@ impl Config {
     }
 }
 
-/// The one place a `split_merge` becomes the algorithm: below two copies is AC.
-pub(super) fn multiplicity(split_merge: Option<u32>) -> Multiplicity {
-    match split_merge {
-        Some(k) if k >= 2 => Multiplicity::Split(k),
-        _ => Multiplicity::Single,
-    }
+/// The one place a `split_merge` becomes the algorithm: AC2's copies, or `None`, AC.
+pub(super) fn multiplicity(split_merge: Option<u32>) -> Option<Multi> {
+    split_merge.and_then(Multi::split)
 }
 
 /// Which factorization each block gets.
@@ -73,15 +71,6 @@ pub enum SchurMode {
     /// Sampled with [`Config::split_merge`]'s multiplicity, as the kept side's own factor is.
     #[default]
     Same,
-}
-
-/// How many virtual copies each edge splits into while sampling.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Multiplicity {
-    /// AC: one copy.
-    Single,
-    /// AC2: `k ≥ 2` copies, merged back under a cap.
-    Split(u32),
 }
 
 /// Whether a solve may split its own work across threads; an outer parallel loop says no.

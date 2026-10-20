@@ -57,7 +57,7 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
         };
         self.entries.truncate(merged);
         for (entry, &count) in self.entries.iter_mut().zip(&self.counts) {
-            let (copies, dropped) = C::cap(count, self.split);
+            let (copies, dropped) = self.split.cap(count);
             entry.copies = copies;
             if dropped > 0 {
                 self.removed_copies.push((entry.neighbor, dropped));
