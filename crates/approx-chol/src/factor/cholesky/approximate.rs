@@ -5,7 +5,7 @@ mod ordering;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use crate::factor::clique_tree::{CliqueSampler, Copies, Fill, Multi, PivotColumn, Single};
+use crate::factor::clique_tree::{CliqueSampler, Copies, Fill, Multi, Single};
 use crate::factor::config::Multiplicity;
 use crate::factor::sddm::Sddm;
 #[cfg(feature = "serde")]
@@ -135,10 +135,11 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
     }
 
     /// The one site deriving the remainder's share.
-    fn push(&mut self, vertex: usize, (weight, shares, remainder): PivotColumn<'_, T, I>) {
+    fn push(&mut self, vertex: usize, column: (T, impl Iterator<Item = (I, T)>, I)) {
+        let (weight, shares, remainder) = column;
         let start = self.neighbors.len();
         let mut retained = T::one();
-        for &(neighbor, share) in shares {
+        for (neighbor, share) in shares {
             self.neighbors.push(neighbor);
             self.coefficients.push(share);
             retained = retained - share;

@@ -14,9 +14,6 @@ use star::StarEntry;
 /// Fill edges `(lo, hi, copies, weight)`, `lo < hi`, as an elimination emits them: one per entry and partner, its weight summed over its copies.
 pub(super) type Fill<T, I, C> = Vec<(I, I, C, T)>;
 
-/// A pivot's column: the last star entry's weight, the other entries' shares, and the last entry's neighbor, which absorbs what they leave.
-pub(super) type PivotColumn<'a, T, I> = (T, &'a [(I, T)], I);
-
 /// A pivot's elimination, reused across pivots; AC and AC2 differ only in `C`.
 pub(super) struct CliqueSampler<T, I, C: Copies> {
     /// A pivot's deduplicated neighborhood in clique-tree order.
@@ -29,7 +26,6 @@ pub(super) struct CliqueSampler<T, I, C: Copies> {
     counts: Vec<u32>,
     /// The star's weights' prefix sums, heaviest last, so each suffix's draw range is one subtraction.
     cumsum: Vec<T>,
-    shares: Vec<(I, T)>,
     split: C::Split,
     /// Scratch [`Copies::draw`] reuses across entries; one copy never touches it.
     tally: Vec<(usize, u32)>,
@@ -44,28 +40,27 @@ impl<T: Real, I: Index, C: Copies> CliqueSampler<T, I, C> {
             scatter: Vec::new(),
             counts: Vec::new(),
             cumsum: Vec::new(),
-            shares: Vec::new(),
             split,
             tally: Vec::new(),
         }
     }
 
-    /// Merges `neighbors`, samples their clique tree into `fill` as `w_i (S_{>i} / d)` from the sequential `draws`, and returns the pivot's column.
+    /// Merges `neighbors`, samples their clique tree into `fill` as `w_i (S_{>i} / d)` from the sequential `draws`, and returns the pivot's column: the last entry's weight, the others' shares, and the last entry's neighbor, which absorbs what they leave.
     pub(super) fn eliminate(
         &mut self,
         draws: &mut Xoshiro256PlusPlus,
         neighbors: impl Iterator<Item = (I, C, T)>,
         fill: &mut Fill<T, I, C>,
-    ) -> PivotColumn<'_, T, I> {
+    ) -> (T, impl Iterator<Item = (I, T)> + '_, I) {
         self.refill(neighbors);
         self.sample(draws, |edge| fill.push(edge));
-        self.shares.clear();
         let (last, rest) =
             (self.entries.split_last()).expect("a pivot of a connected graph has a neighbor");
         let d = suffix_past(&self.cumsum, None);
-        let shares = rest.iter().map(|entry| (entry.neighbor, entry.weight / d));
-        self.shares.extend(shares);
-        (last.weight, &self.shares, last.neighbor)
+        let shares = rest
+            .iter()
+            .map(move |entry| (entry.neighbor, entry.weight / d));
+        (last.weight, shares, last.neighbor)
     }
 
     /// A neighborhood with no duplicate, as a row of `C` is, consuming its star's own `draws` so no task boundary moves one; every neighbor splits alike, so raw weights sort once; fill only, as the complement holds its pivots.
