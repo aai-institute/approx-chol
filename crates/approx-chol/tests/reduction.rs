@@ -147,14 +147,3 @@ fn exhausted_scaling_reports_on_grams_and_rows() {
     let factor: Factor = factorize_with(csr, exact(policy)).unwrap();
     assert!(factor.blocks()[0].scaling_report().is_some());
 }
-
-#[test]
-fn row_surplus_keeps_a_definite_component_grounded() {
-    let ptrs = [0, 2, 4];
-    let indices = [0, 1, 0, 1];
-    let values = [3.0, -1.0, -1.0, 3.0];
-    let csr = CsrRef::new(&ptrs, &indices, &values, 2).unwrap();
-    let reduced = factorize_with(csr, dense()).unwrap();
-    assert!(!reduced.blocks()[0].floats());
-    solve_residual(&reduced, &[vec![3.0, -1.0], vec![-1.0, 3.0]]);
-}

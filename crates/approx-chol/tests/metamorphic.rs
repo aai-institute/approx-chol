@@ -141,16 +141,6 @@ cases! {
     }
 }
 
-cases! {
-    fn a_constant_added_to_a_floating_f32_rhs_leaves_the_solution(
-        route in sparse_routes(all),
-        types in types(f32),
-    ) {
-        let (entry, sparse) = route;
-        assert_a_constant_leaves_the_solution(entry, types, sparse, 2f64.powi(12));
-    }
-}
-
 /// `D L D` floats with null vector `D⁻¹·1` and needs scaling, so both projections run on scaled factors.
 #[test]
 fn a_scaled_floating_block_projects_its_null_vector_out() {

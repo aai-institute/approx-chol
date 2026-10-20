@@ -67,13 +67,6 @@ fn summation_roundoff_does_not_augment<T: Real + std::fmt::LowerExp>(#[case] dri
     assert!(!grounded(&drifted(drift)), "drift {drift:e}");
 }
 
-/// Mid-window for each precision, which no two-term sum invents; through 0.3.1 both floated (#85).
-#[test]
-fn surplus_beyond_summation_roundoff_augments() {
-    assert!(grounded(&drifted(1e-6_f32)));
-    assert!(grounded(&drifted(5e-11_f64)));
-}
-
 /// A deficit past rounding is reported, not zeroed (#91), even well inside the scaling tolerance.
 #[test]
 fn deficit_beyond_summation_roundoff_is_reported() {

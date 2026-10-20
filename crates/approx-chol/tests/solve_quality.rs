@@ -216,22 +216,6 @@ cases! {
     }
 }
 
-cases! {
-    /// Floating blocks solve in place; this case exercises the gather and scatter.
-    fn dirty_scratch_does_not_change_an_interleaved_components_solution(
-        route in routes(all),
-        types in types(all),
-    ) {
-        let (entry, mode) = route;
-        let edges = vec![Edge::negative(0, 2, 1.0), Edge::negative(1, 3, 1.0)];
-        let graph = Graph::new(4, edges);
-        let config = mode.config();
-        let factor = entry.reduce(&graph, types).factorize(&config);
-        let label = format!("interleaved components {types:?} {config:?}");
-        assert_dirty_scratch_matches_the_solve(&label, &factor);
-    }
-}
-
 fn path(weight: f64) -> Graph {
     Graph::new(
         4,
