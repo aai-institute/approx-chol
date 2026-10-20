@@ -1,5 +1,6 @@
 //! [`CsrRef`] views of `sprs` and `faer` matrices, checked square and row-major before [`CsrRef::new`].
 
+#[cfg(feature = "faer")]
 use num_traits::PrimInt;
 
 use super::{CsrError, CsrRef, Input};
@@ -12,13 +13,6 @@ fn square(rows: usize, cols: usize) -> Result<u32, CsrError> {
     u32::try_from(rows).map_err(|_| CsrError::MatrixDimensionExceedsIndexType { n: rows })
 }
 
-fn starts_at_zero<I: PrimInt>(row_ptrs: &[I]) -> Result<(), CsrError> {
-    match row_ptrs[0] == I::zero() {
-        true => Ok(()),
-        false => Err(CsrError::OffsetRows),
-    }
-}
-
 #[cfg(feature = "sprs")]
 impl<'a, T, I: sprs::SpIndex> TryFrom<sprs::CsMatViewI<'a, T, I>> for CsrRef<'a, T, I> {
     type Error = Error;
@@ -29,7 +23,6 @@ impl<'a, T, I: sprs::SpIndex> TryFrom<sprs::CsMatViewI<'a, T, I>> for CsrRef<'a,
         }
         let n = square(matrix.rows(), matrix.cols())?;
         let (row_ptrs, col_indices, values) = matrix.into_raw_storage();
-        starts_at_zero(row_ptrs)?;
         CsrRef::new(row_ptrs, col_indices, values, n)
     }
 }
@@ -53,7 +46,6 @@ impl<'a, T, I: faer::Index + PrimInt> TryFrom<faer::sparse::SparseRowMatRef<'a, 
         let n = square(matrix.nrows(), matrix.ncols())?;
         let symbolic = matrix.symbolic();
         let row_ptrs = symbolic.row_ptr();
-        starts_at_zero(row_ptrs)?;
         // Row counts filling every span are compact storage, so the arrays still borrow as CSR.
         let rows = n as usize;
         if let Some(row) = (0..rows).find(|&i| symbolic.row_range(i).end != row_ptrs[i + 1].zx()) {
