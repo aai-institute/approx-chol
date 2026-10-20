@@ -4,15 +4,16 @@ use num_traits::PrimInt;
 
 use super::edges::{Edges, Weights};
 use super::gram::{General, Gram, Incidences, One};
-use super::{check_ends, length, ViewError};
+use super::{check_diagonal, check_ends, length, ViewError};
 use crate::Real;
 
-/// `A = Σ_k w_k (e_a ± e_b)(e_a ± e_b)ᵀ`: `+` where `positive[k]`, so edge `k` adds `+w_k` to `a_ab`, else `−w_k`.
+/// `A = Σ_k w_k (e_a ± e_b)(e_a ± e_b)ᵀ + diag(g)`: `+` where `positive[k]`, so edge `k` adds `+w_k` to `a_ab`, else `−w_k`.
 #[derive(Clone, Copy, Debug)]
 pub struct SignedGraph<'a, T, I = u32> {
     n: usize,
     edges: Edges<'a, T, I>,
     positive: &'a [bool],
+    ground: Option<&'a [T]>,
 }
 
 impl<'a, T: Real, I: PrimInt> SignedGraph<'a, T, I> {
@@ -27,7 +28,21 @@ impl<'a, T: Real, I: PrimInt> SignedGraph<'a, T, I> {
         length(a.len(), positive.len())?;
         let edges = Edges::new(a, b, weights)?;
         check_ends(n, a, b)?;
-        Ok(Self { n, edges, positive })
+        Ok(Self {
+            n,
+            edges,
+            positive,
+            ground: None,
+        })
+    }
+
+    /// `A + diag(g)`, one finite nonnegative `g_i` per vertex.
+    pub fn with_ground(self, ground: &'a [T]) -> Result<Self, ViewError> {
+        check_diagonal(self.n, ground)?;
+        Ok(Self {
+            ground: Some(ground),
+            ..self
+        })
     }
 
     pub(crate) fn n(&self) -> usize {
@@ -41,7 +56,7 @@ impl<'a, T: Real, I: PrimInt> SignedGraph<'a, T, I> {
             self.edges,
             One,
             Incidences(self.positive),
-            None,
+            self.ground,
         )
     }
 }

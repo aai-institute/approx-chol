@@ -93,7 +93,7 @@ fn shape_ground_and_signature_match_their_gram_matrices() {
     let laplacian = Laplacian::new(4, &a, &b, Weights::of(&weights).unwrap()).unwrap();
     let floating = factorize_with(laplacian, dense()).unwrap();
     assert!(floating.blocks()[0].floats());
-    let grounded = factorize_with(laplacian.grounded(&ground).unwrap(), dense()).unwrap();
+    let grounded = factorize_with(laplacian.with_ground(&ground).unwrap(), dense()).unwrap();
     assert!(!grounded.blocks()[0].floats());
     let mut expected = matrix(4, &a, &b, &x, &y);
     solve_residual(&floating, &expected);

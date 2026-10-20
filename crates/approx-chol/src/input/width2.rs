@@ -40,8 +40,8 @@ pub enum ViewError {
         /// The offending column of `V`.
         column: usize,
     },
-    /// A ground is negative or not finite.
-    InvalidGround {
+    /// A diagonal entry `σ_i`, a ground or a ridge, is negative or not finite.
+    InvalidDiagonal {
         /// The offending vertex.
         vertex: usize,
     },
@@ -58,8 +58,11 @@ impl core::fmt::Display for ViewError {
             Self::InvalidWeight { column } => {
                 write!(f, "column {column} has a negative or non-finite weight")
             }
-            Self::InvalidGround { vertex } => {
-                write!(f, "vertex {vertex} has a negative or non-finite ground")
+            Self::InvalidDiagonal { vertex } => {
+                write!(
+                    f,
+                    "vertex {vertex} has a negative or non-finite diagonal entry"
+                )
             }
         }
     }
@@ -137,6 +140,7 @@ pub struct FactorWidth2<'a, T, I = u32> {
     n: usize,
     edges: Edges<'a, T, I>,
     values: [&'a [T]; 2],
+    diagonal: Option<&'a [T]>,
 }
 
 impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
@@ -158,6 +162,16 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
             n,
             edges,
             values: [x, y],
+            diagonal: None,
+        })
+    }
+
+    /// `V W Vᵀ + diag(d)`, one finite nonnegative `d_i` per vertex.
+    pub fn with_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
+        check_diagonal(self.n, diagonal)?;
+        Ok(Self {
+            diagonal: Some(diagonal),
+            ..self
         })
     }
 
@@ -167,7 +181,14 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
 
     pub(crate) fn gram(self) -> Gram<'a, T, I, General, Values<'a, T>, Values<'a, T>> {
         let [x, y] = self.values;
-        Gram::new(self.n, General, self.edges, Values(x), Values(y), None)
+        Gram::new(
+            self.n,
+            General,
+            self.edges,
+            Values(x),
+            Values(y),
+            self.diagonal,
+        )
     }
 }
 
@@ -176,6 +197,16 @@ fn length(expected: usize, found: usize) -> Result<(), ViewError> {
     match found == expected {
         true => Ok(()),
         false => Err(ViewError::LengthMismatch { expected, found }),
+    }
+}
+
+/// One finite nonnegative entry per vertex.
+fn check_diagonal<T: Real>(n: usize, diagonal: &[T]) -> Result<(), ViewError> {
+    length(n, diagonal.len())?;
+    let valid = |d: &T| d.is_finite() && *d >= T::zero();
+    match diagonal.iter().position(|d| !valid(d)) {
+        Some(vertex) => Err(ViewError::InvalidDiagonal { vertex }),
+        None => Ok(()),
     }
 }
 

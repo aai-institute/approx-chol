@@ -44,7 +44,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
                 Signed::Frustrated(block) => frustrated.push(block),
             }
         }
-        let mut blocks = ground_or_float(v, folded)?;
+        let mut blocks = ground_or_float(v, v.diagonal(), folded)?;
         blocks.extend(frustrated);
         let summands = Summands { blocks, lone, dead };
         Ok(Sgdd::new(Components {
@@ -57,6 +57,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
 /// Floats each folded block as [`RowSums::folded_surplus`](super::RowSums::folded_surplus) does, else grounds it on `s = M·1`.
 fn ground_or_float<T: Real, I: Index>(
     v: impl IntoColumns<T>,
+    diagonal: Option<&[T]>,
     blocks: Vec<Congruent<T, I>>,
 ) -> Result<Vec<IrreducibleBlock<T, I>>, ReduceError> {
     if blocks.is_empty() {
@@ -65,16 +66,24 @@ fn ground_or_float<T: Real, I: Index>(
     // By vertex: blocks are disjoint, so one slot per vertex holds its block, `f_i` and surplus.
     let mut block_of = vec![I::max_value(); v.n()];
     let mut factor = vec![0.0; v.n()];
-    for (c, block) in blocks.iter().enumerate() {
-        for (slot, &vertex) in block.vertices.iter().enumerate() {
-            block_of[vertex.index()] = I::from_index(c);
-            factor[vertex.index()] = widen(block.congruence.factor(slot));
-        }
-    }
     let mut surplus = vec![0.0f64; v.n()];
     // `ε·1ᵀM1` and `ε·tr M` per block.
     let (mut ones, mut trace) = (vec![0.0f64; blocks.len()], vec![0.0f64; blocks.len()]);
     let epsilon = widen(T::epsilon());
+    for (c, block) in blocks.iter().enumerate() {
+        for (slot, &vertex) in block.vertices.iter().enumerate() {
+            let (i, f) = (vertex.index(), widen(block.congruence.factor(slot)));
+            block_of[i] = I::from_index(c);
+            factor[i] = f;
+            // `σ_i` is a one-entry column at `i`, so `M` holds it scaled by `f_i²`.
+            if let Some(d) = diagonal {
+                let d = widen(d[i]);
+                surplus[i] += d * f * f;
+                ones[c] += d * (epsilon * f) * f;
+                trace[c] += d * (epsilon * f) * f;
+            }
+        }
+    }
     v.for_each_column::<I>(
         #[inline(always)]
         |column| {

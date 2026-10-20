@@ -99,9 +99,9 @@ fn laplacian_new_rejects_mismatched_lengths_and_bad_ends_at_their_column(
 }
 
 #[test]
-fn laplacian_grounded_rejects_a_ground_per_vertex_short() {
+fn laplacian_with_ground_rejects_a_ground_per_vertex_short() {
     let short = unit_path()
-        .grounded(&[1.0, 1.0])
+        .with_ground(&[1.0, 1.0])
         .expect_err("one ground per vertex");
     assert_eq!(
         short,
@@ -116,11 +116,11 @@ fn laplacian_grounded_rejects_a_ground_per_vertex_short() {
 #[case::negative(-1.0)]
 #[case::nan(f64::NAN)]
 #[case::infinite(f64::INFINITY)]
-fn laplacian_grounded_rejects_a_bad_ground_at_its_vertex(#[case] ground: f64) {
+fn laplacian_with_ground_rejects_a_bad_ground_at_its_vertex(#[case] ground: f64) {
     let error = unit_path()
-        .grounded(&[0.0, 0.0, ground])
+        .with_ground(&[0.0, 0.0, ground])
         .expect_err("invalid ground");
-    assert_eq!(error, ViewError::InvalidGround { vertex: 2 });
+    assert_eq!(error, ViewError::InvalidDiagonal { vertex: 2 });
 }
 
 #[rstest]
@@ -128,7 +128,7 @@ fn laplacian_grounded_rejects_a_bad_ground_at_its_vertex(#[case] ground: f64) {
 #[case::past_a_quarter_of_the_maximum(f64::MAX / 2.0)]
 fn an_out_of_range_ground_is_rejected_at_its_vertex(#[case] ground: f64) {
     let ground = [0.0, 0.0, ground];
-    let grounded = unit_path().grounded(&ground).expect("a valid ground");
+    let grounded = unit_path().with_ground(&ground).expect("a valid ground");
     let error = factorize(grounded).expect_err("ground out of range");
     assert_names_a_defect(error, &out_of_range(&[2]));
 }
@@ -298,6 +298,104 @@ fn factor_width_2_rejects_weights_of_another_column_count() {
     let weights = Weights::of(&w).unwrap();
     let error = FactorWidth2::new(3, &PATH_A, &PATH_B, &x, &y, weights).expect_err("weights");
     assert_eq!(error, two_edges_but(1));
+}
+
+fn plus_diagonal(mut matrix: Vec<Vec<f64>>, diagonal: &[f64]) -> Vec<Vec<f64>> {
+    for (i, d) in diagonal.iter().enumerate() {
+        matrix[i][i] += d;
+    }
+    matrix
+}
+
+/// `A = [[1, −2], [−2, 5]]` needs scaling; read unscaled, `σ_1` would add 1 to `M`'s diagonal, not `f_1²`.
+#[test]
+fn a_gram_diagonal_enters_the_scaled_surplus_squared() {
+    let gram = FactorWidth2::<f64>::new(2, &[0u32], &[1], &[1.0], &[-2.0], Weights::unit())
+        .and_then(|gram| gram.with_diagonal(&[0.0, 1.0]))
+        .unwrap();
+    let x = factorize(gram).unwrap().solve(&[1.0, 1.0]).unwrap();
+    assert!(
+        (x[0] - 7.0).abs() < 1e-12 && (x[1] - 3.0).abs() < 1e-12,
+        "{x:?}"
+    );
+}
+
+#[rstest]
+#[case::grounds_a_floating_path([0.0, 0.5, 0.0, 0.0])]
+#[case::is_a_lone_vertex_pivot([0.0, 0.0, 0.0, 2.0])]
+fn a_gram_with_a_diagonal_solves_v_vt_plus_it(#[case] diagonal: [f64; 4]) {
+    let (x, y) = ([1.0, 2.0], [-1.0, -2.0]);
+    let gram = FactorWidth2::new(4, &PATH_A, &PATH_B, &x, &y, Weights::unit())
+        .and_then(|gram| gram.with_diagonal(&diagonal))
+        .unwrap();
+    let factor = factorize(gram).expect("a grounded Gram");
+    solve_residual(
+        &factor,
+        &plus_diagonal(matrix(4, &PATH_A, &PATH_B, &x, &y), &diagonal),
+    );
+}
+
+#[rstest]
+#[case::balanced(&[0, 1], &[1, 2], &[true, false])]
+#[case::frustrated(&[0, 1, 0], &[1, 2, 2], &[true, true, true])]
+#[case::cancelling(&[0, 0, 1], &[1, 1, 2], &[true, false, false])]
+fn a_grounded_signed_graph_solves_its_matrix(
+    #[case] a: &[u32],
+    #[case] b: &[u32],
+    #[case] positive: &[bool],
+) {
+    let ground = [0.5, 0.0, 0.25];
+    let graph = SignedGraph::new(3, a, b, positive, Weights::unit())
+        .and_then(|graph| graph.with_ground(&ground))
+        .unwrap();
+    let factor = factorize(graph).expect("a grounded signed graph");
+    let x = vec![1.0; a.len()];
+    let y: Vec<f64> = positive
+        .iter()
+        .map(|&p| if p { 1.0 } else { -1.0 })
+        .collect();
+    solve_residual(&factor, &plus_diagonal(matrix(3, a, b, &x, &y), &ground));
+}
+
+/// Left rows `0, 1`, right rows `2, 3`; the right side's ridge leaves the left floating alone no more.
+#[rstest]
+#[case::incidence(None)]
+#[case::slopes(Some([2.0, 0.5, 1.0]))]
+fn a_bipartite_gram_with_a_diagonal_solves_v_w_vt_plus_it(#[case] slopes: Option<[f64; 3]>) {
+    let (rows, cols) = ([0u32, 0, 1], [0u32, 1, 1]);
+    let left = FactorWidth1::new(2, &rows, slopes.as_ref().map(|s| &s[..])).unwrap();
+    let right = FactorWidth1::<f64>::new(2, &cols, None).unwrap();
+    let diagonal = [0.0, 0.0, 0.0, 0.75];
+    let gram = BipartiteGram::new(left, right, Weights::unit())
+        .and_then(|gram| gram.with_diagonal(&diagonal))
+        .unwrap();
+    let factor = factorize(gram).expect("a grounded bipartite Gram");
+    let x = slopes.unwrap_or([1.0; 3]);
+    let heads: Vec<u32> = cols.iter().map(|c| c + 2).collect();
+    solve_residual(
+        &factor,
+        &plus_diagonal(matrix(4, &rows, &heads, &x, &[1.0; 3]), &diagonal),
+    );
+}
+
+#[rstest]
+#[case::short(&[1.0, 1.0], ViewError::LengthMismatch { expected: 3, found: 2 })]
+#[case::negative(&[0.0, -1.0, 0.0], ViewError::InvalidDiagonal { vertex: 1 })]
+#[case::nan(&[0.0, 0.0, f64::NAN], ViewError::InvalidDiagonal { vertex: 2 })]
+fn every_factor_view_rejects_a_bad_diagonal(#[case] diagonal: &[f64], #[case] expected: ViewError) {
+    let (x, y) = ([1.0, 1.0], [-1.0, -1.0]);
+    let gram = FactorWidth2::new(3, &PATH_A, &PATH_B, &x, &y, Weights::unit()).unwrap();
+    let signed = SignedGraph::new(3, &PATH_A, &PATH_B, &[true, false], Weights::unit()).unwrap();
+    let left = FactorWidth1::<f64>::new(1, &[0u32, 0], None).unwrap();
+    let right = FactorWidth1::<f64>::new(2, &[0u32, 1], None).unwrap();
+    let bipartite = BipartiteGram::new(left, right, Weights::unit()).unwrap();
+    let errors = [
+        gram.with_diagonal(diagonal).err(),
+        signed.with_ground(diagonal).err(),
+        bipartite.with_diagonal(diagonal).err(),
+        unit_path().with_ground(diagonal).err(),
+    ];
+    assert_eq!(errors, [Some(expected); 4]);
 }
 
 /// Both vertices are in range, but their cell's product underflows below the floor.

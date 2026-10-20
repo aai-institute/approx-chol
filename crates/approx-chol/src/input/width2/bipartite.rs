@@ -4,7 +4,7 @@ use num_traits::PrimInt;
 
 use super::edges::{Edges, Weights};
 use super::gram::{Bipartite, Gram, OnBipartite, One, Values};
-use super::{length, ViewError};
+use super::{check_diagonal, length, ViewError};
 use crate::Real;
 
 /// One side of `V`, with at most one nonzero per column: `values[k]` at `rows[k]`, `1` for `None`.
@@ -27,13 +27,14 @@ impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
     }
 }
 
-/// `A = V W Vᵀ` with `V = [V_l; V_r]`, both width 1 on disjoint rows, left rows numbered first.
+/// `A = V W Vᵀ + diag(d)` with `V = [V_l; V_r]`, both width 1 on disjoint rows, left rows numbered first.
 #[derive(Clone, Copy, Debug)]
 pub struct BipartiteGram<'a, T, I = u32> {
     n_left: usize,
     edges: Edges<'a, T, I>,
     values: [Option<&'a [T]>; 2],
     n: usize,
+    diagonal: Option<&'a [T]>,
 }
 
 impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
@@ -50,6 +51,16 @@ impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
             edges,
             values: [left.values, right.values],
             n: count,
+            diagonal: None,
+        })
+    }
+
+    /// `V W Vᵀ + diag(d)`, one finite nonnegative `d_i` per vertex, left rows first.
+    pub fn with_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
+        check_diagonal(self.n, diagonal)?;
+        Ok(Self {
+            diagonal: Some(diagonal),
+            ..self
         })
     }
 
@@ -59,18 +70,15 @@ impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
 
     /// `on` run on this Gram, its sides' ends read as given.
     pub(crate) fn lower<R: OnBipartite<'a, T, I>>(self, on: R) -> R::Output {
-        let (n, graph, edges) = (
-            self.n,
-            Bipartite {
-                n_left: self.n_left,
-            },
-            self.edges,
-        );
+        let graph = Bipartite {
+            n_left: self.n_left,
+        };
+        let (n, edges, d) = (self.n, self.edges, self.diagonal);
         match self.values {
-            [None, None] => on.run(Gram::new(n, graph, edges, One, One, None)),
-            [Some(x), None] => on.run(Gram::new(n, graph, edges, Values(x), One, None)),
-            [None, Some(y)] => on.run(Gram::new(n, graph, edges, One, Values(y), None)),
-            [Some(x), Some(y)] => on.run(Gram::new(n, graph, edges, Values(x), Values(y), None)),
+            [None, None] => on.run(Gram::new(n, graph, edges, One, One, d)),
+            [Some(x), None] => on.run(Gram::new(n, graph, edges, Values(x), One, d)),
+            [None, Some(y)] => on.run(Gram::new(n, graph, edges, One, Values(y), d)),
+            [Some(x), Some(y)] => on.run(Gram::new(n, graph, edges, Values(x), Values(y), d)),
         }
     }
 }

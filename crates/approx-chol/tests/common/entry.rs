@@ -269,7 +269,7 @@ impl Entry {
                 let ground: Vec<T> = cast_all(&graph.ground);
                 match self {
                     Entry::GroundedLaplacian => {
-                        factorize_with(view.grounded(&ground).expect("valid ground"), config)
+                        factorize_with(view.with_ground(&ground).expect("valid ground"), config)
                     }
                     _ => factorize_with(view, config),
                 }

@@ -45,11 +45,13 @@ pub enum View<T> {
         x: Vec<T>,
         y: Vec<T>,
         weights: Weighting<T>,
+        diagonal: Option<Vec<T>>,
     },
     BipartiteGram {
         left: Side<T>,
         right: Side<T>,
         weights: Weighting<T>,
+        diagonal: Option<Vec<T>>,
     },
     Laplacian {
         n: u8,
@@ -64,6 +66,7 @@ pub enum View<T> {
         b: Vec<u32>,
         positive: Vec<bool>,
         weights: Weighting<T>,
+        ground: Option<Vec<T>>,
     },
 }
 
@@ -156,16 +159,26 @@ impl<T: Real> Case<T> {
                 x,
                 y,
                 weights,
+                diagonal,
             } => {
                 let v = FactorWidth2::new((*n).into(), a, b, x, y, weights.weights()?)?;
+                let v = match diagonal {
+                    Some(d) => v.with_diagonal(d)?,
+                    None => v,
+                };
                 factorize_with(v, config)?
             }
             View::BipartiteGram {
                 left,
                 right,
                 weights,
+                diagonal,
             } => {
                 let gram = BipartiteGram::new(left.factor()?, right.factor()?, weights.weights()?)?;
+                let gram = match diagonal {
+                    Some(d) => gram.with_diagonal(d)?,
+                    None => gram,
+                };
                 factorize_with(gram, config)?
             }
             View::Laplacian {
@@ -177,7 +190,7 @@ impl<T: Real> Case<T> {
             } => {
                 let graph = Laplacian::new((*n).into(), a, b, weights.weights()?)?;
                 let graph = match ground {
-                    Some(g) => graph.grounded(g)?,
+                    Some(g) => graph.with_ground(g)?,
                     None => graph,
                 };
                 factorize_with(graph, config)?
@@ -188,8 +201,13 @@ impl<T: Real> Case<T> {
                 b,
                 positive,
                 weights,
+                ground,
             } => {
                 let graph = SignedGraph::new((*n).into(), a, b, positive, weights.weights()?)?;
+                let graph = match ground {
+                    Some(g) => graph.with_ground(g)?,
+                    None => graph,
+                };
                 factorize_with(graph, config)?
             }
         })

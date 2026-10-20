@@ -112,6 +112,7 @@ fn seeds() -> Vec<(&'static str, Input)> {
                     x: vec![1.0, 2.0, 1.0],
                     y: vec![-1.0, -2.0, -1.0],
                     weights: Weighting::Unit,
+                    diagonal: None,
                 },
                 approximate(),
             ),
@@ -126,6 +127,7 @@ fn seeds() -> Vec<(&'static str, Input)> {
                     x: vec![1.0, 1.0, 1.0],
                     y: vec![1.0, -1.0, 2.0],
                     weights: Weighting::Of(vec![1.0, 3.0, 0.5]),
+                    diagonal: Some(vec![0.0, 0.5, 0.0]),
                 },
                 approximate(),
             ),
@@ -161,6 +163,7 @@ fn seeds() -> Vec<(&'static str, Input)> {
                     b: vec![1, 2, 2],
                     positive: vec![true, false, false],
                     weights: Weighting::Unit,
+                    ground: Some(vec![0.25, 0.0, 0.0]),
                 },
                 approximate(),
             ),
@@ -243,6 +246,7 @@ fn bipartite(slopes: bool) -> View<f64> {
             values: None,
         },
         weights: Weighting::Of((0..columns).map(|k| f64::from(1 + k % 3)).collect()),
+        diagonal: slopes.then(|| (0..11).map(|i| if i < 8 { 0.0 } else { 0.5 }).collect()),
     }
 }
 

@@ -149,7 +149,7 @@ fn dominant<'a, T: Real, I: Index, C>(
     Ok(Partitioned { a, partition })
 }
 
-/// `A`'s cells, its diagonal `Σ_k w_k v_ik²` and its components, summed in one column pass.
+/// `A`'s cells, its diagonal `σ_i + Σ_k w_k v_ik²` and its components, summed in one column pass.
 pub(in crate::sgdd) fn assemble_values<'a, T, J, I, G, A, B>(
     v: Gram<'a, T, J, G, A, B>,
 ) -> Result<ValueCells<T, I, G>, ReduceError>
@@ -161,7 +161,10 @@ where
     A: End<T>,
     B: End<T>,
 {
-    let mut sums = vec![0.0_f64; v.n()];
+    let mut sums = match v.diagonal() {
+        Some(d) => d.iter().map(|&d| widen(d)).collect(),
+        None => vec![0.0_f64; v.n()],
+    };
     let a =
         (v.graph()).sum::<T, I, f64>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
     assembled(a, sums)
