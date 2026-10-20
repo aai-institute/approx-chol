@@ -1,18 +1,11 @@
 use crate::graph::{Edge, Graph};
 
-/// Unit-weight `rows × cols` grid Laplacian, row-major.
+/// Unit-weight `rows × cols` grid Laplacian, row-major: every horizontal edge, then every vertical one.
 pub fn grid(rows: usize, cols: usize) -> Graph {
-    let mut edges = Vec::new();
-    for r in 0..rows {
-        for c in 0..cols {
-            let v = r * cols + c;
-            if c + 1 < cols {
-                edges.push(Edge::negative(v, v + 1, 1.0));
-            }
-            if r + 1 < rows {
-                edges.push(Edge::negative(v, v + cols, 1.0));
-            }
-        }
-    }
-    Graph::new(rows * cols, edges)
+    let right = (0..rows * cols)
+        .filter(|v| v % cols + 1 < cols)
+        .map(|v| (v, v + 1));
+    let down = (0..cols * rows.saturating_sub(1)).map(|v| (v, v + cols));
+    let edges = right.chain(down).map(|(a, b)| Edge::negative(a, b, 1.0));
+    Graph::new(rows * cols, edges.collect())
 }

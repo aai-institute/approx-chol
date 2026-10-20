@@ -12,4 +12,5 @@ pub use block::ReduceError;
 pub(crate) use block::{Balance, Grounding};
 pub(crate) use block::{IrreducibleBlock, Sgdd};
 pub(crate) use congruence::Restriction;
+pub(crate) use reduction::within_band;
 pub use scaling::{ScalingPolicy, ScalingReport};

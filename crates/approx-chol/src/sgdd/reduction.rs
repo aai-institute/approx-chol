@@ -33,9 +33,9 @@ impl<T: Real, I: Index> Sgdd<T, I> {
 }
 
 fn into_sgdd<T: Real, I: Index>(
-    (partition, live): Components<IrreducibleBlock<T, I>, I>,
+    (partition, live, lone): Components<IrreducibleBlock<T, I>, I, T>,
 ) -> Sgdd<T, I> {
-    Sgdd::new(partition.n(), live)
+    Sgdd::new(partition.n(), live, lone)
 }
 
 /// One block `A_c` as the input gave it, with its rows' `Σ_j |a_ij|` and entry counts.
@@ -176,7 +176,7 @@ impl<T: Real> RowSums<T> {
     fn folded_surplus<I: Index>(self, off_diagonal: &OffDiagonal<T, I>) -> Grounding<T> {
         let trace = crate::compensated_sum(self.diagonal.iter().map(|&d| widen(d)));
         let ones = trace - off_diagonal.abs_total();
-        match ones <= SINGULAR_BAND * widen(T::epsilon()) * trace {
+        match within_band::<T>(ones, trace) {
             true => Grounding::ungrounded(),
             false => self.surplus(),
         }
@@ -192,3 +192,8 @@ impl<T: Real> RowSums<T> {
 
 /// `1ᵀM1 ≤ SINGULAR_BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh), so `M` floats.
 const SINGULAR_BAND: f64 = 5.0;
+
+/// Whether `ones = 1ᵀM1` is within the band of `trace = tr M`, so `M` is singular to working precision.
+pub(crate) fn within_band<T: Real>(ones: f64, trace: f64) -> bool {
+    ones <= SINGULAR_BAND * widen(T::epsilon()) * trace
+}

@@ -46,39 +46,21 @@ fn diagonal_sddm() -> Graph {
     }
 }
 
-/// `config` with AC2's copy count, wherever it splits, set to `k`.
-fn splitting(config: Config, k: u32) -> Config {
-    let split = |split_merge: Option<u32>| split_merge.filter(|&k| k >= 2).map(|_| k);
-    Config {
-        split_merge: split(config.split_merge),
-        complement: match config.complement {
-            SchurMode::Approximate { split_merge } => SchurMode::Approximate {
-                split_merge: split(split_merge),
-            },
-            other => other,
-        },
-        ..config
-    }
-}
-
 cases! {
-    /// A grounded singleton factors to `1/σ` whatever AC2's `k`, so it solves `M⁻¹b` exactly.
+    /// A grounded singleton factors to `1/σ` under every config, so it solves `M⁻¹b` exactly.
     #[case::positive_rhs([1.0, 2.0, 3.0])]
     #[case::mixed_sign_rhs([1.0, -2.0, 4.0])]
     fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
         #[case] b: [f64; 3],
         entry in entries(grounded),
         types in types(all),
-        #[values(2, 3, 7)] k: u32,
     ) {
         let graph = diagonal_sddm();
         let reduced = entry.reduce(&graph, types);
         assert_eq!(reduced.floats(), [false; 3], "{types:?}");
-        let config = splitting(Sparse::Ac2ExactComplement.config(), k);
-        let factor = reduced.factorize(&config);
+        let factor = reduced.factorize(&Config::default());
         let want: Vec<f64> = b.iter().zip(&graph.ground).map(|(b, d)| b / d).collect();
-        let label = format!("{types:?} {config:?}");
-        assert_close(&label, &factor.solve(&b), &want, 4.0 * types.epsilon());
+        assert_close(&format!("{types:?}"), &factor.solve(&b), &want, 4.0 * types.epsilon());
     }
 }
 
@@ -364,17 +346,15 @@ cases! {
 
 cases! {
     fn a_positive_singleton_has_a_defined_solve(
-        route in routes(lone_ground),
+        entry in entries(lone_ground),
         types in types(all),
     ) {
-        let (entry, mode) = route;
         let graph = Graph {
             ground: vec![2.0],
             ..Graph::new(1, Vec::new())
         };
-        let config = mode.config();
-        let x = entry.reduce(&graph, types).factorize(&config).solve(&[7.0]);
-        let label = format!("positive singleton {types:?} {config:?}");
+        let x = entry.reduce(&graph, types).factorize(&Config::default()).solve(&[7.0]);
+        let label = format!("positive singleton {types:?}");
         assert_close(&label, &x, &[3.5], types.epsilon());
     }
 }
@@ -383,5 +363,68 @@ cases! {
     fn an_empty_system_solves_to_an_empty_vector(entry in entries(all), types in types(all)) {
         let reduced = entry.reduce(&Graph::new(0, Vec::new()), types);
         assert!(reduced.factorize(&Config::default()).solve(&[]).is_empty());
+    }
+}
+
+#[test]
+fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
+    use approx_chol::input::{SignedGraph, Weights};
+    use approx_chol::{factorize_with, Backend};
+    // A frustrated triangle, weakest edge 1e-80, and a pair on (1, 2) cancelling to a 2e-200 surplus.
+    let (a, b) = ([0u32, 1, 0, 1, 1], [1u32, 2, 2, 2, 2]);
+    let pos = [false, false, true, true, false];
+    let w = [1e-80, 1.0, 2.0, 1e-200, 1e-200];
+    let m = [
+        [2.0 + 1e-80, -1e-80, 2.0],
+        [-1e-80, 1.0 + 1e-80 + 2e-200, -1.0],
+        [2.0, -1.0, 3.0 + 2e-200],
+    ];
+    let rhs = [2.5, -1.0, 3.5];
+    let exact = Config {
+        backend: Backend::ExactBelow { max_dim: 64 },
+        complement: SchurMode::Exact,
+        ..Config::default()
+    };
+    for config in [Config::default(), exact] {
+        let graph = SignedGraph::new(3, &a, &b, &pos, Weights::of(&w).unwrap()).unwrap();
+        let x = factorize_with(graph, config).unwrap().solve(&rhs).unwrap();
+        let residual = (m.iter().zip(&rhs))
+            .map(|(row, b)| (row.iter().zip(&x).map(|(m, x)| m * x).sum::<f64>() - b).abs())
+            .fold(0.0, f64::max);
+        let scale = 6.0 * x.iter().fold(0.0f64, |m, x| m.max(x.abs())) + 3.5;
+        assert!(
+            residual <= 64.0 * f64::EPSILON * scale,
+            "{config:?}: x = {x:?}, residual {residual:e}"
+        );
+    }
+}
+
+#[test]
+fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
+    use approx_chol::input::{BipartiteGram, FactorWidth1, Weights};
+    use approx_chol::{factorize_with, Backend};
+    // Three left vertices on one right vertex, each by a cancelling pair: `S` is one grounded slot, so AC2 samples no edge.
+    let (left, right) = ([0u32, 0, 1, 1, 2, 2], [0u32; 6]);
+    let loadings = [1.0, -1.0, 1.0, -1.0, 1.0, -1.0];
+    let weights = [2.0, 1.0, 3.0, 1.0, 1.0, 4.0];
+    let x = [1.0, -1.0, 2.0, 0.5];
+    let b = [3.5, -3.0, 8.5, -1.0];
+    for k in [2, 3] {
+        for complement in [SchurMode::Same, SchurMode::Exact] {
+            let config = Config {
+                split_merge: Some(k),
+                backend: Backend::Approximate,
+                complement,
+                ..Config::default()
+            };
+            let gram = BipartiteGram::new(
+                FactorWidth1::new(3, &left, Some(&loadings[..])).unwrap(),
+                FactorWidth1::<f64>::new(1, &right, None).unwrap(),
+                Weights::of(&weights).unwrap(),
+            )
+            .unwrap();
+            let solved = factorize_with(gram, config).unwrap().solve(&b).unwrap();
+            assert_close(&format!("{config:?}"), &solved, &x, 64.0 * f64::EPSILON);
+        }
     }
 }

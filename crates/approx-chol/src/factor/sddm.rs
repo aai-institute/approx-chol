@@ -2,9 +2,9 @@
 
 use rayon::prelude::*;
 
-use crate::sgdd::Grounding;
+use crate::sgdd::{within_band, Grounding};
 use crate::storage::{Rows, UpperAdjacency};
-use crate::{Index, Real};
+use crate::{widen, Index, Real};
 
 /// `L + diag(s)`, `L`'s off-diagonal nonpositive.
 #[derive(Clone, Debug)]
@@ -33,19 +33,30 @@ impl<T: Real, I: Index> Sddm<T, I> {
         }
     }
 
-    /// The Gremban cover of signed `M`: a Laplacian on two sheets that acts as `M` on `[z; −z]`.
+    /// The Gremban cover of signed `M`: a Laplacian on two sheets that acts as `M` on `[z; −z]`; a surplus within the band joins `i`'s copies by `s_i/2` instead of grounding them, so the sheets' `1/s` common mode cannot swamp `z`.
     pub(super) fn cover(signed: UpperAdjacency<T, I>, grounding: Grounding<T>) -> Self {
         let n = signed.n();
-        let mut rows = SddmRows::with_capacity(2 * n, 2 * signed.nnz());
+        let twisted = grounding.surplus().is_some_and(|s| {
+            let total = crate::compensated_sum(s.iter().map(|&s| widen(s)));
+            within_band::<T>(total, total + signed.abs_total())
+        });
+        let twists = if twisted { n } else { 0 };
+        let mut rows = SddmRows::with_capacity(2 * n, 2 * signed.nnz() + twists);
+        let half = T::one() / (T::one() + T::one());
         for i in 0..n {
+            let surplus = grounding.edge(i);
+            let twist = surplus.filter(|_| twisted).map(|s| s * half);
+            if let Some(t) = twist {
+                rows.add(cover_vertex(i, 1), t);
+            }
             for (j, &a) in signed.upper(i) {
                 rows.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
             }
-            if let Some(s) = grounding.edge(i) {
+            if let Some(s) = surplus.filter(|_| !twisted) {
                 rows.add(2 * n, s);
             }
             rows.end_row();
-            rows.mirror_row();
+            rows.mirror_row(usize::from(twist.is_some()));
         }
         let (adjacency, ground) = rows.finish();
         let grounding = Grounding::of(ground);
@@ -146,9 +157,9 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         self.ptrs.push(self.indices.len());
     }
 
-    /// Repeats the row just ended on the other sheet, each column's sheet bit flipped.
-    fn mirror_row(&mut self) {
-        let (start, end) = (self.ptrs[self.ptrs.len() - 2], self.indices.len());
+    /// Repeats the row just ended on the other sheet past its first `twists` entries, each column's sheet bit flipped.
+    fn mirror_row(&mut self, twists: usize) {
+        let (start, end) = (self.ptrs[self.ptrs.len() - 2] + twists, self.indices.len());
         self.ground.push(*self.ground.last().expect("a row ended"));
         for i in start..end {
             self.indices.push(self.indices[i] ^ I::one());
@@ -178,7 +189,7 @@ impl<T: Real, I: Index> SddmRows<T, I> {
                 row(rows.row(), k);
                 rows.end_row();
                 if sheets == Sheets::Two {
-                    rows.mirror_row();
+                    rows.mirror_row(0);
                 }
                 rows
             },

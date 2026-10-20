@@ -96,14 +96,12 @@ impl<T: Real> Factor<T> {
         store: fn(Block<T, I>) -> Storage<T>,
     ) -> Self {
         let n = sgdd.n();
-        let blocks: Vec<BlockFactor<T>> = (sgdd.into_blocks().into_par_iter())
-            .map(|block| match block.isolated() {
-                Some((vertex, pivot)) => {
-                    BlockFactor(Storage::Isolated(Isolated::new(vertex, pivot)))
-                }
-                None => BlockFactor(store(Block::build(block, config))),
-            })
-            .collect();
+        let (coupled, lone) = sgdd.into_blocks();
+        let mut blocks = Vec::with_capacity(coupled.len() + lone.len());
+        let build = |block| BlockFactor(store(Block::build(block, config)));
+        blocks.par_extend(coupled.into_par_iter().map(build));
+        let isolated = |(v, pivot)| BlockFactor(Storage::Isolated(Isolated::new(v, pivot)));
+        blocks.extend(lone.into_iter().map(isolated));
         let mut covered = vec![false; n];
         (blocks.iter().flat_map(BlockFactor::vertices)).for_each(|v| covered[v] = true);
         let dead = (0..n).filter(|&v| !covered[v]).collect();
@@ -136,7 +134,7 @@ impl<T: Real> Factor<T> {
             .sum()
     }
 
-    /// The blocks' factors, one per irreducible block of `A`; dead vertices have none.
+    /// The blocks' factors, one per irreducible block of `A`, coupled blocks before isolated vertices; dead vertices have none.
     pub fn blocks(&self) -> &[BlockFactor<T>] {
         &self.blocks
     }
@@ -292,7 +290,6 @@ pub(crate) struct Block<T, I> {
 impl<T: Real, I: Index> Block<T, I> {
     fn build(block: IrreducibleBlock<T, I>, config: &Config) -> Self {
         let (restriction, off_diagonal, balance, report) = block.into_parts();
-        let floats = balance.floats();
         let streams = Streams {
             seed: config.seed,
             block: restriction.vertices()[0].index() as u64,
@@ -335,7 +332,6 @@ impl<T: Real, I: Index> Block<T, I> {
                 (Some(Box::new(elimination)), factored)
             }
         };
-        debug_assert_eq!(cholesky.singular(), floats, "a factor floats as its block");
         Self {
             restriction,
             elimination,

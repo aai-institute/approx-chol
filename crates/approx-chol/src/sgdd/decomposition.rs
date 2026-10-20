@@ -43,6 +43,20 @@ pub(super) fn of_upper<T: Real, J: PrimInt, I: Index>(
     Ok(Partitioned { a: csr, partition })
 }
 
+/// The pivot of a vertex no entry couples: its diagonal, or its surplus where no diagonal is stored.
+pub(super) trait LonePivot<T> {
+    fn lone(&self, v: usize) -> T;
+}
+
+/// A lone vertex reduces to `(vertex, σ)` when its pivot is a positive in-range surplus; anything else takes the block path.
+fn isolated<T: Real, I: Index>(vertices: &[I], a: &impl LonePivot<T>) -> Option<(I, T)> {
+    let &[v] = vertices else {
+        return None;
+    };
+    let pivot = a.lone(v.index());
+    (pivot > T::zero() && crate::diagonal_in_range(pivot)).then_some((v, pivot))
+}
+
 /// An assembled `A` cut into its components' blocks.
 pub(super) trait PrincipalBlocks<T, I> {
     type Block;
@@ -59,9 +73,9 @@ impl<A, I: Index> Partitioned<A, I> {
     pub(super) fn extract<T: Real, B: Send>(
         self,
         block: impl Fn(<A as PrincipalBlocks<T, I>>::Block) -> Result<Option<B>, ReduceError> + Sync,
-    ) -> Result<Components<B, I>, ReduceError>
+    ) -> Result<Components<B, I, T>, ReduceError>
     where
-        A: PrincipalBlocks<T, I> + Sync,
+        A: PrincipalBlocks<T, I> + LonePivot<T> + Sync,
     {
         let Self { a, partition } = self;
         // Past `1/ε` vertices, floor weights in series fall below `MIN_POSITIVE`; a dead one is alone.
@@ -71,18 +85,27 @@ impl<A, I: Index> Partitioned<A, I> {
             let vertex = vertices[0].index();
             return Err(ReduceError::TooLarge { vertex });
         }
-        let Some(position) = partition.position() else {
-            let vertices = partition.components().next().expect("one component");
-            let live = block(a.whole(vertices))?.into_iter().collect();
-            return Ok((partition, live));
-        };
-        let components: Vec<&[I]> = partition.components().collect();
+        let mut lone = Vec::new();
+        let components: Vec<&[I]> = (partition.components())
+            .filter(|vertices| match isolated(vertices, &a) {
+                Some(isolated) => {
+                    lone.push(isolated);
+                    false
+                }
+                None => true,
+            })
+            .collect();
         if components.is_empty() {
-            return Ok((partition, Vec::new()));
+            return Ok((partition, Vec::new(), lone));
         }
+        let Some(position) = partition.position() else {
+            let live = block(a.whole(components[0]))?.into_iter().collect();
+            return Ok((partition, live, lone));
+        };
         let cut = |vertices: &&[I]| block(a.component(vertices, position));
         // About `2^PARALLEL_BITS` vertices a task: waking the pool for less costs more than it saves.
-        let per_task = crate::per_task(components.len(), partition.n() as u64, PARALLEL_BITS);
+        let work = (partition.n() - lone.len()) as u64;
+        let per_task = crate::per_task(components.len(), work, PARALLEL_BITS);
         let blocks: Vec<_> = match per_task < components.len() && rayon::current_num_threads() > 1 {
             true => (components.par_iter())
                 .with_min_len(per_task)
@@ -100,14 +123,14 @@ impl<A, I: Index> Partitioned<A, I> {
             .into_iter()
             .filter_map(|b| b.ok().flatten())
             .collect();
-        Ok((partition, live))
+        Ok((partition, live, lone))
     }
 }
 
 const PARALLEL_BITS: u32 = 12;
 
-/// The partition and each live component's block.
-pub(super) type Components<B, I> = (Partition<I>, Vec<B>);
+/// The partition, each live component's block, and each isolated vertex with its pivot.
+pub(super) type Components<B, I, T> = (Partition<I>, Vec<B>, Vec<(I, T)>);
 
 /// A general `A` assembled with its diagonal, and its components.
 type General<T, I> = Partitioned<Assembled<T, UpperAdjacency<T, I>>, I>;
@@ -171,6 +194,26 @@ pub(super) struct Assembled<T, C> {
 pub(super) struct Dominant<'a, T: Clone, C> {
     adjacency: C,
     surplus: Option<Cow<'a, [T]>>,
+}
+
+impl<T: Real, J: PrimInt> LonePivot<T> for Canonical<'_, T, J> {
+    fn lone(&self, v: usize) -> T {
+        self.row(v)
+            .find(|&(j, _)| j == v)
+            .map_or(T::zero(), |(_, a)| a)
+    }
+}
+
+impl<T: Real, C> LonePivot<T> for Assembled<T, C> {
+    fn lone(&self, v: usize) -> T {
+        self.diagonal[v]
+    }
+}
+
+impl<T: Real, C> LonePivot<T> for Dominant<'_, T, C> {
+    fn lone(&self, v: usize) -> T {
+        self.surplus.as_ref().map_or(T::zero(), |s| s[v])
+    }
 }
 
 /// The upper triangle, cancelled cells dropped.
