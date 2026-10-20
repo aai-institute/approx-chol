@@ -108,12 +108,11 @@ pub(crate) enum Weighting<S> {
 
 impl<T: Real> Weighting<T> {
     /// `w·x·y`, as `(s·x)·(s·y)` under `SqrtOf`.
-    pub(crate) fn bilinear<U: Real>(self, x: U, y: U) -> U {
-        let to = |w: T| U::from(w).expect("a finite weight casts to a float");
+    pub(crate) fn bilinear(self, x: f64, y: f64) -> f64 {
         match self {
             Self::Unit => x * y,
-            Self::Of(w) => to(w) * x * y,
-            Self::SqrtOf(s) => (to(s) * x) * (to(s) * y),
+            Self::Of(w) => widen(w) * x * y,
+            Self::SqrtOf(s) => (widen(s) * x) * (widen(s) * y),
         }
     }
 
