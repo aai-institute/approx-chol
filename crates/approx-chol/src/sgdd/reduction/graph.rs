@@ -10,7 +10,9 @@ use crate::{Index, Real};
 
 impl<T: Real, I: Index> Sgdd<T, I> {
     /// Dominant with surplus `g` by shape: a block floats exactly when its ground is zero.
-    pub fn from_laplacian<J: PrimInt>(graph: Laplacian<'_, T, J>) -> Result<Self, ReduceError> {
+    pub(crate) fn from_laplacian<J: PrimInt>(
+        graph: Laplacian<'_, T, J>,
+    ) -> Result<Self, ReduceError> {
         assemble_laplacian(graph)?
             .extract(|(vertices, off_diagonal, grounding)| {
                 let m = Congruent::new(vertices, off_diagonal, Congruence::Identity);
@@ -20,7 +22,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
     }
 
     /// `M`, a bipartite Laplacian, with the kept side negated folding `A` into it.
-    pub fn from_bipartite_laplacian<J: PrimInt>(
+    pub(crate) fn from_bipartite_laplacian<J: PrimInt>(
         m: BipartiteLaplacian<'_, T, J>,
     ) -> Result<Self, ReduceError> {
         assemble_bipartite::<T, I>(m)?
@@ -37,7 +39,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
     }
 
     /// Dominant by shape, each end's surplus its pairs' cancelled mass; its signs are searched.
-    pub fn from_signed_graph<J: PrimInt>(
+    pub(crate) fn from_signed_graph<J: PrimInt>(
         graph: SignedGraph<'_, T, J>,
     ) -> Result<Self, ReduceError> {
         assemble_signed(graph)?

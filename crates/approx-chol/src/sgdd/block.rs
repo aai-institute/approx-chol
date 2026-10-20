@@ -66,7 +66,7 @@ impl<T: Real> Grounding<T> {
 
 /// One irreducible principal block `A_c` of `A`, reduced: `M = F · A_c · F` weakly diagonally dominant, eliminated side first.
 #[derive(Clone, Debug)]
-pub struct IrreducibleBlock<T = f64, I = u32> {
+pub(crate) struct IrreducibleBlock<T = f64, I = u32> {
     restriction: Box<Restriction<T, I>>,
     off_diagonal: OffDiagonal<T, I>,
     balance: Balance<T>,
@@ -133,7 +133,7 @@ type BlockParts<T, I> = (
 
 /// `A` as its [`IrreducibleBlock`]s, each reduced; vertices in none solve to `0`.
 #[derive(Clone, Debug)]
-pub struct Sgdd<T = f64, I = u32> {
+pub(crate) struct Sgdd<T = f64, I = u32> {
     n: usize,
     blocks: Vec<IrreducibleBlock<T, I>>,
     /// Vertices no entry couples, each with its surplus `σ`, which is its whole pivot.
@@ -147,12 +147,12 @@ impl<T: Real, I: Index> Sgdd<T, I> {
     }
 
     /// Dimension of `A`.
-    pub fn n(&self) -> usize {
+    pub(crate) fn n(&self) -> usize {
         self.n
     }
 
     /// The coupled irreducible blocks, each factored and solved on its own, and the isolated vertices with their pivots.
-    pub fn into_blocks(self) -> Blocks<T, I> {
+    pub(crate) fn into_blocks(self) -> Blocks<T, I> {
         (self.blocks, self.lone)
     }
 }
