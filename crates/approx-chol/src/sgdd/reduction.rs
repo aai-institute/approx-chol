@@ -61,11 +61,8 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         relax: impl FnOnce(&Self) -> Option<scaling::Relaxation<T>>,
     ) -> Result<Signed<T, I>, ReduceError> {
         let RowSums { diagonal, abs } = &self.rows;
-        if let Some(i) = diagonal.iter().position(|&d| !diagonal_in_range(d)) {
-            let vertex = self.vertices[i].index();
-            return Err(ReduceError::OutOfRange { vertex });
-        }
-        if let Some(i) = abs.iter().position(|&s| !diagonal_in_range(s)) {
+        let in_range = |(&d, &s): (&T, &T)| diagonal_in_range(d) && diagonal_in_range(s);
+        if let Some(i) = diagonal.iter().zip(abs).position(|row| !in_range(row)) {
             let vertex = self.vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
         }
