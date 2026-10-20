@@ -14,49 +14,94 @@ use crate::{Index, Real};
 use graph::EliminationGraph;
 use ordering::MinDegreeOrder;
 
-/// AC or AC2 by `multiplicity`, each its own monomorphized elimination.
-pub(super) fn factor<T: Real, I: Index>(
-    sddm: Sddm<T, I>,
-    multiplicity: Multiplicity,
-    draws: Xoshiro256PlusPlus,
-    pin: Option<usize>,
-) -> (ApproximateCholesky<T, I>, usize) {
-    match multiplicity {
-        Multiplicity::Single => eliminate::<T, I, Single>(sddm, draws, (), pin),
-        Multiplicity::Split(k) => eliminate::<T, I, Multi>(sddm, draws, k, pin),
+/// A task's AC or AC2 elimination, each monomorphized; a small block reuses the last one's buffers (malloc was 17% of 20-vertex covers).
+pub(in crate::factor) enum Elimination<T, I> {
+    Single(CliqueTreeElimination<T, I, Single>),
+    Split(CliqueTreeElimination<T, I, Multi>),
+}
+
+impl<T: Real, I: Index> Elimination<T, I> {
+    pub(in crate::factor) fn new(multiplicity: Multiplicity) -> Self {
+        match multiplicity {
+            Multiplicity::Single => Self::Single(CliqueTreeElimination::new(())),
+            Multiplicity::Split(k) => Self::Split(CliqueTreeElimination::new(k)),
+        }
+    }
+
+    pub(super) fn factor(
+        &mut self,
+        sddm: Sddm<T, I>,
+        draws: Xoshiro256PlusPlus,
+        pin: Option<usize>,
+    ) -> (ApproximateCholesky<T, I>, usize) {
+        match self {
+            Self::Single(elimination) => elimination.eliminate(sddm, draws, pin),
+            Self::Split(elimination) => elimination.eliminate(sddm, draws, pin),
+        }
     }
 }
 
-/// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree (Algorithm 8); the last, `pin` when given, is the slot the solve zeroes.
-fn eliminate<T: Real, I: Index, C: Copies>(
-    sddm: Sddm<T, I>,
-    draws: Xoshiro256PlusPlus,
+pub(in crate::factor) struct CliqueTreeElimination<T, I, C: Copies> {
     split: C::Split,
-    pin: Option<usize>,
-) -> (ApproximateCholesky<T, I>, usize) {
-    let mut graph = EliminationGraph::<T, I, C>::of(&sddm, split);
-    drop(sddm);
-    let n = graph.n();
-    let mut ordering = MinDegreeOrder::<I>::new(&graph, split, pin);
-    let mut draws = draws;
-    let mut clique = CliqueSampler::<T, I, C>::new(split);
-    let mut fill = Fill::new();
-    let mut steps = ApproximateCholesky::with_capacity(n, graph.edge_ends());
-    for _ in 1..n {
-        let v = ordering.next_vertex();
-        fill.clear();
-        let column = clique.eliminate(&mut draws, graph.neighbors(v), &mut fill);
-        steps.push(v, column);
-        graph.eliminate_vertex(v);
-        for &(u, w, copies, weight) in &fill {
-            graph.push_pair(u, w, copies, weight);
+    graph: EliminationGraph<T, I, C>,
+    clique: CliqueSampler<T, I, C>,
+    fill: Fill<T, I, C>,
+}
+
+impl<T: Real, I: Index, C: Copies> CliqueTreeElimination<T, I, C> {
+    fn new(split: C::Split) -> Self {
+        Self {
+            split,
+            graph: EliminationGraph::new(),
+            clique: CliqueSampler::new(split),
+            fill: Fill::new(),
         }
-        ordering.update(clique.degree_losses(), &fill);
     }
-    // Doubling past the estimate otherwise retains up to 2x the entries (+30% on grids).
-    steps.neighbors.shrink_to_fit();
-    steps.coefficients.shrink_to_fit();
-    (steps, pin.unwrap_or_else(|| ordering.next_vertex()))
+
+    /// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree (Algorithm 8); the last, `pin` when given, is the slot the solve zeroes.
+    fn eliminate(
+        &mut self,
+        sddm: Sddm<T, I>,
+        mut draws: Xoshiro256PlusPlus,
+        pin: Option<usize>,
+    ) -> (ApproximateCholesky<T, I>, usize) {
+        self.graph.load(&sddm, self.split);
+        drop(sddm);
+        let n = self.graph.n();
+        let mut ordering = MinDegreeOrder::<I>::new(&self.graph, self.split, pin);
+        let mut steps = ApproximateCholesky::with_capacity(n, self.graph.edge_ends());
+        self.pivot_all(&mut ordering, &mut draws, &mut steps);
+        // Doubling past the estimate otherwise retains up to 2x the entries (+30% on grids).
+        steps.neighbors.shrink_to_fit();
+        steps.coefficients.shrink_to_fit();
+        (steps, pin.unwrap_or_else(|| ordering.next_vertex()))
+    }
+
+    #[inline(never)] // Inlined, its codegen moves with the buffer handling: grids +1-3%.
+    fn pivot_all(
+        &mut self,
+        ordering: &mut MinDegreeOrder<I>,
+        draws: &mut Xoshiro256PlusPlus,
+        steps: &mut ApproximateCholesky<T, I>,
+    ) {
+        let Self {
+            graph,
+            clique,
+            fill,
+            ..
+        } = self;
+        for _ in 1..graph.n() {
+            let v = ordering.next_vertex();
+            fill.clear();
+            let column = clique.eliminate(draws, graph.neighbors(v), fill);
+            steps.push(v, column);
+            graph.eliminate_vertex(v);
+            for &(u, w, copies, weight) in fill.iter() {
+                graph.push_pair(u, w, copies, weight);
+            }
+            ordering.update(clique.degree_losses(), fill);
+        }
+    }
 }
 
 /// A step's neighbors follow the previous step's, so the solve's running `usize` offset finds them at any size.
