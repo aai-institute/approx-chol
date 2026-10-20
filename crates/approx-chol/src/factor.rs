@@ -151,7 +151,6 @@ impl<T: Real> Factor<T> {
 
     /// `A⁺b` on floating blocks; vertices in no block solve to `0`.
     pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
-        check_buffers(b, self.n, &[], 0)?;
         let mut x = b.to_vec();
         let mut scratch = vec![T::zero(); self.scratch_len()];
         self.solve_in_place(&mut x, &mut scratch)?;

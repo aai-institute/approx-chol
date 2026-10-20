@@ -7,6 +7,7 @@ const DEGREE: usize = 48;
 const GROUPS: [(usize, usize, bool); 3] =
     [(3200, 700, false), (420, 1000, true), (420, 1000, false)];
 
+#[derive(Default)]
 struct Gram {
     n_left: usize,
     n_right: usize,
@@ -17,14 +18,7 @@ struct Gram {
 }
 
 fn gram() -> Gram {
-    let mut g = Gram {
-        n_left: 0,
-        n_right: 0,
-        left: Vec::new(),
-        right: Vec::new(),
-        left_values: Vec::new(),
-        right_values: Vec::new(),
-    };
+    let mut g = Gram::default();
     let (mut first_left, mut first_right) = (0, 0);
     for (left, right, frustrated) in GROUPS {
         for i in 0..left {
