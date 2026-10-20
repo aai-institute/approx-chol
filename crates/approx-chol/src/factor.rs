@@ -558,7 +558,7 @@ mod tests {
     fn csr_block(row_ptrs: &[u32], columns: &[u32], values: &[f64]) -> Block<f64, u32> {
         let n = (row_ptrs.len() - 1) as u32;
         let csr = CsrRef::new(row_ptrs, columns, values, n).expect("valid csr");
-        let sgdd = Sgdd::from_csr(csr, ScalingPolicy::default()).expect("reduces");
+        let sgdd = Sgdd::reduce(csr.into(), ScalingPolicy::default()).expect("reduces");
         only_block(sgdd, &Config::default())
     }
 

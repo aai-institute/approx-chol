@@ -1,6 +1,5 @@
 //! Each block reduced on its own; folded Grams share one column pass.
 
-mod csr;
 mod gram;
 mod graph;
 
@@ -8,10 +7,10 @@ use num_traits::PrimInt;
 
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
 use super::congruence::{Congruence, Scales};
-use super::decomposition::Cells;
+use super::decomposition::{of_csr, of_upper, Cells, Partitioned};
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
 use super::signature;
-use crate::input::Input;
+use crate::input::{Canonical, Input};
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, widen, Error, Index, Real};
 
@@ -22,13 +21,35 @@ impl<T: Real, I: Index> Sgdd<T, I> {
         policy: ScalingPolicy,
     ) -> Result<Self, Error> {
         Ok(match input {
-            Input::Csr(csr) => Self::from_csr(csr, policy)?,
-            Input::UpperCsr(csr) => Self::from_upper_csr(csr, policy)?,
+            // Symmetry is checked in the walk that unions the pattern; upper storage has no mirror.
+            Input::Csr(csr) => of_csr(Canonical::of(csr)?)?.reduce(&policy)?,
+            Input::UpperCsr(csr) => of_upper(Canonical::of(csr.0)?)?.reduce(&policy)?,
             Input::Laplacian(laplacian) => Self::from_laplacian(laplacian)?,
             Input::SignedGraph(graph) => Self::from_signed_graph(graph)?,
             Input::Gram(v) => Self::from_gram(v, policy)?,
             Input::BipartiteGram(gram) => Self::from_bipartite_gram(gram, policy)?,
         })
+    }
+}
+
+impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
+    /// Scales and signs each block's `A_c`, closing its surplus from the same rows.
+    fn reduce(self, policy: &ScalingPolicy) -> Result<Sgdd<T, I>, ReduceError> {
+        self.extract(|cells| {
+            let a = SymmetricBlock::new(cells);
+            let relax = |a: &SymmetricBlock<T, I>| {
+                scaling::relax(&a.off_diagonal, &a.rows.diagonal, policy)
+            };
+            let block = match a.reduce(policy, relax)? {
+                Signed::Folded(m, rows) => {
+                    let grounding = rows.folded_surplus(&m.off_diagonal);
+                    m.block(Balance::Balanced(grounding))?
+                }
+                Signed::Frustrated(block) => block,
+            };
+            Ok(block)
+        })
+        .map(Sgdd::new)
     }
 }
 
