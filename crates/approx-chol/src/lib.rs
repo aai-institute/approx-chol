@@ -14,7 +14,7 @@
 //! # }
 //! ```
 
-#![deny(missing_docs)]
+#![deny(missing_docs, unreachable_pub)]
 
 /// Serde through `remote = "Self"`, every decoded value passed through its type's `checked`.
 #[cfg(feature = "serde")]

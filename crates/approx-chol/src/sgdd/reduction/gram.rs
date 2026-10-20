@@ -12,7 +12,7 @@ use crate::{narrow, widen, Index, Real};
 
 impl<T: Real, I: Index> Sgdd<T, I> {
     /// `A = V Vᵀ`: scales, folds or covers each block as general, deciding floating from `V`.
-    pub fn from_gram<J: PrimInt>(
+    pub(crate) fn from_gram<J: PrimInt>(
         v: FactorWidth2<'_, T, J>,
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
@@ -21,7 +21,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
     }
 
     /// `A = V W Vᵀ` on two disjoint sides `[D_l C; Cᵀ D_r]`, as [`from_gram`](Self::from_gram).
-    pub fn from_bipartite_gram<J: PrimInt>(
+    pub(crate) fn from_bipartite_gram<J: PrimInt>(
         gram: BipartiteGram<'_, T, J>,
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
