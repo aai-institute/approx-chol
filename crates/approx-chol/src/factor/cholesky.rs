@@ -18,7 +18,7 @@ use approximate::ApproximateCholesky;
 #[derive(Clone, Debug)]
 pub(super) struct Cholesky<T, I> {
     sheets: Sheets,
-    /// The ground is the appended slot, right-hand side `−Σb`, every entry then shifted so it reads zero; else the free slot reads zero.
+    /// The ground is the appended slot, right-hand side `−Σb`, every entry then shifted so it reads zero; else the pinned slot reads zero.
     grounded: bool,
     /// The matrix's dimension over its sheets, ground excluded.
     n: usize,
@@ -38,14 +38,14 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         let (sheets, grounded, n) = (sddm.sheets(), sddm.grounded(), sddm.n());
         let (triangular, pinned) = match config.dense(n) {
             true => {
-                let free = pinned(&sddm, factors);
-                (Triangular::Dense(dense::factor(&sddm, free).into()), free)
+                let pin = pinned(&sddm, factors);
+                (Triangular::Dense(dense::factor(&sddm, pin).into()), pin)
             }
             false => {
                 // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
-                let last = spans_wide(factors).then(|| pinned(&sddm, factors));
-                let (steps, last) = approximate::factor(sddm, config.approximate(), draws, last);
-                (Triangular::Approximate(Box::new(steps)), last)
+                let pin = spans_wide(factors).then(|| pinned(&sddm, factors));
+                let (steps, pin) = approximate::factor(sddm, config.approximate(), draws, pin);
+                (Triangular::Approximate(Box::new(steps)), pin)
             }
         };
         Self {
@@ -67,7 +67,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         self.sheets == Sheets::One && !self.grounded
     }
 
-    /// An anchored sheet substitutes on `x` in place; the approximate order may read the ground mid-recurrence, so it sits beside the rows.
+    /// A floating sheet substitutes on `x` in place; the approximate order may read the ground mid-recurrence, so it sits beside the rows.
     pub(super) fn scratch_len(&self) -> usize {
         match (self.sheets, self.grounded) {
             (Sheets::One, false) => 0,

@@ -4,16 +4,16 @@ use crate::factor::sddm::Sddm;
 use crate::factor::within_one;
 use crate::{Index, Real};
 
-/// Left-looking GTH on the packed lower `−w` with a free last row `m` never pivoted (`m = n` holding the ground's `−s` grounded, the anchor `m = n − 1` anchored): for each column `j < m` in order, every stored `(r, j)`, `r > j`, subtracts `Σ_{k<j} min·(max·p_k⁻¹)` of the magnitudes of the already updated `(r, k)` and `(j, k)`, then `p_j = −Σ_{r>j} (r, j)` and `p_j⁻¹` goes to the tail; a last pass scales each column `j` by `p_j⁻¹`, so each `|l| ≤ 1` and no product with a solution overflows, and writes `p_j⁻¹` on its diagonal, and truncating row `m` and the tail leaves `m` rows; nothing cancels, under- or overflows (`d − Σl²` cancelled to 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more factor time).
-/// Packed unit lower `L` of `L D Lᵀ` with `D⁻¹` on its diagonal, the free slot excluded: an upper one would double the factor; the inverse pivots trail the rows, contiguous as every row's fill reads them (strided in the diagonal measured +12-18% at n 16-24).
-pub(super) fn factor<T: Real, I: Index>(sddm: &Sddm<T, I>, free: usize) -> Vec<T> {
+/// Left-looking GTH on the packed lower `−w` with the pinned slot moved to the last row `m`, never pivoted (`m = n`, the ground's `−s`, when grounded, else `m = n − 1`): for each column `j < m` in order, every stored `(r, j)`, `r > j`, subtracts `Σ_{k<j} min·(max·p_k⁻¹)` of the magnitudes of the already updated `(r, k)` and `(j, k)`, then `p_j = −Σ_{r>j} (r, j)` and `p_j⁻¹` goes to the tail; a last pass scales each column `j` by `p_j⁻¹`, so each `|l| ≤ 1` and no product with a solution overflows, and writes `p_j⁻¹` on its diagonal, and truncating row `m` and the tail leaves `m` rows; nothing cancels, under- or overflows (`d − Σl²` cancelled to 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more factor time).
+/// Packed unit lower `L` of `L D Lᵀ` with `D⁻¹` on its diagonal, the pinned slot excluded: an upper one would double the factor; the inverse pivots trail the rows, contiguous as every row's fill reads them (strided in the diagonal measured +12-18% at n 16-24).
+pub(super) fn factor<T: Real, I: Index>(sddm: &Sddm<T, I>, pin: usize) -> Vec<T> {
     let m = sddm.n() - usize::from(!sddm.grounded());
     let packed = row_start(m + 1);
     let mut values = Vec::with_capacity(packed + m);
     values.resize(packed + m, T::zero());
     let slot = |i: usize| match i {
-        i if i == free => m,
-        i if i == m => free,
+        i if i == pin => m,
+        i if i == m => pin,
         i => i,
     };
     sddm.grounded_edges(|k, j, w| {
@@ -63,16 +63,16 @@ fn row_start(row: usize) -> usize {
     row * (row + 1) / 2
 }
 
-/// Forward, backward on a packed factor, and the free last slot pinned to `0`.
-pub(super) fn substitute<T: Real>(factor: &[T], free: usize, values: &mut [T]) {
+/// Forward, backward on a packed factor, and the pinned slot, moved last, zeroed.
+pub(super) fn substitute<T: Real>(factor: &[T], pin: usize, values: &mut [T]) {
     let last = values.len() - 1;
-    values.swap(free, last);
-    let (pinned, solved) = values.split_last_mut().expect("a free slot");
+    values.swap(pin, last);
+    let (pinned, solved) = values.split_last_mut().expect("the pinned slot");
     let m = solved.len();
     debug_assert_eq!(
         row_start(m),
         factor.len(),
-        "one value per row and the free slot"
+        "one value per row and the pinned slot"
     );
     for row in 0..m {
         let entries = &factor[row_start(row)..row_start(row) + row];
@@ -91,11 +91,11 @@ pub(super) fn substitute<T: Real>(factor: &[T], free: usize, values: &mut [T]) {
         solved[row] = value;
     }
     *pinned = T::zero();
-    values.swap(free, last);
+    values.swap(pin, last);
 }
 
 #[cfg(feature = "serde")]
-/// A packed factor decoded from bytes: one row per slot but the free one, finite, positive pivots.
+/// A packed factor decoded from bytes: one row per slot but the pinned one, finite, positive pivots.
 pub(super) fn fits<T: Real>(factor: &[T], slots: usize) -> bool {
     let Some(m) = slots.checked_sub(1) else {
         return false;

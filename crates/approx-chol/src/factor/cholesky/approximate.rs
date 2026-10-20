@@ -19,25 +19,25 @@ pub(super) fn factor<T: Real, I: Index>(
     sddm: Sddm<T, I>,
     multiplicity: Multiplicity,
     draws: Xoshiro256PlusPlus,
-    last: Option<usize>,
+    pin: Option<usize>,
 ) -> (ApproximateCholesky<T, I>, usize) {
     match multiplicity {
-        Multiplicity::Single => eliminate::<T, I, Single>(sddm, draws, (), last),
-        Multiplicity::Split(k) => eliminate::<T, I, Multi>(sddm, draws, k, last),
+        Multiplicity::Single => eliminate::<T, I, Single>(sddm, draws, (), pin),
+        Multiplicity::Split(k) => eliminate::<T, I, Multi>(sddm, draws, k, pin),
     }
 }
 
-/// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree (Algorithm 8); the last, `last` when given, is the slot the solve zeroes.
+/// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree (Algorithm 8); the last, `pin` when given, is the slot the solve zeroes.
 fn eliminate<T: Real, I: Index, C: Copies>(
     sddm: Sddm<T, I>,
     draws: Xoshiro256PlusPlus,
     split: C::Split,
-    last: Option<usize>,
+    pin: Option<usize>,
 ) -> (ApproximateCholesky<T, I>, usize) {
     let mut graph = EliminationGraph::<T, I, C>::of(&sddm, split);
     drop(sddm);
     let n = graph.n();
-    let mut ordering = MinDegreeOrder::<I>::new(&graph, split, last);
+    let mut ordering = MinDegreeOrder::<I>::new(&graph, split, pin);
     let mut draws = draws;
     let mut clique = CliqueSampler::<T, I, C>::new(split);
     let mut fill = Fill::new();
@@ -56,7 +56,7 @@ fn eliminate<T: Real, I: Index, C: Copies>(
     // Doubling past the estimate otherwise retains up to 2x the entries (+30% on grids).
     steps.neighbors.shrink_to_fit();
     steps.coefficients.shrink_to_fit();
-    (steps, last.unwrap_or_else(|| ordering.next_vertex()))
+    (steps, pin.unwrap_or_else(|| ordering.next_vertex()))
 }
 
 /// A step's neighbors follow the previous step's, so the solve's running `usize` offset finds them at any size.
@@ -171,8 +171,8 @@ const LANES: usize = 4;
 
 #[cfg(feature = "serde")]
 impl<T: Real, I: Index> ApproximateCholesky<T, I> {
-    /// Each slot but `last` pivots once, giving only to slots not yet pivoted, shares of at most its whole.
-    pub(super) fn fits(&self, slots: usize, last: usize) -> bool {
+    /// Each slot but `pin` pivots once, giving only to slots not yet pivoted, shares of at most its whole.
+    pub(super) fn fits(&self, slots: usize, pin: usize) -> bool {
         let Self {
             headers,
             neighbors,
@@ -186,7 +186,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
         for header in headers {
             let (v, start) = (header.vertex.index(), end);
             end += header.len.index();
-            if v == last
+            if v == pin
                 || v >= slots
                 || std::mem::replace(&mut pivoted[v], true)
                 || end > neighbors.len()
