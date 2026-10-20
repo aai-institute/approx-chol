@@ -112,11 +112,6 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         })
     }
 
-    /// Whether `A_c` is folded and solved as singular, `A_c⁺b`: before any clamp its `M` has `1ᵀM1 ≤ 5ε·tr M`, so a net deficit floats; a Laplacian's `g` or a signed graph's cancelled mass must be exactly `0`.
-    pub fn floats(&self) -> bool {
-        matches!(&self.balance, Balance::Balanced(grounding) if !grounding.is_grounded())
-    }
-
     /// Moved out, so each part is freed once its factor stops reading it.
     pub(crate) fn into_parts(self) -> BlockParts<T, I> {
         (

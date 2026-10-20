@@ -281,8 +281,8 @@ pub(crate) struct Block<T, I> {
 
 impl<T: Real, I: Index> Block<T, I> {
     fn build(block: IrreducibleBlock<T, I>, config: &Config) -> Self {
-        let floats = block.floats();
         let (restriction, off_diagonal, balance, report) = block.into_parts();
+        let floats = matches!(&balance, Balance::Balanced(g) if !g.is_grounded());
         let streams = Streams {
             seed: config.seed,
             block: restriction.vertices()[0].index() as u64,
