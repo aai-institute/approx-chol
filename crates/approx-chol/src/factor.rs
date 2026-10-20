@@ -392,9 +392,15 @@ impl<T: Real, I: Index> Block<T, I> {
 }
 
 /// A vertex no entry couples: its whole factor is `1/σ`, so it holds no heap part.
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(bound(deserialize = "T: Real + serde::Deserialize<'de>"))
+)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Isolated<T> {
     vertex: u64,
+    #[cfg_attr(feature = "serde", serde(deserialize_with = "positive"))]
     inverse_pivot: T,
 }
 
@@ -417,24 +423,13 @@ impl<T: Real> Isolated<T> {
 }
 
 #[cfg(feature = "serde")]
-impl<T: serde::Serialize> serde::Serialize for Isolated<T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        (&self.vertex, &self.inverse_pivot).serialize(serializer)
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for Isolated<T> {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let (vertex, inverse_pivot) = <(u64, T)>::deserialize(deserializer)?;
-        match inverse_pivot.is_finite() && inverse_pivot > T::zero() {
-            true => Ok(Self {
-                vertex,
-                inverse_pivot,
-            }),
-            false => Err(serde::de::Error::custom("corrupt Isolated")),
-        }
-    }
+fn positive<'de, D: serde::Deserializer<'de>, T: Real + serde::Deserialize<'de>>(
+    deserializer: D,
+) -> Result<T, D::Error> {
+    let pivot = T::deserialize(deserializer)?;
+    (pivot.is_finite() && pivot > T::zero())
+        .then_some(pivot)
+        .ok_or_else(|| serde::de::Error::custom("corrupt Isolated"))
 }
 
 /// `Σ|t| ≤ 1` up to the terms' rounding: a substitution through such multipliers cannot overflow where its solution fits.
