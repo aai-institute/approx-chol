@@ -317,12 +317,11 @@ impl<T: Real, I: Index> Block<T, I> {
                     (true, _) | (false, SchurMode::Exact) => {
                         schur::exact(&cross, &inv_pivot, sheets, grounding)
                     }
-                    (false, SchurMode::Approximate { split_merge }) => {
-                        let copies = multiplicity(split_merge);
-                        schur::sampled(&cross, copies, sheets, grounding, streams)
-                    }
-                    (false, SchurMode::Same) => {
-                        let copies = config.approximate();
+                    (false, sampled) => {
+                        let copies = multiplicity(match sampled {
+                            SchurMode::Approximate { split_merge } => split_merge,
+                            _ => config.split_merge,
+                        });
                         schur::sampled(&cross, copies, sheets, grounding, streams)
                     }
                 };

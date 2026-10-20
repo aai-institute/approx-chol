@@ -3,7 +3,7 @@ mod dense;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use super::config::Config;
+use super::config::{multiplicity, Config};
 use super::sddm::{descend, lift, Sddm, Sheets};
 use crate::{largest, narrow};
 use crate::{widen, Index, Real};
@@ -44,7 +44,8 @@ impl<T: Real, I: Index> Cholesky<T, I> {
             false => {
                 // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
                 let pin = spans_wide(factors).then(|| pinned(&sddm, factors));
-                let (steps, pin) = approximate::factor(sddm, config.approximate(), draws, pin);
+                let copies = multiplicity(config.split_merge);
+                let (steps, pin) = approximate::factor(sddm, copies, draws, pin);
                 (Triangular::Approximate(Box::new(steps)), pin)
             }
         };

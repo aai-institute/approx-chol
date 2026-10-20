@@ -21,10 +21,6 @@ pub struct Config {
 }
 
 impl Config {
-    pub(super) fn approximate(&self) -> Multiplicity {
-        multiplicity(self.split_merge)
-    }
-
     /// Whether a Cholesky of `dimension`, a cover's two sheets counted, is dense: it then takes `S` exact, spending nothing on sparsity.
     pub(super) fn dense(&self, dimension: usize) -> bool {
         match self.backend {
