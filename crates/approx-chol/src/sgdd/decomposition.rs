@@ -71,16 +71,16 @@ impl<A, I: Index> Partitioned<A, I> {
             let vertex = vertices[0].index();
             return Err(ReduceError::TooLarge { vertex });
         }
-        if partition.is_whole() {
+        let Some(position) = partition.position() else {
             let vertices = partition.components().next().expect("one component");
             let live = block(a.whole(vertices))?.into_iter().collect();
             return Ok((partition, live));
-        }
+        };
         let components: Vec<&[I]> = partition.components().collect();
         if components.is_empty() {
             return Ok((partition, Vec::new()));
         }
-        let cut = |vertices: &&[I]| block(a.component(vertices, partition.position()));
+        let cut = |vertices: &&[I]| block(a.component(vertices, position));
         // About `2^PARALLEL_BITS` vertices a task: waking the pool for less costs more than it saves.
         let per_task = crate::per_task(components.len(), partition.n() as u64, PARALLEL_BITS);
         let blocks: Vec<_> = match per_task < components.len() && rayon::current_num_threads() > 1 {

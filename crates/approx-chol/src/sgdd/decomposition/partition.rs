@@ -5,8 +5,8 @@ use crate::{Index, Real};
 pub(in crate::sgdd) struct Partition<I> {
     order: Vec<I>,
     ends: Vec<I>,
-    /// Each vertex's index within its component: extraction remaps without a per-component map.
-    position: Vec<I>,
+    /// Each vertex's index within its component, none when whole: extraction remaps without a per-component map.
+    position: Option<Vec<I>>,
 }
 
 impl<I: Index> Partition<I> {
@@ -49,24 +49,20 @@ impl<I: Index> Partition<I> {
 
     /// One component of `n > 0` vertices: every vertex is its own position.
     fn whole(n: usize) -> Self {
-        let order: Vec<I> = (0..n).map(I::from_index).collect();
         Self {
-            position: order.clone(),
-            order,
+            order: (0..n).map(I::from_index).collect(),
             ends: vec![I::from_index(n)],
+            position: None,
         }
     }
 
     pub(in crate::sgdd) fn n(&self) -> usize {
-        self.position.len()
+        self.order.len()
     }
 
-    pub(super) fn position(&self) -> &[I] {
-        &self.position
-    }
-
-    pub(super) fn is_whole(&self) -> bool {
-        self.ends.len() == 1
+    /// `None` when whole, as every vertex is its own position.
+    pub(super) fn position(&self) -> Option<&[I]> {
+        self.position.as_deref()
     }
 
     pub(in crate::sgdd) fn components(&self) -> impl Iterator<Item = &[I]> + '_ {
@@ -169,7 +165,7 @@ impl<I: Index> UnionFind<I> {
         Partition {
             order,
             ends,
-            position,
+            position: Some(position),
         }
     }
 }
