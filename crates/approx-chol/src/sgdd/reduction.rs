@@ -191,4 +191,4 @@ impl<T: Real> RowSums<T> {
 }
 
 /// `1ᵀM1 ≤ SINGULAR_BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh), so `M` floats.
-const SINGULAR_BAND: f64 = 5.0;
+pub(crate) const SINGULAR_BAND: f64 = 5.0;

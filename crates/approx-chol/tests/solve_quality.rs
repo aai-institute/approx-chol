@@ -385,3 +385,36 @@ cases! {
         assert!(reduced.factorize(&Config::default()).solve(&[]).is_empty());
     }
 }
+
+#[test]
+fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
+    use approx_chol::input::{SignedGraph, Weights};
+    use approx_chol::{factorize_with, Backend};
+    // A frustrated triangle, weakest edge 1e-80, and a pair on (1, 2) cancelling to a 2e-200 surplus.
+    let (a, b) = ([0u32, 1, 0, 1, 1], [1u32, 2, 2, 2, 2]);
+    let pos = [false, false, true, true, false];
+    let w = [1e-80, 1.0, 2.0, 1e-200, 1e-200];
+    let m = [
+        [2.0 + 1e-80, -1e-80, 2.0],
+        [-1e-80, 1.0 + 1e-80 + 2e-200, -1.0],
+        [2.0, -1.0, 3.0 + 2e-200],
+    ];
+    let rhs = [2.5, -1.0, 3.5];
+    let exact = Config {
+        backend: Backend::ExactBelow { max_dim: 64 },
+        complement: SchurMode::Exact,
+        ..Config::default()
+    };
+    for config in [Config::default(), exact] {
+        let graph = SignedGraph::new(3, &a, &b, &pos, Weights::of(&w).unwrap()).unwrap();
+        let x = factorize_with(graph, config).unwrap().solve(&rhs).unwrap();
+        let residual = (m.iter().zip(&rhs))
+            .map(|(row, b)| (row.iter().zip(&x).map(|(m, x)| m * x).sum::<f64>() - b).abs())
+            .fold(0.0, f64::max);
+        let scale = 6.0 * x.iter().fold(0.0f64, |m, x| m.max(x.abs())) + 3.5;
+        assert!(
+            residual <= 64.0 * f64::EPSILON * scale,
+            "{config:?}: x = {x:?}, residual {residual:e}"
+        );
+    }
+}

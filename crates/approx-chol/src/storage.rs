@@ -246,6 +246,11 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
         self.rows.nnz()
     }
 
+    /// `Σ_ij |a_ij|` over both triangles, compensated.
+    pub(crate) fn abs_total(&self) -> f64 {
+        2.0 * self.rows.abs_total()
+    }
+
     /// Row `i`'s neighbors above it.
     pub(crate) fn upper(&self, i: usize) -> impl Iterator<Item = (usize, &T)> {
         self.rows.row(i)
