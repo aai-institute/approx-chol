@@ -15,46 +15,41 @@ pub struct CsrRef<'a, T = f64, I = u32> {
 }
 
 impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
-    /// Checks the arrays' shape, so no row slice can fail.
+    /// Checks the arrays' shape in 0.6.0's order, so no row slice can fail and each defect reports as it did.
     pub fn new(
         row_ptrs: &'a [I],
         col_indices: &'a [I],
         values: &'a [T],
         n: u32,
     ) -> Result<Self, Error> {
-        Ok(Self::checked(n as usize, row_ptrs, col_indices, values)?)
-    }
-
-    /// 0.6.0's checks in 0.6.0's order, so each shape defect reports as it did.
-    fn checked(
-        n: usize,
-        row_ptrs: &'a [I],
-        col_indices: &'a [I],
-        values: &'a [T],
-    ) -> Result<Self, CsrError> {
+        let n = n as usize;
         if row_ptrs.len() != n + 1 {
             return Err(CsrError::RowPtrsLenMismatch {
                 expected: n + 1,
                 got: row_ptrs.len(),
-            });
+            }
+            .into());
         }
         if col_indices.len() != values.len() {
             return Err(CsrError::ColIndicesValuesLenMismatch {
                 col_indices_len: col_indices.len(),
                 values_len: values.len(),
-            });
+            }
+            .into());
         }
         let row_ptr_last = as_usize(row_ptrs[n], IndexKind::RowPtr, n)?;
         if row_ptrs[0] != I::zero() {
             return Err(CsrError::RowPtrsMustStartAtZero {
                 got: as_usize(row_ptrs[0], IndexKind::RowPtr, 0)?,
-            });
+            }
+            .into());
         }
         if row_ptr_last != col_indices.len() {
             return Err(CsrError::RowPtrsEndMismatchNnz {
                 row_ptr_end: row_ptr_last,
                 nnz: col_indices.len(),
-            });
+            }
+            .into());
         }
         // Compared in `I`, so only the error arm converts a pointer to `usize`.
         if let Some(row) = (0..n).find(|&i| row_ptrs[i] > row_ptrs[i + 1]) {
@@ -62,7 +57,8 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
                 row,
                 prev: as_usize(row_ptrs[row], IndexKind::RowPtr, row)?,
                 next: as_usize(row_ptrs[row + 1], IndexKind::RowPtr, row + 1)?,
-            });
+            }
+            .into());
         }
         Ok(Self {
             row_ptrs,
@@ -343,11 +339,7 @@ fn is_canonical<T, I: PrimInt>(csr: &CsrRef<'_, T, I>) -> Result<bool, CsrError>
     for bounds in csr.row_ptrs.windows(2) {
         let start = index(bounds[0]);
         let columns = &csr.col_indices[start..index(bounds[1])];
-        if columns.iter().any(|&j| outside(j)) {
-            let at = columns
-                .iter()
-                .position(|&j| outside(j))
-                .expect("one lies outside");
+        if let Some(at) = columns.iter().position(|&j| outside(j)) {
             return Err(column_error(start + at, columns[at], csr.n()));
         }
         for pair in columns.windows(2) {

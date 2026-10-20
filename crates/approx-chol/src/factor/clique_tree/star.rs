@@ -12,18 +12,14 @@ pub(super) struct StarEntry<T, I, C> {
     pub(super) weight: T,
 }
 
-/// NaN last: `partial_cmp`'s `None` breaks the total order sorts require (1.81+ panics).
-fn float_total_cmp<T: Real>(a: &T, b: &T) -> Ordering {
-    a.partial_cmp(b)
-        .unwrap_or_else(|| a.is_nan().cmp(&b.is_nan()))
-}
-
 /// Total on a deduped star, which keeps the clique tree off `sort_unstable`'s width heuristics.
 fn by_weight_then_neighbor<T: Real, I: Index, C>(
     a: &StarEntry<T, I, C>,
     b: &StarEntry<T, I, C>,
 ) -> Ordering {
-    float_total_cmp(&a.weight, &b.weight).then_with(|| a.neighbor.cmp(&b.neighbor))
+    a.weight
+        .total_cmp(&b.weight)
+        .then_with(|| a.neighbor.cmp(&b.neighbor))
 }
 
 /// A function of each entry, so still a total order; `Single`'s identity makes it the raw sort.
@@ -32,7 +28,7 @@ fn by_per_copy_then_neighbor<T: Real, I: Index, C: Copies>(
     b: &StarEntry<T, I, C>,
 ) -> Ordering {
     let (x, y) = (a.copies.per_copy(a.weight), b.copies.per_copy(b.weight));
-    float_total_cmp(&x, &y).then_with(|| a.neighbor.cmp(&b.neighbor))
+    x.total_cmp(&y).then_with(|| a.neighbor.cmp(&b.neighbor))
 }
 
 /// At or below this many entries, sorting beats the scatter path's random access.

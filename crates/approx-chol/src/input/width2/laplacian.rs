@@ -3,7 +3,7 @@
 use num_traits::PrimInt;
 
 use super::edges::{Edges, Weights};
-use super::{check_ends, Column, IntoColumns, ViewError};
+use super::{check_ends, length, Column, IntoColumns, ViewError};
 use crate::{Index, Real};
 
 /// Weighted multigraph on `n` vertices, grounded by `g`: `A = Σ_k w_k (e_a − e_b)(e_a − e_b)ᵀ + diag(g)`.
@@ -33,12 +33,7 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
 
     /// `L + diag(g)`, one finite nonnegative `g_i` per vertex.
     pub fn grounded(self, ground: &'a [T]) -> Result<Self, ViewError> {
-        if ground.len() != self.n {
-            return Err(ViewError::LengthMismatch {
-                expected: self.n,
-                found: ground.len(),
-            });
-        }
+        length(self.n, ground.len())?;
         let valid = |g: &T| g.is_finite() && *g >= T::zero();
         if let Some(vertex) = ground.iter().position(|g| !valid(g)) {
             return Err(ViewError::InvalidGround { vertex });

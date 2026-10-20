@@ -117,7 +117,7 @@ pub(super) struct Scales<T> {
 impl<T: Real> Scales<T> {
     pub(super) fn new(factors: Box<[T]>) -> Self {
         let peak = crate::largest(&factors);
-        let largest = factors.iter().fold(T::zero(), |m, f| m.max(f.abs()));
+        let largest = factors.get(peak).map_or(T::zero(), |f| f.abs());
         let unit = |&f: &T| {
             let u = widen(f / largest);
             u * u
@@ -176,7 +176,7 @@ impl<T: Real> Congruence<T> {
     pub(super) fn factors(&self, n: usize) -> Option<Cow<'_, [T]>> {
         match self {
             Self::Identity => None,
-            Self::NegateFrom(first) => Some(Cow::Owned(signs(*first, n))),
+            Self::NegateFrom(_) => Some(Cow::Owned((0..n).map(|i| self.factor(i)).collect())),
             Self::Signs(factors) | Self::Scaled(Scales { factors, .. }) => {
                 Some(Cow::Borrowed(&factors[..]))
             }
@@ -220,13 +220,4 @@ fn project_out<T: Real>(x: &mut [T], u: impl Fn(usize) -> T, uu: f64) {
     for (i, x) in x.iter_mut().enumerate() {
         *x = narrow::<T>(widen(*x) - widen(u(i)) * along);
     }
-}
-
-/// `+1` before `first`, `−1` from it on.
-fn signs<T: Real>(first: usize, n: usize) -> Vec<T> {
-    let (plus, minus) = (
-        std::iter::repeat_n(T::one(), first),
-        std::iter::repeat_n(-T::one(), n - first),
-    );
-    plus.chain(minus).collect()
 }

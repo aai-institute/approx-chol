@@ -8,7 +8,7 @@ use num_traits::PrimInt;
 
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Sgdd};
 use super::congruence::{Congruence, Scales};
-use super::decomposition::{Cells, Components};
+use super::decomposition::Cells;
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
 use super::signature;
 use crate::input::Input;
@@ -32,12 +32,6 @@ impl<T: Real, I: Index> Sgdd<T, I> {
     }
 }
 
-fn into_sgdd<T: Real, I: Index>(
-    (partition, live, lone): Components<IrreducibleBlock<T, I>, I, T>,
-) -> Sgdd<T, I> {
-    Sgdd::new(partition.n(), live, lone)
-}
-
 /// One block `A_c` as the input gave it, with its rows' `Σ_j |a_ij|` and entry counts.
 struct SymmetricBlock<T, I> {
     /// In `A`'s numbering, in local order.
@@ -47,18 +41,17 @@ struct SymmetricBlock<T, I> {
 }
 
 impl<T: Real, I: Index> SymmetricBlock<T, I> {
-    /// `None` when dead: components join only nonzeros, so a vertex with nothing to solve is alone with a zero diagonal.
-    fn live((vertices, off_diagonal, diagonal): Cells<T, I>) -> Option<Self> {
+    fn new((vertices, off_diagonal, diagonal): Cells<T, I>) -> Self {
         assert_eq!(vertices.len(), off_diagonal.n(), "one vertex per row");
         assert_eq!(diagonal.len(), off_diagonal.n(), "one diagonal per row");
-        (diagonal != [T::zero()]).then(|| Self {
+        Self {
             vertices,
             rows: RowSums {
                 diagonal,
                 abs: off_diagonal.abs_row_sums(),
             },
             off_diagonal,
-        })
+        }
     }
 
     /// `M = F A_c F` with `F = S R`, formed once with its rows, which decide the report; `relax` runs only past the row test, and a frustrated `A_c` takes `S = I` and grounds on its rows at once.
@@ -68,11 +61,8 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         relax: impl FnOnce(&Self) -> Option<scaling::Relaxation<T>>,
     ) -> Result<Signed<T, I>, ReduceError> {
         let RowSums { diagonal, abs } = &self.rows;
-        if let Some(i) = diagonal.iter().position(|&d| !diagonal_in_range(d)) {
-            let vertex = self.vertices[i].index();
-            return Err(ReduceError::OutOfRange { vertex });
-        }
-        if let Some(i) = abs.iter().position(|&s| !diagonal_in_range(s)) {
+        let in_range = |(&d, &s): (&T, &T)| diagonal_in_range(d) && diagonal_in_range(s);
+        if let Some(i) = diagonal.iter().zip(abs).position(|row| !in_range(row)) {
             let vertex = self.vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
         }

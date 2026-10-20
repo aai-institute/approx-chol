@@ -3,7 +3,7 @@
 use num_traits::PrimInt;
 
 use super::edges::{Edges, Weights};
-use super::{check_ends, Column, IntoColumns, ViewError};
+use super::{check_ends, length, Column, IntoColumns, ViewError};
 use crate::{Index, Real};
 
 /// `A = Σ_k w_k (e_a − σ_k e_b)(e_a − σ_k e_b)ᵀ`, `σ_k = −1` where `positive[k]`.
@@ -23,12 +23,7 @@ impl<'a, T: Real, I: PrimInt> SignedGraph<'a, T, I> {
         positive: &'a [bool],
         weights: Weights<'a, T>,
     ) -> Result<Self, ViewError> {
-        if positive.len() != a.len() {
-            return Err(ViewError::LengthMismatch {
-                expected: a.len(),
-                found: positive.len(),
-            });
-        }
+        length(a.len(), positive.len())?;
         let edges = Edges::new(a, b, weights)?;
         check_ends(n, a, b)?;
         Ok(Self { n, edges, positive })

@@ -9,8 +9,7 @@ use crate::{Index, Real};
 pub(super) fn factor<T: Real, I: Index>(sddm: &Sddm<T, I>, pin: usize) -> Vec<T> {
     let m = sddm.n() - usize::from(!sddm.grounded());
     let packed = row_start(m + 1);
-    let mut values = Vec::with_capacity(packed + m);
-    values.resize(packed + m, T::zero());
+    let mut values = vec![T::zero(); packed + m];
     let slot = |i: usize| match i {
         i if i == pin => m,
         i if i == m => pin,

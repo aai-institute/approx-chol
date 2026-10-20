@@ -49,7 +49,7 @@ mod wire;
 
 use std::fmt::Debug;
 
-use num_traits::{PrimInt, Unsigned};
+use num_traits::{float::TotalOrder, Float, PrimInt, Unsigned};
 
 pub use error::Error;
 use factor::Storage;
@@ -91,7 +91,7 @@ where
 }
 
 /// The scalar every stage computes in: `f32` or `f64`, each summed in `f64`, which holds it exactly.
-pub trait Real: num_traits::Float + Debug + Send + Sync + 'static + seal::Real {}
+pub trait Real: Float + TotalOrder + Debug + Send + Sync + 'static + seal::Real {}
 
 impl Real for f32 {}
 impl Real for f64 {}

@@ -72,13 +72,8 @@ pub(in crate::sgdd) fn assemble_general<T: Real, I: Index>(
     v: impl IntoColumns<T>,
 ) -> Result<General<T, I>, ReduceError> {
     let mut sums = vec![0.0_f64; v.n()];
-    let Partitioned { a, partition } =
-        assemble::<T, I, f64>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
-    let a = Assembled {
-        adjacency: a,
-        diagonal: diagonal_of(sums)?,
-    };
-    Ok(Partitioned { a, partition })
+    let a = assemble::<T, I, f64>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
+    assembled(a, sums)
 }
 
 /// `A`'s strict upper triangle and components, `seen` visiting each column once and `pair` each cell summed as `C` with its two ends.
@@ -117,12 +112,8 @@ pub(in crate::sgdd) fn assemble_bipartite_gram<T: Real, I: Index>(
     v: impl BipartiteColumns<T>,
 ) -> Result<AssembledBipartite<T, I>, ReduceError> {
     let mut sums = vec![0.0_f64; v.n()];
-    let Partitioned { a, partition } = cross(v, |column| add_squares(&mut sums, column))?;
-    let a = Assembled {
-        adjacency: a,
-        diagonal: diagonal_of(sums)?,
-    };
-    Ok(Partitioned { a, partition })
+    let a = cross(v, |column| add_squares(&mut sums, column))?;
+    assembled(a, sums)
 }
 
 /// Adds `w v²` at both ends, so a row of only underflowed terms fails the range screen.
@@ -134,14 +125,22 @@ fn add_squares<T: Real, I: Index>(sums: &mut [f64], column: &Column<T, I>) {
     sums[column.b.index()] += square(widen(column.v_b));
 }
 
-/// Each sum as `T` stores it; a nonzero one cast to zero underflowed, so it is out of range.
-fn diagonal_of<T: Real>(sums: Vec<f64>) -> Result<Vec<T>, ReduceError> {
-    (sums.into_iter().enumerate())
+/// The diagonal is each sum as `T` stores it; a nonzero one cast to zero underflowed, so it is out of range.
+fn assembled<T: Real, I, C>(
+    Partitioned { a, partition }: Partitioned<C, I>,
+    sums: Vec<f64>,
+) -> Result<Partitioned<Assembled<T, C>, I>, ReduceError> {
+    let diagonal = (sums.into_iter().enumerate())
         .map(|(i, sum)| match narrow::<T>(sum) {
             d if sum != 0.0 && d == T::zero() => Err(ReduceError::OutOfRange { vertex: i }),
             d => Ok(d),
         })
-        .collect()
+        .collect::<Result<_, _>>()?;
+    let a = Assembled {
+        adjacency: a,
+        diagonal,
+    };
+    Ok(Partitioned { a, partition })
 }
 
 /// Row `i`'s nonzero sum as `T` stores it; one cast to zero underflowed, so it is out of range too.

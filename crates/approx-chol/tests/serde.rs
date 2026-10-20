@@ -1,6 +1,6 @@
 #![cfg(feature = "serde")]
 
-use approx_chol::input::{BipartiteGram, FactorWidth1, Laplacian, SignedGraph, Weights};
+use approx_chol::input::{BipartiteGram, CsrRef, FactorWidth1, Laplacian, SignedGraph, Weights};
 use approx_chol::{
     factorize_with, Backend, BlockFactor, Config, Factor, InnerParallelism, ScalingPolicy,
     SchurMode,
@@ -296,32 +296,31 @@ fn a_scaling_policy_decode_rejects_tolerance_outside_unit_interval() {
     assert_eq!(postcard::to_stdvec(&policy).unwrap(), bytes);
 }
 
-/// Decodes `factor` after scaling by `by` every multiplier (a stored value below one) in each array at `pointer` below any node.
-fn decode_scaled(factor: &Factor, pointer: &str, by: f64) -> Result<Factor, serde_json::Error> {
-    fn scale(v: &mut serde_json::Value, pointer: &str, by: f64) -> usize {
-        let own = match v.pointer_mut(pointer).and_then(|a| a.as_array_mut()) {
-            Some(values) => {
-                let multipliers = values
-                    .iter_mut()
-                    .filter(|x| x.as_f64().is_some_and(|f| f < 1.0));
-                multipliers.for_each(|x| *x = (x.as_f64().unwrap() * by).into());
-                1
-            }
-            None => 0,
-        };
-        own + match v {
-            serde_json::Value::Object(map) => map.values_mut().map(|v| scale(v, pointer, by)).sum(),
-            serde_json::Value::Array(items) => {
-                items.iter_mut().map(|v| scale(v, pointer, by)).sum()
-            }
-            _ => 0,
-        }
+/// Applies `f` to the node at `pointer` below every node of `v`; the count of nodes it edited.
+fn edit(
+    v: &mut serde_json::Value,
+    pointer: &str,
+    f: &mut impl FnMut(&mut serde_json::Value),
+) -> usize {
+    let own = usize::from(v.pointer_mut(pointer).map(&mut *f).is_some());
+    own + match v {
+        serde_json::Value::Object(map) => map.values_mut().map(|v| edit(v, pointer, f)).sum(),
+        serde_json::Value::Array(items) => items.iter_mut().map(|v| edit(v, pointer, f)).sum(),
+        _ => 0,
     }
+}
+
+/// Decodes `factor` after scaling by `by` every multiplier (a stored value below one) in each array at `pointer` below any node, or the number there.
+fn decode_scaled(factor: &Factor, pointer: &str, by: f64) -> Result<Factor, serde_json::Error> {
+    let scale = |x: &mut serde_json::Value| *x = (x.as_f64().unwrap() * by).into();
     let mut v = serde_json::to_value(factor).unwrap();
-    assert!(
-        scale(&mut v, pointer, by) > 0,
-        "the factor stores {pointer}"
-    );
+    let edited = edit(&mut v, pointer, &mut |node| match node {
+        serde_json::Value::Array(values) => (values.iter_mut())
+            .filter(|x| x.as_f64().is_some_and(|f| f < 1.0))
+            .for_each(scale),
+        x => scale(x),
+    });
+    assert!(edited > 0, "the factor stores {pointer}");
     serde_json::from_value::<Factor>(v)
 }
 
@@ -371,21 +370,6 @@ fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
 #[case::negative(-1.0)]
 #[case::zero(0.0)]
 fn an_approximate_pivot_scale_not_positive_is_corrupt(#[case] by: f64) {
-    fn scale(v: &mut serde_json::Value, by: f64) -> usize {
-        match v {
-            serde_json::Value::Object(map) => (map.iter_mut())
-                .map(|(key, v)| match key.as_str() {
-                    "pivot_scale" => {
-                        *v = (v.as_f64().unwrap() * by).into();
-                        1
-                    }
-                    _ => scale(v, by),
-                })
-                .sum(),
-            serde_json::Value::Array(items) => items.iter_mut().map(|v| scale(v, by)).sum(),
-            _ => 0,
-        }
-    }
     let (a, b): (Vec<u32>, Vec<u32>) = (0..29u32).map(|v| (v, v + 1)).unzip();
     let path = Laplacian::new(30, &a, &b, Weights::unit()).unwrap();
     let config = Config {
@@ -393,9 +377,7 @@ fn an_approximate_pivot_scale_not_positive_is_corrupt(#[case] by: f64) {
         ..Config::default()
     };
     let factor: Factor = factorize_with(path, config).unwrap();
-    let mut v = serde_json::to_value(&factor).unwrap();
-    assert!(scale(&mut v, by) > 0, "the factor stores pivot scales");
-    serde_json::from_value::<Factor>(v).expect_err("a pivot scale not positive is corrupt");
+    decode_scaled(&factor, "/pivot_scale", by).expect_err("a pivot scale not positive is corrupt");
 }
 
 /// A factor holding an isolated vertex reads back from a self-describing format too.
@@ -408,4 +390,17 @@ fn an_isolated_vertex_round_trips_through_json() {
     let back: Factor = serde_json::from_str(&json).unwrap();
     let b = [1.0, 2.0, 3.0];
     assert_eq!(factor.solve(&b).unwrap(), back.solve(&b).unwrap());
+}
+
+/// A forged empty `F` is a decode error, never a panic while its peak is read.
+#[test]
+fn empty_scales_are_corrupt() {
+    let csr = CsrRef::new(&[0u32, 2, 4], &[0u32, 1, 0, 1], &[1.0, -2.0, -2.0, 5.0], 2).unwrap();
+    let mut v = serde_json::to_value(approx_chol::factorize(csr).unwrap()).unwrap();
+    let mut empty = |s: &mut serde_json::Value| *s = serde_json::json!([]);
+    assert!(
+        edit(&mut v, "/Scaled", &mut empty) > 0,
+        "the factor stores scales"
+    );
+    serde_json::from_value::<Factor>(v).expect_err("empty scales are corrupt");
 }

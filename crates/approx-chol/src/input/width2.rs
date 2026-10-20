@@ -108,12 +108,11 @@ pub(crate) enum Weighting<S> {
 
 impl<T: Real> Weighting<T> {
     /// `w·x·y`, as `(s·x)·(s·y)` under `SqrtOf`.
-    pub(crate) fn bilinear<U: Real>(self, x: U, y: U) -> U {
-        let to = |w: T| U::from(w).expect("a finite weight casts to a float");
+    pub(crate) fn bilinear(self, x: f64, y: f64) -> f64 {
         match self {
             Self::Unit => x * y,
-            Self::Of(w) => to(w) * x * y,
-            Self::SqrtOf(s) => (to(s) * x) * (to(s) * y),
+            Self::Of(w) => widen(w) * x * y,
+            Self::SqrtOf(s) => (widen(s) * x) * (widen(s) * y),
         }
     }
 
@@ -152,13 +151,8 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         x: &'a [T],
         y: &'a [T],
     ) -> Result<Self, ViewError> {
-        let columns = a.len();
-        let lengths = [b.len(), x.len(), y.len()];
-        if let Some(&found) = lengths.iter().find(|&&len| len != columns) {
-            return Err(ViewError::LengthMismatch {
-                expected: columns,
-                found,
-            });
+        for found in [b.len(), x.len(), y.len()] {
+            length(a.len(), found)?;
         }
         check_ends(n, a, b)?;
         Ok(Self {
@@ -167,6 +161,14 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
             b,
             values: [x, y],
         })
+    }
+}
+
+/// A slice of `found` entries where the view fixed `expected`.
+fn length(expected: usize, found: usize) -> Result<(), ViewError> {
+    match found == expected {
+        true => Ok(()),
+        false => Err(ViewError::LengthMismatch { expected, found }),
     }
 }
 

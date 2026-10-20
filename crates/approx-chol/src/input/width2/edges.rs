@@ -2,7 +2,7 @@
 
 use num_traits::PrimInt;
 
-use super::{index, Column, ViewError, Weighting};
+use super::{index, length, Column, ViewError, Weighting};
 use crate::{Index, Real};
 
 /// `W`, one nonnegative entry per column of `V`, checked once so every view over the same columns can share it.
@@ -29,24 +29,10 @@ impl<'a, T: Real> Weights<'a, T> {
 
     /// One entry per column.
     fn check(self, columns: usize) -> Result<(), ViewError> {
-        let found = match self.0 {
-            Weighting::Unit => return Ok(()),
-            Weighting::Of(entries) | Weighting::SqrtOf(entries) => entries.len(),
-        };
-        match found == columns {
-            true => Ok(()),
-            false => Err(ViewError::LengthMismatch {
-                expected: columns,
-                found,
-            }),
+        match self.0 {
+            Weighting::Unit => Ok(()),
+            Weighting::Of(entries) | Weighting::SqrtOf(entries) => length(columns, entries.len()),
         }
-    }
-}
-
-impl<T> Default for Weights<'_, T> {
-    /// `W = I`.
-    fn default() -> Self {
-        Self(Weighting::Unit)
     }
 }
 
@@ -68,12 +54,7 @@ pub(super) struct Edges<'a, T, I> {
 impl<'a, T: Real, I: PrimInt> Edges<'a, T, I> {
     /// Lengths and weights are checked; the ends are the view's to check.
     pub(super) fn new(a: &'a [I], b: &'a [I], weights: Weights<'a, T>) -> Result<Self, ViewError> {
-        if a.len() != b.len() {
-            return Err(ViewError::LengthMismatch {
-                expected: a.len(),
-                found: b.len(),
-            });
-        }
+        length(a.len(), b.len())?;
         weights.check(a.len())?;
         Ok(Self { a, b, weights })
     }

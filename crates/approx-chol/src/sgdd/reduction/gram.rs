@@ -16,7 +16,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
         v: FactorWidth2<'_, T, J>,
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        let blocks = assemble_general(v)?.extract(|cells| Ok(SymmetricBlock::live(cells)))?;
+        let blocks = assemble_general(v)?.extract(|cells| Ok(SymmetricBlock::new(cells)))?;
         reduce_gram_blocks(v, blocks, &policy)
     }
 
@@ -30,7 +30,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
             return Self::from_bipartite_laplacian(laplacian);
         }
         let blocks =
-            assemble_bipartite_gram(gram)?.extract(|cells| Ok(SymmetricBlock::live(cells)))?;
+            assemble_bipartite_gram(gram)?.extract(|cells| Ok(SymmetricBlock::new(cells)))?;
         reduce_gram_blocks(gram, blocks, &policy)
     }
 }
@@ -61,7 +61,7 @@ fn reduce_gram_blocks<T: Real, I: Index>(
     }
     let mut blocks = ground_or_float(v, folded)?;
     blocks.extend(frustrated);
-    Ok(Sgdd::new(partition.n(), blocks, lone))
+    Ok(Sgdd::new((partition, blocks, lone)))
 }
 
 /// Floats each folded block as [`RowSums::folded_surplus`](super::RowSums::folded_surplus) does, else grounds it on `s = M·1`.
