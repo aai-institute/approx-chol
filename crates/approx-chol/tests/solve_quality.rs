@@ -419,3 +419,26 @@ fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
         }
     }
 }
+
+#[rstest::rstest]
+#[case::consecutive(&[0, 1, 2, 3, 4], &[1, 2, 3, 4, 5], &[0])]
+#[case::interleaved(&[0, 2, 1, 3], &[2, 4, 3, 5], &[3, 3])]
+#[case::two_runs(&[0, 1, 3, 4], &[1, 2, 4, 5], &[0, 0])]
+#[case::run_and_list(&[0, 1, 3], &[1, 2, 5], &[0, 2])]
+fn solve_in_place_gathers_only_blocks_whose_vertices_are_not_consecutive(
+    #[case] a: &[u32],
+    #[case] b: &[u32],
+    #[case] gathered: &[usize],
+) {
+    use approx_chol::factorize;
+    use approx_chol::input::Laplacian;
+    let factor: Factor = factorize(Laplacian::new(6, a, b).unwrap()).unwrap();
+    let rhs = [1.0, -1.0, 2.0, -3.0, 0.5, 0.5];
+    let blocks = factor.blocks();
+    assert_eq!(blocks.len(), gathered.len());
+    let needed = (blocks.iter().zip(gathered)).map(|(block, g)| g + block.scratch_len());
+    assert_eq!(Some(factor.scratch_len()), needed.max());
+    let x = solve_in_place_on_dirty_scratch(&factor, &rhs);
+    let want = solve_on_dirty_scratch(&factor, &rhs, InnerParallelism::Allow);
+    assert_eq!(bits(&x), bits(&want));
+}

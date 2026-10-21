@@ -88,13 +88,13 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         assert!(grounding.fits(n), "one surplus per row");
         let surplus = grounding.surplus().unwrap_or_default();
         if let Some(i) = surplus.iter().position(|&s| !crate::in_range(s)) {
-            let vertex = vertices[i].index();
+            let vertex = vertices.vertex(i);
             return Err(ReduceError::OutOfRange { vertex });
         }
         // The ground is a vertex too: its diagonal `Σs`, once per sheet, clears the same bound as any other.
         let total = surplus.iter().fold(T::zero(), |sum, &s| sum + s);
         if !diagonal_in_range(sheets * total) {
-            let vertex = vertices[0].index();
+            let vertex = vertices.vertex(0);
             return Err(ReduceError::OutOfRange { vertex });
         }
         Ok(Self {

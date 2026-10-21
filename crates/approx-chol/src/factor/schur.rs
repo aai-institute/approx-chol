@@ -18,6 +18,7 @@ use crate::{narrow, per_task, widen, Index, Real};
     derive(serde::Serialize, serde::Deserialize),
     serde(remote = "Self"),
     serde(bound(
+        serialize = "T: serde::Serialize, I: crate::Index + serde::Serialize",
         deserialize = "T: crate::Real + serde::Deserialize<'de>, I: crate::Index + serde::Deserialize<'de>"
     ))
 )]

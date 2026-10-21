@@ -10,7 +10,6 @@ mod wire;
 
 use rand::rngs::Xoshiro256PlusPlus;
 use rand::SeedableRng;
-use rayon::iter::Either;
 use rayon::prelude::*;
 
 use clique_tree::{Copies, Multi, Single};
@@ -18,7 +17,7 @@ pub use config::{Backend, Config, InnerParallelism, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
 
-use crate::sgdd::{Balance, IrreducibleBlock, Restriction, Sgdd, Summands};
+use crate::sgdd::{Balance, IrreducibleBlock, Restriction, Selection, Sgdd, Summands};
 use crate::storage::OffDiagonal;
 use crate::ScalingReport;
 use crate::{Index, Real};
@@ -128,7 +127,7 @@ impl<T: Real> Factor<T> {
 
     fn new(n: usize, blocks: Vec<BlockFactor<T>>, dead: Box<[usize]>) -> Self {
         let scratch_len = (blocks.iter())
-            .map(|block| on!(block, b => b.vertices().len() + b.cholesky.scratch_len(), _ => 0))
+            .map(|block| on!(block, b => b.global_scratch_len(), _ => 0))
             .max()
             .unwrap_or(0);
         Self {
@@ -162,7 +161,7 @@ impl<T: Real> Factor<T> {
         self.blocks
     }
 
-    /// Workspace [`solve_in_place`](Self::solve_in_place) needs: the most any one block's vertices plus its own scratch take.
+    /// Workspace [`solve_in_place`](Self::solve_in_place) needs: the most any one block takes, its own scratch plus its vertices unless they are consecutive.
     pub fn scratch_len(&self) -> usize {
         self.scratch_len
     }
@@ -222,10 +221,10 @@ impl<T: Real> BlockFactor<T> {
     /// The block's vertices in `A`'s numbering, in local order.
     pub fn vertices(&self) -> Vertices<'_> {
         match &self.0 {
-            Storage::U32(block) => Vertices(Either::Left(block.vertices().iter())),
-            Storage::U64(block) => Vertices(Either::Right(block.vertices().iter())),
+            Storage::U32(block) => Vertices::of(block.vertices(), Indices::U32),
+            Storage::U64(block) => Vertices::of(block.vertices(), Indices::U64),
             Storage::Isolated(block) => {
-                Vertices(Either::Right(std::slice::from_ref(&block.vertex).iter()))
+                Vertices(Indices::U64(std::slice::from_ref(&block.vertex).iter()))
             }
         }
     }
@@ -265,22 +264,43 @@ impl<T: Real> BlockFactor<T> {
 
 /// A [`BlockFactor`]'s vertices in `A`'s numbering; named, so a caller may move the block after its last use.
 #[derive(Clone, Debug)]
-pub struct Vertices<'a>(Either<std::slice::Iter<'a, u32>, std::slice::Iter<'a, u64>>);
+pub struct Vertices<'a>(Indices<'a>);
+
+#[derive(Clone, Debug)]
+enum Indices<'a> {
+    Range(std::ops::Range<usize>),
+    U32(std::slice::Iter<'a, u32>),
+    U64(std::slice::Iter<'a, u64>),
+}
+
+impl<'a> Vertices<'a> {
+    fn of<I>(
+        selection: &'a Selection<I>,
+        listed: fn(std::slice::Iter<'a, I>) -> Indices<'a>,
+    ) -> Self {
+        match selection {
+            Selection::Range(range) => Self(Indices::Range(range.clone())),
+            Selection::Listed(vertices) => Self(listed(vertices.iter())),
+        }
+    }
+}
 
 impl Iterator for Vertices<'_> {
     type Item = usize;
 
     fn next(&mut self) -> Option<usize> {
         match &mut self.0 {
-            Either::Left(vertices) => vertices.next().map(|&v| v.index()),
-            Either::Right(vertices) => vertices.next().map(|&v| v.index()),
+            Indices::Range(vertices) => vertices.next(),
+            Indices::U32(vertices) => vertices.next().map(|&v| v.index()),
+            Indices::U64(vertices) => vertices.next().map(|&v| v.index()),
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         match &self.0 {
-            Either::Left(vertices) => vertices.size_hint(),
-            Either::Right(vertices) => vertices.size_hint(),
+            Indices::Range(vertices) => vertices.size_hint(),
+            Indices::U32(vertices) => vertices.size_hint(),
+            Indices::U64(vertices) => vertices.size_hint(),
         }
     }
 }
@@ -293,6 +313,7 @@ impl ExactSizeIterator for Vertices<'_> {}
     derive(serde::Serialize, serde::Deserialize),
     serde(remote = "Self"),
     serde(bound(
+        serialize = "T: serde::Serialize, I: Index + serde::Serialize",
         deserialize = "T: Real + serde::Deserialize<'de>, I: Index + serde::Deserialize<'de>"
     ))
 )]
@@ -313,7 +334,7 @@ impl<T: Real, I: Index> Block<T, I> {
         let (restriction, off_diagonal, balance, report) = block.into_parts();
         let streams = Streams {
             seed: config.seed,
-            block: restriction.vertices()[0].index() as u64,
+            block: restriction.vertices().vertex(0) as u64,
         };
         let (sheets, grounding) = match balance {
             Balance::Balanced(grounding) => (Sheets::One, grounding),
@@ -361,7 +382,7 @@ impl<T: Real, I: Index> Block<T, I> {
         }
     }
 
-    fn vertices(&self) -> &[I] {
+    fn vertices(&self) -> &Selection<I> {
         self.restriction.vertices()
     }
 
@@ -371,12 +392,17 @@ impl<T: Real, I: Index> Block<T, I> {
         eliminated + self.cholesky.n_steps()
     }
 
-    /// Solves the block's restriction of `x` in place, through `scratch` of its vertices plus its Cholesky's.
+    /// Workspace [`solve_global`](Self::solve_global) needs: room to gather unless the vertices are consecutive, plus the Cholesky's.
+    fn global_scratch_len(&self) -> usize {
+        self.vertices().gather_len() + self.cholesky.scratch_len()
+    }
+
+    /// Solves the block's restriction of `x` in place, through `scratch` of [`global_scratch_len`](Self::global_scratch_len).
     fn solve_global(&self, x: &mut [T], scratch: &mut [T]) {
-        let (local, rest) = scratch.split_at_mut(self.vertices().len());
-        self.restriction.gather(x, local);
-        self.solve_unchecked(local, rest, InnerParallelism::Allow);
-        self.restriction.scatter(local, x);
+        let solve = |local: &mut [T], rest: &mut [T]| {
+            self.solve_unchecked(local, rest, InnerParallelism::Allow)
+        };
+        self.vertices().on_local(x, scratch, solve);
     }
 
     fn solve_unchecked(&self, x: &mut [T], scratch: &mut [T], inner: InnerParallelism) {
