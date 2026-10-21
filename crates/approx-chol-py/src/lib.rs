@@ -265,7 +265,12 @@ impl PyFactor {
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let b = right_hand_side(py, b)?;
         let b_slice = b.as_slice().expect("right_hand_side is contiguous");
-        let x = (py.detach(|| self.inner.solve(b_slice))).map_err(|e| error_to_py(&e))?;
+        let mut x = b_slice.to_vec();
+        let solved = py.detach(|| {
+            let mut scratch = vec![0.0; self.inner.scratch_len()];
+            self.inner.solve_in_place(&mut x, &mut scratch)
+        });
+        solved.map_err(|e| error_to_py(&e))?;
         Ok(PyArray1::from_vec(py, x))
     }
 
@@ -319,10 +324,8 @@ impl PyFactor {
                 &mut owned
             }
         };
-        let solved = py.detach(|| {
-            x.copy_from_slice(b_slice);
-            self.inner.solve_in_place(x, scratch)
-        });
+        x.copy_from_slice(b_slice);
+        let solved = py.detach(|| self.inner.solve_in_place(x, scratch));
         solved.map_err(|e| error_to_py(&e))
     }
 }
