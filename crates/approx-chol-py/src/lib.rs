@@ -265,7 +265,7 @@ impl PyFactor {
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let b = right_hand_side(py, b)?;
         let b_slice = b.as_slice().expect("right_hand_side is contiguous");
-        let x = self.inner.solve(b_slice).map_err(|e| error_to_py(&e))?;
+        let x = (py.detach(|| self.inner.solve(b_slice))).map_err(|e| error_to_py(&e))?;
         Ok(PyArray1::from_vec(py, x))
     }
 
@@ -303,9 +303,12 @@ impl PyFactor {
         let x = &mut out_rw
             .as_slice_mut()
             .map_err(|_| value_error("out must be contiguous"))?[..n];
-        x.copy_from_slice(b_slice);
         let mut scratch = vec![0.0; self.inner.scratch_len()];
-        (self.inner.solve_in_place(x, &mut scratch)).map_err(|e| error_to_py(&e))
+        let solved = py.detach(|| {
+            x.copy_from_slice(b_slice);
+            self.inner.solve_in_place(x, &mut scratch)
+        });
+        solved.map_err(|e| error_to_py(&e))
     }
 }
 
@@ -400,16 +403,16 @@ impl CsrArrays<'_> {
             .map_err(|e| borrow_error("indices", e))?;
         let data = (self.data.try_readonly()).map_err(|e| borrow_error("data", e))?;
         let contiguous = |name: &str| value_error(format!("{name} must be contiguous"));
-        let csr = CsrRef::new(
-            indptr.as_slice().map_err(|_| contiguous("indptr"))?,
-            indices.as_slice().map_err(|_| contiguous("indices"))?,
-            data.as_slice().map_err(|_| contiguous("data"))?,
-            self.n as u32,
-        )
-        .map_err(|e| error_to_py(&e))?;
+        let indptr = indptr.as_slice().map_err(|_| contiguous("indptr"))?;
+        let indices = indices.as_slice().map_err(|_| contiguous("indices"))?;
+        let data = data.as_slice().map_err(|_| contiguous("data"))?;
         let config = config.map_or_else(Config::default, |config| config.0);
-        let inner = factorize_with(csr, config).map_err(|e| error_to_py(&e))?;
-        warn_on_scaling(self.np.py(), &inner)?;
+        let (py, n) = (self.np.py(), self.n as u32);
+        let inner = py.detach(|| {
+            let csr = CsrRef::new(indptr, indices, data, n);
+            factorize_with(csr.map_err(|e| error_to_py(&e))?, config).map_err(|e| error_to_py(&e))
+        })?;
+        warn_on_scaling(py, &inner)?;
         Ok(PyFactor { inner })
     }
 }

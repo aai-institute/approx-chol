@@ -115,6 +115,9 @@ class Factor:
     def solve(self, b: npt.ArrayLike) -> npt.NDArray[np.float64]:
         """Solve LDL^T x = b, returning a new array of the original matrix dimension.
 
+        Runs without the GIL and reads ``b`` in place; writing ``b`` from
+        another thread during the call is the caller's error.
+
         Raises:
             ValueError: If ``b`` is not 1-D integer or float, or ``len(b) != n``.
         """
@@ -128,6 +131,8 @@ class Factor:
         """Solve LDL^T x = b, writing the result into *out*.
 
         ``b`` must have length ``shape[0]``, and *out* at least that length.
+        Runs without the GIL and borrows ``b`` and ``out`` in place; writing
+        either from another thread during the call is the caller's error.
 
         Raises:
             ValueError: If ``b`` is not 1-D integer or float, ``out`` is not
@@ -142,6 +147,9 @@ def factorize(
     config: Config | None = None,
 ) -> Factor:
     """Factorize an SDDM matrix from a scipy.sparse CSR matrix.
+
+    Runs without the GIL and reads the matrix's arrays in place; writing them
+    from another thread during the call is the caller's error.
 
     Args:
         matrix: A ``scipy.sparse.csr_matrix`` or ``csr_array``.
@@ -167,6 +175,8 @@ def factorize_raw(
     config: Config | None = None,
 ) -> Factor:
     """Factorize an SDDM matrix from raw CSR arrays.
+
+    Runs without the GIL and reads the arrays in place, as :func:`factorize`.
 
     Args:
         row_ptrs: CSR row pointer array, any integer dtype.
