@@ -127,7 +127,7 @@ impl<T: Real> Factor<T> {
 
     fn new(n: usize, blocks: Vec<BlockFactor<T>>, dead: Box<[usize]>) -> Self {
         let scratch_len = (blocks.iter())
-            .map(|block| on!(block, b => b.vertices().scratch_len() + b.cholesky.scratch_len(), _ => 0))
+            .map(|block| on!(block, b => b.global_scratch_len(), _ => 0))
             .max()
             .unwrap_or(0);
         Self {
@@ -224,8 +224,7 @@ impl<T: Real> BlockFactor<T> {
             Storage::U32(block) => Vertices::of(block.vertices(), Indices::U32),
             Storage::U64(block) => Vertices::of(block.vertices(), Indices::U64),
             Storage::Isolated(block) => {
-                let vertex = block.vertex as usize;
-                Vertices(Indices::Range(vertex..vertex + 1))
+                Vertices(Indices::U64(std::slice::from_ref(&block.vertex).iter()))
             }
         }
     }
@@ -393,7 +392,12 @@ impl<T: Real, I: Index> Block<T, I> {
         eliminated + self.cholesky.n_steps()
     }
 
-    /// Solves the block's restriction of `x` in place, through `scratch` of its selection's plus its Cholesky's.
+    /// Workspace [`solve_global`](Self::solve_global) needs: room to gather unless the vertices are consecutive, plus the Cholesky's.
+    fn global_scratch_len(&self) -> usize {
+        self.vertices().gather_len() + self.cholesky.scratch_len()
+    }
+
+    /// Solves the block's restriction of `x` in place, through `scratch` of [`global_scratch_len`](Self::global_scratch_len).
     fn solve_global(&self, x: &mut [T], scratch: &mut [T]) {
         let solve = |local: &mut [T], rest: &mut [T]| {
             self.solve_unchecked(local, rest, InnerParallelism::Allow)

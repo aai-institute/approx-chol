@@ -413,6 +413,40 @@ fn an_isolated_vertex_round_trips_through_json() {
     assert_eq!(factor.solve(&b).unwrap(), back.solve(&b).unwrap());
 }
 
+/// A block's vertex `u64::MAX` reads back as itself, never overflowing the end of a run of consecutive vertices.
+#[rstest]
+#[case::isolated(&[u64::MAX])]
+#[case::coupled(&[u64::MAX, 0])]
+fn a_vertex_at_u64_max_reads_back(#[case] vertices: &[u64]) {
+    let factor = with_isolated_vertex();
+    let block = (factor.blocks().iter())
+        .find(|block| block.vertices().len() == vertices.len())
+        .unwrap();
+    let mut v = serde_json::to_value(block).unwrap();
+    match vertices {
+        [vertex] => v[1]["Isolated"]["vertex"] = (*vertex).into(),
+        _ => {
+            let mut coupled = v[1]["U32"].take();
+            coupled["restriction"]["vertices"] = vertices.into();
+            v[1] = serde_json::json!({ "U64": coupled });
+        }
+    }
+    let back: BlockFactor = serde_json::from_value(v).unwrap();
+    let want = vertices.iter().map(|&vertex| vertex as usize);
+    assert!(back.vertices().eq(want));
+}
+
+/// A lone `u64::MAX` for a two-vertex block is a decode error, never an overflow past it.
+#[test]
+fn a_lone_vertex_at_u64_max_for_two_is_corrupt() {
+    let factor = with_isolated_vertex();
+    let mut v = serde_json::to_value(&factor.blocks()[0]).unwrap();
+    let mut coupled = v[1]["U32"].take();
+    coupled["restriction"]["vertices"] = serde_json::json!([u64::MAX]);
+    v[1] = serde_json::json!({ "U64": coupled });
+    serde_json::from_value::<BlockFactor>(v).expect_err("one vertex for two is corrupt");
+}
+
 /// A forged empty `F` is a decode error, never a panic while its peak is read.
 #[test]
 fn empty_scales_are_corrupt() {

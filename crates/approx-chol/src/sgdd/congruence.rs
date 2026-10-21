@@ -93,9 +93,11 @@ pub(crate) enum Selection<I> {
 impl<I: Index> Selection<I> {
     fn of(vertices: Box<[I]>) -> Self {
         let start = vertices.first().map_or(0, |v| v.index());
-        match (vertices.iter().enumerate()).all(|(k, v)| v.index() == start + k) {
-            true => Self::Range(start..start + vertices.len()),
-            false => Self::Listed(vertices),
+        match start.checked_add(vertices.len()) {
+            Some(end) if (vertices.iter().enumerate()).all(|(k, v)| v.index() == start + k) => {
+                Self::Range(start..end)
+            }
+            _ => Self::Listed(vertices),
         }
     }
 
@@ -115,7 +117,7 @@ impl<I: Index> Selection<I> {
     }
 
     /// Workspace [`on_local`](Self::on_local) keeps ahead of what it passes on: room to gather, none for a range.
-    pub(crate) fn scratch_len(&self) -> usize {
+    pub(crate) fn gather_len(&self) -> usize {
         match self {
             Self::Range(_) => 0,
             Self::Listed(vertices) => vertices.len(),
@@ -132,7 +134,7 @@ impl<I: Index> Selection<I> {
         match self {
             Self::Range(range) => solve(&mut x[range.clone()], scratch),
             Self::Listed(vertices) => {
-                let (local, rest) = scratch.split_at_mut(vertices.len());
+                let (local, rest) = scratch.split_at_mut(self.gather_len());
                 (local.iter_mut().zip(vertices.iter())).for_each(|(v, &i)| *v = x[i.index()]);
                 solve(local, rest);
                 (local.iter().zip(vertices.iter())).for_each(|(&v, &i)| x[i.index()] = v);

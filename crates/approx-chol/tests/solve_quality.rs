@@ -421,20 +421,23 @@ fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
 }
 
 #[rstest::rstest]
-#[case::consecutive(&[0, 1, 2, 3, 4], &[1, 2, 3, 4, 5], 0)]
-#[case::interleaved(&[0, 2, 1, 3], &[2, 4, 3, 5], 3)]
+#[case::consecutive(&[0, 1, 2, 3, 4], &[1, 2, 3, 4, 5], &[0])]
+#[case::interleaved(&[0, 2, 1, 3], &[2, 4, 3, 5], &[3, 3])]
+#[case::two_runs(&[0, 1, 3, 4], &[1, 2, 4, 5], &[0, 0])]
+#[case::run_and_list(&[0, 1, 3], &[1, 2, 5], &[0, 2])]
 fn solve_in_place_gathers_only_blocks_whose_vertices_are_not_consecutive(
     #[case] a: &[u32],
     #[case] b: &[u32],
-    #[case] gathered: usize,
+    #[case] gathered: &[usize],
 ) {
     use approx_chol::factorize;
     use approx_chol::input::Laplacian;
     let factor = factorize(Laplacian::new(6, a, b).unwrap()).unwrap();
     let rhs = [1.0, -1.0, 2.0, -3.0, 0.5, 0.5];
     let blocks = factor.blocks();
-    let own = blocks.iter().map(|block| block.scratch_len()).max();
-    assert_eq!(factor.scratch_len(), gathered + own.unwrap());
+    assert_eq!(blocks.len(), gathered.len());
+    let needed = (blocks.iter().zip(gathered)).map(|(block, g)| g + block.scratch_len());
+    assert_eq!(Some(factor.scratch_len()), needed.max());
     let mut x = rhs.to_vec();
     let mut scratch = vec![f64::NAN; factor.scratch_len()];
     factor.solve_in_place(&mut x, &mut scratch).unwrap();
