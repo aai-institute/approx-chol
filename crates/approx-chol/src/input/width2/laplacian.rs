@@ -8,13 +8,18 @@ use crate::Real;
 
 /// The Laplacian of an undirected graph on `n` vertices.
 #[derive(Clone, Copy, Debug)]
-pub struct Laplacian<'a, T, I = u32>(pub(crate) FactorWidth2<'a, T, I>);
+pub struct Laplacian<'a, T, I = u32> {
+    n: usize,
+    u: &'a [I],
+    v: &'a [I],
+    w: Option<&'a [T]>,
+}
 
 impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
     /// Edge `k` joins `u[k] ≠ v[k] < n` with weight 1; repeated edges sum.
     pub fn new(n: usize, u: &'a [I], v: &'a [I]) -> Result<Self, ViewError> {
         check_ends(n, u, v)?;
-        Ok(Self::of(n, u, v, None))
+        Ok(Self { n, u, v, w: None })
     }
 
     /// Edge `k` joins `u[k] ≠ v[k] < n` with weight `w[k]`, finite and `≥ 0`; repeated edges sum.
@@ -22,40 +27,50 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
         length(u.len(), w.len())?;
         check(w, nonnegative, |entry| ViewError::InvalidWeight { entry })?;
         check_ends(n, u, v)?;
-        Ok(Self::of(n, u, v, Some(w)))
+        Ok(Self {
+            n,
+            u,
+            v,
+            w: Some(w),
+        })
     }
 
-    fn of(n: usize, u: &'a [I], v: &'a [I], w: Option<&'a [T]>) -> Self {
-        Self(FactorWidth2 {
+    pub(crate) fn lower(self) -> FactorWidth2<'a, T, I> {
+        self.plus(None)
+    }
+
+    /// `L + diag(s)` as the core's `V Vᵀ` and surplus.
+    fn plus(self, surplus: Option<&'a [T]>) -> FactorWidth2<'a, T, I> {
+        let Self { n, u, v, w } = self;
+        FactorWidth2 {
             a: u,
             b: v,
-            columns: Columns::Incidence {
-                n,
-                w,
-                surplus: None,
-            },
-        })
+            columns: Columns::Incidence { n, w, surplus },
+        }
     }
 }
 
 /// `L + diag(s)`: a Laplacian plus each vertex's surplus over diagonal dominance.
 #[derive(Clone, Copy, Debug)]
-pub struct Sddm<'a, T, I = u32>(pub(crate) FactorWidth2<'a, T, I>);
+pub struct Sddm<'a, T, I = u32> {
+    laplacian: Laplacian<'a, T, I>,
+    surplus: &'a [T],
+}
 
 impl<'a, T: Real, I: PrimInt> Sddm<'a, T, I> {
     /// `s[i]` finite and `≥ 0`, one per vertex, not all zero (that is a [`Laplacian`]).
-    pub fn new(laplacian: Laplacian<'a, T, I>, s: &'a [T]) -> Result<Self, ViewError> {
-        let Laplacian(mut v) = laplacian;
-        length(v.n(), s.len())?;
-        check(s, nonnegative, |vertex| ViewError::InvalidSurplus {
+    pub fn new(laplacian: Laplacian<'a, T, I>, surplus: &'a [T]) -> Result<Self, ViewError> {
+        length(laplacian.n, surplus.len())?;
+        check(surplus, nonnegative, |vertex| ViewError::InvalidSurplus {
             vertex,
         })?;
-        if s.iter().all(|&s| s == T::zero()) {
-            return Err(ViewError::ZeroSurplus);
+        match surplus.iter().all(|&s| s == T::zero()) {
+            true => Err(ViewError::ZeroSurplus),
+            false => Ok(Self { laplacian, surplus }),
         }
-        if let Columns::Incidence { surplus, .. } = &mut v.columns {
-            *surplus = Some(s);
-        }
-        Ok(Self(v))
+    }
+
+    pub(crate) fn lower(self) -> FactorWidth2<'a, T, I> {
+        self.laplacian.plus(Some(self.surplus))
     }
 }

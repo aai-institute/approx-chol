@@ -46,10 +46,9 @@ impl<T: Real, J: PrimInt + Sync> Input<'_, T, J> {
         match self {
             Self::Csr(csr) => csr.n(),
             Self::UpperCsr(csr) => csr.0.n(),
-            Self::Laplacian(Laplacian(v))
-            | Self::Sddm(Sddm(v))
-            | Self::FactorWidth2(v)
-            | Self::BipartiteFactorWidth2(BipartiteFactorWidth2(v)) => v.n(),
+            Self::Laplacian(laplacian) => laplacian.lower().n(),
+            Self::Sddm(sddm) => sddm.lower().n(),
+            Self::FactorWidth2(v) | Self::BipartiteFactorWidth2(BipartiteFactorWidth2(v)) => v.n(),
         }
     }
 }

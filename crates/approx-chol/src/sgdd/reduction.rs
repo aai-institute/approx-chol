@@ -12,7 +12,7 @@ use super::decomposition::{
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
 use super::Sgdd;
-use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Laplacian, Sddm};
+use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input};
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, widen, Error, Index, Real};
 
@@ -26,14 +26,22 @@ impl<T: Real, I: Index> Sgdd<T, I> {
             // Symmetry is checked in the walk that unions the pattern; upper storage has no mirror.
             Input::Csr(csr) => of_csr(Canonical::of(csr)?)?.reduce(&policy)?,
             Input::UpperCsr(csr) => of_upper(Canonical::of(csr.0)?)?.reduce(&policy)?,
-            Input::Laplacian(Laplacian(v))
-            | Input::Sddm(Sddm(v))
-            | Input::FactorWidth2(v)
-            | Input::BipartiteFactorWidth2(BipartiteFactorWidth2(v)) => match Biadjacency::of(&v) {
-                Some(layout) => Self::from_gram(layout, v, &policy)?,
-                None => Self::from_gram(StrictUpperTriangle, v, &policy)?,
-            },
+            Input::Laplacian(laplacian) => Self::from_factor_width_2(laplacian.lower(), &policy)?,
+            Input::Sddm(sddm) => Self::from_factor_width_2(sddm.lower(), &policy)?,
+            Input::FactorWidth2(v) | Input::BipartiteFactorWidth2(BipartiteFactorWidth2(v)) => {
+                Self::from_factor_width_2(v, &policy)?
+            }
         })
+    }
+
+    fn from_factor_width_2<J: PrimInt>(
+        v: FactorWidth2<'_, T, J>,
+        policy: &ScalingPolicy,
+    ) -> Result<Self, ReduceError> {
+        match Biadjacency::of(&v) {
+            Some(layout) => Self::from_gram(layout, v, policy),
+            None => Self::from_gram(StrictUpperTriangle, v, policy),
+        }
     }
 
     /// An incidence `V` is dominant by shape; values are scaled under `policy`.
