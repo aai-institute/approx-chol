@@ -17,7 +17,7 @@ pub(in crate::sgdd) trait AdjacencyLayout {
     type Adjacency<T: Real, I: Index>: PrincipalBlocks<T, I, Block = (Box<[I]>, OffDiagonal<T, I>)>
         + Sync;
 
-    /// The summed cells and components, `seen` visiting each column once and `pair` each nonzero cell with its two ends, and a cancelled one as `0.0` or not at all.
+    /// The summed cells and components, `seen` visiting each column once and `pair` each nonzero cell with its two ends.
     fn sum<T: Real, J: PrimInt, I: Index>(
         self,
         v: FactorWidth2<'_, T, J>,
@@ -56,9 +56,7 @@ impl AdjacencyLayout for StrictUpperTriangle {
     ) -> Result<Partitioned<UpperAdjacency<T, I>, I>, ReduceError> {
         let mut sets = UnionFind::<I>::new(v.n());
         let rows = cells::upper::<T, J, I>(v, seen, |i, j, cell| {
-            if cell != 0.0 {
-                sets.union(i, j);
-            }
+            sets.union(i, j);
             pair(i, j, cell);
         })?;
         Ok(Partitioned {

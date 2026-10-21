@@ -7,7 +7,7 @@ use crate::sgdd::block::ReduceError;
 use crate::storage::Rows;
 use crate::{in_range, narrow, widen, Index, Real};
 
-/// `A`'s strict upper triangle; `pair` sees each summed cell, a cancelled one too.
+/// `A`'s strict upper triangle; `pair` sees each nonzero cell.
 pub(super) fn upper<T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
     seen: impl FnMut(&Column<T, I>),
@@ -24,7 +24,7 @@ pub(super) fn cross<T: Real, J: PrimInt, I: Index>(
     seen: impl FnMut(&Column<T, I>),
     pair: impl FnMut(usize, usize, f64),
 ) -> Result<Rows<T, I>, ReduceError> {
-    Accumulator::of::<I>(n_left, v.n() - n_left, v.n_columns()).cross(v, n_left, seen, pair)
+    Accumulator::of::<T, I>(n_left, v.n() - n_left, v.n_columns()).cross(v, n_left, seen, pair)
 }
 
 /// within's cap on the dense table, about 40 MB.
@@ -42,16 +42,24 @@ enum Accumulator {
 
 impl Accumulator {
     /// The table when columns fill it and it fits within's cap, or past the cap takes no more memory than the buckets.
-    fn of<I>(n_left: usize, n_right: usize, n_columns: usize) -> Self {
+    fn of<T, I>(n_left: usize, n_right: usize, n_columns: usize) -> Self {
         let cells = n_left.saturating_mul(n_right);
         let filled = n_columns.saturating_mul(DENSE_TABLE_CELLS_PER_COLUMN) >= cells;
-        let table_bytes = cells.saturating_mul(size_of::<f64>());
         let fits = cells <= DENSE_TABLE_MAX_CELLS
-            || table_bytes <= Self::bucket_bytes::<I>(n_left, n_right, n_columns);
+            || Self::table_bytes::<T, I>(n_left, cells, n_columns)
+                <= Self::bucket_bytes::<I>(n_left, n_right, n_columns);
         match filled && fits {
             true => Self::Table,
             false => Self::Buckets,
         }
+    }
+
+    /// The table and the rows built beside it: an offset per left row, a column and value per summed cell.
+    fn table_bytes<T, I>(n_left: usize, cells: usize, n_columns: usize) -> usize {
+        let per_cell = size_of::<I>() + size_of::<T>();
+        (cells.saturating_mul(size_of::<f64>()))
+            .saturating_add(n_left.saturating_mul(size_of::<usize>()))
+            .saturating_add(n_columns.min(cells).saturating_mul(per_cell))
     }
 
     /// Everything the buckets allocate: three offsets per left row, a column and cell per column, a sum and mark per right one.
@@ -140,7 +148,7 @@ fn counts<T: Real, J: PrimInt, I: Index>(
     counts
 }
 
-/// Cells bucketed at their lower end in column order, so each sums as a dense table would; `pair` sees each summed cell, a cancelled one too.
+/// Cells bucketed at their lower end in column order, so each sums as a dense table would; `pair` sees each nonzero cell.
 fn sum_cells<T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
     counts: &[usize],
@@ -187,8 +195,8 @@ fn sum_cells<T: Real, J: PrimInt, I: Index>(
         // Written in place: a row's sums never outnumber its own bucket, already read.
         for &j in &touched {
             let cell = std::mem::take(&mut sums[j.index()]);
-            pair(i, first_column + j.index(), cell);
             if cell != 0.0 {
+                pair(i, first_column + j.index(), cell);
                 columns[out] = j;
                 cells[out] = widen(admit::<T>(i, cell)?);
                 out += 1;
@@ -220,7 +228,7 @@ mod tests {
     fn below_the_cap_the_table_needs_only_fill() {
         let (n_left, n_right) = (20, 10);
         let n_columns = filling(n_left * n_right);
-        let of = |n_columns| Accumulator::of::<u32>(n_left, n_right, n_columns);
+        let of = |n_columns| Accumulator::of::<f64, u32>(n_left, n_right, n_columns);
         assert_eq!(of(n_columns), Accumulator::Table);
         assert_eq!(of(n_columns - 1), Accumulator::Buckets);
     }
@@ -228,39 +236,29 @@ mod tests {
     #[test]
     fn past_the_cap_the_table_also_needs_less_memory_than_the_buckets() {
         let (n_left, n_right) = (2000, DENSE_TABLE_MAX_CELLS / 2000);
-        let of = |n_right| Accumulator::of::<u32>(n_left, n_right, filling(n_left * n_right));
+        let of = |n_right| Accumulator::of::<f64, u32>(n_left, n_right, filling(n_left * n_right));
         assert_eq!(of(n_right), Accumulator::Table);
         assert_eq!(of(n_right + 1), Accumulator::Buckets);
-        // 72 MB of table: 12-byte buckets stay smaller at 5M columns, 16-byte ones do not.
+        // 9M cells under 14M repeated columns: 12-byte buckets stay below the table and its rows, 16-byte ones do not.
         assert_eq!(
-            Accumulator::of::<u32>(3000, 3000, 5_000_000),
+            Accumulator::of::<f64, u32>(3000, 3000, 14_000_000),
             Accumulator::Buckets
         );
         assert_eq!(
-            Accumulator::of::<u64>(3000, 3000, 5_000_000),
+            Accumulator::of::<f64, u64>(3000, 3000, 14_000_000),
             Accumulator::Table
         );
-        // One right vertex: the table is 8 bytes per left row, the buckets' offsets alone 24.
+        // One right vertex: the table and its rows take 16 bytes per left row, the buckets' offsets alone 24.
         let n_left = DENSE_TABLE_MAX_CELLS + 1;
         assert_eq!(
-            Accumulator::of::<u32>(n_left, 1, filling(n_left)),
+            Accumulator::of::<f64, u32>(n_left, 1, filling(n_left)),
             Accumulator::Table
         );
-    }
-
-    type Summed = (String, Vec<(u32, u32, f64)>, Vec<(usize, usize, f64)>);
-
-    fn sum(accumulator: Accumulator, gram: BipartiteFactorWidth2<'_, f64>) -> Summed {
-        let (mut seen, mut pairs) = (Vec::new(), Vec::new());
-        let rows = accumulator
-            .cross::<f64, u32, u32>(
-                gram.0,
-                20,
-                |column| seen.push((column.a, column.b, column.cell())),
-                |i, j, cell| pairs.push((i, j, cell)),
-            )
-            .unwrap();
-        (format!("{rows:?}"), seen, pairs)
+        // Six right vertices, four columns a row: 48 MB of table, but 104 MB with its rows against 72 MB of buckets.
+        assert_eq!(
+            Accumulator::of::<f64, u32>(1_000_000, 6, 4_000_000),
+            Accumulator::Buckets
+        );
     }
 
     #[test]
@@ -276,24 +274,31 @@ mod tests {
         let s = [
             1.0, 2.0, 0.5, 1.0, 1.0, 0.0, 1.0, 3.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
         ];
+        let n_left = 20;
         let valued = BipartiteFactorWidth2::new(
-            FactorWidth1::new(20, &left, Some(&x)).unwrap(),
+            FactorWidth1::new(n_left, &left, Some(&x)).unwrap(),
             FactorWidth1::new(10, &right, Some(&y)).unwrap(),
         );
         let incidence = BipartiteFactorWidth2::scaled(
-            FactorWidth1::new(20, &left, None).unwrap(),
+            FactorWidth1::new(n_left, &left, None).unwrap(),
             FactorWidth1::new(10, &right, None).unwrap(),
             &s,
         );
+        let sum = |accumulator: Accumulator, gram: BipartiteFactorWidth2<'_, f64>| {
+            let (mut seen, mut pairs) = (Vec::new(), Vec::new());
+            let rows = accumulator.cross::<f64, u32, u32>(
+                gram.0,
+                n_left,
+                |column| seen.push((column.a, column.b, column.cell())),
+                |i, j, cell| pairs.push((i, j, cell)),
+            );
+            (format!("{:?}", rows.unwrap()), seen, pairs)
+        };
         for gram in [valued.unwrap(), incidence.unwrap()] {
-            let (rows, seen, pairs) = sum(Accumulator::Table, gram);
-            let (bucket_rows, bucket_seen, bucket_pairs) = sum(Accumulator::Buckets, gram);
-            assert_eq!(rows, bucket_rows);
-            assert_eq!(seen, bucket_seen);
-            // The buckets also pass a cell that cancelled to zero.
-            let nonzero = |&(_, _, cell): &(usize, usize, f64)| cell != 0.0;
-            let bucket_pairs: Vec<_> = bucket_pairs.into_iter().filter(nonzero).collect();
-            assert_eq!(pairs, bucket_pairs);
+            assert_eq!(
+                sum(Accumulator::Table, gram),
+                sum(Accumulator::Buckets, gram)
+            );
         }
     }
 }
