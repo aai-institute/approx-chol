@@ -5,7 +5,8 @@ use approx_chol::{factorize, Error, ReduceError};
 use rstest::rstest;
 
 use super::assert_names_a_defect;
-use super::gram::{dense_csr, matrix, solve_residual};
+use super::dense_residual::solve_residual;
+use super::gram::{dense_csr, matrix};
 
 const PATH_A: [u32; 2] = [0, 1];
 const PATH_B: [u32; 2] = [1, 2];

@@ -2,6 +2,8 @@
 mod band_agreement;
 #[path = "common/dense.rs"]
 mod dense;
+#[path = "common/dense_residual.rs"]
+mod dense_residual;
 #[path = "common/gram.rs"]
 mod gram;
 
@@ -10,7 +12,8 @@ use approx_chol::input::{
 };
 use approx_chol::{factorize_with, Backend, Config, Factor, ScalingPolicy};
 use dense::dense;
-use gram::{dense_csr, matrix, solve_residual};
+use dense_residual::solve_residual;
+use gram::{dense_csr, matrix};
 
 /// Every Cholesky dense under `policy`, so a residual reads the reduction alone.
 fn exact(policy: ScalingPolicy) -> Config {

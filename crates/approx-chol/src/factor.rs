@@ -343,10 +343,7 @@ impl<T: Real, I: Index> Block<T, I> {
         let tail = |from: usize| restriction.factor_tail(from);
         let (elimination, cholesky) = match off_diagonal {
             OffDiagonal::General(adjacency) => {
-                let sddm = match sheets {
-                    Sheets::One => Sddm::new(adjacency, grounding, sheets),
-                    Sheets::Two => Sddm::cover(adjacency, grounding),
-                };
+                let sddm = Sddm::of_block(adjacency, grounding, sheets);
                 let draws = streams.cholesky();
                 let factored = Cholesky::factor(sddm, draws, config, tail(0), reused);
                 (None, factored)

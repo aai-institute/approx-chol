@@ -33,7 +33,7 @@ impl<T: Real> Grounding<T> {
         }
     }
 
-    pub(super) fn ungrounded() -> Self {
+    pub(crate) fn ungrounded() -> Self {
         Self(None)
     }
 

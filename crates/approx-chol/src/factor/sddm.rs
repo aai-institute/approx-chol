@@ -4,7 +4,7 @@ use rayon::prelude::*;
 
 use crate::sgdd::{within_band, Grounding};
 use crate::storage::{Rows, UpperAdjacency};
-use crate::{widen, Index, Real};
+use crate::{narrow, widen, Index, Real};
 
 /// `L + diag(s)`, `L`'s off-diagonal nonpositive.
 #[derive(Clone, Debug)]
@@ -16,11 +16,7 @@ pub(super) struct Sddm<T, I> {
 
 impl<T: Real, I: Index> Sddm<T, I> {
     /// Panics unless nonempty, with one surplus per row and the rows split evenly into sheets.
-    pub(super) fn new(
-        adjacency: UpperAdjacency<T, I>,
-        grounding: Grounding<T>,
-        sheets: Sheets,
-    ) -> Self {
+    fn new(adjacency: UpperAdjacency<T, I>, grounding: Grounding<T>, sheets: Sheets) -> Self {
         let n = adjacency.n();
         assert!(n > 0, "an SDDM has a vertex");
         assert!(grounding.fits(n), "one surplus per row");
@@ -33,23 +29,45 @@ impl<T: Real, I: Index> Sddm<T, I> {
         }
     }
 
-    /// The Gremban cover of signed `M`: a Laplacian on two sheets that acts as `M` on `[z; −z]`; a surplus within the band joins `i`'s copies by `s_i/2` instead of grounding them, so the sheets' `1/s` common mode cannot swamp `z`.
-    pub(super) fn cover(signed: UpperAdjacency<T, I>, grounding: Grounding<T>) -> Self {
+    /// Folded `M` on one sheet, or the Gremban cover of signed `M` on two.
+    pub(super) fn of_block(
+        adjacency: UpperAdjacency<T, I>,
+        grounding: Grounding<T>,
+        sheets: Sheets,
+    ) -> Self {
+        match sheets {
+            Sheets::One => Self::new(adjacency, grounding, sheets),
+            Sheets::Two => Self::cover(adjacency, grounding),
+        }
+    }
+
+    /// Rows already on `sheets`, each with its ground; on two, a ground within the band [`twists`].
+    pub(super) fn of_rows(
+        (adjacency, ground): (UpperAdjacency<T, I>, Vec<T>),
+        sheets: Sheets,
+    ) -> Self {
+        let grounding = Grounding::of(ground);
+        let twisted = (grounding.surplus())
+            .filter(|ground| sheets == Sheets::Two && twists(ground, &adjacency));
+        match twisted {
+            Some(ground) => {
+                let adjacency = twisted_rows(adjacency, ground);
+                Self::new(adjacency, Grounding::ungrounded(), sheets)
+            }
+            None => Self::new(adjacency, grounding, sheets),
+        }
+    }
+
+    /// The Gremban cover of signed `M`: a Laplacian on two sheets that acts as `M` on `[z; −z]`.
+    fn cover(signed: UpperAdjacency<T, I>, grounding: Grounding<T>) -> Self {
         let n = signed.n();
-        let twisted = grounding.surplus().is_some_and(|s| {
-            // `ε`-scaled as the reduction's band sums, so `Σ|a_ij|` cannot overflow.
-            let epsilon = widen(T::epsilon());
-            let total = crate::compensated_sum(s.iter().map(|&s| epsilon * widen(s)));
-            let off = crate::compensated_sum(signed.abs_mirrored().map(|x| epsilon * x));
-            within_band::<T>(total, total + off)
-        });
-        let twists = if twisted { n } else { 0 };
-        let mut rows = SddmRows::with_capacity(2 * n, 2 * signed.nnz() + twists);
-        let half = T::one() / (T::one() + T::one());
+        let twisted = (grounding.surplus()).is_some_and(|s| twists(s, &signed));
+        let leads = if twisted { n } else { 0 };
+        let mut rows = SddmRows::with_capacity(2 * n, 2 * signed.nnz() + leads);
         for i in 0..n {
             let surplus = grounding.edge(i);
-            let twist = surplus.filter(|_| twisted).map(|s| s * half);
-            if let Some(t) = twist {
+            let lead = surplus.filter(|_| twisted).map(|s| twist(s, s));
+            if let Some(t) = lead {
                 rows.add(cover_vertex(i, 1), t);
             }
             for (j, &a) in signed.upper(i) {
@@ -59,11 +77,10 @@ impl<T: Real, I: Index> Sddm<T, I> {
                 rows.add(2 * n, s);
             }
             rows.end_row();
-            rows.mirror_row(usize::from(twist.is_some()));
+            rows.mirror_row(usize::from(lead.is_some()));
         }
         let (adjacency, ground) = rows.finish();
-        let grounding = Grounding::of(ground);
-        Self::new(adjacency, grounding, Sheets::Two)
+        Self::new(adjacency, Grounding::of(ground), Sheets::Two)
     }
 
     pub(super) fn n(&self) -> usize {
@@ -233,6 +250,31 @@ impl<T: Real, I: Index> Row<'_, T, I> {
         }
         self.sums[column] = self.sums[column] + w;
     }
+}
+
+/// Whether `ground` is within the band of `ground + Σ|a_ij|`, both `ε`-scaled so neither overflows: a cover's copies then [`twist`] instead of grounding, so its `1/s` common mode cannot swamp `z`; a cover doubles both sums, so `M`'s decide as its own.
+fn twists<T: Real, I: Index>(ground: &[T], adjacency: &UpperAdjacency<T, I>) -> bool {
+    let epsilon = widen(T::epsilon());
+    let total = crate::lane_sum(ground, epsilon);
+    within_band::<T>(total, total + adjacency.scaled_abs_total(epsilon))
+}
+
+/// The edge `k⁺ — k⁻` that acts on `[z; −z]` as grounds `g⁺, g⁻` do; with `g⁺ ≠ g⁻` no ungrounded pair matches them, and the mean differs by less than the band. At least `MIN_POSITIVE`, as a share is.
+fn twist<T: Real>(g_plus: T, g_minus: T) -> T {
+    let quarter = narrow::<T>(0.25);
+    (g_plus * quarter + g_minus * quarter).max(T::min_positive_value())
+}
+
+/// `adjacency` with row `2k` led by its [`twist`] to `2k + 1`, unless both copies' grounds are zero.
+fn twisted_rows<T: Real, I: Index>(
+    adjacency: UpperAdjacency<T, I>,
+    ground: &[T],
+) -> UpperAdjacency<T, I> {
+    adjacency.led_by(|i| {
+        let pair = (i % 2 == 0).then(|| (ground[i], ground[i + 1]));
+        let pair = pair.filter(|&(p, m)| p > T::zero() || m > T::zero());
+        pair.map(|(g_plus, g_minus)| (I::from_index(i + 1), -twist(g_plus, g_minus)))
+    })
 }
 
 /// A negative entry joins its ends on one sheet, a positive one across them.

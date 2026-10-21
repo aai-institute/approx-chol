@@ -204,7 +204,7 @@ fn schur<T: Real, I: Index>(
         let copies = kept.flat_map(|&s| std::iter::repeat_n(s, sheets.count()));
         (ground.iter_mut().zip(copies)).for_each(|(g, s)| *g = s + *g);
     }
-    Sddm::new(adjacency, Grounding::of(ground), sheets)
+    Sddm::of_rows((adjacency, ground), sheets)
 }
 
 /// Bucket by bucket, counting-sorts the chunks' rows unflattened, merges each row's duplicates, stores `−w`; an edge to `n` is `lo`'s ground weight.
