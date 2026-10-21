@@ -164,6 +164,12 @@ fn out_of_class_input_is_rejected_at_its_reported_position(
     &[-1.0, 1.0, 1.0, -1.0],
     &[csr(CsrError::BelowDiagonal { row: 1 })],
 )]
+#[case::entry_below_the_diagonal_after_a_stored_zero(
+    &[0, 2, 4, 7],
+    &[0, 1, 1, 2, 0, 1, 2],
+    &[1.0, -1.0, 2.0, -1.0, 0.0, -1.0, 1.0],
+    &[csr(CsrError::BelowDiagonal { row: 2 })],
+)]
 #[case::stored_nan(
     &[0, 2, 3],
     &[0, 1, 1],
@@ -178,6 +184,38 @@ fn out_of_class_upper_storage_is_rejected_at_its_reported_position(
 ) {
     let observed = reduce_upper(row_ptrs, columns, values).expect_err("out of class");
     assert_names_a_defect(observed, defects);
+}
+
+/// A stored zero is absent in every CSR form, so upper storage admits one below the diagonal.
+#[test]
+fn upper_csr_accepts_a_stored_zero_below_the_diagonal() {
+    let rhs = [1.0, 0.0, -1.0];
+    let plain = reduce_upper(
+        &[0, 2, 4, 5],
+        &[0, 1, 1, 2, 2],
+        &[1.0, -1.0, 2.0, -1.0, 1.0],
+    );
+    let plain = bits(&plain.expect("the path Laplacian factors"), &rhs);
+    let (row_ptrs, columns, values) = (
+        [0, 2, 4, 6],
+        [0, 1, 1, 2, 0, 2],
+        [1.0, -1.0, 2.0, -1.0, 0.0, 1.0],
+    );
+    let (reversed_columns, reversed_values) = reversed_rows(&row_ptrs, &columns, &values);
+    let summed = (
+        [0, 2, 4, 7],
+        [0, 1, 1, 2, 0, 0, 2],
+        [1.0, -1.0, 2.0, -1.0, 1.0, -1.0, 1.0],
+    );
+    for (label, row_ptrs, columns, values) in [
+        ("as given", &row_ptrs[..], &columns[..], &values[..]),
+        ("reversed", &row_ptrs, &reversed_columns, &reversed_values),
+        ("repeats summing to zero", &summed.0, &summed.1, &summed.2),
+    ] {
+        let factor =
+            reduce_upper(row_ptrs, columns, values).expect("a stored zero couples nothing");
+        assert_eq!(bits(&factor, &rhs), plain, "{label}");
+    }
 }
 
 /// Shapes a stricter check would reject, admitted as given and through the canonicalizing copy.
