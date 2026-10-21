@@ -20,7 +20,9 @@
 #[cfg(feature = "serde")]
 macro_rules! checked_serde {
     ($ty:ident) => {
-        impl<T: serde::Serialize, I: serde::Serialize> serde::Serialize for $ty<T, I> {
+        impl<T: serde::Serialize, I: crate::Index + serde::Serialize> serde::Serialize
+            for $ty<T, I>
+        {
             fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
                 $ty::serialize(self, serializer)
             }

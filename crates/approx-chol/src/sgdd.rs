@@ -9,7 +9,7 @@ mod scaling;
 pub use block::ReduceError;
 pub(crate) use block::{Balance, Grounding};
 pub(crate) use block::{IrreducibleBlock, Summands};
-pub(crate) use congruence::{FactorTail, Restriction};
+pub(crate) use congruence::{FactorTail, Restriction, Selection};
 pub(crate) use reduction::within_band;
 pub use scaling::{ScalingPolicy, ScalingReport};
 

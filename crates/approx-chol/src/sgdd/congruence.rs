@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::ops::Range;
 
 use crate::narrow;
 use crate::{widen, Index, Real};
@@ -8,11 +9,14 @@ use crate::{widen, Index, Real};
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
     serde(remote = "Self"),
-    serde(bound(deserialize = "T: Real + serde::Deserialize<'de>, I: serde::Deserialize<'de>"))
+    serde(bound(
+        serialize = "T: serde::Serialize, I: Index + serde::Serialize",
+        deserialize = "T: Real + serde::Deserialize<'de>, I: Index + serde::Deserialize<'de>"
+    ))
 )]
 #[derive(Clone, Debug)]
 pub(crate) struct Restriction<T, I> {
-    vertices: Box<[I]>,
+    vertices: Selection<I>,
     congruence: Congruence<T>,
 }
 
@@ -21,23 +25,13 @@ impl<T: Real, I: Index> Restriction<T, I> {
     pub(super) fn new(vertices: Box<[I]>, congruence: Congruence<T>) -> Self {
         assert!(congruence.fits(vertices.len()), "one factor per vertex");
         Self {
-            vertices,
+            vertices: Selection::of(vertices),
             congruence,
         }
     }
 
-    pub(crate) fn vertices(&self) -> &[I] {
+    pub(crate) fn vertices(&self) -> &Selection<I> {
         &self.vertices
-    }
-
-    /// `local ← Pᵀ x`.
-    pub(crate) fn gather(&self, x: &[T], local: &mut [T]) {
-        (local.iter_mut().zip(self.vertices.iter())).for_each(|(v, &i)| *v = x[i.index()]);
-    }
-
-    /// `x ← P local` on the block's vertices, the rest untouched.
-    pub(crate) fn scatter(&self, local: &[T], x: &mut [T]) {
-        (local.iter().zip(self.vertices.iter())).for_each(|(&v, &i)| x[i.index()] = v);
     }
 
     /// `F` from vertex `from` on, `None` unless scaled, so every `|f|` is `1`.
@@ -84,8 +78,84 @@ impl<T: Real, I: Index> Restriction<T, I> {
             Congruence::Scaled(s) => s.factors.iter().all(|f| f.is_finite() && *f != T::zero()),
             Congruence::Identity | Congruence::NegateFrom(_) => true,
         };
-        let fits = !self.vertices.is_empty() && self.congruence.fits(self.vertices.len());
+        let fits = self.vertices.len() > 0 && self.congruence.fits(self.vertices.len());
         (fits && factors).then_some(self)
+    }
+}
+
+/// `Pᵀ`: the block's vertices of `A` in local order, a run of consecutive ones kept as its range, where `Pᵀ x` is a slice of `x`.
+#[derive(Clone, Debug)]
+pub(crate) enum Selection<I> {
+    Range(Range<usize>),
+    Listed(Box<[I]>),
+}
+
+impl<I: Index> Selection<I> {
+    fn of(vertices: Box<[I]>) -> Self {
+        let start = vertices.first().map_or(0, |v| v.index());
+        match (vertices.iter().enumerate()).all(|(k, v)| v.index() == start + k) {
+            true => Self::Range(start..start + vertices.len()),
+            false => Self::Listed(vertices),
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Range(range) => range.len(),
+            Self::Listed(vertices) => vertices.len(),
+        }
+    }
+
+    /// Local vertex `k` in `A`'s numbering.
+    pub(crate) fn vertex(&self, k: usize) -> usize {
+        match self {
+            Self::Range(range) => range.start + k,
+            Self::Listed(vertices) => vertices[k].index(),
+        }
+    }
+
+    /// Workspace [`on_local`](Self::on_local) keeps ahead of what it passes on: room to gather, none for a range.
+    pub(crate) fn scratch_len(&self) -> usize {
+        match self {
+            Self::Range(_) => 0,
+            Self::Listed(vertices) => vertices.len(),
+        }
+    }
+
+    /// Runs `solve` on `Pᵀ x` and the rest of `scratch`, then sets the block's vertices of `x` to the result.
+    pub(crate) fn on_local<T: Copy>(
+        &self,
+        x: &mut [T],
+        scratch: &mut [T],
+        solve: impl FnOnce(&mut [T], &mut [T]),
+    ) {
+        match self {
+            Self::Range(range) => solve(&mut x[range.clone()], scratch),
+            Self::Listed(vertices) => {
+                let (local, rest) = scratch.split_at_mut(vertices.len());
+                (local.iter_mut().zip(vertices.iter())).for_each(|(v, &i)| *v = x[i.index()]);
+                solve(local, rest);
+                (local.iter().zip(vertices.iter())).for_each(|(&v, &i)| x[i.index()] = v);
+            }
+        }
+    }
+}
+
+/// The vertex list either way, so the wire never shows how a block stores it.
+#[cfg(feature = "serde")]
+impl<I: Index + serde::Serialize> serde::Serialize for Selection<I> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Range(range) => serializer.collect_seq(range.clone().map(I::from_index)),
+            Self::Listed(vertices) => vertices.serialize(serializer),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, I: Index + serde::Deserialize<'de>> serde::Deserialize<'de> for Selection<I> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        <Box<[I]>>::deserialize(deserializer).map(Self::of)
     }
 }
 
