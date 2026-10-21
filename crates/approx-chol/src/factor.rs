@@ -5,6 +5,8 @@ mod clique_tree;
 mod config;
 mod schur;
 mod sddm;
+#[cfg(feature = "serde")]
+mod wire;
 
 use rand::rngs::Xoshiro256PlusPlus;
 use rand::SeedableRng;
@@ -13,6 +15,8 @@ use rayon::prelude::*;
 
 use clique_tree::{Copies, Multi, Single};
 pub use config::{Backend, Config, InnerParallelism, SchurMode};
+#[cfg(feature = "serde")]
+pub use wire::FORMAT_VERSION;
 
 use crate::sgdd::{Balance, IrreducibleBlock, Restriction, Sgdd, Summands};
 use crate::storage::OffDiagonal;
@@ -495,7 +499,7 @@ impl<T: serde::Serialize> serde::Serialize for Factor<T> {
             }
         }
         let body = (self.n, &self.dead, Bodies(&self.blocks));
-        crate::wire::serialize(serializer, body)
+        wire::serialize(serializer, body)
     }
 }
 
@@ -503,7 +507,7 @@ impl<T: serde::Serialize> serde::Serialize for Factor<T> {
 impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for Factor<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let (n, dead, blocks): (usize, Box<[usize]>, Vec<Storage<T>>) =
-            crate::wire::deserialize(deserializer)?;
+            wire::deserialize(deserializer)?;
         let blocks = blocks.into_iter().map(BlockFactor).collect();
         let value = Self::new(n, blocks, dead);
         let corrupt = || serde::de::Error::custom("corrupt Factor");
@@ -531,14 +535,14 @@ impl<T: Real> Factor<T> {
 #[cfg(feature = "serde")]
 impl<T: serde::Serialize> serde::Serialize for BlockFactor<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        crate::wire::serialize(serializer, &self.0)
+        wire::serialize(serializer, &self.0)
     }
 }
 
 #[cfg(feature = "serde")]
 impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for BlockFactor<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        crate::wire::deserialize(deserializer).map(Self)
+        wire::deserialize(deserializer).map(Self)
     }
 }
 

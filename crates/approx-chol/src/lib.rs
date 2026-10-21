@@ -44,8 +44,6 @@ mod factor;
 pub mod input;
 mod sgdd;
 mod storage;
-#[cfg(feature = "serde")]
-mod wire;
 
 use std::fmt::Debug;
 
@@ -53,14 +51,14 @@ use num_traits::{float::TotalOrder, Float, PrimInt, Unsigned};
 
 pub use error::Error;
 use factor::Storage;
+#[cfg(feature = "serde")]
+pub use factor::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
 pub use factor::{
     Backend, BlockFactor, Config, Factor, InnerParallelism, SchurMode, SolveError, Vertices,
 };
 pub use input::{CsrError, CsrRef, IndexKind, Input, OwnedCsr};
 use sgdd::Sgdd;
 pub use sgdd::{ReduceError, ScalingPolicy, ScalingReport};
-#[cfg(feature = "serde")]
-pub use wire::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
 
 /// Factorizes any [`Input`] with [`Config::default`].
 pub fn factorize<'a, T, I, M>(input: M) -> Result<Factor<T>, Error>
