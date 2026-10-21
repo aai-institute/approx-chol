@@ -4,7 +4,6 @@
 use num_traits::PrimInt;
 
 use super::{CsrError, CsrRef, Input};
-use crate::Error;
 
 fn square(rows: usize, cols: usize) -> Result<u32, CsrError> {
     if rows != cols {
@@ -15,9 +14,9 @@ fn square(rows: usize, cols: usize) -> Result<u32, CsrError> {
 
 #[cfg(feature = "sprs")]
 impl<'a, T, I: sprs::SpIndex> TryFrom<sprs::CsMatViewI<'a, T, I>> for CsrRef<'a, T, I> {
-    type Error = Error;
+    type Error = CsrError;
 
-    fn try_from(matrix: sprs::CsMatViewI<'a, T, I>) -> Result<Self, Error> {
+    fn try_from(matrix: sprs::CsMatViewI<'a, T, I>) -> Result<Self, CsrError> {
         let n = square(matrix.rows(), matrix.cols())?;
         let (row_ptrs, col_indices, values) = matrix.into_raw_storage();
         CsrRef::new(row_ptrs, col_indices, values, n)
@@ -26,9 +25,9 @@ impl<'a, T, I: sprs::SpIndex> TryFrom<sprs::CsMatViewI<'a, T, I>> for CsrRef<'a,
 
 #[cfg(feature = "sprs")]
 impl<'a, T, I: sprs::SpIndex> TryFrom<&'a sprs::CsMatI<T, I>> for CsrRef<'a, T, I> {
-    type Error = Error;
+    type Error = CsrError;
 
-    fn try_from(matrix: &'a sprs::CsMatI<T, I>) -> Result<Self, Error> {
+    fn try_from(matrix: &'a sprs::CsMatI<T, I>) -> Result<Self, CsrError> {
         Self::try_from(matrix.view())
     }
 }
@@ -37,16 +36,16 @@ impl<'a, T, I: sprs::SpIndex> TryFrom<&'a sprs::CsMatI<T, I>> for CsrRef<'a, T, 
 impl<'a, T, I: faer::Index + PrimInt> TryFrom<faer::sparse::SparseRowMatRef<'a, I, T>>
     for CsrRef<'a, T, I>
 {
-    type Error = Error;
+    type Error = CsrError;
 
-    fn try_from(matrix: faer::sparse::SparseRowMatRef<'a, I, T>) -> Result<Self, Error> {
+    fn try_from(matrix: faer::sparse::SparseRowMatRef<'a, I, T>) -> Result<Self, CsrError> {
         let n = square(matrix.nrows(), matrix.ncols())?;
         let symbolic = matrix.symbolic();
         let row_ptrs = symbolic.row_ptr();
         // Row counts filling every span are compact storage, so the arrays still borrow as CSR.
         let rows = n as usize;
         if let Some(row) = (0..rows).find(|&i| symbolic.row_range(i).end != row_ptrs[i + 1].zx()) {
-            return Err(CsrError::RowGap { row }.into());
+            return Err(CsrError::RowGap { row });
         }
         // faer may keep spare capacity past the last row.
         let end = row_ptrs[rows].zx();
@@ -59,9 +58,9 @@ impl<'a, T, I: faer::Index + PrimInt> TryFrom<faer::sparse::SparseRowMatRef<'a, 
 impl<'a, T, I: faer::Index + PrimInt> TryFrom<&'a faer::sparse::SparseRowMat<I, T>>
     for CsrRef<'a, T, I>
 {
-    type Error = Error;
+    type Error = CsrError;
 
-    fn try_from(matrix: &'a faer::sparse::SparseRowMat<I, T>) -> Result<Self, Error> {
+    fn try_from(matrix: &'a faer::sparse::SparseRowMat<I, T>) -> Result<Self, CsrError> {
         Self::try_from(matrix.as_ref())
     }
 }
@@ -70,9 +69,9 @@ impl<'a, T, I: faer::Index + PrimInt> TryFrom<&'a faer::sparse::SparseRowMat<I, 
 macro_rules! input_via_csr {
     ($($matrix:ty where $($bound:path),+;)+) => {$(
         impl<'a, T, I: $($bound +)+> TryFrom<$matrix> for Input<'a, T, I> {
-            type Error = Error;
+            type Error = CsrError;
 
-            fn try_from(matrix: $matrix) -> Result<Self, Error> {
+            fn try_from(matrix: $matrix) -> Result<Self, CsrError> {
                 CsrRef::try_from(matrix).map(Input::Csr)
             }
         }

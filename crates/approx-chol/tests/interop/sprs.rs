@@ -53,18 +53,12 @@ fn sprs_outer_slice_with_offset_rows_is_rejected() {
         vec![1.0, 1.0, 1.0, -1.0, -1.0, 1.0],
     );
     let err = CsrRef::try_from(mat.slice_outer(2..4)).expect_err("offset rows must be rejected");
-    assert_eq!(
-        err,
-        Error::InvalidCsr(CsrError::RowPtrsMustStartAtZero { got: 2 })
-    );
+    assert_eq!(err, CsrError::RowPtrsMustStartAtZero { got: 2 });
 }
 
 #[test]
 fn sprs_try_from_non_square_returns_error() {
     let mat = CsMatI::<f64, u32>::new((3, 4), vec![0, 1, 2, 3], vec![0, 1, 2], vec![1.0; 3]);
     let err = CsrRef::try_from(&mat).expect_err("non-square matrix must be rejected");
-    assert_eq!(
-        err,
-        Error::InvalidCsr(CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 })
-    );
+    assert_eq!(err, CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 });
 }

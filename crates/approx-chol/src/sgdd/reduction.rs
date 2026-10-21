@@ -11,10 +11,10 @@ use super::decomposition::{
     of_csr, of_upper, AdjacencyLayout, Biadjacency, Cells, Partitioned, StrictUpperTriangle,
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
-use super::Sgdd;
+use super::{diagonal_in_range, Sgdd};
 use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input};
 use crate::storage::OffDiagonal;
-use crate::{diagonal_in_range, widen, Error, Index, Real};
+use crate::{widen, Error, Index, Real};
 
 impl<T: Real, I: Index> Sgdd<T, I> {
     /// The view's irreducible blocks, each reduced; `policy` scales those not already dominant.

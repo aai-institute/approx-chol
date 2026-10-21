@@ -81,7 +81,7 @@ impl<A, I: Index> Partitioned<A, I> {
                         dead.push(v);
                         false
                     }
-                    pivot if pivot > T::zero() && crate::diagonal_in_range(pivot) => {
+                    pivot if pivot > T::zero() && super::diagonal_in_range(pivot) => {
                         lone.push((v, pivot));
                         false
                     }

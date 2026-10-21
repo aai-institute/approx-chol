@@ -6,8 +6,9 @@ use super::partition::{Partition, UnionFind};
 use super::{Assembled, Dominant, Partitioned, PrincipalBlocks};
 use crate::input::{Column, FactorWidth2};
 use crate::sgdd::block::ReduceError;
+use crate::sgdd::diagonal_in_range;
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
-use crate::{diagonal_in_range, in_range, narrow, widen, Index, Real};
+use crate::{in_range, narrow, widen, Index, Real};
 
 /// How a shape's summed cells are stored, and its components found from them.
 pub(in crate::sgdd) trait AdjacencyLayout {

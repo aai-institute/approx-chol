@@ -44,8 +44,6 @@ mod factor;
 pub mod input;
 mod sgdd;
 mod storage;
-#[cfg(feature = "serde")]
-mod wire;
 
 use std::fmt::Debug;
 
@@ -53,14 +51,14 @@ use num_traits::{float::TotalOrder, Float, PrimInt, Unsigned};
 
 pub use error::Error;
 use factor::Storage;
+#[cfg(feature = "serde")]
+pub use factor::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
 pub use factor::{
     Backend, BlockFactor, Config, Factor, InnerParallelism, SchurMode, SolveError, Vertices,
 };
 pub use input::{CsrError, CsrRef, IndexKind, Input, OwnedCsr};
 use sgdd::Sgdd;
 pub use sgdd::{ReduceError, ScalingPolicy, ScalingReport};
-#[cfg(feature = "serde")]
-pub use wire::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
 
 /// Factorizes any [`Input`] with [`Config::default`].
 pub fn factorize<'a, T, I, M>(input: M) -> Result<Factor<T>, Error>
@@ -152,17 +150,6 @@ fn widen<T: Real>(x: T) -> f64 {
 /// An `f64` sum in `T`: past `T::MAX` it reads infinite, which every range screen rejects.
 fn narrow<T: Real>(sum: f64) -> T {
     T::from(sum).unwrap_or_else(T::infinity)
-}
-
-/// In range and at most `MAX/4`, so every row sum, pivot and surplus stays finite.
-fn diagonal_in_range<T: Real>(d: T) -> bool {
-    in_range(d) && d <= T::max_value() / (T::one() + T::one() + T::one() + T::one())
-}
-
-/// `1/d` for a `d` that is [`diagonal_in_range`]: normal, and at most `ε/MIN_POSITIVE`.
-#[cfg(feature = "serde")]
-fn inverse_pivot_in_range<T: Real>(inverse: T) -> bool {
-    inverse >= T::min_positive_value() && inverse <= T::epsilon() / T::min_positive_value()
 }
 
 /// `Σ x` with each addition's rounding carried (Knuth's TwoSum): within `ε` of exact for nonnegative terms.

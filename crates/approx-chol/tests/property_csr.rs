@@ -69,10 +69,7 @@ fn shape_errors<I: PrimInt + std::fmt::Debug>(
     let full = CsrRef::new(row_ptrs, col_indices, values, n).expect_err("full storage must fail");
     let upper =
         UpperCsrRef::new(row_ptrs, col_indices, values, n).expect_err("upper storage must fail");
-    [full, upper].map(|error| match error {
-        Error::InvalidCsr(error) => error,
-        other => panic!("a shape defect is a CSR error, not {other:?}"),
-    })
+    [full, upper]
 }
 
 /// Columns are checked at reduction, where both storages canonicalize.

@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `Config` serialized by 0.6.0 reads back only from a self-describing format such as JSON. ([#182])
 - `Backend::ExactBelow` has no `on_failure`; `ExactFailure`, `Fallback`, `DenseFailure`, `UnusablePivot` and `Factor::fallbacks` are removed, as the exact arm never fails a pivot. ([#182])
 - `Error` is `InvalidCsr(CsrError)` or `Reduce(ReduceError)`; a value defect is `CsrError::{NotSymmetric, BelowDiagonal, OutOfRange}`, naming its row. ([#182])
+- `CsrRef::new`, `CsrRef::to_owned_u32`, `OwnedCsr::try_from_usize` and `CsrRef`'s `sprs`/`faer` conversions return `CsrError`, not `Error`.
 - A column outside `0..n` is reported by `factorize`, not `CsrRef::new`; `CsrError::InputConversionPanicked` is removed. ([#182])
 - `factorize` takes any `TryInto<Input>`; a type converting only into `CsrRef` converts first. ([#182])
 - `factorize` and `Factor`'s methods take `T: Real`, implemented only for `f32` and `f64`, and `factorize` an index `I: Sync`. ([#182])

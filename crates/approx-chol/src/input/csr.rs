@@ -4,7 +4,7 @@ use num_traits::{cast, PrimInt};
 
 use super::index;
 use crate::in_range;
-use crate::{Error, Real};
+use crate::Real;
 
 /// Borrowed CSR claiming a symmetric `A`; shape is checked here, the claim when it factors.
 #[derive(Clone, Copy, Debug)]
@@ -21,35 +21,31 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
         col_indices: &'a [I],
         values: &'a [T],
         n: u32,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, CsrError> {
         let n = n as usize;
         if row_ptrs.len() != n + 1 {
             return Err(CsrError::RowPtrsLenMismatch {
                 expected: n + 1,
                 got: row_ptrs.len(),
-            }
-            .into());
+            });
         }
         if col_indices.len() != values.len() {
             return Err(CsrError::ColIndicesValuesLenMismatch {
                 col_indices_len: col_indices.len(),
                 values_len: values.len(),
-            }
-            .into());
+            });
         }
         let row_ptr_last = as_usize(row_ptrs[n], IndexKind::RowPtr, n)?;
         if row_ptrs[0] != I::zero() {
             return Err(CsrError::RowPtrsMustStartAtZero {
                 got: as_usize(row_ptrs[0], IndexKind::RowPtr, 0)?,
-            }
-            .into());
+            });
         }
         if row_ptr_last != col_indices.len() {
             return Err(CsrError::RowPtrsEndMismatchNnz {
                 row_ptr_end: row_ptr_last,
                 nnz: col_indices.len(),
-            }
-            .into());
+            });
         }
         // Compared in `I`, so only the error arm converts a pointer to `usize`.
         if let Some(row) = (0..n).find(|&i| row_ptrs[i] > row_ptrs[i + 1]) {
@@ -57,8 +53,7 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
                 row,
                 prev: as_usize(row_ptrs[row], IndexKind::RowPtr, row)?,
                 next: as_usize(row_ptrs[row + 1], IndexKind::RowPtr, row + 1)?,
-            }
-            .into());
+            });
         }
         Ok(Self {
             row_ptrs,
@@ -90,7 +85,7 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
 
 impl<T: Clone, I: PrimInt> CsrRef<'_, T, I> {
     /// Owned copy with `u32` indices; [`CsrError::IndexExceedsIndexType`] if an index does not fit.
-    pub fn to_owned_u32(&self) -> Result<OwnedCsr<T, u32>, Error> {
+    pub fn to_owned_u32(&self) -> Result<OwnedCsr<T, u32>, CsrError> {
         Ok(OwnedCsr {
             row_ptrs: cast_slice(self.row_ptrs, IndexKind::RowPtr)?,
             col_indices: cast_slice(self.col_indices, IndexKind::ColIndex)?,
@@ -110,7 +105,7 @@ impl<'a, T, I: PrimInt> UpperCsrRef<'a, T, I> {
         col_indices: &'a [I],
         values: &'a [T],
         n: u32,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, CsrError> {
         CsrRef::new(row_ptrs, col_indices, values, n).map(Self)
     }
 }
@@ -130,7 +125,7 @@ impl<T: Clone, I: PrimInt> OwnedCsr<T, I> {
         col_indices: &[usize],
         values: &[T],
         n: usize,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, CsrError> {
         let n = u32::try_from(n).map_err(|_| CsrError::MatrixDimensionExceedsIndexType { n })?;
         let row_ptrs = cast_slice(row_ptrs, IndexKind::RowPtr)?;
         let col_indices = cast_slice(col_indices, IndexKind::ColIndex)?;
