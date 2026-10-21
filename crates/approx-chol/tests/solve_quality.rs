@@ -419,3 +419,31 @@ fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
         }
     }
 }
+
+#[rstest::rstest]
+#[case::consecutive(&[0, 1, 2, 3, 4], &[1, 2, 3, 4, 5], 0)]
+#[case::interleaved(&[0, 2, 1, 3], &[2, 4, 3, 5], 3)]
+fn solve_in_place_gathers_only_blocks_whose_vertices_are_not_consecutive(
+    #[case] a: &[u32],
+    #[case] b: &[u32],
+    #[case] gathered: usize,
+) {
+    use approx_chol::factorize;
+    use approx_chol::input::Laplacian;
+    let factor = factorize(Laplacian::new(6, a, b).unwrap()).unwrap();
+    let rhs = [1.0, -1.0, 2.0, -3.0, 0.5, 0.5];
+    let blocks = factor.blocks();
+    let own = blocks.iter().map(|block| block.scratch_len()).max();
+    assert_eq!(factor.scratch_len(), gathered + own.unwrap());
+    let mut x = rhs.to_vec();
+    let mut scratch = vec![f64::NAN; factor.scratch_len()];
+    factor.solve_in_place(&mut x, &mut scratch).unwrap();
+    for block in blocks {
+        let mut local: Vec<f64> = block.vertices().map(|v| rhs[v]).collect();
+        let mut scratch = vec![f64::NAN; block.scratch_len()];
+        let solved = block.solve_local(&mut local, &mut scratch, InnerParallelism::Allow);
+        solved.unwrap();
+        let global: Vec<f64> = block.vertices().map(|v| x[v]).collect();
+        assert_eq!(bits(&global), bits(&local));
+    }
+}
