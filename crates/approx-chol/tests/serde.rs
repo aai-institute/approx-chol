@@ -413,6 +413,13 @@ fn an_isolated_vertex_round_trips_through_json() {
     assert_eq!(factor.solve(&b).unwrap(), back.solve(&b).unwrap());
 }
 
+/// Re-tags a `u32` coupled block as `u64`, over `vertices`.
+fn widen_with(block: &mut serde_json::Value, vertices: serde_json::Value) {
+    let mut coupled = block[1]["U32"].take();
+    coupled["restriction"]["vertices"] = vertices;
+    block[1] = serde_json::json!({ "U64": coupled });
+}
+
 /// A block's vertex `u64::MAX` reads back as itself, never overflowing the end of a run of consecutive vertices.
 #[rstest]
 #[case::isolated(&[u64::MAX])]
@@ -425,11 +432,7 @@ fn a_vertex_at_u64_max_reads_back(#[case] vertices: &[u64]) {
     let mut v = serde_json::to_value(block).unwrap();
     match vertices {
         [vertex] => v[1]["Isolated"]["vertex"] = (*vertex).into(),
-        _ => {
-            let mut coupled = v[1]["U32"].take();
-            coupled["restriction"]["vertices"] = vertices.into();
-            v[1] = serde_json::json!({ "U64": coupled });
-        }
+        _ => widen_with(&mut v, vertices.into()),
     }
     let back: BlockFactor = serde_json::from_value(v).unwrap();
     let want = vertices.iter().map(|&vertex| vertex as usize);
@@ -441,9 +444,7 @@ fn a_vertex_at_u64_max_reads_back(#[case] vertices: &[u64]) {
 fn a_lone_vertex_at_u64_max_for_two_is_corrupt() {
     let factor = with_isolated_vertex();
     let mut v = serde_json::to_value(&factor.blocks()[0]).unwrap();
-    let mut coupled = v[1]["U32"].take();
-    coupled["restriction"]["vertices"] = serde_json::json!([u64::MAX]);
-    v[1] = serde_json::json!({ "U64": coupled });
+    widen_with(&mut v, serde_json::json!([u64::MAX]));
     serde_json::from_value::<BlockFactor>(v).expect_err("one vertex for two is corrupt");
 }
 

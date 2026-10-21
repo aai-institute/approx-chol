@@ -432,21 +432,13 @@ fn solve_in_place_gathers_only_blocks_whose_vertices_are_not_consecutive(
 ) {
     use approx_chol::factorize;
     use approx_chol::input::Laplacian;
-    let factor = factorize(Laplacian::new(6, a, b).unwrap()).unwrap();
+    let factor: Factor = factorize(Laplacian::new(6, a, b).unwrap()).unwrap();
     let rhs = [1.0, -1.0, 2.0, -3.0, 0.5, 0.5];
     let blocks = factor.blocks();
     assert_eq!(blocks.len(), gathered.len());
     let needed = (blocks.iter().zip(gathered)).map(|(block, g)| g + block.scratch_len());
     assert_eq!(Some(factor.scratch_len()), needed.max());
-    let mut x = rhs.to_vec();
-    let mut scratch = vec![f64::NAN; factor.scratch_len()];
-    factor.solve_in_place(&mut x, &mut scratch).unwrap();
-    for block in blocks {
-        let mut local: Vec<f64> = block.vertices().map(|v| rhs[v]).collect();
-        let mut scratch = vec![f64::NAN; block.scratch_len()];
-        let solved = block.solve_local(&mut local, &mut scratch, InnerParallelism::Allow);
-        solved.unwrap();
-        let global: Vec<f64> = block.vertices().map(|v| x[v]).collect();
-        assert_eq!(bits(&global), bits(&local));
-    }
+    let x = solve_in_place_on_dirty_scratch(&factor, &rhs);
+    let want = solve_on_dirty_scratch(&factor, &rhs, InnerParallelism::Allow);
+    assert_eq!(bits(&x), bits(&want));
 }
