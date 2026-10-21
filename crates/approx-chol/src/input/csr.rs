@@ -99,7 +99,7 @@ impl<T: Clone, I: PrimInt> CsrRef<'_, T, I> {
 pub struct UpperCsrRef<'a, T = f64, I = u32>(pub(crate) CsrRef<'a, T, I>);
 
 impl<'a, T, I: PrimInt> UpperCsrRef<'a, T, I> {
-    /// The shape checks of [`CsrRef::new`]; an entry below the diagonal is caught when it factors.
+    /// The shape checks of [`CsrRef::new`]; a nonzero below the diagonal is caught when it factors.
     pub fn new(
         row_ptrs: &'a [I],
         col_indices: &'a [I],
@@ -291,17 +291,20 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
         Ok(found)
     }
 
-    /// Each nonzero `(i, j)`, `i < j`, of upper storage, symmetric by shape: no mirror is found, only a row's first column checked.
+    /// Each nonzero `(i, j)`, `i < j`, of upper storage, symmetric by shape: no mirror is found, only stored zeros admitted below the diagonal.
     pub(crate) fn walk_upper(&self, mut edge: impl FnMut(usize, usize, T)) -> Result<(), CsrError> {
         let (row_ptrs, col_indices, values) = self.arrays();
         for row in 0..self.n() {
             let span = index(row_ptrs[row])..index(row_ptrs[row + 1]);
             let columns = &col_indices[span.clone()];
-            // Columns ascend once canonical, so the first decides that none lies below the diagonal.
-            if columns.first().is_some_and(|&j| index(j) < row) {
+            let values = &values[span];
+            // Columns ascend once canonical, so only a row whose first lies below the diagonal pays the scan.
+            if columns.first().is_some_and(|&j| index(j) < row)
+                && stores_below(columns, values, row)
+            {
                 return Err(CsrError::BelowDiagonal { row });
             }
-            for (&col, &value) in columns.iter().zip(&values[span]) {
+            for (&col, &value) in columns.iter().zip(values) {
                 if !in_range(value) {
                     return Err(CsrError::OutOfRange { row });
                 }
@@ -313,6 +316,13 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
         }
         Ok(())
     }
+}
+
+#[cold]
+fn stores_below<T: Real, I: PrimInt>(columns: &[I], values: &[T], row: usize) -> bool {
+    (columns.iter().zip(values))
+        .take_while(|&(&j, _)| index(j) < row)
+        .any(|(_, &value)| value != T::zero())
 }
 
 /// Mirrors within 8 ulps of the larger are equal: scipy's assembly rounds the two triangles apart.
@@ -473,7 +483,7 @@ pub enum CsrError {
         /// The offending row.
         row: usize,
     },
-    /// An upper triangle stores an entry, or a repeated column's sum, below its diagonal.
+    /// An upper triangle stores a nonzero entry, or a repeated column's nonzero sum, below its diagonal.
     BelowDiagonal {
         /// The offending row.
         row: usize,
