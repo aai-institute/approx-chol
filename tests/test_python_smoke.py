@@ -6,7 +6,7 @@ import scipy.sparse as sp
 from scipy.linalg import block_diag
 
 import approx_chol
-from tests._laplacians import grid_laplacian
+from tests._laplacians import grid_laplacian, grid_sddm
 
 
 def _grid_residual(config: approx_chol.Config) -> float:
@@ -121,15 +121,13 @@ def test_a_dominant_matrix_does_not_warn():
 
 
 def test_solve_into_with_a_reused_workspace_is_bit_identical():
-    lap = grid_laplacian(16, 16)
     factor = approx_chol.factorize(
-        lap, approx_chol.Config(backend=approx_chol.Backend.Approximate())
+        grid_sddm(16, 16), approx_chol.Config(backend=approx_chol.Backend.Approximate())
     )
     workspace = factor.workspace()
     rng = np.random.default_rng(0)
     for _ in range(3):
         b = rng.standard_normal(factor.n)
-        b -= b.mean()
         fresh, reused = np.empty_like(b), np.empty_like(b)
         factor.solve_into(b, fresh)
         factor.solve_into(b, reused, workspace=workspace)

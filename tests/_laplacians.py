@@ -31,3 +31,8 @@ def grid_laplacian(rows: int, cols: int) -> sp.csr_matrix:
             data.append(float(degree))
 
     return sp.csr_matrix((data, (row_idx, col_idx)), shape=(n, n))
+
+
+def grid_sddm(rows: int, cols: int) -> sp.csr_matrix:
+    """``grid_laplacian`` plus the identity: its factor grounds, so solves need scratch."""
+    return (grid_laplacian(rows, cols) + sp.identity(rows * cols)).tocsr()
