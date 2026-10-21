@@ -143,10 +143,9 @@ pub(in crate::sgdd) fn assemble_values<T: Real, J: PrimInt, I: Index, S: Adjacen
 /// Adds `w v²` at both ends, so a row of only underflowed terms fails the range screen.
 #[inline(always)]
 fn add_squares<T: Real, I: Index>(sums: &mut [f64], column: &Column<T, I>) {
-    let square = |v: f64| column.weight.bilinear_unflushed(v, v);
     // Two straight-line ends: a loop over them costs signed_F 7–10% and bip_sparse 18–20%.
-    sums[column.a.index()] += square(widen(column.v_a));
-    sums[column.b.index()] += square(widen(column.v_b));
+    sums[column.a.index()] += column.square(widen(column.v_a));
+    sums[column.b.index()] += column.square(widen(column.v_b));
 }
 
 /// The diagonal is each sum as `T` stores it; a nonzero one cast to zero underflowed, so it is out of range.

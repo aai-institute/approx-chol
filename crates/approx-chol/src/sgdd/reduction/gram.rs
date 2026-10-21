@@ -79,10 +79,10 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     v.for_each_column::<I>(
         #[inline(always)]
         |column| {
-            if column.weight.is_zero() {
+            if column.zero_weight() {
                 return;
             }
-            let w = |x: f64, y: f64| column.weight.bilinear(x, y);
+            let w = |x: f64, y: f64| column.bilinear(x, y);
             let end = |i: I, v_i: T| match block_of[i.index()] {
                 c if c == I::max_value() => None,
                 c => Some((i.index(), c.index(), factor[i.index()] * widen(v_i))),
@@ -170,7 +170,7 @@ fn null_vectors<'c, T: Real, J: PrimInt, I: Index>(
 /// A column's component when both ends are nonzero in it.
 fn coupling<T: Real, I: Index>(column: &Column<T, I>, component: &[I]) -> Option<usize> {
     let c = component[column.a.index()];
-    let couples = !column.weight.is_zero()
+    let couples = !column.zero_weight()
         && column.v_a != T::zero()
         && column.v_b != T::zero()
         && component[column.b.index()] == c;
