@@ -247,9 +247,8 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
         self.rows.nnz()
     }
 
-    /// `Σ_ij |a_ij|` over both triangles, compensated.
-    pub(crate) fn abs_total(&self) -> f64 {
-        crate::compensated_sum(self.rows.abs_mirrored())
+    pub(crate) fn abs_mirrored(&self) -> impl Iterator<Item = f64> + '_ {
+        self.rows.abs_mirrored()
     }
 
     /// Row `i`'s neighbors above it.
