@@ -1,5 +1,5 @@
 use approx_chol::input::{
-    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, ViewError, Weights,
+    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, ViewError, Weights,
 };
 use approx_chol::{factorize, Error, ReduceError};
 use rstest::rstest;
@@ -108,10 +108,8 @@ fn laplacian_new_rejects_mismatched_lengths_and_bad_ends_at_their_entry(
 }
 
 #[test]
-fn laplacian_grounded_rejects_a_ground_per_vertex_short() {
-    let short = unit_path()
-        .grounded(&[1.0, 1.0])
-        .expect_err("one ground per vertex");
+fn sddm_new_rejects_a_surplus_per_vertex_short() {
+    let short = Sddm::new(unit_path(), &[1.0, 1.0]).expect_err("one surplus per vertex");
     assert_eq!(
         short,
         ViewError::LengthMismatch {
@@ -125,11 +123,17 @@ fn laplacian_grounded_rejects_a_ground_per_vertex_short() {
 #[case::negative(-1.0)]
 #[case::nan(f64::NAN)]
 #[case::infinite(f64::INFINITY)]
-fn laplacian_grounded_rejects_a_bad_ground_at_its_vertex(#[case] ground: f64) {
-    let error = unit_path()
-        .grounded(&[0.0, 0.0, ground])
-        .expect_err("invalid ground");
-    assert_eq!(error, ViewError::InvalidGround { vertex: 2 });
+fn sddm_new_rejects_a_bad_surplus_at_its_vertex(#[case] surplus: f64) {
+    let error = Sddm::new(unit_path(), &[1.0, 0.0, surplus]).expect_err("invalid surplus");
+    assert_eq!(error, ViewError::InvalidSurplus { vertex: 2 });
+}
+
+#[rstest]
+#[case::zero(0.0)]
+#[case::negative_zero(-0.0)]
+fn sddm_new_rejects_an_all_zero_surplus_as_a_laplacian(#[case] zero: f64) {
+    let error = Sddm::new(unit_path(), &[0.0, zero, 0.0]).expect_err("a Laplacian");
+    assert_eq!(error, ViewError::ZeroSurplus);
 }
 
 #[rstest]
@@ -137,7 +141,7 @@ fn laplacian_grounded_rejects_a_bad_ground_at_its_vertex(#[case] ground: f64) {
 #[case::past_a_quarter_of_the_maximum(f64::MAX / 2.0)]
 fn an_out_of_range_ground_is_rejected_at_its_vertex(#[case] ground: f64) {
     let ground = [0.0, 0.0, ground];
-    let grounded = unit_path().grounded(&ground).expect("a valid ground");
+    let grounded = Sddm::new(unit_path(), &ground).expect("a valid surplus");
     let error = factorize(grounded).expect_err("ground out of range");
     assert_names_a_defect(error, &out_of_range(&[2]));
 }

@@ -167,7 +167,7 @@ cases! {
     #[case::tied_eight_vertices(tied_eight_vertices())]
     fn a_sampled_complement_past_twice_its_clique_keeps_the_spectrum_bounded(
         #[case] graph: Graph,
-        route in routes(all),
+        route in routes(floating),
         types in types(all),
     ) {
         let (entry, mode) = route;
@@ -195,7 +195,7 @@ fn path_or_cycle() -> impl Strategy<Value = Graph> {
 
 cases! {
     /// Every star has at most two edges, whose clique is one edge: every mode is exact.
-    fn a_path_or_cycle_factors_exactly_in_every_mode(route in routes(all), types in types(all)) {
+    fn a_path_or_cycle_factors_exactly_in_every_mode(route in routes(floating), types in types(all)) {
         let (entry, mode) = route;
         let (config, bounds) = (mode.config(), exact(types));
         check(stated_by(entry, path_or_cycle()), |graph| {

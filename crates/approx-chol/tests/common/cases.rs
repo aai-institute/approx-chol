@@ -35,7 +35,7 @@ macro_rules! cases {
     };
     (@entries $subset:ident $then:tt) => {
         $crate::cases::cases!(@keep $subset [] [
-            Csr UpperCsr FactorWidth2 BipartiteFactorWidth2 Laplacian GroundedLaplacian
+            Csr UpperCsr FactorWidth2 BipartiteFactorWidth2 Laplacian Sddm
         ] $then);
     };
     (@named [$($member:ident)*] $ty:ident $k:tt) => {
@@ -84,13 +84,14 @@ macro_rules! cases {
     };
     // A subset leaves out the entry points that cannot state its graphs, or the other scalar.
     (@excludes grounded Laplacian $out:tt $in:tt) => { $crate::cases::cases! $out; };
+    (@excludes grounded FactorWidth2 $out:tt $in:tt) => { $crate::cases::cases! $out; };
+    (@excludes grounded BipartiteFactorWidth2 $out:tt $in:tt) => { $crate::cases::cases! $out; };
     (@excludes frustrated BipartiteFactorWidth2 $out:tt $in:tt) => { $crate::cases::cases! $out; };
     (@excludes frustrated Laplacian $out:tt $in:tt) => { $crate::cases::cases! $out; };
-    (@excludes frustrated GroundedLaplacian $out:tt $in:tt) => { $crate::cases::cases! $out; };
-    (@excludes lone_ground FactorWidth2 $out:tt $in:tt) => { $crate::cases::cases! $out; };
-    (@excludes lone_ground BipartiteFactorWidth2 $out:tt $in:tt) => { $crate::cases::cases! $out; };
-    (@excludes lone_ground Laplacian $out:tt $in:tt) => { $crate::cases::cases! $out; };
-    (@excludes non_bipartite BipartiteFactorWidth2 $out:tt $in:tt) => { $crate::cases::cases! $out; };
+    (@excludes frustrated Sddm $out:tt $in:tt) => { $crate::cases::cases! $out; };
+    (@excludes floating Sddm $out:tt $in:tt) => { $crate::cases::cases! $out; };
+    (@excludes floating_non_bipartite BipartiteFactorWidth2 $out:tt $in:tt) => { $crate::cases::cases! $out; };
+    (@excludes floating_non_bipartite Sddm $out:tt $in:tt) => { $crate::cases::cases! $out; };
     (@excludes f32 F64U32 $out:tt $in:tt) => { $crate::cases::cases! $out; };
     (@excludes f32 F64U64 $out:tt $in:tt) => { $crate::cases::cases! $out; };
     (@excludes f64 F32U32 $out:tt $in:tt) => { $crate::cases::cases! $out; };

@@ -1,4 +1,4 @@
-//! A graph Laplacian by its edges: each column of `V` is `e_a − e_b`.
+//! A graph Laplacian by its edges, each column of `V` being `e_a − e_b`, and an SDDM over one.
 
 use num_traits::PrimInt;
 
@@ -7,7 +7,7 @@ use super::weights::Weights;
 use super::{Columns, FactorWidth2};
 use crate::Real;
 
-/// Weighted multigraph on `n` vertices, grounded by `g`: `A = Σ_k w_k (e_a − e_b)(e_a − e_b)ᵀ + diag(g)`.
+/// The Laplacian of an undirected graph on `n` vertices.
 #[derive(Clone, Copy, Debug)]
 pub struct Laplacian<'a, T, I = u32>(pub(crate) FactorWidth2<'a, T, I>);
 
@@ -32,21 +32,30 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
             ..laplacian
         }))
     }
+}
 
-    /// `L + diag(g)`, one finite nonnegative `g_i` per vertex.
-    pub fn grounded(self, ground: &'a [T]) -> Result<Self, ViewError> {
-        let v = self.0;
+/// `L + diag(s)`: a Laplacian plus each vertex's surplus over diagonal dominance.
+#[derive(Clone, Copy, Debug)]
+pub struct Sddm<'a, T, I = u32>(pub(crate) FactorWidth2<'a, T, I>);
+
+impl<'a, T: Real, I: PrimInt> Sddm<'a, T, I> {
+    /// `s[i]` finite and `≥ 0`, one per vertex, not all zero (that is a [`Laplacian`]).
+    pub fn new(laplacian: Laplacian<'a, T, I>, surplus: &'a [T]) -> Result<Self, ViewError> {
+        let Laplacian(v) = laplacian;
         let n = v.n();
-        length(n, ground.len())?;
-        check(ground, nonnegative, |vertex| ViewError::InvalidGround {
+        length(n, surplus.len())?;
+        check(surplus, nonnegative, |vertex| ViewError::InvalidSurplus {
             vertex,
         })?;
-        Ok(Self(FactorWidth2 {
-            columns: Columns::Incidence {
-                n,
-                surplus: Some(ground),
-            },
-            ..v
-        }))
+        match surplus.iter().all(|&s| s == T::zero()) {
+            true => Err(ViewError::ZeroSurplus),
+            false => Ok(Self(FactorWidth2 {
+                columns: Columns::Incidence {
+                    n,
+                    surplus: Some(surplus),
+                },
+                ..v
+            })),
+        }
     }
 }

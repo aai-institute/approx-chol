@@ -1,4 +1,4 @@
-//! Factor-width-2 views: `A = V W Vᵀ + diag(g)`, column `k` of `V` joining `a[k]` and `b[k]`.
+//! The factor-width-2 inputs: `A = V W Vᵀ + diag(s)`, column `k` of `V` joining `a[k]` and `b[k]`.
 
 pub(super) mod bipartite;
 pub(super) mod error;
@@ -12,10 +12,10 @@ use self::weights::Weights;
 use super::index;
 use crate::{widen, Index, Real};
 
-/// `V`'s columns and vertices, one variant per view.
+/// `V`'s columns and vertices, one variant per input type.
 #[derive(Clone, Copy, Debug)]
 enum Columns<'a, T> {
-    /// `e_a − e_b`, `a[k] ≠ b[k] < n`, and a [`Laplacian`](laplacian::Laplacian)'s ground.
+    /// `e_a − e_b`, `a[k] ≠ b[k] < n`, and an [`Sddm`](laplacian::Sddm)'s surplus.
     Incidence { n: usize, surplus: Option<&'a [T]> },
     /// `x[k] e_a + y[k] e_b`, `a[k] ≠ b[k] < n`.
     FactorWidth2 { n: usize, x: &'a [T], y: &'a [T] },
@@ -64,7 +64,7 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         }
     }
 
-    /// The ground `g`, which only a grounded [`Laplacian`](laplacian::Laplacian) has.
+    /// The surplus `s`, which only an [`Sddm`](laplacian::Sddm) has.
     pub(crate) fn surplus(&self) -> Option<&'a [T]> {
         match self.columns {
             Columns::Incidence { surplus, .. } => surplus,

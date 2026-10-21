@@ -1,7 +1,8 @@
 use std::error::Error;
 
 use approx_chol::input::{
-    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef, Weights,
+    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
+    Weights,
 };
 use approx_chol::{factorize_with, Backend, Config, Factor, InnerParallelism};
 use approx_chol::{Real, ScalingPolicy, SchurMode};
@@ -38,6 +39,8 @@ pub struct Case<T> {
 pub enum View<T> {
     Csr(Rows<T>),
     UpperCsr(Rows<T>),
+    Laplacian(Edges<T>),
+    Sddm(Edges<T>, Vec<T>),
     FactorWidth2 {
         n: u8,
         a: Vec<u32>,
@@ -50,7 +53,6 @@ pub enum View<T> {
         right: Side<T>,
         weights: Weighting<T>,
     },
-    Laplacian(Edges<T>, Option<Vec<T>>),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -153,6 +155,10 @@ impl<T: Real> Case<T> {
                 let csr = UpperCsrRef::new(&r.row_ptrs, &r.columns, &r.values, r.n.into())?;
                 factorize_with(csr, config)?
             }
+            View::Laplacian(edges) => factorize_with(edges.laplacian()?, config)?,
+            View::Sddm(edges, surplus) => {
+                factorize_with(Sddm::new(edges.laplacian()?, surplus)?, config)?
+            }
             View::FactorWidth2 { n, a, b, x, y } => {
                 let gram = FactorWidth2::new((*n).into(), (a, x), (b, y))?;
                 factorize_with(gram, config)?
@@ -165,14 +171,6 @@ impl<T: Real> Case<T> {
                 let gram =
                     BipartiteFactorWidth2::new(left.factor()?, right.factor()?, weights.weights())?;
                 factorize_with(gram, config)?
-            }
-            View::Laplacian(edges, ground) => {
-                let graph = edges.laplacian()?;
-                let graph = match ground {
-                    Some(g) => graph.grounded(g)?,
-                    None => graph,
-                };
-                factorize_with(graph, config)?
             }
         })
     }

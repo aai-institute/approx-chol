@@ -30,11 +30,13 @@ pub enum ViewError {
         /// The offending edge or column.
         entry: usize,
     },
-    /// A ground is negative or not finite.
-    InvalidGround {
+    /// A surplus is negative or not finite.
+    InvalidSurplus {
         /// The offending vertex.
         vertex: usize,
     },
+    /// Every surplus is zero: the matrix is a [`Laplacian`](super::laplacian::Laplacian).
+    ZeroSurplus,
 }
 
 impl core::fmt::Display for ViewError {
@@ -48,9 +50,10 @@ impl core::fmt::Display for ViewError {
             Self::InvalidWeight { entry } => {
                 write!(f, "entry {entry} has a negative or non-finite weight")
             }
-            Self::InvalidGround { vertex } => {
-                write!(f, "vertex {vertex} has a negative or non-finite ground")
+            Self::InvalidSurplus { vertex } => {
+                write!(f, "vertex {vertex} has a negative or non-finite surplus")
             }
+            Self::ZeroSurplus => write!(f, "every surplus is zero, so the matrix is a Laplacian"),
         }
     }
 }

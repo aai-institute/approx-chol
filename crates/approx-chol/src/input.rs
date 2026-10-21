@@ -1,4 +1,4 @@
-//! What the caller states about `A`, each view by its type.
+//! What the caller states about `A`: a CSR matrix, a Laplacian, an SDDM or a factor-width-2 matrix.
 
 mod csr;
 #[cfg(any(feature = "sprs", feature = "faer"))]
@@ -11,7 +11,7 @@ pub(crate) use csr::Canonical;
 pub use csr::{CsrError, CsrRef, IndexKind, OwnedCsr, UpperCsrRef};
 pub use width2::bipartite::{BipartiteFactorWidth2, FactorWidth1};
 pub use width2::error::ViewError;
-pub use width2::laplacian::Laplacian;
+pub use width2::laplacian::{Laplacian, Sddm};
 pub use width2::weights::Weights;
 pub(crate) use width2::Column;
 pub use width2::FactorWidth2;
@@ -31,8 +31,10 @@ pub enum Input<'a, T, I = u32> {
     Csr(CsrRef<'a, T, I>),
     /// A symmetric matrix stored by its upper triangle.
     UpperCsr(UpperCsrRef<'a, T, I>),
-    /// A graph Laplacian by its edges.
+    /// A graph Laplacian `L`.
     Laplacian(Laplacian<'a, T, I>),
+    /// `L + diag(s)`, `s ≥ 0` and not all zero.
+    Sddm(Sddm<'a, T, I>),
     /// `V Vᵀ`, each column of `V` with two nonzeros.
     FactorWidth2(FactorWidth2<'a, T, I>),
     /// `V W Vᵀ`, `V = [V_l; V_r]` with two width-1 sides on disjoint vertex sets.
@@ -46,6 +48,7 @@ impl<T: Real, J: PrimInt + Sync> Input<'_, T, J> {
             Self::Csr(csr) => csr.n(),
             Self::UpperCsr(csr) => csr.0.n(),
             Self::Laplacian(Laplacian(v))
+            | Self::Sddm(Sddm(v))
             | Self::FactorWidth2(v)
             | Self::BipartiteFactorWidth2(BipartiteFactorWidth2(v)) => v.n(),
         }
@@ -66,6 +69,7 @@ input_from! {
     Csr(CsrRef),
     UpperCsr(UpperCsrRef),
     Laplacian(Laplacian),
+    Sddm(Sddm),
     FactorWidth2(FactorWidth2),
     BipartiteFactorWidth2(BipartiteFactorWidth2),
 }

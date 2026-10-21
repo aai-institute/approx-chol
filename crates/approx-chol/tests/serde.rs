@@ -1,6 +1,6 @@
 #![cfg(feature = "serde")]
 
-use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Laplacian, Weights};
+use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Laplacian, Sddm, Weights};
 use approx_chol::{
     factorize_with, Backend, BlockFactor, Config, Factor, InnerParallelism, ScalingPolicy,
     SchurMode,
@@ -29,10 +29,7 @@ fn factors(config: Config) -> Vec<Factor> {
         .map(|i| (i, i + 1))
         .unzip();
     let ground: Vec<f64> = (0..61).map(|i| if i < 20 { 0.0 } else { 0.5 }).collect();
-    let laplacian = Laplacian::new(61, &a, &b)
-        .unwrap()
-        .grounded(&ground)
-        .unwrap();
+    let laplacian = Sddm::new(Laplacian::new(61, &a, &b).unwrap(), &ground).unwrap();
     let laplacian = factorize_with(laplacian, config).unwrap();
 
     let (c, d): (Vec<u32>, Vec<u32>) = (0..58u32).map(|i| (i, i + 1 + i % 2)).unzip();
@@ -183,7 +180,11 @@ fn an_elimination_keeping_at_most_its_rows_decodes_up_to_the_cut(#[case] rows: u
 /// A Laplacian on `0..4` beside two zero vertices, so the factor carries dead vertices.
 fn with_isolated_vertex() -> Factor {
     let edge = Laplacian::new(3, &[0u32], &[1]).unwrap();
-    factorize_with(edge.grounded(&[1.0, 0.0, 2.0]).unwrap(), Config::default()).unwrap()
+    factorize_with(
+        Sddm::new(edge, &[1.0, 0.0, 2.0]).unwrap(),
+        Config::default(),
+    )
+    .unwrap()
 }
 
 fn with_dead_vertices() -> Factor {
@@ -378,7 +379,7 @@ fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
         .unzip();
     let ground: Vec<f64> = (0..16).map(|i| if i == 0 { 1.0 } else { 0.0 }).collect();
     let grid = Laplacian::new(16, &a, &b).unwrap();
-    let grid = grid.grounded(&ground).unwrap();
+    let grid = Sddm::new(grid, &ground).unwrap();
     let config = Config {
         backend,
         ..Config::default()
