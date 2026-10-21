@@ -26,11 +26,21 @@ fn sprs_csr_factorizes_over_index_types(#[case] run: fn()) {
     run();
 }
 
+/// A symmetric matrix's CSC arrays are its CSR arrays, so both factor alike.
 #[test]
-fn sprs_try_from_csc_returns_error() {
-    let csc = path_laplacian::<u32>().to_csc();
-    let err = CsrRef::try_from(&csc).expect_err("CSC must be rejected");
-    assert_eq!(err, Error::InvalidCsr(CsrError::ExpectedCsrMatrixGotCsc));
+fn sprs_csc_factorizes_as_its_csr() {
+    assert_solves_fixture(&path_laplacian::<u32>().to_csc());
+}
+
+#[test]
+fn sprs_csc_of_an_asymmetric_matrix_is_rejected() {
+    let csc =
+        CsMatI::<f64, u32>::new_csc((2, 2), vec![0, 1, 3], vec![0, 0, 1], vec![2.0, -1.0, 2.0]);
+    let err = approx_chol::factorize(&csc).expect_err("asymmetric CSC must be rejected");
+    assert!(
+        matches!(err, Error::InvalidCsr(CsrError::NotSymmetric { .. })),
+        "{err:?}"
+    );
 }
 
 /// Rows 2..4 of a 4x2 matrix are a square view whose row pointers start past zero.

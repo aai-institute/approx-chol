@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `factorize` takes any `TryInto<Input>`; a type converting only into `CsrRef` converts first. ([#182])
 - `factorize` and `Factor`'s methods take `T: Real`, implemented only for `f32` and `f64`, and `factorize` an index `I: Sync`. ([#182])
 - `low_level` is removed. ([#182])
+- `CsrError::ExpectedCsrMatrixGotCsc` is removed: a CSC `sprs` matrix converts into `CsrRef` as its transpose, which a symmetric one equals; a CSC `faer` matrix converts as `matrix.as_ref().transpose()`.
 - `Factor::n` is the input dimension; `Factor::original_n` is removed. ([#140])
 - `Factor::solve_into` is removed. ([#146])
 - `Factor::solve_in_place` takes `x` of length `Factor::n` and caller scratch of at least `Factor::scratch_len`. ([#146])
