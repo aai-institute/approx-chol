@@ -164,6 +164,12 @@ fn out_of_class_input_is_rejected_at_its_reported_position(
     &[-1.0, 1.0, 1.0, -1.0],
     &[csr(CsrError::BelowDiagonal { row: 1 })],
 )]
+#[case::entry_below_the_diagonal_after_a_stored_zero(
+    &[0, 2, 4, 7],
+    &[0, 1, 1, 2, 0, 1, 2],
+    &[1.0, -1.0, 2.0, -1.0, 0.0, -1.0, 1.0],
+    &[csr(CsrError::BelowDiagonal { row: 2 })],
+)]
 #[case::stored_nan(
     &[0, 2, 3],
     &[0, 1, 1],
@@ -178,6 +184,32 @@ fn out_of_class_upper_storage_is_rejected_at_its_reported_position(
 ) {
     let observed = reduce_upper(row_ptrs, columns, values).expect_err("out of class");
     assert_names_a_defect(observed, defects);
+}
+
+/// A stored zero is absent in every CSR form, so upper storage admits one below the diagonal.
+#[test]
+fn upper_csr_accepts_a_stored_zero_below_the_diagonal() {
+    let rhs = [1.0, 0.0, -1.0];
+    let plain = reduce_upper(
+        &[0, 2, 4, 5],
+        &[0, 1, 1, 2, 2],
+        &[1.0, -1.0, 2.0, -1.0, 1.0],
+    );
+    let plain = bits(&plain.expect("the path is SDDM"), &rhs);
+    let (row_ptrs, columns, values) = (
+        [0, 2, 4, 6],
+        [0, 1, 1, 2, 0, 2],
+        [1.0, -1.0, 2.0, -1.0, 0.0, 1.0],
+    );
+    let (reversed_columns, reversed_values) = reversed_rows(&row_ptrs, &columns, &values);
+    for (label, columns, values) in [
+        ("as given", &columns[..], &values[..]),
+        ("reversed", &reversed_columns, &reversed_values),
+    ] {
+        let factor =
+            reduce_upper(&row_ptrs, columns, values).expect("a stored zero couples nothing");
+        assert_eq!(bits(&factor, &rhs), plain, "{label}");
+    }
 }
 
 /// Shapes a stricter check would reject, admitted as given and through the canonicalizing copy.
@@ -198,6 +230,7 @@ fn out_of_class_upper_storage_is_rejected_at_its_reported_position(
     &[2.0, -0.25, -0.75, -0.5, -0.5, 2.0],
 )]
 #[case::stored_zero_without_a_mirror(&[0, 2, 3], &[0, 1, 1], &[1.0, 0.0, 1.0])]
+#[case::stored_zero_below_the_diagonal_without_a_mirror(&[0, 1, 3], &[0, 0, 1], &[1.0, 0.0, 1.0])]
 #[case::block_diagonal_sddm(
     &[0, 2, 4, 6, 8],
     &[0, 1, 0, 1, 2, 3, 2, 3],
