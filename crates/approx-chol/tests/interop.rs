@@ -7,8 +7,8 @@ mod faer;
 #[path = "interop/sprs.rs"]
 mod sprs;
 
-use approx_chol::input::{CsrRef, Input};
-use approx_chol::{factorize, Error, Factor};
+use approx_chol::input::{CsrError, CsrRef, Input};
+use approx_chol::{factorize, Factor};
 use num_traits::PrimInt;
 
 /// The 4-vertex path 0-1-2-3 with unit weights.
@@ -26,8 +26,8 @@ fn assert_solves_fixture<'a, I, M>(matrix: M)
 where
     I: PrimInt + Sync + 'a,
     M: Copy
-        + TryInto<CsrRef<'a, f64, I>, Error = Error>
-        + TryInto<Input<'a, f64, I>, Error = Error>,
+        + TryInto<CsrRef<'a, f64, I>, Error = CsrError>
+        + TryInto<Input<'a, f64, I>, Error = CsrError>,
 {
     let csr: CsrRef<'a, f64, I> = matrix.try_into().expect("valid CSR view");
     assert_eq!(csr.n(), N);
