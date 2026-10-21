@@ -9,12 +9,12 @@ use num_traits::PrimInt;
 
 pub(crate) use csr::Canonical;
 pub use csr::{CsrError, CsrRef, IndexKind, OwnedCsr, UpperCsrRef};
-pub(crate) use width2::bipartite::BipartiteLaplacian;
 pub use width2::bipartite::{BipartiteGram, FactorWidth1};
-pub use width2::edges::Weights;
+pub use width2::error::ViewError;
 pub use width2::laplacian::Laplacian;
-pub(crate) use width2::{BipartiteColumns, Column, IntoColumns};
-pub use width2::{FactorWidth2, ViewError};
+pub use width2::weights::Weights;
+pub(crate) use width2::Column;
+pub use width2::FactorWidth2;
 
 use crate::Real;
 
@@ -45,9 +45,9 @@ impl<T: Real, J: PrimInt + Sync> Input<'_, T, J> {
         match self {
             Self::Csr(csr) => csr.n(),
             Self::UpperCsr(csr) => csr.0.n(),
-            Self::Laplacian(laplacian) => laplacian.n(),
-            Self::Gram(v) => v.n(),
-            Self::BipartiteGram(gram) => gram.n(),
+            Self::Laplacian(Laplacian(v))
+            | Self::Gram(v)
+            | Self::BipartiteGram(BipartiteGram(v)) => v.n(),
         }
     }
 }

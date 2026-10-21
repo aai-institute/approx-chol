@@ -2,17 +2,14 @@
 
 use num_traits::PrimInt;
 
-use super::edges::{Edges, Weights};
-use super::{check_ends, length, Column, IntoColumns, ViewError};
-use crate::{Index, Real};
+use super::error::{check, check_ends, length, nonnegative, ViewError};
+use super::weights::Weights;
+use super::{Columns, FactorWidth2};
+use crate::Real;
 
 /// Weighted multigraph on `n` vertices, grounded by `g`: `A = Σ_k w_k (e_a − e_b)(e_a − e_b)ᵀ + diag(g)`.
 #[derive(Clone, Copy, Debug)]
-pub struct Laplacian<'a, T, I = u32> {
-    n: usize,
-    edges: Edges<'a, T, I>,
-    ground: Option<&'a [T]>,
-}
+pub struct Laplacian<'a, T, I = u32>(pub(crate) FactorWidth2<'a, T, I>);
 
 impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
     /// Edge `k` joins `a[k] ≠ b[k] < n` under `weights`; lengths, ends and weights are checked.
@@ -22,42 +19,31 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
         b: &'a [I],
         weights: Weights<'a, T>,
     ) -> Result<Self, ViewError> {
-        let edges = Edges::new(a, b, weights)?;
+        let weights = weights.of_columns(a.len())?;
         check_ends(n, a, b)?;
-        Ok(Self {
-            n,
-            edges,
-            ground: None,
-        })
+        let columns = Columns::Incidence { n, surplus: None };
+        Ok(Self(FactorWidth2 {
+            a,
+            b,
+            weights,
+            columns,
+        }))
     }
 
     /// `L + diag(g)`, one finite nonnegative `g_i` per vertex.
     pub fn grounded(self, ground: &'a [T]) -> Result<Self, ViewError> {
-        length(self.n, ground.len())?;
-        let valid = |g: &T| g.is_finite() && *g >= T::zero();
-        if let Some(vertex) = ground.iter().position(|g| !valid(g)) {
-            return Err(ViewError::InvalidGround { vertex });
-        }
-        Ok(Self {
-            ground: Some(ground),
-            ..self
-        })
-    }
-
-    /// `g`, which is no column of `V`.
-    pub(crate) fn ground(&self) -> Option<&'a [T]> {
-        self.ground
-    }
-}
-
-/// The columns of `L` alone: the ground is read through [`Laplacian::ground`].
-impl<T: Real, I: PrimInt> IntoColumns<T> for Laplacian<'_, T, I> {
-    fn n(&self) -> usize {
-        self.n
-    }
-
-    fn for_each_column<S: Index>(self, visit: impl FnMut(Column<T, S>)) {
-        self.edges
-            .for_each_column(0, |_| T::one(), |_| -T::one(), visit)
+        let v = self.0;
+        let n = v.n();
+        length(n, ground.len())?;
+        check(ground, nonnegative, |vertex| ViewError::InvalidGround {
+            vertex,
+        })?;
+        Ok(Self(FactorWidth2 {
+            columns: Columns::Incidence {
+                n,
+                surplus: Some(ground),
+            },
+            ..v
+        }))
     }
 }
