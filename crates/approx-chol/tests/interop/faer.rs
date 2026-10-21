@@ -30,9 +30,9 @@ fn faer_csr_with_full_row_counts_factorizes() {
     assert_solves_fixture(&path_laplacian::<u32>(Some(indices(&spans))));
 }
 
-/// A symmetric matrix's CSC arrays are its CSR arrays, so both factor alike.
+/// A symmetric matrix's CSC arrays are its CSR arrays, so its transpose factors alike.
 #[test]
-fn faer_csc_factorizes_as_its_csr() {
+fn faer_csc_factorizes_as_its_transpose() {
     let symbolic = SymbolicSparseColMat::<u32>::new_checked(
         N,
         N,
@@ -40,18 +40,10 @@ fn faer_csc_factorizes_as_its_csr() {
         None,
         indices(&COL_INDICES),
     );
-    assert_solves_fixture(&SparseColMat::new(symbolic, VALUES.to_vec()));
-}
-
-#[test]
-fn faer_csc_non_square_reports_its_own_shape() {
-    let symbolic =
-        SymbolicSparseColMat::<u32>::new_checked(3, 4, vec![0, 1, 2, 3, 3], None, vec![0, 1, 2]);
-    let mat = SparseColMat::new(symbolic, vec![1.0, 1.0, 1.0]);
-    let err = CsrRef::try_from(&mat).expect_err("non-square matrix must be rejected");
-    assert_eq!(
-        err,
-        Error::InvalidCsr(CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 })
+    assert_solves_fixture(
+        SparseColMat::new(symbolic, VALUES.to_vec())
+            .as_ref()
+            .transpose(),
     );
 }
 

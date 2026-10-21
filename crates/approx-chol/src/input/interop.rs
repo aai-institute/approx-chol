@@ -66,29 +66,6 @@ impl<'a, T, I: faer::Index + PrimInt> TryFrom<&'a faer::sparse::SparseRowMat<I, 
     }
 }
 
-#[cfg(feature = "faer")]
-impl<'a, T, I: faer::Index + PrimInt> TryFrom<faer::sparse::SparseColMatRef<'a, I, T>>
-    for CsrRef<'a, T, I>
-{
-    type Error = Error;
-
-    fn try_from(matrix: faer::sparse::SparseColMatRef<'a, I, T>) -> Result<Self, Error> {
-        square(matrix.nrows(), matrix.ncols())?;
-        Self::try_from(matrix.transpose())
-    }
-}
-
-#[cfg(feature = "faer")]
-impl<'a, T, I: faer::Index + PrimInt> TryFrom<&'a faer::sparse::SparseColMat<I, T>>
-    for CsrRef<'a, T, I>
-{
-    type Error = Error;
-
-    fn try_from(matrix: &'a faer::sparse::SparseColMat<I, T>) -> Result<Self, Error> {
-        Self::try_from(matrix.as_ref())
-    }
-}
-
 /// Each conversion into [`Input`] goes through its [`CsrRef`], so `factorize(&matrix)` reads as before.
 macro_rules! input_via_csr {
     ($($matrix:ty where $($bound:path),+;)+) => {$(
@@ -112,6 +89,4 @@ input_via_csr! {
 input_via_csr! {
     faer::sparse::SparseRowMatRef<'a, I, T> where faer::Index, PrimInt;
     &'a faer::sparse::SparseRowMat<I, T> where faer::Index, PrimInt;
-    faer::sparse::SparseColMatRef<'a, I, T> where faer::Index, PrimInt;
-    &'a faer::sparse::SparseColMat<I, T> where faer::Index, PrimInt;
 }
