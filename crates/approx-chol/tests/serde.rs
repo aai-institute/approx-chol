@@ -1,6 +1,6 @@
 #![cfg(feature = "serde")]
 
-use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Laplacian, Sddm, Weights};
+use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Laplacian, Sddm};
 use approx_chol::{
     factorize_with, Backend, BlockFactor, Config, Factor, InnerParallelism, ScalingPolicy,
     SchurMode,
@@ -19,7 +19,6 @@ fn factors(config: Config) -> Vec<Factor> {
     let gram = BipartiteFactorWidth2::new(
         FactorWidth1::new(left as usize, &rows, Some(&slope)).unwrap(),
         FactorWidth1::new(right as usize, &cols, None).unwrap(),
-        Weights::Unit,
     )
     .unwrap();
     let bipartite = factorize_with(gram, config).unwrap();
@@ -353,11 +352,11 @@ fn decode_scaled(factor: &Factor, pointer: &str, by: f64) -> Result<Factor, serd
 fn an_elimination_whose_rows_sum_past_one_is_corrupt() {
     let rows: Vec<u32> = (0..300).map(|o| o % 60).collect();
     let cols: Vec<u32> = (0..300).map(|o| (o * 7 + o / 13) % 30).collect();
-    let weights: Vec<f64> = (0..300).map(|o| 1.0 + (o % 5) as f64).collect();
-    let gram = BipartiteFactorWidth2::new(
+    let scales: Vec<f64> = (0..300).map(|o| 1.0 + (o % 5) as f64).collect();
+    let gram = BipartiteFactorWidth2::scaled(
         FactorWidth1::new(60, &rows, None).unwrap(),
         FactorWidth1::new(30, &cols, None).unwrap(),
-        Weights::Of(&weights),
+        &scales,
     )
     .unwrap();
     let factor = approx_chol::factorize(gram).unwrap();

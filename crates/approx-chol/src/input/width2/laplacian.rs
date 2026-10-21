@@ -3,7 +3,6 @@
 use num_traits::PrimInt;
 
 use super::error::{check, check_ends, length, nonnegative, ViewError};
-use super::weights::Weights;
 use super::{Columns, FactorWidth2};
 use crate::Real;
 
@@ -15,22 +14,27 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
     /// Edge `k` joins `u[k] ≠ v[k] < n` with weight 1; repeated edges sum.
     pub fn new(n: usize, u: &'a [I], v: &'a [I]) -> Result<Self, ViewError> {
         check_ends(n, u, v)?;
-        Ok(Self(FactorWidth2 {
-            a: u,
-            b: v,
-            weights: Weights::Unit,
-            columns: Columns::Incidence { n, surplus: None },
-        }))
+        Ok(Self::of(n, u, v, None))
     }
 
     /// Edge `k` joins `u[k] ≠ v[k] < n` with weight `w[k]`, finite and `≥ 0`; repeated edges sum.
     pub fn weighted(n: usize, u: &'a [I], v: &'a [I], w: &'a [T]) -> Result<Self, ViewError> {
-        let weights = Weights::Of(w).checked(u.len())?;
-        let Self(laplacian) = Self::new(n, u, v)?;
-        Ok(Self(FactorWidth2 {
-            weights,
-            ..laplacian
-        }))
+        length(u.len(), w.len())?;
+        check(w, nonnegative, |entry| ViewError::InvalidWeight { entry })?;
+        check_ends(n, u, v)?;
+        Ok(Self::of(n, u, v, Some(w)))
+    }
+
+    fn of(n: usize, u: &'a [I], v: &'a [I], w: Option<&'a [T]>) -> Self {
+        Self(FactorWidth2 {
+            a: u,
+            b: v,
+            columns: Columns::Incidence {
+                n,
+                w,
+                surplus: None,
+            },
+        })
     }
 }
 
@@ -40,22 +44,18 @@ pub struct Sddm<'a, T, I = u32>(pub(crate) FactorWidth2<'a, T, I>);
 
 impl<'a, T: Real, I: PrimInt> Sddm<'a, T, I> {
     /// `s[i]` finite and `≥ 0`, one per vertex, not all zero (that is a [`Laplacian`]).
-    pub fn new(laplacian: Laplacian<'a, T, I>, surplus: &'a [T]) -> Result<Self, ViewError> {
-        let Laplacian(v) = laplacian;
-        let n = v.n();
-        length(n, surplus.len())?;
-        check(surplus, nonnegative, |vertex| ViewError::InvalidSurplus {
+    pub fn new(laplacian: Laplacian<'a, T, I>, s: &'a [T]) -> Result<Self, ViewError> {
+        let Laplacian(mut v) = laplacian;
+        length(v.n(), s.len())?;
+        check(s, nonnegative, |vertex| ViewError::InvalidSurplus {
             vertex,
         })?;
-        match surplus.iter().all(|&s| s == T::zero()) {
-            true => Err(ViewError::ZeroSurplus),
-            false => Ok(Self(FactorWidth2 {
-                columns: Columns::Incidence {
-                    n,
-                    surplus: Some(surplus),
-                },
-                ..v
-            })),
+        if s.iter().all(|&s| s == T::zero()) {
+            return Err(ViewError::ZeroSurplus);
         }
+        if let Columns::Incidence { surplus, .. } = &mut v.columns {
+            *surplus = Some(s);
+        }
+        Ok(Self(v))
     }
 }

@@ -5,7 +5,6 @@ mod gram;
 
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
-    Weights,
 };
 use approx_chol::{factorize_with, Backend, Config, Factor, ScalingPolicy};
 use dense::dense;
@@ -116,7 +115,7 @@ fn bipartite_incidence_and_valued_grams_preserve_both_sides() {
     let gram = |values_l, values_r| {
         let l = FactorWidth1::new(3, &left, values_l).unwrap();
         let r = FactorWidth1::new(2, &right, values_r).unwrap();
-        let gram = BipartiteFactorWidth2::new(l, r, Weights::Unit).unwrap();
+        let gram = BipartiteFactorWidth2::new(l, r).unwrap();
         factorize_with(gram, dense()).unwrap()
     };
     let incidence = gram(None, None);

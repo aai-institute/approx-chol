@@ -5,7 +5,7 @@ use approx_chol::{BlockFactor, Factor};
 
 mod case;
 
-use case::{Build, Case, Edges, Input, Rows, Side, View, Weighting};
+use case::{Build, Case, Edges, Input, Rows, Side, View};
 
 /// Written at build time, never committed; a removed or renamed seed's old file stays in `corpus/` until deleted.
 fn main() {
@@ -244,7 +244,7 @@ fn bipartite(slopes: bool) -> View<f64> {
             rows: (0..columns).map(|k| (k * 7 + k / 2) % 3).collect(),
             values: None,
         },
-        weights: Weighting::Of((0..columns).map(|k| f64::from(1 + k % 3)).collect()),
+        scale: Some((0..columns).map(|k| f64::from(1 + k % 3)).collect()),
     }
 }
 

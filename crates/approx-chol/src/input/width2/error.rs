@@ -30,6 +30,11 @@ pub enum ViewError {
         /// The offending edge or column.
         entry: usize,
     },
+    /// A column scale is not finite.
+    InvalidScale {
+        /// The offending column.
+        entry: usize,
+    },
     /// A surplus is negative or not finite.
     InvalidSurplus {
         /// The offending vertex.
@@ -50,6 +55,7 @@ impl core::fmt::Display for ViewError {
             Self::InvalidWeight { entry } => {
                 write!(f, "entry {entry} has a negative or non-finite weight")
             }
+            Self::InvalidScale { entry } => write!(f, "entry {entry} has a non-finite scale"),
             Self::InvalidSurplus { vertex } => {
                 write!(f, "vertex {vertex} has a negative or non-finite surplus")
             }

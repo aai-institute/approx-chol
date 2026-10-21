@@ -1,6 +1,5 @@
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
-    Weights,
 };
 use approx_chol::{factorize_with, Config, Factor, Real};
 use num_traits::{NumCast, PrimInt};
@@ -218,13 +217,14 @@ impl Entry {
                 }
                 // Incidence on a side is `None`, so an unvalued Gram takes its own path.
                 let valued = y.iter().any(|&v| v != 1.0);
-                let (y_t, w_t): (Vec<T>, Vec<T>) = (cast_all(&y), cast_all(&w));
+                let y_t: Vec<T> = cast_all(&y);
                 let left = FactorWidth1::new(n_left, &left, None);
                 let right = FactorWidth1::new(n_right, &right, valued.then_some(&y_t[..]));
-                let gram = BipartiteFactorWidth2::new(
+                let s_t: Vec<T> = w.iter().map(|&w| cast(w.sqrt())).collect();
+                let gram = BipartiteFactorWidth2::scaled(
                     left.expect("valid left factor"),
                     right.expect("valid right factor"),
-                    Weights::Of(&w_t),
+                    &s_t,
                 )
                 .expect("valid bipartite Gram");
                 factorize_with(gram, config).unwrap_or_else(|error| rejected(&error))
