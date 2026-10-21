@@ -154,6 +154,19 @@ fn narrow<T: Real>(sum: f64) -> T {
     T::from(sum).unwrap_or_else(T::infinity)
 }
 
+/// `scale · Σ|x|` in eight fixed lanes, uncompensated: it vectorizes and sums alike at any thread count, for nonnegative sums nothing cancels in.
+fn lane_sum<T: Real>(x: &[T], scale: f64) -> f64 {
+    let mut lanes = [0.0f64; 8];
+    let chunks = x.chunks_exact(8);
+    let rest = chunks.remainder();
+    for chunk in chunks {
+        (lanes.iter_mut().zip(chunk)).for_each(|(lane, &x)| *lane += scale * widen(x.abs()));
+    }
+    (rest.iter()).fold(lanes.iter().sum::<f64>(), |sum, &x| {
+        sum + scale * widen(x.abs())
+    })
+}
+
 /// `Σ x` with each addition's rounding carried (TwoSum; Ogita–Rump–Oishi Sum2): off by at most `ε|Σx| + (nε)² Σ|x|`.
 fn compensated_sum(terms: impl Iterator<Item = f64>) -> f64 {
     let (sum, carry) = terms.fold((0.0f64, 0.0f64), |(sum, carry), x| {

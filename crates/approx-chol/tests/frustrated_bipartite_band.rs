@@ -107,18 +107,18 @@ fn a_frustrated_bipartite_block_with_a_negligible_surplus_solves_backward_stably
         let shifted: Vec<u32> = right.iter().map(|&r| r + n_left as u32).collect();
         let m = matrix(n, &left, &shifted, &x, &y);
         let (ptrs, columns, values) = dense_csr(&m);
+        let gram = BipartiteFactorWidth2::new(
+            FactorWidth1::new(n_left, &left, Some(&x)).unwrap(),
+            FactorWidth1::new(n_right, &right, Some(&y)).unwrap(),
+        )
+        .unwrap();
+        let csr = CsrRef::new(&ptrs, &columns, &values, n as u32).unwrap();
         for (complement, config) in [
             ("dense", Config::default()),
             ("exact", exact),
             ("sampled", approximate),
         ] {
-            let gram = BipartiteFactorWidth2::new(
-                FactorWidth1::new(n_left, &left, Some(&x)).unwrap(),
-                FactorWidth1::new(n_right, &right, Some(&y)).unwrap(),
-            )
-            .unwrap();
             let gram = factorize_with(gram, config).unwrap();
-            let csr = CsrRef::new(&ptrs, &columns, &values, n as u32).unwrap();
             let csr = factorize_with(csr, config).unwrap();
             for (view, factor) in [("gram", gram), ("csr", csr)] {
                 let failure = unstable(&m, |b| factor.solve(b).unwrap());
