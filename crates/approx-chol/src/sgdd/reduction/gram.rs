@@ -5,14 +5,14 @@ use num_traits::PrimInt;
 use super::{within_band, Congruent, Signed, SymmetricBlock};
 use crate::input::{Column, Gram, IntoColumns};
 use crate::sgdd::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Summands};
-use crate::sgdd::decomposition::{assemble_values, CellLayout, Components};
+use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components};
 use crate::sgdd::scaling::{self, ScalingPolicy};
 use crate::sgdd::Sgdd;
 use crate::{narrow, widen, Index, Real};
 
 impl<T: Real, I: Index> Sgdd<T, I> {
     /// `V` with values: scaled by its null vectors on demand, folded blocks dropping their rows for one pass over `V` that decides floating.
-    pub(super) fn from_values<J: PrimInt, S: CellLayout>(
+    pub(super) fn from_values<J: PrimInt, S: AdjacencyLayout>(
         cells: S,
         v: Gram<'_, T, J>,
         policy: &ScalingPolicy,
@@ -45,7 +45,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
                 Signed::Frustrated(block) => frustrated.push(block),
             }
         }
-        let mut blocks = ground_or_float(v, v.diagonal(), folded)?;
+        let mut blocks = ground_or_float(v, folded)?;
         blocks.extend(frustrated);
         let summands = Summands { blocks, lone, dead };
         Ok(Sgdd::new(Components {
@@ -56,9 +56,8 @@ impl<T: Real, I: Index> Sgdd<T, I> {
 }
 
 /// Floats each folded block as [`RowSums::folded_surplus`](super::RowSums::folded_surplus) does, else grounds it on `s = M·1`.
-fn ground_or_float<T: Real, I: Index>(
-    v: impl IntoColumns<T>,
-    diagonal: Option<&[T]>,
+fn ground_or_float<T: Real, J: PrimInt, I: Index>(
+    v: Gram<'_, T, J>,
     blocks: Vec<Congruent<T, I>>,
 ) -> Result<Vec<IrreducibleBlock<T, I>>, ReduceError> {
     if blocks.is_empty() {
@@ -79,7 +78,7 @@ fn ground_or_float<T: Real, I: Index>(
             block_of[i] = I::from_index(c);
             factor[i] = f;
             // `σ_i` is a one-entry column at `i` under weight `σ_i`.
-            if let Some(d) = diagonal {
+            if let Some(d) = v.diagonal() {
                 let d = widen(d[i]);
                 sums.end(|x, y| d * x * y, (i, c, f));
             }

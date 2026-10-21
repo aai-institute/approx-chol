@@ -10,7 +10,9 @@ use super::block::{Grounding, ReduceError, Summands};
 use crate::input::{Canonical, CsrError};
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::{Index, Real};
-pub(super) use assembly::{assemble_incidence, assemble_values, Biadjacency, CellLayout, Triangle};
+pub(super) use assembly::{
+    assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, StrictUpperTriangle,
+};
 use partition::Partition;
 use partition::UnionFind;
 

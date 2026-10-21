@@ -12,7 +12,7 @@ use super::index;
 use crate::widen;
 use crate::{Index, Real};
 use edges::Weights;
-use gram::{Gram, Shape};
+use gram::{Gram, VertexPartition};
 
 /// Why a view's `new` rejected its slices.
 #[non_exhaustive]
@@ -45,12 +45,19 @@ pub enum ViewError {
         /// The offending vertex.
         vertex: usize,
     },
-    /// A bipartite shape's left part has more rows than `A`.
+    /// A bipartite partition's left part has more rows than `A`.
     LeftPartTooLarge {
         /// The left part's size.
         n_left: usize,
         /// `A`'s dimension.
         n: usize,
+    },
+    /// Two parts' sizes sum past `usize`.
+    DimensionOverflow {
+        /// The left part's size.
+        n_left: usize,
+        /// The right part's size.
+        n_right: usize,
     },
 }
 
@@ -73,6 +80,12 @@ impl core::fmt::Display for ViewError {
             }
             Self::LeftPartTooLarge { n_left, n } => {
                 write!(f, "left part of {n_left} rows exceeds dimension {n}")
+            }
+            Self::DimensionOverflow { n_left, n_right } => {
+                write!(
+                    f,
+                    "parts of {n_left} and {n_right} rows overflow the dimension"
+                )
             }
         }
     }
@@ -157,7 +170,7 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         x: &'a [T],
         y: &'a [T],
     ) -> Result<Self, ViewError> {
-        Gram::values(n, Shape::General, a, b, Some(x), Some(y)).map(Self)
+        Gram::values(n, VertexPartition::Unpartitioned, a, b, Some(x), Some(y)).map(Self)
     }
 
     /// `V W Vᵀ` under `weights`, one per column; `W = I` without it.
@@ -166,8 +179,8 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
     }
 
     /// `V W Vᵀ + diag(d)`, one finite nonnegative `d_i` per vertex.
-    pub fn plus_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
-        self.0.plus_diagonal(diagonal).map(Self)
+    pub fn with_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
+        self.0.with_diagonal(diagonal).map(Self)
     }
 }
 
@@ -193,6 +206,15 @@ fn check<T: Real>(
 ) -> Result<(), ViewError> {
     match entries.iter().position(|&x| !valid(x)) {
         Some(at) => Err(error(at)),
+        None => Ok(()),
+    }
+}
+
+/// Each row below `n`.
+fn check_rows<I: PrimInt>(n: usize, rows: &[I]) -> Result<(), ViewError> {
+    let in_range = |row: &I| row.to_usize().is_some_and(|row| row < n);
+    match rows.iter().position(|row| !in_range(row)) {
+        Some(column) => Err(ViewError::IndexOutOfRange { column }),
         None => Ok(()),
     }
 }

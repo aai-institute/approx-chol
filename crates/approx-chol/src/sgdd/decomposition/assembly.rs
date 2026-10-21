@@ -6,13 +6,13 @@ use num_traits::PrimInt;
 
 use super::partition::{Partition, UnionFind};
 use super::{Assembled, Dominant, Partitioned, PrincipalBlocks};
-use crate::input::{Column, Gram, IntoColumns};
+use crate::input::{Column, Gram, IntoColumns, VertexPartition};
 use crate::sgdd::block::ReduceError;
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::{diagonal_in_range, in_range, narrow, widen, Index, Real};
 
 /// How a shape's summed cells are stored, and its components found from them.
-pub(in crate::sgdd) trait CellLayout: Copy {
+pub(in crate::sgdd) trait AdjacencyLayout: Copy {
     type Adjacency<T: Real, I: Index>: PrincipalBlocks<T, I, Block = (Box<[I]>, OffDiagonal<T, I>)>
         + Sync;
 
@@ -27,15 +27,25 @@ pub(in crate::sgdd) trait CellLayout: Copy {
 
 /// A general `V`'s cells: `A`'s strict upper triangle.
 #[derive(Clone, Copy, Debug)]
-pub(in crate::sgdd) struct Triangle;
+pub(in crate::sgdd) struct StrictUpperTriangle;
 
 /// A bipartite `V`'s cells: the biadjacency `C` from the left part's rows.
 #[derive(Clone, Copy, Debug)]
 pub(in crate::sgdd) struct Biadjacency {
-    pub(in crate::sgdd) n_left: usize,
+    n_left: usize,
 }
 
-impl CellLayout for Triangle {
+impl Biadjacency {
+    /// `v`'s own left part, so the layout and the columns it sums never disagree.
+    pub(in crate::sgdd) fn of<T: Real, J: PrimInt>(v: &Gram<'_, T, J>) -> Option<Self> {
+        match v.partition() {
+            VertexPartition::Bipartite { n_left } => Some(Self { n_left }),
+            VertexPartition::Unpartitioned => None,
+        }
+    }
+}
+
+impl AdjacencyLayout for StrictUpperTriangle {
     type Adjacency<T: Real, I: Index> = UpperAdjacency<T, I>;
 
     // Out of line, the Laplacian entry measured 3–4% slower: the same work, laid out worse.
@@ -61,7 +71,7 @@ impl CellLayout for Triangle {
     }
 }
 
-impl CellLayout for Biadjacency {
+impl AdjacencyLayout for Biadjacency {
     type Adjacency<T: Real, I: Index> = Rows<T, I>;
 
     /// `C`, summed in a dense table when small (+54% without it).
@@ -93,13 +103,13 @@ impl CellLayout for Biadjacency {
 
 /// An incidence `V`'s summed cells beside `σ`, and their components.
 type IncidenceCells<'a, T, I, S> =
-    Partitioned<Dominant<'a, T, <S as CellLayout>::Adjacency<T, I>>, I>;
+    Partitioned<Dominant<'a, T, <S as AdjacencyLayout>::Adjacency<T, I>>, I>;
 
 /// A valued `V`'s summed cells beside `A`'s diagonal, and their components.
-type ValueCells<T, I, S> = Partitioned<Assembled<T, <S as CellLayout>::Adjacency<T, I>>, I>;
+type ValueCells<T, I, S> = Partitioned<Assembled<T, <S as AdjacencyLayout>::Adjacency<T, I>>, I>;
 
 /// D: each pivot `Σ_j |c_ij| + σ_i`, plus its pairs' cancelled mass where cells cancel; `A`'s diagonal never stored.
-pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: CellLayout>(
+pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
     cells: S,
     v: Gram<'a, T, J>,
 ) -> Result<IncidenceCells<'a, T, I, S>, ReduceError> {
@@ -119,7 +129,7 @@ pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: 
     let a = cells.sum(
         v,
         |_| {},
-        |i, j, masses: Masses| {
+        |i, j, masses: SignedMasses| {
             let (c, s) = (masses.value().abs(), masses.surplus());
             (abs[i], abs[j]) = (abs[i] + c, abs[j] + c);
             (surplus[i], surplus[j]) = (surplus[i] + s, surplus[j] + s);
@@ -150,7 +160,7 @@ fn dominant<'a, T: Real, I: Index, C>(
 }
 
 /// `A`'s cells, its diagonal `σ_i + Σ_k w_k v_ik²` and its components, summed in one column pass.
-pub(in crate::sgdd) fn assemble_values<T: Real, J: PrimInt, I: Index, S: CellLayout>(
+pub(in crate::sgdd) fn assemble_values<T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
     cells: S,
     v: Gram<'_, T, J>,
 ) -> Result<ValueCells<T, I, S>, ReduceError> {
@@ -281,12 +291,12 @@ impl CellSum for f64 {
 
 /// A pair's positive and negative weight apart: cell `p − q`, each end's surplus `2·min(p, q)`.
 #[derive(Clone, Copy, Default)]
-struct Masses {
+struct SignedMasses {
     positive: f64,
     negative: f64,
 }
 
-impl CellSum for Masses {
+impl CellSum for SignedMasses {
     #[inline(always)]
     fn add(&mut self, x: f64) {
         match x >= 0.0 {
@@ -304,13 +314,13 @@ impl CellSum for Masses {
     }
 }
 
-impl Masses {
+impl SignedMasses {
     fn surplus(self) -> f64 {
         2.0 * self.positive.min(self.negative)
     }
 }
 
-/// CellLayout bucketed at their lower end in column order, so each sums as a dense table would; `pair` sees each summed cell, a cancelled one too.
+/// AdjacencyLayout bucketed at their lower end in column order, so each sums as a dense table would; `pair` sees each summed cell, a cancelled one too.
 fn sum_cells<T: Real, I: Index, C: CellSum>(
     v: impl IntoColumns<T>,
     counts: &[usize],

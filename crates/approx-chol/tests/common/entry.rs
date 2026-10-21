@@ -202,7 +202,7 @@ impl Entry {
                 }
                 let ground: Vec<T> = cast_all(&graph.ground);
                 let v = FactorWidth2::new(n, &a, &b, &x, &y)
-                    .and_then(|v| v.plus_diagonal(&ground))
+                    .and_then(|v| v.with_diagonal(&ground))
                     .expect("valid factor");
                 factorize_with(v, config).unwrap_or_else(|error| rejected(&error))
             }
@@ -234,7 +234,7 @@ impl Entry {
                     right.expect("valid right factor"),
                 )
                 .and_then(|v| v.with_weights(weights))
-                .and_then(|gram| gram.plus_diagonal(&ground))
+                .and_then(|gram| gram.with_diagonal(&ground))
                 .expect("valid bipartite Gram");
                 factorize_with(gram, config).unwrap_or_else(|error| rejected(&error))
             }
@@ -245,7 +245,7 @@ impl Entry {
                 let ground: Vec<T> = cast_all(&graph.ground);
                 match self {
                     Entry::GroundedLaplacian => {
-                        factorize_with(view.plus_diagonal(&ground).expect("valid ground"), config)
+                        factorize_with(view.with_diagonal(&ground).expect("valid ground"), config)
                     }
                     _ => factorize_with(view, config),
                 }
@@ -256,7 +256,7 @@ impl Entry {
                 let ground: Vec<T> = cast_all(&graph.ground);
                 let view = SignedGraph::new(n, &a, &b, &positive)
                     .and_then(|v| v.with_weights(weights))
-                    .and_then(|view| view.plus_diagonal(&ground))
+                    .and_then(|view| view.with_diagonal(&ground))
                     .expect("valid signed graph");
                 factorize_with(view, config).unwrap_or_else(|error| rejected(&error))
             }

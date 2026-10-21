@@ -168,7 +168,7 @@ impl<T: Real> Case<T> {
                     None => v,
                 };
                 let v = match diagonal {
-                    Some(d) => v.plus_diagonal(d)?,
+                    Some(d) => v.with_diagonal(d)?,
                     None => v,
                 };
                 factorize_with(v, config)?
@@ -185,7 +185,7 @@ impl<T: Real> Case<T> {
                     None => gram,
                 };
                 let gram = match diagonal {
-                    Some(d) => gram.plus_diagonal(d)?,
+                    Some(d) => gram.with_diagonal(d)?,
                     None => gram,
                 };
                 factorize_with(gram, config)?
@@ -203,7 +203,7 @@ impl<T: Real> Case<T> {
                     None => graph,
                 };
                 let graph = match diagonal {
-                    Some(d) => graph.plus_diagonal(d)?,
+                    Some(d) => graph.with_diagonal(d)?,
                     None => graph,
                 };
                 factorize_with(graph, config)?
@@ -222,7 +222,7 @@ impl<T: Real> Case<T> {
                     None => graph,
                 };
                 let graph = match diagonal {
-                    Some(d) => graph.plus_diagonal(d)?,
+                    Some(d) => graph.with_diagonal(d)?,
                     None => graph,
                 };
                 factorize_with(graph, config)?

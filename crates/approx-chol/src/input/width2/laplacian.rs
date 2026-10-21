@@ -3,7 +3,7 @@
 use num_traits::PrimInt;
 
 use super::edges::Weights;
-use super::gram::{Gram, Incidence, Shape};
+use super::gram::{Gram, Incidence, VertexPartition};
 use super::ViewError;
 use crate::Real;
 
@@ -14,7 +14,7 @@ pub struct Laplacian<'a, T, I = u32>(Gram<'a, T, I>);
 impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
     /// Edge `k` joins `a[k] ≠ b[k] < n`, unit weight; lengths and ends are checked.
     pub fn new(n: usize, a: &'a [I], b: &'a [I]) -> Result<Self, ViewError> {
-        Gram::incidence(n, Shape::General, a, b, Incidence::Oriented).map(Self)
+        Gram::incidence(n, VertexPartition::Unpartitioned, a, b, Incidence::Oriented).map(Self)
     }
 
     /// `L` under `weights`, one per edge; `W = I` without it.
@@ -23,8 +23,8 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
     }
 
     /// `L + diag(d)`, one finite nonnegative `d_i` per vertex.
-    pub fn plus_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
-        self.0.plus_diagonal(diagonal).map(Self)
+    pub fn with_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
+        self.0.with_diagonal(diagonal).map(Self)
     }
 }
 

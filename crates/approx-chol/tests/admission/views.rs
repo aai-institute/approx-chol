@@ -107,7 +107,7 @@ fn laplacian_new_rejects_mismatched_lengths_and_bad_ends_at_their_column(
 #[test]
 fn laplacian_plus_diagonal_rejects_a_ground_per_vertex_short() {
     let short = unit_path()
-        .plus_diagonal(&[1.0, 1.0])
+        .with_diagonal(&[1.0, 1.0])
         .expect_err("one ground per vertex");
     assert_eq!(
         short,
@@ -124,7 +124,7 @@ fn laplacian_plus_diagonal_rejects_a_ground_per_vertex_short() {
 #[case::infinite(f64::INFINITY)]
 fn laplacian_plus_diagonal_rejects_a_bad_ground_at_its_vertex(#[case] ground: f64) {
     let error = unit_path()
-        .plus_diagonal(&[0.0, 0.0, ground])
+        .with_diagonal(&[0.0, 0.0, ground])
         .expect_err("invalid ground");
     assert_eq!(error, ViewError::InvalidDiagonal { vertex: 2 });
 }
@@ -134,7 +134,7 @@ fn laplacian_plus_diagonal_rejects_a_bad_ground_at_its_vertex(#[case] ground: f6
 #[case::past_a_quarter_of_the_maximum(f64::MAX / 2.0)]
 fn an_out_of_range_ground_is_rejected_at_its_vertex(#[case] ground: f64) {
     let ground = [0.0, 0.0, ground];
-    let grounded = unit_path().plus_diagonal(&ground).expect("a valid ground");
+    let grounded = unit_path().with_diagonal(&ground).expect("a valid ground");
     let error = factorize(grounded).expect_err("ground out of range");
     assert_names_a_defect(error, &out_of_range(&[2]));
 }
@@ -309,7 +309,7 @@ fn every_factor_view_rejects_weights_of_another_column_count() {
     assert_eq!(errors, [Some(two_edges_but(1)); 4]);
 }
 
-fn plus_diagonal(mut matrix: Vec<Vec<f64>>, diagonal: &[f64]) -> Vec<Vec<f64>> {
+fn with_diagonal(mut matrix: Vec<Vec<f64>>, diagonal: &[f64]) -> Vec<Vec<f64>> {
     for (i, d) in diagonal.iter().enumerate() {
         matrix[i][i] += d;
     }
@@ -320,7 +320,7 @@ fn plus_diagonal(mut matrix: Vec<Vec<f64>>, diagonal: &[f64]) -> Vec<Vec<f64>> {
 #[test]
 fn a_gram_diagonal_enters_the_scaled_surplus_squared() {
     let gram = FactorWidth2::<f64>::new(2, &[0u32], &[1], &[1.0], &[-2.0])
-        .and_then(|gram| gram.plus_diagonal(&[0.0, 1.0]))
+        .and_then(|gram| gram.with_diagonal(&[0.0, 1.0]))
         .unwrap();
     let x = factorize(gram).unwrap().solve(&[1.0, 1.0]).unwrap();
     assert!(
@@ -335,12 +335,12 @@ fn a_gram_diagonal_enters_the_scaled_surplus_squared() {
 fn a_gram_with_a_diagonal_solves_v_vt_plus_it(#[case] diagonal: [f64; 4]) {
     let (x, y) = ([1.0, 2.0], [-1.0, -2.0]);
     let gram = FactorWidth2::new(4, &PATH_A, &PATH_B, &x, &y)
-        .and_then(|gram| gram.plus_diagonal(&diagonal))
+        .and_then(|gram| gram.with_diagonal(&diagonal))
         .unwrap();
     let factor = factorize(gram).expect("a grounded Gram");
     solve_residual(
         &factor,
-        &plus_diagonal(matrix(4, &PATH_A, &PATH_B, &x, &y), &diagonal),
+        &with_diagonal(matrix(4, &PATH_A, &PATH_B, &x, &y), &diagonal),
     );
 }
 
@@ -355,7 +355,7 @@ fn a_grounded_signed_graph_solves_its_matrix(
 ) {
     let ground = [0.5, 0.0, 0.25];
     let graph = SignedGraph::new(3, a, b, positive)
-        .and_then(|graph| graph.plus_diagonal(&ground))
+        .and_then(|graph| graph.with_diagonal(&ground))
         .unwrap();
     let factor = factorize(graph).expect("a grounded signed graph");
     let x = vec![1.0; a.len()];
@@ -363,7 +363,7 @@ fn a_grounded_signed_graph_solves_its_matrix(
         .iter()
         .map(|&p| if p { 1.0 } else { -1.0 })
         .collect();
-    solve_residual(&factor, &plus_diagonal(matrix(3, a, b, &x, &y), &ground));
+    solve_residual(&factor, &with_diagonal(matrix(3, a, b, &x, &y), &ground));
 }
 
 /// Left rows `0, 1`, right rows `2, 3`; the right side's ridge leaves the left floating alone no more.
@@ -376,14 +376,14 @@ fn a_bipartite_gram_with_a_diagonal_solves_v_w_vt_plus_it(#[case] slopes: Option
     let right = FactorWidth1::<f64>::new(2, &cols, None).unwrap();
     let diagonal = [0.0, 0.0, 0.0, 0.75];
     let gram = BipartiteGram::new(left, right)
-        .and_then(|gram| gram.plus_diagonal(&diagonal))
+        .and_then(|gram| gram.with_diagonal(&diagonal))
         .unwrap();
     let factor = factorize(gram).expect("a grounded bipartite Gram");
     let x = slopes.unwrap_or([1.0; 3]);
     let heads: Vec<u32> = cols.iter().map(|c| c + 2).collect();
     solve_residual(
         &factor,
-        &plus_diagonal(matrix(4, &rows, &heads, &x, &[1.0; 3]), &diagonal),
+        &with_diagonal(matrix(4, &rows, &heads, &x, &[1.0; 3]), &diagonal),
     );
 }
 
@@ -395,13 +395,13 @@ fn a_bipartite_incidence_diagonal_follows_the_larger_side_first() {
     let right = FactorWidth1::<f64>::new(2, &cols, None).unwrap();
     let diagonal = [1.0, 1.0, 2.0];
     let gram = BipartiteGram::new(left, right)
-        .and_then(|gram| gram.plus_diagonal(&diagonal))
+        .and_then(|gram| gram.with_diagonal(&diagonal))
         .unwrap();
     let factor = factorize(gram).expect("a grounded star");
     let heads = [1u32, 2];
     solve_residual(
         &factor,
-        &plus_diagonal(matrix(3, &rows, &heads, &[1.0; 2], &[1.0; 2]), &diagonal),
+        &with_diagonal(matrix(3, &rows, &heads, &[1.0; 2], &[1.0; 2]), &diagonal),
     );
 }
 
@@ -417,10 +417,10 @@ fn every_factor_view_rejects_a_bad_diagonal(#[case] diagonal: &[f64], #[case] ex
     let right = FactorWidth1::<f64>::new(2, &[0u32, 1], None).unwrap();
     let bipartite = BipartiteGram::new(left, right).unwrap();
     let errors = [
-        gram.plus_diagonal(diagonal).err(),
-        signed.plus_diagonal(diagonal).err(),
-        bipartite.plus_diagonal(diagonal).err(),
-        unit_path().plus_diagonal(diagonal).err(),
+        gram.with_diagonal(diagonal).err(),
+        signed.with_diagonal(diagonal).err(),
+        bipartite.with_diagonal(diagonal).err(),
+        unit_path().with_diagonal(diagonal).err(),
     ];
     assert_eq!(errors, [Some(expected); 4]);
 }
