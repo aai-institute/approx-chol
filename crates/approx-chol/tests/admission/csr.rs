@@ -1,6 +1,5 @@
 use approx_chol::input::{
-    BipartiteGram, CsrError, CsrRef, FactorWidth1, FactorWidth2, Laplacian, SignedGraph,
-    UpperCsrRef, Weights,
+    BipartiteGram, CsrError, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef, Weights,
 };
 use approx_chol::{factorize, Error, Factor, ReduceError};
 use num_traits::PrimInt;
@@ -232,10 +231,6 @@ fn in_class_input_is_admitted_on_both_paths(
 #[case::upper_csr(factorize(UpperCsrRef::<f64>::new(&[0], &[], &[], 0).unwrap()).expect("upper CSR"))]
 #[case::laplacian(
     factorize(Laplacian::<f64>::new(0, &[], &[], Weights::unit()).unwrap()).expect("Laplacian")
-)]
-#[case::signed_graph(
-    factorize(SignedGraph::<f64>::new(0, &[], &[], &[], Weights::unit()).unwrap())
-        .expect("signed graph")
 )]
 #[case::gram(
     factorize(FactorWidth2::<f64>::new(0, &[], &[], &[], &[]).unwrap()).expect("Gram")

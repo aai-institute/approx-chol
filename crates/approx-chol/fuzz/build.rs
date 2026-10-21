@@ -150,19 +150,6 @@ fn seeds() -> Vec<(&'static str, Input)> {
                 approximate(),
             ),
         ),
-        (
-            "signed_graph_frustrated",
-            f64(
-                View::SignedGraph {
-                    n: 3,
-                    a: vec![0, 1, 0],
-                    b: vec![1, 2, 2],
-                    positive: vec![true, false, false],
-                    weights: Weighting::Unit,
-                },
-                approximate(),
-            ),
-        ),
     ]
 }
 

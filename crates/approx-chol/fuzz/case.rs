@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use approx_chol::input::{
-    BipartiteGram, CsrRef, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsrRef, Weights,
+    BipartiteGram, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef, Weights,
 };
 use approx_chol::{factorize_with, Backend, Config, Factor, InnerParallelism};
 use approx_chol::{Real, ScalingPolicy, SchurMode};
@@ -56,13 +56,6 @@ pub enum View<T> {
         b: Vec<u32>,
         weights: Weighting<T>,
         ground: Option<Vec<T>>,
-    },
-    SignedGraph {
-        n: u8,
-        a: Vec<u32>,
-        b: Vec<u32>,
-        positive: Vec<bool>,
-        weights: Weighting<T>,
     },
 }
 
@@ -171,16 +164,6 @@ impl<T: Real> Case<T> {
                     Some(g) => graph.grounded(g)?,
                     None => graph,
                 };
-                factorize_with(graph, config)?
-            }
-            View::SignedGraph {
-                n,
-                a,
-                b,
-                positive,
-                weights,
-            } => {
-                let graph = SignedGraph::new((*n).into(), a, b, positive, weights.weights()?)?;
                 factorize_with(graph, config)?
             }
         })

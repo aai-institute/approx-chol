@@ -4,11 +4,11 @@ mod dense;
 mod gram;
 
 use approx_chol::input::{
-    BipartiteGram, CsrRef, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsrRef, Weights,
+    BipartiteGram, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef, Weights,
 };
 use approx_chol::{factorize_with, Backend, Config, Factor, ScalingPolicy};
 use dense::dense;
-use gram::{matrix, solve_residual};
+use gram::{dense_csr, matrix, solve_residual};
 
 /// Every Cholesky dense under `policy`, so a residual reads the reduction alone.
 fn exact(policy: ScalingPolicy) -> Config {
@@ -99,12 +99,13 @@ fn shape_ground_and_signature_match_their_gram_matrices() {
     solve_residual(&floating, &expected);
     expected[0][0] += ground[0];
     solve_residual(&grounded, &expected);
-    let signs = [true, false, true, false];
-    let signed = SignedGraph::new(4, &a, &b, &signs, Weights::of(&weights).unwrap()).unwrap();
-    let signed = factorize_with(signed, dense()).unwrap();
     let y = [1.0, -2.0, 3.0, -4.0];
-    assert!(signed.blocks()[0].floats());
-    solve_residual(&signed, &matrix(4, &a, &b, &x, &y));
+    let signed = matrix(4, &a, &b, &x, &y);
+    let (ptrs, columns, values) = dense_csr(&signed);
+    let csr = CsrRef::new(&ptrs, &columns, &values, 4).unwrap();
+    let factor = factorize_with(csr, dense()).unwrap();
+    assert!(factor.blocks()[0].floats());
+    solve_residual(&factor, &signed);
 }
 
 #[test]

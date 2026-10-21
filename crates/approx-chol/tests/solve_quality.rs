@@ -328,11 +328,11 @@ cases! {
 
 #[test]
 fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
-    use approx_chol::input::{SignedGraph, Weights};
+    use approx_chol::input::CsrRef;
     use approx_chol::{factorize_with, Backend};
-    // A frustrated triangle, weakest edge 1e-80, and a pair on (1, 2) cancelling to a 2e-200 surplus.
+    // A frustrated triangle, weakest edge 1e-80; the pair on (1, 2) cancels in f64 assembly, so `m`'s 2e-200 surplus is below the CSR's rounding.
     let (a, b) = ([0u32, 1, 0, 1, 1], [1u32, 2, 2, 2, 2]);
-    let pos = [false, false, true, true, false];
+    let pos = [true, true, false, false, true];
     let w = [1e-80, 1.0, 2.0, 1e-200, 1e-200];
     let m = [
         [2.0 + 1e-80, -1e-80, 2.0],
@@ -345,9 +345,18 @@ fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
         complement: SchurMode::Exact,
         ..Config::default()
     };
+    let mut dense = [[0.0; 3]; 3];
+    for k in 0..a.len() {
+        let (i, j) = (a[k] as usize, b[k] as usize);
+        let sign = if pos[k] { -1.0 } else { 1.0 };
+        (dense[i][i], dense[j][j]) = (dense[i][i] + w[k], dense[j][j] + w[k]);
+        (dense[i][j], dense[j][i]) = (dense[i][j] + sign * w[k], dense[j][i] + sign * w[k]);
+    }
+    let values: Vec<f64> = dense.into_iter().flatten().collect();
+    let (ptrs, columns) = ([0u32, 3, 6, 9], [0u32, 1, 2, 0, 1, 2, 0, 1, 2]);
     for config in [Config::default(), exact] {
-        let graph = SignedGraph::new(3, &a, &b, &pos, Weights::of(&w).unwrap()).unwrap();
-        let x = factorize_with(graph, config).unwrap().solve(&rhs).unwrap();
+        let csr = CsrRef::new(&ptrs, &columns, &values, 3).unwrap();
+        let x = factorize_with(csr, config).unwrap().solve(&rhs).unwrap();
         let residual = (m.iter().zip(&rhs))
             .map(|(row, b)| (row.iter().zip(&x).map(|(m, x)| m * x).sum::<f64>() - b).abs())
             .fold(0.0, f64::max);

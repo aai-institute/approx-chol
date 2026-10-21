@@ -13,7 +13,6 @@ pub(crate) use width2::bipartite::BipartiteLaplacian;
 pub use width2::bipartite::{BipartiteGram, FactorWidth1};
 pub use width2::edges::Weights;
 pub use width2::laplacian::Laplacian;
-pub use width2::signed::SignedGraph;
 pub(crate) use width2::{BipartiteColumns, Column, IntoColumns};
 pub use width2::{FactorWidth2, ViewError};
 
@@ -34,8 +33,6 @@ pub enum Input<'a, T, I = u32> {
     UpperCsr(UpperCsrRef<'a, T, I>),
     /// A graph Laplacian by its edges.
     Laplacian(Laplacian<'a, T, I>),
-    /// A signed graph by its edges.
-    SignedGraph(SignedGraph<'a, T, I>),
     /// `V Vᵀ`, `V` of factor width 2.
     Gram(FactorWidth2<'a, T, I>),
     /// `V W Vᵀ` on two disjoint sides.
@@ -49,7 +46,6 @@ impl<T: Real, J: PrimInt + Sync> Input<'_, T, J> {
             Self::Csr(csr) => csr.n(),
             Self::UpperCsr(csr) => csr.0.n(),
             Self::Laplacian(laplacian) => laplacian.n(),
-            Self::SignedGraph(graph) => graph.n(),
             Self::Gram(v) => v.n(),
             Self::BipartiteGram(gram) => gram.n(),
         }
@@ -70,7 +66,6 @@ input_from! {
     Csr(CsrRef),
     UpperCsr(UpperCsrRef),
     Laplacian(Laplacian),
-    SignedGraph(SignedGraph),
     Gram(FactorWidth2),
     BipartiteGram(BipartiteGram),
 }
