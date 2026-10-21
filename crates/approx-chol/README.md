@@ -42,14 +42,14 @@ let x = factor.solve(&b)?;
 assert!(x.iter().all(|v| f64::is_finite(*v)));
 ```
 
-Graph Laplacians, signed graphs and factor-width-2 Grams also factor from their edges, through the views in `approx_chol::input`; see [`examples/basic_solve.rs`](examples/basic_solve.rs).
+Graph Laplacians, bipartite Grams and factor-width-2 Grams also factor from their edges through `approx_chol::input::Gram`; see [`examples/basic_solve.rs`](examples/basic_solve.rs). A signed or signless graph factors as a `CsrRef` whose diagonal is `Σ|w|` over each vertex's edges; repeated entries in a row sum.
 
 ## Feature flags
 
 | Feature | Effect |
 |---------|--------|
-| `sprs`  | Zero-copy `input::Csr` conversion from `sprs` matrices via `TryFrom`. |
-| `faer`  | Zero-copy `input::Csr` conversion from `faer` matrices via `TryFrom`. |
+| `sprs`  | Zero-copy `CsrRef` conversion from `sprs` matrices via `TryFrom`. |
+| `faer`  | Zero-copy `CsrRef` conversion from `faer` matrices via `TryFrom`. |
 | `serde` | Serialize and deserialize `Factor` and `BlockFactor`, led by their format version. |
 
 ## Attribution

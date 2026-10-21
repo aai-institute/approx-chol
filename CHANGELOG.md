@@ -36,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `Input`, and the views `input::Laplacian`, `input::SignedGraph`, `input::FactorWidth2`, `input::BipartiteGram` and `UpperCsrRef` it takes. ([#183])
+- `Input`, taking `UpperCsrRef` and `input::Gram` (`Gram::laplacian`, `Gram::bipartite`, `Gram::factor_width_2`, with `FactorWidth1`, `Weights` and `ViewError`). ([#183])
 - `SchurMode`, `ScalingPolicy`, `ScalingReport` and `ReduceError`. ([#182])
 - `Factor::blocks` and `BlockFactor`, which solves one block in place and persists on its own. ([#183])
 - `Factor::scratch_len`. ([#146])
