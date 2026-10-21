@@ -6,7 +6,7 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as sla
 
 import approx_chol
-from tests._laplacians import grid_laplacian
+from tests._laplacians import grid_laplacian, grid_sddm
 
 
 def _base_csr():
@@ -231,3 +231,26 @@ def test_an_all_zero_row_factors_and_solves_to_zero():
     dead = sp.csr_matrix(np.array([[0.0, 0, 0], [0, 2, -1], [0, -1, 2]]))
     x = approx_chol.factorize(dead).solve(np.ones(3))
     np.testing.assert_array_equal(x, [0.0, 1.0, 1.0])
+
+
+def test_a_workspace_from_a_smaller_factor_raises():
+    approximate = approx_chol.Config(backend=approx_chol.Backend.Approximate())
+    small = approx_chol.factorize(grid_sddm(2, 2), approximate)
+    large = approx_chol.factorize(grid_sddm(16, 16), approximate)
+    b = np.zeros(large.n)
+    with pytest.raises(ValueError, match="workspace is from a smaller factor"):
+        large.solve_into(b, np.empty_like(b), small.workspace())
+
+
+def test_a_workspace_in_use_raises_instead_of_sharing():
+    factor = approx_chol.factorize(grid_laplacian(4, 4))
+    workspace = factor.workspace()
+    out = np.empty(factor.n)
+
+    class ReentrantRhs:
+        def __array__(self, dtype=None, copy=None):
+            factor.solve_into(np.zeros(factor.n), np.empty(factor.n), workspace)
+            return np.zeros(factor.n)
+
+    with pytest.raises(RuntimeError, match="borrowed"):
+        factor.solve_into(ReentrantRhs(), out, workspace)

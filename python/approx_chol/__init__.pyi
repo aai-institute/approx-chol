@@ -4,9 +4,9 @@ from typing import Any, final
 
 import numpy as np
 import numpy.typing as npt
-from typing_extensions import disjoint_base
+from typing_extensions import Never, disjoint_base
 
-__all__ = ["Backend", "Config", "Factor", "factorize", "factorize_raw"]
+__all__ = ["Backend", "Config", "Factor", "Workspace", "factorize", "factorize_raw"]
 
 @disjoint_base
 class Backend:
@@ -115,33 +115,53 @@ class Factor:
     def solve(self, b: npt.ArrayLike) -> npt.NDArray[np.float64]:
         """Solve LDL^T x = b, returning a new array of the original matrix dimension.
 
+        Copies ``b``; releases the GIL when :func:`factorize` did.
+
         Raises:
             ValueError: If ``b`` is not 1-D integer or float, or ``len(b) != n``.
         """
+        ...
+
+    def workspace(self) -> Workspace:
+        """Scratch for :meth:`solve_into`, sized for this factor."""
         ...
 
     def solve_into(
         self,
         b: npt.ArrayLike,
         out: npt.NDArray[np.float64],
+        workspace: Workspace | None = None,
     ) -> None:
         """Solve LDL^T x = b, writing the result into *out*.
 
         ``b`` must have length ``shape[0]``, and *out* at least that length.
+        A *workspace* from :meth:`workspace` saves allocating scratch per call.
+        Releases the GIL as :meth:`solve`; writing *out* meanwhile is the caller's error.
 
         Raises:
             ValueError: If ``b`` is not 1-D integer or float, ``out`` is not
                 contiguous, sizes are invalid,
-                ``out`` is not writeable, or ``b`` and ``out`` overlap in memory.
+                ``out`` is not writeable, ``b`` and ``out`` overlap in memory,
+                or *workspace* is from a smaller factor.
             BufferError: If ``out`` is already borrowed.
+            RuntimeError: If *workspace* is in use by another call.
         """
         ...
+
+@final
+class Workspace:
+    """Scratch for one :meth:`Factor.solve_into` at a time, from :meth:`Factor.workspace`."""
+
+    # No Python constructor: the uninhabited argument makes every call a type error.
+    def __new__(cls, never: Never, /) -> Never: ...
 
 def factorize(
     matrix: Any,
     config: Config | None = None,
 ) -> Factor:
     """Factorize an SDDM matrix from a scipy.sparse CSR matrix.
+
+    Releases the GIL above 32768 stored entries; writing the arrays meanwhile is the caller's error.
 
     Args:
         matrix: A ``scipy.sparse.csr_matrix`` or ``csr_array``.
@@ -167,6 +187,8 @@ def factorize_raw(
     config: Config | None = None,
 ) -> Factor:
     """Factorize an SDDM matrix from raw CSR arrays.
+
+    Releases the GIL as :func:`factorize`.
 
     Args:
         row_ptrs: CSR row pointer array, any integer dtype.

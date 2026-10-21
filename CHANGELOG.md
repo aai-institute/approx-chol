@@ -44,12 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A factor of more than `(u32::MAX - 1) / 2` vertices stores `u64` indices. ([#182])
 - Python `factorize` warns when a block's deficit is clamped or its scaling does not settle. ([#181])
 - Python `factorize_raw` takes arrays of any integer index dtype. ([#181])
+- Python `Factor.workspace` returns a `Workspace`, which `Factor.solve_into` reuses as its scratch. ([#255])
 
 ### Fixed
 
 - Solves sum each block's right-hand side with compensation. ([#147])
 - An entry below `MIN_POSITIVE / EPSILON` in magnitude is rejected. ([#163])
 - A grounded block whose weights span past `1/ε` ends its approximate elimination at the ground; it could solve to ±inf. ([#228])
+- Python `factorize`, `factorize_raw`, `Factor.solve` (so `matvec`/`rmatvec`) and `Factor.solve_into` release the GIL for a matrix of more than 32768 stored entries. ([#255])
 
 ## [0.6.0] - 2026-08-24
 
@@ -254,3 +256,4 @@ for graph Laplacians in Rust with Python bindings.
 [#182]: https://github.com/aai-institute/approx-chol/issues/182
 [#148]: https://github.com/aai-institute/approx-chol/issues/148
 [#228]: https://github.com/aai-institute/approx-chol/pull/228
+[#255]: https://github.com/aai-institute/approx-chol/issues/255

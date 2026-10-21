@@ -1,9 +1,10 @@
-use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, ScalingReport};
+use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, ScalingReport, SolveError};
 use num_traits::PrimInt;
 use numpy::{
     BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyReadonlyArray1,
     PyUntypedArrayMethods,
 };
+use pyo3::marker::Ungil;
 use pyo3::prelude::*;
 use std::error::Error;
 use std::mem::size_of;
@@ -20,6 +21,21 @@ fn error_to_py(error: &dyn Error) -> PyErr {
         cause = source;
     }
     value_error(cause.to_string())
+}
+
+/// A matrix's stored entries, which size every call on it and its factor.
+#[derive(Clone, Copy)]
+struct StoredEntries(usize);
+
+impl StoredEntries {
+    /// Measured: up to 2^15 entries, a handoff to a busy thread costs more than parallel calls gain.
+    fn detach<T: Ungil>(self, py: Python<'_>, work: impl Ungil + FnOnce() -> T) -> T {
+        if self.0 > 1 << 15 {
+            py.detach(work)
+        } else {
+            work()
+        }
+    }
 }
 
 #[inline]
@@ -181,6 +197,7 @@ impl PyConfig {
 #[pyclass(frozen, name = "Factor")]
 struct PyFactor {
     inner: Factor<f64>,
+    entries: StoredEntries,
 }
 
 /// Without this, a deficit the reduction clamped to make a block dominant is silent.
@@ -265,15 +282,27 @@ impl PyFactor {
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let b = right_hand_side(py, b)?;
         let b_slice = b.as_slice().expect("right_hand_side is contiguous");
-        let x = self.inner.solve(b_slice).map_err(|e| error_to_py(&e))?;
+        let (mut x, mut workspace) = (b_slice.to_vec(), self.workspace());
+        let solved = (self.entries).detach(py, || {
+            self.inner.solve_in_place(&mut x, &mut workspace.scratch)
+        });
+        solved.map_err(|e| error_to_py(&e))?;
         Ok(PyArray1::from_vec(py, x))
     }
 
+    fn workspace(&self) -> PyWorkspace {
+        PyWorkspace {
+            scratch: vec![0.0; self.inner.scratch_len()],
+        }
+    }
+
+    #[pyo3(signature = (b, out, workspace=None))]
     fn solve_into<'py>(
         &self,
         py: Python<'py>,
         b: &Bound<'py, PyAny>,
         out: &Bound<'py, PyArray1<f64>>,
+        mut workspace: Option<PyRefMut<'py, PyWorkspace>>,
     ) -> PyResult<()> {
         let b = right_hand_side(py, b)?;
         let b_slice = b.as_slice().expect("right_hand_side is contiguous");
@@ -303,10 +332,29 @@ impl PyFactor {
         let x = &mut out_rw
             .as_slice_mut()
             .map_err(|_| value_error("out must be contiguous"))?[..n];
+        let mut owned;
+        let scratch: &mut [f64] = match workspace.as_deref_mut() {
+            Some(workspace) => &mut workspace.scratch,
+            None => {
+                owned = self.workspace();
+                &mut owned.scratch
+            }
+        };
         x.copy_from_slice(b_slice);
-        let mut scratch = vec![0.0; self.inner.scratch_len()];
-        (self.inner.solve_in_place(x, &mut scratch)).map_err(|e| error_to_py(&e))
+        let solved = (self.entries).detach(py, || self.inner.solve_in_place(x, scratch));
+        solved.map_err(|e| match e {
+            SolveError::ScratchTooShort { .. } => {
+                value_error("workspace is from a smaller factor; use this factor's workspace()")
+            }
+            e => error_to_py(&e),
+        })
     }
+}
+
+/// Caller-owned solve scratch, so repeated `solve_into` calls allocate nothing.
+#[pyclass(name = "Workspace")]
+struct PyWorkspace {
+    scratch: Vec<f64>,
 }
 
 #[pyfunction]
@@ -400,27 +448,28 @@ impl CsrArrays<'_> {
             .map_err(|e| borrow_error("indices", e))?;
         let data = (self.data.try_readonly()).map_err(|e| borrow_error("data", e))?;
         let contiguous = |name: &str| value_error(format!("{name} must be contiguous"));
-        let csr = CsrRef::new(
-            indptr.as_slice().map_err(|_| contiguous("indptr"))?,
-            indices.as_slice().map_err(|_| contiguous("indices"))?,
-            data.as_slice().map_err(|_| contiguous("data"))?,
-            self.n as u32,
-        )
-        .map_err(|e| error_to_py(&e))?;
+        let indptr = indptr.as_slice().map_err(|_| contiguous("indptr"))?;
+        let indices = indices.as_slice().map_err(|_| contiguous("indices"))?;
+        let data = data.as_slice().map_err(|_| contiguous("data"))?;
         let config = config.map_or_else(Config::default, |config| config.0);
-        let inner = factorize_with(csr, config).map_err(|e| error_to_py(&e))?;
-        warn_on_scaling(self.np.py(), &inner)?;
-        Ok(PyFactor { inner })
+        let (py, n, entries) = (self.np.py(), self.n as u32, StoredEntries(data.len()));
+        let inner = entries.detach(py, || {
+            let csr = CsrRef::new(indptr, indices, data, n).map_err(|e| error_to_py(&e))?;
+            factorize_with(csr, config).map_err(|e| error_to_py(&e))
+        })?;
+        warn_on_scaling(py, &inner)?;
+        Ok(PyFactor { inner, entries })
     }
 }
 
 /// Approximate Cholesky factorization for SDDM/Laplacian systems.
-// GIL-free is sound: every pyclass is `frozen` with `Sync` state and the module holds none.
+// GIL-free is sound: pyclass state is `Sync`, `Workspace` is borrow-checked, and the module holds none.
 #[pymodule(gil_used = false)]
 fn _approx_chol(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBackend>()?;
     m.add_class::<PyConfig>()?;
     m.add_class::<PyFactor>()?;
+    m.add_class::<PyWorkspace>()?;
     m.add_function(wrap_pyfunction!(factorize, m)?)?;
     m.add_function(wrap_pyfunction!(factorize_raw, m)?)?;
     Ok(())
