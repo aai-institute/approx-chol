@@ -210,10 +210,13 @@ struct RowSums<T> {
 }
 
 impl<T: Real> RowSums<T> {
-    /// A folded `M`'s row sums are `M1`, so `1ᵀM1 = tr M − Σ|offdiag(M)|`, both compensated.
+    /// A folded `M`'s row sums are `M1`, so `1ᵀM1 = tr M − Σ|offdiag(M)|`, compensated as one sum.
     fn folded_surplus<I: Index>(self, off_diagonal: &OffDiagonal<T, I>) -> Grounding<T> {
-        let trace = crate::compensated_sum(self.diagonal.iter().map(|&d| widen(d)));
-        let ones = trace - off_diagonal.abs_total();
+        let diagonal = || self.diagonal.iter().map(|&d| widen(d));
+        let trace = crate::compensated_sum(diagonal());
+        // `tr M` rounded on its own drops a surplus below its ulp, which the Gram path keeps.
+        let off = off_diagonal.abs_stored().map(|x| -2.0 * x);
+        let ones = crate::compensated_sum(diagonal().chain(off));
         match within_band::<T>(ones, trace) {
             true => Grounding::ungrounded(),
             false => self.surplus(),
