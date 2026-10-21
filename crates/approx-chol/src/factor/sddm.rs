@@ -37,8 +37,11 @@ impl<T: Real, I: Index> Sddm<T, I> {
     pub(super) fn cover(signed: UpperAdjacency<T, I>, grounding: Grounding<T>) -> Self {
         let n = signed.n();
         let twisted = grounding.surplus().is_some_and(|s| {
-            let total = crate::compensated_sum(s.iter().map(|&s| widen(s)));
-            within_band::<T>(total, total + signed.abs_total())
+            // `ε`-scaled as the reduction's band sums, so `Σ|a_ij|` cannot overflow.
+            let epsilon = widen(T::epsilon());
+            let total = crate::compensated_sum(s.iter().map(|&s| epsilon * widen(s)));
+            let off = crate::compensated_sum(signed.abs_mirrored().map(|x| epsilon * x));
+            within_band::<T>(total, total + off)
         });
         let twists = if twisted { n } else { 0 };
         let mut rows = SddmRows::with_capacity(2 * n, 2 * signed.nnz() + twists);
@@ -271,4 +274,30 @@ pub(super) fn lift<T: Real>(x: &[T], rows: &mut [T]) {
 pub(super) fn descend<T: Real>(rows: &[T], x: &mut [T]) {
     let two = T::one() + T::one();
     (x.iter_mut().zip(rows.chunks_exact(2))).for_each(|(x, r)| *x = (r[0] - r[1]) / two);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A frustrated 9-cycle of `2^1020` plus `extra` on vertex 0: `Σ|a_ij|` overflows `f64`, the band `≈ 2^974.5` does not.
+    fn cycle_cover(extra: f64) -> Sddm<f64, u32> {
+        let n = 9;
+        let indices: Vec<u32> = [1, n - 1].into_iter().chain(2..n).collect();
+        let ptrs: Vec<usize> = [0]
+            .into_iter()
+            .chain(2..=n as usize)
+            .chain([n as usize])
+            .collect();
+        let values = vec![2f64.powi(1020); indices.len()];
+        let signed = UpperAdjacency::new(Rows::new(ptrs, indices, values, n as usize));
+        let surplus = [extra].into_iter().chain([0.0; 8]).collect();
+        Sddm::cover(signed, Grounding::of(surplus))
+    }
+
+    #[test]
+    fn cover_twists_in_band_and_grounds_past_it_where_the_off_diagonal_overflows() {
+        assert!(!cycle_cover(2f64.powi(970)).grounded(), "twists in band");
+        assert!(cycle_cover(2f64.powi(1000)).grounded(), "grounds past it");
+    }
 }

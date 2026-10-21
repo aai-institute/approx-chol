@@ -1,3 +1,5 @@
+#[path = "reduction/band_agreement.rs"]
+mod band_agreement;
 #[path = "common/dense.rs"]
 mod dense;
 #[path = "common/gram.rs"]
