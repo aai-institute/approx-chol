@@ -4,7 +4,7 @@ mod dense;
 mod gram;
 
 use approx_chol::input::{
-    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef, Weights,
+    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef,
 };
 use approx_chol::{factorize_with, Backend, Config, Factor, ScalingPolicy};
 use dense::dense;
@@ -90,7 +90,7 @@ fn shape_ground_and_signature_match_their_gram_matrices() {
     let weights = [1.0, 4.0, 9.0, 16.0];
     let (x, y) = ([1.0, 2.0, 3.0, 4.0], [-1.0, -2.0, -3.0, -4.0]);
     let ground = [0.25, 0.0, 0.0, 0.0];
-    let laplacian = Laplacian::new(4, &a, &b, Weights::of(&weights).unwrap()).unwrap();
+    let laplacian = Laplacian::weighted(4, &a, &b, &weights).unwrap();
     let floating = factorize_with(laplacian, dense()).unwrap();
     assert!(floating.blocks()[0].floats());
     let grounded = factorize_with(laplacian.grounded(&ground).unwrap(), dense()).unwrap();
@@ -115,7 +115,7 @@ fn bipartite_incidence_and_valued_grams_preserve_both_sides() {
     let gram = |values_l, values_r| {
         let l = FactorWidth1::new(3, &left, values_l).unwrap();
         let r = FactorWidth1::new(2, &right, values_r).unwrap();
-        let gram = BipartiteFactorWidth2::new(l, r, Weights::unit()).unwrap();
+        let gram = BipartiteFactorWidth2::new(l, r).unwrap();
         factorize_with(gram, dense()).unwrap()
     };
     let incidence = gram(None, None);

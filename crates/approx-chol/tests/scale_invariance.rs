@@ -88,16 +88,15 @@ cases! {
     }
 }
 
-/// A bipartite path whose eliminated row joins `big` to the range floor: `Σ c_ek x_k` overflowed before `D_e⁻¹` scaled it.
-fn path_solves_as_its_scaled_rhs<T: approx_chol::Real>(big: T, down: i32) {
-    use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1, Weights};
-    let floor = T::min_positive_value() / T::epsilon();
-    let w = [big, floor, floor, floor];
+/// A bipartite path whose eliminated row joins `big²` to `floor²` at the range floor: `Σ c_ek x_k` overflowed before `D_e⁻¹` scaled it.
+fn path_solves_as_its_scaled_rhs<T: approx_chol::Real>(big: T, floor: T, down: i32) {
+    use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1};
+    let s = [big, floor, floor, floor];
     let solve = |b: &[T]| {
-        let gram = BipartiteFactorWidth2::new(
+        let gram = BipartiteFactorWidth2::scaled(
             FactorWidth1::new(3, &[0u32, 1, 1, 2], None).unwrap(),
             FactorWidth1::new(2, &[0u32, 0, 1, 1], None).unwrap(),
-            Weights::of(&w).unwrap(),
+            &s,
         )
         .unwrap();
         approx_chol::factorize(gram).unwrap().solve(b).unwrap()
@@ -117,6 +116,6 @@ fn path_solves_as_its_scaled_rhs<T: approx_chol::Real>(big: T, down: i32) {
 
 #[test]
 fn an_eliminated_row_spanning_the_range_solves_finite() {
-    path_solves_as_its_scaled_rhs::<f32>(2f32.powi(112), -120);
-    path_solves_as_its_scaled_rhs::<f64>(2f64.powi(1018), -1010);
+    path_solves_as_its_scaled_rhs::<f32>(2f32.powi(56), 2f32.powi(-51), -120);
+    path_solves_as_its_scaled_rhs::<f64>(2f64.powi(509), 2f64.powi(-485), -1010);
 }

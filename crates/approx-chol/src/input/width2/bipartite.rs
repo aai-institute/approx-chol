@@ -3,7 +3,6 @@
 use num_traits::PrimInt;
 
 use super::error::{below, check, length, ViewError};
-use super::weights::Weights;
 use super::{Columns, FactorWidth2};
 use crate::Real;
 
@@ -33,25 +32,47 @@ impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
 pub struct BipartiteFactorWidth2<'a, T, I = u32>(pub(crate) FactorWidth2<'a, T, I>);
 
 impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
-    /// Both factors share the column count and the weights are checked.
+    /// Both sides have the same column count.
     pub fn new(
         left: FactorWidth1<'a, T, I>,
         right: FactorWidth1<'a, T, I>,
-        weights: Weights<'a, T>,
     ) -> Result<Self, ViewError> {
         length(left.rows.len(), right.rows.len())?;
-        let weights = weights.of_columns(left.rows.len())?;
+        Ok(Self::of(left, right, None))
+    }
+
+    /// `(V S)(V S)ᵀ`, `S = diag(s)`: column `k` scaled by `s[k]`, finite, on both sides.
+    pub fn scaled(
+        left: FactorWidth1<'a, T, I>,
+        right: FactorWidth1<'a, T, I>,
+        s: &'a [T],
+    ) -> Result<Self, ViewError> {
+        length(left.rows.len(), right.rows.len())?;
+        length(left.rows.len(), s.len())?;
+        check(
+            s,
+            |s: T| s.is_finite(),
+            |entry| ViewError::InvalidScale { entry },
+        )?;
+        Ok(Self::of(left, right, Some(s)))
+    }
+
+    fn of(
+        left: FactorWidth1<'a, T, I>,
+        right: FactorWidth1<'a, T, I>,
+        scale: Option<&'a [T]>,
+    ) -> Self {
         let columns = Columns::Bipartite {
             n_left: left.n,
             n_right: right.n,
             x: left.values,
             y: right.values,
+            scale,
         };
-        Ok(Self(FactorWidth2 {
+        Self(FactorWidth2 {
             a: left.rows,
             b: right.rows,
-            weights,
             columns,
-        }))
+        })
     }
 }

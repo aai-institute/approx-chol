@@ -3,7 +3,6 @@
 use num_traits::PrimInt;
 
 use super::error::{check, check_ends, length, nonnegative, ViewError};
-use super::weights::Weights;
 use super::{Columns, FactorWidth2};
 use crate::Real;
 
@@ -12,38 +11,42 @@ use crate::Real;
 pub struct Laplacian<'a, T, I = u32>(pub(crate) FactorWidth2<'a, T, I>);
 
 impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
-    /// Edge `k` joins `a[k] ≠ b[k] < n` under `weights`; lengths, ends and weights are checked.
-    pub fn new(
-        n: usize,
-        a: &'a [I],
-        b: &'a [I],
-        weights: Weights<'a, T>,
-    ) -> Result<Self, ViewError> {
-        let weights = weights.of_columns(a.len())?;
-        check_ends(n, a, b)?;
-        let columns = Columns::Incidence { n, surplus: None };
-        Ok(Self(FactorWidth2 {
-            a,
-            b,
-            weights,
-            columns,
-        }))
+    /// Edge `k` joins `u[k] ≠ v[k] < n` with weight 1; repeated edges sum.
+    pub fn new(n: usize, u: &'a [I], v: &'a [I]) -> Result<Self, ViewError> {
+        check_ends(n, u, v)?;
+        Ok(Self::of(n, u, v, None))
+    }
+
+    /// Edge `k` joins `u[k] ≠ v[k] < n` with weight `w[k]`, finite and `≥ 0`; repeated edges sum.
+    pub fn weighted(n: usize, u: &'a [I], v: &'a [I], w: &'a [T]) -> Result<Self, ViewError> {
+        length(u.len(), w.len())?;
+        check(w, nonnegative, |entry| ViewError::InvalidWeight { entry })?;
+        check_ends(n, u, v)?;
+        Ok(Self::of(n, u, v, Some(w)))
+    }
+
+    fn of(n: usize, u: &'a [I], v: &'a [I], w: Option<&'a [T]>) -> Self {
+        Self(FactorWidth2 {
+            a: u,
+            b: v,
+            columns: Columns::Incidence {
+                n,
+                w,
+                surplus: None,
+            },
+        })
     }
 
     /// `L + diag(g)`, one finite nonnegative `g_i` per vertex.
     pub fn grounded(self, ground: &'a [T]) -> Result<Self, ViewError> {
-        let v = self.0;
-        let n = v.n();
-        length(n, ground.len())?;
+        let Self(mut v) = self;
+        length(v.n(), ground.len())?;
         check(ground, nonnegative, |vertex| ViewError::InvalidGround {
             vertex,
         })?;
-        Ok(Self(FactorWidth2 {
-            columns: Columns::Incidence {
-                n,
-                surplus: Some(ground),
-            },
-            ..v
-        }))
+        if let Columns::Incidence { surplus, .. } = &mut v.columns {
+            *surplus = Some(ground);
+        }
+        Ok(Self(v))
     }
 }

@@ -1,5 +1,5 @@
 use approx_chol::input::{
-    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef, Weights,
+    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef,
 };
 use approx_chol::{factorize_with, Config, Factor, Real};
 use num_traits::{NumCast, PrimInt};
@@ -180,8 +180,6 @@ impl Entry {
         let (a, b): (Vec<I>, Vec<I>) = (graph.edges.iter())
             .map(|edge| (cast::<usize, I>(edge.a), cast::<usize, I>(edge.b)))
             .unzip();
-        let weights: Vec<T> = graph.edges.iter().map(|edge| cast(edge.weight)).collect();
-        let weights = Weights::of(&weights).expect("nonnegative weights");
         match self {
             Entry::Csr | Entry::UpperCsr => {
                 let upper = self == Entry::UpperCsr;
@@ -248,21 +246,21 @@ impl Entry {
                 }
                 // Incidence on a side is `None`, so an unvalued Gram takes its own path.
                 let valued = |values: &[f64]| values.iter().any(|&v| v != 1.0);
-                let (x_t, y_t, w_t): (Vec<T>, Vec<T>, Vec<T>) =
-                    (cast_all(&x), cast_all(&y), cast_all(&w));
+                let (x_t, y_t): (Vec<T>, Vec<T>) = (cast_all(&x), cast_all(&y));
                 let left = FactorWidth1::new(n_left, &left, valued(&x).then_some(&x_t[..]));
                 let right = FactorWidth1::new(n_right, &right, valued(&y).then_some(&y_t[..]));
-                let weights = Weights::of(&w_t).expect("nonnegative weights");
-                let gram = BipartiteFactorWidth2::new(
+                let s_t: Vec<T> = w.iter().map(|&w| cast(w.sqrt())).collect();
+                let gram = BipartiteFactorWidth2::scaled(
                     left.expect("valid left factor"),
                     right.expect("valid right factor"),
-                    weights,
+                    &s_t,
                 )
                 .expect("valid bipartite Gram");
                 factorize_with(gram, config).unwrap_or_else(|error| rejected(&error))
             }
             Entry::Laplacian | Entry::GroundedLaplacian => {
-                let view = Laplacian::new(n, &a, &b, weights).expect("valid Laplacian");
+                let weights: Vec<T> = graph.edges.iter().map(|edge| cast(edge.weight)).collect();
+                let view = Laplacian::weighted(n, &a, &b, &weights).expect("valid Laplacian");
                 let ground: Vec<T> = cast_all(&graph.ground);
                 match self {
                     Entry::GroundedLaplacian => {

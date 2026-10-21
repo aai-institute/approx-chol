@@ -3,7 +3,7 @@ mod csr;
 #[path = "common/grid.rs"]
 mod grid;
 
-use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1, Weights};
+use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1};
 use approx_chol::{factorize_with, Backend, Config};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use csr::{build, OwnedCsr};
@@ -102,16 +102,16 @@ fn bench_bipartite_stars(c: &mut Criterion) {
     let mut group = c.benchmark_group("bipartite_stars");
     for degree in [4usize, 10, 32] {
         let mut rng = SmallRng::seed_from_u64(0x5EED);
-        // Every star on the same `degree` kept vertices, as main's; only weights vary.
+        // Every star on the same `degree` kept vertices, as main's; only scales vary.
         let stars: Vec<u32> = (0..STARS * degree).map(|i| (i / degree) as u32).collect();
         let kept: Vec<u32> = (0..STARS * degree).map(|i| (i % degree) as u32).collect();
-        let weights: Vec<f64> = (0..STARS * degree)
-            .map(|_| rng.random_range(0.25..1.25f64))
+        let scales: Vec<f64> = (0..STARS * degree)
+            .map(|_| rng.random_range(0.25..1.25f64).sqrt())
             .collect();
-        let gram = BipartiteFactorWidth2::new(
+        let gram = BipartiteFactorWidth2::scaled(
             FactorWidth1::new(STARS, &stars, None).expect("valid side"),
             FactorWidth1::new(degree, &kept, None).expect("valid side"),
-            Weights::of(&weights).expect("valid weights"),
+            &scales,
         )
         .expect("valid gram");
 

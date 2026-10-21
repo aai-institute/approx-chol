@@ -1,6 +1,5 @@
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrError, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef,
-    Weights,
 };
 use approx_chol::{factorize, Error, Factor, ReduceError};
 use num_traits::PrimInt;
@@ -231,16 +230,15 @@ fn in_class_input_is_admitted_on_both_paths(
 #[case::csr(factorize(CsrRef::<f64>::new(&[0], &[], &[], 0).unwrap()).expect("CSR"))]
 #[case::upper_csr(factorize(UpperCsrRef::<f64>::new(&[0], &[], &[], 0).unwrap()).expect("upper CSR"))]
 #[case::laplacian(
-    factorize(Laplacian::<f64>::new(0, &[], &[], Weights::unit()).unwrap()).expect("Laplacian")
+    factorize(Laplacian::new(0, &[0u32; 0], &[]).unwrap()).expect("Laplacian")
 )]
 #[case::factor_width_2(
     factorize(FactorWidth2::new(0, (&[0u32; 0], &[]), (&[], &[])).unwrap()).expect("factor-width-2 Gram")
 )]
 #[case::bipartite_factor_width_2(factorize(
     BipartiteFactorWidth2::new(
-        FactorWidth1::<f64>::new(0, &[], None).unwrap(),
-        FactorWidth1::<f64>::new(0, &[], None).unwrap(),
-        Weights::unit(),
+        FactorWidth1::new(0, &[0u32; 0], None).unwrap(),
+        FactorWidth1::new(0, &[], None).unwrap()
     )
     .unwrap(),
 )

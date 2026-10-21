@@ -5,7 +5,7 @@ use approx_chol::{BlockFactor, Factor};
 
 mod case;
 
-use case::{Build, Case, Input, Rows, Side, View, Weighting};
+use case::{Build, Case, Edges, Input, Rows, Side, View};
 
 /// Written at build time, never committed; a removed or renamed seed's old file stays in `corpus/` until deleted.
 fn main() {
@@ -143,13 +143,15 @@ fn seeds() -> Vec<(&'static str, Input)> {
         (
             "laplacian_grounded",
             f64(
-                View::Laplacian {
-                    n: 4,
-                    a: vec![0, 1, 2],
-                    b: vec![1, 2, 3],
-                    weights: Weighting::SqrtOf(vec![1.0, -2.0, 0.5]),
-                    ground: Some(vec![0.0, 0.0, 0.0, 0.5]),
-                },
+                View::Laplacian(
+                    Edges {
+                        n: 4,
+                        a: vec![0, 1, 2],
+                        b: vec![1, 2, 3],
+                        weights: Some(vec![1.0, 4.0, 0.25]),
+                    },
+                    Some(vec![0.0, 0.0, 0.0, 0.5]),
+                ),
                 approximate(),
             ),
         ),
@@ -230,7 +232,7 @@ fn bipartite(slopes: bool) -> View<f64> {
             rows: (0..columns).map(|k| (k * 7 + k / 2) % 3).collect(),
             values: None,
         },
-        weights: Weighting::Of((0..columns).map(|k| f64::from(1 + k % 3)).collect()),
+        scale: Some((0..columns).map(|k| f64::from(1 + k % 3)).collect()),
     }
 }
 

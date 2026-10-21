@@ -370,7 +370,7 @@ fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
 
 #[test]
 fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
-    use approx_chol::input::{Laplacian, Weights};
+    use approx_chol::input::Laplacian;
     use approx_chol::{factorize_with, Backend};
     // Min-degree eliminates the ground first and leaves vertex 0 as the sink; `−Σb` then cancels to 1e24 over a 1e-290 pivot.
     let (a, b, w, ground) = ([0u32, 1], [1u32, 2], [1e-290, 1e30], [0.0, 1e40, 0.0]);
@@ -380,7 +380,7 @@ fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
         backend: Backend::Approximate,
         ..Config::default()
     };
-    let path = Laplacian::new(3, &a, &b, Weights::of(&w).unwrap()).unwrap();
+    let path = Laplacian::weighted(3, &a, &b, &w).unwrap();
     let factor = factorize_with(path.grounded(&ground).unwrap(), config).unwrap();
     assert_close(
         "light sink",
@@ -392,12 +392,12 @@ fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
 
 #[test]
 fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
-    use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1, Weights};
+    use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1};
     use approx_chol::{factorize_with, Backend};
     // Three left vertices on one right vertex, each by a cancelling pair: `S` is one grounded slot, so AC2 samples no edge.
     let (left, right) = ([0u32, 0, 1, 1, 2, 2], [0u32; 6]);
     let loadings = [1.0, -1.0, 1.0, -1.0, 1.0, -1.0];
-    let weights = [2.0, 1.0, 3.0, 1.0, 1.0, 4.0];
+    let scales = [2.0, 1.0, 3.0, 1.0, 1.0, 4.0].map(f64::sqrt);
     let x = [1.0, -1.0, 2.0, 0.5];
     let b = [3.5, -3.0, 8.5, -1.0];
     for k in [2, 3] {
@@ -408,10 +408,10 @@ fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
                 complement,
                 ..Config::default()
             };
-            let gram = BipartiteFactorWidth2::new(
+            let gram = BipartiteFactorWidth2::scaled(
                 FactorWidth1::new(3, &left, Some(&loadings[..])).unwrap(),
                 FactorWidth1::<f64>::new(1, &right, None).unwrap(),
-                Weights::of(&weights).unwrap(),
+                &scales,
             )
             .unwrap();
             let solved = factorize_with(gram, config).unwrap().solve(&b).unwrap();
