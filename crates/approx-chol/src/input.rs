@@ -1,20 +1,16 @@
 //! What the caller states about `A`, each view by its type.
 
 mod csr;
+mod gram;
 #[cfg(any(feature = "sprs", feature = "faer"))]
 mod interop;
-mod width2;
 
 use num_traits::PrimInt;
 
 pub(crate) use csr::Canonical;
 pub use csr::{CsrError, CsrRef, IndexKind, OwnedCsr, UpperCsrRef};
-pub(crate) use width2::bipartite::BipartiteLaplacian;
-pub use width2::bipartite::{BipartiteGram, FactorWidth1};
-pub use width2::edges::Weights;
-pub use width2::laplacian::Laplacian;
-pub(crate) use width2::{BipartiteColumns, Column, IntoColumns};
-pub use width2::{FactorWidth2, ViewError};
+pub use gram::{BipartiteGram, FactorWidth1, FactorWidth2, Laplacian, ViewError, Weights};
+pub(crate) use gram::{Column, Gram};
 
 use crate::Real;
 
@@ -45,9 +41,9 @@ impl<T: Real, J: PrimInt + Sync> Input<'_, T, J> {
         match self {
             Self::Csr(csr) => csr.n(),
             Self::UpperCsr(csr) => csr.0.n(),
-            Self::Laplacian(laplacian) => laplacian.n(),
-            Self::Gram(v) => v.n(),
-            Self::BipartiteGram(gram) => gram.n(),
+            Self::Laplacian(Laplacian(v))
+            | Self::Gram(FactorWidth2(v))
+            | Self::BipartiteGram(BipartiteGram(v)) => v.n(),
         }
     }
 }

@@ -7,10 +7,12 @@ use num_traits::PrimInt;
 
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError};
 use super::congruence::{Congruence, ScaledFactors};
-use super::decomposition::{of_csr, of_upper, Cells, Partitioned};
+use super::decomposition::{
+    of_csr, of_upper, AdjacencyLayout, Biadjacency, Cells, Partitioned, StrictUpperTriangle,
+};
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
 use super::Sgdd;
-use crate::input::{Canonical, Input};
+use crate::input::{BipartiteGram, Canonical, FactorWidth2, Gram, Input, Laplacian};
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, widen, Error, Index, Real};
 
@@ -24,10 +26,25 @@ impl<T: Real, I: Index> Sgdd<T, I> {
             // Symmetry is checked in the walk that unions the pattern; upper storage has no mirror.
             Input::Csr(csr) => of_csr(Canonical::of(csr)?)?.reduce(&policy)?,
             Input::UpperCsr(csr) => of_upper(Canonical::of(csr.0)?)?.reduce(&policy)?,
-            Input::Laplacian(laplacian) => Self::from_laplacian(laplacian)?,
-            Input::Gram(v) => Self::from_gram(v, policy)?,
-            Input::BipartiteGram(gram) => Self::from_bipartite_gram(gram, policy)?,
+            Input::Laplacian(Laplacian(v))
+            | Input::Gram(FactorWidth2(v))
+            | Input::BipartiteGram(BipartiteGram(v)) => match Biadjacency::of(&v) {
+                Some(layout) => Self::from_gram(layout, v, &policy)?,
+                None => Self::from_gram(StrictUpperTriangle, v, &policy)?,
+            },
         })
+    }
+
+    /// An incidence `V` is dominant by shape; values are scaled under `policy`.
+    fn from_gram<J: PrimInt, S: AdjacencyLayout>(
+        cells: S,
+        v: Gram<'_, T, J>,
+        policy: &ScalingPolicy,
+    ) -> Result<Self, ReduceError> {
+        match v.is_incidence() {
+            true => Self::from_incidence(cells, v),
+            false => Self::from_values(cells, v, policy),
+        }
     }
 }
 
