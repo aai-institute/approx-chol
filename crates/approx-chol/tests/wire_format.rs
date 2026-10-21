@@ -129,7 +129,7 @@ fn sampled_gram(config: Config) -> Factor {
     let gram = BipartiteFactorWidth2::new(
         FactorWidth1::new(left as usize, &rows, None).expect("valid rows"),
         FactorWidth1::new(right as usize, &cols, None).expect("valid columns"),
-        Weights::unit(),
+        Weights::Unit,
     )
     .expect("valid gram");
     factorize_with(gram, config).expect("factors")

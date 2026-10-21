@@ -97,7 +97,7 @@ fn path_solves_as_its_scaled_rhs<T: approx_chol::Real>(big: T, down: i32) {
         let gram = BipartiteFactorWidth2::new(
             FactorWidth1::new(3, &[0u32, 1, 1, 2], None).unwrap(),
             FactorWidth1::new(2, &[0u32, 0, 1, 1], None).unwrap(),
-            Weights::of(&w).unwrap(),
+            Weights::Of(&w),
         )
         .unwrap();
         approx_chol::factorize(gram).unwrap().solve(b).unwrap()

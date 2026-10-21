@@ -180,8 +180,6 @@ impl Entry {
         let (a, b): (Vec<I>, Vec<I>) = (graph.edges.iter())
             .map(|edge| (cast::<usize, I>(edge.a), cast::<usize, I>(edge.b)))
             .unzip();
-        let weights: Vec<T> = graph.edges.iter().map(|edge| cast(edge.weight)).collect();
-        let weights = Weights::of(&weights).expect("nonnegative weights");
         match self {
             Entry::Csr | Entry::UpperCsr => {
                 let upper = self == Entry::UpperCsr;
@@ -252,17 +250,17 @@ impl Entry {
                     (cast_all(&x), cast_all(&y), cast_all(&w));
                 let left = FactorWidth1::new(n_left, &left, valued(&x).then_some(&x_t[..]));
                 let right = FactorWidth1::new(n_right, &right, valued(&y).then_some(&y_t[..]));
-                let weights = Weights::of(&w_t).expect("nonnegative weights");
                 let gram = BipartiteFactorWidth2::new(
                     left.expect("valid left factor"),
                     right.expect("valid right factor"),
-                    weights,
+                    Weights::Of(&w_t),
                 )
                 .expect("valid bipartite Gram");
                 factorize_with(gram, config).unwrap_or_else(|error| rejected(&error))
             }
             Entry::Laplacian | Entry::GroundedLaplacian => {
-                let view = Laplacian::new(n, &a, &b, weights).expect("valid Laplacian");
+                let weights: Vec<T> = graph.edges.iter().map(|edge| cast(edge.weight)).collect();
+                let view = Laplacian::weighted(n, &a, &b, &weights).expect("valid Laplacian");
                 let ground: Vec<T> = cast_all(&graph.ground);
                 match self {
                     Entry::GroundedLaplacian => {

@@ -33,14 +33,14 @@ impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
 pub struct BipartiteFactorWidth2<'a, T, I = u32>(pub(crate) FactorWidth2<'a, T, I>);
 
 impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
-    /// Both factors share the column count and the weights are checked.
+    /// Both sides have the same column count; `weights` has one entry per column.
     pub fn new(
         left: FactorWidth1<'a, T, I>,
         right: FactorWidth1<'a, T, I>,
-        weights: Weights<'a, T>,
+        weights: Weights<&'a [T]>,
     ) -> Result<Self, ViewError> {
         length(left.rows.len(), right.rows.len())?;
-        let weights = weights.of_columns(left.rows.len())?;
+        let weights = weights.checked(left.rows.len())?;
         let columns = Columns::Bipartite {
             n_left: left.n,
             n_right: right.n,

@@ -44,7 +44,7 @@ fn solve_bits(g: &Gram, config: Config) -> Vec<u64> {
     let gram = BipartiteFactorWidth2::new(
         FactorWidth1::new(g.n_left, &g.left, Some(&g.left_values)).unwrap(),
         FactorWidth1::new(g.n_right, &g.right, Some(&g.right_values)).unwrap(),
-        Weights::unit(),
+        Weights::Unit,
     )
     .unwrap();
     let factor = factorize_with(gram, config).unwrap();

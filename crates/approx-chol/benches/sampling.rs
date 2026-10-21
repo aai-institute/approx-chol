@@ -111,7 +111,7 @@ fn bench_bipartite_stars(c: &mut Criterion) {
         let gram = BipartiteFactorWidth2::new(
             FactorWidth1::new(STARS, &stars, None).expect("valid side"),
             FactorWidth1::new(degree, &kept, None).expect("valid side"),
-            Weights::of(&weights).expect("valid weights"),
+            Weights::Of(&weights),
         )
         .expect("valid gram");
 

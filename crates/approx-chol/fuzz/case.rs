@@ -50,13 +50,15 @@ pub enum View<T> {
         right: Side<T>,
         weights: Weighting<T>,
     },
-    Laplacian {
-        n: u8,
-        a: Vec<u32>,
-        b: Vec<u32>,
-        weights: Weighting<T>,
-        ground: Option<Vec<T>>,
-    },
+    Laplacian(Edges<T>, Option<Vec<T>>),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Edges<T> {
+    pub n: u8,
+    pub a: Vec<u32>,
+    pub b: Vec<u32>,
+    pub weights: Option<Vec<T>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -107,13 +109,23 @@ impl Build {
     }
 }
 
-impl<T: Real> Weighting<T> {
-    fn weights(&self) -> Result<Weights<'_, T>, Box<dyn Error>> {
-        Ok(match self {
-            Self::Unit => Weights::unit(),
-            Self::Of(w) => Weights::of(w)?,
-            Self::SqrtOf(s) => Weights::sqrt_of(s)?,
+impl<T: Real> Edges<T> {
+    fn laplacian(&self) -> Result<Laplacian<'_, T>, Box<dyn Error>> {
+        let n = self.n.into();
+        Ok(match &self.weights {
+            Some(w) => Laplacian::weighted(n, &self.a, &self.b, w)?,
+            None => Laplacian::new(n, &self.a, &self.b)?,
         })
+    }
+}
+
+impl<T> Weighting<T> {
+    fn weights(&self) -> Weights<&[T]> {
+        match self {
+            Self::Unit => Weights::Unit,
+            Self::Of(w) => Weights::Of(w),
+            Self::SqrtOf(s) => Weights::SqrtOf(s),
+        }
     }
 }
 
@@ -150,21 +162,12 @@ impl<T: Real> Case<T> {
                 right,
                 weights,
             } => {
-                let gram = BipartiteFactorWidth2::new(
-                    left.factor()?,
-                    right.factor()?,
-                    weights.weights()?,
-                )?;
+                let gram =
+                    BipartiteFactorWidth2::new(left.factor()?, right.factor()?, weights.weights())?;
                 factorize_with(gram, config)?
             }
-            View::Laplacian {
-                n,
-                a,
-                b,
-                weights,
-                ground,
-            } => {
-                let graph = Laplacian::new((*n).into(), a, b, weights.weights()?)?;
+            View::Laplacian(edges, ground) => {
+                let graph = edges.laplacian()?;
                 let graph = match ground {
                     Some(g) => graph.grounded(g)?,
                     None => graph,

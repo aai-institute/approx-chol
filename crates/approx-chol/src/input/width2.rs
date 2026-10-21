@@ -8,7 +8,7 @@ pub(super) mod weights;
 use num_traits::PrimInt;
 
 use self::error::{check_ends, length, ViewError};
-use self::weights::Weighting;
+use self::weights::Weights;
 use super::index;
 use crate::{widen, Index, Real};
 
@@ -33,7 +33,7 @@ enum Columns<'a, T> {
 pub struct FactorWidth2<'a, T, I = u32> {
     a: &'a [I],
     b: &'a [I],
-    weights: Weighting<&'a [T]>,
+    weights: Weights<&'a [T]>,
     columns: Columns<'a, T>,
 }
 
@@ -51,7 +51,7 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         Ok(Self {
             a,
             b,
-            weights: Weighting::Unit,
+            weights: Weights::Unit,
             columns,
         })
     }
@@ -135,11 +135,9 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         visit: impl FnMut(Column<T, S>),
     ) {
         match self.weights {
-            Weighting::Unit => self.weighted(offset, v_a, v_b, |_| Weighting::Unit, visit),
-            Weighting::Of(w) => self.weighted(offset, v_a, v_b, |k| Weighting::Of(w[k]), visit),
-            Weighting::SqrtOf(s) => {
-                self.weighted(offset, v_a, v_b, |k| Weighting::SqrtOf(s[k]), visit)
-            }
+            Weights::Unit => self.weighted(offset, v_a, v_b, |_| Weights::Unit, visit),
+            Weights::Of(w) => self.weighted(offset, v_a, v_b, |k| Weights::Of(w[k]), visit),
+            Weights::SqrtOf(s) => self.weighted(offset, v_a, v_b, |k| Weights::SqrtOf(s[k]), visit),
         }
     }
 
@@ -149,7 +147,7 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         offset: usize,
         v_a: impl Fn(usize) -> T,
         v_b: impl Fn(usize) -> T,
-        weight: impl Fn(usize) -> Weighting<T>,
+        weight: impl Fn(usize) -> Weights<T>,
         mut visit: impl FnMut(Column<T, S>),
     ) {
         for (k, (a, b)) in self.a.iter().zip(self.b).enumerate() {
@@ -171,7 +169,7 @@ pub(crate) struct Column<T, I> {
     pub(crate) b: I,
     pub(crate) v_a: T,
     pub(crate) v_b: T,
-    pub(crate) weight: Weighting<T>,
+    pub(crate) weight: Weights<T>,
 }
 
 impl<T: Real, I> Column<T, I> {

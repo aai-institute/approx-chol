@@ -25,40 +25,52 @@ fn two_edges_but(found: usize) -> ViewError {
 }
 
 fn unit_path() -> Laplacian<'static, f64> {
-    Laplacian::new(3, &PATH_A, &PATH_B, Weights::unit()).unwrap()
+    Laplacian::new(3, &PATH_A, &PATH_B).unwrap()
+}
+
+/// Left rows `0, 1` on one right row: the path `0 − 2 − 1`.
+fn bipartite_path(weights: Weights<&[f64]>) -> Result<BipartiteFactorWidth2<'_, f64>, ViewError> {
+    let left = FactorWidth1::new(2, &[0u32, 1], None)?;
+    let right = FactorWidth1::new(1, &[0u32, 0], None)?;
+    BipartiteFactorWidth2::new(left, right, weights)
 }
 
 #[rstest]
 #[case::negative(-1.0)]
 #[case::nan(f64::NAN)]
 #[case::infinite(f64::INFINITY)]
-fn weights_of_rejects_a_negative_or_non_finite_weight_at_its_entry(#[case] weight: f64) {
-    let error = Weights::of(&[1.0, weight, 1.0]).expect_err("invalid weight");
-    assert_eq!(error, ViewError::InvalidWeight { entry: 1 });
+fn a_weighted_view_rejects_a_negative_or_non_finite_weight_at_its_entry(#[case] weight: f64) {
+    let w = [1.0, weight];
+    let laplacian = Laplacian::weighted(3, &PATH_A, &PATH_B, &w).err();
+    let bipartite = bipartite_path(Weights::Of(&w)).err();
+    let expected = Some(ViewError::InvalidWeight { entry: 1 });
+    assert_eq!([laplacian, bipartite], [expected; 2]);
 }
 
 #[test]
-fn weights_of_admits_a_zero_weight() {
-    Weights::of(&[0.0, 1.0]).expect("a zero weight drops its column");
+fn a_weighted_view_admits_a_zero_weight() {
+    let w = [0.0, 1.0];
+    Laplacian::weighted(3, &PATH_A, &PATH_B, &w).expect("a zero weight drops its edge");
+    bipartite_path(Weights::Of(&w)).expect("a zero weight drops its column");
 }
 
 #[rstest]
 #[case::nan(f64::NAN)]
 #[case::infinite(f64::NEG_INFINITY)]
-fn weights_sqrt_of_rejects_a_non_finite_root_at_its_entry(#[case] root: f64) {
-    let error = Weights::sqrt_of(&[1.0, 1.0, root]).expect_err("invalid root");
-    assert_eq!(error, ViewError::InvalidWeight { entry: 2 });
+fn sqrt_weights_reject_a_non_finite_root_at_its_entry(#[case] root: f64) {
+    let error = bipartite_path(Weights::SqrtOf(&[1.0, root])).expect_err("invalid root");
+    assert_eq!(error, ViewError::InvalidWeight { entry: 1 });
 }
 
 #[test]
-fn weights_sqrt_of_admits_a_negative_root() {
-    Weights::sqrt_of(&[-2.0, 0.0]).expect("a negative root squares to a weight");
+fn sqrt_weights_admit_a_negative_root() {
+    bipartite_path(Weights::SqrtOf(&[-2.0, 0.0])).expect("a negative root squares to a weight");
 }
 
 #[test]
 fn a_weight_below_min_positive_over_epsilon_is_out_of_range_at_its_edge() {
     let w = [1.0, tiny()];
-    let graph = Laplacian::new(3, &PATH_A, &PATH_B, Weights::of(&w).unwrap()).unwrap();
+    let graph = Laplacian::weighted(3, &PATH_A, &PATH_B, &w).unwrap();
     let error = factorize(graph).expect_err("tiny weight");
     assert_names_a_defect(error, &out_of_range(&[1, 2]));
 }
@@ -66,27 +78,26 @@ fn a_weight_below_min_positive_over_epsilon_is_out_of_range_at_its_edge() {
 /// Its cell `s·s` underflows to zero, which must not drop the edge.
 #[test]
 fn a_root_weight_whose_square_underflows_is_out_of_range_at_its_edge() {
-    let s = Weights::sqrt_of(&[1.0, 1e-170]).unwrap();
-    let laplacian = Laplacian::new(3, &PATH_A, &PATH_B, s).unwrap();
-    let error = factorize(laplacian).expect_err("tiny root");
+    let path = bipartite_path(Weights::SqrtOf(&[1.0, 1e-170])).unwrap();
+    let error = factorize(path).expect_err("tiny root");
     assert_names_a_defect(error, &out_of_range(&[1, 2]));
 }
 
 #[rstest]
 #[case::ends_of_unequal_length(
-    Laplacian::<f64>::new(3, &[0, 1], &[1], Weights::unit()).err(),
+    Laplacian::<f64>::new(3, &[0, 1], &[1]).err(),
     two_edges_but(1)
 )]
 #[case::a_weight_per_edge(
-    Laplacian::new(3, &PATH_A, &PATH_B, Weights::of(&[1.0, 2.0, 3.0]).unwrap()).err(),
+    Laplacian::weighted(3, &PATH_A, &PATH_B, &[1.0, 2.0, 3.0]).err(),
     two_edges_but(3)
 )]
 #[case::end_past_n(
-    Laplacian::<f64>::new(3, &[0, 1], &[1, 3], Weights::unit()).err(),
+    Laplacian::<f64>::new(3, &[0, 1], &[1, 3]).err(),
     ViewError::IndexOutOfRange { entry: 1 }
 )]
 #[case::self_loop(
-    Laplacian::<f64>::new(3, &[0, 2], &[1, 2], Weights::unit()).err(),
+    Laplacian::<f64>::new(3, &[0, 2], &[1, 2]).err(),
     ViewError::RepeatedVertex { entry: 1 }
 )]
 fn laplacian_new_rejects_mismatched_lengths_and_bad_ends_at_their_entry(
@@ -184,11 +195,10 @@ fn an_out_of_range_loading_is_rejected_at_its_vertex(#[case] value: f64) {
 }
 
 #[test]
-fn bipartite_gram_new_rejects_sides_of_unequal_column_count_and_mismatched_weights() {
+fn bipartite_gram_new_rejects_sides_of_unequal_column_count() {
     let left = FactorWidth1::<f64>::new(2, &[0, 1, 1], None).unwrap();
-    let right = FactorWidth1::<f64>::new(2, &[0, 1], None).unwrap();
-    let error =
-        BipartiteFactorWidth2::new(left, right, Weights::unit()).expect_err("column counts");
+    let right = FactorWidth1::new(2, &[0, 1], None).unwrap();
+    let error = BipartiteFactorWidth2::new(left, right, Weights::Unit).expect_err("column counts");
     assert_eq!(
         error,
         ViewError::LengthMismatch {
@@ -196,18 +206,17 @@ fn bipartite_gram_new_rejects_sides_of_unequal_column_count_and_mismatched_weigh
             found: 2
         }
     );
+}
 
-    let right = FactorWidth1::<f64>::new(2, &[0, 1, 0], None).unwrap();
-    let w = [1.0, 1.0];
-    let error =
-        BipartiteFactorWidth2::new(left, right, Weights::of(&w).unwrap()).expect_err("weights");
-    assert_eq!(
-        error,
-        ViewError::LengthMismatch {
-            expected: 3,
-            found: 2
-        }
-    );
+#[test]
+fn every_weighted_view_rejects_weights_of_another_column_count() {
+    let w = [1.0];
+    let errors = [
+        Laplacian::weighted(3, &PATH_A, &PATH_B, &w).err(),
+        bipartite_path(Weights::Of(&w)).err(),
+        bipartite_path(Weights::SqrtOf(&w)).err(),
+    ];
+    assert_eq!(errors, [Some(two_edges_but(1)); 3]);
 }
 
 #[rstest]
@@ -218,7 +227,7 @@ fn an_out_of_range_bipartite_loading_is_rejected_at_its_vertex(#[case] value: f6
     let values = [1.0, value];
     let left = FactorWidth1::new(2, &[0u32, 1], Some(&values[..])).unwrap();
     let right = FactorWidth1::<f64>::new(1, &[0u32, 0], None).unwrap();
-    let gram = BipartiteFactorWidth2::new(left, right, Weights::unit()).unwrap();
+    let gram = BipartiteFactorWidth2::new(left, right, Weights::Unit).unwrap();
     let error = factorize(gram).expect_err("loading out of range");
     assert_names_a_defect(error, &out_of_range(&[1, 2]));
 }
@@ -235,7 +244,7 @@ fn a_bipartite_loading_whose_square_underflows_beside_an_in_range_column_factors
     let (values, weights) = ([z, 1.0], [w, 1.0]);
     let left = FactorWidth1::new(1, &[0u32, 0], Some(&values[..])).unwrap();
     let right = FactorWidth1::<f64>::new(2, &[0u32, 1], None).unwrap();
-    let gram = BipartiteFactorWidth2::new(left, right, Weights::of(&weights).unwrap()).unwrap();
+    let gram = BipartiteFactorWidth2::new(left, right, Weights::Of(&weights)).unwrap();
     let factor = factorize(gram).expect("every diagonal and cell is in range");
     let root = w.sqrt();
     solve_residual(
@@ -270,7 +279,7 @@ fn a_gram_cell_whose_product_underflows_is_out_of_range() {
 fn a_bipartite_vertex_whose_every_term_underflows_is_out_of_range() {
     let values = [1e-170];
     let side = || FactorWidth1::new(1, &[0u32], Some(&values[..])).unwrap();
-    let gram = BipartiteFactorWidth2::new(side(), side(), Weights::unit()).unwrap();
+    let gram = BipartiteFactorWidth2::new(side(), side(), Weights::Unit).unwrap();
     let error = factorize(gram).expect_err("every term underflows");
     assert_names_a_defect(error, &out_of_range(&[0, 1]));
 }
@@ -310,4 +319,20 @@ fn a_grounded_signed_graph_solves_its_matrix(
     let csr = CsrRef::new(&ptrs, &columns, &values, 3).unwrap();
     let factor = factorize(csr).expect("a grounded signed graph");
     solve_residual(&factor, &matrix);
+}
+
+#[rstest]
+#[case::left_past_its_part(&[0, 2], &[0, 1], Some(ViewError::IndexOutOfRange { entry: 1 }))]
+#[case::right_past_its_part(&[0, 1], &[1, 2], Some(ViewError::IndexOutOfRange { entry: 1 }))]
+#[case::equal_rows_are_distinct_vertices(&[1, 0], &[1, 0], None)]
+fn a_bipartite_incidence_checks_each_end_against_its_own_part(
+    #[case] a: &[u32],
+    #[case] b: &[u32],
+    #[case] expected: Option<ViewError>,
+) {
+    let side = |rows| FactorWidth1::<f64>::new(2, rows, None);
+    let found = side(a)
+        .and_then(|l| BipartiteFactorWidth2::new(l, side(b)?, Weights::Unit))
+        .err();
+    assert_eq!(found, expected);
 }

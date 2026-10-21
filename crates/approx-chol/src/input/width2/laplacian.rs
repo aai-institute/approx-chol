@@ -12,21 +12,24 @@ use crate::Real;
 pub struct Laplacian<'a, T, I = u32>(pub(crate) FactorWidth2<'a, T, I>);
 
 impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
-    /// Edge `k` joins `a[k] ≠ b[k] < n` under `weights`; lengths, ends and weights are checked.
-    pub fn new(
-        n: usize,
-        a: &'a [I],
-        b: &'a [I],
-        weights: Weights<'a, T>,
-    ) -> Result<Self, ViewError> {
-        let weights = weights.of_columns(a.len())?;
-        check_ends(n, a, b)?;
-        let columns = Columns::Incidence { n, surplus: None };
+    /// Edge `k` joins `u[k] ≠ v[k] < n` with weight 1; repeated edges sum.
+    pub fn new(n: usize, u: &'a [I], v: &'a [I]) -> Result<Self, ViewError> {
+        check_ends(n, u, v)?;
         Ok(Self(FactorWidth2 {
-            a,
-            b,
+            a: u,
+            b: v,
+            weights: Weights::Unit,
+            columns: Columns::Incidence { n, surplus: None },
+        }))
+    }
+
+    /// Edge `k` joins `u[k] ≠ v[k] < n` with weight `w[k]`, finite and `≥ 0`; repeated edges sum.
+    pub fn weighted(n: usize, u: &'a [I], v: &'a [I], w: &'a [T]) -> Result<Self, ViewError> {
+        let weights = Weights::Of(w).checked(u.len())?;
+        let Self(laplacian) = Self::new(n, u, v)?;
+        Ok(Self(FactorWidth2 {
             weights,
-            columns,
+            ..laplacian
         }))
     }
 

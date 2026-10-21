@@ -598,7 +598,7 @@ mod tests {
         let gram = BipartiteFactorWidth2::new(
             FactorWidth1::new(2, &[0u32, 0, 1, 1], None).expect("valid rows"),
             FactorWidth1::new(2, &[0u32, 1, 0, 1], None).expect("valid columns"),
-            Weights::unit(),
+            Weights::Unit,
         )
         .expect("valid gram");
         let sgdd = Sgdd::reduce(gram.into(), ScalingPolicy::default()).expect("reduces");
@@ -732,7 +732,7 @@ mod storage {
         let gram = BipartiteFactorWidth2::new(
             FactorWidth1::new(12, &rows, None).expect("valid rows"),
             FactorWidth1::new(9, &cols, None).expect("valid columns"),
-            Weights::of(&weights).expect("nonnegative"),
+            Weights::Of(&weights),
         )
         .expect("valid gram");
         assert_storage_agrees(gram.into());
