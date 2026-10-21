@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use approx_chol::input::{
-    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef, Weights,
+    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef,
 };
 use approx_chol::{factorize_with, Backend, Config, Factor, InnerParallelism};
 use approx_chol::{Real, ScalingPolicy, SchurMode};
@@ -48,7 +48,7 @@ pub enum View<T> {
     BipartiteFactorWidth2 {
         left: Side<T>,
         right: Side<T>,
-        weights: Weighting<T>,
+        scale: Option<Vec<T>>,
     },
     Laplacian(Edges<T>, Option<Vec<T>>),
 }
@@ -74,13 +74,6 @@ pub struct Side<T> {
     pub n: u8,
     pub rows: Vec<u32>,
     pub values: Option<Vec<T>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum Weighting<T> {
-    Unit,
-    Of(Vec<T>),
-    SqrtOf(Vec<T>),
 }
 
 /// `Config` in a `u8` per knob: `None` is an exact complement, under two copies sample once, a `u8` caps AC2.
@@ -119,16 +112,6 @@ impl<T: Real> Edges<T> {
     }
 }
 
-impl<T> Weighting<T> {
-    fn weights(&self) -> Weights<&[T]> {
-        match self {
-            Self::Unit => Weights::Unit,
-            Self::Of(w) => Weights::Of(w),
-            Self::SqrtOf(s) => Weights::SqrtOf(s),
-        }
-    }
-}
-
 impl<T: Real> Side<T> {
     fn factor(&self) -> Result<FactorWidth1<'_, T>, Box<dyn Error>> {
         Ok(FactorWidth1::new(
@@ -157,13 +140,12 @@ impl<T: Real> Case<T> {
                 let gram = FactorWidth2::new((*n).into(), (a, x), (b, y))?;
                 factorize_with(gram, config)?
             }
-            View::BipartiteFactorWidth2 {
-                left,
-                right,
-                weights,
-            } => {
-                let gram =
-                    BipartiteFactorWidth2::new(left.factor()?, right.factor()?, weights.weights())?;
+            View::BipartiteFactorWidth2 { left, right, scale } => {
+                let (left, right) = (left.factor()?, right.factor()?);
+                let gram = match scale {
+                    Some(s) => BipartiteFactorWidth2::scaled(left, right, s)?,
+                    None => BipartiteFactorWidth2::new(left, right)?,
+                };
                 factorize_with(gram, config)?
             }
             View::Laplacian(edges, ground) => {

@@ -1,27 +1,25 @@
-//! The diagonal `W` of `A = V W Vᵀ`.
+//! A column's weight `w_k` in `A = Σ_k w_k v_k v_kᵀ`.
 
-use super::error::{check, length, nonnegative, ViewError};
 use crate::{widen, Real};
 
-/// `W`: one entry per column as a slice, checked by the constructor that takes it.
-#[non_exhaustive]
+/// Column `k`'s `w_k`: none, a Laplacian's edge weight, or the square of `V`'s column scale.
 #[derive(Clone, Copy, Debug)]
-pub enum Weights<S> {
-    /// `W = I`.
+pub(crate) enum Weight<T> {
+    /// No `W`.
     Unit,
-    /// `W = diag(w)`, each `w` finite and `≥ 0`.
-    Of(S),
-    /// `W = diag(s²)`, each `s` finite, for a caller that keeps square roots.
-    SqrtOf(S),
+    /// `w`.
+    Of(T),
+    /// `w = s²`, kept as `s` so `(s·x)·(s·y)` neither overflows nor underflows through `s²`.
+    Scale(T),
 }
 
-impl<T: Real> Weights<T> {
-    /// `w·x·y`, as `(s·x)·(s·y)` under `SqrtOf`.
+impl<T: Real> Weight<T> {
+    /// `w·x·y`, as `(s·x)·(s·y)` under a scale.
     pub(crate) fn bilinear(self, x: f64, y: f64) -> f64 {
         match self {
             Self::Unit => x * y,
             Self::Of(w) => widen(w) * x * y,
-            Self::SqrtOf(s) => (widen(s) * x) * (widen(s) * y),
+            Self::Scale(s) => (widen(s) * x) * (widen(s) * y),
         }
     }
 
@@ -37,26 +35,7 @@ impl<T: Real> Weights<T> {
     pub(crate) fn is_zero(self) -> bool {
         match self {
             Self::Unit => false,
-            Self::Of(w) | Self::SqrtOf(w) => w == T::zero(),
+            Self::Of(w) | Self::Scale(w) => w == T::zero(),
         }
     }
-}
-
-impl<T: Real> Weights<&[T]> {
-    /// `W` over `columns` columns, each entry checked.
-    pub(super) fn checked(self, columns: usize) -> Result<Self, ViewError> {
-        if let Self::Of(w) | Self::SqrtOf(w) = self {
-            length(columns, w.len())?;
-        }
-        match self {
-            Self::Unit => {}
-            Self::Of(w) => check(w, nonnegative, weight)?,
-            Self::SqrtOf(s) => check(s, |s: T| s.is_finite(), weight)?,
-        }
-        Ok(self)
-    }
-}
-
-fn weight(entry: usize) -> ViewError {
-    ViewError::InvalidWeight { entry }
 }

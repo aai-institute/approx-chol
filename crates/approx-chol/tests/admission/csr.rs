@@ -1,6 +1,5 @@
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrError, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef,
-    Weights,
 };
 use approx_chol::{factorize, Error, Factor, ReduceError};
 use num_traits::PrimInt;
@@ -239,8 +238,7 @@ fn in_class_input_is_admitted_on_both_paths(
 #[case::bipartite_factor_width_2(factorize(
     BipartiteFactorWidth2::new(
         FactorWidth1::new(0, &[0u32; 0], None).unwrap(),
-        FactorWidth1::new(0, &[], None).unwrap(),
-        Weights::Unit,
+        FactorWidth1::new(0, &[], None).unwrap()
     )
     .unwrap(),
 )

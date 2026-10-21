@@ -12,7 +12,6 @@ pub use csr::{CsrError, CsrRef, IndexKind, OwnedCsr, UpperCsrRef};
 pub use width2::bipartite::{BipartiteFactorWidth2, FactorWidth1};
 pub use width2::error::ViewError;
 pub use width2::laplacian::Laplacian;
-pub use width2::weights::Weights;
 pub(crate) use width2::Column;
 pub use width2::FactorWidth2;
 
