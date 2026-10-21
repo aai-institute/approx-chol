@@ -56,9 +56,7 @@ impl AdjacencyLayout for StrictUpperTriangle {
     ) -> Result<Partitioned<UpperAdjacency<T, I>, I>, ReduceError> {
         let mut sets = UnionFind::<I>::new(v.n());
         let rows = cells::upper::<T, J, I>(v, seen, |i, j, cell| {
-            if cell != 0.0 {
-                sets.union(i, j);
-            }
+            sets.union(i, j);
             pair(i, j, cell);
         })?;
         Ok(Partitioned {
