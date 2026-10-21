@@ -12,7 +12,7 @@ use super::index;
 use crate::widen;
 use crate::{Index, Real};
 use edges::Weights;
-use gram::{End, Gram, Shape};
+use gram::{Gram, Shape};
 
 /// Why a view's `new` rejected its slices.
 #[non_exhaustive]
@@ -157,8 +157,7 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         x: &'a [T],
         y: &'a [T],
     ) -> Result<Self, ViewError> {
-        let (tail, head) = (End::Values(x), End::Values(y));
-        Gram::new(n, Shape::General, a, b, tail, head).map(Self)
+        Gram::values(n, Shape::General, a, b, Some(x), Some(y)).map(Self)
     }
 
     /// `V W Vᵀ` under `weights`, one per column; `W = I` without it.

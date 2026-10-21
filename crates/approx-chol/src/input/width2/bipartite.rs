@@ -3,7 +3,7 @@
 use num_traits::PrimInt;
 
 use super::edges::{Edges, Weights};
-use super::gram::{End, Gram, Shape};
+use super::gram::Gram;
 use super::{length, ViewError};
 use crate::Real;
 
@@ -25,10 +25,6 @@ impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
         }
         Ok(Self { n, rows, values })
     }
-
-    fn end(self) -> End<'a, T> {
-        self.values.map_or(End::One, End::Values)
-    }
 }
 
 /// `A = V W Vᵀ + diag(d)` with `V = [V_l; V_r]`, both width 1 on disjoint rows, left rows numbered first.
@@ -43,12 +39,8 @@ impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
     ) -> Result<Self, ViewError> {
         // Each side checked its rows and values, so only the column counts are left to agree.
         let edges = Edges::new(left.rows, right.rows)?;
-        let n = left.n.saturating_add(right.n);
-        let (shape, ends) = (
-            Shape::Bipartite { n_left: left.n },
-            [left.end(), right.end()],
-        );
-        Ok(Self(Gram::of_checked(n, shape, edges, ends)))
+        let (left, right) = ((left.n, left.values), (right.n, right.values));
+        Ok(Self(Gram::of_sides(left, right, edges)))
     }
 
     /// `V W Vᵀ` under `weights`, one per column.

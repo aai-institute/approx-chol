@@ -14,7 +14,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
         cells: S,
         v: Gram<'_, T, J>,
     ) -> Result<Self, ReduceError> {
-        // Under `NegatedHead`, the head's part is read negated, so every cell folds as it is summed.
+        // Under `NegatedRight`, the right part is read negated, so every cell folds as it is summed.
         let (fold, v) = v
             .fold()
             .map_or((None, v), |(fold, read)| (Some(fold), read));
@@ -22,7 +22,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
             .extract(|(vertices, off_diagonal, grounding)| {
                 let congruence = match fold {
                     Some(Fold::Identity) => Congruence::Identity,
-                    Some(Fold::NegatedHead) => Congruence::NegateFrom(off_diagonal.stored().1),
+                    Some(Fold::NegatedRight) => Congruence::NegateFrom(off_diagonal.stored().1),
                     None => {
                         return match folding_signs(&off_diagonal) {
                             Some(signs) => Congruent::new(vertices, off_diagonal, signs)

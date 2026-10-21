@@ -12,7 +12,7 @@ pub use csr::{CsrError, CsrRef, IndexKind, OwnedCsr, UpperCsrRef};
 pub use width2::bipartite::{BipartiteGram, FactorWidth1};
 pub use width2::edges::Weights;
 pub(crate) use width2::gram::Fold;
-pub use width2::gram::{End, Gram, Shape};
+pub use width2::gram::{Gram, Incidence, Shape};
 pub use width2::laplacian::Laplacian;
 pub use width2::signed::SignedGraph;
 pub(crate) use width2::{Column, IntoColumns};

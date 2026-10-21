@@ -3,7 +3,7 @@
 use num_traits::PrimInt;
 
 use super::edges::Weights;
-use super::gram::{End, Gram, Shape};
+use super::gram::{Gram, Incidence, Shape};
 use super::ViewError;
 use crate::Real;
 
@@ -14,8 +14,8 @@ pub struct SignedGraph<'a, T, I = u32>(Gram<'a, T, I>);
 impl<'a, T: Real, I: PrimInt> SignedGraph<'a, T, I> {
     /// Edge `k` joins `a[k] ≠ b[k] < n`, unit weight; lengths and ends are checked.
     pub fn new(n: usize, a: &'a [I], b: &'a [I], positive: &'a [bool]) -> Result<Self, ViewError> {
-        let head = End::Signs(positive);
-        Gram::new(n, Shape::General, a, b, End::One, head).map(Self)
+        let incidence = Incidence::Signed(positive);
+        Gram::incidence(n, Shape::General, a, b, incidence).map(Self)
     }
 
     /// `A` under `weights`, one per edge; `W = I` without it.

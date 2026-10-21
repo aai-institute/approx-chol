@@ -1,4 +1,4 @@
-//! `A = V W Vᵀ + diag(d)`, the product every factor view is: column `k` is `tail(k) e_a + head(k) e_b`.
+//! `A = V W Vᵀ + diag(d)`, the product every factor view is: column `k` of `V` joins `a[k]` and `b[k]`.
 
 use num_traits::PrimInt;
 
@@ -6,52 +6,44 @@ use super::edges::{Edges, Weights};
 use super::{check, check_ends, length, Column, IntoColumns, ViewError};
 use crate::{Index, Real};
 
-/// One end's entries of `V`, per column.
+/// The incidence matrix `V` is, by its columns' signs.
 #[derive(Clone, Copy, Debug)]
-pub enum End<'a, T> {
-    /// `+1` in every column.
-    One,
-    /// `−1` in every column.
-    MinusOne,
-    /// `+1` where `true`, else `−1`.
-    Signs(&'a [bool]),
-    /// Any value, per column.
-    Values(&'a [T]),
+pub enum Incidence<'a> {
+    /// `e_a − e_b`: `V W Vᵀ` is a graph Laplacian.
+    Oriented,
+    /// `e_a + e_b`: a signless Laplacian.
+    Unoriented,
+    /// `e_a + e_b` where `positive[k]`, else `e_a − e_b`: a signed Laplacian.
+    Signed(&'a [bool]),
 }
 
-impl<T: Real> End<'_, T> {
-    #[inline(always)]
-    fn at(self, k: usize) -> T {
-        match self {
-            Self::One => T::one(),
-            Self::MinusOne => -T::one(),
-            Self::Signs(positive) => match positive[k] {
-                true => T::one(),
-                false => -T::one(),
-            },
-            Self::Values(values) => values[k],
-        }
-    }
-
-    fn len(self) -> Option<usize> {
-        match self {
-            Self::One | Self::MinusOne => None,
-            Self::Signs(positive) => Some(positive.len()),
-            Self::Values(values) => Some(values.len()),
-        }
-    }
-}
-
-/// Where `V`'s two ends index `A`.
+/// Where `V`'s two rows per column lie in `A`.
 #[derive(Clone, Copy, Debug)]
 pub enum Shape {
-    /// Both ends anywhere in `0..n`, never the same row.
+    /// `a[k] ≠ b[k]`, both in `0..n`.
     General,
-    /// The tail in `0..n_left`, the head in `0..n − n_left`, numbered after it.
+    /// `a[k]` in `0..n_left`, `b[k]` in `0..n − n_left`, numbered after it.
     Bipartite {
         /// The left part's size.
         n_left: usize,
     },
+}
+
+/// `V`'s columns: an incidence matrix's, or `x[k] e_a + y[k] e_b` with `None` reading as `1`.
+#[derive(Clone, Copy, Debug)]
+enum Columns<'a, T> {
+    Incidence(Incidence<'a>),
+    Values([Option<&'a [T]>; 2]),
+}
+
+impl<'a, T> Columns<'a, T> {
+    /// Ones on both sides are the unoriented incidence, stored as it.
+    fn values(x: Option<&'a [T]>, y: Option<&'a [T]>) -> Self {
+        match (x, y) {
+            (None, None) => Self::Incidence(Incidence::Unoriented),
+            (x, y) => Self::Values([x, y]),
+        }
+    }
 }
 
 /// The signs folding `A` into a Z-matrix when `V`'s shape fixes them.
@@ -59,8 +51,8 @@ pub enum Shape {
 pub(crate) enum Fold {
     /// Every cell is already nonpositive.
     Identity,
-    /// Every cell is positive and crosses the parts: reading the head negated folds it.
-    NegatedHead,
+    /// Every cell is positive and crosses the parts: reading the right part negated folds it.
+    NegatedRight,
 }
 
 /// `A = V W Vᵀ + diag(d)` on `n` vertices.
@@ -69,24 +61,48 @@ pub struct Gram<'a, T, I = u32> {
     n: usize,
     shape: Shape,
     edges: Edges<'a, T, I>,
-    ends: [End<'a, T>; 2],
+    columns: Columns<'a, T>,
     diagonal: Option<&'a [T]>,
 }
 
 impl<'a, T: Real, I: PrimInt> Gram<'a, T, I> {
-    /// Column `k` joins `a[k]` and `b[k]`, read by `shape`; every length and index is checked, `W = I`.
-    pub fn new(
+    /// `V` an incidence matrix; every length and index is checked, `W = I`.
+    pub fn incidence(
         n: usize,
         shape: Shape,
         a: &'a [I],
         b: &'a [I],
-        tail: End<'a, T>,
-        head: End<'a, T>,
+        incidence: Incidence<'a>,
+    ) -> Result<Self, ViewError> {
+        if let Incidence::Signed(positive) = incidence {
+            length(a.len(), positive.len())?;
+        }
+        Self::checked(n, shape, a, b, Columns::Incidence(incidence))
+    }
+
+    /// Column `k` is `x[k] e_a + y[k] e_b`, `None` reading as `1`; every length and index is checked, `W = I`.
+    pub fn values(
+        n: usize,
+        shape: Shape,
+        a: &'a [I],
+        b: &'a [I],
+        x: Option<&'a [T]>,
+        y: Option<&'a [T]>,
+    ) -> Result<Self, ViewError> {
+        for values in [x, y].into_iter().flatten() {
+            length(a.len(), values.len())?;
+        }
+        Self::checked(n, shape, a, b, Columns::values(x, y))
+    }
+
+    fn checked(
+        n: usize,
+        shape: Shape,
+        a: &'a [I],
+        b: &'a [I],
+        columns: Columns<'a, T>,
     ) -> Result<Self, ViewError> {
         let edges = Edges::new(a, b)?;
-        for found in [tail.len(), head.len()].into_iter().flatten() {
-            length(a.len(), found)?;
-        }
         match shape {
             Shape::General => check_ends(n, a, b)?,
             Shape::Bipartite { n_left } => {
@@ -96,21 +112,25 @@ impl<'a, T: Real, I: PrimInt> Gram<'a, T, I> {
                 check_rows(n_right, b)?;
             }
         }
-        Ok(Self::of_checked(n, shape, edges, [tail, head]))
+        Ok(Self::of_checked(n, shape, edges, columns))
     }
 
-    /// Columns whose lengths and rows the caller has checked against `shape`.
-    pub(super) fn of_checked(
-        n: usize,
-        shape: Shape,
+    /// Two width-1 sides, each of which checked its rows and values.
+    pub(super) fn of_sides(
+        (n_left, x): (usize, Option<&'a [T]>),
+        (n_right, y): (usize, Option<&'a [T]>),
         edges: Edges<'a, T, I>,
-        ends: [End<'a, T>; 2],
     ) -> Self {
+        let (n, shape) = (n_left.saturating_add(n_right), Shape::Bipartite { n_left });
+        Self::of_checked(n, shape, edges, Columns::values(x, y))
+    }
+
+    fn of_checked(n: usize, shape: Shape, edges: Edges<'a, T, I>, columns: Columns<'a, T>) -> Self {
         Self {
             n,
             shape,
             edges,
-            ends,
+            columns,
             diagonal: None,
         }
     }
@@ -143,29 +163,28 @@ impl<'a, T: Real, I: PrimInt> Gram<'a, T, I> {
         self.diagonal
     }
 
-    /// D: every entry of `V` is `±1`, so `A` is dominant by shape and its diagonal derived.
+    /// D: `V` is an incidence matrix, so `A` is dominant by shape and its diagonal derived.
     pub(crate) fn is_incidence(&self) -> bool {
-        (self.ends).iter().all(|end| !matches!(end, End::Values(_)))
+        matches!(self.columns, Columns::Incidence(_))
     }
 
     /// X: two parallel columns can put opposite signs on one cell.
     pub(crate) fn cancels(&self) -> bool {
-        self.is_incidence() && (self.ends).iter().any(|end| matches!(end, End::Signs(_)))
+        matches!(self.columns, Columns::Incidence(Incidence::Signed(_)))
     }
 
-    /// K: the fold and the reading that applies it, when every cell's sign is fixed by the ends and the shape.
+    /// K: the fold and the reading that applies it, when every cell's sign is fixed by `V` and the shape.
     pub(crate) fn fold(self) -> Option<(Fold, Self)> {
-        use End::{MinusOne, One};
-        let negated = |head| Self {
-            ends: [self.ends[0], head],
-            ..self
-        };
-        match (self.shape, self.ends) {
-            (_, [One, MinusOne] | [MinusOne, One]) => Some((Fold::Identity, self)),
-            (Shape::Bipartite { .. }, [One, One]) => Some((Fold::NegatedHead, negated(MinusOne))),
-            (Shape::Bipartite { .. }, [MinusOne, MinusOne]) => {
-                Some((Fold::NegatedHead, negated(One)))
-            }
+        let oriented = Columns::Incidence(Incidence::Oriented);
+        match (self.columns, self.shape) {
+            (Columns::Incidence(Incidence::Oriented), _) => Some((Fold::Identity, self)),
+            (Columns::Incidence(Incidence::Unoriented), Shape::Bipartite { .. }) => Some((
+                Fold::NegatedRight,
+                Self {
+                    columns: oriented,
+                    ..self
+                },
+            )),
             _ => None,
         }
     }
@@ -187,21 +206,31 @@ impl<T: Real, I: PrimInt> IntoColumns<T> for Gram<'_, T, I> {
 
     #[inline(always)]
     fn for_each_column<S: Index>(self, visit: impl FnMut(Column<T, S>)) {
-        use End::{MinusOne, One, Signs, Values};
-        let (edges, offset) = match self.shape {
-            Shape::General => (self.edges, 0),
-            Shape::Bipartite { n_left } => (self.edges, n_left),
+        let offset = match self.shape {
+            Shape::General => 0,
+            Shape::Bipartite { n_left } => n_left,
         };
-        let (one, minus_one) = (|_| T::one(), |_| -T::one());
-        // Each named form's ends loop straight (per-column reads cost within's paths 6%); any other pair reads per column.
-        match self.ends {
-            [One, MinusOne] => edges.for_each_column(offset, one, minus_one, visit),
-            [One, One] => edges.for_each_column(offset, one, one, visit),
-            [One, Signs(_)] => edges.for_each_column(offset, one, |k| self.ends[1].at(k), visit),
-            [Values(x), One] => edges.for_each_column(offset, |k| x[k], one, visit),
-            [One, Values(y)] => edges.for_each_column(offset, one, |k| y[k], visit),
-            [Values(x), Values(y)] => edges.for_each_column(offset, |k| x[k], |k| y[k], visit),
-            [tail, head] => edges.for_each_column(offset, |k| tail.at(k), |k| head.at(k), visit),
+        let (edges, one, minus_one) = (self.edges, |_| T::one(), |_| -T::one());
+        // Each kind loops straight: reading `V` through a per-column match cost within's paths 6%.
+        match self.columns {
+            Columns::Incidence(Incidence::Oriented) => {
+                edges.for_each_column(offset, one, minus_one, visit)
+            }
+            Columns::Incidence(Incidence::Unoriented) | Columns::Values([None, None]) => {
+                edges.for_each_column(offset, one, one, visit)
+            }
+            Columns::Incidence(Incidence::Signed(positive)) => {
+                let sign = |k: usize| match positive[k] {
+                    true => T::one(),
+                    false => -T::one(),
+                };
+                edges.for_each_column(offset, one, sign, visit)
+            }
+            Columns::Values([Some(x), None]) => edges.for_each_column(offset, |k| x[k], one, visit),
+            Columns::Values([None, Some(y)]) => edges.for_each_column(offset, one, |k| y[k], visit),
+            Columns::Values([Some(x), Some(y)]) => {
+                edges.for_each_column(offset, |k| x[k], |k| y[k], visit)
+            }
         }
     }
 }
