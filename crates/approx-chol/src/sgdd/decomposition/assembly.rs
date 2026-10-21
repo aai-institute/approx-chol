@@ -14,7 +14,7 @@ pub(in crate::sgdd) trait AdjacencyLayout {
     type Adjacency<T: Real, I: Index>: PrincipalBlocks<T, I, Block = (Box<[I]>, OffDiagonal<T, I>)>
         + Sync;
 
-    /// The summed cells and components, `seen` visiting each column once and `pair` each summed cell with its two ends.
+    /// The summed cells and components, `seen` visiting each column once and `pair` each nonzero cell with its two ends.
     fn sum<T: Real, J: PrimInt, I: Index>(
         self,
         v: FactorWidth2<'_, T, J>,
@@ -78,14 +78,13 @@ impl AdjacencyLayout for Biadjacency {
     ) -> Result<Partitioned<Rows<T, I>, I>, ReduceError> {
         let n_left = self.n_left;
         let table = n_left.saturating_mul(v.n() - n_left);
-        let cell = std::mem::size_of::<f64>();
-        let a = match table.saturating_mul(cell) <= DENSE_TABLE_MAX_BYTES {
+        let a = match table <= DENSE_TABLE_MAX_CELLS {
             true => dense_cross(v, n_left, seen, pair)?,
             false => {
                 let counts = counts::<T, J, I>(v, n_left, seen);
                 let columns: usize = counts.iter().sum();
                 // Past the cap, the table still wins whenever the buckets would take more memory.
-                match columns.saturating_mul(12) < table.saturating_mul(cell) {
+                match columns.saturating_mul(12) < table.saturating_mul(8) {
                     true => sum_cells::<T, J, I>(v, &counts, n_left, pair)?,
                     false => dense_cross(v, n_left, |_| {}, pair)?,
                 }
@@ -103,7 +102,7 @@ type IncidenceCells<'a, T, I, S> =
 /// A valued `V`'s summed cells beside `A`'s diagonal, and their components.
 type ValueCells<T, I, S> = Partitioned<Assembled<T, <S as AdjacencyLayout>::Adjacency<T, I>>, I>;
 
-/// D: each pivot `Σ_j |c_ij| + σ_i`, screened in the assembly's own sums; `A`'s diagonal never stored.
+/// Each pivot `Σ_j |c_ij| + σ_i`, screened in the assembly's own sums; `A`'s diagonal never stored.
 pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
     cells: S,
     v: FactorWidth2<'a, T, J>,
@@ -176,8 +175,8 @@ fn admit<T: Real>(i: usize, x: f64) -> Result<T, ReduceError> {
         .ok_or(ReduceError::OutOfRange { vertex: i })
 }
 
-/// within's cap on the dense accumulator.
-const DENSE_TABLE_MAX_BYTES: usize = 40_000_000;
+/// within's cap on the dense accumulator, about 40 MB.
+const DENSE_TABLE_MAX_CELLS: usize = 5_000_000;
 
 /// `pair` sees each nonzero cell.
 fn dense_cross<T: Real, J: PrimInt, I: Index>(

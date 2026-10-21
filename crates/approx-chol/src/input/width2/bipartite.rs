@@ -2,7 +2,7 @@
 
 use num_traits::PrimInt;
 
-use super::error::{check_rows, length, ViewError};
+use super::error::{below, check, length, ViewError};
 use super::weights::Weights;
 use super::{Columns, FactorWidth2};
 use crate::Real;
@@ -19,7 +19,11 @@ impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
     /// `n` rows; each column's row is below `n`, and values, if any, are one per column.
     pub fn new(n: usize, rows: &'a [I], values: Option<&'a [T]>) -> Result<Self, ViewError> {
         values.map_or(Ok(()), |values| length(rows.len(), values.len()))?;
-        check_rows(n, rows)?;
+        check(
+            rows,
+            |row| below(n, row),
+            |column| ViewError::IndexOutOfRange { column },
+        )?;
         Ok(Self { n, rows, values })
     }
 }
@@ -43,8 +47,11 @@ impl<'a, T: Real, I: PrimInt> BipartiteGram<'a, T, I> {
             x: left.values,
             y: right.values,
         };
-        Ok(Self(FactorWidth2::of(
-            left.rows, right.rows, columns, weights,
-        )))
+        Ok(Self(FactorWidth2 {
+            a: left.rows,
+            b: right.rows,
+            weights,
+            columns,
+        }))
     }
 }

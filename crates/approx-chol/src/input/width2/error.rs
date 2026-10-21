@@ -70,9 +70,9 @@ pub(super) fn length(expected: usize, found: usize) -> Result<(), ViewError> {
 }
 
 /// The first entry `valid` rejects, reported by `error` at its index.
-pub(super) fn check<T: Real>(
+pub(super) fn check<T: Copy>(
     entries: &[T],
-    valid: fn(T) -> bool,
+    valid: impl Fn(T) -> bool,
     error: fn(usize) -> ViewError,
 ) -> Result<(), ViewError> {
     match entries.iter().position(|&x| !valid(x)) {
@@ -81,21 +81,15 @@ pub(super) fn check<T: Real>(
     }
 }
 
-/// Each row below `n`.
-pub(super) fn check_rows<I: PrimInt>(n: usize, rows: &[I]) -> Result<(), ViewError> {
-    let in_range = |row: &I| row.to_usize().is_some_and(|row| row < n);
-    match rows.iter().position(|row| !in_range(row)) {
-        Some(column) => Err(ViewError::IndexOutOfRange { column }),
-        None => Ok(()),
-    }
+pub(super) fn below<I: PrimInt>(n: usize, row: I) -> bool {
+    row.to_usize().is_some_and(|row| row < n)
 }
 
 /// One `b` per `a`, each column's two ends distinct rows below `n`.
 pub(super) fn check_ends<I: PrimInt>(n: usize, a: &[I], b: &[I]) -> Result<(), ViewError> {
     length(a.len(), b.len())?;
-    let in_range = |end: &I| end.to_usize().is_some_and(|end| end < n);
     for (column, (end_a, end_b)) in a.iter().zip(b).enumerate() {
-        if !in_range(end_a) || !in_range(end_b) {
+        if !below(n, *end_a) || !below(n, *end_b) {
             return Err(ViewError::IndexOutOfRange { column });
         }
         if end_a == end_b {

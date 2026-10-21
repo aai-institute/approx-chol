@@ -50,16 +50,12 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         length(a.len(), y.len())?;
         check_ends(n, a, b)?;
         let columns = Columns::FactorWidth2 { n, x, y };
-        Ok(Self::of(a, b, columns, Weighting::Unit))
-    }
-
-    fn of(a: &'a [I], b: &'a [I], columns: Columns<'a, T>, weights: Weighting<&'a [T]>) -> Self {
-        Self {
+        Ok(Self {
             a,
             b,
-            weights,
+            weights: Weighting::Unit,
             columns,
-        }
+        })
     }
 
     /// The left part's size, after which `b` is numbered, when `V` is bipartite.
@@ -78,7 +74,7 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         }
     }
 
-    /// D: `V` is an incidence matrix, so `A` is dominant by shape and its diagonal derived.
+    /// `V` is an incidence matrix, so `A` is dominant by shape and its diagonal derived.
     pub(crate) fn is_incidence(&self) -> bool {
         matches!(
             self.columns,

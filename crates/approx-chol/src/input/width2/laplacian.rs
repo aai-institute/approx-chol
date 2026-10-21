@@ -22,7 +22,12 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
         let weights = weights.of_columns(a.len())?;
         check_ends(n, a, b)?;
         let columns = Columns::Incidence { n, surplus: None };
-        Ok(Self(FactorWidth2::of(a, b, columns, weights)))
+        Ok(Self(FactorWidth2 {
+            a,
+            b,
+            weights,
+            columns,
+        }))
     }
 
     /// `L + diag(g)`, one finite nonnegative `g_i` per vertex.
