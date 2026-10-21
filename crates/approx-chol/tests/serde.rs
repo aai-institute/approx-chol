@@ -1,6 +1,6 @@
 #![cfg(feature = "serde")]
 
-use approx_chol::input::{BipartiteGram, CsrRef, FactorWidth1, Laplacian, Weights};
+use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Laplacian, Sddm, Weights};
 use approx_chol::{
     factorize_with, Backend, BlockFactor, Config, Factor, InnerParallelism, ScalingPolicy,
     SchurMode,
@@ -16,10 +16,10 @@ fn factors(config: Config) -> Vec<Factor> {
     let slope: Vec<f64> = (0..rows.len())
         .map(|k| 1.0 + (k % 5) as f64 / 4.0)
         .collect();
-    let gram = BipartiteGram::new(
+    let gram = BipartiteFactorWidth2::new(
         FactorWidth1::new(left as usize, &rows, Some(&slope)).unwrap(),
         FactorWidth1::new(right as usize, &cols, None).unwrap(),
-        Weights::unit(),
+        Weights::Unit,
     )
     .unwrap();
     let bipartite = factorize_with(gram, config).unwrap();
@@ -29,10 +29,7 @@ fn factors(config: Config) -> Vec<Factor> {
         .map(|i| (i, i + 1))
         .unzip();
     let ground: Vec<f64> = (0..61).map(|i| if i < 20 { 0.0 } else { 0.5 }).collect();
-    let laplacian = Laplacian::new(61, &a, &b, Weights::unit())
-        .unwrap()
-        .grounded(&ground)
-        .unwrap();
+    let laplacian = Sddm::new(Laplacian::new(61, &a, &b).unwrap(), &ground).unwrap();
     let laplacian = factorize_with(laplacian, config).unwrap();
 
     let (c, d): (Vec<u32>, Vec<u32>) = (0..58u32).map(|i| (i, i + 1 + i % 2)).unzip();
@@ -182,12 +179,16 @@ fn an_elimination_keeping_at_most_its_rows_decodes_up_to_the_cut(#[case] rows: u
 
 /// A Laplacian on `0..4` beside two zero vertices, so the factor carries dead vertices.
 fn with_isolated_vertex() -> Factor {
-    let edge = Laplacian::new(3, &[0u32], &[1], Weights::unit()).unwrap();
-    factorize_with(edge.grounded(&[1.0, 0.0, 2.0]).unwrap(), Config::default()).unwrap()
+    let edge = Laplacian::new(3, &[0u32], &[1]).unwrap();
+    factorize_with(
+        Sddm::new(edge, &[1.0, 0.0, 2.0]).unwrap(),
+        Config::default(),
+    )
+    .unwrap()
 }
 
 fn with_dead_vertices() -> Factor {
-    let laplacian = Laplacian::new(6, &[0u32, 1, 2], &[1u32, 2, 3], Weights::unit()).unwrap();
+    let laplacian = Laplacian::new(6, &[0u32, 1, 2], &[1u32, 2, 3]).unwrap();
     factorize_with(laplacian, Config::default()).unwrap()
 }
 
@@ -353,10 +354,10 @@ fn an_elimination_whose_rows_sum_past_one_is_corrupt() {
     let rows: Vec<u32> = (0..300).map(|o| o % 60).collect();
     let cols: Vec<u32> = (0..300).map(|o| (o * 7 + o / 13) % 30).collect();
     let weights: Vec<f64> = (0..300).map(|o| 1.0 + (o % 5) as f64).collect();
-    let gram = BipartiteGram::new(
+    let gram = BipartiteFactorWidth2::new(
         FactorWidth1::new(60, &rows, None).unwrap(),
         FactorWidth1::new(30, &cols, None).unwrap(),
-        Weights::of(&weights).unwrap(),
+        Weights::Of(&weights),
     )
     .unwrap();
     let factor = approx_chol::factorize(gram).unwrap();
@@ -377,8 +378,8 @@ fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
         .filter(|&(v, w)| w < 16 && (w != v + 1 || w % 4 != 0))
         .unzip();
     let ground: Vec<f64> = (0..16).map(|i| if i == 0 { 1.0 } else { 0.0 }).collect();
-    let grid = Laplacian::new(16, &a, &b, Weights::unit()).unwrap();
-    let grid = grid.grounded(&ground).unwrap();
+    let grid = Laplacian::new(16, &a, &b).unwrap();
+    let grid = Sddm::new(grid, &ground).unwrap();
     let config = Config {
         backend,
         ..Config::default()
@@ -394,7 +395,7 @@ fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
 #[case::zero(0.0)]
 fn an_approximate_pivot_scale_not_positive_is_corrupt(#[case] by: f64) {
     let (a, b): (Vec<u32>, Vec<u32>) = (0..29u32).map(|v| (v, v + 1)).unzip();
-    let path = Laplacian::new(30, &a, &b, Weights::unit()).unwrap();
+    let path = Laplacian::new(30, &a, &b).unwrap();
     let config = Config {
         backend: Backend::Approximate,
         ..Config::default()

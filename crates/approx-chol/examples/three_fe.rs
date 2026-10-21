@@ -1,6 +1,6 @@
 //! Three fixed effects, no slopes: each pair of factors is one incidence-only bipartite Gram, as within's Schwarz subdomains.
 
-use approx_chol::input::{BipartiteGram, FactorWidth1, Weights};
+use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1, Weights};
 use approx_chol::{factorize_with, Backend, Config, Factor};
 
 /// Workers move between firms of their own region only, so (worker, firm) splits by region.
@@ -43,7 +43,7 @@ fn main() {
         println!("({}, {})", NAMES[l], NAMES[r]);
         let side = |t: usize| FactorWidth1::new(panel.n_levels[t], &panel.levels[t], None);
         let (left, right) = (side(l).expect("valid side"), side(r).expect("valid side"));
-        let gram = BipartiteGram::new(left, right, Weights::unit()).expect("valid gram");
+        let gram = BipartiteFactorWidth2::new(left, right, Weights::Unit).expect("valid gram");
         let a = PairGram {
             left: &panel.levels[l],
             right: &panel.levels[r],

@@ -1,5 +1,6 @@
 use approx_chol::input::{
-    BipartiteGram, CsrError, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef, Weights,
+    BipartiteFactorWidth2, CsrError, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef,
+    Weights,
 };
 use approx_chol::{factorize, Error, Factor, ReduceError};
 use num_traits::PrimInt;
@@ -230,20 +231,20 @@ fn in_class_input_is_admitted_on_both_paths(
 #[case::csr(factorize(CsrRef::<f64>::new(&[0], &[], &[], 0).unwrap()).expect("CSR"))]
 #[case::upper_csr(factorize(UpperCsrRef::<f64>::new(&[0], &[], &[], 0).unwrap()).expect("upper CSR"))]
 #[case::laplacian(
-    factorize(Laplacian::<f64>::new(0, &[], &[], Weights::unit()).unwrap()).expect("Laplacian")
+    factorize(Laplacian::new(0, &[0u32; 0], &[]).unwrap()).expect("Laplacian")
 )]
-#[case::gram(
-    factorize(FactorWidth2::<f64>::new(0, &[], &[], &[], &[]).unwrap()).expect("Gram")
+#[case::factor_width_2(
+    factorize(FactorWidth2::new(0, (&[0u32; 0], &[]), (&[], &[])).unwrap()).expect("factor-width-2 Gram")
 )]
-#[case::bipartite_gram(factorize(
-    BipartiteGram::new(
-        FactorWidth1::<f64>::new(0, &[], None).unwrap(),
-        FactorWidth1::<f64>::new(0, &[], None).unwrap(),
-        Weights::unit(),
+#[case::bipartite_factor_width_2(factorize(
+    BipartiteFactorWidth2::new(
+        FactorWidth1::new(0, &[0u32; 0], None).unwrap(),
+        FactorWidth1::new(0, &[], None).unwrap(),
+        Weights::Unit,
     )
     .unwrap(),
 )
-.expect("bipartite Gram"))]
+.expect("bipartite factor-width-2 Gram"))]
 fn an_empty_system_is_admitted_by_every_entry_point(#[case] factor: Factor) {
     assert_eq!((factor.n(), factor.blocks().len()), (0, 0));
 }

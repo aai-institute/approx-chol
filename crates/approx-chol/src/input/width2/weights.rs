@@ -3,9 +3,10 @@
 use super::error::{check, length, nonnegative, ViewError};
 use crate::{widen, Real};
 
-/// The diagonal `W`: per column of `V` as a slice, or one column's entry.
+/// `W`: one entry per column as a slice, checked by the constructor that takes it.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum Weighting<S> {
+pub enum Weights<S> {
     /// `W = I`.
     Unit,
     /// `W = diag(w)`, each `w` finite and `≥ 0`.
@@ -14,7 +15,7 @@ pub(crate) enum Weighting<S> {
     SqrtOf(S),
 }
 
-impl<T: Real> Weighting<T> {
+impl<T: Real> Weights<T> {
     /// `w·x·y`, as `(s·x)·(s·y)` under `SqrtOf`.
     pub(crate) fn bilinear(self, x: f64, y: f64) -> f64 {
         match self {
@@ -41,37 +42,21 @@ impl<T: Real> Weighting<T> {
     }
 }
 
-/// `W`, one nonnegative entry per column of `V`, checked once so every view over the same columns can share it.
-#[derive(Clone, Copy, Debug)]
-pub struct Weights<'a, T>(Weighting<&'a [T]>);
-
-impl<'a, T: Real> Weights<'a, T> {
-    /// `W = I`.
-    pub fn unit() -> Self {
-        Self(Weighting::Unit)
-    }
-
-    /// `W = diag(w)`; each `w` finite and nonnegative.
-    pub fn of(w: &'a [T]) -> Result<Self, ViewError> {
-        check(w, nonnegative, weight)?;
-        Ok(Self(Weighting::Of(w)))
-    }
-
-    /// `W = diag(s²)`, for a caller that keeps square roots; each `s` finite.
-    pub fn sqrt_of(s: &'a [T]) -> Result<Self, ViewError> {
-        check(s, |s| s.is_finite(), weight)?;
-        Ok(Self(Weighting::SqrtOf(s)))
-    }
-
-    /// `W` over `columns` columns.
-    pub(super) fn of_columns(self, columns: usize) -> Result<Weighting<&'a [T]>, ViewError> {
-        if let Weighting::Of(w) | Weighting::SqrtOf(w) = self.0 {
+impl<T: Real> Weights<&[T]> {
+    /// `W` over `columns` columns, each entry checked.
+    pub(super) fn checked(self, columns: usize) -> Result<Self, ViewError> {
+        if let Self::Of(w) | Self::SqrtOf(w) = self {
             length(columns, w.len())?;
         }
-        Ok(self.0)
+        match self {
+            Self::Unit => {}
+            Self::Of(w) => check(w, nonnegative, weight)?,
+            Self::SqrtOf(s) => check(s, |s: T| s.is_finite(), weight)?,
+        }
+        Ok(self)
     }
 }
 
-fn weight(column: usize) -> ViewError {
-    ViewError::InvalidWeight { column }
+fn weight(entry: usize) -> ViewError {
+    ViewError::InvalidWeight { entry }
 }

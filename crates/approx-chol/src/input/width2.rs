@@ -1,4 +1,4 @@
-//! Factor-width-2 views: `A = V W Vᵀ + diag(g)`, column `k` of `V` joining `a[k]` and `b[k]`.
+//! The factor-width-2 inputs: `A = V W Vᵀ + diag(s)`, column `k` of `V` joining `a[k]` and `b[k]`.
 
 pub(super) mod bipartite;
 pub(super) mod error;
@@ -8,14 +8,14 @@ pub(super) mod weights;
 use num_traits::PrimInt;
 
 use self::error::{check_ends, length, ViewError};
-use self::weights::Weighting;
+use self::weights::Weights;
 use super::index;
 use crate::{widen, Index, Real};
 
-/// `V`'s columns and vertices, one variant per view.
+/// `V`'s columns and vertices, one variant per input type.
 #[derive(Clone, Copy, Debug)]
 enum Columns<'a, T> {
-    /// `e_a − e_b`, `a[k] ≠ b[k] < n`, and a [`Laplacian`](laplacian::Laplacian)'s ground.
+    /// `e_a − e_b`, `a[k] ≠ b[k] < n`, and an [`Sddm`](laplacian::Sddm)'s surplus.
     Incidence { n: usize, surplus: Option<&'a [T]> },
     /// `x[k] e_a + y[k] e_b`, `a[k] ≠ b[k] < n`.
     FactorWidth2 { n: usize, x: &'a [T], y: &'a [T] },
@@ -28,23 +28,21 @@ enum Columns<'a, T> {
     },
 }
 
-/// `V` with at most two nonzeros per column: `x[k]` at `a[k]`, `y[k]` at `b[k] ≠ a[k]`.
+/// `V Vᵀ` on `n` vertices, column `k` of `V` being `x[k] e_a[k] + y[k] e_b[k]`; every other input lowers to one.
 #[derive(Clone, Copy, Debug)]
 pub struct FactorWidth2<'a, T, I = u32> {
     a: &'a [I],
     b: &'a [I],
-    weights: Weighting<&'a [T]>,
+    weights: Weights<&'a [T]>,
     columns: Columns<'a, T>,
 }
 
 impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
-    /// `n` vertices; lengths and `a[k] ≠ b[k] < n` are checked, so a zero value leaves one nonzero.
+    /// `a[k] ≠ b[k] < n`; `a`, `x`, `b`, `y` one entry per column.
     pub fn new(
         n: usize,
-        a: &'a [I],
-        b: &'a [I],
-        x: &'a [T],
-        y: &'a [T],
+        (a, x): (&'a [I], &'a [T]),
+        (b, y): (&'a [I], &'a [T]),
     ) -> Result<Self, ViewError> {
         length(a.len(), x.len())?;
         length(a.len(), y.len())?;
@@ -53,7 +51,7 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         Ok(Self {
             a,
             b,
-            weights: Weighting::Unit,
+            weights: Weights::Unit,
             columns,
         })
     }
@@ -66,7 +64,7 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         }
     }
 
-    /// The ground `g`, which only a grounded [`Laplacian`](laplacian::Laplacian) has.
+    /// The surplus `s`, which only an [`Sddm`](laplacian::Sddm) has.
     pub(crate) fn surplus(&self) -> Option<&'a [T]> {
         match self.columns {
             Columns::Incidence { surplus, .. } => surplus,
@@ -137,11 +135,9 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         visit: impl FnMut(Column<T, S>),
     ) {
         match self.weights {
-            Weighting::Unit => self.weighted(offset, v_a, v_b, |_| Weighting::Unit, visit),
-            Weighting::Of(w) => self.weighted(offset, v_a, v_b, |k| Weighting::Of(w[k]), visit),
-            Weighting::SqrtOf(s) => {
-                self.weighted(offset, v_a, v_b, |k| Weighting::SqrtOf(s[k]), visit)
-            }
+            Weights::Unit => self.weighted(offset, v_a, v_b, |_| Weights::Unit, visit),
+            Weights::Of(w) => self.weighted(offset, v_a, v_b, |k| Weights::Of(w[k]), visit),
+            Weights::SqrtOf(s) => self.weighted(offset, v_a, v_b, |k| Weights::SqrtOf(s[k]), visit),
         }
     }
 
@@ -151,7 +147,7 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         offset: usize,
         v_a: impl Fn(usize) -> T,
         v_b: impl Fn(usize) -> T,
-        weight: impl Fn(usize) -> Weighting<T>,
+        weight: impl Fn(usize) -> Weights<T>,
         mut visit: impl FnMut(Column<T, S>),
     ) {
         for (k, (a, b)) in self.a.iter().zip(self.b).enumerate() {
@@ -173,7 +169,7 @@ pub(crate) struct Column<T, I> {
     pub(crate) b: I,
     pub(crate) v_a: T,
     pub(crate) v_b: T,
-    pub(crate) weight: Weighting<T>,
+    pub(crate) weight: Weights<T>,
 }
 
 impl<T: Real, I> Column<T, I> {

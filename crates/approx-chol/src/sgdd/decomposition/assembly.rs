@@ -121,8 +121,6 @@ pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: 
         return Err(ReduceError::OutOfRange { vertex });
     }
     let Partitioned { a, partition } = a;
-    // An all-zero ground grounds nothing: dropped once here, not copied into every block.
-    let surplus = surplus.filter(|s| s.iter().any(|&x| x != T::zero()));
     let a = Dominant {
         adjacency: a,
         surplus,

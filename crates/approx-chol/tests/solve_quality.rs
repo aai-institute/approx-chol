@@ -239,7 +239,7 @@ fn assert_scaled_path_solves(entry: Entry, types: Types, mode: Mode, exponent: i
 cases! {
     /// Each scalar runs the exponents its solution is representable at.
     fn a_scaled_f64_laplacian_solves_wherever_its_solution_is_representable(
-        route in routes(all),
+        route in routes(floating),
         types in types(f64),
         #[values(0, -5, -15, -100, -250)] exponent: i32,
     ) {
@@ -250,7 +250,7 @@ cases! {
 
 cases! {
     fn a_scaled_f32_laplacian_solves_wherever_its_solution_is_representable(
-        route in routes(all),
+        route in routes(floating),
         types in types(f32),
         #[values(0, -3, -10, -25)] exponent: i32,
     ) {
@@ -261,7 +261,7 @@ cases! {
 
 cases! {
     fn many_zero_singletons_factor_as_trivial_components(
-        entry in entries(all),
+        entry in entries(floating),
         types in types(all),
     ) {
         let graph = Graph::new(128, Vec::new());
@@ -306,7 +306,7 @@ cases! {
     fn interleaved_components_solve_in_input_order(
         #[case] rhs: [f64; 4],
         #[case] want: [f64; 4],
-        route in routes(all),
+        route in routes(floating),
         types in types(all),
     ) {
         let (entry, mode) = route;
@@ -320,7 +320,7 @@ cases! {
 }
 
 cases! {
-    fn an_empty_system_solves_to_an_empty_vector(entry in entries(all), types in types(all)) {
+    fn an_empty_system_solves_to_an_empty_vector(entry in entries(floating), types in types(all)) {
         let reduced = entry.reduce(&Graph::new(0, Vec::new()), types);
         assert!(reduced.factorize(&Config::default()).solve(&[]).is_empty());
     }
@@ -370,7 +370,7 @@ fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
 
 #[test]
 fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
-    use approx_chol::input::{Laplacian, Weights};
+    use approx_chol::input::{Laplacian, Sddm};
     use approx_chol::{factorize_with, Backend};
     // Min-degree eliminates the ground first and leaves vertex 0 as the sink; `−Σb` then cancels to 1e24 over a 1e-290 pivot.
     let (a, b, w, ground) = ([0u32, 1], [1u32, 2], [1e-290, 1e30], [0.0, 1e40, 0.0]);
@@ -380,8 +380,8 @@ fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
         backend: Backend::Approximate,
         ..Config::default()
     };
-    let path = Laplacian::new(3, &a, &b, Weights::of(&w).unwrap()).unwrap();
-    let factor = factorize_with(path.grounded(&ground).unwrap(), config).unwrap();
+    let path = Laplacian::weighted(3, &a, &b, &w).unwrap();
+    let factor = factorize_with(Sddm::new(path, &ground).unwrap(), config).unwrap();
     assert_close(
         "light sink",
         &factor.solve(&rhs).unwrap(),
@@ -392,7 +392,7 @@ fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
 
 #[test]
 fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
-    use approx_chol::input::{BipartiteGram, FactorWidth1, Weights};
+    use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1, Weights};
     use approx_chol::{factorize_with, Backend};
     // Three left vertices on one right vertex, each by a cancelling pair: `S` is one grounded slot, so AC2 samples no edge.
     let (left, right) = ([0u32, 0, 1, 1, 2, 2], [0u32; 6]);
@@ -408,10 +408,10 @@ fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
                 complement,
                 ..Config::default()
             };
-            let gram = BipartiteGram::new(
+            let gram = BipartiteFactorWidth2::new(
                 FactorWidth1::new(3, &left, Some(&loadings[..])).unwrap(),
-                FactorWidth1::<f64>::new(1, &right, None).unwrap(),
-                Weights::of(&weights).unwrap(),
+                FactorWidth1::new(1, &right, None).unwrap(),
+                Weights::Of(&weights),
             )
             .unwrap();
             let solved = factorize_with(gram, config).unwrap().solve(&b).unwrap();
