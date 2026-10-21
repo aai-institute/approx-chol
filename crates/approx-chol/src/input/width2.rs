@@ -94,6 +94,11 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         }
     }
 
+    /// `V`'s column count, known before any column is read.
+    pub(crate) fn n_columns(&self) -> usize {
+        self.a.len()
+    }
+
     /// Each column in order; write `visit` as `#[inline(always)] |column| …` (outlined: 1.6-1.9x).
     #[inline(always)]
     pub(crate) fn for_each_column<S: Index>(self, visit: impl FnMut(Column<T, S>)) {

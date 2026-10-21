@@ -17,7 +17,7 @@ pub(super) fn upper<T: Real, J: PrimInt, I: Index>(
     sum_cells::<T, J, I>(v, &counts, 0, pair)
 }
 
-/// The biadjacency `C` from the left part's rows, summed in a dense table when small (+54% without it).
+/// The biadjacency `C` from the left part's rows, summed in a dense table when columns fill it (+54% without it).
 pub(super) fn cross<T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
     n_left: usize,
@@ -25,17 +25,19 @@ pub(super) fn cross<T: Real, J: PrimInt, I: Index>(
     pair: impl FnMut(usize, usize, f64),
 ) -> Result<Rows<T, I>, ReduceError> {
     let table = n_left.saturating_mul(v.n() - n_left);
+    let columns = v.n_columns();
+    let dense = match table <= DENSE_TABLE_MAX_CELLS {
+        // Measured crossover in instructions: the table wins once columns reach a tenth of it.
+        true => columns.saturating_mul(10) >= table,
+        // Past the cap, the table wins only where the buckets would take more memory.
+        false => columns.saturating_mul(12) >= table.saturating_mul(8),
+    };
     // `?` per arm: returning the arms' results directly reshuffled the whole build's inlining.
-    let a = match table <= DENSE_TABLE_MAX_CELLS {
+    let a = match dense {
         true => dense_cross(v, n_left, seen, pair)?,
         false => {
             let counts = counts::<T, J, I>(v, n_left, seen);
-            let columns: usize = counts.iter().sum();
-            // Past the cap, the table still wins whenever the buckets would take more memory.
-            match columns.saturating_mul(12) < table.saturating_mul(8) {
-                true => sum_cells::<T, J, I>(v, &counts, n_left, pair)?,
-                false => dense_cross(v, n_left, |_| {}, pair)?,
-            }
+            sum_cells::<T, J, I>(v, &counts, n_left, pair)?
         }
     };
     Ok(a)
