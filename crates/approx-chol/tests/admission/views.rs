@@ -1,11 +1,11 @@
 use approx_chol::input::{
-    BipartiteGram, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, ViewError, Weights,
+    BipartiteGram, CsrRef, FactorWidth1, FactorWidth2, Laplacian, ViewError, Weights,
 };
 use approx_chol::{factorize, Error, ReduceError};
 use rstest::rstest;
 
 use super::assert_names_a_defect;
-use super::gram::{matrix, solve_residual};
+use super::gram::{dense_csr, matrix, solve_residual};
 
 const PATH_A: [u32; 2] = [0, 1];
 const PATH_B: [u32; 2] = [1, 2];
@@ -68,10 +68,8 @@ fn a_weight_below_min_positive_over_epsilon_is_out_of_range_at_its_edge() {
 fn a_root_weight_whose_square_underflows_is_out_of_range_at_its_edge() {
     let s = Weights::sqrt_of(&[1.0, 1e-170]).unwrap();
     let laplacian = Laplacian::new(3, &PATH_A, &PATH_B, s).unwrap();
-    let signed = SignedGraph::new(3, &PATH_A, &PATH_B, &[true, false], s).unwrap();
-    for factor in [factorize(laplacian), factorize(signed)] {
-        assert_names_a_defect(factor.expect_err("tiny root"), &out_of_range(&[1, 2]));
-    }
+    let error = factorize(laplacian).expect_err("tiny root");
+    assert_names_a_defect(error, &out_of_range(&[1, 2]));
 }
 
 #[rstest]
@@ -131,29 +129,6 @@ fn an_out_of_range_ground_is_rejected_at_its_vertex(#[case] ground: f64) {
     let grounded = unit_path().grounded(&ground).expect("a valid ground");
     let error = factorize(grounded).expect_err("ground out of range");
     assert_names_a_defect(error, &out_of_range(&[2]));
-}
-
-fn signed(a: &[u32], b: &[u32], positive: &[bool]) -> Option<ViewError> {
-    SignedGraph::<f64>::new(3, a, b, positive, Weights::unit()).err()
-}
-
-#[rstest]
-#[case::a_sign_per_edge(signed(&PATH_A, &PATH_B, &[true]), two_edges_but(1))]
-#[case::ends_of_unequal_length(signed(&PATH_A, &[1], &[true, false]), two_edges_but(1))]
-#[case::end_past_n(
-    signed(&[0, 3], &PATH_B, &[true, false]),
-    ViewError::IndexOutOfRange { column: 1 }
-)]
-#[case::self_loop(
-    signed(&[1, 1], &PATH_B, &[true, false]),
-    ViewError::RepeatedVertex { column: 0 }
-)]
-#[case::nan_weight(Weights::of(&[1.0, f64::NAN]).err(), ViewError::InvalidWeight { column: 1 })]
-fn signed_graph_new_rejects_mismatched_lengths_and_bad_ends_at_their_column(
-    #[case] observed: Option<ViewError>,
-    #[case] expected: ViewError,
-) {
-    assert_eq!(observed, Some(expected));
 }
 
 #[test]
@@ -304,4 +279,33 @@ fn a_gram_vertex_whose_every_term_underflows_is_out_of_range() {
     let gram = FactorWidth2::new(4, &[0u32, 2], &[1, 3], &x, &y).unwrap();
     let error = factorize(gram).expect_err("every term underflows");
     assert_names_a_defect(error, &out_of_range(&[0, 1]));
+}
+
+fn with_diagonal(mut matrix: Vec<Vec<f64>>, diagonal: &[f64]) -> Vec<Vec<f64>> {
+    for (i, d) in diagonal.iter().enumerate() {
+        matrix[i][i] += d;
+    }
+    matrix
+}
+
+#[rstest]
+#[case::balanced(&[0, 1], &[1, 2], &[true, false])]
+#[case::frustrated(&[0, 1, 0], &[1, 2, 2], &[true, true, true])]
+#[case::cancelling(&[0, 0, 1], &[1, 1, 2], &[true, false, false])]
+fn a_grounded_signed_graph_solves_its_matrix(
+    #[case] a: &[u32],
+    #[case] b: &[u32],
+    #[case] positive: &[bool],
+) {
+    let ground = [0.5, 0.0, 0.25];
+    let x = vec![1.0; a.len()];
+    let y: Vec<f64> = positive
+        .iter()
+        .map(|&p| if p { -1.0 } else { 1.0 })
+        .collect();
+    let matrix = with_diagonal(matrix(3, a, b, &x, &y), &ground);
+    let (ptrs, columns, values) = dense_csr(&matrix);
+    let csr = CsrRef::new(&ptrs, &columns, &values, 3).unwrap();
+    let factor = factorize(csr).expect("a grounded signed graph");
+    solve_residual(&factor, &matrix);
 }

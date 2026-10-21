@@ -1,10 +1,10 @@
 use num_traits::PrimInt;
 
-use super::{folding_signs, Congruent};
-use crate::input::{BipartiteLaplacian, Laplacian, SignedGraph};
+use super::Congruent;
+use crate::input::{BipartiteLaplacian, Laplacian};
 use crate::sgdd::block::{Balance, ReduceError};
 use crate::sgdd::congruence::Congruence;
-use crate::sgdd::decomposition::{assemble_bipartite, assemble_laplacian, assemble_signed};
+use crate::sgdd::decomposition::{assemble_bipartite, assemble_laplacian};
 use crate::sgdd::Sgdd;
 use crate::{Index, Real};
 
@@ -35,22 +35,6 @@ impl<T: Real, I: Index> Sgdd<T, I> {
                 };
                 m.block(Balance::Balanced(grounding))
             })
-            .map(Sgdd::new)
-    }
-
-    /// Dominant by shape, each end's surplus its pairs' cancelled mass; its signs are searched.
-    pub(crate) fn from_signed_graph<J: PrimInt>(
-        graph: SignedGraph<'_, T, J>,
-    ) -> Result<Self, ReduceError> {
-        assemble_signed(graph)?
-            .extract(
-                |(vertices, off_diagonal, grounding)| match folding_signs(&off_diagonal) {
-                    Some(signs) => Congruent::new(vertices, off_diagonal, signs)
-                        .block(Balance::Balanced(grounding)),
-                    None => Congruent::new(vertices, off_diagonal, Congruence::Identity)
-                        .block(Balance::Frustrated(grounding)),
-                },
-            )
             .map(Sgdd::new)
     }
 }

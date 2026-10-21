@@ -25,7 +25,6 @@ impl<T: Real, I: Index> Sgdd<T, I> {
             Input::Csr(csr) => of_csr(Canonical::of(csr)?)?.reduce(&policy)?,
             Input::UpperCsr(csr) => of_upper(Canonical::of(csr.0)?)?.reduce(&policy)?,
             Input::Laplacian(laplacian) => Self::from_laplacian(laplacian)?,
-            Input::SignedGraph(graph) => Self::from_signed_graph(graph)?,
             Input::Gram(v) => Self::from_gram(v, policy)?,
             Input::BipartiteGram(gram) => Self::from_bipartite_gram(gram, policy)?,
         })

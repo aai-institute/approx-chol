@@ -12,7 +12,6 @@ use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::{Index, Real};
 pub(super) use assembly::{
     assemble_bipartite, assemble_bipartite_gram, assemble_general, assemble_laplacian,
-    assemble_signed,
 };
 use partition::Partition;
 use partition::UnionFind;
@@ -140,7 +139,7 @@ type General<T, I> = Partitioned<Assembled<T, UpperAdjacency<T, I>>, I>;
 /// A bipartite Gram assembled as `C` and the diagonal, and its components.
 type AssembledBipartite<T, I> = Partitioned<Assembled<T, Rows<T, I>>, I>;
 
-/// A Laplacian or signed graph assembled as `C` and `σ`, and its components.
+/// A Laplacian assembled as `C` and `σ`, and its components.
 type DominantGraph<'a, T, I> = Partitioned<Dominant<'a, T, UpperAdjacency<T, I>>, I>;
 
 /// A bipartite Laplacian assembled as `C`, and its components.

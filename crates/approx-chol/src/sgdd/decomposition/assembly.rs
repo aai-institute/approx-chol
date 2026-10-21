@@ -8,28 +8,10 @@ use std::borrow::Cow;
 use super::{
     Assembled, AssembledBipartite, Dominant, DominantBipartite, DominantGraph, General, Partitioned,
 };
-use crate::input::{BipartiteColumns, Column, IntoColumns, Laplacian, SignedGraph};
+use crate::input::{BipartiteColumns, Column, IntoColumns, Laplacian};
 use crate::sgdd::block::ReduceError;
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{diagonal_in_range, in_range, narrow, widen, Index, Real};
-
-/// The signed graph's cells, each vertex's surplus its pairs' cancelled mass.
-pub(in crate::sgdd) fn assemble_signed<T: Real, J: PrimInt, I: Index>(
-    graph: SignedGraph<'_, T, J>,
-) -> Result<DominantGraph<'static, T, I>, ReduceError> {
-    let (mut abs, mut surplus) = (vec![0.0_f64; graph.n()], vec![0.0_f64; graph.n()]);
-    let a = assemble(
-        graph,
-        |_| {},
-        |i, j, masses: Masses| {
-            let (c, s) = (masses.value().abs(), masses.surplus());
-            (abs[i], abs[j]) = (abs[i] + c, abs[j] + c);
-            (surplus[i], surplus[j]) = (surplus[i] + s, surplus[j] + s);
-        },
-    )?;
-    let surplus = surplus.into_iter().map(narrow).collect();
-    dominant(a, &abs, Some(Cow::Owned(surplus)))
-}
 
 /// The Laplacian's cells, each vertex's surplus its ground.
 pub(in crate::sgdd) fn assemble_laplacian<'a, T: Real, J: PrimInt, I: Index>(
@@ -72,22 +54,22 @@ pub(in crate::sgdd) fn assemble_general<T: Real, I: Index>(
     v: impl IntoColumns<T>,
 ) -> Result<General<T, I>, ReduceError> {
     let mut sums = vec![0.0_f64; v.n()];
-    let a = assemble::<T, I, f64>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
+    let a = assemble::<T, I>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
     assembled(a, sums)
 }
 
-/// `A`'s strict upper triangle and components, `seen` visiting each column once and `pair` each cell summed as `C` with its two ends.
+/// `A`'s strict upper triangle and components, `seen` visiting each column once and `pair` each summed cell with its two ends.
 // Out of line, the Laplacian entry measured 3–4% slower: the same work, laid out worse.
 #[inline(always)]
-fn assemble<T: Real, I: Index, C: CellSum>(
+fn assemble<T: Real, I: Index>(
     v: impl IntoColumns<T>,
     seen: impl FnMut(&Column<T, I>),
-    mut pair: impl FnMut(usize, usize, C),
+    mut pair: impl FnMut(usize, usize, f64),
 ) -> Result<Partitioned<UpperAdjacency<T, I>, I>, ReduceError> {
     let counts = counts::<T, I>(v, v.n(), seen);
     let mut sets = UnionFind::<I>::new(v.n());
-    let rows = sum_cells::<T, I, C>(v, &counts, 0, |i, j, cell| {
-        if cell.value() != 0.0 {
+    let rows = sum_cells::<T, I>(v, &counts, 0, |i, j, cell| {
+        if cell != 0.0 {
             sets.union(i, j);
         }
         pair(i, j, cell);
@@ -165,7 +147,7 @@ fn cross<T: Real, I: Index>(
             let columns: usize = counts.iter().sum();
             // Past the cap, the table still wins whenever the buckets would take more memory.
             match columns.saturating_mul(12) < table.saturating_mul(8) {
-                true => sum_cells::<T, I, f64>(v, &counts, n_left, |_, _, _| {})?,
+                true => sum_cells::<T, I>(v, &counts, n_left, |_, _, _| {})?,
                 false => dense_cross(v, |_| {})?,
             }
         }
@@ -222,56 +204,12 @@ fn counts<T: Real, I: Index>(
     counts
 }
 
-/// What one cell's terms sum to: their value, or a signed graph's two masses kept apart.
-trait CellSum: Copy + Default {
-    fn add(&mut self, x: f64);
-    fn value(self) -> f64;
-}
-
-impl CellSum for f64 {
-    #[inline(always)]
-    fn add(&mut self, x: f64) {
-        *self += x;
-    }
-
-    fn value(self) -> f64 {
-        self
-    }
-}
-
-/// A pair's positive and negative weight apart: cell `p − q`, each end's surplus `2·min(p, q)`.
-#[derive(Clone, Copy, Default)]
-struct Masses {
-    positive: f64,
-    negative: f64,
-}
-
-impl CellSum for Masses {
-    #[inline(always)]
-    fn add(&mut self, x: f64) {
-        match x >= 0.0 {
-            true => self.positive += x,
-            false => self.negative -= x,
-        }
-    }
-
-    fn value(self) -> f64 {
-        self.positive - self.negative
-    }
-}
-
-impl Masses {
-    fn surplus(self) -> f64 {
-        2.0 * self.positive.min(self.negative)
-    }
-}
-
 /// Cells bucketed at their lower end in column order, so each sums as a dense table would; `pair` sees each summed cell, a cancelled one too.
-fn sum_cells<T: Real, I: Index, C: CellSum>(
+fn sum_cells<T: Real, I: Index>(
     v: impl IntoColumns<T>,
     counts: &[usize],
     first_column: usize,
-    mut pair: impl FnMut(usize, usize, C),
+    mut pair: impl FnMut(usize, usize, f64),
 ) -> Result<Rows<T, I>, ReduceError> {
     let starts: Vec<usize> = std::iter::once(0)
         .chain(counts.iter().scan(0, |end, &count| {
@@ -294,7 +232,7 @@ fn sum_cells<T: Real, I: Index, C: CellSum>(
     );
     drop(cursor);
     let n_cols = v.n() - first_column;
-    let mut sums = vec![C::default(); n_cols];
+    let mut sums = vec![0.0_f64; n_cols];
     let mut touched: Vec<I> = Vec::new();
     let mut ptrs = Vec::with_capacity(starts.len());
     ptrs.push(0);
@@ -303,10 +241,10 @@ fn sum_cells<T: Real, I: Index, C: CellSum>(
         for p in span[0]..span[1] {
             let j = columns[p];
             // A cell cancelling to zero mid-row is pushed again; the dedup absorbs it.
-            if sums[j.index()].value() == 0.0 {
+            if sums[j.index()] == 0.0 {
                 touched.push(j);
             }
-            sums[j.index()].add(cells[p]);
+            sums[j.index()] += cells[p];
         }
         touched.sort_unstable();
         touched.dedup();
@@ -314,9 +252,9 @@ fn sum_cells<T: Real, I: Index, C: CellSum>(
         for &j in &touched {
             let cell = std::mem::take(&mut sums[j.index()]);
             pair(i, first_column + j.index(), cell);
-            if cell.value() != 0.0 {
+            if cell != 0.0 {
                 columns[out] = j;
-                cells[out] = widen(admit::<T>(i, cell.value())?);
+                cells[out] = widen(admit::<T>(i, cell)?);
                 out += 1;
             }
         }

@@ -1,5 +1,5 @@
 use approx_chol::input::{
-    BipartiteGram, CsrRef, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsrRef, Weights,
+    BipartiteGram, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef, Weights,
 };
 use approx_chol::{factorize_with, Config, Factor, Real};
 use num_traits::{NumCast, PrimInt};
@@ -15,7 +15,6 @@ pub enum Entry {
     BipartiteGram,
     Laplacian,
     GroundedLaplacian,
-    SignedGraph,
 }
 
 /// The scalar a factor computes in and the index type its input view states.
@@ -150,7 +149,6 @@ impl Entry {
             Entry::BipartiteGram => !lone_ground && bipartition(graph).is_some(),
             Entry::Laplacian => !signed && !grounded,
             Entry::GroundedLaplacian => !signed,
-            Entry::SignedGraph => !grounded,
         }
     }
 
@@ -273,12 +271,6 @@ impl Entry {
                     _ => factorize_with(view, config),
                 }
                 .unwrap_or_else(|error| rejected(&error))
-            }
-            Entry::SignedGraph => {
-                let positive: Vec<bool> = graph.edges.iter().map(|edge| edge.positive).collect();
-                let view =
-                    SignedGraph::new(n, &a, &b, &positive, weights).expect("valid signed graph");
-                factorize_with(view, config).unwrap_or_else(|error| rejected(&error))
             }
         }
     }
