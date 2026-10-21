@@ -1,4 +1,4 @@
-//! What the caller states about `A`: a CSR matrix or a [`Gram`].
+//! What the caller states about `A`: a CSR matrix, a Laplacian, an SDDM or a factor-width-2 Gram.
 
 mod csr;
 mod gram;
@@ -10,7 +10,10 @@ use num_traits::PrimInt;
 pub(crate) use csr::Canonical;
 pub use csr::{CsrError, CsrRef, IndexKind, OwnedCsr, UpperCsrRef};
 pub(crate) use gram::Column;
-pub use gram::{FactorWidth1, Gram, ViewError, Weights};
+pub(crate) use gram::Gram;
+pub use gram::{
+    BipartiteFactorWidth2, FactorWidth1, FactorWidth2, Laplacian, Sddm, ViewError, Weights,
+};
 
 use crate::Real;
 
@@ -27,8 +30,14 @@ pub enum Input<'a, T, I = u32> {
     Csr(CsrRef<'a, T, I>),
     /// A symmetric matrix stored by its upper triangle.
     UpperCsr(UpperCsrRef<'a, T, I>),
-    /// `V W Vᵀ + diag(d)`, `V` of factor width 2.
-    Gram(Gram<'a, T, I>),
+    /// A graph Laplacian `L`.
+    Laplacian(Laplacian<'a, T, I>),
+    /// `L + diag(s)`, `s ≥ 0` and not all zero.
+    Sddm(Sddm<'a, T, I>),
+    /// `V Vᵀ`, each column of `V` with two nonzeros.
+    FactorWidth2(FactorWidth2<'a, T, I>),
+    /// `V W Vᵀ`, `V = [V_l; V_r]` with two width-1 sides on disjoint vertex sets.
+    BipartiteFactorWidth2(BipartiteFactorWidth2<'a, T, I>),
 }
 
 impl<T: Real, J: PrimInt + Sync> Input<'_, T, J> {
@@ -37,7 +46,10 @@ impl<T: Real, J: PrimInt + Sync> Input<'_, T, J> {
         match self {
             Self::Csr(csr) => csr.n(),
             Self::UpperCsr(csr) => csr.0.n(),
-            Self::Gram(v) => v.n(),
+            Self::Laplacian(Laplacian(v))
+            | Self::Sddm(Sddm(v))
+            | Self::FactorWidth2(FactorWidth2(v))
+            | Self::BipartiteFactorWidth2(BipartiteFactorWidth2(v)) => v.n(),
         }
     }
 }
@@ -55,7 +67,10 @@ macro_rules! input_from {
 input_from! {
     Csr(CsrRef),
     UpperCsr(UpperCsrRef),
-    Gram(Gram),
+    Laplacian(Laplacian),
+    Sddm(Sddm),
+    FactorWidth2(FactorWidth2),
+    BipartiteFactorWidth2(BipartiteFactorWidth2),
 }
 
 impl<'a, T, I: PrimInt> From<&'a OwnedCsr<T, I>> for Input<'a, T, I> {

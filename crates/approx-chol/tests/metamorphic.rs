@@ -48,8 +48,13 @@ fn permuted(graph: &Graph, p: &[usize]) -> Graph {
     }
 }
 
+/// Half the draws tie vertex 0 to ground, so the graph is an SDDM.
 fn interleaved_case(entry: Entry) -> impl Strategy<Value = (Graph, Vec<f64>, Vec<usize>)> {
-    let graphs = interleaved_components().prop_map(|(graph, _parts)| graph);
+    let graphs =
+        (interleaved_components(), any::<bool>()).prop_map(|((mut graph, _), grounded)| {
+            graph.ground[0] = if grounded { 1.0 } else { 0.0 };
+            graph
+        });
     stated_by(entry, graphs).prop_flat_map(|graph| {
         let n = graph.n;
         (
@@ -67,25 +72,25 @@ cases! {
         types in types(all),
     ) {
         check(interleaved_case(entry), |(graph, rhs, p)| {
-            let mut permuted_rhs = vec![0.0; rhs.len()];
-            (rhs.iter().enumerate()).for_each(|(v, &value)| permuted_rhs[p[v]] = value);
-            let relabeled = permuted(&graph, &p);
-            let base = entry.reduce(&graph, types);
-            let got = entry.reduce(&relabeled, types);
-            let base = base.factorize(&dense()).solve(&rhs);
-            let got = got.factorize(&dense()).solve(&permuted_rhs);
-            let scale = base.iter().fold(1.0f64, |scale, x| scale.max(x.abs()));
-            for (v, &want) in base.iter().enumerate() {
-                let got = got[p[v]];
-                // Measured at most 6.3ε·‖x‖∞; a broken permutation is off by order one.
-                prop_assert!(
-                    (got - want).abs() <= 64.0 * types.epsilon() * scale,
-                    "{types:?} x[{v}] -> x'[{}]: {got:e} vs {want:e} (p={p:?})",
-                    p[v]
-                );
-            }
-            Ok(())
-        });
+        let mut permuted_rhs = vec![0.0; rhs.len()];
+        (rhs.iter().enumerate()).for_each(|(v, &value)| permuted_rhs[p[v]] = value);
+        let relabeled = permuted(&graph, &p);
+        let base = entry.reduce(&graph, types);
+        let got = entry.reduce(&relabeled, types);
+        let base = base.factorize(&dense()).solve(&rhs);
+        let got = got.factorize(&dense()).solve(&permuted_rhs);
+        let scale = base.iter().fold(1.0f64, |scale, x| scale.max(x.abs()));
+        for (v, &want) in base.iter().enumerate() {
+            let got = got[p[v]];
+            // Measured at most 6.3ε·‖x‖∞; a broken permutation is off by order one.
+            prop_assert!(
+                (got - want).abs() <= 64.0 * types.epsilon() * scale,
+                "{types:?} x[{v}] -> x'[{}]: {got:e} vs {want:e} (p={p:?})",
+                p[v]
+            );
+        }
+        Ok(())
+    });
     }
 }
 
@@ -133,7 +138,7 @@ fn assert_a_constant_leaves_the_solution(entry: Entry, types: Types, sparse: Spa
 cases! {
     /// A floating block projects a constant out of `b`; only the solve's own sums can lose it.
     fn a_constant_added_to_a_floating_rhs_leaves_the_solution(
-        route in sparse_routes(all),
+        route in sparse_routes(floating),
         types in types(f64),
     ) {
         let (entry, sparse) = route;

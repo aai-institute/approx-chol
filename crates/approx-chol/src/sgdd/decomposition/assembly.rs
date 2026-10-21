@@ -116,14 +116,12 @@ pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: 
             (abs[i], abs[j]) = (abs[i] + c.abs(), abs[j] + c.abs());
         },
     )?;
-    let surplus = v.diagonal();
+    let surplus = v.surplus();
     let s = |i: usize| surplus.map_or(0.0, |s| widen(s[i]));
     if let Some(vertex) = (0..abs.len()).find(|&i| !diagonal_in_range(narrow::<T>(abs[i] + s(i)))) {
         return Err(ReduceError::OutOfRange { vertex });
     }
     let Partitioned { a, partition } = a;
-    // An all-zero surplus grounds nothing: dropped once here, not copied into every block.
-    let surplus = surplus.filter(|s| s.iter().any(|&x| x != T::zero()));
     let a = Dominant {
         adjacency: a,
         surplus,
@@ -131,22 +129,14 @@ pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: 
     Ok(Partitioned { a, partition })
 }
 
-/// `A`'s cells, its diagonal `σ_i + Σ_k w_k v_ik²` and its components, summed in one column pass.
+/// `A`'s cells, its diagonal `Σ_k w_k v_ik²` and its components, summed in one column pass.
 pub(in crate::sgdd) fn assemble_values<T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
     cells: S,
     v: Gram<'_, T, J>,
 ) -> Result<ValueCells<T, I, S>, ReduceError> {
-    let mut sums = sigma_sums(v.diagonal(), v.n());
+    let mut sums = vec![0.0; v.n()];
     let a = cells.sum::<T, J, I>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
     assembled(a, sums)
-}
-
-/// Each vertex's `σ_i` in `f64`, where its column sums start.
-fn sigma_sums<T: Real>(sigma: Option<&[T]>, n: usize) -> Vec<f64> {
-    match sigma {
-        Some(s) => s.iter().map(|&s| widen(s)).collect(),
-        None => vec![0.0; n],
-    }
 }
 
 /// Adds `w v²` at both ends, so a row of only underflowed terms fails the range screen.

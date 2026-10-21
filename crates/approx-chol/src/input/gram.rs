@@ -1,15 +1,15 @@
-//! `A = V W Vᵀ + diag(d)`: column `k` of `V` joins `a[k]` and `b[k]`.
+//! The factor-shaped inputs, each lowered to `A = V W Vᵀ + diag(s)`: column `k` of `V` joins `a[k]` and `b[k]`.
 
 use num_traits::PrimInt;
 
 use super::index;
 use crate::{widen, Index, Real};
 
-/// `V`'s columns and vertices, one variant per constructor.
+/// `V`'s columns and vertices, one variant per input type.
 #[derive(Clone, Copy, Debug)]
 enum Columns<'a, T> {
-    /// `e_a − e_b`, `a[k] ≠ b[k] < n`.
-    Incidence { n: usize },
+    /// `e_a − e_b`, `a[k] ≠ b[k] < n`, and an [`Sddm`]'s surplus.
+    Incidence { n: usize, surplus: Option<&'a [T]> },
     /// `x[k] e_a + y[k] e_b`, `a[k] ≠ b[k] < n`.
     FactorWidth2 { n: usize, x: &'a [T], y: &'a [T] },
     /// `x[k] e_a + y[k] e_(n_left + b)`, a missing side `1`; with neither, read switched as `e_a − e_b`.
@@ -21,81 +21,111 @@ enum Columns<'a, T> {
     },
 }
 
-/// `A = V W Vᵀ + diag(d)` on `n` vertices.
+/// `A = V W Vᵀ + diag(s)` on `n` vertices, the form every factor-shaped input lowers to.
 #[derive(Clone, Copy, Debug)]
-pub struct Gram<'a, T, I = u32> {
+pub(crate) struct Gram<'a, T, I = u32> {
     a: &'a [I],
     b: &'a [I],
-    weights: Weights<'a, T>,
+    weights: Weights<&'a [T]>,
     columns: Columns<'a, T>,
-    diagonal: Option<&'a [T]>,
 }
 
-impl<'a, T: Real, I: PrimInt> Gram<'a, T, I> {
-    /// Graph Laplacian: edge `k` is `e_a − e_b`, `a[k] ≠ b[k] < n`.
-    pub fn laplacian(n: usize, a: &'a [I], b: &'a [I]) -> Result<Self, ViewError> {
-        check_ends(n, a, b)?;
-        Ok(Self::of(a, b, Columns::Incidence { n }))
+/// The Laplacian of an undirected graph on `n` vertices.
+#[derive(Clone, Copy, Debug)]
+pub struct Laplacian<'a, T, I = u32>(pub(crate) Gram<'a, T, I>);
+
+impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
+    /// Edge `k` joins `u[k] ≠ v[k] < n` with weight 1; repeated edges sum.
+    pub fn new(n: usize, u: &'a [I], v: &'a [I]) -> Result<Self, ViewError> {
+        check_ends(n, u, v)?;
+        let columns = Columns::Incidence { n, surplus: None };
+        Ok(Self(Gram::of(u, v, columns, Weights::Unit)))
     }
 
-    /// Column `k` is `x[k] e_a + y[k] e_b`, `a[k] ≠ b[k] < n`.
-    pub fn factor_width_2(
+    /// Edge `k` joins `u[k] ≠ v[k] < n` with weight `w[k]`, finite and `≥ 0`; repeated edges sum.
+    pub fn weighted(n: usize, u: &'a [I], v: &'a [I], w: &'a [T]) -> Result<Self, ViewError> {
+        let weights = Weights::Of(w).checked(u.len())?;
+        let Self(gram) = Self::new(n, u, v)?;
+        Ok(Self(Gram { weights, ..gram }))
+    }
+}
+
+/// `L + diag(s)`: a Laplacian plus each vertex's surplus over diagonal dominance.
+#[derive(Clone, Copy, Debug)]
+pub struct Sddm<'a, T, I = u32>(pub(crate) Gram<'a, T, I>);
+
+impl<'a, T: Real, I: PrimInt> Sddm<'a, T, I> {
+    /// `s[i]` finite and `≥ 0`, one per vertex, not all zero (that is a [`Laplacian`]).
+    pub fn new(laplacian: Laplacian<'a, T, I>, surplus: &'a [T]) -> Result<Self, ViewError> {
+        let gram = laplacian.0;
+        let n = gram.n();
+        length(n, surplus.len())?;
+        check(surplus, nonnegative, |vertex| ViewError::InvalidSurplus {
+            vertex,
+        })?;
+        match surplus.iter().all(|&s| s == T::zero()) {
+            true => Err(ViewError::ZeroSurplus),
+            false => Ok(Self(Gram {
+                columns: Columns::Incidence {
+                    n,
+                    surplus: Some(surplus),
+                },
+                ..gram
+            })),
+        }
+    }
+}
+
+/// `V Vᵀ` on `n` vertices, column `k` of `V` being `x[k] e_a[k] + y[k] e_b[k]`.
+#[derive(Clone, Copy, Debug)]
+pub struct FactorWidth2<'a, T, I = u32>(pub(crate) Gram<'a, T, I>);
+
+impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
+    /// `a[k] ≠ b[k] < n`; `a`, `x`, `b`, `y` one entry per column.
+    pub fn new(
         n: usize,
-        a: &'a [I],
-        b: &'a [I],
-        x: &'a [T],
-        y: &'a [T],
+        (a, x): (&'a [I], &'a [T]),
+        (b, y): (&'a [I], &'a [T]),
     ) -> Result<Self, ViewError> {
         length(a.len(), x.len())?;
         length(a.len(), y.len())?;
         check_ends(n, a, b)?;
-        Ok(Self::of(a, b, Columns::FactorWidth2 { n, x, y }))
+        let columns = Columns::FactorWidth2 { n, x, y };
+        Ok(Self(Gram::of(a, b, columns, Weights::Unit)))
     }
+}
 
-    /// `V = [V_l; V_r]`, both width 1 on disjoint rows, left rows first; the sides share the column count.
-    pub fn bipartite(
+/// `V W Vᵀ`, `V = [V_l; V_r]`: left vertices first, then right.
+#[derive(Clone, Copy, Debug)]
+pub struct BipartiteFactorWidth2<'a, T, I = u32>(pub(crate) Gram<'a, T, I>);
+
+impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
+    /// Both sides have the same column count; `weights` has one entry per column.
+    pub fn new(
         left: FactorWidth1<'a, T, I>,
         right: FactorWidth1<'a, T, I>,
+        weights: Weights<&'a [T]>,
     ) -> Result<Self, ViewError> {
         length(left.rows.len(), right.rows.len())?;
+        let weights = weights.checked(left.rows.len())?;
         let columns = Columns::Bipartite {
             n_left: left.n,
             n_right: right.n,
             x: left.values,
             y: right.values,
         };
-        Ok(Self::of(left.rows, right.rows, columns))
+        Ok(Self(Gram::of(left.rows, right.rows, columns, weights)))
     }
+}
 
-    fn of(a: &'a [I], b: &'a [I], columns: Columns<'a, T>) -> Self {
+impl<'a, T: Real, I: PrimInt> Gram<'a, T, I> {
+    fn of(a: &'a [I], b: &'a [I], columns: Columns<'a, T>, weights: Weights<&'a [T]>) -> Self {
         Self {
             a,
             b,
-            weights: Weights(Weighting::Unit),
+            weights,
             columns,
-            diagonal: None,
         }
-    }
-
-    /// `V W Vᵀ` under `weights`, one per column.
-    pub fn with_weights(self, weights: Weights<'a, T>) -> Result<Self, ViewError> {
-        if let Weighting::Of(w) | Weighting::SqrtOf(w) = weights.0 {
-            length(self.a.len(), w.len())?;
-        }
-        Ok(Self { weights, ..self })
-    }
-
-    /// `V W Vᵀ + diag(d)`, one finite nonnegative `d_i` per vertex, replacing any earlier `d`.
-    pub fn with_diagonal(self, diagonal: &'a [T]) -> Result<Self, ViewError> {
-        length(self.n(), diagonal.len())?;
-        let valid = |d: T| d.is_finite() && d >= T::zero();
-        check(diagonal, valid, |vertex| ViewError::InvalidDiagonal {
-            vertex,
-        })?;
-        Ok(Self {
-            diagonal: Some(diagonal),
-            ..self
-        })
     }
 
     /// The left part's size, after which `b` is numbered, when `V` is bipartite.
@@ -106,9 +136,12 @@ impl<'a, T: Real, I: PrimInt> Gram<'a, T, I> {
         }
     }
 
-    /// `d`, which is no column of `V`.
-    pub(crate) fn diagonal(&self) -> Option<&'a [T]> {
-        self.diagonal
+    /// The surplus `s`, which only an [`Sddm`] has.
+    pub(crate) fn surplus(&self) -> Option<&'a [T]> {
+        match self.columns {
+            Columns::Incidence { surplus, .. } => surplus,
+            Columns::FactorWidth2 { .. } | Columns::Bipartite { .. } => None,
+        }
     }
 
     /// D: `V` is an incidence matrix, so `A` is dominant by shape and its diagonal derived.
@@ -127,7 +160,7 @@ impl<'a, T: Real, I: PrimInt> Gram<'a, T, I> {
     /// Dimension of `A`, not the column count; saturates, as a sum past `usize` fails allocation anyway.
     pub(crate) fn n(&self) -> usize {
         match self.columns {
-            Columns::Incidence { n } | Columns::FactorWidth2 { n, .. } => n,
+            Columns::Incidence { n, .. } | Columns::FactorWidth2 { n, .. } => n,
             Columns::Bipartite {
                 n_left, n_right, ..
             } => n_left.saturating_add(n_right),
@@ -173,12 +206,10 @@ impl<'a, T: Real, I: PrimInt> Gram<'a, T, I> {
         v_b: impl Fn(usize) -> T,
         visit: impl FnMut(Column<T, S>),
     ) {
-        match self.weights.0 {
-            Weighting::Unit => self.weighted(offset, v_a, v_b, |_| Weighting::Unit, visit),
-            Weighting::Of(w) => self.weighted(offset, v_a, v_b, |k| Weighting::Of(w[k]), visit),
-            Weighting::SqrtOf(s) => {
-                self.weighted(offset, v_a, v_b, |k| Weighting::SqrtOf(s[k]), visit)
-            }
+        match self.weights {
+            Weights::Unit => self.weighted(offset, v_a, v_b, |_| Weights::Unit, visit),
+            Weights::Of(w) => self.weighted(offset, v_a, v_b, |k| Weights::Of(w[k]), visit),
+            Weights::SqrtOf(s) => self.weighted(offset, v_a, v_b, |k| Weights::SqrtOf(s[k]), visit),
         }
     }
 
@@ -188,7 +219,7 @@ impl<'a, T: Real, I: PrimInt> Gram<'a, T, I> {
         offset: usize,
         v_a: impl Fn(usize) -> T,
         v_b: impl Fn(usize) -> T,
-        weight: impl Fn(usize) -> Weighting<T>,
+        weight: impl Fn(usize) -> Weights<T>,
         mut visit: impl FnMut(Column<T, S>),
     ) {
         for (k, (a, b)) in self.a.iter().zip(self.b).enumerate() {
@@ -220,37 +251,39 @@ impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
     }
 }
 
-/// Why a [`Gram`], [`FactorWidth1`] or [`Weights`] constructor rejected its slices.
+/// Why an input constructor rejected its slices.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewError {
-    /// A slice's length differs from the one the input fixed: the column count, or `n` for a diagonal.
+    /// A slice's length differs from the one the input fixed: the edge or column count, or `n`.
     LengthMismatch {
         /// The length the input fixed.
         expected: usize,
         /// The length found.
         found: usize,
     },
-    /// A column names a row its side, or `A`, does not have.
+    /// An edge or column names a vertex or row that does not exist.
     IndexOutOfRange {
-        /// The offending column of `V`.
-        column: usize,
+        /// The offending edge or column.
+        entry: usize,
     },
-    /// A column names one vertex at both ends.
+    /// An edge or column names one vertex at both ends.
     RepeatedVertex {
-        /// The offending column of `V`.
-        column: usize,
+        /// The offending edge or column.
+        entry: usize,
     },
     /// A weight is negative or not finite.
     InvalidWeight {
-        /// The offending column of `V`.
-        column: usize,
+        /// The offending edge or column.
+        entry: usize,
     },
-    /// A diagonal entry `σ_i`, a ground or a ridge, is negative or not finite.
-    InvalidDiagonal {
+    /// A surplus is negative or not finite.
+    InvalidSurplus {
         /// The offending vertex.
         vertex: usize,
     },
+    /// Every surplus is zero: the matrix is a [`Laplacian`].
+    ZeroSurplus,
 }
 
 impl core::fmt::Display for ViewError {
@@ -259,17 +292,15 @@ impl core::fmt::Display for ViewError {
             Self::LengthMismatch { expected, found } => {
                 write!(f, "slice has length {found}, expected {expected}")
             }
-            Self::IndexOutOfRange { column } => write!(f, "column {column} names a missing row"),
-            Self::RepeatedVertex { column } => write!(f, "column {column} names one vertex twice"),
-            Self::InvalidWeight { column } => {
-                write!(f, "column {column} has a negative or non-finite weight")
+            Self::IndexOutOfRange { entry } => write!(f, "entry {entry} names a missing vertex"),
+            Self::RepeatedVertex { entry } => write!(f, "entry {entry} names one vertex twice"),
+            Self::InvalidWeight { entry } => {
+                write!(f, "entry {entry} has a negative or non-finite weight")
             }
-            Self::InvalidDiagonal { vertex } => {
-                write!(
-                    f,
-                    "vertex {vertex} has a negative or non-finite diagonal entry"
-                )
+            Self::InvalidSurplus { vertex } => {
+                write!(f, "vertex {vertex} has a negative or non-finite surplus")
             }
+            Self::ZeroSurplus => write!(f, "every surplus is zero, so the matrix is a Laplacian"),
         }
     }
 }
@@ -283,7 +314,7 @@ pub(crate) struct Column<T, I> {
     pub(crate) b: I,
     pub(crate) v_a: T,
     pub(crate) v_b: T,
-    pub(crate) weight: Weighting<T>,
+    pub(crate) weight: Weights<T>,
 }
 
 impl<T: Real, I> Column<T, I> {
@@ -293,18 +324,19 @@ impl<T: Real, I> Column<T, I> {
     }
 }
 
-/// The diagonal `W`: per column of `V` as a slice, or one column's entry.
+/// `W`: one entry per column as a slice, checked by the constructor that takes it.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum Weighting<S> {
+pub enum Weights<S> {
     /// `W = I`.
     Unit,
-    /// `W = diag(w)`.
+    /// `W = diag(w)`, each `w` finite and `≥ 0`.
     Of(S),
-    /// `W = diag(s²)`, for a caller that keeps square roots.
+    /// `W = diag(s²)`, each `s` finite, for a caller that keeps square roots.
     SqrtOf(S),
 }
 
-impl<T: Real> Weighting<T> {
+impl<T: Real> Weights<T> {
     /// `w·x·y`, as `(s·x)·(s·y)` under `SqrtOf`.
     pub(crate) fn bilinear(self, x: f64, y: f64) -> f64 {
         match self {
@@ -331,26 +363,27 @@ impl<T: Real> Weighting<T> {
     }
 }
 
-/// `W`, one nonnegative entry per column of `V`, checked once so every [`Gram`] over the same columns can share it; a `Gram` without it has `W = I`.
-#[derive(Clone, Copy, Debug)]
-pub struct Weights<'a, T>(Weighting<&'a [T]>);
-
-impl<'a, T: Real> Weights<'a, T> {
-    /// `W = diag(w)`; each `w` finite and nonnegative.
-    pub fn of(w: &'a [T]) -> Result<Self, ViewError> {
-        check(w, |w| w.is_finite() && w >= T::zero(), weight)?;
-        Ok(Self(Weighting::Of(w)))
-    }
-
-    /// `W = diag(s²)`, for a caller that keeps square roots; each `s` finite.
-    pub fn sqrt_of(s: &'a [T]) -> Result<Self, ViewError> {
-        check(s, |s| s.is_finite(), weight)?;
-        Ok(Self(Weighting::SqrtOf(s)))
+impl<T: Real> Weights<&[T]> {
+    /// `W` over `columns` columns, each entry checked.
+    fn checked(self, columns: usize) -> Result<Self, ViewError> {
+        if let Self::Of(w) | Self::SqrtOf(w) = self {
+            length(columns, w.len())?;
+        }
+        match self {
+            Self::Unit => {}
+            Self::Of(w) => check(w, nonnegative, weight)?,
+            Self::SqrtOf(s) => check(s, |s| s.is_finite(), weight)?,
+        }
+        Ok(self)
     }
 }
 
-fn weight(column: usize) -> ViewError {
-    ViewError::InvalidWeight { column }
+fn nonnegative<T: Real>(x: T) -> bool {
+    x.is_finite() && x >= T::zero()
+}
+
+fn weight(entry: usize) -> ViewError {
+    ViewError::InvalidWeight { entry }
 }
 
 /// A slice of `found` entries where the input fixed `expected`.
@@ -377,7 +410,7 @@ fn check<T: Real>(
 fn check_rows<I: PrimInt>(n: usize, rows: &[I]) -> Result<(), ViewError> {
     let in_range = |row: &I| row.to_usize().is_some_and(|row| row < n);
     match rows.iter().position(|row| !in_range(row)) {
-        Some(column) => Err(ViewError::IndexOutOfRange { column }),
+        Some(entry) => Err(ViewError::IndexOutOfRange { entry }),
         None => Ok(()),
     }
 }
@@ -386,12 +419,12 @@ fn check_rows<I: PrimInt>(n: usize, rows: &[I]) -> Result<(), ViewError> {
 fn check_ends<I: PrimInt>(n: usize, a: &[I], b: &[I]) -> Result<(), ViewError> {
     length(a.len(), b.len())?;
     let in_range = |end: &I| end.to_usize().is_some_and(|end| end < n);
-    for (column, (end_a, end_b)) in a.iter().zip(b).enumerate() {
+    for (entry, (end_a, end_b)) in a.iter().zip(b).enumerate() {
         if !in_range(end_a) || !in_range(end_b) {
-            return Err(ViewError::IndexOutOfRange { column });
+            return Err(ViewError::IndexOutOfRange { entry });
         }
         if end_a == end_b {
-            return Err(ViewError::RepeatedVertex { column });
+            return Err(ViewError::RepeatedVertex { entry });
         }
     }
     Ok(())

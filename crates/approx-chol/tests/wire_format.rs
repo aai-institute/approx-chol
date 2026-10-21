@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use approx_chol::input::{CsrRef, FactorWidth1, Gram};
+use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Weights};
 use approx_chol::{factorize_with, Backend, BlockFactor, Config, Factor, InnerParallelism};
 use rstest::rstest;
 use serde::de::value::{Error, SeqDeserializer};
@@ -126,9 +126,10 @@ fn sampled_gram(config: Config) -> Factor {
     let (rows, cols): (Vec<u32>, Vec<u32>) = (0..left * per_row)
         .map(|k| (k / per_row, (k * 5 + k / per_row) % right))
         .unzip();
-    let gram = Gram::bipartite(
+    let gram = BipartiteFactorWidth2::new(
         FactorWidth1::new(left as usize, &rows, None).expect("valid rows"),
         FactorWidth1::new(right as usize, &cols, None).expect("valid columns"),
+        Weights::Unit,
     )
     .expect("valid gram");
     factorize_with(gram, config).expect("factors")

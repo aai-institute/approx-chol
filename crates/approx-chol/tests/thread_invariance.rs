@@ -1,4 +1,4 @@
-use approx_chol::input::{self, FactorWidth1};
+use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1, Weights};
 use approx_chol::{factorize_with, Config, InnerParallelism, SchurMode};
 
 const DEGREE: usize = 48;
@@ -41,9 +41,10 @@ fn gram() -> Gram {
 
 /// `Factor::solve`, then each block's `solve_local` under `Allow` and `Forbid`, as bits.
 fn solve_bits(g: &Gram, config: Config) -> Vec<u64> {
-    let gram = input::Gram::bipartite(
+    let gram = BipartiteFactorWidth2::new(
         FactorWidth1::new(g.n_left, &g.left, Some(&g.left_values)).unwrap(),
         FactorWidth1::new(g.n_right, &g.right, Some(&g.right_values)).unwrap(),
+        Weights::Unit,
     )
     .unwrap();
     let factor = factorize_with(gram, config).unwrap();

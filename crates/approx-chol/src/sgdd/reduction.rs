@@ -12,7 +12,7 @@ use super::decomposition::{
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
 use super::Sgdd;
-use crate::input::{Canonical, Gram, Input};
+use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Gram, Input, Laplacian, Sddm};
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, widen, Error, Index, Real};
 
@@ -26,7 +26,10 @@ impl<T: Real, I: Index> Sgdd<T, I> {
             // Symmetry is checked in the walk that unions the pattern; upper storage has no mirror.
             Input::Csr(csr) => of_csr(Canonical::of(csr)?)?.reduce(&policy)?,
             Input::UpperCsr(csr) => of_upper(Canonical::of(csr.0)?)?.reduce(&policy)?,
-            Input::Gram(v) => match Biadjacency::of(&v) {
+            Input::Laplacian(Laplacian(v))
+            | Input::Sddm(Sddm(v))
+            | Input::FactorWidth2(FactorWidth2(v))
+            | Input::BipartiteFactorWidth2(BipartiteFactorWidth2(v)) => match Biadjacency::of(&v) {
                 Some(layout) => Self::from_gram(layout, v, &policy)?,
                 None => Self::from_gram(StrictUpperTriangle, v, &policy)?,
             },

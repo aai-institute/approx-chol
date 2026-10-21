@@ -16,7 +16,7 @@ pub fn solve_residual(factor: &Factor, matrix: &[Vec<f64>]) {
     }
 }
 
-/// `V Vᵀ` dense, from the arrays `Gram::factor_width_2` takes.
+/// `V Vᵀ` dense, from the arrays `FactorWidth2::new` takes.
 pub fn matrix(n: usize, a: &[u32], b: &[u32], x: &[f64], y: &[f64]) -> Vec<Vec<f64>> {
     let mut matrix = vec![vec![0.0; n]; n];
     for k in 0..a.len() {

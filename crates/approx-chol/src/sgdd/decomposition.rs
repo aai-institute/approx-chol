@@ -237,7 +237,7 @@ where
 {
     type Block = (Box<[I]>, OffDiagonal<T, I>, Grounding<T>);
 
-    /// The surplus gathered in the block's order, as a bipartite block puts its larger side first.
+    /// The surplus gathered in the block's order.
     fn whole(self, vertices: &[I]) -> Self::Block {
         let (vertices, off_diagonal) = self.adjacency.whole(vertices);
         let grounding = surplus_at(self.surplus, &vertices);

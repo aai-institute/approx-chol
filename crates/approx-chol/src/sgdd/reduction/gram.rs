@@ -77,11 +77,6 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
             let (i, f) = (vertex.index(), widen(block.congruence.factor(slot)));
             block_of[i] = I::from_index(c);
             factor[i] = f;
-            // `σ_i` is a one-entry column at `i` under weight `σ_i`.
-            if let Some(d) = v.diagonal() {
-                let d = widen(d[i]);
-                sums.end(|x, y| d * x * y, (i, c, f));
-            }
         }
     }
     v.for_each_column::<I>(

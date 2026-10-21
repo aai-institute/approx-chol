@@ -1,6 +1,9 @@
 use std::error::Error;
 
-use approx_chol::input::{CsrRef, FactorWidth1, Gram, UpperCsrRef, Weights};
+use approx_chol::input::{
+    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
+    Weights,
+};
 use approx_chol::{factorize_with, Backend, Config, Factor, InnerParallelism};
 use approx_chol::{Real, ScalingPolicy, SchurMode};
 use serde::{Deserialize, Serialize};
@@ -36,28 +39,28 @@ pub struct Case<T> {
 pub enum View<T> {
     Csr(Rows<T>),
     UpperCsr(Rows<T>),
-    Gram {
+    Laplacian(Edges<T>),
+    Sddm(Edges<T>, Vec<T>),
+    FactorWidth2 {
         n: u8,
         a: Vec<u32>,
         b: Vec<u32>,
         x: Vec<T>,
         y: Vec<T>,
-        weights: Weighting<T>,
-        diagonal: Option<Vec<T>>,
     },
-    BipartiteGram {
+    BipartiteFactorWidth2 {
         left: Side<T>,
         right: Side<T>,
         weights: Weighting<T>,
-        diagonal: Option<Vec<T>>,
     },
-    Laplacian {
-        n: u8,
-        a: Vec<u32>,
-        b: Vec<u32>,
-        weights: Weighting<T>,
-        diagonal: Option<Vec<T>>,
-    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Edges<T> {
+    pub n: u8,
+    pub a: Vec<u32>,
+    pub b: Vec<u32>,
+    pub weights: Option<Vec<T>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -108,21 +111,24 @@ impl Build {
     }
 }
 
-/// `gram` under the case's `W`, none for `W = I`, and its `d`, if any.
-fn stated<'a, T: Real>(
-    gram: Gram<'a, T>,
-    weights: &'a Weighting<T>,
-    diagonal: &'a Option<Vec<T>>,
-) -> Result<Gram<'a, T>, Box<dyn Error>> {
-    let gram = match weights {
-        Weighting::Unit => gram,
-        Weighting::Of(w) => gram.with_weights(Weights::of(w)?)?,
-        Weighting::SqrtOf(s) => gram.with_weights(Weights::sqrt_of(s)?)?,
-    };
-    Ok(match diagonal {
-        Some(d) => gram.with_diagonal(d)?,
-        None => gram,
-    })
+impl<T: Real> Edges<T> {
+    fn laplacian(&self) -> Result<Laplacian<'_, T>, Box<dyn Error>> {
+        let n = self.n.into();
+        Ok(match &self.weights {
+            Some(w) => Laplacian::weighted(n, &self.a, &self.b, w)?,
+            None => Laplacian::new(n, &self.a, &self.b)?,
+        })
+    }
+}
+
+impl<T> Weighting<T> {
+    fn weights(&self) -> Weights<&[T]> {
+        match self {
+            Self::Unit => Weights::Unit,
+            Self::Of(w) => Weights::Of(w),
+            Self::SqrtOf(s) => Weights::SqrtOf(s),
+        }
+    }
 }
 
 impl<T: Real> Side<T> {
@@ -149,36 +155,22 @@ impl<T: Real> Case<T> {
                 let csr = UpperCsrRef::new(&r.row_ptrs, &r.columns, &r.values, r.n.into())?;
                 factorize_with(csr, config)?
             }
-            View::Gram {
-                n,
-                a,
-                b,
-                x,
-                y,
-                weights,
-                diagonal,
-            } => {
-                let v = Gram::factor_width_2((*n).into(), a, b, x, y)?;
-                factorize_with(stated(v, weights, diagonal)?, config)?
+            View::Laplacian(edges) => factorize_with(edges.laplacian()?, config)?,
+            View::Sddm(edges, surplus) => {
+                factorize_with(Sddm::new(edges.laplacian()?, surplus)?, config)?
             }
-            View::BipartiteGram {
+            View::FactorWidth2 { n, a, b, x, y } => {
+                let gram = FactorWidth2::new((*n).into(), (a, x), (b, y))?;
+                factorize_with(gram, config)?
+            }
+            View::BipartiteFactorWidth2 {
                 left,
                 right,
                 weights,
-                diagonal,
             } => {
-                let gram = Gram::bipartite(left.factor()?, right.factor()?)?;
-                factorize_with(stated(gram, weights, diagonal)?, config)?
-            }
-            View::Laplacian {
-                n,
-                a,
-                b,
-                weights,
-                diagonal,
-            } => {
-                let graph = Gram::laplacian((*n).into(), a, b)?;
-                factorize_with(stated(graph, weights, diagonal)?, config)?
+                let gram =
+                    BipartiteFactorWidth2::new(left.factor()?, right.factor()?, weights.weights())?;
+                factorize_with(gram, config)?
             }
         })
     }
