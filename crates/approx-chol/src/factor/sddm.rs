@@ -16,11 +16,7 @@ pub(super) struct Sddm<T, I> {
 
 impl<T: Real, I: Index> Sddm<T, I> {
     /// Panics unless nonempty, with one surplus per row and the rows split evenly into sheets.
-    pub(super) fn new(
-        adjacency: UpperAdjacency<T, I>,
-        grounding: Grounding<T>,
-        sheets: Sheets,
-    ) -> Self {
+    fn new(adjacency: UpperAdjacency<T, I>, grounding: Grounding<T>, sheets: Sheets) -> Self {
         let n = adjacency.n();
         assert!(n > 0, "an SDDM has a vertex");
         assert!(grounding.fits(n), "one surplus per row");
@@ -33,40 +29,58 @@ impl<T: Real, I: Index> Sddm<T, I> {
         }
     }
 
+    /// Folded `M` on one sheet, or the Gremban cover of signed `M` on two.
+    pub(super) fn of_block(
+        adjacency: UpperAdjacency<T, I>,
+        grounding: Grounding<T>,
+        sheets: Sheets,
+    ) -> Self {
+        match sheets {
+            Sheets::One => Self::new(adjacency, grounding, sheets),
+            Sheets::Two => Self::cover(adjacency, grounding),
+        }
+    }
+
+    /// Rows already on `sheets`, each with its ground; on two, a ground within the band [`twists`].
+    pub(super) fn of_rows(
+        (adjacency, ground): (UpperAdjacency<T, I>, Vec<T>),
+        sheets: Sheets,
+    ) -> Self {
+        let grounding = Grounding::of(ground);
+        let twisted = (grounding.surplus())
+            .filter(|ground| sheets == Sheets::Two && twists(ground, &adjacency));
+        match twisted {
+            Some(ground) => {
+                let adjacency = twisted_rows(&adjacency, ground);
+                Self::new(adjacency, Grounding::ungrounded(), sheets)
+            }
+            None => Self::new(adjacency, grounding, sheets),
+        }
+    }
+
     /// The Gremban cover of signed `M`: a Laplacian on two sheets that acts as `M` on `[z; −z]`.
-    pub(super) fn cover(signed: UpperAdjacency<T, I>, grounding: Grounding<T>) -> Self {
+    fn cover(signed: UpperAdjacency<T, I>, grounding: Grounding<T>) -> Self {
         let n = signed.n();
-        let mut rows = SddmRows::with_capacity(2 * n, 2 * signed.nnz());
+        let twisted = (grounding.surplus()).is_some_and(|s| twists(s, &signed));
+        let twists = if twisted { n } else { 0 };
+        let mut rows = SddmRows::with_capacity(2 * n, 2 * signed.nnz() + twists);
         for i in 0..n {
+            let surplus = grounding.edge(i);
+            let twist = surplus.filter(|_| twisted).map(|s| twist(s, s));
+            if let Some(t) = twist {
+                rows.add(cover_vertex(i, 1), t);
+            }
             for (j, &a) in signed.upper(i) {
                 rows.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
             }
-            if let Some(s) = grounding.edge(i) {
+            if let Some(s) = surplus.filter(|_| !twisted) {
                 rows.add(2 * n, s);
             }
             rows.end_row();
-            rows.mirror_row();
+            rows.mirror_row(usize::from(twist.is_some()));
         }
-        Self::cover_of(rows.finish())
-    }
-
-    /// A cover from its rows and each copy's ground; a ground within the band joins `k`'s copies by a quarter of their two grounds instead, so the sheets' `1/s` common mode cannot swamp `z`.
-    pub(super) fn cover_of((adjacency, ground): (UpperAdjacency<T, I>, Vec<T>)) -> Self {
-        let grounding = Grounding::of(ground);
-        let twists = grounding.surplus().filter(|ground| {
-            // `ε`-scaled as the reduction's band sums, so `Σ|a_ij|` cannot overflow.
-            let epsilon = widen(T::epsilon());
-            let total = crate::compensated_sum(ground.iter().map(|&g| epsilon * widen(g)));
-            let off = crate::compensated_sum(adjacency.abs_mirrored().map(|x| epsilon * x));
-            within_band::<T>(total, total + off)
-        });
-        match twists {
-            Some(ground) => {
-                let twisted = twisted(&adjacency, ground);
-                Self::new(twisted, Grounding::of(Vec::new()), Sheets::Two)
-            }
-            None => Self::new(adjacency, grounding, Sheets::Two),
-        }
+        let (adjacency, ground) = rows.finish();
+        Self::new(adjacency, Grounding::of(ground), Sheets::Two)
     }
 
     pub(super) fn n(&self) -> usize {
@@ -163,9 +177,9 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         self.ptrs.push(self.indices.len());
     }
 
-    /// Repeats the row just ended on the other sheet, each column's sheet bit flipped.
-    fn mirror_row(&mut self) {
-        let (start, end) = (self.ptrs[self.ptrs.len() - 2], self.indices.len());
+    /// Repeats the row just ended on the other sheet past its first `twists` entries, each column's sheet bit flipped.
+    fn mirror_row(&mut self, twists: usize) {
+        let (start, end) = (self.ptrs[self.ptrs.len() - 2] + twists, self.indices.len());
         self.ground.push(*self.ground.last().expect("a row ended"));
         for i in start..end {
             self.indices.push(self.indices[i] ^ I::one());
@@ -195,7 +209,7 @@ impl<T: Real, I: Index> SddmRows<T, I> {
                 row(rows.row(), k);
                 rows.end_row();
                 if sheets == Sheets::Two {
-                    rows.mirror_row();
+                    rows.mirror_row(0);
                 }
                 rows
             },
@@ -238,13 +252,25 @@ impl<T: Real, I: Index> Row<'_, T, I> {
     }
 }
 
-/// `adjacency` with row `2k` led by an edge `2k — 2k+1` of `(g_2k + g_2k+1)/4`, a zero one dropped: on `[z; −z]` it acts as the copies' mean ground.
-fn twisted<T: Real, I: Index>(
+/// Whether `ground` is within the band of `ground + Σ|a_ij|`, both `ε`-scaled so neither overflows: a cover's copies then [`twist`] instead of grounding, so its `1/s` common mode cannot swamp `z`; a cover doubles both sums, so `M`'s decide as its own.
+fn twists<T: Real, I: Index>(ground: &[T], adjacency: &UpperAdjacency<T, I>) -> bool {
+    let epsilon = widen(T::epsilon());
+    let total = crate::compensated_sum(ground.iter().map(|&g| epsilon * widen(g)));
+    within_band::<T>(total, total + adjacency.scaled_abs_total(epsilon))
+}
+
+/// The edge `k⁺ — k⁻` that acts on `[z; −z]` as grounds `g⁺, g⁻` do; with `g⁺ ≠ g⁻` no ungrounded pair matches them, and the mean differs by less than the band. At least `MIN_POSITIVE`, as a share is.
+fn twist<T: Real>(g_plus: T, g_minus: T) -> T {
+    let quarter = narrow::<T>(0.25);
+    (g_plus * quarter + g_minus * quarter).max(T::min_positive_value())
+}
+
+/// `adjacency` with row `2k` led by its [`twist`] to `2k + 1`, unless both copies' grounds are zero.
+fn twisted_rows<T: Real, I: Index>(
     adjacency: &UpperAdjacency<T, I>,
     ground: &[T],
 ) -> UpperAdjacency<T, I> {
     let n = adjacency.n();
-    let quarter = narrow::<T>(0.25);
     let entries = adjacency.nnz() + n / 2;
     let (mut ptrs, mut indices, mut values) = (
         vec![0],
@@ -253,10 +279,10 @@ fn twisted<T: Real, I: Index>(
     );
     ptrs.reserve_exact(n);
     for i in 0..n {
-        let twist = (i % 2 == 0).then(|| (ground[i] + ground[i + 1]) * quarter);
-        if let Some(t) = twist.filter(|&t| t > T::zero()) {
+        let pair = (i % 2 == 0).then(|| (ground[i], ground[i + 1]));
+        if let Some((g_plus, g_minus)) = pair.filter(|&(p, m)| p > T::zero() || m > T::zero()) {
             indices.push(I::from_index(i + 1));
-            values.push(-t);
+            values.push(-twist(g_plus, g_minus));
         }
         for (j, &a) in adjacency.upper(i) {
             indices.push(I::from_index(j));

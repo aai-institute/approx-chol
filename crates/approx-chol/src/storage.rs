@@ -247,8 +247,19 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
         self.rows.nnz()
     }
 
-    pub(crate) fn abs_mirrored(&self) -> impl Iterator<Item = f64> + '_ {
-        self.rows.abs_mirrored()
+    /// `scale · Σ_ij |a_ij|` over both triangles in four fixed lanes: uncompensated, so it vectorizes and sums alike at any thread count.
+    pub(crate) fn scaled_abs_total(&self, scale: f64) -> f64 {
+        let values = &self.rows.values;
+        let mut lanes = [0.0f64; 4];
+        let chunks = values.chunks_exact(4);
+        let rest = chunks.remainder();
+        for chunk in chunks {
+            (lanes.iter_mut().zip(chunk)).for_each(|(lane, &x)| *lane += scale * widen(x.abs()));
+        }
+        let sum = rest.iter().fold(lanes.iter().sum::<f64>(), |sum, &x| {
+            sum + scale * widen(x.abs())
+        });
+        2.0 * sum
     }
 
     /// Row `i`'s neighbors above it.
