@@ -164,12 +164,9 @@ impl<T: Real, I: Index> Rows<T, I> {
         self.values.iter().all(|&x| x > T::zero())
     }
 
-    fn abs_values(&self) -> impl Iterator<Item = f64> + '_ {
-        self.values.iter().map(|&x| widen(x.abs()))
-    }
-
-    fn abs_total(&self) -> f64 {
-        crate::compensated_sum(self.abs_values())
+    /// `|a_ij| + |a_ji|` per stored entry, in `f64`: the other triangle mirrors it.
+    fn abs_mirrored(&self) -> impl Iterator<Item = f64> + '_ {
+        self.values.iter().map(|&x| 2.0 * widen(x.abs()))
     }
 
     /// `x_ij ← r_i x_ij c_j` for signs `r`, `c`: exact, so never out of range.
@@ -252,7 +249,7 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
 
     /// `Σ_ij |a_ij|` over both triangles, compensated.
     pub(crate) fn abs_total(&self) -> f64 {
-        2.0 * self.rows.abs_total()
+        crate::compensated_sum(self.rows.abs_mirrored())
     }
 
     /// Row `i`'s neighbors above it.
@@ -287,9 +284,8 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
         rows.abs_sums(offset).into_iter().map(narrow).collect()
     }
 
-    /// Each stored `|a_ij|` once, in `f64`: the other triangle mirrors it.
-    pub(crate) fn abs_stored(&self) -> impl Iterator<Item = f64> + '_ {
-        self.stored().0.abs_values()
+    pub(crate) fn abs_mirrored(&self) -> impl Iterator<Item = f64> + '_ {
+        self.stored().0.abs_mirrored()
     }
 
     /// `S X S` for signs `S`: a sign moves no magnitude, so no entry leaves range.

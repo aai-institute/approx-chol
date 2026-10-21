@@ -152,7 +152,7 @@ fn narrow<T: Real>(sum: f64) -> T {
     T::from(sum).unwrap_or_else(T::infinity)
 }
 
-/// `Σ x` with each addition's rounding carried (Knuth's TwoSum): within `ε` of exact for nonnegative terms.
+/// `Σ x` with each addition's rounding carried (TwoSum; Ogita–Rump–Oishi Sum2): off by at most `ε|Σx| + (nε)² Σ|x|`.
 fn compensated_sum(terms: impl Iterator<Item = f64>) -> f64 {
     let (sum, carry) = terms.fold((0.0f64, 0.0f64), |(sum, carry), x| {
         let next = sum + x;
