@@ -1,21 +1,19 @@
-//! What the caller states about `A`, each view by its type.
+//! What the caller states about `A`: a CSR matrix, a Laplacian, an SDDM or a factor-width-2 Gram.
 
 mod csr;
+mod gram;
 #[cfg(any(feature = "sprs", feature = "faer"))]
 mod interop;
-mod width2;
 
 use num_traits::PrimInt;
 
 pub(crate) use csr::Canonical;
 pub use csr::{CsrError, CsrRef, IndexKind, OwnedCsr, UpperCsrRef};
-pub(crate) use width2::bipartite::BipartiteLaplacian;
-pub use width2::bipartite::{BipartiteGram, FactorWidth1};
-pub use width2::edges::Weights;
-pub use width2::laplacian::Laplacian;
-pub use width2::signed::SignedGraph;
-pub(crate) use width2::{BipartiteColumns, Column, IntoColumns};
-pub use width2::{FactorWidth2, ViewError};
+pub(crate) use gram::Column;
+pub(crate) use gram::Gram;
+pub use gram::{
+    BipartiteFactorWidth2, FactorWidth1, FactorWidth2, Laplacian, Sddm, ViewError, Weights,
+};
 
 use crate::Real;
 
@@ -24,7 +22,7 @@ fn index<I: PrimInt>(k: I) -> usize {
     k.to_usize().expect("a shape-checked index fits usize")
 }
 
-/// Any view [`factorize`](crate::factorize) takes, each converted by `From`.
+/// Any input [`factorize`](crate::factorize) takes, each converted by `From`.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
 pub enum Input<'a, T, I = u32> {
@@ -32,14 +30,14 @@ pub enum Input<'a, T, I = u32> {
     Csr(CsrRef<'a, T, I>),
     /// A symmetric matrix stored by its upper triangle.
     UpperCsr(UpperCsrRef<'a, T, I>),
-    /// A graph Laplacian by its edges.
+    /// A graph Laplacian `L`.
     Laplacian(Laplacian<'a, T, I>),
-    /// A signed graph by its edges.
-    SignedGraph(SignedGraph<'a, T, I>),
-    /// `V Vᵀ`, `V` of factor width 2.
-    Gram(FactorWidth2<'a, T, I>),
-    /// `V W Vᵀ` on two disjoint sides.
-    BipartiteGram(BipartiteGram<'a, T, I>),
+    /// `L + diag(s)`, `s ≥ 0` and not all zero.
+    Sddm(Sddm<'a, T, I>),
+    /// `V Vᵀ`, each column of `V` with two nonzeros.
+    FactorWidth2(FactorWidth2<'a, T, I>),
+    /// `V W Vᵀ`, `V = [V_l; V_r]` with two width-1 sides on disjoint vertex sets.
+    BipartiteFactorWidth2(BipartiteFactorWidth2<'a, T, I>),
 }
 
 impl<T: Real, J: PrimInt + Sync> Input<'_, T, J> {
@@ -48,10 +46,10 @@ impl<T: Real, J: PrimInt + Sync> Input<'_, T, J> {
         match self {
             Self::Csr(csr) => csr.n(),
             Self::UpperCsr(csr) => csr.0.n(),
-            Self::Laplacian(laplacian) => laplacian.n(),
-            Self::SignedGraph(graph) => graph.n(),
-            Self::Gram(v) => v.n(),
-            Self::BipartiteGram(gram) => gram.n(),
+            Self::Laplacian(Laplacian(v))
+            | Self::Sddm(Sddm(v))
+            | Self::FactorWidth2(FactorWidth2(v))
+            | Self::BipartiteFactorWidth2(BipartiteFactorWidth2(v)) => v.n(),
         }
     }
 }
@@ -70,9 +68,9 @@ input_from! {
     Csr(CsrRef),
     UpperCsr(UpperCsrRef),
     Laplacian(Laplacian),
-    SignedGraph(SignedGraph),
-    Gram(FactorWidth2),
-    BipartiteGram(BipartiteGram),
+    Sddm(Sddm),
+    FactorWidth2(FactorWidth2),
+    BipartiteFactorWidth2(BipartiteFactorWidth2),
 }
 
 impl<'a, T, I: PrimInt> From<&'a OwnedCsr<T, I>> for Input<'a, T, I> {

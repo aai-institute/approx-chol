@@ -1,7 +1,8 @@
 use std::error::Error;
 
 use approx_chol::input::{
-    BipartiteGram, CsrRef, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsrRef, Weights,
+    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
+    Weights,
 };
 use approx_chol::{factorize_with, Backend, Config, Factor, InnerParallelism};
 use approx_chol::{Real, ScalingPolicy, SchurMode};
@@ -38,32 +39,28 @@ pub struct Case<T> {
 pub enum View<T> {
     Csr(Rows<T>),
     UpperCsr(Rows<T>),
-    Gram {
+    Laplacian(Edges<T>),
+    Sddm(Edges<T>, Vec<T>),
+    FactorWidth2 {
         n: u8,
         a: Vec<u32>,
         b: Vec<u32>,
         x: Vec<T>,
         y: Vec<T>,
     },
-    BipartiteGram {
+    BipartiteFactorWidth2 {
         left: Side<T>,
         right: Side<T>,
         weights: Weighting<T>,
     },
-    Laplacian {
-        n: u8,
-        a: Vec<u32>,
-        b: Vec<u32>,
-        weights: Weighting<T>,
-        ground: Option<Vec<T>>,
-    },
-    SignedGraph {
-        n: u8,
-        a: Vec<u32>,
-        b: Vec<u32>,
-        positive: Vec<bool>,
-        weights: Weighting<T>,
-    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Edges<T> {
+    pub n: u8,
+    pub a: Vec<u32>,
+    pub b: Vec<u32>,
+    pub weights: Option<Vec<T>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -114,13 +111,23 @@ impl Build {
     }
 }
 
-impl<T: Real> Weighting<T> {
-    fn weights(&self) -> Result<Weights<'_, T>, Box<dyn Error>> {
-        Ok(match self {
-            Self::Unit => Weights::unit(),
-            Self::Of(w) => Weights::of(w)?,
-            Self::SqrtOf(s) => Weights::sqrt_of(s)?,
+impl<T: Real> Edges<T> {
+    fn laplacian(&self) -> Result<Laplacian<'_, T>, Box<dyn Error>> {
+        let n = self.n.into();
+        Ok(match &self.weights {
+            Some(w) => Laplacian::weighted(n, &self.a, &self.b, w)?,
+            None => Laplacian::new(n, &self.a, &self.b)?,
         })
+    }
+}
+
+impl<T> Weighting<T> {
+    fn weights(&self) -> Weights<&[T]> {
+        match self {
+            Self::Unit => Weights::Unit,
+            Self::Of(w) => Weights::Of(w),
+            Self::SqrtOf(s) => Weights::SqrtOf(s),
+        }
     }
 }
 
@@ -148,40 +155,22 @@ impl<T: Real> Case<T> {
                 let csr = UpperCsrRef::new(&r.row_ptrs, &r.columns, &r.values, r.n.into())?;
                 factorize_with(csr, config)?
             }
-            View::Gram { n, a, b, x, y } => {
-                factorize_with(FactorWidth2::new((*n).into(), a, b, x, y)?, config)?
+            View::Laplacian(edges) => factorize_with(edges.laplacian()?, config)?,
+            View::Sddm(edges, surplus) => {
+                factorize_with(Sddm::new(edges.laplacian()?, surplus)?, config)?
             }
-            View::BipartiteGram {
+            View::FactorWidth2 { n, a, b, x, y } => {
+                let gram = FactorWidth2::new((*n).into(), (a, x), (b, y))?;
+                factorize_with(gram, config)?
+            }
+            View::BipartiteFactorWidth2 {
                 left,
                 right,
                 weights,
             } => {
-                let gram = BipartiteGram::new(left.factor()?, right.factor()?, weights.weights()?)?;
+                let gram =
+                    BipartiteFactorWidth2::new(left.factor()?, right.factor()?, weights.weights())?;
                 factorize_with(gram, config)?
-            }
-            View::Laplacian {
-                n,
-                a,
-                b,
-                weights,
-                ground,
-            } => {
-                let graph = Laplacian::new((*n).into(), a, b, weights.weights()?)?;
-                let graph = match ground {
-                    Some(g) => graph.grounded(g)?,
-                    None => graph,
-                };
-                factorize_with(graph, config)?
-            }
-            View::SignedGraph {
-                n,
-                a,
-                b,
-                positive,
-                weights,
-            } => {
-                let graph = SignedGraph::new((*n).into(), a, b, positive, weights.weights()?)?;
-                factorize_with(graph, config)?
             }
         })
     }

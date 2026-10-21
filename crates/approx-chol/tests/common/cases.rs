@@ -35,16 +35,16 @@ macro_rules! cases {
     };
     (@entries $subset:ident $then:tt) => {
         $crate::cases::cases!(@keep $subset [] [
-            Csr UpperCsr Gram BipartiteGram Laplacian GroundedLaplacian SignedGraph
+            Csr UpperCsr FactorWidth2 BipartiteFactorWidth2 Laplacian Sddm
         ] $then);
     };
     (@named [$($member:ident)*] $ty:ident $k:tt) => {
         $crate::cases::cases!(@values $ty [$($ty::$member),*] $k);
     };
 
-    // Only a bipartite block reads the complement rule, and only a bipartite Gram builds one.
-    (@routes [BipartiteGram $($rest:ident)*] $kind:ident $acc:tt $k:tt) => {
-        $crate::cases::cases!(@sparse [@route $kind BipartiteGram [$($rest)*] $acc $k]);
+    // Only a bipartite block reads the complement rule, and only a bipartite factor-width-2 Gram builds one.
+    (@routes [BipartiteFactorWidth2 $($rest:ident)*] $kind:ident $acc:tt $k:tt) => {
+        $crate::cases::cases!(@sparse [@route $kind BipartiteFactorWidth2 [$($rest)*] $acc $k]);
     };
     (@routes [$entry:ident $($rest:ident)*] $kind:ident $acc:tt $k:tt) => {
         $crate::cases::cases!(@route $kind $entry [$($rest)*] $acc $k
@@ -84,15 +84,14 @@ macro_rules! cases {
     };
     // A subset leaves out the entry points that cannot state its graphs, or the other scalar.
     (@excludes grounded Laplacian $out:tt $in:tt) => { $crate::cases::cases! $out; };
-    (@excludes grounded SignedGraph $out:tt $in:tt) => { $crate::cases::cases! $out; };
-    (@excludes frustrated BipartiteGram $out:tt $in:tt) => { $crate::cases::cases! $out; };
+    (@excludes grounded FactorWidth2 $out:tt $in:tt) => { $crate::cases::cases! $out; };
+    (@excludes grounded BipartiteFactorWidth2 $out:tt $in:tt) => { $crate::cases::cases! $out; };
+    (@excludes frustrated BipartiteFactorWidth2 $out:tt $in:tt) => { $crate::cases::cases! $out; };
     (@excludes frustrated Laplacian $out:tt $in:tt) => { $crate::cases::cases! $out; };
-    (@excludes frustrated GroundedLaplacian $out:tt $in:tt) => { $crate::cases::cases! $out; };
-    (@excludes lone_ground Gram $out:tt $in:tt) => { $crate::cases::cases! $out; };
-    (@excludes lone_ground BipartiteGram $out:tt $in:tt) => { $crate::cases::cases! $out; };
-    (@excludes lone_ground Laplacian $out:tt $in:tt) => { $crate::cases::cases! $out; };
-    (@excludes lone_ground SignedGraph $out:tt $in:tt) => { $crate::cases::cases! $out; };
-    (@excludes non_bipartite BipartiteGram $out:tt $in:tt) => { $crate::cases::cases! $out; };
+    (@excludes frustrated Sddm $out:tt $in:tt) => { $crate::cases::cases! $out; };
+    (@excludes floating Sddm $out:tt $in:tt) => { $crate::cases::cases! $out; };
+    (@excludes floating_non_bipartite BipartiteFactorWidth2 $out:tt $in:tt) => { $crate::cases::cases! $out; };
+    (@excludes floating_non_bipartite Sddm $out:tt $in:tt) => { $crate::cases::cases! $out; };
     (@excludes f32 F64U32 $out:tt $in:tt) => { $crate::cases::cases! $out; };
     (@excludes f32 F64U64 $out:tt $in:tt) => { $crate::cases::cases! $out; };
     (@excludes f64 F32U32 $out:tt $in:tt) => { $crate::cases::cases! $out; };

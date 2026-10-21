@@ -31,6 +31,13 @@ fn complete_bipartite(w: f64) -> Graph {
     Graph::new(6, pairs.map(|(a, b)| Edge::negative(a, b, w)).collect())
 }
 
+/// As [`complete`] with every vertex tied to ground by `w`, so no `x_i` is zero.
+fn grounded_complete(w: f64) -> Graph {
+    let mut graph = complete(w);
+    graph.ground.fill(w);
+    graph
+}
+
 const F64_EXPONENTS: [i32; 20] = [
     -290, -200, -100, -30, -16, -15, -14, -5, -1, 21, 23, 31, 32, 37, 43, 50, 100, 152, 200, 300,
 ];
@@ -70,7 +77,7 @@ fn assert_invariant_under_scaling(
 
 cases! {
     fn factorization_is_invariant_under_uniform_scaling(
-        route in routes(non_bipartite),
+        route in routes(floating_non_bipartite),
         types in types(all),
     ) {
         let (entry, mode) = route;
@@ -78,9 +85,23 @@ cases! {
     }
 }
 
+/// The typed route only: CSR's approximate route deviates 3–5% at `w = 1e-200`.
+#[rstest::rstest]
+fn an_sddm_factorization_is_invariant_under_uniform_scaling(
+    #[values(Types::F32U32, Types::F32U64, Types::F64U32, Types::F64U64)] types: Types,
+    #[values(
+        Mode::Dense,
+        Mode::Sparse(Sparse::AcExactComplement),
+        Mode::Sparse(Sparse::Ac2ExactComplement)
+    )]
+    mode: Mode,
+) {
+    assert_invariant_under_scaling(Entry::Sddm, grounded_complete, types, mode);
+}
+
 cases! {
     fn bipartite_factorization_is_invariant_under_uniform_scaling(
-        route in routes(all),
+        route in routes(floating),
         types in types(all),
     ) {
         let (entry, mode) = route;
@@ -90,14 +111,14 @@ cases! {
 
 /// A bipartite path whose eliminated row joins `big` to the range floor: `Σ c_ek x_k` overflowed before `D_e⁻¹` scaled it.
 fn path_solves_as_its_scaled_rhs<T: approx_chol::Real>(big: T, down: i32) {
-    use approx_chol::input::{BipartiteGram, FactorWidth1, Weights};
+    use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1, Weights};
     let floor = T::min_positive_value() / T::epsilon();
     let w = [big, floor, floor, floor];
     let solve = |b: &[T]| {
-        let gram = BipartiteGram::new(
+        let gram = BipartiteFactorWidth2::new(
             FactorWidth1::new(3, &[0u32, 1, 1, 2], None).unwrap(),
             FactorWidth1::new(2, &[0u32, 0, 1, 1], None).unwrap(),
-            Weights::of(&w).unwrap(),
+            Weights::Of(&w),
         )
         .unwrap();
         approx_chol::factorize(gram).unwrap().solve(b).unwrap()

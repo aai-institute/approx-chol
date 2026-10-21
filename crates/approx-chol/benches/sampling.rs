@@ -3,7 +3,7 @@ mod csr;
 #[path = "common/grid.rs"]
 mod grid;
 
-use approx_chol::input::{BipartiteGram, FactorWidth1, Weights};
+use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1, Weights};
 use approx_chol::{factorize_with, Backend, Config};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use csr::{build, OwnedCsr};
@@ -108,10 +108,10 @@ fn bench_bipartite_stars(c: &mut Criterion) {
         let weights: Vec<f64> = (0..STARS * degree)
             .map(|_| rng.random_range(0.25..1.25f64))
             .collect();
-        let gram = BipartiteGram::new(
+        let gram = BipartiteFactorWidth2::new(
             FactorWidth1::new(STARS, &stars, None).expect("valid side"),
             FactorWidth1::new(degree, &kept, None).expect("valid side"),
-            Weights::of(&weights).expect("valid weights"),
+            Weights::Of(&weights),
         )
         .expect("valid gram");
 

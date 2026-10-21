@@ -5,7 +5,7 @@ use approx_chol::{BlockFactor, Factor};
 
 mod case;
 
-use case::{Build, Case, Input, Rows, Side, View, Weighting};
+use case::{Build, Case, Edges, Input, Rows, Side, View, Weighting};
 
 /// Written at build time, never committed; a removed or renamed seed's old file stays in `corpus/` until deleted.
 fn main() {
@@ -103,9 +103,9 @@ fn seeds() -> Vec<(&'static str, Input)> {
             f64(View::UpperCsr(upper_grid(4)), split(3)),
         ),
         (
-            "gram_path",
+            "factor_width_2_path",
             f64(
-                View::Gram {
+                View::FactorWidth2 {
                     n: 4,
                     a: vec![0, 1, 2],
                     b: vec![1, 2, 3],
@@ -116,9 +116,9 @@ fn seeds() -> Vec<(&'static str, Input)> {
             ),
         ),
         (
-            "gram_mixed_signs",
+            "factor_width_2_mixed_signs",
             f64(
-                View::Gram {
+                View::FactorWidth2 {
                     n: 3,
                     a: vec![0, 1, 0],
                     b: vec![1, 2, 2],
@@ -129,37 +129,41 @@ fn seeds() -> Vec<(&'static str, Input)> {
             ),
         ),
         (
-            "bipartite_gram_slopes",
+            "bipartite_factor_width_2_slopes",
             f64(bipartite(true), exact_complement()),
         ),
-        ("bipartite_gram_sampled_ac2", f64(bipartite(true), split(3))),
         (
-            "bipartite_gram_incidence",
+            "bipartite_factor_width_2_sampled_ac2",
+            f64(bipartite(true), split(3)),
+        ),
+        (
+            "bipartite_factor_width_2_incidence",
             f64(bipartite(false), approximate()),
         ),
         (
-            "laplacian_grounded",
+            "laplacian_weighted_path",
             f64(
-                View::Laplacian {
+                View::Laplacian(Edges {
                     n: 4,
                     a: vec![0, 1, 2],
                     b: vec![1, 2, 3],
-                    weights: Weighting::SqrtOf(vec![1.0, -2.0, 0.5]),
-                    ground: Some(vec![0.0, 0.0, 0.0, 0.5]),
-                },
+                    weights: Some(vec![1.0, 4.0, 0.25]),
+                }),
                 approximate(),
             ),
         ),
         (
-            "signed_graph_frustrated",
+            "sddm_path",
             f64(
-                View::SignedGraph {
-                    n: 3,
-                    a: vec![0, 1, 0],
-                    b: vec![1, 2, 2],
-                    positive: vec![true, false, false],
-                    weights: Weighting::Unit,
-                },
+                View::Sddm(
+                    Edges {
+                        n: 4,
+                        a: vec![0, 1, 2],
+                        b: vec![1, 2, 3],
+                        weights: Some(vec![1.0, 4.0, 0.25]),
+                    },
+                    vec![0.0, 0.0, 0.0, 0.5],
+                ),
                 approximate(),
             ),
         ),
@@ -229,7 +233,7 @@ fn upper_grid(k: u32) -> Rows<f64> {
 fn bipartite(slopes: bool) -> View<f64> {
     let columns = 16u32;
     let values = slopes.then(|| (0..columns).map(|k| 1.0 + f64::from(k % 5) / 4.0).collect());
-    View::BipartiteGram {
+    View::BipartiteFactorWidth2 {
         left: Side {
             n: 8,
             rows: (0..columns).map(|k| k / 2).collect(),

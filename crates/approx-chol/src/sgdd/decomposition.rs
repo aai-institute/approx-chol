@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use num_traits::PrimInt;
 use rayon::prelude::*;
 
@@ -11,8 +9,7 @@ use crate::input::{Canonical, CsrError};
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::{Index, Real};
 pub(super) use assembly::{
-    assemble_bipartite, assemble_bipartite_gram, assemble_general, assemble_laplacian,
-    assemble_signed,
+    assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, StrictUpperTriangle,
 };
 use partition::Partition;
 use partition::UnionFind;
@@ -134,18 +131,6 @@ pub(super) struct Components<B, I, T> {
     pub(super) summands: Summands<B, I, T>,
 }
 
-/// A general `A` assembled with its diagonal, and its components.
-type General<T, I> = Partitioned<Assembled<T, UpperAdjacency<T, I>>, I>;
-
-/// A bipartite Gram assembled as `C` and the diagonal, and its components.
-type AssembledBipartite<T, I> = Partitioned<Assembled<T, Rows<T, I>>, I>;
-
-/// A Laplacian or signed graph assembled as `C` and `σ`, and its components.
-type DominantGraph<'a, T, I> = Partitioned<Dominant<'a, T, UpperAdjacency<T, I>>, I>;
-
-/// A bipartite Laplacian assembled as `C`, and its components.
-type DominantBipartite<T, I> = Partitioned<Dominant<'static, T, Rows<T, I>>, I>;
-
 /// One component's vertices in local order, off-diagonal and diagonal.
 pub(super) type Cells<T, I> = (Box<[I]>, OffDiagonal<T, I>, Vec<T>);
 
@@ -193,9 +178,9 @@ pub(super) struct Assembled<T, C> {
 }
 
 /// `A = L(C) + diag(σ)`, dominant by shape: no diagonal is stored, each pivot is `Σ_j |c_ij| + σ_i`.
-pub(super) struct Dominant<'a, T: Clone, C> {
+pub(super) struct Dominant<'a, T, C> {
     adjacency: C,
-    surplus: Option<Cow<'a, [T]>>,
+    surplus: Option<&'a [T]>,
 }
 
 impl<T: Real, J: PrimInt> LonePivot<T> for Canonical<'_, T, J> {
@@ -214,7 +199,7 @@ impl<T: Real, C> LonePivot<T> for Assembled<T, C> {
 
 impl<T: Real, C> LonePivot<T> for Dominant<'_, T, C> {
     fn lone(&self, v: usize) -> T {
-        self.surplus.as_ref().map_or(T::zero(), |s| s[v])
+        self.surplus.map_or(T::zero(), |s| s[v])
     }
 }
 
@@ -252,19 +237,27 @@ where
 {
     type Block = (Box<[I]>, OffDiagonal<T, I>, Grounding<T>);
 
+    /// The surplus gathered in the block's order.
     fn whole(self, vertices: &[I]) -> Self::Block {
         let (vertices, off_diagonal) = self.adjacency.whole(vertices);
-        let grounding =
-            (self.surplus).map_or_else(Grounding::ungrounded, |s| Grounding::of(s.into_owned()));
+        let grounding = surplus_at(self.surplus, &vertices);
         (vertices, off_diagonal, grounding)
     }
 
     fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
         let (vertices, off_diagonal) = self.adjacency.component(vertices, position);
-        let at = |s: &Cow<'_, [T]>| Grounding::of(vertices.iter().map(|&v| s[v.index()]).collect());
-        let grounding = self.surplus.as_ref().map_or_else(Grounding::ungrounded, at);
+        let grounding = surplus_at(self.surplus, &vertices);
         (vertices, off_diagonal, grounding)
     }
+}
+
+fn surplus_at<T: Real, I: Index>(surplus: Option<&[T]>, vertices: &[I]) -> Grounding<T> {
+    surplus.map_or_else(Grounding::ungrounded, |s| Grounding::of(at(s, vertices)))
+}
+
+/// `values` in `vertices`' order.
+fn at<T: Copy, I: Index>(values: &[T], vertices: &[I]) -> Vec<T> {
+    vertices.iter().map(|&v| values[v.index()]).collect()
 }
 
 /// The biadjacency `C`, cancelled cells dropped: rows are `A`'s left vertices.
@@ -306,13 +299,13 @@ where
 
     fn whole(self, vertices: &[I]) -> Self::Block {
         let (vertices, off_diagonal) = self.adjacency.whole(vertices);
-        let diagonal = vertices.iter().map(|&v| self.diagonal[v.index()]).collect();
+        let diagonal = at(&self.diagonal, &vertices);
         (vertices, off_diagonal, diagonal)
     }
 
     fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
         let (vertices, off_diagonal) = self.adjacency.component(vertices, position);
-        let diagonal = vertices.iter().map(|&v| self.diagonal[v.index()]).collect();
+        let diagonal = at(&self.diagonal, &vertices);
         (vertices, off_diagonal, diagonal)
     }
 }

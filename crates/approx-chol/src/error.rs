@@ -24,7 +24,7 @@ impl From<ReduceError> for Error {
     }
 }
 
-/// Lets an infallible `From` view pass where [`factorize`](crate::factorize) takes `TryInto`.
+/// Lets an infallible `From` input pass where [`factorize`](crate::factorize) takes `TryInto`.
 impl From<Infallible> for Error {
     fn from(never: Infallible) -> Self {
         match never {}
