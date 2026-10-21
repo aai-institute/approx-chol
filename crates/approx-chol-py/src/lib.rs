@@ -4,6 +4,7 @@ use numpy::{
     BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyReadonlyArray1,
     PyUntypedArrayMethods,
 };
+use pyo3::marker::Ungil;
 use pyo3::prelude::*;
 use std::error::Error;
 use std::mem::size_of;
@@ -20,6 +21,21 @@ fn error_to_py(error: &dyn Error) -> PyErr {
         cause = source;
     }
     value_error(cause.to_string())
+}
+
+/// A matrix's stored entries, which size every call on it and its factor.
+#[derive(Clone, Copy)]
+struct StoredEntries(usize);
+
+impl StoredEntries {
+    /// Measured: up to 2^15 entries, a handoff to a busy thread costs more than parallel calls gain.
+    fn detach<T: Ungil>(self, py: Python<'_>, work: impl Ungil + FnOnce() -> T) -> T {
+        if self.0 > 1 << 15 {
+            py.detach(work)
+        } else {
+            work()
+        }
+    }
 }
 
 #[inline]
@@ -181,6 +197,7 @@ impl PyConfig {
 #[pyclass(frozen, name = "Factor")]
 struct PyFactor {
     inner: Factor<f64>,
+    entries: StoredEntries,
 }
 
 /// Without this, a deficit the reduction clamped to make a block dominant is silent.
@@ -266,7 +283,7 @@ impl PyFactor {
         let b = right_hand_side(py, b)?;
         let b_slice = b.as_slice().expect("right_hand_side is contiguous");
         let mut x = b_slice.to_vec();
-        let solved = py.detach(|| {
+        let solved = self.entries.detach(py, || {
             let mut scratch = vec![0.0; self.inner.scratch_len()];
             self.inner.solve_in_place(&mut x, &mut scratch)
         });
@@ -325,7 +342,7 @@ impl PyFactor {
             }
         };
         x.copy_from_slice(b_slice);
-        let solved = py.detach(|| self.inner.solve_in_place(x, scratch));
+        let solved = (self.entries).detach(py, || self.inner.solve_in_place(x, scratch));
         solved.map_err(|e| error_to_py(&e))
     }
 }
@@ -431,13 +448,13 @@ impl CsrArrays<'_> {
         let indices = indices.as_slice().map_err(|_| contiguous("indices"))?;
         let data = data.as_slice().map_err(|_| contiguous("data"))?;
         let config = config.map_or_else(Config::default, |config| config.0);
-        let (py, n) = (self.np.py(), self.n as u32);
-        let inner = py.detach(|| {
+        let (py, n, entries) = (self.np.py(), self.n as u32, StoredEntries(data.len()));
+        let inner = entries.detach(py, || {
             let csr = CsrRef::new(indptr, indices, data, n);
             factorize_with(csr.map_err(|e| error_to_py(&e))?, config).map_err(|e| error_to_py(&e))
         })?;
         warn_on_scaling(py, &inner)?;
-        Ok(PyFactor { inner })
+        Ok(PyFactor { inner, entries })
     }
 }
 

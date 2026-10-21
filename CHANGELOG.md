@@ -51,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Solves sum each block's right-hand side with compensation. ([#147])
 - An entry below `MIN_POSITIVE / EPSILON` in magnitude is rejected. ([#163])
 - A grounded block whose weights span past `1/ε` ends its approximate elimination at the ground; it could solve to ±inf. ([#228])
-- Python `factorize`, `Factor.solve` and `Factor.solve_into` release the GIL. ([#255])
+- Python `factorize`, `factorize_raw`, `Factor.solve` (so `matvec`/`rmatvec`) and `Factor.solve_into` release the GIL for a matrix of more than 32768 stored entries. ([#255])
 
 ## [0.6.0] - 2026-08-24
 

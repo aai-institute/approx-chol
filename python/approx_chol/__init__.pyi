@@ -4,7 +4,7 @@ from typing import Any, final
 
 import numpy as np
 import numpy.typing as npt
-from typing_extensions import disjoint_base
+from typing_extensions import Never, disjoint_base
 
 __all__ = ["Backend", "Config", "Factor", "Workspace", "factorize", "factorize_raw"]
 
@@ -115,7 +115,7 @@ class Factor:
     def solve(self, b: npt.ArrayLike) -> npt.NDArray[np.float64]:
         """Solve LDL^T x = b, returning a new array of the original matrix dimension.
 
-        Copies ``b``, then runs without the GIL.
+        Copies ``b``; releases the GIL when :func:`factorize` did.
 
         Raises:
             ValueError: If ``b`` is not 1-D integer or float, or ``len(b) != n``.
@@ -136,8 +136,7 @@ class Factor:
 
         ``b`` must have length ``shape[0]``, and *out* at least that length.
         A *workspace* from :meth:`workspace` saves allocating scratch per call.
-        Copies ``b`` into ``out``, then runs without the GIL on ``out`` in place;
-        writing ``out`` from another thread during the call is the caller's error.
+        Releases the GIL as :meth:`solve`; writing *out* meanwhile is the caller's error.
 
         Raises:
             ValueError: If ``b`` is not 1-D integer or float, ``out`` is not
@@ -151,10 +150,10 @@ class Factor:
 
 @final
 class Workspace:
-    """Caller-owned scratch for :meth:`Factor.solve_into`, from :meth:`Factor.workspace`.
+    """Scratch for one :meth:`Factor.solve_into` at a time, from :meth:`Factor.workspace`."""
 
-    One call uses it at a time, so each thread needs its own.
-    """
+    # No Python constructor: the uninhabited argument makes every call a type error.
+    def __new__(cls, never: Never, /) -> Never: ...
 
 def factorize(
     matrix: Any,
@@ -162,8 +161,7 @@ def factorize(
 ) -> Factor:
     """Factorize an SDDM matrix from a scipy.sparse CSR matrix.
 
-    Runs without the GIL and reads the matrix's arrays in place; writing them
-    from another thread during the call is the caller's error.
+    Releases the GIL above 32768 stored entries; writing the arrays meanwhile is the caller's error.
 
     Args:
         matrix: A ``scipy.sparse.csr_matrix`` or ``csr_array``.
@@ -190,7 +188,7 @@ def factorize_raw(
 ) -> Factor:
     """Factorize an SDDM matrix from raw CSR arrays.
 
-    Runs without the GIL and reads the arrays in place, as :func:`factorize`.
+    Releases the GIL as :func:`factorize`.
 
     Args:
         row_ptrs: CSR row pointer array, any integer dtype.
