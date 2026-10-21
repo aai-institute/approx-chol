@@ -291,38 +291,27 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
         Ok(found)
     }
 
-    /// Each nonzero `(i, j)`, `i < j`, of upper storage, symmetric by shape: no mirror is found, only stored zeros admitted below the diagonal.
+    /// Each nonzero `(i, j)`, `i < j`, of upper storage, symmetric by shape: no mirror is found, and a nonzero below the diagonal is rejected.
     pub(crate) fn walk_upper(&self, mut edge: impl FnMut(usize, usize, T)) -> Result<(), CsrError> {
         let (row_ptrs, col_indices, values) = self.arrays();
         for row in 0..self.n() {
             let span = index(row_ptrs[row])..index(row_ptrs[row + 1]);
-            let columns = &col_indices[span.clone()];
-            let values = &values[span];
-            // Columns ascend once canonical, so only a row whose first lies below the diagonal pays the scan.
-            if columns.first().is_some_and(|&j| index(j) < row)
-                && stores_below(columns, values, row)
-            {
-                return Err(CsrError::BelowDiagonal { row });
-            }
-            for (&col, &value) in columns.iter().zip(values) {
+            for (&col, &value) in col_indices[span.clone()].iter().zip(&values[span]) {
                 if !in_range(value) {
                     return Err(CsrError::OutOfRange { row });
                 }
                 let col = index(col);
-                if col > row && value != T::zero() {
-                    edge(row, col, value);
+                if col > row {
+                    if value != T::zero() {
+                        edge(row, col, value);
+                    }
+                } else if col < row && value != T::zero() {
+                    return Err(CsrError::BelowDiagonal { row });
                 }
             }
         }
         Ok(())
     }
-}
-
-#[cold]
-fn stores_below<T: Real, I: PrimInt>(columns: &[I], values: &[T], row: usize) -> bool {
-    (columns.iter().zip(values))
-        .take_while(|&(&j, _)| index(j) < row)
-        .any(|(_, &value)| value != T::zero())
 }
 
 /// Mirrors within 8 ulps of the larger are equal: scipy's assembly rounds the two triangles apart.
@@ -542,7 +531,7 @@ impl core::fmt::Display for CsrError {
             Self::NotSymmetric { row } => write!(f, "row {row} has an entry with no equal mirror"),
             Self::BelowDiagonal { row } => write!(
                 f,
-                "row {row} of an upper triangle has an entry below the diagonal"
+                "row {row} of an upper triangle has a nonzero below the diagonal"
             ),
             Self::OutOfRange { row } => {
                 write!(f, "row {row} has an entry outside the representable range")

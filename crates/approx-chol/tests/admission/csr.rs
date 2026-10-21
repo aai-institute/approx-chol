@@ -195,19 +195,25 @@ fn upper_csr_accepts_a_stored_zero_below_the_diagonal() {
         &[0, 1, 1, 2, 2],
         &[1.0, -1.0, 2.0, -1.0, 1.0],
     );
-    let plain = bits(&plain.expect("the path is SDDM"), &rhs);
+    let plain = bits(&plain.expect("the path Laplacian factors"), &rhs);
     let (row_ptrs, columns, values) = (
         [0, 2, 4, 6],
         [0, 1, 1, 2, 0, 2],
         [1.0, -1.0, 2.0, -1.0, 0.0, 1.0],
     );
     let (reversed_columns, reversed_values) = reversed_rows(&row_ptrs, &columns, &values);
-    for (label, columns, values) in [
-        ("as given", &columns[..], &values[..]),
-        ("reversed", &reversed_columns, &reversed_values),
+    let summed = (
+        [0, 2, 4, 7],
+        [0, 1, 1, 2, 0, 0, 2],
+        [1.0, -1.0, 2.0, -1.0, 1.0, -1.0, 1.0],
+    );
+    for (label, row_ptrs, columns, values) in [
+        ("as given", &row_ptrs[..], &columns[..], &values[..]),
+        ("reversed", &row_ptrs, &reversed_columns, &reversed_values),
+        ("repeats summing to zero", &summed.0, &summed.1, &summed.2),
     ] {
         let factor =
-            reduce_upper(&row_ptrs, columns, values).expect("a stored zero couples nothing");
+            reduce_upper(row_ptrs, columns, values).expect("a stored zero couples nothing");
         assert_eq!(bits(&factor, &rhs), plain, "{label}");
     }
 }
@@ -230,7 +236,6 @@ fn upper_csr_accepts_a_stored_zero_below_the_diagonal() {
     &[2.0, -0.25, -0.75, -0.5, -0.5, 2.0],
 )]
 #[case::stored_zero_without_a_mirror(&[0, 2, 3], &[0, 1, 1], &[1.0, 0.0, 1.0])]
-#[case::stored_zero_below_the_diagonal_without_a_mirror(&[0, 1, 3], &[0, 0, 1], &[1.0, 0.0, 1.0])]
 #[case::block_diagonal_sddm(
     &[0, 2, 4, 6, 8],
     &[0, 1, 0, 1, 2, 3, 2, 3],
