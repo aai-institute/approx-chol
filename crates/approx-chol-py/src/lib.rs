@@ -282,10 +282,9 @@ impl PyFactor {
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let b = right_hand_side(py, b)?;
         let b_slice = b.as_slice().expect("right_hand_side is contiguous");
-        let mut x = b_slice.to_vec();
-        let solved = self.entries.detach(py, || {
-            let mut scratch = vec![0.0; self.inner.scratch_len()];
-            self.inner.solve_in_place(&mut x, &mut scratch)
+        let (mut x, mut workspace) = (b_slice.to_vec(), self.workspace());
+        let solved = (self.entries).detach(py, || {
+            self.inner.solve_in_place(&mut x, &mut workspace.scratch)
         });
         solved.map_err(|e| error_to_py(&e))?;
         Ok(PyArray1::from_vec(py, x))
@@ -337,8 +336,8 @@ impl PyFactor {
         let scratch: &mut [f64] = match workspace.as_deref_mut() {
             Some(workspace) => &mut workspace.scratch,
             None => {
-                owned = vec![0.0; self.inner.scratch_len()];
-                &mut owned
+                owned = self.workspace();
+                &mut owned.scratch
             }
         };
         x.copy_from_slice(b_slice);
@@ -455,8 +454,8 @@ impl CsrArrays<'_> {
         let config = config.map_or_else(Config::default, |config| config.0);
         let (py, n, entries) = (self.np.py(), self.n as u32, StoredEntries(data.len()));
         let inner = entries.detach(py, || {
-            let csr = CsrRef::new(indptr, indices, data, n);
-            factorize_with(csr.map_err(|e| error_to_py(&e))?, config).map_err(|e| error_to_py(&e))
+            let csr = CsrRef::new(indptr, indices, data, n).map_err(|e| error_to_py(&e))?;
+            factorize_with(csr, config).map_err(|e| error_to_py(&e))
         })?;
         warn_on_scaling(py, &inner)?;
         Ok(PyFactor { inner, entries })
