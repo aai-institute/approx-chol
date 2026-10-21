@@ -1,9 +1,10 @@
 //! One reduced irreducible block, its balance and grounding, and the summands extraction yields.
 
 use super::congruence::{Congruence, Restriction};
+use super::diagonal_in_range;
 use super::scaling::ScalingReport;
 use crate::storage::OffDiagonal;
-use crate::{diagonal_in_range, Index, Real};
+use crate::{Index, Real};
 
 /// Whether a signature folds `M` (Harary), and `M`'s grounding.
 #[derive(Clone, Debug)]

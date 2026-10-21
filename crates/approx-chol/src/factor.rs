@@ -430,9 +430,15 @@ fn inverse_of_a_pivot<'de, D: serde::Deserializer<'de>, T: Real + serde::Deseria
     deserializer: D,
 ) -> Result<T, D::Error> {
     let inverse = T::deserialize(deserializer)?;
-    crate::inverse_pivot_in_range(inverse)
+    inverse_pivot_in_range(inverse)
         .then_some(inverse)
         .ok_or_else(|| serde::de::Error::custom("corrupt Isolated"))
+}
+
+/// `1/d` for a `d` that is `sgdd::diagonal_in_range`: normal, and at most `ε/MIN_POSITIVE`.
+#[cfg(feature = "serde")]
+fn inverse_pivot_in_range<T: Real>(inverse: T) -> bool {
+    inverse >= T::min_positive_value() && inverse <= T::epsilon() / T::min_positive_value()
 }
 
 /// `Σ|t| ≤ 1` up to the terms' rounding: a substitution through such multipliers cannot overflow where its solution fits.

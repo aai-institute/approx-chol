@@ -13,7 +13,7 @@ pub(crate) use congruence::{FactorTail, Restriction};
 pub(crate) use reduction::within_band;
 pub use scaling::{ScalingPolicy, ScalingReport};
 
-use crate::{Index, Real};
+use crate::{in_range, Index, Real};
 use decomposition::Components;
 
 /// `A` as its reduced summands; built only from extraction, so they cover `A` once.
@@ -43,4 +43,9 @@ impl<T: Real, I: Index> Sgdd<T, I> {
     pub(crate) fn into_summands(self) -> Summands<IrreducibleBlock<T, I>, I, T> {
         self.summands
     }
+}
+
+/// In range and at most `MAX/4`, so every row sum, pivot and surplus stays finite.
+fn diagonal_in_range<T: Real>(d: T) -> bool {
+    in_range(d) && d <= T::max_value() / (T::one() + T::one() + T::one() + T::one())
 }
