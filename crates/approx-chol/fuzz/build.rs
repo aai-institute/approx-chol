@@ -141,16 +141,28 @@ fn seeds() -> Vec<(&'static str, Input)> {
             f64(bipartite(false), approximate()),
         ),
         (
-            "laplacian_grounded",
+            "laplacian_weighted_path",
             f64(
-                View::Laplacian(
+                View::Laplacian(Edges {
+                    n: 4,
+                    a: vec![0, 1, 2],
+                    b: vec![1, 2, 3],
+                    weights: Some(vec![1.0, 4.0, 0.25]),
+                }),
+                approximate(),
+            ),
+        ),
+        (
+            "sddm_path",
+            f64(
+                View::Sddm(
                     Edges {
                         n: 4,
                         a: vec![0, 1, 2],
                         b: vec![1, 2, 3],
                         weights: Some(vec![1.0, 4.0, 0.25]),
                     },
-                    Some(vec![0.0, 0.0, 0.0, 0.5]),
+                    vec![0.0, 0.0, 0.0, 0.5],
                 ),
                 approximate(),
             ),
