@@ -392,7 +392,7 @@ fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
 
 #[test]
 fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
-    use approx_chol::input::{BipartiteGram, FactorWidth1, Weights};
+    use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1, Weights};
     use approx_chol::{factorize_with, Backend};
     // Three left vertices on one right vertex, each by a cancelling pair: `S` is one grounded slot, so AC2 samples no edge.
     let (left, right) = ([0u32, 0, 1, 1, 2, 2], [0u32; 6]);
@@ -408,7 +408,7 @@ fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
                 complement,
                 ..Config::default()
             };
-            let gram = BipartiteGram::new(
+            let gram = BipartiteFactorWidth2::new(
                 FactorWidth1::new(3, &left, Some(&loadings[..])).unwrap(),
                 FactorWidth1::<f64>::new(1, &right, None).unwrap(),
                 Weights::of(&weights).unwrap(),

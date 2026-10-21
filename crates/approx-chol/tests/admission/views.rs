@@ -1,5 +1,5 @@
 use approx_chol::input::{
-    BipartiteGram, CsrRef, FactorWidth1, FactorWidth2, Laplacian, ViewError, Weights,
+    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, ViewError, Weights,
 };
 use approx_chol::{factorize, Error, ReduceError};
 use rstest::rstest;
@@ -32,9 +32,9 @@ fn unit_path() -> Laplacian<'static, f64> {
 #[case::negative(-1.0)]
 #[case::nan(f64::NAN)]
 #[case::infinite(f64::INFINITY)]
-fn weights_of_rejects_a_negative_or_non_finite_weight_at_its_column(#[case] weight: f64) {
+fn weights_of_rejects_a_negative_or_non_finite_weight_at_its_entry(#[case] weight: f64) {
     let error = Weights::of(&[1.0, weight, 1.0]).expect_err("invalid weight");
-    assert_eq!(error, ViewError::InvalidWeight { column: 1 });
+    assert_eq!(error, ViewError::InvalidWeight { entry: 1 });
 }
 
 #[test]
@@ -45,9 +45,9 @@ fn weights_of_admits_a_zero_weight() {
 #[rstest]
 #[case::nan(f64::NAN)]
 #[case::infinite(f64::NEG_INFINITY)]
-fn weights_sqrt_of_rejects_a_non_finite_root_at_its_column(#[case] root: f64) {
+fn weights_sqrt_of_rejects_a_non_finite_root_at_its_entry(#[case] root: f64) {
     let error = Weights::sqrt_of(&[1.0, 1.0, root]).expect_err("invalid root");
-    assert_eq!(error, ViewError::InvalidWeight { column: 2 });
+    assert_eq!(error, ViewError::InvalidWeight { entry: 2 });
 }
 
 #[test]
@@ -83,13 +83,13 @@ fn a_root_weight_whose_square_underflows_is_out_of_range_at_its_edge() {
 )]
 #[case::end_past_n(
     Laplacian::<f64>::new(3, &[0, 1], &[1, 3], Weights::unit()).err(),
-    ViewError::IndexOutOfRange { column: 1 }
+    ViewError::IndexOutOfRange { entry: 1 }
 )]
 #[case::self_loop(
     Laplacian::<f64>::new(3, &[0, 2], &[1, 2], Weights::unit()).err(),
-    ViewError::RepeatedVertex { column: 1 }
+    ViewError::RepeatedVertex { entry: 1 }
 )]
-fn laplacian_new_rejects_mismatched_lengths_and_bad_ends_at_their_column(
+fn laplacian_new_rejects_mismatched_lengths_and_bad_ends_at_their_entry(
     #[case] observed: Option<ViewError>,
     #[case] expected: ViewError,
 ) {
@@ -142,13 +142,13 @@ fn factor_width_1_new_rejects_mismatched_values_and_rows_past_n() {
         }
     );
     let past = FactorWidth1::<f64>::new(3, &[0u32, 3, 2], None).expect_err("row past n");
-    assert_eq!(past, ViewError::IndexOutOfRange { column: 1 });
+    assert_eq!(past, ViewError::IndexOutOfRange { entry: 1 });
     let negative = FactorWidth1::<f64, i64>::new(3, &[0, 1, -1], None).expect_err("negative row");
-    assert_eq!(negative, ViewError::IndexOutOfRange { column: 2 });
+    assert_eq!(negative, ViewError::IndexOutOfRange { entry: 2 });
 }
 
 fn gram(a: &[u32], b: &[u32], x: &[f64], y: &[f64]) -> Option<ViewError> {
-    FactorWidth2::new(3, a, b, x, y).err()
+    FactorWidth2::new(3, (a, x), (b, y)).err()
 }
 
 #[rstest]
@@ -157,13 +157,13 @@ fn gram(a: &[u32], b: &[u32], x: &[f64], y: &[f64]) -> Option<ViewError> {
 #[case::y_one_short(gram(&PATH_A, &PATH_B, &[1.0, 1.0], &[1.0]), two_edges_but(1))]
 #[case::end_past_n(
     gram(&PATH_A, &[1, 3], &[1.0, 1.0], &[-1.0, -1.0]),
-    ViewError::IndexOutOfRange { column: 1 }
+    ViewError::IndexOutOfRange { entry: 1 }
 )]
 #[case::repeated_vertex(
     gram(&[0, 2], &PATH_B, &[1.0, 1.0], &[-1.0, -1.0]),
-    ViewError::RepeatedVertex { column: 1 }
+    ViewError::RepeatedVertex { entry: 1 }
 )]
-fn factor_width_2_new_rejects_mismatched_lengths_and_bad_ends_at_their_column(
+fn factor_width_2_new_rejects_mismatched_lengths_and_bad_ends_at_their_entry(
     #[case] observed: Option<ViewError>,
     #[case] expected: ViewError,
 ) {
@@ -178,7 +178,7 @@ fn factor_width_2_new_rejects_mismatched_lengths_and_bad_ends_at_their_column(
 #[case::past_a_quarter_of_the_maximum(f64::MAX)]
 fn an_out_of_range_loading_is_rejected_at_its_vertex(#[case] value: f64) {
     let (x, y) = ([1.0, value], [-1.0, -1.0]);
-    let gram = FactorWidth2::new(3, &PATH_A, &PATH_B, &x, &y).unwrap();
+    let gram = FactorWidth2::new(3, (&PATH_A, &x), (&PATH_B, &y)).unwrap();
     let error = factorize(gram).expect_err("loading out of range");
     assert_names_a_defect(error, &out_of_range(&[1, 2]));
 }
@@ -187,7 +187,8 @@ fn an_out_of_range_loading_is_rejected_at_its_vertex(#[case] value: f64) {
 fn bipartite_gram_new_rejects_sides_of_unequal_column_count_and_mismatched_weights() {
     let left = FactorWidth1::<f64>::new(2, &[0, 1, 1], None).unwrap();
     let right = FactorWidth1::<f64>::new(2, &[0, 1], None).unwrap();
-    let error = BipartiteGram::new(left, right, Weights::unit()).expect_err("column counts");
+    let error =
+        BipartiteFactorWidth2::new(left, right, Weights::unit()).expect_err("column counts");
     assert_eq!(
         error,
         ViewError::LengthMismatch {
@@ -198,7 +199,8 @@ fn bipartite_gram_new_rejects_sides_of_unequal_column_count_and_mismatched_weigh
 
     let right = FactorWidth1::<f64>::new(2, &[0, 1, 0], None).unwrap();
     let w = [1.0, 1.0];
-    let error = BipartiteGram::new(left, right, Weights::of(&w).unwrap()).expect_err("weights");
+    let error =
+        BipartiteFactorWidth2::new(left, right, Weights::of(&w).unwrap()).expect_err("weights");
     assert_eq!(
         error,
         ViewError::LengthMismatch {
@@ -216,7 +218,7 @@ fn an_out_of_range_bipartite_loading_is_rejected_at_its_vertex(#[case] value: f6
     let values = [1.0, value];
     let left = FactorWidth1::new(2, &[0u32, 1], Some(&values[..])).unwrap();
     let right = FactorWidth1::<f64>::new(1, &[0u32, 0], None).unwrap();
-    let gram = BipartiteGram::new(left, right, Weights::unit()).unwrap();
+    let gram = BipartiteFactorWidth2::new(left, right, Weights::unit()).unwrap();
     let error = factorize(gram).expect_err("loading out of range");
     assert_names_a_defect(error, &out_of_range(&[1, 2]));
 }
@@ -233,7 +235,7 @@ fn a_bipartite_loading_whose_square_underflows_beside_an_in_range_column_factors
     let (values, weights) = ([z, 1.0], [w, 1.0]);
     let left = FactorWidth1::new(1, &[0u32, 0], Some(&values[..])).unwrap();
     let right = FactorWidth1::<f64>::new(2, &[0u32, 1], None).unwrap();
-    let gram = BipartiteGram::new(left, right, Weights::of(&weights).unwrap()).unwrap();
+    let gram = BipartiteFactorWidth2::new(left, right, Weights::of(&weights).unwrap()).unwrap();
     let factor = factorize(gram).expect("every diagonal and cell is in range");
     let root = w.sqrt();
     solve_residual(
@@ -249,7 +251,7 @@ fn a_gram_loading_whose_square_underflows_beside_an_in_range_column_factors_and_
     #[case] z: f64,
 ) {
     let (x, y) = ([z, 1.0], [-1.0, -1.0]);
-    let gram = FactorWidth2::new(3, &[0u32, 0], &PATH_B, &x, &y).unwrap();
+    let gram = FactorWidth2::new(3, (&[0u32, 0], &x), (&PATH_B, &y)).unwrap();
     let factor = factorize(gram).expect("every diagonal and cell is in range");
     solve_residual(&factor, &matrix(3, &[0, 0], &PATH_B, &x, &y));
 }
@@ -258,7 +260,7 @@ fn a_gram_loading_whose_square_underflows_beside_an_in_range_column_factors_and_
 #[test]
 fn a_gram_cell_whose_product_underflows_is_out_of_range() {
     let (x, y) = ([1e-170, 1.0, 1.0], [1e-170, -1.0, -1.0]);
-    let gram = FactorWidth2::new(4, &[0u32, 0, 1], &[1, 2, 3], &x, &y).unwrap();
+    let gram = FactorWidth2::new(4, (&[0u32, 0, 1], &x), (&[1, 2, 3], &y)).unwrap();
     let error = factorize(gram).expect_err("cell below the floor");
     assert_names_a_defect(error, &out_of_range(&[0, 1]));
 }
@@ -268,7 +270,7 @@ fn a_gram_cell_whose_product_underflows_is_out_of_range() {
 fn a_bipartite_vertex_whose_every_term_underflows_is_out_of_range() {
     let values = [1e-170];
     let side = || FactorWidth1::new(1, &[0u32], Some(&values[..])).unwrap();
-    let gram = BipartiteGram::new(side(), side(), Weights::unit()).unwrap();
+    let gram = BipartiteFactorWidth2::new(side(), side(), Weights::unit()).unwrap();
     let error = factorize(gram).expect_err("every term underflows");
     assert_names_a_defect(error, &out_of_range(&[0, 1]));
 }
@@ -276,7 +278,7 @@ fn a_bipartite_vertex_whose_every_term_underflows_is_out_of_range() {
 #[test]
 fn a_gram_vertex_whose_every_term_underflows_is_out_of_range() {
     let (x, y) = ([1e-170, 1.0], [1e-170, -1.0]);
-    let gram = FactorWidth2::new(4, &[0u32, 2], &[1, 3], &x, &y).unwrap();
+    let gram = FactorWidth2::new(4, (&[0u32, 2], &x), (&[1, 3], &y)).unwrap();
     let error = factorize(gram).expect_err("every term underflows");
     assert_names_a_defect(error, &out_of_range(&[0, 1]));
 }

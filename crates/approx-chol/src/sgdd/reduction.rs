@@ -12,7 +12,7 @@ use super::decomposition::{
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
 use super::Sgdd;
-use crate::input::{BipartiteGram, Canonical, FactorWidth2, Input, Laplacian};
+use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Laplacian};
 use crate::storage::OffDiagonal;
 use crate::{diagonal_in_range, widen, Error, Index, Real};
 
@@ -27,8 +27,8 @@ impl<T: Real, I: Index> Sgdd<T, I> {
             Input::Csr(csr) => of_csr(Canonical::of(csr)?)?.reduce(&policy)?,
             Input::UpperCsr(csr) => of_upper(Canonical::of(csr.0)?)?.reduce(&policy)?,
             Input::Laplacian(Laplacian(v))
-            | Input::Gram(v)
-            | Input::BipartiteGram(BipartiteGram(v)) => match Biadjacency::of(&v) {
+            | Input::FactorWidth2(v)
+            | Input::BipartiteFactorWidth2(BipartiteFactorWidth2(v)) => match Biadjacency::of(&v) {
                 Some(layout) => Self::from_gram(layout, v, &policy)?,
                 None => Self::from_gram(StrictUpperTriangle, v, &policy)?,
             },
