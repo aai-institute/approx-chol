@@ -269,11 +269,19 @@ impl PyFactor {
         Ok(PyArray1::from_vec(py, x))
     }
 
+    fn workspace(&self) -> PyWorkspace {
+        PyWorkspace {
+            scratch: vec![0.0; self.inner.scratch_len()],
+        }
+    }
+
+    #[pyo3(signature = (b, out, workspace=None))]
     fn solve_into<'py>(
         &self,
         py: Python<'py>,
         b: &Bound<'py, PyAny>,
         out: &Bound<'py, PyArray1<f64>>,
+        mut workspace: Option<PyRefMut<'py, PyWorkspace>>,
     ) -> PyResult<()> {
         let b = right_hand_side(py, b)?;
         let b_slice = b.as_slice().expect("right_hand_side is contiguous");
@@ -303,13 +311,26 @@ impl PyFactor {
         let x = &mut out_rw
             .as_slice_mut()
             .map_err(|_| value_error("out must be contiguous"))?[..n];
-        let mut scratch = vec![0.0; self.inner.scratch_len()];
+        let mut owned;
+        let scratch: &mut [f64] = match workspace.as_deref_mut() {
+            Some(workspace) => &mut workspace.scratch,
+            None => {
+                owned = vec![0.0; self.inner.scratch_len()];
+                &mut owned
+            }
+        };
         let solved = py.detach(|| {
             x.copy_from_slice(b_slice);
-            self.inner.solve_in_place(x, &mut scratch)
+            self.inner.solve_in_place(x, scratch)
         });
         solved.map_err(|e| error_to_py(&e))
     }
+}
+
+/// Caller-owned solve scratch, so repeated `solve_into` calls allocate nothing.
+#[pyclass(name = "Workspace")]
+struct PyWorkspace {
+    scratch: Vec<f64>,
 }
 
 #[pyfunction]
@@ -418,12 +439,13 @@ impl CsrArrays<'_> {
 }
 
 /// Approximate Cholesky factorization for SDDM/Laplacian systems.
-// GIL-free is sound: every pyclass is `frozen` with `Sync` state and the module holds none.
+// GIL-free is sound: pyclass state is `Sync`, `Workspace` is borrow-checked, and the module holds none.
 #[pymodule(gil_used = false)]
 fn _approx_chol(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBackend>()?;
     m.add_class::<PyConfig>()?;
     m.add_class::<PyFactor>()?;
+    m.add_class::<PyWorkspace>()?;
     m.add_function(wrap_pyfunction!(factorize, m)?)?;
     m.add_function(wrap_pyfunction!(factorize_raw, m)?)?;
     Ok(())

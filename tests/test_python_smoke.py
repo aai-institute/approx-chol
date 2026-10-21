@@ -29,6 +29,7 @@ def test_package_surface_and_basic_factorize_raw_roundtrip():
         "Backend",
         "Config",
         "Factor",
+        "Workspace",
         "factorize",
         "factorize_raw",
     ]
@@ -49,7 +50,9 @@ def test_config_defaults_and_getters():
     assert (default.seed, default.split) == (0, None)
     assert default.backend == approx_chol.Backend.ExactBelow(max_dim=24)
 
-    config = approx_chol.Config(seed=7, split=3, backend=approx_chol.Backend.Approximate())
+    config = approx_chol.Config(
+        seed=7, split=3, backend=approx_chol.Backend.Approximate()
+    )
     assert (config.seed, config.split) == (7, 3)
     assert config.backend == approx_chol.Backend.Approximate()
 
@@ -115,3 +118,20 @@ def test_a_dominant_matrix_does_not_warn():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         approx_chol.factorize(lap)
+
+
+def test_solve_into_with_a_reused_workspace_is_bit_identical():
+    lap = grid_laplacian(16, 16)
+    factor = approx_chol.factorize(
+        lap, approx_chol.Config(backend=approx_chol.Backend.Approximate())
+    )
+    workspace = factor.workspace()
+    rng = np.random.default_rng(0)
+    for _ in range(3):
+        b = rng.standard_normal(factor.n)
+        b -= b.mean()
+        fresh, reused = np.empty_like(b), np.empty_like(b)
+        factor.solve_into(b, fresh)
+        factor.solve_into(b, reused, workspace=workspace)
+        np.testing.assert_array_equal(reused, fresh)
+        np.testing.assert_array_equal(reused, factor.solve(b))

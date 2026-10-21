@@ -44,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A factor of more than `(u32::MAX - 1) / 2` vertices stores `u64` indices. ([#182])
 - Python `factorize` warns when a block's deficit is clamped or its scaling does not settle. ([#181])
 - Python `factorize_raw` takes arrays of any integer index dtype. ([#181])
+- Python `Factor.workspace` returns a `Workspace`, which `Factor.solve_into` reuses as its scratch. ([#255])
 
 ### Fixed
 

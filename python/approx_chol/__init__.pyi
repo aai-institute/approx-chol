@@ -6,7 +6,7 @@ import numpy as np
 import numpy.typing as npt
 from typing_extensions import disjoint_base
 
-__all__ = ["Backend", "Config", "Factor", "factorize", "factorize_raw"]
+__all__ = ["Backend", "Config", "Factor", "Workspace", "factorize", "factorize_raw"]
 
 @disjoint_base
 class Backend:
@@ -123,24 +123,39 @@ class Factor:
         """
         ...
 
+    def workspace(self) -> Workspace:
+        """Scratch for :meth:`solve_into`, sized for this factor."""
+        ...
+
     def solve_into(
         self,
         b: npt.ArrayLike,
         out: npt.NDArray[np.float64],
+        workspace: Workspace | None = None,
     ) -> None:
         """Solve LDL^T x = b, writing the result into *out*.
 
         ``b`` must have length ``shape[0]``, and *out* at least that length.
+        A *workspace* from :meth:`workspace` saves allocating scratch per call.
         Runs without the GIL and borrows ``b`` and ``out`` in place; writing
         either from another thread during the call is the caller's error.
 
         Raises:
             ValueError: If ``b`` is not 1-D integer or float, ``out`` is not
                 contiguous, sizes are invalid,
-                ``out`` is not writeable, or ``b`` and ``out`` overlap in memory.
+                ``out`` is not writeable, ``b`` and ``out`` overlap in memory,
+                or *workspace* is too small for this factor.
             BufferError: If ``out`` is already borrowed.
+            RuntimeError: If *workspace* is in use by another call.
         """
         ...
+
+@final
+class Workspace:
+    """Caller-owned scratch for :meth:`Factor.solve_into`, from :meth:`Factor.workspace`.
+
+    One call uses it at a time, so each thread needs its own.
+    """
 
 def factorize(
     matrix: Any,
