@@ -4,7 +4,7 @@ use num_traits::PrimInt;
 
 use super::partition::{Partition, UnionFind};
 use super::{Assembled, Dominant, Partitioned, PrincipalBlocks};
-use crate::input::{Column, Gram};
+use crate::input::{Column, FactorWidth2};
 use crate::sgdd::block::ReduceError;
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::{diagonal_in_range, in_range, narrow, widen, Index, Real};
@@ -17,7 +17,7 @@ pub(in crate::sgdd) trait AdjacencyLayout {
     /// The summed cells and components, `seen` visiting each column once and `pair` each summed cell with its two ends.
     fn sum<T: Real, J: PrimInt, I: Index>(
         self,
-        v: Gram<'_, T, J>,
+        v: FactorWidth2<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         pair: impl FnMut(usize, usize, f64),
     ) -> Result<Partitioned<Self::Adjacency<T, I>, I>, ReduceError>;
@@ -35,7 +35,7 @@ pub(in crate::sgdd) struct Biadjacency {
 
 impl Biadjacency {
     /// `v`'s own left part, so the layout and the columns it sums never disagree.
-    pub(in crate::sgdd) fn of<T: Real, J: PrimInt>(v: &Gram<'_, T, J>) -> Option<Self> {
+    pub(in crate::sgdd) fn of<T: Real, J: PrimInt>(v: &FactorWidth2<'_, T, J>) -> Option<Self> {
         v.n_left().map(|n_left| Self { n_left })
     }
 }
@@ -47,7 +47,7 @@ impl AdjacencyLayout for StrictUpperTriangle {
     #[inline(always)]
     fn sum<T: Real, J: PrimInt, I: Index>(
         self,
-        v: Gram<'_, T, J>,
+        v: FactorWidth2<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         mut pair: impl FnMut(usize, usize, f64),
     ) -> Result<Partitioned<UpperAdjacency<T, I>, I>, ReduceError> {
@@ -72,7 +72,7 @@ impl AdjacencyLayout for Biadjacency {
     /// `C`, summed in a dense table when small (+54% without it).
     fn sum<T: Real, J: PrimInt, I: Index>(
         self,
-        v: Gram<'_, T, J>,
+        v: FactorWidth2<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         pair: impl FnMut(usize, usize, f64),
     ) -> Result<Partitioned<Rows<T, I>, I>, ReduceError> {
@@ -106,7 +106,7 @@ type ValueCells<T, I, S> = Partitioned<Assembled<T, <S as AdjacencyLayout>::Adja
 /// D: each pivot `Σ_j |c_ij| + σ_i`, screened in the assembly's own sums; `A`'s diagonal never stored.
 pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
     cells: S,
-    v: Gram<'a, T, J>,
+    v: FactorWidth2<'a, T, J>,
 ) -> Result<IncidenceCells<'a, T, I, S>, ReduceError> {
     let mut abs = vec![0.0_f64; v.n()];
     let a = cells.sum(
@@ -134,7 +134,7 @@ pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: 
 /// `A`'s cells, its diagonal `Σ_k w_k v_ik²` and its components, summed in one column pass.
 pub(in crate::sgdd) fn assemble_values<T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
     cells: S,
-    v: Gram<'_, T, J>,
+    v: FactorWidth2<'_, T, J>,
 ) -> Result<ValueCells<T, I, S>, ReduceError> {
     let mut sums = vec![0.0; v.n()];
     let a = cells.sum::<T, J, I>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
@@ -181,7 +181,7 @@ const DENSE_TABLE_MAX_BYTES: usize = 40_000_000;
 
 /// `pair` sees each nonzero cell.
 fn dense_cross<T: Real, J: PrimInt, I: Index>(
-    v: Gram<'_, T, J>,
+    v: FactorWidth2<'_, T, J>,
     n_left: usize,
     mut seen: impl FnMut(&Column<T, I>),
     mut pair: impl FnMut(usize, usize, f64),
@@ -213,7 +213,7 @@ fn dense_cross<T: Real, J: PrimInt, I: Index>(
 
 /// Each row's cell count, a column's row its lower end, `seen` visiting each column once.
 fn counts<T: Real, J: PrimInt, I: Index>(
-    v: Gram<'_, T, J>,
+    v: FactorWidth2<'_, T, J>,
     n_rows: usize,
     mut seen: impl FnMut(&Column<T, I>),
 ) -> Vec<usize> {
@@ -230,7 +230,7 @@ fn counts<T: Real, J: PrimInt, I: Index>(
 
 /// Cells bucketed at their lower end in column order, so each sums as a dense table would; `pair` sees each summed cell, a cancelled one too.
 fn sum_cells<T: Real, J: PrimInt, I: Index>(
-    v: Gram<'_, T, J>,
+    v: FactorWidth2<'_, T, J>,
     counts: &[usize],
     first_column: usize,
     mut pair: impl FnMut(usize, usize, f64),

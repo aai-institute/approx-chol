@@ -3,7 +3,7 @@ use std::cell::LazyCell;
 use num_traits::PrimInt;
 
 use super::{within_band, Congruent, Signed, SymmetricBlock};
-use crate::input::{Column, Gram};
+use crate::input::{Column, FactorWidth2};
 use crate::sgdd::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Summands};
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components};
 use crate::sgdd::scaling::{self, ScalingPolicy};
@@ -14,7 +14,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
     /// `V` with values: scaled by its null vectors on demand, folded blocks dropping their rows for one pass over `V` that decides floating.
     pub(super) fn from_values<J: PrimInt, S: AdjacencyLayout>(
         cells: S,
-        v: Gram<'_, T, J>,
+        v: FactorWidth2<'_, T, J>,
         policy: &ScalingPolicy,
     ) -> Result<Self, ReduceError> {
         let Components {
@@ -57,7 +57,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
 
 /// Floats each folded block as [`RowSums::folded_surplus`](super::RowSums::folded_surplus) does, else grounds it on `s = M·1`.
 fn ground_or_float<T: Real, J: PrimInt, I: Index>(
-    v: Gram<'_, T, J>,
+    v: FactorWidth2<'_, T, J>,
     blocks: Vec<Congruent<T, I>>,
 ) -> Result<Vec<IrreducibleBlock<T, I>>, ReduceError> {
     if blocks.is_empty() {
@@ -152,7 +152,7 @@ impl OneSums {
 
 /// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is: one union-find pass; a cycle off by more than `√ε` relative dooms its component.
 fn null_vectors<'c, T: Real, J: PrimInt, I: Index>(
-    v: Gram<'_, T, J>,
+    v: FactorWidth2<'_, T, J>,
     components: impl Iterator<Item = &'c [I]>,
 ) -> Vec<f64> {
     let n = v.n();
