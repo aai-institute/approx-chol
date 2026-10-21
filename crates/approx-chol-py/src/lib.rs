@@ -1,4 +1,4 @@
-use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, ScalingReport};
+use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, ScalingReport, SolveError};
 use num_traits::PrimInt;
 use numpy::{
     BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyReadonlyArray1,
@@ -343,7 +343,12 @@ impl PyFactor {
         };
         x.copy_from_slice(b_slice);
         let solved = (self.entries).detach(py, || self.inner.solve_in_place(x, scratch));
-        solved.map_err(|e| error_to_py(&e))
+        solved.map_err(|e| match e {
+            SolveError::ScratchTooShort { .. } => {
+                value_error("workspace is from a smaller factor; use this factor's workspace()")
+            }
+            e => error_to_py(&e),
+        })
     }
 }
 

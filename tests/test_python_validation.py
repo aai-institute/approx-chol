@@ -238,7 +238,7 @@ def test_a_workspace_from_a_smaller_factor_raises():
     small = approx_chol.factorize(grid_laplacian(2, 2), approximate)
     large = approx_chol.factorize(grid_laplacian(16, 16), approximate)
     b = np.zeros(large.n)
-    with pytest.raises(ValueError, match="scratch has length"):
+    with pytest.raises(ValueError, match="workspace is from a smaller factor"):
         large.solve_into(b, np.empty_like(b), small.workspace())
 
 

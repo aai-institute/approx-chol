@@ -142,7 +142,7 @@ class Factor:
             ValueError: If ``b`` is not 1-D integer or float, ``out`` is not
                 contiguous, sizes are invalid,
                 ``out`` is not writeable, ``b`` and ``out`` overlap in memory,
-                or *workspace* is too small for this factor.
+                or *workspace* is from a smaller factor.
             BufferError: If ``out`` is already borrowed.
             RuntimeError: If *workspace* is in use by another call.
         """
