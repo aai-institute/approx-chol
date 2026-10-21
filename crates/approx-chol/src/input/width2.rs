@@ -176,12 +176,28 @@ pub(crate) struct Column<T, I> {
     pub(crate) b: I,
     pub(crate) v_a: T,
     pub(crate) v_b: T,
-    pub(crate) weight: Weight<T>,
+    weight: Weight<T>,
 }
 
 impl<T: Real, I> Column<T, I> {
     /// `w·v_a·v_b` in `f64`: every assembly sums its cells there and casts once.
     pub(crate) fn cell(self) -> f64 {
-        (self.weight).bilinear_unflushed(widen(self.v_a), widen(self.v_b))
+        self.weight
+            .bilinear_unflushed(widen(self.v_a), widen(self.v_b))
+    }
+
+    /// `w·x·y` for any `x`, `y` on this column's ends.
+    pub(crate) fn bilinear(self, x: f64, y: f64) -> f64 {
+        self.weight.bilinear(x, y)
+    }
+
+    /// `w·v²`, an underflow kept as the least subnormal.
+    pub(crate) fn square(self, v: f64) -> f64 {
+        self.weight.bilinear_unflushed(v, v)
+    }
+
+    /// `w = 0`, so the column adds nothing to `A`.
+    pub(crate) fn zero_weight(self) -> bool {
+        self.weight.is_zero()
     }
 }
