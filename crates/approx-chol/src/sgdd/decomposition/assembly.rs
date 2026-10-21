@@ -17,7 +17,7 @@ pub(in crate::sgdd) trait AdjacencyLayout {
     type Adjacency<T: Real, I: Index>: PrincipalBlocks<T, I, Block = (Box<[I]>, OffDiagonal<T, I>)>
         + Sync;
 
-    /// The summed cells and components, `seen` visiting each column once and `pair` each nonzero cell with its two ends.
+    /// The summed cells and components, `seen` visiting each column once and `pair` each nonzero cell with its two ends, and a cancelled one as `0.0` or not at all.
     fn sum<T: Real, J: PrimInt, I: Index>(
         self,
         v: FactorWidth2<'_, T, J>,
