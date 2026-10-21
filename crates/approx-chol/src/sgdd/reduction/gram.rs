@@ -3,7 +3,7 @@ use std::cell::LazyCell;
 use num_traits::PrimInt;
 
 use super::{within_band, Congruent, Signed, SymmetricBlock};
-use crate::input::{Column, Gram, IntoColumns};
+use crate::input::{Column, Gram};
 use crate::sgdd::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Summands};
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components};
 use crate::sgdd::scaling::{self, ScalingPolicy};
@@ -156,8 +156,8 @@ impl OneSums {
 }
 
 /// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is: one union-find pass; a cycle off by more than `√ε` relative dooms its component.
-fn null_vectors<'c, T: Real, I: Index>(
-    v: impl IntoColumns<T>,
+fn null_vectors<'c, T: Real, J: PrimInt, I: Index>(
+    v: Gram<'_, T, J>,
     components: impl Iterator<Item = &'c [I]>,
 ) -> Vec<f64> {
     let n = v.n();

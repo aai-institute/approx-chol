@@ -558,7 +558,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::input::{BipartiteGram, CsrRef, FactorWidth1};
+    use crate::input::{CsrRef, FactorWidth1, Gram};
     use crate::ScalingPolicy;
 
     fn only_block(sgdd: Sgdd, config: &Config) -> Block<f64, u32> {
@@ -595,7 +595,7 @@ mod tests {
 
     /// A bipartite block, so it carries a block elimination.
     fn bipartite_block() -> Block<f64, u32> {
-        let gram = BipartiteGram::new(
+        let gram = Gram::bipartite(
             FactorWidth1::new(2, &[0u32, 0, 1, 1], None).expect("valid rows"),
             FactorWidth1::new(2, &[0u32, 1, 0, 1], None).expect("valid columns"),
         )
@@ -650,7 +650,7 @@ mod tests {
 #[cfg(test)]
 mod storage {
     use super::*;
-    use crate::input::{BipartiteGram, CsrRef, FactorWidth1, Input, Weights};
+    use crate::input::{CsrRef, FactorWidth1, Gram, Input, Weights};
     use crate::{ScalingPolicy, SchurMode};
 
     fn bits(factor: &Factor, b: &[f64]) -> Vec<u64> {
@@ -728,7 +728,7 @@ mod storage {
         let rows: Vec<u32> = (0..60).map(|k| k % 12).collect();
         let cols: Vec<u32> = (0..60).map(|k| (k * 7 + k / 12) % 9).collect();
         let weights: Vec<f64> = (0..60).map(|k| 1.0 + (k % 5) as f64).collect();
-        let gram = BipartiteGram::new(
+        let gram = Gram::bipartite(
             FactorWidth1::new(12, &rows, None).expect("valid rows"),
             FactorWidth1::new(9, &cols, None).expect("valid columns"),
         )

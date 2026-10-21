@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use num_traits::PrimInt;
 use rayon::prelude::*;
 
@@ -180,9 +178,9 @@ pub(super) struct Assembled<T, C> {
 }
 
 /// `A = L(C) + diag(σ)`, dominant by shape: no diagonal is stored, each pivot is `Σ_j |c_ij| + σ_i`.
-pub(super) struct Dominant<'a, T: Clone, C> {
+pub(super) struct Dominant<'a, T, C> {
     adjacency: C,
-    surplus: Option<Cow<'a, [T]>>,
+    surplus: Option<&'a [T]>,
 }
 
 impl<T: Real, J: PrimInt> LonePivot<T> for Canonical<'_, T, J> {
@@ -201,7 +199,7 @@ impl<T: Real, C> LonePivot<T> for Assembled<T, C> {
 
 impl<T: Real, C> LonePivot<T> for Dominant<'_, T, C> {
     fn lone(&self, v: usize) -> T {
-        self.surplus.as_ref().map_or(T::zero(), |s| s[v])
+        self.surplus.map_or(T::zero(), |s| s[v])
     }
 }
 
@@ -242,18 +240,18 @@ where
     /// The surplus gathered in the block's order, as a bipartite block puts its larger side first.
     fn whole(self, vertices: &[I]) -> Self::Block {
         let (vertices, off_diagonal) = self.adjacency.whole(vertices);
-        let grounding = surplus_at(self.surplus.as_ref(), &vertices);
+        let grounding = surplus_at(self.surplus, &vertices);
         (vertices, off_diagonal, grounding)
     }
 
     fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
         let (vertices, off_diagonal) = self.adjacency.component(vertices, position);
-        let grounding = surplus_at(self.surplus.as_ref(), &vertices);
+        let grounding = surplus_at(self.surplus, &vertices);
         (vertices, off_diagonal, grounding)
     }
 }
 
-fn surplus_at<T: Real, I: Index>(surplus: Option<&Cow<'_, [T]>>, vertices: &[I]) -> Grounding<T> {
+fn surplus_at<T: Real, I: Index>(surplus: Option<&[T]>, vertices: &[I]) -> Grounding<T> {
     surplus.map_or_else(Grounding::ungrounded, |s| Grounding::of(at(s, vertices)))
 }
 

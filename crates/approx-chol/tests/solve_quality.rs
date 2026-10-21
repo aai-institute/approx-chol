@@ -328,11 +328,11 @@ cases! {
 
 #[test]
 fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
-    use approx_chol::input::{SignedGraph, Weights};
+    use approx_chol::input::CsrRef;
     use approx_chol::{factorize_with, Backend};
-    // A frustrated triangle, weakest edge 1e-80, and a pair on (1, 2) cancelling to a 2e-200 surplus.
+    // A frustrated triangle, weakest edge 1e-80; the pair on (1, 2) cancels in f64 assembly, so `m`'s 2e-200 surplus is below the CSR's rounding.
     let (a, b) = ([0u32, 1, 0, 1, 1], [1u32, 2, 2, 2, 2]);
-    let pos = [false, false, true, true, false];
+    let pos = [true, true, false, false, true];
     let w = [1e-80, 1.0, 2.0, 1e-200, 1e-200];
     let m = [
         [2.0 + 1e-80, -1e-80, 2.0],
@@ -345,11 +345,18 @@ fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
         complement: SchurMode::Exact,
         ..Config::default()
     };
+    let mut dense = [[0.0; 3]; 3];
+    for k in 0..a.len() {
+        let (i, j) = (a[k] as usize, b[k] as usize);
+        let sign = if pos[k] { -1.0 } else { 1.0 };
+        (dense[i][i], dense[j][j]) = (dense[i][i] + w[k], dense[j][j] + w[k]);
+        (dense[i][j], dense[j][i]) = (dense[i][j] + sign * w[k], dense[j][i] + sign * w[k]);
+    }
+    let values: Vec<f64> = dense.into_iter().flatten().collect();
+    let (ptrs, columns) = ([0u32, 3, 6, 9], [0u32, 1, 2, 0, 1, 2, 0, 1, 2]);
     for config in [Config::default(), exact] {
-        let graph = SignedGraph::new(3, &a, &b, &pos)
-            .and_then(|v| v.with_weights(Weights::of(&w)?))
-            .unwrap();
-        let x = factorize_with(graph, config).unwrap().solve(&rhs).unwrap();
+        let csr = CsrRef::new(&ptrs, &columns, &values, 3).unwrap();
+        let x = factorize_with(csr, config).unwrap().solve(&rhs).unwrap();
         let residual = (m.iter().zip(&rhs))
             .map(|(row, b)| (row.iter().zip(&x).map(|(m, x)| m * x).sum::<f64>() - b).abs())
             .fold(0.0, f64::max);
@@ -363,7 +370,7 @@ fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
 
 #[test]
 fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
-    use approx_chol::input::{Laplacian, Weights};
+    use approx_chol::input::{Gram, Weights};
     use approx_chol::{factorize_with, Backend};
     // Min-degree eliminates the ground first and leaves vertex 0 as the sink; `−Σb` then cancels to 1e24 over a 1e-290 pivot.
     let (a, b, w, ground) = ([0u32, 1], [1u32, 2], [1e-290, 1e30], [0.0, 1e40, 0.0]);
@@ -373,7 +380,7 @@ fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
         backend: Backend::Approximate,
         ..Config::default()
     };
-    let path = Laplacian::new(3, &a, &b)
+    let path = Gram::laplacian(3, &a, &b)
         .and_then(|v| v.with_weights(Weights::of(&w)?))
         .unwrap();
     let factor = factorize_with(path.with_diagonal(&ground).unwrap(), config).unwrap();
@@ -387,7 +394,7 @@ fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
 
 #[test]
 fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
-    use approx_chol::input::{BipartiteGram, FactorWidth1, Weights};
+    use approx_chol::input::{FactorWidth1, Gram, Weights};
     use approx_chol::{factorize_with, Backend};
     // Three left vertices on one right vertex, each by a cancelling pair: `S` is one grounded slot, so AC2 samples no edge.
     let (left, right) = ([0u32, 0, 1, 1, 2, 2], [0u32; 6]);
@@ -403,9 +410,9 @@ fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
                 complement,
                 ..Config::default()
             };
-            let gram = BipartiteGram::new(
+            let gram = Gram::bipartite(
                 FactorWidth1::new(3, &left, Some(&loadings[..])).unwrap(),
-                FactorWidth1::<f64>::new(1, &right, None).unwrap(),
+                FactorWidth1::new(1, &right, None).unwrap(),
             )
             .and_then(|v| v.with_weights(Weights::of(&weights)?))
             .unwrap();

@@ -90,11 +90,11 @@ cases! {
 
 /// A bipartite path whose eliminated row joins `big` to the range floor: `Σ c_ek x_k` overflowed before `D_e⁻¹` scaled it.
 fn path_solves_as_its_scaled_rhs<T: approx_chol::Real>(big: T, down: i32) {
-    use approx_chol::input::{BipartiteGram, FactorWidth1, Weights};
+    use approx_chol::input::{FactorWidth1, Gram, Weights};
     let floor = T::min_positive_value() / T::epsilon();
     let w = [big, floor, floor, floor];
     let solve = |b: &[T]| {
-        let gram = BipartiteGram::new(
+        let gram = Gram::bipartite(
             FactorWidth1::new(3, &[0u32, 1, 1, 2], None).unwrap(),
             FactorWidth1::new(2, &[0u32, 0, 1, 1], None).unwrap(),
         )

@@ -1,27 +1,25 @@
 //! `A` summed from `V`'s columns, row by row in column order.
 
-use std::borrow::Cow;
-
 use num_traits::PrimInt;
 
 use super::partition::{Partition, UnionFind};
 use super::{Assembled, Dominant, Partitioned, PrincipalBlocks};
-use crate::input::{Column, Gram, IntoColumns, VertexPartition};
+use crate::input::{Column, Gram};
 use crate::sgdd::block::ReduceError;
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::{diagonal_in_range, in_range, narrow, widen, Index, Real};
 
 /// How a shape's summed cells are stored, and its components found from them.
-pub(in crate::sgdd) trait AdjacencyLayout: Copy {
+pub(in crate::sgdd) trait AdjacencyLayout {
     type Adjacency<T: Real, I: Index>: PrincipalBlocks<T, I, Block = (Box<[I]>, OffDiagonal<T, I>)>
         + Sync;
 
-    /// The summed cells and components, `seen` visiting each column once and `pair` each cell summed as `C` with its two ends.
-    fn sum<T: Real, I: Index, C: CellSum>(
+    /// The summed cells and components, `seen` visiting each column once and `pair` each summed cell with its two ends.
+    fn sum<T: Real, J: PrimInt, I: Index>(
         self,
-        v: impl IntoColumns<T>,
+        v: Gram<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
-        pair: impl FnMut(usize, usize, C),
+        pair: impl FnMut(usize, usize, f64),
     ) -> Result<Partitioned<Self::Adjacency<T, I>, I>, ReduceError>;
 }
 
@@ -38,10 +36,7 @@ pub(in crate::sgdd) struct Biadjacency {
 impl Biadjacency {
     /// `v`'s own left part, so the layout and the columns it sums never disagree.
     pub(in crate::sgdd) fn of<T: Real, J: PrimInt>(v: &Gram<'_, T, J>) -> Option<Self> {
-        match v.partition() {
-            VertexPartition::Bipartite { n_left } => Some(Self { n_left }),
-            VertexPartition::Unpartitioned => None,
-        }
+        v.n_left().map(|n_left| Self { n_left })
     }
 }
 
@@ -50,16 +45,16 @@ impl AdjacencyLayout for StrictUpperTriangle {
 
     // Out of line, the Laplacian entry measured 3–4% slower: the same work, laid out worse.
     #[inline(always)]
-    fn sum<T: Real, I: Index, C: CellSum>(
+    fn sum<T: Real, J: PrimInt, I: Index>(
         self,
-        v: impl IntoColumns<T>,
+        v: Gram<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
-        mut pair: impl FnMut(usize, usize, C),
+        mut pair: impl FnMut(usize, usize, f64),
     ) -> Result<Partitioned<UpperAdjacency<T, I>, I>, ReduceError> {
-        let counts = counts::<T, I>(v, v.n(), seen);
+        let counts = counts::<T, J, I>(v, v.n(), seen);
         let mut sets = UnionFind::<I>::new(v.n());
-        let rows = sum_cells::<T, I, C>(v, &counts, 0, |i, j, cell| {
-            if cell.value() != 0.0 {
+        let rows = sum_cells::<T, J, I>(v, &counts, 0, |i, j, cell| {
+            if cell != 0.0 {
                 sets.union(i, j);
             }
             pair(i, j, cell);
@@ -75,23 +70,23 @@ impl AdjacencyLayout for Biadjacency {
     type Adjacency<T: Real, I: Index> = Rows<T, I>;
 
     /// `C`, summed in a dense table when small (+54% without it).
-    fn sum<T: Real, I: Index, C: CellSum>(
+    fn sum<T: Real, J: PrimInt, I: Index>(
         self,
-        v: impl IntoColumns<T>,
+        v: Gram<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
-        pair: impl FnMut(usize, usize, C),
+        pair: impl FnMut(usize, usize, f64),
     ) -> Result<Partitioned<Rows<T, I>, I>, ReduceError> {
         let n_left = self.n_left;
         let table = n_left.saturating_mul(v.n() - n_left);
-        let cell = std::mem::size_of::<C>();
+        let cell = std::mem::size_of::<f64>();
         let a = match table.saturating_mul(cell) <= DENSE_TABLE_MAX_BYTES {
             true => dense_cross(v, n_left, seen, pair)?,
             false => {
-                let counts = counts::<T, I>(v, n_left, seen);
+                let counts = counts::<T, J, I>(v, n_left, seen);
                 let columns: usize = counts.iter().sum();
                 // Past the cap, the table still wins whenever the buckets would take more memory.
                 match columns.saturating_mul(12) < table.saturating_mul(cell) {
-                    true => sum_cells::<T, I, C>(v, &counts, n_left, pair)?,
+                    true => sum_cells::<T, J, I>(v, &counts, n_left, pair)?,
                     false => dense_cross(v, n_left, |_| {}, pair)?,
                 }
             }
@@ -108,44 +103,21 @@ type IncidenceCells<'a, T, I, S> =
 /// A valued `V`'s summed cells beside `A`'s diagonal, and their components.
 type ValueCells<T, I, S> = Partitioned<Assembled<T, <S as AdjacencyLayout>::Adjacency<T, I>>, I>;
 
-/// D: each pivot `Σ_j |c_ij| + σ_i`, plus its pairs' cancelled mass where cells cancel; `A`'s diagonal never stored.
+/// D: each pivot `Σ_j |c_ij| + σ_i`, screened in the assembly's own sums; `A`'s diagonal never stored.
 pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
     cells: S,
     v: Gram<'a, T, J>,
 ) -> Result<IncidenceCells<'a, T, I, S>, ReduceError> {
     let mut abs = vec![0.0_f64; v.n()];
-    let ground = v.diagonal();
-    if !v.cancels() {
-        let a = cells.sum(
-            v,
-            |_| {},
-            |i, j, c: f64| {
-                (abs[i], abs[j]) = (abs[i] + c.abs(), abs[j] + c.abs());
-            },
-        )?;
-        return dominant(a, &abs, ground.map(Cow::Borrowed));
-    }
-    let mut surplus = sigma_sums(ground, v.n());
     let a = cells.sum(
         v,
         |_| {},
-        |i, j, masses: SignedMasses| {
-            let (c, s) = (masses.value().abs(), masses.surplus());
-            (abs[i], abs[j]) = (abs[i] + c, abs[j] + c);
-            (surplus[i], surplus[j]) = (surplus[i] + s, surplus[j] + s);
+        |i, j, c: f64| {
+            (abs[i], abs[j]) = (abs[i] + c.abs(), abs[j] + c.abs());
         },
     )?;
-    let surplus = surplus.into_iter().map(narrow).collect();
-    dominant(a, &abs, Some(Cow::Owned(surplus)))
-}
-
-/// Each pivot `Σ_j |c_ij| + σ_i` screened in the assembly's own sums, `A`'s diagonal never stored.
-fn dominant<'a, T: Real, I: Index, C>(
-    a: Partitioned<C, I>,
-    abs: &[f64],
-    surplus: Option<Cow<'a, [T]>>,
-) -> Result<Partitioned<Dominant<'a, T, C>, I>, ReduceError> {
-    let s = |i: usize| surplus.as_ref().map_or(0.0, |s| widen(s[i]));
+    let surplus = v.diagonal();
+    let s = |i: usize| surplus.map_or(0.0, |s| widen(s[i]));
     if let Some(vertex) = (0..abs.len()).find(|&i| !diagonal_in_range(narrow::<T>(abs[i] + s(i)))) {
         return Err(ReduceError::OutOfRange { vertex });
     }
@@ -165,7 +137,7 @@ pub(in crate::sgdd) fn assemble_values<T: Real, J: PrimInt, I: Index, S: Adjacen
     v: Gram<'_, T, J>,
 ) -> Result<ValueCells<T, I, S>, ReduceError> {
     let mut sums = sigma_sums(v.diagonal(), v.n());
-    let a = cells.sum::<T, I, f64>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
+    let a = cells.sum::<T, J, I>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
     assembled(a, sums)
 }
 
@@ -215,19 +187,19 @@ fn admit<T: Real>(i: usize, x: f64) -> Result<T, ReduceError> {
 /// within's cap on the dense accumulator.
 const DENSE_TABLE_MAX_BYTES: usize = 40_000_000;
 
-/// `pair` sees each cell not [`CellSum::is_empty`].
-fn dense_cross<T: Real, I: Index, C: CellSum>(
-    v: impl IntoColumns<T>,
+/// `pair` sees each nonzero cell.
+fn dense_cross<T: Real, J: PrimInt, I: Index>(
+    v: Gram<'_, T, J>,
     n_left: usize,
     mut seen: impl FnMut(&Column<T, I>),
-    mut pair: impl FnMut(usize, usize, C),
+    mut pair: impl FnMut(usize, usize, f64),
 ) -> Result<Rows<T, I>, ReduceError> {
     let n_right = v.n() - n_left;
-    let mut table = vec![C::default(); n_left * n_right];
+    let mut table = vec![0.0_f64; n_left * n_right];
     v.for_each_column::<I>(
         #[inline(always)]
         |column| {
-            table[column.a.index() * n_right + column.b.index() - n_left].add(column.cell());
+            table[column.a.index() * n_right + column.b.index() - n_left] += column.cell();
             seen(&column);
         },
     );
@@ -236,12 +208,10 @@ fn dense_cross<T: Real, I: Index, C: CellSum>(
     let (mut indices, mut cells) = (Vec::new(), Vec::new());
     for i in 0..n_left {
         let row = &table[i * n_right..][..n_right];
-        for (j, &x) in row.iter().enumerate().filter(|&(_, &x)| !x.is_empty()) {
+        for (j, &x) in row.iter().enumerate().filter(|&(_, &x)| x != 0.0) {
             pair(i, n_left + j, x);
-            if x.value() != 0.0 {
-                indices.push(I::from_index(j));
-                cells.push(admit::<T>(i, x.value())?);
-            }
+            indices.push(I::from_index(j));
+            cells.push(admit::<T>(i, x)?);
         }
         ptrs.push(indices.len());
     }
@@ -250,8 +220,8 @@ fn dense_cross<T: Real, I: Index, C: CellSum>(
 }
 
 /// Each row's cell count, a column's row its lower end, `seen` visiting each column once.
-fn counts<T: Real, I: Index>(
-    v: impl IntoColumns<T>,
+fn counts<T: Real, J: PrimInt, I: Index>(
+    v: Gram<'_, T, J>,
     n_rows: usize,
     mut seen: impl FnMut(&Column<T, I>),
 ) -> Vec<usize> {
@@ -266,66 +236,12 @@ fn counts<T: Real, I: Index>(
     counts
 }
 
-/// What one cell's terms sum to: their value, or a signed graph's two masses kept apart.
-pub(in crate::sgdd) trait CellSum: Copy + Default {
-    fn add(&mut self, x: f64);
-    fn value(self) -> f64;
-    /// Nothing left to report: a plain sum that cancelled is empty too, as only kept masses outlive it.
-    fn is_empty(self) -> bool;
-}
-
-impl CellSum for f64 {
-    #[inline(always)]
-    fn add(&mut self, x: f64) {
-        *self += x;
-    }
-
-    fn value(self) -> f64 {
-        self
-    }
-
-    fn is_empty(self) -> bool {
-        self == 0.0
-    }
-}
-
-/// A pair's positive and negative weight apart: cell `p − q`, each end's surplus `2·min(p, q)`.
-#[derive(Clone, Copy, Default)]
-struct SignedMasses {
-    positive: f64,
-    negative: f64,
-}
-
-impl CellSum for SignedMasses {
-    #[inline(always)]
-    fn add(&mut self, x: f64) {
-        match x >= 0.0 {
-            true => self.positive += x,
-            false => self.negative -= x,
-        }
-    }
-
-    fn value(self) -> f64 {
-        self.positive - self.negative
-    }
-
-    fn is_empty(self) -> bool {
-        self.positive == 0.0 && self.negative == 0.0
-    }
-}
-
-impl SignedMasses {
-    fn surplus(self) -> f64 {
-        2.0 * self.positive.min(self.negative)
-    }
-}
-
-/// AdjacencyLayout bucketed at their lower end in column order, so each sums as a dense table would; `pair` sees each summed cell, a cancelled one too.
-fn sum_cells<T: Real, I: Index, C: CellSum>(
-    v: impl IntoColumns<T>,
+/// Cells bucketed at their lower end in column order, so each sums as a dense table would; `pair` sees each summed cell, a cancelled one too.
+fn sum_cells<T: Real, J: PrimInt, I: Index>(
+    v: Gram<'_, T, J>,
     counts: &[usize],
     first_column: usize,
-    mut pair: impl FnMut(usize, usize, C),
+    mut pair: impl FnMut(usize, usize, f64),
 ) -> Result<Rows<T, I>, ReduceError> {
     let starts: Vec<usize> = std::iter::once(0)
         .chain(counts.iter().scan(0, |end, &count| {
@@ -348,7 +264,7 @@ fn sum_cells<T: Real, I: Index, C: CellSum>(
     );
     drop(cursor);
     let n_cols = v.n() - first_column;
-    let mut sums = vec![C::default(); n_cols];
+    let mut sums = vec![0.0_f64; n_cols];
     let mut touched: Vec<I> = Vec::new();
     let mut ptrs = Vec::with_capacity(starts.len());
     ptrs.push(0);
@@ -357,10 +273,10 @@ fn sum_cells<T: Real, I: Index, C: CellSum>(
         for p in span[0]..span[1] {
             let j = columns[p];
             // A cell cancelling to zero mid-row is pushed again; the dedup absorbs it.
-            if sums[j.index()].value() == 0.0 {
+            if sums[j.index()] == 0.0 {
                 touched.push(j);
             }
-            sums[j.index()].add(cells[p]);
+            sums[j.index()] += cells[p];
         }
         touched.sort_unstable();
         touched.dedup();
@@ -368,9 +284,9 @@ fn sum_cells<T: Real, I: Index, C: CellSum>(
         for &j in &touched {
             let cell = std::mem::take(&mut sums[j.index()]);
             pair(i, first_column + j.index(), cell);
-            if cell.value() != 0.0 {
+            if cell != 0.0 {
                 columns[out] = j;
-                cells[out] = widen(admit::<T>(i, cell.value())?);
+                cells[out] = widen(admit::<T>(i, cell)?);
                 out += 1;
             }
         }

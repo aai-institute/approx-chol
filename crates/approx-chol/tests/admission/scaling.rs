@@ -1,4 +1,4 @@
-use approx_chol::input::FactorWidth2;
+use approx_chol::input::Gram;
 use approx_chol::{factorize, ScalingPolicy};
 use rstest::rstest;
 
@@ -149,7 +149,7 @@ fn a_gram_null_vector_deficit_past_its_row_rounding_is_reported() {
     let mut x: Vec<f64> = b.iter().map(|&j| u(j)).collect();
     let y: Vec<f64> = a.iter().map(|&i| -u(i)).collect();
     x[cycle as usize - 1] *= 1.0 + miss;
-    let gram = FactorWidth2::new(cycle as usize, &a, &b, &x, &y).expect("valid columns");
+    let gram = Gram::factor_width_2(cycle as usize, &a, &b, &x, &y).expect("valid columns");
     let factor = factorize(gram).expect("admitted");
     let report = factor.blocks()[0].scaling_report().expect("reported");
     assert!(report.violation > miss / 10.0, "{report:?}");
@@ -186,7 +186,7 @@ fn a_wide_f32_gram_null_vector_scales_in_range() {
     let b: Vec<u32> = (0..n).map(|i| (i + 1) % n).collect();
     let x: Vec<f32> = b.iter().map(|&j| u[j as usize] as f32).collect();
     let y: Vec<f32> = a.iter().map(|&i| -u[i as usize] as f32).collect();
-    let gram = FactorWidth2::new(n as usize, &a, &b, &x, &y).expect("valid columns");
+    let gram = Gram::factor_width_2(n as usize, &a, &b, &x, &y).expect("valid columns");
     let factor = factorize(gram).expect("admitted");
     assert!(factor.blocks()[0].floats());
 }

@@ -1,6 +1,4 @@
-use approx_chol::input::{
-    BipartiteGram, CsrRef, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, UpperCsrRef, Weights,
-};
+use approx_chol::input::{CsrRef, FactorWidth1, Gram, UpperCsrRef, Weights};
 use approx_chol::{factorize_with, Config, Factor, Real};
 use num_traits::{NumCast, PrimInt};
 
@@ -15,7 +13,6 @@ pub enum Entry {
     BipartiteGram,
     Laplacian,
     GroundedLaplacian,
-    SignedGraph,
 }
 
 /// The scalar a factor computes in and the index type its input view states.
@@ -136,7 +133,7 @@ impl Entry {
         let signed = graph.edges.iter().any(|edge| edge.positive);
         let grounded = graph.ground.iter().any(|&g| g != 0.0);
         match self {
-            Entry::Csr | Entry::UpperCsr | Entry::Gram | Entry::SignedGraph => true,
+            Entry::Csr | Entry::UpperCsr | Entry::Gram => true,
             Entry::BipartiteGram => bipartition(graph).is_some(),
             Entry::Laplacian => !signed && !grounded,
             Entry::GroundedLaplacian => !signed,
@@ -201,7 +198,7 @@ impl Entry {
                     y.push(cast(edge.sign() * root));
                 }
                 let ground: Vec<T> = cast_all(&graph.ground);
-                let v = FactorWidth2::new(n, &a, &b, &x, &y)
+                let v = Gram::factor_width_2(n, &a, &b, &x, &y)
                     .and_then(|v| v.with_diagonal(&ground))
                     .expect("valid factor");
                 factorize_with(v, config).unwrap_or_else(|error| rejected(&error))
@@ -209,7 +206,7 @@ impl Entry {
             Entry::BipartiteGram => {
                 let n_right = n - n_left;
                 let (mut left, mut right) = (Vec::<I>::new(), Vec::<I>::new());
-                let (mut x, mut y, mut w) = (vec![], vec![], vec![]);
+                let (mut y, mut w) = (vec![], vec![]);
                 for edge in &graph.edges {
                     let (l, r) = match edge.a < n_left {
                         true => (edge.a, edge.b),
@@ -217,19 +214,17 @@ impl Entry {
                     };
                     left.push(cast(l));
                     right.push(cast(r - n_left));
-                    x.push(1.0);
                     y.push(edge.sign());
                     w.push(edge.weight);
                 }
                 // Incidence on a side is `None`, so an unvalued Gram takes its own path.
-                let valued = |values: &[f64]| values.iter().any(|&v| v != 1.0);
-                let (x_t, y_t, w_t): (Vec<T>, Vec<T>, Vec<T>) =
-                    (cast_all(&x), cast_all(&y), cast_all(&w));
-                let left = FactorWidth1::new(n_left, &left, valued(&x).then_some(&x_t[..]));
-                let right = FactorWidth1::new(n_right, &right, valued(&y).then_some(&y_t[..]));
+                let valued = y.iter().any(|&v| v != 1.0);
+                let (y_t, w_t): (Vec<T>, Vec<T>) = (cast_all(&y), cast_all(&w));
+                let left = FactorWidth1::new(n_left, &left, None);
+                let right = FactorWidth1::new(n_right, &right, valued.then_some(&y_t[..]));
                 let weights = Weights::of(&w_t).expect("nonnegative weights");
                 let ground: Vec<T> = cast_all(&graph.ground);
-                let gram = BipartiteGram::new(
+                let gram = Gram::bipartite(
                     left.expect("valid left factor"),
                     right.expect("valid right factor"),
                 )
@@ -239,7 +234,7 @@ impl Entry {
                 factorize_with(gram, config).unwrap_or_else(|error| rejected(&error))
             }
             Entry::Laplacian | Entry::GroundedLaplacian => {
-                let view = Laplacian::new(n, &a, &b)
+                let view = Gram::laplacian(n, &a, &b)
                     .and_then(|v| v.with_weights(weights))
                     .expect("valid Laplacian");
                 let ground: Vec<T> = cast_all(&graph.ground);
@@ -250,15 +245,6 @@ impl Entry {
                     _ => factorize_with(view, config),
                 }
                 .unwrap_or_else(|error| rejected(&error))
-            }
-            Entry::SignedGraph => {
-                let positive: Vec<bool> = graph.edges.iter().map(|edge| edge.positive).collect();
-                let ground: Vec<T> = cast_all(&graph.ground);
-                let view = SignedGraph::new(n, &a, &b, &positive)
-                    .and_then(|v| v.with_weights(weights))
-                    .and_then(|view| view.with_diagonal(&ground))
-                    .expect("valid signed graph");
-                factorize_with(view, config).unwrap_or_else(|error| rejected(&error))
             }
         }
     }

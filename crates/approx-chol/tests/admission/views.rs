@@ -1,11 +1,9 @@
-use approx_chol::input::{
-    BipartiteGram, FactorWidth1, FactorWidth2, Laplacian, SignedGraph, ViewError, Weights,
-};
+use approx_chol::input::{CsrRef, FactorWidth1, Gram, ViewError, Weights};
 use approx_chol::{factorize, Error, ReduceError};
 use rstest::rstest;
 
 use super::assert_names_a_defect;
-use super::gram::{matrix, solve_residual};
+use super::gram::{dense_csr, matrix, solve_residual};
 
 const PATH_A: [u32; 2] = [0, 1];
 const PATH_B: [u32; 2] = [1, 2];
@@ -24,8 +22,8 @@ fn two_edges_but(found: usize) -> ViewError {
     ViewError::LengthMismatch { expected: 2, found }
 }
 
-fn unit_path() -> Laplacian<'static, f64> {
-    Laplacian::new(3, &PATH_A, &PATH_B).unwrap()
+fn unit_path() -> Gram<'static, f64> {
+    Gram::laplacian(3, &PATH_A, &PATH_B).unwrap()
 }
 
 #[rstest]
@@ -58,7 +56,7 @@ fn weights_sqrt_of_admits_a_negative_root() {
 #[test]
 fn a_weight_below_min_positive_over_epsilon_is_out_of_range_at_its_edge() {
     let w = [1.0, tiny()];
-    let graph = Laplacian::new(3, &PATH_A, &PATH_B)
+    let graph = Gram::laplacian(3, &PATH_A, &PATH_B)
         .and_then(|v| v.with_weights(Weights::of(&w)?))
         .unwrap();
     let error = factorize(graph).expect_err("tiny weight");
@@ -69,32 +67,28 @@ fn a_weight_below_min_positive_over_epsilon_is_out_of_range_at_its_edge() {
 #[test]
 fn a_root_weight_whose_square_underflows_is_out_of_range_at_its_edge() {
     let s = Weights::sqrt_of(&[1.0, 1e-170]).unwrap();
-    let laplacian = Laplacian::new(3, &PATH_A, &PATH_B)
+    let laplacian = Gram::laplacian(3, &PATH_A, &PATH_B)
         .and_then(|v| v.with_weights(s))
         .unwrap();
-    let signed = SignedGraph::new(3, &PATH_A, &PATH_B, &[true, false])
-        .and_then(|v| v.with_weights(s))
-        .unwrap();
-    for factor in [factorize(laplacian), factorize(signed)] {
-        assert_names_a_defect(factor.expect_err("tiny root"), &out_of_range(&[1, 2]));
-    }
+    let error = factorize(laplacian).expect_err("tiny root");
+    assert_names_a_defect(error, &out_of_range(&[1, 2]));
 }
 
 #[rstest]
 #[case::ends_of_unequal_length(
-    Laplacian::<f64>::new(3, &[0, 1], &[1]).err(),
+    Gram::<f64>::laplacian(3, &[0, 1], &[1]).err(),
     two_edges_but(1)
 )]
 #[case::a_weight_per_edge(
-    Laplacian::new(3, &PATH_A, &PATH_B).and_then(|v| v.with_weights(Weights::of(&[1.0, 2.0, 3.0])?)).err(),
+    Gram::laplacian(3, &PATH_A, &PATH_B).and_then(|v| v.with_weights(Weights::of(&[1.0, 2.0, 3.0])?)).err(),
     two_edges_but(3)
 )]
 #[case::end_past_n(
-    Laplacian::<f64>::new(3, &[0, 1], &[1, 3]).err(),
+    Gram::<f64>::laplacian(3, &[0, 1], &[1, 3]).err(),
     ViewError::IndexOutOfRange { column: 1 }
 )]
 #[case::self_loop(
-    Laplacian::<f64>::new(3, &[0, 2], &[1, 2]).err(),
+    Gram::<f64>::laplacian(3, &[0, 2], &[1, 2]).err(),
     ViewError::RepeatedVertex { column: 1 }
 )]
 fn laplacian_new_rejects_mismatched_lengths_and_bad_ends_at_their_column(
@@ -139,29 +133,6 @@ fn an_out_of_range_ground_is_rejected_at_its_vertex(#[case] ground: f64) {
     assert_names_a_defect(error, &out_of_range(&[2]));
 }
 
-fn signed(a: &[u32], b: &[u32], positive: &[bool]) -> Option<ViewError> {
-    SignedGraph::<f64>::new(3, a, b, positive).err()
-}
-
-#[rstest]
-#[case::a_sign_per_edge(signed(&PATH_A, &PATH_B, &[true]), two_edges_but(1))]
-#[case::ends_of_unequal_length(signed(&PATH_A, &[1], &[true, false]), two_edges_but(1))]
-#[case::end_past_n(
-    signed(&[0, 3], &PATH_B, &[true, false]),
-    ViewError::IndexOutOfRange { column: 1 }
-)]
-#[case::self_loop(
-    signed(&[1, 1], &PATH_B, &[true, false]),
-    ViewError::RepeatedVertex { column: 0 }
-)]
-#[case::nan_weight(Weights::of(&[1.0, f64::NAN]).err(), ViewError::InvalidWeight { column: 1 })]
-fn signed_graph_new_rejects_mismatched_lengths_and_bad_ends_at_their_column(
-    #[case] observed: Option<ViewError>,
-    #[case] expected: ViewError,
-) {
-    assert_eq!(observed, Some(expected));
-}
-
 #[test]
 fn factor_width_1_new_rejects_mismatched_values_and_rows_past_n() {
     let mismatch = FactorWidth1::new(3, &[0u32, 1, 2], Some(&[1.0, 2.0][..])).expect_err("values");
@@ -179,7 +150,7 @@ fn factor_width_1_new_rejects_mismatched_values_and_rows_past_n() {
 }
 
 fn gram(a: &[u32], b: &[u32], x: &[f64], y: &[f64]) -> Option<ViewError> {
-    FactorWidth2::new(3, a, b, x, y).err()
+    Gram::factor_width_2(3, a, b, x, y).err()
 }
 
 #[rstest]
@@ -209,7 +180,7 @@ fn factor_width_2_new_rejects_mismatched_lengths_and_bad_ends_at_their_column(
 #[case::past_a_quarter_of_the_maximum(f64::MAX)]
 fn an_out_of_range_loading_is_rejected_at_its_vertex(#[case] value: f64) {
     let (x, y) = ([1.0, value], [-1.0, -1.0]);
-    let gram = FactorWidth2::new(3, &PATH_A, &PATH_B, &x, &y).unwrap();
+    let gram = Gram::factor_width_2(3, &PATH_A, &PATH_B, &x, &y).unwrap();
     let error = factorize(gram).expect_err("loading out of range");
     assert_names_a_defect(error, &out_of_range(&[1, 2]));
 }
@@ -217,8 +188,8 @@ fn an_out_of_range_loading_is_rejected_at_its_vertex(#[case] value: f64) {
 #[test]
 fn bipartite_gram_new_rejects_sides_of_unequal_column_count() {
     let left = FactorWidth1::<f64>::new(2, &[0, 1, 1], None).unwrap();
-    let right = FactorWidth1::<f64>::new(2, &[0, 1], None).unwrap();
-    let error = BipartiteGram::new(left, right).expect_err("column counts");
+    let right = FactorWidth1::new(2, &[0, 1], None).unwrap();
+    let error = Gram::bipartite(left, right).expect_err("column counts");
     assert_eq!(
         error,
         ViewError::LengthMismatch {
@@ -235,8 +206,8 @@ fn bipartite_gram_new_rejects_sides_of_unequal_column_count() {
 fn an_out_of_range_bipartite_loading_is_rejected_at_its_vertex(#[case] value: f64) {
     let values = [1.0, value];
     let left = FactorWidth1::new(2, &[0u32, 1], Some(&values[..])).unwrap();
-    let right = FactorWidth1::<f64>::new(1, &[0u32, 0], None).unwrap();
-    let gram = BipartiteGram::new(left, right).unwrap();
+    let right = FactorWidth1::new(1, &[0u32, 0], None).unwrap();
+    let gram = Gram::bipartite(left, right).unwrap();
     let error = factorize(gram).expect_err("loading out of range");
     assert_names_a_defect(error, &out_of_range(&[1, 2]));
 }
@@ -252,8 +223,8 @@ fn a_bipartite_loading_whose_square_underflows_beside_an_in_range_column_factors
 ) {
     let (values, weights) = ([z, 1.0], [w, 1.0]);
     let left = FactorWidth1::new(1, &[0u32, 0], Some(&values[..])).unwrap();
-    let right = FactorWidth1::<f64>::new(2, &[0u32, 1], None).unwrap();
-    let gram = BipartiteGram::new(left, right)
+    let right = FactorWidth1::new(2, &[0u32, 1], None).unwrap();
+    let gram = Gram::bipartite(left, right)
         .and_then(|v| v.with_weights(Weights::of(&weights)?))
         .unwrap();
     let factor = factorize(gram).expect("every diagonal and cell is in range");
@@ -271,7 +242,7 @@ fn a_gram_loading_whose_square_underflows_beside_an_in_range_column_factors_and_
     #[case] z: f64,
 ) {
     let (x, y) = ([z, 1.0], [-1.0, -1.0]);
-    let gram = FactorWidth2::new(3, &[0u32, 0], &PATH_B, &x, &y).unwrap();
+    let gram = Gram::factor_width_2(3, &[0u32, 0], &PATH_B, &x, &y).unwrap();
     let factor = factorize(gram).expect("every diagonal and cell is in range");
     solve_residual(&factor, &matrix(3, &[0, 0], &PATH_B, &x, &y));
 }
@@ -279,7 +250,7 @@ fn a_gram_loading_whose_square_underflows_beside_an_in_range_column_factors_and_
 #[test]
 fn a_weighted_gram_solves_v_w_vt() {
     let (x, y, w) = ([1.0, 2.0], [-1.0, 0.5], [3.0, 0.5]);
-    let gram = FactorWidth2::new(3, &PATH_A, &PATH_B, &x, &y)
+    let gram = Gram::factor_width_2(3, &PATH_A, &PATH_B, &x, &y)
         .and_then(|v| v.with_weights(Weights::of(&w)?))
         .unwrap();
     let factor = factorize(gram).expect("a weighted Gram");
@@ -295,18 +266,16 @@ fn a_weighted_gram_solves_v_w_vt() {
 fn every_factor_view_rejects_weights_of_another_column_count() {
     let (x, y) = ([1.0, 1.0], [-1.0, -1.0]);
     let weights = Weights::of(&[1.0]).unwrap();
-    let gram = FactorWidth2::new(3, &PATH_A, &PATH_B, &x, &y).unwrap();
-    let signed = SignedGraph::<f64>::new(3, &PATH_A, &PATH_B, &[true, false]).unwrap();
-    let left = FactorWidth1::<f64>::new(1, &[0u32, 0], None).unwrap();
-    let right = FactorWidth1::<f64>::new(2, &[0u32, 1], None).unwrap();
-    let bipartite = BipartiteGram::new(left, right).unwrap();
+    let gram = Gram::factor_width_2(3, &PATH_A, &PATH_B, &x, &y).unwrap();
+    let left = FactorWidth1::new(1, &[0u32, 0], None).unwrap();
+    let right = FactorWidth1::new(2, &[0u32, 1], None).unwrap();
+    let bipartite = Gram::bipartite(left, right).unwrap();
     let errors = [
         gram.with_weights(weights).err(),
-        signed.with_weights(weights).err(),
         bipartite.with_weights(weights).err(),
         unit_path().with_weights(weights).err(),
     ];
-    assert_eq!(errors, [Some(two_edges_but(1)); 4]);
+    assert_eq!(errors, [Some(two_edges_but(1)); 3]);
 }
 
 fn with_diagonal(mut matrix: Vec<Vec<f64>>, diagonal: &[f64]) -> Vec<Vec<f64>> {
@@ -319,7 +288,7 @@ fn with_diagonal(mut matrix: Vec<Vec<f64>>, diagonal: &[f64]) -> Vec<Vec<f64>> {
 /// `A = [[1, −2], [−2, 5]]` needs scaling; read unscaled, `σ_1` would add 1 to `M`'s diagonal, not `f_1²`.
 #[test]
 fn a_gram_diagonal_enters_the_scaled_surplus_squared() {
-    let gram = FactorWidth2::<f64>::new(2, &[0u32], &[1], &[1.0], &[-2.0])
+    let gram = Gram::<f64>::factor_width_2(2, &[0u32], &[1], &[1.0], &[-2.0])
         .and_then(|gram| gram.with_diagonal(&[0.0, 1.0]))
         .unwrap();
     let x = factorize(gram).unwrap().solve(&[1.0, 1.0]).unwrap();
@@ -334,7 +303,7 @@ fn a_gram_diagonal_enters_the_scaled_surplus_squared() {
 #[case::is_a_lone_vertex_pivot([0.0, 0.0, 0.0, 2.0])]
 fn a_gram_with_a_diagonal_solves_v_vt_plus_it(#[case] diagonal: [f64; 4]) {
     let (x, y) = ([1.0, 2.0], [-1.0, -2.0]);
-    let gram = FactorWidth2::new(4, &PATH_A, &PATH_B, &x, &y)
+    let gram = Gram::factor_width_2(4, &PATH_A, &PATH_B, &x, &y)
         .and_then(|gram| gram.with_diagonal(&diagonal))
         .unwrap();
     let factor = factorize(gram).expect("a grounded Gram");
@@ -354,16 +323,16 @@ fn a_grounded_signed_graph_solves_its_matrix(
     #[case] positive: &[bool],
 ) {
     let ground = [0.5, 0.0, 0.25];
-    let graph = SignedGraph::new(3, a, b, positive)
-        .and_then(|graph| graph.with_diagonal(&ground))
-        .unwrap();
-    let factor = factorize(graph).expect("a grounded signed graph");
     let x = vec![1.0; a.len()];
     let y: Vec<f64> = positive
         .iter()
-        .map(|&p| if p { 1.0 } else { -1.0 })
+        .map(|&p| if p { -1.0 } else { 1.0 })
         .collect();
-    solve_residual(&factor, &with_diagonal(matrix(3, a, b, &x, &y), &ground));
+    let matrix = with_diagonal(matrix(3, a, b, &x, &y), &ground);
+    let (ptrs, columns, values) = dense_csr(&matrix);
+    let csr = CsrRef::new(&ptrs, &columns, &values, 3).unwrap();
+    let factor = factorize(csr).expect("a grounded signed graph");
+    solve_residual(&factor, &matrix);
 }
 
 /// Left rows `0, 1`, right rows `2, 3`; the right side's ridge leaves the left floating alone no more.
@@ -373,9 +342,9 @@ fn a_grounded_signed_graph_solves_its_matrix(
 fn a_bipartite_gram_with_a_diagonal_solves_v_w_vt_plus_it(#[case] slopes: Option<[f64; 3]>) {
     let (rows, cols) = ([0u32, 0, 1], [0u32, 1, 1]);
     let left = FactorWidth1::new(2, &rows, slopes.as_ref().map(|s| &s[..])).unwrap();
-    let right = FactorWidth1::<f64>::new(2, &cols, None).unwrap();
+    let right = FactorWidth1::new(2, &cols, None).unwrap();
     let diagonal = [0.0, 0.0, 0.0, 0.75];
-    let gram = BipartiteGram::new(left, right)
+    let gram = Gram::bipartite(left, right)
         .and_then(|gram| gram.with_diagonal(&diagonal))
         .unwrap();
     let factor = factorize(gram).expect("a grounded bipartite Gram");
@@ -391,10 +360,10 @@ fn a_bipartite_gram_with_a_diagonal_solves_v_w_vt_plus_it(#[case] slopes: Option
 #[test]
 fn a_bipartite_incidence_diagonal_follows_the_larger_side_first() {
     let (rows, cols) = ([0u32, 0], [0u32, 1]);
-    let left = FactorWidth1::<f64>::new(1, &rows, None).unwrap();
-    let right = FactorWidth1::<f64>::new(2, &cols, None).unwrap();
+    let left = FactorWidth1::new(1, &rows, None).unwrap();
+    let right = FactorWidth1::new(2, &cols, None).unwrap();
     let diagonal = [1.0, 1.0, 2.0];
-    let gram = BipartiteGram::new(left, right)
+    let gram = Gram::bipartite(left, right)
         .and_then(|gram| gram.with_diagonal(&diagonal))
         .unwrap();
     let factor = factorize(gram).expect("a grounded star");
@@ -411,25 +380,23 @@ fn a_bipartite_incidence_diagonal_follows_the_larger_side_first() {
 #[case::nan(&[0.0, 0.0, f64::NAN], ViewError::InvalidDiagonal { vertex: 2 })]
 fn every_factor_view_rejects_a_bad_diagonal(#[case] diagonal: &[f64], #[case] expected: ViewError) {
     let (x, y) = ([1.0, 1.0], [-1.0, -1.0]);
-    let gram = FactorWidth2::new(3, &PATH_A, &PATH_B, &x, &y).unwrap();
-    let signed = SignedGraph::new(3, &PATH_A, &PATH_B, &[true, false]).unwrap();
-    let left = FactorWidth1::<f64>::new(1, &[0u32, 0], None).unwrap();
-    let right = FactorWidth1::<f64>::new(2, &[0u32, 1], None).unwrap();
-    let bipartite = BipartiteGram::new(left, right).unwrap();
+    let gram = Gram::factor_width_2(3, &PATH_A, &PATH_B, &x, &y).unwrap();
+    let left = FactorWidth1::new(1, &[0u32, 0], None).unwrap();
+    let right = FactorWidth1::new(2, &[0u32, 1], None).unwrap();
+    let bipartite = Gram::bipartite(left, right).unwrap();
     let errors = [
         gram.with_diagonal(diagonal).err(),
-        signed.with_diagonal(diagonal).err(),
         bipartite.with_diagonal(diagonal).err(),
         unit_path().with_diagonal(diagonal).err(),
     ];
-    assert_eq!(errors, [Some(expected); 4]);
+    assert_eq!(errors, [Some(expected); 3]);
 }
 
 /// Both vertices are in range, but their cell's product underflows below the floor.
 #[test]
 fn a_gram_cell_whose_product_underflows_is_out_of_range() {
     let (x, y) = ([1e-170, 1.0, 1.0], [1e-170, -1.0, -1.0]);
-    let gram = FactorWidth2::new(4, &[0u32, 0, 1], &[1, 2, 3], &x, &y).unwrap();
+    let gram = Gram::factor_width_2(4, &[0u32, 0, 1], &[1, 2, 3], &x, &y).unwrap();
     let error = factorize(gram).expect_err("cell below the floor");
     assert_names_a_defect(error, &out_of_range(&[0, 1]));
 }
@@ -439,7 +406,7 @@ fn a_gram_cell_whose_product_underflows_is_out_of_range() {
 fn a_bipartite_vertex_whose_every_term_underflows_is_out_of_range() {
     let values = [1e-170];
     let side = || FactorWidth1::new(1, &[0u32], Some(&values[..])).unwrap();
-    let gram = BipartiteGram::new(side(), side()).unwrap();
+    let gram = Gram::bipartite(side(), side()).unwrap();
     let error = factorize(gram).expect_err("every term underflows");
     assert_names_a_defect(error, &out_of_range(&[0, 1]));
 }
@@ -447,7 +414,21 @@ fn a_bipartite_vertex_whose_every_term_underflows_is_out_of_range() {
 #[test]
 fn a_gram_vertex_whose_every_term_underflows_is_out_of_range() {
     let (x, y) = ([1e-170, 1.0], [1e-170, -1.0]);
-    let gram = FactorWidth2::new(4, &[0u32, 2], &[1, 3], &x, &y).unwrap();
+    let gram = Gram::factor_width_2(4, &[0u32, 2], &[1, 3], &x, &y).unwrap();
     let error = factorize(gram).expect_err("every term underflows");
     assert_names_a_defect(error, &out_of_range(&[0, 1]));
+}
+
+#[rstest]
+#[case::left_past_its_part(&[0, 2], &[0, 1], Some(ViewError::IndexOutOfRange { column: 1 }))]
+#[case::right_past_its_part(&[0, 1], &[1, 2], Some(ViewError::IndexOutOfRange { column: 1 }))]
+#[case::equal_rows_are_distinct_vertices(&[1, 0], &[1, 0], None)]
+fn a_bipartite_incidence_checks_each_end_against_its_own_part(
+    #[case] a: &[u32],
+    #[case] b: &[u32],
+    #[case] expected: Option<ViewError>,
+) {
+    let side = |rows| FactorWidth1::<f64>::new(2, rows, None);
+    let found = side(a).and_then(|l| Gram::bipartite(l, side(b)?)).err();
+    assert_eq!(found, expected);
 }
