@@ -1,4 +1,4 @@
-//! [`CsrRef`] views of `sprs` and `faer` matrices, checked square and row-major before [`CsrRef::new`].
+//! [`CsrRef`] views of `sprs` and `faer` matrices, checked square before [`CsrRef::new`]; a CSC matrix is read as its transpose, which a symmetric one equals, so a storage defect names its column as the row.
 
 #[cfg(feature = "faer")]
 use num_traits::PrimInt;
@@ -18,9 +18,6 @@ impl<'a, T, I: sprs::SpIndex> TryFrom<sprs::CsMatViewI<'a, T, I>> for CsrRef<'a,
     type Error = Error;
 
     fn try_from(matrix: sprs::CsMatViewI<'a, T, I>) -> Result<Self, Error> {
-        if !matrix.is_csr() {
-            return Err(CsrError::ExpectedCsrMatrixGotCsc.into());
-        }
         let n = square(matrix.rows(), matrix.cols())?;
         let (row_ptrs, col_indices, values) = matrix.into_raw_storage();
         CsrRef::new(row_ptrs, col_indices, values, n)
