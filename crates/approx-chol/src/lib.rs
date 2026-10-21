@@ -62,7 +62,7 @@ pub use sgdd::{ReduceError, ScalingPolicy, ScalingReport};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
 
-/// Factorizes any [`Input`] view with [`Config::default`].
+/// Factorizes any [`Input`] with [`Config::default`].
 pub fn factorize<'a, T, I, M>(input: M) -> Result<Factor<T>, Error>
 where
     T: Real,
@@ -73,7 +73,7 @@ where
     factorize_with(input, Config::default())
 }
 
-/// Factorizes any [`Input`] view: reduces it to its irreducible blocks, then factors each in parallel.
+/// Factorizes any [`Input`]: reduces it to its irreducible blocks, then factors each in parallel.
 pub fn factorize_with<'a, T, I, M>(input: M, config: Config) -> Result<Factor<T>, Error>
 where
     T: Real,

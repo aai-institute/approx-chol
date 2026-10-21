@@ -1,5 +1,5 @@
 use approx_chol::input::{
-    BipartiteGram, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef, Weights,
+    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef, Weights,
 };
 use approx_chol::{factorize_with, Config, Factor, Real};
 use num_traits::{NumCast, PrimInt};
@@ -11,8 +11,8 @@ use crate::graph::Graph;
 pub enum Entry {
     Csr,
     UpperCsr,
-    Gram,
-    BipartiteGram,
+    FactorWidth2,
+    BipartiteFactorWidth2,
     Laplacian,
     GroundedLaplacian,
 }
@@ -82,7 +82,7 @@ impl Labels {
     }
 }
 
-/// A two-colouring numbered left side first, as a bipartite Gram takes it; `None` on an odd cycle.
+/// A two-colouring numbered left side first, as a bipartite factor-width-2 Gram takes it; `None` on an odd cycle.
 fn bipartition(graph: &Graph) -> Option<(Labels, usize)> {
     let n = graph.n;
     let mut adjacency = vec![Vec::new(); n];
@@ -145,8 +145,8 @@ impl Entry {
         let lone_ground = graph.n < 2 && grounded;
         match self {
             Entry::Csr | Entry::UpperCsr => true,
-            Entry::Gram => !lone_ground,
-            Entry::BipartiteGram => !lone_ground && bipartition(graph).is_some(),
+            Entry::FactorWidth2 => !lone_ground,
+            Entry::BipartiteFactorWidth2 => !lone_ground && bipartition(graph).is_some(),
             Entry::Laplacian => !signed && !grounded,
             Entry::GroundedLaplacian => !signed,
         }
@@ -155,7 +155,7 @@ impl Entry {
     pub fn reduce(self, graph: &Graph, types: Types) -> Reduced {
         assert!(self.states(graph), "{self:?} cannot state {graph:?}");
         let (labels, n_left) = match self {
-            Entry::BipartiteGram => bipartition(graph).expect("states a bipartite graph"),
+            Entry::BipartiteFactorWidth2 => bipartition(graph).expect("states a bipartite graph"),
             _ => (Labels((0..graph.n).collect()), 0),
         };
         Reduced {
@@ -202,7 +202,7 @@ impl Entry {
                 }
                 .unwrap_or_else(|error| rejected(&error))
             }
-            Entry::Gram => {
+            Entry::FactorWidth2 => {
                 let (mut a, mut b, mut x, mut y) = (a, b, vec![], vec![]);
                 for edge in &graph.edges {
                     let root = edge.weight.sqrt();
@@ -216,10 +216,10 @@ impl Entry {
                     x.push(cast(g.sqrt()));
                     y.push(T::zero());
                 }
-                let v = FactorWidth2::new(n, &a, &b, &x, &y).expect("valid factor");
+                let v = FactorWidth2::new(n, (&a, &x), (&b, &y)).expect("valid factor");
                 factorize_with(v, config).unwrap_or_else(|error| rejected(&error))
             }
-            Entry::BipartiteGram => {
+            Entry::BipartiteFactorWidth2 => {
                 let n_right = n - n_left;
                 let (mut left, mut right) = (Vec::<I>::new(), Vec::<I>::new());
                 let (mut x, mut y, mut w) = (vec![], vec![], vec![]);
@@ -253,7 +253,7 @@ impl Entry {
                 let left = FactorWidth1::new(n_left, &left, valued(&x).then_some(&x_t[..]));
                 let right = FactorWidth1::new(n_right, &right, valued(&y).then_some(&y_t[..]));
                 let weights = Weights::of(&w_t).expect("nonnegative weights");
-                let gram = BipartiteGram::new(
+                let gram = BipartiteFactorWidth2::new(
                     left.expect("valid left factor"),
                     right.expect("valid right factor"),
                     weights,

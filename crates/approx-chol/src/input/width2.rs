@@ -28,7 +28,7 @@ enum Columns<'a, T> {
     },
 }
 
-/// `V` with at most two nonzeros per column: `x[k]` at `a[k]`, `y[k]` at `b[k] ≠ a[k]`.
+/// `V Vᵀ` on `n` vertices, column `k` of `V` being `x[k] e_a[k] + y[k] e_b[k]`; every other input lowers to one.
 #[derive(Clone, Copy, Debug)]
 pub struct FactorWidth2<'a, T, I = u32> {
     a: &'a [I],
@@ -38,13 +38,11 @@ pub struct FactorWidth2<'a, T, I = u32> {
 }
 
 impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
-    /// `n` vertices; lengths and `a[k] ≠ b[k] < n` are checked, so a zero value leaves one nonzero.
+    /// `a[k] ≠ b[k] < n`; `a`, `x`, `b`, `y` one entry per column.
     pub fn new(
         n: usize,
-        a: &'a [I],
-        b: &'a [I],
-        x: &'a [T],
-        y: &'a [T],
+        (a, x): (&'a [I], &'a [T]),
+        (b, y): (&'a [I], &'a [T]),
     ) -> Result<Self, ViewError> {
         length(a.len(), x.len())?;
         length(a.len(), y.len())?;

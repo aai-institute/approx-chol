@@ -72,6 +72,6 @@ impl<'a, T: Real> Weights<'a, T> {
     }
 }
 
-fn weight(column: usize) -> ViewError {
-    ViewError::InvalidWeight { column }
+fn weight(entry: usize) -> ViewError {
+    ViewError::InvalidWeight { entry }
 }
