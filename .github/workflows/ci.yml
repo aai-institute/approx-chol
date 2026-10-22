@@ -48,6 +48,9 @@ jobs:
         run: pixi run -e ci cargo test --workspace --locked
       - name: coverage (cargo test + pytest, instrumented)
         run: pixi run -e ci coverage
+      - name: stubtest (python/approx_chol/__init__.pyi against the built module)
+        if: ${{ !cancelled() }}
+        run: pixi run -e ci stubtest
 
   msrv:
     name: MSRV (1.85.0)
