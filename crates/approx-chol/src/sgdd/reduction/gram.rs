@@ -4,8 +4,8 @@ use num_traits::PrimInt;
 
 use super::{within_band, Congruent, Signed, SymmetricBlock};
 use crate::input::{Column, FactorWidth2};
-use crate::sgdd::block::{Balance, Grounding, IrreducibleBlock, ReduceError, Summands};
-use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components};
+use crate::sgdd::block::{Balance, Grounding, IrreducibleBlock, ReduceError};
+use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components, Summands};
 use crate::sgdd::scaling::{self, ScalingPolicy};
 use crate::sgdd::Sgdd;
 use crate::{narrow, widen, Index, Real};

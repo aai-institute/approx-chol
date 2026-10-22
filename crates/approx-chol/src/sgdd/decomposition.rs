@@ -4,7 +4,7 @@ use rayon::prelude::*;
 mod assembly;
 mod partition;
 
-use super::block::{ReduceError, Summands};
+use super::block::ReduceError;
 use crate::input::{Canonical, CsrError};
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::{Index, Real};
@@ -129,6 +129,17 @@ const PARALLEL_BITS: u32 = 12;
 pub(super) struct Components<B, I, T> {
     pub(super) partition: Partition<I>,
     pub(super) summands: Summands<B, I, T>,
+}
+
+/// `A`'s direct summands by kind, each factored and solved on its own.
+#[derive(Clone, Debug)]
+pub(crate) struct Summands<B, I, T> {
+    /// Each coupled component's block.
+    pub(crate) blocks: Vec<B>,
+    /// Vertices no entry couples, each with its surplus `σ`, which is its whole pivot.
+    pub(crate) lone: Vec<(I, T)>,
+    /// One-vertex components whose pivot is zero: an in-place solve zeroes them.
+    pub(crate) dead: Vec<I>,
 }
 
 /// One component's vertices in local order, off-diagonal and diagonal.
