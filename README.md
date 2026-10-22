@@ -27,8 +27,6 @@ cargo +nightly fuzz run factor_from_bytes
 
 ## Attribution
 
-This project brings the core algorithmic ideas behind the AC and AC(k) implementations of [Laplacians.jl](https://github.com/danspielman/Laplacians.jl) to the Rust and Python ecosystems.
-
 This implementation is a Rust and Python-facing reimplementation of the AC and AC(k) algorithms developed by Daniel A. Spielman and other Laplacians.jl contributors.
 
 Laplacians.jl is licensed under the MIT License.

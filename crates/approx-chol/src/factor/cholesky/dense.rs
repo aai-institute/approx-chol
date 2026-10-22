@@ -4,11 +4,11 @@ use crate::factor::sddm::Sddm;
 use crate::factor::within_one;
 use crate::{Index, Real};
 
-/// Left-looking GTH on the packed lower `−w` with the pinned slot moved to the last row `m`, never pivoted (`m = n`, the ground's `−s`, when grounded, else `m = n − 1`): for each column `j < m` in order, every stored `(r, j)`, `r > j`, subtracts `Σ_{k<j} min·(max·p_k⁻¹)` of the magnitudes of the already updated `(r, k)` and `(j, k)`, then `p_j = −Σ_{r>j} (r, j)` and `p_j⁻¹` goes to the tail; a last pass scales each column `j` by `p_j⁻¹`, so each `|l| ≤ 1` and no product with a solution overflows, and writes `p_j⁻¹` on its diagonal, and truncating row `m` and the tail leaves `m` rows; nothing cancels, under- or overflows (`d − Σl²` cancelled to 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more factor time).
-/// Packed unit lower `L` of `L D Lᵀ` with `D⁻¹` on its diagonal, the pinned slot excluded: an upper one would double the factor; the inverse pivots trail the rows, contiguous as every row's fill reads them (strided in the diagonal measured +12-18% at n 16-24).
+/// GTH on the packed lower `−w`, pinned slot last and dropped (`d − Σl²` reached 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more time); returns unit lower `L` with `D⁻¹` on its diagonal.
 pub(super) fn factor<T: Real, I: Index>(sddm: &Sddm<T, I>, pin: usize) -> Vec<T> {
     let m = sddm.n() - usize::from(!sddm.grounded());
     let packed = row_start(m + 1);
+    // `D⁻¹` trails the rows, contiguous as every row's fill reads it: strided in the diagonal measured +12-18% at n 16-24.
     let mut values = vec![T::zero(); packed + m];
     let slot = |i: usize| match i {
         i if i == pin => m,
