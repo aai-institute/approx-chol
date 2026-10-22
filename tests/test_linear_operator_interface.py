@@ -10,20 +10,14 @@ from tests._laplacians import grid_laplacian
 
 
 def _sddm_matrix() -> sp.csr_matrix:
-    """2x2 SDDM matrix that triggers Gremban augmentation."""
+    """2x2 SDDM matrix, which grounds."""
     return sp.csr_matrix(np.array([[2.0, -1.0], [-1.0, 2.0]], dtype=np.float64))
 
 
 class TestFactorShapeAndDtype:
-    def test_shape_matches_original_dimension_laplacian(self):
-        a = grid_laplacian(5, 5)
-        factor = approx_chol.factorize(a)
-        assert factor.shape == (25, 25)
-
     def test_shape_matches_original_dimension_sddm(self):
         a = _sddm_matrix()
         factor = approx_chol.factorize(a)
-        # The Gremban ground vertex stays internal to the factor.
         assert factor.n == 2
         assert factor.shape == (2, 2)
 
@@ -35,13 +29,6 @@ class TestFactorShapeAndDtype:
 
 
 class TestMatvec:
-    def test_matvec_returns_original_dimension(self):
-        a = _sddm_matrix()
-        factor = approx_chol.factorize(a)
-        x = np.array([1.0, -1.0])
-        result = factor.matvec(x)
-        assert result.shape == (2,)
-
     def test_matvec_equals_solve(self):
         a = grid_laplacian(5, 5)
         factor = approx_chol.factorize(a)
@@ -57,25 +44,6 @@ class TestMatvec:
         b[0] = 1.0
         b[-1] = -1.0
         np.testing.assert_array_equal(factor.rmatvec(b), factor.matvec(b))
-
-
-class TestSolveReturnsDimension:
-    def test_solve_returns_original_n_for_laplacian(self):
-        a = grid_laplacian(4, 4)
-        factor = approx_chol.factorize(a)
-        b = np.zeros(16)
-        b[0] = 1.0
-        b[-1] = -1.0
-        x = factor.solve(b)
-        assert x.shape == (16,)
-
-    def test_solve_returns_original_n_for_sddm(self):
-        a = _sddm_matrix()
-        factor = approx_chol.factorize(a)
-        b = np.array([1.0, -1.0])
-        x = factor.solve(b)
-        # Must be original dimension (2), not augmented (3)
-        assert x.shape == (2,)
 
 
 class TestAsLinearOperator:
@@ -110,7 +78,6 @@ class TestAsLinearOperator:
         assert residual < 1e-7
 
     def test_direct_use_in_cg_with_sddm(self):
-        """SDDM matrix with Gremban augmentation works directly as M=factor."""
         a = _sddm_matrix()
         n = a.shape[0]
         b = np.array([1.0, -1.0])

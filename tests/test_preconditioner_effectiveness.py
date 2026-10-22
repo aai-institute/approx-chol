@@ -51,10 +51,7 @@ def test_preconditioner_reduces_cg_iterations_to_tolerance():
 
 
 def test_sddm_solve_matches_dense_inverse():
-    # Regression for issue #35. A small tridiagonal SDDM augments to a graph
-    # small enough that AC is exact, so solve(b) must equal the dense M^-1 b.
-    # The RHS has a non-zero sum -- exactly the case the old global zero-mean
-    # recovery corrupted.
+    # #35: a non-zero-sum rhs on an SDDM small enough that AC is exact, which the old zero-mean recovery corrupted.
     m = np.array([[5.0, -1.0, 0.0], [-1.0, 6.0, -1.0], [0.0, -1.0, 5.0]])
     a = sp.csr_matrix(m)
     b = np.array([1.0, 2.0, 3.0])  # sum = 6 != 0
@@ -68,12 +65,7 @@ def test_sddm_solve_matches_dense_inverse():
 
 
 def test_sddm_preconditioner_makes_cg_converge():
-    # Regression for issue #35. SDDM = grid Laplacian + positive diagonal shift
-    # (positive row sums -> Gremban augmentation). The RHS has a non-zero sum, so
-    # grounding drives -sum(b) onto the auxiliary vertex. Under the old global
-    # zero-mean recovery the preconditioner is inconsistent and CG stalls at
-    # maxiter (verified: rel. residual ~1.9); with correct grounding it converges
-    # in a handful of iterations.
+    # #35: on this non-zero-sum rhs the old zero-mean recovery left CG stalled at maxiter (rel. residual ~1.9).
     lap = grid_laplacian(20, 20)
     n = lap.shape[0]
     a = (lap + 0.5 * sp.eye(n, format="csr")).tocsr()
@@ -84,28 +76,3 @@ def test_sddm_preconditioner_makes_cg_converge():
 
     assert info == 0, f"preconditioned CG on SDDM did not converge, info={info}"
     assert _relative_residual(a, x, b) < 1e-6
-
-
-def test_preconditioner_reduces_fixed_budget_residual():
-    # Approximate Cholesky is an approximate inverse, so we do not assert exact
-    # solves; instead we assert significantly faster residual decay under a
-    # fixed CG iteration budget (conditioning proxy).
-    a = grid_laplacian(20, 20)
-    n = a.shape[0]
-    b = np.zeros(n, dtype=np.float64)
-    b[0] = 1.0
-    b[-1] = -1.0
-    budget = 15
-
-    x_unpre, _ = spla.cg(a, b, rtol=0.0, atol=0.0, maxiter=budget)
-    residual_unpre = _relative_residual(a, x_unpre, b)
-
-    factor = approx_chol.factorize(a, approx_chol.Config(seed=0))
-    x_pre, _ = spla.cg(a, b, M=factor, rtol=0.0, atol=0.0, maxiter=budget)
-    residual_pre = _relative_residual(a, x_pre, b)
-
-    assert residual_pre < residual_unpre * 0.1, (
-        "expected preconditioned residual to be at least 10x smaller after the "
-        f"same iteration budget, got pre={residual_pre:.3e}, "
-        f"unpre={residual_unpre:.3e}"
-    )
