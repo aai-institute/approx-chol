@@ -174,7 +174,7 @@ impl<T: Real> Factor<T> {
         Ok(x)
     }
 
-    /// As [`solve`](Self::solve), allocating nothing: `x` holds `b` on entry and the solution on return.
+    /// As [`solve`](Self::solve), allocating nothing: `x` holds `b` on entry and the solution on return; `scratch`'s contents on entry are ignored.
     pub fn solve_in_place(&self, x: &mut [T], scratch: &mut [T]) -> Result<(), SolveError> {
         check_buffers(x, self.n, scratch, self.scratch_len())?;
         for block in &self.blocks {
@@ -249,7 +249,7 @@ impl<T: Real> BlockFactor<T> {
         on!(self, block => block.cholesky.scratch_len(), _ => 0)
     }
 
-    /// Solves in local order: `x` holds `b` on entry and the solution on return.
+    /// Solves in local order: `x` holds `b` on entry and the solution on return; `scratch`'s contents on entry are ignored.
     pub fn solve_local(
         &self,
         x: &mut [T],

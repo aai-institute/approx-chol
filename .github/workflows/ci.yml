@@ -194,9 +194,9 @@ jobs:
           python -m pip install dist/*.whl
           pytest tests/ -v
 
-  # `lowest-direct` makes the numpy/scipy floors a tested claim rather than a guess.
+  # `lowest` makes the numpy/scipy floors a tested claim rather than a guess.
   floor:
-    name: Floor (py3.9, lowest-direct deps)
+    name: Floor (py3.9, lowest deps)
     needs: wheel
     runs-on: ubuntu-latest
     steps:
@@ -214,7 +214,7 @@ jobs:
         run: |
           pixi run -e floor uv venv --python 3.9 .venv
           pixi run -e floor uv pip install --python .venv \
-            --resolution lowest-direct dist/*.whl
+            --resolution lowest dist/*.whl
           pixi run -e floor uv pip install --python .venv pytest
           .venv/bin/python -c 'import numpy, scipy, sys; print(
             f"python {sys.version.split()[0]}  numpy {numpy.__version__}  scipy {scipy.__version__}")'
