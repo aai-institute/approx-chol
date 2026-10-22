@@ -35,6 +35,16 @@ impl ScalingPolicy {
             max_iterations,
         })
     }
+
+    /// The relative dominance violation a row may show and still count as dominant; never below rounding.
+    pub fn tolerance(&self) -> f64 {
+        self.tolerance
+    }
+
+    /// The scaling iterations a block may spend before it is reported unsettled.
+    pub fn max_iterations(&self) -> usize {
+        self.max_iterations
+    }
 }
 
 impl Default for ScalingPolicy {

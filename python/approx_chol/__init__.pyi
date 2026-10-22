@@ -6,7 +6,15 @@ import numpy as np
 import numpy.typing as npt
 from typing_extensions import Never, disjoint_base
 
-__all__ = ["Backend", "Config", "Factor", "Workspace", "factorize", "factorize_raw"]
+__all__ = [
+    "Backend",
+    "Config",
+    "Factor",
+    "ScalingPolicy",
+    "Workspace",
+    "factorize",
+    "factorize_raw",
+]
 
 @disjoint_base
 class Backend:
@@ -55,6 +63,29 @@ class Config:
     def split(self) -> int | None: ...
     @property
     def backend(self) -> Backend: ...
+
+@final
+class ScalingPolicy:
+    """How a block short of diagonal dominance is scaled before it is factored.
+
+    ``tolerance`` is the relative dominance violation, in ``[0, 1)``, a row may
+    show and still count as dominant; rounding is always tolerated. ``max_iterations`` is the scaling budget a
+    block may spend before it is reported unsettled. An argument left out or
+    ``None`` keeps the default, which the getters report.
+
+    Raises:
+        ValueError: If ``tolerance`` is outside ``[0, 1)``.
+    """
+
+    def __new__(
+        cls,
+        tolerance: float | None = ...,
+        max_iterations: int | None = ...,
+    ) -> ScalingPolicy: ...
+    @property
+    def tolerance(self) -> float: ...
+    @property
+    def max_iterations(self) -> int: ...
 
 @final
 class Factor:
@@ -119,13 +150,13 @@ class Factor:
         """Solve LDL^T x = b, writing the result into *out*.
 
         ``b`` must have length ``shape[0]``, and *out* at least that length.
+        *out* may be ``b`` or overlap it, as ``b`` is copied before *out* is written.
         A *workspace* from :meth:`workspace` saves allocating buffers per call.
         Releases the GIL as :meth:`solve`, solving in its own buffer and only then writing *out*.
 
         Raises:
             ValueError: If ``b`` is not 1-D integer or float, ``out`` is not
-                contiguous, sizes are invalid,
-                ``out`` is not writeable, ``b`` and ``out`` overlap in memory,
+                contiguous, sizes are invalid, ``out`` is not writeable,
                 or *workspace* is from a smaller factor.
             BufferError: If ``out`` is already borrowed.
             RuntimeError: If *workspace* is in use by another call.
@@ -142,6 +173,7 @@ class Workspace:
 def factorize(
     matrix: Any,
     config: Config | None = None,
+    scaling: ScalingPolicy | None = None,
 ) -> Factor:
     """Factorize an SDDM matrix from a scipy.sparse CSR matrix.
 
@@ -150,6 +182,7 @@ def factorize(
     Args:
         matrix: A ``scipy.sparse.csr_matrix`` or ``csr_array``.
         config: Optional factorization configuration.
+        scaling: Optional scaling policy for blocks short of diagonal dominance.
 
     Raises:
         ValueError: If the matrix is not square or symmetric, has invalid
@@ -169,6 +202,7 @@ def factorize_raw(
     values: npt.ArrayLike,
     n: int,
     config: Config | None = None,
+    scaling: ScalingPolicy | None = None,
 ) -> Factor:
     """Factorize an SDDM matrix from raw CSR arrays.
 
@@ -180,6 +214,7 @@ def factorize_raw(
         values: CSR value array, integer or floating-point.
         n: Matrix dimension.
         config: Optional factorization configuration.
+        scaling: Optional scaling policy, as :func:`factorize`.
 
     Raises:
         ValueError: If an array is not 1-D or has a dtype it cannot carry, the

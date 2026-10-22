@@ -9,7 +9,6 @@ use numpy::{
 use pyo3::marker::Ungil;
 use pyo3::prelude::*;
 use std::error::Error;
-use std::mem::size_of;
 
 #[inline]
 fn value_error(message: impl Into<String>) -> PyErr {
@@ -135,17 +134,6 @@ fn owned<T: Element + Copy>(array: &Bound<'_, PyArray1<T>>, name: &str) -> PyRes
         .map_err(|_| value_error(format!("{name} must be contiguous")))
 }
 
-fn slices_overlap<T>(lhs: &[T], rhs: &[T]) -> bool {
-    if lhs.is_empty() || rhs.is_empty() {
-        return false;
-    }
-    let lhs_start = lhs.as_ptr() as usize;
-    let rhs_start = rhs.as_ptr() as usize;
-    let lhs_end = lhs_start.saturating_add(lhs.len().saturating_mul(size_of::<T>()));
-    let rhs_end = rhs_start.saturating_add(rhs.len().saturating_mul(size_of::<T>()));
-    lhs_start < rhs_end && rhs_start < lhs_end
-}
-
 #[pyclass(frozen, eq, from_py_object, name = "Backend")]
 #[derive(Clone, PartialEq, Eq)]
 enum PyBackend {
@@ -202,6 +190,35 @@ impl PyConfig {
     #[getter]
     fn backend(&self) -> PyBackend {
         self.0.backend.into()
+    }
+}
+
+#[pyclass(frozen, eq, name = "ScalingPolicy")]
+#[derive(PartialEq)]
+struct PyScalingPolicy(ScalingPolicy);
+
+#[pymethods]
+impl PyScalingPolicy {
+    #[new]
+    #[pyo3(signature = (tolerance=None, max_iterations=None))]
+    fn new(tolerance: Option<f64>, max_iterations: Option<usize>) -> PyResult<Self> {
+        let default = ScalingPolicy::default();
+        ScalingPolicy::new(
+            tolerance.unwrap_or(default.tolerance()),
+            max_iterations.unwrap_or(default.max_iterations()),
+        )
+        .map(Self)
+        .ok_or_else(|| value_error("tolerance must be in [0, 1)"))
+    }
+
+    #[getter]
+    fn tolerance(&self) -> f64 {
+        self.0.tolerance()
+    }
+
+    #[getter]
+    fn max_iterations(&self) -> usize {
+        self.0.max_iterations()
     }
 }
 
@@ -314,41 +331,29 @@ impl PyFactor {
         out: &Bound<'py, PyArray1<f64>>,
         mut workspace: Option<PyRefMut<'py, PyWorkspace>>,
     ) -> PyResult<()> {
-        let b = right_hand_side(py, b)?;
-        let b_slice = b.as_slice().expect("right_hand_side is contiguous");
         let n = self.inner.n();
-        let out_ro = out.try_readonly().map_err(|e| borrow_error("out", e))?;
-        let out_ro_slice = out_ro
-            .as_slice()
-            .map_err(|_| value_error("out must be contiguous"))?;
-        if out_ro_slice.len() < n {
-            return Err(value_error(format!(
-                "out length {} is smaller than matrix dimension {}",
-                out_ro_slice.len(),
-                n
-            )));
-        }
-        if slices_overlap(b_slice, out_ro_slice) {
-            return Err(value_error("b and out must not overlap"));
-        }
-        drop(out_ro);
-        if b_slice.len() != n {
-            return Err(value_error(format!(
-                "right-hand side has length {}, expected {n}",
-                b_slice.len()
-            )));
-        }
-        let mut out_rw = out.try_readwrite().map_err(|e| borrow_error("out", e))?;
-        let out = &mut out_rw
-            .as_slice_mut()
-            .map_err(|_| value_error("out must be contiguous"))?[..n];
         let mut owned = None;
         let PyWorkspace { x, scratch } = match workspace.as_deref_mut() {
             Some(workspace) => workspace,
             None => owned.insert(self.workspace()),
         };
-        x.clear();
-        x.extend_from_slice(b_slice);
+        {
+            let b = right_hand_side(py, b)?;
+            x.clear();
+            x.extend_from_slice(b.as_slice().expect("right_hand_side is contiguous"));
+        }
+        // `b`'s borrow is released, so `out` may be `b` or overlap it.
+        let mut out_rw = out.try_readwrite().map_err(|e| borrow_error("out", e))?;
+        let out = out_rw
+            .as_slice_mut()
+            .map_err(|_| value_error("out must be contiguous"))?;
+        if out.len() < n {
+            return Err(value_error(format!(
+                "out length {} is smaller than matrix dimension {n}",
+                out.len()
+            )));
+        }
+        let out = &mut out[..n];
         // Our own buffer: without the GIL, or on a free-threaded build, another thread may touch `out`.
         let solved = (self.entries).detach(py, || self.inner.solve_in_place(x, scratch));
         solved
@@ -371,7 +376,7 @@ struct PyWorkspace {
 }
 
 #[pyfunction]
-#[pyo3(signature = (row_ptrs, col_indices, values, n, config=None))]
+#[pyo3(signature = (row_ptrs, col_indices, values, n, config=None, scaling=None))]
 fn factorize_raw<'py>(
     py: Python<'py>,
     row_ptrs: &Bound<'py, PyAny>,
@@ -379,6 +384,7 @@ fn factorize_raw<'py>(
     values: &Bound<'py, PyAny>,
     n: usize,
     config: Option<&PyConfig>,
+    scaling: Option<&PyScalingPolicy>,
 ) -> PyResult<PyFactor> {
     let np = py.import("numpy")?;
     CsrArrays {
@@ -388,15 +394,16 @@ fn factorize_raw<'py>(
         data: as_contiguous(&np, &as_1d(&np, values, "values", Column::Value)?)?,
         np,
     }
-    .factorize(config)
+    .factorize(config, scaling)
 }
 
 #[pyfunction]
-#[pyo3(signature = (matrix, config=None))]
+#[pyo3(signature = (matrix, config=None, scaling=None))]
 fn factorize(
     py: Python<'_>,
     matrix: &Bound<'_, PyAny>,
     config: Option<&PyConfig>,
+    scaling: Option<&PyScalingPolicy>,
 ) -> PyResult<PyFactor> {
     let (n, columns) = matrix.getattr("shape")?.extract::<(usize, usize)>()?;
     if n != columns {
@@ -411,7 +418,7 @@ fn factorize(
         data: as_contiguous(&np, &data)?,
         np,
     }
-    .factorize(config)
+    .factorize(config, scaling)
 }
 
 /// A CSR's checked arrays: values already `f64`, indices still in the caller's dtype.
@@ -424,7 +431,11 @@ struct CsrArrays<'py> {
 }
 
 impl CsrArrays<'_> {
-    fn factorize(&self, config: Option<&PyConfig>) -> PyResult<PyFactor> {
+    fn factorize(
+        &self,
+        config: Option<&PyConfig>,
+        scaling: Option<&PyScalingPolicy>,
+    ) -> PyResult<PyFactor> {
         // Also keeps `CsrRef::new` from overflowing `n + 1`.
         if u32::try_from(self.n).is_err() {
             return Err(value_error("matrix dimension exceeds u32::MAX"));
@@ -437,11 +448,11 @@ impl CsrArrays<'_> {
         let kind = dtype.getattr("kind")?.extract::<String>()?;
         let width = dtype.getattr("itemsize")?.extract::<usize>()?;
         match (kind.as_str(), width) {
-            ("i", 4) => self.factorize_as::<i32>(config),
-            ("u", 4) => self.factorize_as::<u32>(config),
-            ("u", 8) => self.factorize_as::<u64>(config),
+            ("i", 4) => self.factorize_as::<i32>(config, scaling),
+            ("u", 4) => self.factorize_as::<u32>(config, scaling),
+            ("u", 8) => self.factorize_as::<u64>(config, scaling),
             // Narrower integers widen; int64 beside uint64 promotes to float, and i64 holds any valid index.
-            _ => self.factorize_as::<i64>(config),
+            _ => self.factorize_as::<i64>(config, scaling),
         }
     }
 
@@ -449,6 +460,7 @@ impl CsrArrays<'_> {
     fn factorize_as<J: Element + PrimInt + Sync + Send>(
         &self,
         config: Option<&PyConfig>,
+        scaling: Option<&PyScalingPolicy>,
     ) -> PyResult<PyFactor> {
         let indptr = as_contiguous::<J>(&self.np, &self.indptr)?;
         let indices = as_contiguous::<J>(&self.np, &self.indices)?;
@@ -456,13 +468,12 @@ impl CsrArrays<'_> {
         let indices = owned(&indices, "indices")?;
         let data = owned(&self.data, "data")?;
         let config = config.map_or_else(Config::default, |config| config.0);
+        let scaling = scaling.map_or_else(ScalingPolicy::default, |scaling| scaling.0);
         let (py, n, entries) = (self.np.py(), self.n as u32, StoredEntries(data.len()));
         let inner = entries.detach(py, || {
             let sgdd = CsrRef::new(&indptr, &indices, &data, n)
                 .map_err(|e| error_to_py(&e))
-                .and_then(|csr| {
-                    Sgdd::reduce(csr, ScalingPolicy::default()).map_err(|e| error_to_py(&e))
-                });
+                .and_then(|csr| Sgdd::reduce(csr, scaling).map_err(|e| error_to_py(&e)));
             // Freed before factoring: the copy never coexists with the factor's fill.
             drop((indptr, indices, data));
             sgdd.map(|sgdd| sgdd.factor(&config))
@@ -479,6 +490,7 @@ fn _approx_chol(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBackend>()?;
     m.add_class::<PyConfig>()?;
     m.add_class::<PyFactor>()?;
+    m.add_class::<PyScalingPolicy>()?;
     m.add_class::<PyWorkspace>()?;
     m.add_function(wrap_pyfunction!(factorize, m)?)?;
     m.add_function(wrap_pyfunction!(factorize_raw, m)?)?;
