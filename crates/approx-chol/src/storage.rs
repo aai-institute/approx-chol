@@ -251,28 +251,6 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
         2.0 * crate::lane_sum(&self.rows.values, scale)
     }
 
-    /// Row `i` led by `lead(i)`, a column below its stored ones, widened in place so no second copy is held.
-    pub(crate) fn led_by(mut self, lead: impl Fn(usize) -> Option<(I, T)>) -> Self {
-        let rows = &mut self.rows;
-        let n = rows.n_rows();
-        let mut shift = (0..n).filter(|&i| lead(i).is_some()).count();
-        let len = rows.indices.len() + shift;
-        rows.indices.resize(len, I::zero());
-        rows.values.resize(len, T::zero());
-        for i in (0..n).rev() {
-            let (start, end) = (rows.ptrs[i], rows.ptrs[i + 1]);
-            rows.ptrs[i + 1] = end + shift;
-            rows.indices.copy_within(start..end, start + shift);
-            rows.values.copy_within(start..end, start + shift);
-            if let Some((j, w)) = lead(i) {
-                shift -= 1;
-                (rows.indices[start + shift], rows.values[start + shift]) = (j, w);
-            }
-        }
-        debug_assert!(rows.shaped(), "a lead precedes its row's columns");
-        self
-    }
-
     /// Row `i`'s neighbors above it.
     pub(crate) fn upper(&self, i: usize) -> impl Iterator<Item = (usize, &T)> {
         self.rows.row(i)
