@@ -215,11 +215,8 @@ impl<T: Real> RowSums<T> {
         let epsilon = widen(T::epsilon());
         let diagonal = crate::Sum2::of(&self.diagonal, |_, d| epsilon * widen(d));
         let trace = diagonal.total();
-        let mirrored = |_, x: T| -2.0 * epsilon * widen(x.abs());
         // `tr M` rounded on its own drops a surplus below its ulp, which the Gram path keeps.
-        let ones = diagonal
-            .plus(off_diagonal.stored_values(), mirrored)
-            .total();
+        let ones = off_diagonal.scaled_abs_into(diagonal, -epsilon).total();
         match within_band::<T>(ones, trace) {
             true => Grounding::ungrounded(),
             false => self.surplus(),

@@ -1,6 +1,6 @@
 //! Sparse storage shapes every stage reads.
 
-use crate::{narrow, widen, Index, Real};
+use crate::{narrow, widen, Index, Real, Sum2};
 
 /// Compressed sparse rows.
 #[cfg_attr(
@@ -301,9 +301,9 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
         rows.abs_sums(offset).into_iter().map(narrow).collect()
     }
 
-    /// One triangle's values: the other mirrors them.
-    pub(crate) fn stored_values(&self) -> &[T] {
-        &self.stored().0.values
+    /// `sum + scale · Σ_ij |a_ij|` over both triangles: the other mirrors the stored one.
+    pub(crate) fn scaled_abs_into(&self, sum: Sum2, scale: f64) -> Sum2 {
+        sum.plus(&self.stored().0.values, |_, x| 2.0 * scale * widen(x.abs()))
     }
 
     /// `S X S` for signs `S`: a sign moves no magnitude, so no entry leaves range.

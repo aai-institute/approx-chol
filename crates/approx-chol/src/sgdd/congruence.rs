@@ -222,7 +222,7 @@ impl<T: Real> ScaledFactors<T> {
             let u = widen(f / largest);
             u * u
         };
-        let norm = crate::Sum2::of(&factors, |_, f| unit(&f)).total();
+        let norm = crate::compensated_sum(&factors, |_, f| unit(&f));
         Self {
             factors,
             peak,
@@ -310,7 +310,7 @@ impl<T: Real> Congruence<T> {
 
 fn project_out<T: Real>(x: &mut [T], u: impl Fn(usize) -> T, uu: f64) {
     // Compensated, or a constant added to a floating `b` moves the solution (#147).
-    let ux = crate::Sum2::of(x, |i, x| widen(u(i)) * widen(x)).total();
+    let ux = crate::compensated_sum(x, |i, x| widen(u(i)) * widen(x));
     let along = ux / uu;
     for (i, x) in x.iter_mut().enumerate() {
         *x = narrow::<T>(widen(*x) - widen(u(i)) * along);

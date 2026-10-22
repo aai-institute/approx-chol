@@ -168,7 +168,25 @@ fn lane_sum<T: Real>(x: &[T], scale: f64) -> f64 {
     })
 }
 
-/// Ogita–Rump–Oishi Sum2 in eight fixed TwoSum lanes, as AccurateArithmetic.jl vectorizes it: off by at most `ε|Σx| + (nε)² Σ|x|`, alike at any thread count.
+/// `Σ term(i, x_i)` as [`Sum2`] gives it; serial below 20 terms, where the measured lane setup and merge cost more than they save.
+fn compensated_sum<T: Copy>(x: &[T], term: impl Fn(usize, T) -> f64) -> f64 {
+    // Outlined, so a short sum's caller spills no lane state.
+    #[inline(never)]
+    fn lanes<T: Copy>(x: &[T], term: impl Fn(usize, T) -> f64) -> f64 {
+        Sum2::of(x, term).total()
+    }
+    if x.len() >= 20 {
+        return lanes(x, term);
+    }
+    let terms = x.iter().enumerate().map(|(i, &x)| term(i, x));
+    let (sum, carry) = terms.fold((0.0, 0.0), |(sum, carry), x| {
+        let (sum, error) = two_sum(sum, x);
+        (sum, carry + error)
+    });
+    sum + carry
+}
+
+/// Ogita–Rump–Oishi Sum2 in eight fixed TwoSum lanes, as AccurateArithmetic.jl vectorizes it: off by at most `ε|Σx| + (nε)² Σ|x|`.
 #[derive(Clone, Copy, Default)]
 struct Sum2 {
     sums: [f64; 8],
@@ -188,11 +206,13 @@ impl Sum2 {
         for (k, chunk) in chunks.enumerate() {
             self.add(array::from_fn(|lane| term(8 * k + lane, chunk[lane])));
         }
-        let start = x.len() - rest.len();
-        // Zero-padded rather than a shorter pass, so every lane stays in one vector register.
-        self.add(array::from_fn(|lane| {
-            rest.get(lane).map_or(0.0, |&x| term(start + lane, x))
-        }));
+        if !rest.is_empty() {
+            let start = x.len() - rest.len();
+            // Zero-padded rather than a shorter pass, so every lane stays in one vector register.
+            self.add(array::from_fn(|lane| {
+                rest.get(lane).map_or(0.0, |&x| term(start + lane, x))
+            }));
+        }
         self
     }
 
@@ -226,14 +246,15 @@ fn two_sum(a: f64, b: f64) -> (f64, f64) {
 
 #[cfg(test)]
 mod tests {
-    use super::Sum2;
+    use super::{compensated_sum, Sum2};
 
     /// The dropped `1.0` is the smaller operand as the addend in one order and as the running sum in the other.
     #[test]
     fn compensated_sum_recovers_the_term_a_plain_fold_drops() {
         for values in [[1e16, 1.0, -1e16], [1.0, 1e16, -1e16]] {
             assert_eq!(values.iter().sum::<f64>(), 0.0, "plain fold keeps the term");
-            assert_eq!(Sum2::of(&values, |_, x| x).total(), 1.0);
+            assert_eq!(compensated_sum(&values, |_, x| x), 1.0, "serial");
+            assert_eq!(Sum2::of(&values, |_, x| x).total(), 1.0, "lanes");
         }
     }
 
