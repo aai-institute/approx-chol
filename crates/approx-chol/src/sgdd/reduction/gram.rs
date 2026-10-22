@@ -107,6 +107,11 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
         },
     );
     drop((block_of, factor));
+    // `|u_i·p| ≤ (u_i² + p²)/2`: a running sum past `f64::MAX` puts `m_ii` or `1ᵀM1` past range.
+    let in_range = |&s: &f64| s.is_finite() && narrow::<T>(s.max(0.0)).is_finite();
+    if let Some(vertex) = surplus.iter().position(|s| !in_range(s)) {
+        return Err(ReduceError::OutOfRange { vertex });
+    }
     let decided = blocks.into_iter().zip(ones).zip(trace);
     let decide = |block: Congruent<T, I>, abs: Vec<T>, ones: f64, trace: f64| {
         let mut rows = block.vertices.iter().zip(abs);
