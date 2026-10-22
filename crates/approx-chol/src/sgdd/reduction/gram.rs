@@ -124,7 +124,7 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
         let surplus: Vec<T> = (vertices.iter())
             .map(|&v| narrow(surplus[v.index()].max(0.0)))
             .collect();
-        // Unproven, a surplus that vanishes in `T` is never a float.
+        // Out of band, every row's naive surplus sums to ≤ 0 only past degree ~2·10⁸ (Cauchy–Schwarz, #299).
         let vertex = vertices[0].index();
         match Grounding::of(surplus) {
             grounding if grounding.is_grounded() => block.block(Balance::Balanced(grounding)),
