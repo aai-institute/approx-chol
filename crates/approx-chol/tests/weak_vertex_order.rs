@@ -69,6 +69,7 @@ fn frustrated_cover_solves_a_pendant_behind_a_heavy_triangle() {
             Edge::negative(0, 3, w),
         ],
     );
+    // One ulp of the 2e20 row: dominant, by the least it can be.
     graph.ground[0] = 32768.0;
     assert_componentwise(&graph, &csr_factor(&graph, dense()), &x_true);
 }
