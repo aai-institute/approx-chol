@@ -67,6 +67,7 @@ class Factor:
     ``M=factor`` to iterative solvers like ``scipy.sparse.linalg.cg``.
     """
 
+    def __new__(cls, never: Never, /) -> Never: ...
     @property
     def n(self) -> int:
         """Matrix dimension, which sizes :meth:`solve_into`'s buffers."""
