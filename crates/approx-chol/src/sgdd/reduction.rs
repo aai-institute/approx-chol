@@ -217,7 +217,9 @@ impl<T: Real> RowSums<T> {
         let trace = diagonal.total();
         // `tr M` rounded on its own drops a surplus below its ulp, which the Gram path keeps.
         let ones = off_diagonal.scaled_abs_into(diagonal, -epsilon).total();
-        match within_band::<T>(ones, trace) {
+        let mut rows = self.diagonal.iter().zip(&self.abs);
+        let outweighs = |(&d, &s): (&T, &T)| outweighs_coupling(widen(d) - widen(s), widen(s));
+        match within_band::<T>(ones, trace) && !rows.any(outweighs) {
             true => Grounding::ungrounded(),
             false => self.surplus(),
         }
@@ -231,12 +233,17 @@ impl<T: Real> RowSums<T> {
     }
 }
 
-/// `1ᵀM1 ≤ SINGULAR_BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh), so `M` floats.
+/// `1ᵀM1 ≤ SINGULAR_BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh).
 const SINGULAR_BAND: f64 = 5.0;
 
-/// Whether `ones = 1ᵀM1` is within the band of `trace = tr M`, so `M` is singular to working precision.
+/// Whether `ones = 1ᵀM1` is within the band of `trace = tr M`: needed, not enough, for `M` to float.
 pub(crate) fn within_band<T: Real>(ones: f64, trace: f64) -> bool {
     ones <= SINGULAR_BAND * widen(T::epsilon()) * trace
+}
+
+/// A row whose surplus outweighs its `Σ_j|m_ij|` grounds its block even within the band.
+fn outweighs_coupling(surplus: f64, abs: f64) -> bool {
+    surplus > abs
 }
 
 /// The signs `S` folding `A_c` into a Z-matrix, `I` when it already is one; `None` when frustrated.
