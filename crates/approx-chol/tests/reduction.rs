@@ -6,6 +6,8 @@ mod dense;
 mod dense_residual;
 #[path = "common/gram.rs"]
 mod gram;
+#[path = "reduction/surplus_grounds.rs"]
+mod surplus_grounds;
 
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
