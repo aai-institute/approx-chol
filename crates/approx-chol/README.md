@@ -50,6 +50,8 @@ A `Laplacian` or `Sddm`, a `FactorWidth2` or a `BipartiteFactorWidth2` also fact
 
 ## Attribution
 
+This crate ports key algorithmic ideas from Laplacians.jl to make AC and AC(k) accessible in the Rust ecosystem and through Python bindings.
+
 This implementation is a Rust and Python-facing reimplementation of the AC and AC(k) algorithms developed by Daniel A. Spielman and other Laplacians.jl contributors.
 
 Laplacians.jl is licensed under the MIT License.
