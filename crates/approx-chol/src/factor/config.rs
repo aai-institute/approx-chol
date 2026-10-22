@@ -1,5 +1,3 @@
-use crate::ScalingPolicy;
-
 /// Build settings for [`factorize_with`](crate::factorize_with).
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -14,9 +12,6 @@ pub struct Config {
     /// How a bipartite block's eliminated side becomes the kept side's Schur complement.
     #[cfg_attr(feature = "serde", serde(default))]
     pub complement: SchurMode,
-    /// How a block not diagonally dominant is scaled to dominance.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub scaling: ScalingPolicy,
 }
 
 impl Config {

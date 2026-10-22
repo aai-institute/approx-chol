@@ -33,11 +33,7 @@ fn reduce_with<T: Real>(
 ) -> Result<Factor<T>, Error> {
     let n = (row_ptrs.len() - 1) as u32;
     let csr = CsrRef::new(row_ptrs, columns, values, n).expect("valid shape");
-    let config = Config {
-        scaling: policy,
-        ..Config::default()
-    };
-    factorize_with(csr, config)
+    factorize_with(csr, Config::default(), policy)
 }
 
 fn reduce_upper<T: Real>(

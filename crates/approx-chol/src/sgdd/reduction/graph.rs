@@ -4,12 +4,13 @@ use super::Congruent;
 use crate::input::FactorWidth2;
 use crate::sgdd::block::{Balance, ReduceError};
 use crate::sgdd::congruence::Congruence;
+use crate::sgdd::decomposition::Components;
 use crate::sgdd::decomposition::{assemble_incidence, AdjacencyLayout};
-use crate::sgdd::Sgdd;
+use crate::sgdd::Reduced;
 use crate::storage::OffDiagonal;
 use crate::{Index, Real};
 
-impl<T: Real, I: Index> Sgdd<T, I> {
+impl<T: Real, I: Index> Reduced<T, I> {
     /// `V` an incidence matrix, so dominant by shape; across a bipartition it is `e_a + e_b`, summed switched.
     pub(super) fn from_incidence<J: PrimInt, S: AdjacencyLayout>(
         cells: S,
@@ -29,6 +30,6 @@ impl<T: Real, I: Index> Sgdd<T, I> {
                 };
                 m.block(Balance::Balanced(grounding))
             })
-            .map(Sgdd::new)
+            .map(Components::into_reduced)
     }
 }

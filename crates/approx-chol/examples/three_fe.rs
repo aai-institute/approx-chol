@@ -1,7 +1,7 @@
 //! Three fixed effects, no slopes: each pair of factors is one incidence-only bipartite Gram, as within's Schwarz subdomains.
 
 use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1};
-use approx_chol::{factorize_with, Backend, Config, Factor};
+use approx_chol::{factorize_with, Backend, Config, Factor, ScalingPolicy};
 
 /// Workers move between firms of their own region only, so (worker, firm) splits by region.
 const REGIONS: [(usize, usize); 5] = [(2000, 200), (40, 6), (30, 5), (20, 4), (10, 3)];
@@ -55,8 +55,12 @@ fn main() {
             },
             ..Config::default()
         };
-        let factors = [("dense", dense), ("default", Config::default())]
-            .map(|(name, config)| (name, factorize_with(gram, config).expect("factors")));
+        let factors = [("dense", dense), ("default", Config::default())].map(|(name, config)| {
+            (
+                name,
+                factorize_with(gram, config, ScalingPolicy::default()).expect("factors"),
+            )
+        });
         // Blocks are the reduction's, so either config's factor lists the same ones.
         for block in factors[0].1.blocks() {
             let n = block.vertices().len();

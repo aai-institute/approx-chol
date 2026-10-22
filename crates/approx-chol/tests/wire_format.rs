@@ -5,7 +5,9 @@ use std::collections::BTreeSet;
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
 use approx_chol::FACTOR_FORMAT_VERSION as FORMAT_VERSION;
-use approx_chol::{factorize_with, Backend, BlockFactor, Config, Factor, InnerParallelism};
+use approx_chol::{
+    factorize_with, Backend, BlockFactor, Config, Factor, InnerParallelism, ScalingPolicy,
+};
 use rstest::rstest;
 use serde::de::value::{Error, SeqDeserializer};
 use serde::Deserialize;
@@ -79,7 +81,7 @@ impl Fixture {
         }
         let n = matrix.len() as u32;
         let csr = CsrRef::new(&row_ptrs, &columns, &values, n).expect("valid csr");
-        factorize_with(csr, self.config()).expect("factors")
+        factorize_with(csr, self.config(), ScalingPolicy::default()).expect("factors")
     }
 
     fn config(self) -> Config {
@@ -129,7 +131,7 @@ fn sampled_gram(config: Config) -> Factor {
         FactorWidth1::new(right as usize, &cols, None).expect("valid columns"),
     )
     .expect("valid gram");
-    factorize_with(gram, config).expect("factors")
+    factorize_with(gram, config, ScalingPolicy::default()).expect("factors")
 }
 
 /// Zero-sum over every fixture's floating component, so each has an exact solution.

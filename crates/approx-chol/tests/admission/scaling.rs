@@ -1,5 +1,5 @@
 use approx_chol::input::FactorWidth2;
-use approx_chol::{factorize, ScalingPolicy};
+use approx_chol::{factorize, Config, CsrRef, ScalingPolicy, Sgdd};
 use rstest::rstest;
 
 use super::{reduce, reduce_with};
@@ -97,6 +97,24 @@ fn a_settled_dld_path_is_not_reported(#[case] spread: f64) {
     let block = &factor.blocks()[0];
     assert_eq!(block.scaling_report(), None, "spread {spread:e}");
     assert!(block.floats(), "spread {spread:e}");
+}
+
+/// The path above, unsettled at the default 2048 steps: a reduction under 6144 settles whatever `Config` factors it.
+#[test]
+fn a_reduction_keeps_its_own_scaling_when_factored() {
+    let n = 5000;
+    let (row_ptrs, columns, values) = dld(n, &path(n), 1.0, 0);
+    let csr = CsrRef::new(&row_ptrs, &columns, &values, n as u32).expect("valid shape");
+    let unsettled = factorize(csr).expect("admitted").blocks()[0].scaling_report();
+    assert!(
+        unsettled.is_some_and(|report| !report.settled),
+        "{unsettled:?}"
+    );
+    let scaling = ScalingPolicy::new(1e-9, 6144).expect("a valid policy");
+    let factor = Sgdd::reduce(csr, scaling)
+        .expect("admitted")
+        .factor(&Config::default());
+    assert_eq!(factor.blocks()[0].scaling_report(), None);
 }
 
 /// Settled within 16ε, then `F·A·F` rounds a few ε more: this grid's 17.3ε is rounding, not a deficit.

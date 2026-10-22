@@ -8,15 +8,16 @@ use num_traits::PrimInt;
 use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError};
 use super::congruence::{Congruence, ScaledFactors};
 use super::decomposition::{
-    of_csr, of_upper, AdjacencyLayout, Biadjacency, Cells, Partitioned, StrictUpperTriangle,
+    of_csr, of_upper, AdjacencyLayout, Biadjacency, Cells, Components, Partitioned,
+    StrictUpperTriangle,
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
-use super::{diagonal_in_range, Sgdd};
+use super::{diagonal_in_range, Reduced};
 use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input};
 use crate::storage::OffDiagonal;
 use crate::{narrow, widen, Error, Index, Real};
 
-impl<T: Real, I: Index> Sgdd<T, I> {
+impl<T: Real, I: Index> Reduced<T, I> {
     /// The view's irreducible blocks, each reduced; `policy` scales those not already dominant.
     pub(crate) fn reduce<J: PrimInt + Sync>(
         input: Input<'_, T, J>,
@@ -59,7 +60,7 @@ impl<T: Real, I: Index> Sgdd<T, I> {
 
 impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
     /// Scales and signs each block's `A_c`, closing its surplus from the same rows.
-    fn reduce(self, policy: &ScalingPolicy) -> Result<Sgdd<T, I>, ReduceError> {
+    fn reduce(self, policy: &ScalingPolicy) -> Result<Reduced<T, I>, ReduceError> {
         self.extract(|cells| {
             let a = SymmetricBlock::new(cells);
             let relax = |a: &SymmetricBlock<T, I>| {
@@ -76,7 +77,7 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
             };
             Ok(block)
         })
-        .map(Sgdd::new)
+        .map(Components::into_reduced)
     }
 }
 

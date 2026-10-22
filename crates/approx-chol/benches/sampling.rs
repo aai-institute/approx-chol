@@ -4,7 +4,7 @@ mod csr;
 mod grid;
 
 use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1};
-use approx_chol::{factorize_with, Backend, Config};
+use approx_chol::{factorize_with, Backend, Config, ScalingPolicy};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use csr::{build, OwnedCsr};
 use grid::grid_laplacian;
@@ -124,7 +124,7 @@ fn bench_bipartite_stars(c: &mut Criterion) {
                 ..Config::default()
             };
             group.bench_with_input(BenchmarkId::new(label, degree), &gram, |b, &gram| {
-                b.iter(|| factorize_with(gram, config).expect("factors"));
+                b.iter(|| factorize_with(gram, config, ScalingPolicy::default()).expect("factors"));
             });
         }
     }

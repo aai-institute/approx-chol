@@ -105,6 +105,11 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         })
     }
 
+    /// Vertices of `A` the block holds, each once however many sheets cover it.
+    pub(crate) fn vertex_count(&self) -> usize {
+        self.restriction.vertices().len()
+    }
+
     /// Moved out, so each part is freed once its factor stops reading it.
     pub(crate) fn into_parts(self) -> BlockParts<T, I> {
         (

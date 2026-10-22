@@ -4,7 +4,7 @@ mod csr;
 use std::hint::black_box;
 use std::time::Instant;
 
-use approx_chol::Config;
+use approx_chol::{Config, ScalingPolicy};
 use csr::{build, OwnedCsr};
 
 const N: usize = 160_000;
@@ -32,8 +32,8 @@ fn main() {
         black_box(&factor);
     }
 
-    // Whole `Config` so a retuned bench never compares against a stale reference.
-    let config = format!("{config:?}").replace(' ', "");
+    // Whole `Config` and `build`'s policy, so a retuned bench never compares against a stale reference.
+    let config = format!("{config:?}/{:?}", ScalingPolicy::default()).replace(' ', "");
     println!("WALLCLOCK_WORKLOAD=banded/n={N}/half={HALF_BANDWIDTH}/runs={RUNS}/f64/{config}");
     println!("WALLCLOCK_BEST_NS={best}");
 }

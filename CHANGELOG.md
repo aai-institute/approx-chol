@@ -9,8 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (breaking)
 
-- `Config` gains `complement: SchurMode` and `scaling: ScalingPolicy`. ([#182])
-- A `Config` serialized by 0.6.0 reads back only from a self-describing format such as JSON. ([#182])
+- `Config` gains `complement: SchurMode`. ([#182])
+- `factorize_with` takes a `ScalingPolicy` after its `Config`. ([#267])
+- A `Config` serialized by 0.6.0 reads back from JSON; one serialized to postcard decodes without error, its `on_failure` read as `complement`. ([#182], [#267])
 - `Backend::ExactBelow` has no `on_failure`; `ExactFailure`, `Fallback`, `DenseFailure`, `UnusablePivot` and `Factor::fallbacks` are removed, as the exact arm never fails a pivot. ([#182])
 - `Error` is `InvalidCsr(CsrError)` or `Reduce(ReduceError)`; a value defect is `CsrError::{NotSymmetric, BelowDiagonal, OutOfRange}`, naming its row. ([#182])
 - `CsrRef::new`, `CsrRef::to_owned_u32`, `OwnedCsr::try_from_usize` and `CsrRef`'s `sprs`/`faer` conversions return `CsrError`, not `Error`.
@@ -32,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `Backend::ExactBelow { max_dim }` bounds a block's dimension, not its solved variables: a floating block of `max_dim + 1` vertices factors approximately. ([#182])
-- `factorize` admits symmetric generalized diagonally dominant input: positive off-diagonals fold by a ±1 scaling or factor on a double cover, and a block short of dominance is scaled under `Config::scaling`. ([#183])
+- `factorize` admits symmetric generalized diagonally dominant input: positive off-diagonals fold by a ±1 scaling or factor on a double cover, and a block short of dominance is scaled under `factorize_with`'s `ScalingPolicy`. ([#183])
 - Python `Factor.solve`, `solve_into`, `matvec` and `rmatvec` take any 1-D integer or float array-like, and `matvec`/`rmatvec` scipy's `(n, 1)` column. ([#224])
 
 ### Added
@@ -44,14 +45,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A factor of more than `(u32::MAX - 1) / 2` vertices stores `u64` indices. ([#182])
 - Python `factorize` warns when a block's deficit is clamped or its scaling does not settle. ([#181])
 - Python `factorize_raw` takes arrays of any integer index dtype. ([#181])
-- Python `Factor.workspace` returns a `Workspace`, which `Factor.solve_into` reuses as its scratch. ([#255])
+- Python `Factor.workspace` returns a `Workspace`, which `Factor.solve_into` reuses across calls. ([#255])
+- `Sgdd`: `factorize_with`'s two steps, `Sgdd::reduce` an `Input`, then `Sgdd::factor` it. ([#267])
 
 ### Fixed
 
 - Solves sum each block's right-hand side with compensation. ([#147])
 - An entry below `MIN_POSITIVE / EPSILON` in magnitude is rejected. ([#163])
 - A grounded block whose weights span past `1/ε` ends its approximate elimination at the ground; it could solve to ±inf. ([#228])
-- Python `factorize`, `factorize_raw`, `Factor.solve` (so `matvec`/`rmatvec`) and `Factor.solve_into` release the GIL for a matrix of more than 32768 stored entries. ([#255])
+- Python `factorize`, `factorize_raw`, `Factor.solve` (so `matvec`/`rmatvec`) and `Factor.solve_into` release the GIL for a matrix of more than 32768 stored entries, working only on their own copies meanwhile. ([#255])
 - `Factor<f32>` keeps a high-degree pivot's `1/d` and fill weights; they drifted by `~mε` at degree `m`, up to a negative pivot. ([#275])
 - AC2's degree queue takes memory linear in the input for any `split_merge`. ([#277])
 
@@ -259,5 +261,6 @@ for graph Laplacians in Rust with Python bindings.
 [#148]: https://github.com/aai-institute/approx-chol/issues/148
 [#228]: https://github.com/aai-institute/approx-chol/pull/228
 [#255]: https://github.com/aai-institute/approx-chol/issues/255
+[#267]: https://github.com/aai-institute/approx-chol/issues/267
 [#275]: https://github.com/aai-institute/approx-chol/issues/275
 [#277]: https://github.com/aai-institute/approx-chol/issues/277

@@ -17,7 +17,7 @@ pub use config::{Backend, Config, InnerParallelism, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
 
-use crate::sgdd::{Balance, IrreducibleBlock, Restriction, Selection, Sgdd, Summands};
+use crate::sgdd::{Balance, IrreducibleBlock, Reduced, Restriction, Selection, Summands};
 use crate::storage::OffDiagonal;
 use crate::ScalingReport;
 use crate::{Index, Real};
@@ -92,30 +92,30 @@ pub struct Factor<T = f64> {
 }
 
 impl<T: Real> Factor<T> {
-    /// Factors every irreducible block of `sgdd` in parallel.
+    /// Factors every irreducible block of `summands` in parallel.
     pub(crate) fn build<I: Index>(
-        sgdd: Sgdd<T, I>,
+        summands: Reduced<T, I>,
         config: &Config,
         store: fn(Block<T, I>) -> Storage<T>,
     ) -> Self {
         match config.split_merge.and_then(Multi::split) {
-            None => Self::build_with(sgdd, config, store, Single),
-            Some(split) => Self::build_with(sgdd, config, store, split),
+            None => Self::build_with(summands, config, store, Single),
+            Some(split) => Self::build_with(summands, config, store, split),
         }
     }
 
     fn build_with<I: Index, C: Copies>(
-        sgdd: Sgdd<T, I>,
+        summands: Reduced<T, I>,
         config: &Config,
         store: fn(Block<T, I>) -> Storage<T>,
         split: C,
     ) -> Self {
-        let n = sgdd.n();
+        let n = summands.dimension();
         let Summands {
             blocks: coupled,
             lone,
             dead,
-        } = sgdd.into_summands();
+        } = summands;
         let mut blocks = Vec::with_capacity(coupled.len() + lone.len());
         let build = |reused: &mut _, block| BlockFactor(store(Block::build(block, config, reused)));
         let elimination = || CliqueTreeElimination::new(split);
@@ -601,8 +601,8 @@ mod tests {
     use crate::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
     use crate::ScalingPolicy;
 
-    fn only_block(sgdd: Sgdd, config: &Config) -> Block<f64, u32> {
-        let mut blocks = Factor::build(sgdd, config, Storage::U32).into_blocks();
+    fn only_block(summands: Reduced<f64, u32>, config: &Config) -> Block<f64, u32> {
+        let mut blocks = Factor::build(summands, config, Storage::U32).into_blocks();
         assert_eq!(blocks.len(), 1);
         match blocks.pop().expect("one block").0 {
             Storage::U32(block) => block,
@@ -615,8 +615,8 @@ mod tests {
     fn csr_block(row_ptrs: &[u32], columns: &[u32], values: &[f64]) -> Block<f64, u32> {
         let n = (row_ptrs.len() - 1) as u32;
         let csr = CsrRef::new(row_ptrs, columns, values, n).expect("valid csr");
-        let sgdd = Sgdd::reduce(csr.into(), ScalingPolicy::default()).expect("reduces");
-        only_block(sgdd, &Config::default())
+        let summands = Reduced::reduce(csr.into(), ScalingPolicy::default()).expect("reduces");
+        only_block(summands, &Config::default())
     }
 
     fn grounded_block() -> Block<f64, u32> {
@@ -640,8 +640,8 @@ mod tests {
             FactorWidth1::new(2, &[0u32, 1, 0, 1], None).expect("valid columns"),
         )
         .expect("valid gram");
-        let sgdd = Sgdd::reduce(gram.into(), ScalingPolicy::default()).expect("reduces");
-        let block = only_block(sgdd, &Config::default());
+        let summands = Reduced::reduce(gram.into(), ScalingPolicy::default()).expect("reduces");
+        let block = only_block(summands, &Config::default());
         assert!(block.elimination.is_some());
         block
     }
@@ -717,12 +717,12 @@ mod storage {
         ];
         for config in configs {
             let narrow = Factor::build(
-                Sgdd::reduce(input, policy).expect("reduces"),
+                Reduced::reduce(input, policy).expect("reduces"),
                 &config,
                 Storage::U32,
             );
             let wide = Factor::build(
-                Sgdd::reduce(input, policy).expect("reduces"),
+                Reduced::reduce(input, policy).expect("reduces"),
                 &config,
                 Storage::U64,
             );
