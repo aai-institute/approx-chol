@@ -1,7 +1,7 @@
 use super::dense::dense;
 use super::gram::{dense_csr, matrix};
 use approx_chol::input::{CsrRef, FactorWidth2, Laplacian, Sddm};
-use approx_chol::{factorize, factorize_with, Factor};
+use approx_chol::{factorize, factorize_with, Factor, ScalingPolicy};
 
 fn grounded(factor: &Factor) -> bool {
     factor.blocks().iter().all(|block| !block.floats())
@@ -126,7 +126,7 @@ fn apply(a: &[Vec<f64>], x: &[f64]) -> Vec<f64> {
 fn backward_error(a: &[Vec<f64>], rhs: &[f64]) -> f64 {
     let (ptrs, columns, values) = dense_csr(a);
     let csr = CsrRef::new(&ptrs, &columns, &values, a.len() as u32).unwrap();
-    let factor: Factor = factorize_with(csr, dense()).unwrap();
+    let factor: Factor = factorize_with(csr, dense(), ScalingPolicy::default()).unwrap();
     assert!(!factor.blocks()[0].floats());
     let x = factor.solve(rhs).unwrap();
     let residual = (apply(a, &x).into_iter().zip(rhs)).map(|(r, b)| (r - b).abs());

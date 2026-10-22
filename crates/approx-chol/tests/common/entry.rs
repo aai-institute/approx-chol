@@ -1,7 +1,7 @@
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
 };
-use approx_chol::{factorize_with, Config, Factor, Real};
+use approx_chol::{factorize_with, Config, Factor, Real, ScalingPolicy};
 use num_traits::{NumCast, PrimInt};
 
 use crate::graph::Graph;
@@ -181,12 +181,12 @@ impl Entry {
                     false => {
                         let csr =
                             CsrRef::new(&ptrs, &columns, &values, n as u32).expect("valid CSR");
-                        factorize_with(csr, config)
+                        factorize_with(csr, config, ScalingPolicy::default())
                     }
                     true => {
                         let csr = UpperCsrRef::new(&ptrs, &columns, &values, n as u32)
                             .expect("valid CSR");
-                        factorize_with(csr, config)
+                        factorize_with(csr, config, ScalingPolicy::default())
                     }
                 }
                 .unwrap_or_else(|error| rejected(&error))
@@ -199,7 +199,8 @@ impl Entry {
                     y.push(cast(edge.sign() * root));
                 }
                 let v = FactorWidth2::new(n, (&a, &x), (&b, &y)).expect("valid factor");
-                factorize_with(v, config).unwrap_or_else(|error| rejected(&error))
+                factorize_with(v, config, ScalingPolicy::default())
+                    .unwrap_or_else(|error| rejected(&error))
             }
             Entry::BipartiteFactorWidth2 => {
                 let n_right = n - n_left;
@@ -227,7 +228,8 @@ impl Entry {
                     &s_t,
                 )
                 .expect("valid bipartite Gram");
-                factorize_with(gram, config).unwrap_or_else(|error| rejected(&error))
+                factorize_with(gram, config, ScalingPolicy::default())
+                    .unwrap_or_else(|error| rejected(&error))
             }
             Entry::Laplacian | Entry::Sddm => {
                 let weights: Vec<T> = graph.edges.iter().map(|edge| cast(edge.weight)).collect();
@@ -235,9 +237,13 @@ impl Entry {
                 match self {
                     Entry::Sddm => {
                         let ground: Vec<T> = cast_all(&graph.ground);
-                        factorize_with(Sddm::new(view, &ground).expect("valid surplus"), config)
+                        factorize_with(
+                            Sddm::new(view, &ground).expect("valid surplus"),
+                            config,
+                            ScalingPolicy::default(),
+                        )
                     }
-                    _ => factorize_with(view, config),
+                    _ => factorize_with(view, config, ScalingPolicy::default()),
                 }
                 .unwrap_or_else(|error| rejected(&error))
             }

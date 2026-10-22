@@ -7,10 +7,10 @@ use crate::input::{Column, FactorWidth2};
 use crate::sgdd::block::{Balance, Grounding, IrreducibleBlock, ReduceError};
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components, Summands};
 use crate::sgdd::scaling::{self, ScalingPolicy};
-use crate::sgdd::Sgdd;
+use crate::sgdd::Reduced;
 use crate::{narrow, widen, Index, Real};
 
-impl<T: Real, I: Index> Sgdd<T, I> {
+impl<T: Real, I: Index> Reduced<T, I> {
     /// `V` with values: scaled by its null vectors on demand, folded blocks dropping their rows for one pass over `V` that decides floating.
     pub(super) fn from_values<J: PrimInt, S: AdjacencyLayout>(
         cells: S,
@@ -48,10 +48,11 @@ impl<T: Real, I: Index> Sgdd<T, I> {
         let mut blocks = ground_or_float(v, folded)?;
         blocks.extend(frustrated);
         let summands = Summands { blocks, lone, dead };
-        Ok(Sgdd::new(Components {
+        Ok(Components {
             partition,
             summands,
-        }))
+        }
+        .into_reduced())
     }
 }
 

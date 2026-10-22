@@ -1,7 +1,7 @@
 //! Factorize a 10×10 grid Laplacian with AC and AC2, and use each to precondition CG.
 
 use approx_chol::input::Laplacian;
-use approx_chol::{factorize_with, Config, Factor};
+use approx_chol::{factorize_with, Config, Factor, ScalingPolicy};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grid = Grid::new(10, 10);
@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..Config::default()
     };
     for (name, config) in [("AC", Config::default()), ("AC2 (k=2)", ac2)] {
-        let factor = factorize_with(laplacian, config)?;
+        let factor = factorize_with(laplacian, config, ScalingPolicy::default())?;
         let (x, iterations) = grid.pcg(&factor, &b, 1e-10);
         let mean = x.iter().sum::<f64>() / grid.n as f64;
         let blocks = factor.blocks().len();

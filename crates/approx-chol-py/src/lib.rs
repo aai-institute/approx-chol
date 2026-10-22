@@ -1,4 +1,6 @@
-use approx_chol::{factorize_with, Backend, Config, CsrRef, Factor, ScalingReport, SolveError};
+use approx_chol::{
+    factorize_with, Backend, Config, CsrRef, Factor, ScalingPolicy, ScalingReport, SolveError,
+};
 use num_traits::PrimInt;
 use numpy::{
     BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyReadonlyArray1,
@@ -455,7 +457,7 @@ impl CsrArrays<'_> {
         let (py, n, entries) = (self.np.py(), self.n as u32, StoredEntries(data.len()));
         let inner = entries.detach(py, || {
             let csr = CsrRef::new(indptr, indices, data, n).map_err(|e| error_to_py(&e))?;
-            factorize_with(csr, config).map_err(|e| error_to_py(&e))
+            factorize_with(csr, config, ScalingPolicy::default()).map_err(|e| error_to_py(&e))
         })?;
         warn_on_scaling(py, &inner)?;
         Ok(PyFactor { inner, entries })

@@ -17,32 +17,25 @@ pub use scaling::{ScalingPolicy, ScalingReport};
 use crate::{in_range, Index, Real};
 use decomposition::Components;
 
-/// `A` as its reduced summands; built only from extraction, so they cover `A` once.
-#[derive(Clone, Debug)]
-pub(crate) struct Sgdd<T = f64, I = u32> {
-    n: usize,
-    summands: Summands<IrreducibleBlock<T, I>, I, T>,
+/// `A`'s reduced summands; built only from extraction, so they cover `A` once.
+pub(crate) type Reduced<T, I> = Summands<IrreducibleBlock<T, I>, I, T>;
+
+impl<T: Real, I: Index> Reduced<T, I> {
+    /// Dimension of `A`, which the summands cover once.
+    pub(crate) fn dimension(&self) -> usize {
+        let coupled: usize = self.blocks.iter().map(IrreducibleBlock::vertex_count).sum();
+        coupled + self.lone.len() + self.dead.len()
+    }
 }
 
-impl<T: Real, I: Index> Sgdd<T, I> {
-    fn new(components: Components<IrreducibleBlock<T, I>, I, T>) -> Self {
+impl<T: Real, I: Index> Components<IrreducibleBlock<T, I>, I, T> {
+    fn into_reduced(self) -> Reduced<T, I> {
         let Components {
             partition,
             summands,
-        } = components;
-        Self {
-            n: partition.n(),
-            summands,
-        }
-    }
-
-    /// Dimension of `A`.
-    pub(crate) fn n(&self) -> usize {
-        self.n
-    }
-
-    pub(crate) fn into_summands(self) -> Summands<IrreducibleBlock<T, I>, I, T> {
-        self.summands
+        } = self;
+        debug_assert_eq!(partition.n(), summands.dimension(), "summands cover A once");
+        summands
     }
 }
 

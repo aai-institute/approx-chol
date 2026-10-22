@@ -6,7 +6,7 @@ mod graph;
 mod residual;
 
 use approx_chol::input::Laplacian;
-use approx_chol::{factorize_with, Backend, Config, Factor, OwnedCsr};
+use approx_chol::{factorize_with, Backend, Config, Factor, OwnedCsr, ScalingPolicy};
 use dense::dense;
 use graph::{Edge, Graph};
 
@@ -45,7 +45,7 @@ fn assert_componentwise(graph: &Graph, factor: &Factor, x_true: &[f64]) {
 fn csr_factor(graph: &Graph, config: Config) -> Factor {
     let (ptrs, cols, vals) = graph.csr(false);
     let csr = OwnedCsr::<f64, u32>::try_from_usize(&ptrs, &cols, &vals, graph.n).unwrap();
-    factorize_with(csr.as_csr_ref(), config).unwrap()
+    factorize_with(csr.as_csr_ref(), config, ScalingPolicy::default()).unwrap()
 }
 
 /// Heavy-row rounding reaches the last-eliminated weak pendant unequally on the cover's two sheets.
@@ -92,7 +92,7 @@ fn floating_laplacian_solves_with_a_weakly_coupled_last_vertex() {
     };
     for config in [dense(), approximate] {
         let laplacian = Laplacian::weighted(graph.n, &u, &v, &weights).unwrap();
-        let factor = factorize_with(laplacian, config).unwrap();
+        let factor = factorize_with(laplacian, config, ScalingPolicy::default()).unwrap();
         assert_componentwise(&graph, &factor, &x_true);
     }
 }

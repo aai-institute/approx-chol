@@ -87,7 +87,7 @@ pub struct Build {
 }
 
 impl Build {
-    pub fn config(&self, scaling: ScalingPolicy) -> Config {
+    pub fn config(&self) -> Config {
         let complement = (self.complement).map_or(SchurMode::Exact, |k| SchurMode::Approximate {
             split_merge: Some(k.into()),
         });
@@ -98,7 +98,6 @@ impl Build {
                 max_dim: self.dense_up_to.into(),
             },
             complement,
-            scaling,
         }
     }
 }
@@ -127,23 +126,23 @@ impl<T: Real> Case<T> {
     pub fn factor(&self) -> Result<Factor<T>, Box<dyn Error>> {
         let policy = ScalingPolicy::new(self.tolerance, self.max_iterations.into())
             .ok_or("tolerance outside [0, 1)")?;
-        let config = self.build.config(policy);
+        let config = self.build.config();
         Ok(match &self.view {
             View::Csr(r) => {
                 let csr = CsrRef::new(&r.row_ptrs, &r.columns, &r.values, r.n.into())?;
-                factorize_with(csr, config)?
+                factorize_with(csr, config, policy)?
             }
             View::UpperCsr(r) => {
                 let csr = UpperCsrRef::new(&r.row_ptrs, &r.columns, &r.values, r.n.into())?;
-                factorize_with(csr, config)?
+                factorize_with(csr, config, policy)?
             }
-            View::Laplacian(edges) => factorize_with(edges.laplacian()?, config)?,
+            View::Laplacian(edges) => factorize_with(edges.laplacian()?, config, policy)?,
             View::Sddm(edges, surplus) => {
-                factorize_with(Sddm::new(edges.laplacian()?, surplus)?, config)?
+                factorize_with(Sddm::new(edges.laplacian()?, surplus)?, config, policy)?
             }
             View::FactorWidth2 { n, a, b, x, y } => {
                 let gram = FactorWidth2::new((*n).into(), (a, x), (b, y))?;
-                factorize_with(gram, config)?
+                factorize_with(gram, config, policy)?
             }
             View::BipartiteFactorWidth2 { left, right, scale } => {
                 let (left, right) = (left.factor()?, right.factor()?);
@@ -151,7 +150,7 @@ impl<T: Real> Case<T> {
                     Some(s) => BipartiteFactorWidth2::scaled(left, right, s)?,
                     None => BipartiteFactorWidth2::new(left, right)?,
                 };
-                factorize_with(gram, config)?
+                factorize_with(gram, config, policy)?
             }
         })
     }

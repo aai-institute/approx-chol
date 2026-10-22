@@ -60,10 +60,10 @@ pub use factor::{
     Backend, BlockFactor, Config, Factor, InnerParallelism, SchurMode, SolveError, Vertices,
 };
 pub use input::{CsrError, CsrRef, IndexKind, Input, OwnedCsr};
-use sgdd::Sgdd;
+use sgdd::Reduced;
 pub use sgdd::{ReduceError, ScalingPolicy, ScalingReport};
 
-/// Factorizes any [`Input`] with [`Config::default`].
+/// Factorizes any [`Input`] with [`Config::default`] and [`ScalingPolicy::default`].
 pub fn factorize<'a, T, I, M>(input: M) -> Result<Factor<T>, Error>
 where
     T: Real,
@@ -71,24 +71,59 @@ where
     M: TryInto<Input<'a, T, I>>,
     <M as TryInto<Input<'a, T, I>>>::Error: Into<Error>,
 {
-    factorize_with(input, Config::default())
+    factorize_with(input, Config::default(), ScalingPolicy::default())
 }
 
-/// Factorizes any [`Input`]: reduces it to its irreducible blocks, then factors each in parallel.
-pub fn factorize_with<'a, T, I, M>(input: M, config: Config) -> Result<Factor<T>, Error>
+/// Factorizes any [`Input`]: [`Sgdd::reduce`] under `scaling`, then [`Sgdd::factor`] under `config`.
+pub fn factorize_with<'a, T, I, M>(
+    input: M,
+    config: Config,
+    scaling: ScalingPolicy,
+) -> Result<Factor<T>, Error>
 where
     T: Real,
     I: PrimInt + Sync + 'a,
     M: TryInto<Input<'a, T, I>>,
     <M as TryInto<Input<'a, T, I>>>::Error: Into<Error>,
 {
-    let input = input.try_into().map_err(Into::into)?;
-    // A cover's two sheets and its ground are the most slots any block indexes.
-    let slots = input.n().saturating_mul(2).saturating_add(1);
-    Ok(match u32::try_from(slots).is_ok() {
-        true => Factor::build(Sgdd::reduce(input, config.scaling)?, &config, Storage::U32),
-        false => Factor::build(Sgdd::reduce(input, config.scaling)?, &config, Storage::U64),
-    })
+    Ok(Sgdd::reduce(input, scaling)?.factor(&config))
+}
+
+/// Built only by [`Sgdd::reduce`]: `A` in symmetric generalized diagonally dominant form, each irreducible block scaled to dominance.
+#[derive(Clone, Debug)]
+pub struct Sgdd<T = f64>(Indexed<T>);
+
+/// The reduction in the narrowest index its cover's `2n + 1` slots fit.
+#[derive(Clone, Debug)]
+enum Indexed<T> {
+    U32(Reduced<T, u32>),
+    U64(Reduced<T, u64>),
+}
+
+impl<T: Real> Sgdd<T> {
+    /// Reduces any [`Input`], scaling each block short of dominance under `scaling`; nothing after this reads `input`.
+    pub fn reduce<'a, I, M>(input: M, scaling: ScalingPolicy) -> Result<Self, Error>
+    where
+        I: PrimInt + Sync + 'a,
+        M: TryInto<Input<'a, T, I>>,
+        <M as TryInto<Input<'a, T, I>>>::Error: Into<Error>,
+    {
+        let input = input.try_into().map_err(Into::into)?;
+        // A cover's two sheets and its ground are the most slots any block indexes.
+        let slots = input.n().saturating_mul(2).saturating_add(1);
+        Ok(Self(match u32::try_from(slots).is_ok() {
+            true => Indexed::U32(Reduced::reduce(input, scaling)?),
+            false => Indexed::U64(Reduced::reduce(input, scaling)?),
+        }))
+    }
+
+    /// Factors each block in parallel; clone first to factor again under another `config`.
+    pub fn factor(self, config: &Config) -> Factor<T> {
+        match self.0 {
+            Indexed::U32(summands) => Factor::build(summands, config, Storage::U32),
+            Indexed::U64(summands) => Factor::build(summands, config, Storage::U64),
+        }
+    }
 }
 
 /// The scalar every stage computes in: `f32` or `f64`, each summed in `f64`, which holds it exactly.

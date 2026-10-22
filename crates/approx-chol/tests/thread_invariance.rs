@@ -1,5 +1,5 @@
 use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1};
-use approx_chol::{factorize_with, Config, InnerParallelism, SchurMode};
+use approx_chol::{factorize_with, Config, InnerParallelism, ScalingPolicy, SchurMode};
 
 const DEGREE: usize = 48;
 
@@ -46,7 +46,7 @@ fn solve_bits(g: &Gram, config: Config) -> Vec<u64> {
         FactorWidth1::new(g.n_right, &g.right, Some(&g.right_values)).unwrap(),
     )
     .unwrap();
-    let factor = factorize_with(gram, config).unwrap();
+    let factor = factorize_with(gram, config, ScalingPolicy::default()).unwrap();
     assert_eq!(factor.blocks().len(), GROUPS.len());
     assert!(
         factor.blocks().iter().any(|b| b.splittable_work() > 0),

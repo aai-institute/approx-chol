@@ -329,7 +329,7 @@ cases! {
 #[test]
 fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
     use approx_chol::input::CsrRef;
-    use approx_chol::{factorize_with, Backend};
+    use approx_chol::{factorize_with, Backend, ScalingPolicy};
     // A frustrated triangle, weakest edge 1e-80; the pair on (1, 2) cancels in f64 assembly, so `m`'s 2e-200 surplus is below the CSR's rounding.
     let (a, b) = ([0u32, 1, 0, 1, 1], [1u32, 2, 2, 2, 2]);
     let pos = [true, true, false, false, true];
@@ -356,7 +356,10 @@ fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
     let (ptrs, columns) = ([0u32, 3, 6, 9], [0u32, 1, 2, 0, 1, 2, 0, 1, 2]);
     for config in [Config::default(), exact] {
         let csr = CsrRef::new(&ptrs, &columns, &values, 3).unwrap();
-        let x = factorize_with(csr, config).unwrap().solve(&rhs).unwrap();
+        let x = factorize_with(csr, config, ScalingPolicy::default())
+            .unwrap()
+            .solve(&rhs)
+            .unwrap();
         let residual = (m.iter().zip(&rhs))
             .map(|(row, b)| (row.iter().zip(&x).map(|(m, x)| m * x).sum::<f64>() - b).abs())
             .fold(0.0, f64::max);
@@ -371,7 +374,7 @@ fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
 #[test]
 fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
     use approx_chol::input::{Laplacian, Sddm};
-    use approx_chol::{factorize_with, Backend};
+    use approx_chol::{factorize_with, Backend, ScalingPolicy};
     // Min-degree eliminates the ground first and leaves vertex 0 as the sink; `−Σb` then cancels to 1e24 over a 1e-290 pivot.
     let (a, b, w, ground) = ([0u32, 1], [1u32, 2], [1e-290, 1e30], [0.0, 1e40, 0.0]);
     let x = [1.0, 0.75, -0.5];
@@ -381,7 +384,12 @@ fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
         ..Config::default()
     };
     let path = Laplacian::weighted(3, &a, &b, &w).unwrap();
-    let factor = factorize_with(Sddm::new(path, &ground).unwrap(), config).unwrap();
+    let factor = factorize_with(
+        Sddm::new(path, &ground).unwrap(),
+        config,
+        ScalingPolicy::default(),
+    )
+    .unwrap();
     assert_close(
         "light sink",
         &factor.solve(&rhs).unwrap(),
@@ -393,7 +401,7 @@ fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
 #[test]
 fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
     use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1};
-    use approx_chol::{factorize_with, Backend};
+    use approx_chol::{factorize_with, Backend, ScalingPolicy};
     // Three left vertices on one right vertex, each by a cancelling pair: `S` is one grounded slot, so AC2 samples no edge.
     let (left, right) = ([0u32, 0, 1, 1, 2, 2], [0u32; 6]);
     let loadings = [1.0, -1.0, 1.0, -1.0, 1.0, -1.0];
@@ -414,7 +422,10 @@ fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
                 &scales,
             )
             .unwrap();
-            let solved = factorize_with(gram, config).unwrap().solve(&b).unwrap();
+            let solved = factorize_with(gram, config, ScalingPolicy::default())
+                .unwrap()
+                .solve(&b)
+                .unwrap();
             assert_close(&format!("{config:?}"), &solved, &x, 64.0 * f64::EPSILON);
         }
     }

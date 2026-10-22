@@ -31,7 +31,6 @@ impl Sparse {
             split_merge,
             backend: Backend::Approximate,
             complement,
-            ..Config::default()
         }
     }
 }

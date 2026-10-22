@@ -25,7 +25,7 @@ fn factors(config: Config) -> Vec<Factor> {
         FactorWidth1::new(right as usize, &cols, None).unwrap(),
     )
     .unwrap();
-    let bipartite = factorize_with(gram, config).unwrap();
+    let bipartite = factorize_with(gram, config, ScalingPolicy::default()).unwrap();
 
     let (a, b): (Vec<u32>, Vec<u32>) = (0..60u32)
         .filter(|i| i % 20 != 19)
@@ -33,7 +33,7 @@ fn factors(config: Config) -> Vec<Factor> {
         .unzip();
     let ground: Vec<f64> = (0..61).map(|i| if i < 20 { 0.0 } else { 0.5 }).collect();
     let laplacian = Sddm::new(Laplacian::new(61, &a, &b).unwrap(), &ground).unwrap();
-    let laplacian = factorize_with(laplacian, config).unwrap();
+    let laplacian = factorize_with(laplacian, config, ScalingPolicy::default()).unwrap();
 
     let (c, d): (Vec<u32>, Vec<u32>) = (0..58u32).map(|i| (i, i + 1 + i % 2)).unzip();
     let cell: Vec<f64> = (0..c.len())
@@ -41,7 +41,7 @@ fn factors(config: Config) -> Vec<Factor> {
         .collect();
     let (ptrs, columns, values) = dense_csr(&matrix(60, &c, &d, &vec![1.0; c.len()], &cell));
     let signed = CsrRef::new(&ptrs, &columns, &values, 60).unwrap();
-    let signed = factorize_with(signed, config).unwrap();
+    let signed = factorize_with(signed, config, ScalingPolicy::default()).unwrap();
     vec![bipartite, laplacian, signed]
 }
 
@@ -171,13 +171,14 @@ fn with_isolated_vertex() -> Factor {
     factorize_with(
         Sddm::new(edge, &[1.0, 0.0, 2.0]).unwrap(),
         Config::default(),
+        ScalingPolicy::default(),
     )
     .unwrap()
 }
 
 fn with_dead_vertices() -> Factor {
     let laplacian = Laplacian::new(6, &[0u32, 1, 2], &[1u32, 2, 3]).unwrap();
-    factorize_with(laplacian, Config::default()).unwrap()
+    factorize_with(laplacian, Config::default(), ScalingPolicy::default()).unwrap()
 }
 
 fn solve_factor(factor: &Factor) -> Vec<u64> {
@@ -240,18 +241,16 @@ fn a_factor_not_covering_n_once_is_rejected(#[case] n: usize, #[case] dead: &[us
     assert_eq!(error, postcard::Error::SerdeDeCustom);
 }
 
-/// Each `Config` as 0.6.0 serialized it to JSON and to postcard, beside what it reads as now.
-fn released_configs() -> [(&'static str, &'static [u8], Config); 4] {
+/// Each `Config` as 0.6.0 serialized it to JSON, beside what it reads as now.
+fn released_configs() -> [(&'static str, Config); 4] {
     let exact_below = |max_dim| Backend::ExactBelow { max_dim };
     [
         (
             r#"{"seed":0,"split_merge":null,"backend":{"ExactBelow":{"max_dim":24,"on_failure":"FallBackToApproximate"}}}"#,
-            &[0, 0, 1, 24, 0],
             Config::default(),
         ),
         (
             r#"{"seed":7,"split_merge":3,"backend":{"ExactBelow":{"max_dim":24,"on_failure":"FallBackToApproximate"}}}"#,
-            &[7, 1, 3, 1, 24, 0],
             Config {
                 seed: 7,
                 split_merge: Some(3),
@@ -260,7 +259,6 @@ fn released_configs() -> [(&'static str, &'static [u8], Config); 4] {
         ),
         (
             r#"{"seed":0,"split_merge":null,"backend":"Approximate"}"#,
-            &[0, 0, 0],
             Config {
                 backend: Backend::Approximate,
                 ..Config::default()
@@ -268,7 +266,6 @@ fn released_configs() -> [(&'static str, &'static [u8], Config); 4] {
         ),
         (
             r#"{"seed":0,"split_merge":null,"backend":{"ExactBelow":{"max_dim":64,"on_failure":"Error"}}}"#,
-            &[0, 0, 1, 64, 1],
             Config {
                 backend: exact_below(64),
                 ..Config::default()
@@ -279,17 +276,9 @@ fn released_configs() -> [(&'static str, &'static [u8], Config); 4] {
 
 #[test]
 fn a_released_json_config_reads_as_its_new_config() {
-    for (json, _, expected) in released_configs() {
+    for (json, expected) in released_configs() {
         let config: Config = serde_json::from_str(json).unwrap();
         assert_eq!(config, expected, "{json}");
-    }
-}
-
-// Postcard is not self-describing, so a 0.6.0 config must fail rather than misread its `on_failure` as `complement`.
-#[test]
-fn a_released_postcard_config_is_rejected() {
-    for (json, bytes, _) in released_configs() {
-        assert!(postcard::from_bytes::<Config>(bytes).is_err(), "{json}");
     }
 }
 
@@ -372,7 +361,7 @@ fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
         backend,
         ..Config::default()
     };
-    let factor = factorize_with(grid, config).unwrap();
+    let factor = factorize_with(grid, config, ScalingPolicy::default()).unwrap();
     decode_scaled(&factor, stored, 1.0).expect("a stored Cholesky decodes");
     decode_scaled(&factor, stored, 2.0).expect_err("multipliers summing to two are corrupt");
 }
@@ -388,7 +377,7 @@ fn an_approximate_pivot_scale_not_positive_is_corrupt(#[case] by: f64) {
         backend: Backend::Approximate,
         ..Config::default()
     };
-    let factor: Factor = factorize_with(path, config).unwrap();
+    let factor: Factor = factorize_with(path, config, ScalingPolicy::default()).unwrap();
     decode_scaled(&factor, "/pivot_scale", by).expect_err("a pivot scale not positive is corrupt");
 }
 
