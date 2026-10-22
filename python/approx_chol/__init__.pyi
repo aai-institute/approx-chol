@@ -37,9 +37,9 @@ class Config:
     """Configuration for approximate Cholesky factorization.
 
     ``seed`` keys every sampler stream. ``split`` is the AC2 multi-edge
-    multiplicity. Splitting an edge fewer than twice is standard AC, so
-    ``None``, ``0`` and ``1`` all select AC. ``backend`` picks which blocks
-    are factored exactly.
+    multiplicity ``k``, costing ``O(k)`` sampler draws per edge. Splitting an
+    edge fewer than twice is standard AC, so ``None``, ``0`` and ``1`` all
+    select AC. ``backend`` picks which blocks are factored exactly.
     An argument left out or ``None`` keeps the default, which the getters report.
     """
 

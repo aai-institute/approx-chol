@@ -42,9 +42,9 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeElimination<T, I, C> {
     ) -> (ApproximateCholesky<T, I>, usize) {
         self.graph.load(&sddm, self.split);
         drop(sddm);
-        let n = self.graph.n();
-        self.order.load(&self.graph, self.split, pin);
-        let mut steps = ApproximateCholesky::with_capacity(n, self.graph.edge_ends());
+        let (n, edge_ends) = (self.graph.n(), self.graph.edge_ends());
+        self.order.load(&self.graph, self.split, pin, edge_ends);
+        let mut steps = ApproximateCholesky::with_capacity(n, edge_ends);
         self.pivot_all(&mut draws, &mut steps);
         // Doubling past the estimate otherwise retains up to 2x the entries (+30% on grids).
         steps.neighbors.shrink_to_fit();

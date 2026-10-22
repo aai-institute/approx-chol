@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A grounded block whose weights span past `1/ε` ends its approximate elimination at the ground; it could solve to ±inf. ([#228])
 - Python `factorize`, `factorize_raw`, `Factor.solve` (so `matvec`/`rmatvec`) and `Factor.solve_into` release the GIL for a matrix of more than 32768 stored entries. ([#255])
 - `Factor<f32>` keeps a high-degree pivot's `1/d` and fill weights; they drifted by `~mε` at degree `m`, up to a negative pivot. ([#275])
+- AC2's degree queue takes memory linear in the input for any `split_merge`. ([#277])
 
 ## [0.6.0] - 2026-08-24
 
@@ -259,3 +260,4 @@ for graph Laplacians in Rust with Python bindings.
 [#228]: https://github.com/aai-institute/approx-chol/pull/228
 [#255]: https://github.com/aai-institute/approx-chol/issues/255
 [#275]: https://github.com/aai-institute/approx-chol/issues/275
+[#277]: https://github.com/aai-institute/approx-chol/issues/277
