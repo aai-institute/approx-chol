@@ -4,13 +4,11 @@
 use std::collections::BTreeSet;
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
+use approx_chol::FACTOR_FORMAT_VERSION as FORMAT_VERSION;
 use approx_chol::{factorize_with, Backend, BlockFactor, Config, Factor, InnerParallelism};
 use rstest::rstest;
 use serde::de::value::{Error, SeqDeserializer};
 use serde::Deserialize;
-
-/// The leading field this build writes; a bump points the reader at new fixture files.
-const FORMAT_VERSION: u32 = 0x4143_0009;
 
 /// One list declares each fixture, its file name and its rstest case, so none is kept in step by hand.
 macro_rules! fixtures {

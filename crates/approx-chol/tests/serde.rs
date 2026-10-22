@@ -1,10 +1,14 @@
 #![cfg(feature = "serde")]
 
+#[path = "common/gram.rs"]
+mod gram;
+
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Laplacian, Sddm};
 use approx_chol::{
     factorize_with, Backend, BlockFactor, Config, Factor, InnerParallelism, ScalingPolicy,
     SchurMode,
 };
+use gram::{dense_csr, matrix};
 use rstest::rstest;
 
 fn factors(config: Config) -> Vec<Factor> {
@@ -32,25 +36,10 @@ fn factors(config: Config) -> Vec<Factor> {
     let laplacian = factorize_with(laplacian, config).unwrap();
 
     let (c, d): (Vec<u32>, Vec<u32>) = (0..58u32).map(|i| (i, i + 1 + i % 2)).unzip();
-    let positive: Vec<bool> = (0..c.len()).map(|k| k % 3 == 0).collect();
-    let mut dense = vec![vec![0.0; 60]; 60];
-    for k in 0..c.len() {
-        let (i, j, cell) = (
-            c[k] as usize,
-            d[k] as usize,
-            if positive[k] { -1.0 } else { 1.0 },
-        );
-        (dense[i][i], dense[j][j], dense[i][j], dense[j][i]) =
-            (dense[i][i] + 1.0, dense[j][j] + 1.0, cell, cell);
-    }
-    let (mut ptrs, mut columns, mut values) = (vec![0u32], vec![], vec![]);
-    for row in &dense {
-        for (j, &x) in row.iter().enumerate().filter(|&(_, &x)| x != 0.0) {
-            columns.push(j as u32);
-            values.push(x);
-        }
-        ptrs.push(columns.len() as u32);
-    }
+    let cell: Vec<f64> = (0..c.len())
+        .map(|k| if k % 3 == 0 { -1.0 } else { 1.0 })
+        .collect();
+    let (ptrs, columns, values) = dense_csr(&matrix(60, &c, &d, &vec![1.0; c.len()], &cell));
     let signed = CsrRef::new(&ptrs, &columns, &values, 60).unwrap();
     let signed = factorize_with(signed, config).unwrap();
     vec![bipartite, laplacian, signed]

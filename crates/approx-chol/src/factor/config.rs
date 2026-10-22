@@ -6,8 +6,7 @@ use crate::ScalingPolicy;
 pub struct Config {
     /// Every sampler stream derives from this, keyed by block and star.
     pub seed: u64,
-    /// AC2 multi-edge multiplicity `k`. Splitting an edge fewer than twice is
-    /// standard AC, so `None`, `Some(0)` and `Some(1)` all select AC.
+    /// AC2 multi-edge multiplicity `k`; `None`, `Some(0)` and `Some(1)` select standard AC.
     pub split_merge: Option<u32>,
     /// Which factorization each block gets.
     #[cfg_attr(feature = "serde", serde(default))]

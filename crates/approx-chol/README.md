@@ -6,10 +6,6 @@ This crate implements AC and AC(k), porting key algorithmic ideas from [Laplacia
 
 AC(k) was introduced and analyzed by Gao, Kyng, and Spielman (2025), "AC(k): Robust Solution of Laplacian Equations by Randomized Approximate Cholesky Factorization" (SIAM Journal on Scientific Computing, November 2025, ISSN 1064-8275).
 
-Provides a robust Rust implementation of approximate Cholesky factorization,
-suitable as a preconditioner for iterative solvers on symmetric diagonally dominant
-(SDDM) linear systems.
-
 ## Install
 
 ```toml

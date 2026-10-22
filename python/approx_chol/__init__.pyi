@@ -69,10 +69,7 @@ class Factor:
 
     @property
     def n(self) -> int:
-        """Matrix dimension; a Gremban ground vertex stays internal.
-
-        Use this to size output buffers for :meth:`solve_into`.
-        """
+        """Matrix dimension, which sizes :meth:`solve_into`'s buffers."""
         ...
 
     @property
@@ -82,34 +79,20 @@ class Factor:
 
     @property
     def shape(self) -> tuple[int, int]:
-        """Preconditioner shape ``(n, n)`` reflecting the original matrix dimension.
-
-        Part of the scipy ``LinearOperator`` duck-type interface.
-        """
+        """Preconditioner shape ``(n, n)``."""
         ...
 
     @property
     def dtype(self) -> np.dtype[np.float64]:
-        """Numpy dtype of output arrays (``numpy.float64``).
-
-        Part of the scipy ``LinearOperator`` duck-type interface.
-        """
+        """Numpy dtype of output arrays (``numpy.float64``)."""
         ...
 
     def matvec(self, x: npt.ArrayLike) -> npt.NDArray[np.float64]:
-        """Apply the preconditioner (alias for :meth:`solve`).
-
-        Part of the scipy ``LinearOperator`` duck-type interface; ``x`` may be
-        an ``(n, 1)`` column.
-        """
+        """Alias for :meth:`solve`; ``x`` may be an ``(n, 1)`` column."""
         ...
 
     def rmatvec(self, x: npt.ArrayLike) -> npt.NDArray[np.float64]:
-        """Apply the preconditioner transpose (alias for :meth:`solve`; symmetric).
-
-        Part of the scipy ``LinearOperator`` duck-type interface; ``x`` may be
-        an ``(n, 1)`` column.
-        """
+        """Alias for :meth:`solve`, as the factor is symmetric; ``x`` may be an ``(n, 1)`` column."""
         ...
 
     def solve(self, b: npt.ArrayLike) -> npt.NDArray[np.float64]:

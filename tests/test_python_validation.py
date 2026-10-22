@@ -159,9 +159,7 @@ def test_duck_typed_factorize_validates_indices_and_dimension():
 
 
 def test_each_column_rejects_the_dtype_kinds_it_cannot_carry():
-    # An index column casts to uint32 and a value column to float64, so a float
-    # index would truncate silently and a complex value would drop its imaginary
-    # part. Each names only the kinds it accepts, and both share the rank check.
+    # A float index would truncate silently and a complex value drop its imaginary part.
     row_ptrs, col_indices, values = _base_csr()
 
     float_index = MatrixLike(row_ptrs.astype(np.float64), col_indices, values, (2, 2))
