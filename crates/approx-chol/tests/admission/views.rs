@@ -336,3 +336,35 @@ fn a_bipartite_incidence_checks_each_end_against_its_own_part(
         .err();
     assert_eq!(found, expected);
 }
+
+/// Every row is in range but the ground's `Σs ≈ 101·MAX/5`; interleaved, no running sum overflows.
+#[rstest]
+#[case::blocked(|c| c)]
+#[case::blocked_spokes_reversed(|c| c / 100 * 100 + 99 - c % 100)]
+#[case::interleaved_control(|c| c % 3 * 100 + c / 3)]
+fn a_gram_whose_surplus_sum_overflows_is_rejected_not_a_panic(#[case] order: fn(usize) -> usize) {
+    let (s, k) = ((f64::MAX / 1000.0).sqrt(), 10.0);
+    let columns = (0..300).map(order);
+    let b: Vec<u32> = columns.clone().map(|c| (c % 100 + 1) as u32).collect();
+    let a = vec![0u32; b.len()];
+    let x: Vec<f64> = columns
+        .clone()
+        .map(|c| if c < 200 { s } else { 1.0 })
+        .collect();
+    let y: Vec<f64> = columns
+        .map(|c| match c {
+            0..100 => -k * s,
+            100..200 => k * s,
+            _ => 1.0,
+        })
+        .collect();
+    let gram = FactorWidth2::new(101, (&a, &x), (&b, &y)).unwrap();
+    let outcome = std::panic::catch_unwind(|| factorize(gram).map(|_| ()));
+    let error = outcome
+        .expect("no panic")
+        .expect_err("the ground's Σs ≈ 101·MAX/5");
+    assert!(matches!(
+        error,
+        Error::Reduce(ReduceError::OutOfRange { .. })
+    ));
+}
