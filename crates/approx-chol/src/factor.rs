@@ -396,12 +396,19 @@ impl<T: Real, I: Index> Block<T, I> {
 
     /// Solves the block's restriction of `x` in place, through `scratch` of [`global_scratch_len`](Self::global_scratch_len).
     fn solve_global(&self, x: &mut [T], scratch: &mut [T]) {
-        let solve = |local: &mut [T], rest: &mut [T]| {
-            self.solve_unchecked(local, rest, InnerParallelism::Allow)
-        };
-        self.vertices().on_local(x, scratch, solve);
+        self.vertices().on_local(
+            x,
+            scratch,
+            // on_local's two arms would otherwise each call it: ~19 instructions per block.
+            #[inline(always)]
+            |local: &mut [T], rest: &mut [T]| {
+                self.solve_unchecked(local, rest, InnerParallelism::Allow)
+            },
+        );
     }
 
+    // Two call sites through the closure plus solve_local's: by cost alone it stays a call.
+    #[inline(always)]
     fn solve_unchecked(&self, x: &mut [T], scratch: &mut [T], inner: InnerParallelism) {
         let singular = self.cholesky.singular();
         self.restriction.restrict(x, singular);
