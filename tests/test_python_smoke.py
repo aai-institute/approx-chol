@@ -29,6 +29,7 @@ def test_package_surface_and_basic_factorize_raw_roundtrip():
         "Backend",
         "Config",
         "Factor",
+        "ScalingPolicy",
         "Workspace",
         "factorize",
         "factorize_raw",
@@ -55,6 +56,40 @@ def test_config_defaults_and_getters():
     )
     assert (config.seed, config.split) == (7, 3)
     assert config.backend == approx_chol.Backend.Approximate()
+
+
+def test_scaling_policy_defaults_getters_and_range():
+    default = approx_chol.ScalingPolicy()
+    assert (default.tolerance, default.max_iterations) == (1e-9, 2048)
+    policy = approx_chol.ScalingPolicy(tolerance=0.25, max_iterations=7)
+    assert (policy.tolerance, policy.max_iterations) == (0.25, 7)
+    assert policy == approx_chol.ScalingPolicy(0.25, 7) != default
+    with pytest.raises(ValueError, match=r"tolerance must be in \[0, 1\)"):
+        approx_chol.ScalingPolicy(tolerance=1.0)
+
+
+def _dld_path(n: int) -> sp.csr_matrix:
+    # D L D of a path, D within 1/2 of I: short of dominance until scaled.
+    d = 1.0 + ((7919 * np.arange(n)) % 1000) / 1000.0 - 0.5
+    lap = sp.diags(
+        [-np.ones(n - 1), np.r_[1.0, 2.0 * np.ones(n - 2), 1.0], -np.ones(n - 1)],
+        [-1, 0, 1],
+    )
+    return sp.csr_matrix(sp.diags(d) @ lap @ sp.diags(d))
+
+
+def test_factorize_and_factorize_raw_scale_under_the_given_policy():
+    path = _dld_path(10)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        approx_chol.factorize(path)
+    no_budget = approx_chol.ScalingPolicy(max_iterations=0)
+    with pytest.warns(RuntimeWarning, match="1 block\\(s\\) did not settle"):
+        approx_chol.factorize(path, scaling=no_budget)
+    with pytest.warns(RuntimeWarning, match="1 block\\(s\\) did not settle"):
+        approx_chol.factorize_raw(
+            path.indptr, path.indices, path.data, path.shape[0], scaling=no_budget
+        )
 
 
 def test_no_config_and_a_default_config_factor_alike():

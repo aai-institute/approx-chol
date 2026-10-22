@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Backend::ExactBelow { max_dim }` bounds a block's dimension, not its solved variables: a floating block of `max_dim + 1` vertices factors approximately. ([#182])
 - `factorize` admits symmetric generalized diagonally dominant input: positive off-diagonals fold by a ±1 scaling or factor on a double cover, and a block short of dominance is scaled under `factorize_with`'s `ScalingPolicy`. ([#183])
 - Python `Factor.solve`, `solve_into`, `matvec` and `rmatvec` take any 1-D integer or float array-like, and `matvec`/`rmatvec` scipy's `(n, 1)` column. ([#224])
+- Python `Factor.solve_into` accepts `out` overlapping `b`, so `solve_into(v, v)` solves in place. ([#300])
 
 ### Added
 
@@ -47,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python `factorize_raw` takes arrays of any integer index dtype. ([#181])
 - Python `Factor.workspace` returns a `Workspace`, which `Factor.solve_into` reuses across calls. ([#255])
 - `Sgdd`: `factorize_with`'s two steps, `Sgdd::reduce` an `Input`, then `Sgdd::factor` it. ([#267])
+- Python `ScalingPolicy`, which `factorize` and `factorize_raw` take as `scaling`. ([#301])
 
 ### Fixed
 
@@ -264,3 +266,5 @@ for graph Laplacians in Rust with Python bindings.
 [#267]: https://github.com/aai-institute/approx-chol/issues/267
 [#275]: https://github.com/aai-institute/approx-chol/issues/275
 [#277]: https://github.com/aai-institute/approx-chol/issues/277
+[#300]: https://github.com/aai-institute/approx-chol/issues/300
+[#301]: https://github.com/aai-institute/approx-chol/issues/301

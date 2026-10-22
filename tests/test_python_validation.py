@@ -179,7 +179,7 @@ def test_each_column_rejects_the_dtype_kinds_it_cannot_carry():
         approx_chol.factorize(two_dimensional)
 
 
-def test_solve_and_solve_into_raise_value_error_for_shape_and_overlap():
+def test_solve_and_solve_into_raise_value_error_for_shape():
     row_ptrs, col_indices, values = _base_csr()
     factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
 
@@ -190,17 +190,20 @@ def test_solve_and_solve_into_raise_value_error_for_shape_and_overlap():
     with pytest.raises(ValueError, match="out length"):
         factor.solve_into(rhs, np.zeros(1))
 
-    with pytest.raises(ValueError, match="must not overlap"):
-        factor.solve_into(rhs, rhs)
 
-
-def test_solve_into_rejects_partially_overlapping_views():
+def test_solve_into_solves_in_place_and_into_an_overlapping_view():
     row_ptrs, col_indices, values = _base_csr()
     factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
-    base = np.zeros(3)
+    rhs = np.array([1.0, -1.0])
+    expected = factor.solve(rhs)
 
-    with pytest.raises(ValueError, match="must not overlap"):
-        factor.solve_into(base[:-1], base[1:])
+    in_place = rhs.copy()
+    factor.solve_into(in_place, in_place)
+    np.testing.assert_array_equal(in_place, expected)
+
+    base = np.array([1.0, -1.0, 0.0])
+    factor.solve_into(base[:-1], base[1:])
+    np.testing.assert_array_equal(base[1:], expected)
 
 
 def test_solve_takes_any_1d_array_like_as_the_stub_declares():

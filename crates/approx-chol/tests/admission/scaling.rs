@@ -208,3 +208,14 @@ fn a_wide_f32_gram_null_vector_scales_in_range() {
     let factor = factorize(gram).expect("admitted");
     assert!(factor.blocks()[0].floats());
 }
+
+#[test]
+fn a_policy_reports_what_it_was_built_from() {
+    let default = ScalingPolicy::default();
+    assert_eq!(
+        (default.tolerance(), default.max_iterations()),
+        (1e-9, 2048)
+    );
+    let policy = ScalingPolicy::new(0.25, 7).expect("a valid policy");
+    assert_eq!((policy.tolerance(), policy.max_iterations()), (0.25, 7));
+}
