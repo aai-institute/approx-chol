@@ -216,7 +216,7 @@ impl Sum2 {
         self
     }
 
-    // Outlined, every chunk round-trips the lanes through memory.
+    // If outlined, every chunk round-trips the lanes through memory.
     #[inline(always)]
     fn add(&mut self, terms: [f64; 8]) {
         let lanes = (self.sums.iter_mut().zip(&mut self.carries)).zip(terms);
