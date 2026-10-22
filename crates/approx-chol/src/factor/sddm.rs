@@ -6,27 +6,66 @@ use crate::sgdd::{within_band, Grounding};
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, widen, Index, Real};
 
-/// `L + diag(s)`, `L`'s off-diagonal nonpositive.
+/// `L + diag(s)`, `L`'s off-diagonal nonpositive; a twisted cover's `k⁺—k⁻` edges live in its closure, not its rows.
 #[derive(Clone, Debug)]
 pub(super) struct Sddm<T, I> {
     adjacency: UpperAdjacency<T, I>,
-    grounding: Grounding<T>,
-    sheets: Sheets,
+    closure: Closure<T>,
+}
+
+/// What `L` carries beyond its rows: a ground on one sheet or two, or a cover's twists in its place.
+#[derive(Clone, Debug)]
+enum Closure<T> {
+    Folded(Grounding<T>),
+    Cover(Grounding<T>),
+    /// Each vertex's [`twist`] `k⁺ — k⁻`, zero where both copies float.
+    Twisted(Box<[T]>),
+}
+
+impl<T: Real> Closure<T> {
+    /// The twists of each vertex's copies' grounds `(g⁺, g⁻)`.
+    fn twisted(grounds: impl Iterator<Item = (T, T)>) -> Self {
+        let twists = grounds.map(|(g_plus, g_minus)| {
+            let floats = g_plus == T::zero() && g_minus == T::zero();
+            if floats {
+                T::zero()
+            } else {
+                twist(g_plus, g_minus)
+            }
+        });
+        Self::Twisted(twists.collect())
+    }
+
+    fn grounding(&self) -> Option<&Grounding<T>> {
+        match self {
+            Self::Folded(grounding) | Self::Cover(grounding) => Some(grounding),
+            Self::Twisted(_) => None,
+        }
+    }
+
+    fn sheets(&self) -> Sheets {
+        match self {
+            Self::Folded(_) => Sheets::One,
+            Self::Cover(_) | Self::Twisted(_) => Sheets::Two,
+        }
+    }
 }
 
 impl<T: Real, I: Index> Sddm<T, I> {
-    /// Panics unless nonempty, with one surplus per row and the rows split evenly into sheets.
-    fn new(adjacency: UpperAdjacency<T, I>, grounding: Grounding<T>, sheets: Sheets) -> Self {
+    /// Panics unless nonempty, with one surplus per row or one twist per pair.
+    fn new(adjacency: UpperAdjacency<T, I>, closure: Closure<T>) -> Self {
         let n = adjacency.n();
         assert!(n > 0, "an SDDM has a vertex");
-        assert!(grounding.fits(n), "one surplus per row");
-        assert_eq!(n % sheets.count(), 0, "every sheet holds the same vertices");
-        debug_assert!(adjacency.nonpositive(), "L's off-diagonal is nonpositive");
-        Self {
-            adjacency,
-            grounding,
-            sheets,
+        match &closure {
+            Closure::Folded(grounding) => assert!(grounding.fits(n), "one surplus per row"),
+            Closure::Cover(grounding) => {
+                assert!(grounding.fits(n), "one surplus per row");
+                assert_eq!(n % 2, 0, "every sheet holds the same vertices");
+            }
+            Closure::Twisted(twists) => assert_eq!(2 * twists.len(), n, "one twist per pair"),
         }
+        debug_assert!(adjacency.nonpositive(), "L's off-diagonal is nonpositive");
+        Self { adjacency, closure }
     }
 
     /// Folded `M` on one sheet, or the Gremban cover of signed `M` on two.
@@ -36,7 +75,7 @@ impl<T: Real, I: Index> Sddm<T, I> {
         sheets: Sheets,
     ) -> Self {
         match sheets {
-            Sheets::One => Self::new(adjacency, grounding, sheets),
+            Sheets::One => Self::new(adjacency, Closure::Folded(grounding)),
             Sheets::Two => Self::cover(adjacency, grounding),
         }
     }
@@ -46,41 +85,39 @@ impl<T: Real, I: Index> Sddm<T, I> {
         (adjacency, ground): (UpperAdjacency<T, I>, Vec<T>),
         sheets: Sheets,
     ) -> Self {
+        assert_eq!(ground.len(), adjacency.n(), "one surplus per row");
         let grounding = Grounding::of(ground);
-        let twisted = (grounding.surplus())
-            .filter(|ground| sheets == Sheets::Two && twists(ground, &adjacency));
-        match twisted {
-            Some(ground) => {
-                let adjacency = twisted_rows(adjacency, ground);
-                Self::new(adjacency, Grounding::ungrounded(), sheets)
+        let closure = match (sheets, grounding.surplus()) {
+            (Sheets::One, _) => Closure::Folded(grounding),
+            (Sheets::Two, Some(ground)) if twists(ground, &adjacency) => {
+                Closure::twisted(ground.chunks_exact(2).map(|g| (g[0], g[1])))
             }
-            None => Self::new(adjacency, grounding, sheets),
-        }
+            (Sheets::Two, _) => Closure::Cover(grounding),
+        };
+        Self::new(adjacency, closure)
     }
 
     /// The Gremban cover of signed `M`: a Laplacian on two sheets that acts as `M` on `[z; −z]`.
     fn cover(signed: UpperAdjacency<T, I>, grounding: Grounding<T>) -> Self {
         let n = signed.n();
-        let twisted = (grounding.surplus()).is_some_and(|s| twists(s, &signed));
-        let leads = if twisted { n } else { 0 };
-        let mut rows = SddmRows::with_capacity(2 * n, 2 * signed.nnz() + leads);
+        let twisted = (grounding.surplus()).filter(|s| twists(s, &signed));
+        let mut rows = SddmRows::with_capacity(2 * n, 2 * signed.nnz());
         for i in 0..n {
-            let surplus = grounding.edge(i);
-            let lead = surplus.filter(|_| twisted).map(|s| twist(s, s));
-            if let Some(t) = lead {
-                rows.add(cover_vertex(i, 1), t);
-            }
             for (j, &a) in signed.upper(i) {
                 rows.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
             }
-            if let Some(s) = surplus.filter(|_| !twisted) {
+            if let Some(s) = grounding.edge(i).filter(|_| twisted.is_none()) {
                 rows.add(2 * n, s);
             }
             rows.end_row();
-            rows.mirror_row(usize::from(lead.is_some()));
+            rows.mirror_row();
         }
         let (adjacency, ground) = rows.finish();
-        Self::new(adjacency, Grounding::of(ground), Sheets::Two)
+        let closure = match twisted {
+            Some(surplus) => Closure::twisted(surplus.iter().map(|&s| (s, s))),
+            None => Closure::Cover(Grounding::of(ground)),
+        };
+        Self::new(adjacency, closure)
     }
 
     pub(super) fn n(&self) -> usize {
@@ -88,24 +125,35 @@ impl<T: Real, I: Index> Sddm<T, I> {
     }
 
     pub(super) fn grounded(&self) -> bool {
-        self.grounding.is_grounded()
+        (self.closure.grounding()).is_some_and(Grounding::is_grounded)
     }
 
     pub(super) fn sheets(&self) -> Sheets {
-        self.sheets
+        self.closure.sheets()
     }
 
-    /// Positive Laplacian weights, each edge once, the ground vertex `n` joined by each surplus.
+    /// Positive Laplacian weights, each edge once with any twists, the ground vertex `n` joined by each surplus.
     pub(super) fn grounded_edges(&self, mut edge: impl FnMut(I, I, T)) {
         let n = self.n();
+        let twists = match &self.closure {
+            Closure::Twisted(twists) => &twists[..],
+            Closure::Folded(_) | Closure::Cover(_) => &[],
+        };
         for i in 0..n {
+            // Ahead of `k⁺`'s row, where its column sorts: a star merges duplicates in list order.
+            let twist = twists.get(i / 2).filter(|&&t| i % 2 == 0 && t > T::zero());
+            if let Some(&t) = twist {
+                edge(I::from_index(i), I::from_index(i + 1), t);
+            }
             for (j, &a) in self.adjacency.upper(i) {
                 edge(I::from_index(i), I::from_index(j), -a);
             }
         }
-        for k in 0..n {
-            if let Some(s) = self.grounding.edge(k) {
-                edge(I::from_index(k), I::from_index(n), s);
+        if let Some(grounding) = self.closure.grounding() {
+            for k in 0..n {
+                if let Some(s) = grounding.edge(k) {
+                    edge(I::from_index(k), I::from_index(n), s);
+                }
             }
         }
     }
@@ -177,9 +225,9 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         self.ptrs.push(self.indices.len());
     }
 
-    /// Repeats the row just ended on the other sheet past its first `twists` entries, each column's sheet bit flipped.
-    fn mirror_row(&mut self, twists: usize) {
-        let (start, end) = (self.ptrs[self.ptrs.len() - 2] + twists, self.indices.len());
+    /// Repeats the row just ended on the other sheet, each column's sheet bit flipped.
+    fn mirror_row(&mut self) {
+        let (start, end) = (self.ptrs[self.ptrs.len() - 2], self.indices.len());
         self.ground.push(*self.ground.last().expect("a row ended"));
         for i in start..end {
             self.indices.push(self.indices[i] ^ I::one());
@@ -209,7 +257,7 @@ impl<T: Real, I: Index> SddmRows<T, I> {
                 row(rows.row(), k);
                 rows.end_row();
                 if sheets == Sheets::Two {
-                    rows.mirror_row(0);
+                    rows.mirror_row();
                 }
                 rows
             },
@@ -263,18 +311,6 @@ fn twists<T: Real, I: Index>(ground: &[T], adjacency: &UpperAdjacency<T, I>) -> 
 fn twist<T: Real>(g_plus: T, g_minus: T) -> T {
     let quarter = narrow::<T>(0.25);
     (g_plus * quarter + g_minus * quarter).max(T::min_positive_value())
-}
-
-/// `adjacency` with row `2k` led by its [`twist`] to `2k + 1`, unless both copies' grounds are zero.
-fn twisted_rows<T: Real, I: Index>(
-    adjacency: UpperAdjacency<T, I>,
-    ground: &[T],
-) -> UpperAdjacency<T, I> {
-    adjacency.led_by(|i| {
-        let pair = (i % 2 == 0).then(|| (ground[i], ground[i + 1]));
-        let pair = pair.filter(|&(p, m)| p > T::zero() || m > T::zero());
-        pair.map(|(g_plus, g_minus)| (I::from_index(i + 1), -twist(g_plus, g_minus)))
-    })
 }
 
 /// A negative entry joins its ends on one sheet, a positive one across them.
