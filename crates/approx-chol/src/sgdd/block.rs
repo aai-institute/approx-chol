@@ -1,4 +1,4 @@
-//! One reduced irreducible block, its balance and grounding, and the summands extraction yields.
+//! One reduced irreducible block, its balance and grounding.
 
 use super::congruence::{Congruence, Restriction};
 use super::diagonal_in_range;
@@ -122,17 +122,6 @@ type BlockParts<T, I> = (
     Balance<T>,
     Option<Box<ScalingReport>>,
 );
-
-/// `A`'s direct summands by kind, each factored and solved on its own.
-#[derive(Clone, Debug)]
-pub(crate) struct Summands<B, I, T> {
-    /// Each coupled component's block.
-    pub(crate) blocks: Vec<B>,
-    /// Vertices no entry couples, each with its surplus `σ`, which is its whole pivot.
-    pub(crate) lone: Vec<(I, T)>,
-    /// One-vertex components whose pivot is zero: an in-place solve zeroes them.
-    pub(crate) dead: Vec<I>,
-}
 
 /// Why a block has no SDDM form; each `vertex` is in `A`'s numbering.
 #[non_exhaustive]
