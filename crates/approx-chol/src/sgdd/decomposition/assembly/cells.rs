@@ -304,4 +304,21 @@ mod tests {
             );
         }
     }
+
+    /// Eleven cells: pushes doubling past them leave slack the factor would keep.
+    #[test]
+    fn a_dense_cross_table_keeps_no_slack() {
+        let left: Vec<u32> = (0..11).map(|k| k % 4).collect();
+        let right: Vec<u32> = (0..11).collect();
+        let x = [1.0; 11];
+        let gram = BipartiteFactorWidth2::new(
+            FactorWidth1::new(4, &left, Some(&x)).unwrap(),
+            FactorWidth1::new(11, &right, Some(&x)).unwrap(),
+        )
+        .unwrap();
+        let rows = Accumulator::Table
+            .cross::<f64, u32, u32>(gram.0, 4, |_| {}, |_, _, _| {})
+            .unwrap();
+        assert!(rows.holds_no_slack());
+    }
 }
