@@ -213,11 +213,10 @@ impl<T: Real> RowSums<T> {
     /// A folded `M`'s row sums are `M1`, so `1ᵀM1 = tr M − Σ|offdiag(M)|`, both `ε`-scaled as the Gram path's, so `tr M` cannot overflow.
     fn folded_surplus<I: Index>(self, off_diagonal: &OffDiagonal<T, I>) -> Grounding<T> {
         let epsilon = widen(T::epsilon());
-        let diagonal = self.diagonal.iter().map(move |&d| epsilon * widen(d));
-        let trace = crate::compensated_sum(diagonal.clone());
+        let diagonal = crate::Sum2::of(&self.diagonal, |_, d| epsilon * widen(d));
+        let trace = diagonal.total();
         // `tr M` rounded on its own drops a surplus below its ulp, which the Gram path keeps.
-        let off = off_diagonal.abs_mirrored().map(|x| -epsilon * x);
-        let ones = crate::compensated_sum(diagonal.chain(off));
+        let ones = off_diagonal.scaled_abs_into(diagonal, -epsilon).total();
         match within_band::<T>(ones, trace) {
             true => Grounding::ungrounded(),
             false => self.surplus(),

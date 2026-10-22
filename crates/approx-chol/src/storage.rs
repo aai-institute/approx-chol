@@ -1,6 +1,6 @@
 //! Sparse storage shapes every stage reads.
 
-use crate::{narrow, widen, Index, Real};
+use crate::{narrow, widen, Index, Real, Sum2};
 
 /// Compressed sparse rows.
 #[cfg_attr(
@@ -164,11 +164,6 @@ impl<T: Real, I: Index> Rows<T, I> {
         self.values.iter().all(|&x| x > T::zero())
     }
 
-    /// `|a_ij| + |a_ji|` per stored entry, in `f64`: the other triangle mirrors it.
-    fn abs_mirrored(&self) -> impl Iterator<Item = f64> + '_ {
-        self.values.iter().map(|&x| 2.0 * widen(x.abs()))
-    }
-
     /// `x_ij ← r_i x_ij c_j` for signs `r`, `c`: exact, so never out of range.
     fn signed(self, r: &[T], c: &[T]) -> Self {
         (self.scaled_seeing(r, c, |_, _, _| {})).expect("a sign moves no magnitude")
@@ -306,8 +301,9 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
         rows.abs_sums(offset).into_iter().map(narrow).collect()
     }
 
-    pub(crate) fn abs_mirrored(&self) -> impl Iterator<Item = f64> + '_ {
-        self.stored().0.abs_mirrored()
+    /// `sum + scale · Σ_ij |a_ij|` over both triangles: the other mirrors the stored one.
+    pub(crate) fn scaled_abs_into(&self, sum: Sum2, scale: f64) -> Sum2 {
+        sum.plus(&self.stored().0.values, |_, x| 2.0 * scale * widen(x.abs()))
     }
 
     /// `S X S` for signs `S`: a sign moves no magnitude, so no entry leaves range.
