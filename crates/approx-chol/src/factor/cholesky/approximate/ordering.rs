@@ -7,7 +7,7 @@ pub(super) struct MinDegreeOrder<I> {
     elems: Vec<QueueElem<I>>,
     lists: Vec<I>,
     min_list: usize,
-    bucket_base: usize,
+    scale: KeyScale,
     /// Net degree change per vertex, zero at rest, so each moves once per pivot: a list would sort per pivot (measured 1.5-1.7x the star sort).
     net: Vec<i64>,
     touched: Vec<I>,
@@ -27,26 +27,30 @@ impl<I: Index> MinDegreeOrder<I> {
             elems: Vec::new(),
             lists: Vec::new(),
             min_list: 0,
-            bucket_base: 1,
+            scale: KeyScale {
+                base: 1,
+                divisor: 1,
+            },
             net: Vec::new(),
             touched: Vec::new(),
         }
     }
 
-    /// Buckets span `split · n`, Laplacians.jl's AC2 scale; `pin` is never queued.
+    /// `pin` is never queued.
     pub(super) fn load<T: Real, C: Copies>(
         &mut self,
         graph: &EliminationGraph<T, I, C>,
         split: C,
         pin: Option<usize>,
+        edge_ends: usize,
     ) {
         let n = graph.n();
-        let bucket_base = (split.get() as usize).saturating_mul(n).max(1);
+        let scale = KeyScale::new(n, edge_ends, split.get());
         let Self {
             elems, lists, net, ..
         } = self;
         lists.clear();
-        lists.resize(n_buckets(bucket_base), sentinel());
+        lists.resize(scale.n_buckets(), sentinel());
         elems.clear();
         elems.reserve(n);
         let mut min_list = lists.len();
@@ -59,8 +63,8 @@ impl<I: Index> MinDegreeOrder<I> {
                 });
                 continue;
             }
-            let key = graph.degree(v).min(u64::from(u32::MAX - 1)) as u32;
-            let list = key_map(key, bucket_base);
+            let key = graph.degree(v).min(u64::from(REMOVED - 1)) as u32;
+            let list = scale.bucket(key);
             let head = lists[list];
             elems.push(QueueElem {
                 prev: sentinel(),
@@ -76,7 +80,7 @@ impl<I: Index> MinDegreeOrder<I> {
         net.clear();
         net.resize(n, 0);
         self.min_list = min_list;
-        self.bucket_base = bucket_base;
+        self.scale = scale;
     }
 
     /// Panics on an empty queue: every step leaves at least one vertex behind.
@@ -126,16 +130,14 @@ impl<I: Index> MinDegreeOrder<I> {
     /// `i64` so negating a full-range `u32` count cannot sign-flip as an `i32` would.
     fn apply_delta(&mut self, v: usize, delta: i64) {
         let key = self.elems[v].key;
-        if key == REMOVED || delta == 0 {
+        // A saturated key no longer counts copies, so it stays saturated rather than undercount.
+        if key >= REMOVED - 1 || delta == 0 {
             return;
         }
         let moved = i64::from(key) + delta;
         debug_assert!(moved >= 0, "a degree estimate counts every copy it loses");
         let moved = moved.clamp(0, i64::from(REMOVED - 1)) as u32;
-        let (old, new) = (
-            key_map(key, self.bucket_base),
-            key_map(moved, self.bucket_base),
-        );
+        let (old, new) = (self.scale.bucket(key), self.scale.bucket(moved));
         self.elems[v].key = moved;
         if old == new {
             return;
@@ -167,16 +169,40 @@ fn sentinel<I: Index>() -> I {
 /// A popped vertex's key, which [`MinDegreeOrder::apply_delta`] skips.
 const REMOVED: u32 = u32::MAX;
 
-/// Sole derivation of the bucket count, so `key_map`'s cap and `load` agree on the last bucket.
-fn n_buckets(bucket_base: usize) -> usize {
-    bucket_base.saturating_mul(2).saturating_add(1)
+/// Translated from Laplacians.jl's `keyMap` and `ApproxCholPQ` (MIT, see NOTICE): keys exact up to `base`, then `divisor` copies per bucket, in `2 · base + 1` buckets.
+#[derive(Clone, Copy)]
+struct KeyScale {
+    base: usize,
+    divisor: usize,
 }
 
-/// Exact below `bucket_base`, coarser above it.
-fn key_map(key: u32, bucket_base: usize) -> usize {
-    let degree = key as usize;
-    match degree <= bucket_base {
-        true => degree,
-        false => (bucket_base + degree / bucket_base).min(n_buckets(bucket_base) - 1),
+impl KeyScale {
+    /// Laplacians.jl's `base = k · n`, capped at `8 (n + edge_ends)`; past the cap `divisor` grows so no key, at most `k · edge_ends / 2`, passes the last bucket.
+    fn new(n: usize, edge_ends: usize, copies: u32) -> Self {
+        let copies = copies as usize;
+        let budget = 8usize.saturating_mul(n.saturating_add(edge_ends));
+        let base = copies.saturating_mul(n).min(budget).max(1);
+        let reach = copies
+            .saturating_mul(edge_ends / 2)
+            .min(REMOVED as usize - 1);
+        Self {
+            base,
+            divisor: base.max(reach.div_ceil(base)),
+        }
+    }
+
+    /// Sole derivation of the bucket count, so `bucket`'s cap and `load` agree on the last bucket.
+    fn n_buckets(self) -> usize {
+        self.base.saturating_mul(2).saturating_add(1)
+    }
+
+    // Called out of line, its two fields spill around each call in `apply_delta` (+0.3-0.6% build).
+    #[inline(always)]
+    fn bucket(self, key: u32) -> usize {
+        let degree = key as usize;
+        match degree <= self.base {
+            true => degree,
+            false => (self.base + degree / self.divisor).min(self.n_buckets() - 1),
+        }
     }
 }
