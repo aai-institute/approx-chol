@@ -116,7 +116,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
         (weight, shares, remainder): (T, impl Iterator<Item = (I, f64)>, I),
     ) {
         let start = self.neighbors.len();
-        // `f64` shares: rounded alike in `f32`, they cancel past the last's `w/d` (#275).
+        // `f64` shares, as `f32` ones cancel past the last's `w/d` (#275); `1 − Σ` still errs ≤ m²·2⁻⁵³ relative (#302).
         let mut retained = 1.0;
         for (neighbor, share) in shares {
             self.neighbors.push(neighbor);
