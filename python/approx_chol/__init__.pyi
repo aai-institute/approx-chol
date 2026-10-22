@@ -107,7 +107,7 @@ class Factor:
         ...
 
     def workspace(self) -> Workspace:
-        """Scratch for :meth:`solve_into`, sized for this factor."""
+        """Reusable buffers for :meth:`solve_into` on this factor."""
         ...
 
     def solve_into(
@@ -119,8 +119,8 @@ class Factor:
         """Solve LDL^T x = b, writing the result into *out*.
 
         ``b`` must have length ``shape[0]``, and *out* at least that length.
-        A *workspace* from :meth:`workspace` saves allocating scratch per call.
-        Releases the GIL as :meth:`solve`; writing *out* meanwhile is the caller's error.
+        A *workspace* from :meth:`workspace` saves allocating buffers per call.
+        Releases the GIL as :meth:`solve`, solving in its own buffer and only then writing *out*.
 
         Raises:
             ValueError: If ``b`` is not 1-D integer or float, ``out`` is not
@@ -134,7 +134,7 @@ class Factor:
 
 @final
 class Workspace:
-    """Scratch for one :meth:`Factor.solve_into` at a time, from :meth:`Factor.workspace`."""
+    """Buffers for one :meth:`Factor.solve_into` at a time, from :meth:`Factor.workspace`."""
 
     # No Python constructor: the uninhabited argument makes every call a type error.
     def __new__(cls, never: Never, /) -> Never: ...
@@ -145,7 +145,7 @@ def factorize(
 ) -> Factor:
     """Factorize an SDDM matrix from a scipy.sparse CSR matrix.
 
-    Releases the GIL above 32768 stored entries; writing the arrays meanwhile is the caller's error.
+    Copies the arrays, then releases the GIL to check and factor the copy above 32768 stored entries.
 
     Args:
         matrix: A ``scipy.sparse.csr_matrix`` or ``csr_array``.

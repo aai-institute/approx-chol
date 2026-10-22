@@ -1,5 +1,5 @@
 use approx_chol::{
-    factorize_with, Backend, Config, CsrRef, Factor, ScalingPolicy, ScalingReport, SolveError,
+    Backend, Config, CsrRef, Factor, ScalingPolicy, ScalingReport, Sgdd, SolveError,
 };
 use num_traits::PrimInt;
 use numpy::{
@@ -126,6 +126,15 @@ fn right_hand_side<'py>(
 }
 
 #[inline]
+/// A contiguous copy, its borrow released on return so the caller's array is free again.
+fn owned<T: Element + Copy>(array: &Bound<'_, PyArray1<T>>, name: &str) -> PyResult<Vec<T>> {
+    let array = array.try_readonly().map_err(|e| borrow_error(name, e))?;
+    let slice = array.as_slice();
+    slice
+        .map(<[T]>::to_vec)
+        .map_err(|_| value_error(format!("{name} must be contiguous")))
+}
+
 fn slices_overlap<T>(lhs: &[T], rhs: &[T]) -> bool {
     if lhs.is_empty() || rhs.is_empty() {
         return false;
@@ -284,16 +293,15 @@ impl PyFactor {
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let b = right_hand_side(py, b)?;
         let b_slice = b.as_slice().expect("right_hand_side is contiguous");
-        let (mut x, mut workspace) = (b_slice.to_vec(), self.workspace());
-        let solved = (self.entries).detach(py, || {
-            self.inner.solve_in_place(&mut x, &mut workspace.scratch)
-        });
+        let (mut x, mut scratch) = (b_slice.to_vec(), vec![0.0; self.inner.scratch_len()]);
+        let solved = (self.entries).detach(py, || self.inner.solve_in_place(&mut x, &mut scratch));
         solved.map_err(|e| error_to_py(&e))?;
         Ok(PyArray1::from_vec(py, x))
     }
 
     fn workspace(&self) -> PyWorkspace {
         PyWorkspace {
+            x: Vec::new(),
             scratch: vec![0.0; self.inner.scratch_len()],
         }
     }
@@ -331,31 +339,34 @@ impl PyFactor {
             )));
         }
         let mut out_rw = out.try_readwrite().map_err(|e| borrow_error("out", e))?;
-        let x = &mut out_rw
+        let out = &mut out_rw
             .as_slice_mut()
             .map_err(|_| value_error("out must be contiguous"))?[..n];
-        let mut owned;
-        let scratch: &mut [f64] = match workspace.as_deref_mut() {
-            Some(workspace) => &mut workspace.scratch,
-            None => {
-                owned = self.workspace();
-                &mut owned.scratch
-            }
+        let mut owned = None;
+        let PyWorkspace { x, scratch } = match workspace.as_deref_mut() {
+            Some(workspace) => workspace,
+            None => owned.insert(self.workspace()),
         };
-        x.copy_from_slice(b_slice);
+        x.clear();
+        x.extend_from_slice(b_slice);
+        // Our own buffer: without the GIL, or on a free-threaded build, another thread may touch `out`.
         let solved = (self.entries).detach(py, || self.inner.solve_in_place(x, scratch));
-        solved.map_err(|e| match e {
-            SolveError::ScratchTooShort { .. } => {
-                value_error("workspace is from a smaller factor; use this factor's workspace()")
-            }
-            e => error_to_py(&e),
-        })
+        solved
+            .map(|()| out.copy_from_slice(x))
+            .map_err(|e| match e {
+                SolveError::ScratchTooShort { .. } => {
+                    value_error("workspace is from a smaller factor; use this factor's workspace()")
+                }
+                e => error_to_py(&e),
+            })
     }
 }
 
-/// Caller-owned solve scratch, so repeated `solve_into` calls allocate nothing.
+/// Caller-owned solve buffers, so repeated `solve_into` calls allocate nothing.
 #[pyclass(name = "Workspace")]
 struct PyWorkspace {
+    /// Grown by the first solve; `workspace()` allocates only `scratch`.
+    x: Vec<f64>,
     scratch: Vec<f64>,
 }
 
@@ -434,30 +445,27 @@ impl CsrArrays<'_> {
         }
     }
 
-    /// Borrows the index arrays whenever they already are contiguous `J`.
-    fn factorize_as<J: Element + PrimInt + Sync>(
+    /// Copies the arrays, so nothing after reads a caller's array.
+    fn factorize_as<J: Element + PrimInt + Sync + Send>(
         &self,
         config: Option<&PyConfig>,
     ) -> PyResult<PyFactor> {
         let indptr = as_contiguous::<J>(&self.np, &self.indptr)?;
         let indices = as_contiguous::<J>(&self.np, &self.indices)?;
-        // Borrowed arrays are the caller's, so another thread may hold one mutably.
-        let indptr = indptr
-            .try_readonly()
-            .map_err(|e| borrow_error("indptr", e))?;
-        let indices = indices
-            .try_readonly()
-            .map_err(|e| borrow_error("indices", e))?;
-        let data = (self.data.try_readonly()).map_err(|e| borrow_error("data", e))?;
-        let contiguous = |name: &str| value_error(format!("{name} must be contiguous"));
-        let indptr = indptr.as_slice().map_err(|_| contiguous("indptr"))?;
-        let indices = indices.as_slice().map_err(|_| contiguous("indices"))?;
-        let data = data.as_slice().map_err(|_| contiguous("data"))?;
+        let indptr = owned(&indptr, "indptr")?;
+        let indices = owned(&indices, "indices")?;
+        let data = owned(&self.data, "data")?;
         let config = config.map_or_else(Config::default, |config| config.0);
         let (py, n, entries) = (self.np.py(), self.n as u32, StoredEntries(data.len()));
         let inner = entries.detach(py, || {
-            let csr = CsrRef::new(indptr, indices, data, n).map_err(|e| error_to_py(&e))?;
-            factorize_with(csr, config, ScalingPolicy::default()).map_err(|e| error_to_py(&e))
+            let sgdd = CsrRef::new(&indptr, &indices, &data, n)
+                .map_err(|e| error_to_py(&e))
+                .and_then(|csr| {
+                    Sgdd::reduce(csr, ScalingPolicy::default()).map_err(|e| error_to_py(&e))
+                });
+            // Freed before factoring: the copy never coexists with the factor's fill.
+            drop((indptr, indices, data));
+            sgdd.map(|sgdd| sgdd.factor(&config))
         })?;
         warn_on_scaling(py, &inner)?;
         Ok(PyFactor { inner, entries })
@@ -465,7 +473,7 @@ impl CsrArrays<'_> {
 }
 
 /// Approximate Cholesky factorization for SDDM/Laplacian systems.
-// GIL-free is sound: pyclass state is `Sync`, `Workspace` is borrow-checked, and the module holds none.
+// GIL-free is sound: pyclass state is `Sync`, `Workspace` is borrow-checked, the module holds none, and `detach` reads only owned copies.
 #[pymodule(gil_used = false)]
 fn _approx_chol(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBackend>()?;
