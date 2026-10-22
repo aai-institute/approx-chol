@@ -6,7 +6,7 @@ mod star;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use crate::{Index, Real};
+use crate::{narrow, widen, Index, Real};
 use cdf::{draw_after, suffix_past};
 pub(super) use copies::{Copies, Multi, Single};
 use star::StarEntry;
@@ -24,8 +24,8 @@ pub(super) struct CliqueTreeSampler<T, I, C: Copies> {
     scatter: Vec<I>,
     /// Each merged entry's summed copies before the cap: `C` cannot add.
     counts: Vec<u32>,
-    /// The star's weights' prefix sums, heaviest last, so each suffix's draw range is one subtraction.
-    cumsum: Vec<T>,
+    /// The star's weights' prefix sums, heaviest last, so each suffix's draw range is one subtraction; `f64`, as `f32` loses short suffixes (#275).
+    cumsum: Vec<f64>,
     split: C,
     /// Scratch [`Copies::draw`] reuses across entries; one copy never touches it.
     tally: Vec<(usize, u32)>,
@@ -51,7 +51,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         draws: &mut Xoshiro256PlusPlus,
         neighbors: impl Iterator<Item = (I, C, T)>,
         fill: &mut Fill<T, I, C>,
-    ) -> (T, impl Iterator<Item = (I, T)> + '_, I) {
+    ) -> (T, impl Iterator<Item = (I, f64)> + '_, I) {
         self.refill(neighbors);
         self.sample(draws, |edge| fill.push(edge));
         let (last, rest) =
@@ -59,7 +59,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         let d = suffix_past(&self.cumsum, None);
         let shares = rest
             .iter()
-            .map(move |entry| (entry.neighbor, entry.weight / d));
+            .map(move |entry| (entry.neighbor, widen(entry.weight) / d));
         (last.weight, shares, last.neighbor)
     }
 
@@ -81,21 +81,20 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
             return;
         };
         self.cumsum.clear();
-        let mut acc = T::zero();
+        let mut acc = 0.0;
         for entry in entries {
-            acc = acc + entry.weight;
+            acc += widen(entry.weight);
             self.cumsum.push(acc);
         }
         let d = suffix_past(&self.cumsum, None);
         debug_assert!(
-            d.is_finite() && d > T::zero(),
+            d.is_finite() && d > 0.0,
             "positive weights under the diagonal bound"
         );
         for (i, entry) in rest.iter().enumerate() {
+            let total: T = narrow(widen(entry.weight) * (suffix_past(&self.cumsum, Some(i)) / d));
             // Clamped, never dropped: the clique tree keeps the star's neighbors connected, and every weight's inverse finite.
-            let weight = (entry.copies)
-                .per_copy(entry.weight * (suffix_past(&self.cumsum, Some(i)) / d))
-                .max(T::min_positive_value());
+            let weight = (entry.copies).per_copy(total).max(T::min_positive_value());
             let draw = || draw_after(&self.cumsum, rng, i);
             for (at, copies, weight) in (entry.copies).draw(&mut self.tally, weight, draw) {
                 let other = entries[at].neighbor;

@@ -9,7 +9,7 @@ use crate::factor::clique_tree::{CliqueTreeSampler, Copies, Fill};
 use crate::factor::sddm::Sddm;
 #[cfg(feature = "serde")]
 use crate::factor::within_one;
-use crate::{Index, Real};
+use crate::{narrow, Index, Real};
 use graph::EliminationGraph;
 use ordering::MinDegreeOrder;
 
@@ -113,17 +113,18 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
     fn push(
         &mut self,
         vertex: usize,
-        (weight, shares, remainder): (T, impl Iterator<Item = (I, T)>, I),
+        (weight, shares, remainder): (T, impl Iterator<Item = (I, f64)>, I),
     ) {
         let start = self.neighbors.len();
-        let mut retained = T::one();
+        // `f64` shares: rounded alike in `f32`, they cancel past the last's `w/d` (#275).
+        let mut retained = 1.0;
         for (neighbor, share) in shares {
             self.neighbors.push(neighbor);
-            self.coefficients.push(share);
-            retained = retained - share;
+            self.coefficients.push(narrow(share));
+            retained -= share;
         }
         self.neighbors.push(remainder);
-        self.coefficients.push(retained);
+        self.coefficients.push(narrow(retained));
         // Finite, as fill and `S` never weigh below `MIN_POSITIVE`.
         self.headers.push(StepHeader {
             vertex: I::from_index(vertex),
@@ -228,5 +229,97 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
             }
         }
         end == neighbors.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rand::{Rng, SeedableRng};
+
+    use super::*;
+    use crate::factor::clique_tree::{Multi, Single};
+    use crate::factor::within_one;
+
+    fn stars(m: usize) -> [(&'static str, Vec<f32>); 3] {
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(7);
+        let log_uniform = |_| ((rng.next_u64() >> 40) as f32 / (1 << 21) as f32 - 4.0).exp2();
+        [
+            ("0.1", vec![0.1; m]),
+            ("0.7", vec![0.7; m]),
+            ("log-uniform", (0..m).map(log_uniform).collect()),
+        ]
+    }
+
+    /// Worst relative error of each entry's summed fill against `w_i S_{>i} / d`, and `d`, both in `f64`.
+    fn fill_error<C: Copies>(w: &[f32], fill: &Fill<f32, u32, C>) -> (f64, f64) {
+        let mut order: Vec<u32> = (1..=w.len() as u32).collect();
+        order.sort_by(|&a, &b| {
+            w[a as usize - 1]
+                .total_cmp(&w[b as usize - 1])
+                .then(a.cmp(&b))
+        });
+        let mut position = vec![0; w.len() + 1];
+        order
+            .iter()
+            .enumerate()
+            .for_each(|(p, &j)| position[j as usize] = p);
+        let mut sums = vec![0.0; w.len()];
+        for &(lo, hi, _, weight) in fill {
+            sums[position[lo as usize].min(position[hi as usize])] += f64::from(weight);
+        }
+        let sorted: Vec<f64> = order
+            .iter()
+            .map(|&j| f64::from(w[j as usize - 1]))
+            .collect();
+        let d: f64 = sorted.iter().sum();
+        let mut suffix = d;
+        let worst = (sorted.iter().zip(&sums).take(w.len() - 1))
+            .map(|(&wi, &sum)| {
+                suffix -= wi;
+                (sum / (wi * suffix / d) - 1.0).abs()
+            })
+            .fold(0.0, f64::max);
+        (worst, d)
+    }
+
+    fn pivot_defects<C: Copies>(split: C, label: &str, w: &[f32]) -> Option<String> {
+        let mut clique = CliqueTreeSampler::<f32, u32, C>::new(split);
+        let mut fill = Fill::new();
+        let mut steps = ApproximateCholesky::with_capacity(w.len() + 1, w.len());
+        let draws = &mut Xoshiro256PlusPlus::seed_from_u64(0);
+        let star = (1..).zip(w).map(|(j, &w)| (j, split, w));
+        steps.push(0, clique.eliminate(draws, star, &mut fill));
+        let (fill_off, d) = fill_error(w, &fill);
+        let retained = *steps.coefficients.last().expect("the remainder's share");
+        let inverse = f64::from(retained) * f64::from(steps.headers[0].pivot_scale);
+        let off = (inverse * d - 1.0).abs();
+        let bounded = within_one(steps.coefficients.iter().copied());
+        (retained < 0.0 || off >= 1e-3 || fill_off >= 1e-5 || !bounded).then(|| {
+            format!("{label}: retained {retained:e}, D⁻¹ off {off:e}, fill off {fill_off:e}, Σ|c| ≤ 1 {bounded}")
+        })
+    }
+
+    fn unique_fill_defects(label: &str, w: &[f32]) -> Option<String> {
+        let mut clique = CliqueTreeSampler::<f32, u32, Single>::new(Single);
+        let mut fill = Fill::new();
+        let star = (1..).zip(w.iter().copied());
+        clique.eliminate_unique(Xoshiro256PlusPlus::seed_from_u64(0), star, |e| fill.push(e));
+        let (fill_off, _) = fill_error(w, &fill);
+        (fill_off >= 1e-5).then(|| format!("{label}: fill off {fill_off:e}"))
+    }
+
+    #[test]
+    fn high_degree_f32_star_keeps_its_inverse_degree_and_fill() {
+        let ac2 = Multi::split(2).expect("k = 2 is AC2");
+        let mut defects = Vec::new();
+        for m in [6000, 20000, 50000] {
+            for (kind, w) in stars(m) {
+                let label = |arm| format!("{arm} m {m} w {kind}");
+                defects.extend(pivot_defects(Single, &label("AC"), &w));
+                defects.extend(pivot_defects(ac2, &label("AC2"), &w));
+                defects.extend(unique_fill_defects(&label("unique"), &w));
+            }
+        }
+        assert!(defects.is_empty(), "{defects:#?}");
     }
 }
