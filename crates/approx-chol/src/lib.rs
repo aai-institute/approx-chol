@@ -186,7 +186,7 @@ fn compensated_sum<T: Copy>(x: &[T], term: impl Fn(usize, T) -> f64) -> f64 {
     sum + carry
 }
 
-/// Ogita–Rump–Oishi Sum2 in eight fixed TwoSum lanes, as AccurateArithmetic.jl vectorizes it: off by at most `ε|Σx| + (nε)² Σ|x|`.
+/// Ogita–Rump–Oishi Sum2 (SISC 26(6), 2005) in eight fixed TwoSum lanes: off by at most `ε|Σx| + (nε)² Σ|x|`.
 #[derive(Clone, Copy, Default)]
 struct Sum2 {
     sums: [f64; 8],
