@@ -1,6 +1,7 @@
+use super::dense::dense;
 use super::gram::{dense_csr, matrix};
 use approx_chol::input::{CsrRef, FactorWidth2, Laplacian, Sddm};
-use approx_chol::{factorize, Factor};
+use approx_chol::{factorize, factorize_with, Factor};
 
 fn grounded(factor: &Factor) -> bool {
     factor.blocks().iter().all(|block| !block.floats())
@@ -75,4 +76,95 @@ fn weakly_grounded_vertex_solves_as_its_sddm_view() {
 fn weakly_grounded_vertex_on_a_long_path_solves_as_its_sddm_view() {
     let path: Vec<(u32, u32)> = (0..39).map(|i| (i, i + 1)).collect();
     weak_vertex_solves_as_its_sddm_view(40, &path);
+}
+
+/// A star whose centre's `f64` row sum rounds up at every leaf, `d₀` that rounded sum; `frustrated` adds `+1` between leaves 1 and 2.
+fn rounding_up_star(leaves: usize, frustrated: bool) -> Vec<Vec<f64>> {
+    let mut sum = 0.0f64;
+    let weights: Vec<f64> = (0..leaves)
+        .map(|_| {
+            let next = sum + 1.0;
+            let ulp = f64::from_bits(next.to_bits() + 1) - next;
+            // Just past half an ulp below `next`; below a power of two the spacing halves, so no gain there.
+            let t = match (next as u64).is_power_of_two() {
+                true => 1.0,
+                false => 1.0 - ulp / 2.0 + f64::EPSILON,
+            };
+            sum += t;
+            t
+        })
+        .collect();
+    let mut a = vec![vec![0.0; leaves + 1]; leaves + 1];
+    a[0][0] = sum;
+    for (leaf, &t) in (1..).zip(&weights) {
+        (a[0][leaf], a[leaf][0], a[leaf][leaf]) = (-t, -t, t);
+    }
+    if frustrated {
+        (a[1][2], a[2][1]) = (1.0, 1.0);
+        a[1][1] += 1.0;
+        a[2][2] += 1.0;
+    }
+    a
+}
+
+/// The centre's exact surplus over `ε tr M`; every other row's is zero.
+fn centre_surplus_over_band(a: &[Vec<f64>]) -> f64 {
+    let leaves = a.len() - 1;
+    let rounding: f64 = a[0][1..].iter().map(|&t| t.abs() - 1.0).sum();
+    let surplus = (a[0][0] - leaves as f64) - rounding;
+    let trace: f64 = (0..a.len()).map(|i| a[i][i]).sum();
+    surplus / (f64::EPSILON * trace)
+}
+
+fn apply(a: &[Vec<f64>], x: &[f64]) -> Vec<f64> {
+    (a.iter())
+        .map(|row| row.iter().zip(x).map(|(a, x)| a * x).sum())
+        .collect()
+}
+
+/// `‖Ax − b‖∞ / (‖A‖∞ ‖x‖∞)` for `x` the dense factor's solve of `b`, which must not float.
+fn backward_error(a: &[Vec<f64>], rhs: &[f64]) -> f64 {
+    let (ptrs, columns, values) = dense_csr(a);
+    let csr = CsrRef::new(&ptrs, &columns, &values, a.len() as u32).unwrap();
+    let factor: Factor = factorize_with(csr, dense()).unwrap();
+    assert!(!factor.blocks()[0].floats());
+    let x = factor.solve(rhs).unwrap();
+    let residual = (apply(a, &x).into_iter().zip(rhs)).map(|(r, b)| (r - b).abs());
+    let a_norm = (a.iter()).map(|row| row.iter().map(|a| a.abs()).sum::<f64>());
+    let norm = a_norm.fold(0.0, f64::max) * x.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+    residual.fold(0.0, f64::max) / norm
+}
+
+/// The pseudoinverse a floating block returns misses `b`'s mean, `≈ 1` here.
+#[test]
+fn csr_star_whose_row_sum_rounds_up_to_its_diagonal_grounds() {
+    let a = rounding_up_star(100, false);
+    let band = centre_surplus_over_band(&a);
+    assert!(band > 5.0, "{band}");
+    let rhs: Vec<f64> = (0..a.len()).map(|i| (i % 5) as f64 - 1.0).collect();
+    let backward = backward_error(&a, &rhs);
+    assert!(backward <= 16.0 * f64::EPSILON, "{backward:e}");
+}
+
+/// Ungrounded, a frustrated block's two-sheet cover is still definite on `[z; −z]`.
+#[test]
+fn frustrated_star_whose_surplus_rounds_to_zero_solves_its_matrix() {
+    let a = rounding_up_star(100, true);
+    let band = centre_surplus_over_band(&a);
+    assert!(band > 5.0, "{band}");
+    let exact: Vec<f64> = (0..a.len()).map(|i| (i % 5) as f64 - 2.0).collect();
+    let backward = backward_error(&a, &apply(&a, &exact));
+    assert!(backward <= 16.0 * f64::EPSILON, "{backward:e}");
+}
+
+/// `Σ|a₀ⱼ| = 1 + 0.75ε` rounds up to `1 + ε` in `f32`; `d₀ = 1 + 10ε` is `4.6ε tr M`, `1 + 11ε` is `5.1ε`.
+#[test]
+fn f32_star_just_past_the_band_grounds() {
+    let (eps, w) = (f32::EPSILON, 0.75 * f32::EPSILON);
+    for (ulps, floats) in [(10.0, true), (11.0, false)] {
+        let values = [1.0 + ulps * eps, -1.0, -w, -1.0, 1.0, -w, w];
+        let csr = CsrRef::new(&[0u32, 3, 5, 7], &[0, 1, 2, 0, 1, 0, 2], &values, 3).unwrap();
+        let factor: Factor<f32> = factorize(csr).unwrap();
+        assert_eq!(factor.blocks()[0].floats(), floats, "d₀ = 1 + {ulps}ε");
+    }
 }

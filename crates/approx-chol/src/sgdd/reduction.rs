@@ -14,7 +14,7 @@ use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
 use super::{diagonal_in_range, Sgdd};
 use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input};
 use crate::storage::OffDiagonal;
-use crate::{widen, Error, Index, Real};
+use crate::{narrow, widen, Error, Index, Real};
 
 impl<T: Real, I: Index> Sgdd<T, I> {
     /// The view's irreducible blocks, each reduced; `policy` scales those not already dominant.
@@ -67,7 +67,9 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
             };
             let block = match a.reduce(policy, relax)? {
                 Signed::Folded(m, rows) => {
-                    let grounding = rows.folded_surplus(&m.off_diagonal);
+                    let vertex = m.vertices[0].index();
+                    let grounding = (rows.folded_surplus(&m.off_diagonal))
+                        .ok_or(ReduceError::Unscalable { vertex })?;
                     m.block(Balance::Balanced(grounding))?
                 }
                 Signed::Frustrated(block) => block,
@@ -157,7 +159,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         match folded {
             true => Ok(Signed::Folded(m, rows)),
             false => Ok(Signed::Frustrated(
-                m.block(Balance::Frustrated(rows.surplus()))?,
+                m.block(Balance::Frustrated(surplus(&rows.diagonal, rows.abs)))?,
             )),
         }
     }
@@ -210,8 +212,8 @@ struct RowSums<T> {
 }
 
 impl<T: Real> RowSums<T> {
-    /// A folded `M`'s row sums are `M1`, so `1ᵀM1 = tr M − Σ|offdiag(M)|`, both `ε`-scaled as the Gram path's, so `tr M` cannot overflow.
-    fn folded_surplus<I: Index>(self, off_diagonal: &OffDiagonal<T, I>) -> Grounding<T> {
+    /// A folded `M`'s row sums are `M1`, so `1ᵀM1 = tr M − Σ|offdiag(M)|`, both `ε`-scaled as the Gram path's, so `tr M` cannot overflow; `None` only past `Sum2`'s bound.
+    fn folded_surplus<I: Index>(self, off_diagonal: &OffDiagonal<T, I>) -> Option<Grounding<T>> {
         let epsilon = widen(T::epsilon());
         let diagonal = crate::Sum2::of(&self.diagonal, |_, d| epsilon * widen(d));
         let trace = diagonal.total();
@@ -219,18 +221,28 @@ impl<T: Real> RowSums<T> {
         let ones = off_diagonal.scaled_abs_into(diagonal, -epsilon).total();
         let mut rows = self.diagonal.iter().zip(&self.abs);
         let outweighs = |(&d, &s): (&T, &T)| outweighs_coupling(widen(d) - widen(s), widen(s));
-        match within_band::<T>(ones, trace) && !rows.any(outweighs) {
-            true => Grounding::ungrounded(),
-            false => self.surplus(),
+        if within_band::<T>(ones, trace) && !rows.any(outweighs) {
+            return Some(Grounding::ungrounded());
+        }
+        let Self { diagonal, abs } = self;
+        match surplus(&diagonal, abs) {
+            grounding if grounding.is_grounded() => Some(grounding),
+            // An uncompensated `f64` row sum can round up to `d_i` from degree 67 (#269).
+            _ => {
+                let sums = off_diagonal.compensated_abs_row_sums();
+                let residues = (diagonal.iter().zip(sums))
+                    .map(|(&d, s)| narrow((widen(d) - s).max(0.0)))
+                    .collect();
+                Some(Grounding::of(residues)).filter(Grounding::is_grounded)
+            }
         }
     }
+}
 
-    /// Each row's residue, deficits clamped to zero.
-    fn surplus(self) -> Grounding<T> {
-        let Self { mut diagonal, abs } = self;
-        (diagonal.iter_mut().zip(&abs)).for_each(|(d, &s)| *d = (*d - s).max(T::zero()));
-        Grounding::of(diagonal)
-    }
+/// Each row's residue, deficits clamped to zero, written over `abs` so `diagonal` outlives it.
+fn surplus<T: Real>(diagonal: &[T], mut abs: Vec<T>) -> Grounding<T> {
+    (abs.iter_mut().zip(diagonal)).for_each(|(s, &d)| *s = (d - *s).max(T::zero()));
+    Grounding::of(abs)
 }
 
 /// `1ᵀM1 ≤ SINGULAR_BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh).

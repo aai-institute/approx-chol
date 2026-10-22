@@ -77,6 +77,10 @@ impl<T: Real, I: Index> Rows<T, I> {
         (self.indices[span.clone()].iter().map(|&j| j.index())).zip(&self.values[span])
     }
 
+    fn row_values(&self, i: usize) -> &[T] {
+        &self.values[self.ptrs[i]..self.ptrs[i + 1]]
+    }
+
     /// `out = |X| x`.
     pub(crate) fn abs_times(&self, x: &[f64], out: &mut [f64]) {
         for (i, out) in out.iter_mut().enumerate() {
@@ -299,6 +303,21 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
     pub(crate) fn abs_row_sums(&self) -> Vec<T> {
         let (rows, offset) = self.stored();
         rows.abs_sums(offset).into_iter().map(narrow).collect()
+    }
+
+    /// [`abs_row_sums`](Self::abs_row_sums) as [`Sum2`] gives them, off by `(u + γ²_{k/8})Σ` at degree `k`, in `f64`.
+    pub(crate) fn compensated_abs_row_sums(&self) -> Vec<f64> {
+        let (rows, offset) = self.stored();
+        let mirror = rows.transpose();
+        let mut sums = vec![Sum2::default(); self.n()];
+        let abs = |_, x: T| widen(x.abs());
+        for (i, sum) in sums[..rows.n_rows()].iter_mut().enumerate() {
+            *sum = sum.plus(rows.row_values(i), abs);
+        }
+        for (j, sum) in sums[offset..].iter_mut().enumerate() {
+            *sum = sum.plus(mirror.row_values(j), abs);
+        }
+        sums.iter().map(Sum2::total).collect()
     }
 
     /// `sum + scale · Σ_ij |a_ij|` over both triangles: the other mirrors the stored one.
