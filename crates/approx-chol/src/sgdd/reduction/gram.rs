@@ -2,11 +2,11 @@ use std::cell::LazyCell;
 
 use num_traits::PrimInt;
 
-use super::{outweighs_coupling, within_band, Congruent, Signed, SymmetricBlock};
+use super::{within_band, Congruent, RowSums, Signed, SymmetricBlock};
 use crate::input::{Column, FactorWidth2};
 use crate::sgdd::block::{Balance, Grounding, IrreducibleBlock, ReduceError};
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components, Summands};
-use crate::sgdd::scaling::{self, ScalingPolicy};
+use crate::sgdd::scaling::{self, ScaleVector, ScalingPolicy};
 use crate::sgdd::Reduced;
 use crate::{narrow, widen, Index, Real};
 
@@ -41,7 +41,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
                     .or_else(|| scaling::relax(&a.off_diagonal, &a.rows.diagonal, policy))
             })?;
             match reduced {
-                Signed::Folded(m, rows) => folded.push((m, rows.abs)),
+                Signed::Folded(m, rows, vector) => folded.push((m, rows, vector)),
                 Signed::Frustrated(block) => frustrated.push(block),
             }
         }
@@ -59,7 +59,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
 /// Floats each folded block as [`RowSums::folded_surplus`](super::RowSums::folded_surplus) does, else grounds it on `s = M·1`.
 fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
-    blocks: Vec<(Congruent<T, I>, Vec<T>)>,
+    blocks: Vec<(Congruent<T, I>, RowSums<T>, ScaleVector)>,
 ) -> Result<Vec<IrreducibleBlock<T, I>>, ReduceError> {
     if blocks.is_empty() {
         return Ok(Vec::new());
@@ -67,7 +67,7 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     // By vertex: blocks are disjoint, so one slot per vertex holds its block, `f_i` and surplus.
     let mut block_of = vec![I::max_value(); v.n()];
     let mut factor = vec![0.0; v.n()];
-    for (c, (block, _)) in blocks.iter().enumerate() {
+    for (c, (block, ..)) in blocks.iter().enumerate() {
         for (slot, &vertex) in block.vertices.iter().enumerate() {
             block_of[vertex.index()] = I::from_index(c);
             factor[vertex.index()] = widen(block.congruence.factor(slot));
@@ -114,10 +114,11 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
         return Err(ReduceError::OutOfRange { vertex });
     }
     let decided = blocks.into_iter().zip(ones).zip(trace);
-    let decide = |block: Congruent<T, I>, abs: Vec<T>, ones: f64, trace: f64| {
-        let mut rows = block.vertices.iter().zip(abs);
-        let outweighs = |(v, s): (&I, T)| outweighs_coupling(surplus[v.index()], widen(s));
-        if within_band::<T>(ones, trace) && !rows.any(outweighs) {
+    let decide = |block: Congruent<T, I>, rows: RowSums<T>, vector: ScaleVector, ones, trace| {
+        let sums = rows.diagonal.iter().zip(&rows.abs);
+        let rows = (block.vertices.iter().zip(sums))
+            .map(|(v, (&d, &s))| (surplus[v.index()], widen(s), widen(d)));
+        if within_band::<T>(ones, trace) && vector.rows_float(rows, &block.off_diagonal) {
             return block.block(Balance::Balanced(Grounding::ungrounded()));
         }
         let vertices = &block.vertices;
@@ -131,7 +132,8 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
             _ => Err(ReduceError::Unscalable { vertex }),
         }
     };
-    (decided.map(|(((block, abs), ones), trace)| decide(block, abs, ones, trace))).collect()
+    let decide = |(((block, rows, vector), ones), trace)| decide(block, rows, vector, ones, trace);
+    decided.map(decide).collect()
 }
 
 /// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is: one union-find pass; a cycle off by more than `√ε` relative dooms its component.

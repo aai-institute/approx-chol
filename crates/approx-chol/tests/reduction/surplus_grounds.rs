@@ -1,7 +1,7 @@
 use super::dense::dense;
 use super::gram::{dense_csr, matrix};
 use approx_chol::input::{CsrRef, FactorWidth2, Laplacian, Sddm};
-use approx_chol::{factorize, factorize_with, Factor, ScalingPolicy};
+use approx_chol::{factorize, factorize_with, Factor, Real, ScalingPolicy};
 
 fn grounded(factor: &Factor) -> bool {
     factor.blocks().iter().all(|block| !block.floats())
@@ -155,6 +155,27 @@ fn frustrated_star_whose_surplus_rounds_to_zero_solves_its_matrix() {
     let exact: Vec<f64> = (0..a.len()).map(|i| (i % 5) as f64 - 2.0).collect();
     let backward = backward_error(&a, &apply(&a, &exact));
     assert!(backward <= 16.0 * f64::EPSILON, "{backward:e}");
+}
+
+/// Path `0 —r²— 1 —1— 2`, vertex 2 grounded by `1` = its coupling: `1ᵀM1 = 1` is within `5ε tr M` from `r² = 1/(8ε)`.
+fn heavy_path_solves_grounded<T: Real>(r: T) {
+    let (one, two) = (T::one(), T::one() + T::one());
+    let w = r * r;
+    let values = [w, -w, -w, w + one, -one, -one, two];
+    let csr = CsrRef::new(&[0u32, 2, 5, 7], &[0, 1, 0, 1, 2, 1, 2], &values, 3).unwrap();
+    let (x, y) = ([r, one, one], [-r, -one, T::zero()]);
+    let gram = FactorWidth2::new(3, (&[0u32, 1, 2], &x), (&[1u32, 2, 0], &y)).unwrap();
+    let rhs = [T::zero(), one, T::zero()];
+    for (label, factor) in [("csr", factorize(csr)), ("gram", factorize(gram))] {
+        let solution = factor.unwrap().solve(&rhs).unwrap();
+        assert_eq!(solution, [two, two, one], "{label}");
+    }
+}
+
+#[test]
+fn heavy_path_whose_light_end_grounds_by_its_coupling_grounds() {
+    heavy_path_solves_grounded(2f32.powi(10));
+    heavy_path_solves_grounded(2f64.powi(25));
 }
 
 /// `Σ|a₀ⱼ| = 1 + 0.75ε` rounds up to `1 + ε` in `f32`; `d₀ = 1 + 10ε` is `4.6ε tr M`, `1 + 11ε` is `5.1ε`.

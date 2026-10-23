@@ -95,6 +95,20 @@ pub(super) enum ScaleVector {
 }
 
 impl ScaleVector {
+    /// Whether no row `(surplus, Σ_j|m_ij|, m_ii)` is past its band or its coupling; a band grows with `k_i`, so only a row past its one-entry band pays for the degrees.
+    pub(super) fn rows_float<T: Real, I: Index>(
+        self,
+        rows: impl Iterator<Item = (f64, f64, f64)> + Clone,
+        off_diagonal: &OffDiagonal<T, I>,
+    ) -> bool {
+        let epsilon = widen(T::epsilon());
+        let past = |k: usize, (surplus, abs, m_ii): (f64, f64, f64)| {
+            surplus > abs.min(self.row_band(k, m_ii, epsilon) * m_ii)
+        };
+        !rows.clone().any(|row| past(1, row))
+            || !(rows.zip(off_diagonal.degrees())).any(|(row, k)| past(k, row))
+    }
+
     /// Row `i`'s band for its `k_i` entries and diagonal `m_ii`, in units where `T`'s rounding is `epsilon`.
     fn row_band(self, k: usize, m_ii: f64, epsilon: f64) -> f64 {
         let rounding = (k + 3) as f64 * epsilon;
