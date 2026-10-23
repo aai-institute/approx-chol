@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-10-30
 
 ### Changed (breaking)
 
@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Factor::solve_in_place` takes `x` of length `Factor::n` and caller scratch of at least `Factor::scratch_len`. ([#146])
 - `Factor::solve` rejects a right-hand side whose length is not `Factor::n`. ([#146])
 - `SolveError` is `LengthMismatch` or `ScratchTooShort`. ([#146])
+- An entry below `MIN_POSITIVE / EPSILON` in magnitude is `CsrError::OutOfRange`; 0.6.0 accepted it, and solved scales below about 1e-307 wrongly without an error. ([#163])
 - `Factor::solve_in_place` returns `solve`'s `A⁺b` on each floating block; 0.6.0 pinned an elimination-dependent vertex of each floating block to zero instead. ([#135])
 - `FACTOR_FORMAT_VERSION` is `0x41430009`, and no other version decodes. ([#148], [#179])
 - Python `Backend` is removed: `Config(exact_max_dim=...)` replaces it; `ExactFailure`, `DenseFailure`, `Fallback` and `Factor.fallbacks` are removed. ([#182])
@@ -39,9 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `Input`, taking `UpperCsrRef`, `Laplacian`, `Sddm`, `FactorWidth2` and `BipartiteFactorWidth2`, with `FactorWidth1` and `ViewError`. ([#183])
+- `input`: `Input`, taking `UpperCsrRef`, `Laplacian`, `Sddm`, `FactorWidth2` and `BipartiteFactorWidth2`, with `FactorWidth1` and `ViewError`. ([#183])
 - `SchurMode`, `ScalingPolicy`, `ScalingReport` and `ReduceError`. ([#182])
-- `Factor::blocks` and `BlockFactor`, which solves one block in place and persists on its own. ([#183])
+- `Factor::blocks`, `Factor::into_blocks`, `BlockFactor` and `InnerParallelism`: a `BlockFactor` solves one block in place and persists on its own. ([#183])
 - `Factor::scratch_len`. ([#146])
 - A factor of more than `(u32::MAX - 1) / 2` vertices stores `u64` indices. ([#182])
 - Python `factorize` warns when a block's deficit is clamped or its scaling does not settle. ([#181])
@@ -53,9 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Solves sum each block's right-hand side with compensation. ([#147])
-- An entry below `MIN_POSITIVE / EPSILON` in magnitude is rejected. ([#163])
-- A grounded block whose weights span past `1/ε` ends its approximate elimination at the ground; it could solve to ±inf. ([#228])
+- A `faer` matrix with unused slots inside a row is `CsrError::RowGap`; 0.6.0 read them as entries. ([#180])
+- A grounded block whose weights span past `1/ε` ends its approximate elimination at the ground; it could solve inaccurately. ([#228])
 - Python `factorize`, `factorize_raw`, `Factor.solve` (so `matvec`/`rmatvec`) and `Factor.solve_into` release the GIL for a matrix of more than 32768 stored entries, working only on their own copies meanwhile. ([#255])
 - `Factor<f32>` keeps a high-degree pivot's `1/d` and fill weights; they drifted by `~mε` at degree `m`, up to a negative pivot. ([#275])
 - AC2's degree queue takes memory linear in the input for any `split_merge`. ([#277])
@@ -218,7 +218,8 @@ for graph Laplacians in Rust with Python bindings.
 - Multi-platform CI with coverage reporting
 - Dual MIT license for Rust crate and Python package
 
-[Unreleased]: https://github.com/aai-institute/approx-chol/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/aai-institute/approx-chol/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.7.0
 [0.6.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.6.0
 [0.5.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.5.0
 [0.4.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.4.0
@@ -253,7 +254,6 @@ for graph Laplacians in Rust with Python bindings.
 [#135]: https://github.com/aai-institute/approx-chol/issues/135
 [#140]: https://github.com/aai-institute/approx-chol/issues/140
 [#146]: https://github.com/aai-institute/approx-chol/issues/146
-[#147]: https://github.com/aai-institute/approx-chol/issues/147
 [#163]: https://github.com/aai-institute/approx-chol/issues/163
 [#179]: https://github.com/aai-institute/approx-chol/issues/179
 [#180]: https://github.com/aai-institute/approx-chol/issues/180
