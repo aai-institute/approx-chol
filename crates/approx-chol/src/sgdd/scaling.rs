@@ -91,10 +91,28 @@ pub(super) enum ScaleVector {
     /// `|u|` of a certified null vector, accurate relative to each entry.
     NullVector,
     /// An inverse-iteration Perron vector settled to `band` relative to its peak: a row of `M_ii = μ_i²` sits within `band/μ_i`.
+    // Spreads a ground as `1 − ρ` over every row, so a block within the band floats (#308).
     PerronVector { band: f64, shortfall: ScalingReport },
 }
 
 impl ScaleVector {
+    /// The worst `excess_i / m_ii` past row `i`'s band, `0` if none; degrees cost a pass over the entries, so only a row past the `RATIO_BAND ε` floor pays for them.
+    pub(super) fn worst_past_band<T: Real, I: Index>(
+        self,
+        excess: impl Iterator<Item = f64> + Clone,
+        diagonal: &[T],
+        off_diagonal: &OffDiagonal<T, I>,
+    ) -> f64 {
+        let epsilon = widen(T::epsilon());
+        let ratios = (excess.zip(diagonal)).map(|(e, &d)| e / widen(d));
+        if (ratios.clone()).all(|ratio| ratio <= RATIO_BAND * epsilon) {
+            return 0.0;
+        }
+        (ratios.zip(off_diagonal.degrees()).zip(diagonal))
+            .filter(|&((ratio, k), &d)| ratio > self.row_band(k, widen(d), epsilon))
+            .fold(0.0, |worst, ((ratio, _), _)| worst.max(ratio))
+    }
+
     /// Row `i`'s band for its `k_i` entries and diagonal `m_ii`, in units where `T`'s rounding is `epsilon`.
     fn row_band(self, k: usize, m_ii: f64, epsilon: f64) -> f64 {
         let rounding = (k + 3) as f64 * epsilon;
@@ -105,14 +123,8 @@ impl ScaleVector {
         }
     }
 
-    /// `M`'s report from its rows, kept when a deficit past a row's band was clamped or the scaling did not settle; an exact vector spends nothing.
-    pub(super) fn report<T: Real, I: Index>(
-        self,
-        diagonal: &[T],
-        abs_row_sums: &[T],
-        off_diagonal: &OffDiagonal<T, I>,
-    ) -> Option<ScalingReport> {
-        let deficit = clamped_deficit(diagonal, abs_row_sums, off_diagonal, self);
+    /// `M`'s report from its worst clamped `deficit`, kept when one is past a row's band or the scaling did not settle; an exact vector spends nothing.
+    pub(super) fn report(self, deficit: f64) -> Option<ScalingReport> {
         let shortfall = match self {
             Self::Identity | Self::NullVector => ScalingReport {
                 iterations: 0,
@@ -126,28 +138,6 @@ impl ScaleVector {
             ..shortfall
         })
     }
-}
-
-/// `max_i (Σ_j|m_ij| − m_ii)/m_ii` past row `i`'s band, which its `k_i` entries and the scale vector set.
-fn clamped_deficit<T: Real, I: Index>(
-    diagonal: &[T],
-    abs_row_sums: &[T],
-    off_diagonal: &OffDiagonal<T, I>,
-    vector: ScaleVector,
-) -> f64 {
-    let epsilon = widen(T::epsilon());
-    let deficits =
-        (diagonal.iter().zip(abs_row_sums)).map(|(&d, &s)| (widen(s) - widen(d)) / widen(d));
-    // Degrees cost a pass over the entries, so only a row past the floor pays for them.
-    if deficits
-        .clone()
-        .all(|deficit| deficit <= RATIO_BAND * epsilon)
-    {
-        return 0.0;
-    }
-    (deficits.zip(off_diagonal.degrees()).zip(diagonal))
-        .filter(|&((deficit, k), &d)| deficit > vector.row_band(k, widen(d), epsilon))
-        .fold(0.0, |worst, ((deficit, _), _)| worst.max(deficit))
 }
 
 /// `None` unless every scale is a positive `T`.

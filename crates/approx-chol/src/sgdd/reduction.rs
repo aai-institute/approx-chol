@@ -67,12 +67,7 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
                 scaling::relax(&a.off_diagonal, &a.rows.diagonal, policy)
             };
             let block = match a.reduce(policy, relax)? {
-                Signed::Folded(m, rows) => {
-                    let vertex = m.vertices[0].index();
-                    let grounding = (rows.folded_surplus(&m.off_diagonal))
-                        .ok_or(ReduceError::Unscalable { vertex })?;
-                    m.block(Balance::Balanced(grounding))?
-                }
+                Signed::Folded(folded) => folded.block()?,
                 Signed::Frustrated(block) => block,
             };
             Ok(block)
@@ -155,10 +150,19 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 (m, RowSums { diagonal, abs }, vector)
             }
         };
-        let report = vector.report(&rows.diagonal, &rows.abs, &m.off_diagonal);
-        let m = Congruent { report, ..m };
+        let deficits = (rows.diagonal.iter().zip(&rows.abs)).map(|(&d, &s)| widen(s) - widen(d));
+        let clamped = vector.worst_past_band(deficits, &rows.diagonal, &m.off_diagonal);
+        let m = Congruent {
+            report: vector.report(clamped),
+            ..m
+        };
         match folded {
-            true => Ok(Signed::Folded(m, rows)),
+            true => Ok(Signed::Folded(Folded {
+                m,
+                rows,
+                vector,
+                clamped,
+            })),
             false => Ok(Signed::Frustrated(
                 m.block(Balance::Frustrated(surplus(&rows.diagonal, rows.abs)))?,
             )),
@@ -168,7 +172,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
 
 /// Only a folded `M` can still take a surplus from `V`.
 enum Signed<T, I> {
-    Folded(Congruent<T, I>, RowSums<T>),
+    Folded(Folded<T, I>),
     Frustrated(IrreducibleBlock<T, I>),
 }
 
@@ -212,31 +216,61 @@ struct RowSums<T> {
     abs: Vec<T>,
 }
 
-impl<T: Real> RowSums<T> {
-    /// A folded `M`'s row sums are `M1`, so `1ᵀM1 = tr M − Σ|offdiag(M)|`, both `ε`-scaled as the Gram path's, so `tr M` cannot overflow; `None` only past `Sum2`'s bound.
-    fn folded_surplus<I: Index>(self, off_diagonal: &OffDiagonal<T, I>) -> Option<Grounding<T>> {
+/// A folded `M` with its rows and the bands they sit in, its surplus still to be decided.
+struct Folded<T, I> {
+    m: Congruent<T, I>,
+    rows: RowSums<T>,
+    vector: ScaleVector,
+    /// The worst `(Σ_j|m_ij| − m_ii)/m_ii` clamped past its row's band.
+    clamped: f64,
+}
+
+impl<T: Real, I: Index> Folded<T, I> {
+    /// `M` floating or grounded on `M1`: `1ᵀM1 = tr M − Σ|offdiag(M)|`, both `ε`-scaled as the Gram path's, so `tr M` cannot overflow.
+    fn block(self) -> Result<IrreducibleBlock<T, I>, ReduceError> {
+        let vertex = self.m.vertices[0].index();
+        let off_diagonal = &self.m.off_diagonal;
         let epsilon = widen(T::epsilon());
-        let diagonal = crate::Sum2::of(&self.diagonal, |_, d| epsilon * widen(d));
+        let diagonal = crate::Sum2::of(&self.rows.diagonal, |_, d| epsilon * widen(d));
         let trace = diagonal.total();
         // `tr M` rounded on its own drops a surplus below its ulp, which the Gram path keeps.
         let ones = off_diagonal.scaled_abs_into(diagonal, -epsilon).total();
-        let mut rows = self.diagonal.iter().zip(&self.abs);
-        let outweighs = |(&d, &s): (&T, &T)| outweighs_coupling(widen(d) - widen(s), widen(s));
-        if within_band::<T>(ones, trace) && !rows.any(outweighs) {
-            return Some(Grounding::ungrounded());
+        let RowSums { diagonal, abs } = &self.rows;
+        let residues = (diagonal.iter().zip(abs)).map(|(&d, &s)| widen(d) - widen(s));
+        if within_band::<T>(ones, trace) && self.floats(residues) {
+            return self.m.block(Balance::Balanced(Grounding::ungrounded()));
         }
-        let Self { diagonal, abs } = self;
-        match surplus(&diagonal, abs) {
-            grounding if grounding.is_grounded() => Some(grounding),
+        let Self {
+            m,
+            rows: RowSums { diagonal, abs },
+            ..
+        } = self;
+        let grounding = match surplus(&diagonal, abs) {
+            grounding if grounding.is_grounded() => grounding,
             // An uncompensated `f64` row sum can round up to `d_i` from degree 67 (#269).
             _ => {
-                let sums = off_diagonal.compensated_abs_row_sums();
+                let sums = m.off_diagonal.compensated_abs_row_sums();
                 let residues = (diagonal.iter().zip(sums))
                     .map(|(&d, s)| narrow((widen(d) - s).max(0.0)))
                     .collect();
-                Some(Grounding::of(residues)).filter(Grounding::is_grounded)
+                Some(Grounding::of(residues))
+                    .filter(Grounding::is_grounded)
+                    .ok_or(ReduceError::Unscalable { vertex })?
             }
-        }
+        };
+        m.block(Balance::Balanced(grounding))
+    }
+
+    /// Whether no row's surplus outweighs its coupling or passes its band by more than the deficit clamped beside it, whose twin it may be.
+    fn floats(&self, surplus: impl Iterator<Item = f64> + Clone) -> bool {
+        let RowSums { diagonal, abs } = &self.rows;
+        // A surplus past its coupling is past every band.
+        let excess =
+            (surplus.zip(diagonal.iter().zip(abs))).map(|(s, (&d, &abs))| match s > widen(abs) {
+                true => f64::INFINITY,
+                false => s - self.clamped * widen(d),
+            });
+        (self.vector).worst_past_band(excess, diagonal, &self.m.off_diagonal) == 0.0
     }
 }
 
@@ -252,11 +286,6 @@ const SINGULAR_BAND: f64 = 5.0;
 /// Whether `ones = 1ᵀM1` is within the band of `trace = tr M`: needed, not enough, for `M` to float.
 pub(crate) fn within_band<T: Real>(ones: f64, trace: f64) -> bool {
     ones <= SINGULAR_BAND * widen(T::epsilon()) * trace
-}
-
-/// A row whose surplus outweighs its `Σ_j|m_ij|` grounds its block even within the band.
-fn outweighs_coupling(surplus: f64, abs: f64) -> bool {
-    surplus > abs
 }
 
 /// The signs `S` folding `A_c` into a Z-matrix, `I` when it already is one; `None` when frustrated.

@@ -2,6 +2,7 @@ use approx_chol::input::FactorWidth2;
 use approx_chol::{factorize, Config, CsrRef, ScalingPolicy, Sgdd};
 use rstest::rstest;
 
+use super::cycle::Cycle;
 use super::{reduce, reduce_with};
 
 /// `D L D` for the graph `edges` on `n` vertices, `D` within `spread` of `I`: GDD by construction, `R = D⁻¹`.
@@ -160,15 +161,8 @@ fn a_settled_scaling_with_an_uneven_perron_vector_is_not_clamped() {
 /// A Gram cycle whose null vector `u = 2^min(i, L−1−i)` peaks mid-cycle; its error is relative per entry, so no row's band grows by `1/μ_i`.
 #[test]
 fn a_gram_null_vector_deficit_past_its_row_rounding_is_reported() {
-    let (cycle, miss) = (20u32, 1e-10);
-    let u = |i: u32| f64::from(1u32 << i.min(cycle - 1 - i));
-    let a: Vec<u32> = (0..cycle).collect();
-    let b: Vec<u32> = (0..cycle).map(|i| (i + 1) % cycle).collect();
-    let mut x: Vec<f64> = b.iter().map(|&j| u(j)).collect();
-    let y: Vec<f64> = a.iter().map(|&i| -u(i)).collect();
-    x[cycle as usize - 1] *= 1.0 + miss;
-    let gram = FactorWidth2::new(cycle as usize, (&a, &x), (&b, &y)).expect("valid columns");
-    let factor = factorize(gram).expect("admitted");
+    let miss = 1e-10;
+    let factor = factorize(Cycle::new(20, miss).gram()).expect("admitted");
     let report = factor.blocks()[0].scaling_report().expect("reported");
     assert!(report.violation > miss / 10.0, "{report:?}");
 }

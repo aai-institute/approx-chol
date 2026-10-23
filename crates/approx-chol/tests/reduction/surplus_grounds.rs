@@ -1,9 +1,10 @@
+use super::cycle::Cycle;
 use super::dense::dense;
 use super::gram::{dense_csr, matrix};
 use approx_chol::input::{CsrRef, FactorWidth2, Laplacian, Sddm};
-use approx_chol::{factorize, factorize_with, Factor, ScalingPolicy};
+use approx_chol::{factorize, factorize_with, Factor, Real, ScalingPolicy};
 
-fn grounded(factor: &Factor) -> bool {
+fn grounded<T: Real>(factor: &Factor<T>) -> bool {
     factor.blocks().iter().all(|block| !block.floats())
 }
 
@@ -155,6 +156,56 @@ fn frustrated_star_whose_surplus_rounds_to_zero_solves_its_matrix() {
     let exact: Vec<f64> = (0..a.len()).map(|i| (i % 5) as f64 - 2.0).collect();
     let backward = backward_error(&a, &apply(&a, &exact));
     assert!(backward <= 16.0 * f64::EPSILON, "{backward:e}");
+}
+
+/// Path `0 —r²— 1 —1— 2`, vertex 2 grounded by `1` = its coupling: `x = [2, 2, 1]`.
+fn heavy_path_solves_grounded<T: Real>(r: T) {
+    let (one, two) = (T::one(), T::one() + T::one());
+    let w = r * r;
+    let values = [w, -w, -w, w + one, -one, -one, two];
+    let csr = CsrRef::new(&[0u32, 2, 5, 7], &[0, 1, 0, 1, 2, 1, 2], &values, 3).unwrap();
+    let (x, y) = ([r, one, one], [-r, -one, T::zero()]);
+    let gram = FactorWidth2::new(3, (&[0u32, 1, 2], &x), (&[1u32, 2, 0], &y)).unwrap();
+    for (label, factor) in [("csr", factorize(csr)), ("gram", factorize(gram))] {
+        let factor = factor.unwrap();
+        let solution = factor.solve(&[T::zero(), one, T::zero()]).unwrap();
+        assert_eq!(solution, [two, two, one], "{label}");
+        assert!(grounded(&factor), "{label}");
+    }
+}
+
+/// `1ᵀM1 = 1` is within `5ε tr M` once `r² ≥ 1/(10ε)`, yet vertex 2's surplus is past its row's band.
+#[test]
+fn heavy_path_whose_light_end_grounds_by_its_coupling_grounds() {
+    heavy_path_solves_grounded(2f32.powi(10));
+    heavy_path_solves_grounded(2f64.powi(25));
+}
+
+/// The path above with column `2r e₀ − r e₁`, dominant only once scaled by its null vector `(1, 2, 2)`: `x = [1, 2, 1]`.
+#[test]
+fn scaled_heavy_gram_path_grounds() {
+    fn solves<T: Real>(r: T) {
+        let (one, two) = (T::one(), T::one() + T::one());
+        let (x, y) = ([two * r, one, one], [-r, -one, T::zero()]);
+        let gram = FactorWidth2::new(3, (&[0u32, 1, 2], &x), (&[1u32, 2, 0], &y)).unwrap();
+        let factor = factorize(gram).unwrap();
+        let solution = factor.solve(&[T::zero(), one, T::zero()]).unwrap();
+        let error = (solution.iter().zip([one, two, one])).map(|(&s, e)| ((s - e) / e).abs());
+        let error = error.fold(T::zero(), T::max);
+        assert!(error <= T::from(1e-3).unwrap(), "{solution:?}");
+        assert!(grounded(&factor));
+    }
+    solves(2f32.powi(10));
+    solves(2f64.powi(25));
+}
+
+/// A cycle off its null vector by `1e-10` leaves a surplus twinned with the deficit clamped beside it; grounded, `x₀` was `-5e12`.
+#[test]
+fn gram_cycle_whose_surplus_twins_its_clamped_deficit_floats() {
+    let factor = factorize(Cycle::new(20, -1e-10).gram()).unwrap();
+    let block = &factor.blocks()[0];
+    assert!(block.scaling_report().is_some());
+    assert!(block.floats());
 }
 
 /// `Σ|a₀ⱼ| = 1 + 0.75ε` rounds up to `1 + ε` in `f32`; `d₀ = 1 + 10ε` is `4.6ε tr M`, `1 + 11ε` is `5.1ε`.
