@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-10-23
 
 ### Changed (breaking)
 
@@ -54,9 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Solves sum each block's right-hand side with compensation. ([#147])
 - An entry below `MIN_POSITIVE / EPSILON` in magnitude is rejected. ([#163])
-- A grounded block whose weights span past `1/ε` ends its approximate elimination at the ground; it could solve to ±inf. ([#228])
+- A grounded block whose weights span past `1/ε` ends its approximate elimination at the ground; it could solve inaccurately. ([#228])
 - Python `factorize`, `factorize_raw`, `Factor.solve` (so `matvec`/`rmatvec`) and `Factor.solve_into` release the GIL for a matrix of more than 32768 stored entries, working only on their own copies meanwhile. ([#255])
 - `Factor<f32>` keeps a high-degree pivot's `1/d` and fill weights; they drifted by `~mε` at degree `m`, up to a negative pivot. ([#275])
+- A solve no longer overflows to ±inf where the solution fits. ([#217])
 - AC2's degree queue takes memory linear in the input for any `split_merge`. ([#277])
 
 ## [0.6.0] - 2026-08-24
@@ -217,7 +218,8 @@ for graph Laplacians in Rust with Python bindings.
 - Multi-platform CI with coverage reporting
 - Dual MIT license for Rust crate and Python package
 
-[Unreleased]: https://github.com/aai-institute/approx-chol/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/aai-institute/approx-chol/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.7.0
 [0.6.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.6.0
 [0.5.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.5.0
 [0.4.0]: https://github.com/aai-institute/approx-chol/releases/tag/v0.4.0
@@ -258,6 +260,7 @@ for graph Laplacians in Rust with Python bindings.
 [#180]: https://github.com/aai-institute/approx-chol/issues/180
 [#181]: https://github.com/aai-institute/approx-chol/issues/181
 [#224]: https://github.com/aai-institute/approx-chol/pull/224
+[#217]: https://github.com/aai-institute/approx-chol/pull/217
 [#183]: https://github.com/aai-institute/approx-chol/issues/183
 [#182]: https://github.com/aai-institute/approx-chol/issues/182
 [#148]: https://github.com/aai-institute/approx-chol/issues/148
