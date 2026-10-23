@@ -116,7 +116,7 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     let decided = blocks.into_iter().zip(ones).zip(trace);
     (decided.map(|((folded, ones), trace)| {
         let row_surplus = (folded.m.vertices.iter()).map(|v| surplus[v.index()]);
-        let floats = within_band::<T>(ones, trace) && folded.floats(row_surplus);
+        let floats = within_band::<T>(ones, trace) && folded.floats(row_surplus, ones);
         let block = folded.m;
         if floats {
             return block.block(Balance::Balanced(Grounding::ungrounded()));

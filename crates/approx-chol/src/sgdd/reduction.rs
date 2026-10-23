@@ -237,7 +237,7 @@ impl<T: Real, I: Index> Folded<T, I> {
         let ones = off_diagonal.scaled_abs_into(diagonal, -epsilon).total();
         let RowSums { diagonal, abs } = &self.rows;
         let residues = (diagonal.iter().zip(abs)).map(|(&d, &s)| widen(d) - widen(s));
-        if within_band::<T>(ones, trace) && self.floats(residues) {
+        if within_band::<T>(ones, trace) && self.floats(residues, ones) {
             return self.m.block(Balance::Balanced(Grounding::ungrounded()));
         }
         let Self {
@@ -261,16 +261,19 @@ impl<T: Real, I: Index> Folded<T, I> {
         m.block(Balance::Balanced(grounding))
     }
 
-    /// Whether no row's surplus outweighs its coupling or passes its band by more than the deficit clamped beside it, whose twin it may be.
-    fn floats(&self, surplus: impl Iterator<Item = f64> + Clone) -> bool {
+    /// Whether no row's surplus outweighs its coupling, and none passes its band unless the deficits beside it cancel it; `ones` is `ε·1ᵀM1`.
+    fn floats(&self, surplus: impl Iterator<Item = f64> + Clone, ones: f64) -> bool {
         let RowSums { diagonal, abs } = &self.rows;
-        // A surplus past its coupling is past every band.
-        let excess =
-            (surplus.zip(diagonal.iter().zip(abs))).map(|(s, (&d, &abs))| match s > widen(abs) {
-                true => f64::INFINITY,
-                false => s - self.clamped * widen(d),
-            });
-        (self.vector).worst_past_band(excess, diagonal, &self.m.off_diagonal) == 0.0
+        if (surplus.clone().zip(abs)).any(|(s, &abs)| s > widen(abs)) {
+            return false;
+        }
+        let excess = (surplus.clone().zip(diagonal)).map(|(s, &d)| s - self.clamped * widen(d));
+        if (self.vector).worst_past_band(excess, diagonal, &self.m.off_diagonal) == 0.0 {
+            return true;
+        }
+        // A ground's mass reaches `1ᵀM1`; residues of a near-null `M1` cancel far below theirs.
+        let positive: f64 = surplus.filter(|&s| s > 0.0).sum();
+        ones < 0.5 * widen(T::epsilon()) * positive
     }
 }
 
