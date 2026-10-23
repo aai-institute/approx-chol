@@ -91,6 +91,7 @@ pub(super) enum ScaleVector {
     /// `|u|` of a certified null vector, accurate relative to each entry.
     NullVector,
     /// An inverse-iteration Perron vector settled to `band` relative to its peak: a row of `M_ii = μ_i²` sits within `band/μ_i`.
+    // Spreads a ground as `1 − ρ` over every row, so a block within the band floats (#308).
     PerronVector { band: f64, shortfall: ScalingReport },
 }
 
