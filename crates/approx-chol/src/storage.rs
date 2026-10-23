@@ -18,6 +18,11 @@ pub(crate) struct Rows<T, I> {
 }
 
 impl<T: Real, I: Index> Rows<T, I> {
+    #[cfg(test)]
+    pub(crate) fn holds_no_slack(&self) -> bool {
+        self.indices.capacity() == self.indices.len() && self.values.capacity() == self.values.len()
+    }
+
     /// Panics unless `ptrs` ascends from `0` and each row's columns strictly ascend below `n_cols`.
     pub(crate) fn new(ptrs: Vec<usize>, indices: Vec<I>, values: Vec<T>, n_cols: usize) -> Self {
         assert_eq!(ptrs.first(), Some(&0), "rows start at the first entry");
