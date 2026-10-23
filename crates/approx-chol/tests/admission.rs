@@ -1,5 +1,7 @@
 #[path = "admission/csr.rs"]
 mod csr;
+#[path = "common/cycle.rs"]
+mod cycle;
 #[path = "common/dense_residual.rs"]
 mod dense_residual;
 #[path = "common/gram.rs"]
