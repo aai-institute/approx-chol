@@ -9,7 +9,7 @@ use crate::input::{Canonical, CsrError};
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::{Index, Real};
 pub(super) use assembly::{
-    assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, StrictUpperTriangle,
+    assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, Onto, StrictUpperTriangle,
 };
 use partition::Partition;
 use partition::UnionFind;
@@ -132,7 +132,7 @@ pub(super) struct Components<B, I, T> {
     pub(super) summands: Summands<B, I, T>,
 }
 
-/// `A`'s direct summands by kind, each factored and solved on its own.
+/// The factored matrix's direct summands by kind, each factored and solved on its own.
 #[derive(Clone, Debug)]
 pub(crate) struct Summands<B, I, T> {
     /// Each coupled component's block.

@@ -1,5 +1,7 @@
 use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1};
-use approx_chol::{factorize_with, Config, InnerParallelism, ScalingPolicy, SchurMode};
+use approx_chol::{
+    factorize_complement, factorize_with, Config, InnerParallelism, ScalingPolicy, SchurMode, Side,
+};
 
 const DEGREE: usize = 48;
 
@@ -39,17 +41,20 @@ fn gram() -> Gram {
     g
 }
 
-/// `Factor::solve`, then each block's `solve_local` under `Allow` and `Forbid`, as bits.
-fn solve_bits(g: &Gram, config: Config) -> Vec<u64> {
+/// `Factor::solve`, then each block's `solve_local` under `Allow` and `Forbid`, as bits; `kept` factors the complement.
+fn solve_bits(g: &Gram, config: Config, kept: Option<Side>) -> Vec<u64> {
     let gram = BipartiteFactorWidth2::new(
         FactorWidth1::new(g.n_left, &g.left, Some(&g.left_values)).unwrap(),
         FactorWidth1::new(g.n_right, &g.right, Some(&g.right_values)).unwrap(),
     )
     .unwrap();
-    let factor = factorize_with(gram, config, ScalingPolicy::default()).unwrap();
+    let factor = match kept {
+        None => factorize_with(gram, config, ScalingPolicy::default()).unwrap(),
+        Some(side) => factorize_complement(gram, side, config, ScalingPolicy::default()).unwrap(),
+    };
     assert_eq!(factor.blocks().len(), GROUPS.len());
     assert!(
-        factor.blocks().iter().any(|b| b.splittable_work() > 0),
+        kept.is_some() || factor.blocks().iter().any(|b| b.splittable_work() > 0),
         "a block stores Cᵀ, so Allow splits its solve"
     );
     let b: Vec<f64> = (0..factor.n())
@@ -88,19 +93,22 @@ fn solves_are_bit_identical_across_thread_counts() {
             },
         ),
     ];
-    for (label, config) in configs {
+    for ((label, config), kept) in configs
+        .into_iter()
+        .flat_map(|c| [None, Some(Side::Left), Some(Side::Right)].map(|k| (c, k)))
+    {
         let at = |threads: usize| {
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
                 .build()
                 .unwrap();
-            pool.install(|| solve_bits(&g, config))
+            pool.install(|| solve_bits(&g, config, kept))
         };
         let serial = at(1);
         for threads in [2, 7] {
             assert!(
                 at(threads) == serial,
-                "{label}: {threads} threads differ from 1"
+                "{label} {kept:?}: {threads} threads differ from 1"
             );
         }
     }

@@ -4,7 +4,7 @@ use std::ops::Range;
 use crate::narrow;
 use crate::{widen, Index, Real};
 
-/// `R = F Pᵀ`, so `M = R A Rᵀ`: `Pᵀ` picks the block's vertices of `A`, `F` is the congruence.
+/// `R = F Pᵀ`, so `M = R A Rᵀ`: `Pᵀ` picks the block's vertices of `A`, or of `S` once tailed, `F` is the congruence.
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -32,6 +32,12 @@ impl<T: Real, I: Index> Restriction<T, I> {
 
     pub(crate) fn vertices(&self) -> &Selection<I> {
         &self.vertices
+    }
+
+    /// The restriction to local vertices `from..`, renumbered by `vertex`: a complement's, `F` commuting with the elimination.
+    pub(crate) fn tail(self, from: usize, vertex: impl Fn(usize) -> I) -> Self {
+        let vertices = (from..self.vertices.len()).map(|k| vertex(self.vertices.vertex(k)));
+        Self::new(vertices.collect(), self.congruence.tail(from))
     }
 
     /// `F` from vertex `from` on, `None` unless scaled, so every `|f|` is `1`.
@@ -83,7 +89,7 @@ impl<T: Real, I: Index> Restriction<T, I> {
     }
 }
 
-/// `Pᵀ`: the block's vertices of `A` in local order, a run of consecutive ones kept as its range, where `Pᵀ x` is a slice of `x`.
+/// `Pᵀ`: the block's vertices of the factored matrix in local order, a run of consecutive ones kept as its range, where `Pᵀ x` is a slice of `x`.
 #[derive(Clone, Debug)]
 pub(crate) enum Selection<I> {
     Range(Range<usize>),
@@ -108,7 +114,7 @@ impl<I: Index> Selection<I> {
         }
     }
 
-    /// Local vertex `k` in `A`'s numbering.
+    /// Local vertex `k` in the factored matrix's numbering.
     pub(crate) fn vertex(&self, k: usize) -> usize {
         match self {
             Self::Range(range) => range.start + k,
@@ -253,6 +259,18 @@ impl<T: Real> Congruence<T> {
             Self::NegateFrom(first) if i >= *first => -T::one(),
             Self::NegateFrom(_) => T::one(),
             Self::Signs(factors) | Self::Scaled(ScaledFactors { factors, .. }) => factors[i],
+        }
+    }
+
+    /// `F` on vertices `from..`, renumbered from `0`.
+    fn tail(&self, from: usize) -> Self {
+        match self {
+            Self::Identity => Self::Identity,
+            // `(−I) S (−I) = S`: a tail negated whole needs no congruence.
+            Self::NegateFrom(first) if *first <= from => Self::Identity,
+            Self::NegateFrom(first) => Self::NegateFrom(first - from),
+            Self::Signs(factors) => Self::Signs(factors[from..].into()),
+            Self::Scaled(scales) => Self::Scaled(ScaledFactors::new(scales.factors[from..].into())),
         }
     }
 

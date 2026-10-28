@@ -266,7 +266,7 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
 #[derive(Clone, Debug)]
 pub(crate) enum OffDiagonal<T, I> {
     General(UpperAdjacency<T, I>),
-    /// `C` of `[D_e C; Cᵀ D_k]`, both sides nonempty, the larger eliminated first as its rows.
+    /// `C` of `[D_e C; Cᵀ D_k]`, both sides nonempty, the eliminated side as its rows.
     Bipartite(Rows<T, I>),
 }
 

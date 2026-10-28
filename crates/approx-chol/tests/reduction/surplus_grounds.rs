@@ -1,5 +1,6 @@
 use super::cycle::Cycle;
 use super::dense::dense;
+use super::dense_residual::apply;
 use super::gram::{dense_csr, matrix};
 use approx_chol::input::{CsrRef, FactorWidth2, Laplacian, Sddm};
 use approx_chol::{factorize, factorize_with, Factor, Real, ScalingPolicy};
@@ -115,12 +116,6 @@ fn centre_surplus_over_band(a: &[Vec<f64>]) -> f64 {
     let surplus = (a[0][0] - leaves as f64) - rounding;
     let trace: f64 = (0..a.len()).map(|i| a[i][i]).sum();
     surplus / (f64::EPSILON * trace)
-}
-
-fn apply(a: &[Vec<f64>], x: &[f64]) -> Vec<f64> {
-    (a.iter())
-        .map(|row| row.iter().zip(x).map(|(a, x)| a * x).sum())
-        .collect()
 }
 
 /// `‖Ax − b‖∞ / (‖A‖∞ ‖x‖∞)` for `x` the dense factor's solve of `b`, which must not float.

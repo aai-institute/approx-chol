@@ -1,5 +1,7 @@
 //! `V = [V_l; V_r]`: two width-1 sides on disjoint rows, left rows numbered first.
 
+use std::ops::Range;
+
 use num_traits::PrimInt;
 
 use super::error::{below, check, length, ViewError};
@@ -57,6 +59,20 @@ impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
         Ok(Self::of(left, right, Some(s)))
     }
 
+    /// Dimension of `A`.
+    pub(crate) fn n(&self) -> usize {
+        self.0.n()
+    }
+
+    /// The run of `A`'s vertices on `side`.
+    pub(crate) fn vertices(&self, side: Side) -> Range<usize> {
+        let n_left = self.0.n_left().expect("built only by `of`");
+        match side {
+            Side::Left => 0..n_left,
+            Side::Right => n_left..self.n(),
+        }
+    }
+
     fn of(
         left: FactorWidth1<'a, T, I>,
         right: FactorWidth1<'a, T, I>,
@@ -75,4 +91,13 @@ impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
             columns,
         })
     }
+}
+
+/// One side of a [`BipartiteFactorWidth2`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    /// `V_l`'s rows, `A`'s vertices `0..n_left`.
+    Left,
+    /// `V_r`'s rows, `A`'s vertices `n_left..n`.
+    Right,
 }

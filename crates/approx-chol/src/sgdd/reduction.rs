@@ -5,15 +5,15 @@ mod graph;
 
 use num_traits::PrimInt;
 
-use super::block::{Balance, Grounding, IrreducibleBlock, ReduceError};
+use super::block::{Balance, BlockComplement, Grounding, IrreducibleBlock, ReduceError};
 use super::congruence::{Congruence, ScaledFactors};
 use super::decomposition::{
-    of_csr, of_upper, AdjacencyLayout, Biadjacency, Cells, Components, Partitioned,
-    StrictUpperTriangle,
+    of_csr, of_upper, AdjacencyLayout, Biadjacency, Cells, Components, Onto, Partitioned,
+    StrictUpperTriangle, Summands,
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
-use super::{diagonal_in_range, Reduced};
-use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input};
+use super::{diagonal_in_range, Complement, Reduced};
+use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Side};
 use crate::storage::OffDiagonal;
 use crate::{narrow, widen, Error, Index, Real};
 
@@ -39,7 +39,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
         v: FactorWidth2<'_, T, J>,
         policy: &ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        match Biadjacency::of(&v) {
+        match Biadjacency::of(&v, Onto::Smaller) {
             Some(layout) => Self::from_gram(layout, v, policy),
             None => Self::from_gram(StrictUpperTriangle, v, policy),
         }
@@ -55,6 +55,35 @@ impl<T: Real, I: Index> Reduced<T, I> {
             true => Self::from_incidence(cells, v),
             false => Self::from_values(cells, v, policy),
         }
+    }
+}
+
+impl<T: Real, I: Index> Complement<T, I> {
+    /// As [`Reduced::reduce`], each block's side opposite `kept` eliminated first.
+    pub(crate) fn reduce_onto<J: PrimInt>(
+        input: BipartiteFactorWidth2<'_, T, J>,
+        kept: Side,
+        policy: ScalingPolicy,
+    ) -> Result<Self, ReduceError> {
+        let range = input.vertices(kept);
+        let BipartiteFactorWidth2(v) = input;
+        let layout = Biadjacency::of(&v, Onto::Given(kept)).expect("a bipartite V");
+        let Summands { blocks, lone, dead } = Reduced::from_gram(layout, v, &policy)?;
+        let start = range.start;
+        let local = |v: I| {
+            range
+                .contains(&v.index())
+                .then(|| I::from_index(v.index() - start))
+        };
+        Ok(Self {
+            blocks: (blocks.into_iter())
+                .map(|block| BlockComplement { block, start })
+                .collect(),
+            lone: (lone.into_iter())
+                .filter_map(|(v, pivot)| Some((local(v)?, pivot)))
+                .collect(),
+            dead: dead.into_iter().filter_map(local).collect(),
+        })
     }
 }
 

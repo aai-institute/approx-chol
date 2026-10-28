@@ -59,8 +59,8 @@ pub use factor::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
 pub use factor::{
     Backend, BlockFactor, Config, Factor, InnerParallelism, SchurMode, SolveError, Vertices,
 };
-pub use input::{CsrError, CsrRef, IndexKind, Input, OwnedCsr};
-use sgdd::Reduced;
+pub use input::{CsrError, CsrRef, IndexKind, Input, OwnedCsr, Side};
+use sgdd::{Complement, Reduced};
 pub use sgdd::{ReduceError, ScalingPolicy, ScalingReport};
 
 /// Factorizes any [`Input`] with [`Config::default`] and [`ScalingPolicy::default`].
@@ -89,6 +89,32 @@ where
     Ok(Sgdd::reduce(input, scaling)?.factor(&config))
 }
 
+/// Factors a bipartite `A`'s Schur complement onto its `kept` side, formed under [`Config::complement`] and factored as [`factorize_with`] would; the factor's vertex `k` is the kept side's `k`-th.
+pub fn factorize_complement<T: Real, I: PrimInt + Sync>(
+    input: input::BipartiteFactorWidth2<'_, T, I>,
+    kept: Side,
+    config: Config,
+    scaling: ScalingPolicy,
+) -> Result<Factor<T>, Error> {
+    Ok(match fits_u32(input.n()) {
+        true => Factor::build(
+            Complement::reduce_onto(input, kept, scaling)?,
+            &config,
+            Storage::U32,
+        ),
+        false => Factor::build(
+            Complement::reduce_onto(input, kept, scaling)?,
+            &config,
+            Storage::U64,
+        ),
+    })
+}
+
+/// Whether `u32` indexes a cover's two sheets and its ground, the most slots any block of `n` vertices takes.
+fn fits_u32(n: usize) -> bool {
+    u32::try_from(n.saturating_mul(2).saturating_add(1)).is_ok()
+}
+
 /// Built only by [`Sgdd::reduce`]: `A` in symmetric generalized diagonally dominant form, each irreducible block scaled to dominance.
 #[derive(Clone, Debug)]
 pub struct Sgdd<T = f64>(Indexed<T>);
@@ -109,9 +135,7 @@ impl<T: Real> Sgdd<T> {
         <M as TryInto<Input<'a, T, I>>>::Error: Into<Error>,
     {
         let input = input.try_into().map_err(Into::into)?;
-        // A cover's two sheets and its ground are the most slots any block indexes.
-        let slots = input.n().saturating_mul(2).saturating_add(1);
-        Ok(Self(match u32::try_from(slots).is_ok() {
+        Ok(Self(match fits_u32(input.n()) {
             true => Indexed::U32(Reduced::reduce(input, scaling)?),
             false => Indexed::U64(Reduced::reduce(input, scaling)?),
         }))

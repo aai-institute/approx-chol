@@ -1,5 +1,7 @@
 #[path = "reduction/band_agreement.rs"]
 mod band_agreement;
+#[path = "reduction/complement.rs"]
+mod complement;
 #[path = "common/cycle.rs"]
 mod cycle;
 #[path = "common/dense.rs"]
