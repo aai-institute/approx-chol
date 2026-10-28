@@ -17,7 +17,9 @@ pub use config::{Backend, Config, InnerParallelism, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
 
-use crate::sgdd::{Balance, Grounding, IrreducibleBlock, Restriction, Selection, Summands};
+use crate::sgdd::{
+    Balance, BlockComplement, Grounding, IrreducibleBlock, Restriction, Selection, Summands,
+};
 use crate::storage::OffDiagonal;
 use crate::ScalingReport;
 use crate::{Index, Real};
@@ -81,7 +83,7 @@ fn buffer_error(found: usize, n: usize, scratch: usize, needed: usize) -> SolveE
     }
 }
 
-/// Block-diagonal approximate inverse of `A`: one [`BlockFactor`] per irreducible block.
+/// Block-diagonal approximate inverse of the factored matrix, `A` or its [complement](crate::factorize_complement) numbered by the kept side: one [`BlockFactor`] per irreducible block of `A`.
 #[derive(Clone, Debug)]
 pub struct Factor<T = f64> {
     n: usize,
@@ -138,7 +140,7 @@ impl<T: Real> Factor<T> {
         }
     }
 
-    /// Dimension of `A`.
+    /// Dimension of the factored matrix.
     pub fn n(&self) -> usize {
         self.n
     }
@@ -151,7 +153,7 @@ impl<T: Real> Factor<T> {
             .sum()
     }
 
-    /// The blocks' factors, one per irreducible block of `A`, coupled blocks before isolated vertices; dead vertices have none.
+    /// The blocks' factors, one per irreducible block of `A` the factored matrix meets, coupled blocks before isolated vertices; dead vertices have none.
     pub fn blocks(&self) -> &[BlockFactor<T>] {
         &self.blocks
     }
@@ -185,7 +187,7 @@ impl<T: Real> Factor<T> {
     }
 }
 
-/// A coupled summand of `A`, factored on its own.
+/// A coupled summand of the factored matrix: a block of `A`, or a block's complement onto its kept side.
 pub(crate) trait Summand<T, I>: Send {
     fn factor<C: Copies>(
         self,
@@ -214,7 +216,8 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
             OffDiagonal::Bipartite(cross) => {
                 let kept = tail(cross.n_rows());
                 let inv_pivot = BlockElimination::inverse_pivots(&cross, &grounding);
-                let s = schur_complement(&cross, &inv_pivot, sheets, grounding, config, streams);
+                let pivots = Some(&*inv_pivot);
+                let s = schur_complement(&cross, pivots, sheets, grounding, config, streams);
                 // A kept `Cᵀ` is built once `S` is factored, so it never shares that peak.
                 let factored = Cholesky::factor(s, streams.cholesky(), config, kept, reused);
                 let elimination = BlockElimination::with_inverse_pivots(cross, inv_pivot);
@@ -224,6 +227,36 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
         Block {
             restriction,
             elimination,
+            cholesky,
+            report,
+        }
+    }
+}
+
+impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
+    /// Keyed as a whole block keys its draws.
+    fn factor<C: Copies>(
+        self,
+        config: &Config,
+        reused: &mut CliqueTreeElimination<T, I, C>,
+    ) -> Block<T, I> {
+        let Self { block, start } = self;
+        let (whole, off_diagonal, balance, report) = block.into_parts();
+        let OffDiagonal::Bipartite(cross) = off_diagonal else {
+            unreachable!("a bipartite block has both sides")
+        };
+        let streams = Streams::of(&whole, config);
+        let renumber = |v: usize| I::from_index(v - start);
+        // Tailed before `S`, so the eliminated side's `F` never shares its formation's peak.
+        let restriction = whole.tail(cross.n_rows(), renumber);
+        let (sheets, grounding) = sheets(balance);
+        // Moved, so `C` is freed once `S` stops reading it.
+        let s = schur_complement(cross, None, sheets, grounding, config, streams);
+        let tail = restriction.factor_tail(0);
+        let cholesky = Cholesky::factor(s, streams.cholesky(), config, tail, reused);
+        Block {
+            restriction: Box::new(restriction),
+            elimination: None,
             cholesky,
             report,
         }
@@ -242,7 +275,7 @@ macro_rules! on {
 }
 use on;
 
-/// One irreducible block's factor over its vertices of `A`.
+/// The factor of one irreducible block of `A`, over its vertices of the factored matrix.
 #[derive(Clone, Debug)]
 pub struct BlockFactor<T = f64>(Storage<T>);
 
@@ -263,7 +296,7 @@ pub(crate) enum Storage<T> {
 }
 
 impl<T: Real> BlockFactor<T> {
-    /// The block's vertices in `A`'s numbering, in local order.
+    /// The block's vertices in the factored matrix's numbering, in local order.
     pub fn vertices(&self) -> Vertices<'_> {
         match &self.0 {
             Storage::U32(block) => Vertices::of(block.vertices(), Indices::U32),
@@ -279,7 +312,7 @@ impl<T: Real> BlockFactor<T> {
         on!(self, block => block.report.as_deref().copied(), _ => None)
     }
 
-    /// Whether the block is folded and solved as singular, `A_c⁺b`.
+    /// Whether the block is folded and solved as singular, `A_c⁺b` or its complement's `S_c⁺b`.
     pub fn floats(&self) -> bool {
         on!(self, block => block.cholesky.singular(), _ => false)
     }
@@ -307,7 +340,7 @@ impl<T: Real> BlockFactor<T> {
     }
 }
 
-/// A [`BlockFactor`]'s vertices in `A`'s numbering; named, so a caller may move the block after its last use.
+/// A [`BlockFactor`]'s vertices in the factored matrix's numbering; named, so a caller may move the block after its last use.
 #[derive(Clone, Debug)]
 pub struct Vertices<'a>(Indices<'a>);
 
@@ -491,7 +524,7 @@ struct Streams {
 }
 
 impl Streams {
-    /// Keyed by the block's first vertex.
+    /// Keyed by the block's first vertex in `A`, so a complement eliminating the side its whole factor does draws as that factor does.
     fn of<T: Real, I: Index>(restriction: &Restriction<T, I>, config: &Config) -> Self {
         Self {
             seed: config.seed,
@@ -526,7 +559,7 @@ fn splitmix(x: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-/// `(FORMAT_VERSION, (n, dead, blocks))`: every vertex of `A` is in the bytes, so decoding allocates nothing they do not hold.
+/// `(FORMAT_VERSION, (n, dead, blocks))`: every vertex of the factored matrix is in the bytes, so decoding allocates nothing they do not hold.
 #[cfg(feature = "serde")]
 impl<T: serde::Serialize> serde::Serialize for Factor<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {

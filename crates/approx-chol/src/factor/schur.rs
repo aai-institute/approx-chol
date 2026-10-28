@@ -1,4 +1,6 @@
-//! Block elimination of a bipartite block's larger, independent side, and the Schur complement it leaves.
+//! Block elimination of a bipartite block's independent side, and the Schur complement it leaves.
+
+use std::borrow::Borrow;
 
 use rayon::prelude::*;
 
@@ -138,25 +140,32 @@ fn rows_within_one<T: Real, I: Index>(cross: &Rows<T, I>) -> bool {
     (0..cross.n_rows()).all(|e| within_one(cross.row(e).map(|(_, &c)| c)))
 }
 
-/// `S`, `c`'s eliminated rows' complement onto its columns: exact when dense or asked, else sampled.
+/// `S`, `cross`'s eliminated rows' complement onto its columns: exact when dense or asked, else sampled; only exact needs the pivots.
 pub(super) fn schur_complement<T: Real, I: Index>(
-    c: &Rows<T, I>,
-    inv_pivot: &[T],
+    cross: impl Borrow<Rows<T, I>>,
+    inv_pivot: Option<&[T]>,
     sheets: Sheets,
     grounding: Grounding<T>,
     config: &Config,
     streams: Streams,
 ) -> Sddm<T, I> {
+    let c = cross.borrow();
     let dense = config.dense(sheets.count() * c.n_cols());
     match (dense, config.complement) {
-        (true, _) | (false, SchurMode::Exact) => exact(c, inv_pivot, sheets, grounding),
+        (true, _) | (false, SchurMode::Exact) => match inv_pivot {
+            Some(inv_pivot) => exact(c, inv_pivot, sheets, grounding),
+            None => {
+                let inv_pivot = BlockElimination::inverse_pivots(c, &grounding);
+                exact(c, &inv_pivot, sheets, grounding)
+            }
+        },
         (false, sampled) => {
             let split = match sampled {
                 SchurMode::Approximate { split_merge } => split_merge,
                 _ => config.split_merge,
             }
             .and_then(Multi::split);
-            self::sampled(c, split, sheets, grounding, streams)
+            self::sampled(cross, split, sheets, grounding, streams)
         }
     }
 }
@@ -178,12 +187,13 @@ fn exact<T: Real, I: Index>(
 
 /// `S` sampled by star in parallel; clique trees need no pivots, so no elimination exists yet. σ is read last here, so it is freed before `S` is factored.
 fn sampled<T: Real, I: Index>(
-    c: &Rows<T, I>,
+    cross: impl Borrow<Rows<T, I>>,
     split: Option<Multi>,
     sheets: Sheets,
     grounding: Grounding<T>,
     stars: Streams,
 ) -> Sddm<T, I> {
+    let c = cross.borrow();
     let n_kept = c.n_cols();
     let n = sheets.count() * n_kept;
     let ground = I::from_index(n);
@@ -204,6 +214,8 @@ fn sampled<T: Real, I: Index>(
             (stars.star(star), neighbors.chain(ground_share(e)))
         }),
     };
+    // An owned `C` is freed here: the merge never reads it.
+    drop(cross);
     schur(from_fill(n, fill), n_kept, sheets, &grounding)
 }
 

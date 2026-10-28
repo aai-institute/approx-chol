@@ -6,9 +6,9 @@ mod decomposition;
 mod reduction;
 mod scaling;
 
-pub(crate) use block::IrreducibleBlock;
 pub use block::ReduceError;
 pub(crate) use block::{Balance, Grounding};
+pub(crate) use block::{BlockComplement, IrreducibleBlock};
 pub(crate) use congruence::{FactorTail, Restriction, Selection};
 pub(crate) use decomposition::Summands;
 pub(crate) use reduction::within_band;
@@ -19,6 +19,9 @@ use decomposition::Components;
 
 /// `A`'s reduced summands; built only from extraction, so they cover `A` once.
 pub(crate) type Reduced<T, I> = Summands<IrreducibleBlock<T, I>, I, T>;
+
+/// A bipartite `A`'s Schur complement onto one side, reduced; lone and dead vertices in the kept side's numbering.
+pub(crate) type Complement<T, I> = Summands<BlockComplement<T, I>, I, T>;
 
 impl<T: Real, I: Index> Components<IrreducibleBlock<T, I>, I, T> {
     fn into_reduced(self) -> Reduced<T, I> {
