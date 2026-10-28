@@ -1,7 +1,9 @@
 use super::cycle::Cycle;
 use super::dense::dense;
 use super::gram::{dense_csr, matrix};
-use approx_chol::input::{CsrRef, FactorWidth2, Laplacian, Sddm};
+use approx_chol::input::{
+    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm,
+};
 use approx_chol::{factorize, factorize_with, Factor, Real, ScalingPolicy};
 
 fn grounded<T: Real>(factor: &Factor<T>) -> bool {
@@ -217,5 +219,35 @@ fn f32_star_just_past_the_band_grounds() {
         let csr = CsrRef::new(&[0u32, 3, 5, 7], &[0, 1, 2, 0, 1, 0, 2], &values, 3).unwrap();
         let factor: Factor<f32> = factorize(csr).unwrap();
         assert_eq!(factor.blocks()[0].floats(), floats, "d₀ = 1 + {ulps}ε");
+    }
+}
+
+/// Worker slopes `t − t̄` beside year intercepts, one observation off by `δ`: a row's residue passes its band and the deficit clamped beside it, yet cancels in `1ᵀM1`.
+fn near_aliased_slope(delta: f64) -> bool {
+    let (workers, years) = (400u32, 10u32);
+    let mean = f64::from(years - 1) / 2.0;
+    let (mut rows, mut cols, mut x) = (vec![], vec![], vec![]);
+    for w in 0..workers {
+        for t in 0..years {
+            rows.push(w);
+            cols.push(t);
+            x.push(f64::from(t) - mean);
+        }
+    }
+    x[3] += delta;
+    let gram = BipartiteFactorWidth2::new(
+        FactorWidth1::new(workers as usize, &rows, Some(&x)).unwrap(),
+        FactorWidth1::new(years as usize, &cols, None).unwrap(),
+    )
+    .unwrap();
+    let factor = factorize(gram).unwrap();
+    assert_eq!(factor.blocks().len(), 1);
+    factor.blocks()[0].floats()
+}
+
+#[test]
+fn near_aliased_slope_residues_cancel_so_the_block_floats() {
+    for delta in [1e-9, -1e-9] {
+        assert!(near_aliased_slope(delta), "{delta}");
     }
 }
