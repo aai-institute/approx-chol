@@ -499,19 +499,19 @@ fn within_one<T: Real>(terms: impl Iterator<Item = T>) -> bool {
     sum <= 1.0 + 4.0 * (len + 2) as f64 * crate::widen(T::epsilon())
 }
 
-/// One block's keys, so no draw depends on thread scheduling or on how other blocks routed.
+/// One block's key, so no draw depends on thread scheduling or on how other blocks routed.
 #[derive(Clone, Copy, Debug)]
 struct Streams {
-    seed: u64,
-    block: u64,
+    /// The seed and the block mixed once: every star would otherwise repeat them on its first draw's path.
+    key: u64,
 }
 
 impl Streams {
     /// Keyed by the block's first vertex in `A`, so a complement eliminating the side its whole factor does draws as that factor does.
     fn of<T: Real, I: Index>(restriction: &Restriction<T, I>, config: &Config) -> Self {
+        let block = restriction.vertices().vertex(0) as u64;
         Self {
-            seed: config.seed,
-            block: restriction.vertices().vertex(0) as u64,
+            key: splitmix(splitmix(config.seed) ^ block),
         }
     }
 
@@ -526,12 +526,9 @@ impl Streams {
     }
 }
 
-/// The whole key mixed once, the only place a key becomes draws; stage `0` is the Cholesky's, `e + 1` star `e`'s.
+/// The only place a key becomes draws; stage `0` is the Cholesky's, `e + 1` star `e`'s.
 fn rng(streams: Streams, stage: u64) -> Xoshiro256PlusPlus {
-    let key = [streams.block, stage]
-        .into_iter()
-        .fold(splitmix(streams.seed), |key, part| splitmix(key ^ part));
-    Xoshiro256PlusPlus::seed_from_u64(key)
+    Xoshiro256PlusPlus::seed_from_u64(splitmix(streams.key ^ stage))
 }
 
 /// SplitMix64's finalizer: each part changes every bit of the key, so no two keys collide by addition.

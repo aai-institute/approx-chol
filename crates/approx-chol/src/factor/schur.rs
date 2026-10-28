@@ -4,8 +4,6 @@ use std::borrow::Borrow;
 
 use rayon::prelude::*;
 
-use rand::rngs::Xoshiro256PlusPlus;
-
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::{Config, InnerParallelism, SchurMode};
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
@@ -224,32 +222,64 @@ fn sampled<T: Real, I: Index, C: Copies>(
     split: C,
     sheets: Sheets,
     grounding: Grounding<T>,
-    stars: Streams,
+    streams: Streams,
 ) -> Sddm<T, I> {
     let c = cross.borrow();
     let n_kept = c.n_cols();
     let n = sheets.count() * n_kept;
-    let ground = I::from_index(n);
-    let ground_share = |e: usize| grounding.edge(e).map(|s| (ground, s));
-    let stars_per_task = per_task(c.n_rows(), c.nnz() as u64, 14);
-    let fill = match sheets {
-        // One sheet maps no column, as the balanced loop pays for any map.
-        Sheets::One => sample_stars(split, c.n_rows(), stars_per_task, n, |e| {
-            let neighbors = c.row(e).map(|(k, &c)| (I::from_index(k), c.abs()));
-            (stars.star(e), neighbors.chain(ground_share(e)))
-        }),
-        Sheets::Two => sample_stars(split, 2 * c.n_rows(), stars_per_task, n, |star| {
-            let (sheet, e) = (star / c.n_rows(), star % c.n_rows());
-            let neighbors = c.row(e).map(move |(k, &c)| {
-                let on = sheet ^ usize::from(crosses(c));
-                (I::from_index(cover_vertex(k, on)), c.abs())
-            });
-            (stars.star(star), neighbors.chain(ground_share(e)))
-        }),
+    let stars = Stars {
+        c,
+        sheets,
+        grounding: &grounding,
+        streams,
+        ground: I::from_index(n),
     };
+    let fill = sample_stars(split, &stars, per_task(c.n_rows(), c.nnz() as u64, 14), n);
     // An owned `C` is freed here: the merge never reads it.
     drop(cross);
     schur(from_fill(n, fill), n_kept, sheets, &grounding)
+}
+
+/// The eliminated side's stars: row `e` of `C` on each sheet, its ground share last, each under its own stream.
+struct Stars<'a, T, I> {
+    c: &'a Rows<T, I>,
+    sheets: Sheets,
+    grounding: &'a Grounding<T>,
+    streams: Streams,
+    ground: I,
+}
+
+impl<T: Real, I: Index> Stars<'_, T, I> {
+    fn count(&self) -> usize {
+        self.sheets.count() * self.c.n_rows()
+    }
+
+    /// Star `s` sampled under its own stream; a row of `C` repeats no column, so it skips the merge.
+    fn eliminate<C: Copies>(
+        &self,
+        s: usize,
+        sampler: &mut CliqueTreeSampler<T, I, C>,
+        fill: impl FnMut((I, I, C, T)),
+    ) {
+        let c = self.c;
+        let ground = |e: usize| self.grounding.edge(e).map(|s_e| (self.ground, s_e));
+        let draws = self.streams.star(s);
+        match self.sheets {
+            // One sheet maps no column, as the balanced loop pays for any map.
+            Sheets::One => {
+                let neighbors = c.row(s).map(|(k, &c)| (I::from_index(k), c.abs()));
+                sampler.eliminate_unique(draws, neighbors.chain(ground(s)), fill);
+            }
+            Sheets::Two => {
+                let (sheet, e) = (s / c.n_rows(), s % c.n_rows());
+                let neighbors = c.row(e).map(move |(k, &c)| {
+                    let on = sheet ^ usize::from(crosses(c));
+                    (I::from_index(cover_vertex(k, on)), c.abs())
+                });
+                sampler.eliminate_unique(draws, neighbors.chain(ground(e)), fill);
+            }
+        }
+    }
 }
 
 /// Rows per fill bucket, as a shift: at most 16 buckets, so one bucket's sorted copy is all the fill ever copied at once.
@@ -324,24 +354,22 @@ fn from_fill<T: Real, I: Index>(
     rows.finish()
 }
 
-/// Each eliminated star's clique tree on each sheet under its own stream, unmerged as a row of `C` repeats no column, the ground a final neighbor unless its share is zero; fill bucketed over `n` rows, chunked in star order so merged duplicates sum alike at any thread count.
-fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
+/// Each star's clique tree, chunked in star order so merged duplicates sum alike at any thread count; fill bucketed over `n` rows.
+fn sample_stars<T: Real, I: Index, C: Copies>(
     split: C,
-    n_stars: usize,
+    stars: &Stars<'_, T, I>,
     per_task: usize,
     n: usize,
-    star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
 ) -> Vec<Buckets<T, I>> {
     let shift = bucket_shift(n);
     let count = n.div_ceil(1 << shift);
     let empty = || (CliqueTreeSampler::new(split), vec![Vec::new(); count]);
-    (0..n_stars)
+    (0..stars.count())
         .into_par_iter()
-        .fold_chunks(per_task, empty, |(mut sampler, mut buckets), i| {
-            let (draws, neighbors) = star(i);
+        .fold_chunks(per_task, empty, |(mut sampler, mut buckets), s| {
             let push =
                 |(lo, hi, _, w): (I, I, C, T)| buckets[lo.index() >> shift].push((lo, hi, w));
-            sampler.eliminate_unique(draws, neighbors, push);
+            stars.eliminate(s, &mut sampler, push);
             (sampler, buckets)
         })
         .map(|(_, mut buckets)| {
