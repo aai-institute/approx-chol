@@ -17,15 +17,13 @@ pub use config::{Backend, Config, InnerParallelism, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
 
-use crate::sgdd::{
-    Balance, BlockComplement, Grounding, IrreducibleBlock, Restriction, Selection, Summands,
-};
+use crate::sgdd::{BlockComplement, IrreducibleBlock, Restriction, Selection, Summands};
 use crate::storage::OffDiagonal;
 use crate::ScalingReport;
 use crate::{Index, Real};
 use cholesky::{Cholesky, CliqueTreeElimination};
-use schur::{schur_complement, BlockElimination};
-use sddm::{Sddm, Sheets};
+use schur::BlockElimination;
+use sddm::Sddm;
 
 /// Errors returned by fallible solves.
 #[non_exhaustive]
@@ -204,23 +202,18 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
     ) -> Block<T, I> {
         let (restriction, off_diagonal, balance, report) = self.into_parts();
         let streams = Streams::of(&restriction, config);
-        let (sheets, grounding) = sheets(balance);
         let tail = |from: usize| restriction.factor_tail(from);
+        let draws = streams.cholesky();
         let (elimination, cholesky) = match off_diagonal {
             OffDiagonal::General(adjacency) => {
-                let sddm = Sddm::of_block(adjacency, grounding, sheets);
-                let draws = streams.cholesky();
-                let factored = Cholesky::factor(sddm, draws, config, tail(0), reused);
-                (None, factored)
+                let sddm = Sddm::of_block(adjacency, balance);
+                (None, Cholesky::factor(sddm, draws, config, tail(0), reused))
             }
             OffDiagonal::Bipartite(cross) => {
                 let kept = tail(cross.n_rows());
-                let inv_pivot = BlockElimination::inverse_pivots(&cross, &grounding);
-                let pivots = Some(&*inv_pivot);
-                let s = schur_complement(&cross, pivots, sheets, grounding, config, streams);
-                // A kept `Cᵀ` is built once `S` is factored, so it never shares that peak.
-                let factored = Cholesky::factor(s, streams.cholesky(), config, kept, reused);
-                let elimination = BlockElimination::with_inverse_pivots(cross, inv_pivot);
+                let factor = |s| Cholesky::factor(s, draws, config, kept, reused);
+                let (elimination, factored) =
+                    BlockElimination::eliminate(cross, balance, config, streams, factor);
                 (Some(Box::new(elimination)), factored)
             }
         };
@@ -249,9 +242,7 @@ impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
         let renumber = |v: usize| I::from_index(v - start);
         // Tailed before `S`, so the eliminated side's `F` never shares its formation's peak.
         let restriction = whole.tail(cross.n_rows(), renumber);
-        let (sheets, grounding) = sheets(balance);
-        // Moved, so `C` is freed once `S` stops reading it.
-        let s = schur_complement(cross, None, sheets, grounding, config, streams);
+        let s = schur::complement(cross, balance, config, streams);
         let tail = restriction.factor_tail(0);
         let cholesky = Cholesky::factor(s, streams.cholesky(), config, tail, reused);
         Block {
@@ -447,14 +438,6 @@ impl<T: Real, I: Index> Block<T, I> {
             }
         }
         self.restriction.prolongate(x, singular);
-    }
-}
-
-/// A balanced block folds onto one sheet; a frustrated one needs the cover's two.
-fn sheets<T>(balance: Balance<T>) -> (Sheets, Grounding<T>) {
-    match balance {
-        Balance::Balanced(grounding) => (Sheets::One, grounding),
-        Balance::Frustrated(grounding) => (Sheets::Two, grounding),
     }
 }
 

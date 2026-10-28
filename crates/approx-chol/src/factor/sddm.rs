@@ -2,7 +2,7 @@
 
 use rayon::prelude::*;
 
-use crate::sgdd::{within_band, Grounding};
+use crate::sgdd::{within_band, Balance, Grounding};
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, widen, Index, Real};
 
@@ -69,14 +69,10 @@ impl<T: Real, I: Index> Sddm<T, I> {
     }
 
     /// Folded `M` on one sheet, or the Gremban cover of signed `M` on two.
-    pub(super) fn of_block(
-        adjacency: UpperAdjacency<T, I>,
-        grounding: Grounding<T>,
-        sheets: Sheets,
-    ) -> Self {
-        match sheets {
-            Sheets::One => Self::new(adjacency, Closure::Folded(grounding)),
-            Sheets::Two => Self::cover(adjacency, grounding),
+    pub(super) fn of_block(adjacency: UpperAdjacency<T, I>, balance: Balance<T>) -> Self {
+        match balance {
+            Balance::Balanced(grounding) => Self::new(adjacency, Closure::Folded(grounding)),
+            Balance::Frustrated(grounding) => Self::cover(adjacency, grounding),
         }
     }
 
