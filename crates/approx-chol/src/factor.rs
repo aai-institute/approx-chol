@@ -173,10 +173,21 @@ impl<T: Real> Factor<T> {
 
     /// `A⁺b` on floating blocks; vertices in no block solve to `0`.
     pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
-        let mut x = b.to_vec();
-        let mut scratch = vec![T::zero(); self.scratch_len()];
-        self.solve_in_place(&mut x, &mut scratch)?;
+        let mut x = vec![T::zero(); self.n];
+        self.solve_into(b, &mut x)?;
         Ok(x)
+    }
+
+    /// As [`solve`](Self::solve), into `x` of length [`n`](Self::n).
+    pub fn solve_into(&self, b: &[T], x: &mut [T]) -> Result<(), SolveError> {
+        if let Some(found) = [b.len(), x.len()].into_iter().find(|&len| len != self.n) {
+            return Err(SolveError::LengthMismatch {
+                expected: self.n,
+                found,
+            });
+        }
+        x.copy_from_slice(b);
+        self.solve_in_place(x, &mut vec![T::zero(); self.scratch_len()])
     }
 
     /// As [`solve`](Self::solve), allocating nothing: `x` holds `b` on entry and the solution on return; `scratch`'s contents on entry are ignored.

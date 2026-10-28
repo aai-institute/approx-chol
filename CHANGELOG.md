@@ -21,9 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `low_level` is removed. ([#182])
 - `CsrError::ExpectedCsrMatrixGotCsc` is removed: a CSC `sprs` matrix converts into `CsrRef` as its transpose, which a symmetric one equals; a CSC `faer` matrix converts as `matrix.as_ref().transpose()`.
 - `Factor::n` is the input dimension; `Factor::original_n` is removed. ([#140])
-- `Factor::solve_into` is removed. ([#146])
 - `Factor::solve_in_place` takes `x` of length `Factor::n` and caller scratch of at least `Factor::scratch_len`. ([#146])
-- `Factor::solve` rejects a right-hand side whose length is not `Factor::n`. ([#146])
+- `Factor::solve` and `Factor::solve_into` reject a right-hand side or output whose length is not `Factor::n`. ([#146])
 - `SolveError` is `LengthMismatch` or `ScratchTooShort`. ([#146])
 - An entry below `MIN_POSITIVE / EPSILON` in magnitude is `CsrError::OutOfRange`; 0.6.0 accepted it, and solved scales below about 1e-307 wrongly without an error. ([#163])
 - `Factor::solve_in_place` returns `solve`'s `A⁺b` on each floating block; 0.6.0 pinned an elimination-dependent vertex of each floating block to zero instead. ([#135])
