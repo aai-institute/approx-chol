@@ -280,22 +280,12 @@ where
     }
 }
 
-/// The larger side eliminated first, `C` transposed when it is the right one; a side alone is one uncoupled vertex.
+/// The larger side eliminated first, `C` transposed when it is the right one.
 fn sides<T: Real, I: Index>(
     lefts: &[I],
     rights: &[I],
     c: Rows<T, I>,
 ) -> (Box<[I]>, OffDiagonal<T, I>) {
-    if lefts.is_empty() || rights.is_empty() {
-        debug_assert_eq!(
-            lefts.len() + rights.len(),
-            1,
-            "a connected side alone is one vertex"
-        );
-        let empty = Rows::new(vec![0, 0], Vec::new(), Vec::new(), 1);
-        let vertices = [lefts, rights].concat().into();
-        return (vertices, OffDiagonal::General(UpperAdjacency::new(empty)));
-    }
     match lefts.len() >= rights.len() {
         true => ([lefts, rights].concat().into(), OffDiagonal::Bipartite(c)),
         false => {

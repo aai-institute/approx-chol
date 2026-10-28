@@ -73,23 +73,24 @@ impl<A, I: Index> Partitioned<A, I> {
             let vertex = vertices[0].index();
             return Err(ReduceError::TooLarge { vertex });
         }
-        let (mut lone, mut dead) = (Vec::new(), Vec::new());
-        let components: Vec<&[I]> = (partition.components())
-            .filter(|vertices| match **vertices {
-                [v] => match a.lone(v.index()) {
-                    pivot if pivot == T::zero() => {
-                        dead.push(v);
-                        false
-                    }
-                    pivot if pivot > T::zero() && super::diagonal_in_range(pivot) => {
-                        lone.push((v, pivot));
-                        false
-                    }
-                    _ => true,
-                },
-                _ => true,
-            })
-            .collect();
+        let (mut lone, mut dead, mut components) = (Vec::new(), Vec::new(), Vec::new());
+        for vertices in partition.components() {
+            let &[v] = vertices else {
+                components.push(vertices);
+                continue;
+            };
+            let vertex = v.index();
+            match a.lone(vertex) {
+                pivot if pivot == T::zero() => dead.push(v),
+                pivot if pivot > T::zero() && super::diagonal_in_range(pivot) => {
+                    lone.push((v, pivot))
+                }
+                pivot if pivot < T::zero() => {
+                    return Err(ReduceError::NonpositiveDiagonal { vertex })
+                }
+                _ => return Err(ReduceError::OutOfRange { vertex }),
+            }
+        }
         let blocks = match (components.first(), partition.position()) {
             (None, _) => Vec::new(),
             (Some(&whole), None) => vec![block(a.whole(whole))?],

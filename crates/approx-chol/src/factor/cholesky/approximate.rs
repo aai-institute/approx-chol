@@ -14,7 +14,7 @@ use graph::EliminationGraph;
 use ordering::MinDegreeOrder;
 
 /// A task's AC or AC2 elimination; small blocks reuse its buffers (malloc was 17% of 20-vertex covers).
-pub(in crate::factor) struct CliqueTreeElimination<T, I, C: Copies> {
+pub(crate) struct CliqueTreeElimination<T, I, C: Copies> {
     split: C,
     graph: EliminationGraph<T, I, C>,
     clique: CliqueTreeSampler<T, I, C>,

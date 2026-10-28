@@ -20,21 +20,19 @@ use decomposition::Components;
 /// `A`'s reduced summands; built only from extraction, so they cover `A` once.
 pub(crate) type Reduced<T, I> = Summands<IrreducibleBlock<T, I>, I, T>;
 
-impl<T: Real, I: Index> Reduced<T, I> {
-    /// Dimension of `A`, which the summands cover once.
-    pub(crate) fn dimension(&self) -> usize {
-        let coupled: usize = self.blocks.iter().map(IrreducibleBlock::vertex_count).sum();
-        coupled + self.lone.len() + self.dead.len()
-    }
-}
-
 impl<T: Real, I: Index> Components<IrreducibleBlock<T, I>, I, T> {
     fn into_reduced(self) -> Reduced<T, I> {
         let Components {
             partition,
             summands,
         } = self;
-        debug_assert_eq!(partition.n(), summands.dimension(), "summands cover A once");
+        let coupled: usize = summands
+            .blocks
+            .iter()
+            .map(IrreducibleBlock::vertex_count)
+            .sum();
+        let dimension = coupled + summands.lone.len() + summands.dead.len();
+        debug_assert_eq!(partition.n(), dimension, "summands cover A once");
         summands
     }
 }
