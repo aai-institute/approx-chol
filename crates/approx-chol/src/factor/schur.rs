@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
-use super::config::InnerParallelism;
+use super::config::{Config, InnerParallelism, SchurMode};
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
 use super::{within_one, Streams};
 use crate::sgdd::Grounding;
@@ -138,8 +138,31 @@ fn rows_within_one<T: Real, I: Index>(cross: &Rows<T, I>) -> bool {
     (0..cross.n_rows()).all(|e| within_one(cross.row(e).map(|(_, &c)| c)))
 }
 
+/// `S`, `c`'s eliminated rows' complement onto its columns: exact when dense or asked, else sampled.
+pub(super) fn schur_complement<T: Real, I: Index>(
+    c: &Rows<T, I>,
+    inv_pivot: &[T],
+    sheets: Sheets,
+    grounding: Grounding<T>,
+    config: &Config,
+    streams: Streams,
+) -> Sddm<T, I> {
+    let dense = config.dense(sheets.count() * c.n_cols());
+    match (dense, config.complement) {
+        (true, _) | (false, SchurMode::Exact) => exact(c, inv_pivot, sheets, grounding),
+        (false, sampled) => {
+            let split = match sampled {
+                SchurMode::Approximate { split_merge } => split_merge,
+                _ => config.split_merge,
+            }
+            .and_then(Multi::split);
+            self::sampled(c, split, sheets, grounding, streams)
+        }
+    }
+}
+
 /// `S = D_k − Cᵀ D_e⁻¹ C` on `sheets`, exact by kept row through a `Cᵀ` freed before `S` is factored.
-pub(super) fn exact<T: Real, I: Index>(
+fn exact<T: Real, I: Index>(
     c: &Rows<T, I>,
     inv_pivot: &[T],
     sheets: Sheets,
@@ -154,7 +177,7 @@ pub(super) fn exact<T: Real, I: Index>(
 }
 
 /// `S` sampled by star in parallel; clique trees need no pivots, so no elimination exists yet. σ is read last here, so it is freed before `S` is factored.
-pub(super) fn sampled<T: Real, I: Index>(
+fn sampled<T: Real, I: Index>(
     c: &Rows<T, I>,
     split: Option<Multi>,
     sheets: Sheets,

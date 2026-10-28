@@ -17,12 +17,12 @@ pub use config::{Backend, Config, InnerParallelism, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
 
-use crate::sgdd::{Balance, IrreducibleBlock, Reduced, Restriction, Selection, Summands};
+use crate::sgdd::{Balance, Grounding, IrreducibleBlock, Restriction, Selection, Summands};
 use crate::storage::OffDiagonal;
 use crate::ScalingReport;
 use crate::{Index, Real};
 use cholesky::{Cholesky, CliqueTreeElimination};
-use schur::BlockElimination;
+use schur::{schur_complement, BlockElimination};
 use sddm::{Sddm, Sheets};
 
 /// Errors returned by fallible solves.
@@ -92,9 +92,9 @@ pub struct Factor<T = f64> {
 }
 
 impl<T: Real> Factor<T> {
-    /// Factors every irreducible block of `summands` in parallel.
-    pub(crate) fn build<I: Index>(
-        summands: Reduced<T, I>,
+    /// Factors every coupled summand in parallel.
+    pub(crate) fn build<I: Index, B: Summand<T, I>>(
+        summands: Summands<B, I, T>,
         config: &Config,
         store: fn(Block<T, I>) -> Storage<T>,
     ) -> Self {
@@ -104,28 +104,28 @@ impl<T: Real> Factor<T> {
         }
     }
 
-    fn build_with<I: Index, C: Copies>(
-        summands: Reduced<T, I>,
+    fn build_with<I: Index, B: Summand<T, I>, C: Copies>(
+        summands: Summands<B, I, T>,
         config: &Config,
         store: fn(Block<T, I>) -> Storage<T>,
         split: C,
     ) -> Self {
-        let n = summands.dimension();
         let Summands {
             blocks: coupled,
             lone,
             dead,
         } = summands;
         let mut blocks = Vec::with_capacity(coupled.len() + lone.len());
-        let build = |reused: &mut _, block| BlockFactor(store(Block::build(block, config, reused)));
+        let build = |reused: &mut _, block: B| BlockFactor(store(block.factor(config, reused)));
         let elimination = || CliqueTreeElimination::new(split);
         blocks.par_extend(coupled.into_par_iter().map_init(elimination, build));
         let isolated = |(v, pivot)| BlockFactor(Storage::Isolated(Isolated::new(v, pivot)));
         blocks.extend(lone.into_iter().map(isolated));
-        Self::new(n, blocks, dead.into_iter().map(I::index).collect())
+        Self::new(blocks, dead.into_iter().map(I::index).collect())
     }
 
-    fn new(n: usize, blocks: Vec<BlockFactor<T>>, dead: Box<[usize]>) -> Self {
+    fn new(blocks: Vec<BlockFactor<T>>, dead: Box<[usize]>) -> Self {
+        let n = blocks.iter().map(|b| b.vertices().len()).sum::<usize>() + dead.len();
         let scratch_len = (blocks.iter())
             .map(|block| on!(block, b => b.global_scratch_len(), _ => 0))
             .max()
@@ -182,6 +182,51 @@ impl<T: Real> Factor<T> {
         }
         self.dead.iter().for_each(|&v| x[v] = T::zero());
         Ok(())
+    }
+}
+
+/// A coupled summand of `A`, factored on its own.
+pub(crate) trait Summand<T, I>: Send {
+    fn factor<C: Copies>(
+        self,
+        config: &Config,
+        reused: &mut CliqueTreeElimination<T, I, C>,
+    ) -> Block<T, I>;
+}
+
+impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
+    fn factor<C: Copies>(
+        self,
+        config: &Config,
+        reused: &mut CliqueTreeElimination<T, I, C>,
+    ) -> Block<T, I> {
+        let (restriction, off_diagonal, balance, report) = self.into_parts();
+        let streams = Streams::of(&restriction, config);
+        let (sheets, grounding) = sheets(balance);
+        let tail = |from: usize| restriction.factor_tail(from);
+        let (elimination, cholesky) = match off_diagonal {
+            OffDiagonal::General(adjacency) => {
+                let sddm = Sddm::of_block(adjacency, grounding, sheets);
+                let draws = streams.cholesky();
+                let factored = Cholesky::factor(sddm, draws, config, tail(0), reused);
+                (None, factored)
+            }
+            OffDiagonal::Bipartite(cross) => {
+                let kept = tail(cross.n_rows());
+                let inv_pivot = BlockElimination::inverse_pivots(&cross, &grounding);
+                let s = schur_complement(&cross, &inv_pivot, sheets, grounding, config, streams);
+                // A kept `Cᵀ` is built once `S` is factored, so it never shares that peak.
+                let factored = Cholesky::factor(s, streams.cholesky(), config, kept, reused);
+                let elimination = BlockElimination::with_inverse_pivots(cross, inv_pivot);
+                (Some(Box::new(elimination)), factored)
+            }
+        };
+        Block {
+            restriction,
+            elimination,
+            cholesky,
+            report,
+        }
     }
 }
 
@@ -326,59 +371,6 @@ pub(crate) struct Block<T, I> {
 }
 
 impl<T: Real, I: Index> Block<T, I> {
-    fn build<C: Copies>(
-        block: IrreducibleBlock<T, I>,
-        config: &Config,
-        reused: &mut CliqueTreeElimination<T, I, C>,
-    ) -> Self {
-        let (restriction, off_diagonal, balance, report) = block.into_parts();
-        let streams = Streams {
-            seed: config.seed,
-            block: restriction.vertices().vertex(0) as u64,
-        };
-        let (sheets, grounding) = match balance {
-            Balance::Balanced(grounding) => (Sheets::One, grounding),
-            Balance::Frustrated(grounding) => (Sheets::Two, grounding),
-        };
-        let tail = |from: usize| restriction.factor_tail(from);
-        let (elimination, cholesky) = match off_diagonal {
-            OffDiagonal::General(adjacency) => {
-                let sddm = Sddm::of_block(adjacency, grounding, sheets);
-                let draws = streams.cholesky();
-                let factored = Cholesky::factor(sddm, draws, config, tail(0), reused);
-                (None, factored)
-            }
-            OffDiagonal::Bipartite(cross) => {
-                let kept = tail(cross.n_rows());
-                let dense = config.dense(sheets.count() * cross.n_cols());
-                let inv_pivot = BlockElimination::inverse_pivots(&cross, &grounding);
-                let s = match (dense, config.complement) {
-                    (true, _) | (false, SchurMode::Exact) => {
-                        schur::exact(&cross, &inv_pivot, sheets, grounding)
-                    }
-                    (false, sampled) => {
-                        let split = match sampled {
-                            SchurMode::Approximate { split_merge } => split_merge,
-                            _ => config.split_merge,
-                        }
-                        .and_then(Multi::split);
-                        schur::sampled(&cross, split, sheets, grounding, streams)
-                    }
-                };
-                // A kept `Cᵀ` is built once `S` is factored, so it never shares that peak.
-                let factored = Cholesky::factor(s, streams.cholesky(), config, kept, reused);
-                let elimination = BlockElimination::with_inverse_pivots(cross, inv_pivot);
-                (Some(Box::new(elimination)), factored)
-            }
-        };
-        Self {
-            restriction,
-            elimination,
-            cholesky,
-            report,
-        }
-    }
-
     fn vertices(&self) -> &Selection<I> {
         self.restriction.vertices()
     }
@@ -422,6 +414,14 @@ impl<T: Real, I: Index> Block<T, I> {
             }
         }
         self.restriction.prolongate(x, singular);
+    }
+}
+
+/// A balanced block folds onto one sheet; a frustrated one needs the cover's two.
+fn sheets<T>(balance: Balance<T>) -> (Sheets, Grounding<T>) {
+    match balance {
+        Balance::Balanced(grounding) => (Sheets::One, grounding),
+        Balance::Frustrated(grounding) => (Sheets::Two, grounding),
     }
 }
 
@@ -491,6 +491,14 @@ struct Streams {
 }
 
 impl Streams {
+    /// Keyed by the block's first vertex.
+    fn of<T: Real, I: Index>(restriction: &Restriction<T, I>, config: &Config) -> Self {
+        Self {
+            seed: config.seed,
+            block: restriction.vertices().vertex(0) as u64,
+        }
+    }
+
     /// The approximate Cholesky's one sequence: pivot `t`'s sample is conditioned on every earlier one.
     fn cholesky(self) -> Xoshiro256PlusPlus {
         rng(self, 0)
@@ -539,19 +547,19 @@ impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for Factor<
         let (n, dead, blocks): (usize, Box<[usize]>, Vec<Storage<T>>) =
             wire::deserialize(deserializer)?;
         let blocks = blocks.into_iter().map(BlockFactor).collect();
-        let value = Self::new(n, blocks, dead);
+        let value = Self::new(blocks, dead);
         let corrupt = || serde::de::Error::custom("corrupt Factor");
-        value.checked().ok_or_else(corrupt)
+        value.checked(n).ok_or_else(corrupt)
     }
 }
 
 #[cfg(feature = "serde")]
 impl<T: Real> Factor<T> {
     /// The blocks' vertices and the dead ones cover `0..n` once each.
-    fn checked(self) -> Option<Self> {
+    fn checked(self, n: usize) -> Option<Self> {
         let mut vertices = self.dead.to_vec();
         vertices.extend(self.blocks.iter().flat_map(BlockFactor::vertices));
-        if vertices.len() != self.n {
+        if vertices.len() != n {
             return None;
         }
         vertices.sort_unstable();
@@ -599,6 +607,7 @@ mod tests {
 
     use super::*;
     use crate::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
+    use crate::sgdd::Reduced;
     use crate::ScalingPolicy;
 
     fn only_block(summands: Reduced<f64, u32>, config: &Config) -> Block<f64, u32> {
@@ -691,6 +700,7 @@ mod tests {
 mod storage {
     use super::*;
     use crate::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Input};
+    use crate::sgdd::Reduced;
     use crate::{ScalingPolicy, SchurMode};
 
     fn bits(factor: &Factor, b: &[f64]) -> Vec<u64> {
