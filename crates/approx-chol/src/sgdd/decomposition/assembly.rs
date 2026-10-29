@@ -2,7 +2,7 @@
 
 mod cells;
 
-use cells::{CellSum, Compensated};
+use cells::{Bounded, CellSum};
 
 use num_traits::PrimInt;
 
@@ -155,11 +155,8 @@ pub(in crate::sgdd) fn assemble_values<T: Real, J: PrimInt, I: Index, S: Adjacen
     v: FactorWidth2<'_, T, J>,
 ) -> Result<ValueCells<T, I, S>, ReduceError> {
     let mut sums = vec![0.0; v.n()];
-    let a = cells.sum::<T, J, I, Compensated>(
-        v,
-        |column| add_squares(&mut sums, column),
-        |_, _, _| {},
-    )?;
+    let a =
+        cells.sum::<T, J, I, Bounded>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
     assembled(a, sums)
 }
 

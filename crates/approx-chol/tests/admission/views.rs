@@ -337,6 +337,29 @@ fn a_bipartite_incidence_checks_each_end_against_its_own_part(
     assert_eq!(found, expected);
 }
 
+fn p(e: i32) -> f64 {
+    2f64.powi(e)
+}
+
+/// Vertices 0 and 1 share a cell summing to 1, which a plain or a TwoSum running sum cancels to 0 in some order.
+#[rstest]
+#[case::plain_cancels(&[p(53), 1.0, -p(53)])]
+#[case::two_sum_cancels(&[p(110), p(56), -p(110), p(53), 1.0, -p(53), -p(56)])]
+#[case::one_last(&[p(110), -p(110), p(56), -p(56), p(53), -p(53), 1.0])]
+fn a_cell_whose_terms_cancel_keeps_its_edge_in_any_column_order(#[case] terms: &[f64]) {
+    let x = [terms, &[1.0]].concat();
+    let a = vec![0u32; x.len()];
+    let right_rows = [vec![0u32; terms.len()], vec![1]].concat();
+    let b: Vec<u32> = right_rows.iter().map(|r| r + 1).collect();
+    let y = vec![1.0; x.len()];
+    let gram = FactorWidth2::new(3, (&a, &x), (&b, &y)).unwrap();
+    assert_eq!(factorize(gram).unwrap().blocks().len(), 1, "general");
+    let left = FactorWidth1::new(1, &a, Some(&x[..])).unwrap();
+    let right = FactorWidth1::<f64>::new(2, &right_rows, None).unwrap();
+    let bipartite = BipartiteFactorWidth2::new(left, right).unwrap();
+    assert_eq!(factorize(bipartite).unwrap().blocks().len(), 1, "bipartite");
+}
+
 /// Every row is in range but the ground's `Σs ≈ 101·MAX/5`; interleaved, no running sum overflows.
 #[rstest]
 #[case::blocked(|c| c)]
