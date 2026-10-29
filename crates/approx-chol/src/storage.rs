@@ -247,10 +247,6 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
         self.rows.row_len(i)
     }
 
-    pub(crate) fn nnz(&self) -> usize {
-        self.rows.nnz()
-    }
-
     /// `scale · Σ_ij |a_ij|` over both triangles, as a [`crate::lane_sum`].
     pub(crate) fn scaled_abs_total(&self, scale: f64) -> f64 {
         2.0 * crate::lane_sum(&self.rows.values, scale)

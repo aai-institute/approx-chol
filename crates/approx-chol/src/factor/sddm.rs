@@ -23,30 +23,10 @@ enum Closure<T> {
 }
 
 impl<T: Real> Closure<T> {
-    /// The twists of each vertex's copies' grounds `(g⁺, g⁻)`.
-    fn twisted(grounds: impl Iterator<Item = (T, T)>) -> Self {
-        let twists = grounds.map(|(g_plus, g_minus)| {
-            let floats = g_plus == T::zero() && g_minus == T::zero();
-            if floats {
-                T::zero()
-            } else {
-                twist(g_plus, g_minus)
-            }
-        });
-        Self::Twisted(twists.collect())
-    }
-
     fn grounding(&self) -> Option<&Grounding<T>> {
         match self {
             Self::Folded(grounding) | Self::Cover(grounding) => Some(grounding),
             Self::Twisted(_) => None,
-        }
-    }
-
-    fn sheets(&self) -> Sheets {
-        match self {
-            Self::Folded(_) => Sheets::One,
-            Self::Cover(_) | Self::Twisted(_) => Sheets::Two,
         }
     }
 }
@@ -72,46 +52,36 @@ impl<T: Real, I: Index> Sddm<T, I> {
     pub(super) fn of_block(adjacency: UpperAdjacency<T, I>, balance: Balance<T>) -> Self {
         match balance {
             Balance::Balanced(grounding) => Self::new(adjacency, Closure::Folded(grounding)),
-            Balance::Frustrated(grounding) => Self::cover(adjacency, grounding),
+            Balance::Frustrated(grounding) => {
+                let (sheets, n) = (Sheets::Two, adjacency.n());
+                // The cover acts as `M − diag(s)` on `[z; −z]`.
+                let rows = SddmRows::split(sheets, n, n, |mut sums, i| {
+                    for (j, &a) in adjacency.upper(i) {
+                        sums.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
+                    }
+                });
+                Self::of_rows(rows, sheets, &grounding)
+            }
         }
     }
 
-    /// Rows already on `sheets`, each with its ground; on two, a ground within the band [`twists`].
-    pub(super) fn of_rows(
-        (adjacency, ground): (UpperAdjacency<T, I>, Vec<T>),
-        sheets: Sheets,
-    ) -> Self {
-        assert_eq!(ground.len(), adjacency.n(), "one surplus per row");
+    /// Rows on `sheets`, each ground plus its vertex's surplus, the last of `block`'s; on two, a ground within the band [`twists`].
+    pub(super) fn of_rows(rows: SddmRows<T, I>, sheets: Sheets, block: &Grounding<T>) -> Self {
+        let n = rows.sums.len() - 1;
+        let adjacency = UpperAdjacency::new(Rows::new(rows.ptrs, rows.indices, rows.values, n));
+        let mut ground = rows.ground;
+        if let Some(surplus) = block.surplus() {
+            let kept = surplus[surplus.len() - ground.len() / sheets.count()..].iter();
+            let copies = kept.flat_map(|&s| std::iter::repeat_n(s, sheets.count()));
+            (ground.iter_mut().zip(copies)).for_each(|(g, s)| *g = s + *g);
+        }
         let grounding = Grounding::of(ground);
         let closure = match (sheets, grounding.surplus()) {
             (Sheets::One, _) => Closure::Folded(grounding),
             (Sheets::Two, Some(ground)) if twists(ground, &adjacency) => {
-                Closure::twisted(ground.chunks_exact(2).map(|g| (g[0], g[1])))
+                Closure::Twisted(ground.chunks_exact(2).map(|g| twist(g[0], g[1])).collect())
             }
             (Sheets::Two, _) => Closure::Cover(grounding),
-        };
-        Self::new(adjacency, closure)
-    }
-
-    /// The Gremban cover of signed `M`: a Laplacian on two sheets that acts as `M` on `[z; −z]`.
-    fn cover(signed: UpperAdjacency<T, I>, grounding: Grounding<T>) -> Self {
-        let n = signed.n();
-        let twisted = (grounding.surplus()).filter(|s| twists(s, &signed));
-        let mut rows = SddmRows::with_capacity(2 * n, 2 * signed.nnz());
-        for i in 0..n {
-            for (j, &a) in signed.upper(i) {
-                rows.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
-            }
-            if let Some(s) = grounding.edge(i).filter(|_| twisted.is_none()) {
-                rows.add(2 * n, s);
-            }
-            rows.end_row();
-            rows.mirror_row();
-        }
-        let (adjacency, ground) = rows.finish();
-        let closure = match twisted {
-            Some(surplus) => Closure::twisted(surplus.iter().map(|&s| (s, s))),
-            None => Closure::Cover(Grounding::of(ground)),
         };
         Self::new(adjacency, closure)
     }
@@ -125,7 +95,10 @@ impl<T: Real, I: Index> Sddm<T, I> {
     }
 
     pub(super) fn sheets(&self) -> Sheets {
-        self.closure.sheets()
+        match self.closure {
+            Closure::Folded(_) => Sheets::One,
+            Closure::Cover(_) | Closure::Twisted(_) => Sheets::Two,
+        }
     }
 
     /// Positive Laplacian weights, each edge once with any twists, the ground vertex `n` joined by each surplus.
@@ -177,28 +150,11 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         }
     }
 
-    pub(super) fn add(&mut self, column: usize, w: T) {
-        self.row().add(column, w);
-    }
-
-    /// `new` with room for exactly `n` rows of `entries` in all, when the caller knows them.
-    fn with_capacity(n: usize, entries: usize) -> Self {
-        let mut rows = Self::new(n);
-        rows.ptrs.reserve_exact(n);
-        rows.ground.reserve_exact(n);
-        rows.indices.reserve_exact(entries);
-        rows.values.reserve_exact(entries);
-        rows
-    }
-
-    fn row(&mut self) -> Row<'_, T, I> {
-        Row {
+    pub(super) fn row(&mut self, add: impl FnOnce(ColumnSums<'_, T, I>)) {
+        add(ColumnSums {
             sums: &mut self.sums,
             touched: &mut self.touched,
-        }
-    }
-
-    pub(super) fn end_row(&mut self) {
+        });
         let n = self.sums.len() - 1;
         self.touched.sort_unstable();
         let ground = match self.touched.last() {
@@ -239,19 +195,18 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         self.ptrs.push(self.indices.len());
     }
 
-    /// An SDDM on `n_kept` vertices per sheet, `row` writing kept vertex `k`'s row on each sheet; split by vertex across threads, at least `min_kept` a task, so each sums alone and the bits match at any count.
+    /// An SDDM on `n_sheet` vertices per sheet, `row` writing vertex `k`'s row once, `k⁺`'s on a cover, which `k⁻` mirrors; split by vertex across threads, at least `min_len` a task, so each sums alone and the bits match at any count.
     pub(super) fn split(
         sheets: Sheets,
-        n_kept: usize,
-        min_kept: usize,
-        row: impl Fn(Row<'_, T, I>, usize) + Sync,
-    ) -> (UpperAdjacency<T, I>, Vec<T>) {
-        let n = sheets.count() * n_kept;
-        let rows = (0..n_kept).into_par_iter().with_min_len(min_kept).fold(
+        n_sheet: usize,
+        min_len: usize,
+        row: impl Fn(ColumnSums<'_, T, I>, usize) + Sync,
+    ) -> Self {
+        let n = sheets.count() * n_sheet;
+        let rows = (0..n_sheet).into_par_iter().with_min_len(min_len).fold(
             || Self::new(n),
             |mut rows, k| {
-                row(rows.row(), k);
-                rows.end_row();
+                rows.row(|sums| row(sums, k));
                 if sheets == Sheets::Two {
                     rows.mirror_row();
                 }
@@ -266,24 +221,18 @@ impl<T: Real, I: Index> SddmRows<T, I> {
             rows.ground.extend(part.ground);
             rows
         });
-        rows.unwrap_or_else(|| Self::new(n)).finish()
-    }
-
-    pub(super) fn finish(self) -> (UpperAdjacency<T, I>, Vec<T>) {
-        let n = self.ground.len();
-        let rows = Rows::new(self.ptrs, self.indices, self.values, n);
-        (UpperAdjacency::new(rows), self.ground)
+        rows.unwrap_or_else(|| Self::new(n))
     }
 }
 
-/// One row's open column sums, borrowed apart from the finished rows so the sums stay in registers.
-pub(super) struct Row<'a, T, I> {
+/// One open row's sums by column and the columns they touch, borrowed apart from the finished rows so the sums stay in registers.
+pub(super) struct ColumnSums<'a, T, I> {
     sums: &'a mut [T],
     touched: &'a mut Vec<I>,
 }
 
-impl<T: Real, I: Index> Row<'_, T, I> {
-    /// No zero test on `w`: it costs the exact rows 6-8%, so `end_row` drops what a zero addend leaves.
+impl<T: Real, I: Index> ColumnSums<'_, T, I> {
+    /// No zero test on `w`: it costs the exact rows 6-8%, so ending the row drops what a zero addend leaves.
     pub(super) fn add(&mut self, column: usize, w: T) {
         debug_assert!(
             w >= T::zero(),
@@ -303,8 +252,11 @@ fn twists<T: Real, I: Index>(ground: &[T], adjacency: &UpperAdjacency<T, I>) -> 
     within_band::<T>(total, total + adjacency.scaled_abs_total(epsilon))
 }
 
-/// The edge `k⁺ — k⁻` that acts on `[z; −z]` as grounds `g⁺, g⁻` do; with `g⁺ ≠ g⁻` no ungrounded pair matches them, and the mean differs by less than the band. At least `MIN_POSITIVE`, as a share is.
+/// The edge `k⁺ — k⁻` that acts on `[z; −z]` as grounds `g⁺, g⁻` do; with `g⁺ ≠ g⁻` no ungrounded pair matches them, and the mean differs by less than the band. Zero where both copies float, else at least `MIN_POSITIVE`, as a share is.
 fn twist<T: Real>(g_plus: T, g_minus: T) -> T {
+    if g_plus == T::zero() && g_minus == T::zero() {
+        return T::zero();
+    }
     let quarter = narrow::<T>(0.25);
     (g_plus * quarter + g_minus * quarter).max(T::min_positive_value())
 }
@@ -366,7 +318,7 @@ mod tests {
         let values = vec![2f64.powi(1020); indices.len()];
         let signed = UpperAdjacency::new(Rows::new(ptrs, indices, values, n as usize));
         let surplus = [extra].into_iter().chain([0.0; 8]).collect();
-        Sddm::cover(signed, Grounding::of(surplus))
+        Sddm::of_block(signed, Balance::Frustrated(Grounding::of(surplus)))
     }
 
     #[test]

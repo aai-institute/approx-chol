@@ -1,5 +1,6 @@
 //! Each irreducible block as an optional block elimination `L` and a Cholesky of what it leaves: `A_c⁺ ≈ P F L⁻ᵀ diag(D_e⁻¹, S⁺) L⁻¹ F P`, `P` projecting out `F·1` when the block floats, else `I`.
 
+mod block_elimination;
 mod cholesky;
 mod clique_tree;
 mod config;
@@ -12,7 +13,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 use rand::SeedableRng;
 use rayon::prelude::*;
 
-use clique_tree::{Copies, Multi, Single};
+use clique_tree::{Copies, Single};
 pub use config::{Backend, Config, InnerParallelism, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
@@ -21,9 +22,13 @@ use crate::sgdd::{BlockComplement, IrreducibleBlock, Restriction, Selection, Sum
 use crate::storage::OffDiagonal;
 use crate::ScalingReport;
 use crate::{Index, Real};
+use block_elimination::BlockElimination;
 use cholesky::{Cholesky, CliqueTreeElimination};
-use schur::BlockElimination;
+use schur::BipartiteBlock;
 use sddm::Sddm;
+
+/// `log₂` of the multiply-adds a block elimination's task carries, below which a split costs more than it saves.
+const MULTIPLY_ADD_GRAIN_BITS: u32 = 17;
 
 /// Errors returned by fallible solves.
 #[non_exhaustive]
@@ -98,7 +103,7 @@ impl<T: Real> Factor<T> {
         config: &Config,
         store: fn(Block<T, I>) -> Storage<T>,
     ) -> Self {
-        match config.split_merge.and_then(Multi::split) {
+        match config.split() {
             None => Self::build_with(summands, config, store, Single),
             Some(split) => Self::build_with(summands, config, store, split),
         }
@@ -212,8 +217,8 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
             OffDiagonal::Bipartite(cross) => {
                 let kept = tail(cross.n_rows());
                 let factor = |s| Cholesky::factor(s, draws, config, kept, reused);
-                let (elimination, factored) =
-                    BlockElimination::eliminate(cross, balance, config, streams, factor);
+                let block = BipartiteBlock::of(cross, balance);
+                let (elimination, factored) = block.eliminate(config, streams, factor);
                 (Some(Box::new(elimination)), factored)
             }
         };
@@ -242,7 +247,7 @@ impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
         let renumber = |v: usize| I::from_index(v - start);
         // Tailed before `S`, so the eliminated side's `F` never shares its formation's peak.
         let restriction = whole.tail(cross.n_rows(), renumber);
-        let s = schur::complement(cross, balance, config, streams);
+        let s = BipartiteBlock::of(cross, balance).complement(config, streams);
         let tail = restriction.factor_tail(0);
         let cholesky = Cholesky::factor(s, streams.cholesky(), config, tail, reused);
         Block {

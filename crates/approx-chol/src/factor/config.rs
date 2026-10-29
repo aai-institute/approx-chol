@@ -1,3 +1,5 @@
+use super::clique_tree::Multi;
+
 /// Build settings for [`factorize_with`](crate::factorize_with).
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -21,6 +23,11 @@ impl Config {
             Backend::Approximate => false,
             Backend::ExactBelow { max_dim } => dimension <= max_dim,
         }
+    }
+
+    /// The split the factor's own sampler draws with.
+    pub(super) fn split(&self) -> Option<Multi> {
+        self.split_merge.and_then(Multi::split)
     }
 }
 
