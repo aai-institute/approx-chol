@@ -1,5 +1,6 @@
 //! Each irreducible block as an optional block elimination `L` and a Cholesky of what it leaves: `A_c⁺ ≈ P F L⁻ᵀ diag(D_e⁻¹, S⁺) L⁻¹ F P`, `P` projecting out `F·1` when the block floats, else `I`.
 
+mod block_elimination;
 mod cholesky;
 mod clique_tree;
 mod config;
@@ -21,8 +22,8 @@ use crate::sgdd::{BlockComplement, IrreducibleBlock, Restriction, Selection, Sum
 use crate::storage::OffDiagonal;
 use crate::ScalingReport;
 use crate::{Index, Real};
+use block_elimination::BlockElimination;
 use cholesky::{Cholesky, CliqueTreeElimination};
-use schur::BlockElimination;
 use sddm::Sddm;
 
 /// Errors returned by fallible solves.
