@@ -342,6 +342,7 @@ fn a_bipartite_incidence_checks_each_end_against_its_own_part(
 #[case::blocked(|c| c)]
 #[case::blocked_spokes_reversed(|c| c / 100 * 100 + 99 - c % 100)]
 #[case::interleaved_control(|c| c % 3 * 100 + c / 3)]
+#[case::interleaved_reversed(|c| (2 - c % 3) * 100 + c / 3)]
 fn a_gram_whose_surplus_sum_overflows_is_rejected_not_a_panic(#[case] order: fn(usize) -> usize) {
     let (s, k) = ((f64::MAX / 1000.0).sqrt(), 10.0);
     let columns = (0..300).map(order);

@@ -2,6 +2,8 @@
 
 mod cells;
 
+use cells::{CellSum, Compensated};
+
 use num_traits::PrimInt;
 
 use super::partition::{Partition, UnionFind};
@@ -17,8 +19,8 @@ pub(in crate::sgdd) trait AdjacencyLayout {
     type Adjacency<T: Real, I: Index>: PrincipalBlocks<T, I, Block = (Box<[I]>, OffDiagonal<T, I>)>
         + Sync;
 
-    /// The summed cells and components, `seen` visiting each column once and `pair` each nonzero cell with its two ends.
-    fn sum<T: Real, J: PrimInt, I: Index>(
+    /// The cells summed as `C`, and components, `seen` visiting each column once and `pair` each nonzero cell with its two ends.
+    fn sum<T: Real, J: PrimInt, I: Index, C: CellSum>(
         self,
         v: FactorWidth2<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
@@ -67,14 +69,14 @@ impl AdjacencyLayout for StrictUpperTriangle {
 
     // Out of line, the Laplacian entry measured 3–4% slower: the same work, laid out worse.
     #[inline(always)]
-    fn sum<T: Real, J: PrimInt, I: Index>(
+    fn sum<T: Real, J: PrimInt, I: Index, C: CellSum>(
         self,
         v: FactorWidth2<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         mut pair: impl FnMut(usize, usize, f64),
     ) -> Result<Partitioned<UpperAdjacency<T, I>, I>, ReduceError> {
         let mut sets = UnionFind::<I>::new(v.n());
-        let rows = cells::upper::<T, J, I>(v, seen, |i, j, cell| {
+        let rows = cells::upper::<T, J, I, C>(v, seen, |i, j, cell| {
             sets.union(i, j);
             pair(i, j, cell);
         })?;
@@ -88,13 +90,13 @@ impl AdjacencyLayout for StrictUpperTriangle {
 impl AdjacencyLayout for Biadjacency {
     type Adjacency<T: Real, I: Index> = Oriented<T, I>;
 
-    fn sum<T: Real, J: PrimInt, I: Index>(
+    fn sum<T: Real, J: PrimInt, I: Index, C: CellSum>(
         self,
         v: FactorWidth2<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         pair: impl FnMut(usize, usize, f64),
     ) -> Result<Partitioned<Oriented<T, I>, I>, ReduceError> {
-        let c = cells::cross(v, self.n_left, seen, pair)?;
+        let c = cells::cross::<T, J, I, C>(v, self.n_left, seen, pair)?;
         let partition = Partition::of_bipartite(&c);
         let onto = self.onto;
         let a = Oriented { c, onto };
@@ -127,7 +129,7 @@ pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: 
     v: FactorWidth2<'a, T, J>,
 ) -> Result<IncidenceCells<'a, T, I, S>, ReduceError> {
     let mut abs = vec![0.0_f64; v.n()];
-    let a = cells.sum(
+    let a = cells.sum::<T, J, I, f64>(
         v,
         |_| {},
         |i, j, c: f64| {
@@ -153,7 +155,11 @@ pub(in crate::sgdd) fn assemble_values<T: Real, J: PrimInt, I: Index, S: Adjacen
     v: FactorWidth2<'_, T, J>,
 ) -> Result<ValueCells<T, I, S>, ReduceError> {
     let mut sums = vec![0.0; v.n()];
-    let a = cells.sum::<T, J, I>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
+    let a = cells.sum::<T, J, I, Compensated>(
+        v,
+        |column| add_squares(&mut sums, column),
+        |_, _, _| {},
+    )?;
     assembled(a, sums)
 }
 
