@@ -1,7 +1,9 @@
+//! A bipartite block's eliminated side as `L`'s first block column, and the solve `M⁻¹x` around `S`'s.
+
 use rayon::prelude::*;
 
 use super::config::InnerParallelism;
-use super::within_one;
+use super::{within_one, MULTIPLY_ADD_GRAIN_BITS};
 use crate::storage::Rows;
 use crate::{Index, Real};
 
@@ -20,20 +22,21 @@ pub(super) struct BlockElimination<T, I> {
     /// `D_e⁻¹ C`, signs kept and shared with the block: a frustrated block's cover never doubles it; each row's magnitudes sum to at most one, so no product with a solution overflows.
     cross: Rows<T, I>,
     inv_pivot: Box<[T]>,
-    /// `Cᵀ` where [`Self::transposes`], so `Allow` may split the solve by kept row.
+    /// `(D_e⁻¹ C)ᵀ` past one grain of the forward's `nnz` multiply-adds, so `Allow` may split the solve by kept row.
     #[cfg_attr(feature = "serde", serde(skip))]
     ct: Option<Rows<T, I>>,
 }
 
 impl<T: Real, I: Index> BlockElimination<T, I> {
-    /// Whether an elimination of `c` keeps `Cᵀ`: past `2^17` entries, the forward's work, as `rows_per_task` splits it.
-    fn transposes(c: &Rows<T, I>) -> bool {
-        c.nnz() > 1 << 17
+    /// `C`'s rows scaled by the pivots `S` was formed with.
+    pub(super) fn new(mut cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
+        cross.scale_rows(&inv_pivot);
+        Self::scaled(cross, inv_pivot)
     }
 
-    pub(super) fn scaled(cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
+    fn scaled(cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
         debug_assert!(rows_within_one(&cross), "a D_e⁻¹C row sums past one");
-        let ct = Self::transposes(&cross).then(|| cross.transpose());
+        let ct = (cross.nnz() > 1 << MULTIPLY_ADD_GRAIN_BITS).then(|| cross.transpose());
         Self {
             cross,
             inv_pivot,
@@ -66,7 +69,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         self.backward(eliminated, kept, inner);
     }
 
-    /// Each `b_k` subtracts `(D_e⁻¹ C)_ek b_e` term by term in ascending `e`: scattered through `C`, or gathered through `Cᵀ` under `Allow` where it is kept, the same bits either way.
+    /// Each `b_k` subtracts `(D_e⁻¹ C)_ek b_e` term by term in ascending `e`: scattered through `D_e⁻¹ C`, or gathered through `(D_e⁻¹ C)ᵀ` under `Allow` where it is kept, the same bits either way.
     fn forward(&self, b: &[T], kept: &mut [T], inner: InnerParallelism) {
         if let (InnerParallelism::Allow, Some(ct)) = (inner, &self.ct) {
             kept.par_iter_mut().enumerate().for_each(|(k, b_k)| {
@@ -84,7 +87,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         }
     }
 
-    /// `x_e = D_e⁻¹ b_e − D_e⁻¹ C x_k` by eliminated row, split under `Allow` where `Cᵀ` is kept.
+    /// `x_e = D_e⁻¹ b_e − D_e⁻¹ C x_k` by eliminated row, split under `Allow` where `(D_e⁻¹ C)ᵀ` is kept.
     fn backward(&self, eliminated: &mut [T], kept: &[T], inner: InnerParallelism) {
         const ROWS_PER_TASK: usize = 4096;
         let c = &self.cross;
@@ -124,7 +127,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         self.cross.n_cols()
     }
 
-    /// `Cᵀ` is derived, so it is rebuilt rather than read: a stored one could disagree with `C`.
+    /// `(D_e⁻¹ C)ᵀ` is derived, so it is rebuilt rather than read: a stored one could disagree with `D_e⁻¹ C`.
     fn checked(self) -> Option<Self> {
         let pivots = self.inv_pivot.len() == self.cross.n_rows()
             && self
@@ -132,7 +135,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
                 .iter()
                 .all(|p| p.is_finite() && *p > T::zero());
         let (n_rows, n_cols) = (self.cross.n_rows(), self.cross.n_cols());
-        // The larger side is eliminated, which bounds `n_cols` by decoded rows before `n` or `Cᵀ` exists.
+        // The larger side is eliminated, which bounds `n_cols` by decoded rows before `n` or `(D_e⁻¹ C)ᵀ` exists.
         let sides = n_cols <= n_rows;
         (pivots && sides && rows_within_one(&self.cross))
             .then(|| Self::scaled(self.cross, self.inv_pivot))

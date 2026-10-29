@@ -24,7 +24,11 @@ use crate::ScalingReport;
 use crate::{Index, Real};
 use block_elimination::BlockElimination;
 use cholesky::{Cholesky, CliqueTreeElimination};
+use schur::BipartiteBlock;
 use sddm::Sddm;
+
+/// `log₂` of the multiply-adds a block elimination's task carries, below which a split costs more than it saves.
+const MULTIPLY_ADD_GRAIN_BITS: u32 = 17;
 
 /// Errors returned by fallible solves.
 #[non_exhaustive]
@@ -213,8 +217,8 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
             OffDiagonal::Bipartite(cross) => {
                 let kept = tail(cross.n_rows());
                 let factor = |s| Cholesky::factor(s, draws, config, kept, reused);
-                let (elimination, factored) =
-                    BlockElimination::eliminate(cross, balance, config, streams, factor);
+                let block = BipartiteBlock::of(cross, balance);
+                let (elimination, factored) = block.eliminate(config, streams, factor);
                 (Some(Box::new(elimination)), factored)
             }
         };
@@ -243,7 +247,7 @@ impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
         let renumber = |v: usize| I::from_index(v - start);
         // Tailed before `S`, so the eliminated side's `F` never shares its formation's peak.
         let restriction = whole.tail(cross.n_rows(), renumber);
-        let s = schur::complement(cross, balance, config, streams);
+        let s = BipartiteBlock::of(cross, balance).complement(config, streams);
         let tail = restriction.factor_tail(0);
         let cholesky = Cholesky::factor(s, streams.cholesky(), config, tail, reused);
         Block {
