@@ -12,7 +12,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 use rand::SeedableRng;
 use rayon::prelude::*;
 
-use clique_tree::{Copies, Multi, Single};
+use clique_tree::{Copies, Single};
 pub use config::{Backend, Config, InnerParallelism, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
@@ -98,7 +98,7 @@ impl<T: Real> Factor<T> {
         config: &Config,
         store: fn(Block<T, I>) -> Storage<T>,
     ) -> Self {
-        match config.split_merge.and_then(Multi::split) {
+        match config.split() {
             None => Self::build_with(summands, config, store, Single),
             Some(split) => Self::build_with(summands, config, store, split),
         }
