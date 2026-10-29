@@ -28,7 +28,7 @@ pub(super) fn cross<T: Real, J: PrimInt, I: Index, C: CellSum>(
         .cross::<T, J, I, C>(v, n_left, seen, pair)
 }
 
-/// within's cap on the dense table, in plain cells: about 40 MB, which a valued table's wider cells share.
+/// within's cap on the dense table's cells: about 40 MB plain, 80 MB valued.
 const DENSE_TABLE_MAX_CELLS: usize = 5_000_000;
 
 /// Measured crossover in instructions: the table wins once `V`'s columns reach a tenth of its cells.
@@ -46,7 +46,7 @@ impl Accumulator {
     fn of<T, I, C>(n_left: usize, n_right: usize, n_columns: usize) -> Self {
         let cells = n_left.saturating_mul(n_right);
         let filled = n_columns.saturating_mul(DENSE_TABLE_CELLS_PER_COLUMN) >= cells;
-        let fits = cells.saturating_mul(size_of::<C>()) <= DENSE_TABLE_MAX_CELLS * size_of::<f64>()
+        let fits = cells <= DENSE_TABLE_MAX_CELLS
             || Self::table_bytes::<T, I, C>(n_left, cells, n_columns)
                 <= Self::bucket_bytes::<I, C>(n_left, n_right, n_columns);
         match filled && fits {
@@ -416,14 +416,6 @@ mod tests {
         // A valued table's 16-byte cells tip it past the 16-byte buckets.
         assert_eq!(
             Accumulator::of::<f64, u64, Bounded>(3000, 3000, 14_000_000),
-            Accumulator::Buckets
-        );
-        // A valued table's cap is half as many cells, so past it the smaller buckets win.
-        let valued =
-            |n_right| Accumulator::of::<f64, u32, Bounded>(2000, n_right, filling(2000 * n_right));
-        assert_eq!(valued(DENSE_TABLE_MAX_CELLS / 4000), Accumulator::Table);
-        assert_eq!(
-            valued(DENSE_TABLE_MAX_CELLS / 4000 + 1),
             Accumulator::Buckets
         );
         // One right vertex: the table and its rows take 16 bytes per left row, the buckets' offsets alone 24.
