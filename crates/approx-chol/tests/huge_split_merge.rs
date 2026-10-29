@@ -1,10 +1,10 @@
 use approx_chol::input::Laplacian;
-use approx_chol::{factorize_with, Backend, Config, Factor, ScalingPolicy};
+use approx_chol::{factorize_with, Config, Factor, ScalingPolicy};
 
 fn approximate(split_merge: u32) -> Config {
     Config {
         split_merge: Some(split_merge),
-        backend: Backend::Approximate,
+        exact_max_dim: 0,
         ..Config::default()
     }
 }

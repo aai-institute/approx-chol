@@ -3,7 +3,7 @@ mod csr;
 #[path = "common/grid.rs"]
 mod grid;
 
-use approx_chol::{Backend, Config};
+use approx_chol::Config;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use csr::{build, OwnedCsr};
 
@@ -28,16 +28,14 @@ fn choleskies() -> [(&'static str, Config); 2] {
         (
             "approximate",
             Config {
-                backend: Backend::Approximate,
+                exact_max_dim: 0,
                 ..Config::default()
             },
         ),
         (
             "exact",
             Config {
-                backend: Backend::ExactBelow {
-                    max_dim: usize::MAX,
-                },
+                exact_max_dim: usize::MAX,
                 ..Config::default()
             },
         ),

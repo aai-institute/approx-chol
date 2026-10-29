@@ -4,10 +4,9 @@ from typing import Any, final
 
 import numpy as np
 import numpy.typing as npt
-from typing_extensions import Never, disjoint_base
+from typing_extensions import Never
 
 __all__ = [
-    "Backend",
     "Config",
     "Factor",
     "ScalingPolicy",
@@ -16,30 +15,6 @@ __all__ = [
     "factorize_raw",
 ]
 
-@disjoint_base
-class Backend:
-    """Which factorization each block gets."""
-
-    @final
-    class Approximate(Backend):
-        """Approximate elimination for every block."""
-
-        __match_args__ = ()
-        def __new__(cls) -> Backend.Approximate: ...
-
-    @final
-    class ExactBelow(Backend):
-        """Exact dense Cholesky at or below ``max_dim``, approximate above.
-
-        A frustrated block, whose signs no ±1 scaling folds, counts twice: its
-        cover has two sheets. A ``max_dim`` of ``0`` selects ``Approximate``.
-        """
-
-        __match_args__ = ("max_dim",)
-        def __new__(cls, max_dim: int) -> Backend.ExactBelow: ...
-        @property
-        def max_dim(self) -> int: ...
-
 @final
 class Config:
     """Configuration for approximate Cholesky factorization.
@@ -47,7 +22,9 @@ class Config:
     ``seed`` keys every sampler stream. ``split`` is the AC2 multi-edge
     multiplicity ``k``, costing ``O(k)`` sampler draws per edge. Splitting an
     edge fewer than twice is standard AC, so ``None``, ``0`` and ``1`` all
-    select AC. ``backend`` picks which blocks are factored exactly.
+    select AC. ``exact_max_dim`` is the largest block dimension factored by
+    exact dense Cholesky, a frustrated block's two-sheet cover counted twice;
+    ``0`` factors every block approximately.
     An argument left out or ``None`` keeps the default, which the getters report.
     """
 
@@ -55,14 +32,14 @@ class Config:
         cls,
         seed: int | None = ...,
         split: int | None = ...,
-        backend: Backend | None = ...,
+        exact_max_dim: int | None = ...,
     ) -> Config: ...
     @property
     def seed(self) -> int: ...
     @property
     def split(self) -> int | None: ...
     @property
-    def backend(self) -> Backend: ...
+    def exact_max_dim(self) -> int: ...
 
 @final
 class ScalingPolicy:

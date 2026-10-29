@@ -4,7 +4,7 @@ mod csr;
 mod grid;
 
 use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1};
-use approx_chol::{factorize_with, Backend, Config, ScalingPolicy};
+use approx_chol::{factorize_with, Config, ScalingPolicy};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use csr::{build, OwnedCsr};
 use grid::grid_laplacian;
@@ -120,7 +120,7 @@ fn bench_bipartite_stars(c: &mut Criterion) {
             // Dense would take the complement exact: the kept block has only `degree` vertices.
             let config = Config {
                 split_merge,
-                backend: Backend::Approximate,
+                exact_max_dim: 0,
                 ..Config::default()
             };
             group.bench_with_input(BenchmarkId::new(label, degree), &gram, |b, &gram| {

@@ -2,7 +2,7 @@
 mod gram;
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
-use approx_chol::{factorize_with, Backend, Config, ScalingPolicy, SchurMode};
+use approx_chol::{factorize_with, Config, ScalingPolicy, SchurMode};
 use gram::{dense_csr, matrix};
 
 /// A frustrated unit cycle `L0 R0 L1 R1 …`, `cycle` vertices a side, and `pendants` left vertices each joined by `1e-95` to `wide` cycle vertices and left a `1e-200` surplus: within the band.
@@ -74,7 +74,7 @@ fn unstable(m: &[Vec<f64>], solve: impl FnOnce(&[f64]) -> Vec<f64>) -> Option<St
 #[test]
 fn a_frustrated_bipartite_block_with_a_negligible_surplus_solves_backward_stably() {
     let approximate = Config {
-        backend: Backend::Approximate,
+        exact_max_dim: 0,
         ..Config::default()
     };
     let exact = Config {

@@ -56,9 +56,7 @@ pub use error::Error;
 use factor::Storage;
 #[cfg(feature = "serde")]
 pub use factor::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
-pub use factor::{
-    Backend, BlockFactor, Config, Factor, InnerParallelism, SchurMode, SolveError, Vertices,
-};
+pub use factor::{BlockFactor, Config, Factor, InnerParallelism, SchurMode, SolveError, Vertices};
 pub use input::{CsrError, CsrRef, IndexKind, Input, OwnedCsr, Side};
 use sgdd::{Complement, Reduced};
 pub use sgdd::{ReduceError, ScalingPolicy, ScalingReport};

@@ -2,52 +2,39 @@ use super::clique_tree::Multi;
 
 /// Build settings for [`factorize_with`](crate::factorize_with).
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
     /// Every sampler stream derives from this, keyed by block and star.
     pub seed: u64,
     /// AC2 multi-edge multiplicity `k`, costing `O(k)` sampler draws per edge; `None`, `Some(0)` and `Some(1)` select standard AC.
     pub split_merge: Option<u32>,
-    /// Which factorization each block gets.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub backend: Backend,
+    /// Largest block dimension, a cover's two sheets counted, factored by exact dense Cholesky at `O(exact_max_dim³)`; `0` factors every block approximately.
+    pub exact_max_dim: usize,
     /// How a bipartite block's eliminated side becomes the kept side's Schur complement.
-    #[cfg_attr(feature = "serde", serde(default))]
     pub complement: SchurMode,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            seed: 0,
+            split_merge: None,
+            exact_max_dim: 24,
+            complement: SchurMode::default(),
+        }
+    }
 }
 
 impl Config {
     /// Whether a Cholesky of `dimension`, a cover's two sheets counted, is dense: it then takes `S` exact, spending nothing on sparsity.
     pub(super) fn dense(&self, dimension: usize) -> bool {
-        match self.backend {
-            Backend::Approximate => false,
-            Backend::ExactBelow { max_dim } => dimension <= max_dim,
-        }
+        dimension <= self.exact_max_dim
     }
 
     /// The split the factor's own sampler draws with.
     pub(super) fn split(&self) -> Option<Multi> {
         self.split_merge.and_then(Multi::split)
-    }
-}
-
-/// Which factorization each block gets.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Backend {
-    /// Approximate elimination for every block.
-    Approximate,
-    /// Exact dense Cholesky at or below `max_dim`, a cover's two sheets counted, approximate elimination above.
-    ExactBelow {
-        /// Inclusive bound on the dimension, costing `O(max_dim³)` time; `0` selects [`Approximate`](Backend::Approximate).
-        max_dim: usize,
-    },
-}
-
-impl Default for Backend {
-    fn default() -> Self {
-        Self::ExactBelow { max_dim: 24 }
     }
 }
 

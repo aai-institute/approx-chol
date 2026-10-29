@@ -1,6 +1,6 @@
 use super::bipartite::Bipartite;
 use super::{dense, dense_residual, gram};
-use approx_chol::{factorize_complement, factorize_with, Backend, Config, ScalingPolicy, Side};
+use approx_chol::{factorize_complement, factorize_with, Config, ScalingPolicy, Side};
 use rstest::rstest;
 
 impl Bipartite {
@@ -123,7 +123,7 @@ fn an_exact_complement_solves_the_dense_complement(
 fn a_sampled_complement_is_the_whole_factors_kept_part() {
     let (n_left, n_right, kept) = (60, 401, Side::Left);
     let config = Config {
-        backend: Backend::Approximate,
+        exact_max_dim: 0,
         ..Config::default()
     };
     let gram = Bipartite::new(n_left, n_right, 3000, false);

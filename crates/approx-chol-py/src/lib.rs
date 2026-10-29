@@ -1,6 +1,4 @@
-use approx_chol::{
-    Backend, Config, CsrRef, Factor, ScalingPolicy, ScalingReport, Sgdd, SolveError,
-};
+use approx_chol::{Config, CsrRef, Factor, ScalingPolicy, ScalingReport, Sgdd, SolveError};
 use num_traits::PrimInt;
 use numpy::{
     BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyReadonlyArray1,
@@ -134,45 +132,19 @@ fn owned<T: Element + Copy>(array: &Bound<'_, PyArray1<T>>, name: &str) -> PyRes
         .map_err(|_| value_error(format!("{name} must be contiguous")))
 }
 
-#[pyclass(frozen, eq, from_py_object, name = "Backend")]
-#[derive(Clone, PartialEq, Eq)]
-enum PyBackend {
-    Approximate {},
-    ExactBelow { max_dim: usize },
-}
-
-impl From<PyBackend> for Backend {
-    fn from(backend: PyBackend) -> Self {
-        match backend {
-            PyBackend::Approximate {} => Self::Approximate,
-            PyBackend::ExactBelow { max_dim } => Self::ExactBelow { max_dim },
-        }
-    }
-}
-
-impl From<Backend> for PyBackend {
-    fn from(backend: Backend) -> Self {
-        match backend {
-            Backend::ExactBelow { max_dim } => Self::ExactBelow { max_dim },
-            // `Backend` is `non_exhaustive`, so a newer core may route a way these bindings do not model yet.
-            _ => Self::Approximate {},
-        }
-    }
-}
-
 #[pyclass(frozen, name = "Config")]
 struct PyConfig(Config);
 
 #[pymethods]
 impl PyConfig {
     #[new]
-    #[pyo3(signature = (seed=None, split=None, backend=None))]
-    fn new(seed: Option<u64>, split: Option<u32>, backend: Option<PyBackend>) -> Self {
+    #[pyo3(signature = (seed=None, split=None, exact_max_dim=None))]
+    fn new(seed: Option<u64>, split: Option<u32>, exact_max_dim: Option<usize>) -> Self {
         let default = Config::default();
         Self(Config {
             seed: seed.unwrap_or(default.seed),
             split_merge: split.or(default.split_merge),
-            backend: backend.map_or(default.backend, Backend::from),
+            exact_max_dim: exact_max_dim.unwrap_or(default.exact_max_dim),
             ..default
         })
     }
@@ -188,8 +160,8 @@ impl PyConfig {
     }
 
     #[getter]
-    fn backend(&self) -> PyBackend {
-        self.0.backend.into()
+    fn exact_max_dim(&self) -> usize {
+        self.0.exact_max_dim
     }
 }
 
@@ -487,7 +459,6 @@ impl CsrArrays<'_> {
 // GIL-free is sound: pyclass state is `Sync`, `Workspace` is borrow-checked, the module holds none, and `detach` reads only owned copies.
 #[pymodule(gil_used = false)]
 fn _approx_chol(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyBackend>()?;
     m.add_class::<PyConfig>()?;
     m.add_class::<PyFactor>()?;
     m.add_class::<PyScalingPolicy>()?;

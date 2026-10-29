@@ -75,7 +75,7 @@ fn weakly_grounded_vertex_solves_as_its_sddm_view() {
     weak_vertex_solves_as_its_sddm_view(3, &[(0, 1), (1, 2), (0, 2)]);
 }
 
-/// Past the default `ExactBelow { max_dim: 24 }`, so the grounded block is factored by AC.
+/// Past the default `exact_max_dim: 24`, so the grounded block is factored by AC.
 #[test]
 fn weakly_grounded_vertex_on_a_long_path_solves_as_its_sddm_view() {
     let path: Vec<(u32, u32)> = (0..39).map(|i| (i, i + 1)).collect();

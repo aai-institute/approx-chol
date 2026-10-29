@@ -31,9 +31,7 @@ def test_split_below_two_selects_standard_ac(split):
     b[0], b[-1] = 1.0, -1.0
 
     def solve(split):
-        config = approx_chol.Config(
-            split=split, backend=approx_chol.Backend.Approximate()
-        )
+        config = approx_chol.Config(split=split, exact_max_dim=0)
         return approx_chol.factorize(lap, config).solve(b)
 
     np.testing.assert_array_equal(solve(split), solve(None))
@@ -235,7 +233,7 @@ def test_an_all_zero_row_factors_and_solves_to_zero():
 
 
 def test_a_workspace_from_a_smaller_factor_raises():
-    approximate = approx_chol.Config(backend=approx_chol.Backend.Approximate())
+    approximate = approx_chol.Config(exact_max_dim=0)
     small = approx_chol.factorize(grid_sddm(2, 2), approximate)
     large = approx_chol.factorize(grid_sddm(16, 16), approximate)
     b = np.zeros(large.n)

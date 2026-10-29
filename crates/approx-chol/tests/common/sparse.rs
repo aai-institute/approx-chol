@@ -1,6 +1,6 @@
-use approx_chol::{Backend, Config, SchurMode};
+use approx_chol::{Config, SchurMode};
 
-/// [`Backend::Approximate`] under AC or AC2, each complement exact or sampled either way.
+/// `exact_max_dim: 0` under AC or AC2, each complement exact or sampled either way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sparse {
     AcExactComplement,
@@ -29,7 +29,7 @@ impl Sparse {
         Config {
             seed: 7,
             split_merge,
-            backend: Backend::Approximate,
+            exact_max_dim: 0,
             complement,
         }
     }

@@ -18,7 +18,7 @@ mod surplus_grounds;
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
 };
-use approx_chol::{factorize_with, Backend, Config, Factor, ScalingPolicy};
+use approx_chol::{factorize_with, Config, Factor, ScalingPolicy};
 use dense::dense;
 use dense_residual::solve_residual;
 use gram::{dense_csr, matrix};
@@ -55,7 +55,7 @@ fn csr_and_upper_share_reduction_and_solve_bits() {
     let rhs = [1.0; 7];
     for config in [
         Config {
-            backend: Backend::Approximate,
+            exact_max_dim: 0,
             ..Config::default()
         },
         dense(),
