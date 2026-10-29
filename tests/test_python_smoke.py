@@ -26,7 +26,6 @@ def _grid_solution(config: approx_chol.Config) -> np.ndarray:
 
 def test_package_surface_and_basic_factorize_raw_roundtrip():
     assert approx_chol.__all__ == [
-        "Backend",
         "Config",
         "Factor",
         "ScalingPolicy",
@@ -48,14 +47,10 @@ def test_package_surface_and_basic_factorize_raw_roundtrip():
 
 def test_config_defaults_and_getters():
     default = approx_chol.Config()
-    assert (default.seed, default.split) == (0, None)
-    assert default.backend == approx_chol.Backend.ExactBelow(max_dim=24)
+    assert (default.seed, default.split, default.exact_max_dim) == (0, None, 24)
 
-    config = approx_chol.Config(
-        seed=7, split=3, backend=approx_chol.Backend.Approximate()
-    )
-    assert (config.seed, config.split) == (7, 3)
-    assert config.backend == approx_chol.Backend.Approximate()
+    config = approx_chol.Config(seed=7, split=3, exact_max_dim=0)
+    assert (config.seed, config.split, config.exact_max_dim) == (7, 3, 0)
 
 
 def test_scaling_policy_defaults_getters_and_range():
@@ -102,17 +97,14 @@ def test_no_config_and_a_default_config_factor_alike():
     )
 
 
-def test_backend_reaches_the_factorization():
-    exact = approx_chol.Backend.ExactBelow
-    assert _grid_residual(approx_chol.Config(backend=exact(max_dim=16))) < 1e-12
-    assert _grid_residual(approx_chol.Config(backend=exact(max_dim=15))) > 1e-3
+def test_exact_max_dim_reaches_the_factorization():
+    assert _grid_residual(approx_chol.Config(exact_max_dim=16)) < 1e-12
+    assert _grid_residual(approx_chol.Config(exact_max_dim=15)) > 1e-3
 
 
 def test_seed_and_split_reach_the_factorization():
     def solution(**config):
-        return _grid_solution(
-            approx_chol.Config(backend=approx_chol.Backend.Approximate(), **config)
-        )
+        return _grid_solution(approx_chol.Config(exact_max_dim=0, **config))
 
     base = solution(seed=0)
     np.testing.assert_array_equal(base, solution(seed=0))
@@ -157,7 +149,7 @@ def test_a_dominant_matrix_does_not_warn():
 
 def test_solve_into_with_a_reused_workspace_is_bit_identical():
     factor = approx_chol.factorize(
-        grid_sddm(16, 16), approx_chol.Config(backend=approx_chol.Backend.Approximate())
+        grid_sddm(16, 16), approx_chol.Config(exact_max_dim=0)
     )
     workspace = factor.workspace()
     rng = np.random.default_rng(0)

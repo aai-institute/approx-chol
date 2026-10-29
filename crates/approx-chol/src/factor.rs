@@ -14,7 +14,7 @@ use rand::SeedableRng;
 use rayon::prelude::*;
 
 use clique_tree::{Copies, Single};
-pub use config::{Backend, Config, InnerParallelism, SchurMode};
+pub use config::{Config, InnerParallelism, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
 
@@ -733,12 +733,12 @@ mod storage {
         let configs = [
             Config::default(),
             Config {
-                backend: Backend::Approximate,
+                exact_max_dim: 0,
                 split_merge: Some(2),
                 ..Config::default()
             },
             Config {
-                backend: Backend::Approximate,
+                exact_max_dim: 0,
                 complement: SchurMode::Exact,
                 ..Config::default()
             },

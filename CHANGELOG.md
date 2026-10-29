@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Config` gains `complement: SchurMode`. ([#182])
 - `factorize_with` takes a `ScalingPolicy` after its `Config`. ([#267])
-- A `Config` serialized by 0.6.0 reads back from JSON; one serialized to postcard decodes without error, its `on_failure` read as `complement`. ([#182], [#267])
-- `Backend::ExactBelow` has no `on_failure`; `ExactFailure`, `Fallback`, `DenseFailure`, `UnusablePivot` and `Factor::fallbacks` are removed, as the exact arm never fails a pivot. ([#182])
+- `Backend` and `Config::backend` are removed: `Config::exact_max_dim` is the largest block dimension factored exactly, `0` none; a `Config` serialized by 0.6.0 is rejected from JSON and unsupported from postcard. ([#322])
+- `ExactFailure`, `Fallback`, `DenseFailure`, `UnusablePivot` and `Factor::fallbacks` are removed, as the exact arm never fails a pivot. ([#182])
 - `Error` is `InvalidCsr(CsrError)` or `Reduce(ReduceError)`; a value defect is `CsrError::{NotSymmetric, BelowDiagonal, OutOfRange}`, naming its row. ([#182])
 - `CsrRef::new`, `CsrRef::to_owned_u32`, `OwnedCsr::try_from_usize` and `CsrRef`'s `sprs`/`faer` conversions return `CsrError`, not `Error`.
 - A column outside `0..n` is reported by `factorize`, not `CsrRef::new`; `CsrError::InputConversionPanicked` is removed. ([#182])
@@ -27,12 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SolveError` is `LengthMismatch` or `ScratchTooShort`. ([#146])
 - `Factor::solve_in_place` returns `solve`'s `A⁺b` on each floating block; 0.6.0 pinned an elimination-dependent vertex of each floating block to zero instead. ([#135])
 - `FACTOR_FORMAT_VERSION` is `0x41430009`, and no other version decodes. ([#148], [#179])
-- Python `Backend.ExactBelow` takes only `max_dim`; `ExactFailure`, `DenseFailure`, `Fallback` and `Factor.fallbacks` are removed. ([#182])
+- Python `Backend` is removed: `Config(exact_max_dim=...)` replaces it; `ExactFailure`, `DenseFailure`, `Fallback` and `Factor.fallbacks` are removed. ([#182])
 - Python `Factor.n` is the matrix dimension, and `Factor.solve`, `solve_into` and `matvec` reject a `b` whose length is not `n`. ([#140], [#146])
 
 ### Changed
 
-- `Backend::ExactBelow { max_dim }` bounds a block's dimension, not its solved variables: a floating block of `max_dim + 1` vertices factors approximately. ([#182])
+- `Config::exact_max_dim` bounds a block's dimension, not its solved variables: a floating block of `exact_max_dim + 1` vertices factors approximately. ([#182])
 - `factorize` admits symmetric generalized diagonally dominant input: positive off-diagonals fold by a ±1 scaling or factor on a double cover, and a block short of dominance is scaled under `factorize_with`'s `ScalingPolicy`. ([#183])
 - Python `Factor.solve`, `solve_into`, `matvec` and `rmatvec` take any 1-D integer or float array-like, and `matvec`/`rmatvec` scipy's `(n, 1)` column. ([#224])
 - Python `Factor.solve_into` accepts `out` overlapping `b`, so `solve_into(v, v)` solves in place. ([#300])
@@ -270,3 +270,4 @@ for graph Laplacians in Rust with Python bindings.
 [#300]: https://github.com/aai-institute/approx-chol/issues/300
 [#301]: https://github.com/aai-institute/approx-chol/issues/301
 [#315]: https://github.com/aai-institute/approx-chol/pull/315
+[#322]: https://github.com/aai-institute/approx-chol/pull/322

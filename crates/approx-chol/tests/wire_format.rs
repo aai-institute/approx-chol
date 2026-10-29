@@ -5,9 +5,7 @@ use std::collections::BTreeSet;
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
 use approx_chol::FACTOR_FORMAT_VERSION as FORMAT_VERSION;
-use approx_chol::{
-    factorize_with, Backend, BlockFactor, Config, Factor, InnerParallelism, ScalingPolicy,
-};
+use approx_chol::{factorize_with, BlockFactor, Config, Factor, InnerParallelism, ScalingPolicy};
 use rstest::rstest;
 use serde::de::value::{Error, SeqDeserializer};
 use serde::Deserialize;
@@ -88,7 +86,7 @@ impl Fixture {
         match self {
             Self::SampledAc2 => Config {
                 split_merge: Some(2),
-                backend: Backend::Approximate,
+                exact_max_dim: 0,
                 ..Config::default()
             },
             _ => Config::default(),

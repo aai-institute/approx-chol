@@ -6,7 +6,7 @@ mod graph;
 mod residual;
 
 use approx_chol::input::Laplacian;
-use approx_chol::{factorize_with, Backend, Config, Factor, OwnedCsr, ScalingPolicy};
+use approx_chol::{factorize_with, Config, Factor, OwnedCsr, ScalingPolicy};
 use dense::dense;
 use graph::{Edge, Graph};
 
@@ -87,7 +87,7 @@ fn floating_laplacian_solves_with_a_weakly_coupled_last_vertex() {
     let (u, v) = (ends(|e| e.a as u32), ends(|e| e.b as u32));
     let weights: Vec<f64> = graph.edges.iter().map(|e| e.weight).collect();
     let approximate = Config {
-        backend: Backend::Approximate,
+        exact_max_dim: 0,
         ..Config::default()
     };
     for config in [dense(), approximate] {

@@ -248,12 +248,12 @@ fn bipartite(slopes: bool) -> View<f64> {
     }
 }
 
-fn build(dense_up_to: u8) -> Build {
+fn build(exact_max_dim: u8) -> Build {
     Build {
         seed: 0,
         complement: Some(1),
         approximate: 1,
-        dense_up_to,
+        exact_max_dim,
     }
 }
 

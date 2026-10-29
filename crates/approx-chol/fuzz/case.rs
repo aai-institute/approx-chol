@@ -3,7 +3,7 @@ use std::error::Error;
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
 };
-use approx_chol::{factorize_with, Backend, Config, Factor, InnerParallelism};
+use approx_chol::{factorize_with, Config, Factor, InnerParallelism};
 use approx_chol::{Real, ScalingPolicy, SchurMode};
 use serde::{Deserialize, Serialize};
 
@@ -83,7 +83,7 @@ pub struct Build {
     pub seed: u64,
     pub complement: Option<u8>,
     pub approximate: u8,
-    pub dense_up_to: u8,
+    pub exact_max_dim: u8,
 }
 
 impl Build {
@@ -94,9 +94,7 @@ impl Build {
         Config {
             seed: self.seed,
             split_merge: Some(self.approximate.into()),
-            backend: Backend::ExactBelow {
-                max_dim: self.dense_up_to.into(),
-            },
+            exact_max_dim: self.exact_max_dim.into(),
             complement,
         }
     }

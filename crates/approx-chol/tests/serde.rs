@@ -5,8 +5,7 @@ mod gram;
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Laplacian, Sddm};
 use approx_chol::{
-    factorize_with, Backend, BlockFactor, Config, Factor, InnerParallelism, ScalingPolicy,
-    SchurMode,
+    factorize_with, BlockFactor, Config, Factor, InnerParallelism, ScalingPolicy, SchurMode,
 };
 use gram::{dense_csr, matrix};
 use rstest::rstest;
@@ -48,7 +47,7 @@ fn factors(config: Config) -> Vec<Factor> {
 fn configs() -> [Config; 2] {
     let exact = Config {
         complement: SchurMode::Exact,
-        backend: Backend::Approximate,
+        exact_max_dim: 0,
         ..Config::default()
     };
     [Config::default(), exact]
@@ -241,45 +240,12 @@ fn a_factor_not_covering_n_once_is_rejected(#[case] n: usize, #[case] dead: &[us
     assert_eq!(error, postcard::Error::SerdeDeCustom);
 }
 
-/// Each `Config` as 0.6.0 serialized it to JSON, beside what it reads as now.
-fn released_configs() -> [(&'static str, Config); 4] {
-    let exact_below = |max_dim| Backend::ExactBelow { max_dim };
-    [
-        (
-            r#"{"seed":0,"split_merge":null,"backend":{"ExactBelow":{"max_dim":24,"on_failure":"FallBackToApproximate"}}}"#,
-            Config::default(),
-        ),
-        (
-            r#"{"seed":7,"split_merge":3,"backend":{"ExactBelow":{"max_dim":24,"on_failure":"FallBackToApproximate"}}}"#,
-            Config {
-                seed: 7,
-                split_merge: Some(3),
-                ..Config::default()
-            },
-        ),
-        (
-            r#"{"seed":0,"split_merge":null,"backend":"Approximate"}"#,
-            Config {
-                backend: Backend::Approximate,
-                ..Config::default()
-            },
-        ),
-        (
-            r#"{"seed":0,"split_merge":null,"backend":{"ExactBelow":{"max_dim":64,"on_failure":"Error"}}}"#,
-            Config {
-                backend: exact_below(64),
-                ..Config::default()
-            },
-        ),
-    ]
-}
-
-#[test]
-fn a_released_json_config_reads_as_its_new_config() {
-    for (json, expected) in released_configs() {
-        let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config, expected, "{json}");
-    }
+/// 0.6.0's JSON lacks `exact_max_dim` and `complement`, so it is rejected, not read as the default bound.
+#[rstest]
+#[case::default(r#"{"seed":0,"split_merge":null,"backend":{"ExactBelow":{"max_dim":24,"on_failure":"FallBackToApproximate"}}}"#)]
+#[case::approximate(r#"{"seed":0,"split_merge":null,"backend":"Approximate"}"#)]
+fn a_released_json_config_is_rejected(#[case] json: &str) {
+    assert!(serde_json::from_str::<Config>(json).is_err());
 }
 
 #[test]
@@ -344,11 +310,11 @@ fn an_elimination_whose_rows_sum_past_one_is_corrupt() {
 
 /// Each column of a dense `|L|` and each step of an approximate one sums to at most one; past it the substitution can overflow.
 #[rstest]
-#[case::dense("/Dense", Backend::ExactBelow { max_dim: 24 })]
-#[case::approximate("/coefficients", Backend::Approximate)]
+#[case::dense("/Dense", 24)]
+#[case::approximate("/coefficients", 0)]
 fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
     #[case] stored: &str,
-    #[case] backend: Backend,
+    #[case] exact_max_dim: usize,
 ) {
     let (a, b): (Vec<u32>, Vec<u32>) = (0..16u32)
         .flat_map(|v| [(v, v + 1), (v, v + 4)])
@@ -358,7 +324,7 @@ fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
     let grid = Laplacian::new(16, &a, &b).unwrap();
     let grid = Sddm::new(grid, &ground).unwrap();
     let config = Config {
-        backend,
+        exact_max_dim,
         ..Config::default()
     };
     let factor = factorize_with(grid, config, ScalingPolicy::default()).unwrap();
@@ -374,7 +340,7 @@ fn an_approximate_pivot_scale_not_positive_is_corrupt(#[case] by: f64) {
     let (a, b): (Vec<u32>, Vec<u32>) = (0..29u32).map(|v| (v, v + 1)).unzip();
     let path = Laplacian::new(30, &a, &b).unwrap();
     let config = Config {
-        backend: Backend::Approximate,
+        exact_max_dim: 0,
         ..Config::default()
     };
     let factor: Factor = factorize_with(path, config, ScalingPolicy::default()).unwrap();
