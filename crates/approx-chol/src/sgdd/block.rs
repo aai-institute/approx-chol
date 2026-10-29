@@ -65,6 +65,12 @@ pub(crate) struct IrreducibleBlock<T = f64, I = u32> {
     report: Option<Box<ScalingReport>>,
 }
 
+/// A bipartite block's Schur complement onto its kept side, unformed: the block, and where the kept side's run starts in `A`.
+pub(crate) struct BlockComplement<T, I> {
+    pub(crate) block: IrreducibleBlock<T, I>,
+    pub(crate) start: usize,
+}
+
 impl<T: Real, I: Index> IrreducibleBlock<T, I> {
     /// Panics unless one factor, row and surplus per vertex; the ground's `Σs` must clear the bound any diagonal does, and `I` must index the factor's vertices.
     pub(super) fn new(

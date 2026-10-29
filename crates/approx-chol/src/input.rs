@@ -9,7 +9,7 @@ use num_traits::PrimInt;
 
 pub(crate) use csr::Canonical;
 pub use csr::{CsrError, CsrRef, IndexKind, OwnedCsr, UpperCsrRef};
-pub use width2::bipartite::{BipartiteFactorWidth2, FactorWidth1};
+pub use width2::bipartite::{BipartiteFactorWidth2, FactorWidth1, Side};
 pub use width2::error::ViewError;
 pub use width2::laplacian::{Laplacian, Sddm};
 pub(crate) use width2::Column;

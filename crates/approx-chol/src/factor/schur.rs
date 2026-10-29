@@ -1,14 +1,14 @@
-//! Block elimination of a bipartite block's larger, independent side, and the Schur complement it leaves.
+//! Block elimination of a bipartite block's independent side, and the Schur complement it leaves.
+
+use std::borrow::Borrow;
 
 use rayon::prelude::*;
 
-use rand::rngs::Xoshiro256PlusPlus;
-
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
-use super::config::InnerParallelism;
+use super::config::{Config, InnerParallelism, SchurMode};
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
 use super::{within_one, Streams};
-use crate::sgdd::Grounding;
+use crate::sgdd::{Balance, Grounding};
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, per_task, widen, Index, Real};
 
@@ -33,8 +33,24 @@ pub(super) struct BlockElimination<T, I> {
 }
 
 impl<T: Real, I: Index> BlockElimination<T, I> {
+    /// `L` and `factor(S)` over one pivot vector; `Cᵀ` is built once `factor` has consumed `S`, so it never shares that peak.
+    pub(super) fn eliminate<R>(
+        mut cross: Rows<T, I>,
+        balance: Balance<T>,
+        config: &Config,
+        streams: Streams,
+        factor: impl FnOnce(Sddm<T, I>) -> R,
+    ) -> (Self, R) {
+        let (sheets, grounding) = sheets(balance);
+        let inv_pivot = Self::inverse_pivots(&cross, &grounding);
+        let s = schur_complement(&cross, Some(&inv_pivot), sheets, grounding, config, streams);
+        let reduced = factor(s);
+        cross.scale_rows(&inv_pivot);
+        (Self::scaled(cross, inv_pivot), reduced)
+    }
+
     /// Inverse pivots `1/(Σ|c_ek| + s_e)`, the same on both sheets of a cover.
-    pub(super) fn inverse_pivots(c: &Rows<T, I>, grounding: &Grounding<T>) -> Box<[T]> {
+    fn inverse_pivots(c: &Rows<T, I>, grounding: &Grounding<T>) -> Box<[T]> {
         (0..c.n_rows())
             .map(|e| {
                 let s_e = grounding.edge(e).map_or(0.0, widen);
@@ -47,11 +63,6 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     /// Whether an elimination of `c` keeps `Cᵀ`: past `2^17` entries, the forward's work, as `rows_per_task` splits it.
     fn transposes(c: &Rows<T, I>) -> bool {
         c.nnz() > 1 << 17
-    }
-
-    pub(super) fn with_inverse_pivots(mut cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
-        cross.scale_rows(&inv_pivot);
-        Self::scaled(cross, inv_pivot)
     }
 
     fn scaled(cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
@@ -138,8 +149,60 @@ fn rows_within_one<T: Real, I: Index>(cross: &Rows<T, I>) -> bool {
     (0..cross.n_rows()).all(|e| within_one(cross.row(e).map(|(_, &c)| c)))
 }
 
+/// `S` alone, a complement's summand: only exact computes pivots, and `C` is freed before the sampled merge.
+pub(super) fn complement<T: Real, I: Index>(
+    cross: Rows<T, I>,
+    balance: Balance<T>,
+    config: &Config,
+    streams: Streams,
+) -> Sddm<T, I> {
+    let (sheets, grounding) = sheets(balance);
+    schur_complement(cross, None, sheets, grounding, config, streams)
+}
+
+/// A balanced block folds onto one sheet; a frustrated one needs the cover's two.
+fn sheets<T>(balance: Balance<T>) -> (Sheets, Grounding<T>) {
+    match balance {
+        Balance::Balanced(grounding) => (Sheets::One, grounding),
+        Balance::Frustrated(grounding) => (Sheets::Two, grounding),
+    }
+}
+
+/// `S`, `cross`'s eliminated rows' complement onto its columns: exact when dense or asked, else sampled; only exact needs the pivots.
+fn schur_complement<T: Real, I: Index>(
+    cross: impl Borrow<Rows<T, I>>,
+    inv_pivot: Option<&[T]>,
+    sheets: Sheets,
+    grounding: Grounding<T>,
+    config: &Config,
+    streams: Streams,
+) -> Sddm<T, I> {
+    let c = cross.borrow();
+    let dense = config.dense(sheets.count() * c.n_cols());
+    match (dense, config.complement) {
+        (true, _) | (false, SchurMode::Exact) => match inv_pivot {
+            Some(inv_pivot) => exact(c, inv_pivot, sheets, grounding),
+            None => {
+                let inv_pivot = BlockElimination::inverse_pivots(c, &grounding);
+                exact(c, &inv_pivot, sheets, grounding)
+            }
+        },
+        (false, sampled) => {
+            let split = match sampled {
+                SchurMode::Approximate { split_merge } => split_merge,
+                _ => config.split_merge,
+            }
+            .and_then(Multi::split);
+            match split {
+                None => self::sampled(cross, Single, sheets, grounding, streams),
+                Some(split) => self::sampled(cross, split, sheets, grounding, streams),
+            }
+        }
+    }
+}
+
 /// `S = D_k − Cᵀ D_e⁻¹ C` on `sheets`, exact by kept row through a `Cᵀ` freed before `S` is factored.
-pub(super) fn exact<T: Real, I: Index>(
+fn exact<T: Real, I: Index>(
     c: &Rows<T, I>,
     inv_pivot: &[T],
     sheets: Sheets,
@@ -154,34 +217,69 @@ pub(super) fn exact<T: Real, I: Index>(
 }
 
 /// `S` sampled by star in parallel; clique trees need no pivots, so no elimination exists yet. σ is read last here, so it is freed before `S` is factored.
-pub(super) fn sampled<T: Real, I: Index>(
-    c: &Rows<T, I>,
-    split: Option<Multi>,
+fn sampled<T: Real, I: Index, C: Copies>(
+    cross: impl Borrow<Rows<T, I>>,
+    split: C,
     sheets: Sheets,
     grounding: Grounding<T>,
-    stars: Streams,
+    streams: Streams,
 ) -> Sddm<T, I> {
+    let c = cross.borrow();
     let n_kept = c.n_cols();
     let n = sheets.count() * n_kept;
-    let ground = I::from_index(n);
-    let ground_share = |e: usize| grounding.edge(e).map(|s| (ground, s));
-    let stars_per_task = per_task(c.n_rows(), c.nnz() as u64, 14);
-    let fill = match sheets {
-        // One sheet maps no column, as the balanced loop pays for any map.
-        Sheets::One => fill_stars(split, c.n_rows(), stars_per_task, n, |e| {
-            let neighbors = c.row(e).map(|(k, &c)| (I::from_index(k), c.abs()));
-            (stars.star(e), neighbors.chain(ground_share(e)))
-        }),
-        Sheets::Two => fill_stars(split, 2 * c.n_rows(), stars_per_task, n, |star| {
-            let (sheet, e) = (star / c.n_rows(), star % c.n_rows());
-            let neighbors = c.row(e).map(move |(k, &c)| {
-                let on = sheet ^ usize::from(crosses(c));
-                (I::from_index(cover_vertex(k, on)), c.abs())
-            });
-            (stars.star(star), neighbors.chain(ground_share(e)))
-        }),
+    let stars = Stars {
+        c,
+        sheets,
+        grounding: &grounding,
+        streams,
+        ground: I::from_index(n),
     };
+    let fill = sample_stars(split, &stars, per_task(c.n_rows(), c.nnz() as u64, 14), n);
+    // An owned `C` is freed here: the merge never reads it.
+    drop(cross);
     schur(from_fill(n, fill), n_kept, sheets, &grounding)
+}
+
+/// The eliminated side's stars: row `e` of `C` on each sheet, its ground share last, each under its own stream.
+struct Stars<'a, T, I> {
+    c: &'a Rows<T, I>,
+    sheets: Sheets,
+    grounding: &'a Grounding<T>,
+    streams: Streams,
+    ground: I,
+}
+
+impl<T: Real, I: Index> Stars<'_, T, I> {
+    fn count(&self) -> usize {
+        self.sheets.count() * self.c.n_rows()
+    }
+
+    /// Star `s` sampled under its own stream; a row of `C` repeats no column, so it skips the merge.
+    fn eliminate<C: Copies>(
+        &self,
+        s: usize,
+        sampler: &mut CliqueTreeSampler<T, I, C>,
+        fill: impl FnMut((I, I, C, T)),
+    ) {
+        let c = self.c;
+        let ground = |e: usize| self.grounding.edge(e).map(|s_e| (self.ground, s_e));
+        let draws = self.streams.star(s);
+        match self.sheets {
+            // One sheet maps no column, as the balanced loop pays for any map.
+            Sheets::One => {
+                let neighbors = c.row(s).map(|(k, &c)| (I::from_index(k), c.abs()));
+                sampler.eliminate_unique(draws, neighbors.chain(ground(s)), fill);
+            }
+            Sheets::Two => {
+                let (sheet, e) = (s / c.n_rows(), s % c.n_rows());
+                let neighbors = c.row(e).map(move |(k, &c)| {
+                    let on = sheet ^ usize::from(crosses(c));
+                    (I::from_index(cover_vertex(k, on)), c.abs())
+                });
+                sampler.eliminate_unique(draws, neighbors.chain(ground(e)), fill);
+            }
+        }
+    }
 }
 
 /// Rows per fill bucket, as a shift: at most 16 buckets, so one bucket's sorted copy is all the fill ever copied at once.
@@ -256,38 +354,22 @@ fn from_fill<T: Real, I: Index>(
     rows.finish()
 }
 
-/// A row of `C` repeats no column, so stars skip the merge; chunks in star order, so merged duplicates sum alike at any thread count.
-fn fill_stars<T: Real, I: Index, N: Iterator<Item = (I, T)>>(
-    split: Option<Multi>,
-    n_stars: usize,
-    per_task: usize,
-    n: usize,
-    star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
-) -> Vec<Buckets<T, I>> {
-    match split {
-        None => sample_stars(Single, n_stars, per_task, n, star),
-        Some(split) => sample_stars(split, n_stars, per_task, n, star),
-    }
-}
-
-/// Each eliminated star's clique tree on each sheet under its own stream, the ground a final neighbor unless its share is zero; fill bucketed over `n` rows.
-fn sample_stars<T: Real, I: Index, C: Copies, N: Iterator<Item = (I, T)>>(
+/// Each star's clique tree, chunked in star order so merged duplicates sum alike at any thread count; fill bucketed over `n` rows.
+fn sample_stars<T: Real, I: Index, C: Copies>(
     split: C,
-    n_stars: usize,
+    stars: &Stars<'_, T, I>,
     per_task: usize,
     n: usize,
-    star: impl Fn(usize) -> (Xoshiro256PlusPlus, N) + Sync,
 ) -> Vec<Buckets<T, I>> {
     let shift = bucket_shift(n);
     let count = n.div_ceil(1 << shift);
     let empty = || (CliqueTreeSampler::new(split), vec![Vec::new(); count]);
-    (0..n_stars)
+    (0..stars.count())
         .into_par_iter()
-        .fold_chunks(per_task, empty, |(mut sampler, mut buckets), i| {
-            let (draws, neighbors) = star(i);
+        .fold_chunks(per_task, empty, |(mut sampler, mut buckets), s| {
             let push =
                 |(lo, hi, _, w): (I, I, C, T)| buckets[lo.index() >> shift].push((lo, hi, w));
-            sampler.eliminate_unique(draws, neighbors, push);
+            stars.eliminate(s, &mut sampler, push);
             (sampler, buckets)
         })
         .map(|(_, mut buckets)| {

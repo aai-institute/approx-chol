@@ -6,7 +6,7 @@ use num_traits::PrimInt;
 
 use super::partition::{Partition, UnionFind};
 use super::{Cells, LonePivot, Partitioned, PrincipalBlocks};
-use crate::input::{Column, FactorWidth2};
+use crate::input::{Column, FactorWidth2, Side};
 use crate::sgdd::block::{Grounding, ReduceError};
 use crate::sgdd::diagonal_in_range;
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
@@ -34,13 +34,32 @@ pub(in crate::sgdd) struct StrictUpperTriangle;
 #[derive(Clone, Copy, Debug)]
 pub(in crate::sgdd) struct Biadjacency {
     n_left: usize,
+    onto: Onto,
+}
+
+/// The side each bipartite block's Schur complement is onto; the other is eliminated first.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::sgdd) enum Onto {
+    /// The smaller, the right on a tie, so the larger is eliminated.
+    Smaller,
+    /// This side.
+    Given(Side),
 }
 
 impl Biadjacency {
     /// `v`'s own left part, so the layout and the columns it sums never disagree.
-    pub(in crate::sgdd) fn of<T: Real, J: PrimInt>(v: &FactorWidth2<'_, T, J>) -> Option<Self> {
-        v.n_left().map(|n_left| Self { n_left })
+    pub(in crate::sgdd) fn of<T: Real, J: PrimInt>(
+        v: &FactorWidth2<'_, T, J>,
+        onto: Onto,
+    ) -> Option<Self> {
+        v.n_left().map(|n_left| Self { n_left, onto })
     }
+}
+
+/// `C` and the side each block's complement is onto.
+pub(in crate::sgdd) struct Oriented<T, I> {
+    c: Rows<T, I>,
+    onto: Onto,
 }
 
 impl AdjacencyLayout for StrictUpperTriangle {
@@ -67,16 +86,18 @@ impl AdjacencyLayout for StrictUpperTriangle {
 }
 
 impl AdjacencyLayout for Biadjacency {
-    type Adjacency<T: Real, I: Index> = Rows<T, I>;
+    type Adjacency<T: Real, I: Index> = Oriented<T, I>;
 
     fn sum<T: Real, J: PrimInt, I: Index>(
         self,
         v: FactorWidth2<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         pair: impl FnMut(usize, usize, f64),
-    ) -> Result<Partitioned<Rows<T, I>, I>, ReduceError> {
-        let a = cells::cross(v, self.n_left, seen, pair)?;
-        let partition = Partition::of_bipartite(&a);
+    ) -> Result<Partitioned<Oriented<T, I>, I>, ReduceError> {
+        let c = cells::cross(v, self.n_left, seen, pair)?;
+        let partition = Partition::of_bipartite(&c);
+        let onto = self.onto;
+        let a = Oriented { c, onto };
         Ok(Partitioned { a, partition })
     }
 }
@@ -231,23 +252,24 @@ fn at<T: Copy, I: Index>(values: &[T], vertices: &[I]) -> Vec<T> {
 }
 
 /// The biadjacency `C`, cancelled cells dropped: rows are `A`'s left vertices.
-impl<T: Real, I: Index> PrincipalBlocks<T, I> for Rows<T, I> {
+impl<T: Real, I: Index> PrincipalBlocks<T, I> for Oriented<T, I> {
     type Block = (Box<[I]>, OffDiagonal<T, I>);
 
     fn whole(self, vertices: &[I]) -> Self::Block {
-        let (lefts, rights) = vertices.split_at(self.n_rows());
-        sides(lefts, rights, self)
+        let (lefts, rights) = vertices.split_at(self.c.n_rows());
+        sides(lefts, rights, self.c, self.onto)
     }
 
     fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
-        let n_left = self.n_rows();
+        let c = &self.c;
+        let n_left = c.n_rows();
         let (lefts, rights) = vertices.split_at(vertices.partition_point(|&v| v.index() < n_left));
         let mut ptrs = Vec::with_capacity(lefts.len() + 1);
         ptrs.push(0);
-        let entries = lefts.iter().map(|&i| self.row_len(i.index())).sum();
+        let entries = lefts.iter().map(|&i| c.row_len(i.index())).sum();
         let (mut indices, mut values) = (Vec::with_capacity(entries), Vec::with_capacity(entries));
         for &i in lefts {
-            for (j, &x) in self.row(i.index()) {
+            for (j, &x) in c.row(i.index()) {
                 indices.push(position[n_left + j] - I::from_index(lefts.len()));
                 values.push(x);
             }
@@ -257,6 +279,7 @@ impl<T: Real, I: Index> PrincipalBlocks<T, I> for Rows<T, I> {
             lefts,
             rights,
             Rows::new(ptrs, indices, values, rights.len()),
+            self.onto,
         )
     }
 }
@@ -280,23 +303,18 @@ where
     }
 }
 
-/// The larger side eliminated first, `C` transposed when it is the right one; a side alone is one uncoupled vertex.
+/// The side opposite `onto`'s eliminated first, `C` transposed when it is the right one.
 fn sides<T: Real, I: Index>(
     lefts: &[I],
     rights: &[I],
     c: Rows<T, I>,
+    onto: Onto,
 ) -> (Box<[I]>, OffDiagonal<T, I>) {
-    if lefts.is_empty() || rights.is_empty() {
-        debug_assert_eq!(
-            lefts.len() + rights.len(),
-            1,
-            "a connected side alone is one vertex"
-        );
-        let empty = Rows::new(vec![0, 0], Vec::new(), Vec::new(), 1);
-        let vertices = [lefts, rights].concat().into();
-        return (vertices, OffDiagonal::General(UpperAdjacency::new(empty)));
-    }
-    match lefts.len() >= rights.len() {
+    let left_first = match onto {
+        Onto::Smaller => lefts.len() >= rights.len(),
+        Onto::Given(kept) => kept == Side::Right,
+    };
+    match left_first {
         true => ([lefts, rights].concat().into(), OffDiagonal::Bipartite(c)),
         false => {
             let c = c.transpose();

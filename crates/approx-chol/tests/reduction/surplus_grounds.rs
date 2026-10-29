@@ -1,5 +1,6 @@
 use super::cycle::Cycle;
 use super::dense::dense;
+use super::dense_residual::apply;
 use super::gram::{dense_csr, matrix};
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm,
@@ -119,12 +120,6 @@ fn centre_surplus_over_band(a: &[Vec<f64>]) -> f64 {
     surplus / (f64::EPSILON * trace)
 }
 
-fn apply(a: &[Vec<f64>], x: &[f64]) -> Vec<f64> {
-    (a.iter())
-        .map(|row| row.iter().zip(x).map(|(a, x)| a * x).sum())
-        .collect()
-}
-
 /// `‖Ax − b‖∞ / (‖A‖∞ ‖x‖∞)` for `x` the dense factor's solve of `b`, which must not float.
 fn backward_error(a: &[Vec<f64>], rhs: &[f64]) -> f64 {
     let (ptrs, columns, values) = dense_csr(a);
@@ -223,31 +218,27 @@ fn f32_star_just_past_the_band_grounds() {
 }
 
 /// Worker slopes `t − t̄` beside year intercepts, one observation off by `δ`: a row's residue passes its band and the deficit clamped beside it, yet cancels in `1ᵀM1`.
-fn near_aliased_slope(delta: f64) -> bool {
-    let (workers, years) = (400u32, 10u32);
-    let mean = f64::from(years - 1) / 2.0;
-    let (mut rows, mut cols, mut x) = (vec![], vec![], vec![]);
-    for w in 0..workers {
-        for t in 0..years {
-            rows.push(w);
-            cols.push(t);
-            x.push(f64::from(t) - mean);
-        }
-    }
-    x[3] += delta;
-    let gram = BipartiteFactorWidth2::new(
-        FactorWidth1::new(workers as usize, &rows, Some(&x)).unwrap(),
-        FactorWidth1::new(years as usize, &cols, None).unwrap(),
-    )
-    .unwrap();
-    let factor = factorize(gram).unwrap();
-    assert_eq!(factor.blocks().len(), 1);
-    factor.blocks()[0].floats()
-}
-
 #[test]
 fn near_aliased_slope_residues_cancel_so_the_block_floats() {
     for delta in [1e-9, -1e-9] {
-        assert!(near_aliased_slope(delta), "{delta}");
+        let (workers, years) = (400u32, 10u32);
+        let mean = f64::from(years - 1) / 2.0;
+        let (mut rows, mut cols, mut x) = (vec![], vec![], vec![]);
+        for w in 0..workers {
+            for t in 0..years {
+                rows.push(w);
+                cols.push(t);
+                x.push(f64::from(t) - mean);
+            }
+        }
+        x[3] += delta;
+        let gram = BipartiteFactorWidth2::new(
+            FactorWidth1::new(workers as usize, &rows, Some(&x)).unwrap(),
+            FactorWidth1::new(years as usize, &cols, None).unwrap(),
+        )
+        .unwrap();
+        let factor = factorize(gram).unwrap();
+        assert_eq!(factor.blocks().len(), 1);
+        assert!(factor.blocks()[0].floats(), "{delta}");
     }
 }

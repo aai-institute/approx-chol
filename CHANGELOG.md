@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python `Factor.workspace` returns a `Workspace`, which `Factor.solve_into` reuses across calls. ([#255])
 - `Sgdd`: `factorize_with`'s two steps, `Sgdd::reduce` an `Input`, then `Sgdd::factor` it. ([#267])
 - Python `ScalingPolicy`, which `factorize` and `factorize_raw` take as `scaling`. ([#301])
+- `factorize_complement` factors a `BipartiteFactorWidth2`'s Schur complement onto a `Side`, formed under `Config::complement` as `factorize_with` forms it; the factor's vertex `k` is that side's `k`-th. ([#315])
 
 ### Fixed
 
@@ -268,3 +269,4 @@ for graph Laplacians in Rust with Python bindings.
 [#277]: https://github.com/aai-institute/approx-chol/issues/277
 [#300]: https://github.com/aai-institute/approx-chol/issues/300
 [#301]: https://github.com/aai-institute/approx-chol/issues/301
+[#315]: https://github.com/aai-institute/approx-chol/pull/315
