@@ -94,19 +94,28 @@ impl Accumulator {
 
 /// A cell's running sum over its columns' terms.
 pub(in crate::sgdd) trait CellSum: Copy + Default {
+    /// What `settled` needs to know of a cell's term count, counted over `V`'s columns.
+    type Terms: Terms;
+
     fn add(&mut self, x: f64);
 
     fn sum(self) -> f64;
 
-    /// The sum `A` keeps, `slack` bounding any column order's rounding relative to `Σ|x|`.
-    #[inline(always)]
-    fn settled(self, _slack: f64) -> f64 {
-        self.sum()
-    }
+    /// The sum `A` keeps for the cell between vertices `a` and `b`.
+    fn settled(self, terms: &Self::Terms, a: usize, b: usize) -> f64;
+}
+
+/// A count over `V`'s columns, each joining two vertices.
+pub(in crate::sgdd) trait Terms {
+    fn new(n: usize) -> Self;
+
+    fn count(&mut self, a: usize, b: usize);
 }
 
 /// An incidence `V`'s terms share a sign, so no order cancels a cell to zero.
 impl CellSum for f64 {
+    type Terms = ();
+
     #[inline(always)]
     fn add(&mut self, x: f64) {
         *self += x;
@@ -116,6 +125,18 @@ impl CellSum for f64 {
     fn sum(self) -> f64 {
         self
     }
+
+    #[inline(always)]
+    fn settled(self, _: &(), _: usize, _: usize) -> f64 {
+        self
+    }
+}
+
+impl Terms for () {
+    fn new(_: usize) -> Self {}
+
+    #[inline(always)]
+    fn count(&mut self, _: usize, _: usize) {}
 }
 
 /// A valued `V`'s cell: its plain sum, and `Σ|x|` to bound how far another order's sum could be.
@@ -126,6 +147,8 @@ pub(super) struct Bounded {
 }
 
 impl CellSum for Bounded {
+    type Terms = PerVertex;
+
     #[inline(always)]
     fn add(&mut self, x: f64) {
         self.sum += x;
@@ -139,13 +162,33 @@ impl CellSum for Bounded {
 
     /// Zero when within `k·ε·Σ|x|` of it, past any order's error `γ_(k−1)·Σ|x|` (ORO 2005, (2.4)).
     #[inline(always)]
-    fn settled(self, slack: f64) -> f64 {
+    fn settled(self, terms: &PerVertex, a: usize, b: usize) -> f64 {
+        // Empty cells skip the bound: on every table cell it cost +10% cycles.
+        if self.sum == 0.0 {
+            return 0.0;
+        }
+        let k = terms.0[a].min(terms.0[b]);
         // An overflowed `Σ|x|` bounds nothing; the plain sum goes on to `admit`.
-        let off = self.magnitude * slack;
+        let off = self.magnitude * (k as f64 * f64::EPSILON);
         match off.is_finite() && self.sum.abs() <= off {
             true => 0.0,
             false => self.sum,
         }
+    }
+}
+
+/// Each vertex's count of `V`'s terms, so a cell has at most its ends' smaller count.
+pub(in crate::sgdd) struct PerVertex(Vec<usize>);
+
+impl Terms for PerVertex {
+    fn new(n: usize) -> Self {
+        Self(vec![0; n])
+    }
+
+    #[inline(always)]
+    fn count(&mut self, a: usize, b: usize) {
+        self.0[a] += 1;
+        self.0[b] += 1;
     }
 }
 
@@ -166,23 +209,22 @@ fn dense_cross<T: Real, J: PrimInt, I: Index, C: CellSum>(
 ) -> Result<Rows<T, I>, ReduceError> {
     let n_right = v.n() - n_left;
     let mut table = vec![C::default(); n_left * n_right];
+    let mut terms = C::Terms::new(v.n());
     v.for_each_column::<I>(
         #[inline(always)]
         |column| {
             table[column.a.index() * n_right + column.b.index() - n_left].add(column.cell());
+            terms.count(column.a.index(), column.b.index());
             seen(&column);
         },
     );
-    let slack = v.n_columns() as f64 * f64::EPSILON;
     let mut ptrs = Vec::with_capacity(n_left + 1);
     ptrs.push(0);
     let (mut indices, mut cells) = (Vec::new(), Vec::new());
     for i in 0..n_left {
         let row = &table[i * n_right..][..n_right];
-        let sums = row
-            .iter()
-            .enumerate()
-            .map(|(j, cell)| (j, cell.settled(slack)));
+        let sums =
+            (row.iter().enumerate()).map(|(j, cell)| (j, cell.settled(&terms, i, n_left + j)));
         for (j, x) in sums.filter(|&(_, x)| x != 0.0) {
             pair(i, n_left + j, x);
             indices.push(I::from_index(j));
@@ -230,10 +272,12 @@ fn sum_cells<T: Real, J: PrimInt, I: Index, C: CellSum>(
     let entries = starts[counts.len()];
     let mut cursor = starts[..counts.len()].to_vec();
     let (mut columns, mut cells) = (vec![I::zero(); entries], vec![0.0; entries]);
+    let mut terms = C::Terms::new(v.n());
     v.for_each_column::<I>(
         #[inline(always)]
         |column| {
             let (lo, hi) = (column.a.min(column.b), column.a.max(column.b));
+            terms.count(lo.index(), hi.index());
             let slot = &mut cursor[lo.index()];
             columns[*slot] = hi - I::from_index(first_column);
             cells[*slot] = column.cell();
@@ -242,7 +286,6 @@ fn sum_cells<T: Real, J: PrimInt, I: Index, C: CellSum>(
     );
     drop(cursor);
     let n_cols = v.n() - first_column;
-    let slack = v.n_columns() as f64 * f64::EPSILON;
     let mut sums = vec![C::default(); n_cols];
     let mut touched: Vec<I> = Vec::new();
     let mut ptrs = Vec::with_capacity(starts.len());
@@ -261,7 +304,8 @@ fn sum_cells<T: Real, J: PrimInt, I: Index, C: CellSum>(
         touched.dedup();
         // Written in place: a row's sums never outnumber its own bucket, already read.
         for &j in &touched {
-            let cell = std::mem::take(&mut sums[j.index()]).settled(slack);
+            let cell =
+                std::mem::take(&mut sums[j.index()]).settled(&terms, i, first_column + j.index());
             if cell != 0.0 {
                 pair(i, first_column + j.index(), cell);
                 columns[out] = j;
@@ -273,7 +317,7 @@ fn sum_cells<T: Real, J: PrimInt, I: Index, C: CellSum>(
         ptrs.push(out);
     }
     // Freed before the shrinks reallocate, as they set the reduction's peak.
-    drop((starts, sums));
+    drop((starts, sums, terms));
     columns.truncate(out);
     columns.shrink_to_fit();
     cells.truncate(out);
@@ -334,6 +378,23 @@ mod tests {
         );
     }
 
+    type Summed = (String, Vec<(u32, u32, f64)>, Vec<(usize, usize, f64)>);
+
+    fn sum<C: CellSum>(
+        accumulator: Accumulator,
+        gram: BipartiteFactorWidth2<'_, f64>,
+        n_left: usize,
+    ) -> Summed {
+        let (mut seen, mut pairs) = (Vec::new(), Vec::new());
+        let rows = accumulator.cross::<f64, u32, u32, C>(
+            gram.0,
+            n_left,
+            |column| seen.push((column.a, column.b, column.cell())),
+            |i, j, cell| pairs.push((i, j, cell)),
+        );
+        (format!("{:?}", rows.unwrap()), seen, pairs)
+    }
+
     #[test]
     fn table_and_buckets_sum_valued_and_incidence_sides_alike() {
         let left = [0, 0, 0, 1, 1, 2, 3, 3, 4, 5, 6, 7, 8, 9, 9];
@@ -357,21 +418,6 @@ mod tests {
             FactorWidth1::new(10, &right, None).unwrap(),
             &s,
         );
-        type Summed = (String, Vec<(u32, u32, f64)>, Vec<(usize, usize, f64)>);
-        fn sum<C: CellSum>(
-            accumulator: Accumulator,
-            gram: BipartiteFactorWidth2<'_, f64>,
-            n_left: usize,
-        ) -> Summed {
-            let (mut seen, mut pairs) = (Vec::new(), Vec::new());
-            let rows = accumulator.cross::<f64, u32, u32, C>(
-                gram.0,
-                n_left,
-                |column| seen.push((column.a, column.b, column.cell())),
-                |i, j, cell| pairs.push((i, j, cell)),
-            );
-            (format!("{:?}", rows.unwrap()), seen, pairs)
-        }
         let (valued, incidence) = (valued.unwrap(), incidence.unwrap());
         assert_eq!(
             sum::<Bounded>(Accumulator::Table, valued, n_left),
@@ -400,43 +446,25 @@ mod tests {
         )
         .unwrap();
         for accumulator in [Accumulator::Table, Accumulator::Buckets] {
-            let mut pairs = Vec::new();
-            accumulator
-                .cross::<f64, u32, u32, Bounded>(
-                    gram.0,
-                    2,
-                    |_| {},
-                    |i, j, cell| pairs.push((i, j, cell)),
-                )
-                .unwrap();
+            let pairs = sum::<Bounded>(accumulator, gram, 2).2;
             assert_eq!(pairs, [(1, 3, 1.0)], "{accumulator:?}");
         }
     }
 
-    /// Its row holds 3 terms and `V` 3003: both accumulators judge the cell by `V`'s count.
+    /// Cell (0, 0) sums exactly to 2⁻⁴⁰ beside 3000 columns elsewhere, which a bound by `V`'s count drops.
     #[test]
-    fn table_and_buckets_take_one_bound_for_a_cell_near_it() {
-        let x = [&[1.0, 3.0 * p(-54), -1.0 + p(-40)][..], &[1.0; 3000]].concat();
-        let left = [vec![0u32; 3], vec![1; 3000]].concat();
-        let right = [vec![0u32; 3], vec![1; 3000]].concat();
+    fn table_and_buckets_bound_a_cell_by_its_own_terms() {
+        let x = [&[1.0, -1.0 + p(-40)][..], &[1.0; 3000]].concat();
+        let rows = [vec![0u32; 2], vec![1; 3000]].concat();
         let gram = BipartiteFactorWidth2::new(
-            FactorWidth1::new(2, &left, Some(&x[..])).unwrap(),
-            FactorWidth1::new(2, &right, None).unwrap(),
+            FactorWidth1::new(2, &rows, Some(&x[..])).unwrap(),
+            FactorWidth1::new(2, &rows, None).unwrap(),
         )
         .unwrap();
-        let sum = |accumulator: Accumulator| {
-            let mut pairs = Vec::new();
-            accumulator
-                .cross::<f64, u32, u32, Bounded>(
-                    gram.0,
-                    2,
-                    |_| {},
-                    |i, j, cell| pairs.push((i, j, cell)),
-                )
-                .unwrap();
-            pairs
-        };
-        assert_eq!(sum(Accumulator::Table), sum(Accumulator::Buckets));
+        for accumulator in [Accumulator::Table, Accumulator::Buckets] {
+            let pairs = sum::<Bounded>(accumulator, gram, 2).2;
+            assert_eq!(pairs, [(0, 2, p(-40)), (1, 3, 3000.0)], "{accumulator:?}");
+        }
     }
 
     /// Eleven cells: pushes doubling past them leave slack the factor would keep.
