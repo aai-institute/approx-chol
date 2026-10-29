@@ -44,8 +44,8 @@ fn choleskies() -> [(&'static str, Config); 2] {
 
 const DIMENSIONS: [usize; 7] = [8, 16, 24, 32, 64, 128, 256];
 
-fn bench_backend_build(c: &mut Criterion) {
-    let mut group = c.benchmark_group("backend_build");
+fn bench_exact_max_dim_build(c: &mut Criterion) {
+    let mut group = c.benchmark_group("exact_max_dim_build");
     for (shape, build_lap) in shapes() {
         for n in DIMENSIONS {
             let lap = build_lap(n);
@@ -61,8 +61,8 @@ fn bench_backend_build(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_backend_solve(c: &mut Criterion) {
-    let mut group = c.benchmark_group("backend_solve");
+fn bench_exact_max_dim_solve(c: &mut Criterion) {
+    let mut group = c.benchmark_group("exact_max_dim_solve");
     for (shape, build_lap) in shapes() {
         for n in DIMENSIONS {
             let lap = build_lap(n);
@@ -81,5 +81,9 @@ fn bench_backend_solve(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_backend_build, bench_backend_solve);
+criterion_group!(
+    benches,
+    bench_exact_max_dim_build,
+    bench_exact_max_dim_solve
+);
 criterion_main!(benches);

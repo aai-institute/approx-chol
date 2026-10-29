@@ -2,7 +2,6 @@ use super::clique_tree::Multi;
 
 /// Build settings for [`factorize_with`](crate::factorize_with).
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
     /// Every sampler stream derives from this, keyed by block and star.

@@ -240,16 +240,12 @@ fn a_factor_not_covering_n_once_is_rejected(#[case] n: usize, #[case] dead: &[us
     assert_eq!(error, postcard::Error::SerdeDeCustom);
 }
 
-/// 0.6.0's `backend` field is refused, not dropped: dropping it would silently reset the exact bound to 24.
+/// 0.6.0's JSON lacks `exact_max_dim` and `complement`, so it is rejected, not read as the default bound.
 #[rstest]
 #[case::default(r#"{"seed":0,"split_merge":null,"backend":{"ExactBelow":{"max_dim":24,"on_failure":"FallBackToApproximate"}}}"#)]
 #[case::approximate(r#"{"seed":0,"split_merge":null,"backend":"Approximate"}"#)]
 fn a_released_json_config_is_rejected(#[case] json: &str) {
-    let error = serde_json::from_str::<Config>(json).unwrap_err();
-    assert!(
-        error.to_string().contains("unknown field `backend`"),
-        "{error}"
-    );
+    assert!(serde_json::from_str::<Config>(json).is_err());
 }
 
 #[test]

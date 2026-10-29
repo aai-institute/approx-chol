@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Config` gains `complement: SchurMode`. ([#182])
 - `factorize_with` takes a `ScalingPolicy` after its `Config`. ([#267])
-- `Backend` and `Config::backend` are removed: `Config::exact_max_dim` is the largest block dimension factored exactly, `0` none; JSON rejects a `Config` serialized by 0.6.0.
+- `Backend` and `Config::backend` are removed: `Config::exact_max_dim` is the largest block dimension factored exactly, `0` none; a `Config` serialized by 0.6.0 is rejected from JSON and unsupported from postcard. ([#322])
 - `ExactFailure`, `Fallback`, `DenseFailure`, `UnusablePivot` and `Factor::fallbacks` are removed, as the exact arm never fails a pivot. ([#182])
 - `Error` is `InvalidCsr(CsrError)` or `Reduce(ReduceError)`; a value defect is `CsrError::{NotSymmetric, BelowDiagonal, OutOfRange}`, naming its row. ([#182])
 - `CsrRef::new`, `CsrRef::to_owned_u32`, `OwnedCsr::try_from_usize` and `CsrRef`'s `sprs`/`faer` conversions return `CsrError`, not `Error`.
@@ -270,3 +270,4 @@ for graph Laplacians in Rust with Python bindings.
 [#300]: https://github.com/aai-institute/approx-chol/issues/300
 [#301]: https://github.com/aai-institute/approx-chol/issues/301
 [#315]: https://github.com/aai-institute/approx-chol/pull/315
+[#322]: https://github.com/aai-institute/approx-chol/pull/322

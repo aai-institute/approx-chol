@@ -83,7 +83,7 @@ pub struct Build {
     pub seed: u64,
     pub complement: Option<u8>,
     pub approximate: u8,
-    pub dense_up_to: u8,
+    pub exact_max_dim: u8,
 }
 
 impl Build {
@@ -94,7 +94,7 @@ impl Build {
         Config {
             seed: self.seed,
             split_merge: Some(self.approximate.into()),
-            exact_max_dim: self.dense_up_to.into(),
+            exact_max_dim: self.exact_max_dim.into(),
             complement,
         }
     }
