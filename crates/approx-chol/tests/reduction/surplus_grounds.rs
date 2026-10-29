@@ -220,8 +220,9 @@ fn f32_star_just_past_the_band_grounds() {
 /// Worker slopes `t − t̄` beside year intercepts, one observation off by `δ`: a row's residue passes its band and the deficit clamped beside it, yet cancels in `1ᵀM1`.
 #[test]
 fn near_aliased_slope_residues_cancel_so_the_block_floats() {
-    for delta in [1e-9, -1e-9] {
-        let (workers, years) = (400u32, 10u32);
+    // At 4000 workers year 3's cancelling deficit sits within its `(k + 3)ε` band.
+    for (workers, delta) in [(400u32, 1e-9), (400, -1e-9), (4000, 1e-12)] {
+        let years = 10u32;
         let mean = f64::from(years - 1) / 2.0;
         let (mut rows, mut cols, mut x) = (vec![], vec![], vec![]);
         for w in 0..workers {
@@ -240,5 +241,28 @@ fn near_aliased_slope_residues_cancel_so_the_block_floats() {
         let factor = factorize(gram).unwrap();
         assert_eq!(factor.blocks().len(), 1);
         assert!(factor.blocks()[0].floats(), "{delta}");
+    }
+}
+
+/// A cycle of `2⁵⁰` whose rows sit `residues` off their coupling, and a pendant grounded by `1`: rounding outweighs the ground in `Σs⁺` or `1ᵀM1` (#323).
+#[test]
+fn rounding_residues_beside_a_light_ground_do_not_float_it() {
+    for residues in [[0.5, -0.5], [-0.5, -0.5]] {
+        let (n, w) = (8, 2f64.powi(50));
+        let mut a = vec![vec![0.0; n + 1]; n + 1];
+        for i in 0..n {
+            let j = (i + 1) % n;
+            (a[i][j], a[j][i]) = (-w, -w);
+            a[i][i] = 2.0 * w + residues[i % 2];
+        }
+        (a[0][n], a[n][0]) = (-1.0, -1.0);
+        a[0][0] += 1.0;
+        a[n][n] = 2.0;
+        let rhs: Vec<f64> = (0..a.len()).map(|i| (i % 5) as f64 - 1.0).collect();
+        let backward = backward_error(&a, &rhs);
+        assert!(
+            backward <= 16.0 * f64::EPSILON,
+            "{residues:?}: {backward:e}"
+        );
     }
 }

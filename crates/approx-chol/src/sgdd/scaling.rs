@@ -96,21 +96,44 @@ pub(super) enum ScaleVector {
 }
 
 impl ScaleVector {
-    /// The worst `excess_i / m_ii` past row `i`'s band, `0` if none; degrees cost a pass over the entries, so only a row past the `RATIO_BAND ε` floor pays for them.
+    /// The worst `excess_i / m_ii` past row `i`'s band, `0` if none.
     pub(super) fn worst_past_band<T: Real, I: Index>(
         self,
         excess: impl Iterator<Item = f64> + Clone,
         diagonal: &[T],
         off_diagonal: &OffDiagonal<T, I>,
     ) -> f64 {
+        self.fold_past_band(excess, diagonal, off_diagonal, |worst, e, d| {
+            worst.max(e / d)
+        })
+    }
+
+    /// `Σ value_i` over the rows whose `value_i / m_ii` passes their band.
+    pub(super) fn past_band_sum<T: Real, I: Index>(
+        self,
+        values: impl Iterator<Item = f64> + Clone,
+        diagonal: &[T],
+        off_diagonal: &OffDiagonal<T, I>,
+    ) -> f64 {
+        self.fold_past_band(values, diagonal, off_diagonal, |sum, v, _| sum + v)
+    }
+
+    /// Folds `(value_i, m_ii)` from `0` over the rows past their band; degrees cost a pass over the entries, so only a row past the `RATIO_BAND ε` floor, below every band, pays for them.
+    fn fold_past_band<T: Real, I: Index>(
+        self,
+        values: impl Iterator<Item = f64> + Clone,
+        diagonal: &[T],
+        off_diagonal: &OffDiagonal<T, I>,
+        fold: impl Fn(f64, f64, f64) -> f64,
+    ) -> f64 {
         let epsilon = widen(T::epsilon());
-        let ratios = (excess.zip(diagonal)).map(|(e, &d)| e / widen(d));
-        if (ratios.clone()).all(|ratio| ratio <= RATIO_BAND * epsilon) {
+        let rows = values.zip(diagonal.iter().map(|&d| widen(d)));
+        if (rows.clone()).all(|(v, d)| v / d <= RATIO_BAND * epsilon) {
             return 0.0;
         }
-        (ratios.zip(off_diagonal.degrees()).zip(diagonal))
-            .filter(|&((ratio, k), &d)| ratio > self.row_band(k, widen(d), epsilon))
-            .fold(0.0, |worst, ((ratio, _), _)| worst.max(ratio))
+        (rows.zip(off_diagonal.degrees()))
+            .filter(|&((v, d), k)| v / d > self.row_band(k, d, epsilon))
+            .fold(0.0, |acc, ((v, d), _)| fold(acc, v, d))
     }
 
     /// Row `i`'s band for its `k_i` entries and diagonal `m_ii`, in units where `T`'s rounding is `epsilon`.
