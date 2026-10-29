@@ -94,16 +94,14 @@ impl Accumulator {
 
 /// A cell's running sum over its columns' terms.
 pub(in crate::sgdd) trait CellSum: Copy + Default {
-    /// Its terms can take both signs, so their order could cancel it to zero.
-    const CAN_CANCEL: bool = false;
-
     fn add(&mut self, x: f64);
 
     fn sum(self) -> f64;
 
-    /// Its plain sum is within `slack·Σ|x|` of zero, `slack` bounding any order's rounding.
-    fn needs_exact(self, _slack: f64) -> bool {
-        false
+    /// The sum `A` keeps, `slack` bounding any column order's rounding relative to `Σ|x|`.
+    #[inline(always)]
+    fn settled(self, _slack: f64) -> f64 {
+        self.sum()
     }
 }
 
@@ -114,6 +112,7 @@ impl CellSum for f64 {
         *self += x;
     }
 
+    #[inline(always)]
     fn sum(self) -> f64 {
         self
     }
@@ -127,61 +126,27 @@ pub(super) struct Bounded {
 }
 
 impl CellSum for Bounded {
-    const CAN_CANCEL: bool = true;
-
     #[inline(always)]
     fn add(&mut self, x: f64) {
         self.sum += x;
         self.magnitude += x.abs();
     }
 
+    #[inline(always)]
     fn sum(self) -> f64 {
         self.sum
     }
 
-    /// Any order's plain sum of `k` terms is off by at most `γ_(k−1)·Σ|x|` (ORO 2005, (2.4)), below `k·ε·Σ|x|`.
+    /// Zero when within `k·ε·Σ|x|` of it, past any order's error `γ_(k−1)·Σ|x|` (ORO 2005, (2.4)).
     #[inline(always)]
-    fn needs_exact(self, slack: f64) -> bool {
-        // `off` is zero when empty or all subnormal, where sums are exact; NaN or ∞ ends at `admit`.
+    fn settled(self, slack: f64) -> f64 {
+        // An overflowed `Σ|x|` bounds nothing; the plain sum goes on to `admit`.
         let off = self.magnitude * slack;
-        0.0 < off && self.sum.abs() <= off
-    }
-}
-
-/// `Σ terms` exactly, by Shewchuk's Grow-Expansion (DCG 18(3), 1997, Thm 10): zero only if the sum is.
-#[cold]
-#[inline(never)]
-fn exact_sum(terms: impl IntoIterator<Item = f64>) -> f64 {
-    let mut parts: Vec<f64> = Vec::new();
-    for mut x in terms {
-        let mut kept = 0;
-        for k in 0..parts.len() {
-            let error;
-            (x, error) = crate::two_sum(x, parts[k]);
-            if error != 0.0 {
-                parts[kept] = error;
-                kept += 1;
-            }
-        }
-        parts.truncate(kept);
-        if x != 0.0 {
-            parts.push(x);
+        match off.is_finite() && self.sum.abs() <= off {
+            true => 0.0,
+            false => self.sum,
         }
     }
-    // Nonoverlapping and increasing, so the top part dominates and the sum cannot round to zero.
-    parts.iter().sum()
-}
-
-/// The exact sums of the cells in `terms`, `(cell, term)` pairs, in cell order.
-#[cold]
-#[inline(never)]
-fn exact_sums(mut terms: Vec<(usize, f64)>) -> std::vec::IntoIter<f64> {
-    terms.sort_unstable_by_key(|&(k, _)| k);
-    let cells = terms.chunk_by(|a, b| a.0 == b.0);
-    let sums: Vec<f64> = cells
-        .map(|cell| exact_sum(cell.iter().map(|&(_, x)| x)))
-        .collect();
-    sums.into_iter()
 }
 
 /// Row `i`'s nonzero sum as `T` stores it; one cast to zero underflowed, so it is out of range too.
@@ -200,32 +165,24 @@ fn dense_cross<T: Real, J: PrimInt, I: Index, C: CellSum>(
     mut pair: impl FnMut(usize, usize, f64),
 ) -> Result<Rows<T, I>, ReduceError> {
     let n_right = v.n() - n_left;
-    let at = |column: &Column<T, I>| column.a.index() * n_right + column.b.index() - n_left;
     let mut table = vec![C::default(); n_left * n_right];
     v.for_each_column::<I>(
         #[inline(always)]
         |column| {
-            table[at(&column)].add(column.cell());
+            table[column.a.index() * n_right + column.b.index() - n_left].add(column.cell());
             seen(&column);
         },
     );
     let slack = v.n_columns() as f64 * f64::EPSILON;
-    let mut exact = None;
     let mut ptrs = Vec::with_capacity(n_left + 1);
     ptrs.push(0);
     let (mut indices, mut cells) = (Vec::new(), Vec::new());
     for i in 0..n_left {
         let row = &table[i * n_right..][..n_right];
-        let sums = row.iter().enumerate().map(|(j, cell)| {
-            let x = match C::CAN_CANCEL && cell.needs_exact(slack) {
-                true => exact
-                    .get_or_insert_with(|| exact_from(v, &table, i * n_right + j, slack, at))
-                    .next()
-                    .expect("an exact sum per cell needing one"),
-                false => cell.sum(),
-            };
-            (j, x)
-        });
+        let sums = row
+            .iter()
+            .enumerate()
+            .map(|(j, cell)| (j, cell.settled(slack)));
         for (j, x) in sums.filter(|&(_, x)| x != 0.0) {
             pair(i, n_left + j, x);
             indices.push(I::from_index(j));
@@ -238,47 +195,6 @@ fn dense_cross<T: Real, J: PrimInt, I: Index, C: CellSum>(
     indices.shrink_to_fit();
     cells.shrink_to_fit();
     Ok(Rows::new(ptrs, indices, cells, n_right))
-}
-
-/// The exact sums of the table's cells from `first` on that need one, from one more pass over `V`.
-#[cold]
-#[inline(never)]
-fn exact_from<T: Real, J: PrimInt, I: Index, C: CellSum>(
-    v: FactorWidth2<'_, T, J>,
-    table: &[C],
-    first: usize,
-    slack: f64,
-    at: impl Fn(&Column<T, I>) -> usize,
-) -> std::vec::IntoIter<f64> {
-    let wanted: Vec<usize> = (first..table.len())
-        .filter(|&k| table[k].needs_exact(slack))
-        .collect();
-    let mut found = Vec::new();
-    v.for_each_column::<I>(|column| {
-        let k = at(&column);
-        if wanted.binary_search(&k).is_ok() {
-            found.push((k, column.cell()));
-        }
-    });
-    exact_sums(found)
-}
-
-/// The exact sums of a row's `touched` cells that need one, from its bucket of columns and terms.
-#[cold]
-#[inline(never)]
-fn exact_in_row<I: Index, C: CellSum>(
-    touched: &[I],
-    sums: &[C],
-    slack: f64,
-    (columns, cells): (&[I], &[f64]),
-) -> std::vec::IntoIter<f64> {
-    let wanted: Vec<I> = (touched.iter().copied())
-        .filter(|j| sums[j.index()].needs_exact(slack))
-        .collect();
-    let found = (columns.iter().zip(cells))
-        .filter(|&(j, _)| wanted.binary_search(j).is_ok())
-        .map(|(j, &x)| (j.index(), x));
-    exact_sums(found.collect())
 }
 
 /// Each row's cell count, a column's row its lower end, `seen` visiting each column once.
@@ -343,22 +259,9 @@ fn sum_cells<T: Real, J: PrimInt, I: Index, C: CellSum>(
         }
         touched.sort_unstable();
         touched.dedup();
-        // Summed before the writes below overwrite the bucket.
-        let mut exact = (C::CAN_CANCEL
-            && touched.iter().any(|j| sums[j.index()].needs_exact(slack)))
-        .then(|| {
-            let bucket = (&columns[span[0]..span[1]], &cells[span[0]..span[1]]);
-            exact_in_row(&touched, &sums, slack, bucket)
-        });
         // Written in place: a row's sums never outnumber its own bucket, already read.
         for &j in &touched {
-            let sum = std::mem::take(&mut sums[j.index()]);
-            let cell = match exact.as_mut() {
-                Some(exact) if sum.needs_exact(slack) => {
-                    exact.next().expect("an exact sum per cell needing one")
-                }
-                _ => sum.sum(),
-            };
+            let cell = std::mem::take(&mut sums[j.index()]).settled(slack);
             if cell != 0.0 {
                 pair(i, first_column + j.index(), cell);
                 columns[out] = j;
@@ -484,11 +387,11 @@ mod tests {
         2f64.powi(e)
     }
 
-    /// Cell (0, 0) sums to 1; plainly summed it is `−2⁵⁶` in the first order, and TwoSum's sum is 0.
+    /// Cell (0, 0) sums to 1, below its terms' rounding: plainly `−2⁵⁶` in the first order, 1 in the second.
     #[rstest::rstest]
     #[case::one_amid([p(110), p(56), -p(110), p(53), 1.0, -p(53), -p(56)])]
     #[case::one_last([p(110), -p(110), p(56), -p(56), p(53), -p(53), 1.0])]
-    fn table_and_buckets_sum_a_cancelling_cell_exactly(#[case] terms: [f64; 7]) {
+    fn table_and_buckets_drop_a_cell_below_its_rounding(#[case] terms: [f64; 7]) {
         let x = [&terms[..], &[1.0]].concat();
         let rows = [0u32, 0, 0, 0, 0, 0, 0, 1];
         let gram = BipartiteFactorWidth2::new(
@@ -506,7 +409,7 @@ mod tests {
                     |i, j, cell| pairs.push((i, j, cell)),
                 )
                 .unwrap();
-            assert_eq!(pairs, [(0, 2, 1.0), (1, 3, 1.0)], "{accumulator:?}");
+            assert_eq!(pairs, [(1, 3, 1.0)], "{accumulator:?}");
         }
     }
 

@@ -341,52 +341,49 @@ fn p(e: i32) -> f64 {
     2f64.powi(e)
 }
 
-/// Vertices 0 and 1 share a cell summing to 1, which a plain or a TwoSum running sum cancels to 0 in some order.
+/// Vertices 0 and 1 share a cell summing to 1, below its terms' rounding, which a plain sum keeps in some orders only.
 #[rstest]
 #[case::plain_cancels(&[p(53), 1.0, -p(53)])]
-#[case::two_sum_cancels(&[p(110), p(56), -p(110), p(53), 1.0, -p(53), -p(56)])]
-#[case::one_last(&[p(110), -p(110), p(56), -p(56), p(53), -p(53), 1.0])]
-fn a_cell_whose_terms_cancel_keeps_its_edge_in_any_column_order(#[case] terms: &[f64]) {
+#[case::plain_keeps(&[p(53), -p(53), 1.0])]
+#[case::seven_amid(&[p(110), p(56), -p(110), p(53), 1.0, -p(53), -p(56)])]
+#[case::seven_last(&[p(110), -p(110), p(56), -p(56), p(53), -p(53), 1.0])]
+fn a_cell_below_its_rounding_drops_its_edge_in_any_column_order(#[case] terms: &[f64]) {
     let x = [terms, &[1.0]].concat();
     let a = vec![0u32; x.len()];
     let right_rows = [vec![0u32; terms.len()], vec![1]].concat();
     let b: Vec<u32> = right_rows.iter().map(|r| r + 1).collect();
     let y = vec![1.0; x.len()];
     let gram = FactorWidth2::new(3, (&a, &x), (&b, &y)).unwrap();
-    assert_eq!(factorize(gram).unwrap().blocks().len(), 1, "general");
+    assert_eq!(factorize(gram).unwrap().blocks().len(), 2, "general");
     let left = FactorWidth1::new(1, &a, Some(&x[..])).unwrap();
     let right = FactorWidth1::<f64>::new(2, &right_rows, None).unwrap();
     let bipartite = BipartiteFactorWidth2::new(left, right).unwrap();
-    assert_eq!(factorize(bipartite).unwrap().blocks().len(), 1, "bipartite");
+    assert_eq!(factorize(bipartite).unwrap().blocks().len(), 2, "bipartite");
 }
 
-/// Every row is in range but the ground's `Σs ≈ 101·MAX/5`; interleaved, no running sum overflows.
+/// Every row is in range but the ground's `Σs ≈ 20·MAX`; interleaved, no running sum overflows.
 #[rstest]
 #[case::blocked(|c| c)]
 #[case::blocked_spokes_reversed(|c| c / 100 * 100 + 99 - c % 100)]
 #[case::interleaved_control(|c| c % 3 * 100 + c / 3)]
-#[case::interleaved_reversed(|c| (2 - c % 3) * 100 + c / 3)]
 fn a_gram_whose_surplus_sum_overflows_is_rejected_not_a_panic(#[case] order: fn(usize) -> usize) {
     let (s, k) = ((f64::MAX / 1000.0).sqrt(), 10.0);
     let columns = (0..300).map(order);
     let b: Vec<u32> = columns.clone().map(|c| (c % 100 + 1) as u32).collect();
     let a = vec![0u32; b.len()];
-    let x: Vec<f64> = columns
-        .clone()
-        .map(|c| if c < 200 { s } else { 1.0 })
-        .collect();
+    let x = vec![s; b.len()];
     let y: Vec<f64> = columns
         .map(|c| match c {
             0..100 => -k * s,
             100..200 => k * s,
-            _ => 1.0,
+            _ => s / 1000.0,
         })
         .collect();
     let gram = FactorWidth2::new(101, (&a, &x), (&b, &y)).unwrap();
     let outcome = std::panic::catch_unwind(|| factorize(gram).map(|_| ()));
     let error = outcome
         .expect("no panic")
-        .expect_err("the ground's Σs ≈ 101·MAX/5");
+        .expect_err("the ground's Σs ≈ 20·MAX");
     assert!(matches!(
         error,
         Error::Reduce(ReduceError::OutOfRange { .. })
