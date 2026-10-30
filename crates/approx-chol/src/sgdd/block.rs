@@ -152,15 +152,41 @@ type ComplementParts<T, I> = (
     Option<Box<ScalingReport>>,
 );
 
-impl<T: Real, I: Index> IrreducibleBlock<T, I> {
-    /// Panics unless one factor, row and surplus per vertex; the ground's `Σs` must clear the bound any diagonal does, and `I` must index the factor's vertices.
+/// `M = F · A_c · F` over its vertices, its surplus still to be decided.
+pub(super) struct Congruent<T, I> {
+    pub(super) vertices: Box<[I]>,
+    pub(super) congruence: Congruence<T>,
+    pub(super) off_diagonal: OffDiagonal<T, I>,
+    pub(super) report: Option<ScalingReport>,
+}
+
+impl<T: Real, I: Index> Congruent<T, I> {
+    /// `S A_c S`, unscaled.
     pub(super) fn new(
         vertices: Box<[I]>,
-        congruence: Congruence<T>,
         off_diagonal: OffDiagonal<T, I>,
-        balance: Balance<T>,
-        report: Option<ScalingReport>,
-    ) -> Result<Self, ReduceError> {
+        signs: Congruence<T>,
+    ) -> Self {
+        let off_diagonal = match signs.factors(off_diagonal.n()) {
+            Some(s) => off_diagonal.signed(&s),
+            None => off_diagonal,
+        };
+        Self {
+            vertices,
+            congruence: signs,
+            off_diagonal,
+            report: None,
+        }
+    }
+
+    /// Panics unless one factor, row and surplus per vertex; the ground's `Σs` must clear the bound any diagonal does, and `I` must index the factor's vertices.
+    pub(super) fn block(self, balance: Balance<T>) -> Result<IrreducibleBlock<T, I>, ReduceError> {
+        let Self {
+            vertices,
+            congruence,
+            off_diagonal,
+            report,
+        } = self;
         let restriction = Restriction::new(vertices, congruence);
         let vertices = restriction.vertices();
         let n = vertices.len();
@@ -187,14 +213,16 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
             let vertex = vertices.vertex(0);
             return Err(ReduceError::OutOfRange { vertex });
         }
-        Ok(Self {
+        Ok(IrreducibleBlock {
             restriction: Box::new(restriction),
             off_diagonal,
             balance,
             report: report.map(Box::new),
         })
     }
+}
 
+impl<T: Real, I: Index> IrreducibleBlock<T, I> {
     /// Vertices of `A` the block holds, each once however many sheets cover it.
     pub(crate) fn vertex_count(&self) -> usize {
         self.restriction.vertices().len()

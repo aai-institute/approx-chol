@@ -6,13 +6,13 @@ mod graph;
 use num_traits::PrimInt;
 use rayon::prelude::*;
 
-use super::block::{Balance, BlockComplement, Grounding, IrreducibleBlock, ReduceError};
+use super::block::{Balance, BlockComplement, Congruent, Grounding, IrreducibleBlock, ReduceError};
 use super::congruence::{Congruence, ScaledFactors};
 use super::decomposition::{
     of_csr, of_upper, AdjacencyLayout, Biadjacency, Cells, Components, Partitioned,
     StrictUpperTriangle, Summands,
 };
-use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
+use super::scaling::{self, ScaleVector, ScalingPolicy};
 use super::{diagonal_in_range, Complement, Reduced};
 use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Lowered, Side};
 use crate::storage::OffDiagonal;
@@ -195,40 +195,6 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
 enum Signed<T, I> {
     Folded(Folded<T, I>),
     Frustrated(IrreducibleBlock<T, I>),
-}
-
-/// `M = F · A_c · F` over its vertices, its surplus still to be decided.
-struct Congruent<T, I> {
-    vertices: Box<[I]>,
-    congruence: Congruence<T>,
-    off_diagonal: OffDiagonal<T, I>,
-    report: Option<ScalingReport>,
-}
-
-impl<T: Real, I: Index> Congruent<T, I> {
-    /// `S A_c S`, unscaled.
-    fn new(vertices: Box<[I]>, off_diagonal: OffDiagonal<T, I>, signs: Congruence<T>) -> Self {
-        let off_diagonal = match signs.factors(off_diagonal.n()) {
-            Some(s) => off_diagonal.signed(&s),
-            None => off_diagonal,
-        };
-        Self {
-            vertices,
-            congruence: signs,
-            off_diagonal,
-            report: None,
-        }
-    }
-
-    fn block(self, balance: Balance<T>) -> Result<IrreducibleBlock<T, I>, ReduceError> {
-        let Self {
-            vertices,
-            congruence,
-            off_diagonal,
-            report,
-        } = self;
-        IrreducibleBlock::new(vertices, congruence, off_diagonal, balance, report)
-    }
 }
 
 /// `M`'s diagonal and `Σ_j |m_ij|`: the surplus when no shape or `V` gives it.
