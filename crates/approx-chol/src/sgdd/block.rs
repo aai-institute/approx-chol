@@ -15,6 +15,46 @@ pub(crate) enum Balance<T> {
     Frustrated(Grounding<T>),
 }
 
+impl<T> Balance<T> {
+    /// A balanced `M` folds onto one sheet; a frustrated one needs the cover's two.
+    fn sheets(&self) -> Sheets {
+        match self {
+            Self::Balanced(_) => Sheets::One,
+            Self::Frustrated(_) => Sheets::Two,
+        }
+    }
+
+    fn grounding(&self) -> &Grounding<T> {
+        match self {
+            Self::Balanced(grounding) | Self::Frustrated(grounding) => grounding,
+        }
+    }
+
+    pub(crate) fn split(self) -> (Sheets, Grounding<T>) {
+        let sheets = self.sheets();
+        match self {
+            Self::Balanced(grounding) | Self::Frustrated(grounding) => (sheets, grounding),
+        }
+    }
+}
+
+/// How many copies of each vertex a matrix holds: two for a Gremban cover.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Sheets {
+    One,
+    Two,
+}
+
+impl Sheets {
+    pub(crate) fn count(self) -> usize {
+        match self {
+            Self::One => 1,
+            Self::Two => 2,
+        }
+    }
+}
+
 /// The surplus `s = diag(M) − Σ|offdiag(M)|` closing `M` into an SDDM; none is `σ = 0`, singular only when balanced.
 #[derive(Clone, Debug)]
 pub(crate) struct Grounding<T>(Option<Box<[T]>>);
@@ -84,13 +124,11 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         let vertices = restriction.vertices();
         let n = vertices.len();
         assert_eq!(off_diagonal.n(), n, "one row per vertex");
-        let (sheets, grounding) = match &balance {
-            Balance::Balanced(grounding) => {
-                debug_assert!(off_diagonal.nonpositive(), "a balanced M is a Z-matrix");
-                (T::one(), grounding)
-            }
-            Balance::Frustrated(grounding) => (T::one() + T::one(), grounding),
-        };
+        let (sheets, grounding) = (balance.sheets(), balance.grounding());
+        debug_assert!(
+            sheets == Sheets::Two || off_diagonal.nonpositive(),
+            "a balanced M is a Z-matrix"
+        );
         assert!(grounding.fits(n), "one surplus per row");
         let surplus = grounding.surplus().unwrap_or_default();
         if let Some(i) = surplus.iter().position(|&s| !crate::in_range(s)) {
@@ -99,7 +137,7 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         }
         // The ground is a vertex too: its diagonal `Σs`, once per sheet, clears the same bound as any other.
         let total = surplus.iter().fold(T::zero(), |sum, &s| sum + s);
-        if !diagonal_in_range(sheets * total) {
+        if !diagonal_in_range(crate::narrow::<T>(sheets.count() as f64) * total) {
             let vertex = vertices.vertex(0);
             return Err(ReduceError::OutOfRange { vertex });
         }

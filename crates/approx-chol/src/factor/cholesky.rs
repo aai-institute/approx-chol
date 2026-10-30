@@ -3,9 +3,9 @@ mod dense;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use super::sddm::{descend, lift, Sddm, Sheets};
+use super::sddm::{descend, lift, Sddm};
 use crate::narrow;
-use crate::sgdd::FactorTail;
+use crate::sgdd::{FactorTail, Sheets};
 use crate::{widen, Index, Real};
 use approximate::ApproximateCholesky;
 pub(super) use approximate::CliqueTreeElimination;

@@ -1,7 +1,7 @@
 //! Exact Cholesky of a small `M` by GTH elimination: every pivot a sum of nonnegative terms, so none cancels or fails.
 
 use crate::factor::within_one;
-use crate::sgdd::{Balance, Grounding};
+use crate::sgdd::{Grounding, Sheets};
 use crate::storage::UpperAdjacency;
 use crate::{Index, Real};
 
@@ -15,17 +15,17 @@ pub(in crate::factor) struct Signed<T, I> {
 
 impl<T: Real, I: Index> Signed<T, I> {
     /// Panics unless nonempty, with one surplus per row.
-    pub(in crate::factor) fn new(adjacency: UpperAdjacency<T, I>, balance: Balance<T>) -> Self {
-        let (grounding, frustrated) = match balance {
-            Balance::Balanced(grounding) => (grounding, false),
-            Balance::Frustrated(grounding) => (grounding, true),
-        };
+    pub(in crate::factor) fn new(
+        adjacency: UpperAdjacency<T, I>,
+        sheets: Sheets,
+        grounding: Grounding<T>,
+    ) -> Self {
         assert!(adjacency.n() > 0, "M has a vertex");
         assert!(grounding.fits(adjacency.n()), "one surplus per row");
         Self {
             adjacency,
             grounding,
-            frustrated,
+            frustrated: sheets == Sheets::Two,
         }
     }
 
