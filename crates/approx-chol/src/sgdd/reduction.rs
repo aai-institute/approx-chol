@@ -64,20 +64,16 @@ impl<T: Real, I: Index> Complement<T, I> {
         let range = input.vertices(kept);
         let layout = Biadjacency::onto(&input, kept);
         let Summands { blocks, lone, dead } = Reduced::from_gram(layout, input.lower(), &policy)?;
-        let start = range.start;
-        let local = |v: I| {
-            range
-                .contains(&v.index())
-                .then(|| I::from_index(v.index() - start))
-        };
+        let local = |v: usize| I::from_index(v - range.start);
+        let on_kept = |v: I| range.contains(&v.index()).then(|| local(v.index()));
         Ok(Self {
             blocks: (blocks.into_iter())
-                .map(|block| BlockComplement { block, start })
+                .map(|block| BlockComplement::new(block, local))
                 .collect(),
             lone: (lone.into_iter())
-                .filter_map(|(v, pivot)| Some((local(v)?, pivot)))
+                .filter_map(|(v, pivot)| Some((on_kept(v)?, pivot)))
                 .collect(),
-            dead: dead.into_iter().filter_map(local).collect(),
+            dead: dead.into_iter().filter_map(on_kept).collect(),
         })
     }
 }

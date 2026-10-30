@@ -3,7 +3,7 @@
 use super::congruence::{Congruence, Restriction};
 use super::diagonal_in_range;
 use super::scaling::ScalingReport;
-use crate::storage::OffDiagonal;
+use crate::storage::{OffDiagonal, Rows};
 use crate::{Index, Real};
 
 /// Whether a signature folds `M` (Harary), and `M`'s grounding.
@@ -99,11 +99,58 @@ pub(crate) struct IrreducibleBlock<T = f64, I = u32> {
     report: Option<Box<ScalingReport>>,
 }
 
-/// A bipartite block's Schur complement onto its kept side, unformed: the block, and where the kept side's run starts in `A`.
+/// A bipartite block's Schur complement onto its kept side, unformed: `C`, and the restriction onto the kept side's numbering.
 pub(crate) struct BlockComplement<T, I> {
-    pub(crate) block: IrreducibleBlock<T, I>,
-    pub(crate) start: usize,
+    /// The whole block's first vertex in `A`.
+    first: usize,
+    restriction: Box<Restriction<T, I>>,
+    cross: Rows<T, I>,
+    sheets: Sheets,
+    grounding: Grounding<T>,
+    report: Option<Box<ScalingReport>>,
 }
+
+impl<T: Real, I: Index> BlockComplement<T, I> {
+    /// `block`'s restriction tailed onto its kept side, each kept vertex of `A` numbered `local(v)`.
+    pub(super) fn new(block: IrreducibleBlock<T, I>, local: impl Fn(usize) -> I) -> Self {
+        let (whole, off_diagonal, sheets, grounding, report) = block.into_parts();
+        let OffDiagonal::Bipartite(cross) = off_diagonal else {
+            unreachable!("a complement's layout leaves each block both sides")
+        };
+        let first = whole.vertices().vertex(0);
+        // Tailed before `S`, so the eliminated side's `F` never shares its formation's peak.
+        let restriction = Box::new(whole.tail(cross.n_rows(), local));
+        Self {
+            first,
+            restriction,
+            cross,
+            sheets,
+            grounding,
+            report,
+        }
+    }
+
+    /// Moved out, the whole block's first vertex first, as it keys the draws.
+    pub(crate) fn into_parts(self) -> ComplementParts<T, I> {
+        (
+            self.first,
+            self.restriction,
+            self.cross,
+            self.sheets,
+            self.grounding,
+            self.report,
+        )
+    }
+}
+
+type ComplementParts<T, I> = (
+    usize,
+    Box<Restriction<T, I>>,
+    Rows<T, I>,
+    Sheets,
+    Grounding<T>,
+    Option<Box<ScalingReport>>,
+);
 
 impl<T: Real, I: Index> IrreducibleBlock<T, I> {
     /// Panics unless one factor, row and surplus per vertex; the ground's `Σs` must clear the bound any diagonal does, and `I` must index the factor's vertices.
