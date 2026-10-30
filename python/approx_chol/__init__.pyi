@@ -23,8 +23,8 @@ class Config:
     multiplicity ``k``, costing ``O(k)`` sampler draws per edge. Splitting an
     edge fewer than twice is standard AC, so ``None``, ``0`` and ``1`` all
     select AC. ``exact_max_dim`` is the largest block dimension factored by
-    exact dense Cholesky, a frustrated block's two-sheet cover counted twice;
-    ``0`` factors every block approximately.
+    exact dense Cholesky, a bipartite block's by its kept side; ``0`` factors
+    every block approximately.
     An argument left out or ``None`` keeps the default, which the getters report.
     """
 

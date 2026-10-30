@@ -223,6 +223,46 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         });
         rows.unwrap_or_else(|| Self::new(n))
     }
+
+    /// The signed rows the sheets cover, `k⁻`'s mirrors skipped: `j⁺, j⁻` sum `P, N` into `N − P`, and the surplus, `block`'s plus the ground, gains `2 min(P, N)` on both rows, as `P + N − |N − P|` would by cancellation.
+    pub(super) fn fold(
+        self,
+        sheets: Sheets,
+        block: &Grounding<T>,
+    ) -> (UpperAdjacency<T, I>, Grounding<T>) {
+        let count = sheets.count();
+        let n = (self.sums.len() - 1) / count;
+        let kept = block.surplus().map(|s| &s[s.len() - n..]);
+        let ground = |k: usize| self.ground[count * k];
+        let mut surplus: Vec<T> = (0..n)
+            .map(|k| kept.map_or(ground(k), |s| s[k] + ground(k)))
+            .collect();
+        let (mut ptrs, mut indices, mut values) = (vec![0], Vec::new(), Vec::new());
+        let two = T::one() + T::one();
+        for k in 0..n {
+            let mut at = self.ptrs[count * k];
+            let columns = &self.indices[at..self.ptrs[count * k + 1]];
+            for pair in columns.chunk_by(|a, b| a.index() / count == b.index() / count) {
+                let mut sums = [T::zero(); 2];
+                for (c, &v) in pair.iter().zip(&self.values[at..]) {
+                    sums[c.index() % count] = -v;
+                }
+                at += pair.len();
+                let [same, opposite] = sums;
+                let j = pair[0].index() / count;
+                let gain = two * same.min(opposite);
+                surplus[k] = surplus[k] + gain;
+                surplus[j] = surplus[j] + gain;
+                if opposite != same {
+                    indices.push(I::from_index(j));
+                    values.push(opposite - same);
+                }
+            }
+            ptrs.push(indices.len());
+        }
+        let rows = Rows::new(ptrs, indices, values, n);
+        (UpperAdjacency::new(rows), Grounding::of(surplus))
+    }
 }
 
 /// One open row's sums by column and the columns they touch, borrowed apart from the finished rows so the sums stay in registers.

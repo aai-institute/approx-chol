@@ -23,7 +23,7 @@ use crate::storage::OffDiagonal;
 use crate::ScalingReport;
 use crate::{Index, Real};
 use block_elimination::BlockElimination;
-use cholesky::{Cholesky, CliqueTreeElimination};
+use cholesky::{Arm, Cholesky, CliqueTreeElimination, Signed};
 use schur::BipartiteBlock;
 use sddm::Sddm;
 
@@ -222,12 +222,15 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
         let draws = streams.cholesky();
         let (elimination, cholesky) = match off_diagonal {
             OffDiagonal::General(adjacency) => {
-                let sddm = Sddm::of_block(adjacency, balance);
-                (None, Cholesky::factor(sddm, draws, config, tail(0), reused))
+                let arm = match config.dense(adjacency.n()) {
+                    true => Arm::Exact(Signed::new(adjacency, balance)),
+                    false => Arm::Approximate(Sddm::of_block(adjacency, balance)),
+                };
+                (None, Cholesky::factor(arm, draws, tail(0), reused))
             }
             OffDiagonal::Bipartite(cross) => {
                 let kept = tail(cross.n_rows());
-                let factor = |s| Cholesky::factor(s, draws, config, kept, reused);
+                let factor = |s| Cholesky::factor(s, draws, kept, reused);
                 let block = BipartiteBlock::of(cross, balance);
                 let (elimination, factored) = block.eliminate(config, streams, factor);
                 (Some(Box::new(elimination)), factored)
@@ -260,7 +263,7 @@ impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
         let restriction = whole.tail(cross.n_rows(), renumber);
         let s = BipartiteBlock::of(cross, balance).complement(config, streams);
         let tail = restriction.factor_tail(0);
-        let cholesky = Cholesky::factor(s, streams.cholesky(), config, tail, reused);
+        let cholesky = Cholesky::factor(s, streams.cholesky(), tail, reused);
         Block {
             restriction: Box::new(restriction),
             elimination: None,

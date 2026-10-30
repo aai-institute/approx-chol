@@ -41,6 +41,7 @@ fixtures! {
     Isolated => isolated,
     Floating => floating,
     Cover => cover,
+    DenseCover => dense_cover,
     SampledAc2 => sampled_ac2,
 }
 
@@ -59,8 +60,10 @@ impl Fixture {
                 &[-1.0, 0.0, 1.0, 0.0],
                 &[0.0, -1.0, 0.0, 1.0],
             ]),
-            // A triangle with one positive edge: frustrated, so it factors on the double cover.
-            Self::Cover => Some(&[&[2.0, -1.0, 1.0], &[-1.0, 2.0, -1.0], &[1.0, -1.0, 2.0]]),
+            // A triangle with one positive edge: frustrated, so the approximate arm factors its double cover.
+            Self::Cover | Self::DenseCover => {
+                Some(&[&[2.0, -1.0, 1.0], &[-1.0, 2.0, -1.0], &[1.0, -1.0, 2.0]])
+            }
             Self::SampledAc2 => None,
         }
     }
@@ -89,6 +92,10 @@ impl Fixture {
                 exact_max_dim: 0,
                 ..Config::default()
             },
+            Self::Cover => Config {
+                exact_max_dim: 0,
+                ..Config::default()
+            },
             _ => Config::default(),
         }
     }
@@ -100,7 +107,17 @@ impl Fixture {
             Self::Isolated => &["Isolated("],
             Self::Floating => &["sheets: One, grounded: false"],
             Self::Cover => &["sheets: Two"],
+            Self::DenseCover => &["sheets: Two", "Dense("],
             Self::SampledAc2 => &["elimination: Some", "Approximate("],
+        }
+    }
+
+    /// What this build's factor must show: a legacy fixture's input no longer factors as its payload did.
+    fn built(self) -> &'static [&'static str] {
+        match self {
+            // 0.7.0 factored a small frustrated block densely on its cover; it is now dense on one sheet.
+            Self::DenseCover => &["sheets: One, grounded: true", "Dense("],
+            _ => self.covers(),
         }
     }
 
@@ -192,7 +209,7 @@ fn assert_committed_payload_decodes_and_solves(fixture: Fixture) {
 
     let factor = fixture.factor();
     let built = format!("{:?}", factor.blocks());
-    for marker in fixture.covers() {
+    for marker in fixture.built() {
         assert!(
             built.contains(marker),
             "this build's {fixture:?} lost {marker:?}"

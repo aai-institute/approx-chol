@@ -375,6 +375,31 @@ fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
 }
 
 #[test]
+fn a_frustrated_block_as_large_as_exact_max_dim_solves_exactly() {
+    use approx_chol::input::CsrRef;
+    use approx_chol::{factorize_with, ScalingPolicy};
+    let n = 12;
+    let matrix: Vec<Vec<f64>> = (0..n)
+        .map(|i| (0..n).map(|j| if i == j { 12.0 } else { 1.0 }).collect())
+        .collect();
+    let ptrs: Vec<u32> = (0..=n as u32).map(|i| i * n as u32).collect();
+    let columns: Vec<u32> = (0..n * n).map(|k| (k % n) as u32).collect();
+    let values: Vec<f64> = matrix.iter().flatten().copied().collect();
+    let csr = CsrRef::new(&ptrs, &columns, &values, n as u32).unwrap();
+    let config = Config {
+        exact_max_dim: n,
+        ..Config::default()
+    };
+    let factor = factorize_with(csr, config, ScalingPolicy::default()).unwrap();
+    let b: Vec<f64> = (0..n).map(|i| (i % 5) as f64 - 2.0).collect();
+    let x = factor.solve(&b).unwrap();
+    let residual = (matrix.iter().zip(&b))
+        .map(|(row, b)| (row.iter().zip(&x).map(|(a, x)| a * x).sum::<f64>() - b).abs())
+        .fold(0.0, f64::max);
+    assert!(residual < 1e-13, "max|Ax − b| = {residual:e}");
+}
+
+#[test]
 fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
     use approx_chol::input::{Laplacian, Sddm};
     use approx_chol::{factorize_with, ScalingPolicy};
