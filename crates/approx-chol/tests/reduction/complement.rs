@@ -1,4 +1,5 @@
 use super::bipartite::Bipartite;
+use super::lcg::Lcg;
 use super::{dense, dense_residual, gram};
 use approx_chol::{factorize_complement, factorize_with, Config, ScalingPolicy, Side};
 use rstest::rstest;
@@ -6,13 +7,8 @@ use rstest::rstest;
 impl Bipartite {
     /// `columns` columns over sides of `n_left` and `n_right`, left vertex `n_left − 1` in none, so it is dead.
     fn new(n_left: usize, n_right: usize, columns: usize, signed: bool) -> Self {
-        let mut state = 0x9e37_79b9_u64;
-        let mut next = || {
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            (state >> 33) as usize
-        };
+        let mut lcg = Lcg(0x9e37_79b9);
+        let mut next = || (lcg.next_u64() >> 33) as usize;
         let left: Vec<u32> = (0..columns).map(|k| (k % (n_left - 1)) as u32).collect();
         let right: Vec<u32> = (0..columns).map(|_| (next() % n_right) as u32).collect();
         let values = signed.then(|| {

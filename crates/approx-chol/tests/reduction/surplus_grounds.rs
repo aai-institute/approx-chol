@@ -2,10 +2,12 @@ use super::cycle::Cycle;
 use super::dense::dense;
 use super::dense_residual::apply;
 use super::gram::{dense_csr, matrix};
+use super::lcg::Lcg;
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm,
 };
-use approx_chol::{factorize, factorize_with, Factor, Real, ScalingPolicy};
+use approx_chol::{factorize, factorize_with, Config, Factor, Real, ScalingPolicy};
+use rstest::rstest;
 
 fn grounded<T: Real>(factor: &Factor<T>) -> bool {
     factor.blocks().iter().all(|block| !block.floats())
@@ -70,16 +72,12 @@ fn weak_vertex_solves_as_its_sddm_view(n: u32, edges: &[(u32, u32)]) {
     }
 }
 
-#[test]
-fn weakly_grounded_vertex_solves_as_its_sddm_view() {
-    weak_vertex_solves_as_its_sddm_view(3, &[(0, 1), (1, 2), (0, 2)]);
-}
-
-/// Past the default `exact_max_dim: 24`, so the grounded block is factored by AC.
-#[test]
-fn weakly_grounded_vertex_on_a_long_path_solves_as_its_sddm_view() {
-    let path: Vec<(u32, u32)> = (0..39).map(|i| (i, i + 1)).collect();
-    weak_vertex_solves_as_its_sddm_view(40, &path);
+/// A triangle, and a path past the default `exact_max_dim: 24`, so the grounded block is factored by AC.
+#[rstest]
+#[case::triangle(3, vec![(0, 1), (1, 2), (0, 2)])]
+#[case::long_path(40, (0..39).map(|i| (i, i + 1)).collect())]
+fn weakly_grounded_vertex_solves_as_its_sddm_view(#[case] n: u32, #[case] edges: Vec<(u32, u32)>) {
+    weak_vertex_solves_as_its_sddm_view(n, &edges);
 }
 
 /// A star whose centre's `f64` row sum rounds up at every leaf, `d₀` that rounded sum; `frustrated` adds `+1` between leaves 1 and 2.
@@ -196,49 +194,143 @@ fn scaled_heavy_gram_path_grounds() {
     solves(2f64.powi(25));
 }
 
-/// A cycle off its null vector by `1e-10` leaves a surplus twinned with the deficit clamped beside it; grounded, `x₀` was `-5e12`.
-#[test]
-fn gram_cycle_whose_surplus_twins_its_clamped_deficit_floats() {
-    let factor = factorize(Cycle::new(20, -1e-10).gram()).unwrap();
+/// A cycle missing by `1e-10`, within `√ε`, closes: it floats, its miss clamped and reported; grounded, `x₀` was `-5e12`.
+#[rstest]
+fn gram_cycle_missing_within_its_tolerance_floats_and_reports(#[values(1e-10, -1e-10)] miss: f64) {
+    let factor = factorize(Cycle::<f64>::doubling(20).missing(miss).gram()).unwrap();
     let block = &factor.blocks()[0];
-    assert!(block.scaling_report().is_some());
+    let report = block.scaling_report().expect("reported");
+    assert!(report.violation > 1e-11, "{report:?}");
     assert!(block.floats());
 }
 
 /// `Σ|a₀ⱼ| = 1 + 0.75ε` rounds up to `1 + ε` in `f32`; `d₀ = 1 + 10ε` is `4.6ε tr M`, `1 + 11ε` is `5.1ε`.
-#[test]
-fn f32_star_just_past_the_band_grounds() {
+#[rstest]
+#[case::in_band(10.0, true)]
+#[case::past_band(11.0, false)]
+fn f32_star_just_past_the_band_grounds(#[case] ulps: f32, #[case] floats: bool) {
     let (eps, w) = (f32::EPSILON, 0.75 * f32::EPSILON);
-    for (ulps, floats) in [(10.0, true), (11.0, false)] {
-        let values = [1.0 + ulps * eps, -1.0, -w, -1.0, 1.0, -w, w];
-        let csr = CsrRef::new(&[0u32, 3, 5, 7], &[0, 1, 2, 0, 1, 0, 2], &values, 3).unwrap();
-        let factor: Factor<f32> = factorize(csr).unwrap();
-        assert_eq!(factor.blocks()[0].floats(), floats, "d₀ = 1 + {ulps}ε");
-    }
+    let values = [1.0 + ulps * eps, -1.0, -w, -1.0, 1.0, -w, w];
+    let csr = CsrRef::new(&[0u32, 3, 5, 7], &[0, 1, 2, 0, 1, 0, 2], &values, 3).unwrap();
+    let factor: Factor<f32> = factorize(csr).unwrap();
+    assert_eq!(factor.blocks()[0].floats(), floats);
 }
 
-/// Worker slopes `t − t̄` beside year intercepts, one observation off by `δ`: a row's residue passes its band and the deficit clamped beside it, yet cancels in `1ᵀM1`.
-#[test]
-fn near_aliased_slope_residues_cancel_so_the_block_floats() {
-    for delta in [1e-9, -1e-9] {
-        let (workers, years) = (400u32, 10u32);
-        let mean = f64::from(years - 1) / 2.0;
-        let (mut rows, mut cols, mut x) = (vec![], vec![], vec![]);
-        for w in 0..workers {
-            for t in 0..years {
-                rows.push(w);
-                cols.push(t);
-                x.push(f64::from(t) - mean);
-            }
-        }
-        x[3] += delta;
-        let gram = BipartiteFactorWidth2::new(
-            FactorWidth1::new(workers as usize, &rows, Some(&x)).unwrap(),
-            FactorWidth1::new(years as usize, &cols, None).unwrap(),
-        )
-        .unwrap();
-        let factor = factorize(gram).unwrap();
-        assert_eq!(factor.blocks().len(), 1);
-        assert!(factor.blocks()[0].floats(), "{delta}");
+/// Worker slopes `t − t̄` beside year intercepts, the first or last worker's year 3 off by `δ`: the last closes its cycles after the year hubs' many lookups.
+#[rstest]
+fn near_aliased_slope_floats(
+    #[values((400, 1e-9), (400, -1e-9), (4000, 1e-12), (4000, -1e-12))] case: (u32, f64),
+    #[values(false, true)] last: bool,
+) {
+    let ((workers, delta), years) = (case, 10u32);
+    let mean = f64::from(years - 1) / 2.0;
+    let rows: Vec<u32> = (0..workers * years).map(|k| k / years).collect();
+    let cols: Vec<u32> = (0..workers * years).map(|k| k % years).collect();
+    let mut x: Vec<f64> = cols.iter().map(|&t| f64::from(t) - mean).collect();
+    let at = if last { x.len() - years as usize } else { 0 };
+    x[at + 3] += delta;
+    let gram = BipartiteFactorWidth2::new(
+        FactorWidth1::new(workers as usize, &rows, Some(&x)).unwrap(),
+        FactorWidth1::new(years as usize, &cols, None).unwrap(),
+    )
+    .unwrap();
+    let factor = factorize(gram).unwrap();
+    assert_eq!(factor.blocks().len(), 1);
+    assert!(factor.blocks()[0].floats());
+}
+
+/// A cycle of `2⁵⁰` whose rows sit `residues` off their coupling, and a pendant grounded by `1`: rounding outweighs the ground in `Σs⁺` or `1ᵀM1` (#323).
+#[rstest]
+fn rounding_residues_beside_a_light_ground_do_not_float_it(
+    #[values([0.5, -0.5], [-0.5, -0.5])] residues: [f64; 2],
+) {
+    let (n, w) = (8, 2f64.powi(50));
+    let mut a = vec![vec![0.0; n + 1]; n + 1];
+    for i in 0..n {
+        let j = (i + 1) % n;
+        (a[i][j], a[j][i]) = (-w, -w);
+        a[i][i] = 2.0 * w + residues[i % 2];
     }
+    (a[0][n], a[n][0]) = (-1.0, -1.0);
+    a[0][0] += 1.0;
+    a[n][n] = 2.0;
+    let rhs: Vec<f64> = (0..a.len()).map(|i| (i % 5) as f64 - 1.0).collect();
+    let backward = backward_error(&a, &rhs);
+    assert!(backward <= 16.0 * f64::EPSILON, "{backward:e}");
+}
+
+/// A stated ground of `10⁻¹¹ a_00` grounds a ring of `10⁵` rounded links, from either end of its column.
+#[rstest]
+fn light_ground_on_long_ring_grounds(#[values(false, true)] swapped: bool) {
+    let ring = Cycle::random(100_000, 1).grounded(0, 1e-11);
+    let ring = if swapped { ring.swapped() } else { ring };
+    let factor: Factor = factorize(ring.gram()).unwrap();
+    assert!(!factor.blocks()[0].floats());
+}
+
+/// A cycle missing past `√ε` states the ring definite: it grounds whatever the scaling iteration leaves.
+#[rstest]
+fn ring_missing_past_its_tolerance_grounds(
+    #[values(1, 2, 3)] seed: u64,
+    #[values(2e-8, -1e-7, 1e-6)] miss: f64,
+) {
+    let factor: Factor = factorize(Cycle::random(1000, seed).missing(miss).gram()).unwrap();
+    assert!(!factor.blocks()[0].floats());
+}
+
+/// Values rounded to `f32` close the ring within `√ε`: its null vector scales it, no iteration runs.
+#[test]
+fn f32_rounded_ring_keeps_its_null_vector() {
+    let ring = Cycle::random(10_000, 1);
+    let factor: Factor<f32> =
+        factorize_with(ring.gram(), Config::default(), no_iterations()).unwrap();
+    let block = &factor.blocks()[0];
+    assert_eq!(block.scaling_report(), None);
+    assert!(block.floats());
+}
+
+/// An `f32` ring missing by `10⁻²` is past `√ε`: it falls to `relax`, which here may not iterate, so it is reported.
+#[test]
+fn f32_ring_missing_past_its_tolerance_is_reported() {
+    let ring = Cycle::random(10_000, 1).missing(1e-2);
+    let factor: Factor<f32> =
+        factorize_with(ring.gram(), Config::default(), no_iterations()).unwrap();
+    let report = factor.blocks()[0].scaling_report();
+    assert!(report.is_some_and(|report| !report.settled), "{report:?}");
+}
+
+fn no_iterations() -> ScalingPolicy {
+    ScalingPolicy::new(1e-9, 0).unwrap()
+}
+
+/// `petals` rings of four columns through hub 0, the last one's closing column off by `1 + miss`: a short cycle in a block of `3·petals + 1`.
+fn flower(petals: u32, miss: f64) -> (usize, [Vec<u32>; 2], [Vec<f64>; 2]) {
+    let mut lcg = Lcg(1);
+    let mut draw = move || lcg.unit() + 0.5;
+    let u: Vec<f64> = (0..=3 * petals).map(|_| draw()).collect();
+    let (mut a, mut b, mut x, mut y) = (vec![], vec![], vec![], vec![]);
+    for p in 0..petals {
+        let ring = [0, 3 * p + 1, 3 * p + 2, 3 * p + 3, 0];
+        for (&i, &j) in ring.iter().zip(&ring[1..]) {
+            let r = draw();
+            a.push(i);
+            b.push(j);
+            x.push(u[j as usize] * r);
+            y.push(-u[i as usize] * r);
+        }
+    }
+    *x.last_mut().unwrap() *= 1.0 + miss;
+    (u.len(), [a, b], [x, y])
+}
+
+/// A short cycle missing by `10⁻¹³` among `20000` clamps its petal's row past band, so it is reported; the hub's band covers its degree.
+#[rstest]
+#[case::closed(0.0, false)]
+#[case::missing(-1e-13, true)]
+fn short_cycle_miss_in_a_large_block_is_reported(#[case] miss: f64, #[case] reported: bool) {
+    let (n, [a, b], [x, y]) = flower(20_000, miss);
+    let factor: Factor = factorize(FactorWidth2::new(n, (&a, &x), (&b, &y)).unwrap()).unwrap();
+    let block = &factor.blocks()[0];
+    assert!(block.floats());
+    assert_eq!(block.scaling_report().is_some(), reported);
 }

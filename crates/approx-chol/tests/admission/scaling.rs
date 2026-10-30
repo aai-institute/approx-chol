@@ -2,7 +2,7 @@ use approx_chol::input::FactorWidth2;
 use approx_chol::{factorize, Config, CsrRef, ScalingPolicy, Sgdd};
 use rstest::rstest;
 
-use super::cycle::Cycle;
+use super::lcg::Lcg;
 use super::{reduce, reduce_with};
 
 /// `D L D` for the graph `edges` on `n` vertices, `D` within `spread` of `I`: GDD by construction, `R = D⁻¹`.
@@ -26,27 +26,16 @@ fn weighted_dld(
     bits: u32,
     seed: u64,
 ) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
-    let mut draws = Draws(seed.wrapping_mul(2_654_435_761).wrapping_add(17));
-    let d: Vec<f64> = (0..n).map(|_| draws.log_uniform(bits)).collect();
-    let weights: Vec<f64> = edges.iter().map(|_| draws.log_uniform(bits)).collect();
+    let mut lcg = Lcg(seed.wrapping_mul(2_654_435_761).wrapping_add(17));
+    let d: Vec<f64> = (0..n).map(|_| log_uniform(&mut lcg, bits)).collect();
+    let weights: Vec<f64> = edges.iter().map(|_| log_uniform(&mut lcg, bits)).collect();
     congruent_laplacian(&d, edges, &weights)
 }
 
-/// A fixed LCG; powers of two come from their bits, so no libm.
-struct Draws(u64);
-
-impl Draws {
-    fn unit(&mut self) -> f64 {
-        self.0 = (self.0)
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        (self.0 >> 11) as f64 / (1u64 << 53) as f64
-    }
-
-    fn log_uniform(&mut self, bits: u32) -> f64 {
-        let exponent = (self.unit() * f64::from(bits)) as u64 + 1;
-        (1.0 + self.unit()) * f64::from_bits((1023 - exponent) << 52)
-    }
+/// Log-uniform over `[2^-bits, 1)`; powers of two come from their bits, so no libm.
+fn log_uniform(lcg: &mut Lcg, bits: u32) -> f64 {
+    let exponent = (lcg.unit() * f64::from(bits)) as u64 + 1;
+    (1.0 + lcg.unit()) * f64::from_bits((1023 - exponent) << 52)
 }
 
 /// `D L_w D`: off-diagonal `−w_ij d_i d_j`, diagonal `d_i (Σ_j w_ij) d_i`.
@@ -158,15 +147,6 @@ fn a_settled_scaling_with_an_uneven_perron_vector_is_not_clamped() {
     assert_eq!(factor.blocks()[0].scaling_report(), None);
 }
 
-/// A Gram cycle whose null vector `u = 2^min(i, L−1−i)` peaks mid-cycle; its error is relative per entry, so no row's band grows by `1/μ_i`.
-#[test]
-fn a_gram_null_vector_deficit_past_its_row_rounding_is_reported() {
-    let miss = 1e-10;
-    let factor = factorize(Cycle::new(20, miss).gram()).expect("admitted");
-    let report = factor.blocks()[0].scaling_report().expect("reported");
-    assert!(report.violation > miss / 10.0, "{report:?}");
-}
-
 /// `f32` rounds a singular block's `ρ(N)` ulps past `1`, so only a bracket within the `16ε` band certifies; under `1e-9` these spent 2048 steps and reported.
 #[rstest]
 #[case::path(path(1000), 1)]
@@ -192,8 +172,8 @@ fn a_settled_f32_scaling_is_judged_against_its_band(
 #[test]
 fn a_wide_f32_gram_null_vector_scales_in_range() {
     let n = 1000u32;
-    let mut draws = Draws(0);
-    let u: Vec<f64> = (0..n).map(|_| draws.log_uniform(28)).collect();
+    let mut lcg = Lcg(0);
+    let u: Vec<f64> = (0..n).map(|_| log_uniform(&mut lcg, 28)).collect();
     let a: Vec<u32> = (0..n).collect();
     let b: Vec<u32> = (0..n).map(|i| (i + 1) % n).collect();
     let x: Vec<f32> = b.iter().map(|&j| u[j as usize] as f32).collect();
