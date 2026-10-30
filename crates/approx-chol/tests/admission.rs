@@ -10,6 +10,8 @@ mod gram;
 mod graph;
 #[path = "common/grid.rs"]
 mod grid;
+#[path = "common/lcg.rs"]
+mod lcg;
 #[path = "admission/scaling.rs"]
 mod scaling;
 #[path = "admission/surplus.rs"]
