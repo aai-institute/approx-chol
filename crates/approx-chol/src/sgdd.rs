@@ -17,7 +17,7 @@ pub use scaling::{ScalingPolicy, ScalingReport};
 use crate::{in_range, Index, Real};
 use decomposition::Components;
 
-/// `A`'s reduced summands; built only from extraction, so they cover `A` once.
+/// `A`'s reduced summands, covering `A` once by extraction; only debug builds check it.
 pub(crate) type Reduced<T, I> = Summands<IrreducibleBlock<T, I>, I, T>;
 
 /// A bipartite `A`'s Schur complement onto one side, reduced; lone and dead vertices in the kept side's numbering.
