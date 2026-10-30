@@ -2,11 +2,9 @@ use num_traits::PrimInt;
 
 use crate::input::FactorWidth2;
 use crate::sgdd::block::{Balance, Congruent, ReduceError};
-use crate::sgdd::congruence::Congruence;
 use crate::sgdd::decomposition::Components;
 use crate::sgdd::decomposition::{assemble_incidence, AdjacencyLayout};
 use crate::sgdd::Reduced;
-use crate::storage::OffDiagonal;
 use crate::{Index, Real};
 
 impl<T: Real, I: Index> Reduced<T, I> {
@@ -17,17 +15,8 @@ impl<T: Real, I: Index> Reduced<T, I> {
     ) -> Result<Self, ReduceError> {
         assemble_incidence(cells, v)?
             .extract(|(vertices, off_diagonal, grounding)| {
-                let congruence = match &off_diagonal {
-                    OffDiagonal::Bipartite(c) => Congruence::NegateFrom(c.n_rows()),
-                    OffDiagonal::General(_) => Congruence::Identity,
-                };
-                let m = Congruent {
-                    vertices,
-                    congruence,
-                    off_diagonal,
-                    report: None,
-                };
-                m.block(Balance::Balanced(grounding))
+                let m = Congruent::incidence(vertices, off_diagonal);
+                m.block(Balance::Balanced(grounding), None)
             })
             .map(Components::into_reduced)
     }
