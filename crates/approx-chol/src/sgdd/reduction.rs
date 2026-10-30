@@ -325,7 +325,6 @@ fn folding_signs<T: Real, I: Index>(off_diagonal: &OffDiagonal<T, I>) -> Option<
             return Some(Congruence::NegateFrom(cross.n_rows()));
         }
     }
-    // Each stored entry once: a bipartite block searches `C` alone, as `Cᵀ` costs a transpose.
     let mut forest = ParityForest::<I>::new(off_diagonal.n());
     for (i, row) in off_diagonal.upper_rows() {
         for (j, &a) in row {

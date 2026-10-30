@@ -337,10 +337,12 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
     pub(crate) fn degrees(&self) -> Vec<usize> {
         let mut degree = vec![0usize; self.n()];
         for (i, row) in self.upper_rows() {
+            let mut count = 0;
             for (j, _) in row {
-                degree[i] += 1;
+                count += 1;
                 degree[j] += 1;
             }
+            degree[i] += count;
         }
         degree
     }
