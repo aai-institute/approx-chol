@@ -39,7 +39,7 @@ pub(in crate::sgdd) struct Biadjacency {
 
 /// The side each bipartite block's Schur complement is onto; the other is eliminated first.
 #[derive(Clone, Copy, Debug)]
-pub(in crate::sgdd) enum Onto {
+enum Onto {
     /// The smaller, the right on a tie, so the larger is eliminated.
     Smaller,
     /// This side.
@@ -47,7 +47,7 @@ pub(in crate::sgdd) enum Onto {
 }
 
 impl Biadjacency {
-    /// `v`'s own left part, so the layout and the columns it sums never disagree; each block onto its smaller side.
+    /// `v`'s own left part, so the layout and the columns it sums never disagree.
     pub(in crate::sgdd) fn of<T: Real, J: PrimInt>(v: &FactorWidth2<'_, T, J>) -> Option<Self> {
         let onto = Onto::Smaller;
         v.n_left().map(|n_left| Self { n_left, onto })
@@ -58,7 +58,7 @@ impl Biadjacency {
         input: &BipartiteFactorWidth2<'_, T, J>,
         kept: Side,
     ) -> Self {
-        let n_left = input.n_left();
+        let n_left = input.vertices(Side::Left).end;
         let onto = Onto::Given(kept);
         Self { n_left, onto }
     }

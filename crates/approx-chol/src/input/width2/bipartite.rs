@@ -5,7 +5,7 @@ use std::ops::Range;
 use num_traits::PrimInt;
 
 use super::error::{below, check, length, ViewError};
-use super::{Columns, FactorWidth2};
+use super::{BipartiteColumns, Columns, FactorWidth2};
 use crate::Real;
 
 /// One side of `V`, with at most one nonzero per column: `values[k]` at `rows[k]`, `1` for `None`.
@@ -32,8 +32,9 @@ impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
 /// `V W Vᵀ`, `V = [V_l; V_r]`: left vertices first, then right.
 #[derive(Clone, Copy, Debug)]
 pub struct BipartiteFactorWidth2<'a, T, I = u32> {
-    v: FactorWidth2<'a, T, I>,
-    n_left: usize,
+    a: &'a [I],
+    b: &'a [I],
+    columns: BipartiteColumns<'a, T>,
 }
 
 impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
@@ -64,24 +65,24 @@ impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
 
     /// Dimension of `A`.
     pub(crate) fn n(&self) -> usize {
-        self.v.n()
-    }
-
-    /// The left part's size, after which the right's vertices are numbered.
-    pub(crate) fn n_left(&self) -> usize {
-        self.n_left
+        self.columns.n()
     }
 
     /// The run of `A`'s vertices on `side`.
     pub(crate) fn vertices(&self, side: Side) -> Range<usize> {
         match side {
-            Side::Left => 0..self.n_left,
-            Side::Right => self.n_left..self.n(),
+            Side::Left => 0..self.columns.n_left,
+            Side::Right => self.columns.n_left..self.n(),
         }
     }
 
     pub(crate) fn lower(self) -> FactorWidth2<'a, T, I> {
-        self.v
+        let columns = Columns::Bipartite(self.columns);
+        FactorWidth2 {
+            a: self.a,
+            b: self.b,
+            columns,
+        }
     }
 
     fn of(
@@ -89,19 +90,18 @@ impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
         right: FactorWidth1<'a, T, I>,
         scale: Option<&'a [T]>,
     ) -> Self {
-        let columns = Columns::Bipartite {
+        let columns = BipartiteColumns {
             n_left: left.n,
             n_right: right.n,
             x: left.values,
             y: right.values,
             scale,
         };
-        let v = FactorWidth2 {
+        Self {
             a: left.rows,
             b: right.rows,
             columns,
-        };
-        Self { v, n_left: left.n }
+        }
     }
 }
 

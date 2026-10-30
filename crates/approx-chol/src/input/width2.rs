@@ -23,14 +23,25 @@ enum Columns<'a, T> {
     },
     /// `x[k] e_a + y[k] e_b`, `a[k] ≠ b[k] < n`.
     FactorWidth2 { n: usize, x: &'a [T], y: &'a [T] },
-    /// `s[k] (x[k] e_a + y[k] e_(n_left + b))`, a missing side or scale `1`; with neither side, read switched as `e_a − e_b`.
-    Bipartite {
-        n_left: usize,
-        n_right: usize,
-        x: Option<&'a [T]>,
-        y: Option<&'a [T]>,
-        scale: Option<&'a [T]>,
-    },
+    /// A [`BipartiteFactorWidth2`](bipartite::BipartiteFactorWidth2)'s.
+    Bipartite(BipartiteColumns<'a, T>),
+}
+
+/// `s[k] (x[k] e_a + y[k] e_(n_left + b))`, a missing side or scale `1`; with neither side, read switched as `e_a − e_b`.
+#[derive(Clone, Copy, Debug)]
+struct BipartiteColumns<'a, T> {
+    n_left: usize,
+    n_right: usize,
+    x: Option<&'a [T]>,
+    y: Option<&'a [T]>,
+    scale: Option<&'a [T]>,
+}
+
+impl<T> BipartiteColumns<'_, T> {
+    /// Saturates, as a sum past `usize` fails allocation anyway.
+    fn n(&self) -> usize {
+        self.n_left.saturating_add(self.n_right)
+    }
 }
 
 /// `V Vᵀ` on `n` vertices, column `k` of `V` being `x[k] e_a[k] + y[k] e_b[k]`; every other input lowers to one.
@@ -58,7 +69,7 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
     /// The left part's size, after which `b` is numbered, when `V` is bipartite.
     pub(crate) fn n_left(&self) -> Option<usize> {
         match self.columns {
-            Columns::Bipartite { n_left, .. } => Some(n_left),
+            Columns::Bipartite(columns) => Some(columns.n_left),
             Columns::Incidence { .. } | Columns::FactorWidth2 { .. } => None,
         }
     }
@@ -67,7 +78,7 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
     pub(crate) fn surplus(&self) -> Option<&'a [T]> {
         match self.columns {
             Columns::Incidence { surplus, .. } => surplus,
-            Columns::FactorWidth2 { .. } | Columns::Bipartite { .. } => None,
+            Columns::FactorWidth2 { .. } | Columns::Bipartite(_) => None,
         }
     }
 
@@ -76,11 +87,11 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         matches!(
             self.columns,
             Columns::Incidence { .. }
-                | Columns::Bipartite {
+                | Columns::Bipartite(BipartiteColumns {
                     x: None,
                     y: None,
                     ..
-                }
+                })
         )
     }
 
@@ -88,9 +99,7 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
     pub(crate) fn n(&self) -> usize {
         match self.columns {
             Columns::Incidence { n, .. } | Columns::FactorWidth2 { n, .. } => n,
-            Columns::Bipartite {
-                n_left, n_right, ..
-            } => n_left.saturating_add(n_right),
+            Columns::Bipartite(columns) => columns.n(),
         }
     }
 
@@ -112,20 +121,20 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
             Columns::FactorWidth2 { x, y, .. } => {
                 self.columns_of(0, |k| x[k], |k| y[k], unit, visit)
             }
-            Columns::Bipartite {
+            Columns::Bipartite(BipartiteColumns {
                 n_left,
                 x,
                 y,
                 scale: None,
                 ..
-            } => self.sides(n_left, x, y, unit, visit),
-            Columns::Bipartite {
+            }) => self.sides(n_left, x, y, unit, visit),
+            Columns::Bipartite(BipartiteColumns {
                 n_left,
                 x,
                 y,
                 scale: Some(s),
                 ..
-            } => self.sides(n_left, x, y, |k| Weight::Scale(s[k]), visit),
+            }) => self.sides(n_left, x, y, |k| Weight::Scale(s[k]), visit),
         }
     }
 
