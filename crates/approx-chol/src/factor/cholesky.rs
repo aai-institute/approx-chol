@@ -59,13 +59,8 @@ impl<T: Real, I: Index> Cholesky<T, I> {
                 let pin =
                     (spans_wide || grounds_wide(&sddm)).then(|| pinned(sheets, grounded, n, tail));
                 let (steps, pin) = elimination.eliminate(sddm, draws, pin);
-                (
-                    sheets,
-                    grounded,
-                    n,
-                    pin,
-                    Triangular::Approximate(Box::new(steps)),
-                )
+                let triangular = Triangular::Approximate(Box::new(steps));
+                (sheets, grounded, n, pin, triangular)
             }
         };
         Self {

@@ -248,9 +248,11 @@ impl<T: Real, I: Index> SddmRows<T, I> {
                     sums[c.index() % count] = -v;
                 }
                 at += pair.len();
-                let ([same, opposite], j) = (sums, pair[0].index() / count);
-                surplus[k] = surplus[k] + two * same.min(opposite);
-                surplus[j] = surplus[j] + two * same.min(opposite);
+                let [same, opposite] = sums;
+                let j = pair[0].index() / count;
+                let gain = two * same.min(opposite);
+                surplus[k] = surplus[k] + gain;
+                surplus[j] = surplus[j] + gain;
                 if opposite != same {
                     indices.push(I::from_index(j));
                     values.push(opposite - same);
