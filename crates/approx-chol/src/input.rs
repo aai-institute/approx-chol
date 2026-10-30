@@ -40,17 +40,33 @@ pub enum Input<'a, T, I = u32> {
     BipartiteFactorWidth2(BipartiteFactorWidth2<'a, T, I>),
 }
 
-impl<T: Real, J: PrimInt + Sync> Input<'_, T, J> {
-    /// Dimension of `A`.
-    pub(crate) fn n(&self) -> usize {
+impl<'a, T: Real, J: PrimInt> Input<'a, T, J> {
+    /// The one of three forms the core reads this input as.
+    pub(crate) fn lower(self) -> Lowered<'a, T, J> {
         match self {
-            Self::Csr(csr) => csr.n(),
-            Self::UpperCsr(csr) => csr.0.n(),
-            Self::Laplacian(laplacian) => laplacian.lower().n(),
-            Self::Sddm(sddm) => sddm.lower().n(),
-            Self::FactorWidth2(v) | Self::BipartiteFactorWidth2(BipartiteFactorWidth2(v)) => v.n(),
+            Self::Csr(csr) => Lowered::Csr(csr),
+            Self::UpperCsr(csr) => Lowered::UpperCsr(csr.lower()),
+            Self::Laplacian(laplacian) => Lowered::FactorWidth2(laplacian.lower()),
+            Self::Sddm(sddm) => Lowered::FactorWidth2(sddm.lower()),
+            Self::FactorWidth2(v) => Lowered::FactorWidth2(v),
+            Self::BipartiteFactorWidth2(v) => Lowered::FactorWidth2(v.lower()),
         }
     }
+
+    /// Dimension of `A`.
+    pub(crate) fn n(&self) -> usize {
+        match self.lower() {
+            Lowered::Csr(csr) | Lowered::UpperCsr(csr) => csr.n(),
+            Lowered::FactorWidth2(v) => v.n(),
+        }
+    }
+}
+
+/// An [`Input`] as the core reads it: a CSR matrix stored whole or by its upper triangle, or `V W Vᵀ`.
+pub(crate) enum Lowered<'a, T, I> {
+    Csr(CsrRef<'a, T, I>),
+    UpperCsr(CsrRef<'a, T, I>),
+    FactorWidth2(FactorWidth2<'a, T, I>),
 }
 
 macro_rules! input_from {

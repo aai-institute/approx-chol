@@ -96,7 +96,7 @@ impl<T: Clone, I: PrimInt> CsrRef<'_, T, I> {
 
 /// Borrowed CSR of the upper triangle of a symmetric `A`, diagonal included.
 #[derive(Clone, Copy, Debug)]
-pub struct UpperCsrRef<'a, T = f64, I = u32>(pub(crate) CsrRef<'a, T, I>);
+pub struct UpperCsrRef<'a, T = f64, I = u32>(CsrRef<'a, T, I>);
 
 impl<'a, T, I: PrimInt> UpperCsrRef<'a, T, I> {
     /// The shape checks of [`CsrRef::new`]; a nonzero below the diagonal is caught when it factors.
@@ -107,6 +107,10 @@ impl<'a, T, I: PrimInt> UpperCsrRef<'a, T, I> {
         n: u32,
     ) -> Result<Self, CsrError> {
         CsrRef::new(row_ptrs, col_indices, values, n).map(Self)
+    }
+
+    pub(crate) fn lower(self) -> CsrRef<'a, T, I> {
+        self.0
     }
 }
 

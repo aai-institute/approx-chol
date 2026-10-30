@@ -31,7 +31,10 @@ impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
 
 /// `V W Vᵀ`, `V = [V_l; V_r]`: left vertices first, then right.
 #[derive(Clone, Copy, Debug)]
-pub struct BipartiteFactorWidth2<'a, T, I = u32>(pub(crate) FactorWidth2<'a, T, I>);
+pub struct BipartiteFactorWidth2<'a, T, I = u32> {
+    v: FactorWidth2<'a, T, I>,
+    n_left: usize,
+}
 
 impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
     /// Both sides have the same column count.
@@ -61,16 +64,24 @@ impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
 
     /// Dimension of `A`.
     pub(crate) fn n(&self) -> usize {
-        self.0.n()
+        self.v.n()
+    }
+
+    /// The left part's size, after which the right's vertices are numbered.
+    pub(crate) fn n_left(&self) -> usize {
+        self.n_left
     }
 
     /// The run of `A`'s vertices on `side`.
     pub(crate) fn vertices(&self, side: Side) -> Range<usize> {
-        let n_left = self.0.n_left().expect("built only by `of`");
         match side {
-            Side::Left => 0..n_left,
-            Side::Right => n_left..self.n(),
+            Side::Left => 0..self.n_left,
+            Side::Right => self.n_left..self.n(),
         }
+    }
+
+    pub(crate) fn lower(self) -> FactorWidth2<'a, T, I> {
+        self.v
     }
 
     fn of(
@@ -85,11 +96,12 @@ impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
             y: right.values,
             scale,
         };
-        Self(FactorWidth2 {
+        let v = FactorWidth2 {
             a: left.rows,
             b: right.rows,
             columns,
-        })
+        };
+        Self { v, n_left: left.n }
     }
 }
 

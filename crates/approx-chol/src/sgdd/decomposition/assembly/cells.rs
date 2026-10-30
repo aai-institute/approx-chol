@@ -290,7 +290,7 @@ mod tests {
         let sum = |accumulator: Accumulator, gram: BipartiteFactorWidth2<'_, f64>| {
             let (mut seen, mut pairs) = (Vec::new(), Vec::new());
             let rows = accumulator.cross::<f64, u32, u32>(
-                gram.0,
+                gram.lower(),
                 n_left,
                 |column| seen.push((column.a, column.b, column.cell())),
                 |i, j, cell| pairs.push((i, j, cell)),
@@ -317,7 +317,7 @@ mod tests {
         )
         .unwrap();
         let rows = Accumulator::Table
-            .cross::<f64, u32, u32>(gram.0, 4, |_| {}, |_, _, _| {})
+            .cross::<f64, u32, u32>(gram.lower(), 4, |_| {}, |_, _, _| {})
             .unwrap();
         assert!(rows.holds_no_slack());
     }
