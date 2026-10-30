@@ -12,6 +12,8 @@ mod dense;
 mod dense_residual;
 #[path = "common/gram.rs"]
 mod gram;
+#[path = "common/lcg.rs"]
+mod lcg;
 #[path = "reduction/surplus_grounds.rs"]
 mod surplus_grounds;
 

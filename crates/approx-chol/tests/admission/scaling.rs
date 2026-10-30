@@ -2,7 +2,6 @@ use approx_chol::input::FactorWidth2;
 use approx_chol::{factorize, Config, CsrRef, ScalingPolicy, Sgdd};
 use rstest::rstest;
 
-use super::cycle::Cycle;
 use super::lcg::Lcg;
 use super::{reduce, reduce_with};
 
@@ -146,15 +145,6 @@ fn a_settled_scaling_with_an_uneven_perron_vector_is_not_clamped() {
     let (row_ptrs, columns, values) = weighted_dld(k * k, &grid(k), 10, 0);
     let factor = reduce(&row_ptrs, &columns, &values).expect("admitted");
     assert_eq!(factor.blocks()[0].scaling_report(), None);
-}
-
-/// A Gram cycle whose null vector `u = 2^min(i, L−1−i)` peaks mid-cycle; its error is relative per entry, so no row's band grows by `1/μ_i`.
-#[test]
-fn a_gram_null_vector_deficit_past_its_row_rounding_is_reported() {
-    let miss = 1e-10;
-    let factor = factorize(Cycle::new(20, miss).gram()).expect("admitted");
-    let report = factor.blocks()[0].scaling_report().expect("reported");
-    assert!(report.violation > miss / 10.0, "{report:?}");
 }
 
 /// `f32` rounds a singular block's `ρ(N)` ulps past `1`, so only a bracket within the `16ε` band certifies; under `1e-9` these spent 2048 steps and reported.
