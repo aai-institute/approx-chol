@@ -35,7 +35,7 @@ impl<T: Real, I: Index> Restriction<T, I> {
     }
 
     /// The restriction to local vertices `from..`, renumbered by `vertex`: a complement's, `F` commuting with the elimination.
-    pub(crate) fn tail(self, from: usize, vertex: impl Fn(usize) -> I) -> Self {
+    pub(super) fn tail(self, from: usize, vertex: impl Fn(usize) -> I) -> Self {
         let vertices = (from..self.vertices.len()).map(|k| vertex(self.vertices.vertex(k)));
         Self::new(vertices.collect(), self.congruence.tail(from))
     }
