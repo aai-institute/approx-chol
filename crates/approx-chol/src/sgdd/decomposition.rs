@@ -9,7 +9,7 @@ use crate::input::{Canonical, CsrError};
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::{Index, Real};
 pub(super) use assembly::{
-    assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, Onto, StrictUpperTriangle,
+    assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, StrictUpperTriangle,
 };
 use partition::Partition;
 use partition::UnionFind;

@@ -8,12 +8,12 @@ use num_traits::PrimInt;
 use super::block::{Balance, BlockComplement, Grounding, IrreducibleBlock, ReduceError};
 use super::congruence::{Congruence, ScaledFactors};
 use super::decomposition::{
-    of_csr, of_upper, AdjacencyLayout, Biadjacency, Cells, Components, Onto, Partitioned,
+    of_csr, of_upper, AdjacencyLayout, Biadjacency, Cells, Components, Partitioned,
     StrictUpperTriangle, Summands,
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy, ScalingReport};
 use super::{diagonal_in_range, Complement, Reduced};
-use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Side};
+use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Lowered, Side};
 use crate::storage::OffDiagonal;
 use crate::{narrow, widen, Error, Index, Real};
 
@@ -23,15 +23,11 @@ impl<T: Real, I: Index> Reduced<T, I> {
         input: Input<'_, T, J>,
         policy: ScalingPolicy,
     ) -> Result<Self, Error> {
-        Ok(match input {
+        Ok(match input.lower() {
             // Symmetry is checked in the walk that unions the pattern; upper storage has no mirror.
-            Input::Csr(csr) => of_csr(Canonical::of(csr)?)?.reduce(&policy)?,
-            Input::UpperCsr(csr) => of_upper(Canonical::of(csr.0)?)?.reduce(&policy)?,
-            Input::Laplacian(laplacian) => Self::from_factor_width_2(laplacian.lower(), &policy)?,
-            Input::Sddm(sddm) => Self::from_factor_width_2(sddm.lower(), &policy)?,
-            Input::FactorWidth2(v) | Input::BipartiteFactorWidth2(BipartiteFactorWidth2(v)) => {
-                Self::from_factor_width_2(v, &policy)?
-            }
+            Lowered::Csr(csr) => of_csr(Canonical::of(csr)?)?.reduce(&policy)?,
+            Lowered::UpperCsr(csr) => of_upper(Canonical::of(csr)?)?.reduce(&policy)?,
+            Lowered::FactorWidth2(v) => Self::from_factor_width_2(v, &policy)?,
         })
     }
 
@@ -39,7 +35,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
         v: FactorWidth2<'_, T, J>,
         policy: &ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        match Biadjacency::of(&v, Onto::Smaller) {
+        match Biadjacency::of(&v) {
             Some(layout) => Self::from_gram(layout, v, policy),
             None => Self::from_gram(StrictUpperTriangle, v, policy),
         }
@@ -66,9 +62,8 @@ impl<T: Real, I: Index> Complement<T, I> {
         policy: ScalingPolicy,
     ) -> Result<Self, ReduceError> {
         let range = input.vertices(kept);
-        let BipartiteFactorWidth2(v) = input;
-        let layout = Biadjacency::of(&v, Onto::Given(kept)).expect("a bipartite V");
-        let Summands { blocks, lone, dead } = Reduced::from_gram(layout, v, &policy)?;
+        let layout = Biadjacency::onto(&input, kept);
+        let Summands { blocks, lone, dead } = Reduced::from_gram(layout, input.lower(), &policy)?;
         let start = range.start;
         let local = |v: I| {
             range

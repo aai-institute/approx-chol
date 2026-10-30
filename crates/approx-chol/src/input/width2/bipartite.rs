@@ -5,7 +5,7 @@ use std::ops::Range;
 use num_traits::PrimInt;
 
 use super::error::{below, check, length, ViewError};
-use super::{Columns, FactorWidth2};
+use super::{BipartiteColumns, Columns, FactorWidth2};
 use crate::Real;
 
 /// One side of `V`, with at most one nonzero per column: `values[k]` at `rows[k]`, `1` for `None`.
@@ -31,7 +31,11 @@ impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
 
 /// `V W Vᵀ`, `V = [V_l; V_r]`: left vertices first, then right.
 #[derive(Clone, Copy, Debug)]
-pub struct BipartiteFactorWidth2<'a, T, I = u32>(pub(crate) FactorWidth2<'a, T, I>);
+pub struct BipartiteFactorWidth2<'a, T, I = u32> {
+    a: &'a [I],
+    b: &'a [I],
+    columns: BipartiteColumns<'a, T>,
+}
 
 impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
     /// Both sides have the same column count.
@@ -61,15 +65,23 @@ impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
 
     /// Dimension of `A`.
     pub(crate) fn n(&self) -> usize {
-        self.0.n()
+        self.columns.n()
     }
 
     /// The run of `A`'s vertices on `side`.
     pub(crate) fn vertices(&self, side: Side) -> Range<usize> {
-        let n_left = self.0.n_left().expect("built only by `of`");
         match side {
-            Side::Left => 0..n_left,
-            Side::Right => n_left..self.n(),
+            Side::Left => 0..self.columns.n_left,
+            Side::Right => self.columns.n_left..self.n(),
+        }
+    }
+
+    pub(crate) fn lower(self) -> FactorWidth2<'a, T, I> {
+        let columns = Columns::Bipartite(self.columns);
+        FactorWidth2 {
+            a: self.a,
+            b: self.b,
+            columns,
         }
     }
 
@@ -78,18 +90,18 @@ impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
         right: FactorWidth1<'a, T, I>,
         scale: Option<&'a [T]>,
     ) -> Self {
-        let columns = Columns::Bipartite {
+        let columns = BipartiteColumns {
             n_left: left.n,
             n_right: right.n,
             x: left.values,
             y: right.values,
             scale,
         };
-        Self(FactorWidth2 {
+        Self {
             a: left.rows,
             b: right.rows,
             columns,
-        })
+        }
     }
 }
 

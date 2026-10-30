@@ -6,7 +6,7 @@ use num_traits::PrimInt;
 
 use super::partition::{Partition, UnionFind};
 use super::{Cells, LonePivot, Partitioned, PrincipalBlocks};
-use crate::input::{Column, FactorWidth2, Side};
+use crate::input::{BipartiteFactorWidth2, Column, FactorWidth2, Side};
 use crate::sgdd::block::{Grounding, ReduceError};
 use crate::sgdd::diagonal_in_range;
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
@@ -39,7 +39,7 @@ pub(in crate::sgdd) struct Biadjacency {
 
 /// The side each bipartite block's Schur complement is onto; the other is eliminated first.
 #[derive(Clone, Copy, Debug)]
-pub(in crate::sgdd) enum Onto {
+enum Onto {
     /// The smaller, the right on a tie, so the larger is eliminated.
     Smaller,
     /// This side.
@@ -48,11 +48,19 @@ pub(in crate::sgdd) enum Onto {
 
 impl Biadjacency {
     /// `v`'s own left part, so the layout and the columns it sums never disagree.
-    pub(in crate::sgdd) fn of<T: Real, J: PrimInt>(
-        v: &FactorWidth2<'_, T, J>,
-        onto: Onto,
-    ) -> Option<Self> {
+    pub(in crate::sgdd) fn of<T: Real, J: PrimInt>(v: &FactorWidth2<'_, T, J>) -> Option<Self> {
+        let onto = Onto::Smaller;
         v.n_left().map(|n_left| Self { n_left, onto })
+    }
+
+    /// `input`'s own left part, each block's complement onto `kept`.
+    pub(in crate::sgdd) fn onto<T: Real, J: PrimInt>(
+        input: &BipartiteFactorWidth2<'_, T, J>,
+        kept: Side,
+    ) -> Self {
+        let n_left = input.vertices(Side::Left).end;
+        let onto = Onto::Given(kept);
+        Self { n_left, onto }
     }
 }
 
