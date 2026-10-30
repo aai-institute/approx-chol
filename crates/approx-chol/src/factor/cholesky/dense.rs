@@ -105,7 +105,8 @@ fn eliminate<T: Real, const SIGNED: bool>(matrix: &mut [T], inverse_pivots: &mut
                     true => -t,
                     false => t,
                 };
-                if row < m && (value > T::zero()) == (t > T::zero()) {
+                // A zero `t` gains nothing; testing it spares sparse rows a `+0` store per step.
+                if row < m && (value > T::zero()) == (t > T::zero()) && t != T::zero() {
                     let gain = two * value.abs().min(t.abs());
                     gains[row] = gains[row] + gain;
                     gains[col] = gains[col] + gain;
