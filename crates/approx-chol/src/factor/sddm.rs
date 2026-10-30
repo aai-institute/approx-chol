@@ -64,19 +64,19 @@ impl<T: Real, I: Index> Sddm<T, I> {
                         sums.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
                     }
                 });
-                Self::of_rows(rows, sheets, &grounding)
+                Self::of_rows(rows, sheets, grounding.surplus())
             }
         }
     }
 
-    /// Rows on `sheets`, each ground plus its vertex's surplus, the last of `block`'s; on two, a ground within the band [`twists`].
-    pub(super) fn of_rows(rows: SddmRows<T, I>, sheets: Sheets, block: &Grounding<T>) -> Self {
+    /// Rows on `sheets`, each ground plus its vertex's `surplus`, one per vertex; on two, a ground within the band [`twists`].
+    pub(super) fn of_rows(rows: SddmRows<T, I>, sheets: Sheets, surplus: Option<&[T]>) -> Self {
         let n = rows.sums.len() - 1;
         let adjacency = UpperAdjacency::new(Rows::new(rows.ptrs, rows.indices, rows.values, n));
         let mut ground = rows.ground;
-        if let Some(surplus) = block.surplus() {
-            let kept = surplus[surplus.len() - ground.len() / sheets.count()..].iter();
-            let copies = kept.flat_map(|&s| std::iter::repeat_n(s, sheets.count()));
+        if let Some(surplus) = surplus {
+            assert_eq!(sheets.count() * surplus.len(), n, "one surplus per vertex");
+            let copies = (surplus.iter()).flat_map(|&s| std::iter::repeat_n(s, sheets.count()));
             (ground.iter_mut().zip(copies)).for_each(|(g, s)| *g = s + *g);
         }
         let grounding = Grounding::of(ground);
@@ -228,18 +228,21 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         rows.unwrap_or_else(|| Self::new(n))
     }
 
-    /// The signed rows the sheets cover, `k⁻`'s mirrors skipped: `j⁺, j⁻` sum `P, N` into `N − P`, and the surplus, `block`'s plus the ground, gains `2 min(P, N)` on both rows, as `P + N − |N − P|` would by cancellation.
+    /// The signed rows the sheets cover, `k⁻`'s mirrors skipped: `j⁺, j⁻` sum `P, N` into `N − P`, and `surplus` plus the ground gains `2 min(P, N)` on both rows, as `P + N − |N − P|` would by cancellation.
     pub(super) fn fold(
         self,
         sheets: Sheets,
-        block: &Grounding<T>,
+        surplus: Option<&[T]>,
     ) -> (UpperAdjacency<T, I>, Grounding<T>) {
         let count = sheets.count();
         let n = (self.sums.len() - 1) / count;
-        let kept = block.surplus().map(|s| &s[s.len() - n..]);
+        assert!(
+            surplus.is_none_or(|s| s.len() == n),
+            "one surplus per vertex"
+        );
         let ground = |k: usize| self.ground[count * k];
         let mut surplus: Vec<T> = (0..n)
-            .map(|k| kept.map_or(ground(k), |s| s[k] + ground(k)))
+            .map(|k| surplus.map_or(ground(k), |s| s[k] + ground(k)))
             .collect();
         let (mut ptrs, mut indices, mut values) = (vec![0], Vec::new(), Vec::new());
         let two = T::one() + T::one();

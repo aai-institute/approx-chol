@@ -75,12 +75,14 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
             Formation::Exact => self.exact(inv_pivot),
             Formation::Sampled(split) => self.sample(split, streams).merge(),
         };
-        let s = Sddm::of_rows(rows, self.sheets, &self.grounding);
+        let kept = Self::kept_surplus(&self.grounding, &self.cross);
+        let s = Sddm::of_rows(rows, self.sheets, kept);
         (Arm::Approximate(s), self.cross)
     }
 
     /// `S` alone, a complement's summand: only exact computes pivots, and `C` is freed before the sampled merge.
     pub(super) fn complement(self, config: &Config, streams: Streams) -> Arm<T, I> {
+        let kept = Self::kept_surplus(&self.grounding, &self.cross);
         let rows = match formation(config, self.cross.n_cols()) {
             Formation::Dense => return Arm::Exact(self.signed(&self.inverse_pivots())),
             Formation::Exact => self.exact(&self.inverse_pivots()),
@@ -91,13 +93,19 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
                 fill.merge()
             }
         };
-        Arm::Approximate(Sddm::of_rows(rows, self.sheets, &self.grounding))
+        Arm::Approximate(Sddm::of_rows(rows, self.sheets, kept))
     }
 
     /// `S` itself, its exact rows folded off the sheets.
     fn signed(&self, inv_pivot: &[T]) -> Signed<T, I> {
-        let (adjacency, grounding) = self.exact(inv_pivot).fold(self.sheets, &self.grounding);
+        let kept = Self::kept_surplus(&self.grounding, &self.cross);
+        let (adjacency, grounding) = self.exact(inv_pivot).fold(self.sheets, kept);
         Signed::new(adjacency, self.sheets, grounding)
+    }
+
+    /// The kept rows' surplus `s_k`, after `C`'s eliminated rows'; borrowed from σ alone, so `C` can be freed while it is held.
+    fn kept_surplus<'a>(grounding: &'a Grounding<T>, cross: &Rows<T, I>) -> Option<&'a [T]> {
+        grounding.surplus().map(|s| &s[cross.n_rows()..])
     }
 
     /// `S`'s dimension, a cover's two sheets counted.
