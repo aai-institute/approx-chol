@@ -22,7 +22,6 @@ enum ByCopies<T, I> {
 }
 
 impl<T: Real, I: Index> CliqueTreeElimination<T, I> {
-    /// AC2 at `split`'s copies, else AC.
     pub(in crate::factor) fn new(split: Option<Multi>) -> Self {
         Self(match split {
             None => ByCopies::Ac(Elimination::new(Single)),
