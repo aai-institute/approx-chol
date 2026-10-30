@@ -195,22 +195,22 @@ pub(crate) trait Summand<T, I>: Send {
 
 impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
     fn factor(self, config: &Config, reused: &mut CliqueTreeElimination<T, I>) -> Block<T, I> {
-        let (restriction, off_diagonal, balance, report) = self.into_parts();
+        let (restriction, off_diagonal, sheets, grounding, report) = self.into_parts();
         let streams = Streams::of(&restriction, config);
         let tail = |from: usize| restriction.factor_tail(from);
         let draws = streams.cholesky();
         let (elimination, cholesky) = match off_diagonal {
             OffDiagonal::General(adjacency) => {
                 let arm = match config.dense(adjacency.n()) {
-                    true => Arm::Exact(Signed::new(adjacency, balance)),
-                    false => Arm::Approximate(Sddm::of_block(adjacency, balance)),
+                    true => Arm::Exact(Signed::new(adjacency, sheets, grounding)),
+                    false => Arm::Approximate(Sddm::of_block(adjacency, sheets, grounding)),
                 };
                 (None, Cholesky::factor(arm, draws, tail(0), reused))
             }
             OffDiagonal::Bipartite(cross) => {
                 let kept = tail(cross.n_rows());
                 let factor = |s| Cholesky::factor(s, draws, kept, reused);
-                let block = BipartiteBlock::of(cross, balance);
+                let block = BipartiteBlock::of(cross, sheets, grounding);
                 let (elimination, factored) = block.eliminate(config, streams, factor);
                 (Some(Box::new(elimination)), factored)
             }
@@ -228,7 +228,7 @@ impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
     /// Keyed as a whole block keys its draws.
     fn factor(self, config: &Config, reused: &mut CliqueTreeElimination<T, I>) -> Block<T, I> {
         let Self { block, start } = self;
-        let (whole, off_diagonal, balance, report) = block.into_parts();
+        let (whole, off_diagonal, sheets, grounding, report) = block.into_parts();
         let OffDiagonal::Bipartite(cross) = off_diagonal else {
             unreachable!("a bipartite block has both sides")
         };
@@ -236,7 +236,7 @@ impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
         let renumber = |v: usize| I::from_index(v - start);
         // Tailed before `S`, so the eliminated side's `F` never shares its formation's peak.
         let restriction = whole.tail(cross.n_rows(), renumber);
-        let s = BipartiteBlock::of(cross, balance).complement(config, streams);
+        let s = BipartiteBlock::of(cross, sheets, grounding).complement(config, streams);
         let tail = restriction.factor_tail(0);
         let cholesky = Cholesky::factor(s, streams.cholesky(), tail, reused);
         Block {

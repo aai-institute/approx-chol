@@ -2,7 +2,7 @@
 
 use rayon::prelude::*;
 
-use crate::sgdd::{within_band, Balance, Grounding};
+use crate::sgdd::{within_band, Grounding, Sheets};
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, widen, Index, Real};
 
@@ -49,11 +49,15 @@ impl<T: Real, I: Index> Sddm<T, I> {
     }
 
     /// Folded `M` on one sheet, or the Gremban cover of signed `M` on two.
-    pub(super) fn of_block(adjacency: UpperAdjacency<T, I>, balance: Balance<T>) -> Self {
-        match balance {
-            Balance::Balanced(grounding) => Self::new(adjacency, Closure::Folded(grounding)),
-            Balance::Frustrated(grounding) => {
-                let (sheets, n) = (Sheets::Two, adjacency.n());
+    pub(super) fn of_block(
+        adjacency: UpperAdjacency<T, I>,
+        sheets: Sheets,
+        grounding: Grounding<T>,
+    ) -> Self {
+        match sheets {
+            Sheets::One => Self::new(adjacency, Closure::Folded(grounding)),
+            Sheets::Two => {
+                let n = adjacency.n();
                 // The cover acts as `M − diag(s)` on `[z; −z]`.
                 let rows = SddmRows::split(sheets, n, n, |mut sums, i| {
                     for (j, &a) in adjacency.upper(i) {
@@ -306,23 +310,6 @@ pub(super) fn crosses<T: Real>(c: T) -> bool {
     c > T::zero()
 }
 
-/// How many copies of each vertex a matrix holds: two for a Gremban cover, interleaved by vertex.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Sheets {
-    One,
-    Two,
-}
-
-impl Sheets {
-    pub(super) fn count(self) -> usize {
-        match self {
-            Self::One => 1,
-            Self::Two => 2,
-        }
-    }
-}
-
 /// Vertex `k`'s copy on `sheet` of a cover: sheets interleave, so row `k⁻` mirrors its `k⁺` by flipping each column's low bit.
 pub(super) fn cover_vertex(k: usize, sheet: usize) -> usize {
     2 * k + sheet
@@ -358,7 +345,7 @@ mod tests {
         let values = vec![2f64.powi(1020); indices.len()];
         let signed = UpperAdjacency::new(Rows::new(ptrs, indices, values, n as usize));
         let surplus = [extra].into_iter().chain([0.0; 8]).collect();
-        Sddm::of_block(signed, Balance::Frustrated(Grounding::of(surplus)))
+        Sddm::of_block(signed, Sheets::Two, Grounding::of(surplus))
     }
 
     #[test]

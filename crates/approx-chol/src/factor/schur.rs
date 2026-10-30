@@ -6,9 +6,9 @@ use super::block_elimination::BlockElimination;
 use super::cholesky::{Arm, Signed};
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::{Config, SchurMode};
-use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
+use super::sddm::{cover_vertex, crosses, Sddm, SddmRows};
 use super::{Streams, MULTIPLY_ADD_GRAIN_BITS};
-use crate::sgdd::{Balance, Grounding};
+use crate::sgdd::{Grounding, Sheets};
 use crate::storage::Rows;
 use crate::{narrow, per_task, widen, Index, Real};
 
@@ -42,12 +42,7 @@ pub(super) struct BipartiteBlock<T, I> {
 }
 
 impl<T: Real, I: Index> BipartiteBlock<T, I> {
-    /// A balanced block folds onto one sheet; a frustrated one needs the cover's two.
-    pub(super) fn of(cross: Rows<T, I>, balance: Balance<T>) -> Self {
-        let (sheets, grounding) = match balance {
-            Balance::Balanced(grounding) => (Sheets::One, grounding),
-            Balance::Frustrated(grounding) => (Sheets::Two, grounding),
-        };
+    pub(super) fn of(cross: Rows<T, I>, sheets: Sheets, grounding: Grounding<T>) -> Self {
         Self {
             cross,
             sheets,
@@ -102,11 +97,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
     /// `S` itself, its exact rows folded off the sheets.
     fn signed(&self, inv_pivot: &[T]) -> Signed<T, I> {
         let (adjacency, grounding) = self.exact(inv_pivot).fold(self.sheets, &self.grounding);
-        let balance = match self.sheets {
-            Sheets::One => Balance::Balanced(grounding),
-            Sheets::Two => Balance::Frustrated(grounding),
-        };
-        Signed::new(adjacency, balance)
+        Signed::new(adjacency, self.sheets, grounding)
     }
 
     /// `S`'s dimension, a cover's two sheets counted.
