@@ -495,9 +495,9 @@ struct Streams {
 
 impl Streams {
     /// Keyed by the block's first vertex in `A`, so a complement eliminating the side its whole factor does draws as that factor does.
-    fn of(block: usize, config: &Config) -> Self {
+    fn of(first: usize, config: &Config) -> Self {
         Self {
-            key: splitmix(splitmix(config.seed) ^ block as u64),
+            key: splitmix(splitmix(config.seed) ^ first as u64),
         }
     }
 

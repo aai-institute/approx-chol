@@ -4,6 +4,7 @@ mod gram;
 mod graph;
 
 use num_traits::PrimInt;
+use rayon::prelude::*;
 
 use super::block::{Balance, BlockComplement, Grounding, IrreducibleBlock, ReduceError};
 use super::congruence::{Congruence, ScaledFactors};
@@ -67,7 +68,7 @@ impl<T: Real, I: Index> Complement<T, I> {
         let local = |v: usize| I::from_index(v - range.start);
         let on_kept = |v: I| range.contains(&v.index()).then(|| local(v.index()));
         Ok(Self {
-            blocks: (blocks.into_iter())
+            blocks: (blocks.into_par_iter())
                 .map(|block| BlockComplement::new(block, local))
                 .collect(),
             lone: (lone.into_iter())
