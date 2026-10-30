@@ -317,12 +317,23 @@ pub(super) fn cover_vertex(k: usize, sheet: usize) -> usize {
     2 * k + sheet
 }
 
-/// `x` on the first sheet, `−x` on the second: the antisymmetric lift a cover solves on.
+/// Vertex `k`'s copy on the first of `sheets`.
+pub(super) fn first_copy(sheets: Sheets, k: usize) -> usize {
+    match sheets {
+        Sheets::One => k,
+        Sheets::Two => cover_vertex(k, 0),
+    }
+}
+
+/// `x` on the first sheet, `−x` on the second, any ground slot after them zero: the antisymmetric lift a cover solves on.
 pub(super) fn lift<T: Real>(x: &[T], rows: &mut [T]) {
-    (rows.chunks_exact_mut(2).zip(x)).for_each(|(r, &v)| {
+    let (pairs, ground) = rows.split_at_mut(cover_vertex(x.len(), 0));
+    (pairs.chunks_exact_mut(2).zip(x)).for_each(|(r, &v)| {
         r[0] = v;
         r[1] = -v;
     });
+    // A lift sums to zero, so the ground's right-hand side is zero and its shift cancels in the descent.
+    ground.fill(T::zero());
 }
 
 /// Half the sheets' difference back into `x`, undoing [`lift`].
