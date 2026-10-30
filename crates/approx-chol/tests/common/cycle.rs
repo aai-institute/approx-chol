@@ -48,15 +48,6 @@ impl<T: Real> Cycle<T> {
         self
     }
 
-    /// The cycle without its closing column: a path, closing no cycle.
-    pub fn open(mut self) -> Self {
-        self.a.pop();
-        self.b.pop();
-        self.x.pop();
-        self.y.pop();
-        self
-    }
-
     /// A column `√(weight·a_ii) e_i`, grounding vertex `i` by `weight·a_ii`.
     pub fn grounded(mut self, i: u32, weight: f64) -> Self {
         let at_i = |ends: &[u32], values: &[T]| -> f64 {
