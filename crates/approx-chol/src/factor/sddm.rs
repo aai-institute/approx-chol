@@ -228,21 +228,20 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         rows.unwrap_or_else(|| Self::new(n))
     }
 
-    /// The signed rows the sheets cover, `k⁻`'s mirrors skipped: `j⁺, j⁻` sum `P, N` into `N − P`, and `surplus` plus the ground gains `2 min(P, N)` on both rows, as `P + N − |N − P|` would by cancellation.
+    /// The signed rows the sheets cover, `k⁻`'s mirrors skipped: `j⁺, j⁻` sum `P, N` into `N − P`, and `kept` plus the ground gains `2 min(P, N)` on both rows, as `P + N − |N − P|` would by cancellation.
     pub(super) fn fold(
         self,
         sheets: Sheets,
-        surplus: Option<&[T]>,
+        kept: Option<&[T]>,
     ) -> (UpperAdjacency<T, I>, Grounding<T>) {
         let count = sheets.count();
         let n = (self.sums.len() - 1) / count;
-        assert!(
-            surplus.is_none_or(|s| s.len() == n),
-            "one surplus per vertex"
-        );
+        if let Some(s) = kept {
+            assert_eq!(s.len(), n, "one surplus per vertex");
+        }
         let ground = |k: usize| self.ground[count * k];
         let mut surplus: Vec<T> = (0..n)
-            .map(|k| surplus.map_or(ground(k), |s| s[k] + ground(k)))
+            .map(|k| kept.map_or(ground(k), |s| s[k] + ground(k)))
             .collect();
         let (mut ptrs, mut indices, mut values) = (vec![0], Vec::new(), Vec::new());
         let two = T::one() + T::one();
