@@ -8,7 +8,7 @@ pub struct Config {
     pub seed: u64,
     /// AC2 multi-edge multiplicity `k`, costing `O(k)` sampler draws per edge; `None`, `Some(0)` and `Some(1)` select standard AC.
     pub split_merge: Option<u32>,
-    /// Largest block dimension, a cover's two sheets counted, factored by exact dense Cholesky at `O(exact_max_dim³)`; `0` factors every block approximately.
+    /// Largest block dimension, a bipartite block's by its kept side, factored by exact dense Cholesky at `O(exact_max_dim³)`; `0` factors every block approximately.
     pub exact_max_dim: usize,
     /// How a bipartite block's eliminated side becomes the kept side's Schur complement.
     pub complement: SchurMode,
@@ -26,7 +26,7 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Whether a Cholesky of `dimension`, a cover's two sheets counted, is dense: it then takes `S` exact, spending nothing on sparsity.
+    /// Whether a Cholesky of a block's `dimension` is dense: it then factors `M` itself, and takes `S` exact, spending nothing on sparsity.
     pub(super) fn dense(&self, dimension: usize) -> bool {
         dimension <= self.exact_max_dim
     }

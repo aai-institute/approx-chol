@@ -3,6 +3,7 @@
 use rayon::prelude::*;
 
 use super::block_elimination::BlockElimination;
+use super::cholesky::{Arm, Signed};
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::{Config, SchurMode};
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows, Sheets};
@@ -11,18 +12,20 @@ use crate::sgdd::{Balance, Grounding};
 use crate::storage::Rows;
 use crate::{narrow, per_task, widen, Index, Real};
 
-/// How one block's Schur complement is formed, resolved from [`Config`] and its dimension.
+/// How one block's Schur complement is formed, resolved from [`Config`] and its kept side.
 enum Formation {
+    /// Exact and signed, for a dense Cholesky of `S` itself.
+    Dense,
     /// Each star's whole clique.
     Exact,
     /// Clique trees sampled with this split.
     Sampled(Option<Multi>),
 }
 
-/// How a complement of `dimension` is formed: exact when dense or asked, else sampled with its own split or under `Same` the factor's.
-fn formation(config: &Config, dimension: usize) -> Formation {
+/// How a complement on `n_kept` vertices is formed: signed when dense, exact when asked, else sampled with its own split or under `Same` the factor's.
+fn formation(config: &Config, n_kept: usize) -> Formation {
     match config.complement {
-        _ if config.dense(dimension) => Formation::Exact,
+        _ if config.dense(n_kept) => Formation::Dense,
         SchurMode::Exact => Formation::Exact,
         SchurMode::Approximate { split_merge } => {
             Formation::Sampled(split_merge.and_then(Multi::split))
@@ -57,7 +60,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         self,
         config: &Config,
         streams: Streams,
-        factor: impl FnOnce(Sddm<T, I>) -> R,
+        factor: impl FnOnce(Arm<T, I>) -> R,
     ) -> (BlockElimination<T, I>, R) {
         let inv_pivot = self.inverse_pivots();
         let (s, cross) = self.complement_and_cross(config, streams, &inv_pivot);
@@ -71,20 +74,20 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         config: &Config,
         streams: Streams,
         inv_pivot: &[T],
-    ) -> (Sddm<T, I>, Rows<T, I>) {
-        let rows = match formation(config, self.complement_dimension()) {
+    ) -> (Arm<T, I>, Rows<T, I>) {
+        let rows = match formation(config, self.cross.n_cols()) {
+            Formation::Dense => return (Arm::Exact(self.signed(inv_pivot)), self.cross),
             Formation::Exact => self.exact(inv_pivot),
             Formation::Sampled(split) => self.sample(split, streams).merge(),
         };
-        (
-            Sddm::of_rows(rows, self.sheets, &self.grounding),
-            self.cross,
-        )
+        let s = Sddm::of_rows(rows, self.sheets, &self.grounding);
+        (Arm::Approximate(s), self.cross)
     }
 
     /// `S` alone, a complement's summand: only exact computes pivots, and `C` is freed before the sampled merge.
-    pub(super) fn complement(self, config: &Config, streams: Streams) -> Sddm<T, I> {
-        let rows = match formation(config, self.complement_dimension()) {
+    pub(super) fn complement(self, config: &Config, streams: Streams) -> Arm<T, I> {
+        let rows = match formation(config, self.cross.n_cols()) {
+            Formation::Dense => return Arm::Exact(self.signed(&self.inverse_pivots())),
             Formation::Exact => self.exact(&self.inverse_pivots()),
             Formation::Sampled(split) => {
                 let fill = self.sample(split, streams);
@@ -93,7 +96,17 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
                 fill.merge()
             }
         };
-        Sddm::of_rows(rows, self.sheets, &self.grounding)
+        Arm::Approximate(Sddm::of_rows(rows, self.sheets, &self.grounding))
+    }
+
+    /// `S` itself, its exact rows folded off the sheets.
+    fn signed(&self, inv_pivot: &[T]) -> Signed<T, I> {
+        let (adjacency, grounding) = self.exact(inv_pivot).fold(self.sheets, &self.grounding);
+        let balance = match self.sheets {
+            Sheets::One => Balance::Balanced(grounding),
+            Sheets::Two => Balance::Frustrated(grounding),
+        };
+        Signed::new(adjacency, balance)
     }
 
     /// `S`'s dimension, a cover's two sheets counted.

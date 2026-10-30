@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The exact arm factors a frustrated block as itself, not its two-sheet cover, so `Config::exact_max_dim` counts its vertices once; a frustrated block of `exact_max_dim / 2 < n ≤ exact_max_dim` vertices factored approximately before. ([#327])
+
 ## [0.7.0] - 2026-10-30
 
 ### Changed (breaking)
@@ -270,3 +276,4 @@ for graph Laplacians in Rust with Python bindings.
 [#301]: https://github.com/aai-institute/approx-chol/issues/301
 [#315]: https://github.com/aai-institute/approx-chol/pull/315
 [#322]: https://github.com/aai-institute/approx-chol/pull/322
+[#327]: https://github.com/aai-institute/approx-chol/issues/327

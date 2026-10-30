@@ -7,10 +7,32 @@ use super::clique_tree::Copies;
 use super::config::Config;
 use super::sddm::{descend, lift, Sddm, Sheets};
 use crate::narrow;
-use crate::sgdd::FactorTail;
+use crate::sgdd::{Balance, FactorTail};
+use crate::storage::UpperAdjacency;
 use crate::{widen, Index, Real};
 use approximate::ApproximateCholesky;
 pub(super) use approximate::CliqueTreeElimination;
+pub(super) use dense::Signed;
+
+/// What a Cholesky factors: `M` itself on the exact arm, its SDDM on the approximate one.
+pub(super) enum Arm<T, I> {
+    Exact(Signed<T, I>),
+    Approximate(Sddm<T, I>),
+}
+
+impl<T: Real, I: Index> Arm<T, I> {
+    /// Exact up to the config's dimension, else folded or covered.
+    pub(super) fn of_block(
+        adjacency: UpperAdjacency<T, I>,
+        balance: Balance<T>,
+        config: &Config,
+    ) -> Self {
+        match config.dense(adjacency.n()) {
+            true => Self::Exact(Signed::new(adjacency, balance)),
+            false => Self::Approximate(Sddm::of_block(adjacency, balance)),
+        }
+    }
+}
 
 /// The factor of what the elimination leaves; it builds its own Triangular, so its facts come from that matrix.
 #[cfg_attr(
@@ -31,26 +53,35 @@ pub(super) struct Cholesky<T, I> {
 }
 
 impl<T: Real, I: Index> Cholesky<T, I> {
-    /// Dense up to the config's dimension, else approximate; `tail` is `F` on its vertices, `None` when every `|f|` is `1`.
+    /// Dense on the exact arm, else approximate; `tail` is `F` on its vertices, `None` when every `|f|` is `1`.
     pub(super) fn factor<C: Copies>(
-        sddm: Sddm<T, I>,
+        arm: Arm<T, I>,
         draws: Xoshiro256PlusPlus,
-        config: &Config,
         tail: Option<FactorTail<'_, T>>,
         elimination: &mut CliqueTreeElimination<T, I, C>,
     ) -> Self {
-        let (sheets, grounded, n) = (sddm.sheets(), sddm.grounded(), sddm.n());
-        let (triangular, pinned) = match config.dense(n) {
-            true => {
-                let pin = pinned(&sddm, tail);
-                (Triangular::Dense(dense::factor(&sddm, pin).into()), pin)
+        let (sheets, grounded, n, pinned, triangular) = match arm {
+            Arm::Exact(signed) => {
+                let (grounded, n) = (!signed.floats(), signed.n());
+                // A definite `M`'s surplus is the ground's slot, pinned so the solve is `M`'s own.
+                let pin = pinned(Sheets::One, grounded, n, tail);
+                let factor = Triangular::Dense(dense::factor(&signed, pin).into());
+                (Sheets::One, grounded, n, pin, factor)
             }
-            false => {
+            Arm::Approximate(sddm) => {
+                let (sheets, grounded, n) = (sddm.sheets(), sddm.grounded(), sddm.n());
                 // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
                 let spans_wide = tail.is_some_and(FactorTail::spans_wide);
-                let pin = (spans_wide || grounds_wide(&sddm)).then(|| pinned(&sddm, tail));
+                let pin =
+                    (spans_wide || grounds_wide(&sddm)).then(|| pinned(sheets, grounded, n, tail));
                 let (steps, pin) = elimination.eliminate(sddm, draws, pin);
-                (Triangular::Approximate(Box::new(steps)), pin)
+                (
+                    sheets,
+                    grounded,
+                    n,
+                    pin,
+                    Triangular::Approximate(Box::new(steps)),
+                )
             }
         };
         Self {
@@ -109,10 +140,15 @@ impl<T: Real, I: Index> Cholesky<T, I> {
 }
 
 /// The slot the solve pins: the ground, else the largest `|f|` on the first sheet, so the gauge's rounding is not amplified by `1/f`.
-fn pinned<T: Real, I: Index>(sddm: &Sddm<T, I>, tail: Option<FactorTail<'_, T>>) -> usize {
-    match sddm.grounded() {
-        true => sddm.n(),
-        false => tail.map_or(sddm.n() - 1, |tail| sddm.sheets().count() * tail.largest()),
+fn pinned<T: Real>(
+    sheets: Sheets,
+    grounded: bool,
+    n: usize,
+    tail: Option<FactorTail<'_, T>>,
+) -> usize {
+    match grounded {
+        true => n,
+        false => tail.map_or(n - 1, |tail| sheets.count() * tail.largest()),
     }
 }
 

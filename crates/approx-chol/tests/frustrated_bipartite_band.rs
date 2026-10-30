@@ -129,3 +129,32 @@ fn a_frustrated_bipartite_block_with_a_negligible_surplus_solves_backward_stably
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+#[test]
+fn a_frustrated_kept_side_as_large_as_exact_max_dim_solves_exactly() {
+    // Complete and mixed-signed, so no sampled clique is the whole one.
+    let (n_left, n_right) = (14, 10);
+    let (mut left, mut right, mut x, mut y) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for l in 0..n_left {
+        for r in 0..n_right {
+            left.push(l as u32);
+            right.push(r as u32);
+            x.push(1.0 + ((l * 7 + r * 3) % 5) as f64);
+            y.push(if (l + 2 * r) % 3 == 0 { -1.0 } else { 1.0 });
+        }
+    }
+    let shifted: Vec<u32> = right.iter().map(|&r| r + n_left as u32).collect();
+    let m = matrix(n_left + n_right, &left, &shifted, &x, &y);
+    let gram = BipartiteFactorWidth2::new(
+        FactorWidth1::new(n_left, &left, Some(&x)).unwrap(),
+        FactorWidth1::new(n_right, &right, Some(&y)).unwrap(),
+    )
+    .unwrap();
+    let config = Config {
+        exact_max_dim: n_left.min(n_right),
+        ..Config::default()
+    };
+    let factor = factorize_with(gram, config, ScalingPolicy::default()).unwrap();
+    let failure = unstable(&m, |b| factor.solve(b).unwrap());
+    assert!(failure.is_none(), "{failure:?}");
+}
