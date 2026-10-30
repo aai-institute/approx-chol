@@ -69,6 +69,9 @@ fn assert_buffers_checked<T: Real>(factor: &Factor<T>) {
     for found in [n - 1, n + 1] {
         let error = SolveError::LengthMismatch { expected: n, found };
         assert_eq!(factor.solve(&vec![T::zero(); found]), Err(error));
+        let (short_or_long, exact) = (&mut vec![T::zero(); found], &mut vec![T::zero(); n]);
+        assert_eq!(factor.solve_into(short_or_long, exact), Err(error));
+        assert_eq!(factor.solve_into(exact, short_or_long), Err(error));
         let mut scratch = vec![T::zero(); factor.scratch_len()];
         let solved = factor.solve_in_place(&mut vec![T::zero(); found], &mut scratch);
         assert_eq!(solved, Err(error));
