@@ -13,7 +13,6 @@ use rand::rngs::Xoshiro256PlusPlus;
 use rand::SeedableRng;
 use rayon::prelude::*;
 
-use clique_tree::{Copies, Single};
 pub use config::{Config, InnerParallelism, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
@@ -103,18 +102,6 @@ impl<T: Real> Factor<T> {
         config: &Config,
         store: fn(Block<T, I>) -> Storage<T>,
     ) -> Self {
-        match config.split() {
-            None => Self::build_with(summands, config, store, Single),
-            Some(split) => Self::build_with(summands, config, store, split),
-        }
-    }
-
-    fn build_with<I: Index, B: Summand<T, I>, C: Copies>(
-        summands: Summands<B, I, T>,
-        config: &Config,
-        store: fn(Block<T, I>) -> Storage<T>,
-        split: C,
-    ) -> Self {
         let Summands {
             blocks: coupled,
             lone,
@@ -122,7 +109,7 @@ impl<T: Real> Factor<T> {
         } = summands;
         let mut blocks = Vec::with_capacity(coupled.len() + lone.len());
         let build = |reused: &mut _, block: B| BlockFactor(store(block.factor(config, reused)));
-        let elimination = || CliqueTreeElimination::new(split);
+        let elimination = || CliqueTreeElimination::new(config.split());
         blocks.par_extend(coupled.into_par_iter().map_init(elimination, build));
         let isolated = |(v, pivot)| BlockFactor(Storage::Isolated(Isolated::new(v, pivot)));
         blocks.extend(lone.into_iter().map(isolated));
@@ -203,19 +190,11 @@ impl<T: Real> Factor<T> {
 
 /// A coupled summand of the factored matrix: a block of `A`, or a block's complement onto its kept side.
 pub(crate) trait Summand<T, I>: Send {
-    fn factor<C: Copies>(
-        self,
-        config: &Config,
-        reused: &mut CliqueTreeElimination<T, I, C>,
-    ) -> Block<T, I>;
+    fn factor(self, config: &Config, reused: &mut CliqueTreeElimination<T, I>) -> Block<T, I>;
 }
 
 impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
-    fn factor<C: Copies>(
-        self,
-        config: &Config,
-        reused: &mut CliqueTreeElimination<T, I, C>,
-    ) -> Block<T, I> {
+    fn factor(self, config: &Config, reused: &mut CliqueTreeElimination<T, I>) -> Block<T, I> {
         let (restriction, off_diagonal, balance, report) = self.into_parts();
         let streams = Streams::of(&restriction, config);
         let tail = |from: usize| restriction.factor_tail(from);
@@ -247,11 +226,7 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
 
 impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
     /// Keyed as a whole block keys its draws.
-    fn factor<C: Copies>(
-        self,
-        config: &Config,
-        reused: &mut CliqueTreeElimination<T, I, C>,
-    ) -> Block<T, I> {
+    fn factor(self, config: &Config, reused: &mut CliqueTreeElimination<T, I>) -> Block<T, I> {
         let Self { block, start } = self;
         let (whole, off_diagonal, balance, report) = block.into_parts();
         let OffDiagonal::Bipartite(cross) = off_diagonal else {
