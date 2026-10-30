@@ -4,11 +4,9 @@ mod dense;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use super::clique_tree::Copies;
-use super::config::Config;
 use super::sddm::{descend, lift, Sddm, Sheets};
 use crate::narrow;
-use crate::sgdd::{Balance, FactorTail};
-use crate::storage::UpperAdjacency;
+use crate::sgdd::FactorTail;
 use crate::{widen, Index, Real};
 use approximate::ApproximateCholesky;
 pub(super) use approximate::CliqueTreeElimination;
@@ -18,20 +16,6 @@ pub(super) use dense::Signed;
 pub(super) enum Arm<T, I> {
     Exact(Signed<T, I>),
     Approximate(Sddm<T, I>),
-}
-
-impl<T: Real, I: Index> Arm<T, I> {
-    /// Exact up to the config's dimension, else folded or covered.
-    pub(super) fn of_block(
-        adjacency: UpperAdjacency<T, I>,
-        balance: Balance<T>,
-        config: &Config,
-    ) -> Self {
-        match config.dense(adjacency.n()) {
-            true => Self::Exact(Signed::new(adjacency, balance)),
-            false => Self::Approximate(Sddm::of_block(adjacency, balance)),
-        }
-    }
 }
 
 /// The factor of what the elimination leaves; it builds its own Triangular, so its facts come from that matrix.

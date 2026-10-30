@@ -233,35 +233,25 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         let count = sheets.count();
         let n = (self.sums.len() - 1) / count;
         let kept = block.surplus().map(|s| &s[s.len() - n..]);
+        let ground = |k: usize| self.ground[count * k];
         let mut surplus: Vec<T> = (0..n)
-            .map(|k| (self.ground[count * k], k))
-            .map(|(g, k)| kept.map_or(g, |s| s[k] + g))
+            .map(|k| kept.map_or(ground(k), |s| s[k] + ground(k)))
             .collect();
         let (mut ptrs, mut indices, mut values) = (vec![0], Vec::new(), Vec::new());
         let two = T::one() + T::one();
         for k in 0..n {
-            let span = self.ptrs[count * k]..self.ptrs[count * k + 1];
-            let mut row = (self.indices[span.clone()].iter())
-                .map(|c| c.index())
-                .zip(self.values[span].iter().map(|&v| -v))
-                .peekable();
-            while let Some((column, w)) = row.next() {
-                let j = column / count;
-                // Columns sort, so a `j⁻` follows its `j⁺`.
-                let (same, opposite) = match column % count {
-                    0 => (
-                        w,
-                        row.next_if(|&(c, _)| c / count == j)
-                            .map_or(T::zero(), |e| e.1),
-                    ),
-                    _ => (T::zero(), w),
-                };
-                let gain = two * same.min(opposite);
-                if gain > T::zero() {
-                    surplus[k] = surplus[k] + gain;
-                    surplus[j] = surplus[j] + gain;
+            let mut at = self.ptrs[count * k];
+            let columns = &self.indices[at..self.ptrs[count * k + 1]];
+            for pair in columns.chunk_by(|a, b| a.index() / count == b.index() / count) {
+                let mut sums = [T::zero(); 2];
+                for (c, &v) in pair.iter().zip(&self.values[at..]) {
+                    sums[c.index() % count] = -v;
                 }
-                if opposite - same != T::zero() {
+                at += pair.len();
+                let ([same, opposite], j) = (sums, pair[0].index() / count);
+                surplus[k] = surplus[k] + two * same.min(opposite);
+                surplus[j] = surplus[j] + two * same.min(opposite);
+                if opposite != same {
                     indices.push(I::from_index(j));
                     values.push(opposite - same);
                 }

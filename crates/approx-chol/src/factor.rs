@@ -23,8 +23,9 @@ use crate::storage::OffDiagonal;
 use crate::ScalingReport;
 use crate::{Index, Real};
 use block_elimination::BlockElimination;
-use cholesky::{Arm, Cholesky, CliqueTreeElimination};
+use cholesky::{Arm, Cholesky, CliqueTreeElimination, Signed};
 use schur::BipartiteBlock;
+use sddm::Sddm;
 
 /// `log₂` of the multiply-adds a block elimination's task carries, below which a split costs more than it saves.
 const MULTIPLY_ADD_GRAIN_BITS: u32 = 17;
@@ -221,7 +222,10 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
         let draws = streams.cholesky();
         let (elimination, cholesky) = match off_diagonal {
             OffDiagonal::General(adjacency) => {
-                let arm = Arm::of_block(adjacency, balance, config);
+                let arm = match config.dense(adjacency.n()) {
+                    true => Arm::Exact(Signed::new(adjacency, balance)),
+                    false => Arm::Approximate(Sddm::of_block(adjacency, balance)),
+                };
                 (None, Cholesky::factor(arm, draws, tail(0), reused))
             }
             OffDiagonal::Bipartite(cross) => {
