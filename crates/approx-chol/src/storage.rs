@@ -151,7 +151,7 @@ impl<T: Real, I: Index> Rows<T, I> {
     }
 
     /// `Σ|x|` in `f64`, row `i`'s at `i`, column `j`'s at `offset + j`: a row lands whole, after any column sharing its slot.
-    pub(crate) fn abs_sums(&self, offset: usize) -> Vec<f64> {
+    fn abs_sums(&self, offset: usize) -> Vec<f64> {
         let mut sums = vec![0.0; offset + self.n_cols];
         for i in 0..self.n_rows() {
             let mut sum = 0.0;
@@ -335,12 +335,11 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
 
     /// Each row's off-diagonal count, both triangles.
     pub(crate) fn degrees(&self) -> Vec<usize> {
-        let (rows, offset) = self.stored();
         let mut degree = vec![0usize; self.n()];
-        for (i, span) in rows.ptrs.windows(2).enumerate() {
-            degree[i] += span[1] - span[0];
-            for &j in &rows.indices[span[0]..span[1]] {
-                degree[offset + j.index()] += 1;
+        for (i, row) in self.upper_rows() {
+            for (j, _) in row {
+                degree[i] += 1;
+                degree[j] += 1;
             }
         }
         degree
@@ -365,8 +364,16 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
         }
     }
 
+    /// Each stored row `i` with its entries `(j, a_ij)` in local order: every edge once.
+    pub(crate) fn upper_rows(
+        &self,
+    ) -> impl Iterator<Item = (usize, impl Iterator<Item = (usize, &T)>)> {
+        let (rows, offset) = self.stored();
+        (0..rows.n_rows()).map(move |i| (i, rows.row(i).map(move |(j, a)| (offset + j, a))))
+    }
+
     /// The stored entries, and where their columns start in local order.
-    pub(crate) fn stored(&self) -> (&Rows<T, I>, usize) {
+    fn stored(&self) -> (&Rows<T, I>, usize) {
         match self {
             Self::General(adjacency) => (&adjacency.rows, 0),
             Self::Bipartite(cross) => (cross, cross.n_rows()),
