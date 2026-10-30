@@ -7,7 +7,7 @@ use num_traits::PrimInt;
 use rayon::prelude::*;
 
 use super::block::{Balance, BlockComplement, Congruent, Grounding, IrreducibleBlock, ReduceError};
-use super::congruence::{Congruence, ScaledFactors};
+use super::congruence::Congruence;
 use super::decomposition::{
     of_csr, of_upper, AdjacencyLayout, Biadjacency, Cells, Components, Partitioned,
     StrictUpperTriangle, Summands,
@@ -150,33 +150,20 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         let (m, rows, vector) = match relaxation {
             // Signs keep every magnitude, so `A_c`'s rows are `M`'s.
             None => {
-                let m = Congruent::new(self.vertices, self.off_diagonal, signs);
+                let m = Congruent::signed(self.vertices, self.off_diagonal, signs);
                 (m, self.rows, ScaleVector::Identity)
             }
             Some((scales, vector)) => {
-                let factors: Box<[T]> = (scales.iter().enumerate())
-                    .map(|(i, &scale)| signs.factor(i) * scale)
-                    .collect();
-                let (off_diagonal, abs) = (self.off_diagonal.scaled_abs_row_sums(&factors))
+                let (m, abs) = Congruent::scaled(self.vertices, self.off_diagonal, signs, &scales)
                     .ok_or(ReduceError::Unscalable { vertex })?;
                 let diagonal = (self.rows.diagonal.iter().zip(&scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();
-                let m = Congruent {
-                    vertices: self.vertices,
-                    congruence: Congruence::Scaled(ScaledFactors::new(factors)),
-                    off_diagonal,
-                    report: None,
-                };
                 (m, RowSums { diagonal, abs }, vector)
             }
         };
         let deficits = (rows.diagonal.iter().zip(&rows.abs)).map(|(&d, &s)| widen(s) - widen(d));
-        let clamped = vector.worst_past_band(deficits, &rows.diagonal, &m.off_diagonal);
-        let m = Congruent {
-            report: vector.report(clamped),
-            ..m
-        };
+        let clamped = vector.worst_past_band(deficits, &rows.diagonal, m.off_diagonal());
         match folded {
             true => Ok(Signed::Folded(Folded {
                 m,
@@ -184,9 +171,10 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 vector,
                 clamped,
             })),
-            false => Ok(Signed::Frustrated(
-                m.block(Balance::Frustrated(surplus(&rows.diagonal, rows.abs)))?,
-            )),
+            false => Ok(Signed::Frustrated(m.block(
+                Balance::Frustrated(surplus(&rows.diagonal, rows.abs)),
+                vector.report(clamped),
+            )?)),
         }
     }
 }
@@ -215,8 +203,9 @@ struct Folded<T, I> {
 impl<T: Real, I: Index> Folded<T, I> {
     /// `M` floating or grounded on `M1`: `1ᵀM1 = tr M − Σ|offdiag(M)|`, both `ε`-scaled as the Gram path's, so `tr M` cannot overflow.
     fn block(self) -> Result<IrreducibleBlock<T, I>, ReduceError> {
-        let vertex = self.m.vertices[0].index();
-        let off_diagonal = &self.m.off_diagonal;
+        let report = self.vector.report(self.clamped);
+        let vertex = self.m.vertices()[0].index();
+        let off_diagonal = self.m.off_diagonal();
         let epsilon = widen(T::epsilon());
         let diagonal = crate::Sum2::of(&self.rows.diagonal, |_, d| epsilon * widen(d));
         let trace = diagonal.total();
@@ -225,7 +214,9 @@ impl<T: Real, I: Index> Folded<T, I> {
         let RowSums { diagonal, abs } = &self.rows;
         let residues = (diagonal.iter().zip(abs)).map(|(&d, &s)| widen(d) - widen(s));
         if within_band::<T>(ones, trace) && self.floats(residues) {
-            return self.m.block(Balance::Balanced(Grounding::ungrounded()));
+            return self
+                .m
+                .block(Balance::Balanced(Grounding::ungrounded()), report);
         }
         let Self {
             m,
@@ -236,7 +227,7 @@ impl<T: Real, I: Index> Folded<T, I> {
             grounding if grounding.is_grounded() => grounding,
             // An uncompensated `f64` row sum can round up to `d_i` from degree 67 (#269).
             _ => {
-                let sums = m.off_diagonal.compensated_abs_row_sums();
+                let sums = m.off_diagonal().compensated_abs_row_sums();
                 let residues = (diagonal.iter().zip(sums))
                     .map(|(&d, s)| narrow((widen(d) - s).max(0.0)))
                     .collect();
@@ -245,7 +236,7 @@ impl<T: Real, I: Index> Folded<T, I> {
                     .ok_or(ReduceError::Unscalable { vertex })?
             }
         };
-        m.block(Balance::Balanced(grounding))
+        m.block(Balance::Balanced(grounding), report)
     }
 
     /// Whether no row's surplus outweighs its coupling or passes its band.
@@ -255,7 +246,7 @@ impl<T: Real, I: Index> Folded<T, I> {
             return false;
         }
         let excess = (surplus.zip(diagonal)).map(|(s, &d)| s - self.clamped * widen(d));
-        (self.vector).worst_past_band(excess, diagonal, &self.m.off_diagonal) == 0.0
+        (self.vector).worst_past_band(excess, diagonal, self.m.off_diagonal()) == 0.0
     }
 }
 

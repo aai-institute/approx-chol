@@ -1,6 +1,6 @@
 //! One reduced irreducible block, its balance and grounding.
 
-use super::congruence::{Congruence, Restriction};
+use super::congruence::{Congruence, Restriction, ScaledFactors};
 use super::diagonal_in_range;
 use super::scaling::ScalingReport;
 use crate::storage::{OffDiagonal, Rows};
@@ -154,15 +154,14 @@ type ComplementParts<T, I> = (
 
 /// `M = F · A_c · F` over its vertices, its surplus still to be decided.
 pub(super) struct Congruent<T, I> {
-    pub(super) vertices: Box<[I]>,
-    pub(super) congruence: Congruence<T>,
-    pub(super) off_diagonal: OffDiagonal<T, I>,
-    pub(super) report: Option<ScalingReport>,
+    vertices: Box<[I]>,
+    congruence: Congruence<T>,
+    off_diagonal: OffDiagonal<T, I>,
 }
 
 impl<T: Real, I: Index> Congruent<T, I> {
     /// `S A_c S`, unscaled.
-    pub(super) fn new(
+    pub(super) fn signed(
         vertices: Box<[I]>,
         off_diagonal: OffDiagonal<T, I>,
         signs: Congruence<T>,
@@ -175,17 +174,65 @@ impl<T: Real, I: Index> Congruent<T, I> {
             vertices,
             congruence: signs,
             off_diagonal,
-            report: None,
         }
     }
 
+    /// `S R A_c R S` with its `Σ_j |m_ij|`; `None` once a scaled entry leaves the range.
+    pub(super) fn scaled(
+        vertices: Box<[I]>,
+        off_diagonal: OffDiagonal<T, I>,
+        signs: Congruence<T>,
+        scales: &[T],
+    ) -> Option<(Self, Vec<T>)> {
+        let factors: Box<[T]> = (scales.iter().enumerate())
+            .map(|(i, &scale)| signs.factor(i) * scale)
+            .collect();
+        let (off_diagonal, abs) = off_diagonal.scaled_abs_row_sums(&factors)?;
+        let congruence = Congruence::Scaled(ScaledFactors::new(factors));
+        let m = Self {
+            vertices,
+            congruence,
+            off_diagonal,
+        };
+        Some((m, abs))
+    }
+
+    /// An incidence Gram, assembled switched across a bipartition.
+    pub(super) fn incidence(vertices: Box<[I]>, off_diagonal: OffDiagonal<T, I>) -> Self {
+        let congruence = match &off_diagonal {
+            OffDiagonal::Bipartite(c) => Congruence::NegateFrom(c.n_rows()),
+            OffDiagonal::General(_) => Congruence::Identity,
+        };
+        Self {
+            vertices,
+            congruence,
+            off_diagonal,
+        }
+    }
+
+    /// In `A`'s numbering, in local order.
+    pub(super) fn vertices(&self) -> &[I] {
+        &self.vertices
+    }
+
+    pub(super) fn off_diagonal(&self) -> &OffDiagonal<T, I> {
+        &self.off_diagonal
+    }
+
+    pub(super) fn factor(&self, i: usize) -> T {
+        self.congruence.factor(i)
+    }
+
     /// Panics unless one factor, row and surplus per vertex; the ground's `Σs` must clear the bound any diagonal does, and `I` must index the factor's vertices.
-    pub(super) fn block(self, balance: Balance<T>) -> Result<IrreducibleBlock<T, I>, ReduceError> {
+    pub(super) fn block(
+        self,
+        balance: Balance<T>,
+        report: Option<ScalingReport>,
+    ) -> Result<IrreducibleBlock<T, I>, ReduceError> {
         let Self {
             vertices,
             congruence,
             off_diagonal,
-            report,
         } = self;
         let restriction = Restriction::new(vertices, congruence);
         let vertices = restriction.vertices();
