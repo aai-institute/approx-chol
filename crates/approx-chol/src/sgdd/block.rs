@@ -24,13 +24,7 @@ impl<T> Balance<T> {
         }
     }
 
-    fn grounding(&self) -> &Grounding<T> {
-        match self {
-            Self::Balanced(grounding) | Self::Frustrated(grounding) => grounding,
-        }
-    }
-
-    pub(crate) fn split(self) -> (Sheets, Grounding<T>) {
+    fn split(self) -> (Sheets, Grounding<T>) {
         let sheets = self.sheets();
         match self {
             Self::Balanced(grounding) | Self::Frustrated(grounding) => (sheets, grounding),
@@ -38,7 +32,7 @@ impl<T> Balance<T> {
     }
 }
 
-/// How many copies of each vertex a matrix holds: two for a Gremban cover.
+/// How many copies of each vertex a matrix holds: two for a Gremban cover, interleaved by vertex.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Sheets {
@@ -124,7 +118,8 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         let vertices = restriction.vertices();
         let n = vertices.len();
         assert_eq!(off_diagonal.n(), n, "one row per vertex");
-        let (sheets, grounding) = (balance.sheets(), balance.grounding());
+        let (Balance::Balanced(grounding) | Balance::Frustrated(grounding)) = &balance;
+        let sheets = balance.sheets();
         debug_assert!(
             sheets == Sheets::Two || off_diagonal.nonpositive(),
             "a balanced M is a Z-matrix"
@@ -137,7 +132,11 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
         }
         // The ground is a vertex too: its diagonal `Σs`, once per sheet, clears the same bound as any other.
         let total = surplus.iter().fold(T::zero(), |sum, &s| sum + s);
-        if !diagonal_in_range(crate::narrow::<T>(sheets.count() as f64) * total) {
+        let ground = match sheets {
+            Sheets::One => total,
+            Sheets::Two => total + total,
+        };
+        if !diagonal_in_range(ground) {
             let vertex = vertices.vertex(0);
             return Err(ReduceError::OutOfRange { vertex });
         }
@@ -156,10 +155,12 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
 
     /// Moved out, so each part is freed once its factor stops reading it.
     pub(crate) fn into_parts(self) -> BlockParts<T, I> {
+        let (sheets, grounding) = self.balance.split();
         (
             self.restriction,
             self.off_diagonal,
-            self.balance,
+            sheets,
+            grounding,
             self.report,
         )
     }
@@ -168,7 +169,8 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
 type BlockParts<T, I> = (
     Box<Restriction<T, I>>,
     OffDiagonal<T, I>,
-    Balance<T>,
+    Sheets,
+    Grounding<T>,
     Option<Box<ScalingReport>>,
 );
 
