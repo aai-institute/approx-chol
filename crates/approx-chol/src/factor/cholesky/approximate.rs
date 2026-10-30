@@ -5,7 +5,7 @@ mod ordering;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use crate::factor::clique_tree::{CliqueTreeSampler, Copies, Fill};
+use crate::factor::clique_tree::{CliqueTreeSampler, Copies, Fill, Multi, Single};
 use crate::factor::sddm::Sddm;
 #[cfg(feature = "serde")]
 use crate::factor::within_one;
@@ -14,7 +14,38 @@ use graph::EliminationGraph;
 use ordering::MinDegreeOrder;
 
 /// A task's AC or AC2 elimination; small blocks reuse its buffers (malloc was 17% of 20-vertex covers).
-pub(crate) struct CliqueTreeElimination<T, I, C: Copies> {
+pub(crate) struct CliqueTreeElimination<T, I>(ByCopies<T, I>);
+
+enum ByCopies<T, I> {
+    Ac(Elimination<T, I, Single>),
+    Ac2(Elimination<T, I, Multi>),
+}
+
+impl<T: Real, I: Index> CliqueTreeElimination<T, I> {
+    /// AC2 at `split`'s copies, else AC.
+    pub(in crate::factor) fn new(split: Option<Multi>) -> Self {
+        Self(match split {
+            None => ByCopies::Ac(Elimination::new(Single)),
+            Some(split) => ByCopies::Ac2(Elimination::new(split)),
+        })
+    }
+
+    /// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree; the last, `pin` when given, is the slot the solve zeroes.
+    pub(super) fn eliminate(
+        &mut self,
+        sddm: Sddm<T, I>,
+        draws: Xoshiro256PlusPlus,
+        pin: Option<usize>,
+    ) -> (ApproximateCholesky<T, I>, usize) {
+        match &mut self.0 {
+            ByCopies::Ac(elimination) => elimination.eliminate(sddm, draws, pin),
+            ByCopies::Ac2(elimination) => elimination.eliminate(sddm, draws, pin),
+        }
+    }
+}
+
+/// One copy count's elimination: `C` reaches every edge, so it is fixed per task.
+struct Elimination<T, I, C: Copies> {
     split: C,
     graph: EliminationGraph<T, I, C>,
     clique: CliqueTreeSampler<T, I, C>,
@@ -22,8 +53,8 @@ pub(crate) struct CliqueTreeElimination<T, I, C: Copies> {
     order: MinDegreeOrder<I>,
 }
 
-impl<T: Real, I: Index, C: Copies> CliqueTreeElimination<T, I, C> {
-    pub(in crate::factor) fn new(split: C) -> Self {
+impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
+    fn new(split: C) -> Self {
         Self {
             split,
             graph: EliminationGraph::new(),
@@ -33,8 +64,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeElimination<T, I, C> {
         }
     }
 
-    /// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree; the last, `pin` when given, is the slot the solve zeroes.
-    pub(super) fn eliminate(
+    fn eliminate(
         &mut self,
         sddm: Sddm<T, I>,
         mut draws: Xoshiro256PlusPlus,

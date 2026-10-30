@@ -3,7 +3,6 @@ mod dense;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use super::clique_tree::Copies;
 use super::sddm::{descend, lift, Sddm, Sheets};
 use crate::narrow;
 use crate::sgdd::FactorTail;
@@ -38,11 +37,11 @@ pub(super) struct Cholesky<T, I> {
 
 impl<T: Real, I: Index> Cholesky<T, I> {
     /// Dense on the exact arm, else approximate; `tail` is `F` on its vertices, `None` when every `|f|` is `1`.
-    pub(super) fn factor<C: Copies>(
+    pub(super) fn factor(
         arm: Arm<T, I>,
         draws: Xoshiro256PlusPlus,
         tail: Option<FactorTail<'_, T>>,
-        elimination: &mut CliqueTreeElimination<T, I, C>,
+        elimination: &mut CliqueTreeElimination<T, I>,
     ) -> Self {
         let (sheets, grounded, n, pinned, triangular) = match arm {
             Arm::Exact(signed) => {
