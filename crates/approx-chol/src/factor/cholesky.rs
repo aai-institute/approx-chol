@@ -3,7 +3,7 @@ mod dense;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use super::sddm::{descend, lift, Sddm};
+use super::sddm::{descend, first_copy, lift, Sddm};
 use crate::narrow;
 use crate::sgdd::{FactorTail, Sheets};
 use crate::{widen, Index, Real};
@@ -108,8 +108,6 @@ impl<T: Real, I: Index> Cholesky<T, I> {
             (Sheets::Two, _) => {
                 let rows = &mut scratch[..self.scratch_len()];
                 lift(x, rows);
-                // A lift sums to zero, so the ground's right-hand side is zero and its shift cancels in the descent.
-                rows[2 * x.len()..].fill(T::zero());
                 triangular.substitute(rows, self.pinned);
                 descend(rows, x);
             }
@@ -126,7 +124,7 @@ fn pinned<T: Real>(
 ) -> usize {
     match grounded {
         true => n,
-        false => tail.map_or(n - 1, |tail| sheets.count() * tail.largest()),
+        false => tail.map_or(n - 1, |tail| first_copy(sheets, tail.largest())),
     }
 }
 
