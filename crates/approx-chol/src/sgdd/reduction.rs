@@ -12,7 +12,7 @@ use super::decomposition::{
     of_csr, of_upper, AdjacencyLayout, Biadjacency, Cells, Components, Partitioned,
     StrictUpperTriangle, Summands,
 };
-use super::scaling::{self, ScaleVector, ScalingPolicy};
+use super::scaling::{self, ScaleVector, ScalingPolicy, RATIO_BAND};
 use super::{diagonal_in_range, Complement, Reduced};
 use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Lowered, Side};
 use crate::storage::OffDiagonal;
@@ -200,43 +200,101 @@ struct Folded<T, I> {
     clamped: f64,
 }
 
+/// What decides a folded `M`'s float or ground besides its rows: a CSR `A` has only `M`, a Gram also `V`.
+enum Evidence<'a, I> {
+    /// `M`'s rows give its band, residues and grounds; a scaled block's residues decide as a dominant one's.
+    Rows,
+    /// `V`'s column pass gives them instead.
+    Columns(Columns<'a, I>),
+}
+
+/// One column pass over `V`, by vertex of `A`, and what `V` certifies.
+struct Columns<'a, I> {
+    /// This block's `ε·1ᵀM1`.
+    ones: f64,
+    /// This block's `ε·tr M`.
+    trace: f64,
+    /// Each row's `(M1)_i`.
+    surplus: &'a [f64],
+    /// Each row's ground stated by one-ended columns.
+    stated: &'a [f64],
+    /// Whether the block's cycles all close within `√ε`; read only when nothing else floats it.
+    certified: &'a dyn Fn(&[I]) -> bool,
+}
+
 impl<T: Real, I: Index> Folded<T, I> {
-    /// `M` floating or grounded on `M1`: `1ᵀM1 = tr M − Σ|offdiag(M)|`, both `ε`-scaled as the Gram path's, so `tr M` cannot overflow.
+    /// `M` floating or grounded on `M1`, as its rows say.
     fn block(self) -> Result<IrreducibleBlock<T, I>, ReduceError> {
+        self.settle(Evidence::Rows)
+    }
+
+    /// The one float-or-ground rule: in band and admitted by `evidence`; a Gram block never floats past a stated ground, nor scaled unless certified.
+    fn settle(self, evidence: Evidence<'_, I>) -> Result<IrreducibleBlock<T, I>, ReduceError> {
+        let floats = match &evidence {
+            Evidence::Rows => {
+                let (ones, trace) = self.band();
+                let RowSums { diagonal, abs } = &self.rows;
+                let residues = (diagonal.iter().zip(abs)).map(|(&d, &s)| widen(d) - widen(s));
+                within_band::<T>(ones, trace) && self.floats(residues)
+            }
+            Evidence::Columns(columns) => {
+                let epsilon = widen(T::epsilon());
+                let rows = (self.m.vertices().iter()).map(|v| v.index());
+                // A stated ground sums without cancellation, so the floor ignores degree.
+                let stated_ground = (rows.clone().zip(&self.rows.diagonal))
+                    .any(|(v, &d)| columns.stated[v] > RATIO_BAND * epsilon * widen(d));
+                let dominant = matches!(self.vector, ScaleVector::Identity);
+                // A Gram's grounds are stated or break a cycle: closing all, `V` is singular within `√ε`.
+                !stated_ground
+                    && within_band::<T>(columns.ones, columns.trace)
+                    && ((dominant && self.floats(rows.map(|v| columns.surplus[v])))
+                        || (columns.certified)(self.m.vertices()))
+            }
+        };
         let report = self.vector.report(self.clamped);
-        let vertex = self.m.vertices()[0].index();
-        let off_diagonal = self.m.off_diagonal();
+        let Self { m, rows, .. } = self;
+        if floats {
+            return m.block(Balance::Balanced(Grounding::ungrounded()), report);
+        }
+        let vertex = m.vertices()[0].index();
+        let grounding = match evidence {
+            Evidence::Rows => {
+                let RowSums { diagonal, abs } = rows;
+                match surplus(&diagonal, abs) {
+                    grounding if grounding.is_grounded() => grounding,
+                    // An uncompensated `f64` row sum can round up to `d_i` from degree 67 (#269).
+                    _ => {
+                        let sums = m.off_diagonal().compensated_abs_row_sums();
+                        let residues = (diagonal.iter().zip(sums))
+                            .map(|(&d, s)| narrow((widen(d) - s).max(0.0)))
+                            .collect();
+                        Grounding::of(residues)
+                    }
+                }
+            }
+            // Every rounded surplus ≤ 0 leaves nothing to ground: out of band, only past degree ~2·10⁸ (#299).
+            Evidence::Columns(columns) => Grounding::of(
+                (m.vertices().iter())
+                    .map(|&v| narrow(columns.surplus[v.index()].max(0.0)))
+                    .collect(),
+            ),
+        };
+        match grounding.is_grounded() {
+            true => m.block(Balance::Balanced(grounding), report),
+            false => Err(ReduceError::Unscalable { vertex }),
+        }
+    }
+
+    /// `(ε·1ᵀM1, ε·tr M)` from `M`'s rows, `1ᵀM1 = tr M − Σ|offdiag(M)|`, so `tr M` cannot overflow.
+    fn band(&self) -> (f64, f64) {
         let epsilon = widen(T::epsilon());
         let diagonal = crate::Sum2::of(&self.rows.diagonal, |_, d| epsilon * widen(d));
         let trace = diagonal.total();
         // `tr M` rounded on its own drops a surplus below its ulp, which the Gram path keeps.
-        let ones = off_diagonal.scaled_abs_into(diagonal, -epsilon).total();
-        let RowSums { diagonal, abs } = &self.rows;
-        let residues = (diagonal.iter().zip(abs)).map(|(&d, &s)| widen(d) - widen(s));
-        if within_band::<T>(ones, trace) && self.floats(residues) {
-            return self
-                .m
-                .block(Balance::Balanced(Grounding::ungrounded()), report);
-        }
-        let Self {
-            m,
-            rows: RowSums { diagonal, abs },
-            ..
-        } = self;
-        let grounding = match surplus(&diagonal, abs) {
-            grounding if grounding.is_grounded() => grounding,
-            // An uncompensated `f64` row sum can round up to `d_i` from degree 67 (#269).
-            _ => {
-                let sums = m.off_diagonal().compensated_abs_row_sums();
-                let residues = (diagonal.iter().zip(sums))
-                    .map(|(&d, s)| narrow((widen(d) - s).max(0.0)))
-                    .collect();
-                Some(Grounding::of(residues))
-                    .filter(Grounding::is_grounded)
-                    .ok_or(ReduceError::Unscalable { vertex })?
-            }
-        };
-        m.block(Balance::Balanced(grounding), report)
+        let ones = (self.m.off_diagonal())
+            .scaled_abs_into(diagonal, -epsilon)
+            .total();
+        (ones, trace)
     }
 
     /// Whether no row's surplus outweighs its coupling or passes its band.

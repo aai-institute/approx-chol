@@ -2,11 +2,11 @@ use std::cell::LazyCell;
 
 use num_traits::PrimInt;
 
-use super::{within_band, Folded, Signed, SymmetricBlock};
+use super::{Columns, Evidence, Folded, Signed, SymmetricBlock};
 use crate::input::{Column, FactorWidth2};
-use crate::sgdd::block::{Balance, Grounding, IrreducibleBlock, ReduceError};
+use crate::sgdd::block::{IrreducibleBlock, ReduceError};
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components, Summands};
-use crate::sgdd::scaling::{self, ScaleVector, ScalingPolicy, RATIO_BAND};
+use crate::sgdd::scaling::{self, ScalingPolicy};
 use crate::sgdd::Reduced;
 use crate::{narrow, widen, Index, Real};
 
@@ -63,7 +63,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
     }
 }
 
-/// Grounds a folded block on `s = M·1` unless, in band and stating no ground, its cycles close or, dominant, [`Folded::floats`] admits it.
+/// Each folded block settled by [`Folded::settle`] on one pass over `V`'s columns.
 fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
     blocks: Vec<Folded<T, I>>,
@@ -124,37 +124,18 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     if let Some(vertex) = surplus.iter().position(|s| !in_range(s)) {
         return Err(ReduceError::OutOfRange { vertex });
     }
+    let certified = |vertices: &[I]| {
+        (vertices.iter().min()).is_some_and(|v| certified.binary_search(v).is_ok())
+    };
     let decided = blocks.into_iter().zip(ones).zip(trace);
     (decided.map(|((folded, ones), trace)| {
-        let rows = (folded.m.vertices().iter()).map(|v| v.index());
-        // A stated ground sums without cancellation, so the floor ignores degree.
-        let stated_ground = (rows.clone().zip(&folded.rows.diagonal))
-            .any(|(v, &d)| stated[v] > RATIO_BAND * epsilon * widen(d));
-        let in_band = within_band::<T>(ones, trace);
-        let dominant = matches!(folded.vector, ScaleVector::Identity);
-        // A Gram's grounds are stated or break a cycle: closing all, `V` is singular within `√ε`.
-        let floats = !stated_ground
-            && in_band
-            && ((dominant && folded.floats(rows.map(|v| surplus[v])))
-                || (folded.m.vertices().iter().min())
-                    .is_some_and(|v| certified.binary_search(v).is_ok()));
-        let report = folded.vector.report(folded.clamped);
-        let block = folded.m;
-        if floats {
-            return block.block(Balance::Balanced(Grounding::ungrounded()), report);
-        }
-        let vertices = block.vertices();
-        let grounds: Vec<T> = (vertices.iter())
-            .map(|&v| narrow(surplus[v.index()].max(0.0)))
-            .collect();
-        // Every rounded surplus ≤ 0 leaves nothing to ground: out of band, only past degree ~2·10⁸ (#299).
-        let vertex = vertices[0].index();
-        match Grounding::of(grounds) {
-            grounding if grounding.is_grounded() => {
-                block.block(Balance::Balanced(grounding), report)
-            }
-            _ => Err(ReduceError::Unscalable { vertex }),
-        }
+        folded.settle(Evidence::Columns(Columns {
+            ones,
+            trace,
+            surplus: &surplus,
+            stated: &stated,
+            certified: &certified,
+        }))
     }))
     .collect()
 }
