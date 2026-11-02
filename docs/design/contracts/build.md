@@ -9,26 +9,28 @@ How a caller turns an admissible matrix into the approximate inverse $B$. The re
   limit, largest component factored exactly), valid by construction, each setting defaulted; a
   thread budget (a nonzero count or all cores), named in Rust, all cores by default in Python;
   an observer, `()` for none, which receives diagnostics and may stop the build.
-- **Result:** $B$, stopped, or a `BuildError` when a computed scale, scaled entry or row sum leaves
-  the representable range, located in the caller's numbering.
+- **Result:** $B$, stopped, or a `BuildError`, located in the caller's numbering: a computed
+  scale, scaled entry or scaled row sum leaves the representable range, or a component has more
+  than $1/\varepsilon$ vertices.
 - **Facts on $B$**, of the target $A_r$ in the caller's numbering: the components, and per
-  component its null vector if singular and its clamp if past rounding. A clamp states whether
-  the scaling settled: settled proves the component is not GDD; unsettled means the steps ran out.
-  Clamped rows, step counts, fill and durations go only to the observer.
+  component its null vector if singular and its clamp if past the rounding band. A clamp states
+  whether the scaling was refuted, proving the component is not GDD, or unsettled, its steps run
+  out. Clamped rows, step counts, fill and durations go only to the observer.
 - **Schur complement:** the same, with a `BipartiteFactorWidth2` and the side to keep; $B$
-  approximates the pseudoinverse of the Schur complement of $A_r$ on that side, and its facts are
-  numbered there.
-- **Threads:** the caller's pool, never a new one, at most the budget.
+  approximates the pseudoinverse of the Schur complement of $A_r$ on that side; components and
+  null vectors are the complement's, numbered there, and clamps are per component of $A$.
+- **Threads:** the caller's pool, never a new one, at most the budget, safe nested in the caller's
+  parallel work. $B$ is bit-identical for every budget and every observer that does not stop it.
+- **Python:** Ctrl-C stops the build.
 
 ## Why
 
-- **`BuildError`:** Submit decides everything the entries decide; the scaling's range depends on
-  the computed scaling, so only the build can find it.
+- **`BuildError`:** both cases need the build's own computation, the scaling or the components;
+  Submit checks what single entries and rows decide.
 - **Budget apart from the configuration:** it does not change $B$, so the configuration stays a
   value that can be compared and saved.
 - **Budget named in Rust:** a Rust caller often runs its own parallelism; no default fits inside and
   outside a parallel loop. A Python caller expects the machine.
-- **Stop as an outcome:** the caller asked for it.
 - **Facts on $B$:** the solve needs the null vectors itself, and they persist with $B$.
 - **Diagnostics through the observer:** they serve watching, profiling and tests, not the solve; a
   caller who does not observe pays nothing.

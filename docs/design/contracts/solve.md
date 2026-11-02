@@ -10,7 +10,8 @@ How a caller applies $B$ to right-hand sides. The requirements are "Solve", "Sol
   type, named in Rust, all cores by default in Python. A Schur $B$ is sized and numbered on the
   kept side.
 - **Each column equals its solve alone,** bit for bit, for every $k$ and every budget.
-- **Target:** $B$ approximates $A_r^+$, or $H^+$ for a Schur $B$. On a singular component the
+- **Target:** $B$ approximates $A_r^+$, or $H^+$ for a Schur $B$, $H$ the Schur complement of
+  $A_r$. On a singular component the
   solve projects the right-hand side and the solution onto the range, and reports no defect.
 - **Solver:** a handle borrowed from $B$ for at most some $k$ columns, owning the scratch; one per
   concurrent solve. Solving only reads $B$, so any number of handles solve with one $B$ at once.

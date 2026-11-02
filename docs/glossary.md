@@ -74,7 +74,7 @@ take. "(not: …)" lists synonyms we don't use.
 - **Z-matrix:** every off-diagonal entry is $\le 0$.
 - **Comparison matrix** $M(A)$: $m_{ii} = |a_{ii}|$; $m_{ij} = -|a_{ij}|$ for $i \ne j$. It is a
   Z-matrix.
-- **Laplacian** of a graph with edge weights $w_e > 0$: $L = \sum_e w_e \chi_e \chi_e^\top$.
+- **Laplacian** of a graph with edge weights $w_e \ge 0$: $L = \sum_e w_e \chi_e \chi_e^\top$.
   Equivalently, a symmetric Z-matrix with every row sum $0$. $L\mathbf{1} = 0$, so it is singular.
 - **SDDM:** $L + \operatorname{diag}(s)$ with $L$ a Laplacian and $s \ge 0$; equivalently, a
   symmetric WDD Z-matrix. It is nonsingular iff every component has some $s_i > 0$. The name
@@ -83,7 +83,7 @@ take. "(not: …)" lists synonyms we don't use.
 - **Factor width** of a PSD $A$: the least $k$ such that $A = VV^\top$ with at most $k$ nonzeros per
   column of $V$.
 - **Factor-width-2 form:** $A = VWV^\top$ given by $V$ with at most two nonzeros per column and $W$
-  positive diagonal.
+  nonnegative diagonal.
 - **Generalized diagonally dominant (GDD):** some positive diagonal $D$ makes $DAD$ WDD. Weak, so
   $A$ may be singular. For symmetric $A$ these are equivalent (Boman, Chen, Parekh, Toledo 2005,
   "On factor width and symmetric H-matrices"):

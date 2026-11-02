@@ -14,7 +14,7 @@ The matrices approx-chol accepts and the forms callers give them in.
   | Laplacian of a weighted graph | zero row sums |
   | SDDM: Laplacian plus surplus | each row's surplus |
   | Factor-width-2 form | `A = VWVᵀ`, hence a dominance scaling and any null vector |
-  | Bipartite factor-width-2 form | the split into eliminated and kept side |
+  | Bipartite factor-width-2 form | as factor-width-2, and a split into two sides |
 
 - **Scope.** No other class and no other representation.
 
