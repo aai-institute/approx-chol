@@ -142,8 +142,6 @@ variant; `kind`, `parameter` and `position` are for matching.
   exact terms, for reading, not matching; whether an index or a value is wrong is the variant. A
   bipartite form numbers its vertices left side first, so a vertex is a position on both sides.
 - **`#[non_exhaustive]`:** variants can be added without a breaking release.
-- **`Input` opaque, built only by `From`:** every `Input` is admissible, and it hands nothing
-  back.
 - **sprs, faer and nalgebra-sparse through `TryFrom` into `CsrRef`:** their matrices are
   compressed storage; a symmetric matrix's CSC storage is the CSR of its transpose, so the column
   forms, faer's and nalgebra-sparse's main ones, convert too.
@@ -157,7 +155,5 @@ variant; `kind`, `parameter` and `position` are for matching.
 - **Python: any scipy sparse matrix, inside the build call:** Python users hold scipy matrices,
   networkx's Laplacians among them; within, the one consumer of the other forms, calls Rust. A
   Python input object would be one more step that carries nothing.
-- **No `factorize_raw`:** `csr_array((data, indices, indptr), shape=(n, n))` wraps three numpy
-  arrays of matching index dtypes without a copy.
 - **`InputError` a `ValueError`:** existing `except ValueError` keeps working; `kind` and the
   position mirror the Rust variant.

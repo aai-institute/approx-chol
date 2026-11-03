@@ -65,7 +65,6 @@ pub enum ApplyError {
 }
 ```
 
-- Applying only reads $B$.
 - `scratch(columns, threads)` is what applying to a block of `columns` columns at `threads`
   needs, independent of the pool; it is monotone in both, so a stack that holds it serves every
   block of fewer columns at a smaller budget, `All` above every `Count`. `apply` allocates its
@@ -121,15 +120,8 @@ preconditioner, so it right-preconditions there composed with $A$: `y` from
 
 - **`apply`:** $B$ is the approximate inverse, and applying it solves $Ax = b$ approximately, as
   faer's `LinOp::apply`, PETSc's `PCApply` and scipy's `matvec` apply an operator.
-- **The budget per apply:** it changes no bit of a solution, so it is per-use state beside the
-  scratch, as faer passes `par` beside its stack.
-- **Scratch by columns and budget:** a single right-hand side or a sequential apply is not
-  charged for a block or a parallel one; monotone, so one stack sized for the largest serves all,
-  as faer's LSMR already assumes of its preconditioner. A stack that does not fit is `Scratch`,
-  never a wrong solution.
-- **`apply` allocating, `apply_with` not:** the convenience takes the short name, the explicit
-  form the suffix, as in rustfft's `process`/`process_with_scratch` and regex's
-  `search`/`search_with`.
+- **Monotone scratch:** one stack sized for the largest serves all, as faer's LSMR assumes of its
+  preconditioner.
 - **`MatrixMut` a trait:** an apply only copies columns in and out; each type copies its own way,
   with its strides, without `unsafe`, and the adapters implement it without the approximate
   inverse depending on their crates. A layout costs that copy, 4–8% of a block solve.
@@ -138,7 +130,7 @@ preconditioner, so it right-preconditions there composed with $A$: `y` from
 - **ndarray through `ArrayRef`:** a shared or copy-on-write array copies itself on its first
   write; through `ArrayRef` that happens at the caller's `&mut *a`, in sight.
 - **faer's operator traits:** faer's CG and LSMR take $B$ as is; their `par` and scratch queries
-  map one to one.
+  map one to one, `par` beside the stack as the budget beside the scratch.
 - **Python's held budget:** a `LinearOperator`'s `matvec` takes no budget, so the operator
   holds one; `with_threads` serves a solver that wants another than the build's. `out` is
   numpy's convention for reusing the result.

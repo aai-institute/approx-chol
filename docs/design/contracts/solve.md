@@ -17,9 +17,8 @@ How a caller applies $B$ to right-hand sides. The requirements are "Solve", "Sol
   scratch is sized by the block's column count and the budget, and serves every block of fewer
   columns at a smaller budget. Solving only reads $B$, so any number of solves run with one $B$
   at once, each with its own scratch.
-- **Threads:** the caller's pool, never a new one, at most the budget, safe nested in the caller's
-  parallel work. A solve spreads its budget over $B$'s components, by size; the solution does not
-  depend on how.
+- **Threads:** as Execution, `../architecture.md`. A solve spreads its budget over $B$'s
+  components, by size; the solution does not depend on how.
 - **One error:** a block of the wrong row count, or scratch that does not meet the block's
   requirement. A block's own layout is checked where it is formed.
 - **Python:** $B$ is a scipy `LinearOperator`, its adjoint itself: `matvec` and `matmat`, with

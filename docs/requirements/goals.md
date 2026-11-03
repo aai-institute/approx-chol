@@ -24,13 +24,12 @@ Each requirement names its source: math (the context above), a consumer, or the 
   against cost, and chooses the seed and the thread budget (math). The caller also sets the
   dominance scaling's tolerance and step limit, trading the size of a clamp against cost (within,
   which passes them to its users), and the size up to which a component is factored exactly
-  (product), and how a Schur complement is formed (within).
+  and how a Schur complement is formed (both within, which sets them from its own configuration).
 - **Caller ergonomics:** the API is easy to use correctly, and defaults serve the common case.
   Product.
 - **Reproducibility:** the same input, configuration and seed give the same approximate inverse.
   Product.
-- **Thread determinism:** every result is bit-identical for every thread budget. within; no
-  surveyed library provides it, so the crate cannot inherit it.
+- **Thread determinism:** every result is bit-identical for every thread budget. within.
 - **Persistence:** an approximate inverse can be saved and loaded without refactorizing. Product.
 - **Interoperability:** callers pass the matrices and vectors they hold: in Rust, never
   converted or cloned whole, sparse matrices of faer, sprs and nalgebra-sparse and dense vectors
