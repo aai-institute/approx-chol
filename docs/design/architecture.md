@@ -8,8 +8,8 @@ requirements are in `../requirements/`.
 ```
 5  Adapters              Python binding; faer, sprs, nalgebra, ndarray adapters
 4  Approximate inverse   B: build, solve, report, save and load
-3a Reduction             GDD → SDDM problems, lift, build facts, diagnostics
-3b Cholesky              SDDM → factorization, diagnostics; solve with it
+3a Reduction             GDD → SDDM problems, lift, build facts
+3b Cholesky              SDDM → factorization; solve with it
 2  Input                 the closed admissible-matrix type and its facts
 1a Storage               scalars, sparse storage
 1b Execution             deterministic parallel execution
@@ -19,7 +19,7 @@ requirements are in `../requirements/`.
   only the public surface.
 - The Rust API is the public face of Input and the approximate inverse, with their configuration
   and reports; it is not a part of its own.
-- Each part owns its configuration, diagnostics, errors and encoding. The approximate inverse
+- Each part owns its configuration, errors and encoding. The approximate inverse
   composes them and reaches into none. The adapters report through Input's error for a matrix,
   since a conversion answers the same question; a foreign block needs no check.
 - **Interoperability:** one feature per foreign crate, named after it: `faer` 0.24 with faer's
@@ -62,11 +62,11 @@ requirements are in `../requirements/`.
 | From → to | Crosses |
 |---|---|
 | Caller or adapter → Input | a matrix in one representation; back: an admissible matrix or an input error |
-| Caller or adapter → approximate inverse | admissible matrix, configuration, thread budget, observer; back: B with its facts, stopped, or a build error; to the observer: progress and diagnostics |
+| Caller or adapter → approximate inverse | admissible matrix, configuration, thread budget; back: B with its facts, or a build error |
 | Caller or adapter → approximate inverse (solve) | B; per solve one or several right-hand sides, a thread budget, scratch; back: the solutions, or a solve error |
 | Caller or adapter → approximate inverse (persistence) | B; back: its saved form. Later the saved form; back: B or an error |
-| Approximate inverse → Reduction | admissible matrix; back: SDDM matrices with the vertices each keeps, the lift with its scratch requirement, and the build's facts: clamp, components, null vector of each singular component, diagnostics. During a solve: right-hand sides; back: their lifts, then solutions |
-| Approximate inverse → Cholesky | one SDDM matrix, the vertices it keeps, fill-in control, seed and the component's stream; back: factorization with its scratch requirement, diagnostics. During a solve: right-hand sides; back: solutions |
+| Approximate inverse → Reduction | admissible matrix; back: SDDM matrices with the vertices each keeps, the lift with its scratch requirement, and the build's facts: clamp, components, null vector of each singular component. During a solve: right-hand sides; back: their lifts, then solutions |
+| Approximate inverse → Cholesky | one SDDM matrix, the vertices it keeps, fill-in control, seed and the component's stream; back: factorization with its scratch requirement. During a solve: right-hand sides; back: solutions |
 | Any part → Execution | independent work, thread budget |
 
 ## Why

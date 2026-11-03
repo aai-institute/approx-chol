@@ -21,7 +21,7 @@ Who calls approx-chol and what each needs to do. The goals are in `goals.md`.
 | Action | The caller has | It needs back | How often |
 |---|---|---|---|
 | Submit a matrix | the matrix in one representation | whether it is admissible, and if not, why | per problem |
-| Build | an admissible matrix, fill-in level, seed, thread budget | the approximate inverse, and the facts of the build: whether and where the matrix was clamped, its components, the null vector of each singular component, diagnostics | per problem |
+| Build | an admissible matrix, fill-in level, seed, thread budget | the approximate inverse, and the facts of the build: whether and where the matrix was clamped, its components, the null vector of each singular component | per problem |
 | Build for a Schur complement | a bipartite factor-width-2 form, the same settings | the approximate inverse of the Schur complement on the kept side, and the same facts | per problem |
 | Solve | the approximate inverse, one right-hand side, thread budget | the solution | per iteration |
 | Solve a block | the approximate inverse, several right-hand sides, thread budget | their solutions, each equal to solving that column alone | per iteration |
@@ -34,8 +34,6 @@ Who calls approx-chol and what each needs to do. The goals are in `goals.md`.
   pseudoinverse.
 - **Caller's parallelism:** the crate is safe nested inside the caller's parallel work, without
   deadlock, and never uses more threads than the budget it is given.
-- **Watching and stopping a build:** the caller can follow a build's progress and diagnostics,
-  and stop it.
 
 ## Sources
 
@@ -51,6 +49,3 @@ Who calls approx-chol and what each needs to do. The goals are in `goals.md`.
   scheduling. Source: consumer (within).
 - **Nested, within the budget:** within calls the crate from inside its own parallel work and
   must not deadlock there or oversubscribe its cores. Source: consumer (within).
-- **Watching and stopping:** a person watching a long build, within's own control of its
-  builds, profiling, and tests; Python users expect Ctrl-C to stop a call. Source: consumer
-  (within, Python users), product (maintainer).

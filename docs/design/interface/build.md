@@ -1,7 +1,6 @@
 # Build interface
 
-The contract is `../contracts/build.md`. The observer and the stopped outcome are open until
-`inflight` is ready; this interface leaves them out.
+The contract is `../contracts/build.md`.
 
 ## Decision
 
@@ -166,8 +165,7 @@ tolerance out of range raises `ValueError`. Python builds `f64`. A clamp also wa
 ## Why
 
 - **Two stages, `Sgdd` and `Complement`:** the reduction is complete before any factoring, so a
-  caller reads the clamps and can stop there; the budget, and later the observer, live at this
-  level only.
+  caller reads the clamps and can stop there; the budget lives at this level only.
 - **`ScalingPolicy` apart from `Config`:** the first configures Reduction, the second Cholesky;
   each stage takes only its own.
 - **`split_merge: NonZeroU32`:** one value per fill-in level, 1 being standard AC.

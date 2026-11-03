@@ -8,22 +8,19 @@ How a caller turns an admissible matrix into the approximate inverse $B$. The re
 - **Arguments:** an `Input`; a configuration (fill-in level, seed, scaling tolerance and step
   limit, largest component factored exactly, how a Schur complement is formed), valid by
   construction, each setting defaulted; a thread budget (a nonzero count or all cores), all cores
-  in the Rust one-call functions and by default in Python, named at the two-stage level; an
-  observer, `()` for none, which receives diagnostics and may stop the build, at the two-stage
-  level.
-- **Result:** $B$, stopped, or a `BuildError`, located in the caller's numbering: a computed
+  in the Rust one-call functions and by default in Python, named at the two-stage level.
+- **Result:** $B$ or a `BuildError`, located in the caller's numbering: a computed
   scale, scaled entry or scaled row sum leaves the representable range, or a component has more
   than $1/\varepsilon$ vertices.
 - **Facts on $B$**, of the target $A_r$ in the caller's numbering: the components, and per
   component its null vector if singular and its clamp if past the rounding band. A clamp states
   whether the scaling was refuted, proving the component is not GDD, or unsettled, its steps run
-  out. Clamped rows, step counts, fill and durations go only to the observer.
+  out.
 - **Schur complement:** the same, with a `BipartiteFactorWidth2` and the side to keep; $B$
   approximates the pseudoinverse of the Schur complement of $A_r$ on that side; components and
   null vectors are the complement's, numbered there, and clamps are per component of $A$.
 - **Threads:** the caller's pool, never a new one, at most the budget, safe nested in the caller's
-  parallel work. $B$ is bit-identical for every budget and every observer that does not stop it.
-- **Python:** Ctrl-C stops the build.
+  parallel work. $B$ is bit-identical for every budget.
 
 ## Why
 
@@ -36,5 +33,3 @@ How a caller turns an admissible matrix into the approximate inverse $B$. The re
 - **Budget named at the two-stage level:** a caller inside its own parallel loop needs that level
   anyway; one call, like Python, expects the machine.
 - **Facts on $B$:** the solve needs the null vectors itself, and they persist with $B$.
-- **Diagnostics through the observer:** they serve watching, profiling and tests, not the solve; a
-  caller who does not observe pays nothing.
