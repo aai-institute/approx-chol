@@ -122,7 +122,7 @@ Python, the input as in `interface/submit.md`:
 def factorize(matrix: sparray | spmatrix, *, config: Config | None = None,
               scaling: ScalingPolicy | None = None, threads: int | None = None) -> ApproxCholesky: ...
 
-class ApproxCholesky(LinearOperator):
+class ApproxCholesky:
     @property
     def components(self) -> tuple[Component, ...]: ...
     @property

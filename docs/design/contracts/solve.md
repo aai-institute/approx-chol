@@ -13,16 +13,16 @@ How a caller applies $B$ to right-hand sides. The requirements are "Solve", "Sol
 - **Target:** $B$ approximates $A_r^+$, or $H^+$ for a Schur $B$, $H$ the Schur complement of
   $A_r$. On a singular component the
   solve projects the right-hand side and the solution onto the range, and reports no defect.
-- **Solver:** $B$ with a budget, named once; it sizes the scratch for every block and solves
-  with the caller's scratch, or with its own, allocated per solve. Solving only reads $B$, so any
-  number of solves run with one $B$ at once, each with its own scratch.
+- **Per solve:** a budget and the caller's scratch, or scratch allocated for that solve; the
+  scratch is sized by the block's column count and the budget, and serves every block of fewer
+  columns at a smaller budget. Solving only reads $B$, so any number of solves run with one $B$
+  at once, each with its own scratch.
 - **Threads:** the caller's pool, never a new one, at most the budget, safe nested in the caller's
   parallel work.
-- **One `SolveError`:** a block of the wrong row count, or scratch that does not meet the
-  solver's requirement. A block's own
-  layout is checked where it is formed.
+- **One error:** a block of the wrong row count, or scratch that does not meet the block's
+  requirement. A block's own layout is checked where it is formed.
 - **Python:** $B$ is a scipy `LinearOperator`, its adjoint itself: `matvec` and `matmat`, with
-  `rmatvec` and `rmatmat` the same, at the default budget. An explicit solve takes a budget.
+  `rmatvec` and `rmatmat` the same, at a budget it holds, all cores by default.
 
 ## Why
 
@@ -33,6 +33,9 @@ How a caller applies $B$ to right-hand sides. The requirements are "Solve", "Sol
   needs; the defect is the caller's to compute, with the null vectors on $B$.
 - **Caller's scratch:** within's local solvers take `&self` and the scratch of a faer `MemStack`;
   a solve per iteration allocates nothing. The allocating form serves a caller who solves once.
-- **Budget named once:** a scratch sized for one budget and a solve at another cannot disagree.
+- **Budget per solve:** it changes no bit of a solution, so it is per-use state like the scratch.
+- **Scratch by columns and budget:** a single right-hand side and a sequential solve are not
+  charged for a block or a parallel one; a scratch that does not fit is an error, never a wrong
+  solution.
 - **$k = 0$:** faer's operators may apply to a block without columns.
 - **`LinearOperator`:** it is what scipy's iterative solvers take; `lsmr` calls `rmatvec`.

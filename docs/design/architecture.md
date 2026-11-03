@@ -33,7 +33,7 @@ requirements are in `../requirements/`.
 | Part | Package | Responsible for |
 |---|---|---|
 | Adapters | crate `approx-chol-py`; modules `faer`, `sprs`, `nalgebra`, `ndarray`, each behind its feature | Translating another language's or library's matrices into Input, implementing the solve's block trait for their dense types, and the approximate inverse as faer's operator traits; no mathematics. |
-| Approximate inverse | module `approximate_inverse`, re-exported at the crate root | B as one object: building it per component, solving with it, the composed configuration and facts, the versioned envelope for persistence. Solving reads B and never changes it. |
+| Approximate inverse | module `approximate_inverse`, re-exported at the crate root | B as one object, applied through a read-only view of it: building it per component, solving with it, the composed configuration and facts, the versioned envelope for persistence. Solving reads B and never changes it. |
 | Reduction | module `reduction` | Everything that exists because the input is GDD and not SDDM: scaling, switching, the cover, components, the clamp, the classification into grounded and floating. The lift maps right-hand sides in and solutions out: projection, scaling, switching, the cover, and regauge in A's coordinates. |
 | Cholesky | module `cholesky` | The approximate Cholesky factorization of an SDDM matrix, augmentation by the ground vertex, fill-in control, randomness, and the solve with the factorization, including the ground's lift and descent. Eliminating the side F of a bipartite factor-width-2 form yields a factorization of the Schur complement, numbered on K. |
 | Input | module `input` | The closed admissible-matrix type: its representations, their validation, and the facts each carries. |
@@ -44,7 +44,7 @@ requirements are in `../requirements/`.
 |---|---|
 | Caller or adapter → Input | a matrix in one representation; back: an admissible matrix or an input error |
 | Caller or adapter → approximate inverse | admissible matrix, configuration, thread budget, observer; back: B with its facts, stopped, or a build error; to the observer: progress and diagnostics |
-| Caller or adapter → approximate inverse (solve) | B with a thread budget, one or several right-hand sides, scratch; back: the solutions, or a solve error |
+| Caller or adapter → approximate inverse (solve) | B; per solve one or several right-hand sides, a thread budget, scratch; back: the solutions, or a solve error |
 | Caller or adapter → approximate inverse (persistence) | B; back: its saved form. Later the saved form; back: B or an error |
 | Approximate inverse → Reduction | admissible matrix; back: SDDM problems with the vertices to eliminate, lift, and the build's facts: clamp, components, null vector of each singular component, diagnostics. During a solve: right-hand sides; back: their lifts, then solutions |
 | Approximate inverse → Cholesky | one SDDM problem, vertices to eliminate, fill-in control, seed; back: factorization, diagnostics. During a solve: right-hand sides; back: solutions |

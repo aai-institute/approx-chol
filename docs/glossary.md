@@ -218,7 +218,7 @@ Terms for dominance of a rounded $A$ under a computed scaling $d$.
   reduction maps and the approximate Cholesky factorizations of the reduced matrices. It targets
   $A_r^{-1}$, and $A_r^+$ on singular components.
 - **Preconditioner:** an operator used to speed up an iterative solver; $B$ is used as one.
-- **Solve** (not: apply): applying $B$ to a right-hand side or a block. Exact solutions are called
-  "the solution of …", never "solve".
+- **Solve** (in prose not: apply): applying $B$ to a right-hand side or a block; the operator's
+  method is `apply`. Exact solutions are called "the solution of …", never "solve".
 - **Right-hand side** (column): one vector $b$ that $B$ is applied to. A **block** is several
   right-hand sides applied at once.
