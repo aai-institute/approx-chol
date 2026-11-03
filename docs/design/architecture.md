@@ -6,7 +6,7 @@ requirements are in `../requirements/`.
 ## Decision
 
 ```
-5  Adapters              Python binding, faer/sprs adapters
+5  Adapters              Python binding; faer, sprs, nalgebra, ndarray adapters
 4  Approximate inverse   B: build, solve, report, save and load
 3a Reduction             GDD → SDDM problems, lift, build facts, diagnostics
 3b Cholesky              SDDM → factorization, diagnostics; solve with it
@@ -20,12 +20,19 @@ requirements are in `../requirements/`.
 - The Rust API is the public face of Input and the approximate inverse, with their configuration
   and reports; it is not a part of its own.
 - Each part owns its configuration, diagnostics, errors and encoding. The approximate inverse
-  composes them and reaches into none. The adapters report through Input's error, since a
-  conversion answers the same question, why a matrix is not admissible.
+  composes them and reaches into none. The adapters report through Input's error for a matrix,
+  since a conversion answers the same question; a foreign block needs no check.
+- **Interoperability:** one feature per foreign crate, named after it: `faer` 0.24 with faer's
+  `rayon`, `sprs` 0.11, `nalgebra` 0.35 with nalgebra-sparse 0.12, `ndarray` 0.17; `sprs`
+  enables `ndarray`. dyn-stack 0.13 is a required dependency. A Rust adapter borrows, never
+  copies: a matrix converts into Input and fails as Input validates; a dense type implements the
+  solve's block trait, which the solve reads and writes column by column through its scratch.
+  Moving a feature to another version is a breaking release. Python converts a form it cannot
+  borrow, as documented.
 
 | Part | Package | Responsible for |
 |---|---|---|
-| Adapters | crate `approx-chol-py`; modules `faer`, `sprs`, each behind its feature | Translating another language's or library's types into Input and the approximate inverse; no mathematics. |
+| Adapters | crate `approx-chol-py`; modules `faer`, `sprs`, `nalgebra`, `ndarray`, each behind its feature | Translating another language's or library's matrices into Input, implementing the solve's block trait for their dense types, and the approximate inverse as faer's operator traits; no mathematics. |
 | Approximate inverse | module `approximate_inverse`, re-exported at the crate root | B as one object: building it per component, solving with it, the composed configuration and facts, the versioned envelope for persistence. Solving reads B and never changes it. |
 | Reduction | module `reduction` | Everything that exists because the input is GDD and not SDDM: scaling, switching, the cover, components, the clamp, the classification into grounded and floating. The lift maps right-hand sides in and solutions out: projection, scaling, switching, the cover, and regauge in A's coordinates. |
 | Cholesky | module `cholesky` | The approximate Cholesky factorization of an SDDM matrix, augmentation by the ground vertex, fill-in control, randomness, and the solve with the factorization, including the ground's lift and descent. Eliminating the side F of a bipartite factor-width-2 form yields a factorization of the Schur complement, numbered on K. |
@@ -37,7 +44,7 @@ requirements are in `../requirements/`.
 |---|---|
 | Caller or adapter → Input | a matrix in one representation; back: an admissible matrix or an input error |
 | Caller or adapter → approximate inverse | admissible matrix, configuration, thread budget, observer; back: B with its facts, stopped, or a build error; to the observer: progress and diagnostics |
-| Caller or adapter → approximate inverse (solve) | B, one or several right-hand sides, thread budget; back: the solutions |
+| Caller or adapter → approximate inverse (solve) | B with a thread budget, one or several right-hand sides, scratch; back: the solutions, or a solve error |
 | Caller or adapter → approximate inverse (persistence) | B; back: its saved form. Later the saved form; back: B or an error |
 | Approximate inverse → Reduction | admissible matrix; back: SDDM problems with the vertices to eliminate, lift, and the build's facts: clamp, components, null vector of each singular component, diagnostics. During a solve: right-hand sides; back: their lifts, then solutions |
 | Approximate inverse → Cholesky | one SDDM problem, vertices to eliminate, fill-in control, seed; back: factorization, diagnostics. During a solve: right-hand sides; back: solutions |
@@ -50,6 +57,10 @@ requirements are in `../requirements/`.
 - **Input as a part:** the type is closed and callers, adapters and Reduction all need it.
 - **Adapters as a part:** each depends on a foreign library and changes with it; Input stays free
   of those dependencies.
+- **dyn-stack required:** within and faer size and pass scratch with it; one protocol composes
+  their requirement with ours.
+- **`sprs` enables `ndarray`, at 0.17:** sprs users hold their dense vectors as ndarray arrays;
+  sprs 0.11 accepts ndarray 0.15 to 0.17, and one pinned version keeps them one type.
 - **Projection and regauge in the lift:** they are coordinate semantics of A, which only Reduction
   knows; Cholesky sees at most a zero pivot.
 - **Determinism in Execution:** proved once, not in every part that runs in parallel.

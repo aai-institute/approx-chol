@@ -64,6 +64,14 @@ pub mod input {
     {
         type Error = InputError;
     }
+    #[cfg(feature = "nalgebra")]
+    impl<'a, T: Real> TryFrom<&'a nalgebra_sparse::CsrMatrix<T>> for CsrRef<'a, T, usize> {
+        type Error = InputError;
+    }
+    #[cfg(feature = "nalgebra")]
+    impl<'a, T: Real> TryFrom<&'a nalgebra_sparse::CscMatrix<T>> for CsrRef<'a, T, usize> {
+        type Error = InputError;
+    }
 
     #[non_exhaustive]
     pub enum InputError {
@@ -92,7 +100,8 @@ pub mod input {
 `u32` unless named, so `Laplacian::<f64, i64>::new(n, &u, &v)` names both where no value fixes
 `T`. Every type is `Copy` and `Debug`; every error type implements `Error` and `Display`.
 `CsrRef::new` and `UpperCsrRef::new` accept a row's entries in any order, and repeated columns,
-which sum. A sprs CSC view and a faer `SparseColMatRef` are read as the CSR of their transpose,
+which sum. A sprs CSC view, a faer `SparseColMatRef` and a nalgebra-sparse `CscMatrix` are read
+as the CSR of their transpose,
 positions in that storage. `NotSquare` and `RowGap` arise only from conversions, whose
 `parameter` is the source's own field name.
 
@@ -100,9 +109,7 @@ Python submits as part of the build call (`interface/build.md`): a matrix is che
 passed.
 
 ```python
-def factorize(matrix: csr_matrix | csr_array, ...) -> Factor: ...
-def factorize_raw(row_ptrs: ArrayLike, col_indices: ArrayLike, values: ArrayLike, n: int,
-                  ...) -> Factor: ...
+def factorize(matrix: sparray | spmatrix, *, ...) -> ApproxCholesky: ...
 
 class InputError(ValueError):
     kind: str            # the Rust variant in snake_case, e.g. "not_symmetric"
@@ -110,10 +117,11 @@ class InputError(ValueError):
     position: int | None # the entry, row, edge, column or vertex the variant names
 ```
 
-Python takes the CSR forms only, whole storage; indices of any integer dtype, values of any real
-dtype, converted to `f64`. `parameter` is `indptr`, `indices` or `data` for a scipy matrix and the
-argument's name for `factorize_raw`, whose `n` stays last for compatibility. A rectangular scipy
-matrix raises `not_square`.
+Python takes any scipy sparse matrix, whole storage. CSR, and CSC as the CSR of its transpose,
+with `f64` values and `int32` or `int64` indices are read without a copy; any other format goes
+through `tocsr()` and any other dtype is converted to `f64` or `int64`, each at most once.
+Anything else raises `TypeError`. `parameter` is `indptr`, `indices` or `data` of the matrix
+read. A rectangular matrix raises `not_square`.
 
 ## Why
 
@@ -129,16 +137,18 @@ matrix raises `not_square`.
 - **`#[non_exhaustive]`:** variants can be added without a breaking release.
 - **`Input` opaque, built only by `From`:** every `Input` is admissible, and it hands nothing
   back.
-- **sprs and faer through `TryFrom` into `CsrRef`:** their matrices are compressed storage; a
-  symmetric matrix's CSC storage is the CSR of its transpose, so faer's column form, its main
-  one, converts too.
+- **sprs, faer and nalgebra-sparse through `TryFrom` into `CsrRef`:** their matrices are
+  compressed storage; a symmetric matrix's CSC storage is the CSR of its transpose, so the column
+  forms, faer's and nalgebra-sparse's main ones, convert too.
 - **Any order and repeated columns:** they store the same matrix; Submit judges the matrix, not
   its storage.
 - **One `I` for row pointers and column indices:** one index type per input; past $2^{32}$ nonzeros
   the caller widens both.
 - **`Side` in `input`:** it names a part of `BipartiteFactorWidth2`; Build names a side with it.
-- **Python: CSR only, inside the build call:** Python users hold scipy matrices; within, the one
-  consumer of the other forms, calls Rust. A Python input object would be one more step that
-  carries nothing.
+- **Python: any scipy sparse matrix, inside the build call:** Python users hold scipy matrices,
+  networkx's Laplacians among them; within, the one consumer of the other forms, calls Rust. A
+  Python input object would be one more step that carries nothing.
+- **No `factorize_raw`:** `csr_array((data, indices, indptr), shape=(n, n))` wraps three numpy
+  arrays of matching index dtypes without a copy.
 - **`InputError` a `ValueError`:** existing `except ValueError` keeps working; `kind` and the
   position mirror the Rust variant.

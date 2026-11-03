@@ -8,24 +8,24 @@ The contract is `../contracts/build.md`. The observer and the stopped outcome ar
 ```rust
 // One call, all cores.
 pub fn factorize<'a, T: Real, I: PrimInt>(input: impl Into<Input<'a, T, I>>)
-    -> Result<Factor<T>, BuildError>;
+    -> Result<ApproxCholesky<T>, BuildError>;
 pub fn factorize_with<'a, T: Real, I: PrimInt>(input: impl Into<Input<'a, T, I>>, config: Config,
-    scaling: ScalingPolicy) -> Result<Factor<T>, BuildError>;
+    scaling: ScalingPolicy) -> Result<ApproxCholesky<T>, BuildError>;
 pub fn factorize_complement<'a, T: Real, I: PrimInt>(input: BipartiteFactorWidth2<'a, T, I>,
-    kept: Side, config: Config, scaling: ScalingPolicy) -> Result<Factor<T>, BuildError>;
+    kept: Side, config: Config, scaling: ScalingPolicy) -> Result<ApproxCholesky<T>, BuildError>;
 
 // Two stages, the budget named.
 impl<T: Real> Sgdd<T> {
     pub fn reduce<'a, I: PrimInt>(input: impl Into<Input<'a, T, I>>, scaling: ScalingPolicy,
         threads: Threads) -> Result<Sgdd<T>, BuildError>;
     pub fn clamps(&self) -> &[Clamp];
-    pub fn factor(self, config: Config, threads: Threads) -> Factor<T>;
+    pub fn factor(self, config: Config, threads: Threads) -> ApproxCholesky<T>;
 }
 impl<T: Real> Complement<T> {
     pub fn reduce_onto<'a, I: PrimInt>(input: BipartiteFactorWidth2<'a, T, I>, kept: Side,
         scaling: ScalingPolicy, threads: Threads) -> Result<Complement<T>, BuildError>;
     pub fn clamps(&self) -> &[Clamp];
-    pub fn factor(self, config: Config, threads: Threads) -> Factor<T>;
+    pub fn factor(self, config: Config, threads: Threads) -> ApproxCholesky<T>;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -58,8 +58,13 @@ pub enum Threads {
     All,
     Count(NonZeroUsize),
 }
+#[cfg(feature = "faer")]
+impl From<faer::Par> for Threads {}
 
-impl<T: Real> Factor<T> {
+#[derive(Clone, Debug)]
+pub struct ApproxCholesky<T> { /* private */ }   // Send + Sync
+
+impl<T: Real> ApproxCholesky<T> {
     pub fn n(&self) -> usize;
     pub fn components(&self) -> impl ExactSizeIterator<Item = Component<'_, T>>;
     pub fn clamps(&self) -> &[Clamp];
@@ -109,17 +114,15 @@ build.
   the kept side and clamps on the input, left side first.
 - A `BuildError`'s `vertex` is the lowest vertex of its component, in the input's numbering.
 - `Threads::All` is every thread of the caller's rayon pool; `Count(n)` caps the threads used at
-  `n`, whatever the pool's size; faer's `Par::Seq` is `Count(1)`.
+  `n`, whatever the pool's size; faer's `Par::Seq` is `Count(1)`, `Par::Rayon(n)` is `Count(n)`.
 
 Python, the input as in `interface/submit.md`:
 
 ```python
-def factorize(matrix, config: Config | None = None, scaling: ScalingPolicy | None = None,
-              threads: int | None = None) -> Factor: ...
-def factorize_raw(row_ptrs, col_indices, values, n: int, config: Config | None = None,
-                  scaling: ScalingPolicy | None = None, threads: int | None = None) -> Factor: ...
+def factorize(matrix: sparray | spmatrix, *, config: Config | None = None,
+              scaling: ScalingPolicy | None = None, threads: int | None = None) -> ApproxCholesky: ...
 
-class Factor(LinearOperator):
+class ApproxCholesky(LinearOperator):
     @property
     def components(self) -> tuple[Component, ...]: ...
     @property
