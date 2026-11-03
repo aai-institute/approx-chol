@@ -7,7 +7,7 @@ How a caller applies $B$ to right-hand sides. The requirements are "Solve", "Sol
 
 - **One solve for $k \ge 0$ columns:** right-hand sides and solutions as blocks of $B$'s size by
   $k$ in the caller's storage, the solutions written into the caller's block; a thread budget of
-  the build's type, named in Rust, all cores by default in Python. A Schur $B$ is sized and
+  the build's type, named in Rust, the held one by default in Python. A Schur $B$ is sized and
   numbered on the kept side. A block without columns is left as it is.
 - **Each column equals its solve alone,** bit for bit, for every $k$ and every budget.
 - **Target:** $B$ approximates $A_r^+$, or $H^+$ for a Schur $B$, $H$ the Schur complement of
@@ -22,7 +22,8 @@ How a caller applies $B$ to right-hand sides. The requirements are "Solve", "Sol
 - **One error:** a block of the wrong row count, or scratch that does not meet the block's
   requirement. A block's own layout is checked where it is formed.
 - **Python:** $B$ is a scipy `LinearOperator`, its adjoint itself: `matvec` and `matmat`, with
-  `rmatvec` and `rmatmat` the same, at a budget it holds, all cores by default.
+  `rmatvec` and `rmatmat` the same, at a budget it holds, the build's unless
+  another is named.
 
 ## Why
 

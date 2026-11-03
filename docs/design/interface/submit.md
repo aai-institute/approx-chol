@@ -109,7 +109,7 @@ Python submits as part of the build call (`interface/build.md`): a matrix is che
 passed.
 
 ```python
-def factorize(matrix: sparray | spmatrix, *, ...) -> ApproxCholesky: ...
+def factorize(matrix: sparray | spmatrix, *, ...) -> ApproxInverse: ...
 
 class InputError(ValueError):
     kind: str            # the Rust variant in snake_case, e.g. "not_symmetric"

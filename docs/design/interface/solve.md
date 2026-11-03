@@ -1,18 +1,12 @@
 # Solve interface
 
-The contract is `../contracts/solve.md`; `Threads` and `ApproxCholesky` are those of
+The contract is `../contracts/solve.md`; `Threads` and `ApproxInverse` are those of
 `interface/build.md`. `StackReq` and `MemStack` are dyn-stack's.
 
 ## Decision
 
 ```rust
-impl<T: Real> ApproxCholesky<T> {
-    pub fn inverse(&self) -> Inverse<'_, T>;
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct Inverse<'b, T> { /* private */ }   // Send + Sync
-impl<'b, T: Real> Inverse<'b, T> {
+impl<T: Real> ApproxInverse<T> {
     pub fn scratch(&self, columns: usize, threads: Threads) -> StackReq;
     pub fn apply_with<M: MatrixMut<T> + ?Sized>(&self, block: &mut M, threads: Threads,
         stack: &mut MemStack) -> Result<(), ApplyError>;
@@ -52,7 +46,7 @@ impl<T: Real, R: Dim, C: Dim, S: RawStorageMut<T, R, C>> MatrixMut<T>
 #[cfg(feature = "ndarray")]
 impl<T: Real> MatrixMut<T> for ndarray::ArrayRef<T, Ix2> {}   // also Ix1
 #[cfg(feature = "faer")]
-impl<T: Real + faer::traits::ComplexField> faer::matrix_free::Precond<T> for Inverse<'_, T> {}
+impl<T: Real + faer::traits::ComplexField> faer::matrix_free::Precond<T> for ApproxInverse<T> {}
     // also LinOp, BiLinOp, BiPrecond
 
 #[non_exhaustive]
@@ -71,12 +65,11 @@ pub enum ApplyError {
 }
 ```
 
-- `ApproxCholesky` is $B$ as built, with its facts and its saved form; `inverse` borrows it as
-  the operator, allocating nothing, and an `Inverse` only reads it.
+- Applying only reads $B$.
 - `scratch(columns, threads)` is what applying to a block of `columns` columns at `threads`
   needs, independent of the pool; it is monotone in both, so a stack that holds it serves every
-  block of fewer columns at a smaller budget, `All` above every `Count`. `apply` allocates
-  `scratch(block.columns(), threads)` and calls `apply_with`, which allocates nothing.
+  block of fewer columns at a smaller budget, `All` above every `Count`. `apply` allocates its
+  scratch per call; `apply_with` allocates nothing.
 - `block` holds the right-hand sides on entry and the solutions on return; it has $n$ rows, else
   `Rows`, also without columns. `Scratch` is returned when `stack` cannot hold
   `scratch(block.columns(), threads)`, alignment included. Either error leaves `block` untouched.
@@ -92,43 +85,39 @@ pub enum ApplyError {
   `as_dyn_mut().as_dyn_stride_mut()`.
 - The unimplemented-trait message names the feature each foreign type needs and the supported
   versions, faer 0.24, nalgebra 0.35 and ndarray 0.17, and suggests `[..]` for an array.
-- With `faer`, `Inverse<'_, T>` implements faer's `LinOp`, `BiLinOp`, `Precond` and `BiPrecond`,
+- With `faer`, `ApproxInverse<T>` implements faer's `LinOp`, `BiLinOp`, `Precond` and `BiPrecond`,
   its own adjoint and transpose: faer's `par` is the budget, `par.into()`, and its scratch
   queries are `scratch(rhs_ncols, par.into())`. The in-place methods apply in place, without
   faer's default temporary; `apply` copies `rhs` into `out` first. faer's traits return nothing,
-  so a shape faer forbids or a stack too small panics, as faer's own operators do.
+  so a shape faer forbids or a stack too small panics, as faer's own operators do. faer's impls
+  for references let a caller pass `&b` where faer takes the operator by value.
 
 Python:
 
 ```python
-class ApproxCholesky:
-    def inverse(self, *, threads: int | None = None) -> Inverse: ...
-
-class Inverse(LinearOperator):
+class ApproxInverse(LinearOperator):
+    @property
+    def threads(self) -> int | None: ...
+    def with_threads(self, threads: int | None) -> ApproxInverse: ...
     def apply(self, b: ArrayLike, *,
               out: NDArray[np.float64] | None = None) -> NDArray[np.float64]: ...
 ```
 
-`inverse` names the budget, every core when `None`; the `Inverse`, a Python class over the Rust
-one, keeps the factorization alive and pickles as it and the budget.
-It is a `LinearOperator` of shape $(n, n)$ and dtype `float64`, its own adjoint: `matvec` and
-`rmatvec` take a vector or a stack of them, $(\ldots, n)$, `matmat` and `rmatmat`
-$(\ldots, n, k)$, as scipy 1.18 passes them. `apply`'s `b` is a real array `np.asarray` reads, a
-vector of length $n$ or an $n \times k$ array, converted to `f64` if it is not; any other dtype
-raises `TypeError`. The solution has `b`'s shape, written to `out` when given, a writable `f64`
-array of that shape in any order whose entries do not overlap, `b` itself allowed, else to a new
-array. A wrong shape or an overlapping `out` raises `ValueError`. Every apply releases the GIL and
-allocates its own scratch.
+An `ApproxInverse` holds a budget, the build's `threads` unless `with_threads` names another, `None`
+every core; `with_threads` shares $B$, copying nothing; every apply runs at the held budget. It is a
+Python class over the Rust one, and a `LinearOperator` of shape $(n, n)$ and dtype `float64`, its
+own adjoint: `matvec` and `rmatvec` take a vector or a stack of them, $(\ldots, n)$, `matmat` and
+`rmatmat` $(\ldots, n, k)$, as scipy 1.18 passes them. `apply`'s `b` is a real array `np.asarray`
+reads, a vector of length $n$ or an $n \times k$ array, converted to `f64` if it is not; any other
+dtype raises `TypeError`. The solution has `b`'s shape, written to `out` when given, a writable
+`f64` array of that shape in any order whose entries do not overlap, `b` itself allowed, else to a
+new array. A wrong shape or an overlapping `out` raises `ValueError`. Every apply releases the GIL
+and allocates its own scratch.
 
 ## Why
 
-- **`inverse` and `apply`:** $B$ is the approximate inverse, and applying it solves $Ax = b$
-  approximately, as faer's `LinOp::apply`, PETSc's `PCApply` and scipy's `matvec` apply an
-  operator; the factorization's own apply would approximate $A$, which no consumer needs. faer's
-  and nalgebra's `inverse()` build a dense matrix; this one borrows, as Eigen's
-  `PartialPivLU::inverse()` returns an `Inverse` expression.
-- **`Inverse` at the crate root:** `approx_chol::Inverse`; the crate names the approximation.
-  Callers mostly infer it from `inverse()`.
+- **`apply`:** $B$ is the approximate inverse, and applying it solves $Ax = b$ approximately, as
+  faer's `LinOp::apply`, PETSc's `PCApply` and scipy's `matvec` apply an operator.
 - **The budget per apply:** it changes no bit of a solution, so it is per-use state beside the
   scratch, as faer passes `par` beside its stack.
 - **Scratch by columns and budget:** a single right-hand side or a sequential apply is not
@@ -147,5 +136,6 @@ allocates its own scratch.
   write; through `ArrayRef` that happens at the caller's `&mut *a`, in sight.
 - **faer's operator traits:** faer's CG and LSMR take $B$ as is; their `par` and scratch queries
   map one to one.
-- **Python's budget at `inverse`:** a `LinearOperator`'s `matvec` takes no budget, so the
-  operator holds it. `out` is numpy's convention for reusing the result.
+- **Python's held budget:** a `LinearOperator`'s `matvec` takes no budget, so the operator
+  holds one; `with_threads` serves a solver that wants another than the build's. `out` is
+  numpy's convention for reusing the result.

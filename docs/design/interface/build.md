@@ -8,24 +8,24 @@ The contract is `../contracts/build.md`. The observer and the stopped outcome ar
 ```rust
 // One call, all cores.
 pub fn factorize<'a, T: Real, I: PrimInt>(input: impl Into<Input<'a, T, I>>)
-    -> Result<ApproxCholesky<T>, BuildError>;
+    -> Result<ApproxInverse<T>, BuildError>;
 pub fn factorize_with<'a, T: Real, I: PrimInt>(input: impl Into<Input<'a, T, I>>, config: Config,
-    scaling: ScalingPolicy) -> Result<ApproxCholesky<T>, BuildError>;
+    scaling: ScalingPolicy) -> Result<ApproxInverse<T>, BuildError>;
 pub fn factorize_complement<'a, T: Real, I: PrimInt>(input: BipartiteFactorWidth2<'a, T, I>,
-    kept: Side, config: Config, scaling: ScalingPolicy) -> Result<ApproxCholesky<T>, BuildError>;
+    kept: Side, config: Config, scaling: ScalingPolicy) -> Result<ApproxInverse<T>, BuildError>;
 
 // Two stages, the budget named.
 impl<T: Real> Sgdd<T> {
     pub fn reduce<'a, I: PrimInt>(input: impl Into<Input<'a, T, I>>, scaling: ScalingPolicy,
         threads: Threads) -> Result<Sgdd<T>, BuildError>;
     pub fn clamps(&self) -> &[Clamp];
-    pub fn factor(self, config: Config, threads: Threads) -> ApproxCholesky<T>;
+    pub fn factor(self, config: Config, threads: Threads) -> ApproxInverse<T>;
 }
 impl<T: Real> Complement<T> {
     pub fn reduce_onto<'a, I: PrimInt>(input: BipartiteFactorWidth2<'a, T, I>, kept: Side,
         scaling: ScalingPolicy, threads: Threads) -> Result<Complement<T>, BuildError>;
     pub fn clamps(&self) -> &[Clamp];
-    pub fn factor(self, config: Config, threads: Threads) -> ApproxCholesky<T>;
+    pub fn factor(self, config: Config, threads: Threads) -> ApproxInverse<T>;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -37,7 +37,7 @@ pub struct Config {
 }
 
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SchurMode {
     Exact,
     Approximate { split_merge: NonZeroU32 },
@@ -62,9 +62,9 @@ pub enum Threads {
 impl From<faer::Par> for Threads {}
 
 #[derive(Clone, Debug)]
-pub struct ApproxCholesky<T> { /* private */ }   // Send + Sync
+pub struct ApproxInverse<T> { /* private */ }   // Send + Sync
 
-impl<T: Real> ApproxCholesky<T> {
+impl<T: Real> ApproxInverse<T> {
     pub fn n(&self) -> usize;
     pub fn components(&self) -> impl ExactSizeIterator<Item = Component<'_, T>>;
     pub fn clamps(&self) -> &[Clamp];
@@ -120,9 +120,10 @@ Python, the input as in `interface/submit.md`:
 
 ```python
 def factorize(matrix: sparray | spmatrix, *, config: Config | None = None,
-              scaling: ScalingPolicy | None = None, threads: int | None = None) -> ApproxCholesky: ...
+              scaling: ScalingPolicy | None = None,
+              threads: int | None = None) -> ApproxInverse: ...
 
-class ApproxCholesky:
+class ApproxInverse(LinearOperator):   # applied as in interface/solve.md
     @property
     def components(self) -> tuple[Component, ...]: ...
     @property
@@ -168,6 +169,8 @@ tolerance out of range raises `ValueError`. Python builds `f64`. A clamp also wa
 - **`Component::clamp` beside `clamps`:** each component of $B$ lies in one component of $A$, so
   a caller reads its null vector and clamp together; `clamps` alone holds a clamp on a component
   of $A$ with no kept vertex. Both read one stored list.
+- **The result is $B$, `ApproxInverse`:** its facts, its persistence and its apply all concern
+  $B$; the factors $\mathcal{L}$ and $\mathcal{D}$ are not exposed, so no type names them.
 - **Vertices as `usize`:** the storage index is internal; callers index their own arrays with
   `usize`.
 - **Python without `factorize_complement`:** within, its one consumer, calls Rust.
