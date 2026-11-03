@@ -49,17 +49,19 @@ pub mod input {
     impl<'a, T, I> From<CsrRef<'a, T, I>> for Input<'a, T, I> { /* … */ }
 
     #[cfg(feature = "sprs")]
-    impl<'a, T: Real, I: SpIndex> TryFrom<sprs::CsMatViewI<'a, T, I>> for CsrRef<'a, T, I> {
-        type Error = InputError;
-    }
-    #[cfg(feature = "faer")]
-    impl<'a, T: Real, I: faer::Index> TryFrom<faer::sparse::SparseRowMatRef<'a, I, T>>
+    impl<'a, T: Real, I: PrimInt + SpIndex> TryFrom<sprs::CsMatViewI<'a, T, I>>
         for CsrRef<'a, T, I>
     {
         type Error = InputError;
     }
     #[cfg(feature = "faer")]
-    impl<'a, T: Real, I: faer::Index> TryFrom<faer::sparse::SparseColMatRef<'a, I, T>>
+    impl<'a, T: Real, I: PrimInt + faer::Index> TryFrom<faer::sparse::SparseRowMatRef<'a, I, T>>
+        for CsrRef<'a, T, I>
+    {
+        type Error = InputError;
+    }
+    #[cfg(feature = "faer")]
+    impl<'a, T: Real, I: PrimInt + faer::Index> TryFrom<faer::sparse::SparseColMatRef<'a, I, T>>
         for CsrRef<'a, T, I>
     {
         type Error = InputError;
@@ -101,9 +103,10 @@ pub mod input {
 `T`. Every type is `Copy` and `Debug`; every error type implements `Error` and `Display`.
 `CsrRef::new` and `UpperCsrRef::new` accept a row's entries in any order, and repeated columns,
 which sum. A sprs CSC view, a faer `SparseColMatRef` and a nalgebra-sparse `CscMatrix` are read
-as the CSR of their transpose,
-positions in that storage. `NotSquare` and `RowGap` arise only from conversions, whose
-`parameter` is the source's own field name.
+as the CSR of their transpose, positions in that storage. A sprs view converts when its pointers
+and indices share one type, sprs's default. `NotSquare` and `RowGap` arise only from conversions,
+whose `parameter` is the source's own field name; `RowGap` is a faer matrix stored with gaps
+(`row_nnz` or `col_nnz` set).
 
 Python submits as part of the build call (`interface/build.md`): a matrix is checked where it is
 passed.
@@ -121,7 +124,8 @@ Python takes any scipy sparse matrix, whole storage. CSR, and CSC as the CSR of 
 with `f64` values and `int32` or `int64` indices are read without a copy; any other format goes
 through `tocsr()` and any other dtype is converted to `f64` or `int64`, each at most once.
 Anything else raises `TypeError`. `parameter` is `indptr`, `indices` or `data` of the matrix
-read. A rectangular matrix raises `not_square`.
+read. A rectangular matrix raises `not_square`. The message carries every field of the Rust
+variant; `kind`, `parameter` and `position` are for matching.
 
 ## Why
 

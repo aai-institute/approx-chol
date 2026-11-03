@@ -23,12 +23,12 @@ requirements are in `../requirements/`.
   composes them and reaches into none. The adapters report through Input's error for a matrix,
   since a conversion answers the same question; a foreign block needs no check.
 - **Interoperability:** one feature per foreign crate, named after it: `faer` 0.24 with faer's
-  `rayon`, `sprs` 0.11, `nalgebra` 0.35 with nalgebra-sparse 0.12, `ndarray` 0.17; `sprs`
-  enables `ndarray`. dyn-stack 0.13 is a required dependency. A Rust adapter borrows, never
+  `rayon`, `sprs` 0.11, `nalgebra` 0.35 with nalgebra-sparse 0.12, `ndarray` 0.17; `sprs` enables
+  `ndarray`. dyn-stack 0.13 is a required dependency, re-exported. A Rust adapter borrows, never
   copies: a matrix converts into Input and fails as Input validates; a dense type implements the
-  solve's block trait, which the solve reads and writes column by column through its scratch.
-  Moving a feature to another version is a breaking release. Python converts a form it cannot
-  borrow, as documented.
+  solve's block trait, which the solve reads and writes column by column through its scratch. Moving
+  a feature to another version is a breaking release. Python converts a form it cannot borrow, as
+  documented.
 
 | Part | Package | Responsible for |
 |---|---|---|

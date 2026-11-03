@@ -6,7 +6,7 @@ The matrices approx-chol accepts and the forms callers give them in.
 
 - **Class.** Real symmetric GDD matrices, weak: singular and disconnected matrices are admitted.
   Single and double precision.
-- **Representations.** An admissible matrix can be given in each of these forms:
+- **Representations.** An admissible matrix can be given in each of these forms that can hold it:
 
   | Representation | Carries exactly |
   |---|---|

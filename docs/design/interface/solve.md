@@ -84,7 +84,8 @@ pub enum ApplyError {
   `ArrayRef`, which owned arrays and views dereference to. A typed faer view converts with
   `as_dyn_mut().as_dyn_stride_mut()`.
 - The unimplemented-trait message names the feature each foreign type needs and the supported
-  versions, faer 0.24, nalgebra 0.35 and ndarray 0.17, and suggests `[..]` for an array.
+  versions, faer 0.24, nalgebra 0.35 and ndarray 0.17, and suggests `[..]` for an array and
+  `&mut *a` for an ndarray array.
 - With `faer`, `ApproxInverse<T>` implements faer's `LinOp`, `BiLinOp`, `Precond` and `BiPrecond`,
   its own adjoint and transpose: faer's `par` is the budget, `par.into()`, and its scratch
   queries are `scratch(rhs_ncols, par.into())`. The in-place methods apply in place, without
@@ -112,7 +113,9 @@ reads, a vector of length $n$ or an $n \times k$ array, converted to `f64` if it
 dtype raises `TypeError`. The solution has `b`'s shape, written to `out` when given, a writable
 `f64` array of that shape in any order whose entries do not overlap, `b` itself allowed, else to a
 new array. A wrong shape or an overlapping `out` raises `ValueError`. Every apply releases the GIL
-and allocates its own scratch.
+and allocates its own scratch. scipy's `cg` and `minres` take it as `M`; `lsmr` takes no
+preconditioner, so it right-preconditions there composed with $A$: `y` from
+`lsmr(aslinearoperator(A) @ B, b)`, then `x = B @ y`.
 
 ## Why
 

@@ -16,7 +16,9 @@ impl<'de, T: Real> serde::Deserialize<'de> for ApproxInverse<T> {}
   not the current one, or whose scalar is not `T`, before it reads $B$.
 - A rejection of the version, the scalar or an invariant of $B$ goes through `D::Error::custom`,
   with a message naming what was found and what was expected; a decoding error is the format's
-  own. A format that drops custom messages, such as postcard, keeps only the error.
+  own. A format that drops custom messages, such as postcard, keeps only the error. The same
+  $B$ bit for bit needs a format that round-trips floats exactly: serde_json does with its
+  `float_roundtrip` feature only.
 
 Python:
 
@@ -41,8 +43,8 @@ was expected; a form that then fails to decode or validate raises `ValueError` a
   releases inside joblib's files, so the encoding is part of the form.
 - **Python reads the header itself:** postcard drops custom messages, and a version or scalar
   mismatch, the failure a caller can act on, is the one a message must name.
-- **`__reduce__`, not the default:** scipy's `LinearOperator` changed its pickled state between
-  releases; rebuilding through the constructor does not depend on it.
+- **`__reduce__`, not the default:** the pickle then holds only approx-chol's versioned form,
+  not scipy's object state, which is not versioned.
 - **The budget in the pickle:** it is what the Python operator holds; another process applies at
   the same budget, all cores when it was `None`.
 - **`ValueError` in Python:** a saved form that does not load is bad input, as `InputError` and

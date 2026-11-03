@@ -28,7 +28,7 @@ impl<T: Real> Complement<T> {
     pub fn factor(self, config: Config, threads: Threads) -> ApproxInverse<T>;
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Config {
     pub seed: u64,
     pub split_merge: NonZeroU32,
@@ -45,7 +45,7 @@ pub enum SchurMode {
     Same,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScalingPolicy { /* private */ }
 impl ScalingPolicy {
     pub fn new(tolerance: f64, max_iterations: usize) -> Option<ScalingPolicy>;
@@ -100,11 +100,16 @@ pub enum BuildError {
 }
 ```
 
-`Config` and `ScalingPolicy` default to seed 0, `split_merge` 1, `exact_max_dim` 24, `Same`,
-tolerance $10^{-9}$ and 2048 iterations; both are serializable behind the `serde` feature, and
-decoding validates as `new` does. `ScalingPolicy::new` accepts a finite tolerance in $[0, 1)$,
-never applied below rounding, and any iteration count. `complement` matters only in a Schur
-build.
+Everything here is at the crate root, as are `Real`, sealed, `PrimInt`, num-traits' re-exported, and
+dyn-stack, re-exported as `approx_chol::dyn_stack`; only Submit's types live in `input`. Every error
+type implements `Error` and `Display`.
+
+`Config` and `ScalingPolicy` implement `Default`: seed 0, `split_merge` 1, `exact_max_dim` 24,
+`Same`, tolerance $10^{-9}$ and 2048 iterations; both are serializable behind the `serde` feature,
+and decoding validates as `new` does. `ScalingPolicy::new` accepts a finite tolerance in $[0, 1)$,
+never applied below rounding, and any iteration count. `exact_max_dim` is the largest block
+dimension factored exactly, a bipartite block's by its kept side. `complement` matters only in a
+Schur build; `Same` factors the complement as the rest, with `split_merge`.
 
 - A component's `vertices` are ascending, in $B$'s numbering; `null_vector`, when present, holds
   one entry per vertex in that order, as computed, unnormalized.
@@ -173,4 +178,4 @@ tolerance out of range raises `ValueError`. Python builds `f64`. A clamp also wa
   $B$; the factors $\mathcal{L}$ and $\mathcal{D}$ are not exposed, so no type names them.
 - **Vertices as `usize`:** the storage index is internal; callers index their own arrays with
   `usize`.
-- **Python without `factorize_complement`:** within, its one consumer, calls Rust.
+- **Python without `factorize_complement`:** the Schur build serves within, which calls Rust.

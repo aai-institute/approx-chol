@@ -44,4 +44,5 @@ How a caller applies $B$ to right-hand sides. The requirements are "Solve", "Sol
   time at 12 threads on pairs of 100 to 100,000 equal components, none on single-component
   pairs.
 - **$k = 0$:** faer's operators may apply to a block without columns.
-- **`LinearOperator`:** it is what scipy's iterative solvers take; `lsmr` calls `rmatvec`.
+- **`LinearOperator`:** it is what scipy's iterative solvers take, as `M`, or composed with
+  $A$ for `lsmr`, which takes no preconditioner and calls `rmatvec`.
