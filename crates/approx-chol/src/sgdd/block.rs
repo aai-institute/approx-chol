@@ -1,6 +1,6 @@
 //! One reduced irreducible block, its balance and grounding.
 
-use super::congruence::{Congruence, Restriction, ScaledFactors};
+use super::congruence::{Congruence, Restriction, ScaledFactors, Selection};
 use super::diagonal_in_range;
 use super::scaling::ScalingReport;
 use crate::storage::{OffDiagonal, Rows};
@@ -154,7 +154,7 @@ type ComplementParts<T, I> = (
 
 /// `M = F · A_c · F` over its vertices, its surplus still to be decided.
 pub(super) struct Congruent<T, I> {
-    vertices: Box<[I]>,
+    vertices: Selection<I>,
     congruence: Congruence<T>,
     off_diagonal: OffDiagonal<T, I>,
 }
@@ -162,7 +162,7 @@ pub(super) struct Congruent<T, I> {
 impl<T: Real, I: Index> Congruent<T, I> {
     /// `S A_c S`, unscaled.
     pub(super) fn signed(
-        vertices: Box<[I]>,
+        vertices: Selection<I>,
         off_diagonal: OffDiagonal<T, I>,
         signs: Congruence<T>,
     ) -> Self {
@@ -179,7 +179,7 @@ impl<T: Real, I: Index> Congruent<T, I> {
 
     /// `S R A_c R S` with its `Σ_j |m_ij|`; `None` once a scaled entry leaves the range.
     pub(super) fn scaled(
-        vertices: Box<[I]>,
+        vertices: Selection<I>,
         off_diagonal: OffDiagonal<T, I>,
         signs: Congruence<T>,
         scales: &[T],
@@ -198,7 +198,7 @@ impl<T: Real, I: Index> Congruent<T, I> {
     }
 
     /// An incidence Gram, assembled switched across a bipartition.
-    pub(super) fn incidence(vertices: Box<[I]>, off_diagonal: OffDiagonal<T, I>) -> Self {
+    pub(super) fn incidence(vertices: Selection<I>, off_diagonal: OffDiagonal<T, I>) -> Self {
         let congruence = match &off_diagonal {
             OffDiagonal::Bipartite(c) => Congruence::NegateFrom(c.n_rows()),
             OffDiagonal::General(_) => Congruence::Identity,
@@ -211,7 +211,7 @@ impl<T: Real, I: Index> Congruent<T, I> {
     }
 
     /// In `A`'s numbering, in local order.
-    pub(super) fn vertices(&self) -> &[I] {
+    pub(super) fn vertices(&self) -> &Selection<I> {
         &self.vertices
     }
 

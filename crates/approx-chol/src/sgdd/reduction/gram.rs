@@ -2,9 +2,10 @@ use std::cell::LazyCell;
 
 use num_traits::PrimInt;
 
-use super::{Folded, Signed, Surplus, SymmetricBlock};
+use super::{Folded, Signed, Surplus};
 use crate::input::{Column, FactorWidth2};
 use crate::sgdd::block::{Congruent, Grounding, IrreducibleBlock, ReduceError};
+use crate::sgdd::congruence::Selection;
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components, Summands};
 use crate::sgdd::scaling::{self, ScalingPolicy, RATIO_BAND};
 use crate::sgdd::Reduced;
@@ -20,8 +21,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
         let Components {
             partition,
             summands,
-        } = assemble_values::<T, J, I, S>(cells, v)?
-            .extract(|cells| Ok(SymmetricBlock::new(cells)))?;
+        } = assemble_values::<T, J, I, S>(cells, v)?.extract(Ok)?;
         let Summands {
             blocks: live,
             lone,
@@ -36,7 +36,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
             let reduced = a.reduce(policy, |a| {
                 let (u, _) = nulls.get_or_insert_with(|| null_vectors(v, partition.components()));
                 // `NaN` where a component has no certificate.
-                let u = (a.vertices.iter()).map(|&v| u[v.index()]);
+                let u = (a.vertices.iter()).map(|v| u[v]);
                 (u.clone().all(f64::is_finite))
                     .then(|| scaling::null_scaling(u, &a.rows.diagonal))
                     .flatten()
@@ -78,25 +78,26 @@ impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_,
     const RESIDUES_FLOAT_SCALED: bool = false;
 
     fn residues<'a>(&'a self, folded: &'a Folded<T, I>) -> impl Iterator<Item = f64> + Clone + 'a {
-        (folded.m.vertices().iter()).map(|v| self.surplus[v.index()])
+        (folded.m.vertices().iter()).map(|v| self.surplus[v])
     }
 
     fn states_ground(&self, folded: &Folded<T, I>) -> bool {
         let epsilon = widen(T::epsilon());
         // A stated ground sums without cancellation, so the floor ignores degree.
         (folded.m.vertices().iter().zip(&folded.rows.diagonal))
-            .any(|(v, &d)| self.stated[v.index()] > RATIO_BAND * epsilon * widen(d))
+            .any(|(v, &d)| self.stated[v] > RATIO_BAND * epsilon * widen(d))
     }
 
-    fn certifies(&self, vertices: &[I]) -> bool {
-        (vertices.iter().min()).is_some_and(|v| self.certified.binary_search(v).is_ok())
+    fn certifies(&self, vertices: &Selection<I>) -> bool {
+        (vertices.iter().min())
+            .is_some_and(|v| self.certified.binary_search(&I::from_index(v)).is_ok())
     }
 
     // Every rounded surplus ≤ 0 leaves nothing to ground: out of band, only past degree ~2·10⁸ (#299).
     fn grounds(&self, m: &Congruent<T, I>, _: super::RowSums<T>) -> Grounding<T> {
         Grounding::of(
             (m.vertices().iter())
-                .map(|&v| narrow(self.surplus[v.index()].max(0.0)))
+                .map(|v| narrow(self.surplus[v].max(0.0)))
                 .collect(),
         )
     }
@@ -115,9 +116,9 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     let mut block_of = vec![I::max_value(); v.n()];
     let mut factor = vec![0.0; v.n()];
     for (c, Folded { m: block, .. }) in blocks.iter().enumerate() {
-        for (slot, &vertex) in block.vertices().iter().enumerate() {
-            block_of[vertex.index()] = I::from_index(c);
-            factor[vertex.index()] = widen(block.factor(slot));
+        for (slot, vertex) in block.vertices().iter().enumerate() {
+            block_of[vertex] = I::from_index(c);
+            factor[vertex] = widen(block.factor(slot));
         }
     }
     let mut surplus = vec![0.0f64; v.n()];

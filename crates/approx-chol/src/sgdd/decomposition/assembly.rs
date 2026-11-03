@@ -5,7 +5,7 @@ mod cells;
 use num_traits::PrimInt;
 
 use super::partition::{Partition, UnionFind};
-use super::{Cells, LonePivot, Partitioned, PrincipalBlocks};
+use super::{LonePivot, Partitioned, PrincipalBlocks, RowSums, Selection, SymmetricBlock};
 use crate::input::{BipartiteFactorWidth2, Column, FactorWidth2, Side};
 use crate::sgdd::block::{Grounding, ReduceError};
 use crate::sgdd::diagonal_in_range;
@@ -14,7 +14,7 @@ use crate::{narrow, widen, Index, Real};
 
 /// How a shape's summed cells are stored, and its components found from them.
 pub(in crate::sgdd) trait AdjacencyLayout {
-    type Adjacency<T: Real, I: Index>: PrincipalBlocks<T, I, Block = (Box<[I]>, OffDiagonal<T, I>)>
+    type Adjacency<T: Real, I: Index>: PrincipalBlocks<T, I, Block = (Selection<I>, OffDiagonal<T, I>)>
         + Sync;
 
     /// The summed cells and components, `seen` visiting each column once and `pair` each nonzero cell with its two ends.
@@ -205,10 +205,10 @@ impl<T: Real, C> LonePivot<T> for Dominant<'_, T, C> {
 
 /// The upper triangle, cancelled cells dropped.
 impl<T: Real, I: Index> PrincipalBlocks<T, I> for UpperAdjacency<T, I> {
-    type Block = (Box<[I]>, OffDiagonal<T, I>);
+    type Block = (Selection<I>, OffDiagonal<T, I>);
 
     fn whole(self, vertices: &[I]) -> Self::Block {
-        (vertices.into(), OffDiagonal::General(self))
+        (Selection::of(vertices), OffDiagonal::General(self))
     }
 
     fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
@@ -225,7 +225,7 @@ impl<T: Real, I: Index> PrincipalBlocks<T, I> for UpperAdjacency<T, I> {
         }
         let rows = Rows::new(ptrs, indices, values, vertices.len());
         (
-            vertices.into(),
+            Selection::of(vertices),
             OffDiagonal::General(UpperAdjacency::new(rows)),
         )
     }
@@ -233,35 +233,35 @@ impl<T: Real, I: Index> PrincipalBlocks<T, I> for UpperAdjacency<T, I> {
 
 impl<T: Real, I: Index, C> PrincipalBlocks<T, I> for Dominant<'_, T, C>
 where
-    C: PrincipalBlocks<T, I, Block = (Box<[I]>, OffDiagonal<T, I>)>,
+    C: PrincipalBlocks<T, I, Block = (Selection<I>, OffDiagonal<T, I>)>,
 {
-    type Block = (Box<[I]>, OffDiagonal<T, I>, Grounding<T>);
+    type Block = (Selection<I>, OffDiagonal<T, I>, Grounding<T>);
 
     fn whole(self, vertices: &[I]) -> Self::Block {
-        let (vertices, off_diagonal) = self.adjacency.whole(vertices);
-        let grounding = surplus_at(self.surplus, &vertices);
-        (vertices, off_diagonal, grounding)
+        let (selection, off_diagonal) = self.adjacency.whole(vertices);
+        let grounding = surplus_at(self.surplus, &selection);
+        (selection, off_diagonal, grounding)
     }
 
     fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
-        let (vertices, off_diagonal) = self.adjacency.component(vertices, position);
-        let grounding = surplus_at(self.surplus, &vertices);
-        (vertices, off_diagonal, grounding)
+        let (selection, off_diagonal) = self.adjacency.component(vertices, position);
+        let grounding = surplus_at(self.surplus, &selection);
+        (selection, off_diagonal, grounding)
     }
 }
 
-fn surplus_at<T: Real, I: Index>(surplus: Option<&[T]>, vertices: &[I]) -> Grounding<T> {
+fn surplus_at<T: Real, I: Index>(surplus: Option<&[T]>, vertices: &Selection<I>) -> Grounding<T> {
     surplus.map_or_else(Grounding::ungrounded, |s| Grounding::of(at(s, vertices)))
 }
 
 /// `values` in `vertices`' order.
-fn at<T: Copy, I: Index>(values: &[T], vertices: &[I]) -> Vec<T> {
-    vertices.iter().map(|&v| values[v.index()]).collect()
+fn at<T: Copy, I: Index>(values: &[T], vertices: &Selection<I>) -> Vec<T> {
+    vertices.iter().map(|v| values[v]).collect()
 }
 
 /// The biadjacency `C`, cancelled cells dropped: rows are `A`'s left vertices.
 impl<T: Real, I: Index> PrincipalBlocks<T, I> for Oriented<T, I> {
-    type Block = (Box<[I]>, OffDiagonal<T, I>);
+    type Block = (Selection<I>, OffDiagonal<T, I>);
 
     fn whole(self, vertices: &[I]) -> Self::Block {
         let (lefts, rights) = vertices.split_at(self.c.n_rows());
@@ -294,21 +294,29 @@ impl<T: Real, I: Index> PrincipalBlocks<T, I> for Oriented<T, I> {
 
 impl<T: Real, I: Index, C> PrincipalBlocks<T, I> for Assembled<T, C>
 where
-    C: PrincipalBlocks<T, I, Block = (Box<[I]>, OffDiagonal<T, I>)>,
+    C: PrincipalBlocks<T, I, Block = (Selection<I>, OffDiagonal<T, I>)>,
 {
-    type Block = Cells<T, I>;
+    type Block = SymmetricBlock<T, I>;
 
     fn whole(self, vertices: &[I]) -> Self::Block {
-        let (vertices, off_diagonal) = self.adjacency.whole(vertices);
-        let diagonal = at(&self.diagonal, &vertices);
-        (vertices, off_diagonal, diagonal)
+        with_rows(&self.diagonal, self.adjacency.whole(vertices))
     }
 
     fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
-        let (vertices, off_diagonal) = self.adjacency.component(vertices, position);
-        let diagonal = at(&self.diagonal, &vertices);
-        (vertices, off_diagonal, diagonal)
+        with_rows(&self.diagonal, self.adjacency.component(vertices, position))
     }
+}
+
+/// A block's adjacency with its diagonal picked from `diagonal` and its rows' `Σ_j |a_ij|`.
+fn with_rows<T: Real, I: Index>(
+    diagonal: &[T],
+    (vertices, off_diagonal): (Selection<I>, OffDiagonal<T, I>),
+) -> SymmetricBlock<T, I> {
+    let rows = RowSums {
+        diagonal: at(diagonal, &vertices),
+        abs: off_diagonal.abs_row_sums(),
+    };
+    SymmetricBlock::new(vertices, off_diagonal, rows)
 }
 
 /// The side opposite `onto`'s eliminated first, `C` transposed when it is the right one.
@@ -317,16 +325,22 @@ fn sides<T: Real, I: Index>(
     rights: &[I],
     c: Rows<T, I>,
     onto: Onto,
-) -> (Box<[I]>, OffDiagonal<T, I>) {
+) -> (Selection<I>, OffDiagonal<T, I>) {
     let left_first = match onto {
         Onto::Smaller => lefts.len() >= rights.len(),
         Onto::Given(kept) => kept == Side::Right,
     };
     match left_first {
-        true => ([lefts, rights].concat().into(), OffDiagonal::Bipartite(c)),
+        true => (
+            Selection::owned([lefts, rights].concat().into()),
+            OffDiagonal::Bipartite(c),
+        ),
         false => {
             let c = c.transpose();
-            ([rights, lefts].concat().into(), OffDiagonal::Bipartite(c))
+            (
+                Selection::owned([rights, lefts].concat().into()),
+                OffDiagonal::Bipartite(c),
+            )
         }
     }
 }

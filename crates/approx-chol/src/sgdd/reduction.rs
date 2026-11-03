@@ -7,10 +7,10 @@ use num_traits::PrimInt;
 use rayon::prelude::*;
 
 use super::block::{Balance, BlockComplement, Congruent, Grounding, IrreducibleBlock, ReduceError};
-use super::congruence::Congruence;
+use super::congruence::{Congruence, Selection};
 use super::decomposition::{
-    of_csr, of_upper, AdjacencyLayout, Biadjacency, Cells, Components, Partitioned,
-    StrictUpperTriangle, Summands,
+    of_csr, of_upper, AdjacencyLayout, Biadjacency, Components, Partitioned, RowSums,
+    StrictUpperTriangle, Summands, SymmetricBlock,
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy};
 use super::{diagonal_in_range, Complement, Reduced};
@@ -82,8 +82,7 @@ impl<T: Real, I: Index> Complement<T, I> {
 impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
     /// Scales and signs each block's `A_c`, closing its surplus from the same rows.
     fn reduce(self, policy: &ScalingPolicy) -> Result<Reduced<T, I>, ReduceError> {
-        self.extract(|cells| {
-            let a = SymmetricBlock::new(cells);
+        self.extract(|a| {
             let relax = |a: &SymmetricBlock<T, I>| {
                 scaling::relax(&a.off_diagonal, &a.rows.diagonal, policy)
             };
@@ -100,28 +99,7 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
     }
 }
 
-/// One block `A_c` as the input gave it, with its rows' `Σ_j |a_ij|` and entry counts.
-struct SymmetricBlock<T, I> {
-    /// In `A`'s numbering, in local order.
-    vertices: Box<[I]>,
-    off_diagonal: OffDiagonal<T, I>,
-    rows: RowSums<T>,
-}
-
 impl<T: Real, I: Index> SymmetricBlock<T, I> {
-    fn new((vertices, off_diagonal, diagonal): Cells<T, I>) -> Self {
-        assert_eq!(vertices.len(), off_diagonal.n(), "one vertex per row");
-        assert_eq!(diagonal.len(), off_diagonal.n(), "one diagonal per row");
-        Self {
-            vertices,
-            rows: RowSums {
-                diagonal,
-                abs: off_diagonal.abs_row_sums(),
-            },
-            off_diagonal,
-        }
-    }
-
     /// `M = F A_c F` with `F = S R`, formed once with its rows, which decide the report; `relax` runs only past the row test, and a frustrated `A_c` takes `S = I` and grounds on its rows at once.
     fn reduce(
         self,
@@ -131,14 +109,14 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         let RowSums { diagonal, abs } = &self.rows;
         let in_range = |(&d, &s): (&T, &T)| diagonal_in_range(d) && diagonal_in_range(s);
         if let Some(i) = diagonal.iter().zip(abs).position(|row| !in_range(row)) {
-            let vertex = self.vertices[i].index();
+            let vertex = self.vertices.vertex(i);
             return Err(ReduceError::OutOfRange { vertex });
         }
         if let Some(i) = diagonal.iter().position(|&d| d <= T::zero()) {
-            let vertex = self.vertices[i].index();
+            let vertex = self.vertices.vertex(i);
             return Err(ReduceError::NonpositiveDiagonal { vertex });
         }
-        let vertex = self.vertices[0].index();
+        let vertex = self.vertices.vertex(0);
         let relaxation = match diagonal
             .iter()
             .zip(abs)
@@ -188,12 +166,6 @@ enum Signed<T, I> {
     Frustrated(IrreducibleBlock<T, I>),
 }
 
-/// `M`'s diagonal and `Σ_j |m_ij|`: the surplus when no shape or `V` gives it.
-struct RowSums<T> {
-    diagonal: Vec<T>,
-    abs: Vec<T>,
-}
-
 /// A folded `M` with its rows and the bands they sit in, its surplus still to be decided.
 struct Folded<T, I> {
     m: Congruent<T, I>,
@@ -212,7 +184,7 @@ trait Surplus<T: Real, I: Index> {
     /// Whether a row states a ground, which no residue test can float.
     fn states_ground(&self, folded: &Folded<T, I>) -> bool;
     /// Whether the block's cycles all close within `√ε`; asked last, as it may run a pass over `V`.
-    fn certifies(&self, vertices: &[I]) -> bool;
+    fn certifies(&self, vertices: &Selection<I>) -> bool;
     /// `M`'s grounds once it does not float.
     fn grounds(&self, m: &Congruent<T, I>, rows: RowSums<T>) -> Grounding<T>;
 }
@@ -232,7 +204,7 @@ impl<T: Real, I: Index> Surplus<T, I> for RowSurplus {
         false
     }
 
-    fn certifies(&self, _: &[I]) -> bool {
+    fn certifies(&self, _: &Selection<I>) -> bool {
         false
     }
 
@@ -268,7 +240,7 @@ impl<T: Real, I: Index> Folded<T, I> {
         if floats {
             return m.block(Balance::Balanced(Grounding::ungrounded()), report);
         }
-        let vertex = m.vertices()[0].index();
+        let vertex = m.vertices().vertex(0);
         let grounding = surplus.grounds(&m, rows);
         if grounding.is_grounded() {
             m.block(Balance::Balanced(grounding), report)
