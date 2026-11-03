@@ -22,10 +22,10 @@ pub(crate) struct Restriction<T, I> {
 
 impl<T: Real, I: Index> Restriction<T, I> {
     /// Panics unless one factor per vertex.
-    pub(super) fn new(vertices: Box<[I]>, congruence: Congruence<T>) -> Self {
+    pub(super) fn new(vertices: Selection<I>, congruence: Congruence<T>) -> Self {
         assert!(congruence.fits(vertices.len()), "one factor per vertex");
         Self {
-            vertices: Selection::of(vertices),
+            vertices,
             congruence,
         }
     }
@@ -37,7 +37,10 @@ impl<T: Real, I: Index> Restriction<T, I> {
     /// The restriction to local vertices `from..`, renumbered by `vertex`: a complement's, `F` commuting with the elimination.
     pub(super) fn tail(self, from: usize, vertex: impl Fn(usize) -> I) -> Self {
         let vertices = (from..self.vertices.len()).map(|k| vertex(self.vertices.vertex(k)));
-        Self::new(vertices.collect(), self.congruence.tail(from))
+        Self::new(
+            Selection::owned(vertices.collect()),
+            self.congruence.tail(from),
+        )
     }
 
     /// `F` from vertex `from` on, `None` unless scaled, so every `|f|` is `1`.
@@ -97,14 +100,26 @@ pub(crate) enum Selection<I> {
 }
 
 impl<I: Index> Selection<I> {
-    fn of(vertices: Box<[I]>) -> Self {
+    /// Copies `vertices` only when they are not one run.
+    pub(super) fn of(vertices: &[I]) -> Self {
+        Self::run(vertices).map_or_else(|| Self::Listed(vertices.into()), Self::Range)
+    }
+
+    pub(super) fn owned(vertices: Box<[I]>) -> Self {
+        Self::run(&vertices).map_or(Self::Listed(vertices), Self::Range)
+    }
+
+    fn run(vertices: &[I]) -> Option<Range<usize>> {
         let start = vertices.first().map_or(0, |v| v.index());
-        match start.checked_add(vertices.len()) {
-            Some(end) if (vertices.iter().enumerate()).all(|(k, v)| v.index() == start + k) => {
-                Self::Range(start..end)
-            }
-            _ => Self::Listed(vertices),
-        }
+        let end = start.checked_add(vertices.len())?;
+        (vertices.iter().enumerate())
+            .all(|(k, v)| v.index() == start + k)
+            .then_some(start..end)
+    }
+
+    /// Each local vertex in the factored matrix's numbering, in local order.
+    pub(super) fn iter(&self) -> impl Iterator<Item = usize> + Clone + '_ {
+        (0..self.len()).map(|k| self.vertex(k))
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -163,7 +178,7 @@ impl<I: Index + serde::Serialize> serde::Serialize for Selection<I> {
 #[cfg(feature = "serde")]
 impl<'de, I: Index + serde::Deserialize<'de>> serde::Deserialize<'de> for Selection<I> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        <Box<[I]>>::deserialize(deserializer).map(Self::of)
+        <Box<[I]>>::deserialize(deserializer).map(Self::owned)
     }
 }
 

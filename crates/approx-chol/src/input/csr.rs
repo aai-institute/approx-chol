@@ -229,7 +229,28 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
     pub(crate) fn upper_len(&self, i: usize) -> usize {
         let (row_ptrs, col_indices, _) = self.arrays();
         let row = &col_indices[index(row_ptrs[i])..index(row_ptrs[i + 1])];
-        row.len() - row.partition_point(|&j| index(j) <= i)
+        row.len() - (row.iter().position(|&j| index(j) > i)).unwrap_or(row.len())
+    }
+
+    /// Row `i`'s diagonal, zero when not stored, and its entries above it, stored zeros included.
+    pub(crate) fn upper_row(
+        &self,
+        i: usize,
+    ) -> (T, impl ExactSizeIterator<Item = (usize, T)> + '_) {
+        let (row_ptrs, col_indices, values) = self.arrays();
+        let span = index(row_ptrs[i])..index(row_ptrs[i + 1]);
+        let (columns, values) = (&col_indices[span.clone()], &values[span]);
+        let below = (columns.iter().position(|&j| index(j) >= i)).unwrap_or(columns.len());
+        let stored = columns.get(below).is_some_and(|&j| index(j) == i);
+        // A stored `−0` reads as absent, as it couples nothing.
+        let diagonal = match stored && values[below] != T::zero() {
+            true => values[below],
+            false => T::zero(),
+        };
+        let above = below + usize::from(stored);
+        let upper =
+            (columns[above..].iter().map(|&j| index(j))).zip(values[above..].iter().copied());
+        (diagonal, upper)
     }
 
     /// Each nonzero `(i, j)`, `i < j`, mirrors checked by a per-row cursor (binary search: +6-15% build).

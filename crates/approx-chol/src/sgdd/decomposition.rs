@@ -5,8 +5,9 @@ mod assembly;
 mod partition;
 
 use super::block::ReduceError;
+use super::congruence::Selection;
 use crate::input::{Canonical, CsrError};
-use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
+use crate::storage::{tally_abs, OffDiagonal, Rows, UpperAdjacency};
 use crate::{Index, Real};
 pub(super) use assembly::{
     assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, StrictUpperTriangle,
@@ -143,11 +144,38 @@ pub(crate) struct Summands<B, I, T> {
     pub(crate) dead: Vec<I>,
 }
 
-/// One component's vertices in local order, off-diagonal and diagonal.
-pub(super) type Cells<T, I> = (Box<[I]>, OffDiagonal<T, I>, Vec<T>);
+/// One block `A_c` as the input gave it, with its rows' `Σ_j |a_ij|`.
+pub(super) struct SymmetricBlock<T, I> {
+    /// In `A`'s numbering, in local order.
+    pub(super) vertices: Selection<I>,
+    pub(super) off_diagonal: OffDiagonal<T, I>,
+    pub(super) rows: RowSums<T>,
+}
+
+impl<T: Real, I: Index> SymmetricBlock<T, I> {
+    fn new(vertices: Selection<I>, off_diagonal: OffDiagonal<T, I>, rows: RowSums<T>) -> Self {
+        assert_eq!(vertices.len(), off_diagonal.n(), "one vertex per row");
+        assert_eq!(
+            rows.diagonal.len(),
+            off_diagonal.n(),
+            "one diagonal per row"
+        );
+        Self {
+            vertices,
+            off_diagonal,
+            rows,
+        }
+    }
+}
+
+/// `M`'s diagonal and `Σ_j |m_ij|`: the surplus when no shape or `V` gives it.
+pub(super) struct RowSums<T> {
+    pub(super) diagonal: Vec<T>,
+    pub(super) abs: Vec<T>,
+}
 
 impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Canonical<'_, T, J> {
-    type Block = Cells<T, I>;
+    type Block = SymmetricBlock<T, I>;
 
     fn whole(self, vertices: &[I]) -> Self::Block {
         self.component(vertices, vertices)
@@ -160,18 +188,17 @@ impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Canonical<'_, T, J
         ptrs.push(0);
         let entries = vertices.iter().map(|&v| self.upper_len(v.index())).sum();
         let (mut indices, mut values) = (Vec::with_capacity(entries), Vec::with_capacity(entries));
-        for &v in vertices {
-            let v = v.index();
-            let mut d = T::zero();
-            for (j, a) in self.row(v).filter(|&(j, a)| j >= v && a != T::zero()) {
-                match j == v {
-                    true => d = a,
-                    false => {
-                        indices.push(position[j]);
-                        values.push(a);
-                    }
-                }
-            }
+        // `Σ_j |a_ij|` tallied while the row is at hand, saving `abs_row_sums`'s pass.
+        let mut abs = vec![0.0; vertices.len()];
+        for (i, &v) in vertices.iter().enumerate() {
+            let (d, upper) = self.upper_row(v.index());
+            let row = upper.filter(|&(_, a)| a != T::zero()).map(|(j, a)| {
+                let j = position[j];
+                indices.push(j);
+                values.push(a);
+                (j.index(), a)
+            });
+            tally_abs(&mut abs, i, row);
             diagonal.push(d);
             ptrs.push(indices.len());
         }
@@ -179,7 +206,12 @@ impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Canonical<'_, T, J
         values.shrink_to_fit();
         let rows = Rows::new(ptrs, indices, values, vertices.len());
         let off_diagonal = OffDiagonal::General(UpperAdjacency::new(rows));
-        (vertices.into(), off_diagonal, diagonal)
+        let abs = abs.into_iter().map(crate::narrow).collect();
+        SymmetricBlock::new(
+            Selection::of(vertices),
+            off_diagonal,
+            RowSums { diagonal, abs },
+        )
     }
 }
 
