@@ -29,8 +29,8 @@ The matrices approx-chol accepts and the forms callers give them in.
   arXiv:0803.0988, §4), then the Gremban cover (Gremban, "Combinatorial preconditioners for
   sparse, symmetric, diagonally dominant linear systems", PhD thesis, CMU-CS-96-123, 1996).
 - **Representations:** each form beyond CSR states a fact that CSR leaves the crate to recover
-  numerically, up to rounding: a zero row sum, a surplus, a scaling, a split. Python, faer and
-  sprs users hold CSR; graph users hold Laplacians, with or without surplus; within forms Gram
-  matrices of columns with at most two nonzeros, the factor-width-2 form, and eliminates one side
-  for a Schur complement. Source: math, consumer.
+  numerically, up to rounding: a zero row sum, a surplus, a scaling, a split. Python, faer, sprs
+  and nalgebra-sparse users hold CSR or CSC; graph users hold Laplacians, with or without
+  surplus; within forms Gram matrices of columns with at most two nonzeros, the factor-width-2
+  form, and eliminates one side for a Schur complement. Source: math, consumer.
 - **Scope:** Source: product (maintainer).

@@ -11,8 +11,8 @@ Who calls approx-chol and what each needs to do. The goals are in `goals.md`.
   solves with them in every iteration from its own parallelism.
 - **Python users:** hold scipy or numpy matrices and pass the approximate inverse to an iterative
   solver.
-- **Rust users of faer or sprs:** hold that library's matrices and bring their own iterative
-  solver.
+- **Rust users of faer, sprs, nalgebra or ndarray:** hold that library's sparse matrices, where
+  it has them, and its dense vectors, and bring their own iterative solver, or faer's.
 - **Graph users:** hold a weighted graph, a Laplacian, or a Laplacian with surplus; often singular.
 - **Persisting users:** build once and solve in another process.
 

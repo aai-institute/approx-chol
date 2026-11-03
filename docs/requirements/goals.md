@@ -32,3 +32,8 @@ Each requirement names its source: math (the context above), a consumer, or the 
 - **Thread determinism:** every result is bit-identical for every thread budget. within; no
   surveyed library provides it, so the crate cannot inherit it.
 - **Persistence:** an approximate inverse can be saved and loaded without refactorizing. Product.
+- **Interoperability:** callers pass the matrices and vectors they hold: in Rust, never
+  converted or cloned whole, sparse matrices of faer, sprs and nalgebra-sparse and dense vectors
+  and blocks of faer, nalgebra and ndarray; in Python, any scipy sparse matrix and any real numpy
+  array, converted when it cannot be borrowed. faer users pass the approximate inverse to faer's
+  iterative solvers as is. Product.

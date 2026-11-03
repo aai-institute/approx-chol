@@ -211,7 +211,8 @@ Terms for dominance of a rounded $A$ under a computed scaling $d$.
 - **Seed:** the value that initializes the random choices of a factorization.
 - **Factorization** (not: decomposition): writing a matrix as a product of factors, and the
   result. The **approximate Cholesky factorization** of a Laplacian $L$ is
-  $(\Pi, \mathcal{L}, \mathcal{D})$.
+  $(\Pi, \mathcal{L}, \mathcal{D})$; that of $A$ is the reduction maps with the approximate
+  Cholesky factorizations of the reduced matrices, and $B$ is the operator it gives.
 - **Factor:** one matrix of a factorization: $\mathcal{L}$ or $\mathcal{D}$.
 - **Approximate inverse** $B$ (not: $Z$, $M^{-1}$): the linear operator $b \mapsto x$ given by the
   reduction maps and the approximate Cholesky factorizations of the reduced matrices. It targets
