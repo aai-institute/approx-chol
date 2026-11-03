@@ -150,13 +150,8 @@ fn grounds_wide<T: Real, I: Index>(sddm: &Sddm<T, I>) -> bool {
     if !sddm.grounded() || sddm.sheets() != Sheets::One {
         return false;
     }
-    let (n, mut least, mut most) = (sddm.n(), T::infinity(), T::zero());
-    sddm.grounded_edges(|_, j, w| {
-        most = most.max(w);
-        if j.index() < n {
-            least = least.min(w);
-        }
-    });
+    let (least, heaviest) = sddm.weight_range();
+    let most = (sddm.surplus().iter()).fold(heaviest, |most, &s| most.max(s));
     least < most * T::epsilon()
 }
 
