@@ -2,11 +2,11 @@ use std::cell::LazyCell;
 
 use num_traits::PrimInt;
 
-use super::{Columns, Evidence, Folded, Signed, SymmetricBlock};
+use super::{Evidence, Folded, Signed, SymmetricBlock};
 use crate::input::{Column, FactorWidth2};
-use crate::sgdd::block::{IrreducibleBlock, ReduceError};
+use crate::sgdd::block::{Congruent, Grounding, IrreducibleBlock, ReduceError};
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components, Summands};
-use crate::sgdd::scaling::{self, ScalingPolicy};
+use crate::sgdd::scaling::{self, ScalingPolicy, RATIO_BAND};
 use crate::sgdd::Reduced;
 use crate::{narrow, widen, Index, Real};
 
@@ -60,6 +60,45 @@ impl<T: Real, I: Index> Reduced<T, I> {
             summands,
         }
         .into_reduced())
+    }
+}
+
+/// One column pass over `V`, by vertex of `A`, and the components whose cycles `V` certifies.
+struct Columns<'a, I, F> {
+    /// Each row's `(M1)_i`.
+    surplus: &'a [f64],
+    /// Each row's ground stated by one-ended columns.
+    stated: &'a [f64],
+    /// Sorted lowest vertices of certified components, built on first use.
+    certified: &'a LazyCell<Vec<I>, F>,
+}
+
+impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Evidence<T, I> for Columns<'_, I, F> {
+    // A Gram's grounds are stated or break a cycle: a scaled block floats only on its certificate.
+    const RESIDUES_FLOAT_SCALED: bool = false;
+
+    fn residues<'a>(&'a self, folded: &'a Folded<T, I>) -> impl Iterator<Item = f64> + Clone + 'a {
+        (folded.m.vertices().iter()).map(|v| self.surplus[v.index()])
+    }
+
+    fn states_ground(&self, folded: &Folded<T, I>) -> bool {
+        let epsilon = widen(T::epsilon());
+        // A stated ground sums without cancellation, so the floor ignores degree.
+        (folded.m.vertices().iter().zip(&folded.rows.diagonal))
+            .any(|(v, &d)| self.stated[v.index()] > RATIO_BAND * epsilon * widen(d))
+    }
+
+    fn certifies(&self, vertices: &[I]) -> bool {
+        (vertices.iter().min()).is_some_and(|v| self.certified.binary_search(v).is_ok())
+    }
+
+    // Every rounded surplus ≤ 0 leaves nothing to ground: out of band, only past degree ~2·10⁸ (#299).
+    fn grounds(&self, m: &Congruent<T, I>, _: super::RowSums<T>) -> Grounding<T> {
+        Grounding::of(
+            (m.vertices().iter())
+                .map(|&v| narrow(self.surplus[v.index()].max(0.0)))
+                .collect(),
+        )
     }
 }
 
@@ -124,20 +163,13 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     if let Some(vertex) = surplus.iter().position(|s| !in_range(s)) {
         return Err(ReduceError::OutOfRange { vertex });
     }
-    let certified = |vertices: &[I]| {
-        (vertices.iter().min()).is_some_and(|v| certified.binary_search(v).is_ok())
+    let columns = Columns {
+        surplus: &surplus,
+        stated: &stated,
+        certified,
     };
     let decided = blocks.into_iter().zip(ones).zip(trace);
-    (decided.map(|((folded, ones), trace)| {
-        folded.settle(Evidence::Columns(Columns {
-            ones,
-            trace,
-            surplus: &surplus,
-            stated: &stated,
-            certified: &certified,
-        }))
-    }))
-    .collect()
+    (decided.map(|((folded, ones), trace)| folded.settle((ones, trace), &columns))).collect()
 }
 
 /// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is, and the sorted lowest vertices of the components that have one: one union-find pass; a cycle off by more than `√ε` relative dooms its component.
