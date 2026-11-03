@@ -18,7 +18,8 @@ How a caller applies $B$ to right-hand sides. The requirements are "Solve", "Sol
   columns at a smaller budget. Solving only reads $B$, so any number of solves run with one $B$
   at once, each with its own scratch.
 - **Threads:** the caller's pool, never a new one, at most the budget, safe nested in the caller's
-  parallel work.
+  parallel work. A solve spreads its budget over $B$'s components, by size; the solution does not
+  depend on how.
 - **One error:** a block of the wrong row count, or scratch that does not meet the block's
   requirement. A block's own layout is checked where it is formed.
 - **Python:** $B$ is a scipy `LinearOperator`, its adjoint itself: `matvec` and `matmat`, with
@@ -38,5 +39,9 @@ How a caller applies $B$ to right-hand sides. The requirements are "Solve", "Sol
 - **Scratch by columns and budget:** a single right-hand side and a sequential solve are not
   charged for a block or a parallel one; a scratch that does not fit is an error, never a wrong
   solution.
+- **Budget over components:** within holds one $B$ per channel pair, and a pair can split into
+  many components; applied one after another, they leave the budget idle, 48–74% more apply
+  time at 12 threads on pairs of 100 to 100,000 equal components, none on single-component
+  pairs.
 - **$k = 0$:** faer's operators may apply to a block without columns.
 - **`LinearOperator`:** it is what scipy's iterative solvers take; `lsmr` calls `rmatvec`.
