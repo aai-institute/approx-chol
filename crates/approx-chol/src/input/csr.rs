@@ -229,7 +229,7 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
     pub(crate) fn upper_len(&self, i: usize) -> usize {
         let (row_ptrs, col_indices, _) = self.arrays();
         let row = &col_indices[index(row_ptrs[i])..index(row_ptrs[i + 1])];
-        row.len() - row.partition_point(|&j| index(j) <= i)
+        row.len() - (row.iter().position(|&j| index(j) > i)).unwrap_or(row.len())
     }
 
     /// Each nonzero `(i, j)`, `i < j`, mirrors checked by a per-row cursor (binary search: +6-15% build).
