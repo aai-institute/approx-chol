@@ -11,9 +11,9 @@ representations are those of `../../requirements/input.md`.
   | Type | Given as | Accepted when, besides the common checks |
   |---|---|---|
   | `CsrRef` | CSR storage of the whole matrix | symmetric up to rounding; no inadmissible row |
-  | `UpperCsrRef` | CSR storage of the upper triangle | no entry below the diagonal; no row of the whole matrix inadmissible |
+  | `TriangleCsrRef` | CSR storage of the upper or the lower triangle, named | no entry outside it; no row of the whole matrix inadmissible |
   | `Laplacian` | edge list, optional weights | weights $\ge 0$; no self-loop |
-  | `Sddm` | a `Laplacian` and one surplus per vertex | every surplus $\ge 0$, not all $0$ |
+  | `Sddm` | a `Laplacian` and one surplus per vertex | every surplus $\ge 0$ |
   | `FactorWidth2` | columns of $V$, each two (row, value) pairs, the values absorbing $W$ | the two rows of a column differ |
   | `BipartiteFactorWidth2` | two width-1 factors, the two sides, each column one (row, value) pair per side; optional column scales, each column's weight their square | both sides have the same column count |
 
@@ -30,12 +30,12 @@ representations are those of `../../requirements/input.md`.
 
 ## Why
 
-- **A type per representation:** a caller looks for what they hold by its name. Beyond the two CSR
-  forms, a representation earns a type only if it carries a fact CSR leaves to numerical recovery.
+- **A type per representation:** a caller looks for what they hold by its name. Beyond full CSR, a
+  representation earns a type only if it carries a fact CSR leaves to numerical recovery; a
+  triangle carries exact symmetry, which full CSR is checked for up to rounding.
 - **Validation in the constructor:** an `Input` is admissible before Build sees it.
-- **Self-loops and all-zero surpluses rejected:** a self-loop contributes nothing, so it is a defect
-  in the caller's data; an `Sddm` with no surplus is a `Laplacian`, and no matrix has
-  two graph types.
+- **Self-loops rejected:** a self-loop contributes nothing, so it is a defect in the caller's data.
+  A surplus of $0$ everywhere is admitted: a component without surplus floats, as in a `Laplacian`.
 - **Structural admissibility:** deciding GDD means running the dominance scaling, which is the
   build's; a non-GDD input is clamped and reported (`../../algorithm.md`, Clamp).
 - **Borrowing:** memory economy; the build copies what $B$ needs.

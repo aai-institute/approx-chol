@@ -7,7 +7,7 @@ The contract is `../contracts/submit.md`.
 ```rust
 pub mod input {
     pub struct CsrRef<'a, T, I = u32> { /* private */ }
-    pub struct UpperCsrRef<'a, T, I = u32> { /* private */ }
+    pub struct TriangleCsrRef<'a, T, I = u32> { /* private */ }
     pub struct Laplacian<'a, T, I = u32> { /* private */ }
     pub struct Sddm<'a, T, I = u32> { /* private */ }
     pub struct FactorWidth2<'a, T, I = u32> { /* private */ }
@@ -18,8 +18,10 @@ pub mod input {
         pub fn new(n: usize, row_ptrs: &'a [I], col_indices: &'a [I], values: &'a [T])
             -> Result<Self, InputError>;
     }
-    impl<'a, T: Real, I: PrimInt> UpperCsrRef<'a, T, I> {
-        pub fn new(n: usize, row_ptrs: &'a [I], col_indices: &'a [I], values: &'a [T])
+    impl<'a, T: Real, I: PrimInt> TriangleCsrRef<'a, T, I> {
+        pub fn upper(n: usize, row_ptrs: &'a [I], col_indices: &'a [I], values: &'a [T])
+            -> Result<Self, InputError>;
+        pub fn lower(n: usize, row_ptrs: &'a [I], col_indices: &'a [I], values: &'a [T])
             -> Result<Self, InputError>;
     }
     impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
@@ -85,9 +87,8 @@ pub mod input {
         Magnitude { vertex: usize },
         SelfLoop { edge: usize },
         RepeatedRow { column: usize },
-        ZeroSurplus,
         NotSymmetric { row: usize },
-        BelowDiagonal { row: usize },
+        OutsideTriangle { row: usize },
         InadmissibleRow { row: usize },
         NotSquare { rows: usize, cols: usize },
         RowGap { row: usize },
@@ -97,12 +98,14 @@ pub mod input {
 }
 ```
 
-`Input` also converts `From` `UpperCsrRef`, `Laplacian`, `Sddm`, `FactorWidth2` and
+`Input` also converts `From` `TriangleCsrRef`, `Laplacian`, `Sddm`, `FactorWidth2` and
 `BipartiteFactorWidth2`. `T` is `f32` or `f64` (`Real`, sealed); `I` is any primitive integer,
 `u32` unless named, so `Laplacian::<f64, i64>::new(n, &u, &v)` names both where no value fixes
 `T`. Every type is `Copy` and `Debug`; every error type implements `Error` and `Display`.
-`CsrRef::new` and `UpperCsrRef::new` accept a row's entries in any order, and repeated columns,
-which sum. A sprs CSC view, a faer `SparseColMatRef` and a nalgebra-sparse `CscMatrix` are read
+`CsrRef::new`, `TriangleCsrRef::upper` and `TriangleCsrRef::lower` accept a row's entries in any
+order, and repeated columns, which sum; a triangle's diagonal is stored once, in it. A CSC
+triangle is passed as the CSR of the other, a faer `SparseColMatRef` holding the lower triangle
+to `upper`. A sprs CSC view, a faer `SparseColMatRef` and a nalgebra-sparse `CscMatrix` are read
 as the CSR of their transpose, positions in that storage. A sprs view converts when its pointers
 and indices share one type, sprs's default. `NotSquare` and `RowGap` arise only from conversions,
 whose `parameter` is the source's own field name; `RowGap` is a faer matrix stored with gaps
@@ -146,6 +149,8 @@ variant; `kind`, `parameter` and `position` are for matching.
   forms, faer's and nalgebra-sparse's main ones, convert too.
 - **Any order and repeated columns:** they store the same matrix; Submit judges the matrix, not
   its storage.
+- **One `TriangleCsrRef`, `upper` and `lower`:** both triangles carry the same fact, so one type;
+  the constructor names the triangle, as `weighted` names the values.
 - **One `I` for row pointers and column indices:** one index type per input; past $2^{32}$ nonzeros
   the caller widens both.
 - **`Side` in `input`:** it names a part of `BipartiteFactorWidth2`; Build names a side with it.

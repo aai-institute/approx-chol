@@ -47,7 +47,7 @@ requirements are in `../requirements/`.
 | Approximate inverse | `ApproxInverse`, `Component`, `Sgdd`, `Complement`, `factorize`, `factorize_with`, `factorize_complement`, `MatrixMut` with its impls for slices, `Vec` and arrays, `ColumnMajor`, `Columns`, `ApplyError`, `LayoutError`, `dyn_stack`; serde for `ApproxInverse` | none |
 | Reduction | `ScalingPolicy`, `Clamp`, `ScalingOutcome`, `BuildError` | `Reduced` (the SDDM matrices with the vertices each keeps, the lift, the facts), `Lift` with its scratch requirement |
 | Cholesky | `Config`, `SchurMode` | `Factorization` with its scratch requirement |
-| Input | module `input`: `CsrRef`, `UpperCsrRef`, `Laplacian`, `Sddm`, `FactorWidth2`, `FactorWidth1`, `BipartiteFactorWidth2`, `Input`, `InputError`, `Side` | the representation an `Input` holds |
+| Input | module `input`: `CsrRef`, `TriangleCsrRef`, `Laplacian`, `Sddm`, `FactorWidth2`, `FactorWidth1`, `BipartiteFactorWidth2`, `Input`, `InputError`, `Side` | the representation an `Input` holds |
 | Storage | `Real`, `PrimInt` (num-traits') | `Csr`, `SddmCsr`, the storage index |
 | Execution | `Threads` | `join`, `fork` |
 

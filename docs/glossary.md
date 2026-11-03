@@ -41,7 +41,8 @@ take. "(not: …)" lists synonyms we don't use.
 - **Machine epsilon** $\varepsilon$: the spacing from $1$ to the next larger value of the scalar
   type, $2^{-52}$ for `f64` and $2^{-23}$ for `f32` (Rust's `EPSILON`), twice the unit roundoff.
 - **CSR:** compressed sparse row storage of $A$: row pointers, column indices, values. **Full**
-  stores every entry; **upper triangle** stores $a_{ij}$ for $j \ge i$ only.
+  stores every entry; a **triangle** stores the upper, $a_{ij}$ for $j \ge i$, or the lower,
+  $j \le i$, only. The CSC storage of a triangle is the CSR of the other.
 - **Symmetric up to rounding:** $|a_{ij} - a_{ji}|$ is within a tolerance relative to the entries.
 
 ## Graph structure
