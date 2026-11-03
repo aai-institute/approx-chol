@@ -20,7 +20,8 @@ requirements are in `../requirements/`.
 - The Rust API is the public face of Input and the approximate inverse, with their configuration
   and reports; it is not a part of its own.
 - Each part owns its configuration, diagnostics, errors and encoding. The approximate inverse
-  composes them and reaches into none.
+  composes them and reaches into none. The adapters report through Input's error, since a
+  conversion answers the same question, why a matrix is not admissible.
 
 | Part | Package | Responsible for |
 |---|---|---|

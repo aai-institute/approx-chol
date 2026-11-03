@@ -31,7 +31,7 @@ pub mod input {
         pub fn new(laplacian: Laplacian<'a, T, I>, surplus: &'a [T]) -> Result<Self, InputError>;
     }
     impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
-        pub fn new(n: usize, a: (&'a [I], &'a [T]), b: (&'a [I], &'a [T]))
+        pub fn new(n: usize, (a, x): (&'a [I], &'a [T]), (b, y): (&'a [I], &'a [T]))
             -> Result<Self, InputError>;
     }
     impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
@@ -54,6 +54,12 @@ pub mod input {
     }
     #[cfg(feature = "faer")]
     impl<'a, T: Real, I: faer::Index> TryFrom<faer::sparse::SparseRowMatRef<'a, I, T>>
+        for CsrRef<'a, T, I>
+    {
+        type Error = InputError;
+    }
+    #[cfg(feature = "faer")]
+    impl<'a, T: Real, I: faer::Index> TryFrom<faer::sparse::SparseColMatRef<'a, I, T>>
         for CsrRef<'a, T, I>
     {
         type Error = InputError;
@@ -83,11 +89,31 @@ pub mod input {
 
 `Input` also converts `From` `UpperCsrRef`, `Laplacian`, `Sddm`, `FactorWidth2` and
 `BipartiteFactorWidth2`. `T` is `f32` or `f64` (`Real`, sealed); `I` is any primitive integer,
-`u32` unless named. Every type is `Copy` and `Debug`; `InputError` implements `Error` and
-`Display`. `CsrRef::new` and `UpperCsrRef::new` accept a row's entries in any order, and
-repeated columns, which sum. A sprs CSC view is read as the CSR of its transpose, its positions in
-that storage.
-`NotSquare` and `RowGap` arise only from the sprs and faer conversions.
+`u32` unless named, so `Laplacian::<f64, i64>::new(n, &u, &v)` names both where no value fixes
+`T`. Every type is `Copy` and `Debug`; every error type implements `Error` and `Display`.
+`CsrRef::new` and `UpperCsrRef::new` accept a row's entries in any order, and repeated columns,
+which sum. A sprs CSC view and a faer `SparseColMatRef` are read as the CSR of their transpose,
+positions in that storage. `NotSquare` and `RowGap` arise only from conversions, whose
+`parameter` is the source's own field name.
+
+Python submits as part of the build call (`interface/build.md`): a matrix is checked where it is
+passed.
+
+```python
+def factorize(matrix: csr_matrix | csr_array, ...) -> Factor: ...
+def factorize_raw(row_ptrs: ArrayLike, col_indices: ArrayLike, values: ArrayLike, n: int,
+                  ...) -> Factor: ...
+
+class InputError(ValueError):
+    kind: str            # the Rust variant in snake_case, e.g. "not_symmetric"
+    parameter: str | None
+    position: int | None # the entry, row, edge, column or vertex the variant names
+```
+
+Python takes the CSR forms only, whole storage; indices of any integer dtype, values of any real
+dtype, converted to `f64`. `parameter` is `indptr`, `indices` or `data` for a scipy matrix and the
+argument's name for `factorize_raw`, whose `n` stays last for compatibility. A rectangular scipy
+matrix raises `not_square`.
 
 ## Why
 
@@ -100,12 +126,19 @@ that storage.
   that makes no sense for it. A slice is named by the constructor's own parameter, the caller's
   exact terms, for reading, not matching; whether an index or a value is wrong is the variant. A
   bipartite form numbers its vertices left side first, so a vertex is a position on both sides.
-- **`#[non_exhaustive]`:** variants and slices can be added without a breaking release.
-- **`Input` opaque, built only by `From`:** it hands nothing back.
+- **`#[non_exhaustive]`:** variants can be added without a breaking release.
+- **`Input` opaque, built only by `From`:** every `Input` is admissible, and it hands nothing
+  back.
 - **sprs and faer through `TryFrom` into `CsrRef`:** their matrices are compressed storage; a
-  symmetric matrix's CSC storage is the CSR of its transpose.
+  symmetric matrix's CSC storage is the CSR of its transpose, so faer's column form, its main
+  one, converts too.
 - **Any order and repeated columns:** they store the same matrix; Submit judges the matrix, not
   its storage.
 - **One `I` for row pointers and column indices:** one index type per input; past $2^{32}$ nonzeros
   the caller widens both.
 - **`Side` in `input`:** it names a part of `BipartiteFactorWidth2`; Build names a side with it.
+- **Python: CSR only, inside the build call:** Python users hold scipy matrices; within, the one
+  consumer of the other forms, calls Rust. A Python input object would be one more step that
+  carries nothing.
+- **`InputError` a `ValueError`:** existing `except ValueError` keeps working; `kind` and the
+  position mirror the Rust variant.

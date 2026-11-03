@@ -6,9 +6,11 @@ How a caller turns an admissible matrix into the approximate inverse $B$. The re
 ## Decision
 
 - **Arguments:** an `Input`; a configuration (fill-in level, seed, scaling tolerance and step
-  limit, largest component factored exactly), valid by construction, each setting defaulted; a
-  thread budget (a nonzero count or all cores), named in Rust, all cores by default in Python;
-  an observer, `()` for none, which receives diagnostics and may stop the build.
+  limit, largest component factored exactly, how a Schur complement is formed), valid by
+  construction, each setting defaulted; a thread budget (a nonzero count or all cores), all cores
+  in the Rust one-call functions and by default in Python, named at the two-stage level; an
+  observer, `()` for none, which receives diagnostics and may stop the build, at the two-stage
+  level.
 - **Result:** $B$, stopped, or a `BuildError`, located in the caller's numbering: a computed
   scale, scaled entry or scaled row sum leaves the representable range, or a component has more
   than $1/\varepsilon$ vertices.
@@ -29,8 +31,10 @@ How a caller turns an admissible matrix into the approximate inverse $B$. The re
   Submit checks what single entries and rows decide.
 - **Budget apart from the configuration:** it does not change $B$, so the configuration stays a
   value that can be compared and saved.
-- **Budget named in Rust:** a Rust caller often runs its own parallelism; no default fits inside and
-  outside a parallel loop. A Python caller expects the machine.
+- **Two levels:** one call for the common case, with defaults; two stages, reduce then factor, for
+  every setting and for a caller who reads the clamps before paying for the factorization.
+- **Budget named at the two-stage level:** a caller inside its own parallel loop needs that level
+  anyway; one call, like Python, expects the machine.
 - **Facts on $B$:** the solve needs the null vectors itself, and they persist with $B$.
 - **Diagnostics through the observer:** they serve watching, profiling and tests, not the solve; a
   caller who does not observe pays nothing.
