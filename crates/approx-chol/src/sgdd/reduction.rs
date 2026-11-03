@@ -88,7 +88,10 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
                 scaling::relax(&a.off_diagonal, &a.rows.diagonal, policy)
             };
             let block = match a.reduce(policy, relax)? {
-                Signed::Folded(folded) => folded.block()?,
+                Signed::Folded(folded) => {
+                    let band = folded.band();
+                    folded.settle(band, &RowSurplus)?
+                }
                 Signed::Frustrated(block) => block,
             };
             Ok(block)
@@ -200,30 +203,41 @@ struct Folded<T, I> {
     clamped: f64,
 }
 
-impl<T: Real, I: Index> Folded<T, I> {
-    /// `M` floating or grounded on `M1`: `1ᵀM1 = tr M − Σ|offdiag(M)|`, both `ε`-scaled as the Gram path's, so `tr M` cannot overflow.
-    fn block(self) -> Result<IrreducibleBlock<T, I>, ReduceError> {
-        let report = self.vector.report(self.clamped);
-        let vertex = self.m.vertices()[0].index();
-        let off_diagonal = self.m.off_diagonal();
-        let epsilon = widen(T::epsilon());
-        let diagonal = crate::Sum2::of(&self.rows.diagonal, |_, d| epsilon * widen(d));
-        let trace = diagonal.total();
-        // `tr M` rounded on its own drops a surplus below its ulp, which the Gram path keeps.
-        let ones = off_diagonal.scaled_abs_into(diagonal, -epsilon).total();
-        let RowSums { diagonal, abs } = &self.rows;
-        let residues = (diagonal.iter().zip(abs)).map(|(&d, &s)| widen(d) - widen(s));
-        if within_band::<T>(ones, trace) && self.floats(residues) {
-            return self
-                .m
-                .block(Balance::Balanced(Grounding::ungrounded()), report);
-        }
-        let Self {
-            m,
-            rows: RowSums { diagonal, abs },
-            ..
-        } = self;
-        let grounding = match surplus(&diagonal, abs) {
+/// `M`'s surplus `M1` and what tells a real one from rounding: a CSR `A` has only `M`'s rows, a Gram also `V`.
+trait Surplus<T: Real, I: Index> {
+    /// Whether residues alone float a scaled block, which then has no certificate to fall back on.
+    const RESIDUES_FLOAT_SCALED: bool;
+    /// Each row's residue `(M1)_i`.
+    fn residues<'a>(&'a self, folded: &'a Folded<T, I>) -> impl Iterator<Item = f64> + Clone + 'a;
+    /// Whether a row states a ground, which no residue test can float.
+    fn states_ground(&self, folded: &Folded<T, I>) -> bool;
+    /// Whether the block's cycles all close within `√ε`; asked last, as it may run a pass over `V`.
+    fn certifies(&self, vertices: &[I]) -> bool;
+    /// `M`'s grounds once it does not float.
+    fn grounds(&self, m: &Congruent<T, I>, rows: RowSums<T>) -> Grounding<T>;
+}
+
+/// Read from `M`'s rows: `d_i − Σ_j |m_ij|`.
+struct RowSurplus;
+
+impl<T: Real, I: Index> Surplus<T, I> for RowSurplus {
+    const RESIDUES_FLOAT_SCALED: bool = true;
+
+    fn residues<'a>(&'a self, folded: &'a Folded<T, I>) -> impl Iterator<Item = f64> + Clone + 'a {
+        let RowSums { diagonal, abs } = &folded.rows;
+        (diagonal.iter().zip(abs)).map(|(&d, &s)| widen(d) - widen(s))
+    }
+
+    fn states_ground(&self, _: &Folded<T, I>) -> bool {
+        false
+    }
+
+    fn certifies(&self, _: &[I]) -> bool {
+        false
+    }
+
+    fn grounds(&self, m: &Congruent<T, I>, RowSums { diagonal, abs }: RowSums<T>) -> Grounding<T> {
+        match surplus(&diagonal, abs) {
             grounding if grounding.is_grounded() => grounding,
             // An uncompensated `f64` row sum can round up to `d_i` from degree 67 (#269).
             _ => {
@@ -231,12 +245,48 @@ impl<T: Real, I: Index> Folded<T, I> {
                 let residues = (diagonal.iter().zip(sums))
                     .map(|(&d, s)| narrow((widen(d) - s).max(0.0)))
                     .collect();
-                Some(Grounding::of(residues))
-                    .filter(Grounding::is_grounded)
-                    .ok_or(ReduceError::Unscalable { vertex })?
+                Grounding::of(residues)
             }
-        };
-        m.block(Balance::Balanced(grounding), report)
+        }
+    }
+}
+
+impl<T: Real, I: Index> Folded<T, I> {
+    /// The one float-or-ground rule: in band, no stated ground, and residues or a certificate float `M`.
+    fn settle<S: Surplus<T, I>>(
+        self,
+        (ones, trace): (f64, f64),
+        surplus: &S,
+    ) -> Result<IrreducibleBlock<T, I>, ReduceError> {
+        let dominant = matches!(self.vector, ScaleVector::Identity);
+        let floats = !surplus.states_ground(&self)
+            && within_band::<T>(ones, trace)
+            && (((dominant || S::RESIDUES_FLOAT_SCALED) && self.floats(surplus.residues(&self)))
+                || surplus.certifies(self.m.vertices()));
+        let report = self.vector.report(self.clamped);
+        let Self { m, rows, .. } = self;
+        if floats {
+            return m.block(Balance::Balanced(Grounding::ungrounded()), report);
+        }
+        let vertex = m.vertices()[0].index();
+        let grounding = surplus.grounds(&m, rows);
+        if grounding.is_grounded() {
+            m.block(Balance::Balanced(grounding), report)
+        } else {
+            Err(ReduceError::Unscalable { vertex })
+        }
+    }
+
+    /// `(ε·1ᵀM1, ε·tr M)` from `M`'s rows, `1ᵀM1 = tr M − Σ|offdiag(M)|`, so `tr M` cannot overflow.
+    fn band(&self) -> (f64, f64) {
+        let epsilon = widen(T::epsilon());
+        let diagonal = crate::Sum2::of(&self.rows.diagonal, |_, d| epsilon * widen(d));
+        let trace = diagonal.total();
+        // `tr M` rounded on its own drops a surplus below its ulp, which the Gram path keeps.
+        let ones = (self.m.off_diagonal())
+            .scaled_abs_into(diagonal, -epsilon)
+            .total();
+        (ones, trace)
     }
 
     /// Whether no row's surplus outweighs its coupling or passes its band.

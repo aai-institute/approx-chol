@@ -2,11 +2,11 @@ use std::cell::LazyCell;
 
 use num_traits::PrimInt;
 
-use super::{within_band, Folded, Signed, SymmetricBlock};
+use super::{Folded, Signed, Surplus, SymmetricBlock};
 use crate::input::{Column, FactorWidth2};
-use crate::sgdd::block::{Balance, Grounding, IrreducibleBlock, ReduceError};
+use crate::sgdd::block::{Congruent, Grounding, IrreducibleBlock, ReduceError};
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components, Summands};
-use crate::sgdd::scaling::{self, ScaleVector, ScalingPolicy, RATIO_BAND};
+use crate::sgdd::scaling::{self, ScalingPolicy, RATIO_BAND};
 use crate::sgdd::Reduced;
 use crate::{narrow, widen, Index, Real};
 
@@ -63,7 +63,46 @@ impl<T: Real, I: Index> Reduced<T, I> {
     }
 }
 
-/// Grounds a folded block on `s = M·1` unless, in band and stating no ground, its cycles close or, dominant, [`Folded::floats`] admits it.
+/// Summed from `V`'s columns, with what one-ended columns state and the components whose cycles `V` certifies.
+struct GramSurplus<'a, I, F> {
+    /// Each row's `(M1)_i`.
+    surplus: &'a [f64],
+    /// Each row's ground stated by one-ended columns.
+    stated: &'a [f64],
+    /// Sorted lowest vertices of certified components, built on first use.
+    certified: &'a LazyCell<Vec<I>, F>,
+}
+
+impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_, I, F> {
+    // A Gram's grounds are stated or break a cycle: a scaled block floats only on its certificate.
+    const RESIDUES_FLOAT_SCALED: bool = false;
+
+    fn residues<'a>(&'a self, folded: &'a Folded<T, I>) -> impl Iterator<Item = f64> + Clone + 'a {
+        (folded.m.vertices().iter()).map(|v| self.surplus[v.index()])
+    }
+
+    fn states_ground(&self, folded: &Folded<T, I>) -> bool {
+        let epsilon = widen(T::epsilon());
+        // A stated ground sums without cancellation, so the floor ignores degree.
+        (folded.m.vertices().iter().zip(&folded.rows.diagonal))
+            .any(|(v, &d)| self.stated[v.index()] > RATIO_BAND * epsilon * widen(d))
+    }
+
+    fn certifies(&self, vertices: &[I]) -> bool {
+        (vertices.iter().min()).is_some_and(|v| self.certified.binary_search(v).is_ok())
+    }
+
+    // Every rounded surplus ≤ 0 leaves nothing to ground: out of band, only past degree ~2·10⁸ (#299).
+    fn grounds(&self, m: &Congruent<T, I>, _: super::RowSums<T>) -> Grounding<T> {
+        Grounding::of(
+            (m.vertices().iter())
+                .map(|&v| narrow(self.surplus[v.index()].max(0.0)))
+                .collect(),
+        )
+    }
+}
+
+/// Each folded block settled by [`Folded::settle`] on one pass over `V`'s columns.
 fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
     blocks: Vec<Folded<T, I>>,
@@ -124,39 +163,13 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     if let Some(vertex) = surplus.iter().position(|s| !in_range(s)) {
         return Err(ReduceError::OutOfRange { vertex });
     }
+    let gram = GramSurplus {
+        surplus: &surplus,
+        stated: &stated,
+        certified,
+    };
     let decided = blocks.into_iter().zip(ones).zip(trace);
-    (decided.map(|((folded, ones), trace)| {
-        let rows = (folded.m.vertices().iter()).map(|v| v.index());
-        // A stated ground sums without cancellation, so the floor ignores degree.
-        let stated_ground = (rows.clone().zip(&folded.rows.diagonal))
-            .any(|(v, &d)| stated[v] > RATIO_BAND * epsilon * widen(d));
-        let in_band = within_band::<T>(ones, trace);
-        let dominant = matches!(folded.vector, ScaleVector::Identity);
-        // A Gram's grounds are stated or break a cycle: closing all, `V` is singular within `√ε`.
-        let floats = !stated_ground
-            && in_band
-            && ((dominant && folded.floats(rows.map(|v| surplus[v])))
-                || (folded.m.vertices().iter().min())
-                    .is_some_and(|v| certified.binary_search(v).is_ok()));
-        let report = folded.vector.report(folded.clamped);
-        let block = folded.m;
-        if floats {
-            return block.block(Balance::Balanced(Grounding::ungrounded()), report);
-        }
-        let vertices = block.vertices();
-        let grounds: Vec<T> = (vertices.iter())
-            .map(|&v| narrow(surplus[v.index()].max(0.0)))
-            .collect();
-        // Every rounded surplus ≤ 0 leaves nothing to ground: out of band, only past degree ~2·10⁸ (#299).
-        let vertex = vertices[0].index();
-        match Grounding::of(grounds) {
-            grounding if grounding.is_grounded() => {
-                block.block(Balance::Balanced(grounding), report)
-            }
-            _ => Err(ReduceError::Unscalable { vertex }),
-        }
-    }))
-    .collect()
+    (decided.map(|((folded, ones), trace)| folded.settle((ones, trace), &gram))).collect()
 }
 
 /// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is, and the sorted lowest vertices of the components that have one: one union-find pass; a cycle off by more than `√ε` relative dooms its component.
