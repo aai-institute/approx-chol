@@ -154,13 +154,7 @@ impl<T: Real, I: Index> Rows<T, I> {
     fn abs_sums(&self, offset: usize) -> Vec<f64> {
         let mut sums = vec![0.0; offset + self.n_cols];
         for i in 0..self.n_rows() {
-            let mut sum = 0.0;
-            for (j, x) in self.row(i) {
-                let x = widen(x.abs());
-                sum += x;
-                sums[offset + j] += x;
-            }
-            sums[i] += sum;
+            tally_abs(&mut sums, i, self.row(i).map(|(j, &x)| (offset + j, x)));
         }
         sums
     }
@@ -401,4 +395,19 @@ impl<T: Real, I: Index> Rows<T, I> {
             self.values.len() == self.indices.len() && self.values.iter().all(|v| v.is_finite());
         (self.shaped() && values).then_some(self)
     }
+}
+
+/// Adds row `i`'s `|x|` in `f64`, each at its column's slot and their sum at `i`: the one order every `Σ_j |a_ij|` takes.
+pub(crate) fn tally_abs<T: Real>(
+    sums: &mut [f64],
+    i: usize,
+    row: impl Iterator<Item = (usize, T)>,
+) {
+    let mut sum = 0.0;
+    for (j, x) in row {
+        let x = widen(x.abs());
+        sum += x;
+        sums[j] += x;
+    }
+    sums[i] += sum;
 }
