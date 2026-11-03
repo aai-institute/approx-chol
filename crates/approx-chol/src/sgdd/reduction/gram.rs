@@ -2,7 +2,7 @@ use std::cell::LazyCell;
 
 use num_traits::PrimInt;
 
-use super::{Evidence, Folded, Signed, SymmetricBlock};
+use super::{Folded, Signed, Surplus, SymmetricBlock};
 use crate::input::{Column, FactorWidth2};
 use crate::sgdd::block::{Congruent, Grounding, IrreducibleBlock, ReduceError};
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components, Summands};
@@ -63,8 +63,8 @@ impl<T: Real, I: Index> Reduced<T, I> {
     }
 }
 
-/// One column pass over `V`, by vertex of `A`, and the components whose cycles `V` certifies.
-struct Columns<'a, I, F> {
+/// Summed from `V`'s columns, with what one-ended columns state and the components whose cycles `V` certifies.
+struct GramSurplus<'a, I, F> {
     /// Each row's `(M1)_i`.
     surplus: &'a [f64],
     /// Each row's ground stated by one-ended columns.
@@ -73,7 +73,7 @@ struct Columns<'a, I, F> {
     certified: &'a LazyCell<Vec<I>, F>,
 }
 
-impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Evidence<T, I> for Columns<'_, I, F> {
+impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_, I, F> {
     // A Gram's grounds are stated or break a cycle: a scaled block floats only on its certificate.
     const RESIDUES_FLOAT_SCALED: bool = false;
 
@@ -163,13 +163,13 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     if let Some(vertex) = surplus.iter().position(|s| !in_range(s)) {
         return Err(ReduceError::OutOfRange { vertex });
     }
-    let columns = Columns {
+    let gram = GramSurplus {
         surplus: &surplus,
         stated: &stated,
         certified,
     };
     let decided = blocks.into_iter().zip(ones).zip(trace);
-    (decided.map(|((folded, ones), trace)| folded.settle((ones, trace), &columns))).collect()
+    (decided.map(|((folded, ones), trace)| folded.settle((ones, trace), &gram))).collect()
 }
 
 /// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is, and the sorted lowest vertices of the components that have one: one union-find pass; a cycle off by more than `√ε` relative dooms its component.

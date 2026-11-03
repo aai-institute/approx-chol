@@ -90,7 +90,7 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
             let block = match a.reduce(policy, relax)? {
                 Signed::Folded(folded) => {
                     let band = folded.band();
-                    folded.settle(band, &Rows)?
+                    folded.settle(band, &RowSurplus)?
                 }
                 Signed::Frustrated(block) => block,
             };
@@ -203,8 +203,8 @@ struct Folded<T, I> {
     clamped: f64,
 }
 
-/// What settles a folded `M` besides its band: a CSR `A` has only `M`'s rows, a Gram also `V`.
-trait Evidence<T: Real, I: Index> {
+/// `M`'s surplus `M1` and what tells a real one from rounding: a CSR `A` has only `M`'s rows, a Gram also `V`.
+trait Surplus<T: Real, I: Index> {
     /// Whether residues alone float a scaled block, which then has no certificate to fall back on.
     const RESIDUES_FLOAT_SCALED: bool;
     /// Each row's residue `(M1)_i`.
@@ -217,10 +217,10 @@ trait Evidence<T: Real, I: Index> {
     fn grounds(&self, m: &Congruent<T, I>, rows: RowSums<T>) -> Grounding<T>;
 }
 
-/// `M`'s rows alone.
-struct Rows;
+/// Read from `M`'s rows: `d_i − Σ_j |m_ij|`.
+struct RowSurplus;
 
-impl<T: Real, I: Index> Evidence<T, I> for Rows {
+impl<T: Real, I: Index> Surplus<T, I> for RowSurplus {
     const RESIDUES_FLOAT_SCALED: bool = true;
 
     fn residues<'a>(&'a self, folded: &'a Folded<T, I>) -> impl Iterator<Item = f64> + Clone + 'a {
@@ -253,23 +253,23 @@ impl<T: Real, I: Index> Evidence<T, I> for Rows {
 
 impl<T: Real, I: Index> Folded<T, I> {
     /// The one float-or-ground rule: in band, no stated ground, and residues or a certificate float `M`.
-    fn settle<E: Evidence<T, I>>(
+    fn settle<S: Surplus<T, I>>(
         self,
         (ones, trace): (f64, f64),
-        evidence: &E,
+        surplus: &S,
     ) -> Result<IrreducibleBlock<T, I>, ReduceError> {
         let dominant = matches!(self.vector, ScaleVector::Identity);
-        let floats = !evidence.states_ground(&self)
+        let floats = !surplus.states_ground(&self)
             && within_band::<T>(ones, trace)
-            && (((dominant || E::RESIDUES_FLOAT_SCALED) && self.floats(evidence.residues(&self)))
-                || evidence.certifies(self.m.vertices()));
+            && (((dominant || S::RESIDUES_FLOAT_SCALED) && self.floats(surplus.residues(&self)))
+                || surplus.certifies(self.m.vertices()));
         let report = self.vector.report(self.clamped);
         let Self { m, rows, .. } = self;
         if floats {
             return m.block(Balance::Balanced(Grounding::ungrounded()), report);
         }
         let vertex = m.vertices()[0].index();
-        let grounding = evidence.grounds(&m, rows);
+        let grounding = surplus.grounds(&m, rows);
         if grounding.is_grounded() {
             m.block(Balance::Balanced(grounding), report)
         } else {
