@@ -40,12 +40,17 @@ impl<T: Real, I: Index> Signed<T, I> {
 }
 
 /// GTH on the packed lower `M`, the surplus as a last row `−s`, pinned slot last and dropped (`d − Σl²` reached 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more time); returns unit lower `L` with `D⁻¹` on its diagonal.
-pub(super) fn factor<T: Real, I: Index>(signed: &Signed<T, I>, pin: usize) -> Vec<T> {
+pub(super) fn factor<T: Real, I: Index>(
+    signed: &Signed<T, I>,
+    pin: usize,
+    values: &mut Vec<T>,
+) -> Vec<T> {
     let n = signed.n();
     let m = n - usize::from(signed.floats());
     let packed = row_start(m + 1);
     // `D⁻¹` trails the rows, contiguous as every row's fill reads it: strided in the diagonal measured +12-18% at n 16-24.
-    let mut values = vec![T::zero(); packed + m];
+    values.clear();
+    values.resize(packed + m, T::zero());
     let slot = |i: usize| match i {
         i if i == pin => m,
         i if i == m => pin,
@@ -72,13 +77,12 @@ pub(super) fn factor<T: Real, I: Index>(signed: &Signed<T, I>, pin: usize) -> Ve
         }
         matrix[start + row] = inverse_pivots[row];
     }
-    values.truncate(row_start(m));
-    values.shrink_to_fit();
+    let factor = values[..row_start(m)].to_vec();
     debug_assert!(
-        columns_within_one(&values, m),
+        columns_within_one(&factor, m),
         "an |L| column sums past one"
     );
-    values
+    factor
 }
 
 /// Left-looking GTH over `m` columns into the inverse pivots, the surplus row `m` updated as any other; `SIGNED` entries may be positive, each update that shrinks one adding `2 min(|a|, |t|)` to both its rows' surplus, as `|a| + |t| − |a − t|` would by cancellation.

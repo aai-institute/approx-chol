@@ -3,13 +3,29 @@ mod dense;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
+use super::clique_tree::Multi;
 use super::sddm::{descend, first_copy, lift, Sddm};
 use crate::narrow;
 use crate::sgdd::{FactorTail, Sheets};
 use crate::{widen, Index, Real};
-use approximate::ApproximateCholesky;
-pub(super) use approximate::CliqueTreeElimination;
+use approximate::{ApproximateCholesky, CliqueTreeElimination};
 pub(super) use dense::Signed;
+
+/// A task's buffers, reused across its blocks by either arm.
+pub(crate) struct Workspace<T, I> {
+    elimination: CliqueTreeElimination<T, I>,
+    /// The dense arm's working matrix: allocated per block, it cost 8% of building 2–5 vertex blocks.
+    dense: Vec<T>,
+}
+
+impl<T: Real, I: Index> Workspace<T, I> {
+    pub(super) fn new(split: Option<Multi>) -> Self {
+        Self {
+            elimination: CliqueTreeElimination::new(split),
+            dense: Vec::new(),
+        }
+    }
+}
 
 /// What a Cholesky factors: `M` itself on the exact arm, its SDDM on the approximate one.
 pub(super) enum Arm<T, I> {
@@ -41,14 +57,15 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         arm: Arm<T, I>,
         draws: Xoshiro256PlusPlus,
         tail: Option<FactorTail<'_, T>>,
-        elimination: &mut CliqueTreeElimination<T, I>,
+        reused: &mut Workspace<T, I>,
     ) -> Self {
         let (sheets, grounded, n, pinned, triangular) = match arm {
             Arm::Exact(signed) => {
                 let (grounded, n) = (!signed.floats(), signed.n());
                 // A definite `M`'s surplus is the ground's slot, pinned so the solve is `M`'s own.
                 let pin = pinned(Sheets::One, grounded, n, tail);
-                let factor = Triangular::Dense(dense::factor(&signed, pin).into());
+                let factor =
+                    Triangular::Dense(dense::factor(&signed, pin, &mut reused.dense).into());
                 (Sheets::One, grounded, n, pin, factor)
             }
             Arm::Approximate(sddm) => {
@@ -57,7 +74,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
                 let spans_wide = tail.is_some_and(FactorTail::spans_wide);
                 let pin =
                     (spans_wide || grounds_wide(&sddm)).then(|| pinned(sheets, grounded, n, tail));
-                let (steps, pin) = elimination.eliminate(sddm, draws, pin);
+                let (steps, pin) = reused.elimination.eliminate(sddm, draws, pin);
                 let triangular = Triangular::Approximate(Box::new(steps));
                 (sheets, grounded, n, pin, triangular)
             }
