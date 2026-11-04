@@ -45,9 +45,9 @@ impl Bracket {
         self.violation() <= slack
     }
 
-    /// `ρ ≥ low` past `1 + slack`: no scaling certifies (Guan, Lu, Li, Shao, JCAM 302 (2016), Thm 2.1).
-    fn refutes(&self, slack: f64) -> bool {
-        self.low > 1.0 + slack
+    /// `ρ ≥ low` past `ceiling`: no scaling certifies (Guan, Lu, Li, Shao, JCAM 302 (2016), Thm 2.1).
+    fn refutes(&self, ceiling: f64) -> bool {
+        self.low > ceiling
     }
 
     /// `ρ < 1` proven, or `y` a Perron vector of `ρ = 1` to rounding: no later `y` moves the float decision.
@@ -102,9 +102,11 @@ pub(super) struct InverseIteration<'n, 'a, T, I> {
     slack: f64,
     /// The rounding band a settled bracket closes to, around `ρ = 1`.
     settle_band: f64,
+    /// `1 + max(slack, settle_band)`: a bound on `ρ` past it refutes, as an `f32` block's `N` reads a few ulps over a singular `ρ = 1`.
+    ceiling: f64,
     max_iterations: usize,
     iterations: usize,
-    /// A Rayleigh quotient passed `1 + max(slack, settle_band)`: `ρ` is too, so no later `y` certifies.
+    /// A Rayleigh quotient passed the ceiling: `ρ` is too, so no later `y` certifies.
     refuted: bool,
     best: Iterate,
     /// The product of every product with `N`.
@@ -128,6 +130,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             n,
             slack,
             settle_band,
+            ceiling: 1.0 + slack.max(settle_band),
             max_iterations,
             iterations: 0,
             refuted: false,
@@ -139,11 +142,11 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
 
     /// `α = 1 + slack/2` until a step certifies or refutes (as `M⁻¹𝟙` does: Ahmadinejad et al., arXiv:1810.02348 §3.1), then each step from the bracket's [`shift`](Bracket::shift).
     pub(super) fn run(mut self) -> (Vec<f64>, Shortfall) {
-        let (slack, settle_band) = (self.slack, self.settle_band);
-        let polished = |b: &Bracket| b.settled(slack, settle_band) || b.refutes(slack);
+        let (slack, settle_band, ceiling) = (self.slack, self.settle_band, self.ceiling);
+        let polished = |b: &Bracket| b.settled(slack, settle_band) || b.refutes(ceiling);
         let unit = vec![1.0; self.n.n()];
         self.solve(1.0 + 0.5 * slack, unit, |b| {
-            b.certifies(slack) || b.refutes(slack)
+            b.certifies(slack) || b.refutes(ceiling)
         });
         while !self.refuted
             && !polished(&self.best.bracket)
@@ -160,7 +163,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
         let Iterate { y, bracket } = self.best;
         let outcome = match bracket.settled(slack, settle_band) {
             true => Outcome::Settled,
-            false if self.refuted || bracket.refutes(slack) => Outcome::Refuted,
+            false if self.refuted || bracket.refutes(ceiling) => Outcome::Refuted,
             false => Outcome::Unsettled,
         };
         let shortfall = Shortfall {
@@ -191,8 +194,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             }
             let vanishing = curvature <= 64.0 * f64::EPSILON * direction_norm_squared;
             let floor = system.spectral_floor(direction_norm_squared, curvature);
-            // Past the rounding band too: an f32 block's `N` reads a few ulps over a singular `ρ = 1`.
-            self.refuted = floor > 1.0 + self.slack.max(self.settle_band);
+            self.refuted = floor > self.ceiling;
             if vanishing || self.refuted {
                 // Either exposes a near-Perron vector: a singular boundary's zero curvature, or the refuting direction.
                 let witness: Vec<f64> = direction.iter().map(|value| value.abs()).collect();
