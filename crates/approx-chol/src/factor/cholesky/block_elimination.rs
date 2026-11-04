@@ -2,8 +2,8 @@
 
 use rayon::prelude::*;
 
-use super::config::InnerParallelism;
 use super::{within_one, MULTIPLY_ADD_GRAIN_BITS};
+use crate::factor::InnerParallelism;
 use crate::storage::{Index, Real, Rows};
 
 /// `M`'s cross block scaled by its inverse pivots, `D_e⁻¹ C`, and `D_e⁻¹`, applied as two products because the block's steps commute.
@@ -17,7 +17,7 @@ use crate::storage::{Index, Real, Rows};
     ))
 )]
 #[derive(Clone, Debug)]
-pub(super) struct BlockElimination<T, I> {
+pub(in crate::factor) struct BlockElimination<T, I> {
     /// `D_e⁻¹ C`, signs kept and shared with the block: a frustrated block's cover never doubles it; each row's magnitudes sum to at most one, so no product with a solution overflows.
     cross: Rows<T, I>,
     inv_pivot: Box<[T]>,
@@ -28,7 +28,7 @@ pub(super) struct BlockElimination<T, I> {
 
 impl<T: Real, I: Index> BlockElimination<T, I> {
     /// `C`'s rows scaled by the pivots `S` was formed with.
-    pub(super) fn new(mut cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
+    pub(in crate::factor) fn new(mut cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
         cross.scale_rows(&inv_pivot);
         Self::scaled(cross, inv_pivot)
     }
@@ -43,12 +43,12 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         }
     }
 
-    pub(super) fn n_eliminated(&self) -> usize {
+    pub(in crate::factor) fn n_eliminated(&self) -> usize {
         self.inv_pivot.len()
     }
 
     /// `2·nnz(C) + n_eliminated + n_kept`, within's estimate, when it splits, else `0`.
-    pub(super) fn splittable_work(&self) -> usize {
+    pub(in crate::factor) fn splittable_work(&self) -> usize {
         match self.ct {
             Some(_) => 2 * self.cross.nnz() + self.cross.n_rows() + self.cross.n_cols(),
             None => 0,
@@ -56,7 +56,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     }
 
     /// `x ← M⁻¹x`, with `reduced` solving `S` in place on the kept half between the two products.
-    pub(super) fn solve(
+    pub(in crate::factor) fn solve(
         &self,
         x: &mut [T],
         inner: InnerParallelism,
@@ -122,7 +122,7 @@ checked_serde!(BlockElimination);
 
 #[cfg(feature = "serde")]
 impl<T: Real, I: Index> BlockElimination<T, I> {
-    pub(super) fn n_kept(&self) -> usize {
+    pub(in crate::factor) fn n_kept(&self) -> usize {
         self.cross.n_cols()
     }
 

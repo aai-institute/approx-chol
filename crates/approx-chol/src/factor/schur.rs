@@ -2,12 +2,12 @@
 
 use rayon::prelude::*;
 
-use super::block_elimination::BlockElimination;
+use super::cholesky::BlockElimination;
 use super::cholesky::{Arm, Signed};
+use super::cholesky::{Streams, MULTIPLY_ADD_GRAIN_BITS};
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::{Config, SchurMode};
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows};
-use super::{Streams, MULTIPLY_ADD_GRAIN_BITS};
 use crate::per_task;
 use crate::storage::{narrow, widen, Grounding, Index, Real, Rows, Sheets};
 

@@ -5,10 +5,10 @@ mod ordering;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
+#[cfg(feature = "serde")]
+use super::within_one;
 use crate::factor::clique_tree::{CliqueTreeSampler, Copies, Fill, Multi, Single};
 use crate::factor::sddm::Sddm;
-#[cfg(feature = "serde")]
-use crate::factor::within_one;
 use crate::storage::{narrow, Index, Real};
 use graph::EliminationGraph;
 use ordering::MinDegreeOrder;
@@ -266,8 +266,8 @@ mod tests {
     use rand::{Rng, SeedableRng};
 
     use super::*;
+    use crate::factor::cholesky::within_one;
     use crate::factor::clique_tree::{Multi, Single};
-    use crate::factor::within_one;
 
     fn stars(m: usize) -> [(&'static str, Vec<f32>); 3] {
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(7);

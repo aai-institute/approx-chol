@@ -1,17 +1,195 @@
 mod approximate;
+mod block_elimination;
 mod dense;
 
 use rand::rngs::Xoshiro256PlusPlus;
+use rand::SeedableRng;
 
 use super::clique_tree::Multi;
+use super::config::{Config, InnerParallelism};
+use super::schur::BipartiteBlock;
 use super::sddm::{descend, first_copy, lift, Sddm};
-use crate::storage::{compensated_sum, narrow, widen, Gauge, Index, Real, Sheets};
+use crate::storage::{
+    compensated_sum, narrow, widen, Adjacency, Balance, Bipartite, Gauge, Grounded, Index,
+    OffDiagonal, Real, Sheets,
+};
 use approximate::{ApproximateCholesky, CliqueTreeElimination};
+pub(super) use block_elimination::BlockElimination;
 pub(super) use dense::Signed;
 
 /// Whether `u32` indexes every slot of `n` vertices on the widest route, a cover's two sheets and its ground; the reduction is made before the route is known.
 pub(crate) fn fits_u32(n: usize) -> bool {
     u32::try_from(n.saturating_mul(Sheets::Two.count()).saturating_add(1)).is_ok()
+}
+
+/// `log₂` of the multiply-adds a block elimination's task carries, below which a split costs more than it saves.
+pub(super) const MULTIPLY_ADD_GRAIN_BITS: u32 = 17;
+
+/// `Σ|t| ≤ 1` up to the terms' rounding: a substitution through such multipliers cannot overflow where its solution fits.
+fn within_one<T: Real>(terms: impl Iterator<Item = T>) -> bool {
+    let (sum, len) = terms.fold((0.0, 0), |(sum, len), t| (sum + widen(t.abs()), len + 1));
+    sum <= 1.0 + 4.0 * (len + 2) as f64 * widen(T::epsilon())
+}
+
+/// One block's key, so no draw depends on thread scheduling or on how other blocks routed.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Streams {
+    /// The seed and the block mixed once: every star would otherwise repeat them on its first draw's path.
+    key: u64,
+}
+
+impl Streams {
+    /// Keyed by the block's first vertex in `A`, so a complement eliminating the side its whole factor does draws as that factor does.
+    fn of(first: usize, config: &Config) -> Self {
+        Self {
+            key: splitmix(splitmix(config.seed) ^ first as u64),
+        }
+    }
+
+    /// The approximate Cholesky's one sequence: pivot `t`'s sample is conditioned on every earlier one.
+    fn cholesky(self) -> Xoshiro256PlusPlus {
+        rng(self, 0)
+    }
+
+    /// Star `eliminated`'s own sequence, by its index in the block, never by task.
+    pub(super) fn star(self, eliminated: usize) -> Xoshiro256PlusPlus {
+        rng(self, eliminated as u64 + 1)
+    }
+}
+
+/// The only place a key becomes draws; stage `0` is the Cholesky's, `e + 1` star `e`'s.
+fn rng(streams: Streams, stage: u64) -> Xoshiro256PlusPlus {
+    Xoshiro256PlusPlus::seed_from_u64(splitmix(streams.key ^ stage))
+}
+
+/// SplitMix64's finalizer: each part changes every bit of the key, so no two keys collide by addition.
+fn splitmix(x: u64) -> u64 {
+    let x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    let x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    let x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+
+/// A component's factorization: a bipartite one's block elimination, then the Cholesky of what it leaves.
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(bound(
+        serialize = "T: serde::Serialize, I: Index + serde::Serialize",
+        deserialize = "T: Real + serde::Deserialize<'de>, I: Index + serde::Deserialize<'de>"
+    ))
+)]
+#[derive(Clone, Debug)]
+pub(super) struct Factorization<T, I> {
+    pub(super) elimination: Option<Box<BlockElimination<T, I>>>,
+    pub(super) cholesky: Cholesky<T, I>,
+}
+
+impl<T: Real, I: Index> Factorization<T, I> {
+    /// Dense or approximate as `config` sizes it; a bipartite component eliminates its larger side first.
+    pub(super) fn component(
+        matrix: Grounded<T, OffDiagonal<T, I>>,
+        balance: Balance,
+        gauge: Gauge,
+        key: usize,
+        config: &Config,
+        reused: &mut Workspace<T, I>,
+    ) -> Self {
+        let Grounded {
+            adjacency,
+            grounding,
+        } = matrix;
+        let streams = Streams::of(key, config);
+        let sheets = balance.sheets();
+        let draws = streams.cholesky();
+        match adjacency {
+            OffDiagonal::General(adjacency) => {
+                let arm = match config.dense(adjacency.n()) {
+                    true => Arm::Exact(Signed::new(adjacency, sheets, grounding)),
+                    false => Arm::Approximate(Sddm::of_block(adjacency, sheets, grounding)),
+                };
+                Self {
+                    elimination: None,
+                    cholesky: Cholesky::factor(arm, draws, gauge, reused),
+                }
+            }
+            OffDiagonal::Bipartite(cross) => {
+                let factor = |s| Cholesky::factor(s, draws, gauge, reused);
+                let block = BipartiteBlock::of(cross.into_cross(), sheets, grounding);
+                let (elimination, cholesky) = block.eliminate(config, streams, factor);
+                Self {
+                    elimination: Some(Box::new(elimination)),
+                    cholesky,
+                }
+            }
+        }
+    }
+
+    /// The Schur complement onto the kept side, keyed as the whole component keys its draws.
+    pub(super) fn complement(
+        matrix: Grounded<T, Bipartite<T, I>>,
+        balance: Balance,
+        gauge: Gauge,
+        key: usize,
+        config: &Config,
+        reused: &mut Workspace<T, I>,
+    ) -> Self {
+        let Grounded {
+            adjacency: cross,
+            grounding,
+        } = matrix;
+        let streams = Streams::of(key, config);
+        let block = BipartiteBlock::of(cross.into_cross(), balance.sheets(), grounding);
+        let s = block.complement(config, streams);
+        Self {
+            elimination: None,
+            cholesky: Cholesky::factor(s, streams.cholesky(), gauge, reused),
+        }
+    }
+
+    /// Every slot but one, eliminated ones and the Cholesky's alike.
+    pub(super) fn n_steps(&self) -> usize {
+        let eliminated = (self.elimination.as_deref()).map_or(0, BlockElimination::n_eliminated);
+        eliminated + self.cholesky.n_steps()
+    }
+
+    pub(super) fn scratch_len(&self) -> usize {
+        self.cholesky.scratch_len()
+    }
+
+    /// Work `InnerParallelism::Allow` may split per solve, `0` when nothing does.
+    pub(super) fn splittable_work(&self) -> usize {
+        (self.elimination.as_deref()).map_or(0, BlockElimination::splittable_work)
+    }
+
+    /// `x ← M⁻¹x`, or its pseudo-inverse's up to the gauge when `M` is singular.
+    pub(super) fn solve(&self, x: &mut [T], scratch: &mut [T], inner: InnerParallelism) {
+        match &self.elimination {
+            None => self.cholesky.solve(x, scratch),
+            Some(elimination) => {
+                elimination.solve(x, inner, |kept| self.cholesky.solve(kept, scratch));
+            }
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T: Real, I: Index> Factorization<T, I> {
+    /// Whether it solves a component of `n` vertices: the elimination's sides, then the Cholesky on what it keeps.
+    pub(super) fn solves(&self, n: usize) -> bool {
+        let kept = match &self.elimination {
+            None => Some(n),
+            Some(elimination) => n
+                .checked_sub(elimination.n_eliminated())
+                .filter(|&kept| kept == elimination.n_kept()),
+        };
+        kept.is_some_and(|kept| kept > 0 && self.cholesky.solves(kept))
+    }
+
+    /// Whether it solves a singular Laplacian, and whether an elimination splits that solve.
+    pub(super) fn singular(&self) -> (bool, bool) {
+        (self.cholesky.singular(), self.elimination.is_some())
+    }
 }
 
 /// A task's buffers, reused across its blocks by either arm.
