@@ -1,11 +1,11 @@
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, ViewError,
 };
-use approx_chol::{factorize, Error, ReduceError};
+use approx_chol::{factorize, factorize_with, Config, Error, Factor, ReduceError, ScalingPolicy};
 use rstest::rstest;
 
 use super::assert_names_a_defect;
-use super::dense_residual::solve_residual;
+use super::dense_residual::{apply, solve_residual};
 use super::gram::{dense_csr, matrix};
 
 const PATH_A: [u32; 2] = [0, 1];
@@ -337,12 +337,8 @@ fn a_bipartite_incidence_checks_each_end_against_its_own_part(
     assert_eq!(found, expected);
 }
 
-/// Every row is in range but the ground's `Σs ≈ 101·MAX/5`; interleaved, no running sum overflows.
-#[rstest]
-#[case::blocked(|c| c)]
-#[case::blocked_spokes_reversed(|c| c / 100 * 100 + 99 - c % 100)]
-#[case::interleaved_control(|c| c % 3 * 100 + c / 3)]
-fn a_gram_whose_surplus_sum_overflows_is_rejected_not_a_panic(#[case] order: fn(usize) -> usize) {
+/// A star whose spokes `b` each carry `x = s, y = ∓k s` twice, cancelling, and `x = y = 1` once: every row is in range, the ground's `Σs ≈ 20·MAX`.
+fn overflowing_ground_star(order: fn(usize) -> usize) -> (Vec<u32>, Vec<u32>, Vec<f64>, Vec<f64>) {
     let (s, k) = ((f64::MAX / 1000.0).sqrt(), 10.0);
     let columns = (0..300).map(order);
     let b: Vec<u32> = columns.clone().map(|c| (c % 100 + 1) as u32).collect();
@@ -358,13 +354,86 @@ fn a_gram_whose_surplus_sum_overflows_is_rejected_not_a_panic(#[case] order: fn(
             _ => 1.0,
         })
         .collect();
+    (a, b, x, y)
+}
+
+/// Blocked, the hub's running surplus sum passes `MAX` before its cancelling columns arrive.
+#[rstest]
+#[case::blocked(|c| c)]
+#[case::blocked_spokes_reversed(|c| c / 100 * 100 + 99 - c % 100)]
+fn a_gram_whose_running_surplus_sum_overflows_is_rejected_not_a_panic(
+    #[case] order: fn(usize) -> usize,
+) {
+    let (a, b, x, y) = overflowing_ground_star(order);
     let gram = FactorWidth2::new(101, (&a, &x), (&b, &y)).unwrap();
     let outcome = std::panic::catch_unwind(|| factorize(gram).map(|_| ()));
     let error = outcome
         .expect("no panic")
-        .expect_err("the ground's Σs ≈ 101·MAX/5");
+        .expect_err("a running sum overflows");
     assert!(matches!(
         error,
         Error::Reduce(ReduceError::OutOfRange { .. })
     ));
+}
+
+/// Interleaved, no running sum overflows; the ground is never a pivot, dense or approximate, so its `Σs` past `MAX` is never formed; a link between two spokes frustrates the star, whose cover grounds `2Σs`.
+#[rstest]
+fn a_gram_whose_ground_total_passes_the_maximum_solves(
+    #[values(0, 101)] exact_max_dim: usize,
+    #[values(false, true)] frustrated: bool,
+) {
+    let (mut a, mut b, mut x, mut y) = overflowing_ground_star(|c| c % 3 * 100 + c / 3);
+    if frustrated {
+        a.push(1);
+        b.push(2);
+        x.push(1.0);
+        y.push(1.0);
+    }
+    let gram = FactorWidth2::new(101, (&a, &x), (&b, &y)).unwrap();
+    let config = Config {
+        exact_max_dim,
+        ..Config::default()
+    };
+    let factor: Factor =
+        factorize_with(gram, config, ScalingPolicy::default()).expect("in range row by row");
+    solve_residual(&factor, &matrix(101, &a, &b, &x, &y));
+}
+
+/// `K₃₀` of weight `MAX/1000`, ten vertices grounded by `MAX/5`: the ground's degree, 10 against 29, puts it first in minimum degree, and its `Σs = 2 MAX` with no weight `1/ε` apart.
+#[test]
+fn a_low_degree_ground_whose_total_passes_the_maximum_solves() {
+    let (n, w, s) = (30, f64::MAX / 1000.0, f64::MAX / 5.0);
+    let matrix: Vec<Vec<f64>> = (0..n)
+        .map(|i| {
+            let ground = if i % 3 == 0 { s } else { 0.0 };
+            (0..n)
+                .map(|j| {
+                    if i == j {
+                        (n - 1) as f64 * w + ground
+                    } else {
+                        -w
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let (ptrs, columns, values) = dense_csr(&matrix);
+    let csr = CsrRef::new(&ptrs, &columns, &values, n as u32).unwrap();
+    let config = Config {
+        exact_max_dim: 0,
+        ..Config::default()
+    };
+    let factor: Factor =
+        factorize_with(csr, config, ScalingPolicy::default()).expect("in range row by row");
+    // Sampled, one apply is a preconditioner, not a solve: finite, and residual 2e-2 at seed 0.
+    let exact: Vec<f64> = (0..n).map(|i| (i % 5) as f64 - 2.0).collect();
+    let rhs = apply(&matrix, &exact);
+    let x = factor.solve(&rhs).expect("solve");
+    assert!(x.iter().all(|v| v.is_finite()), "{x:?}");
+    let norm = |v: &[f64]| v.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    let residual: Vec<f64> = (apply(&matrix, &x).iter().zip(&rhs))
+        .map(|(r, b)| r - b)
+        .collect();
+    let relative = norm(&residual) / norm(&rhs);
+    assert!(relative < 0.5, "{relative:e}");
 }

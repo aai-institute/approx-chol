@@ -24,7 +24,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         Self { lists: Vec::new() }
     }
 
-    /// The ground is a vertex like any other: forcing it last measured +0-10% PCG iterations.
+    /// The ground, when there is one, is the last vertex; the order pins it.
     pub(super) fn load(&mut self, sddm: &Sddm<T, I>, split: C) {
         let n = sddm.n() + usize::from(sddm.grounded());
         // One slot past the degree: the first fill edge reallocating measured +2-3% on grids.
