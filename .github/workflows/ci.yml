@@ -10,6 +10,8 @@ env:
   CARGO_TERM_COLOR: always
   # Every failure reported, not only the first (`.config/nextest.toml`).
   NEXTEST_PROFILE: ci
+  # Overrides Cargo.toml's local opt-level 1: CI builds the workspace clean, where it cost 8 min to save 1.
+  CARGO_PROFILE_DEV_OPT_LEVEL: 0
   # Both free-threaded jobs build this one interpreter; `publish.yml` has its own copy.
   FREETHREADED_PYTHON: "3.14t"
 
