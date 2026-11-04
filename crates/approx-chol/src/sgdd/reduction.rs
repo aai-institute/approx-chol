@@ -9,7 +9,7 @@ use rayon::prelude::*;
 use super::block::{Balance, BlockComplement, Congruent, Grounding, IrreducibleBlock, ReduceError};
 use super::congruence::{Congruence, Selection};
 use super::decomposition::{
-    of_csr, of_upper, AdjacencyLayout, Biadjacency, Components, Partitioned, RowSums,
+    of_csr, of_upper, AdjacencyLayout, Biadjacency, Components, Lone, Partitioned, RowSums,
     StrictUpperTriangle, Summands, SymmetricBlock,
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy};
@@ -72,7 +72,12 @@ impl<T: Real, I: Index> Complement<T, I> {
                 .map(|block| BlockComplement::new(block, local))
                 .collect(),
             lone: (lone.into_iter())
-                .filter_map(|(v, pivot)| Some((on_kept(v)?, pivot)))
+                .filter_map(|Lone { vertex, pivot }| {
+                    Some(Lone {
+                        vertex: on_kept(vertex)?,
+                        pivot,
+                    })
+                })
                 .collect(),
             dead: dead.into_iter().filter_map(on_kept).collect(),
         })
@@ -134,7 +139,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 let m = Congruent::signed(self.vertices, self.off_diagonal, signs);
                 (m, self.rows, ScaleVector::Identity)
             }
-            Some((scales, vector)) => {
+            Some(scaling::Relaxation { scales, vector }) => {
                 let (m, abs) = Congruent::scaled(self.vertices, self.off_diagonal, signs, &scales)
                     .ok_or(ReduceError::Unscalable { vertex })?;
                 let diagonal = (self.rows.diagonal.iter().zip(&scales[..]))

@@ -73,6 +73,12 @@ impl Bracket {
     }
 }
 
+/// The best positive `y` so far and its bracket.
+struct Iterate {
+    y: Vec<f64>,
+    bracket: Bracket,
+}
+
 /// Inverse iteration towards `N`'s Perron vector, each step `(αI − N) y' = y` solved by CG from `y' = 0` (Jia, Lin, Liu, arXiv:1309.3926).
 pub(super) struct InverseIteration<'n, 'a, T, I> {
     n: &'n Normalized<'a, T, I>,
@@ -83,8 +89,7 @@ pub(super) struct InverseIteration<'n, 'a, T, I> {
     iterations: usize,
     /// A Rayleigh quotient passed `1 + max(tolerance, band)`: `ρ` is too, so no later `y` certifies.
     refuted: bool,
-    /// The best positive `y` so far and its bracket.
-    best: (Vec<f64>, Bracket),
+    best: Iterate,
     /// The product of every product with `N`.
     work: Vec<f64>,
     /// Steps a nearly settled `best` may go unimproved; doubles per restart and per stall before an adoption, so stalls cannot chain.
@@ -109,7 +114,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             max_iterations,
             iterations: 0,
             refuted: false,
-            best: (unit, bracket),
+            best: Iterate { y: unit, bracket },
             work,
             patience: 64,
         })
@@ -123,8 +128,11 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
         self.solve(1.0 + 0.5 * tolerance, unit, |b| {
             b.certifies(tolerance) || b.refutes(tolerance)
         });
-        while !self.refuted && !polished(&self.best.1) && self.iterations < self.max_iterations {
-            let (y, bracket) = &self.best;
+        while !self.refuted
+            && !polished(&self.best.bracket)
+            && self.iterations < self.max_iterations
+        {
+            let Iterate { y, bracket } = &self.best;
             let peak = y.iter().copied().fold(0.0f64, f64::max);
             let rhs = y.iter().map(|&y| y / peak).collect();
             if !self.solve(bracket.shift(tolerance), rhs, polished) {
@@ -132,7 +140,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             }
             self.patience = self.patience.saturating_mul(2);
         }
-        let (y, bracket) = self.best;
+        let Iterate { y, bracket } = self.best;
         let report = ScalingReport {
             iterations: self.iterations,
             violation: bracket.violation(),
@@ -151,7 +159,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
         let (mut residual, mut direction) = (rhs.clone(), rhs);
         let start = self.iterations;
         let mut last_adoption = start;
-        while self.iterations < self.max_iterations && !goal(&self.best.1) {
+        while self.iterations < self.max_iterations && !goal(&self.best.bracket) {
             self.iterations += 1;
             let m = direction.len();
             let image = &mut self.work[..m];
@@ -184,7 +192,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
                 break;
             }
             // A long run's iterate stalls a few ulps above the band; a fresh solve from an improved `best` polishes it.
-            let stalled = self.best.1.nearly_settled(self.tolerance, self.band)
+            let stalled = self.best.bracket.nearly_settled(self.tolerance, self.band)
                 && self.iterations - last_adoption >= self.patience;
             // From an unchanged `best`, a restart would replay this solve step for step.
             if stalled && !adopted {
@@ -229,11 +237,11 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             };
             (goal(b), certified, progress)
         };
-        let better = rank(&bracket) > rank(&self.best.1);
+        let better = rank(&bracket) > rank(&self.best.bracket);
         if better {
-            self.best.0.clear();
-            self.best.0.extend_from_slice(y);
-            self.best.1 = bracket;
+            self.best.y.clear();
+            self.best.y.extend_from_slice(y);
+            self.best.bracket = bracket;
         }
         better
     }

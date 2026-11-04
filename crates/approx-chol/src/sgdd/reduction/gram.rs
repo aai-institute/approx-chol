@@ -28,13 +28,14 @@ impl<T: Real, I: Index> Reduced<T, I> {
             dead,
         } = summands;
         // Built by the first block not already dominant: a dominant input pays only once a block's band fails.
-        let mut nulls: Option<(Vec<f64>, Vec<I>)> = None;
+        let mut nulls: Option<NullVectors<I>> = None;
         // Doubling, the folded blocks held up to 2x their size beside `live` (+12% peak at 99k blocks).
         let (mut folded, mut frustrated) = (Vec::with_capacity(live.len()), Vec::new());
         for a in live {
             // `V` proves a scaling exists.
             let reduced = a.reduce(policy, |a| {
-                let (u, _) = nulls.get_or_insert_with(|| null_vectors(v, partition.components()));
+                let NullVectors { u, .. } =
+                    nulls.get_or_insert_with(|| null_vectors(v, partition.components()));
                 // `NaN` where a component has no certificate.
                 let u = (a.vertices.iter()).map(|v| u[v]);
                 (u.clone().all(f64::is_finite))
@@ -48,9 +49,10 @@ impl<T: Real, I: Index> Reduced<T, I> {
             }
         }
         // `u` freed before the column pass: only the certified set outlives the scaling.
-        let read = nulls.map(|(_, certified)| certified);
-        let certified =
-            LazyCell::new(|| read.unwrap_or_else(|| null_vectors(v, partition.components()).1));
+        let read = nulls.map(|nulls| nulls.certified);
+        let certified = LazyCell::new(|| {
+            read.unwrap_or_else(|| null_vectors(v, partition.components()).certified)
+        });
         let mut blocks = ground_or_float(v, folded, &certified)?;
         drop(certified);
         blocks.extend(frustrated);
@@ -173,11 +175,18 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     (decided.map(|((folded, ones), trace)| folded.settle((ones, trace), &gram))).collect()
 }
 
-/// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is, and the sorted lowest vertices of the components that have one: one union-find pass; a cycle off by more than `√ε` relative dooms its component.
+/// The null-vector certificate: one union-find pass; a cycle off by more than `√ε` relative dooms its component.
+struct NullVectors<I> {
+    /// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is.
+    u: Vec<f64>,
+    /// The sorted lowest vertices of the components that have one.
+    certified: Vec<I>,
+}
+
 fn null_vectors<'c, T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
     components: impl Iterator<Item = &'c [I]>,
-) -> (Vec<f64>, Vec<I>) {
+) -> NullVectors<I> {
     let n = v.n();
     let mut component = vec![I::zero(); n];
     // A lone vertex is dead or definite, never a candidate.
@@ -217,7 +226,7 @@ fn null_vectors<'c, T: Real, J: PrimInt, I: Index>(
         .filter_map(|(lowest, doomed)| lowest.filter(|_| !doomed))
         .collect();
     certified.sort_unstable();
-    (u, certified)
+    NullVectors { u, certified }
 }
 
 /// A column's component when both ends are nonzero in it.

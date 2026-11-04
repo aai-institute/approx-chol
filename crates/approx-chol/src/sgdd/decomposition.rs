@@ -10,7 +10,8 @@ use crate::input::{Canonical, CsrError};
 use crate::storage::{tally_abs, OffDiagonal, Rows, UpperAdjacency};
 use crate::{Index, Real};
 pub(super) use assembly::{
-    assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, StrictUpperTriangle,
+    assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, IncidenceBlock,
+    StrictUpperTriangle,
 };
 use partition::Partition;
 use partition::UnionFind;
@@ -84,7 +85,7 @@ impl<A, I: Index> Partitioned<A, I> {
             match a.lone(vertex) {
                 pivot if pivot == T::zero() => dead.push(v),
                 pivot if pivot > T::zero() && super::diagonal_in_range(pivot) => {
-                    lone.push((v, pivot))
+                    lone.push(Lone { vertex: v, pivot })
                 }
                 pivot if pivot < T::zero() => {
                     return Err(ReduceError::NonpositiveDiagonal { vertex })
@@ -138,10 +139,16 @@ pub(super) struct Components<B, I, T> {
 pub(crate) struct Summands<B, I, T> {
     /// Each coupled component's block.
     pub(crate) blocks: Vec<B>,
-    /// Vertices no entry couples, each with its surplus `σ`, which is its whole pivot.
-    pub(crate) lone: Vec<(I, T)>,
+    pub(crate) lone: Vec<Lone<I, T>>,
     /// One-vertex components whose pivot is zero: an in-place solve zeroes them.
     pub(crate) dead: Vec<I>,
+}
+
+/// A vertex no entry couples, with its surplus `σ`, which is its whole pivot.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Lone<I, T> {
+    pub(crate) vertex: I,
+    pub(crate) pivot: T,
 }
 
 /// One block `A_c` as the input gave it, with its rows' `Σ_j |a_ij|`.
