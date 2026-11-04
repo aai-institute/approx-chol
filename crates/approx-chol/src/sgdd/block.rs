@@ -205,7 +205,7 @@ impl<T: Real, I: Index> Congruent<T, I> {
         Formed { m, rows }
     }
 
-    /// `S R A_c R S` with its rows; `None` once a scaled entry leaves the range.
+    /// `S R A_c R S` with its rows; `None` once a scaled off-diagonal entry leaves the range.
     pub(super) fn scaled(
         a: SymmetricBlock<T, I>,
         signs: Congruence<T>,

@@ -74,11 +74,9 @@ impl<T: Real, I: Index> Complement<T, I> {
                 .map(|block| BlockComplement::new(block, local))
                 .collect(),
             lone: (lone.into_iter())
-                .filter_map(|Lone { vertex, pivot }| {
-                    Some(Lone {
-                        vertex: on_kept(vertex)?,
-                        pivot,
-                    })
+                .filter_map(|lone| {
+                    let vertex = on_kept(lone.vertex)?;
+                    Some(Lone { vertex, ..lone })
                 })
                 .collect(),
             dead: dead.into_iter().filter_map(on_kept).collect(),
@@ -135,12 +133,11 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         let folding = folding_signs(&self.adjacency.off_diagonal);
         let folded = folding.is_some();
         let signs = folding.unwrap_or(Congruence::Identity);
-        let (Formed { m, rows }, vector) = match relaxation {
-            None => (Congruent::signed(self, signs), ScaleVector::Identity),
-            Some(scaling::Relaxation { scales, vector }) => {
-                let formed = Congruent::scaled(self, signs, &scales);
-                (formed.ok_or(ReduceError::Unscalable { vertex })?, vector)
-            }
+        let vector = (relaxation.as_ref()).map_or(ScaleVector::Identity, |r| r.vector);
+        let Formed { m, rows } = match relaxation {
+            None => Congruent::signed(self, signs),
+            Some(r) => Congruent::scaled(self, signs, &r.scales)
+                .ok_or(ReduceError::Unscalable { vertex })?,
         };
         let deficits = (rows.diagonal.iter().zip(&rows.abs)).map(|(&d, &s)| widen(s) - widen(d));
         let clamped = vector.worst_past_band(deficits, &rows.diagonal, m.off_diagonal());

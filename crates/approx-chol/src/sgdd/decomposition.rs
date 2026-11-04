@@ -139,13 +139,14 @@ pub(super) struct Components<B, I, T> {
 pub(crate) struct Summands<B, I, T> {
     /// Each coupled component's block.
     pub(crate) blocks: Vec<B>,
+    /// Vertices no entry couples whose pivot is positive.
     pub(crate) lone: Vec<Lone<I, T>>,
     /// One-vertex components whose pivot is zero: an in-place solve zeroes them.
     pub(crate) dead: Vec<I>,
 }
 
 /// A vertex no entry couples, with its surplus `σ`, which is its whole pivot.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Lone<I, T> {
     pub(crate) vertex: I,
     pub(crate) pivot: T,

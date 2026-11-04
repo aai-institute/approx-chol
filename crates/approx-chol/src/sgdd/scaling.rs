@@ -56,7 +56,7 @@ impl Default for ScalingPolicy {
     }
 }
 
-/// A block's clamped deficit or uncertified or unsettled scaling: present iff a deficit past rounding was clamped, its violation exceeded the policy's tolerance, or its float decision is unproven.
+/// A block's clamped deficit or uncertified or unsettled scaling: present iff a deficit past rounding was clamped, its violation exceeded the policy's tolerance, never taken below rounding, or its float decision is unproven.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScalingReport {
@@ -169,7 +169,7 @@ pub(super) fn null_scaling<T: Real>(
 /// How far, in `ε`, a row ratio `Σ_j|a_ij|f_j / (a_ii f_i)` may sit from `1`: a settled residual and the dominance slack's floor.
 pub(super) const RATIO_BAND: f64 = 16.0;
 
-/// Scales from `N`'s Perron vector, iterated until `ρ < 1` is proven, pinned at `1`, or refuted past the tolerance.
+/// Scales from `N`'s Perron vector, iterated until `ρ < 1` is proven, pinned at `1`, or refuted past the slack.
 pub(super) fn relax<T: Real, I: Index>(
     off_diagonal: &OffDiagonal<T, I>,
     diagonal: &[T],
