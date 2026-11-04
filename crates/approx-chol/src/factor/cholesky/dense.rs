@@ -105,6 +105,12 @@ fn columns_within_one<T: Real>(factor: &[T], m: usize) -> bool {
     (0..m).all(|j| within_one((j + 1..m).map(|row| factor[row_start(row) + j])))
 }
 
+/// Slots of a packed factor: its rows and the pinned one; a length no row count packs to rounds down, which `fits` rejects.
+pub(super) fn slots<T>(factor: &[T]) -> usize {
+    let rows = ((8 * factor.len() + 1).isqrt() - 1) / 2;
+    rows + 1
+}
+
 /// Where packed row `row` starts.
 fn row_start(row: usize) -> usize {
     row * (row + 1) / 2

@@ -103,11 +103,11 @@ impl Fixture {
     /// What the payload's `Debug` must show, so a fixture cannot quietly stop covering its kind.
     fn covers(self) -> &'static [&'static str] {
         match self {
-            Self::Grounded => &["grounded: true"],
+            Self::Grounded => &["layout: Grounded"],
             Self::Isolated => &["Isolated("],
-            Self::Floating => &["sheets: One, grounded: false"],
-            Self::Cover => &["sheets: Two"],
-            Self::DenseCover => &["sheets: Two", "Dense("],
+            Self::Floating => &["layout: Floating"],
+            Self::Cover => &["layout: Cover"],
+            Self::DenseCover => &["layout: Cover", "Dense("],
             Self::SampledAc2 => &["elimination: Some", "Approximate("],
         }
     }
@@ -116,7 +116,7 @@ impl Fixture {
     fn built(self) -> &'static [&'static str] {
         match self {
             // 0.7.0 factored a small frustrated block densely on its cover; it is now dense on one sheet.
-            Self::DenseCover => &["sheets: One, grounded: true", "Dense("],
+            Self::DenseCover => &["layout: Grounded", "Dense("],
             _ => self.covers(),
         }
     }

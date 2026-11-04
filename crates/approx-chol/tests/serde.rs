@@ -393,6 +393,23 @@ fn a_lone_vertex_at_u64_max_for_two_is_corrupt() {
     serde_json::from_value::<BlockFactor>(v).expect_err("one vertex for two is corrupt");
 }
 
+/// A grounded factor pins its ground, the last slot; any other pin is corrupt.
+#[rstest]
+#[case::the_ground(3, true)]
+#[case::a_vertex(0, false)]
+fn a_grounded_factor_decodes_only_pinning_its_ground(#[case] pinned: u64, #[case] decodes: bool) {
+    let values = [2.0, -1.0, -1.0, 3.0, -1.0, -1.0, 2.0];
+    let csr = CsrRef::new(&[0u32, 2, 5, 7], &[0u32, 1, 0, 1, 2, 1, 2], &values, 3).unwrap();
+    let mut v = serde_json::to_value(approx_chol::factorize(csr).unwrap()).unwrap();
+    let mut pin = |p: &mut serde_json::Value| *p = pinned.into();
+    assert_eq!(edit(&mut v, "/pinned", &mut pin), 1, "one Cholesky pins");
+    assert!(
+        v.to_string().contains("\"Grounded\""),
+        "the block is grounded"
+    );
+    assert_eq!(serde_json::from_value::<Factor>(v).is_ok(), decodes);
+}
+
 /// A forged empty `F` is a decode error, never a panic while its peak is read.
 #[test]
 fn empty_scales_are_corrupt() {

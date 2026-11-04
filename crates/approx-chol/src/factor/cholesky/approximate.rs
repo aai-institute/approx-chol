@@ -162,6 +162,11 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
         });
     }
 
+    /// Pivots: every slot but the pinned one.
+    pub(super) fn n_steps(&self) -> usize {
+        self.headers.len()
+    }
+
     /// Forward, zero the `pinned` entry, backward; the gather dispatches `[]`, `[_]`, lanes by row length.
     pub(super) fn substitute(&self, y: &mut [T], pinned: usize) {
         let Self {
