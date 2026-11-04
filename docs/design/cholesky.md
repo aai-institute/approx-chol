@@ -124,3 +124,22 @@ enum Triangular<T, I> { Dense(Box<[T]>), Approximate(Box<Steps<T, I>>) }
 - **Rules see neither signs nor the ground:** a star is a tree, hence balanced, so a local switching
   turns any rule for Laplacians into one for signed entries, and a ground vertex is one more
   neighbor. Every rule then serves every route.
+
+## Plan
+
+From `main` to this design. The refactors change no factor: each is checked bit-identical on
+the solve fixtures, the u32/u64 storage test and the wire-format payloads, apart from the format
+version where stated. Features follow, each with integration tests in `crates/approx-chol/tests`.
+Refactors and behavior changes are separate commits.
+
+| Step | Change | Check |
+|---|---|---|
+| R1 | `Reduced<T, I, P>` with `key`; named `Bipartite`; the complement path receives `ReducedComplement` directly, no `unreachable!`; no positional tuples | bit-identical |
+| R2 | `Sign` markers, `Wdd<S>`, `AnyWdd`; the dense arm on `Wdd<S>`, its kernel chosen by `S::SIGNED` | bit-identical |
+| R3 | `Layout` and `Represented`; the cover built in Cholesky's private cover function, `CoverSurplus::Auto` internal with today's band; sheets and surplus edges confined there | bit-identical solves; format version bumped |
+| R4 | `Star` and `FillRule`, `CliqueTree` only, `StarOrder` | bit-identical; Criterion benches |
+| R5 | `S: Sign` through the elimination engine, `Unsigned` only | bit-identical; Criterion benches |
+| R6 | Public `Sampling`, `Multiplicity`, `FrustratedRoute`, `CoverSurplus`; `split_merge` removed | Python and stub, stubtest, changelog; breaking |
+| F0 | `Auto`'s threshold from the surplus sweep | A/B on the synthetic graphs and within's frustrated components |
+| F1 | Signed elimination: `Signed`, cancellation into surplus, signed Schur complement | switched balanced equals its Z-matrix seed for seed; both routes on frustrated inputs; serde round trip |
+| F2 | `SchurTree` | expectation equals the clique, every sample connected, edge marginals $(w_{vi} + w_{vj})/\omega_v$ |
