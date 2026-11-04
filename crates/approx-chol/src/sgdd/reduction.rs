@@ -14,7 +14,7 @@ use super::decomposition::{
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy};
 use super::{diagonal_in_range, Complement, Reduced};
-use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Lowered, Side};
+use crate::input::{BipartiteFactorWidth2, Canonical, Gram, Input, Repr, Side, Stored, Values};
 use crate::storage::{narrow, widen, Balance, Grounding, Index, OffDiagonal, Real, Sum2};
 use crate::Error;
 
@@ -24,16 +24,18 @@ impl<T: Real, I: Index> Reduced<T, I> {
         input: Input<'_, T, J>,
         policy: ScalingPolicy,
     ) -> Result<Self, Error> {
-        Ok(match input.lower() {
+        Ok(match input.repr() {
             // Symmetry is checked in the walk that unions the pattern; upper storage has no mirror.
-            Lowered::Csr(csr) => of_csr(Canonical::of(csr)?)?.reduce(&policy)?,
-            Lowered::UpperCsr(csr) => of_upper(Canonical::of(csr)?)?.reduce(&policy)?,
-            Lowered::FactorWidth2(v) => Self::from_factor_width_2(v, &policy)?,
+            Repr::Csr(csr, Stored::Whole) => of_csr(Canonical::of(csr)?)?.reduce(&policy)?,
+            Repr::Csr(csr, Stored::UpperTriangle) => {
+                of_upper(Canonical::of(csr)?)?.reduce(&policy)?
+            }
+            Repr::Gram(v) => Self::from_factor_width_2(v, &policy)?,
         })
     }
 
     fn from_factor_width_2<J: PrimInt>(
-        v: FactorWidth2<'_, T, J>,
+        v: Gram<'_, T, J>,
         policy: &ScalingPolicy,
     ) -> Result<Self, ReduceError> {
         match Biadjacency::of(&v) {
@@ -45,12 +47,12 @@ impl<T: Real, I: Index> Reduced<T, I> {
     /// An incidence `V` is dominant by shape; values are scaled under `policy`.
     fn from_gram<J: PrimInt, S: AdjacencyLayout>(
         cells: S,
-        v: FactorWidth2<'_, T, J>,
+        v: Gram<'_, T, J>,
         policy: &ScalingPolicy,
     ) -> Result<Self, ReduceError> {
-        match v.is_incidence() {
-            true => Self::from_incidence(cells, v),
-            false => Self::from_values(cells, v, policy),
+        match v.values() {
+            Values::Incidence { .. } => Self::from_incidence(cells, v),
+            Values::Valued { .. } => Self::from_values(cells, v, policy),
         }
     }
 }
@@ -64,7 +66,7 @@ impl<T: Real, I: Index> Complement<T, I> {
     ) -> Result<Self, ReduceError> {
         let range = input.vertices(kept);
         let layout = Biadjacency::onto(&input, kept);
-        let Summands { blocks, lone, dead } = Reduced::from_gram(layout, input.lower(), &policy)?;
+        let Summands { blocks, lone, dead } = Reduced::from_gram(layout, input.gram(), &policy)?;
         let local = |v: usize| I::from_index(v - range.start);
         let on_kept = |v: I| range.contains(&v.index()).then(|| local(v.index()));
         Ok(Self {

@@ -8,7 +8,7 @@ use super::partition::{Partition, UnionFind};
 use super::{
     BlockAdjacency, LonePivot, Partitioned, PrincipalBlocks, RowSums, Selection, SymmetricBlock,
 };
-use crate::input::{BipartiteFactorWidth2, Column, FactorWidth2, Side};
+use crate::input::{BipartiteFactorWidth2, Column, Gram, Layout, Side};
 use crate::sgdd::block::ReduceError;
 use crate::sgdd::diagonal_in_range;
 use crate::storage::{narrow, widen, Grounding, Index, OffDiagonal, Real, Rows, UpperAdjacency};
@@ -26,7 +26,7 @@ pub(in crate::sgdd) trait AdjacencyLayout {
     /// The summed cells and components, `seen` visiting each column once and `pair` each nonzero cell with its two ends.
     fn sum<T: Real, J: PrimInt, I: Index>(
         self,
-        v: FactorWidth2<'_, T, J>,
+        v: Gram<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         pair: impl FnMut(usize, usize, f64),
     ) -> Result<Partitioned<Self::Adjacency<T, I>, I>, ReduceError>;
@@ -54,9 +54,12 @@ enum Onto {
 
 impl Biadjacency {
     /// `v`'s own left part, so the layout and the columns it sums never disagree.
-    pub(in crate::sgdd) fn of<T: Real, J: PrimInt>(v: &FactorWidth2<'_, T, J>) -> Option<Self> {
+    pub(in crate::sgdd) fn of<T: Real, J: PrimInt>(v: &Gram<'_, T, J>) -> Option<Self> {
         let onto = Onto::Smaller;
-        v.n_left().map(|n_left| Self { n_left, onto })
+        match v.layout() {
+            Layout::Bipartite { n_left, .. } => Some(Self { n_left, onto }),
+            Layout::Whole { .. } => None,
+        }
     }
 
     /// `input`'s own left part, each block's complement onto `kept`.
@@ -83,7 +86,7 @@ impl AdjacencyLayout for StrictUpperTriangle {
     #[inline(always)]
     fn sum<T: Real, J: PrimInt, I: Index>(
         self,
-        v: FactorWidth2<'_, T, J>,
+        v: Gram<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         mut pair: impl FnMut(usize, usize, f64),
     ) -> Result<Partitioned<UpperAdjacency<T, I>, I>, ReduceError> {
@@ -104,7 +107,7 @@ impl AdjacencyLayout for Biadjacency {
 
     fn sum<T: Real, J: PrimInt, I: Index>(
         self,
-        v: FactorWidth2<'_, T, J>,
+        v: Gram<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         pair: impl FnMut(usize, usize, f64),
     ) -> Result<Partitioned<Oriented<T, I>, I>, ReduceError> {
@@ -138,7 +141,7 @@ type ValueCells<T, I, S> = Partitioned<Assembled<T, <S as AdjacencyLayout>::Adja
 /// Each pivot `Σ_j |c_ij| + σ_i`, screened in the assembly's own sums; `A`'s diagonal never stored.
 pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
     cells: S,
-    v: FactorWidth2<'a, T, J>,
+    v: Gram<'a, T, J>,
 ) -> Result<IncidenceCells<'a, T, I, S>, ReduceError> {
     let mut abs = vec![0.0_f64; v.n()];
     let a = cells.sum(
@@ -164,7 +167,7 @@ pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: 
 /// `A`'s cells, its diagonal `Σ_k w_k v_ik²` and its components, summed in one column pass.
 pub(in crate::sgdd) fn assemble_values<T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
     cells: S,
-    v: FactorWidth2<'_, T, J>,
+    v: Gram<'_, T, J>,
 ) -> Result<ValueCells<T, I, S>, ReduceError> {
     let mut sums = vec![0.0; v.n()];
     let a = cells.sum::<T, J, I>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;

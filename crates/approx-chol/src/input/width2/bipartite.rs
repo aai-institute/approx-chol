@@ -5,7 +5,7 @@ use std::ops::Range;
 use num_traits::PrimInt;
 
 use super::error::{below, check, length, ViewError};
-use super::{BipartiteColumns, Columns, FactorWidth2};
+use crate::input::repr::gram::{Gram, Layout, Values, Weights};
 use crate::storage::Real;
 
 /// One side of `V`, with at most one nonzero per column: `values[k]` at `rows[k]`, `1` for `None`.
@@ -32,9 +32,9 @@ impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
 /// `V W Vᵀ`, `V = [V_l; V_r]`: left vertices first, then right.
 #[derive(Clone, Copy, Debug)]
 pub struct BipartiteFactorWidth2<'a, T, I = u32> {
-    a: &'a [I],
-    b: &'a [I],
-    columns: BipartiteColumns<'a, T>,
+    left: FactorWidth1<'a, T, I>,
+    right: FactorWidth1<'a, T, I>,
+    scale: Option<&'a [T]>,
 }
 
 impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
@@ -63,26 +63,32 @@ impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
         Ok(Self::of(left, right, Some(s)))
     }
 
-    /// Dimension of `A`.
+    /// Dimension of `A`; saturates, as a sum past `usize` fails allocation anyway.
     pub(crate) fn n(&self) -> usize {
-        self.columns.n()
+        self.left.n.saturating_add(self.right.n)
     }
 
     /// The run of `A`'s vertices on `side`.
     pub(crate) fn vertices(&self, side: Side) -> Range<usize> {
         match side {
-            Side::Left => 0..self.columns.n_left,
-            Side::Right => self.columns.n_left..self.n(),
+            Side::Left => 0..self.left.n,
+            Side::Right => self.left.n..self.n(),
         }
     }
 
-    pub(crate) fn lower(self) -> FactorWidth2<'a, T, I> {
-        let columns = Columns::Bipartite(self.columns);
-        FactorWidth2 {
-            a: self.a,
-            b: self.b,
-            columns,
-        }
+    /// With neither side valued, `V`'s columns read switched as `e_a − e_b`: an incidence matrix.
+    pub(crate) fn gram(self) -> Gram<'a, T, I> {
+        let Self { left, right, scale } = self;
+        let layout = Layout::Bipartite {
+            n_left: left.n,
+            n_right: right.n,
+        };
+        let values = match (left.values, right.values) {
+            (None, None) => Values::Incidence { surplus: None },
+            (x, y) => Values::Valued { x, y },
+        };
+        let weights = scale.map_or(Weights::Unit, Weights::Scale);
+        Gram::new((left.rows, right.rows), layout, values, weights)
     }
 
     fn of(
@@ -90,18 +96,7 @@ impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
         right: FactorWidth1<'a, T, I>,
         scale: Option<&'a [T]>,
     ) -> Self {
-        let columns = BipartiteColumns {
-            n_left: left.n,
-            n_right: right.n,
-            x: left.values,
-            y: right.values,
-            scale,
-        };
-        Self {
-            a: left.rows,
-            b: right.rows,
-            columns,
-        }
+        Self { left, right, scale }
     }
 }
 
