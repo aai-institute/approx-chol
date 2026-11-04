@@ -1,11 +1,11 @@
 //! Exact Cholesky of a small `M` by GTH elimination: every pivot a sum of nonnegative terms, so none cancels or fails.
 
 use crate::factor::within_one;
-use crate::storage::{Adjacency, Grounding, Index, Real, Sheets, UpperAdjacency};
+use crate::storage::{Adjacency, Grounding, Index, Real, Sheets, WddCsr};
 
 /// `M` as it is, its off-diagonal signed and its surplus closing it: dense Cholesky needs no cover, fold or dominance.
 pub(in crate::factor) struct Signed<T, I> {
-    adjacency: UpperAdjacency<T, I>,
+    adjacency: WddCsr<T, I>,
     grounding: Grounding<T>,
     /// Off-diagonals of either sign, so GTH tracks the surplus their cancellation leaves; else a Z-matrix.
     frustrated: bool,
@@ -14,7 +14,7 @@ pub(in crate::factor) struct Signed<T, I> {
 impl<T: Real, I: Index> Signed<T, I> {
     /// Panics unless nonempty, with one surplus per row.
     pub(in crate::factor) fn new(
-        adjacency: UpperAdjacency<T, I>,
+        adjacency: WddCsr<T, I>,
         sheets: Sheets,
         grounding: Grounding<T>,
     ) -> Self {

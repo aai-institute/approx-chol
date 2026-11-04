@@ -15,9 +15,7 @@ use super::decomposition::{
 use super::scaling::{self, ScaleVector, ScalingPolicy};
 use super::{diagonal_in_range, Complement, Reduction};
 use crate::input::{BipartiteFactorWidth2, Canonical, Gram, Input, Repr, Side, Stored, Values};
-use crate::storage::{
-    narrow, widen, Adjacency, Balance, Grounding, Index, Real, Sum2, UpperAdjacency,
-};
+use crate::storage::{narrow, widen, Adjacency, Balance, Grounding, Index, Real, Sum2, WddCsr};
 use crate::Error;
 
 /// The reduced blocks, each off-diagonal in the shape layout `S` stores.
@@ -90,7 +88,7 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
     /// Scales and signs each block's `A_c`, closing its surplus from the same rows.
     fn reduce(self, policy: &ScalingPolicy) -> Result<Reduction<T, I>, ReduceError> {
         self.extract(|a| {
-            let relax = |a: &SymmetricBlock<T, I, UpperAdjacency<T, I>>| {
+            let relax = |a: &SymmetricBlock<T, I, WddCsr<T, I>>| {
                 scaling::relax(&a.adjacency.off_diagonal, &a.rows.diagonal, policy)
             };
             let block = match a.reduce(policy, relax)? {

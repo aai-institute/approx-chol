@@ -7,7 +7,7 @@ mod partition;
 use super::block::ReduceError;
 use super::congruence::Selection;
 use crate::input::{Canonical, CsrError};
-use crate::storage::{narrow, tally_abs, Adjacency, Index, Real, Rows, UpperAdjacency};
+use crate::storage::{narrow, tally_abs, Adjacency, Index, Real, Rows, WddCsr};
 pub(super) use assembly::{
     assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, IncidenceBlock,
     StrictUpperTriangle,
@@ -179,7 +179,7 @@ pub(super) struct RowSums<T> {
 }
 
 impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Canonical<'_, T, J> {
-    type Block = SymmetricBlock<T, I, UpperAdjacency<T, I>>;
+    type Block = SymmetricBlock<T, I, WddCsr<T, I>>;
 
     fn whole(self, vertices: &[I]) -> Self::Block {
         self.component(vertices, vertices)
@@ -209,7 +209,7 @@ impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Canonical<'_, T, J
         indices.shrink_to_fit();
         values.shrink_to_fit();
         let rows = Rows::new(ptrs, indices, values, vertices.len());
-        let off_diagonal = UpperAdjacency::new(rows);
+        let off_diagonal = WddCsr::new(rows);
         let abs = abs.into_iter().map(narrow).collect();
         let adjacency = BlockAdjacency {
             vertices: Selection::of(vertices),

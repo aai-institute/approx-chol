@@ -4,13 +4,13 @@ use rayon::prelude::*;
 
 use crate::sgdd::Singularity;
 use crate::storage::{
-    lane_sum, narrow, widen, Adjacency, Grounding, Index, Real, Rows, Sheets, UpperAdjacency,
+    lane_sum, narrow, widen, Adjacency, Grounding, Index, Real, Rows, Sheets, WddCsr,
 };
 
 /// `L + diag(s)`, `L`'s off-diagonal nonpositive; a twisted cover's `k⁺—k⁻` edges live in its closure, not its rows.
 #[derive(Clone, Debug)]
 pub(super) struct Sddm<T, I> {
-    adjacency: UpperAdjacency<T, I>,
+    adjacency: WddCsr<T, I>,
     closure: Closure<T>,
 }
 
@@ -34,7 +34,7 @@ impl<T: Real> Closure<T> {
 
 impl<T: Real, I: Index> Sddm<T, I> {
     /// Panics unless nonempty, with one surplus per row or one twist per pair.
-    fn new(adjacency: UpperAdjacency<T, I>, closure: Closure<T>) -> Self {
+    fn new(adjacency: WddCsr<T, I>, closure: Closure<T>) -> Self {
         let n = adjacency.n();
         assert!(n > 0, "an SDDM has a vertex");
         match &closure {
@@ -51,7 +51,7 @@ impl<T: Real, I: Index> Sddm<T, I> {
 
     /// Folded `M` on one sheet, or the Gremban cover of signed `M` on two.
     pub(super) fn of_block(
-        adjacency: UpperAdjacency<T, I>,
+        adjacency: WddCsr<T, I>,
         sheets: Sheets,
         grounding: Grounding<T>,
     ) -> Self {
@@ -73,7 +73,7 @@ impl<T: Real, I: Index> Sddm<T, I> {
     /// Rows on `sheets`, each ground plus its vertex's `surplus`, one per vertex; on two, a ground within the singular band [`twists`].
     pub(super) fn of_rows(rows: SddmRows<T, I>, sheets: Sheets, surplus: Option<&[T]>) -> Self {
         let n = rows.sums.len() - 1;
-        let adjacency = UpperAdjacency::new(Rows::new(rows.ptrs, rows.indices, rows.values, n));
+        let adjacency = WddCsr::new(Rows::new(rows.ptrs, rows.indices, rows.values, n));
         let mut ground = rows.ground;
         if let Some(surplus) = surplus {
             assert_eq!(sheets.count() * surplus.len(), n, "one surplus per vertex");
@@ -230,11 +230,7 @@ impl<T: Real, I: Index> SddmRows<T, I> {
     }
 
     /// The signed rows the sheets cover, `k⁻`'s mirrors skipped: `j⁺, j⁻` sum `P, N` into `N − P`, and `kept` plus the ground gains `2 min(P, N)` on both rows, as `P + N − |N − P|` would by cancellation.
-    pub(super) fn fold(
-        self,
-        sheets: Sheets,
-        kept: Option<&[T]>,
-    ) -> (UpperAdjacency<T, I>, Grounding<T>) {
+    pub(super) fn fold(self, sheets: Sheets, kept: Option<&[T]>) -> (WddCsr<T, I>, Grounding<T>) {
         let count = sheets.count();
         let n = (self.sums.len() - 1) / count;
         if let Some(s) = kept {
@@ -268,7 +264,7 @@ impl<T: Real, I: Index> SddmRows<T, I> {
             ptrs.push(indices.len());
         }
         let rows = Rows::new(ptrs, indices, values, n);
-        (UpperAdjacency::new(rows), Grounding::of(surplus))
+        (WddCsr::new(rows), Grounding::of(surplus))
     }
 }
 
@@ -293,7 +289,7 @@ impl<T: Real, I: Index> ColumnSums<'_, T, I> {
 }
 
 /// Whether `ground` is within the singular band of `ground + Σ|a_ij|`, both `ε`-scaled so neither overflows: a cover's copies then [`twist`] instead of grounding, so its `1/s` common mode cannot swamp `z`; a cover doubles both sums, so `M`'s decide as its own.
-fn twists<T: Real, I: Index>(ground: &[T], adjacency: &UpperAdjacency<T, I>) -> bool {
+fn twists<T: Real, I: Index>(ground: &[T], adjacency: &WddCsr<T, I>) -> bool {
     let epsilon = widen(T::epsilon());
     let total = lane_sum(ground, epsilon);
     let trace = total + adjacency.scaled_abs_total(epsilon);
@@ -357,7 +353,7 @@ mod tests {
             .chain([n as usize])
             .collect();
         let values = vec![2f64.powi(1020); indices.len()];
-        let signed = UpperAdjacency::new(Rows::new(ptrs, indices, values, n as usize));
+        let signed = WddCsr::new(Rows::new(ptrs, indices, values, n as usize));
         let surplus = [extra].into_iter().chain([0.0; 8]).collect();
         Sddm::of_block(signed, Sheets::Two, Grounding::of(surplus))
     }

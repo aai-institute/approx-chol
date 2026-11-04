@@ -223,13 +223,13 @@ impl<T: Real, I: Index> Rows<T, I> {
     }
 }
 
-/// A symmetric off-diagonal's strict upper triangle by rows: each edge once.
+/// A WDD matrix's off-diagonal, its strict upper triangle by rows: each edge once.
 #[derive(Clone, Debug)]
-pub(crate) struct UpperAdjacency<T, I> {
+pub(crate) struct WddCsr<T, I> {
     rows: Rows<T, I>,
 }
 
-impl<T: Real, I: Index> UpperAdjacency<T, I> {
+impl<T: Real, I: Index> WddCsr<T, I> {
     /// Panics unless square, every column above its row, and no stored zero.
     pub(crate) fn new(rows: Rows<T, I>) -> Self {
         assert_eq!(rows.n_rows(), rows.n_cols, "square");
@@ -354,7 +354,7 @@ pub(crate) trait Adjacency<T: Real, I: Index>: Sized + Send + Sync {
     }
 }
 
-impl<T: Real, I: Index> Adjacency<T, I> for UpperAdjacency<T, I> {
+impl<T: Real, I: Index> Adjacency<T, I> for WddCsr<T, I> {
     fn rows(&self) -> &Rows<T, I> {
         &self.rows
     }
@@ -407,12 +407,12 @@ impl<T: Real, I: Index> Adjacency<T, I> for Bipartite<T, I> {
 /// A block's off-diagonal by shape, as Cholesky receives it.
 #[derive(Clone, Debug)]
 pub(crate) enum OffDiagonal<T, I> {
-    General(UpperAdjacency<T, I>),
+    General(WddCsr<T, I>),
     Bipartite(Bipartite<T, I>),
 }
 
-impl<T, I> From<UpperAdjacency<T, I>> for OffDiagonal<T, I> {
-    fn from(adjacency: UpperAdjacency<T, I>) -> Self {
+impl<T, I> From<WddCsr<T, I>> for OffDiagonal<T, I> {
+    fn from(adjacency: WddCsr<T, I>) -> Self {
         Self::General(adjacency)
     }
 }

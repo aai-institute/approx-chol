@@ -11,9 +11,7 @@ use super::{
 use crate::input::{BipartiteFactorWidth2, Column, Gram, Layout, Side};
 use crate::sgdd::block::ReduceError;
 use crate::sgdd::diagonal_in_range;
-use crate::storage::{
-    narrow, widen, Adjacency, Bipartite, Grounding, Index, Real, Rows, UpperAdjacency,
-};
+use crate::storage::{narrow, widen, Adjacency, Bipartite, Grounding, Index, Real, Rows, WddCsr};
 
 /// An incidence `V`'s block, dominant by shape: its adjacency and the surplus an SDDM states on it.
 pub(in crate::sgdd) struct IncidenceBlock<T, I, P> {
@@ -85,8 +83,8 @@ pub(in crate::sgdd) struct Oriented<T, I> {
 }
 
 impl AdjacencyLayout for StrictUpperTriangle {
-    type Shape<T: Real, I: Index> = UpperAdjacency<T, I>;
-    type Cells<T: Real, I: Index> = UpperAdjacency<T, I>;
+    type Shape<T: Real, I: Index> = WddCsr<T, I>;
+    type Cells<T: Real, I: Index> = WddCsr<T, I>;
 
     // Out of line, the Laplacian entry measured 3–4% slower: the same work, laid out worse.
     #[inline(always)]
@@ -95,14 +93,14 @@ impl AdjacencyLayout for StrictUpperTriangle {
         v: Gram<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         mut pair: impl FnMut(usize, usize, f64),
-    ) -> Result<Partitioned<UpperAdjacency<T, I>, I>, ReduceError> {
+    ) -> Result<Partitioned<WddCsr<T, I>, I>, ReduceError> {
         let mut sets = UnionFind::<I>::new(v.n());
         let rows = cells::upper::<T, J, I>(v, seen, |i, j, cell| {
             sets.union(i, j);
             pair(i, j, cell);
         })?;
         Ok(Partitioned {
-            a: UpperAdjacency::new(rows),
+            a: WddCsr::new(rows),
             partition: sets.into_partition(),
         })
     }
@@ -220,7 +218,7 @@ impl<T: Real, C> LonePivot<T> for Dominant<'_, T, C> {
 }
 
 /// The upper triangle, cancelled cells dropped.
-impl<T: Real, I: Index> PrincipalBlocks<T, I> for UpperAdjacency<T, I> {
+impl<T: Real, I: Index> PrincipalBlocks<T, I> for WddCsr<T, I> {
     type Block = BlockAdjacency<I, Self>;
 
     fn whole(self, vertices: &[I]) -> Self::Block {
@@ -245,7 +243,7 @@ impl<T: Real, I: Index> PrincipalBlocks<T, I> for UpperAdjacency<T, I> {
         let rows = Rows::new(ptrs, indices, values, vertices.len());
         BlockAdjacency {
             vertices: Selection::of(vertices),
-            off_diagonal: UpperAdjacency::new(rows),
+            off_diagonal: WddCsr::new(rows),
         }
     }
 }
