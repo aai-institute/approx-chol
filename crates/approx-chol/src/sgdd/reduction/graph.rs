@@ -1,6 +1,6 @@
 use num_traits::PrimInt;
 
-use super::Laid;
+use super::ShapedBy;
 use crate::input::Gram;
 use crate::sgdd::block::{Congruent, ReduceError};
 use crate::sgdd::decomposition::Components;
@@ -12,7 +12,7 @@ pub(super) fn from_incidence<T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
     cells: S,
     v: Gram<'_, T, J>,
     surplus: Option<&[T]>,
-) -> Result<Laid<T, I, S>, ReduceError> {
+) -> Result<ShapedBy<T, I, S>, ReduceError> {
     assemble_incidence(cells, v, surplus)?
         .extract(
             |IncidenceBlock {

@@ -2,7 +2,7 @@ use std::cell::LazyCell;
 
 use num_traits::PrimInt;
 
-use super::{Folded, Laid, Signed, Singularity, Surplus};
+use super::{Folded, ShapedBy, Signed, Singularity, Surplus};
 use crate::input::{Column, Gram};
 use crate::sgdd::block::{ReduceError, Reduced};
 use crate::sgdd::congruence::Selection;
@@ -15,7 +15,7 @@ pub(super) fn from_values<T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
     cells: S,
     v: Gram<'_, T, J>,
     policy: &ScalingPolicy,
-) -> Result<Laid<T, I, S>, ReduceError> {
+) -> Result<ShapedBy<T, I, S>, ReduceError> {
     let Components {
         partition,
         summands,

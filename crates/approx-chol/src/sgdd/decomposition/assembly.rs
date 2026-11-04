@@ -25,7 +25,7 @@ pub(in crate::sgdd) struct IncidenceBlock<T, I, P> {
 pub(in crate::sgdd) trait AdjacencyLayout {
     /// Each block's off-diagonal.
     type Shape<T: Real, I: Index>: Adjacency<T, I>;
-    type Adjacency<T: Real, I: Index>: PrincipalBlocks<T, I, Block = BlockAdjacency<I, Self::Shape<T, I>>>
+    type Cells<T: Real, I: Index>: PrincipalBlocks<T, I, Block = BlockAdjacency<I, Self::Shape<T, I>>>
         + Sync;
 
     /// The summed cells and components, `seen` visiting each column once and `pair` each nonzero cell with its two ends.
@@ -34,7 +34,7 @@ pub(in crate::sgdd) trait AdjacencyLayout {
         v: Gram<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         pair: impl FnMut(usize, usize, f64),
-    ) -> Result<Partitioned<Self::Adjacency<T, I>, I>, ReduceError>;
+    ) -> Result<Partitioned<Self::Cells<T, I>, I>, ReduceError>;
 }
 
 /// A general `V`'s cells: `A`'s strict upper triangle.
@@ -86,7 +86,7 @@ pub(in crate::sgdd) struct Oriented<T, I> {
 
 impl AdjacencyLayout for StrictUpperTriangle {
     type Shape<T: Real, I: Index> = UpperAdjacency<T, I>;
-    type Adjacency<T: Real, I: Index> = UpperAdjacency<T, I>;
+    type Cells<T: Real, I: Index> = UpperAdjacency<T, I>;
 
     // Out of line, the Laplacian entry measured 3–4% slower: the same work, laid out worse.
     #[inline(always)]
@@ -110,7 +110,7 @@ impl AdjacencyLayout for StrictUpperTriangle {
 
 impl AdjacencyLayout for Biadjacency {
     type Shape<T: Real, I: Index> = Bipartite<T, I>;
-    type Adjacency<T: Real, I: Index> = Oriented<T, I>;
+    type Cells<T: Real, I: Index> = Oriented<T, I>;
 
     fn sum<T: Real, J: PrimInt, I: Index>(
         self,
@@ -140,10 +140,10 @@ pub(in crate::sgdd) struct Dominant<'a, T, C> {
 
 /// An incidence `V`'s summed cells beside `σ`, and their components.
 type IncidenceCells<'a, T, I, S> =
-    Partitioned<Dominant<'a, T, <S as AdjacencyLayout>::Adjacency<T, I>>, I>;
+    Partitioned<Dominant<'a, T, <S as AdjacencyLayout>::Cells<T, I>>, I>;
 
 /// A valued `V`'s summed cells beside `A`'s diagonal, and their components.
-type ValueCells<T, I, S> = Partitioned<Assembled<T, <S as AdjacencyLayout>::Adjacency<T, I>>, I>;
+type ValueCells<T, I, S> = Partitioned<Assembled<T, <S as AdjacencyLayout>::Cells<T, I>>, I>;
 
 /// Each pivot `Σ_j |c_ij| + σ_i`, screened in the assembly's own sums; `A`'s diagonal never stored.
 pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(

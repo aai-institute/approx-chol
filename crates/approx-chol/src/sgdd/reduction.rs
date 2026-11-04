@@ -20,8 +20,8 @@ use crate::storage::{
 };
 use crate::Error;
 
-/// Each block reduced in the shape layout `S` stores it.
-type Laid<T, I, S> = Summands<Reduced<T, I, <S as AdjacencyLayout>::Shape<T, I>>, I, T>;
+/// The reduced blocks, each off-diagonal in the shape layout `S` stores.
+type ShapedBy<T, I, S> = Summands<Reduced<T, I, <S as AdjacencyLayout>::Shape<T, I>>, I, T>;
 
 impl<T: Real, I: Index> Reduction<T, I> {
     /// The view's irreducible blocks, each reduced; `policy` scales those not already dominant.
@@ -52,7 +52,7 @@ fn from_gram<T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
     cells: S,
     v: Gram<'_, T, J>,
     policy: &ScalingPolicy,
-) -> Result<Laid<T, I, S>, ReduceError> {
+) -> Result<ShapedBy<T, I, S>, ReduceError> {
     match v.values() {
         Values::Incidence { surplus } => graph::from_incidence(cells, v, surplus),
         Values::Valued { .. } => gram::from_values(cells, v, policy),
@@ -293,10 +293,7 @@ impl<T: Real, I: Index, P: Adjacency<T, I>> Folded<T, I, P> {
 }
 
 /// Row `i` of `m` holds a ground out of range.
-fn out_of_range<T: Real, I: Index, P: Adjacency<T, I>>(
-    m: &Congruent<T, I, P>,
-    i: usize,
-) -> ReduceError {
+fn out_of_range<T: Real, I: Index, P>(m: &Congruent<T, I, P>, i: usize) -> ReduceError {
     ReduceError::OutOfRange {
         vertex: m.vertices().vertex(i),
     }

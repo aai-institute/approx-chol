@@ -1,5 +1,5 @@
 use super::normalized::Normalized;
-use crate::storage::{Adjacency, Index, Real};
+use crate::storage::{Index, Real};
 
 /// `[min_i, max_i] (Ny)_i / y_i` of a positive `y`, which brackets `ρ(N)` (Collatz 1942, Wielandt 1950).
 #[derive(Clone, Copy)]
@@ -12,8 +12,8 @@ struct Bracket {
 
 impl Bracket {
     /// Of a positive `y`; `None` unless every ratio is finite.
-    fn of<T: Real, I: Index, P: Adjacency<T, I>>(
-        n: &Normalized<'_, T, I, P>,
+    fn of<T: Real, I: Index>(
+        n: &Normalized<'_, T, I>,
         y: &[f64],
         work: &mut [f64],
     ) -> Option<Self> {
@@ -97,8 +97,8 @@ struct Iterate {
 }
 
 /// Inverse iteration towards `N`'s Perron vector, each step `(αI − N) y' = y` solved by CG from `y' = 0` (Jia, Lin, Liu, arXiv:1309.3926).
-pub(super) struct InverseIteration<'n, 'a, T, I, P> {
-    n: &'n Normalized<'a, T, I, P>,
+pub(super) struct InverseIteration<'n, 'a, T, I> {
+    n: &'n Normalized<'a, T, I>,
     slack: f64,
     /// The rounding band a settled bracket closes to, around `ρ = 1`.
     settle_band: f64,
@@ -115,10 +115,10 @@ pub(super) struct InverseIteration<'n, 'a, T, I, P> {
     patience: usize,
 }
 
-impl<'n, 'a, T: Real, I: Index, P: Adjacency<T, I>> InverseIteration<'n, 'a, T, I, P> {
+impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
     /// From `y = 1`; `None` if its bracket is not finite.
     pub(super) fn new(
-        n: &'n Normalized<'a, T, I, P>,
+        n: &'n Normalized<'a, T, I>,
         slack: f64,
         settle_band: f64,
         max_iterations: usize,

@@ -18,7 +18,7 @@ pub use config::{Config, InnerParallelism, SchurMode};
 pub use wire::FORMAT_VERSION;
 
 use crate::sgdd::{Lift, Lone, Reduced, ReducedComplement, ReducedComponent, Selection, Summands};
-use crate::storage::{widen, Grounded, Index, OffDiagonal, Real};
+use crate::storage::{widen, Adjacency, Grounded, Index, OffDiagonal, Real};
 use crate::ScalingReport;
 use block_elimination::BlockElimination;
 use cholesky::{Arm, Cholesky, Signed, Workspace};
@@ -247,7 +247,7 @@ impl<T: Real, I: Index> Summand<T, I> for ReducedComplement<T, I> {
             balance,
             gauge,
             report,
-        } = self;
+        } = self.into_reduced();
         let streams = Streams::of(key, config);
         let block = BipartiteBlock::of(cross.into_cross(), balance.sheets(), grounding);
         let s = block.complement(config, streams);
@@ -395,6 +395,7 @@ impl ExactSizeIterator for Vertices<'_> {}
 )]
 #[derive(Clone, Debug)]
 pub(crate) struct Block<T, I> {
+    #[cfg_attr(feature = "serde", serde(rename = "restriction"))]
     lift: Box<Lift<T, I>>,
     elimination: Option<Box<BlockElimination<T, I>>>,
     cholesky: Cholesky<T, I>,

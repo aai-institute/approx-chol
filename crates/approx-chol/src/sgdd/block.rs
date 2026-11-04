@@ -7,7 +7,7 @@ use crate::storage::{
     in_range, Adjacency, Balance, Bipartite, Gauge, Grounded, Grounding, Index, OffDiagonal, Real,
 };
 
-/// One irreducible principal block `A_c` of `A`, reduced: `M = F · A_c · F` weakly diagonally dominant, eliminated side first.
+/// One irreducible principal block `A_c` of `A`, reduced: `M = F · A_c · F` weakly diagonally dominant, eliminated side first; in a [`ReducedComplement`] its lift covers only the kept side.
 #[derive(Clone, Debug)]
 pub(crate) struct Reduced<T, I, P> {
     /// `A_c`'s first vertex in `A`: it keys every draw, so a complement draws as its whole block does.
@@ -23,11 +23,18 @@ pub(crate) struct Reduced<T, I, P> {
 /// A block of `A`, whichever its shape.
 pub(crate) type ReducedComponent<T, I> = Reduced<T, I, OffDiagonal<T, I>>;
 
-/// A bipartite block's Schur complement onto its kept side, unformed: `C`, its lift already on the kept side's numbering.
-pub(crate) type ReducedComplement<T, I> = Reduced<T, I, Bipartite<T, I>>;
+/// A bipartite block's Schur complement onto its kept side, unformed: `C`, its lift on the kept side's numbering; only [`Reduced::onto_kept`] builds one.
+#[derive(Clone, Debug)]
+pub(crate) struct ReducedComplement<T, I>(Reduced<T, I, Bipartite<T, I>>);
+
+impl<T, I> ReducedComplement<T, I> {
+    pub(crate) fn into_reduced(self) -> Reduced<T, I, Bipartite<T, I>> {
+        self.0
+    }
+}
 
 impl<T: Real, I: Index, P> Reduced<T, I, P> {
-    /// Vertices of `A` the block holds, each once however many sheets cover it.
+    /// Vertices its lift covers, each once however many sheets cover it.
     pub(crate) fn vertex_count(&self) -> usize {
         self.lift.vertices().len()
     }
@@ -54,14 +61,14 @@ impl<T: Real, I: Index, P> Reduced<T, I, P> {
     }
 }
 
-impl<T: Real, I: Index> ReducedComplement<T, I> {
-    /// The lift tailed onto the kept side, each kept vertex of `A` numbered `local(v)`; tailed before `S`, so the eliminated side's `F` never shares its formation's peak.
-    pub(super) fn onto_kept(self, local: impl Fn(usize) -> I) -> Self {
+impl<T: Real, I: Index> Reduced<T, I, Bipartite<T, I>> {
+    /// The complement, its lift tailed onto the kept side, each kept vertex of `A` numbered `local(v)`; tailed before `S`, so the eliminated side's `F` never shares its formation's peak.
+    pub(super) fn onto_kept(self, local: impl Fn(usize) -> I) -> ReducedComplement<T, I> {
         let from = self.matrix.adjacency.n_eliminated();
-        Self {
+        ReducedComplement(Self {
             lift: Box::new(self.lift.tail(from, local)),
             ..self
-        }
+        })
     }
 }
 
@@ -70,6 +77,21 @@ pub(super) struct Congruent<T, I, P> {
     vertices: Selection<I>,
     congruence: Congruence<T>,
     off_diagonal: P,
+}
+
+impl<T: Real, I, P> Congruent<T, I, P> {
+    /// In `A`'s numbering, in local order.
+    pub(super) fn vertices(&self) -> &Selection<I> {
+        &self.vertices
+    }
+
+    pub(super) fn off_diagonal(&self) -> &P {
+        &self.off_diagonal
+    }
+
+    pub(super) fn factor(&self, i: usize) -> T {
+        self.congruence.factor(i)
+    }
 }
 
 impl<T: Real, I: Index, P: Adjacency<T, I>> Congruent<T, I, P> {
@@ -142,19 +164,6 @@ impl<T: Real, I: Index, P: Adjacency<T, I>> Congruent<T, I, P> {
         }
     }
 
-    /// In `A`'s numbering, in local order.
-    pub(super) fn vertices(&self) -> &Selection<I> {
-        &self.vertices
-    }
-
-    pub(super) fn off_diagonal(&self) -> &P {
-        &self.off_diagonal
-    }
-
-    pub(super) fn factor(&self, i: usize) -> T {
-        self.congruence.factor(i)
-    }
-
     /// Panics unless one factor, row and surplus per vertex, and `I` must index the factor's vertices.
     pub(super) fn block(
         self,
@@ -182,8 +191,7 @@ impl<T: Real, I: Index, P: Adjacency<T, I>> Congruent<T, I, P> {
             return Err(ReduceError::OutOfRange { vertex });
         }
         let key = vertices.vertex(0);
-        let eliminated = (off_diagonal.bipartite()).map_or(0, Bipartite::n_eliminated);
-        let gauge = lift.gauge(eliminated);
+        let gauge = lift.gauge(off_diagonal.n_eliminated());
         Ok(Reduced {
             key,
             lift: Box::new(lift),

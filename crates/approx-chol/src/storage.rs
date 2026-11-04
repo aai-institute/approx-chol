@@ -98,6 +98,24 @@ impl<T: Real, I: Index> Rows<T, I> {
         }
     }
 
+    /// `out = |X| diag(s) y` for the symmetric `X` these rows store, columns from `offset` on: each entry read for both its ends.
+    pub(crate) fn mirrored_abs_times(&self, offset: usize, s: &[f64], y: &[f64], out: &mut [f64]) {
+        out.fill(0.0);
+        for (i, span) in self.ptrs.windows(2).enumerate() {
+            let x_i = y[i] * s[i];
+            let mut sum = 0.0;
+            for (&j, &a) in self.indices[span[0]..span[1]]
+                .iter()
+                .zip(&self.values[span[0]..span[1]])
+            {
+                let (a, j) = (widen(a.abs()), offset + j.index());
+                sum += a * (y[j] * s[j]);
+                out[j] += a * x_i;
+            }
+            out[i] += sum;
+        }
+    }
+
     /// `out = |X|ᵀ x`.
     pub(crate) fn abs_transpose_times(&self, x: &[f64], out: &mut [f64]) {
         out.fill(0.0);
@@ -223,14 +241,6 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
         Self { rows }
     }
 
-    pub(crate) fn n(&self) -> usize {
-        self.rows.n_rows()
-    }
-
-    pub(crate) fn nonpositive(&self) -> bool {
-        self.rows.nonpositive()
-    }
-
     pub(crate) fn upper_len(&self, i: usize) -> usize {
         self.rows.row_len(i)
     }
@@ -262,16 +272,8 @@ impl<T: Real, I: Index> Bipartite<T, I> {
         Self { cross }
     }
 
-    pub(crate) fn n_eliminated(&self) -> usize {
-        self.cross.n_rows()
-    }
-
     pub(crate) fn positive(&self) -> bool {
         self.cross.values.iter().all(|&x| x > T::zero())
-    }
-
-    pub(crate) fn cross(&self) -> &Rows<T, I> {
-        &self.cross
     }
 
     pub(crate) fn into_cross(self) -> Rows<T, I> {
@@ -279,20 +281,12 @@ impl<T: Real, I: Index> Bipartite<T, I> {
     }
 }
 
-/// A block's off-diagonal as Reduction reads it, by shape; each edge stored once.
+/// A block's off-diagonal as Reduction reads it, by shape: each edge stored once, as rows whose columns start past the eliminated side.
 pub(crate) trait Adjacency<T: Real, I: Index>: Sized + Send + Sync {
-    fn n(&self) -> usize;
+    fn rows(&self) -> &Rows<T, I>;
 
-    fn nonpositive(&self) -> bool;
-
-    /// `Σ_j |a_ij|` per row in local order: dominance, surplus and pivots all start here.
-    fn abs_row_sums(&self) -> Vec<T>;
-
-    /// [`abs_row_sums`](Self::abs_row_sums) as [`Sum2`] gives them, off by `(u + γ²_{k/8})Σ` at degree `k`, in `f64`.
-    fn compensated_abs_row_sums(&self) -> Vec<f64>;
-
-    /// `sum + scale · Σ_ij |a_ij|` over both triangles: the other mirrors the stored one.
-    fn scaled_abs_into(&self, sum: Sum2, scale: f64) -> Sum2;
+    /// Vertices numbered before the stored columns: a bipartite block's eliminated side, else none.
+    fn n_eliminated(&self) -> usize;
 
     /// `S X S` for signs `S`: a sign moves no magnitude, so no entry leaves range.
     fn signed(self, s: &[T]) -> Self;
@@ -300,38 +294,73 @@ pub(crate) trait Adjacency<T: Real, I: Index>: Sized + Send + Sync {
     /// `F X F` with the new row sums from the same pass; `None` where an entry leaves range.
     fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)>;
 
-    /// Each row's off-diagonal count, both triangles.
-    fn degrees(&self) -> Vec<usize>;
+    /// Itself when bipartite: a positive `C` folds by negating one side.
+    fn bipartite(&self) -> Option<&Bipartite<T, I>> {
+        None
+    }
 
-    /// `out = |X| diag(s) y`, each stored entry read for both its ends.
-    fn abs_times(&self, s: &[f64], y: &[f64], out: &mut [f64]);
-
-    /// Each stored row `i` with its entries `(j, a_ij)` in local order: every edge once.
-    fn upper_rows(&self) -> impl Iterator<Item = (usize, impl Iterator<Item = (usize, &T)>)>;
-
-    /// Itself when bipartite, for what only that shape has: a side to eliminate, a cheaper Perron system.
-    fn bipartite(&self) -> Option<&Bipartite<T, I>>;
-}
-
-impl<T: Real, I: Index> Adjacency<T, I> for UpperAdjacency<T, I> {
     fn n(&self) -> usize {
-        UpperAdjacency::n(self)
+        self.n_eliminated() + self.rows().n_cols
     }
 
     fn nonpositive(&self) -> bool {
-        UpperAdjacency::nonpositive(self)
+        self.rows().nonpositive()
     }
 
+    /// `Σ_j |a_ij|` per row in local order: dominance, surplus and pivots all start here.
     fn abs_row_sums(&self) -> Vec<T> {
-        narrowed(self.rows.abs_sums(0))
+        let sums = self.rows().abs_sums(self.n_eliminated());
+        sums.into_iter().map(narrow).collect()
     }
 
+    /// [`abs_row_sums`](Self::abs_row_sums) as [`Sum2`] gives them, off by `(u + γ²_{k/8})Σ` at degree `k`, in `f64`.
     fn compensated_abs_row_sums(&self) -> Vec<f64> {
-        self.rows.compensated_abs_sums(0)
+        let (rows, offset) = (self.rows(), self.n_eliminated());
+        let mirror = rows.transpose();
+        let mut sums = vec![Sum2::default(); self.n()];
+        let abs = |_, x: T| widen(x.abs());
+        for (i, sum) in sums[..rows.n_rows()].iter_mut().enumerate() {
+            *sum = sum.plus(rows.row_values(i), abs);
+        }
+        for (j, sum) in sums[offset..].iter_mut().enumerate() {
+            *sum = sum.plus(mirror.row_values(j), abs);
+        }
+        sums.iter().map(Sum2::total).collect()
     }
 
+    /// `sum + scale · Σ_ij |a_ij|` over both triangles: the other mirrors the stored one.
     fn scaled_abs_into(&self, sum: Sum2, scale: f64) -> Sum2 {
-        self.rows.scaled_abs_into(sum, scale)
+        sum.plus(&self.rows().values, |_, x| 2.0 * scale * widen(x.abs()))
+    }
+
+    /// Each row's off-diagonal count, both triangles.
+    fn degrees(&self) -> Vec<usize> {
+        let mut degree = vec![0usize; self.n()];
+        for (i, row) in self.upper_rows() {
+            let mut count = 0;
+            for (j, _) in row {
+                count += 1;
+                degree[j] += 1;
+            }
+            degree[i] += count;
+        }
+        degree
+    }
+
+    /// Each stored row `i` with its entries `(j, a_ij)` in local order: every edge once.
+    fn upper_rows(&self) -> impl Iterator<Item = (usize, impl Iterator<Item = (usize, &T)>)> {
+        let (rows, offset) = (self.rows(), self.n_eliminated());
+        (0..rows.n_rows()).map(move |i| (i, rows.row(i).map(move |(j, a)| (offset + j, a))))
+    }
+}
+
+impl<T: Real, I: Index> Adjacency<T, I> for UpperAdjacency<T, I> {
+    fn rows(&self) -> &Rows<T, I> {
+        &self.rows
+    }
+
+    fn n_eliminated(&self) -> usize {
+        0
     }
 
     fn signed(self, s: &[T]) -> Self {
@@ -342,45 +371,17 @@ impl<T: Real, I: Index> Adjacency<T, I> for UpperAdjacency<T, I> {
 
     fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
         let (rows, sums) = self.rows.scaled_abs_sums(f, f, 0)?;
-        Some((Self { rows }, narrowed(sums)))
-    }
-
-    fn degrees(&self) -> Vec<usize> {
-        self.rows.degrees(0)
-    }
-
-    fn abs_times(&self, s: &[f64], y: &[f64], out: &mut [f64]) {
-        self.rows.mirrored_abs_times(0, s, y, out);
-    }
-
-    fn upper_rows(&self) -> impl Iterator<Item = (usize, impl Iterator<Item = (usize, &T)>)> {
-        self.rows.offset_rows(0)
-    }
-
-    fn bipartite(&self) -> Option<&Bipartite<T, I>> {
-        None
+        Some((Self { rows }, sums.into_iter().map(narrow).collect()))
     }
 }
 
 impl<T: Real, I: Index> Adjacency<T, I> for Bipartite<T, I> {
-    fn n(&self) -> usize {
-        self.cross.n_rows() + self.cross.n_cols()
+    fn rows(&self) -> &Rows<T, I> {
+        &self.cross
     }
 
-    fn nonpositive(&self) -> bool {
-        self.cross.nonpositive()
-    }
-
-    fn abs_row_sums(&self) -> Vec<T> {
-        narrowed(self.cross.abs_sums(self.n_eliminated()))
-    }
-
-    fn compensated_abs_row_sums(&self) -> Vec<f64> {
-        self.cross.compensated_abs_sums(self.n_eliminated())
-    }
-
-    fn scaled_abs_into(&self, sum: Sum2, scale: f64) -> Sum2 {
-        self.cross.scaled_abs_into(sum, scale)
+    fn n_eliminated(&self) -> usize {
+        self.cross.n_rows()
     }
 
     fn signed(self, s: &[T]) -> Self {
@@ -395,86 +396,11 @@ impl<T: Real, I: Index> Adjacency<T, I> for Bipartite<T, I> {
         let (cross, sums) = self
             .cross
             .scaled_abs_sums(eliminated, kept, eliminated.len())?;
-        Some((Self { cross }, narrowed(sums)))
-    }
-
-    fn degrees(&self) -> Vec<usize> {
-        self.cross.degrees(self.n_eliminated())
-    }
-
-    fn abs_times(&self, s: &[f64], y: &[f64], out: &mut [f64]) {
-        self.cross
-            .mirrored_abs_times(self.n_eliminated(), s, y, out);
-    }
-
-    fn upper_rows(&self) -> impl Iterator<Item = (usize, impl Iterator<Item = (usize, &T)>)> {
-        self.cross.offset_rows(self.n_eliminated())
+        Some((Self { cross }, sums.into_iter().map(narrow).collect()))
     }
 
     fn bipartite(&self) -> Option<&Bipartite<T, I>> {
         Some(self)
-    }
-}
-
-fn narrowed<T: Real>(sums: Vec<f64>) -> Vec<T> {
-    sums.into_iter().map(narrow).collect()
-}
-
-// A symmetric off-diagonal's stored entries, its columns from `offset` in local order, read for both their ends.
-impl<T: Real, I: Index> Rows<T, I> {
-    /// Each row's [`Sum2`] of `|x|` and its column's from the mirror, in `f64`.
-    fn compensated_abs_sums(&self, offset: usize) -> Vec<f64> {
-        let mirror = self.transpose();
-        let mut sums = vec![Sum2::default(); offset + self.n_cols];
-        let abs = |_, x: T| widen(x.abs());
-        for (i, sum) in sums[..self.n_rows()].iter_mut().enumerate() {
-            *sum = sum.plus(self.row_values(i), abs);
-        }
-        for (j, sum) in sums[offset..].iter_mut().enumerate() {
-            *sum = sum.plus(mirror.row_values(j), abs);
-        }
-        sums.iter().map(Sum2::total).collect()
-    }
-
-    fn scaled_abs_into(&self, sum: Sum2, scale: f64) -> Sum2 {
-        sum.plus(&self.values, |_, x| 2.0 * scale * widen(x.abs()))
-    }
-
-    fn degrees(&self, offset: usize) -> Vec<usize> {
-        let mut degree = vec![0usize; offset + self.n_cols];
-        for (i, row) in self.offset_rows(offset) {
-            let mut count = 0;
-            for (j, _) in row {
-                count += 1;
-                degree[j] += 1;
-            }
-            degree[i] += count;
-        }
-        degree
-    }
-
-    fn mirrored_abs_times(&self, offset: usize, s: &[f64], y: &[f64], out: &mut [f64]) {
-        out.fill(0.0);
-        for (i, span) in self.ptrs.windows(2).enumerate() {
-            let x_i = y[i] * s[i];
-            let mut sum = 0.0;
-            for (&j, &a) in self.indices[span[0]..span[1]]
-                .iter()
-                .zip(&self.values[span[0]..span[1]])
-            {
-                let (a, j) = (widen(a.abs()), offset + j.index());
-                sum += a * (y[j] * s[j]);
-                out[j] += a * x_i;
-            }
-            out[i] += sum;
-        }
-    }
-
-    fn offset_rows(
-        &self,
-        offset: usize,
-    ) -> impl Iterator<Item = (usize, impl Iterator<Item = (usize, &T)>)> {
-        (0..self.n_rows()).map(move |i| (i, self.row(i).map(move |(j, a)| (offset + j, a))))
     }
 }
 
