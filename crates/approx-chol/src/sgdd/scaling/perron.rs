@@ -81,10 +81,11 @@ pub(super) struct Perron {
 
 /// The steps spent, the violation `y` leaves, and whether `y` settled, proving the float decision.
 #[derive(Clone, Copy, Debug)]
+// Mirrors `ScalingReport` before a clamped deficit joins it, which only `ScaleVector::report` does.
 pub(in crate::sgdd) struct Shortfall {
-    pub(in crate::sgdd) iterations: usize,
-    pub(in crate::sgdd) violation: f64,
-    pub(in crate::sgdd) settled: bool,
+    pub(super) iterations: usize,
+    pub(super) violation: f64,
+    pub(super) settled: bool,
 }
 
 /// The best positive `y` so far and its bracket.

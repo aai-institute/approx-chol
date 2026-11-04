@@ -132,17 +132,14 @@ impl ScaleVector {
     /// `M`'s report from its worst clamped `deficit`, kept when one is past a row's band or the scaling did not settle; an exact vector spends nothing.
     pub(super) fn report(self, deficit: f64) -> Option<ScalingReport> {
         let shortfall = match self {
-            Self::Identity | Self::NullVector => Shortfall {
-                iterations: 0,
-                violation: 0.0,
-                settled: true,
-            },
-            Self::PerronVector { shortfall, .. } => shortfall,
+            Self::Identity | Self::NullVector => None,
+            Self::PerronVector { shortfall, .. } => Some(shortfall),
         };
-        (deficit > 0.0 || !shortfall.settled).then_some(ScalingReport {
-            iterations: shortfall.iterations,
-            violation: shortfall.violation.max(deficit),
-            settled: shortfall.settled,
+        let settled = shortfall.is_none_or(|s| s.settled);
+        (deficit > 0.0 || !settled).then(|| ScalingReport {
+            iterations: shortfall.map_or(0, |s| s.iterations),
+            violation: shortfall.map_or(deficit, |s| s.violation.max(deficit)),
+            settled,
         })
     }
 }
