@@ -152,10 +152,14 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 vector,
                 clamped,
             })),
-            false => Ok(Signed::Frustrated(m.block(
-                Balance::Frustrated(surplus(&rows.diagonal, rows.abs)),
-                vector.report(clamped),
-            )?)),
+            false => {
+                let grounding = surplus(&rows).flushed(&rows.diagonal);
+                let grounding = grounding.map_err(|i| out_of_range(&m, i))?;
+                let report = vector.report(clamped);
+                Ok(Signed::Frustrated(
+                    m.block(Balance::Frustrated(grounding), report)?,
+                ))
+            }
         }
     }
 }
@@ -186,7 +190,7 @@ trait Surplus<T: Real, I: Index> {
     /// Whether the block's cycles all close within `√ε`; asked last, as it may run a pass over `V`.
     fn certifies(&self, vertices: &Selection<I>) -> bool;
     /// `M`'s grounds once it does not float.
-    fn grounds(&self, m: &Congruent<T, I>, rows: RowSums<T>) -> Grounding<T>;
+    fn grounds(&self, folded: &Folded<T, I>) -> Grounding<T>;
 }
 
 /// Read from `M`'s rows: `d_i − Σ_j |m_ij|`.
@@ -208,13 +212,13 @@ impl<T: Real, I: Index> Surplus<T, I> for RowSurplus {
         false
     }
 
-    fn grounds(&self, m: &Congruent<T, I>, RowSums { diagonal, abs }: RowSums<T>) -> Grounding<T> {
-        match surplus(&diagonal, abs) {
+    fn grounds(&self, Folded { m, rows, .. }: &Folded<T, I>) -> Grounding<T> {
+        match surplus(rows) {
             grounding if grounding.is_grounded() => grounding,
             // An uncompensated `f64` row sum can round up to `d_i` from degree 67 (#269).
             _ => {
                 let sums = m.off_diagonal().compensated_abs_row_sums();
-                let residues = (diagonal.iter().zip(sums))
+                let residues = (rows.diagonal.iter().zip(sums))
                     .map(|(&d, s)| narrow((widen(d) - s).max(0.0)))
                     .collect();
                 Grounding::of(residues)
@@ -236,16 +240,25 @@ impl<T: Real, I: Index> Folded<T, I> {
             && (((dominant || S::RESIDUES_FLOAT_SCALED) && self.floats(surplus.residues(&self)))
                 || surplus.certifies(self.m.vertices()));
         let report = self.vector.report(self.clamped);
-        let Self { m, rows, .. } = self;
         if floats {
-            return m.block(Balance::Balanced(Grounding::ungrounded()), report);
+            return self
+                .m
+                .block(Balance::Balanced(Grounding::ungrounded()), report);
         }
-        let vertex = m.vertices().vertex(0);
-        let grounding = surplus.grounds(&m, rows);
-        if grounding.is_grounded() {
-            m.block(Balance::Balanced(grounding), report)
-        } else {
-            Err(ReduceError::Unscalable { vertex })
+        let grounding = surplus.grounds(&self);
+        // The first ground, which flushing all of them would lose from a definite `M`.
+        let Some(first) = (grounding.surplus()).and_then(|s| s.iter().position(|&s| s > T::zero()))
+        else {
+            let vertex = self.m.vertices().vertex(0);
+            return Err(ReduceError::Unscalable { vertex });
+        };
+        let Self { m, rows, .. } = self;
+        match grounding.flushed(&rows.diagonal) {
+            Ok(grounding) if grounding.is_grounded() => {
+                m.block(Balance::Balanced(grounding), report)
+            }
+            Ok(_) => Err(out_of_range(&m, first)),
+            Err(i) => Err(out_of_range(&m, i)),
         }
     }
 
@@ -272,10 +285,20 @@ impl<T: Real, I: Index> Folded<T, I> {
     }
 }
 
-/// Each row's residue, deficits clamped to zero, written over `abs` so `diagonal` outlives it.
-fn surplus<T: Real>(diagonal: &[T], mut abs: Vec<T>) -> Grounding<T> {
-    (abs.iter_mut().zip(diagonal)).for_each(|(s, &d)| *s = (d - *s).max(T::zero()));
-    Grounding::of(abs)
+/// Row `i` of `m` holds a ground out of range.
+fn out_of_range<T: Real, I: Index>(m: &Congruent<T, I>, i: usize) -> ReduceError {
+    ReduceError::OutOfRange {
+        vertex: m.vertices().vertex(i),
+    }
+}
+
+/// Each row's residue, deficits clamped to zero.
+fn surplus<T: Real>(RowSums { diagonal, abs }: &RowSums<T>) -> Grounding<T> {
+    Grounding::of(
+        (diagonal.iter().zip(abs))
+            .map(|(&d, &s)| (d - s).max(T::zero()))
+            .collect(),
+    )
 }
 
 /// `1ᵀM1 ≤ SINGULAR_BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh).
