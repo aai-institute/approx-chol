@@ -55,6 +55,13 @@ impl<T: Real, I: Index, S: Sign> Wdd<T, I, S> {
     }
 }
 
+impl<T: Real, I: Index> Wdd<T, I, Unsigned> {
+    pub(super) fn z_matrix(matrix: Grounded<T, WddCsr<T, I>>) -> Self {
+        debug_assert!(matrix.adjacency.nonpositive(), "a Z-matrix");
+        Self::of(matrix)
+    }
+}
+
 /// A balanced matrix is a Z-matrix, a frustrated one signed.
 pub(super) enum AnyWdd<T, I> {
     Unsigned(Wdd<T, I, Unsigned>),
@@ -68,10 +75,7 @@ impl<T: Real, I: Index> AnyWdd<T, I> {
         assert!(n > 0, "M has a vertex");
         assert!(matrix.grounding.fits(n), "one surplus per row");
         match balance {
-            Balance::Balanced => {
-                debug_assert!(matrix.adjacency.nonpositive(), "a balanced M is a Z-matrix");
-                Self::Unsigned(Wdd::of(matrix))
-            }
+            Balance::Balanced => Self::Unsigned(Wdd::z_matrix(matrix)),
             Balance::Frustrated => Self::Signed(Wdd::of(matrix)),
         }
     }

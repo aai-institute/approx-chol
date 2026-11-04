@@ -1,5 +1,5 @@
 use crate::factor::clique_tree::Copies;
-use crate::factor::sddm::Sddm;
+use crate::factor::representation::Represented;
 use crate::storage::{Index, Real};
 
 /// One half of an edge; `mirror` indexes the other half in `to`'s list, so removal is O(1).
@@ -25,11 +25,11 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
     }
 
     /// The ground, when there is one, is the last vertex; the order pins it.
-    pub(super) fn load(&mut self, sddm: &Sddm<T, I>, split: C) {
-        let n = sddm.n() + usize::from(sddm.grounded());
+    pub(super) fn load(&mut self, represented: &Represented<T, I>, split: C) {
+        let n = represented.n() + usize::from(represented.layout().grounded());
         // One slot past the degree: the first fill edge reallocating measured +2-3% on grids.
         let mut capacities = vec![1; n];
-        sddm.grounded_edges(|k, j, _| {
+        represented.grounded_edges(|k, j, _| {
             capacities[k.index()] += 1;
             capacities[j.index()] += 1;
         });
@@ -37,7 +37,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         let reused = self.lists.len();
         (self.lists.iter_mut().zip(&capacities)).for_each(|(list, &c)| list.reserve_exact(c));
         (self.lists).extend(capacities[reused..].iter().map(|&c| Vec::with_capacity(c)));
-        sddm.grounded_edges(|k, j, w| self.push_pair(k, j, split, w));
+        represented.grounded_edges(|k, j, w| self.push_pair(k, j, split, w));
     }
 
     pub(super) fn n(&self) -> usize {

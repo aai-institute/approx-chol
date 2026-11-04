@@ -8,7 +8,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 #[cfg(feature = "serde")]
 use super::within_one;
 use crate::factor::clique_tree::{CliqueTreeSampler, Copies, Fill, Multi, Single};
-use crate::factor::sddm::Sddm;
+use crate::factor::representation::Represented;
 use crate::storage::{narrow, Index, Real};
 use graph::EliminationGraph;
 use ordering::MinDegreeOrder;
@@ -32,13 +32,13 @@ impl<T: Real, I: Index> CliqueTreeElimination<T, I> {
     /// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree; the last, `pin` when given, is the slot the solve zeroes.
     pub(super) fn eliminate(
         &mut self,
-        sddm: Sddm<T, I>,
+        represented: Represented<T, I>,
         draws: Xoshiro256PlusPlus,
         pin: Option<usize>,
     ) -> (ApproximateCholesky<T, I>, usize) {
         match &mut self.0 {
-            ByCopies::Ac(elimination) => elimination.eliminate(sddm, draws, pin),
-            ByCopies::Ac2(elimination) => elimination.eliminate(sddm, draws, pin),
+            ByCopies::Ac(elimination) => elimination.eliminate(represented, draws, pin),
+            ByCopies::Ac2(elimination) => elimination.eliminate(represented, draws, pin),
         }
     }
 }
@@ -65,12 +65,12 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
 
     fn eliminate(
         &mut self,
-        sddm: Sddm<T, I>,
+        represented: Represented<T, I>,
         mut draws: Xoshiro256PlusPlus,
         pin: Option<usize>,
     ) -> (ApproximateCholesky<T, I>, usize) {
-        self.graph.load(&sddm, self.split);
-        drop(sddm);
+        self.graph.load(&represented, self.split);
+        drop(represented);
         let (n, edge_ends) = (self.graph.n(), self.graph.edge_ends());
         self.order.load(&self.graph, self.split, pin, edge_ends);
         let mut steps = ApproximateCholesky::with_capacity(n, edge_ends);

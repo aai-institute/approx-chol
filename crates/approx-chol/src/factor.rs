@@ -3,8 +3,8 @@
 mod cholesky;
 mod clique_tree;
 mod config;
+mod representation;
 mod schur;
-mod sddm;
 mod wdd;
 #[cfg(feature = "serde")]
 mod wire;

@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use super::cholesky::{Arm, BlockElimination, Streams, MULTIPLY_ADD_GRAIN_BITS};
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::{Config, SchurMode};
-use super::sddm::{cover_vertex, crosses, Sddm, SddmRows};
+use super::representation::{cover_neighbor, crosses, Represented, SddmRows};
 use super::wdd::AnyWdd;
 use crate::per_task;
 use crate::storage::{narrow, widen, Balance, Grounding, Index, Real, Rows, Sheets};
@@ -74,7 +74,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
             Formation::Exact => self.exact(inv_pivot),
             Formation::Sampled(split) => self.sample(split, streams).merge(),
         };
-        let s = Sddm::of_rows(rows, self.balance.sheets(), kept);
+        let s = Represented::from_rows(rows, self.balance.sheets(), kept);
         (Arm::Approximate(s), self.cross)
     }
 
@@ -91,7 +91,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
                 fill.merge()
             }
         };
-        Arm::Approximate(Sddm::of_rows(rows, self.balance.sheets(), kept))
+        Arm::Approximate(Represented::from_rows(rows, self.balance.sheets(), kept))
     }
 
     /// `S` itself, its exact rows folded off the sheets.
@@ -128,12 +128,12 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
             .collect()
     }
 
-    /// `S − diag(s_k)` exact by kept row, `S = D_k − Cᵀ D_e⁻¹ C`, through a `Cᵀ` freed before `of_rows` adds `s_k`.
+    /// `S − diag(s_k)` exact by kept row, `S = D_k − Cᵀ D_e⁻¹ C`, through a `Cᵀ` freed before `from_rows` adds `s_k`.
     fn exact(&self, inv_pivot: &[T]) -> SddmRows<T, I> {
         match self.balance.sheets() {
             Sheets::One => self.exact_rows(inv_pivot, |j, _, _| j),
             Sheets::Two => self.exact_rows(inv_pivot, |j, c_ek, c_ej| {
-                cover_vertex(j, usize::from(crosses(c_ek) != crosses(c_ej)))
+                cover_neighbor(j, 0, crosses(c_ek) != crosses(c_ej))
             }),
         }
     }
@@ -208,8 +208,7 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
             Sheets::Two => {
                 let (sheet, e) = (s / c.n_rows(), s % c.n_rows());
                 let neighbors = c.row(e).map(move |(k, &c)| {
-                    let on = sheet ^ usize::from(crosses(c));
-                    (I::from_index(cover_vertex(k, on)), c.abs())
+                    (I::from_index(cover_neighbor(k, sheet, crosses(c))), c.abs())
                 });
                 sampler.eliminate_unique(draws, neighbors.chain(ground(e)), fill);
             }

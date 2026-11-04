@@ -10,7 +10,6 @@ pub use block::ReduceError;
 pub(crate) use block::{Reduced, ReducedComplement, ReducedComponent};
 pub(crate) use congruence::{Lift, Null, Selection};
 pub(crate) use decomposition::{Lone, Summands};
-pub(crate) use reduction::Singularity;
 pub use scaling::{ScalingPolicy, ScalingReport};
 
 use crate::storage::{in_range, Adjacency, Index, OffDiagonal, Real};

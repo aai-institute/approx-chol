@@ -7,8 +7,8 @@ use rand::SeedableRng;
 
 use super::clique_tree::Multi;
 use super::config::{Config, InnerParallelism};
+use super::representation::{Layout, Represented};
 use super::schur::BipartiteBlock;
-use super::sddm::{descend, first_copy, lift, Sddm};
 use super::wdd::AnyWdd;
 use crate::sgdd::Null;
 use crate::storage::{
@@ -110,9 +110,11 @@ impl<T: Real, I: Index> Factorization<T, I> {
                         },
                         balance,
                     )),
-                    false => {
-                        Arm::Approximate(Sddm::of_block(adjacency, balance.sheets(), grounding))
-                    }
+                    false => Arm::Approximate(Represented::sampled(
+                        adjacency,
+                        balance.sheets(),
+                        grounding,
+                    )),
                 };
                 Self {
                     elimination: None,
@@ -221,57 +223,7 @@ impl<T: Real, I: Index> Workspace<T, I> {
 /// What a Cholesky factors: `M` itself on the dense arm, its SDDM on the approximate one.
 pub(super) enum Arm<T, I> {
     Dense(AnyWdd<T, I>),
-    Approximate(Sddm<T, I>),
-}
-
-/// The elimination's slots over `M`'s `n` vertices: `n` floating, `n + 1` with the ground `g` appended, `2n` on a cover's sheets, `g` after them when grounded.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Layout {
-    Floating,
-    Grounded,
-    Cover { grounded: bool },
-}
-
-impl Layout {
-    fn of(sheets: Sheets, grounded: bool) -> Self {
-        match (sheets, grounded) {
-            (Sheets::One, false) => Self::Floating,
-            (Sheets::One, true) => Self::Grounded,
-            (Sheets::Two, grounded) => Self::Cover { grounded },
-        }
-    }
-
-    fn grounded(self) -> bool {
-        matches!(self, Self::Grounded | Self::Cover { grounded: true })
-    }
-
-    fn sheets(self) -> Sheets {
-        match self {
-            Self::Floating | Self::Grounded => Sheets::One,
-            Self::Cover { .. } => Sheets::Two,
-        }
-    }
-
-    fn slots(self, n: usize) -> usize {
-        self.sheets().count() * n + usize::from(self.grounded())
-    }
-
-    /// `M`'s vertices over `slots`, if they fit this layout.
-    #[cfg(feature = "serde")]
-    fn vertices(self, slots: usize) -> Option<usize> {
-        let sheets = slots.checked_sub(usize::from(self.grounded()))?;
-        let count = self.sheets().count();
-        (sheets % count == 0 && sheets > 0).then_some(sheets / count)
-    }
-
-    /// The slot the solve pins: the ground, else the largest `|f|` on the first sheet, so the gauge's rounding is not amplified by `1/f`.
-    fn pinned(self, n: usize, gauge: Gauge) -> usize {
-        match self.grounded() {
-            true => self.slots(n) - 1,
-            false => first_copy(self.sheets(), gauge.peak),
-        }
-    }
+    Approximate(Represented<T, I>),
 }
 
 /// The factor of what the elimination leaves; it builds its own Triangular, so its facts come from that matrix.
@@ -304,14 +256,13 @@ impl<T: Real, I: Index> Cholesky<T, I> {
                 let factor = dense::factor(&wdd, pin, &mut reused.dense);
                 (layout, pin, Triangular::Dense(factor.into()))
             }
-            Arm::Approximate(sddm) => {
-                let (sheets, grounded) = (sddm.sheets(), sddm.grounded());
-                let layout = Layout::of(sheets, grounded);
-                let n = sddm.n() / sheets.count();
+            Arm::Approximate(represented) => {
+                let layout = represented.layout();
+                let n = represented.n() / layout.sheets().count();
                 // The ground is never a pivot, so `Σs` is never formed: within unchanged, grids +0-8% PCG iterations at 1-10 grounds.
                 // Floating, ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
-                let pin = (grounded || gauge.spans_wide).then(|| layout.pinned(n, gauge));
-                let (steps, pin) = reused.elimination.eliminate(sddm, draws, pin);
+                let pin = (layout.grounded() || gauge.spans_wide).then(|| layout.pinned(n, gauge));
+                let (steps, pin) = reused.elimination.eliminate(represented, draws, pin);
                 (layout, pin, Triangular::Approximate(Box::new(steps)))
             }
         };
@@ -332,32 +283,14 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         self.layout == Layout::Floating
     }
 
-    /// A floating sheet substitutes on `x` in place; any other layout on its slots beside it.
     pub(super) fn scratch_len(&self) -> usize {
-        match self.layout {
-            Layout::Floating => 0,
-            Layout::Grounded | Layout::Cover { .. } => self.triangular.slots(),
-        }
+        self.layout.scratch_len(self.triangular.slots())
     }
 
-    /// Lifts to the slots, substitutes, and descends; the pinned ground reads zero, so its right-hand side is never read.
     pub(super) fn solve(&self, x: &mut [T], scratch: &mut [T]) {
-        let triangular = &self.triangular;
-        match self.layout {
-            Layout::Floating => triangular.substitute(x, self.pinned),
-            Layout::Grounded => {
-                let rows = &mut scratch[..=x.len()];
-                rows[..x.len()].copy_from_slice(x);
-                triangular.substitute(rows, self.pinned);
-                x.copy_from_slice(&rows[..x.len()]);
-            }
-            Layout::Cover { .. } => {
-                let rows = &mut scratch[..self.scratch_len()];
-                lift(x, rows);
-                triangular.substitute(rows, self.pinned);
-                descend(rows, x);
-            }
-        }
+        let slots = self.triangular.slots();
+        let substitute = |rows: &mut [T]| self.triangular.substitute(rows, self.pinned);
+        self.layout.solve(x, scratch, slots, substitute);
     }
 }
 

@@ -1,133 +1,203 @@
-//! The Cholesky's input: a Laplacian with its surplus, on one sheet or a Gremban cover's two.
+//! What the approximate elimination factors: a Z-matrix and its slot map, on one sheet or a Gremban cover's two.
 
 use rayon::prelude::*;
 
-use crate::sgdd::Singularity;
+use super::wdd::{Unsigned, Wdd};
 use crate::storage::{
-    lane_sum, narrow, widen, Adjacency, Grounded, Grounding, Index, Real, Rows, Sheets, WddCsr,
+    lane_sum, narrow, widen, Adjacency, Gauge, Grounded, Grounding, Index, Real, Rows, Sheets,
+    WddCsr,
 };
 
-/// `L + diag(s)`, `L`'s off-diagonal nonpositive; a twisted cover's `k⁺—k⁻` edges live in its closure, not its rows.
-#[derive(Clone, Debug)]
-pub(super) struct Sddm<T, I> {
-    adjacency: WddCsr<T, I>,
-    closure: Closure<T>,
+/// The elimination's slots over `M`'s `n` vertices: `n` floating, `n + 1` with the ground `g` appended, `2n` on a cover's sheets, `g` after them when grounded.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Layout {
+    Floating,
+    Grounded,
+    Cover { grounded: bool },
 }
 
-/// What `L` carries beyond its rows: a ground on one sheet or two, or a cover's twists in its place.
-#[derive(Clone, Debug)]
-enum Closure<T> {
-    Folded(Grounding<T>),
-    Cover(Grounding<T>),
-    /// Each vertex's [`twist`] `k⁺ — k⁻`, zero where both copies float.
-    Twisted(Box<[T]>),
-}
+impl Layout {
+    pub(super) fn of(sheets: Sheets, grounded: bool) -> Self {
+        match (sheets, grounded) {
+            (Sheets::One, false) => Self::Floating,
+            (Sheets::One, true) => Self::Grounded,
+            (Sheets::Two, grounded) => Self::Cover { grounded },
+        }
+    }
 
-impl<T: Real> Closure<T> {
-    fn grounding(&self) -> Option<&Grounding<T>> {
+    pub(super) fn grounded(self) -> bool {
+        matches!(self, Self::Grounded | Self::Cover { grounded: true })
+    }
+
+    pub(super) fn sheets(self) -> Sheets {
         match self {
-            Self::Folded(grounding) | Self::Cover(grounding) => Some(grounding),
-            Self::Twisted(_) => None,
+            Self::Floating | Self::Grounded => Sheets::One,
+            Self::Cover { .. } => Sheets::Two,
+        }
+    }
+
+    fn slots(self, n: usize) -> usize {
+        self.sheets().count() * n + usize::from(self.grounded())
+    }
+
+    /// `M`'s vertices over `slots`, if they fit this layout.
+    #[cfg(feature = "serde")]
+    pub(super) fn vertices(self, slots: usize) -> Option<usize> {
+        let sheets = slots.checked_sub(usize::from(self.grounded()))?;
+        let count = self.sheets().count();
+        (sheets % count == 0 && sheets > 0).then_some(sheets / count)
+    }
+
+    /// The slot the solve pins: the ground, else the largest `|f|` on the first sheet, so the gauge's rounding is not amplified by `1/f`.
+    pub(super) fn pinned(self, n: usize, gauge: Gauge) -> usize {
+        match (self.grounded(), self.sheets()) {
+            (true, _) => self.slots(n) - 1,
+            (false, Sheets::One) => gauge.peak,
+            (false, Sheets::Two) => cover_vertex(gauge.peak, 0),
+        }
+    }
+
+    /// Scratch beside `x`: none floating, else every slot.
+    pub(super) fn scratch_len(self, slots: usize) -> usize {
+        match self {
+            Self::Floating => 0,
+            Self::Grounded | Self::Cover { .. } => slots,
+        }
+    }
+
+    /// Lifts `x` onto the slots, `substitute`s there, and descends; the pinned ground reads zero, so its right-hand side is never read.
+    pub(super) fn solve<T: Real>(
+        self,
+        x: &mut [T],
+        scratch: &mut [T],
+        slots: usize,
+        substitute: impl FnOnce(&mut [T]),
+    ) {
+        match self {
+            Self::Floating => substitute(x),
+            Self::Grounded => {
+                let rows = &mut scratch[..slots];
+                rows[..x.len()].copy_from_slice(x);
+                substitute(rows);
+                x.copy_from_slice(&rows[..x.len()]);
+            }
+            Self::Cover { .. } => {
+                let rows = &mut scratch[..slots];
+                ascend(x, rows);
+                substitute(rows);
+                descend(rows, x);
+            }
         }
     }
 }
 
-impl<T: Real, I: Index> Sddm<T, I> {
-    /// Panics unless nonempty, with one surplus per row or one twist per pair.
-    fn new(adjacency: WddCsr<T, I>, closure: Closure<T>) -> Self {
-        let n = adjacency.n();
-        assert!(n > 0, "an SDDM has a vertex");
-        match &closure {
-            Closure::Folded(grounding) => assert!(grounding.fits(n), "one surplus per row"),
-            Closure::Cover(grounding) => {
-                assert!(grounding.fits(n), "one surplus per row");
-                assert_eq!(n % 2, 0, "every sheet holds the same vertices");
-            }
-            Closure::Twisted(twists) => assert_eq!(2 * twists.len(), n, "one twist per pair"),
-        }
-        debug_assert!(adjacency.nonpositive(), "L's off-diagonal is nonpositive");
-        Self { adjacency, closure }
-    }
+/// A Z-matrix with its slot map, only built together: `M` folded, or its Gremban cover, grounded or joined across its sheets by surplus edges.
+pub(super) struct Represented<T, I> {
+    matrix: Wdd<T, I, Unsigned>,
+    layout: Layout,
+}
 
+impl<T: Real, I: Index> Represented<T, I> {
     /// Folded `M` on one sheet, or the Gremban cover of signed `M` on two.
-    pub(super) fn of_block(
+    pub(super) fn sampled(
         adjacency: WddCsr<T, I>,
         sheets: Sheets,
         grounding: Grounding<T>,
     ) -> Self {
         match sheets {
-            Sheets::One => Self::new(adjacency, Closure::Folded(grounding)),
+            Sheets::One => Self::folded(Grounded {
+                adjacency,
+                grounding,
+            }),
             Sheets::Two => {
                 let n = adjacency.n();
                 // The cover acts as `M − diag(s)` on `[z; −z]`.
                 let rows = SddmRows::split(sheets, n, n, |mut sums, i| {
                     for (j, &a) in adjacency.upper(i) {
-                        sums.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
+                        sums.add(cover_neighbor(j, 0, crosses(a)), a.abs());
                     }
                 });
-                Self::of_rows(rows, sheets, grounding.surplus())
+                Self::from_rows(rows, sheets, grounding.surplus())
             }
         }
     }
 
-    /// Rows on `sheets`, each ground plus its vertex's `surplus`, one per vertex; on two, a ground within the singular band [`twists`].
-    pub(super) fn of_rows(rows: SddmRows<T, I>, sheets: Sheets, surplus: Option<&[T]>) -> Self {
+    /// Rows on `sheets`, each ground plus its vertex's `surplus`, one per vertex.
+    pub(super) fn from_rows(rows: SddmRows<T, I>, sheets: Sheets, surplus: Option<&[T]>) -> Self {
         let n = rows.sums.len() - 1;
-        let adjacency = WddCsr::new(Rows::new(rows.ptrs, rows.indices, rows.values, n));
         let mut ground = rows.ground;
         if let Some(surplus) = surplus {
             assert_eq!(sheets.count() * surplus.len(), n, "one surplus per vertex");
             let copies = (surplus.iter()).flat_map(|&s| std::iter::repeat_n(s, sheets.count()));
             (ground.iter_mut().zip(copies)).for_each(|(g, s)| *g = s + *g);
         }
-        let grounding = Grounding::of(ground);
-        let closure = match (sheets, grounding.surplus()) {
-            (Sheets::One, _) => Closure::Folded(grounding),
-            (Sheets::Two, Some(ground)) if twists(ground, &adjacency) => {
-                Closure::Twisted(ground.chunks_exact(2).map(|g| twist(g[0], g[1])).collect())
-            }
-            (Sheets::Two, _) => Closure::Cover(grounding),
-        };
-        Self::new(adjacency, closure)
-    }
-
-    pub(super) fn n(&self) -> usize {
-        self.adjacency.n()
-    }
-
-    pub(super) fn grounded(&self) -> bool {
-        (self.closure.grounding()).is_some_and(Grounding::is_grounded)
-    }
-
-    pub(super) fn sheets(&self) -> Sheets {
-        match self.closure {
-            Closure::Folded(_) => Sheets::One,
-            Closure::Cover(_) | Closure::Twisted(_) => Sheets::Two,
+        let rows = Rows::new(rows.ptrs, rows.indices, rows.values, n);
+        match sheets {
+            Sheets::One => Self::folded(Grounded {
+                adjacency: WddCsr::new(rows),
+                grounding: Grounding::of(ground),
+            }),
+            Sheets::Two => Self::cover(rows, ground),
         }
     }
 
-    /// Positive Laplacian weights, each edge once with any twists, the ground vertex `n` joined by each surplus.
+    fn folded(matrix: Grounded<T, WddCsr<T, I>>) -> Self {
+        let layout = Layout::of(Sheets::One, matrix.grounding.is_grounded());
+        Self::new(matrix, layout)
+    }
+
+    /// The one place a cover takes its surplus: as the ground `g`, or, within [`surplus_edges`]' band, as an edge [`twist`] `k⁺ — k⁻` per vertex, first in `k⁺`'s row.
+    fn cover(rows: Rows<T, I>, ground: Vec<T>) -> Self {
+        let adjacency = WddCsr::new(rows);
+        assert_eq!(adjacency.n() % 2, 0, "every sheet holds the same vertices");
+        let grounding = Grounding::of(ground);
+        let matrix = match grounding.surplus() {
+            Some(ground) if surplus_edges(ground, &adjacency) => {
+                let twists = ground.chunks_exact(2).map(|g| twist(g[0], g[1]));
+                Grounded {
+                    adjacency: first_in_row(adjacency, twists),
+                    grounding: Grounding::ungrounded(),
+                }
+            }
+            _ => Grounded {
+                adjacency,
+                grounding,
+            },
+        };
+        let layout = Layout::of(Sheets::Two, matrix.grounding.is_grounded());
+        Self::new(matrix, layout)
+    }
+
+    /// Panics unless nonempty, with one surplus per row.
+    fn new(matrix: Grounded<T, WddCsr<T, I>>, layout: Layout) -> Self {
+        assert!(matrix.adjacency.n() > 0, "an SDDM has a vertex");
+        Self {
+            matrix: Wdd::z_matrix(matrix),
+            layout,
+        }
+    }
+
+    /// Its slots, the ground excluded.
+    pub(super) fn n(&self) -> usize {
+        self.matrix.n()
+    }
+
+    pub(super) fn layout(&self) -> Layout {
+        self.layout
+    }
+
+    /// Positive Laplacian weights, each edge once, the ground vertex `n` joined by each surplus.
     pub(super) fn grounded_edges(&self, mut edge: impl FnMut(I, I, T)) {
         let n = self.n();
-        let twists = match &self.closure {
-            Closure::Twisted(twists) => &twists[..],
-            Closure::Folded(_) | Closure::Cover(_) => &[],
-        };
         for i in 0..n {
-            // Ahead of `k⁺`'s row, where its column sorts: a star merges duplicates in list order.
-            let twist = twists.get(i / 2).filter(|&&t| i % 2 == 0 && t > T::zero());
-            if let Some(&t) = twist {
-                edge(I::from_index(i), I::from_index(i + 1), t);
-            }
-            for (j, &a) in self.adjacency.upper(i) {
+            for (j, &a) in self.matrix.adjacency().upper(i) {
                 edge(I::from_index(i), I::from_index(j), -a);
             }
         }
-        if let Some(grounding) = self.closure.grounding() {
-            for k in 0..n {
-                if let Some(s) = grounding.edge(k) {
-                    edge(I::from_index(k), I::from_index(n), s);
-                }
+        for k in 0..n {
+            if let Some(s) = self.matrix.grounding().edge(k) {
+                edge(I::from_index(k), I::from_index(n), s);
             }
         }
     }
@@ -291,12 +361,38 @@ impl<T: Real, I: Index> ColumnSums<'_, T, I> {
     }
 }
 
-/// Whether `ground` is within the singular band of `ground + Σ|a_ij|`, both `ε`-scaled so neither overflows: a cover's copies then [`twist`] instead of grounding, so its `1/s` common mode cannot swamp `z`; a cover doubles both sums, so `M`'s decide as its own.
-fn twists<T: Real, I: Index>(ground: &[T], adjacency: &WddCsr<T, I>) -> bool {
+/// `adjacency` with each `t > 0` of `twists` as the edge `2k — 2k+1`, first in row `2k`: no other neighbor of `k⁺` sorts below `k⁻`.
+fn first_in_row<T: Real, I: Index>(
+    adjacency: WddCsr<T, I>,
+    twists: impl Iterator<Item = T>,
+) -> WddCsr<T, I> {
+    let n = adjacency.n();
+    let (mut ptrs, mut indices, mut values) = (vec![0], Vec::new(), Vec::new());
+    for (k, t) in twists.enumerate() {
+        for i in [2 * k, 2 * k + 1] {
+            if i == 2 * k && t > T::zero() {
+                indices.push(I::from_index(i + 1));
+                values.push(-t);
+            }
+            for (j, &a) in adjacency.upper(i) {
+                indices.push(I::from_index(j));
+                values.push(a);
+            }
+            ptrs.push(indices.len());
+        }
+    }
+    WddCsr::new(Rows::new(ptrs, indices, values, n))
+}
+
+/// `CoverSurplus::Auto`'s band, `main`'s for floating, its own so Reduction's can move apart.
+const SURPLUS_EDGE_BAND: f64 = 5.0;
+
+/// Whether `ground` is within the band of `ground + Σ|a_ij|`, both `ε`-scaled so neither overflows: a cover's copies then [`twist`] instead of grounding, so its `1/s` common mode cannot swamp `z`; a cover doubles both sums, so `M`'s decide as its own.
+fn surplus_edges<T: Real, I: Index>(ground: &[T], adjacency: &WddCsr<T, I>) -> bool {
     let epsilon = widen(T::epsilon());
     let total = lane_sum(ground, epsilon);
     let trace = total + adjacency.scaled_abs_total(epsilon);
-    Singularity { ones: total, trace }.within_band::<T>()
+    total <= SURPLUS_EDGE_BAND * epsilon * trace
 }
 
 /// The edge `k⁺ — k⁻` that acts on `[z; −z]` as grounds `g⁺, g⁻` do; with `g⁺ ≠ g⁻` no ungrounded pair matches them, and the mean differs by less than the singular band. Zero where both copies float, else at least `MIN_POSITIVE`, as a share is.
@@ -314,19 +410,17 @@ pub(super) fn crosses<T: Real>(c: T) -> bool {
 }
 
 /// Vertex `k`'s copy on `sheet` of a cover: sheets interleave, so row `k⁻` mirrors its `k⁺` by flipping each column's low bit.
-pub(super) fn cover_vertex(k: usize, sheet: usize) -> usize {
+fn cover_vertex(k: usize, sheet: usize) -> usize {
     2 * k + sheet
 }
 
-pub(super) fn first_copy(sheets: Sheets, k: usize) -> usize {
-    match sheets {
-        Sheets::One => k,
-        Sheets::Two => cover_vertex(k, 0),
-    }
+/// The slot of a neighbor `k` of a vertex on `sheet`, across the sheets when their entry `crosses`.
+pub(super) fn cover_neighbor(k: usize, sheet: usize, crosses: bool) -> usize {
+    cover_vertex(k, sheet ^ usize::from(crosses))
 }
 
-/// `[x; −x]` interleaved by vertex, any ground slot after it zero: the lift a cover solves on.
-pub(super) fn lift<T: Real>(x: &[T], rows: &mut [T]) {
+/// `[x; −x]` interleaved by vertex, any ground slot after it zero: the cover's right-hand side.
+fn ascend<T: Real>(x: &[T], rows: &mut [T]) {
     let (pairs, ground) = rows.split_at_mut(2 * x.len());
     (pairs.chunks_exact_mut(2).zip(x)).for_each(|(r, &v)| {
         r[0] = v;
@@ -336,8 +430,8 @@ pub(super) fn lift<T: Real>(x: &[T], rows: &mut [T]) {
     ground.fill(T::zero());
 }
 
-/// Half the sheets' difference back into `x`, undoing [`lift`].
-pub(super) fn descend<T: Real>(rows: &[T], x: &mut [T]) {
+/// Half the sheets' difference back into `x`, undoing [`ascend`].
+fn descend<T: Real>(rows: &[T], x: &mut [T]) {
     let two = T::one() + T::one();
     (x.iter_mut().zip(rows.chunks_exact(2))).for_each(|(x, r)| *x = (r[0] - r[1]) / two);
 }
@@ -347,7 +441,7 @@ mod tests {
     use super::*;
 
     /// A frustrated 9-cycle of `2^1020` plus `extra` on vertex 0: `Σ|a_ij|` overflows `f64`, the band `≈ 2^974.5` does not.
-    fn cycle_cover(extra: f64) -> Sddm<f64, u32> {
+    fn cycle_cover(extra: f64) -> Represented<f64, u32> {
         let n = 9;
         let indices: Vec<u32> = [1, n - 1].into_iter().chain(2..n).collect();
         let ptrs: Vec<usize> = [0]
@@ -358,12 +452,13 @@ mod tests {
         let values = vec![2f64.powi(1020); indices.len()];
         let signed = WddCsr::new(Rows::new(ptrs, indices, values, n as usize));
         let surplus = [extra].into_iter().chain([0.0; 8]).collect();
-        Sddm::of_block(signed, Sheets::Two, Grounding::of(surplus))
+        Represented::sampled(signed, Sheets::Two, Grounding::of(surplus))
     }
 
     #[test]
     fn cover_twists_in_band_and_grounds_past_it_where_the_off_diagonal_overflows() {
-        assert!(!cycle_cover(2f64.powi(970)).grounded(), "twists in band");
-        assert!(cycle_cover(2f64.powi(1000)).grounded(), "grounds past it");
+        let grounded = |extra: f64| cycle_cover(extra).layout().grounded();
+        assert!(!grounded(2f64.powi(970)), "twists in band");
+        assert!(grounded(2f64.powi(1000)), "grounds past it");
     }
 }
