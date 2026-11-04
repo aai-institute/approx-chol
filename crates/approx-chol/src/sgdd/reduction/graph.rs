@@ -14,10 +14,15 @@ impl<T: Real, I: Index> Reduced<T, I> {
         v: FactorWidth2<'_, T, J>,
     ) -> Result<Self, ReduceError> {
         assemble_incidence(cells, v)?
-            .extract(|IncidenceBlock { cut, grounding }| {
-                let m = Congruent::incidence(cut.vertices, cut.off_diagonal);
-                m.block(Balance::Balanced(grounding), None)
-            })
+            .extract(
+                |IncidenceBlock {
+                     adjacency,
+                     grounding,
+                 }| {
+                    let m = Congruent::incidence(adjacency);
+                    m.block(Balance::Balanced(grounding), None)
+                },
+            )
             .map(Components::into_reduced)
     }
 }

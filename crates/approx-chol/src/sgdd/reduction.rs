@@ -91,7 +91,7 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
     fn reduce(self, policy: &ScalingPolicy) -> Result<Reduced<T, I>, ReduceError> {
         self.extract(|a| {
             let relax = |a: &SymmetricBlock<T, I>| {
-                scaling::relax(&a.off_diagonal, &a.rows.diagonal, policy)
+                scaling::relax(&a.adjacency.off_diagonal, &a.rows.diagonal, policy)
             };
             let block = match a.reduce(policy, relax)? {
                 Signed::Folded(folded) => {
@@ -116,14 +116,14 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         let RowSums { diagonal, abs } = &self.rows;
         let in_range = |(&d, &s): (&T, &T)| diagonal_in_range(d) && diagonal_in_range(s);
         if let Some(i) = diagonal.iter().zip(abs).position(|row| !in_range(row)) {
-            let vertex = self.vertices.vertex(i);
+            let vertex = self.adjacency.vertices.vertex(i);
             return Err(ReduceError::OutOfRange { vertex });
         }
         if let Some(i) = diagonal.iter().position(|&d| d <= T::zero()) {
-            let vertex = self.vertices.vertex(i);
+            let vertex = self.adjacency.vertices.vertex(i);
             return Err(ReduceError::NonpositiveDiagonal { vertex });
         }
-        let vertex = self.vertices.vertex(0);
+        let vertex = self.adjacency.vertices.vertex(0);
         let relaxation = match diagonal
             .iter()
             .zip(abs)
@@ -132,7 +132,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
             true => None,
             false => Some(relax(&self).ok_or(ReduceError::Unscalable { vertex })?),
         };
-        let folding = folding_signs(&self.off_diagonal);
+        let folding = folding_signs(&self.adjacency.off_diagonal);
         let folded = folding.is_some();
         let signs = folding.unwrap_or(Congruence::Identity);
         let (Formed { m, rows }, vector) = match relaxation {

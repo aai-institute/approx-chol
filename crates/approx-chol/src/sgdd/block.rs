@@ -1,7 +1,7 @@
 //! One reduced irreducible block, its balance and grounding.
 
 use super::congruence::{Congruence, Restriction, ScaledFactors, Selection};
-use super::decomposition::{RowSums, SymmetricBlock};
+use super::decomposition::{BlockAdjacency, RowSums, SymmetricBlock};
 use super::scaling::{ScalingReport, RATIO_BAND};
 use crate::storage::{OffDiagonal, Rows};
 use crate::{Index, Real};
@@ -186,8 +186,11 @@ impl<T: Real, I: Index> Congruent<T, I> {
     /// `S A_c S`, unscaled: signs keep every magnitude, so `A_c`'s rows are `M`'s.
     pub(super) fn signed(a: SymmetricBlock<T, I>, signs: Congruence<T>) -> Formed<T, I> {
         let SymmetricBlock {
-            vertices,
-            off_diagonal,
+            adjacency:
+                BlockAdjacency {
+                    vertices,
+                    off_diagonal,
+                },
             rows,
         } = a;
         let off_diagonal = match signs.factors(off_diagonal.n()) {
@@ -209,8 +212,11 @@ impl<T: Real, I: Index> Congruent<T, I> {
         scales: &[T],
     ) -> Option<Formed<T, I>> {
         let SymmetricBlock {
-            vertices,
-            off_diagonal,
+            adjacency:
+                BlockAdjacency {
+                    vertices,
+                    off_diagonal,
+                },
             rows,
         } = a;
         let factors: Box<[T]> = (scales.iter().enumerate())
@@ -233,7 +239,11 @@ impl<T: Real, I: Index> Congruent<T, I> {
     }
 
     /// An incidence Gram, assembled switched across a bipartition.
-    pub(super) fn incidence(vertices: Selection<I>, off_diagonal: OffDiagonal<T, I>) -> Self {
+    pub(super) fn incidence(adjacency: BlockAdjacency<T, I>) -> Self {
+        let BlockAdjacency {
+            vertices,
+            off_diagonal,
+        } = adjacency;
         let congruence = match &off_diagonal {
             OffDiagonal::Bipartite(c) => Congruence::NegateFrom(c.n_rows()),
             OffDiagonal::General(_) => Congruence::Identity,

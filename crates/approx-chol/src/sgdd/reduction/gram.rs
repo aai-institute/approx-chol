@@ -37,11 +37,11 @@ impl<T: Real, I: Index> Reduced<T, I> {
                 let NullVectors { u, .. } =
                     nulls.get_or_insert_with(|| null_vectors(v, partition.components()));
                 // `NaN` where a component has no certificate.
-                let u = (a.vertices.iter()).map(|v| u[v]);
+                let u = (a.adjacency.vertices.iter()).map(|v| u[v]);
                 (u.clone().all(f64::is_finite))
                     .then(|| scaling::null_scaling(u, &a.rows.diagonal))
                     .flatten()
-                    .or_else(|| scaling::relax(&a.off_diagonal, &a.rows.diagonal, policy))
+                    .or_else(|| scaling::relax(&a.adjacency.off_diagonal, &a.rows.diagonal, policy))
             })?;
             match reduced {
                 Signed::Folded(block) => folded.push(block),
