@@ -92,11 +92,11 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
                 scaling::relax(&a.adjacency.off_diagonal, &a.rows.diagonal, policy)
             };
             let block = match a.reduce(policy, relax)? {
-                Signed::Folded(folded) => {
+                Folding::Folded(folded) => {
                     let singularity = folded.singularity();
                     folded.settle(singularity, &RowSurplus)?
                 }
-                Signed::Frustrated(block) => block,
+                Folding::Frustrated(block) => block,
             };
             Ok(block)
         })
@@ -110,7 +110,7 @@ impl<T: Real, I: Index, P: Adjacency<T, I>> SymmetricBlock<T, I, P> {
         self,
         policy: &ScalingPolicy,
         relax: impl FnOnce(&Self) -> Option<scaling::Relaxation<T>>,
-    ) -> Result<Signed<T, I, P>, ReduceError> {
+    ) -> Result<Folding<T, I, P>, ReduceError> {
         let RowSums { diagonal, abs } = &self.rows;
         let in_range = |(&d, &s): (&T, &T)| diagonal_in_range(d) && diagonal_in_range(s);
         if let Some(i) = diagonal.iter().zip(abs).position(|row| !in_range(row)) {
@@ -142,7 +142,7 @@ impl<T: Real, I: Index, P: Adjacency<T, I>> SymmetricBlock<T, I, P> {
         let deficits = (rows.diagonal.iter().zip(&rows.abs)).map(|(&d, &s)| widen(s) - widen(d));
         let clamped = vector.worst_past_band(deficits, &rows.diagonal, m.off_diagonal());
         match folded {
-            true => Ok(Signed::Folded(Folded {
+            true => Ok(Folding::Folded(Folded {
                 m,
                 rows,
                 vector,
@@ -152,7 +152,7 @@ impl<T: Real, I: Index, P: Adjacency<T, I>> SymmetricBlock<T, I, P> {
                 let grounding = surplus(&rows).flushed(&rows.diagonal, scaling::ratio_band::<T>());
                 let grounding = grounding.map_err(|i| out_of_range(&m, i))?;
                 let report = vector.report(clamped);
-                Ok(Signed::Frustrated(m.block(
+                Ok(Folding::Frustrated(m.block(
                     grounding,
                     Balance::Frustrated,
                     report,
@@ -163,7 +163,7 @@ impl<T: Real, I: Index, P: Adjacency<T, I>> SymmetricBlock<T, I, P> {
 }
 
 /// Only a folded `M` can still take a surplus from `V`.
-enum Signed<T, I, P> {
+enum Folding<T, I, P> {
     Folded(Folded<T, I, P>),
     Frustrated(Reduced<T, I, P>),
 }

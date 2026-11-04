@@ -2,7 +2,7 @@ use std::cell::LazyCell;
 
 use num_traits::PrimInt;
 
-use super::{Folded, ShapedBy, Signed, Singularity, Surplus};
+use super::{Folded, Folding, ShapedBy, Singularity, Surplus};
 use crate::input::{Column, Gram};
 use crate::sgdd::block::{ReduceError, Reduced};
 use crate::sgdd::congruence::Selection;
@@ -42,8 +42,8 @@ pub(super) fn from_values<T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
                 .or_else(|| scaling::relax(&a.adjacency.off_diagonal, &a.rows.diagonal, policy))
         })?;
         match reduced {
-            Signed::Folded(block) => folded.push(block),
-            Signed::Frustrated(block) => frustrated.push(block),
+            Folding::Folded(block) => folded.push(block),
+            Folding::Frustrated(block) => frustrated.push(block),
         }
     }
     // `u` freed before the column pass: only the certified set outlives the scaling.
