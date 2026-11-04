@@ -1,7 +1,9 @@
 //! Scalars and the sparse storage shapes every stage reads.
 
+mod grounded;
 mod real;
 
+pub(crate) use grounded::{Balance, Grounding, Sheets};
 pub use real::Real;
 pub(crate) use real::{compensated_sum, in_range, lane_sum, narrow, widen, Index, Sum2};
 

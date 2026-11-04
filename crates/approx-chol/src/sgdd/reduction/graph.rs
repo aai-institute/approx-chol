@@ -1,10 +1,11 @@
 use num_traits::PrimInt;
 
 use crate::input::FactorWidth2;
-use crate::sgdd::block::{Balance, Congruent, ReduceError};
+use crate::sgdd::block::{Congruent, ReduceError};
 use crate::sgdd::decomposition::Components;
 use crate::sgdd::decomposition::{assemble_incidence, AdjacencyLayout, IncidenceBlock};
 use crate::sgdd::Reduced;
+use crate::storage::Balance;
 use crate::storage::{Index, Real};
 
 impl<T: Real, I: Index> Reduced<T, I> {

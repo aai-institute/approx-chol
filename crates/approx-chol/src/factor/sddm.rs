@@ -2,8 +2,9 @@
 
 use rayon::prelude::*;
 
-use crate::sgdd::{Grounding, Sheets, Singularity};
+use crate::sgdd::Singularity;
 use crate::storage::{narrow, widen, Index, Real};
+use crate::storage::{Grounding, Sheets};
 use crate::storage::{Rows, UpperAdjacency};
 
 /// `L + diag(s)`, `L`'s off-diagonal nonpositive; a twisted cover's `k⁺—k⁻` edges live in its closure, not its rows.

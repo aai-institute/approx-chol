@@ -5,8 +5,9 @@ use rand::rngs::Xoshiro256PlusPlus;
 
 use super::clique_tree::Multi;
 use super::sddm::{descend, first_copy, lift, Sddm};
-use crate::sgdd::{FactorTail, Sheets};
+use crate::sgdd::FactorTail;
 use crate::storage::narrow;
+use crate::storage::Sheets;
 use crate::storage::{widen, Index, Real};
 use approximate::{ApproximateCholesky, CliqueTreeElimination};
 pub(super) use dense::Signed;

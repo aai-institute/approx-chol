@@ -6,7 +6,7 @@ mod graph;
 use num_traits::PrimInt;
 use rayon::prelude::*;
 
-use super::block::{Balance, BlockComplement, Congruent, Grounding, IrreducibleBlock, ReduceError};
+use super::block::{BlockComplement, Congruent, IrreducibleBlock, ReduceError};
 use super::congruence::{Congruence, Selection};
 use super::decomposition::{
     of_csr, of_upper, AdjacencyLayout, Biadjacency, Components, Lone, Partitioned, RowSums,
@@ -15,8 +15,7 @@ use super::decomposition::{
 use super::scaling::{self, ScaleVector, ScalingPolicy};
 use super::{diagonal_in_range, Complement, Reduced};
 use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Lowered, Side};
-use crate::storage::OffDiagonal;
-use crate::storage::{narrow, widen, Index, Real};
+use crate::storage::{narrow, widen, Balance, Grounding, Index, OffDiagonal, Real};
 use crate::Error;
 
 impl<T: Real, I: Index> Reduced<T, I> {
@@ -148,7 +147,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 clamped,
             })),
             false => {
-                let grounding = surplus(&rows).flushed(&rows.diagonal);
+                let grounding = surplus(&rows).flushed(&rows.diagonal, flush_band::<T>());
                 let grounding = grounding.map_err(|i| out_of_range(&m, i))?;
                 let report = vector.report(clamped);
                 Ok(Signed::Frustrated(
@@ -248,7 +247,7 @@ impl<T: Real, I: Index> Folded<T, I> {
             return Err(ReduceError::Unscalable { vertex });
         };
         let Self { m, rows, .. } = self;
-        match grounding.flushed(&rows.diagonal) {
+        match grounding.flushed(&rows.diagonal, flush_band::<T>()) {
             Ok(grounding) if grounding.is_grounded() => {
                 m.block(Balance::Balanced(grounding), report)
             }
@@ -285,6 +284,11 @@ fn out_of_range<T: Real, I: Index>(m: &Congruent<T, I>, i: usize) -> ReduceError
     ReduceError::OutOfRange {
         vertex: m.vertices().vertex(i),
     }
+}
+
+/// How far below the range floor a derived surplus may drop: its row's rounding, `RATIO_BAND ε d_i`.
+fn flush_band<T: Real>() -> f64 {
+    scaling::RATIO_BAND * widen(T::epsilon())
 }
 
 /// Each row's residue, deficits clamped to zero.

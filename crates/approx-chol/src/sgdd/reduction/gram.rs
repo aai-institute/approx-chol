@@ -4,11 +4,12 @@ use num_traits::PrimInt;
 
 use super::{Folded, Signed, Singularity, Surplus};
 use crate::input::{Column, FactorWidth2};
-use crate::sgdd::block::{Grounding, IrreducibleBlock, ReduceError};
+use crate::sgdd::block::{IrreducibleBlock, ReduceError};
 use crate::sgdd::congruence::Selection;
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components, Summands};
 use crate::sgdd::scaling::{self, ScalingPolicy, RATIO_BAND};
 use crate::sgdd::Reduced;
+use crate::storage::Grounding;
 use crate::storage::{narrow, widen, Index, Real};
 
 impl<T: Real, I: Index> Reduced<T, I> {

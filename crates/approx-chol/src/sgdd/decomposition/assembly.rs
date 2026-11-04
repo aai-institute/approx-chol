@@ -9,8 +9,9 @@ use super::{
     BlockAdjacency, LonePivot, Partitioned, PrincipalBlocks, RowSums, Selection, SymmetricBlock,
 };
 use crate::input::{BipartiteFactorWidth2, Column, FactorWidth2, Side};
-use crate::sgdd::block::{Grounding, ReduceError};
+use crate::sgdd::block::ReduceError;
 use crate::sgdd::diagonal_in_range;
+use crate::storage::Grounding;
 use crate::storage::{narrow, widen, Index, Real};
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 
