@@ -11,17 +11,22 @@ use super::{
 use crate::input::{BipartiteFactorWidth2, Column, Gram, Layout, Side};
 use crate::sgdd::block::ReduceError;
 use crate::sgdd::diagonal_in_range;
-use crate::storage::{narrow, widen, Grounding, Index, OffDiagonal, Real, Rows, UpperAdjacency};
+use crate::storage::{
+    narrow, widen, Adjacency, Bipartite, Grounding, Index, Real, Rows, UpperAdjacency,
+};
 
 /// An incidence `V`'s block, dominant by shape: its adjacency and the surplus an SDDM states on it.
-pub(in crate::sgdd) struct IncidenceBlock<T, I> {
-    pub(in crate::sgdd) adjacency: BlockAdjacency<T, I>,
+pub(in crate::sgdd) struct IncidenceBlock<T, I, P> {
+    pub(in crate::sgdd) adjacency: BlockAdjacency<I, P>,
     pub(in crate::sgdd) grounding: Grounding<T>,
 }
 
 /// How a shape's summed cells are stored, and its components found from them.
 pub(in crate::sgdd) trait AdjacencyLayout {
-    type Adjacency<T: Real, I: Index>: PrincipalBlocks<T, I, Block = BlockAdjacency<T, I>> + Sync;
+    /// Each block's off-diagonal.
+    type Shape<T: Real, I: Index>: Adjacency<T, I>;
+    type Cells<T: Real, I: Index>: PrincipalBlocks<T, I, Block = BlockAdjacency<I, Self::Shape<T, I>>>
+        + Sync;
 
     /// The summed cells and components, `seen` visiting each column once and `pair` each nonzero cell with its two ends.
     fn sum<T: Real, J: PrimInt, I: Index>(
@@ -29,7 +34,7 @@ pub(in crate::sgdd) trait AdjacencyLayout {
         v: Gram<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         pair: impl FnMut(usize, usize, f64),
-    ) -> Result<Partitioned<Self::Adjacency<T, I>, I>, ReduceError>;
+    ) -> Result<Partitioned<Self::Cells<T, I>, I>, ReduceError>;
 }
 
 /// A general `V`'s cells: `A`'s strict upper triangle.
@@ -80,7 +85,8 @@ pub(in crate::sgdd) struct Oriented<T, I> {
 }
 
 impl AdjacencyLayout for StrictUpperTriangle {
-    type Adjacency<T: Real, I: Index> = UpperAdjacency<T, I>;
+    type Shape<T: Real, I: Index> = UpperAdjacency<T, I>;
+    type Cells<T: Real, I: Index> = UpperAdjacency<T, I>;
 
     // Out of line, the Laplacian entry measured 3–4% slower: the same work, laid out worse.
     #[inline(always)]
@@ -103,7 +109,8 @@ impl AdjacencyLayout for StrictUpperTriangle {
 }
 
 impl AdjacencyLayout for Biadjacency {
-    type Adjacency<T: Real, I: Index> = Oriented<T, I>;
+    type Shape<T: Real, I: Index> = Bipartite<T, I>;
+    type Cells<T: Real, I: Index> = Oriented<T, I>;
 
     fn sum<T: Real, J: PrimInt, I: Index>(
         self,
@@ -133,10 +140,10 @@ pub(in crate::sgdd) struct Dominant<'a, T, C> {
 
 /// An incidence `V`'s summed cells beside `σ`, and their components.
 type IncidenceCells<'a, T, I, S> =
-    Partitioned<Dominant<'a, T, <S as AdjacencyLayout>::Adjacency<T, I>>, I>;
+    Partitioned<Dominant<'a, T, <S as AdjacencyLayout>::Cells<T, I>>, I>;
 
 /// A valued `V`'s summed cells beside `A`'s diagonal, and their components.
-type ValueCells<T, I, S> = Partitioned<Assembled<T, <S as AdjacencyLayout>::Adjacency<T, I>>, I>;
+type ValueCells<T, I, S> = Partitioned<Assembled<T, <S as AdjacencyLayout>::Cells<T, I>>, I>;
 
 /// Each pivot `Σ_j |c_ij| + σ_i`, screened in the assembly's own sums; `A`'s diagonal never stored.
 pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
@@ -214,12 +221,12 @@ impl<T: Real, C> LonePivot<T> for Dominant<'_, T, C> {
 
 /// The upper triangle, cancelled cells dropped.
 impl<T: Real, I: Index> PrincipalBlocks<T, I> for UpperAdjacency<T, I> {
-    type Block = BlockAdjacency<T, I>;
+    type Block = BlockAdjacency<I, Self>;
 
     fn whole(self, vertices: &[I]) -> Self::Block {
         BlockAdjacency {
             vertices: Selection::of(vertices),
-            off_diagonal: OffDiagonal::General(self),
+            off_diagonal: self,
         }
     }
 
@@ -238,16 +245,16 @@ impl<T: Real, I: Index> PrincipalBlocks<T, I> for UpperAdjacency<T, I> {
         let rows = Rows::new(ptrs, indices, values, vertices.len());
         BlockAdjacency {
             vertices: Selection::of(vertices),
-            off_diagonal: OffDiagonal::General(UpperAdjacency::new(rows)),
+            off_diagonal: UpperAdjacency::new(rows),
         }
     }
 }
 
-impl<T: Real, I: Index, C> PrincipalBlocks<T, I> for Dominant<'_, T, C>
+impl<T: Real, I: Index, P, C> PrincipalBlocks<T, I> for Dominant<'_, T, C>
 where
-    C: PrincipalBlocks<T, I, Block = BlockAdjacency<T, I>>,
+    C: PrincipalBlocks<T, I, Block = BlockAdjacency<I, P>>,
 {
-    type Block = IncidenceBlock<T, I>;
+    type Block = IncidenceBlock<T, I, P>;
 
     fn whole(self, vertices: &[I]) -> Self::Block {
         let adjacency = self.adjacency.whole(vertices);
@@ -279,7 +286,7 @@ fn at<T: Copy, I: Index>(values: &[T], vertices: &Selection<I>) -> Vec<T> {
 
 /// The biadjacency `C`, cancelled cells dropped: rows are `A`'s left vertices.
 impl<T: Real, I: Index> PrincipalBlocks<T, I> for Oriented<T, I> {
-    type Block = BlockAdjacency<T, I>;
+    type Block = BlockAdjacency<I, Bipartite<T, I>>;
 
     fn whole(self, vertices: &[I]) -> Self::Block {
         let (lefts, rights) = vertices.split_at(self.c.n_rows());
@@ -310,11 +317,11 @@ impl<T: Real, I: Index> PrincipalBlocks<T, I> for Oriented<T, I> {
     }
 }
 
-impl<T: Real, I: Index, C> PrincipalBlocks<T, I> for Assembled<T, C>
+impl<T: Real, I: Index, P: Adjacency<T, I>, C> PrincipalBlocks<T, I> for Assembled<T, C>
 where
-    C: PrincipalBlocks<T, I, Block = BlockAdjacency<T, I>>,
+    C: PrincipalBlocks<T, I, Block = BlockAdjacency<I, P>>,
 {
-    type Block = SymmetricBlock<T, I>;
+    type Block = SymmetricBlock<T, I, P>;
 
     fn whole(self, vertices: &[I]) -> Self::Block {
         with_rows(&self.diagonal, self.adjacency.whole(vertices))
@@ -326,10 +333,10 @@ where
 }
 
 /// A block's adjacency with its diagonal picked from `diagonal` and its rows' `Σ_j |a_ij|`.
-fn with_rows<T: Real, I: Index>(
+fn with_rows<T: Real, I: Index, P: Adjacency<T, I>>(
     diagonal: &[T],
-    adjacency: BlockAdjacency<T, I>,
-) -> SymmetricBlock<T, I> {
+    adjacency: BlockAdjacency<I, P>,
+) -> SymmetricBlock<T, I, P> {
     let rows = RowSums {
         diagonal: at(diagonal, &adjacency.vertices),
         abs: adjacency.off_diagonal.abs_row_sums(),
@@ -343,7 +350,7 @@ fn sides<T: Real, I: Index>(
     rights: &[I],
     c: Rows<T, I>,
     onto: Onto,
-) -> BlockAdjacency<T, I> {
+) -> BlockAdjacency<I, Bipartite<T, I>> {
     let left_first = match onto {
         Onto::Smaller => lefts.len() >= rights.len(),
         Onto::Given(kept) => kept == Side::Right,
@@ -351,11 +358,11 @@ fn sides<T: Real, I: Index>(
     match left_first {
         true => BlockAdjacency {
             vertices: Selection::owned([lefts, rights].concat().into()),
-            off_diagonal: OffDiagonal::Bipartite(c),
+            off_diagonal: Bipartite::new(c),
         },
         false => BlockAdjacency {
             vertices: Selection::owned([rights, lefts].concat().into()),
-            off_diagonal: OffDiagonal::Bipartite(c.transpose()),
+            off_diagonal: Bipartite::new(c.transpose()),
         },
     }
 }

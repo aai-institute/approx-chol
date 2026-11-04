@@ -6,19 +6,24 @@ mod graph;
 use num_traits::PrimInt;
 use rayon::prelude::*;
 
-use super::block::{BlockComplement, Congruent, IrreducibleBlock, ReduceError};
+use super::block::{Congruent, ReduceError, Reduced};
 use super::congruence::{Congruence, Selection};
 use super::decomposition::{
-    of_csr, of_upper, AdjacencyLayout, Biadjacency, Components, Lone, Partitioned, RowSums,
+    of_csr, of_upper, AdjacencyLayout, Biadjacency, Lone, Partitioned, RowSums,
     StrictUpperTriangle, Summands, SymmetricBlock,
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy};
-use super::{diagonal_in_range, Complement, Reduced};
+use super::{diagonal_in_range, Complement, Reduction};
 use crate::input::{BipartiteFactorWidth2, Canonical, Gram, Input, Repr, Side, Stored, Values};
-use crate::storage::{narrow, widen, Balance, Grounding, Index, OffDiagonal, Real, Sum2};
+use crate::storage::{
+    narrow, widen, Adjacency, Balance, Grounding, Index, Real, Sum2, UpperAdjacency,
+};
 use crate::Error;
 
-impl<T: Real, I: Index> Reduced<T, I> {
+/// The reduced blocks, each off-diagonal in the shape layout `S` stores.
+type ShapedBy<T, I, S> = Summands<Reduced<T, I, <S as AdjacencyLayout>::Shape<T, I>>, I, T>;
+
+impl<T: Real, I: Index> Reduction<T, I> {
     /// The view's irreducible blocks, each reduced; `policy` scales those not already dominant.
     pub(crate) fn reduce<J: PrimInt + Sync>(
         input: Input<'_, T, J>,
@@ -35,27 +40,27 @@ impl<T: Real, I: Index> Reduced<T, I> {
     }
 
     fn of_gram<J: PrimInt>(v: Gram<'_, T, J>, policy: &ScalingPolicy) -> Result<Self, ReduceError> {
-        match Biadjacency::of(&v) {
-            Some(layout) => Self::from_gram(layout, v, policy),
-            None => Self::from_gram(StrictUpperTriangle, v, policy),
-        }
+        Ok(match Biadjacency::of(&v) {
+            Some(layout) => from_gram(layout, v, policy)?.into_reduction(),
+            None => from_gram(StrictUpperTriangle, v, policy)?.into_reduction(),
+        })
     }
+}
 
-    /// An incidence `V` is dominant by shape; values are scaled under `policy`.
-    fn from_gram<J: PrimInt, S: AdjacencyLayout>(
-        cells: S,
-        v: Gram<'_, T, J>,
-        policy: &ScalingPolicy,
-    ) -> Result<Self, ReduceError> {
-        match v.values() {
-            Values::Incidence { surplus } => Self::from_incidence(cells, v, surplus),
-            Values::Valued { .. } => Self::from_values(cells, v, policy),
-        }
+/// An incidence `V` is dominant by shape; values are scaled under `policy`.
+fn from_gram<T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
+    cells: S,
+    v: Gram<'_, T, J>,
+    policy: &ScalingPolicy,
+) -> Result<ShapedBy<T, I, S>, ReduceError> {
+    match v.values() {
+        Values::Incidence { surplus } => graph::from_incidence(cells, v, surplus),
+        Values::Valued { .. } => gram::from_values(cells, v, policy),
     }
 }
 
 impl<T: Real, I: Index> Complement<T, I> {
-    /// As [`Reduced::reduce`], each block's side opposite `kept` eliminated first.
+    /// As [`Reduction::reduce`], each block's side opposite `kept` eliminated first.
     pub(crate) fn reduce_onto<J: PrimInt>(
         input: BipartiteFactorWidth2<'_, T, J>,
         kept: Side,
@@ -63,12 +68,12 @@ impl<T: Real, I: Index> Complement<T, I> {
     ) -> Result<Self, ReduceError> {
         let range = input.vertices(kept);
         let layout = Biadjacency::onto(&input, kept);
-        let Summands { blocks, lone, dead } = Reduced::from_gram(layout, input.gram(), &policy)?;
+        let Summands { blocks, lone, dead } = from_gram(layout, input.gram(), &policy)?;
         let local = |v: usize| I::from_index(v - range.start);
         let on_kept = |v: I| range.contains(&v.index()).then(|| local(v.index()));
         Ok(Self {
             blocks: (blocks.into_par_iter())
-                .map(|block| BlockComplement::new(block, local))
+                .map(|block| block.onto_kept(local))
                 .collect(),
             lone: (lone.into_iter())
                 .filter_map(|lone| {
@@ -83,9 +88,9 @@ impl<T: Real, I: Index> Complement<T, I> {
 
 impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
     /// Scales and signs each block's `A_c`, closing its surplus from the same rows.
-    fn reduce(self, policy: &ScalingPolicy) -> Result<Reduced<T, I>, ReduceError> {
+    fn reduce(self, policy: &ScalingPolicy) -> Result<Reduction<T, I>, ReduceError> {
         self.extract(|a| {
-            let relax = |a: &SymmetricBlock<T, I>| {
+            let relax = |a: &SymmetricBlock<T, I, UpperAdjacency<T, I>>| {
                 scaling::relax(&a.adjacency.off_diagonal, &a.rows.diagonal, policy)
             };
             let block = match a.reduce(policy, relax)? {
@@ -97,17 +102,17 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
             };
             Ok(block)
         })
-        .map(Components::into_reduced)
+        .map(|components| components.into_summands().into_reduction())
     }
 }
 
-impl<T: Real, I: Index> SymmetricBlock<T, I> {
+impl<T: Real, I: Index, P: Adjacency<T, I>> SymmetricBlock<T, I, P> {
     /// `M = F A_c F` with `F = S R`, formed once with its rows, which decide the report; `relax` runs only past the row test, and a frustrated `A_c` takes `S = I` and grounds on its rows at once.
     fn reduce(
         self,
         policy: &ScalingPolicy,
         relax: impl FnOnce(&Self) -> Option<scaling::Relaxation<T>>,
-    ) -> Result<Signed<T, I>, ReduceError> {
+    ) -> Result<Signed<T, I, P>, ReduceError> {
         let RowSums { diagonal, abs } = &self.rows;
         let in_range = |(&d, &s): (&T, &T)| diagonal_in_range(d) && diagonal_in_range(s);
         if let Some(i) = diagonal.iter().zip(abs).position(|row| !in_range(row)) {
@@ -149,23 +154,25 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 let grounding = surplus(&rows).flushed(&rows.diagonal, scaling::ratio_band::<T>());
                 let grounding = grounding.map_err(|i| out_of_range(&m, i))?;
                 let report = vector.report(clamped);
-                Ok(Signed::Frustrated(
-                    m.block(Balance::Frustrated(grounding), report)?,
-                ))
+                Ok(Signed::Frustrated(m.block(
+                    grounding,
+                    Balance::Frustrated,
+                    report,
+                )?))
             }
         }
     }
 }
 
 /// Only a folded `M` can still take a surplus from `V`.
-enum Signed<T, I> {
-    Folded(Folded<T, I>),
-    Frustrated(IrreducibleBlock<T, I>),
+enum Signed<T, I, P> {
+    Folded(Folded<T, I, P>),
+    Frustrated(Reduced<T, I, P>),
 }
 
 /// A folded `M` with its rows and the bands they sit in, its surplus still to be decided.
-struct Folded<T, I> {
-    m: Congruent<T, I>,
+struct Folded<T, I, P> {
+    m: Congruent<T, I, P>,
     rows: RowSums<T>,
     vector: ScaleVector,
     /// The worst `(Σ_j|m_ij| − m_ii)/m_ii` clamped past its row's band.
@@ -177,13 +184,16 @@ trait Surplus<T: Real, I: Index> {
     /// Whether residues alone float a scaled block, which then has no certificate to fall back on.
     const RESIDUES_FLOAT_SCALED: bool;
     /// Each row's residue `(M1)_i`.
-    fn residues<'a>(&'a self, folded: &'a Folded<T, I>) -> impl Iterator<Item = f64> + Clone + 'a;
+    fn residues<'a, P: Adjacency<T, I>>(
+        &'a self,
+        folded: &'a Folded<T, I, P>,
+    ) -> impl Iterator<Item = f64> + Clone + 'a;
     /// Whether a row states a ground, which no residue test can float.
-    fn states_ground(&self, folded: &Folded<T, I>) -> bool;
+    fn states_ground<P: Adjacency<T, I>>(&self, folded: &Folded<T, I, P>) -> bool;
     /// Whether the block's cycles all close within `√ε`; asked last, as it may run a pass over `V`.
     fn certifies(&self, vertices: &Selection<I>) -> bool;
     /// `M`'s grounds once it does not float.
-    fn grounds(&self, folded: &Folded<T, I>) -> Grounding<T>;
+    fn grounds<P: Adjacency<T, I>>(&self, folded: &Folded<T, I, P>) -> Grounding<T>;
 }
 
 /// Read from `M`'s rows: `d_i − Σ_j |m_ij|`.
@@ -192,12 +202,15 @@ struct RowSurplus;
 impl<T: Real, I: Index> Surplus<T, I> for RowSurplus {
     const RESIDUES_FLOAT_SCALED: bool = true;
 
-    fn residues<'a>(&'a self, folded: &'a Folded<T, I>) -> impl Iterator<Item = f64> + Clone + 'a {
+    fn residues<'a, P: Adjacency<T, I>>(
+        &'a self,
+        folded: &'a Folded<T, I, P>,
+    ) -> impl Iterator<Item = f64> + Clone + 'a {
         let RowSums { diagonal, abs } = &folded.rows;
         (diagonal.iter().zip(abs)).map(|(&d, &s)| widen(d) - widen(s))
     }
 
-    fn states_ground(&self, _: &Folded<T, I>) -> bool {
+    fn states_ground<P: Adjacency<T, I>>(&self, _: &Folded<T, I, P>) -> bool {
         false
     }
 
@@ -205,7 +218,10 @@ impl<T: Real, I: Index> Surplus<T, I> for RowSurplus {
         false
     }
 
-    fn grounds(&self, Folded { m, rows, .. }: &Folded<T, I>) -> Grounding<T> {
+    fn grounds<P: Adjacency<T, I>>(
+        &self,
+        Folded { m, rows, .. }: &Folded<T, I, P>,
+    ) -> Grounding<T> {
         match surplus(rows) {
             grounding if grounding.is_grounded() => grounding,
             // An uncompensated `f64` row sum can round up to `d_i` from degree 67 (#269).
@@ -220,13 +236,13 @@ impl<T: Real, I: Index> Surplus<T, I> for RowSurplus {
     }
 }
 
-impl<T: Real, I: Index> Folded<T, I> {
+impl<T: Real, I: Index, P: Adjacency<T, I>> Folded<T, I, P> {
     /// The one float-or-ground rule: in the singular band, no stated ground, and residues or a certificate float `M`.
     fn settle<S: Surplus<T, I>>(
         self,
         singularity: Singularity,
         surplus: &S,
-    ) -> Result<IrreducibleBlock<T, I>, ReduceError> {
+    ) -> Result<Reduced<T, I, P>, ReduceError> {
         let dominant = matches!(self.vector, ScaleVector::Identity);
         let floats = !surplus.states_ground(&self)
             && singularity.within_band::<T>()
@@ -234,9 +250,7 @@ impl<T: Real, I: Index> Folded<T, I> {
                 || surplus.certifies(self.m.vertices()));
         let report = self.vector.report(self.clamped);
         if floats {
-            return self
-                .m
-                .block(Balance::Balanced(Grounding::ungrounded()), report);
+            return (self.m).block(Grounding::ungrounded(), Balance::Balanced, report);
         }
         let grounding = surplus.grounds(&self);
         // The first ground, which flushing all of them would lose from a definite `M`.
@@ -248,7 +262,7 @@ impl<T: Real, I: Index> Folded<T, I> {
         let Self { m, rows, .. } = self;
         match grounding.flushed(&rows.diagonal, scaling::ratio_band::<T>()) {
             Ok(grounding) if grounding.is_grounded() => {
-                m.block(Balance::Balanced(grounding), report)
+                m.block(grounding, Balance::Balanced, report)
             }
             Ok(_) => Err(out_of_range(&m, first)),
             Err(i) => Err(out_of_range(&m, i)),
@@ -279,7 +293,7 @@ impl<T: Real, I: Index> Folded<T, I> {
 }
 
 /// Row `i` of `m` holds a ground out of range.
-fn out_of_range<T: Real, I: Index>(m: &Congruent<T, I>, i: usize) -> ReduceError {
+fn out_of_range<T: Real, I: Index, P>(m: &Congruent<T, I, P>, i: usize) -> ReduceError {
     ReduceError::OutOfRange {
         vertex: m.vertices().vertex(i),
     }
@@ -312,13 +326,13 @@ impl Singularity {
 }
 
 /// The signs `S` folding `A_c` into a Z-matrix, `I` when it already is one; `None` when frustrated.
-fn folding_signs<T: Real, I: Index>(off_diagonal: &OffDiagonal<T, I>) -> Option<Congruence<T>> {
+fn folding_signs<T: Real, I: Index>(off_diagonal: &impl Adjacency<T, I>) -> Option<Congruence<T>> {
     if off_diagonal.nonpositive() {
         return Some(Congruence::Identity);
     }
-    if let OffDiagonal::Bipartite(cross) = off_diagonal {
+    if let Some(cross) = off_diagonal.bipartite() {
         if cross.positive() {
-            return Some(Congruence::NegateFrom(cross.n_rows()));
+            return Some(Congruence::NegateFrom(cross.n_eliminated()));
         }
     }
     let mut forest = ParityForest::<I>::new(off_diagonal.n());

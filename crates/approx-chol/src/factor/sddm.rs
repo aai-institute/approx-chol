@@ -4,7 +4,7 @@ use rayon::prelude::*;
 
 use crate::sgdd::Singularity;
 use crate::storage::{
-    lane_sum, narrow, widen, Grounding, Index, Real, Rows, Sheets, UpperAdjacency,
+    lane_sum, narrow, widen, Adjacency, Grounding, Index, Real, Rows, Sheets, UpperAdjacency,
 };
 
 /// `L + diag(s)`, `L`'s off-diagonal nonpositive; a twisted cover's `k⁺—k⁻` edges live in its closure, not its rows.

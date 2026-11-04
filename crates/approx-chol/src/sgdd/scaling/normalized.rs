@@ -1,18 +1,21 @@
 use std::borrow::Cow;
 
-use crate::storage::{narrow, widen, Index, OffDiagonal, Real, Rows};
+use crate::storage::{narrow, widen, Adjacency, Index, Real, Rows};
 
 /// `N = D^{-1/2}|offdiag(A_c)|D^{-1/2}`: scales `R` make `R|A_c|R` dominant iff `N y ≤ y` for `y = R√D`, so iff `ρ(N) ≤ 1` (Boman, Chen, Parekh, Toledo, LAA 2005).
 pub(super) struct Normalized<'a, T, I> {
-    off_diagonal: &'a OffDiagonal<T, I>,
+    /// The off-diagonal's stored rows, their columns past its `eliminated` vertices.
+    rows: &'a Rows<T, I>,
+    eliminated: usize,
     inv_sqrt: Box<[f64]>,
 }
 
 impl<'a, T: Real, I: Index> Normalized<'a, T, I> {
-    pub(super) fn new(off_diagonal: &'a OffDiagonal<T, I>, diagonal: &[T]) -> Self {
+    pub(super) fn new(off_diagonal: &'a impl Adjacency<T, I>, diagonal: &[T]) -> Self {
         let inv_sqrt = diagonal.iter().map(|&d| 1.0 / widen(d).sqrt()).collect();
         Self {
-            off_diagonal,
+            rows: off_diagonal.rows(),
+            eliminated: off_diagonal.n_eliminated(),
             inv_sqrt,
         }
     }
@@ -27,10 +30,10 @@ impl<'a, T: Real, I: Index> Normalized<'a, T, I> {
         alpha: f64,
         b: &'s [f64],
     ) -> (Shifted<'s, 'a, T, I>, Vec<f64>) {
-        match self.off_diagonal {
-            OffDiagonal::General(_) => (Shifted::Whole { n: self, alpha }, b.to_vec()),
-            OffDiagonal::Bipartite(cross) => {
-                let kept = Kept::new(self, cross, alpha, b);
+        match self.eliminated {
+            0 => (Shifted::Whole { n: self, alpha }, b.to_vec()),
+            _ => {
+                let kept = Kept::new(self, self.rows, alpha, b);
                 let rhs = kept.rhs(b);
                 (Shifted::Kept(kept), rhs)
             }
@@ -39,7 +42,7 @@ impl<'a, T: Real, I: Index> Normalized<'a, T, I> {
 
     /// `out = |offdiag(A_c)| D^{-1/2} y`, returning the outer `D^{-1/2}` that makes it `N y`.
     pub(super) fn unscaled(&self, y: &[f64], out: &mut [f64]) -> &[f64] {
-        self.off_diagonal.abs_times(&self.inv_sqrt, y, out);
+        (self.rows).mirrored_abs_times(self.eliminated, &self.inv_sqrt, y, out);
         &self.inv_sqrt
     }
 

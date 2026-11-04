@@ -7,35 +7,40 @@ mod reduction;
 mod scaling;
 
 pub use block::ReduceError;
-pub(crate) use block::{BlockComplement, IrreducibleBlock};
-pub(crate) use congruence::{FactorTail, Restriction, Selection};
+pub(crate) use block::{Reduced, ReducedComplement, ReducedComponent};
+pub(crate) use congruence::{Lift, Selection};
 pub(crate) use decomposition::{Lone, Summands};
 pub(crate) use reduction::Singularity;
 pub use scaling::{ScalingPolicy, ScalingReport};
 
-use crate::storage::{in_range, Index, Real};
+use crate::storage::{in_range, Adjacency, Index, OffDiagonal, Real};
 use decomposition::Components;
 
 /// `A`'s reduced summands, covering `A` once by extraction; only debug builds check it.
-pub(crate) type Reduced<T, I> = Summands<IrreducibleBlock<T, I>, I, T>;
+pub(crate) type Reduction<T, I> = Summands<ReducedComponent<T, I>, I, T>;
 
 /// A bipartite `A`'s Schur complement onto one side, reduced; lone and dead vertices in the kept side's numbering.
-pub(crate) type Complement<T, I> = Summands<BlockComplement<T, I>, I, T>;
+pub(crate) type Complement<T, I> = Summands<ReducedComplement<T, I>, I, T>;
 
-impl<T: Real, I: Index> Components<IrreducibleBlock<T, I>, I, T> {
-    fn into_reduced(self) -> Reduced<T, I> {
+impl<T: Real, I: Index, P: Adjacency<T, I>> Components<Reduced<T, I, P>, I, T> {
+    fn into_summands(self) -> Summands<Reduced<T, I, P>, I, T> {
         let Components {
             partition,
             summands,
         } = self;
-        let coupled: usize = summands
-            .blocks
-            .iter()
-            .map(IrreducibleBlock::vertex_count)
-            .sum();
+        let coupled: usize = summands.blocks.iter().map(Reduced::vertex_count).sum();
         let dimension = coupled + summands.lone.len() + summands.dead.len();
         debug_assert_eq!(partition.n(), dimension, "summands cover A once");
         summands
+    }
+}
+
+impl<T: Real, I: Index, P: Into<OffDiagonal<T, I>>> Summands<Reduced<T, I, P>, I, T> {
+    /// Each block as Cholesky receives it, whichever its shape.
+    fn into_reduction(self) -> Reduction<T, I> {
+        let Self { blocks, lone, dead } = self;
+        let blocks = blocks.into_iter().map(Reduced::into_component).collect();
+        Summands { blocks, lone, dead }
     }
 }
 
