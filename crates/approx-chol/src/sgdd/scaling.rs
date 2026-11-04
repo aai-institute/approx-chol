@@ -2,7 +2,7 @@ mod normalized;
 mod perron;
 
 use normalized::Normalized;
-use perron::InverseIteration;
+use perron::{InverseIteration, Perron, Shortfall};
 
 use crate::storage::OffDiagonal;
 use crate::{narrow, widen, Index, Real};
@@ -95,7 +95,7 @@ pub(super) enum ScaleVector {
     NullVector,
     /// An inverse-iteration Perron vector settled to `band` relative to its peak: a row of `M_ii = μ_i²` sits within `band/μ_i`.
     // Spreads a ground as `1 − ρ` over every row, so a block within the band floats (#308).
-    PerronVector { band: f64, shortfall: ScalingReport },
+    PerronVector { band: f64, shortfall: Shortfall },
 }
 
 impl ScaleVector {
@@ -129,7 +129,7 @@ impl ScaleVector {
     /// `M`'s report from its worst clamped `deficit`, kept when one is past a row's band or the scaling did not settle; an exact vector spends nothing.
     pub(super) fn report(self, deficit: f64) -> Option<ScalingReport> {
         let shortfall = match self {
-            Self::Identity | Self::NullVector => ScalingReport {
+            Self::Identity | Self::NullVector => Shortfall {
                 iterations: 0,
                 violation: 0.0,
                 settled: true,
@@ -137,8 +137,9 @@ impl ScaleVector {
             Self::PerronVector { shortfall, .. } => shortfall,
         };
         (deficit > 0.0 || !shortfall.settled).then_some(ScalingReport {
+            iterations: shortfall.iterations,
             violation: shortfall.violation.max(deficit),
-            ..shortfall
+            settled: shortfall.settled,
         })
     }
 }
@@ -181,7 +182,7 @@ pub(super) fn relax<T: Real, I: Index>(
     let band = (RATIO_BAND * widen(T::epsilon())).max(rounding);
     let slack = policy.slack(widen(T::epsilon()));
     let iteration = InverseIteration::new(&n, slack, band, policy.max_iterations)?;
-    let (y, shortfall) = iteration.run();
+    let Perron { y, shortfall } = iteration.run();
     let vector = ScaleVector::PerronVector { band, shortfall };
     positive(n.scales(&y), vector)
 }
