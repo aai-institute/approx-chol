@@ -1,6 +1,7 @@
 //! One reduced irreducible block, its balance and grounding.
 
 use super::congruence::{Congruence, Restriction, ScaledFactors, Selection};
+use super::decomposition::{RowSums, SymmetricBlock};
 use super::scaling::{ScalingReport, RATIO_BAND};
 use crate::storage::{OffDiagonal, Rows};
 use crate::{Index, Real};
@@ -168,6 +169,12 @@ type ComplementParts<T, I> = (
     Option<Box<ScalingReport>>,
 );
 
+/// `M` formed with its rows' diagonal and `Σ_j |m_ij|`.
+pub(super) struct Formed<T, I> {
+    pub(super) m: Congruent<T, I>,
+    pub(super) rows: RowSums<T>,
+}
+
 /// `M = F · A_c · F` over its vertices, its surplus still to be decided.
 pub(super) struct Congruent<T, I> {
     vertices: Selection<I>,
@@ -176,30 +183,36 @@ pub(super) struct Congruent<T, I> {
 }
 
 impl<T: Real, I: Index> Congruent<T, I> {
-    /// `S A_c S`, unscaled.
-    pub(super) fn signed(
-        vertices: Selection<I>,
-        off_diagonal: OffDiagonal<T, I>,
-        signs: Congruence<T>,
-    ) -> Self {
+    /// `S A_c S`, unscaled: signs keep every magnitude, so `A_c`'s rows are `M`'s.
+    pub(super) fn signed(a: SymmetricBlock<T, I>, signs: Congruence<T>) -> Formed<T, I> {
+        let SymmetricBlock {
+            vertices,
+            off_diagonal,
+            rows,
+        } = a;
         let off_diagonal = match signs.factors(off_diagonal.n()) {
             Some(s) => off_diagonal.signed(&s),
             None => off_diagonal,
         };
-        Self {
+        let m = Self {
             vertices,
             congruence: signs,
             off_diagonal,
-        }
+        };
+        Formed { m, rows }
     }
 
-    /// `S R A_c R S` with its `Σ_j |m_ij|`; `None` once a scaled entry leaves the range.
+    /// `S R A_c R S` with its rows; `None` once a scaled entry leaves the range.
     pub(super) fn scaled(
-        vertices: Selection<I>,
-        off_diagonal: OffDiagonal<T, I>,
+        a: SymmetricBlock<T, I>,
         signs: Congruence<T>,
         scales: &[T],
-    ) -> Option<(Self, Vec<T>)> {
+    ) -> Option<Formed<T, I>> {
+        let SymmetricBlock {
+            vertices,
+            off_diagonal,
+            rows,
+        } = a;
         let factors: Box<[T]> = (scales.iter().enumerate())
             .map(|(i, &scale)| signs.factor(i) * scale)
             .collect();
@@ -210,7 +223,13 @@ impl<T: Real, I: Index> Congruent<T, I> {
             congruence,
             off_diagonal,
         };
-        Some((m, abs))
+        let diagonal = (rows.diagonal.iter().zip(scales))
+            .map(|(&a, &f)| f * a * f)
+            .collect();
+        Some(Formed {
+            m,
+            rows: RowSums { diagonal, abs },
+        })
     }
 
     /// An incidence Gram, assembled switched across a bipartition.

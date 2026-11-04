@@ -6,7 +6,9 @@ mod graph;
 use num_traits::PrimInt;
 use rayon::prelude::*;
 
-use super::block::{Balance, BlockComplement, Congruent, Grounding, IrreducibleBlock, ReduceError};
+use super::block::{
+    Balance, BlockComplement, Congruent, Formed, Grounding, IrreducibleBlock, ReduceError,
+};
 use super::congruence::{Congruence, Selection};
 use super::decomposition::{
     of_csr, of_upper, AdjacencyLayout, Biadjacency, Components, Lone, Partitioned, RowSums,
@@ -133,19 +135,11 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         let folding = folding_signs(&self.off_diagonal);
         let folded = folding.is_some();
         let signs = folding.unwrap_or(Congruence::Identity);
-        let (m, rows, vector) = match relaxation {
-            // Signs keep every magnitude, so `A_c`'s rows are `M`'s.
-            None => {
-                let m = Congruent::signed(self.vertices, self.off_diagonal, signs);
-                (m, self.rows, ScaleVector::Identity)
-            }
+        let (Formed { m, rows }, vector) = match relaxation {
+            None => (Congruent::signed(self, signs), ScaleVector::Identity),
             Some(scaling::Relaxation { scales, vector }) => {
-                let (m, abs) = Congruent::scaled(self.vertices, self.off_diagonal, signs, &scales)
-                    .ok_or(ReduceError::Unscalable { vertex })?;
-                let diagonal = (self.rows.diagonal.iter().zip(&scales[..]))
-                    .map(|(&a, &f)| f * a * f)
-                    .collect();
-                (m, RowSums { diagonal, abs }, vector)
+                let formed = Congruent::scaled(self, signs, &scales);
+                (formed.ok_or(ReduceError::Unscalable { vertex })?, vector)
             }
         };
         let deficits = (rows.diagonal.iter().zip(&rows.abs)).map(|(&d, &s)| widen(s) - widen(d));
