@@ -1,2 +1,5 @@
+# Rejects nextest older than 0.9.150 (GHSA-vc25-qg58-w57c).
+nextest-version = "0.9.150"
+
 [profile.ci]
 fail-fast = false
