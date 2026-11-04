@@ -127,37 +127,38 @@ fn varint(mut x: u64, bytes: &mut Vec<u8>) {
     bytes.push(x as u8);
 }
 
-/// One `u32` block on vertices `[64, 0]` whose elimination has `rows` empty rows of `C`, cut off before its Cholesky.
-fn truncated_elimination(rows: u64, n_cols: u64) -> Vec<u8> {
+/// One `u32` block on vertices `[64, 0]` whose elimination's `C` has `rows` rows, `entries` of `2⁻²⁰` in its first, and `n_cols` columns, cut off before its Cholesky.
+fn truncated_elimination(rows: u64, entries: u64, n_cols: u64) -> Vec<u8> {
     let mut bytes = vec![1];
     varint(approx_chol::FACTOR_FORMAT_VERSION.into(), &mut bytes);
     bytes.extend([0, 2, 64, 0, 0, 0, 1]); // U32, vertices, Identity, definite, an elimination
     varint(rows + 1, &mut bytes);
-    bytes.extend(std::iter::repeat_n(0, rows as usize + 1));
-    bytes.extend([0, 0]);
+    bytes.push(0);
+    (0..rows).for_each(|_| varint(entries, &mut bytes));
+    varint(entries, &mut bytes);
+    (0..entries).for_each(|k| varint(k, &mut bytes));
+    varint(entries, &mut bytes);
+    (0..entries).for_each(|_| bytes.extend((2.0f64).powi(-20).to_le_bytes()));
     varint(n_cols, &mut bytes);
     varint(rows, &mut bytes);
     (0..rows).for_each(|_| bytes.extend(1.0f64.to_le_bytes()));
     bytes
 }
 
+/// Whichever side it keeps, the elimination decodes until the block, cut off before its Cholesky, ends; `(D_e⁻¹ C)ᵀ` waits for the block to bound its kept side.
 #[rstest]
-#[case::dimension_overflows(3, u64::MAX)]
-#[case::transpose_overflows(10_001, 1 << 62)]
-#[case::one_more_kept(3, 4)]
-fn an_elimination_keeping_more_columns_than_rows_is_corrupt(
+#[case::kept_in_place(3, 0, 3)]
+#[case::transposed(10_001, 0, 10_001)]
+#[case::one_more_kept(3, 0, 4)]
+#[case::dimension_overflows(3, 0, u64::MAX)]
+#[case::past_the_grain_with_a_vast_kept_side(1, (1 << 17) + 1, 1 << 62)]
+fn an_elimination_decodes_up_to_the_cut(
     #[case] rows: u64,
+    #[case] entries: u64,
     #[case] n_cols: u64,
 ) {
-    let error = postcard::from_bytes::<Vec<BlockFactor>>(&truncated_elimination(rows, n_cols));
-    assert_eq!(error.unwrap_err(), postcard::Error::SerdeDeCustom);
-}
-
-#[rstest]
-#[case::kept_in_place(3)]
-#[case::transposed(10_001)]
-fn an_elimination_keeping_at_most_its_rows_decodes_up_to_the_cut(#[case] rows: u64) {
-    let error = postcard::from_bytes::<Vec<BlockFactor>>(&truncated_elimination(rows, rows));
+    let bytes = truncated_elimination(rows, entries, n_cols);
+    let error = postcard::from_bytes::<Vec<BlockFactor>>(&bytes);
     assert_eq!(
         error.unwrap_err(),
         postcard::Error::DeserializeUnexpectedEnd
@@ -360,7 +361,7 @@ fn an_isolated_vertex_round_trips_through_json() {
 /// Re-tags a `u32` coupled block as `u64`, over `vertices`.
 fn widen_with(block: &mut serde_json::Value, vertices: serde_json::Value) {
     let mut coupled = block[1]["U32"].take();
-    coupled["restriction"]["vertices"] = vertices;
+    coupled["lift"]["vertices"] = vertices;
     block[1] = serde_json::json!({ "U64": coupled });
 }
 

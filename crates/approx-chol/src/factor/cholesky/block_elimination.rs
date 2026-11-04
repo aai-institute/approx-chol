@@ -126,17 +126,18 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         self.cross.n_cols()
     }
 
-    /// `(D_e⁻¹ C)ᵀ` is derived, so it is rebuilt rather than read: a stored one could disagree with `D_e⁻¹ C`.
+    /// Decoded without `(D_e⁻¹ C)ᵀ`: its `n_kept` is unbounded until the factorization ties it to the block's vertices.
     fn checked(self) -> Option<Self> {
         let pivots = self.inv_pivot.len() == self.cross.n_rows()
             && self
                 .inv_pivot
                 .iter()
                 .all(|p| p.is_finite() && *p > T::zero());
-        let (n_rows, n_cols) = (self.cross.n_rows(), self.cross.n_cols());
-        // The larger side is eliminated, which bounds `n_cols` by decoded rows before `n` or `(D_e⁻¹ C)ᵀ` exists.
-        let sides = n_cols <= n_rows;
-        (pivots && sides && rows_within_one(&self.cross))
-            .then(|| Self::scaled(self.cross, self.inv_pivot))
+        (pivots && rows_within_one(&self.cross)).then_some(self)
+    }
+
+    /// `(D_e⁻¹ C)ᵀ` is derived, so it is rebuilt rather than read: a stored one could disagree with `D_e⁻¹ C`.
+    pub(in crate::factor) fn rebuilt(self) -> Self {
+        Self::scaled(self.cross, self.inv_pivot)
     }
 }

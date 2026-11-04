@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- `FACTOR_FORMAT_VERSION` is `0x4143000A`: a factor saved by 0.7.0 no longer decodes. A block's lift is stored as `lift`, not `restriction`, in self-describing formats.
+
 ### Changed
 
 - Faster factorization of inputs with many small components or long paths, with fewer allocations per component. ([#312])

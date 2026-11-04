@@ -175,15 +175,18 @@ impl<T: Real, I: Index> Factorization<T, I> {
 
 #[cfg(feature = "serde")]
 impl<T: Real, I: Index> Factorization<T, I> {
-    /// Whether it solves a component of `n` vertices: the elimination's sides, then the Cholesky on what it keeps.
-    pub(super) fn solves(&self, n: usize) -> bool {
+    /// Present iff it solves a component of `n` vertices: the elimination's sides, then the Cholesky on what it keeps.
+    pub(super) fn checked(self, n: usize) -> Option<Self> {
         let kept = match &self.elimination {
-            None => Some(n),
+            None => n,
             Some(elimination) => n
                 .checked_sub(elimination.n_eliminated())
-                .filter(|&kept| kept == elimination.n_kept()),
+                .filter(|&kept| kept == elimination.n_kept())?,
         };
-        kept.is_some_and(|kept| kept > 0 && self.cholesky.solves(kept))
+        (kept > 0 && self.cholesky.solves(kept)).then(|| Self {
+            elimination: self.elimination.map(|e| Box::new(e.rebuilt())),
+            cholesky: self.cholesky,
+        })
     }
 
     /// Whether it solves a singular Laplacian, and whether an elimination splits that solve.

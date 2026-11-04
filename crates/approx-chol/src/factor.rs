@@ -373,7 +373,6 @@ impl ExactSizeIterator for Vertices<'_> {}
 )]
 #[derive(Clone, Debug)]
 pub(crate) struct Block<T, I> {
-    #[cfg_attr(feature = "serde", serde(rename = "restriction"))]
     lift: Box<Lift<T, I>>,
     factorization: Factorization<T, I>,
     report: Option<Box<ScalingReport>>,
@@ -537,7 +536,11 @@ impl<T: Real, I: Index> Block<T, I> {
             (true, true) => Null::Regauged,
         };
         let n = self.vertices().len();
-        (self.factorization.solves(n) && self.lift.null() == null).then_some(self)
+        let factorization = self.factorization.checked(n)?;
+        (self.lift.null() == null).then_some(Self {
+            factorization,
+            ..self
+        })
     }
 }
 
