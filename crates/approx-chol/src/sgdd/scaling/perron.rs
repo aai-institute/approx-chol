@@ -1,5 +1,5 @@
 use super::normalized::Normalized;
-use crate::{Index, Real};
+use crate::storage::{Index, Real};
 
 /// `[min_i, max_i] (Ny)_i / y_i` of a positive `y`, which brackets `ρ(N)` (Collatz 1942, Wielandt 1950).
 #[derive(Clone, Copy)]

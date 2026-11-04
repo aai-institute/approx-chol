@@ -8,13 +8,12 @@ mod scaling;
 
 pub use block::ReduceError;
 pub(crate) use block::{BlockComplement, IrreducibleBlock};
-pub(crate) use block::{Grounding, Sheets};
 pub(crate) use congruence::{FactorTail, Restriction, Selection};
 pub(crate) use decomposition::{Lone, Summands};
 pub(crate) use reduction::Singularity;
 pub use scaling::{ScalingPolicy, ScalingReport};
 
-use crate::{in_range, Index, Real};
+use crate::storage::{in_range, Index, Real};
 use decomposition::Components;
 
 /// `A`'s reduced summands, covering `A` once by extraction; only debug builds check it.

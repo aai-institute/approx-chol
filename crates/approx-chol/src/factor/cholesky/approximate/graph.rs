@@ -1,6 +1,6 @@
 use crate::factor::clique_tree::Copies;
 use crate::factor::sddm::Sddm;
-use crate::{Index, Real};
+use crate::storage::{Index, Real};
 
 /// One half of an edge; `mirror` indexes the other half in `to`'s list, so removal is O(1).
 #[derive(Clone, Copy, Debug)]

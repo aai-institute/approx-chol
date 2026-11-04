@@ -6,7 +6,7 @@ mod graph;
 use num_traits::PrimInt;
 use rayon::prelude::*;
 
-use super::block::{Balance, BlockComplement, Congruent, Grounding, IrreducibleBlock, ReduceError};
+use super::block::{BlockComplement, Congruent, IrreducibleBlock, ReduceError};
 use super::congruence::{Congruence, Selection};
 use super::decomposition::{
     of_csr, of_upper, AdjacencyLayout, Biadjacency, Components, Lone, Partitioned, RowSums,
@@ -15,8 +15,8 @@ use super::decomposition::{
 use super::scaling::{self, ScaleVector, ScalingPolicy};
 use super::{diagonal_in_range, Complement, Reduced};
 use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Lowered, Side};
-use crate::storage::OffDiagonal;
-use crate::{narrow, widen, Error, Index, Real};
+use crate::storage::{narrow, widen, Balance, Grounding, Index, OffDiagonal, Real, Sum2};
+use crate::Error;
 
 impl<T: Real, I: Index> Reduced<T, I> {
     /// The view's irreducible blocks, each reduced; `policy` scales those not already dominant.
@@ -147,7 +147,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 clamped,
             })),
             false => {
-                let grounding = surplus(&rows).flushed(&rows.diagonal);
+                let grounding = surplus(&rows).flushed(&rows.diagonal, scaling::ratio_band::<T>());
                 let grounding = grounding.map_err(|i| out_of_range(&m, i))?;
                 let report = vector.report(clamped);
                 Ok(Signed::Frustrated(
@@ -247,7 +247,7 @@ impl<T: Real, I: Index> Folded<T, I> {
             return Err(ReduceError::Unscalable { vertex });
         };
         let Self { m, rows, .. } = self;
-        match grounding.flushed(&rows.diagonal) {
+        match grounding.flushed(&rows.diagonal, scaling::ratio_band::<T>()) {
             Ok(grounding) if grounding.is_grounded() => {
                 m.block(Balance::Balanced(grounding), report)
             }
@@ -259,7 +259,7 @@ impl<T: Real, I: Index> Folded<T, I> {
     /// From `M`'s rows, `1ᵀM1 = tr M − Σ|offdiag(M)|`, so `tr M` cannot overflow.
     fn singularity(&self) -> Singularity {
         let epsilon = widen(T::epsilon());
-        let diagonal = crate::Sum2::of(&self.rows.diagonal, |_, d| epsilon * widen(d));
+        let diagonal = Sum2::of(&self.rows.diagonal, |_, d| epsilon * widen(d));
         let trace = diagonal.total();
         // `tr M` rounded on its own drops a surplus below its ulp, which the Gram path keeps.
         let ones = (self.m.off_diagonal())

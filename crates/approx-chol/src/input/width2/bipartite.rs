@@ -6,7 +6,7 @@ use num_traits::PrimInt;
 
 use super::error::{below, check, length, ViewError};
 use super::{BipartiteColumns, Columns, FactorWidth2};
-use crate::Real;
+use crate::storage::Real;
 
 /// One side of `V`, with at most one nonzero per column: `values[k]` at `rows[k]`, `1` for `None`.
 #[derive(Clone, Copy, Debug)]
