@@ -30,14 +30,11 @@ impl<T: Real, I: Index> Reduced<T, I> {
             Repr::Csr(csr, Stored::UpperTriangle) => {
                 of_upper(Canonical::of(csr)?)?.reduce(&policy)?
             }
-            Repr::Gram(v) => Self::from_factor_width_2(v, &policy)?,
+            Repr::Gram(v) => Self::of_gram(v, &policy)?,
         })
     }
 
-    fn from_factor_width_2<J: PrimInt>(
-        v: Gram<'_, T, J>,
-        policy: &ScalingPolicy,
-    ) -> Result<Self, ReduceError> {
+    fn of_gram<J: PrimInt>(v: Gram<'_, T, J>, policy: &ScalingPolicy) -> Result<Self, ReduceError> {
         match Biadjacency::of(&v) {
             Some(layout) => Self::from_gram(layout, v, policy),
             None => Self::from_gram(StrictUpperTriangle, v, policy),
@@ -51,7 +48,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
         policy: &ScalingPolicy,
     ) -> Result<Self, ReduceError> {
         match v.values() {
-            Values::Incidence { .. } => Self::from_incidence(cells, v),
+            Values::Incidence { surplus } => Self::from_incidence(cells, v, surplus),
             Values::Valued { .. } => Self::from_values(cells, v, policy),
         }
     }

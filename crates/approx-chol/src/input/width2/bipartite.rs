@@ -5,7 +5,7 @@ use std::ops::Range;
 use num_traits::PrimInt;
 
 use super::error::{below, check, length, ViewError};
-use crate::input::repr::gram::{Gram, Layout, Values, Weights};
+use crate::input::repr::gram::{Gram, Layout, Sides, Values, Weights};
 use crate::storage::Real;
 
 /// One side of `V`, with at most one nonzero per column: `values[k]` at `rows[k]`, `1` for `None`.
@@ -63,9 +63,9 @@ impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
         Ok(Self::of(left, right, Some(s)))
     }
 
-    /// Dimension of `A`; saturates, as a sum past `usize` fails allocation anyway.
+    /// Dimension of `A`.
     pub(crate) fn n(&self) -> usize {
-        self.left.n.saturating_add(self.right.n)
+        self.gram().n()
     }
 
     /// The run of `A`'s vertices on `side`.
@@ -79,16 +79,22 @@ impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
     /// With neither side valued, `V`'s columns read switched as `e_a − e_b`: an incidence matrix.
     pub(crate) fn gram(self) -> Gram<'a, T, I> {
         let Self { left, right, scale } = self;
-        let layout = Layout::Bipartite {
-            n_left: left.n,
-            n_right: right.n,
-        };
         let values = match (left.values, right.values) {
             (None, None) => Values::Incidence { surplus: None },
-            (x, y) => Values::Valued { x, y },
+            (Some(x), Some(y)) => Values::Valued(Sides::Both(x, y)),
+            (Some(x), None) => Values::Valued(Sides::Left(x)),
+            (None, Some(y)) => Values::Valued(Sides::Right(y)),
         };
-        let weights = scale.map_or(Weights::Unit, Weights::Scale);
-        Gram::new((left.rows, right.rows), layout, values, weights)
+        Gram {
+            a: left.rows,
+            b: right.rows,
+            layout: Layout::Bipartite {
+                n_left: left.n,
+                n_right: right.n,
+            },
+            values,
+            weights: scale.map_or(Weights::Unit, Weights::Scale),
+        }
     }
 
     fn of(

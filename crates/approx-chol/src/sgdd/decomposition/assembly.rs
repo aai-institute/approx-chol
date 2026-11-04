@@ -142,6 +142,7 @@ type ValueCells<T, I, S> = Partitioned<Assembled<T, <S as AdjacencyLayout>::Adja
 pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
     cells: S,
     v: Gram<'a, T, J>,
+    surplus: Option<&'a [T]>,
 ) -> Result<IncidenceCells<'a, T, I, S>, ReduceError> {
     let mut abs = vec![0.0_f64; v.n()];
     let a = cells.sum(
@@ -151,7 +152,6 @@ pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: 
             (abs[i], abs[j]) = (abs[i] + c.abs(), abs[j] + c.abs());
         },
     )?;
-    let surplus = v.surplus();
     let s = |i: usize| surplus.map_or(0.0, |s| widen(s[i]));
     if let Some(vertex) = (0..abs.len()).find(|&i| !diagonal_in_range(narrow::<T>(abs[i] + s(i)))) {
         return Err(ReduceError::OutOfRange { vertex });

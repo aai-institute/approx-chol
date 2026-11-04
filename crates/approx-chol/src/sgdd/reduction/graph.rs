@@ -12,8 +12,9 @@ impl<T: Real, I: Index> Reduced<T, I> {
     pub(super) fn from_incidence<J: PrimInt, S: AdjacencyLayout>(
         cells: S,
         v: Gram<'_, T, J>,
+        surplus: Option<&[T]>,
     ) -> Result<Self, ReduceError> {
-        assemble_incidence(cells, v)?
+        assemble_incidence(cells, v, surplus)?
             .extract(
                 |IncidenceBlock {
                      adjacency,

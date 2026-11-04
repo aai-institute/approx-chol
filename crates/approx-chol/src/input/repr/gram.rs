@@ -5,14 +5,14 @@ use num_traits::PrimInt;
 use super::super::index;
 use crate::storage::{widen, Index, Real};
 
-/// A Gram input by its layout, values and weights.
+/// A Gram input by its layout, values and weights; each input type checks its ends and lengths before building one.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Gram<'a, T, I> {
-    a: &'a [I],
-    b: &'a [I],
-    layout: Layout,
-    values: Values<'a, T>,
-    weights: Weights<'a, T>,
+    pub(in crate::input) a: &'a [I],
+    pub(in crate::input) b: &'a [I],
+    pub(in crate::input) layout: Layout,
+    pub(in crate::input) values: Values<'a, T>,
+    pub(in crate::input) weights: Weights<'a, T>,
 }
 
 /// Which vertices `a` and `b` number.
@@ -27,13 +27,18 @@ pub(crate) enum Layout {
 /// Column `k`'s two entries.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Values<'a, T> {
-    /// `e_a − e_b`: `A` dominant by shape, its diagonal derived, plus an SDDM's surplus `s`.
+    /// `e_a − e_b`, a bipartite `V`'s `e_a + e_b` read switched: `A` dominant by shape, its diagonal derived, plus an SDDM's surplus `s`.
     Incidence { surplus: Option<&'a [T]> },
-    /// `x[k] e_a + y[k] e_b`, a missing side `1`.
-    Valued {
-        x: Option<&'a [T]>,
-        y: Option<&'a [T]>,
-    },
+    /// `x[k] e_a + y[k] e_b`.
+    Valued(Sides<'a, T>),
+}
+
+/// The sides a valued `V` gives values on, the other's `1`: a `V` with neither is an incidence.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Sides<'a, T> {
+    Both(&'a [T], &'a [T]),
+    Left(&'a [T]),
+    Right(&'a [T]),
 }
 
 /// `W`: none, a Laplacian's edge weights, or `V`'s column scales `s` with `w = s²`.
@@ -45,36 +50,12 @@ pub(crate) enum Weights<'a, T> {
 }
 
 impl<'a, T: Real, I: PrimInt> Gram<'a, T, I> {
-    /// Each input type checks its own ends, lengths and values before building one.
-    pub(in crate::input) fn new(
-        (a, b): (&'a [I], &'a [I]),
-        layout: Layout,
-        values: Values<'a, T>,
-        weights: Weights<'a, T>,
-    ) -> Self {
-        Self {
-            a,
-            b,
-            layout,
-            values,
-            weights,
-        }
-    }
-
     pub(crate) fn layout(&self) -> Layout {
         self.layout
     }
 
     pub(crate) fn values(&self) -> Values<'a, T> {
         self.values
-    }
-
-    /// The surplus `s`, which only an SDDM has.
-    pub(crate) fn surplus(&self) -> Option<&'a [T]> {
-        match self.values {
-            Values::Incidence { surplus } => surplus,
-            Values::Valued { .. } => None,
-        }
     }
 
     /// Dimension of `A`, not the column count; saturates, as a sum past `usize` fails allocation anyway.
@@ -101,7 +82,7 @@ impl<'a, T: Real, I: PrimInt> Gram<'a, T, I> {
         }
     }
 
-    /// The columns under `weight(k)`; an incidence column reads `e_a − e_b`, a valued one's missing side `1`.
+    /// The columns under `weight(k)`; an incidence column reads `e_a − e_b`, a valued one's side without values `1`.
     #[inline(always)]
     fn weighted<S: Index>(
         self,
@@ -111,19 +92,9 @@ impl<'a, T: Real, I: PrimInt> Gram<'a, T, I> {
         let (one, minus_one) = (|_| T::one(), |_| -T::one());
         match self.values {
             Values::Incidence { .. } => self.columns_of(one, minus_one, weight, visit),
-            Values::Valued { x: None, y: None } => self.columns_of(one, one, weight, visit),
-            Values::Valued {
-                x: Some(x),
-                y: None,
-            } => self.columns_of(|k| x[k], one, weight, visit),
-            Values::Valued {
-                x: None,
-                y: Some(y),
-            } => self.columns_of(one, |k| y[k], weight, visit),
-            Values::Valued {
-                x: Some(x),
-                y: Some(y),
-            } => self.columns_of(|k| x[k], |k| y[k], weight, visit),
+            Values::Valued(Sides::Left(x)) => self.columns_of(|k| x[k], one, weight, visit),
+            Values::Valued(Sides::Right(y)) => self.columns_of(one, |k| y[k], weight, visit),
+            Values::Valued(Sides::Both(x, y)) => self.columns_of(|k| x[k], |k| y[k], weight, visit),
         }
     }
 

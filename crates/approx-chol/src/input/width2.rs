@@ -7,7 +7,7 @@ pub(super) mod laplacian;
 use num_traits::PrimInt;
 
 use self::error::{check_ends, length, ViewError};
-use super::repr::gram::{Gram, Layout, Values, Weights};
+use super::repr::gram::{Gram, Layout, Sides, Values, Weights};
 use crate::storage::Real;
 
 /// `V Vᵀ` on `n` vertices, column `k` of `V` being `x[k] e_a[k] + y[k] e_b[k]`.
@@ -35,10 +35,14 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
 
     pub(super) fn gram(self) -> Gram<'a, T, I> {
         let Self { n, a, b, x, y } = self;
-        let values = Values::Valued {
-            x: Some(x),
-            y: Some(y),
-        };
-        Gram::new((a, b), Layout::Whole { n }, values, Weights::Unit)
+        let (layout, values) = (Layout::Whole { n }, Values::Valued(Sides::Both(x, y)));
+        let weights = Weights::Unit;
+        Gram {
+            a,
+            b,
+            layout,
+            values,
+            weights,
+        }
     }
 }

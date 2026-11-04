@@ -42,13 +42,13 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
     /// `L + diag(s)` as the core's `V W Vᵀ` and surplus.
     fn plus(self, surplus: Option<&'a [T]>) -> Gram<'a, T, I> {
         let Self { n, u, v, w } = self;
-        let weights = w.map_or(Weights::Unit, Weights::Of);
-        Gram::new(
-            (u, v),
-            Layout::Whole { n },
-            Values::Incidence { surplus },
-            weights,
-        )
+        Gram {
+            a: u,
+            b: v,
+            layout: Layout::Whole { n },
+            values: Values::Incidence { surplus },
+            weights: w.map_or(Weights::Unit, Weights::Of),
+        }
     }
 }
 
