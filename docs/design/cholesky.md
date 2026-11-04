@@ -49,8 +49,9 @@ and the component's key. Seven choices shape the factorization; each has one own
   the gauge is the last vertex, not spanning. It does not read the scaling, and it does not report
   whether the component is singular: the lift knows that, and whether it regauges, from its
   construction. The auto rule has its own threshold, not Reduction's band for floating.
-- **Index width:** the approximate inverse picks `u32` or `u64` once, from `max_slots`, the most
-  slots any route takes; the reduction is made before the configuration is known.
+- **Index width:** Cholesky's `fits_u32` says whether `u32` indexes the most slots any route
+  takes, a cover's two sheets and its ground; the reduction is made before the configuration is
+  known, so the approximate inverse picks the width from it before the route.
 - **The elimination is generic over the clique sample, the copies and the sign.** The engine
   merges a star, caps its copies, cancels opposite signs into surplus and sorts it ascending by
   weight per copy, with $\omega_v$ and the prefix sums; the column of $\mathcal{L}$ is taken from
@@ -112,7 +113,7 @@ impl<T: Real, I: Index> Represented<T, I> {
     fn from_cover_rows(rows: CoverRows<T, I>) -> Self;                                // a complement formed on the cover
 }
 fn cover_neighbor(k: usize, sheet: usize, crosses: bool) -> usize;                    // the cover's slot of a neighbor
-pub(crate) const fn max_slots(n: usize) -> usize;                                     // 2n + 1
+pub(crate) fn fits_u32(n: usize) -> bool;                                            // 2n + 1 slots
 
 // The edge sign: Unsigned is zero-sized and compiles to the Laplacian elimination.
 trait Sign: Copy + Send + Sync {
