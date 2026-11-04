@@ -1,6 +1,9 @@
-//! Sparse storage shapes every stage reads.
+//! Scalars and the sparse storage shapes every stage reads.
 
-use crate::{narrow, widen, Index, Real, Sum2};
+mod real;
+
+pub use real::Real;
+pub(crate) use real::{compensated_sum, in_range, lane_sum, narrow, widen, Index, Sum2};
 
 /// Compressed sparse rows.
 #[cfg_attr(
@@ -200,7 +203,7 @@ impl<T: Real, I: Index> Rows<T, I> {
             for p in span[0]..span[1] {
                 let j = self.indices[p].index();
                 let x = r[i] * self.values[p] * c[j];
-                if x == T::zero() || !crate::in_range(x) {
+                if x == T::zero() || !in_range(x) {
                     return None;
                 }
                 self.values[p] = x;
@@ -241,9 +244,9 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
         self.rows.row_len(i)
     }
 
-    /// `scale · Σ_ij |a_ij|` over both triangles, as a [`crate::lane_sum`].
+    /// `scale · Σ_ij |a_ij|` over both triangles, as a [`lane_sum`].
     pub(crate) fn scaled_abs_total(&self, scale: f64) -> f64 {
-        2.0 * crate::lane_sum(&self.rows.values, scale)
+        2.0 * lane_sum(&self.rows.values, scale)
     }
 
     /// Row `i`'s neighbors above it.

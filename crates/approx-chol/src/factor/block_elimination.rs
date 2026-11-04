@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use super::config::InnerParallelism;
 use super::{within_one, MULTIPLY_ADD_GRAIN_BITS};
 use crate::storage::Rows;
-use crate::{Index, Real};
+use crate::storage::{Index, Real};
 
 /// `M`'s cross block scaled by its inverse pivots, `D_e⁻¹ C`, and `D_e⁻¹`, applied as two products because the block's steps commute.
 #[cfg_attr(
@@ -13,8 +13,8 @@ use crate::{Index, Real};
     derive(serde::Serialize, serde::Deserialize),
     serde(remote = "Self"),
     serde(bound(
-        serialize = "T: serde::Serialize, I: crate::Index + serde::Serialize",
-        deserialize = "T: crate::Real + serde::Deserialize<'de>, I: crate::Index + serde::Deserialize<'de>"
+        serialize = "T: serde::Serialize, I: crate::storage::Index + serde::Serialize",
+        deserialize = "T: crate::storage::Real + serde::Deserialize<'de>, I: crate::storage::Index + serde::Deserialize<'de>"
     ))
 )]
 #[derive(Clone, Debug)]

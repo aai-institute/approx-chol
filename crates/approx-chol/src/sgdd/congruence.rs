@@ -1,8 +1,8 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
-use crate::narrow;
-use crate::{widen, Index, Real};
+use crate::storage::narrow;
+use crate::storage::{widen, Index, Real};
 
 /// `R = F Pᵀ`, so `M = R A Rᵀ`: `Pᵀ` picks the block's vertices of `A`, or of `S` once tailed, `F` is the congruence.
 #[cfg_attr(
@@ -243,7 +243,7 @@ impl<T: Real> ScaledFactors<T> {
             let u = widen(f / largest);
             u * u
         };
-        let norm = crate::compensated_sum(&factors, |_, f| unit(&f));
+        let norm = crate::storage::compensated_sum(&factors, |_, f| unit(&f));
         Self {
             factors,
             peak,
@@ -343,7 +343,7 @@ impl<T: Real> Congruence<T> {
 
 fn project_out<T: Real>(x: &mut [T], u: impl Fn(usize) -> T, uu: f64) {
     // Compensated, or a constant added to a floating `b` moves the solution (#147).
-    let ux = crate::compensated_sum(x, |i, x| widen(u(i)) * widen(x));
+    let ux = crate::storage::compensated_sum(x, |i, x| widen(u(i)) * widen(x));
     let along = ux / uu;
     for (i, x) in x.iter_mut().enumerate() {
         *x = narrow::<T>(widen(*x) - widen(u(i)) * along);

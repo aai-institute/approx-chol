@@ -16,7 +16,8 @@ use super::scaling::{self, ScaleVector, ScalingPolicy};
 use super::{diagonal_in_range, Complement, Reduced};
 use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Lowered, Side};
 use crate::storage::OffDiagonal;
-use crate::{narrow, widen, Error, Index, Real};
+use crate::storage::{narrow, widen, Index, Real};
+use crate::Error;
 
 impl<T: Real, I: Index> Reduced<T, I> {
     /// The view's irreducible blocks, each reduced; `policy` scales those not already dominant.
@@ -259,7 +260,7 @@ impl<T: Real, I: Index> Folded<T, I> {
     /// From `M`'s rows, `1ᵀM1 = tr M − Σ|offdiag(M)|`, so `tr M` cannot overflow.
     fn singularity(&self) -> Singularity {
         let epsilon = widen(T::epsilon());
-        let diagonal = crate::Sum2::of(&self.rows.diagonal, |_, d| epsilon * widen(d));
+        let diagonal = crate::storage::Sum2::of(&self.rows.diagonal, |_, d| epsilon * widen(d));
         let trace = diagonal.total();
         // `tr M` rounded on its own drops a surplus below its ulp, which the Gram path keeps.
         let ones = (self.m.off_diagonal())

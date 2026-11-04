@@ -3,8 +3,8 @@
 use super::congruence::{Congruence, Restriction, ScaledFactors, Selection};
 use super::decomposition::{BlockAdjacency, RowSums, SymmetricBlock};
 use super::scaling::{ScalingReport, RATIO_BAND};
+use crate::storage::{Index, Real};
 use crate::storage::{OffDiagonal, Rows};
-use crate::{Index, Real};
 
 /// Whether a signature folds `M` (Harary), and `M`'s grounding.
 #[derive(Clone, Debug)]
@@ -72,10 +72,10 @@ impl<T: Real> Grounding<T> {
         let Some(mut surplus) = self.0 else {
             return Ok(self);
         };
-        let band = RATIO_BAND * crate::widen(T::epsilon());
+        let band = RATIO_BAND * crate::storage::widen(T::epsilon());
         for (i, (s, &d)) in surplus.iter_mut().zip(diagonal).enumerate() {
-            if !crate::in_range(*s) {
-                if crate::widen(*s) > band * crate::widen(d) {
+            if !crate::storage::in_range(*s) {
+                if crate::storage::widen(*s) > band * crate::storage::widen(d) {
                     return Err(i);
                 }
                 *s = T::zero();
@@ -281,7 +281,7 @@ impl<T: Real, I: Index> Congruent<T, I> {
         );
         assert!(grounding.fits(n), "one surplus per row");
         let surplus = grounding.surplus().unwrap_or_default();
-        if let Some(i) = surplus.iter().position(|&s| !crate::in_range(s)) {
+        if let Some(i) = surplus.iter().position(|&s| !crate::storage::in_range(s)) {
             let vertex = vertices.vertex(i);
             return Err(ReduceError::OutOfRange { vertex });
         }

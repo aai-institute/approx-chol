@@ -5,7 +5,7 @@ use normalized::Normalized;
 use perron::{InverseIteration, Outcome, Shortfall};
 
 use crate::storage::OffDiagonal;
-use crate::{narrow, widen, Index, Real};
+use crate::storage::{narrow, widen, Index, Real};
 
 /// Certification policy for a dominance scaling; a deficit past rounding left at hand-over is clamped and reported.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

@@ -14,7 +14,7 @@ pub(crate) use decomposition::{Lone, Summands};
 pub(crate) use reduction::Singularity;
 pub use scaling::{ScalingPolicy, ScalingReport};
 
-use crate::{in_range, Index, Real};
+use crate::storage::{in_range, Index, Real};
 use decomposition::Components;
 
 /// `A`'s reduced summands, covering `A` once by extraction; only debug builds check it.

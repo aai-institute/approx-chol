@@ -5,7 +5,7 @@ use num_traits::PrimInt;
 use crate::input::{Column, FactorWidth2};
 use crate::sgdd::block::ReduceError;
 use crate::storage::Rows;
-use crate::{in_range, narrow, widen, Index, Real};
+use crate::storage::{in_range, narrow, widen, Index, Real};
 
 /// `A`'s strict upper triangle; `pair` sees each nonzero cell.
 pub(super) fn upper<T: Real, J: PrimInt, I: Index>(

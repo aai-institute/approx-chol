@@ -11,8 +11,8 @@ use super::{
 use crate::input::{BipartiteFactorWidth2, Column, FactorWidth2, Side};
 use crate::sgdd::block::{Grounding, ReduceError};
 use crate::sgdd::diagonal_in_range;
+use crate::storage::{narrow, widen, Index, Real};
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
-use crate::{narrow, widen, Index, Real};
 
 /// An incidence `V`'s block, dominant by shape: its adjacency and the surplus an SDDM states on it.
 pub(in crate::sgdd) struct IncidenceBlock<T, I> {

@@ -8,7 +8,7 @@ use super::block::ReduceError;
 use super::congruence::Selection;
 use crate::input::{Canonical, CsrError};
 use crate::storage::{tally_abs, OffDiagonal, Rows, UpperAdjacency};
-use crate::{Index, Real};
+use crate::storage::{Index, Real};
 pub(super) use assembly::{
     assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, IncidenceBlock,
     StrictUpperTriangle,
@@ -211,7 +211,7 @@ impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Canonical<'_, T, J
         values.shrink_to_fit();
         let rows = Rows::new(ptrs, indices, values, vertices.len());
         let off_diagonal = OffDiagonal::General(UpperAdjacency::new(rows));
-        let abs = abs.into_iter().map(crate::narrow).collect();
+        let abs = abs.into_iter().map(crate::storage::narrow).collect();
         let adjacency = BlockAdjacency {
             vertices: Selection::of(vertices),
             off_diagonal,

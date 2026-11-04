@@ -19,8 +19,8 @@ pub use wire::FORMAT_VERSION;
 
 use crate::sgdd::{BlockComplement, IrreducibleBlock, Lone, Restriction, Selection, Summands};
 use crate::storage::OffDiagonal;
+use crate::storage::{Index, Real};
 use crate::ScalingReport;
-use crate::{Index, Real};
 use block_elimination::BlockElimination;
 use cholesky::{Arm, Cholesky, Signed, Workspace};
 use schur::BipartiteBlock;
@@ -482,9 +482,9 @@ fn inverse_pivot_in_range<T: Real>(inverse: T) -> bool {
 /// `Σ|t| ≤ 1` up to the terms' rounding: a substitution through such multipliers cannot overflow where its solution fits.
 fn within_one<T: Real>(terms: impl Iterator<Item = T>) -> bool {
     let (sum, len) = terms.fold((0.0, 0), |(sum, len), t| {
-        (sum + crate::widen(t.abs()), len + 1)
+        (sum + crate::storage::widen(t.abs()), len + 1)
     });
-    sum <= 1.0 + 4.0 * (len + 2) as f64 * crate::widen(T::epsilon())
+    sum <= 1.0 + 4.0 * (len + 2) as f64 * crate::storage::widen(T::epsilon())
 }
 
 /// One block's key, so no draw depends on thread scheduling or on how other blocks routed.

@@ -6,7 +6,7 @@ mod star;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use crate::{narrow, widen, Index, Real};
+use crate::storage::{narrow, widen, Index, Real};
 use cdf::{draw_after, suffix_past};
 pub(super) use copies::{Copies, Multi, Single};
 use star::StarEntry;

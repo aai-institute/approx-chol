@@ -9,7 +9,7 @@ use crate::sgdd::congruence::Selection;
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components, Summands};
 use crate::sgdd::scaling::{self, ScalingPolicy, RATIO_BAND};
 use crate::sgdd::Reduced;
-use crate::{narrow, widen, Index, Real};
+use crate::storage::{narrow, widen, Index, Real};
 
 impl<T: Real, I: Index> Reduced<T, I> {
     /// `V` with values: scaled by its null vectors on demand, folded blocks dropping their rows for a pass over `V` that decides floating.
