@@ -17,7 +17,9 @@ pub use config::{Config, InnerParallelism, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
 
-use crate::sgdd::{Lift, Lone, Reduced, ReducedComplement, ReducedComponent, Selection, Summands};
+use crate::sgdd::{
+    Lift, Lone, Null, Reduced, ReducedComplement, ReducedComponent, Selection, Summands,
+};
 use crate::storage::{widen, Adjacency, Grounded, Index, OffDiagonal, Real};
 use crate::ScalingReport;
 use block_elimination::BlockElimination;
@@ -327,7 +329,7 @@ impl<T: Real> BlockFactor<T> {
 
     /// Whether the block is folded and solved as singular, `A_c⁺b` or its complement's `S_c⁺b`.
     pub fn floats(&self) -> bool {
-        on!(self, block => block.cholesky.singular(), _ => false)
+        on!(self, block => block.lift.null() != Null::None, _ => false)
     }
 
     /// Work [`InnerParallelism::Allow`] may split per solve, `0` when nothing does: an outer scheduler weighs it against its own parallelism.
@@ -449,18 +451,15 @@ impl<T: Real, I: Index> Block<T, I> {
     // Two call sites through the closure plus solve_local's: by cost alone it stays a call.
     #[inline(always)]
     fn solve_unchecked(&self, x: &mut [T], scratch: &mut [T], inner: InnerParallelism) {
-        let singular = self.cholesky.singular();
-        self.lift.restrict(x, singular);
+        self.lift.restrict(x);
         match &self.elimination {
             None => self.cholesky.solve(x, scratch),
             Some(elimination) => {
                 elimination.solve(x, inner, |kept| self.cholesky.solve(kept, scratch));
-                if singular {
-                    self.lift.regauge(x);
-                }
+                self.lift.regauge(x);
             }
         }
-        self.lift.prolongate(x, singular);
+        self.lift.prolongate(x);
     }
 }
 
@@ -630,7 +629,12 @@ impl<T: Real, I: Index> Block<T, I> {
                 .checked_sub(elimination.n_eliminated())
                 .filter(|&kept| kept == elimination.n_kept())?,
         };
-        (kept > 0 && self.cholesky.solves(kept)).then_some(self)
+        let null = match (self.cholesky.singular(), &self.elimination) {
+            (false, _) => Null::None,
+            (true, None) => Null::Projected,
+            (true, Some(_)) => Null::Regauged,
+        };
+        (kept > 0 && self.cholesky.solves(kept) && self.lift.null() == null).then_some(self)
     }
 }
 
@@ -669,6 +673,17 @@ mod tests {
     /// A 2-vertex floating block's lift over a 3-vertex grounded block's Cholesky.
     fn mismatched_cholesky() -> Block<f64, u32> {
         let floating = csr_block(&[0, 2, 4], &[0, 1, 0, 1], &[1.0, -1.0, -1.0, 1.0]);
+        Block {
+            cholesky: grounded_block().cholesky,
+            ..floating
+        }
+    }
+
+    /// A floating 3-vertex path's lift, which projects, over a grounded 3-vertex block's Cholesky.
+    fn floating_lift_over_a_grounded_cholesky() -> Block<f64, u32> {
+        let values = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
+        let floating = csr_block(&[0, 2, 5, 7], &[0, 1, 0, 1, 2, 1, 2], &values);
+        assert_eq!(floating.lift.null(), Null::Projected);
         Block {
             cholesky: grounded_block().cholesky,
             ..floating
@@ -718,6 +733,7 @@ mod tests {
 
     #[rstest]
     #[case::mismatched_cholesky(mismatched_cholesky())]
+    #[case::floating_lift_over_a_grounded_cholesky(floating_lift_over_a_grounded_cholesky())]
     #[case::without_elimination(without_elimination())]
     #[case::elimination_keeping_another_count(elimination_keeping_another_count())]
     fn a_block_whose_parts_disagree_is_rejected_on_decode(#[case] spliced: Block<f64, u32>) {

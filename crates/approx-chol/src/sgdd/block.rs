@@ -1,6 +1,6 @@
 //! One reduced irreducible block.
 
-use super::congruence::{Congruence, Lift, ScaledFactors, Selection};
+use super::congruence::{Congruence, Lift, Null, ScaledFactors, Selection};
 use super::decomposition::{BlockAdjacency, RowSums, SymmetricBlock};
 use super::scaling::ScalingReport;
 use crate::storage::{
@@ -176,7 +176,12 @@ impl<T: Real, I: Index, P: Adjacency<T, I>> Congruent<T, I, P> {
             congruence,
             off_diagonal,
         } = self;
-        let lift = Lift::new(vertices, congruence);
+        let null = match (balance, grounding.is_grounded()) {
+            (Balance::Balanced, false) if off_diagonal.n_eliminated() > 0 => Null::Regauged,
+            (Balance::Balanced, false) => Null::Projected,
+            _ => Null::None,
+        };
+        let lift = Lift::new(vertices, congruence, null);
         let vertices = lift.vertices();
         let n = vertices.len();
         assert_eq!(off_diagonal.n(), n, "one row per vertex");

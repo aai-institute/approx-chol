@@ -97,6 +97,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
     }
 
     /// Whether it solves a singular Laplacian: one sheet, no ground.
+    #[cfg(feature = "serde")]
     pub(super) fn singular(&self) -> bool {
         self.sheets == Sheets::One && !self.grounded
     }

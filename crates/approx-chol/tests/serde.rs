@@ -131,7 +131,7 @@ fn varint(mut x: u64, bytes: &mut Vec<u8>) {
 fn truncated_elimination(rows: u64, n_cols: u64) -> Vec<u8> {
     let mut bytes = vec![1];
     varint(approx_chol::FACTOR_FORMAT_VERSION.into(), &mut bytes);
-    bytes.extend([0, 2, 64, 0, 0, 1]);
+    bytes.extend([0, 2, 64, 0, 0, 0, 1]); // U32, vertices, Identity, definite, an elimination
     varint(rows + 1, &mut bytes);
     bytes.extend(std::iter::repeat_n(0, rows as usize + 1));
     bytes.extend([0, 0]);
@@ -411,7 +411,7 @@ fn an_approximate_step_length_past_its_neighbors_is_corrupt() {
     let mut bytes = Vec::new();
     varint(u64::from(approx_chol::FACTOR_FORMAT_VERSION), &mut bytes);
     bytes.push(1); // Storage::U64
-    bytes.extend([4, 0, 1, 2, 3, 0]); // vertices, Identity
+    bytes.extend([4, 0, 1, 2, 3, 0, 1]); // vertices, Identity, projected
     bytes.push(0); // no elimination
     bytes.extend([0, 0, 4, 0, 1]); // One, floating, n = 4, pinned 0, Approximate
     bytes.push(3);

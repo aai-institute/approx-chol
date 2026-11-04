@@ -8,7 +8,7 @@ mod scaling;
 
 pub use block::ReduceError;
 pub(crate) use block::{Reduced, ReducedComplement, ReducedComponent};
-pub(crate) use congruence::{Lift, Selection};
+pub(crate) use congruence::{Lift, Null, Selection};
 pub(crate) use decomposition::{Lone, Summands};
 pub(crate) use reduction::Singularity;
 pub use scaling::{ScalingPolicy, ScalingReport};

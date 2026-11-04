@@ -17,28 +17,51 @@ use crate::storage::{compensated_sum, narrow, widen, Gauge, Index, Real};
 pub(crate) struct Lift<T, I> {
     vertices: Selection<I>,
     congruence: Congruence<T>,
+    null: Null,
+}
+
+/// What a solve does about `F·1`, the null vector of a singular `M`.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Null {
+    /// `M` is definite.
+    None,
+    /// Projected out of the right-hand side and the solution.
+    Projected,
+    /// Also regauged between a split block's elimination and the lift back.
+    Regauged,
 }
 
 impl<T: Real, I: Index> Lift<T, I> {
     /// Panics unless one factor per vertex.
-    pub(super) fn new(vertices: Selection<I>, congruence: Congruence<T>) -> Self {
+    pub(super) fn new(vertices: Selection<I>, congruence: Congruence<T>, null: Null) -> Self {
         assert!(congruence.fits(vertices.len()), "one factor per vertex");
         Self {
             vertices,
             congruence,
+            null,
         }
+    }
+
+    pub(crate) fn null(&self) -> Null {
+        self.null
     }
 
     pub(crate) fn vertices(&self) -> &Selection<I> {
         &self.vertices
     }
 
-    /// The lift onto local vertices `from..`, renumbered by `vertex`: a complement's, `F` commuting with the elimination.
+    /// The lift onto local vertices `from..`, renumbered by `vertex`: a complement's, `F` commuting with the elimination, which it no longer follows.
     pub(super) fn tail(self, from: usize, vertex: impl Fn(usize) -> I) -> Self {
         let vertices = (from..self.vertices.len()).map(|k| vertex(self.vertices.vertex(k)));
+        let null = match self.null {
+            Null::Regauged => Null::Projected,
+            null => null,
+        };
         Self::new(
             Selection::owned(vertices.collect()),
             self.congruence.tail(from),
+            null,
         )
     }
 
@@ -60,8 +83,8 @@ impl<T: Real, I: Index> Lift<T, I> {
     }
 
     /// `x ← F x` on a gathered `x`, `F·1` projected out first when `M` is singular.
-    pub(crate) fn restrict(&self, x: &mut [T], singular: bool) {
-        if singular {
+    pub(crate) fn restrict(&self, x: &mut [T]) {
+        if self.null != Null::None {
             self.congruence.project_out_null(x);
         }
         self.congruence.apply(x);
@@ -69,16 +92,16 @@ impl<T: Real, I: Index> Lift<T, I> {
 
     /// `x ← x − x_q·1` at the largest `|f|`, where a split block's singular solve fixes `M`'s gauge.
     pub(crate) fn regauge(&self, x: &mut [T]) {
-        if let Congruence::Scaled(scales) = &self.congruence {
+        if let (Null::Regauged, Congruence::Scaled(scales)) = (self.null, &self.congruence) {
             let gauge = x[scales.peak];
             x.iter_mut().for_each(|x| *x = *x - gauge);
         }
     }
 
     /// `x ← F x` back in `A_c`'s scale, `F·1` projected out last when `M` is singular.
-    pub(crate) fn prolongate(&self, x: &mut [T], singular: bool) {
+    pub(crate) fn prolongate(&self, x: &mut [T]) {
         self.congruence.apply(x);
-        if singular {
+        if self.null != Null::None {
             self.congruence.project_out_null(x);
         }
     }
