@@ -252,16 +252,13 @@ impl<T: Real, I: Index> Cholesky<T, I> {
             Arm::Dense(wdd) => {
                 let layout = Layout::of(Sheets::One, !wdd.floats());
                 // A definite `M`'s surplus is the ground's slot, pinned so the solve is `M`'s own.
-                let pin = layout.pinned(wdd.n(), gauge);
+                let pin = layout.pinned(layout.slots(wdd.n()), gauge);
                 let factor = dense::factor(&wdd, pin, &mut reused.dense);
                 (layout, pin, Triangular::Dense(factor.into()))
             }
             Arm::Approximate(represented) => {
                 let layout = represented.layout();
-                let n = represented.n() / layout.sheets().count();
-                // The ground is never a pivot, so `Σs` is never formed: within unchanged, grids +0-8% PCG iterations at 1-10 grounds.
-                // Floating, ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
-                let pin = (layout.grounded() || gauge.spans_wide).then(|| layout.pinned(n, gauge));
+                let pin = layout.sampled_pin(represented.slots(), gauge);
                 let (steps, pin) = reused.elimination.eliminate(represented, draws, pin);
                 (layout, pin, Triangular::Approximate(Box::new(steps)))
             }
@@ -288,9 +285,8 @@ impl<T: Real, I: Index> Cholesky<T, I> {
     }
 
     pub(super) fn solve(&self, x: &mut [T], scratch: &mut [T]) {
-        let slots = self.triangular.slots();
         let substitute = |rows: &mut [T]| self.triangular.substitute(rows, self.pinned);
-        self.layout.solve(x, scratch, slots, substitute);
+        self.layout.solve(x, scratch, substitute);
     }
 }
 
@@ -333,10 +329,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
             Triangular::Dense(dense) => dense::fits(dense, slots),
             Triangular::Approximate(approximate) => approximate.fits(slots, self.pinned),
         };
-        let pinned = match self.layout.grounded() {
-            true => self.pinned == slots - 1,
-            false => self.pinned < slots,
-        };
+        let pinned = (self.layout.ground(slots)).map_or(self.pinned < slots, |g| self.pinned == g);
         (pinned && fits).then_some(self)
     }
 

@@ -37,7 +37,7 @@ impl Layout {
         }
     }
 
-    fn slots(self, n: usize) -> usize {
+    pub(super) fn slots(self, n: usize) -> usize {
         self.sheets().count() * n + usize::from(self.grounded())
     }
 
@@ -49,13 +49,24 @@ impl Layout {
         (sheets % count == 0 && sheets > 0).then_some(sheets / count)
     }
 
+    /// The ground's slot, the last, when there is one.
+    pub(super) fn ground(self, slots: usize) -> Option<usize> {
+        self.grounded().then(|| slots - 1)
+    }
+
     /// The slot the solve pins: the ground, else the largest `|f|` on the first sheet, so the gauge's rounding is not amplified by `1/f`.
-    pub(super) fn pinned(self, n: usize, gauge: Gauge) -> usize {
-        match (self.grounded(), self.sheets()) {
-            (true, _) => self.slots(n) - 1,
-            (false, Sheets::One) => gauge.peak,
-            (false, Sheets::Two) => cover_vertex(gauge.peak, 0),
-        }
+    pub(super) fn pinned(self, slots: usize, gauge: Gauge) -> usize {
+        self.ground(slots).unwrap_or(match self.sheets() {
+            Sheets::One => gauge.peak,
+            Sheets::Two => cover_vertex(gauge.peak, 0),
+        })
+    }
+
+    /// The slot a sampled elimination must pin, else `None` for its minimum-degree order's last.
+    pub(super) fn sampled_pin(self, slots: usize, gauge: Gauge) -> Option<usize> {
+        // The ground is never a pivot, so `Σs` is never formed: within unchanged, grids +0-8% PCG iterations at 1-10 grounds.
+        // Floating, ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
+        (self.grounded() || gauge.spans_wide).then(|| self.pinned(slots, gauge))
     }
 
     /// Scratch beside `x`: none floating, else every slot.
@@ -71,9 +82,9 @@ impl Layout {
         self,
         x: &mut [T],
         scratch: &mut [T],
-        slots: usize,
         substitute: impl FnOnce(&mut [T]),
     ) {
+        let slots = self.slots(x.len());
         match self {
             Self::Floating => substitute(x),
             Self::Grounded => {
@@ -106,10 +117,13 @@ impl<T: Real, I: Index> Represented<T, I> {
         grounding: Grounding<T>,
     ) -> Self {
         match sheets {
-            Sheets::One => Self::folded(Grounded {
-                adjacency,
-                grounding,
-            }),
+            Sheets::One => Self::new(
+                Grounded {
+                    adjacency,
+                    grounding,
+                },
+                Sheets::One,
+            ),
             Sheets::Two => {
                 let n = adjacency.n();
                 // The cover acts as `M − diag(s)` on `[z; −z]`.
@@ -134,17 +148,15 @@ impl<T: Real, I: Index> Represented<T, I> {
         }
         let rows = Rows::new(rows.ptrs, rows.indices, rows.values, n);
         match sheets {
-            Sheets::One => Self::folded(Grounded {
-                adjacency: WddCsr::new(rows),
-                grounding: Grounding::of(ground),
-            }),
+            Sheets::One => Self::new(
+                Grounded {
+                    adjacency: WddCsr::new(rows),
+                    grounding: Grounding::of(ground),
+                },
+                Sheets::One,
+            ),
             Sheets::Two => Self::cover(rows, ground),
         }
-    }
-
-    fn folded(matrix: Grounded<T, WddCsr<T, I>>) -> Self {
-        let layout = Layout::of(Sheets::One, matrix.grounding.is_grounded());
-        Self::new(matrix, layout)
     }
 
     /// The one place a cover takes its surplus: as the ground `g`, or, within [`surplus_edges`]' band, as an edge [`twist`] `k⁺ — k⁻` per vertex, first in `k⁺`'s row.
@@ -165,22 +177,21 @@ impl<T: Real, I: Index> Represented<T, I> {
                 grounding,
             },
         };
-        let layout = Layout::of(Sheets::Two, matrix.grounding.is_grounded());
-        Self::new(matrix, layout)
+        Self::new(matrix, Sheets::Two)
     }
 
-    /// Panics unless nonempty, with one surplus per row.
-    fn new(matrix: Grounded<T, WddCsr<T, I>>, layout: Layout) -> Self {
-        assert!(matrix.adjacency.n() > 0, "an SDDM has a vertex");
+    /// Its layout follows from its sheets and whether it is grounded.
+    fn new(matrix: Grounded<T, WddCsr<T, I>>, sheets: Sheets) -> Self {
+        let layout = Layout::of(sheets, matrix.grounding.is_grounded());
         Self {
             matrix: Wdd::z_matrix(matrix),
             layout,
         }
     }
 
-    /// Its slots, the ground excluded.
-    pub(super) fn n(&self) -> usize {
-        self.matrix.n()
+    /// Its slots, the ground's included.
+    pub(super) fn slots(&self) -> usize {
+        self.matrix.n() + usize::from(self.layout.grounded())
     }
 
     pub(super) fn layout(&self) -> Layout {
@@ -189,7 +200,7 @@ impl<T: Real, I: Index> Represented<T, I> {
 
     /// Positive Laplacian weights, each edge once, the ground vertex `n` joined by each surplus.
     pub(super) fn grounded_edges(&self, mut edge: impl FnMut(I, I, T)) {
-        let n = self.n();
+        let n = self.matrix.n();
         for i in 0..n {
             for (j, &a) in self.matrix.adjacency().upper(i) {
                 edge(I::from_index(i), I::from_index(j), -a);
@@ -364,27 +375,35 @@ impl<T: Real, I: Index> ColumnSums<'_, T, I> {
 /// `adjacency` with each `t > 0` of `twists` as the edge `2k — 2k+1`, first in row `2k`: no other neighbor of `k⁺` sorts below `k⁻`.
 fn first_in_row<T: Real, I: Index>(
     adjacency: WddCsr<T, I>,
-    twists: impl Iterator<Item = T>,
+    twists: impl ExactSizeIterator<Item = T>,
 ) -> WddCsr<T, I> {
     let n = adjacency.n();
-    let (mut ptrs, mut indices, mut values) = (vec![0], Vec::new(), Vec::new());
-    for (k, t) in twists.enumerate() {
-        for i in [2 * k, 2 * k + 1] {
-            if i == 2 * k && t > T::zero() {
-                indices.push(I::from_index(i + 1));
-                values.push(-t);
-            }
-            for (j, &a) in adjacency.upper(i) {
-                indices.push(I::from_index(j));
-                values.push(a);
-            }
-            ptrs.push(indices.len());
+    let nnz = (0..n).map(|i| adjacency.upper_len(i)).sum::<usize>() + twists.len();
+    let (mut ptrs, mut indices, mut values) = (
+        Vec::with_capacity(n + 1),
+        Vec::with_capacity(nnz),
+        Vec::with_capacity(nnz),
+    );
+    ptrs.push(0);
+    let mut row = |i: usize, indices: &mut Vec<I>, values: &mut Vec<T>| {
+        for (j, &a) in adjacency.upper(i) {
+            indices.push(I::from_index(j));
+            values.push(a);
         }
+        ptrs.push(indices.len());
+    };
+    for (k, t) in twists.enumerate() {
+        if t > T::zero() {
+            indices.push(I::from_index(cover_vertex(k, 1)));
+            values.push(-t);
+        }
+        row(cover_vertex(k, 0), &mut indices, &mut values);
+        row(cover_vertex(k, 1), &mut indices, &mut values);
     }
     WddCsr::new(Rows::new(ptrs, indices, values, n))
 }
 
-/// `CoverSurplus::Auto`'s band, `main`'s for floating, its own so Reduction's can move apart.
+/// `CoverSurplus::Auto`'s band, today the value of Reduction's `SINGULAR_BAND`, its own so the two can move apart.
 const SURPLUS_EDGE_BAND: f64 = 5.0;
 
 /// Whether `ground` is within the band of `ground + Σ|a_ij|`, both `ε`-scaled so neither overflows: a cover's copies then [`twist`] instead of grounding, so its `1/s` common mode cannot swamp `z`; a cover doubles both sums, so `M`'s decide as its own.
@@ -395,7 +414,7 @@ fn surplus_edges<T: Real, I: Index>(ground: &[T], adjacency: &WddCsr<T, I>) -> b
     total <= SURPLUS_EDGE_BAND * epsilon * trace
 }
 
-/// The edge `k⁺ — k⁻` that acts on `[z; −z]` as grounds `g⁺, g⁻` do; with `g⁺ ≠ g⁻` no ungrounded pair matches them, and the mean differs by less than the singular band. Zero where both copies float, else at least `MIN_POSITIVE`, as a share is.
+/// The edge `k⁺ — k⁻` that acts on `[z; −z]` as grounds `g⁺, g⁻` do; with `g⁺ ≠ g⁻` no ungrounded pair matches them, and the mean differs by less than [`SURPLUS_EDGE_BAND`]. Zero where both copies float, else at least `MIN_POSITIVE`, as a share is.
 fn twist<T: Real>(g_plus: T, g_minus: T) -> T {
     if g_plus == T::zero() && g_minus == T::zero() {
         return T::zero();

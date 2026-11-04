@@ -230,14 +230,14 @@ const LANES: usize = 4;
 
 #[cfg(feature = "serde")]
 impl<T: Real, I: Index> ApproximateCholesky<T, I> {
-    /// Each slot but `pin` pivots once, giving only to slots not yet pivoted, shares of at most its whole.
+    /// Each of its `slots` but `pin` pivots once, giving only to slots not yet pivoted, shares of at most its whole.
     pub(super) fn fits(&self, slots: usize, pin: usize) -> bool {
         let Self {
             headers,
             neighbors,
             coefficients,
         } = self;
-        if headers.len() + 1 != slots || neighbors.len() != coefficients.len() {
+        if neighbors.len() != coefficients.len() {
             return false;
         }
         let mut pivoted = vec![false; slots];

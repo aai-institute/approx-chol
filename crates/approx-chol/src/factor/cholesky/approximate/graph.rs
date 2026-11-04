@@ -26,7 +26,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
 
     /// The ground, when there is one, is the last vertex; the order pins it.
     pub(super) fn load(&mut self, represented: &Represented<T, I>, split: C) {
-        let n = represented.n() + usize::from(represented.layout().grounded());
+        let n = represented.slots();
         // One slot past the degree: the first fill edge reallocating measured +2-3% on grids.
         let mut capacities = vec![1; n];
         represented.grounded_edges(|k, j, _| {

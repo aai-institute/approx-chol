@@ -30,7 +30,11 @@ pub(super) struct Wdd<T, I, S> {
 }
 
 impl<T: Real, I: Index, S: Sign> Wdd<T, I, S> {
+    /// Panics unless nonempty, with one surplus per row.
     fn of(matrix: Grounded<T, WddCsr<T, I>>) -> Self {
+        let n = matrix.adjacency.n();
+        assert!(n > 0, "M has a vertex");
+        assert!(matrix.grounding.fits(n), "one surplus per row");
         Self {
             matrix,
             sign: PhantomData,
@@ -69,11 +73,7 @@ pub(super) enum AnyWdd<T, I> {
 }
 
 impl<T: Real, I: Index> AnyWdd<T, I> {
-    /// Panics unless nonempty, with one surplus per row.
     pub(super) fn new(matrix: Grounded<T, WddCsr<T, I>>, balance: Balance) -> Self {
-        let n = matrix.adjacency.n();
-        assert!(n > 0, "M has a vertex");
-        assert!(matrix.grounding.fits(n), "one surplus per row");
         match balance {
             Balance::Balanced => Self::Unsigned(Wdd::z_matrix(matrix)),
             Balance::Frustrated => Self::Signed(Wdd::of(matrix)),

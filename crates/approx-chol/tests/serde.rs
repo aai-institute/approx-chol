@@ -393,7 +393,7 @@ fn a_lone_vertex_at_u64_max_for_two_is_corrupt() {
     serde_json::from_value::<BlockFactor>(v).expect_err("one vertex for two is corrupt");
 }
 
-/// A grounded factor pins its ground, the last slot; any other pin is corrupt.
+/// A grounded dense factor pins its ground, the last slot; any other pin is corrupt (an approximate one's pin is also the one slot its steps never pivot).
 #[rstest]
 #[case::the_ground(3, true)]
 #[case::a_vertex(0, false)]
@@ -423,17 +423,22 @@ fn empty_scales_are_corrupt() {
     serde_json::from_value::<Factor>(v).expect_err("empty scales are corrupt");
 }
 
-/// A forged u64 step length past the stored neighbors is a decode error, never an overflow.
-#[test]
-fn an_approximate_step_length_past_its_neighbors_is_corrupt() {
+/// A forged u64 step length past the stored neighbors is a decode error, never an overflow; the same block with the true length decodes.
+#[rstest]
+#[case::past_its_neighbors(u64::MAX, false)]
+#[case::its_own(1, true)]
+fn an_approximate_step_length_decodes_only_within_its_neighbors(
+    #[case] len: u64,
+    #[case] decodes: bool,
+) {
     let mut bytes = Vec::new();
     varint(u64::from(approx_chol::FACTOR_FORMAT_VERSION), &mut bytes);
     bytes.push(1); // Storage::U64
     bytes.extend([4, 0, 1, 2, 3, 0, 1]); // vertices, Identity, projected
     bytes.push(0); // no elimination
-    bytes.extend([0, 0, 4, 0, 1]); // One, floating, n = 4, pinned 0, Approximate
+    bytes.extend([0, 0, 1]); // Floating, pinned 0, Approximate
     bytes.push(3);
-    for (vertex, len) in [(3, 1), (2, u64::MAX), (1, 1)] {
+    for (vertex, len) in [(3, 1), (2, len), (1, 1)] {
         varint(vertex, &mut bytes);
         varint(len, &mut bytes);
         bytes.extend(1.0f64.to_le_bytes());
@@ -441,7 +446,7 @@ fn an_approximate_step_length_past_its_neighbors_is_corrupt() {
     bytes.extend([3, 2, 1, 0, 3]);
     (0..3).for_each(|_| bytes.extend(1.0f64.to_le_bytes()));
     bytes.push(0); // no report
-    postcard::from_bytes::<BlockFactor>(&bytes).expect_err("a step past its neighbors is corrupt");
+    assert_eq!(postcard::from_bytes::<BlockFactor>(&bytes).is_ok(), decodes);
 }
 
 /// An isolated vertex's inverse pivot, `0.5` here, scaled outside what a stored pivot inverts to is corrupt.
