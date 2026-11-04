@@ -3,16 +3,18 @@
 mod csr;
 #[cfg(any(feature = "sprs", feature = "faer"))]
 mod interop;
+mod repr;
 mod width2;
 
 use num_traits::PrimInt;
 
 pub(crate) use csr::Canonical;
 pub use csr::{CsrError, CsrRef, IndexKind, OwnedCsr, UpperCsrRef};
+pub(crate) use repr::gram::{Column, Gram, Layout, Values};
+pub(crate) use repr::{Repr, Stored};
 pub use width2::bipartite::{BipartiteFactorWidth2, FactorWidth1, Side};
 pub use width2::error::ViewError;
 pub use width2::laplacian::{Laplacian, Sddm};
-pub(crate) use width2::Column;
 pub use width2::FactorWidth2;
 
 use crate::storage::Real;
@@ -41,32 +43,25 @@ pub enum Input<'a, T, I = u32> {
 }
 
 impl<'a, T: Real, J: PrimInt> Input<'a, T, J> {
-    /// The one of three forms the core reads this input as.
-    pub(crate) fn lower(self) -> Lowered<'a, T, J> {
+    /// The form the core reads this input in.
+    pub(crate) fn repr(self) -> Repr<'a, T, J> {
         match self {
-            Self::Csr(csr) => Lowered::Csr(csr),
-            Self::UpperCsr(csr) => Lowered::UpperCsr(csr.lower()),
-            Self::Laplacian(laplacian) => Lowered::FactorWidth2(laplacian.lower()),
-            Self::Sddm(sddm) => Lowered::FactorWidth2(sddm.lower()),
-            Self::FactorWidth2(v) => Lowered::FactorWidth2(v),
-            Self::BipartiteFactorWidth2(v) => Lowered::FactorWidth2(v.lower()),
+            Self::Csr(csr) => Repr::Csr(csr, Stored::Whole),
+            Self::UpperCsr(csr) => csr.repr(),
+            Self::Laplacian(laplacian) => Repr::Gram(laplacian.gram()),
+            Self::Sddm(sddm) => Repr::Gram(sddm.gram()),
+            Self::FactorWidth2(v) => Repr::Gram(v.gram()),
+            Self::BipartiteFactorWidth2(v) => Repr::Gram(v.gram()),
         }
     }
 
     /// Dimension of `A`.
     pub(crate) fn n(&self) -> usize {
-        match self.lower() {
-            Lowered::Csr(csr) | Lowered::UpperCsr(csr) => csr.n(),
-            Lowered::FactorWidth2(v) => v.n(),
+        match self.repr() {
+            Repr::Csr(csr, _) => csr.n(),
+            Repr::Gram(v) => v.n(),
         }
     }
-}
-
-/// An [`Input`] as the core reads it: a CSR matrix stored whole or by its upper triangle, or `V W Vᵀ`.
-pub(crate) enum Lowered<'a, T, I> {
-    Csr(CsrRef<'a, T, I>),
-    UpperCsr(CsrRef<'a, T, I>),
-    FactorWidth2(FactorWidth2<'a, T, I>),
 }
 
 macro_rules! input_from {
