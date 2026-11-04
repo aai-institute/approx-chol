@@ -8,6 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Every failure reported, not only the first (`.config/nextest.toml`).
+  NEXTEST_PROFILE: ci
   # Both free-threaded jobs build this one interpreter; `publish.yml` has its own copy.
   FREETHREADED_PYTHON: "3.14t"
 
@@ -45,7 +47,9 @@ jobs:
           done
       # Coverage tests only --all-features, which hides breakage with features off.
       - name: cargo test (default features)
-        run: pixi run -e ci cargo test --workspace --locked
+        run: |
+          pixi run -e ci cargo nextest run --workspace --locked
+          pixi run -e ci cargo test --doc --workspace --locked
       - name: coverage (cargo test + pytest, instrumented)
         run: pixi run -e ci coverage
       - name: stubtest (python/approx_chol/__init__.pyi against the built module)
@@ -116,7 +120,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
       - name: cargo test
-        run: pixi run -e platform cargo test --workspace --all-features --locked
+        run: pixi run -e platform test-rust
       - name: pytest
         run: pixi run -e platform test
 

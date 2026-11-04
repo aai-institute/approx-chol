@@ -17,6 +17,10 @@ categories = ["mathematics", "science", "algorithms"]
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
+# Tests ran 5x faster for 3.5x a clean build, an incremental rebuild no slower; debug assertions stay on.
+[profile.dev]
+opt-level = 1
+
 [profile.release]
 opt-level = 3
 lto = "fat"

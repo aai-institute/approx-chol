@@ -19,7 +19,7 @@ AC(k) was introduced and analyzed by Gao, Kyng, and Spielman (2025), "AC(k): Rob
 pixi install
 pixi run develop
 cargo check --workspace
-cargo test --workspace --all-features
+pixi run test-rust
 pixi run test
 # on demand, on nightly, from crates/approx-chol/fuzz
 cargo +nightly fuzz run factor_from_bytes
