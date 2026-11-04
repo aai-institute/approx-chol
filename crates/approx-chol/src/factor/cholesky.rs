@@ -1,7 +1,6 @@
 mod approximate;
 mod block_elimination;
 mod dense;
-mod wdd;
 
 use rand::rngs::Xoshiro256PlusPlus;
 use rand::SeedableRng;
@@ -10,6 +9,7 @@ use super::clique_tree::Multi;
 use super::config::{Config, InnerParallelism};
 use super::schur::BipartiteBlock;
 use super::sddm::{descend, first_copy, lift, Sddm};
+use super::wdd::AnyWdd;
 use crate::sgdd::Null;
 use crate::storage::{
     compensated_sum, narrow, widen, Adjacency, Balance, Bipartite, Gauge, Grounded, Index,
@@ -17,7 +17,6 @@ use crate::storage::{
 };
 use approximate::{ApproximateCholesky, CliqueTreeElimination};
 pub(super) use block_elimination::BlockElimination;
-pub(super) use wdd::AnyWdd;
 
 /// Whether `u32` indexes every slot of `n` vertices on the widest route, a cover's two sheets and its ground; the reduction is made before the route is known.
 pub(crate) fn fits_u32(n: usize) -> bool {
@@ -101,7 +100,6 @@ impl<T: Real, I: Index> Factorization<T, I> {
         reused: &mut Workspace<T, I>,
     ) -> Self {
         let streams = Streams::of(key, config);
-        let sheets = balance.sheets();
         let draws = streams.cholesky();
         match adjacency {
             OffDiagonal::General(adjacency) => {
@@ -113,7 +111,9 @@ impl<T: Real, I: Index> Factorization<T, I> {
                         },
                         balance,
                     )),
-                    false => Arm::Approximate(Sddm::of_block(adjacency, sheets, grounding)),
+                    false => {
+                        Arm::Approximate(Sddm::of_block(adjacency, balance.sheets(), grounding))
+                    }
                 };
                 Self {
                     elimination: None,
@@ -244,7 +244,7 @@ pub(super) struct Cholesky<T, I> {
 }
 
 impl<T: Real, I: Index> Cholesky<T, I> {
-    /// Dense on the exact arm, else approximate; `gauge` on its vertices.
+    /// Dense on the dense arm, else approximate; `gauge` on its vertices.
     pub(super) fn factor(
         arm: Arm<T, I>,
         draws: Xoshiro256PlusPlus,
@@ -256,11 +256,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
                 let (grounded, n) = (!wdd.floats(), wdd.n());
                 // A definite `M`'s surplus is the ground's slot, pinned so the solve is `M`'s own.
                 let pin = pinned(Sheets::One, grounded, n, gauge);
-                let dense = &mut reused.dense;
-                let factor = match &wdd {
-                    AnyWdd::Unsigned(wdd) => dense::factor(wdd, pin, dense),
-                    AnyWdd::Signed(wdd) => dense::factor(wdd, pin, dense),
-                };
+                let factor = dense::factor(&wdd, pin, &mut reused.dense);
                 (
                     Sheets::One,
                     grounded,

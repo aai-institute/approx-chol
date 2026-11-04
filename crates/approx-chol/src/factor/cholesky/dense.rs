@@ -1,11 +1,22 @@
 //! Exact Cholesky of a small `M` by GTH elimination: every pivot a sum of nonnegative terms, so none cancels or fails.
 
-use super::wdd::{Sign, Wdd};
 use super::within_one;
+use crate::factor::wdd::{AnyWdd, Sign, Wdd};
 use crate::storage::{Index, Real};
 
 /// GTH on the packed lower `M`, the surplus as a last row `−s`, pinned slot last and dropped (`d − Σl²` reached 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more time); returns unit lower `L` with `D⁻¹` on its diagonal.
-pub(super) fn factor<T: Real, I: Index, S: Sign>(
+pub(super) fn factor<T: Real, I: Index>(
+    wdd: &AnyWdd<T, I>,
+    pin: usize,
+    values: &mut Vec<T>,
+) -> Vec<T> {
+    match wdd {
+        AnyWdd::Unsigned(wdd) => factor_as(wdd, pin, values),
+        AnyWdd::Signed(wdd) => factor_as(wdd, pin, values),
+    }
+}
+
+fn factor_as<T: Real, I: Index, S: Sign>(
     wdd: &Wdd<T, I, S>,
     pin: usize,
     values: &mut Vec<T>,

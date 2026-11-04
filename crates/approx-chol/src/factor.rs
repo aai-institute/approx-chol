@@ -5,6 +5,7 @@ mod clique_tree;
 mod config;
 mod schur;
 mod sddm;
+mod wdd;
 #[cfg(feature = "serde")]
 mod wire;
 

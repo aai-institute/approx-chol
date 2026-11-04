@@ -2,12 +2,13 @@
 
 use rayon::prelude::*;
 
-use super::cholesky::{AnyWdd, Arm, BlockElimination, Streams, MULTIPLY_ADD_GRAIN_BITS};
+use super::cholesky::{Arm, BlockElimination, Streams, MULTIPLY_ADD_GRAIN_BITS};
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::{Config, SchurMode};
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows};
+use super::wdd::AnyWdd;
 use crate::per_task;
-use crate::storage::{narrow, widen, Balance, Grounded, Grounding, Index, Real, Rows, Sheets};
+use crate::storage::{narrow, widen, Balance, Grounding, Index, Real, Rows, Sheets};
 
 /// How one block's Schur complement is formed, resolved from [`Config`] and its kept side.
 enum Formation {
@@ -95,12 +96,8 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
 
     /// `S` itself, its exact rows folded off the sheets.
     fn dense(&self, inv_pivot: &[T], kept: Option<&[T]>) -> AnyWdd<T, I> {
-        let (adjacency, grounding) = self.exact(inv_pivot).fold(self.balance.sheets(), kept);
         AnyWdd::new(
-            Grounded {
-                adjacency,
-                grounding,
-            },
+            self.exact(inv_pivot).fold(self.balance.sheets(), kept),
             self.balance,
         )
     }

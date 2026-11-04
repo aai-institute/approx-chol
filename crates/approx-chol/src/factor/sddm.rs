@@ -4,7 +4,7 @@ use rayon::prelude::*;
 
 use crate::sgdd::Singularity;
 use crate::storage::{
-    lane_sum, narrow, widen, Adjacency, Grounding, Index, Real, Rows, Sheets, WddCsr,
+    lane_sum, narrow, widen, Adjacency, Grounded, Grounding, Index, Real, Rows, Sheets, WddCsr,
 };
 
 /// `L + diag(s)`, `L`'s off-diagonal nonpositive; a twisted cover's `k⁺—k⁻` edges live in its closure, not its rows.
@@ -230,7 +230,7 @@ impl<T: Real, I: Index> SddmRows<T, I> {
     }
 
     /// The signed rows the sheets cover, `k⁻`'s mirrors skipped: `j⁺, j⁻` sum `P, N` into `N − P`, and `kept` plus the ground gains `2 min(P, N)` on both rows, as `P + N − |N − P|` would by cancellation.
-    pub(super) fn fold(self, sheets: Sheets, kept: Option<&[T]>) -> (WddCsr<T, I>, Grounding<T>) {
+    pub(super) fn fold(self, sheets: Sheets, kept: Option<&[T]>) -> Grounded<T, WddCsr<T, I>> {
         let count = sheets.count();
         let n = (self.sums.len() - 1) / count;
         if let Some(s) = kept {
@@ -264,7 +264,10 @@ impl<T: Real, I: Index> SddmRows<T, I> {
             ptrs.push(indices.len());
         }
         let rows = Rows::new(ptrs, indices, values, n);
-        (WddCsr::new(rows), Grounding::of(surplus))
+        Grounded {
+            adjacency: WddCsr::new(rows),
+            grounding: Grounding::of(surplus),
+        }
     }
 }
 
