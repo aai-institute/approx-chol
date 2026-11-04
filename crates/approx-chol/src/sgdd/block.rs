@@ -2,7 +2,7 @@
 
 use super::congruence::{Congruence, Restriction, ScaledFactors, Selection};
 use super::diagonal_in_range;
-use super::scaling::ScalingReport;
+use super::scaling::{ScalingReport, RATIO_BAND};
 use crate::storage::{OffDiagonal, Rows};
 use crate::{Index, Real};
 
@@ -65,6 +65,23 @@ impl<T: Real> Grounding<T> {
             true => Self(None),
             false => Self(Some(surplus.into())),
         }
+    }
+
+    /// A derived surplus with each entry below the range floor (#163) set to zero while within its row's rounding, `RATIO_BAND ε d_i`; past it, `Err` names the row of a real ground out of range.
+    pub(crate) fn flushed(self, diagonal: &[T]) -> Result<Self, usize> {
+        let Some(mut surplus) = self.0 else {
+            return Ok(self);
+        };
+        let band = RATIO_BAND * crate::widen(T::epsilon());
+        for (i, (s, &d)) in surplus.iter_mut().zip(diagonal).enumerate() {
+            if !crate::in_range(*s) {
+                if crate::widen(*s) > band * crate::widen(d) {
+                    return Err(i);
+                }
+                *s = T::zero();
+            }
+        }
+        Ok(Self::of(surplus.into_vec()))
     }
 
     pub(crate) fn ungrounded() -> Self {

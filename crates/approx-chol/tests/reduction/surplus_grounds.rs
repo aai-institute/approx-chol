@@ -6,7 +6,9 @@ use super::lcg::Lcg;
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm,
 };
-use approx_chol::{factorize, factorize_with, Config, Factor, Real, ScalingPolicy};
+use approx_chol::{
+    factorize, factorize_with, Config, Error, Factor, Real, ReduceError, ScalingPolicy,
+};
 use rstest::rstest;
 
 fn grounded<T: Real>(factor: &Factor<T>) -> bool {
@@ -151,6 +153,64 @@ fn frustrated_star_whose_surplus_rounds_to_zero_solves_its_matrix() {
     let exact: Vec<f64> = (0..a.len()).map(|i| (i % 5) as f64 - 2.0).collect();
     let backward = backward_error(&a, &apply(&a, &exact));
     assert!(backward <= 16.0 * f64::EPSILON, "{backward:e}");
+}
+
+/// `MIN_POSITIVE/ε`, the range floor every input entry clears.
+const FLOOR: f64 = f64::MIN_POSITIVE / f64::EPSILON;
+
+/// Triangle with edges `sign·a` and diagonal `2a` raised by `ulps`.
+fn triangle(a: f64, sign: f64, ulps: u64) -> Vec<Vec<f64>> {
+    let d = f64::from_bits((2.0 * a).to_bits() + ulps);
+    let entry = |i: usize, j: usize| if i == j { d } else { sign * a };
+    (0..3)
+        .map(|i| (0..3).map(|j| entry(i, j)).collect())
+        .collect()
+}
+
+/// `rows` times the range floor.
+fn at_floor(rows: &[&[f64]]) -> Vec<Vec<f64>> {
+    (rows.iter())
+        .map(|row| row.iter().map(|&a| a * FLOOR).collect())
+        .collect()
+}
+
+fn reduce_error(a: &[Vec<f64>]) -> Error {
+    let (ptrs, columns, values) = dense_csr(a);
+    let csr = CsrRef::new(&ptrs, &columns, &values, a.len() as u32).unwrap();
+    factorize(csr).map(|_: Factor| ()).unwrap_err()
+}
+
+/// At `a = 2⁻⁹⁶⁴` a one-ulp surplus is rounding below the range floor.
+#[rstest]
+fn frustrated_triangle_whose_rounding_surplus_is_below_the_range_floor_solves(
+    #[values(1.0, 2f64.powi(-964))] a: f64,
+) {
+    let backward = backward_error(&triangle(a, 1.0, 1), &[1.0, -1.0, 2.0]);
+    assert!(backward <= 16.0 * f64::EPSILON, "{backward:e}");
+}
+
+/// Row 0's one-ulp surplus is rounding below the floor; row 1's ground of `FLOOR` grounds the block.
+#[test]
+fn balanced_block_drops_a_rounding_ground_below_the_range_floor_beside_a_real_one() {
+    let mut a = at_floor(&[&[1.0, -1.0], &[-1.0, 2.0]]);
+    a[0][0] = f64::from_bits(a[0][0].to_bits() + 1);
+    let backward = backward_error(&a, &[1.0, -1.0]);
+    assert!(backward <= 16.0 * f64::EPSILON, "{backward:e}");
+}
+
+/// A real ground below the range floor is out of range at its row, whether or not other grounds remain.
+#[rstest]
+#[case::frustrated(at_floor(&[&[2.0, 1.0, 1.0], &[1.0, 2.9, 1.0], &[1.0, 1.0, 2.0]]), 1)]
+#[case::balanced_beside_a_real_ground(at_floor(&[&[1.5, -1.0], &[-1.0, 2.0]]), 0)]
+#[case::balanced_alone(triangle(2f64.powi(-964), -1.0, 1 << 20), 0)]
+fn a_real_ground_below_the_range_floor_is_out_of_range(
+    #[case] a: Vec<Vec<f64>>,
+    #[case] vertex: usize,
+) {
+    assert_eq!(
+        reduce_error(&a),
+        Error::Reduce(ReduceError::OutOfRange { vertex })
+    );
 }
 
 /// Path `0 —r²— 1 —1— 2`, vertex 2 grounded by `1` = its coupling: `x = [2, 2, 1]`.

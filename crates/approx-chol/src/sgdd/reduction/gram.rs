@@ -94,7 +94,7 @@ impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_,
     }
 
     // Every rounded surplus ≤ 0 leaves nothing to ground: out of band, only past degree ~2·10⁸ (#299).
-    fn grounds(&self, m: &Congruent<T, I>, _: super::RowSums<T>) -> Grounding<T> {
+    fn grounds(&self, m: &Congruent<T, I>, _: &[T], _: Vec<T>) -> Grounding<T> {
         Grounding::of(
             (m.vertices().iter())
                 .map(|v| narrow(self.surplus[v].max(0.0)))
