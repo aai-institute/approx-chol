@@ -9,6 +9,11 @@ use crate::storage::{compensated_sum, narrow, widen, Gauge, Index, Real, Sheets}
 use approximate::{ApproximateCholesky, CliqueTreeElimination};
 pub(super) use dense::Signed;
 
+/// Whether `u32` indexes every slot of `n` vertices on the widest route, a cover's two sheets and its ground; the reduction is made before the route is known.
+pub(crate) fn fits_u32(n: usize) -> bool {
+    u32::try_from(n.saturating_mul(Sheets::Two.count()).saturating_add(1)).is_ok()
+}
+
 /// A task's buffers, reused across its blocks by either arm.
 pub(crate) struct Workspace<T, I> {
     elimination: CliqueTreeElimination<T, I>,

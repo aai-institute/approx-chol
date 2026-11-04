@@ -11,7 +11,7 @@ pub trait Real: Float + TotalOrder + Debug + Send + Sync + 'static + seal::Real 
 impl Real for f32 {}
 impl Real for f64 {}
 
-/// The unsigned integer a reduction and its factor store each vertex index in: `u32` while a cover's `2n + 1` slots fit it, else `u64`.
+/// The unsigned integer a reduction and its factor store each vertex index in: `u32` while Cholesky's `fits_u32`, else `u64`.
 pub(crate) trait Index: PrimInt + Unsigned + Send + Sync + 'static {
     /// `self` as `usize`, so `x[v.index()]` reads vertex `v` of any `x` over `A`'s vertices.
     fn index(self) -> usize;
