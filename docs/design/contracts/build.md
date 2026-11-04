@@ -5,8 +5,9 @@ How a caller turns an admissible matrix into the approximate inverse $B$. The re
 
 ## Decision
 
-- **Arguments:** an `Input`; a configuration (fill-in level, seed, scaling tolerance and step
-  limit, largest component factored exactly, how a Schur complement is formed), valid by
+- **Arguments:** an `Input`; a configuration (clique sample rule and fill-in level, seed,
+  scaling tolerance and step limit, largest component factored exactly, how a frustrated component
+  is factored, how a Schur complement is formed), valid by
   construction, each setting defaulted, serializable behind the `serde` feature; a thread budget
   (a nonzero count or all cores), all cores in the Rust one-call functions and by default in
   Python, named at the two-stage level.

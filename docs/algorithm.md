@@ -13,12 +13,12 @@ factorization equals the matrix in expectation.
 The input class is wider than Laplacians: symmetric GDD matrices, with entries of either sign, not
 necessarily dominant as given, and possibly singular. The algorithm therefore has three stages:
 
-1. **Reduce** each component of $A$ to a Laplacian: scale it to be diagonally dominant, make its
-   off-diagonal entries nonpositive by switching signs or by doubling it, and turn its surplus into
-   edges to a ground vertex.
-2. **Factor** that Laplacian by approximate Cholesky.
-3. **Solve** by mapping $b$ into the Laplacian's coordinates, applying the factorization, and
-   mapping the result back.
+1. **Reduce** each component of $A$ to a WDD matrix: scale it to be diagonally dominant and, if
+   it is balanced, switch its off-diagonal entries to be nonpositive.
+2. **Factor** it by approximate Cholesky: a balanced one as a Laplacian with its surplus on a
+   ground vertex; a frustrated one, as configured, on its Gremban cover or by signed elimination.
+3. **Solve** by mapping $b$ into the factored matrix's coordinates, applying the factorization,
+   and mapping the result back.
 
 Stage 1 changes $A$ only by the clamp $E$ and the dropped surplus $E'$, both at rounding level for
 a GDD input whose scaling settles; it is exact for the target matrix $A_r = A + E + E'$. All randomness sits in stage 2:
@@ -40,10 +40,12 @@ build(A, k, seed):
                 z ← DS·1
         else:
             S ← I
-            Ã ← Gremban cover of Ā                        -- SDDM, size 2|C|
-        if bipartite: eliminate F exactly; Ã ← H̃           -- step 7
-        L ← Ã with ground vertex g, if Ã has a positive surplus; else Ã    -- step 5
-        (Π, 𝓛, 𝓓) ← approximate_cholesky(L, k, seed)       -- step 6
+            Ã ← Ā                                         -- WDD, size |C|
+        M ← Ã, or for a frustrated C on the cover route its Gremban cover   -- step 5
+        if bipartite: eliminate F exactly; M ← its Schur complement         -- step 8
+        L ← M with its surplus on a ground vertex g, or on a cover as
+            surplus edges, as configured                                     -- step 5, 6
+        (Π, 𝓛, 𝓓) ← approximate_cholesky(L, rule, k, seed)                  -- step 7
 
 solve(b), per component:
     b ← Qb                                                -- project onto z^⟂ if singular
@@ -141,8 +143,33 @@ A symmetric WDD matrix is SDDM iff its off-diagonal entries are nonpositive.
 - **Balanced:** if every cycle has an even number of positive entries, a signature $S$ switches
   $\bar A$ to a Z-matrix: $\tilde A = S\bar A S$. Switching is a similarity by $\pm 1$, so it keeps
   the spectrum; a solution maps back by $S$.
-- **Frustrated:** otherwise no switching works, and $\tilde A$ is the Gremban cover $\hat A$ of
-  $\bar A$, with $S = I$ (Gremban 1996).
+- **Frustrated:** otherwise no switching works; $\tilde A = \bar A$, with $S = I$, keeps its
+  positive entries. Step 5 factors it.
+
+The classification below is numerical, on the computed surpluses.
+
+- **Balanced, numerically floating:** the surpluses of $\tilde A$ are at rounding level, and the
+  component is treated as floating: they are set to $0$, the dropped surplus $E'$. A surplus inside
+  the band cannot be told apart from rounding, and keeping it would give $B$ an eigenvalue of order
+  $1/\text{surplus}$ that rounding alone decided. $\tilde A$ is then a Laplacian,
+  $\tilde A \mathbf{1} = 0$, and $z = DS\mathbf{1}$ spans the kernel of $A_r$.
+- **Frustrated:** $A + E$ is nonsingular whatever its surplus, its smallest eigenvalue set by the
+  frustration; a rounding-level surplus is kept, as no $1/\text{surplus}$ eigenvalue reaches $B$.
+- **Otherwise grounded:** $\tilde A$ has a positive surplus.
+
+**Sources**
+
+- Balance: Harary. "On the notion of balance of a signed graph." *Michigan Math. J.* 2(2), 1953,
+  pp. 143–146. His signed graph has edge signs $-\operatorname{sgn} a_{ij}$, so his even number of
+  negative edges is our even number of positive entries.
+- Switching: Zaslavsky. "Signed graphs." *Discrete Appl. Math.* 4, 1982, pp. 47–74, §3,
+  Prop. 3.2; erratum 5, 1983, p. 248.
+
+### 5. Factoring a frustrated component
+
+Approximate Cholesky samples cliques of nonnegative weights. A frustrated $\tilde A$ has entries of
+both signs, so it is factored on its Gremban cover, a Z-matrix of twice the size, or by signed
+elimination, on $\tilde A$ itself. The configuration chooses; both target the same $A_r$.
 
 **Gremban cover.** Split $\bar A = \bar\Delta + \bar N + \bar P$ into its diagonal, its negative
 off-diagonal entries and its positive ones, and set
@@ -169,41 +196,54 @@ entry ties $i^+$ to $j^-$, so following a cycle with an odd number of positive e
 $i^+$ to $i^-$: the cover of a frustrated component is connected. On a balanced component it would
 fall apart into two copies of $S\bar A S$, which is why switching, at half the size, is used there.
 
-The classification below is numerical, on the computed surpluses.
+**Where a cover puts the surplus.** $\hat A$ commutes with exchanging $i^+$ and $i^-$, so it splits
+into two invariant parts: on $\begin{pmatrix} x \\ -x \end{pmatrix}$ it acts as $\bar A$, on
+$\begin{pmatrix} z \\ z \end{pmatrix}$ as $\bar\Delta + \bar N - \bar P$, the unsigned matrix with
+$\bar A$'s surpluses. A right-hand side $\begin{pmatrix} b \\ -b \end{pmatrix}$ lies in the first.
 
-- **Balanced, numerically floating:** the surpluses of $\tilde A$ are at rounding level, and the
-  component is treated as floating: they are set to $0$, the dropped surplus $E'$. A surplus inside
-  the band cannot be told apart from rounding, and keeping it would give $B$ an eigenvalue of order
-  $1/\text{surplus}$ that rounding alone decided. $\tilde A$ is then a Laplacian,
-  $\tilde A \mathbf{1} = 0$, and $z = DS\mathbf{1}$ spans the kernel of $A_r$.
-- **Frustrated, no positive surplus:** treated as floating. The cover is a Laplacian,
-  $\hat A \begin{pmatrix} \mathbf{1} \\ \mathbf{1} \end{pmatrix} = 0$, while $A + E$ stays
-  nonsingular: the half-difference cancels the cover's null direction. For the same reason a
-  frustrated component keeps a rounding-level surplus: no $1/\text{surplus}$ eigenvalue reaches $B$.
-- **Otherwise grounded:** $\tilde A$ has a positive surplus.
+- **Ground vertex** (step 6): $\hat A$'s surpluses on edges to $g$, a Laplacian of size $2n + 1$.
+  The unsigned part has smallest eigenvalue at most the mean surplus, an eigenvalue of the cover
+  that $\bar A$ does not have; when the surplus is near rounding, its errors can swamp the solve.
+- **Surplus edges:** each $s_i$ on an edge $\{i^+, i^-\}$ of weight $s_i/2$, a Laplacian of size
+  $2n$. On $\begin{pmatrix} x \\ -x \end{pmatrix}$ the edge acts as the surplus $s_i$; on
+  $\begin{pmatrix} z \\ z \end{pmatrix}$ it vanishes, so the unsigned part is a Laplacian whose
+  only null vector, $\mathbf{1}$, no lifted right-hand side reaches. The edges join two real
+  vertices, so they add fill where a ground vertex, pinned last, adds little.
+- **Auto:** surplus edges when the total surplus is within the rounding band of the trace, a ground
+  vertex otherwise. Where between the two the threshold belongs is open (#347).
+
+**Signed elimination.** $\tilde A$ is factored as it is, of size $n$, with signed entries
+(`glossary.md`, Elimination): each elimination keeps it WDD, the cancellation of entries of
+opposite sign turning into surplus, so it has a ground vertex $g$ even without an input surplus,
+which is pinned. $\tilde A$ is nonsingular, so every pivot but $g$'s is positive.
 
 **Sources**
 
-- Balance: Harary. "On the notion of balance of a signed graph." *Michigan Math. J.* 2(2), 1953,
-  pp. 143–146. His signed graph has edge signs $-\operatorname{sgn} a_{ij}$, so his even number of
-  negative edges is our even number of positive entries.
-- Switching (§3, Prop. 3.2) and the signed covering graph, the Gremban cover's graph, connected iff
-  the graph is unbalanced (§6):
-  Zaslavsky. "Signed graphs." *Discrete Appl. Math.* 4, 1982, pp. 47–74; erratum 5, 1983, p. 248.
 - Gremban cover, his expanded matrix, and $\hat A(u, -u) = (\bar A u, -\bar A u)$: Gremban.
   *Combinatorial preconditioners for sparse, symmetric, diagonally dominant linear systems.* PhD
   thesis, CMU-CS-96-123, 1996, §7.1, Def. 7.2 and Lemma 7.3.
+- The cover's graph, connected iff the graph is unbalanced: Zaslavsky (1982), as in step 4, §6.
+- Surplus edges, a one-step reduction of size $2n$ preserving approximate solutions: Kelner,
+  Orecchia, Sidford, Zhu. "A simple, combinatorial algorithm for solving SDD systems in
+  nearly-linear time." *STOC*, 2013. arXiv:1301.6628, App. A.
+- The two invariant parts: Diaz-Diaz, Devriendt, Lambiotte. "Gremban expansion for signed
+  networks." arXiv:2509.14193, 2025.
+- Elimination directly on signed SDD matrices: Boman, Chen, Hendrickson, Toledo.
+  "Maximum-weight-basis preconditioners." *Numer. Linear Algebra Appl.* 11, 2004, pp. 695–721;
+  for connection Laplacians, of which a signed graph is the case $\pm 1$: Kyng, Lee, Peng,
+  Sachdeva, Spielman. "Sparsified Cholesky and multigrid solvers for connection Laplacians."
+  *STOC*, 2016. arXiv:1512.01892.
 
-### 5. Augmentation
+### 6. Augmentation
 
 An SDDM matrix is a Laplacian with one vertex deleted: the ground vertex $g$, with an edge
-$\{i, g\}$ of weight $s_i$ for every positive surplus. A grounded $\tilde A$, balanced or a cover,
-gets $g$ back, so every matrix factored is a connected Laplacian $L$, and one algorithm serves all
-cases.
+$\{i, g\}$ of weight $s_i$ for every positive surplus. A grounded $\tilde A$, balanced or a cover
+with a ground vertex, gets $g$ back, so the matrix factored is a connected Laplacian $L$; signed
+elimination keeps $g$ beside a WDD matrix instead, pinned.
 
-**Source:** Gremban (1996), as in step 4, §4.2, Def. 4.1 and Lemma 4.2.
+**Source:** Gremban (1996), as in step 5, §4.2, Def. 4.1 and Lemma 4.2.
 
-### 6. Approximate Cholesky
+### 7. Approximate Cholesky
 
 Exact elimination of a pivot $v$ with star weights $w_{vi}$ and $\omega_v = \sum_i w_{vi}$ removes
 its star and adds the clique on its neighbors, with weights
@@ -215,19 +255,21 @@ $$
 Approximate Cholesky adds a clique sample instead.
 
 ```
-approximate_cholesky(L, k, seed):
+approximate_cholesky(L, rule, k, seed):
     while more than one vertex remains:
-        v ← a vertex with the fewest edge copies
-        𝓓_vv ← ω_v;  column v of 𝓛 ← eᵥ − (w_{vi} / ω_v)ᵢ
+        v ← a vertex with the fewest edge copies, g last under signed elimination
+        𝓓_vv ← a_vv;  column v of 𝓛 ← eᵥ + (a_{vi} / a_vv)ᵢ
         remove the star of v
-        add a clique sample on the neighbors of v
+        add a clique sample on the neighbors of v, by rule with fill-in level k
     the last vertex gets 𝓓 = 0
 ```
 
 - **Order:** the next pivot is a vertex with the fewest incident edge copies in the current graph,
   so cliques stay small. The order is dynamic, recomputed after each elimination; $g$ takes part
   like any vertex.
-- **Clique sample** (Gao, Kyng, Spielman, §4.3): every edge is split into $k$ parallel copies,
+- **Rule:** a clique tree or a Schur tree (`glossary.md`). Both keep the clique's expectation;
+  the clique tree is the default, and the Schur tree is opt-in.
+- **Clique tree** (Gao, Kyng, Spielman, §4.3): every edge is split into $k$ parallel copies,
   $k$ the fill-in level. When $v$ is eliminated, the copies of each edge $\{v, i\}$ are regrouped
   into $c_i = \min(\text{count}, k)$ copies of weight $w_{vi}/c_i$, $w_{vi}$ their total weight (GKS's
   merge cap $l$, set to $k$). The neighbors are put in ascending order of the per-copy weight $w_{vi}/c_i$; GKS order
@@ -242,6 +284,16 @@ approximate_cholesky(L, k, seed):
   The expected weight of $\{i, j\}$ is then the clique's $w_{vi} w_{vj} / \omega_v$, and the sample
   is connected, since every neighbor but the last joins a later one. With $k = 1$ it is a random
   spanning tree of the clique; larger $k$ adds edges and lowers the variance.
+- **Schur tree:** one spanning tree of the clique, drawn by a weighted Prüfer code, each neighbor
+  chosen with probability $w_{vi}/\omega_v$; edge $\{i, j\}$ is present with probability
+  $(w_{vi} + w_{vj})/\omega_v$ and carries $w_{vi} w_{vj}/(w_{vi} + w_{vj})$, so its expected weight
+  is the clique's. With a split $k$, each neighbor becomes $k$ copies of weight $w_{vi}/k$ for this
+  draw, and the tree is contracted back; no copy persists.
+- **Signed entries:** under signed elimination both rules draw on the magnitudes $w_{vi} = |a_{vi}|$,
+  and each sampled edge takes the sign of the exact entry it stands for. A star is a tree, hence
+  balanced, so a switching local to the star makes it a Z-matrix's star; the sample keeps the
+  clique's expectation, positive semidefiniteness and null vector. Merging with an entry of the
+  other sign cancels into surplus at both ends.
 - **Expectation:** given the eliminations so far and the chosen pivot, the sample's expected
   Laplacian is the clique's. The errors therefore have conditional mean zero, a martingale, and in
   original coordinates
@@ -249,24 +301,30 @@ approximate_cholesky(L, k, seed):
   since each pivot is chosen from the past (Kyng, Sachdeva prove it for a random order).
 - **Zero pivot:** $L$ is a connected Laplacian, hence singular with kernel $\operatorname{span}
   \mathbf{1}$. Connected samples keep every intermediate graph connected, so exactly one pivot value
-  is zero, the last one, and $\mathcal{D}^+$ replaces $\mathcal{D}^{-1}$.
+  is zero, the last one, and $\mathcal{D}^+$ replaces $\mathcal{D}^{-1}$. Under signed elimination
+  the last vertex is $g$; its pivot value need not be zero, as the matrix with $g$ is no Laplacian,
+  and it is set to $0$, which pins $g$.
 
 **Sources**
 
 - Approximate Cholesky: Kyng, Sachdeva. "Approximate Gaussian elimination for Laplacians – fast,
   sparse, and simple." *FOCS*, 2016, pp. 573–582. arXiv:1605.02353, §4.1 (random order).
-- Clique sample, split and merge, expectation of the factorization: Gao, Kyng, Spielman. "Robust
+- Clique tree, split and merge, expectation of the factorization: Gao, Kyng, Spielman. "Robust
   and practical solution of Laplacian equations by approximate elimination." arXiv:2303.00709,
   2023, §4.1 (Claim 4.1), §4.3 (Alg. 6), App. B.
+- Schur tree: Baumann, Kyng, Zöcklein. "VAC: a volume-sampling-based elimination rule for
+  approximate Cholesky factorization." arXiv:2609.20241, 2026; with a split $k$: Chaitanya, Musco,
+  Gionis. "CAST: canonical approximate Schur tree for approximate Cholesky on graphs."
+  arXiv:2609.09255, 2026, Alg. 1.
 - Minimum degree, with the degree as the number of distinct neighbors: George, Liu. "The evolution
   of the minimum degree ordering algorithm." *SIAM Review* 31(1), 1989, pp. 1–19. Counting edge copies
   is approx-chol's variant.
 
-### 7. Bipartite factor-width-2 form
+### 8. Bipartite factor-width-2 form
 
-A bipartite factor-width-2 form has no edges inside $F$. Steps 2–4 apply to the whole $A$; after
+A bipartite factor-width-2 form has no edges inside $F$. Steps 2–5 apply to the whole $A$; after
 a cover, $F$ and $K$ comprise both copies of their vertices, and $F$ keeps no internal edges in
-$\tilde A$. Its pivots do not touch each other, so $F$ is eliminated exactly as
+$\tilde A$. Under signed elimination $F$ is eliminated from $\tilde A$ itself, with signed entries. Its pivots do not touch each other, so $F$ is eliminated exactly as
 one block: the diagonal $\tilde A_{FF}$ enters $\mathcal{D}$, and $\tilde A_{KF} \tilde
 A_{FF}^{-1}$ enters $\mathcal{L}$. An isolated vertex of $F$ has a zero row and drops out; every
 other vertex of $F$ has a positive diagonal.
@@ -277,11 +335,12 @@ $$
 \tilde H = \tilde A_{KK} - \tilde A_{KF}\, \tilde A_{FF}^{-1}\, \tilde A_{FK},
 $$
 
-which is SDDM, since each elimination keeps SDDM. Eliminating a vertex $f \in F$ adds the clique
+which is SDDM on a cover and WDD under signed elimination, since each elimination keeps either.
+Eliminating a vertex $f \in F$ adds the clique
 on its neighbors with weights $w_{fi} w_{fj} / a_{ff}$ and raises their surpluses (glossary,
 Elimination). These cliques can make $\tilde H$ dense, so $\tilde H$ is formed exactly, or with each
 clique replaced by a clique sample and the surplus raise kept exact. The stars are independent,
-since $F$ has no internal edges. Steps 5–6 then factor $\tilde H$.
+since $F$ has no internal edges. Steps 6–7 then factor $\tilde H$.
 
 ## Solve
 
@@ -296,8 +355,9 @@ and $Q$ the orthogonal projection onto $z^\perp$ (the identity on a nonsingular 
 1. **Project:** $b \mapsto Qb$, the nearest right-hand side meeting the range condition.
 2. **Reduce:** $b \mapsto SDb$.
 3. **Lift:** for a cover, form $\begin{pmatrix} SDb \\ -SDb \end{pmatrix}$; this is the
-   right-hand side $\tilde b$ of $\tilde A$. If grounded, append $-\mathbf{1}^\top \tilde b$ at $g$,
-   so the lifted vector sums to zero like every vector in the range of $L$.
+   right-hand side of the cover. If grounded, append $-\mathbf{1}^\top \tilde b$ at $g$, so the
+   lifted vector sums to zero like every vector in the range of $L$; under signed elimination
+   append $0$, as $g$ is pinned.
 4. **Factor solve:** apply $G$.
 5. **Descend:** if grounded, subtract $y_g$ from every entry and drop $g$, which pins $g$ at zero;
    for a cover, take $(p - q)/2$.
@@ -322,8 +382,10 @@ is invertible and $\mathcal{D}^+$ is one of $\mathcal{D}$. Then $B = A_r^+$:
 
 - **grounded, balanced:** $R^\top G R = \tilde A^{-1}$, since $\tilde A$ is $L$ with $g$ deleted,
   so $B = A_r^{-1}$;
-- **frustrated:** the ground's lift and descent turn $G$ into $\hat A^{-1}$ if grounded and into a
-  {1}-inverse $Y$ of $\hat A$ if floating. With $J = \begin{pmatrix} I \\ -I \end{pmatrix}$,
+- **frustrated, signed elimination:** $g$ is pinned, so $R^\top G R = \tilde A^{-1}$ and
+  $B = A_r^{-1}$;
+- **frustrated, cover:** the ground's lift and descent turn $G$ into $\hat A^{-1}$ if grounded and
+  into a {1}-inverse $Y$ of $\hat A$ if floating, as with surplus edges. With $J = \begin{pmatrix} I \\ -I \end{pmatrix}$,
   $\hat A J = J \bar A$, so $Jb = \hat A J \bar A^{-1} b$ lies in the range of $\hat A$, and
   $Y J b = J \bar A^{-1} b + n$ with $n \in \ker \hat A = \operatorname{span}
   \begin{pmatrix} \mathbf{1} \\ \mathbf{1} \end{pmatrix}$. Since $J^\top n = 0$,

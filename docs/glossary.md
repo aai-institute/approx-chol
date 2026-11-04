@@ -108,9 +108,9 @@ take. "(not: …)" lists synonyms we don't use.
   $a_{ij} \mapsto \sigma_i \sigma_j a_{ij}$. It keeps the spectrum.
 - **Balanced** component: some switching makes $SAS$ a Z-matrix there. Equivalently, every cycle
   has an even number of positive entries. **Frustrated:** not balanced.
-- **Gremban cover** (not: double cover, Gremban expansion, lift), for a frustrated component:
-  split $A = \Delta + N + P$ into its diagonal, its negative off-diagonal entries and its positive
-  ones.
+- **Gremban cover** (not: double cover, Gremban expansion, lift), one way Cholesky factors a
+  frustrated component: split $A = \Delta + N + P$ into its diagonal, its negative off-diagonal
+  entries and its positive ones.
 
   $$
   \hat A = \begin{pmatrix} \Delta + N & -P \\ -P & \Delta + N \end{pmatrix},
@@ -118,17 +118,21 @@ take. "(not: …)" lists synonyms we don't use.
 
   a $2n \times 2n$ Z-matrix with $A$'s surpluses, so WDD iff $A$ is. If
   $\hat A \begin{pmatrix} p \\ q \end{pmatrix} = \begin{pmatrix} b \\ -b \end{pmatrix}$, then
-  $x = (p - q)/2$ is a solution of $Ax = b$, even when $\hat A$ is singular.
+  $x = (p - q)/2$ is a solution of $Ax = b$, even when $\hat A$ is singular. Its surpluses are
+  factored either through a ground vertex or as surplus edges.
+- **Surplus edges** (not: twist), of a Gremban cover: the surplus $s_i$ placed on an edge
+  $\{i^+, i^-\}$ of weight $s_i/2$ instead of on a ground vertex, which leaves a Laplacian of size
+  $2n$ that still reads $x = (p - q)/2$ (Kelner, Orecchia, Sidford, Zhu, App. A).
+- **Signed elimination:** the other way Cholesky factors a frustrated component, on $A$ itself,
+  its positive entries kept: Elimination below with signed entries.
 - **Scaling vector** $d > 0$, $D = \operatorname{diag}(d)$. It is a **dominance scaling** (not:
   balancing, equilibration) of $A$ if $DAD$ is WDD.
 - **Reduction** of a GDD component, given a dominance scaling $D$. It is exact.
-  - Balanced, with $S$ switching $DAD$ to a Z-matrix: $\tilde A = SDADS$, of size $n$;
-    $\tilde b = SDb$, and $x = DS\tilde y$ where $\tilde A \tilde y = \tilde b$.
-  - Frustrated: $\tilde A$ is the Gremban cover of $DAD$, of size $2n$;
-    $\tilde b = \begin{pmatrix} Db \\ -Db \end{pmatrix}$, and $x = D(p - q)/2$ where
-    $\tilde A \begin{pmatrix} p \\ q \end{pmatrix} = \tilde b$.
+  - Balanced, with $S$ switching $DAD$ to a Z-matrix: $\tilde A = SDADS$;
+  - Frustrated: $\tilde A = DAD$, with $S = I$.
 
-  The **reduced matrix** $\tilde A$ is SDDM. Reduction need not preserve the orthogonal gauge; it
+  In both, $\tilde A$ has size $n$, $\tilde b = SDb$, and $x = DS\tilde y$ where
+  $\tilde A \tilde y = \tilde b$. The **reduced matrix** $\tilde A$ is WDD, SDDM when balanced. Reduction need not preserve the orthogonal gauge; it
   is imposed as $z^\top x = 0$ in $A$'s coordinates.
 - **Edge weight:** the magnitude of an off-diagonal entry of $\tilde A$, $w_{ij} = |a_{ij}|\, d_i d_j$.
 
@@ -141,8 +145,8 @@ Entries here concern one GDD component $A_C$, with $n = |C|$; apply them per com
   positive factor.
   - Balanced: $\tilde A$ is a Laplacian, so $A$ is singular, with null space spanned by the
     **null vector** $z = DS\mathbf{1}$, i.e. $z_i = \pm d_i$.
-  - Frustrated: $A$ is nonsingular. The cover of $DAD$ is singular, and the recovery
-    $x = D(p - q)/2$ cancels its null direction.
+  - Frustrated: $A$ is nonsingular. A Gremban cover of $DAD$ without a ground vertex is singular,
+    and the recovery $x = D(p - q)/2$ cancels its null direction.
 
   So a component is singular iff it is balanced and floating. An isolated vertex with $a_{ii} = 0$
   is one, with $z = e_i$.
@@ -202,8 +206,22 @@ Terms for dominance of a rounded $A$ under a computed scaling $d$.
   - if $a_{vv} = 0$, $v$ is isolated and nothing changes.
 - **Elimination order:** the permutation in which pivots are eliminated, and its permutation
   matrix $\Pi$.
+- **Signed entries:** in a frustrated $\tilde A$, eliminating $v$ adds to $\{i, j\}$ the entry
+  $-a_{vi} a_{vj} / a_{vv}$, of magnitude $w_{vi} w_{vj} / a_{vv}$ with $w_{vi} = |a_{vi}|$, negative
+  iff $a_{vi}$ and $a_{vj}$ have the same sign. Where it meets an entry of the other sign the two
+  cancel: the row's off-diagonal magnitude drops by twice the smaller, which becomes surplus at both
+  ends, so the matrix stays WDD.
 - **Clique sample:** a random weighted graph on the pivot's neighbors whose Laplacian has
   expectation equal to the clique's. It is **connected** if it is connected on those neighbors.
+  For signed entries it samples the magnitudes and gives each edge the sign of the exact entry it
+  replaces: every star is a tree, hence balanced, so switching it is a Z-matrix's star, and the
+  sample keeps the expectation, positive semidefiniteness and the clique's null vector.
+- **Clique tree** (Gao, Kyng, Spielman): the clique sample in which each neighbor joins one later
+  neighbor per copy, its copies persisting in the graph; with one copy, AC, with $k$, AC$k$.
+- **Schur tree** (Baumann, Kyng, Zöcklein: VAC; Chaitanya, Musco, Gionis: CAST): the clique sample
+  that is one spanning tree of the clique, edge $\{i, j\}$ present with probability
+  $(w_{vi} + w_{vj})/\omega_v$ and weighted $w_{vi} w_{vj}/(w_{vi} + w_{vj})$; with a split $k$,
+  each neighbor is split into $k$ copies within this pivot only.
 - **Approximate Cholesky:** elimination with each clique replaced by a clique sample, e.g. a
   spanning tree of the clique: $\deg(v) - 1$ edges instead of $\deg(v)(\deg(v) - 1)/2$. Applied to
   a Laplacian $L$, it produces $\mathcal{L}$ and $\mathcal{D}$ with

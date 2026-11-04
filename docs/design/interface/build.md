@@ -30,16 +30,48 @@ impl<T: Real> Complement<T> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Config {
     pub seed: u64,
-    pub split_merge: NonZeroU32,
+    pub sampling: Sampling,
+    pub frustrated: FrustratedRoute,
     pub exact_max_dim: usize,
     pub complement: SchurMode,
+}
+
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Sampling {
+    CliqueTree { copies: Multiplicity },
+    SchurTree { split: NonZeroU32 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Multiplicity(/* private: at least 1 */);
+impl Multiplicity {
+    pub const ONE: Multiplicity;
+    pub fn new(k: u32) -> Option<Multiplicity>;
+    pub fn get(self) -> NonZeroU32;
+}
+
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FrustratedRoute {
+    Cover(CoverSurplus),
+    Signed,
+}
+
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CoverSurplus {
+    GroundVertex,
+    SurplusEdges,
+    #[default]
+    Auto,
 }
 
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SchurMode {
     Exact,
-    Approximate { split_merge: NonZeroU32 },
+    Approximate { sampling: Sampling },
     #[default]
     Same,
 }
@@ -103,12 +135,15 @@ Everything here is at the crate root, as are `Real`, sealed, `PrimInt`, num-trai
 dyn-stack, re-exported as `approx_chol::dyn_stack`; only Submit's types live in `input`. Every error
 type implements `Error` and `Display`.
 
-`Config` and `ScalingPolicy` implement `Default`: seed 0, `split_merge` 1, `exact_max_dim` 24,
-`Same`, tolerance $10^{-9}$ and 2048 iterations; both are serializable behind the `serde` feature,
+`Config` and `ScalingPolicy` implement `Default`: seed 0, `CliqueTree` with `Multiplicity::ONE`,
+`Cover(Auto)`, `exact_max_dim` 24, `Same`, tolerance $10^{-9}$ and 2048 iterations; both are serializable behind the `serde` feature,
 and decoding validates as `new` does. `ScalingPolicy::new` accepts a finite tolerance in $[0, 1)$,
 never applied below rounding, and any iteration count. `exact_max_dim` is the largest block
 dimension factored exactly, a bipartite block's by its kept side. `complement` matters only in a
-Schur build; `Same` factors the complement as the rest, with `split_merge`.
+Schur build; `Same` forms the complement with `sampling`. `frustrated` matters only for a
+frustrated component factored approximately; `Auto` places the surplus on surplus edges when it is
+within the rounding band of the row sums, else on a ground vertex. The algorithm behind each
+setting is in `../../algorithm.md`, steps 5 and 7.
 
 - A component's `vertices` are ascending, in $B$'s numbering; `null_vector`, when present, holds
   one entry per vertex in that order, as computed, unnormalized.
@@ -151,6 +186,9 @@ class BuildError(ValueError):
 ```python
 class Config:
     def __init__(self, seed: int | None = None, split: int | None = None,
+                 sampling: Literal["clique_tree", "schur_tree"] | None = None,
+                 frustrated: Literal["cover", "cover_ground_vertex", "cover_surplus_edges",
+                                     "signed"] | None = None,
                  exact_max_dim: int | None = None) -> None: ...
 class ScalingPolicy:
     def __init__(self, tolerance: float | None = None,
@@ -158,8 +196,9 @@ class ScalingPolicy:
 ```
 
 Each argument left `None` takes the Rust default and is read back by a property of its name;
-`split` is Rust's `split_merge`, at least 1. `threads=None` is every core. A `threads`, `split` or
-tolerance out of range raises `ValueError`. Python builds `f64`. A clamp also warns with a
+`split` is the `Multiplicity` of a clique tree and the `split` of a Schur tree, at least 1;
+`"cover"` is `Cover(Auto)`. `threads=None` is every core. A `threads`, `split` or tolerance out of
+range raises `ValueError`. Python builds `f64`. A clamp also warns with a
 `RuntimeWarning`.
 
 ## Why
@@ -168,7 +207,13 @@ tolerance out of range raises `ValueError`. Python builds `f64`. A clamp also wa
   caller reads the clamps and can stop there; the budget lives at this level only.
 - **`ScalingPolicy` apart from `Config`:** the first configures Reduction, the second Cholesky;
   each stage takes only its own.
-- **`split_merge: NonZeroU32`:** one value per fill-in level, 1 being standard AC.
+- **`Sampling` an enum, its copies in each variant:** a clique tree's copies persist in the graph
+  and cap later merges; a Schur tree splits each neighbor only within one pivot. The two numbers
+  mean different things, so no configuration pairs a Schur tree with persistent copies.
+  `Multiplicity::ONE` is standard AC, one value where `Option<u32>` had three.
+- **`FrustratedRoute` and `CoverSurplus` in the configuration:** both routes and both surplus
+  encodings target the same $A_r$ (`../../algorithm.md`); they differ in fill and robustness, so
+  the caller chooses. The defaults reproduce the current factorization.
 - **`Component::clamp` beside `clamps`:** each component of $B$ lies in one component of $A$, so
   a caller reads its null vector and clamp together; `clamps` alone holds a clamp on a component
   of $A$ with no kept vertex. Both read one stored list.

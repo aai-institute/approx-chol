@@ -8,8 +8,8 @@ requirements are in `../requirements/`.
 ```
 5  Adapters              Python binding; faer, sprs, nalgebra, ndarray adapters
 4  Approximate inverse   B: build, solve, report, save and load
-3a Reduction             GDD → SDDM problems, lift, build facts
-3b Cholesky              SDDM → factorization; solve with it
+3a Reduction             GDD → WDD problems, lift, build facts
+3b Cholesky              WDD → factorization; solve with it
 2  Input                 the closed admissible-matrix type and its facts
 1a Storage               scalars, sparse storage
 1b Execution             deterministic parallel execution
@@ -34,8 +34,8 @@ requirements are in `../requirements/`.
 |---|---|---|
 | Adapters | crate `approx-chol-py`; modules `faer`, `sprs`, `nalgebra`, `ndarray`, each behind its feature | Translating another language's or library's matrices into Input, implementing the solve's block trait for their dense types, and the approximate inverse as faer's operator traits; no mathematics. |
 | Approximate inverse | module `approximate_inverse`, re-exported at the crate root | B as one object: building it per component, solving with it, the composed configuration and facts, the versioned envelope for persistence. |
-| Reduction | module `reduction` | Everything that exists because the input is GDD and not SDDM: scaling, switching, the cover, components, the clamp, the classification into grounded and floating. The lift maps right-hand sides in and solutions out: projection, scaling, switching, the cover, and regauge in A's coordinates. |
-| Cholesky | module `cholesky` | The approximate Cholesky factorization of an SDDM matrix, augmentation by the ground vertex, fill-in control, randomness, and the solve with the factorization, including the ground's lift and descent. Eliminating the side F of a bipartite factor-width-2 form yields a factorization of the Schur complement, numbered on K. |
+| Reduction | module `reduction` | Everything that exists because the input is GDD and not WDD: scaling, switching, components, the clamp, the classification into balanced or frustrated and grounded or floating. The lift maps right-hand sides in and solutions out: projection, scaling, switching, and regauge in A's coordinates. |
+| Cholesky | module `cholesky` | The approximate Cholesky factorization of a WDD matrix: a frustrated one factored by its Gremban cover or by signed elimination, as configured; augmentation by the ground vertex; the clique sample's rule and fill-in level; randomness; and the solve with the factorization, including the cover's and the ground's lift and descent. Eliminating the side F of a bipartite factor-width-2 form yields a factorization of the Schur complement, numbered on K. |
 | Input | module `input` | The closed admissible-matrix type: its representations, their validation, and the facts each carries. |
 | Storage | module `storage` | Scalars and sparse storage. |
 | Execution | module `execution` | Running independent work in the caller's pool, never a new one, within a thread budget, nested in the caller's parallel work without deadlock, with results that do not depend on the budget. |
@@ -45,10 +45,10 @@ requirements are in `../requirements/`.
 | Adapters, Rust | impls only: `TryFrom` faer, sprs and nalgebra-sparse matrices for `CsrRef`; `MatrixMut` for faer, nalgebra and ndarray blocks; faer's `LinOp`, `BiLinOp`, `Precond`, `BiPrecond` for `ApproxInverse`; `From<faer::Par>` for `Threads` | none |
 | Adapters, Python | module `approx_chol`: `factorize`, `ApproxInverse`, `Component`, `Clamp`, `Config`, `ScalingPolicy`, `InputError`, `BuildError` | none |
 | Approximate inverse | `ApproxInverse`, `Component`, `Sgdd`, `Complement`, `factorize`, `factorize_with`, `factorize_complement`, `MatrixMut` with its impls for slices, `Vec` and arrays, `ColumnMajor`, `Columns`, `ApplyError`, `LayoutError`, `dyn_stack`; serde for `ApproxInverse` | none |
-| Reduction | `ScalingPolicy`, `Clamp`, `ScalingOutcome`, `BuildError` | `Reduced` (the SDDM matrices with the vertices each keeps, the lift, the facts), `Lift` with its scratch requirement |
-| Cholesky | `Config`, `SchurMode` | `Factorization` with its scratch requirement |
+| Reduction | `ScalingPolicy`, `Clamp`, `ScalingOutcome`, `BuildError` | `Reduced` (the WDD matrices with the vertices each keeps, the lift, the facts), `Lift` with its scratch requirement |
+| Cholesky | `Config`, `SchurMode`, `Sampling`, `Multiplicity`, `FrustratedRoute`, `CoverSurplus` | `Factorization` with its scratch requirement |
 | Input | module `input`: `CsrRef`, `TriangleCsrRef`, `Laplacian`, `Sddm`, `FactorWidth2`, `FactorWidth1`, `BipartiteFactorWidth2`, `Input`, `InputError`, `Side` | the representation an `Input` holds |
-| Storage | `Real`, `PrimInt` (num-traits') | `Csr`, `SddmCsr`, the storage index |
+| Storage | `Real`, `PrimInt` (num-traits') | `Csr`, `WddCsr`, the storage index |
 | Execution | `Threads` | `join`, `fork` |
 
 - A part offers only its exports. Visibility enforces it: a part's other items are at most
@@ -65,8 +65,8 @@ requirements are in `../requirements/`.
 | Caller or adapter → approximate inverse | admissible matrix, configuration, thread budget; back: B with its facts, or a build error |
 | Caller or adapter → approximate inverse (solve) | B; per solve one or several right-hand sides, a thread budget, scratch; back: the solutions, or a solve error |
 | Caller or adapter → approximate inverse (persistence) | B; back: its saved form. Later the saved form; back: B or an error |
-| Approximate inverse → Reduction | admissible matrix; back: SDDM matrices with the vertices each keeps, the lift with its scratch requirement, and the build's facts: clamp, components, null vector of each singular component. During a solve: right-hand sides; back: their lifts, then solutions |
-| Approximate inverse → Cholesky | one SDDM matrix, the vertices it keeps, fill-in control, seed and the component's stream; back: factorization with its scratch requirement. During a solve: right-hand sides; back: solutions |
+| Approximate inverse → Reduction | admissible matrix; back: WDD matrices, each a Z-matrix if balanced, with the vertices each keeps, the lift with its scratch requirement, and the build's facts: clamp, components, null vector of each singular component. During a solve: right-hand sides; back: their lifts, then solutions |
+| Approximate inverse → Cholesky | one WDD matrix and whether it is balanced, the vertices it keeps, the configuration, seed and the component's stream; back: factorization with its scratch requirement. During a solve: right-hand sides; back: solutions |
 | Any part → Execution | independent work, thread budget |
 
 ## Why
@@ -91,8 +91,13 @@ requirements are in `../requirements/`.
   semver-checks allows additions.
 - **`Sgdd` and `Complement` in the approximate inverse:** their `factor` returns B, which
   Reduction may not name; they hold Reduction's `Reduced`.
-- **`SddmCsr` in Storage:** Reduction makes it and Cholesky takes it, and neither uses the
+- **`WddCsr` in Storage:** Reduction makes it and Cholesky takes it, and neither uses the
   other; the kept vertices travel beside it as indices, so Storage holds no elimination.
+- **The boundary at WDD, the cover in Cholesky:** the Gremban cover, its surplus encoding and
+  signed elimination are alternative ways to factor one frustrated WDD matrix, chosen by
+  Cholesky's configuration; the matrix, its scaling and its switching do not depend on the choice.
+  Reduction states the fact, balanced or frustrated, and Cholesky decides how to factor it
+  (#347).
 - **`BuildError` in Reduction:** both its cases come from the reduction, the scaling and the
   components; Cholesky does not fail.
 - **Visibility, then a test:** the compiler rejects any use of a part's private item, trait
