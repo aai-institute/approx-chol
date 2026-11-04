@@ -42,7 +42,7 @@ pub(super) enum Arm<T, I> {
 #[derive(Clone, Debug)]
 pub(super) struct Cholesky<T, I> {
     sheets: Sheets,
-    /// The ground is the appended slot, right-hand side `−Σb`, every entry then shifted so it reads zero; else the pinned slot reads zero.
+    /// The ground is the appended slot, pinned so it reads zero; its right-hand side `−Σb` and the shift serve only factors saved before the ground was always pinned.
     grounded: bool,
     /// The matrix's dimension over its sheets, ground excluded.
     n: usize,
@@ -70,10 +70,10 @@ impl<T: Real, I: Index> Cholesky<T, I> {
             }
             Arm::Approximate(sddm) => {
                 let (sheets, grounded, n) = (sddm.sheets(), sddm.grounded(), sddm.n());
-                // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
-                let spans_wide = tail.is_some_and(FactorTail::spans_wide);
-                let pin =
-                    (spans_wide || grounds_wide(&sddm)).then(|| pinned(sheets, grounded, n, tail));
+                // The ground is never a pivot, so `Σs` is never formed: within unchanged, grids +0-8% PCG iterations at 1-10 grounds.
+                // Floating, ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
+                let pin = (grounded || tail.is_some_and(FactorTail::spans_wide))
+                    .then(|| pinned(sheets, grounded, n, tail));
                 let (steps, pin) = reused.elimination.eliminate(sddm, draws, pin);
                 let triangular = Triangular::Approximate(Box::new(steps));
                 (sheets, grounded, n, pin, triangular)
@@ -88,7 +88,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         }
     }
 
-    /// Pivots eliminated: every slot, the ground's included, but the pinned one.
+    /// Pivots eliminated: every slot but the pinned one, which is the ground when there is one.
     pub(super) fn n_steps(&self) -> usize {
         self.n + usize::from(self.grounded) - 1
     }
@@ -98,7 +98,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         self.sheets == Sheets::One && !self.grounded
     }
 
-    /// A floating sheet substitutes on `x` in place; the approximate order may read the ground mid-recurrence, so it sits beside the rows.
+    /// A floating sheet substitutes on `x` in place; a grounded one appends the ground's slot beside the rows.
     pub(super) fn scratch_len(&self) -> usize {
         match (self.sheets, self.grounded) {
             (Sheets::One, false) => 0,
@@ -143,16 +143,6 @@ fn pinned<T: Real>(
         true => n,
         false => tail.map_or(n - 1, |tail| first_copy(sheets, tail.largest())),
     }
-}
-
-/// A sink behind an edge past `1/ε` lighter than the heaviest would divide the ground's `−Σb` rounding.
-fn grounds_wide<T: Real, I: Index>(sddm: &Sddm<T, I>) -> bool {
-    if !sddm.grounded() || sddm.sheets() != Sheets::One {
-        return false;
-    }
-    let (least, heaviest) = sddm.weight_range();
-    let most = (sddm.surplus().iter()).fold(heaviest, |most, &s| most.max(s));
-    least < most * T::epsilon()
 }
 
 /// The triangular factor, dense or approximate.

@@ -241,14 +241,6 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
         self.rows.row_len(i)
     }
 
-    /// The least and greatest `|a_ij|`, `(∞, 0)` without an entry.
-    pub(crate) fn abs_range(&self) -> (T, T) {
-        let range = (T::infinity(), T::zero());
-        (self.rows.values.iter()).fold(range, |(least, most), &a| {
-            (least.min(a.abs()), most.max(a.abs()))
-        })
-    }
-
     /// `scale · Σ_ij |a_ij|` over both triangles, as a [`crate::lane_sum`].
     pub(crate) fn scaled_abs_total(&self, scale: f64) -> f64 {
         2.0 * crate::lane_sum(&self.rows.values, scale)

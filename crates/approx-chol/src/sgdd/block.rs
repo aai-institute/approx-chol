@@ -1,7 +1,6 @@
 //! One reduced irreducible block, its balance and grounding.
 
 use super::congruence::{Congruence, Restriction, ScaledFactors, Selection};
-use super::diagonal_in_range;
 use super::scaling::{ScalingReport, RATIO_BAND};
 use crate::storage::{OffDiagonal, Rows};
 use crate::{Index, Real};
@@ -240,7 +239,7 @@ impl<T: Real, I: Index> Congruent<T, I> {
         self.congruence.factor(i)
     }
 
-    /// Panics unless one factor, row and surplus per vertex; the ground's `Σs` must clear the bound any diagonal does, and `I` must index the factor's vertices.
+    /// Panics unless one factor, row and surplus per vertex, and `I` must index the factor's vertices.
     pub(super) fn block(
         self,
         balance: Balance<T>,
@@ -256,25 +255,14 @@ impl<T: Real, I: Index> Congruent<T, I> {
         let n = vertices.len();
         assert_eq!(off_diagonal.n(), n, "one row per vertex");
         let (Balance::Balanced(grounding) | Balance::Frustrated(grounding)) = &balance;
-        let sheets = balance.sheets();
         debug_assert!(
-            sheets == Sheets::Two || off_diagonal.nonpositive(),
+            balance.sheets() == Sheets::Two || off_diagonal.nonpositive(),
             "a balanced M is a Z-matrix"
         );
         assert!(grounding.fits(n), "one surplus per row");
         let surplus = grounding.surplus().unwrap_or_default();
         if let Some(i) = surplus.iter().position(|&s| !crate::in_range(s)) {
             let vertex = vertices.vertex(i);
-            return Err(ReduceError::OutOfRange { vertex });
-        }
-        // The ground is a vertex too: its diagonal `Σs`, once per sheet, clears the same bound as any other.
-        let total = surplus.iter().fold(T::zero(), |sum, &s| sum + s);
-        let ground = match sheets {
-            Sheets::One => total,
-            Sheets::Two => total + total,
-        };
-        if !diagonal_in_range(ground) {
-            let vertex = vertices.vertex(0);
             return Err(ReduceError::OutOfRange { vertex });
         }
         Ok(IrreducibleBlock {
@@ -332,7 +320,7 @@ pub enum ReduceError {
         /// The block's first vertex, in `A`'s numbering.
         vertex: usize,
     },
-    /// An assembled entry, diagonal, row sum or ground left the representable range.
+    /// An assembled entry, diagonal, row sum or row's ground left the representable range.
     OutOfRange {
         /// The entry's vertex, in `A`'s numbering.
         vertex: usize,

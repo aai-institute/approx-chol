@@ -105,18 +105,6 @@ impl<T: Real, I: Index> Sddm<T, I> {
         }
     }
 
-    /// The least and greatest of `L`'s edge weights, ground and twists excluded; `(∞, 0)` without an edge.
-    pub(super) fn weight_range(&self) -> (T, T) {
-        self.adjacency.abs_range()
-    }
-
-    /// Each vertex's ground weight on one sheet or two; empty when ungrounded or twisted.
-    pub(super) fn surplus(&self) -> &[T] {
-        (self.closure.grounding())
-            .and_then(Grounding::surplus)
-            .unwrap_or_default()
-    }
-
     /// Positive Laplacian weights, each edge once with any twists, the ground vertex `n` joined by each surplus.
     pub(super) fn grounded_edges(&self, mut edge: impl FnMut(I, I, T)) {
         let n = self.n();
@@ -343,7 +331,7 @@ pub(super) fn lift<T: Real>(x: &[T], rows: &mut [T]) {
         r[0] = v;
         r[1] = -v;
     });
-    // A lift sums to zero, so the ground's right-hand side is zero and its shift cancels in the descent.
+    // A lift sums to zero, so the ground's right-hand side is zero.
     ground.fill(T::zero());
 }
 
