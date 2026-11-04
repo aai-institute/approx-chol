@@ -213,7 +213,8 @@ $\bar A$'s surpluses. A right-hand side $\begin{pmatrix} b \\ -b \end{pmatrix}$ 
   only null vector, $\mathbf{1}$, no lifted right-hand side reaches. The edges join two real
   vertices, so they add fill where a ground vertex, pinned last, adds little.
 - **Auto:** surplus edges when the total surplus is within the rounding band of the trace, a ground
-  vertex otherwise. Where between the two the threshold belongs is open (#347).
+  vertex otherwise. A ground vertex within the band can leave PCG without progress where the
+  surplus sits on a light region (#352).
 
 **Signed elimination.** $\tilde A$ is factored as it is, of size $n$, with signed entries
 (`glossary.md`, Elimination): each elimination keeps it WDD, the cancellation of entries of

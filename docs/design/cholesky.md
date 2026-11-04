@@ -160,7 +160,8 @@ enum Triangular<T, I> { Dense(Box<[T]>), Approximate(Box<Steps<T, I>>) }
   most the mean surplus, but add edges between real vertices. In the prototype they never needed
   less work than the ground vertex, from a surplus of $10^{-14}$ of the row sums to $1$, on grids
   and on within's frustrated components; above $10^{-2}$ they needed 1.3–2.3 times as much. Auto
-  keeps `main`'s rule until a solve-error test at near-zero surplus decides (step F0).
+  keeps `main`'s rule, surplus edges within the band of the trace: a ground vertex there left PCG
+  without progress where the surplus sat on a light region (step F0, #352).
 - **Clique tree the default, Schur tree opt-in:** in the same prototype the Schur tree needed two to
   three times the iterations on graphs whose weights span many orders of magnitude, on both
   routes, while it matched the clique tree on moderate weights.
@@ -202,6 +203,6 @@ Refactors and behavior changes are separate commits.
 | R5 | `S: Sign` through the elimination engine, `Unsigned` only | bit-identical; Criterion benches |
 | R6 | Public `Sampling`, `Multiplicity`, `FrustratedRoute`, `CoverSurplus`; `split_merge` removed, in `SchurMode` too | Python and stub, stubtest, changelog; breaking |
 | G1 | The ground pinned in every layout; Reduction's ground range check deleted. Done in #351: within unchanged bit for bit, synthetic +0.1–0.7% PCG iterations, at most +7.5% with one ground | A/B of PCG iterations and nnz(L) in Rust on the synthetic graphs and within's components; inputs the check rejected now factor |
-| F0 | `Auto`'s rule: solve error at near-zero surplus, `f32` and `f64`, ground vertex against surplus edges, after G1; ground vertex everywhere if it shows none | the error test; A/B as G1 |
+| F0 | `Auto`'s rule: solve error at near-zero surplus, `f32` and `f64`, ground vertex against surplus edges, after G1. Done in #352: `main`'s rule kept; ground and edges equal when every row's surplus is small, the ground stalls PCG where the surplus sits on a light region, every such case within the band | the error test |
 | F1 | Signed elimination, after G1: `Signed`, cancellation into surplus at $v$ and an edge to $g$, signed Schur complement | switched balanced equals its Z-matrix seed for seed; both routes on frustrated inputs; serde round trip; Criterion benches for the wider graph edge |
 | F2 | `SchurTree` | expectation equals the clique; every sample connected; at split 1 edge marginals $(w_{vi} + w_{vj})/\omega_v$, above it the auxiliary copies' marginals before contraction and unbiased weights after |
