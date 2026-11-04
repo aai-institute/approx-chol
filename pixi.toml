@@ -16,7 +16,6 @@ uv = ">=0.4"
 pytest = ">=7.0"
 numpy = ">=1.24"
 scipy = ">=1.12"
-cargo-nextest = ">=0.9.151,<0.10"
 
 [feature.coverage.dependencies]
 cargo-llvm-cov = ">=0.8.4,<0.9"
@@ -54,8 +53,8 @@ floor = { features = ["floor"] }
 
 [tasks]
 test = "maturin develop --uv --locked && pytest tests/ -v"
-# nextest runs no doctests, so `cargo test --doc` runs them beside it.
-test-rust = "cargo nextest run --workspace --all-features --locked && cargo test --doc --workspace --all-features --locked"
+# Every failure reported, not only the first.
+test-rust = "cargo test --workspace --all-features --locked --no-fail-fast"
 # Unstripped: rustc 1.93's strip under ld-27037 leaves a misaligned LINKEDIT string pool that dlopen rejects.
 develop = { cmd = "maturin develop --uv --release --locked", env = { CARGO_PROFILE_RELEASE_STRIP = "false" } }
 # uv fetches mypy (pinned here, as no environment or lock carries it); the stub is checked against a fresh debug build.
