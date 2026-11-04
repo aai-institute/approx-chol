@@ -9,6 +9,7 @@ use super::clique_tree::Multi;
 use super::config::{Config, InnerParallelism};
 use super::schur::BipartiteBlock;
 use super::sddm::{descend, first_copy, lift, Sddm};
+use crate::sgdd::Null;
 use crate::storage::{
     compensated_sum, narrow, widen, Adjacency, Balance, Bipartite, Gauge, Grounded, Index,
     OffDiagonal, Real, Sheets,
@@ -70,7 +71,7 @@ fn splitmix(x: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-/// A component's factorization: a bipartite one's block elimination, then the Cholesky of what it leaves.
+/// A block's factorization: a bipartite one's block elimination, then the Cholesky of what it leaves.
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -88,17 +89,16 @@ pub(super) struct Factorization<T, I> {
 impl<T: Real, I: Index> Factorization<T, I> {
     /// Dense or approximate as `config` sizes it; a bipartite component eliminates its larger side first.
     pub(super) fn component(
-        matrix: Grounded<T, OffDiagonal<T, I>>,
+        Grounded {
+            adjacency,
+            grounding,
+        }: Grounded<T, OffDiagonal<T, I>>,
         balance: Balance,
         gauge: Gauge,
         key: usize,
         config: &Config,
         reused: &mut Workspace<T, I>,
     ) -> Self {
-        let Grounded {
-            adjacency,
-            grounding,
-        } = matrix;
         let streams = Streams::of(key, config);
         let sheets = balance.sheets();
         let draws = streams.cholesky();
@@ -127,17 +127,16 @@ impl<T: Real, I: Index> Factorization<T, I> {
 
     /// The Schur complement onto the kept side, keyed as the whole component keys its draws.
     pub(super) fn complement(
-        matrix: Grounded<T, Bipartite<T, I>>,
+        Grounded {
+            adjacency: cross,
+            grounding,
+        }: Grounded<T, Bipartite<T, I>>,
         balance: Balance,
         gauge: Gauge,
         key: usize,
         config: &Config,
         reused: &mut Workspace<T, I>,
     ) -> Self {
-        let Grounded {
-            adjacency: cross,
-            grounding,
-        } = matrix;
         let streams = Streams::of(key, config);
         let block = BipartiteBlock::of(cross.into_cross(), balance.sheets(), grounding);
         let s = block.complement(config, streams);
@@ -188,10 +187,12 @@ impl<T: Real, I: Index> Factorization<T, I> {
             cholesky: self.cholesky,
         })
     }
+}
 
-    /// Whether it solves a singular Laplacian, and whether an elimination splits that solve.
-    pub(super) fn singular(&self) -> (bool, bool) {
-        (self.cholesky.singular(), self.elimination.is_some())
+impl<T: Real, I: Index> Factorization<T, I> {
+    /// What its lift must do about `F·1`, read off what it factored.
+    pub(super) fn null(&self) -> Null {
+        Null::of(self.cholesky.singular(), self.elimination.is_some())
     }
 }
 
@@ -278,7 +279,6 @@ impl<T: Real, I: Index> Cholesky<T, I> {
     }
 
     /// Whether it solves a singular Laplacian: one sheet, no ground.
-    #[cfg(feature = "serde")]
     pub(super) fn singular(&self) -> bool {
         self.sheets == Sheets::One && !self.grounded
     }

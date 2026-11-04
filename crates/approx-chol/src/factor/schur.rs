@@ -2,9 +2,7 @@
 
 use rayon::prelude::*;
 
-use super::cholesky::BlockElimination;
-use super::cholesky::{Arm, Signed};
-use super::cholesky::{Streams, MULTIPLY_ADD_GRAIN_BITS};
+use super::cholesky::{Arm, BlockElimination, Signed, Streams, MULTIPLY_ADD_GRAIN_BITS};
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::{Config, SchurMode};
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows};

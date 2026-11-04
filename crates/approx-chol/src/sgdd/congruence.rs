@@ -32,6 +32,17 @@ pub(crate) enum Null {
     Regauged,
 }
 
+impl Null {
+    /// The one rule: a singular `M` projects, and regauges when an elimination splits its solve.
+    pub(crate) fn of(singular: bool, splits: bool) -> Self {
+        match (singular, splits) {
+            (false, _) => Self::None,
+            (true, false) => Self::Projected,
+            (true, true) => Self::Regauged,
+        }
+    }
+}
+
 impl<T: Real, I: Index> Lift<T, I> {
     /// Panics unless one factor per vertex.
     pub(super) fn new(vertices: Selection<I>, congruence: Congruence<T>, null: Null) -> Self {

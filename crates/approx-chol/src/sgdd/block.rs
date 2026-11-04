@@ -176,11 +176,8 @@ impl<T: Real, I: Index, P: Adjacency<T, I>> Congruent<T, I, P> {
             congruence,
             off_diagonal,
         } = self;
-        let null = match (balance, grounding.is_grounded()) {
-            (Balance::Balanced, false) if off_diagonal.n_eliminated() > 0 => Null::Regauged,
-            (Balance::Balanced, false) => Null::Projected,
-            _ => Null::None,
-        };
+        let singular = balance == Balance::Balanced && !grounding.is_grounded();
+        let null = Null::of(singular, off_diagonal.bipartite().is_some());
         let lift = Lift::new(vertices, congruence, null);
         let vertices = lift.vertices();
         let n = vertices.len();

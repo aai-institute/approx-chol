@@ -135,7 +135,7 @@ impl<T: Real> Factor<T> {
     pub fn n_steps(&self) -> usize {
         self.blocks
             .iter()
-            .map(|block| on!(block, b => b.n_steps(), _ => 1))
+            .map(|block| on!(block, b => b.factorization.n_steps(), _ => 1))
             .sum()
     }
 
@@ -200,6 +200,11 @@ impl<T: Real, I: Index> Summand<T, I> for ReducedComponent<T, I> {
             report,
         } = self;
         let factorization = Factorization::component(matrix, balance, gauge, key, config, reused);
+        debug_assert_eq!(
+            lift.null(),
+            factorization.null(),
+            "the lift and the factor disagree"
+        );
         Block {
             lift,
             factorization,
@@ -219,6 +224,11 @@ impl<T: Real, I: Index> Summand<T, I> for ReducedComplement<T, I> {
             report,
         } = self.into_reduced();
         let factorization = Factorization::complement(matrix, balance, gauge, key, config, reused);
+        debug_assert_eq!(
+            lift.null(),
+            factorization.null(),
+            "the lift and the factor disagree"
+        );
         Block {
             lift,
             factorization,
@@ -383,11 +393,6 @@ impl<T: Real, I: Index> Block<T, I> {
         self.lift.vertices()
     }
 
-    /// Every slot but one, eliminated ones and the Cholesky's alike.
-    fn n_steps(&self) -> usize {
-        self.factorization.n_steps()
-    }
-
     /// Workspace [`solve_global`](Self::solve_global) needs: room to gather unless the vertices are consecutive, plus the Cholesky's.
     fn global_scratch_len(&self) -> usize {
         self.vertices().gather_len() + self.factorization.scratch_len()
@@ -530,14 +535,12 @@ checked_serde!(Block);
 #[cfg(feature = "serde")]
 impl<T: Real, I: Index> Block<T, I> {
     fn checked(self) -> Option<Self> {
-        let null = match self.factorization.singular() {
-            (false, _) => Null::None,
-            (true, false) => Null::Projected,
-            (true, true) => Null::Regauged,
-        };
+        if self.lift.null() != self.factorization.null() {
+            return None;
+        }
         let n = self.vertices().len();
         let factorization = self.factorization.checked(n)?;
-        (self.lift.null() == null).then_some(Self {
+        Some(Self {
             factorization,
             ..self
         })
@@ -611,15 +614,9 @@ mod tests {
 
     /// A bipartite block stripped of the elimination its Cholesky follows.
     fn without_elimination() -> Block<f64, u32> {
-        let block = bipartite_block();
-        let factorization = Factorization {
-            elimination: None,
-            ..block.factorization
-        };
-        Block {
-            factorization,
-            ..block
-        }
+        let mut block = bipartite_block();
+        block.factorization.elimination = None;
+        block
     }
 
     /// An elimination of 2 keeping 2, between a 5-vertex lift and a 3-vertex Cholesky.
@@ -627,21 +624,16 @@ mod tests {
         let elimination = bipartite_block().factorization.elimination;
         let counts = elimination.as_ref().map(|e| (e.n_eliminated(), e.n_kept()));
         assert_eq!(counts, Some((2, 2)));
-        let path = csr_block(
+        let mut block = csr_block(
             &[0, 2, 5, 8, 11, 13],
             &[0, 1, 0, 1, 2, 1, 2, 3, 2, 3, 4, 3, 4],
             &[
                 3.0, -1.0, -1.0, 3.0, -1.0, -1.0, 3.0, -1.0, -1.0, 3.0, -1.0, -1.0, 3.0,
             ],
         );
-        Block {
-            lift: path.lift,
-            factorization: Factorization {
-                elimination,
-                ..grounded_block().factorization
-            },
-            report: None,
-        }
+        block.factorization = grounded_block().factorization;
+        block.factorization.elimination = elimination;
+        block
     }
 
     #[rstest]

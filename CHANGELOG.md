@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (breaking)
 
-- `FACTOR_FORMAT_VERSION` is `0x4143000A`: a factor saved by 0.7.0 no longer decodes. A block's lift is stored as `lift`, not `restriction`, in self-describing formats.
+- `FACTOR_FORMAT_VERSION` is `0x4143000A`: a factor saved by 0.7.0 no longer decodes. Each coupled block's lift stores whether its solve projects out the null vector, one more byte in postcard, and is named `lift`, not `restriction`, in self-describing formats.
 
 ### Changed
 
