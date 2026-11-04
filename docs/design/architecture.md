@@ -105,3 +105,19 @@ requirements are in `../requirements/`.
   list.
 - **Encodings per part:** the persistence format does not couple the approximate inverse to the
   internals of Reduction and Cholesky.
+
+## Plan
+
+From `main` to this architecture, beside Cholesky's steps R1–R6 and F0–F2 in `cholesky.md`.
+Refactors are bit-identical on the solve fixtures, the u32/u64 storage test and the wire-format
+payloads, apart from the format version where stated, and are committed apart from behavior
+changes.
+
+| Step | Part | Change | Check | After |
+|---|---|---|---|---|
+| D1 | Reduction | One named record for an extracted block: vertices, off-diagonal, grounding if given, row sums; `PrincipalBlocks::Block` tuples, `Relaxation` and `lone`'s pairs named | bit-identical | – |
+| D2 | Storage | `Grounding` and `Grounded` beside `WddCsr`; one row-tally pass where `tally_abs` and `scaled_abs_sums` repeat it | bit-identical | – |
+| D3 | Input | Lowering keeps the bipartite form and the incidence-or-values distinction as types; `n_left()` and `is_incidence()` probes removed | bit-identical | – |
+| D4 | Approximate inverse | One width branch, picked from Cholesky's `max_slots`; `Storage` split into the summand's kind and its width; `Indexed` and the `store` function removed | bit-identical; format version bumped | R1 |
+| D5 | Approximate inverse | Each part serializes its own exports under its own version; the approximate inverse checks that they agree | serde round trip; corrupt payloads rejected | R3 |
+| D6 | Input, Reduction | Validation on construction into the representation an `Input` holds (`Canonical` made there); `InputError` and `BuildError`; a nonpositive diagonal an input error; an undecidable float-or-ground no longer `Unscalable`; `ScalingReport` becomes `Clamp`, refuted or unsettled | integration tests per error; Python, stub, changelog; breaking | – |
