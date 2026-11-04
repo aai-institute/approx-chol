@@ -48,7 +48,7 @@ requirements are in `../requirements/`.
 | Reduction | `ScalingPolicy`, `Clamp`, `ScalingOutcome`, `BuildError` | `Reduced` (per component the WDD matrix with its grounding, its balance, gauge and key, the lift, the index of its clamp in the build's list), `Lift` with its scratch requirement, the bound on a lone pivot |
 | Cholesky | `Config`, `SchurMode`, `Sampling`, `Multiplicity`, `FrustratedRoute`, `CoverSurplus` | `factor`, `Factorization` with its scratch requirement, `max_slots` |
 | Input | module `input`: `CsrRef`, `TriangleCsrRef`, `Laplacian`, `Sddm`, `FactorWidth2`, `FactorWidth1`, `BipartiteFactorWidth2`, `Input`, `InputError`, `Side` | the representation an `Input` holds |
-| Storage | `Real`, `PrimInt` (num-traits') | `Csr`, `WddCsr`, `Bipartite`, `Grounding`, `Grounded`, `Balance`, `Gauge`, the storage index, the compensated sums and range screens |
+| Storage | `Real`, `PrimInt` (num-traits') | `Csr`, `WddCsr`, `Bipartite`, `Adjacency` (Reduction's view of either shape), `Grounding`, `Grounded`, `Balance`, `Gauge`, the storage index, the compensated sums and range screens |
 | Execution | `Threads` | `join`, `fork` |
 
 - A part offers only its exports. Visibility enforces it: a part's other items are at most
@@ -132,7 +132,7 @@ changes.
 |---|---|---|---|
 | P1 | Execution: `Threads`, `join`, `fork`, the task grain; no other part calls rayon | every result bit-identical for every budget and in a nested pool | – |
 | P2 | Modules moved to the tree below | bit-identical | R1 |
-| P3 | `ApproxInverse` and `Component` with `vertices`, `null_vector`, `clamp`; the build's list of clamps; the per-block solver removed, so the width branch sits at the top; within migrated | breaking; within's tests | D4, P1 |
+| P3 | `ApproxInverse` and `Component` with `vertices`, `null_vector`, `clamp`; the build's list of clamps, `Reduced`'s `report` becoming a `ClampId` into it; the per-block solver removed, so the width branch sits at the top; within migrated | breaking; within's tests | D4, P1 |
 | P4 | `MatrixMut`, `ColumnMajor`, `Columns`, `scratch`, `apply`, `apply_with`, `ApplyError`, `LayoutError`; the budget spread over components by size | each column equals its solve alone, bit for bit, at every budget; `apply_with` allocates nothing | P3 |
 | P5 | Build surface: `Sgdd` and `Complement` with `Threads` and `clamps`; `Config` comparable and hashable | interface tests | P3, D6, R6 |
 | P6 | Persistence: the envelope `(version, scalar, B)`; each part serializes its exports under its own version, the approximate inverse checks that they agree | round trip; version and scalar rejected by name; corrupt payloads rejected | P3, R3 |

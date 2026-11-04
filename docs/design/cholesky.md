@@ -195,8 +195,8 @@ Refactors and behavior changes are separate commits.
 
 | Step | Change | Check |
 |---|---|---|
-| R1 | `Reduced<T, I, P>` with `key`, `Grounded` matrix, payload-free `Balance`, `Gauge`, `ClampId`; `Restriction` renamed `Lift`; named `Bipartite`; the complement path receives `ReducedComplement` directly, no `unreachable!`; no positional tuples | bit-identical |
-| R1b | `Lift` built with whether it projects and regauges; `singular` no longer passed at solve time; `FactorTail` replaced by `Gauge` on the factored vertices; `BlockElimination`, `Streams`, `within_one` and the grain constant moved into Cholesky; its decoder no longer checks Reduction's side policy | bit-identical; format version bumped |
+| R1 | `Reduced<T, I, P>` with `key`, `Grounded` matrix, payload-free `Balance`, `Gauge`; `Restriction` renamed `Lift`; named `Bipartite`; the complement path receives `ReducedComplement` directly, no `unreachable!`; no positional tuples. Done in #363: the reduction generic over the shape through Storage's `Adjacency`, so the bipartite layout yields `Bipartite` blocks; `ReducedComplement` its own type, built only by tailing the lift; `Gauge` on the factored vertices replaces `FactorTail`; `ClampId` moved to P3; the field still serialized as `restriction` | bit-identical |
+| R1b | `Lift` built with whether it projects and regauges; `singular` no longer passed at solve time; `UpperAdjacency` renamed `WddCsr`, `Block`'s `restriction` serialized as `lift`; `BlockElimination`, `Streams`, `within_one` and the grain constant moved into Cholesky; its decoder no longer checks Reduction's side policy | bit-identical; format version bumped |
 | R2 | `Sign` markers, `Wdd<S>`, `AnyWdd`; the dense arm on `Wdd<S>`, its kernel chosen by `S::SIGNED`; reduction's `Signed` renamed `Folding`, `Arm::Exact` renamed `Dense` | bit-identical |
 | R3 | `Layout` and `Represented` with its three constructors; the pin chosen by `Layout`, `main`'s rule kept (the ground if grounded, else the gauge's peak if the scales span wide, else minimum degree's last); the grounded solve's `−Σb` and shift, no-ops since G1, removed, and a decoded grounded factor checked to pin its ground; the cover built in one private function, the bipartite formations through `cover_neighbor`, the dense one still on the cover, then folded; `CoverSurplus::Auto` internal with today's band as its own constant; sheets and surplus edges confined there; the slot count derived | bit-identical solves; format version bumped |
 | R4 | `Star` (merged, unique), `Column`, `FillEdge`, `FillRule` with `CliqueTree` only; `Formation` keeps the exact formation | bit-identical; Criterion benches |
@@ -206,6 +206,10 @@ Refactors and behavior changes are separate commits.
 | F0 | `Auto`'s rule: solve error at near-zero surplus, `f32` and `f64`, ground vertex against surplus edges, after G1. Done in #352: `main`'s rule kept; ground and edges equal when every row's surplus is small, the ground stalls PCG where the surplus sits on a light region, every such case within the band | the error test |
 | F1 | Signed elimination, after G1: `Signed`, cancellation into surplus at $v$ and an edge to $g$, signed Schur complement | switched balanced equals its Z-matrix seed for seed; both routes on frustrated inputs; serde round trip; Criterion benches for the wider graph edge |
 | F2 | `SchurTree` | expectation equals the clique; every sample connected; at split 1 edge marginals $(w_{vi} + w_{vj})/\omega_v$, above it the auxiliary copies' marginals before contraction and unbiased weights after |
+
+Open for R3: two lifts. Reduction's `Lift` maps a right-hand side into `M`'s coordinates and back;
+Cholesky's `sddm::lift` copies one onto the cover's sheets, and `Layout` is to own that lift and
+the descent. One of them needs another name before `Layout` lands.
 
 Open for R1b: one record for Cholesky. `Reduced`'s fields are `pub(crate)`, as the sketch has
 them, so code outside Reduction can pair a gauge with another lift. Splitting it into
