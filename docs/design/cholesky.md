@@ -206,3 +206,10 @@ Refactors and behavior changes are separate commits.
 | F0 | `Auto`'s rule: solve error at near-zero surplus, `f32` and `f64`, ground vertex against surplus edges, after G1. Done in #352: `main`'s rule kept; ground and edges equal when every row's surplus is small, the ground stalls PCG where the surplus sits on a light region, every such case within the band | the error test |
 | F1 | Signed elimination, after G1: `Signed`, cancellation into surplus at $v$ and an edge to $g$, signed Schur complement | switched balanced equals its Z-matrix seed for seed; both routes on frustrated inputs; serde round trip; Criterion benches for the wider graph edge |
 | F2 | `SchurTree` | expectation equals the clique; every sample connected; at split 1 edge marginals $(w_{vi} + w_{vj})/\omega_v$, above it the auxiliary copies' marginals before contraction and unbiased weights after |
+
+Open for R1b: one record for Cholesky. `Reduced`'s fields are `pub(crate)`, as the sketch has
+them, so code outside Reduction can pair a gauge with another lift. Splitting it into
+`Reduced { lift, report, problem }`, `problem` holding the key, the matrix, the balance and the
+gauge, with fields private to Reduction, would let the approximate inverse keep the lift and the
+report and hand `problem` to Cholesky whole. Against it: Cholesky then takes one record, not four
+facts, and the record needs an owner, likely Storage beside `Grounded`.
