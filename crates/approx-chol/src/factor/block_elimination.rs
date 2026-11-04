@@ -4,8 +4,7 @@ use rayon::prelude::*;
 
 use super::config::InnerParallelism;
 use super::{within_one, MULTIPLY_ADD_GRAIN_BITS};
-use crate::storage::Rows;
-use crate::storage::{Index, Real};
+use crate::storage::{Index, Real, Rows};
 
 /// `M`'s cross block scaled by its inverse pivots, `D_e⁻¹ C`, and `D_e⁻¹`, applied as two products because the block's steps commute.
 #[cfg_attr(

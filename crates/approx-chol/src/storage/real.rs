@@ -108,7 +108,7 @@ impl Sum2 {
 
     // Inlined into a large caller, SLP leaves the lanes scalar.
     #[inline(never)]
-    pub(crate) fn plus<T: Copy>(mut self, x: &[T], term: impl Fn(usize, T) -> f64) -> Self {
+    pub(super) fn plus<T: Copy>(mut self, x: &[T], term: impl Fn(usize, T) -> f64) -> Self {
         let chunks = x.chunks_exact(8);
         let rest = chunks.remainder();
         for (k, chunk) in chunks.enumerate() {

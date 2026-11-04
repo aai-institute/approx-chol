@@ -15,7 +15,7 @@ use super::decomposition::{
 use super::scaling::{self, ScaleVector, ScalingPolicy};
 use super::{diagonal_in_range, Complement, Reduced};
 use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Lowered, Side};
-use crate::storage::{narrow, widen, Balance, Grounding, Index, OffDiagonal, Real};
+use crate::storage::{narrow, widen, Balance, Grounding, Index, OffDiagonal, Real, Sum2};
 use crate::Error;
 
 impl<T: Real, I: Index> Reduced<T, I> {
@@ -147,7 +147,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
                 clamped,
             })),
             false => {
-                let grounding = surplus(&rows).flushed(&rows.diagonal, flush_band::<T>());
+                let grounding = surplus(&rows).flushed(&rows.diagonal, scaling::ratio_band::<T>());
                 let grounding = grounding.map_err(|i| out_of_range(&m, i))?;
                 let report = vector.report(clamped);
                 Ok(Signed::Frustrated(
@@ -247,7 +247,7 @@ impl<T: Real, I: Index> Folded<T, I> {
             return Err(ReduceError::Unscalable { vertex });
         };
         let Self { m, rows, .. } = self;
-        match grounding.flushed(&rows.diagonal, flush_band::<T>()) {
+        match grounding.flushed(&rows.diagonal, scaling::ratio_band::<T>()) {
             Ok(grounding) if grounding.is_grounded() => {
                 m.block(Balance::Balanced(grounding), report)
             }
@@ -259,7 +259,7 @@ impl<T: Real, I: Index> Folded<T, I> {
     /// From `M`'s rows, `1ᵀM1 = tr M − Σ|offdiag(M)|`, so `tr M` cannot overflow.
     fn singularity(&self) -> Singularity {
         let epsilon = widen(T::epsilon());
-        let diagonal = crate::storage::Sum2::of(&self.rows.diagonal, |_, d| epsilon * widen(d));
+        let diagonal = Sum2::of(&self.rows.diagonal, |_, d| epsilon * widen(d));
         let trace = diagonal.total();
         // `tr M` rounded on its own drops a surplus below its ulp, which the Gram path keeps.
         let ones = (self.m.off_diagonal())
@@ -284,11 +284,6 @@ fn out_of_range<T: Real, I: Index>(m: &Congruent<T, I>, i: usize) -> ReduceError
     ReduceError::OutOfRange {
         vertex: m.vertices().vertex(i),
     }
-}
-
-/// How far below the range floor a derived surplus may drop: its row's rounding, `RATIO_BAND ε d_i`.
-fn flush_band<T: Real>() -> f64 {
-    scaling::RATIO_BAND * widen(T::epsilon())
 }
 
 /// Each row's residue, deficits clamped to zero.

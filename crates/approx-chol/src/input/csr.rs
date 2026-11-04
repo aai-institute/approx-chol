@@ -3,8 +3,7 @@ use std::borrow::Cow;
 use num_traits::{cast, PrimInt};
 
 use super::index;
-use crate::storage::in_range;
-use crate::storage::Real;
+use crate::storage::{in_range, Real};
 
 /// Borrowed CSR claiming a symmetric `A`; shape is checked here, the claim when it factors.
 #[derive(Clone, Copy, Debug)]

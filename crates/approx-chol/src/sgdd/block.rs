@@ -3,7 +3,7 @@
 use super::congruence::{Congruence, Restriction, ScaledFactors, Selection};
 use super::decomposition::{BlockAdjacency, RowSums, SymmetricBlock};
 use super::scaling::ScalingReport;
-use crate::storage::{Balance, Grounding, Index, OffDiagonal, Real, Rows, Sheets};
+use crate::storage::{in_range, Balance, Grounding, Index, OffDiagonal, Real, Rows, Sheets};
 
 /// One irreducible principal block `A_c` of `A`, reduced: `M = F · A_c · F` weakly diagonally dominant, eliminated side first.
 #[derive(Clone, Debug)]
@@ -179,7 +179,7 @@ impl<T: Real, I: Index> Congruent<T, I> {
         );
         assert!(grounding.fits(n), "one surplus per row");
         let surplus = grounding.surplus().unwrap_or_default();
-        if let Some(i) = surplus.iter().position(|&s| !crate::storage::in_range(s)) {
+        if let Some(i) = surplus.iter().position(|&s| !in_range(s)) {
             let vertex = vertices.vertex(i);
             return Err(ReduceError::OutOfRange { vertex });
         }

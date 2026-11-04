@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 
-use crate::storage::{narrow, widen, Index, Real};
-use crate::storage::{OffDiagonal, Rows};
+use crate::storage::{narrow, widen, Index, OffDiagonal, Real, Rows};
 
 /// `N = D^{-1/2}|offdiag(A_c)|D^{-1/2}`: scales `R` make `R|A_c|R` dominant iff `N y ≤ y` for `y = R√D`, so iff `ρ(N) ≤ 1` (Boman, Chen, Parekh, Toledo, LAA 2005).
 pub(super) struct Normalized<'a, T, I> {

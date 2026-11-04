@@ -9,9 +9,7 @@ use super::config::{Config, SchurMode};
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows};
 use super::{Streams, MULTIPLY_ADD_GRAIN_BITS};
 use crate::per_task;
-use crate::storage::Rows;
-use crate::storage::{narrow, widen, Index, Real};
-use crate::storage::{Grounding, Sheets};
+use crate::storage::{narrow, widen, Grounding, Index, Real, Rows, Sheets};
 
 /// How one block's Schur complement is formed, resolved from [`Config`] and its kept side.
 enum Formation {

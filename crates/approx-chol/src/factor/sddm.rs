@@ -3,9 +3,9 @@
 use rayon::prelude::*;
 
 use crate::sgdd::Singularity;
-use crate::storage::{narrow, widen, Index, Real};
-use crate::storage::{Grounding, Sheets};
-use crate::storage::{Rows, UpperAdjacency};
+use crate::storage::{
+    lane_sum, narrow, widen, Grounding, Index, Real, Rows, Sheets, UpperAdjacency,
+};
 
 /// `L + diag(s)`, `L`'s off-diagonal nonpositive; a twisted cover's `k⁺—k⁻` edges live in its closure, not its rows.
 #[derive(Clone, Debug)]
@@ -295,7 +295,7 @@ impl<T: Real, I: Index> ColumnSums<'_, T, I> {
 /// Whether `ground` is within the singular band of `ground + Σ|a_ij|`, both `ε`-scaled so neither overflows: a cover's copies then [`twist`] instead of grounding, so its `1/s` common mode cannot swamp `z`; a cover doubles both sums, so `M`'s decide as its own.
 fn twists<T: Real, I: Index>(ground: &[T], adjacency: &UpperAdjacency<T, I>) -> bool {
     let epsilon = widen(T::epsilon());
-    let total = crate::storage::lane_sum(ground, epsilon);
+    let total = lane_sum(ground, epsilon);
     let trace = total + adjacency.scaled_abs_total(epsilon);
     Singularity { ones: total, trace }.within_band::<T>()
 }

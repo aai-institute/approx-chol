@@ -1,4 +1,4 @@
-//! Scalars and the sparse storage shapes every stage reads.
+//! Scalars and sparse storage.
 
 mod grounded;
 mod real;
@@ -155,7 +155,7 @@ impl<T: Real, I: Index> Rows<T, I> {
         }
     }
 
-    /// `Σ|x|` in `f64`, row `i`'s at `i`, column `j`'s at `offset + j`: a row lands whole, after any column sharing its slot.
+    /// `Σ|x|` in `f64` as [`tally_abs`] orders it, row `i`'s at `i`, column `j`'s at `offset + j`.
     fn abs_sums(&self, offset: usize) -> Vec<f64> {
         let mut sums = vec![0.0; offset + self.n_cols];
         for i in 0..self.n_rows() {
