@@ -50,6 +50,60 @@ owner.
   constructor. A rule that needs more than one pivot's star, or changes the column of
   $\mathcal{L}$, needs the elimination itself to change.
 
+### Type sketch
+
+A sketch of the crate-internal types until they exist; once the code lands it is the reference,
+and this section shrinks to their names, as `architecture.md` asks of exports.
+
+```rust
+// reduction → cholesky: one reduced component; P is what Cholesky factors.
+pub(crate) struct Reduced<T, I, P> {
+    pub(crate) key: usize,                       // the component's first vertex in A: keys every draw
+    pub(crate) lift: Box<Lift<T, I>>,            // projection, scaling, switching; a Schur build's on K
+    pub(crate) part: P,
+    pub(crate) balance: Balance<T>,              // Balanced(Grounding) | Frustrated(Grounding)
+    pub(crate) clamp: Option<Box<Clamp>>,
+}
+pub(crate) enum OffDiagonal<T, I> { General(WddCsr<T, I>), Bipartite(Bipartite<T, I>) }
+pub(crate) type ReducedComponent<T, I>  = Reduced<T, I, OffDiagonal<T, I>>;
+pub(crate) type ReducedComplement<T, I> = Reduced<T, I, Bipartite<T, I>>;   // its lift already on K
+
+// The matrix factored, typed by sign; S = Unsigned: Z-matrix, S = Signed: positive entries kept.
+struct Wdd<T, I, S: Sign> { adjacency: WddCsr<T, I>, grounding: Grounding<T>, sign: PhantomData<S> }
+enum AnyWdd<T, I> { Unsigned(Wdd<T, I, Unsigned>), Signed(Wdd<T, I, Signed>) }   // the one sign branch
+
+// A matrix and its slot map, only built together.
+enum Layout { Floating, Grounded, Cover { grounded: bool }, Signed }
+struct Represented<T, I> { matrix: AnyWdd<T, I>, layout: Layout }
+impl<T: Real, I: Index> Represented<T, I> {
+    fn exact(m: WddCsr<T, I>, balance: Balance<T>) -> Self;                          // dense arm, signed route
+    fn sampled(m: WddCsr<T, I>, balance: Balance<T>, route: FrustratedRoute) -> Self; // builds the cover if asked
+}
+
+// The edge sign: Unsigned is zero-sized and compiles to the Laplacian elimination.
+trait Sign: Copy + Send + Sync {
+    const SIGNED: bool;                                          // also picks the dense kernel
+    fn fill(self, other: Self) -> Self;                          // sign of a sampled edge
+    fn merge<T: Real>(a: (Self, T), b: (Self, T)) -> ((Self, T), T);   // cancelled 2·min → surplus
+}
+struct Unsigned;
+struct Signed(bool);
+
+// A clique sample: a prepared star in, fill edges out; the column of 𝓛 stays exact.
+struct Star<T, I, C: Copies, S: Sign> { /* merged neighbors, capped copies, weights, ω_v */ }
+enum StarOrder { Ascending, Any }
+trait FillRule<T, I, C: Copies, S: Sign> {
+    const ORDER: StarOrder;
+    fn fill(&mut self, star: &Star<T, I, C, S>, rng: &mut Rng, emit: impl FnMut(FillEdge<T, I, C, S>));
+}
+struct CliqueTree;                                               // for C = Single and C = Multi
+struct SchurTree { split: NonZeroU32 }                           // for C = Single only
+
+// The factorization of one component.
+struct Factorization<T, I> { layout: Layout, pinned: usize, triangular: Triangular<T, I> }
+enum Triangular<T, I> { Dense(Box<[T]>), Approximate(Box<Steps<T, I>>) }
+```
+
 ## Why
 
 - **Cover and signed elimination both kept:** they target the same $A_r$. In a Python prototype
