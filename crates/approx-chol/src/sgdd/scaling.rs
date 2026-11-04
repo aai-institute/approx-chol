@@ -2,7 +2,7 @@ mod normalized;
 mod perron;
 
 use normalized::Normalized;
-use perron::InverseIteration;
+use perron::{InverseIteration, Outcome, Shortfall};
 
 use crate::storage::OffDiagonal;
 use crate::{narrow, widen, Index, Real};
@@ -56,7 +56,7 @@ impl Default for ScalingPolicy {
     }
 }
 
-/// A block's clamped deficit or uncertified or unsettled scaling: present iff a deficit past rounding was clamped, its violation exceeded the policy's tolerance, or its float decision is unproven.
+/// A block's clamped deficit or uncertified or unsettled scaling: present iff a deficit past rounding was clamped, its violation exceeded the policy's tolerance, never taken below rounding, or its float decision is unproven.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScalingReport {
@@ -81,7 +81,10 @@ impl ScalingPolicy {
 }
 
 /// Scales `R = μ/√a_ii`, positive once [`positive`] admits them, making `R|A|R` weakly dominant (Daitch, Spielman, arXiv:0803.0988 §4), and what `μ` is.
-pub(super) type Relaxation<T> = (Box<[T]>, ScaleVector);
+pub(super) struct Relaxation<T> {
+    pub(super) scales: Box<[T]>,
+    pub(super) vector: ScaleVector,
+}
 
 /// The vector the scales are taken from, and so how far past rounding each row of `M` may sit.
 #[derive(Clone, Copy, Debug)]
@@ -90,9 +93,12 @@ pub(super) enum ScaleVector {
     Identity,
     /// `|u|` of a certified null vector, accurate relative to each entry.
     NullVector,
-    /// An inverse-iteration Perron vector settled to `band` relative to its peak: a row of `M_ii = μ_i²` sits within `band/μ_i`.
-    // Spreads a ground as `1 − ρ` over every row, so a block within the band floats (#308).
-    PerronVector { band: f64, shortfall: ScalingReport },
+    /// An inverse-iteration Perron vector settled to `settle_band` relative to its peak: a row of `M_ii = μ_i²` sits within `settle_band/μ_i`.
+    // Spreads a ground as `1 − ρ` over every row, so a block within the singular band floats (#308).
+    PerronVector {
+        settle_band: f64,
+        shortfall: Shortfall,
+    },
 }
 
 impl ScaleVector {
@@ -119,23 +125,21 @@ impl ScaleVector {
         match self {
             Self::Identity => rounding.max(RATIO_BAND * epsilon),
             Self::NullVector => rounding + RATIO_BAND * epsilon,
-            Self::PerronVector { band, .. } => rounding + band / m_ii.sqrt(),
+            Self::PerronVector { settle_band, .. } => rounding + settle_band / m_ii.sqrt(),
         }
     }
 
     /// `M`'s report from its worst clamped `deficit`, kept when one is past a row's band or the scaling did not settle; an exact vector spends nothing.
     pub(super) fn report(self, deficit: f64) -> Option<ScalingReport> {
         let shortfall = match self {
-            Self::Identity | Self::NullVector => ScalingReport {
-                iterations: 0,
-                violation: 0.0,
-                settled: true,
-            },
-            Self::PerronVector { shortfall, .. } => shortfall,
+            Self::Identity | Self::NullVector => None,
+            Self::PerronVector { shortfall, .. } => Some(shortfall),
         };
-        (deficit > 0.0 || !shortfall.settled).then_some(ScalingReport {
-            violation: shortfall.violation.max(deficit),
-            ..shortfall
+        let settled = shortfall.is_none_or(|s| s.outcome == Outcome::Settled);
+        (deficit > 0.0 || !settled).then(|| ScalingReport {
+            iterations: shortfall.map_or(0, |s| s.iterations),
+            violation: shortfall.map_or(deficit, |s| s.violation.max(deficit)),
+            settled,
         })
     }
 }
@@ -143,7 +147,7 @@ impl ScaleVector {
 /// `None` unless every scale is a positive `T`.
 fn positive<T: Real>(scales: Box<[T]>, vector: ScaleVector) -> Option<Relaxation<T>> {
     let admitted = scales.iter().all(|&f| f.is_finite() && f > T::zero());
-    admitted.then_some((scales, vector))
+    admitted.then_some(Relaxation { scales, vector })
 }
 
 /// `|u|` of a certified null vector: no iteration runs; `None` if a scale leaves `T`.
@@ -165,7 +169,7 @@ pub(super) fn null_scaling<T: Real>(
 /// How far, in `ε`, a row ratio `Σ_j|a_ij|f_j / (a_ii f_i)` may sit from `1`: a settled residual and the dominance slack's floor.
 pub(super) const RATIO_BAND: f64 = 16.0;
 
-/// Scales from `N`'s Perron vector, iterated until `ρ < 1` is proven, pinned at `1`, or refuted past the tolerance.
+/// Scales from `N`'s Perron vector, iterated until `ρ < 1` is proven, pinned at `1`, or refuted past the slack.
 pub(super) fn relax<T: Real, I: Index>(
     off_diagonal: &OffDiagonal<T, I>,
     diagonal: &[T],
@@ -175,10 +179,13 @@ pub(super) fn relax<T: Real, I: Index>(
     // A ratio over `k` positive terms rounds by `(k + 3)ε`: no bracket closes tighter.
     let rounding =
         (off_diagonal.degrees().into_iter().max().unwrap_or(0) + 3) as f64 * f64::EPSILON;
-    let band = (RATIO_BAND * widen(T::epsilon())).max(rounding);
+    let settle_band = (RATIO_BAND * widen(T::epsilon())).max(rounding);
     let slack = policy.slack(widen(T::epsilon()));
-    let iteration = InverseIteration::new(&n, slack, band, policy.max_iterations)?;
+    let iteration = InverseIteration::new(&n, slack, settle_band, policy.max_iterations)?;
     let (y, shortfall) = iteration.run();
-    let vector = ScaleVector::PerronVector { band, shortfall };
+    let vector = ScaleVector::PerronVector {
+        settle_band,
+        shortfall,
+    };
     positive(n.scales(&y), vector)
 }

@@ -1,5 +1,4 @@
 use super::normalized::Normalized;
-use super::ScalingReport;
 use crate::{Index, Real};
 
 /// `[min_i, max_i] (Ny)_i / y_i` of a positive `y`, which brackets `ρ(N)` (Collatz 1942, Wielandt 1950).
@@ -42,29 +41,30 @@ impl Bracket {
         (self.high - 1.0).max(0.0)
     }
 
-    fn certifies(&self, tolerance: f64) -> bool {
-        self.violation() <= tolerance
+    fn certifies(&self, slack: f64) -> bool {
+        self.violation() <= slack
     }
 
-    /// `ρ ≥ low` past `1 + tolerance`: no scaling certifies (Guan, Lu, Li, Shao, JCAM 302 (2016), Thm 2.1).
-    fn refutes(&self, tolerance: f64) -> bool {
-        self.low > 1.0 + tolerance
+    /// `ρ ≥ low` past `1 + slack`: no scaling certifies (Guan, Lu, Li, Shao, JCAM 302 (2016), Thm 2.1).
+    fn refutes(&self, slack: f64) -> bool {
+        self.low > 1.0 + slack
     }
 
     /// `ρ < 1` proven, or `y` a Perron vector of `ρ = 1` to rounding: no later `y` moves the float decision.
-    fn settled(&self, tolerance: f64, band: f64) -> bool {
+    fn settled(&self, slack: f64, settle_band: f64) -> bool {
         // Not the width, which never closes once `y` has components below `ε` (Li & Li, arXiv:2111.12642 §3).
-        self.certifies(tolerance) && (self.high < 1.0 - band || self.eigen_residual <= band)
+        self.certifies(slack)
+            && (self.high < 1.0 - settle_band || self.eigen_residual <= settle_band)
     }
 
-    /// Certified and near settling: a CG run stalls at a floor that grows with its steps, past `4×` the band after ~5000.
-    fn nearly_settled(&self, tolerance: f64, band: f64) -> bool {
-        self.certifies(tolerance) && self.eigen_residual <= 64.0 * band
+    /// Certified and near settling: a CG run stalls at a floor that grows with its steps, past `4×` the settle band after ~5000.
+    fn nearly_settled(&self, slack: f64, settle_band: f64) -> bool {
+        self.certifies(slack) && self.eigen_residual <= 64.0 * settle_band
     }
 
     /// Just above `ρ`: `1` once certified, as a scalable block's `ρ ≤ 1`, else the top (Noda 1971).
-    fn shift(&self, tolerance: f64) -> f64 {
-        let top = if self.certifies(tolerance) {
+    fn shift(&self, slack: f64) -> f64 {
+        let top = if self.certifies(slack) {
             1.0
         } else {
             self.high
@@ -73,18 +73,40 @@ impl Bracket {
     }
 }
 
+/// The steps spent, the violation `y` leaves, and how the iteration ended.
+#[derive(Clone, Copy, Debug)]
+// Mirrors `ScalingReport` before a clamped deficit joins it, which only `ScaleVector::report` does.
+pub(in crate::sgdd) struct Shortfall {
+    pub(super) iterations: usize,
+    pub(super) violation: f64,
+    pub(super) outcome: Outcome,
+}
+
+/// Settled proves the float decision; refuted proves no scaling certifies; unsettled ran out of steps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Outcome {
+    Settled,
+    Refuted,
+    Unsettled,
+}
+
+/// The best positive `y` so far and its bracket.
+struct Iterate {
+    y: Vec<f64>,
+    bracket: Bracket,
+}
+
 /// Inverse iteration towards `N`'s Perron vector, each step `(αI − N) y' = y` solved by CG from `y' = 0` (Jia, Lin, Liu, arXiv:1309.3926).
 pub(super) struct InverseIteration<'n, 'a, T, I> {
     n: &'n Normalized<'a, T, I>,
-    tolerance: f64,
+    slack: f64,
     /// The rounding band a settled bracket closes to, around `ρ = 1`.
-    band: f64,
+    settle_band: f64,
     max_iterations: usize,
     iterations: usize,
-    /// A Rayleigh quotient passed `1 + max(tolerance, band)`: `ρ` is too, so no later `y` certifies.
+    /// A Rayleigh quotient passed `1 + max(slack, settle_band)`: `ρ` is too, so no later `y` certifies.
     refuted: bool,
-    /// The best positive `y` so far and its bracket.
-    best: (Vec<f64>, Bracket),
+    best: Iterate,
     /// The product of every product with `N`.
     work: Vec<f64>,
     /// Steps a nearly settled `best` may go unimproved; doubles per restart and per stall before an adoption, so stalls cannot chain.
@@ -95,8 +117,8 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
     /// From `y = 1`; `None` if its bracket is not finite.
     pub(super) fn new(
         n: &'n Normalized<'a, T, I>,
-        tolerance: f64,
-        band: f64,
+        slack: f64,
+        settle_band: f64,
         max_iterations: usize,
     ) -> Option<Self> {
         let mut work = vec![0.0; n.n()];
@@ -104,41 +126,49 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
         let bracket = Bracket::of(n, &unit, &mut work)?;
         Some(Self {
             n,
-            tolerance,
-            band,
+            slack,
+            settle_band,
             max_iterations,
             iterations: 0,
             refuted: false,
-            best: (unit, bracket),
+            best: Iterate { y: unit, bracket },
             work,
             patience: 64,
         })
     }
 
-    /// `α = 1 + tolerance/2` until a step certifies or refutes (as `M⁻¹𝟙` does: Ahmadinejad et al., arXiv:1810.02348 §3.1), then each step from the bracket's [`shift`](Bracket::shift).
-    pub(super) fn run(mut self) -> (Vec<f64>, ScalingReport) {
-        let (tolerance, band) = (self.tolerance, self.band);
-        let polished = |b: &Bracket| b.settled(tolerance, band) || b.refutes(tolerance);
+    /// `α = 1 + slack/2` until a step certifies or refutes (as `M⁻¹𝟙` does: Ahmadinejad et al., arXiv:1810.02348 §3.1), then each step from the bracket's [`shift`](Bracket::shift).
+    pub(super) fn run(mut self) -> (Vec<f64>, Shortfall) {
+        let (slack, settle_band) = (self.slack, self.settle_band);
+        let polished = |b: &Bracket| b.settled(slack, settle_band) || b.refutes(slack);
         let unit = vec![1.0; self.n.n()];
-        self.solve(1.0 + 0.5 * tolerance, unit, |b| {
-            b.certifies(tolerance) || b.refutes(tolerance)
+        self.solve(1.0 + 0.5 * slack, unit, |b| {
+            b.certifies(slack) || b.refutes(slack)
         });
-        while !self.refuted && !polished(&self.best.1) && self.iterations < self.max_iterations {
-            let (y, bracket) = &self.best;
+        while !self.refuted
+            && !polished(&self.best.bracket)
+            && self.iterations < self.max_iterations
+        {
+            let Iterate { y, bracket } = &self.best;
             let peak = y.iter().copied().fold(0.0f64, f64::max);
             let rhs = y.iter().map(|&y| y / peak).collect();
-            if !self.solve(bracket.shift(tolerance), rhs, polished) {
+            if !self.solve(bracket.shift(slack), rhs, polished) {
                 break;
             }
             self.patience = self.patience.saturating_mul(2);
         }
-        let (y, bracket) = self.best;
-        let report = ScalingReport {
+        let Iterate { y, bracket } = self.best;
+        let outcome = match bracket.settled(slack, settle_band) {
+            true => Outcome::Settled,
+            false if self.refuted || bracket.refutes(slack) => Outcome::Refuted,
+            false => Outcome::Unsettled,
+        };
+        let shortfall = Shortfall {
             iterations: self.iterations,
             violation: bracket.violation(),
-            settled: bracket.settled(tolerance, band),
+            outcome,
         };
-        (y, report)
+        (y, shortfall)
     }
 
     /// CG on `(αI − N) y = b`; each probed iterate, and a vanishing curvature's or refuting Rayleigh quotient's direction, replaces `best` when it ranks above it. Whether one did.
@@ -151,7 +181,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
         let (mut residual, mut direction) = (rhs.clone(), rhs);
         let start = self.iterations;
         let mut last_adoption = start;
-        while self.iterations < self.max_iterations && !goal(&self.best.1) {
+        while self.iterations < self.max_iterations && !goal(&self.best.bracket) {
             self.iterations += 1;
             let m = direction.len();
             let image = &mut self.work[..m];
@@ -162,7 +192,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             let vanishing = curvature <= 64.0 * f64::EPSILON * direction_norm_squared;
             let floor = system.spectral_floor(direction_norm_squared, curvature);
             // Past the rounding band too: an f32 block's `N` reads a few ulps over a singular `ρ = 1`.
-            self.refuted = floor > 1.0 + self.tolerance.max(self.band);
+            self.refuted = floor > 1.0 + self.slack.max(self.settle_band);
             if vanishing || self.refuted {
                 // Either exposes a near-Perron vector: a singular boundary's zero curvature, or the refuting direction.
                 let witness: Vec<f64> = direction.iter().map(|value| value.abs()).collect();
@@ -183,8 +213,11 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             if !next_residual_norm_squared.is_finite() {
                 break;
             }
-            // A long run's iterate stalls a few ulps above the band; a fresh solve from an improved `best` polishes it.
-            let stalled = self.best.1.nearly_settled(self.tolerance, self.band)
+            // A long run's iterate stalls a few ulps above the settle band; a fresh solve from an improved `best` polishes it.
+            let stalled = self
+                .best
+                .bracket
+                .nearly_settled(self.slack, self.settle_band)
                 && self.iterations - last_adoption >= self.patience;
             // From an unchanged `best`, a restart would replay this solve step for step.
             if stalled && !adopted {
@@ -218,10 +251,10 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
         let Some(bracket) = Bracket::of(self.n, y, &mut self.work) else {
             return false;
         };
-        let tolerance = self.tolerance;
+        let slack = self.slack;
         // Certified, only the eigen-residual moves towards settling; a smaller violation alone resumes a restart from a stale best.
         let rank = |b: &Bracket| {
-            let certified = b.certifies(tolerance);
+            let certified = b.certifies(slack);
             let progress = if certified {
                 -b.eigen_residual
             } else {
@@ -229,11 +262,11 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             };
             (goal(b), certified, progress)
         };
-        let better = rank(&bracket) > rank(&self.best.1);
+        let better = rank(&bracket) > rank(&self.best.bracket);
         if better {
-            self.best.0.clear();
-            self.best.0.extend_from_slice(y);
-            self.best.1 = bracket;
+            self.best.y.clear();
+            self.best.y.extend_from_slice(y);
+            self.best.bracket = bracket;
         }
         better
     }

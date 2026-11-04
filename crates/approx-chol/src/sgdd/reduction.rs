@@ -9,7 +9,7 @@ use rayon::prelude::*;
 use super::block::{Balance, BlockComplement, Congruent, Grounding, IrreducibleBlock, ReduceError};
 use super::congruence::{Congruence, Selection};
 use super::decomposition::{
-    of_csr, of_upper, AdjacencyLayout, Biadjacency, Components, Partitioned, RowSums,
+    of_csr, of_upper, AdjacencyLayout, Biadjacency, Components, Lone, Partitioned, RowSums,
     StrictUpperTriangle, Summands, SymmetricBlock,
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy};
@@ -72,7 +72,10 @@ impl<T: Real, I: Index> Complement<T, I> {
                 .map(|block| BlockComplement::new(block, local))
                 .collect(),
             lone: (lone.into_iter())
-                .filter_map(|(v, pivot)| Some((on_kept(v)?, pivot)))
+                .filter_map(|lone| {
+                    let vertex = on_kept(lone.vertex)?;
+                    Some(Lone { vertex, ..lone })
+                })
                 .collect(),
             dead: dead.into_iter().filter_map(on_kept).collect(),
         })
@@ -84,12 +87,12 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
     fn reduce(self, policy: &ScalingPolicy) -> Result<Reduced<T, I>, ReduceError> {
         self.extract(|a| {
             let relax = |a: &SymmetricBlock<T, I>| {
-                scaling::relax(&a.off_diagonal, &a.rows.diagonal, policy)
+                scaling::relax(&a.adjacency.off_diagonal, &a.rows.diagonal, policy)
             };
             let block = match a.reduce(policy, relax)? {
                 Signed::Folded(folded) => {
-                    let band = folded.band();
-                    folded.settle(band, &RowSurplus)?
+                    let singularity = folded.singularity();
+                    folded.settle(singularity, &RowSurplus)?
                 }
                 Signed::Frustrated(block) => block,
             };
@@ -109,14 +112,14 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         let RowSums { diagonal, abs } = &self.rows;
         let in_range = |(&d, &s): (&T, &T)| diagonal_in_range(d) && diagonal_in_range(s);
         if let Some(i) = diagonal.iter().zip(abs).position(|row| !in_range(row)) {
-            let vertex = self.vertices.vertex(i);
+            let vertex = self.adjacency.vertices.vertex(i);
             return Err(ReduceError::OutOfRange { vertex });
         }
         if let Some(i) = diagonal.iter().position(|&d| d <= T::zero()) {
-            let vertex = self.vertices.vertex(i);
+            let vertex = self.adjacency.vertices.vertex(i);
             return Err(ReduceError::NonpositiveDiagonal { vertex });
         }
-        let vertex = self.vertices.vertex(0);
+        let vertex = self.adjacency.vertices.vertex(0);
         let relaxation = match diagonal
             .iter()
             .zip(abs)
@@ -125,23 +128,14 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
             true => None,
             false => Some(relax(&self).ok_or(ReduceError::Unscalable { vertex })?),
         };
-        let folding = folding_signs(&self.off_diagonal);
+        let folding = folding_signs(&self.adjacency.off_diagonal);
         let folded = folding.is_some();
         let signs = folding.unwrap_or(Congruence::Identity);
-        let (m, rows, vector) = match relaxation {
-            // Signs keep every magnitude, so `A_c`'s rows are `M`'s.
-            None => {
-                let m = Congruent::signed(self.vertices, self.off_diagonal, signs);
-                (m, self.rows, ScaleVector::Identity)
-            }
-            Some((scales, vector)) => {
-                let (m, abs) = Congruent::scaled(self.vertices, self.off_diagonal, signs, &scales)
-                    .ok_or(ReduceError::Unscalable { vertex })?;
-                let diagonal = (self.rows.diagonal.iter().zip(&scales[..]))
-                    .map(|(&a, &f)| f * a * f)
-                    .collect();
-                (m, RowSums { diagonal, abs }, vector)
-            }
+        let vector = (relaxation.as_ref()).map_or(ScaleVector::Identity, |r| r.vector);
+        let (m, rows) = match relaxation {
+            None => Congruent::signed(self, signs),
+            Some(r) => Congruent::scaled(self, signs, &r.scales)
+                .ok_or(ReduceError::Unscalable { vertex })?,
         };
         let deficits = (rows.diagonal.iter().zip(&rows.abs)).map(|(&d, &s)| widen(s) - widen(d));
         let clamped = vector.worst_past_band(deficits, &rows.diagonal, m.off_diagonal());
@@ -228,15 +222,15 @@ impl<T: Real, I: Index> Surplus<T, I> for RowSurplus {
 }
 
 impl<T: Real, I: Index> Folded<T, I> {
-    /// The one float-or-ground rule: in band, no stated ground, and residues or a certificate float `M`.
+    /// The one float-or-ground rule: in the singular band, no stated ground, and residues or a certificate float `M`.
     fn settle<S: Surplus<T, I>>(
         self,
-        (ones, trace): (f64, f64),
+        singularity: Singularity,
         surplus: &S,
     ) -> Result<IrreducibleBlock<T, I>, ReduceError> {
         let dominant = matches!(self.vector, ScaleVector::Identity);
         let floats = !surplus.states_ground(&self)
-            && within_band::<T>(ones, trace)
+            && singularity.within_band::<T>()
             && (((dominant || S::RESIDUES_FLOAT_SCALED) && self.floats(surplus.residues(&self)))
                 || surplus.certifies(self.m.vertices()));
         let report = self.vector.report(self.clamped);
@@ -262,8 +256,8 @@ impl<T: Real, I: Index> Folded<T, I> {
         }
     }
 
-    /// `(ε·1ᵀM1, ε·tr M)` from `M`'s rows, `1ᵀM1 = tr M − Σ|offdiag(M)|`, so `tr M` cannot overflow.
-    fn band(&self) -> (f64, f64) {
+    /// From `M`'s rows, `1ᵀM1 = tr M − Σ|offdiag(M)|`, so `tr M` cannot overflow.
+    fn singularity(&self) -> Singularity {
         let epsilon = widen(T::epsilon());
         let diagonal = crate::Sum2::of(&self.rows.diagonal, |_, d| epsilon * widen(d));
         let trace = diagonal.total();
@@ -271,7 +265,7 @@ impl<T: Real, I: Index> Folded<T, I> {
         let ones = (self.m.off_diagonal())
             .scaled_abs_into(diagonal, -epsilon)
             .total();
-        (ones, trace)
+        Singularity { ones, trace }
     }
 
     /// Whether no row's surplus outweighs its coupling or passes its band.
@@ -301,12 +295,21 @@ fn surplus<T: Real>(RowSums { diagonal, abs }: &RowSums<T>) -> Grounding<T> {
     )
 }
 
-/// `1ᵀM1 ≤ SINGULAR_BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh).
-const SINGULAR_BAND: f64 = 5.0;
+/// `ε·1ᵀM1` and `ε·tr M`, both `ε`-scaled so neither overflows: how near `M` is to singular.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Singularity {
+    pub(crate) ones: f64,
+    pub(crate) trace: f64,
+}
 
-/// Whether `ones = 1ᵀM1` is within the band of `trace = tr M`: needed, not enough, for `M` to float.
-pub(crate) fn within_band<T: Real>(ones: f64, trace: f64) -> bool {
-    ones <= SINGULAR_BAND * widen(T::epsilon()) * trace
+impl Singularity {
+    /// `1ᵀM1 ≤ SINGULAR_BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh).
+    const SINGULAR_BAND: f64 = 5.0;
+
+    /// Whether `1ᵀM1` is within the singular band of `tr M`: needed, not enough, for `M` to float.
+    pub(crate) fn within_band<T: Real>(self) -> bool {
+        self.ones <= Self::SINGULAR_BAND * widen(T::epsilon()) * self.trace
+    }
 }
 
 /// The signs `S` folding `A_c` into a Z-matrix, `I` when it already is one; `None` when frustrated.
