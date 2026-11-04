@@ -93,8 +93,8 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
             };
             let block = match a.reduce(policy, relax)? {
                 Signed::Folded(folded) => {
-                    let band = folded.band();
-                    folded.settle(band, &RowSurplus)?
+                    let singularity = folded.singularity();
+                    folded.settle(singularity, &RowSurplus)?
                 }
                 Signed::Frustrated(block) => block,
             };
@@ -236,12 +236,12 @@ impl<T: Real, I: Index> Folded<T, I> {
     /// The one float-or-ground rule: in band, no stated ground, and residues or a certificate float `M`.
     fn settle<S: Surplus<T, I>>(
         self,
-        (ones, trace): (f64, f64),
+        singularity: Singularity,
         surplus: &S,
     ) -> Result<IrreducibleBlock<T, I>, ReduceError> {
         let dominant = matches!(self.vector, ScaleVector::Identity);
         let floats = !surplus.states_ground(&self)
-            && within_band::<T>(ones, trace)
+            && singularity.within_band::<T>()
             && (((dominant || S::RESIDUES_FLOAT_SCALED) && self.floats(surplus.residues(&self)))
                 || surplus.certifies(self.m.vertices()));
         let report = self.vector.report(self.clamped);
@@ -267,8 +267,8 @@ impl<T: Real, I: Index> Folded<T, I> {
         }
     }
 
-    /// `(ε·1ᵀM1, ε·tr M)` from `M`'s rows, `1ᵀM1 = tr M − Σ|offdiag(M)|`, so `tr M` cannot overflow.
-    fn band(&self) -> (f64, f64) {
+    /// From `M`'s rows, `1ᵀM1 = tr M − Σ|offdiag(M)|`, so `tr M` cannot overflow.
+    fn singularity(&self) -> Singularity {
         let epsilon = widen(T::epsilon());
         let diagonal = crate::Sum2::of(&self.rows.diagonal, |_, d| epsilon * widen(d));
         let trace = diagonal.total();
@@ -276,7 +276,7 @@ impl<T: Real, I: Index> Folded<T, I> {
         let ones = (self.m.off_diagonal())
             .scaled_abs_into(diagonal, -epsilon)
             .total();
-        (ones, trace)
+        Singularity { ones, trace }
     }
 
     /// Whether no row's surplus outweighs its coupling or passes its band.
@@ -306,12 +306,25 @@ fn surplus<T: Real>(RowSums { diagonal, abs }: &RowSums<T>) -> Grounding<T> {
     )
 }
 
-/// `1ᵀM1 ≤ SINGULAR_BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh).
-const SINGULAR_BAND: f64 = 5.0;
+/// `ε·1ᵀM1` and `ε·tr M`, both `ε`-scaled so neither overflows: how near `M` is to singular.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Singularity {
+    ones: f64,
+    trace: f64,
+}
 
-/// Whether `ones = 1ᵀM1` is within the band of `trace = tr M`: needed, not enough, for `M` to float.
-pub(crate) fn within_band<T: Real>(ones: f64, trace: f64) -> bool {
-    ones <= SINGULAR_BAND * widen(T::epsilon()) * trace
+impl Singularity {
+    /// `1ᵀM1 ≤ BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh).
+    const BAND: f64 = 5.0;
+
+    pub(crate) fn new(ones: f64, trace: f64) -> Self {
+        Self { ones, trace }
+    }
+
+    /// Whether `1ᵀM1` is within the band of `tr M`: needed, not enough, for `M` to float.
+    pub(crate) fn within_band<T: Real>(self) -> bool {
+        self.ones <= Self::BAND * widen(T::epsilon()) * self.trace
+    }
 }
 
 /// The signs `S` folding `A_c` into a Z-matrix, `I` when it already is one; `None` when frustrated.

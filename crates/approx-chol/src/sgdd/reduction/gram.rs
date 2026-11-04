@@ -2,7 +2,7 @@ use std::cell::LazyCell;
 
 use num_traits::PrimInt;
 
-use super::{Folded, Signed, Surplus};
+use super::{Folded, Signed, Singularity, Surplus};
 use crate::input::{Column, FactorWidth2};
 use crate::sgdd::block::{Grounding, IrreducibleBlock, ReduceError};
 use crate::sgdd::congruence::Selection;
@@ -126,8 +126,7 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     let mut surplus = vec![0.0f64; v.n()];
     // One-ended columns: data, not a cancelling row sum.
     let mut stated = vec![0.0f64; v.n()];
-    // `ε·1ᵀM1` and `ε·tr M` per block.
-    let (mut ones, mut trace) = (vec![0.0f64; blocks.len()], vec![0.0f64; blocks.len()]);
+    let mut singularity = vec![Singularity::default(); blocks.len()];
     let epsilon = widen(T::epsilon());
     v.for_each_column::<I>(
         #[inline(always)]
@@ -145,16 +144,16 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
                     let p = u_a + u_b;
                     surplus[a] += w(u_a, p);
                     surplus[b] += w(u_b, p);
-                    ones[c] += w(epsilon * p, p);
-                    trace[c] += w(epsilon * u_a, u_a) + w(epsilon * u_b, u_b);
+                    singularity[c].ones += w(epsilon * p, p);
+                    singularity[c].trace += w(epsilon * u_a, u_a) + w(epsilon * u_b, u_b);
                 }
                 // One-ended, a column states a ground of its end's own square.
                 (a, b) => {
                     for (i, c, u) in [a, b].into_iter().flatten() {
                         surplus[i] += w(u, u);
                         stated[i] += w(u, u);
-                        ones[c] += w(epsilon * u, u);
-                        trace[c] += w(epsilon * u, u);
+                        singularity[c].ones += w(epsilon * u, u);
+                        singularity[c].trace += w(epsilon * u, u);
                     }
                 }
             }
@@ -171,8 +170,8 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
         stated: &stated,
         certified,
     };
-    let decided = blocks.into_iter().zip(ones).zip(trace);
-    (decided.map(|((folded, ones), trace)| folded.settle((ones, trace), &gram))).collect()
+    let decided = blocks.into_iter().zip(singularity);
+    (decided.map(|(folded, singularity)| folded.settle(singularity, &gram))).collect()
 }
 
 /// The null-vector certificate: one union-find pass; a cycle off by more than `√ε` relative dooms its component.

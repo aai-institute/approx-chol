@@ -11,7 +11,7 @@ pub(crate) use block::{BlockComplement, IrreducibleBlock};
 pub(crate) use block::{Grounding, Sheets};
 pub(crate) use congruence::{FactorTail, Restriction, Selection};
 pub(crate) use decomposition::{Lone, Summands};
-pub(crate) use reduction::within_band;
+pub(crate) use reduction::Singularity;
 pub use scaling::{ScalingPolicy, ScalingReport};
 
 use crate::{in_range, Index, Real};

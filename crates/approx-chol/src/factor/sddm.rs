@@ -2,7 +2,7 @@
 
 use rayon::prelude::*;
 
-use crate::sgdd::{within_band, Grounding, Sheets};
+use crate::sgdd::{Grounding, Sheets, Singularity};
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, widen, Index, Real};
 
@@ -295,7 +295,7 @@ impl<T: Real, I: Index> ColumnSums<'_, T, I> {
 fn twists<T: Real, I: Index>(ground: &[T], adjacency: &UpperAdjacency<T, I>) -> bool {
     let epsilon = widen(T::epsilon());
     let total = crate::lane_sum(ground, epsilon);
-    within_band::<T>(total, total + adjacency.scaled_abs_total(epsilon))
+    Singularity::new(total, total + adjacency.scaled_abs_total(epsilon)).within_band::<T>()
 }
 
 /// The edge `k⁺ — k⁻` that acts on `[z; −z]` as grounds `g⁺, g⁻` do; with `g⁺ ≠ g⁻` no ungrounded pair matches them, and the mean differs by less than the band. Zero where both copies float, else at least `MIN_POSITIVE`, as a share is.
