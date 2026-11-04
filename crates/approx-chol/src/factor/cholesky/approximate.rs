@@ -7,7 +7,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 
 #[cfg(feature = "serde")]
 use super::within_one;
-use crate::factor::clique_tree::{CliqueTreeSampler, Copies, Fill, Multi, Single};
+use crate::factor::clique_tree::{CliqueTree, Column, Copies, Fill, FillRule, Multi, Single, Star};
 use crate::factor::representation::Represented;
 use crate::storage::{narrow, Index, Real};
 use graph::EliminationGraph;
@@ -47,7 +47,8 @@ impl<T: Real, I: Index> CliqueTreeElimination<T, I> {
 struct Elimination<T, I, C: Copies> {
     split: C,
     graph: EliminationGraph<T, I, C>,
-    clique: CliqueTreeSampler<T, I, C>,
+    star: Star<T, I, C>,
+    rule: CliqueTree,
     fill: Fill<T, I, C>,
     order: MinDegreeOrder<I>,
 }
@@ -57,7 +58,8 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         Self {
             split,
             graph: EliminationGraph::new(),
-            clique: CliqueTreeSampler::new(split),
+            star: Star::new(split),
+            rule: CliqueTree::default(),
             fill: Fill::new(),
             order: MinDegreeOrder::new(),
         }
@@ -89,7 +91,8 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
     fn pivot_all(&mut self, draws: &mut Xoshiro256PlusPlus, steps: &mut ApproximateCholesky<T, I>) {
         let Self {
             graph,
-            clique,
+            star,
+            rule,
             fill,
             order,
             ..
@@ -97,13 +100,14 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         for _ in 1..graph.n() {
             let v = order.next_vertex();
             fill.clear();
-            let column = clique.eliminate(draws, graph.neighbors(v), fill);
-            steps.push(v, column);
+            star.merged(graph.neighbors(v));
+            rule.fill(star, draws, |edge| fill.push(edge));
+            steps.push(v, star.column());
             graph.eliminate_vertex(v);
-            for &(u, w, copies, weight) in fill.iter() {
-                graph.push_pair(u, w, copies, weight);
+            for edge in fill.iter() {
+                graph.push_pair(edge.lo, edge.hi, edge.copies, edge.weight);
             }
-            order.update(clique.degree_losses(), fill);
+            order.update(star.degree_losses(), fill);
         }
     }
 }
@@ -139,11 +143,9 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
     }
 
     /// The one site deriving the remainder's share.
-    fn push(
-        &mut self,
-        vertex: usize,
-        (weight, shares, remainder): (T, impl Iterator<Item = (I, f64)>, I),
-    ) {
+    fn push<C: Copies>(&mut self, vertex: usize, column: Column<'_, T, I, C>) {
+        let (weight, remainder) = (column.weight(), column.remainder());
+        let shares = column.shares();
         let start = self.neighbors.len();
         // `f64` shares, as `f32` ones cancel past the last's `w/d` (#275); `1 − Σ` still errs ≤ m²·2⁻⁵³ relative (#302).
         let mut retained = 1.0;
@@ -272,7 +274,7 @@ mod tests {
 
     use super::*;
     use crate::factor::cholesky::within_one;
-    use crate::factor::clique_tree::{Multi, Single};
+    use crate::factor::clique_tree::{CliqueTree, FillRule, Multi, Single, Star};
 
     fn stars(m: usize) -> [(&'static str, Vec<f32>); 3] {
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(7);
@@ -298,8 +300,9 @@ mod tests {
             .enumerate()
             .for_each(|(p, &j)| position[j as usize] = p);
         let mut sums = vec![0.0; w.len()];
-        for &(lo, hi, _, weight) in fill {
-            sums[position[lo as usize].min(position[hi as usize])] += f64::from(weight);
+        for edge in fill {
+            let (lo, hi) = (position[edge.lo as usize], position[edge.hi as usize]);
+            sums[lo.min(hi)] += f64::from(edge.weight);
         }
         let sorted: Vec<f64> = order
             .iter()
@@ -317,12 +320,13 @@ mod tests {
     }
 
     fn pivot_defects<C: Copies>(split: C, label: &str, w: &[f32]) -> Option<String> {
-        let mut clique = CliqueTreeSampler::<f32, u32, C>::new(split);
+        let mut star = Star::<f32, u32, C>::new(split);
         let mut fill = Fill::new();
         let mut steps = ApproximateCholesky::with_capacity(w.len() + 1, w.len());
         let draws = &mut Xoshiro256PlusPlus::seed_from_u64(0);
-        let star = (1..).zip(w).map(|(j, &w)| (j, split, w));
-        steps.push(0, clique.eliminate(draws, star, &mut fill));
+        star.merged((1..).zip(w).map(|(j, &w)| (j, split, w)));
+        CliqueTree::default().fill(&star, draws, |edge| fill.push(edge));
+        steps.push(0, star.column());
         let (fill_off, d) = fill_error(w, &fill);
         let retained = *steps.coefficients.last().expect("the remainder's share");
         let inverse = f64::from(retained) * f64::from(steps.headers[0].pivot_scale);
@@ -334,10 +338,11 @@ mod tests {
     }
 
     fn unique_fill_defects(label: &str, w: &[f32]) -> Option<String> {
-        let mut clique = CliqueTreeSampler::<f32, u32, Single>::new(Single);
+        let mut star = Star::<f32, u32, Single>::new(Single);
         let mut fill = Fill::new();
-        let star = (1..).zip(w.iter().copied());
-        clique.eliminate_unique(Xoshiro256PlusPlus::seed_from_u64(0), star, |e| fill.push(e));
+        star.unique((1..).zip(w.iter().copied()));
+        let draws = &mut Xoshiro256PlusPlus::seed_from_u64(0);
+        CliqueTree::default().fill(&star, draws, |edge| fill.push(edge));
         let (fill_off, _) = fill_error(w, &fill);
         (fill_off >= 1e-5).then(|| format!("{label}: fill off {fill_off:e}"))
     }

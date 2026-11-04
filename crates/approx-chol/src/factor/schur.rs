@@ -3,7 +3,7 @@
 use rayon::prelude::*;
 
 use super::cholesky::{Arm, BlockElimination, Streams, MULTIPLY_ADD_GRAIN_BITS};
-use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
+use super::clique_tree::{CliqueTree, Copies, FillEdge, FillRule, Multi, Single, Star};
 use super::config::{Config, SchurMode};
 use super::representation::{cover_neighbor, crosses, Represented, SddmRows};
 use super::wdd::AnyWdd;
@@ -193,26 +193,27 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
     fn eliminate<C: Copies>(
         &self,
         s: usize,
-        sampler: &mut CliqueTreeSampler<T, I, C>,
-        fill: impl FnMut((I, I, C, T)),
+        (star, rule): &mut (Star<T, I, C>, CliqueTree),
+        fill: impl FnMut(FillEdge<T, I, C>),
     ) {
         let c = &self.block.cross;
         let ground = |e: usize| self.block.grounding.edge(e).map(|s_e| (self.ground, s_e));
-        let draws = self.streams.star(s);
+        let draws = &mut self.streams.star(s);
         match self.block.balance.sheets() {
             // One sheet maps no column, as the balanced loop pays for any map.
             Sheets::One => {
                 let neighbors = c.row(s).map(|(k, &c)| (I::from_index(k), c.abs()));
-                sampler.eliminate_unique(draws, neighbors.chain(ground(s)), fill);
+                star.unique(neighbors.chain(ground(s)));
             }
             Sheets::Two => {
                 let (sheet, e) = (s / c.n_rows(), s % c.n_rows());
                 let neighbors = c.row(e).map(move |(k, &c)| {
                     (I::from_index(cover_neighbor(k, sheet, crosses(c))), c.abs())
                 });
-                sampler.eliminate_unique(draws, neighbors.chain(ground(e)), fill);
+                star.unique(neighbors.chain(ground(e)));
             }
         }
+        rule.fill(star, draws, fill);
     }
 
     /// Each star's clique tree, chunked in star order so merged duplicates sum alike at any thread count.
@@ -222,13 +223,19 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
         let shift = bucket_shift(n);
         let count = n.div_ceil(1 << shift);
         let per_task = per_task(c.n_rows(), c.nnz() as u64, 14);
-        let empty = || (CliqueTreeSampler::new(split), vec![Vec::new(); count]);
+        let empty = || {
+            (
+                (Star::new(split), CliqueTree::default()),
+                vec![Vec::new(); count],
+            )
+        };
         let stars = self.block.balance.sheets().count() * c.n_rows();
         let pieces = (0..stars)
             .into_par_iter()
             .fold_chunks(per_task, empty, |(mut sampler, mut buckets), s| {
-                let push =
-                    |(lo, hi, _, w): (I, I, C, T)| buckets[lo.index() >> shift].push((lo, hi, w));
+                let push = |edge: FillEdge<T, I, C>| {
+                    buckets[edge.lo.index() >> shift].push((edge.lo, edge.hi, edge.weight))
+                };
                 self.eliminate(s, &mut sampler, push);
                 (sampler, buckets)
             })

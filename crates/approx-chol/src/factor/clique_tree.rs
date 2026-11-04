@@ -1,4 +1,4 @@
-//! One pivot's star eliminated by a sampled clique tree (GKS 2023, Algorithm 6; AC is its `k = l = 1`): its column and fill.
+//! A pivot's star prepared by the engine, and the clique sample that draws its fill (GKS 2023, Algorithm 6; AC is its `k = l = 1`).
 
 mod cdf;
 mod copies;
@@ -7,103 +7,66 @@ mod star;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use crate::storage::{narrow, widen, Index, Real};
-use cdf::{draw_after, suffix_past};
+use cdf::draw_after;
 pub(super) use copies::{Copies, Multi, Single};
-use star::StarEntry;
+pub(super) use star::{Column, Star};
 
-/// Fill edges `(lo, hi, copies, weight)`, `lo < hi`, as an elimination emits them: one per entry and partner, its weight summed over its copies.
-pub(super) type Fill<T, I, C> = Vec<(I, I, C, T)>;
+/// A sampled edge, `lo < hi`, its weight summed over its copies.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct FillEdge<T, I, C> {
+    pub(super) lo: I,
+    pub(super) hi: I,
+    pub(super) copies: C,
+    pub(super) weight: T,
+}
 
-/// A pivot's elimination, reused across pivots; AC and AC2 differ only in `C`.
-pub(super) struct CliqueTreeSampler<T, I, C: Copies> {
-    /// A pivot's deduplicated neighborhood in clique-tree order.
-    entries: Vec<StarEntry<T, I, C>>,
-    /// What merging or capping collapsed, per neighbor.
-    removed_copies: Vec<(I, u32)>,
-    /// Grown to `n` on first need: above 32 entries, dedup scatters instead of sorting 16-byte entries twice.
-    scatter: Vec<I>,
-    /// Each merged entry's summed copies before the cap: `C` cannot add.
-    counts: Vec<u32>,
-    /// The star's weights' prefix sums, heaviest last, so each suffix's draw range is one subtraction; `f64`, as `f32` loses short suffixes (#275).
-    cumsum: Vec<f64>,
-    split: C,
+/// Fill edges as an elimination emits them: one per entry and partner.
+pub(super) type Fill<T, I, C> = Vec<FillEdge<T, I, C>>;
+
+/// A clique sample: a prepared star in, fill edges out; the column is the engine's, read off the same star.
+pub(super) trait FillRule<T, I, C: Copies> {
+    /// Emits each fill edge once, with a weight of at least `MIN_POSITIVE`, dropping none.
+    fn fill(
+        &mut self,
+        star: &Star<T, I, C>,
+        rng: &mut Xoshiro256PlusPlus,
+        emit: impl FnMut(FillEdge<T, I, C>),
+    );
+}
+
+/// The sampled clique tree: each neighbor but the heaviest joins one drawn past it, per copy.
+#[derive(Default)]
+pub(super) struct CliqueTree {
     /// Scratch [`Copies::draw`] reuses across entries; one copy never touches it.
     tally: Vec<(usize, u32)>,
 }
 
-impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
-    /// `split` caps every merge, so one sampler cannot mix two.
-    pub(super) fn new(split: C) -> Self {
-        Self {
-            entries: Vec::new(),
-            removed_copies: Vec::new(),
-            scatter: Vec::new(),
-            counts: Vec::new(),
-            cumsum: Vec::new(),
-            split,
-            tally: Vec::new(),
-        }
-    }
-
-    /// Samples the merged star's clique tree into `fill` as `w_i (S_{>i} / d)`; the last neighbor absorbs what the shares leave.
-    pub(super) fn eliminate(
+impl<T: Real, I: Index, C: Copies> FillRule<T, I, C> for CliqueTree {
+    /// `per_copy(w_i (S_{>i} / d))` per copy of each entry but the heaviest, each copy drawing past it.
+    fn fill(
         &mut self,
-        draws: &mut Xoshiro256PlusPlus,
-        neighbors: impl Iterator<Item = (I, C, T)>,
-        fill: &mut Fill<T, I, C>,
-    ) -> (T, impl Iterator<Item = (I, f64)> + '_, I) {
-        self.refill(neighbors);
-        self.sample(draws, |edge| fill.push(edge));
-        let (last, rest) =
-            (self.entries.split_last()).expect("a pivot of a connected graph has a neighbor");
-        let d = suffix_past(&self.cumsum, None);
-        let shares = rest
-            .iter()
-            .map(move |entry| (entry.neighbor, widen(entry.weight) / d));
-        (last.weight, shares, last.neighbor)
-    }
-
-    /// A neighborhood with no duplicate, as a row of `C` is, consuming its star's own `draws` so no task boundary moves one; every neighbor splits alike, so raw weights sort once; fill only, as the complement holds its pivots.
-    pub(super) fn eliminate_unique(
-        &mut self,
-        mut rng: Xoshiro256PlusPlus,
-        neighbors: impl Iterator<Item = (I, T)>,
-        fill: impl FnMut((I, I, C, T)),
+        star: &Star<T, I, C>,
+        rng: &mut Xoshiro256PlusPlus,
+        mut emit: impl FnMut(FillEdge<T, I, C>),
     ) {
-        self.refill_unique(neighbors);
-        self.sample(&mut rng, fill);
-    }
-
-    /// Prepares the star's CDF, then fills `per_copy(w_i (S_{>i} / d))` per copy of each entry but the heaviest, each copy drawing past it.
-    fn sample(&mut self, rng: &mut Xoshiro256PlusPlus, mut fill: impl FnMut((I, I, C, T))) {
-        let entries = &self.entries;
+        let (entries, cumsum) = (star.entries(), star.cumsum());
         let Some((_, rest)) = entries.split_last() else {
             return;
         };
-        self.cumsum.clear();
-        let mut acc = 0.0;
-        for entry in entries {
-            acc += widen(entry.weight);
-            self.cumsum.push(acc);
-        }
-        let d = suffix_past(&self.cumsum, None);
-        debug_assert!(
-            d.is_finite() && d > 0.0,
-            "positive weights under the diagonal bound"
-        );
+        let d = star.total();
         for (i, entry) in rest.iter().enumerate() {
-            let total: T = narrow(widen(entry.weight) * (suffix_past(&self.cumsum, Some(i)) / d));
+            let total: T = narrow(widen(entry.weight) * (star.past(i) / d));
             // Clamped, never dropped: the clique tree keeps the star's neighbors connected, and every weight's inverse finite.
             let weight = (entry.copies).per_copy(total).max(T::min_positive_value());
-            let draw = || draw_after(&self.cumsum, rng, i);
+            let draw = || draw_after(cumsum, rng, i);
             for (at, copies, weight) in (entry.copies).draw(&mut self.tally, weight, draw) {
                 let other = entries[at].neighbor;
-                fill((
-                    entry.neighbor.min(other),
-                    entry.neighbor.max(other),
+                emit(FillEdge {
+                    lo: entry.neighbor.min(other),
+                    hi: entry.neighbor.max(other),
                     copies,
                     weight,
-                ));
+                });
             }
         }
     }

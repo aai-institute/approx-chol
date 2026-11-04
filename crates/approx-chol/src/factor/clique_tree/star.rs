@@ -1,8 +1,49 @@
 use core::cmp::Ordering;
 
+use super::cdf::suffix_past;
 use super::copies::Copies;
-use super::CliqueTreeSampler;
-use crate::storage::{Index, Real};
+use crate::storage::{widen, Index, Real};
+
+/// A pivot's neighborhood, merged and capped, sorted ascending by per-copy weight, with its prefix sums; reused across pivots.
+pub(in crate::factor) struct Star<T, I, C: Copies> {
+    /// The deduplicated neighborhood in clique-tree order.
+    entries: Vec<StarEntry<T, I, C>>,
+    /// What merging or capping collapsed, per neighbor.
+    removed_copies: Vec<(I, u32)>,
+    /// Grown to `n` on first need: above 32 entries, dedup scatters instead of sorting 16-byte entries twice.
+    scatter: Vec<I>,
+    /// Each merged entry's summed copies before the cap: `C` cannot add.
+    counts: Vec<u32>,
+    /// The weights' prefix sums, heaviest last, so each suffix's draw range is one subtraction; `f64`, as `f32` loses short suffixes (#275).
+    cumsum: Vec<f64>,
+    split: C,
+}
+
+/// The pivot's column, read off its sorted star: each neighbor's share `w_i / d` but the heaviest's, which takes what the shares leave, and the pivot's weight.
+pub(in crate::factor) struct Column<'a, T, I, C: Copies> {
+    star: &'a Star<T, I, C>,
+}
+
+impl<T: Real, I: Index, C: Copies> Column<'_, T, I, C> {
+    fn heaviest(&self) -> &StarEntry<T, I, C> {
+        (self.star.entries.last()).expect("a pivot of a connected graph has a neighbor")
+    }
+
+    pub(in crate::factor) fn weight(&self) -> T {
+        self.heaviest().weight
+    }
+
+    pub(in crate::factor) fn remainder(&self) -> I {
+        self.heaviest().neighbor
+    }
+
+    pub(in crate::factor) fn shares(&self) -> impl Iterator<Item = (I, f64)> + '_ {
+        let d = self.star.total();
+        let rest = &self.star.entries[..self.star.entries.len() - 1];
+        rest.iter()
+            .map(move |entry| (entry.neighbor, widen(entry.weight) / d))
+    }
+}
 
 /// Copies stored as the graph stores them, so a single-copy star pays no count or division.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -34,14 +75,26 @@ fn by_per_copy_then_neighbor<T: Real, I: Index, C: Copies>(
 /// At or below this many entries, sorting beats the scatter path's random access.
 const SCATTER_THRESHOLD: usize = 32;
 
-/// Rests in every slot of [`CliqueTreeSampler::scatter`] between merges.
+/// Rests in every slot of [`Star::scatter`] between merges.
 fn unseen<I: Index>() -> I {
     I::max_value()
 }
 
-impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
-    /// Merges duplicate neighbors under the sampler's `split` cap, then sorts by per-copy weight.
-    pub(super) fn refill(&mut self, neighbors: impl Iterator<Item = (I, C, T)>) {
+impl<T: Real, I: Index, C: Copies> Star<T, I, C> {
+    /// `split` caps every merge, so one star cannot mix two.
+    pub(in crate::factor) fn new(split: C) -> Self {
+        Self {
+            entries: Vec::new(),
+            removed_copies: Vec::new(),
+            scatter: Vec::new(),
+            counts: Vec::new(),
+            cumsum: Vec::new(),
+            split,
+        }
+    }
+
+    /// Merges duplicate neighbors under the `split` cap, then sorts by per-copy weight.
+    pub(in crate::factor) fn merged(&mut self, neighbors: impl Iterator<Item = (I, C, T)>) {
         self.entries.clear();
         self.removed_copies.clear();
         self.counts.clear();
@@ -64,6 +117,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
             }
         }
         self.entries.sort_unstable_by(by_per_copy_then_neighbor);
+        self.sum();
     }
 
     /// Runs of one neighbor summed in place; returns the merged count.
@@ -115,8 +169,8 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         self.counts[position] = self.counts[position].saturating_add(duplicate.copies.get());
     }
 
-    /// Neighbors already unique, each at the split's copies, which keeps per-copy order the raw order: one sort, no scratch.
-    pub(super) fn refill_unique(&mut self, neighbors: impl Iterator<Item = (I, T)>) {
+    /// Neighbors already unique, as a row of `C` is, each at the split's copies, which keeps per-copy order the raw order: one sort, no scratch.
+    pub(in crate::factor) fn unique(&mut self, neighbors: impl Iterator<Item = (I, T)>) {
         let copies = self.split;
         self.entries.clear();
         self.removed_copies.clear();
@@ -127,6 +181,42 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         });
         self.entries.extend(entries);
         self.entries.sort_unstable_by(by_weight_then_neighbor);
+        self.sum();
+    }
+
+    fn sum(&mut self) {
+        self.cumsum.clear();
+        let mut acc = 0.0;
+        for entry in &self.entries {
+            acc += widen(entry.weight);
+            self.cumsum.push(acc);
+        }
+        debug_assert!(
+            self.entries.is_empty() || (self.total().is_finite() && self.total() > 0.0),
+            "positive weights under the diagonal bound"
+        );
+    }
+
+    pub(super) fn entries(&self) -> &[StarEntry<T, I, C>] {
+        &self.entries
+    }
+
+    pub(super) fn cumsum(&self) -> &[f64] {
+        &self.cumsum
+    }
+
+    /// `d = ω_v`, the star's whole weight.
+    pub(super) fn total(&self) -> f64 {
+        suffix_past(&self.cumsum, None)
+    }
+
+    /// The weight past entry `i`.
+    pub(super) fn past(&self, i: usize) -> f64 {
+        suffix_past(&self.cumsum, Some(i))
+    }
+
+    pub(in crate::factor) fn column(&self) -> Column<'_, T, I, C> {
+        Column { star: self }
     }
 
     /// Copies each neighbor lost: those to the pivot, and those merging or capping collapsed.

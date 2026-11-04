@@ -107,9 +107,9 @@ impl<I: Index> MinDegreeOrder<I> {
         for (u, copies) in losses {
             self.add(u, -i64::from(copies));
         }
-        for &(u, w, copies, _) in fill {
-            self.add(u, i64::from(copies.get()));
-            self.add(w, i64::from(copies.get()));
+        for edge in fill {
+            self.add(edge.lo, i64::from(edge.copies.get()));
+            self.add(edge.hi, i64::from(edge.copies.get()));
         }
         for i in 0..self.touched.len() {
             let v = self.touched[i].index();
