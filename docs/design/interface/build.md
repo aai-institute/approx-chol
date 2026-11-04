@@ -141,8 +141,8 @@ and decoding validates as `new` does. `ScalingPolicy::new` accepts a finite tole
 never applied below rounding, and any iteration count. `exact_max_dim` is the largest block
 dimension factored exactly, a bipartite block's by its kept side. `complement` matters only in a
 Schur build; `Same` forms the complement with `sampling`. `frustrated` matters only for a
-frustrated component factored approximately; `Auto` places the surplus on surplus edges when it is
-within the rounding band of the row sums, else on a ground vertex. The algorithm behind each
+frustrated component factored approximately; `Auto` places the surplus by the rule of
+`../../algorithm.md`, step 5. The algorithm behind each
 setting is in `../../algorithm.md`, steps 5 and 7.
 
 - A component's `vertices` are ascending, in $B$'s numbering; `null_vector`, when present, holds

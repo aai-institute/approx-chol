@@ -2,18 +2,20 @@
 
 How the Cholesky part factors one WDD matrix, and where each choice of the configuration lives.
 The mathematics is steps 5–8 of `../algorithm.md`; the part's boundary is in `architecture.md`.
-Planned: on `main` the cover is still built in Reduction (`sgdd`) and handed over as sheets.
+Planned: on `main` Reduction (`sgdd`) decides the sheets and checks the cover's ground; Cholesky
+(`factor/sddm.rs`) builds the cover's rows from them.
 
 ## Decision
 
-Cholesky receives one WDD matrix with its balance, the vertices it keeps, the configuration, the
-seed and the component's stream. Five independent choices shape the factorization; each has one
-owner.
+Cholesky receives one WDD matrix with its grounding, its balance and its gauge, the configuration,
+and the component's key. Seven choices shape the factorization; each has one owner.
 
 | Choice | Values | Owner | Decided |
 |---|---|---|---|
-| How a frustrated matrix is factored | Gremban cover, signed elimination | `FrustratedRoute` | per build, applied per component |
+| Arm | dense, approximate | `Config::exact_max_dim` | per component, by size; a bipartite one by its kept side |
+| How a frustrated matrix is factored | Gremban cover, signed elimination | `FrustratedRoute` | per build, applied per component; the dense arm factors it as it is |
 | Where a cover puts its surplus | ground vertex, surplus edges, auto | `CoverSurplus` | per build; auto per component |
+| How a bipartite form's complement is formed | dense, exact, sampled | `SchurMode`, with the arm | per component; a dense kept side forms it dense |
 | Clique sample | clique tree, Schur tree | `Sampling`, a `FillRule` | per build |
 | Fill-in level | copies (clique tree), split (Schur tree) | the `Sampling` variant | per build |
 | Sign of the eliminated entries | unsigned, signed | a `Sign` type | follows from balance and route |
@@ -23,36 +25,49 @@ owner.
   factors either as it is; its kernel is chosen by the sign type, not by a flag.
 - **A representation is a matrix and its slot map, built together.** `Represented` pairs the
   matrix the elimination sees with `Layout`, which maps the elimination's slots to the component's
-  vertices and owns the lift and the descent:
+  vertices, chooses the pinned slot, and owns the lift and the descent:
 
-  | Layout | Slots | Built from |
-  |---|---|---|
-  | `Floating` | $n$, one pinned | a balanced matrix without surplus |
-  | `Grounded` | $n + 1$, $g$ appended | a balanced matrix with surplus |
-  | `Cover { grounded }` | $2n$, $+1$ if grounded | a frustrated matrix on the cover route |
-  | `Signed` | $n + 1$, $g$ pinned | a frustrated matrix on the signed route |
+  | Layout | Slots | Pinned | Built from |
+  |---|---|---|---|
+  | `Floating` | $n$ | the gauge's peak | a balanced matrix without surplus |
+  | `Grounded` | $n + 1$, $g$ appended | $g$ | a balanced matrix with surplus; any matrix on the signed route |
+  | `Cover { grounded }` | $2n$, $+1$ if grounded | $g$, else the peak's first copy | a frustrated matrix on the cover route |
 
-  `Represented` has two constructors: `as_is`, the matrix as it is, for the dense arm and
-  the signed route; and the sampled one, which builds the cover when the route asks for it. The
-  cover's construction, its surplus edges and the auto rule live in one private function behind
-  the second; the bipartite formation, exact or sampled, maps its stars through the same slot
-  function.
-- **Cholesky receives facts, never Reduction's internals.** The matrix with its grounding, the
-  balance, and the gauge: the vertex where a pin loses least and whether the scales span past
-  $1/\sqrt\varepsilon$. It does not read the scaling, and it does not report whether the component
-  floats: the lift knows that from its construction. The auto rule has its own threshold, not
-  Reduction's band for floating.
+- **The ground is never a pivot.** $g$ is pinned in every layout that has it, so its diagonal
+  $\sum_i s_i$ is never formed and no range check guards it; each edge to $g$ is bounded by its
+  other end, as every edge is. Signed elimination needs this anyway: cancellation adds edges to
+  $g$ during the elimination. Planned (step G1): on `main` the approximate arm eliminates $g$ in
+  minimum-degree order unless the scales or the ground span wide, and Reduction rejects a ground
+  whose diagonal leaves the range.
+- **Three constructors of `Represented`:** `as_is`, the matrix as it is, for the dense arm and the
+  signed route; `sampled`, which builds the cover when the route asks for it; and
+  `from_cover_rows`, for a bipartite complement formed on the cover. The cover's construction, its
+  surplus edges and the auto rule live in one private function both cover constructors call.
+  Which slot a neighbor lands on, sheet and crossing, is one function, used by the general cover
+  and by both bipartite formations.
+- **Cholesky receives facts, never Reduction's internals.** It takes the matrix with its
+  grounding, the balance and the gauge, not the reduced record: the vertex of the factored matrix
+  where a pin loses least and whether the scales span past $1/\sqrt\varepsilon$; without scales
+  the gauge is the last vertex, not spanning. It does not read the scaling, and it does not report
+  whether the component is singular: the lift knows that, and whether it regauges, from its
+  construction. The auto rule has its own threshold, not Reduction's band for floating.
 - **Index width:** the approximate inverse picks `u32` or `u64` once, from `max_slots`, the most
   slots any route takes; the reduction is made before the configuration is known.
-- **The elimination is generic over the clique sample, the copies and the sign.** A star is
-  merged, its copies capped and its opposite signs cancelled into surplus, then handed to a
-  `FillRule`, which emits fill edges. The column of $\mathcal{L}$ is exact; a rule samples only the
-  fill, and sees magnitudes, never signs or the ground. A rule states whether it needs the star
-  sorted. A task's workspace holds one engine per sign for the build's rule.
+- **The elimination is generic over the clique sample, the copies and the sign.** The engine
+  merges a star, caps its copies, cancels opposite signs into surplus and sorts it ascending by
+  weight per copy, with $\omega_v$ and the prefix sums; the column of $\mathcal{L}$ is taken from
+  that sorted star, exactly. A `FillRule` then samples only the fill, from magnitudes; the engine
+  attaches the signs to what it emits. A rule never sees signs; the ground is one more neighbor.
+  A rule emits each fill edge once, lower end first, with a weight of at least `MIN_POSITIVE`,
+  and drops none. Degree losses from merging stay with the elimination's ordering.
+- **Two kinds of star:** an elimination star is merged from the graph; a bipartite star is a row
+  of $C$, already unique, under its own stream. Both go to the same rule.
 - **A Schur tree has no persistent copies.** Its split exists only within one pivot, so the rule
   is implemented for single-copy graphs only, and the configuration has no field to ask for both.
 - **The bipartite form** forms its Schur complement on the cover or with signed entries, as the
-  route says, exactly or by the same `FillRule`, then factors it as any matrix.
+  route says: dense, or exactly by summing each clique through $C$, or sampled by the build's
+  `FillRule`; then factors it as any matrix. The exact formation is not a rule: it sums by kept
+  row, not by star.
 - **Extension points.** A new clique sample is one `FillRule` and one `Sampling` variant. A new
   way to factor a frustrated matrix is one `Layout` variant and one branch of the sampled
   constructor. A rule that needs more than one pivot's star, or changes the column of
@@ -64,64 +79,70 @@ A sketch of the crate-internal types until they exist; once the code lands it is
 and this section shrinks to their names, as `architecture.md` asks of exports.
 
 ```rust
-// Storage: a WDD matrix is its adjacency and its grounding, held together.
+// Storage: what crosses from Reduction to Cholesky, through the approximate inverse.
 pub(crate) struct Grounded<T, P> { pub(crate) adjacency: P, pub(crate) grounding: Grounding<T> }
 pub(crate) enum OffDiagonal<T, I> { General(WddCsr<T, I>), Bipartite(Bipartite<T, I>) }
+pub(crate) enum Balance { Balanced, Frustrated }
+pub(crate) struct Gauge { pub(crate) peak: usize, pub(crate) spans_wide: bool }   // on the factored vertices
 
-// reduction → cholesky: one reduced component; P is what Cholesky factors.
+// Reduction's result per component; the approximate inverse keeps the lift and hands the rest on.
 pub(crate) struct Reduced<T, I, P> {
-    pub(crate) key: usize,                       // the component's first vertex in A: keys every draw
-    pub(crate) lift: Box<Lift<T, I>>,            // projection, scaling, switching; a Schur build's on K
+    pub(crate) key: usize,                       // local vertex 0 in A, eliminated side first: keys every draw
+    pub(crate) lift: Box<Lift<T, I>>,            // vertices, congruence, whether it projects and regauges
     pub(crate) matrix: Grounded<T, P>,
-    pub(crate) balance: Balance,                 // Balanced | Frustrated; floats = balanced and ungrounded
-    pub(crate) gauge: Gauge,                     // where a pin loses least, from the scaling
-    pub(crate) clamp: Option<Box<Clamp>>,
+    pub(crate) balance: Balance,                 // singular = balanced and ungrounded
+    pub(crate) gauge: Gauge,
+    pub(crate) clamp: Option<ClampId>,           // into the build's list of clamps
 }
-pub(crate) struct Gauge { pub(crate) peak: usize, pub(crate) spans_wide: bool }
 pub(crate) type ReducedComponent<T, I>  = Reduced<T, I, OffDiagonal<T, I>>;
 pub(crate) type ReducedComplement<T, I> = Reduced<T, I, Bipartite<T, I>>;   // its lift already on K
-// Lift { vertices, congruence, projects }: `projects` is set by the one constructor of Reduced, from
-// balance and grounding, so no solve passes it in.
+
+// Cholesky's entry: the facts, not the record.
+pub(crate) fn factor<T: Real, I: Index, P>(key: usize, matrix: Grounded<T, P>, balance: Balance,
+    gauge: Gauge, config: &Config, workspace: &mut Workspace<T, I>) -> Factorization<T, I>;
 
 // The matrix factored, typed by sign; S = Unsigned: Z-matrix, S = Signed: positive entries kept.
 struct Wdd<T, I, S: Sign> { matrix: Grounded<T, WddCsr<T, I>>, sign: PhantomData<S> }
 enum AnyWdd<T, I> { Unsigned(Wdd<T, I, Unsigned>), Signed(Wdd<T, I, Signed>) }   // the one sign branch
 
-// A matrix and its slot map, only built together.
-enum Layout { Floating, Grounded, Cover { grounded: bool }, Signed }
+// A matrix and its slot map, only built together; the layout picks the pinned slot.
+enum Layout { Floating, Grounded, Cover { grounded: bool } }
 struct Represented<T, I> { matrix: AnyWdd<T, I>, layout: Layout }
 impl<T: Real, I: Index> Represented<T, I> {
-    fn as_is(m: Grounded<T, WddCsr<T, I>>, balance: Balance) -> Self;                // dense arm, signed route
-    fn sampled(m: Grounded<T, WddCsr<T, I>>, balance: Balance, route: FrustratedRoute) -> Self; // cover if asked
+    fn as_is(m: Grounded<T, WddCsr<T, I>>, balance: Balance) -> Self;               // dense arm, signed route
+    fn sampled(m: Grounded<T, WddCsr<T, I>>, balance: Balance, route: FrustratedRoute) -> Self;
+    fn from_cover_rows(rows: CoverRows<T, I>) -> Self;                                // a complement formed on the cover
 }
-// The cover's slot map: the one function every cover goes through, the bipartite formation's stars included.
-fn cover_slot(k: usize, sheet: usize) -> usize;
-// Slots the widest route takes for n vertices: the approximate inverse picks the index width from it.
-pub(crate) const fn max_slots(n: usize) -> usize;   // 2n + 1
+fn cover_neighbor(k: usize, sheet: usize, crosses: bool) -> usize;                    // the cover's slot of a neighbor
+pub(crate) const fn max_slots(n: usize) -> usize;                                     // 2n + 1
 
 // The edge sign: Unsigned is zero-sized and compiles to the Laplacian elimination.
 trait Sign: Copy + Send + Sync {
     const SIGNED: bool;                                          // also picks the dense kernel
     fn fill(self, other: Self) -> Self;                          // sign of a sampled edge
-    fn merge<T: Real>(a: (Self, T), b: (Self, T)) -> ((Self, T), T);   // cancelled 2·min → surplus
+    fn merge<T: Real>(a: Entry<Self, T>, b: Entry<Self, T>) -> Merged<Self, T>;
 }
 struct Unsigned;
 struct Signed(bool);
+struct Entry<S, T> { sign: S, weight: T }
+struct Merged<S, T> { kept: Entry<S, T>, cancelled: T }          // 2·min: surplus at v and an edge to g
 
-// A clique sample: a prepared star in, fill edges out; the column of 𝓛 stays exact.
-struct Star<T, I, C: Copies, S: Sign> { /* merged neighbors, capped copies, weights, ω_v */ }
-enum StarOrder { Ascending, Any }
-trait FillRule<T, I, C: Copies, S: Sign> {
-    const ORDER: StarOrder;
-    fn fill(&mut self, star: &Star<T, I, C, S>, rng: &mut Rng, emit: impl FnMut(FillEdge<T, I, C, S>));
+// A clique sample: a prepared star in, fill edges out; the column of 𝓛 is the engine's.
+struct Star<T, I, C: Copies> { /* sorted ascending, capped copies, ω_v, prefix sums */ }
+struct Column<T, I> { /* the pivot's entries of 𝓛 and its 𝓓 */ }
+struct FillEdge<T, I, C: Copies> { lo: I, hi: I, copies: C, weight: T }
+trait FillRule<T, I, C: Copies> {
+    fn fill(&mut self, star: &Star<T, I, C>, rng: &mut Rng, emit: impl FnMut(FillEdge<T, I, C>));
 }
 struct CliqueTree;                                               // for C = Single and C = Multi
 struct SchurTree { split: NonZeroU32 }                           // for C = Single only
+enum Formation { Dense, Exact, Sampled(Sampling) }               // a bipartite complement
 
-// Randomness: the build's seed and Reduced::key mixed once; stage 0 the elimination's, e + 1 star e's.
+// Randomness: the build's seed and the key mixed once; stage 0 the elimination's, e + 1 star e's.
 struct Streams { key: u64 }
 
-// The factorization of one component; a bipartite one eliminates F first.
+// The factorization of one component; a bipartite one eliminates F first. Its slot count is
+// derived from the triangular factor, and a decoded one is checked against its layout.
 struct Factorization<T, I> {
     eliminated: Option<Box<BlockElimination<T, I>>>,
     layout: Layout,
@@ -137,9 +158,11 @@ enum Triangular<T, I> { Dense(Box<[T]>), Approximate(Box<Steps<T, I>>) }
   on synthetic frustrated graphs and on within's frustrated components (#347), signed elimination
   needed about half the work of the cover at equal iterations; the cover is the established
   reduction and stays available.
-- **Ground vertex and surplus edges both kept:** surplus edges remove the cover's eigenvalue at the
-  mean surplus, but add fill where the surplus is large. Where auto should switch is being
-  measured; until then auto keeps the current rule.
+- **Ground vertex and surplus edges both kept:** surplus edges remove the cover's eigenvalue of at
+  most the mean surplus, but add edges between real vertices. In the prototype they never needed
+  less work than the ground vertex, from a surplus of $10^{-14}$ of the row sums to $1$, on grids
+  and on within's frustrated components; above $10^{-2}$ they needed 1.3–2.3 times as much. Auto
+  keeps `main`'s rule until a solve-error test at near-zero surplus decides (step F0).
 - **Clique tree the default, Schur tree opt-in:** in the same prototype the Schur tree needed two to
   three times the iterations on graphs whose weights span many orders of magnitude, on both
   routes, while it matched the clique tree on moderate weights.
@@ -147,13 +170,18 @@ enum Triangular<T, I> { Dense(Box<[T]>), Approximate(Box<Steps<T, I>>) }
   adjacency and a grounding, and differed only in sign; one type parameter replaces three types and
   a flag.
 - **Layout built with its matrix:** a slot map set apart from the matrix could disagree with it;
-  built together, it cannot.
+  built together, it cannot. The pinned slot is part of the map: on `main` three places decide it.
+- **Ground never a pivot:** its diagonal is the one quantity no row check bounds, a sum over the
+  whole component; pinned, it is never formed, so Cholesky cannot fail by construction, not by a
+  guard. One rule then serves every route, where `main` pins $g$ only when it spans wide.
 - **Grounding with the matrix, not with the balance:** carried inside the balance, the matrix
   was split over two fields and reassembled by every consumer; the balance alone is a fact with
   no payload.
-- **One slot function for the cover:** on `main` the cover's slots are written three times, in
-  the general cover and in the exact and the sampled bipartite formation; a route added to one
-  would be missing from the others.
+- **One crossing function for the cover:** on `main` the slot formula has one owner, but the
+  rule for which sheet a neighbor lands on is written in the general cover and in the exact and
+  the sampled bipartite formation; a route added to one would be missing from the others.
+- **The engine sorts and takes the column:** the column of $\mathcal{L}$ is computed from the
+  sorted star, its heaviest entry last; a rule free to skip the sort would change it.
 - **Rules see neither signs nor the ground:** a star is a tree, hence balanced, so a local switching
   turns any rule for Laplacians into one for signed entries, and a ground vertex is one more
   neighbor. Every rule then serves every route.
@@ -168,13 +196,14 @@ Refactors and behavior changes are separate commits.
 
 | Step | Change | Check |
 |---|---|---|
-| R1 | `Reduced<T, I, P>` with `key`, `Grounded` matrix, payload-free `Balance`, `Gauge`; `Restriction` renamed `Lift`; named `Bipartite`; the complement path receives `ReducedComplement` directly, no `unreachable!`; no positional tuples | bit-identical |
-| R1b | `Lift` built with `projects`; `singular` no longer passed at solve time; `FactorTail` replaced by `Gauge`; `BlockElimination` and `Streams` moved into Cholesky's `Factorization` | bit-identical; format version bumped |
+| R1 | `Reduced<T, I, P>` with `key`, `Grounded` matrix, payload-free `Balance`, `Gauge`, `ClampId`; `Restriction` renamed `Lift`; named `Bipartite`; the complement path receives `ReducedComplement` directly, no `unreachable!`; no positional tuples | bit-identical |
+| R1b | `Lift` built with whether it projects and regauges; `singular` no longer passed at solve time; `FactorTail` replaced by `Gauge` on the factored vertices; `BlockElimination`, `Streams`, `within_one` and the grain constant moved into Cholesky; its decoder no longer checks Reduction's side policy | bit-identical; format version bumped |
 | R2 | `Sign` markers, `Wdd<S>`, `AnyWdd`; the dense arm on `Wdd<S>`, its kernel chosen by `S::SIGNED`; reduction's `Signed` renamed `Folding`, `Arm::Exact` renamed `Dense` | bit-identical |
-| R3 | `Layout` and `Represented`; the cover built in Cholesky's private cover function, the bipartite formations through its slot function; the cover's ground range check moved there from Reduction; `CoverSurplus::Auto` internal with today's band as its own constant; sheets and surplus edges confined there | bit-identical solves; format version bumped |
-| R4 | `Star` and `FillRule`, `CliqueTree` only, `StarOrder` | bit-identical; Criterion benches |
+| R3 | `Layout` and `Represented` with its three constructors; the pin chosen by `Layout`, `main`'s rule kept; the cover built in one private function, the bipartite formations through `cover_neighbor`, the dense one still on the cover, then folded; `CoverSurplus::Auto` internal with today's band as its own constant; sheets and surplus edges confined there; the slot count derived | bit-identical solves; format version bumped |
+| R4 | `Star` (merged, unique), `Column`, `FillEdge`, `FillRule` with `CliqueTree` only; `Formation` keeps the exact formation | bit-identical; Criterion benches |
 | R5 | `S: Sign` through the elimination engine, `Unsigned` only | bit-identical; Criterion benches |
-| R6 | Public `Sampling`, `Multiplicity`, `FrustratedRoute`, `CoverSurplus`; `split_merge` removed, in `SchurMode` too; Python's `Config` gains the complement setting it lacks | Python and stub, stubtest, changelog; breaking |
-| F0 | `Auto`'s threshold from the surplus sweep | A/B on the synthetic graphs and within's frustrated components |
-| F1 | Signed elimination: `Signed`, cancellation into surplus, signed Schur complement | switched balanced equals its Z-matrix seed for seed; both routes on frustrated inputs; serde round trip |
-| F2 | `SchurTree` | expectation equals the clique, every sample connected, edge marginals $(w_{vi} + w_{vj})/\omega_v$ |
+| R6 | Public `Sampling`, `Multiplicity`, `FrustratedRoute`, `CoverSurplus`; `split_merge` removed, in `SchurMode` too | Python and stub, stubtest, changelog; breaking |
+| G1 | The ground pinned in every layout; Reduction's ground range check (`sgdd/block.rs:253`) deleted | A/B of PCG iterations and nnz(L) in Rust on the synthetic graphs and within's components; inputs the check rejected now factor |
+| F0 | `Auto`'s rule: solve error at near-zero surplus, `f32` and `f64`, ground vertex against surplus edges, after G1; ground vertex everywhere if it shows none | the error test; A/B as G1 |
+| F1 | Signed elimination, after G1: `Signed`, cancellation into surplus at $v$ and an edge to $g$, signed Schur complement | switched balanced equals its Z-matrix seed for seed; both routes on frustrated inputs; serde round trip; Criterion benches for the wider graph edge |
+| F2 | `SchurTree` | expectation equals the clique; every sample connected; at split 1 edge marginals $(w_{vi} + w_{vj})/\omega_v$, above it the auxiliary copies' marginals before contraction and unbiased weights after |

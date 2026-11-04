@@ -33,9 +33,9 @@ requirements are in `../requirements/`.
 | Part | Package | Responsible for |
 |---|---|---|
 | Adapters | crate `approx-chol-py`; modules `faer`, `sprs`, `nalgebra`, `ndarray`, each behind its feature | Translating another language's or library's matrices into Input, implementing the solve's block trait for their dense types, and the approximate inverse as faer's operator traits; no mathematics. |
-| Approximate inverse | module `approximate_inverse`, re-exported at the crate root | B as one object: building it per component, solving with it, the composed configuration and facts, the versioned envelope for persistence. |
+| Approximate inverse | module `approximate_inverse`, re-exported at the crate root | B as one object: building it per component, solving with it, the composed configuration and facts, the versioned envelope for persistence. A vertex no entry couples is a component of its own, solved as $1/\sigma$ here. |
 | Reduction | module `reduction` | Everything that exists because the input is GDD and not WDD: scaling, switching, components, the clamp, the classification into balanced or frustrated and grounded or floating. The lift maps right-hand sides in and solutions out: projection, scaling, switching, and regauge in A's coordinates. |
-| Cholesky | module `cholesky` | The approximate Cholesky factorization of a WDD matrix: a frustrated one factored by its Gremban cover or by signed elimination, as configured; augmentation by the ground vertex; the clique sample's rule and fill-in level; randomness; and the solve with the factorization, including the cover's and the ground's lift and descent. Eliminating the side F of a bipartite factor-width-2 form yields a factorization of the Schur complement, numbered on K. |
+| Cholesky | module `cholesky` | The approximate Cholesky factorization of a WDD matrix: a frustrated one factored by its Gremban cover or by signed elimination, as configured; augmentation by the ground vertex, pinned, never a pivot; the clique sample's rule and fill-in level; randomness; and the solve with the factorization, including the cover's and the ground's lift and descent. Eliminating the side F of a bipartite factor-width-2 form yields a factorization of the Schur complement, numbered on K. |
 | Input | module `input` | The closed admissible-matrix type: its representations, their validation, and the facts each carries. |
 | Storage | module `storage` | Scalars and sparse storage. |
 | Execution | module `execution` | Running independent work in the caller's pool, never a new one, within a thread budget, nested in the caller's parallel work without deadlock, with results that do not depend on the budget. |
@@ -45,10 +45,10 @@ requirements are in `../requirements/`.
 | Adapters, Rust | impls only: `TryFrom` faer, sprs and nalgebra-sparse matrices for `CsrRef`; `MatrixMut` for faer, nalgebra and ndarray blocks; faer's `LinOp`, `BiLinOp`, `Precond`, `BiPrecond` for `ApproxInverse`; `From<faer::Par>` for `Threads` | none |
 | Adapters, Python | module `approx_chol`: `factorize`, `ApproxInverse`, `Component`, `Clamp`, `Config`, `ScalingPolicy`, `InputError`, `BuildError` | none |
 | Approximate inverse | `ApproxInverse`, `Component`, `Sgdd`, `Complement`, `factorize`, `factorize_with`, `factorize_complement`, `MatrixMut` with its impls for slices, `Vec` and arrays, `ColumnMajor`, `Columns`, `ApplyError`, `LayoutError`, `dyn_stack`; serde for `ApproxInverse` | none |
-| Reduction | `ScalingPolicy`, `Clamp`, `ScalingOutcome`, `BuildError` | `Reduced` (the WDD matrices with the vertices each keeps, the lift, the facts), `Lift` with its scratch requirement |
-| Cholesky | `Config`, `SchurMode`, `Sampling`, `Multiplicity`, `FrustratedRoute`, `CoverSurplus` | `Factorization` with its scratch requirement |
+| Reduction | `ScalingPolicy`, `Clamp`, `ScalingOutcome`, `BuildError` | `Reduced` (per component the WDD matrix with its grounding, its balance, gauge and key, the lift, the index of its clamp in the build's list), `Lift` with its scratch requirement, the bound on a lone pivot |
+| Cholesky | `Config`, `SchurMode`, `Sampling`, `Multiplicity`, `FrustratedRoute`, `CoverSurplus` | `factor`, `Factorization` with its scratch requirement, `max_slots` |
 | Input | module `input`: `CsrRef`, `TriangleCsrRef`, `Laplacian`, `Sddm`, `FactorWidth2`, `FactorWidth1`, `BipartiteFactorWidth2`, `Input`, `InputError`, `Side` | the representation an `Input` holds |
-| Storage | `Real`, `PrimInt` (num-traits') | `Csr`, `WddCsr`, the storage index |
+| Storage | `Real`, `PrimInt` (num-traits') | `Csr`, `WddCsr`, `Bipartite`, `Grounding`, `Grounded`, `Balance`, `Gauge`, the storage index, the compensated sums and range screens |
 | Execution | `Threads` | `join`, `fork` |
 
 - A part offers only its exports. Visibility enforces it: a part's other items are at most
@@ -66,7 +66,7 @@ requirements are in `../requirements/`.
 | Caller or adapter → approximate inverse (solve) | B; per solve one or several right-hand sides, a thread budget, scratch; back: the solutions, or a solve error |
 | Caller or adapter → approximate inverse (persistence) | B; back: its saved form. Later the saved form; back: B or an error |
 | Approximate inverse → Reduction | admissible matrix; back: WDD matrices, each a Z-matrix if balanced, with the vertices each keeps, the lift with its scratch requirement, and the build's facts: clamp, components, null vector of each singular component. During a solve: right-hand sides; back: their lifts, then solutions |
-| Approximate inverse → Cholesky | one WDD matrix and whether it is balanced, the vertices it keeps, the configuration, seed and the component's stream; back: factorization with its scratch requirement. During a solve: right-hand sides; back: solutions |
+| Approximate inverse → Cholesky | one WDD matrix with its grounding, whether it is balanced, its gauge, the configuration and the component's key; back: factorization with its scratch requirement. During a solve: right-hand sides; back: solutions |
 | Any part → Execution | independent work, thread budget |
 
 ## Why
@@ -106,18 +106,76 @@ requirements are in `../requirements/`.
 - **Encodings per part:** the persistence format does not couple the approximate inverse to the
   internals of Reduction and Cholesky.
 
+
 ## Plan
 
-From `main` to this architecture, beside Cholesky's steps R1–R6 and F0–F2 in `cholesky.md`.
+From `main` to this architecture, beside Cholesky's steps R1–R6, G1 and F0–F2 in `cholesky.md`.
 Refactors are bit-identical on the solve fixtures, the u32/u64 storage test and the wire-format
 payloads, apart from the format version where stated, and are committed apart from behavior
 changes.
 
+### Inside the parts
+
 | Step | Part | Change | Check | After |
 |---|---|---|---|---|
-| D1 | Reduction | One named record for an extracted block: vertices, off-diagonal, grounding if given, row sums; `PrincipalBlocks::Block` tuples, `Relaxation` and `lone`'s pairs named | bit-identical | – |
-| D2 | Storage | `Grounding` and `Grounded` beside `WddCsr`; one row-tally pass where `tally_abs` and `scaled_abs_sums` repeat it | bit-identical | – |
-| D3 | Input | Lowering keeps the bipartite form and the incidence-or-values distinction as types; `n_left()` and `is_incidence()` probes removed | bit-identical | – |
-| D4 | Approximate inverse | One width branch, picked from Cholesky's `max_slots`; `Storage` split into the summand's kind and its width; `Indexed` and the `store` function removed | bit-identical; format version bumped | R1 |
-| D5 | Approximate inverse | Each part serializes its own exports under its own version; the approximate inverse checks that they agree | serde round trip; corrupt payloads rejected | R3 |
-| D6 | Input, Reduction | Validation on construction into the representation an `Input` holds (`Canonical` made there); `InputError` and `BuildError`; a nonpositive diagonal an input error; an undecidable float-or-ground no longer `Unscalable`; `ScalingReport` becomes `Clamp`, refuted or unsettled | integration tests per error; Python, stub, changelog; breaking | – |
+| D1 | Reduction | Named records for every positional tuple: the extracted block, `Relaxation`, a lone vertex, the null-vector certificate, the iteration's best iterate, scaled row sums; the singularity pair a record owning `SINGULAR_BAND`; `Congruent` built with its row sums; the scaling iteration's state its own type, not the public report; one name per band; Perron's `tolerance` named `slack` | bit-identical | – |
+| D2 | Storage | `Grounding`, `Grounded`, `Balance`, `Gauge` beside `WddCsr`; the scalar traits, compensated sums and range screens out of the crate root; one row-tally pass where `tally_abs` and `scaled_abs_sums` repeat it | bit-identical | – |
+| D3 | Input | The representation an `Input` holds apart from the public `FactorWidth2`: a Gram form by layout, whole or bipartite, and by values, incidence or valued, and a CSR form, whole or a triangle; `Lowered`, `Columns` and the `n_left()`, `is_incidence()` probes removed; `UpperCsrRef::lower` renamed | bit-identical | – |
+| D4 | Approximate inverse | One width branch, picked from Cholesky's `max_slots`; a component's kind apart from its width; `Indexed` and the `store` function removed | bit-identical; format version bumped | R1 |
+| D6 | Input, Reduction | Validation on construction: column range, finite in-range values in every constructor, symmetry, nothing outside a triangle, magnitude of `n`; one `InputError` for `CsrError` and `ViewError`, an offset row pointer from an adapter its own case; `BuildError` with `OutOfRange` and `TooLarge`, `Unscalable` folded into `OutOfRange`, a nonpositive diagonal an input error; `ScalingReport` becomes `Clamp`, refuted or unsettled; `Sddm` admits an all-zero surplus; `factorize` takes `impl Into<Input>`; `OwnedCsr`, `IndexKind`, the CSR accessors and the root re-exports of Input's types removed | integration tests per error; Python, stub, changelog; breaking | open question 3 |
+| D7 | Reduction | A derived surplus below the range floor is rounding: flushed to zero, not `OutOfRange`; the screens of derived values in one place | regression test: a frustrated triangle at scale $10^{-291}$ factors, as it does at scale 1; solves that succeed today unchanged | D1 |
+| D8 | Reduction | One refutation test for the scaling, with the rounding floor the Rayleigh check uses | A/B of iterations and clamps | D1 |
+
+### The public interface
+
+| Step | Change | Check | After |
+|---|---|---|---|
+| P1 | Execution: `Threads`, `join`, `fork`, the task grain; no other part calls rayon | every result bit-identical for every budget and in a nested pool | – |
+| P2 | Modules moved to the tree below | bit-identical | R1 |
+| P3 | `ApproxInverse` and `Component` with `vertices`, `null_vector`, `clamp`; the build's list of clamps; the per-block solver removed, so the width branch sits at the top; within migrated | breaking; within's tests | D4, P1 |
+| P4 | `MatrixMut`, `ColumnMajor`, `Columns`, `scratch`, `apply`, `apply_with`, `ApplyError`, `LayoutError`; the budget spread over components by size | each column equals its solve alone, bit for bit, at every budget; `apply_with` allocates nothing | P3 |
+| P5 | Build surface: `Sgdd` and `Complement` with `Threads` and `clamps`; `Config` comparable and hashable | interface tests | P3, D6, R6 |
+| P6 | Persistence: the envelope `(version, scalar, B)`; each part serializes its exports under its own version, the approximate inverse checks that they agree | round trip; version and scalar rejected by name; corrupt payloads rejected | P3, R3 |
+| P7 | Adapters: faer (row and column CSR, `MatrixMut`, `LinOp`, `BiLinOp`, `Precond`, `BiPrecond`, `From<Par>`), sprs, nalgebra, ndarray; the unimplemented-trait message | per-feature tests | P4, D6 |
+| P8 | Python: `ApproxInverse` a `LinearOperator`, `threads`, `with_threads`, `apply` with `out`; `components`, `clamps`; `Config`'s `sampling` and `frustrated`; `InputError` and `BuildError` with their kinds; pickle through postcard; any scipy format through `tocsr()`, a CSC no longer read as its transpose; the checks Rust makes no longer repeated; `factorize_raw` removed | pytest, stubtest, changelog | P3–P6 |
+| P9 | Visibility per part, the layer and export test, the public-surface snapshot in CI | CI | P2 |
+
+### Module tree
+
+```
+src/lib.rs                     re-exports only
+src/storage.rs, storage/       real.rs (Real, Index, sums, range screens), csr.rs (Csr, WddCsr, Bipartite), grounded.rs
+src/execution.rs               Threads, join, fork, task grain
+src/input.rs, input/           error.rs, csr.rs, triangle.rs, laplacian.rs, factor_width.rs, repr.rs, repr/{canonical,gram}.rs
+src/reduction.rs, reduction/   components.rs, components/assembly.rs, components/assembly/cells.rs,
+                               block.rs, switching.rs, classify.rs, classify/gram.rs, gram.rs, lift.rs,
+                               scaling.rs, scaling/{perron,normalized,certificate}.rs
+src/cholesky.rs, cholesky/     config.rs, streams.rs, representation.rs, representation/cover.rs, dense.rs,
+                               elimination.rs, elimination/{graph,ordering}.rs, star.rs, fill.rs,
+                               fill/{clique_tree,cdf}.rs, bipartite.rs, bipartite/block_elimination.rs
+src/approximate_inverse.rs, approximate_inverse/
+                               build.rs (factorize*, Sgdd, Complement), component.rs (lone vertices too),
+                               apply.rs (MatrixMut, ColumnMajor, Columns), wire.rs
+src/adapters/                  faer.rs, sprs.rs, nalgebra.rs, ndarray.rs
+crates/approx-chol-py/src/     lib.rs, input.rs, build.rs, inverse.rs
+```
+
+- One file per input representation; the representation an `Input` holds apart from the public
+  types.
+- Reduction by stage: components, switching, scaling with its certificate, classification, the
+  lift.
+- `star` and `fill` beside `elimination` and `bipartite`, which both use them; everything that
+  knows the cover under `representation`.
+- Adapters under one folder: a root module named `faer` would shadow the crate in paths.
+
+### Open questions
+
+1. **Components of a Schur complement.** Cancellation can split a frustrated component's
+   complement: $A$ connected, $H = I$ of two components. The contract promises $H$'s components,
+   but they are found on $A$ before $H$ is formed. Find them after formation, which an exact
+   formation allows and a sampled one does not, or promise $A$'s restricted to $K$.
+2. **Where `complement` applies.** `interface/build.md` says only in a Schur build; `main` also
+   forms a whole bipartite build's complement under it.
+3. **A borrowed, `Copy` `Input` validated on construction.** A CSR out of canonical order needs
+   an owned rewrite, and the symmetry check, fused today into the walk that finds components,
+   becomes a pass of its own: measure it before choosing.

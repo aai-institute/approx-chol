@@ -1,7 +1,9 @@
 # Algorithm
 
 The mathematics approx-chol implements: how a symmetric GDD matrix $A$ becomes the approximate
-inverse $B$, and which matrix $B$ targets. Terms are those of `glossary.md`.
+inverse $B$, and which matrix $B$ targets. Terms are those of `glossary.md`. Planned, not on
+`main`: signed elimination, the Schur tree, and the ground pinned in every layout
+(`design/cholesky.md`, F1, F2, G1).
 
 ## Overview
 
@@ -87,8 +89,9 @@ holds, with equality for the Perron vector. Hence $A$ is GDD iff $\lambda \le 1$
 $d = \Delta^{-1/2} u$ for the Perron vector is a dominance scaling.
 
 The eigenvector need not be exact: the row ratios of any positive iterate certify dominance
-($\max_i \rho_i \le 1$) or refute it ($\min_i \rho_i > 1$), up to the rounding band. $u$ is
-computed by an inexact Noda iteration.
+($\max_i \rho_i \le 1$) or refute it ($\min_i \rho_i > 1$), up to the slack
+$\tau = \max(t, \beta)$, $t$ the caller's tolerance, never below the rounding band $\beta$. $u$ is
+computed by an inexact Noda iteration; its budget counts the inner solves' steps.
 
 ```
 dominance_scaling(A_C):
@@ -96,11 +99,11 @@ dominance_scaling(A_C):
     u ← 1
     loop, until a step budget runs out:
         ρ ← (Tu)ᵢ / uᵢ for every i                 -- row ratios of d = Δ^{-1/2} u
-        if maxᵢ ρᵢ ≤ 1 + β: return Δ^{-1/2} u       -- dominance certified
-        if minᵢ ρᵢ > 1 + β: return Δ^{-1/2} u       -- refuted; the clamp covers the rest
+        if maxᵢ ρᵢ ≤ 1 + τ and settled: return Δ^{-1/2} u   -- dominance certified
+        if minᵢ ρᵢ > 1 + τ: return Δ^{-1/2} u       -- refuted; the clamp covers the rest
         α ← maxᵢ ρᵢ                                -- Collatz–Wielandt: α ≥ λ
-        u ← approximate solution of (αI − T) u′ = u, refined until it is positive
-            and lowers maxᵢ ρᵢ, normalized                   -- Noda step
+        u ← approximate solution of (αI − T) u′ = u, taken when positive and better:
+            certified, a smaller eigen-residual; else a smaller maxᵢ ρᵢ   -- Noda step
     return Δ^{-1/2} u                             -- unsettled; the clamp covers the rest
 ```
 
@@ -108,8 +111,9 @@ For $\alpha > \lambda$, $\alpha I - T$ is a nonsingular M-matrix, so its inverse
 maps a positive $u$ to a positive one; with exact solves, $\alpha$ decreases toward $\lambda$. Jia,
 Lin and Liu keep both properties for inexact solves whose residual $f$ satisfies $|f| \le \gamma u$
 entrywise with $\gamma < 1$, and prove convergence to $\lambda$ under a slightly stronger bound.
-approx-chol's solves bound no residual; an iterate is taken only once it is positive and lowers the
-maximum row ratio. Every returned $u$ is positive, so its row ratios bound $\lambda$ soundly, but
+approx-chol's solves bound no residual; an iterate is taken only once it is positive and ranks
+better: before certification by its largest row ratio, after it by its eigen-residual, and it is
+settled once $\max_i \rho_i < 1 - \beta$ or its eigen-residual is within $\beta$. Every returned $u$ is positive, so its row ratios bound $\lambda$ soundly, but
 convergence is not guaranteed: if the budget runs out unsettled, the clamp can exceed rounding
 level even on a GDD input.
 
@@ -265,8 +269,9 @@ approximate_cholesky(L, rule, k, seed):
 ```
 
 - **Order:** the next pivot is a vertex with the fewest incident edge copies in the current graph,
-  so cliques stay small. The order is dynamic, recomputed after each elimination; $g$ takes part
-  like any vertex.
+  so cliques stay small. The order is dynamic, recomputed after each elimination; $g$ is never a
+  pivot, it is pinned as the last slot. Planned (G1): on `main` $g$ takes part like any vertex
+  unless the scales or the ground span wide.
 - **Rule:** a clique tree or a Schur tree (`glossary.md`). Both keep the clique's expectation;
   the clique tree is the default, and the Schur tree is opt-in.
 - **Clique tree** (Gao, Kyng, Spielman, §4.3): every edge is split into $k$ parallel copies,
@@ -301,9 +306,9 @@ approximate_cholesky(L, rule, k, seed):
   since each pivot is chosen from the past (Kyng, Sachdeva prove it for a random order).
 - **Zero pivot:** $L$ is a connected Laplacian, hence singular with kernel $\operatorname{span}
   \mathbf{1}$. Connected samples keep every intermediate graph connected, so exactly one pivot value
-  is zero, the last one, and $\mathcal{D}^+$ replaces $\mathcal{D}^{-1}$. Under signed elimination
-  the last vertex is $g$; its pivot value need not be zero, as the matrix with $g$ is no Laplacian,
-  and it is set to $0$, which pins $g$.
+  is zero, the last one, $g$ where there is one, and $\mathcal{D}^+$ replaces $\mathcal{D}^{-1}$.
+  Under signed elimination the matrix with $g$ is no Laplacian, so $g$'s pivot value need not be
+  zero; it is not computed but set to $0$, which pins $g$.
 
 **Sources**
 
@@ -338,9 +343,12 @@ $$
 which is SDDM on a cover and WDD under signed elimination, since each elimination keeps either.
 Eliminating a vertex $f \in F$ adds the clique
 on its neighbors with weights $w_{fi} w_{fj} / a_{ff}$ and raises their surpluses (glossary,
-Elimination). These cliques can make $\tilde H$ dense, so $\tilde H$ is formed exactly, or with each
-clique replaced by a clique sample and the surplus raise kept exact. The stars are independent,
-since $F$ has no internal edges. Steps 6–7 then factor $\tilde H$.
+Elimination). These cliques can make $\tilde H$ dense, so $\tilde H$ is formed exactly, or sampled: each
+star of $F$, its ground share included as one more neighbor, is replaced by a clique sample, so
+the surplus raise is sampled with the clique and unbiased like it. The stars are independent,
+since $F$ has no internal edges: on a cover they are formed with a ground vertex, and whether
+$\tilde H$'s surplus then goes to a ground vertex or to surplus edges is decided on $\tilde H$
+(step 5), after formation. Steps 6–7 then factor $\tilde H$.
 
 ## Solve
 
@@ -375,15 +383,21 @@ symmetric and PSD. For a bipartite factor-width-2 form, steps 3–5 act on $\til
 block substitution around them: before, $\tilde b_K \mapsto \tilde b_K - \tilde A_{KF} \tilde A_{FF}^{-1} \tilde b_F$;
 after, $\tilde y_F = \tilde A_{FF}^{-1} (\tilde b_F - \tilde A_{FK} \tilde y_K)$.
 
+A Schur build's $B$ takes only $b_K$: steps 1–6 run on $\tilde H$, with the lift restricted to
+$K$ and $Q$ the projection onto the complement of $\tilde H$'s null vector in $K$'s coordinates;
+no substitution through $F$ runs.
+
 ## Target
 
-With exact elimination, $G$ is a {1,2}-inverse of $L$ ($LGL = L$, $GLG = G$), since $\mathcal{L}$
-is invertible and $\mathcal{D}^+$ is one of $\mathcal{D}$. Then $B = A_r^+$:
+With exact elimination of a Laplacian, $G$ is a {1,2}-inverse of $L$ ($LGL = L$, $GLG = G$), since
+$\mathcal{L}$ is invertible and $\mathcal{D}^+$ is one of $\mathcal{D}$. Then $B = A_r^+$:
 
 - **grounded, balanced:** $R^\top G R = \tilde A^{-1}$, since $\tilde A$ is $L$ with $g$ deleted,
   so $B = A_r^{-1}$;
-- **frustrated, signed elimination:** $g$ is pinned, so $R^\top G R = \tilde A^{-1}$ and
-  $B = A_r^{-1}$;
+- **frustrated, signed elimination:** the matrix with $g$ is no Laplacian and $g$'s pivot is set
+  to $0$, not computed, so $G$ is no generalized inverse of it. But $g$ is pinned: the
+  substitutions run on the principal block without $g$, which is $\tilde A$ factored exactly, so
+  $R^\top G R = \tilde A^{-1}$ and $B = A_r^{-1}$;
 - **frustrated, cover:** the ground's lift and descent turn $G$ into $\hat A^{-1}$ if grounded and
   into a {1}-inverse $Y$ of $\hat A$ if floating, as with surplus edges. With $J = \begin{pmatrix} I \\ -I \end{pmatrix}$,
   $\hat A J = J \bar A$, so $Jb = \hat A J \bar A^{-1} b$ lies in the range of $\hat A$, and
@@ -395,7 +409,8 @@ is invertible and $\mathcal{D}^+$ is one of $\mathcal{D}$. Then $B = A_r^+$:
   $\operatorname{span} z$; the {1,2}-inverse with that range and kernel is unique, and it is
   $A_r^+$. The projection on both sides is what makes $B$ the pseudoinverse;
 - **bipartite:** exact block elimination of $F$ and an exact factorization of $\tilde H$ together
-  factor $\tilde A$ exactly, so one of the cases above applies.
+  factor $\tilde A$ exactly, so one of the cases above applies; a Schur build's $B$ is $H^+$ by the
+  same cases applied to $\tilde H$.
 
 Approximate Cholesky replaces $G$ by a random operator whose factorization has $L$ as its
 expectation. The inverse is not unbiased, $\mathbb{E}[B] \ne A_r^+$ in general: "targets" refers to
