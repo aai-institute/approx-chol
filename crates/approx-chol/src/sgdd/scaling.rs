@@ -2,7 +2,7 @@ mod normalized;
 mod perron;
 
 use normalized::Normalized;
-use perron::{InverseIteration, Perron, Shortfall};
+use perron::{InverseIteration, Outcome, Shortfall};
 
 use crate::storage::OffDiagonal;
 use crate::{narrow, widen, Index, Real};
@@ -135,7 +135,7 @@ impl ScaleVector {
             Self::Identity | Self::NullVector => None,
             Self::PerronVector { shortfall, .. } => Some(shortfall),
         };
-        let settled = shortfall.is_none_or(|s| s.settled);
+        let settled = shortfall.is_none_or(|s| s.outcome == Outcome::Settled);
         (deficit > 0.0 || !settled).then(|| ScalingReport {
             iterations: shortfall.map_or(0, |s| s.iterations),
             violation: shortfall.map_or(deficit, |s| s.violation.max(deficit)),
@@ -182,7 +182,7 @@ pub(super) fn relax<T: Real, I: Index>(
     let settle_band = (RATIO_BAND * widen(T::epsilon())).max(rounding);
     let slack = policy.slack(widen(T::epsilon()));
     let iteration = InverseIteration::new(&n, slack, settle_band, policy.max_iterations)?;
-    let Perron { y, shortfall } = iteration.run();
+    let (y, shortfall) = iteration.run();
     let vector = ScaleVector::PerronVector {
         settle_band,
         shortfall,

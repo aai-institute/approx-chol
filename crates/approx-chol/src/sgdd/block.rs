@@ -169,12 +169,6 @@ type ComplementParts<T, I> = (
     Option<Box<ScalingReport>>,
 );
 
-/// `M` formed with its rows' diagonal and `Σ_j |m_ij|`.
-pub(super) struct Formed<T, I> {
-    pub(super) m: Congruent<T, I>,
-    pub(super) rows: RowSums<T>,
-}
-
 /// `M = F · A_c · F` over its vertices, its surplus still to be decided.
 pub(super) struct Congruent<T, I> {
     vertices: Selection<I>,
@@ -184,7 +178,7 @@ pub(super) struct Congruent<T, I> {
 
 impl<T: Real, I: Index> Congruent<T, I> {
     /// `S A_c S`, unscaled: signs keep every magnitude, so `A_c`'s rows are `M`'s.
-    pub(super) fn signed(a: SymmetricBlock<T, I>, signs: Congruence<T>) -> Formed<T, I> {
+    pub(super) fn signed(a: SymmetricBlock<T, I>, signs: Congruence<T>) -> (Self, RowSums<T>) {
         let SymmetricBlock {
             adjacency:
                 BlockAdjacency {
@@ -202,7 +196,7 @@ impl<T: Real, I: Index> Congruent<T, I> {
             congruence: signs,
             off_diagonal,
         };
-        Formed { m, rows }
+        (m, rows)
     }
 
     /// `S R A_c R S` with its rows; `None` once a scaled off-diagonal entry leaves the range.
@@ -210,7 +204,7 @@ impl<T: Real, I: Index> Congruent<T, I> {
         a: SymmetricBlock<T, I>,
         signs: Congruence<T>,
         scales: &[T],
-    ) -> Option<Formed<T, I>> {
+    ) -> Option<(Self, RowSums<T>)> {
         let SymmetricBlock {
             adjacency:
                 BlockAdjacency {
@@ -232,10 +226,7 @@ impl<T: Real, I: Index> Congruent<T, I> {
         let diagonal = (rows.diagonal.iter().zip(scales))
             .map(|(&a, &f)| f * a * f)
             .collect();
-        Some(Formed {
-            m,
-            rows: RowSums { diagonal, abs },
-        })
+        Some((m, RowSums { diagonal, abs }))
     }
 
     /// An incidence Gram, assembled switched across a bipartition.

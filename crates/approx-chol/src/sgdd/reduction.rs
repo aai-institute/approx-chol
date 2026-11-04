@@ -6,9 +6,7 @@ mod graph;
 use num_traits::PrimInt;
 use rayon::prelude::*;
 
-use super::block::{
-    Balance, BlockComplement, Congruent, Formed, Grounding, IrreducibleBlock, ReduceError,
-};
+use super::block::{Balance, BlockComplement, Congruent, Grounding, IrreducibleBlock, ReduceError};
 use super::congruence::{Congruence, Selection};
 use super::decomposition::{
     of_csr, of_upper, AdjacencyLayout, Biadjacency, Components, Lone, Partitioned, RowSums,
@@ -134,7 +132,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
         let folded = folding.is_some();
         let signs = folding.unwrap_or(Congruence::Identity);
         let vector = (relaxation.as_ref()).map_or(ScaleVector::Identity, |r| r.vector);
-        let Formed { m, rows } = match relaxation {
+        let (m, rows) = match relaxation {
             None => Congruent::signed(self, signs),
             Some(r) => Congruent::scaled(self, signs, &r.scales)
                 .ok_or(ReduceError::Unscalable { vertex })?,

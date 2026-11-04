@@ -73,19 +73,21 @@ impl Bracket {
     }
 }
 
-/// The scaling the iteration leaves: `y`, and how far it fell short.
-pub(super) struct Perron {
-    pub(super) y: Vec<f64>,
-    pub(super) shortfall: Shortfall,
-}
-
-/// The steps spent, the violation `y` leaves, and whether `y` settled, proving the float decision.
+/// The steps spent, the violation `y` leaves, and how the iteration ended.
 #[derive(Clone, Copy, Debug)]
 // Mirrors `ScalingReport` before a clamped deficit joins it, which only `ScaleVector::report` does.
 pub(in crate::sgdd) struct Shortfall {
     pub(super) iterations: usize,
     pub(super) violation: f64,
-    pub(super) settled: bool,
+    pub(super) outcome: Outcome,
+}
+
+/// Settled proves the float decision; refuted proves no scaling certifies; unsettled ran out of steps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Outcome {
+    Settled,
+    Refuted,
+    Unsettled,
 }
 
 /// The best positive `y` so far and its bracket.
@@ -136,7 +138,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
     }
 
     /// `α = 1 + slack/2` until a step certifies or refutes (as `M⁻¹𝟙` does: Ahmadinejad et al., arXiv:1810.02348 §3.1), then each step from the bracket's [`shift`](Bracket::shift).
-    pub(super) fn run(mut self) -> Perron {
+    pub(super) fn run(mut self) -> (Vec<f64>, Shortfall) {
         let (slack, settle_band) = (self.slack, self.settle_band);
         let polished = |b: &Bracket| b.settled(slack, settle_band) || b.refutes(slack);
         let unit = vec![1.0; self.n.n()];
@@ -156,12 +158,17 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             self.patience = self.patience.saturating_mul(2);
         }
         let Iterate { y, bracket } = self.best;
+        let outcome = match bracket.settled(slack, settle_band) {
+            true => Outcome::Settled,
+            false if self.refuted || bracket.refutes(slack) => Outcome::Refuted,
+            false => Outcome::Unsettled,
+        };
         let shortfall = Shortfall {
             iterations: self.iterations,
             violation: bracket.violation(),
-            settled: bracket.settled(slack, settle_band),
+            outcome,
         };
-        Perron { y, shortfall }
+        (y, shortfall)
     }
 
     /// CG on `(αI − N) y = b`; each probed iterate, and a vanishing curvature's or refuting Rayleigh quotient's direction, replaces `best` when it ranks above it. Whether one did.
