@@ -3,7 +3,7 @@
 mod grounded;
 mod real;
 
-pub(crate) use grounded::{Balance, Grounding, Sheets};
+pub(crate) use grounded::{Balance, Gauge, Grounded, Grounding, Sheets};
 pub use real::Real;
 pub(crate) use real::{compensated_sum, in_range, lane_sum, narrow, widen, Index, Sum2};
 
@@ -168,10 +168,6 @@ impl<T: Real, I: Index> Rows<T, I> {
         self.values.iter().all(|&x| x <= T::zero())
     }
 
-    pub(crate) fn positive(&self) -> bool {
-        self.values.iter().all(|&x| x > T::zero())
-    }
-
     /// `x_ij ← r_i x_ij c_j` for signs `r`, `c`: exact, so never out of range.
     fn signed(mut self, r: &[T], c: &[T]) -> Self {
         for (i, &r_i) in r[..self.n_rows()].iter().enumerate() {
@@ -250,40 +246,189 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
     }
 }
 
-/// A block's off-diagonal by shape: `A_c`'s signed one, or `M`'s once congruent.
+/// `C` of `[D_e C; Cᵀ D_k]`, both sides nonempty, the eliminated side as its rows.
 #[derive(Clone, Debug)]
-pub(crate) enum OffDiagonal<T, I> {
-    General(UpperAdjacency<T, I>),
-    /// `C` of `[D_e C; Cᵀ D_k]`, both sides nonempty, the eliminated side as its rows.
-    Bipartite(Rows<T, I>),
+pub(crate) struct Bipartite<T, I> {
+    cross: Rows<T, I>,
 }
 
-impl<T: Real, I: Index> OffDiagonal<T, I> {
-    pub(crate) fn n(&self) -> usize {
-        match self {
-            Self::General(adjacency) => adjacency.n(),
-            Self::Bipartite(cross) => cross.n_rows() + cross.n_cols(),
+impl<T: Real, I: Index> Bipartite<T, I> {
+    /// Panics unless both sides are nonempty.
+    pub(crate) fn new(cross: Rows<T, I>) -> Self {
+        assert!(
+            cross.n_rows() > 0 && cross.n_cols > 0,
+            "both sides nonempty"
+        );
+        Self { cross }
+    }
+
+    pub(crate) fn n_eliminated(&self) -> usize {
+        self.cross.n_rows()
+    }
+
+    pub(crate) fn positive(&self) -> bool {
+        self.cross.values.iter().all(|&x| x > T::zero())
+    }
+
+    pub(crate) fn cross(&self) -> &Rows<T, I> {
+        &self.cross
+    }
+
+    pub(crate) fn into_cross(self) -> Rows<T, I> {
+        self.cross
+    }
+}
+
+/// A block's off-diagonal as Reduction reads it, by shape; each edge stored once.
+pub(crate) trait Adjacency<T: Real, I: Index>: Sized + Send + Sync {
+    fn n(&self) -> usize;
+
+    fn nonpositive(&self) -> bool;
+
+    /// `Σ_j |a_ij|` per row in local order: dominance, surplus and pivots all start here.
+    fn abs_row_sums(&self) -> Vec<T>;
+
+    /// [`abs_row_sums`](Self::abs_row_sums) as [`Sum2`] gives them, off by `(u + γ²_{k/8})Σ` at degree `k`, in `f64`.
+    fn compensated_abs_row_sums(&self) -> Vec<f64>;
+
+    /// `sum + scale · Σ_ij |a_ij|` over both triangles: the other mirrors the stored one.
+    fn scaled_abs_into(&self, sum: Sum2, scale: f64) -> Sum2;
+
+    /// `S X S` for signs `S`: a sign moves no magnitude, so no entry leaves range.
+    fn signed(self, s: &[T]) -> Self;
+
+    /// `F X F` with the new row sums from the same pass; `None` where an entry leaves range.
+    fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)>;
+
+    /// Each row's off-diagonal count, both triangles.
+    fn degrees(&self) -> Vec<usize>;
+
+    /// `out = |X| diag(s) y`, each stored entry read for both its ends.
+    fn abs_times(&self, s: &[f64], y: &[f64], out: &mut [f64]);
+
+    /// Each stored row `i` with its entries `(j, a_ij)` in local order: every edge once.
+    fn upper_rows(&self) -> impl Iterator<Item = (usize, impl Iterator<Item = (usize, &T)>)>;
+
+    /// Itself when bipartite, for what only that shape has: a side to eliminate, a cheaper Perron system.
+    fn bipartite(&self) -> Option<&Bipartite<T, I>>;
+}
+
+impl<T: Real, I: Index> Adjacency<T, I> for UpperAdjacency<T, I> {
+    fn n(&self) -> usize {
+        UpperAdjacency::n(self)
+    }
+
+    fn nonpositive(&self) -> bool {
+        UpperAdjacency::nonpositive(self)
+    }
+
+    fn abs_row_sums(&self) -> Vec<T> {
+        narrowed(self.rows.abs_sums(0))
+    }
+
+    fn compensated_abs_row_sums(&self) -> Vec<f64> {
+        self.rows.compensated_abs_sums(0)
+    }
+
+    fn scaled_abs_into(&self, sum: Sum2, scale: f64) -> Sum2 {
+        self.rows.scaled_abs_into(sum, scale)
+    }
+
+    fn signed(self, s: &[T]) -> Self {
+        Self {
+            rows: self.rows.signed(s, s),
         }
     }
 
-    pub(crate) fn nonpositive(&self) -> bool {
-        self.stored().0.nonpositive()
+    fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
+        let (rows, sums) = self.rows.scaled_abs_sums(f, f, 0)?;
+        Some((Self { rows }, narrowed(sums)))
     }
 
-    /// `Σ_j |a_ij|` per row in local order: dominance, surplus and pivots all start here.
-    pub(crate) fn abs_row_sums(&self) -> Vec<T> {
-        let (rows, offset) = self.stored();
-        rows.abs_sums(offset).into_iter().map(narrow).collect()
+    fn degrees(&self) -> Vec<usize> {
+        self.rows.degrees(0)
     }
 
-    /// [`abs_row_sums`](Self::abs_row_sums) as [`Sum2`] gives them, off by `(u + γ²_{k/8})Σ` at degree `k`, in `f64`.
-    pub(crate) fn compensated_abs_row_sums(&self) -> Vec<f64> {
-        let (rows, offset) = self.stored();
-        let mirror = rows.transpose();
-        let mut sums = vec![Sum2::default(); self.n()];
+    fn abs_times(&self, s: &[f64], y: &[f64], out: &mut [f64]) {
+        self.rows.mirrored_abs_times(0, s, y, out);
+    }
+
+    fn upper_rows(&self) -> impl Iterator<Item = (usize, impl Iterator<Item = (usize, &T)>)> {
+        self.rows.offset_rows(0)
+    }
+
+    fn bipartite(&self) -> Option<&Bipartite<T, I>> {
+        None
+    }
+}
+
+impl<T: Real, I: Index> Adjacency<T, I> for Bipartite<T, I> {
+    fn n(&self) -> usize {
+        self.cross.n_rows() + self.cross.n_cols()
+    }
+
+    fn nonpositive(&self) -> bool {
+        self.cross.nonpositive()
+    }
+
+    fn abs_row_sums(&self) -> Vec<T> {
+        narrowed(self.cross.abs_sums(self.n_eliminated()))
+    }
+
+    fn compensated_abs_row_sums(&self) -> Vec<f64> {
+        self.cross.compensated_abs_sums(self.n_eliminated())
+    }
+
+    fn scaled_abs_into(&self, sum: Sum2, scale: f64) -> Sum2 {
+        self.cross.scaled_abs_into(sum, scale)
+    }
+
+    fn signed(self, s: &[T]) -> Self {
+        let (eliminated, kept) = s.split_at(self.n_eliminated());
+        Self {
+            cross: self.cross.signed(eliminated, kept),
+        }
+    }
+
+    fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
+        let (eliminated, kept) = f.split_at(self.n_eliminated());
+        let (cross, sums) = self
+            .cross
+            .scaled_abs_sums(eliminated, kept, eliminated.len())?;
+        Some((Self { cross }, narrowed(sums)))
+    }
+
+    fn degrees(&self) -> Vec<usize> {
+        self.cross.degrees(self.n_eliminated())
+    }
+
+    fn abs_times(&self, s: &[f64], y: &[f64], out: &mut [f64]) {
+        self.cross
+            .mirrored_abs_times(self.n_eliminated(), s, y, out);
+    }
+
+    fn upper_rows(&self) -> impl Iterator<Item = (usize, impl Iterator<Item = (usize, &T)>)> {
+        self.cross.offset_rows(self.n_eliminated())
+    }
+
+    fn bipartite(&self) -> Option<&Bipartite<T, I>> {
+        Some(self)
+    }
+}
+
+fn narrowed<T: Real>(sums: Vec<f64>) -> Vec<T> {
+    sums.into_iter().map(narrow).collect()
+}
+
+// A symmetric off-diagonal's stored entries, its columns from `offset` in local order, read for both their ends.
+impl<T: Real, I: Index> Rows<T, I> {
+    /// Each row's [`Sum2`] of `|x|` and its column's from the mirror, in `f64`.
+    fn compensated_abs_sums(&self, offset: usize) -> Vec<f64> {
+        let mirror = self.transpose();
+        let mut sums = vec![Sum2::default(); offset + self.n_cols];
         let abs = |_, x: T| widen(x.abs());
-        for (i, sum) in sums[..rows.n_rows()].iter_mut().enumerate() {
-            *sum = sum.plus(rows.row_values(i), abs);
+        for (i, sum) in sums[..self.n_rows()].iter_mut().enumerate() {
+            *sum = sum.plus(self.row_values(i), abs);
         }
         for (j, sum) in sums[offset..].iter_mut().enumerate() {
             *sum = sum.plus(mirror.row_values(j), abs);
@@ -291,44 +436,13 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
         sums.iter().map(Sum2::total).collect()
     }
 
-    /// `sum + scale · Σ_ij |a_ij|` over both triangles: the other mirrors the stored one.
-    pub(crate) fn scaled_abs_into(&self, sum: Sum2, scale: f64) -> Sum2 {
-        sum.plus(&self.stored().0.values, |_, x| 2.0 * scale * widen(x.abs()))
+    fn scaled_abs_into(&self, sum: Sum2, scale: f64) -> Sum2 {
+        sum.plus(&self.values, |_, x| 2.0 * scale * widen(x.abs()))
     }
 
-    /// `S X S` for signs `S`: a sign moves no magnitude, so no entry leaves range.
-    pub(crate) fn signed(self, s: &[T]) -> Self {
-        match self {
-            Self::General(adjacency) => Self::General(UpperAdjacency {
-                rows: adjacency.rows.signed(s, s),
-            }),
-            Self::Bipartite(cross) => {
-                let (eliminated, kept) = s.split_at(cross.n_rows());
-                Self::Bipartite(cross.signed(eliminated, kept))
-            }
-        }
-    }
-
-    /// `F X F` with the new row sums from the same pass; `None` where an entry leaves range.
-    pub(crate) fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
-        let (scaled, sums) = match self {
-            Self::General(adjacency) => {
-                let (rows, sums) = adjacency.rows.scaled_abs_sums(f, f, 0)?;
-                (Self::General(UpperAdjacency { rows }), sums)
-            }
-            Self::Bipartite(cross) => {
-                let (eliminated, kept) = f.split_at(cross.n_rows());
-                let (cross, sums) = cross.scaled_abs_sums(eliminated, kept, eliminated.len())?;
-                (Self::Bipartite(cross), sums)
-            }
-        };
-        Some((scaled, sums.into_iter().map(narrow).collect()))
-    }
-
-    /// Each row's off-diagonal count, both triangles.
-    pub(crate) fn degrees(&self) -> Vec<usize> {
-        let mut degree = vec![0usize; self.n()];
-        for (i, row) in self.upper_rows() {
+    fn degrees(&self, offset: usize) -> Vec<usize> {
+        let mut degree = vec![0usize; offset + self.n_cols];
+        for (i, row) in self.offset_rows(offset) {
             let mut count = 0;
             for (j, _) in row {
                 count += 1;
@@ -339,16 +453,14 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
         degree
     }
 
-    /// `out = |X| diag(s) y`, each stored entry read for both its ends.
-    pub(crate) fn abs_times(&self, s: &[f64], y: &[f64], out: &mut [f64]) {
-        let (rows, offset) = self.stored();
+    fn mirrored_abs_times(&self, offset: usize, s: &[f64], y: &[f64], out: &mut [f64]) {
         out.fill(0.0);
-        for (i, span) in rows.ptrs.windows(2).enumerate() {
+        for (i, span) in self.ptrs.windows(2).enumerate() {
             let x_i = y[i] * s[i];
             let mut sum = 0.0;
-            for (&j, &a) in rows.indices[span[0]..span[1]]
+            for (&j, &a) in self.indices[span[0]..span[1]]
                 .iter()
-                .zip(&rows.values[span[0]..span[1]])
+                .zip(&self.values[span[0]..span[1]])
             {
                 let (a, j) = (widen(a.abs()), offset + j.index());
                 sum += a * (y[j] * s[j]);
@@ -358,20 +470,30 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
         }
     }
 
-    /// Each stored row `i` with its entries `(j, a_ij)` in local order: every edge once.
-    pub(crate) fn upper_rows(
+    fn offset_rows(
         &self,
+        offset: usize,
     ) -> impl Iterator<Item = (usize, impl Iterator<Item = (usize, &T)>)> {
-        let (rows, offset) = self.stored();
-        (0..rows.n_rows()).map(move |i| (i, rows.row(i).map(move |(j, a)| (offset + j, a))))
+        (0..self.n_rows()).map(move |i| (i, self.row(i).map(move |(j, a)| (offset + j, a))))
     }
+}
 
-    /// The stored entries, and where their columns start in local order.
-    fn stored(&self) -> (&Rows<T, I>, usize) {
-        match self {
-            Self::General(adjacency) => (&adjacency.rows, 0),
-            Self::Bipartite(cross) => (cross, cross.n_rows()),
-        }
+/// A block's off-diagonal by shape, as Cholesky receives it.
+#[derive(Clone, Debug)]
+pub(crate) enum OffDiagonal<T, I> {
+    General(UpperAdjacency<T, I>),
+    Bipartite(Bipartite<T, I>),
+}
+
+impl<T, I> From<UpperAdjacency<T, I>> for OffDiagonal<T, I> {
+    fn from(adjacency: UpperAdjacency<T, I>) -> Self {
+        Self::General(adjacency)
+    }
+}
+
+impl<T, I> From<Bipartite<T, I>> for OffDiagonal<T, I> {
+    fn from(cross: Bipartite<T, I>) -> Self {
+        Self::Bipartite(cross)
     }
 }
 

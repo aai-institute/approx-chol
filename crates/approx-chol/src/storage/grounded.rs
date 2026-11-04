@@ -2,30 +2,36 @@
 
 use super::{in_range, widen, Real};
 
-/// Whether a signature folds `M` (Harary), and `M`'s grounding.
-#[derive(Clone, Debug)]
-pub(crate) enum Balance<T> {
-    /// Folded to a Z-matrix: singular exactly when ungrounded.
-    Balanced(Grounding<T>),
+/// Whether a signature folds `M` into a Z-matrix (Harary): balanced `M` is singular exactly when ungrounded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Balance {
+    Balanced,
     /// No signature exists: a two-sheet cover, definite on `[z; −z]` even ungrounded.
-    Frustrated(Grounding<T>),
+    Frustrated,
 }
 
-impl<T> Balance<T> {
+impl Balance {
     /// A balanced `M` folds onto one sheet; a frustrated one needs the cover's two.
-    pub(crate) fn sheets(&self) -> Sheets {
+    pub(crate) fn sheets(self) -> Sheets {
         match self {
-            Self::Balanced(_) => Sheets::One,
-            Self::Frustrated(_) => Sheets::Two,
+            Self::Balanced => Sheets::One,
+            Self::Frustrated => Sheets::Two,
         }
     }
+}
 
-    pub(crate) fn split(self) -> (Sheets, Grounding<T>) {
-        let sheets = self.sheets();
-        match self {
-            Self::Balanced(grounding) | Self::Frustrated(grounding) => (sheets, grounding),
-        }
-    }
+/// A matrix's off-diagonal and the surplus closing it into an SDDM.
+#[derive(Clone, Debug)]
+pub(crate) struct Grounded<T, P> {
+    pub(crate) adjacency: P,
+    pub(crate) grounding: Grounding<T>,
+}
+
+/// Where a floating solve fixes its gauge, on the vertices Cholesky factors: the largest scale, and whether the scales span past `1/√ε`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Gauge {
+    pub(crate) peak: usize,
+    pub(crate) spans_wide: bool,
 }
 
 /// How many copies of each vertex a matrix holds: two for a Gremban cover, interleaved by vertex.
