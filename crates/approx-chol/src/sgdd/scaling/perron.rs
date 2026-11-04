@@ -51,14 +51,15 @@ impl Bracket {
     }
 
     /// `ρ < 1` proven, or `y` a Perron vector of `ρ = 1` to rounding: no later `y` moves the float decision.
-    fn settled(&self, slack: f64, band: f64) -> bool {
+    fn settled(&self, slack: f64, settle_band: f64) -> bool {
         // Not the width, which never closes once `y` has components below `ε` (Li & Li, arXiv:2111.12642 §3).
-        self.certifies(slack) && (self.high < 1.0 - band || self.eigen_residual <= band)
+        self.certifies(slack)
+            && (self.high < 1.0 - settle_band || self.eigen_residual <= settle_band)
     }
 
-    /// Certified and near settling: a CG run stalls at a floor that grows with its steps, past `4×` the band after ~5000.
-    fn nearly_settled(&self, slack: f64, band: f64) -> bool {
-        self.certifies(slack) && self.eigen_residual <= 64.0 * band
+    /// Certified and near settling: a CG run stalls at a floor that grows with its steps, past `4×` the settle band after ~5000.
+    fn nearly_settled(&self, slack: f64, settle_band: f64) -> bool {
+        self.certifies(slack) && self.eigen_residual <= 64.0 * settle_band
     }
 
     /// Just above `ρ`: `1` once certified, as a scalable block's `ρ ≤ 1`, else the top (Noda 1971).
@@ -97,10 +98,10 @@ pub(super) struct InverseIteration<'n, 'a, T, I> {
     n: &'n Normalized<'a, T, I>,
     slack: f64,
     /// The rounding band a settled bracket closes to, around `ρ = 1`.
-    band: f64,
+    settle_band: f64,
     max_iterations: usize,
     iterations: usize,
-    /// A Rayleigh quotient passed `1 + max(slack, band)`: `ρ` is too, so no later `y` certifies.
+    /// A Rayleigh quotient passed `1 + max(slack, settle_band)`: `ρ` is too, so no later `y` certifies.
     refuted: bool,
     best: Iterate,
     /// The product of every product with `N`.
@@ -114,7 +115,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
     pub(super) fn new(
         n: &'n Normalized<'a, T, I>,
         slack: f64,
-        band: f64,
+        settle_band: f64,
         max_iterations: usize,
     ) -> Option<Self> {
         let mut work = vec![0.0; n.n()];
@@ -123,7 +124,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
         Some(Self {
             n,
             slack,
-            band,
+            settle_band,
             max_iterations,
             iterations: 0,
             refuted: false,
@@ -135,8 +136,8 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
 
     /// `α = 1 + slack/2` until a step certifies or refutes (as `M⁻¹𝟙` does: Ahmadinejad et al., arXiv:1810.02348 §3.1), then each step from the bracket's [`shift`](Bracket::shift).
     pub(super) fn run(mut self) -> Perron {
-        let (slack, band) = (self.slack, self.band);
-        let polished = |b: &Bracket| b.settled(slack, band) || b.refutes(slack);
+        let (slack, settle_band) = (self.slack, self.settle_band);
+        let polished = |b: &Bracket| b.settled(slack, settle_band) || b.refutes(slack);
         let unit = vec![1.0; self.n.n()];
         self.solve(1.0 + 0.5 * slack, unit, |b| {
             b.certifies(slack) || b.refutes(slack)
@@ -157,7 +158,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
         let shortfall = Shortfall {
             iterations: self.iterations,
             violation: bracket.violation(),
-            settled: bracket.settled(slack, band),
+            settled: bracket.settled(slack, settle_band),
         };
         Perron { y, shortfall }
     }
@@ -183,7 +184,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             let vanishing = curvature <= 64.0 * f64::EPSILON * direction_norm_squared;
             let floor = system.spectral_floor(direction_norm_squared, curvature);
             // Past the rounding band too: an f32 block's `N` reads a few ulps over a singular `ρ = 1`.
-            self.refuted = floor > 1.0 + self.slack.max(self.band);
+            self.refuted = floor > 1.0 + self.slack.max(self.settle_band);
             if vanishing || self.refuted {
                 // Either exposes a near-Perron vector: a singular boundary's zero curvature, or the refuting direction.
                 let witness: Vec<f64> = direction.iter().map(|value| value.abs()).collect();
@@ -204,8 +205,11 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             if !next_residual_norm_squared.is_finite() {
                 break;
             }
-            // A long run's iterate stalls a few ulps above the band; a fresh solve from an improved `best` polishes it.
-            let stalled = self.best.bracket.nearly_settled(self.slack, self.band)
+            // A long run's iterate stalls a few ulps above the settle band; a fresh solve from an improved `best` polishes it.
+            let stalled = self
+                .best
+                .bracket
+                .nearly_settled(self.slack, self.settle_band)
                 && self.iterations - last_adoption >= self.patience;
             // From an unchanged `best`, a restart would replay this solve step for step.
             if stalled && !adopted {

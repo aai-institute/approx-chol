@@ -93,9 +93,12 @@ pub(super) enum ScaleVector {
     Identity,
     /// `|u|` of a certified null vector, accurate relative to each entry.
     NullVector,
-    /// An inverse-iteration Perron vector settled to `band` relative to its peak: a row of `M_ii = μ_i²` sits within `band/μ_i`.
-    // Spreads a ground as `1 − ρ` over every row, so a block within the band floats (#308).
-    PerronVector { band: f64, shortfall: Shortfall },
+    /// An inverse-iteration Perron vector settled to `settle_band` relative to its peak: a row of `M_ii = μ_i²` sits within `settle_band/μ_i`.
+    // Spreads a ground as `1 − ρ` over every row, so a block within the singular band floats (#308).
+    PerronVector {
+        settle_band: f64,
+        shortfall: Shortfall,
+    },
 }
 
 impl ScaleVector {
@@ -122,7 +125,7 @@ impl ScaleVector {
         match self {
             Self::Identity => rounding.max(RATIO_BAND * epsilon),
             Self::NullVector => rounding + RATIO_BAND * epsilon,
-            Self::PerronVector { band, .. } => rounding + band / m_ii.sqrt(),
+            Self::PerronVector { settle_band, .. } => rounding + settle_band / m_ii.sqrt(),
         }
     }
 
@@ -179,10 +182,13 @@ pub(super) fn relax<T: Real, I: Index>(
     // A ratio over `k` positive terms rounds by `(k + 3)ε`: no bracket closes tighter.
     let rounding =
         (off_diagonal.degrees().into_iter().max().unwrap_or(0) + 3) as f64 * f64::EPSILON;
-    let band = (RATIO_BAND * widen(T::epsilon())).max(rounding);
+    let settle_band = (RATIO_BAND * widen(T::epsilon())).max(rounding);
     let slack = policy.slack(widen(T::epsilon()));
-    let iteration = InverseIteration::new(&n, slack, band, policy.max_iterations)?;
+    let iteration = InverseIteration::new(&n, slack, settle_band, policy.max_iterations)?;
     let Perron { y, shortfall } = iteration.run();
-    let vector = ScaleVector::PerronVector { band, shortfall };
+    let vector = ScaleVector::PerronVector {
+        settle_band,
+        shortfall,
+    };
     positive(n.scales(&y), vector)
 }

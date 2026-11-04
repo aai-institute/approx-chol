@@ -227,7 +227,7 @@ impl<T: Real, I: Index> Surplus<T, I> for RowSurplus {
 }
 
 impl<T: Real, I: Index> Folded<T, I> {
-    /// The one float-or-ground rule: in band, no stated ground, and residues or a certificate float `M`.
+    /// The one float-or-ground rule: in the singular band, no stated ground, and residues or a certificate float `M`.
     fn settle<S: Surplus<T, I>>(
         self,
         singularity: Singularity,
@@ -303,21 +303,17 @@ fn surplus<T: Real>(RowSums { diagonal, abs }: &RowSums<T>) -> Grounding<T> {
 /// `ε·1ᵀM1` and `ε·tr M`, both `ε`-scaled so neither overflows: how near `M` is to singular.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Singularity {
-    ones: f64,
-    trace: f64,
+    pub(crate) ones: f64,
+    pub(crate) trace: f64,
 }
 
 impl Singularity {
-    /// `1ᵀM1 ≤ BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh).
-    const BAND: f64 = 5.0;
+    /// `1ᵀM1 ≤ SINGULAR_BAND ε tr M` bounds `M`'s least eigenvalue relative to its diagonal (Rayleigh).
+    const SINGULAR_BAND: f64 = 5.0;
 
-    pub(crate) fn new(ones: f64, trace: f64) -> Self {
-        Self { ones, trace }
-    }
-
-    /// Whether `1ᵀM1` is within the band of `tr M`: needed, not enough, for `M` to float.
+    /// Whether `1ᵀM1` is within the singular band of `tr M`: needed, not enough, for `M` to float.
     pub(crate) fn within_band<T: Real>(self) -> bool {
-        self.ones <= Self::BAND * widen(T::epsilon()) * self.trace
+        self.ones <= Self::SINGULAR_BAND * widen(T::epsilon()) * self.trace
     }
 }
 
