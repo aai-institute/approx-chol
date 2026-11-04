@@ -50,7 +50,7 @@ mod storage;
 use num_traits::PrimInt;
 
 pub use error::Error;
-use factor::Storage;
+use factor::fits_u32;
 #[cfg(feature = "serde")]
 pub use factor::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
 pub use factor::{BlockFactor, Config, Factor, InnerParallelism, SchurMode, SolveError, Vertices};
@@ -94,28 +94,21 @@ pub fn factorize_complement<T: Real, I: PrimInt + Sync>(
 ) -> Result<Factor<T>, Error> {
     Ok(match fits_u32(input.n()) {
         true => Factor::build(
-            Complement::reduce_onto(input, kept, scaling)?,
+            Complement::<T, u32>::reduce_onto(input, kept, scaling)?,
             &config,
-            Storage::U32,
         ),
         false => Factor::build(
-            Complement::reduce_onto(input, kept, scaling)?,
+            Complement::<T, u64>::reduce_onto(input, kept, scaling)?,
             &config,
-            Storage::U64,
         ),
     })
-}
-
-/// Whether `u32` indexes a cover's two sheets and its ground, the most slots any block of `n` vertices takes.
-fn fits_u32(n: usize) -> bool {
-    u32::try_from(n.saturating_mul(2).saturating_add(1)).is_ok()
 }
 
 /// Built only by [`Sgdd::reduce`]: `A` in symmetric generalized diagonally dominant form, each irreducible block scaled to dominance.
 #[derive(Clone, Debug)]
 pub struct Sgdd<T = f64>(Indexed<T>);
 
-/// The reduction in the narrowest index its cover's `2n + 1` slots fit.
+/// The reduction in `u32` when [`fits_u32`], else in `u64`.
 #[derive(Clone, Debug)]
 enum Indexed<T> {
     U32(Reduction<T, u32>),
@@ -140,8 +133,8 @@ impl<T: Real> Sgdd<T> {
     /// Factors each block in parallel; clone first to factor again under another `config`.
     pub fn factor(self, config: &Config) -> Factor<T> {
         match self.0 {
-            Indexed::U32(summands) => Factor::build(summands, config, Storage::U32),
-            Indexed::U64(summands) => Factor::build(summands, config, Storage::U64),
+            Indexed::U32(summands) => Factor::build(summands, config),
+            Indexed::U64(summands) => Factor::build(summands, config),
         }
     }
 }
