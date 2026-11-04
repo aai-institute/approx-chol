@@ -4,8 +4,7 @@ set -euo pipefail
 source <(cargo llvm-cov show-env --sh)
 cargo llvm-cov clean --workspace
 
-cargo nextest run --workspace --all-features --locked
-cargo test --doc --workspace --all-features --locked
+cargo test --workspace --all-features --locked --no-fail-fast
 maturin develop --uv --locked
 pytest tests/ -v
 
