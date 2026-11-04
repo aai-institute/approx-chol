@@ -2,12 +2,12 @@
 
 use rayon::prelude::*;
 
-use super::cholesky::{Arm, BlockElimination, Signed, Streams, MULTIPLY_ADD_GRAIN_BITS};
+use super::cholesky::{AnyWdd, Arm, BlockElimination, Streams, MULTIPLY_ADD_GRAIN_BITS};
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::{Config, SchurMode};
 use super::sddm::{cover_vertex, crosses, Sddm, SddmRows};
 use crate::per_task;
-use crate::storage::{narrow, widen, Grounding, Index, Real, Rows, Sheets};
+use crate::storage::{narrow, widen, Balance, Grounded, Grounding, Index, Real, Rows, Sheets};
 
 /// How one block's Schur complement is formed, resolved from [`Config`] and its kept side.
 enum Formation {
@@ -34,15 +34,15 @@ fn formation(config: &Config, n_kept: usize) -> Formation {
 /// The bipartite block `M = [D_e C; Cᵀ D_k]` on its sheets: `C` by eliminated row, and every row's surplus, eliminated rows first.
 pub(super) struct BipartiteBlock<T, I> {
     cross: Rows<T, I>,
-    sheets: Sheets,
+    balance: Balance,
     grounding: Grounding<T>,
 }
 
 impl<T: Real, I: Index> BipartiteBlock<T, I> {
-    pub(super) fn of(cross: Rows<T, I>, sheets: Sheets, grounding: Grounding<T>) -> Self {
+    pub(super) fn of(cross: Rows<T, I>, balance: Balance, grounding: Grounding<T>) -> Self {
         Self {
             cross,
-            sheets,
+            balance,
             grounding,
         }
     }
@@ -69,11 +69,11 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
     ) -> (Arm<T, I>, Rows<T, I>) {
         let kept = Self::kept_surplus(&self.grounding, &self.cross);
         let rows = match formation(config, self.cross.n_cols()) {
-            Formation::Dense => return (Arm::Exact(self.signed(inv_pivot, kept)), self.cross),
+            Formation::Dense => return (Arm::Dense(self.dense(inv_pivot, kept)), self.cross),
             Formation::Exact => self.exact(inv_pivot),
             Formation::Sampled(split) => self.sample(split, streams).merge(),
         };
-        let s = Sddm::of_rows(rows, self.sheets, kept);
+        let s = Sddm::of_rows(rows, self.balance.sheets(), kept);
         (Arm::Approximate(s), self.cross)
     }
 
@@ -81,7 +81,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
     pub(super) fn complement(self, config: &Config, streams: Streams) -> Arm<T, I> {
         let kept = Self::kept_surplus(&self.grounding, &self.cross);
         let rows = match formation(config, self.cross.n_cols()) {
-            Formation::Dense => return Arm::Exact(self.signed(&self.inverse_pivots(), kept)),
+            Formation::Dense => return Arm::Dense(self.dense(&self.inverse_pivots(), kept)),
             Formation::Exact => self.exact(&self.inverse_pivots()),
             Formation::Sampled(split) => {
                 let fill = self.sample(split, streams);
@@ -90,13 +90,19 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
                 fill.merge()
             }
         };
-        Arm::Approximate(Sddm::of_rows(rows, self.sheets, kept))
+        Arm::Approximate(Sddm::of_rows(rows, self.balance.sheets(), kept))
     }
 
     /// `S` itself, its exact rows folded off the sheets.
-    fn signed(&self, inv_pivot: &[T], kept: Option<&[T]>) -> Signed<T, I> {
-        let (adjacency, grounding) = self.exact(inv_pivot).fold(self.sheets, kept);
-        Signed::new(adjacency, self.sheets, grounding)
+    fn dense(&self, inv_pivot: &[T], kept: Option<&[T]>) -> AnyWdd<T, I> {
+        let (adjacency, grounding) = self.exact(inv_pivot).fold(self.balance.sheets(), kept);
+        AnyWdd::new(
+            Grounded {
+                adjacency,
+                grounding,
+            },
+            self.balance,
+        )
     }
 
     /// The kept rows' surplus `s_k`, after `C`'s eliminated rows'; borrowed from σ alone, so `C` can be freed while it is held.
@@ -110,7 +116,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
 
     /// `S`'s dimension, a cover's two sheets counted.
     fn complement_dimension(&self) -> usize {
-        self.sheets.count() * self.cross.n_cols()
+        self.balance.sheets().count() * self.cross.n_cols()
     }
 
     /// Inverse pivots `1/(Σ|c_ek| + s_e)`, the same on both sheets of a cover.
@@ -127,7 +133,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
 
     /// `S − diag(s_k)` exact by kept row, `S = D_k − Cᵀ D_e⁻¹ C`, through a `Cᵀ` freed before `of_rows` adds `s_k`.
     fn exact(&self, inv_pivot: &[T]) -> SddmRows<T, I> {
-        match self.sheets {
+        match self.balance.sheets() {
             Sheets::One => self.exact_rows(inv_pivot, |j, _, _| j),
             Sheets::Two => self.exact_rows(inv_pivot, |j, c_ek, c_ej| {
                 cover_vertex(j, usize::from(crosses(c_ek) != crosses(c_ej)))
@@ -147,7 +153,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         // Each task carries one grain of the complement's `nnz·(nnz/n_e)/2` multiply-adds.
         let work = c.nnz() as u64 * (c.nnz() / c.n_rows().max(1)) as u64 / 2;
         SddmRows::split(
-            self.sheets,
+            self.balance.sheets(),
             c.n_cols(),
             per_task(c.n_cols(), work, MULTIPLY_ADD_GRAIN_BITS),
             |mut sums, k| {
@@ -196,7 +202,7 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
         let c = &self.block.cross;
         let ground = |e: usize| self.block.grounding.edge(e).map(|s_e| (self.ground, s_e));
         let draws = self.streams.star(s);
-        match self.block.sheets {
+        match self.block.balance.sheets() {
             // One sheet maps no column, as the balanced loop pays for any map.
             Sheets::One => {
                 let neighbors = c.row(s).map(|(k, &c)| (I::from_index(k), c.abs()));
@@ -221,7 +227,7 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
         let count = n.div_ceil(1 << shift);
         let per_task = per_task(c.n_rows(), c.nnz() as u64, 14);
         let empty = || (CliqueTreeSampler::new(split), vec![Vec::new(); count]);
-        let stars = self.block.sheets.count() * c.n_rows();
+        let stars = self.block.balance.sheets().count() * c.n_rows();
         let pieces = (0..stars)
             .into_par_iter()
             .fold_chunks(per_task, empty, |(mut sampler, mut buckets), s| {

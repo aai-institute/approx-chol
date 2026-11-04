@@ -1,6 +1,7 @@
 mod approximate;
 mod block_elimination;
 mod dense;
+mod wdd;
 
 use rand::rngs::Xoshiro256PlusPlus;
 use rand::SeedableRng;
@@ -16,7 +17,7 @@ use crate::storage::{
 };
 use approximate::{ApproximateCholesky, CliqueTreeElimination};
 pub(super) use block_elimination::BlockElimination;
-pub(super) use dense::Signed;
+pub(super) use wdd::AnyWdd;
 
 /// Whether `u32` indexes every slot of `n` vertices on the widest route, a cover's two sheets and its ground; the reduction is made before the route is known.
 pub(crate) fn fits_u32(n: usize) -> bool {
@@ -105,7 +106,13 @@ impl<T: Real, I: Index> Factorization<T, I> {
         match adjacency {
             OffDiagonal::General(adjacency) => {
                 let arm = match config.dense(adjacency.n()) {
-                    true => Arm::Exact(Signed::new(adjacency, sheets, grounding)),
+                    true => Arm::Dense(AnyWdd::new(
+                        Grounded {
+                            adjacency,
+                            grounding,
+                        },
+                        balance,
+                    )),
                     false => Arm::Approximate(Sddm::of_block(adjacency, sheets, grounding)),
                 };
                 Self {
@@ -115,7 +122,7 @@ impl<T: Real, I: Index> Factorization<T, I> {
             }
             OffDiagonal::Bipartite(cross) => {
                 let factor = |s| Cholesky::factor(s, draws, gauge, reused);
-                let block = BipartiteBlock::of(cross.into_cross(), sheets, grounding);
+                let block = BipartiteBlock::of(cross.into_cross(), balance, grounding);
                 let (elimination, cholesky) = block.eliminate(config, streams, factor);
                 Self {
                     elimination: Some(Box::new(elimination)),
@@ -138,7 +145,7 @@ impl<T: Real, I: Index> Factorization<T, I> {
         reused: &mut Workspace<T, I>,
     ) -> Self {
         let streams = Streams::of(key, config);
-        let block = BipartiteBlock::of(cross.into_cross(), balance.sheets(), grounding);
+        let block = BipartiteBlock::of(cross.into_cross(), balance, grounding);
         let s = block.complement(config, streams);
         Self {
             elimination: None,
@@ -212,9 +219,9 @@ impl<T: Real, I: Index> Workspace<T, I> {
     }
 }
 
-/// What a Cholesky factors: `M` itself on the exact arm, its SDDM on the approximate one.
+/// What a Cholesky factors: `M` itself on the dense arm, its SDDM on the approximate one.
 pub(super) enum Arm<T, I> {
-    Exact(Signed<T, I>),
+    Dense(AnyWdd<T, I>),
     Approximate(Sddm<T, I>),
 }
 
@@ -245,13 +252,22 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         reused: &mut Workspace<T, I>,
     ) -> Self {
         let (sheets, grounded, n, pinned, triangular) = match arm {
-            Arm::Exact(signed) => {
-                let (grounded, n) = (!signed.floats(), signed.n());
+            Arm::Dense(wdd) => {
+                let (grounded, n) = (!wdd.floats(), wdd.n());
                 // A definite `M`'s surplus is the ground's slot, pinned so the solve is `M`'s own.
                 let pin = pinned(Sheets::One, grounded, n, gauge);
-                let factor =
-                    Triangular::Dense(dense::factor(&signed, pin, &mut reused.dense).into());
-                (Sheets::One, grounded, n, pin, factor)
+                let dense = &mut reused.dense;
+                let factor = match &wdd {
+                    AnyWdd::Unsigned(wdd) => dense::factor(wdd, pin, dense),
+                    AnyWdd::Signed(wdd) => dense::factor(wdd, pin, dense),
+                };
+                (
+                    Sheets::One,
+                    grounded,
+                    n,
+                    pin,
+                    Triangular::Dense(factor.into()),
+                )
             }
             Arm::Approximate(sddm) => {
                 let (sheets, grounded, n) = (sddm.sheets(), sddm.grounded(), sddm.n());

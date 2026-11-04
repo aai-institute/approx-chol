@@ -1,50 +1,17 @@
 //! Exact Cholesky of a small `M` by GTH elimination: every pivot a sum of nonnegative terms, so none cancels or fails.
 
+use super::wdd::{Sign, Wdd};
 use super::within_one;
-use crate::storage::{Adjacency, Grounding, Index, Real, Sheets, WddCsr};
-
-/// `M` as it is, its off-diagonal signed and its surplus closing it: dense Cholesky needs no cover, fold or dominance.
-pub(in crate::factor) struct Signed<T, I> {
-    adjacency: WddCsr<T, I>,
-    grounding: Grounding<T>,
-    /// Off-diagonals of either sign, so GTH tracks the surplus their cancellation leaves; else a Z-matrix.
-    frustrated: bool,
-}
-
-impl<T: Real, I: Index> Signed<T, I> {
-    /// Panics unless nonempty, with one surplus per row.
-    pub(in crate::factor) fn new(
-        adjacency: WddCsr<T, I>,
-        sheets: Sheets,
-        grounding: Grounding<T>,
-    ) -> Self {
-        assert!(adjacency.n() > 0, "M has a vertex");
-        assert!(grounding.fits(adjacency.n()), "one surplus per row");
-        Self {
-            adjacency,
-            grounding,
-            frustrated: sheets == Sheets::Two,
-        }
-    }
-
-    pub(super) fn n(&self) -> usize {
-        self.adjacency.n()
-    }
-
-    /// Singular exactly when balanced and ungrounded: its null vector is `1`, the fold's `F·1` in `A`.
-    pub(super) fn floats(&self) -> bool {
-        !self.frustrated && !self.grounding.is_grounded()
-    }
-}
+use crate::storage::{Index, Real};
 
 /// GTH on the packed lower `M`, the surplus as a last row `−s`, pinned slot last and dropped (`d − Σl²` reached 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more time); returns unit lower `L` with `D⁻¹` on its diagonal.
-pub(super) fn factor<T: Real, I: Index>(
-    signed: &Signed<T, I>,
+pub(super) fn factor<T: Real, I: Index, S: Sign>(
+    wdd: &Wdd<T, I, S>,
     pin: usize,
     values: &mut Vec<T>,
 ) -> Vec<T> {
-    let n = signed.n();
-    let m = n - usize::from(signed.floats());
+    let n = wdd.n();
+    let m = n - usize::from(wdd.floats());
     let packed = row_start(m + 1);
     // `D⁻¹` trails the rows, contiguous as every row's fill reads it: strided in the diagonal measured +12-18% at n 16-24.
     values.clear();
@@ -59,15 +26,12 @@ pub(super) fn factor<T: Real, I: Index>(
         values[row_start(k.max(j)) + k.min(j)] = a;
     };
     for i in 0..n {
-        signed.adjacency.upper(i).for_each(|(j, &a)| entry(i, j, a));
+        wdd.adjacency().upper(i).for_each(|(j, &a)| entry(i, j, a));
     }
-    let ground = |i| signed.grounding.edge(i).map(|s| (i, s));
+    let ground = |i| wdd.grounding().edge(i).map(|s| (i, s));
     (0..n).filter_map(ground).for_each(|(i, s)| entry(i, n, -s));
     let (matrix, inverse_pivots) = values.split_at_mut(packed);
-    match signed.frustrated {
-        false => eliminate::<T, false>(matrix, inverse_pivots, m),
-        true => eliminate::<T, true>(matrix, inverse_pivots, m),
-    }
+    eliminate::<T, S>(matrix, inverse_pivots, m);
     for row in 0..m {
         let start = row_start(row);
         for (value, &scale) in matrix[start..start + row].iter_mut().zip(&*inverse_pivots) {
@@ -83,9 +47,9 @@ pub(super) fn factor<T: Real, I: Index>(
     factor
 }
 
-/// Left-looking GTH over `m` columns into the inverse pivots, the surplus row `m` updated as any other; `SIGNED` entries may be positive, each update that shrinks one adding `2 min(|a|, |t|)` to both its rows' surplus, as `|a| + |t| − |a − t|` would by cancellation.
-fn eliminate<T: Real, const SIGNED: bool>(matrix: &mut [T], inverse_pivots: &mut [T], m: usize) {
-    let mut gains = vec![T::zero(); if SIGNED { m } else { 0 }];
+/// Left-looking GTH over `m` columns into the inverse pivots, the surplus row `m` updated as any other; signed entries may be positive, each update that shrinks one adding `2 min(|a|, |t|)` to both its rows' surplus, as `|a| + |t| − |a − t|` would by cancellation.
+fn eliminate<T: Real, S: Sign>(matrix: &mut [T], inverse_pivots: &mut [T], m: usize) {
+    let mut gains = vec![T::zero(); if S::SIGNED { m } else { 0 }];
     let two = T::one() + T::one();
     for col in 0..m {
         let pivot_row = row_start(col);
@@ -95,7 +59,7 @@ fn eliminate<T: Real, const SIGNED: bool>(matrix: &mut [T], inverse_pivots: &mut
             let mut value = matrix[start + col];
             for k in 0..col {
                 let (a, b) = (matrix[start + k], matrix[pivot_row + k]);
-                if !SIGNED {
+                if !S::SIGNED {
                     // Both are `−w`: max is the smaller weight, min the larger.
                     value = value - a.max(b) * (a.min(b) * inverse_pivots[k]);
                     continue;
@@ -115,7 +79,7 @@ fn eliminate<T: Real, const SIGNED: bool>(matrix: &mut [T], inverse_pivots: &mut
                 }
                 value = value - t;
             }
-            if SIGNED && row == m {
+            if S::SIGNED && row == m {
                 value = value - gains[col];
             }
             matrix[start + col] = value;
