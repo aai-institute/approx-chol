@@ -2,8 +2,7 @@
 
 The mathematics approx-chol implements: how a symmetric GDD matrix $A$ becomes the approximate
 inverse $B$, and which matrix $B$ targets. Terms are those of `glossary.md`. Planned, not on
-`main`: signed elimination, the Schur tree, and the ground pinned in every layout
-(`design/cholesky.md`, F1, F2, G1).
+`main`: signed elimination and the Schur tree (`design/cholesky.md`, F1, F2).
 
 ## Overview
 
@@ -270,8 +269,7 @@ approximate_cholesky(L, rule, k, seed):
 
 - **Order:** the next pivot is a vertex with the fewest incident edge copies in the current graph,
   so cliques stay small. The order is dynamic, recomputed after each elimination; $g$ is never a
-  pivot, it is pinned as the last slot. Planned (G1): on `main` $g$ takes part like any vertex
-  unless the scales or the ground span wide.
+  pivot, it is pinned as the last slot.
 - **Rule:** a clique tree or a Schur tree (`glossary.md`). Both keep the clique's expectation;
   the clique tree is the default, and the Schur tree is opt-in.
 - **Clique tree** (Gao, Kyng, Spielman, §4.3): every edge is split into $k$ parallel copies,

@@ -36,9 +36,7 @@ and the component's key. Seven choices shape the factorization; each has one own
 - **The ground is never a pivot.** $g$ is pinned in every layout that has it, so its diagonal
   $\sum_i s_i$ is never formed and no range check guards it; each edge to $g$ is bounded by its
   other end, as every edge is. Signed elimination needs this anyway: cancellation adds edges to
-  $g$ during the elimination. Planned (step G1): on `main` the approximate arm eliminates $g$ in
-  minimum-degree order unless the scales or the ground span wide, and Reduction rejects a ground
-  whose diagonal leaves the range.
+  $g$ during the elimination. On `main` since step G1 (#351).
 - **Three constructors of `Represented`:** `as_is`, the matrix as it is, for the dense arm and the
   signed route; `sampled`, which builds the cover when the route asks for it; and
   `from_cover_rows`, for a bipartite complement formed on the cover. The cover's construction, its
@@ -199,11 +197,11 @@ Refactors and behavior changes are separate commits.
 | R1 | `Reduced<T, I, P>` with `key`, `Grounded` matrix, payload-free `Balance`, `Gauge`, `ClampId`; `Restriction` renamed `Lift`; named `Bipartite`; the complement path receives `ReducedComplement` directly, no `unreachable!`; no positional tuples | bit-identical |
 | R1b | `Lift` built with whether it projects and regauges; `singular` no longer passed at solve time; `FactorTail` replaced by `Gauge` on the factored vertices; `BlockElimination`, `Streams`, `within_one` and the grain constant moved into Cholesky; its decoder no longer checks Reduction's side policy | bit-identical; format version bumped |
 | R2 | `Sign` markers, `Wdd<S>`, `AnyWdd`; the dense arm on `Wdd<S>`, its kernel chosen by `S::SIGNED`; reduction's `Signed` renamed `Folding`, `Arm::Exact` renamed `Dense` | bit-identical |
-| R3 | `Layout` and `Represented` with its three constructors; the pin chosen by `Layout`, `main`'s rule kept; the cover built in one private function, the bipartite formations through `cover_neighbor`, the dense one still on the cover, then folded; `CoverSurplus::Auto` internal with today's band as its own constant; sheets and surplus edges confined there; the slot count derived | bit-identical solves; format version bumped |
+| R3 | `Layout` and `Represented` with its three constructors; the pin chosen by `Layout`, `main`'s rule kept (the ground if grounded, else the gauge's peak if the scales span wide, else minimum degree's last); the grounded solve's `−Σb` and shift, no-ops since G1, removed, and a decoded grounded factor checked to pin its ground; the cover built in one private function, the bipartite formations through `cover_neighbor`, the dense one still on the cover, then folded; `CoverSurplus::Auto` internal with today's band as its own constant; sheets and surplus edges confined there; the slot count derived | bit-identical solves; format version bumped |
 | R4 | `Star` (merged, unique), `Column`, `FillEdge`, `FillRule` with `CliqueTree` only; `Formation` keeps the exact formation | bit-identical; Criterion benches |
 | R5 | `S: Sign` through the elimination engine, `Unsigned` only | bit-identical; Criterion benches |
 | R6 | Public `Sampling`, `Multiplicity`, `FrustratedRoute`, `CoverSurplus`; `split_merge` removed, in `SchurMode` too | Python and stub, stubtest, changelog; breaking |
-| G1 | The ground pinned in every layout; Reduction's ground range check (`sgdd/block.rs:253`) deleted | A/B of PCG iterations and nnz(L) in Rust on the synthetic graphs and within's components; inputs the check rejected now factor |
+| G1 | The ground pinned in every layout; Reduction's ground range check deleted. Done in #351: within unchanged bit for bit, synthetic +0.1–0.7% PCG iterations, at most +7.5% with one ground | A/B of PCG iterations and nnz(L) in Rust on the synthetic graphs and within's components; inputs the check rejected now factor |
 | F0 | `Auto`'s rule: solve error at near-zero surplus, `f32` and `f64`, ground vertex against surplus edges, after G1; ground vertex everywhere if it shows none | the error test; A/B as G1 |
 | F1 | Signed elimination, after G1: `Signed`, cancellation into surplus at $v$ and an edge to $g$, signed Schur complement | switched balanced equals its Z-matrix seed for seed; both routes on frustrated inputs; serde round trip; Criterion benches for the wider graph edge |
 | F2 | `SchurTree` | expectation equals the clique; every sample connected; at split 1 edge marginals $(w_{vi} + w_{vj})/\omega_v$, above it the auxiliary copies' marginals before contraction and unbiased weights after |
