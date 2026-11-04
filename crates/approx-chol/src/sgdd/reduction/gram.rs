@@ -4,7 +4,7 @@ use num_traits::PrimInt;
 
 use super::{Folded, Signed, Surplus};
 use crate::input::{Column, FactorWidth2};
-use crate::sgdd::block::{Congruent, Grounding, IrreducibleBlock, ReduceError};
+use crate::sgdd::block::{Grounding, IrreducibleBlock, ReduceError};
 use crate::sgdd::congruence::Selection;
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components, Summands};
 use crate::sgdd::scaling::{self, ScalingPolicy, RATIO_BAND};
@@ -94,9 +94,9 @@ impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_,
     }
 
     // Every rounded surplus ≤ 0 leaves nothing to ground: out of band, only past degree ~2·10⁸ (#299).
-    fn grounds(&self, m: &Congruent<T, I>, _: &[T], _: Vec<T>) -> Grounding<T> {
+    fn grounds(&self, folded: &Folded<T, I>) -> Grounding<T> {
         Grounding::of(
-            (m.vertices().iter())
+            (folded.m.vertices().iter())
                 .map(|v| narrow(self.surplus[v].max(0.0)))
                 .collect(),
         )
