@@ -5,7 +5,6 @@ mod star;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
-use crate::factor::wdd::Sign;
 use crate::storage::{narrow, widen, Index, Real};
 pub(super) use copies::{Copies, Multi, Single};
 pub(super) use star::{Column, Star};
@@ -33,9 +32,9 @@ pub(super) struct FillEdge<T, I, C, S> {
 pub(super) type Fill<T, I, C, S> = Vec<FillEdge<T, I, C, S>>;
 
 /// A clique sample: a prepared star in, pairs of its positions out; it reads magnitudes only, and the engine attaches ends and signs.
-pub(super) trait FillRule<T, I, C: Copies, S> {
-    /// Emits each pair once, with a weight of at least `MIN_POSITIVE`, dropping none.
-    fn fill(
+pub(super) trait FillRule<T, C: Copies> {
+    /// Emits each pair once, with a weight of at least `MIN_POSITIVE`, dropping none; `S` unbounded, so no rule reads a sign.
+    fn fill<I: Index, S>(
         &mut self,
         star: &Star<T, I, C, S>,
         rng: &mut Xoshiro256PlusPlus,
@@ -50,25 +49,25 @@ pub(super) struct CliqueTree {
     tally: Vec<(usize, u32)>,
 }
 
-impl<T: Real, I: Index, C: Copies, S: Sign> FillRule<T, I, C, S> for CliqueTree {
+impl<T: Real, C: Copies> FillRule<T, C> for CliqueTree {
     /// `per_copy(w_i (S_{>i} / d))` per copy of each entry but the heaviest, each copy drawing past it.
-    fn fill(
+    fn fill<I: Index, S>(
         &mut self,
         star: &Star<T, I, C, S>,
         rng: &mut Xoshiro256PlusPlus,
         mut emit: impl FnMut(FillPair<T, C>),
     ) {
-        let entries = star.entries();
-        let Some((_, rest)) = entries.split_last() else {
+        let Some(last) = star.len().checked_sub(1) else {
             return;
         };
         let d = star.total();
-        for (i, entry) in rest.iter().enumerate() {
-            let total: T = narrow(widen(entry.weight) * (star.past(i) / d));
+        for i in 0..last {
+            let (copies, weight) = star.magnitude(i);
+            let total: T = narrow(widen(weight) * (star.past(i) / d));
             // Clamped, never dropped: the clique tree keeps the star's neighbors connected, and every weight's inverse finite.
-            let weight = (entry.copies).per_copy(total).max(T::min_positive_value());
+            let weight = copies.per_copy(total).max(T::min_positive_value());
             let draw = || star.draw_after(rng, i);
-            for (at, copies, weight) in (entry.copies).draw(&mut self.tally, weight, draw) {
+            for (at, copies, weight) in copies.draw(&mut self.tally, weight, draw) {
                 emit(FillPair {
                     first: i,
                     second: at,

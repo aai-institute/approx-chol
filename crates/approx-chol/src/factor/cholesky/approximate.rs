@@ -7,7 +7,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 
 #[cfg(feature = "serde")]
 use super::within_one;
-use crate::factor::clique_tree::{CliqueTree, Column, Copies, Fill, FillRule, Multi, Single, Star};
+use crate::factor::clique_tree::{CliqueTree, Column, Copies, Fill, Multi, Single, Star};
 use crate::factor::representation::Represented;
 use crate::factor::wdd::{Sign, Unsigned};
 use crate::storage::{narrow, Index, Real};
@@ -80,7 +80,7 @@ impl<T: Real, I: Index, C: Copies, S: Sign> Elimination<T, I, C, S> {
             let v = order.next_vertex();
             fill.clear();
             star.merged(graph.neighbors(v));
-            rule.fill(star, draws, |pair| fill.push(star.fill_edge(pair)));
+            star.fill_with(rule, draws, |edge| fill.push(edge));
             steps.push(v, star.column());
             graph.eliminate_vertex(v);
             for edge in fill.iter() {
@@ -147,7 +147,9 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
     }
 
     /// The one site deriving the remainder's share.
-    fn push<C, S>(&mut self, vertex: usize, column: Column<'_, T, I, C, S>) {
+    /// Unsigned only until the signed column (F1): the remainder is `1 − Σ shares` only where every row sums to zero.
+    fn push<C, S: Sign>(&mut self, vertex: usize, column: Column<'_, T, I, C, S>) {
+        const { assert!(!S::SIGNED, "a signed column needs its signs (F1)") };
         let (weight, remainder) = (column.weight(), column.remainder());
         let shares = column.shares();
         let start = self.neighbors.len();
@@ -278,7 +280,7 @@ mod tests {
 
     use super::*;
     use crate::factor::cholesky::within_one;
-    use crate::factor::clique_tree::{CliqueTree, FillRule, Multi, Single, Star};
+    use crate::factor::clique_tree::{CliqueTree, Multi, Single, Star};
 
     fn stars(m: usize) -> [(&'static str, Vec<f32>); 3] {
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(7);
@@ -329,7 +331,7 @@ mod tests {
         let mut steps = ApproximateCholesky::with_capacity(w.len() + 1, w.len());
         let draws = &mut Xoshiro256PlusPlus::seed_from_u64(0);
         star.merged((1..).zip(w).map(|(j, &w)| (j, split, Unsigned, w)));
-        CliqueTree::default().fill(&star, draws, |pair| fill.push(star.fill_edge(pair)));
+        star.fill_with(&mut CliqueTree::default(), draws, |edge| fill.push(edge));
         steps.push(0, star.column());
         let (fill_off, d) = fill_error(w, &fill);
         let retained = *steps.coefficients.last().expect("the remainder's share");
@@ -346,7 +348,7 @@ mod tests {
         let mut fill = Fill::new();
         star.unique((1..).zip(w).map(|(j, &w)| (j, Unsigned, w)));
         let draws = &mut Xoshiro256PlusPlus::seed_from_u64(0);
-        CliqueTree::default().fill(&star, draws, |pair| fill.push(star.fill_edge(pair)));
+        star.fill_with(&mut CliqueTree::default(), draws, |edge| fill.push(edge));
         let (fill_off, _) = fill_error(w, &fill);
         (fill_off >= 1e-5).then(|| format!("{label}: fill off {fill_off:e}"))
     }

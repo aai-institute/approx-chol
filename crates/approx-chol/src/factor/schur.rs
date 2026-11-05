@@ -3,7 +3,7 @@
 use rayon::prelude::*;
 
 use super::cholesky::{Arm, BlockElimination, Streams, MULTIPLY_ADD_GRAIN_BITS};
-use super::clique_tree::{CliqueTree, Copies, FillRule, Multi, Single, Star};
+use super::clique_tree::{CliqueTree, Copies, Multi, Single, Star};
 use super::config::{Config, SchurMode};
 use super::representation::{cover_neighbor, crosses, Represented, SddmRows};
 use super::wdd::{AnyWdd, Unsigned};
@@ -234,9 +234,8 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
                 self.prepare(s, &mut star);
                 // Each star under its own stream, so no task boundary moves a draw.
                 let draws = &mut self.streams.star(s);
-                // `FillEdge` without its copies, which the merge never reads.
-                rule.fill(&star, draws, |pair| {
-                    let edge = star.fill_edge(pair);
+                // An unsigned `FillEdge` without its copies, which the merge never reads.
+                star.fill_with(&mut rule, draws, |edge| {
                     buckets[edge.lo.index() >> shift].push((edge.lo, edge.hi, edge.weight))
                 });
                 (star, rule, buckets)

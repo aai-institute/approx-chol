@@ -4,7 +4,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 use rand::Rng;
 
 use super::copies::Copies;
-use super::{FillEdge, FillPair};
+use super::{FillEdge, FillPair, FillRule};
 use crate::factor::wdd::{Entry, Merged, Sign};
 use crate::storage::{widen, Index, Real};
 
@@ -44,6 +44,57 @@ impl<T: Real, I: Index, C, S> Column<'_, T, I, C, S> {
 
     pub(in crate::factor) fn shares(&self) -> impl Iterator<Item = (I, f64)> + '_ {
         (self.rest.iter()).map(|entry| (entry.neighbor, widen(entry.weight) / self.d))
+    }
+}
+
+/// What a rule and the column read: magnitudes, never signs.
+impl<T: Real, I: Index, C: Copies, S> Star<T, I, C, S> {
+    pub(super) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Entry `i`'s copies and weight: all a rule reads of it.
+    pub(super) fn magnitude(&self, i: usize) -> (C, T) {
+        (self.entries[i].copies, self.entries[i].weight)
+    }
+
+    /// `d = ω_v`, the star's whole weight.
+    pub(super) fn total(&self) -> f64 {
+        *self.cumsum.last().expect("a prepared star")
+    }
+
+    /// The weight past entry `i`: one subtraction, as each draw's range.
+    pub(super) fn past(&self, i: usize) -> f64 {
+        self.total() - self.cumsum[i]
+    }
+
+    /// An entry past `i`, drawn by weight, clamped to the last: a draw can round up to the total.
+    pub(super) fn draw_after(&self, rng: &mut Xoshiro256PlusPlus, i: usize) -> usize {
+        let cumsum = &self.cumsum;
+        let (start, end) = (i + 1, cumsum.len());
+        // 53 bits times a power of two is exact, so never 1.0.
+        let u = ((rng.next_u64() >> 11) as f64) * (1.0 / (1u64 << 53) as f64);
+        let r = u * self.past(i) + cumsum[i];
+        let k = if end - start <= LINEAR_THRESHOLD {
+            let mut k = start;
+            while k < end && cumsum[k] < r {
+                k += 1;
+            }
+            k
+        } else {
+            cumsum[start..end].partition_point(|&c| c < r) + start
+        };
+        k.min(end - 1)
+    }
+
+    pub(in crate::factor) fn column(&self) -> Column<'_, T, I, C, S> {
+        let (heaviest, rest) =
+            (self.entries.split_last()).expect("a pivot of a connected graph has a neighbor");
+        Column {
+            heaviest,
+            rest,
+            d: self.total(),
+        }
     }
 }
 
@@ -167,15 +218,20 @@ impl<T: Real, I: Index, C: Copies, S: Sign> Star<T, I, C, S> {
         write
     }
 
-    /// Through `S::merge`; a signed merge's cancelled weight is the signed route's to place (F1), so none is kept here.
+    /// Through `S::merge`; unsigned only until the star keeps a signed merge's cancelled weight (F1).
     fn absorb(&mut self, position: usize, duplicate: StarEntry<T, I, C, S>) {
         let merged = &mut self.entries[position];
         let entry = |e: &StarEntry<T, I, C, S>| Entry {
             sign: e.sign,
             weight: e.weight,
         };
-        let Merged { kept, cancelled } = S::merge(entry(merged), entry(&duplicate));
-        debug_assert!(cancelled == T::zero(), "only an unsigned star merges");
+        const {
+            assert!(
+                !S::SIGNED,
+                "a signed star's cancelled weight needs a place (F1)"
+            )
+        };
+        let Merged { kept, cancelled: _ } = S::merge(entry(merged), entry(&duplicate));
         (merged.sign, merged.weight) = (kept.sign, kept.weight);
         self.counts[position] = self.counts[position].saturating_add(duplicate.copies.get());
     }
@@ -209,41 +265,17 @@ impl<T: Real, I: Index, C: Copies, S: Sign> Star<T, I, C, S> {
         );
     }
 
-    pub(super) fn entries(&self) -> &[StarEntry<T, I, C, S>] {
-        &self.entries
+    /// `rule`'s fill as edges: each pair of positions turned into its ends, lower first, and its sign, neither of which the rule sees.
+    pub(in crate::factor) fn fill_with<R: FillRule<T, C>>(
+        &self,
+        rule: &mut R,
+        rng: &mut Xoshiro256PlusPlus,
+        mut emit: impl FnMut(FillEdge<T, I, C, S>),
+    ) {
+        rule.fill(self, rng, |pair| emit(self.fill_edge(pair)));
     }
 
-    /// `d = ω_v`, the star's whole weight.
-    pub(super) fn total(&self) -> f64 {
-        *self.cumsum.last().expect("a prepared star")
-    }
-
-    /// The weight past entry `i`: one subtraction, as each draw's range.
-    pub(super) fn past(&self, i: usize) -> f64 {
-        self.total() - self.cumsum[i]
-    }
-
-    /// An entry past `i`, drawn by weight, clamped to the last: a draw can round up to the total.
-    pub(super) fn draw_after(&self, rng: &mut Xoshiro256PlusPlus, i: usize) -> usize {
-        let cumsum = &self.cumsum;
-        let (start, end) = (i + 1, cumsum.len());
-        // 53 bits times a power of two is exact, so never 1.0.
-        let u = ((rng.next_u64() >> 11) as f64) * (1.0 / (1u64 << 53) as f64);
-        let r = u * self.past(i) + cumsum[i];
-        let k = if end - start <= LINEAR_THRESHOLD {
-            let mut k = start;
-            while k < end && cumsum[k] < r {
-                k += 1;
-            }
-            k
-        } else {
-            cumsum[start..end].partition_point(|&c| c < r) + start
-        };
-        k.min(end - 1)
-    }
-
-    /// A rule's pair of positions as an edge, lower end first, its sign attached: the rule sees neither.
-    pub(in crate::factor) fn fill_edge(&self, pair: FillPair<T, C>) -> FillEdge<T, I, C, S> {
+    fn fill_edge(&self, pair: FillPair<T, C>) -> FillEdge<T, I, C, S> {
         let (a, b) = (&self.entries[pair.first], &self.entries[pair.second]);
         FillEdge {
             lo: a.neighbor.min(b.neighbor),
@@ -251,16 +283,6 @@ impl<T: Real, I: Index, C: Copies, S: Sign> Star<T, I, C, S> {
             copies: pair.copies,
             sign: a.sign.fill(b.sign),
             weight: pair.weight,
-        }
-    }
-
-    pub(in crate::factor) fn column(&self) -> Column<'_, T, I, C, S> {
-        let (heaviest, rest) =
-            (self.entries.split_last()).expect("a pivot of a connected graph has a neighbor");
-        Column {
-            heaviest,
-            rest,
-            d: self.total(),
         }
     }
 

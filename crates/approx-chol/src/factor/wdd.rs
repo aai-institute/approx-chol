@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use crate::storage::{Adjacency, Balance, Grounded, Grounding, Index, Real, WddCsr};
 
 /// An edge's sign: `Unsigned` is zero-sized and compiles to the Laplacian elimination, `Signed` keeps positive entries.
-pub(super) trait Sign: Copy + Send + Sync + 'static {
+pub(super) trait Sign: Copy {
     const SIGNED: bool;
 
     /// The sign of a fill edge between two neighbors of an eliminated vertex.
