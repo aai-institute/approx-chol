@@ -1,8 +1,13 @@
 use core::cmp::Ordering;
 
-use super::cdf::suffix_past;
+use rand::rngs::Xoshiro256PlusPlus;
+use rand::Rng;
+
 use super::copies::Copies;
 use crate::storage::{widen, Index, Real};
+
+/// Above this many entries past a draw's start, it bisects; a linear scan up to 32 (256 measured +4-5%).
+const LINEAR_THRESHOLD: usize = 32;
 
 /// A pivot's neighborhood, merged and capped, sorted ascending by per-copy weight, with its prefix sums; reused across pivots.
 pub(in crate::factor) struct Star<T, I, C: Copies> {
@@ -20,28 +25,23 @@ pub(in crate::factor) struct Star<T, I, C: Copies> {
 }
 
 /// The pivot's column, read off its sorted star: each neighbor's share `w_i / d` but the heaviest's, which takes what the shares leave, and the pivot's weight.
-pub(in crate::factor) struct Column<'a, T, I, C: Copies> {
-    star: &'a Star<T, I, C>,
+pub(in crate::factor) struct Column<'a, T, I, C> {
+    heaviest: &'a StarEntry<T, I, C>,
+    rest: &'a [StarEntry<T, I, C>],
+    d: f64,
 }
 
-impl<T: Real, I: Index, C: Copies> Column<'_, T, I, C> {
-    fn heaviest(&self) -> &StarEntry<T, I, C> {
-        (self.star.entries.last()).expect("a pivot of a connected graph has a neighbor")
-    }
-
+impl<T: Real, I: Index, C> Column<'_, T, I, C> {
     pub(in crate::factor) fn weight(&self) -> T {
-        self.heaviest().weight
+        self.heaviest.weight
     }
 
     pub(in crate::factor) fn remainder(&self) -> I {
-        self.heaviest().neighbor
+        self.heaviest.neighbor
     }
 
     pub(in crate::factor) fn shares(&self) -> impl Iterator<Item = (I, f64)> + '_ {
-        let d = self.star.total();
-        let rest = &self.star.entries[..self.star.entries.len() - 1];
-        rest.iter()
-            .map(move |entry| (entry.neighbor, widen(entry.weight) / d))
+        (self.rest.iter()).map(|entry| (entry.neighbor, widen(entry.weight) / self.d))
     }
 }
 
@@ -201,22 +201,43 @@ impl<T: Real, I: Index, C: Copies> Star<T, I, C> {
         &self.entries
     }
 
-    pub(super) fn cumsum(&self) -> &[f64] {
-        &self.cumsum
-    }
-
     /// `d = ω_v`, the star's whole weight.
     pub(super) fn total(&self) -> f64 {
-        suffix_past(&self.cumsum, None)
+        *self.cumsum.last().expect("a prepared star")
     }
 
-    /// The weight past entry `i`.
+    /// The weight past entry `i`: one subtraction, as each draw's range.
     pub(super) fn past(&self, i: usize) -> f64 {
-        suffix_past(&self.cumsum, Some(i))
+        self.total() - self.cumsum[i]
+    }
+
+    /// An entry past `i`, drawn by weight, clamped to the last: a draw can round up to the total.
+    pub(super) fn draw_after(&self, rng: &mut Xoshiro256PlusPlus, i: usize) -> usize {
+        let cumsum = &self.cumsum;
+        let (start, end) = (i + 1, cumsum.len());
+        // 53 bits times a power of two is exact, so never 1.0.
+        let u = ((rng.next_u64() >> 11) as f64) * (1.0 / (1u64 << 53) as f64);
+        let r = u * self.past(i) + cumsum[i];
+        let k = if end - start <= LINEAR_THRESHOLD {
+            let mut k = start;
+            while k < end && cumsum[k] < r {
+                k += 1;
+            }
+            k
+        } else {
+            cumsum[start..end].partition_point(|&c| c < r) + start
+        };
+        k.min(end - 1)
     }
 
     pub(in crate::factor) fn column(&self) -> Column<'_, T, I, C> {
-        Column { star: self }
+        let (heaviest, rest) =
+            (self.entries.split_last()).expect("a pivot of a connected graph has a neighbor");
+        Column {
+            heaviest,
+            rest,
+            d: self.total(),
+        }
     }
 
     /// Copies each neighbor lost: those to the pivot, and those merging or capping collapsed.

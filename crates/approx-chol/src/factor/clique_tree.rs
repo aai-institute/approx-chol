@@ -1,13 +1,11 @@
 //! A pivot's star prepared by the engine, and the clique sample that draws its fill (GKS 2023, Algorithm 6; AC is its `k = l = 1`).
 
-mod cdf;
 mod copies;
 mod star;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
 use crate::storage::{narrow, widen, Index, Real};
-use cdf::draw_after;
 pub(super) use copies::{Copies, Multi, Single};
 pub(super) use star::{Column, Star};
 
@@ -49,7 +47,7 @@ impl<T: Real, I: Index, C: Copies> FillRule<T, I, C> for CliqueTree {
         rng: &mut Xoshiro256PlusPlus,
         mut emit: impl FnMut(FillEdge<T, I, C>),
     ) {
-        let (entries, cumsum) = (star.entries(), star.cumsum());
+        let entries = star.entries();
         let Some((_, rest)) = entries.split_last() else {
             return;
         };
@@ -58,7 +56,7 @@ impl<T: Real, I: Index, C: Copies> FillRule<T, I, C> for CliqueTree {
             let total: T = narrow(widen(entry.weight) * (star.past(i) / d));
             // Clamped, never dropped: the clique tree keeps the star's neighbors connected, and every weight's inverse finite.
             let weight = (entry.copies).per_copy(total).max(T::min_positive_value());
-            let draw = || draw_after(cumsum, rng, i);
+            let draw = || star.draw_after(rng, i);
             for (at, copies, weight) in (entry.copies).draw(&mut self.tally, weight, draw) {
                 let other = entries[at].neighbor;
                 emit(FillEdge {

@@ -189,16 +189,10 @@ struct Stars<'a, T, I> {
 }
 
 impl<T: Real, I: Index> Stars<'_, T, I> {
-    /// Star `s` sampled under its own stream; a row of `C` repeats no column, so it skips the merge.
-    fn eliminate<C: Copies>(
-        &self,
-        s: usize,
-        (star, rule): &mut (Star<T, I, C>, CliqueTree),
-        fill: impl FnMut(FillEdge<T, I, C>),
-    ) {
+    /// Star `s` prepared; a row of `C` repeats no column, so it skips the merge.
+    fn prepare<C: Copies>(&self, s: usize, star: &mut Star<T, I, C>) {
         let c = &self.block.cross;
         let ground = |e: usize| self.block.grounding.edge(e).map(|s_e| (self.ground, s_e));
-        let draws = &mut self.streams.star(s);
         match self.block.balance.sheets() {
             // One sheet maps no column, as the balanced loop pays for any map.
             Sheets::One => {
@@ -213,7 +207,6 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
                 star.unique(neighbors.chain(ground(e)));
             }
         }
-        rule.fill(star, draws, fill);
     }
 
     /// Each star's clique tree, chunked in star order so merged duplicates sum alike at any thread count.
@@ -225,21 +218,25 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
         let per_task = per_task(c.n_rows(), c.nnz() as u64, 14);
         let empty = || {
             (
-                (Star::new(split), CliqueTree::default()),
+                Star::new(split),
+                CliqueTree::default(),
                 vec![Vec::new(); count],
             )
         };
         let stars = self.block.balance.sheets().count() * c.n_rows();
         let pieces = (0..stars)
             .into_par_iter()
-            .fold_chunks(per_task, empty, |(mut sampler, mut buckets), s| {
-                let push = |edge: FillEdge<T, I, C>| {
+            .fold_chunks(per_task, empty, |(mut star, mut rule, mut buckets), s| {
+                self.prepare(s, &mut star);
+                // Each star under its own stream, so no task boundary moves a draw.
+                let draws = &mut self.streams.star(s);
+                // `FillEdge` without its copies, which the merge never reads.
+                rule.fill(&star, draws, |edge: FillEdge<T, I, C>| {
                     buckets[edge.lo.index() >> shift].push((edge.lo, edge.hi, edge.weight))
-                };
-                self.eliminate(s, &mut sampler, push);
-                (sampler, buckets)
+                });
+                (star, rule, buckets)
             })
-            .map(|(_, mut buckets)| {
+            .map(|(_, _, mut buckets)| {
                 buckets.iter_mut().for_each(Vec::shrink_to_fit);
                 buckets
             })
