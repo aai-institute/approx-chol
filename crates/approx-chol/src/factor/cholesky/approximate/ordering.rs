@@ -1,5 +1,6 @@
 use super::graph::EliminationGraph;
 use crate::factor::clique_tree::{Copies, Fill};
+use crate::factor::wdd::Sign;
 use crate::storage::{Index, Real};
 
 /// Bucket queue over live degree estimates (Julia's `ApproxCholPQ`).
@@ -37,9 +38,9 @@ impl<I: Index> MinDegreeOrder<I> {
     }
 
     /// `pin` is never queued.
-    pub(super) fn load<T: Real, C: Copies>(
+    pub(super) fn load<T: Real, C: Copies, S: Sign>(
         &mut self,
-        graph: &EliminationGraph<T, I, C>,
+        graph: &EliminationGraph<T, I, C, S>,
         split: C,
         pin: Option<usize>,
         edge_ends: usize,
@@ -99,10 +100,10 @@ impl<I: Index> MinDegreeOrder<I> {
     }
 
     /// The star's degree losses, then fill's gains.
-    pub(super) fn update<T: Real, C: Copies>(
+    pub(super) fn update<T: Real, C: Copies, S>(
         &mut self,
         losses: impl Iterator<Item = (I, u32)>,
-        fill: &Fill<T, I, C>,
+        fill: &Fill<T, I, C, S>,
     ) {
         for (u, copies) in losses {
             self.add(u, -i64::from(copies));

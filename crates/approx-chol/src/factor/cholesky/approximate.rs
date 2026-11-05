@@ -9,6 +9,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 use super::within_one;
 use crate::factor::clique_tree::{CliqueTree, Column, Copies, Fill, FillRule, Multi, Single, Star};
 use crate::factor::representation::Represented;
+use crate::factor::wdd::{Sign, Unsigned};
 use crate::storage::{narrow, Index, Real};
 use graph::EliminationGraph;
 use ordering::MinDegreeOrder;
@@ -17,8 +18,8 @@ use ordering::MinDegreeOrder;
 pub(crate) struct CliqueTreeElimination<T, I>(ByCopies<T, I>);
 
 enum ByCopies<T, I> {
-    Ac(Elimination<T, I, Single>),
-    Ac2(Elimination<T, I, Multi>),
+    Ac(Elimination<T, I, Single, Unsigned>),
+    Ac2(Elimination<T, I, Multi, Unsigned>),
 }
 
 impl<T: Real, I: Index> CliqueTreeElimination<T, I> {
@@ -44,16 +45,16 @@ impl<T: Real, I: Index> CliqueTreeElimination<T, I> {
 }
 
 /// One copy count's elimination: `C` reaches every edge, so it is fixed per task.
-struct Elimination<T, I, C: Copies> {
+struct Elimination<T, I, C: Copies, S> {
     split: C,
-    graph: EliminationGraph<T, I, C>,
-    star: Star<T, I, C>,
+    graph: EliminationGraph<T, I, C, S>,
+    star: Star<T, I, C, S>,
     rule: CliqueTree,
-    fill: Fill<T, I, C>,
+    fill: Fill<T, I, C, S>,
     order: MinDegreeOrder<I>,
 }
 
-impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
+impl<T: Real, I: Index, C: Copies, S: Sign> Elimination<T, I, C, S> {
     fn new(split: C) -> Self {
         Self {
             split,
@@ -65,6 +66,33 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         }
     }
 
+    #[inline(never)] // Inlined, its codegen moves with the buffer handling: grids +1-3%.
+    fn pivot_all(&mut self, draws: &mut Xoshiro256PlusPlus, steps: &mut ApproximateCholesky<T, I>) {
+        let Self {
+            graph,
+            star,
+            rule,
+            fill,
+            order,
+            ..
+        } = self;
+        for _ in 1..graph.n() {
+            let v = order.next_vertex();
+            fill.clear();
+            star.merged(graph.neighbors(v));
+            rule.fill(star, draws, |pair| fill.push(star.fill_edge(pair)));
+            steps.push(v, star.column());
+            graph.eliminate_vertex(v);
+            for edge in fill.iter() {
+                graph.push_pair(edge.lo, edge.hi, edge.copies, edge.sign, edge.weight);
+            }
+            order.update(star.degree_losses(), fill);
+        }
+    }
+}
+
+/// The sampled elimination of a Z-matrix: its edges load unsigned.
+impl<T: Real, I: Index, C: Copies> Elimination<T, I, C, Unsigned> {
     fn eliminate(
         &mut self,
         represented: Represented<T, I>,
@@ -85,30 +113,6 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
             *self = Self::new(self.split);
         }
         (steps, last)
-    }
-
-    #[inline(never)] // Inlined, its codegen moves with the buffer handling: grids +1-3%.
-    fn pivot_all(&mut self, draws: &mut Xoshiro256PlusPlus, steps: &mut ApproximateCholesky<T, I>) {
-        let Self {
-            graph,
-            star,
-            rule,
-            fill,
-            order,
-            ..
-        } = self;
-        for _ in 1..graph.n() {
-            let v = order.next_vertex();
-            fill.clear();
-            star.merged(graph.neighbors(v));
-            rule.fill(star, draws, |edge| fill.push(edge));
-            steps.push(v, star.column());
-            graph.eliminate_vertex(v);
-            for edge in fill.iter() {
-                graph.push_pair(edge.lo, edge.hi, edge.copies, edge.weight);
-            }
-            order.update(star.degree_losses(), fill);
-        }
     }
 }
 
@@ -143,7 +147,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
     }
 
     /// The one site deriving the remainder's share.
-    fn push<C: Copies>(&mut self, vertex: usize, column: Column<'_, T, I, C>) {
+    fn push<C, S>(&mut self, vertex: usize, column: Column<'_, T, I, C, S>) {
         let (weight, remainder) = (column.weight(), column.remainder());
         let shares = column.shares();
         let start = self.neighbors.len();
@@ -287,7 +291,7 @@ mod tests {
     }
 
     /// Worst relative error of each entry's summed fill against `w_i S_{>i} / d`, and `d`, both in `f64`.
-    fn fill_error<C: Copies>(w: &[f32], fill: &Fill<f32, u32, C>) -> (f64, f64) {
+    fn fill_error<C: Copies>(w: &[f32], fill: &Fill<f32, u32, C, Unsigned>) -> (f64, f64) {
         let mut order: Vec<u32> = (1..=w.len() as u32).collect();
         order.sort_by(|&a, &b| {
             w[a as usize - 1]
@@ -320,12 +324,12 @@ mod tests {
     }
 
     fn pivot_defects<C: Copies>(split: C, label: &str, w: &[f32]) -> Option<String> {
-        let mut star = Star::<f32, u32, C>::new(split);
+        let mut star = Star::<f32, u32, C, Unsigned>::new(split);
         let mut fill = Fill::new();
         let mut steps = ApproximateCholesky::with_capacity(w.len() + 1, w.len());
         let draws = &mut Xoshiro256PlusPlus::seed_from_u64(0);
-        star.merged((1..).zip(w).map(|(j, &w)| (j, split, w)));
-        CliqueTree::default().fill(&star, draws, |edge| fill.push(edge));
+        star.merged((1..).zip(w).map(|(j, &w)| (j, split, Unsigned, w)));
+        CliqueTree::default().fill(&star, draws, |pair| fill.push(star.fill_edge(pair)));
         steps.push(0, star.column());
         let (fill_off, d) = fill_error(w, &fill);
         let retained = *steps.coefficients.last().expect("the remainder's share");
@@ -338,11 +342,11 @@ mod tests {
     }
 
     fn unique_fill_defects(label: &str, w: &[f32]) -> Option<String> {
-        let mut star = Star::<f32, u32, Single>::new(Single);
+        let mut star = Star::<f32, u32, Single, Unsigned>::new(Single);
         let mut fill = Fill::new();
-        star.unique((1..).zip(w.iter().copied()));
+        star.unique((1..).zip(w).map(|(j, &w)| (j, Unsigned, w)));
         let draws = &mut Xoshiro256PlusPlus::seed_from_u64(0);
-        CliqueTree::default().fill(&star, draws, |edge| fill.push(edge));
+        CliqueTree::default().fill(&star, draws, |pair| fill.push(star.fill_edge(pair)));
         let (fill_off, _) = fill_error(w, &fill);
         (fill_off >= 1e-5).then(|| format!("{label}: fill off {fill_off:e}"))
     }

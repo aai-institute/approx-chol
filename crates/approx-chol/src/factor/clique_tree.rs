@@ -5,30 +5,41 @@ mod star;
 
 use rand::rngs::Xoshiro256PlusPlus;
 
+use crate::factor::wdd::Sign;
 use crate::storage::{narrow, widen, Index, Real};
 pub(super) use copies::{Copies, Multi, Single};
 pub(super) use star::{Column, Star};
 
-/// A sampled edge, `lo < hi`, its weight summed over its copies.
+/// What a rule draws: two positions of the star, the weight summed over the copies that drew them.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct FillEdge<T, I, C> {
-    pub(super) lo: I,
-    pub(super) hi: I,
+pub(super) struct FillPair<T, C> {
+    pub(super) first: usize,
+    pub(super) second: usize,
     pub(super) copies: C,
     pub(super) weight: T,
 }
 
-/// Fill edges as an elimination emits them: one per entry and partner.
-pub(super) type Fill<T, I, C> = Vec<FillEdge<T, I, C>>;
+/// A fill edge as the engine emits it, `lo < hi`, its sign attached.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct FillEdge<T, I, C, S> {
+    pub(super) lo: I,
+    pub(super) hi: I,
+    pub(super) copies: C,
+    pub(super) sign: S,
+    pub(super) weight: T,
+}
 
-/// A clique sample: a prepared star in, fill edges out; the column is the engine's, read off the same star.
-pub(super) trait FillRule<T, I, C: Copies> {
-    /// Emits each fill edge once, with a weight of at least `MIN_POSITIVE`, dropping none.
+/// Fill edges as an elimination emits them: one per entry and partner.
+pub(super) type Fill<T, I, C, S> = Vec<FillEdge<T, I, C, S>>;
+
+/// A clique sample: a prepared star in, pairs of its positions out; it reads magnitudes only, and the engine attaches ends and signs.
+pub(super) trait FillRule<T, I, C: Copies, S> {
+    /// Emits each pair once, with a weight of at least `MIN_POSITIVE`, dropping none.
     fn fill(
         &mut self,
-        star: &Star<T, I, C>,
+        star: &Star<T, I, C, S>,
         rng: &mut Xoshiro256PlusPlus,
-        emit: impl FnMut(FillEdge<T, I, C>),
+        emit: impl FnMut(FillPair<T, C>),
     );
 }
 
@@ -39,13 +50,13 @@ pub(super) struct CliqueTree {
     tally: Vec<(usize, u32)>,
 }
 
-impl<T: Real, I: Index, C: Copies> FillRule<T, I, C> for CliqueTree {
+impl<T: Real, I: Index, C: Copies, S: Sign> FillRule<T, I, C, S> for CliqueTree {
     /// `per_copy(w_i (S_{>i} / d))` per copy of each entry but the heaviest, each copy drawing past it.
     fn fill(
         &mut self,
-        star: &Star<T, I, C>,
+        star: &Star<T, I, C, S>,
         rng: &mut Xoshiro256PlusPlus,
-        mut emit: impl FnMut(FillEdge<T, I, C>),
+        mut emit: impl FnMut(FillPair<T, C>),
     ) {
         let entries = star.entries();
         let Some((_, rest)) = entries.split_last() else {
@@ -58,10 +69,9 @@ impl<T: Real, I: Index, C: Copies> FillRule<T, I, C> for CliqueTree {
             let weight = (entry.copies).per_copy(total).max(T::min_positive_value());
             let draw = || star.draw_after(rng, i);
             for (at, copies, weight) in (entry.copies).draw(&mut self.tally, weight, draw) {
-                let other = entries[at].neighbor;
-                emit(FillEdge {
-                    lo: entry.neighbor.min(other),
-                    hi: entry.neighbor.max(other),
+                emit(FillPair {
+                    first: i,
+                    second: at,
                     copies,
                     weight,
                 });

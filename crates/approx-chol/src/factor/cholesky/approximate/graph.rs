@@ -1,29 +1,27 @@
 use crate::factor::clique_tree::Copies;
 use crate::factor::representation::Represented;
+use crate::factor::wdd::{Sign, Unsigned};
 use crate::storage::{Index, Real};
 
 /// One half of an edge; `mirror` indexes the other half in `to`'s list, so removal is O(1).
 #[derive(Clone, Copy, Debug)]
-struct Edge<T, I, C> {
+struct Edge<T, I, C, S> {
     to: I,
     mirror: u32,
     copies: C,
+    sign: S,
     weight: T,
 }
 
 /// The mutable graph minimum-degree eliminates; a grounded one carries its ground as the last vertex.
-pub(super) struct EliminationGraph<T, I, C> {
-    lists: Vec<Vec<Edge<T, I, C>>>,
+pub(super) struct EliminationGraph<T, I, C, S> {
+    lists: Vec<Vec<Edge<T, I, C, S>>>,
 }
 
 /// A block this small keeps its buffers for the task's next; a larger one frees them (peak −11…−14%).
 pub(super) const REUSED_UP_TO: usize = 1024;
 
-impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
-    pub(super) fn new() -> Self {
-        Self { lists: Vec::new() }
-    }
-
+impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C, Unsigned> {
     /// The ground, when there is one, is the last vertex; the order pins it.
     pub(super) fn load(&mut self, represented: &Represented<T, I>, split: C) {
         let n = represented.slots();
@@ -37,7 +35,13 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         let reused = self.lists.len();
         (self.lists.iter_mut().zip(&capacities)).for_each(|(list, &c)| list.reserve_exact(c));
         (self.lists).extend(capacities[reused..].iter().map(|&c| Vec::with_capacity(c)));
-        represented.grounded_edges(|k, j, w| self.push_pair(k, j, split, w));
+        represented.grounded_edges(|k, j, w| self.push_pair(k, j, split, Unsigned, w));
+    }
+}
+
+impl<T: Real, I: Index, C: Copies, S: Sign> EliminationGraph<T, I, C, S> {
+    pub(super) fn new() -> Self {
+        Self { lists: Vec::new() }
     }
 
     pub(super) fn n(&self) -> usize {
@@ -57,8 +61,10 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
             .sum()
     }
 
-    pub(super) fn neighbors(&self, v: usize) -> impl Iterator<Item = (I, C, T)> + '_ {
-        self.lists[v].iter().map(|e| (e.to, e.copies, e.weight))
+    pub(super) fn neighbors(&self, v: usize) -> impl Iterator<Item = (I, C, S, T)> + '_ {
+        self.lists[v]
+            .iter()
+            .map(|e| (e.to, e.copies, e.sign, e.weight))
     }
 
     /// Drops `v`'s edges from both sides.
@@ -72,7 +78,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         }
     }
 
-    pub(super) fn push_pair(&mut self, u: I, v: I, copies: C, weight: T) {
+    pub(super) fn push_pair(&mut self, u: I, v: I, copies: C, sign: S, weight: T) {
         let (mirror_u, mirror_v) = (self.lists[v.index()].len(), self.lists[u.index()].len());
         // Truncating a u32 mirror would corrupt removal, so this holds in release too.
         assert!(
@@ -83,6 +89,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
             to,
             mirror: mirror as u32,
             copies,
+            sign,
             weight,
         };
         self.lists[u.index()].push(edge(v, mirror_u));

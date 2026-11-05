@@ -3,10 +3,10 @@
 use rayon::prelude::*;
 
 use super::cholesky::{Arm, BlockElimination, Streams, MULTIPLY_ADD_GRAIN_BITS};
-use super::clique_tree::{CliqueTree, Copies, FillEdge, FillRule, Multi, Single, Star};
+use super::clique_tree::{CliqueTree, Copies, FillRule, Multi, Single, Star};
 use super::config::{Config, SchurMode};
 use super::representation::{cover_neighbor, crosses, Represented, SddmRows};
-use super::wdd::AnyWdd;
+use super::wdd::{AnyWdd, Unsigned};
 use crate::per_task;
 use crate::storage::{narrow, widen, Balance, Grounding, Index, Real, Rows, Sheets};
 
@@ -190,19 +190,23 @@ struct Stars<'a, T, I> {
 
 impl<T: Real, I: Index> Stars<'_, T, I> {
     /// Star `s` prepared; a row of `C` repeats no column, so it skips the merge.
-    fn prepare<C: Copies>(&self, s: usize, star: &mut Star<T, I, C>) {
+    fn prepare<C: Copies>(&self, s: usize, star: &mut Star<T, I, C, Unsigned>) {
         let c = &self.block.cross;
-        let ground = |e: usize| self.block.grounding.edge(e).map(|s_e| (self.ground, s_e));
+        let ground =
+            |e: usize| (self.block.grounding.edge(e)).map(|s_e| (self.ground, Unsigned, s_e));
         match self.block.balance.sheets() {
             // One sheet maps no column, as the balanced loop pays for any map.
             Sheets::One => {
-                let neighbors = c.row(s).map(|(k, &c)| (I::from_index(k), c.abs()));
+                let neighbors = c
+                    .row(s)
+                    .map(|(k, &c)| (I::from_index(k), Unsigned, c.abs()));
                 star.unique(neighbors.chain(ground(s)));
             }
             Sheets::Two => {
                 let (sheet, e) = (s / c.n_rows(), s % c.n_rows());
                 let neighbors = c.row(e).map(move |(k, &c)| {
-                    (I::from_index(cover_neighbor(k, sheet, crosses(c))), c.abs())
+                    let k = cover_neighbor(k, sheet, crosses(c));
+                    (I::from_index(k), Unsigned, c.abs())
                 });
                 star.unique(neighbors.chain(ground(e)));
             }
@@ -231,7 +235,8 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
                 // Each star under its own stream, so no task boundary moves a draw.
                 let draws = &mut self.streams.star(s);
                 // `FillEdge` without its copies, which the merge never reads.
-                rule.fill(&star, draws, |edge: FillEdge<T, I, C>| {
+                rule.fill(&star, draws, |pair| {
+                    let edge = star.fill_edge(pair);
                     buckets[edge.lo.index() >> shift].push((edge.lo, edge.hi, edge.weight))
                 });
                 (star, rule, buckets)
