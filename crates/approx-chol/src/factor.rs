@@ -565,26 +565,8 @@ impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ApproxI
 
 #[cfg(feature = "serde")]
 impl<T: Real> ApproxInverse<T> {
-    /// The blocks' vertices and the dead ones cover `0..n` once each; clamps are as a build lists them, disjoint components ordered by first vertex.
+    /// The blocks' vertices and the dead ones cover `0..n` once each.
     fn checked(self, n: usize) -> Option<Self> {
-        let listed = |clamp: &Clamp| {
-            let ascending = clamp.vertices.windows(2).all(|pair| pair[0] < pair[1]);
-            !clamp.vertices.is_empty()
-                && ascending
-                && clamp.violation > 0.0
-                && clamp.violation.is_finite()
-        };
-        let ordered = |pair: &[Clamp]| pair[0].vertices[0] < pair[1].vertices[0];
-        if !(self.clamps.iter().all(listed) && self.clamps.windows(2).all(ordered)) {
-            return None;
-        }
-        let mut clamped: Vec<usize> = (self.clamps.iter())
-            .flat_map(|clamp| clamp.vertices.iter().copied())
-            .collect();
-        clamped.sort_unstable();
-        if clamped.windows(2).any(|pair| pair[0] == pair[1]) {
-            return None;
-        }
         let mut vertices = self.dead.to_vec();
         vertices.extend(self.blocks.iter().flat_map(BlockFactor::vertices));
         if vertices.len() != n {
