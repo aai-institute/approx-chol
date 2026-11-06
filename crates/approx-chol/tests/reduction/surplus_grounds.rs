@@ -7,11 +7,11 @@ use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm,
 };
 use approx_chol::{
-    factorize, factorize_with, Config, Error, Factor, Real, ReduceError, ScalingPolicy,
+    factorize, factorize_with, ApproxInverse, Config, Error, Real, ReduceError, ScalingPolicy,
 };
 use rstest::rstest;
 
-fn grounded<T: Real>(factor: &Factor<T>) -> bool {
+fn grounded<T: Real>(factor: &ApproxInverse<T>) -> bool {
     factor.blocks().iter().all(|block| !block.floats())
 }
 
@@ -124,7 +124,7 @@ fn centre_surplus_over_band(a: &[Vec<f64>]) -> f64 {
 fn backward_error(a: &[Vec<f64>], rhs: &[f64]) -> f64 {
     let (ptrs, columns, values) = dense_csr(a);
     let csr = CsrRef::new(&ptrs, &columns, &values, a.len() as u32).unwrap();
-    let factor: Factor = factorize_with(csr, dense(), ScalingPolicy::default()).unwrap();
+    let factor: ApproxInverse = factorize_with(csr, dense(), ScalingPolicy::default()).unwrap();
     assert!(!factor.blocks()[0].floats());
     let x = factor.solve(rhs).unwrap();
     let residual = (apply(a, &x).into_iter().zip(rhs)).map(|(r, b)| (r - b).abs());
@@ -177,7 +177,7 @@ fn at_floor(rows: &[&[f64]]) -> Vec<Vec<f64>> {
 fn reduce_error(a: &[Vec<f64>]) -> Error {
     let (ptrs, columns, values) = dense_csr(a);
     let csr = CsrRef::new(&ptrs, &columns, &values, a.len() as u32).unwrap();
-    factorize(csr).map(|_: Factor| ()).unwrap_err()
+    factorize(csr).map(|_: ApproxInverse| ()).unwrap_err()
 }
 
 /// At `a = 2⁻⁹⁶⁴` a one-ulp surplus is rounding below the range floor.
@@ -272,7 +272,7 @@ fn f32_star_just_past_the_band_grounds(#[case] ulps: f32, #[case] floats: bool) 
     let (eps, w) = (f32::EPSILON, 0.75 * f32::EPSILON);
     let values = [1.0 + ulps * eps, -1.0, -w, -1.0, 1.0, -w, w];
     let csr = CsrRef::new(&[0u32, 3, 5, 7], &[0, 1, 2, 0, 1, 0, 2], &values, 3).unwrap();
-    let factor: Factor<f32> = factorize(csr).unwrap();
+    let factor: ApproxInverse<f32> = factorize(csr).unwrap();
     assert_eq!(factor.blocks()[0].floats(), floats);
 }
 
@@ -324,7 +324,7 @@ fn rounding_residues_beside_a_light_ground_do_not_float_it(
 fn light_ground_on_long_ring_grounds(#[values(false, true)] swapped: bool) {
     let ring = Cycle::random(100_000, 1).grounded(0, 1e-11);
     let ring = if swapped { ring.swapped() } else { ring };
-    let factor: Factor = factorize(ring.gram()).unwrap();
+    let factor: ApproxInverse = factorize(ring.gram()).unwrap();
     assert!(!factor.blocks()[0].floats());
 }
 
@@ -334,7 +334,7 @@ fn ring_missing_past_its_tolerance_grounds(
     #[values(1, 2, 3)] seed: u64,
     #[values(2e-8, -1e-7, 1e-6)] miss: f64,
 ) {
-    let factor: Factor = factorize(Cycle::random(1000, seed).missing(miss).gram()).unwrap();
+    let factor: ApproxInverse = factorize(Cycle::random(1000, seed).missing(miss).gram()).unwrap();
     assert!(!factor.blocks()[0].floats());
 }
 
@@ -342,7 +342,7 @@ fn ring_missing_past_its_tolerance_grounds(
 #[test]
 fn f32_rounded_ring_keeps_its_null_vector() {
     let ring = Cycle::random(10_000, 1);
-    let factor: Factor<f32> =
+    let factor: ApproxInverse<f32> =
         factorize_with(ring.gram(), Config::default(), no_iterations()).unwrap();
     let block = &factor.blocks()[0];
     assert_eq!(block.scaling_report(), None);
@@ -353,7 +353,7 @@ fn f32_rounded_ring_keeps_its_null_vector() {
 #[test]
 fn f32_ring_missing_past_its_tolerance_is_reported() {
     let ring = Cycle::random(10_000, 1).missing(1e-2);
-    let factor: Factor<f32> =
+    let factor: ApproxInverse<f32> =
         factorize_with(ring.gram(), Config::default(), no_iterations()).unwrap();
     let report = factor.blocks()[0].scaling_report();
     assert!(report.is_some_and(|report| !report.settled), "{report:?}");
@@ -389,7 +389,8 @@ fn flower(petals: u32, miss: f64) -> (usize, [Vec<u32>; 2], [Vec<f64>; 2]) {
 #[case::missing(-1e-13, true)]
 fn short_cycle_miss_in_a_large_block_is_reported(#[case] miss: f64, #[case] reported: bool) {
     let (n, [a, b], [x, y]) = flower(20_000, miss);
-    let factor: Factor = factorize(FactorWidth2::new(n, (&a, &x), (&b, &y)).unwrap()).unwrap();
+    let factor: ApproxInverse =
+        factorize(FactorWidth2::new(n, (&a, &x), (&b, &y)).unwrap()).unwrap();
     let block = &factor.blocks()[0];
     assert!(block.floats());
     assert_eq!(block.scaling_report().is_some(), reported);

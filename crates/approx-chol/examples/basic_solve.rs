@@ -1,7 +1,7 @@
 //! Factorize a 10×10 grid Laplacian with AC and AC2, and use each to precondition CG.
 
 use approx_chol::input::Laplacian;
-use approx_chol::{factorize_with, Config, Factor, ScalingPolicy};
+use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grid = Grid::new(10, 10);
@@ -78,7 +78,7 @@ impl Grid {
     }
 
     /// PCG on `L x = b` preconditioned by `factor`: the solution and its iteration count to `tol`.
-    fn pcg(&self, factor: &Factor, b: &[f64], tol: f64) -> (Vec<f64>, usize) {
+    fn pcg(&self, factor: &ApproxInverse, b: &[f64], tol: f64) -> (Vec<f64>, usize) {
         let mut x = vec![0.0; b.len()];
         let mut r = b.to_vec();
         let mut z = factor.solve(&r).expect("solves");

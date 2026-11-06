@@ -2,7 +2,7 @@ use super::gram::{dense_csr, matrix};
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
 };
-use approx_chol::{factorize, Factor};
+use approx_chol::{factorize, ApproxInverse};
 
 /// `ε^{1/2}`: a column `q e_a` adds exactly `ε` to `a`'s diagonal.
 const Q: f64 = 1.0 / (1u64 << 26) as f64;
@@ -12,7 +12,7 @@ const MS: std::ops::RangeInclusive<u32> = 1..=40;
 /// `1ᵀA1 = mε` against the band `5ε·tr A = 20ε + O(ε²)`.
 const EDGE: u32 = 20;
 
-fn floats(factor: &Factor) -> bool {
+fn floats(factor: &ApproxInverse) -> bool {
     assert_eq!(factor.blocks().len(), 1, "one block");
     factor.blocks()[0].floats()
 }

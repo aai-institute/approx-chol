@@ -5,12 +5,12 @@ mod gram;
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Laplacian, Sddm};
 use approx_chol::{
-    factorize_with, BlockFactor, Config, Factor, InnerParallelism, ScalingPolicy, SchurMode,
+    factorize_with, ApproxInverse, BlockFactor, Config, InnerParallelism, ScalingPolicy, SchurMode,
 };
 use gram::{dense_csr, matrix};
 use rstest::rstest;
 
-fn factors(config: Config) -> Vec<Factor> {
+fn factors(config: Config) -> Vec<ApproxInverse> {
     let (left, right, per_row) = (12_000u32, 400u32, 12u32);
     let rows: Vec<u32> = (0..left * per_row).map(|k| k / per_row).collect();
     let cols: Vec<u32> = (0..left * per_row)
@@ -67,7 +67,7 @@ fn round_trip_solves_bit_identically() {
     let defaults = factors(Config::default());
     assert!(defaults
         .iter()
-        .flat_map(Factor::blocks)
+        .flat_map(ApproxInverse::blocks)
         .any(|block| block.floats()));
     assert!(
         defaults[0]
@@ -165,7 +165,7 @@ fn an_elimination_keeping_at_most_its_rows_decodes_up_to_the_cut(#[case] rows: u
 }
 
 /// A Laplacian on `0..4` beside two zero vertices, so the factor carries dead vertices.
-fn with_isolated_vertex() -> Factor {
+fn with_isolated_vertex() -> ApproxInverse {
     let edge = Laplacian::new(3, &[0u32], &[1]).unwrap();
     factorize_with(
         Sddm::new(edge, &[1.0, 0.0, 2.0]).unwrap(),
@@ -175,12 +175,12 @@ fn with_isolated_vertex() -> Factor {
     .unwrap()
 }
 
-fn with_dead_vertices() -> Factor {
+fn with_dead_vertices() -> ApproxInverse {
     let laplacian = Laplacian::new(6, &[0u32, 1, 2], &[1u32, 2, 3]).unwrap();
     factorize_with(laplacian, Config::default(), ScalingPolicy::default()).unwrap()
 }
 
-fn solve_factor(factor: &Factor) -> Vec<u64> {
+fn solve_factor(factor: &ApproxInverse) -> Vec<u64> {
     let b: Vec<f64> = (0..factor.n()).map(|i| (i % 5) as f64 - 2.0).collect();
     let x = factor.solve(&b).unwrap();
     x.iter().map(|v| v.to_bits()).collect()
@@ -196,7 +196,7 @@ fn a_factor_round_trips_bit_identically() {
         let bytes = postcard::to_stdvec(&factor).unwrap();
         let version = postcard::to_stdvec(&approx_chol::FACTOR_FORMAT_VERSION).unwrap();
         assert!(bytes.starts_with(&version), "the version leads");
-        let decoded: Factor = postcard::from_bytes(&bytes).unwrap();
+        let decoded: ApproxInverse = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(
             (decoded.n(), decoded.n_steps()),
             (factor.n(), factor.n_steps())
@@ -206,7 +206,7 @@ fn a_factor_round_trips_bit_identically() {
 }
 
 /// The factor's bytes with `n` and the dead vertices replaced, its blocks kept.
-fn respliced(factor: &Factor, n: usize, dead: &[usize]) -> Vec<u8> {
+fn respliced(factor: &ApproxInverse, n: usize, dead: &[usize]) -> Vec<u8> {
     let bytes = postcard::to_stdvec(factor).unwrap();
     let version = approx_chol::FACTOR_FORMAT_VERSION;
     let own_dead: Vec<usize> = (0..factor.n())
@@ -235,8 +235,8 @@ fn respliced(factor: &Factor, n: usize, dead: &[usize]) -> Vec<u8> {
 #[case::dead_out_of_range(6, &[4, 6])]
 fn a_factor_not_covering_n_once_is_rejected(#[case] n: usize, #[case] dead: &[usize]) {
     let factor = with_dead_vertices();
-    assert!(postcard::from_bytes::<Factor>(&respliced(&factor, 6, &[4, 5])).is_ok());
-    let error = postcard::from_bytes::<Factor>(&respliced(&factor, n, dead)).unwrap_err();
+    assert!(postcard::from_bytes::<ApproxInverse>(&respliced(&factor, 6, &[4, 5])).is_ok());
+    let error = postcard::from_bytes::<ApproxInverse>(&respliced(&factor, n, dead)).unwrap_err();
     assert_eq!(error, postcard::Error::SerdeDeCustom);
 }
 
@@ -278,7 +278,11 @@ fn edit(
 }
 
 /// Decodes `factor` after scaling by `by` every multiplier (a stored value below one) in each array at `pointer` below any node, or the number there.
-fn decode_scaled(factor: &Factor, pointer: &str, by: f64) -> Result<Factor, serde_json::Error> {
+fn decode_scaled(
+    factor: &ApproxInverse,
+    pointer: &str,
+    by: f64,
+) -> Result<ApproxInverse, serde_json::Error> {
     let scale = |x: &mut serde_json::Value| *x = (x.as_f64().unwrap() * by).into();
     let mut v = serde_json::to_value(factor).unwrap();
     let edited = edit(&mut v, pointer, &mut |node| match node {
@@ -288,7 +292,7 @@ fn decode_scaled(factor: &Factor, pointer: &str, by: f64) -> Result<Factor, serd
         x => scale(x),
     });
     assert!(edited > 0, "the factor stores {pointer}");
-    serde_json::from_value::<Factor>(v)
+    serde_json::from_value::<ApproxInverse>(v)
 }
 
 /// Each stored `|D_e⁻¹C|` row sums to at most one; past it the backward sum can overflow.
@@ -343,7 +347,7 @@ fn an_approximate_pivot_scale_not_positive_is_corrupt(#[case] by: f64) {
         exact_max_dim: 0,
         ..Config::default()
     };
-    let factor: Factor = factorize_with(path, config, ScalingPolicy::default()).unwrap();
+    let factor: ApproxInverse = factorize_with(path, config, ScalingPolicy::default()).unwrap();
     decode_scaled(&factor, "/pivot_scale", by).expect_err("a pivot scale not positive is corrupt");
 }
 
@@ -352,7 +356,7 @@ fn an_approximate_pivot_scale_not_positive_is_corrupt(#[case] by: f64) {
 fn an_isolated_vertex_round_trips_through_json() {
     let factor = with_isolated_vertex();
     let json = serde_json::to_string(&factor).unwrap();
-    let back: Factor = serde_json::from_str(&json).unwrap();
+    let back: ApproxInverse = serde_json::from_str(&json).unwrap();
     let b = [1.0, 2.0, 3.0];
     assert_eq!(factor.solve(&b).unwrap(), back.solve(&b).unwrap());
 }
@@ -402,7 +406,7 @@ fn empty_scales_are_corrupt() {
         edit(&mut v, "/Scaled", &mut empty) > 0,
         "the factor stores scales"
     );
-    serde_json::from_value::<Factor>(v).expect_err("empty scales are corrupt");
+    serde_json::from_value::<ApproxInverse>(v).expect_err("empty scales are corrupt");
 }
 
 /// A forged u64 step length past the stored neighbors is a decode error, never an overflow.

@@ -1,5 +1,5 @@
 use approx_chol::input::CsrRef;
-use approx_chol::{factorize_with, Config, Factor, ScalingPolicy};
+use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy};
 
 /// A unit-weight graph Laplacian held as owned u32 CSR arrays.
 pub struct OwnedCsr {
@@ -36,6 +36,6 @@ impl OwnedCsr {
 }
 
 /// Symmetry check and reduction belong to the timed build: every caller pays them.
-pub fn build(csr: CsrRef<'_, f64>, config: Config) -> Factor {
+pub fn build(csr: CsrRef<'_, f64>, config: Config) -> ApproxInverse {
     factorize_with(csr, config, ScalingPolicy::default()).expect("factors")
 }

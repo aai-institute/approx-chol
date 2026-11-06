@@ -87,7 +87,7 @@ fn buffer_error(found: usize, n: usize, scratch: usize, needed: usize) -> SolveE
 
 /// Block-diagonal approximate inverse of the factored matrix, `A` or its [complement](crate::factorize_complement) numbered by the kept side: one [`BlockFactor`] per irreducible block of `A`.
 #[derive(Clone, Debug)]
-pub struct Factor<T = f64> {
+pub struct ApproxInverse<T = f64> {
     n: usize,
     blocks: Vec<BlockFactor<T>>,
     /// Vertices in no block, which solve to `0`.
@@ -95,7 +95,7 @@ pub struct Factor<T = f64> {
     scratch_len: usize,
 }
 
-impl<T: Real> Factor<T> {
+impl<T: Real> ApproxInverse<T> {
     /// Factors every coupled summand in parallel.
     pub(crate) fn build<I: Index, B: Summand<T, I>>(
         summands: Summands<B, I, T>,
@@ -527,7 +527,7 @@ fn splitmix(x: u64) -> u64 {
 
 /// `(FORMAT_VERSION, (n, dead, blocks))`: every vertex of the factored matrix is in the bytes, so decoding allocates nothing they do not hold.
 #[cfg(feature = "serde")]
-impl<T: serde::Serialize> serde::Serialize for Factor<T> {
+impl<T: serde::Serialize> serde::Serialize for ApproxInverse<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         struct Bodies<'a, T>(&'a [BlockFactor<T>]);
         impl<T: serde::Serialize> serde::Serialize for Bodies<'_, T> {
@@ -541,19 +541,19 @@ impl<T: serde::Serialize> serde::Serialize for Factor<T> {
 }
 
 #[cfg(feature = "serde")]
-impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for Factor<T> {
+impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ApproxInverse<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let (n, dead, blocks): (usize, Box<[usize]>, Vec<Storage<T>>) =
             wire::deserialize(deserializer)?;
         let blocks = blocks.into_iter().map(BlockFactor).collect();
         let value = Self::new(blocks, dead);
-        let corrupt = || serde::de::Error::custom("corrupt Factor");
+        let corrupt = || serde::de::Error::custom("corrupt ApproxInverse");
         value.checked(n).ok_or_else(corrupt)
     }
 }
 
 #[cfg(feature = "serde")]
-impl<T: Real> Factor<T> {
+impl<T: Real> ApproxInverse<T> {
     /// The blocks' vertices and the dead ones cover `0..n` once each.
     fn checked(self, n: usize) -> Option<Self> {
         let mut vertices = self.dead.to_vec();
@@ -610,7 +610,7 @@ mod tests {
     use crate::ScalingPolicy;
 
     fn only_block(summands: Reduced<f64, u32>, config: &Config) -> Block<f64, u32> {
-        let mut blocks = Factor::build(summands, config, Storage::U32).into_blocks();
+        let mut blocks = ApproxInverse::build(summands, config, Storage::U32).into_blocks();
         assert_eq!(blocks.len(), 1);
         match blocks.pop().expect("one block").0 {
             Storage::U32(block) => block,
@@ -702,7 +702,7 @@ mod storage {
     use crate::sgdd::Reduced;
     use crate::{ScalingPolicy, SchurMode};
 
-    fn bits(factor: &Factor, b: &[f64]) -> Vec<u64> {
+    fn bits(factor: &ApproxInverse, b: &[f64]) -> Vec<u64> {
         let x = factor.solve(b).expect("b has length n");
         x.iter().map(|x| x.to_bits()).collect()
     }
@@ -725,12 +725,12 @@ mod storage {
             },
         ];
         for config in configs {
-            let narrow = Factor::build(
+            let narrow = ApproxInverse::build(
                 Reduced::reduce(input, policy).expect("reduces"),
                 &config,
                 Storage::U32,
             );
-            let wide = Factor::build(
+            let wide = ApproxInverse::build(
                 Reduced::reduce(input, policy).expect("reduces"),
                 &config,
                 Storage::U64,

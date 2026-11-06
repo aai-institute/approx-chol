@@ -1,7 +1,9 @@
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, ViewError,
 };
-use approx_chol::{factorize, factorize_with, Config, Error, Factor, ReduceError, ScalingPolicy};
+use approx_chol::{
+    factorize, factorize_with, ApproxInverse, Config, Error, ReduceError, ScalingPolicy,
+};
 use rstest::rstest;
 
 use super::assert_names_a_defect;
@@ -394,7 +396,7 @@ fn a_gram_whose_ground_total_passes_the_maximum_solves(
         exact_max_dim,
         ..Config::default()
     };
-    let factor: Factor =
+    let factor: ApproxInverse =
         factorize_with(gram, config, ScalingPolicy::default()).expect("in range row by row");
     solve_residual(&factor, &matrix(101, &a, &b, &x, &y));
 }
@@ -423,7 +425,7 @@ fn a_low_degree_ground_whose_total_passes_the_maximum_solves() {
         exact_max_dim: 0,
         ..Config::default()
     };
-    let factor: Factor =
+    let factor: ApproxInverse =
         factorize_with(csr, config, ScalingPolicy::default()).expect("in range row by row");
     // Sampled, one apply is a preconditioner, not a solve: finite, and residual 2e-2 at seed 0.
     let exact: Vec<f64> = (0..n).map(|i| (i % 5) as f64 - 2.0).collect();

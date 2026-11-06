@@ -1,14 +1,14 @@
-use approx_chol::{Factor, Real, ScalingReport};
+use approx_chol::{ApproxInverse, Real, ScalingReport};
 use rstest::rstest;
 
 use super::{grounded, reduce};
 
 /// `[[a+s, -a], [-a, a+s]]`: dominant by `s` on both rows, so it floats exactly when `s` is noise.
-fn surplus_pair<T: Real>(a: T, s: T) -> Factor<T> {
+fn surplus_pair<T: Real>(a: T, s: T) -> ApproxInverse<T> {
     reduce(&[0, 2, 4], &[0, 1, 0, 1], &[a + s, -a, -a, a + s]).expect("a pair is admitted")
 }
 
-fn solves_to<T: Real + std::fmt::LowerExp>(factor: &Factor<T>, rhs: &[T], expected: &[T]) {
+fn solves_to<T: Real + std::fmt::LowerExp>(factor: &ApproxInverse<T>, rhs: &[T], expected: &[T]) {
     let solution = factor.solve(rhs).expect("solve");
     let tolerance = T::from(1e-3).unwrap();
     for (&got, &want) in solution.iter().zip(expected) {
@@ -53,7 +53,7 @@ fn f32_surplus_is_judged_against_summation_error_alone(
     assert_eq!(grounded(&factor), expected, "surplus {surplus:e}");
 }
 
-fn drifted<T: Real>(drift: T) -> Factor<T> {
+fn drifted<T: Real>(drift: T) -> ApproxInverse<T> {
     surplus_pair(T::one(), drift)
 }
 
@@ -70,7 +70,7 @@ fn summation_roundoff_does_not_augment<T: Real + std::fmt::LowerExp>(#[case] dri
 /// A deficit past rounding is reported, not zeroed (#91), even well inside the scaling tolerance.
 #[test]
 fn deficit_beyond_summation_roundoff_is_reported() {
-    let reported = |factor: &Factor<f64>| factor.blocks()[0].scaling_report().is_some();
+    let reported = |factor: &ApproxInverse<f64>| factor.blocks()[0].scaling_report().is_some();
     assert!(reported(&drifted(-5e-11_f64)), "1e-9 tolerance is no cover");
     assert!(reported(&drifted(-32.0 * f64::EPSILON)));
     assert!(!reported(&drifted(-12.0 * f64::EPSILON)), "inside 16 eps");
@@ -80,7 +80,7 @@ fn deficit_beyond_summation_roundoff_is_reported() {
 }
 
 /// Unit leaves, centre short of their sum by `short_ulps` ε; the leaves balance exactly.
-fn star(leaves: u32, short_ulps: f64) -> Factor<f64> {
+fn star(leaves: u32, short_ulps: f64) -> ApproxInverse<f64> {
     let mut row_ptrs = vec![0u32, leaves + 1];
     let mut columns: Vec<u32> = (0..=leaves).collect();
     let mut values = vec![f64::from(leaves) * (1.0 - short_ulps * f64::EPSILON)];

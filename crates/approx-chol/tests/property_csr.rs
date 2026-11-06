@@ -1,5 +1,5 @@
 use approx_chol::input::{CsrError, CsrRef, IndexKind, UpperCsrRef};
-use approx_chol::{factorize, Error, Factor};
+use approx_chol::{factorize, ApproxInverse, Error};
 use num_traits::PrimInt;
 use proptest::prelude::*;
 
@@ -94,8 +94,8 @@ proptest! {
         let (upper_ptrs, upper_columns, upper_values, _) = upper(&csr);
         let full = CsrRef::new(row_ptrs, col_indices, values, *n as u32).expect("valid shape");
         let triangle = UpperCsrRef::new(&upper_ptrs, &upper_columns, &upper_values, *n as u32).expect("valid shape");
-        let full: Factor = factorize(full).expect("a Laplacian is admitted");
-        let triangle: Factor = factorize(triangle).expect("a Laplacian is admitted");
+        let full: ApproxInverse = factorize(full).expect("a Laplacian is admitted");
+        let triangle: ApproxInverse = factorize(triangle).expect("a Laplacian is admitted");
         prop_assert_eq!(format!("{full:?}"), format!("{triangle:?}"));
         prop_assert!(full.blocks().iter().all(|block| block.floats()));
     }

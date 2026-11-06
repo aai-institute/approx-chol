@@ -7,8 +7,8 @@ import numpy.typing as npt
 from typing_extensions import Never
 
 __all__ = [
+    "ApproxInverse",
     "Config",
-    "Factor",
     "ScalingPolicy",
     "Workspace",
     "factorize",
@@ -65,7 +65,7 @@ class ScalingPolicy:
     def max_iterations(self) -> int: ...
 
 @final
-class Factor:
+class ApproxInverse:
     """Approximate Cholesky factor (LDL^T decomposition).
 
     Obtained from :func:`factorize` or :func:`factorize_raw`.
@@ -142,7 +142,7 @@ class Factor:
 
 @final
 class Workspace:
-    """Buffers for one :meth:`Factor.solve_into` at a time, from :meth:`Factor.workspace`."""
+    """Buffers for one :meth:`ApproxInverse.solve_into` at a time, from :meth:`ApproxInverse.workspace`."""
 
     # No Python constructor: the uninhabited argument makes every call a type error.
     def __new__(cls, never: Never, /) -> Never: ...
@@ -151,7 +151,7 @@ def factorize(
     matrix: Any,
     config: Config | None = None,
     scaling: ScalingPolicy | None = None,
-) -> Factor:
+) -> ApproxInverse:
     """Factorize an SDDM matrix from a scipy.sparse CSR matrix.
 
     Copies the arrays, then releases the GIL to check and factor the copy above 32768 stored entries.
@@ -180,7 +180,7 @@ def factorize_raw(
     n: int,
     config: Config | None = None,
     scaling: ScalingPolicy | None = None,
-) -> Factor:
+) -> ApproxInverse:
     """Factorize an SDDM matrix from raw CSR arrays.
 
     Releases the GIL as :func:`factorize`.

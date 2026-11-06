@@ -56,13 +56,15 @@ pub use error::Error;
 use factor::Storage;
 #[cfg(feature = "serde")]
 pub use factor::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
-pub use factor::{BlockFactor, Config, Factor, InnerParallelism, SchurMode, SolveError, Vertices};
+pub use factor::{
+    ApproxInverse, BlockFactor, Config, InnerParallelism, SchurMode, SolveError, Vertices,
+};
 pub use input::{CsrError, CsrRef, IndexKind, Input, OwnedCsr, Side};
 use sgdd::{Complement, Reduced};
 pub use sgdd::{ReduceError, ScalingPolicy, ScalingReport};
 
 /// Factorizes any [`Input`] with [`Config::default`] and [`ScalingPolicy::default`].
-pub fn factorize<'a, T, I, M>(input: M) -> Result<Factor<T>, Error>
+pub fn factorize<'a, T, I, M>(input: M) -> Result<ApproxInverse<T>, Error>
 where
     T: Real,
     I: PrimInt + Sync + 'a,
@@ -77,7 +79,7 @@ pub fn factorize_with<'a, T, I, M>(
     input: M,
     config: Config,
     scaling: ScalingPolicy,
-) -> Result<Factor<T>, Error>
+) -> Result<ApproxInverse<T>, Error>
 where
     T: Real,
     I: PrimInt + Sync + 'a,
@@ -93,14 +95,14 @@ pub fn factorize_complement<T: Real, I: PrimInt + Sync>(
     kept: Side,
     config: Config,
     scaling: ScalingPolicy,
-) -> Result<Factor<T>, Error> {
+) -> Result<ApproxInverse<T>, Error> {
     Ok(match fits_u32(input.n()) {
-        true => Factor::build(
+        true => ApproxInverse::build(
             Complement::reduce_onto(input, kept, scaling)?,
             &config,
             Storage::U32,
         ),
-        false => Factor::build(
+        false => ApproxInverse::build(
             Complement::reduce_onto(input, kept, scaling)?,
             &config,
             Storage::U64,
@@ -140,10 +142,10 @@ impl<T: Real> Sgdd<T> {
     }
 
     /// Factors each block in parallel; clone first to factor again under another `config`.
-    pub fn factor(self, config: &Config) -> Factor<T> {
+    pub fn factor(self, config: &Config) -> ApproxInverse<T> {
         match self.0 {
-            Indexed::U32(summands) => Factor::build(summands, config, Storage::U32),
-            Indexed::U64(summands) => Factor::build(summands, config, Storage::U64),
+            Indexed::U32(summands) => ApproxInverse::build(summands, config, Storage::U32),
+            Indexed::U64(summands) => ApproxInverse::build(summands, config, Storage::U64),
         }
     }
 }

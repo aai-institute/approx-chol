@@ -19,7 +19,7 @@ mod residual;
 #[path = "common/sparse.rs"]
 mod sparse;
 
-use approx_chol::{Config, Factor, InnerParallelism, Real, SchurMode, SolveError};
+use approx_chol::{ApproxInverse, Config, InnerParallelism, Real, SchurMode, SolveError};
 use cases::cases;
 use entry::{by_type, cast, cast_all, Entry, Factored, Types};
 use graph::{Edge, Graph};
@@ -66,7 +66,7 @@ cases! {
     }
 }
 
-fn assert_buffers_checked<T: Real>(factor: &Factor<T>) {
+fn assert_buffers_checked<T: Real>(factor: &ApproxInverse<T>) {
     let n = factor.n();
     for found in [n - 1, n + 1] {
         let error = SolveError::LengthMismatch { expected: n, found };
@@ -129,7 +129,7 @@ cases! {
 
 /// Each block through `solve_local` on a NaN-filled scratch, scattered back.
 fn solve_on_dirty_scratch<T: Real>(
-    factor: &Factor<T>,
+    factor: &ApproxInverse<T>,
     b: &[f64],
     inner: InnerParallelism,
 ) -> Vec<f64> {
@@ -170,7 +170,7 @@ fn assert_dirty_scratch_matches_the_solve(label: &str, factor: &Factored) {
 }
 
 /// The whole factor through `solve_in_place` on a NaN-filled scratch.
-fn solve_in_place_on_dirty_scratch<T: Real>(factor: &Factor<T>, b: &[f64]) -> Vec<f64> {
+fn solve_in_place_on_dirty_scratch<T: Real>(factor: &ApproxInverse<T>, b: &[f64]) -> Vec<f64> {
     let mut x: Vec<T> = cast_all(b);
     let mut scratch = vec![T::nan(); factor.scratch_len() + 1];
     factor
@@ -473,7 +473,7 @@ fn solve_in_place_gathers_only_blocks_whose_vertices_are_not_consecutive(
 ) {
     use approx_chol::factorize;
     use approx_chol::input::Laplacian;
-    let factor: Factor = factorize(Laplacian::new(6, a, b).unwrap()).unwrap();
+    let factor: ApproxInverse = factorize(Laplacian::new(6, a, b).unwrap()).unwrap();
     let rhs = [1.0, -1.0, 2.0, -3.0, 0.5, 0.5];
     let blocks = factor.blocks();
     assert_eq!(blocks.len(), gathered.len());

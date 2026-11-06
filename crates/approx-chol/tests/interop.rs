@@ -8,7 +8,7 @@ mod faer;
 mod sprs;
 
 use approx_chol::input::{CsrError, CsrRef, Input};
-use approx_chol::{factorize, Factor};
+use approx_chol::{factorize, ApproxInverse};
 use num_traits::PrimInt;
 
 /// The 4-vertex path 0-1-2-3 with unit weights.
@@ -37,7 +37,7 @@ where
         .solve(&b)
         .expect("solve");
     // The matrix factors directly too, as `factorize(&matrix)` did before 0.7.
-    let direct: Factor = factorize(matrix).expect("the path is SDDM");
+    let direct: ApproxInverse = factorize(matrix).expect("the path is SDDM");
     let bits = |x: &[f64]| x.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
     assert_eq!(bits(&direct.solve(&b).expect("solve")), bits(&x));
     for (row, &b) in b.iter().enumerate() {

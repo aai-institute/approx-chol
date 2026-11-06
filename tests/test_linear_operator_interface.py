@@ -1,4 +1,4 @@
-"""Tests for the scipy LinearOperator duck-type interface on Factor."""
+"""Tests for the scipy LinearOperator duck-type interface on ApproxInverse."""
 
 import numpy as np
 import scipy.sparse as sp
