@@ -87,10 +87,8 @@ fn gram_separates_folded_scaled_and_frustrated_components() {
     let gram = FactorWidth2::new(7, (&a, &x), (&b, &y)).unwrap();
     let reduced = factorize_with(gram, dense(), ScalingPolicy::new(0.0, 0).unwrap()).unwrap();
     assert_eq!(floats(&reduced), [true, false]);
-    assert!(reduced
-        .blocks()
-        .iter()
-        .all(|c| c.scaling_report().is_none()));
+    assert_eq!(reduced.clamps(), []);
+    assert!(!reduced.blocks().iter().any(|c| c.grounding_unproven()));
     solve_residual(&reduced, &matrix(7, &a, &b, &x, &y));
 }
 
@@ -153,13 +151,33 @@ fn exhausted_scaling_reports_on_grams_and_rows() {
     let (x, y) = ([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
     let gram = FactorWidth2::new(3, (&a, &x), (&b, &y)).unwrap();
     let policy = ScalingPolicy::new(0.0, 0).unwrap();
+    let reported = |f: &ApproxInverse| !f.clamps().is_empty() || f.blocks()[0].grounding_unproven();
     let factor: ApproxInverse = factorize_with(gram, dense(), policy).unwrap();
-    assert!(factor.blocks()[0].scaling_report().is_some());
+    assert!(reported(&factor));
     let matrix = matrix(3, &a, &b, &x, &y);
     let ptrs = [0, 3, 6, 9];
     let indices = [0, 1, 2, 0, 1, 2, 0, 1, 2];
     let values: Vec<f64> = matrix.into_iter().flatten().collect();
     let csr = CsrRef::new(&ptrs, &indices, &values, 3).unwrap();
     let factor: ApproxInverse = factorize_with(csr, dense(), policy).unwrap();
-    assert!(factor.blocks()[0].scaling_report().is_some());
+    assert!(reported(&factor));
+}
+
+/// A Gram reduces its folded components after its frustrated ones; its clamps are still listed by first vertex.
+#[test]
+fn a_grams_clamps_are_listed_by_first_vertex() {
+    let (a, b) = ([0, 1, 0, 3, 4, 3], [1, 2, 2, 4, 5, 5]);
+    let (x, y) = (
+        [1.0, 2.0, 3.0, 1.0, 2.0, 3.0],
+        [4.0, 5.0, 6.0, -4.0, -5.0, -6.0],
+    );
+    let gram = FactorWidth2::new(6, (&a, &x), (&b, &y)).unwrap();
+    let exhausted = ScalingPolicy::new(0.0, 0).unwrap();
+    let factor: ApproxInverse = factorize_with(gram, dense(), exhausted).unwrap();
+    let firsts: Vec<usize> = factor
+        .clamps()
+        .iter()
+        .map(|clamp| clamp.vertices[0])
+        .collect();
+    assert_eq!(firsts, [0, 3], "{:?}", factor.clamps());
 }

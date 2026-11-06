@@ -6,14 +6,14 @@ mod graph;
 use num_traits::PrimInt;
 use rayon::prelude::*;
 
-use super::block::{Balance, BlockComplement, Congruent, Grounding, IrreducibleBlock, ReduceError};
+use super::block::{Balance, BlockComplement, Congruent, Grounding, ReduceError, WithClamp};
 use super::congruence::{Congruence, Selection};
 use super::decomposition::{
     of_csr, of_upper, AdjacencyLayout, Biadjacency, Components, Partitioned, RowSums,
     StrictUpperTriangle, Summands, SymmetricBlock,
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy};
-use super::{diagonal_in_range, Complement, Reduced};
+use super::{diagonal_in_range, Complement, Reduced, Reduction};
 use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Lowered, Side};
 use crate::storage::OffDiagonal;
 use crate::{narrow, widen, Error, Index, Real};
@@ -64,10 +64,13 @@ impl<T: Real, I: Index> Complement<T, I> {
     ) -> Result<Self, ReduceError> {
         let range = input.vertices(kept);
         let layout = Biadjacency::onto(&input, kept);
-        let Summands { blocks, lone, dead } = Reduced::from_gram(layout, input.lower(), &policy)?;
+        let Reduction {
+            summands: Summands { blocks, lone, dead },
+            clamps,
+        } = Reduced::from_gram(layout, input.lower(), &policy)?;
         let local = |v: usize| I::from_index(v - range.start);
         let on_kept = |v: I| range.contains(&v.index()).then(|| local(v.index()));
-        Ok(Self {
+        let summands = Summands {
             blocks: (blocks.into_par_iter())
                 .map(|block| BlockComplement::new(block, local))
                 .collect(),
@@ -75,7 +78,8 @@ impl<T: Real, I: Index> Complement<T, I> {
                 .filter_map(|(v, pivot)| Some((on_kept(v)?, pivot)))
                 .collect(),
             dead: dead.into_iter().filter_map(on_kept).collect(),
-        })
+        };
+        Ok(Self { summands, clamps })
     }
 }
 
@@ -100,7 +104,7 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
 }
 
 impl<T: Real, I: Index> SymmetricBlock<T, I> {
-    /// `M = F A_c F` with `F = S R`, formed once with its rows, which decide the report; `relax` runs only past the row test, and a frustrated `A_c` takes `S = I` and grounds on its rows at once.
+    /// `M = F A_c F` with `F = S R`, formed once with its rows, which decide the clamp; `relax` runs only past the row test, and a frustrated `A_c` takes `S = I` and grounds on its rows at once.
     fn reduce(
         self,
         policy: &ScalingPolicy,
@@ -155,10 +159,11 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
             false => {
                 let grounding = surplus(&rows).flushed(&rows.diagonal);
                 let grounding = grounding.map_err(|i| out_of_range(&m, i))?;
-                let report = vector.report(clamped);
-                Ok(Signed::Frustrated(
-                    m.block(Balance::Frustrated(grounding), report)?,
-                ))
+                Ok(Signed::Frustrated(m.block(
+                    Balance::Frustrated(grounding),
+                    vector,
+                    clamped,
+                )?))
             }
         }
     }
@@ -167,7 +172,7 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
 /// Only a folded `M` can still take a surplus from `V`.
 enum Signed<T, I> {
     Folded(Folded<T, I>),
-    Frustrated(IrreducibleBlock<T, I>),
+    Frustrated(WithClamp<T, I>),
 }
 
 /// A folded `M` with its rows and the bands they sit in, its surplus still to be decided.
@@ -233,17 +238,15 @@ impl<T: Real, I: Index> Folded<T, I> {
         self,
         (ones, trace): (f64, f64),
         surplus: &S,
-    ) -> Result<IrreducibleBlock<T, I>, ReduceError> {
+    ) -> Result<WithClamp<T, I>, ReduceError> {
         let dominant = matches!(self.vector, ScaleVector::Identity);
         let floats = !surplus.states_ground(&self)
             && within_band::<T>(ones, trace)
             && (((dominant || S::RESIDUES_FLOAT_SCALED) && self.floats(surplus.residues(&self)))
                 || surplus.certifies(self.m.vertices()));
-        let report = self.vector.report(self.clamped);
+        let (vector, clamped) = (self.vector, self.clamped);
         if floats {
-            return self
-                .m
-                .block(Balance::Balanced(Grounding::ungrounded()), report);
+            return (self.m).block(Balance::Balanced(Grounding::ungrounded()), vector, clamped);
         }
         let grounding = surplus.grounds(&self);
         // The first ground, which flushing all of them would lose from a definite `M`.
@@ -255,7 +258,7 @@ impl<T: Real, I: Index> Folded<T, I> {
         let Self { m, rows, .. } = self;
         match grounding.flushed(&rows.diagonal) {
             Ok(grounding) if grounding.is_grounded() => {
-                m.block(Balance::Balanced(grounding), report)
+                m.block(Balance::Balanced(grounding), vector, clamped)
             }
             Ok(_) => Err(out_of_range(&m, first)),
             Err(i) => Err(out_of_range(&m, i)),
@@ -383,5 +386,46 @@ impl<I: Index> ParityForest<I> {
         self.odd[small] = pi ^ pj ^ differ;
         self.size[big] = self.size[big] + self.size[small];
         Some(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::CsrRef;
+
+    /// A degree-13 star whose centre is 24ε short dominates within the default tolerance: no scaling runs, yet its rows are clamped.
+    #[test]
+    fn a_deficit_within_the_tolerance_is_clamped_unscaled() {
+        let leaves = 13u32;
+        let (mut row_ptrs, mut columns) =
+            (vec![0u32, leaves + 1], (0..=leaves).collect::<Vec<_>>());
+        let mut values = vec![f64::from(leaves) * (1.0 - 24.0 * f64::EPSILON)];
+        values.extend(std::iter::repeat_n(-1.0, leaves as usize));
+        for leaf in 1..=leaves {
+            columns.extend([0, leaf]);
+            values.extend([-1.0, 1.0]);
+            row_ptrs.push(columns.len() as u32);
+        }
+        let csr = CsrRef::new(&row_ptrs, &columns, &values, leaves + 1).expect("valid shape");
+        let policy = ScalingPolicy::default();
+        let unscaled = |_: &SymmetricBlock<f64, u32>| -> Option<scaling::Relaxation<f64>> {
+            panic!("dominant within the tolerance, so nothing scales")
+        };
+        let partitioned = of_csr::<f64, u32, u32>(Canonical::of(csr).expect("canonical"));
+        let components = (partitioned.expect("symmetric"))
+            .extract(|a| match a.reduce(&policy, unscaled)? {
+                Signed::Folded(Folded {
+                    vector: ScaleVector::Identity,
+                    clamped,
+                    ..
+                }) => Ok(clamped),
+                _ => Ok(f64::NAN),
+            })
+            .expect("admitted");
+        let [clamped] = components.summands.blocks[..] else {
+            panic!("one component")
+        };
+        assert!(clamped > 16.0 * f64::EPSILON, "{clamped:e}");
     }
 }

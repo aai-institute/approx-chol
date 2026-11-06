@@ -1,7 +1,7 @@
 //! One reduced irreducible block, its balance and grounding.
 
 use super::congruence::{Congruence, Restriction, ScaledFactors, Selection};
-use super::scaling::{ScalingReport, RATIO_BAND};
+use super::scaling::{Clamp, ScaleVector, RATIO_BAND};
 use crate::storage::{OffDiagonal, Rows};
 use crate::{Index, Real};
 
@@ -112,8 +112,11 @@ pub(crate) struct IrreducibleBlock<T = f64, I = u32> {
     restriction: Box<Restriction<T, I>>,
     off_diagonal: OffDiagonal<T, I>,
     balance: Balance<T>,
-    report: Option<Box<ScalingReport>>,
+    grounding_unproven: bool,
 }
+
+/// A reduced block, and its component's clamp, which the reduction lists apart; boxed, as most components have none.
+pub(crate) type WithClamp<T, I> = (IrreducibleBlock<T, I>, Option<Box<Clamp>>);
 
 /// A bipartite block's Schur complement onto its kept side, unformed: `C`, and the restriction onto the kept side's numbering.
 pub(crate) struct BlockComplement<T, I> {
@@ -123,13 +126,13 @@ pub(crate) struct BlockComplement<T, I> {
     cross: Rows<T, I>,
     sheets: Sheets,
     grounding: Grounding<T>,
-    report: Option<Box<ScalingReport>>,
+    grounding_unproven: bool,
 }
 
 impl<T: Real, I: Index> BlockComplement<T, I> {
     /// `block`'s restriction tailed onto its kept side, each kept vertex of `A` numbered `local(v)`.
     pub(super) fn new(block: IrreducibleBlock<T, I>, local: impl Fn(usize) -> I) -> Self {
-        let (whole, off_diagonal, sheets, grounding, report) = block.into_parts();
+        let (whole, off_diagonal, sheets, grounding, grounding_unproven) = block.into_parts();
         let OffDiagonal::Bipartite(cross) = off_diagonal else {
             unreachable!("a complement's layout leaves each block both sides")
         };
@@ -142,7 +145,7 @@ impl<T: Real, I: Index> BlockComplement<T, I> {
             cross,
             sheets,
             grounding,
-            report,
+            grounding_unproven,
         }
     }
 
@@ -154,7 +157,7 @@ impl<T: Real, I: Index> BlockComplement<T, I> {
             self.cross,
             self.sheets,
             self.grounding,
-            self.report,
+            self.grounding_unproven,
         )
     }
 }
@@ -165,7 +168,7 @@ type ComplementParts<T, I> = (
     Rows<T, I>,
     Sheets,
     Grounding<T>,
-    Option<Box<ScalingReport>>,
+    bool,
 );
 
 /// `M = F · A_c · F` over its vertices, its surplus still to be decided.
@@ -243,8 +246,9 @@ impl<T: Real, I: Index> Congruent<T, I> {
     pub(super) fn block(
         self,
         balance: Balance<T>,
-        report: Option<ScalingReport>,
-    ) -> Result<IrreducibleBlock<T, I>, ReduceError> {
+        vector: ScaleVector,
+        clamped: f64,
+    ) -> Result<WithClamp<T, I>, ReduceError> {
         let Self {
             vertices,
             congruence,
@@ -265,12 +269,14 @@ impl<T: Real, I: Index> Congruent<T, I> {
             let vertex = vertices.vertex(i);
             return Err(ReduceError::OutOfRange { vertex });
         }
-        Ok(IrreducibleBlock {
+        let clamp = vector.clamp(clamped, vertices).map(Box::new);
+        let block = IrreducibleBlock {
             restriction: Box::new(restriction),
             off_diagonal,
             balance,
-            report: report.map(Box::new),
-        })
+            grounding_unproven: vector.grounding_unproven(),
+        };
+        Ok((block, clamp))
     }
 }
 
@@ -288,7 +294,7 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
             self.off_diagonal,
             sheets,
             grounding,
-            self.report,
+            self.grounding_unproven,
         )
     }
 }
@@ -298,7 +304,7 @@ type BlockParts<T, I> = (
     OffDiagonal<T, I>,
     Sheets,
     Grounding<T>,
-    Option<Box<ScalingReport>>,
+    bool,
 );
 
 /// Why a block has no SDDM form; each `vertex` is in `A`'s numbering.
