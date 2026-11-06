@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - An approximate step stores each neighbor's share `w/d` and `D⁻¹ = 1/d`, each rounded once. The heaviest neighbor's share was `1 − Σ` of the others, which cancelled to a relative error of 8e-6 at degree 10⁶ ([#306]).
+- Decoding rejects an approximate factor with a negative share; such a payload decoded and solved another matrix.
 - The exact arm factors a frustrated block as itself, not its two-sheet cover, so `Config::exact_max_dim` counts its vertices once; a frustrated block of `exact_max_dim / 2 < n ≤ exact_max_dim` vertices factored approximately before. ([#327])
 
 ## [0.7.0] - 2026-10-30

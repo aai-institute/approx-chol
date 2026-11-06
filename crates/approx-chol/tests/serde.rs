@@ -320,6 +320,13 @@ fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
     #[case] stored: &str,
     #[case] exact_max_dim: usize,
 ) {
+    let factor = grounded_grid(exact_max_dim);
+    decode_scaled(&factor, stored, 1.0).expect("a stored Cholesky decodes");
+    decode_scaled(&factor, stored, 2.0).expect_err("multipliers summing to two are corrupt");
+}
+
+/// A 4×4 grid grounded at a corner.
+fn grounded_grid(exact_max_dim: usize) -> ApproxInverse {
     let (a, b): (Vec<u32>, Vec<u32>) = (0..16u32)
         .flat_map(|v| [(v, v + 1), (v, v + 4)])
         .filter(|&(v, w)| w < 16 && (w != v + 1 || w % 4 != 0))
@@ -331,9 +338,14 @@ fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
         exact_max_dim,
         ..Config::default()
     };
-    let factor = factorize_with(grid, config, ScalingPolicy::default()).unwrap();
-    decode_scaled(&factor, stored, 1.0).expect("a stored Cholesky decodes");
-    decode_scaled(&factor, stored, 2.0).expect_err("multipliers summing to two are corrupt");
+    factorize_with(grid, config, ScalingPolicy::default()).unwrap()
+}
+
+/// An approximate step's shares are weights over its degree; negated, they still bound `Σ|c| ≤ 1` but solve another matrix.
+#[test]
+fn an_approximate_negative_share_is_corrupt() {
+    decode_scaled(&grounded_grid(0), "/coefficients", -1.0)
+        .expect_err("a negative share is corrupt");
 }
 
 /// An approximate step's `D⁻¹` is positive, as every other stored pivot; a negated one solves indefinite.

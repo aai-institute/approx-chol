@@ -236,7 +236,7 @@ const LANES: usize = 4;
 
 #[cfg(feature = "serde")]
 impl<T: Real, I: Index> ApproximateCholesky<T, I> {
-    /// Each slot but `pin` pivots once, giving only to slots not yet pivoted, shares of at most its whole.
+    /// Each slot but `pin` pivots once, giving only to slots not yet pivoted, nonnegative shares of at most its whole.
     pub(super) fn fits(&self, slots: usize, pin: Option<usize>) -> bool {
         let Self {
             headers,
@@ -265,7 +265,8 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
                 .all(|&j| j.index() < slots && !pivoted[j.index()]);
             let shares = &coefficients[start..end];
             let pivot = header.inverse_degree.is_finite() && header.inverse_degree > T::zero();
-            if !later || !pivot || !within_one(shares.iter().copied()) {
+            let nonnegative = shares.iter().all(|&c| c >= T::zero());
+            if !later || !pivot || !nonnegative || !within_one(shares.iter().copied()) {
                 return false;
             }
         }
