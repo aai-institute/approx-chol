@@ -17,7 +17,7 @@ pub use config::{Config, InnerParallelism, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
 
-use crate::sgdd::{BlockComplement, IrreducibleBlock, Lone, Restriction, Selection, Summands};
+use crate::sgdd::{BlockComplement, IrreducibleBlock, Restriction, Selection, Summands};
 use crate::storage::OffDiagonal;
 use crate::ScalingReport;
 use crate::{Index, Real};
@@ -111,8 +111,7 @@ impl<T: Real> Factor<T> {
         let build = |reused: &mut _, block: B| BlockFactor(store(block.factor(config, reused)));
         let workspace = || Workspace::new(config.split());
         blocks.par_extend(coupled.into_par_iter().map_init(workspace, build));
-        let isolated =
-            |Lone { vertex, pivot }| BlockFactor(Storage::Isolated(Isolated::new(vertex, pivot)));
+        let isolated = |(v, pivot)| BlockFactor(Storage::Isolated(Isolated::new(v, pivot)));
         blocks.extend(lone.into_iter().map(isolated));
         Self::new(blocks, dead.into_iter().map(I::index).collect())
     }

@@ -10,8 +10,7 @@ use crate::input::{Canonical, CsrError};
 use crate::storage::{tally_abs, OffDiagonal, Rows, UpperAdjacency};
 use crate::{Index, Real};
 pub(super) use assembly::{
-    assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, IncidenceBlock,
-    StrictUpperTriangle,
+    assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, StrictUpperTriangle,
 };
 use partition::Partition;
 use partition::UnionFind;
@@ -85,7 +84,7 @@ impl<A, I: Index> Partitioned<A, I> {
             match a.lone(vertex) {
                 pivot if pivot == T::zero() => dead.push(v),
                 pivot if pivot > T::zero() && super::diagonal_in_range(pivot) => {
-                    lone.push(Lone { vertex: v, pivot })
+                    lone.push((v, pivot))
                 }
                 pivot if pivot < T::zero() => {
                     return Err(ReduceError::NonpositiveDiagonal { vertex })
@@ -139,37 +138,33 @@ pub(super) struct Components<B, I, T> {
 pub(crate) struct Summands<B, I, T> {
     /// Each coupled component's block.
     pub(crate) blocks: Vec<B>,
-    /// Vertices no entry couples whose pivot is positive.
-    pub(crate) lone: Vec<Lone<I, T>>,
+    /// Vertices no entry couples, each with its surplus `σ`, which is its whole pivot.
+    pub(crate) lone: Vec<(I, T)>,
     /// One-vertex components whose pivot is zero: an in-place solve zeroes them.
     pub(crate) dead: Vec<I>,
 }
 
-/// A vertex no entry couples, with its surplus `σ`, which is its whole pivot.
-#[derive(Clone, Debug)]
-pub(crate) struct Lone<I, T> {
-    pub(crate) vertex: I,
-    pub(crate) pivot: T,
-}
-
-/// A principal block's off-diagonal and its vertices, in `A`'s numbering, in local order.
-pub(super) struct BlockAdjacency<T, I> {
-    pub(super) vertices: Selection<I>,
-    pub(super) off_diagonal: OffDiagonal<T, I>,
-}
-
 /// One block `A_c` as the input gave it, with its rows' `Σ_j |a_ij|`.
 pub(super) struct SymmetricBlock<T, I> {
-    pub(super) adjacency: BlockAdjacency<T, I>,
+    /// In `A`'s numbering, in local order.
+    pub(super) vertices: Selection<I>,
+    pub(super) off_diagonal: OffDiagonal<T, I>,
     pub(super) rows: RowSums<T>,
 }
 
 impl<T: Real, I: Index> SymmetricBlock<T, I> {
-    fn new(adjacency: BlockAdjacency<T, I>, rows: RowSums<T>) -> Self {
-        let n = adjacency.off_diagonal.n();
-        assert_eq!(adjacency.vertices.len(), n, "one vertex per row");
-        assert_eq!(rows.diagonal.len(), n, "one diagonal per row");
-        Self { adjacency, rows }
+    fn new(vertices: Selection<I>, off_diagonal: OffDiagonal<T, I>, rows: RowSums<T>) -> Self {
+        assert_eq!(vertices.len(), off_diagonal.n(), "one vertex per row");
+        assert_eq!(
+            rows.diagonal.len(),
+            off_diagonal.n(),
+            "one diagonal per row"
+        );
+        Self {
+            vertices,
+            off_diagonal,
+            rows,
+        }
     }
 }
 
@@ -212,11 +207,11 @@ impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Canonical<'_, T, J
         let rows = Rows::new(ptrs, indices, values, vertices.len());
         let off_diagonal = OffDiagonal::General(UpperAdjacency::new(rows));
         let abs = abs.into_iter().map(crate::narrow).collect();
-        let adjacency = BlockAdjacency {
-            vertices: Selection::of(vertices),
+        SymmetricBlock::new(
+            Selection::of(vertices),
             off_diagonal,
-        };
-        SymmetricBlock::new(adjacency, RowSums { diagonal, abs })
+            RowSums { diagonal, abs },
+        )
     }
 }
 

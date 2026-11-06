@@ -2,7 +2,7 @@
 
 use rayon::prelude::*;
 
-use crate::sgdd::{Grounding, Sheets, Singularity};
+use crate::sgdd::{within_band, Grounding, Sheets};
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, widen, Index, Real};
 
@@ -69,7 +69,7 @@ impl<T: Real, I: Index> Sddm<T, I> {
         }
     }
 
-    /// Rows on `sheets`, each ground plus its vertex's `surplus`, one per vertex; on two, a ground within the singular band [`twists`].
+    /// Rows on `sheets`, each ground plus its vertex's `surplus`, one per vertex; on two, a ground within the band [`twists`].
     pub(super) fn of_rows(rows: SddmRows<T, I>, sheets: Sheets, surplus: Option<&[T]>) -> Self {
         let n = rows.sums.len() - 1;
         let adjacency = UpperAdjacency::new(Rows::new(rows.ptrs, rows.indices, rows.values, n));
@@ -291,15 +291,14 @@ impl<T: Real, I: Index> ColumnSums<'_, T, I> {
     }
 }
 
-/// Whether `ground` is within the singular band of `ground + Σ|a_ij|`, both `ε`-scaled so neither overflows: a cover's copies then [`twist`] instead of grounding, so its `1/s` common mode cannot swamp `z`; a cover doubles both sums, so `M`'s decide as its own.
+/// Whether `ground` is within the band of `ground + Σ|a_ij|`, both `ε`-scaled so neither overflows: a cover's copies then [`twist`] instead of grounding, so its `1/s` common mode cannot swamp `z`; a cover doubles both sums, so `M`'s decide as its own.
 fn twists<T: Real, I: Index>(ground: &[T], adjacency: &UpperAdjacency<T, I>) -> bool {
     let epsilon = widen(T::epsilon());
     let total = crate::lane_sum(ground, epsilon);
-    let trace = total + adjacency.scaled_abs_total(epsilon);
-    Singularity { ones: total, trace }.within_band::<T>()
+    within_band::<T>(total, total + adjacency.scaled_abs_total(epsilon))
 }
 
-/// The edge `k⁺ — k⁻` that acts on `[z; −z]` as grounds `g⁺, g⁻` do; with `g⁺ ≠ g⁻` no ungrounded pair matches them, and the mean differs by less than the singular band. Zero where both copies float, else at least `MIN_POSITIVE`, as a share is.
+/// The edge `k⁺ — k⁻` that acts on `[z; −z]` as grounds `g⁺, g⁻` do; with `g⁺ ≠ g⁻` no ungrounded pair matches them, and the mean differs by less than the band. Zero where both copies float, else at least `MIN_POSITIVE`, as a share is.
 fn twist<T: Real>(g_plus: T, g_minus: T) -> T {
     if g_plus == T::zero() && g_minus == T::zero() {
         return T::zero();
