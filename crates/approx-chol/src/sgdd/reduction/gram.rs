@@ -3,7 +3,7 @@ use std::cell::LazyCell;
 use num_traits::PrimInt;
 
 use super::{Folded, Signed, Singularity, Surplus};
-use crate::input::{Column, Gram};
+use crate::input::{Column, FactorWidth2};
 use crate::sgdd::block::{IrreducibleBlock, ReduceError};
 use crate::sgdd::congruence::Selection;
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components, Summands};
@@ -15,7 +15,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
     /// `V` with values: scaled by its null vectors on demand, folded blocks dropping their rows for a pass over `V` that decides floating.
     pub(super) fn from_values<J: PrimInt, S: AdjacencyLayout>(
         cells: S,
-        v: Gram<'_, T, J>,
+        v: FactorWidth2<'_, T, J>,
         policy: &ScalingPolicy,
     ) -> Result<Self, ReduceError> {
         let Components {
@@ -107,7 +107,7 @@ impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_,
 
 /// Each folded block settled by [`Folded::settle`] on one pass over `V`'s columns.
 fn ground_or_float<T: Real, J: PrimInt, I: Index>(
-    v: Gram<'_, T, J>,
+    v: FactorWidth2<'_, T, J>,
     blocks: Vec<Folded<T, I>>,
     certified: &LazyCell<Vec<I>, impl FnOnce() -> Vec<I>>,
 ) -> Result<Vec<IrreducibleBlock<T, I>>, ReduceError> {
@@ -183,7 +183,7 @@ struct NullVectors<I> {
 }
 
 fn null_vectors<'c, T: Real, J: PrimInt, I: Index>(
-    v: Gram<'_, T, J>,
+    v: FactorWidth2<'_, T, J>,
     components: impl Iterator<Item = &'c [I]>,
 ) -> NullVectors<I> {
     let n = v.n();

@@ -1,6 +1,6 @@
 use num_traits::PrimInt;
 
-use crate::input::Gram;
+use crate::input::FactorWidth2;
 use crate::sgdd::block::{Congruent, ReduceError};
 use crate::sgdd::decomposition::Components;
 use crate::sgdd::decomposition::{assemble_incidence, AdjacencyLayout, IncidenceBlock};
@@ -11,10 +11,9 @@ impl<T: Real, I: Index> Reduced<T, I> {
     /// `V` an incidence matrix, so dominant by shape; across a bipartition it is `e_a + e_b`, summed switched.
     pub(super) fn from_incidence<J: PrimInt, S: AdjacencyLayout>(
         cells: S,
-        v: Gram<'_, T, J>,
-        surplus: Option<&[T]>,
+        v: FactorWidth2<'_, T, J>,
     ) -> Result<Self, ReduceError> {
-        assemble_incidence(cells, v, surplus)?
+        assemble_incidence(cells, v)?
             .extract(
                 |IncidenceBlock {
                      adjacency,

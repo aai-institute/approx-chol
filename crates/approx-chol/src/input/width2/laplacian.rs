@@ -3,7 +3,7 @@
 use num_traits::PrimInt;
 
 use super::error::{check, check_ends, length, nonnegative, ViewError};
-use crate::input::repr::gram::{Gram, Layout, Values, Weights};
+use super::{Columns, FactorWidth2};
 use crate::storage::Real;
 
 /// The Laplacian of an undirected graph on `n` vertices.
@@ -35,19 +35,17 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
         })
     }
 
-    pub(in crate::input) fn gram(self) -> Gram<'a, T, I> {
+    pub(crate) fn lower(self) -> FactorWidth2<'a, T, I> {
         self.plus(None)
     }
 
-    /// `L + diag(s)` as the core's `V W Vᵀ` and surplus.
-    fn plus(self, surplus: Option<&'a [T]>) -> Gram<'a, T, I> {
+    /// `L + diag(s)` as the core's `V Vᵀ` and surplus.
+    fn plus(self, surplus: Option<&'a [T]>) -> FactorWidth2<'a, T, I> {
         let Self { n, u, v, w } = self;
-        Gram {
+        FactorWidth2 {
             a: u,
             b: v,
-            layout: Layout::Whole { n },
-            values: Values::Incidence { surplus },
-            weights: w.map_or(Weights::Unit, Weights::Of),
+            columns: Columns::Incidence { n, w, surplus },
         }
     }
 }
@@ -72,7 +70,7 @@ impl<'a, T: Real, I: PrimInt> Sddm<'a, T, I> {
         }
     }
 
-    pub(in crate::input) fn gram(self) -> Gram<'a, T, I> {
+    pub(crate) fn lower(self) -> FactorWidth2<'a, T, I> {
         self.laplacian.plus(Some(self.surplus))
     }
 }
