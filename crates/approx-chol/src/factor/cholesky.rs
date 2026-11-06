@@ -5,9 +5,8 @@ use rand::rngs::Xoshiro256PlusPlus;
 
 use super::clique_tree::Multi;
 use super::sddm::{descend, first_copy, lift, Sddm};
-use crate::narrow;
 use crate::sgdd::{FactorTail, Sheets};
-use crate::{widen, Index, Real};
+use crate::{compensated_sum, Batch, Index, Real};
 use approximate::{ApproximateCholesky, CliqueTreeElimination};
 pub(super) use dense::Signed;
 
@@ -108,7 +107,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
     }
 
     /// Lifts to the sheets, fixes the gauge, substitutes, and descends.
-    pub(super) fn solve(&self, x: &mut [T], scratch: &mut [T]) {
+    pub(super) fn solve<V: Batch<T>>(&self, x: &mut [V], scratch: &mut [V]) {
         let triangular = &self.triangular;
         match (self.sheets, self.grounded) {
             (Sheets::One, false) => triangular.substitute(x, self.pinned),
@@ -116,11 +115,11 @@ impl<T: Real, I: Index> Cholesky<T, I> {
                 let rows = &mut scratch[..=x.len()];
                 let (ground, values) = rows.split_last_mut().expect("the ground's slot");
                 values.copy_from_slice(x);
-                let total = crate::compensated_sum(x, |_, b| widen(b));
-                *ground = narrow::<T>(-total);
+                let total = compensated_sum(x, |_, b: V| b.widen());
+                *ground = V::narrow(total.neg());
                 triangular.substitute(rows, self.pinned);
                 let (ground, values) = rows.split_last().expect("the ground's slot");
-                (x.iter_mut().zip(values)).for_each(|(x, &v)| *x = v - *ground);
+                (x.iter_mut().zip(values)).for_each(|(x, &v)| *x = v.sub(*ground));
             }
             (Sheets::Two, _) => {
                 let rows = &mut scratch[..self.scratch_len()];
@@ -155,7 +154,7 @@ enum Triangular<T, I> {
 }
 
 impl<T: Real, I: Index> Triangular<T, I> {
-    fn substitute(&self, values: &mut [T], pinned: usize) {
+    fn substitute<V: Batch<T>>(&self, values: &mut [V], pinned: usize) {
         match self {
             Self::Dense(factor) => dense::substitute(factor, pinned, values),
             Self::Approximate(approximate) => approximate.substitute(values, pinned),

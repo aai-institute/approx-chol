@@ -3,7 +3,7 @@
 use crate::factor::within_one;
 use crate::sgdd::{Grounding, Sheets};
 use crate::storage::UpperAdjacency;
-use crate::{Index, Real};
+use crate::{Batch, Index, Real};
 
 /// `M` as it is, its off-diagonal signed and its surplus closing it: dense Cholesky needs no cover, fold or dominance.
 pub(in crate::factor) struct Signed<T, I> {
@@ -138,7 +138,7 @@ fn row_start(row: usize) -> usize {
 }
 
 /// Forward, backward on a packed factor, and the pinned slot, moved last, zeroed.
-pub(super) fn substitute<T: Real>(factor: &[T], pin: usize, values: &mut [T]) {
+pub(super) fn substitute<T: Real, V: Batch<T>>(factor: &[T], pin: usize, values: &mut [V]) {
     let last = values.len() - 1;
     values.swap(pin, last);
     let (pinned, solved) = values.split_last_mut().expect("the pinned slot");
@@ -152,19 +152,19 @@ pub(super) fn substitute<T: Real>(factor: &[T], pin: usize, values: &mut [T]) {
         let entries = &factor[row_start(row)..row_start(row) + row];
         let mut value = solved[row];
         for (&entry, &solution) in entries.iter().zip(&solved[..row]) {
-            value = value - entry * solution;
+            value = value.sub(solution.mul(entry));
         }
         solved[row] = value;
     }
     for row in (0..m).rev() {
-        let mut value = solved[row] * factor[row_start(row) + row];
+        let mut value = solved[row].mul(factor[row_start(row) + row]);
         // Strided down column `row`, unlike the forward pass, which is why this keeps an index.
         for (below, &solution) in (row + 1..m).zip(&solved[row + 1..]) {
-            value = value - factor[row_start(below) + row] * solution;
+            value = value.sub(solution.mul(factor[row_start(below) + row]));
         }
         solved[row] = value;
     }
-    *pinned = T::zero();
+    *pinned = V::zero();
     values.swap(pin, last);
 }
 

@@ -20,7 +20,7 @@ pub use wire::FORMAT_VERSION;
 use crate::sgdd::{BlockComplement, IrreducibleBlock, Reduction, Restriction, Selection, Summands};
 use crate::storage::OffDiagonal;
 use crate::Clamp;
-use crate::{Index, Real};
+use crate::{Batch, Index, Real};
 use block_elimination::BlockElimination;
 use cholesky::{Arm, Cholesky, Signed, Workspace};
 use schur::BipartiteBlock;
@@ -410,13 +410,13 @@ impl<T: Real, I: Index> Block<T, I> {
     }
 
     /// Solves the block's restriction of `x` in place, through `scratch` of [`global_scratch_len`](Self::global_scratch_len).
-    fn solve_global(&self, x: &mut [T], scratch: &mut [T]) {
+    fn solve_global<V: Batch<T>>(&self, x: &mut [V], scratch: &mut [V]) {
         self.vertices().on_local(
             x,
             scratch,
             // on_local's two arms would otherwise each call it: ~19 instructions per block.
             #[inline(always)]
-            |local: &mut [T], rest: &mut [T]| {
+            |local: &mut [V], rest: &mut [V]| {
                 self.solve_unchecked(local, rest, InnerParallelism::Allow)
             },
         );
@@ -424,7 +424,12 @@ impl<T: Real, I: Index> Block<T, I> {
 
     // Two call sites through the closure plus solve_local's: by cost alone it stays a call.
     #[inline(always)]
-    fn solve_unchecked(&self, x: &mut [T], scratch: &mut [T], inner: InnerParallelism) {
+    fn solve_unchecked<V: Batch<T>>(
+        &self,
+        x: &mut [V],
+        scratch: &mut [V],
+        inner: InnerParallelism,
+    ) {
         let singular = self.cholesky.singular();
         self.restriction.restrict(x, singular);
         match &self.elimination {
@@ -464,13 +469,13 @@ impl<T: Real> Isolated<T> {
         }
     }
 
-    fn solve_global(&self, x: &mut [T]) {
+    fn solve_global<V: Batch<T>>(&self, x: &mut [V]) {
         let v = &mut x[self.vertex as usize];
-        *v = *v * self.inverse_pivot;
+        *v = v.mul(self.inverse_pivot);
     }
 
-    fn solve_local(&self, x: &mut [T]) {
-        x[0] = x[0] * self.inverse_pivot;
+    fn solve_local<V: Batch<T>>(&self, x: &mut [V]) {
+        x[0] = x[0].mul(self.inverse_pivot);
     }
 }
 

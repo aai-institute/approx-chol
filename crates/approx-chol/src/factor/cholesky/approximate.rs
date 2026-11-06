@@ -9,7 +9,7 @@ use crate::factor::clique_tree::{CliqueTreeSampler, Copies, Fill, Multi, Single}
 use crate::factor::sddm::Sddm;
 #[cfg(feature = "serde")]
 use crate::factor::within_one;
-use crate::{narrow, Index, Real};
+use crate::{narrow, Batch, Index, Real};
 use graph::EliminationGraph;
 use ordering::MinDegreeOrder;
 
@@ -163,7 +163,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
     }
 
     /// Forward, zero the `pinned` entry, backward; the gather dispatches `[]`, `[_]`, lanes by row length.
-    pub(super) fn substitute(&self, y: &mut [T], pinned: usize) {
+    pub(super) fn substitute<V: Batch<T>>(&self, y: &mut [V], pinned: usize) {
         let Self {
             headers,
             neighbors,
@@ -178,17 +178,17 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
                 [c] => {
                     debug_assert!(c == T::one(), "a lone coefficient takes the whole pivot");
                     let j = neighbors[span.start].index();
-                    y[j] = y[j] + pivot;
+                    y[j] = y[j].add(pivot);
                 }
                 _ => {
                     for (&j, &c) in neighbors[span.clone()].iter().zip(&coefficients[span]) {
-                        y[j.index()] = y[j.index()] + c * pivot;
+                        y[j.index()] = y[j.index()].add(pivot.mul(c));
                     }
                 }
             }
-            y[header.vertex.index()] = pivot * header.pivot_scale;
+            y[header.vertex.index()] = pivot.mul(header.pivot_scale);
         }
-        y[pinned] = T::zero();
+        y[pinned] = V::zero();
         for header in headers.iter().rev() {
             let span = end - header.len.index()..end;
             end = span.start;
@@ -197,21 +197,21 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
                 [] => {}
                 [c] => {
                     debug_assert!(c == T::one(), "a lone coefficient takes the whole pivot");
-                    y[v] = y[v] + y[neighbors[span.start].index()];
+                    y[v] = y[v].add(y[neighbors[span.start].index()]);
                 }
                 [.., retained] => {
-                    let mut lanes = [T::zero(); LANES];
-                    lanes[0] = retained * y[v];
+                    let mut lanes = [V::zero(); LANES];
+                    lanes[0] = y[v].mul(retained);
                     let mut js = neighbors[span.clone()].chunks_exact(LANES);
                     let mut cs = coefficients[span].chunks_exact(LANES);
                     for (js, cs) in js.by_ref().zip(cs.by_ref()) {
                         for lane in 0..LANES {
-                            lanes[lane] = lanes[lane] + cs[lane] * y[js[lane].index()];
+                            lanes[lane] = lanes[lane].add(y[js[lane].index()].mul(cs[lane]));
                         }
                     }
-                    let mut total = lanes.iter().fold(T::zero(), |sum, &lane| sum + lane);
+                    let mut total = lanes.iter().fold(V::zero(), |sum, &lane| sum.add(lane));
                     for (&j, &c) in js.remainder().iter().zip(cs.remainder()) {
-                        total = total + c * y[j.index()];
+                        total = total.add(y[j.index()].mul(c));
                     }
                     y[v] = total;
                 }

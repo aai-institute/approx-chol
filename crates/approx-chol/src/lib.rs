@@ -41,6 +41,7 @@ macro_rules! checked_serde {
     };
 }
 
+mod batch;
 mod error;
 mod factor;
 pub mod input;
@@ -52,6 +53,7 @@ use std::fmt::Debug;
 
 use num_traits::{float::TotalOrder, Float, PrimInt, Unsigned};
 
+use batch::Batch;
 pub use error::Error;
 use factor::Storage;
 #[cfg(feature = "serde")]
@@ -228,38 +230,47 @@ fn lane_sum<T: Real>(x: &[T], scale: f64) -> f64 {
 }
 
 /// `Σ term(i, x_i)` as [`Sum2`] gives it; serial below 20 terms, where the measured lane setup and merge cost more than they save.
-fn compensated_sum<T: Copy>(x: &[T], term: impl Fn(usize, T) -> f64) -> f64 {
+fn compensated_sum<X: Copy, W: Batch<f64>>(x: &[X], term: impl Fn(usize, X) -> W) -> W {
     // Outlined, so a short sum's caller spills no lane state.
     #[inline(never)]
-    fn lanes<T: Copy>(x: &[T], term: impl Fn(usize, T) -> f64) -> f64 {
+    fn lanes<X: Copy, W: Batch<f64>>(x: &[X], term: impl Fn(usize, X) -> W) -> W {
         Sum2::of(x, term).total()
     }
     if x.len() >= 20 {
         return lanes(x, term);
     }
     let terms = x.iter().enumerate().map(|(i, &x)| term(i, x));
-    let (sum, carry) = terms.fold((0.0, 0.0), |(sum, carry), x| {
+    let (sum, carry) = terms.fold((W::zero(), W::zero()), |(sum, carry), x| {
         let (sum, error) = two_sum(sum, x);
-        (sum, carry + error)
+        (sum, carry.add(error))
     });
-    sum + carry
+    sum.add(carry)
 }
 
 /// Ogita–Rump–Oishi Sum2 (SISC 26(6), 2005) in eight fixed TwoSum lanes: off by at most `ε|Σx| + (nε)² Σ|x|`.
-#[derive(Clone, Copy, Default)]
-struct Sum2 {
-    sums: [f64; 8],
-    carries: [f64; 8],
+#[derive(Clone, Copy)]
+struct Sum2<W = f64> {
+    sums: [W; 8],
+    carries: [W; 8],
 }
 
-impl Sum2 {
-    fn of<T: Copy>(x: &[T], term: impl Fn(usize, T) -> f64) -> Self {
+impl<W: Batch<f64>> Default for Sum2<W> {
+    fn default() -> Self {
+        Self {
+            sums: [W::zero(); 8],
+            carries: [W::zero(); 8],
+        }
+    }
+}
+
+impl<W: Batch<f64>> Sum2<W> {
+    fn of<X: Copy>(x: &[X], term: impl Fn(usize, X) -> W) -> Self {
         Self::default().plus(x, term)
     }
 
     // Inlined into a large caller, SLP leaves the lanes scalar.
     #[inline(never)]
-    fn plus<T: Copy>(mut self, x: &[T], term: impl Fn(usize, T) -> f64) -> Self {
+    fn plus<X: Copy>(mut self, x: &[X], term: impl Fn(usize, X) -> W) -> Self {
         let chunks = x.chunks_exact(8);
         let rest = chunks.remainder();
         for (k, chunk) in chunks.enumerate() {
@@ -269,7 +280,7 @@ impl Sum2 {
             let start = x.len() - rest.len();
             // Zero-padded rather than a shorter pass, so every lane stays in one vector register.
             self.add(array::from_fn(|lane| {
-                rest.get(lane).map_or(0.0, |&x| term(start + lane, x))
+                rest.get(lane).map_or(W::zero(), |&x| term(start + lane, x))
             }));
         }
         self
@@ -277,30 +288,32 @@ impl Sum2 {
 
     // If outlined, every chunk round-trips the lanes through memory.
     #[inline(always)]
-    fn add(&mut self, terms: [f64; 8]) {
+    fn add(&mut self, terms: [W; 8]) {
         let lanes = (self.sums.iter_mut().zip(&mut self.carries)).zip(terms);
         for ((sum, carry), x) in lanes {
             let error;
             (*sum, error) = two_sum(*sum, x);
-            *carry += error;
+            *carry = carry.add(error);
         }
     }
 
-    fn total(&self) -> f64 {
-        let first = (self.sums[0], 0.0);
+    fn total(&self) -> W {
+        let first = (self.sums[0], W::zero());
         let (sum, carry) = self.sums[1..].iter().fold(first, |(sum, carry), &x| {
             let (sum, error) = two_sum(sum, x);
-            (sum, carry + error)
+            (sum, carry.add(error))
         });
-        sum + (carry + self.carries.iter().sum::<f64>())
+        // From `−0`, as `Iterator::sum` starts, so a zero keeps its sign.
+        let carries = (self.carries.iter()).fold(W::zero().neg(), |total, &c| total.add(c));
+        sum.add(carry.add(carries))
     }
 }
 
 /// `a + b` and its rounding error, exactly (Knuth's TwoSum).
-fn two_sum(a: f64, b: f64) -> (f64, f64) {
-    let sum = a + b;
-    let b_part = sum - a;
-    (sum, (a - (sum - b_part)) + (b - b_part))
+fn two_sum<W: Batch<f64>>(a: W, b: W) -> (W, W) {
+    let sum = a.add(b);
+    let b_part = sum.sub(a);
+    (sum, (a.sub(sum.sub(b_part))).add(b.sub(b_part)))
 }
 
 #[cfg(test)]
