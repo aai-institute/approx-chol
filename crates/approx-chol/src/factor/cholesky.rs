@@ -4,9 +4,9 @@ mod dense;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use super::clique_tree::Multi;
-use super::sddm::{descend, lift, Sddm};
+use super::sddm::{descend, lifted, Sddm};
 use crate::sgdd::{FactorTail, Sheets};
-use crate::{Batch, Index, Real};
+use crate::{Batch, Index, MemStack, Real};
 use approximate::{ApproximateCholesky, CliqueTreeElimination};
 pub(super) use dense::Signed;
 
@@ -89,8 +89,8 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         self.sheets == Sheets::One && self.pinned.is_some()
     }
 
-    /// One sheet substitutes on `x` in place; two lift `x` to rows of their own.
-    pub(super) fn scratch_len(&self) -> usize {
+    /// Slots [`solve`](Self::solve) takes: none on one sheet, which substitutes on `x` in place; two lift `x` to rows of their own.
+    pub(super) fn scratch_slots(&self) -> usize {
         match self.sheets {
             Sheets::One => 0,
             Sheets::Two => self.n,
@@ -98,15 +98,14 @@ impl<T: Real, I: Index> Cholesky<T, I> {
     }
 
     /// Lifts to the sheets, fixes the gauge, substitutes, and descends.
-    pub(super) fn solve<V: Batch<T>>(&self, x: &mut [V], scratch: &mut [V]) {
+    pub(super) fn solve<V: Batch<T>>(&self, x: &mut [V], stack: &mut MemStack) {
         let triangular = &self.triangular;
         match self.sheets {
             Sheets::One => triangular.substitute(x, self.pinned),
             Sheets::Two => {
-                let rows = &mut scratch[..self.scratch_len()];
-                lift(x, rows);
-                triangular.substitute(rows, self.pinned);
-                descend(rows, x);
+                let (mut rows, _) = stack.make_with(self.scratch_slots(), |i| lifted(x, i));
+                triangular.substitute(&mut rows, self.pinned);
+                descend(&rows, x);
             }
         }
     }

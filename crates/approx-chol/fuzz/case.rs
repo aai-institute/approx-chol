@@ -3,9 +3,12 @@ use std::error::Error;
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
 };
-use approx_chol::{factorize_with, ApproxInverse, Config, InnerParallelism};
+use approx_chol::{factorize_with, ApproxInverse, Config, InnerParallelism, MemStack};
 use approx_chol::{Real, ScalingPolicy, SchurMode};
 use serde::{Deserialize, Serialize};
+
+#[path = "cells.rs"]
+mod cells;
 
 /// The precision is a variant, so one byte string never decodes as both.
 #[derive(Debug, Serialize, Deserialize)]
@@ -163,10 +166,14 @@ impl<T: Real> Case<T> {
         // NaN scratch reaches the solution if any slot is read before written.
         for block in &blocks {
             let mut local = vec![T::one(); block.vertices().len()];
-            let mut scratch = vec![T::nan(); block.scratch_len()];
+            let mut cells = cells::filled(block.scratch(), T::nan());
             block
-                .solve_local(&mut local, &mut scratch, InnerParallelism::Allow)
-                .expect("buffers of the block's own lengths are accepted");
+                .solve_local(
+                    &mut local,
+                    MemStack::new_any(&mut cells),
+                    InnerParallelism::Allow,
+                )
+                .expect("a stack of the block's own scratch is accepted");
             let agrees = (block.vertices().zip(&local))
                 .all(|(v, x)| solved[v].integer_decode() == x.integer_decode());
             assert!(agrees, "dirty scratch changed the solution");

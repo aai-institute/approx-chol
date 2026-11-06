@@ -1,4 +1,6 @@
-use approx_chol::{ApproxInverse, Config, CsrRef, ScalingPolicy, Sgdd, SolveError};
+use approx_chol::{
+    ApproxInverse, Config, CsrRef, MemBuffer, MemStack, ScalingPolicy, Sgdd, SolveError,
+};
 use num_traits::PrimInt;
 use numpy::{
     BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyReadonlyArray1,
@@ -278,8 +280,10 @@ impl PyApproxInverse {
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let b = right_hand_side(py, b)?;
         let b_slice = b.as_slice().expect("right_hand_side is contiguous");
-        let (mut x, mut scratch) = (b_slice.to_vec(), vec![0.0; self.inner.scratch_len()]);
-        let solved = (self.entries).detach(py, || self.inner.solve_in_place(&mut x, &mut scratch));
+        let (mut x, mut scratch) = (b_slice.to_vec(), MemBuffer::new(self.inner.scratch()));
+        let solved = (self.entries).detach(py, || {
+            (self.inner).solve_in_place(&mut x, MemStack::new(&mut scratch))
+        });
         solved.map_err(|e| error_to_py(&e))?;
         Ok(PyArray1::from_vec(py, x))
     }
@@ -287,7 +291,7 @@ impl PyApproxInverse {
     fn workspace(&self) -> PyWorkspace {
         PyWorkspace {
             x: Vec::new(),
-            scratch: vec![0.0; self.inner.scratch_len()],
+            scratch: MemBuffer::new(self.inner.scratch()),
         }
     }
 
@@ -323,11 +327,13 @@ impl PyApproxInverse {
         }
         let out = &mut out[..n];
         // Our own buffer: without the GIL, or on a free-threaded build, another thread may touch `out`.
-        let solved = (self.entries).detach(py, || self.inner.solve_in_place(x, scratch));
+        let solved = (self.entries).detach(py, || {
+            (self.inner).solve_in_place(x, MemStack::new(scratch))
+        });
         solved
             .map(|()| out.copy_from_slice(x))
             .map_err(|e| match e {
-                SolveError::ScratchTooShort { .. } => {
+                SolveError::Scratch => {
                     value_error("workspace is from a smaller factor; use this factor's workspace()")
                 }
                 e => error_to_py(&e),
@@ -340,7 +346,7 @@ impl PyApproxInverse {
 struct PyWorkspace {
     /// Grown by the first solve; `workspace()` allocates only `scratch`.
     x: Vec<f64>,
-    scratch: Vec<f64>,
+    scratch: MemBuffer,
 }
 
 #[pyfunction]

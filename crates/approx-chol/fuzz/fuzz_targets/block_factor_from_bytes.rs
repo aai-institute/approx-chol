@@ -1,7 +1,10 @@
 #![no_main]
 
-use approx_chol::{BlockFactor, InnerParallelism};
+use approx_chol::{BlockFactor, InnerParallelism, MemStack};
 use libfuzzer_sys::fuzz_target;
+
+#[path = "../cells.rs"]
+mod cells;
 
 // Postcard is how `within` persists its factor, so these bytes really do arrive from another process.
 fuzz_target!(|data: &[u8]| {
@@ -14,10 +17,14 @@ fuzz_target!(|data: &[u8]| {
             .collect();
         let solve = |fill: f64| {
             let mut x = b.clone();
-            let mut scratch = vec![fill; block.scratch_len()];
+            let mut cells = cells::filled(block.scratch(), fill);
             block
-                .solve_local(&mut x, &mut scratch, InnerParallelism::Allow)
-                .expect("buffers of the block's own lengths are accepted");
+                .solve_local(
+                    &mut x,
+                    MemStack::new_any(&mut cells),
+                    InnerParallelism::Allow,
+                )
+                .expect("a stack of the block's own scratch is accepted");
             x
         };
         // NaN scratch reaches the solution if any slot is read before written.

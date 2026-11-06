@@ -2,7 +2,8 @@
 mod bipartite;
 
 use approx_chol::{
-    factorize_complement, factorize_with, Config, InnerParallelism, ScalingPolicy, SchurMode, Side,
+    factorize_complement, factorize_with, Config, InnerParallelism, MemBuffer, MemStack,
+    ScalingPolicy, SchurMode, Side,
 };
 use bipartite::Bipartite;
 
@@ -58,8 +59,13 @@ fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> Vec<u64> {
     for block in factor.blocks() {
         for inner in [InnerParallelism::Allow, InnerParallelism::Forbid] {
             let mut x: Vec<f64> = block.vertices().map(|v| b[v]).collect();
-            let mut scratch = vec![0.0; block.scratch_len()];
-            block.solve_local(&mut x, &mut scratch, inner).unwrap();
+            block
+                .solve_local(
+                    &mut x,
+                    MemStack::new(&mut MemBuffer::new(block.scratch())),
+                    inner,
+                )
+                .unwrap();
             bits.extend(x.iter().map(|x| x.to_bits()));
         }
     }

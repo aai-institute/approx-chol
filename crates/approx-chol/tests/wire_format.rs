@@ -6,8 +6,8 @@ use std::collections::BTreeSet;
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
 use approx_chol::FACTOR_FORMAT_VERSION as FORMAT_VERSION;
 use approx_chol::{
-    factorize_with, ApproxInverse, BlockFactor, Config, InnerParallelism, ScalingOutcome,
-    ScalingPolicy,
+    factorize_with, ApproxInverse, BlockFactor, Config, InnerParallelism, MemBuffer, MemStack,
+    ScalingOutcome, ScalingPolicy,
 };
 use rstest::rstest;
 use serde::de::value::{Error, SeqDeserializer};
@@ -173,9 +173,12 @@ fn solve(blocks: &[BlockFactor], b: &[f64]) -> Vec<f64> {
     for block in blocks {
         let vertices: Vec<usize> = block.vertices().collect();
         let mut local: Vec<f64> = vertices.iter().map(|&v| b[v]).collect();
-        let mut scratch = vec![0.0; block.scratch_len()];
-        (block.solve_local(&mut local, &mut scratch, InnerParallelism::Forbid))
-            .expect("buffers fit");
+        (block.solve_local(
+            &mut local,
+            MemStack::new(&mut MemBuffer::new(block.scratch())),
+            InnerParallelism::Forbid,
+        ))
+        .expect("buffers fit");
         vertices.iter().zip(local).for_each(|(&v, xv)| x[v] = xv);
     }
     x
