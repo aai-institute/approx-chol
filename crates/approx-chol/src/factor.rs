@@ -21,7 +21,6 @@ use crate::sgdd::{Lift, Lone, Reduced, ReducedComplement, ReducedComponent, Sele
 use crate::storage::{widen, Adjacency, Grounded, Index, OffDiagonal, Real};
 use crate::ScalingReport;
 use block_elimination::BlockElimination;
-pub(crate) use cholesky::fits_u32;
 use cholesky::{Arm, Cholesky, Signed, Workspace};
 use schur::BipartiteBlock;
 use sddm::Sddm;
@@ -100,17 +99,15 @@ impl<T: Real> Factor<T> {
     pub(crate) fn build<I: Index, B: Summand<T, I>>(
         summands: Summands<B, I, T>,
         config: &Config,
-    ) -> Self
-    where
-        Storage<T>: From<Block<T, I>>,
-    {
+        store: fn(Block<T, I>) -> Storage<T>,
+    ) -> Self {
         let Summands {
             blocks: coupled,
             lone,
             dead,
         } = summands;
         let mut blocks = Vec::with_capacity(coupled.len() + lone.len());
-        let build = |reused: &mut _, block: B| BlockFactor(block.factor(config, reused).into());
+        let build = |reused: &mut _, block: B| BlockFactor(store(block.factor(config, reused)));
         let workspace = || Workspace::new(config.split());
         blocks.par_extend(coupled.into_par_iter().map_init(workspace, build));
         let isolated =
@@ -294,18 +291,6 @@ pub(crate) enum Storage<T> {
     U32(Block<T, u32>),
     U64(Block<T, u64>),
     Isolated(Isolated<T>),
-}
-
-impl<T> From<Block<T, u32>> for Storage<T> {
-    fn from(block: Block<T, u32>) -> Self {
-        Self::U32(block)
-    }
-}
-
-impl<T> From<Block<T, u64>> for Storage<T> {
-    fn from(block: Block<T, u64>) -> Self {
-        Self::U64(block)
-    }
 }
 
 impl<T: Real> BlockFactor<T> {
@@ -644,7 +629,7 @@ mod tests {
     use crate::ScalingPolicy;
 
     fn only_block(summands: Reduction<f64, u32>, config: &Config) -> Block<f64, u32> {
-        let mut blocks = Factor::build(summands, config).into_blocks();
+        let mut blocks = Factor::build(summands, config, Storage::U32).into_blocks();
         assert_eq!(blocks.len(), 1);
         match blocks.pop().expect("one block").0 {
             Storage::U32(block) => block,
@@ -759,10 +744,16 @@ mod storage {
             },
         ];
         for config in configs {
-            let narrow: Reduction<f64, u32> = Reduction::reduce(input, policy).expect("reduces");
-            let narrow = Factor::build(narrow, &config);
-            let wide: Reduction<f64, u64> = Reduction::reduce(input, policy).expect("reduces");
-            let wide = Factor::build(wide, &config);
+            let narrow = Factor::build(
+                Reduction::reduce(input, policy).expect("reduces"),
+                &config,
+                Storage::U32,
+            );
+            let wide = Factor::build(
+                Reduction::reduce(input, policy).expect("reduces"),
+                &config,
+                Storage::U64,
+            );
             assert!(matches!(wide.blocks[0].0, Storage::U64(_)));
             assert_eq!(bits(&narrow, &b), bits(&wide, &b), "{config:?}");
         }
