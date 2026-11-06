@@ -336,11 +336,11 @@ fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
     decode_scaled(&factor, stored, 2.0).expect_err("multipliers summing to two are corrupt");
 }
 
-/// An approximate step's pivot scale is positive, as every other stored pivot; a negated one solves indefinite.
+/// An approximate step's `D⁻¹` is positive, as every other stored pivot; a negated one solves indefinite.
 #[rstest]
 #[case::negative(-1.0)]
 #[case::zero(0.0)]
-fn an_approximate_pivot_scale_not_positive_is_corrupt(#[case] by: f64) {
+fn an_approximate_inverse_degree_not_positive_is_corrupt(#[case] by: f64) {
     let (a, b): (Vec<u32>, Vec<u32>) = (0..29u32).map(|v| (v, v + 1)).unzip();
     let path = Laplacian::new(30, &a, &b).unwrap();
     let config = Config {
@@ -348,7 +348,7 @@ fn an_approximate_pivot_scale_not_positive_is_corrupt(#[case] by: f64) {
         ..Config::default()
     };
     let factor: ApproxInverse = factorize_with(path, config, ScalingPolicy::default()).unwrap();
-    decode_scaled(&factor, "/pivot_scale", by).expect_err("a pivot scale not positive is corrupt");
+    decode_scaled(&factor, "/inverse_degree", by).expect_err("a D⁻¹ not positive is corrupt");
 }
 
 /// A factor holding an isolated vertex reads back from a self-describing format too.

@@ -115,8 +115,8 @@ struct StepHeader<T, I> {
     vertex: I,
     /// Below `n`, so `I` always holds it and a `u32` header stays 16 bytes.
     len: I,
-    /// `D⁻¹` over the retained fraction, `1/w`, as the backward multiplies by that fraction.
-    pivot_scale: T,
+    /// `D⁻¹ = 1/d`.
+    inverse_degree: T,
 }
 
 /// `LDLᵀ` with sampled columns, appended in pivot order: a serial recurrence, so shares are composed against the original pivot.
@@ -138,27 +138,18 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
         }
     }
 
-    /// The one site deriving the remainder's share.
-    fn push(
-        &mut self,
-        vertex: usize,
-        (weight, shares, remainder): (T, impl Iterator<Item = (I, f64)>, I),
-    ) {
+    /// Each share `w/d` and `D⁻¹` rounded once from `f64`: no share is derived from the others, so none cancels (#275, #302).
+    fn push(&mut self, vertex: usize, (d, shares): (f64, impl Iterator<Item = (I, f64)>)) {
         let start = self.neighbors.len();
-        // `f64` shares, as `f32` ones cancel past the last's `w/d` (#275); `1 − Σ` still errs ≤ m²·2⁻⁵³ relative (#302).
-        let mut retained = 1.0;
         for (neighbor, share) in shares {
             self.neighbors.push(neighbor);
             self.coefficients.push(narrow(share));
-            retained -= share;
         }
-        self.neighbors.push(remainder);
-        self.coefficients.push(narrow(retained));
         // Finite, as fill and `S` never weigh below `MIN_POSITIVE`.
         self.headers.push(StepHeader {
             vertex: I::from_index(vertex),
             len: I::from_index(self.neighbors.len() - start),
-            pivot_scale: T::one() / weight,
+            inverse_degree: narrow(1.0 / d),
         });
     }
 
@@ -186,7 +177,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
                     }
                 }
             }
-            y[header.vertex.index()] = pivot.mul(header.pivot_scale);
+            y[header.vertex.index()] = pivot.mul(header.inverse_degree);
         }
         y[pinned] = V::zero();
         for header in headers.iter().rev() {
@@ -199,9 +190,9 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
                     debug_assert!(c == T::one(), "a lone coefficient takes the whole pivot");
                     y[v] = y[v].add(y[neighbors[span.start].index()]);
                 }
-                [.., retained] => {
+                _ => {
                     let mut lanes = [V::zero(); LANES];
-                    lanes[0] = y[v].mul(retained);
+                    lanes[0] = y[v];
                     let mut js = neighbors[span.clone()].chunks_exact(LANES);
                     let mut cs = coefficients[span].chunks_exact(LANES);
                     for (js, cs) in js.by_ref().zip(cs.by_ref()) {
@@ -251,7 +242,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
                 .iter()
                 .all(|&j| j.index() < slots && !pivoted[j.index()]);
             let shares = &coefficients[start..end];
-            let pivot = header.pivot_scale.is_finite() && header.pivot_scale > T::zero();
+            let pivot = header.inverse_degree.is_finite() && header.inverse_degree > T::zero();
             let bounded = pivot && within_one(shares.iter().copied());
             if !later || !bounded || matches!(shares, [c] if *c != T::one()) {
                 return false;
@@ -311,20 +302,28 @@ mod tests {
         (worst, d)
     }
 
+    /// Worst relative error of every stored share, the heaviest's included, against `w_j / d`; `w_j` is neighbor `j`'s weight, `j ≥ 1`.
+    fn share_error<T: Real>(steps: &ApproximateCholesky<T, u32>, w: &[f64], d: f64) -> f64 {
+        assert_eq!(steps.coefficients.len(), w.len(), "every neighbor's share");
+        (steps.neighbors.iter().zip(&steps.coefficients))
+            .map(|(&j, &c)| (crate::widen(c) / (w[j as usize - 1] / d) - 1.0).abs())
+            .fold(0.0, f64::max)
+    }
+
     fn pivot_defects<C: Copies>(split: C, label: &str, w: &[f32]) -> Option<String> {
         let mut clique = CliqueTreeSampler::<f32, u32, C>::new(split);
         let mut fill = Fill::new();
-        let mut steps = ApproximateCholesky::with_capacity(w.len() + 1, w.len());
+        let mut steps = ApproximateCholesky::<f32, u32>::with_capacity(w.len() + 1, w.len());
         let draws = &mut Xoshiro256PlusPlus::seed_from_u64(0);
         let star = (1..).zip(w).map(|(j, &w)| (j, split, w));
         steps.push(0, clique.eliminate(draws, star, &mut fill));
         let (fill_off, d) = fill_error(w, &fill);
-        let retained = *steps.coefficients.last().expect("the remainder's share");
-        let inverse = f64::from(retained) * f64::from(steps.headers[0].pivot_scale);
-        let off = (inverse * d - 1.0).abs();
+        let off = (f64::from(steps.headers[0].inverse_degree) * d - 1.0).abs();
+        let w: Vec<f64> = w.iter().copied().map(f64::from).collect();
+        let shares_off = share_error(&steps, &w, d);
         let bounded = within_one(steps.coefficients.iter().copied());
-        (retained < 0.0 || off >= 1e-3 || fill_off >= 1e-5 || !bounded).then(|| {
-            format!("{label}: retained {retained:e}, D⁻¹ off {off:e}, fill off {fill_off:e}, Σ|c| ≤ 1 {bounded}")
+        (off >= 1e-6 || shares_off >= 1e-6 || fill_off >= 1e-5 || !bounded).then(|| {
+            format!("{label}: D⁻¹ off {off:e}, shares off {shares_off:e}, fill off {fill_off:e}, Σ|c| ≤ 1 {bounded}")
         })
     }
 
@@ -350,5 +349,19 @@ mod tests {
             }
         }
         assert!(defects.is_empty(), "{defects:#?}");
+    }
+
+    /// At degree 10⁵ the heaviest share as `1 − Σ` erred 1.9e-7 relative in `f64` (#306); as `w/d` it rounds once.
+    #[test]
+    fn a_high_degree_f64_star_rounds_each_share_once() {
+        let w = vec![0.1; 100_000];
+        let mut clique = CliqueTreeSampler::<f64, u32, Single>::new(Single);
+        let mut steps = ApproximateCholesky::<f64, u32>::with_capacity(w.len() + 1, w.len());
+        let star = (1..).zip(&w).map(|(j, &w)| (j, Single, w));
+        let draws = &mut Xoshiro256PlusPlus::seed_from_u64(0);
+        steps.push(0, clique.eliminate(draws, star, &mut Fill::new()));
+        let d = w.iter().sum();
+        let off = share_error(&steps, &w, d);
+        assert!(off <= f64::EPSILON, "a share off by {off:e}");
     }
 }
