@@ -1,9 +1,11 @@
 #[path = "common/bipartite.rs"]
 mod bipartite;
+#[path = "common/threads.rs"]
+mod threads;
 
 use approx_chol::{
-    factorize_complement, factorize_with, Config, InnerParallelism, MemBuffer, MemStack,
-    ScalingPolicy, SchurMode, Side,
+    factorize_complement, factorize_with, Config, MemBuffer, MemStack, ScalingPolicy, SchurMode,
+    Side,
 };
 use bipartite::Bipartite;
 
@@ -39,7 +41,7 @@ fn gram() -> Bipartite {
     }
 }
 
-/// `ApproxInverse::solve`, then each block's `solve_local` under `Allow` and `Forbid`, as bits; `kept` factors the complement.
+/// `ApproxInverse::solve` as bits, which each block's `solve_local` matches under each budget; `kept` factors the complement.
 fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> Vec<u64> {
     let gram = g.view();
     let factor = match kept {
@@ -49,24 +51,30 @@ fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> Vec<u64> {
     assert_eq!(factor.blocks().len(), GROUPS.len());
     assert!(
         kept.is_some() || factor.blocks().iter().any(|b| b.splittable_work() > 0),
-        "a block stores Cᵀ, so Allow splits its solve"
+        "a block stores Cᵀ, so a solve may split"
     );
     let b: Vec<f64> = (0..factor.n())
         .map(|i| ((i * 7919) % 101) as f64 / 50.0 - 1.0)
         .collect();
-    let x = factor.solve(&b).unwrap();
-    let mut bits: Vec<u64> = x.iter().map(|x| x.to_bits()).collect();
+    let bits: Vec<u64> = factor
+        .solve(&b)
+        .unwrap()
+        .iter()
+        .map(|x| x.to_bits())
+        .collect();
     for block in factor.blocks() {
-        for inner in [InnerParallelism::Allow, InnerParallelism::Forbid] {
+        for threads in threads::BUDGETS {
             let mut x: Vec<f64> = block.vertices().map(|v| b[v]).collect();
             block
                 .solve_local(
                     &mut x,
                     MemStack::new(&mut MemBuffer::new(block.scratch())),
-                    inner,
+                    threads,
                 )
                 .unwrap();
-            bits.extend(x.iter().map(|x| x.to_bits()));
+            let local: Vec<u64> = x.iter().map(|x| x.to_bits()).collect();
+            let solved: Vec<u64> = block.vertices().map(|v| bits[v]).collect();
+            assert_eq!(local, solved, "{threads:?}");
         }
     }
     bits

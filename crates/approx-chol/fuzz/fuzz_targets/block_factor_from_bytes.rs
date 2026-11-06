@@ -1,6 +1,6 @@
 #![no_main]
 
-use approx_chol::{BlockFactor, InnerParallelism, MemStack};
+use approx_chol::{BlockFactor, MemStack, Threads};
 use libfuzzer_sys::fuzz_target;
 
 #[path = "../cells.rs"]
@@ -19,11 +19,7 @@ fuzz_target!(|data: &[u8]| {
             let mut x = b.clone();
             let mut cells = cells::filled(block.scratch(), fill);
             block
-                .solve_local(
-                    &mut x,
-                    MemStack::new_any(&mut cells),
-                    InnerParallelism::Allow,
-                )
+                .solve_local(&mut x, MemStack::new_any(&mut cells), Threads::All)
                 .expect("a stack of the block's own scratch is accepted");
             x
         };

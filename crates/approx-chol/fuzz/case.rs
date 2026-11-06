@@ -3,7 +3,7 @@ use std::error::Error;
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
 };
-use approx_chol::{factorize_with, ApproxInverse, Config, InnerParallelism, MemStack};
+use approx_chol::{factorize_with, ApproxInverse, Config, MemStack, Threads};
 use approx_chol::{Real, ScalingPolicy, SchurMode};
 use serde::{Deserialize, Serialize};
 
@@ -168,11 +168,7 @@ impl<T: Real> Case<T> {
             let mut local = vec![T::one(); block.vertices().len()];
             let mut cells = cells::filled(block.scratch(), T::nan());
             block
-                .solve_local(
-                    &mut local,
-                    MemStack::new_any(&mut cells),
-                    InnerParallelism::Allow,
-                )
+                .solve_local(&mut local, MemStack::new_any(&mut cells), Threads::All)
                 .expect("a stack of the block's own scratch is accepted");
             let agrees = (block.vertices().zip(&local))
                 .all(|(v, x)| solved[v].integer_decode() == x.integer_decode());

@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Factor` is renamed `ApproxInverse`, in Rust and Python: it applies an approximate inverse, not a factor.
 - `ScalingReport` and `BlockFactor::scaling_report` are removed. `ApproxInverse::clamps` lists each component of `A` the reduction clamped past rounding, ordered by first vertex: its vertices in the input's numbering, also for a Schur build, its violation, and a `ScalingOutcome`: `Certified`, `Refuted` or `Unsettled`. `BlockFactor::grounding_unproven` states that a block floated or grounded on a scaling that did not settle. The format version is `0x4143_000A`.
 - `ApproxInverse::solve_in_place` and `BlockFactor::solve_local` take a `MemStack` that holds their `scratch()`, a `StackReq`; `scratch_len` is removed and `SolveError::ScratchTooShort` is `SolveError::Scratch`. `MemBuffer`, `MemStack` and `StackReq` are dyn-stack 0.13's, faer 0.24's, re-exported.
+- `InnerParallelism` is replaced by `Threads`: `BlockFactor::solve_local` takes `Threads::All`, every thread of the caller's rayon pool, or `Threads::Count(n)`, at most `n` threads at a time whatever the pool's size; `Count(1)` runs on the calling thread, as `Forbid` did. The solution's bits do not depend on it.
 
 ### Changed
 
