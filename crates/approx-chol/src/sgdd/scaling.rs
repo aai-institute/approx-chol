@@ -4,7 +4,8 @@ mod perron;
 use normalized::Normalized;
 use perron::{InverseIteration, Outcome, Shortfall};
 
-use crate::storage::{narrow, widen, Index, OffDiagonal, Real};
+use crate::storage::OffDiagonal;
+use crate::{narrow, widen, Index, Real};
 
 /// Certification policy for a dominance scaling; a deficit past rounding left at hand-over is clamped and reported.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -168,11 +169,6 @@ pub(super) fn null_scaling<T: Real>(
 /// How far, in `ε`, a row ratio `Σ_j|a_ij|f_j / (a_ii f_i)` may sit from `1`: a settled residual and the dominance slack's floor.
 pub(super) const RATIO_BAND: f64 = 16.0;
 
-/// [`RATIO_BAND`] in `T`'s rounding: a row ratio's settled residual, and a dropped surplus's ceiling relative to its diagonal.
-pub(super) fn ratio_band<T: Real>() -> f64 {
-    RATIO_BAND * widen(T::epsilon())
-}
-
 /// Scales from `N`'s Perron vector, iterated until `ρ < 1` is proven, pinned at `1`, or refuted past the slack.
 pub(super) fn relax<T: Real, I: Index>(
     off_diagonal: &OffDiagonal<T, I>,
@@ -183,7 +179,7 @@ pub(super) fn relax<T: Real, I: Index>(
     // A ratio over `k` positive terms rounds by `(k + 3)ε`: no bracket closes tighter.
     let rounding =
         (off_diagonal.degrees().into_iter().max().unwrap_or(0) + 3) as f64 * f64::EPSILON;
-    let settle_band = ratio_band::<T>().max(rounding);
+    let settle_band = (RATIO_BAND * widen(T::epsilon())).max(rounding);
     let slack = policy.slack(widen(T::epsilon()));
     let iteration = InverseIteration::new(&n, slack, settle_band, policy.max_iterations)?;
     let (y, shortfall) = iteration.run();

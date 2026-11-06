@@ -9,7 +9,7 @@ use crate::factor::clique_tree::{CliqueTreeSampler, Copies, Fill, Multi, Single}
 use crate::factor::sddm::Sddm;
 #[cfg(feature = "serde")]
 use crate::factor::within_one;
-use crate::storage::{narrow, Index, Real};
+use crate::{narrow, Index, Real};
 use graph::EliminationGraph;
 use ordering::MinDegreeOrder;
 

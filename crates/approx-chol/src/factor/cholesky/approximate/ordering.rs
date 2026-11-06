@@ -1,6 +1,6 @@
 use super::graph::EliminationGraph;
 use crate::factor::clique_tree::{Copies, Fill};
-use crate::storage::{Index, Real};
+use crate::{Index, Real};
 
 /// Bucket queue over live degree estimates (Julia's `ApproxCholPQ`).
 pub(super) struct MinDegreeOrder<I> {

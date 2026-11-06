@@ -1,4 +1,5 @@
-use crate::storage::{Index, Real, Rows};
+use crate::storage::Rows;
+use crate::{Index, Real};
 
 /// Every vertex once, components back to back.
 pub(in crate::sgdd) struct Partition<I> {

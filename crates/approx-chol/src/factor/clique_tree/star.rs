@@ -2,7 +2,7 @@ use core::cmp::Ordering;
 
 use super::copies::Copies;
 use super::CliqueTreeSampler;
-use crate::storage::{Index, Real};
+use crate::{Index, Real};
 
 /// Copies stored as the graph stores them, so a single-copy star pays no count or division.
 #[derive(Clone, Copy, Debug, PartialEq)]

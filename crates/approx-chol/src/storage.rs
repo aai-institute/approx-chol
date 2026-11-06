@@ -1,11 +1,6 @@
-//! Scalars and sparse storage.
+//! Sparse storage shapes every stage reads.
 
-mod grounded;
-mod real;
-
-pub(crate) use grounded::{Balance, Grounding, Sheets};
-pub use real::Real;
-pub(crate) use real::{compensated_sum, in_range, lane_sum, narrow, widen, Index, Sum2};
+use crate::{narrow, widen, Index, Real, Sum2};
 
 /// Compressed sparse rows.
 #[cfg_attr(
@@ -155,7 +150,7 @@ impl<T: Real, I: Index> Rows<T, I> {
         }
     }
 
-    /// `Σ|x|` in `f64` as [`tally_abs`] orders it, row `i`'s at `i`, column `j`'s at `offset + j`.
+    /// `Σ|x|` in `f64`, row `i`'s at `i`, column `j`'s at `offset + j`: a row lands whole, after any column sharing its slot.
     fn abs_sums(&self, offset: usize) -> Vec<f64> {
         let mut sums = vec![0.0; offset + self.n_cols];
         for i in 0..self.n_rows() {
@@ -173,39 +168,46 @@ impl<T: Real, I: Index> Rows<T, I> {
     }
 
     /// `x_ij ← r_i x_ij c_j` for signs `r`, `c`: exact, so never out of range.
-    fn signed(mut self, r: &[T], c: &[T]) -> Self {
-        for (i, &r_i) in r[..self.n_rows()].iter().enumerate() {
-            self.scale_row(i, r_i, c)
-                .expect("a sign moves no magnitude");
-        }
-        self
+    fn signed(self, r: &[T], c: &[T]) -> Self {
+        (self.scaled_seeing(r, c, |_, _, _| {})).expect("a sign moves no magnitude")
     }
 
     /// Scaled by `r` on rows and `c` on columns, with the new [`abs_sums`](Self::abs_sums) from the same pass.
-    fn scaled_abs_sums(mut self, r: &[T], c: &[T], offset: usize) -> Option<(Self, Vec<f64>)> {
+    fn scaled_abs_sums(self, r: &[T], c: &[T], offset: usize) -> Option<(Self, Vec<f64>)> {
         let mut sums = vec![0.0; offset + self.n_cols];
-        for (i, &r_i) in r[..self.n_rows()].iter().enumerate() {
-            self.scale_row(i, r_i, c)?;
-            tally_abs(&mut sums, i, self.row(i).map(|(j, &x)| (offset + j, x)));
-        }
-        Some((self, sums))
+        let mut row = (0, 0.0);
+        let scaled = self.scaled_seeing(r, c, |i, j, x| {
+            let x = widen(x.abs());
+            if i != row.0 {
+                sums[row.0] += row.1;
+                row = (i, 0.0);
+            }
+            row.1 += x;
+            sums[offset + j] += x;
+        })?;
+        sums[row.0] += row.1;
+        Some((scaled, sums))
     }
 
-    /// Row `i` scaled by `r_i` and `c`; `None` once an entry vanishes or leaves range.
     #[inline(always)]
-    fn scale_row(&mut self, i: usize, r_i: T, c: &[T]) -> Option<()> {
-        let span = self.ptrs[i]..self.ptrs[i + 1];
-        for (&j, x) in self.indices[span.clone()]
-            .iter()
-            .zip(&mut self.values[span])
-        {
-            let scaled = r_i * *x * c[j.index()];
-            if scaled == T::zero() || !in_range(scaled) {
-                return None;
+    fn scaled_seeing(
+        mut self,
+        r: &[T],
+        c: &[T],
+        mut seen: impl FnMut(usize, usize, T),
+    ) -> Option<Self> {
+        for (i, span) in self.ptrs.windows(2).enumerate() {
+            for p in span[0]..span[1] {
+                let j = self.indices[p].index();
+                let x = r[i] * self.values[p] * c[j];
+                if x == T::zero() || !crate::in_range(x) {
+                    return None;
+                }
+                self.values[p] = x;
+                seen(i, j, x);
             }
-            *x = scaled;
         }
-        Some(())
+        Some(self)
     }
 }
 
@@ -239,9 +241,9 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
         self.rows.row_len(i)
     }
 
-    /// `scale · Σ_ij |a_ij|` over both triangles, as a [`lane_sum`].
+    /// `scale · Σ_ij |a_ij|` over both triangles, as a [`crate::lane_sum`].
     pub(crate) fn scaled_abs_total(&self, scale: f64) -> f64 {
-        2.0 * lane_sum(&self.rows.values, scale)
+        2.0 * crate::lane_sum(&self.rows.values, scale)
     }
 
     /// Row `i`'s neighbors above it.

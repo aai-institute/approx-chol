@@ -1,6 +1,6 @@
 //! A column's weight `w_k` in `A = Σ_k w_k v_k v_kᵀ`.
 
-use crate::storage::{widen, Real};
+use crate::{widen, Real};
 
 /// Column `k`'s `w_k`: none, a Laplacian's edge weight, or the square of `V`'s column scale.
 #[derive(Clone, Copy, Debug)]

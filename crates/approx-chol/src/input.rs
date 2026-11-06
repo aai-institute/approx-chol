@@ -15,7 +15,7 @@ pub use width2::laplacian::{Laplacian, Sddm};
 pub(crate) use width2::Column;
 pub use width2::FactorWidth2;
 
-use crate::storage::Real;
+use crate::Real;
 
 /// A shape-checked index is non-negative and fits `usize`.
 fn index<I: PrimInt>(k: I) -> usize {

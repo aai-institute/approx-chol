@@ -4,12 +4,12 @@ use num_traits::PrimInt;
 
 use super::{Folded, Signed, Singularity, Surplus};
 use crate::input::{Column, FactorWidth2};
-use crate::sgdd::block::{IrreducibleBlock, ReduceError};
+use crate::sgdd::block::{Grounding, IrreducibleBlock, ReduceError};
 use crate::sgdd::congruence::Selection;
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components, Summands};
-use crate::sgdd::scaling::{self, ScalingPolicy};
+use crate::sgdd::scaling::{self, ScalingPolicy, RATIO_BAND};
 use crate::sgdd::Reduced;
-use crate::storage::{narrow, widen, Grounding, Index, Real};
+use crate::{narrow, widen, Index, Real};
 
 impl<T: Real, I: Index> Reduced<T, I> {
     /// `V` with values: scaled by its null vectors on demand, folded blocks dropping their rows for a pass over `V` that decides floating.
@@ -84,10 +84,10 @@ impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_,
     }
 
     fn states_ground(&self, folded: &Folded<T, I>) -> bool {
-        let band = scaling::ratio_band::<T>();
+        let epsilon = widen(T::epsilon());
         // A stated ground sums without cancellation, so the floor ignores degree.
         (folded.m.vertices().iter().zip(&folded.rows.diagonal))
-            .any(|(v, &d)| self.stated[v] > band * widen(d))
+            .any(|(v, &d)| self.stated[v] > RATIO_BAND * epsilon * widen(d))
     }
 
     fn certifies(&self, vertices: &Selection<I>) -> bool {

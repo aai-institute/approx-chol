@@ -4,7 +4,7 @@ use num_traits::PrimInt;
 
 use super::error::{check, check_ends, length, nonnegative, ViewError};
 use super::{Columns, FactorWidth2};
-use crate::storage::Real;
+use crate::Real;
 
 /// The Laplacian of an undirected graph on `n` vertices.
 #[derive(Clone, Copy, Debug)]

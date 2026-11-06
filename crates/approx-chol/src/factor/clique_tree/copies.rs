@@ -1,4 +1,4 @@
-use crate::storage::Real;
+use crate::Real;
 
 /// An edge's virtual copies; AC is AC2 at one copy per edge, so this trait is the whole difference.
 pub(in crate::factor) trait Copies: Copy + Send + Sync {

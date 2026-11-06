@@ -5,8 +5,9 @@ use rand::rngs::Xoshiro256PlusPlus;
 
 use super::clique_tree::Multi;
 use super::sddm::{descend, first_copy, lift, Sddm};
-use crate::sgdd::FactorTail;
-use crate::storage::{compensated_sum, narrow, widen, Index, Real, Sheets};
+use crate::narrow;
+use crate::sgdd::{FactorTail, Sheets};
+use crate::{widen, Index, Real};
 use approximate::{ApproximateCholesky, CliqueTreeElimination};
 pub(super) use dense::Signed;
 
@@ -115,7 +116,7 @@ impl<T: Real, I: Index> Cholesky<T, I> {
                 let rows = &mut scratch[..=x.len()];
                 let (ground, values) = rows.split_last_mut().expect("the ground's slot");
                 values.copy_from_slice(x);
-                let total = compensated_sum(x, |_, b| widen(b));
+                let total = crate::compensated_sum(x, |_, b| widen(b));
                 *ground = narrow::<T>(-total);
                 triangular.substitute(rows, self.pinned);
                 let (ground, values) = rows.split_last().expect("the ground's slot");

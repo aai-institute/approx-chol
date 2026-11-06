@@ -10,7 +10,7 @@ use num_traits::PrimInt;
 use self::error::{check_ends, length, ViewError};
 use self::weights::Weight;
 use super::index;
-use crate::storage::{widen, Index, Real};
+use crate::{widen, Index, Real};
 
 /// `V`'s columns and vertices, one variant per input type.
 #[derive(Clone, Copy, Debug)]
