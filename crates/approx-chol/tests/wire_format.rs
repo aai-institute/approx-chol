@@ -41,6 +41,7 @@ macro_rules! fixtures {
 
 fixtures! {
     Grounded => grounded,
+    GroundedApproximate => grounded_approximate,
     Isolated => isolated,
     Floating => floating,
     Cover => cover,
@@ -54,6 +55,15 @@ impl Fixture {
         match self {
             // Strictly dominant, so it reduces to a grounded block.
             Self::Grounded => Some(&[&[2.0, -1.0, 0.0], &[-1.0, 3.0, -1.0], &[0.0, -1.0, 2.0]]),
+            // A path grounded at every vertex: its ends share their pivots with the ground, and a tree factors exactly.
+            Self::GroundedApproximate => Some(&[
+                &[1.5, -1.0, 0.0, 0.0, 0.0, 0.0],
+                &[-1.0, 2.5, -1.0, 0.0, 0.0, 0.0],
+                &[0.0, -1.0, 2.5, -1.0, 0.0, 0.0],
+                &[0.0, 0.0, -1.0, 2.5, -1.0, 0.0],
+                &[0.0, 0.0, 0.0, -1.0, 2.5, -1.0],
+                &[0.0, 0.0, 0.0, 0.0, -1.0, 1.5],
+            ]),
             // Two vertices no entry couples, so each factor is its inverse pivot.
             Self::Isolated => Some(&[&[2.0, 0.0], &[0.0, 4.0]]),
             // Two interleaved floating components, so each block's vertices skip the other's.
@@ -95,7 +105,7 @@ impl Fixture {
                 exact_max_dim: 0,
                 ..Config::default()
             },
-            Self::Cover => Config {
+            Self::Cover | Self::GroundedApproximate => Config {
                 exact_max_dim: 0,
                 ..Config::default()
             },
@@ -106,9 +116,10 @@ impl Fixture {
     /// What the payload's `Debug` must show, so a fixture cannot quietly stop covering its kind.
     fn covers(self) -> &'static [&'static str] {
         match self {
-            Self::Grounded => &["grounded: true"],
+            Self::Grounded => &["pinned: None"],
+            Self::GroundedApproximate => &["pinned: None", "Approximate(", "len: 0"],
             Self::Isolated => &["Isolated("],
-            Self::Floating => &["sheets: One, grounded: false"],
+            Self::Floating => &["sheets: One, n: 2, pinned: Some("],
             Self::Cover => &["sheets: Two"],
             Self::DenseCover => &["sheets: Two", "Dense("],
             Self::SampledAc2 => &["elimination: Some", "Approximate("],
@@ -119,7 +130,7 @@ impl Fixture {
     fn built(self) -> &'static [&'static str] {
         match self {
             // 0.7.0 factored a small frustrated block densely on its cover; it is now dense on one sheet.
-            Self::DenseCover => &["sheets: One, grounded: true", "Dense("],
+            Self::DenseCover => &["sheets: One, n: 3, pinned: None", "Dense("],
             _ => self.covers(),
         }
     }

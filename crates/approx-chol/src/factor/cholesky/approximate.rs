@@ -6,9 +6,10 @@ mod ordering;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use crate::factor::clique_tree::{CliqueTreeSampler, Copies, Fill, Multi, Single};
-use crate::factor::sddm::Sddm;
+use crate::factor::sddm::{first_copy, Sddm};
 #[cfg(feature = "serde")]
 use crate::factor::within_one;
+use crate::sgdd::FactorTail;
 use crate::{narrow, Batch, Index, Real};
 use graph::EliminationGraph;
 use ordering::MinDegreeOrder;
@@ -29,16 +30,16 @@ impl<T: Real, I: Index> CliqueTreeElimination<T, I> {
         })
     }
 
-    /// Every vertex but one in minimum-degree order, each star replaced by a sampled clique tree; the last, `pin` when given, is the slot the solve zeroes.
+    /// Every vertex of `M` in minimum-degree order, each star replaced by a sampled clique tree, but a floating `M`'s last: returned as the slot the solve zeroes.
     pub(super) fn eliminate(
         &mut self,
         sddm: Sddm<T, I>,
         draws: Xoshiro256PlusPlus,
-        pin: Option<usize>,
-    ) -> (ApproximateCholesky<T, I>, usize) {
+        tail: Option<FactorTail<'_, T>>,
+    ) -> (ApproximateCholesky<T, I>, Option<usize>) {
         match &mut self.0 {
-            ByCopies::Ac(elimination) => elimination.eliminate(sddm, draws, pin),
-            ByCopies::Ac2(elimination) => elimination.eliminate(sddm, draws, pin),
+            ByCopies::Ac(elimination) => elimination.eliminate(sddm, draws, tail),
+            ByCopies::Ac2(elimination) => elimination.eliminate(sddm, draws, tail),
         }
     }
 }
@@ -67,26 +68,41 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         &mut self,
         sddm: Sddm<T, I>,
         mut draws: Xoshiro256PlusPlus,
-        pin: Option<usize>,
-    ) -> (ApproximateCholesky<T, I>, usize) {
+        tail: Option<FactorTail<'_, T>>,
+    ) -> (ApproximateCholesky<T, I>, Option<usize>) {
+        let slots = sddm.n();
+        let pin = match sddm.grounded() {
+            // The ground is never a pivot, so `Σs` is never formed: within unchanged, grids +0-8% PCG iterations at 1-10 grounds.
+            true => Some(slots),
+            // Floating, ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
+            false => {
+                (tail.filter(|f| f.spans_wide())).map(|f| first_copy(sddm.sheets(), f.largest()))
+            }
+        };
         self.graph.load(&sddm, self.split);
         drop(sddm);
         let (n, edge_ends) = (self.graph.n(), self.graph.edge_ends());
         self.order.load(&self.graph, self.split, pin, edge_ends);
         let mut steps = ApproximateCholesky::with_capacity(n, edge_ends);
-        self.pivot_all(&mut draws, &mut steps);
+        self.pivot_all(&mut draws, &mut steps, slots);
         // Doubling past the estimate otherwise retains up to 2x the entries (+30% on grids).
         steps.neighbors.shrink_to_fit();
         steps.coefficients.shrink_to_fit();
         let last = pin.unwrap_or_else(|| self.order.next_vertex());
+        let pinned = (last < slots).then_some(last);
         if n > graph::REUSED_UP_TO {
             *self = Self::new(self.split);
         }
-        (steps, last)
+        (steps, pinned)
     }
 
     #[inline(never)] // Inlined, its codegen moves with the buffer handling: grids +1-3%.
-    fn pivot_all(&mut self, draws: &mut Xoshiro256PlusPlus, steps: &mut ApproximateCholesky<T, I>) {
+    fn pivot_all(
+        &mut self,
+        draws: &mut Xoshiro256PlusPlus,
+        steps: &mut ApproximateCholesky<T, I>,
+        slots: usize,
+    ) {
         let Self {
             graph,
             clique,
@@ -98,7 +114,7 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
             let v = order.next_vertex();
             fill.clear();
             let column = clique.eliminate(draws, graph.neighbors(v), fill);
-            steps.push(v, column);
+            steps.push(v, column, slots);
             graph.eliminate_vertex(v);
             for &(u, w, copies, weight) in fill.iter() {
                 graph.push_pair(u, w, copies, weight);
@@ -115,8 +131,7 @@ struct StepHeader<T, I> {
     vertex: I,
     /// Below `n`, so `I` always holds it and a `u32` header stays 16 bytes.
     len: I,
-    /// `D⁻¹` over the retained fraction, `1/w`, as the backward multiplies by that fraction.
-    pivot_scale: T,
+    inverse_degree: T,
 }
 
 /// `LDLᵀ` with sampled columns, appended in pivot order: a serial recurrence, so shares are composed against the original pivot.
@@ -138,32 +153,28 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
         }
     }
 
-    /// The one site deriving the remainder's share.
+    /// Each share `w/d` and `D⁻¹` rounded once from `f64`: no share is derived from the others, so none cancels (#275, #302); only `M`'s `slots` take one, not the ground past them.
     fn push(
         &mut self,
         vertex: usize,
-        (weight, shares, remainder): (T, impl Iterator<Item = (I, f64)>, I),
+        (d, shares): (f64, impl Iterator<Item = (I, f64)>),
+        slots: usize,
     ) {
         let start = self.neighbors.len();
-        // `f64` shares, as `f32` ones cancel past the last's `w/d` (#275); `1 − Σ` still errs ≤ m²·2⁻⁵³ relative (#302).
-        let mut retained = 1.0;
-        for (neighbor, share) in shares {
+        for (neighbor, share) in shares.filter(|&(j, _)| j.index() < slots) {
             self.neighbors.push(neighbor);
             self.coefficients.push(narrow(share));
-            retained -= share;
         }
-        self.neighbors.push(remainder);
-        self.coefficients.push(narrow(retained));
         // Finite, as fill and `S` never weigh below `MIN_POSITIVE`.
         self.headers.push(StepHeader {
             vertex: I::from_index(vertex),
             len: I::from_index(self.neighbors.len() - start),
-            pivot_scale: T::one() / weight,
+            inverse_degree: narrow(1.0 / d),
         });
     }
 
-    /// Forward, zero the `pinned` entry, backward; the gather dispatches `[]`, `[_]`, lanes by row length.
-    pub(super) fn substitute<V: Batch<T>>(&self, y: &mut [V], pinned: usize) {
+    /// Forward, zero a floating factor's `pinned` slot, backward; the gather dispatches `[]`, `[_]`, lanes by row length.
+    pub(super) fn substitute<V: Batch<T>>(&self, y: &mut [V], pinned: Option<usize>) {
         let Self {
             headers,
             neighbors,
@@ -175,8 +186,8 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
             end = span.end;
             let pivot = y[header.vertex.index()];
             match coefficients[span.clone()] {
-                [c] => {
-                    debug_assert!(c == T::one(), "a lone coefficient takes the whole pivot");
+                // A lone neighbor takes the whole pivot unless the ground shared it; a multiply on this serial chain cost paths +24%.
+                [c] if c == T::one() => {
                     let j = neighbors[span.start].index();
                     y[j] = y[j].add(pivot);
                 }
@@ -186,22 +197,22 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
                     }
                 }
             }
-            y[header.vertex.index()] = pivot.mul(header.pivot_scale);
+            y[header.vertex.index()] = pivot.mul(header.inverse_degree);
         }
-        y[pinned] = V::zero();
+        if let Some(pinned) = pinned {
+            y[pinned] = V::zero();
+        }
         for header in headers.iter().rev() {
             let span = end - header.len.index()..end;
             end = span.start;
             let v = header.vertex.index();
             match coefficients[span.clone()] {
                 [] => {}
-                [c] => {
-                    debug_assert!(c == T::one(), "a lone coefficient takes the whole pivot");
-                    y[v] = y[v].add(y[neighbors[span.start].index()]);
-                }
-                [.., retained] => {
+                [c] if c == T::one() => y[v] = y[v].add(y[neighbors[span.start].index()]),
+                [c] => y[v] = y[v].add(y[neighbors[span.start].index()].mul(c)),
+                _ => {
                     let mut lanes = [V::zero(); LANES];
-                    lanes[0] = y[v].mul(retained);
+                    lanes[0] = y[v];
                     let mut js = neighbors[span.clone()].chunks_exact(LANES);
                     let mut cs = coefficients[span].chunks_exact(LANES);
                     for (js, cs) in js.by_ref().zip(cs.by_ref()) {
@@ -225,14 +236,16 @@ const LANES: usize = 4;
 
 #[cfg(feature = "serde")]
 impl<T: Real, I: Index> ApproximateCholesky<T, I> {
-    /// Each slot but `pin` pivots once, giving only to slots not yet pivoted, shares of at most its whole.
-    pub(super) fn fits(&self, slots: usize, pin: usize) -> bool {
+    /// Each slot but `pin` pivots once, giving only to slots not yet pivoted, nonnegative shares of at most its whole.
+    pub(super) fn fits(&self, slots: usize, pin: Option<usize>) -> bool {
         let Self {
             headers,
             neighbors,
             coefficients,
         } = self;
-        if headers.len() + 1 != slots || neighbors.len() != coefficients.len() {
+        if headers.len() + usize::from(pin.is_some()) != slots
+            || neighbors.len() != coefficients.len()
+        {
             return false;
         }
         let mut pivoted = vec![false; slots];
@@ -240,7 +253,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
         for header in headers {
             let (v, start) = (header.vertex.index(), end);
             end = end.saturating_add(header.len.index());
-            if v == pin
+            if Some(v) == pin
                 || v >= slots
                 || std::mem::replace(&mut pivoted[v], true)
                 || end > neighbors.len()
@@ -251,9 +264,9 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
                 .iter()
                 .all(|&j| j.index() < slots && !pivoted[j.index()]);
             let shares = &coefficients[start..end];
-            let pivot = header.pivot_scale.is_finite() && header.pivot_scale > T::zero();
-            let bounded = pivot && within_one(shares.iter().copied());
-            if !later || !bounded || matches!(shares, [c] if *c != T::one()) {
+            let pivot = header.inverse_degree.is_finite() && header.inverse_degree > T::zero();
+            let nonnegative = shares.iter().all(|&c| c >= T::zero());
+            if !later || !pivot || !nonnegative || !within_one(shares.iter().copied()) {
                 return false;
             }
         }
@@ -311,20 +324,28 @@ mod tests {
         (worst, d)
     }
 
+    /// Worst relative error of every stored share, the heaviest's included, against `w_j / d`; `w_j` is neighbor `j`'s weight, `j ≥ 1`.
+    fn share_error<T: Real>(steps: &ApproximateCholesky<T, u32>, w: &[f64], d: f64) -> f64 {
+        assert_eq!(steps.coefficients.len(), w.len(), "every neighbor's share");
+        (steps.neighbors.iter().zip(&steps.coefficients))
+            .map(|(&j, &c)| (crate::widen(c) / (w[j as usize - 1] / d) - 1.0).abs())
+            .fold(0.0, f64::max)
+    }
+
     fn pivot_defects<C: Copies>(split: C, label: &str, w: &[f32]) -> Option<String> {
         let mut clique = CliqueTreeSampler::<f32, u32, C>::new(split);
         let mut fill = Fill::new();
-        let mut steps = ApproximateCholesky::with_capacity(w.len() + 1, w.len());
+        let mut steps = ApproximateCholesky::<f32, u32>::with_capacity(w.len() + 1, w.len());
         let draws = &mut Xoshiro256PlusPlus::seed_from_u64(0);
         let star = (1..).zip(w).map(|(j, &w)| (j, split, w));
-        steps.push(0, clique.eliminate(draws, star, &mut fill));
+        steps.push(0, clique.eliminate(draws, star, &mut fill), w.len() + 1);
         let (fill_off, d) = fill_error(w, &fill);
-        let retained = *steps.coefficients.last().expect("the remainder's share");
-        let inverse = f64::from(retained) * f64::from(steps.headers[0].pivot_scale);
-        let off = (inverse * d - 1.0).abs();
+        let off = (f64::from(steps.headers[0].inverse_degree) * d - 1.0).abs();
+        let w: Vec<f64> = w.iter().copied().map(f64::from).collect();
+        let shares_off = share_error(&steps, &w, d);
         let bounded = within_one(steps.coefficients.iter().copied());
-        (retained < 0.0 || off >= 1e-3 || fill_off >= 1e-5 || !bounded).then(|| {
-            format!("{label}: retained {retained:e}, D⁻¹ off {off:e}, fill off {fill_off:e}, Σ|c| ≤ 1 {bounded}")
+        (off >= 1e-6 || shares_off >= 1e-6 || fill_off >= 1e-5 || !bounded).then(|| {
+            format!("{label}: D⁻¹ off {off:e}, shares off {shares_off:e}, fill off {fill_off:e}, Σ|c| ≤ 1 {bounded}")
         })
     }
 
@@ -350,5 +371,23 @@ mod tests {
             }
         }
         assert!(defects.is_empty(), "{defects:#?}");
+    }
+
+    /// At degree 10⁵ the heaviest share as `1 − Σ` erred 1.9e-7 relative in `f64` (#306); as `w/d` it rounds once.
+    #[test]
+    fn a_high_degree_f64_star_rounds_each_share_once() {
+        let w = vec![0.1; 100_000];
+        let mut clique = CliqueTreeSampler::<f64, u32, Single>::new(Single);
+        let mut steps = ApproximateCholesky::<f64, u32>::with_capacity(w.len() + 1, w.len());
+        let star = (1..).zip(&w).map(|(j, &w)| (j, Single, w));
+        let draws = &mut Xoshiro256PlusPlus::seed_from_u64(0);
+        steps.push(
+            0,
+            clique.eliminate(draws, star, &mut Fill::new()),
+            w.len() + 1,
+        );
+        let d = w.iter().sum();
+        let off = share_error(&steps, &w, d);
+        assert!(off <= f64::EPSILON, "a share off by {off:e}");
     }
 }

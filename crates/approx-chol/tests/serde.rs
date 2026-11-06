@@ -320,6 +320,13 @@ fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
     #[case] stored: &str,
     #[case] exact_max_dim: usize,
 ) {
+    let factor = grounded_grid(exact_max_dim);
+    decode_scaled(&factor, stored, 1.0).expect("a stored Cholesky decodes");
+    decode_scaled(&factor, stored, 2.0).expect_err("multipliers summing to two are corrupt");
+}
+
+/// A 4×4 grid grounded at a corner.
+fn grounded_grid(exact_max_dim: usize) -> ApproxInverse {
     let (a, b): (Vec<u32>, Vec<u32>) = (0..16u32)
         .flat_map(|v| [(v, v + 1), (v, v + 4)])
         .filter(|&(v, w)| w < 16 && (w != v + 1 || w % 4 != 0))
@@ -331,16 +338,21 @@ fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
         exact_max_dim,
         ..Config::default()
     };
-    let factor = factorize_with(grid, config, ScalingPolicy::default()).unwrap();
-    decode_scaled(&factor, stored, 1.0).expect("a stored Cholesky decodes");
-    decode_scaled(&factor, stored, 2.0).expect_err("multipliers summing to two are corrupt");
+    factorize_with(grid, config, ScalingPolicy::default()).unwrap()
 }
 
-/// An approximate step's pivot scale is positive, as every other stored pivot; a negated one solves indefinite.
+/// An approximate step's shares are weights over its degree; negated, they still bound `Σ|c| ≤ 1` but solve another matrix.
+#[test]
+fn an_approximate_negative_share_is_corrupt() {
+    decode_scaled(&grounded_grid(0), "/coefficients", -1.0)
+        .expect_err("a negative share is corrupt");
+}
+
+/// An approximate step's `D⁻¹` is positive, as every other stored pivot; a negated one solves indefinite.
 #[rstest]
 #[case::negative(-1.0)]
 #[case::zero(0.0)]
-fn an_approximate_pivot_scale_not_positive_is_corrupt(#[case] by: f64) {
+fn an_approximate_inverse_degree_not_positive_is_corrupt(#[case] by: f64) {
     let (a, b): (Vec<u32>, Vec<u32>) = (0..29u32).map(|v| (v, v + 1)).unzip();
     let path = Laplacian::new(30, &a, &b).unwrap();
     let config = Config {
@@ -348,7 +360,7 @@ fn an_approximate_pivot_scale_not_positive_is_corrupt(#[case] by: f64) {
         ..Config::default()
     };
     let factor: ApproxInverse = factorize_with(path, config, ScalingPolicy::default()).unwrap();
-    decode_scaled(&factor, "/pivot_scale", by).expect_err("a pivot scale not positive is corrupt");
+    decode_scaled(&factor, "/inverse_degree", by).expect_err("a D⁻¹ not positive is corrupt");
 }
 
 /// A factor holding an isolated vertex reads back from a self-describing format too.
@@ -409,17 +421,16 @@ fn empty_scales_are_corrupt() {
     serde_json::from_value::<ApproxInverse>(v).expect_err("empty scales are corrupt");
 }
 
-/// A forged u64 step length past the stored neighbors is a decode error, never an overflow.
-#[test]
-fn an_approximate_step_length_past_its_neighbors_is_corrupt() {
+/// A unit path `3 → 2 → 1`, gauge `0`, its middle step `len` long.
+fn path_block_bytes(len: u64) -> Vec<u8> {
     let mut bytes = Vec::new();
     varint(u64::from(approx_chol::FACTOR_FORMAT_VERSION), &mut bytes);
     bytes.push(1); // Storage::U64
     bytes.extend([4, 0, 1, 2, 3, 0]); // vertices, Identity
     bytes.push(0); // no elimination
-    bytes.extend([0, 0, 4, 0, 1]); // One, floating, n = 4, pinned 0, Approximate
+    bytes.extend([0, 4, 1, 0, 1]); // One, n = 4, pinned Some(0), Approximate
     bytes.push(3);
-    for (vertex, len) in [(3, 1), (2, u64::MAX), (1, 1)] {
+    for (vertex, len) in [(3, 1), (2, len), (1, 1)] {
         varint(vertex, &mut bytes);
         varint(len, &mut bytes);
         bytes.extend(1.0f64.to_le_bytes());
@@ -427,7 +438,15 @@ fn an_approximate_step_length_past_its_neighbors_is_corrupt() {
     bytes.extend([3, 2, 1, 0, 3]);
     (0..3).for_each(|_| bytes.extend(1.0f64.to_le_bytes()));
     bytes.push(0); // no report
-    postcard::from_bytes::<BlockFactor>(&bytes).expect_err("a step past its neighbors is corrupt");
+    bytes
+}
+
+/// A forged u64 step length past the stored neighbors is a decode error, never an overflow; the same bytes at its true length decode.
+#[test]
+fn an_approximate_step_length_past_its_neighbors_is_corrupt() {
+    postcard::from_bytes::<BlockFactor>(&path_block_bytes(1)).expect("the true length decodes");
+    postcard::from_bytes::<BlockFactor>(&path_block_bytes(u64::MAX))
+        .expect_err("a step past its neighbors is corrupt");
 }
 
 /// An isolated vertex's inverse pivot, `0.5` here, scaled outside what a stored pivot inverts to is corrupt.

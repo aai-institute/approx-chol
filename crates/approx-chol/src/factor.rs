@@ -142,7 +142,7 @@ impl<T: Real> ApproxInverse<T> {
         self.n
     }
 
-    /// Total elimination steps: every slot but one per block, whichever arm factored it.
+    /// Total elimination steps: every slot but a floating block's gauge, whichever arm factored it.
     pub fn n_steps(&self) -> usize {
         self.blocks
             .iter()
@@ -398,7 +398,7 @@ impl<T: Real, I: Index> Block<T, I> {
         self.restriction.vertices()
     }
 
-    /// Every slot but one, eliminated ones and the Cholesky's alike.
+    /// Every slot but a floating block's gauge, eliminated ones and the Cholesky's alike.
     fn n_steps(&self) -> usize {
         let eliminated = (self.elimination.as_deref()).map_or(0, BlockElimination::n_eliminated);
         eliminated + self.cholesky.n_steps()

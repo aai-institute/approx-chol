@@ -1,7 +1,7 @@
 //! Exact Cholesky of a small `M` by GTH elimination: every pivot a sum of nonnegative terms, so none cancels or fails.
 
 use crate::factor::within_one;
-use crate::sgdd::{Grounding, Sheets};
+use crate::sgdd::{FactorTail, Grounding, Sheets};
 use crate::storage::UpperAdjacency;
 use crate::{Batch, Index, Real};
 
@@ -39,22 +39,23 @@ impl<T: Real, I: Index> Signed<T, I> {
     }
 }
 
-/// GTH on the packed lower `M`, the surplus as a last row `−s`, pinned slot last and dropped (`d − Σl²` reached 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more time); returns unit lower `L` with `D⁻¹` on its diagonal.
+/// GTH on the packed lower `M`, the surplus as a last row `−s`, a floating `M`'s gauge moved last, both dropped (`d − Σl²` reached 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more time); returns unit lower `L` with `D⁻¹` on its diagonal, and the gauge.
 pub(super) fn factor<T: Real, I: Index>(
     signed: &Signed<T, I>,
-    pin: usize,
+    tail: Option<FactorTail<'_, T>>,
     values: &mut Vec<T>,
-) -> Vec<T> {
+) -> (Vec<T>, Option<usize>) {
     let n = signed.n();
-    let m = n - usize::from(signed.floats());
+    let pin = (signed.floats()).then(|| tail.map_or(n - 1, FactorTail::largest));
+    let m = n - usize::from(pin.is_some());
     let packed = row_start(m + 1);
     // `D⁻¹` trails the rows, contiguous as every row's fill reads it: strided in the diagonal measured +12-18% at n 16-24.
     values.clear();
     values.resize(packed + m, T::zero());
-    let slot = |i: usize| match i {
-        i if i == pin => m,
-        i if i == m => pin,
-        i => i,
+    let slot = |i: usize| match pin {
+        Some(pin) if i == pin => m,
+        Some(pin) if i == m => pin,
+        _ => i,
     };
     let mut entry = |k: usize, j: usize, a: T| {
         let (k, j) = (slot(k), slot(j));
@@ -82,7 +83,7 @@ pub(super) fn factor<T: Real, I: Index>(
         columns_within_one(&factor, m),
         "an |L| column sums past one"
     );
-    factor
+    (factor, pin)
 }
 
 /// Left-looking GTH over `m` columns into the inverse pivots, the surplus row `m` updated as any other; `SIGNED` entries may be positive, each update that shrinks one adding `2 min(|a|, |t|)` to both its rows' surplus, as `|a| + |t| − |a − t|` would by cancellation.
@@ -137,17 +138,22 @@ fn row_start(row: usize) -> usize {
     row * (row + 1) / 2
 }
 
-/// Forward, backward on a packed factor, and the pinned slot, moved last, zeroed.
-pub(super) fn substitute<T: Real, V: Batch<T>>(factor: &[T], pin: usize, values: &mut [V]) {
+/// Forward, backward on a packed factor; a floating factor's `pin`, moved last, zeroed.
+pub(super) fn substitute<T: Real, V: Batch<T>>(factor: &[T], pin: Option<usize>, values: &mut [V]) {
+    let Some(pin) = pin else {
+        return sweeps(factor, values);
+    };
     let last = values.len() - 1;
     values.swap(pin, last);
     let (pinned, solved) = values.split_last_mut().expect("the pinned slot");
+    sweeps(factor, solved);
+    *pinned = V::zero();
+    values.swap(pin, last);
+}
+
+fn sweeps<T: Real, V: Batch<T>>(factor: &[T], solved: &mut [V]) {
     let m = solved.len();
-    debug_assert_eq!(
-        row_start(m),
-        factor.len(),
-        "one value per row and the pinned slot"
-    );
+    debug_assert_eq!(row_start(m), factor.len(), "one value per row");
     for row in 0..m {
         let entries = &factor[row_start(row)..row_start(row) + row];
         let mut value = solved[row];
@@ -164,17 +170,15 @@ pub(super) fn substitute<T: Real, V: Batch<T>>(factor: &[T], pin: usize, values:
         }
         solved[row] = value;
     }
-    *pinned = V::zero();
-    values.swap(pin, last);
 }
 
 #[cfg(feature = "serde")]
-/// A packed factor decoded from bytes: one row per slot but the pinned one, finite, positive pivots.
-pub(super) fn fits<T: Real>(factor: &[T], slots: usize) -> bool {
-    let Some(m) = slots.checked_sub(1) else {
-        return false;
-    };
-    m.checked_mul(slots).map(|p| p / 2) == Some(factor.len())
+/// A packed factor decoded from bytes: `m` rows, finite, positive pivots.
+pub(super) fn fits<T: Real>(factor: &[T], m: usize) -> bool {
+    (m.checked_add(1))
+        .and_then(|slots| m.checked_mul(slots))
+        .map(|p| p / 2)
+        == Some(factor.len())
         && factor.iter().all(|v| v.is_finite())
         && (0..m).all(|row| factor[row_start(row) + row] > T::zero())
         && columns_within_one(factor, m)

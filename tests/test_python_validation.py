@@ -6,7 +6,7 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as sla
 
 import approx_chol
-from tests._laplacians import grid_laplacian, grid_sddm
+from tests._laplacians import grid_laplacian, frustrated_grid
 
 
 def _base_csr():
@@ -234,8 +234,8 @@ def test_an_all_zero_row_factors_and_solves_to_zero():
 
 def test_a_workspace_from_a_smaller_factor_raises():
     approximate = approx_chol.Config(exact_max_dim=0)
-    small = approx_chol.factorize(grid_sddm(2, 2), approximate)
-    large = approx_chol.factorize(grid_sddm(16, 16), approximate)
+    small = approx_chol.factorize(frustrated_grid(2, 2), approximate)
+    large = approx_chol.factorize(frustrated_grid(16, 16), approximate)
     b = np.zeros(large.n)
     with pytest.raises(ValueError, match="workspace is from a smaller factor"):
         large.solve_into(b, np.empty_like(b), small.workspace())

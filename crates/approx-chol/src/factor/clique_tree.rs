@@ -45,22 +45,19 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         }
     }
 
-    /// Samples the merged star's clique tree into `fill` as `w_i (S_{>i} / d)`; the last neighbor absorbs what the shares leave.
+    /// Samples the merged star's clique tree into `fill` as `w_i (S_{>i} / d)`; returns `d` and each neighbor's share `w/d`.
     pub(super) fn eliminate(
         &mut self,
         draws: &mut Xoshiro256PlusPlus,
         neighbors: impl Iterator<Item = (I, C, T)>,
         fill: &mut Fill<T, I, C>,
-    ) -> (T, impl Iterator<Item = (I, f64)> + '_, I) {
+    ) -> (f64, impl Iterator<Item = (I, f64)> + '_) {
         self.refill(neighbors);
-        self.sample(draws, |edge| fill.push(edge));
-        let (last, rest) =
-            (self.entries.split_last()).expect("a pivot of a connected graph has a neighbor");
-        let d = suffix_past(&self.cumsum, None);
-        let shares = rest
-            .iter()
-            .map(move |entry| (entry.neighbor, widen(entry.weight) / d));
-        (last.weight, shares, last.neighbor)
+        let d = (self.sample(draws, |edge| fill.push(edge)))
+            .expect("a pivot of a connected graph has a neighbor");
+        let shares =
+            (self.entries.iter()).map(move |entry| (entry.neighbor, widen(entry.weight) / d));
+        (d, shares)
     }
 
     /// A neighborhood with no duplicate, as a row of `C` is, consuming its star's own `draws` so no task boundary moves one; every neighbor splits alike, so raw weights sort once; fill only, as the complement holds its pivots.
@@ -74,12 +71,14 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         self.sample(&mut rng, fill);
     }
 
-    /// Prepares the star's CDF, then fills `per_copy(w_i (S_{>i} / d))` per copy of each entry but the heaviest, each copy drawing past it.
-    fn sample(&mut self, rng: &mut Xoshiro256PlusPlus, mut fill: impl FnMut((I, I, C, T))) {
+    /// Prepares the star's CDF, then fills `per_copy(w_i (S_{>i} / d))` per copy of each entry but the heaviest, each copy drawing past it; `d`, unless the star is empty.
+    fn sample(
+        &mut self,
+        rng: &mut Xoshiro256PlusPlus,
+        mut fill: impl FnMut((I, I, C, T)),
+    ) -> Option<f64> {
         let entries = &self.entries;
-        let Some((_, rest)) = entries.split_last() else {
-            return;
-        };
+        let (_, rest) = entries.split_last()?;
         self.cumsum.clear();
         let mut acc = 0.0;
         for entry in entries {
@@ -106,5 +105,6 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
                 ));
             }
         }
+        Some(d)
     }
 }
