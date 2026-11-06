@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
-use crate::{compensated_sum, widen, Batch, Index, Real};
+use crate::{compensated_sum, widen, Batch, Index, MemStack, Real};
 
 /// `R = F Pᵀ`, so `M = R A Rᵀ`: `Pᵀ` picks the block's vertices of `A`, or of `S` once tailed, `F` is the congruence.
 #[cfg_attr(
@@ -136,27 +136,26 @@ impl<I: Index> Selection<I> {
         }
     }
 
-    /// Workspace [`on_local`](Self::on_local) keeps ahead of what it passes on: room to gather, none for a range.
-    pub(crate) fn gather_len(&self) -> usize {
+    /// Slots [`on_local`](Self::on_local) takes from its stack before passing the rest on: room to gather, none for a range.
+    pub(crate) fn gather_slots(&self) -> usize {
         match self {
             Self::Range(_) => 0,
             Self::Listed(vertices) => vertices.len(),
         }
     }
 
-    /// Runs `solve` on `Pᵀ x` and the rest of `scratch`, then sets the block's vertices of `x` to the result.
-    pub(crate) fn on_local<T: Copy>(
+    /// Runs `solve` on `Pᵀ x` and the rest of `stack`, then sets the block's vertices of `x` to the result.
+    pub(crate) fn on_local<V: Copy>(
         &self,
-        x: &mut [T],
-        scratch: &mut [T],
-        solve: impl FnOnce(&mut [T], &mut [T]),
+        x: &mut [V],
+        stack: &mut MemStack,
+        solve: impl FnOnce(&mut [V], &mut MemStack),
     ) {
         match self {
-            Self::Range(range) => solve(&mut x[range.clone()], scratch),
+            Self::Range(range) => solve(&mut x[range.clone()], stack),
             Self::Listed(vertices) => {
-                let (local, rest) = scratch.split_at_mut(self.gather_len());
-                (local.iter_mut().zip(vertices.iter())).for_each(|(v, &i)| *v = x[i.index()]);
-                solve(local, rest);
+                let (mut local, rest) = stack.make_with(vertices.len(), |k| x[vertices[k].index()]);
+                solve(&mut local, rest);
                 (local.iter().zip(vertices.iter())).for_each(|(&v, &i)| x[i.index()] = v);
             }
         }

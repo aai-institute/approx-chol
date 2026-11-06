@@ -322,15 +322,15 @@ pub(super) fn first_copy(sheets: Sheets, k: usize) -> usize {
     }
 }
 
-/// `[x; −x]` interleaved by vertex: the lift a cover solves on.
-pub(super) fn lift<T: Real, V: Batch<T>>(x: &[V], rows: &mut [V]) {
-    (rows.chunks_exact_mut(2).zip(x)).for_each(|(r, &v)| {
-        r[0] = v;
-        r[1] = v.neg();
-    });
+/// Slot `i` of `[x; −x]` interleaved by vertex: the lift a cover solves on.
+pub(super) fn lifted<T: Real, V: Batch<T>>(x: &[V], i: usize) -> V {
+    match i % 2 {
+        0 => x[i / 2],
+        _ => x[i / 2].neg(),
+    }
 }
 
-/// Half the sheets' difference back into `x`, undoing [`lift`].
+/// Half the sheets' difference back into `x`, undoing [`lifted`].
 pub(super) fn descend<T: Real, V: Batch<T>>(rows: &[V], x: &mut [V]) {
     let two = T::one() + T::one();
     (x.iter_mut().zip(rows.chunks_exact(2))).for_each(|(x, r)| *x = r[0].sub(r[1]).div(two));

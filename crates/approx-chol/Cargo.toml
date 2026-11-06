@@ -17,6 +17,7 @@ exclude = ["fuzz"]
 workspace = true
 
 [dependencies]
+dyn-stack = { version = "0.13.2", default-features = false, features = ["alloc"] }
 num-traits = "0.2.18"
 rand = "0.10.0"
 rayon = "1.6"

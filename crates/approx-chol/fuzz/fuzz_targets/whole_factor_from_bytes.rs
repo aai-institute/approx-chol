@@ -1,7 +1,10 @@
 #![no_main]
 
-use approx_chol::ApproxInverse;
+use approx_chol::{ApproxInverse, MemStack};
 use libfuzzer_sys::fuzz_target;
+
+#[path = "../cells.rs"]
+mod cells;
 
 // A persisted factor's blocks must cover `0..n` once each, or a solve would index past `x`.
 fuzz_target!(|data: &[u8]| {
@@ -11,10 +14,10 @@ fuzz_target!(|data: &[u8]| {
     let b: Vec<f64> = (0..factor.n()).map(|i| (i % 7) as f64 - 3.0).collect();
     let solve = |fill: f64| {
         let mut x = b.clone();
-        let mut scratch = vec![fill; factor.scratch_len()];
+        let mut cells = cells::filled(factor.scratch(), fill);
         factor
-            .solve_in_place(&mut x, &mut scratch)
-            .expect("buffers of the factor's own lengths are accepted");
+            .solve_in_place(&mut x, MemStack::new_any(&mut cells))
+            .expect("a stack of the factor's own scratch is accepted");
         x
     };
     // NaN scratch reaches the solution if any slot is read before written.

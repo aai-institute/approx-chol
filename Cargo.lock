@@ -43,6 +43,7 @@ name = "approx-chol"
 version = "0.8.0"
 dependencies = [
  "criterion",
+ "dyn-stack",
  "faer",
  "num-traits",
  "postcard",

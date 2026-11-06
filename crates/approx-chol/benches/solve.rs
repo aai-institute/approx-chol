@@ -7,7 +7,7 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1};
-use approx_chol::{factorize, ApproxInverse, Config};
+use approx_chol::{factorize, ApproxInverse, Config, MemBuffer, MemStack};
 use criterion::{criterion_group, criterion_main, Bencher, BenchmarkId, Criterion};
 use csr::{build, OwnedCsr};
 use grid::grid_laplacian;
@@ -17,10 +17,12 @@ use rand::{RngExt, SeedableRng};
 /// The solve alone: `x` and the scratch allocated once, `b` copied in per run.
 fn timed_solve(b: &mut Bencher, factor: &ApproxInverse, rhs: &[f64]) {
     let mut x = rhs.to_vec();
-    let mut scratch = vec![0.0; factor.scratch_len()];
+    let mut scratch = MemBuffer::new(factor.scratch());
     b.iter(|| {
         x.copy_from_slice(black_box(rhs));
-        factor.solve_in_place(&mut x, &mut scratch).expect("solve");
+        factor
+            .solve_in_place(&mut x, MemStack::new(&mut scratch))
+            .expect("solve");
         black_box(&x);
     });
 }

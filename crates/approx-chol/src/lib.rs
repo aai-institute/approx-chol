@@ -54,6 +54,7 @@ use std::fmt::Debug;
 use num_traits::{float::TotalOrder, Float, PrimInt, Unsigned};
 
 use batch::Batch;
+pub use dyn_stack::{MemBuffer, MemStack, StackReq};
 pub use error::Error;
 use factor::Storage;
 #[cfg(feature = "serde")]

@@ -5,7 +5,8 @@ mod gram;
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Laplacian, Sddm};
 use approx_chol::{
-    factorize_with, ApproxInverse, BlockFactor, Config, InnerParallelism, ScalingPolicy, SchurMode,
+    factorize_with, ApproxInverse, BlockFactor, Config, InnerParallelism, MemBuffer, MemStack,
+    ScalingPolicy, SchurMode,
 };
 use gram::{dense_csr, matrix};
 use rstest::rstest;
@@ -57,8 +58,13 @@ fn solve(block: &BlockFactor, inner: InnerParallelism) -> Vec<u64> {
     let mut x: Vec<f64> = (0..block.vertices().len())
         .map(|i| (i % 7) as f64 - 3.0)
         .collect();
-    let mut scratch = vec![0.0; block.scratch_len()];
-    block.solve_local(&mut x, &mut scratch, inner).unwrap();
+    block
+        .solve_local(
+            &mut x,
+            MemStack::new(&mut MemBuffer::new(block.scratch())),
+            inner,
+        )
+        .unwrap();
     x.iter().map(|v| v.to_bits()).collect()
 }
 
