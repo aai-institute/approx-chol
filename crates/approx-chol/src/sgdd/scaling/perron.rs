@@ -46,9 +46,9 @@ impl Bracket {
         self.violation() <= tolerance
     }
 
-    /// `ρ ≥ low` past `1 + tolerance`: no scaling certifies (Guan, Lu, Li, Shao, JCAM 302 (2016), Thm 2.1).
-    fn refutes(&self, tolerance: f64) -> bool {
-        self.low > 1.0 + tolerance
+    /// `ρ ≥ low` past `ceiling`: no scaling certifies (Guan, Lu, Li, Shao, JCAM 302 (2016), Thm 2.1).
+    fn refutes(&self, ceiling: f64) -> bool {
+        self.low > ceiling
     }
 
     /// `ρ < 1` proven, or `y` a Perron vector of `ρ = 1` to rounding: no later `y` moves the float decision.
@@ -79,9 +79,11 @@ pub(super) struct InverseIteration<'n, 'a, T, I> {
     tolerance: f64,
     /// The rounding band a settled bracket closes to, around `ρ = 1`.
     band: f64,
+    /// `1 + max(tolerance, band)`: a bound on `ρ` past it refutes, as an `f32` block's `N` reads a few ulps over a singular `ρ = 1`.
+    ceiling: f64,
     max_iterations: usize,
     iterations: usize,
-    /// A Rayleigh quotient passed `1 + max(tolerance, band)`: `ρ` is too, so no later `y` certifies.
+    /// A Rayleigh quotient passed the ceiling: `ρ` is too, so no later `y` certifies.
     refuted: bool,
     /// The best positive `y` so far and its bracket.
     best: (Vec<f64>, Bracket),
@@ -106,6 +108,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             n,
             tolerance,
             band,
+            ceiling: 1.0 + tolerance.max(band),
             max_iterations,
             iterations: 0,
             refuted: false,
@@ -117,11 +120,11 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
 
     /// `α = 1 + tolerance/2` until a step certifies or refutes (as `M⁻¹𝟙` does: Ahmadinejad et al., arXiv:1810.02348 §3.1), then each step from the bracket's [`shift`](Bracket::shift).
     pub(super) fn run(mut self) -> (Vec<f64>, ScalingReport) {
-        let (tolerance, band) = (self.tolerance, self.band);
-        let polished = |b: &Bracket| b.settled(tolerance, band) || b.refutes(tolerance);
+        let (tolerance, band, ceiling) = (self.tolerance, self.band, self.ceiling);
+        let polished = |b: &Bracket| b.settled(tolerance, band) || b.refutes(ceiling);
         let unit = vec![1.0; self.n.n()];
         self.solve(1.0 + 0.5 * tolerance, unit, |b| {
-            b.certifies(tolerance) || b.refutes(tolerance)
+            b.certifies(tolerance) || b.refutes(ceiling)
         });
         while !self.refuted && !polished(&self.best.1) && self.iterations < self.max_iterations {
             let (y, bracket) = &self.best;
@@ -161,8 +164,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             }
             let vanishing = curvature <= 64.0 * f64::EPSILON * direction_norm_squared;
             let floor = system.spectral_floor(direction_norm_squared, curvature);
-            // Past the rounding band too: an f32 block's `N` reads a few ulps over a singular `ρ = 1`.
-            self.refuted = floor > 1.0 + self.tolerance.max(self.band);
+            self.refuted = floor > self.ceiling;
             if vanishing || self.refuted {
                 // Either exposes a near-Perron vector: a singular boundary's zero curvature, or the refuting direction.
                 let witness: Vec<f64> = direction.iter().map(|value| value.abs()).collect();
