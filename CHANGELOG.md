@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Faster factorization of inputs with many small components or long paths, with fewer allocations per component. ([#312])
+- A factor stores no ground, so a definite block of `n` vertices on one sheet, grounded or frustrated, solves in place: its `BlockFactor::scratch_len` is `0`, not `n + 1`, and a grounded cover's is `2n`, not `2n + 1`.
 
 ### Fixed
 

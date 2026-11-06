@@ -322,15 +322,12 @@ pub(super) fn first_copy(sheets: Sheets, k: usize) -> usize {
     }
 }
 
-/// `[x; −x]` interleaved by vertex, any ground slot after it zero: the lift a cover solves on.
+/// `[x; −x]` interleaved by vertex: the lift a cover solves on.
 pub(super) fn lift<T: Real, V: Batch<T>>(x: &[V], rows: &mut [V]) {
-    let (pairs, ground) = rows.split_at_mut(2 * x.len());
-    (pairs.chunks_exact_mut(2).zip(x)).for_each(|(r, &v)| {
+    (rows.chunks_exact_mut(2).zip(x)).for_each(|(r, &v)| {
         r[0] = v;
         r[1] = v.neg();
     });
-    // A lift sums to zero, so the ground's right-hand side is zero.
-    ground.fill(V::zero());
 }
 
 /// Half the sheets' difference back into `x`, undoing [`lift`].

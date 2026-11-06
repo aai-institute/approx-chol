@@ -2,6 +2,8 @@
 mod dense;
 #[path = "common/graph.rs"]
 mod graph;
+#[path = "common/positive.rs"]
+mod positive;
 #[path = "common/residual.rs"]
 mod residual;
 
@@ -53,12 +55,7 @@ fn csr_factor(graph: &Graph, config: Config) -> ApproxInverse {
 #[ignore = "#283: componentwise accuracy of the frustrated cover past a weak vertex"]
 fn frustrated_cover_solves_a_pendant_behind_a_heavy_triangle() {
     let (h, w) = (1e20, 1.0);
-    let positive = |a, b| Edge {
-        a,
-        b,
-        weight: h,
-        positive: true,
-    };
+    let positive = |a, b| Edge::positive(a, b, h);
     let x_true = [1.0, -1.0, 0.5, 2.0];
     let mut graph = Graph::new(
         x_true.len(),

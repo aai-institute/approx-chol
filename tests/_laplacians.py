@@ -33,6 +33,8 @@ def grid_laplacian(rows: int, cols: int) -> sp.csr_matrix:
     return sp.csr_matrix((data, (row_idx, col_idx)), shape=(n, n))
 
 
-def grid_sddm(rows: int, cols: int) -> sp.csr_matrix:
-    """``grid_laplacian`` plus the identity: its factor grounds, so solves need scratch."""
-    return (grid_laplacian(rows, cols) + sp.identity(rows * cols)).tocsr()
+def frustrated_grid(rows: int, cols: int) -> sp.csr_matrix:
+    """``grid_laplacian`` plus the identity, one edge's off-diagonal positive: the approximate arm solves its two-sheet cover through scratch."""
+    matrix = (grid_laplacian(rows, cols) + sp.identity(rows * cols)).tolil()
+    matrix[0, 1] = matrix[1, 0] = 1.0
+    return matrix.tocsr()

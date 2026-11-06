@@ -14,6 +14,8 @@ mod graph;
 mod grid;
 #[path = "common/modes.rs"]
 mod modes;
+#[path = "common/positive.rs"]
+mod positive;
 #[path = "common/residual.rs"]
 mod residual;
 #[path = "common/sparse.rs"]
@@ -79,21 +81,18 @@ fn assert_buffers_checked<T: Real>(factor: &ApproxInverse<T>) {
         assert_eq!(solved, Err(error));
     }
     let needed = factor.scratch_len();
-    let short = &mut vec![T::zero(); needed - 1];
-    let error = SolveError::ScratchTooShort {
-        needed,
-        found: needed - 1,
-    };
-    assert_eq!(
-        factor.solve_in_place(&mut vec![T::one(); n], short),
-        Err(error)
-    );
-    let blocks = factor.clone().into_blocks();
-    assert!(
-        blocks.iter().any(|block| block.scratch_len() > 0),
-        "a grounded block solves through scratch"
-    );
-    for block in blocks {
+    if needed > 0 {
+        let short = &mut vec![T::zero(); needed - 1];
+        let error = SolveError::ScratchTooShort {
+            needed,
+            found: needed - 1,
+        };
+        assert_eq!(
+            factor.solve_in_place(&mut vec![T::one(); n], short),
+            Err(error)
+        );
+    }
+    for block in factor.clone().into_blocks() {
         let (m, needed) = (block.vertices().len(), block.scratch_len());
         let mut scratch = vec![T::zero(); needed];
         for found in [m - 1, m + 1] {
@@ -121,10 +120,27 @@ cases! {
             ground: vec![2.0, 3.0, 5.0],
             ..Graph::new(3, vec![Edge::negative(0, 1, 1.0)])
         };
-        let reduced = entry.reduce(&graph, types);
-        let factor = reduced.factorize(&Config::default());
+        let factor = entry.reduce(&graph, types).factorize(&Config::default());
         by_type!(&factor.factor, factor => assert_buffers_checked(factor));
     }
+}
+
+cases! {
+    fn every_cover_solve_checks_its_scratch_length(
+        entry in entries(frustrated),
+        types in types(all),
+    ) {
+        let config = Mode::Sparse(Sparse::AcExactComplement).config();
+        let graph = frustrated_triangle();
+        let factor = entry.reduce(&graph, types).factorize(&config);
+        assert!(uses_scratch(&factor), "a cover lifts through scratch");
+        by_type!(&factor.factor, factor => assert_buffers_checked(factor));
+    }
+}
+
+fn frustrated_triangle() -> Graph {
+    let edges = [(0, 1), (1, 2), (0, 2)].map(|(a, b)| Edge::positive(a, b, 1.0));
+    Graph::new(3, edges.to_vec())
 }
 
 /// Each block through `solve_local` on a NaN-filled scratch, scattered back.
@@ -152,7 +168,7 @@ fn uses_scratch(factor: &Factored) -> bool {
         .any(|block| block.scratch_len() > 0))
 }
 
-/// NaN reaches the result if any slot, ground or cover, is read before it is written.
+/// NaN reaches the result if any scratch slot is read before it is written.
 fn assert_dirty_scratch_matches_the_solve(label: &str, factor: &Factored) {
     let n = factor.n();
     let rhs: Vec<f64> = (0..n).map(|i| i as f64 - 1.5).collect();
@@ -180,22 +196,14 @@ fn solve_in_place_on_dirty_scratch<T: Real>(factor: &ApproxInverse<T>, b: &[f64]
 }
 
 cases! {
-    fn dirty_scratch_does_not_change_a_grounded_solution(
-        route in routes(grounded),
-        types in types(all),
-    ) {
+    fn a_grounded_solve_takes_no_scratch(route in routes(grounded), types in types(all)) {
         let (entry, mode) = route;
         let graph = Graph {
             ground: vec![1.0, 1.0],
             ..Graph::new(2, vec![Edge::negative(0, 1, 1.0)])
         };
-        let config = mode.config();
-        let factor = entry.reduce(&graph, types).factorize(&config);
-        assert!(
-            uses_scratch(&factor),
-            "grounded: the solve goes through scratch"
-        );
-        assert_dirty_scratch_matches_the_solve(&format!("grounded {types:?} {config:?}"), &factor);
+        let factor = entry.reduce(&graph, types).factorize(&mode.config());
+        assert!(!uses_scratch(&factor), "{types:?} {mode:?}");
     }
 }
 
@@ -205,32 +213,28 @@ cases! {
         types in types(all),
     ) {
         let (entry, mode) = route;
-        let positive = |a, b| Edge {
-            positive: true,
-            ..Edge::negative(a, b, 1.0)
-        };
-        let graph = Graph::new(3, vec![positive(0, 1), positive(1, 2), positive(0, 2)]);
         let config = mode.config();
-        let factor = entry.reduce(&graph, types).factorize(&config);
-        assert!(
+        let factor = entry.reduce(&frustrated_triangle(), types).factorize(&config);
+        assert_eq!(
             uses_scratch(&factor),
-            "frustrated: the solve goes through scratch"
+            mode != Mode::Dense,
+            "frustrated: only the cover lifts through scratch"
         );
         let label = format!("frustrated {types:?} {config:?}");
         assert_dirty_scratch_matches_the_solve(&label, &factor);
     }
 }
 
-fn path(weight: f64) -> Graph {
+fn path(n: usize, weight: f64) -> Graph {
     Graph::new(
-        4,
-        (0..3).map(|i| Edge::negative(i, i + 1, weight)).collect(),
+        n,
+        (1..n).map(|i| Edge::negative(i - 1, i, weight)).collect(),
     )
 }
 
 /// `t A` solves to `x / t`, so a factor that drops the scale misses by `t`.
 fn assert_scaled_path_solves(entry: Entry, types: Types, mode: Mode, exponent: i32) {
-    let graph = path(10f64.powi(exponent));
+    let graph = path(4, 10f64.powi(exponent));
     let b = [1.0, 0.0, 0.0, -1.0];
     let config = mode.config();
     let x = entry.reduce(&graph, types).factorize(&config).solve(&b);
@@ -401,11 +405,31 @@ fn a_frustrated_block_as_large_as_exact_max_dim_solves_exactly() {
     assert!(residual < 1e-13, "max|Ax − b| = {residual:e}");
 }
 
+cases! {
+    /// Grounded at every vertex, a path pivots its ends first, each sharing its pivot between its neighbor and the ground; a tree factors exactly.
+    fn a_path_whose_ends_share_their_pivots_with_the_ground_solves_exactly(
+        entry in entries(grounded),
+        types in types(all),
+    ) {
+        let graph = Graph {
+            ground: vec![0.5; 6],
+            ..path(6, 1.0)
+        };
+        let x: Vec<f64> = (0..6).map(|i| i as f64 - 2.5).collect();
+        let config = Config {
+            exact_max_dim: 0,
+            ..Config::default()
+        };
+        let factor = entry.reduce(&graph, types).factorize(&config);
+        let label = format!("{entry:?} {types:?}");
+        assert_close(&label, &factor.solve(&graph.apply(&x)), &x, 64.0 * types.epsilon());
+    }
+}
+
 #[test]
 fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
     use approx_chol::input::{Laplacian, Sddm};
     use approx_chol::{factorize_with, ScalingPolicy};
-    // Min-degree eliminates the ground first and leaves vertex 0 as the sink; `−Σb` then cancels to 1e24 over a 1e-290 pivot.
     let (a, b, w, ground) = ([0u32, 1], [1u32, 2], [1e-290, 1e30], [0.0, 1e40, 0.0]);
     let x = [1.0, 0.75, -0.5];
     let rhs = [2.5e-291, 0.75e40 + 1.25e30, -1.25e30];

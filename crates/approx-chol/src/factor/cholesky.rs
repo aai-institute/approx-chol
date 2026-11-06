@@ -4,9 +4,9 @@ mod dense;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use super::clique_tree::Multi;
-use super::sddm::{descend, first_copy, lift, Sddm};
+use super::sddm::{descend, lift, Sddm};
 use crate::sgdd::{FactorTail, Sheets};
-use crate::{compensated_sum, Batch, Index, Real};
+use crate::{Batch, Index, Real};
 use approximate::{ApproximateCholesky, CliqueTreeElimination};
 pub(super) use dense::Signed;
 
@@ -41,12 +41,10 @@ pub(super) enum Arm<T, I> {
 #[derive(Clone, Debug)]
 pub(super) struct Cholesky<T, I> {
     sheets: Sheets,
-    /// The ground is the appended slot, pinned so it reads zero; its right-hand side `−Σb` and the shift serve only factors saved before the ground was always pinned.
-    grounded: bool,
-    /// The matrix's dimension over its sheets, ground excluded.
+    /// The matrix's dimension over its sheets.
     n: usize,
-    /// The one slot no pivot eliminates, zeroed between the sweeps.
-    pinned: usize,
+    /// A floating matrix's one slot no pivot eliminates, zeroed between the sweeps; a definite one pivots every slot.
+    pinned: Option<usize>,
     triangular: Triangular<T, I>,
 }
 
@@ -58,89 +56,59 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         tail: Option<FactorTail<'_, T>>,
         reused: &mut Workspace<T, I>,
     ) -> Self {
-        let (sheets, grounded, n, pinned, triangular) = match arm {
+        match arm {
             Arm::Exact(signed) => {
-                let (grounded, n) = (!signed.floats(), signed.n());
-                // A definite `M`'s surplus is the ground's slot, pinned so the solve is `M`'s own.
-                let pin = pinned(Sheets::One, grounded, n, tail);
-                let factor =
-                    Triangular::Dense(dense::factor(&signed, pin, &mut reused.dense).into());
-                (Sheets::One, grounded, n, pin, factor)
+                let (factor, pinned) = dense::factor(&signed, tail, &mut reused.dense);
+                Self {
+                    sheets: Sheets::One,
+                    n: signed.n(),
+                    pinned,
+                    triangular: Triangular::Dense(factor.into()),
+                }
             }
             Arm::Approximate(sddm) => {
-                let (sheets, grounded, n) = (sddm.sheets(), sddm.grounded(), sddm.n());
-                // The ground is never a pivot, so `Σs` is never formed: within unchanged, grids +0-8% PCG iterations at 1-10 grounds.
-                // Floating, ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
-                let pin = (grounded || tail.is_some_and(FactorTail::spans_wide))
-                    .then(|| pinned(sheets, grounded, n, tail));
-                let (steps, pin) = reused.elimination.eliminate(sddm, draws, pin);
-                let triangular = Triangular::Approximate(Box::new(steps));
-                (sheets, grounded, n, pin, triangular)
+                let (sheets, n) = (sddm.sheets(), sddm.n());
+                let (steps, pinned) = reused.elimination.eliminate(sddm, draws, tail);
+                Self {
+                    sheets,
+                    n,
+                    pinned,
+                    triangular: Triangular::Approximate(Box::new(steps)),
+                }
             }
-        };
-        Self {
-            sheets,
-            grounded,
-            n,
-            pinned,
-            triangular,
         }
     }
 
-    /// Pivots eliminated: every slot but the pinned one, which is the ground when there is one.
+    /// Pivots eliminated: every slot but a floating matrix's pinned one.
     pub(super) fn n_steps(&self) -> usize {
-        self.n + usize::from(self.grounded) - 1
+        self.n - usize::from(self.pinned.is_some())
     }
 
-    /// Whether it solves a singular Laplacian: one sheet, no ground.
+    /// Whether it solves a singular Laplacian: one floating sheet.
     pub(super) fn singular(&self) -> bool {
-        self.sheets == Sheets::One && !self.grounded
+        self.sheets == Sheets::One && self.pinned.is_some()
     }
 
-    /// A floating sheet substitutes on `x` in place; a grounded one appends the ground's slot beside the rows.
+    /// One sheet substitutes on `x` in place; two lift `x` to rows of their own.
     pub(super) fn scratch_len(&self) -> usize {
-        match (self.sheets, self.grounded) {
-            (Sheets::One, false) => 0,
-            (_, true) => self.n + 1,
-            (Sheets::Two, false) => self.n,
+        match self.sheets {
+            Sheets::One => 0,
+            Sheets::Two => self.n,
         }
     }
 
     /// Lifts to the sheets, fixes the gauge, substitutes, and descends.
     pub(super) fn solve<V: Batch<T>>(&self, x: &mut [V], scratch: &mut [V]) {
         let triangular = &self.triangular;
-        match (self.sheets, self.grounded) {
-            (Sheets::One, false) => triangular.substitute(x, self.pinned),
-            (Sheets::One, true) => {
-                let rows = &mut scratch[..=x.len()];
-                let (ground, values) = rows.split_last_mut().expect("the ground's slot");
-                values.copy_from_slice(x);
-                let total = compensated_sum(x, |_, b: V| b.widen());
-                *ground = V::narrow(total.neg());
-                triangular.substitute(rows, self.pinned);
-                let (ground, values) = rows.split_last().expect("the ground's slot");
-                (x.iter_mut().zip(values)).for_each(|(x, &v)| *x = v.sub(*ground));
-            }
-            (Sheets::Two, _) => {
+        match self.sheets {
+            Sheets::One => triangular.substitute(x, self.pinned),
+            Sheets::Two => {
                 let rows = &mut scratch[..self.scratch_len()];
                 lift(x, rows);
                 triangular.substitute(rows, self.pinned);
                 descend(rows, x);
             }
         }
-    }
-}
-
-/// The slot the solve pins: the ground, else the largest `|f|` on the first sheet, so the gauge's rounding is not amplified by `1/f`.
-fn pinned<T: Real>(
-    sheets: Sheets,
-    grounded: bool,
-    n: usize,
-    tail: Option<FactorTail<'_, T>>,
-) -> usize {
-    match grounded {
-        true => n,
-        false => tail.map_or(n - 1, |tail| first_copy(sheets, tail.largest())),
     }
 }
 
@@ -154,7 +122,7 @@ enum Triangular<T, I> {
 }
 
 impl<T: Real, I: Index> Triangular<T, I> {
-    fn substitute<V: Batch<T>>(&self, values: &mut [V], pinned: usize) {
+    fn substitute<V: Batch<T>>(&self, values: &mut [V], pinned: Option<usize>) {
         match self {
             Self::Dense(factor) => dense::substitute(factor, pinned, values),
             Self::Approximate(approximate) => approximate.substitute(values, pinned),
@@ -171,12 +139,11 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         if self.n == 0 {
             return None;
         }
-        let slots = self.n.checked_add(usize::from(self.grounded))?;
         let fits = match &self.triangular {
-            Triangular::Dense(dense) => dense::fits(dense, slots),
-            Triangular::Approximate(approximate) => approximate.fits(slots, self.pinned),
+            Triangular::Dense(dense) => dense::fits(dense, self.n_steps()),
+            Triangular::Approximate(approximate) => approximate.fits(self.n, self.pinned),
         };
-        (self.pinned < slots && fits).then_some(self)
+        (self.pinned.is_none_or(|pin| pin < self.n) && fits).then_some(self)
     }
 
     /// Whether it solves a block of `kept` vertices on its sheets.
