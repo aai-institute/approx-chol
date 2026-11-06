@@ -60,8 +60,8 @@ pub use factor::{
     ApproxInverse, BlockFactor, Config, InnerParallelism, SchurMode, SolveError, Vertices,
 };
 pub use input::{CsrError, CsrRef, IndexKind, Input, OwnedCsr, Side};
+pub use sgdd::{Clamp, ReduceError, ScalingOutcome, ScalingPolicy};
 use sgdd::{Complement, Reduced};
-pub use sgdd::{ReduceError, ScalingPolicy, ScalingReport};
 
 /// Factorizes any [`Input`] with [`Config::default`] and [`ScalingPolicy::default`].
 pub fn factorize<'a, T, I, M>(input: M) -> Result<ApproxInverse<T>, Error>

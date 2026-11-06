@@ -4,6 +4,7 @@ use crate::input::FactorWidth2;
 use crate::sgdd::block::{Balance, Congruent, ReduceError};
 use crate::sgdd::decomposition::Components;
 use crate::sgdd::decomposition::{assemble_incidence, AdjacencyLayout};
+use crate::sgdd::scaling::ScaleVector;
 use crate::sgdd::Reduced;
 use crate::{Index, Real};
 
@@ -16,7 +17,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
         assemble_incidence(cells, v)?
             .extract(|(vertices, off_diagonal, grounding)| {
                 let m = Congruent::incidence(vertices, off_diagonal);
-                m.block(Balance::Balanced(grounding), None)
+                m.block(Balance::Balanced(grounding), ScaleVector::Identity, 0.0)
             })
             .map(Components::into_reduced)
     }

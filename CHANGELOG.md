@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed (breaking)
 
 - `Factor` is renamed `ApproxInverse`, in Rust and Python: it applies an approximate inverse, not a factor.
+- `ScalingReport` and `BlockFactor::scaling_report` are removed. `ApproxInverse::clamps` lists each component of `A` the reduction clamped past rounding, ordered by first vertex: its vertices in the input's numbering, also for a Schur build, its violation, and a `ScalingOutcome`: `Certified`, `Refuted` or `Unsettled`. `BlockFactor::grounding_unproven` states that a block floated or grounded on a scaling that did not settle. The format version is `0x4143_000A`.
 
 ### Changed
 

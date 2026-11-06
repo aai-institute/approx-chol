@@ -6,7 +6,8 @@ use std::collections::BTreeSet;
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
 use approx_chol::FACTOR_FORMAT_VERSION as FORMAT_VERSION;
 use approx_chol::{
-    factorize_with, ApproxInverse, BlockFactor, Config, InnerParallelism, ScalingPolicy,
+    factorize_with, ApproxInverse, BlockFactor, Config, InnerParallelism, ScalingOutcome,
+    ScalingPolicy,
 };
 use rstest::rstest;
 use serde::de::value::{Error, SeqDeserializer};
@@ -265,22 +266,64 @@ fn a_payload_of_another_format_version_is_rejected_by_version(#[case] declared: 
 #[ignore = "writes fixtures: cargo test -p approx-chol --features serde --test wire_format -- --ignored"]
 fn regenerate_missing_wire_format_fixtures() {
     for &fixture in FIXTURES {
-        let path = fixture.path();
-        let bytes = postcard::to_stdvec(&fixture.blocks()).expect("serialize the fixture");
-        // Rewriting a committed payload with today's encoder is how this test comes to agree with the drift it exists to catch.
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path);
-        match file {
-            Ok(mut file) => {
-                std::io::Write::write_all(&mut file, &bytes).expect("write the fixture");
-                println!("wrote {path}");
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                println!("kept {path}");
-            }
-            Err(error) => panic!("cannot create {path}: {error}"),
-        }
+        write_new(
+            &fixture.path(),
+            &postcard::to_stdvec(&fixture.blocks()).expect("serialize"),
+        );
     }
+    write_new(
+        &clamped_path(),
+        &postcard::to_stdvec(&clamped()).expect("serialize"),
+    );
+}
+
+/// Rewriting a committed payload with today's encoder is how this test comes to agree with the drift it exists to catch.
+fn write_new(path: &str, bytes: &[u8]) {
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path);
+    match file {
+        Ok(mut file) => {
+            std::io::Write::write_all(&mut file, bytes).expect("write the fixture");
+            println!("wrote {path}");
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => println!("kept {path}"),
+        Err(error) => panic!("cannot create {path}: {error}"),
+    }
+}
+
+/// Two interleaved pairs no scaling makes dominant: a whole factor listing two clamps.
+fn clamped() -> ApproxInverse {
+    let (row_ptrs, columns) = ([0, 2, 4, 6, 8], [0, 2, 1, 3, 0, 2, 1, 3]);
+    let values = [1.0, -3.0, 1.0, -3.0, -3.0, 1.0, -3.0, 1.0];
+    let csr = CsrRef::new(&row_ptrs, &columns, &values, 4).expect("valid csr");
+    factorize_with(csr, Config::default(), ScalingPolicy::default()).expect("factors")
+}
+
+/// Apart from the block fixtures, whose payloads are block lists, not a whole factor.
+fn clamped_path() -> String {
+    format!(
+        "{}/tests/fixtures/whole/clamped_{FORMAT_VERSION:#010x}.postcard",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+/// The clamp list's encoding, its outcome's variant order among it, is frozen with the format version.
+#[test]
+fn a_committed_whole_payload_keeps_its_clamps() {
+    let committed = std::fs::read(clamped_path())
+        .expect("no committed payload for this version; regenerate if the version moved");
+    let restored: ApproxInverse =
+        postcard::from_bytes(&committed).expect("committed payload must decode");
+    assert_eq!(
+        postcard::to_stdvec(&restored).expect("serialize"),
+        committed
+    );
+    let listed: Vec<_> = (restored.clamps().iter())
+        .map(|clamp| (clamp.vertices.clone(), clamp.scaling))
+        .collect();
+    let refuted = ScalingOutcome::Refuted;
+    assert_eq!(listed, [(vec![0, 2], refuted), (vec![1, 3], refuted)]);
+    assert_eq!(restored.clamps(), clamped().clamps(), "this build's clamps");
 }

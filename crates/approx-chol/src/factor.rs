@@ -17,9 +17,9 @@ pub use config::{Config, InnerParallelism, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
 
-use crate::sgdd::{BlockComplement, IrreducibleBlock, Restriction, Selection, Summands};
+use crate::sgdd::{BlockComplement, IrreducibleBlock, Reduction, Restriction, Selection, Summands};
 use crate::storage::OffDiagonal;
-use crate::ScalingReport;
+use crate::Clamp;
 use crate::{Index, Real};
 use block_elimination::BlockElimination;
 use cholesky::{Arm, Cholesky, Signed, Workspace};
@@ -92,31 +92,37 @@ pub struct ApproxInverse<T = f64> {
     blocks: Vec<BlockFactor<T>>,
     /// Vertices in no block, which solve to `0`.
     dead: Box<[usize]>,
+    clamps: Box<[Clamp]>,
     scratch_len: usize,
 }
 
 impl<T: Real> ApproxInverse<T> {
     /// Factors every coupled summand in parallel.
     pub(crate) fn build<I: Index, B: Summand<T, I>>(
-        summands: Summands<B, I, T>,
+        reduction: Reduction<B, I, T>,
         config: &Config,
         store: fn(Block<T, I>) -> Storage<T>,
     ) -> Self {
-        let Summands {
-            blocks: coupled,
-            lone,
-            dead,
-        } = summands;
+        let Reduction {
+            summands:
+                Summands {
+                    blocks: coupled,
+                    lone,
+                    dead,
+                },
+            clamps,
+        } = reduction;
         let mut blocks = Vec::with_capacity(coupled.len() + lone.len());
         let build = |reused: &mut _, block: B| BlockFactor(store(block.factor(config, reused)));
         let workspace = || Workspace::new(config.split());
         blocks.par_extend(coupled.into_par_iter().map_init(workspace, build));
         let isolated = |(v, pivot)| BlockFactor(Storage::Isolated(Isolated::new(v, pivot)));
         blocks.extend(lone.into_iter().map(isolated));
-        Self::new(blocks, dead.into_iter().map(I::index).collect())
+        let dead = dead.into_iter().map(I::index).collect();
+        Self::new(blocks, dead, clamps.into())
     }
 
-    fn new(blocks: Vec<BlockFactor<T>>, dead: Box<[usize]>) -> Self {
+    fn new(blocks: Vec<BlockFactor<T>>, dead: Box<[usize]>, clamps: Box<[Clamp]>) -> Self {
         let n = blocks.iter().map(|b| b.vertices().len()).sum::<usize>() + dead.len();
         let scratch_len = (blocks.iter())
             .map(|block| on!(block, b => b.global_scratch_len(), _ => 0))
@@ -126,6 +132,7 @@ impl<T: Real> ApproxInverse<T> {
             n,
             blocks,
             dead,
+            clamps,
             scratch_len,
         }
     }
@@ -141,6 +148,11 @@ impl<T: Real> ApproxInverse<T> {
             .iter()
             .map(|block| on!(block, b => b.n_steps(), _ => 1))
             .sum()
+    }
+
+    /// Every component of `A` the reduction clamped, ordered by first vertex, in the input's numbering also for a Schur build.
+    pub fn clamps(&self) -> &[Clamp] {
+        &self.clamps
     }
 
     /// The blocks' factors, one per irreducible block of `A` the factored matrix meets, coupled blocks before isolated vertices; dead vertices have none.
@@ -195,7 +207,7 @@ pub(crate) trait Summand<T, I>: Send {
 
 impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
     fn factor(self, config: &Config, reused: &mut Workspace<T, I>) -> Block<T, I> {
-        let (restriction, off_diagonal, sheets, grounding, report) = self.into_parts();
+        let (restriction, off_diagonal, sheets, grounding, grounding_unproven) = self.into_parts();
         let streams = Streams::of(restriction.vertices().vertex(0), config);
         let tail = |from: usize| restriction.factor_tail(from);
         let draws = streams.cholesky();
@@ -219,7 +231,7 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
             restriction,
             elimination,
             cholesky,
-            report,
+            grounding_unproven,
         }
     }
 }
@@ -227,7 +239,7 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
 impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
     /// Keyed as a whole block keys its draws.
     fn factor(self, config: &Config, reused: &mut Workspace<T, I>) -> Block<T, I> {
-        let (first, restriction, cross, sheets, grounding, report) = self.into_parts();
+        let (first, restriction, cross, sheets, grounding, grounding_unproven) = self.into_parts();
         let streams = Streams::of(first, config);
         let s = BipartiteBlock::of(cross, sheets, grounding).complement(config, streams);
         let tail = restriction.factor_tail(0);
@@ -236,7 +248,7 @@ impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
             restriction,
             elimination: None,
             cholesky,
-            report,
+            grounding_unproven,
         }
     }
 }
@@ -285,9 +297,9 @@ impl<T: Real> BlockFactor<T> {
         }
     }
 
-    /// Present iff a deficit past rounding was clamped, the block's scaling fell short beyond the policy's tolerance, or did not settle.
-    pub fn scaling_report(&self) -> Option<ScalingReport> {
-        on!(self, block => block.report.as_deref().copied(), _ => None)
+    /// Whether the block was grounded or floated on a scaling that did not settle, so a singular block may have been grounded.
+    pub fn grounding_unproven(&self) -> bool {
+        on!(self, block => block.grounding_unproven, _ => false)
     }
 
     /// Whether the block is folded and solved as singular, `A_c⁺b` or its complement's `S_c⁺b`.
@@ -378,7 +390,7 @@ pub(crate) struct Block<T, I> {
     restriction: Box<Restriction<T, I>>,
     elimination: Option<Box<BlockElimination<T, I>>>,
     cholesky: Cholesky<T, I>,
-    report: Option<Box<ScalingReport>>,
+    grounding_unproven: bool,
 }
 
 impl<T: Real, I: Index> Block<T, I> {
@@ -525,7 +537,7 @@ fn splitmix(x: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-/// `(FORMAT_VERSION, (n, dead, blocks))`: every vertex of the factored matrix is in the bytes, so decoding allocates nothing they do not hold.
+/// `(FORMAT_VERSION, (n, dead, blocks, clamps))`: every vertex of the factored matrix is in the bytes, so decoding allocates nothing they do not hold.
 #[cfg(feature = "serde")]
 impl<T: serde::Serialize> serde::Serialize for ApproxInverse<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -535,7 +547,7 @@ impl<T: serde::Serialize> serde::Serialize for ApproxInverse<T> {
                 serializer.collect_seq(self.0.iter().map(|block| &block.0))
             }
         }
-        let body = (self.n, &self.dead, Bodies(&self.blocks));
+        let body = (self.n, &self.dead, Bodies(&self.blocks), &self.clamps);
         wire::serialize(serializer, body)
     }
 }
@@ -543,10 +555,9 @@ impl<T: serde::Serialize> serde::Serialize for ApproxInverse<T> {
 #[cfg(feature = "serde")]
 impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ApproxInverse<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let (n, dead, blocks): (usize, Box<[usize]>, Vec<Storage<T>>) =
-            wire::deserialize(deserializer)?;
-        let blocks = blocks.into_iter().map(BlockFactor).collect();
-        let value = Self::new(blocks, dead);
+        let (n, dead, blocks, clamps) = wire::deserialize(deserializer)?;
+        let blocks = Vec::into_iter(blocks).map(BlockFactor).collect();
+        let value = Self::new(blocks, dead, clamps);
         let corrupt = || serde::de::Error::custom("corrupt ApproxInverse");
         value.checked(n).ok_or_else(corrupt)
     }
@@ -554,8 +565,26 @@ impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ApproxI
 
 #[cfg(feature = "serde")]
 impl<T: Real> ApproxInverse<T> {
-    /// The blocks' vertices and the dead ones cover `0..n` once each.
+    /// The blocks' vertices and the dead ones cover `0..n` once each; clamps are as a build lists them, disjoint components ordered by first vertex.
     fn checked(self, n: usize) -> Option<Self> {
+        let listed = |clamp: &Clamp| {
+            let ascending = clamp.vertices.windows(2).all(|pair| pair[0] < pair[1]);
+            !clamp.vertices.is_empty()
+                && ascending
+                && clamp.violation > 0.0
+                && clamp.violation.is_finite()
+        };
+        let ordered = |pair: &[Clamp]| pair[0].vertices[0] < pair[1].vertices[0];
+        if !(self.clamps.iter().all(listed) && self.clamps.windows(2).all(ordered)) {
+            return None;
+        }
+        let mut clamped: Vec<usize> = (self.clamps.iter())
+            .flat_map(|clamp| clamp.vertices.iter().copied())
+            .collect();
+        clamped.sort_unstable();
+        if clamped.windows(2).any(|pair| pair[0] == pair[1]) {
+            return None;
+        }
         let mut vertices = self.dead.to_vec();
         vertices.extend(self.blocks.iter().flat_map(BlockFactor::vertices));
         if vertices.len() != n {
@@ -678,7 +707,7 @@ mod tests {
             restriction: path.restriction,
             elimination,
             cholesky: grounded_block().cholesky,
-            report: None,
+            grounding_unproven: false,
         }
     }
 

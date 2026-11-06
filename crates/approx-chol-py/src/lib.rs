@@ -1,4 +1,4 @@
-use approx_chol::{ApproxInverse, Config, CsrRef, ScalingPolicy, ScalingReport, Sgdd, SolveError};
+use approx_chol::{ApproxInverse, Config, CsrRef, ScalingPolicy, Sgdd, SolveError};
 use num_traits::PrimInt;
 use numpy::{
     BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyReadonlyArray1,
@@ -202,21 +202,17 @@ struct PyApproxInverse {
 
 /// Without this, a deficit the reduction clamped to make a block dominant is silent.
 fn warn_on_scaling(py: Python<'_>, factor: &ApproxInverse<f64>) -> PyResult<()> {
-    let reports: Vec<ScalingReport> = (factor.blocks().iter())
-        .filter_map(|block| block.scaling_report())
-        .collect();
-    let clamped: Vec<f64> = (reports.iter())
-        .map(|report| report.violation)
-        .filter(|&violation| violation > 0.0)
-        .collect();
-    let unsettled = reports.iter().filter(|report| !report.settled).count();
+    let clamps = factor.clamps();
+    let unsettled = (factor.blocks().iter())
+        .filter(|block| block.grounding_unproven())
+        .count();
     let mut causes = Vec::new();
-    if !clamped.is_empty() {
-        let worst = clamped.iter().fold(0.0f64, |worst, &v| worst.max(v));
+    if !clamps.is_empty() {
+        let worst = (clamps.iter()).fold(0.0f64, |worst, clamp| worst.max(clamp.violation));
         causes.push(format!(
             "{} block(s) fell short of diagonal dominance by up to {worst:.3e} \
              of a diagonal; the deficit was clamped",
-            clamped.len()
+            clamps.len()
         ));
     }
     if unsettled > 0 {

@@ -259,8 +259,8 @@ fn scaled_heavy_gram_path_grounds() {
 fn gram_cycle_missing_within_its_tolerance_floats_and_reports(#[values(1e-10, -1e-10)] miss: f64) {
     let factor = factorize(Cycle::<f64>::doubling(20).missing(miss).gram()).unwrap();
     let block = &factor.blocks()[0];
-    let report = block.scaling_report().expect("reported");
-    assert!(report.violation > 1e-11, "{report:?}");
+    let clamp = factor.clamps().first().expect("reported");
+    assert!(clamp.violation > 1e-11, "{clamp:?}");
     assert!(block.floats());
 }
 
@@ -345,7 +345,8 @@ fn f32_rounded_ring_keeps_its_null_vector() {
     let factor: ApproxInverse<f32> =
         factorize_with(ring.gram(), Config::default(), no_iterations()).unwrap();
     let block = &factor.blocks()[0];
-    assert_eq!(block.scaling_report(), None);
+    assert_eq!(factor.clamps(), []);
+    assert!(!block.grounding_unproven());
     assert!(block.floats());
 }
 
@@ -355,8 +356,7 @@ fn f32_ring_missing_past_its_tolerance_is_reported() {
     let ring = Cycle::random(10_000, 1).missing(1e-2);
     let factor: ApproxInverse<f32> =
         factorize_with(ring.gram(), Config::default(), no_iterations()).unwrap();
-    let report = factor.blocks()[0].scaling_report();
-    assert!(report.is_some_and(|report| !report.settled), "{report:?}");
+    assert!(factor.blocks()[0].grounding_unproven());
 }
 
 fn no_iterations() -> ScalingPolicy {
@@ -393,5 +393,6 @@ fn short_cycle_miss_in_a_large_block_is_reported(#[case] miss: f64, #[case] repo
         factorize(FactorWidth2::new(n, (&a, &x), (&b, &y)).unwrap()).unwrap();
     let block = &factor.blocks()[0];
     assert!(block.floats());
-    assert_eq!(block.scaling_report().is_some(), reported);
+    let any = !factor.clamps().is_empty() || block.grounding_unproven();
+    assert_eq!(any, reported);
 }

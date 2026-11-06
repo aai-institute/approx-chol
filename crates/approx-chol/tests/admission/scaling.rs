@@ -1,5 +1,5 @@
 use approx_chol::input::FactorWidth2;
-use approx_chol::{factorize, Config, CsrRef, ScalingPolicy, Sgdd};
+use approx_chol::{factorize, Config, CsrRef, ScalingOutcome, ScalingPolicy, Sgdd};
 use rstest::rstest;
 
 use super::lcg::Lcg;
@@ -85,7 +85,8 @@ fn a_settled_dld_path_is_not_reported(#[case] spread: f64) {
     let policy = ScalingPolicy::new(1e-9, 6144).expect("a valid policy");
     let factor = reduce_with(&row_ptrs, &columns, &values, policy).expect("admitted");
     let block = &factor.blocks()[0];
-    assert_eq!(block.scaling_report(), None, "spread {spread:e}");
+    assert_eq!(factor.clamps(), [], "spread {spread:e}");
+    assert!(!block.grounding_unproven(), "spread {spread:e}");
     assert!(block.floats(), "spread {spread:e}");
 }
 
@@ -95,16 +96,18 @@ fn a_reduction_keeps_its_own_scaling_when_factored() {
     let n = 5000;
     let (row_ptrs, columns, values) = dld(n, &path(n), 1.0, 0);
     let csr = CsrRef::new(&row_ptrs, &columns, &values, n as u32).expect("valid shape");
-    let unsettled = factorize(csr).expect("admitted").blocks()[0].scaling_report();
-    assert!(
-        unsettled.is_some_and(|report| !report.settled),
-        "{unsettled:?}"
-    );
+    let unsettled = factorize(csr).expect("admitted");
+    assert!(unsettled.blocks()[0].grounding_unproven());
+    let [clamp] = unsettled.clamps() else {
+        panic!("one clamp: {:?}", unsettled.clamps())
+    };
+    assert_eq!(clamp.scaling, ScalingOutcome::Unsettled, "{clamp:?}");
     let scaling = ScalingPolicy::new(1e-9, 6144).expect("a valid policy");
     let factor = Sgdd::reduce(csr, scaling)
         .expect("admitted")
         .factor(&Config::default());
-    assert_eq!(factor.blocks()[0].scaling_report(), None);
+    assert_eq!(factor.clamps(), []);
+    assert!(!factor.blocks()[0].grounding_unproven());
 }
 
 /// Settled within 16ε, then `F·A·F` rounds a few ε more: this grid's 17.3ε is rounding, not a deficit.
@@ -113,7 +116,8 @@ fn a_settled_scaling_with_rounding_deficit_is_not_clamped() {
     let k = 22;
     let (row_ptrs, columns, values) = dld(k * k, &grid(k), 1e-3, 30);
     let factor = reduce(&row_ptrs, &columns, &values).expect("admitted");
-    assert_eq!(factor.blocks()[0].scaling_report(), None);
+    assert_eq!(factor.clamps(), []);
+    assert!(!factor.blocks()[0].grounding_unproven());
 }
 
 /// Ranked by violation, a stall restart resumed from a stale best, adopted nothing, and gave up at 3568 of the budget.
@@ -123,8 +127,7 @@ fn a_weighted_grid_settles_after_a_stall_restart() {
     let (row_ptrs, columns, values) = weighted_dld(k * k, &grid(k), 24, 2);
     let policy = ScalingPolicy::new(1e-9, 8000).expect("a valid policy");
     let factor = reduce_with(&row_ptrs, &columns, &values, policy).expect("admitted");
-    let report = factor.blocks()[0].scaling_report();
-    assert!(report.is_none_or(|r| r.settled), "{report:?}");
+    assert!(!factor.blocks()[0].grounding_unproven());
 }
 
 /// A restart's CG could not beat best's eigen-residual within its patience; ending there gave up at 5144 of 12000.
@@ -134,8 +137,7 @@ fn a_stall_before_any_adoption_keeps_iterating() {
     let (row_ptrs, columns, values) = weighted_dld(k * k, &grid(k), 24, 14);
     let policy = ScalingPolicy::new(1e-9, 12_000).expect("a valid policy");
     let factor = reduce_with(&row_ptrs, &columns, &values, policy).expect("admitted");
-    let report = factor.blocks()[0].scaling_report();
-    assert!(report.is_none_or(|r| r.settled), "{report:?}");
+    assert!(!factor.blocks()[0].grounding_unproven());
 }
 
 /// A settled eigen-residual is relative to the Perron vector's peak, so a row at `μ_i` may sit `band/μ_i` off.
@@ -144,7 +146,8 @@ fn a_settled_scaling_with_an_uneven_perron_vector_is_not_clamped() {
     let k = 30;
     let (row_ptrs, columns, values) = weighted_dld(k * k, &grid(k), 10, 0);
     let factor = reduce(&row_ptrs, &columns, &values).expect("admitted");
-    assert_eq!(factor.blocks()[0].scaling_report(), None);
+    assert_eq!(factor.clamps(), []);
+    assert!(!factor.blocks()[0].grounding_unproven());
 }
 
 /// `f32` rounds a singular block's `ρ(N)` ulps past `1`, so only a bracket within the `16ε` band certifies; under `1e-9` these spent 2048 steps and reported.
@@ -164,7 +167,8 @@ fn a_settled_f32_scaling_is_judged_against_its_band(
     let values: Vec<f32> = values.iter().map(|&v| v as f32).collect();
     let factor = reduce(&row_ptrs, &columns, &values).expect("admitted");
     let block = &factor.blocks()[0];
-    assert_eq!(block.scaling_report(), None);
+    assert_eq!(factor.clamps(), []);
+    assert!(!block.grounding_unproven());
     assert!(block.floats());
 }
 
@@ -192,4 +196,18 @@ fn a_policy_reports_what_it_was_built_from() {
     );
     let policy = ScalingPolicy::new(0.25, 7).expect("a valid policy");
     assert_eq!((policy.tolerance(), policy.max_iterations()), (0.25, 7));
+}
+
+/// Two interleaved pairs no scaling makes dominant: each is one clamp, its component's vertices ascending, listed by first vertex.
+#[test]
+fn clamps_list_each_component_by_its_first_vertex() {
+    let row_ptrs = [0, 2, 4, 6, 8];
+    let columns = [0, 2, 1, 3, 0, 2, 1, 3];
+    let values = [1.0, -3.0, 1.0, -3.0, -3.0, 1.0, -3.0, 1.0];
+    let factor = reduce(&row_ptrs, &columns, &values).expect("admitted clamped");
+    let listed: Vec<_> = (factor.clamps().iter())
+        .map(|clamp| (clamp.vertices.clone(), clamp.scaling))
+        .collect();
+    let refuted = ScalingOutcome::Refuted;
+    assert_eq!(listed, [(vec![0, 2], refuted), (vec![1, 3], refuted)]);
 }

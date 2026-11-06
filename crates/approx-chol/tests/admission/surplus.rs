@@ -1,4 +1,4 @@
-use approx_chol::{ApproxInverse, Real, ScalingReport};
+use approx_chol::{ApproxInverse, Clamp, Real, ScalingOutcome};
 use rstest::rstest;
 
 use super::{grounded, reduce};
@@ -70,13 +70,27 @@ fn summation_roundoff_does_not_augment<T: Real + std::fmt::LowerExp>(#[case] dri
 /// A deficit past rounding is reported, not zeroed (#91), even well inside the scaling tolerance.
 #[test]
 fn deficit_beyond_summation_roundoff_is_reported() {
-    let reported = |factor: &ApproxInverse<f64>| factor.blocks()[0].scaling_report().is_some();
-    assert!(reported(&drifted(-5e-11_f64)), "1e-9 tolerance is no cover");
-    assert!(reported(&drifted(-32.0 * f64::EPSILON)));
-    assert!(!reported(&drifted(-12.0 * f64::EPSILON)), "inside 16 eps");
-    let f32_reported = |drift: f32| drifted(drift).blocks()[0].scaling_report().is_some();
-    assert!(f32_reported(-32.0 * f32::EPSILON));
-    assert!(!f32_reported(-12.0 * f32::EPSILON), "inside 16 eps");
+    let certified = Some(ScalingOutcome::Certified);
+    let reported = |factor: &ApproxInverse<f64>| factor.clamps().first().map(|clamp| clamp.scaling);
+    assert_eq!(
+        reported(&drifted(-5e-11_f64)),
+        certified,
+        "1e-9 tolerance is no cover"
+    );
+    assert_eq!(reported(&drifted(-32.0 * f64::EPSILON)), certified);
+    let inside = drifted(-12.0 * f64::EPSILON);
+    assert_eq!(reported(&inside), None, "inside 16 eps");
+    assert!(!inside.blocks()[0].grounding_unproven());
+    let f32_reported = |drift: f32| drifted(drift).clamps().first().map(|clamp| clamp.scaling);
+    let refuted = Some(ScalingOutcome::Refuted);
+    assert_eq!(
+        f32_reported(-32.0 * f32::EPSILON),
+        refuted,
+        "past f32's 16 eps band"
+    );
+    let inside = drifted(-12.0 * f32::EPSILON);
+    assert_eq!(inside.clamps(), [], "inside 16 eps");
+    assert!(!inside.blocks()[0].grounding_unproven());
 }
 
 /// Unit leaves, centre short of their sum by `short_ulps` ε; the leaves balance exactly.
@@ -96,37 +110,48 @@ fn star(leaves: u32, short_ulps: f64) -> ApproxInverse<f64> {
 /// A row of `k` entries rounds by `(k + 3)ε`: a degree-100 centre short by 50ε is rounding, by 200ε a deficit.
 #[test]
 fn a_rows_rounding_band_grows_with_its_degree() {
-    assert!(star(100, 50.0).blocks()[0].scaling_report().is_none());
-    assert!(star(100, 200.0).blocks()[0].scaling_report().is_some());
+    let rounding = star(100, 50.0);
+    assert_eq!(rounding.clamps(), []);
+    assert!(!rounding.blocks()[0].grounding_unproven());
+    assert_eq!(star(100, 200.0).clamps().len(), 1);
 }
 
-/// No scaling settled, so no settle band widens the row's: a degree-13 centre short by 24ε passes `max(16, 16)ε`.
+/// No scaling settled, so no settle band widens the row's: a degree-13 centre short by 24ε passes `max(16, 16)ε`; that none ran is the reduction's unit test.
 #[test]
 fn an_unscaled_deficit_past_its_row_rounding_is_reported() {
-    let report = star(13, 24.0).blocks()[0]
-        .scaling_report()
-        .expect("reported");
-    assert_eq!(report.iterations, 0, "unscaled");
-    assert!(report.violation > 16.0 * f64::EPSILON, "{report:?}");
+    let factor = star(13, 24.0);
+    let [clamp] = factor.clamps() else {
+        panic!("one clamp: {:?}", factor.clamps())
+    };
+    assert_eq!(clamp.vertices, Vec::from_iter(0..14), "the whole star");
+    assert_eq!(clamp.scaling, ScalingOutcome::Certified);
+    assert!(clamp.violation > 16.0 * f64::EPSILON, "{clamp:?}");
 }
 
 /// Main rejected these as not dominant; the rewrite admits them clamped and reports the violation.
 #[rstest]
-#[case::f64_pair_2e_9_short(drifted(-2e-9_f64).blocks()[0].scaling_report(), 2e-9)]
-#[case::f32_pair_1e_5_short(drifted(-1e-5_f32).blocks()[0].scaling_report(), 1e-5)]
+#[case::f64_pair_2e_9_short(drifted(-2e-9_f64).clamps().to_vec(), 2e-9)]
+#[case::f32_pair_1e_5_short(drifted(-1e-5_f32).clamps().to_vec(), 1e-5)]
 #[case::no_scaling_makes_it_dominant(
     reduce(&[0, 2, 4], &[0, 1, 0, 1], &[1.0, -3.0, -3.0, 1.0])
         .expect("clamped")
-        .blocks()[0]
-        .scaling_report(),
+        .clamps()
+        .to_vec(),
     1.0
 )]
 fn a_deficit_past_the_dominance_band_is_admitted_clamped_and_reported(
-    #[case] report: Option<ScalingReport>,
+    #[case] clamps: Vec<Clamp>,
     #[case] deficit: f64,
 ) {
-    let report = report.expect("a clamp is reported");
-    assert!(report.violation >= deficit, "{report:?}");
+    let [clamp] = &clamps[..] else {
+        panic!("one clamp: {clamps:?}")
+    };
+    assert!(clamp.violation >= deficit, "{clamp:?}");
+    assert_eq!(
+        clamp.scaling,
+        ScalingOutcome::Refuted,
+        "a pair's ρ is exact: {clamp:?}"
+    );
 }
 
 /// A 4-vertex star whose centre is `offset` ulps above its dyadic off-diagonal mass; the leaves balance exactly.

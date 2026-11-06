@@ -4,7 +4,7 @@ use num_traits::PrimInt;
 
 use super::{Folded, Signed, Surplus};
 use crate::input::{Column, FactorWidth2};
-use crate::sgdd::block::{Grounding, IrreducibleBlock, ReduceError};
+use crate::sgdd::block::{Grounding, ReduceError, WithClamp};
 use crate::sgdd::congruence::Selection;
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components, Summands};
 use crate::sgdd::scaling::{self, ScalingPolicy, RATIO_BAND};
@@ -108,7 +108,7 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
     blocks: Vec<Folded<T, I>>,
     certified: &LazyCell<Vec<I>, impl FnOnce() -> Vec<I>>,
-) -> Result<Vec<IrreducibleBlock<T, I>>, ReduceError> {
+) -> Result<Vec<WithClamp<T, I>>, ReduceError> {
     if blocks.is_empty() {
         return Ok(Vec::new());
     }

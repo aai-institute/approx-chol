@@ -145,3 +145,24 @@ fn a_sampled_complement_is_the_whole_factors_kept_part() {
     let gap = max(&dense_residual::apply(&s, &delta));
     assert!(gap <= 1e-10 * max(&b), "{gap}");
 }
+
+/// Clamps are per component of `A`, in the input's numbering, so a Schur build lists the whole build's.
+#[test]
+fn a_complement_lists_the_whole_builds_clamps() {
+    let gram = Bipartite::new(31, 12, 60, true);
+    let exhausted = ScalingPolicy::new(0.0, 0).expect("a valid policy");
+    let whole = factorize_with(gram.view(), dense::dense(), exhausted).expect("factors");
+    let [clamp] = whole.clamps() else {
+        panic!("one clamp: {:?}", whole.clamps())
+    };
+    let both_sides: Vec<usize> = (0..30).chain(31..43).collect();
+    assert_eq!(
+        clamp.vertices, both_sides,
+        "the dead left vertex 30 is in no component"
+    );
+    for kept in [Side::Left, Side::Right] {
+        let factor =
+            factorize_complement(gram.view(), kept, dense::dense(), exhausted).expect("factors");
+        assert_eq!(factor.clamps(), whole.clamps(), "{kept:?}");
+    }
+}

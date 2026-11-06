@@ -441,3 +441,35 @@ fn an_isolated_inverse_pivot_out_of_range_is_corrupt(#[case] by: f64) {
     decode_scaled(&factor, "/Isolated/inverse_pivot", by)
         .expect_err("its inverse pivot is out of range");
 }
+
+/// Two interleaved pairs no scaling makes dominant, so two clamps.
+fn with_two_clamps() -> ApproxInverse {
+    let (row_ptrs, columns) = ([0, 2, 4, 6, 8], [0, 2, 1, 3, 0, 2, 1, 3]);
+    let values = [1.0, -3.0, 1.0, -3.0, -3.0, 1.0, -3.0, 1.0];
+    let csr = CsrRef::new(&row_ptrs, &columns, &values, 4).unwrap();
+    let factor = factorize_with(csr, Config::default(), ScalingPolicy::default()).unwrap();
+    assert_eq!(factor.clamps().len(), 2);
+    factor
+}
+
+#[test]
+fn clamps_round_trip() {
+    let factor = with_two_clamps();
+    let bytes = postcard::to_stdvec(&factor).unwrap();
+    let back: ApproxInverse = postcard::from_bytes(&bytes).unwrap();
+    assert_eq!(back.clamps(), factor.clamps());
+}
+
+/// The clamp list as a build writes it: disjoint, each non-empty and ascending, ordered by first vertex, a violation past zero.
+#[rstest]
+#[case::reordered(|clamps: &mut serde_json::Value| clamps.as_array_mut().unwrap().swap(0, 1))]
+#[case::empty(|clamps: &mut serde_json::Value| clamps[0]["vertices"] = serde_json::json!([]))]
+#[case::descending(|clamps: &mut serde_json::Value| clamps[0]["vertices"] = serde_json::json!([2, 0]))]
+#[case::no_violation(|clamps: &mut serde_json::Value| clamps[0]["violation"] = 0.0.into())]
+#[case::overlapping(|clamps: &mut serde_json::Value| clamps[1]["vertices"] = serde_json::json!([1, 2]))]
+fn a_clamp_list_no_build_writes_is_corrupt(#[case] tamper: fn(&mut serde_json::Value)) {
+    let mut v = serde_json::to_value(with_two_clamps()).unwrap();
+    serde_json::from_value::<ApproxInverse>(v.clone()).expect("as written, it decodes");
+    tamper(&mut v[1][3]);
+    serde_json::from_value::<ApproxInverse>(v).expect_err("corrupt");
+}

@@ -4,6 +4,7 @@ mod perron;
 use normalized::Normalized;
 use perron::InverseIteration;
 
+use super::Selection;
 use crate::storage::OffDiagonal;
 use crate::{narrow, widen, Index, Real};
 
@@ -56,16 +57,29 @@ impl Default for ScalingPolicy {
     }
 }
 
-/// A block's clamped deficit or uncertified or unsettled scaling: present iff a deficit past rounding was clamped, its violation exceeded the policy's tolerance, or its float decision is unproven.
+/// A component of `A` whose rows the reduction clamped past rounding to make it dominant.
+#[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ScalingReport {
-    /// Scaling iterations spent.
-    pub iterations: usize,
+#[derive(Clone, Debug, PartialEq)]
+pub struct Clamp {
+    /// The component's vertices, ascending, in the input's numbering.
+    pub vertices: Vec<usize>,
     /// Largest relative dominance violation, clamped away.
     pub violation: f64,
-    /// Whether `y` settled, proving the float decision; else a singular block may have been grounded.
-    pub settled: bool,
+    /// What the scaling proved about the violation.
+    pub scaling: ScalingOutcome,
+}
+
+/// What a component's scaling proved: whether a certificate of generalized diagonal dominance exists.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScalingOutcome {
+    /// Proven dominant, by rows within the policy's tolerance, a null vector closing within `√ε`, or a Perron vector within the tolerance; the clamp removed that proof's rounding.
+    Certified,
+    /// Proven not dominant past the tolerance.
+    Refuted,
+    /// Neither proven: the iteration stopped first.
+    Unsettled,
 }
 
 impl ScalingPolicy {
@@ -92,7 +106,14 @@ pub(super) enum ScaleVector {
     NullVector,
     /// An inverse-iteration Perron vector settled to `band` relative to its peak: a row of `M_ii = μ_i²` sits within `band/μ_i`.
     // Spreads a ground as `1 − ρ` over every row, so a block within the band floats (#308).
-    PerronVector { band: f64, shortfall: ScalingReport },
+    PerronVector {
+        band: f64,
+        /// How far the best `y` leaves `M` short of dominance.
+        violation: f64,
+        scaling: ScalingOutcome,
+        /// Settled `y` proves the float decision; else a singular block may have been grounded.
+        settled: bool,
+    },
 }
 
 impl ScaleVector {
@@ -123,20 +144,28 @@ impl ScaleVector {
         }
     }
 
-    /// `M`'s report from its worst clamped `deficit`, kept when one is past a row's band or the scaling did not settle; an exact vector spends nothing.
-    pub(super) fn report(self, deficit: f64) -> Option<ScalingReport> {
-        let shortfall = match self {
-            Self::Identity | Self::NullVector => ScalingReport {
-                iterations: 0,
-                violation: 0.0,
-                settled: true,
-            },
-            Self::PerronVector { shortfall, .. } => shortfall,
+    /// The clamp of the component on `vertices` whose worst `deficit` is past its band, `None` at `0`.
+    pub(super) fn clamp<I: Index>(self, deficit: f64, vertices: &Selection<I>) -> Option<Clamp> {
+        let (violation, scaling) = match self {
+            Self::Identity | Self::NullVector => (0.0, ScalingOutcome::Certified),
+            Self::PerronVector {
+                violation, scaling, ..
+            } => (violation, scaling),
         };
-        (deficit > 0.0 || !shortfall.settled).then_some(ScalingReport {
-            violation: shortfall.violation.max(deficit),
-            ..shortfall
+        (deficit > 0.0).then(|| {
+            let mut vertices: Vec<usize> = vertices.iter().collect();
+            vertices.sort_unstable();
+            Clamp {
+                vertices,
+                violation: violation.max(deficit),
+                scaling,
+            }
         })
+    }
+
+    /// Whether the float decision rests on an unsettled Perron vector.
+    pub(super) fn grounding_unproven(self) -> bool {
+        matches!(self, Self::PerronVector { settled, .. } if !settled)
     }
 }
 
@@ -178,7 +207,6 @@ pub(super) fn relax<T: Real, I: Index>(
     let band = (RATIO_BAND * widen(T::epsilon())).max(rounding);
     let slack = policy.slack(widen(T::epsilon()));
     let iteration = InverseIteration::new(&n, slack, band, policy.max_iterations)?;
-    let (y, shortfall) = iteration.run();
-    let vector = ScaleVector::PerronVector { band, shortfall };
+    let (y, vector) = iteration.run();
     positive(n.scales(&y), vector)
 }

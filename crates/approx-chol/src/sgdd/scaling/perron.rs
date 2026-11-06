@@ -1,5 +1,5 @@
 use super::normalized::Normalized;
-use super::ScalingReport;
+use super::{ScaleVector, ScalingOutcome};
 use crate::{Index, Real};
 
 /// `[min_i, max_i] (Ny)_i / y_i` of a positive `y`, which brackets `ρ(N)` (Collatz 1942, Wielandt 1950).
@@ -119,7 +119,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
     }
 
     /// `α = 1 + tolerance/2` until a step certifies or refutes (as `M⁻¹𝟙` does: Ahmadinejad et al., arXiv:1810.02348 §3.1), then each step from the bracket's [`shift`](Bracket::shift).
-    pub(super) fn run(mut self) -> (Vec<f64>, ScalingReport) {
+    pub(super) fn run(mut self) -> (Vec<f64>, ScaleVector) {
         let (tolerance, band, ceiling) = (self.tolerance, self.band, self.ceiling);
         let polished = |b: &Bracket| b.settled(tolerance, band) || b.refutes(ceiling);
         let unit = vec![1.0; self.n.n()];
@@ -136,12 +136,20 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
             self.patience = self.patience.saturating_mul(2);
         }
         let (y, bracket) = self.best;
-        let report = ScalingReport {
-            iterations: self.iterations,
+        let scaling = if bracket.certifies(tolerance) {
+            ScalingOutcome::Certified
+        } else if self.refuted || bracket.refutes(ceiling) {
+            ScalingOutcome::Refuted
+        } else {
+            ScalingOutcome::Unsettled
+        };
+        let vector = ScaleVector::PerronVector {
+            band,
             violation: bracket.violation(),
+            scaling,
             settled: bracket.settled(tolerance, band),
         };
-        (y, report)
+        (y, vector)
     }
 
     /// CG on `(αI − N) y = b`; each probed iterate, and a vanishing curvature's or refuting Rayleigh quotient's direction, replaces `best` when it ranks above it. Whether one did.
