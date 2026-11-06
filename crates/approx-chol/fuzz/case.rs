@@ -3,7 +3,7 @@ use std::error::Error;
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
 };
-use approx_chol::{factorize_with, Config, Factor, InnerParallelism};
+use approx_chol::{factorize_with, ApproxInverse, Config, InnerParallelism};
 use approx_chol::{Real, ScalingPolicy, SchurMode};
 use serde::{Deserialize, Serialize};
 
@@ -121,7 +121,7 @@ impl<T: Real> Side<T> {
 }
 
 impl<T: Real> Case<T> {
-    pub fn factor(&self) -> Result<Factor<T>, Box<dyn Error>> {
+    pub fn factor(&self) -> Result<ApproxInverse<T>, Box<dyn Error>> {
         let policy = ScalingPolicy::new(self.tolerance, self.max_iterations.into())
             .ok_or("tolerance outside [0, 1)")?;
         let config = self.build.config();

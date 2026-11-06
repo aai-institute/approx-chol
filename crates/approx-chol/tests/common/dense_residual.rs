@@ -1,6 +1,6 @@
-use approx_chol::Factor;
+use approx_chol::ApproxInverse;
 
-pub fn solve_residual(factor: &Factor, matrix: &[Vec<f64>]) {
+pub fn solve_residual(factor: &ApproxInverse, matrix: &[Vec<f64>]) {
     let exact: Vec<f64> = (0..factor.n()).map(|i| (i % 5) as f64 - 2.0).collect();
     let rhs = apply(matrix, &exact);
     let solution = factor.solve(&rhs).unwrap();

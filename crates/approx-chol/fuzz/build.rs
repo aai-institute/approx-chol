@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use approx_chol::{BlockFactor, Factor};
+use approx_chol::{ApproxInverse, BlockFactor};
 
 mod case;
 
@@ -33,7 +33,7 @@ fn main() {
         if let Input::F64(case) = decoded {
             let factor = case.factor().expect("the seed factors");
             let bytes = postcard::to_stdvec(&factor).expect("serialize the factor");
-            postcard::from_bytes::<Factor>(&bytes).expect("a real factor decodes");
+            postcard::from_bytes::<ApproxInverse>(&bytes).expect("a real factor decodes");
             fs::write(wholes.join(format!("{name}.bin")), bytes).expect("write the seed");
             let blocks = factor.into_blocks();
             let bytes = postcard::to_stdvec(&blocks).expect("serialize the blocks");

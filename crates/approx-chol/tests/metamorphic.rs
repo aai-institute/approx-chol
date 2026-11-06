@@ -150,7 +150,7 @@ cases! {
 #[test]
 fn a_scaled_floating_block_projects_its_null_vector_out() {
     use approx_chol::input::CsrRef;
-    use approx_chol::{factorize, Factor};
+    use approx_chol::{factorize, ApproxInverse};
 
     let graph = grid(30, 30);
     let d: Vec<f64> = (0..graph.n)
@@ -162,7 +162,7 @@ fn a_scaled_floating_block_projects_its_null_vector_out() {
         .map(|(i, k)| d[i] * values[k] * d[columns[k]])
         .collect();
     let csr = CsrRef::new(&ptrs, &columns, &scaled, graph.n as u32).unwrap();
-    let factor: Factor = factorize(csr).unwrap();
+    let factor: ApproxInverse = factorize(csr).unwrap();
     assert!(factor.blocks().iter().all(|block| block.floats()));
 
     let norm = |v: &[f64]| v.iter().map(|v| v * v).sum::<f64>().sqrt();

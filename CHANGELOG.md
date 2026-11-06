@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- `Factor` is renamed `ApproxInverse`, in Rust and Python: it applies an approximate inverse, not a factor.
+
 ### Changed
 
 - Faster factorization of inputs with many small components or long paths, with fewer allocations per component. ([#312])

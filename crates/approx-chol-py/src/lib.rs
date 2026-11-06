@@ -1,4 +1,4 @@
-use approx_chol::{Config, CsrRef, Factor, ScalingPolicy, ScalingReport, Sgdd, SolveError};
+use approx_chol::{ApproxInverse, Config, CsrRef, ScalingPolicy, ScalingReport, Sgdd, SolveError};
 use num_traits::PrimInt;
 use numpy::{
     BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyReadonlyArray1,
@@ -194,14 +194,14 @@ impl PyScalingPolicy {
     }
 }
 
-#[pyclass(frozen, name = "Factor")]
-struct PyFactor {
-    inner: Factor<f64>,
+#[pyclass(frozen, name = "ApproxInverse")]
+struct PyApproxInverse {
+    inner: ApproxInverse<f64>,
     entries: StoredEntries,
 }
 
 /// Without this, a deficit the reduction clamped to make a block dominant is silent.
-fn warn_on_scaling(py: Python<'_>, factor: &Factor<f64>) -> PyResult<()> {
+fn warn_on_scaling(py: Python<'_>, factor: &ApproxInverse<f64>) -> PyResult<()> {
     let reports: Vec<ScalingReport> = (factor.blocks().iter())
         .filter_map(|block| block.scaling_report())
         .collect();
@@ -237,7 +237,7 @@ fn warn_on_scaling(py: Python<'_>, factor: &Factor<f64>) -> PyResult<()> {
 }
 
 #[pymethods]
-impl PyFactor {
+impl PyApproxInverse {
     #[getter]
     fn n(&self) -> usize {
         self.inner.n()
@@ -357,7 +357,7 @@ fn factorize_raw<'py>(
     n: usize,
     config: Option<&PyConfig>,
     scaling: Option<&PyScalingPolicy>,
-) -> PyResult<PyFactor> {
+) -> PyResult<PyApproxInverse> {
     let np = py.import("numpy")?;
     CsrArrays {
         n,
@@ -376,7 +376,7 @@ fn factorize(
     matrix: &Bound<'_, PyAny>,
     config: Option<&PyConfig>,
     scaling: Option<&PyScalingPolicy>,
-) -> PyResult<PyFactor> {
+) -> PyResult<PyApproxInverse> {
     let (n, columns) = matrix.getattr("shape")?.extract::<(usize, usize)>()?;
     if n != columns {
         return Err(value_error("matrix must be square"));
@@ -407,7 +407,7 @@ impl CsrArrays<'_> {
         &self,
         config: Option<&PyConfig>,
         scaling: Option<&PyScalingPolicy>,
-    ) -> PyResult<PyFactor> {
+    ) -> PyResult<PyApproxInverse> {
         // Also keeps `CsrRef::new` from overflowing `n + 1`.
         if u32::try_from(self.n).is_err() {
             return Err(value_error("matrix dimension exceeds u32::MAX"));
@@ -433,7 +433,7 @@ impl CsrArrays<'_> {
         &self,
         config: Option<&PyConfig>,
         scaling: Option<&PyScalingPolicy>,
-    ) -> PyResult<PyFactor> {
+    ) -> PyResult<PyApproxInverse> {
         let indptr = as_contiguous::<J>(&self.np, &self.indptr)?;
         let indices = as_contiguous::<J>(&self.np, &self.indices)?;
         let indptr = owned(&indptr, "indptr")?;
@@ -451,7 +451,7 @@ impl CsrArrays<'_> {
             sgdd.map(|sgdd| sgdd.factor(&config))
         })?;
         warn_on_scaling(py, &inner)?;
-        Ok(PyFactor { inner, entries })
+        Ok(PyApproxInverse { inner, entries })
     }
 }
 
@@ -459,8 +459,8 @@ impl CsrArrays<'_> {
 // GIL-free is sound: pyclass state is `Sync`, `Workspace` is borrow-checked, the module holds none, and `detach` reads only owned copies.
 #[pymodule(gil_used = false)]
 fn _approx_chol(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyApproxInverse>()?;
     m.add_class::<PyConfig>()?;
-    m.add_class::<PyFactor>()?;
     m.add_class::<PyScalingPolicy>()?;
     m.add_class::<PyWorkspace>()?;
     m.add_function(wrap_pyfunction!(factorize, m)?)?;

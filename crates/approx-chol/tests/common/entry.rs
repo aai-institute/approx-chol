@@ -1,7 +1,7 @@
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
 };
-use approx_chol::{factorize_with, Config, Factor, Real, ScalingPolicy};
+use approx_chol::{factorize_with, ApproxInverse, Config, Real, ScalingPolicy};
 use num_traits::{NumCast, PrimInt};
 
 use crate::graph::Graph;
@@ -55,7 +55,8 @@ macro_rules! by_type {
 }
 pub(crate) use by_type;
 
-pub type Factors = ByType<Factor<f32>, Factor<f32>, Factor<f64>, Factor<f64>>;
+pub type Factors =
+    ByType<ApproxInverse<f32>, ApproxInverse<f32>, ApproxInverse<f64>, ApproxInverse<f64>>;
 
 /// `labels.0[v]` is caller vertex `v`'s index in the entry point's numbering.
 #[derive(Clone, Debug)]
@@ -163,9 +164,9 @@ impl Entry {
         graph: &Graph,
         n_left: usize,
         config: Config,
-    ) -> Factor<T> {
+    ) -> ApproxInverse<T> {
         let n = graph.n;
-        let rejected = |error: &dyn std::fmt::Debug| -> Factor<T> {
+        let rejected = |error: &dyn std::fmt::Debug| -> ApproxInverse<T> {
             panic!("{self:?} rejected {graph:?}: {error:?}")
         };
         let (a, b): (Vec<I>, Vec<I>) = (graph.edges.iter())
@@ -290,7 +291,7 @@ impl Factored {
     }
 }
 
-fn solve<T: Real>(factor: &Factor<T>, b: &[f64]) -> Vec<f64> {
+fn solve<T: Real>(factor: &ApproxInverse<T>, b: &[f64]) -> Vec<f64> {
     let x = factor
         .solve(&cast_all::<f64, T>(b))
         .expect("b has length n");

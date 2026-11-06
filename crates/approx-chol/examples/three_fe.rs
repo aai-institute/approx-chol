@@ -1,7 +1,7 @@
 //! Three fixed effects, no slopes: each pair of factors is one incidence-only bipartite Gram, as within's Schwarz subdomains.
 
 use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1};
-use approx_chol::{factorize_with, Config, Factor, ScalingPolicy};
+use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy};
 
 /// Workers move between firms of their own region only, so (worker, firm) splits by region.
 const REGIONS: [(usize, usize); 5] = [(2000, 200), (40, 6), (30, 5), (20, 4), (10, 3)];
@@ -92,7 +92,7 @@ impl PairGram<'_> {
 }
 
 /// One application's residual, then PCG's iterations to `1e-10`; `b = A x_true` is consistent although `A` is singular.
-fn check(a: &PairGram<'_>, factor: &Factor<f64>) {
+fn check(a: &PairGram<'_>, factor: &ApproxInverse<f64>) {
     let mut rng = SplitMix(11);
     let x_true: Vec<f64> = (0..factor.n()).map(|_| rng.unit() - 0.5).collect();
     let b = a.apply(&x_true);
@@ -116,7 +116,7 @@ fn relative_residual(a: &PairGram<'_>, x: &[f64], b: &[f64]) -> f64 {
 
 fn pcg(
     a: &PairGram<'_>,
-    factor: &Factor<f64>,
+    factor: &ApproxInverse<f64>,
     b: &[f64],
     tol: f64,
     max: usize,

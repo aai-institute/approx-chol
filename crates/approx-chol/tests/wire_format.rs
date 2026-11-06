@@ -5,7 +5,9 @@ use std::collections::BTreeSet;
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
 use approx_chol::FACTOR_FORMAT_VERSION as FORMAT_VERSION;
-use approx_chol::{factorize_with, BlockFactor, Config, Factor, InnerParallelism, ScalingPolicy};
+use approx_chol::{
+    factorize_with, ApproxInverse, BlockFactor, Config, InnerParallelism, ScalingPolicy,
+};
 use rstest::rstest;
 use serde::de::value::{Error, SeqDeserializer};
 use serde::Deserialize;
@@ -68,7 +70,7 @@ impl Fixture {
         }
     }
 
-    fn factor(self) -> Factor {
+    fn factor(self) -> ApproxInverse {
         let Some(matrix) = self.exact_matrix() else {
             return sampled_gram(self.config());
         };
@@ -136,7 +138,7 @@ impl Fixture {
 }
 
 /// Small enough for AC2 to keep a few eliminations, large enough that its samples differ from AC's.
-fn sampled_gram(config: Config) -> Factor {
+fn sampled_gram(config: Config) -> ApproxInverse {
     let (left, right, per_row) = (10u32, 6u32, 3u32);
     let (rows, cols): (Vec<u32>, Vec<u32>) = (0..left * per_row)
         .map(|k| (k / per_row, (k * 5 + k / per_row) % right))

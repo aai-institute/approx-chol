@@ -1,11 +1,11 @@
 #![no_main]
 
-use approx_chol::Factor;
+use approx_chol::ApproxInverse;
 use libfuzzer_sys::fuzz_target;
 
 // A persisted factor's blocks must cover `0..n` once each, or a solve would index past `x`.
 fuzz_target!(|data: &[u8]| {
-    let Ok(factor) = postcard::from_bytes::<Factor<f64>>(data) else {
+    let Ok(factor) = postcard::from_bytes::<ApproxInverse<f64>>(data) else {
         return;
     };
     let b: Vec<f64> = (0..factor.n()).map(|i| (i % 7) as f64 - 3.0).collect();

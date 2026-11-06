@@ -1,7 +1,7 @@
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrError, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef,
 };
-use approx_chol::{factorize, Error, Factor, ReduceError};
+use approx_chol::{factorize, ApproxInverse, Error, ReduceError};
 use num_traits::PrimInt;
 use rstest::rstest;
 
@@ -281,7 +281,7 @@ fn in_class_input_is_admitted_on_both_paths(
     .unwrap(),
 )
 .expect("bipartite factor-width-2 Gram"))]
-fn an_empty_system_is_admitted_by_every_entry_point(#[case] factor: Factor) {
+fn an_empty_system_is_admitted_by_every_entry_point(#[case] factor: ApproxInverse) {
     assert_eq!((factor.n(), factor.blocks().len()), (0, 0));
 }
 
@@ -307,7 +307,7 @@ fn a_diagonal_at_a_quarter_of_the_maximum_still_solves() {
 }
 
 /// The #163 range in `f32`'s own bounds: `MIN_POSITIVE/EPSILON` is `2^-103`, not `f64`'s `2^-970`.
-fn f32_pair(diagonal: f32, edge: f32) -> Result<Factor<f32>, Error> {
+fn f32_pair(diagonal: f32, edge: f32) -> Result<ApproxInverse<f32>, Error> {
     reduce(&[0, 2, 4], &[0, 1, 0, 1], &[diagonal, edge, edge, diagonal])
 }
 
@@ -355,7 +355,7 @@ fn widen<I: PrimInt>(indices: &[u32]) -> Vec<I> {
         .collect()
 }
 
-fn bits(factor: &Factor, rhs: &[f64]) -> (String, Vec<u64>) {
+fn bits(factor: &ApproxInverse, rhs: &[f64]) -> (String, Vec<u64>) {
     let solution = factor.solve(rhs).expect("solve");
     (
         format!("{factor:?}"),

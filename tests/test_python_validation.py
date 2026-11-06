@@ -255,7 +255,7 @@ def test_a_workspace_in_use_raises_instead_of_sharing():
         factor.solve_into(ReentrantRhs(), out, workspace)
 
 
-@pytest.mark.parametrize("cls", [approx_chol.Factor, approx_chol.Workspace])
-def test_factor_and_workspace_cannot_be_constructed_directly(cls):
+@pytest.mark.parametrize("cls", [approx_chol.ApproxInverse, approx_chol.Workspace])
+def test_approx_inverse_and_workspace_cannot_be_constructed_directly(cls):
     with pytest.raises(TypeError, match="cannot create"):
         cls()

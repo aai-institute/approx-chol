@@ -14,7 +14,7 @@ fn owned_csr_routes_factor_alike() {
     let narrowed = wide.to_owned_u32().expect("narrow");
     let by_narrow = factorize(&narrowed).expect("factor narrowed");
     let b = [1.0, 0.0, -1.0];
-    let x = |f: &approx_chol::Factor| f.solve(&b).expect("solve");
+    let x = |f: &approx_chol::ApproxInverse| f.solve(&b).expect("solve");
     assert_eq!(x(&by_input), x(&by_ref));
     assert_eq!(x(&by_input), x(&by_narrow));
 }

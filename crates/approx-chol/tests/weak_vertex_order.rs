@@ -6,7 +6,7 @@ mod graph;
 mod residual;
 
 use approx_chol::input::Laplacian;
-use approx_chol::{factorize_with, Config, Factor, OwnedCsr, ScalingPolicy};
+use approx_chol::{factorize_with, ApproxInverse, Config, OwnedCsr, ScalingPolicy};
 use dense::dense;
 use graph::{Edge, Graph};
 
@@ -29,7 +29,7 @@ fn omega(graph: &Graph, x: &[f64], b: &[f64]) -> f64 {
 }
 
 /// The sweep's bar: `max(1e3 ε, 10 ω(x*))`.
-fn assert_componentwise(graph: &Graph, factor: &Factor, x_true: &[f64]) {
+fn assert_componentwise(graph: &Graph, factor: &ApproxInverse, x_true: &[f64]) {
     let b = graph.apply(x_true);
     let x = factor.solve(&b).unwrap();
     assert!(x.iter().all(|v| v.is_finite()), "x = {x:?}");
@@ -42,7 +42,7 @@ fn assert_componentwise(graph: &Graph, factor: &Factor, x_true: &[f64]) {
     );
 }
 
-fn csr_factor(graph: &Graph, config: Config) -> Factor {
+fn csr_factor(graph: &Graph, config: Config) -> ApproxInverse {
     let (ptrs, cols, vals) = graph.csr(false);
     let csr = OwnedCsr::<f64, u32>::try_from_usize(&ptrs, &cols, &vals, graph.n).unwrap();
     factorize_with(csr.as_csr_ref(), config, ScalingPolicy::default()).unwrap()

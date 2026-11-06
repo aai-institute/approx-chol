@@ -20,12 +20,12 @@ mod surplus_grounds;
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
 };
-use approx_chol::{factorize_with, Config, Factor, ScalingPolicy};
+use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy};
 use dense::dense;
 use dense_residual::solve_residual;
 use gram::{dense_csr, matrix};
 
-fn floats(factor: &Factor) -> Vec<bool> {
+fn floats(factor: &ApproxInverse) -> Vec<bool> {
     factor.blocks().iter().map(|block| block.floats()).collect()
 }
 
@@ -62,8 +62,8 @@ fn csr_and_upper_share_reduction_and_solve_bits() {
         },
         dense(),
     ] {
-        let full: Factor = factorize_with(csr, config, ScalingPolicy::default()).unwrap();
-        let upper: Factor = factorize_with(upper, config, ScalingPolicy::default()).unwrap();
+        let full: ApproxInverse = factorize_with(csr, config, ScalingPolicy::default()).unwrap();
+        let upper: ApproxInverse = factorize_with(upper, config, ScalingPolicy::default()).unwrap();
         assert_eq!(format!("{full:?}"), format!("{upper:?}"));
         assert_eq!(floats(&full), [true, false]);
         let a = full.solve(&rhs).unwrap();
@@ -153,13 +153,13 @@ fn exhausted_scaling_reports_on_grams_and_rows() {
     let (x, y) = ([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
     let gram = FactorWidth2::new(3, (&a, &x), (&b, &y)).unwrap();
     let policy = ScalingPolicy::new(0.0, 0).unwrap();
-    let factor: Factor = factorize_with(gram, dense(), policy).unwrap();
+    let factor: ApproxInverse = factorize_with(gram, dense(), policy).unwrap();
     assert!(factor.blocks()[0].scaling_report().is_some());
     let matrix = matrix(3, &a, &b, &x, &y);
     let ptrs = [0, 3, 6, 9];
     let indices = [0, 1, 2, 0, 1, 2, 0, 1, 2];
     let values: Vec<f64> = matrix.into_iter().flatten().collect();
     let csr = CsrRef::new(&ptrs, &indices, &values, 3).unwrap();
-    let factor: Factor = factorize_with(csr, dense(), policy).unwrap();
+    let factor: ApproxInverse = factorize_with(csr, dense(), policy).unwrap();
     assert!(factor.blocks()[0].scaling_report().is_some());
 }

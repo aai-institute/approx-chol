@@ -38,7 +38,7 @@ fn gram() -> Bipartite {
     }
 }
 
-/// `Factor::solve`, then each block's `solve_local` under `Allow` and `Forbid`, as bits; `kept` factors the complement.
+/// `ApproxInverse::solve`, then each block's `solve_local` under `Allow` and `Forbid`, as bits; `kept` factors the complement.
 fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> Vec<u64> {
     let gram = g.view();
     let factor = match kept {
