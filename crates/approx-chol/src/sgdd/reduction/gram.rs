@@ -2,63 +2,65 @@ use std::cell::LazyCell;
 
 use num_traits::PrimInt;
 
-use super::{Folded, ShapedBy, Signed, Singularity, Surplus};
-use crate::input::{Column, Gram};
-use crate::sgdd::block::{ReduceError, Reduced};
+use super::{Folded, Signed, Surplus};
+use crate::input::{Column, FactorWidth2};
+use crate::sgdd::block::{Grounding, IrreducibleBlock, ReduceError};
 use crate::sgdd::congruence::Selection;
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Components, Summands};
-use crate::sgdd::scaling::{self, ScalingPolicy};
-use crate::storage::{narrow, widen, Adjacency, Grounding, Index, Real};
+use crate::sgdd::scaling::{self, ScalingPolicy, RATIO_BAND};
+use crate::sgdd::Reduced;
+use crate::{narrow, widen, Index, Real};
 
-/// `V` with values: scaled by its null vectors on demand, folded blocks dropping their rows for a pass over `V` that decides floating.
-pub(super) fn from_values<T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
-    cells: S,
-    v: Gram<'_, T, J>,
-    policy: &ScalingPolicy,
-) -> Result<ShapedBy<T, I, S>, ReduceError> {
-    let Components {
-        partition,
-        summands,
-    } = assemble_values::<T, J, I, S>(cells, v)?.extract(Ok)?;
-    let Summands {
-        blocks: live,
-        lone,
-        dead,
-    } = summands;
-    // Built by the first block not already dominant: a dominant input pays only once a block's band fails.
-    let mut nulls: Option<NullVectors<I>> = None;
-    // Doubling, the folded blocks held up to 2x their size beside `live` (+12% peak at 99k blocks).
-    let (mut folded, mut frustrated) = (Vec::with_capacity(live.len()), Vec::new());
-    for a in live {
-        // `V` proves a scaling exists.
-        let reduced = a.reduce(policy, |a| {
-            let NullVectors { u, .. } =
-                nulls.get_or_insert_with(|| null_vectors(v, partition.components()));
-            // `NaN` where a component has no certificate.
-            let u = (a.adjacency.vertices.iter()).map(|v| u[v]);
-            (u.clone().all(f64::is_finite))
-                .then(|| scaling::null_scaling(u, &a.rows.diagonal))
-                .flatten()
-                .or_else(|| scaling::relax(&a.adjacency.off_diagonal, &a.rows.diagonal, policy))
-        })?;
-        match reduced {
-            Signed::Folded(block) => folded.push(block),
-            Signed::Frustrated(block) => frustrated.push(block),
+impl<T: Real, I: Index> Reduced<T, I> {
+    /// `V` with values: scaled by its null vectors on demand, folded blocks dropping their rows for a pass over `V` that decides floating.
+    pub(super) fn from_values<J: PrimInt, S: AdjacencyLayout>(
+        cells: S,
+        v: FactorWidth2<'_, T, J>,
+        policy: &ScalingPolicy,
+    ) -> Result<Self, ReduceError> {
+        let Components {
+            partition,
+            summands,
+        } = assemble_values::<T, J, I, S>(cells, v)?.extract(Ok)?;
+        let Summands {
+            blocks: live,
+            lone,
+            dead,
+        } = summands;
+        // Built by the first block not already dominant: a dominant input pays only once a block's band fails.
+        let mut nulls: Option<(Vec<f64>, Vec<I>)> = None;
+        // Doubling, the folded blocks held up to 2x their size beside `live` (+12% peak at 99k blocks).
+        let (mut folded, mut frustrated) = (Vec::with_capacity(live.len()), Vec::new());
+        for a in live {
+            // `V` proves a scaling exists.
+            let reduced = a.reduce(policy, |a| {
+                let (u, _) = nulls.get_or_insert_with(|| null_vectors(v, partition.components()));
+                // `NaN` where a component has no certificate.
+                let u = (a.vertices.iter()).map(|v| u[v]);
+                (u.clone().all(f64::is_finite))
+                    .then(|| scaling::null_scaling(u, &a.rows.diagonal))
+                    .flatten()
+                    .or_else(|| scaling::relax(&a.off_diagonal, &a.rows.diagonal, policy))
+            })?;
+            match reduced {
+                Signed::Folded(block) => folded.push(block),
+                Signed::Frustrated(block) => frustrated.push(block),
+            }
         }
+        // `u` freed before the column pass: only the certified set outlives the scaling.
+        let read = nulls.map(|(_, certified)| certified);
+        let certified =
+            LazyCell::new(|| read.unwrap_or_else(|| null_vectors(v, partition.components()).1));
+        let mut blocks = ground_or_float(v, folded, &certified)?;
+        drop(certified);
+        blocks.extend(frustrated);
+        let summands = Summands { blocks, lone, dead };
+        Ok(Components {
+            partition,
+            summands,
+        }
+        .into_reduced())
     }
-    // `u` freed before the column pass: only the certified set outlives the scaling.
-    let read = nulls.map(|nulls| nulls.certified);
-    let certified =
-        LazyCell::new(|| read.unwrap_or_else(|| null_vectors(v, partition.components()).certified));
-    let mut blocks = ground_or_float(v, folded, &certified)?;
-    drop(certified);
-    blocks.extend(frustrated);
-    let summands = Summands { blocks, lone, dead };
-    Ok(Components {
-        partition,
-        summands,
-    }
-    .into_summands())
 }
 
 /// Summed from `V`'s columns, with what one-ended columns state and the components whose cycles `V` certifies.
@@ -75,18 +77,15 @@ impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_,
     // A Gram's grounds are stated or break a cycle: a scaled block floats only on its certificate.
     const RESIDUES_FLOAT_SCALED: bool = false;
 
-    fn residues<'a, P: Adjacency<T, I>>(
-        &'a self,
-        folded: &'a Folded<T, I, P>,
-    ) -> impl Iterator<Item = f64> + Clone + 'a {
+    fn residues<'a>(&'a self, folded: &'a Folded<T, I>) -> impl Iterator<Item = f64> + Clone + 'a {
         (folded.m.vertices().iter()).map(|v| self.surplus[v])
     }
 
-    fn states_ground<P: Adjacency<T, I>>(&self, folded: &Folded<T, I, P>) -> bool {
-        let band = scaling::ratio_band::<T>();
+    fn states_ground(&self, folded: &Folded<T, I>) -> bool {
+        let epsilon = widen(T::epsilon());
         // A stated ground sums without cancellation, so the floor ignores degree.
         (folded.m.vertices().iter().zip(&folded.rows.diagonal))
-            .any(|(v, &d)| self.stated[v] > band * widen(d))
+            .any(|(v, &d)| self.stated[v] > RATIO_BAND * epsilon * widen(d))
     }
 
     fn certifies(&self, vertices: &Selection<I>) -> bool {
@@ -95,7 +94,7 @@ impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_,
     }
 
     // Every rounded surplus ≤ 0 leaves nothing to ground: out of band, only past degree ~2·10⁸ (#299).
-    fn grounds<P: Adjacency<T, I>>(&self, folded: &Folded<T, I, P>) -> Grounding<T> {
+    fn grounds(&self, folded: &Folded<T, I>) -> Grounding<T> {
         Grounding::of(
             (folded.m.vertices().iter())
                 .map(|v| narrow(self.surplus[v].max(0.0)))
@@ -105,11 +104,11 @@ impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_,
 }
 
 /// Each folded block settled by [`Folded::settle`] on one pass over `V`'s columns.
-fn ground_or_float<T: Real, J: PrimInt, I: Index, P: Adjacency<T, I>>(
-    v: Gram<'_, T, J>,
-    blocks: Vec<Folded<T, I, P>>,
+fn ground_or_float<T: Real, J: PrimInt, I: Index>(
+    v: FactorWidth2<'_, T, J>,
+    blocks: Vec<Folded<T, I>>,
     certified: &LazyCell<Vec<I>, impl FnOnce() -> Vec<I>>,
-) -> Result<Vec<Reduced<T, I, P>>, ReduceError> {
+) -> Result<Vec<IrreducibleBlock<T, I>>, ReduceError> {
     if blocks.is_empty() {
         return Ok(Vec::new());
     }
@@ -125,7 +124,8 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index, P: Adjacency<T, I>>(
     let mut surplus = vec![0.0f64; v.n()];
     // One-ended columns: data, not a cancelling row sum.
     let mut stated = vec![0.0f64; v.n()];
-    let mut singularity = vec![Singularity::default(); blocks.len()];
+    // `ε·1ᵀM1` and `ε·tr M` per block.
+    let (mut ones, mut trace) = (vec![0.0f64; blocks.len()], vec![0.0f64; blocks.len()]);
     let epsilon = widen(T::epsilon());
     v.for_each_column::<I>(
         #[inline(always)]
@@ -143,16 +143,16 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index, P: Adjacency<T, I>>(
                     let p = u_a + u_b;
                     surplus[a] += w(u_a, p);
                     surplus[b] += w(u_b, p);
-                    singularity[c].ones += w(epsilon * p, p);
-                    singularity[c].trace += w(epsilon * u_a, u_a) + w(epsilon * u_b, u_b);
+                    ones[c] += w(epsilon * p, p);
+                    trace[c] += w(epsilon * u_a, u_a) + w(epsilon * u_b, u_b);
                 }
                 // One-ended, a column states a ground of its end's own square.
                 (a, b) => {
                     for (i, c, u) in [a, b].into_iter().flatten() {
                         surplus[i] += w(u, u);
                         stated[i] += w(u, u);
-                        singularity[c].ones += w(epsilon * u, u);
-                        singularity[c].trace += w(epsilon * u, u);
+                        ones[c] += w(epsilon * u, u);
+                        trace[c] += w(epsilon * u, u);
                     }
                 }
             }
@@ -169,22 +169,15 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index, P: Adjacency<T, I>>(
         stated: &stated,
         certified,
     };
-    let decided = blocks.into_iter().zip(singularity);
-    (decided.map(|(folded, singularity)| folded.settle(singularity, &gram))).collect()
+    let decided = blocks.into_iter().zip(ones).zip(trace);
+    (decided.map(|((folded, ones), trace)| folded.settle((ones, trace), &gram))).collect()
 }
 
-/// The null-vector certificate: one union-find pass; a cycle off by more than `√ε` relative dooms its component.
-struct NullVectors<I> {
-    /// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is.
-    u: Vec<f64>,
-    /// The sorted lowest vertices of the components that have one.
-    certified: Vec<I>,
-}
-
+/// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is, and the sorted lowest vertices of the components that have one: one union-find pass; a cycle off by more than `√ε` relative dooms its component.
 fn null_vectors<'c, T: Real, J: PrimInt, I: Index>(
-    v: Gram<'_, T, J>,
+    v: FactorWidth2<'_, T, J>,
     components: impl Iterator<Item = &'c [I]>,
-) -> NullVectors<I> {
+) -> (Vec<f64>, Vec<I>) {
     let n = v.n();
     let mut component = vec![I::zero(); n];
     // A lone vertex is dead or definite, never a candidate.
@@ -224,7 +217,7 @@ fn null_vectors<'c, T: Real, J: PrimInt, I: Index>(
         .filter_map(|(lowest, doomed)| lowest.filter(|_| !doomed))
         .collect();
     certified.sort_unstable();
-    NullVectors { u, certified }
+    (u, certified)
 }
 
 /// A column's component when both ends are nonzero in it.

@@ -2,13 +2,14 @@
 
 use num_traits::PrimInt;
 
-use crate::input::{Column, Gram};
+use crate::input::{Column, FactorWidth2};
 use crate::sgdd::block::ReduceError;
-use crate::storage::{in_range, narrow, widen, Index, Real, Rows};
+use crate::storage::Rows;
+use crate::{in_range, narrow, widen, Index, Real};
 
 /// `A`'s strict upper triangle; `pair` sees each nonzero cell.
 pub(super) fn upper<T: Real, J: PrimInt, I: Index>(
-    v: Gram<'_, T, J>,
+    v: FactorWidth2<'_, T, J>,
     seen: impl FnMut(&Column<T, I>),
     pair: impl FnMut(usize, usize, f64),
 ) -> Result<Rows<T, I>, ReduceError> {
@@ -18,7 +19,7 @@ pub(super) fn upper<T: Real, J: PrimInt, I: Index>(
 
 /// The biadjacency `C` from the left part's rows, summed as [`Accumulator::of`] picks.
 pub(super) fn cross<T: Real, J: PrimInt, I: Index>(
-    v: Gram<'_, T, J>,
+    v: FactorWidth2<'_, T, J>,
     n_left: usize,
     seen: impl FnMut(&Column<T, I>),
     pair: impl FnMut(usize, usize, f64),
@@ -73,7 +74,7 @@ impl Accumulator {
 
     fn cross<T: Real, J: PrimInt, I: Index>(
         self,
-        v: Gram<'_, T, J>,
+        v: FactorWidth2<'_, T, J>,
         n_left: usize,
         seen: impl FnMut(&Column<T, I>),
         pair: impl FnMut(usize, usize, f64),
@@ -100,7 +101,7 @@ fn admit<T: Real>(i: usize, x: f64) -> Result<T, ReduceError> {
 
 /// `pair` sees each nonzero cell.
 fn dense_cross<T: Real, J: PrimInt, I: Index>(
-    v: Gram<'_, T, J>,
+    v: FactorWidth2<'_, T, J>,
     n_left: usize,
     mut seen: impl FnMut(&Column<T, I>),
     mut pair: impl FnMut(usize, usize, f64),
@@ -135,7 +136,7 @@ fn dense_cross<T: Real, J: PrimInt, I: Index>(
 
 /// Each row's cell count, a column's row its lower end, `seen` visiting each column once.
 fn counts<T: Real, J: PrimInt, I: Index>(
-    v: Gram<'_, T, J>,
+    v: FactorWidth2<'_, T, J>,
     n_rows: usize,
     mut seen: impl FnMut(&Column<T, I>),
 ) -> Vec<usize> {
@@ -152,7 +153,7 @@ fn counts<T: Real, J: PrimInt, I: Index>(
 
 /// Cells bucketed at their lower end in column order, so each sums as a dense table would; `pair` sees each nonzero cell.
 fn sum_cells<T: Real, J: PrimInt, I: Index>(
-    v: Gram<'_, T, J>,
+    v: FactorWidth2<'_, T, J>,
     counts: &[usize],
     first_column: usize,
     mut pair: impl FnMut(usize, usize, f64),
@@ -289,7 +290,7 @@ mod tests {
         let sum = |accumulator: Accumulator, gram: BipartiteFactorWidth2<'_, f64>| {
             let (mut seen, mut pairs) = (Vec::new(), Vec::new());
             let rows = accumulator.cross::<f64, u32, u32>(
-                gram.gram(),
+                gram.lower(),
                 n_left,
                 |column| seen.push((column.a, column.b, column.cell())),
                 |i, j, cell| pairs.push((i, j, cell)),
@@ -316,7 +317,7 @@ mod tests {
         )
         .unwrap();
         let rows = Accumulator::Table
-            .cross::<f64, u32, u32>(gram.gram(), 4, |_| {}, |_, _, _| {})
+            .cross::<f64, u32, u32>(gram.lower(), 4, |_| {}, |_, _, _| {})
             .unwrap();
         assert!(rows.holds_no_slack());
     }

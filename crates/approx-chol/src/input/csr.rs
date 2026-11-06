@@ -3,8 +3,8 @@ use std::borrow::Cow;
 use num_traits::{cast, PrimInt};
 
 use super::index;
-use super::repr::{Repr, Stored};
-use crate::storage::{in_range, Real};
+use crate::in_range;
+use crate::Real;
 
 /// Borrowed CSR claiming a symmetric `A`; shape is checked here, the claim when it factors.
 #[derive(Clone, Copy, Debug)]
@@ -109,8 +109,8 @@ impl<'a, T, I: PrimInt> UpperCsrRef<'a, T, I> {
         CsrRef::new(row_ptrs, col_indices, values, n).map(Self)
     }
 
-    pub(super) fn repr(self) -> Repr<'a, T, I> {
-        Repr::Csr(self.0, Stored::UpperTriangle)
+    pub(crate) fn lower(self) -> CsrRef<'a, T, I> {
+        self.0
     }
 }
 

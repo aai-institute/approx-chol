@@ -2,7 +2,7 @@
 
 use num_traits::PrimInt;
 
-use crate::storage::Real;
+use crate::Real;
 
 /// Why an input constructor rejected its slices.
 #[non_exhaustive]

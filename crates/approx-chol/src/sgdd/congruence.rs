@@ -1,7 +1,8 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
-use crate::storage::{compensated_sum, narrow, widen, Gauge, Index, Real};
+use crate::narrow;
+use crate::{widen, Index, Real};
 
 /// `R = F Pᵀ`, so `M = R A Rᵀ`: `Pᵀ` picks the block's vertices of `A`, or of `S` once tailed, `F` is the congruence.
 #[cfg_attr(
@@ -14,12 +15,12 @@ use crate::storage::{compensated_sum, narrow, widen, Gauge, Index, Real};
     ))
 )]
 #[derive(Clone, Debug)]
-pub(crate) struct Lift<T, I> {
+pub(crate) struct Restriction<T, I> {
     vertices: Selection<I>,
     congruence: Congruence<T>,
 }
 
-impl<T: Real, I: Index> Lift<T, I> {
+impl<T: Real, I: Index> Restriction<T, I> {
     /// Panics unless one factor per vertex.
     pub(super) fn new(vertices: Selection<I>, congruence: Congruence<T>) -> Self {
         assert!(congruence.fits(vertices.len()), "one factor per vertex");
@@ -33,7 +34,7 @@ impl<T: Real, I: Index> Lift<T, I> {
         &self.vertices
     }
 
-    /// The lift onto local vertices `from..`, renumbered by `vertex`: a complement's, `F` commuting with the elimination.
+    /// The restriction to local vertices `from..`, renumbered by `vertex`: a complement's, `F` commuting with the elimination.
     pub(super) fn tail(self, from: usize, vertex: impl Fn(usize) -> I) -> Self {
         let vertices = (from..self.vertices.len()).map(|k| vertex(self.vertices.vertex(k)));
         Self::new(
@@ -42,20 +43,11 @@ impl<T: Real, I: Index> Lift<T, I> {
         )
     }
 
-    /// The gauge on local vertices `from..`; unscaled, every `|f|` is `1`, so the last.
-    pub(super) fn gauge(&self, from: usize) -> Gauge {
+    /// `F` from vertex `from` on, `None` unless scaled, so every `|f|` is `1`.
+    pub(crate) fn factor_tail(&self, from: usize) -> Option<FactorTail<'_, T>> {
         match &self.congruence {
-            Congruence::Scaled(scales) => {
-                let f = &scales.factors[from..];
-                Gauge {
-                    peak: largest(f),
-                    spans_wide: spans_wide(f),
-                }
-            }
-            _ => Gauge {
-                peak: self.vertices.len() - from - 1,
-                spans_wide: false,
-            },
+            Congruence::Scaled(scales) => Some(FactorTail(&scales.factors[from..])),
+            _ => None,
         }
     }
 
@@ -85,10 +77,10 @@ impl<T: Real, I: Index> Lift<T, I> {
 }
 
 #[cfg(feature = "serde")]
-checked_serde!(Lift);
+checked_serde!(Restriction);
 
 #[cfg(feature = "serde")]
-impl<T: Real, I: Index> Lift<T, I> {
+impl<T: Real, I: Index> Restriction<T, I> {
     fn checked(self) -> Option<Self> {
         let factors = match &self.congruence {
             Congruence::Signs(f) => f.iter().all(|f| f.abs() == T::one()),
@@ -215,12 +207,23 @@ pub(super) struct ScaledFactors<T> {
     norm: f64,
 }
 
-/// Whether `|f|` spans past `1/√ε`, where a solve pinned at a small `|f|` loses more than half its digits.
-fn spans_wide<T: Real>(f: &[T]) -> bool {
-    let (least, most) = (f.iter()).fold((T::infinity(), T::zero()), |(least, most), f| {
-        (least.min(f.abs()), most.max(f.abs()))
-    });
-    least < most * T::epsilon().sqrt()
+/// `F` on a block's vertices from an offset on, asked only where its gauge goes.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FactorTail<'f, T>(&'f [T]);
+
+impl<T: Real> FactorTail<'_, T> {
+    /// The offset of the largest `|f|`.
+    pub(crate) fn largest(self) -> usize {
+        largest(self.0)
+    }
+
+    /// Whether `|f|` spans past `1/√ε`, where a solve pinned at a small `|f|` loses more than half its digits.
+    pub(crate) fn spans_wide(self) -> bool {
+        let (least, most) = (self.0.iter()).fold((T::infinity(), T::zero()), |(least, most), f| {
+            (least.min(f.abs()), most.max(f.abs()))
+        });
+        least < most * T::epsilon().sqrt()
+    }
 }
 
 /// An index of the largest `|f|`, where pinning the gauge leaves its rounding unamplified by `1/f`.
@@ -240,7 +243,7 @@ impl<T: Real> ScaledFactors<T> {
             let u = widen(f / largest);
             u * u
         };
-        let norm = compensated_sum(&factors, |_, f| unit(&f));
+        let norm = crate::compensated_sum(&factors, |_, f| unit(&f));
         Self {
             factors,
             peak,
@@ -340,7 +343,7 @@ impl<T: Real> Congruence<T> {
 
 fn project_out<T: Real>(x: &mut [T], u: impl Fn(usize) -> T, uu: f64) {
     // Compensated, or a constant added to a floating `b` moves the solution (#147).
-    let ux = compensated_sum(x, |i, x| widen(u(i)) * widen(x));
+    let ux = crate::compensated_sum(x, |i, x| widen(u(i)) * widen(x));
     let along = ux / uu;
     for (i, x) in x.iter_mut().enumerate() {
         *x = narrow::<T>(widen(*x) - widen(u(i)) * along);

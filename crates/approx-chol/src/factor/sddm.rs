@@ -2,10 +2,9 @@
 
 use rayon::prelude::*;
 
-use crate::sgdd::Singularity;
-use crate::storage::{
-    lane_sum, narrow, widen, Adjacency, Grounding, Index, Real, Rows, Sheets, UpperAdjacency,
-};
+use crate::sgdd::{within_band, Grounding, Sheets};
+use crate::storage::{Rows, UpperAdjacency};
+use crate::{narrow, widen, Index, Real};
 
 /// `L + diag(s)`, `L`'s off-diagonal nonpositive; a twisted cover's `k⁺—k⁻` edges live in its closure, not its rows.
 #[derive(Clone, Debug)]
@@ -65,19 +64,19 @@ impl<T: Real, I: Index> Sddm<T, I> {
                         sums.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
                     }
                 });
-                Self::of_rows(rows, sheets, grounding.surplus())
+                Self::of_rows(rows, sheets, &grounding)
             }
         }
     }
 
-    /// Rows on `sheets`, each ground plus its vertex's `surplus`, one per vertex; on two, a ground within the singular band [`twists`].
-    pub(super) fn of_rows(rows: SddmRows<T, I>, sheets: Sheets, surplus: Option<&[T]>) -> Self {
+    /// Rows on `sheets`, each ground plus its vertex's surplus, the last of `block`'s; on two, a ground within the band [`twists`].
+    pub(super) fn of_rows(rows: SddmRows<T, I>, sheets: Sheets, block: &Grounding<T>) -> Self {
         let n = rows.sums.len() - 1;
         let adjacency = UpperAdjacency::new(Rows::new(rows.ptrs, rows.indices, rows.values, n));
         let mut ground = rows.ground;
-        if let Some(surplus) = surplus {
-            assert_eq!(sheets.count() * surplus.len(), n, "one surplus per vertex");
-            let copies = (surplus.iter()).flat_map(|&s| std::iter::repeat_n(s, sheets.count()));
+        if let Some(surplus) = block.surplus() {
+            let kept = surplus[surplus.len() - ground.len() / sheets.count()..].iter();
+            let copies = kept.flat_map(|&s| std::iter::repeat_n(s, sheets.count()));
             (ground.iter_mut().zip(copies)).for_each(|(g, s)| *g = s + *g);
         }
         let grounding = Grounding::of(ground);
@@ -229,17 +228,15 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         rows.unwrap_or_else(|| Self::new(n))
     }
 
-    /// The signed rows the sheets cover, `k⁻`'s mirrors skipped: `j⁺, j⁻` sum `P, N` into `N − P`, and `kept` plus the ground gains `2 min(P, N)` on both rows, as `P + N − |N − P|` would by cancellation.
+    /// The signed rows the sheets cover, `k⁻`'s mirrors skipped: `j⁺, j⁻` sum `P, N` into `N − P`, and the surplus, `block`'s plus the ground, gains `2 min(P, N)` on both rows, as `P + N − |N − P|` would by cancellation.
     pub(super) fn fold(
         self,
         sheets: Sheets,
-        kept: Option<&[T]>,
+        block: &Grounding<T>,
     ) -> (UpperAdjacency<T, I>, Grounding<T>) {
         let count = sheets.count();
         let n = (self.sums.len() - 1) / count;
-        if let Some(s) = kept {
-            assert_eq!(s.len(), n, "one surplus per vertex");
-        }
+        let kept = block.surplus().map(|s| &s[s.len() - n..]);
         let ground = |k: usize| self.ground[count * k];
         let mut surplus: Vec<T> = (0..n)
             .map(|k| kept.map_or(ground(k), |s| s[k] + ground(k)))
@@ -292,15 +289,14 @@ impl<T: Real, I: Index> ColumnSums<'_, T, I> {
     }
 }
 
-/// Whether `ground` is within the singular band of `ground + Σ|a_ij|`, both `ε`-scaled so neither overflows: a cover's copies then [`twist`] instead of grounding, so its `1/s` common mode cannot swamp `z`; a cover doubles both sums, so `M`'s decide as its own.
+/// Whether `ground` is within the band of `ground + Σ|a_ij|`, both `ε`-scaled so neither overflows: a cover's copies then [`twist`] instead of grounding, so its `1/s` common mode cannot swamp `z`; a cover doubles both sums, so `M`'s decide as its own.
 fn twists<T: Real, I: Index>(ground: &[T], adjacency: &UpperAdjacency<T, I>) -> bool {
     let epsilon = widen(T::epsilon());
-    let total = lane_sum(ground, epsilon);
-    let trace = total + adjacency.scaled_abs_total(epsilon);
-    Singularity { ones: total, trace }.within_band::<T>()
+    let total = crate::lane_sum(ground, epsilon);
+    within_band::<T>(total, total + adjacency.scaled_abs_total(epsilon))
 }
 
-/// The edge `k⁺ — k⁻` that acts on `[z; −z]` as grounds `g⁺, g⁻` do; with `g⁺ ≠ g⁻` no ungrounded pair matches them, and the mean differs by less than the singular band. Zero where both copies float, else at least `MIN_POSITIVE`, as a share is.
+/// The edge `k⁺ — k⁻` that acts on `[z; −z]` as grounds `g⁺, g⁻` do; with `g⁺ ≠ g⁻` no ungrounded pair matches them, and the mean differs by less than the band. Zero where both copies float, else at least `MIN_POSITIVE`, as a share is.
 fn twist<T: Real>(g_plus: T, g_minus: T) -> T {
     if g_plus == T::zero() && g_minus == T::zero() {
         return T::zero();

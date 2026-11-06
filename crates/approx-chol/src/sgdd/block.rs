@@ -1,136 +1,205 @@
-//! One reduced irreducible block.
+//! One reduced irreducible block, its balance and grounding.
 
-use super::congruence::{Congruence, Lift, ScaledFactors, Selection};
-use super::decomposition::{BlockAdjacency, RowSums, SymmetricBlock};
-use super::scaling::ScalingReport;
-use crate::storage::{
-    in_range, Adjacency, Balance, Bipartite, Gauge, Grounded, Grounding, Index, OffDiagonal, Real,
-};
+use super::congruence::{Congruence, Restriction, ScaledFactors, Selection};
+use super::scaling::{ScalingReport, RATIO_BAND};
+use crate::storage::{OffDiagonal, Rows};
+use crate::{Index, Real};
 
-/// One irreducible principal block `A_c` of `A`, reduced: `M = F · A_c · F` weakly diagonally dominant, eliminated side first; in a [`ReducedComplement`] its lift covers only the kept side.
+/// Whether a signature folds `M` (Harary), and `M`'s grounding.
 #[derive(Clone, Debug)]
-pub(crate) struct Reduced<T, I, P> {
-    /// `A_c`'s first vertex in `A`: it keys every draw, so a complement draws as its whole block does.
-    pub(crate) key: usize,
-    pub(crate) lift: Box<Lift<T, I>>,
-    pub(crate) matrix: Grounded<T, P>,
-    pub(crate) balance: Balance,
-    /// On the vertices Cholesky factors: a bipartite block's kept side.
-    pub(crate) gauge: Gauge,
-    pub(crate) report: Option<Box<ScalingReport>>,
+pub(crate) enum Balance<T> {
+    /// Folded to a Z-matrix: singular exactly when ungrounded.
+    Balanced(Grounding<T>),
+    /// No signature exists: a two-sheet cover, definite on `[z; −z]` even ungrounded.
+    Frustrated(Grounding<T>),
 }
 
-/// A block of `A`, whichever its shape.
-pub(crate) type ReducedComponent<T, I> = Reduced<T, I, OffDiagonal<T, I>>;
-
-/// A bipartite block's Schur complement onto its kept side, unformed: `C`, its lift on the kept side's numbering; only [`Reduced::onto_kept`] builds one.
-#[derive(Clone, Debug)]
-pub(crate) struct ReducedComplement<T, I>(Reduced<T, I, Bipartite<T, I>>);
-
-impl<T, I> ReducedComplement<T, I> {
-    pub(crate) fn into_reduced(self) -> Reduced<T, I, Bipartite<T, I>> {
-        self.0
-    }
-}
-
-impl<T: Real, I: Index, P> Reduced<T, I, P> {
-    /// Vertices its lift covers, each once however many sheets cover it.
-    pub(crate) fn vertex_count(&self) -> usize {
-        self.lift.vertices().len()
+impl<T> Balance<T> {
+    /// A balanced `M` folds onto one sheet; a frustrated one needs the cover's two.
+    fn sheets(&self) -> Sheets {
+        match self {
+            Self::Balanced(_) => Sheets::One,
+            Self::Frustrated(_) => Sheets::Two,
+        }
     }
 
-    pub(super) fn into_component(self) -> ReducedComponent<T, I>
-    where
-        P: Into<OffDiagonal<T, I>>,
-    {
-        let Grounded {
-            adjacency,
-            grounding,
-        } = self.matrix;
-        Reduced {
-            matrix: Grounded {
-                adjacency: adjacency.into(),
-                grounding,
-            },
-            key: self.key,
-            lift: self.lift,
-            balance: self.balance,
-            gauge: self.gauge,
-            report: self.report,
+    fn split(self) -> (Sheets, Grounding<T>) {
+        let sheets = self.sheets();
+        match self {
+            Self::Balanced(grounding) | Self::Frustrated(grounding) => (sheets, grounding),
         }
     }
 }
 
-impl<T: Real, I: Index> Reduced<T, I, Bipartite<T, I>> {
-    /// The complement, its lift tailed onto the kept side, each kept vertex of `A` numbered `local(v)`; tailed before `S`, so the eliminated side's `F` never shares its formation's peak.
-    pub(super) fn onto_kept(self, local: impl Fn(usize) -> I) -> ReducedComplement<T, I> {
-        let from = self.matrix.adjacency.n_eliminated();
-        ReducedComplement(Self {
-            lift: Box::new(self.lift.tail(from, local)),
-            ..self
-        })
+/// How many copies of each vertex a matrix holds: two for a Gremban cover, interleaved by vertex.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Sheets {
+    One,
+    Two,
+}
+
+impl Sheets {
+    pub(crate) fn count(self) -> usize {
+        match self {
+            Self::One => 1,
+            Self::Two => 2,
+        }
     }
 }
+
+/// The surplus `s = diag(M) − Σ|offdiag(M)|` closing `M` into an SDDM; none is `σ = 0`, singular only when balanced.
+#[derive(Clone, Debug)]
+pub(crate) struct Grounding<T>(Option<Box<[T]>>);
+
+impl<T: Real> Grounding<T> {
+    /// Panics on a negative or non-finite entry; ungrounded exactly when every entry is zero.
+    pub(crate) fn of(surplus: Vec<T>) -> Self {
+        let valid = |&s: &T| s.is_finite() && s >= T::zero();
+        assert!(
+            surplus.iter().all(valid),
+            "a surplus is finite and nonnegative"
+        );
+        match surplus.iter().all(|&s| s == T::zero()) {
+            true => Self(None),
+            false => Self(Some(surplus.into())),
+        }
+    }
+
+    /// A derived surplus with each entry below the range floor (#163) set to zero while within its row's rounding, `RATIO_BAND ε d_i`; past it, `Err` names the row of a real ground out of range.
+    pub(crate) fn flushed(self, diagonal: &[T]) -> Result<Self, usize> {
+        let Some(mut surplus) = self.0 else {
+            return Ok(self);
+        };
+        let band = RATIO_BAND * crate::widen(T::epsilon());
+        for (i, (s, &d)) in surplus.iter_mut().zip(diagonal).enumerate() {
+            if !crate::in_range(*s) {
+                if crate::widen(*s) > band * crate::widen(d) {
+                    return Err(i);
+                }
+                *s = T::zero();
+            }
+        }
+        Ok(Self::of(surplus.into_vec()))
+    }
+
+    pub(crate) fn ungrounded() -> Self {
+        Self(None)
+    }
+
+    pub(crate) fn surplus(&self) -> Option<&[T]> {
+        self.0.as_deref()
+    }
+
+    /// Row `i`'s ground edge; a zero surplus couples nothing, so it is none.
+    pub(crate) fn edge(&self, i: usize) -> Option<T> {
+        self.surplus().map(|s| s[i]).filter(|&s| s > T::zero())
+    }
+
+    pub(crate) fn is_grounded(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// Whether it grounds exactly `n` rows.
+    pub(crate) fn fits(&self, n: usize) -> bool {
+        self.0.as_ref().is_none_or(|surplus| surplus.len() == n)
+    }
+}
+
+/// One irreducible principal block `A_c` of `A`, reduced: `M = F · A_c · F` weakly diagonally dominant, eliminated side first.
+#[derive(Clone, Debug)]
+pub(crate) struct IrreducibleBlock<T = f64, I = u32> {
+    restriction: Box<Restriction<T, I>>,
+    off_diagonal: OffDiagonal<T, I>,
+    balance: Balance<T>,
+    report: Option<Box<ScalingReport>>,
+}
+
+/// A bipartite block's Schur complement onto its kept side, unformed: `C`, and the restriction onto the kept side's numbering.
+pub(crate) struct BlockComplement<T, I> {
+    /// The whole block's first vertex in `A`.
+    first: usize,
+    restriction: Box<Restriction<T, I>>,
+    cross: Rows<T, I>,
+    sheets: Sheets,
+    grounding: Grounding<T>,
+    report: Option<Box<ScalingReport>>,
+}
+
+impl<T: Real, I: Index> BlockComplement<T, I> {
+    /// `block`'s restriction tailed onto its kept side, each kept vertex of `A` numbered `local(v)`.
+    pub(super) fn new(block: IrreducibleBlock<T, I>, local: impl Fn(usize) -> I) -> Self {
+        let (whole, off_diagonal, sheets, grounding, report) = block.into_parts();
+        let OffDiagonal::Bipartite(cross) = off_diagonal else {
+            unreachable!("a complement's layout leaves each block both sides")
+        };
+        let first = whole.vertices().vertex(0);
+        // Tailed before `S`, so the eliminated side's `F` never shares its formation's peak.
+        let restriction = Box::new(whole.tail(cross.n_rows(), local));
+        Self {
+            first,
+            restriction,
+            cross,
+            sheets,
+            grounding,
+            report,
+        }
+    }
+
+    /// Moved out, the whole block's first vertex first, as it keys the draws.
+    pub(crate) fn into_parts(self) -> ComplementParts<T, I> {
+        (
+            self.first,
+            self.restriction,
+            self.cross,
+            self.sheets,
+            self.grounding,
+            self.report,
+        )
+    }
+}
+
+type ComplementParts<T, I> = (
+    usize,
+    Box<Restriction<T, I>>,
+    Rows<T, I>,
+    Sheets,
+    Grounding<T>,
+    Option<Box<ScalingReport>>,
+);
 
 /// `M = F · A_c · F` over its vertices, its surplus still to be decided.
-pub(super) struct Congruent<T, I, P> {
+pub(super) struct Congruent<T, I> {
     vertices: Selection<I>,
     congruence: Congruence<T>,
-    off_diagonal: P,
+    off_diagonal: OffDiagonal<T, I>,
 }
 
-impl<T: Real, I, P> Congruent<T, I, P> {
-    /// In `A`'s numbering, in local order.
-    pub(super) fn vertices(&self) -> &Selection<I> {
-        &self.vertices
-    }
-
-    pub(super) fn off_diagonal(&self) -> &P {
-        &self.off_diagonal
-    }
-
-    pub(super) fn factor(&self, i: usize) -> T {
-        self.congruence.factor(i)
-    }
-}
-
-impl<T: Real, I: Index, P: Adjacency<T, I>> Congruent<T, I, P> {
-    /// `S A_c S`, unscaled: signs keep every magnitude, so `A_c`'s rows are `M`'s.
-    pub(super) fn signed(a: SymmetricBlock<T, I, P>, signs: Congruence<T>) -> (Self, RowSums<T>) {
-        let SymmetricBlock {
-            adjacency:
-                BlockAdjacency {
-                    vertices,
-                    off_diagonal,
-                },
-            rows,
-        } = a;
+impl<T: Real, I: Index> Congruent<T, I> {
+    /// `S A_c S`, unscaled.
+    pub(super) fn signed(
+        vertices: Selection<I>,
+        off_diagonal: OffDiagonal<T, I>,
+        signs: Congruence<T>,
+    ) -> Self {
         let off_diagonal = match signs.factors(off_diagonal.n()) {
             Some(s) => off_diagonal.signed(&s),
             None => off_diagonal,
         };
-        let m = Self {
+        Self {
             vertices,
             congruence: signs,
             off_diagonal,
-        };
-        (m, rows)
+        }
     }
 
-    /// `S R A_c R S` with its rows; `None` once a scaled off-diagonal entry leaves the range.
+    /// `S R A_c R S` with its `Σ_j |m_ij|`; `None` once a scaled entry leaves the range.
     pub(super) fn scaled(
-        a: SymmetricBlock<T, I, P>,
+        vertices: Selection<I>,
+        off_diagonal: OffDiagonal<T, I>,
         signs: Congruence<T>,
         scales: &[T],
-    ) -> Option<(Self, RowSums<T>)> {
-        let SymmetricBlock {
-            adjacency:
-                BlockAdjacency {
-                    vertices,
-                    off_diagonal,
-                },
-            rows,
-        } = a;
+    ) -> Option<(Self, Vec<T>)> {
         let factors: Box<[T]> = (scales.iter().enumerate())
             .map(|(i, &scale)| signs.factor(i) * scale)
             .collect();
@@ -141,21 +210,14 @@ impl<T: Real, I: Index, P: Adjacency<T, I>> Congruent<T, I, P> {
             congruence,
             off_diagonal,
         };
-        let diagonal = (rows.diagonal.iter().zip(scales))
-            .map(|(&a, &f)| f * a * f)
-            .collect();
-        Some((m, RowSums { diagonal, abs }))
+        Some((m, abs))
     }
 
     /// An incidence Gram, assembled switched across a bipartition.
-    pub(super) fn incidence(adjacency: BlockAdjacency<I, P>) -> Self {
-        let BlockAdjacency {
-            vertices,
-            off_diagonal,
-        } = adjacency;
-        let congruence = match off_diagonal.bipartite() {
-            Some(c) => Congruence::NegateFrom(c.n_eliminated()),
-            None => Congruence::Identity,
+    pub(super) fn incidence(vertices: Selection<I>, off_diagonal: OffDiagonal<T, I>) -> Self {
+        let congruence = match &off_diagonal {
+            OffDiagonal::Bipartite(c) => Congruence::NegateFrom(c.n_rows()),
+            OffDiagonal::General(_) => Congruence::Identity,
         };
         Self {
             vertices,
@@ -164,47 +226,80 @@ impl<T: Real, I: Index, P: Adjacency<T, I>> Congruent<T, I, P> {
         }
     }
 
+    /// In `A`'s numbering, in local order.
+    pub(super) fn vertices(&self) -> &Selection<I> {
+        &self.vertices
+    }
+
+    pub(super) fn off_diagonal(&self) -> &OffDiagonal<T, I> {
+        &self.off_diagonal
+    }
+
+    pub(super) fn factor(&self, i: usize) -> T {
+        self.congruence.factor(i)
+    }
+
     /// Panics unless one factor, row and surplus per vertex, and `I` must index the factor's vertices.
     pub(super) fn block(
         self,
-        grounding: Grounding<T>,
-        balance: Balance,
+        balance: Balance<T>,
         report: Option<ScalingReport>,
-    ) -> Result<Reduced<T, I, P>, ReduceError> {
+    ) -> Result<IrreducibleBlock<T, I>, ReduceError> {
         let Self {
             vertices,
             congruence,
             off_diagonal,
         } = self;
-        let lift = Lift::new(vertices, congruence);
-        let vertices = lift.vertices();
+        let restriction = Restriction::new(vertices, congruence);
+        let vertices = restriction.vertices();
         let n = vertices.len();
         assert_eq!(off_diagonal.n(), n, "one row per vertex");
+        let (Balance::Balanced(grounding) | Balance::Frustrated(grounding)) = &balance;
         debug_assert!(
-            balance == Balance::Frustrated || off_diagonal.nonpositive(),
+            balance.sheets() == Sheets::Two || off_diagonal.nonpositive(),
             "a balanced M is a Z-matrix"
         );
         assert!(grounding.fits(n), "one surplus per row");
         let surplus = grounding.surplus().unwrap_or_default();
-        if let Some(i) = surplus.iter().position(|&s| !in_range(s)) {
+        if let Some(i) = surplus.iter().position(|&s| !crate::in_range(s)) {
             let vertex = vertices.vertex(i);
             return Err(ReduceError::OutOfRange { vertex });
         }
-        let key = vertices.vertex(0);
-        let gauge = lift.gauge(off_diagonal.n_eliminated());
-        Ok(Reduced {
-            key,
-            lift: Box::new(lift),
-            matrix: Grounded {
-                adjacency: off_diagonal,
-                grounding,
-            },
+        Ok(IrreducibleBlock {
+            restriction: Box::new(restriction),
+            off_diagonal,
             balance,
-            gauge,
             report: report.map(Box::new),
         })
     }
 }
+
+impl<T: Real, I: Index> IrreducibleBlock<T, I> {
+    /// Vertices of `A` the block holds, each once however many sheets cover it.
+    pub(crate) fn vertex_count(&self) -> usize {
+        self.restriction.vertices().len()
+    }
+
+    /// Moved out, so each part is freed once its factor stops reading it.
+    pub(crate) fn into_parts(self) -> BlockParts<T, I> {
+        let (sheets, grounding) = self.balance.split();
+        (
+            self.restriction,
+            self.off_diagonal,
+            sheets,
+            grounding,
+            self.report,
+        )
+    }
+}
+
+type BlockParts<T, I> = (
+    Box<Restriction<T, I>>,
+    OffDiagonal<T, I>,
+    Sheets,
+    Grounding<T>,
+    Option<Box<ScalingReport>>,
+);
 
 /// Why a block has no SDDM form; each `vertex` is in `A`'s numbering.
 #[non_exhaustive]

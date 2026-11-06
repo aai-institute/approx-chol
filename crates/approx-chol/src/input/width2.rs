@@ -3,21 +3,53 @@
 pub(super) mod bipartite;
 pub(super) mod error;
 pub(super) mod laplacian;
+pub(super) mod weights;
 
 use num_traits::PrimInt;
 
 use self::error::{check_ends, length, ViewError};
-use super::repr::gram::{Gram, Layout, Sides, Values, Weights};
-use crate::storage::Real;
+use self::weights::Weight;
+use super::index;
+use crate::{widen, Index, Real};
 
-/// `V Vᵀ` on `n` vertices, column `k` of `V` being `x[k] e_a[k] + y[k] e_b[k]`.
+/// `V`'s columns and vertices, one variant per input type.
+#[derive(Clone, Copy, Debug)]
+enum Columns<'a, T> {
+    /// `e_a − e_b`, `a[k] ≠ b[k] < n`, under a [`Laplacian`](laplacian::Laplacian)'s edge weights and an [`Sddm`](laplacian::Sddm)'s surplus.
+    Incidence {
+        n: usize,
+        w: Option<&'a [T]>,
+        surplus: Option<&'a [T]>,
+    },
+    /// `x[k] e_a + y[k] e_b`, `a[k] ≠ b[k] < n`.
+    FactorWidth2 { n: usize, x: &'a [T], y: &'a [T] },
+    /// A [`BipartiteFactorWidth2`](bipartite::BipartiteFactorWidth2)'s.
+    Bipartite(BipartiteColumns<'a, T>),
+}
+
+/// `s[k] (x[k] e_a + y[k] e_(n_left + b))`, a missing side or scale `1`; with neither side, read switched as `e_a − e_b`.
+#[derive(Clone, Copy, Debug)]
+struct BipartiteColumns<'a, T> {
+    n_left: usize,
+    n_right: usize,
+    x: Option<&'a [T]>,
+    y: Option<&'a [T]>,
+    scale: Option<&'a [T]>,
+}
+
+impl<T> BipartiteColumns<'_, T> {
+    /// Saturates, as a sum past `usize` fails allocation anyway.
+    fn n(&self) -> usize {
+        self.n_left.saturating_add(self.n_right)
+    }
+}
+
+/// `V Vᵀ` on `n` vertices, column `k` of `V` being `x[k] e_a[k] + y[k] e_b[k]`; every other input lowers to one.
 #[derive(Clone, Copy, Debug)]
 pub struct FactorWidth2<'a, T, I = u32> {
-    n: usize,
     a: &'a [I],
     b: &'a [I],
-    x: &'a [T],
-    y: &'a [T],
+    columns: Columns<'a, T>,
 }
 
 impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
@@ -30,19 +62,156 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         length(a.len(), x.len())?;
         length(a.len(), y.len())?;
         check_ends(n, a, b)?;
-        Ok(Self { n, a, b, x, y })
+        let columns = Columns::FactorWidth2 { n, x, y };
+        Ok(Self { a, b, columns })
     }
 
-    pub(super) fn gram(self) -> Gram<'a, T, I> {
-        let Self { n, a, b, x, y } = self;
-        let (layout, values) = (Layout::Whole { n }, Values::Valued(Sides::Both(x, y)));
-        let weights = Weights::Unit;
-        Gram {
-            a,
-            b,
-            layout,
-            values,
-            weights,
+    /// The left part's size, after which `b` is numbered, when `V` is bipartite.
+    pub(crate) fn n_left(&self) -> Option<usize> {
+        match self.columns {
+            Columns::Bipartite(columns) => Some(columns.n_left),
+            Columns::Incidence { .. } | Columns::FactorWidth2 { .. } => None,
         }
+    }
+
+    /// The surplus `s`, which only an [`Sddm`](laplacian::Sddm) has.
+    pub(crate) fn surplus(&self) -> Option<&'a [T]> {
+        match self.columns {
+            Columns::Incidence { surplus, .. } => surplus,
+            Columns::FactorWidth2 { .. } | Columns::Bipartite(_) => None,
+        }
+    }
+
+    /// `V` is an incidence matrix, so `A` is dominant by shape and its diagonal derived.
+    pub(crate) fn is_incidence(&self) -> bool {
+        matches!(
+            self.columns,
+            Columns::Incidence { .. }
+                | Columns::Bipartite(BipartiteColumns {
+                    x: None,
+                    y: None,
+                    ..
+                })
+        )
+    }
+
+    /// Dimension of `A`, not the column count; saturates, as a sum past `usize` fails allocation anyway.
+    pub(crate) fn n(&self) -> usize {
+        match self.columns {
+            Columns::Incidence { n, .. } | Columns::FactorWidth2 { n, .. } => n,
+            Columns::Bipartite(columns) => columns.n(),
+        }
+    }
+
+    /// `V`'s column count, known before any column is read.
+    pub(crate) fn n_columns(&self) -> usize {
+        self.a.len()
+    }
+
+    /// Each column in order; write `visit` as `#[inline(always)] |column| …` (outlined: 1.6-1.9x).
+    #[inline(always)]
+    pub(crate) fn for_each_column<S: Index>(self, visit: impl FnMut(Column<T, S>)) {
+        let (one, minus_one) = (|_| T::one(), |_| -T::one());
+        // Each kind loops straight: reading `V` through a per-column match cost within's paths 6%.
+        match self.columns {
+            Columns::Incidence { w: None, .. } => self.columns_of(0, one, minus_one, unit, visit),
+            Columns::Incidence { w: Some(w), .. } => {
+                self.columns_of(0, one, minus_one, |k| Weight::Of(w[k]), visit)
+            }
+            Columns::FactorWidth2 { x, y, .. } => {
+                self.columns_of(0, |k| x[k], |k| y[k], unit, visit)
+            }
+            Columns::Bipartite(BipartiteColumns {
+                n_left,
+                x,
+                y,
+                scale: None,
+                ..
+            }) => self.sides(n_left, x, y, unit, visit),
+            Columns::Bipartite(BipartiteColumns {
+                n_left,
+                x,
+                y,
+                scale: Some(s),
+                ..
+            }) => self.sides(n_left, x, y, |k| Weight::Scale(s[k]), visit),
+        }
+    }
+
+    /// The bipartite `V`'s columns, a missing side `1`; with neither, read switched as `e_a − e_b`.
+    #[inline(always)]
+    fn sides<S: Index>(
+        self,
+        offset: usize,
+        x: Option<&[T]>,
+        y: Option<&[T]>,
+        weight: impl Fn(usize) -> Weight<T>,
+        visit: impl FnMut(Column<T, S>),
+    ) {
+        let (one, minus_one) = (|_| T::one(), |_| -T::one());
+        match (x, y) {
+            (None, None) => self.columns_of(offset, one, minus_one, weight, visit),
+            (Some(x), None) => self.columns_of(offset, |k| x[k], one, weight, visit),
+            (None, Some(y)) => self.columns_of(offset, one, |k| y[k], weight, visit),
+            (Some(x), Some(y)) => self.columns_of(offset, |k| x[k], |k| y[k], weight, visit),
+        }
+    }
+
+    /// Column `k` is `v_a(k) e_a + v_b(k) e_(offset + b)` under `weight(k)`; matched once, then looped per case.
+    #[inline(always)]
+    fn columns_of<S: Index>(
+        self,
+        offset: usize,
+        v_a: impl Fn(usize) -> T,
+        v_b: impl Fn(usize) -> T,
+        weight: impl Fn(usize) -> Weight<T>,
+        mut visit: impl FnMut(Column<T, S>),
+    ) {
+        for (k, (a, b)) in self.a.iter().zip(self.b).enumerate() {
+            visit(Column {
+                a: S::from_index(index(*a)),
+                b: S::from_index(offset + index(*b)),
+                v_a: v_a(k),
+                v_b: v_b(k),
+                weight: weight(k),
+            });
+        }
+    }
+}
+
+fn unit<T>(_: usize) -> Weight<T> {
+    Weight::Unit
+}
+
+/// Column `k` of `V` under its weight, unfolded, so the floating test reads `V` exactly as given.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Column<T, I> {
+    pub(crate) a: I,
+    pub(crate) b: I,
+    pub(crate) v_a: T,
+    pub(crate) v_b: T,
+    weight: Weight<T>,
+}
+
+impl<T: Real, I> Column<T, I> {
+    /// `w·v_a·v_b` in `f64`: every assembly sums its cells there and casts once.
+    pub(crate) fn cell(self) -> f64 {
+        self.weight
+            .bilinear_unflushed(widen(self.v_a), widen(self.v_b))
+    }
+
+    /// `w·x·y` for any `x`, `y` on this column's ends.
+    pub(crate) fn bilinear(self, x: f64, y: f64) -> f64 {
+        self.weight.bilinear(x, y)
+    }
+
+    /// `w·v²`, an underflow kept as the least subnormal.
+    pub(crate) fn square(self, v: f64) -> f64 {
+        self.weight.bilinear_unflushed(v, v)
+    }
+
+    /// `w = 0`, so the column adds nothing to `A`.
+    pub(crate) fn zero_weight(self) -> bool {
+        self.weight.is_zero()
     }
 }

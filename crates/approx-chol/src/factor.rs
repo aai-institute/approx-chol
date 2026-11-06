@@ -17,11 +17,11 @@ pub use config::{Config, InnerParallelism, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
 
-use crate::sgdd::{Lift, Lone, Reduced, ReducedComplement, ReducedComponent, Selection, Summands};
-use crate::storage::{widen, Adjacency, Grounded, Index, OffDiagonal, Real};
+use crate::sgdd::{BlockComplement, IrreducibleBlock, Restriction, Selection, Summands};
+use crate::storage::OffDiagonal;
 use crate::ScalingReport;
+use crate::{Index, Real};
 use block_elimination::BlockElimination;
-pub(crate) use cholesky::fits_u32;
 use cholesky::{Arm, Cholesky, Signed, Workspace};
 use schur::BipartiteBlock;
 use sddm::Sddm;
@@ -100,21 +100,18 @@ impl<T: Real> Factor<T> {
     pub(crate) fn build<I: Index, B: Summand<T, I>>(
         summands: Summands<B, I, T>,
         config: &Config,
-    ) -> Self
-    where
-        Storage<T>: From<Block<T, I>>,
-    {
+        store: fn(Block<T, I>) -> Storage<T>,
+    ) -> Self {
         let Summands {
             blocks: coupled,
             lone,
             dead,
         } = summands;
         let mut blocks = Vec::with_capacity(coupled.len() + lone.len());
-        let build = |reused: &mut _, block: B| BlockFactor(block.factor(config, reused).into());
+        let build = |reused: &mut _, block: B| BlockFactor(store(block.factor(config, reused)));
         let workspace = || Workspace::new(config.split());
         blocks.par_extend(coupled.into_par_iter().map_init(workspace, build));
-        let isolated =
-            |Lone { vertex, pivot }| BlockFactor(Storage::Isolated(Isolated::new(vertex, pivot)));
+        let isolated = |(v, pivot)| BlockFactor(Storage::Isolated(Isolated::new(v, pivot)));
         blocks.extend(lone.into_iter().map(isolated));
         Self::new(blocks, dead.into_iter().map(I::index).collect())
     }
@@ -196,39 +193,30 @@ pub(crate) trait Summand<T, I>: Send {
     fn factor(self, config: &Config, reused: &mut Workspace<T, I>) -> Block<T, I>;
 }
 
-impl<T: Real, I: Index> Summand<T, I> for ReducedComponent<T, I> {
+impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
     fn factor(self, config: &Config, reused: &mut Workspace<T, I>) -> Block<T, I> {
-        let Reduced {
-            key,
-            lift,
-            matrix: Grounded {
-                adjacency,
-                grounding,
-            },
-            balance,
-            gauge,
-            report,
-        } = self;
-        let streams = Streams::of(key, config);
-        let sheets = balance.sheets();
+        let (restriction, off_diagonal, sheets, grounding, report) = self.into_parts();
+        let streams = Streams::of(restriction.vertices().vertex(0), config);
+        let tail = |from: usize| restriction.factor_tail(from);
         let draws = streams.cholesky();
-        let (elimination, cholesky) = match adjacency {
+        let (elimination, cholesky) = match off_diagonal {
             OffDiagonal::General(adjacency) => {
                 let arm = match config.dense(adjacency.n()) {
                     true => Arm::Exact(Signed::new(adjacency, sheets, grounding)),
                     false => Arm::Approximate(Sddm::of_block(adjacency, sheets, grounding)),
                 };
-                (None, Cholesky::factor(arm, draws, gauge, reused))
+                (None, Cholesky::factor(arm, draws, tail(0), reused))
             }
             OffDiagonal::Bipartite(cross) => {
-                let factor = |s| Cholesky::factor(s, draws, gauge, reused);
-                let block = BipartiteBlock::of(cross.into_cross(), sheets, grounding);
+                let kept = tail(cross.n_rows());
+                let factor = |s| Cholesky::factor(s, draws, kept, reused);
+                let block = BipartiteBlock::of(cross, sheets, grounding);
                 let (elimination, factored) = block.eliminate(config, streams, factor);
                 (Some(Box::new(elimination)), factored)
             }
         };
         Block {
-            lift,
+            restriction,
             elimination,
             cholesky,
             report,
@@ -236,27 +224,16 @@ impl<T: Real, I: Index> Summand<T, I> for ReducedComponent<T, I> {
     }
 }
 
-impl<T: Real, I: Index> Summand<T, I> for ReducedComplement<T, I> {
+impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
     /// Keyed as a whole block keys its draws.
     fn factor(self, config: &Config, reused: &mut Workspace<T, I>) -> Block<T, I> {
-        let Reduced {
-            key,
-            lift,
-            matrix:
-                Grounded {
-                    adjacency: cross,
-                    grounding,
-                },
-            balance,
-            gauge,
-            report,
-        } = self.into_reduced();
-        let streams = Streams::of(key, config);
-        let block = BipartiteBlock::of(cross.into_cross(), balance.sheets(), grounding);
-        let s = block.complement(config, streams);
-        let cholesky = Cholesky::factor(s, streams.cholesky(), gauge, reused);
+        let (first, restriction, cross, sheets, grounding, report) = self.into_parts();
+        let streams = Streams::of(first, config);
+        let s = BipartiteBlock::of(cross, sheets, grounding).complement(config, streams);
+        let tail = restriction.factor_tail(0);
+        let cholesky = Cholesky::factor(s, streams.cholesky(), tail, reused);
         Block {
-            lift,
+            restriction,
             elimination: None,
             cholesky,
             report,
@@ -294,18 +271,6 @@ pub(crate) enum Storage<T> {
     U32(Block<T, u32>),
     U64(Block<T, u64>),
     Isolated(Isolated<T>),
-}
-
-impl<T> From<Block<T, u32>> for Storage<T> {
-    fn from(block: Block<T, u32>) -> Self {
-        Self::U32(block)
-    }
-}
-
-impl<T> From<Block<T, u64>> for Storage<T> {
-    fn from(block: Block<T, u64>) -> Self {
-        Self::U64(block)
-    }
 }
 
 impl<T: Real> BlockFactor<T> {
@@ -410,8 +375,7 @@ impl ExactSizeIterator for Vertices<'_> {}
 )]
 #[derive(Clone, Debug)]
 pub(crate) struct Block<T, I> {
-    #[cfg_attr(feature = "serde", serde(rename = "restriction"))]
-    lift: Box<Lift<T, I>>,
+    restriction: Box<Restriction<T, I>>,
     elimination: Option<Box<BlockElimination<T, I>>>,
     cholesky: Cholesky<T, I>,
     report: Option<Box<ScalingReport>>,
@@ -419,7 +383,7 @@ pub(crate) struct Block<T, I> {
 
 impl<T: Real, I: Index> Block<T, I> {
     fn vertices(&self) -> &Selection<I> {
-        self.lift.vertices()
+        self.restriction.vertices()
     }
 
     /// Every slot but one, eliminated ones and the Cholesky's alike.
@@ -433,7 +397,7 @@ impl<T: Real, I: Index> Block<T, I> {
         self.vertices().gather_len() + self.cholesky.scratch_len()
     }
 
-    /// Solves the block's part of `x` in place, through `scratch` of [`global_scratch_len`](Self::global_scratch_len).
+    /// Solves the block's restriction of `x` in place, through `scratch` of [`global_scratch_len`](Self::global_scratch_len).
     fn solve_global(&self, x: &mut [T], scratch: &mut [T]) {
         self.vertices().on_local(
             x,
@@ -450,17 +414,17 @@ impl<T: Real, I: Index> Block<T, I> {
     #[inline(always)]
     fn solve_unchecked(&self, x: &mut [T], scratch: &mut [T], inner: InnerParallelism) {
         let singular = self.cholesky.singular();
-        self.lift.restrict(x, singular);
+        self.restriction.restrict(x, singular);
         match &self.elimination {
             None => self.cholesky.solve(x, scratch),
             Some(elimination) => {
                 elimination.solve(x, inner, |kept| self.cholesky.solve(kept, scratch));
                 if singular {
-                    self.lift.regauge(x);
+                    self.restriction.regauge(x);
                 }
             }
         }
-        self.lift.prolongate(x, singular);
+        self.restriction.prolongate(x, singular);
     }
 }
 
@@ -516,8 +480,10 @@ fn inverse_pivot_in_range<T: Real>(inverse: T) -> bool {
 
 /// `Σ|t| ≤ 1` up to the terms' rounding: a substitution through such multipliers cannot overflow where its solution fits.
 fn within_one<T: Real>(terms: impl Iterator<Item = T>) -> bool {
-    let (sum, len) = terms.fold((0.0, 0), |(sum, len), t| (sum + widen(t.abs()), len + 1));
-    sum <= 1.0 + 4.0 * (len + 2) as f64 * widen(T::epsilon())
+    let (sum, len) = terms.fold((0.0, 0), |(sum, len), t| {
+        (sum + crate::widen(t.abs()), len + 1)
+    });
+    sum <= 1.0 + 4.0 * (len + 2) as f64 * crate::widen(T::epsilon())
 }
 
 /// One block's key, so no draw depends on thread scheduling or on how other blocks routed.
@@ -640,11 +606,11 @@ mod tests {
 
     use super::*;
     use crate::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
-    use crate::sgdd::Reduction;
+    use crate::sgdd::Reduced;
     use crate::ScalingPolicy;
 
-    fn only_block(summands: Reduction<f64, u32>, config: &Config) -> Block<f64, u32> {
-        let mut blocks = Factor::build(summands, config).into_blocks();
+    fn only_block(summands: Reduced<f64, u32>, config: &Config) -> Block<f64, u32> {
+        let mut blocks = Factor::build(summands, config, Storage::U32).into_blocks();
         assert_eq!(blocks.len(), 1);
         match blocks.pop().expect("one block").0 {
             Storage::U32(block) => block,
@@ -657,7 +623,7 @@ mod tests {
     fn csr_block(row_ptrs: &[u32], columns: &[u32], values: &[f64]) -> Block<f64, u32> {
         let n = (row_ptrs.len() - 1) as u32;
         let csr = CsrRef::new(row_ptrs, columns, values, n).expect("valid csr");
-        let summands = Reduction::reduce(csr.into(), ScalingPolicy::default()).expect("reduces");
+        let summands = Reduced::reduce(csr.into(), ScalingPolicy::default()).expect("reduces");
         only_block(summands, &Config::default())
     }
 
@@ -666,7 +632,7 @@ mod tests {
         csr_block(&[0, 2, 5, 7], &[0, 1, 0, 1, 2, 1, 2], &values)
     }
 
-    /// A 2-vertex floating block's lift over a 3-vertex grounded block's Cholesky.
+    /// A 2-vertex floating block's restriction over a 3-vertex grounded block's Cholesky.
     fn mismatched_cholesky() -> Block<f64, u32> {
         let floating = csr_block(&[0, 2, 4], &[0, 1, 0, 1], &[1.0, -1.0, -1.0, 1.0]);
         Block {
@@ -682,7 +648,7 @@ mod tests {
             FactorWidth1::new(2, &[0u32, 1, 0, 1], None).expect("valid columns"),
         )
         .expect("valid gram");
-        let summands = Reduction::reduce(gram.into(), ScalingPolicy::default()).expect("reduces");
+        let summands = Reduced::reduce(gram.into(), ScalingPolicy::default()).expect("reduces");
         let block = only_block(summands, &Config::default());
         assert!(block.elimination.is_some());
         block
@@ -696,7 +662,7 @@ mod tests {
         }
     }
 
-    /// An elimination of 2 keeping 2, between a 5-vertex lift and a 3-vertex Cholesky.
+    /// An elimination of 2 keeping 2, between a 5-vertex restriction and a 3-vertex Cholesky.
     fn elimination_keeping_another_count() -> Block<f64, u32> {
         let elimination = bipartite_block().elimination;
         let counts = elimination.as_ref().map(|e| (e.n_eliminated(), e.n_kept()));
@@ -709,7 +675,7 @@ mod tests {
             ],
         );
         Block {
-            lift: path.lift,
+            restriction: path.restriction,
             elimination,
             cholesky: grounded_block().cholesky,
             report: None,
@@ -733,7 +699,7 @@ mod tests {
 mod storage {
     use super::*;
     use crate::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Input};
-    use crate::sgdd::Reduction;
+    use crate::sgdd::Reduced;
     use crate::{ScalingPolicy, SchurMode};
 
     fn bits(factor: &Factor, b: &[f64]) -> Vec<u64> {
@@ -759,10 +725,16 @@ mod storage {
             },
         ];
         for config in configs {
-            let narrow: Reduction<f64, u32> = Reduction::reduce(input, policy).expect("reduces");
-            let narrow = Factor::build(narrow, &config);
-            let wide: Reduction<f64, u64> = Reduction::reduce(input, policy).expect("reduces");
-            let wide = Factor::build(wide, &config);
+            let narrow = Factor::build(
+                Reduced::reduce(input, policy).expect("reduces"),
+                &config,
+                Storage::U32,
+            );
+            let wide = Factor::build(
+                Reduced::reduce(input, policy).expect("reduces"),
+                &config,
+                Storage::U64,
+            );
             assert!(matches!(wide.blocks[0].0, Storage::U64(_)));
             assert_eq!(bits(&narrow, &b), bits(&wide, &b), "{config:?}");
         }

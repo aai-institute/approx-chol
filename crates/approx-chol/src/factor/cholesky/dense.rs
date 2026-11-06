@@ -1,7 +1,9 @@
 //! Exact Cholesky of a small `M` by GTH elimination: every pivot a sum of nonnegative terms, so none cancels or fails.
 
 use crate::factor::within_one;
-use crate::storage::{Adjacency, Grounding, Index, Real, Sheets, UpperAdjacency};
+use crate::sgdd::{Grounding, Sheets};
+use crate::storage::UpperAdjacency;
+use crate::{Index, Real};
 
 /// `M` as it is, its off-diagonal signed and its surplus closing it: dense Cholesky needs no cover, fold or dominance.
 pub(in crate::factor) struct Signed<T, I> {
