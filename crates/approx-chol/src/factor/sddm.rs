@@ -4,7 +4,7 @@ use rayon::prelude::*;
 
 use crate::sgdd::{within_band, Grounding, Sheets};
 use crate::storage::{Rows, UpperAdjacency};
-use crate::{narrow, widen, Index, Real};
+use crate::{narrow, widen, Batch, Index, Real};
 
 /// `L + diag(s)`, `L`'s off-diagonal nonpositive; a twisted cover's `k⁺—k⁻` edges live in its closure, not its rows.
 #[derive(Clone, Debug)]
@@ -323,20 +323,20 @@ pub(super) fn first_copy(sheets: Sheets, k: usize) -> usize {
 }
 
 /// `[x; −x]` interleaved by vertex, any ground slot after it zero: the lift a cover solves on.
-pub(super) fn lift<T: Real>(x: &[T], rows: &mut [T]) {
+pub(super) fn lift<T: Real, V: Batch<T>>(x: &[V], rows: &mut [V]) {
     let (pairs, ground) = rows.split_at_mut(2 * x.len());
     (pairs.chunks_exact_mut(2).zip(x)).for_each(|(r, &v)| {
         r[0] = v;
-        r[1] = -v;
+        r[1] = v.neg();
     });
     // A lift sums to zero, so the ground's right-hand side is zero.
-    ground.fill(T::zero());
+    ground.fill(V::zero());
 }
 
 /// Half the sheets' difference back into `x`, undoing [`lift`].
-pub(super) fn descend<T: Real>(rows: &[T], x: &mut [T]) {
+pub(super) fn descend<T: Real, V: Batch<T>>(rows: &[V], x: &mut [V]) {
     let two = T::one() + T::one();
-    (x.iter_mut().zip(rows.chunks_exact(2))).for_each(|(x, r)| *x = (r[0] - r[1]) / two);
+    (x.iter_mut().zip(rows.chunks_exact(2))).for_each(|(x, r)| *x = r[0].sub(r[1]).div(two));
 }
 
 #[cfg(test)]

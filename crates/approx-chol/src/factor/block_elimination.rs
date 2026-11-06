@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use super::config::InnerParallelism;
 use super::{within_one, MULTIPLY_ADD_GRAIN_BITS};
 use crate::storage::Rows;
-use crate::{Index, Real};
+use crate::{Batch, Index, Real};
 
 /// `M`'s cross block scaled by its inverse pivots, `D_e⁻¹ C`, and `D_e⁻¹`, applied as two products because the block's steps commute.
 #[cfg_attr(
@@ -57,11 +57,11 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     }
 
     /// `x ← M⁻¹x`, with `reduced` solving `S` in place on the kept half between the two products.
-    pub(super) fn solve(
+    pub(super) fn solve<V: Batch<T>>(
         &self,
-        x: &mut [T],
+        x: &mut [V],
         inner: InnerParallelism,
-        reduced: impl FnOnce(&mut [T]),
+        reduced: impl FnOnce(&mut [V]),
     ) {
         let (eliminated, kept) = x.split_at_mut(self.n_eliminated());
         self.forward(eliminated, kept, inner);
@@ -70,36 +70,36 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     }
 
     /// Each `b_k` subtracts `(D_e⁻¹ C)_ek b_e` term by term in ascending `e`: scattered through `D_e⁻¹ C`, or gathered through `(D_e⁻¹ C)ᵀ` under `Allow` where it is kept, the same bits either way.
-    fn forward(&self, b: &[T], kept: &mut [T], inner: InnerParallelism) {
+    fn forward<V: Batch<T>>(&self, b: &[V], kept: &mut [V], inner: InnerParallelism) {
         if let (InnerParallelism::Allow, Some(ct)) = (inner, &self.ct) {
             kept.par_iter_mut().enumerate().for_each(|(k, b_k)| {
                 for (e, &c) in ct.row(k) {
-                    *b_k = *b_k - c * b[e];
+                    *b_k = b_k.sub(b[e].mul(c));
                 }
             });
         } else {
             let c = &self.cross;
             for (e, &b_e) in b.iter().enumerate() {
                 for (k, &c) in c.row(e) {
-                    kept[k] = kept[k] - c * b_e;
+                    kept[k] = kept[k].sub(b_e.mul(c));
                 }
             }
         }
     }
 
     /// `x_e = D_e⁻¹ b_e − D_e⁻¹ C x_k` by eliminated row, split under `Allow` where `(D_e⁻¹ C)ᵀ` is kept.
-    fn backward(&self, eliminated: &mut [T], kept: &[T], inner: InnerParallelism) {
+    fn backward<V: Batch<T>>(&self, eliminated: &mut [V], kept: &[V], inner: InnerParallelism) {
         const ROWS_PER_TASK: usize = 4096;
         let c = &self.cross;
         // Scaled here: a serial pass after the parallel gather rewrites lines its workers hold.
-        let rows = |first: usize, ys: &mut [T]| {
+        let rows = |first: usize, ys: &mut [V]| {
             let inv_pivots = &self.inv_pivot[first..][..ys.len()];
             for (e, (y, &inv_pivot)) in (first..).zip(ys.iter_mut().zip(inv_pivots)) {
-                let mut cx = T::zero();
+                let mut cx = V::zero();
                 for (k, &c) in c.row(e) {
-                    cx = cx + c * kept[k];
+                    cx = cx.add(kept[k].mul(c));
                 }
-                *y = *y * inv_pivot - cx;
+                *y = y.mul(inv_pivot).sub(cx);
             }
         };
         if inner == InnerParallelism::Allow && self.ct.is_some() {

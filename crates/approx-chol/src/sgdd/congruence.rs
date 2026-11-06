@@ -1,8 +1,7 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
-use crate::narrow;
-use crate::{widen, Index, Real};
+use crate::{compensated_sum, widen, Batch, Index, Real};
 
 /// `R = F Pᵀ`, so `M = R A Rᵀ`: `Pᵀ` picks the block's vertices of `A`, or of `S` once tailed, `F` is the congruence.
 #[cfg_attr(
@@ -52,7 +51,7 @@ impl<T: Real, I: Index> Restriction<T, I> {
     }
 
     /// `x ← F x` on a gathered `x`, `F·1` projected out first when `M` is singular.
-    pub(crate) fn restrict(&self, x: &mut [T], singular: bool) {
+    pub(crate) fn restrict<V: Batch<T>>(&self, x: &mut [V], singular: bool) {
         if singular {
             self.congruence.project_out_null(x);
         }
@@ -60,15 +59,15 @@ impl<T: Real, I: Index> Restriction<T, I> {
     }
 
     /// `x ← x − x_q·1` at the largest `|f|`, where a split block's singular solve fixes `M`'s gauge.
-    pub(crate) fn regauge(&self, x: &mut [T]) {
+    pub(crate) fn regauge<V: Batch<T>>(&self, x: &mut [V]) {
         if let Congruence::Scaled(scales) = &self.congruence {
             let gauge = x[scales.peak];
-            x.iter_mut().for_each(|x| *x = *x - gauge);
+            x.iter_mut().for_each(|x| *x = x.sub(gauge));
         }
     }
 
     /// `x ← F x` back in `A_c`'s scale, `F·1` projected out last when `M` is singular.
-    pub(crate) fn prolongate(&self, x: &mut [T], singular: bool) {
+    pub(crate) fn prolongate<V: Batch<T>>(&self, x: &mut [V], singular: bool) {
         self.congruence.apply(x);
         if singular {
             self.congruence.project_out_null(x);
@@ -243,7 +242,7 @@ impl<T: Real> ScaledFactors<T> {
             let u = widen(f / largest);
             u * u
         };
-        let norm = crate::compensated_sum(&factors, |_, f| unit(&f));
+        let norm = compensated_sum(&factors, |_, f| unit(&f));
         Self {
             factors,
             peak,
@@ -312,18 +311,18 @@ impl<T: Real> Congruence<T> {
     }
 
     /// `x ← F x`: the solve applies it on both sides, `A_c⁺ = P F M⁺ F P`.
-    fn apply(&self, x: &mut [T]) {
+    fn apply<V: Batch<T>>(&self, x: &mut [V]) {
         match self {
             Self::Identity => {}
-            Self::NegateFrom(first) => x[*first..].iter_mut().for_each(|x| *x = -*x),
+            Self::NegateFrom(first) => x[*first..].iter_mut().for_each(|x| *x = x.neg()),
             Self::Signs(factors) | Self::Scaled(ScaledFactors { factors, .. }) => {
-                (x.iter_mut().zip(factors)).for_each(|(x, &f)| *x = *x * f)
+                (x.iter_mut().zip(factors)).for_each(|(x, &f)| *x = x.mul(f))
             }
         }
     }
 
     /// Removes the component along `F·1`, max-normalized: the raw norm overflows at a 1e200 scale range.
-    fn project_out_null(&self, x: &mut [T]) {
+    fn project_out_null<V: Batch<T>>(&self, x: &mut [V]) {
         // Every unit `F·1` is its own normalization, with `uᵀu = n` exact below 2⁵³.
         let n = x.len() as f64;
         match self {
@@ -341,11 +340,11 @@ impl<T: Real> Congruence<T> {
     }
 }
 
-fn project_out<T: Real>(x: &mut [T], u: impl Fn(usize) -> T, uu: f64) {
+fn project_out<T: Real, V: Batch<T>>(x: &mut [V], u: impl Fn(usize) -> T, uu: f64) {
     // Compensated, or a constant added to a floating `b` moves the solution (#147).
-    let ux = crate::compensated_sum(x, |i, x| widen(u(i)) * widen(x));
-    let along = ux / uu;
+    let ux = compensated_sum(x, |i, x: V| x.widen().mul(widen(u(i))));
+    let along = ux.div(uu);
     for (i, x) in x.iter_mut().enumerate() {
-        *x = narrow::<T>(widen(*x) - widen(u(i)) * along);
+        *x = V::narrow(x.widen().sub(along.mul(widen(u(i)))));
     }
 }
