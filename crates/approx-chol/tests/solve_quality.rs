@@ -20,12 +20,14 @@ mod positive;
 mod residual;
 #[path = "common/sparse.rs"]
 mod sparse;
+#[path = "common/threads.rs"]
+mod threads;
 
 use std::mem::MaybeUninit;
 
 use approx_chol::{
-    ApproxInverse, BlockFactor, Config, InnerParallelism, MemBuffer, MemStack, Real, SchurMode,
-    SolveError, StackReq,
+    ApproxInverse, BlockFactor, Config, MemBuffer, MemStack, Real, SchurMode, SolveError, StackReq,
+    Threads,
 };
 use cases::cases;
 use entry::{by_type, cast, cast_all, Entry, Factored, Types};
@@ -102,13 +104,13 @@ fn assert_buffers_checked<T: Real>(factor: &ApproxInverse<T>) {
             let mut x = vec![T::zero(); found];
             let error = SolveError::LengthMismatch { expected: m, found };
             let stack = MemStack::new(&mut scratch);
-            let solved = block.solve_local(&mut x, stack, InnerParallelism::Forbid);
+            let solved = block.solve_local(&mut x, stack, threads::ONE);
             assert_eq!(solved, Err(error));
         }
         if needed.size_bytes() > 0 {
             let mut x = vec![T::one(); m];
             let short = MemStack::new(&mut scratch[..needed.size_bytes() - 1]);
-            let solved = block.solve_local(&mut x, short, InnerParallelism::Forbid);
+            let solved = block.solve_local(&mut x, short, threads::ONE);
             assert_eq!(solved, Err(SolveError::Scratch));
         }
     }
@@ -152,13 +154,13 @@ fn frustrated_triangle() -> Graph {
 fn solve_on_dirty_scratch<T: Real>(
     factor: &ApproxInverse<T>,
     b: &[f64],
-    inner: InnerParallelism,
+    threads: Threads,
 ) -> Vec<f64> {
     let mut x = vec![0.0; factor.n()];
     for block in factor.clone().into_blocks() {
         let mut local: Vec<T> = block.vertices().map(|v| cast(b[v])).collect();
         let mut cells = nan_cells::<T>(block.scratch());
-        let solved = block.solve_local(&mut local, MemStack::new_any(&mut cells), inner);
+        let solved = block.solve_local(&mut local, MemStack::new_any(&mut cells), threads);
         solved.expect("buffers fit");
         (block.vertices().zip(&local)).for_each(|(v, &value)| x[v] = cast(value));
     }
@@ -178,11 +180,11 @@ fn assert_dirty_scratch_matches_the_solve(label: &str, factor: &Factored) {
     let n = factor.n();
     let rhs: Vec<f64> = (0..n).map(|i| i as f64 - 1.5).collect();
     let want = factor.solve(&rhs);
-    for inner in [InnerParallelism::Allow, InnerParallelism::Forbid] {
+    for threads in threads::BUDGETS {
         let local = factor.labels.to_local(&rhs);
-        let x = by_type!(&factor.factor, f => solve_on_dirty_scratch(f, &local, inner));
+        let x = by_type!(&factor.factor, f => solve_on_dirty_scratch(f, &local, threads));
         let x = factor.labels.to_caller(&x);
-        assert_eq!(bits(&x), bits(&want), "{label} {inner:?}");
+        assert_eq!(bits(&x), bits(&want), "{label} {threads:?}");
     }
     let local = factor.labels.to_local(&rhs);
     let x = by_type!(&factor.factor, f => solve_in_place_on_dirty_scratch(f, &local));
@@ -510,7 +512,7 @@ fn solve_in_place_gathers_only_blocks_whose_vertices_are_not_consecutive(
     let needed = (blocks.iter().zip(gathered)).map(|(block, &g)| bytes(block, g));
     assert_eq!(Some(factor.scratch().size_bytes()), needed.max());
     let x = solve_in_place_on_dirty_scratch(&factor, &rhs);
-    let want = solve_on_dirty_scratch(&factor, &rhs, InnerParallelism::Allow);
+    let want = solve_on_dirty_scratch(&factor, &rhs, Threads::All);
     assert_eq!(bits(&x), bits(&want));
 }
 

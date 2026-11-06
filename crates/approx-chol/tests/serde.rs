@@ -2,11 +2,13 @@
 
 #[path = "common/gram.rs"]
 mod gram;
+#[path = "common/threads.rs"]
+mod threads;
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Laplacian, Sddm};
 use approx_chol::{
-    factorize_with, ApproxInverse, BlockFactor, Config, InnerParallelism, MemBuffer, MemStack,
-    ScalingPolicy, SchurMode,
+    factorize_with, ApproxInverse, BlockFactor, Config, MemBuffer, MemStack, ScalingPolicy,
+    SchurMode, Threads,
 };
 use gram::{dense_csr, matrix};
 use rstest::rstest;
@@ -54,7 +56,7 @@ fn configs() -> [Config; 2] {
     [Config::default(), exact]
 }
 
-fn solve(block: &BlockFactor, inner: InnerParallelism) -> Vec<u64> {
+fn solve(block: &BlockFactor, threads: Threads) -> Vec<u64> {
     let mut x: Vec<f64> = (0..block.vertices().len())
         .map(|i| (i % 7) as f64 - 3.0)
         .collect();
@@ -62,7 +64,7 @@ fn solve(block: &BlockFactor, inner: InnerParallelism) -> Vec<u64> {
         .solve_local(
             &mut x,
             MemStack::new(&mut MemBuffer::new(block.scratch())),
-            inner,
+            threads,
         )
         .unwrap();
     x.iter().map(|v| v.to_bits()).collect()
@@ -89,8 +91,8 @@ fn round_trip_solves_bit_identically() {
             let back: Vec<BlockFactor> = postcard::from_bytes(&bytes).unwrap();
             assert_eq!(postcard::to_stdvec(&back).unwrap(), bytes);
             for (block, back) in blocks.iter().zip(&back) {
-                for inner in [InnerParallelism::Allow, InnerParallelism::Forbid] {
-                    assert_eq!(solve(block, inner), solve(back, inner));
+                for threads in threads::BUDGETS {
+                    assert_eq!(solve(block, threads), solve(back, threads));
                 }
             }
         }
@@ -119,7 +121,7 @@ fn corrupt_bytes_error_instead_of_panicking() {
             if let Ok(blocks) = postcard::from_bytes::<Vec<BlockFactor>>(&corrupt) {
                 blocks
                     .iter()
-                    .for_each(|block| drop(solve(block, InnerParallelism::Forbid)));
+                    .for_each(|block| drop(solve(block, threads::ONE)));
             }
         }
     }

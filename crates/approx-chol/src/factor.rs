@@ -13,14 +13,14 @@ use rand::rngs::Xoshiro256PlusPlus;
 use rand::SeedableRng;
 use rayon::prelude::*;
 
-pub use config::{Config, InnerParallelism, SchurMode};
+pub use config::{Config, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
 
 use crate::sgdd::{BlockComplement, IrreducibleBlock, Reduction, Restriction, Selection, Summands};
 use crate::storage::OffDiagonal;
 use crate::Clamp;
-use crate::{Batch, Index, MemBuffer, MemStack, Real, StackReq};
+use crate::{Batch, Index, MemBuffer, MemStack, Real, StackReq, Threads};
 use block_elimination::BlockElimination;
 use cholesky::{Arm, Cholesky, Signed, Workspace};
 use schur::BipartiteBlock;
@@ -310,7 +310,7 @@ impl<T: Real> BlockFactor<T> {
         on!(self, block => block.cholesky.singular(), _ => false)
     }
 
-    /// Work [`InnerParallelism::Allow`] may split per solve, `0` when nothing does: an outer scheduler weighs it against its own parallelism.
+    /// Work a solve may split across its [`Threads`], `0` when nothing does: an outer scheduler weighs it against its own parallelism.
     pub fn splittable_work(&self) -> usize {
         on!(self, block => (block.elimination.as_deref()).map_or(0, BlockElimination::splittable_work), _ => 0)
     }
@@ -325,10 +325,10 @@ impl<T: Real> BlockFactor<T> {
         &self,
         x: &mut [T],
         stack: &mut MemStack,
-        inner: InnerParallelism,
+        threads: Threads,
     ) -> Result<(), SolveError> {
         check_buffers(x, self.vertices().len(), stack, self.scratch())?;
-        on!(self, block => block.solve_unchecked(x, stack, inner), i => i.solve_local(x));
+        on!(self, block => block.solve_unchecked(x, stack, threads), i => i.solve_local(x));
         Ok(())
     }
 }
@@ -419,26 +419,19 @@ impl<T: Real, I: Index> Block<T, I> {
             stack,
             // on_local's two arms would otherwise each call it: ~19 instructions per block.
             #[inline(always)]
-            |local: &mut [V], rest: &mut MemStack| {
-                self.solve_unchecked(local, rest, InnerParallelism::Allow)
-            },
+            |local: &mut [V], rest: &mut MemStack| self.solve_unchecked(local, rest, Threads::All),
         );
     }
 
     // Two call sites through the closure plus solve_local's: by cost alone it stays a call.
     #[inline(always)]
-    fn solve_unchecked<V: Batch<T>>(
-        &self,
-        x: &mut [V],
-        stack: &mut MemStack,
-        inner: InnerParallelism,
-    ) {
+    fn solve_unchecked<V: Batch<T>>(&self, x: &mut [V], stack: &mut MemStack, threads: Threads) {
         let singular = self.cholesky.singular();
         self.restriction.restrict(x, singular);
         match &self.elimination {
             None => self.cholesky.solve(x, stack),
             Some(elimination) => {
-                elimination.solve(x, inner, |kept| self.cholesky.solve(kept, stack));
+                elimination.solve(x, threads, |kept| self.cholesky.solve(kept, stack));
                 if singular {
                     self.restriction.regauge(x);
                 }

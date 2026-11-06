@@ -47,6 +47,7 @@ mod factor;
 pub mod input;
 mod sgdd;
 mod storage;
+mod threads;
 
 use std::array;
 use std::fmt::Debug;
@@ -59,12 +60,11 @@ pub use error::Error;
 use factor::Storage;
 #[cfg(feature = "serde")]
 pub use factor::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
-pub use factor::{
-    ApproxInverse, BlockFactor, Config, InnerParallelism, SchurMode, SolveError, Vertices,
-};
+pub use factor::{ApproxInverse, BlockFactor, Config, SchurMode, SolveError, Vertices};
 pub use input::{CsrError, CsrRef, IndexKind, Input, OwnedCsr, Side};
 pub use sgdd::{Clamp, ReduceError, ScalingOutcome, ScalingPolicy};
 use sgdd::{Complement, Reduced};
+pub use threads::Threads;
 
 /// Factorizes any [`Input`] with [`Config::default`] and [`ScalingPolicy::default`].
 pub fn factorize<'a, T, I, M>(input: M) -> Result<ApproxInverse<T>, Error>

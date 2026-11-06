@@ -53,12 +53,3 @@ pub enum SchurMode {
     #[default]
     Same,
 }
-
-/// Whether a solve may split its own work across threads; an outer parallel loop says no.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum InnerParallelism {
-    /// Large block eliminations split their rows.
-    Allow,
-    /// Everything runs on the calling thread.
-    Forbid,
-}

@@ -2,12 +2,13 @@
 //! Frozen payloads from earlier builds; `serde.rs` writes and reads with one build, so an encoding shift is invisible to it and visible here.
 
 use std::collections::BTreeSet;
+use std::num::NonZeroUsize;
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
 use approx_chol::FACTOR_FORMAT_VERSION as FORMAT_VERSION;
 use approx_chol::{
-    factorize_with, ApproxInverse, BlockFactor, Config, InnerParallelism, MemBuffer, MemStack,
-    ScalingOutcome, ScalingPolicy,
+    factorize_with, ApproxInverse, BlockFactor, Config, MemBuffer, MemStack, ScalingOutcome,
+    ScalingPolicy, Threads,
 };
 use rstest::rstest;
 use serde::de::value::{Error, SeqDeserializer};
@@ -176,7 +177,7 @@ fn solve(blocks: &[BlockFactor], b: &[f64]) -> Vec<f64> {
         (block.solve_local(
             &mut local,
             MemStack::new(&mut MemBuffer::new(block.scratch())),
-            InnerParallelism::Forbid,
+            Threads::Count(NonZeroUsize::MIN),
         ))
         .expect("buffers fit");
         vertices.iter().zip(local).for_each(|(&v, xv)| x[v] = xv);
