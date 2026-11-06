@@ -5,7 +5,8 @@ use rand::rngs::Xoshiro256PlusPlus;
 
 use super::clique_tree::Multi;
 use super::sddm::{descend, first_copy, lift, Sddm};
-use crate::storage::{compensated_sum, narrow, widen, Gauge, Index, Real, Sheets};
+use crate::sgdd::FactorTail;
+use crate::storage::{compensated_sum, narrow, widen, Index, Real, Sheets};
 use approximate::{ApproximateCholesky, CliqueTreeElimination};
 pub(super) use dense::Signed;
 
@@ -50,18 +51,18 @@ pub(super) struct Cholesky<T, I> {
 }
 
 impl<T: Real, I: Index> Cholesky<T, I> {
-    /// Dense on the exact arm, else approximate; `gauge` on its vertices.
+    /// Dense on the exact arm, else approximate; `tail` is `F` on its vertices, `None` when every `|f|` is `1`.
     pub(super) fn factor(
         arm: Arm<T, I>,
         draws: Xoshiro256PlusPlus,
-        gauge: Gauge,
+        tail: Option<FactorTail<'_, T>>,
         reused: &mut Workspace<T, I>,
     ) -> Self {
         let (sheets, grounded, n, pinned, triangular) = match arm {
             Arm::Exact(signed) => {
                 let (grounded, n) = (!signed.floats(), signed.n());
                 // A definite `M`'s surplus is the ground's slot, pinned so the solve is `M`'s own.
-                let pin = pinned(Sheets::One, grounded, n, gauge);
+                let pin = pinned(Sheets::One, grounded, n, tail);
                 let factor =
                     Triangular::Dense(dense::factor(&signed, pin, &mut reused.dense).into());
                 (Sheets::One, grounded, n, pin, factor)
@@ -70,8 +71,8 @@ impl<T: Real, I: Index> Cholesky<T, I> {
                 let (sheets, grounded, n) = (sddm.sheets(), sddm.grounded(), sddm.n());
                 // The ground is never a pivot, so `Σs` is never formed: within unchanged, grids +0-8% PCG iterations at 1-10 grounds.
                 // Floating, ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
-                let pin =
-                    (grounded || gauge.spans_wide).then(|| pinned(sheets, grounded, n, gauge));
+                let pin = (grounded || tail.is_some_and(FactorTail::spans_wide))
+                    .then(|| pinned(sheets, grounded, n, tail));
                 let (steps, pin) = reused.elimination.eliminate(sddm, draws, pin);
                 let triangular = Triangular::Approximate(Box::new(steps));
                 (sheets, grounded, n, pin, triangular)
@@ -131,10 +132,15 @@ impl<T: Real, I: Index> Cholesky<T, I> {
 }
 
 /// The slot the solve pins: the ground, else the largest `|f|` on the first sheet, so the gauge's rounding is not amplified by `1/f`.
-fn pinned(sheets: Sheets, grounded: bool, n: usize, gauge: Gauge) -> usize {
+fn pinned<T: Real>(
+    sheets: Sheets,
+    grounded: bool,
+    n: usize,
+    tail: Option<FactorTail<'_, T>>,
+) -> usize {
     match grounded {
         true => n,
-        false => first_copy(sheets, gauge.peak),
+        false => tail.map_or(n - 1, |tail| first_copy(sheets, tail.largest())),
     }
 }
 

@@ -7,7 +7,7 @@ mod partition;
 use super::block::ReduceError;
 use super::congruence::Selection;
 use crate::input::{Canonical, CsrError};
-use crate::storage::{narrow, tally_abs, Adjacency, Index, Real, Rows, UpperAdjacency};
+use crate::storage::{narrow, tally_abs, Index, OffDiagonal, Real, Rows, UpperAdjacency};
 pub(super) use assembly::{
     assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, IncidenceBlock,
     StrictUpperTriangle,
@@ -152,19 +152,19 @@ pub(crate) struct Lone<I, T> {
 }
 
 /// A principal block's off-diagonal and its vertices, in `A`'s numbering, in local order.
-pub(super) struct BlockAdjacency<I, P> {
+pub(super) struct BlockAdjacency<T, I> {
     pub(super) vertices: Selection<I>,
-    pub(super) off_diagonal: P,
+    pub(super) off_diagonal: OffDiagonal<T, I>,
 }
 
 /// One block `A_c` as the input gave it, with its rows' `Σ_j |a_ij|`.
-pub(super) struct SymmetricBlock<T, I, P> {
-    pub(super) adjacency: BlockAdjacency<I, P>,
+pub(super) struct SymmetricBlock<T, I> {
+    pub(super) adjacency: BlockAdjacency<T, I>,
     pub(super) rows: RowSums<T>,
 }
 
-impl<T: Real, I: Index, P: Adjacency<T, I>> SymmetricBlock<T, I, P> {
-    fn new(adjacency: BlockAdjacency<I, P>, rows: RowSums<T>) -> Self {
+impl<T: Real, I: Index> SymmetricBlock<T, I> {
+    fn new(adjacency: BlockAdjacency<T, I>, rows: RowSums<T>) -> Self {
         let n = adjacency.off_diagonal.n();
         assert_eq!(adjacency.vertices.len(), n, "one vertex per row");
         assert_eq!(rows.diagonal.len(), n, "one diagonal per row");
@@ -179,7 +179,7 @@ pub(super) struct RowSums<T> {
 }
 
 impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Canonical<'_, T, J> {
-    type Block = SymmetricBlock<T, I, UpperAdjacency<T, I>>;
+    type Block = SymmetricBlock<T, I>;
 
     fn whole(self, vertices: &[I]) -> Self::Block {
         self.component(vertices, vertices)
@@ -209,7 +209,7 @@ impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Canonical<'_, T, J
         indices.shrink_to_fit();
         values.shrink_to_fit();
         let rows = Rows::new(ptrs, indices, values, vertices.len());
-        let off_diagonal = UpperAdjacency::new(rows);
+        let off_diagonal = OffDiagonal::General(UpperAdjacency::new(rows));
         let abs = abs.into_iter().map(narrow).collect();
         let adjacency = BlockAdjacency {
             vertices: Selection::of(vertices),

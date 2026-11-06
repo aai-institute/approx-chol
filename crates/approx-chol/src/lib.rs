@@ -55,7 +55,7 @@ use factor::Storage;
 pub use factor::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
 pub use factor::{BlockFactor, Config, Factor, InnerParallelism, SchurMode, SolveError, Vertices};
 pub use input::{CsrError, CsrRef, IndexKind, Input, OwnedCsr, Side};
-use sgdd::{Complement, Reduction};
+use sgdd::{Complement, Reduced};
 pub use sgdd::{ReduceError, ScalingPolicy, ScalingReport};
 pub use storage::Real;
 
@@ -118,8 +118,8 @@ pub struct Sgdd<T = f64>(Indexed<T>);
 /// The reduction in the narrowest index its cover's `2n + 1` slots fit.
 #[derive(Clone, Debug)]
 enum Indexed<T> {
-    U32(Reduction<T, u32>),
-    U64(Reduction<T, u64>),
+    U32(Reduced<T, u32>),
+    U64(Reduced<T, u64>),
 }
 
 impl<T: Real> Sgdd<T> {
@@ -132,8 +132,8 @@ impl<T: Real> Sgdd<T> {
     {
         let input = input.try_into().map_err(Into::into)?;
         Ok(Self(match fits_u32(input.n()) {
-            true => Indexed::U32(Reduction::reduce(input, scaling)?),
-            false => Indexed::U64(Reduction::reduce(input, scaling)?),
+            true => Indexed::U32(Reduced::reduce(input, scaling)?),
+            false => Indexed::U64(Reduced::reduce(input, scaling)?),
         }))
     }
 

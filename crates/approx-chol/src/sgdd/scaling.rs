@@ -4,7 +4,7 @@ mod perron;
 use normalized::Normalized;
 use perron::{InverseIteration, Outcome, Shortfall};
 
-use crate::storage::{narrow, widen, Adjacency, Index, Real};
+use crate::storage::{narrow, widen, Index, OffDiagonal, Real};
 
 /// Certification policy for a dominance scaling; a deficit past rounding left at hand-over is clamped and reported.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -106,7 +106,7 @@ impl ScaleVector {
         self,
         excess: impl Iterator<Item = f64> + Clone,
         diagonal: &[T],
-        off_diagonal: &impl Adjacency<T, I>,
+        off_diagonal: &OffDiagonal<T, I>,
     ) -> f64 {
         let epsilon = widen(T::epsilon());
         let ratios = (excess.zip(diagonal)).map(|(e, &d)| e / widen(d));
@@ -175,7 +175,7 @@ pub(super) fn ratio_band<T: Real>() -> f64 {
 
 /// Scales from `N`'s Perron vector, iterated until `ρ < 1` is proven, pinned at `1`, or refuted past the slack.
 pub(super) fn relax<T: Real, I: Index>(
-    off_diagonal: &impl Adjacency<T, I>,
+    off_diagonal: &OffDiagonal<T, I>,
     diagonal: &[T],
     policy: &ScalingPolicy,
 ) -> Option<Relaxation<T>> {
