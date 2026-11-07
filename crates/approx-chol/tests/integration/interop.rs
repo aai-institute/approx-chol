@@ -9,16 +9,13 @@ use approx_chol::input::{CsrError, CsrRef, Input};
 use approx_chol::{factorize, ApproxInverse};
 use num_traits::PrimInt;
 
+use crate::common::bits::bits;
+
 /// The 4-vertex path 0-1-2-3 with unit weights.
 const N: usize = 4;
 const ROW_PTRS: [usize; 5] = [0, 2, 5, 8, 10];
 const COL_INDICES: [usize; 10] = [0, 1, 0, 1, 2, 1, 2, 3, 2, 3];
 const VALUES: [f64; 10] = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
-
-fn indices<I: PrimInt>(fixture: &[usize]) -> Vec<I> {
-    let index = |&i: &usize| num_traits::cast(i).expect("fixture index fits");
-    fixture.iter().map(index).collect()
-}
 
 fn assert_solves_fixture<'a, I, M>(matrix: M)
 where
@@ -36,7 +33,6 @@ where
         .expect("solve");
     // The matrix factors directly too, as `factorize(&matrix)` did before 0.7.
     let direct: ApproxInverse = factorize(matrix).expect("the path is SDDM");
-    let bits = |x: &[f64]| x.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
     assert_eq!(bits(&direct.solve(&b).expect("solve")), bits(&x));
     for (row, &b) in b.iter().enumerate() {
         let lx: f64 = (ROW_PTRS[row]..ROW_PTRS[row + 1])

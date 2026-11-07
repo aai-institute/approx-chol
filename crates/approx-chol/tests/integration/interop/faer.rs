@@ -3,11 +3,17 @@ use faer::sparse::{SparseColMat, SparseRowMat, SymbolicSparseColMat, SymbolicSpa
 use num_traits::PrimInt;
 use rstest::rstest;
 
-use super::{assert_solves_fixture, indices, COL_INDICES, N, ROW_PTRS, VALUES};
+use super::{assert_solves_fixture, COL_INDICES, N, ROW_PTRS, VALUES};
+use crate::common::entry::cast_all;
 
 fn path_laplacian<I: faer::Index + PrimInt>(row_nnz: Option<Vec<I>>) -> SparseRowMat<I, f64> {
-    let symbolic =
-        SymbolicSparseRowMat::new_checked(N, N, indices(&ROW_PTRS), row_nnz, indices(&COL_INDICES));
+    let symbolic = SymbolicSparseRowMat::new_checked(
+        N,
+        N,
+        cast_all(&ROW_PTRS),
+        row_nnz,
+        cast_all(&COL_INDICES),
+    );
     SparseRowMat::new(symbolic, VALUES.to_vec())
 }
 
@@ -26,7 +32,7 @@ fn faer_csr_factorizes_over_index_types(#[case] run: fn()) {
 #[test]
 fn faer_csr_with_full_row_counts_factorizes() {
     let spans: Vec<usize> = ROW_PTRS.windows(2).map(|span| span[1] - span[0]).collect();
-    assert_solves_fixture(&path_laplacian::<u32>(Some(indices(&spans))));
+    assert_solves_fixture(&path_laplacian::<u32>(Some(cast_all(&spans))));
 }
 
 /// A symmetric matrix's CSC arrays are its CSR arrays, so its transpose factors alike.
@@ -35,9 +41,9 @@ fn faer_csc_factorizes_as_its_transpose() {
     let symbolic = SymbolicSparseColMat::<u32>::new_checked(
         N,
         N,
-        indices(&ROW_PTRS),
+        cast_all(&ROW_PTRS),
         None,
-        indices(&COL_INDICES),
+        cast_all(&COL_INDICES),
     );
     assert_solves_fixture(
         SparseColMat::new(symbolic, VALUES.to_vec())
@@ -49,11 +55,11 @@ fn faer_csc_factorizes_as_its_transpose() {
 /// The spare slots hold `-1`s that would connect vertices 0 and 3 if read.
 #[test]
 fn faer_csr_with_spare_capacity_factorizes() {
-    let mut col_indices: Vec<u32> = indices(&COL_INDICES);
+    let mut col_indices: Vec<u32> = cast_all(&COL_INDICES);
     col_indices.extend([3, 0]);
     let mut values = VALUES.to_vec();
     values.extend([-1.0, -1.0]);
-    let symbolic = SymbolicSparseRowMat::new_checked(N, N, indices(&ROW_PTRS), None, col_indices);
+    let symbolic = SymbolicSparseRowMat::new_checked(N, N, cast_all(&ROW_PTRS), None, col_indices);
     assert_solves_fixture(&SparseRowMat::new(symbolic, values));
 }
 

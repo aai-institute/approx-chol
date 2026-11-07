@@ -7,6 +7,7 @@ use approx_chol::{
 };
 use rstest::rstest;
 
+use crate::common::bits::bits;
 use crate::common::gram::{dense_csr, matrix};
 use crate::common::threads;
 
@@ -64,7 +65,7 @@ fn solve(block: &BlockFactor, threads: Threads) -> Vec<u64> {
             threads,
         )
         .unwrap();
-    x.iter().map(|v| v.to_bits()).collect()
+    bits(&x)
 }
 
 #[test]
@@ -188,7 +189,7 @@ fn with_dead_vertices() -> ApproxInverse {
 fn solve_factor(factor: &ApproxInverse) -> Vec<u64> {
     let b: Vec<f64> = (0..factor.n()).map(|i| (i % 5) as f64 - 2.0).collect();
     let x = factor.solve(&b).unwrap();
-    x.iter().map(|v| v.to_bits()).collect()
+    bits(&x)
 }
 
 #[test]

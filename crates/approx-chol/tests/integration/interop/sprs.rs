@@ -3,13 +3,14 @@ use approx_chol::Error;
 use rstest::rstest;
 use sprs::{CsMatI, SpIndex};
 
-use super::{assert_solves_fixture, indices, COL_INDICES, N, ROW_PTRS, VALUES};
+use super::{assert_solves_fixture, COL_INDICES, N, ROW_PTRS, VALUES};
+use crate::common::entry::cast_all;
 
 fn path_laplacian<I: SpIndex>() -> CsMatI<f64, I> {
     CsMatI::new(
         (N, N),
-        indices(&ROW_PTRS),
-        indices(&COL_INDICES),
+        cast_all(&ROW_PTRS),
+        cast_all(&COL_INDICES),
         VALUES.to_vec(),
     )
 }

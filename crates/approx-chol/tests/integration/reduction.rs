@@ -7,6 +7,7 @@ use approx_chol::input::{
 };
 use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy};
 
+use crate::common::bits::bits;
 use crate::common::dense::dense;
 use crate::common::dense_residual::solve_residual;
 use crate::common::entry::floats;
@@ -51,10 +52,7 @@ fn csr_and_upper_share_reduction_and_solve_bits() {
         assert_eq!(floats(&full), [true, false]);
         let a = full.solve(&rhs).unwrap();
         let b = upper.solve(&rhs).unwrap();
-        assert_eq!(
-            a.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
-            b.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
-        );
+        assert_eq!(bits(&a), bits(&b));
         assert_eq!(a[6], 0.0);
     }
     solve_residual(
