@@ -9,11 +9,8 @@ use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy};
 
 use crate::common::dense::dense;
 use crate::common::dense_residual::solve_residual;
+use crate::common::entry::floats;
 use crate::common::gram::{dense_csr, matrix};
-
-fn floats(factor: &ApproxInverse) -> Vec<bool> {
-    factor.blocks().iter().map(|block| block.floats()).collect()
-}
 
 #[test]
 fn csr_and_upper_share_reduction_and_solve_bits() {

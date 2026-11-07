@@ -1,7 +1,8 @@
 use approx_chol::{ApproxInverse, Clamp, Real, ScalingOutcome};
 use rstest::rstest;
 
-use super::{grounded, reduce};
+use super::reduce;
+use crate::common::entry::floats;
 
 /// `[[a+s, -a], [-a, a+s]]`: dominant by `s` on both rows, so it floats exactly when `s` is noise.
 fn surplus_pair<T: Real>(a: T, s: T) -> ApproxInverse<T> {
@@ -27,7 +28,7 @@ fn solves_to<T: Real + std::fmt::LowerExp>(factor: &ApproxInverse<T>, rhs: &[T],
 #[case::just_above_the_floor(6e-18)]
 fn surplus_above_summation_error_grounds_and_solves(#[case] surplus: f64) {
     let factor = surplus_pair(1e-6, surplus);
-    assert!(grounded(&factor), "surplus {surplus:e}");
+    assert_eq!(floats(&factor), [false], "surplus {surplus:e}");
     solves_to(&factor, &[1.0, 1.0], &[1.0 / surplus; 2]);
 }
 
@@ -35,8 +36,9 @@ fn surplus_above_summation_error_grounds_and_solves(#[case] surplus: f64) {
 #[case::below_the_floor(6e-22)]
 #[case::not_representable_at_this_scale(1e-30)]
 fn surplus_within_summation_error_floats(#[case] surplus: f64) {
-    assert!(
-        !grounded(&surplus_pair(1e-6, surplus)),
+    assert_eq!(
+        floats(&surplus_pair(1e-6, surplus)),
+        [true],
         "surplus {surplus:e}"
     );
 }
@@ -50,7 +52,7 @@ fn f32_surplus_is_judged_against_summation_error_alone(
     #[case] expected: bool,
 ) {
     let factor = surplus_pair(1e-3f32, surplus);
-    assert_eq!(grounded(&factor), expected, "surplus {surplus:e}");
+    assert_eq!(floats(&factor), [!expected], "surplus {surplus:e}");
 }
 
 fn drifted<T: Real>(drift: T) -> ApproxInverse<T> {
@@ -64,7 +66,7 @@ fn drifted<T: Real>(drift: T) -> ApproxInverse<T> {
 #[case::f64_one_ulp_over(f64::EPSILON)]
 #[case::f64_one_ulp_under(-f64::EPSILON)]
 fn summation_roundoff_does_not_augment<T: Real + std::fmt::LowerExp>(#[case] drift: T) {
-    assert!(!grounded(&drifted(drift)), "drift {drift:e}");
+    assert_eq!(floats(&drifted(drift)), [true], "drift {drift:e}");
 }
 
 /// A deficit past rounding is reported, not zeroed (#91), even well inside the scaling tolerance.
@@ -155,18 +157,26 @@ fn a_deficit_past_the_dominance_band_is_admitted_clamped_and_reported(
 }
 
 /// A 4-vertex star whose centre is `offset` ulps above its dyadic off-diagonal mass; the leaves balance exactly.
-fn star_grounds_at_ulp_offset(offset: u64) -> bool {
+fn star_floats_at_ulp_offset(offset: u64) -> Vec<bool> {
     let centre = f64::from_bits(4e8f64.to_bits() + offset);
     let values = [centre, -1e8, -2e8, -1e8, -1e8, 1e8, -2e8, 2e8, -1e8, 1e8];
     let factor = reduce(&[0, 4, 6, 8, 10], &[0, 1, 2, 3, 0, 1, 0, 2, 0, 3], &values).expect("star");
-    grounded(&factor)
+    floats(&factor)
 }
 
 /// Brackets the floor at a large row scale, where an absolute threshold misjudges both ends.
 #[test]
 fn surplus_below_the_row_noise_floor_does_not_augment() {
-    assert!(!star_grounds_at_ulp_offset(4), "4 ulps is inside the floor");
-    assert!(star_grounds_at_ulp_offset(24), "24 ulps is real dominance");
+    assert_eq!(
+        star_floats_at_ulp_offset(4),
+        [true],
+        "4 ulps is inside the floor"
+    );
+    assert_eq!(
+        star_floats_at_ulp_offset(24),
+        [false],
+        "24 ulps is real dominance"
+    );
 }
 
 const OFF_BY_FIVE_ULPS: f64 = 1.0 + 5.0 * f64::EPSILON;
@@ -177,7 +187,7 @@ const OFF_BY_FIVE_ULPS: f64 = 1.0 + 5.0 * f64::EPSILON;
 #[case::lower_holds_the_smaller([OFF_BY_FIVE_ULPS, -OFF_BY_FIVE_ULPS, -1.0, 1.0])]
 fn tolerated_mirror_difference_is_not_one_row_s_surplus(#[case] values: [f64; 4]) {
     let factor = reduce(&[0, 2, 4], &[0, 1, 0, 1], &values).expect("tolerated mirrors");
-    assert!(!grounded(&factor), "every stored row sums to zero");
+    assert_eq!(floats(&factor), [true], "every stored row sums to zero");
 }
 
 /// Ten sub-ulp duplicates are absorbed one way and accumulate the other: no surplus on a row summing to zero.
@@ -195,8 +205,9 @@ fn coalescing_additions_are_inside_the_error_allowance() {
         row_ptrs.push(columns.len() as u32);
     }
     let factor = reduce(&row_ptrs, &columns, &values).expect("coalesced duplicates");
-    assert!(
-        !grounded(&factor),
+    assert_eq!(
+        floats(&factor),
+        [true],
         "duplicates coalescing to a balanced Laplacian"
     );
 }

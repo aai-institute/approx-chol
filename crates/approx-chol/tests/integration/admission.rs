@@ -39,11 +39,6 @@ fn reduce_upper<T: Real>(
 }
 
 /// For input reducing to one balanced block: grounded exactly when it does not float.
-fn grounded<T: Real>(factor: &ApproxInverse<T>) -> bool {
-    assert_eq!(factor.blocks().len(), 1, "one block");
-    !factor.blocks()[0].floats()
-}
-
 /// Error order is not the contract: a rejection need only name one of the input's defects.
 fn assert_names_a_defect<E: PartialEq + Debug>(observed: E, defects: &[E]) {
     assert!(

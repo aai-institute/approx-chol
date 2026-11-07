@@ -279,7 +279,7 @@ impl Reduced {
     /// Per irreducible block, whether it solves as singular.
     pub fn floats(&self) -> Vec<bool> {
         let factored = self.factorize(&Config::default());
-        by_type!(&factored.factor, factor => factor.blocks().iter().map(|block| block.floats()).collect())
+        by_type!(&factored.factor, factor => floats(factor))
     }
 }
 
@@ -299,6 +299,11 @@ impl Factored {
     pub fn n(&self) -> usize {
         by_type!(&self.factor, factor => factor.n())
     }
+}
+
+/// Per irreducible block, whether it solves as singular.
+pub fn floats<T: Real>(factor: &ApproxInverse<T>) -> Vec<bool> {
+    factor.blocks().iter().map(|block| block.floats()).collect()
 }
 
 fn solve<T: Real>(factor: &ApproxInverse<T>, b: &[f64]) -> Vec<f64> {

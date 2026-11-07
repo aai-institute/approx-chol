@@ -1,8 +1,9 @@
+use approx_chol::factorize;
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
 };
-use approx_chol::{factorize, ApproxInverse};
 
+use crate::common::entry::floats;
 use crate::common::gram::{dense_csr, matrix};
 
 /// `ε^{1/2}`: a column `q e_a` adds exactly `ε` to `a`'s diagonal.
@@ -12,11 +13,6 @@ const MS: std::ops::RangeInclusive<u32> = 1..=40;
 
 /// `1ᵀA1 = mε` against the band `5ε·tr A = 20ε + O(ε²)`.
 const EDGE: u32 = 20;
-
-fn floats(factor: &ApproxInverse) -> bool {
-    assert_eq!(factor.blocks().len(), 1, "one block");
-    factor.blocks()[0].floats()
-}
 
 /// The unit path 0-1-2 plus `m` ε of surplus split over the ends: every entry, `tr = 4 + mε` excepted, is exact.
 fn split(m: u32) -> (u32, u32) {
@@ -59,33 +55,33 @@ fn path(m: u32) -> Columns {
     surplus_columns(m, [(0, 1), (1, 2)], [0, 2], 1)
 }
 
-fn csr_floats(m: u32) -> bool {
+fn csr_floats(m: u32) -> Vec<bool> {
     let (ptrs, columns, values) = dense_csr(&path(m).matrix(3));
     floats(&factorize(CsrRef::new(&ptrs, &columns, &values, 3).unwrap()).unwrap())
 }
 
-fn upper_csr_floats(m: u32) -> bool {
+fn upper_csr_floats(m: u32) -> Vec<bool> {
     let mut matrix = path(m).matrix(3);
     (matrix.iter_mut().enumerate()).for_each(|(i, row)| row[..i].fill(0.0));
     let (ptrs, columns, values) = dense_csr(&matrix);
     floats(&factorize(UpperCsrRef::new(&ptrs, &columns, &values, 3).unwrap()).unwrap())
 }
 
-fn gram_floats(m: u32) -> bool {
+fn gram_floats(m: u32) -> Vec<bool> {
     let c = path(m);
     let gram = FactorWidth2::new(3, (&c.a, &c.x), (&c.b, &c.y)).unwrap();
     floats(&factorize(gram).unwrap())
 }
 
 /// The path with its ends `0, 2` on the left as `0, 1` and its middle on the right as `0`.
-fn bipartite_floats(m: u32) -> bool {
+fn bipartite_floats(m: u32) -> Vec<bool> {
     let c = surplus_columns(m, [(0, 0), (1, 0)], [0, 1], 0);
     let left = FactorWidth1::new(2, &c.a, Some(&c.x)).unwrap();
     let right = FactorWidth1::new(1, &c.b, Some(&c.y)).unwrap();
     floats(&factorize(BipartiteFactorWidth2::new(left, right).unwrap()).unwrap())
 }
 
-fn sddm_floats(m: u32) -> bool {
+fn sddm_floats(m: u32) -> Vec<bool> {
     let (a, c) = split(m);
     let (u, v) = ([0u32, 1], [1u32, 2]);
     let surplus = [
@@ -100,14 +96,14 @@ fn sddm_floats(m: u32) -> bool {
 #[test]
 fn values_gram_and_its_csr_float_exactly_inside_the_band() {
     let forms = [
-        ("csr", csr_floats as fn(u32) -> bool),
+        ("csr", csr_floats as fn(u32) -> Vec<bool>),
         ("upper csr", upper_csr_floats),
         ("gram", gram_floats),
         ("bipartite", bipartite_floats),
     ];
     let wrong: Vec<_> = (forms.iter())
         .flat_map(|&(name, form)| MS.map(move |m| (name, m, form(m))))
-        .filter(|&(_, m, floated)| floated != (m <= EDGE))
+        .filter(|(_, m, floated)| *floated != [*m <= EDGE])
         .collect();
     assert!(wrong.is_empty(), "(form, m, floats): {wrong:?}");
 }
@@ -115,7 +111,7 @@ fn values_gram_and_its_csr_float_exactly_inside_the_band() {
 /// A stated surplus carries no rounding, so an `Sddm` grounds on it even inside the band.
 #[test]
 fn sddm_grounds_on_an_in_band_surplus() {
-    let floating: Vec<u32> = MS.filter(|&m| sddm_floats(m)).collect();
+    let floating: Vec<u32> = MS.filter(|&m| sddm_floats(m) != [false]).collect();
     assert!(floating.is_empty(), "sddm floats at m = {floating:?}");
 }
 
@@ -134,5 +130,9 @@ fn csr_and_gram_float_alike_where_the_trace_overflows() {
     let csr = floats(&factorize(CsrRef::new(&ptrs, &columns, &values, n).unwrap()).unwrap());
     let gram =
         floats(&factorize(FactorWidth2::new(n as usize, (&a, &x), (&b, &y)).unwrap()).unwrap());
-    assert_eq!((csr, gram), (true, true), "(csr floats, gram floats)");
+    assert_eq!(
+        (csr, gram),
+        (vec![true], vec![true]),
+        "(csr floats, gram floats)"
+    );
 }
