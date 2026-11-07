@@ -2,6 +2,7 @@ use approx_chol::{
     factorize_complement, factorize_with, Config, MemBuffer, MemStack, ScalingPolicy, SchurMode,
     Side,
 };
+use rstest::rstest;
 
 use crate::common::bipartite::Bipartite;
 use crate::common::bits::bits;
@@ -88,43 +89,27 @@ fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> Vec<u64> {
     whole
 }
 
-#[test]
-fn solves_are_bit_identical_across_thread_counts() {
+#[rstest]
+#[case::ac(Config::default())]
+#[case::ac2(Config { split_merge: Some(3), ..Config::default() })]
+#[case::exact(Config { complement: SchurMode::Exact, ..Config::default() })]
+fn solves_are_bit_identical_across_thread_counts(
+    #[case] config: Config,
+    #[values(None, Some(Side::Left), Some(Side::Right))] kept: Option<Side>,
+) {
     let g = gram();
-    let configs = [
-        ("AC", Config::default()),
-        (
-            "AC2",
-            Config {
-                split_merge: Some(3),
-                ..Config::default()
-            },
-        ),
-        (
-            "exact",
-            Config {
-                complement: SchurMode::Exact,
-                ..Config::default()
-            },
-        ),
-    ];
-    for ((label, config), kept) in configs
-        .into_iter()
-        .flat_map(|c| [None, Some(Side::Left), Some(Side::Right)].map(|k| (c, k)))
-    {
-        let at = |threads: usize| {
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build()
-                .unwrap();
-            pool.install(|| solve_bits(&g, config, kept))
-        };
-        let serial = at(1);
-        for threads in [2, 7] {
-            assert!(
-                at(threads) == serial,
-                "{label} {kept:?}: {threads} threads differ from 1"
-            );
-        }
+    let at = |threads: usize| {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap();
+        pool.install(|| solve_bits(&g, config, kept))
+    };
+    let serial = at(1);
+    for threads in [2, 7] {
+        assert!(
+            at(threads) == serial,
+            "{config:?} {kept:?}: {threads} threads differ from 1"
+        );
     }
 }
