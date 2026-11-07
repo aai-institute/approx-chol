@@ -1,0 +1,309 @@
+use approx_chol::input::{
+    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
+};
+use approx_chol::{factorize_with, ApproxInverse, Config, Real, ScalingPolicy};
+use num_traits::{NumCast, PrimInt};
+
+use super::graph::Graph;
+
+/// The input entry points; each reads one [`Graph`] where it [`states`](Entry::states) it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Entry {
+    Csr,
+    UpperCsr,
+    FactorWidth2,
+    BipartiteFactorWidth2,
+    Laplacian,
+    Sddm,
+}
+
+/// The scalar a factor computes in and the index type its input view states.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Types {
+    F32U32,
+    F32U64,
+    F64U32,
+    F64U64,
+}
+
+impl Types {
+    pub fn epsilon(self) -> f64 {
+        match self {
+            Self::F32U32 | Self::F32U64 => f32::EPSILON.into(),
+            Self::F64U32 | Self::F64U64 => f64::EPSILON,
+        }
+    }
+}
+
+/// One value per [`Types`], so a property written once in `f64` runs on all four.
+pub enum ByType<A, B, C, D> {
+    F32U32(A),
+    F32U64(B),
+    F64U32(C),
+    F64U64(D),
+}
+
+macro_rules! by_type {
+    ($value:expr, $x:ident => $body:expr) => {
+        match $value {
+            $crate::common::entry::ByType::F32U32($x) => $body,
+            $crate::common::entry::ByType::F32U64($x) => $body,
+            $crate::common::entry::ByType::F64U32($x) => $body,
+            $crate::common::entry::ByType::F64U64($x) => $body,
+        }
+    };
+}
+pub(crate) use by_type;
+
+pub type Factors =
+    ByType<ApproxInverse<f32>, ApproxInverse<f32>, ApproxInverse<f64>, ApproxInverse<f64>>;
+
+/// `labels.0[v]` is caller vertex `v`'s index in the entry point's numbering.
+#[derive(Clone, Debug)]
+pub struct Labels(Vec<usize>);
+
+impl Labels {
+    pub fn to_local(&self, b: &[f64]) -> Vec<f64> {
+        let mut local = vec![0.0; b.len()];
+        (self.0.iter().zip(b)).for_each(|(&at, &value)| local[at] = value);
+        local
+    }
+
+    pub fn to_caller(&self, x: &[f64]) -> Vec<f64> {
+        self.0.iter().map(|&at| x[at]).collect()
+    }
+
+    fn graph(&self, graph: &Graph) -> Graph {
+        let mut relabeled = graph.clone();
+        for edge in &mut relabeled.edges {
+            (edge.a, edge.b) = (self.0[edge.a], self.0[edge.b]);
+        }
+        relabeled.ground = self.to_local(&graph.ground);
+        relabeled
+    }
+}
+
+/// A two-colouring numbered left side first, as a bipartite factor-width-2 Gram takes it; `None` on an odd cycle.
+fn bipartition(graph: &Graph) -> Option<(Labels, usize)> {
+    let n = graph.n;
+    let mut adjacency = vec![Vec::new(); n];
+    for edge in &graph.edges {
+        adjacency[edge.a].push(edge.b);
+        adjacency[edge.b].push(edge.a);
+    }
+    let mut right = vec![None; n];
+    for root in 0..n {
+        if right[root].is_some() {
+            continue;
+        }
+        right[root] = Some(false);
+        let mut stack = vec![root];
+        while let Some(v) = stack.pop() {
+            let side = right[v];
+            for &u in &adjacency[v] {
+                match right[u] {
+                    None => {
+                        right[u] = side.map(|side| !side);
+                        stack.push(u);
+                    }
+                    other if other == side => return None,
+                    _ => {}
+                }
+            }
+        }
+    }
+    let right: Vec<bool> = right.into_iter().map(|side| side == Some(true)).collect();
+    let n_left = right.iter().filter(|&&r| !r).count();
+    let (mut lefts, mut rights) = (0..n_left, n_left..n);
+    let labels = right.iter().map(|&r| match r {
+        false => lefts.next(),
+        true => rights.next(),
+    });
+    Some((Labels(labels.map(Option::unwrap).collect()), n_left))
+}
+
+pub fn cast<S: NumCast, D: NumCast>(x: S) -> D {
+    D::from(x).expect("representable")
+}
+
+pub fn cast_all<S: NumCast + Copy, D: NumCast>(xs: &[S]) -> Vec<D> {
+    xs.iter().map(|&x| cast(x)).collect()
+}
+
+impl Entry {
+    /// A Laplacian states no positive edge, a bipartite Gram no odd cycle, and only CSR or an SDDM a ground.
+    pub fn states(self, graph: &Graph) -> bool {
+        let signed = graph.edges.iter().any(|edge| edge.positive);
+        let grounded = graph.ground.iter().any(|&g| g != 0.0);
+        match self {
+            Entry::Csr | Entry::UpperCsr => true,
+            Entry::FactorWidth2 => !grounded,
+            Entry::BipartiteFactorWidth2 => !grounded && bipartition(graph).is_some(),
+            Entry::Laplacian => !signed && !grounded,
+            Entry::Sddm => !signed && grounded,
+        }
+    }
+
+    pub fn reduce(self, graph: &Graph, types: Types) -> Reduced {
+        assert!(self.states(graph), "{self:?} cannot state {graph:?}");
+        let (labels, n_left) = match self {
+            Entry::BipartiteFactorWidth2 => bipartition(graph).expect("states a bipartite graph"),
+            _ => (Labels((0..graph.n).collect()), 0),
+        };
+        Reduced {
+            entry: self,
+            local: labels.graph(graph),
+            n_left,
+            types,
+            labels,
+        }
+    }
+
+    fn factorize_as<T: Real, I: PrimInt + Sync>(
+        self,
+        graph: &Graph,
+        n_left: usize,
+        config: Config,
+    ) -> ApproxInverse<T> {
+        let n = graph.n;
+        let rejected = |error: &dyn std::fmt::Debug| -> ApproxInverse<T> {
+            panic!("{self:?} rejected {graph:?}: {error:?}")
+        };
+        let (a, b): (Vec<I>, Vec<I>) = (graph.edges.iter())
+            .map(|edge| (cast::<usize, I>(edge.a), cast::<usize, I>(edge.b)))
+            .unzip();
+        match self {
+            Entry::Csr | Entry::UpperCsr => {
+                let upper = self == Entry::UpperCsr;
+                let (ptrs, columns, values) = graph.csr(upper);
+                let (ptrs, columns): (Vec<I>, Vec<I>) = (cast_all(&ptrs), cast_all(&columns));
+                let values: Vec<T> = cast_all(&values);
+                match upper {
+                    false => {
+                        let csr =
+                            CsrRef::new(&ptrs, &columns, &values, n as u32).expect("valid CSR");
+                        factorize_with(csr, config, ScalingPolicy::default())
+                    }
+                    true => {
+                        let csr = UpperCsrRef::new(&ptrs, &columns, &values, n as u32)
+                            .expect("valid CSR");
+                        factorize_with(csr, config, ScalingPolicy::default())
+                    }
+                }
+                .unwrap_or_else(|error| rejected(&error))
+            }
+            Entry::FactorWidth2 => {
+                let (mut x, mut y) = (vec![], vec![]);
+                for edge in &graph.edges {
+                    let root = edge.weight.sqrt();
+                    x.push(cast::<f64, T>(root));
+                    y.push(cast(edge.sign() * root));
+                }
+                let v = FactorWidth2::new(n, (&a, &x), (&b, &y)).expect("valid factor");
+                factorize_with(v, config, ScalingPolicy::default())
+                    .unwrap_or_else(|error| rejected(&error))
+            }
+            Entry::BipartiteFactorWidth2 => {
+                let n_right = n - n_left;
+                let (mut left, mut right) = (Vec::<I>::new(), Vec::<I>::new());
+                let (mut y, mut w) = (vec![], vec![]);
+                for edge in &graph.edges {
+                    let (l, r) = match edge.a < n_left {
+                        true => (edge.a, edge.b),
+                        false => (edge.b, edge.a),
+                    };
+                    left.push(cast(l));
+                    right.push(cast(r - n_left));
+                    y.push(edge.sign());
+                    w.push(edge.weight);
+                }
+                // Incidence on a side is `None`, so an unvalued Gram takes its own path.
+                let valued = y.iter().any(|&v| v != 1.0);
+                let y_t: Vec<T> = cast_all(&y);
+                let left = FactorWidth1::new(n_left, &left, None);
+                let right = FactorWidth1::new(n_right, &right, valued.then_some(&y_t[..]));
+                let s_t: Vec<T> = w.iter().map(|&w| cast(w.sqrt())).collect();
+                let gram = BipartiteFactorWidth2::scaled(
+                    left.expect("valid left factor"),
+                    right.expect("valid right factor"),
+                    &s_t,
+                )
+                .expect("valid bipartite Gram");
+                factorize_with(gram, config, ScalingPolicy::default())
+                    .unwrap_or_else(|error| rejected(&error))
+            }
+            Entry::Laplacian | Entry::Sddm => {
+                let weights: Vec<T> = graph.edges.iter().map(|edge| cast(edge.weight)).collect();
+                let view = Laplacian::weighted(n, &a, &b, &weights).expect("valid Laplacian");
+                match self {
+                    Entry::Sddm => {
+                        let ground: Vec<T> = cast_all(&graph.ground);
+                        factorize_with(
+                            Sddm::new(view, &ground).expect("valid surplus"),
+                            config,
+                            ScalingPolicy::default(),
+                        )
+                    }
+                    _ => factorize_with(view, config, ScalingPolicy::default()),
+                }
+                .unwrap_or_else(|error| rejected(&error))
+            }
+        }
+    }
+}
+
+/// A graph as its entry point states it, in that entry point's numbering.
+pub struct Reduced {
+    entry: Entry,
+    local: Graph,
+    n_left: usize,
+    types: Types,
+    labels: Labels,
+}
+
+impl Reduced {
+    pub fn factorize(&self, config: &Config) -> Factored {
+        let (entry, graph, n_left, config) = (self.entry, &self.local, self.n_left, *config);
+        let factor = match self.types {
+            Types::F32U32 => ByType::F32U32(entry.factorize_as::<f32, u32>(graph, n_left, config)),
+            Types::F32U64 => ByType::F32U64(entry.factorize_as::<f32, u64>(graph, n_left, config)),
+            Types::F64U32 => ByType::F64U32(entry.factorize_as::<f64, u32>(graph, n_left, config)),
+            Types::F64U64 => ByType::F64U64(entry.factorize_as::<f64, u64>(graph, n_left, config)),
+        };
+        Factored {
+            factor,
+            labels: self.labels.clone(),
+        }
+    }
+
+    /// Per irreducible block, whether it solves as singular.
+    pub fn floats(&self) -> Vec<bool> {
+        let factored = self.factorize(&Config::default());
+        by_type!(&factored.factor, factor => factor.blocks().iter().map(|block| block.floats()).collect())
+    }
+}
+
+/// A factor that solves in the caller's numbering and in `f64`.
+pub struct Factored {
+    pub factor: Factors,
+    pub labels: Labels,
+}
+
+impl Factored {
+    pub fn solve(&self, b: &[f64]) -> Vec<f64> {
+        let local = self.labels.to_local(b);
+        let x = by_type!(&self.factor, factor => solve(factor, &local));
+        self.labels.to_caller(&x)
+    }
+
+    pub fn n(&self) -> usize {
+        by_type!(&self.factor, factor => factor.n())
+    }
+}
+
+fn solve<T: Real>(factor: &ApproxInverse<T>, b: &[f64]) -> Vec<f64> {
+    let x = factor
+        .solve(&cast_all::<f64, T>(b))
+        .expect("b has length n");
+    cast_all(&x)
+}

@@ -1,0 +1,582 @@
+use approx_chol::{
+    ApplyError, ApproxInverse, BlockFactor, Config, MemBuffer, MemStack, Real, SchurMode, StackReq,
+    Threads,
+};
+
+use crate::common::bits::bits;
+use crate::common::cases::cases;
+use crate::common::entry::{by_type, cast, cast_all, Entry, Factored, Types};
+use crate::common::graph::{Edge, Graph};
+use crate::common::grid;
+use crate::common::modes::Mode;
+use crate::common::scratch::nan_cells;
+use crate::common::sparse::Sparse;
+use crate::common::threads;
+
+fn assert_close(label: &str, x: &[f64], want: &[f64], tolerance: f64) {
+    assert_eq!(x.len(), want.len(), "{label}");
+    for (i, (&got, &want)) in x.iter().zip(want).enumerate() {
+        assert!(
+            (got - want).abs() <= tolerance * want.abs().max(1.0),
+            "{label}: x[{i}] = {got:e}, expected {want:e} ({x:?})"
+        );
+    }
+}
+
+/// Every vertex its own grounded block.
+fn diagonal_sddm() -> Graph {
+    Graph {
+        ground: vec![2.0, 3.0, 5.0],
+        ..Graph::new(3, Vec::new())
+    }
+}
+
+cases! {
+    /// A grounded singleton factors to `1/σ` under every config, so it solves `M⁻¹b` exactly.
+    #[case::positive_rhs([1.0, 2.0, 3.0])]
+    #[case::mixed_sign_rhs([1.0, -2.0, 4.0])]
+    fn sddm_solve_matches_dense_inverse_nonzero_sum_rhs(
+        #[case] b: [f64; 3],
+        entry in entries(grounded),
+        types in types(all),
+    ) {
+        let graph = diagonal_sddm();
+        let reduced = entry.reduce(&graph, types);
+        assert_eq!(reduced.floats(), [false; 3], "{types:?}");
+        let factor = reduced.factorize(&Config::default());
+        let want: Vec<f64> = b.iter().zip(&graph.ground).map(|(b, d)| b / d).collect();
+        assert_close(&format!("{types:?}"), &factor.solve(&b), &want, 4.0 * types.epsilon());
+    }
+}
+
+fn assert_buffers_checked<T: Real>(factor: &ApproxInverse<T>) {
+    let n = factor.n();
+    for found in [n - 1, n + 1] {
+        let error = ApplyError::Rows { expected: n, found };
+        assert_eq!(factor.solve(&vec![T::zero(); found]), Err(error));
+        let (short_or_long, exact) = (&mut vec![T::zero(); found], &mut vec![T::zero(); n]);
+        assert_eq!(factor.solve_into(short_or_long, exact), Err(error));
+        assert_eq!(factor.solve_into(exact, short_or_long), Err(error));
+        let mut scratch = MemBuffer::new(factor.scratch(1, Threads::All));
+        let stack = MemStack::new(&mut scratch);
+        let solved = factor.solve_in_place(&mut vec![T::zero(); found], stack);
+        assert_eq!(solved, Err(error));
+    }
+    let needed = factor.scratch(1, Threads::All);
+    if needed.size_bytes() > 0 {
+        let mut scratch = MemBuffer::new(needed);
+        let short = MemStack::new(&mut scratch[..needed.size_bytes() - 1]);
+        assert_eq!(
+            factor.solve_in_place(&mut vec![T::one(); n], short),
+            Err(ApplyError::Scratch)
+        );
+    }
+    for block in factor.clone().into_blocks() {
+        let (m, needed) = (block.vertices().len(), block.scratch());
+        let mut scratch = MemBuffer::new(needed);
+        for found in [m - 1, m + 1] {
+            let mut x = vec![T::zero(); found];
+            let error = ApplyError::Rows { expected: m, found };
+            let stack = MemStack::new(&mut scratch);
+            let solved = block.solve_local(&mut x, stack, threads::ONE);
+            assert_eq!(solved, Err(error));
+        }
+        if needed.size_bytes() > 0 {
+            let mut x = vec![T::one(); m];
+            let short = MemStack::new(&mut scratch[..needed.size_bytes() - 1]);
+            let solved = block.solve_local(&mut x, short, threads::ONE);
+            assert_eq!(solved, Err(ApplyError::Scratch));
+        }
+    }
+}
+
+cases! {
+    fn every_solve_checks_its_buffer_lengths(entry in entries(grounded), types in types(all)) {
+        let graph = Graph {
+            ground: vec![2.0, 3.0, 5.0],
+            ..Graph::new(3, vec![Edge::negative(0, 1, 1.0)])
+        };
+        let factor = entry.reduce(&graph, types).factorize(&Config::default());
+        by_type!(&factor.factor, factor => assert_buffers_checked(factor));
+    }
+}
+
+cases! {
+    fn every_cover_solve_checks_its_scratch_length(
+        entry in entries(frustrated),
+        types in types(all),
+    ) {
+        let config = Mode::Sparse(Sparse::AcExactComplement).config();
+        let graph = frustrated_triangle();
+        let factor = entry.reduce(&graph, types).factorize(&config);
+        assert!(uses_scratch(&factor), "a cover lifts through scratch");
+        by_type!(&factor.factor, factor => assert_buffers_checked(factor));
+    }
+}
+
+fn frustrated_triangle() -> Graph {
+    let edges = [(0, 1), (1, 2), (0, 2)].map(|(a, b)| Edge::positive(a, b, 1.0));
+    Graph::new(3, edges.to_vec())
+}
+
+/// Each block through `solve_local` on a NaN-filled scratch, scattered back.
+fn solve_on_dirty_scratch<T: Real>(
+    factor: &ApproxInverse<T>,
+    b: &[f64],
+    threads: Threads,
+) -> Vec<f64> {
+    let mut x = vec![0.0; factor.n()];
+    for block in factor.clone().into_blocks() {
+        let mut local: Vec<T> = block.vertices().map(|v| cast(b[v])).collect();
+        let mut cells = nan_cells::<T>(block.scratch());
+        let solved = block.solve_local(&mut local, MemStack::new_any(&mut cells), threads);
+        solved.expect("buffers fit");
+        (block.vertices().zip(&local)).for_each(|(v, &value)| x[v] = cast(value));
+    }
+    x
+}
+
+fn uses_scratch(factor: &Factored) -> bool {
+    by_type!(&factor.factor, factor => factor
+        .clone()
+        .into_blocks()
+        .iter()
+        .any(|block| block.scratch().size_bytes() > 0))
+}
+
+/// NaN reaches the result if any scratch slot is read before it is written.
+fn assert_dirty_scratch_matches_the_solve(label: &str, factor: &Factored) {
+    let n = factor.n();
+    let rhs: Vec<f64> = (0..n).map(|i| i as f64 - 1.5).collect();
+    let want = factor.solve(&rhs);
+    for threads in threads::BUDGETS {
+        let local = factor.labels.to_local(&rhs);
+        let x = by_type!(&factor.factor, f => solve_on_dirty_scratch(f, &local, threads));
+        let x = factor.labels.to_caller(&x);
+        assert_eq!(bits(&x), bits(&want), "{label} {threads:?}");
+    }
+    let local = factor.labels.to_local(&rhs);
+    let x = by_type!(&factor.factor, f => solve_in_place_on_dirty_scratch(f, &local));
+    let x = factor.labels.to_caller(&x);
+    assert_eq!(bits(&x), bits(&want), "{label} in place");
+}
+
+/// The whole factor through `solve_in_place` on a NaN-filled scratch.
+fn solve_in_place_on_dirty_scratch<T: Real>(factor: &ApproxInverse<T>, b: &[f64]) -> Vec<f64> {
+    let mut x: Vec<T> = cast_all(b);
+    let mut cells = nan_cells::<T>(factor.scratch(1, Threads::All));
+    factor
+        .solve_in_place(&mut x, MemStack::new_any(&mut cells))
+        .expect("buffers fit");
+    cast_all(&x)
+}
+
+cases! {
+    fn a_grounded_solve_takes_no_scratch(route in routes(grounded), types in types(all)) {
+        let (entry, mode) = route;
+        let graph = Graph {
+            ground: vec![1.0, 1.0],
+            ..Graph::new(2, vec![Edge::negative(0, 1, 1.0)])
+        };
+        let factor = entry.reduce(&graph, types).factorize(&mode.config());
+        assert!(!uses_scratch(&factor), "{types:?} {mode:?}");
+    }
+}
+
+cases! {
+    fn dirty_scratch_does_not_change_a_frustrated_solution(
+        route in routes(frustrated),
+        types in types(all),
+    ) {
+        let (entry, mode) = route;
+        let config = mode.config();
+        let factor = entry.reduce(&frustrated_triangle(), types).factorize(&config);
+        assert_eq!(
+            uses_scratch(&factor),
+            mode != Mode::Dense,
+            "frustrated: only the cover lifts through scratch"
+        );
+        let label = format!("frustrated {types:?} {config:?}");
+        assert_dirty_scratch_matches_the_solve(&label, &factor);
+    }
+}
+
+fn path(n: usize, weight: f64) -> Graph {
+    Graph::new(
+        n,
+        (1..n).map(|i| Edge::negative(i - 1, i, weight)).collect(),
+    )
+}
+
+/// `t A` solves to `x / t`, so a factor that drops the scale misses by `t`.
+fn assert_scaled_path_solves(entry: Entry, types: Types, mode: Mode, exponent: i32) {
+    let graph = path(4, 10f64.powi(exponent));
+    let b = [1.0, 0.0, 0.0, -1.0];
+    let config = mode.config();
+    let x = entry.reduce(&graph, types).factorize(&config).solve(&b);
+    let relative = graph.relative_residual(&x, &b);
+    assert!(
+        relative < 1e-6,
+        "{types:?} {config:?} 1e{exponent}: relative residual {relative:e}"
+    );
+}
+
+cases! {
+    /// Each scalar runs the exponents its solution is representable at.
+    fn a_scaled_f64_laplacian_solves_wherever_its_solution_is_representable(
+        route in routes(floating),
+        types in types(f64),
+        #[values(0, -5, -15, -100, -250)] exponent: i32,
+    ) {
+        let (entry, mode) = route;
+        assert_scaled_path_solves(entry, types, mode, exponent);
+    }
+}
+
+cases! {
+    fn a_scaled_f32_laplacian_solves_wherever_its_solution_is_representable(
+        route in routes(floating),
+        types in types(f32),
+        #[values(0, -3, -10, -25)] exponent: i32,
+    ) {
+        let (entry, mode) = route;
+        assert_scaled_path_solves(entry, types, mode, exponent);
+    }
+}
+
+cases! {
+    fn many_zero_singletons_factor_as_trivial_components(
+        entry in entries(floating),
+        types in types(all),
+    ) {
+        let graph = Graph::new(128, Vec::new());
+        let reduced = entry.reduce(&graph, types);
+        assert!(
+            reduced.floats().is_empty(),
+            "{types:?}: a zero vertex is no block"
+        );
+        let factor = reduced.factorize(&Config::default());
+        assert_eq!(factor.n(), 128);
+        assert_eq!(bits(&factor.solve(&[1.0; 128])), bits(&[0.0; 128]));
+        let x = by_type!(&factor.factor, f => solve_in_place_on_dirty_scratch(f, &[1.0; 128]));
+        assert_eq!(bits(&x), bits(&[0.0; 128]), "{types:?}: in place zeroes every dead vertex");
+    }
+}
+
+cases! {
+    fn mixed_grounded_and_floating_components_solve_independently(
+        route in routes(grounded),
+        types in types(all),
+    ) {
+        let (entry, mode) = route;
+        let graph = Graph {
+            ground: vec![2.0, 0.0, 0.0],
+            ..Graph::new(3, vec![Edge::negative(1, 2, 1.0)])
+        };
+        let reduced = entry.reduce(&graph, types);
+        let mut floats = reduced.floats();
+        floats.sort();
+        assert_eq!(floats, [false, true], "{types:?}");
+        let config = mode.config();
+        let x = reduced.factorize(&config).solve(&[4.0, 1.0, -1.0]);
+        let label = format!("{types:?} {config:?}");
+        assert_close(&label, &x, &[2.0, 0.5, -0.5], 4.0 * types.epsilon());
+    }
+}
+
+cases! {
+    /// Components `{0, 2}` and `{1, 3}` interleave; the inconsistent rhs solves least-squares.
+    #[case::zero_sum_per_block([1.0, 2.0, -1.0, -2.0], [0.5, 1.0, -0.5, -1.0])]
+    #[case::inconsistent([3.0, 5.0, -1.0, -2.0], [1.0, 1.75, -1.0, -1.75])]
+    fn interleaved_components_solve_in_input_order(
+        #[case] rhs: [f64; 4],
+        #[case] want: [f64; 4],
+        route in routes(floating),
+        types in types(all),
+    ) {
+        let (entry, mode) = route;
+        let edges = vec![Edge::negative(0, 2, 1.0), Edge::negative(1, 3, 1.0)];
+        let graph = Graph::new(4, edges);
+        let config = mode.config();
+        let factor = entry.reduce(&graph, types).factorize(&config);
+        let label = format!("{types:?} {config:?}");
+        assert_close(&label, &factor.solve(&rhs), &want, 8.0 * types.epsilon());
+    }
+}
+
+cases! {
+    fn an_empty_system_solves_to_an_empty_vector(entry in entries(floating), types in types(all)) {
+        let reduced = entry.reduce(&Graph::new(0, Vec::new()), types);
+        assert!(reduced.factorize(&Config::default()).solve(&[]).is_empty());
+    }
+}
+
+#[test]
+fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
+    use approx_chol::input::CsrRef;
+    use approx_chol::{factorize_with, ScalingPolicy};
+    // A frustrated triangle, weakest edge 1e-80; the pair on (1, 2) cancels in f64 assembly, so `m`'s 2e-200 surplus is below the CSR's rounding.
+    let (a, b) = ([0u32, 1, 0, 1, 1], [1u32, 2, 2, 2, 2]);
+    let pos = [true, true, false, false, true];
+    let w = [1e-80, 1.0, 2.0, 1e-200, 1e-200];
+    let m = [
+        [2.0 + 1e-80, -1e-80, 2.0],
+        [-1e-80, 1.0 + 1e-80 + 2e-200, -1.0],
+        [2.0, -1.0, 3.0 + 2e-200],
+    ];
+    let rhs = [2.5, -1.0, 3.5];
+    let exact = Config {
+        exact_max_dim: 64,
+        complement: SchurMode::Exact,
+        ..Config::default()
+    };
+    let mut dense = [[0.0; 3]; 3];
+    for k in 0..a.len() {
+        let (i, j) = (a[k] as usize, b[k] as usize);
+        let sign = if pos[k] { -1.0 } else { 1.0 };
+        (dense[i][i], dense[j][j]) = (dense[i][i] + w[k], dense[j][j] + w[k]);
+        (dense[i][j], dense[j][i]) = (dense[i][j] + sign * w[k], dense[j][i] + sign * w[k]);
+    }
+    let values: Vec<f64> = dense.into_iter().flatten().collect();
+    let (ptrs, columns) = ([0u32, 3, 6, 9], [0u32, 1, 2, 0, 1, 2, 0, 1, 2]);
+    for config in [Config::default(), exact] {
+        let csr = CsrRef::new(&ptrs, &columns, &values, 3).unwrap();
+        let x = factorize_with(csr, config, ScalingPolicy::default())
+            .unwrap()
+            .solve(&rhs)
+            .unwrap();
+        let residual = (m.iter().zip(&rhs))
+            .map(|(row, b)| (row.iter().zip(&x).map(|(m, x)| m * x).sum::<f64>() - b).abs())
+            .fold(0.0, f64::max);
+        let scale = 6.0 * x.iter().fold(0.0f64, |m, x| m.max(x.abs())) + 3.5;
+        assert!(
+            residual <= 64.0 * f64::EPSILON * scale,
+            "{config:?}: x = {x:?}, residual {residual:e}"
+        );
+    }
+}
+
+#[test]
+fn a_frustrated_block_as_large_as_exact_max_dim_solves_exactly() {
+    use approx_chol::input::CsrRef;
+    use approx_chol::{factorize_with, ScalingPolicy};
+    let n = 12;
+    let matrix: Vec<Vec<f64>> = (0..n)
+        .map(|i| (0..n).map(|j| if i == j { 12.0 } else { 1.0 }).collect())
+        .collect();
+    let ptrs: Vec<u32> = (0..=n as u32).map(|i| i * n as u32).collect();
+    let columns: Vec<u32> = (0..n * n).map(|k| (k % n) as u32).collect();
+    let values: Vec<f64> = matrix.iter().flatten().copied().collect();
+    let csr = CsrRef::new(&ptrs, &columns, &values, n as u32).unwrap();
+    let config = Config {
+        exact_max_dim: n,
+        ..Config::default()
+    };
+    let factor = factorize_with(csr, config, ScalingPolicy::default()).unwrap();
+    let b: Vec<f64> = (0..n).map(|i| (i % 5) as f64 - 2.0).collect();
+    let x = factor.solve(&b).unwrap();
+    let residual = (matrix.iter().zip(&b))
+        .map(|(row, b)| (row.iter().zip(&x).map(|(a, x)| a * x).sum::<f64>() - b).abs())
+        .fold(0.0, f64::max);
+    assert!(residual < 1e-13, "max|Ax − b| = {residual:e}");
+}
+
+cases! {
+    /// Grounded at every vertex, a path pivots its ends first, each sharing its pivot between its neighbor and the ground; a tree factors exactly.
+    fn a_path_whose_ends_share_their_pivots_with_the_ground_solves_exactly(
+        entry in entries(grounded),
+        types in types(all),
+    ) {
+        let graph = Graph {
+            ground: vec![0.5; 6],
+            ..path(6, 1.0)
+        };
+        let x: Vec<f64> = (0..6).map(|i| i as f64 - 2.5).collect();
+        let config = Config {
+            exact_max_dim: 0,
+            ..Config::default()
+        };
+        let factor = entry.reduce(&graph, types).factorize(&config);
+        let label = format!("{entry:?} {types:?}");
+        assert_close(&label, &factor.solve(&graph.apply(&x)), &x, 64.0 * types.epsilon());
+    }
+}
+
+#[test]
+fn a_grounded_path_behind_a_light_edge_solves_on_the_approximate_arm() {
+    use approx_chol::input::{Laplacian, Sddm};
+    use approx_chol::{factorize_with, ScalingPolicy};
+    let (a, b, w, ground) = ([0u32, 1], [1u32, 2], [1e-290, 1e30], [0.0, 1e40, 0.0]);
+    let x = [1.0, 0.75, -0.5];
+    let rhs = [2.5e-291, 0.75e40 + 1.25e30, -1.25e30];
+    let config = Config {
+        exact_max_dim: 0,
+        ..Config::default()
+    };
+    let path = Laplacian::weighted(3, &a, &b, &w).unwrap();
+    let factor = factorize_with(
+        Sddm::new(path, &ground).unwrap(),
+        config,
+        ScalingPolicy::default(),
+    )
+    .unwrap();
+    assert_close(
+        "light sink",
+        &factor.solve(&rhs).unwrap(),
+        &x,
+        64.0 * f64::EPSILON,
+    );
+}
+
+#[test]
+fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
+    use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1};
+    use approx_chol::{factorize_with, ScalingPolicy};
+    // Three left vertices on one right vertex, each by a cancelling pair: `S` is one grounded slot, so AC2 samples no edge.
+    let (left, right) = ([0u32, 0, 1, 1, 2, 2], [0u32; 6]);
+    let loadings = [1.0, -1.0, 1.0, -1.0, 1.0, -1.0];
+    let scales = [2.0, 1.0, 3.0, 1.0, 1.0, 4.0].map(f64::sqrt);
+    let x = [1.0, -1.0, 2.0, 0.5];
+    let b = [3.5, -3.0, 8.5, -1.0];
+    for k in [2, 3] {
+        for complement in [SchurMode::Same, SchurMode::Exact] {
+            let config = Config {
+                split_merge: Some(k),
+                exact_max_dim: 0,
+                complement,
+                ..Config::default()
+            };
+            let gram = BipartiteFactorWidth2::scaled(
+                FactorWidth1::new(3, &left, Some(&loadings[..])).unwrap(),
+                FactorWidth1::new(1, &right, None).unwrap(),
+                &scales,
+            )
+            .unwrap();
+            let solved = factorize_with(gram, config, ScalingPolicy::default())
+                .unwrap()
+                .solve(&b)
+                .unwrap();
+            assert_close(&format!("{config:?}"), &solved, &x, 64.0 * f64::EPSILON);
+        }
+    }
+}
+
+#[rstest::rstest]
+#[case::consecutive(&[0, 1, 2, 3, 4], &[1, 2, 3, 4, 5], &[0])]
+#[case::interleaved(&[0, 2, 1, 3], &[2, 4, 3, 5], &[3, 3])]
+#[case::two_runs(&[0, 1, 3, 4], &[1, 2, 4, 5], &[0, 0])]
+#[case::run_and_list(&[0, 1, 3], &[1, 2, 5], &[0, 2])]
+fn solve_in_place_gathers_only_blocks_whose_vertices_are_not_consecutive(
+    #[case] a: &[u32],
+    #[case] b: &[u32],
+    #[case] gathered: &[usize],
+) {
+    use approx_chol::factorize;
+    use approx_chol::input::Laplacian;
+    let factor: ApproxInverse = factorize(Laplacian::new(6, a, b).unwrap()).unwrap();
+    let rhs = [1.0, -1.0, 2.0, -3.0, 0.5, 0.5];
+    let blocks = factor.blocks();
+    assert_eq!(blocks.len(), gathered.len());
+    let bytes = |block: &BlockFactor, g: usize| g * size_of::<f64>() + block.scratch().size_bytes();
+    let needed = (blocks.iter().zip(gathered)).map(|(block, &g)| bytes(block, g));
+    let in_place = needed.max().expect("a block");
+    let column = 6 * size_of::<f64>();
+    for k in 1..=3 {
+        let scratch = factor.scratch(k, Threads::All).size_bytes();
+        assert_eq!(
+            scratch,
+            (k * in_place).max(column + in_place),
+            "{k} columns"
+        );
+    }
+    let x = solve_in_place_on_dirty_scratch(&factor, &rhs);
+    let want = solve_on_dirty_scratch(&factor, &rhs, Threads::All);
+    assert_eq!(bits(&x), bits(&want));
+}
+
+/// An empty stack's slice is not aligned for `f64`: a solve taking no scratch must not ask for it.
+#[test]
+fn a_solve_taking_no_scratch_accepts_an_empty_stack() {
+    use approx_chol::factorize;
+    use approx_chol::input::Laplacian;
+    let factor: ApproxInverse = factorize(Laplacian::new(3, &[0, 1], &[1, 2]).unwrap()).unwrap();
+    let [block] = factor.blocks() else {
+        panic!("one block");
+    };
+    assert_eq!(block.scratch(), StackReq::EMPTY);
+    let mut x = vec![1.0, -1.0, 0.5];
+    let want = factor.solve(&x).unwrap();
+    block
+        .solve_local(&mut x, MemStack::new(&mut []), Threads::All)
+        .unwrap();
+    assert_eq!(bits(&x), bits(&want));
+}
+
+/// PCG on `graph` preconditioned by `factor`, from zero; the iterations to `‖r‖ ≤ tolerance ‖b‖`, if within `max`.
+fn pcg_iterations(
+    graph: &Graph,
+    factor: &Factored,
+    b: &[f64],
+    tolerance: f64,
+    max: usize,
+) -> Option<usize> {
+    let dot = |u: &[f64], v: &[f64]| u.iter().zip(v).map(|(u, v)| u * v).sum::<f64>();
+    let (mut x, mut r) = (vec![0.0; b.len()], b.to_vec());
+    let mut z = factor.solve(&r);
+    let (mut p, mut rz) = (z.clone(), dot(&r, &z));
+    for iteration in 1..=max {
+        let q = graph.apply(&p);
+        let alpha = rz / dot(&p, &q);
+        (x.iter_mut().zip(&p)).for_each(|(x, p)| *x += alpha * p);
+        (r.iter_mut().zip(&q)).for_each(|(r, q)| *r -= alpha * q);
+        if graph.relative_residual(&x, b) <= tolerance {
+            return Some(iteration);
+        }
+        z = factor.solve(&r);
+        let next = dot(&r, &z);
+        (p.iter_mut().zip(&z)).for_each(|(p, z)| *p = z + next / rz * *p);
+        rz = next;
+    }
+    None
+}
+
+#[rstest::rstest]
+#[case::f64(Types::F64U32, 1e-40, 1e-10)]
+#[case::f32(Types::F32U32, 1e-15, 1e-5)]
+fn a_frustrated_grid_whose_surplus_lies_on_a_light_row_converges_under_pcg(
+    #[case] types: Types,
+    #[case] light: f64,
+    #[case] tolerance: f64,
+) {
+    // Its surplus is ~1e-3·light of the trace: as a ground it gives the cover a common mode that small, and PCG stalls at ‖r‖ = ‖b‖.
+    let k = 10;
+    let edges = grid::grid(k, k)
+        .edges
+        .into_iter()
+        .enumerate()
+        .map(|(e, edge)| Edge {
+            weight: if edge.a < k { light } else { 1.0 },
+            positive: e % 7 == 0,
+            ..edge
+        });
+    let mut graph = Graph::new(k * k, edges.collect());
+    for edge in &graph.edges {
+        for v in [edge.a, edge.b].into_iter().filter(|&v| v < k) {
+            graph.ground[v] += 0.01 * edge.weight;
+        }
+    }
+    let b = graph.apply(&(0..k * k).map(|v| (v % 5) as f64 - 2.0).collect::<Vec<_>>());
+    for seed in 0..3 {
+        let config = Config {
+            seed,
+            exact_max_dim: 0,
+            ..Config::default()
+        };
+        let factor = Entry::Csr.reduce(&graph, types).factorize(&config);
+        let iterations = pcg_iterations(&graph, &factor, &b, tolerance, 100);
+        assert!(
+            iterations.is_some(),
+            "seed {seed}: PCG did not reach {tolerance:e}"
+        );
+    }
+}
