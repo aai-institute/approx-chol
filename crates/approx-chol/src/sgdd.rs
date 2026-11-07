@@ -10,7 +10,7 @@ pub use block::ReduceError;
 use block::WithClamp;
 pub(crate) use block::{BlockComplement, IrreducibleBlock};
 pub(crate) use block::{Grounding, Sheets};
-pub(crate) use congruence::{FactorTail, Restriction, Selection};
+pub(crate) use congruence::{Congruence, FactorTail, Selection};
 pub(crate) use decomposition::Summands;
 pub(crate) use reduction::within_band;
 pub use scaling::{Clamp, ScalingOutcome, ScalingPolicy};

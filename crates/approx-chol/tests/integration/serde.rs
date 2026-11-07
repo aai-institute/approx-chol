@@ -220,11 +220,28 @@ fn respliced(factor: &ApproxInverse, n: usize, dead: &[usize]) -> Vec<u8> {
 #[case::one_past_n(7, &[4, 5])]
 #[case::dead_inside_a_block(6, &[4, 3])]
 #[case::dead_out_of_range(6, &[4, 6])]
+#[case::n_past_any_allocation(usize::MAX / 4, &[4, 5])]
+#[case::n_at_usize_max(usize::MAX, &[4, 5])]
 fn a_factor_not_covering_n_once_is_rejected(#[case] n: usize, #[case] dead: &[usize]) {
     let factor = with_dead_vertices();
     assert!(postcard::from_bytes::<ApproxInverse>(&respliced(&factor, 6, &[4, 5])).is_ok());
     let error = postcard::from_bytes::<ApproxInverse>(&respliced(&factor, n, dead)).unwrap_err();
     assert_eq!(error, postcard::Error::SerdeDeCustom);
+}
+
+/// Isolated vertices listed before the coupled blocks decode to the same solves.
+#[test]
+fn blocks_decode_in_any_order() {
+    let factor = with_isolated_vertex();
+    let mut v = serde_json::to_value(&factor).unwrap();
+    let blocks = v[1][2].as_array_mut().unwrap();
+    assert!(blocks.len() > 1 && blocks[0].get("Isolated").is_none());
+    blocks.reverse();
+    let decoded: ApproxInverse = serde_json::from_value(v).unwrap();
+    assert_eq!(
+        bits_at(&decoded, Threads::All),
+        bits_at(&factor, Threads::All)
+    );
 }
 
 /// 0.6.0's JSON lacks `exact_max_dim` and `complement`, so it is rejected, not read as the default bound.
