@@ -145,8 +145,9 @@ frustrated component factored approximately; `Auto` places the surplus by the ru
 `../../algorithm.md`, step 5. The algorithm behind each
 setting is in `../../algorithm.md`, steps 5 and 7.
 
-- A component's `vertices` are ascending, in $B$'s numbering; `null_vector`, when present, holds
-  one entry per vertex in that order, as computed, unnormalized.
+- A component's `vertices` are in the order its factor numbers them, in $B$'s numbering;
+  `null_vector`, when present, holds one entry per vertex in that order, as computed,
+  unnormalized.
 - A `Clamp`'s `vertices` are its component of $A$, ascending, in the input's numbering;
   `clamps` are ordered by their first vertex. `Component::clamp` is the clamp of the component
   of $A$ that holds the component, in a whole build its own. A Schur build numbers components on
@@ -219,6 +220,8 @@ range raises `ValueError`. Python builds `f64`. A clamp also warns with a
   of $A$ with no kept vertex. Both read one stored list.
 - **The result is $B$, `ApproxInverse`:** its facts, its persistence and its apply all concern
   $B$; the factors $\mathcal{L}$ and $\mathcal{D}$ are not exposed, so no type names them.
+- **Vertices in the factor's order:** placing a null vector needs its vertices in one order, not
+  sorted; the factor's own costs neither a sort nor a second stored order.
 - **Vertices as `usize`:** the storage index is internal; callers index their own arrays with
   `usize`.
 - **Python without `factorize_complement`:** the Schur build serves within, which calls Rust.
