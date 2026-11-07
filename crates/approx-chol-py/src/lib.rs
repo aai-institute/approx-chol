@@ -1,5 +1,5 @@
 use approx_chol::{
-    ApproxInverse, Config, CsrRef, MemBuffer, MemStack, ScalingPolicy, Sgdd, SolveError,
+    ApplyError, ApproxInverse, Config, CsrRef, MemBuffer, MemStack, ScalingPolicy, Sgdd, Threads,
 };
 use num_traits::PrimInt;
 use numpy::{
@@ -22,6 +22,16 @@ fn error_to_py(error: &dyn Error) -> PyErr {
         cause = source;
     }
     value_error(cause.to_string())
+}
+
+/// A vector's length is its block's row count.
+fn apply_error(error: ApplyError) -> PyErr {
+    match error {
+        ApplyError::Rows { expected, found } => value_error(format!(
+            "right-hand side has length {found}, expected {expected}"
+        )),
+        error => error_to_py(&error),
+    }
 }
 
 /// A matrix's stored entries, which size every call on it and its factor.
@@ -280,18 +290,16 @@ impl PyApproxInverse {
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let b = right_hand_side(py, b)?;
         let b_slice = b.as_slice().expect("right_hand_side is contiguous");
-        let (mut x, mut scratch) = (b_slice.to_vec(), MemBuffer::new(self.inner.scratch()));
-        let solved = (self.entries).detach(py, || {
-            (self.inner).solve_in_place(&mut x, MemStack::new(&mut scratch))
-        });
-        solved.map_err(|e| error_to_py(&e))?;
+        let mut x = b_slice.to_vec();
+        let solved = (self.entries).detach(py, || self.inner.apply(x.as_mut_slice(), Threads::All));
+        solved.map_err(apply_error)?;
         Ok(PyArray1::from_vec(py, x))
     }
 
     fn workspace(&self) -> PyWorkspace {
         PyWorkspace {
             x: Vec::new(),
-            scratch: MemBuffer::new(self.inner.scratch()),
+            scratch: MemBuffer::new(self.inner.scratch(1, Threads::All)),
         }
     }
 
@@ -328,15 +336,15 @@ impl PyApproxInverse {
         let out = &mut out[..n];
         // Our own buffer: without the GIL, or on a free-threaded build, another thread may touch `out`.
         let solved = (self.entries).detach(py, || {
-            (self.inner).solve_in_place(x, MemStack::new(scratch))
+            (self.inner).apply_with(x.as_mut_slice(), Threads::All, MemStack::new(scratch))
         });
         solved
             .map(|()| out.copy_from_slice(x))
             .map_err(|e| match e {
-                SolveError::Scratch => {
+                ApplyError::Scratch => {
                     value_error("workspace is from a smaller factor; use this factor's workspace()")
                 }
-                e => error_to_py(&e),
+                e => apply_error(e),
             })
     }
 }

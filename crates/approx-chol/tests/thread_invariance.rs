@@ -1,5 +1,7 @@
 #[path = "common/bipartite.rs"]
 mod bipartite;
+#[path = "common/bits.rs"]
+mod bits;
 #[path = "common/threads.rs"]
 mod threads;
 
@@ -8,6 +10,7 @@ use approx_chol::{
     Side,
 };
 use bipartite::Bipartite;
+use bits::bits;
 
 const DEGREE: usize = 48;
 
@@ -41,7 +44,7 @@ fn gram() -> Bipartite {
     }
 }
 
-/// `ApproxInverse::solve` as bits, which each block's `solve_local` matches under each budget; `kept` factors the complement.
+/// `ApproxInverse::solve` as bits, which each block's `solve_local` and each column of a four-column apply match under each budget; `kept` factors the complement.
 fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> Vec<u64> {
     let gram = g.view();
     let factor = match kept {
@@ -56,12 +59,7 @@ fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> Vec<u64> {
     let b: Vec<f64> = (0..factor.n())
         .map(|i| ((i * 7919) % 101) as f64 / 50.0 - 1.0)
         .collect();
-    let bits: Vec<u64> = factor
-        .solve(&b)
-        .unwrap()
-        .iter()
-        .map(|x| x.to_bits())
-        .collect();
+    let whole = bits(&factor.solve(&b).unwrap());
     for block in factor.blocks() {
         for threads in threads::BUDGETS {
             let mut x: Vec<f64> = block.vertices().map(|v| b[v]).collect();
@@ -72,12 +70,27 @@ fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> Vec<u64> {
                     threads,
                 )
                 .unwrap();
-            let local: Vec<u64> = x.iter().map(|x| x.to_bits()).collect();
-            let solved: Vec<u64> = block.vertices().map(|v| bits[v]).collect();
-            assert_eq!(local, solved, "{threads:?}");
+            let solved: Vec<u64> = block.vertices().map(|v| whole[v]).collect();
+            assert_eq!(bits(&x), solved, "{threads:?}");
         }
     }
-    bits
+    let scale = [1.0, -0.5, 0.0, 3.0];
+    let alone = scale.map(|s| {
+        bits(
+            &factor
+                .solve(&b.iter().map(|&v| s * v).collect::<Vec<_>>())
+                .unwrap(),
+        )
+    });
+    for threads in threads::BUDGETS {
+        let mut rows: Vec<[f64; 4]> = b.iter().map(|&v| scale.map(|s| s * v)).collect();
+        factor.apply(&mut rows, threads).unwrap();
+        for (j, alone) in alone.iter().enumerate() {
+            let column: Vec<f64> = rows.iter().map(|row| row[j]).collect();
+            assert_eq!(&bits(&column), alone, "column {j}, {threads:?}");
+        }
+    }
+    whole
 }
 
 #[test]
