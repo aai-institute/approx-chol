@@ -21,7 +21,7 @@ fn timed_solve(b: &mut Bencher, factor: &ApproxInverse, rhs: &[f64]) {
     b.iter(|| {
         x.copy_from_slice(black_box(rhs));
         factor
-            .solve_in_place(&mut x, MemStack::new(&mut scratch))
+            .apply_with(&mut x, Threads::All, MemStack::new(&mut scratch))
             .expect("solve");
         black_box(&x);
     });

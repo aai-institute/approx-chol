@@ -160,8 +160,9 @@ impl<T: Real> Case<T> {
     fn run(&self) -> Result<usize, Box<dyn Error>> {
         let factor = self.factor()?;
         let b = vec![T::one(); factor.n()];
-        let solved = factor
-            .solve(&b)
+        let mut solved = b.clone();
+        factor
+            .apply(&mut solved, Threads::All)
             .expect("a right-hand side of length n is accepted");
         // NaN scratch reaches the solution if any slot is read before written.
         for threads in [Threads::All, Threads::Count(NonZeroUsize::MIN)] {

@@ -3,6 +3,7 @@ use rstest::rstest;
 
 use crate::common::bipartite::Bipartite;
 use crate::common::bits::bits;
+use crate::common::solve::Solve;
 use crate::common::threads;
 
 const DEGREE: usize = 48;
@@ -37,7 +38,7 @@ fn gram() -> Bipartite {
     }
 }
 
-/// `ApproxInverse::solve` as bits, which an apply of `b` and each column of a four-column apply match under each budget; `kept` factors the complement.
+/// The solve of `b` as bits, which its solve and each column of a four-column apply match under each budget; `kept` factors the complement.
 fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> Vec<u64> {
     let gram = g.view();
     let factor = match kept {
@@ -50,9 +51,11 @@ fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> Vec<u64> {
         .collect();
     let whole = bits(&factor.solve(&b).unwrap());
     for threads in threads::BUDGETS {
-        let mut x = b.clone();
-        factor.apply(&mut x, threads).unwrap();
-        assert_eq!(bits(&x), whole, "{threads:?}");
+        assert_eq!(
+            bits(&factor.solve_at(&b, threads).unwrap()),
+            whole,
+            "{threads:?}"
+        );
     }
     let scale = [1.0, -0.5, 0.0, 3.0];
     let alone = scale.map(|s| {

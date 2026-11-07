@@ -8,6 +8,7 @@ use crate::common::bits::bits;
 use crate::common::entry::cast_all;
 use crate::common::grid::grid;
 use crate::common::out_of_range::{out_of_range, F32_FLOOR, FLOOR};
+use crate::common::solve::Solve;
 
 use super::{assert_names_a_defect, reduce, reduce_upper};
 

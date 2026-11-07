@@ -181,30 +181,6 @@ impl<T: Real> ApproxInverse<T> {
         Ok(())
     }
 
-    /// `A⁺b` on floating blocks; vertices in no block solve to `0`.
-    pub fn solve(&self, b: &[T]) -> Result<Vec<T>, ApplyError> {
-        let mut x = b.to_vec();
-        self.apply(x.as_mut_slice(), Threads::All)?;
-        Ok(x)
-    }
-
-    /// As [`solve`](Self::solve), into `x` of length [`n`](Self::n).
-    pub fn solve_into(&self, b: &[T], x: &mut [T]) -> Result<(), ApplyError> {
-        if let Some(found) = [b.len(), x.len()].into_iter().find(|&len| len != self.n) {
-            return Err(ApplyError::Rows {
-                expected: self.n,
-                found,
-            });
-        }
-        x.copy_from_slice(b);
-        self.apply(x, Threads::All)
-    }
-
-    /// As [`solve`](Self::solve), allocating nothing: `x` holds `b` on entry and the solution on return; `stack` holds [`scratch`](Self::scratch) for one column.
-    pub fn solve_in_place(&self, x: &mut [T], stack: &mut MemStack) -> Result<(), ApplyError> {
-        self.apply_with(x, Threads::All, stack)
-    }
-
     /// Solves `x`, of `n` rows, in place through `stack`, which holds every block's scratch for `V`.
     fn solve_unchecked<V: Batch<T>>(&self, x: &mut [V], threads: Threads, stack: &mut MemStack) {
         for block in &self.blocks {
@@ -709,7 +685,8 @@ mod storage {
     use crate::{ScalingPolicy, SchurMode};
 
     fn bits(factor: &ApproxInverse, b: &[f64]) -> Vec<u64> {
-        let x = factor.solve(b).expect("b has length n");
+        let mut x = b.to_vec();
+        factor.apply(&mut x, Threads::All).expect("b has length n");
         x.iter().map(|x| x.to_bits()).collect()
     }
 

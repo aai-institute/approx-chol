@@ -13,6 +13,7 @@ use crate::common::dense::dense;
 use crate::common::dense_residual::solve_residual;
 use crate::common::entry::{floats, only};
 use crate::common::gram::{dense_csr, matrix};
+use crate::common::solve::Solve;
 
 #[test]
 fn csr_and_upper_share_reduction_and_solve_bits() {

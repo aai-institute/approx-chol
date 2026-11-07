@@ -1,7 +1,7 @@
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
 };
-use approx_chol::{factorize_with, ApproxInverse, Component, Config, Real, ScalingPolicy};
+use approx_chol::{factorize_with, ApproxInverse, Component, Config, Real, ScalingPolicy, Threads};
 use num_traits::{NumCast, PrimInt};
 
 use super::graph::Graph;
@@ -319,8 +319,7 @@ pub fn only<T: Real>(factor: &ApproxInverse<T>) -> Component<'_, T> {
 }
 
 fn solve<T: Real>(factor: &ApproxInverse<T>, b: &[f64]) -> Vec<f64> {
-    let x = factor
-        .solve(&cast_all::<f64, T>(b))
-        .expect("b has length n");
+    let mut x = cast_all::<f64, T>(b);
+    factor.apply(&mut x, Threads::All).expect("b has length n");
     cast_all(&x)
 }

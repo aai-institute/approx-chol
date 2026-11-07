@@ -6,6 +6,7 @@ use rstest::rstest;
 
 use crate::common::bits::bits;
 use crate::common::gram::{dense_csr, matrix};
+use crate::common::solve::Solve;
 use crate::common::threads;
 
 fn factors(config: Config) -> Vec<ApproxInverse> {
@@ -51,10 +52,9 @@ fn configs() -> [Config; 2] {
     [Config::default(), exact]
 }
 
-fn solve(factor: &ApproxInverse, threads: Threads) -> Vec<u64> {
-    let mut x: Vec<f64> = (0..factor.n()).map(|i| (i % 7) as f64 - 3.0).collect();
-    factor.apply(&mut x, threads).unwrap();
-    bits(&x)
+fn bits_at(factor: &ApproxInverse, threads: Threads) -> Vec<u64> {
+    let b: Vec<f64> = (0..factor.n()).map(|i| (i % 7) as f64 - 3.0).collect();
+    bits(&factor.solve_at(&b, threads).unwrap())
 }
 
 #[test]
@@ -70,7 +70,7 @@ fn round_trip_solves_bit_identically() {
             let back: ApproxInverse = postcard::from_bytes(&bytes).unwrap();
             assert_eq!(postcard::to_stdvec(&back).unwrap(), bytes);
             for threads in threads::BUDGETS {
-                assert_eq!(solve(&factor, threads), solve(&back, threads));
+                assert_eq!(bits_at(&factor, threads), bits_at(&back, threads));
             }
         }
     }
@@ -96,7 +96,7 @@ fn corrupt_bytes_error_instead_of_panicking() {
                 _ => corrupt.truncate(at),
             }
             if let Ok(factor) = postcard::from_bytes::<ApproxInverse>(&corrupt) {
-                drop(solve(&factor, threads::ONE));
+                drop(bits_at(&factor, threads::ONE));
             }
         }
     }
@@ -171,12 +171,6 @@ fn with_dead_vertices() -> ApproxInverse {
     factorize_with(laplacian, Config::default(), ScalingPolicy::default()).unwrap()
 }
 
-fn solve_factor(factor: &ApproxInverse) -> Vec<u64> {
-    let b: Vec<f64> = (0..factor.n()).map(|i| (i % 5) as f64 - 2.0).collect();
-    let x = factor.solve(&b).unwrap();
-    bits(&x)
-}
-
 #[test]
 fn a_factor_round_trips_bit_identically() {
     let all = configs()
@@ -192,7 +186,10 @@ fn a_factor_round_trips_bit_identically() {
             (decoded.n(), decoded.n_steps()),
             (factor.n(), factor.n_steps())
         );
-        assert_eq!(solve_factor(&decoded), solve_factor(&factor));
+        assert_eq!(
+            bits_at(&decoded, Threads::All),
+            bits_at(&factor, Threads::All)
+        );
     }
 }
 

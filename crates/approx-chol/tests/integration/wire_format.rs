@@ -10,6 +10,7 @@ use rstest::rstest;
 use serde::de::value::{Error, SeqDeserializer};
 use serde::Deserialize;
 
+use crate::common::solve::Solve;
 use crate::common::threads;
 
 const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
@@ -186,12 +187,6 @@ fn rhs(n: usize) -> Vec<f64> {
     (0..n).map(|i| [1.0, 2.0, -1.0, -2.0][i % 4]).collect()
 }
 
-fn solve(factor: &ApproxInverse, b: &[f64]) -> Vec<f64> {
-    let mut x = b.to_vec();
-    (factor.apply(&mut x, threads::ONE)).expect("rows fit");
-    x
-}
-
 fn relative_residual(matrix: &[&[f64]], x: &[f64], b: &[f64]) -> f64 {
     let norm = |v: &mut dyn Iterator<Item = f64>| v.map(|e| e * e).sum::<f64>().sqrt();
     let mut error = matrix.iter().zip(b).map(|(row, bi)| {
@@ -240,7 +235,7 @@ fn assert_committed_payload_decodes_and_solves(fixture: Fixture) {
         );
     }
     let b = rhs(factor.n());
-    let x = solve(&restored, &b);
+    let x = restored.solve_at(&b, threads::ONE).expect("rows fit");
     if let Some(matrix) = fixture.matrix().filter(|_| fixture.exact()) {
         let residual = relative_residual(matrix, &x, &b);
         assert!(residual < 1e-12, "relative residual {residual:e}");
@@ -256,7 +251,7 @@ fn assert_committed_payload_decodes_and_solves(fixture: Fixture) {
     assert_eq!(restored.clamps(), factor.clamps(), "this build's clamps");
 
     // The residual alone is met by any valid factor, not only the one that wrote these bytes.
-    let expected = solve(&factor, &b);
+    let expected = factor.solve_at(&b, threads::ONE).expect("rows fit");
     assert!(
         x.iter()
             .zip(&expected)

@@ -16,19 +16,20 @@ fuzz_target!(|data: &[u8]| {
         let mut x = b.clone();
         let mut cells = cells::filled(factor.scratch(1, Threads::All), fill);
         factor
-            .solve_in_place(&mut x, MemStack::new_any(&mut cells))
+            .apply_with(&mut x, Threads::All, MemStack::new_any(&mut cells))
             .expect("a stack of the factor's own scratch is accepted");
         x
     };
     // NaN scratch reaches the solution if any slot is read before written.
     let agrees = (solve(0.0).iter().zip(solve(f64::NAN))).all(|(a, b)| a.to_bits() == b.to_bits());
     assert!(agrees, "dirty scratch changed the solution");
-    let x = factor.solve(&b).expect("b has length n");
+    let mut x = b.clone();
+    factor.apply(&mut x, Threads::All).expect("b has length n");
     assert!(
         x.iter()
             .zip(solve(0.0))
             .all(|(a, b)| a.to_bits() == b.to_bits()),
-        "solve and solve_in_place agree"
+        "apply and apply_with agree"
     );
     let mut rows: Vec<[f64; 3]> = b.iter().map(|&v| [v, -v, 0.5 * v]).collect();
     let mut cells = cells::filled(factor.scratch(3, Threads::All), f64::NAN);
@@ -40,8 +41,9 @@ fuzz_target!(|data: &[u8]| {
         )
         .expect("a stack of the factor's own scratch is accepted");
     for (j, sign) in [1.0, -1.0, 0.5].into_iter().enumerate() {
-        let alone = factor
-            .solve(&b.iter().map(|&v| sign * v).collect::<Vec<_>>())
+        let mut alone: Vec<f64> = b.iter().map(|&v| sign * v).collect();
+        factor
+            .apply(&mut alone, Threads::All)
             .expect("b has length n");
         let column = rows.iter().map(|row| row[j]);
         assert!(

@@ -6,6 +6,7 @@ use crate::common::dense;
 use crate::common::dense_residual;
 use crate::common::gram;
 use crate::common::lcg::Lcg;
+use crate::common::solve::Solve;
 
 impl Bipartite {
     /// `columns` columns over sides of `n_left` and `n_right`, left vertex `n_left − 1` in none, so it is dead.

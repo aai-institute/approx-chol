@@ -1,14 +1,15 @@
 //! Approximate Cholesky of symmetric generalized diagonally dominant `A`, one irreducible block at a time.
 //!
 //! ```
-//! use approx_chol::{factorize, CsrRef};
+//! use approx_chol::{factorize, CsrRef, Threads};
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let row_ptrs    = [0u32, 2, 5, 8, 10];
 //! let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
 //! let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
 //!
 //! let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
-//! let x = factorize(csr)?.solve(&[1.0, -1.0, 1.0, -1.0])?;
+//! let mut x = vec![1.0, -1.0, 1.0, -1.0];
+//! factorize(csr)?.apply(&mut x, Threads::All)?;
 //! assert!(x.iter().all(|v| f64::is_finite(*v)));
 //! # Ok(())
 //! # }

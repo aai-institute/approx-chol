@@ -9,6 +9,7 @@ use crate::common::graph::Graph;
 use crate::common::grid::grid;
 use crate::common::interleaved::interleaved_components;
 use crate::common::runner::{check, stated_by};
+use crate::common::solve::Solve;
 use crate::common::sparse::Sparse;
 
 /// Half the draws tie vertex 0 to ground, so the graph is an SDDM.

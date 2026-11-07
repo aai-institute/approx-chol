@@ -10,6 +10,7 @@ use crate::common::entry::{floats, only};
 use crate::common::gram::{dense_csr, matrix};
 use crate::common::lcg::Lcg;
 use crate::common::out_of_range::{out_of_range, FLOOR};
+use crate::common::solve::Solve;
 
 use super::cycle::Cycle;
 

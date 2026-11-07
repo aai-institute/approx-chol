@@ -3,7 +3,7 @@ mod csr;
 #[path = "common/grid.rs"]
 mod grid;
 
-use approx_chol::Config;
+use approx_chol::{Config, Threads};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use csr::{build, OwnedCsr};
 
@@ -73,7 +73,13 @@ fn bench_exact_max_dim_solve(c: &mut Criterion) {
                 let factor = build(lap.csr(), config);
                 let id = BenchmarkId::new(format!("{shape}/{label}"), n);
                 group.bench_with_input(id, &rhs, |b, rhs| {
-                    b.iter(|| factor.solve(rhs).expect("solve should succeed"));
+                    b.iter(|| {
+                        let mut x = rhs.to_vec();
+                        factor
+                            .apply(&mut x, Threads::All)
+                            .expect("solve should succeed");
+                        x
+                    });
                 });
             }
         }

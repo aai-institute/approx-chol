@@ -3,6 +3,7 @@ use approx_chol::{factorize_with, Config, ScalingPolicy, SchurMode};
 
 use crate::common::dense_residual::apply;
 use crate::common::gram::{dense_csr, matrix};
+use crate::common::solve::Solve;
 
 /// A frustrated unit cycle `L0 R0 L1 R1 …`, `cycle` vertices a side, and `pendants` left vertices each joined by `1e-95` to `wide` cycle vertices and left a `1e-200` surplus: within the band.
 struct Cycle {

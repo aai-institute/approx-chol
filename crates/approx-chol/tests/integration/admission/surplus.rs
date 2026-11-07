@@ -3,6 +3,7 @@ use rstest::rstest;
 
 use super::reduce;
 use crate::common::entry::{floats, only};
+use crate::common::solve::Solve;
 
 /// `[[a+s, -a], [-a, a+s]]`: dominant by `s` on both rows, so it floats exactly when `s` is noise.
 fn surplus_pair<T: Real>(a: T, s: T) -> ApproxInverse<T> {

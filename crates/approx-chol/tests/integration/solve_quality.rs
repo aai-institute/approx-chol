@@ -9,6 +9,7 @@ use crate::common::graph::{Edge, Graph};
 use crate::common::grid;
 use crate::common::modes::Mode;
 use crate::common::scratch::nan_cells;
+use crate::common::solve::Solve;
 use crate::common::sparse::Sparse;
 use crate::common::threads;
 
@@ -52,13 +53,13 @@ fn assert_buffers_checked<T: Real>(factor: &ApproxInverse<T>) {
     let n = factor.n();
     for found in [n - 1, n + 1] {
         let error = ApplyError::Rows { expected: n, found };
-        assert_eq!(factor.solve(&vec![T::zero(); found]), Err(error));
-        let (short_or_long, exact) = (&mut vec![T::zero(); found], &mut vec![T::zero(); n]);
-        assert_eq!(factor.solve_into(short_or_long, exact), Err(error));
-        assert_eq!(factor.solve_into(exact, short_or_long), Err(error));
+        assert_eq!(
+            factor.apply(&mut vec![T::zero(); found], Threads::All),
+            Err(error)
+        );
         let mut scratch = MemBuffer::new(factor.scratch(1, Threads::All));
         let stack = MemStack::new(&mut scratch);
-        let solved = factor.solve_in_place(&mut vec![T::zero(); found], stack);
+        let solved = factor.apply_with(&mut vec![T::zero(); found], Threads::All, stack);
         assert_eq!(solved, Err(error));
     }
     let needed = factor.scratch(1, Threads::All);
@@ -66,7 +67,7 @@ fn assert_buffers_checked<T: Real>(factor: &ApproxInverse<T>) {
         let mut scratch = MemBuffer::new(needed);
         let short = MemStack::new(&mut scratch[..needed.size_bytes() - 1]);
         assert_eq!(
-            factor.solve_in_place(&mut vec![T::one(); n], short),
+            factor.apply_with(&mut vec![T::one(); n], Threads::All, short),
             Err(ApplyError::Scratch)
         );
     }
@@ -143,20 +144,6 @@ fn assert_dirty_scratch_matches_the_solve(label: &str, factor: &Factored) {
         let x = factor.labels.to_caller(&x);
         assert_eq!(bits(&x), bits(&want), "{label} {threads:?}");
     }
-    let local = factor.labels.to_local(&rhs);
-    let x = by_type!(&factor.factor, f => solve_in_place_on_dirty_scratch(f, &local));
-    let x = factor.labels.to_caller(&x);
-    assert_eq!(bits(&x), bits(&want), "{label} in place");
-}
-
-/// The whole factor through `solve_in_place` on a NaN-filled scratch.
-fn solve_in_place_on_dirty_scratch<T: Real>(factor: &ApproxInverse<T>, b: &[f64]) -> Vec<f64> {
-    let mut x: Vec<T> = cast_all(b);
-    let mut cells = nan_cells::<T>(factor.scratch(1, Threads::All));
-    factor
-        .solve_in_place(&mut x, MemStack::new_any(&mut cells))
-        .expect("buffers fit");
-    cast_all(&x)
 }
 
 cases! {
@@ -246,8 +233,8 @@ cases! {
         let factor = reduced.factorize(&Config::default());
         assert_eq!(factor.n(), 128);
         assert_eq!(bits(&factor.solve(&[1.0; 128])), bits(&[0.0; 128]));
-        let x = by_type!(&factor.factor, f => solve_in_place_on_dirty_scratch(f, &[1.0; 128]));
-        assert_eq!(bits(&x), bits(&[0.0; 128]), "{types:?}: in place zeroes every dead vertex");
+        let x = by_type!(&factor.factor, f => solve_on_dirty_scratch(f, &[1.0; 128], Threads::All));
+        assert_eq!(bits(&x), bits(&[0.0; 128]), "{types:?}: a dirty scratch zeroes every dead vertex");
     }
 }
 
@@ -454,7 +441,7 @@ fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
 #[case::interleaved(&[0, 2, 1, 3], &[2, 4, 3, 5], &[3, 3])]
 #[case::two_runs(&[0, 1, 3, 4], &[1, 2, 4, 5], &[0, 0])]
 #[case::run_and_list(&[0, 1, 3], &[1, 2, 5], &[0, 2])]
-fn solve_in_place_gathers_only_blocks_whose_vertices_are_not_consecutive(
+fn apply_with_gathers_only_blocks_whose_vertices_are_not_consecutive(
     #[case] a: &[u32],
     #[case] b: &[u32],
     #[case] gathered: &[usize],
@@ -474,8 +461,8 @@ fn solve_in_place_gathers_only_blocks_whose_vertices_are_not_consecutive(
             "{k} columns"
         );
     }
-    let x = solve_in_place_on_dirty_scratch(&factor, &rhs);
-    let want = solve_on_dirty_scratch(&factor, &rhs, Threads::All);
+    let x = solve_on_dirty_scratch(&factor, &rhs, Threads::All);
+    let want = factor.solve(&rhs).expect("rows fit");
     assert_eq!(bits(&x), bits(&want));
 }
 

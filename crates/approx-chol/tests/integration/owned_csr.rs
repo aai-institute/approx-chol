@@ -1,5 +1,7 @@
 use approx_chol::{factorize, CsrRef, OwnedCsr};
 
+use crate::common::solve::Solve;
+
 #[test]
 fn owned_csr_routes_factor_alike() {
     let (rp, ci, v) = (

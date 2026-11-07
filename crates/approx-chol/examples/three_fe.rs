@@ -1,7 +1,7 @@
 //! Three fixed effects, no slopes: each pair of factors is one incidence-only bipartite Gram, as within's Schwarz subdomains.
 
 use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1};
-use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy};
+use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy, Threads};
 
 /// Workers move between firms of their own region only, so (worker, firm) splits by region.
 const REGIONS: [(usize, usize); 5] = [(2000, 200), (40, 6), (30, 5), (20, 4), (10, 3)];
@@ -96,7 +96,8 @@ fn check(a: &PairGram<'_>, factor: &ApproxInverse<f64>) {
     let mut rng = SplitMix(11);
     let x_true: Vec<f64> = (0..factor.n()).map(|_| rng.unit() - 0.5).collect();
     let b = a.apply(&x_true);
-    let x = factor.solve(&b).expect("solves");
+    let mut x = b.clone();
+    factor.apply(&mut x, Threads::All).expect("solves");
     println!(
         "  one solve: relative residual {:.2e}",
         relative_residual(a, &x, &b)
@@ -123,7 +124,8 @@ fn pcg(
 ) -> (Vec<f64>, usize) {
     let mut x = vec![0.0; b.len()];
     let mut r = b.to_vec();
-    let mut z = factor.solve(&r).expect("solves");
+    let mut z = r.clone();
+    factor.apply(&mut z, Threads::All).expect("solves");
     let mut p = z.clone();
     let mut rz = dot(&r, &z);
     for iteration in 0..max {
@@ -134,7 +136,8 @@ fn pcg(
         let alpha = rz / dot(&p, &ap);
         axpy(alpha, &p, &mut x);
         axpy(-alpha, &ap, &mut r);
-        z = factor.solve(&r).expect("solves");
+        z.copy_from_slice(&r);
+        factor.apply(&mut z, Threads::All).expect("solves");
         let rz_next = dot(&r, &z);
         let beta = rz_next / rz;
         rz = rz_next;

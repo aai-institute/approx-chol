@@ -14,6 +14,7 @@ pub mod out_of_range;
 pub mod range;
 pub mod runner;
 pub mod scratch;
+pub mod solve;
 pub mod sparse;
 pub mod spectrum;
 pub mod threads;
