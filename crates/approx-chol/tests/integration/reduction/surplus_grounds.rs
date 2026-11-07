@@ -4,13 +4,14 @@ use approx_chol::input::{
 use approx_chol::{factorize, factorize_with, ApproxInverse, Config, Error, Real, ScalingPolicy};
 use rstest::rstest;
 
-use crate::common::cycle::Cycle;
 use crate::common::dense::dense;
 use crate::common::dense_residual::apply;
 use crate::common::entry::floats;
 use crate::common::gram::{dense_csr, matrix};
 use crate::common::lcg::Lcg;
 use crate::common::out_of_range::{out_of_range, FLOOR};
+
+use super::cycle::Cycle;
 
 /// The chain's null vector `(1, 1e200, 1e400)` passes `f64`; floating, `x₀` is `4.9e174`.
 #[test]
