@@ -1,29 +1,4 @@
-#[path = "common/cases.rs"]
-mod cases;
-#[path = "common/dense.rs"]
-mod dense;
-#[path = "common/dimension.rs"]
-mod dimension;
-#[path = "common/entry.rs"]
-mod entry;
-#[path = "common/floats.rs"]
-mod floats;
-#[path = "common/graph.rs"]
-mod graph;
-#[path = "common/interleaved.rs"]
-mod interleaved;
-#[path = "common/modes.rs"]
-mod modes;
-#[path = "common/range.rs"]
-mod range;
-#[path = "common/residual.rs"]
-mod residual;
-#[path = "common/runner.rs"]
-mod runner;
-#[path = "common/sparse.rs"]
-mod sparse;
-#[path = "common/spectrum.rs"]
-mod spectrum;
+use crate::common::{cases, dense, entry, graph, interleaved, modes, runner, sparse};
 
 use std::ops::RangeInclusive;
 

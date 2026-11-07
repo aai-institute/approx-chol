@@ -1,6 +1,6 @@
 use proptest::prelude::*;
 
-use crate::graph::{Edge, Graph};
+use crate::common::graph::{Edge, Graph};
 
 /// Components are the residue classes mod the returned `parts`, so no block is contiguous.
 pub fn interleaved_components() -> impl Strategy<Value = (Graph, usize)> {

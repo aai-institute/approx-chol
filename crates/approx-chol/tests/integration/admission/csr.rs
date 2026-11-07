@@ -6,7 +6,7 @@ use num_traits::PrimInt;
 use rstest::rstest;
 
 use super::{assert_names_a_defect, reduce, reduce_upper};
-use crate::grid::grid;
+use crate::common::grid::grid;
 
 const F32_FLOOR: f32 = f32::MIN_POSITIVE / f32::EPSILON;
 

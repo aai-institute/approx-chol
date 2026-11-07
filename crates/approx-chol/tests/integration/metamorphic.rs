@@ -1,25 +1,5 @@
 //! Exact mode only: relabeling redraws the sampler, which moved sampled solutions 6-37%.
-
-#[path = "common/cases.rs"]
-mod cases;
-#[path = "common/dense.rs"]
-mod dense;
-#[path = "common/entry.rs"]
-mod entry;
-#[path = "common/graph.rs"]
-mod graph;
-#[path = "common/grid.rs"]
-mod grid;
-#[path = "common/interleaved.rs"]
-mod interleaved;
-#[path = "common/range.rs"]
-mod range;
-#[path = "common/residual.rs"]
-mod residual;
-#[path = "common/runner.rs"]
-mod runner;
-#[path = "common/sparse.rs"]
-mod sparse;
+use crate::common::{cases, dense, entry, graph, grid, interleaved, runner, sparse};
 
 use cases::cases;
 use dense::dense;

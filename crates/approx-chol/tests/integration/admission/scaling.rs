@@ -70,7 +70,7 @@ fn path(n: usize) -> Vec<(usize, usize)> {
 }
 
 fn grid(k: usize) -> Vec<(usize, usize)> {
-    let edges = crate::grid::grid(k, k).edges;
+    let edges = crate::common::grid::grid(k, k).edges;
     edges.iter().map(|edge| (edge.a, edge.b)).collect()
 }
 

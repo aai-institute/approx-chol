@@ -1,31 +1,4 @@
-#[path = "common/bits.rs"]
-mod bits;
-#[path = "common/cases.rs"]
-mod cases;
-#[path = "common/dense.rs"]
-mod dense;
-#[path = "common/dimension.rs"]
-mod dimension;
-#[path = "common/entry.rs"]
-mod entry;
-#[path = "common/floats.rs"]
-mod floats;
-#[path = "common/graph.rs"]
-mod graph;
-#[path = "common/grid.rs"]
-mod grid;
-#[path = "common/modes.rs"]
-mod modes;
-#[path = "common/positive.rs"]
-mod positive;
-#[path = "common/residual.rs"]
-mod residual;
-#[path = "common/scratch.rs"]
-mod scratch;
-#[path = "common/sparse.rs"]
-mod sparse;
-#[path = "common/threads.rs"]
-mod threads;
+use crate::common::{bits, cases, entry, graph, grid, modes, scratch, sparse, threads};
 
 use approx_chol::{
     ApplyError, ApproxInverse, BlockFactor, Config, MemBuffer, MemStack, Real, SchurMode, StackReq,

@@ -1,10 +1,8 @@
 #![cfg(any(feature = "sprs", feature = "faer"))]
 
 #[cfg(feature = "faer")]
-#[path = "interop/faer.rs"]
 mod faer;
 #[cfg(feature = "sprs")]
-#[path = "interop/sprs.rs"]
 mod sprs;
 
 use approx_chol::input::{CsrError, CsrRef, Input};

@@ -1,7 +1,7 @@
 use approx_chol::Config;
 
-use crate::dense::dense;
-use crate::sparse::Sparse;
+use crate::common::dense::dense;
+use crate::common::sparse::Sparse;
 
 /// A graph small enough to factor dense runs `Dense` beside every sparse mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

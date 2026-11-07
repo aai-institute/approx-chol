@@ -1,5 +1,4 @@
-#[path = "common/gram.rs"]
-mod gram;
+use crate::common::gram;
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
 use approx_chol::{factorize_with, Config, ScalingPolicy, SchurMode};

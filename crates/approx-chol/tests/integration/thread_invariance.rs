@@ -1,9 +1,4 @@
-#[path = "common/bipartite.rs"]
-mod bipartite;
-#[path = "common/bits.rs"]
-mod bits;
-#[path = "common/threads.rs"]
-mod threads;
+use crate::common::{bipartite, bits, threads};
 
 use approx_chol::{
     factorize_complement, factorize_with, Config, MemBuffer, MemStack, ScalingPolicy, SchurMode,

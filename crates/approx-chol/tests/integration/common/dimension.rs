@@ -1,4 +1,4 @@
-use crate::entry::{by_type, Factored};
+use crate::common::entry::{by_type, Factored};
 
 impl Factored {
     pub fn n(&self) -> usize {

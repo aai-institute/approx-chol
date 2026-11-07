@@ -1,4 +1,4 @@
-use crate::graph::Edge;
+use crate::common::graph::Edge;
 
 impl Edge {
     /// `w (e_a + e_b)(e_a + e_b)ᵀ`: a positive off-diagonal.

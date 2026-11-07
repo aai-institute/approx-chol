@@ -1,25 +1,4 @@
-#[path = "common/bits.rs"]
-mod bits;
-#[path = "common/cases.rs"]
-mod cases;
-#[path = "common/dense.rs"]
-mod dense;
-#[path = "common/entry.rs"]
-mod entry;
-#[path = "common/floats.rs"]
-mod floats;
-#[path = "common/graph.rs"]
-mod graph;
-#[path = "common/modes.rs"]
-mod modes;
-#[path = "common/positive.rs"]
-mod positive;
-#[path = "common/scratch.rs"]
-mod scratch;
-#[path = "common/sparse.rs"]
-mod sparse;
-#[path = "common/threads.rs"]
-mod threads;
+use crate::common::{bits, cases, entry, graph, modes, scratch, sparse, threads};
 
 use std::array;
 

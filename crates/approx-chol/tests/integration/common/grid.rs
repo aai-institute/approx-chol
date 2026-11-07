@@ -1,4 +1,4 @@
-use crate::graph::{Edge, Graph};
+use crate::common::graph::{Edge, Graph};
 
 /// Unit-weight `rows × cols` grid Laplacian, row-major: every horizontal edge, then every vertical one.
 pub fn grid(rows: usize, cols: usize) -> Graph {

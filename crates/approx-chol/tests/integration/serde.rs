@@ -1,9 +1,5 @@
 #![cfg(feature = "serde")]
-
-#[path = "common/gram.rs"]
-mod gram;
-#[path = "common/threads.rs"]
-mod threads;
+use crate::common::{gram, threads};
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Laplacian, Sddm};
 use approx_chol::{

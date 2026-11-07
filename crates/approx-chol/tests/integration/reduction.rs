@@ -1,20 +1,6 @@
-#[path = "reduction/band_agreement.rs"]
+use crate::common::{bipartite, cycle, dense, dense_residual, gram, lcg};
 mod band_agreement;
-#[path = "common/bipartite.rs"]
-mod bipartite;
-#[path = "reduction/complement.rs"]
 mod complement;
-#[path = "common/cycle.rs"]
-mod cycle;
-#[path = "common/dense.rs"]
-mod dense;
-#[path = "common/dense_residual.rs"]
-mod dense_residual;
-#[path = "common/gram.rs"]
-mod gram;
-#[path = "common/lcg.rs"]
-mod lcg;
-#[path = "reduction/surplus_grounds.rs"]
 mod surplus_grounds;
 
 use approx_chol::input::{

@@ -278,7 +278,7 @@ fn a_payload_of_another_format_version_is_rejected_by_version(#[case] declared: 
 
 /// After a version bump or a new fixture; a factorization change deletes and regenerates the affected fixture, with no version bump.
 #[test]
-#[ignore = "writes fixtures: cargo test -p approx-chol --features serde --test wire_format -- --ignored"]
+#[ignore = "writes fixtures: cargo test -p approx-chol --features serde --test integration -- --ignored wire_format::regenerate_missing_wire_format_fixtures"]
 fn regenerate_missing_wire_format_fixtures() {
     for &fixture in FIXTURES {
         write_new(

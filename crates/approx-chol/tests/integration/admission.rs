@@ -1,20 +1,7 @@
-#[path = "admission/csr.rs"]
+use crate::common::{dense_residual, gram, lcg};
 mod csr;
-#[path = "common/dense_residual.rs"]
-mod dense_residual;
-#[path = "common/gram.rs"]
-mod gram;
-#[path = "common/graph.rs"]
-mod graph;
-#[path = "common/grid.rs"]
-mod grid;
-#[path = "common/lcg.rs"]
-mod lcg;
-#[path = "admission/scaling.rs"]
 mod scaling;
-#[path = "admission/surplus.rs"]
 mod surplus;
-#[path = "admission/views.rs"]
 mod views;
 
 use std::fmt::Debug;

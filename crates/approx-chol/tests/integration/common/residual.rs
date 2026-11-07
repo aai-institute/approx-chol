@@ -1,4 +1,4 @@
-use crate::graph::Graph;
+use crate::common::graph::Graph;
 
 impl Graph {
     /// `A x` from the edges, independent of every entry point under test.

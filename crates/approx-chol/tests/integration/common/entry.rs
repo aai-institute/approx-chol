@@ -4,7 +4,7 @@ use approx_chol::input::{
 use approx_chol::{factorize_with, ApproxInverse, Config, Real, ScalingPolicy};
 use num_traits::{NumCast, PrimInt};
 
-use crate::graph::Graph;
+use crate::common::graph::Graph;
 
 /// The input entry points; each reads one [`Graph`] where it [`states`](Entry::states) it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,10 +46,10 @@ pub enum ByType<A, B, C, D> {
 macro_rules! by_type {
     ($value:expr, $x:ident => $body:expr) => {
         match $value {
-            $crate::entry::ByType::F32U32($x) => $body,
-            $crate::entry::ByType::F32U64($x) => $body,
-            $crate::entry::ByType::F64U32($x) => $body,
-            $crate::entry::ByType::F64U64($x) => $body,
+            $crate::common::entry::ByType::F32U32($x) => $body,
+            $crate::common::entry::ByType::F32U64($x) => $body,
+            $crate::common::entry::ByType::F64U32($x) => $body,
+            $crate::common::entry::ByType::F64U64($x) => $body,
         }
     };
 }
@@ -286,7 +286,7 @@ pub struct Factored {
 impl Factored {
     pub fn solve(&self, b: &[f64]) -> Vec<f64> {
         let local = self.labels.to_local(b);
-        let x = crate::entry::by_type!(&self.factor, factor => solve(factor, &local));
+        let x = crate::common::entry::by_type!(&self.factor, factor => solve(factor, &local));
         self.labels.to_caller(&x)
     }
 }

@@ -1,6 +1,6 @@
 use approx_chol::Config;
 
-use crate::entry::{by_type, Reduced};
+use crate::common::entry::{by_type, Reduced};
 
 impl Reduced {
     /// Per irreducible block, whether it solves as singular.

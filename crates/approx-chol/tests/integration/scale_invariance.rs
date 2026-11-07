@@ -1,15 +1,4 @@
-#[path = "common/cases.rs"]
-mod cases;
-#[path = "common/dense.rs"]
-mod dense;
-#[path = "common/entry.rs"]
-mod entry;
-#[path = "common/graph.rs"]
-mod graph;
-#[path = "common/modes.rs"]
-mod modes;
-#[path = "common/sparse.rs"]
-mod sparse;
+use crate::common::{cases, entry, graph, modes, sparse};
 
 use cases::cases;
 use entry::{Entry, Types};

@@ -1,11 +1,4 @@
-#[path = "common/dense.rs"]
-mod dense;
-#[path = "common/graph.rs"]
-mod graph;
-#[path = "common/positive.rs"]
-mod positive;
-#[path = "common/residual.rs"]
-mod residual;
+use crate::common::{dense, graph};
 
 use approx_chol::input::Laplacian;
 use approx_chol::{factorize_with, ApproxInverse, Config, OwnedCsr, ScalingPolicy};

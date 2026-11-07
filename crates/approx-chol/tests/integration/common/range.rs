@@ -1,4 +1,4 @@
-use crate::graph::Graph;
+use crate::common::graph::Graph;
 
 impl Graph {
     /// `b` with each floating component's null vector projected out, so `A x = b` is consistent.
