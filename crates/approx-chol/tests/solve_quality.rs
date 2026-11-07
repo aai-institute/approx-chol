@@ -1,3 +1,5 @@
+#[path = "common/bits.rs"]
+mod bits;
 #[path = "common/cases.rs"]
 mod cases;
 #[path = "common/dense.rs"]
@@ -18,21 +20,23 @@ mod modes;
 mod positive;
 #[path = "common/residual.rs"]
 mod residual;
+#[path = "common/scratch.rs"]
+mod scratch;
 #[path = "common/sparse.rs"]
 mod sparse;
 #[path = "common/threads.rs"]
 mod threads;
 
-use std::mem::MaybeUninit;
-
 use approx_chol::{
-    ApproxInverse, BlockFactor, Config, MemBuffer, MemStack, Real, SchurMode, SolveError, StackReq,
+    ApplyError, ApproxInverse, BlockFactor, Config, MemBuffer, MemStack, Real, SchurMode, StackReq,
     Threads,
 };
+use bits::bits;
 use cases::cases;
 use entry::{by_type, cast, cast_all, Entry, Factored, Types};
 use graph::{Edge, Graph};
 use modes::Mode;
+use scratch::nan_cells;
 use sparse::Sparse;
 
 fn assert_close(label: &str, x: &[f64], want: &[f64], tolerance: f64) {
@@ -43,10 +47,6 @@ fn assert_close(label: &str, x: &[f64], want: &[f64], tolerance: f64) {
             "{label}: x[{i}] = {got:e}, expected {want:e} ({x:?})"
         );
     }
-}
-
-fn bits(x: &[f64]) -> Vec<u64> {
-    x.iter().map(|x| x.to_bits()).collect()
 }
 
 /// Every vertex its own grounded block.
@@ -78,23 +78,23 @@ cases! {
 fn assert_buffers_checked<T: Real>(factor: &ApproxInverse<T>) {
     let n = factor.n();
     for found in [n - 1, n + 1] {
-        let error = SolveError::LengthMismatch { expected: n, found };
+        let error = ApplyError::Rows { expected: n, found };
         assert_eq!(factor.solve(&vec![T::zero(); found]), Err(error));
         let (short_or_long, exact) = (&mut vec![T::zero(); found], &mut vec![T::zero(); n]);
         assert_eq!(factor.solve_into(short_or_long, exact), Err(error));
         assert_eq!(factor.solve_into(exact, short_or_long), Err(error));
-        let mut scratch = MemBuffer::new(factor.scratch());
+        let mut scratch = MemBuffer::new(factor.scratch(1, Threads::All));
         let stack = MemStack::new(&mut scratch);
         let solved = factor.solve_in_place(&mut vec![T::zero(); found], stack);
         assert_eq!(solved, Err(error));
     }
-    let needed = factor.scratch();
+    let needed = factor.scratch(1, Threads::All);
     if needed.size_bytes() > 0 {
         let mut scratch = MemBuffer::new(needed);
         let short = MemStack::new(&mut scratch[..needed.size_bytes() - 1]);
         assert_eq!(
             factor.solve_in_place(&mut vec![T::one(); n], short),
-            Err(SolveError::Scratch)
+            Err(ApplyError::Scratch)
         );
     }
     for block in factor.clone().into_blocks() {
@@ -102,7 +102,7 @@ fn assert_buffers_checked<T: Real>(factor: &ApproxInverse<T>) {
         let mut scratch = MemBuffer::new(needed);
         for found in [m - 1, m + 1] {
             let mut x = vec![T::zero(); found];
-            let error = SolveError::LengthMismatch { expected: m, found };
+            let error = ApplyError::Rows { expected: m, found };
             let stack = MemStack::new(&mut scratch);
             let solved = block.solve_local(&mut x, stack, threads::ONE);
             assert_eq!(solved, Err(error));
@@ -111,14 +111,9 @@ fn assert_buffers_checked<T: Real>(factor: &ApproxInverse<T>) {
             let mut x = vec![T::one(); m];
             let short = MemStack::new(&mut scratch[..needed.size_bytes() - 1]);
             let solved = block.solve_local(&mut x, short, threads::ONE);
-            assert_eq!(solved, Err(SolveError::Scratch));
+            assert_eq!(solved, Err(ApplyError::Scratch));
         }
     }
-}
-
-/// A stack over `needed` and one slot more, every slot NaN: a slot read before it is written reaches the result.
-fn nan_cells<T: Real>(needed: StackReq) -> Vec<MaybeUninit<T>> {
-    vec![MaybeUninit::new(T::nan()); needed.size_bytes() / size_of::<T>() + 1]
 }
 
 cases! {
@@ -195,7 +190,7 @@ fn assert_dirty_scratch_matches_the_solve(label: &str, factor: &Factored) {
 /// The whole factor through `solve_in_place` on a NaN-filled scratch.
 fn solve_in_place_on_dirty_scratch<T: Real>(factor: &ApproxInverse<T>, b: &[f64]) -> Vec<f64> {
     let mut x: Vec<T> = cast_all(b);
-    let mut cells = nan_cells::<T>(factor.scratch());
+    let mut cells = nan_cells::<T>(factor.scratch(1, Threads::All));
     factor
         .solve_in_place(&mut x, MemStack::new_any(&mut cells))
         .expect("buffers fit");
@@ -510,7 +505,16 @@ fn solve_in_place_gathers_only_blocks_whose_vertices_are_not_consecutive(
     assert_eq!(blocks.len(), gathered.len());
     let bytes = |block: &BlockFactor, g: usize| g * size_of::<f64>() + block.scratch().size_bytes();
     let needed = (blocks.iter().zip(gathered)).map(|(block, &g)| bytes(block, g));
-    assert_eq!(Some(factor.scratch().size_bytes()), needed.max());
+    let in_place = needed.max().expect("a block");
+    let column = 6 * size_of::<f64>();
+    for k in 1..=3 {
+        let scratch = factor.scratch(k, Threads::All).size_bytes();
+        assert_eq!(
+            scratch,
+            (k * in_place).max(column + in_place),
+            "{k} columns"
+        );
+    }
     let x = solve_in_place_on_dirty_scratch(&factor, &rhs);
     let want = solve_on_dirty_scratch(&factor, &rhs, Threads::All);
     assert_eq!(bits(&x), bits(&want));
@@ -522,11 +526,14 @@ fn a_solve_taking_no_scratch_accepts_an_empty_stack() {
     use approx_chol::factorize;
     use approx_chol::input::Laplacian;
     let factor: ApproxInverse = factorize(Laplacian::new(3, &[0, 1], &[1, 2]).unwrap()).unwrap();
-    assert_eq!(factor.scratch(), StackReq::EMPTY);
+    let [block] = factor.blocks() else {
+        panic!("one block");
+    };
+    assert_eq!(block.scratch(), StackReq::EMPTY);
     let mut x = vec![1.0, -1.0, 0.5];
     let want = factor.solve(&x).unwrap();
-    factor
-        .solve_in_place(&mut x, MemStack::new(&mut []))
+    block
+        .solve_local(&mut x, MemStack::new(&mut []), Threads::All)
         .unwrap();
     assert_eq!(bits(&x), bits(&want));
 }

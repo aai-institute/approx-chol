@@ -1,6 +1,6 @@
 #![no_main]
 
-use approx_chol::{ApproxInverse, MemStack};
+use approx_chol::{ApproxInverse, MemStack, Threads};
 use libfuzzer_sys::fuzz_target;
 
 #[path = "../cells.rs"]
@@ -14,7 +14,7 @@ fuzz_target!(|data: &[u8]| {
     let b: Vec<f64> = (0..factor.n()).map(|i| (i % 7) as f64 - 3.0).collect();
     let solve = |fill: f64| {
         let mut x = b.clone();
-        let mut cells = cells::filled(factor.scratch(), fill);
+        let mut cells = cells::filled(factor.scratch(1, Threads::All), fill);
         factor
             .solve_in_place(&mut x, MemStack::new_any(&mut cells))
             .expect("a stack of the factor's own scratch is accepted");
@@ -30,4 +30,23 @@ fuzz_target!(|data: &[u8]| {
             .all(|(a, b)| a.to_bits() == b.to_bits()),
         "solve and solve_in_place agree"
     );
+    let mut rows: Vec<[f64; 3]> = b.iter().map(|&v| [v, -v, 0.5 * v]).collect();
+    let mut cells = cells::filled(factor.scratch(3, Threads::All), f64::NAN);
+    factor
+        .apply_with(
+            rows.as_mut_slice(),
+            Threads::All,
+            MemStack::new_any(&mut cells),
+        )
+        .expect("a stack of the factor's own scratch is accepted");
+    for (j, sign) in [1.0, -1.0, 0.5].into_iter().enumerate() {
+        let alone = factor
+            .solve(&b.iter().map(|&v| sign * v).collect::<Vec<_>>())
+            .expect("b has length n");
+        let column = rows.iter().map(|row| row[j]);
+        assert!(
+            column.zip(alone).all(|(a, b)| a.to_bits() == b.to_bits()),
+            "each column of a block solves as it does alone"
+        );
+    }
 });

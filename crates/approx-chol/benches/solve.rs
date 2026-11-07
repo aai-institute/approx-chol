@@ -7,7 +7,7 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1};
-use approx_chol::{factorize, ApproxInverse, Config, MemBuffer, MemStack};
+use approx_chol::{factorize, ApproxInverse, Config, MemBuffer, MemStack, Threads};
 use criterion::{criterion_group, criterion_main, Bencher, BenchmarkId, Criterion};
 use csr::{build, OwnedCsr};
 use grid::grid_laplacian;
@@ -17,13 +17,34 @@ use rand::{RngExt, SeedableRng};
 /// The solve alone: `x` and the scratch allocated once, `b` copied in per run.
 fn timed_solve(b: &mut Bencher, factor: &ApproxInverse, rhs: &[f64]) {
     let mut x = rhs.to_vec();
-    let mut scratch = MemBuffer::new(factor.scratch());
+    let mut scratch = MemBuffer::new(factor.scratch(1, Threads::All));
     b.iter(|| {
         x.copy_from_slice(black_box(rhs));
         factor
             .solve_in_place(&mut x, MemStack::new(&mut scratch))
             .expect("solve");
         black_box(&x);
+    });
+}
+
+/// A `K`-column block applied in place: the rows and the scratch allocated once, the right-hand sides copied in per run.
+fn timed_apply<const K: usize>(
+    b: &mut Bencher,
+    factor: &ApproxInverse,
+    rhs: &[f64],
+    threads: Threads,
+) {
+    let columns: Vec<[f64; K]> = (rhs.iter().enumerate())
+        .map(|(i, &v)| std::array::from_fn(|j| v * (1.0 + ((i + j) % 3) as f64)))
+        .collect();
+    let mut rows = columns.clone();
+    let mut scratch = MemBuffer::new(factor.scratch(K, threads));
+    b.iter(|| {
+        rows.copy_from_slice(black_box(&columns));
+        factor
+            .apply_with(&mut rows, threads, MemStack::new(&mut scratch))
+            .expect("apply");
+        black_box(&rows);
     });
 }
 
@@ -105,6 +126,17 @@ fn bench_panel_solve(c: &mut Criterion, workers: usize, firms: usize) {
         BenchmarkId::new("solve", format!("{workers}x{firms}")),
         |b| timed_solve(b, &factor, &rhs),
     );
+    if workers >= 200_000 {
+        let one = Threads::Count(std::num::NonZeroUsize::MIN);
+        for (budget, threads) in [("all", Threads::All), ("one", one)] {
+            let id = |k: usize| {
+                BenchmarkId::new(format!("apply_k{k}_{budget}"), format!("{workers}x{firms}"))
+            };
+            group.bench_function(id(1), |b| timed_apply::<1>(b, &factor, &rhs, threads));
+            group.bench_function(id(4), |b| timed_apply::<4>(b, &factor, &rhs, threads));
+            group.bench_function(id(8), |b| timed_apply::<8>(b, &factor, &rhs, threads));
+        }
+    }
     group.finish();
 }
 

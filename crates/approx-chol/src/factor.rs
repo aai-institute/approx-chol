@@ -1,5 +1,6 @@
 //! Each irreducible block as an optional block elimination `L` and a Cholesky of what it leaves: `A_c⁺ ≈ P F L⁻ᵀ diag(D_e⁻¹, S⁺) L⁻¹ F P`, `P` projecting out `F·1` when the block floats, else `I`.
 
+mod apply;
 mod block_elimination;
 mod cholesky;
 mod clique_tree;
@@ -13,6 +14,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 use rand::SeedableRng;
 use rayon::prelude::*;
 
+pub use apply::{ApplyError, MatrixMut};
 pub use config::{Config, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
@@ -21,6 +23,7 @@ use crate::sgdd::{BlockComplement, IrreducibleBlock, Reduction, Restriction, Sel
 use crate::storage::OffDiagonal;
 use crate::Clamp;
 use crate::{Batch, Index, MemBuffer, MemStack, Real, StackReq, Threads};
+use apply::Kernel;
 use block_elimination::BlockElimination;
 use cholesky::{Arm, Cholesky, Signed, Workspace};
 use schur::BipartiteBlock;
@@ -28,34 +31,6 @@ use sddm::Sddm;
 
 /// `log₂` of the multiply-adds a block elimination's task carries, below which a split costs more than it saves.
 const MULTIPLY_ADD_GRAIN_BITS: u32 = 17;
-
-/// Errors returned by fallible solves.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SolveError {
-    /// A right-hand side of a length other than the operator's dimension.
-    LengthMismatch {
-        /// The operator's dimension.
-        expected: usize,
-        /// The length provided.
-        found: usize,
-    },
-    /// A stack that cannot hold the factor's `scratch`.
-    Scratch,
-}
-
-impl core::fmt::Display for SolveError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::LengthMismatch { expected, found } => {
-                write!(f, "right-hand side has length {found}, expected {expected}")
-            }
-            Self::Scratch => write!(f, "the stack cannot hold the solve's scratch"),
-        }
-    }
-}
-
-impl std::error::Error for SolveError {}
 
 /// `count` slots of `V` on a stack; none asks no alignment either, so any stack serves a solve that takes none.
 fn slots<V>(count: usize) -> StackReq {
@@ -65,26 +40,27 @@ fn slots<V>(count: usize) -> StackReq {
     }
 }
 
-/// `x` must match the operator and `stack` hold its scratch.
-fn check_buffers<T>(
-    x: &[T],
+/// A block of `rows` must match the operator and `stack` hold its scratch.
+fn check_buffers(
+    rows: usize,
     n: usize,
     stack: &MemStack,
     needed: StackReq,
-) -> Result<(), SolveError> {
-    match x.len() == n && stack.can_hold(needed) {
+) -> Result<(), ApplyError> {
+    // An overflowing requirement's alignment is 0, on which can_hold panics.
+    match rows == n && needed.align_bytes() != 0 && stack.can_hold(needed) {
         true => Ok(()),
-        false => Err(buffer_error(x.len(), n)),
+        false => Err(buffer_error(rows, n)),
     }
 }
 
 // Built inline, the error cost within's solves 5–9%.
 #[cold]
 #[inline(never)]
-fn buffer_error(found: usize, n: usize) -> SolveError {
+fn buffer_error(found: usize, n: usize) -> ApplyError {
     match found == n {
-        false => SolveError::LengthMismatch { expected: n, found },
-        true => SolveError::Scratch,
+        false => ApplyError::Rows { expected: n, found },
+        true => ApplyError::Scratch,
     }
 }
 
@@ -168,38 +144,78 @@ impl<T: Real> ApproxInverse<T> {
         self.blocks
     }
 
-    /// What [`solve_in_place`](Self::solve_in_place) takes from its stack: the most any one block takes, its Cholesky's slots plus a gather unless its vertices are consecutive.
-    pub fn scratch(&self) -> StackReq {
-        slots::<T>(self.scratch_slots)
+    /// What [`apply_with`](Self::apply_with) takes from its stack for a block of `columns` columns: the most any one block of `A` takes, its Cholesky's slots plus a gather unless its vertices are consecutive, per column solved in place, or one column copied through. It grows with `columns` and serves every block of fewer.
+    pub fn scratch(&self, columns: usize, _threads: Threads) -> StackReq {
+        if columns == 0 {
+            return StackReq::EMPTY;
+        }
+        let in_place = slots::<T>(self.scratch_slots).array(columns);
+        in_place.or(slots::<T>(self.n + self.scratch_slots))
+    }
+
+    /// Applies the approximate inverse to every column of `block` at once, each bit for bit as it would be alone, through scratch allocated for this call; [`ApplyError::Scratch`] if it cannot be.
+    pub fn apply<M: MatrixMut<T> + ?Sized>(
+        &self,
+        block: &mut M,
+        threads: Threads,
+    ) -> Result<(), ApplyError> {
+        let fits = block.rows() == self.n;
+        let scratch = fits.then(|| MemBuffer::try_new(self.scratch(block.columns(), threads)));
+        let Some(Ok(mut scratch)) = scratch else {
+            return Err(buffer_error(block.rows(), self.n));
+        };
+        self.apply_with(block, threads, MemStack::new(&mut scratch))
+    }
+
+    /// As [`apply`](Self::apply), allocating nothing: `block` holds the right-hand sides on entry and `A⁺b` on floating blocks on return, `0` at vertices in no block; `stack` holds [`scratch`](Self::scratch) for its columns. Either error leaves `block` as it was, and a block without columns is left as it is.
+    pub fn apply_with<M: MatrixMut<T> + ?Sized>(
+        &self,
+        block: &mut M,
+        threads: Threads,
+        stack: &mut MemStack,
+    ) -> Result<(), ApplyError> {
+        let columns = block.columns();
+        check_buffers(block.rows(), self.n, stack, self.scratch(columns, threads))?;
+        if columns > 0 {
+            block.solve_by(Kernel {
+                inverse: self,
+                threads,
+                stack,
+            });
+        }
+        Ok(())
     }
 
     /// `A⁺b` on floating blocks; vertices in no block solve to `0`.
-    pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SolveError> {
-        let mut x = vec![T::zero(); self.n];
-        self.solve_into(b, &mut x)?;
+    pub fn solve(&self, b: &[T]) -> Result<Vec<T>, ApplyError> {
+        let mut x = b.to_vec();
+        self.apply(x.as_mut_slice(), Threads::All)?;
         Ok(x)
     }
 
     /// As [`solve`](Self::solve), into `x` of length [`n`](Self::n).
-    pub fn solve_into(&self, b: &[T], x: &mut [T]) -> Result<(), SolveError> {
+    pub fn solve_into(&self, b: &[T], x: &mut [T]) -> Result<(), ApplyError> {
         if let Some(found) = [b.len(), x.len()].into_iter().find(|&len| len != self.n) {
-            return Err(SolveError::LengthMismatch {
+            return Err(ApplyError::Rows {
                 expected: self.n,
                 found,
             });
         }
         x.copy_from_slice(b);
-        self.solve_in_place(x, MemStack::new(&mut MemBuffer::new(self.scratch())))
+        self.apply(x, Threads::All)
     }
 
-    /// As [`solve`](Self::solve), allocating nothing: `x` holds `b` on entry and the solution on return; `stack` holds [`scratch`](Self::scratch).
-    pub fn solve_in_place(&self, x: &mut [T], stack: &mut MemStack) -> Result<(), SolveError> {
-        check_buffers(x, self.n, stack, self.scratch())?;
+    /// As [`solve`](Self::solve), allocating nothing: `x` holds `b` on entry and the solution on return; `stack` holds [`scratch`](Self::scratch) for one column.
+    pub fn solve_in_place(&self, x: &mut [T], stack: &mut MemStack) -> Result<(), ApplyError> {
+        self.apply_with(x, Threads::All, stack)
+    }
+
+    /// Solves `x`, of `n` rows, in place through `stack`, which holds every block's scratch for `V`.
+    fn solve_unchecked<V: Batch<T>>(&self, x: &mut [V], threads: Threads, stack: &mut MemStack) {
         for block in &self.blocks {
-            on!(block, b => b.solve_global(x, stack), i => i.solve_global(x));
+            on!(block, b => b.solve_global(x, threads, stack), i => i.solve_global(x));
         }
-        self.dead.iter().for_each(|&v| x[v] = T::zero());
-        Ok(())
+        self.dead.iter().for_each(|&v| x[v] = V::zero());
     }
 }
 
@@ -326,8 +342,8 @@ impl<T: Real> BlockFactor<T> {
         x: &mut [T],
         stack: &mut MemStack,
         threads: Threads,
-    ) -> Result<(), SolveError> {
-        check_buffers(x, self.vertices().len(), stack, self.scratch())?;
+    ) -> Result<(), ApplyError> {
+        check_buffers(x.len(), self.vertices().len(), stack, self.scratch())?;
         on!(self, block => block.solve_unchecked(x, stack, threads), i => i.solve_local(x));
         Ok(())
     }
@@ -413,13 +429,13 @@ impl<T: Real, I: Index> Block<T, I> {
     }
 
     /// Solves the block's restriction of `x` in place, through a stack of [`global_scratch_slots`](Self::global_scratch_slots) slots.
-    fn solve_global<V: Batch<T>>(&self, x: &mut [V], stack: &mut MemStack) {
+    fn solve_global<V: Batch<T>>(&self, x: &mut [V], threads: Threads, stack: &mut MemStack) {
         self.vertices().on_local(
             x,
             stack,
             // on_local's two arms would otherwise each call it: ~19 instructions per block.
             #[inline(always)]
-            |local: &mut [V], rest: &mut MemStack| self.solve_unchecked(local, rest, Threads::All),
+            |local: &mut [V], rest: &mut MemStack| self.solve_unchecked(local, rest, threads),
         );
     }
 
