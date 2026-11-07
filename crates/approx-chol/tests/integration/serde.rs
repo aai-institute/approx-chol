@@ -474,3 +474,44 @@ fn an_isolated_inverse_pivot_out_of_range_is_corrupt(#[case] by: f64) {
     *pivot = (0.5 * by).into();
     serde_json::from_value::<ApproxInverse>(v).expect_err("its inverse pivot is out of range");
 }
+
+/// `rows` as a CSR factored under `exact_max_dim`, as JSON.
+fn factored_json(rows: &[&[f64]], exact_max_dim: usize) -> serde_json::Value {
+    let rows: Vec<Vec<f64>> = rows.iter().map(|row| row.to_vec()).collect();
+    let (ptrs, columns, values) = dense_csr(&rows);
+    let csr = CsrRef::new(&ptrs, &columns, &values, rows.len() as u32).unwrap();
+    let config = Config {
+        exact_max_dim,
+        ..Config::default()
+    };
+    serde_json::to_value(factorize_with(csr, config, ScalingPolicy::default()).unwrap()).unwrap()
+}
+
+/// The exact arm factors `M` itself on one sheet, so a dense factor on a cover's two sheets is corrupt.
+#[test]
+fn a_dense_factor_on_two_sheets_is_corrupt() {
+    let triangle: [&[f64]; 3] = [&[2.0, -1.0, 1.0], &[-1.0, 2.0, -1.0], &[1.0, -1.0, 2.0]];
+    let mut cover = factored_json(&triangle, 0);
+    let path: [&[f64]; 6] = [
+        &[1.5, -1.0, 0.0, 0.0, 0.0, 0.0],
+        &[-1.0, 2.5, -1.0, 0.0, 0.0, 0.0],
+        &[0.0, -1.0, 2.5, -1.0, 0.0, 0.0],
+        &[0.0, 0.0, -1.0, 2.5, -1.0, 0.0],
+        &[0.0, 0.0, 0.0, -1.0, 2.5, -1.0],
+        &[0.0, 0.0, 0.0, 0.0, -1.0, 1.5],
+    ];
+    let dense = factored_json(&path, 24);
+    let dense = &dense[1][1]["U32"][0]["cholesky"];
+    let shape = |c: &serde_json::Value| (c["sheets"].clone(), c["n"].clone());
+    assert_eq!(
+        shape(&cover[1][1]["U32"][0]["cholesky"]),
+        ("Two".into(), 6.into())
+    );
+    assert_eq!(shape(dense), ("One".into(), 6.into()));
+    assert!(dense["triangular"].get("Dense").is_some());
+    serde_json::from_value::<ApproxInverse>(cover.clone()).expect("the cover decodes");
+    let cholesky = &mut cover[1][1]["U32"][0]["cholesky"];
+    cholesky["pinned"] = dense["pinned"].clone();
+    cholesky["triangular"] = dense["triangular"].clone();
+    serde_json::from_value::<ApproxInverse>(cover).expect_err("a dense factor on two sheets");
+}

@@ -139,7 +139,9 @@ impl<T: Real, I: Index> Cholesky<T, I> {
             return None;
         }
         let fits = match &self.triangular {
-            Triangular::Dense(dense) => dense::fits(dense, self.n_steps()),
+            Triangular::Dense(dense) => {
+                self.sheets == Sheets::One && dense::fits(dense, self.n_steps())
+            }
             Triangular::Approximate(approximate) => approximate.fits(self.n, self.pinned),
         };
         (self.pinned.is_none_or(|pin| pin < self.n) && fits).then_some(self)
