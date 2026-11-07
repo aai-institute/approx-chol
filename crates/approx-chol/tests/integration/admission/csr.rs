@@ -2,9 +2,10 @@ use approx_chol::input::{
     BipartiteFactorWidth2, CsrError, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef,
 };
 use approx_chol::{factorize, ApproxInverse, Error, ReduceError};
-use num_traits::PrimInt;
 use rstest::rstest;
 
+use crate::common::bits::bits;
+use crate::common::entry::cast_all;
 use crate::common::grid::grid;
 
 use super::{assert_names_a_defect, reduce, reduce_upper};
@@ -196,7 +197,7 @@ fn upper_csr_accepts_a_stored_zero_below_the_diagonal() {
         &[0, 1, 1, 2, 2],
         &[1.0, -1.0, 2.0, -1.0, 1.0],
     );
-    let plain = bits(&plain.expect("the path Laplacian factors"), &rhs);
+    let plain = debug_and_bits(&plain.expect("the path Laplacian factors"), &rhs);
     let (row_ptrs, columns, values) = (
         [0, 2, 4, 6],
         [0, 1, 1, 2, 0, 2],
@@ -215,7 +216,7 @@ fn upper_csr_accepts_a_stored_zero_below_the_diagonal() {
     ] {
         let factor =
             reduce_upper(row_ptrs, columns, values).expect("a stored zero couples nothing");
-        assert_eq!(bits(&factor, &rhs), plain, "{label}");
+        assert_eq!(debug_and_bits(&factor, &rhs), plain, "{label}");
     }
 }
 
@@ -346,22 +347,12 @@ fn f32_in_range_input_is_admitted(#[case] diagonal: f32, #[case] edge: f32) {
 
 fn grid_laplacian(rows: usize, cols: usize) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
     let (row_ptrs, columns, values) = grid(rows, cols).csr(false);
-    let narrow = |indices: Vec<usize>| indices.into_iter().map(|i| i as u32).collect();
-    (narrow(row_ptrs), narrow(columns), values)
+    (cast_all(&row_ptrs), cast_all(&columns), values)
 }
 
-fn widen<I: PrimInt>(indices: &[u32]) -> Vec<I> {
-    (indices.iter())
-        .map(|&index| I::from(index).expect("fits"))
-        .collect()
-}
-
-fn bits(factor: &ApproxInverse, rhs: &[f64]) -> (String, Vec<u64>) {
+fn debug_and_bits(factor: &ApproxInverse, rhs: &[f64]) -> (String, Vec<u64>) {
     let solution = factor.solve(rhs).expect("solve");
-    (
-        format!("{factor:?}"),
-        solution.iter().map(|x| x.to_bits()).collect(),
-    )
+    (format!("{factor:?}"), bits(&solution))
 }
 
 /// Descending columns force the canonicalizing copy; the `u64` copy is rewritten in its own index type.
@@ -372,16 +363,25 @@ fn canonical_and_reordered_ingestion_agree_bit_for_bit() {
     let (reversed_columns, reversed_values) = reversed_rows(&row_ptrs, &columns, &values);
     let rhs: Vec<f64> = (0..n).map(|i| (i % 5) as f64 - 2.0).collect();
 
-    let canonical = bits(
+    let canonical = debug_and_bits(
         &factorize(CsrRef::new(&row_ptrs, &columns, &values, n).unwrap()).expect("grid"),
         &rhs,
     );
     let reordered = CsrRef::new(&row_ptrs, &reversed_columns, &reversed_values, n).unwrap();
-    assert_eq!(canonical, bits(&factorize(reordered).expect("grid"), &rhs));
+    assert_eq!(
+        canonical,
+        debug_and_bits(&factorize(reordered).expect("grid"), &rhs)
+    );
 
-    let (wide_row_ptrs, wide_columns) = (widen::<u64>(&row_ptrs), widen::<u64>(&reversed_columns));
+    let (wide_row_ptrs, wide_columns) = (
+        cast_all::<u32, u64>(&row_ptrs),
+        cast_all::<u32, u64>(&reversed_columns),
+    );
     let wide = CsrRef::new(&wide_row_ptrs, &wide_columns, &reversed_values, n).unwrap();
-    assert_eq!(canonical, bits(&factorize(wide).expect("grid"), &rhs));
+    assert_eq!(
+        canonical,
+        debug_and_bits(&factorize(wide).expect("grid"), &rhs)
+    );
 
     let upper = |row_ptrs: &[u32], columns: &[u32], values: &[f64]| {
         let (mut ptrs, mut kept_columns, mut kept_values) = (vec![0u32], Vec::new(), Vec::new());
@@ -403,6 +403,10 @@ fn canonical_and_reordered_ingestion_agree_bit_for_bit() {
         let (ptrs, kept_columns, kept_values) = upper(&row_ptrs, columns, values);
         let triangle = UpperCsrRef::new(&ptrs, &kept_columns, &kept_values, n).unwrap();
         let triangle = factorize(triangle).expect("grid");
-        assert_eq!(canonical, bits(&triangle, &rhs), "{label} upper storage");
+        assert_eq!(
+            canonical,
+            debug_and_bits(&triangle, &rhs),
+            "{label} upper storage"
+        );
     }
 }

@@ -3,6 +3,7 @@ use std::ops::RangeInclusive;
 use approx_chol::Config;
 use proptest::prelude::*;
 
+use crate::common::bits::bits;
 use crate::common::cases::cases;
 use crate::common::dense::dense;
 use crate::common::entry::{Entry, Types};
@@ -222,7 +223,6 @@ cases! {
             let second = entry.reduce(&graph, types);
             let x1 = first.factorize(&config).solve(&rhs);
             let x2 = second.factorize(&config).solve(&rhs);
-            let bits = |x: &[f64]| x.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
             prop_assert_eq!(bits(&x1), bits(&x2), "{:?} {:?}", types, config);
             Ok(())
         });

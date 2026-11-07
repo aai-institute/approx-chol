@@ -4,29 +4,12 @@ use proptest::prelude::*;
 
 use crate::common::cases::cases;
 use crate::common::dense::dense;
-use crate::common::entry::{Entry, Types};
-use crate::common::graph::{Edge, Graph};
+use crate::common::entry::{Entry, Labels, Types};
+use crate::common::graph::Graph;
 use crate::common::grid::grid;
 use crate::common::interleaved::interleaved_components;
 use crate::common::runner::{check, stated_by};
 use crate::common::sparse::Sparse;
-
-/// `A'[p[i]][p[j]] = A[i][j]`.
-fn permuted(graph: &Graph, p: &[usize]) -> Graph {
-    let edges = (graph.edges.iter())
-        .map(|edge| Edge {
-            a: p[edge.a],
-            b: p[edge.b],
-            ..*edge
-        })
-        .collect();
-    let mut ground = vec![0.0; graph.n];
-    (graph.ground.iter().enumerate()).for_each(|(v, &g)| ground[p[v]] = g);
-    Graph {
-        ground,
-        ..Graph::new(graph.n, edges)
-    }
-}
 
 /// Half the draws tie vertex 0 to ground, so the graph is an SDDM.
 fn interleaved_case(entry: Entry) -> impl Strategy<Value = (Graph, Vec<f64>, Vec<usize>)> {
@@ -52,16 +35,15 @@ cases! {
         types in types(all),
     ) {
         check(interleaved_case(entry), |(graph, rhs, p)| {
-            let mut permuted_rhs = vec![0.0; rhs.len()];
-            (rhs.iter().enumerate()).for_each(|(v, &value)| permuted_rhs[p[v]] = value);
-            let relabeled = permuted(&graph, &p);
+            let labels = Labels(p.clone());
+            let relabeled = labels.graph(&graph);
             let base = entry.reduce(&graph, types);
             let got = entry.reduce(&relabeled, types);
             let base = base.factorize(&dense()).solve(&rhs);
-            let got = got.factorize(&dense()).solve(&permuted_rhs);
+            let got = labels.to_caller(&got.factorize(&dense()).solve(&labels.to_local(&rhs)));
             let scale = base.iter().fold(1.0f64, |scale, x| scale.max(x.abs()));
             for (v, &want) in base.iter().enumerate() {
-                let got = got[p[v]];
+                let got = got[v];
                 // Measured at most 6.3ε·‖x‖∞; a broken permutation is off by order one.
                 prop_assert!(
                     (got - want).abs() <= 64.0 * types.epsilon() * scale,

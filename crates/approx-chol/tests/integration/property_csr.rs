@@ -3,6 +3,8 @@ use approx_chol::{factorize, ApproxInverse, Error};
 use num_traits::PrimInt;
 use proptest::prelude::*;
 
+use crate::common::entry::cast_all;
+
 type LaplacianCsr = (Vec<u32>, Vec<u32>, Vec<f64>, usize);
 
 fn laplacian_csr(n: usize, edge_weights: &[u8]) -> LaplacianCsr {
@@ -50,12 +52,6 @@ fn upper((row_ptrs, col_indices, values, n): &LaplacianCsr) -> LaplacianCsr {
         ptrs.push(columns.len() as u32);
     }
     (ptrs, columns, kept, *n)
-}
-
-fn widen<I: PrimInt>(indices: &[u32]) -> Vec<I> {
-    (indices.iter())
-        .map(|&index| I::from(index).expect("fits"))
-        .collect()
 }
 
 /// Both constructors share the shape checks, so each must name the same defect.
@@ -160,7 +156,7 @@ proptest! {
     fn a_negative_row_pointer_is_not_representable_at_its_position(
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
-        let (mut row_ptrs, col_indices) = (widen::<i64>(&row_ptrs), widen::<i64>(&col_indices));
+        let (mut row_ptrs, col_indices) = (cast_all::<u32, i64>(&row_ptrs), cast_all::<u32, i64>(&col_indices));
         row_ptrs[n] = -1;
         let expected = CsrError::IndexNotRepresentableAsUsize { kind: IndexKind::RowPtr, position: n };
         prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
@@ -179,7 +175,7 @@ proptest! {
     fn a_negative_column_is_not_representable_at_its_position(
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
-        let (row_ptrs, mut col_indices) = (widen::<i64>(&row_ptrs), widen::<i64>(&col_indices));
+        let (row_ptrs, mut col_indices) = (cast_all::<u32, i64>(&row_ptrs), cast_all::<u32, i64>(&col_indices));
         let last = col_indices.len() - 1;
         col_indices[last] = -1;
         let expected = Error::InvalidCsr(CsrError::IndexNotRepresentableAsUsize { kind: IndexKind::ColIndex, position: last });

@@ -9,12 +9,9 @@ use rstest::rstest;
 use crate::common::cycle::Cycle;
 use crate::common::dense::dense;
 use crate::common::dense_residual::apply;
+use crate::common::entry::floats;
 use crate::common::gram::{dense_csr, matrix};
 use crate::common::lcg::Lcg;
-
-fn grounded<T: Real>(factor: &ApproxInverse<T>) -> bool {
-    factor.blocks().iter().all(|block| !block.floats())
-}
 
 /// The chain's null vector `(1, 1e200, 1e400)` passes `f64`; floating, `x₀` is `4.9e174`.
 #[test]
@@ -23,7 +20,7 @@ fn csr_chain_whose_row_surplus_outweighs_its_coupling_grounds() {
     let csr = CsrRef::new(&[0u32, 2, 5, 7], &[0, 1, 0, 1, 2, 1, 2], &values, 3).unwrap();
     let factor = factorize(csr).unwrap();
     assert_eq!(factor.solve(&[1e200, -1.0, 0.0]).unwrap(), [1.0, 0.0, 0.0]);
-    assert!(grounded(&factor));
+    assert!(!floats(&factor).contains(&true));
 }
 
 #[test]
@@ -34,7 +31,7 @@ fn gram_chain_whose_row_surplus_outweighs_its_coupling_grounds() {
     let solution = factor.solve(&[1e200, 1e200, -1.0]).unwrap();
     let error = (solution.iter().zip([1.0, 1.0, 0.0])).map(|(s, e): (&f64, f64)| (s - e).abs());
     assert!(error.fold(0.0, f64::max) <= 1e-15, "{solution:?}");
-    assert!(grounded(&factor));
+    assert!(!floats(&factor).contains(&true));
 }
 
 /// `edges` with unit weights, plus vertex `n` hung off vertex 0 by `1e-17` and grounded by `2e-17`.
@@ -71,7 +68,7 @@ fn weak_vertex_solves_as_its_sddm_view(n: u32, edges: &[(u32, u32)]) {
         let gap = (solution.iter().zip(&expected)).map(|(s, e)| (s - e).abs());
         let gap = gap.fold(0.0, f64::max);
         assert!(gap <= 1e-12, "{label}: {gap:e} off {expected:?}");
-        assert!(grounded(factor), "{label} floats");
+        assert!(!floats(factor).contains(&true), "{label} floats");
     }
 }
 
@@ -226,7 +223,7 @@ fn heavy_path_solves_grounded<T: Real>(r: T) {
         let factor = factor.unwrap();
         let solution = factor.solve(&[T::zero(), one, T::zero()]).unwrap();
         assert_eq!(solution, [two, two, one], "{label}");
-        assert!(grounded(&factor), "{label}");
+        assert!(!floats(&factor).contains(&true), "{label}");
     }
 }
 
@@ -249,7 +246,7 @@ fn scaled_heavy_gram_path_grounds() {
         let error = (solution.iter().zip([one, two, one])).map(|(&s, e)| ((s - e) / e).abs());
         let error = error.fold(T::zero(), T::max);
         assert!(error <= T::from(1e-3).unwrap(), "{solution:?}");
-        assert!(grounded(&factor));
+        assert!(!floats(&factor).contains(&true));
     }
     solves(2f32.powi(10));
     solves(2f64.powi(25));
