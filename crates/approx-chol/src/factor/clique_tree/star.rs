@@ -43,7 +43,6 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
     /// Merges duplicate neighbors under the sampler's `split` cap, then sorts by per-copy weight.
     pub(super) fn refill(&mut self, neighbors: impl Iterator<Item = (I, C, T)>) {
         self.entries.clear();
-        self.removed_copies.clear();
         self.counts.clear();
         let entries = neighbors.map(|(neighbor, copies, weight)| StarEntry {
             neighbor,
@@ -57,11 +56,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         };
         self.entries.truncate(merged);
         for (entry, &count) in self.entries.iter_mut().zip(&self.counts) {
-            let (copies, dropped) = self.split.cap(count);
-            entry.copies = copies;
-            if dropped > 0 {
-                self.removed_copies.push((entry.neighbor, dropped));
-            }
+            entry.copies = self.split.cap(count);
         }
         self.entries.sort_unstable_by(by_per_copy_then_neighbor);
     }
@@ -119,7 +114,6 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
     pub(super) fn refill_unique(&mut self, neighbors: impl Iterator<Item = (I, T)>) {
         let copies = self.split;
         self.entries.clear();
-        self.removed_copies.clear();
         let entries = neighbors.map(|(neighbor, weight)| StarEntry {
             neighbor,
             copies,
@@ -129,9 +123,8 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         self.entries.sort_unstable_by(by_weight_then_neighbor);
     }
 
-    /// Copies each neighbor lost: those to the pivot, and those merging or capping collapsed.
-    pub(in crate::factor) fn degree_losses(&self) -> impl Iterator<Item = (I, u32)> + '_ {
-        let to_pivot = (self.entries.iter()).map(|entry| (entry.neighbor, entry.copies.get()));
-        to_pivot.chain(self.removed_copies.iter().copied())
+    /// The last star's neighbors in clique-tree order: every vertex its pivot's elimination moved.
+    pub(in crate::factor) fn neighbors(&self) -> impl Iterator<Item = I> + '_ {
+        self.entries.iter().map(|entry| entry.neighbor)
     }
 }

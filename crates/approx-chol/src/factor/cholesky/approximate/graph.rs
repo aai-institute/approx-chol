@@ -1,7 +1,7 @@
 mod lists;
 
 use self::lists::Lists;
-use crate::factor::clique_tree::Copies;
+use crate::factor::clique_tree::{Copies, Degrees};
 use crate::factor::sddm::Sddm;
 use crate::{Index, Real};
 
@@ -15,14 +15,16 @@ struct Edge<T, I, C> {
 }
 
 /// The mutable graph minimum-degree eliminates; a grounded one carries its ground as the last vertex.
-pub(super) struct EliminationGraph<T, I, C> {
+pub(super) struct EliminationGraph<T, I, C: Copies> {
     lists: Lists<Edge<T, I, C>, I>,
+    degrees: C::Degrees,
 }
 
 impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
     pub(super) fn new() -> Self {
         Self {
             lists: Lists::new(),
+            degrees: C::Degrees::default(),
         }
     }
 
@@ -36,14 +38,20 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
             room[k.index()] = room[k.index()].saturating_add(1);
             room[j.index()] = room[j.index()].saturating_add(1);
         });
+        self.reset(&room, split);
+        sddm.grounded_edges(|k, j, w| self.push_pair(k, j, split, w));
+    }
+
+    /// Vertex `v` edgeless, with room for `room[v]` edges.
+    pub(super) fn reset(&mut self, room: &[u32], split: C) {
         let unused = Edge {
             to: I::from_index(0),
             mirror: 0,
             copies: split,
             weight: T::zero(),
         };
-        self.lists.load(&room, unused);
-        sddm.grounded_edges(|k, j, w| self.push_pair(k, j, split, w));
+        self.lists.load(room, unused);
+        self.degrees.load(room.len());
     }
 
     pub(super) fn n(&self) -> usize {
@@ -57,11 +65,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
 
     /// Virtual copies, not stored entries: AC2 orders by the multigraph's degree.
     pub(super) fn degree(&self, v: usize) -> u64 {
-        self.lists
-            .get(v)
-            .iter()
-            .map(|e| u64::from(e.copies.get()))
-            .sum()
+        self.degrees.get(v, self.lists.len(v))
     }
 
     pub(super) fn neighbors(&self, v: usize) -> impl Iterator<Item = (I, C, T)> + '_ {
@@ -72,9 +76,11 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
     #[inline(never)] // Inlined into its one call site, it measured +1.6% of build.
     pub(super) fn eliminate_vertex(&mut self, v: usize) {
         while let Some(edge) = self.lists.pop(v) {
+            self.degrees.remove(edge.to.index(), edge.copies.get());
             self.swap_remove(edge.to.index(), edge.mirror as usize);
         }
         self.lists.release(v);
+        self.degrees.release(v);
     }
 
     pub(super) fn push_pair(&mut self, u: I, v: I, copies: C, weight: T) {
@@ -88,6 +94,8 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         };
         self.lists.push(u.index(), edge(v, mirror_u));
         self.lists.push(v.index(), edge(u, mirror_v));
+        self.degrees.add(u.index(), copies.get());
+        self.degrees.add(v.index(), copies.get());
     }
 
     /// Swap-removes `u`'s edge at `at`, repairing the moved edge's mirror.
@@ -103,9 +111,9 @@ mod tests {
     use proptest::collection::vec;
     use proptest::prelude::*;
 
-    use super::{Edge, EliminationGraph};
+    use super::EliminationGraph;
     use crate::factor::cholesky::approximate::REUSED_UP_TO;
-    use crate::factor::clique_tree::Single;
+    use crate::factor::clique_tree::{Copies, Multi, Single};
 
     const N: usize = 8;
 
@@ -117,7 +125,7 @@ mod tests {
             // Past REUSED_UP_TO, so eliminations compact; only the first N vertices are used.
             let mut room = vec![0; REUSED_UP_TO + 1];
             room[..N].fill(1);
-            graph.lists.load(&room, Edge { to: 0, mirror: 0, copies: Single, weight: 0.0 });
+            graph.reset(&room, Single);
             let (mut alive, mut edges) = ([true; N], Vec::new());
             for (id, (u, v, eliminate)) in ops.into_iter().enumerate() {
                 if eliminate == 0 && alive[u] {
@@ -144,5 +152,36 @@ mod tests {
                 }
             }
         }
+
+        /// A vertex's degree is its list's copies, through pushes and eliminations, AC and AC2.
+        #[test]
+        fn degrees_sum_copies(ops in vec((0..N, 0..N, 0u8..8, 1u32..5), 0..300)) {
+            degrees_track_lists(Single, &ops)?;
+            degrees_track_lists(Multi::split(4).expect("AC2"), &ops)?;
+        }
+    }
+
+    fn degrees_track_lists<C: Copies>(
+        split: C,
+        ops: &[(usize, usize, u8, u32)],
+    ) -> Result<(), TestCaseError> {
+        let mut graph = EliminationGraph::<f64, u32, C>::new();
+        let mut room = vec![0; REUSED_UP_TO + 1];
+        room[..N].fill(1);
+        graph.reset(&room, split);
+        let mut alive = [true; N];
+        for &(u, v, eliminate, copies) in ops {
+            if eliminate == 0 && alive[u] {
+                graph.eliminate_vertex(u);
+                alive[u] = false;
+            } else if u != v && alive[u] && alive[v] {
+                graph.push_pair(u as u32, v as u32, split.cap(copies), 1.0);
+            }
+            for x in 0..N {
+                let copies: u64 = graph.neighbors(x).map(|(_, c, _)| u64::from(c.get())).sum();
+                prop_assert_eq!(graph.degree(x), copies);
+            }
+        }
+        Ok(())
     }
 }

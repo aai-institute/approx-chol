@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Faster factorization of inputs with many small components or long paths, with fewer allocations per component. ([#312])
+- Faster approximate factorization: 4-15% on grids, power-law graphs and fixed-effects inputs, with factors bit for bit as before unless a vertex's AC2 copy degree reaches `u32::MAX - 1`, which takes a `split_merge` near `2^30` or more: there its place in the minimum-degree order now follows its degree back down. ([#386])
 - A factor stores no ground, so a definite block of `n` vertices on one sheet, grounded or frustrated, solves in place: its `BlockFactor::scratch()` holds no slot, not `n + 1`, and a grounded cover's holds `2n`, not `2n + 1`.
 
 ### Fixed
@@ -297,3 +298,4 @@ for graph Laplacians in Rust with Python bindings.
 [#315]: https://github.com/aai-institute/approx-chol/pull/315
 [#322]: https://github.com/aai-institute/approx-chol/pull/322
 [#327]: https://github.com/aai-institute/approx-chol/issues/327
+[#386]: https://github.com/aai-institute/approx-chol/pull/386

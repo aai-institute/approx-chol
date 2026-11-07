@@ -122,7 +122,7 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
             for &(u, w, copies, weight) in fill.iter() {
                 graph.push_pair(u, w, copies, weight);
             }
-            order.update(clique.degree_losses(), fill);
+            order.update(graph, clique.neighbors());
         }
     }
 }

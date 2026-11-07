@@ -1,5 +1,5 @@
 use super::graph::EliminationGraph;
-use crate::factor::clique_tree::{Copies, Fill};
+use crate::factor::clique_tree::Copies;
 use crate::{Index, Real};
 
 /// Bucket queue over live degree estimates (Julia's `ApproxCholPQ`).
@@ -8,9 +8,6 @@ pub(super) struct MinDegreeOrder<I> {
     lists: Vec<I>,
     min_list: usize,
     scale: KeyScale,
-    /// Net degree change per vertex, zero at rest, so each moves once per pivot: a list would sort per pivot (measured 1.5-1.7x the star sort).
-    net: Vec<i64>,
-    touched: Vec<I>,
 }
 
 /// 12 bytes at `u32`: `Option<u32>` keys measured +2-3% on grids.
@@ -31,8 +28,6 @@ impl<I: Index> MinDegreeOrder<I> {
                 base: 1,
                 divisor: 1,
             },
-            net: Vec::new(),
-            touched: Vec::new(),
         }
     }
 
@@ -46,9 +41,7 @@ impl<I: Index> MinDegreeOrder<I> {
     ) {
         let n = graph.n();
         let scale = KeyScale::new(n, edge_ends, split.get());
-        let Self {
-            elems, lists, net, ..
-        } = self;
+        let Self { elems, lists, .. } = self;
         lists.clear();
         lists.resize(scale.n_buckets(), sentinel());
         elems.clear();
@@ -63,7 +56,7 @@ impl<I: Index> MinDegreeOrder<I> {
                 });
                 continue;
             }
-            let key = graph.degree(v).min(u64::from(REMOVED - 1)) as u32;
+            let key = key(graph.degree(v));
             let list = scale.bucket(key);
             let head = lists[list];
             elems.push(QueueElem {
@@ -77,8 +70,6 @@ impl<I: Index> MinDegreeOrder<I> {
             lists[list] = I::from_index(v);
             min_list = min_list.min(list);
         }
-        net.clear();
-        net.resize(n, 0);
         self.min_list = min_list;
         self.scale = scale;
     }
@@ -98,45 +89,21 @@ impl<I: Index> MinDegreeOrder<I> {
         v
     }
 
-    /// The star's degree losses, then fill's gains.
+    /// Re-keys `vertices`, in their order, from `graph`'s degrees: a pivot moves only its star.
     pub(super) fn update<T: Real, C: Copies>(
         &mut self,
-        losses: impl Iterator<Item = (I, u32)>,
-        fill: &Fill<T, I, C>,
+        graph: &EliminationGraph<T, I, C>,
+        vertices: impl Iterator<Item = I>,
     ) {
-        for (u, copies) in losses {
-            self.add(u, -i64::from(copies));
+        for v in vertices.map(I::index) {
+            if self.elems[v].key != REMOVED {
+                self.rekey(v, key(graph.degree(v)));
+            }
         }
-        for &(u, w, copies, _) in fill {
-            self.add(u, i64::from(copies.get()));
-            self.add(w, i64::from(copies.get()));
-        }
-        for i in 0..self.touched.len() {
-            let v = self.touched[i].index();
-            let delta = std::mem::take(&mut self.net[v]);
-            self.apply_delta(v, delta);
-        }
-        self.touched.clear();
     }
 
-    fn add(&mut self, v: I, delta: i64) {
-        let slot = &mut self.net[v.index()];
-        if *slot == 0 {
-            self.touched.push(v);
-        }
-        *slot += delta;
-    }
-
-    /// `i64` so negating a full-range `u32` count cannot sign-flip as an `i32` would.
-    fn apply_delta(&mut self, v: usize, delta: i64) {
+    fn rekey(&mut self, v: usize, moved: u32) {
         let key = self.elems[v].key;
-        // A saturated key no longer counts copies, so it stays saturated rather than undercount.
-        if key >= REMOVED - 1 || delta == 0 {
-            return;
-        }
-        let moved = i64::from(key) + delta;
-        debug_assert!(moved >= 0, "a degree estimate counts every copy it loses");
-        let moved = moved.clamp(0, i64::from(REMOVED - 1)) as u32;
         let (old, new) = (self.scale.bucket(key), self.scale.bucket(moved));
         self.elems[v].key = moved;
         if old == new {
@@ -166,8 +133,13 @@ fn sentinel<I: Index>() -> I {
     I::max_value()
 }
 
-/// A popped vertex's key, which [`MinDegreeOrder::apply_delta`] skips.
+/// A popped or pinned vertex's key, which [`MinDegreeOrder::update`] skips.
 const REMOVED: u32 = u32::MAX;
+
+/// Saturated below [`REMOVED`], as only the order matters.
+fn key(degree: u64) -> u32 {
+    degree.min(u64::from(REMOVED - 1)) as u32
+}
 
 /// Translated from Laplacians.jl's `keyMap` and `ApproxCholPQ` (MIT, see NOTICE): keys exact up to `base`, then `divisor` copies per bucket, in `2 · base + 1` buckets.
 #[derive(Clone, Copy)]
@@ -196,7 +168,7 @@ impl KeyScale {
         self.base.saturating_mul(2).saturating_add(1)
     }
 
-    // Called out of line, its two fields spill around each call in `apply_delta` (+0.3-0.6% build).
+    // Called out of line, its two fields spill around each call in `rekey` (+0.3-0.6% build).
     #[inline(always)]
     fn bucket(self, key: u32) -> usize {
         let degree = key as usize;
@@ -204,5 +176,34 @@ impl KeyScale {
             true => degree,
             false => (self.base + degree / self.divisor).min(self.n_buckets() - 1),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::graph::EliminationGraph;
+    use super::MinDegreeOrder;
+    use crate::factor::clique_tree::Multi;
+
+    /// Path 0-1-2-3 at 2^31 copies an edge: inner keys saturate, and 2's follows its degree down once 3 goes, so it pops before 0.
+    #[test]
+    fn a_saturated_key_follows_its_degree_down() {
+        let split = Multi::split(1 << 31).expect("AC2");
+        let mut graph = EliminationGraph::<f64, u32, Multi>::new();
+        graph.reset(&[2; 4], split);
+        for v in 0..3 {
+            graph.push_pair(v, v + 1, split, 1.0);
+        }
+        let mut order = MinDegreeOrder::new();
+        order.load(&graph, split, None, graph.edge_ends());
+        let mut popped = Vec::new();
+        for _ in 0..3 {
+            let v = order.next_vertex();
+            popped.push(v);
+            let neighbors: Vec<u32> = graph.neighbors(v).map(|(u, _, _)| u).collect();
+            graph.eliminate_vertex(v);
+            order.update(&graph, neighbors.into_iter());
+        }
+        assert_eq!(popped, [3, 2, 1]);
     }
 }

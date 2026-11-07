@@ -2,11 +2,13 @@ use crate::Real;
 
 /// An edge's virtual copies; AC is AC2 at one copy per edge, so this trait is the whole difference.
 pub(in crate::factor) trait Copies: Copy + Send + Sync {
+    type Degrees: Degrees;
+
     fn get(&self) -> u32;
     fn per_copy<T: Real>(&self, total: T) -> T;
 
-    /// The kept copies, and how many the cap discarded.
-    fn cap(self, copies: u32) -> (Self, u32);
+    /// The copies kept of `copies` merged ones.
+    fn cap(self, copies: u32) -> Self;
 
     /// Draws a partner position per copy; yields each distinct one once, with the copies that drew it and their summed `per_copy` weight.
     fn draw<'a, T: Real>(
@@ -15,6 +17,60 @@ pub(in crate::factor) trait Copies: Copy + Send + Sync {
         per_copy: T,
         draw: impl FnMut() -> usize,
     ) -> impl Iterator<Item = (usize, Self, T)> + 'a;
+}
+
+/// Each vertex's copies over its incident edges, kept as edges come and go.
+pub(in crate::factor) trait Degrees: Default {
+    fn load(&mut self, n: usize);
+    fn add(&mut self, v: usize, copies: u32);
+    fn remove(&mut self, v: usize, copies: u32);
+    fn release(&mut self, v: usize);
+    fn get(&self, v: usize, len: u32) -> u64;
+}
+
+/// One copy per edge: a vertex's edge count is its degree.
+#[derive(Default)]
+pub(in crate::factor) struct EdgeCounts;
+
+impl Degrees for EdgeCounts {
+    fn load(&mut self, _: usize) {}
+
+    fn add(&mut self, _: usize, _: u32) {}
+
+    fn remove(&mut self, _: usize, _: u32) {}
+
+    fn release(&mut self, _: usize) {}
+
+    fn get(&self, _: usize, len: u32) -> u64 {
+        u64::from(len)
+    }
+}
+
+/// Summed per vertex: summing a hub's list per pivot would cost its degree.
+#[derive(Default)]
+pub(in crate::factor) struct CopySums(Vec<u64>);
+
+impl Degrees for CopySums {
+    fn load(&mut self, n: usize) {
+        self.0.clear();
+        self.0.resize(n, 0);
+    }
+
+    fn add(&mut self, v: usize, copies: u32) {
+        self.0[v] += u64::from(copies);
+    }
+
+    fn remove(&mut self, v: usize, copies: u32) {
+        self.0[v] -= u64::from(copies);
+    }
+
+    fn release(&mut self, v: usize) {
+        self.0[v] = 0;
+    }
+
+    fn get(&self, v: usize, _: u32) -> u64 {
+        self.0[v]
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -32,6 +88,8 @@ impl Multi {
 }
 
 impl Copies for Single {
+    type Degrees = EdgeCounts;
+
     fn get(&self) -> u32 {
         1
     }
@@ -40,8 +98,8 @@ impl Copies for Single {
         total
     }
 
-    fn cap(self, copies: u32) -> (Self, u32) {
-        (Self, copies - 1)
+    fn cap(self, _: u32) -> Self {
+        Self
     }
 
     fn draw<'a, T: Real>(
@@ -55,6 +113,8 @@ impl Copies for Single {
 }
 
 impl Copies for Multi {
+    type Degrees = CopySums;
+
     fn get(&self) -> u32 {
         self.0
     }
@@ -63,9 +123,8 @@ impl Copies for Multi {
         total / T::from(self.0).expect("a copy count is a float")
     }
 
-    fn cap(self, copies: u32) -> (Self, u32) {
-        let kept = copies.min(self.0);
-        (Self(kept), copies - kept)
+    fn cap(self, copies: u32) -> Self {
+        Self(copies.min(self.0))
     }
 
     fn draw<'a, T: Real>(

@@ -8,7 +8,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 
 use crate::{narrow, widen, Index, Real};
 use cdf::{draw_after, suffix_past};
-pub(super) use copies::{Copies, Multi, Single};
+pub(super) use copies::{Copies, Degrees, Multi, Single};
 use star::StarEntry;
 
 /// Fill edges `(lo, hi, copies, weight)`, `lo < hi`, as an elimination emits them: one per entry and partner, its weight summed over its copies.
@@ -18,8 +18,6 @@ pub(super) type Fill<T, I, C> = Vec<(I, I, C, T)>;
 pub(super) struct CliqueTreeSampler<T, I, C: Copies> {
     /// A pivot's deduplicated neighborhood in clique-tree order.
     entries: Vec<StarEntry<T, I, C>>,
-    /// What merging or capping collapsed, per neighbor.
-    removed_copies: Vec<(I, u32)>,
     /// Grown to `n` on first need: above 32 entries, dedup scatters instead of sorting 16-byte entries twice.
     scatter: Vec<I>,
     /// Each merged entry's summed copies before the cap: `C` cannot add.
@@ -36,7 +34,6 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
     pub(super) fn new(split: C) -> Self {
         Self {
             entries: Vec::new(),
-            removed_copies: Vec::new(),
             scatter: Vec::new(),
             counts: Vec::new(),
             cumsum: Vec::new(),
