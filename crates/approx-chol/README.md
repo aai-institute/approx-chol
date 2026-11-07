@@ -48,7 +48,7 @@ A `Laplacian` or `Sddm`, a `FactorWidth2` or a `BipartiteFactorWidth2` also fact
 |---------|--------|
 | `sprs`  | Zero-copy `CsrRef` conversion from `sprs` matrices via `TryFrom`. |
 | `faer`  | Zero-copy `CsrRef` conversion from `faer` matrices via `TryFrom`. |
-| `serde` | Serialize and deserialize `ApproxInverse` and `BlockFactor`, led by their format version. |
+| `serde` | Serialize and deserialize `ApproxInverse`, led by its format version. |
 
 ## Attribution
 

@@ -112,7 +112,7 @@ fn an_exact_complement_solves_the_dense_complement(
     for (kept, blocks) in [Side::Left, Side::Right].into_iter().zip(blocks) {
         let factor = factorize_complement(gram.view(), kept, dense::dense(), Default::default())
             .expect("factors");
-        assert_eq!(factor.blocks().len(), blocks, "{kept:?}");
+        assert_eq!(factor.components().len(), blocks, "{kept:?}");
         dense_residual::solve_residual(&factor, &gram.complement(kept));
     }
 }

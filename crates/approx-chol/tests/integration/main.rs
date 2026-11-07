@@ -3,6 +3,7 @@ mod common;
 
 mod admission;
 mod apply;
+mod component;
 mod frustrated_bipartite_band;
 mod huge_split_merge;
 mod interop;

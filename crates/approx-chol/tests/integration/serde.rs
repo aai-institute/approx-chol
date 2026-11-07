@@ -1,10 +1,7 @@
 #![cfg(feature = "serde")]
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Laplacian, Sddm};
-use approx_chol::{
-    factorize_with, ApproxInverse, BlockFactor, Config, MemBuffer, MemStack, ScalingPolicy,
-    SchurMode, Threads,
-};
+use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy, SchurMode, Threads};
 use rstest::rstest;
 
 use crate::common::bits::bits;
@@ -54,17 +51,9 @@ fn configs() -> [Config; 2] {
     [Config::default(), exact]
 }
 
-fn solve(block: &BlockFactor, threads: Threads) -> Vec<u64> {
-    let mut x: Vec<f64> = (0..block.vertices().len())
-        .map(|i| (i % 7) as f64 - 3.0)
-        .collect();
-    block
-        .solve_local(
-            &mut x,
-            MemStack::new(&mut MemBuffer::new(block.scratch())),
-            threads,
-        )
-        .unwrap();
+fn solve(factor: &ApproxInverse, threads: Threads) -> Vec<u64> {
+    let mut x: Vec<f64> = (0..factor.n()).map(|i| (i % 7) as f64 - 3.0).collect();
+    factor.apply(&mut x, threads).unwrap();
     bits(&x)
 }
 
@@ -73,25 +62,15 @@ fn round_trip_solves_bit_identically() {
     let defaults = factors(Config::default());
     assert!(defaults
         .iter()
-        .flat_map(ApproxInverse::blocks)
-        .any(|block| block.floats()));
-    assert!(
-        defaults[0]
-            .blocks()
-            .iter()
-            .any(|block| block.splittable_work() > 0),
-        "a block keeps Cᵀ, which loading rebuilds"
-    );
+        .flat_map(ApproxInverse::components)
+        .any(|component| component.floats()));
     for config in configs() {
         for factor in factors(config) {
-            let blocks = factor.into_blocks();
-            let bytes = postcard::to_stdvec(&blocks).unwrap();
-            let back: Vec<BlockFactor> = postcard::from_bytes(&bytes).unwrap();
+            let bytes = postcard::to_stdvec(&factor).unwrap();
+            let back: ApproxInverse = postcard::from_bytes(&bytes).unwrap();
             assert_eq!(postcard::to_stdvec(&back).unwrap(), bytes);
-            for (block, back) in blocks.iter().zip(&back) {
-                for threads in threads::BUDGETS {
-                    assert_eq!(solve(block, threads), solve(back, threads));
-                }
+            for threads in threads::BUDGETS {
+                assert_eq!(solve(&factor, threads), solve(&back, threads));
             }
         }
     }
@@ -107,7 +86,7 @@ fn corrupt_bytes_error_instead_of_panicking() {
         state as usize
     };
     for factor in factors(Config::default()) {
-        let bytes = postcard::to_stdvec(&factor.into_blocks()).unwrap();
+        let bytes = postcard::to_stdvec(&factor).unwrap();
         for trial in 0..500 {
             let mut corrupt = bytes.clone();
             let at = next() % corrupt.len();
@@ -116,10 +95,8 @@ fn corrupt_bytes_error_instead_of_panicking() {
                 1 => corrupt[at] ^= 1 << (next() % 8),
                 _ => corrupt.truncate(at),
             }
-            if let Ok(blocks) = postcard::from_bytes::<Vec<BlockFactor>>(&corrupt) {
-                blocks
-                    .iter()
-                    .for_each(|block| drop(solve(block, threads::ONE)));
+            if let Ok(factor) = postcard::from_bytes::<ApproxInverse>(&corrupt) {
+                drop(solve(&factor, threads::ONE));
             }
         }
     }
@@ -133,10 +110,18 @@ fn varint(mut x: u64, bytes: &mut Vec<u8>) {
     bytes.push(x as u8);
 }
 
-/// One `u32` block on vertices `[64, 0]` whose elimination has `rows` empty rows of `C`, cut off before its Cholesky.
-fn truncated_elimination(rows: u64, n_cols: u64) -> Vec<u8> {
-    let mut bytes = vec![1];
+/// The version and a factor's head before its one block: `n`, no dead vertex, one block.
+fn one_block_factor(n: u64) -> Vec<u8> {
+    let mut bytes = Vec::new();
     varint(approx_chol::FACTOR_FORMAT_VERSION.into(), &mut bytes);
+    varint(n, &mut bytes);
+    bytes.extend([0, 1]);
+    bytes
+}
+
+/// A factor of one `u32` block on vertices `[64, 0]` whose elimination has `rows` empty rows of `C`, cut off before its Cholesky.
+fn truncated_elimination(rows: u64, n_cols: u64) -> Vec<u8> {
+    let mut bytes = one_block_factor(65);
     bytes.extend([0, 2, 64, 0, 0, 1]);
     varint(rows + 1, &mut bytes);
     bytes.extend(std::iter::repeat_n(0, rows as usize + 1));
@@ -155,7 +140,7 @@ fn an_elimination_keeping_more_columns_than_rows_is_corrupt(
     #[case] rows: u64,
     #[case] n_cols: u64,
 ) {
-    let error = postcard::from_bytes::<Vec<BlockFactor>>(&truncated_elimination(rows, n_cols));
+    let error = postcard::from_bytes::<ApproxInverse>(&truncated_elimination(rows, n_cols));
     assert_eq!(error.unwrap_err(), postcard::Error::SerdeDeCustom);
 }
 
@@ -163,7 +148,7 @@ fn an_elimination_keeping_more_columns_than_rows_is_corrupt(
 #[case::kept_in_place(3)]
 #[case::transposed(10_001)]
 fn an_elimination_keeping_at_most_its_rows_decodes_up_to_the_cut(#[case] rows: u64) {
-    let error = postcard::from_bytes::<Vec<BlockFactor>>(&truncated_elimination(rows, rows));
+    let error = postcard::from_bytes::<ApproxInverse>(&truncated_elimination(rows, rows));
     assert_eq!(
         error.unwrap_err(),
         postcard::Error::DeserializeUnexpectedEnd
@@ -218,9 +203,8 @@ fn respliced(factor: &ApproxInverse, n: usize, dead: &[usize]) -> Vec<u8> {
     let own_dead: Vec<usize> = (0..factor.n())
         .filter(|&v| {
             factor
-                .blocks()
-                .iter()
-                .all(|block| block.vertices().all(|u| u != v))
+                .components()
+                .all(|component| component.vertices().all(|u| u != v))
         })
         .collect();
     let head = postcard::to_stdvec(&(version, factor.n(), &own_dead)).unwrap();
@@ -379,39 +363,40 @@ fn an_isolated_vertex_round_trips_through_json() {
     assert_eq!(factor.solve(&b).unwrap(), back.solve(&b).unwrap());
 }
 
-/// Re-tags a `u32` coupled block as `u64`, over `vertices`.
-fn widen_with(block: &mut serde_json::Value, vertices: serde_json::Value) {
-    let mut coupled = block[1]["U32"].take();
-    coupled["restriction"]["vertices"] = vertices;
-    block[1] = serde_json::json!({ "U64": coupled });
+/// The factor's first block stored as `tag`, in its JSON `[version, [n, dead, blocks, clamps]]`.
+fn block_tagged<'a>(factor: &'a mut serde_json::Value, tag: &str) -> &'a mut serde_json::Value {
+    (factor[1][2].as_array_mut().unwrap().iter_mut())
+        .find(|block| block.get(tag).is_some())
+        .unwrap()
 }
 
-/// A block's vertex `u64::MAX` reads back as itself, never overflowing the end of a run of consecutive vertices.
+/// Re-tags the factor's first `u32` coupled block as `u64`, over `vertices`.
+fn widen_with(factor: &mut serde_json::Value, vertices: serde_json::Value) {
+    let block = block_tagged(factor, "U32");
+    let mut coupled = block["U32"].take();
+    coupled["restriction"]["vertices"] = vertices;
+    *block = serde_json::json!({ "U64": coupled });
+}
+
+/// A block's vertex `u64::MAX` is a decode error, never an overflow past the end of a run of consecutive vertices.
 #[rstest]
 #[case::isolated(&[u64::MAX])]
 #[case::coupled(&[u64::MAX, 0])]
-fn a_vertex_at_u64_max_reads_back(#[case] vertices: &[u64]) {
-    let factor = with_isolated_vertex();
-    let block = (factor.blocks().iter())
-        .find(|block| block.vertices().len() == vertices.len())
-        .unwrap();
-    let mut v = serde_json::to_value(block).unwrap();
+fn a_vertex_at_u64_max_is_corrupt(#[case] vertices: &[u64]) {
+    let mut v = serde_json::to_value(with_isolated_vertex()).unwrap();
     match vertices {
-        [vertex] => v[1]["Isolated"]["vertex"] = (*vertex).into(),
+        [vertex] => block_tagged(&mut v, "Isolated")["Isolated"]["vertex"] = (*vertex).into(),
         _ => widen_with(&mut v, vertices.into()),
     }
-    let back: BlockFactor = serde_json::from_value(v).unwrap();
-    let want = vertices.iter().map(|&vertex| vertex as usize);
-    assert!(back.vertices().eq(want));
+    serde_json::from_value::<ApproxInverse>(v).expect_err("no factor covers u64::MAX");
 }
 
 /// A lone `u64::MAX` for a two-vertex block is a decode error, never an overflow past it.
 #[test]
 fn a_lone_vertex_at_u64_max_for_two_is_corrupt() {
-    let factor = with_isolated_vertex();
-    let mut v = serde_json::to_value(&factor.blocks()[0]).unwrap();
+    let mut v = serde_json::to_value(with_isolated_vertex()).unwrap();
     widen_with(&mut v, serde_json::json!([u64::MAX]));
-    serde_json::from_value::<BlockFactor>(v).expect_err("one vertex for two is corrupt");
+    serde_json::from_value::<ApproxInverse>(v).expect_err("one vertex for two is corrupt");
 }
 
 /// A forged empty `F` is a decode error, never a panic while its peak is read.
@@ -427,10 +412,9 @@ fn empty_scales_are_corrupt() {
     serde_json::from_value::<ApproxInverse>(v).expect_err("empty scales are corrupt");
 }
 
-/// A unit path `3 → 2 → 1`, gauge `0`, its middle step `len` long.
+/// A factor of one unit path `3 → 2 → 1`, gauge `0`, its middle step `len` long.
 fn path_block_bytes(len: u64) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    varint(u64::from(approx_chol::FACTOR_FORMAT_VERSION), &mut bytes);
+    let mut bytes = one_block_factor(4);
     bytes.push(1); // Storage::U64
     bytes.extend([4, 0, 1, 2, 3, 0]); // vertices, Identity
     bytes.push(0); // no elimination
@@ -444,14 +428,15 @@ fn path_block_bytes(len: u64) -> Vec<u8> {
     bytes.extend([3, 2, 1, 0, 3]);
     (0..3).for_each(|_| bytes.extend(1.0f64.to_le_bytes()));
     bytes.push(0); // no report
+    bytes.push(0); // no clamp
     bytes
 }
 
 /// A forged u64 step length past the stored neighbors is a decode error, never an overflow; the same bytes at its true length decode.
 #[test]
 fn an_approximate_step_length_past_its_neighbors_is_corrupt() {
-    postcard::from_bytes::<BlockFactor>(&path_block_bytes(1)).expect("the true length decodes");
-    postcard::from_bytes::<BlockFactor>(&path_block_bytes(u64::MAX))
+    postcard::from_bytes::<ApproxInverse>(&path_block_bytes(1)).expect("the true length decodes");
+    postcard::from_bytes::<ApproxInverse>(&path_block_bytes(u64::MAX))
         .expect_err("a step past its neighbors is corrupt");
 }
 

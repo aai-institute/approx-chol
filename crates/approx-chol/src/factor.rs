@@ -64,11 +64,11 @@ fn buffer_error(found: usize, n: usize) -> ApplyError {
     }
 }
 
-/// Block-diagonal approximate inverse of the factored matrix, `A` or its [complement](crate::factorize_complement) numbered by the kept side: one [`BlockFactor`] per irreducible block of `A`.
+/// Block-diagonal approximate inverse of the factored matrix, `A` or its [complement](crate::factorize_complement) numbered by the kept side: one [`Component`] per irreducible block of `A`.
 #[derive(Clone, Debug)]
 pub struct ApproxInverse<T = f64> {
     n: usize,
-    blocks: Vec<BlockFactor<T>>,
+    blocks: Vec<Storage<T>>,
     /// Vertices in no block, which solve to `0`.
     dead: Box<[usize]>,
     clamps: Box<[Clamp]>,
@@ -92,16 +92,16 @@ impl<T: Real> ApproxInverse<T> {
             clamps,
         } = reduction;
         let mut blocks = Vec::with_capacity(coupled.len() + lone.len());
-        let build = |reused: &mut _, block: B| BlockFactor(store(block.factor(config, reused)));
+        let build = |reused: &mut _, block: B| store(block.factor(config, reused));
         let workspace = || Workspace::new(config.split());
         blocks.par_extend(coupled.into_par_iter().map_init(workspace, build));
-        let isolated = |(v, pivot)| BlockFactor(Storage::Isolated(Isolated::new(v, pivot)));
+        let isolated = |(v, pivot)| Storage::Isolated(Isolated::new(v, pivot));
         blocks.extend(lone.into_iter().map(isolated));
         let dead = dead.into_iter().map(I::index).collect();
         Self::new(blocks, dead, clamps.into())
     }
 
-    fn new(blocks: Vec<BlockFactor<T>>, dead: Box<[usize]>, clamps: Box<[Clamp]>) -> Self {
+    fn new(blocks: Vec<Storage<T>>, dead: Box<[usize]>, clamps: Box<[Clamp]>) -> Self {
         let n = blocks.iter().map(|b| b.vertices().len()).sum::<usize>() + dead.len();
         let scratch_slots = (blocks.iter())
             .map(|block| on!(block, b => b.global_scratch_slots(), _ => 0))
@@ -134,14 +134,9 @@ impl<T: Real> ApproxInverse<T> {
         &self.clamps
     }
 
-    /// The blocks' factors, one per irreducible block of `A` the factored matrix meets, coupled blocks before isolated vertices; dead vertices have none.
-    pub fn blocks(&self) -> &[BlockFactor<T>] {
-        &self.blocks
-    }
-
-    /// The blocks' factors, owned, for a caller that keeps one solver per block; dead vertices need none.
-    pub fn into_blocks(self) -> Vec<BlockFactor<T>> {
-        self.blocks
+    /// One per irreducible block of `A` the factored matrix meets, coupled blocks before isolated vertices; dead vertices are in none.
+    pub fn components(&self) -> impl ExactSizeIterator<Item = Component<'_, T>> {
+        self.blocks.iter().map(Component)
     }
 
     /// What [`apply_with`](Self::apply_with) takes from its stack for a block of `columns` columns: the most any one block of `A` takes, its Cholesky's slots plus a gather unless its vertices are consecutive, per column solved in place, or one column copied through. It grows with `columns` and serves every block of fewer.
@@ -272,10 +267,10 @@ impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
     }
 }
 
-/// Runs `$body` on a [`BlockFactor`]'s block, whichever index type stores it, or `$alone` on an isolated vertex.
+/// Runs `$body` on a stored block, whichever index type stores it, or `$alone` on an isolated vertex.
 macro_rules! on {
     ($factor:expr, $block:ident => $body:expr, $isolated:pat => $alone:expr) => {
-        match &$factor.0 {
+        match $factor {
             Storage::U32($block) => $body,
             Storage::U64($block) => $body,
             Storage::Isolated($isolated) => $alone,
@@ -284,9 +279,9 @@ macro_rules! on {
 }
 use on;
 
-/// The factor of one irreducible block of `A`, over its vertices of the factored matrix.
-#[derive(Clone, Debug)]
-pub struct BlockFactor<T = f64>(Storage<T>);
+/// One irreducible block of `A` the factored matrix meets, borrowed from its [`ApproxInverse`].
+#[derive(Clone, Copy, Debug)]
+pub struct Component<'f, T = f64>(&'f Storage<T>);
 
 /// A block's factor with its vertex indices in `u32` when they fit, else in `u64`; an isolated vertex stores only its inverse pivot.
 #[cfg_attr(
@@ -304,70 +299,45 @@ pub(crate) enum Storage<T> {
     Isolated(Isolated<T>),
 }
 
-impl<T: Real> BlockFactor<T> {
-    /// The block's vertices in the factored matrix's numbering, in local order.
-    pub fn vertices(&self) -> Vertices<'_> {
-        match &self.0 {
-            Storage::U32(block) => Vertices::of(block.vertices(), Indices::U32),
-            Storage::U64(block) => Vertices::of(block.vertices(), Indices::U64),
-            Storage::Isolated(block) => {
-                Vertices(Indices::U64(std::slice::from_ref(&block.vertex).iter()))
-            }
+impl<T: Real> Storage<T> {
+    fn vertices(&self) -> Vertices<'_> {
+        match self {
+            Storage::U32(block) => Vertices::of(block.vertices(), Vertices::U32),
+            Storage::U64(block) => Vertices::of(block.vertices(), Vertices::U64),
+            Storage::Isolated(block) => Vertices::U64(std::slice::from_ref(&block.vertex).iter()),
         }
-    }
-
-    /// Whether the block was grounded or floated on a scaling that did not settle, so a singular block may have been grounded.
-    pub fn grounding_unproven(&self) -> bool {
-        on!(self, block => block.grounding_unproven, _ => false)
-    }
-
-    /// Whether the block is folded and solved as singular, `A_c⁺b` or its complement's `S_c⁺b`.
-    pub fn floats(&self) -> bool {
-        on!(self, block => block.cholesky.singular(), _ => false)
-    }
-
-    /// Work a solve may split across its [`Threads`], `0` when nothing does: an outer scheduler weighs it against its own parallelism.
-    pub fn splittable_work(&self) -> usize {
-        on!(self, block => (block.elimination.as_deref()).map_or(0, BlockElimination::splittable_work), _ => 0)
-    }
-
-    /// What [`BlockFactor::solve_local`] takes from its stack, fixed at factorization.
-    pub fn scratch(&self) -> StackReq {
-        slots::<T>(on!(self, block => block.cholesky.scratch_slots(), _ => 0))
-    }
-
-    /// Solves in local order: `x` holds `b` on entry and the solution on return; `stack` holds [`scratch`](Self::scratch).
-    pub fn solve_local(
-        &self,
-        x: &mut [T],
-        stack: &mut MemStack,
-        threads: Threads,
-    ) -> Result<(), ApplyError> {
-        check_buffers(x.len(), self.vertices().len(), stack, self.scratch())?;
-        on!(self, block => block.solve_unchecked(x, stack, threads), i => i.solve_local(x));
-        Ok(())
     }
 }
 
-/// A [`BlockFactor`]'s vertices in the factored matrix's numbering; named, so a caller may move the block after its last use.
-#[derive(Clone, Debug)]
-pub struct Vertices<'a>(Indices<'a>);
+impl<'f, T: Real> Component<'f, T> {
+    /// Its vertices in the factored matrix's numbering, in the order its factor numbers them.
+    pub fn vertices(self) -> impl ExactSizeIterator<Item = usize> + 'f {
+        self.0.vertices()
+    }
+
+    /// Whether it was grounded or floated on a scaling that did not settle, so a singular component may have been grounded.
+    pub fn grounding_unproven(self) -> bool {
+        on!(self.0, block => block.grounding_unproven, _ => false)
+    }
+
+    /// Whether it is folded and solved as singular, `A_c⁺b` or its complement's `S_c⁺b`.
+    pub fn floats(self) -> bool {
+        on!(self.0, block => block.cholesky.singular(), _ => false)
+    }
+}
 
 #[derive(Clone, Debug)]
-enum Indices<'a> {
+enum Vertices<'a> {
     Range(std::ops::Range<usize>),
     U32(std::slice::Iter<'a, u32>),
     U64(std::slice::Iter<'a, u64>),
 }
 
 impl<'a> Vertices<'a> {
-    fn of<I>(
-        selection: &'a Selection<I>,
-        listed: fn(std::slice::Iter<'a, I>) -> Indices<'a>,
-    ) -> Self {
+    fn of<I>(selection: &'a Selection<I>, listed: fn(std::slice::Iter<'a, I>) -> Self) -> Self {
         match selection {
-            Selection::Range(range) => Self(Indices::Range(range.clone())),
-            Selection::Listed(vertices) => Self(listed(vertices.iter())),
+            Selection::Range(range) => Self::Range(range.clone()),
+            Selection::Listed(vertices) => listed(vertices.iter()),
         }
     }
 }
@@ -376,18 +346,18 @@ impl Iterator for Vertices<'_> {
     type Item = usize;
 
     fn next(&mut self) -> Option<usize> {
-        match &mut self.0 {
-            Indices::Range(vertices) => vertices.next(),
-            Indices::U32(vertices) => vertices.next().map(|&v| v.index()),
-            Indices::U64(vertices) => vertices.next().map(|&v| v.index()),
+        match self {
+            Self::Range(vertices) => vertices.next(),
+            Self::U32(vertices) => vertices.next().map(|&v| v.index()),
+            Self::U64(vertices) => vertices.next().map(|&v| v.index()),
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        match &self.0 {
-            Indices::Range(vertices) => vertices.size_hint(),
-            Indices::U32(vertices) => vertices.size_hint(),
-            Indices::U64(vertices) => vertices.size_hint(),
+        match self {
+            Self::Range(vertices) => vertices.size_hint(),
+            Self::U32(vertices) => vertices.size_hint(),
+            Self::U64(vertices) => vertices.size_hint(),
         }
     }
 }
@@ -439,7 +409,7 @@ impl<T: Real, I: Index> Block<T, I> {
         );
     }
 
-    // Two call sites through the closure plus solve_local's: by cost alone it stays a call.
+    // Both of on_local's arms call it, and rustc's cost model alone keeps those calls.
     #[inline(always)]
     fn solve_unchecked<V: Batch<T>>(&self, x: &mut [V], stack: &mut MemStack, threads: Threads) {
         let singular = self.cholesky.singular();
@@ -484,10 +454,6 @@ impl<T: Real> Isolated<T> {
     fn solve_global<V: Batch<T>>(&self, x: &mut [V]) {
         let v = &mut x[self.vertex as usize];
         *v = v.mul(self.inverse_pivot);
-    }
-
-    fn solve_local<V: Batch<T>>(&self, x: &mut [V]) {
-        x[0] = x[0].mul(self.inverse_pivot);
     }
 }
 
@@ -558,13 +524,7 @@ fn splitmix(x: u64) -> u64 {
 #[cfg(feature = "serde")]
 impl<T: serde::Serialize> serde::Serialize for ApproxInverse<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        struct Bodies<'a, T>(&'a [BlockFactor<T>]);
-        impl<T: serde::Serialize> serde::Serialize for Bodies<'_, T> {
-            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-                serializer.collect_seq(self.0.iter().map(|block| &block.0))
-            }
-        }
-        let body = (self.n, &self.dead, Bodies(&self.blocks), &self.clamps);
+        let body = (self.n, &self.dead, &self.blocks, &self.clamps);
         wire::serialize(serializer, body)
     }
 }
@@ -573,7 +533,6 @@ impl<T: serde::Serialize> serde::Serialize for ApproxInverse<T> {
 impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ApproxInverse<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let (n, dead, blocks, clamps) = wire::deserialize(deserializer)?;
-        let blocks = Vec::into_iter(blocks).map(BlockFactor).collect();
         let value = Self::new(blocks, dead, clamps);
         let corrupt = || serde::de::Error::custom("corrupt ApproxInverse");
         value.checked(n).ok_or_else(corrupt)
@@ -585,7 +544,7 @@ impl<T: Real> ApproxInverse<T> {
     /// The blocks' vertices and the dead ones cover `0..n` once each.
     fn checked(self, n: usize) -> Option<Self> {
         let mut vertices = self.dead.to_vec();
-        vertices.extend(self.blocks.iter().flat_map(BlockFactor::vertices));
+        vertices.extend(self.blocks.iter().flat_map(Storage::vertices));
         if vertices.len() != n {
             return None;
         }
@@ -593,21 +552,6 @@ impl<T: Real> ApproxInverse<T> {
         (vertices.iter().enumerate())
             .all(|(i, &v)| i == v)
             .then_some(self)
-    }
-}
-
-/// `(FORMAT_VERSION, storage)`: the version leads, so no future format has to keep the storage tag first.
-#[cfg(feature = "serde")]
-impl<T: serde::Serialize> serde::Serialize for BlockFactor<T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        wire::serialize(serializer, &self.0)
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for BlockFactor<T> {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        wire::deserialize(deserializer).map(Self)
     }
 }
 
@@ -638,9 +582,9 @@ mod tests {
     use crate::ScalingPolicy;
 
     fn only_block(summands: Reduced<f64, u32>, config: &Config) -> Block<f64, u32> {
-        let mut blocks = ApproxInverse::build(summands, config, Storage::U32).into_blocks();
+        let mut blocks = ApproxInverse::build(summands, config, Storage::U32).blocks;
         assert_eq!(blocks.len(), 1);
-        match blocks.pop().expect("one block").0 {
+        match blocks.pop().expect("one block") {
             Storage::U32(block) => block,
             Storage::U64(_) | Storage::Isolated(_) => {
                 unreachable!("a coupled u32 block stores u32")
@@ -682,6 +626,39 @@ mod tests {
         block
     }
 
+    /// `tests/thread_invariance.rs`'s first group keeps `Cᵀ`, so its solves split, and loading rebuilds it.
+    #[test]
+    fn decoding_rebuilds_the_transpose() {
+        let (n_left, n_right, degree) = (3200, 700, 48);
+        let (mut rows, mut cols, mut x, mut y) = (vec![], vec![], vec![], vec![]);
+        for i in 0..n_left {
+            for d in 0..degree {
+                let k = rows.len();
+                rows.push(i as u32);
+                cols.push(((i * 7 + d * 13) % n_right) as u32);
+                x.push(1.0 + (k % 7) as f64 / 8.0);
+                y.push(-(0.5 + (k % 3) as f64 / 4.0));
+            }
+        }
+        let gram = BipartiteFactorWidth2::new(
+            FactorWidth1::new(n_left, &rows, Some(&x)).expect("valid rows"),
+            FactorWidth1::new(n_right, &cols, Some(&y)).expect("valid columns"),
+        )
+        .expect("valid gram");
+        let summands = Reduced::reduce(gram.into(), ScalingPolicy::default()).expect("reduces");
+        let factor = ApproxInverse::build(summands, &Config::default(), Storage::U32);
+        let back: ApproxInverse =
+            postcard::from_bytes(&postcard::to_stdvec(&factor).expect("serialize"))
+                .expect("decodes");
+        let keeps = |factor: &ApproxInverse| {
+            (factor.blocks.iter()).any(|block| {
+                on!(block, b => b.elimination.as_deref().is_some_and(BlockElimination::keeps_transpose), _ => false)
+            })
+        };
+        assert!(keeps(&factor), "a block keeps Cᵀ");
+        assert!(keeps(&back), "and loading rebuilds it");
+    }
+
     /// A bipartite block stripped of the elimination its Cholesky follows.
     fn without_elimination() -> Block<f64, u32> {
         Block {
@@ -715,9 +692,10 @@ mod tests {
     #[case::without_elimination(without_elimination())]
     #[case::elimination_keeping_another_count(elimination_keeping_another_count())]
     fn a_block_whose_parts_disagree_is_rejected_on_decode(#[case] spliced: Block<f64, u32>) {
-        let bytes = postcard::to_stdvec(&BlockFactor(Storage::U32(spliced))).expect("serialize");
+        let factor = ApproxInverse::new(vec![Storage::U32(spliced)], Box::new([]), Box::new([]));
+        let bytes = postcard::to_stdvec(&factor).expect("serialize");
         assert_eq!(
-            postcard::from_bytes::<BlockFactor>(&bytes).expect_err("parts that disagree"),
+            postcard::from_bytes::<ApproxInverse>(&bytes).expect_err("parts that disagree"),
             postcard::Error::SerdeDeCustom
         );
     }
@@ -735,11 +713,12 @@ mod storage {
         x.iter().map(|x| x.to_bits()).collect()
     }
 
-    fn assert_storage_agrees(input: Input<'_, f64, u32>) {
-        let policy = ScalingPolicy::default();
-        let n = input.n();
-        let b: Vec<f64> = (0..n).map(|i| (i as f64 * 0.37).sin()).collect();
-        let configs = [
+    fn rhs(n: usize) -> Vec<f64> {
+        (0..n).map(|i| (i as f64 * 0.37).sin()).collect()
+    }
+
+    fn configs() -> [Config; 3] {
+        [
             Config::default(),
             Config {
                 exact_max_dim: 0,
@@ -751,8 +730,13 @@ mod storage {
                 complement: SchurMode::Exact,
                 ..Config::default()
             },
-        ];
-        for config in configs {
+        ]
+    }
+
+    fn assert_storage_agrees(input: Input<'_, f64, u32>) {
+        let policy = ScalingPolicy::default();
+        let b = rhs(input.n());
+        for config in configs() {
             let narrow = ApproxInverse::build(
                 Reduced::reduce(input, policy).expect("reduces"),
                 &config,
@@ -763,8 +747,28 @@ mod storage {
                 &config,
                 Storage::U64,
             );
-            assert!(matches!(wide.blocks[0].0, Storage::U64(_)));
+            assert!(matches!(wide.blocks[0], Storage::U64(_)));
             assert_eq!(bits(&narrow, &b), bits(&wide, &b), "{config:?}");
+        }
+    }
+
+    /// Each block on a NaN-filled stack of its own solves as on a zeroed one: none reads a slot before writing it.
+    fn assert_scratch_written_first(input: Input<'_, f64, u32>) {
+        let b = rhs(input.n());
+        for config in configs() {
+            let reduced = Reduced::reduce(input, ScalingPolicy::default()).expect("reduces");
+            let factor = ApproxInverse::build(reduced, &config, Storage::U32);
+            for block in &factor.blocks {
+                let solve = |fill: f64| {
+                    let mut x = b.clone();
+                    let slots = on!(block, b => b.global_scratch_slots(), _ => 0);
+                    let mut cells = vec![std::mem::MaybeUninit::new(fill); slots];
+                    let stack = MemStack::new_any(&mut cells);
+                    on!(block, b => b.solve_global(&mut x, Threads::All, stack), i => i.solve_global(&mut x));
+                    x.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+                };
+                assert_eq!(solve(0.0), solve(f64::NAN), "{config:?}");
+            }
         }
     }
 
@@ -794,14 +798,28 @@ mod storage {
         (row_ptrs, columns, values)
     }
 
-    #[test]
-    fn u64_storage_solves_bit_identically_to_u32() {
-        // Floating Laplacian, signs no ±1 folds (a cover), and a block scaled to dominance.
+    /// A floating Laplacian, signs no ±1 folds (a cover), a block scaled to dominance, interleaved paths that gather, and a scaled gram.
+    fn each_input(mut check: impl FnMut(Input<'_, f64, u32>)) {
         for (sign, diagonal) in [(-1.0, 1.0), (1.0, 1.0), (-1.0, 0.8)] {
             let (row_ptrs, columns, values) = grid(7, 6, sign, diagonal);
-            let csr = CsrRef::new(&row_ptrs, &columns, &values, 42).expect("valid CSR");
-            assert_storage_agrees(csr.into());
+            check(
+                CsrRef::new(&row_ptrs, &columns, &values, 42)
+                    .expect("valid CSR")
+                    .into(),
+            );
         }
+        let (row_ptrs, columns) = (
+            [0u32, 2, 4, 7, 10, 12, 14],
+            [0u32, 2, 1, 3, 0, 2, 4, 1, 3, 5, 2, 4, 3, 5],
+        );
+        let values = [
+            1.0, -1.0, 1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0, -1.0, 1.0,
+        ];
+        check(
+            CsrRef::new(&row_ptrs, &columns, &values, 6)
+                .expect("valid CSR")
+                .into(),
+        );
         let rows: Vec<u32> = (0..60).map(|k| k % 12).collect();
         let cols: Vec<u32> = (0..60).map(|k| (k * 7 + k / 12) % 9).collect();
         let scales: Vec<f64> = (0..60).map(|k| 1.0 + (k % 5) as f64).collect();
@@ -811,6 +829,16 @@ mod storage {
             &scales,
         )
         .expect("valid gram");
-        assert_storage_agrees(gram.into());
+        check(gram.into());
+    }
+
+    #[test]
+    fn u64_storage_solves_bit_identically_to_u32() {
+        each_input(assert_storage_agrees);
+    }
+
+    #[test]
+    fn every_block_writes_its_scratch_before_reading_it() {
+        each_input(assert_scratch_written_first);
     }
 }

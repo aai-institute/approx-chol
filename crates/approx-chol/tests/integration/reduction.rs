@@ -11,7 +11,7 @@ use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy};
 use crate::common::bits::bits;
 use crate::common::dense::dense;
 use crate::common::dense_residual::solve_residual;
-use crate::common::entry::floats;
+use crate::common::entry::{floats, only};
 use crate::common::gram::{dense_csr, matrix};
 
 #[test]
@@ -70,7 +70,9 @@ fn gram_separates_folded_scaled_and_frustrated_components() {
     let reduced = factorize_with(gram, dense(), ScalingPolicy::new(0.0, 0).unwrap()).unwrap();
     assert_eq!(floats(&reduced), [true, false]);
     assert_eq!(reduced.clamps(), []);
-    assert!(!reduced.blocks().iter().any(|c| c.grounding_unproven()));
+    assert!(!reduced
+        .components()
+        .any(|component| component.grounding_unproven()));
     solve_residual(&reduced, &matrix(7, &a, &b, &x, &y));
 }
 
@@ -82,14 +84,14 @@ fn shape_ground_and_signature_match_their_gram_matrices() {
     let ground = [0.25, 0.0, 0.0, 0.0];
     let laplacian = Laplacian::weighted(4, &a, &b, &weights).unwrap();
     let floating = factorize_with(laplacian, dense(), ScalingPolicy::default()).unwrap();
-    assert!(floating.blocks()[0].floats());
+    assert!(only(&floating).floats());
     let grounded = factorize_with(
         Sddm::new(laplacian, &ground).unwrap(),
         dense(),
         ScalingPolicy::default(),
     )
     .unwrap();
-    assert!(!grounded.blocks()[0].floats());
+    assert!(!only(&grounded).floats());
     let mut expected = matrix(4, &a, &b, &x, &y);
     solve_residual(&floating, &expected);
     expected[0][0] += ground[0];
@@ -99,7 +101,7 @@ fn shape_ground_and_signature_match_their_gram_matrices() {
     let (ptrs, columns, values) = dense_csr(&signed);
     let csr = CsrRef::new(&ptrs, &columns, &values, 4).unwrap();
     let factor = factorize_with(csr, dense(), ScalingPolicy::default()).unwrap();
-    assert!(factor.blocks()[0].floats());
+    assert!(only(&factor).floats());
     solve_residual(&factor, &signed);
 }
 
@@ -117,7 +119,7 @@ fn bipartite_incidence_and_valued_grams_preserve_both_sides() {
     let valued = gram(Some(&ones[..]), Some(&ones[..]));
     let laplacian = gram(None, Some(&minus[..]));
     for sgdd in [&incidence, &valued, &laplacian] {
-        assert!(sgdd.blocks()[0].floats());
+        assert!(only(sgdd).floats());
     }
     let right = right.map(|j| j + 3);
     let positive = matrix(5, &left, &right, &ones, &ones);
@@ -133,7 +135,7 @@ fn exhausted_scaling_reports_on_grams_and_rows() {
     let (x, y) = ([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
     let gram = FactorWidth2::new(3, (&a, &x), (&b, &y)).unwrap();
     let policy = ScalingPolicy::new(0.0, 0).unwrap();
-    let reported = |f: &ApproxInverse| !f.clamps().is_empty() || f.blocks()[0].grounding_unproven();
+    let reported = |f: &ApproxInverse| !f.clamps().is_empty() || only(f).grounding_unproven();
     let factor: ApproxInverse = factorize_with(gram, dense(), policy).unwrap();
     assert!(reported(&factor));
     let matrix = matrix(3, &a, &b, &x, &y);

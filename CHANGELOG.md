@@ -14,16 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed (breaking)
 
 - `Factor` is renamed `ApproxInverse`, in Rust and Python: it applies an approximate inverse, not a factor.
-- `ScalingReport` and `BlockFactor::scaling_report` are removed. `ApproxInverse::clamps` lists each component of `A` the reduction clamped past rounding, ordered by first vertex: its vertices in the input's numbering, also for a Schur build, its violation, and a `ScalingOutcome`: `Certified`, `Refuted` or `Unsettled`. `BlockFactor::grounding_unproven` states that a block floated or grounded on a scaling that did not settle. The format version is `0x4143_000A`.
-- `ApproxInverse::solve_in_place` takes a `MemStack` that holds `scratch(1, Threads::All)` and `BlockFactor::solve_local` one that holds its `scratch()`, each a `StackReq`; `scratch_len` is removed. `SolveError` is `ApplyError`: `LengthMismatch` is `Rows`, `ScratchTooShort` is `Scratch`. `MemBuffer`, `MemStack` and `StackReq` are dyn-stack 0.13's, faer 0.24's, re-exported.
-- `InnerParallelism` is replaced by `Threads`: `BlockFactor::solve_local` takes `Threads::All`, every thread of the caller's rayon pool, or `Threads::Count(n)`, at most `n` threads at a time whatever the pool's size; `Count(1)` runs on the calling thread, as `Forbid` did. The solution's bits do not depend on it.
+- `ScalingReport` and `BlockFactor::scaling_report` are removed. `ApproxInverse::clamps` lists each component of `A` the reduction clamped past rounding, ordered by first vertex: its vertices in the input's numbering, also for a Schur build, its violation, and a `ScalingOutcome`: `Certified`, `Refuted` or `Unsettled`. `Component::grounding_unproven` states that a block floated or grounded on a scaling that did not settle. The format version is `0x4143_000A`.
+- `ApproxInverse::solve_in_place` takes a `MemStack` that holds `scratch(1, Threads::All)`, a `StackReq`; `scratch_len` is removed. `SolveError` is `ApplyError`: `LengthMismatch` is `Rows`, `ScratchTooShort` is `Scratch`. `MemBuffer`, `MemStack` and `StackReq` are dyn-stack 0.13's, faer 0.24's, re-exported.
+- `BlockFactor`, `Vertices`, `ApproxInverse::blocks` and `into_blocks` are removed. `ApproxInverse::components` borrows one `Component` per irreducible block: its `vertices`, in the order its factor numbers them, `floats` and `grounding_unproven`. A block is solved only through the whole `ApproxInverse`, so `solve_local`, a block's `scratch` and `splittable_work` are gone with it. A persisted `ApproxInverse` keeps its bytes; a persisted list of `BlockFactor`s no longer decodes.
+- `InnerParallelism` is replaced by `Threads`: `apply` takes `Threads::All`, every thread of the caller's rayon pool, or `Threads::Count(n)`, at most `n` threads at a time whatever the pool's size; `Count(1)` runs on the calling thread, as `Forbid` did. The solution's bits do not depend on it.
 
 ### Changed
 
 - Faster factorization of inputs with many small components or long paths, with fewer allocations per component. ([#312])
 - Faster approximate factorization: 4-15% on grids, power-law graphs and fixed-effects inputs, with factors bit for bit as before unless a vertex's AC2 copy degree reaches `u32::MAX - 1`, which takes a `split_merge` near `2^30` or more: there its place in the minimum-degree order now follows its degree back down. ([#386])
 - Faster approximate factorization: 3-12% on grids and banded inputs, with factors bit for bit as before except in `f32`, where a star of 21 to 32 entries now sums a neighbor's duplicates in the order they come, as every other star does. ([#388])
-- A factor stores no ground, so a definite block of `n` vertices on one sheet, grounded or frustrated, solves in place: its `BlockFactor::scratch()` holds no slot, not `n + 1`, and a grounded cover's holds `2n`, not `2n + 1`.
+- A factor stores no ground, so a definite block of `n` vertices on one sheet, grounded or frustrated, solves in place: it takes no Cholesky slot, not `n + 1`, and a grounded cover takes `2n`, not `2n + 1`.
 
 ### Fixed
 

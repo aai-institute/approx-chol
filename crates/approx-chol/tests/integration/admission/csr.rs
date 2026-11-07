@@ -274,7 +274,7 @@ fn in_class_input_is_admitted_on_both_paths(
 )
 .expect("bipartite factor-width-2 Gram"))]
 fn an_empty_system_is_admitted_by_every_entry_point(#[case] factor: ApproxInverse) {
-    assert_eq!((factor.n(), factor.blocks().len()), (0, 0));
+    assert_eq!((factor.n(), factor.components().len()), (0, 0));
 }
 
 #[rstest]

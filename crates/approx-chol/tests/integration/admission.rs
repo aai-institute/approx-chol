@@ -38,7 +38,6 @@ fn reduce_upper<T: Real>(
     factorize(csr)
 }
 
-/// For input reducing to one balanced block: grounded exactly when it does not float.
 /// Error order is not the contract: a rejection need only name one of the input's defects.
 fn assert_names_a_defect<E: PartialEq + Debug>(observed: E, defects: &[E]) {
     assert!(

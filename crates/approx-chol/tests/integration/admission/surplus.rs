@@ -2,7 +2,7 @@ use approx_chol::{ApproxInverse, Clamp, Real, ScalingOutcome};
 use rstest::rstest;
 
 use super::reduce;
-use crate::common::entry::floats;
+use crate::common::entry::{floats, only};
 
 /// `[[a+s, -a], [-a, a+s]]`: dominant by `s` on both rows, so it floats exactly when `s` is noise.
 fn surplus_pair<T: Real>(a: T, s: T) -> ApproxInverse<T> {
@@ -82,7 +82,7 @@ fn deficit_beyond_summation_roundoff_is_reported() {
     assert_eq!(reported(&drifted(-32.0 * f64::EPSILON)), certified);
     let inside = drifted(-12.0 * f64::EPSILON);
     assert_eq!(reported(&inside), None, "inside 16 eps");
-    assert!(!inside.blocks()[0].grounding_unproven());
+    assert!(!only(&inside).grounding_unproven());
     let f32_reported = |drift: f32| drifted(drift).clamps().first().map(|clamp| clamp.scaling);
     let refuted = Some(ScalingOutcome::Refuted);
     assert_eq!(
@@ -92,7 +92,7 @@ fn deficit_beyond_summation_roundoff_is_reported() {
     );
     let inside = drifted(-12.0 * f32::EPSILON);
     assert_eq!(inside.clamps(), [], "inside 16 eps");
-    assert!(!inside.blocks()[0].grounding_unproven());
+    assert!(!only(&inside).grounding_unproven());
 }
 
 /// Unit leaves, centre short of their sum by `short_ulps` ε; the leaves balance exactly.
@@ -114,7 +114,7 @@ fn star(leaves: u32, short_ulps: f64) -> ApproxInverse<f64> {
 fn a_rows_rounding_band_grows_with_its_degree() {
     let rounding = star(100, 50.0);
     assert_eq!(rounding.clamps(), []);
-    assert!(!rounding.blocks()[0].grounding_unproven());
+    assert!(!only(&rounding).grounding_unproven());
     assert_eq!(star(100, 200.0).clamps().len(), 1);
 }
 
@@ -238,6 +238,6 @@ fn genuine_surplus_at_either_scale_is_augmented_and_solves(
     #[case] expected: [f64; 2],
 ) {
     let factor = reduce(row_ptrs, columns, values).expect("genuine surplus");
-    assert!(factor.blocks().iter().all(|block| !block.floats()));
+    assert!(factor.components().all(|component| !component.floats()));
     solves_to(&factor, &rhs, &expected);
 }

@@ -1,4 +1,4 @@
-//! The format version a persisted [`BlockFactor`](super::BlockFactor) leads with.
+//! The format version a persisted [`ApproxInverse`](super::ApproxInverse) leads with.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

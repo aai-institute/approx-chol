@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let factor = factorize_with(laplacian, config, ScalingPolicy::default())?;
         let (x, iterations) = grid.pcg(&factor, &b, 1e-10);
         let mean = x.iter().sum::<f64>() / grid.n as f64;
-        let blocks = factor.blocks().len();
+        let blocks = factor.components().len();
         println!(
             "{name:>9}: {blocks} block(s), {iterations} PCG iterations, mean {mean:.2e} (⟂ 1)"
         );

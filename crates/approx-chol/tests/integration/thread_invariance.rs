@@ -1,7 +1,4 @@
-use approx_chol::{
-    factorize_complement, factorize_with, Config, MemBuffer, MemStack, ScalingPolicy, SchurMode,
-    Side,
-};
+use approx_chol::{factorize_complement, factorize_with, Config, ScalingPolicy, SchurMode, Side};
 use rstest::rstest;
 
 use crate::common::bipartite::Bipartite;
@@ -10,7 +7,7 @@ use crate::common::threads;
 
 const DEGREE: usize = 48;
 
-/// `(left, right, frustrated)` per block: the first's 3200·48 entries clear the `Cᵀ` gate (2¹⁷) by 17%, each splits its star fold and exact rows, together they split the components.
+/// `(left, right, frustrated)` per block: the first's 3200·48 entries clear the `Cᵀ` gate (2¹⁷) by 17%, as `factor.rs`'s `decoding_rebuilds_the_transpose` checks; each splits its star fold and exact rows, together they split the components.
 const GROUPS: [(usize, usize, bool); 3] =
     [(3200, 700, false), (420, 1000, true), (420, 1000, false)];
 
@@ -40,35 +37,22 @@ fn gram() -> Bipartite {
     }
 }
 
-/// `ApproxInverse::solve` as bits, which each block's `solve_local` and each column of a four-column apply match under each budget; `kept` factors the complement.
+/// `ApproxInverse::solve` as bits, which an apply of `b` and each column of a four-column apply match under each budget; `kept` factors the complement.
 fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> Vec<u64> {
     let gram = g.view();
     let factor = match kept {
         None => factorize_with(gram, config, ScalingPolicy::default()).unwrap(),
         Some(side) => factorize_complement(gram, side, config, ScalingPolicy::default()).unwrap(),
     };
-    assert_eq!(factor.blocks().len(), GROUPS.len());
-    assert!(
-        kept.is_some() || factor.blocks().iter().any(|b| b.splittable_work() > 0),
-        "a block stores Cᵀ, so a solve may split"
-    );
+    assert_eq!(factor.components().len(), GROUPS.len());
     let b: Vec<f64> = (0..factor.n())
         .map(|i| ((i * 7919) % 101) as f64 / 50.0 - 1.0)
         .collect();
     let whole = bits(&factor.solve(&b).unwrap());
-    for block in factor.blocks() {
-        for threads in threads::BUDGETS {
-            let mut x: Vec<f64> = block.vertices().map(|v| b[v]).collect();
-            block
-                .solve_local(
-                    &mut x,
-                    MemStack::new(&mut MemBuffer::new(block.scratch())),
-                    threads,
-                )
-                .unwrap();
-            let solved: Vec<u64> = block.vertices().map(|v| whole[v]).collect();
-            assert_eq!(bits(&x), solved, "{threads:?}");
-        }
+    for threads in threads::BUDGETS {
+        let mut x = b.clone();
+        factor.apply(&mut x, threads).unwrap();
+        assert_eq!(bits(&x), whole, "{threads:?}");
     }
     let scale = [1.0, -0.5, 0.0, 3.0];
     let alone = scale.map(|s| {

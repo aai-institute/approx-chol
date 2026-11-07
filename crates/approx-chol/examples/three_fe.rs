@@ -59,10 +59,10 @@ fn main() {
                 factorize_with(gram, config, ScalingPolicy::default()).expect("factors"),
             )
         });
-        // Blocks are the reduction's, so either config's factor lists the same ones.
-        for block in factors[0].1.blocks() {
-            let n = block.vertices().len();
-            println!("  block: {n} vertices, floats {}", block.floats());
+        // Components are the reduction's, so either config's factor lists the same ones.
+        for component in factors[0].1.components() {
+            let n = component.vertices().len();
+            println!("  component: {n} vertices, floats {}", component.floats());
         }
         for (name, factor) in &factors {
             println!("  {name}:");

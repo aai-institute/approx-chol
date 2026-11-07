@@ -347,3 +347,17 @@ fn project_out<T: Real, V: Batch<T>>(x: &mut [V], u: impl Fn(usize) -> T, uu: f6
         *x = V::narrow(x.widen().sub(along.mul(widen(u(i)))));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Selection;
+
+    /// A vertex at `u64::MAX` stays listed and reads back as itself, never a run whose end overflows.
+    #[test]
+    fn a_vertex_at_u64_max_reads_back() {
+        for vertices in [vec![u64::MAX], vec![u64::MAX, 0]] {
+            let selection = Selection::owned(vertices.clone().into());
+            assert!(selection.iter().eq(vertices.iter().map(|&v| v as usize)));
+        }
+    }
+}
