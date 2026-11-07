@@ -1,9 +1,7 @@
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm,
 };
-use approx_chol::{
-    factorize, factorize_with, ApproxInverse, Config, Error, Real, ReduceError, ScalingPolicy,
-};
+use approx_chol::{factorize, factorize_with, ApproxInverse, Config, Error, Real, ScalingPolicy};
 use rstest::rstest;
 
 use crate::common::cycle::Cycle;
@@ -12,6 +10,7 @@ use crate::common::dense_residual::apply;
 use crate::common::entry::floats;
 use crate::common::gram::{dense_csr, matrix};
 use crate::common::lcg::Lcg;
+use crate::common::out_of_range::{out_of_range, FLOOR};
 
 /// The chain's null vector `(1, 1e200, 1e400)` passes `f64`; floating, `x₀` is `4.9e174`.
 #[test]
@@ -153,9 +152,6 @@ fn frustrated_star_whose_surplus_rounds_to_zero_solves_its_matrix() {
     assert!(backward <= 16.0 * f64::EPSILON, "{backward:e}");
 }
 
-/// `MIN_POSITIVE/ε`, the range floor every input entry clears.
-const FLOOR: f64 = f64::MIN_POSITIVE / f64::EPSILON;
-
 /// Triangle with edges `sign·a` and diagonal `2a` raised by `ulps`.
 fn triangle(a: f64, sign: f64, ulps: u64) -> Vec<Vec<f64>> {
     let d = f64::from_bits((2.0 * a).to_bits() + ulps);
@@ -205,10 +201,7 @@ fn a_real_ground_below_the_range_floor_is_out_of_range(
     #[case] a: Vec<Vec<f64>>,
     #[case] vertex: usize,
 ) {
-    assert_eq!(
-        reduce_error(&a),
-        Error::Reduce(ReduceError::OutOfRange { vertex })
-    );
+    assert_eq!(reduce_error(&a), out_of_range(vertex));
 }
 
 /// Path `0 —r²— 1 —1— 2`, vertex 2 grounded by `1` = its coupling: `x = [2, 2, 1]`.

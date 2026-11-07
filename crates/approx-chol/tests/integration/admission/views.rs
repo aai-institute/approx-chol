@@ -8,21 +8,12 @@ use rstest::rstest;
 
 use crate::common::dense_residual::{apply, solve_residual};
 use crate::common::gram::{dense_csr, matrix};
+use crate::common::out_of_range::{out_of_range, FLOOR};
 
 use super::assert_names_a_defect;
 
 const PATH_A: [u32; 2] = [0, 1];
 const PATH_B: [u32; 2] = [1, 2];
-
-fn tiny() -> f64 {
-    f64::MIN_POSITIVE / f64::EPSILON / 2.0
-}
-
-fn out_of_range(vertices: &[usize]) -> Vec<Error> {
-    (vertices.iter())
-        .map(|&vertex| Error::Reduce(ReduceError::OutOfRange { vertex }))
-        .collect()
-}
 
 fn two_edges_but(found: usize) -> ViewError {
     ViewError::LengthMismatch { expected: 2, found }
@@ -70,10 +61,10 @@ fn a_scaled_bipartite_admits_a_negative_or_zero_scale() {
 
 #[test]
 fn a_weight_below_min_positive_over_epsilon_is_out_of_range_at_its_edge() {
-    let w = [1.0, tiny()];
+    let w = [1.0, FLOOR / 2.0];
     let graph = Laplacian::weighted(3, &PATH_A, &PATH_B, &w).unwrap();
     let error = factorize(graph).expect_err("tiny weight");
-    assert_names_a_defect(error, &out_of_range(&[1, 2]));
+    assert_names_a_defect(error, &[out_of_range(1), out_of_range(2)]);
 }
 
 /// Its cell `s·s` underflows to zero, which must not drop the column.
@@ -81,7 +72,7 @@ fn a_weight_below_min_positive_over_epsilon_is_out_of_range_at_its_edge() {
 fn a_scale_whose_square_underflows_is_out_of_range_at_its_column() {
     let path = scaled_bipartite_path(&[1.0, 1e-170]).unwrap();
     let error = factorize(path).expect_err("tiny scale");
-    assert_names_a_defect(error, &out_of_range(&[1, 2]));
+    assert_names_a_defect(error, &[out_of_range(1), out_of_range(2)]);
 }
 
 #[rstest]
@@ -138,13 +129,13 @@ fn sddm_new_rejects_an_all_zero_surplus_as_a_laplacian(#[case] zero: f64) {
 }
 
 #[rstest]
-#[case::below_min_positive_over_epsilon(tiny())]
+#[case::below_min_positive_over_epsilon(FLOOR / 2.0)]
 #[case::past_a_quarter_of_the_maximum(f64::MAX / 2.0)]
 fn an_out_of_range_ground_is_rejected_at_its_vertex(#[case] ground: f64) {
     let ground = [0.0, 0.0, ground];
     let grounded = Sddm::new(unit_path(), &ground).expect("a valid surplus");
     let error = factorize(grounded).expect_err("ground out of range");
-    assert_names_a_defect(error, &out_of_range(&[2]));
+    assert_names_a_defect(error, &[out_of_range(2)]);
 }
 
 #[test]
@@ -190,13 +181,13 @@ fn factor_width_2_new_rejects_mismatched_lengths_and_bad_ends_at_their_entry(
 #[rstest]
 #[case::nan(f64::NAN)]
 #[case::infinite(f64::INFINITY)]
-#[case::below_min_positive_over_epsilon(tiny())]
+#[case::below_min_positive_over_epsilon(FLOOR / 2.0)]
 #[case::past_a_quarter_of_the_maximum(f64::MAX)]
 fn an_out_of_range_loading_is_rejected_at_its_vertex(#[case] value: f64) {
     let (x, y) = ([1.0, value], [-1.0, -1.0]);
     let gram = FactorWidth2::new(3, (&PATH_A, &x), (&PATH_B, &y)).unwrap();
     let error = factorize(gram).expect_err("loading out of range");
-    assert_names_a_defect(error, &out_of_range(&[1, 2]));
+    assert_names_a_defect(error, &[out_of_range(1), out_of_range(2)]);
 }
 
 #[test]
@@ -225,7 +216,7 @@ fn weights_or_scales_of_another_column_count_are_rejected() {
 
 #[rstest]
 #[case::nan(f64::NAN)]
-#[case::below_min_positive_over_epsilon(tiny())]
+#[case::below_min_positive_over_epsilon(FLOOR / 2.0)]
 #[case::past_a_quarter_of_the_maximum(f64::MAX)]
 fn an_out_of_range_bipartite_loading_is_rejected_at_its_vertex(#[case] value: f64) {
     let values = [1.0, value];
@@ -233,13 +224,13 @@ fn an_out_of_range_bipartite_loading_is_rejected_at_its_vertex(#[case] value: f6
     let right = FactorWidth1::<f64>::new(1, &[0u32, 0], None).unwrap();
     let gram = BipartiteFactorWidth2::new(left, right).unwrap();
     let error = factorize(gram).expect_err("loading out of range");
-    assert_names_a_defect(error, &out_of_range(&[1, 2]));
+    assert_names_a_defect(error, &[out_of_range(1), out_of_range(2)]);
 }
 
 /// Its square underflows, but the vertex's other column keeps the diagonal in range.
 #[rstest]
 #[case::square_just_underflows(1e-162, 1.0)]
-#[case::loading_at_the_floor(2.0 * tiny(), 1.0)]
+#[case::loading_at_the_floor(FLOOR, 1.0)]
 #[case::scaled(1e-162, 0.5f64.sqrt())]
 fn a_bipartite_loading_whose_square_underflows_beside_an_in_range_column_factors_and_solves(
     #[case] z: f64,
@@ -258,7 +249,7 @@ fn a_bipartite_loading_whose_square_underflows_beside_an_in_range_column_factors
 
 #[rstest]
 #[case::square_just_underflows(1e-162)]
-#[case::loading_at_the_floor(2.0 * tiny())]
+#[case::loading_at_the_floor(FLOOR)]
 fn a_gram_loading_whose_square_underflows_beside_an_in_range_column_factors_and_solves(
     #[case] z: f64,
 ) {
@@ -274,7 +265,7 @@ fn a_gram_cell_whose_product_underflows_is_out_of_range() {
     let (x, y) = ([1e-170, 1.0, 1.0], [1e-170, -1.0, -1.0]);
     let gram = FactorWidth2::new(4, (&[0u32, 0, 1], &x), (&[1, 2, 3], &y)).unwrap();
     let error = factorize(gram).expect_err("cell below the floor");
-    assert_names_a_defect(error, &out_of_range(&[0, 1]));
+    assert_names_a_defect(error, &[out_of_range(0), out_of_range(1)]);
 }
 
 /// Its cell underflows too, so the vertex is out of range, not dead.
@@ -284,7 +275,7 @@ fn a_bipartite_vertex_whose_every_term_underflows_is_out_of_range() {
     let side = || FactorWidth1::new(1, &[0u32], Some(&values[..])).unwrap();
     let gram = BipartiteFactorWidth2::new(side(), side()).unwrap();
     let error = factorize(gram).expect_err("every term underflows");
-    assert_names_a_defect(error, &out_of_range(&[0, 1]));
+    assert_names_a_defect(error, &[out_of_range(0), out_of_range(1)]);
 }
 
 #[test]
@@ -292,7 +283,7 @@ fn a_gram_vertex_whose_every_term_underflows_is_out_of_range() {
     let (x, y) = ([1e-170, 1.0], [1e-170, -1.0]);
     let gram = FactorWidth2::new(4, (&[0u32, 2], &x), (&[1, 3], &y)).unwrap();
     let error = factorize(gram).expect_err("every term underflows");
-    assert_names_a_defect(error, &out_of_range(&[0, 1]));
+    assert_names_a_defect(error, &[out_of_range(0), out_of_range(1)]);
 }
 
 fn with_diagonal(mut matrix: Vec<Vec<f64>>, diagonal: &[f64]) -> Vec<Vec<f64>> {
