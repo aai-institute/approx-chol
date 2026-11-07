@@ -1,6 +1,7 @@
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
 use approx_chol::{factorize_with, Config, ScalingPolicy, SchurMode};
 
+use crate::common::dense_residual::apply;
 use crate::common::gram::{dense_csr, matrix};
 
 /// A frustrated unit cycle `L0 R0 L1 R1 …`, `cycle` vertices a side, and `pendants` left vertices each joined by `1e-95` to `wide` cycle vertices and left a `1e-200` surplus: within the band.
@@ -48,18 +49,13 @@ impl Cycle {
 /// `‖Mx − b‖∞` past `64ε (‖M‖∞‖x‖∞ + ‖b‖∞)`, for `b = M·want`.
 fn unstable(m: &[Vec<f64>], solve: impl FnOnce(&[f64]) -> Vec<f64>) -> Option<String> {
     let max = |v: &[f64]| v.iter().fold(0.0f64, |m, v| m.max(v.abs()));
-    let apply = |x: &[f64]| -> Vec<f64> {
-        (m.iter())
-            .map(|row| row.iter().zip(x).map(|(m, x)| m * x).sum())
-            .collect()
-    };
     let want: Vec<f64> = (0..m.len())
         .map(|i| (7 * i + 3) as f64)
         .map(f64::sin)
         .collect();
-    let b = apply(&want);
+    let b = apply(m, &want);
     let x = solve(&b);
-    let residual = (apply(&x).iter().zip(&b))
+    let residual = (apply(m, &x).iter().zip(&b))
         .map(|(mx, b)| (mx - b).abs())
         .fold(0.0, f64::max);
     let norm = (m.iter())
