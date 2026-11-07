@@ -2,19 +2,22 @@
 //! Frozen payloads from earlier builds; `serde.rs` writes and reads with one build, so an encoding shift is invisible to it and visible here.
 
 use std::collections::BTreeSet;
-use std::num::NonZeroUsize;
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
 use approx_chol::FACTOR_FORMAT_VERSION as FORMAT_VERSION;
 use approx_chol::{
     factorize_with, ApproxInverse, BlockFactor, Config, MemBuffer, MemStack, ScalingOutcome,
-    ScalingPolicy, Threads,
+    ScalingPolicy,
 };
 use rstest::rstest;
 use serde::de::value::{Error, SeqDeserializer};
 use serde::Deserialize;
 
+use crate::common::threads;
+
 /// One list declares each fixture, its file name and its rstest case, so none is kept in step by hand.
+const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+
 macro_rules! fixtures {
     ($($variant:ident => $name:ident),+ $(,)?) => {
         #[derive(Clone, Copy, Debug)]
@@ -139,8 +142,7 @@ impl Fixture {
     /// The one place a fixture path is spelled, so the reader and the regenerator agree on the version.
     fn path(self) -> String {
         format!(
-            "{}/tests/fixtures/{}_{FORMAT_VERSION:#010x}.postcard",
-            env!("CARGO_MANIFEST_DIR"),
+            "{FIXTURE_DIR}/{}_{FORMAT_VERSION:#010x}.postcard",
             self.name()
         )
     }
@@ -177,7 +179,7 @@ fn solve(blocks: &[BlockFactor], b: &[f64]) -> Vec<f64> {
         (block.solve_local(
             &mut local,
             MemStack::new(&mut MemBuffer::new(block.scratch())),
-            Threads::Count(NonZeroUsize::MIN),
+            threads::ONE,
         ))
         .expect("buffers fit");
         vertices.iter().zip(local).for_each(|(&v, xv)| x[v] = xv);
@@ -198,8 +200,7 @@ fn relative_residual(matrix: &[&[f64]], x: &[f64], b: &[f64]) -> f64 {
 #[test]
 fn every_fixture_has_a_case() {
     let suffix = format!("_{FORMAT_VERSION:#010x}.postcard");
-    let directory = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
-    let committed: BTreeSet<String> = std::fs::read_dir(directory)
+    let committed: BTreeSet<String> = std::fs::read_dir(FIXTURE_DIR)
         .expect("a fixtures directory")
         .map(|entry| entry.expect("a readable entry").file_name())
         .filter_map(|name| Some(name.to_str()?.strip_suffix(&suffix)?.to_owned()))
@@ -318,10 +319,7 @@ fn clamped() -> ApproxInverse {
 
 /// Apart from the block fixtures, whose payloads are block lists, not a whole factor.
 fn clamped_path() -> String {
-    format!(
-        "{}/tests/fixtures/whole/clamped_{FORMAT_VERSION:#010x}.postcard",
-        env!("CARGO_MANIFEST_DIR")
-    )
+    format!("{FIXTURE_DIR}/whole/clamped_{FORMAT_VERSION:#010x}.postcard")
 }
 
 /// The clamp list's encoding, its outcome's variant order among it, is frozen with the format version.
