@@ -44,6 +44,9 @@ impl<T: Real, I: Index> CliqueTreeElimination<T, I> {
     }
 }
 
+/// A block this small keeps its buffers for the task's next, its graph's slab never compacted; a larger one frees them.
+const REUSED_UP_TO: usize = 1024;
+
 /// One copy count's elimination: `C` reaches every edge, so it is fixed per task.
 struct Elimination<T, I, C: Copies> {
     split: C,
@@ -90,7 +93,7 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         steps.coefficients.shrink_to_fit();
         let last = pin.unwrap_or_else(|| self.order.next_vertex());
         let pinned = (last < slots).then_some(last);
-        if n > graph::REUSED_UP_TO {
+        if n > REUSED_UP_TO {
             *self = Self::new(self.split);
         }
         (steps, pinned)
