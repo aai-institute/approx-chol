@@ -2,7 +2,8 @@ use approx_chol::input::FactorWidth2;
 use approx_chol::{factorize, Config, CsrRef, ScalingOutcome, ScalingPolicy, Sgdd};
 use rstest::rstest;
 
-use super::lcg::Lcg;
+use crate::common::lcg::Lcg;
+
 use super::{reduce, reduce_with};
 
 /// `D L D` for the graph `edges` on `n` vertices, `D` within `spread` of `I`: GDD by construction, `R = D⁻¹`.

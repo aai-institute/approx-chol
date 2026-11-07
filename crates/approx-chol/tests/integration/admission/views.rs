@@ -6,9 +6,10 @@ use approx_chol::{
 };
 use rstest::rstest;
 
+use crate::common::dense_residual::{apply, solve_residual};
+use crate::common::gram::{dense_csr, matrix};
+
 use super::assert_names_a_defect;
-use super::dense_residual::{apply, solve_residual};
-use super::gram::{dense_csr, matrix};
 
 const PATH_A: [u32; 2] = [0, 1];
 const PATH_B: [u32; 2] = [1, 2];

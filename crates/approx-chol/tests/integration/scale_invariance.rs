@@ -1,10 +1,8 @@
-use crate::common::{cases, entry, graph, modes, sparse};
-
-use cases::cases;
-use entry::{Entry, Types};
-use graph::{Edge, Graph};
-use modes::Mode;
-use sparse::Sparse;
+use crate::common::cases::cases;
+use crate::common::entry::{Entry, Types};
+use crate::common::graph::{Edge, Graph};
+use crate::common::modes::Mode;
+use crate::common::sparse::Sparse;
 
 const RHS: [f64; 6] = [1.0, -1.0, 2.0, -2.0, 0.5, -0.5];
 

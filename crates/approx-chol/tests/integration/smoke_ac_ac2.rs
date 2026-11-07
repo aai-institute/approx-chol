@@ -1,10 +1,8 @@
-use crate::common::{cases, entry, graph, grid, sparse};
-
-use cases::cases;
-use entry::{Entry, Types};
-use graph::Graph;
-use grid::grid;
-use sparse::Sparse;
+use crate::common::cases::cases;
+use crate::common::entry::{Entry, Types};
+use crate::common::graph::Graph;
+use crate::common::grid::grid;
+use crate::common::sparse::Sparse;
 
 /// Bucket layout and fill bookkeeping carry load only past the property graphs' size.
 fn smoke(entry: Entry, sparse: Sparse, types: Types, graph: &Graph) {

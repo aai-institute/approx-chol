@@ -1,11 +1,11 @@
-use crate::common::{bipartite, bits, threads};
-
 use approx_chol::{
     factorize_complement, factorize_with, Config, MemBuffer, MemStack, ScalingPolicy, SchurMode,
     Side,
 };
-use bipartite::Bipartite;
-use bits::bits;
+
+use crate::common::bipartite::Bipartite;
+use crate::common::bits::bits;
+use crate::common::threads;
 
 const DEGREE: usize = 48;
 

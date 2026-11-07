@@ -1,15 +1,15 @@
 //! Exact mode only: relabeling redraws the sampler, which moved sampled solutions 6-37%.
-use crate::common::{cases, dense, entry, graph, grid, interleaved, runner, sparse};
 
-use cases::cases;
-use dense::dense;
-use entry::{Entry, Types};
-use graph::{Edge, Graph};
-use grid::grid;
-use interleaved::interleaved_components;
 use proptest::prelude::*;
-use runner::{check, stated_by};
-use sparse::Sparse;
+
+use crate::common::cases::cases;
+use crate::common::dense::dense;
+use crate::common::entry::{Entry, Types};
+use crate::common::graph::{Edge, Graph};
+use crate::common::grid::grid;
+use crate::common::interleaved::interleaved_components;
+use crate::common::runner::{check, stated_by};
+use crate::common::sparse::Sparse;
 
 /// `A'[p[i]][p[j]] = A[i][j]`.
 fn permuted(graph: &Graph, p: &[usize]) -> Graph {

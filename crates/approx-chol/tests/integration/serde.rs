@@ -1,13 +1,14 @@
 #![cfg(feature = "serde")]
-use crate::common::{gram, threads};
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Laplacian, Sddm};
 use approx_chol::{
     factorize_with, ApproxInverse, BlockFactor, Config, MemBuffer, MemStack, ScalingPolicy,
     SchurMode, Threads,
 };
-use gram::{dense_csr, matrix};
 use rstest::rstest;
+
+use crate::common::gram::{dense_csr, matrix};
+use crate::common::threads;
 
 fn factors(config: Config) -> Vec<ApproxInverse> {
     let (left, right, per_row) = (12_000u32, 400u32, 12u32);

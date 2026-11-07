@@ -1,4 +1,3 @@
-use crate::common::{bipartite, cycle, dense, dense_residual, gram, lcg};
 mod band_agreement;
 mod complement;
 mod surplus_grounds;
@@ -7,9 +6,10 @@ use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
 };
 use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy};
-use dense::dense;
-use dense_residual::solve_residual;
-use gram::{dense_csr, matrix};
+
+use crate::common::dense::dense;
+use crate::common::dense_residual::solve_residual;
+use crate::common::gram::{dense_csr, matrix};
 
 fn floats(factor: &ApproxInverse) -> Vec<bool> {
     factor.blocks().iter().map(|block| block.floats()).collect()

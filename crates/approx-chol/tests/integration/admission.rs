@@ -1,4 +1,3 @@
-use crate::common::{dense_residual, gram, lcg};
 mod csr;
 mod scaling;
 mod surplus;

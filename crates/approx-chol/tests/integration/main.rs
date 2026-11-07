@@ -1,3 +1,4 @@
+// One binary links the crate once; register new test modules here.
 mod common;
 
 mod admission;

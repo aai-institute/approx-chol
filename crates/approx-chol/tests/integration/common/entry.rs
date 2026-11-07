@@ -4,7 +4,7 @@ use approx_chol::input::{
 use approx_chol::{factorize_with, ApproxInverse, Config, Real, ScalingPolicy};
 use num_traits::{NumCast, PrimInt};
 
-use crate::common::graph::Graph;
+use super::graph::Graph;
 
 /// The input entry points; each reads one [`Graph`] where it [`states`](Entry::states) it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -275,6 +275,12 @@ impl Reduced {
             labels: self.labels.clone(),
         }
     }
+
+    /// Per irreducible block, whether it solves as singular.
+    pub fn floats(&self) -> Vec<bool> {
+        let factored = self.factorize(&Config::default());
+        by_type!(&factored.factor, factor => factor.blocks().iter().map(|block| block.floats()).collect())
+    }
 }
 
 /// A factor that solves in the caller's numbering and in `f64`.
@@ -286,8 +292,12 @@ pub struct Factored {
 impl Factored {
     pub fn solve(&self, b: &[f64]) -> Vec<f64> {
         let local = self.labels.to_local(b);
-        let x = crate::common::entry::by_type!(&self.factor, factor => solve(factor, &local));
+        let x = by_type!(&self.factor, factor => solve(factor, &local));
         self.labels.to_caller(&x)
+    }
+
+    pub fn n(&self) -> usize {
+        by_type!(&self.factor, factor => factor.n())
     }
 }
 

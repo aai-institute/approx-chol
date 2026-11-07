@@ -1,8 +1,11 @@
-use super::bipartite::Bipartite;
-use super::lcg::Lcg;
-use super::{dense, dense_residual, gram};
 use approx_chol::{factorize_complement, factorize_with, Config, ScalingPolicy, Side};
 use rstest::rstest;
+
+use crate::common::bipartite::Bipartite;
+use crate::common::dense;
+use crate::common::dense_residual;
+use crate::common::gram;
+use crate::common::lcg::Lcg;
 
 impl Bipartite {
     /// `columns` columns over sides of `n_left` and `n_right`, left vertex `n_left − 1` in none, so it is dead.

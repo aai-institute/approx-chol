@@ -1,16 +1,17 @@
-use crate::common::{bits, cases, entry, graph, grid, modes, scratch, sparse, threads};
-
 use approx_chol::{
     ApplyError, ApproxInverse, BlockFactor, Config, MemBuffer, MemStack, Real, SchurMode, StackReq,
     Threads,
 };
-use bits::bits;
-use cases::cases;
-use entry::{by_type, cast, cast_all, Entry, Factored, Types};
-use graph::{Edge, Graph};
-use modes::Mode;
-use scratch::nan_cells;
-use sparse::Sparse;
+
+use crate::common::bits::bits;
+use crate::common::cases::cases;
+use crate::common::entry::{by_type, cast, cast_all, Entry, Factored, Types};
+use crate::common::graph::{Edge, Graph};
+use crate::common::grid;
+use crate::common::modes::Mode;
+use crate::common::scratch::nan_cells;
+use crate::common::sparse::Sparse;
+use crate::common::threads;
 
 fn assert_close(label: &str, x: &[f64], want: &[f64], tolerance: f64) {
     assert_eq!(x.len(), want.len(), "{label}");

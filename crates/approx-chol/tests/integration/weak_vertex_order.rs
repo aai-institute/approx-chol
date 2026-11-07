@@ -1,9 +1,8 @@
-use crate::common::{dense, graph};
-
 use approx_chol::input::Laplacian;
 use approx_chol::{factorize_with, ApproxInverse, Config, OwnedCsr, ScalingPolicy};
-use dense::dense;
-use graph::{Edge, Graph};
+
+use crate::common::dense::dense;
+use crate::common::graph::{Edge, Graph};
 
 /// `max_i |Ax − b|_i / (|A||x| + |b|)_i`; NaN when any term is.
 fn omega(graph: &Graph, x: &[f64], b: &[f64]) -> f64 {

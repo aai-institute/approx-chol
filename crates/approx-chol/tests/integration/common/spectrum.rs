@@ -1,7 +1,7 @@
 use faer::{Mat, Side};
 
-use crate::common::entry::Factored;
-use crate::common::graph::Graph;
+use super::entry::Factored;
+use super::graph::Graph;
 
 impl Factored {
     /// Eigenvalues of `M⁺A` on `range(A)`, ascending, as those of `W M⁺ Wᵀ` for `A = Wᵀ W`.

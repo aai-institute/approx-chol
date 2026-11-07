@@ -1,8 +1,3 @@
-use super::cycle::Cycle;
-use super::dense::dense;
-use super::dense_residual::apply;
-use super::gram::{dense_csr, matrix};
-use super::lcg::Lcg;
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm,
 };
@@ -10,6 +5,12 @@ use approx_chol::{
     factorize, factorize_with, ApproxInverse, Config, Error, Real, ReduceError, ScalingPolicy,
 };
 use rstest::rstest;
+
+use crate::common::cycle::Cycle;
+use crate::common::dense::dense;
+use crate::common::dense_residual::apply;
+use crate::common::gram::{dense_csr, matrix};
+use crate::common::lcg::Lcg;
 
 fn grounded<T: Real>(factor: &ApproxInverse<T>) -> bool {
     factor.blocks().iter().all(|block| !block.floats())

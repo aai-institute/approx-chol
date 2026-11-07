@@ -5,8 +5,9 @@ use approx_chol::{factorize, ApproxInverse, Error, ReduceError};
 use num_traits::PrimInt;
 use rstest::rstest;
 
-use super::{assert_names_a_defect, reduce, reduce_upper};
 use crate::common::grid::grid;
+
+use super::{assert_names_a_defect, reduce, reduce_upper};
 
 const F32_FLOOR: f32 = f32::MIN_POSITIVE / f32::EPSILON;
 

@@ -1,18 +1,18 @@
-use crate::common::{bits, cases, entry, graph, modes, scratch, sparse, threads};
-
 use std::array;
 
 use approx_chol::input::Laplacian;
 use approx_chol::{
     factorize, ApplyError, ApproxInverse, MatrixMut, MemStack, Real, StackReq, Threads,
 };
-use bits::bits;
-use cases::cases;
-use entry::{by_type, cast, cast_all, Entry, Factored, Labels, Types};
-use graph::{Edge, Graph};
-use modes::Mode;
-use scratch::nan_cells;
-use sparse::Sparse;
+
+use crate::common::bits::bits;
+use crate::common::cases::cases;
+use crate::common::entry::{by_type, cast, cast_all, Entry, Factored, Labels, Types};
+use crate::common::graph::{Edge, Graph};
+use crate::common::modes::Mode;
+use crate::common::scratch::nan_cells;
+use crate::common::sparse::Sparse;
+use crate::common::threads;
 
 /// How the odd vertices `1, 3, 5` join.
 #[derive(Clone, Copy)]

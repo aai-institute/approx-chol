@@ -1,8 +1,9 @@
-use super::gram::{dense_csr, matrix};
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
 };
 use approx_chol::{factorize, ApproxInverse};
+
+use crate::common::gram::{dense_csr, matrix};
 
 /// `ε^{1/2}`: a column `q e_a` adds exactly `ε` to `a`'s diagonal.
 const Q: f64 = 1.0 / (1u64 << 26) as f64;

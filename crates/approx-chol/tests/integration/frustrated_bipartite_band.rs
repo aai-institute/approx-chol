@@ -1,8 +1,7 @@
-use crate::common::gram;
-
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
 use approx_chol::{factorize_with, Config, ScalingPolicy, SchurMode};
-use gram::{dense_csr, matrix};
+
+use crate::common::gram::{dense_csr, matrix};
 
 /// A frustrated unit cycle `L0 R0 L1 R1 …`, `cycle` vertices a side, and `pendants` left vertices each joined by `1e-95` to `wide` cycle vertices and left a `1e-200` surplus: within the band.
 struct Cycle {

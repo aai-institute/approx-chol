@@ -1,8 +1,8 @@
 use proptest::strategy::Strategy;
 use proptest::test_runner::{Config, TestCaseResult, TestRunner};
 
-use crate::common::entry::Entry;
-use crate::common::graph::Graph;
+use super::entry::Entry;
+use super::graph::Graph;
 
 /// `proptest!` for a body inside an `rstest` case, so each entry point is its own test.
 pub fn check<S: Strategy>(strategy: S, test: impl Fn(S::Value) -> TestCaseResult) {

@@ -1,17 +1,16 @@
-use crate::common::{cases, dense, entry, graph, interleaved, modes, runner, sparse};
-
 use std::ops::RangeInclusive;
 
 use approx_chol::Config;
-use cases::cases;
-use dense::dense;
-use entry::{Entry, Types};
-use graph::{Edge, Graph};
-use interleaved::interleaved_components;
-use modes::Mode;
 use proptest::prelude::*;
-use runner::{check, stated_by};
-use sparse::Sparse;
+
+use crate::common::cases::cases;
+use crate::common::dense::dense;
+use crate::common::entry::{Entry, Types};
+use crate::common::graph::{Edge, Graph};
+use crate::common::interleaved::interleaved_components;
+use crate::common::modes::Mode;
+use crate::common::runner::{check, stated_by};
+use crate::common::sparse::Sparse;
 
 /// Rounding alone: what an exact factor leaves of `λ = 1`.
 fn exact(types: Types) -> RangeInclusive<f64> {
