@@ -1,7 +1,6 @@
 pub mod bipartite;
 pub mod bits;
 pub mod cases;
-pub mod cycle;
 pub mod dense;
 pub mod dense_residual;
 pub mod entry;
@@ -11,6 +10,7 @@ pub mod grid;
 pub mod interleaved;
 pub mod lcg;
 pub mod modes;
+pub mod out_of_range;
 pub mod range;
 pub mod runner;
 pub mod scratch;

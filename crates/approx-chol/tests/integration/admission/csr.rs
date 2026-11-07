@@ -7,22 +7,12 @@ use rstest::rstest;
 use crate::common::bits::bits;
 use crate::common::entry::cast_all;
 use crate::common::grid::grid;
+use crate::common::out_of_range::{out_of_range, F32_FLOOR, FLOOR};
 
 use super::{assert_names_a_defect, reduce, reduce_upper};
 
-const F32_FLOOR: f32 = f32::MIN_POSITIVE / f32::EPSILON;
-
 fn csr(error: CsrError) -> Error {
     Error::InvalidCsr(error)
-}
-
-fn out_of_range(vertex: usize) -> Error {
-    Error::Reduce(ReduceError::OutOfRange { vertex })
-}
-
-/// The smallest nonzero magnitude admitted (#163).
-fn floor() -> f64 {
-    f64::MIN_POSITIVE / f64::EPSILON
 }
 
 /// The same matrix with every row's entries reversed, which forces the canonicalizing copy.
@@ -115,7 +105,7 @@ fn reversed_rows<T: Copy>(row_ptrs: &[u32], columns: &[u32], values: &[T]) -> (V
 #[case::normal_edge_below_min_positive_over_epsilon(
     &[0, 2, 4],
     &[0, 1, 0, 1],
-    &[1.0, -floor() / 2.0, -floor() / 2.0, 1.0],
+    &[1.0, -FLOOR / 2.0, -FLOOR / 2.0, 1.0],
     &[csr(CsrError::OutOfRange { row: 0 }), csr(CsrError::OutOfRange { row: 1 })],
 )]
 #[case::subnormal_edge_in_a_later_row(
@@ -253,7 +243,7 @@ fn upper_csr_accepts_a_stored_zero_below_the_diagonal() {
 #[case::edge_at_min_positive_over_epsilon(
     &[0, 2, 4],
     &[0, 1, 0, 1],
-    &[1.0, -floor(), -floor(), 1.0],
+    &[1.0, -FLOOR, -FLOOR, 1.0],
 )]
 fn in_class_input_is_admitted_on_both_paths(
     #[case] row_ptrs: &[u32],

@@ -1,7 +1,7 @@
 use approx_chol::input::FactorWidth2;
 use approx_chol::Real;
 
-use super::lcg::Lcg;
+use crate::common::lcg::Lcg;
 
 /// A Gram cycle `x_i = u_{i+1} r_i`, `y_i = −u_i r_i` on `n` vertices, each value rounded to `T`.
 pub struct Cycle<T> {

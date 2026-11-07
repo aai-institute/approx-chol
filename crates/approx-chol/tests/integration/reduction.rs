@@ -1,5 +1,6 @@
 mod band_agreement;
 mod complement;
+mod cycle;
 mod surplus_grounds;
 
 use approx_chol::input::{
