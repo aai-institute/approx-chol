@@ -2,7 +2,7 @@ use std::cell::LazyCell;
 
 use num_traits::PrimInt;
 
-use super::{Folded, Signed, Surplus};
+use super::{Folded, Settling, Surplus};
 use crate::input::{Column, FactorWidth2};
 use crate::sgdd::block::{Grounding, IrreducibleBlock, ReduceError};
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, SymmetricBlock};
@@ -92,15 +92,15 @@ impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_,
 /// Each block in turn, a folded one settled by [`Folded::settle`] on one pass over `V`'s columns, which none takes when none is folded.
 fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
-    blocks: Vec<Signed<'_, T, I>>,
+    blocks: Vec<Settling<'_, T, I>>,
     certified: &LazyCell<Vec<I>, impl FnOnce() -> Vec<I>>,
 ) -> Result<Vec<IrreducibleBlock<T, I>>, ReduceError> {
     // By vertex, sized only when a block is folded: blocks are disjoint, so one slot per vertex holds its block, `f_i` and surplus.
-    let folds = blocks.iter().any(|b| matches!(b, Signed::Folded(_)));
+    let folds = blocks.iter().any(|b| matches!(b, Settling::Pending(_)));
     let n = if folds { v.n() } else { 0 };
     let (mut block_of, mut factor) = (vec![I::max_value(); n], vec![0.0; n]);
     for (c, block) in blocks.iter().enumerate() {
-        let Signed::Folded(Folded { m: block, .. }) = block else {
+        let Settling::Pending(Folded { m: block, .. }) = block else {
             continue;
         };
         for (slot, vertex) in block.vertices().iter().enumerate() {
@@ -160,8 +160,8 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     };
     (blocks.into_iter().zip(ones.into_iter().zip(trace)))
         .map(|(block, band)| match block {
-            Signed::Folded(folded) => folded.settle(band, &gram),
-            Signed::Frustrated(block) => Ok(block),
+            Settling::Pending(folded) => folded.settle(band, &gram),
+            Settling::Settled(block) => Ok(block),
         })
         .collect()
 }
