@@ -428,6 +428,16 @@ fn a_vertex_at_u64_max_is_corrupt(
     serde_json::from_value::<ApproxInverse>(v).expect_err("no factor covers u64::MAX");
 }
 
+/// A block listing one vertex twice is a decode error, though every vertex is below `n` (#348).
+#[test]
+fn a_vertex_twice_in_one_block_is_corrupt() {
+    let v = with_order(
+        serde_json::json!([{"Listed": {"len": 2}}]),
+        serde_json::json!([1, 1, 2]),
+    );
+    serde_json::from_value::<ApproxInverse>(v).expect_err("vertex 1 in two places, 0 in none");
+}
+
 /// A forged empty `F` is a decode error, never a panic while its peak is read.
 #[test]
 fn empty_scales_are_corrupt() {
