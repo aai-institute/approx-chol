@@ -79,7 +79,7 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
             true => Some(slots),
             // Floating, ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
             false => {
-                (tail.filter(|f| f.spans_wide())).map(|f| first_copy(sddm.sheets(), f.largest()))
+                (tail.filter(|f| f.spans_wide())).map(|f| first_copy(sddm.balance(), f.largest()))
             }
         };
         self.graph.load(&sddm, self.split);

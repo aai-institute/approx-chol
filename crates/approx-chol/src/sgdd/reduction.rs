@@ -161,7 +161,8 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
                 let grounding = surplus(&rows).flushed(&rows.diagonal);
                 let grounding = grounding.map_err(|i| out_of_range(&m, i))?;
                 Ok(Signed::Frustrated(m.block(
-                    Balance::Frustrated(grounding),
+                    Balance::Frustrated,
+                    grounding,
                     vector,
                     clamped,
                 )?))
@@ -253,7 +254,7 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
                 || surplus.certifies(self.m.vertices()));
         let (vector, clamped) = (self.vector, self.clamped);
         if floats {
-            return (self.m).block(Balance::Balanced(Grounding::ungrounded()), vector, clamped);
+            return (self.m).block(Balance::Balanced, Grounding::ungrounded(), vector, clamped);
         }
         let grounding = surplus.grounds(&self);
         // The first ground, which flushing all of them would lose from a definite `M`.
@@ -265,7 +266,7 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         let Self { m, rows, .. } = self;
         match grounding.flushed(&rows.diagonal) {
             Ok(grounding) if grounding.is_grounded() => {
-                m.block(Balance::Balanced(grounding), vector, clamped)
+                m.block(Balance::Balanced, grounding, vector, clamped)
             }
             Ok(_) => Err(out_of_range(&m, first)),
             Err(i) => Err(out_of_range(&m, i)),

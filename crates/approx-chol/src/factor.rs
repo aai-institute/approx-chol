@@ -251,7 +251,7 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
         config: &Config,
         reused: &mut Workspace<T, I>,
     ) -> Block<T, I> {
-        let (congruence, off_diagonal, sheets, grounding, grounding_unproven, clamp) =
+        let (congruence, off_diagonal, balance, grounding, grounding_unproven, clamp) =
             self.into_parts();
         let streams = Streams::of(order.slots(segment).vertex(0), config);
         let tail = |from: usize| congruence.factor_tail(from);
@@ -259,15 +259,15 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
         let (elimination, cholesky) = match off_diagonal {
             OffDiagonal::General(adjacency) => {
                 let arm = match config.dense(adjacency.n()) {
-                    true => Arm::Exact(Signed::new(adjacency, sheets, grounding)),
-                    false => Arm::Approximate(Sddm::of_block(adjacency, sheets, grounding)),
+                    true => Arm::Exact(Signed::new(adjacency, balance, grounding)),
+                    false => Arm::Approximate(Sddm::of_block(adjacency, balance, grounding)),
                 };
                 (None, Cholesky::factor(arm, draws, tail(0), reused))
             }
             OffDiagonal::Bipartite(cross) => {
                 let kept = tail(cross.n_rows());
                 let factor = |s| Cholesky::factor(s, draws, kept, reused);
-                let block = BipartiteBlock::of(cross, sheets, grounding);
+                let block = BipartiteBlock::of(cross, balance, grounding);
                 let (elimination, factored) = block.eliminate(config, streams, factor);
                 (Some(Box::new(elimination)), factored)
             }
@@ -292,10 +292,10 @@ impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
         config: &Config,
         reused: &mut Workspace<T, I>,
     ) -> Block<T, I> {
-        let (first, congruence, cross, sheets, grounding, grounding_unproven, clamp) =
+        let (first, congruence, cross, balance, grounding, grounding_unproven, clamp) =
             self.into_parts();
         let streams = Streams::of(first, config);
-        let s = BipartiteBlock::of(cross, sheets, grounding).complement(config, streams);
+        let s = BipartiteBlock::of(cross, balance, grounding).complement(config, streams);
         let tail = congruence.factor_tail(0);
         let cholesky = Cholesky::factor(s, streams.cholesky(), tail, reused);
         Block {

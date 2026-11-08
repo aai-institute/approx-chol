@@ -7,8 +7,8 @@ mod reduction;
 mod scaling;
 
 pub use block::ReduceError;
+pub(crate) use block::{Balance, Grounding};
 pub(crate) use block::{BlockComplement, IrreducibleBlock};
-pub(crate) use block::{Grounding, Sheets};
 pub(crate) use congruence::{Congruence, FactorTail};
 pub(crate) use decomposition::{Components, Summands};
 pub(crate) use reduction::within_band;

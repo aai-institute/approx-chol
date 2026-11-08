@@ -5,7 +5,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 
 use super::clique_tree::Multi;
 use super::sddm::{descend, lifted, Sddm};
-use crate::sgdd::{FactorTail, Sheets};
+use crate::sgdd::{Balance, FactorTail};
 use crate::{Batch, Index, MemStack, Real};
 use approximate::{ApproximateCholesky, CliqueTreeElimination};
 pub(super) use dense::Signed;
@@ -67,7 +67,11 @@ impl<T: Real, I: Index> Cholesky<T, I> {
                 }
             }
             Arm::Approximate(sddm) => {
-                let (sheets, n) = (sddm.sheets(), sddm.n());
+                let sheets = match sddm.balance() {
+                    Balance::Balanced => Sheets::One,
+                    Balance::Frustrated => Sheets::Two,
+                };
+                let n = sddm.n();
                 let (steps, pinned) = reused.elimination.eliminate(sddm, draws, tail);
                 Self {
                     sheets,
@@ -107,6 +111,23 @@ impl<T: Real, I: Index> Cholesky<T, I> {
                 triangular.substitute(&mut rows, self.pinned);
                 descend(&rows, x);
             }
+        }
+    }
+}
+
+/// How many copies of each vertex a matrix holds: two for a Gremban cover, interleaved by vertex.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sheets {
+    One,
+    Two,
+}
+
+impl Sheets {
+    fn count(self) -> usize {
+        match self {
+            Self::One => 1,
+            Self::Two => 2,
         }
     }
 }
