@@ -2,8 +2,8 @@ use std::array;
 
 use approx_chol::input::Laplacian;
 use approx_chol::{
-    factorize, factorize_with, ApplyError, ApproxInverse, Config, CsrRef, MatrixMut, MemStack,
-    Real, ScalingPolicy, StackReq, Threads,
+    factorize, factorize_with, ApplyError, ApproxInverse, ColumnMajor, Columns, Config, CsrRef,
+    LayoutError, MatrixMut, MemStack, Real, ScalingPolicy, StackReq, Threads,
 };
 
 use crate::common::bits::bits;
@@ -91,23 +91,39 @@ fn applied<T: Real, const K: usize>(
     factor: &ApproxInverse<T>,
     labels: &Labels,
     threads: Threads,
-) -> [(&'static str, Vec<Vec<f64>>); 2] {
+) -> [(&'static str, Vec<Vec<f64>>); 4] {
     let n = factor.n();
     let columns: [Vec<T>; K] = array::from_fn(|j| cast_all(&labels.to_local(&rhs(n, j))));
     let mut rows: Vec<[T; K]> = (0..n).map(|i| array::from_fn(|j| columns[j][i])).collect();
     let mut apart = Apart(columns.to_vec());
-    for block in [&mut rows as &mut dyn MatrixMut<T>, &mut apart] {
-        let mut cells = nan_cells::<T>(factor.scratch(K, threads));
-        let stack = MemStack::new_any(&mut cells);
-        factor
-            .apply_with(block, threads, stack)
-            .expect("its own scratch");
+    let mut major = columns.concat();
+    let mut slices = columns.to_vec();
+    {
+        let mut major = ColumnMajor::new(&mut major, n).expect("n rows to a column");
+        let mut slices = Columns::new(&mut slices).expect("n rows each");
+        for block in [
+            &mut rows as &mut dyn MatrixMut<T>,
+            &mut apart,
+            &mut major,
+            &mut slices,
+        ] {
+            let mut cells = nan_cells::<T>(factor.scratch(K, threads));
+            let stack = MemStack::new_any(&mut cells);
+            factor
+                .apply_with(block, threads, stack)
+                .expect("its own scratch");
+        }
     }
-    let caller = |column: Vec<T>| labels.to_caller(&cast_all(&column));
-    let interleaved = (0..K).map(|j| caller(rows.iter().map(|row| row[j]).collect()));
+    let caller = |column: &[T]| labels.to_caller(&cast_all(column));
+    let interleaved = (0..K).map(|j| caller(&rows.iter().map(|row| row[j]).collect::<Vec<_>>()));
     [
         ("interleaved", interleaved.collect()),
-        ("apart", apart.0.into_iter().map(caller).collect()),
+        ("apart", apart.0.iter().map(|c| caller(c)).collect()),
+        (
+            "column-major",
+            (0..K).map(|j| caller(&major[j * n..][..n])).collect(),
+        ),
+        ("columns", slices.iter().map(|c| caller(c)).collect()),
     ]
 }
 
@@ -157,25 +173,64 @@ fn assert_blocks<T: Real>(
     );
 }
 
-/// A block of the wrong row count, or a stack short of one thread's scratch, errs and leaves the block as it was.
+/// A block of the wrong row count, or a stack short of one thread's scratch, errs and leaves the block as it was, in every layout.
 fn assert_errors_leave_the_block<T: Real>(factor: &ApproxInverse<T>) {
     let n = factor.n();
-    let row = |i: usize| [cast(i as f64), cast(-(i as f64))];
-    for found in [n - 1, n + 1] {
-        let mut rows: Vec<[T; 2]> = (0..found).map(row).collect();
-        let before = rows.clone();
-        let error = factor.apply(&mut rows, Threads::All);
-        assert_eq!(error, Err(ApplyError::Rows { expected: n, found }));
-        assert!(rows == before, "a block of {found} rows is left as it was");
-    }
     let needed = factor.scratch(2, threads::ONE);
     let mut cells = nan_cells::<T>(needed);
-    let short = &mut cells[..needed.size_bytes() / size_of::<T>() - 1];
-    let mut rows: Vec<[T; 2]> = (0..n).map(row).collect();
-    let before = rows.clone();
-    let error = factor.apply_with(&mut rows, Threads::All, MemStack::new_any(short));
-    assert_eq!(error, Err(ApplyError::Scratch));
-    assert!(rows == before, "a block on a short stack is left as it was");
+    let short = needed.size_bytes() / size_of::<T>() - 1;
+    for found in [n - 1, n + 1, n] {
+        let column = |sign: f64| {
+            (0..found)
+                .map(|i| cast(sign * i as f64))
+                .collect::<Vec<T>>()
+        };
+        let columns = [column(1.0), column(-1.0)];
+        let mut rows: Vec<[T; 2]> = (0..found).map(|i| [columns[0][i], columns[1][i]]).collect();
+        let mut apart = Apart(columns.to_vec());
+        let mut data = columns.concat();
+        let mut slices = columns.to_vec();
+        {
+            let mut major = ColumnMajor::new(&mut data, found).expect("found rows to a column");
+            let mut slices = Columns::new(&mut slices).expect("found rows each");
+            for block in [
+                &mut rows as &mut dyn MatrixMut<T>,
+                &mut apart,
+                &mut major,
+                &mut slices,
+            ] {
+                match found == n {
+                    true => {
+                        let stack = MemStack::new_any(&mut cells[..short]);
+                        let error = factor.apply_with(block, Threads::All, stack);
+                        assert_eq!(error, Err(ApplyError::Scratch));
+                    }
+                    false => {
+                        let rows = Err(ApplyError::Rows { expected: n, found });
+                        assert_eq!(factor.apply(block, Threads::All), rows);
+                        let stack = MemStack::new_any(&mut cells);
+                        assert_eq!(factor.apply_with(block, Threads::All, stack), rows);
+                    }
+                }
+            }
+        }
+        let before = columns.concat();
+        let interleaved = (0..found).map(|i| [before[i], before[found + i]]);
+        assert!(
+            rows == interleaved.collect::<Vec<_>>(),
+            "interleaved of {found} rows"
+        );
+        for (layout, after) in [
+            ("apart", apart.0.concat()),
+            ("column-major", data),
+            ("columns", slices.concat()),
+        ] {
+            assert!(
+                after == before,
+                "{layout} of {found} rows is left as it was"
+            );
+        }
+    }
 }
 
 cases! {
@@ -284,6 +339,18 @@ fn an_apply_with_nothing_to_solve_accepts_an_empty_stack() {
     factor
         .apply_with(&mut rows, Threads::All, MemStack::new(&mut []))
         .unwrap();
+    let mut empty = vec![Vec::<f64>::new(); 3];
+    let mut slices = Columns::new(&mut empty).unwrap();
+    factor
+        .apply_with(&mut slices, Threads::All, MemStack::new(&mut []))
+        .unwrap();
+    for factor in [&factor, &path] {
+        let mut major = ColumnMajor::new(&mut [] as &mut [f64], 0).unwrap();
+        assert_eq!(major.columns(), 0);
+        factor
+            .apply_with(&mut major, Threads::All, MemStack::new(&mut []))
+            .unwrap();
+    }
 }
 
 /// Past the spread's threshold in small blocks: 300 paths of 3 to 32 vertices interleaved in the numbering, listed, the short ones dense; 200 contiguous paths of 25, runs; 50 contiguous 12-cycles with one positive edge, covers; then a 120×120 grid, which takes the whole budget alone.
@@ -356,8 +423,8 @@ fn a_decoded_factor_spreads_to_the_same_bits() {
     assert_spread_changes_no_bit(&decoded);
 }
 
-/// Two columns in place and apart, the latter one column at a time through the scratch.
-fn spread_bits(factor: &ApproxInverse, threads: Threads, regions: Threads) -> [Vec<u64>; 2] {
+/// Two columns interleaved, apart through the scratch, and column-major and one slice each where they are.
+fn spread_bits(factor: &ApproxInverse, threads: Threads, regions: Threads) -> [Vec<u64>; 4] {
     let n = factor.n();
     let column = |j: usize| -> Vec<f64> {
         (0..n)
@@ -366,19 +433,38 @@ fn spread_bits(factor: &ApproxInverse, threads: Threads, regions: Threads) -> [V
     };
     let (zero, one) = (column(0), column(1));
     let mut rows: Vec<[f64; 2]> = (zero.iter().zip(&one)).map(|(&a, &b)| [a, b]).collect();
+    let mut data = [zero.as_slice(), &one].concat();
+    let mut slices = vec![zero.clone(), one.clone()];
     let mut apart = Apart(vec![zero, one]);
-    for block in [&mut rows as &mut dyn MatrixMut<f64>, &mut apart] {
-        let mut cells = nan_cells::<f64>(factor.scratch(2, regions));
-        factor
-            .apply_with(block, threads, MemStack::new_any(&mut cells))
-            .expect("one region at least");
+    {
+        let mut major = ColumnMajor::new(&mut data, n).expect("n rows to a column");
+        let mut slices = Columns::new(&mut slices).expect("n rows each");
+        for block in [
+            &mut rows as &mut dyn MatrixMut<f64>,
+            &mut apart,
+            &mut major,
+            &mut slices,
+        ] {
+            let mut cells = nan_cells::<f64>(factor.scratch(2, regions));
+            factor
+                .apply_with(block, threads, MemStack::new_any(&mut cells))
+                .expect("one region at least");
+        }
     }
-    [bits(&rows.concat()), bits(&apart.0.concat())]
+    [
+        bits(&rows.concat()),
+        bits(&apart.0.concat()),
+        bits(&data),
+        bits(&slices.concat()),
+    ]
 }
 
 fn assert_spread_changes_no_bit(factor: &ApproxInverse) {
     let alone = spread_bits(factor, threads::ONE, threads::ONE);
     assert_eq!(alone[0].len(), alone[1].len());
+    for layout in &alone[2..] {
+        assert_eq!(layout, &alone[1], "in place as apart through the scratch");
+    }
     let eight = Threads::Count(std::num::NonZeroUsize::new(8).unwrap());
     for threads in threads::BUDGETS.into_iter().chain([eight]) {
         for regions in [threads::ONE, threads::BUDGETS[2], threads] {
@@ -403,4 +489,86 @@ fn scratch_grows_with_the_budget() {
         );
         assert!(more.size_bytes() > one.size_bytes(), "{columns} columns");
     }
+}
+
+/// Each malformed layout is refused where it is formed, naming what is wrong.
+#[test]
+fn a_malformed_layout_errs_where_it_is_formed() {
+    let mut data = [0.0f64; 6];
+    for rows in [4, 0] {
+        assert_eq!(
+            ColumnMajor::new(&mut data, rows).err(),
+            Some(LayoutError::Length { rows, found: 6 })
+        );
+    }
+    let mut columns = [vec![0.0f64; 3], vec![0.0; 2], vec![0.0; 3]];
+    assert_eq!(
+        Columns::new(&mut columns).err(),
+        Some(LayoutError::Column {
+            column: 1,
+            expected: 3,
+            found: 2
+        })
+    );
+}
+
+/// A block without columns is left as it is, whatever its rows; with one, its rows are the operator's.
+#[test]
+fn only_a_block_with_columns_is_held_to_the_rows() {
+    let path: ApproxInverse = factorize(Laplacian::new(3, &[0u32, 1], &[1, 2]).unwrap()).unwrap();
+    let mut no_columns: Vec<Vec<f64>> = Vec::new();
+    let mut empty: [f64; 0] = [];
+    let mut slices = Columns::new(&mut no_columns).unwrap();
+    let mut major = ColumnMajor::new(&mut empty, 2).unwrap();
+    let mut rows: Vec<[f64; 0]> = vec![[]; 2];
+    for block in [
+        &mut slices as &mut dyn MatrixMut<f64>,
+        &mut major,
+        &mut rows,
+    ] {
+        assert_eq!(block.columns(), 0);
+        path.apply_with(block, Threads::All, MemStack::new(&mut []))
+            .expect("nothing to solve");
+        path.apply(block, Threads::All).expect("nothing to solve");
+    }
+    let mut data = [1.0, -1.0, 2.0, -2.0];
+    let mut major = ColumnMajor::new(&mut data, 2).unwrap();
+    assert_eq!(
+        path.apply(&mut major, Threads::All),
+        Err(ApplyError::Rows {
+            expected: 3,
+            found: 2
+        })
+    );
+    assert_eq!(data, [1.0, -1.0, 2.0, -2.0], "left as it was");
+}
+
+/// Through the trait, each layout copies one column in and out and touches no other.
+#[test]
+fn a_layout_reads_and_writes_one_column() {
+    let mut data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let mut major = ColumnMajor::new(&mut data, 3).unwrap();
+    assert_eq!((major.rows(), major.columns()), (3, 2));
+    let mut column = [0.0; 3];
+    major.read_column(1, &mut column);
+    assert_eq!(column, [4.0, 5.0, 6.0]);
+    major.write_column(0, &[7.0, 8.0, 9.0]);
+    assert_eq!(data, [7.0, 8.0, 9.0, 4.0, 5.0, 6.0]);
+    let mut columns = [[1.0, 2.0], [3.0, 4.0]];
+    let mut slices = Columns::new(&mut columns).unwrap();
+    assert_eq!((slices.rows(), slices.columns()), (2, 2));
+    let mut column = [0.0; 2];
+    slices.read_column(1, &mut column);
+    assert_eq!(column, [3.0, 4.0]);
+    slices.write_column(0, &[5.0, 6.0]);
+    assert_eq!(columns, [[5.0, 6.0], [3.0, 4.0]]);
+}
+
+/// A column past the block panics.
+#[test]
+#[should_panic(expected = "column 2 of 2")]
+fn a_column_major_column_past_the_block_panics() {
+    let mut data = [0.0f64; 4];
+    let major = ColumnMajor::new(&mut data, 2).unwrap();
+    major.read_column(2, &mut [0.0; 2]);
 }

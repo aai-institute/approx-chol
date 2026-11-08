@@ -14,7 +14,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 use rand::SeedableRng;
 use rayon::prelude::*;
 
-pub use apply::{ApplyError, MatrixMut};
+pub use apply::{ApplyError, ColumnMajor, Columns, LayoutError, MatrixMut};
 pub use config::{Config, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
@@ -190,15 +190,13 @@ impl<T: Real> ApproxInverse<T> {
         block: &mut M,
         threads: Threads,
     ) -> Result<(), ApplyError> {
-        let fits = block.rows() == self.n();
-        let scratch = fits.then(|| MemBuffer::try_new(self.scratch(block.columns(), threads)));
-        let Some(Ok(mut scratch)) = scratch else {
+        let Ok(mut scratch) = MemBuffer::try_new(self.scratch(block.columns(), threads)) else {
             return Err(buffer_error(block.rows(), self.n()));
         };
         self.apply_with(block, threads, MemStack::new(&mut scratch))
     }
 
-    /// As [`apply`](Self::apply), allocating nothing: `block` holds the right-hand sides on entry and `A⁺b` on floating blocks on return, `0` at vertices in no block; `stack` holds [`scratch`](Self::scratch) for its columns at one thread at least, and solves as many blocks at once as it holds regions, up to `threads`. Either error leaves `block` as it was, and a block without columns is left as it is.
+    /// As [`apply`](Self::apply), allocating nothing: `block` holds the right-hand sides on entry and `A⁺b` on floating blocks on return, `0` at vertices in no block; `stack` holds [`scratch`](Self::scratch) for its columns at one thread at least, and solves as many blocks at once as it holds regions, up to `threads`. Either error leaves `block` as it was; a block without columns is left as it is, whatever its rows.
     pub fn apply_with<M: MatrixMut<T> + ?Sized>(
         &self,
         block: &mut M,
@@ -206,14 +204,15 @@ impl<T: Real> ApproxInverse<T> {
         stack: &mut MemStack,
     ) -> Result<(), ApplyError> {
         let columns = block.columns();
-        check_buffers(block.rows(), self.n(), stack, self.scratch(columns, ONE))?;
-        if columns > 0 {
-            block.solve_by(Kernel {
-                inverse: self,
-                threads,
-                stack,
-            });
+        if columns == 0 {
+            return Ok(());
         }
+        check_buffers(block.rows(), self.n(), stack, self.scratch(columns, ONE))?;
+        block.solve_by(Kernel {
+            inverse: self,
+            threads,
+            stack,
+        });
         Ok(())
     }
 
