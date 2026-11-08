@@ -8,7 +8,7 @@ use crate::common::threads;
 
 const DEGREE: usize = 48;
 
-/// `(left, right, frustrated)` per block: the first's 3200·48 entries clear the `Cᵀ` gate (2¹⁷) by 17%, as `factor.rs`'s `decoding_rebuilds_the_transpose` checks; each splits its star fold and exact rows, together they split the components.
+/// `(left, right, frustrated)` per block: the first's 3200·48 entries clear the `Cᵀ` gate (2¹⁷) by 17%, so its elimination's solves split; each splits its star fold and exact rows, together they split the components.
 const GROUPS: [(usize, usize, bool); 3] =
     [(3200, 700, false), (420, 1000, true), (420, 1000, false)];
 

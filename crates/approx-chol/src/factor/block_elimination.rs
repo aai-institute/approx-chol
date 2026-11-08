@@ -47,11 +47,6 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         self.inv_pivot.len()
     }
 
-    #[cfg(all(test, feature = "serde"))]
-    pub(super) fn keeps_transpose(&self) -> bool {
-        self.ct.is_some()
-    }
-
     /// `x ← M⁻¹x`, with `reduced` solving `S` in place on the kept half between the two products.
     pub(super) fn solve<V: Batch<T>>(
         &self,

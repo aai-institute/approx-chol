@@ -562,40 +562,6 @@ mod tests {
         factor
     }
 
-    /// `tests/thread_invariance.rs`'s first group keeps `Cᵀ`, so its solves split, and loading rebuilds it.
-    #[test]
-    fn decoding_rebuilds_the_transpose() {
-        let (n_left, n_right, degree) = (3200, 700, 48);
-        let (mut rows, mut cols, mut x, mut y) = (vec![], vec![], vec![], vec![]);
-        for i in 0..n_left {
-            for d in 0..degree {
-                let k = rows.len();
-                rows.push(i as u32);
-                cols.push(((i * 7 + d * 13) % n_right) as u32);
-                x.push(1.0 + (k % 7) as f64 / 8.0);
-                y.push(-(0.5 + (k % 3) as f64 / 4.0));
-            }
-        }
-        let gram = BipartiteFactorWidth2::new(
-            FactorWidth1::new(n_left, &rows, Some(&x)).expect("valid rows"),
-            FactorWidth1::new(n_right, &cols, Some(&y)).expect("valid columns"),
-        )
-        .expect("valid gram");
-        let summands =
-            Reduced::<f64, u32>::reduce(gram.into(), ScalingPolicy::default()).expect("reduces");
-        let factor = ApproxInverse::build(summands, &Config::default());
-        let back: ApproxInverse =
-            postcard::from_bytes(&postcard::to_stdvec(&factor).expect("serialize"))
-                .expect("decodes");
-        let keeps = |factor: &ApproxInverse| {
-            on!(&factor.blocks, blocks => blocks.iter().any(|b| {
-                b.elimination.as_deref().is_some_and(BlockElimination::keeps_transpose)
-            }))
-        };
-        assert!(keeps(&factor), "a block keeps Cᵀ");
-        assert!(keeps(&back), "and loading rebuilds it");
-    }
-
     /// A bipartite block stripped of the elimination its Cholesky follows.
     fn without_elimination() -> ApproxInverse {
         let mut factor = bipartite();

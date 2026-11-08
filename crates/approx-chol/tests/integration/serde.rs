@@ -64,11 +64,15 @@ fn round_trip_solves_bit_identically() {
         .iter()
         .flat_map(ApproxInverse::components)
         .any(|component| component.floats()));
+    // `Cᵀ` is not persisted: only `Debug` shows that a block kept it and that loading rebuilt it.
+    let keeps_transpose = |factor: &ApproxInverse| format!("{factor:?}").contains("ct: Some(");
+    assert!(keeps_transpose(&defaults[0]), "a block keeps Cᵀ");
     for config in configs() {
         for factor in factors(config) {
             let bytes = postcard::to_stdvec(&factor).unwrap();
             let back: ApproxInverse = postcard::from_bytes(&bytes).unwrap();
             assert_eq!(postcard::to_stdvec(&back).unwrap(), bytes);
+            assert_eq!(format!("{back:?}"), format!("{factor:?}"));
             for threads in threads::BUDGETS {
                 assert_eq!(bits_at(&factor, threads), bits_at(&back, threads));
             }
