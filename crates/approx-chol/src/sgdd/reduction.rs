@@ -81,9 +81,7 @@ impl<T: Real, I: Index> Complement<T, I> {
                 complement
             })
             .collect();
-        let on_kept = |v: &I| range.contains(&v.index());
-        components.lone.retain(|(v, _)| on_kept(v));
-        components.dead.retain(on_kept);
+        components.retain_isolated(|v| range.contains(&v.index()));
         components.numbering = range;
         let summands = Summands { components, blocks };
         Ok(Self { summands, clamps })

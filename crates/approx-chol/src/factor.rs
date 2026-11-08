@@ -70,7 +70,7 @@ fn buffer_error(found: usize, n: usize) -> ApplyError {
 pub struct ApproxInverse<T = f64> {
     order: Order,
     blocks: Blocks<T>,
-    /// Each lone vertex's whole factor `1/σ`, in `order`'s lone order.
+    /// Each lone vertex's whole factor `1/σ`, in the order `order` lists them ahead of the dead ones.
     inverse_pivots: Box<[T]>,
     clamps: Box<[Clamp]>,
     scratch_slots: usize,
@@ -124,16 +124,15 @@ impl<T: Real> ApproxInverse<T> {
             summands: Summands { components, blocks },
             clamps,
         } = reduction;
+        let isolated = components.isolated();
         let Components {
             vertices,
             coupled,
-            lone,
-            dead,
+            pivots,
             numbering,
         } = components;
-        let inverse_pivots = lone.iter().map(|&(_, pivot)| T::one() / pivot).collect();
-        let lone = lone.into_iter().map(|(v, _)| v);
-        let order = Order::pack(vertices, &coupled, lone, dead.into_iter(), numbering);
+        let inverse_pivots = pivots.iter().map(|&pivot| T::one() / pivot).collect();
+        let order = Order::pack(vertices, &coupled, isolated, numbering);
         let workspace = || Workspace::new(config.split());
         // Exactly sized: collect's reserve rounds a few blocks up to 4 and into_boxed_slice reallocates.
         let mut factored = Vec::with_capacity(blocks.len());
@@ -183,7 +182,7 @@ impl<T: Real> ApproxInverse<T> {
 
     /// One per irreducible block of `A` the factored matrix meets, coupled blocks by their component's lowest vertex in the input's numbering, then isolated vertices; dead vertices are in none.
     pub fn components(&self) -> impl ExactSizeIterator<Item = Component<'_, T>> {
-        (0..self.order.len()).map(|k| Component { factor: self, k })
+        (0..self.order.coupled() + self.inverse_pivots.len()).map(|k| Component { factor: self, k })
     }
 
     /// What [`apply_with`](Self::apply_with) takes from its stack for a block of `columns` columns: the most any one block of `A` takes, its Cholesky's slots plus a gather unless its vertices are consecutive, per column solved in place, or one column copied through. It grows with `columns` and serves every block of fewer.
@@ -238,10 +237,11 @@ impl<T: Real> ApproxInverse<T> {
         on!(&self.blocks, blocks => for (k, block) in blocks.iter().enumerate() {
             block.solve_global(self.order.block(k), x, threads, stack);
         });
-        for (v, &inverse_pivot) in self.order.lone().vertices().zip(&self.inverse_pivots) {
+        let (lone, dead) = self.order.lone_and_dead(self.inverse_pivots.len());
+        for (v, &inverse_pivot) in lone.vertices().zip(&self.inverse_pivots) {
             x[v] = x[v].mul(inverse_pivot);
         }
-        self.order.dead().vertices().for_each(|v| x[v] = V::zero());
+        dead.vertices().for_each(|v| x[v] = V::zero());
     }
 }
 
@@ -488,8 +488,9 @@ impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ApproxI
                 && (blocks.iter().enumerate()).all(|(k, block)| block.holds(order.block(k).len())))
         };
         let pivots = inverse_pivots.iter().all(|&p| inverse_pivot_in_range(p));
-        match Order::decoded(order, inverse_pivots.len()) {
-            Some(order) if pivots && fits(&order) && order.once() => {
+        let lone = |order: &Order| inverse_pivots.len() <= order.isolated().len();
+        match Order::decoded(order) {
+            Some(order) if pivots && lone(&order) && fits(&order) && order.once() => {
                 Ok(Self::new(order, blocks, inverse_pivots, clamps))
             }
             _ => Err(serde::de::Error::custom("corrupt ApproxInverse")),

@@ -91,12 +91,17 @@ impl<A, I: Index> Partitioned<A, I> {
             let vertex = order[range.start].index();
             return Err(ReduceError::TooLarge { vertex });
         }
-        let (mut coupled, mut lone, mut dead) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut coupled, mut lone, mut dead, mut pivots) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut end = 0;
         for range in ranges {
             if range.len() > 1 {
                 let rotation = a.rotation(&order[range.clone()]);
                 order[range.clone()].rotate_left(rotation);
-                coupled.push(range);
+                let len = range.len();
+                order.copy_within(range, end);
+                coupled.push(end..end + len);
+                end += len;
                 continue;
             }
             let v = order[range.start];
@@ -104,7 +109,8 @@ impl<A, I: Index> Partitioned<A, I> {
             match a.lone(vertex) {
                 pivot if pivot == T::zero() => dead.push(v),
                 pivot if pivot > T::zero() && super::diagonal_in_range(pivot) => {
-                    lone.push((v, pivot))
+                    lone.push(v);
+                    pivots.push(pivot);
                 }
                 pivot if pivot < T::zero() => {
                     return Err(ReduceError::NonpositiveDiagonal { vertex })
@@ -112,12 +118,14 @@ impl<A, I: Index> Partitioned<A, I> {
                 _ => return Err(ReduceError::OutOfRange { vertex }),
             }
         }
+        let numbering = 0..order.len();
+        order.truncate(end);
+        order.extend(lone.into_iter().chain(dead));
         let components = Components {
-            numbering: 0..order.len(),
+            numbering,
             vertices: order,
             coupled,
-            lone,
-            dead,
+            pivots,
         };
         Ok((Cuts { a, position }, components))
     }
@@ -186,24 +194,41 @@ impl<A, I: Index> Cuts<A, I> {
 
 const PARALLEL_BITS: u32 = 12;
 
-/// `A`'s vertices by component in the partition's array, components by lowest vertex: each coupled component in local order, its eliminated side first; the lone and dead ones also listed with their pivots.
+/// `A`'s vertices by component in the partition's array, components by lowest vertex: each coupled component in local order, its eliminated side first, then the lone vertices, then the dead ones.
 #[derive(Clone, Debug)]
 pub(crate) struct Components<I, T> {
     pub(crate) vertices: Vec<I>,
     /// Each coupled component's range of `vertices`, the ranges ascending.
     pub(crate) coupled: Vec<Range<usize>>,
-    /// Vertices no entry couples, each with its surplus `σ`, which is its whole pivot.
-    pub(crate) lone: Vec<(I, T)>,
-    /// One-vertex components whose pivot is zero: an in-place solve zeroes them.
-    pub(crate) dead: Vec<I>,
+    /// Each lone vertex's surplus `σ`, which is its whole pivot; dead vertices, whose pivot is zero, follow the lone ones.
+    pub(crate) pivots: Vec<T>,
     /// The factored matrix's vertices in `A`'s numbering: all of `A`'s, or a complement's kept side.
     pub(crate) numbering: Range<usize>,
 }
 
-impl<I, T> Components<I, T> {
+impl<I: Index, T> Components<I, T> {
     /// Coupled component `k`'s vertices of `A`, in local order.
     pub(crate) fn component(&self, k: usize) -> &[I] {
         &self.vertices[self.coupled[k].clone()]
+    }
+
+    /// Where the lone and dead vertices start in `vertices`.
+    pub(crate) fn isolated(&self) -> usize {
+        self.coupled.last().map_or(0, |range| range.end)
+    }
+
+    /// Drops the lone and dead vertices `keep` rejects, a lone one with its pivot.
+    pub(crate) fn retain_isolated(&mut self, keep: impl Fn(I) -> bool) {
+        let isolated = self.vertices.split_off(self.isolated());
+        let (lone, dead) = isolated.split_at(self.pivots.len());
+        for (&v, pivot) in lone.iter().zip(std::mem::take(&mut self.pivots)) {
+            if keep(v) {
+                self.vertices.push(v);
+                self.pivots.push(pivot);
+            }
+        }
+        self.vertices
+            .extend(dead.iter().copied().filter(|&v| keep(v)));
     }
 }
 
