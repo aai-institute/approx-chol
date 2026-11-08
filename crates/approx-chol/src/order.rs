@@ -29,6 +29,7 @@ pub(crate) enum Segment {
 }
 
 impl Segment {
+    #[cfg(feature = "serde")]
     pub(crate) fn len(self) -> usize {
         match self {
             Segment::Run { len, .. } | Segment::Listed { len, .. } => len,
