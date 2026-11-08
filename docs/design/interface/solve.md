@@ -27,15 +27,15 @@ impl<T: Real> MatrixMut<T> for Vec<T> {}
 impl<T: Real, const K: usize> MatrixMut<T> for [[T; K]] {}
 impl<T: Real, const K: usize> MatrixMut<T> for Vec<[T; K]> {}
 impl<T: Real> MatrixMut<T> for ColumnMajor<'_, T> {}
-impl<T: Real> MatrixMut<T> for Columns<'_, '_, T> {}
+impl<T: Real, C: AsRef<[T]> + AsMut<[T]>> MatrixMut<T> for Columns<'_, C> {}
 
 pub struct ColumnMajor<'a, T> { /* private */ }
 impl<'a, T> ColumnMajor<'a, T> {
-    pub fn new(data: &'a mut [T], rows: usize, columns: usize) -> Result<Self, LayoutError>;
+    pub fn new(data: &'a mut [T], rows: usize) -> Result<Self, LayoutError>;
 }
-pub struct Columns<'s, 'a, T> { /* private */ }
-impl<'s, 'a, T> Columns<'s, 'a, T> {
-    pub fn new(rows: usize, columns: &'s mut [&'a mut [T]]) -> Result<Self, LayoutError>;
+pub struct Columns<'s, C> { /* private */ }
+impl<'s, C> Columns<'s, C> {
+    pub fn new<T>(columns: &'s mut [C]) -> Result<Self, LayoutError> where C: AsRef<[T]>;
 }
 
 #[cfg(feature = "faer")]
@@ -52,8 +52,7 @@ impl<T: Real + faer::traits::ComplexField> faer::matrix_free::Precond<T> for App
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutError {
-    Length { expected: usize, found: usize },
-    Overflow,
+    Length { rows: usize, found: usize },
     Column { column: usize, expected: usize, found: usize },
 }
 
@@ -71,20 +70,20 @@ pub enum ApplyError {
   `columns`; one thread's serves every budget, and a stack of fewer regions solves fewer
   components at once, to the same bits. `apply` allocates its scratch per call; `apply_with`
   allocates nothing.
-- `block` holds the right-hand sides on entry and the solutions on return; it has $n$ rows, else
-  `Rows`, also without columns. `Scratch` is returned when `stack` cannot hold one thread's
+- `block` holds the right-hand sides on entry and the solutions on return; a block with columns
+  has $n$ rows, else `Rows`, and one without is left as it is, whatever its rows. `Scratch` is returned when `stack` cannot hold one thread's
   scratch, `scratch(block.columns(), Threads::Count(1))`, alignment included. Either error leaves
   `block` untouched.
 - A `MatrixMut` keeps its shape during an apply; `read_column` copies a column into `into`,
-  `write_column` copies `from` into one column and touches nothing else, and neither allocates.
-  Each panics unless `column < columns()` and the slice has `rows()` entries; the crate's impls
-  keep this contract, and the apply relies on no more. A one-dimensional type is one column;
-  `[[T; K]]` holds $K$ interleaved columns; `ColumnMajor` reads `data` column-major, `Length`
-  unless it holds rows $\cdot$ columns entries, `Overflow` if that product does not fit; `Columns`
-  is one slice per column, `Column` at the first not of `rows` entries. Foreign types implement
-  it with any stride values: faer's dynamic-shape types, every nalgebra matrix, and ndarray's
-  `ArrayRef`, which owned arrays and views dereference to. A typed faer view converts with
-  `as_dyn_mut().as_dyn_stride_mut()`.
+  `write_column` copies `from` into one column and touches nothing else, and neither allocates. Each
+  panics unless `column < columns()` and the slice has `rows()` entries; the crate's impls keep this
+  contract, and the apply relies on no more. A one-dimensional type is one column; `[[T; K]]` holds
+  $K$ interleaved columns; `ColumnMajor` reads `data` column-major, `rows` to a column, `Length`
+  unless that makes whole columns, none without data; `Columns` is one `&mut [T]`, `Vec<T>` or other
+  `AsMut<[T]>` per column, `Column` at the first not of the first's rows; both solve each column
+  where it is. Foreign types implement it with any stride values: faer's dynamic-shape types, every
+  nalgebra matrix, and ndarray's `ArrayRef`, which owned arrays and views dereference to. A typed
+  faer view converts with `as_dyn_mut().as_dyn_stride_mut()`.
 - The unimplemented-trait message names the feature each foreign type needs and the supported
   versions, faer 0.24, nalgebra 0.35 and ndarray 0.17, and suggests `[..]` for an array and
   `&mut *a` for an ndarray array.
@@ -127,9 +126,11 @@ preconditioner, so it right-preconditions there composed with $A$: `y` from
   preconditioner.
 - **`MatrixMut` a trait:** an apply only copies columns in and out; each type copies its own way,
   with its strides, without `unsafe`, and the adapters implement it without the approximate
-  inverse depending on their crates. A layout costs that copy, 4–8% of a block solve.
+  inverse depending on their crates. A layout costs that copy, 4–8% of a block solve, except the crate's, which solve
+  where they are.
 - **`ColumnMajor` and `Columns`:** the two forms whose input can be malformed, checked once;
-  both name their rows, so a block without columns has a shape.
+  each states its shape once, by its data. Rows matter only to a column there is to solve, so
+  a block without columns needs none.
 - **ndarray through `ArrayRef`:** a shared or copy-on-write array copies itself on its first
   write; through `ArrayRef` that happens at the caller's `&mut *a`, in sight.
 - **faer's operator traits:** faer's CG and LSMR take $B$ as is; their `par` and scratch queries
