@@ -99,23 +99,21 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     let folds = blocks.iter().any(|b| matches!(b, Signed::Folded(_)));
     let n = if folds { v.n() } else { 0 };
     let (mut block_of, mut factor) = (vec![I::max_value(); n], vec![0.0; n]);
-    let mut count = 0;
-    for block in &blocks {
+    for (c, block) in blocks.iter().enumerate() {
         let Signed::Folded(Folded { m: block, .. }) = block else {
             continue;
         };
         for (slot, vertex) in block.vertices().iter().enumerate() {
-            block_of[vertex.index()] = I::from_index(count);
+            block_of[vertex.index()] = I::from_index(c);
             factor[vertex.index()] = widen(block.factor(slot));
         }
-        count += 1;
     }
     let mut surplus = vec![0.0f64; n];
     // One-ended columns: data, not a cancelling row sum.
     let mut stated = vec![0.0f64; n];
-    // `ε·1ᵀM1` and `ε·tr M` per folded block.
-    let (mut ones, mut trace) = (vec![0.0f64; count], vec![0.0f64; count]);
-    if count > 0 {
+    // `ε·1ᵀM1` and `ε·tr M` per block, a frustrated one's unused.
+    let (mut ones, mut trace) = (vec![0.0f64; blocks.len()], vec![0.0f64; blocks.len()]);
+    if folds {
         let epsilon = widen(T::epsilon());
         v.for_each_column::<I>(
             #[inline(always)]
@@ -160,13 +158,9 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
         stated: &stated,
         certified,
     };
-    let mut decided = ones.into_iter().zip(trace);
-    (blocks.into_iter())
-        .map(|block| match block {
-            Signed::Folded(folded) => {
-                let band = decided.next().expect("a tally per folded block");
-                folded.settle(band, &gram)
-            }
+    (blocks.into_iter().zip(ones.into_iter().zip(trace)))
+        .map(|(block, band)| match block {
+            Signed::Folded(folded) => folded.settle(band, &gram),
             Signed::Frustrated(block) => Ok(block),
         })
         .collect()
