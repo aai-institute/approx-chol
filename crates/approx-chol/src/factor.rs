@@ -292,15 +292,8 @@ impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
         config: &Config,
         reused: &mut Workspace<T, I>,
     ) -> Block<T, I> {
-        let BlockComplement {
-            first,
-            congruence,
-            cross,
-            sheets,
-            grounding,
-            grounding_unproven,
-            clamp,
-        } = self;
+        let (first, congruence, cross, sheets, grounding, grounding_unproven, clamp) =
+            self.into_parts();
         let streams = Streams::of(first, config);
         let s = BipartiteBlock::of(cross, sheets, grounding).complement(config, streams);
         let tail = congruence.factor_tail(0);
@@ -503,13 +496,13 @@ impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ApproxI
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let (order, mut blocks, inverse_pivots): Body<T> = wire::deserialize(deserializer)?;
         let order = on!(&mut blocks, blocks => Order::decoded(order, blocks.iter_mut().map(|b| &mut b.segment)));
-        let fits = on!(&blocks, blocks => blocks.iter().all(Block::holds));
+        let fits = || on!(&blocks, blocks => blocks.iter().all(Block::holds));
         let once =
             |order: &Order| on!(&blocks, blocks => order.once(blocks.iter().map(|b| b.segment)));
         let pivots = inverse_pivots.iter().all(|&p| inverse_pivot_in_range(p));
         let lone = |order: &Order| inverse_pivots.len() <= order.isolated().len();
         match order {
-            Some(order) if pivots && lone(&order) && fits && once(&order) => {
+            Some(order) if pivots && lone(&order) && fits() && once(&order) => {
                 Ok(Self::new(order, blocks, inverse_pivots))
             }
             _ => Err(serde::de::Error::custom("corrupt ApproxInverse")),

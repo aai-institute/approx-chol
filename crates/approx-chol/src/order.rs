@@ -36,6 +36,17 @@ impl Segment {
         }
     }
 
+    /// Starts it at `end` of the list if it is listed; where the next listed one starts.
+    fn place(&mut self, end: usize) -> usize {
+        match self {
+            Segment::Run { .. } => end,
+            Segment::Listed { start, len } => {
+                *start = end;
+                end + *len
+            }
+        }
+    }
+
     /// Slots [`Slots::on_local`] takes from its stack before passing the rest on: room to gather, none for a run.
     pub(crate) fn gather_slots(self) -> usize {
         match self {
@@ -88,13 +99,15 @@ impl Order {
         let (mut segments, mut end) = (Vec::with_capacity(coupled.len()), 0);
         for range in coupled {
             let (block, len) = (&vertices[range.clone()], range.len());
-            if block.windows(2).all(|w| w[1].index() == w[0].index() + 1) {
-                let start = local(block[0]);
-                segments.push(Segment::Run { start, len });
-            } else {
-                segments.push(Segment::Listed { start: end, len });
-                end += len;
-            }
+            let mut segment = match block.windows(2).all(|w| w[1].index() == w[0].index() + 1) {
+                true => Segment::Run {
+                    start: local(block[0]),
+                    len,
+                },
+                false => Segment::Listed { start: 0, len },
+            };
+            end = segment.place(end);
+            segments.push(segment);
         }
         let listed = (coupled.iter().zip(&segments))
             .filter(|(_, segment)| matches!(segment, Segment::Listed { .. }))
@@ -131,18 +144,12 @@ impl Order {
     ) -> Option<Self> {
         let (mut end, mut covered, mut runs_end) = (0usize, 0usize, 0usize);
         for segment in segments {
-            let len = match segment {
-                Segment::Run { start, len } => {
-                    runs_end = runs_end.max(start.checked_add(*len)?);
-                    *len
-                }
-                Segment::Listed { start, len } => {
-                    *start = end;
-                    end = end.checked_add(*len)?;
-                    *len
-                }
-            };
-            covered = covered.checked_add(len)?;
+            if let Segment::Run { start, len } = *segment {
+                runs_end = runs_end.max(start.checked_add(len)?);
+            }
+            covered = covered.checked_add(segment.len())?;
+            // Placing cannot overflow: the list's end stays within `covered`.
+            end = segment.place(end);
         }
         let isolated = listed.slots(..).len().checked_sub(end)?;
         let n = covered.checked_add(isolated)?;
