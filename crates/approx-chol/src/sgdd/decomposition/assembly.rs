@@ -5,7 +5,7 @@ mod cells;
 use num_traits::PrimInt;
 
 use super::partition::{Partition, UnionFind};
-use super::{LonePivot, Partitioned, PrincipalBlocks, RowSums};
+use super::{Entries, LonePivot, Partitioned, PrincipalBlocks, RowSums};
 use crate::input::{BipartiteFactorWidth2, Column, FactorWidth2, Side};
 use crate::sgdd::block::{Grounding, ReduceError};
 use crate::sgdd::diagonal_in_range;
@@ -206,6 +206,10 @@ impl<T: Real, C> LonePivot<T> for Dominant<'_, T, C> {
 impl<T: Real, I: Index> PrincipalBlocks<T, I> for UpperAdjacency<T, I> {
     type Block = OffDiagonal<T, I>;
 
+    fn rotation(&self, _: &[I]) -> usize {
+        0
+    }
+
     fn whole(self, _: &[I]) -> Self::Block {
         OffDiagonal::General(self)
     }
@@ -319,7 +323,7 @@ impl<T: Real, I: Index, C> PrincipalBlocks<T, I> for Assembled<T, C>
 where
     C: PrincipalBlocks<T, I, Block = OffDiagonal<T, I>>,
 {
-    type Block = (OffDiagonal<T, I>, RowSums<T>);
+    type Block = Entries<T, I>;
 
     fn rotation(&self, ascending: &[I]) -> usize {
         self.adjacency.rotation(ascending)
@@ -340,10 +344,10 @@ fn with_rows<T: Real, I: Index>(
     diagonal: &[T],
     vertices: &[I],
     off_diagonal: OffDiagonal<T, I>,
-) -> (OffDiagonal<T, I>, RowSums<T>) {
+) -> Entries<T, I> {
     let rows = RowSums {
         diagonal: at(diagonal, vertices),
         abs: off_diagonal.abs_row_sums(),
     };
-    (off_diagonal, rows)
+    Entries { off_diagonal, rows }
 }

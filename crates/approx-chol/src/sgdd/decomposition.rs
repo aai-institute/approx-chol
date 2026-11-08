@@ -52,9 +52,7 @@ pub(super) trait PrincipalBlocks<T, I> {
     type Block;
 
     /// How far a component's ascending vertices rotate left so its eliminated side comes first.
-    fn rotation(&self, _ascending: &[I]) -> usize {
-        0
-    }
+    fn rotation(&self, ascending: &[I]) -> usize;
 
     /// The whole input as one component, moved where it is owned: its vertices are their own positions.
     fn whole(self, vertices: &[I]) -> Self::Block;
@@ -217,31 +215,17 @@ pub(crate) struct Summands<B, I, T> {
     pub(crate) blocks: Vec<B>,
 }
 
-/// One block `A_c` as the input gave it, with its rows' `Σ_j |a_ij|`.
+/// One block `A_c` as the input gave it.
 pub(super) struct SymmetricBlock<'p, T, I> {
     /// In `A`'s numbering, in local order.
     pub(super) vertices: &'p [I],
-    pub(super) off_diagonal: OffDiagonal<T, I>,
-    pub(super) rows: RowSums<T>,
+    pub(super) entries: Entries<T, I>,
 }
 
-impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
-    pub(super) fn new(
-        vertices: &'p [I],
-        (off_diagonal, rows): (OffDiagonal<T, I>, RowSums<T>),
-    ) -> Self {
-        assert_eq!(vertices.len(), off_diagonal.n(), "one vertex per row");
-        assert_eq!(
-            rows.diagonal.len(),
-            off_diagonal.n(),
-            "one diagonal per row"
-        );
-        Self {
-            vertices,
-            off_diagonal,
-            rows,
-        }
-    }
+/// A block's entries off its diagonal, with its rows' diagonal and `Σ_j |a_ij|`.
+pub(super) struct Entries<T, I> {
+    pub(super) off_diagonal: OffDiagonal<T, I>,
+    pub(super) rows: RowSums<T>,
 }
 
 /// `M`'s diagonal and `Σ_j |m_ij|`: the surplus when no shape or `V` gives it.
@@ -252,11 +236,7 @@ pub(super) struct RowSums<T> {
 
 impl<T: Real, J: PrimInt> Canonical<'_, T, J> {
     /// Upper rows in local order, columns remapped through `position`; a zero couples nothing, so it may name another component.
-    fn rows<I: Index>(
-        &self,
-        vertices: &[I],
-        position: impl Fn(usize) -> I,
-    ) -> (OffDiagonal<T, I>, RowSums<T>) {
+    fn rows<I: Index>(&self, vertices: &[I], position: impl Fn(usize) -> I) -> Entries<T, I> {
         let mut diagonal = Vec::with_capacity(vertices.len());
         let mut ptrs = Vec::with_capacity(vertices.len() + 1);
         ptrs.push(0);
@@ -281,12 +261,17 @@ impl<T: Real, J: PrimInt> Canonical<'_, T, J> {
         let rows = Rows::new(ptrs, indices, values, vertices.len());
         let off_diagonal = OffDiagonal::General(UpperAdjacency::new(rows));
         let abs = abs.into_iter().map(crate::narrow).collect();
-        (off_diagonal, RowSums { diagonal, abs })
+        let rows = RowSums { diagonal, abs };
+        Entries { off_diagonal, rows }
     }
 }
 
 impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Canonical<'_, T, J> {
-    type Block = (OffDiagonal<T, I>, RowSums<T>);
+    type Block = Entries<T, I>;
+
+    fn rotation(&self, _: &[I]) -> usize {
+        0
+    }
 
     fn whole(self, vertices: &[I]) -> Self::Block {
         self.rows(vertices, I::from_index)

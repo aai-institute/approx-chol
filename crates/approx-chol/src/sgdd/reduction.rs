@@ -93,10 +93,10 @@ impl<T: Real, I: Index> Complement<T, I> {
 impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
     /// Scales and signs each block's `A_c`, closing its surplus from the same rows.
     fn reduce(self, policy: &ScalingPolicy) -> Result<Reduced<T, I>, ReduceError> {
-        self.reduced(|vertices, block| {
-            let a = SymmetricBlock::new(vertices, block);
+        self.reduced(|vertices, entries| {
+            let a = SymmetricBlock { vertices, entries };
             let relax = |a: &SymmetricBlock<'_, T, I>| {
-                scaling::relax(&a.off_diagonal, &a.rows.diagonal, policy)
+                scaling::relax(&a.entries.off_diagonal, &a.entries.rows.diagonal, policy)
             };
             let block = match a.reduce(policy, relax)? {
                 Signed::Folded(folded) => {
@@ -118,7 +118,7 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
         policy: &ScalingPolicy,
         relax: impl FnOnce(&Self) -> Option<scaling::Relaxation<T>>,
     ) -> Result<Signed<'p, T, I>, ReduceError> {
-        let RowSums { diagonal, abs } = &self.rows;
+        let RowSums { diagonal, abs } = &self.entries.rows;
         let in_range = |(&d, &s): (&T, &T)| diagonal_in_range(d) && diagonal_in_range(s);
         if let Some(i) = diagonal.iter().zip(abs).position(|row| !in_range(row)) {
             let vertex = self.vertices[i].index();
@@ -137,19 +137,20 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
             true => None,
             false => Some(relax(&self).ok_or(ReduceError::Unscalable { vertex })?),
         };
-        let folding = folding_signs(&self.off_diagonal);
+        let folding = folding_signs(&self.entries.off_diagonal);
         let folded = folding.is_some();
         let signs = folding.unwrap_or(Congruence::Identity);
         let (m, rows, vector) = match relaxation {
             // Signs keep every magnitude, so `A_c`'s rows are `M`'s.
             None => {
-                let m = Congruent::signed(self.vertices, self.off_diagonal, signs);
-                (m, self.rows, ScaleVector::Identity)
+                let m = Congruent::signed(self.vertices, self.entries.off_diagonal, signs);
+                (m, self.entries.rows, ScaleVector::Identity)
             }
             Some((scales, vector)) => {
-                let (m, abs) = Congruent::scaled(self.vertices, self.off_diagonal, signs, &scales)
-                    .ok_or(ReduceError::Unscalable { vertex })?;
-                let diagonal = (self.rows.diagonal.iter().zip(&scales[..]))
+                let (m, abs) =
+                    Congruent::scaled(self.vertices, self.entries.off_diagonal, signs, &scales)
+                        .ok_or(ReduceError::Unscalable { vertex })?;
+                let diagonal = (self.entries.rows.diagonal.iter().zip(&scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();
                 (m, RowSums { diagonal, abs }, vector)
@@ -428,8 +429,8 @@ mod tests {
         };
         let partitioned = of_csr::<f64, u32, u32>(Canonical::of(csr).expect("canonical"));
         let summands = (partitioned.expect("symmetric"))
-            .reduced(|vertices, block| {
-                match SymmetricBlock::new(vertices, block).reduce(&policy, unscaled)? {
+            .reduced(|vertices, entries| {
+                match (SymmetricBlock { vertices, entries }).reduce(&policy, unscaled)? {
                     Signed::Folded(Folded {
                         vector: ScaleVector::Identity,
                         clamped,

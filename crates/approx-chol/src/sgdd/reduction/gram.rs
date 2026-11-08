@@ -18,8 +18,8 @@ impl<T: Real, I: Index> Reduced<T, I> {
         policy: &ScalingPolicy,
     ) -> Result<Self, ReduceError> {
         let (cuts, components) = assemble_values::<T, J, I, S>(cells, v)?.arrange()?;
-        let live = cuts.extract(&components, |vertices, block| {
-            Ok(SymmetricBlock::new(vertices, block))
+        let live = cuts.extract(&components, |vertices, entries| {
+            Ok(SymmetricBlock { vertices, entries })
         })?;
         // Built by the first block not already dominant: a dominant input pays only once a block's band fails.
         let mut nulls: Option<(Vec<f64>, Vec<I>)> = None;
@@ -32,9 +32,11 @@ impl<T: Real, I: Index> Reduced<T, I> {
                 // `NaN` where a component has no certificate.
                 let u = (a.vertices.iter()).map(|v| u[v.index()]);
                 (u.clone().all(f64::is_finite))
-                    .then(|| scaling::null_scaling(u, &a.rows.diagonal))
+                    .then(|| scaling::null_scaling(u, &a.entries.rows.diagonal))
                     .flatten()
-                    .or_else(|| scaling::relax(&a.off_diagonal, &a.rows.diagonal, policy))
+                    .or_else(|| {
+                        scaling::relax(&a.entries.off_diagonal, &a.entries.rows.diagonal, policy)
+                    })
             })?);
         }
         // `u` freed before the column pass: only the certified set outlives the scaling.
