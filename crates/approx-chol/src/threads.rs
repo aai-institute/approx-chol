@@ -14,6 +14,14 @@ pub enum Threads {
 /// The calling thread alone.
 pub(crate) const ONE: Threads = Threads::Count(NonZeroUsize::MIN);
 
+/// faer's `Par::Seq` is `Count(1)`, `Par::Rayon(n)` is `Count(n)`.
+#[cfg(feature = "faer")]
+impl From<faer::Par> for Threads {
+    fn from(par: faer::Par) -> Self {
+        NonZeroUsize::new(par.degree()).map_or(ONE, Threads::Count)
+    }
+}
+
 impl Threads {
     /// The most threads it runs at a time: no more than the current pool has.
     pub(crate) fn tasks(self) -> usize {
