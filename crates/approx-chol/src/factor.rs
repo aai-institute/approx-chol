@@ -22,6 +22,7 @@ pub use wire::FORMAT_VERSION;
 use crate::order::{Listed, Order, Segment, Slots};
 use crate::sgdd::{BlockComplement, Components, Congruence, IrreducibleBlock, Summands};
 use crate::storage::OffDiagonal;
+use crate::threads::ONE;
 use crate::Clamp;
 use crate::{Batch, Index, MemBuffer, MemStack, Real, StackReq, Threads};
 use apply::Kernel;
@@ -72,7 +73,8 @@ pub struct ApproxInverse<T = f64> {
     blocks: Blocks<T>,
     /// Each lone vertex's whole factor `1/σ`, in the order `order` lists them ahead of the dead ones.
     inverse_pivots: Box<[T]>,
-    scratch_slots: usize,
+    /// The coupled blocks' elimination steps.
+    coupled_steps: usize,
 }
 
 /// Every coupled block's factor, block `k` on `order`'s segment `k`, all in `u32` while a cover's `2n + 1` slots fit it, else in `u64`.
@@ -109,6 +111,8 @@ macro_rules! on {
     };
 }
 
+mod spread;
+
 impl<T: Real> ApproxInverse<T> {
     /// Factors every coupled summand in parallel, each keyed by its vertices once they are `order`'s.
     pub(crate) fn build<I: Index, B: Summand<T, I>>(
@@ -142,15 +146,12 @@ impl<T: Real> ApproxInverse<T> {
     }
 
     fn new(order: Order, blocks: Blocks<T>, inverse_pivots: Box<[T]>) -> Self {
-        let scratch_slots = on!(&blocks, blocks => (blocks.iter())
-            .map(Block::global_scratch_slots)
-            .max())
-        .unwrap_or(0);
+        let coupled_steps = on!(&blocks, blocks => blocks.iter().map(Block::n_steps).sum());
         Self {
             order,
             blocks,
             inverse_pivots,
-            scratch_slots,
+            coupled_steps,
         }
     }
 
@@ -161,8 +162,7 @@ impl<T: Real> ApproxInverse<T> {
 
     /// Total elimination steps: every slot but a floating block's gauge, whichever arm factored it.
     pub fn n_steps(&self) -> usize {
-        let coupled: usize = on!(&self.blocks, blocks => blocks.iter().map(Block::n_steps).sum());
-        coupled + self.inverse_pivots.len()
+        self.coupled_steps + self.inverse_pivots.len()
     }
 
     /// One per irreducible block of `A` the factored matrix meets, coupled blocks by their component's lowest vertex in the input's numbering, then isolated vertices; dead vertices are in none.
@@ -171,13 +171,17 @@ impl<T: Real> ApproxInverse<T> {
         (0..coupled + self.inverse_pivots.len()).map(|k| Component { factor: self, k })
     }
 
-    /// What [`apply_with`](Self::apply_with) takes from its stack for a block of `columns` columns: the most any one block of `A` takes, its Cholesky's slots plus a gather unless its vertices are consecutive, per column solved in place, or one column copied through. It grows with `columns` and serves every block of fewer.
-    pub fn scratch(&self, columns: usize, _threads: Threads) -> StackReq {
+    /// What [`apply_with`](Self::apply_with) takes from its stack for a block of `columns` columns at `threads`: per column solved in place, or for one column copied through first, the most a block of `A` past the budget's share takes alone, its Cholesky's slots plus a gather unless its vertices are consecutive, or a region per thread, at most the pool's, of the most one of the others takes. It grows with `columns` and serves every block of fewer; one thread's serves every budget, solving fewer blocks at once to the same bits.
+    pub fn scratch(&self, columns: usize, threads: Threads) -> StackReq {
         if columns == 0 {
             return StackReq::EMPTY;
         }
-        let in_place = slots::<T>(self.scratch_slots).array(columns);
-        in_place.or(slots::<T>(self.n() + self.scratch_slots))
+        let (alone, region, regions) = spread::Spread::of(self, threads).slots(self);
+        let solve = |columns| {
+            let regions = slots::<T>(region).array(columns).array(regions);
+            slots::<T>(alone).array(columns).or(regions)
+        };
+        solve(columns).or(slots::<T>(self.n()).and(solve(1)))
     }
 
     /// Applies the approximate inverse to every column of `block` at once, each bit for bit as it would be alone, through scratch allocated for this call; [`ApplyError::Scratch`] if it cannot be.
@@ -194,7 +198,7 @@ impl<T: Real> ApproxInverse<T> {
         self.apply_with(block, threads, MemStack::new(&mut scratch))
     }
 
-    /// As [`apply`](Self::apply), allocating nothing: `block` holds the right-hand sides on entry and `A⁺b` on floating blocks on return, `0` at vertices in no block; `stack` holds [`scratch`](Self::scratch) for its columns. Either error leaves `block` as it was, and a block without columns is left as it is.
+    /// As [`apply`](Self::apply), allocating nothing: `block` holds the right-hand sides on entry and `A⁺b` on floating blocks on return, `0` at vertices in no block; `stack` holds [`scratch`](Self::scratch) for its columns at one thread at least, and solves as many blocks at once as it holds regions, up to `threads`. Either error leaves `block` as it was, and a block without columns is left as it is.
     pub fn apply_with<M: MatrixMut<T> + ?Sized>(
         &self,
         block: &mut M,
@@ -202,12 +206,7 @@ impl<T: Real> ApproxInverse<T> {
         stack: &mut MemStack,
     ) -> Result<(), ApplyError> {
         let columns = block.columns();
-        check_buffers(
-            block.rows(),
-            self.n(),
-            stack,
-            self.scratch(columns, threads),
-        )?;
+        check_buffers(block.rows(), self.n(), stack, self.scratch(columns, ONE))?;
         if columns > 0 {
             block.solve_by(Kernel {
                 inverse: self,
@@ -220,9 +219,7 @@ impl<T: Real> ApproxInverse<T> {
 
     /// Solves `x`, of `n` rows, in place through `stack`, which holds every block's scratch for `V`.
     fn solve_unchecked<V: Batch<T>>(&self, x: &mut [V], threads: Threads, stack: &mut MemStack) {
-        on!(&self.blocks, blocks => for block in blocks.iter() {
-            block.solve_global(&self.order, x, threads, stack);
-        });
+        spread::solve_blocks(self, x, threads, stack);
         let (lone, dead) = self.order.lone_and_dead(self.inverse_pivots.len());
         for (v, &inverse_pivot) in lone.vertices().zip(&self.inverse_pivots) {
             x[v] = x[v].mul(inverse_pivot);

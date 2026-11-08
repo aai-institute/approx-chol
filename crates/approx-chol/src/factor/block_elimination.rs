@@ -242,8 +242,7 @@ mod tests {
                 assert_eq!(used.len(), n, "{used:?} under {n}");
             }
         }
-        let one = Threads::Count(NonZeroUsize::MIN);
-        let alone = workers(1, || elimination.solve(&mut x, one, |_| ()));
+        let alone = workers(1, || elimination.solve(&mut x, crate::threads::ONE, |_| ()));
         assert_eq!(
             alone,
             BTreeSet::from([None]),
