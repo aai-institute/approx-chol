@@ -70,10 +70,10 @@ pub enum ApplyError {
   `columns`; one thread's serves every budget, and a stack of fewer regions solves fewer
   components at once, to the same bits. `apply` allocates its scratch per call; `apply_with`
   allocates nothing.
-- `block` holds the right-hand sides on entry and the solutions on return; a block with columns
-  has $n$ rows, else `Rows`, and one without is left as it is, whatever its rows. `Scratch` is returned when `stack` cannot hold one thread's
-  scratch, `scratch(block.columns(), Threads::Count(1))`, alignment included. Either error leaves
-  `block` untouched.
+- `block` holds the right-hand sides on entry and the solutions on return; a block with columns has
+  $n$ rows, else `Rows`, and one without is left as it is, whatever its rows. `Scratch` is returned
+  when `stack` cannot hold one thread's scratch, `scratch(block.columns(), Threads::Count(1))`,
+  alignment included. Either error leaves `block` untouched.
 - A `MatrixMut` keeps its shape during an apply; `read_column` copies a column into `into`,
   `write_column` copies `from` into one column and touches nothing else, and neither allocates. Each
   panics unless `column < columns()` and the slice has `rows()` entries; the crate's impls keep this
@@ -125,9 +125,9 @@ preconditioner, so it right-preconditions there composed with $A$: `y` from
 - **Monotone scratch:** one stack sized for the largest serves all, as faer's LSMR assumes of its
   preconditioner.
 - **`MatrixMut` a trait:** an apply only copies columns in and out; each type copies its own way,
-  with its strides, without `unsafe`, and the adapters implement it without the approximate
-  inverse depending on their crates. A layout costs that copy, 4–8% of a block solve, except the crate's, which solve
-  where they are.
+  with its strides, without `unsafe`, and the adapters implement it without the approximate inverse
+  depending on their crates. A layout costs that copy, 4–8% of a block solve, except the crate's,
+  which solve where they are.
 - **`ColumnMajor` and `Columns`:** the two forms whose input can be malformed, checked once;
   each states its shape once, by its data. Rows matter only to a column there is to solve, so
   a block without columns needs none.
