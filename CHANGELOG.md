@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `ApproxInverse::apply` and `apply_with` solve a block of right-hand sides, each column bit for bit as it solves alone, at a `Threads` budget; `apply_with` takes a `MemStack` that holds `scratch(columns, threads)`. A block is a `MatrixMut`: a slice or `Vec` of `T` is one column, one of `[T; K]` holds `K` interleaved columns, both solved in place; any other `MatrixMut` is copied through the scratch one column at a time.
+- `ApproxInverse::apply` and `apply_with` solve a block of right-hand sides, each column bit for bit as it solves alone, at a `Threads` budget; `apply_with` takes a `MemStack` that holds `scratch(columns, threads)`. A block is a `MatrixMut`: a slice or `Vec` of `T` is one column, one of `[T; K]` holds `K` interleaved columns, both solved in place; any other `MatrixMut` is copied through the scratch one column at a time. A block without columns is left as it is, whatever its rows.
 
 ### Changed (breaking)
 

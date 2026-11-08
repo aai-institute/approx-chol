@@ -404,3 +404,14 @@ fn scratch_grows_with_the_budget() {
         assert!(more.size_bytes() > one.size_bytes(), "{columns} columns");
     }
 }
+
+/// A block without columns is left as it is, whatever its rows.
+#[test]
+fn only_a_block_with_columns_is_held_to_the_rows() {
+    let path: ApproxInverse = factorize(Laplacian::new(3, &[0u32, 1], &[1, 2]).unwrap()).unwrap();
+    let mut rows: Vec<[f64; 0]> = vec![[]; 2];
+    path.apply_with(&mut rows, Threads::All, MemStack::new(&mut []))
+        .expect("nothing to solve");
+    path.apply(&mut rows, Threads::All)
+        .expect("nothing to solve");
+}
