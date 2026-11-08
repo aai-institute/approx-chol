@@ -31,8 +31,8 @@ fn by_per_copy_then_neighbor<T: Real, I: Index, C: Copies>(
     x.total_cmp(&y).then_with(|| a.neighbor.cmp(&b.neighbor))
 }
 
-/// At or below this many entries, sorting beats the scatter path's random access.
-const SCATTER_THRESHOLD: usize = 32;
+/// Searching the merged prefix beats the scatter path's random access up to here.
+const SEARCH_LIMIT: usize = 8;
 
 /// Rests in every slot of [`CliqueTreeSampler::scatter`] between merges.
 fn unseen<I: Index>() -> I {
@@ -50,8 +50,8 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
             weight,
         });
         self.entries.extend(entries);
-        let merged = match self.entries.len() <= SCATTER_THRESHOLD {
-            true => self.merge_by_sort(),
+        let merged = match self.entries.len() <= SEARCH_LIMIT {
+            true => self.merge_by_search(),
             false => self.merge_by_scatter(),
         };
         self.entries.truncate(merged);
@@ -61,17 +61,17 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         self.entries.sort_unstable_by(by_per_copy_then_neighbor);
     }
 
-    /// Runs of one neighbor summed in place; returns the merged count.
-    fn merge_by_sort(&mut self) -> usize {
-        self.entries.sort_unstable_by_key(|entry| entry.neighbor);
+    /// First-seen order, each entry searched in the merged prefix; returns the merged count.
+    fn merge_by_search(&mut self) -> usize {
         let mut write = 0;
         for read in 0..self.entries.len() {
             let entry = self.entries[read];
-            match write > 0 && self.entries[write - 1].neighbor == entry.neighbor {
-                true => self.absorb(write - 1, entry),
-                false => {
-                    self.entries[write] = entry;
-                    self.counts.push(entry.copies.get());
+            let seen =
+                (self.entries[..write].iter()).position(|merged| merged.neighbor == entry.neighbor);
+            match seen {
+                Some(position) => self.absorb(position, entry),
+                None => {
+                    self.admit(write, entry);
                     write += 1;
                 }
             }
@@ -91,8 +91,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
             match self.scatter[slot] {
                 position if position == unseen() => {
                     self.scatter[slot] = I::from_index(write);
-                    self.entries[write] = entry;
-                    self.counts.push(entry.copies.get());
+                    self.admit(write, entry);
                     write += 1;
                 }
                 position => self.absorb(position.index(), entry),
@@ -102,6 +101,11 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
             self.scatter[entry.neighbor.index()] = unseen();
         }
         write
+    }
+
+    fn admit(&mut self, write: usize, entry: StarEntry<T, I, C>) {
+        self.entries[write] = entry;
+        self.counts.push(entry.copies.get());
     }
 
     fn absorb(&mut self, position: usize, duplicate: StarEntry<T, I, C>) {
@@ -126,5 +130,42 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
     /// The last star's neighbors in clique-tree order: every vertex its pivot's elimination moved.
     pub(in crate::factor) fn neighbors(&self) -> impl Iterator<Item = I> + '_ {
         self.entries.iter().map(|entry| entry.neighbor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::collection::vec;
+    use proptest::prelude::*;
+
+    use super::super::{CliqueTreeSampler, Copies, Multi};
+    use super::StarEntry;
+
+    /// Merged with `merge`, as `(neighbor, summed copies, weight bits)`.
+    fn merged(
+        star: &[(u32, u32, f32)],
+        merge: fn(&mut CliqueTreeSampler<f32, u32, Multi>) -> usize,
+    ) -> Vec<(u32, u32, u32)> {
+        let split = Multi::split(4).expect("AC2");
+        let mut sampler = CliqueTreeSampler::new(split);
+        let entries = star.iter().map(|&(neighbor, copies, weight)| StarEntry {
+            neighbor,
+            copies: split.cap(copies),
+            weight,
+        });
+        sampler.entries.extend(entries);
+        let merged = merge(&mut sampler);
+        (sampler.entries[..merged].iter().zip(&sampler.counts))
+            .map(|(e, &count)| (e.neighbor, count, e.weight.to_bits()))
+            .collect()
+    }
+
+    proptest! {
+        /// f32, where three duplicates' sum can depend on their order.
+        #[test]
+        fn search_and_scatter_merge_alike(star in vec((0u32..6, 1u32..5, 0.1f32..10.0), 0..40)) {
+            let search = merged(&star, CliqueTreeSampler::merge_by_search);
+            prop_assert_eq!(search, merged(&star, CliqueTreeSampler::merge_by_scatter));
+        }
     }
 }
