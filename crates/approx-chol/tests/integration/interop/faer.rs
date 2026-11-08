@@ -1,5 +1,9 @@
+use std::num::NonZeroUsize;
+
 use approx_chol::input::{CsrError, CsrRef};
+use approx_chol::Threads;
 use faer::sparse::{SparseColMat, SparseRowMat, SymbolicSparseColMat, SymbolicSparseRowMat};
+use faer::Par;
 use num_traits::PrimInt;
 use rstest::rstest;
 
@@ -95,4 +99,15 @@ fn faer_try_from_non_square_returns_error() {
     let mat = SparseRowMat::new(symbolic, vec![1.0, 1.0, 1.0]);
     let err = CsrRef::try_from(&mat).expect_err("non-square matrix must be rejected");
     assert_eq!(err, CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 });
+}
+
+#[test]
+fn a_faer_par_is_a_thread_budget() {
+    assert_eq!(Threads::from(Par::Seq), Threads::Count(NonZeroUsize::MIN));
+    for n in [1, 3, 12] {
+        let count = NonZeroUsize::new(n).unwrap();
+        assert_eq!(Threads::from(Par::Rayon(count)), Threads::Count(count));
+    }
+    let pool = NonZeroUsize::new(rayon::current_num_threads()).unwrap();
+    assert_eq!(Threads::from(Par::rayon(0)), Threads::Count(pool));
 }
