@@ -1,15 +1,15 @@
 use approx_chol::{
-    ApplyError, ApproxInverse, BlockFactor, Config, MemBuffer, MemStack, Real, SchurMode, StackReq,
-    Threads,
+    ApplyError, ApproxInverse, Component, Config, MemBuffer, MemStack, Real, SchurMode, Threads,
 };
 
 use crate::common::bits::bits;
 use crate::common::cases::cases;
-use crate::common::entry::{by_type, cast, cast_all, Entry, Factored, Types};
+use crate::common::entry::{by_type, cast_all, Entry, Factored, Types};
 use crate::common::graph::{Edge, Graph};
 use crate::common::grid;
 use crate::common::modes::Mode;
 use crate::common::scratch::nan_cells;
+use crate::common::solve::Solve;
 use crate::common::sparse::Sparse;
 use crate::common::threads;
 
@@ -53,13 +53,13 @@ fn assert_buffers_checked<T: Real>(factor: &ApproxInverse<T>) {
     let n = factor.n();
     for found in [n - 1, n + 1] {
         let error = ApplyError::Rows { expected: n, found };
-        assert_eq!(factor.solve(&vec![T::zero(); found]), Err(error));
-        let (short_or_long, exact) = (&mut vec![T::zero(); found], &mut vec![T::zero(); n]);
-        assert_eq!(factor.solve_into(short_or_long, exact), Err(error));
-        assert_eq!(factor.solve_into(exact, short_or_long), Err(error));
+        assert_eq!(
+            factor.apply(&mut vec![T::zero(); found], Threads::All),
+            Err(error)
+        );
         let mut scratch = MemBuffer::new(factor.scratch(1, Threads::All));
         let stack = MemStack::new(&mut scratch);
-        let solved = factor.solve_in_place(&mut vec![T::zero(); found], stack);
+        let solved = factor.apply_with(&mut vec![T::zero(); found], Threads::All, stack);
         assert_eq!(solved, Err(error));
     }
     let needed = factor.scratch(1, Threads::All);
@@ -67,26 +67,9 @@ fn assert_buffers_checked<T: Real>(factor: &ApproxInverse<T>) {
         let mut scratch = MemBuffer::new(needed);
         let short = MemStack::new(&mut scratch[..needed.size_bytes() - 1]);
         assert_eq!(
-            factor.solve_in_place(&mut vec![T::one(); n], short),
+            factor.apply_with(&mut vec![T::one(); n], Threads::All, short),
             Err(ApplyError::Scratch)
         );
-    }
-    for block in factor.clone().into_blocks() {
-        let (m, needed) = (block.vertices().len(), block.scratch());
-        let mut scratch = MemBuffer::new(needed);
-        for found in [m - 1, m + 1] {
-            let mut x = vec![T::zero(); found];
-            let error = ApplyError::Rows { expected: m, found };
-            let stack = MemStack::new(&mut scratch);
-            let solved = block.solve_local(&mut x, stack, threads::ONE);
-            assert_eq!(solved, Err(error));
-        }
-        if needed.size_bytes() > 0 {
-            let mut x = vec![T::one(); m];
-            let short = MemStack::new(&mut scratch[..needed.size_bytes() - 1]);
-            let solved = block.solve_local(&mut x, short, threads::ONE);
-            assert_eq!(solved, Err(ApplyError::Scratch));
-        }
     }
 }
 
@@ -119,29 +102,35 @@ fn frustrated_triangle() -> Graph {
     Graph::new(3, edges.to_vec())
 }
 
-/// Each block through `solve_local` on a NaN-filled scratch, scattered back.
+/// The whole factor through `apply_with` on a NaN-filled scratch.
 fn solve_on_dirty_scratch<T: Real>(
     factor: &ApproxInverse<T>,
     b: &[f64],
     threads: Threads,
 ) -> Vec<f64> {
-    let mut x = vec![0.0; factor.n()];
-    for block in factor.clone().into_blocks() {
-        let mut local: Vec<T> = block.vertices().map(|v| cast(b[v])).collect();
-        let mut cells = nan_cells::<T>(block.scratch());
-        let solved = block.solve_local(&mut local, MemStack::new_any(&mut cells), threads);
-        solved.expect("buffers fit");
-        (block.vertices().zip(&local)).for_each(|(v, &value)| x[v] = cast(value));
-    }
-    x
+    let mut x: Vec<T> = cast_all(b);
+    let mut cells = nan_cells::<T>(factor.scratch(1, threads));
+    factor
+        .apply_with(&mut x, threads, MemStack::new_any(&mut cells))
+        .expect("buffers fit");
+    cast_all(&x)
 }
 
+/// Scratch past the copied column, which only a lift takes once no component gathers.
 fn uses_scratch(factor: &Factored) -> bool {
-    by_type!(&factor.factor, factor => factor
-        .clone()
-        .into_blocks()
-        .iter()
-        .any(|block| block.scratch().size_bytes() > 0))
+    fn lifts<T: Real>(factor: &ApproxInverse<T>) -> bool {
+        let run = |c: Component<'_, T>| {
+            c.vertices()
+                .zip(c.vertices().skip(1))
+                .all(|(a, b)| b == a + 1)
+        };
+        assert!(
+            factor.components().all(run),
+            "a gather would take scratch too"
+        );
+        factor.scratch(1, Threads::All).size_bytes() > factor.n() * size_of::<T>()
+    }
+    by_type!(&factor.factor, factor => lifts(factor))
 }
 
 /// NaN reaches the result if any scratch slot is read before it is written.
@@ -155,20 +144,6 @@ fn assert_dirty_scratch_matches_the_solve(label: &str, factor: &Factored) {
         let x = factor.labels.to_caller(&x);
         assert_eq!(bits(&x), bits(&want), "{label} {threads:?}");
     }
-    let local = factor.labels.to_local(&rhs);
-    let x = by_type!(&factor.factor, f => solve_in_place_on_dirty_scratch(f, &local));
-    let x = factor.labels.to_caller(&x);
-    assert_eq!(bits(&x), bits(&want), "{label} in place");
-}
-
-/// The whole factor through `solve_in_place` on a NaN-filled scratch.
-fn solve_in_place_on_dirty_scratch<T: Real>(factor: &ApproxInverse<T>, b: &[f64]) -> Vec<f64> {
-    let mut x: Vec<T> = cast_all(b);
-    let mut cells = nan_cells::<T>(factor.scratch(1, Threads::All));
-    factor
-        .solve_in_place(&mut x, MemStack::new_any(&mut cells))
-        .expect("buffers fit");
-    cast_all(&x)
 }
 
 cases! {
@@ -258,8 +233,8 @@ cases! {
         let factor = reduced.factorize(&Config::default());
         assert_eq!(factor.n(), 128);
         assert_eq!(bits(&factor.solve(&[1.0; 128])), bits(&[0.0; 128]));
-        let x = by_type!(&factor.factor, f => solve_in_place_on_dirty_scratch(f, &[1.0; 128]));
-        assert_eq!(bits(&x), bits(&[0.0; 128]), "{types:?}: in place zeroes every dead vertex");
+        let x = by_type!(&factor.factor, f => solve_on_dirty_scratch(f, &[1.0; 128], Threads::All));
+        assert_eq!(bits(&x), bits(&[0.0; 128]), "{types:?}: a dirty scratch zeroes every dead vertex");
     }
 }
 
@@ -466,7 +441,7 @@ fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
 #[case::interleaved(&[0, 2, 1, 3], &[2, 4, 3, 5], &[3, 3])]
 #[case::two_runs(&[0, 1, 3, 4], &[1, 2, 4, 5], &[0, 0])]
 #[case::run_and_list(&[0, 1, 3], &[1, 2, 5], &[0, 2])]
-fn solve_in_place_gathers_only_blocks_whose_vertices_are_not_consecutive(
+fn apply_with_gathers_only_blocks_whose_vertices_are_not_consecutive(
     #[case] a: &[u32],
     #[case] b: &[u32],
     #[case] gathered: &[usize],
@@ -475,11 +450,8 @@ fn solve_in_place_gathers_only_blocks_whose_vertices_are_not_consecutive(
     use approx_chol::input::Laplacian;
     let factor: ApproxInverse = factorize(Laplacian::new(6, a, b).unwrap()).unwrap();
     let rhs = [1.0, -1.0, 2.0, -3.0, 0.5, 0.5];
-    let blocks = factor.blocks();
-    assert_eq!(blocks.len(), gathered.len());
-    let bytes = |block: &BlockFactor, g: usize| g * size_of::<f64>() + block.scratch().size_bytes();
-    let needed = (blocks.iter().zip(gathered)).map(|(block, &g)| bytes(block, g));
-    let in_place = needed.max().expect("a block");
+    assert_eq!(factor.components().len(), gathered.len());
+    let in_place = gathered.iter().max().expect("a block") * size_of::<f64>();
     let column = 6 * size_of::<f64>();
     for k in 1..=3 {
         let scratch = factor.scratch(k, Threads::All).size_bytes();
@@ -489,26 +461,8 @@ fn solve_in_place_gathers_only_blocks_whose_vertices_are_not_consecutive(
             "{k} columns"
         );
     }
-    let x = solve_in_place_on_dirty_scratch(&factor, &rhs);
-    let want = solve_on_dirty_scratch(&factor, &rhs, Threads::All);
-    assert_eq!(bits(&x), bits(&want));
-}
-
-/// An empty stack's slice is not aligned for `f64`: a solve taking no scratch must not ask for it.
-#[test]
-fn a_solve_taking_no_scratch_accepts_an_empty_stack() {
-    use approx_chol::factorize;
-    use approx_chol::input::Laplacian;
-    let factor: ApproxInverse = factorize(Laplacian::new(3, &[0, 1], &[1, 2]).unwrap()).unwrap();
-    let [block] = factor.blocks() else {
-        panic!("one block");
-    };
-    assert_eq!(block.scratch(), StackReq::EMPTY);
-    let mut x = vec![1.0, -1.0, 0.5];
-    let want = factor.solve(&x).unwrap();
-    block
-        .solve_local(&mut x, MemStack::new(&mut []), Threads::All)
-        .unwrap();
+    let x = solve_on_dirty_scratch(&factor, &rhs, Threads::All);
+    let want = factor.solve(&rhs).expect("rows fit");
     assert_eq!(bits(&x), bits(&want));
 }
 

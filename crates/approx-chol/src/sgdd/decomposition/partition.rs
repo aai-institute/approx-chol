@@ -3,10 +3,10 @@ use crate::{Index, Real};
 
 /// Every vertex once, components back to back.
 pub(in crate::sgdd) struct Partition<I> {
-    order: Vec<I>,
-    ends: Vec<I>,
+    pub(super) order: Vec<I>,
+    pub(super) ends: Vec<I>,
     /// Each vertex's index within its component, none when whole: extraction remaps without a per-component map.
-    position: Option<Vec<I>>,
+    pub(super) position: Option<Vec<I>>,
 }
 
 impl<I: Index> Partition<I> {
@@ -54,23 +54,6 @@ impl<I: Index> Partition<I> {
             ends: vec![I::from_index(n)],
             position: None,
         }
-    }
-
-    pub(in crate::sgdd) fn n(&self) -> usize {
-        self.order.len()
-    }
-
-    /// `None` when whole, as every vertex is its own position.
-    pub(super) fn position(&self) -> Option<&[I]> {
-        self.position.as_deref()
-    }
-
-    pub(in crate::sgdd) fn components(&self) -> impl Iterator<Item = &[I]> + '_ {
-        self.ends.iter().scan(0usize, |start, &end| {
-            let component = &self.order[*start..end.index()];
-            *start = end.index();
-            Some(component)
-        })
     }
 }
 

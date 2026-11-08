@@ -33,13 +33,6 @@ doc = false
 bench = false
 
 [[bin]]
-name = "block_factor_from_bytes"
-path = "fuzz_targets/block_factor_from_bytes.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "whole_factor_from_bytes"
 path = "fuzz_targets/whole_factor_from_bytes.rs"
 test = false

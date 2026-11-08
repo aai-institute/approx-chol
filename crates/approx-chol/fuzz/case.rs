@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::num::NonZeroUsize;
 
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
@@ -159,21 +160,22 @@ impl<T: Real> Case<T> {
     fn run(&self) -> Result<usize, Box<dyn Error>> {
         let factor = self.factor()?;
         let b = vec![T::one(); factor.n()];
-        let solved = factor
-            .solve(&b)
+        let mut solved = b.clone();
+        factor
+            .apply(&mut solved, Threads::All)
             .expect("a right-hand side of length n is accepted");
-        let blocks = factor.into_blocks();
         // NaN scratch reaches the solution if any slot is read before written.
-        for block in &blocks {
-            let mut local = vec![T::one(); block.vertices().len()];
-            let mut cells = cells::filled(block.scratch(), T::nan());
-            block
-                .solve_local(&mut local, MemStack::new_any(&mut cells), Threads::All)
-                .expect("a stack of the block's own scratch is accepted");
-            let agrees = (block.vertices().zip(&local))
-                .all(|(v, x)| solved[v].integer_decode() == x.integer_decode());
+        for threads in [Threads::All, Threads::Count(NonZeroUsize::MIN)] {
+            let mut x = b.clone();
+            let mut cells = cells::filled(factor.scratch(1, threads), T::nan());
+            factor
+                .apply_with(&mut x, threads, MemStack::new_any(&mut cells))
+                .expect("a stack of the factor's own scratch is accepted");
+            let agrees =
+                (solved.iter().zip(&x)).all(|(s, x)| s.integer_decode() == x.integer_decode());
             assert!(agrees, "dirty scratch changed the solution");
         }
-        Ok(blocks.len())
+        let components = factor.components().len();
+        Ok(components)
     }
 }

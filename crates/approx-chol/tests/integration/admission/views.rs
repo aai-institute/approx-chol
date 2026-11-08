@@ -9,6 +9,7 @@ use rstest::rstest;
 use crate::common::dense_residual::{apply, solve_residual};
 use crate::common::gram::{dense_csr, matrix};
 use crate::common::out_of_range::{out_of_range, FLOOR};
+use crate::common::solve::Solve;
 
 use super::assert_names_a_defect;
 

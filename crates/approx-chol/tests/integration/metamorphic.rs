@@ -9,6 +9,7 @@ use crate::common::graph::Graph;
 use crate::common::grid::grid;
 use crate::common::interleaved::interleaved_components;
 use crate::common::runner::{check, stated_by};
+use crate::common::solve::Solve;
 use crate::common::sparse::Sparse;
 
 /// Half the draws tie vertex 0 to ground, so the graph is an SDDM.
@@ -125,7 +126,7 @@ fn a_scaled_floating_block_projects_its_null_vector_out() {
         .collect();
     let csr = CsrRef::new(&ptrs, &columns, &scaled, graph.n as u32).unwrap();
     let factor: ApproxInverse = factorize(csr).unwrap();
-    assert!(factor.blocks().iter().all(|block| block.floats()));
+    assert!(factor.components().all(|component| component.floats()));
 
     let norm = |v: &[f64]| v.iter().map(|v| v * v).sum::<f64>().sqrt();
     let dot = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(a, b)| a * b).sum::<f64>();

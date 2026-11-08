@@ -1,14 +1,12 @@
 #![cfg(feature = "serde")]
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Laplacian, Sddm};
-use approx_chol::{
-    factorize_with, ApproxInverse, BlockFactor, Config, MemBuffer, MemStack, ScalingPolicy,
-    SchurMode, Threads,
-};
+use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy, SchurMode, Threads};
 use rstest::rstest;
 
 use crate::common::bits::bits;
 use crate::common::gram::{dense_csr, matrix};
+use crate::common::solve::Solve;
 use crate::common::threads;
 
 fn factors(config: Config) -> Vec<ApproxInverse> {
@@ -54,18 +52,9 @@ fn configs() -> [Config; 2] {
     [Config::default(), exact]
 }
 
-fn solve(block: &BlockFactor, threads: Threads) -> Vec<u64> {
-    let mut x: Vec<f64> = (0..block.vertices().len())
-        .map(|i| (i % 7) as f64 - 3.0)
-        .collect();
-    block
-        .solve_local(
-            &mut x,
-            MemStack::new(&mut MemBuffer::new(block.scratch())),
-            threads,
-        )
-        .unwrap();
-    bits(&x)
+fn bits_at(factor: &ApproxInverse, threads: Threads) -> Vec<u64> {
+    let b: Vec<f64> = (0..factor.n()).map(|i| (i % 7) as f64 - 3.0).collect();
+    bits(&factor.solve_at(&b, threads).unwrap())
 }
 
 #[test]
@@ -73,25 +62,19 @@ fn round_trip_solves_bit_identically() {
     let defaults = factors(Config::default());
     assert!(defaults
         .iter()
-        .flat_map(ApproxInverse::blocks)
-        .any(|block| block.floats()));
-    assert!(
-        defaults[0]
-            .blocks()
-            .iter()
-            .any(|block| block.splittable_work() > 0),
-        "a block keeps Cᵀ, which loading rebuilds"
-    );
+        .flat_map(ApproxInverse::components)
+        .any(|component| component.floats()));
+    // `Cᵀ` is not persisted: only `Debug` shows that a block kept it and that loading rebuilt it.
+    let keeps_transpose = |factor: &ApproxInverse| format!("{factor:?}").contains("ct: Some(");
+    assert!(keeps_transpose(&defaults[0]), "a block keeps Cᵀ");
     for config in configs() {
         for factor in factors(config) {
-            let blocks = factor.into_blocks();
-            let bytes = postcard::to_stdvec(&blocks).unwrap();
-            let back: Vec<BlockFactor> = postcard::from_bytes(&bytes).unwrap();
+            let bytes = postcard::to_stdvec(&factor).unwrap();
+            let back: ApproxInverse = postcard::from_bytes(&bytes).unwrap();
             assert_eq!(postcard::to_stdvec(&back).unwrap(), bytes);
-            for (block, back) in blocks.iter().zip(&back) {
-                for threads in threads::BUDGETS {
-                    assert_eq!(solve(block, threads), solve(back, threads));
-                }
+            assert_eq!(format!("{back:?}"), format!("{factor:?}"));
+            for threads in threads::BUDGETS {
+                assert_eq!(bits_at(&factor, threads), bits_at(&back, threads));
             }
         }
     }
@@ -107,7 +90,7 @@ fn corrupt_bytes_error_instead_of_panicking() {
         state as usize
     };
     for factor in factors(Config::default()) {
-        let bytes = postcard::to_stdvec(&factor.into_blocks()).unwrap();
+        let bytes = postcard::to_stdvec(&factor).unwrap();
         for trial in 0..500 {
             let mut corrupt = bytes.clone();
             let at = next() % corrupt.len();
@@ -116,10 +99,8 @@ fn corrupt_bytes_error_instead_of_panicking() {
                 1 => corrupt[at] ^= 1 << (next() % 8),
                 _ => corrupt.truncate(at),
             }
-            if let Ok(blocks) = postcard::from_bytes::<Vec<BlockFactor>>(&corrupt) {
-                blocks
-                    .iter()
-                    .for_each(|block| drop(solve(block, threads::ONE)));
+            if let Ok(factor) = postcard::from_bytes::<ApproxInverse>(&corrupt) {
+                drop(bits_at(&factor, threads::ONE));
             }
         }
     }
@@ -133,11 +114,34 @@ fn varint(mut x: u64, bytes: &mut Vec<u8>) {
     bytes.push(x as u8);
 }
 
-/// One `u32` block on vertices `[64, 0]` whose elimination has `rows` empty rows of `C`, cut off before its Cholesky.
+/// An order's segment as the bytes hold it.
+#[derive(serde::Serialize)]
+enum Segment {
+    Run { start: usize, len: usize },
+}
+
+/// An order's listed vertices as the bytes hold them.
+#[derive(serde::Serialize)]
+enum Listed<'a> {
+    U32(&'a [u32]),
+}
+
+/// The version and an order of one block, the run `0..run`, listing `dead` after it.
+fn order_head(run: usize, dead: &[u32]) -> Vec<u8> {
+    let version = approx_chol::FACTOR_FORMAT_VERSION;
+    let segments = [Segment::Run { start: 0, len: run }];
+    postcard::to_stdvec(&(version, &segments[..], Listed::U32(dead))).unwrap()
+}
+
+/// The version and the order of one block on `0..n` before its blocks.
+fn one_block_factor(n: u64) -> Vec<u8> {
+    order_head(n as usize, &[])
+}
+
+/// A factor of one `u32` block of identity `F` on vertices `0..65` whose elimination has `rows` empty rows of `C`, cut off before its Cholesky.
 fn truncated_elimination(rows: u64, n_cols: u64) -> Vec<u8> {
-    let mut bytes = vec![1];
-    varint(approx_chol::FACTOR_FORMAT_VERSION.into(), &mut bytes);
-    bytes.extend([0, 2, 64, 0, 0, 1]);
+    let mut bytes = one_block_factor(65);
+    bytes.extend([0, 1, 0, 1]);
     varint(rows + 1, &mut bytes);
     bytes.extend(std::iter::repeat_n(0, rows as usize + 1));
     bytes.extend([0, 0]);
@@ -155,7 +159,7 @@ fn an_elimination_keeping_more_columns_than_rows_is_corrupt(
     #[case] rows: u64,
     #[case] n_cols: u64,
 ) {
-    let error = postcard::from_bytes::<Vec<BlockFactor>>(&truncated_elimination(rows, n_cols));
+    let error = postcard::from_bytes::<ApproxInverse>(&truncated_elimination(rows, n_cols));
     assert_eq!(error.unwrap_err(), postcard::Error::SerdeDeCustom);
 }
 
@@ -163,14 +167,14 @@ fn an_elimination_keeping_more_columns_than_rows_is_corrupt(
 #[case::kept_in_place(3)]
 #[case::transposed(10_001)]
 fn an_elimination_keeping_at_most_its_rows_decodes_up_to_the_cut(#[case] rows: u64) {
-    let error = postcard::from_bytes::<Vec<BlockFactor>>(&truncated_elimination(rows, rows));
+    let error = postcard::from_bytes::<ApproxInverse>(&truncated_elimination(rows, rows));
     assert_eq!(
         error.unwrap_err(),
         postcard::Error::DeserializeUnexpectedEnd
     );
 }
 
-/// A Laplacian on `0..4` beside two zero vertices, so the factor carries dead vertices.
+/// An edge `0–1` grounded at `0`, beside a vertex `2` no entry couples.
 fn with_isolated_vertex() -> ApproxInverse {
     let edge = Laplacian::new(3, &[0u32], &[1]).unwrap();
     factorize_with(
@@ -181,15 +185,10 @@ fn with_isolated_vertex() -> ApproxInverse {
     .unwrap()
 }
 
+/// A path on `0..4` beside two zero vertices, so the factor carries dead vertices.
 fn with_dead_vertices() -> ApproxInverse {
     let laplacian = Laplacian::new(6, &[0u32, 1, 2], &[1u32, 2, 3]).unwrap();
     factorize_with(laplacian, Config::default(), ScalingPolicy::default()).unwrap()
-}
-
-fn solve_factor(factor: &ApproxInverse) -> Vec<u64> {
-    let b: Vec<f64> = (0..factor.n()).map(|i| (i % 5) as f64 - 2.0).collect();
-    let x = factor.solve(&b).unwrap();
-    bits(&x)
 }
 
 #[test]
@@ -197,7 +196,7 @@ fn a_factor_round_trips_bit_identically() {
     let all = configs()
         .into_iter()
         .flat_map(factors)
-        .chain([with_dead_vertices()]);
+        .chain([with_dead_vertices(), with_isolated_vertex()]);
     for factor in all {
         let bytes = postcard::to_stdvec(&factor).unwrap();
         let version = postcard::to_stdvec(&approx_chol::FACTOR_FORMAT_VERSION).unwrap();
@@ -207,43 +206,62 @@ fn a_factor_round_trips_bit_identically() {
             (decoded.n(), decoded.n_steps()),
             (factor.n(), factor.n_steps())
         );
-        assert_eq!(solve_factor(&decoded), solve_factor(&factor));
+        assert_eq!(
+            bits_at(&decoded, Threads::All),
+            bits_at(&factor, Threads::All)
+        );
     }
 }
 
-/// The factor's bytes with `n` and the dead vertices replaced, its blocks kept.
-fn respliced(factor: &ApproxInverse, n: usize, dead: &[usize]) -> Vec<u8> {
-    let bytes = postcard::to_stdvec(factor).unwrap();
-    let version = approx_chol::FACTOR_FORMAT_VERSION;
-    let own_dead: Vec<usize> = (0..factor.n())
-        .filter(|&v| {
-            factor
-                .blocks()
-                .iter()
-                .all(|block| block.vertices().all(|u| u != v))
-        })
-        .collect();
-    let head = postcard::to_stdvec(&(version, factor.n(), &own_dead)).unwrap();
+/// [`with_dead_vertices`]'s bytes with its order's run length and dead vertices replaced, its block kept.
+fn respliced(run: usize, dead: &[u32]) -> Vec<u8> {
+    let bytes = postcard::to_stdvec(&with_dead_vertices()).unwrap();
+    let head = order_head(4, &[4, 5]);
     assert_eq!(
         &bytes[..head.len()],
         &head[..],
-        "the head is version, n, dead"
+        "the order leads, one run then the dead vertices"
     );
-    let mut spliced = postcard::to_stdvec(&(version, n, dead)).unwrap();
+    let mut spliced = order_head(run, dead);
     spliced.extend_from_slice(&bytes[head.len()..]);
     spliced
 }
 
+/// The bytes state no `n`: it is the vertex count, so a vertex is missing only as one out of range or twice.
 #[rstest]
-#[case::a_vertex_missing(6, &[4])]
-#[case::one_past_n(7, &[4, 5])]
-#[case::dead_inside_a_block(6, &[4, 3])]
-#[case::dead_out_of_range(6, &[4, 6])]
-fn a_factor_not_covering_n_once_is_rejected(#[case] n: usize, #[case] dead: &[usize]) {
-    let factor = with_dead_vertices();
-    assert!(postcard::from_bytes::<ApproxInverse>(&respliced(&factor, 6, &[4, 5])).is_ok());
-    let error = postcard::from_bytes::<ApproxInverse>(&respliced(&factor, n, dead)).unwrap_err();
+#[case::dead_inside_a_block(4, &[4, 3])]
+#[case::dead_twice(4, &[4, 4])]
+#[case::dead_out_of_range(4, &[4, 6])]
+#[case::run_past_its_block(usize::MAX / 4, &[4, 5])]
+#[case::run_past_usize(usize::MAX, &[4, 5])]
+fn a_factor_not_covering_its_vertices_once_is_rejected(#[case] run: usize, #[case] dead: &[u32]) {
+    for fine in [&[4, 5], &[5, 4]] {
+        assert!(postcard::from_bytes::<ApproxInverse>(&respliced(4, fine)).is_ok());
+    }
+    let error = postcard::from_bytes::<ApproxInverse>(&respliced(run, dead)).unwrap_err();
     assert_eq!(error, postcard::Error::SerdeDeCustom);
+}
+
+/// One dead vertex fewer is a factor of one dimension fewer.
+#[test]
+fn the_dimension_is_the_vertex_count() {
+    let factor = postcard::from_bytes::<ApproxInverse>(&respliced(4, &[4])).unwrap();
+    assert_eq!(factor.n(), 5);
+}
+
+/// The inverse pivots count the lone vertices: one fewer reads the last as dead, one more than the vertices left is corrupt.
+#[test]
+fn the_inverse_pivots_count_the_lone_vertices() {
+    let v = serde_json::to_value(with_isolated_vertex()).unwrap();
+    assert_eq!(v[1][2].as_array().unwrap().len(), 1, "one lone vertex");
+    let mut none = v.clone();
+    none[1][2] = serde_json::json!([]);
+    let dead: ApproxInverse = serde_json::from_value(none).unwrap();
+    assert_eq!(dead.components().len(), 1);
+    assert_eq!(dead.solve(&[1.0, 2.0, 3.0]).unwrap()[2], 0.0);
+    let mut more = v;
+    more[1][2] = serde_json::json!([0.5, 0.5]);
+    serde_json::from_value::<ApproxInverse>(more).expect_err("more lone vertices than listed");
 }
 
 /// 0.6.0's JSON lacks `exact_max_dim` and `complement`, so it is rejected, not read as the default bound.
@@ -379,39 +397,45 @@ fn an_isolated_vertex_round_trips_through_json() {
     assert_eq!(factor.solve(&b).unwrap(), back.solve(&b).unwrap());
 }
 
-/// Re-tags a `u32` coupled block as `u64`, over `vertices`.
-fn widen_with(block: &mut serde_json::Value, vertices: serde_json::Value) {
-    let mut coupled = block[1]["U32"].take();
-    coupled["restriction"]["vertices"] = vertices;
-    block[1] = serde_json::json!({ "U64": coupled });
+/// [`with_isolated_vertex`]'s JSON `[version, [order, blocks, inverse_pivots, clamps]]` with its order's segments and listed vertices replaced.
+fn with_order(segments: serde_json::Value, listed: serde_json::Value) -> serde_json::Value {
+    let mut v = serde_json::to_value(with_isolated_vertex()).unwrap();
+    let order = &mut v[1][0];
+    assert_eq!(
+        order,
+        &serde_json::json!({"segments": [{"Run": {"start": 0, "len": 2}}], "listed": {"U32": [2]}})
+    );
+    *order = serde_json::json!({ "segments": segments, "listed": { "U64": listed } });
+    v
 }
 
-/// A block's vertex `u64::MAX` reads back as itself, never overflowing the end of a run of consecutive vertices.
+/// A vertex `u64::MAX` is a decode error, never an overflow past the end of a run or a list.
 #[rstest]
-#[case::isolated(&[u64::MAX])]
-#[case::coupled(&[u64::MAX, 0])]
-fn a_vertex_at_u64_max_reads_back(#[case] vertices: &[u64]) {
-    let factor = with_isolated_vertex();
-    let block = (factor.blocks().iter())
-        .find(|block| block.vertices().len() == vertices.len())
-        .unwrap();
-    let mut v = serde_json::to_value(block).unwrap();
-    match vertices {
-        [vertex] => v[1]["Isolated"]["vertex"] = (*vertex).into(),
-        _ => widen_with(&mut v, vertices.into()),
-    }
-    let back: BlockFactor = serde_json::from_value(v).unwrap();
-    let want = vertices.iter().map(|&vertex| vertex as usize);
-    assert!(back.vertices().eq(want));
+#[case::lone(serde_json::json!([{"Run": {"start": 0, "len": 2}}]), serde_json::json!([u64::MAX]))]
+#[case::listed(serde_json::json!([{"Listed": {"len": 2}}]), serde_json::json!([u64::MAX, 0, 2]))]
+#[case::one_listed_for_two(serde_json::json!([{"Listed": {"len": 1}}]), serde_json::json!([u64::MAX, 2]))]
+#[case::run(serde_json::json!([{"Run": {"start": u64::MAX, "len": 2}}]), serde_json::json!([2]))]
+fn a_vertex_at_u64_max_is_corrupt(
+    #[case] segments: serde_json::Value,
+    #[case] listed: serde_json::Value,
+) {
+    let fine = with_order(
+        serde_json::json!([{"Listed": {"len": 2}}]),
+        serde_json::json!([1, 0, 2]),
+    );
+    serde_json::from_value::<ApproxInverse>(fine).expect("its vertices listed decode");
+    let v = with_order(segments, listed);
+    serde_json::from_value::<ApproxInverse>(v).expect_err("no factor covers u64::MAX");
 }
 
-/// A lone `u64::MAX` for a two-vertex block is a decode error, never an overflow past it.
+/// A block listing one vertex twice is a decode error, though every vertex is below `n` (#348).
 #[test]
-fn a_lone_vertex_at_u64_max_for_two_is_corrupt() {
-    let factor = with_isolated_vertex();
-    let mut v = serde_json::to_value(&factor.blocks()[0]).unwrap();
-    widen_with(&mut v, serde_json::json!([u64::MAX]));
-    serde_json::from_value::<BlockFactor>(v).expect_err("one vertex for two is corrupt");
+fn a_vertex_twice_in_one_block_is_corrupt() {
+    let v = with_order(
+        serde_json::json!([{"Listed": {"len": 2}}]),
+        serde_json::json!([1, 1, 2]),
+    );
+    serde_json::from_value::<ApproxInverse>(v).expect_err("vertex 1 in two places, 0 in none");
 }
 
 /// A forged empty `F` is a decode error, never a panic while its peak is read.
@@ -427,15 +451,10 @@ fn empty_scales_are_corrupt() {
     serde_json::from_value::<ApproxInverse>(v).expect_err("empty scales are corrupt");
 }
 
-/// A unit path `3 → 2 → 1`, gauge `0`, its middle step `len` long.
+/// A factor of one unit path `3 → 2 → 1`, gauge `0`, its middle step `len` long: one `u64` block of identity `F`, no elimination, one sheet of 4 pinned at `0`, approximate; proven grounding, no lone vertex and no clamp.
 fn path_block_bytes(len: u64) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    varint(u64::from(approx_chol::FACTOR_FORMAT_VERSION), &mut bytes);
-    bytes.push(1); // Storage::U64
-    bytes.extend([4, 0, 1, 2, 3, 0]); // vertices, Identity
-    bytes.push(0); // no elimination
-    bytes.extend([0, 4, 1, 0, 1]); // One, n = 4, pinned Some(0), Approximate
-    bytes.push(3);
+    let mut bytes = one_block_factor(4);
+    bytes.extend([1, 1, 0, 0, 0, 4, 1, 0, 1, 3]);
     for (vertex, len) in [(3, 1), (2, len), (1, 1)] {
         varint(vertex, &mut bytes);
         varint(len, &mut bytes);
@@ -443,15 +462,15 @@ fn path_block_bytes(len: u64) -> Vec<u8> {
     }
     bytes.extend([3, 2, 1, 0, 3]);
     (0..3).for_each(|_| bytes.extend(1.0f64.to_le_bytes()));
-    bytes.push(0); // no report
+    bytes.extend([0, 0, 0]);
     bytes
 }
 
 /// A forged u64 step length past the stored neighbors is a decode error, never an overflow; the same bytes at its true length decode.
 #[test]
 fn an_approximate_step_length_past_its_neighbors_is_corrupt() {
-    postcard::from_bytes::<BlockFactor>(&path_block_bytes(1)).expect("the true length decodes");
-    postcard::from_bytes::<BlockFactor>(&path_block_bytes(u64::MAX))
+    postcard::from_bytes::<ApproxInverse>(&path_block_bytes(1)).expect("the true length decodes");
+    postcard::from_bytes::<ApproxInverse>(&path_block_bytes(u64::MAX))
         .expect_err("a step past its neighbors is corrupt");
 }
 
@@ -462,7 +481,51 @@ fn an_approximate_step_length_past_its_neighbors_is_corrupt() {
 #[case::subnormal(1e-323)]
 #[case::past_any_pivot(1e308)]
 fn an_isolated_inverse_pivot_out_of_range_is_corrupt(#[case] by: f64) {
-    let factor = with_isolated_vertex();
-    decode_scaled(&factor, "/Isolated/inverse_pivot", by)
-        .expect_err("its inverse pivot is out of range");
+    let mut v = serde_json::to_value(with_isolated_vertex()).unwrap();
+    serde_json::from_value::<ApproxInverse>(v.clone()).expect("its inverse pivot decodes");
+    let pivot = &mut v[1][2][0];
+    assert_eq!(pivot.as_f64(), Some(0.5));
+    *pivot = (0.5 * by).into();
+    serde_json::from_value::<ApproxInverse>(v).expect_err("its inverse pivot is out of range");
+}
+
+/// `rows` as a CSR factored under `exact_max_dim`, as JSON.
+fn factored_json(rows: &[&[f64]], exact_max_dim: usize) -> serde_json::Value {
+    let rows: Vec<Vec<f64>> = rows.iter().map(|row| row.to_vec()).collect();
+    let (ptrs, columns, values) = dense_csr(&rows);
+    let csr = CsrRef::new(&ptrs, &columns, &values, rows.len() as u32).unwrap();
+    let config = Config {
+        exact_max_dim,
+        ..Config::default()
+    };
+    serde_json::to_value(factorize_with(csr, config, ScalingPolicy::default()).unwrap()).unwrap()
+}
+
+/// The exact arm factors `M` itself on one sheet, so a dense factor on a cover's two sheets is corrupt.
+#[test]
+fn a_dense_factor_on_two_sheets_is_corrupt() {
+    let triangle: [&[f64]; 3] = [&[2.0, -1.0, 1.0], &[-1.0, 2.0, -1.0], &[1.0, -1.0, 2.0]];
+    let mut cover = factored_json(&triangle, 0);
+    let path: [&[f64]; 6] = [
+        &[1.5, -1.0, 0.0, 0.0, 0.0, 0.0],
+        &[-1.0, 2.5, -1.0, 0.0, 0.0, 0.0],
+        &[0.0, -1.0, 2.5, -1.0, 0.0, 0.0],
+        &[0.0, 0.0, -1.0, 2.5, -1.0, 0.0],
+        &[0.0, 0.0, 0.0, -1.0, 2.5, -1.0],
+        &[0.0, 0.0, 0.0, 0.0, -1.0, 1.5],
+    ];
+    let dense = factored_json(&path, 24);
+    let dense = &dense[1][1]["U32"][0]["cholesky"];
+    let shape = |c: &serde_json::Value| (c["sheets"].clone(), c["n"].clone());
+    assert_eq!(
+        shape(&cover[1][1]["U32"][0]["cholesky"]),
+        ("Two".into(), 6.into())
+    );
+    assert_eq!(shape(dense), ("One".into(), 6.into()));
+    assert!(dense["triangular"].get("Dense").is_some());
+    serde_json::from_value::<ApproxInverse>(cover.clone()).expect("the cover decodes");
+    let cholesky = &mut cover[1][1]["U32"][0]["cholesky"];
+    cholesky["pinned"] = dense["pinned"].clone();
+    cholesky["triangular"] = dense["triangular"].clone();
+    serde_json::from_value::<ApproxInverse>(cover).expect_err("a dense factor on two sheets");
 }

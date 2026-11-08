@@ -93,7 +93,7 @@ proptest! {
         let full: ApproxInverse = factorize(full).expect("a Laplacian is admitted");
         let triangle: ApproxInverse = factorize(triangle).expect("a Laplacian is admitted");
         prop_assert_eq!(format!("{full:?}"), format!("{triangle:?}"));
-        prop_assert!(full.blocks().iter().all(|block| block.floats()));
+        prop_assert!(full.components().all(|component| component.floats()));
     }
 
     #[test]

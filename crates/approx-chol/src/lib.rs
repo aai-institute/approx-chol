@@ -1,14 +1,15 @@
 //! Approximate Cholesky of symmetric generalized diagonally dominant `A`, one irreducible block at a time.
 //!
 //! ```
-//! use approx_chol::{factorize, CsrRef};
+//! use approx_chol::{factorize, CsrRef, Threads};
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let row_ptrs    = [0u32, 2, 5, 8, 10];
 //! let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
 //! let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
 //!
 //! let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
-//! let x = factorize(csr)?.solve(&[1.0, -1.0, 1.0, -1.0])?;
+//! let mut x = vec![1.0, -1.0, 1.0, -1.0];
+//! factorize(csr)?.apply(&mut x, Threads::All)?;
 //! assert!(x.iter().all(|v| f64::is_finite(*v)));
 //! # Ok(())
 //! # }
@@ -45,6 +46,7 @@ mod batch;
 mod error;
 mod factor;
 pub mod input;
+mod order;
 mod sgdd;
 mod storage;
 mod threads;
@@ -57,10 +59,9 @@ use num_traits::{float::TotalOrder, Float, PrimInt, Unsigned};
 use batch::Batch;
 pub use dyn_stack::{MemBuffer, MemStack, StackReq};
 pub use error::Error;
-use factor::Storage;
 #[cfg(feature = "serde")]
 pub use factor::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
-pub use factor::{ApplyError, ApproxInverse, BlockFactor, Config, MatrixMut, SchurMode, Vertices};
+pub use factor::{ApplyError, ApproxInverse, Component, Config, MatrixMut, SchurMode};
 pub use input::{CsrError, CsrRef, IndexKind, Input, OwnedCsr, Side};
 pub use sgdd::{Clamp, ReduceError, ScalingOutcome, ScalingPolicy};
 use sgdd::{Complement, Reduced};
@@ -101,14 +102,12 @@ pub fn factorize_complement<T: Real, I: PrimInt + Sync>(
 ) -> Result<ApproxInverse<T>, Error> {
     Ok(match fits_u32(input.n()) {
         true => ApproxInverse::build(
-            Complement::reduce_onto(input, kept, scaling)?,
+            Complement::<T, u32>::reduce_onto(input, kept, scaling)?,
             &config,
-            Storage::U32,
         ),
         false => ApproxInverse::build(
-            Complement::reduce_onto(input, kept, scaling)?,
+            Complement::<T, u64>::reduce_onto(input, kept, scaling)?,
             &config,
-            Storage::U64,
         ),
     })
 }
@@ -147,8 +146,8 @@ impl<T: Real> Sgdd<T> {
     /// Factors each block in parallel; clone first to factor again under another `config`.
     pub fn factor(self, config: &Config) -> ApproxInverse<T> {
         match self.0 {
-            Indexed::U32(summands) => ApproxInverse::build(summands, config, Storage::U32),
-            Indexed::U64(summands) => ApproxInverse::build(summands, config, Storage::U64),
+            Indexed::U32(summands) => ApproxInverse::build(summands, config),
+            Indexed::U64(summands) => ApproxInverse::build(summands, config),
         }
     }
 }

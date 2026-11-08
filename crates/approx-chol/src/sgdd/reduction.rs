@@ -7,10 +7,10 @@ use num_traits::PrimInt;
 use rayon::prelude::*;
 
 use super::block::{Balance, BlockComplement, Congruent, Grounding, ReduceError, WithClamp};
-use super::congruence::{Congruence, Selection};
+use super::congruence::Congruence;
 use super::decomposition::{
-    of_csr, of_upper, AdjacencyLayout, Biadjacency, Components, Partitioned, RowSums,
-    StrictUpperTriangle, Summands, SymmetricBlock,
+    of_csr, of_upper, AdjacencyLayout, Biadjacency, Partitioned, RowSums, StrictUpperTriangle,
+    Summands, SymmetricBlock,
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy};
 use super::{diagonal_in_range, Complement, Reduced, Reduction};
@@ -65,20 +65,25 @@ impl<T: Real, I: Index> Complement<T, I> {
         let range = input.vertices(kept);
         let layout = Biadjacency::onto(&input, kept);
         let Reduction {
-            summands: Summands { blocks, lone, dead },
+            summands:
+                Summands {
+                    mut components,
+                    blocks,
+                },
             clamps,
         } = Reduced::from_gram(layout, input.lower(), &policy)?;
-        let local = |v: usize| I::from_index(v - range.start);
-        let on_kept = |v: I| range.contains(&v.index()).then(|| local(v.index()));
-        let summands = Summands {
-            blocks: (blocks.into_par_iter())
-                .map(|block| BlockComplement::new(block, local))
-                .collect(),
-            lone: (lone.into_iter())
-                .filter_map(|(v, pivot)| Some((on_kept(v)?, pivot)))
-                .collect(),
-            dead: dead.into_iter().filter_map(on_kept).collect(),
-        };
+        let vertices: &[I] = &components.vertices;
+        let blocks: Vec<_> = (blocks.into_par_iter())
+            .zip(components.coupled.par_iter_mut())
+            .map(|(block, coupled)| {
+                let complement = BlockComplement::new(block, vertices[coupled.start].index());
+                coupled.start += complement.kept_from();
+                complement
+            })
+            .collect();
+        components.retain_isolated(|v| range.contains(&v.index()));
+        components.numbering = range;
+        let summands = Summands { components, blocks };
         Ok(Self { summands, clamps })
     }
 }
@@ -86,9 +91,10 @@ impl<T: Real, I: Index> Complement<T, I> {
 impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
     /// Scales and signs each block's `A_c`, closing its surplus from the same rows.
     fn reduce(self, policy: &ScalingPolicy) -> Result<Reduced<T, I>, ReduceError> {
-        self.extract(|a| {
-            let relax = |a: &SymmetricBlock<T, I>| {
-                scaling::relax(&a.off_diagonal, &a.rows.diagonal, policy)
+        self.reduced(|vertices, entries| {
+            let a = SymmetricBlock { vertices, entries };
+            let relax = |a: &SymmetricBlock<'_, T, I>| {
+                scaling::relax(&a.entries.off_diagonal, &a.entries.rows.diagonal, policy)
             };
             let block = match a.reduce(policy, relax)? {
                 Signed::Folded(folded) => {
@@ -99,28 +105,28 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
             };
             Ok(block)
         })
-        .map(Components::into_reduced)
+        .map(Summands::into_reduced)
     }
 }
 
-impl<T: Real, I: Index> SymmetricBlock<T, I> {
+impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
     /// `M = F A_c F` with `F = S R`, formed once with its rows, which decide the clamp; `relax` runs only past the row test, and a frustrated `A_c` takes `S = I` and grounds on its rows at once.
     fn reduce(
         self,
         policy: &ScalingPolicy,
         relax: impl FnOnce(&Self) -> Option<scaling::Relaxation<T>>,
-    ) -> Result<Signed<T, I>, ReduceError> {
-        let RowSums { diagonal, abs } = &self.rows;
+    ) -> Result<Signed<'p, T, I>, ReduceError> {
+        let RowSums { diagonal, abs } = &self.entries.rows;
         let in_range = |(&d, &s): (&T, &T)| diagonal_in_range(d) && diagonal_in_range(s);
         if let Some(i) = diagonal.iter().zip(abs).position(|row| !in_range(row)) {
-            let vertex = self.vertices.vertex(i);
+            let vertex = self.vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
         }
         if let Some(i) = diagonal.iter().position(|&d| d <= T::zero()) {
-            let vertex = self.vertices.vertex(i);
+            let vertex = self.vertices[i].index();
             return Err(ReduceError::NonpositiveDiagonal { vertex });
         }
-        let vertex = self.vertices.vertex(0);
+        let vertex = self.vertices[0].index();
         let relaxation = match diagonal
             .iter()
             .zip(abs)
@@ -129,19 +135,20 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
             true => None,
             false => Some(relax(&self).ok_or(ReduceError::Unscalable { vertex })?),
         };
-        let folding = folding_signs(&self.off_diagonal);
+        let folding = folding_signs(&self.entries.off_diagonal);
         let folded = folding.is_some();
         let signs = folding.unwrap_or(Congruence::Identity);
         let (m, rows, vector) = match relaxation {
             // Signs keep every magnitude, so `A_c`'s rows are `M`'s.
             None => {
-                let m = Congruent::signed(self.vertices, self.off_diagonal, signs);
-                (m, self.rows, ScaleVector::Identity)
+                let m = Congruent::signed(self.vertices, self.entries.off_diagonal, signs);
+                (m, self.entries.rows, ScaleVector::Identity)
             }
             Some((scales, vector)) => {
-                let (m, abs) = Congruent::scaled(self.vertices, self.off_diagonal, signs, &scales)
-                    .ok_or(ReduceError::Unscalable { vertex })?;
-                let diagonal = (self.rows.diagonal.iter().zip(&scales[..]))
+                let (m, abs) =
+                    Congruent::scaled(self.vertices, self.entries.off_diagonal, signs, &scales)
+                        .ok_or(ReduceError::Unscalable { vertex })?;
+                let diagonal = (self.entries.rows.diagonal.iter().zip(&scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();
                 (m, RowSums { diagonal, abs }, vector)
@@ -170,14 +177,14 @@ impl<T: Real, I: Index> SymmetricBlock<T, I> {
 }
 
 /// Only a folded `M` can still take a surplus from `V`.
-enum Signed<T, I> {
-    Folded(Folded<T, I>),
+enum Signed<'p, T, I> {
+    Folded(Folded<'p, T, I>),
     Frustrated(WithClamp<T, I>),
 }
 
 /// A folded `M` with its rows and the bands they sit in, its surplus still to be decided.
-struct Folded<T, I> {
-    m: Congruent<T, I>,
+struct Folded<'p, T, I> {
+    m: Congruent<'p, T, I>,
     rows: RowSums<T>,
     vector: ScaleVector,
     /// The worst `(Σ_j|m_ij| − m_ii)/m_ii` clamped past its row's band.
@@ -189,13 +196,16 @@ trait Surplus<T: Real, I: Index> {
     /// Whether residues alone float a scaled block, which then has no certificate to fall back on.
     const RESIDUES_FLOAT_SCALED: bool;
     /// Each row's residue `(M1)_i`.
-    fn residues<'a>(&'a self, folded: &'a Folded<T, I>) -> impl Iterator<Item = f64> + Clone + 'a;
+    fn residues<'a>(
+        &'a self,
+        folded: &'a Folded<'_, T, I>,
+    ) -> impl Iterator<Item = f64> + Clone + 'a;
     /// Whether a row states a ground, which no residue test can float.
-    fn states_ground(&self, folded: &Folded<T, I>) -> bool;
+    fn states_ground(&self, folded: &Folded<'_, T, I>) -> bool;
     /// Whether the block's cycles all close within `√ε`; asked last, as it may run a pass over `V`.
-    fn certifies(&self, vertices: &Selection<I>) -> bool;
+    fn certifies(&self, vertices: &[I]) -> bool;
     /// `M`'s grounds once it does not float.
-    fn grounds(&self, folded: &Folded<T, I>) -> Grounding<T>;
+    fn grounds(&self, folded: &Folded<'_, T, I>) -> Grounding<T>;
 }
 
 /// Read from `M`'s rows: `d_i − Σ_j |m_ij|`.
@@ -204,20 +214,23 @@ struct RowSurplus;
 impl<T: Real, I: Index> Surplus<T, I> for RowSurplus {
     const RESIDUES_FLOAT_SCALED: bool = true;
 
-    fn residues<'a>(&'a self, folded: &'a Folded<T, I>) -> impl Iterator<Item = f64> + Clone + 'a {
+    fn residues<'a>(
+        &'a self,
+        folded: &'a Folded<'_, T, I>,
+    ) -> impl Iterator<Item = f64> + Clone + 'a {
         let RowSums { diagonal, abs } = &folded.rows;
         (diagonal.iter().zip(abs)).map(|(&d, &s)| widen(d) - widen(s))
     }
 
-    fn states_ground(&self, _: &Folded<T, I>) -> bool {
+    fn states_ground(&self, _: &Folded<'_, T, I>) -> bool {
         false
     }
 
-    fn certifies(&self, _: &Selection<I>) -> bool {
+    fn certifies(&self, _: &[I]) -> bool {
         false
     }
 
-    fn grounds(&self, Folded { m, rows, .. }: &Folded<T, I>) -> Grounding<T> {
+    fn grounds(&self, Folded { m, rows, .. }: &Folded<'_, T, I>) -> Grounding<T> {
         match surplus(rows) {
             grounding if grounding.is_grounded() => grounding,
             // An uncompensated `f64` row sum can round up to `d_i` from degree 67 (#269).
@@ -232,7 +245,7 @@ impl<T: Real, I: Index> Surplus<T, I> for RowSurplus {
     }
 }
 
-impl<T: Real, I: Index> Folded<T, I> {
+impl<T: Real, I: Index> Folded<'_, T, I> {
     /// The one float-or-ground rule: in band, no stated ground, and residues or a certificate float `M`.
     fn settle<S: Surplus<T, I>>(
         self,
@@ -252,7 +265,7 @@ impl<T: Real, I: Index> Folded<T, I> {
         // The first ground, which flushing all of them would lose from a definite `M`.
         let Some(first) = (grounding.surplus()).and_then(|s| s.iter().position(|&s| s > T::zero()))
         else {
-            let vertex = self.m.vertices().vertex(0);
+            let vertex = self.m.vertices()[0].index();
             return Err(ReduceError::Unscalable { vertex });
         };
         let Self { m, rows, .. } = self;
@@ -289,9 +302,9 @@ impl<T: Real, I: Index> Folded<T, I> {
 }
 
 /// Row `i` of `m` holds a ground out of range.
-fn out_of_range<T: Real, I: Index>(m: &Congruent<T, I>, i: usize) -> ReduceError {
+fn out_of_range<T: Real, I: Index>(m: &Congruent<'_, T, I>, i: usize) -> ReduceError {
     ReduceError::OutOfRange {
-        vertex: m.vertices().vertex(i),
+        vertex: m.vertices()[i].index(),
     }
 }
 
@@ -409,21 +422,23 @@ mod tests {
         }
         let csr = CsrRef::new(&row_ptrs, &columns, &values, leaves + 1).expect("valid shape");
         let policy = ScalingPolicy::default();
-        let unscaled = |_: &SymmetricBlock<f64, u32>| -> Option<scaling::Relaxation<f64>> {
+        let unscaled = |_: &SymmetricBlock<'_, f64, u32>| -> Option<scaling::Relaxation<f64>> {
             panic!("dominant within the tolerance, so nothing scales")
         };
         let partitioned = of_csr::<f64, u32, u32>(Canonical::of(csr).expect("canonical"));
-        let components = (partitioned.expect("symmetric"))
-            .extract(|a| match a.reduce(&policy, unscaled)? {
-                Signed::Folded(Folded {
-                    vector: ScaleVector::Identity,
-                    clamped,
-                    ..
-                }) => Ok(clamped),
-                _ => Ok(f64::NAN),
+        let summands = (partitioned.expect("symmetric"))
+            .reduced(|vertices, entries| {
+                match (SymmetricBlock { vertices, entries }).reduce(&policy, unscaled)? {
+                    Signed::Folded(Folded {
+                        vector: ScaleVector::Identity,
+                        clamped,
+                        ..
+                    }) => Ok(clamped),
+                    _ => Ok(f64::NAN),
+                }
             })
             .expect("admitted");
-        let [clamped] = components.summands.blocks[..] else {
+        let [clamped] = summands.blocks[..] else {
             panic!("one component")
         };
         assert!(clamped > 16.0 * f64::EPSILON, "{clamped:e}");

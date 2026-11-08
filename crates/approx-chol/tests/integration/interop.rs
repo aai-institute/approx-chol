@@ -10,6 +10,7 @@ use approx_chol::{factorize, ApproxInverse};
 use num_traits::PrimInt;
 
 use crate::common::bits::bits;
+use crate::common::solve::Solve;
 
 /// The 4-vertex path 0-1-2-3 with unit weights.
 const N: usize = 4;

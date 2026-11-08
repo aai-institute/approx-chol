@@ -47,14 +47,6 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         self.inv_pivot.len()
     }
 
-    /// `2·nnz(C) + n_eliminated + n_kept`, within's estimate, when it splits, else `0`.
-    pub(super) fn splittable_work(&self) -> usize {
-        match self.ct {
-            Some(_) => 2 * self.cross.nnz() + self.cross.n_rows() + self.cross.n_cols(),
-            None => 0,
-        }
-    }
-
     /// `x ← M⁻¹x`, with `reduced` solving `S` in place on the kept half between the two products.
     pub(super) fn solve<V: Batch<T>>(
         &self,

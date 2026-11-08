@@ -1,184 +1,6 @@
 use std::borrow::Cow;
-use std::ops::Range;
 
-use crate::{compensated_sum, widen, Batch, Index, MemStack, Real};
-
-/// `R = F Pᵀ`, so `M = R A Rᵀ`: `Pᵀ` picks the block's vertices of `A`, or of `S` once tailed, `F` is the congruence.
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(remote = "Self"),
-    serde(bound(
-        serialize = "T: serde::Serialize, I: Index + serde::Serialize",
-        deserialize = "T: Real + serde::Deserialize<'de>, I: Index + serde::Deserialize<'de>"
-    ))
-)]
-#[derive(Clone, Debug)]
-pub(crate) struct Restriction<T, I> {
-    vertices: Selection<I>,
-    congruence: Congruence<T>,
-}
-
-impl<T: Real, I: Index> Restriction<T, I> {
-    /// Panics unless one factor per vertex.
-    pub(super) fn new(vertices: Selection<I>, congruence: Congruence<T>) -> Self {
-        assert!(congruence.fits(vertices.len()), "one factor per vertex");
-        Self {
-            vertices,
-            congruence,
-        }
-    }
-
-    pub(crate) fn vertices(&self) -> &Selection<I> {
-        &self.vertices
-    }
-
-    /// The restriction to local vertices `from..`, renumbered by `vertex`: a complement's, `F` commuting with the elimination.
-    pub(super) fn tail(self, from: usize, vertex: impl Fn(usize) -> I) -> Self {
-        let vertices = (from..self.vertices.len()).map(|k| vertex(self.vertices.vertex(k)));
-        Self::new(
-            Selection::owned(vertices.collect()),
-            self.congruence.tail(from),
-        )
-    }
-
-    /// `F` from vertex `from` on, `None` unless scaled, so every `|f|` is `1`.
-    pub(crate) fn factor_tail(&self, from: usize) -> Option<FactorTail<'_, T>> {
-        match &self.congruence {
-            Congruence::Scaled(scales) => Some(FactorTail(&scales.factors[from..])),
-            _ => None,
-        }
-    }
-
-    /// `x ← F x` on a gathered `x`, `F·1` projected out first when `M` is singular.
-    pub(crate) fn restrict<V: Batch<T>>(&self, x: &mut [V], singular: bool) {
-        if singular {
-            self.congruence.project_out_null(x);
-        }
-        self.congruence.apply(x);
-    }
-
-    /// `x ← x − x_q·1` at the largest `|f|`, where a split block's singular solve fixes `M`'s gauge.
-    pub(crate) fn regauge<V: Batch<T>>(&self, x: &mut [V]) {
-        if let Congruence::Scaled(scales) = &self.congruence {
-            let gauge = x[scales.peak];
-            x.iter_mut().for_each(|x| *x = x.sub(gauge));
-        }
-    }
-
-    /// `x ← F x` back in `A_c`'s scale, `F·1` projected out last when `M` is singular.
-    pub(crate) fn prolongate<V: Batch<T>>(&self, x: &mut [V], singular: bool) {
-        self.congruence.apply(x);
-        if singular {
-            self.congruence.project_out_null(x);
-        }
-    }
-}
-
-#[cfg(feature = "serde")]
-checked_serde!(Restriction);
-
-#[cfg(feature = "serde")]
-impl<T: Real, I: Index> Restriction<T, I> {
-    fn checked(self) -> Option<Self> {
-        let factors = match &self.congruence {
-            Congruence::Signs(f) => f.iter().all(|f| f.abs() == T::one()),
-            Congruence::Scaled(s) => s.factors.iter().all(|f| f.is_finite() && *f != T::zero()),
-            Congruence::Identity | Congruence::NegateFrom(_) => true,
-        };
-        let fits = self.vertices.len() > 0 && self.congruence.fits(self.vertices.len());
-        (fits && factors).then_some(self)
-    }
-}
-
-/// `Pᵀ`: the block's vertices of the factored matrix in local order, a run of consecutive ones kept as its range, where `Pᵀ x` is a slice of `x`.
-#[derive(Clone, Debug)]
-pub(crate) enum Selection<I> {
-    Range(Range<usize>),
-    Listed(Box<[I]>),
-}
-
-impl<I: Index> Selection<I> {
-    /// Copies `vertices` only when they are not one run.
-    pub(super) fn of(vertices: &[I]) -> Self {
-        Self::run(vertices).map_or_else(|| Self::Listed(vertices.into()), Self::Range)
-    }
-
-    pub(super) fn owned(vertices: Box<[I]>) -> Self {
-        Self::run(&vertices).map_or(Self::Listed(vertices), Self::Range)
-    }
-
-    fn run(vertices: &[I]) -> Option<Range<usize>> {
-        let start = vertices.first().map_or(0, |v| v.index());
-        let end = start.checked_add(vertices.len())?;
-        (vertices.iter().enumerate())
-            .all(|(k, v)| v.index() == start + k)
-            .then_some(start..end)
-    }
-
-    /// Each local vertex in the factored matrix's numbering, in local order.
-    pub(super) fn iter(&self) -> impl Iterator<Item = usize> + Clone + '_ {
-        (0..self.len()).map(|k| self.vertex(k))
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        match self {
-            Self::Range(range) => range.len(),
-            Self::Listed(vertices) => vertices.len(),
-        }
-    }
-
-    /// Local vertex `k` in the factored matrix's numbering.
-    pub(crate) fn vertex(&self, k: usize) -> usize {
-        match self {
-            Self::Range(range) => range.start + k,
-            Self::Listed(vertices) => vertices[k].index(),
-        }
-    }
-
-    /// Slots [`on_local`](Self::on_local) takes from its stack before passing the rest on: room to gather, none for a range.
-    pub(crate) fn gather_slots(&self) -> usize {
-        match self {
-            Self::Range(_) => 0,
-            Self::Listed(vertices) => vertices.len(),
-        }
-    }
-
-    /// Runs `solve` on `Pᵀ x` and the rest of `stack`, then sets the block's vertices of `x` to the result.
-    pub(crate) fn on_local<V: Copy>(
-        &self,
-        x: &mut [V],
-        stack: &mut MemStack,
-        solve: impl FnOnce(&mut [V], &mut MemStack),
-    ) {
-        match self {
-            Self::Range(range) => solve(&mut x[range.clone()], stack),
-            Self::Listed(vertices) => {
-                let (mut local, rest) = stack.make_with(vertices.len(), |k| x[vertices[k].index()]);
-                solve(&mut local, rest);
-                (local.iter().zip(vertices.iter())).for_each(|(&v, &i)| x[i.index()] = v);
-            }
-        }
-    }
-}
-
-/// The vertex list either way, so the wire never shows how a block stores it.
-#[cfg(feature = "serde")]
-impl<I: Index + serde::Serialize> serde::Serialize for Selection<I> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::Range(range) => serializer.collect_seq(range.clone().map(I::from_index)),
-            Self::Listed(vertices) => vertices.serialize(serializer),
-        }
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de, I: Index + serde::Deserialize<'de>> serde::Deserialize<'de> for Selection<I> {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        <Box<[I]>>::deserialize(deserializer).map(Self::owned)
-    }
-}
+use crate::{compensated_sum, widen, Batch, Real};
 
 /// `F` in `M = F A_c F`, finite and nonzero; a folded `A_c`'s null vector is then `F·1`.
 #[cfg_attr(
@@ -187,7 +9,7 @@ impl<'de, I: Index + serde::Deserialize<'de>> serde::Deserialize<'de> for Select
     serde(bound(deserialize = "T: Real + serde::Deserialize<'de>"))
 )]
 #[derive(Clone, Debug)]
-pub(super) enum Congruence<T> {
+pub(crate) enum Congruence<T> {
     Identity,
     /// Every vertex from this one on is negated.
     NegateFrom(usize),
@@ -199,7 +21,7 @@ pub(super) enum Congruence<T> {
 
 /// `F = S R`'s factors, the largest `|f|`'s index and `F·1`'s normalization, computed once: every singular solve projects `F·1` out.
 #[derive(Clone, Debug)]
-pub(super) struct ScaledFactors<T> {
+pub(crate) struct ScaledFactors<T> {
     factors: Box<[T]>,
     peak: usize,
     norm: f64,
@@ -265,6 +87,30 @@ impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ScaledF
 }
 
 impl<T: Real> Congruence<T> {
+    /// `x ← F x` on a gathered `x`, `F·1` projected out first when `M` is singular.
+    pub(crate) fn restrict<V: Batch<T>>(&self, x: &mut [V], singular: bool) {
+        if singular {
+            self.project_out_null(x);
+        }
+        self.apply(x);
+    }
+
+    /// `x ← x − x_q·1` at the largest `|f|`, where a split block's singular solve fixes `M`'s gauge.
+    pub(crate) fn regauge<V: Batch<T>>(&self, x: &mut [V]) {
+        if let Congruence::Scaled(scales) = self {
+            let gauge = x[scales.peak];
+            x.iter_mut().for_each(|x| *x = x.sub(gauge));
+        }
+    }
+
+    /// `x ← F x` back in `A_c`'s scale, `F·1` projected out last when `M` is singular.
+    pub(crate) fn prolongate<V: Batch<T>>(&self, x: &mut [V], singular: bool) {
+        self.apply(x);
+        if singular {
+            self.project_out_null(x);
+        }
+    }
+
     /// `f_i`, vertex `i`'s entry of `F·1`.
     pub(super) fn factor(&self, i: usize) -> T {
         match self {
@@ -275,8 +121,8 @@ impl<T: Real> Congruence<T> {
         }
     }
 
-    /// `F` on vertices `from..`, renumbered from `0`.
-    fn tail(&self, from: usize) -> Self {
+    /// `F` on vertices `from..`, renumbered from `0`: a complement's, `F` commuting with the elimination.
+    pub(super) fn tail(&self, from: usize) -> Self {
         match self {
             Self::Identity => Self::Identity,
             // `(−I) S (−I) = S`: a tail negated whole needs no congruence.
@@ -287,8 +133,16 @@ impl<T: Real> Congruence<T> {
         }
     }
 
+    /// `F` from vertex `from` on, `None` unless scaled, so every `|f|` is `1`.
+    pub(crate) fn factor_tail(&self, from: usize) -> Option<FactorTail<'_, T>> {
+        match self {
+            Self::Scaled(scales) => Some(FactorTail(&scales.factors[from..])),
+            _ => None,
+        }
+    }
+
     /// Whether it scales exactly `n` vertices.
-    fn fits(&self, n: usize) -> bool {
+    pub(super) fn fits(&self, n: usize) -> bool {
         match self {
             Self::Identity => true,
             Self::NegateFrom(first) => *first <= n,
@@ -296,6 +150,17 @@ impl<T: Real> Congruence<T> {
                 factors.len() == n
             }
         }
+    }
+
+    /// Whether it scales exactly `n` vertices, each by a sign or a finite nonzero factor.
+    #[cfg(feature = "serde")]
+    pub(crate) fn holds(&self, n: usize) -> bool {
+        let factors = match self {
+            Self::Signs(f) => f.iter().all(|f| f.abs() == T::one()),
+            Self::Scaled(s) => s.factors.iter().all(|f| f.is_finite() && *f != T::zero()),
+            Self::Identity | Self::NegateFrom(_) => true,
+        };
+        factors && self.fits(n)
     }
 
     /// `F·1` over `n` vertices, `None` for the identity.

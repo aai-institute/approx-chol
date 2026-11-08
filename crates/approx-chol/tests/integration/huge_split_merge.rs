@@ -1,6 +1,8 @@
 use approx_chol::input::Laplacian;
 use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy};
 
+use crate::common::solve::Solve;
+
 fn approximate(split_merge: u32) -> Config {
     Config {
         split_merge: Some(split_merge),

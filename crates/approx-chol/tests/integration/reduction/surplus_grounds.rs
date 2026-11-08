@@ -6,10 +6,11 @@ use rstest::rstest;
 
 use crate::common::dense::dense;
 use crate::common::dense_residual::apply;
-use crate::common::entry::floats;
+use crate::common::entry::{floats, only};
 use crate::common::gram::{dense_csr, matrix};
 use crate::common::lcg::Lcg;
 use crate::common::out_of_range::{out_of_range, FLOOR};
+use crate::common::solve::Solve;
 
 use super::cycle::Cycle;
 
@@ -123,7 +124,7 @@ fn backward_error(a: &[Vec<f64>], rhs: &[f64]) -> f64 {
     let (ptrs, columns, values) = dense_csr(a);
     let csr = CsrRef::new(&ptrs, &columns, &values, a.len() as u32).unwrap();
     let factor: ApproxInverse = factorize_with(csr, dense(), ScalingPolicy::default()).unwrap();
-    assert!(!factor.blocks()[0].floats());
+    assert!(!only(&factor).floats());
     let x = factor.solve(rhs).unwrap();
     let residual = (apply(a, &x).into_iter().zip(rhs)).map(|(r, b)| (r - b).abs());
     let a_norm = (a.iter()).map(|row| row.iter().map(|a| a.abs()).sum::<f64>());
@@ -250,7 +251,7 @@ fn scaled_heavy_gram_path_grounds() {
 #[rstest]
 fn gram_cycle_missing_within_its_tolerance_floats_and_reports(#[values(1e-10, -1e-10)] miss: f64) {
     let factor = factorize(Cycle::<f64>::doubling(20).missing(miss).gram()).unwrap();
-    let block = &factor.blocks()[0];
+    let block = only(&factor);
     let clamp = factor.clamps().first().expect("reported");
     assert!(clamp.violation > 1e-11, "{clamp:?}");
     assert!(block.floats());
@@ -265,7 +266,7 @@ fn f32_star_just_past_the_band_grounds(#[case] ulps: f32, #[case] floats: bool) 
     let values = [1.0 + ulps * eps, -1.0, -w, -1.0, 1.0, -w, w];
     let csr = CsrRef::new(&[0u32, 3, 5, 7], &[0, 1, 2, 0, 1, 0, 2], &values, 3).unwrap();
     let factor: ApproxInverse<f32> = factorize(csr).unwrap();
-    assert_eq!(factor.blocks()[0].floats(), floats);
+    assert_eq!(only(&factor).floats(), floats);
 }
 
 /// Worker slopes `t − t̄` beside year intercepts, the first or last worker's year 3 off by `δ`: the last closes its cycles after the year hubs' many lookups.
@@ -287,8 +288,7 @@ fn near_aliased_slope_floats(
     )
     .unwrap();
     let factor = factorize(gram).unwrap();
-    assert_eq!(factor.blocks().len(), 1);
-    assert!(factor.blocks()[0].floats());
+    assert!(only(&factor).floats());
 }
 
 /// A cycle of `2⁵⁰` whose rows sit `residues` off their coupling, and a pendant grounded by `1`: rounding outweighs the ground in `Σs⁺` or `1ᵀM1` (#323).
@@ -317,7 +317,7 @@ fn light_ground_on_long_ring_grounds(#[values(false, true)] swapped: bool) {
     let ring = Cycle::random(100_000, 1).grounded(0, 1e-11);
     let ring = if swapped { ring.swapped() } else { ring };
     let factor: ApproxInverse = factorize(ring.gram()).unwrap();
-    assert!(!factor.blocks()[0].floats());
+    assert!(!only(&factor).floats());
 }
 
 /// A cycle missing past `√ε` states the ring definite: it grounds whatever the scaling iteration leaves.
@@ -327,7 +327,7 @@ fn ring_missing_past_its_tolerance_grounds(
     #[values(2e-8, -1e-7, 1e-6)] miss: f64,
 ) {
     let factor: ApproxInverse = factorize(Cycle::random(1000, seed).missing(miss).gram()).unwrap();
-    assert!(!factor.blocks()[0].floats());
+    assert!(!only(&factor).floats());
 }
 
 /// Values rounded to `f32` close the ring within `√ε`: its null vector scales it, no iteration runs.
@@ -336,7 +336,7 @@ fn f32_rounded_ring_keeps_its_null_vector() {
     let ring = Cycle::random(10_000, 1);
     let factor: ApproxInverse<f32> =
         factorize_with(ring.gram(), Config::default(), no_iterations()).unwrap();
-    let block = &factor.blocks()[0];
+    let block = only(&factor);
     assert_eq!(factor.clamps(), []);
     assert!(!block.grounding_unproven());
     assert!(block.floats());
@@ -348,7 +348,7 @@ fn f32_ring_missing_past_its_tolerance_is_reported() {
     let ring = Cycle::random(10_000, 1).missing(1e-2);
     let factor: ApproxInverse<f32> =
         factorize_with(ring.gram(), Config::default(), no_iterations()).unwrap();
-    assert!(factor.blocks()[0].grounding_unproven());
+    assert!(only(&factor).grounding_unproven());
 }
 
 fn no_iterations() -> ScalingPolicy {
@@ -383,7 +383,7 @@ fn short_cycle_miss_in_a_large_block_is_reported(#[case] miss: f64, #[case] repo
     let (n, [a, b], [x, y]) = flower(20_000, miss);
     let factor: ApproxInverse =
         factorize(FactorWidth2::new(n, (&a, &x), (&b, &y)).unwrap()).unwrap();
-    let block = &factor.blocks()[0];
+    let block = only(&factor);
     assert!(block.floats());
     let any = !factor.clamps().is_empty() || block.grounding_unproven();
     assert_eq!(any, reported);

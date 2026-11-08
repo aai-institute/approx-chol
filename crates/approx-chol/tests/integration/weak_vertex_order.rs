@@ -3,6 +3,7 @@ use approx_chol::{factorize_with, ApproxInverse, Config, OwnedCsr, ScalingPolicy
 
 use crate::common::dense::dense;
 use crate::common::graph::{Edge, Graph};
+use crate::common::solve::Solve;
 
 /// `max_i |Ax − b|_i / (|A||x| + |b|)_i`; NaN when any term is.
 fn omega(graph: &Graph, x: &[f64], b: &[f64]) -> f64 {

@@ -5,19 +5,17 @@ use std::collections::BTreeSet;
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
 use approx_chol::FACTOR_FORMAT_VERSION as FORMAT_VERSION;
-use approx_chol::{
-    factorize_with, ApproxInverse, BlockFactor, Config, MemBuffer, MemStack, ScalingOutcome,
-    ScalingPolicy,
-};
+use approx_chol::{factorize_with, ApproxInverse, Config, ScalingOutcome, ScalingPolicy};
 use rstest::rstest;
 use serde::de::value::{Error, SeqDeserializer};
 use serde::Deserialize;
 
+use crate::common::solve::Solve;
 use crate::common::threads;
 
-/// One list declares each fixture, its file name and its rstest case, so none is kept in step by hand.
 const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
+/// One list declares each fixture, its file name and its rstest case, so none is kept in step by hand.
 macro_rules! fixtures {
     ($($variant:ident => $name:ident),+ $(,)?) => {
         #[derive(Clone, Copy, Debug)]
@@ -49,13 +47,14 @@ fixtures! {
     Isolated => isolated,
     Floating => floating,
     Cover => cover,
-    DenseCover => dense_cover,
+    DenseFrustrated => dense_frustrated,
     SampledAc2 => sampled_ac2,
+    Clamped => clamped,
 }
 
 impl Fixture {
-    /// The matrix of a fixture factored exactly; a sampled factor only preconditions, so it has none to meet.
-    fn exact_matrix(self) -> Option<&'static [&'static [f64]]> {
+    /// The matrix a fixture factors, if not a sampled gram.
+    fn matrix(self) -> Option<&'static [&'static [f64]]> {
         match self {
             // Strictly dominant, so it reduces to a grounded block.
             Self::Grounded => Some(&[&[2.0, -1.0, 0.0], &[-1.0, 3.0, -1.0], &[0.0, -1.0, 2.0]]),
@@ -77,16 +76,36 @@ impl Fixture {
                 &[-1.0, 0.0, 1.0, 0.0],
                 &[0.0, -1.0, 0.0, 1.0],
             ]),
-            // A triangle with one positive edge: frustrated, so the approximate arm factors its double cover.
-            Self::Cover | Self::DenseCover => {
+            // A triangle with one positive edge: frustrated, so the approximate arm factors its double cover and the exact arm `M` itself.
+            Self::Cover | Self::DenseFrustrated => {
                 Some(&[&[2.0, -1.0, 1.0], &[-1.0, 2.0, -1.0], &[1.0, -1.0, 2.0]])
             }
+            // Two interleaved pairs no scaling makes dominant: each is clamped.
+            Self::Clamped => Some(&[
+                &[1.0, 0.0, -3.0, 0.0],
+                &[0.0, 1.0, 0.0, -3.0],
+                &[-3.0, 0.0, 1.0, 0.0],
+                &[0.0, -3.0, 0.0, 1.0],
+            ]),
             Self::SampledAc2 => None,
         }
     }
 
+    /// Whether the factor solves its matrix exactly: neither sampled nor clamped.
+    fn exact(self) -> bool {
+        !matches!(self, Self::SampledAc2 | Self::Clamped)
+    }
+
+    /// The clamps the payload lists, by vertices.
+    fn clamps(self) -> &'static [&'static [usize]] {
+        match self {
+            Self::Clamped => &[&[0, 2], &[1, 3]],
+            _ => &[],
+        }
+    }
+
     fn factor(self) -> ApproxInverse {
-        let Some(matrix) = self.exact_matrix() else {
+        let Some(matrix) = self.matrix() else {
             return sampled_gram(self.config());
         };
         let (mut row_ptrs, mut columns, mut values) = (vec![0u32], Vec::new(), Vec::new());
@@ -122,20 +141,12 @@ impl Fixture {
         match self {
             Self::Grounded => &["pinned: None"],
             Self::GroundedApproximate => &["pinned: None", "Approximate(", "len: 0"],
-            Self::Isolated => &["Isolated("],
+            Self::Isolated => &["inverse_pivots: [0.5, 0.25]"],
             Self::Floating => &["sheets: One, n: 2, pinned: Some("],
             Self::Cover => &["sheets: Two"],
-            Self::DenseCover => &["sheets: Two", "Dense("],
+            Self::DenseFrustrated => &["sheets: One, n: 3, pinned: None", "Dense("],
             Self::SampledAc2 => &["elimination: Some", "Approximate("],
-        }
-    }
-
-    /// What this build's factor must show: a legacy fixture's input no longer factors as its payload did.
-    fn built(self) -> &'static [&'static str] {
-        match self {
-            // 0.7.0 factored a small frustrated block densely on its cover; it is now dense on one sheet.
-            Self::DenseCover => &["sheets: One, n: 3, pinned: None", "Dense("],
-            _ => self.covers(),
+            Self::Clamped => &["scaling: Refuted"],
         }
     }
 
@@ -145,10 +156,6 @@ impl Fixture {
             "{FIXTURE_DIR}/{}_{FORMAT_VERSION:#010x}.postcard",
             self.name()
         )
-    }
-
-    fn blocks(self) -> Vec<BlockFactor> {
-        self.factor().into_blocks()
     }
 }
 
@@ -169,22 +176,6 @@ fn sampled_gram(config: Config) -> ApproxInverse {
 /// Zero-sum over every fixture's floating component, so each has an exact solution.
 fn rhs(n: usize) -> Vec<f64> {
     (0..n).map(|i| [1.0, 2.0, -1.0, -2.0][i % 4]).collect()
-}
-
-fn solve(blocks: &[BlockFactor], b: &[f64]) -> Vec<f64> {
-    let mut x = vec![0.0; b.len()];
-    for block in blocks {
-        let vertices: Vec<usize> = block.vertices().collect();
-        let mut local: Vec<f64> = vertices.iter().map(|&v| b[v]).collect();
-        (block.solve_local(
-            &mut local,
-            MemStack::new(&mut MemBuffer::new(block.scratch())),
-            threads::ONE,
-        ))
-        .expect("buffers fit");
-        vertices.iter().zip(local).for_each(|(&v, xv)| x[v] = xv);
-    }
-    x
 }
 
 fn relative_residual(matrix: &[&[f64]], x: &[f64], b: &[f64]) -> f64 {
@@ -215,7 +206,7 @@ fn every_fixture_has_a_case() {
 fn assert_committed_payload_decodes_and_solves(fixture: Fixture) {
     let committed = std::fs::read(fixture.path())
         .expect("no committed payload for this version; regenerate if the version moved");
-    let restored: Vec<BlockFactor> =
+    let restored: ApproxInverse =
         postcard::from_bytes(&committed).expect("committed payload must decode");
     assert_eq!(
         postcard::to_stdvec(&restored).expect("serialize"),
@@ -227,22 +218,31 @@ fn assert_committed_payload_decodes_and_solves(fixture: Fixture) {
     }
 
     let factor = fixture.factor();
-    let built = format!("{:?}", factor.blocks());
-    for marker in fixture.built() {
+    let built = format!("{factor:?}");
+    for marker in fixture.covers() {
         assert!(
             built.contains(marker),
             "this build's {fixture:?} lost {marker:?}"
         );
     }
     let b = rhs(factor.n());
-    let x = solve(&restored, &b);
-    if let Some(matrix) = fixture.exact_matrix() {
+    let x = restored.solve_at(&b, threads::ONE).expect("rows fit");
+    if let Some(matrix) = fixture.matrix().filter(|_| fixture.exact()) {
         let residual = relative_residual(matrix, &x, &b);
         assert!(residual < 1e-12, "relative residual {residual:e}");
     }
+    // The clamp list's encoding, its outcome's variant order among it, is frozen with the format version.
+    let clamps: Vec<_> = (restored.clamps().iter())
+        .map(|clamp| (clamp.vertices.as_slice(), clamp.scaling))
+        .collect();
+    let listed: Vec<_> = (fixture.clamps().iter())
+        .map(|&vertices| (vertices, ScalingOutcome::Refuted))
+        .collect();
+    assert_eq!(clamps, listed, "{fixture:?}");
+    assert_eq!(restored.clamps(), factor.clamps(), "this build's clamps");
 
     // The residual alone is met by any valid factor, not only the one that wrote these bytes.
-    let expected = solve(&factor.into_blocks(), &b);
+    let expected = factor.solve_at(&b, threads::ONE).expect("rows fit");
     assert!(
         x.iter()
             .zip(&expected)
@@ -256,19 +256,19 @@ fn assert_committed_payload_decodes_and_solves(fixture: Fixture) {
 #[case::from_a_future_release(FORMAT_VERSION + 1)]
 #[case::zero(0)]
 fn a_payload_of_another_format_version_is_rejected_by_version(#[case] declared: u32) {
-    let block = Fixture::Grounded.blocks().pop().expect("one block");
-    let bytes = postcard::to_stdvec(&block).expect("serialize");
+    let bytes = postcard::to_stdvec(&Fixture::Grounded.factor()).expect("serialize");
     let (_, body) = postcard::take_from_bytes::<u32>(&bytes).expect("a leading version");
     let mut payload = postcard::to_stdvec(&declared).expect("serialize the version");
     payload.extend_from_slice(body);
     assert_eq!(
-        postcard::from_bytes::<BlockFactor>(&payload).expect_err("another version must not decode"),
+        postcard::from_bytes::<ApproxInverse>(&payload)
+            .expect_err("another version must not decode"),
         postcard::Error::SerdeDeCustom
     );
 
     // Nothing follows the version, so only a gate that reads it first can name it.
     let lone = SeqDeserializer::<_, Error>::new(std::iter::once(declared));
-    let error = BlockFactor::<f64>::deserialize(lone)
+    let error = ApproxInverse::<f64>::deserialize(lone)
         .expect_err("another version must not decode")
         .to_string();
     for version in [declared, FORMAT_VERSION] {
@@ -284,13 +284,9 @@ fn regenerate_missing_wire_format_fixtures() {
     for &fixture in FIXTURES {
         write_new(
             &fixture.path(),
-            &postcard::to_stdvec(&fixture.blocks()).expect("serialize"),
+            &postcard::to_stdvec(&fixture.factor()).expect("serialize"),
         );
     }
-    write_new(
-        &clamped_path(),
-        &postcard::to_stdvec(&clamped()).expect("serialize"),
-    );
 }
 
 /// Rewriting a committed payload with today's encoder is how this test comes to agree with the drift it exists to catch.
@@ -307,36 +303,4 @@ fn write_new(path: &str, bytes: &[u8]) {
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => println!("kept {path}"),
         Err(error) => panic!("cannot create {path}: {error}"),
     }
-}
-
-/// Two interleaved pairs no scaling makes dominant: a whole factor listing two clamps.
-fn clamped() -> ApproxInverse {
-    let (row_ptrs, columns) = ([0, 2, 4, 6, 8], [0, 2, 1, 3, 0, 2, 1, 3]);
-    let values = [1.0, -3.0, 1.0, -3.0, -3.0, 1.0, -3.0, 1.0];
-    let csr = CsrRef::new(&row_ptrs, &columns, &values, 4).expect("valid csr");
-    factorize_with(csr, Config::default(), ScalingPolicy::default()).expect("factors")
-}
-
-/// Apart from the block fixtures, whose payloads are block lists, not a whole factor.
-fn clamped_path() -> String {
-    format!("{FIXTURE_DIR}/whole/clamped_{FORMAT_VERSION:#010x}.postcard")
-}
-
-/// The clamp list's encoding, its outcome's variant order among it, is frozen with the format version.
-#[test]
-fn a_committed_whole_payload_keeps_its_clamps() {
-    let committed = std::fs::read(clamped_path())
-        .expect("no committed payload for this version; regenerate if the version moved");
-    let restored: ApproxInverse =
-        postcard::from_bytes(&committed).expect("committed payload must decode");
-    assert_eq!(
-        postcard::to_stdvec(&restored).expect("serialize"),
-        committed
-    );
-    let listed: Vec<_> = (restored.clamps().iter())
-        .map(|clamp| (clamp.vertices.clone(), clamp.scaling))
-        .collect();
-    let refuted = ScalingOutcome::Refuted;
-    assert_eq!(listed, [(vec![0, 2], refuted), (vec![1, 3], refuted)]);
-    assert_eq!(restored.clamps(), clamped().clamps(), "this build's clamps");
 }

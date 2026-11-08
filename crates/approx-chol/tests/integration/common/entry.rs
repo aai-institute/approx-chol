@@ -1,7 +1,7 @@
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
 };
-use approx_chol::{factorize_with, ApproxInverse, Config, Real, ScalingPolicy};
+use approx_chol::{factorize_with, ApproxInverse, Component, Config, Real, ScalingPolicy, Threads};
 use num_traits::{NumCast, PrimInt};
 
 use super::graph::Graph;
@@ -303,14 +303,23 @@ impl Factored {
     }
 }
 
-/// Per irreducible block, whether it solves as singular.
+/// Per component, whether it solves as singular.
 pub fn floats<T: Real>(factor: &ApproxInverse<T>) -> Vec<bool> {
-    factor.blocks().iter().map(|block| block.floats()).collect()
+    factor
+        .components()
+        .map(|component| component.floats())
+        .collect()
+}
+
+/// The factor's one component.
+pub fn only<T: Real>(factor: &ApproxInverse<T>) -> Component<'_, T> {
+    let mut components = factor.components();
+    assert_eq!(components.len(), 1, "one component");
+    components.next().expect("one component")
 }
 
 fn solve<T: Real>(factor: &ApproxInverse<T>, b: &[f64]) -> Vec<f64> {
-    let x = factor
-        .solve(&cast_all::<f64, T>(b))
-        .expect("b has length n");
+    let mut x = cast_all::<f64, T>(b);
+    factor.apply(&mut x, Threads::All).expect("b has length n");
     cast_all(&x)
 }

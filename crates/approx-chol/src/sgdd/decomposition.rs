@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use num_traits::PrimInt;
 use rayon::prelude::*;
 
@@ -5,7 +7,6 @@ mod assembly;
 mod partition;
 
 use super::block::ReduceError;
-use super::congruence::Selection;
 use crate::input::{Canonical, CsrError};
 use crate::storage::{tally_abs, OffDiagonal, Rows, UpperAdjacency};
 use crate::{Index, Real};
@@ -50,6 +51,9 @@ pub(super) trait LonePivot<T> {
 pub(super) trait PrincipalBlocks<T, I> {
     type Block;
 
+    /// How far a component's ascending vertices rotate left so its eliminated side comes first.
+    fn rotation(&self, ascending: &[I]) -> usize;
+
     /// The whole input as one component, moved where it is owned: its vertices are their own positions.
     fn whole(self, vertices: &[I]) -> Self::Block;
 
@@ -57,34 +61,56 @@ pub(super) trait PrincipalBlocks<T, I> {
     fn component(&self, vertices: &[I], position: &[I]) -> Self::Block;
 }
 
+/// An assembled `A` still to cut, beside its vertices by component.
+pub(super) type Arranged<A, I, T> = (Cuts<A, I>, Components<I, T>);
+
+/// An assembled `A` still to cut, and each vertex's position within its ascending component, none when whole.
+pub(super) struct Cuts<A, I> {
+    a: A,
+    position: Option<Vec<I>>,
+}
+
 impl<A, I: Index> Partitioned<A, I> {
-    /// The partition, each live component's block, and the lone and dead vertices, the assembly freed; a connected input moves its assembly in whole.
-    pub(super) fn extract<T: Real, B: Send>(
-        self,
-        block: impl Fn(<A as PrincipalBlocks<T, I>>::Block) -> Result<B, ReduceError> + Sync,
-    ) -> Result<Components<B, I, T>, ReduceError>
+    /// Each component told apart in the partition's array: a coupled one rotated so its eliminated side leads, a lone or dead one by its pivot.
+    pub(super) fn arrange<T: Real>(self) -> Result<Arranged<A, I, T>, ReduceError>
     where
-        A: PrincipalBlocks<T, I> + LonePivot<T> + Sync,
+        A: PrincipalBlocks<T, I> + LonePivot<T>,
     {
         let Self { a, partition } = self;
+        let Partition {
+            mut order,
+            ends,
+            position,
+        } = partition;
+        let ranges = (ends.iter()).scan(0, |start, &end| {
+            Some(std::mem::replace(start, end.index())..end.index())
+        });
         // Past `1/ε` vertices, floor weights in series fall below `MIN_POSITIVE`; a dead one is alone.
-        let too_long =
-            |vertices: &[I]| T::from(vertices.len()).is_none_or(|n| n * T::epsilon() >= T::one());
-        if let Some(vertices) = partition.components().find(|&vertices| too_long(vertices)) {
-            let vertex = vertices[0].index();
+        let too_long = |len: usize| T::from(len).is_none_or(|n| n * T::epsilon() >= T::one());
+        if let Some(range) = ranges.clone().find(|range| too_long(range.len())) {
+            let vertex = order[range.start].index();
             return Err(ReduceError::TooLarge { vertex });
         }
-        let (mut lone, mut dead, mut components) = (Vec::new(), Vec::new(), Vec::new());
-        for vertices in partition.components() {
-            let &[v] = vertices else {
-                components.push(vertices);
+        let (mut coupled, mut lone, mut dead, mut pivots) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut end = 0;
+        for range in ranges {
+            if range.len() > 1 {
+                let rotation = a.rotation(&order[range.clone()]);
+                order[range.clone()].rotate_left(rotation);
+                let len = range.len();
+                order.copy_within(range, end);
+                coupled.push(end..end + len);
+                end += len;
                 continue;
-            };
+            }
+            let v = order[range.start];
             let vertex = v.index();
             match a.lone(vertex) {
                 pivot if pivot == T::zero() => dead.push(v),
                 pivot if pivot > T::zero() && super::diagonal_in_range(pivot) => {
-                    lone.push((v, pivot))
+                    lone.push(v);
+                    pivots.push(pivot);
                 }
                 pivot if pivot < T::zero() => {
                     return Err(ReduceError::NonpositiveDiagonal { vertex })
@@ -92,80 +118,139 @@ impl<A, I: Index> Partitioned<A, I> {
                 _ => return Err(ReduceError::OutOfRange { vertex }),
             }
         }
-        let blocks = match (components.first(), partition.position()) {
-            (None, _) => Vec::new(),
-            (Some(&whole), None) => vec![block(a.whole(whole))?],
-            (Some(_), Some(position)) => {
-                let cut = |vertices: &&[I]| block(a.component(vertices, position));
+        let numbering = 0..order.len();
+        order.truncate(end);
+        order.extend(lone.into_iter().chain(dead));
+        let components = Components {
+            numbering,
+            vertices: order,
+            coupled,
+            pivots,
+        };
+        Ok((Cuts { a, position }, components))
+    }
+
+    /// The reduction `block` makes of each coupled component, the assembly freed.
+    pub(super) fn reduced<T: Real, B: Send>(
+        self,
+        block: impl Fn(&[I], <A as PrincipalBlocks<T, I>>::Block) -> Result<B, ReduceError> + Sync,
+    ) -> Result<Summands<B, I, T>, ReduceError>
+    where
+        A: PrincipalBlocks<T, I> + LonePivot<T> + Sync,
+    {
+        let (cuts, components) = self.arrange()?;
+        let blocks = cuts.extract(&components, block)?;
+        Ok(Summands { components, blocks })
+    }
+}
+
+impl<A, I: Index> Cuts<A, I> {
+    /// Each coupled component as `block` makes it, in component order, the assembly freed; a connected input moves its assembly in whole.
+    pub(super) fn extract<'p, T: Real, B: Send>(
+        self,
+        components: &'p Components<I, T>,
+        block: impl Fn(&'p [I], <A as PrincipalBlocks<T, I>>::Block) -> Result<B, ReduceError> + Sync,
+    ) -> Result<Vec<B>, ReduceError>
+    where
+        A: PrincipalBlocks<T, I> + Sync,
+    {
+        let Self { a, position } = self;
+        let count = components.coupled.len();
+        Ok(match (count, position) {
+            (0, _) => Vec::new(),
+            (_, None) => {
+                let whole = components.component(0);
+                vec![block(whole, a.whole(whole))?]
+            }
+            (_, Some(position)) => {
+                let cut = |k: usize| {
+                    let vertices = components.component(k);
+                    block(vertices, a.component(vertices, &position))
+                };
                 // About `2^PARALLEL_BITS` vertices a task: waking the pool for less costs more than it saves.
-                let work = components.iter().map(|c| c.len() as u64).sum();
-                let per_task = crate::per_task(components.len(), work, PARALLEL_BITS);
-                let parallel = per_task < components.len() && rayon::current_num_threads() > 1;
+                let work = components.coupled.iter().map(|c| c.len() as u64).sum();
+                let per_task = crate::per_task(count, work, PARALLEL_BITS);
+                let parallel = per_task < count && rayon::current_num_threads() > 1;
                 let blocks: Vec<_> = match parallel {
-                    true => (components.par_iter())
+                    true => (0..count)
+                        .into_par_iter()
                         .with_min_len(per_task)
                         .map(cut)
                         .collect(),
-                    false => components.iter().map(cut).collect(),
+                    false => (0..count).map(cut).collect(),
                 };
                 // Kept past extraction, an owned assembly raised the Gram peak 11–22%.
                 drop(a);
+                drop(position);
                 if let Some(&error) = blocks.iter().find_map(|b| b.as_ref().err()) {
                     return Err(error);
                 }
                 // In place: a block's result is the block's own size.
                 blocks.into_iter().filter_map(Result::ok).collect()
             }
-        };
-        let summands = Summands { blocks, lone, dead };
-        Ok(Components {
-            partition,
-            summands,
         })
     }
 }
 
 const PARALLEL_BITS: u32 = 12;
 
-/// The partition, and `A`'s summands cut along it.
-pub(super) struct Components<B, I, T> {
-    pub(super) partition: Partition<I>,
-    pub(super) summands: Summands<B, I, T>,
+/// `A`'s vertices by component in the partition's array, components by lowest vertex: each coupled component in local order, its eliminated side first, then the lone vertices, then the dead ones.
+#[derive(Clone, Debug)]
+pub(crate) struct Components<I, T> {
+    pub(crate) vertices: Vec<I>,
+    /// Each coupled component's range of `vertices`, the ranges ascending.
+    pub(crate) coupled: Vec<Range<usize>>,
+    /// Each lone vertex's surplus `σ`, which is its whole pivot; dead vertices, whose pivot is zero, follow the lone ones.
+    pub(crate) pivots: Vec<T>,
+    /// The factored matrix's vertices in `A`'s numbering: all of `A`'s, or a complement's kept side.
+    pub(crate) numbering: Range<usize>,
 }
 
-/// The factored matrix's direct summands by kind, each factored and solved on its own.
+impl<I: Index, T> Components<I, T> {
+    /// Coupled component `k`'s vertices of `A`, in local order.
+    pub(crate) fn component(&self, k: usize) -> &[I] {
+        &self.vertices[self.coupled[k].clone()]
+    }
+
+    /// Where the lone and dead vertices start in `vertices`.
+    pub(crate) fn isolated(&self) -> usize {
+        self.coupled.last().map_or(0, |range| range.end)
+    }
+
+    /// Drops the lone and dead vertices `keep` rejects, a lone one with its pivot.
+    pub(crate) fn retain_isolated(&mut self, keep: impl Fn(I) -> bool) {
+        let isolated = self.vertices.split_off(self.isolated());
+        let (lone, dead) = isolated.split_at(self.pivots.len());
+        for (&v, pivot) in lone.iter().zip(std::mem::take(&mut self.pivots)) {
+            if keep(v) {
+                self.vertices.push(v);
+                self.pivots.push(pivot);
+            }
+        }
+        self.vertices
+            .extend(dead.iter().copied().filter(|&v| keep(v)));
+    }
+}
+
+/// The factored matrix's direct summands: its vertices by component, and each coupled component's block.
 #[derive(Clone, Debug)]
 pub(crate) struct Summands<B, I, T> {
-    /// Each coupled component's block.
+    pub(crate) components: Components<I, T>,
+    /// Block `k` is coupled component `k`'s.
     pub(crate) blocks: Vec<B>,
-    /// Vertices no entry couples, each with its surplus `σ`, which is its whole pivot.
-    pub(crate) lone: Vec<(I, T)>,
-    /// One-vertex components whose pivot is zero: an in-place solve zeroes them.
-    pub(crate) dead: Vec<I>,
 }
 
-/// One block `A_c` as the input gave it, with its rows' `Σ_j |a_ij|`.
-pub(super) struct SymmetricBlock<T, I> {
+/// One block `A_c` as the input gave it.
+pub(super) struct SymmetricBlock<'p, T, I> {
     /// In `A`'s numbering, in local order.
-    pub(super) vertices: Selection<I>,
+    pub(super) vertices: &'p [I],
+    pub(super) entries: Entries<T, I>,
+}
+
+/// A block's entries off its diagonal, with its rows' diagonal and `Σ_j |a_ij|`.
+pub(super) struct Entries<T, I> {
     pub(super) off_diagonal: OffDiagonal<T, I>,
     pub(super) rows: RowSums<T>,
-}
-
-impl<T: Real, I: Index> SymmetricBlock<T, I> {
-    fn new(vertices: Selection<I>, off_diagonal: OffDiagonal<T, I>, rows: RowSums<T>) -> Self {
-        assert_eq!(vertices.len(), off_diagonal.n(), "one vertex per row");
-        assert_eq!(
-            rows.diagonal.len(),
-            off_diagonal.n(),
-            "one diagonal per row"
-        );
-        Self {
-            vertices,
-            off_diagonal,
-            rows,
-        }
-    }
 }
 
 /// `M`'s diagonal and `Σ_j |m_ij|`: the surplus when no shape or `V` gives it.
@@ -174,26 +259,20 @@ pub(super) struct RowSums<T> {
     pub(super) abs: Vec<T>,
 }
 
-impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Canonical<'_, T, J> {
-    type Block = SymmetricBlock<T, I>;
-
-    fn whole(self, vertices: &[I]) -> Self::Block {
-        self.component(vertices, vertices)
-    }
-
-    /// Upper rows in local order; a zero couples nothing, so it may name another component.
-    fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
+impl<T: Real, J: PrimInt> Canonical<'_, T, J> {
+    /// Upper rows in local order, columns remapped through `position`; a zero couples nothing, so it may name another component.
+    fn rows<I: Index>(&self, vertices: &[I], position: impl Fn(usize) -> I) -> Entries<T, I> {
         let mut diagonal = Vec::with_capacity(vertices.len());
         let mut ptrs = Vec::with_capacity(vertices.len() + 1);
         ptrs.push(0);
-        let entries = vertices.iter().map(|&v| self.upper_len(v.index())).sum();
+        let entries = vertices.iter().map(|v| self.upper_len(v.index())).sum();
         let (mut indices, mut values) = (Vec::with_capacity(entries), Vec::with_capacity(entries));
         // `Σ_j |a_ij|` tallied while the row is at hand, saving `abs_row_sums`'s pass.
         let mut abs = vec![0.0; vertices.len()];
-        for (i, &v) in vertices.iter().enumerate() {
+        for (i, v) in vertices.iter().enumerate() {
             let (d, upper) = self.upper_row(v.index());
             let row = upper.filter(|&(_, a)| a != T::zero()).map(|(j, a)| {
-                let j = position[j];
+                let j = position(j);
                 indices.push(j);
                 values.push(a);
                 (j.index(), a)
@@ -207,11 +286,24 @@ impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Canonical<'_, T, J
         let rows = Rows::new(ptrs, indices, values, vertices.len());
         let off_diagonal = OffDiagonal::General(UpperAdjacency::new(rows));
         let abs = abs.into_iter().map(crate::narrow).collect();
-        SymmetricBlock::new(
-            Selection::of(vertices),
-            off_diagonal,
-            RowSums { diagonal, abs },
-        )
+        let rows = RowSums { diagonal, abs };
+        Entries { off_diagonal, rows }
+    }
+}
+
+impl<T: Real, J: PrimInt, I: Index> PrincipalBlocks<T, I> for Canonical<'_, T, J> {
+    type Block = Entries<T, I>;
+
+    fn rotation(&self, _: &[I]) -> usize {
+        0
+    }
+
+    fn whole(self, vertices: &[I]) -> Self::Block {
+        self.rows(vertices, I::from_index)
+    }
+
+    fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
+        self.rows(vertices, |j| position[j])
     }
 }
 

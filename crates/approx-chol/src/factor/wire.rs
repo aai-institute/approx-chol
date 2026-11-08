@@ -1,9 +1,9 @@
-//! The format version a persisted [`BlockFactor`](super::BlockFactor) leads with.
+//! The format version a persisted [`ApproxInverse`](super::ApproxInverse) leads with.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Continues `approx-chol`'s `0x4143_xxxx`; bump it whenever a persisted factor's bytes change.
-pub const FORMAT_VERSION: u32 = 0x4143_000A;
+pub const FORMAT_VERSION: u32 = 0x4143_000B;
 
 /// Writes [`FORMAT_VERSION`] and decodes only it.
 struct FormatVersion;

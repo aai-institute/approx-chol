@@ -1,7 +1,7 @@
 //! Factorize a 10×10 grid Laplacian with AC and AC2, and use each to precondition CG.
 
 use approx_chol::input::Laplacian;
-use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy};
+use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy, Threads};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grid = Grid::new(10, 10);
@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let factor = factorize_with(laplacian, config, ScalingPolicy::default())?;
         let (x, iterations) = grid.pcg(&factor, &b, 1e-10);
         let mean = x.iter().sum::<f64>() / grid.n as f64;
-        let blocks = factor.blocks().len();
+        let blocks = factor.components().len();
         println!(
             "{name:>9}: {blocks} block(s), {iterations} PCG iterations, mean {mean:.2e} (⟂ 1)"
         );
@@ -81,7 +81,8 @@ impl Grid {
     fn pcg(&self, factor: &ApproxInverse, b: &[f64], tol: f64) -> (Vec<f64>, usize) {
         let mut x = vec![0.0; b.len()];
         let mut r = b.to_vec();
-        let mut z = factor.solve(&r).expect("solves");
+        let mut z = r.clone();
+        factor.apply(&mut z, Threads::All).expect("solves");
         let mut p = z.clone();
         let mut rz = dot(&r, &z);
         for iteration in 0..self.n {
@@ -92,7 +93,8 @@ impl Grid {
             let alpha = rz / dot(&p, &ap);
             x.iter_mut().zip(&p).for_each(|(x, p)| *x += alpha * p);
             r.iter_mut().zip(&ap).for_each(|(r, ap)| *r -= alpha * ap);
-            z = factor.solve(&r).expect("solves");
+            z.copy_from_slice(&r);
+            factor.apply(&mut z, Threads::All).expect("solves");
             let rz_next = dot(&r, &z);
             let beta = rz_next / rz;
             rz = rz_next;

@@ -4,7 +4,6 @@ mod perron;
 use normalized::Normalized;
 use perron::InverseIteration;
 
-use super::Selection;
 use crate::storage::OffDiagonal;
 use crate::{narrow, widen, Index, Real};
 
@@ -145,7 +144,7 @@ impl ScaleVector {
     }
 
     /// The clamp of the component on `vertices` whose worst `deficit` is past its band, `None` at `0`.
-    pub(super) fn clamp<I: Index>(self, deficit: f64, vertices: &Selection<I>) -> Option<Clamp> {
+    pub(super) fn clamp<I: Index>(self, deficit: f64, vertices: &[I]) -> Option<Clamp> {
         let (violation, scaling) = match self {
             Self::Identity | Self::NullVector => (0.0, ScalingOutcome::Certified),
             Self::PerronVector {
@@ -153,7 +152,7 @@ impl ScaleVector {
             } => (violation, scaling),
         };
         (deficit > 0.0).then(|| {
-            let mut vertices: Vec<usize> = vertices.iter().collect();
+            let mut vertices: Vec<usize> = vertices.iter().map(|v| v.index()).collect();
             vertices.sort_unstable();
             Clamp {
                 vertices,
