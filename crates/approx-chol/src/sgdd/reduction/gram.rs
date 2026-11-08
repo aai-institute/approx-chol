@@ -4,7 +4,7 @@ use num_traits::PrimInt;
 
 use super::{Folded, Signed, Surplus};
 use crate::input::{Column, FactorWidth2};
-use crate::sgdd::block::{Grounding, ReduceError, WithClamp};
+use crate::sgdd::block::{Grounding, IrreducibleBlock, ReduceError};
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, SymmetricBlock};
 use crate::sgdd::scaling::{self, ScalingPolicy, RATIO_BAND};
 use crate::sgdd::{Components, Reduced, Summands};
@@ -44,7 +44,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
         let certified = LazyCell::new(|| read.unwrap_or_else(|| null_vectors(v, &components).1));
         let blocks = ground_or_float(v, signed, &certified)?;
         drop(certified);
-        Ok(Summands { components, blocks }.into_reduced())
+        Ok(Summands { components, blocks })
     }
 }
 /// Summed from `V`'s columns, with what one-ended columns state and the components whose cycles `V` certifies.
@@ -94,7 +94,7 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
     blocks: Vec<Signed<'_, T, I>>,
     certified: &LazyCell<Vec<I>, impl FnOnce() -> Vec<I>>,
-) -> Result<Vec<WithClamp<T, I>>, ReduceError> {
+) -> Result<Vec<IrreducibleBlock<T, I>>, ReduceError> {
     // By vertex, sized only when a block is folded: blocks are disjoint, so one slot per vertex holds its block, `f_i` and surplus.
     let folds = blocks.iter().any(|b| matches!(b, Signed::Folded(_)));
     let n = if folds { v.n() } else { 0 };

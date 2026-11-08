@@ -113,10 +113,9 @@ pub(crate) struct IrreducibleBlock<T = f64, I = u32> {
     off_diagonal: OffDiagonal<T, I>,
     balance: Balance<T>,
     grounding_unproven: bool,
+    /// Boxed, as most components have none.
+    clamp: Option<Box<Clamp>>,
 }
-
-/// A reduced block, and its component's clamp, which the reduction lists apart; boxed, as most components have none.
-pub(crate) type WithClamp<T, I> = (IrreducibleBlock<T, I>, Option<Box<Clamp>>);
 
 /// A bipartite block's Schur complement onto its kept side, unformed: `C`, and `F` on the kept side.
 pub(crate) struct BlockComplement<T, I> {
@@ -127,12 +126,15 @@ pub(crate) struct BlockComplement<T, I> {
     sheets: Sheets,
     grounding: Grounding<T>,
     grounding_unproven: bool,
+    /// The whole block's.
+    clamp: Option<Box<Clamp>>,
 }
 
 impl<T: Real, I: Index> BlockComplement<T, I> {
     /// `block` onto its kept side; `first` is the whole block's first vertex in `A`.
     pub(super) fn new(block: IrreducibleBlock<T, I>, first: usize) -> Self {
-        let (congruence, off_diagonal, sheets, grounding, grounding_unproven) = block.into_parts();
+        let (congruence, off_diagonal, sheets, grounding, grounding_unproven, clamp) =
+            block.into_parts();
         let OffDiagonal::Bipartite(cross) = off_diagonal else {
             unreachable!("a complement's layout leaves each block both sides")
         };
@@ -145,6 +147,7 @@ impl<T: Real, I: Index> BlockComplement<T, I> {
             sheets,
             grounding,
             grounding_unproven,
+            clamp,
         }
     }
 
@@ -162,6 +165,7 @@ impl<T: Real, I: Index> BlockComplement<T, I> {
             self.sheets,
             self.grounding,
             self.grounding_unproven,
+            self.clamp,
         )
     }
 }
@@ -173,6 +177,7 @@ type ComplementParts<T, I> = (
     Sheets,
     Grounding<T>,
     bool,
+    Option<Box<Clamp>>,
 );
 
 /// `M = F · A_c · F` over its vertices, its surplus still to be decided.
@@ -252,7 +257,7 @@ impl<'p, T: Real, I: Index> Congruent<'p, T, I> {
         balance: Balance<T>,
         vector: ScaleVector,
         clamped: f64,
-    ) -> Result<WithClamp<T, I>, ReduceError> {
+    ) -> Result<IrreducibleBlock<T, I>, ReduceError> {
         let Self {
             vertices,
             congruence,
@@ -272,14 +277,13 @@ impl<'p, T: Real, I: Index> Congruent<'p, T, I> {
             let vertex = vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
         }
-        let clamp = vector.clamp(clamped, vertices).map(Box::new);
-        let block = IrreducibleBlock {
+        Ok(IrreducibleBlock {
             congruence: Box::new(congruence),
             off_diagonal,
             balance,
             grounding_unproven: vector.grounding_unproven(),
-        };
-        Ok((block, clamp))
+            clamp: vector.clamp(clamped).map(Box::new),
+        })
     }
 }
 
@@ -293,6 +297,7 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
             sheets,
             grounding,
             self.grounding_unproven,
+            self.clamp,
         )
     }
 }
@@ -303,6 +308,7 @@ type BlockParts<T, I> = (
     Sheets,
     Grounding<T>,
     bool,
+    Option<Box<Clamp>>,
 );
 
 /// Why a block has no SDDM form; each `vertex` is in `A`'s numbering.

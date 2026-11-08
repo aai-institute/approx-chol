@@ -1,3 +1,4 @@
+use crate::common::clamps::Clamps;
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm,
 };
@@ -252,7 +253,8 @@ fn scaled_heavy_gram_path_grounds() {
 fn gram_cycle_missing_within_its_tolerance_floats_and_reports(#[values(1e-10, -1e-10)] miss: f64) {
     let factor = factorize(Cycle::<f64>::doubling(20).missing(miss).gram()).unwrap();
     let block = only(&factor);
-    let clamp = factor.clamps().first().expect("reported");
+    let clamps = factor.clamps();
+    let clamp = clamps.first().expect("reported");
     assert!(clamp.violation > 1e-11, "{clamp:?}");
     assert!(block.floats());
 }

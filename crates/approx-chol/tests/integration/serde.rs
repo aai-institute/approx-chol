@@ -114,7 +114,7 @@ fn varint(mut x: u64, bytes: &mut Vec<u8>) {
     bytes.push(x as u8);
 }
 
-/// An order's segment as the bytes hold it.
+/// A block's segment as the bytes hold it.
 #[derive(serde::Serialize)]
 enum Segment {
     Run { start: usize, len: usize },
@@ -126,22 +126,25 @@ enum Listed<'a> {
     U32(&'a [u32]),
 }
 
-/// The version and an order of one block, the run `0..run`, listing `dead` after it.
-fn order_head(run: usize, dead: &[u32]) -> Vec<u8> {
+/// The version, an order listing `dead`, and one block of index tag `tag` up to its segment, the run `0..run`.
+fn one_block_head(tag: u8, run: usize, dead: &[u32]) -> Vec<u8> {
     let version = approx_chol::FACTOR_FORMAT_VERSION;
-    let segments = [Segment::Run { start: 0, len: run }];
-    postcard::to_stdvec(&(version, &segments[..], Listed::U32(dead))).unwrap()
+    let mut bytes = postcard::to_stdvec(&(version, Listed::U32(dead))).unwrap();
+    bytes.extend([tag, 1]);
+    let segment = Segment::Run { start: 0, len: run };
+    bytes.extend(postcard::to_stdvec(&segment).unwrap());
+    bytes
 }
 
-/// The version and the order of one block on `0..n` before its blocks.
+/// The version and the order of one `u32` block on `0..n`, up to its segment.
 fn one_block_factor(n: u64) -> Vec<u8> {
-    order_head(n as usize, &[])
+    one_block_head(0, n as usize, &[])
 }
 
 /// A factor of one `u32` block of identity `F` on vertices `0..65` whose elimination has `rows` empty rows of `C`, cut off before its Cholesky.
 fn truncated_elimination(rows: u64, n_cols: u64) -> Vec<u8> {
     let mut bytes = one_block_factor(65);
-    bytes.extend([0, 1, 0, 1]);
+    bytes.extend([0, 1]);
     varint(rows + 1, &mut bytes);
     bytes.extend(std::iter::repeat_n(0, rows as usize + 1));
     bytes.extend([0, 0]);
@@ -213,16 +216,16 @@ fn a_factor_round_trips_bit_identically() {
     }
 }
 
-/// [`with_dead_vertices`]'s bytes with its order's run length and dead vertices replaced, its block kept.
+/// [`with_dead_vertices`]'s bytes with its block's run length and its dead vertices replaced, the block's factor kept.
 fn respliced(run: usize, dead: &[u32]) -> Vec<u8> {
     let bytes = postcard::to_stdvec(&with_dead_vertices()).unwrap();
-    let head = order_head(4, &[4, 5]);
+    let head = one_block_head(0, 4, &[4, 5]);
     assert_eq!(
         &bytes[..head.len()],
         &head[..],
-        "the order leads, one run then the dead vertices"
+        "the order's dead vertices lead, then one block on a run"
     );
-    let mut spliced = order_head(run, dead);
+    let mut spliced = one_block_head(0, run, dead);
     spliced.extend_from_slice(&bytes[head.len()..]);
     spliced
 }
@@ -397,34 +400,33 @@ fn an_isolated_vertex_round_trips_through_json() {
     assert_eq!(factor.solve(&b).unwrap(), back.solve(&b).unwrap());
 }
 
-/// [`with_isolated_vertex`]'s JSON `[version, [order, blocks, inverse_pivots, clamps]]` with its order's segments and listed vertices replaced.
-fn with_order(segments: serde_json::Value, listed: serde_json::Value) -> serde_json::Value {
+/// [`with_isolated_vertex`]'s JSON `[version, [listed, blocks, inverse_pivots]]` with its block's segment and the listed vertices replaced.
+fn with_order(segment: serde_json::Value, listed: serde_json::Value) -> serde_json::Value {
     let mut v = serde_json::to_value(with_isolated_vertex()).unwrap();
-    let order = &mut v[1][0];
-    assert_eq!(
-        order,
-        &serde_json::json!({"segments": [{"Run": {"start": 0, "len": 2}}], "listed": {"U32": [2]}})
-    );
-    *order = serde_json::json!({ "segments": segments, "listed": { "U64": listed } });
+    assert_eq!(v[1][0], serde_json::json!({"U32": [2]}));
+    let block = &mut v[1][1]["U32"][0]["segment"];
+    assert_eq!(*block, serde_json::json!({"Run": {"start": 0, "len": 2}}));
+    *block = segment;
+    v[1][0] = serde_json::json!({ "U64": listed });
     v
 }
 
 /// A vertex `u64::MAX` is a decode error, never an overflow past the end of a run or a list.
 #[rstest]
-#[case::lone(serde_json::json!([{"Run": {"start": 0, "len": 2}}]), serde_json::json!([u64::MAX]))]
-#[case::listed(serde_json::json!([{"Listed": {"len": 2}}]), serde_json::json!([u64::MAX, 0, 2]))]
-#[case::one_listed_for_two(serde_json::json!([{"Listed": {"len": 1}}]), serde_json::json!([u64::MAX, 2]))]
-#[case::run(serde_json::json!([{"Run": {"start": u64::MAX, "len": 2}}]), serde_json::json!([2]))]
+#[case::lone(serde_json::json!({"Run": {"start": 0, "len": 2}}), serde_json::json!([u64::MAX]))]
+#[case::listed(serde_json::json!({"Listed": {"len": 2}}), serde_json::json!([u64::MAX, 0, 2]))]
+#[case::one_listed_for_two(serde_json::json!({"Listed": {"len": 1}}), serde_json::json!([u64::MAX, 2]))]
+#[case::run(serde_json::json!({"Run": {"start": u64::MAX, "len": 2}}), serde_json::json!([2]))]
 fn a_vertex_at_u64_max_is_corrupt(
-    #[case] segments: serde_json::Value,
+    #[case] segment: serde_json::Value,
     #[case] listed: serde_json::Value,
 ) {
     let fine = with_order(
-        serde_json::json!([{"Listed": {"len": 2}}]),
+        serde_json::json!({"Listed": {"len": 2}}),
         serde_json::json!([1, 0, 2]),
     );
     serde_json::from_value::<ApproxInverse>(fine).expect("its vertices listed decode");
-    let v = with_order(segments, listed);
+    let v = with_order(segment, listed);
     serde_json::from_value::<ApproxInverse>(v).expect_err("no factor covers u64::MAX");
 }
 
@@ -432,7 +434,7 @@ fn a_vertex_at_u64_max_is_corrupt(
 #[test]
 fn a_vertex_twice_in_one_block_is_corrupt() {
     let v = with_order(
-        serde_json::json!([{"Listed": {"len": 2}}]),
+        serde_json::json!({"Listed": {"len": 2}}),
         serde_json::json!([1, 1, 2]),
     );
     serde_json::from_value::<ApproxInverse>(v).expect_err("vertex 1 in two places, 0 in none");
@@ -453,8 +455,8 @@ fn empty_scales_are_corrupt() {
 
 /// A factor of one unit path `3 → 2 → 1`, gauge `0`, its middle step `len` long: one `u64` block of identity `F`, no elimination, one sheet of 4 pinned at `0`, approximate; proven grounding, no lone vertex and no clamp.
 fn path_block_bytes(len: u64) -> Vec<u8> {
-    let mut bytes = one_block_factor(4);
-    bytes.extend([1, 1, 0, 0, 0, 4, 1, 0, 1, 3]);
+    let mut bytes = one_block_head(1, 4, &[]);
+    bytes.extend([0, 0, 0, 4, 1, 0, 1, 3]);
     for (vertex, len) in [(3, 1), (2, len), (1, 1)] {
         varint(vertex, &mut bytes);
         varint(len, &mut bytes);

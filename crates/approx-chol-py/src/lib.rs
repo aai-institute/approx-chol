@@ -214,18 +214,19 @@ struct PyApproxInverse {
 
 /// Without this, a deficit the reduction clamped to make a block dominant is silent.
 fn warn_on_scaling(py: Python<'_>, factor: &ApproxInverse<f64>) -> PyResult<()> {
-    let clamps = factor.clamps();
-    let unsettled = factor
-        .components()
-        .filter(|component| component.grounding_unproven())
-        .count();
+    let (mut clamped, mut worst, mut unsettled) = (0, 0.0f64, 0);
+    for component in factor.components() {
+        if let Some(clamp) = component.clamp() {
+            clamped += 1;
+            worst = worst.max(clamp.violation);
+        }
+        unsettled += usize::from(component.grounding_unproven());
+    }
     let mut causes = Vec::new();
-    if !clamps.is_empty() {
-        let worst = (clamps.iter()).fold(0.0f64, |worst, clamp| worst.max(clamp.violation));
+    if clamped > 0 {
         causes.push(format!(
-            "{} block(s) fell short of diagonal dominance by up to {worst:.3e} \
-             of a diagonal; the deficit was clamped",
-            clamps.len()
+            "{clamped} block(s) fell short of diagonal dominance by up to {worst:.3e} \
+             of a diagonal; the deficit was clamped"
         ));
     }
     if unsettled > 0 {

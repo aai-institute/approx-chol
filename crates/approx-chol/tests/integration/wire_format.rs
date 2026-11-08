@@ -1,6 +1,7 @@
 #![cfg(feature = "serde")]
 //! Frozen payloads from earlier builds; `serde.rs` writes and reads with one build, so an encoding shift is invisible to it and visible here.
 
+use crate::common::clamps::Clamps;
 use std::collections::BTreeSet;
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
@@ -231,15 +232,16 @@ fn assert_committed_payload_decodes_and_solves(fixture: Fixture) {
         let residual = relative_residual(matrix, &x, &b);
         assert!(residual < 1e-12, "relative residual {residual:e}");
     }
-    // The clamp list's encoding, its outcome's variant order among it, is frozen with the format version.
-    let clamps: Vec<_> = (restored.clamps().iter())
+    // Each block's clamp, its outcome's variant order among it, is frozen with the format version.
+    let restored_clamps = restored.clamps();
+    let clamps: Vec<_> = (restored_clamps.iter())
         .map(|clamp| (clamp.vertices.as_slice(), clamp.scaling))
         .collect();
     let listed: Vec<_> = (fixture.clamps().iter())
         .map(|&vertices| (vertices, ScalingOutcome::Refuted))
         .collect();
     assert_eq!(clamps, listed, "{fixture:?}");
-    assert_eq!(restored.clamps(), factor.clamps(), "this build's clamps");
+    assert_eq!(restored_clamps, factor.clamps(), "this build's clamps");
 
     // The residual alone is met by any valid factor, not only the one that wrote these bytes.
     let expected = factor.solve_at(&b, threads::ONE).expect("rows fit");

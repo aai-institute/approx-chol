@@ -6,14 +6,14 @@ mod graph;
 use num_traits::PrimInt;
 use rayon::prelude::*;
 
-use super::block::{Balance, BlockComplement, Congruent, Grounding, ReduceError, WithClamp};
+use super::block::{Balance, BlockComplement, Congruent, Grounding, IrreducibleBlock, ReduceError};
 use super::congruence::Congruence;
 use super::decomposition::{
     of_csr, of_upper, AdjacencyLayout, Biadjacency, Partitioned, RowSums, StrictUpperTriangle,
     Summands, SymmetricBlock,
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy};
-use super::{diagonal_in_range, Complement, Reduced, Reduction};
+use super::{diagonal_in_range, Complement, Reduced};
 use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Lowered, Side};
 use crate::storage::OffDiagonal;
 use crate::{narrow, widen, Error, Index, Real};
@@ -64,13 +64,9 @@ impl<T: Real, I: Index> Complement<T, I> {
     ) -> Result<Self, ReduceError> {
         let range = input.vertices(kept);
         let layout = Biadjacency::onto(&input, kept);
-        let Reduction {
-            summands:
-                Summands {
-                    mut components,
-                    blocks,
-                },
-            clamps,
+        let Summands {
+            mut components,
+            blocks,
         } = Reduced::from_gram(layout, input.lower(), &policy)?;
         let vertices: &[I] = &components.vertices;
         let blocks: Vec<_> = (blocks.into_par_iter())
@@ -83,8 +79,7 @@ impl<T: Real, I: Index> Complement<T, I> {
             .collect();
         components.retain_isolated(|v| range.contains(&v.index()));
         components.numbering = range;
-        let summands = Summands { components, blocks };
-        Ok(Self { summands, clamps })
+        Ok(Summands { components, blocks })
     }
 }
 
@@ -105,7 +100,6 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
             };
             Ok(block)
         })
-        .map(Summands::into_reduced)
     }
 }
 
@@ -179,7 +173,7 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
 /// Only a folded `M` can still take a surplus from `V`.
 enum Signed<'p, T, I> {
     Folded(Folded<'p, T, I>),
-    Frustrated(WithClamp<T, I>),
+    Frustrated(IrreducibleBlock<T, I>),
 }
 
 /// A folded `M` with its rows and the bands they sit in, its surplus still to be decided.
@@ -251,7 +245,7 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         self,
         (ones, trace): (f64, f64),
         surplus: &S,
-    ) -> Result<WithClamp<T, I>, ReduceError> {
+    ) -> Result<IrreducibleBlock<T, I>, ReduceError> {
         let dominant = matches!(self.vector, ScaleVector::Identity);
         let floats = !surplus.states_ground(&self)
             && within_band::<T>(ones, trace)

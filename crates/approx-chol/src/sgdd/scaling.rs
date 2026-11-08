@@ -56,13 +56,11 @@ impl Default for ScalingPolicy {
     }
 }
 
-/// A component of `A` whose rows the reduction clamped past rounding to make it dominant.
+/// How the reduction clamped a component's rows past rounding to make it dominant.
 #[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Clamp {
-    /// The component's vertices, ascending, in the input's numbering.
-    pub vertices: Vec<usize>,
     /// Largest relative dominance violation, clamped away.
     pub violation: f64,
     /// What the scaling proved about the violation.
@@ -143,22 +141,17 @@ impl ScaleVector {
         }
     }
 
-    /// The clamp of the component on `vertices` whose worst `deficit` is past its band, `None` at `0`.
-    pub(super) fn clamp<I: Index>(self, deficit: f64, vertices: &[I]) -> Option<Clamp> {
+    /// The clamp of a component whose worst `deficit` is past its band, `None` at `0`.
+    pub(super) fn clamp(self, deficit: f64) -> Option<Clamp> {
         let (violation, scaling) = match self {
             Self::Identity | Self::NullVector => (0.0, ScalingOutcome::Certified),
             Self::PerronVector {
                 violation, scaling, ..
             } => (violation, scaling),
         };
-        (deficit > 0.0).then(|| {
-            let mut vertices: Vec<usize> = vertices.iter().map(|v| v.index()).collect();
-            vertices.sort_unstable();
-            Clamp {
-                vertices,
-                violation: violation.max(deficit),
-                scaling,
-            }
+        (deficit > 0.0).then(|| Clamp {
+            violation: violation.max(deficit),
+            scaling,
         })
     }
 
