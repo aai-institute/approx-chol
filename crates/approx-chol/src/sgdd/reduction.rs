@@ -92,11 +92,11 @@ impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
                 scaling::relax(&a.entries.off_diagonal, &a.entries.rows.diagonal, policy)
             };
             let block = match a.reduce(policy, relax)? {
-                Signed::Folded(folded) => {
+                Settling::Pending(folded) => {
                     let band = folded.band();
                     folded.settle(band, &RowSurplus)?
                 }
-                Signed::Frustrated(block) => block,
+                Settling::Settled(block) => block,
             };
             Ok(block)
         })
@@ -109,7 +109,7 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
         self,
         policy: &ScalingPolicy,
         relax: impl FnOnce(&Self) -> Option<scaling::Relaxation<T>>,
-    ) -> Result<Signed<'p, T, I>, ReduceError> {
+    ) -> Result<Settling<'p, T, I>, ReduceError> {
         let RowSums { diagonal, abs } = &self.entries.rows;
         let in_range = |(&d, &s): (&T, &T)| diagonal_in_range(d) && diagonal_in_range(s);
         if let Some(i) = diagonal.iter().zip(abs).position(|row| !in_range(row)) {
@@ -130,7 +130,10 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
             false => Some(relax(&self).ok_or(ReduceError::Unscalable { vertex })?),
         };
         let folding = folding_signs(&self.entries.off_diagonal);
-        let folded = folding.is_some();
+        let balance = match folding {
+            Some(_) => Balance::Balanced,
+            None => Balance::Frustrated,
+        };
         let signs = folding.unwrap_or(Congruence::Identity);
         let (m, rows, vector) = match relaxation {
             // Signs keep every magnitude, so `A_c`'s rows are `M`'s.
@@ -150,30 +153,27 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
         };
         let deficits = (rows.diagonal.iter().zip(&rows.abs)).map(|(&d, &s)| widen(s) - widen(d));
         let clamped = vector.worst_past_band(deficits, &rows.diagonal, m.off_diagonal());
-        match folded {
-            true => Ok(Signed::Folded(Folded {
+        match balance {
+            Balance::Balanced => Ok(Settling::Pending(Folded {
                 m,
                 rows,
                 vector,
                 clamped,
             })),
-            false => {
+            Balance::Frustrated => {
                 let grounding = surplus(&rows).flushed(&rows.diagonal);
                 let grounding = grounding.map_err(|i| out_of_range(&m, i))?;
-                Ok(Signed::Frustrated(m.block(
-                    Balance::Frustrated(grounding),
-                    vector,
-                    clamped,
-                )?))
+                let block = m.block(balance, grounding, vector, clamped)?;
+                Ok(Settling::Settled(block))
             }
         }
     }
 }
 
-/// Only a folded `M` can still take a surplus from `V`.
-enum Signed<'p, T, I> {
-    Folded(Folded<'p, T, I>),
-    Frustrated(IrreducibleBlock<T, I>),
+/// A reduced block, its surplus still to be taken from `V`, which only a folded `M` can, or settled.
+enum Settling<'p, T, I> {
+    Pending(Folded<'p, T, I>),
+    Settled(IrreducibleBlock<T, I>),
 }
 
 /// A folded `M` with its rows and the bands they sit in, its surplus still to be decided.
@@ -253,7 +253,7 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
                 || surplus.certifies(self.m.vertices()));
         let (vector, clamped) = (self.vector, self.clamped);
         if floats {
-            return (self.m).block(Balance::Balanced(Grounding::ungrounded()), vector, clamped);
+            return (self.m).block(Balance::Balanced, Grounding::ungrounded(), vector, clamped);
         }
         let grounding = surplus.grounds(&self);
         // The first ground, which flushing all of them would lose from a definite `M`.
@@ -265,7 +265,7 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         let Self { m, rows, .. } = self;
         match grounding.flushed(&rows.diagonal) {
             Ok(grounding) if grounding.is_grounded() => {
-                m.block(Balance::Balanced(grounding), vector, clamped)
+                m.block(Balance::Balanced, grounding, vector, clamped)
             }
             Ok(_) => Err(out_of_range(&m, first)),
             Err(i) => Err(out_of_range(&m, i)),
@@ -423,7 +423,7 @@ mod tests {
         let summands = (partitioned.expect("symmetric"))
             .reduced(|vertices, entries| {
                 match (SymmetricBlock { vertices, entries }).reduce(&policy, unscaled)? {
-                    Signed::Folded(Folded {
+                    Settling::Pending(Folded {
                         vector: ScaleVector::Identity,
                         clamped,
                         ..

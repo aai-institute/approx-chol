@@ -6,9 +6,9 @@ use super::block_elimination::BlockElimination;
 use super::cholesky::{Arm, Signed};
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::{Config, SchurMode};
-use super::sddm::{cover_vertex, crosses, Sddm, SddmRows};
+use super::sddm::{cover_vertex, crosses, sheets, Sddm, SddmRows};
 use super::{Streams, MULTIPLY_ADD_GRAIN_BITS};
-use crate::sgdd::{Grounding, Sheets};
+use crate::sgdd::{Balance, Grounding};
 use crate::storage::Rows;
 use crate::{narrow, per_task, widen, Index, Real};
 
@@ -34,18 +34,18 @@ fn formation(config: &Config, n_kept: usize) -> Formation {
     }
 }
 
-/// The bipartite block `M = [D_e C; Cᵀ D_k]` on its sheets: `C` by eliminated row, and every row's surplus, eliminated rows first.
+/// The bipartite block `M = [D_e C; Cᵀ D_k]`: `C` by eliminated row, and every row's surplus, eliminated rows first.
 pub(super) struct BipartiteBlock<T, I> {
     cross: Rows<T, I>,
-    sheets: Sheets,
+    balance: Balance,
     grounding: Grounding<T>,
 }
 
 impl<T: Real, I: Index> BipartiteBlock<T, I> {
-    pub(super) fn of(cross: Rows<T, I>, sheets: Sheets, grounding: Grounding<T>) -> Self {
+    pub(super) fn of(cross: Rows<T, I>, balance: Balance, grounding: Grounding<T>) -> Self {
         Self {
             cross,
-            sheets,
+            balance,
             grounding,
         }
     }
@@ -75,7 +75,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
             Formation::Exact => self.exact(inv_pivot),
             Formation::Sampled(split) => self.sample(split, streams).merge(),
         };
-        let s = Sddm::of_rows(rows, self.sheets, &self.grounding);
+        let s = Sddm::of_rows(rows, self.balance, &self.grounding);
         (Arm::Approximate(s), self.cross)
     }
 
@@ -91,18 +91,18 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
                 fill.merge()
             }
         };
-        Arm::Approximate(Sddm::of_rows(rows, self.sheets, &self.grounding))
+        Arm::Approximate(Sddm::of_rows(rows, self.balance, &self.grounding))
     }
 
     /// `S` itself, its exact rows folded off the sheets.
     fn signed(&self, inv_pivot: &[T]) -> Signed<T, I> {
-        let (adjacency, grounding) = self.exact(inv_pivot).fold(self.sheets, &self.grounding);
-        Signed::new(adjacency, self.sheets, grounding)
+        let (adjacency, grounding) = self.exact(inv_pivot).fold(self.balance, &self.grounding);
+        Signed::new(adjacency, self.balance, grounding)
     }
 
     /// `S`'s dimension, a cover's two sheets counted.
     fn complement_dimension(&self) -> usize {
-        self.sheets.count() * self.cross.n_cols()
+        sheets(self.balance) * self.cross.n_cols()
     }
 
     /// Inverse pivots `1/(Σ|c_ek| + s_e)`, the same on both sheets of a cover.
@@ -119,9 +119,9 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
 
     /// `S − diag(s_k)` exact by kept row, `S = D_k − Cᵀ D_e⁻¹ C`, through a `Cᵀ` freed before `of_rows` adds `s_k`.
     fn exact(&self, inv_pivot: &[T]) -> SddmRows<T, I> {
-        match self.sheets {
-            Sheets::One => self.exact_rows(inv_pivot, |j, _, _| j),
-            Sheets::Two => self.exact_rows(inv_pivot, |j, c_ek, c_ej| {
+        match self.balance {
+            Balance::Balanced => self.exact_rows(inv_pivot, |j, _, _| j),
+            Balance::Frustrated => self.exact_rows(inv_pivot, |j, c_ek, c_ej| {
                 cover_vertex(j, usize::from(crosses(c_ek) != crosses(c_ej)))
             }),
         }
@@ -139,7 +139,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         // Each task carries one grain of the complement's `nnz·(nnz/n_e)/2` multiply-adds.
         let work = c.nnz() as u64 * (c.nnz() / c.n_rows().max(1)) as u64 / 2;
         SddmRows::split(
-            self.sheets,
+            self.balance,
             c.n_cols(),
             per_task(c.n_cols(), work, MULTIPLY_ADD_GRAIN_BITS),
             |mut sums, k| {
@@ -188,13 +188,13 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
         let c = &self.block.cross;
         let ground = |e: usize| self.block.grounding.edge(e).map(|s_e| (self.ground, s_e));
         let draws = self.streams.star(s);
-        match self.block.sheets {
+        match self.block.balance {
             // One sheet maps no column, as the balanced loop pays for any map.
-            Sheets::One => {
+            Balance::Balanced => {
                 let neighbors = c.row(s).map(|(k, &c)| (I::from_index(k), c.abs()));
                 sampler.eliminate_unique(draws, neighbors.chain(ground(s)), fill);
             }
-            Sheets::Two => {
+            Balance::Frustrated => {
                 let (sheet, e) = (s / c.n_rows(), s % c.n_rows());
                 let neighbors = c.row(e).map(move |(k, &c)| {
                     let on = sheet ^ usize::from(crosses(c));
@@ -213,7 +213,7 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
         let count = n.div_ceil(1 << shift);
         let per_task = per_task(c.n_rows(), c.nnz() as u64, 14);
         let empty = || (CliqueTreeSampler::new(split), vec![Vec::new(); count]);
-        let stars = self.block.sheets.count() * c.n_rows();
+        let stars = sheets(self.block.balance) * c.n_rows();
         let pieces = (0..stars)
             .into_par_iter()
             .fold_chunks(per_task, empty, |(mut sampler, mut buckets), s| {

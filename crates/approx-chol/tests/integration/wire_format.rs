@@ -141,12 +141,12 @@ impl Fixture {
     fn covers(self) -> &'static [&'static str] {
         match self {
             Self::Grounded => &["pinned: None"],
-            Self::GroundedApproximate => &["pinned: None", "Approximate(", "len: 0"],
+            Self::GroundedApproximate => &["pinned: None", "Folded(", "len: 0"],
             Self::Isolated => &["inverse_pivots: [0.5, 0.25]"],
-            Self::Floating => &["sheets: One, n: 2, pinned: Some("],
-            Self::Cover => &["sheets: Two"],
-            Self::DenseFrustrated => &["sheets: One, n: 3, pinned: None", "Dense("],
-            Self::SampledAc2 => &["elimination: Some", "Approximate("],
+            Self::Floating => &["n: 2, pinned: Some(", "triangular: Dense("],
+            Self::Cover => &["Cover("],
+            Self::DenseFrustrated => &["n: 3, pinned: None", "Dense("],
+            Self::SampledAc2 => &["elimination: Some", "Folded("],
             Self::Clamped => &["scaling: Refuted"],
         }
     }

@@ -1,31 +1,31 @@
 //! Exact Cholesky of a small `M` by GTH elimination: every pivot a sum of nonnegative terms, so none cancels or fails.
 
 use crate::factor::within_one;
-use crate::sgdd::{FactorTail, Grounding, Sheets};
+use crate::sgdd::{Balance, FactorTail, Grounding};
 use crate::storage::UpperAdjacency;
 use crate::{Batch, Index, Real};
 
 /// `M` as it is, its off-diagonal signed and its surplus closing it: dense Cholesky needs no cover, fold or dominance.
 pub(in crate::factor) struct Signed<T, I> {
     adjacency: UpperAdjacency<T, I>,
+    /// Frustrated, its off-diagonals of either sign, so GTH tracks the surplus their cancellation leaves; balanced, a Z-matrix.
+    balance: Balance,
     grounding: Grounding<T>,
-    /// Off-diagonals of either sign, so GTH tracks the surplus their cancellation leaves; else a Z-matrix.
-    frustrated: bool,
 }
 
 impl<T: Real, I: Index> Signed<T, I> {
     /// Panics unless nonempty, with one surplus per row.
     pub(in crate::factor) fn new(
         adjacency: UpperAdjacency<T, I>,
-        sheets: Sheets,
+        balance: Balance,
         grounding: Grounding<T>,
     ) -> Self {
         assert!(adjacency.n() > 0, "M has a vertex");
         assert!(grounding.fits(adjacency.n()), "one surplus per row");
         Self {
             adjacency,
+            balance,
             grounding,
-            frustrated: sheets == Sheets::Two,
         }
     }
 
@@ -35,7 +35,7 @@ impl<T: Real, I: Index> Signed<T, I> {
 
     /// Singular exactly when balanced and ungrounded: its null vector is `1`, the fold's `F·1` in `A`.
     pub(super) fn floats(&self) -> bool {
-        !self.frustrated && !self.grounding.is_grounded()
+        self.balance == Balance::Balanced && !self.grounding.is_grounded()
     }
 }
 
@@ -67,9 +67,9 @@ pub(super) fn factor<T: Real, I: Index>(
     let ground = |i| signed.grounding.edge(i).map(|s| (i, s));
     (0..n).filter_map(ground).for_each(|(i, s)| entry(i, n, -s));
     let (matrix, inverse_pivots) = values.split_at_mut(packed);
-    match signed.frustrated {
-        false => eliminate::<T, false>(matrix, inverse_pivots, m),
-        true => eliminate::<T, true>(matrix, inverse_pivots, m),
+    match signed.balance {
+        Balance::Balanced => eliminate::<T, false>(matrix, inverse_pivots, m),
+        Balance::Frustrated => eliminate::<T, true>(matrix, inverse_pivots, m),
     }
     for row in 0..m {
         let start = row_start(row);

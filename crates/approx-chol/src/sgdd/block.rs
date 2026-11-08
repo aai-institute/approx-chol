@@ -5,47 +5,13 @@ use super::scaling::{Clamp, ScaleVector, RATIO_BAND};
 use crate::storage::{OffDiagonal, Rows};
 use crate::{Index, Real};
 
-/// Whether a signature folds `M` (Harary), and `M`'s grounding.
-#[derive(Clone, Debug)]
-pub(crate) enum Balance<T> {
-    /// Folded to a Z-matrix: singular exactly when ungrounded.
-    Balanced(Grounding<T>),
-    /// No signature exists: a two-sheet cover, definite on `[z; −z]` even ungrounded.
-    Frustrated(Grounding<T>),
-}
-
-impl<T> Balance<T> {
-    /// A balanced `M` folds onto one sheet; a frustrated one needs the cover's two.
-    fn sheets(&self) -> Sheets {
-        match self {
-            Self::Balanced(_) => Sheets::One,
-            Self::Frustrated(_) => Sheets::Two,
-        }
-    }
-
-    fn split(self) -> (Sheets, Grounding<T>) {
-        let sheets = self.sheets();
-        match self {
-            Self::Balanced(grounding) | Self::Frustrated(grounding) => (sheets, grounding),
-        }
-    }
-}
-
-/// How many copies of each vertex a matrix holds: two for a Gremban cover, interleaved by vertex.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Whether a signature folds `M` (Harary).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Sheets {
-    One,
-    Two,
-}
-
-impl Sheets {
-    pub(crate) fn count(self) -> usize {
-        match self {
-            Self::One => 1,
-            Self::Two => 2,
-        }
-    }
+pub(crate) enum Balance {
+    /// Folded to a Z-matrix: singular exactly when ungrounded.
+    Balanced,
+    /// No signature exists: definite even ungrounded, as a two-sheet cover on `[z; −z]` is.
+    Frustrated,
 }
 
 /// The surplus `s = diag(M) − Σ|offdiag(M)|` closing `M` into an SDDM; none is `σ = 0`, singular only when balanced.
@@ -111,7 +77,8 @@ impl<T: Real> Grounding<T> {
 pub(crate) struct IrreducibleBlock<T = f64, I = u32> {
     congruence: Box<Congruence<T>>,
     off_diagonal: OffDiagonal<T, I>,
-    balance: Balance<T>,
+    balance: Balance,
+    grounding: Grounding<T>,
     grounding_unproven: bool,
     /// Boxed, as most components have none.
     clamp: Option<Box<Clamp>>,
@@ -123,7 +90,7 @@ pub(crate) struct BlockComplement<T, I> {
     first: usize,
     congruence: Box<Congruence<T>>,
     cross: Rows<T, I>,
-    sheets: Sheets,
+    balance: Balance,
     grounding: Grounding<T>,
     grounding_unproven: bool,
     /// The whole block's.
@@ -133,7 +100,7 @@ pub(crate) struct BlockComplement<T, I> {
 impl<T: Real, I: Index> BlockComplement<T, I> {
     /// `block` onto its kept side; `first` is the whole block's first vertex in `A`.
     pub(super) fn new(block: IrreducibleBlock<T, I>, first: usize) -> Self {
-        let (congruence, off_diagonal, sheets, grounding, grounding_unproven, clamp) =
+        let (congruence, off_diagonal, balance, grounding, grounding_unproven, clamp) =
             block.into_parts();
         let OffDiagonal::Bipartite(cross) = off_diagonal else {
             unreachable!("a complement's layout leaves each block both sides")
@@ -144,7 +111,7 @@ impl<T: Real, I: Index> BlockComplement<T, I> {
             first,
             congruence,
             cross,
-            sheets,
+            balance,
             grounding,
             grounding_unproven,
             clamp,
@@ -162,7 +129,7 @@ impl<T: Real, I: Index> BlockComplement<T, I> {
             self.first,
             self.congruence,
             self.cross,
-            self.sheets,
+            self.balance,
             self.grounding,
             self.grounding_unproven,
             self.clamp,
@@ -174,7 +141,7 @@ type ComplementParts<T, I> = (
     usize,
     Box<Congruence<T>>,
     Rows<T, I>,
-    Sheets,
+    Balance,
     Grounding<T>,
     bool,
     Option<Box<Clamp>>,
@@ -254,7 +221,8 @@ impl<'p, T: Real, I: Index> Congruent<'p, T, I> {
     /// Panics unless one factor, row and surplus per vertex, and `I` must index the factor's vertices.
     pub(super) fn block(
         self,
-        balance: Balance<T>,
+        balance: Balance,
+        grounding: Grounding<T>,
         vector: ScaleVector,
         clamped: f64,
     ) -> Result<IrreducibleBlock<T, I>, ReduceError> {
@@ -266,9 +234,8 @@ impl<'p, T: Real, I: Index> Congruent<'p, T, I> {
         let n = vertices.len();
         assert!(congruence.fits(n), "one factor per vertex");
         assert_eq!(off_diagonal.n(), n, "one row per vertex");
-        let (Balance::Balanced(grounding) | Balance::Frustrated(grounding)) = &balance;
         debug_assert!(
-            balance.sheets() == Sheets::Two || off_diagonal.nonpositive(),
+            balance == Balance::Frustrated || off_diagonal.nonpositive(),
             "a balanced M is a Z-matrix"
         );
         assert!(grounding.fits(n), "one surplus per row");
@@ -281,6 +248,7 @@ impl<'p, T: Real, I: Index> Congruent<'p, T, I> {
             congruence: Box::new(congruence),
             off_diagonal,
             balance,
+            grounding,
             grounding_unproven: vector.grounding_unproven(),
             clamp: vector.clamp(clamped).map(Box::new),
         })
@@ -290,12 +258,11 @@ impl<'p, T: Real, I: Index> Congruent<'p, T, I> {
 impl<T: Real, I: Index> IrreducibleBlock<T, I> {
     /// Moved out, so each part is freed once its factor stops reading it.
     pub(crate) fn into_parts(self) -> BlockParts<T, I> {
-        let (sheets, grounding) = self.balance.split();
         (
             self.congruence,
             self.off_diagonal,
-            sheets,
-            grounding,
+            self.balance,
+            self.grounding,
             self.grounding_unproven,
             self.clamp,
         )
@@ -305,7 +272,7 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
 type BlockParts<T, I> = (
     Box<Congruence<T>>,
     OffDiagonal<T, I>,
-    Sheets,
+    Balance,
     Grounding<T>,
     bool,
     Option<Box<Clamp>>,

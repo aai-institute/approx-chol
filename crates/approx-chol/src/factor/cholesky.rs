@@ -5,7 +5,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 
 use super::clique_tree::Multi;
 use super::sddm::{descend, lifted, Sddm};
-use crate::sgdd::{FactorTail, Sheets};
+use crate::sgdd::{Balance, FactorTail};
 use crate::{Batch, Index, MemStack, Real};
 use approximate::{ApproximateCholesky, CliqueTreeElimination};
 pub(super) use dense::Signed;
@@ -40,8 +40,7 @@ pub(super) enum Arm<T, I> {
 )]
 #[derive(Clone, Debug)]
 pub(super) struct Cholesky<T, I> {
-    sheets: Sheets,
-    /// The matrix's dimension over its sheets.
+    /// The matrix's dimension, a cover's two sheets counted.
     n: usize,
     /// A floating matrix's one slot no pivot eliminates, zeroed between the sweeps; a definite one pivots every slot.
     pinned: Option<usize>,
@@ -60,20 +59,23 @@ impl<T: Real, I: Index> Cholesky<T, I> {
             Arm::Exact(signed) => {
                 let (factor, pinned) = dense::factor(&signed, tail, &mut reused.dense);
                 Self {
-                    sheets: Sheets::One,
                     n: signed.n(),
                     pinned,
                     triangular: Triangular::Dense(factor.into()),
                 }
             }
             Arm::Approximate(sddm) => {
-                let (sheets, n) = (sddm.sheets(), sddm.n());
+                let (balance, n) = (sddm.balance(), sddm.n());
                 let (steps, pinned) = reused.elimination.eliminate(sddm, draws, tail);
+                let steps = Box::new(steps);
+                let triangular = match balance {
+                    Balance::Balanced => Triangular::Folded(steps),
+                    Balance::Frustrated => Triangular::Cover(steps),
+                };
                 Self {
-                    sheets,
                     n,
                     pinned,
-                    triangular: Triangular::Approximate(Box::new(steps)),
+                    triangular,
                 }
             }
         }
@@ -86,45 +88,47 @@ impl<T: Real, I: Index> Cholesky<T, I> {
 
     /// Whether it solves a singular Laplacian: one floating sheet.
     pub(super) fn singular(&self) -> bool {
-        self.sheets == Sheets::One && self.pinned.is_some()
+        self.triangular.sheets() == 1 && self.pinned.is_some()
     }
 
-    /// Slots [`solve`](Self::solve) takes: none on one sheet, which substitutes on `x` in place; two lift `x` to rows of their own.
+    /// Slots [`solve`](Self::solve) takes: none on one sheet, which substitutes on `x` in place; a cover lifts `x` to rows of their own.
     pub(super) fn scratch_slots(&self) -> usize {
-        match self.sheets {
-            Sheets::One => 0,
-            Sheets::Two => self.n,
+        match self.triangular {
+            Triangular::Dense(_) | Triangular::Folded(_) => 0,
+            Triangular::Cover(_) => self.n,
         }
     }
 
     /// Lifts to the sheets, fixes the gauge, substitutes, and descends.
     pub(super) fn solve<V: Batch<T>>(&self, x: &mut [V], stack: &mut MemStack) {
-        let triangular = &self.triangular;
-        match self.sheets {
-            Sheets::One => triangular.substitute(x, self.pinned),
-            Sheets::Two => {
-                let (mut rows, _) = stack.make_with(self.scratch_slots(), |i| lifted(x, i));
-                triangular.substitute(&mut rows, self.pinned);
+        match &self.triangular {
+            Triangular::Dense(factor) => dense::substitute(factor, self.pinned, x),
+            Triangular::Folded(steps) => steps.substitute(x, self.pinned),
+            Triangular::Cover(steps) => {
+                let (mut rows, _) = stack.make_with(self.n, |i| lifted(x, i));
+                steps.substitute(&mut rows, self.pinned);
                 descend(&rows, x);
             }
         }
     }
 }
 
-/// The triangular factor, dense or approximate.
+/// The triangular factor: dense on one sheet, or approximate on one or a cover's two.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 enum Triangular<T, I> {
     /// Packed unit lower `L` of `L D Lᵀ`, `D⁻¹` on its diagonal.
     Dense(Box<[T]>),
-    Approximate(Box<ApproximateCholesky<T, I>>),
+    Folded(Box<ApproximateCholesky<T, I>>),
+    Cover(Box<ApproximateCholesky<T, I>>),
 }
 
-impl<T: Real, I: Index> Triangular<T, I> {
-    fn substitute<V: Batch<T>>(&self, values: &mut [V], pinned: Option<usize>) {
+impl<T, I> Triangular<T, I> {
+    /// Copies of each vertex it factors: a dense factor's balance left none but its one sheet.
+    fn sheets(&self) -> usize {
         match self {
-            Self::Dense(factor) => dense::substitute(factor, pinned, values),
-            Self::Approximate(approximate) => approximate.substitute(values, pinned),
+            Self::Dense(_) | Self::Folded(_) => 1,
+            Self::Cover(_) => 2,
         }
     }
 }
@@ -139,16 +143,14 @@ impl<T: Real, I: Index> Cholesky<T, I> {
             return None;
         }
         let fits = match &self.triangular {
-            Triangular::Dense(dense) => {
-                self.sheets == Sheets::One && dense::fits(dense, self.n_steps())
-            }
-            Triangular::Approximate(approximate) => approximate.fits(self.n, self.pinned),
+            Triangular::Dense(dense) => dense::fits(dense, self.n_steps()),
+            Triangular::Folded(steps) | Triangular::Cover(steps) => steps.fits(self.n, self.pinned),
         };
         (self.pinned.is_none_or(|pin| pin < self.n) && fits).then_some(self)
     }
 
     /// Whether it solves a block of `kept` vertices on its sheets.
     pub(super) fn solves(&self, kept: usize) -> bool {
-        Some(self.n) == self.sheets.count().checked_mul(kept)
+        Some(self.n) == kept.checked_mul(self.triangular.sheets())
     }
 }
