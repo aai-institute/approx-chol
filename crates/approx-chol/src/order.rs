@@ -5,14 +5,11 @@ use std::ops::{Range, RangeBounds};
 use crate::{Index, MemStack};
 
 /// The vertices of `P` a coupled block's [`Segment`] lists, then the isolated vertices: the lone ones, which the factor counts by their pivots, then the dead ones; persisted without what follows from those.
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Clone, Debug)]
 pub(crate) struct Order {
-    #[cfg_attr(feature = "serde", serde(skip))]
     n: usize,
     /// The listed segments' vertices in segment order, then the isolated ones from `isolated`.
     listed: Listed,
-    #[cfg_attr(feature = "serde", serde(skip))]
     isolated: usize,
 }
 
@@ -31,20 +28,28 @@ pub(crate) enum Segment {
     },
 }
 
+impl Segment {
+    pub(crate) fn len(self) -> usize {
+        match self {
+            Segment::Run { len, .. } | Segment::Listed { len, .. } => len,
+        }
+    }
+
+    /// Slots [`Slots::on_local`] takes from its stack before passing the rest on: room to gather, none for a run.
+    pub(crate) fn gather_slots(self) -> usize {
+        match self {
+            Segment::Run { .. } => 0,
+            Segment::Listed { len, .. } => len,
+        }
+    }
+}
+
 /// In `u32` when `n` lets every vertex fit.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub(crate) enum Listed {
     U32(Box<[u32]>),
     U64(Box<[u64]>),
-}
-
-/// An [`Order`] as persisted, its offsets and `n` not yet rebuilt.
-#[cfg(feature = "serde")]
-#[derive(serde::Deserialize)]
-#[serde(rename = "Order")]
-pub(crate) struct Encoded {
-    listed: Listed,
 }
 
 /// One block's vertices of the factored matrix, in local order.
@@ -117,13 +122,12 @@ impl Order {
         (order, segments)
     }
 
-    /// From `encoded` and the coupled blocks' `segments`, whose list offsets it rebuilds, with `n`; `None` unless every offset is in bounds and every vertex below `n`, allocating nothing `n` sizes.
+    /// From `listed` and the coupled blocks' `segments`, whose list offsets it rebuilds, with `n`; `None` unless every offset is in bounds and every vertex below `n`, allocating nothing `n` sizes.
     #[cfg(feature = "serde")]
     pub(crate) fn decoded<'s>(
-        encoded: Encoded,
+        listed: Listed,
         segments: impl Iterator<Item = &'s mut Segment>,
     ) -> Option<Self> {
-        let Encoded { listed } = encoded;
         let (mut end, mut covered, mut runs_end) = (0usize, 0usize, 0usize);
         for segment in segments {
             let len = match segment {
@@ -151,6 +155,12 @@ impl Order {
             isolated: end,
         };
         (runs_end <= n && below).then_some(order)
+    }
+
+    /// What persists of it: all else follows from the blocks' segments and the lone vertices' count.
+    #[cfg(feature = "serde")]
+    pub(crate) fn listed(&self) -> &Listed {
+        &self.listed
     }
 
     /// The vertices in a block or dead.
@@ -227,14 +237,6 @@ impl<'a> Slots<'a> {
     /// Each local vertex in the factored matrix's numbering, in local order.
     pub(crate) fn vertices(self) -> impl ExactSizeIterator<Item = usize> + Clone + 'a {
         (0..self.len()).map(move |k| self.vertex(k))
-    }
-
-    /// Slots [`on_local`](Self::on_local) takes from its stack before passing the rest on: room to gather, none for a run.
-    pub(crate) fn gather_slots(self) -> usize {
-        match self {
-            Slots::Run { .. } => 0,
-            listed => listed.len(),
-        }
     }
 
     /// Runs `solve` on `Pᵀ x` and the rest of `stack`, then sets the block's vertices of `x` to the result.

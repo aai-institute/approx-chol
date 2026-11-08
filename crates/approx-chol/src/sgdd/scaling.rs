@@ -56,7 +56,7 @@ impl Default for ScalingPolicy {
     }
 }
 
-/// A component of `A` whose rows the reduction clamped past rounding to make it dominant.
+/// How the reduction clamped a component's rows past rounding to make it dominant.
 #[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]

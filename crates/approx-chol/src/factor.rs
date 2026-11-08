@@ -143,7 +143,7 @@ impl<T: Real> ApproxInverse<T> {
 
     fn new(order: Order, blocks: Blocks<T>, inverse_pivots: Box<[T]>) -> Self {
         let scratch_slots = on!(&blocks, blocks => (blocks.iter())
-            .map(|block| block.global_scratch_slots(order.slots(block.segment)))
+            .map(Block::global_scratch_slots)
             .max())
         .unwrap_or(0);
         Self {
@@ -221,7 +221,7 @@ impl<T: Real> ApproxInverse<T> {
     /// Solves `x`, of `n` rows, in place through `stack`, which holds every block's scratch for `V`.
     fn solve_unchecked<V: Batch<T>>(&self, x: &mut [V], threads: Threads, stack: &mut MemStack) {
         on!(&self.blocks, blocks => for block in blocks.iter() {
-            block.solve_global(self.order.slots(block.segment), x, threads, stack);
+            block.solve_global(&self.order, x, threads, stack);
         });
         let (lone, dead) = self.order.lone_and_dead(self.inverse_pivots.len());
         for (v, &inverse_pivot) in lone.vertices().zip(&self.inverse_pivots) {
@@ -292,8 +292,15 @@ impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
         config: &Config,
         reused: &mut Workspace<T, I>,
     ) -> Block<T, I> {
-        let (first, congruence, cross, sheets, grounding, grounding_unproven, clamp) =
-            self.into_parts();
+        let BlockComplement {
+            first,
+            congruence,
+            cross,
+            sheets,
+            grounding,
+            grounding_unproven,
+            clamp,
+        } = self;
         let streams = Streams::of(first, config);
         let s = BipartiteBlock::of(cross, sheets, grounding).complement(config, streams);
         let tail = congruence.factor_tail(0);
@@ -385,19 +392,19 @@ impl<T: Real, I: Index> Block<T, I> {
     }
 
     /// Slots [`solve_global`](Self::solve_global) takes: room to gather unless the vertices are consecutive, plus the Cholesky's.
-    fn global_scratch_slots(&self, slots: Slots<'_>) -> usize {
-        slots.gather_slots() + self.cholesky.scratch_slots()
+    fn global_scratch_slots(&self) -> usize {
+        self.segment.gather_slots() + self.cholesky.scratch_slots()
     }
 
-    /// Solves the block's vertices `slots` of `x` in place, through a stack of [`global_scratch_slots`](Self::global_scratch_slots) slots.
+    /// Solves the block's vertices of `x`, its segment of `order`, in place through a stack of [`global_scratch_slots`](Self::global_scratch_slots) slots.
     fn solve_global<V: Batch<T>>(
         &self,
-        slots: Slots<'_>,
+        order: &Order,
         x: &mut [V],
         threads: Threads,
         stack: &mut MemStack,
     ) {
-        slots.on_local(
+        order.slots(self.segment).on_local(
             x,
             stack,
             // on_local's two arms would otherwise each call it: ~19 instructions per block.
@@ -477,18 +484,18 @@ fn splitmix(x: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-/// `(FORMAT_VERSION, (order, blocks, inverse_pivots))`: the vertices once, in `order`, and each block's factor without them.
+/// `(FORMAT_VERSION, (listed, blocks, inverse_pivots))`: the vertices once, each block's segment a run or a length of the order's `listed`.
 #[cfg(feature = "serde")]
 impl<T: serde::Serialize> serde::Serialize for ApproxInverse<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let body = (&self.order, &self.blocks, &self.inverse_pivots);
+        let body = (self.order.listed(), &self.blocks, &self.inverse_pivots);
         wire::serialize(serializer, body)
     }
 }
 
-/// `(order, blocks, inverse_pivots)` as decoded.
+/// `(listed, blocks, inverse_pivots)` as decoded.
 #[cfg(feature = "serde")]
-type Body<T> = (crate::order::Encoded, Blocks<T>, Box<[T]>);
+type Body<T> = (Listed, Blocks<T>, Box<[T]>);
 
 /// Checks the order and the blocks' segments before anything sized by their `n`: offsets and vertices in bounds, each block's parts agreeing on its segment's length, so a run's length is one its block's bytes back; only then whether each vertex is in one place.
 #[cfg(feature = "serde")]
@@ -496,13 +503,13 @@ impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ApproxI
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let (order, mut blocks, inverse_pivots): Body<T> = wire::deserialize(deserializer)?;
         let order = on!(&mut blocks, blocks => Order::decoded(order, blocks.iter_mut().map(|b| &mut b.segment)));
-        let fits = |order: &Order| on!(&blocks, blocks => blocks.iter().all(|block| block.holds(order.slots(block.segment).len())));
+        let fits = on!(&blocks, blocks => blocks.iter().all(Block::holds));
         let once =
             |order: &Order| on!(&blocks, blocks => order.once(blocks.iter().map(|b| b.segment)));
         let pivots = inverse_pivots.iter().all(|&p| inverse_pivot_in_range(p));
         let lone = |order: &Order| inverse_pivots.len() <= order.isolated().len();
         match order {
-            Some(order) if pivots && lone(&order) && fits(&order) && once(&order) => {
+            Some(order) if pivots && lone(&order) && fits && once(&order) => {
                 Ok(Self::new(order, blocks, inverse_pivots))
             }
             _ => Err(serde::de::Error::custom("corrupt ApproxInverse")),
@@ -513,7 +520,8 @@ impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ApproxI
 #[cfg(feature = "serde")]
 impl<T: Real, I: Index> Block<T, I> {
     /// Whether its parts agree on `n` vertices.
-    fn holds(&self, n: usize) -> bool {
+    fn holds(&self) -> bool {
+        let n = self.segment.len();
         let kept = match &self.elimination {
             None => Some(n),
             Some(elimination) => n
@@ -674,12 +682,12 @@ mod storage {
                 unreachable!("built in u32")
             };
             for block in blocks.iter() {
-                let slots = factor.order.slots(block.segment);
-                let len = block.global_scratch_slots(slots);
+                let len = block.global_scratch_slots();
                 let solve = |fill: f64| {
                     let mut x = b.clone();
                     let mut cells = vec![std::mem::MaybeUninit::new(fill); len];
-                    block.solve_global(slots, &mut x, Threads::All, MemStack::new_any(&mut cells));
+                    let stack = MemStack::new_any(&mut cells);
+                    block.solve_global(&factor.order, &mut x, Threads::All, stack);
                     x.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
                 };
                 assert_eq!(solve(0.0), solve(f64::NAN), "{config:?}");

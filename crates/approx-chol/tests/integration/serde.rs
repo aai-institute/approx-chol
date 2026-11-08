@@ -400,14 +400,14 @@ fn an_isolated_vertex_round_trips_through_json() {
     assert_eq!(factor.solve(&b).unwrap(), back.solve(&b).unwrap());
 }
 
-/// [`with_isolated_vertex`]'s JSON `[version, [order, blocks, inverse_pivots]]` with its block's segment and its order's listed vertices replaced.
+/// [`with_isolated_vertex`]'s JSON `[version, [listed, blocks, inverse_pivots]]` with its block's segment and the listed vertices replaced.
 fn with_order(segment: serde_json::Value, listed: serde_json::Value) -> serde_json::Value {
     let mut v = serde_json::to_value(with_isolated_vertex()).unwrap();
-    assert_eq!(v[1][0], serde_json::json!({"listed": {"U32": [2]}}));
+    assert_eq!(v[1][0], serde_json::json!({"U32": [2]}));
     let block = &mut v[1][1]["U32"][0]["segment"];
     assert_eq!(*block, serde_json::json!({"Run": {"start": 0, "len": 2}}));
     *block = segment;
-    v[1][0] = serde_json::json!({ "listed": { "U64": listed } });
+    v[1][0] = serde_json::json!({ "U64": listed });
     v
 }
 

@@ -120,14 +120,14 @@ pub(crate) struct IrreducibleBlock<T = f64, I = u32> {
 /// A bipartite block's Schur complement onto its kept side, unformed: `C`, and `F` on the kept side.
 pub(crate) struct BlockComplement<T, I> {
     /// The whole block's first vertex in `A`.
-    first: usize,
-    congruence: Box<Congruence<T>>,
-    cross: Rows<T, I>,
-    sheets: Sheets,
-    grounding: Grounding<T>,
-    grounding_unproven: bool,
+    pub(crate) first: usize,
+    pub(crate) congruence: Box<Congruence<T>>,
+    pub(crate) cross: Rows<T, I>,
+    pub(crate) sheets: Sheets,
+    pub(crate) grounding: Grounding<T>,
+    pub(crate) grounding_unproven: bool,
     /// The whole block's.
-    clamp: Option<Box<Clamp>>,
+    pub(crate) clamp: Option<Box<Clamp>>,
 }
 
 impl<T: Real, I: Index> BlockComplement<T, I> {
@@ -155,30 +155,7 @@ impl<T: Real, I: Index> BlockComplement<T, I> {
     pub(super) fn kept_from(&self) -> usize {
         self.cross.n_rows()
     }
-
-    /// Moved out, the whole block's first vertex first, as it keys the draws.
-    pub(crate) fn into_parts(self) -> ComplementParts<T, I> {
-        (
-            self.first,
-            self.congruence,
-            self.cross,
-            self.sheets,
-            self.grounding,
-            self.grounding_unproven,
-            self.clamp,
-        )
-    }
 }
-
-type ComplementParts<T, I> = (
-    usize,
-    Box<Congruence<T>>,
-    Rows<T, I>,
-    Sheets,
-    Grounding<T>,
-    bool,
-    Option<Box<Clamp>>,
-);
 
 /// `M = F · A_c · F` over its vertices, its surplus still to be decided.
 pub(super) struct Congruent<'p, T, I> {
