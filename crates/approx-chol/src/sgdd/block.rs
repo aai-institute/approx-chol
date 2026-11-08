@@ -1,5 +1,7 @@
 //! One reduced irreducible block, its balance and grounding.
 
+use std::ops::Range;
+
 use super::congruence::{Congruence, ScaledFactors};
 use super::scaling::{Clamp, ScaleVector, RATIO_BAND};
 use crate::storage::{OffDiagonal, Rows};
@@ -97,6 +99,12 @@ pub(crate) struct BlockComplement<T, I> {
     clamp: Option<Box<Clamp>>,
 }
 
+/// A coupled component's block, which knows the vertices of its component it keeps.
+pub(crate) trait KeptVertices {
+    /// Its kept vertices in its component's local order: a tail, so the component ends where they do.
+    fn kept(&self) -> Range<usize>;
+}
+
 impl<T: Real, I: Index> BlockComplement<T, I> {
     /// `block` onto its kept side; `first` is the whole block's first vertex in `A`.
     pub(super) fn new(block: IrreducibleBlock<T, I>, first: usize) -> Self {
@@ -118,11 +126,6 @@ impl<T: Real, I: Index> BlockComplement<T, I> {
         }
     }
 
-    /// The local vertex its kept side starts at.
-    pub(super) fn kept_from(&self) -> usize {
-        self.cross.n_rows()
-    }
-
     /// Moved out, the whole block's first vertex first, as it keys the draws.
     pub(crate) fn into_parts(self) -> ComplementParts<T, I> {
         (
@@ -134,6 +137,13 @@ impl<T: Real, I: Index> BlockComplement<T, I> {
             self.grounding_unproven,
             self.clamp,
         )
+    }
+}
+
+impl<T: Real, I: Index> KeptVertices for BlockComplement<T, I> {
+    fn kept(&self) -> Range<usize> {
+        let eliminated = self.cross.n_rows();
+        eliminated..eliminated + self.cross.n_cols()
     }
 }
 
@@ -266,6 +276,12 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
             self.grounding_unproven,
             self.clamp,
         )
+    }
+}
+
+impl<T: Real, I: Index> KeptVertices for IrreducibleBlock<T, I> {
+    fn kept(&self) -> Range<usize> {
+        0..self.off_diagonal.n()
     }
 }
 
