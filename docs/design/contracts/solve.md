@@ -14,9 +14,10 @@ How a caller applies $B$ to right-hand sides. The requirements are "Solve", "Sol
   $A_r$. On a singular component the
   solve projects the right-hand side and the solution onto the range, and reports no defect.
 - **Per solve:** a budget and the caller's scratch, or scratch allocated for that solve; the
-  scratch is sized by the block's column count and the budget, and serves every block of fewer
-  columns at a smaller budget. Solving only reads $B$, so any number of solves run with one $B$
-  at once, each with its own scratch.
+  scratch is sized by the block's column count and the budget, a region per thread for the
+  components solved at once, and serves every block of fewer columns; one thread's serves every
+  budget, solving fewer components at once, never other bits. Solving only reads $B$, so any
+  number of solves run with one $B$ at once, each with its own scratch.
 - **Threads:** as Execution, `../architecture.md`. A solve spreads its budget over $B$'s
   components, by size; the solution does not depend on how.
 - **One error:** a block of the wrong row count, or scratch that does not meet the block's

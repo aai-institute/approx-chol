@@ -66,12 +66,15 @@ pub enum ApplyError {
 ```
 
 - `scratch(columns, threads)` is what applying to a block of `columns` columns at `threads`
-  needs, independent of the pool; it is monotone in both, so a stack that holds it serves every
-  block of fewer columns at a smaller budget, `All` above every `Count`. `apply` allocates its
-  scratch per call; `apply_with` allocates nothing.
+  needs to solve as many components at once as the budget has threads, at most the current
+  pool's: a region per thread, of the most one of those components takes. It grows with
+  `columns`; one thread's serves every budget, and a stack of fewer regions solves fewer
+  components at once, to the same bits. `apply` allocates its scratch per call; `apply_with`
+  allocates nothing.
 - `block` holds the right-hand sides on entry and the solutions on return; it has $n$ rows, else
-  `Rows`, also without columns. `Scratch` is returned when `stack` cannot hold
-  `scratch(block.columns(), threads)`, alignment included. Either error leaves `block` untouched.
+  `Rows`, also without columns. `Scratch` is returned when `stack` cannot hold one thread's
+  scratch, `scratch(block.columns(), Threads::Count(1))`, alignment included. Either error leaves
+  `block` untouched.
 - A `MatrixMut` keeps its shape during an apply; `read_column` copies a column into `into`,
   `write_column` copies `from` into one column and touches nothing else, and neither allocates.
   Each panics unless `column < columns()` and the slice has `rows()` entries; the crate's impls
