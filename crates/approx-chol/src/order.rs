@@ -1,25 +1,25 @@
-//! `P`: every block's vertices of the factored matrix in local order, coupled blocks first, then the isolated ones.
+//! `P`: every block's vertices of the factored matrix in local order, coupled blocks by their segments, then the isolated ones.
 
 use std::ops::{Range, RangeBounds};
 
 use crate::{Index, MemStack};
 
-/// `P` as one segment per coupled block, a run of consecutive vertices storing no index, then the isolated vertices as a list: the lone ones, which the factor counts by their pivots, then the dead ones; persisted without what follows from those.
+/// The vertices of `P` a coupled block's [`Segment`] lists, then the isolated vertices: the lone ones, which the factor counts by their pivots, then the dead ones; persisted without what follows from those.
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Clone, Debug)]
 pub(crate) struct Order {
     #[cfg_attr(feature = "serde", serde(skip))]
     n: usize,
-    segments: Box<[Segment]>,
-    /// The coupled blocks' vertices outside runs, then the isolated ones from `isolated`.
+    /// The listed segments' vertices in segment order, then the isolated ones from `isolated`.
     listed: Listed,
     #[cfg_attr(feature = "serde", serde(skip))]
     isolated: usize,
 }
 
+/// A coupled block's vertices: a run of consecutive ones storing no index, or listed in its [`Order`].
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug)]
-enum Segment {
+pub(crate) enum Segment {
     Run {
         start: usize,
         len: usize,
@@ -44,7 +44,6 @@ pub(crate) enum Listed {
 #[derive(serde::Deserialize)]
 #[serde(rename = "Order")]
 pub(crate) struct Encoded {
-    segments: Box<[Segment]>,
     listed: Listed,
 }
 
@@ -75,7 +74,7 @@ impl Order {
         coupled: &[Range<usize>],
         isolated: usize,
         numbering: Range<usize>,
-    ) -> Self
+    ) -> (Self, Vec<Segment>)
     where
         Listed: From<Box<[I]>>,
     {
@@ -91,7 +90,7 @@ impl Order {
                 end += len;
             }
         }
-        let listed = (coupled.iter().zip(&segments[..]))
+        let listed = (coupled.iter().zip(&segments))
             .filter(|(_, segment)| matches!(segment, Segment::Listed { .. }))
             .flat_map(|(range, _)| range.clone())
             .chain(isolated..vertices.len());
@@ -110,25 +109,28 @@ impl Order {
                 Listed::from(vertices.into_boxed_slice())
             }
         };
-        Self {
+        let order = Self {
             n,
-            segments: segments.into_boxed_slice(),
             listed,
             isolated: end,
-        }
+        };
+        (order, segments)
     }
 
-    /// From `encoded`, offsets and `n` rebuilt, `None` unless every offset is in bounds and every vertex below `n`, allocating nothing `n` sizes.
+    /// From `encoded` and the coupled blocks' `segments`, whose list offsets it rebuilds, with `n`; `None` unless every offset is in bounds and every vertex below `n`, allocating nothing `n` sizes.
     #[cfg(feature = "serde")]
-    pub(crate) fn decoded(encoded: Encoded) -> Option<Self> {
-        let Encoded {
-            mut segments,
-            listed,
-        } = encoded;
-        let (mut end, mut covered) = (0usize, 0usize);
-        for segment in &mut segments[..] {
+    pub(crate) fn decoded<'s>(
+        encoded: Encoded,
+        segments: impl Iterator<Item = &'s mut Segment>,
+    ) -> Option<Self> {
+        let Encoded { listed } = encoded;
+        let (mut end, mut covered, mut runs_end) = (0usize, 0usize, 0usize);
+        for segment in segments {
             let len = match segment {
-                Segment::Run { len, .. } => *len,
+                Segment::Run { start, len } => {
+                    runs_end = runs_end.max(start.checked_add(*len)?);
+                    *len
+                }
                 Segment::Listed { start, len } => {
                     *start = end;
                     end = end.checked_add(*len)?;
@@ -139,21 +141,16 @@ impl Order {
         }
         let isolated = listed.slots(..).len().checked_sub(end)?;
         let n = covered.checked_add(isolated)?;
-        let runs = segments.iter().all(|&segment| match segment {
-            Segment::Run { start, len } => start.checked_add(len).is_some_and(|end| end <= n),
-            Segment::Listed { .. } => true,
-        });
         let below = match &listed {
             Listed::U32(listed) => listed.iter().all(|&v| v.index() < n),
             Listed::U64(listed) => listed.iter().all(|&v| v < n as u64),
         };
         let order = Self {
             n,
-            segments,
             listed,
             isolated: end,
         };
-        (runs && below).then_some(order)
+        (runs_end <= n && below).then_some(order)
     }
 
     /// The vertices in a block or dead.
@@ -161,21 +158,18 @@ impl Order {
         self.n
     }
 
-    /// Coupled blocks.
-    pub(crate) fn coupled(&self) -> usize {
-        self.segments.len()
+    /// A coupled block's vertices, by its segment.
+    pub(crate) fn slots(&self, segment: Segment) -> Slots<'_> {
+        match segment {
+            Segment::Run { start, len } => Slots::Run { start, len },
+            Segment::Listed { start, len } => self.listed.slots(start..start + len),
+        }
     }
 
-    /// Block `k`'s vertices, past the coupled blocks a lone vertex's.
-    pub(crate) fn block(&self, k: usize) -> Slots<'_> {
-        match self.segments.get(k) {
-            Some(&Segment::Run { start, len }) => Slots::Run { start, len },
-            Some(&Segment::Listed { start, len }) => self.listed.slots(start..start + len),
-            None => Slots::Run {
-                start: self.isolated().vertex(k - self.segments.len()),
-                len: 1,
-            },
-        }
+    /// Lone vertex `k`'s block.
+    pub(crate) fn lone(&self, k: usize) -> Slots<'_> {
+        let start = self.isolated().vertex(k);
+        Slots::Run { start, len: 1 }
     }
 
     /// Vertices no entry couples: the lone ones, each its own block, then the dead ones, in no block.
@@ -192,12 +186,12 @@ impl Order {
         )
     }
 
-    /// Whether no vertex is in two places; with every one below `n` and `n` places, each is in one.
+    /// Whether no vertex is in two places, the coupled blocks' on `segments`; with every one below `n` and `n` places, each is in one.
     #[cfg(feature = "serde")]
-    pub(crate) fn once(&self) -> bool {
+    pub(crate) fn once(&self, mut segments: impl Iterator<Item = Segment>) -> bool {
         let mut seen = vec![false; self.n];
         let mut once = |v: usize| !std::mem::replace(&mut seen[v], true);
-        (0..self.coupled()).all(|k| self.block(k).vertices().all(&mut once))
+        segments.all(|segment| self.slots(segment).vertices().all(&mut once))
             && self.isolated().vertices().all(once)
     }
 }
@@ -285,9 +279,10 @@ mod tests {
     #[test]
     fn packing_lists_coupled_blocks_ahead_of_isolated_vertices() {
         let vertices = vec![0u32, 2, 4, 5, 3, 6, 7, 1, 8];
-        let order = Order::pack(vertices, &[0..2, 2..5, 5..7], 7, 0..9);
+        let (order, segments) = Order::pack(vertices, &[0..2, 2..5, 5..7], 7, 0..9);
         assert_eq!(order.n(), 9);
-        let blocks: Vec<_> = (0..order.coupled() + 1).map(|k| order.block(k)).collect();
+        let coupled = segments.into_iter().map(|segment| order.slots(segment));
+        let blocks: Vec<_> = coupled.chain([order.lone(0)]).collect();
         assert!(!is_run(blocks[0]) && !is_run(blocks[1]) && is_run(blocks[2]) && is_run(blocks[3]));
         let blocks: Vec<_> = blocks.into_iter().map(listed).collect();
         assert_eq!(blocks, [vec![0, 2], vec![4, 5, 3], vec![6, 7], vec![1]]);
@@ -298,9 +293,10 @@ mod tests {
     #[test]
     fn packing_renumbers_onto_a_kept_side() {
         let vertices = vec![0u32, 4, 6, 1, 5, 8, 7];
-        let order = Order::pack(vertices, &[1..3, 4..5], 5, 4..9);
+        let (order, segments) = Order::pack(vertices, &[1..3, 4..5], 5, 4..9);
         assert_eq!(order.n(), 5);
-        let blocks: Vec<_> = (0..order.coupled() + 1).map(|k| order.block(k)).collect();
+        let coupled = segments.into_iter().map(|segment| order.slots(segment));
+        let blocks: Vec<_> = coupled.chain([order.lone(0)]).collect();
         assert!(!is_run(blocks[0]) && is_run(blocks[1]));
         let blocks: Vec<_> = blocks.into_iter().map(listed).collect();
         assert_eq!(blocks, [vec![0, 2], vec![1], vec![4]]);

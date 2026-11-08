@@ -19,7 +19,7 @@ pub use config::{Config, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
 
-use crate::order::{Listed, Order, Slots};
+use crate::order::{Listed, Order, Segment, Slots};
 use crate::sgdd::{BlockComplement, Components, Congruence, IrreducibleBlock, Summands};
 use crate::storage::OffDiagonal;
 use crate::Clamp;
@@ -128,13 +128,13 @@ impl<T: Real> ApproxInverse<T> {
             numbering,
         } = components;
         let inverse_pivots = pivots.iter().map(|&pivot| T::one() / pivot).collect();
-        let order = Order::pack(vertices, &coupled, isolated, numbering);
+        let (order, segments) = Order::pack(vertices, &coupled, isolated, numbering);
         let workspace = || Workspace::new(config.split());
         // Exactly sized: collect's reserve rounds a few blocks up to 4 and into_boxed_slice reallocates.
         let mut factored = Vec::with_capacity(blocks.len());
-        (blocks.into_par_iter().enumerate())
-            .map_init(workspace, |reused, (k, block)| {
-                block.factor(order.block(k), config, reused)
+        (blocks.into_par_iter().zip(segments))
+            .map_init(workspace, |reused, (block, segment)| {
+                block.factor(segment, &order, config, reused)
             })
             .collect_into_vec(&mut factored);
         let blocks = Blocks::from(factored.into_boxed_slice());
@@ -142,8 +142,8 @@ impl<T: Real> ApproxInverse<T> {
     }
 
     fn new(order: Order, blocks: Blocks<T>, inverse_pivots: Box<[T]>) -> Self {
-        let scratch_slots = on!(&blocks, blocks => (blocks.iter().enumerate())
-            .map(|(k, block)| block.global_scratch_slots(order.block(k)))
+        let scratch_slots = on!(&blocks, blocks => (blocks.iter())
+            .map(|block| block.global_scratch_slots(order.slots(block.segment)))
             .max())
         .unwrap_or(0);
         Self {
@@ -167,7 +167,8 @@ impl<T: Real> ApproxInverse<T> {
 
     /// One per irreducible block of `A` the factored matrix meets, coupled blocks by their component's lowest vertex in the input's numbering, then isolated vertices; dead vertices are in none.
     pub fn components(&self) -> impl ExactSizeIterator<Item = Component<'_, T>> {
-        (0..self.order.coupled() + self.inverse_pivots.len()).map(|k| Component { factor: self, k })
+        let coupled = on!(&self.blocks, blocks => blocks.len());
+        (0..coupled + self.inverse_pivots.len()).map(|k| Component { factor: self, k })
     }
 
     /// What [`apply_with`](Self::apply_with) takes from its stack for a block of `columns` columns: the most any one block of `A` takes, its Cholesky's slots plus a gather unless its vertices are consecutive, per column solved in place, or one column copied through. It grows with `columns` and serves every block of fewer.
@@ -219,8 +220,8 @@ impl<T: Real> ApproxInverse<T> {
 
     /// Solves `x`, of `n` rows, in place through `stack`, which holds every block's scratch for `V`.
     fn solve_unchecked<V: Batch<T>>(&self, x: &mut [V], threads: Threads, stack: &mut MemStack) {
-        on!(&self.blocks, blocks => for (k, block) in blocks.iter().enumerate() {
-            block.solve_global(self.order.block(k), x, threads, stack);
+        on!(&self.blocks, blocks => for block in blocks.iter() {
+            block.solve_global(self.order.slots(block.segment), x, threads, stack);
         });
         let (lone, dead) = self.order.lone_and_dead(self.inverse_pivots.len());
         for (v, &inverse_pivot) in lone.vertices().zip(&self.inverse_pivots) {
@@ -232,10 +233,11 @@ impl<T: Real> ApproxInverse<T> {
 
 /// A coupled summand of the factored matrix: a block of `A`, or a block's complement onto its kept side.
 pub(crate) trait Summand<T, I>: Send {
-    /// Its factor; `vertices` are its own in the factored matrix's numbering.
+    /// Its factor on `segment` of `order`, its vertices in the factored matrix's numbering.
     fn factor(
         self,
-        vertices: Slots<'_>,
+        segment: Segment,
+        order: &Order,
         config: &Config,
         reused: &mut Workspace<T, I>,
     ) -> Block<T, I>;
@@ -244,13 +246,14 @@ pub(crate) trait Summand<T, I>: Send {
 impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
     fn factor(
         self,
-        vertices: Slots<'_>,
+        segment: Segment,
+        order: &Order,
         config: &Config,
         reused: &mut Workspace<T, I>,
     ) -> Block<T, I> {
         let (congruence, off_diagonal, sheets, grounding, grounding_unproven, clamp) =
             self.into_parts();
-        let streams = Streams::of(vertices.vertex(0), config);
+        let streams = Streams::of(order.slots(segment).vertex(0), config);
         let tail = |from: usize| congruence.factor_tail(from);
         let draws = streams.cholesky();
         let (elimination, cholesky) = match off_diagonal {
@@ -270,6 +273,7 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
             }
         };
         Block {
+            segment,
             congruence,
             elimination,
             cholesky,
@@ -281,7 +285,13 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
 
 impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
     /// Keyed as a whole block keys its draws.
-    fn factor(self, _: Slots<'_>, config: &Config, reused: &mut Workspace<T, I>) -> Block<T, I> {
+    fn factor(
+        self,
+        segment: Segment,
+        _: &Order,
+        config: &Config,
+        reused: &mut Workspace<T, I>,
+    ) -> Block<T, I> {
         let (first, congruence, cross, sheets, grounding, grounding_unproven, clamp) =
             self.into_parts();
         let streams = Streams::of(first, config);
@@ -289,6 +299,7 @@ impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
         let tail = congruence.factor_tail(0);
         let cholesky = Cholesky::factor(s, streams.cholesky(), tail, reused);
         Block {
+            segment,
             congruence,
             elimination: None,
             cholesky,
@@ -306,9 +317,19 @@ pub struct Component<'f, T = f64> {
     k: usize,
 }
 
+impl<'f, T> Component<'f, T> {
+    fn slots(&self) -> Slots<'f> {
+        let factor = self.factor;
+        on!(&factor.blocks, blocks => match blocks.get(self.k) {
+            Some(block) => factor.order.slots(block.segment),
+            None => factor.order.lone(self.k - blocks.len()),
+        })
+    }
+}
+
 impl<T> core::fmt::Debug for Component<'_, T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let vertices = self.factor.order.block(self.k);
+        let vertices = self.slots();
         f.debug_struct("Component")
             .field("vertices", &vertices)
             .finish()
@@ -318,7 +339,7 @@ impl<T> core::fmt::Debug for Component<'_, T> {
 impl<'f, T: Real> Component<'f, T> {
     /// Its vertices in the factored matrix's numbering, in the order its factor numbers them.
     pub fn vertices(self) -> impl ExactSizeIterator<Item = usize> + 'f {
-        self.factor.order.block(self.k).vertices()
+        self.slots().vertices()
     }
 
     /// Whether it was grounded or floated on a scaling that did not settle, so a singular component may have been grounded.
@@ -337,7 +358,7 @@ impl<'f, T: Real> Component<'f, T> {
     }
 }
 
-/// One irreducible block's factor, its local indices stored in `I`; its vertices are its [`Order`]'s.
+/// One irreducible block's factor, its local indices stored in `I`, and its vertices as a segment of its [`Order`].
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -348,6 +369,7 @@ impl<'f, T: Real> Component<'f, T> {
 )]
 #[derive(Clone, Debug)]
 pub(crate) struct Block<T, I> {
+    segment: Segment,
     congruence: Box<Congruence<T>>,
     elimination: Option<Box<BlockElimination<T, I>>>,
     cholesky: Cholesky<T, I>,
@@ -468,19 +490,19 @@ impl<T: serde::Serialize> serde::Serialize for ApproxInverse<T> {
 #[cfg(feature = "serde")]
 type Body<T> = (crate::order::Encoded, Blocks<T>, Box<[T]>);
 
-/// Checks the order before anything sized by its `n`: offsets and vertices in bounds, each block's parts agreeing on its segment's length, so a run's length is one its block's bytes back; only then whether each vertex is in one place.
+/// Checks the order and the blocks' segments before anything sized by their `n`: offsets and vertices in bounds, each block's parts agreeing on its segment's length, so a run's length is one its block's bytes back; only then whether each vertex is in one place.
 #[cfg(feature = "serde")]
 impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ApproxInverse<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let (order, blocks, inverse_pivots): Body<T> = wire::deserialize(deserializer)?;
-        let fits = |order: &Order| {
-            on!(&blocks, blocks => blocks.len() == order.coupled()
-                && (blocks.iter().enumerate()).all(|(k, block)| block.holds(order.block(k).len())))
-        };
+        let (order, mut blocks, inverse_pivots): Body<T> = wire::deserialize(deserializer)?;
+        let order = on!(&mut blocks, blocks => Order::decoded(order, blocks.iter_mut().map(|b| &mut b.segment)));
+        let fits = |order: &Order| on!(&blocks, blocks => blocks.iter().all(|block| block.holds(order.slots(block.segment).len())));
+        let once =
+            |order: &Order| on!(&blocks, blocks => order.once(blocks.iter().map(|b| b.segment)));
         let pivots = inverse_pivots.iter().all(|&p| inverse_pivot_in_range(p));
         let lone = |order: &Order| inverse_pivots.len() <= order.isolated().len();
-        match Order::decoded(order) {
-            Some(order) if pivots && lone(&order) && fits(&order) && order.once() => {
+        match order {
+            Some(order) if pivots && lone(&order) && fits(&order) && once(&order) => {
                 Ok(Self::new(order, blocks, inverse_pivots))
             }
             _ => Err(serde::de::Error::custom("corrupt ApproxInverse")),
@@ -651,8 +673,8 @@ mod storage {
             let Blocks::U32(blocks) = &factor.blocks else {
                 unreachable!("built in u32")
             };
-            for (k, block) in blocks.iter().enumerate() {
-                let slots = factor.order.block(k);
+            for block in blocks.iter() {
+                let slots = factor.order.slots(block.segment);
                 let len = block.global_scratch_slots(slots);
                 let solve = |fill: f64| {
                     let mut x = b.clone();
