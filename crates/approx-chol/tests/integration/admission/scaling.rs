@@ -1,3 +1,4 @@
+use crate::common::clamps::Clamps;
 use approx_chol::input::FactorWidth2;
 use approx_chol::{factorize, Config, CsrRef, ScalingOutcome, ScalingPolicy, Sgdd};
 use rstest::rstest;
@@ -100,7 +101,7 @@ fn a_reduction_keeps_its_own_scaling_when_factored() {
     let csr = CsrRef::new(&row_ptrs, &columns, &values, n as u32).expect("valid shape");
     let unsettled = factorize(csr).expect("admitted");
     assert!(only(&unsettled).grounding_unproven());
-    let [clamp] = unsettled.clamps() else {
+    let [clamp] = &unsettled.clamps()[..] else {
         panic!("one clamp: {:?}", unsettled.clamps())
     };
     assert_eq!(clamp.scaling, ScalingOutcome::Unsettled, "{clamp:?}");

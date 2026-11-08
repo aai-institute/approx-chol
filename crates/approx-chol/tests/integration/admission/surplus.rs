@@ -1,4 +1,5 @@
-use approx_chol::{ApproxInverse, Clamp, Real, ScalingOutcome};
+use crate::common::clamps::{Clamped, Clamps};
+use approx_chol::{ApproxInverse, Real, ScalingOutcome};
 use rstest::rstest;
 
 use super::reduce;
@@ -123,7 +124,7 @@ fn a_rows_rounding_band_grows_with_its_degree() {
 #[test]
 fn an_unscaled_deficit_past_its_row_rounding_is_reported() {
     let factor = star(13, 24.0);
-    let [clamp] = factor.clamps() else {
+    let [clamp] = &factor.clamps()[..] else {
         panic!("one clamp: {:?}", factor.clamps())
     };
     assert_eq!(clamp.vertices, Vec::from_iter(0..14), "the whole star");
@@ -143,7 +144,7 @@ fn an_unscaled_deficit_past_its_row_rounding_is_reported() {
     1.0
 )]
 fn a_deficit_past_the_dominance_band_is_admitted_clamped_and_reported(
-    #[case] clamps: Vec<Clamp>,
+    #[case] clamps: Vec<Clamped>,
     #[case] deficit: f64,
 ) {
     let [clamp] = &clamps[..] else {

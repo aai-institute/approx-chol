@@ -3,6 +3,7 @@ mod complement;
 mod cycle;
 mod surplus_grounds;
 
+use crate::common::clamps::Clamps;
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
 };

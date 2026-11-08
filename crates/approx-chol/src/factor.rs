@@ -20,7 +20,7 @@ pub use config::{Config, SchurMode};
 pub use wire::FORMAT_VERSION;
 
 use crate::order::{Listed, Order, Slots};
-use crate::sgdd::{BlockComplement, Components, Congruence, IrreducibleBlock, Reduction, Summands};
+use crate::sgdd::{BlockComplement, Components, Congruence, IrreducibleBlock, Summands};
 use crate::storage::OffDiagonal;
 use crate::Clamp;
 use crate::{Batch, Index, MemBuffer, MemStack, Real, StackReq, Threads};
@@ -72,7 +72,6 @@ pub struct ApproxInverse<T = f64> {
     blocks: Blocks<T>,
     /// Each lone vertex's whole factor `1/σ`, in the order `order` lists them ahead of the dead ones.
     inverse_pivots: Box<[T]>,
-    clamps: Box<[Clamp]>,
     scratch_slots: usize,
 }
 
@@ -113,17 +112,14 @@ macro_rules! on {
 impl<T: Real> ApproxInverse<T> {
     /// Factors every coupled summand in parallel, each keyed by its vertices once they are `order`'s.
     pub(crate) fn build<I: Index, B: Summand<T, I>>(
-        reduction: Reduction<B, I, T>,
+        summands: Summands<B, I, T>,
         config: &Config,
     ) -> Self
     where
         Blocks<T>: From<Box<[Block<T, I>]>>,
         Listed: From<Box<[I]>>,
     {
-        let Reduction {
-            summands: Summands { components, blocks },
-            clamps,
-        } = reduction;
+        let Summands { components, blocks } = summands;
         let isolated = components.isolated();
         let Components {
             vertices,
@@ -142,15 +138,10 @@ impl<T: Real> ApproxInverse<T> {
             })
             .collect_into_vec(&mut factored);
         let blocks = Blocks::from(factored.into_boxed_slice());
-        Self::new(order, blocks, inverse_pivots, clamps.into())
+        Self::new(order, blocks, inverse_pivots)
     }
 
-    fn new(
-        order: Order,
-        blocks: Blocks<T>,
-        inverse_pivots: Box<[T]>,
-        clamps: Box<[Clamp]>,
-    ) -> Self {
+    fn new(order: Order, blocks: Blocks<T>, inverse_pivots: Box<[T]>) -> Self {
         let scratch_slots = on!(&blocks, blocks => (blocks.iter().enumerate())
             .map(|(k, block)| block.global_scratch_slots(order.block(k)))
             .max())
@@ -159,7 +150,6 @@ impl<T: Real> ApproxInverse<T> {
             order,
             blocks,
             inverse_pivots,
-            clamps,
             scratch_slots,
         }
     }
@@ -173,11 +163,6 @@ impl<T: Real> ApproxInverse<T> {
     pub fn n_steps(&self) -> usize {
         let coupled: usize = on!(&self.blocks, blocks => blocks.iter().map(Block::n_steps).sum());
         coupled + self.inverse_pivots.len()
-    }
-
-    /// Every component of `A` the reduction clamped, ordered by lowest vertex, in the input's numbering also for a Schur build.
-    pub fn clamps(&self) -> &[Clamp] {
-        &self.clamps
     }
 
     /// One per irreducible block of `A` the factored matrix meets, coupled blocks by their component's lowest vertex in the input's numbering, then isolated vertices; dead vertices are in none.
@@ -263,7 +248,8 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
         config: &Config,
         reused: &mut Workspace<T, I>,
     ) -> Block<T, I> {
-        let (congruence, off_diagonal, sheets, grounding, grounding_unproven) = self.into_parts();
+        let (congruence, off_diagonal, sheets, grounding, grounding_unproven, clamp) =
+            self.into_parts();
         let streams = Streams::of(vertices.vertex(0), config);
         let tail = |from: usize| congruence.factor_tail(from);
         let draws = streams.cholesky();
@@ -288,6 +274,7 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
             elimination,
             cholesky,
             grounding_unproven,
+            clamp,
         }
     }
 }
@@ -295,7 +282,8 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
 impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
     /// Keyed as a whole block keys its draws.
     fn factor(self, _: Slots<'_>, config: &Config, reused: &mut Workspace<T, I>) -> Block<T, I> {
-        let (first, congruence, cross, sheets, grounding, grounding_unproven) = self.into_parts();
+        let (first, congruence, cross, sheets, grounding, grounding_unproven, clamp) =
+            self.into_parts();
         let streams = Streams::of(first, config);
         let s = BipartiteBlock::of(cross, sheets, grounding).complement(config, streams);
         let tail = congruence.factor_tail(0);
@@ -305,6 +293,7 @@ impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
             elimination: None,
             cholesky,
             grounding_unproven,
+            clamp,
         }
     }
 }
@@ -337,6 +326,11 @@ impl<'f, T: Real> Component<'f, T> {
         on!(&self.factor.blocks, blocks => blocks.get(self.k).is_some_and(|b| b.grounding_unproven))
     }
 
+    /// How the reduction clamped its rows to make it dominant, if it did; a complement's is its whole block's.
+    pub fn clamp(self) -> Option<&'f Clamp> {
+        on!(&self.factor.blocks, blocks => blocks.get(self.k).and_then(|b| b.clamp.as_deref()))
+    }
+
     /// Whether it is folded and solved as singular, `A_c⁺b` or its complement's `S_c⁺b`.
     pub fn floats(self) -> bool {
         on!(&self.factor.blocks, blocks => blocks.get(self.k).is_some_and(|b| b.cholesky.singular()))
@@ -358,6 +352,7 @@ pub(crate) struct Block<T, I> {
     elimination: Option<Box<BlockElimination<T, I>>>,
     cholesky: Cholesky<T, I>,
     grounding_unproven: bool,
+    clamp: Option<Box<Clamp>>,
 }
 
 impl<T: Real, I: Index> Block<T, I> {
@@ -460,29 +455,24 @@ fn splitmix(x: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-/// `(FORMAT_VERSION, (order, blocks, inverse_pivots, clamps))`: the vertices once, in `order`, and each block's factor without them.
+/// `(FORMAT_VERSION, (order, blocks, inverse_pivots))`: the vertices once, in `order`, and each block's factor without them.
 #[cfg(feature = "serde")]
 impl<T: serde::Serialize> serde::Serialize for ApproxInverse<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let body = (
-            &self.order,
-            &self.blocks,
-            &self.inverse_pivots,
-            &self.clamps,
-        );
+        let body = (&self.order, &self.blocks, &self.inverse_pivots);
         wire::serialize(serializer, body)
     }
 }
 
-/// `(order, blocks, inverse_pivots, clamps)` as decoded.
+/// `(order, blocks, inverse_pivots)` as decoded.
 #[cfg(feature = "serde")]
-type Body<T> = (crate::order::Encoded, Blocks<T>, Box<[T]>, Box<[Clamp]>);
+type Body<T> = (crate::order::Encoded, Blocks<T>, Box<[T]>);
 
 /// Checks the order before anything sized by its `n`: offsets and vertices in bounds, each block's parts agreeing on its segment's length, so a run's length is one its block's bytes back; only then whether each vertex is in one place.
 #[cfg(feature = "serde")]
 impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ApproxInverse<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let (order, blocks, inverse_pivots, clamps): Body<T> = wire::deserialize(deserializer)?;
+        let (order, blocks, inverse_pivots): Body<T> = wire::deserialize(deserializer)?;
         let fits = |order: &Order| {
             on!(&blocks, blocks => blocks.len() == order.coupled()
                 && (blocks.iter().enumerate()).all(|(k, block)| block.holds(order.block(k).len())))
@@ -491,7 +481,7 @@ impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ApproxI
         let lone = |order: &Order| inverse_pivots.len() <= order.isolated().len();
         match Order::decoded(order) {
             Some(order) if pivots && lone(&order) && fits(&order) && order.once() => {
-                Ok(Self::new(order, blocks, inverse_pivots, clamps))
+                Ok(Self::new(order, blocks, inverse_pivots))
             }
             _ => Err(serde::de::Error::custom("corrupt ApproxInverse")),
         }

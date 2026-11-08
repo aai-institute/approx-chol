@@ -214,7 +214,9 @@ struct PyApproxInverse {
 
 /// Without this, a deficit the reduction clamped to make a block dominant is silent.
 fn warn_on_scaling(py: Python<'_>, factor: &ApproxInverse<f64>) -> PyResult<()> {
-    let clamps = factor.clamps();
+    let clamps: Vec<_> = (factor.components())
+        .filter_map(|component| component.clamp())
+        .collect();
     let unsettled = factor
         .components()
         .filter(|component| component.grounding_unproven())
