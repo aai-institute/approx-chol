@@ -14,7 +14,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 use rand::SeedableRng;
 use rayon::prelude::*;
 
-pub use apply::{ApplyError, MatrixMut};
+pub use apply::{ApplyError, ColumnMajor, Columns, LayoutError, MatrixMut};
 pub use config::{Config, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
