@@ -19,7 +19,7 @@ pub(crate) struct Order {
     dead: usize,
 }
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug)]
 enum Segment {
     Run {
@@ -46,16 +46,8 @@ pub(crate) enum Listed {
 #[derive(serde::Deserialize)]
 #[serde(rename = "Order")]
 pub(crate) struct Encoded {
-    segments: Box<[EncodedSegment]>,
+    segments: Box<[Segment]>,
     listed: Listed,
-}
-
-#[cfg(feature = "serde")]
-#[derive(Clone, Copy, serde::Deserialize)]
-#[serde(rename = "Segment")]
-enum EncodedSegment {
-    Run { start: usize, len: usize },
-    Listed { len: usize },
 }
 
 /// One block's vertices of the factored matrix, in local order.
@@ -135,24 +127,25 @@ impl Order {
     /// From `encoded`, the first `lone` vertices after the lists lone and the rest dead: offsets and `n` rebuilt, `None` unless every offset is in bounds and every vertex below `n`, allocating nothing `n` sizes.
     #[cfg(feature = "serde")]
     pub(crate) fn decoded(encoded: Encoded, lone: usize) -> Option<Self> {
-        let Encoded { segments, listed } = encoded;
+        let Encoded {
+            mut segments,
+            listed,
+        } = encoded;
         let (mut end, mut covered) = (0usize, 0usize);
-        let segments = (segments.iter())
-            .map(|&segment| {
-                let (segment, len) = match segment {
-                    EncodedSegment::Run { start, len } => (Segment::Run { start, len }, len),
-                    EncodedSegment::Listed { len } => {
-                        let start = end;
-                        end = end.checked_add(len)?;
-                        (Segment::Listed { start, len }, len)
-                    }
-                };
-                covered = covered.checked_add(len)?;
-                Some(segment)
-            })
-            .collect::<Option<Box<[_]>>>()?;
-        let dead = end.checked_add(lone).filter(|&dead| dead <= listed.len())?;
-        let n = covered.checked_add(listed.len() - end)?;
+        for segment in &mut segments[..] {
+            let len = match segment {
+                Segment::Run { len, .. } => *len,
+                Segment::Listed { start, len } => {
+                    *start = end;
+                    end = end.checked_add(*len)?;
+                    *len
+                }
+            };
+            covered = covered.checked_add(len)?;
+        }
+        let listed_len = listed.slots(..).len();
+        let dead = end.checked_add(lone).filter(|&dead| dead <= listed_len)?;
+        let n = covered.checked_add(listed_len - end)?;
         let runs = segments.iter().all(|&segment| match segment {
             Segment::Run { start, len } => start.checked_add(len).is_some_and(|end| end <= n),
             Segment::Listed { .. } => true,
@@ -193,7 +186,7 @@ impl Order {
             Some(&Segment::Run { start, len }) => Slots::Run { start, len },
             Some(&Segment::Listed { start, len }) => self.listed.slots(start..start + len),
             None => Slots::Run {
-                start: self.listed.vertex(self.lone + k - self.segments.len()),
+                start: self.lone().vertex(k - self.segments.len()),
                 len: 1,
             },
         }
@@ -220,21 +213,6 @@ impl Order {
 }
 
 impl Listed {
-    #[cfg(feature = "serde")]
-    fn len(&self) -> usize {
-        match self {
-            Self::U32(listed) => listed.len(),
-            Self::U64(listed) => listed.len(),
-        }
-    }
-
-    fn vertex(&self, k: usize) -> usize {
-        match self {
-            Self::U32(listed) => listed[k].index(),
-            Self::U64(listed) => listed[k].index(),
-        }
-    }
-
     fn slots(&self, range: impl RangeBounds<usize>) -> Slots<'_> {
         let range = (range.start_bound().cloned(), range.end_bound().cloned());
         match self {
