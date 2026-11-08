@@ -69,14 +69,15 @@ impl<T: Real, I: Index> Sddm<T, I> {
         }
     }
 
-    /// Rows on `balance`'s [`sheets`], each ground plus its vertex's surplus, the last of `block`'s; on two, a ground within the band [`twists`].
+    /// Rows on `balance`'s [`sheets`], each ground plus its vertex's surplus, the last of `block`'s; frustrated, a ground within the band [`twists`].
     pub(super) fn of_rows(rows: SddmRows<T, I>, balance: Balance, block: &Grounding<T>) -> Self {
         let n = rows.sums.len() - 1;
         let adjacency = UpperAdjacency::new(Rows::new(rows.ptrs, rows.indices, rows.values, n));
         let mut ground = rows.ground;
         if let Some(surplus) = block.surplus() {
-            let kept = surplus[surplus.len() - ground.len() / sheets(balance)..].iter();
-            let copies = kept.flat_map(|&s| std::iter::repeat_n(s, sheets(balance)));
+            let count = sheets(balance);
+            let kept = surplus[surplus.len() - ground.len() / count..].iter();
+            let copies = kept.flat_map(|&s| std::iter::repeat_n(s, count));
             (ground.iter_mut().zip(copies)).for_each(|(g, s)| *g = s + *g);
         }
         let grounding = Grounding::of(ground);
@@ -316,7 +317,7 @@ pub(super) fn cover_vertex(k: usize, sheet: usize) -> usize {
     2 * k + sheet
 }
 
-/// Copies of each vertex the approximate arm factors: a frustrated `M` needs a Gremban cover's two sheets.
+/// Copies of each vertex a cover of `M` holds: a frustrated `M` needs a Gremban cover's two sheets, interleaved by vertex.
 pub(super) fn sheets(balance: Balance) -> usize {
     match balance {
         Balance::Balanced => 1,
@@ -324,11 +325,9 @@ pub(super) fn sheets(balance: Balance) -> usize {
     }
 }
 
+/// Vertex `k`'s first copy: the sheets interleave, as [`cover_vertex`] places them.
 pub(super) fn first_copy(balance: Balance, k: usize) -> usize {
-    match balance {
-        Balance::Balanced => k,
-        Balance::Frustrated => cover_vertex(k, 0),
-    }
+    sheets(balance) * k
 }
 
 /// Slot `i` of `[x; −x]` interleaved by vertex: the lift a cover solves on.

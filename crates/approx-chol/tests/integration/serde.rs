@@ -453,10 +453,10 @@ fn empty_scales_are_corrupt() {
     serde_json::from_value::<ApproxInverse>(v).expect_err("empty scales are corrupt");
 }
 
-/// A factor of one unit path `3 → 2 → 1`, gauge `0`, its middle step `len` long: one `u64` block of identity `F`, no elimination, one sheet of 4 pinned at `0`, approximate; proven grounding, no lone vertex and no clamp.
+/// A factor of one unit path `3 → 2 → 1`, gauge `0`, its middle step `len` long: one `u64` block of identity `F`, no elimination, 4 slots pinned at `0`, approximate on one sheet; proven grounding, no lone vertex and no clamp.
 fn path_block_bytes(len: u64) -> Vec<u8> {
     let mut bytes = one_block_head(1, 4, &[]);
-    bytes.extend([0, 0, 0, 4, 1, 0, 1, 3]);
+    bytes.extend([0, 0, 4, 1, 0, 1, 3]);
     for (vertex, len) in [(3, 1), (2, len), (1, 1)] {
         varint(vertex, &mut bytes);
         varint(len, &mut bytes);
@@ -503,11 +503,16 @@ fn factored_json(rows: &[&[f64]], exact_max_dim: usize) -> serde_json::Value {
     serde_json::to_value(factorize_with(csr, config, ScalingPolicy::default()).unwrap()).unwrap()
 }
 
-/// The exact arm factors `M` itself on one sheet, so a dense factor on a cover's two sheets is corrupt.
-#[test]
-fn a_dense_factor_on_two_sheets_is_corrupt() {
+/// A triangle with one positive edge, frustrated, factored approximately on its cover's two sheets.
+fn triangle_cover() -> serde_json::Value {
     let triangle: [&[f64]; 3] = [&[2.0, -1.0, 1.0], &[-1.0, 2.0, -1.0], &[1.0, -1.0, 2.0]];
-    let mut cover = factored_json(&triangle, 0);
+    factored_json(&triangle, 0)
+}
+
+/// The exact arm factors `M` itself on one sheet, so a dense factor in a cover's place solves half its slots and is corrupt.
+#[test]
+fn a_dense_factor_in_a_covers_place_is_corrupt() {
+    let mut cover = triangle_cover();
     let path: [&[f64]; 6] = [
         &[1.5, -1.0, 0.0, 0.0, 0.0, 0.0],
         &[-1.0, 2.5, -1.0, 0.0, 0.0, 0.0],
@@ -518,16 +523,26 @@ fn a_dense_factor_on_two_sheets_is_corrupt() {
     ];
     let dense = factored_json(&path, 24);
     let dense = &dense[1][1]["U32"][0]["cholesky"];
-    let shape = |c: &serde_json::Value| (c["sheets"].clone(), c["n"].clone());
-    assert_eq!(
-        shape(&cover[1][1]["U32"][0]["cholesky"]),
-        ("Two".into(), 6.into())
-    );
-    assert_eq!(shape(dense), ("One".into(), 6.into()));
+    let covered = &cover[1][1]["U32"][0]["cholesky"];
+    assert_eq!(covered["n"], 6);
+    assert!(covered["triangular"].get("Cover").is_some());
+    assert_eq!(dense["n"], 6);
     assert!(dense["triangular"].get("Dense").is_some());
     serde_json::from_value::<ApproxInverse>(cover.clone()).expect("the cover decodes");
     let cholesky = &mut cover[1][1]["U32"][0]["cholesky"];
     cholesky["pinned"] = dense["pinned"].clone();
     cholesky["triangular"] = dense["triangular"].clone();
-    serde_json::from_value::<ApproxInverse>(cover).expect_err("a dense factor on two sheets");
+    serde_json::from_value::<ApproxInverse>(cover).expect_err("a dense factor in a cover's place");
+}
+
+/// A cover's steps relabelled as one sheet's solve half its slots, so they are corrupt.
+#[test]
+fn a_covers_steps_on_one_sheet_are_corrupt() {
+    let mut cover = triangle_cover();
+    serde_json::from_value::<ApproxInverse>(cover.clone()).expect("the cover decodes");
+    let triangular = &mut cover[1][1]["U32"][0]["cholesky"]["triangular"];
+    let steps = triangular["Cover"].take();
+    assert!(steps.is_object(), "the triangle factors on its cover");
+    *triangular = serde_json::json!({ "Folded": steps });
+    serde_json::from_value::<ApproxInverse>(cover).expect_err("a cover's steps on one sheet");
 }
