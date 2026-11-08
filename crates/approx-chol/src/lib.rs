@@ -46,6 +46,7 @@ mod batch;
 mod error;
 mod factor;
 pub mod input;
+mod order;
 mod sgdd;
 mod storage;
 mod threads;
@@ -58,7 +59,6 @@ use num_traits::{float::TotalOrder, Float, PrimInt, Unsigned};
 use batch::Batch;
 pub use dyn_stack::{MemBuffer, MemStack, StackReq};
 pub use error::Error;
-use factor::Storage;
 #[cfg(feature = "serde")]
 pub use factor::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
 pub use factor::{ApplyError, ApproxInverse, Component, Config, MatrixMut, SchurMode};
@@ -102,14 +102,12 @@ pub fn factorize_complement<T: Real, I: PrimInt + Sync>(
 ) -> Result<ApproxInverse<T>, Error> {
     Ok(match fits_u32(input.n()) {
         true => ApproxInverse::build(
-            Complement::reduce_onto(input, kept, scaling)?,
+            Complement::<T, u32>::reduce_onto(input, kept, scaling)?,
             &config,
-            Storage::U32,
         ),
         false => ApproxInverse::build(
-            Complement::reduce_onto(input, kept, scaling)?,
+            Complement::<T, u64>::reduce_onto(input, kept, scaling)?,
             &config,
-            Storage::U64,
         ),
     })
 }
@@ -148,8 +146,8 @@ impl<T: Real> Sgdd<T> {
     /// Factors each block in parallel; clone first to factor again under another `config`.
     pub fn factor(self, config: &Config) -> ApproxInverse<T> {
         match self.0 {
-            Indexed::U32(summands) => ApproxInverse::build(summands, config, Storage::U32),
-            Indexed::U64(summands) => ApproxInverse::build(summands, config, Storage::U64),
+            Indexed::U32(summands) => ApproxInverse::build(summands, config),
+            Indexed::U64(summands) => ApproxInverse::build(summands, config),
         }
     }
 }

@@ -37,7 +37,6 @@ postcard = { version = "1", features = ["use-std"] }
 proptest = "1.6"
 rstest = { version = "0.26.1", default-features = false }
 serde_json = "1"
-serde_test = "1"
 
 [[bench]]
 name = "exact_max_dim"

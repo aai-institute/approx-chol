@@ -1,6 +1,6 @@
 //! One reduced irreducible block, its balance and grounding.
 
-use super::congruence::{Congruence, Restriction, ScaledFactors, Selection};
+use super::congruence::{Congruence, ScaledFactors};
 use super::scaling::{Clamp, ScaleVector, RATIO_BAND};
 use crate::storage::{OffDiagonal, Rows};
 use crate::{Index, Real};
@@ -109,7 +109,7 @@ impl<T: Real> Grounding<T> {
 /// One irreducible principal block `A_c` of `A`, reduced: `M = F · A_c · F` weakly diagonally dominant, eliminated side first.
 #[derive(Clone, Debug)]
 pub(crate) struct IrreducibleBlock<T = f64, I = u32> {
-    restriction: Box<Restriction<T, I>>,
+    congruence: Box<Congruence<T>>,
     off_diagonal: OffDiagonal<T, I>,
     balance: Balance<T>,
     grounding_unproven: bool,
@@ -118,11 +118,11 @@ pub(crate) struct IrreducibleBlock<T = f64, I = u32> {
 /// A reduced block, and its component's clamp, which the reduction lists apart; boxed, as most components have none.
 pub(crate) type WithClamp<T, I> = (IrreducibleBlock<T, I>, Option<Box<Clamp>>);
 
-/// A bipartite block's Schur complement onto its kept side, unformed: `C`, and the restriction onto the kept side's numbering.
+/// A bipartite block's Schur complement onto its kept side, unformed: `C`, and `F` on the kept side.
 pub(crate) struct BlockComplement<T, I> {
     /// The whole block's first vertex in `A`.
     first: usize,
-    restriction: Box<Restriction<T, I>>,
+    congruence: Box<Congruence<T>>,
     cross: Rows<T, I>,
     sheets: Sheets,
     grounding: Grounding<T>,
@@ -130,18 +130,17 @@ pub(crate) struct BlockComplement<T, I> {
 }
 
 impl<T: Real, I: Index> BlockComplement<T, I> {
-    /// `block`'s restriction tailed onto its kept side, each kept vertex of `A` numbered `local(v)`.
-    pub(super) fn new(block: IrreducibleBlock<T, I>, local: impl Fn(usize) -> I) -> Self {
-        let (whole, off_diagonal, sheets, grounding, grounding_unproven) = block.into_parts();
+    /// `block` onto its kept side; `first` is the whole block's first vertex in `A`.
+    pub(super) fn new(block: IrreducibleBlock<T, I>, first: usize) -> Self {
+        let (congruence, off_diagonal, sheets, grounding, grounding_unproven) = block.into_parts();
         let OffDiagonal::Bipartite(cross) = off_diagonal else {
             unreachable!("a complement's layout leaves each block both sides")
         };
-        let first = whole.vertices().vertex(0);
         // Tailed before `S`, so the eliminated side's `F` never shares its formation's peak.
-        let restriction = Box::new(whole.tail(cross.n_rows(), local));
+        let congruence = Box::new(congruence.tail(cross.n_rows()));
         Self {
             first,
-            restriction,
+            congruence,
             cross,
             sheets,
             grounding,
@@ -149,11 +148,16 @@ impl<T: Real, I: Index> BlockComplement<T, I> {
         }
     }
 
+    /// The local vertex its kept side starts at.
+    pub(super) fn kept_from(&self) -> usize {
+        self.cross.n_rows()
+    }
+
     /// Moved out, the whole block's first vertex first, as it keys the draws.
     pub(crate) fn into_parts(self) -> ComplementParts<T, I> {
         (
             self.first,
-            self.restriction,
+            self.congruence,
             self.cross,
             self.sheets,
             self.grounding,
@@ -164,7 +168,7 @@ impl<T: Real, I: Index> BlockComplement<T, I> {
 
 type ComplementParts<T, I> = (
     usize,
-    Box<Restriction<T, I>>,
+    Box<Congruence<T>>,
     Rows<T, I>,
     Sheets,
     Grounding<T>,
@@ -172,16 +176,16 @@ type ComplementParts<T, I> = (
 );
 
 /// `M = F · A_c · F` over its vertices, its surplus still to be decided.
-pub(super) struct Congruent<T, I> {
-    vertices: Selection<I>,
+pub(super) struct Congruent<'p, T, I> {
+    vertices: &'p [I],
     congruence: Congruence<T>,
     off_diagonal: OffDiagonal<T, I>,
 }
 
-impl<T: Real, I: Index> Congruent<T, I> {
+impl<'p, T: Real, I: Index> Congruent<'p, T, I> {
     /// `S A_c S`, unscaled.
     pub(super) fn signed(
-        vertices: Selection<I>,
+        vertices: &'p [I],
         off_diagonal: OffDiagonal<T, I>,
         signs: Congruence<T>,
     ) -> Self {
@@ -198,7 +202,7 @@ impl<T: Real, I: Index> Congruent<T, I> {
 
     /// `S R A_c R S` with its `Σ_j |m_ij|`; `None` once a scaled entry leaves the range.
     pub(super) fn scaled(
-        vertices: Selection<I>,
+        vertices: &'p [I],
         off_diagonal: OffDiagonal<T, I>,
         signs: Congruence<T>,
         scales: &[T],
@@ -217,7 +221,7 @@ impl<T: Real, I: Index> Congruent<T, I> {
     }
 
     /// An incidence Gram, assembled switched across a bipartition.
-    pub(super) fn incidence(vertices: Selection<I>, off_diagonal: OffDiagonal<T, I>) -> Self {
+    pub(super) fn incidence(vertices: &'p [I], off_diagonal: OffDiagonal<T, I>) -> Self {
         let congruence = match &off_diagonal {
             OffDiagonal::Bipartite(c) => Congruence::NegateFrom(c.n_rows()),
             OffDiagonal::General(_) => Congruence::Identity,
@@ -230,8 +234,8 @@ impl<T: Real, I: Index> Congruent<T, I> {
     }
 
     /// In `A`'s numbering, in local order.
-    pub(super) fn vertices(&self) -> &Selection<I> {
-        &self.vertices
+    pub(super) fn vertices(&self) -> &'p [I] {
+        self.vertices
     }
 
     pub(super) fn off_diagonal(&self) -> &OffDiagonal<T, I> {
@@ -254,9 +258,8 @@ impl<T: Real, I: Index> Congruent<T, I> {
             congruence,
             off_diagonal,
         } = self;
-        let restriction = Restriction::new(vertices, congruence);
-        let vertices = restriction.vertices();
         let n = vertices.len();
+        assert!(congruence.fits(n), "one factor per vertex");
         assert_eq!(off_diagonal.n(), n, "one row per vertex");
         let (Balance::Balanced(grounding) | Balance::Frustrated(grounding)) = &balance;
         debug_assert!(
@@ -266,12 +269,12 @@ impl<T: Real, I: Index> Congruent<T, I> {
         assert!(grounding.fits(n), "one surplus per row");
         let surplus = grounding.surplus().unwrap_or_default();
         if let Some(i) = surplus.iter().position(|&s| !crate::in_range(s)) {
-            let vertex = vertices.vertex(i);
+            let vertex = vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
         }
         let clamp = vector.clamp(clamped, vertices).map(Box::new);
         let block = IrreducibleBlock {
-            restriction: Box::new(restriction),
+            congruence: Box::new(congruence),
             off_diagonal,
             balance,
             grounding_unproven: vector.grounding_unproven(),
@@ -281,16 +284,11 @@ impl<T: Real, I: Index> Congruent<T, I> {
 }
 
 impl<T: Real, I: Index> IrreducibleBlock<T, I> {
-    /// Vertices of `A` the block holds, each once however many sheets cover it.
-    pub(crate) fn vertex_count(&self) -> usize {
-        self.restriction.vertices().len()
-    }
-
     /// Moved out, so each part is freed once its factor stops reading it.
     pub(crate) fn into_parts(self) -> BlockParts<T, I> {
         let (sheets, grounding) = self.balance.split();
         (
-            self.restriction,
+            self.congruence,
             self.off_diagonal,
             sheets,
             grounding,
@@ -300,7 +298,7 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
 }
 
 type BlockParts<T, I> = (
-    Box<Restriction<T, I>>,
+    Box<Congruence<T>>,
     OffDiagonal<T, I>,
     Sheets,
     Grounding<T>,

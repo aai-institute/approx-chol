@@ -47,7 +47,7 @@ fixtures! {
     Isolated => isolated,
     Floating => floating,
     Cover => cover,
-    DenseCover => dense_cover,
+    DenseFrustrated => dense_frustrated,
     SampledAc2 => sampled_ac2,
     Clamped => clamped,
 }
@@ -76,8 +76,8 @@ impl Fixture {
                 &[-1.0, 0.0, 1.0, 0.0],
                 &[0.0, -1.0, 0.0, 1.0],
             ]),
-            // A triangle with one positive edge: frustrated, so the approximate arm factors its double cover.
-            Self::Cover | Self::DenseCover => {
+            // A triangle with one positive edge: frustrated, so the approximate arm factors its double cover and the exact arm `M` itself.
+            Self::Cover | Self::DenseFrustrated => {
                 Some(&[&[2.0, -1.0, 1.0], &[-1.0, 2.0, -1.0], &[1.0, -1.0, 2.0]])
             }
             // Two interleaved pairs no scaling makes dominant: each is clamped.
@@ -141,21 +141,12 @@ impl Fixture {
         match self {
             Self::Grounded => &["pinned: None"],
             Self::GroundedApproximate => &["pinned: None", "Approximate(", "len: 0"],
-            Self::Isolated => &["Isolated("],
+            Self::Isolated => &["inverse_pivots: [0.5, 0.25]"],
             Self::Floating => &["sheets: One, n: 2, pinned: Some("],
             Self::Cover => &["sheets: Two"],
-            Self::DenseCover => &["sheets: Two", "Dense("],
+            Self::DenseFrustrated => &["sheets: One, n: 3, pinned: None", "Dense("],
             Self::SampledAc2 => &["elimination: Some", "Approximate("],
             Self::Clamped => &["scaling: Refuted"],
-        }
-    }
-
-    /// What this build's factor must show: a legacy fixture's input no longer factors as its payload did.
-    fn built(self) -> &'static [&'static str] {
-        match self {
-            // 0.7.0 factored a small frustrated block densely on its cover; it is now dense on one sheet.
-            Self::DenseCover => &["sheets: One, n: 3, pinned: None", "Dense("],
-            _ => self.covers(),
         }
     }
 
@@ -228,7 +219,7 @@ fn assert_committed_payload_decodes_and_solves(fixture: Fixture) {
 
     let factor = fixture.factor();
     let built = format!("{factor:?}");
-    for marker in fixture.built() {
+    for marker in fixture.covers() {
         assert!(
             built.contains(marker),
             "this build's {fixture:?} lost {marker:?}"

@@ -1,105 +1,6 @@
 use std::borrow::Cow;
-use std::ops::Range;
 
-use crate::{compensated_sum, widen, Batch, Index, Real};
-
-/// `R = F Pᵀ`, so `M = R A Rᵀ`: `Pᵀ` picks the block's vertices of `A`, or of `S` once tailed, `F` is the congruence.
-#[derive(Clone, Debug)]
-pub(crate) struct Restriction<T, I> {
-    vertices: Selection<I>,
-    congruence: Congruence<T>,
-}
-
-impl<T: Real, I: Index> Restriction<T, I> {
-    /// Panics unless one factor per vertex.
-    pub(super) fn new(vertices: Selection<I>, congruence: Congruence<T>) -> Self {
-        assert!(congruence.fits(vertices.len()), "one factor per vertex");
-        Self {
-            vertices,
-            congruence,
-        }
-    }
-
-    pub(crate) fn vertices(&self) -> &Selection<I> {
-        &self.vertices
-    }
-
-    /// The restriction to local vertices `from..`, renumbered by `vertex`: a complement's, `F` commuting with the elimination.
-    pub(super) fn tail(self, from: usize, vertex: impl Fn(usize) -> I) -> Self {
-        let vertices = (from..self.vertices.len()).map(|k| vertex(self.vertices.vertex(k)));
-        Self::new(
-            Selection::owned(vertices.collect()),
-            self.congruence.tail(from),
-        )
-    }
-
-    /// `F` from vertex `from` on, `None` unless scaled, so every `|f|` is `1`.
-    pub(crate) fn factor_tail(&self, from: usize) -> Option<FactorTail<'_, T>> {
-        match &self.congruence {
-            Congruence::Scaled(scales) => Some(FactorTail(&scales.factors[from..])),
-            _ => None,
-        }
-    }
-
-    /// `Pᵀ` and `F` apart: a factor keeps `F`, its approximate inverse `Pᵀ` for every block at once.
-    pub(crate) fn into_parts(self) -> (Selection<I>, Congruence<T>) {
-        (self.vertices, self.congruence)
-    }
-}
-
-/// `Pᵀ`: the block's vertices of the factored matrix in local order, a run of consecutive ones kept as its range, where `Pᵀ x` is a slice of `x`.
-#[derive(Clone, Debug)]
-pub(crate) enum Selection<I> {
-    Range(Range<usize>),
-    Listed(Box<[I]>),
-}
-
-impl<I: Index> Selection<I> {
-    /// Copies `vertices` only when they are not one run.
-    pub(super) fn of(vertices: &[I]) -> Self {
-        Self::run(vertices).map_or_else(|| Self::Listed(vertices.into()), Self::Range)
-    }
-
-    pub(super) fn owned(vertices: Box<[I]>) -> Self {
-        Self::run(&vertices).map_or(Self::Listed(vertices), Self::Range)
-    }
-
-    fn run(vertices: &[I]) -> Option<Range<usize>> {
-        let start = vertices.first().map_or(0, |v| v.index());
-        let end = start.checked_add(vertices.len())?;
-        (vertices.iter().enumerate())
-            .all(|(k, v)| v.index() == start + k)
-            .then_some(start..end)
-    }
-
-    /// Each local vertex in the factored matrix's numbering, in local order.
-    pub(super) fn iter(&self) -> impl Iterator<Item = usize> + Clone + '_ {
-        (0..self.len()).map(|k| self.vertex(k))
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        match self {
-            Self::Range(range) => range.len(),
-            Self::Listed(vertices) => vertices.len(),
-        }
-    }
-
-    /// Local vertex `k` in the factored matrix's numbering.
-    pub(crate) fn vertex(&self, k: usize) -> usize {
-        match self {
-            Self::Range(range) => range.start + k,
-            Self::Listed(vertices) => vertices[k].index(),
-        }
-    }
-}
-
-/// A decoded vertex list, kept as its range when it is one run.
-#[cfg(feature = "serde")]
-impl<'de, I: Index + serde::Deserialize<'de>> serde::Deserialize<'de> for Selection<I> {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        <Box<[I]>>::deserialize(deserializer).map(Self::owned)
-    }
-}
+use crate::{compensated_sum, widen, Batch, Real};
 
 /// `F` in `M = F A_c F`, finite and nonzero; a folded `A_c`'s null vector is then `F·1`.
 #[cfg_attr(
@@ -220,8 +121,8 @@ impl<T: Real> Congruence<T> {
         }
     }
 
-    /// `F` on vertices `from..`, renumbered from `0`.
-    fn tail(&self, from: usize) -> Self {
+    /// `F` on vertices `from..`, renumbered from `0`: a complement's, `F` commuting with the elimination.
+    pub(super) fn tail(&self, from: usize) -> Self {
         match self {
             Self::Identity => Self::Identity,
             // `(−I) S (−I) = S`: a tail negated whole needs no congruence.
@@ -232,8 +133,16 @@ impl<T: Real> Congruence<T> {
         }
     }
 
+    /// `F` from vertex `from` on, `None` unless scaled, so every `|f|` is `1`.
+    pub(crate) fn factor_tail(&self, from: usize) -> Option<FactorTail<'_, T>> {
+        match self {
+            Self::Scaled(scales) => Some(FactorTail(&scales.factors[from..])),
+            _ => None,
+        }
+    }
+
     /// Whether it scales exactly `n` vertices.
-    fn fits(&self, n: usize) -> bool {
+    pub(super) fn fits(&self, n: usize) -> bool {
         match self {
             Self::Identity => true,
             Self::NegateFrom(first) => *first <= n,
@@ -301,19 +210,5 @@ fn project_out<T: Real, V: Batch<T>>(x: &mut [V], u: impl Fn(usize) -> T, uu: f6
     let along = ux.div(uu);
     for (i, x) in x.iter_mut().enumerate() {
         *x = V::narrow(x.widen().sub(along.mul(widen(u(i)))));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Selection;
-
-    /// A vertex at `u64::MAX` stays listed and reads back as itself, never a run whose end overflows.
-    #[test]
-    fn a_vertex_at_u64_max_reads_back() {
-        for vertices in [vec![u64::MAX], vec![u64::MAX, 0]] {
-            let selection = Selection::owned(vertices.clone().into());
-            assert!(selection.iter().eq(vertices.iter().map(|&v| v as usize)));
-        }
     }
 }
