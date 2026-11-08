@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cell::Cell;
 
 use crate::storage::{OffDiagonal, Rows};
 use crate::{narrow, widen, Index, Real};
@@ -7,6 +8,8 @@ use crate::{narrow, widen, Index, Real};
 pub(super) struct Normalized<'a, T, I> {
     off_diagonal: &'a OffDiagonal<T, I>,
     inv_sqrt: Box<[f64]>,
+    /// A product's operand times its scales, formed once per product, not per entry read.
+    scaled: Cell<Vec<f64>>,
 }
 
 impl<'a, T: Real, I: Index> Normalized<'a, T, I> {
@@ -15,6 +18,7 @@ impl<'a, T: Real, I: Index> Normalized<'a, T, I> {
         Self {
             off_diagonal,
             inv_sqrt,
+            scaled: Cell::default(),
         }
     }
 
@@ -40,8 +44,17 @@ impl<'a, T: Real, I: Index> Normalized<'a, T, I> {
 
     /// `out = |offdiag(A_c)| D^{-1/2} y`, returning the outer `D^{-1/2}` that makes it `N y`.
     pub(super) fn unscaled(&self, y: &[f64], out: &mut [f64]) -> &[f64] {
-        self.off_diagonal.abs_times(&self.inv_sqrt, y, out);
+        self.with_scaled(y, &self.inv_sqrt, |x| self.off_diagonal.abs_times(x, out));
         &self.inv_sqrt
+    }
+
+    /// `product(s∘y)`.
+    fn with_scaled(&self, y: &[f64], s: &[f64], product: impl FnOnce(&[f64])) {
+        let mut x = self.scaled.take();
+        x.clear();
+        x.extend(y.iter().zip(s).map(|(&y, &s)| y * s));
+        product(&x);
+        self.scaled.set(x);
     }
 
     /// `R = D^{-1/2} y` with `y` peaking at `1`, so `M`'s diagonal never exceeds `1`.
@@ -127,9 +140,10 @@ impl<'n, 'a, T: Real, I: Index> Kept<'n, 'a, T, I> {
     fn rhs(&self, b: &[f64]) -> Vec<f64> {
         let (s_e, s_k) = self.n.inv_sqrt.split_at(self.cross.n_rows());
         let b_k = &b[self.cross.n_rows()..];
-        let scaled: Vec<f64> = self.b_e.iter().zip(s_e).map(|(b, s)| b * s).collect();
         let mut rhs = vec![0.0; b_k.len()];
-        self.cross.abs_transpose_times(&scaled, &mut rhs);
+        (self.n).with_scaled(self.b_e, s_e, |x| {
+            self.cross.abs_transpose_times(x, &mut rhs);
+        });
         for ((r, &s), &b) in rhs.iter_mut().zip(s_k).zip(b_k) {
             *r = self.alpha * b + s * *r;
         }
@@ -139,16 +153,15 @@ impl<'n, 'a, T: Real, I: Index> Kept<'n, 'a, T, I> {
     /// `out = |C|ᵀ D_e^{-1} |C| D_k^{-1/2} p`, with the shift `α²` and the outer `D_k^{-1/2}` left to the caller.
     fn unscaled(&self, p: &[f64], out: &mut [f64]) -> (f64, &[f64]) {
         let (s_e, s_k) = self.n.inv_sqrt.split_at(self.cross.n_rows());
-        self.cross.abs_gram_times(s_e, s_k, p, out);
+        (self.n).with_scaled(p, s_k, |x| self.cross.abs_gram_times(s_e, x, out));
         (self.alpha * self.alpha, s_k)
     }
 
     fn lift(&self, y_k: &[f64], b_e: Option<&[f64]>) -> Vec<f64> {
         let (s_e, s_k) = self.n.inv_sqrt.split_at(self.cross.n_rows());
-        let scaled: Vec<f64> = y_k.iter().zip(s_k).map(|(y, s)| y * s).collect();
         let mut y = vec![0.0; self.n.n()];
         let (y_e, kept) = y.split_at_mut(self.cross.n_rows());
-        self.cross.abs_times(&scaled, y_e);
+        (self.n).with_scaled(y_k, s_k, |x| self.cross.abs_times(x, y_e));
         for (i, (y, &s)) in y_e.iter_mut().zip(s_e).enumerate() {
             *y = (b_e.map_or(0.0, |b| b[i]) + s * *y) / self.alpha;
         }
