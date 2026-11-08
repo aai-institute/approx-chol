@@ -18,10 +18,8 @@ pub(super) type Fill<T, I, C> = Vec<(I, I, C, T)>;
 pub(super) struct CliqueTreeSampler<T, I, C: Copies> {
     /// A pivot's deduplicated neighborhood in clique-tree order.
     entries: Vec<StarEntry<T, I, C>>,
-    /// Grown to `n` on first need: above 32 entries, dedup scatters instead of sorting 16-byte entries twice.
+    /// Grown on first need to the highest neighbor a star has scattered.
     scatter: Vec<I>,
-    /// Each merged entry's summed copies before the cap: `C` cannot add.
-    counts: Vec<u32>,
     /// The star's weights' prefix sums, heaviest last, so each suffix's draw range is one subtraction; `f64`, as `f32` loses short suffixes (#275).
     cumsum: Vec<f64>,
     split: C,
@@ -35,7 +33,6 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         Self {
             entries: Vec::new(),
             scatter: Vec::new(),
-            counts: Vec::new(),
             cumsum: Vec::new(),
             split,
             tally: Vec::new(),
