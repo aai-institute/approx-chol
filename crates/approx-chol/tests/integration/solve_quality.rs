@@ -62,7 +62,7 @@ fn assert_buffers_checked<T: Real>(factor: &ApproxInverse<T>) {
         let solved = factor.apply_with(&mut vec![T::zero(); found], Threads::All, stack);
         assert_eq!(solved, Err(error));
     }
-    let needed = factor.scratch(1, Threads::All);
+    let needed = factor.scratch(1, threads::ONE);
     if needed.size_bytes() > 0 {
         let mut scratch = MemBuffer::new(needed);
         let short = MemStack::new(&mut scratch[..needed.size_bytes() - 1]);
@@ -453,13 +453,16 @@ fn apply_with_gathers_only_blocks_whose_vertices_are_not_consecutive(
     assert_eq!(factor.components().len(), gathered.len());
     let in_place = gathered.iter().max().expect("a block") * size_of::<f64>();
     let column = 6 * size_of::<f64>();
-    for k in 1..=3 {
-        let scratch = factor.scratch(k, Threads::All).size_bytes();
-        assert_eq!(
-            scratch,
-            (k * in_place).max(column + in_place),
-            "{k} columns"
-        );
+    // Too little work to wake the pool: every budget solves on the calling thread, on one region.
+    for threads in [threads::ONE, threads::BUDGETS[2], Threads::All] {
+        for k in 1..=3 {
+            let scratch = factor.scratch(k, threads).size_bytes();
+            assert_eq!(
+                scratch,
+                (k * in_place).max(column + in_place),
+                "{k} columns at {threads:?}"
+            );
+        }
     }
     let x = solve_on_dirty_scratch(&factor, &rhs, Threads::All);
     let want = factor.solve(&rhs).expect("rows fit");

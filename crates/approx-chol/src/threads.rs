@@ -11,7 +11,19 @@ pub enum Threads {
     Count(NonZeroUsize),
 }
 
+/// The calling thread alone.
+pub(crate) const ONE: Threads = Threads::Count(NonZeroUsize::MIN);
+
 impl Threads {
+    /// The most threads it runs at a time: no more than the current pool has.
+    pub(crate) fn tasks(self) -> usize {
+        let pool = rayon::current_num_threads();
+        match self {
+            Threads::All => pool,
+            Threads::Count(n) => n.get().min(pool),
+        }
+    }
+
     /// Rows per task, at least `grain`, in at most `n` tasks under `Count(n)`; `None` when one task takes all `len`, run on the calling thread.
     pub(crate) fn chunk(self, len: usize, grain: usize) -> Option<usize> {
         let per = match self {

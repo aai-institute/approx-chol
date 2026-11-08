@@ -13,8 +13,9 @@ categories.workspace = true
 # A nested workspace nothing in the published crate reads.
 exclude = ["fuzz"]
 
-[lints]
-workspace = true
+# The workspace's, but unsafe code denied, not forbidden: factor/spread.rs alone allows it, to write blocks of one solve at once.
+[lints.rust]
+unsafe_code = "deny"
 
 [dependencies]
 dyn-stack = { version = "0.13.2", default-features = false, features = ["alloc"] }

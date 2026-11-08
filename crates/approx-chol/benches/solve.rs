@@ -140,6 +140,29 @@ fn bench_panel_solve(c: &mut Criterion, workers: usize, firms: usize) {
     group.finish();
 }
 
+/// `components` interleaved paths of `len` vertices: a budget spread over many small listed blocks, as within's pairs split.
+fn bench_many_components(c: &mut Criterion, components: usize, len: usize) {
+    let lap = interleaved_paths(components * len, components);
+    let factor = build(lap.csr(), Config::default());
+    let rhs: Vec<f64> = (0..factor.n()).map(|i| (i % 7) as f64 - 3.0).collect();
+    let mut group = c.benchmark_group("many_components");
+    group.sample_size(30);
+    group.warm_up_time(Duration::from_millis(200));
+    group.measurement_time(Duration::from_secs(2));
+    let one = Threads::Count(std::num::NonZeroUsize::MIN);
+    for (budget, threads) in [("all", Threads::All), ("one", one)] {
+        let id = |k: usize| {
+            BenchmarkId::new(
+                format!("apply_k{k}_{budget}"),
+                format!("{components}x{len}"),
+            )
+        };
+        group.bench_function(id(1), |b| timed_apply::<1>(b, &factor, &rhs, threads));
+        group.bench_function(id(4), |b| timed_apply::<4>(b, &factor, &rhs, threads));
+    }
+    group.finish();
+}
+
 fn bench_solve(c: &mut Criterion) {
     // 1000x1000 holds 5M nonzeros, so its timing runs out of cache.
     for size in [100, 200, 1000] {
@@ -152,6 +175,7 @@ fn bench_solve(c: &mut Criterion) {
     for (workers, firms) in [(20_000, 1_000), (200_000, 10_000)] {
         bench_panel_solve(c, workers, firms);
     }
+    bench_many_components(c, 1000, 100);
 }
 
 criterion_group!(benches, bench_solve);

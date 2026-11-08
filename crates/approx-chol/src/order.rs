@@ -248,29 +248,50 @@ impl<'a> Slots<'a> {
     }
 
     /// Runs `solve` on `Pᵀ x` and the rest of `stack`, then sets the block's vertices of `x` to the result.
-    pub(crate) fn on_local<V: Copy>(
+    pub(crate) fn on_local<V: Copy, X: Rows<V> + ?Sized>(
         self,
-        x: &mut [V],
+        x: &mut X,
         stack: &mut MemStack,
         solve: impl FnOnce(&mut [V], &mut MemStack),
     ) {
         match self {
-            Slots::Run { start, len } => solve(&mut x[start..start + len], stack),
+            Slots::Run { start, len } => solve(x.run(start, len), stack),
             Slots::U32(listed) => gathered(listed, x, stack, solve),
             Slots::U64(listed) => gathered(listed, x, stack, solve),
         }
     }
 }
 
-fn gathered<V: Copy, I: Index>(
+/// The rows of `x` a block's [`Slots::on_local`] reads and writes: all of `x`, or one block's share of an `x` blocks solve at once.
+pub(crate) trait Rows<V> {
+    fn run(&mut self, start: usize, len: usize) -> &mut [V];
+    fn get(&self, row: usize) -> V;
+    fn set(&mut self, row: usize, value: V);
+}
+
+impl<V: Copy> Rows<V> for [V] {
+    fn run(&mut self, start: usize, len: usize) -> &mut [V] {
+        &mut self[start..start + len]
+    }
+
+    fn get(&self, row: usize) -> V {
+        self[row]
+    }
+
+    fn set(&mut self, row: usize, value: V) {
+        self[row] = value;
+    }
+}
+
+fn gathered<V: Copy, I: Index, X: Rows<V> + ?Sized>(
     listed: &[I],
-    x: &mut [V],
+    x: &mut X,
     stack: &mut MemStack,
     solve: impl FnOnce(&mut [V], &mut MemStack),
 ) {
-    let (mut local, rest) = stack.make_with(listed.len(), |k| x[listed[k].index()]);
+    let (mut local, rest) = stack.make_with(listed.len(), |k| x.get(listed[k].index()));
     solve(&mut local, rest);
-    (local.iter().zip(listed)).for_each(|(&v, &i)| x[i.index()] = v);
+    (local.iter().zip(listed)).for_each(|(&v, &i)| x.set(i.index(), v));
 }
 
 #[cfg(test)]
