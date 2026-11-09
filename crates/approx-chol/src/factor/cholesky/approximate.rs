@@ -7,6 +7,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 
 use crate::factor::clique_tree::{CliqueTreeSampler, Copies, Fill, Multi, Single};
 use crate::factor::sddm::{first_copy, Sddm};
+use crate::factor::sign::Sign;
 #[cfg(feature = "serde")]
 use crate::factor::within_one;
 use crate::sgdd::FactorTail;
@@ -83,11 +84,12 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
             }
         };
         self.graph.load(&sddm, self.copies);
+        let sign = sddm.sign();
         drop(sddm);
         let (n, edge_ends) = (self.graph.n(), self.graph.edge_ends());
         self.order.load(&self.graph, self.copies, pin, edge_ends);
         let mut steps = ApproximateCholesky::with_capacity(n, edge_ends);
-        self.pivot_all(&mut draws, &mut steps, slots);
+        self.pivot_all(&mut draws, &mut steps, slots, sign);
         // Doubling past the estimate otherwise retains up to 2x the entries (+30% on grids).
         steps.neighbors.shrink_to_fit();
         steps.coefficients.shrink_to_fit();
@@ -100,11 +102,12 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
     }
 
     #[inline(never)] // Inlined, its codegen moves with the buffer handling: grids +1-3%.
-    fn pivot_all(
+    fn pivot_all<S: Sign<T, I>>(
         &mut self,
         draws: &mut Xoshiro256PlusPlus,
         steps: &mut ApproximateCholesky<T, I>,
         slots: usize,
+        sign: S,
     ) {
         let Self {
             graph,
@@ -116,7 +119,7 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         for _ in 1..graph.n() {
             let v = order.next_vertex();
             fill.clear();
-            let column = clique.eliminate(draws, graph.neighbors(v), fill);
+            let column = clique.eliminate(draws, graph.neighbors(v), fill, sign);
             steps.push(v, column, slots);
             graph.eliminate_vertex(v);
             for &(u, w, copies, weight) in fill.iter() {
@@ -283,6 +286,7 @@ mod tests {
 
     use super::*;
     use crate::factor::clique_tree::{Multi, Single};
+    use crate::factor::sign::Unsigned;
     use crate::factor::within_one;
 
     fn stars(m: usize) -> [(&'static str, Vec<f32>); 3] {
@@ -341,7 +345,11 @@ mod tests {
         let mut steps = ApproximateCholesky::<f32, u32>::with_capacity(w.len() + 1, w.len());
         let draws = &mut Xoshiro256PlusPlus::seed_from_u64(0);
         let star = (1..).zip(w).map(|(j, &w)| (j, copies, w));
-        steps.push(0, clique.eliminate(draws, star, &mut fill), w.len() + 1);
+        steps.push(
+            0,
+            clique.eliminate(draws, star, &mut fill, Unsigned),
+            w.len() + 1,
+        );
         let (fill_off, d) = fill_error(w, &fill);
         let off = (f64::from(steps.headers[0].inverse_degree) * d - 1.0).abs();
         let w: Vec<f64> = w.iter().copied().map(f64::from).collect();
@@ -356,7 +364,12 @@ mod tests {
         let mut clique = CliqueTreeSampler::<f32, u32, Single>::new(Single);
         let mut fill = Fill::new();
         let star = (1..).zip(w.iter().copied());
-        clique.eliminate_unique(Xoshiro256PlusPlus::seed_from_u64(0), star, |e| fill.push(e));
+        clique.eliminate_unique(
+            Xoshiro256PlusPlus::seed_from_u64(0),
+            star,
+            |e| fill.push(e),
+            Unsigned,
+        );
         let (fill_off, _) = fill_error(w, &fill);
         (fill_off >= 1e-5).then(|| format!("{label}: fill off {fill_off:e}"))
     }
@@ -386,7 +399,7 @@ mod tests {
         let draws = &mut Xoshiro256PlusPlus::seed_from_u64(0);
         steps.push(
             0,
-            clique.eliminate(draws, star, &mut Fill::new()),
+            clique.eliminate(draws, star, &mut Fill::new(), Unsigned),
             w.len() + 1,
         );
         let d = w.iter().sum();

@@ -7,6 +7,7 @@ mod clique_tree;
 mod config;
 mod schur;
 mod sddm;
+mod sign;
 #[cfg(feature = "serde")]
 mod wire;
 

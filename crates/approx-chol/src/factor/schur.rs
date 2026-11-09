@@ -7,6 +7,7 @@ use super::cholesky::{Arm, Signed};
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::{Config, SchurMode};
 use super::sddm::{cover_vertex, crosses, sheets, Sddm, SddmRows};
+use super::sign::Unsigned;
 use super::{Streams, MULTIPLY_ADD_GRAIN_BITS};
 use crate::sgdd::{Balance, Grounding};
 use crate::storage::Rows;
@@ -191,7 +192,7 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
             // One sheet maps no column, as the balanced loop pays for any map.
             Balance::Balanced => {
                 let neighbors = c.row(s).map(|(k, &c)| (I::from_index(k), c.abs()));
-                sampler.eliminate_unique(draws, neighbors.chain(ground(s)), fill);
+                sampler.eliminate_unique(draws, neighbors.chain(ground(s)), fill, Unsigned);
             }
             Balance::Frustrated => {
                 let (sheet, e) = (s / c.n_rows(), s % c.n_rows());
@@ -199,7 +200,7 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
                     let on = sheet ^ usize::from(crosses(c));
                     (I::from_index(cover_vertex(k, on)), c.abs())
                 });
-                sampler.eliminate_unique(draws, neighbors.chain(ground(e)), fill);
+                sampler.eliminate_unique(draws, neighbors.chain(ground(e)), fill, Unsigned);
             }
         }
     }

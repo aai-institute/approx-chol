@@ -3,6 +3,7 @@
 use rayon::prelude::*;
 
 use super::config::{CoverSurplus, FrustratedRoute};
+use super::sign::Unsigned;
 use crate::sgdd::{Balance, Grounding};
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, widen, Batch, Index, Real};
@@ -104,6 +105,11 @@ impl<T: Real, I: Index> Sddm<T, I> {
 
     pub(super) fn grounded(&self) -> bool {
         (self.closure.grounding()).is_some_and(Grounding::is_grounded)
+    }
+
+    /// `L`'s weights are magnitudes.
+    pub(super) fn sign(&self) -> Unsigned {
+        Unsigned
     }
 
     /// Balanced on one sheet, frustrated on a cover's two.
