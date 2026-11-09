@@ -63,3 +63,13 @@ harness = false
 [[bench]]
 name = "reduce"
 harness = false
+
+[[bench]]
+name = "frustrated"
+harness = false
+
+# Counts `nnz(L)` from the serde payload.
+[[bench]]
+name = "frustrated_ab"
+harness = false
+required-features = ["serde"]
