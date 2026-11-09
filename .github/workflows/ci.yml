@@ -79,6 +79,25 @@ jobs:
       - name: cargo semver-checks
         run: pixi run -e gates semver
 
+  # Semver judges the version; this shows the surface itself, so each PR's diff lists what it adds or removes.
+  public-api:
+    name: Public API (snapshot)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Keyed on the script, which owns both pins.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.rustup/toolchains/nightly-*
+            ~/.cargo/bin/cargo-public-api
+          key: public-api-${{ runner.os }}-${{ hashFiles('scripts/public-api.sh') }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: "false"
+      - name: cargo public-api against crates/approx-chol/public-api.txt
+        run: scripts/public-api.sh --check
+
   # deny.toml's [graph] targets keeps future target-only deps out of the graph.
   deny:
     name: Dependency policy (licenses, duplicates, advisories, sources)
