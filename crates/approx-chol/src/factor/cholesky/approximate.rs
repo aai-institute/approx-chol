@@ -6,7 +6,6 @@ mod ordering;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use crate::factor::clique_tree::{CliqueTreeSampler, Copies, Fill, Multi, Single};
-use crate::factor::sddm::{first_copy, Sddm};
 use crate::factor::sign::Sign;
 #[cfg(feature = "serde")]
 use crate::factor::within_one;
@@ -32,17 +31,33 @@ impl<T: Real, I: Index> CliqueTreeElimination<T, I> {
     }
 
     /// Every vertex of `M` in minimum-degree order, each star replaced by a sampled clique tree, but a floating `M`'s last: returned as the slot the solve zeroes.
-    pub(super) fn eliminate(
+    pub(super) fn eliminate<M: Eliminated<T, I>>(
         &mut self,
-        sddm: Sddm<T, I>,
+        m: M,
         draws: Xoshiro256PlusPlus,
         tail: Option<FactorTail<'_, T>>,
     ) -> (ApproximateCholesky<T, I>, Option<usize>) {
         match &mut self.0 {
-            ByCopies::Ac(elimination) => elimination.eliminate(sddm, draws, tail),
-            ByCopies::Ac2(elimination) => elimination.eliminate(sddm, draws, tail),
+            ByCopies::Ac(elimination) => elimination.eliminate(m, draws, tail),
+            ByCopies::Ac2(elimination) => elimination.eliminate(m, draws, tail),
         }
     }
+}
+
+/// What an elimination eliminates: its edges, the ground past its slots, how its weights' signs read, and the slot it leaves.
+pub(in crate::factor) trait Eliminated<T: Real, I: Index> {
+    type Sign: Sign<T, I>;
+
+    /// Its slots; a ground is the vertex past them.
+    fn n(&self) -> usize;
+
+    /// Each edge once as `(i, j, −a_ij)`, the ground's as `(k, n, s_k)`.
+    fn grounded_edges(&self, edge: impl FnMut(I, I, T));
+
+    fn sign(&self) -> Self::Sign;
+
+    /// The vertex no pivot eliminates: the ground, the vertex past the slots, or a floating matrix's gauge, by `tail`.
+    fn pin(&self, tail: Option<FactorTail<'_, T>>) -> Option<usize>;
 }
 
 /// A block this small keeps its buffers for the task's next, its graph's slab never compacted; a larger one frees them.
@@ -68,24 +83,17 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         }
     }
 
-    fn eliminate(
+    fn eliminate<M: Eliminated<T, I>>(
         &mut self,
-        sddm: Sddm<T, I>,
+        m: M,
         mut draws: Xoshiro256PlusPlus,
         tail: Option<FactorTail<'_, T>>,
     ) -> (ApproximateCholesky<T, I>, Option<usize>) {
-        let slots = sddm.n();
-        let pin = match sddm.grounded() {
-            // The ground is never a pivot, so `Σs` is never formed: within unchanged, grids +0-8% PCG iterations at 1-10 grounds.
-            true => Some(slots),
-            // Floating, ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
-            false => {
-                (tail.filter(|f| f.spans_wide())).map(|f| first_copy(sddm.balance(), f.largest()))
-            }
-        };
-        self.graph.load(&sddm, self.copies);
-        let sign = sddm.sign();
-        drop(sddm);
+        let (slots, pin) = (m.n(), m.pin(tail));
+        self.graph
+            .load(&m, slots + usize::from(pin == Some(slots)), self.copies);
+        let sign = m.sign();
+        drop(m);
         let (n, edge_ends) = (self.graph.n(), self.graph.edge_ends());
         self.order.load(&self.graph, self.copies, pin, edge_ends);
         let mut steps = ApproximateCholesky::with_capacity(n, edge_ends);

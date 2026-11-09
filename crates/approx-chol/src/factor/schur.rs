@@ -74,7 +74,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
             Formation::Exact => self.exact(inv_pivot, Layout::sddm(self.balance)),
             Formation::Sampled(copies) => self.sample(copies, streams).merge(),
         };
-        let s = Sddm::of_rows(rows, &self.grounding, config.frustrated);
+        let s = Sddm::of_rows(rows, &self.grounding, config.frustrated.cover_surplus());
         (Arm::Sddm(s), self.cross)
     }
 
@@ -90,8 +90,8 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
                 fill.merge()
             }
         };
-        let route = config.frustrated;
-        Arm::Sddm(Sddm::of_rows(rows, &self.grounding, route))
+        let surplus = config.frustrated.cover_surplus();
+        Arm::Sddm(Sddm::of_rows(rows, &self.grounding, surplus))
     }
 
     /// `S` itself: a balanced block's exact rows, a frustrated one's signed pairs folded.

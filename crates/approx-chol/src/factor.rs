@@ -237,7 +237,8 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
                 let arm = match config.dense(adjacency.n()) {
                     true => Arm::AsIs(AsIs::new(adjacency, balance, grounding)),
                     false => {
-                        let s = Sddm::of_block(adjacency, balance, grounding, config.frustrated);
+                        let surplus = config.frustrated.cover_surplus();
+                        let s = Sddm::of_block(adjacency, balance, grounding, surplus);
                         Arm::Sddm(s)
                     }
                 };

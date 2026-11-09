@@ -7,6 +7,7 @@ use super::clique_tree::Multi;
 use super::sddm::{descend, lifted, Sddm};
 use crate::sgdd::{Balance, FactorTail};
 use crate::{Batch, Index, MemStack, Real};
+pub(super) use approximate::Eliminated;
 use approximate::{ApproximateCholesky, CliqueTreeElimination};
 pub(super) use dense::AsIs;
 
