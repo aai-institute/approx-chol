@@ -54,3 +54,7 @@ harness = false
 [[bench]]
 name = "wallclock_banded"
 harness = false
+
+[[bench]]
+name = "ingest"
+harness = false
