@@ -2,15 +2,17 @@
 mod csr;
 #[path = "common/grid.rs"]
 mod grid;
+#[path = "common/panel.rs"]
+mod panel;
 
 use std::hint::black_box;
 use std::time::Duration;
 
-use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1};
 use approx_chol::{factorize, ApproxInverse, Config, MemBuffer, MemStack, Threads};
 use criterion::{criterion_group, criterion_main, Bencher, BenchmarkId, Criterion};
 use csr::{build, OwnedCsr};
 use grid::grid_laplacian;
+use panel::Panel;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -100,20 +102,9 @@ fn bench_disconnected_solve(c: &mut Criterion, n: usize, k: usize) {
 
 /// A worker-firm panel as `within` passes it: the worker side is eliminated, the firm side's complement factored.
 fn bench_panel_solve(c: &mut Criterion, workers: usize, firms: usize) {
-    const OBSERVATIONS_PER_WORKER: usize = 5;
     let mut rng = SmallRng::seed_from_u64(0x5EED);
-    let worker: Vec<u32> = (0..workers * OBSERVATIONS_PER_WORKER)
-        .map(|i| (i / OBSERVATIONS_PER_WORKER) as u32)
-        .collect();
-    let firm: Vec<u32> = (0..worker.len())
-        .map(|_| rng.random_range(0..firms as u32))
-        .collect();
-    let gram = BipartiteFactorWidth2::new(
-        FactorWidth1::new(workers, &worker, None).expect("valid side"),
-        FactorWidth1::new(firms, &firm, None).expect("valid side"),
-    )
-    .expect("valid gram");
-    let factor = factorize(gram).expect("factors");
+    let panel = Panel::new(workers, firms, &mut rng);
+    let factor = factorize(panel.gram()).expect("factors");
     let rhs: Vec<f64> = (0..factor.n())
         .map(|_| rng.random_range(-1.0..1.0))
         .collect();
