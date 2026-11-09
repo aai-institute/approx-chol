@@ -1,6 +1,6 @@
 use approx_chol::factorize;
 use approx_chol::input::{
-    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
+    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, TriangleCsrRef,
 };
 
 use crate::common::entry::floats;
@@ -57,14 +57,14 @@ fn path(m: u32) -> Columns {
 
 fn csr_floats(m: u32) -> Vec<bool> {
     let (ptrs, columns, values) = dense_csr(&path(m).matrix(3));
-    floats(&factorize(CsrRef::new(&ptrs, &columns, &values, 3).unwrap()).unwrap())
+    floats(&factorize(CsrRef::new(3, &ptrs, &columns, &values).unwrap()).unwrap())
 }
 
 fn upper_csr_floats(m: u32) -> Vec<bool> {
     let mut matrix = path(m).matrix(3);
     (matrix.iter_mut().enumerate()).for_each(|(i, row)| row[..i].fill(0.0));
     let (ptrs, columns, values) = dense_csr(&matrix);
-    floats(&factorize(UpperCsrRef::new(&ptrs, &columns, &values, 3).unwrap()).unwrap())
+    floats(&factorize(TriangleCsrRef::upper(3, &ptrs, &columns, &values).unwrap()).unwrap())
 }
 
 fn gram_floats(m: u32) -> Vec<bool> {
@@ -76,8 +76,8 @@ fn gram_floats(m: u32) -> Vec<bool> {
 /// The path with its ends `0, 2` on the left as `0, 1` and its middle on the right as `0`.
 fn bipartite_floats(m: u32) -> Vec<bool> {
     let c = surplus_columns(m, [(0, 0), (1, 0)], [0, 1], 0);
-    let left = FactorWidth1::new(2, &c.a, Some(&c.x)).unwrap();
-    let right = FactorWidth1::new(1, &c.b, Some(&c.y)).unwrap();
+    let left = FactorWidth1::valued(2, &c.a, &c.x).unwrap();
+    let right = FactorWidth1::valued(1, &c.b, &c.y).unwrap();
     floats(&factorize(BipartiteFactorWidth2::new(left, right).unwrap()).unwrap())
 }
 
@@ -134,7 +134,8 @@ fn csr_and_gram_float_alike_where_the_trace_overflows() {
     x.push(extra);
     y.push(0.0);
     let (ptrs, columns, values) = dense_csr(&matrix(n as usize, &a, &b, &x, &y));
-    let csr = floats(&factorize(CsrRef::new(&ptrs, &columns, &values, n).unwrap()).unwrap());
+    let csr =
+        floats(&factorize(CsrRef::new(n as usize, &ptrs, &columns, &values).unwrap()).unwrap());
     let gram =
         floats(&factorize(FactorWidth2::new(n as usize, (&a, &x), (&b, &y)).unwrap()).unwrap());
     let mut surplus = vec![0.0; n as usize];

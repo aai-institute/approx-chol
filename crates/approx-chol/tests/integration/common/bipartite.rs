@@ -1,4 +1,18 @@
-use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1};
+use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1, InputError};
+use approx_chol::Real;
+use num_traits::PrimInt;
+
+/// A side valued by `values`, or unit-valued without.
+pub fn side<'a, T: Real, I: PrimInt>(
+    n: usize,
+    rows: &'a [I],
+    values: Option<&'a [T]>,
+) -> Result<FactorWidth1<'a, T, I>, InputError> {
+    match values {
+        Some(values) => FactorWidth1::valued(n, rows, values),
+        None => FactorWidth1::new(n, rows),
+    }
+}
 
 /// A bipartite `V`'s columns `(left, right, x, y)`; no `x` and `y` reads as an incidence.
 pub struct Bipartite {
@@ -46,8 +60,8 @@ impl Bipartite {
             None => (None, None),
         };
         BipartiteFactorWidth2::new(
-            FactorWidth1::new(self.n_left, &self.left, x).expect("valid left"),
-            FactorWidth1::new(self.n_right, &self.right, y).expect("valid right"),
+            side(self.n_left, &self.left, x).expect("valid left"),
+            side(self.n_right, &self.right, y).expect("valid right"),
         )
         .expect("valid gram")
     }

@@ -30,8 +30,8 @@ impl Stars {
 
     pub fn gram(&self) -> BipartiteFactorWidth2<'_, f64> {
         BipartiteFactorWidth2::scaled(
-            FactorWidth1::new(STARS, &self.stars, None).expect("valid side"),
-            FactorWidth1::new(self.degree, &self.kept, None).expect("valid side"),
+            FactorWidth1::new(STARS, &self.stars).expect("valid side"),
+            FactorWidth1::new(self.degree, &self.kept).expect("valid side"),
             &self.scales,
         )
         .expect("valid gram")

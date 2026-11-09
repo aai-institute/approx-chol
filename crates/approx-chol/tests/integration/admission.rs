@@ -5,7 +5,7 @@ mod views;
 
 use std::fmt::Debug;
 
-use approx_chol::input::{CsrRef, UpperCsrRef};
+use approx_chol::input::{CsrRef, TriangleCsrRef};
 use approx_chol::{factorize, factorize_with, ApproxInverse, Config, Error, Real, ScalingPolicy};
 
 /// `n` follows from `row_ptrs`, so no case can disagree with its own row count.
@@ -23,8 +23,8 @@ fn reduce_with<T: Real>(
     values: &[T],
     policy: ScalingPolicy,
 ) -> Result<ApproxInverse<T>, Error> {
-    let n = (row_ptrs.len() - 1) as u32;
-    let csr = CsrRef::new(row_ptrs, columns, values, n).expect("valid shape");
+    let n = row_ptrs.len() - 1;
+    let csr = CsrRef::new(n, row_ptrs, columns, values).expect("valid shape");
     factorize_with(csr, Config::default(), policy)
 }
 
@@ -33,8 +33,8 @@ fn reduce_upper<T: Real>(
     columns: &[u32],
     values: &[T],
 ) -> Result<ApproxInverse<T>, Error> {
-    let n = (row_ptrs.len() - 1) as u32;
-    let csr = UpperCsrRef::new(row_ptrs, columns, values, n).expect("valid shape");
+    let n = row_ptrs.len() - 1;
+    let csr = TriangleCsrRef::upper(n, row_ptrs, columns, values).expect("valid shape");
     factorize(csr)
 }
 

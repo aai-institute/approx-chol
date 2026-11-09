@@ -124,7 +124,7 @@ fn a_scaled_floating_block_projects_its_null_vector_out() {
         .flat_map(|i| (ptrs[i]..ptrs[i + 1]).map(move |k| (i, k)))
         .map(|(i, k)| d[i] * values[k] * d[columns[k]])
         .collect();
-    let csr = CsrRef::new(&ptrs, &columns, &scaled, graph.n as u32).unwrap();
+    let csr = CsrRef::new(graph.n, &ptrs, &columns, &scaled).unwrap();
     let factor: ApproxInverse = factorize(csr).unwrap();
     assert!(factor.components().all(|component| component.floats()));
 

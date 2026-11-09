@@ -82,11 +82,6 @@ pub enum InputError {
         /// The first row with unused slots.
         row: usize,
     },
-    /// The dimension does not fit `u32`.
-    DimensionTooLarge {
-        /// The dimension.
-        n: usize,
-    },
 }
 
 impl core::fmt::Display for InputError {
@@ -121,7 +116,6 @@ impl core::fmt::Display for InputError {
             }
             Self::NotSquare { rows, cols } => write!(f, "matrix is not square ({rows}x{cols})"),
             Self::RowGap { row } => write!(f, "row {row} leaves unused slots after its entries"),
-            Self::DimensionTooLarge { n } => write!(f, "dimension {n} exceeds u32::MAX"),
         }
     }
 }
@@ -164,10 +158,6 @@ pub(super) fn nonnegative<T: Real>(
         Some(entry) => Err(InputError::OutOfRange { parameter, entry }),
         None => Ok(()),
     }
-}
-
-pub(super) fn dimension(n: usize) -> Result<u32, InputError> {
-    u32::try_from(n).map_err(|_| InputError::DimensionTooLarge { n })
 }
 
 /// Every index in `parameter` below `n`.

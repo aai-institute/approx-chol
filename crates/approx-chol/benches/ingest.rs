@@ -11,8 +11,8 @@ mod stars;
 
 use std::hint::black_box;
 
-use approx_chol::input::{CsrRef, Laplacian, Sddm};
-use approx_chol::{Config, Error, Input};
+use approx_chol::input::{Input, Laplacian, Sddm};
+use approx_chol::Config;
 use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, BenchmarkId, Criterion};
 use csr::{build, OwnedCsr};
@@ -23,20 +23,15 @@ use rand::rngs::SmallRng;
 use rand::SeedableRng;
 use stars::Stars;
 
-fn row(csr: CsrRef<'_, f64>, i: usize) -> impl Iterator<Item = (u32, f64)> + '_ {
-    let span = csr.row_ptrs()[i] as usize..csr.row_ptrs()[i + 1] as usize;
-    (csr.col_indices()[span.clone()].iter().copied()).zip(csr.values()[span].iter().copied())
-}
-
 /// The diagonal and the entries right of it.
-fn upper(csr: CsrRef<'_, f64>) -> OwnedCsr {
-    OwnedCsr::from_rows((0..csr.n()).map(|i| row(csr, i).filter(move |&(j, _)| j as usize >= i)))
+fn upper(csr: &OwnedCsr) -> OwnedCsr {
+    OwnedCsr::from_rows((0..csr.n()).map(|i| csr.row(i).filter(move |&(j, _)| j as usize >= i)))
 }
 
 /// Every row's entries in descending column order, which factorize rewrites.
-fn reversed(csr: CsrRef<'_, f64>) -> OwnedCsr {
+fn reversed(csr: &OwnedCsr) -> OwnedCsr {
     OwnedCsr::from_rows((0..csr.n()).map(|i| {
-        let mut entries: Vec<_> = row(csr, i).collect();
+        let mut entries: Vec<_> = csr.row(i).collect();
         entries.reverse();
         entries
     }))
@@ -52,10 +47,10 @@ struct Edges {
 }
 
 impl Edges {
-    fn of(csr: CsrRef<'_, f64>) -> Self {
+    fn of(csr: &OwnedCsr) -> Self {
         let (mut u, mut v, mut w) = (Vec::new(), Vec::new(), Vec::new());
         for i in 0..csr.n() {
-            for (j, a) in row(csr, i).filter(|&(j, _)| j as usize > i) {
+            for (j, a) in csr.row(i).filter(|&(j, _)| j as usize > i) {
                 u.push(i as u32);
                 v.push(j);
                 w.push(-a);
@@ -85,8 +80,7 @@ impl Edges {
 /// `build` times construction and factorize together, `construct` and `factorize` each alone.
 fn ingest<'a, V>(group: &mut BenchmarkGroup<'_, WallTime>, case: &str, construct: impl Fn() -> V)
 where
-    V: Copy + TryInto<Input<'a, f64, u32>>,
-    V::Error: Into<Error>,
+    V: Copy + Into<Input<'a, f64, u32>>,
 {
     let factorize = |view: V| build(view, Config::default());
     group.bench_function(BenchmarkId::new("build", case), |b| {
@@ -108,11 +102,11 @@ fn bench_ingest(c: &mut Criterion) {
     // 1000x1000 holds 5M nonzeros, so ingestion runs out of cache.
     let grid = grid_laplacian(1000, 1000);
     ingest(&mut group, "grid1000_csr", || grid.csr());
-    let grid_upper = upper(grid.csr());
+    let grid_upper = upper(&grid);
     ingest(&mut group, "grid1000_upper", || grid_upper.upper());
-    let grid_reversed = reversed(grid.csr());
+    let grid_reversed = reversed(&grid);
     ingest(&mut group, "grid1000_reversed", || grid_reversed.csr());
-    let grid_edges = Edges::of(grid.csr());
+    let grid_edges = Edges::of(&grid);
     ingest(&mut group, "grid1000_laplacian", || grid_edges.laplacian());
     ingest(&mut group, "grid1000_sddm", || grid_edges.sddm());
 

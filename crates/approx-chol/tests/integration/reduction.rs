@@ -4,9 +4,10 @@ mod cycle;
 mod rounding;
 mod surplus_grounds;
 
+use crate::common::bipartite::side;
 use crate::common::clamps::Clamps;
 use approx_chol::input::{
-    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
+    BipartiteFactorWidth2, CsrRef, FactorWidth2, Laplacian, Sddm, TriangleCsrRef,
 };
 use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy};
 
@@ -40,8 +41,8 @@ fn csr_and_upper_share_reduction_and_solve_bits() {
             ptrs[upper].push(indices[upper].len() as u32);
         }
     }
-    let csr = CsrRef::new(&ptrs[0], &indices[0], &values[0], 7).unwrap();
-    let upper = UpperCsrRef::new(&ptrs[1], &indices[1], &values[1], 7).unwrap();
+    let csr = CsrRef::new(7, &ptrs[0], &indices[0], &values[0]).unwrap();
+    let upper = TriangleCsrRef::upper(7, &ptrs[1], &indices[1], &values[1]).unwrap();
     let rhs = [1.0; 7];
     for config in [
         Config {
@@ -102,7 +103,7 @@ fn shape_ground_and_signature_match_their_gram_matrices() {
     let y = [1.0, -2.0, 3.0, -4.0];
     let signed = matrix(4, &a, &b, &x, &y);
     let (ptrs, columns, values) = dense_csr(&signed);
-    let csr = CsrRef::new(&ptrs, &columns, &values, 4).unwrap();
+    let csr = CsrRef::new(4, &ptrs, &columns, &values).unwrap();
     let factor = factorize_with(csr, dense(), ScalingPolicy::default()).unwrap();
     assert!(only(&factor).floats());
     solve_residual(&factor, &signed);
@@ -112,9 +113,9 @@ fn shape_ground_and_signature_match_their_gram_matrices() {
 fn bipartite_incidence_and_valued_grams_preserve_both_sides() {
     let (left, right) = ([0, 0, 1, 1, 2, 2], [0, 1, 0, 1, 0, 1]);
     let (ones, minus) = ([1.0; 6], [-1.0; 6]);
-    let gram = |values_l, values_r| {
-        let l = FactorWidth1::new(3, &left, values_l).unwrap();
-        let r = FactorWidth1::new(2, &right, values_r).unwrap();
+    let gram = |values_l: Option<&[f64]>, values_r| {
+        let (l, r) = (side(3, &left, values_l), side(2, &right, values_r));
+        let (l, r) = (l.unwrap(), r.unwrap());
         let gram = BipartiteFactorWidth2::new(l, r).unwrap();
         factorize_with(gram, dense(), ScalingPolicy::default()).unwrap()
     };
@@ -145,7 +146,7 @@ fn exhausted_scaling_reports_on_grams_and_rows() {
     let ptrs = [0, 3, 6, 9];
     let indices = [0, 1, 2, 0, 1, 2, 0, 1, 2];
     let values: Vec<f64> = matrix.into_iter().flatten().collect();
-    let csr = CsrRef::new(&ptrs, &indices, &values, 3).unwrap();
+    let csr = CsrRef::new(3, &ptrs, &indices, &values).unwrap();
     let factor: ApproxInverse = factorize_with(csr, dense(), policy).unwrap();
     assert!(reported(&factor));
 }

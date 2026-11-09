@@ -9,7 +9,7 @@ mod width2;
 use num_traits::PrimInt;
 
 pub(crate) use csr::Canonical;
-pub use csr::{CsrRef, OwnedCsr, UpperCsrRef};
+pub use csr::{CsrRef, TriangleCsrRef};
 pub use error::InputError;
 pub use width2::bipartite::{BipartiteFactorWidth2, FactorWidth1, Side};
 pub use width2::laplacian::{Laplacian, Sddm};
@@ -24,73 +24,43 @@ fn index<I: PrimInt>(k: I) -> usize {
 }
 
 /// Any input [`factorize`](crate::factorize) takes, each converted by `From`.
-#[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
-pub enum Input<'a, T, I = u32> {
-    /// A symmetric matrix stored whole.
-    Csr(CsrRef<'a, T, I>),
-    /// A symmetric matrix stored by its upper triangle.
-    UpperCsr(UpperCsrRef<'a, T, I>),
-    /// A graph Laplacian `L`.
-    Laplacian(Laplacian<'a, T, I>),
-    /// `L + diag(s)`, `s ≥ 0` and not all zero.
-    Sddm(Sddm<'a, T, I>),
-    /// `V Vᵀ`, each column of `V` with two nonzeros.
-    FactorWidth2(FactorWidth2<'a, T, I>),
-    /// `V W Vᵀ`, `V = [V_l; V_r]` with two width-1 sides on disjoint vertex sets.
-    BipartiteFactorWidth2(BipartiteFactorWidth2<'a, T, I>),
-}
+pub struct Input<'a, T, I = u32>(pub(crate) Lowered<'a, T, I>);
 
-impl<'a, T: Real, J: PrimInt> Input<'a, T, J> {
-    /// The one of three forms the core reads this input as.
-    pub(crate) fn lower(self) -> Lowered<'a, T, J> {
-        match self {
-            Self::Csr(csr) => Lowered::Csr(csr),
-            Self::UpperCsr(csr) => Lowered::UpperCsr(csr.lower()),
-            Self::Laplacian(laplacian) => Lowered::FactorWidth2(laplacian.lower()),
-            Self::Sddm(sddm) => Lowered::FactorWidth2(sddm.lower()),
-            Self::FactorWidth2(v) => Lowered::FactorWidth2(v),
-            Self::BipartiteFactorWidth2(v) => Lowered::FactorWidth2(v.lower()),
-        }
-    }
-
+impl<T: Real, J: PrimInt> Input<'_, T, J> {
     /// Dimension of `A`.
     pub(crate) fn n(&self) -> usize {
-        match self.lower() {
-            Lowered::Csr(csr) | Lowered::UpperCsr(csr) => csr.n(),
+        match self.0 {
+            Lowered::Csr(csr) => csr.n(),
+            Lowered::Triangle(triangle) => triangle.n(),
             Lowered::FactorWidth2(v) => v.n(),
         }
     }
 }
 
 /// An [`Input`] as the core reads it: a CSR matrix stored whole or by its upper triangle, or `V W Vᵀ`.
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum Lowered<'a, T, I> {
     Csr(CsrRef<'a, T, I>),
-    UpperCsr(CsrRef<'a, T, I>),
+    Triangle(TriangleCsrRef<'a, T, I>),
     FactorWidth2(FactorWidth2<'a, T, I>),
 }
 
 macro_rules! input_from {
-    ($($variant:ident($view:ident),)+) => {$(
-        impl<'a, T, I> From<$view<'a, T, I>> for Input<'a, T, I> {
-            fn from(view: $view<'a, T, I>) -> Self {
-                Self::$variant(view)
+    ($($view:ident => |$v:ident| $lowered:expr,)+) => {$(
+        impl<'a, T: Real, I: PrimInt> From<$view<'a, T, I>> for Input<'a, T, I> {
+            fn from($v: $view<'a, T, I>) -> Self {
+                Self($lowered)
             }
         }
     )+};
 }
 
 input_from! {
-    Csr(CsrRef),
-    UpperCsr(UpperCsrRef),
-    Laplacian(Laplacian),
-    Sddm(Sddm),
-    FactorWidth2(FactorWidth2),
-    BipartiteFactorWidth2(BipartiteFactorWidth2),
-}
-
-impl<'a, T, I: PrimInt> From<&'a OwnedCsr<T, I>> for Input<'a, T, I> {
-    fn from(owned: &'a OwnedCsr<T, I>) -> Self {
-        Self::Csr(owned.as_csr_ref())
-    }
+    CsrRef => |csr| Lowered::Csr(csr),
+    TriangleCsrRef => |triangle| Lowered::Triangle(triangle),
+    Laplacian => |laplacian| Lowered::FactorWidth2(laplacian.lower()),
+    Sddm => |sddm| Lowered::FactorWidth2(sddm.lower()),
+    FactorWidth2 => |v| Lowered::FactorWidth2(v),
+    BipartiteFactorWidth2 => |v| Lowered::FactorWidth2(v.lower()),
 }

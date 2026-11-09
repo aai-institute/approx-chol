@@ -11,8 +11,8 @@ fn gram<'a>(
     edges: &'a (Vec<u32>, Vec<u32>),
 ) -> BipartiteFactorWidth2<'a, f64, u32> {
     BipartiteFactorWidth2::new(
-        FactorWidth1::<f64, u32>::new(n_left, &edges.0, None).expect("valid left"),
-        FactorWidth1::new(n_right, &edges.1, None).expect("valid right"),
+        FactorWidth1::<f64, u32>::new(n_left, &edges.0).expect("valid left"),
+        FactorWidth1::new(n_right, &edges.1).expect("valid right"),
     )
     .expect("valid gram")
 }

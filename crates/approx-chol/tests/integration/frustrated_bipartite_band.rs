@@ -60,7 +60,7 @@ fn a_frustrated_bipartite_block_with_a_negligible_surplus_solves_backward_stably
         let m = g.dense();
         let (ptrs, columns, values) = dense_csr(&m);
         let gram = g.view();
-        let csr = CsrRef::new(&ptrs, &columns, &values, m.len() as u32).unwrap();
+        let csr = CsrRef::new(m.len(), &ptrs, &columns, &values).unwrap();
         for (complement, config) in [
             ("dense", Config::default()),
             ("exact", exact),

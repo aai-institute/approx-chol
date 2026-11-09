@@ -1,31 +1,31 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
-use num_traits::{cast, PrimInt};
+use num_traits::PrimInt;
 
-use super::error::{dimension, length, InputError};
+use super::error::{length, InputError};
 use super::index;
 use crate::in_range;
 use crate::Real;
 
 /// Borrowed CSR claiming a symmetric `A`; shape is checked here, the claim when it factors.
 #[derive(Clone, Copy, Debug)]
-pub struct CsrRef<'a, T = f64, I = u32> {
+pub struct CsrRef<'a, T, I = u32> {
     row_ptrs: &'a [I],
     col_indices: &'a [I],
     values: &'a [T],
 }
 
-impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
+impl<'a, T: Real, I: PrimInt> CsrRef<'a, T, I> {
     /// Checks the arrays' shape, so no row slice can fail.
     pub fn new(
+        n: usize,
         row_ptrs: &'a [I],
         col_indices: &'a [I],
         values: &'a [T],
-        n: u32,
     ) -> Result<Self, InputError> {
-        let n = n as usize;
-        length("row_ptrs", n + 1, row_ptrs.len())?;
+        // No slice has `usize::MAX` entries, so a saturated `n + 1` still mismatches.
+        length("row_ptrs", n.saturating_add(1), row_ptrs.len())?;
         length("values", col_indices.len(), values.len())?;
         let row_ptr_last = representable(row_ptrs, n)?;
         if row_ptrs[0] != I::zero() {
@@ -45,100 +45,30 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
         })
     }
 
-    /// Row pointer array (length `n + 1`).
-    pub fn row_ptrs(&self) -> &'a [I] {
-        self.row_ptrs
-    }
-
-    /// Column index array (length `nnz`).
-    pub fn col_indices(&self) -> &'a [I] {
-        self.col_indices
-    }
-
-    /// Value array (length `nnz`).
-    pub fn values(&self) -> &'a [T] {
-        self.values
-    }
-
     /// Dimension of `A`.
-    pub fn n(&self) -> usize {
+    pub(crate) fn n(&self) -> usize {
         self.row_ptrs.len() - 1
-    }
-}
-
-impl<T: Clone, I: PrimInt> CsrRef<'_, T, I> {
-    /// Owned copy with `u32` indices; [`InputError::IndexOutOfRange`] if an index does not fit.
-    pub fn to_owned_u32(&self) -> Result<OwnedCsr<T, u32>, InputError> {
-        Ok(OwnedCsr {
-            row_ptrs: cast_slice("row_ptrs", self.row_ptrs)?,
-            col_indices: cast_slice("col_indices", self.col_indices)?,
-            values: self.values.to_vec(),
-        })
     }
 }
 
 /// Borrowed CSR of the upper triangle of a symmetric `A`, diagonal included.
 #[derive(Clone, Copy, Debug)]
-pub struct UpperCsrRef<'a, T = f64, I = u32>(CsrRef<'a, T, I>);
+pub struct TriangleCsrRef<'a, T, I = u32>(CsrRef<'a, T, I>);
 
-impl<'a, T, I: PrimInt> UpperCsrRef<'a, T, I> {
-    /// The shape checks of [`CsrRef::new`]; a nonzero below the diagonal is caught when it factors.
-    pub fn new(
+impl<'a, T: Real, I: PrimInt> TriangleCsrRef<'a, T, I> {
+    /// The upper triangle, shape-checked as [`CsrRef::new`]; a nonzero below the diagonal is caught when it factors.
+    pub fn upper(
+        n: usize,
         row_ptrs: &'a [I],
         col_indices: &'a [I],
         values: &'a [T],
-        n: u32,
     ) -> Result<Self, InputError> {
-        CsrRef::new(row_ptrs, col_indices, values, n).map(Self)
+        CsrRef::new(n, row_ptrs, col_indices, values).map(Self)
     }
 
-    pub(crate) fn lower(self) -> CsrRef<'a, T, I> {
-        self.0
-    }
-}
-
-/// Owned CSR matrix, for sources that index in `usize`.
-#[derive(Clone, Debug)]
-pub struct OwnedCsr<T = f64, I = u32> {
-    row_ptrs: Vec<I>,
-    col_indices: Vec<I>,
-    values: Vec<T>,
-}
-
-impl<T: Clone, I: PrimInt> OwnedCsr<T, I> {
-    /// Owned CSR from `usize` arrays, shape-checked as [`CsrRef::new`]; an index past `I` is an error.
-    pub fn try_from_usize(
-        row_ptrs: &[usize],
-        col_indices: &[usize],
-        values: &[T],
-        n: usize,
-    ) -> Result<Self, InputError> {
-        let n = dimension(n)?;
-        let row_ptrs = cast_slice("row_ptrs", row_ptrs)?;
-        let col_indices = cast_slice("col_indices", col_indices)?;
-        CsrRef::new(&row_ptrs, &col_indices, values, n)?;
-        Ok(Self {
-            row_ptrs,
-            col_indices,
-            values: values.to_vec(),
-        })
-    }
-}
-
-impl<T, I: PrimInt> OwnedCsr<T, I> {
-    /// Infallible: the constructors check shape and the fields are private.
-    pub fn as_csr_ref(&self) -> CsrRef<'_, T, I> {
-        CsrRef {
-            row_ptrs: &self.row_ptrs,
-            col_indices: &self.col_indices,
-            values: &self.values,
-        }
-    }
-}
-
-impl<'a, T, I: PrimInt> From<&'a OwnedCsr<T, I>> for CsrRef<'a, T, I> {
-    fn from(owned: &'a OwnedCsr<T, I>) -> Self {
-        owned.as_csr_ref()
+    /// Dimension of `A`.
+    pub(crate) fn n(&self) -> usize {
+        self.0.n()
     }
 }
 
@@ -147,18 +77,6 @@ fn representable<I: PrimInt>(row_ptrs: &[I], entry: usize) -> Result<usize, Inpu
         parameter: "row_ptrs",
         entry,
     })
-}
-
-/// Reserves up front: collecting into `Option<Vec<_>>` drops the size hint and cost 3.5x the traffic.
-fn cast_slice<S: PrimInt, D: PrimInt>(
-    parameter: &'static str,
-    src: &[S],
-) -> Result<Vec<D>, InputError> {
-    let mut out = Vec::with_capacity(src.len());
-    for (entry, &value) in src.iter().enumerate() {
-        out.push(cast::<S, D>(value).ok_or(InputError::IndexOutOfRange { parameter, entry })?);
-    }
-    Ok(out)
 }
 
 /// Strictly ascending columns per row, all in range, values not yet read; scipy already emits them, so only rare input pays for a copy.
@@ -180,8 +98,8 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
     }
 
     /// `A` stored by its upper triangle: every value in range, no nonzero below the diagonal.
-    pub(crate) fn upper(csr: CsrRef<'a, T, I>) -> Result<Self, InputError> {
-        let unchecked = Unchecked::of(csr)?;
+    pub(crate) fn upper(triangle: TriangleCsrRef<'a, T, I>) -> Result<Self, InputError> {
+        let unchecked = Unchecked::of(triangle.0)?;
         unchecked.check_upper()?;
         Ok(Self(unchecked))
     }
@@ -345,7 +263,7 @@ fn approximately_equal<T: Real>(left: T, right: T) -> bool {
 }
 
 /// Accumulated, not short-circuited: the `all` form measured 0.4-2% slower.
-fn is_canonical<T, I: PrimInt>(csr: &CsrRef<'_, T, I>) -> Result<bool, InputError> {
+fn is_canonical<T: Real, I: PrimInt>(csr: &CsrRef<'_, T, I>) -> Result<bool, InputError> {
     // `None` means `I` cannot represent `n`, so every `I` value is below it.
     let limit = I::from(csr.n());
     let mut canonical = true;

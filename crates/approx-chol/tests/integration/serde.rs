@@ -20,8 +20,8 @@ fn factors(config: Config) -> Vec<ApproxInverse> {
         .map(|k| 1.0 + (k % 5) as f64 / 4.0)
         .collect();
     let gram = BipartiteFactorWidth2::new(
-        FactorWidth1::new(left as usize, &rows, Some(&slope)).unwrap(),
-        FactorWidth1::new(right as usize, &cols, None).unwrap(),
+        FactorWidth1::valued(left as usize, &rows, &slope).unwrap(),
+        FactorWidth1::new(right as usize, &cols).unwrap(),
     )
     .unwrap();
     let bipartite = factorize_with(gram, config, ScalingPolicy::default()).unwrap();
@@ -39,7 +39,7 @@ fn factors(config: Config) -> Vec<ApproxInverse> {
         .map(|k| if k % 3 == 0 { -1.0 } else { 1.0 })
         .collect();
     let (ptrs, columns, values) = dense_csr(&matrix(60, &c, &d, &vec![1.0; c.len()], &cell));
-    let signed = CsrRef::new(&ptrs, &columns, &values, 60).unwrap();
+    let signed = CsrRef::new(60, &ptrs, &columns, &values).unwrap();
     let signed = factorize_with(signed, config, ScalingPolicy::default()).unwrap();
     vec![bipartite, laplacian, signed]
 }
@@ -351,8 +351,8 @@ fn an_elimination_whose_rows_sum_past_one_is_corrupt() {
     let cols: Vec<u32> = (0..300).map(|o| (o * 7 + o / 13) % 30).collect();
     let scales: Vec<f64> = (0..300).map(|o| 1.0 + (o % 5) as f64).collect();
     let gram = BipartiteFactorWidth2::scaled(
-        FactorWidth1::new(60, &rows, None).unwrap(),
-        FactorWidth1::new(30, &cols, None).unwrap(),
+        FactorWidth1::new(60, &rows).unwrap(),
+        FactorWidth1::new(30, &cols).unwrap(),
         &scales,
     )
     .unwrap();
@@ -465,7 +465,7 @@ fn a_vertex_twice_in_one_block_is_corrupt() {
 /// A forged empty `F` is a decode error, never a panic while its peak is read.
 #[test]
 fn empty_scales_are_corrupt() {
-    let csr = CsrRef::new(&[0u32, 2, 4], &[0u32, 1, 0, 1], &[1.0, -2.0, -2.0, 5.0], 2).unwrap();
+    let csr = CsrRef::new(2, &[0u32, 2, 4], &[0u32, 1, 0, 1], &[1.0, -2.0, -2.0, 5.0]).unwrap();
     let mut v = serde_json::to_value(approx_chol::factorize(csr).unwrap()).unwrap();
     let mut empty = |s: &mut serde_json::Value| *s = serde_json::json!([]);
     assert!(
@@ -517,7 +517,7 @@ fn an_isolated_inverse_pivot_out_of_range_is_corrupt(#[case] by: f64) {
 fn factored_json(rows: &[&[f64]], exact_max_dim: usize) -> serde_json::Value {
     let rows: Vec<Vec<f64>> = rows.iter().map(|row| row.to_vec()).collect();
     let (ptrs, columns, values) = dense_csr(&rows);
-    let csr = CsrRef::new(&ptrs, &columns, &values, rows.len() as u32).unwrap();
+    let csr = CsrRef::new(rows.len(), &ptrs, &columns, &values).unwrap();
     let config = Config {
         exact_max_dim,
         ..Config::default()

@@ -1,8 +1,8 @@
 //! A row's surplus within its band is rounding, never a ground (#311, #343).
 use std::collections::BTreeMap;
 
-use approx_chol::input::FactorWidth2;
-use approx_chol::{factorize, ApproxInverse, Config, CsrRef, Real};
+use approx_chol::input::{CsrRef, FactorWidth2};
+use approx_chol::{factorize, ApproxInverse, Config, Real};
 
 use crate::common::bits::bits;
 use crate::common::entry::{by_type, floats, Entry, Factored, Types};
@@ -121,7 +121,7 @@ fn f32_csr((ptrs, columns, values): &(Vec<usize>, Vec<usize>, Vec<f64>)) -> Appr
     let ptrs: Vec<u32> = ptrs.iter().map(|&p| p as u32).collect();
     let columns: Vec<u32> = columns.iter().map(|&j| j as u32).collect();
     let values: Vec<f32> = values.iter().map(|&a| a as f32).collect();
-    factorize(CsrRef::new(&ptrs, &columns, &values, ptrs.len() as u32 - 1).unwrap()).unwrap()
+    factorize(CsrRef::new(ptrs.len() - 1, &ptrs, &columns, &values).unwrap()).unwrap()
 }
 
 /// #311: a grounded `f32` CSR at weight span `1e16` factors as the same CSR whose ungrounded rows hold no residue.

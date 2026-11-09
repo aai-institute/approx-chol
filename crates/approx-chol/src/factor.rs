@@ -527,8 +527,8 @@ mod tests {
     }
 
     fn csr_factor(row_ptrs: &[u32], columns: &[u32], values: &[f64]) -> ApproxInverse {
-        let n = (row_ptrs.len() - 1) as u32;
-        let csr = CsrRef::new(row_ptrs, columns, values, n).expect("valid csr");
+        let n = row_ptrs.len() - 1;
+        let csr = CsrRef::new(n, row_ptrs, columns, values).expect("valid csr");
         let summands =
             Reduced::<f64, u32>::reduce(csr.into(), ScalingPolicy::default()).expect("reduces");
         ApproxInverse::build(summands, &Config::default())
@@ -549,8 +549,8 @@ mod tests {
     /// A bipartite block, so it carries a block elimination.
     fn bipartite() -> ApproxInverse {
         let gram = BipartiteFactorWidth2::new(
-            FactorWidth1::new(2, &[0u32, 0, 1, 1], None).expect("valid rows"),
-            FactorWidth1::new(2, &[0u32, 1, 0, 1], None).expect("valid columns"),
+            FactorWidth1::new(2, &[0u32, 0, 1, 1]).expect("valid rows"),
+            FactorWidth1::new(2, &[0u32, 1, 0, 1]).expect("valid columns"),
         )
         .expect("valid gram");
         let summands =
@@ -705,7 +705,7 @@ mod storage {
         for (sign, diagonal) in [(-1.0, 1.0), (1.0, 1.0), (-1.0, 0.8)] {
             let (row_ptrs, columns, values) = grid(7, 6, sign, diagonal);
             check(
-                CsrRef::new(&row_ptrs, &columns, &values, 42)
+                CsrRef::new(42, &row_ptrs, &columns, &values)
                     .expect("valid CSR")
                     .into(),
             );
@@ -718,7 +718,7 @@ mod storage {
             1.0, -1.0, 1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0, -1.0, 1.0,
         ];
         check(
-            CsrRef::new(&row_ptrs, &columns, &values, 6)
+            CsrRef::new(6, &row_ptrs, &columns, &values)
                 .expect("valid CSR")
                 .into(),
         );
@@ -726,8 +726,8 @@ mod storage {
         let cols: Vec<u32> = (0..60).map(|k| (k * 7 + k / 12) % 9).collect();
         let scales: Vec<f64> = (0..60).map(|k| 1.0 + (k % 5) as f64).collect();
         let gram = BipartiteFactorWidth2::scaled(
-            FactorWidth1::new(12, &rows, None).expect("valid rows"),
-            FactorWidth1::new(9, &cols, None).expect("valid columns"),
+            FactorWidth1::new(12, &rows).expect("valid rows"),
+            FactorWidth1::new(9, &cols).expect("valid columns"),
             &scales,
         )
         .expect("valid gram");

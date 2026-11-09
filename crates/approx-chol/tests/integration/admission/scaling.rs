@@ -1,6 +1,6 @@
 use crate::common::clamps::Clamps;
-use approx_chol::input::FactorWidth2;
-use approx_chol::{factorize, Config, CsrRef, ScalingOutcome, ScalingPolicy, Sgdd};
+use approx_chol::input::{CsrRef, FactorWidth2};
+use approx_chol::{factorize, Config, ScalingOutcome, ScalingPolicy, Sgdd};
 use rstest::rstest;
 
 use crate::common::entry::only;
@@ -98,7 +98,7 @@ fn a_settled_dld_path_is_not_reported(#[case] spread: f64) {
 fn a_reduction_keeps_its_own_scaling_when_factored() {
     let n = 5000;
     let (row_ptrs, columns, values) = dld(n, &path(n), 1.0, 0);
-    let csr = CsrRef::new(&row_ptrs, &columns, &values, n as u32).expect("valid shape");
+    let csr = CsrRef::new(n, &row_ptrs, &columns, &values).expect("valid shape");
     let unsettled = factorize(csr).expect("admitted");
     assert!(only(&unsettled).grounding_unproven());
     let [clamp] = &unsettled.clamps()[..] else {

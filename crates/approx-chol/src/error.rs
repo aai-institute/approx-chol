@@ -1,6 +1,5 @@
-use std::convert::Infallible;
-
-use crate::{InputError, ReduceError};
+use crate::input::InputError;
+use crate::ReduceError;
 
 /// Why an input did not factor.
 #[non_exhaustive]
@@ -21,13 +20,6 @@ impl From<InputError> for Error {
 impl From<ReduceError> for Error {
     fn from(error: ReduceError) -> Self {
         Self::Reduce(error)
-    }
-}
-
-/// Lets an infallible `From` input pass where [`factorize`](crate::factorize) takes `TryInto`.
-impl From<Infallible> for Error {
-    fn from(never: Infallible) -> Self {
-        match never {}
     }
 }
 

@@ -1,13 +1,14 @@
 //! Approximate Cholesky of symmetric generalized diagonally dominant `A`, one irreducible block at a time.
 //!
 //! ```
-//! use approx_chol::{factorize, CsrRef, Threads};
+//! use approx_chol::input::CsrRef;
+//! use approx_chol::{factorize, Threads};
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let row_ptrs    = [0u32, 2, 5, 8, 10];
 //! let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
 //! let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
 //!
-//! let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
+//! let csr = CsrRef::new(4, &row_ptrs, &col_indices, &values)?;
 //! let mut x = vec![1.0, -1.0, 1.0, -1.0];
 //! factorize(csr)?.apply(&mut x, Threads::All)?;
 //! assert!(x.iter().all(|v| f64::is_finite(*v)));
@@ -65,7 +66,7 @@ pub use factor::{
     ApplyError, ApproxInverse, ColumnMajor, Columns, Component, Config, CoverSurplus,
     FrustratedRoute, LayoutError, MatrixMut, Sampling, SchurMode,
 };
-pub use input::{CsrRef, Input, InputError, OwnedCsr, Side};
+use input::{Input, Side};
 pub use sgdd::{Clamp, ReduceError, ScalingOutcome, ScalingPolicy};
 use sgdd::{Complement, Reduced};
 pub use threads::Threads;
@@ -75,8 +76,7 @@ pub fn factorize<'a, T, I, M>(input: M) -> Result<ApproxInverse<T>, Error>
 where
     T: Real,
     I: PrimInt + Sync + 'a,
-    M: TryInto<Input<'a, T, I>>,
-    <M as TryInto<Input<'a, T, I>>>::Error: Into<Error>,
+    M: Into<Input<'a, T, I>>,
 {
     factorize_with(input, Config::default(), ScalingPolicy::default())
 }
@@ -90,8 +90,7 @@ pub fn factorize_with<'a, T, I, M>(
 where
     T: Real,
     I: PrimInt + Sync + 'a,
-    M: TryInto<Input<'a, T, I>>,
-    <M as TryInto<Input<'a, T, I>>>::Error: Into<Error>,
+    M: Into<Input<'a, T, I>>,
 {
     Ok(Sgdd::reduce(input, scaling)?.factor(&config))
 }
@@ -136,10 +135,9 @@ impl<T: Real> Sgdd<T> {
     pub fn reduce<'a, I, M>(input: M, scaling: ScalingPolicy) -> Result<Self, Error>
     where
         I: PrimInt + Sync + 'a,
-        M: TryInto<Input<'a, T, I>>,
-        <M as TryInto<Input<'a, T, I>>>::Error: Into<Error>,
+        M: Into<Input<'a, T, I>>,
     {
-        let input = input.try_into().map_err(Into::into)?;
+        let input = input.into();
         Ok(Self(match fits_u32(input.n()) {
             true => Indexed::U32(Reduced::reduce(input, scaling)?),
             false => Indexed::U64(Reduced::reduce(input, scaling)?),

@@ -1,5 +1,5 @@
-use approx_chol::input::{CsrRef, UpperCsrRef};
-use approx_chol::{factorize_with, ApproxInverse, Config, Error, Input, ScalingPolicy};
+use approx_chol::input::{CsrRef, Input, TriangleCsrRef};
+use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy};
 
 /// CSR arrays as a caller holds them, `u32` indices and `f64` values, each row's entries in the order given.
 pub struct OwnedCsr {
@@ -70,33 +70,42 @@ impl OwnedCsr {
         }))
     }
 
-    fn n(&self) -> u32 {
-        (self.row_ptrs.len() - 1) as u32
+    pub fn n(&self) -> usize {
+        self.row_ptrs.len() - 1
+    }
+
+    /// Row `i`'s stored entries `(column, value)`, in the order given.
+    #[allow(
+        dead_code,
+        reason = "only the ingest and frustrated benches read rows or apply A"
+    )]
+    pub fn row(&self, i: usize) -> impl Iterator<Item = (u32, f64)> + '_ {
+        let span = self.row_ptrs[i] as usize..self.row_ptrs[i + 1] as usize;
+        (self.col_indices[span.clone()].iter().copied()).zip(self.values[span].iter().copied())
+    }
+
+    /// Stored entries, both triangles.
+    #[allow(dead_code, reason = "only the frustrated benches count entries")]
+    pub fn nnz(&self) -> usize {
+        self.values.len()
     }
 
     pub fn csr(&self) -> CsrRef<'_, f64> {
-        CsrRef::new(&self.row_ptrs, &self.col_indices, &self.values, self.n()).expect("valid CSR")
+        CsrRef::new(self.n(), &self.row_ptrs, &self.col_indices, &self.values).expect("valid CSR")
     }
 
     /// `A x` over every stored entry.
     #[allow(dead_code, reason = "only the frustrated benches apply A")]
     pub fn matvec(&self, x: &[f64]) -> Vec<f64> {
-        (self.row_ptrs.windows(2))
-            .map(|span| {
-                let span = span[0] as usize..span[1] as usize;
-                (self.col_indices[span.clone()]
-                    .iter()
-                    .zip(&self.values[span]))
-                .map(|(&j, &a)| a * x[j as usize])
-                .sum()
-            })
+        (0..self.n())
+            .map(|i| self.row(i).map(|(j, a)| a * x[j as usize]).sum())
             .collect()
     }
 
     /// The arrays read as an upper triangle, diagonal included.
     #[allow(dead_code, reason = "only the ingest bench stores a triangle")]
-    pub fn upper(&self) -> UpperCsrRef<'_, f64> {
-        UpperCsrRef::new(&self.row_ptrs, &self.col_indices, &self.values, self.n())
+    pub fn upper(&self) -> TriangleCsrRef<'_, f64> {
+        TriangleCsrRef::upper(self.n(), &self.row_ptrs, &self.col_indices, &self.values)
             .expect("valid CSR")
     }
 }
@@ -104,8 +113,7 @@ impl OwnedCsr {
 /// Input checks and reduction belong to the timed build: every caller pays them.
 pub fn build<'a, M>(input: M, config: Config) -> ApproxInverse
 where
-    M: TryInto<Input<'a, f64, u32>>,
-    M::Error: Into<Error>,
+    M: Into<Input<'a, f64, u32>>,
 {
     factorize_with(input, config, ScalingPolicy::default()).expect("factors")
 }

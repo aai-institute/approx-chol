@@ -19,7 +19,7 @@ use super::cycle::Cycle;
 #[test]
 fn csr_chain_whose_row_surplus_outweighs_its_coupling_grounds() {
     let values = [1e200, -1.0, -1.0, 1e200, -1.0, -1.0, 1e-200];
-    let csr = CsrRef::new(&[0u32, 2, 5, 7], &[0, 1, 0, 1, 2, 1, 2], &values, 3).unwrap();
+    let csr = CsrRef::new(3, &[0u32, 2, 5, 7], &[0, 1, 0, 1, 2, 1, 2], &values).unwrap();
     let factor = factorize(csr).unwrap();
     assert_eq!(factor.solve(&[1e200, -1.0, 0.0]).unwrap(), [1.0, 0.0, 0.0]);
     assert!(!floats(&factor).contains(&true));
@@ -59,7 +59,7 @@ fn weak_vertex_solves_as_its_sddm_view(n: u32, edges: &[(u32, u32)]) {
     let gram = factorize(FactorWidth2::new(size, (&a, &x), (&b, &y)).unwrap()).unwrap();
     let dense = matrix(size, &a, &b, &x, &y);
     let (ptrs, columns, values) = dense_csr(&dense);
-    let csr = factorize(CsrRef::new(&ptrs, &columns, &values, size as u32).unwrap()).unwrap();
+    let csr = factorize(CsrRef::new(size, &ptrs, &columns, &values).unwrap()).unwrap();
     let exact = (0..size).map(|i| [1.0, -1.0, 0.5, 2.0][i % 4]);
     let rhs: Vec<f64> = (dense.iter())
         .map(|row| row.iter().zip(exact.clone()).map(|(a, x)| a * x).sum())
@@ -123,7 +123,7 @@ fn centre_surplus_over_band(a: &[Vec<f64>]) -> f64 {
 /// `‖Ax − b‖∞ / (‖A‖∞ ‖x‖∞)` for `x` the dense factor's solve of `b`, which must not float.
 fn backward_error(a: &[Vec<f64>], rhs: &[f64]) -> f64 {
     let (ptrs, columns, values) = dense_csr(a);
-    let csr = CsrRef::new(&ptrs, &columns, &values, a.len() as u32).unwrap();
+    let csr = CsrRef::new(a.len(), &ptrs, &columns, &values).unwrap();
     let factor: ApproxInverse = factorize_with(csr, dense(), ScalingPolicy::default()).unwrap();
     assert!(!only(&factor).floats());
     let x = factor.solve(rhs).unwrap();
@@ -173,7 +173,7 @@ fn at_floor(rows: &[&[f64]]) -> Vec<Vec<f64>> {
 
 fn reduce_error(a: &[Vec<f64>]) -> Error {
     let (ptrs, columns, values) = dense_csr(a);
-    let csr = CsrRef::new(&ptrs, &columns, &values, a.len() as u32).unwrap();
+    let csr = CsrRef::new(a.len(), &ptrs, &columns, &values).unwrap();
     factorize(csr).map(|_: ApproxInverse| ()).unwrap_err()
 }
 
@@ -212,7 +212,7 @@ fn heavy_path_solves_grounded<T: Real>(r: T) {
     let (one, two) = (T::one(), T::one() + T::one());
     let w = r * r;
     let values = [w, -w, -w, w + one, -one, -one, two];
-    let csr = CsrRef::new(&[0u32, 2, 5, 7], &[0, 1, 0, 1, 2, 1, 2], &values, 3).unwrap();
+    let csr = CsrRef::new(3, &[0u32, 2, 5, 7], &[0, 1, 0, 1, 2, 1, 2], &values).unwrap();
     let (x, y) = ([r, one, one], [-r, -one, T::zero()]);
     let gram = FactorWidth2::new(3, (&[0u32, 1, 2], &x), (&[1u32, 2, 0], &y)).unwrap();
     for (label, factor) in [("csr", factorize(csr)), ("gram", factorize(gram))] {
@@ -266,7 +266,7 @@ fn gram_cycle_missing_within_its_tolerance_floats_and_reports(#[values(1e-10, -1
 fn f32_star_just_past_the_band_grounds(#[case] ulps: f32, #[case] floats: bool) {
     let (eps, w) = (f32::EPSILON, 0.75 * f32::EPSILON);
     let values = [1.0 + ulps * eps, -1.0, -w, -1.0, 1.0, -w, w];
-    let csr = CsrRef::new(&[0u32, 3, 5, 7], &[0, 1, 2, 0, 1, 0, 2], &values, 3).unwrap();
+    let csr = CsrRef::new(3, &[0u32, 3, 5, 7], &[0, 1, 2, 0, 1, 0, 2], &values).unwrap();
     let factor: ApproxInverse<f32> = factorize(csr).unwrap();
     assert_eq!(only(&factor).floats(), floats);
 }
@@ -285,8 +285,8 @@ fn near_aliased_slope_floats(
     let at = if last { x.len() - years as usize } else { 0 };
     x[at + 3] += delta;
     let gram = BipartiteFactorWidth2::new(
-        FactorWidth1::new(workers as usize, &rows, Some(&x)).unwrap(),
-        FactorWidth1::new(years as usize, &cols, None).unwrap(),
+        FactorWidth1::valued(workers as usize, &rows, &x).unwrap(),
+        FactorWidth1::new(years as usize, &cols).unwrap(),
     )
     .unwrap();
     let factor = factorize(gram).unwrap();

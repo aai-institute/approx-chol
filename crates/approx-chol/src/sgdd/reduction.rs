@@ -22,9 +22,9 @@ impl<T: Real, I: Index> Reduced<T, I> {
         input: Input<'_, T, J>,
         policy: ScalingPolicy,
     ) -> Result<Self, Error> {
-        Ok(match input.lower() {
+        Ok(match input.0 {
             Lowered::Csr(csr) => of_csr(Canonical::whole(csr)?).reduce(&policy)?,
-            Lowered::UpperCsr(csr) => of_csr(Canonical::upper(csr)?).reduce(&policy)?,
+            Lowered::Triangle(triangle) => of_csr(Canonical::upper(triangle)?).reduce(&policy)?,
             Lowered::FactorWidth2(v) => Self::from_factor_width_2(v, &policy)?,
         })
     }
@@ -459,7 +459,8 @@ mod tests {
             values.extend([-1.0, 1.0]);
             row_ptrs.push(columns.len() as u32);
         }
-        let csr = CsrRef::new(&row_ptrs, &columns, &values, leaves + 1).expect("valid shape");
+        let csr =
+            CsrRef::new(leaves as usize + 1, &row_ptrs, &columns, &values).expect("valid shape");
         let policy = ScalingPolicy::default();
         let unscaled = |_: &SymmetricBlock<'_, f64, u32>| -> Option<scaling::Relaxation<f64>> {
             panic!("dominant within the tolerance, so nothing scales")

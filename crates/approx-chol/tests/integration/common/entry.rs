@@ -1,9 +1,10 @@
 use approx_chol::input::{
-    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
+    BipartiteFactorWidth2, CsrRef, FactorWidth2, Laplacian, Sddm, TriangleCsrRef,
 };
 use approx_chol::{factorize_with, ApproxInverse, Component, Config, Real, ScalingPolicy, Threads};
 use num_traits::{NumCast, PrimInt};
 
+use super::bipartite::side;
 use super::graph::Graph;
 
 /// The input entry points; each reads one [`Graph`] where it [`states`](Entry::states) it.
@@ -182,13 +183,12 @@ impl Entry {
                 let values: Vec<T> = cast_all(&values);
                 match upper {
                     false => {
-                        let csr =
-                            CsrRef::new(&ptrs, &columns, &values, n as u32).expect("valid CSR");
+                        let csr = CsrRef::new(n, &ptrs, &columns, &values).expect("valid CSR");
                         factorize_with(csr, config, ScalingPolicy::default())
                     }
                     true => {
-                        let csr = UpperCsrRef::new(&ptrs, &columns, &values, n as u32)
-                            .expect("valid CSR");
+                        let csr =
+                            TriangleCsrRef::upper(n, &ptrs, &columns, &values).expect("valid CSR");
                         factorize_with(csr, config, ScalingPolicy::default())
                     }
                 }
@@ -222,8 +222,8 @@ impl Entry {
                 // Incidence on a side is `None`, so an unvalued Gram takes its own path.
                 let valued = y.iter().any(|&v| v != 1.0);
                 let y_t: Vec<T> = cast_all(&y);
-                let left = FactorWidth1::new(n_left, &left, None);
-                let right = FactorWidth1::new(n_right, &right, valued.then_some(&y_t[..]));
+                let left = side(n_left, &left, None);
+                let right = side(n_right, &right, valued.then_some(&y_t[..]));
                 let s_t: Vec<T> = w.iter().map(|&w| cast(w.sqrt())).collect();
                 let gram = BipartiteFactorWidth2::scaled(
                     left.expect("valid left factor"),
