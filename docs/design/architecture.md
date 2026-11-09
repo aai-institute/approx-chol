@@ -122,7 +122,8 @@ payloads, apart from the format version where stated, and are committed apart fr
 changes.
 
 0.8.0 is scope O2: the public surface of P5–P8 and P9a on `main`'s current modules, with D6, R6
-and F1, and P1 as far as P5 takes it. P2's module moves, P9b, R1, R1b and R3 follow 0.8.0.
+and F1, and P1 as far as P5 takes it. After 0.8.0: P2's module moves, the rest of P1 and of P3,
+P9b, R1–R5 with R1b, and F2.
 
 ### Inside the parts
 
@@ -140,14 +141,14 @@ and F1, and P1 as far as P5 takes it. P2's module moves, P9b, R1, R1b and R3 fol
 
 | Step | Change | Check | After |
 |---|---|---|---|
-| P1 | Execution: `Threads`, `join`, `fork`, the task grain; no other part calls rayon. `main` has `Threads` and the apply's spread under it; P5 routes the build's rayon sites through `Threads` | every result bit-identical for every budget and in a nested pool | – |
+| P1 | Execution: `Threads`, `join`, `fork`, the task grain; no other part calls rayon. `main` has `Threads` and the apply's spread under it; P5 routes the build's rayon sites through `Threads`; `join`, `fork` and the task grain after 0.8.0 | every result bit-identical for every budget and in a nested pool | – |
 | P2 | Modules moved to the tree below; after 0.8.0 | bit-identical | R1 |
-| P3 | `ApproxInverse` and `Component` with `vertices`, `null_vector`, `clamp`, the clamp owned by its block alone; the per-block solver removed, so one width branch sits at the top, around the components, and a component's kind is apart from its width; `Indexed` removed; within migrated | breaking; format version bumped; within's tests | D4, P1 |
+| P3 | `ApproxInverse` and `Component` with `vertices`, `null_vector`, `clamp`, the clamp owned by its block alone; the per-block solver removed, so one width branch sits at the top, around the components, and a component's kind is apart from its width; `Indexed` removed; within migrated. On `main`: `Component` with `vertices` and `clamp` (#389, #390); `null_vector` and the per-block solver's removal, with `Indexed`'s, after 0.8.0 | breaking; format version bumped; within's tests | D4, P1 |
 | P4 | `MatrixMut`, `ColumnMajor`, `Columns`, `scratch`, `apply`, `apply_with`, `ApplyError`, `LayoutError`; the budget spread over components by size. On `main` by #382, #395, #398, #400 | each column equals its solve alone, bit for bit, at every budget; `apply_with` allocates nothing at `Count(1)` | P3 |
-| P5 | Build surface, in `src/factor/build.rs` until P2 renames it: `Sgdd` and `Complement` with `Threads` and `clamps`, an iterator of `Clamped` handles over the blocks' clamps, no clamp list and no `ClampId`; no other fact before factoring; the build's six direct rayon sites take the budget through `Threads`, part of P1 | interface tests; `Threads::All` keeps today's schedule, bit-identical | P3, D6, R6 |
-| P6 | Persistence: the envelope `(Header, B)`, `Header`, `Scalar` and `HeaderMismatch` public, replacing `FACTOR_FORMAT_VERSION`; one version, none per part; format `0x4143_000E` | round trip; postcard bytes equal the flat `(version, scalar, B)`; version and scalar rejected by name; corrupt payloads rejected | P3 |
+| P5 | Build surface, in `src/factor/build.rs` until P2 renames it: `Sgdd` and `Complement` with `Threads` and `clamps`, an iterator of `Clamped` handles over the blocks' clamps, no clamp list and no `ClampId`; no other fact before factoring; `Indexed` kept, generic over the two reduced types; the build's six direct rayon sites take the budget through `Threads`, part of P1 | interface tests; `Threads::All` keeps today's schedule, bit-identical | D6, R6 |
+| P6 | Persistence: the envelope `(Header, B)`, `Header`, `Scalar` and `HeaderMismatch` public, replacing `FACTOR_FORMAT_VERSION`; one version, none per part; format `0x4143_000E` | round trip; postcard bytes equal the flat `(version, scalar, B)`; version and scalar rejected by name; corrupt payloads rejected | – |
 | P7 | Adapters: faer (row and column CSR, `MatrixMut`, `LinOp`, `BiLinOp`, `Precond`, `BiPrecond`, `From<Par>`), sprs, nalgebra, ndarray; the unimplemented-trait message | per-feature tests | P4, D6 |
-| P8 | Python: `ApproxInverse` a `LinearOperator`, `threads`, `with_threads`, `apply` with `out`; `components`, each with its `vertices`, `null_vector` and `clamp`, no clamp list and no clamp `vertices`; `Config`'s `sampling` and `frustrated`; `InputError` and `BuildError` with their kinds; pickle through postcard, its header read as P6's `Header`; any scipy format through `tocsr()`, a CSC no longer read as its transpose; the checks Rust makes no longer repeated; `factorize_raw` removed | pytest, stubtest, changelog | P3–P6 |
+| P8 | Python: `ApproxInverse` a `LinearOperator`, `threads`, `with_threads`, `apply` with `out`; `components`, each with its `vertices` and `clamp`, `null_vector` with the rest of P3, no clamp list and no clamp `vertices`; `Config`'s `sampling` and `frustrated`; `InputError` and `BuildError` with their kinds; pickle through postcard, its header read as P6's `Header`; any scipy format through `tocsr()`, a CSC no longer read as its transpose; the checks Rust makes no longer repeated; `factorize_raw` removed | pytest, stubtest, changelog | P4–P6 |
 | P9a | The public-surface snapshot: cargo-public-api over all features on a nightly pinned through rustup in `scripts/public-api.sh`, a CI job beside `semver`; every PR that changes the surface regenerates it. Lands first | CI | – |
 | P9b | Visibility per part; the layer and export test, with syn, writing the generated `parts.txt`; after 0.8.0 | CI | P2 |
 
