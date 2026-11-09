@@ -10,7 +10,8 @@ mod partition;
 use super::block::{KeptVertices, ReduceError};
 use crate::input::Canonical;
 use crate::storage::{tally_abs, OffDiagonal, Rows, UpperAdjacency};
-use crate::{Index, Real};
+use crate::threads::task;
+use crate::{Index, Real, Threads};
 pub(super) use assembly::{
     assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, StrictUpperTriangle,
 };
@@ -127,16 +128,18 @@ impl<A, I: Index> Partitioned<A, I> {
         Ok((Cuts { a, position }, components))
     }
 
-    /// The reduction `block` makes of each coupled component, the assembly freed.
+    /// The reduction `block` makes of each coupled component under the budget its task leaves it, the assembly freed.
     pub(super) fn reduced<T: Real, B: Send>(
         self,
-        block: impl Fn(&[I], <A as PrincipalBlocks<T, I>>::Block) -> Result<B, ReduceError> + Sync,
+        threads: Threads,
+        block: impl Fn(&[I], <A as PrincipalBlocks<T, I>>::Block, Threads) -> Result<B, ReduceError>
+            + Sync,
     ) -> Result<Summands<B, I, T>, ReduceError>
     where
         A: PrincipalBlocks<T, I> + LonePivot<T> + Sync,
     {
         let (cuts, components) = self.arrange()?;
-        components.cut(|components| cuts.extract(components, block))
+        components.cut(|components| cuts.extract(components, threads, block))
     }
 }
 
@@ -145,7 +148,9 @@ impl<A, I: Index> Cuts<A, I> {
     pub(super) fn extract<'p, T: Real, B: Send>(
         self,
         components: &'p Components<I, T>,
-        block: impl Fn(&'p [I], <A as PrincipalBlocks<T, I>>::Block) -> Result<B, ReduceError> + Sync,
+        threads: Threads,
+        block: impl Fn(&'p [I], <A as PrincipalBlocks<T, I>>::Block, Threads) -> Result<B, ReduceError>
+            + Sync,
     ) -> Result<Cut<'p, I, T, B>, ReduceError>
     where
         A: PrincipalBlocks<T, I> + Sync,
@@ -156,22 +161,26 @@ impl<A, I: Index> Cuts<A, I> {
             (0, _) => Vec::new(),
             (_, None) => {
                 let whole = components.component(0);
-                vec![block(whole, a.whole(whole))?]
+                vec![block(whole, a.whole(whole), threads)?]
             }
             (_, Some(position)) => {
-                let cut = |k: usize| {
+                let cut = |k: usize, threads| {
                     let vertices = components.component(k);
-                    block(vertices, a.component(vertices, &position))
+                    block(vertices, a.component(vertices, &position), threads)
                 };
                 // About `2^PARALLEL_BITS` vertices a task: waking the pool for less costs more than it saves.
                 let work = components.coupled.iter().map(|c| c.len() as u64).sum();
-                let blocks: Vec<_> = match crate::split(count, work, PARALLEL_BITS) {
-                    Some(per_task) => (0..count)
-                        .into_par_iter()
-                        .with_min_len(per_task)
-                        .map(cut)
-                        .collect(),
-                    None => (0..count).map(cut).collect(),
+                let grain = crate::per_task(count, work, PARALLEL_BITS);
+                let blocks: Vec<_> = match threads.per_task(count, grain) {
+                    Some(per) => {
+                        let nested = threads.within_task(count.div_ceil(per));
+                        (0..count)
+                            .into_par_iter()
+                            .with_min_len(per)
+                            .map(|k| task(|| cut(k, nested)))
+                            .collect()
+                    }
+                    None => (0..count).map(|k| cut(k, threads)).collect(),
                 };
                 // Kept past extraction, an owned assembly raised the Gram peak 11–22%.
                 drop(a);
@@ -295,16 +304,28 @@ impl<I, T, C> Components<I, T, C> {
 }
 
 impl<I: Index, T, B: KeptVertices> Summands<B, I, T> {
-    /// Each block as `f` makes it from its kept vertices and itself, in parallel.
-    pub(super) fn map<C: Send>(mut self, f: impl Fn(&[I], B) -> C + Sync) -> Summands<C, I, T>
+    /// Each block as `f` makes it from its kept vertices and itself, in parallel within `threads`.
+    pub(super) fn map<C: Send>(
+        mut self,
+        threads: Threads,
+        f: impl Fn(&[I], B) -> C + Sync,
+    ) -> Summands<C, I, T>
     where
         B: Send,
     {
         let kept: Vec<_> = ranges(&self.coupled).collect();
         let vertices = &self.vertices;
-        let coupled = (std::mem::take(&mut self.coupled).into_par_iter().zip(kept))
-            .map(|(block, kept)| f(&vertices[kept], block))
-            .collect();
+        let blocks = std::mem::take(&mut self.coupled);
+        let map = |(block, kept): (B, std::ops::Range<usize>)| f(&vertices[kept], block);
+        let coupled = match threads.per_task(blocks.len(), 1) {
+            Some(per) => blocks
+                .into_par_iter()
+                .zip(kept)
+                .with_min_len(per)
+                .map(|item| task(|| map(item)))
+                .collect(),
+            None => blocks.into_iter().zip(kept).map(map).collect(),
+        };
         self.with_coupled(coupled)
     }
 

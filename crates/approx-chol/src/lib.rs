@@ -104,12 +104,14 @@ pub fn factorize_complement<T: Real, I: PrimInt + Sync>(
 ) -> Result<ApproxInverse<T>, Error> {
     Ok(match fits_u32(input.n()) {
         true => ApproxInverse::build(
-            Complement::<T, u32>::reduce_onto(input, kept, scaling)?,
+            Complement::<T, u32>::reduce_onto(input, kept, scaling, Threads::All)?,
             &config,
+            Threads::All,
         ),
         false => ApproxInverse::build(
-            Complement::<T, u64>::reduce_onto(input, kept, scaling)?,
+            Complement::<T, u64>::reduce_onto(input, kept, scaling, Threads::All)?,
             &config,
+            Threads::All,
         ),
     })
 }
@@ -139,16 +141,16 @@ impl<T: Real> Sgdd<T> {
     {
         let input = input.into();
         Ok(Self(match fits_u32(input.n()) {
-            true => Indexed::U32(Reduced::reduce(input, scaling)?),
-            false => Indexed::U64(Reduced::reduce(input, scaling)?),
+            true => Indexed::U32(Reduced::reduce(input, scaling, Threads::All)?),
+            false => Indexed::U64(Reduced::reduce(input, scaling, Threads::All)?),
         }))
     }
 
     /// Factors each block in parallel; clone first to factor again under another `config`.
     pub fn factor(self, config: &Config) -> ApproxInverse<T> {
         match self.0 {
-            Indexed::U32(summands) => ApproxInverse::build(summands, config),
-            Indexed::U64(summands) => ApproxInverse::build(summands, config),
+            Indexed::U32(summands) => ApproxInverse::build(summands, config, Threads::All),
+            Indexed::U64(summands) => ApproxInverse::build(summands, config, Threads::All),
         }
     }
 }
@@ -200,12 +202,6 @@ index!(u64);
 fn per_task(units: usize, work: u64, bits: u32) -> usize {
     let per = ((units as u64) << bits).div_ceil(work.max(1));
     usize::try_from(per).unwrap_or(usize::MAX).max(1)
-}
-
-/// [`per_task`] where a setup loop splits: `None` when one task takes every unit or the pool has one thread.
-fn split(units: usize, work: u64, bits: u32) -> Option<usize> {
-    let per = per_task(units, work, bits);
-    (per < units && rayon::current_num_threads() > 1).then_some(per)
 }
 
 /// Finite, and zero or at least `MIN_POSITIVE/EPSILON`, so no product turns subnormal (#163).

@@ -268,9 +268,11 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
             (rows.row(i)).fold(0.0, |sum, (j, &a)| sum + widen(a.abs()) * x[j])
         };
         (out.par_chunks_mut(per).enumerate()).for_each(|(task, out)| {
-            (task * per..)
-                .zip(out)
-                .for_each(|(i, out)| *out = sum(lower, i) + sum(&self.rows, i));
+            crate::threads::task(|| {
+                (task * per..)
+                    .zip(out)
+                    .for_each(|(i, out)| *out = sum(lower, i) + sum(&self.rows, i));
+            });
         });
     }
 }

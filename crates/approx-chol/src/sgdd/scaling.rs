@@ -5,7 +5,7 @@ use normalized::Normalized;
 use perron::InverseIteration;
 
 use crate::storage::OffDiagonal;
-use crate::{narrow, widen, Index, Real};
+use crate::{narrow, widen, Index, Real, Threads};
 
 /// Certification policy for a dominance scaling; a deficit past rounding left at hand-over is clamped and reported.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -212,8 +212,9 @@ pub(super) fn relax<T: Real, I: Index>(
     off_diagonal: &OffDiagonal<T, I>,
     diagonal: &[T],
     policy: &ScalingPolicy,
+    threads: Threads,
 ) -> Option<Relaxation<T>> {
-    let n = Normalized::new(off_diagonal, diagonal);
+    let n = Normalized::new(off_diagonal, diagonal, threads);
     // A ratio over `k` positive terms rounds by `(k + 3)ε`: no bracket closes tighter.
     let rounding =
         (off_diagonal.degrees().into_iter().max().unwrap_or(0) + 3) as f64 * f64::EPSILON;

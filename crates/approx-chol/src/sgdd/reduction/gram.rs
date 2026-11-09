@@ -8,7 +8,7 @@ use crate::sgdd::block::{Grounding, IrreducibleBlock, ReduceError};
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Cut, SymmetricBlock};
 use crate::sgdd::scaling::{self, ScalingPolicy};
 use crate::sgdd::{Components, Reduced};
-use crate::{narrow, widen, Index, Real};
+use crate::{narrow, widen, Index, Real, Threads};
 
 impl<T: Real, I: Index> Reduced<T, I> {
     /// `V` with values: scaled by its null vectors on demand, folded blocks dropping their rows for a pass over `V` that decides floating.
@@ -16,10 +16,11 @@ impl<T: Real, I: Index> Reduced<T, I> {
         cells: S,
         v: FactorWidth2<'_, T, J>,
         policy: &ScalingPolicy,
+        threads: Threads,
     ) -> Result<Self, ReduceError> {
         let (cuts, components) = assemble_values::<T, J, I, S>(cells, v)?.arrange()?;
         components.cut(|components| {
-            let live = cuts.extract(components, |vertices, entries| {
+            let live = cuts.extract(components, threads, |vertices, entries, _| {
                 Ok(SymmetricBlock { vertices, entries })
             })?;
             // Built by the first block not already dominant: a dominant input pays only once a block's band fails.
@@ -38,6 +39,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
                                 &a.entries.off_diagonal,
                                 &a.entries.rows.diagonal,
                                 policy,
+                                threads,
                             )
                         })
                 })
