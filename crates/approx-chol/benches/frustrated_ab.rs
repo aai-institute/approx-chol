@@ -95,6 +95,7 @@ fn nnz_l(factor: &ApproxInverse) -> usize {
             Some((kind, pinned)) if ["Folded", "Cover"].contains(&kind.as_str()) => {
                 steps(&pinned[0])
             }
+            Some((kind, signed)) if kind == "Signed" => steps(signed),
             other => panic!("a triangular factor, not {other:?}"),
         };
         count += match &block["elimination"] {
