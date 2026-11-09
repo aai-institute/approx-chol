@@ -8,7 +8,7 @@ mod assembly;
 mod partition;
 
 use super::block::{KeptVertices, ReduceError};
-use crate::input::{Canonical, CsrError};
+use crate::input::Canonical;
 use crate::storage::{tally_abs, OffDiagonal, Rows, UpperAdjacency};
 use crate::{Index, Real};
 pub(super) use assembly::{
@@ -23,24 +23,20 @@ pub(super) struct Partitioned<A, I> {
     partition: Partition<I>,
 }
 
-/// Unions the pattern in the walk that checks symmetry and range.
+/// Unions each nonzero above the diagonal: a checked `A` stored whole mirrors them below.
 pub(super) fn of_csr<T: Real, J: PrimInt, I: Index>(
     csr: Canonical<'_, T, J>,
-) -> Result<Partitioned<Canonical<'_, T, J>, I>, CsrError> {
+) -> Partitioned<Canonical<'_, T, J>, I> {
     let mut sets = UnionFind::<I>::new(csr.n());
-    csr.walk(|i, j, _| sets.union(i, j))?;
+    for i in 0..csr.n() {
+        for (j, a) in csr.above(i) {
+            if a != T::zero() {
+                sets.union(i, j);
+            }
+        }
+    }
     let partition = sets.into_partition();
-    Ok(Partitioned { a: csr, partition })
-}
-
-/// Unions the pattern in the walk that checks range: upper storage has no mirror to check.
-pub(super) fn of_upper<T: Real, J: PrimInt, I: Index>(
-    csr: Canonical<'_, T, J>,
-) -> Result<Partitioned<Canonical<'_, T, J>, I>, CsrError> {
-    let mut sets = UnionFind::<I>::new(csr.n());
-    csr.walk_upper(|i, j, _| sets.union(i, j))?;
-    let partition = sets.into_partition();
-    Ok(Partitioned { a: csr, partition })
+    Partitioned { a: csr, partition }
 }
 
 /// The pivot of a vertex no entry couples: its diagonal, or its surplus where no diagonal is stored.
@@ -355,7 +351,7 @@ impl<T: Real, J: PrimInt> Canonical<'_, T, J> {
         let mut diagonal = Vec::with_capacity(vertices.len());
         let mut ptrs = Vec::with_capacity(vertices.len() + 1);
         ptrs.push(0);
-        let entries = vertices.iter().map(|v| self.upper_len(v.index())).sum();
+        let entries = vertices.iter().map(|v| self.above(v.index()).len()).sum();
         let (mut indices, mut values) = (Vec::with_capacity(entries), Vec::with_capacity(entries));
         // `Σ_j |a_ij|` tallied while the row is at hand, saving `abs_row_sums`'s pass.
         let mut abs = vec![0.0; vertices.len()];

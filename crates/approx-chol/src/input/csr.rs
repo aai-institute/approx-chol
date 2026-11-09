@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::ops::Range;
 
 use num_traits::{cast, PrimInt};
 
@@ -190,16 +191,75 @@ impl core::fmt::Display for IndexKind {
     }
 }
 
-/// Strictly ascending columns per row; scipy already emits them, so only rare input pays for a copy.
-pub(crate) struct Canonical<'a, T: Clone, I: Clone> {
+/// Strictly ascending columns per row, all in range, values not yet read; scipy already emits them, so only rare input pays for a copy.
+struct Unchecked<'a, T: Clone, I: Clone> {
     row_ptrs: Cow<'a, [I]>,
     col_indices: Cow<'a, [I]>,
     values: Cow<'a, [T]>,
 }
 
+/// A checked symmetric `A`: canonical rows, every value in range, symmetric by its mirrors or by upper storage.
+pub(crate) struct Canonical<'a, T: Clone, I: Clone>(Unchecked<'a, T, I>);
+
 impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
-    /// Reads no value, sparing a stream: [`walk`](Self::walk) checks each as it reads it.
-    pub(crate) fn of(csr: CsrRef<'a, T, I>) -> Result<Self, CsrError> {
+    /// `A` stored whole: every value in range, each nonzero's mirror within 8 ulps.
+    pub(crate) fn whole(csr: CsrRef<'a, T, I>) -> Result<Self, CsrError> {
+        let unchecked = Unchecked::of(csr)?;
+        unchecked.check_mirrors()?;
+        Ok(Self(unchecked))
+    }
+
+    /// `A` stored by its upper triangle: every value in range, no nonzero below the diagonal.
+    pub(crate) fn upper(csr: CsrRef<'a, T, I>) -> Result<Self, CsrError> {
+        let unchecked = Unchecked::of(csr)?;
+        unchecked.check_upper()?;
+        Ok(Self(unchecked))
+    }
+
+    pub(crate) fn n(&self) -> usize {
+        self.0.n()
+    }
+
+    /// Row `i`'s canonical entries, stored zeros included.
+    pub(crate) fn row(&self, i: usize) -> impl Iterator<Item = (usize, T)> + '_ {
+        let (row_ptrs, _, _) = self.0.arrays();
+        self.0.entries(index(row_ptrs[i])..index(row_ptrs[i + 1]))
+    }
+
+    /// Row `i`'s span above its diagonal, found from the row's end: reads those columns and one more.
+    fn above_span(&self, i: usize) -> Range<usize> {
+        let (row_ptrs, col_indices, _) = self.0.arrays();
+        let end = index(row_ptrs[i + 1]);
+        let row = &col_indices[index(row_ptrs[i])..end];
+        end - row.iter().rev().take_while(|&&j| index(j) > i).count()..end
+    }
+
+    /// Row `i`'s entries above its diagonal, stored zeros included.
+    pub(crate) fn above(&self, i: usize) -> impl ExactSizeIterator<Item = (usize, T)> + '_ {
+        self.0.entries(self.above_span(i))
+    }
+
+    /// Row `i`'s diagonal, zero when not stored, and its entries above it, stored zeros included.
+    pub(crate) fn upper_row(
+        &self,
+        i: usize,
+    ) -> (T, impl ExactSizeIterator<Item = (usize, T)> + '_) {
+        let (row_ptrs, col_indices, values) = self.0.arrays();
+        let above = self.above_span(i);
+        let at = above.start.checked_sub(1);
+        let stored = at.filter(|&k| k >= index(row_ptrs[i]) && index(col_indices[k]) == i);
+        // A stored `−0` reads as absent, as it couples nothing.
+        let diagonal = match stored.map(|k| values[k]) {
+            Some(d) if d != T::zero() => d,
+            _ => T::zero(),
+        };
+        (diagonal, self.0.entries(above))
+    }
+}
+
+impl<'a, T: Real, I: PrimInt> Unchecked<'a, T, I> {
+    /// Reads no value, sparing a stream, unless it rewrites: the checks after it read each.
+    fn of(csr: CsrRef<'a, T, I>) -> Result<Self, CsrError> {
         match is_canonical(&csr)? {
             true => Ok(Self {
                 row_ptrs: Cow::Borrowed(csr.row_ptrs),
@@ -210,7 +270,7 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
         }
     }
 
-    pub(crate) fn n(&self) -> usize {
+    fn n(&self) -> usize {
         self.row_ptrs.len() - 1
     }
 
@@ -218,43 +278,14 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
         (&self.row_ptrs, &self.col_indices, &self.values)
     }
 
-    /// Row `i`'s canonical entries, stored zeros included.
-    pub(crate) fn row(&self, i: usize) -> impl Iterator<Item = (usize, T)> + '_ {
-        let (row_ptrs, col_indices, values) = self.arrays();
-        let span = index(row_ptrs[i])..index(row_ptrs[i + 1]);
+    /// The entries in `span` of the arrays, stored zeros included.
+    fn entries(&self, span: Range<usize>) -> impl ExactSizeIterator<Item = (usize, T)> + '_ {
+        let (_, col_indices, values) = self.arrays();
         (col_indices[span.clone()].iter().map(|&j| index(j))).zip(values[span].iter().copied())
     }
 
-    /// Row `i`'s stored entries above its diagonal, stored zeros included.
-    pub(crate) fn upper_len(&self, i: usize) -> usize {
-        let (row_ptrs, col_indices, _) = self.arrays();
-        let row = &col_indices[index(row_ptrs[i])..index(row_ptrs[i + 1])];
-        row.len() - (row.iter().position(|&j| index(j) > i)).unwrap_or(row.len())
-    }
-
-    /// Row `i`'s diagonal, zero when not stored, and its entries above it, stored zeros included.
-    pub(crate) fn upper_row(
-        &self,
-        i: usize,
-    ) -> (T, impl ExactSizeIterator<Item = (usize, T)> + '_) {
-        let (row_ptrs, col_indices, values) = self.arrays();
-        let span = index(row_ptrs[i])..index(row_ptrs[i + 1]);
-        let (columns, values) = (&col_indices[span.clone()], &values[span]);
-        let below = (columns.iter().position(|&j| index(j) >= i)).unwrap_or(columns.len());
-        let stored = columns.get(below).is_some_and(|&j| index(j) == i);
-        // A stored `−0` reads as absent, as it couples nothing.
-        let diagonal = match stored && values[below] != T::zero() {
-            true => values[below],
-            false => T::zero(),
-        };
-        let above = below + usize::from(stored);
-        let upper =
-            (columns[above..].iter().map(|&j| index(j))).zip(values[above..].iter().copied());
-        (diagonal, upper)
-    }
-
-    /// Each nonzero `(i, j)`, `i < j`, mirrors checked by a per-row cursor (binary search: +6-15% build).
-    pub(crate) fn walk(&self, mut edge: impl FnMut(usize, usize, T)) -> Result<(), CsrError> {
+    /// Each nonzero `(i, j)`, `i < j`, its mirror found by a per-row cursor (binary search: +6-15% build).
+    fn check_mirrors(&self) -> Result<(), CsrError> {
         let (row_ptrs, col_indices, values) = self.arrays();
         let mut cursors = row_ptrs[..self.n()].to_vec();
         for row in 0..self.n() {
@@ -272,7 +303,7 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
                 if !in_range(upper) {
                     return Err(CsrError::OutOfRange { row });
                 }
-                // Duplicates can coalesce to exactly zero, which contributes no edge.
+                // Duplicates can coalesce to exactly zero, which needs no mirror.
                 if upper == T::zero() {
                     continue;
                 }
@@ -280,7 +311,6 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
                 if !approximately_equal(upper, lower) {
                     return Err(CsrError::NotSymmetric { row });
                 }
-                edge(row, col, upper);
             }
         }
         Ok(())
@@ -316,8 +346,8 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
         Ok(found)
     }
 
-    /// Each nonzero `(i, j)`, `i < j`, of upper storage, symmetric by shape: no mirror is found, and a nonzero below the diagonal is rejected.
-    pub(crate) fn walk_upper(&self, mut edge: impl FnMut(usize, usize, T)) -> Result<(), CsrError> {
+    /// Upper storage is symmetric by shape: no mirror is found, and a nonzero below the diagonal is rejected.
+    fn check_upper(&self) -> Result<(), CsrError> {
         let (row_ptrs, col_indices, values) = self.arrays();
         for row in 0..self.n() {
             let span = index(row_ptrs[row])..index(row_ptrs[row + 1]);
@@ -325,12 +355,7 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
                 if !in_range(value) {
                     return Err(CsrError::OutOfRange { row });
                 }
-                let col = index(col);
-                if col > row {
-                    if value != T::zero() {
-                        edge(row, col, value);
-                    }
-                } else if col < row && value != T::zero() {
+                if index(col) < row && value != T::zero() {
                     return Err(CsrError::BelowDiagonal { row });
                 }
             }
@@ -383,7 +408,7 @@ fn column_error<I: PrimInt>(position: usize, col: I, n: usize) -> CsrError {
 /// Only non-canonical input pays this copy, in its own index type.
 fn rewrite<'a, T: Real, I: PrimInt>(
     csr: &CsrRef<'_, T, I>,
-) -> Result<Canonical<'a, T, I>, CsrError> {
+) -> Result<Unchecked<'a, T, I>, CsrError> {
     let nnz = csr.col_indices.len();
     let mut row_ptrs = Vec::with_capacity(csr.row_ptrs.len());
     let mut col_indices = Vec::with_capacity(nnz);
@@ -413,7 +438,7 @@ fn rewrite<'a, T: Real, I: PrimInt>(
         // At most the caller's own `nnz`, which its last row pointer already holds in `I`.
         row_ptrs.push(I::from(col_indices.len()).expect("a coalesced count fits the input's type"));
     }
-    Ok(Canonical {
+    Ok(Unchecked {
         row_ptrs: Cow::Owned(row_ptrs),
         col_indices: Cow::Owned(col_indices),
         values: Cow::Owned(values),

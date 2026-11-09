@@ -8,8 +8,7 @@ use num_traits::PrimInt;
 use super::block::{Balance, BlockComplement, Congruent, Grounding, IrreducibleBlock, ReduceError};
 use super::congruence::Congruence;
 use super::decomposition::{
-    of_csr, of_upper, AdjacencyLayout, Biadjacency, Partitioned, RowSums, StrictUpperTriangle,
-    SymmetricBlock,
+    of_csr, AdjacencyLayout, Biadjacency, Partitioned, RowSums, StrictUpperTriangle, SymmetricBlock,
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy};
 use super::{diagonal_in_range, Complement, Reduced};
@@ -24,9 +23,8 @@ impl<T: Real, I: Index> Reduced<T, I> {
         policy: ScalingPolicy,
     ) -> Result<Self, Error> {
         Ok(match input.lower() {
-            // Symmetry is checked in the walk that unions the pattern; upper storage has no mirror.
-            Lowered::Csr(csr) => of_csr(Canonical::of(csr)?)?.reduce(&policy)?,
-            Lowered::UpperCsr(csr) => of_upper(Canonical::of(csr)?)?.reduce(&policy)?,
+            Lowered::Csr(csr) => of_csr(Canonical::whole(csr)?).reduce(&policy)?,
+            Lowered::UpperCsr(csr) => of_csr(Canonical::upper(csr)?).reduce(&policy)?,
             Lowered::FactorWidth2(v) => Self::from_factor_width_2(v, &policy)?,
         })
     }
@@ -408,8 +406,8 @@ mod tests {
         let unscaled = |_: &SymmetricBlock<'_, f64, u32>| -> Option<scaling::Relaxation<f64>> {
             panic!("dominant within the tolerance, so nothing scales")
         };
-        let partitioned = of_csr::<f64, u32, u32>(Canonical::of(csr).expect("canonical"));
-        let summands = (partitioned.expect("symmetric"))
+        let partitioned = of_csr::<f64, u32, u32>(Canonical::whole(csr).expect("symmetric"));
+        let summands = partitioned
             .reduced(|vertices, entries| {
                 match (SymmetricBlock { vertices, entries }).reduce(&policy, unscaled)? {
                     Settling::Pending(Folded {
