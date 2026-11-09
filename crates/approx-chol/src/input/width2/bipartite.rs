@@ -4,8 +4,8 @@ use std::ops::Range;
 
 use num_traits::PrimInt;
 
-use super::error::{below, check, length, ViewError};
 use super::{BipartiteColumns, Columns, FactorWidth2};
+use crate::input::error::{finite, indices, length, InputError};
 use crate::Real;
 
 /// One side of `V`, with at most one nonzero per column: `values[k]` at `rows[k]`, `1` for `None`.
@@ -18,13 +18,9 @@ pub struct FactorWidth1<'a, T, I = u32> {
 
 impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
     /// `n` rows; each column's row is below `n`, and values, if any, are one per column.
-    pub fn new(n: usize, rows: &'a [I], values: Option<&'a [T]>) -> Result<Self, ViewError> {
-        values.map_or(Ok(()), |values| length(rows.len(), values.len()))?;
-        check(
-            rows,
-            |row| below(n, row),
-            |entry| ViewError::IndexOutOfRange { entry },
-        )?;
+    pub fn new(n: usize, rows: &'a [I], values: Option<&'a [T]>) -> Result<Self, InputError> {
+        values.map_or(Ok(()), |values| length("values", rows.len(), values.len()))?;
+        indices("rows", n, rows)?;
         Ok(Self { n, rows, values })
     }
 }
@@ -42,8 +38,8 @@ impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
     pub fn new(
         left: FactorWidth1<'a, T, I>,
         right: FactorWidth1<'a, T, I>,
-    ) -> Result<Self, ViewError> {
-        length(left.rows.len(), right.rows.len())?;
+    ) -> Result<Self, InputError> {
+        length("right", left.rows.len(), right.rows.len())?;
         Ok(Self::of(left, right, None))
     }
 
@@ -52,14 +48,10 @@ impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
         left: FactorWidth1<'a, T, I>,
         right: FactorWidth1<'a, T, I>,
         s: &'a [T],
-    ) -> Result<Self, ViewError> {
-        length(left.rows.len(), right.rows.len())?;
-        length(left.rows.len(), s.len())?;
-        check(
-            s,
-            |s: T| s.is_finite(),
-            |entry| ViewError::InvalidScale { entry },
-        )?;
+    ) -> Result<Self, InputError> {
+        length("right", left.rows.len(), right.rows.len())?;
+        length("s", left.rows.len(), s.len())?;
+        finite("s", s)?;
         Ok(Self::of(left, right, Some(s)))
     }
 

@@ -160,7 +160,7 @@ def _f64(*xs):
             _u32(0, 1, 0, 1),
             _f64(2, -1, -1),
             2,
-            "col_indices and values have different lengths (4 != 3)",
+            "values has length 3, expected 4",
             id="csr_new",
         ),
         pytest.param(
@@ -191,7 +191,7 @@ def test_factorize_names_the_defect_of_a_scipy_matrix():
     with pytest.raises(ValueError, match="^row 0 has an entry with no equal mirror$"):
         approx_chol.factorize(asymmetric)
 
-    with pytest.raises(ValueError, match="^matrix must be square$"):
+    with pytest.raises(ValueError, match=r"^matrix is not square \(2x3\)$"):
         approx_chol.factorize(sp.csr_matrix(np.ones((2, 3))))
 
 
@@ -229,9 +229,7 @@ def test_duck_typed_factorize_validates_indices_and_dimension():
         np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64),
         (2, 2),
     )
-    with pytest.raises(
-        ValueError, match="^column index out of bounds at position 1: 4294967297 >= 2$"
-    ):
+    with pytest.raises(ValueError, match=r"^col_indices\[1\] is out of range$"):
         approx_chol.factorize(too_large_idx)
 
     negative_idx = MatrixLike(
@@ -240,10 +238,7 @@ def test_duck_typed_factorize_validates_indices_and_dimension():
         np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64),
         (2, 2),
     )
-    with pytest.raises(
-        ValueError,
-        match="^col_index value at position 1 cannot be represented as usize$",
-    ):
+    with pytest.raises(ValueError, match=r"^col_indices\[1\] is out of range$"):
         approx_chol.factorize(negative_idx)
 
     oversized_dim = MatrixLike(
@@ -252,7 +247,7 @@ def test_duck_typed_factorize_validates_indices_and_dimension():
         np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64),
         (2**32 + 1, 2**32 + 1),
     )
-    with pytest.raises(ValueError, match="matrix dimension exceeds u32::MAX"):
+    with pytest.raises(ValueError, match="^dimension 4294967297 exceeds u32::MAX$"):
         approx_chol.factorize(oversized_dim)
 
 

@@ -1,4 +1,4 @@
-use approx_chol::input::{CsrError, CsrRef, IndexKind, UpperCsrRef};
+use approx_chol::input::{CsrRef, InputError, UpperCsrRef};
 use approx_chol::{factorize, ApproxInverse, Error};
 use num_traits::PrimInt;
 use proptest::prelude::*;
@@ -60,7 +60,7 @@ fn shape_errors<I: PrimInt + std::fmt::Debug>(
     row_ptrs: &[I],
     col_indices: &[I],
     values: &[f64],
-) -> [CsrError; 2] {
+) -> [InputError; 2] {
     let n = n as u32;
     let full = CsrRef::new(row_ptrs, col_indices, values, n).expect_err("full storage must fail");
     let upper =
@@ -101,7 +101,7 @@ proptest! {
         (mut row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         row_ptrs.pop();
-        let expected = CsrError::RowPtrsLenMismatch { expected: n + 1, got: n };
+        let expected = InputError::LengthMismatch { parameter: "row_ptrs", expected: n + 1, found: n };
         prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
@@ -110,7 +110,7 @@ proptest! {
         (row_ptrs, col_indices, mut values, n) in laplacian_csr_strategy()
     ) {
         values.pop();
-        let expected = CsrError::ColIndicesValuesLenMismatch { col_indices_len: col_indices.len(), values_len: values.len() };
+        let expected = InputError::LengthMismatch { parameter: "values", expected: col_indices.len(), found: values.len() };
         prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
@@ -119,7 +119,7 @@ proptest! {
         (row_ptrs, mut col_indices, values, n) in laplacian_csr_strategy()
     ) {
         col_indices.pop();
-        let expected = CsrError::ColIndicesValuesLenMismatch { col_indices_len: col_indices.len(), values_len: values.len() };
+        let expected = InputError::LengthMismatch { parameter: "values", expected: col_indices.len(), found: values.len() };
         prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
@@ -129,7 +129,7 @@ proptest! {
         (mut row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         row_ptrs[0] = 1;
-        let expected = CsrError::RowPtrsMustStartAtZero { got: 1 };
+        let expected = InputError::RowPtrs { row: 0 };
         prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
@@ -138,7 +138,7 @@ proptest! {
         (mut row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         row_ptrs[n] -= 1;
-        let expected = CsrError::RowPtrsEndMismatchNnz { row_ptr_end: row_ptrs[n] as usize, nnz: col_indices.len() };
+        let expected = InputError::LengthMismatch { parameter: "col_indices", expected: row_ptrs[n] as usize, found: col_indices.len() };
         prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
@@ -148,17 +148,17 @@ proptest! {
     ) {
         prop_assume!(n >= 2);
         row_ptrs[1] = row_ptrs[2] + 1;
-        let expected = CsrError::RowPtrsNotNonDecreasing { row: 1, prev: row_ptrs[1] as usize, next: row_ptrs[2] as usize };
+        let expected = InputError::RowPtrs { row: 1 };
         prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
     #[test]
-    fn a_negative_row_pointer_is_not_representable_at_its_position(
+    fn a_negative_last_row_pointer_is_out_of_range_at_its_position(
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         let (mut row_ptrs, col_indices) = (cast_all::<u32, i64>(&row_ptrs), cast_all::<u32, i64>(&col_indices));
         row_ptrs[n] = -1;
-        let expected = CsrError::IndexNotRepresentableAsUsize { kind: IndexKind::RowPtr, position: n };
+        let expected = InputError::IndexOutOfRange { parameter: "row_ptrs", entry: n };
         prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
@@ -167,18 +167,39 @@ proptest! {
         (row_ptrs, mut col_indices, values, n) in laplacian_csr_strategy()
     ) {
         col_indices[0] = n as u32;
-        let expected = Error::InvalidCsr(CsrError::ColumnIndexOutOfBounds { position: 0, col: n, n });
+        let expected = Error::Input(InputError::IndexOutOfRange { parameter: "col_indices", entry: 0 });
         prop_assert_eq!(column_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
     #[test]
-    fn a_negative_column_is_not_representable_at_its_position(
+    fn a_negative_column_is_out_of_range_at_its_position(
         (row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         let (row_ptrs, mut col_indices) = (cast_all::<u32, i64>(&row_ptrs), cast_all::<u32, i64>(&col_indices));
         let last = col_indices.len() - 1;
         col_indices[last] = -1;
-        let expected = Error::InvalidCsr(CsrError::IndexNotRepresentableAsUsize { kind: IndexKind::ColIndex, position: last });
+        let expected = Error::Input(InputError::IndexOutOfRange { parameter: "col_indices", entry: last });
         prop_assert_eq!(column_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
+}
+
+#[rstest::rstest]
+#[case::negative_middle(CsrRef::<f64, i64>::new(&[0, -1, 2], &[0, 1], &[1.0, 1.0], 2).err(), 1)]
+#[case::negative_first(CsrRef::<f64, i64>::new(&[-1, 1, 2], &[0, 1], &[1.0, 1.0], 2).err(), 0)]
+#[case::past_usize_last(CsrRef::<f64, u128>::new(&[0, u128::MAX], &[0], &[1.0], 1).err(), 1)]
+fn a_row_pointer_past_usize_is_out_of_range_at_its_position(
+    #[case] error: Option<InputError>,
+    #[case] entry: usize,
+) {
+    let expected = InputError::IndexOutOfRange {
+        parameter: "row_ptrs",
+        entry,
+    };
+    assert_eq!(error, Some(expected));
+}
+
+#[test]
+fn a_decreasing_pair_of_valid_pointers_is_out_of_order_at_the_first() {
+    let error = CsrRef::<f64>::new(&[0, 2, 1, 2], &[0, 1], &[1.0, 1.0], 3).err();
+    assert_eq!(error, Some(InputError::RowPtrs { row: 1 }));
 }

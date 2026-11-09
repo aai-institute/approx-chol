@@ -1,6 +1,6 @@
 use approx_chol::{
-    ApplyError, ApproxInverse, Config, CoverSurplus, CsrRef, FrustratedRoute, MemBuffer, MemStack,
-    Sampling, ScalingPolicy, Sgdd, Threads,
+    ApplyError, ApproxInverse, Config, CoverSurplus, CsrRef, FrustratedRoute, InputError,
+    MemBuffer, MemStack, Sampling, ScalingPolicy, Sgdd, Threads,
 };
 use num_traits::PrimInt;
 use numpy::{
@@ -455,7 +455,11 @@ fn factorize(
 ) -> PyResult<PyApproxInverse> {
     let (n, columns) = matrix.getattr("shape")?.extract::<(usize, usize)>()?;
     if n != columns {
-        return Err(value_error("matrix must be square"));
+        let error = InputError::NotSquare {
+            rows: n,
+            cols: columns,
+        };
+        return Err(error_to_py(&error));
     }
     let np = py.import("numpy")?;
     let data = as_1d(&np, &matrix.getattr("data")?, "data", Column::Value)?;
@@ -486,7 +490,7 @@ impl CsrArrays<'_> {
     ) -> PyResult<PyApproxInverse> {
         // Also keeps `CsrRef::new` from overflowing `n + 1`.
         if u32::try_from(self.n).is_err() {
-            return Err(value_error("matrix dimension exceeds u32::MAX"));
+            return Err(error_to_py(&InputError::DimensionTooLarge { n: self.n }));
         }
         let dtypes = (
             self.indptr.getattr("dtype")?,

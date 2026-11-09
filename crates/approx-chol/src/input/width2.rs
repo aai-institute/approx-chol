@@ -1,14 +1,13 @@
 //! The factor-width-2 inputs: `A = V W Vᵀ + diag(s)`, column `k` of `V` joining `a[k]` and `b[k]`.
 
 pub(super) mod bipartite;
-pub(super) mod error;
 pub(super) mod laplacian;
 pub(super) mod weights;
 
 use num_traits::PrimInt;
 
-use self::error::{check_ends, length, ViewError};
 use self::weights::Weight;
+use super::error::{check_ends, length, InputError};
 use super::index;
 use crate::{widen, Index, Real};
 
@@ -58,10 +57,12 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         n: usize,
         (a, x): (&'a [I], &'a [T]),
         (b, y): (&'a [I], &'a [T]),
-    ) -> Result<Self, ViewError> {
-        length(a.len(), x.len())?;
-        length(a.len(), y.len())?;
-        check_ends(n, a, b)?;
+    ) -> Result<Self, InputError> {
+        length("x", a.len(), x.len())?;
+        length("y", a.len(), y.len())?;
+        check_ends(n, ("a", a), ("b", b), |column| InputError::RepeatedRow {
+            column,
+        })?;
         let columns = Columns::FactorWidth2 { n, x, y };
         Ok(Self { a, b, columns })
     }

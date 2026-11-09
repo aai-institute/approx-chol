@@ -1,6 +1,7 @@
 //! What the caller states about `A`: a CSR matrix, a Laplacian, an SDDM or a factor-width-2 matrix.
 
 mod csr;
+mod error;
 #[cfg(any(feature = "sprs", feature = "faer"))]
 mod interop;
 mod width2;
@@ -8,9 +9,9 @@ mod width2;
 use num_traits::PrimInt;
 
 pub(crate) use csr::Canonical;
-pub use csr::{CsrError, CsrRef, IndexKind, OwnedCsr, UpperCsrRef};
+pub use csr::{CsrRef, OwnedCsr, UpperCsrRef};
+pub use error::InputError;
 pub use width2::bipartite::{BipartiteFactorWidth2, FactorWidth1, Side};
-pub use width2::error::ViewError;
 pub use width2::laplacian::{Laplacian, Sddm};
 pub(crate) use width2::Column;
 pub use width2::FactorWidth2;
