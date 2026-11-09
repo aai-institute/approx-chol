@@ -56,12 +56,21 @@ impl Default for ScalingPolicy {
     }
 }
 
+#[cfg(feature = "serde")]
+fn violation<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    let violation = <f64 as serde::Deserialize>::deserialize(deserializer)?;
+    (violation.is_finite() && violation > 0.0)
+        .then_some(violation)
+        .ok_or_else(|| serde::de::Error::custom("clamp violation not finite and positive"))
+}
+
 /// How the reduction clamped a component's rows past rounding to make it dominant.
 #[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Clamp {
-    /// Largest relative dominance violation, clamped away.
+    /// Largest relative dominance violation, clamped away: finite and positive.
+    #[cfg_attr(feature = "serde", serde(deserialize_with = "violation"))]
     pub violation: f64,
     /// What the scaling proved about the violation.
     pub scaling: ScalingOutcome,
