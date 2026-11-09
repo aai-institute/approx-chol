@@ -1,19 +1,20 @@
 //! Exact Cholesky of a small `M` by GTH elimination: every pivot a sum of nonnegative terms, so none cancels or fails.
 
+use crate::factor::sign::cancel;
 use crate::factor::within_one;
 use crate::sgdd::{Balance, FactorTail, Grounding};
 use crate::storage::UpperAdjacency;
 use crate::{Batch, Index, Real};
 
 /// `M` as it is, its off-diagonal signed and its surplus closing it: dense Cholesky needs no cover, fold or dominance.
-pub(in crate::factor) struct Signed<T, I> {
+pub(in crate::factor) struct AsIs<T, I> {
     adjacency: UpperAdjacency<T, I>,
     /// Frustrated, its off-diagonals of either sign, so GTH tracks the surplus their cancellation leaves; balanced, a Z-matrix.
     balance: Balance,
     grounding: Grounding<T>,
 }
 
-impl<T: Real, I: Index> Signed<T, I> {
+impl<T: Real, I: Index> AsIs<T, I> {
     /// Panics unless nonempty, with one surplus per row.
     pub(in crate::factor) fn new(
         adjacency: UpperAdjacency<T, I>,
@@ -41,12 +42,12 @@ impl<T: Real, I: Index> Signed<T, I> {
 
 /// GTH on the packed lower `M`, the surplus as a last row `−s`, a floating `M`'s gauge moved last, both dropped (`d − Σl²` reached 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more time); returns unit lower `L` with `D⁻¹` on its diagonal, and the gauge.
 pub(super) fn factor<T: Real, I: Index>(
-    signed: &Signed<T, I>,
+    as_is: &AsIs<T, I>,
     tail: Option<FactorTail<'_, T>>,
     values: &mut Vec<T>,
 ) -> (Vec<T>, Option<usize>) {
-    let n = signed.n();
-    let pin = (signed.floats()).then(|| tail.map_or(n - 1, FactorTail::largest));
+    let n = as_is.n();
+    let pin = (as_is.floats()).then(|| tail.map_or(n - 1, FactorTail::largest));
     let m = n - usize::from(pin.is_some());
     let packed = row_start(m + 1);
     // `D⁻¹` trails the rows, contiguous as every row's fill reads it: strided in the diagonal measured +12-18% at n 16-24.
@@ -62,12 +63,12 @@ pub(super) fn factor<T: Real, I: Index>(
         values[row_start(k.max(j)) + k.min(j)] = a;
     };
     for i in 0..n {
-        signed.adjacency.upper(i).for_each(|(j, &a)| entry(i, j, a));
+        as_is.adjacency.upper(i).for_each(|(j, &a)| entry(i, j, a));
     }
-    let ground = |i| signed.grounding.edge(i).map(|s| (i, s));
+    let ground = |i| as_is.grounding.edge(i).map(|s| (i, s));
     (0..n).filter_map(ground).for_each(|(i, s)| entry(i, n, -s));
     let (matrix, inverse_pivots) = values.split_at_mut(packed);
-    match signed.balance {
+    match as_is.balance {
         Balance::Balanced => eliminate::<T, false>(matrix, inverse_pivots, m),
         Balance::Frustrated => eliminate::<T, true>(matrix, inverse_pivots, m),
     }
@@ -86,10 +87,9 @@ pub(super) fn factor<T: Real, I: Index>(
     (factor, pin)
 }
 
-/// Left-looking GTH over `m` columns into the inverse pivots, the surplus row `m` updated as any other; `SIGNED` entries may be positive, each update that shrinks one adding `2 min(|a|, |t|)` to both its rows' surplus, as `|a| + |t| − |a − t|` would by cancellation.
+/// Left-looking GTH over `m` columns into the inverse pivots, the surplus row `m` updated as any other; `SIGNED` entries may be positive, each update adding what it [`cancel`]s to both its rows' surplus.
 fn eliminate<T: Real, const SIGNED: bool>(matrix: &mut [T], inverse_pivots: &mut [T], m: usize) {
     let mut gains = vec![T::zero(); if SIGNED { m } else { 0 }];
-    let two = T::one() + T::one();
     for col in 0..m {
         let pivot_row = row_start(col);
         let mut diagonal = T::zero();
@@ -110,13 +110,15 @@ fn eliminate<T: Real, const SIGNED: bool>(matrix: &mut [T], inverse_pivots: &mut
                     true => -t,
                     false => t,
                 };
-                // A zero `t` gains nothing; testing it spares sparse rows a `+0` store per step.
-                if row < m && (value > T::zero()) == (t > T::zero()) && t != T::zero() {
-                    let gain = two * value.abs().min(t.abs());
+                // Gated on `cancel`'s own sign test, which then folds away: sparse rows skip a `+0` store per step.
+                if row < m && (value < T::zero()) != (-t < T::zero()) && t != T::zero() {
+                    let (sum, gain) = cancel(value, -t);
                     gains[row] = gains[row] + gain;
                     gains[col] = gains[col] + gain;
+                    value = sum;
+                } else {
+                    value = value - t;
                 }
-                value = value - t;
             }
             if SIGNED && row == m {
                 value = value - gains[col];

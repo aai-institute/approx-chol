@@ -78,6 +78,21 @@ impl OwnedCsr {
         CsrRef::new(&self.row_ptrs, &self.col_indices, &self.values, self.n()).expect("valid CSR")
     }
 
+    /// `A x` over every stored entry.
+    #[allow(dead_code, reason = "only the frustrated benches apply A")]
+    pub fn matvec(&self, x: &[f64]) -> Vec<f64> {
+        (self.row_ptrs.windows(2))
+            .map(|span| {
+                let span = span[0] as usize..span[1] as usize;
+                (self.col_indices[span.clone()]
+                    .iter()
+                    .zip(&self.values[span]))
+                .map(|(&j, &a)| a * x[j as usize])
+                .sum()
+            })
+            .collect()
+    }
+
     /// The arrays read as an upper triangle, diagonal included.
     #[allow(dead_code, reason = "only the ingest bench stores a triangle")]
     pub fn upper(&self) -> UpperCsrRef<'_, f64> {

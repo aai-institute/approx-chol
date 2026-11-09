@@ -8,7 +8,7 @@ use super::sddm::{descend, lifted, Sddm};
 use crate::sgdd::{Balance, FactorTail};
 use crate::{Batch, Index, MemStack, Real};
 use approximate::{ApproximateCholesky, CliqueTreeElimination};
-pub(super) use dense::Signed;
+pub(super) use dense::AsIs;
 
 /// A task's buffers, reused across its blocks by either arm.
 pub(crate) struct Workspace<T, I> {
@@ -26,10 +26,10 @@ impl<T: Real, I: Index> Workspace<T, I> {
     }
 }
 
-/// What a Cholesky factors: `M` itself on the exact arm, its SDDM on the approximate one.
+/// What a Cholesky factors: `M` as it is, factored densely, or its SDDM, factored approximately.
 pub(super) enum Arm<T, I> {
-    Exact(Signed<T, I>),
-    Approximate(Sddm<T, I>),
+    AsIs(AsIs<T, I>),
+    Sddm(Sddm<T, I>),
 }
 
 /// The factor of what the elimination leaves; it builds its own Triangular, so its facts come from that matrix.
@@ -48,7 +48,7 @@ pub(super) struct Cholesky<T, I> {
 }
 
 impl<T: Real, I: Index> Cholesky<T, I> {
-    /// Dense on the exact arm, else approximate; `tail` is `F` on its vertices, `None` when every `|f|` is `1`.
+    /// Dense on `M` as it is, approximate on its SDDM; `tail` is `F` on its vertices, `None` when every `|f|` is `1`.
     pub(super) fn factor(
         arm: Arm<T, I>,
         draws: Xoshiro256PlusPlus,
@@ -56,15 +56,15 @@ impl<T: Real, I: Index> Cholesky<T, I> {
         reused: &mut Workspace<T, I>,
     ) -> Self {
         match arm {
-            Arm::Exact(signed) => {
-                let (factor, pinned) = dense::factor(&signed, tail, &mut reused.dense);
+            Arm::AsIs(as_is) => {
+                let (factor, pinned) = dense::factor(&as_is, tail, &mut reused.dense);
                 Self {
-                    n: signed.n(),
+                    n: as_is.n(),
                     pinned,
                     triangular: Triangular::Dense(factor.into()),
                 }
             }
-            Arm::Approximate(sddm) => {
+            Arm::Sddm(sddm) => {
                 let (balance, n) = (sddm.balance(), sddm.n());
                 let (steps, pinned) = reused.elimination.eliminate(sddm, draws, tail);
                 let steps = Box::new(steps);
