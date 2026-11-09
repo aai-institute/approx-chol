@@ -149,7 +149,7 @@ step 5. The algorithm behind each setting is in `../../algorithm.md`, steps 5 an
   numbering: in a whole build the component's, in a Schur build its kept vertices, numbered on
   the kept side. `Component::clamp` is the clamp of the component of $A$
   that holds the component, in a whole build its own; it reads the same stored clamp.
-- A `BuildError`'s `vertex` is the lowest vertex of its component, in the input's numbering.
+- A `BuildError`'s `vertex` is the offending row, in the input's numbering.
 - `Threads::All` is every thread of the caller's rayon pool; `Count(n)` caps the threads used at
   `n`, whatever the pool's size; faer's `Par::Seq` is `Count(1)`, `Par::Rayon(n)` is `Count(n)`.
 

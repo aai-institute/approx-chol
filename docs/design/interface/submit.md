@@ -83,6 +83,7 @@ pub mod input {
         RowPtrs { row: usize },
         IndexOutOfRange { parameter: &'static str, entry: usize },
         NotFinite { parameter: &'static str, entry: usize },
+        OutOfRange { parameter: &'static str, entry: usize },
         Negative { parameter: &'static str, entry: usize },
         Magnitude { vertex: usize },
         SelfLoop { edge: usize },
@@ -109,7 +110,11 @@ to `upper`. A sprs CSC view, a faer `SparseColMatRef` and a nalgebra-sparse `Csc
 as the CSR of their transpose, positions in that storage. A sprs view converts when its pointers
 and indices share one type, sprs's default. `NotSquare` and `RowGap` arise only from conversions,
 whose `parameter` is the source's own field name; `RowGap` is a faer matrix stored with gaps
-(`row_nnz` or `col_nnz` set).
+(`row_nnz` or `col_nnz` set). A first row pointer other than 0, an adapter's offset view
+included, is `RowPtrs { row: 0 }`. `OutOfRange` is a finite stated value past the range the build
+handles, such as a surplus below the range floor. A `BipartiteFactorWidth2` whose sides' rows
+sum past `usize` is an input error. A magnitude derived from a Gram form, a diagonal of
+$V W V^\top$, is the build's to check (`BuildError::OutOfRange`), not the constructor's.
 
 Python submits as part of the build call (`interface/build.md`): a matrix is checked where it is
 passed.
