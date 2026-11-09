@@ -145,10 +145,11 @@ step 5. The algorithm behind each setting is in `../../algorithm.md`, steps 5 an
 - A component's `vertices` are in the order its factor numbers them, in $B$'s numbering;
   `null_vector`, when present, holds one entry per vertex in that order, as computed,
   unnormalized.
-- `clamps` yields one `Clamped` per clamped component of $A$; its `vertices` are in $B$'s
-  numbering: in a whole build the component's, in a Schur build its kept vertices, numbered on
-  the kept side. `Component::clamp` is the clamp of the component of $A$
-  that holds the component, in a whole build its own; it reads the same stored clamp.
+- `clamps` yields one `Clamped` per clamped component of $A$, in the factor's order, as
+  `components` yields them; its `vertices` are a component's, as above: in a whole build the
+  component of $A$, in a Schur build its kept vertices, numbered on the kept side.
+  `Component::clamp` is the clamp of the component of $A$ that holds the component, in a whole
+  build its own; it reads the same stored clamp.
 - A `BuildError`'s `vertex` is the offending row, in the input's numbering.
 - `Threads::All` is every thread of the caller's rayon pool; `Count(n)` caps the threads used at
   `n`, whatever the pool's size; faer's `Par::Seq` is `Count(1)`, `Par::Rayon(n)` is `Count(n)`.
@@ -163,8 +164,6 @@ def factorize(matrix: sparray | spmatrix, *, config: Config | None = None,
 class ApproxInverse(LinearOperator):   # applied as in interface/solve.md
     @property
     def components(self) -> tuple[Component, ...]: ...
-    @property
-    def clamps(self) -> tuple[Clamp, ...]: ...
 
 class Component:   # read-only
     vertices: NDArray[np.intp]
@@ -172,7 +171,6 @@ class Component:   # read-only
     clamp: Clamp | None
 
 class Clamp:       # read-only
-    vertices: NDArray[np.intp]
     violation: float
     scaling: Literal["refuted", "unsettled"]
 
@@ -197,7 +195,8 @@ Each argument left `None` takes the Rust default and is read back by a property 
 `split` is the `copies` of a clique tree and the `split` of a Schur tree, at least 1;
 `"cover"` is `Cover(Auto)`. `threads=None` is every core. A `threads`, `split` or tolerance out of
 range raises `ValueError`. Python builds `f64`. A clamp also warns with a
-`RuntimeWarning`.
+`RuntimeWarning`. Python has one stage, so it reads clamps per component, as Rust's
+`Component::clamp`, beside the component's `vertices`.
 
 ## Why
 
