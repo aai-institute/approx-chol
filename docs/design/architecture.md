@@ -114,26 +114,29 @@ Refactors are bit-identical on the solve fixtures, the u32/u64 storage test and 
 payloads, apart from the format version where stated, and are committed apart from behavior
 changes.
 
+0.8.0 is scope O2: the public surface of P5–P8 and P9a on `main`'s current modules, with D6, R6
+and F1, and P1 as far as P5 takes it. P2's module moves, P9b, R1, R1b and R3 follow 0.8.0.
+
 ### Inside the parts
 
 | Step | Part | Change | Check | After |
 |---|---|---|---|---|
-| D1 | Reduction | Named records where a fact crosses a function: a block's `BlockAdjacency`, `Relaxation`, a lone vertex, the null-vector certificate, Perron's best iterate; the singularity pair a record owning `SINGULAR_BAND`; `Congruent` formed with its row sums; Perron's `Shortfall` its own type, not the public report, settled, refuted or unsettled; one name per band; Perron's `tolerance` named `slack`. Done in #353 | bit-identical | – |
-| D2 | Storage | `Grounding`, `Balance`, `Sheets` beside the sparse storage, `flushed` given its band by Reduction's `ratio_band`; the scalar traits, compensated sums and range screens out of the crate root; one row-tally pass where `tally_abs` and `scaled_abs_sums` repeated it. `Grounded`, `Gauge` and the `WddCsr`, `Bipartite` names land in Storage with R1 and R1b. Done in #357 | bit-identical | – |
-| D3 | Input | The representation an `Input` holds apart from the public `FactorWidth2`: a Gram form by layout, whole or bipartite, and by values, incidence or valued, and a CSR form, whole or a triangle; `Lowered`, `Columns` and the `n_left()`, `is_incidence()`, `surplus()` probes removed; `UpperCsrRef::lower` renamed. Done in #360: `Repr` and `Gram` in `input/repr`, with `Weights` a third axis beside layout and values, and a valued `V`'s `Sides` never neither; `Canonical` and the public types move with P2 | bit-identical | – |
-| D4 | Approximate inverse | The index width picked by Cholesky's `fits_u32`; the `store` function removed. Done in #364: `Storage` stays flat, so the format does not change; a component's kind apart from its width moves to P3, where the width wraps the components | bit-identical | R1 |
+| D1 | Reduction | Named records where a fact crosses a function: a block's `BlockAdjacency`, `Relaxation`, a lone vertex, the null-vector certificate, Perron's best iterate; the singularity pair a record owning `SINGULAR_BAND`; `Congruent` formed with its row sums; Perron's `Shortfall` its own type, not the public report, settled, refuted or unsettled; one name per band; Perron's `tolerance` named `slack`. Reverted by #371 (was #353): `main`'s Reduction has none of these records | bit-identical | – |
+| D2 | Storage | `Grounding`, `Balance`, `Sheets` beside the sparse storage, `flushed` given its band by Reduction's `ratio_band`; the scalar traits, compensated sums and range screens out of the crate root; one row-tally pass where `tally_abs` and `scaled_abs_sums` repeated it. `Grounded`, `Gauge` and the `WddCsr`, `Bipartite` names land in Storage with R1 and R1b. Reverted by #371 (was #357): on `main`, `storage.rs` holds the sparse storage alone, `Grounding` and `Balance` sit in `sgdd/block.rs`, the scalar traits at the crate root | bit-identical | – |
+| D3 | Input | The representation an `Input` holds apart from the public `FactorWidth2`: a Gram form by layout, whole or bipartite, and by values, incidence or valued, and a CSR form, whole or a triangle; `Lowered`, `Columns` and the `n_left()`, `is_incidence()`, `surplus()` probes removed; `UpperCsrRef::lower` renamed. Reverted by #371 (was #360): `main`'s `Input` holds its forms as `input/csr.rs` and `input/width2` define them | bit-identical | – |
+| D4 | Approximate inverse | The index width picked by Cholesky's `fits_u32`; the `store` function removed. Reverted by #371 (was #364): `main` picks the width by `fits_u32` in `lib.rs`, around `Sgdd`'s `Indexed` | bit-identical | R1 |
 | D6 | Input, Reduction | Validation on construction: column range, finite in-range values in every constructor, symmetry, nothing outside a triangle, magnitude of `n`; one `InputError` for `CsrError` and `ViewError`, an offset row pointer from an adapter its own case; `BuildError` with `OutOfRange` and `TooLarge`, `Unscalable` folded into `OutOfRange`, a nonpositive diagonal an input error; `ScalingReport` becomes `Clamp`, refuted or unsettled as Perron's `Shortfall` records it; `Sddm` admits an all-zero surplus; `factorize` takes `impl Into<Input>`; `OwnedCsr`, `IndexKind`, the CSR accessors and the root re-exports of Input's types removed | integration tests per error; Python, stub, changelog; breaking | open question 3 |
 | D7 | Reduction | A derived surplus below the range floor is dropped while within its row's rounding, $16\varepsilon\, d_i$ (`RATIO_BAND`); past it, it is a real ground the floor cannot represent: `OutOfRange` at its row, as is a balanced block whose grounds would all drop. One rule for derived surpluses; a stated surplus below the floor is rejected at input (D6). Done in #350 | regression tests: at scale $2^{-964}$ a frustrated triangle with a one-ulp surplus factors, as it does at scale 1; a real ground below the floor is `OutOfRange` at its row; solves that succeed today unchanged | – |
-| D8 | Reduction | One refutation test for the scaling, with the rounding floor the Rayleigh check uses: Collatz and Rayleigh read one ceiling, `1 + max(slack, settle_band)`. Done in #355; no probed case differed | A/B of iterations and clamps | D1 |
+| D8 | Reduction | One refutation test for the scaling, with the rounding floor the Rayleigh check uses: Collatz and Rayleigh read one ceiling, `1 + max(slack, settle_band)`. Done in #355, reverted with D1 and ported onto `main`'s code by #371; no probed case differed | A/B of iterations and clamps | – |
 
 ### The public interface
 
 | Step | Change | Check | After |
 |---|---|---|---|
 | P1 | Execution: `Threads`, `join`, `fork`, the task grain; no other part calls rayon | every result bit-identical for every budget and in a nested pool | – |
-| P2 | Modules moved to the tree below | bit-identical | R1 |
+| P2 | Modules moved to the tree below; after 0.8.0 | bit-identical | R1 |
 | P3 | `ApproxInverse` and `Component` with `vertices`, `null_vector`, `clamp`; the build's list of clamps, `Reduced`'s `report` becoming a `ClampId` into it; the per-block solver removed, so one width branch sits at the top, around the components, and a component's kind is apart from its width; `Indexed` removed; within migrated | breaking; format version bumped; within's tests | D4, P1 |
-| P4 | `MatrixMut`, `ColumnMajor`, `Columns`, `scratch`, `apply`, `apply_with`, `ApplyError`, `LayoutError`; the budget spread over components by size | each column equals its solve alone, bit for bit, at every budget; `apply_with` allocates nothing at `Count(1)` | P3 |
+| P4 | `MatrixMut`, `ColumnMajor`, `Columns`, `scratch`, `apply`, `apply_with`, `ApplyError`, `LayoutError`; the budget spread over components by size. On `main` by #382, #395, #398, #400 | each column equals its solve alone, bit for bit, at every budget; `apply_with` allocates nothing at `Count(1)` | P3 |
 | P5 | Build surface: `Sgdd` and `Complement` with `Threads` and `clamps`; `Config` comparable and hashable | interface tests | P3, D6, R6 |
 | P6 | Persistence: the envelope `(version, scalar, B)`; each part serializes its exports under its own version, the approximate inverse checks that they agree | round trip; version and scalar rejected by name; corrupt payloads rejected | P3, R3 |
 | P7 | Adapters: faer (row and column CSR, `MatrixMut`, `LinOp`, `BiLinOp`, `Precond`, `BiPrecond`, `From<Par>`), sprs, nalgebra, ndarray; the unimplemented-trait message | per-feature tests | P4, D6 |
@@ -141,6 +144,9 @@ changes.
 | P9 | Visibility per part, the layer and export test, the public-surface snapshot in CI | CI | P2 |
 
 ### Module tree
+
+P2's target. Until P2, 0.8.0 included, the code keeps `main`'s modules: `factor`, `sgdd`,
+`input`, `storage`, `threads`, `order`, `batch`.
 
 ```
 src/lib.rs                     re-exports only
