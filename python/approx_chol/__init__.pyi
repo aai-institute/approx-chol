@@ -19,13 +19,15 @@ __all__ = [
 class Config:
     """Configuration for approximate Cholesky factorization.
 
-    ``seed`` keys every sampler stream. ``split`` is the AC2 multi-edge
-    multiplicity ``k``, costing ``O(k)`` sampler draws per edge. Splitting an
-    edge fewer than twice is standard AC, so ``None``, ``0`` and ``1`` all
-    select AC. ``exact_max_dim`` is the largest block dimension factored by
-    exact dense Cholesky, a bipartite block's by its kept side; ``0`` factors
-    every block approximately.
+    ``seed`` keys every sampler stream. ``split`` is the number of clique-tree
+    copies each edge is sampled as, at least ``1``, costing ``O(split)`` sampler
+    draws per edge: ``1`` is standard AC, more is AC2. ``exact_max_dim`` is the
+    largest block dimension factored by exact dense Cholesky, a bipartite
+    block's by its kept side; ``0`` factors every block approximately.
     An argument left out or ``None`` keeps the default, which the getters report.
+
+    Raises:
+        ValueError: If ``split`` is outside ``[1, 2**32 - 1]``.
     """
 
     def __new__(
@@ -37,7 +39,7 @@ class Config:
     @property
     def seed(self) -> int: ...
     @property
-    def split(self) -> int | None: ...
+    def split(self) -> int: ...
     @property
     def exact_max_dim(self) -> int: ...
 

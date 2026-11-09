@@ -9,7 +9,7 @@ use crate::common::layouts::{assert_errors_leave_the_block, Layout, Layouts};
 use crate::common::modes::Mode;
 use crate::common::scratch::nan_cells;
 use crate::common::solve::Solve;
-use crate::common::sparse::Sparse;
+use crate::common::sparse::{clique_tree, Sparse};
 use crate::common::threads;
 
 fn assert_close(label: &str, x: &[f64], want: &[f64], tolerance: f64) {
@@ -391,7 +391,7 @@ fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
     for k in [2, 3] {
         for complement in [SchurMode::Same, SchurMode::Exact] {
             let config = Config {
-                split_merge: Some(k),
+                sampling: clique_tree(k),
                 exact_max_dim: 0,
                 complement,
                 ..Config::default()

@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use super::block_elimination::BlockElimination;
 use super::cholesky::{Arm, Signed};
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
-use super::config::{copies, Config, SchurMode};
+use super::config::{Config, SchurMode};
 use super::sddm::{cover_vertex, crosses, sheets, Sddm, SddmRows};
 use super::{Streams, MULTIPLY_ADD_GRAIN_BITS};
 use crate::sgdd::{Balance, Grounding};
@@ -22,13 +22,13 @@ enum Formation {
     Sampled(Option<Multi>),
 }
 
-/// How a complement on `n_kept` vertices is formed: signed when dense, exact when asked, else sampled with its own copies or under `Same` the factor's.
+/// How a complement on `n_kept` vertices is formed: signed when dense, exact when asked, else sampled with its own sampling or under `Same` the factor's.
 fn formation(config: &Config, n_kept: usize) -> Formation {
     match config.complement {
         _ if config.dense(n_kept) => Formation::Dense,
         SchurMode::Exact => Formation::Exact,
-        SchurMode::Approximate { split_merge } => Formation::Sampled(copies(split_merge)),
-        SchurMode::Same => Formation::Sampled(copies(config.split_merge)),
+        SchurMode::Approximate { sampling } => Formation::Sampled(sampling.copies()),
+        SchurMode::Same => Formation::Sampled(config.sampling.copies()),
     }
 }
 

@@ -47,7 +47,7 @@ def test_package_surface_and_basic_factorize_raw_roundtrip():
 
 def test_config_defaults_and_getters():
     default = approx_chol.Config()
-    assert (default.seed, default.split, default.exact_max_dim) == (0, None, 24)
+    assert (default.seed, default.split, default.exact_max_dim) == (0, 1, 24)
 
     config = approx_chol.Config(seed=7, split=3, exact_max_dim=0)
     assert (config.seed, config.split, config.exact_max_dim) == (7, 3, 0)

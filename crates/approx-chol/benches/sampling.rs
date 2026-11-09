@@ -7,7 +7,9 @@ mod powerlaw;
 #[path = "common/stars.rs"]
 mod stars;
 
-use approx_chol::{factorize_with, Config, ScalingPolicy};
+use std::num::NonZeroU32;
+
+use approx_chol::{factorize_with, Config, Sampling, ScalingPolicy};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use csr::build;
 use grid::grid_laplacian;
@@ -19,7 +21,9 @@ fn bench_factorization_grid(c: &mut Criterion) {
     group.sample_size(10);
 
     let ac2 = Config {
-        split_merge: Some(2),
+        sampling: Sampling::CliqueTree {
+            copies: NonZeroU32::new(2).unwrap(),
+        },
         ..Config::default()
     };
     // 1000x1000 holds 5M nonzeros, so its timing runs out of cache.
@@ -64,10 +68,12 @@ fn bench_bipartite_stars(c: &mut Criterion) {
         let gram = stars.gram();
 
         group.throughput(criterion::Throughput::Elements(STARS as u64));
-        for (label, split_merge) in [("AC", None), ("AC2 k=4", Some(4))] {
+        for (label, copies) in [("AC", 1), ("AC2 k=4", 4)] {
             // Dense would take the complement exact: the kept block has only `degree` vertices.
             let config = Config {
-                split_merge,
+                sampling: Sampling::CliqueTree {
+                    copies: NonZeroU32::new(copies).unwrap(),
+                },
                 exact_max_dim: 0,
                 ..Config::default()
             };

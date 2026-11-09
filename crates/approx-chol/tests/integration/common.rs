@@ -6,6 +6,7 @@ pub mod clamps;
 pub mod dense;
 pub mod dense_residual;
 pub mod entry;
+pub mod frustrated;
 pub mod gram;
 pub mod graph;
 pub mod grid;

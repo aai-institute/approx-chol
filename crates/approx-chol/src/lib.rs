@@ -63,7 +63,7 @@ pub use error::Error;
 pub use factor::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
 pub use factor::{
     ApplyError, ApproxInverse, ColumnMajor, Columns, Component, Config, LayoutError, MatrixMut,
-    SchurMode,
+    Sampling, SchurMode,
 };
 pub use input::{CsrError, CsrRef, IndexKind, Input, OwnedCsr, Side};
 pub use sgdd::{Clamp, ReduceError, ScalingOutcome, ScalingPolicy};

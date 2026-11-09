@@ -14,6 +14,7 @@ use serde::de::value::{Error, SeqDeserializer};
 use serde::Deserialize;
 
 use crate::common::solve::Solve;
+use crate::common::sparse::clique_tree;
 use crate::common::threads;
 
 const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
@@ -51,6 +52,7 @@ fixtures! {
     Floating => floating,
     Cover => cover,
     DenseFrustrated => dense_frustrated,
+    SampledAc => sampled_ac,
     SampledAc2 => sampled_ac2,
     Clamped => clamped,
 }
@@ -90,13 +92,13 @@ impl Fixture {
                 &[-3.0, 0.0, 1.0, 0.0],
                 &[0.0, -3.0, 0.0, 1.0],
             ]),
-            Self::SampledAc2 => None,
+            Self::SampledAc | Self::SampledAc2 => None,
         }
     }
 
     /// Whether the factor solves its matrix exactly: neither sampled nor clamped.
     fn exact(self) -> bool {
-        !matches!(self, Self::SampledAc2 | Self::Clamped)
+        !matches!(self, Self::SampledAc | Self::SampledAc2 | Self::Clamped)
     }
 
     /// The clamps the payload lists, by vertices.
@@ -126,8 +128,12 @@ impl Fixture {
 
     fn config(self) -> Config {
         match self {
+            Self::SampledAc => Config {
+                exact_max_dim: 0,
+                ..Config::default()
+            },
             Self::SampledAc2 => Config {
-                split_merge: Some(2),
+                sampling: clique_tree(2),
                 exact_max_dim: 0,
                 ..Config::default()
             },
@@ -148,7 +154,7 @@ impl Fixture {
             Self::Floating => &["n: 2, pinned: Some(", "triangular: Dense("],
             Self::Cover => &["Cover("],
             Self::DenseFrustrated => &["n: 3, pinned: None", "Dense("],
-            Self::SampledAc2 => &["elimination: Some", "Folded("],
+            Self::SampledAc | Self::SampledAc2 => &["elimination: Some", "Folded("],
             Self::Clamped => &["scaling: Refuted"],
         }
     }

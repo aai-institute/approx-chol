@@ -24,8 +24,7 @@ class MatrixLike:
         self.shape = shape
 
 
-@pytest.mark.parametrize("split", [0, 1])
-def test_split_below_two_selects_standard_ac(split):
+def test_one_split_is_the_default():
     lap = grid_laplacian(8, 8)
     b = np.zeros(lap.shape[0])
     b[0], b[-1] = 1.0, -1.0
@@ -34,13 +33,35 @@ def test_split_below_two_selects_standard_ac(split):
         config = approx_chol.Config(split=split, exact_max_dim=0)
         return approx_chol.factorize(lap, config).solve(b)
 
-    np.testing.assert_array_equal(solve(split), solve(None))
+    np.testing.assert_array_equal(solve(1), solve(None))
     assert not np.array_equal(solve(2), solve(None))
 
 
-@pytest.mark.parametrize("split", [-1, 2**32])
-def test_split_outside_u32_raises(split):
-    with pytest.raises(OverflowError):
+@pytest.mark.parametrize("split", [0, -1, 2**32])
+def test_split_outside_its_range_raises(split):
+    with pytest.raises(
+        ValueError, match=re.escape("split must be an integer in [1, 2**32 - 1]")
+    ):
+        approx_chol.Config(split=split)
+
+
+@pytest.mark.parametrize("split", [np.int64(2), np.uint32(2)])
+def test_a_numpy_integer_split_is_its_value(split):
+    config = approx_chol.Config(split=split)
+    assert config.split == 2
+    assert config == approx_chol.Config(split=2)
+
+
+def test_configs_compare_and_hash_by_value():
+    assert approx_chol.Config(seed=1, split=2) == approx_chol.Config(seed=1, split=2)
+    assert hash(approx_chol.Config(seed=1)) == hash(approx_chol.Config(seed=1))
+    assert approx_chol.Config(seed=1) != approx_chol.Config(seed=2)
+    assert len({approx_chol.Config(), approx_chol.Config(split=1)}) == 1
+
+
+@pytest.mark.parametrize("split", [2.0, "2", np.float64(2.0)])
+def test_a_split_not_an_integer_raises_type_error(split):
+    with pytest.raises(TypeError):
         approx_chol.Config(split=split)
 
 
