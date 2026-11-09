@@ -1,13 +1,18 @@
+use std::num::NonZeroU32;
+
 use super::clique_tree::Multi;
 
 /// Build settings for [`factorize_with`](crate::factorize_with).
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Config {
     /// Every sampler stream derives from this, keyed by block and star.
     pub seed: u64,
-    /// AC2 multi-edge multiplicity `k`, costing `O(k)` sampler draws per edge; `None`, `Some(0)` and `Some(1)` select standard AC.
-    pub split_merge: Option<u32>,
+    /// How the approximate Cholesky samples each pivot's fill.
+    pub sampling: Sampling,
+    /// How a frustrated block, one no diagonal `±1` congruence folds into an SDDM, is factored approximately; the dense arm factors it as itself.
+    pub frustrated: FrustratedRoute,
     /// Largest block dimension, a bipartite block's by its kept side, factored by exact dense Cholesky at `O(exact_max_dim³)`; `0` factors every block approximately.
     pub exact_max_dim: usize,
     /// How a bipartite block's eliminated side becomes the kept side's Schur complement.
@@ -18,7 +23,10 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             seed: 0,
-            split_merge: None,
+            sampling: Sampling::CliqueTree {
+                copies: NonZeroU32::MIN,
+            },
+            frustrated: FrustratedRoute::Cover(CoverSurplus::default()),
             exact_max_dim: 24,
             complement: SchurMode::default(),
         }
@@ -30,26 +38,67 @@ impl Config {
     pub(super) fn dense(&self, dimension: usize) -> bool {
         dimension <= self.exact_max_dim
     }
+}
 
-    /// The split the factor's own sampler draws with.
-    pub(super) fn split(&self) -> Option<Multi> {
-        self.split_merge.and_then(Multi::split)
+/// How a frustrated block is factored approximately.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FrustratedRoute {
+    /// Through its Gremban cover, an SDDM on two sheets that solves `[x; −x]`, carrying its surplus as the [`CoverSurplus`] says.
+    Cover(CoverSurplus),
+}
+
+/// How a frustrated block's Gremban cover carries the surplus each copy of a vertex holds.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CoverSurplus {
+    /// To a ground vertex both sheets share; inside `Auto`'s twist band its common mode `1/s` swamps `z`, and PCG stalls where `Auto` converges.
+    GroundVertex,
+    /// As an edge `k⁺ — k⁻` per vertex, a quarter of its copies' surplus, which acts on `[z; −z]` as the grounds do: the cover stays singular, its common mode never in `z`. On a sampled complement the sheets draw their ground shares from different streams, so the edge takes their mean, unbiased; a whole block's cover and an exact complement mirror their rows, so the mean is exact.
+    SurplusEdges,
+    /// Surplus edges inside the twist band, `Σs ≤ 5ε (Σs + Σ|a_ij|)` over the cover's surplus `s` and off-diagonal `a`, where a ground vertex's common mode would swamp `z`; else the ground vertex.
+    #[default]
+    Auto,
+}
+
+/// How a pivot's star is sampled into fill.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Sampling {
+    /// A clique tree over `copies` of each edge (GKS 2023), costing `O(copies)` sampler draws per edge: `1` is standard AC, more is AC2.
+    CliqueTree {
+        /// Copies each edge splits into.
+        copies: NonZeroU32,
+    },
+}
+
+impl Sampling {
+    /// The copies a sampler draws with: AC2's from two on, else AC's one.
+    pub(super) fn copies(self) -> Option<Multi> {
+        match self {
+            Self::CliqueTree { copies } => Multi::split(copies.get()),
+        }
     }
 }
 
-/// How a bipartite block's eliminated stars become the kept side's Schur complement; a dense kept side always takes it exact.
+/// How a bipartite component's eliminated stars become the kept side's Schur complement, in a whole build of a bipartite input or a Schur build; a dense kept side always takes it exact.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SchurMode {
     /// Each star's whole clique: the exact Schur complement.
     Exact,
-    /// A clique tree sampled from each star.
+    /// Each star sampled under its own `sampling`.
     Approximate {
-        /// Multiplicity `k`, as [`Config::split_merge`]: `None`, `Some(0)` and `Some(1)` select AC.
-        split_merge: Option<u32>,
+        /// How each star is sampled.
+        sampling: Sampling,
     },
-    /// Sampled with [`Config::split_merge`]'s multiplicity, as the kept side's own factor is.
+    /// Sampled under [`Config::sampling`], as the kept side's own factor is.
     #[default]
     Same,
 }

@@ -1,14 +1,17 @@
 use approx_chol::{
-    ApplyError, ApproxInverse, Config, CsrRef, MemBuffer, MemStack, ScalingPolicy, Sgdd, Threads,
+    ApplyError, ApproxInverse, Config, CoverSurplus, CsrRef, FrustratedRoute, MemBuffer, MemStack,
+    Sampling, ScalingPolicy, Sgdd, Threads,
 };
 use num_traits::PrimInt;
 use numpy::{
     BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyReadonlyArray1,
     PyUntypedArrayMethods,
 };
+use pyo3::exceptions::{PyNotImplementedError, PyOverflowError};
 use pyo3::marker::Ungil;
 use pyo3::prelude::*;
 use std::error::Error;
+use std::num::NonZeroU32;
 
 #[inline]
 fn value_error(message: impl Into<String>) -> PyErr {
@@ -144,21 +147,68 @@ fn owned<T: Element + Copy>(array: &Bound<'_, PyArray1<T>>, name: &str) -> PyRes
         .map_err(|_| value_error(format!("{name} must be contiguous")))
 }
 
-#[pyclass(frozen, name = "Config")]
+#[pyclass(frozen, eq, hash, name = "Config")]
+#[derive(PartialEq, Eq, Hash)]
 struct PyConfig(Config);
+
+/// Each frustrated route by its Python name.
+const FRUSTRATED: [(&str, FrustratedRoute); 3] = [
+    ("cover", FrustratedRoute::Cover(CoverSurplus::Auto)),
+    (
+        "cover_ground_vertex",
+        FrustratedRoute::Cover(CoverSurplus::GroundVertex),
+    ),
+    (
+        "cover_surplus_edges",
+        FrustratedRoute::Cover(CoverSurplus::SurplusEdges),
+    ),
+];
+
+/// The route `name` names, else a `ValueError` listing every name.
+fn frustrated_route(name: &str) -> PyResult<FrustratedRoute> {
+    let named = FRUSTRATED.iter().find(|(n, _)| *n == name);
+    named.map(|&(_, route)| route).ok_or_else(|| {
+        let names = FRUSTRATED.map(|(n, _)| format!("'{n}'")).join(", ");
+        value_error(format!("frustrated must be one of {names}, not '{name}'"))
+    })
+}
+
+/// `split` as copies: an integer past `u32` or `0` is a `ValueError`, a non-integer a `TypeError`.
+fn copies(split: &Bound<'_, PyAny>) -> PyResult<NonZeroU32> {
+    let out_of_range = || value_error("split must be an integer in [1, 2**32 - 1]");
+    match split.extract::<i64>() {
+        Ok(k) => (u32::try_from(k).ok())
+            .and_then(NonZeroU32::new)
+            .ok_or_else(out_of_range),
+        Err(e) if e.is_instance_of::<PyOverflowError>(split.py()) => Err(out_of_range()),
+        Err(e) => Err(e),
+    }
+}
 
 #[pymethods]
 impl PyConfig {
     #[new]
-    #[pyo3(signature = (seed=None, split=None, exact_max_dim=None))]
-    fn new(seed: Option<u64>, split: Option<u32>, exact_max_dim: Option<usize>) -> Self {
+    #[pyo3(signature = (seed=None, split=None, exact_max_dim=None, *, frustrated=None))]
+    fn new(
+        seed: Option<u64>,
+        split: Option<Bound<'_, PyAny>>,
+        exact_max_dim: Option<usize>,
+        frustrated: Option<&str>,
+    ) -> PyResult<Self> {
         let default = Config::default();
-        Self(Config {
+        let sampling = match split {
+            None => default.sampling,
+            Some(split) => Sampling::CliqueTree {
+                copies: copies(&split)?,
+            },
+        };
+        Ok(Self(Config {
             seed: seed.unwrap_or(default.seed),
-            split_merge: split.or(default.split_merge),
+            sampling,
+            frustrated: frustrated.map_or(Ok(default.frustrated), frustrated_route)?,
             exact_max_dim: exact_max_dim.unwrap_or(default.exact_max_dim),
             ..default
-        })
+        }))
     }
 
     #[getter]
@@ -167,8 +217,21 @@ impl PyConfig {
     }
 
     #[getter]
-    fn split(&self) -> Option<u32> {
-        self.0.split_merge
+    fn split(&self) -> PyResult<u32> {
+        match self.0.sampling {
+            Sampling::CliqueTree { copies } => Ok(copies.get()),
+            _ => Err(PyNotImplementedError::new_err("this sampling has no split")),
+        }
+    }
+
+    #[getter]
+    fn frustrated(&self) -> PyResult<&'static str> {
+        let named = FRUSTRATED
+            .iter()
+            .find(|(_, route)| *route == self.0.frustrated);
+        named
+            .map(|&(name, _)| name)
+            .ok_or_else(|| PyNotImplementedError::new_err("this frustrated route has no name"))
     }
 
     #[getter]

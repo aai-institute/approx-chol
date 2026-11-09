@@ -1,4 +1,5 @@
 import re
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -6,7 +7,7 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as sla
 
 import approx_chol
-from tests._laplacians import grid_laplacian, frustrated_grid
+from tests._laplacians import grid_laplacian, frustrated_grid, light_row_grid
 
 
 def _base_csr():
@@ -24,8 +25,7 @@ class MatrixLike:
         self.shape = shape
 
 
-@pytest.mark.parametrize("split", [0, 1])
-def test_split_below_two_selects_standard_ac(split):
+def test_one_split_is_the_default():
     lap = grid_laplacian(8, 8)
     b = np.zeros(lap.shape[0])
     b[0], b[-1] = 1.0, -1.0
@@ -34,14 +34,84 @@ def test_split_below_two_selects_standard_ac(split):
         config = approx_chol.Config(split=split, exact_max_dim=0)
         return approx_chol.factorize(lap, config).solve(b)
 
-    np.testing.assert_array_equal(solve(split), solve(None))
+    np.testing.assert_array_equal(solve(1), solve(None))
     assert not np.array_equal(solve(2), solve(None))
 
 
-@pytest.mark.parametrize("split", [-1, 2**32])
-def test_split_outside_u32_raises(split):
-    with pytest.raises(OverflowError):
+@pytest.mark.parametrize("split", [0, -1, 2**32])
+def test_split_outside_its_range_raises(split):
+    with pytest.raises(
+        ValueError, match=re.escape("split must be an integer in [1, 2**32 - 1]")
+    ):
         approx_chol.Config(split=split)
+
+
+@pytest.mark.parametrize("split", [np.int64(2), np.uint32(2)])
+def test_a_numpy_integer_split_is_its_value(split):
+    config = approx_chol.Config(split=split)
+    assert config.split == 2
+    assert config == approx_chol.Config(split=2)
+
+
+def test_configs_compare_and_hash_by_value():
+    assert approx_chol.Config(seed=1, split=2) == approx_chol.Config(seed=1, split=2)
+    assert hash(approx_chol.Config(seed=1)) == hash(approx_chol.Config(seed=1))
+    assert approx_chol.Config(seed=1) != approx_chol.Config(seed=2)
+    assert len({approx_chol.Config(), approx_chol.Config(split=1)}) == 1
+
+
+@pytest.mark.parametrize("split", [2.0, "2", np.float64(2.0)])
+def test_a_split_not_an_integer_raises_type_error(split):
+    with pytest.raises(TypeError):
+        approx_chol.Config(split=split)
+
+
+def _stub_frustrated_names() -> list[str]:
+    stub = Path(__file__).parent.parent / "python" / "approx_chol" / "__init__.pyi"
+    literal = re.search(r"_Frustrated: TypeAlias = Literal\[(.*?)\]", stub.read_text())
+    return re.findall(r'"([^"]+)"', literal.group(1))
+
+
+FRUSTRATED = _stub_frustrated_names()
+
+
+@pytest.mark.parametrize("frustrated", FRUSTRATED)
+def test_frustrated_round_trips(frustrated):
+    assert approx_chol.Config(frustrated=frustrated).frustrated == frustrated
+
+
+def test_an_unknown_frustrated_route_raises_naming_the_stubs_routes():
+    with pytest.raises(ValueError, match="frustrated must be one of ") as error:
+        approx_chol.Config(frustrated="signed")
+    named = str(error.value).removesuffix(", not 'signed'")
+    assert re.findall(r"'([^']+)'", named) == FRUSTRATED
+
+
+def test_frustrated_is_keyword_only():
+    with pytest.raises(TypeError):
+        approx_chol.Config(0, 1, 24, "cover")
+
+
+@pytest.mark.parametrize(
+    ("light", "like", "unlike"),
+    [
+        (1e-40, "cover_surplus_edges", "cover_ground_vertex"),
+        (1.0, "cover_ground_vertex", "cover_surplus_edges"),
+    ],
+)
+def test_each_frustrated_name_factors_as_its_route(light, like, unlike):
+    """Inside the twist band ``"cover"`` carries the surplus on edges, past it to the ground vertex, so two names swapped in the table fail one case."""
+    matrix = light_row_grid(10, light)
+    b = np.sin(np.arange(matrix.shape[0], dtype=np.float64))
+
+    def solve(**route):
+        config = approx_chol.Config(exact_max_dim=0, **route)
+        return approx_chol.factorize(matrix, config).solve(b)
+
+    cover = solve(frustrated="cover")
+    np.testing.assert_array_equal(cover, solve())
+    np.testing.assert_array_equal(cover, solve(frustrated=like))
+    assert not np.array_equal(cover, solve(frustrated=unlike))
 
 
 def _u32(*xs):

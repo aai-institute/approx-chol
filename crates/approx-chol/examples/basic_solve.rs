@@ -1,7 +1,9 @@
 //! Factorize a 10×10 grid Laplacian with AC and AC2, and use each to precondition CG.
 
+use std::num::NonZeroU32;
+
 use approx_chol::input::Laplacian;
-use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy, Threads};
+use approx_chol::{factorize_with, ApproxInverse, Config, Sampling, ScalingPolicy, Threads};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grid = Grid::new(10, 10);
@@ -12,7 +14,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // AC2's `k` copies per edge trade more fill-in for lower factor variance.
     let ac2 = Config {
-        split_merge: Some(2),
+        sampling: Sampling::CliqueTree {
+            copies: NonZeroU32::new(2).ok_or("two copies")?,
+        },
         ..Config::default()
     };
     for (name, config) in [("AC", Config::default()), ("AC2 (k=2)", ac2)] {

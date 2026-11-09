@@ -1,8 +1,8 @@
 use approx_chol::input::CsrRef;
 use approx_chol::ScalingOutcome::Unsettled;
 use approx_chol::{
-    factorize_complement, factorize_with, ApproxInverse, Component, Config, Real, ScalingPolicy,
-    SchurMode, Side,
+    factorize_complement, factorize_with, ApproxInverse, Component, Config, CoverSurplus,
+    FrustratedRoute, Real, ScalingPolicy, SchurMode, Side,
 };
 use rstest::rstest;
 
@@ -11,6 +11,7 @@ use crate::common::bits::bits;
 use crate::common::grid::grid;
 use crate::common::lcg::Lcg;
 use crate::common::solve::Solve;
+use crate::common::sparse::clique_tree;
 use crate::common::threads;
 
 /// The solve of `b` as bits, which its solve and each column of a four-column apply match under each budget; `kept` factors the complement.
@@ -53,8 +54,9 @@ fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> Vec<u64> {
 
 #[rstest]
 #[case::ac(Config::default())]
-#[case::ac2(Config { split_merge: Some(3), ..Config::default() })]
+#[case::ac2(Config { sampling: clique_tree(3), ..Config::default() })]
 #[case::exact(Config { complement: SchurMode::Exact, ..Config::default() })]
+#[case::surplus_edges(Config { frustrated: FrustratedRoute::Cover(CoverSurplus::SurplusEdges), ..Config::default() })]
 fn solves_are_bit_identical_across_thread_counts(
     #[case] config: Config,
     #[values(None, Some(Side::Left), Some(Side::Right))] kept: Option<Side>,

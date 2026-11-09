@@ -69,7 +69,7 @@ x = factor.solve(b)
 - `factorize_raw(row_ptrs, col_indices, values, n, config=None)` — Factorize from raw CSR arrays.
 - `ApproxInverse.solve(b)` — Solve LDL^T x = b, returning a new array.
 - `ApproxInverse.solve_into(b, out)` — Solve in-place into a pre-allocated array.
-- `Config(seed=0, split=None, exact_max_dim=24)` — Configuration for the factorization; blocks of at most `exact_max_dim` vertices, a bipartite block's kept side counted, are factored exactly by dense Cholesky, and `0` factors every block approximately.
+- `Config(seed=0, split=1, exact_max_dim=24, *, frustrated="cover")` — Configuration for the factorization; `split` is the number of clique-tree copies each edge is sampled as, `1` standard AC and more AC2; `frustrated` carries a frustrated block's surplus on its cover to a ground vertex (`"cover_ground_vertex"`), onto edges between each vertex's copies (`"cover_surplus_edges"`), or onto those edges only inside the twist band of `CoverSurplus::Auto` (`"cover"`); blocks of at most `exact_max_dim` vertices, a bipartite block's kept side counted, are factored exactly by dense Cholesky, and `0` factors every block approximately.
 
 ## Attribution
 

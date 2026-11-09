@@ -1,6 +1,6 @@
 """Type stubs for approx_chol."""
 
-from typing import Any, final
+from typing import Any, Literal, TypeAlias, final
 
 import numpy as np
 import numpy.typing as npt
@@ -15,17 +15,28 @@ __all__ = [
     "factorize_raw",
 ]
 
+_Frustrated: TypeAlias = Literal["cover", "cover_ground_vertex", "cover_surplus_edges"]
+
 @final
 class Config:
     """Configuration for approximate Cholesky factorization.
 
-    ``seed`` keys every sampler stream. ``split`` is the AC2 multi-edge
-    multiplicity ``k``, costing ``O(k)`` sampler draws per edge. Splitting an
-    edge fewer than twice is standard AC, so ``None``, ``0`` and ``1`` all
-    select AC. ``exact_max_dim`` is the largest block dimension factored by
-    exact dense Cholesky, a bipartite block's by its kept side; ``0`` factors
-    every block approximately.
+    ``seed`` keys every sampler stream. ``split`` is the number of clique-tree
+    copies each edge is sampled as, at least ``1``, costing ``O(split)`` sampler
+    draws per edge: ``1`` is standard AC, more is AC2. ``exact_max_dim`` is the
+    largest block dimension factored by exact dense Cholesky, a bipartite
+    block's by its kept side; ``0`` factors every block approximately.
+    ``frustrated`` is how a frustrated block, one no diagonal ``±1`` scaling
+    makes an SDDM, is factored approximately: through its Gremban cover on two
+    sheets, whose surplus goes to a ground vertex (``"cover_ground_vertex"``),
+    onto an edge between each vertex's two copies (``"cover_surplus_edges"``),
+    or onto those edges only inside the twist band of
+    ``CoverSurplus::Auto`` (``"cover"``).
     An argument left out or ``None`` keeps the default, which the getters report.
+
+    Raises:
+        ValueError: If ``split`` is outside ``[1, 2**32 - 1]`` or ``frustrated``
+            names no route.
     """
 
     def __new__(
@@ -33,11 +44,15 @@ class Config:
         seed: int | None = ...,
         split: int | None = ...,
         exact_max_dim: int | None = ...,
+        *,
+        frustrated: _Frustrated | None = ...,
     ) -> Config: ...
     @property
     def seed(self) -> int: ...
     @property
-    def split(self) -> int | None: ...
+    def split(self) -> int: ...
+    @property
+    def frustrated(self) -> _Frustrated: ...
     @property
     def exact_max_dim(self) -> int: ...
 

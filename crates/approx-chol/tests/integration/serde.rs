@@ -281,10 +281,12 @@ fn the_inverse_pivots_count_the_lone_vertices() {
     serde_json::from_value::<ApproxInverse>(more).expect_err("more lone vertices than listed");
 }
 
-/// 0.6.0's JSON lacks `exact_max_dim` and `complement`, so it is rejected, not read as the default bound.
+/// 0.6.0's JSON lacks `exact_max_dim` and `complement`, 0.7.0's states `split_merge`, not `sampling`: each is rejected, not read as the default.
 #[rstest]
 #[case::default(r#"{"seed":0,"split_merge":null,"backend":{"ExactBelow":{"max_dim":24,"on_failure":"FallBackToApproximate"}}}"#)]
 #[case::approximate(r#"{"seed":0,"split_merge":null,"backend":"Approximate"}"#)]
+#[case::v0_7(r#"{"seed":0,"split_merge":null,"exact_max_dim":24,"complement":"Same"}"#)]
+#[case::v0_7_split(r#"{"seed":0,"split_merge":2,"exact_max_dim":24,"complement":{"Approximate":{"split_merge":2}}}"#)]
 fn a_released_json_config_is_rejected(#[case] json: &str) {
     assert!(serde_json::from_str::<Config>(json).is_err());
 }

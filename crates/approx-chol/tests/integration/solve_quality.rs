@@ -7,9 +7,10 @@ use crate::common::graph::{Edge, Graph};
 use crate::common::grid;
 use crate::common::layouts::{assert_errors_leave_the_block, Layout, Layouts};
 use crate::common::modes::Mode;
+use crate::common::pcg::pcg_iterations;
 use crate::common::scratch::nan_cells;
 use crate::common::solve::Solve;
-use crate::common::sparse::Sparse;
+use crate::common::sparse::{clique_tree, Sparse};
 use crate::common::threads;
 
 fn assert_close(label: &str, x: &[f64], want: &[f64], tolerance: f64) {
@@ -391,7 +392,7 @@ fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
     for k in [2, 3] {
         for complement in [SchurMode::Same, SchurMode::Exact] {
             let config = Config {
-                split_merge: Some(k),
+                sampling: clique_tree(k),
                 exact_max_dim: 0,
                 complement,
                 ..Config::default()
@@ -459,34 +460,6 @@ fn apply_with_gathers_only_blocks_whose_vertices_are_not_consecutive(
     assert_eq!(bits(&x), bits(&want));
 }
 
-/// PCG on `graph` preconditioned by `factor`, from zero; the iterations to `‖r‖ ≤ tolerance ‖b‖`, if within `max`.
-fn pcg_iterations(
-    graph: &Graph,
-    factor: &Factored,
-    b: &[f64],
-    tolerance: f64,
-    max: usize,
-) -> Option<usize> {
-    let dot = |u: &[f64], v: &[f64]| u.iter().zip(v).map(|(u, v)| u * v).sum::<f64>();
-    let (mut x, mut r) = (vec![0.0; b.len()], b.to_vec());
-    let mut z = factor.solve(&r);
-    let (mut p, mut rz) = (z.clone(), dot(&r, &z));
-    for iteration in 1..=max {
-        let q = graph.apply(&p);
-        let alpha = rz / dot(&p, &q);
-        (x.iter_mut().zip(&p)).for_each(|(x, p)| *x += alpha * p);
-        (r.iter_mut().zip(&q)).for_each(|(r, q)| *r -= alpha * q);
-        if graph.relative_residual(&x, b) <= tolerance {
-            return Some(iteration);
-        }
-        z = factor.solve(&r);
-        let next = dot(&r, &z);
-        (p.iter_mut().zip(&z)).for_each(|(p, z)| *p = z + next / rz * *p);
-        rz = next;
-    }
-    None
-}
-
 #[rstest::rstest]
 #[case::f64(Types::F64U32, 1e-40, 1e-10)]
 #[case::f32(Types::F32U32, 1e-15, 1e-5)]
@@ -495,23 +468,9 @@ fn a_frustrated_grid_whose_surplus_lies_on_a_light_row_converges_under_pcg(
     #[case] light: f64,
     #[case] tolerance: f64,
 ) {
-    // Its surplus is ~1e-3·light of the trace: as a ground it gives the cover a common mode that small, and PCG stalls at ‖r‖ = ‖b‖.
+    // As a ground its surplus gives the cover a common mode that small, and PCG stalls at ‖r‖ = ‖b‖.
     let k = 10;
-    let edges = grid::grid(k, k)
-        .edges
-        .into_iter()
-        .enumerate()
-        .map(|(e, edge)| Edge {
-            weight: if edge.a < k { light } else { 1.0 },
-            positive: e % 7 == 0,
-            ..edge
-        });
-    let mut graph = Graph::new(k * k, edges.collect());
-    for edge in &graph.edges {
-        for v in [edge.a, edge.b].into_iter().filter(|&v| v < k) {
-            graph.ground[v] += 0.01 * edge.weight;
-        }
-    }
+    let graph = grid::light_row(k, light);
     let b = graph.apply(&(0..k * k).map(|v| (v % 5) as f64 - 2.0).collect::<Vec<_>>());
     for seed in 0..3 {
         let config = Config {
@@ -520,7 +479,8 @@ fn a_frustrated_grid_whose_surplus_lies_on_a_light_row_converges_under_pcg(
             ..Config::default()
         };
         let factor = Entry::Csr.reduce(&graph, types).factorize(&config);
-        let iterations = pcg_iterations(&graph, &factor, &b, tolerance, 100);
+        let iterations =
+            pcg_iterations(|x| graph.apply(x), |r| factor.solve(r), &b, tolerance, 100);
         assert!(
             iterations.is_some(),
             "seed {seed}: PCG did not reach {tolerance:e}"

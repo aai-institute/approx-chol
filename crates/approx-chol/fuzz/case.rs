@@ -1,11 +1,11 @@
 use std::error::Error;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
 };
 use approx_chol::{factorize_with, ApproxInverse, Config, MemStack, Threads};
-use approx_chol::{Real, ScalingPolicy, SchurMode};
+use approx_chol::{FrustratedRoute, Real, Sampling, ScalingPolicy, SchurMode};
 use serde::{Deserialize, Serialize};
 
 #[path = "cells.rs"]
@@ -81,26 +81,35 @@ pub struct Side<T> {
     pub values: Option<Vec<T>>,
 }
 
-/// `Config` in a `u8` per knob: `None` is an exact complement, under two copies sample once, a `u8` caps AC2.
+/// `Config` in a `u8` per count knob: `None` is an exact complement, under two copies sample once, a `u8` caps AC2; the frustrated route as itself.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Build {
     pub seed: u64,
     pub complement: Option<u8>,
     pub approximate: u8,
     pub exact_max_dim: u8,
+    pub frustrated: FrustratedRoute,
 }
 
 impl Build {
     pub fn config(&self) -> Config {
         let complement = (self.complement).map_or(SchurMode::Exact, |k| SchurMode::Approximate {
-            split_merge: Some(k.into()),
+            sampling: clique_tree(k),
         });
         Config {
             seed: self.seed,
-            split_merge: Some(self.approximate.into()),
+            sampling: clique_tree(self.approximate),
+            frustrated: self.frustrated,
             exact_max_dim: self.exact_max_dim.into(),
             complement,
         }
+    }
+}
+
+/// Every byte a count: `0` samples as `1`, standard AC.
+fn clique_tree(k: u8) -> Sampling {
+    Sampling::CliqueTree {
+        copies: NonZeroU32::new(k.into()).unwrap_or(NonZeroU32::MIN),
     }
 }
 

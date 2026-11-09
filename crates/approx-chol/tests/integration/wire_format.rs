@@ -13,7 +13,9 @@ use rstest::rstest;
 use serde::de::value::{Error, SeqDeserializer};
 use serde::Deserialize;
 
+use crate::common::pcg::relative_residual;
 use crate::common::solve::Solve;
+use crate::common::sparse::clique_tree;
 use crate::common::threads;
 
 const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
@@ -51,6 +53,7 @@ fixtures! {
     Floating => floating,
     Cover => cover,
     DenseFrustrated => dense_frustrated,
+    SampledAc => sampled_ac,
     SampledAc2 => sampled_ac2,
     Clamped => clamped,
 }
@@ -90,13 +93,13 @@ impl Fixture {
                 &[-3.0, 0.0, 1.0, 0.0],
                 &[0.0, -3.0, 0.0, 1.0],
             ]),
-            Self::SampledAc2 => None,
+            Self::SampledAc | Self::SampledAc2 => None,
         }
     }
 
     /// Whether the factor solves its matrix exactly: neither sampled nor clamped.
     fn exact(self) -> bool {
-        !matches!(self, Self::SampledAc2 | Self::Clamped)
+        !matches!(self, Self::SampledAc | Self::SampledAc2 | Self::Clamped)
     }
 
     /// The clamps the payload lists, by vertices.
@@ -126,8 +129,12 @@ impl Fixture {
 
     fn config(self) -> Config {
         match self {
+            Self::SampledAc => Config {
+                exact_max_dim: 0,
+                ..Config::default()
+            },
             Self::SampledAc2 => Config {
-                split_merge: Some(2),
+                sampling: clique_tree(2),
                 exact_max_dim: 0,
                 ..Config::default()
             },
@@ -148,7 +155,7 @@ impl Fixture {
             Self::Floating => &["n: 2, pinned: Some(", "triangular: Dense("],
             Self::Cover => &["Cover("],
             Self::DenseFrustrated => &["n: 3, pinned: None", "Dense("],
-            Self::SampledAc2 => &["elimination: Some", "Folded("],
+            Self::SampledAc | Self::SampledAc2 => &["elimination: Some", "Folded("],
             Self::Clamped => &["scaling: Refuted"],
         }
     }
@@ -179,15 +186,6 @@ fn sampled_gram(config: Config) -> ApproxInverse {
 /// Zero-sum over every fixture's floating component, so each has an exact solution.
 fn rhs(n: usize) -> Vec<f64> {
     (0..n).map(|i| [1.0, 2.0, -1.0, -2.0][i % 4]).collect()
-}
-
-fn relative_residual(matrix: &[&[f64]], x: &[f64], b: &[f64]) -> f64 {
-    let norm = |v: &mut dyn Iterator<Item = f64>| v.map(|e| e * e).sum::<f64>().sqrt();
-    let mut error = matrix.iter().zip(b).map(|(row, bi)| {
-        let ax: f64 = row.iter().zip(x).map(|(a, xj)| a * xj).sum();
-        ax - bi
-    });
-    norm(&mut error) / norm(&mut b.iter().copied())
 }
 
 /// `fixtures!` gives every fixture its case; this ties the committed payloads to those fixtures, so none is written but never read, an older version's included.
@@ -235,7 +233,10 @@ fn assert_committed_payload_decodes_and_solves(fixture: Fixture) {
     let b = rhs(factor.n());
     let x = restored.solve_at(&b, threads::ONE).expect("rows fit");
     if let Some(matrix) = fixture.matrix().filter(|_| fixture.exact()) {
-        let residual = relative_residual(matrix, &x, &b);
+        let ax: Vec<f64> = (matrix.iter())
+            .map(|row| row.iter().zip(&x).map(|(a, x)| a * x).sum())
+            .collect();
+        let residual = relative_residual(&ax, &b);
         assert!(residual < 1e-12, "relative residual {residual:e}");
     }
     // Each block's clamp, its outcome's variant order among it, is frozen with the format version.

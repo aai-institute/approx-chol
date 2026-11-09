@@ -2,7 +2,8 @@
 
 use rayon::prelude::*;
 
-use crate::sgdd::{within_band, Balance, Grounding};
+use super::config::{CoverSurplus, FrustratedRoute};
+use crate::sgdd::{Balance, Grounding};
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, widen, Batch, Index, Real};
 
@@ -48,11 +49,12 @@ impl<T: Real, I: Index> Sddm<T, I> {
         Self { adjacency, closure }
     }
 
-    /// Folded `M` on one sheet, or the Gremban cover of frustrated `M` on two.
+    /// Folded `M` on one sheet, or the Gremban cover of frustrated `M` on two, its surplus carried as `route` says.
     pub(super) fn of_block(
         adjacency: UpperAdjacency<T, I>,
         balance: Balance,
         grounding: Grounding<T>,
+        route: FrustratedRoute,
     ) -> Self {
         match balance {
             Balance::Balanced => Self::new(adjacency, Closure::Folded(grounding)),
@@ -64,26 +66,31 @@ impl<T: Real, I: Index> Sddm<T, I> {
                         sums.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
                     }
                 });
-                Self::of_rows(rows, balance, &grounding)
+                Self::of_rows(rows, balance, &grounding, route)
             }
         }
     }
 
-    /// Rows on `balance`'s [`sheets`], each ground plus its vertex's surplus, the last of `block`'s; frustrated, a ground within the band [`twists`].
-    pub(super) fn of_rows(rows: SddmRows<T, I>, balance: Balance, block: &Grounding<T>) -> Self {
+    /// Rows on `balance`'s [`sheets`], each ground plus its vertex's surplus, the last of `block`'s; frustrated, a ground twists as `route` says, and with none the cover floats.
+    pub(super) fn of_rows(
+        rows: SddmRows<T, I>,
+        balance: Balance,
+        block: &Grounding<T>,
+        route: FrustratedRoute,
+    ) -> Self {
         let n = rows.sums.len() - 1;
         let adjacency = UpperAdjacency::new(Rows::new(rows.ptrs, rows.indices, rows.values, n));
         let mut ground = rows.ground;
-        if let Some(surplus) = block.surplus() {
+        if let Some(stated) = block.surplus() {
             let count = sheets(balance);
-            let kept = surplus[surplus.len() - ground.len() / count..].iter();
+            let kept = stated[stated.len() - ground.len() / count..].iter();
             let copies = kept.flat_map(|&s| std::iter::repeat_n(s, count));
             (ground.iter_mut().zip(copies)).for_each(|(g, s)| *g = s + *g);
         }
         let grounding = Grounding::of(ground);
         let closure = match (balance, grounding.surplus()) {
             (Balance::Balanced, _) => Closure::Folded(grounding),
-            (Balance::Frustrated, Some(ground)) if twists(ground, &adjacency) => {
+            (Balance::Frustrated, Some(ground)) if twists(route, ground, &adjacency) => {
                 Closure::Twisted(ground.chunks_exact(2).map(|g| twist(g[0], g[1])).collect())
             }
             (Balance::Frustrated, _) => Closure::Cover(grounding),
@@ -291,14 +298,28 @@ impl<T: Real, I: Index> ColumnSums<'_, T, I> {
     }
 }
 
-/// Whether `ground` is within the band of `ground + Σ|a_ij|`, both `ε`-scaled so neither overflows: a cover's copies then [`twist`] instead of grounding, so its `1/s` common mode cannot swamp `z`; a cover doubles both sums, so `M`'s decide as its own.
-fn twists<T: Real, I: Index>(ground: &[T], adjacency: &UpperAdjacency<T, I>) -> bool {
-    let epsilon = widen(T::epsilon());
-    let total = crate::lane_sum(ground, epsilon);
-    within_band::<T>(total, total + adjacency.scaled_abs_total(epsilon))
+/// [`CoverSurplus::Auto`]'s twist band, in `ε`.
+const TWIST_BAND: f64 = 5.0;
+
+/// Whether a cover's copies [`twist`] instead of grounding, as `route` says; `Auto` weighs `ground` against `ground + Σ|a_ij|`, both `ε`-scaled so neither overflows, and a cover doubles both sums, so `M`'s decide as its own.
+fn twists<T: Real, I: Index>(
+    route: FrustratedRoute,
+    ground: &[T],
+    adjacency: &UpperAdjacency<T, I>,
+) -> bool {
+    match route {
+        FrustratedRoute::Cover(CoverSurplus::GroundVertex) => false,
+        FrustratedRoute::Cover(CoverSurplus::SurplusEdges) => true,
+        FrustratedRoute::Cover(CoverSurplus::Auto) => {
+            let epsilon = widen(T::epsilon());
+            let total = crate::lane_sum(ground, epsilon);
+            let trace = total + adjacency.scaled_abs_total(epsilon);
+            total <= TWIST_BAND * epsilon * trace
+        }
+    }
 }
 
-/// The edge `k⁺ — k⁻` that acts on `[z; −z]` as grounds `g⁺, g⁻` do; with `g⁺ ≠ g⁻` no ungrounded pair matches them, and the mean differs by less than the band. Zero where both copies float, else at least `MIN_POSITIVE`, as a share is.
+/// The edge `k⁺ — k⁻`, a quarter of `g⁺ + g⁻`, that acts on `[z; −z]` as grounds `g⁺, g⁻` together do; with `g⁺ ≠ g⁻` the sheets are not mirrored, and the edge holds their mean on both. Zero where both copies float, else at least `MIN_POSITIVE`, as a share is.
 fn twist<T: Real>(g_plus: T, g_minus: T) -> T {
     if g_plus == T::zero() && g_minus == T::zero() {
         return T::zero();
@@ -360,7 +381,9 @@ mod tests {
         let values = vec![2f64.powi(1020); indices.len()];
         let signed = UpperAdjacency::new(Rows::new(ptrs, indices, values, n as usize));
         let surplus = [extra].into_iter().chain([0.0; 8]).collect();
-        Sddm::of_block(signed, Balance::Frustrated, Grounding::of(surplus))
+        let grounding = Grounding::of(surplus);
+        let route = FrustratedRoute::Cover(CoverSurplus::Auto);
+        Sddm::of_block(signed, Balance::Frustrated, grounding, route)
     }
 
     #[test]

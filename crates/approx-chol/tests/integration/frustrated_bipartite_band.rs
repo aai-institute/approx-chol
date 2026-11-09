@@ -1,51 +1,11 @@
-use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
+use approx_chol::input::CsrRef;
 use approx_chol::{factorize_with, Config, ScalingPolicy, SchurMode};
 
+use crate::common::bipartite::Bipartite;
+use crate::common::cycle::Cycle;
 use crate::common::dense_residual::apply;
-use crate::common::gram::{dense_csr, matrix};
+use crate::common::gram::dense_csr;
 use crate::common::solve::Solve;
-
-/// A frustrated unit cycle `L0 R0 L1 R1 …`, `cycle` vertices a side, and `pendants` left vertices each joined by `1e-95` to `wide` cycle vertices and left a `1e-200` surplus: within the band.
-struct Cycle {
-    cycle: usize,
-    pendants: usize,
-    wide: usize,
-    /// Unit pendants on the right, which make the left side, surplus and all, the kept one.
-    right_pendants: usize,
-}
-
-impl Cycle {
-    fn sides(&self) -> (usize, usize) {
-        (self.cycle + self.pendants, self.cycle + self.right_pendants)
-    }
-
-    /// Columns `(left, right, x, y)` of `V Wᵀ`.
-    fn columns(&self) -> (Vec<u32>, Vec<u32>, Vec<f64>, Vec<f64>) {
-        let m = self.cycle;
-        let mut columns = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-        let mut push = |l: usize, r: usize, x: f64, y: f64| {
-            columns.0.push(l as u32);
-            columns.1.push(r as u32);
-            columns.2.push(x);
-            columns.3.push(y);
-        };
-        for i in 0..m {
-            push(i, i, 1.0, 1.0);
-            push(i, (i + 1) % m, 1.0, if i == m - 1 { -1.0 } else { 1.0 });
-        }
-        for p in 0..self.pendants {
-            for k in 0..self.wide {
-                let y = if k == 0 { -1e-95 } else { 1e-95 };
-                push(m + p, (p + k) % m, 1e-95, y);
-            }
-            push(m + p, 0, 1e-100, 0.0);
-        }
-        for p in 0..self.right_pendants {
-            push(p % m, m + p, 1.0, 1.0);
-        }
-        columns
-    }
-}
 
 /// `‖Mx − b‖∞` past `64ε (‖M‖∞‖x‖∞ + ‖b‖∞)`, for `b = M·want`.
 fn unstable(m: &[Vec<f64>], solve: impl FnOnce(&[f64]) -> Vec<f64>) -> Option<String> {
@@ -96,18 +56,11 @@ fn a_frustrated_bipartite_block_with_a_negligible_surplus_solves_backward_stably
     ];
     let mut failures = Vec::new();
     for (surplus, cycle) in cycles {
-        let (left, right, x, y) = cycle.columns();
-        let (n_left, n_right) = cycle.sides();
-        let n = n_left + n_right;
-        let shifted: Vec<u32> = right.iter().map(|&r| r + n_left as u32).collect();
-        let m = matrix(n, &left, &shifted, &x, &y);
+        let g = cycle.bipartite();
+        let m = g.dense();
         let (ptrs, columns, values) = dense_csr(&m);
-        let gram = BipartiteFactorWidth2::new(
-            FactorWidth1::new(n_left, &left, Some(&x)).unwrap(),
-            FactorWidth1::new(n_right, &right, Some(&y)).unwrap(),
-        )
-        .unwrap();
-        let csr = CsrRef::new(&ptrs, &columns, &values, n as u32).unwrap();
+        let gram = g.view();
+        let csr = CsrRef::new(&ptrs, &columns, &values, m.len() as u32).unwrap();
         for (complement, config) in [
             ("dense", Config::default()),
             ("exact", exact),
@@ -138,18 +91,19 @@ fn a_frustrated_kept_side_as_large_as_exact_max_dim_solves_exactly() {
             y.push(if (l + 2 * r) % 3 == 0 { -1.0 } else { 1.0 });
         }
     }
-    let shifted: Vec<u32> = right.iter().map(|&r| r + n_left as u32).collect();
-    let m = matrix(n_left + n_right, &left, &shifted, &x, &y);
-    let gram = BipartiteFactorWidth2::new(
-        FactorWidth1::new(n_left, &left, Some(&x)).unwrap(),
-        FactorWidth1::new(n_right, &right, Some(&y)).unwrap(),
-    )
-    .unwrap();
+    let g = Bipartite {
+        n_left,
+        n_right,
+        left,
+        right,
+        values: Some((x, y)),
+    };
+    let m = g.dense();
     let config = Config {
         exact_max_dim: n_left.min(n_right),
         ..Config::default()
     };
-    let factor = factorize_with(gram, config, ScalingPolicy::default()).unwrap();
+    let factor = factorize_with(g.view(), config, ScalingPolicy::default()).unwrap();
     let failure = unstable(&m, |b| factor.solve(b).unwrap());
     assert!(failure.is_none(), "{failure:?}");
 }

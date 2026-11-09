@@ -15,7 +15,7 @@ use rand::SeedableRng;
 use rayon::prelude::*;
 
 pub use apply::{ApplyError, ColumnMajor, Columns, LayoutError, MatrixMut};
-pub use config::{Config, SchurMode};
+pub use config::{Config, CoverSurplus, FrustratedRoute, Sampling, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
 
@@ -106,7 +106,7 @@ impl<T: Real> ApproxInverse<T> {
         } = summands;
         let inverse_pivots = pivots.iter().map(|&pivot| T::one() / pivot).collect();
         let (order, segments) = Order::pack(vertices, ranges(&coupled), numbering);
-        let workspace = || Workspace::new(config.split());
+        let workspace = || Workspace::new(config.sampling.copies());
         // Exactly sized: collect's reserve rounds a few blocks up to 4 and into_boxed_slice reallocates.
         let mut factored = Vec::with_capacity(coupled.len());
         (coupled.into_par_iter().zip(segments))
@@ -235,7 +235,10 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
             OffDiagonal::General(adjacency) => {
                 let arm = match config.dense(adjacency.n()) {
                     true => Arm::Exact(Signed::new(adjacency, balance, grounding)),
-                    false => Arm::Approximate(Sddm::of_block(adjacency, balance, grounding)),
+                    false => {
+                        let s = Sddm::of_block(adjacency, balance, grounding, config.frustrated);
+                        Arm::Approximate(s)
+                    }
                 };
                 (None, Cholesky::factor(arm, draws, tail(0), reused))
             }
@@ -594,7 +597,7 @@ mod storage {
     use super::*;
     use crate::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Input};
     use crate::sgdd::Reduced;
-    use crate::{ScalingPolicy, SchurMode};
+    use crate::{Sampling, ScalingPolicy, SchurMode};
 
     fn bits(factor: &ApproxInverse, b: &[f64]) -> Vec<u64> {
         let mut x = b.to_vec();
@@ -611,7 +614,9 @@ mod storage {
             Config::default(),
             Config {
                 exact_max_dim: 0,
-                split_merge: Some(2),
+                sampling: Sampling::CliqueTree {
+                    copies: std::num::NonZeroU32::new(2).expect("two"),
+                },
                 ..Config::default()
             },
             Config {
