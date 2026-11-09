@@ -3,7 +3,7 @@
 use rayon::prelude::*;
 
 use super::config::{CoverSurplus, FrustratedRoute};
-use super::sign::Unsigned;
+use super::sign::{cancel, Unsigned};
 use crate::sgdd::{Balance, Grounding};
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, widen, Batch, Index, Real};
@@ -243,7 +243,7 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         rows.unwrap_or_else(|| Self::new(n))
     }
 
-    /// The signed rows the sheets cover, `k⁻`'s mirrors skipped: `j⁺, j⁻` sum `P, N` into `N − P`, and the surplus, `block`'s plus the ground, gains `2 min(P, N)` on both rows, as `P + N − |N − P|` would by cancellation.
+    /// The signed rows the sheets cover, `k⁻`'s mirrors skipped: `j⁺, j⁻` sum `P, N` into `N − P`, and the surplus, `block`'s plus the ground, gains what that sum [`cancel`]s on both rows.
     pub(super) fn fold(
         self,
         balance: Balance,
@@ -257,7 +257,6 @@ impl<T: Real, I: Index> SddmRows<T, I> {
             .map(|k| kept.map_or(ground(k), |s| s[k] + ground(k)))
             .collect();
         let (mut ptrs, mut indices, mut values) = (vec![0], Vec::new(), Vec::new());
-        let two = T::one() + T::one();
         for k in 0..n {
             let mut at = self.ptrs[count * k];
             let columns = &self.indices[at..self.ptrs[count * k + 1]];
@@ -269,12 +268,12 @@ impl<T: Real, I: Index> SddmRows<T, I> {
                 at += pair.len();
                 let [same, opposite] = sums;
                 let j = pair[0].index() / count;
-                let gain = two * same.min(opposite);
+                let (entry, gain) = cancel(opposite, -same);
                 surplus[k] = surplus[k] + gain;
                 surplus[j] = surplus[j] + gain;
-                if opposite != same {
+                if entry != T::zero() {
                     indices.push(I::from_index(j));
-                    values.push(opposite - same);
+                    values.push(entry);
                 }
             }
             ptrs.push(indices.len());

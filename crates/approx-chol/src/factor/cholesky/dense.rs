@@ -1,5 +1,6 @@
 //! Exact Cholesky of a small `M` by GTH elimination: every pivot a sum of nonnegative terms, so none cancels or fails.
 
+use crate::factor::sign::cancel;
 use crate::factor::within_one;
 use crate::sgdd::{Balance, FactorTail, Grounding};
 use crate::storage::UpperAdjacency;
@@ -86,10 +87,9 @@ pub(super) fn factor<T: Real, I: Index>(
     (factor, pin)
 }
 
-/// Left-looking GTH over `m` columns into the inverse pivots, the surplus row `m` updated as any other; `SIGNED` entries may be positive, each update that shrinks one adding `2 min(|a|, |t|)` to both its rows' surplus, as `|a| + |t| − |a − t|` would by cancellation.
+/// Left-looking GTH over `m` columns into the inverse pivots, the surplus row `m` updated as any other; `SIGNED` entries may be positive, each update adding what it [`cancel`]s to both its rows' surplus.
 fn eliminate<T: Real, const SIGNED: bool>(matrix: &mut [T], inverse_pivots: &mut [T], m: usize) {
     let mut gains = vec![T::zero(); if SIGNED { m } else { 0 }];
-    let two = T::one() + T::one();
     for col in 0..m {
         let pivot_row = row_start(col);
         let mut diagonal = T::zero();
@@ -110,13 +110,15 @@ fn eliminate<T: Real, const SIGNED: bool>(matrix: &mut [T], inverse_pivots: &mut
                     true => -t,
                     false => t,
                 };
-                // A zero `t` gains nothing; testing it spares sparse rows a `+0` store per step.
-                if row < m && (value > T::zero()) == (t > T::zero()) && t != T::zero() {
-                    let gain = two * value.abs().min(t.abs());
+                // Gated on `cancel`'s own sign test, which then folds away: sparse rows skip a `+0` store per step.
+                if row < m && (value < T::zero()) != (-t < T::zero()) && t != T::zero() {
+                    let (sum, gain) = cancel(value, -t);
                     gains[row] = gains[row] + gain;
                     gains[col] = gains[col] + gain;
+                    value = sum;
+                } else {
+                    value = value - t;
                 }
-                value = value - t;
             }
             if SIGNED && row == m {
                 value = value - gains[col];

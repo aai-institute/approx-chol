@@ -194,7 +194,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::super::{CliqueTreeSampler, Copies, Multi, Single};
-    use crate::factor::sign::{Sign, Unsigned};
+    use crate::factor::sign::{cancel, Sign, Unsigned};
 
     /// Merged with `merge` under a split of `k`, as `(neighbor, copies, weight bits)`.
     fn merged(
@@ -252,12 +252,7 @@ mod tests {
         }
 
         fn merge(self, a: f64, b: f64) -> (f64, f64) {
-            let gain = if (a < 0.0) != (b < 0.0) {
-                2.0 * a.abs().min(b.abs())
-            } else {
-                0.0
-            };
-            (a + b, gain)
+            cancel(a, b)
         }
 
         fn fill(self, _: f64, _: f64, magnitude: f64, _: u32) -> f64 {

@@ -17,6 +17,15 @@ pub(super) trait Sign<T: Real, I: Index>: Copy {
     fn ground(self) -> Option<I>;
 }
 
+/// `a + b`, and the magnitude their sum cancels, `|a| + |b| − |a + b|`: `2 min(|a|, |b|)` where their signs differ.
+pub(super) fn cancel<T: Real>(a: T, b: T) -> (T, T) {
+    let cancelled = match (a < T::zero()) != (b < T::zero()) {
+        true => (T::one() + T::one()) * a.abs().min(b.abs()),
+        false => T::zero(),
+    };
+    (a + b, cancelled)
+}
+
 /// A Laplacian's weights: every one a magnitude, so nothing cancels.
 #[derive(Clone, Copy)]
 pub(super) struct Unsigned;
