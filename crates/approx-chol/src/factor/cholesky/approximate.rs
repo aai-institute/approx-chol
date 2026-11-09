@@ -214,12 +214,12 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
                 [c] if c == T::one() => y[v] = y[v].add(y[neighbors[span.start].index()]),
                 [c] => y[v] = y[v].add(y[neighbors[span.start].index()].mul(c)),
                 _ => {
-                    let mut lanes = [V::zero(); LANES];
+                    let mut lanes = [V::zero(); SPLIT];
                     lanes[0] = y[v];
-                    let mut js = neighbors[span.clone()].chunks_exact(LANES);
-                    let mut cs = coefficients[span].chunks_exact(LANES);
+                    let mut js = neighbors[span.clone()].chunks_exact(SPLIT);
+                    let mut cs = coefficients[span].chunks_exact(SPLIT);
                     for (js, cs) in js.by_ref().zip(cs.by_ref()) {
-                        for lane in 0..LANES {
+                        for lane in 0..SPLIT {
                             lanes[lane] = lanes[lane].add(y[js[lane].index()].mul(cs[lane]));
                         }
                     }
@@ -235,7 +235,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
 }
 
 /// The split reassociates the row's sum, so this is part of a factor's solve output.
-const LANES: usize = 4;
+const SPLIT: usize = 4;
 
 #[cfg(feature = "serde")]
 impl<T: Real, I: Index> ApproximateCholesky<T, I> {

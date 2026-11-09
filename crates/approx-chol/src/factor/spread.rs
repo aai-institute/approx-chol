@@ -4,6 +4,7 @@
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use super::apply::Room;
 use super::{slots, ApproxInverse, Block, Blocks};
 use crate::order::{Order, Rows};
 use crate::threads::ONE;
@@ -41,8 +42,8 @@ impl Spread {
         }
     }
 
-    /// Slots of the solve's stack: the most a block running alone takes, and regions of the most another one takes, one per thread when they run at once.
-    pub(super) fn slots<T: Real>(&self, inverse: &ApproxInverse<T>) -> (usize, usize, usize) {
+    /// The solve's room on the stack: the most a block running alone takes, and regions of the most another one takes, one per thread when they run at once.
+    pub(super) fn room<T: Real>(&self, inverse: &ApproxInverse<T>) -> Room {
         let mut alone = 0;
         let small = on!(&inverse.blocks, blocks => self.split(blocks, |block| {
             alone = alone.max(block.global_scratch_slots());
@@ -51,7 +52,12 @@ impl Spread {
             true => self.tasks,
             false => 1,
         };
-        (alone, small.slots, regions)
+        Room {
+            column: slots::<T>(inverse.n()),
+            alone: slots::<T>(alone),
+            region: slots::<T>(small.slots),
+            regions,
+        }
     }
 
     /// Hands each block past the share to `alone`, in order, and sums the others.

@@ -25,7 +25,7 @@ use crate::storage::OffDiagonal;
 use crate::threads::ONE;
 use crate::Clamp;
 use crate::{Batch, Index, MemBuffer, MemStack, Real, StackReq, Threads};
-use apply::Kernel;
+use apply::{Kernel, Room};
 use block_elimination::BlockElimination;
 use cholesky::{Arm, Cholesky, Signed, Workspace};
 use schur::BipartiteBlock;
@@ -174,12 +174,8 @@ impl<T: Real> ApproxInverse<T> {
         if columns == 0 {
             return StackReq::EMPTY;
         }
-        let (alone, region, regions) = spread::Spread::of(self, threads).slots(self);
-        let solve = |columns| {
-            let regions = slots::<T>(region).array(columns).array(regions);
-            slots::<T>(alone).array(columns).or(regions)
-        };
-        solve(columns).or(slots::<T>(self.n()).and(solve(1)))
+        let room = Room::of(self, threads);
+        room.in_place(columns).or(room.staged())
     }
 
     /// Applies the approximate inverse to every column of `block` at once, each bit for bit as it would be alone, through scratch allocated for this call; [`ApplyError::Scratch`] if it cannot be.
