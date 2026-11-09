@@ -363,6 +363,7 @@ impl core::marker::Copy for approx_chol::Error
 impl core::marker::StructuralPartialEq for approx_chol::Error
 #[non_exhaustive] pub enum approx_chol::FrustratedRoute
 pub approx_chol::FrustratedRoute::Cover(approx_chol::CoverSurplus)
+pub approx_chol::FrustratedRoute::Signed
 impl core::clone::Clone for approx_chol::FrustratedRoute
 pub fn approx_chol::FrustratedRoute::clone(&self) -> Self
 impl core::cmp::Eq for approx_chol::FrustratedRoute
