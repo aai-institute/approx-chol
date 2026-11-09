@@ -52,10 +52,12 @@ requirements are in `../requirements/`.
 | Execution | `Threads` | `join`, `fork` |
 
 - A part offers only its exports. Visibility enforces it: a part's other items are at most
-  `pub(in crate::part)`, its exports `pub(crate)` or public. A test checks that every such item is
-  listed here and that every path between parts follows the layer order, and counts the distinct
-  part-to-part edges and the exports. The public surface over all features is a committed
-  snapshot whose every change CI shows; Python's is the stub that stubtest checks.
+  `pub(in crate::part)`, its exports `pub(crate)` or public. The code owns the export list: a
+  part's exports are its root's re-exports, and the public ones are also in the snapshot; the
+  table above is the target until P2 makes the parts. A test checks that every path between parts
+  follows the layer order, counts the distinct part-to-part edges and the exports, and writes them
+  to a generated `parts.txt`; doc links are not layer edges. The public surface over all features
+  is a committed snapshot whose every change CI shows; Python's is the stub that stubtest checks.
 - Each part's exports serialize themselves, under the envelope's one format version; no part
   versions its own. On load, the approximate inverse checks that the parts agree, as their
   owners' checks state, without reading their representations.
@@ -86,10 +88,12 @@ requirements are in `../requirements/`.
 - **Determinism in Execution:** proved once, not in every part that runs in parallel.
 - **One core crate plus the Python crate:** a part becomes a crate only when something outside the
   crate forces it; pyo3 does for the binding, nothing does for the others.
-- **Exports named, signatures not:** a name list is the vocabulary of a boundary and changes
-  with the design; signatures written here would be a second copy of the code. The snapshot and
-  the edge test check the code itself, so an addition such as `BlockFactor` cannot pass unseen:
-  semver-checks allows additions.
+- **The code owns the export list:** a list kept here would be a second copy of the part roots'
+  re-exports, as signatures would be of the code. The snapshot and `parts.txt` are generated from
+  the code and committed, so an addition such as `BlockFactor` cannot pass unseen: semver-checks
+  allows additions.
+- **Doc links not layer edges:** a rustdoc link names an item for the reader and compiles to
+  nothing; counted, it would forbid a part's docs from pointing at the part that uses it.
 - **`Sgdd` and `Complement` in the approximate inverse:** their `factor` returns B, which
   Reduction may not name; they hold Reduction's `Reduced`.
 - **`WddCsr` in Storage:** Reduction makes it and Cholesky takes it, and neither uses the
@@ -103,7 +107,9 @@ requirements are in `../requirements/`.
   components; Cholesky does not fail.
 - **Visibility, then a test:** the compiler rejects any use of a part's private item, trait
   methods and macros included; the test adds what visibility cannot say, the layer order and the
-  list.
+  counts.
+- **The snapshot before the parts:** the public surface exists on `main` today and changes in
+  every 0.8.0 step, so P9a shows those changes; visibility per part needs the parts, P2.
 - **Encodings per part:** the persistence format does not couple the approximate inverse to the
   internals of Reduction and Cholesky.
 
@@ -142,7 +148,8 @@ and F1, and P1 as far as P5 takes it. P2's module moves, P9b, R1, R1b and R3 fol
 | P6 | Persistence: the envelope `(Header, B)`, `Header`, `Scalar` and `HeaderMismatch` public, replacing `FACTOR_FORMAT_VERSION`; one version, none per part; format `0x4143_000E` | round trip; postcard bytes equal the flat `(version, scalar, B)`; version and scalar rejected by name; corrupt payloads rejected | P3 |
 | P7 | Adapters: faer (row and column CSR, `MatrixMut`, `LinOp`, `BiLinOp`, `Precond`, `BiPrecond`, `From<Par>`), sprs, nalgebra, ndarray; the unimplemented-trait message | per-feature tests | P4, D6 |
 | P8 | Python: `ApproxInverse` a `LinearOperator`, `threads`, `with_threads`, `apply` with `out`; `components`, `clamps`; `Config`'s `sampling` and `frustrated`; `InputError` and `BuildError` with their kinds; pickle through postcard, its header read as P6's `Header`; any scipy format through `tocsr()`, a CSC no longer read as its transpose; the checks Rust makes no longer repeated; `factorize_raw` removed | pytest, stubtest, changelog | P3–P6 |
-| P9 | Visibility per part, the layer and export test, the public-surface snapshot in CI | CI | P2 |
+| P9a | The public-surface snapshot: cargo-public-api over all features on a nightly pinned through rustup in `scripts/public-api.sh`, a CI job beside `semver`; every PR that changes the surface regenerates it. Lands first | CI | – |
+| P9b | Visibility per part; the layer and export test, with syn, writing the generated `parts.txt`; after 0.8.0 | CI | P2 |
 
 ### Module tree
 
