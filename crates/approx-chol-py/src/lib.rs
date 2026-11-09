@@ -1,6 +1,6 @@
 use approx_chol::{
-    ApplyError, ApproxInverse, Config, CsrRef, MemBuffer, MemStack, Sampling, ScalingPolicy, Sgdd,
-    Threads,
+    ApplyError, ApproxInverse, Config, CoverSurplus, CsrRef, FrustratedRoute, MemBuffer, MemStack,
+    Sampling, ScalingPolicy, Sgdd, Threads,
 };
 use num_traits::PrimInt;
 use numpy::{
@@ -151,6 +151,28 @@ fn owned<T: Element + Copy>(array: &Bound<'_, PyArray1<T>>, name: &str) -> PyRes
 #[derive(PartialEq, Eq, Hash)]
 struct PyConfig(Config);
 
+/// Each frustrated route by its Python name.
+const FRUSTRATED: [(&str, FrustratedRoute); 3] = [
+    ("cover", FrustratedRoute::Cover(CoverSurplus::Auto)),
+    (
+        "cover_ground_vertex",
+        FrustratedRoute::Cover(CoverSurplus::GroundVertex),
+    ),
+    (
+        "cover_surplus_edges",
+        FrustratedRoute::Cover(CoverSurplus::SurplusEdges),
+    ),
+];
+
+/// The route `name` names, else a `ValueError` listing every name.
+fn frustrated_route(name: &str) -> PyResult<FrustratedRoute> {
+    let named = FRUSTRATED.iter().find(|(n, _)| *n == name);
+    named.map(|&(_, route)| route).ok_or_else(|| {
+        let names = FRUSTRATED.map(|(n, _)| format!("'{n}'")).join(", ");
+        value_error(format!("frustrated must be one of {names}, not '{name}'"))
+    })
+}
+
 /// `split` as copies: an integer past `u32` or `0` is a `ValueError`, a non-integer a `TypeError`.
 fn copies(split: &Bound<'_, PyAny>) -> PyResult<NonZeroU32> {
     let out_of_range = || value_error("split must be an integer in [1, 2**32 - 1]");
@@ -166,11 +188,12 @@ fn copies(split: &Bound<'_, PyAny>) -> PyResult<NonZeroU32> {
 #[pymethods]
 impl PyConfig {
     #[new]
-    #[pyo3(signature = (seed=None, split=None, exact_max_dim=None))]
+    #[pyo3(signature = (seed=None, split=None, exact_max_dim=None, *, frustrated=None))]
     fn new(
         seed: Option<u64>,
         split: Option<Bound<'_, PyAny>>,
         exact_max_dim: Option<usize>,
+        frustrated: Option<&str>,
     ) -> PyResult<Self> {
         let default = Config::default();
         let sampling = match split {
@@ -182,6 +205,7 @@ impl PyConfig {
         Ok(Self(Config {
             seed: seed.unwrap_or(default.seed),
             sampling,
+            frustrated: frustrated.map_or(Ok(default.frustrated), frustrated_route)?,
             exact_max_dim: exact_max_dim.unwrap_or(default.exact_max_dim),
             ..default
         }))
@@ -198,6 +222,16 @@ impl PyConfig {
             Sampling::CliqueTree { copies } => Ok(copies.get()),
             _ => Err(PyNotImplementedError::new_err("this sampling has no split")),
         }
+    }
+
+    #[getter]
+    fn frustrated(&self) -> PyResult<&'static str> {
+        let named = FRUSTRATED
+            .iter()
+            .find(|(_, route)| *route == self.0.frustrated);
+        named
+            .map(|&(name, _)| name)
+            .ok_or_else(|| PyNotImplementedError::new_err("this frustrated route has no name"))
     }
 
     #[getter]

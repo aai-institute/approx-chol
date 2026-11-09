@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use approx_chol::ApproxInverse;
+use approx_chol::{ApproxInverse, CoverSurplus, FrustratedRoute};
 
 mod case;
 
@@ -81,14 +81,16 @@ fn seeds() -> Vec<(&'static str, Input)> {
         // An odd cycle of positive entries cannot fold to a Laplacian.
         (
             "csr_frustrated_triangle",
-            f64(
-                View::Csr(rows(
-                    &[0, 3, 6, 9],
-                    &[0, 1, 2, 0, 1, 2, 0, 1, 2],
-                    &[2.0, 1.0, 1.0, 1.0, 2.0, 1.0, 1.0, 1.0, 2.0],
-                )),
-                approximate(),
-            ),
+            f64(frustrated_triangle(2.0), approximate()),
+        ),
+        // Each row's surplus of 1 on a cover forced onto a ground vertex, then onto surplus edges.
+        (
+            "csr_frustrated_triangle_ground_vertex",
+            f64(frustrated_triangle(3.0), cover(CoverSurplus::GroundVertex)),
+        ),
+        (
+            "csr_frustrated_triangle_surplus_edges",
+            f64(frustrated_triangle(3.0), cover(CoverSurplus::SurplusEdges)),
         ),
         (
             "upper_csr_grid_4x4",
@@ -184,6 +186,16 @@ fn rows(row_ptrs: &[u32], columns: &[u32], values: &[f64]) -> Rows<f64> {
     }
 }
 
+/// Unit positive entries on a triangle, each row's `diagonal` past their `2` its surplus.
+fn frustrated_triangle(diagonal: f64) -> View<f64> {
+    let d = diagonal;
+    View::Csr(rows(
+        &[0, 3, 6, 9],
+        &[0, 1, 2, 0, 1, 2, 0, 1, 2],
+        &[d, 1.0, 1.0, 1.0, d, 1.0, 1.0, 1.0, d],
+    ))
+}
+
 fn narrowed(r: Rows<f64>) -> Rows<f32> {
     Rows {
         n: r.n,
@@ -246,6 +258,7 @@ fn build(exact_max_dim: u8) -> Build {
         complement: Some(1),
         approximate: 1,
         exact_max_dim,
+        frustrated: FrustratedRoute::Cover(CoverSurplus::Auto),
     }
 }
 
@@ -261,6 +274,13 @@ fn split(copies: u8) -> Build {
     Build {
         complement: Some(copies),
         approximate: copies,
+        ..approximate()
+    }
+}
+
+fn cover(surplus: CoverSurplus) -> Build {
+    Build {
+        frustrated: FrustratedRoute::Cover(surplus),
         ..approximate()
     }
 }

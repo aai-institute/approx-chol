@@ -5,6 +5,7 @@ mod admission;
 mod apply;
 mod component;
 mod config;
+mod cover_surplus;
 mod frustrated_bipartite_band;
 mod huge_copies;
 mod interop;

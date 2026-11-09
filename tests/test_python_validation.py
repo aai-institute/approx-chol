@@ -1,4 +1,5 @@
 import re
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -6,7 +7,7 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as sla
 
 import approx_chol
-from tests._laplacians import grid_laplacian, frustrated_grid
+from tests._laplacians import grid_laplacian, frustrated_grid, light_row_grid
 
 
 def _base_csr():
@@ -63,6 +64,54 @@ def test_configs_compare_and_hash_by_value():
 def test_a_split_not_an_integer_raises_type_error(split):
     with pytest.raises(TypeError):
         approx_chol.Config(split=split)
+
+
+def _stub_frustrated_names() -> list[str]:
+    stub = Path(__file__).parent.parent / "python" / "approx_chol" / "__init__.pyi"
+    literal = re.search(r"_Frustrated: TypeAlias = Literal\[(.*?)\]", stub.read_text())
+    return re.findall(r'"([^"]+)"', literal.group(1))
+
+
+FRUSTRATED = _stub_frustrated_names()
+
+
+@pytest.mark.parametrize("frustrated", FRUSTRATED)
+def test_frustrated_round_trips(frustrated):
+    assert approx_chol.Config(frustrated=frustrated).frustrated == frustrated
+
+
+def test_an_unknown_frustrated_route_raises_naming_the_stubs_routes():
+    with pytest.raises(ValueError, match="frustrated must be one of ") as error:
+        approx_chol.Config(frustrated="signed")
+    named = str(error.value).removesuffix(", not 'signed'")
+    assert re.findall(r"'([^']+)'", named) == FRUSTRATED
+
+
+def test_frustrated_is_keyword_only():
+    with pytest.raises(TypeError):
+        approx_chol.Config(0, 1, 24, "cover")
+
+
+@pytest.mark.parametrize(
+    ("light", "like", "unlike"),
+    [
+        (1e-40, "cover_surplus_edges", "cover_ground_vertex"),
+        (1.0, "cover_ground_vertex", "cover_surplus_edges"),
+    ],
+)
+def test_each_frustrated_name_factors_as_its_route(light, like, unlike):
+    """Inside the twist band ``"cover"`` carries the surplus on edges, past it to the ground vertex, so two names swapped in the table fail one case."""
+    matrix = light_row_grid(10, light)
+    b = np.sin(np.arange(matrix.shape[0], dtype=np.float64))
+
+    def solve(**route):
+        config = approx_chol.Config(exact_max_dim=0, **route)
+        return approx_chol.factorize(matrix, config).solve(b)
+
+    cover = solve(frustrated="cover")
+    np.testing.assert_array_equal(cover, solve())
+    np.testing.assert_array_equal(cover, solve(frustrated=like))
+    assert not np.array_equal(cover, solve(frustrated=unlike))
 
 
 def _u32(*xs):

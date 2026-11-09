@@ -46,6 +46,7 @@ impl Sparse {
             sampling,
             exact_max_dim: 0,
             complement,
+            ..Config::default()
         }
     }
 }

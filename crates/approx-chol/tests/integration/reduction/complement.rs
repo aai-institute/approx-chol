@@ -5,7 +5,6 @@ use rstest::rstest;
 use crate::common::bipartite::Bipartite;
 use crate::common::dense;
 use crate::common::dense_residual;
-use crate::common::gram;
 use crate::common::lcg::Lcg;
 use crate::common::solve::Solve;
 
@@ -31,25 +30,6 @@ impl Bipartite {
             right,
             values,
         }
-    }
-
-    /// `A`'s Schur complement onto `kept`, dense: the other side's block of a bipartite `A` is diagonal.
-    fn complement(&self, kept: Side) -> Vec<Vec<f64>> {
-        let ones = vec![1.0; self.left.len()];
-        let (x, y) = self.values.as_ref().map_or((&ones, &ones), |(x, y)| (x, y));
-        let shifted: Vec<u32> = self.right.iter().map(|&r| r + self.n_left as u32).collect();
-        let a = gram::matrix(self.n_left + self.n_right, &self.left, &shifted, x, y);
-        let (kept, eliminated) = match kept {
-            Side::Left => (0..self.n_left, self.n_left..a.len()),
-            Side::Right => (self.n_left..a.len(), 0..self.n_left),
-        };
-        let s_entry = |i: usize, j: usize| {
-            let through = (eliminated.clone()).filter(|&e| a[e][e] != 0.0);
-            a[i][j] - through.map(|e| a[i][e] * a[e][j] / a[e][e]).sum::<f64>()
-        };
-        (kept.clone())
-            .map(|i| kept.clone().map(|j| s_entry(i, j)).collect())
-            .collect()
     }
 
     /// Right vertex `n_right − 1` in one column, at `x = 0`, so it is lone.

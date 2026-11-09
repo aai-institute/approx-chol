@@ -15,7 +15,7 @@ use rand::SeedableRng;
 use rayon::prelude::*;
 
 pub use apply::{ApplyError, ColumnMajor, Columns, LayoutError, MatrixMut};
-pub use config::{Config, Sampling, SchurMode};
+pub use config::{Config, CoverSurplus, FrustratedRoute, Sampling, SchurMode};
 #[cfg(feature = "serde")]
 pub use wire::FORMAT_VERSION;
 
@@ -236,7 +236,7 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
                 let arm = match config.dense(adjacency.n()) {
                     true => Arm::Exact(Signed::new(adjacency, balance, grounding)),
                     false => {
-                        let s = Sddm::of_block(adjacency, balance, grounding, config.frustrated());
+                        let s = Sddm::of_block(adjacency, balance, grounding, config.frustrated);
                         Arm::Approximate(s)
                     }
                 };

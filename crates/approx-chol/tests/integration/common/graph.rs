@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use super::pcg::relative_residual;
+
 /// `w (e_a − e_b)(e_a − e_b)ᵀ`, or `w (e_a + e_b)(e_a + e_b)ᵀ` when `positive`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Edge {
@@ -105,8 +107,6 @@ impl Graph {
 
     /// `‖A x − b‖ / ‖b‖`.
     pub fn relative_residual(&self, x: &[f64], b: &[f64]) -> f64 {
-        let norm = |v: &mut dyn Iterator<Item = f64>| v.map(|v| v * v).sum::<f64>().sqrt();
-        let ax = self.apply(x);
-        norm(&mut ax.iter().zip(b).map(|(ax, b)| ax - b)) / norm(&mut b.iter().copied())
+        relative_residual(&self.apply(x), b)
     }
 }

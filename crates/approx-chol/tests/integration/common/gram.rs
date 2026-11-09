@@ -1,3 +1,7 @@
+use approx_chol::Side;
+
+use super::bipartite::Bipartite;
+
 /// `V Vᵀ` dense, from the arrays `FactorWidth2::new` takes.
 pub fn matrix(n: usize, a: &[u32], b: &[u32], x: &[f64], y: &[f64]) -> Vec<Vec<f64>> {
     let mut matrix = vec![vec![0.0; n]; n];
@@ -22,4 +26,30 @@ pub fn dense_csr(matrix: &[Vec<f64>]) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
         ptrs.push(columns.len() as u32);
     }
     (ptrs, columns, values)
+}
+
+impl Bipartite {
+    /// `A` dense, the right side numbered after the left; no `x` and `y` reads as an incidence.
+    pub fn dense(&self) -> Vec<Vec<f64>> {
+        let ones = vec![1.0; self.left.len()];
+        let (x, y) = self.values.as_ref().map_or((&ones, &ones), |(x, y)| (x, y));
+        let shifted: Vec<u32> = self.right.iter().map(|&r| r + self.n_left as u32).collect();
+        matrix(self.n_left + self.n_right, &self.left, &shifted, x, y)
+    }
+
+    /// `A`'s Schur complement onto `kept`, dense: the other side's block of a bipartite `A` is diagonal.
+    pub fn complement(&self, kept: Side) -> Vec<Vec<f64>> {
+        let a = self.dense();
+        let (kept, eliminated) = match kept {
+            Side::Left => (0..self.n_left, self.n_left..a.len()),
+            Side::Right => (self.n_left..a.len(), 0..self.n_left),
+        };
+        let s_entry = |i: usize, j: usize| {
+            let through = (eliminated.clone()).filter(|&e| a[e][e] != 0.0);
+            a[i][j] - through.map(|e| a[i][e] * a[e][j] / a[e][e]).sum::<f64>()
+        };
+        (kept.clone())
+            .map(|i| kept.clone().map(|j| s_entry(i, j)).collect())
+            .collect()
+    }
 }

@@ -11,6 +11,8 @@ pub struct Config {
     pub seed: u64,
     /// How the approximate Cholesky samples each pivot's fill.
     pub sampling: Sampling,
+    /// How a frustrated block, one no diagonal `±1` congruence folds into an SDDM, is factored approximately; the dense arm factors it as itself.
+    pub frustrated: FrustratedRoute,
     /// Largest block dimension, a bipartite block's by its kept side, factored by exact dense Cholesky at `O(exact_max_dim³)`; `0` factors every block approximately.
     pub exact_max_dim: usize,
     /// How a bipartite block's eliminated side becomes the kept side's Schur complement.
@@ -24,6 +26,7 @@ impl Default for Config {
             sampling: Sampling::CliqueTree {
                 copies: NonZeroU32::MIN,
             },
+            frustrated: FrustratedRoute::Cover(CoverSurplus::default()),
             exact_max_dim: 24,
             complement: SchurMode::default(),
         }
@@ -35,28 +38,25 @@ impl Config {
     pub(super) fn dense(&self, dimension: usize) -> bool {
         dimension <= self.exact_max_dim
     }
-
-    /// The route a frustrated block takes: the cover under `Auto`, the one route so far.
-    pub(super) fn frustrated(&self) -> FrustratedRoute {
-        FrustratedRoute::Cover(CoverSurplus::Auto)
-    }
 }
 
 /// How a frustrated block is factored approximately.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum FrustratedRoute {
+pub enum FrustratedRoute {
     /// Through its Gremban cover, an SDDM on two sheets that solves `[x; −x]`, carrying its surplus as the [`CoverSurplus`] says.
     Cover(CoverSurplus),
 }
 
 /// How a frustrated block's Gremban cover carries the surplus each copy of a vertex holds.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub(crate) enum CoverSurplus {
+pub enum CoverSurplus {
     /// To a ground vertex both sheets share; inside `Auto`'s twist band its common mode `1/s` swamps `z`, and PCG stalls where `Auto` converges.
-    #[expect(dead_code, reason = "only Auto is configurable yet")]
     GroundVertex,
     /// As an edge `k⁺ — k⁻` per vertex, a quarter of its copies' surplus, which acts on `[z; −z]` as the grounds do: the cover stays singular, its common mode never in `z`. On a sampled complement the sheets draw their ground shares from different streams, so the edge takes their mean, unbiased; a whole block's cover and an exact complement mirror their rows, so the mean is exact.
-    #[expect(dead_code, reason = "only Auto is configurable yet")]
     SurplusEdges,
     /// Surplus edges inside the twist band, `Σs ≤ 5ε (Σs + Σ|a_ij|)` over the cover's surplus `s` and off-diagonal `a`, where a ground vertex's common mode would swamp `z`; else the ground vertex.
     #[default]

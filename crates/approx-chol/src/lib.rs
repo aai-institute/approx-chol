@@ -62,8 +62,8 @@ pub use error::Error;
 #[cfg(feature = "serde")]
 pub use factor::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
 pub use factor::{
-    ApplyError, ApproxInverse, ColumnMajor, Columns, Component, Config, LayoutError, MatrixMut,
-    Sampling, SchurMode,
+    ApplyError, ApproxInverse, ColumnMajor, Columns, Component, Config, CoverSurplus,
+    FrustratedRoute, LayoutError, MatrixMut, Sampling, SchurMode,
 };
 pub use input::{CsrError, CsrRef, IndexKind, Input, OwnedCsr, Side};
 pub use sgdd::{Clamp, ReduceError, ScalingOutcome, ScalingPolicy};

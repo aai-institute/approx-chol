@@ -1,8 +1,14 @@
-use approx_chol::{Config, SchurMode};
+use approx_chol::{Config, CoverSurplus, FrustratedRoute, SchurMode};
 
 use crate::common::bipartite::Bipartite;
 use crate::common::frustrated::solves;
 use crate::common::sparse::clique_tree;
+
+#[test]
+fn the_default_frustrated_route_is_the_auto_cover() {
+    let route = FrustratedRoute::Cover(CoverSurplus::Auto);
+    assert_eq!(Config::default().frustrated, route);
+}
 
 #[test]
 fn an_approximate_complement_sampled_as_the_factor_is_same() {
@@ -30,18 +36,25 @@ mod serde {
 
     #[test]
     fn a_config_round_trips() {
-        let config = Config {
-            seed: 3,
-            sampling: clique_tree(u32::MAX),
-            exact_max_dim: 0,
-            complement: SchurMode::Approximate {
-                sampling: clique_tree(2),
-            },
-        };
-        let json = serde_json::to_string(&config).unwrap();
-        assert_eq!(serde_json::from_str::<Config>(&json).unwrap(), config);
-        let bytes = postcard::to_stdvec(&config).unwrap();
-        assert_eq!(postcard::from_bytes::<Config>(&bytes).unwrap(), config);
+        for surplus in [
+            CoverSurplus::GroundVertex,
+            CoverSurplus::SurplusEdges,
+            CoverSurplus::Auto,
+        ] {
+            let config = Config {
+                seed: 3,
+                sampling: clique_tree(u32::MAX),
+                frustrated: FrustratedRoute::Cover(surplus),
+                exact_max_dim: 0,
+                complement: SchurMode::Approximate {
+                    sampling: clique_tree(2),
+                },
+            };
+            let json = serde_json::to_string(&config).unwrap();
+            assert_eq!(serde_json::from_str::<Config>(&json).unwrap(), config);
+            let bytes = postcard::to_stdvec(&config).unwrap();
+            assert_eq!(postcard::from_bytes::<Config>(&bytes).unwrap(), config);
+        }
     }
 
     #[test]

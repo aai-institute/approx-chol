@@ -5,7 +5,7 @@ use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
 };
 use approx_chol::{factorize_with, ApproxInverse, Config, MemStack, Threads};
-use approx_chol::{Real, Sampling, ScalingPolicy, SchurMode};
+use approx_chol::{FrustratedRoute, Real, Sampling, ScalingPolicy, SchurMode};
 use serde::{Deserialize, Serialize};
 
 #[path = "cells.rs"]
@@ -81,13 +81,14 @@ pub struct Side<T> {
     pub values: Option<Vec<T>>,
 }
 
-/// `Config` in a `u8` per knob: `None` is an exact complement, under two copies sample once, a `u8` caps AC2.
+/// `Config` in a `u8` per count knob: `None` is an exact complement, under two copies sample once, a `u8` caps AC2; the frustrated route as itself.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Build {
     pub seed: u64,
     pub complement: Option<u8>,
     pub approximate: u8,
     pub exact_max_dim: u8,
+    pub frustrated: FrustratedRoute,
 }
 
 impl Build {
@@ -98,6 +99,7 @@ impl Build {
         Config {
             seed: self.seed,
             sampling: clique_tree(self.approximate),
+            frustrated: self.frustrated,
             exact_max_dim: self.exact_max_dim.into(),
             complement,
         }
