@@ -25,6 +25,7 @@ use crate::sgdd::{
     ranges, Balance, BlockComplement, Congruence, IrreducibleBlock, KeptVertices, Summands,
 };
 use crate::storage::OffDiagonal;
+use crate::threads::task;
 use crate::Clamp;
 use crate::{Batch, Index, MemStack, Real, StackReq, Threads};
 use apply::{rows_error, Kernel, Room, Stack};
@@ -96,6 +97,7 @@ impl<T: Real> ApproxInverse<T> {
     pub(crate) fn build<I: Index, B: Summand<T, I>>(
         summands: Summands<B, I, T>,
         config: &Config,
+        threads: Threads,
     ) -> Self
     where
         Blocks<T>: From<Box<[Block<T, I>]>>,
@@ -112,11 +114,23 @@ impl<T: Real> ApproxInverse<T> {
         let workspace = || Workspace::new(config.sampling.copies());
         // Exactly sized: collect's reserve rounds a few blocks up to 4 and into_boxed_slice reallocates.
         let mut factored = Vec::with_capacity(coupled.len());
-        (coupled.into_par_iter().zip(segments))
-            .map_init(workspace, |reused, (block, segment)| {
-                block.factor(segment, &order, config, reused)
-            })
-            .collect_into_vec(&mut factored);
+        match threads.per_task(coupled.len(), 1) {
+            Some(per) => {
+                let nested = threads.within_task(coupled.len().div_ceil(per));
+                (coupled.into_par_iter().zip(segments))
+                    .with_min_len(per)
+                    .map_init(workspace, |reused, (block, segment)| {
+                        task(|| block.factor(segment, &order, config, nested, reused))
+                    })
+                    .collect_into_vec(&mut factored);
+            }
+            None => {
+                let mut reused = workspace();
+                factored.extend(coupled.into_iter().zip(segments).map(|(block, segment)| {
+                    block.factor(segment, &order, config, threads, &mut reused)
+                }));
+            }
+        }
         let blocks = Blocks::from(factored.into_boxed_slice());
         Self::new(order, blocks, inverse_pivots)
     }
@@ -217,6 +231,7 @@ pub(crate) trait Summand<T, I>: Send + KeptVertices {
         segment: Segment,
         order: &Order,
         config: &Config,
+        threads: Threads,
         reused: &mut Workspace<T, I>,
     ) -> Block<T, I>;
 }
@@ -227,6 +242,7 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
         segment: Segment,
         order: &Order,
         config: &Config,
+        threads: Threads,
         reused: &mut Workspace<T, I>,
     ) -> Block<T, I> {
         let (congruence, off_diagonal, balance, grounding, grounding_unproven, clamp) =
@@ -252,7 +268,7 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
                 let kept = tail(cross.n_rows());
                 let factor = |s| Cholesky::factor(s, draws, kept, reused);
                 let block = BipartiteBlock::of(cross, balance, grounding);
-                let (elimination, factored) = block.eliminate(config, streams, factor);
+                let (elimination, factored) = block.eliminate(config, streams, threads, factor);
                 (Some(Box::new(elimination)), factored)
             }
         };
@@ -274,12 +290,13 @@ impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
         segment: Segment,
         _: &Order,
         config: &Config,
+        threads: Threads,
         reused: &mut Workspace<T, I>,
     ) -> Block<T, I> {
         let (first, congruence, cross, balance, grounding, grounding_unproven, clamp) =
             self.into_parts();
         let streams = Streams::of(first, config);
-        let s = BipartiteBlock::of(cross, balance, grounding).complement(config, streams);
+        let s = BipartiteBlock::of(cross, balance, grounding).complement(config, streams, threads);
         let tail = congruence.factor_tail(0);
         let cholesky = Cholesky::factor(s, streams.cholesky(), tail, reused);
         Block {
@@ -530,8 +547,9 @@ mod tests {
         let n = row_ptrs.len() - 1;
         let csr = CsrRef::new(n, row_ptrs, columns, values).expect("valid csr");
         let summands =
-            Reduced::<f64, u32>::reduce(csr.into(), ScalingPolicy::default()).expect("reduces");
-        ApproxInverse::build(summands, &Config::default())
+            Reduced::<f64, u32>::reduce(csr.into(), ScalingPolicy::default(), Threads::All)
+                .expect("reduces");
+        ApproxInverse::build(summands, &Config::default(), Threads::All)
     }
 
     fn grounded() -> ApproxInverse {
@@ -554,8 +572,9 @@ mod tests {
         )
         .expect("valid gram");
         let summands =
-            Reduced::<f64, u32>::reduce(gram.into(), ScalingPolicy::default()).expect("reduces");
-        let mut factor = ApproxInverse::build(summands, &Config::default());
+            Reduced::<f64, u32>::reduce(gram.into(), ScalingPolicy::default(), Threads::All)
+                .expect("reduces");
+        let mut factor = ApproxInverse::build(summands, &Config::default(), Threads::All);
         assert!(only_block_mut(&mut factor).elimination.is_some());
         factor
     }
@@ -638,12 +657,14 @@ mod storage {
         let b = rhs(input.n());
         for config in configs() {
             let narrow = ApproxInverse::build(
-                Reduced::<f64, u32>::reduce(input, policy).expect("reduces"),
+                Reduced::<f64, u32>::reduce(input, policy, Threads::All).expect("reduces"),
                 &config,
+                Threads::All,
             );
             let wide = ApproxInverse::build(
-                Reduced::<f64, u64>::reduce(input, policy).expect("reduces"),
+                Reduced::<f64, u64>::reduce(input, policy, Threads::All).expect("reduces"),
                 &config,
+                Threads::All,
             );
             assert!(matches!(wide.blocks, Blocks::U64(_)));
             assert_eq!(bits(&narrow, &b), bits(&wide, &b), "{config:?}");
@@ -655,8 +676,9 @@ mod storage {
         let b = rhs(input.n());
         for config in configs() {
             let reduced =
-                Reduced::<f64, u32>::reduce(input, ScalingPolicy::default()).expect("reduces");
-            let factor = ApproxInverse::build(reduced, &config);
+                Reduced::<f64, u32>::reduce(input, ScalingPolicy::default(), Threads::All)
+                    .expect("reduces");
+            let factor = ApproxInverse::build(reduced, &config, Threads::All);
             let Blocks::U32(blocks) = &factor.blocks else {
                 unreachable!("built in u32")
             };
@@ -742,5 +764,206 @@ mod storage {
     #[test]
     fn each_block_solves_on_a_stack_of_its_own_slots() {
         each_input(assert_solves_on_its_own_slots);
+    }
+}
+
+#[cfg(test)]
+mod budget {
+    use std::num::{NonZeroU32, NonZeroUsize};
+
+    use rstest::rstest;
+
+    use super::*;
+    use crate::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Side};
+    use crate::sgdd::{Complement, Reduced};
+    use crate::threads::{probe, ONE};
+    use crate::{widen, CoverSurplus, FrustratedRoute, Sampling, ScalingPolicy, SchurMode};
+
+    const THREE: Threads = Threads::Count(NonZeroUsize::new(3).unwrap());
+
+    /// The factor as shown, every stored field, and its apply's bits.
+    fn fingerprint<T: Real>(factor: ApproxInverse<T>) -> (String, Vec<u64>) {
+        let mut x: Vec<_> = (0..factor.n())
+            .map(|i| T::from((i % 101) as f64 - 50.0).expect("small"))
+            .collect();
+        factor.apply(&mut x, ONE).expect("b has length n");
+        let bits = x.into_iter().map(|x| widen(x).to_bits()).collect();
+        (format!("{factor:?}"), bits)
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum Case {
+        /// `groups` components of 400 left and 200 right vertices, 48 entries a left vertex, the second frustrated: one block splits its star fold and exact rows, three split the blocks.
+        Bipartite(u32),
+        /// `groups` rings of 2000 vertices, each joined to its six nearest on either side and scaled off dominance, so the Perron product gathers; relaxed `0`, `8` and `100` iterations.
+        Perron64(u32),
+        Perron32(u32),
+    }
+
+    const CASES: [Case; 6] = [
+        Case::Bipartite(1),
+        Case::Bipartite(3),
+        Case::Perron64(1),
+        Case::Perron64(8),
+        Case::Perron32(1),
+        Case::Perron32(8),
+    ];
+
+    type Build<'a> = &'a (dyn Fn(Threads) -> (String, Vec<u64>) + Sync);
+
+    impl Case {
+        /// Each build of the case, run by `check`.
+        fn each_build(self, mut check: impl FnMut(Build<'_>)) {
+            match self {
+                Case::Bipartite(groups) => bipartite(groups, &mut check),
+                Case::Perron64(groups) => perron::<f64>(groups, &mut check),
+                Case::Perron32(groups) => perron::<f32>(groups, &mut check),
+            }
+        }
+    }
+
+    fn bipartite(groups: u32, check: &mut impl FnMut(Build<'_>)) {
+        let (mut left, mut right, mut x, mut y) = (vec![], vec![], vec![], vec![]);
+        for group in 0..groups {
+            for i in 0..400 {
+                for d in 0..48 {
+                    left.push(group * 400 + i);
+                    right.push(group * 200 + (i * 7 + d * 13) % 200);
+                    x.push(1.0 + (d % 7) as f64 / 8.0);
+                    y.push(if group == 1 && d % 5 == 0 { 0.5 } else { -0.5 });
+                }
+            }
+        }
+        let gram = BipartiteFactorWidth2::new(
+            FactorWidth1::valued(groups as usize * 400, &left, &x).expect("valid rows"),
+            FactorWidth1::valued(groups as usize * 200, &right, &y).expect("valid columns"),
+        )
+        .expect("valid gram");
+        let policy = ScalingPolicy::default();
+        let configs = [
+            Config::default(),
+            Config {
+                sampling: Sampling::CliqueTree {
+                    copies: NonZeroU32::new(3).unwrap(),
+                },
+                ..Config::default()
+            },
+            Config {
+                complement: SchurMode::Exact,
+                ..Config::default()
+            },
+            Config {
+                frustrated: FrustratedRoute::Cover(CoverSurplus::SurplusEdges),
+                ..Config::default()
+            },
+            Config {
+                frustrated: FrustratedRoute::Signed,
+                ..Config::default()
+            },
+        ];
+        for config in configs {
+            for kept in [None, Some(Side::Left), Some(Side::Right)] {
+                check(&|threads| {
+                    fingerprint(match kept {
+                        None => ApproxInverse::build(
+                            Reduced::<_, u32>::reduce(gram.into(), policy, threads)
+                                .expect("reduces"),
+                            &config,
+                            threads,
+                        ),
+                        Some(side) => ApproxInverse::build(
+                            Complement::<_, u32>::reduce_onto(gram, side, policy, threads)
+                                .expect("reduces"),
+                            &config,
+                            threads,
+                        ),
+                    })
+                });
+            }
+        }
+    }
+
+    fn perron<T: Real>(groups: u32, check: &mut impl FnMut(Build<'_>)) {
+        let size = 2000u32;
+        let n = size * groups;
+        let (mut ptrs, mut columns, mut values) = (vec![0u32], vec![], vec![]);
+        let scale = |i: u32| 1.0 + (i % 17) as f64;
+        for i in 0..n {
+            let mut row = vec![(i, 12.0 * scale(i).powi(2))];
+            for offset in 1..=6 {
+                for j in [(i + offset) % size, (i + size - offset) % size] {
+                    let j = i / size * size + j;
+                    row.push((j, -scale(i) * scale(j)));
+                }
+            }
+            row.sort_by_key(|&(j, _)| j);
+            for (j, value) in row {
+                columns.push(j);
+                values.push(T::from(value).expect("small"));
+            }
+            ptrs.push(columns.len() as u32);
+        }
+        let csr = CsrRef::new(n as usize, &ptrs, &columns, &values).expect("valid csr");
+        for iterations in [0, 8, 100] {
+            let policy = ScalingPolicy::new(1e-9, iterations).expect("valid policy");
+            check(&|threads| {
+                fingerprint(ApproxInverse::build(
+                    Reduced::<_, u32>::reduce(csr.into(), policy, threads).expect("reduces"),
+                    &Config::default(),
+                    threads,
+                ))
+            });
+        }
+    }
+
+    fn pool(threads: usize) -> rayon::ThreadPool {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .thread_name(|i| format!("{}-{i}", probe::POOL))
+            .build()
+            .expect("pool")
+    }
+
+    /// Under `All`, `Count(1)` and `Count(3)`, in pools of one, two and seven threads, each build equals it under `All` outside any.
+    #[rstest]
+    fn a_build_is_bit_identical_across_budgets(
+        #[values(CASES[0], CASES[1], CASES[2], CASES[3], CASES[4], CASES[5])] case: Case,
+    ) {
+        let pools = [1, 2, 7].map(|size| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(size)
+                .build()
+                .expect("pool")
+        });
+        case.each_build(|build| {
+            let reference = build(Threads::All);
+            for pool in &pools {
+                let size = pool.current_num_threads();
+                for budget in [Threads::All, ONE, THREE] {
+                    let built = pool.install(|| build(budget));
+                    assert!(built == reference, "{case:?}, pool {size}, {budget:?}");
+                }
+            }
+        });
+    }
+
+    /// In a pool of seven, a count's build never has more of its threads in a loop's items at once; the pool's whole budget is seen to.
+    #[test]
+    fn a_build_runs_at_most_its_count_of_threads() {
+        let pool = pool(7);
+        let mut widest = 0;
+        for case in CASES {
+            case.each_build(|build| {
+                for (budget, n) in [(ONE, 1), (THREE, 3)] {
+                    let peak = probe::peak(|| drop(pool.install(|| build(budget))));
+                    assert!(peak <= n, "{case:?}: {peak} threads under {budget:?}");
+                }
+                widest = widest.max(probe::peak(|| drop(pool.install(|| build(Threads::All)))));
+            });
+        }
+        assert!(
+            widest > 3,
+            "the probe saw at most {widest} threads under All"
+        );
     }
 }

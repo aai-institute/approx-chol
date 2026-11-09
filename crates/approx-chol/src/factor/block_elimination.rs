@@ -21,7 +21,7 @@ pub(super) struct BlockElimination<T, I> {
     /// `D_e⁻¹ C`, signs kept and shared with the block: a frustrated block's cover never doubles it; each row's magnitudes sum to at most one, so no product with a solution overflows.
     cross: Rows<T, I>,
     inv_pivot: Box<[T]>,
-    /// `(D_e⁻¹ C)ᵀ` past one grain of the forward's `nnz` multiply-adds, so a solve may split by kept row as [`Threads::chunk`] says.
+    /// `(D_e⁻¹ C)ᵀ` past one grain of the forward's `nnz` multiply-adds, so a solve may split by kept row as [`Threads::per_task`] says.
     #[cfg_attr(feature = "serde", serde(skip))]
     ct: Option<Rows<T, I>>,
 }
@@ -60,9 +60,9 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         self.backward(eliminated, kept, threads);
     }
 
-    /// Each `b_k` subtracts `(D_e⁻¹ C)_ek b_e` term by term in ascending `e`: scattered through `D_e⁻¹ C`, or gathered through `(D_e⁻¹ C)ᵀ` where it is kept and [`Threads::chunk`] splits the rows, the same bits either way.
+    /// Each `b_k` subtracts `(D_e⁻¹ C)_ek b_e` term by term in ascending `e`: scattered through `D_e⁻¹ C`, or gathered through `(D_e⁻¹ C)ᵀ` where it is kept and [`Threads::per_task`] splits the rows, the same bits either way.
     fn forward<V: Batch<T>>(&self, b: &[V], kept: &mut [V], threads: Threads) {
-        if let (Some(ct), Some(per)) = (&self.ct, threads.chunk(kept.len(), 1)) {
+        if let (Some(ct), Some(per)) = (&self.ct, threads.per_task(kept.len(), 1)) {
             let gather = |k: usize, b_k: &mut V| {
                 for (e, &c) in ct.row(k) {
                     *b_k = b_k.sub(b[e].mul(c));
@@ -88,7 +88,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         }
     }
 
-    /// `x_e = D_e⁻¹ b_e − D_e⁻¹ C x_k` by eliminated row, split as [`Threads::chunk`] says where `(D_e⁻¹ C)ᵀ` is kept.
+    /// `x_e = D_e⁻¹ b_e − D_e⁻¹ C x_k` by eliminated row, split as [`Threads::per_task`] says where `(D_e⁻¹ C)ᵀ` is kept.
     fn backward<V: Batch<T>>(&self, eliminated: &mut [V], kept: &[V], threads: Threads) {
         let c = &self.cross;
         // Scaled here: a serial pass after the parallel gather rewrites lines its workers hold.
@@ -106,7 +106,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         let len = eliminated.len();
         // A fixed grain, as TBB's simple partitioner: concurrent blocks share the pool; a short block still splits 16 ways.
         let grain = ROWS_PER_TASK.min(len.div_ceil(16));
-        if let (Some(_), Some(per)) = (&self.ct, threads.chunk(len, grain)) {
+        if let (Some(_), Some(per)) = (&self.ct, threads.per_task(len, grain)) {
             (eliminated.par_chunks_mut(per).enumerate())
                 .for_each(|(task, ys)| rows(task * per, ys));
         } else {

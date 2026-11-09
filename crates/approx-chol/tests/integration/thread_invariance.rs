@@ -14,8 +14,8 @@ use crate::common::solve::Solve;
 use crate::common::sparse::clique_tree;
 use crate::common::threads;
 
-/// The solve of `b` as bits, which its solve and each column of a four-column apply match under each budget; `kept` factors the complement.
-fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> Vec<u64> {
+/// The factor as shown, and the solve of `b` as bits, which its solve and each column of a four-column apply match under each budget; `kept` factors the complement.
+fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> (String, Vec<u64>) {
     let gram = g.view();
     let factor = match kept {
         None => factorize_with(gram, config, ScalingPolicy::default()).unwrap(),
@@ -49,7 +49,7 @@ fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> Vec<u64> {
             assert_eq!(&bits(&column), alone, "column {j}, {threads:?}");
         }
     }
-    whole
+    (format!("{factor:?}"), whole)
 }
 
 #[rstest]

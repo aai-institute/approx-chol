@@ -7,7 +7,8 @@ use super::config::CoverSurplus;
 use super::sign::{cancel, Signed, Unsigned};
 use crate::sgdd::{Balance, FactorTail, Grounding};
 use crate::storage::{Rows, UpperAdjacency};
-use crate::{narrow, widen, Batch, Index, Real};
+use crate::threads::{task, ONE};
+use crate::{narrow, widen, Batch, Index, Real, Threads};
 
 /// `L + diag(s)`, `L`'s off-diagonal nonpositive; a twisted cover's `k⁺—k⁻` edges live in its closure, not its rows.
 #[derive(Clone, Debug)]
@@ -63,7 +64,7 @@ impl<T: Real, I: Index> Sddm<T, I> {
             Balance::Frustrated => {
                 let n = adjacency.n();
                 // The cover acts as `M − diag(s)` on `[z; −z]`.
-                let rows = SddmRows::split(Layout::Cover, n, n, |mut sums, i| {
+                let rows = SddmRows::split(Layout::Cover, n, n, ONE, |mut sums, i| {
                     for (j, &a) in adjacency.upper(i) {
                         sums.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
                     }
@@ -339,21 +340,27 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         layout: Layout,
         n: usize,
         min_len: usize,
+        threads: Threads,
         row: impl Fn(ColumnSums<'_, T, I>, usize) + Sync,
     ) -> Self {
         let columns = layout.columns(n);
         // A bool, tested against zero as the balance was: comparing the three-way layout measured a `cmp` more per row.
         let mirrored = layout == Layout::Cover;
-        let rows = (0..n).into_par_iter().with_min_len(min_len).fold(
-            || RowSums::new(columns),
-            |mut rows, k| {
-                rows.row(|sums| row(sums, k));
-                if mirrored {
-                    rows.mirror_row();
-                }
-                rows
-            },
-        );
+        let add = |mut rows: RowSums<T, I>, k| {
+            rows.row(|sums| row(sums, k));
+            if mirrored {
+                rows.mirror_row();
+            }
+            rows
+        };
+        let Some(per) = threads.per_task(n, min_len) else {
+            let rows = (0..n).fold(RowSums::new(columns), add);
+            return Self { layout, rows };
+        };
+        let rows = (0..n)
+            .into_par_iter()
+            .with_min_len(per)
+            .fold(|| RowSums::new(columns), |rows, k| task(|| add(rows, k)));
         let rows = rows.reduce_with(|mut rows, part| {
             let offset = rows.indices.len();
             rows.ptrs.extend(part.ptrs[1..].iter().map(|&p| p + offset));

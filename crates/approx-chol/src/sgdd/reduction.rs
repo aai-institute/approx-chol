@@ -14,28 +14,32 @@ use super::scaling::{self, ScaleVector, ScalingPolicy};
 use super::{diagonal_in_range, Complement, Reduced};
 use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Lowered, Side};
 use crate::storage::OffDiagonal;
-use crate::{narrow, widen, Error, Index, Real};
+use crate::{narrow, widen, Error, Index, Real, Threads};
 
 impl<T: Real, I: Index> Reduced<T, I> {
     /// The view's irreducible blocks, each reduced; `policy` scales those not already dominant.
     pub(crate) fn reduce<J: PrimInt + Sync>(
         input: Input<'_, T, J>,
         policy: ScalingPolicy,
+        threads: Threads,
     ) -> Result<Self, Error> {
         Ok(match input.0 {
-            Lowered::Csr(csr) => of_csr(Canonical::whole(csr)?).reduce(&policy)?,
-            Lowered::Triangle(triangle) => of_csr(Canonical::upper(triangle)?).reduce(&policy)?,
-            Lowered::FactorWidth2(v) => Self::from_factor_width_2(v, &policy)?,
+            Lowered::Csr(csr) => of_csr(Canonical::whole(csr)?).reduce(&policy, threads)?,
+            Lowered::Triangle(triangle) => {
+                of_csr(Canonical::upper(triangle)?).reduce(&policy, threads)?
+            }
+            Lowered::FactorWidth2(v) => Self::from_factor_width_2(v, &policy, threads)?,
         })
     }
 
     fn from_factor_width_2<J: PrimInt>(
         v: FactorWidth2<'_, T, J>,
         policy: &ScalingPolicy,
+        threads: Threads,
     ) -> Result<Self, ReduceError> {
         match Biadjacency::of(&v) {
-            Some(layout) => Self::from_gram(layout, v, policy),
-            None => Self::from_gram(StrictUpperTriangle, v, policy),
+            Some(layout) => Self::from_gram(layout, v, policy, threads),
+            None => Self::from_gram(StrictUpperTriangle, v, policy, threads),
         }
     }
 
@@ -44,10 +48,11 @@ impl<T: Real, I: Index> Reduced<T, I> {
         cells: S,
         v: FactorWidth2<'_, T, J>,
         policy: &ScalingPolicy,
+        threads: Threads,
     ) -> Result<Self, ReduceError> {
         match v.is_incidence() {
-            true => Self::from_incidence(cells, v),
-            false => Self::from_values(cells, v, policy),
+            true => Self::from_incidence(cells, v, threads),
+            false => Self::from_values(cells, v, policy, threads),
         }
     }
 }
@@ -58,12 +63,14 @@ impl<T: Real, I: Index> Complement<T, I> {
         input: BipartiteFactorWidth2<'_, T, J>,
         kept: Side,
         policy: ScalingPolicy,
+        threads: Threads,
     ) -> Result<Self, ReduceError> {
         let range = input.vertices(kept);
         let layout = Biadjacency::onto(&input, kept);
-        let whole: Reduced<T, I> = Reduced::from_gram(layout, input.lower(), &policy)?;
-        let mut complement =
-            whole.map(|vertices, block| BlockComplement::new(block, vertices[0].index()));
+        let whole: Reduced<T, I> = Reduced::from_gram(layout, input.lower(), &policy, threads)?;
+        let mut complement = whole.map(threads, |vertices, block| {
+            BlockComplement::new(block, vertices[0].index())
+        });
         complement.retain_isolated(|v| range.contains(&v.index()));
         complement.numbering = range;
         Ok(complement)
@@ -72,11 +79,20 @@ impl<T: Real, I: Index> Complement<T, I> {
 
 impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
     /// Scales and signs each block's `A_c`, closing its surplus from the same rows.
-    fn reduce(self, policy: &ScalingPolicy) -> Result<Reduced<T, I>, ReduceError> {
-        self.reduced(|vertices, entries| {
+    fn reduce(
+        self,
+        policy: &ScalingPolicy,
+        threads: Threads,
+    ) -> Result<Reduced<T, I>, ReduceError> {
+        self.reduced(threads, |vertices, entries, threads| {
             let a = SymmetricBlock { vertices, entries };
             let relax = |a: &SymmetricBlock<'_, T, I>| {
-                scaling::relax(&a.entries.off_diagonal, &a.entries.rows.diagonal, policy)
+                scaling::relax(
+                    &a.entries.off_diagonal,
+                    &a.entries.rows.diagonal,
+                    policy,
+                    threads,
+                )
             };
             let block = match a.reduce(policy, relax)? {
                 Settling::Pending(folded) => {
@@ -467,15 +483,18 @@ mod tests {
         };
         let partitioned = of_csr::<f64, u32, u32>(Canonical::whole(csr).expect("symmetric"));
         let summands = partitioned
-            .reduced(|vertices, entries| {
-                match (SymmetricBlock { vertices, entries }).reduce(&policy, unscaled)? {
-                    Settling::Pending(Folded {
-                        vector: ScaleVector::Identity,
-                        clamped,
-                        ..
-                    }) => Ok(clamped),
-                    _ => Ok(f64::NAN),
-                }
+            .reduced(Threads::All, |vertices, entries, _| match (SymmetricBlock {
+                vertices,
+                entries,
+            })
+            .reduce(&policy, unscaled)?
+            {
+                Settling::Pending(Folded {
+                    vector: ScaleVector::Identity,
+                    clamped,
+                    ..
+                }) => Ok(clamped),
+                _ => Ok(f64::NAN),
             })
             .expect("admitted");
         let [clamped] = summands.coupled[..] else {

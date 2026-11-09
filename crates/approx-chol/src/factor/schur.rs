@@ -11,7 +11,8 @@ use super::sign::Unsigned;
 use super::{Streams, MULTIPLY_ADD_GRAIN_BITS};
 use crate::sgdd::{Balance, Grounding};
 use crate::storage::Rows;
-use crate::{narrow, per_task, widen, Index, Real};
+use crate::threads::task;
+use crate::{narrow, per_task, widen, Index, Real, Threads};
 
 /// How one block's Schur complement is formed, resolved from [`Config`] and its kept side.
 enum Formation {
@@ -54,10 +55,11 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         self,
         config: &Config,
         streams: Streams,
+        threads: Threads,
         factor: impl FnOnce(Arm<T, I>) -> R,
     ) -> (BlockElimination<T, I>, R) {
         let inv_pivot = self.inverse_pivots();
-        let (s, cross) = self.complement_and_cross(config, streams, &inv_pivot);
+        let (s, cross) = self.complement_and_cross(config, streams, threads, &inv_pivot);
         let reduced = factor(s);
         (BlockElimination::new(cross, inv_pivot), reduced)
     }
@@ -67,24 +69,32 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         self,
         config: &Config,
         streams: Streams,
+        threads: Threads,
         inv_pivot: &[T],
     ) -> (Arm<T, I>, Rows<T, I>) {
         let rows = match formation(config, self.cross.n_cols()) {
-            Formation::Dense => return (Arm::AsIs(self.as_is(inv_pivot)), self.cross),
-            Formation::Exact => self.exact(inv_pivot, Layout::sddm(self.balance)),
-            Formation::Sampled(copies) => self.sample(copies, streams).merge(),
+            Formation::Dense => return (Arm::AsIs(self.as_is(inv_pivot, threads)), self.cross),
+            Formation::Exact => self.exact(inv_pivot, Layout::sddm(self.balance), threads),
+            Formation::Sampled(copies) => self.sample(copies, streams, threads).merge(),
         };
         let s = Sddm::of_rows(rows, &self.grounding, config.frustrated.cover_surplus());
         (Arm::Sddm(s), self.cross)
     }
 
     /// `S` alone, a complement's summand: only exact computes pivots, and `C` is freed before the sampled merge.
-    pub(super) fn complement(self, config: &Config, streams: Streams) -> Arm<T, I> {
+    pub(super) fn complement(
+        self,
+        config: &Config,
+        streams: Streams,
+        threads: Threads,
+    ) -> Arm<T, I> {
         let rows = match formation(config, self.cross.n_cols()) {
-            Formation::Dense => return Arm::AsIs(self.as_is(&self.inverse_pivots())),
-            Formation::Exact => self.exact(&self.inverse_pivots(), Layout::sddm(self.balance)),
+            Formation::Dense => return Arm::AsIs(self.as_is(&self.inverse_pivots(), threads)),
+            Formation::Exact => {
+                self.exact(&self.inverse_pivots(), Layout::sddm(self.balance), threads)
+            }
             Formation::Sampled(copies) => {
-                let fill = self.sample(copies, streams);
+                let fill = self.sample(copies, streams, threads);
                 // The merge never reads `C`.
                 drop(self.cross);
                 fill.merge()
@@ -95,8 +105,8 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
     }
 
     /// `S` itself: a balanced block's exact rows, a frustrated one's signed pairs folded.
-    fn as_is(&self, inv_pivot: &[T]) -> AsIs<T, I> {
-        let rows = self.exact(inv_pivot, Layout::as_is(self.balance));
+    fn as_is(&self, inv_pivot: &[T], threads: Threads) -> AsIs<T, I> {
+        let rows = self.exact(inv_pivot, Layout::as_is(self.balance), threads);
         let (adjacency, grounding) = rows.close(&self.grounding);
         AsIs::new(adjacency, self.balance, grounding)
     }
@@ -114,11 +124,11 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
     }
 
     /// `S − diag(s_k)` exact by kept row in `layout`, `S = D_k − Cᵀ D_e⁻¹ C`, through a `Cᵀ` freed before closing adds `s_k`.
-    fn exact(&self, inv_pivot: &[T], layout: Layout) -> SddmRows<T, I> {
+    fn exact(&self, inv_pivot: &[T], layout: Layout, threads: Threads) -> SddmRows<T, I> {
         match layout {
-            Layout::Sheet => self.exact_rows(inv_pivot, layout, |j, _, _| j),
+            Layout::Sheet => self.exact_rows(inv_pivot, layout, threads, |j, _, _| j),
             Layout::Cover | Layout::SignedPairs => {
-                self.exact_rows(inv_pivot, layout, |j, c_ek, c_ej| {
+                self.exact_rows(inv_pivot, layout, threads, |j, c_ek, c_ej| {
                     cover_vertex(j, usize::from(crosses(c_ek) != crosses(c_ej)))
                 })
             }
@@ -130,6 +140,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         &self,
         inv_pivot: &[T],
         layout: Layout,
+        threads: Threads,
         vertex: impl Fn(usize, T, T) -> usize + Sync,
     ) -> SddmRows<T, I> {
         let (c, grounding) = (&self.cross, &self.grounding);
@@ -141,6 +152,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
             layout,
             c.n_cols(),
             per_task(c.n_cols(), work, MULTIPLY_ADD_GRAIN_BITS),
+            threads,
             |mut sums, k| {
                 for (e, &c_ek) in ct.row(k) {
                     for (j, &c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
@@ -156,15 +168,15 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
     }
 
     /// Clique trees need no pivots, so sampling reads only `C`, σ and the streams.
-    fn sample(&self, copies: Option<Multi>, streams: Streams) -> Fill<T, I> {
+    fn sample(&self, copies: Option<Multi>, streams: Streams, threads: Threads) -> Fill<T, I> {
         let stars = Stars {
             block: self,
             streams,
             ground: I::from_index(Layout::sddm(self.balance).columns(self.cross.n_cols())),
         };
         match copies {
-            None => stars.sample_with(Single),
-            Some(copies) => stars.sample_with(copies),
+            None => stars.sample_with(Single, threads),
+            Some(copies) => stars.sample_with(copies, threads),
         }
     }
 }
@@ -205,28 +217,34 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
     }
 
     /// Each star's clique tree, chunked in star order so merged duplicates sum alike at any thread count.
-    fn sample_with<C: Copies>(&self, copies: C) -> Fill<T, I> {
+    fn sample_with<C: Copies>(&self, copies: C, threads: Threads) -> Fill<T, I> {
         let c = &self.block.cross;
         let layout = Layout::sddm(self.block.balance);
         let n = layout.columns(c.n_cols());
         let shift = bucket_shift(n);
         let count = n.div_ceil(1 << shift);
         let per_task = per_task(c.n_rows(), c.nnz() as u64, 14);
-        let empty = || (CliqueTreeSampler::new(copies), vec![Vec::new(); count]);
         let stars = layout.columns(c.n_rows());
-        let pieces = (0..stars)
-            .into_par_iter()
-            .fold_chunks(per_task, empty, |(mut sampler, mut buckets), s| {
+        let piece = |task: usize| {
+            let (mut sampler, mut buckets) =
+                (CliqueTreeSampler::new(copies), vec![Vec::new(); count]);
+            for s in task * per_task..stars.min((task + 1) * per_task) {
                 let push =
                     |(lo, hi, _, w): (I, I, C, T)| buckets[lo.index() >> shift].push((lo, hi, w));
                 self.eliminate(s, &mut sampler, push);
-                (sampler, buckets)
-            })
-            .map(|(_, mut buckets)| {
-                buckets.iter_mut().for_each(Vec::shrink_to_fit);
-                buckets
-            })
-            .collect();
+            }
+            buckets.iter_mut().for_each(Vec::shrink_to_fit);
+            buckets
+        };
+        let tasks = stars.div_ceil(per_task);
+        let pieces = match threads.per_task(tasks, 1) {
+            Some(per) => (0..tasks)
+                .into_par_iter()
+                .with_min_len(per)
+                .map(|k| task(|| piece(k)))
+                .collect(),
+            None => (0..tasks).map(piece).collect(),
+        };
         Fill {
             layout,
             kept: c.n_cols(),
