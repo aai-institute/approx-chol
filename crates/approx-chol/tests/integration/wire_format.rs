@@ -3,6 +3,8 @@
 
 use crate::common::clamps::Clamps;
 use std::collections::BTreeSet;
+use std::ffi::OsString;
+use std::path::Path;
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
 use approx_chol::FACTOR_FORMAT_VERSION as FORMAT_VERSION;
@@ -188,19 +190,23 @@ fn relative_residual(matrix: &[&[f64]], x: &[f64], b: &[f64]) -> f64 {
     norm(&mut error) / norm(&mut b.iter().copied())
 }
 
-/// `fixtures!` gives every fixture its case; this ties the committed payloads to those fixtures, so none is written but never read.
+/// `fixtures!` gives every fixture its case; this ties the committed payloads to those fixtures, so none is written but never read, an older version's included.
 #[test]
 fn every_fixture_has_a_case() {
-    let suffix = format!("_{FORMAT_VERSION:#010x}.postcard");
-    let committed: BTreeSet<String> = std::fs::read_dir(FIXTURE_DIR)
+    let file_name = |path: &Path| path.file_name().expect("a file").to_owned();
+    let committed: BTreeSet<OsString> = std::fs::read_dir(FIXTURE_DIR)
         .expect("a fixtures directory")
-        .map(|entry| entry.expect("a readable entry").file_name())
-        .filter_map(|name| Some(name.to_str()?.strip_suffix(&suffix)?.to_owned()))
+        .map(|entry| entry.expect("a readable entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "postcard"))
+        .map(|path| file_name(&path))
         .collect();
-    let named: BTreeSet<String> = FIXTURES.iter().map(|f| f.name().to_owned()).collect();
+    let named: BTreeSet<OsString> = FIXTURES
+        .iter()
+        .map(|f| file_name(Path::new(&f.path())))
+        .collect();
     assert_eq!(
         committed, named,
-        "every committed payload of this version is a fixture"
+        "every committed payload is a fixture of format version {FORMAT_VERSION:#010x}"
     );
 }
 
