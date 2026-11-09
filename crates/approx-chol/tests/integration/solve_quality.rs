@@ -1,12 +1,11 @@
-use approx_chol::{
-    ApplyError, ApproxInverse, Component, Config, MemBuffer, MemStack, Real, SchurMode, Threads,
-};
+use approx_chol::{ApproxInverse, Component, Config, MemStack, Real, SchurMode, Threads};
 
 use crate::common::bits::bits;
 use crate::common::cases::cases;
 use crate::common::entry::{by_type, cast_all, Entry, Factored, Types};
 use crate::common::graph::{Edge, Graph};
 use crate::common::grid;
+use crate::common::layouts::{assert_errors_leave_the_block, Layout, Layouts};
 use crate::common::modes::Mode;
 use crate::common::scratch::nan_cells;
 use crate::common::solve::Solve;
@@ -49,30 +48,6 @@ cases! {
     }
 }
 
-fn assert_buffers_checked<T: Real>(factor: &ApproxInverse<T>) {
-    let n = factor.n();
-    for found in [n - 1, n + 1] {
-        let error = ApplyError::Rows { expected: n, found };
-        assert_eq!(
-            factor.apply(&mut vec![T::zero(); found], Threads::All),
-            Err(error)
-        );
-        let mut scratch = MemBuffer::new(factor.scratch(1, Threads::All));
-        let stack = MemStack::new(&mut scratch);
-        let solved = factor.apply_with(&mut vec![T::zero(); found], Threads::All, stack);
-        assert_eq!(solved, Err(error));
-    }
-    let needed = factor.scratch(1, threads::ONE);
-    if needed.size_bytes() > 0 {
-        let mut scratch = MemBuffer::new(needed);
-        let short = MemStack::new(&mut scratch[..needed.size_bytes() - 1]);
-        assert_eq!(
-            factor.apply_with(&mut vec![T::one(); n], Threads::All, short),
-            Err(ApplyError::Scratch)
-        );
-    }
-}
-
 cases! {
     fn every_solve_checks_its_buffer_lengths(entry in entries(grounded), types in types(all)) {
         let graph = Graph {
@@ -80,7 +55,7 @@ cases! {
             ..Graph::new(3, vec![Edge::negative(0, 1, 1.0)])
         };
         let factor = entry.reduce(&graph, types).factorize(&Config::default());
-        by_type!(&factor.factor, factor => assert_buffers_checked(factor));
+        by_type!(&factor.factor, factor => assert_errors_leave_the_block(factor));
     }
 }
 
@@ -93,7 +68,7 @@ cases! {
         let graph = frustrated_triangle();
         let factor = entry.reduce(&graph, types).factorize(&config);
         assert!(uses_scratch(&factor), "a cover lifts through scratch");
-        by_type!(&factor.factor, factor => assert_buffers_checked(factor));
+        by_type!(&factor.factor, factor => assert_errors_leave_the_block(factor));
     }
 }
 
@@ -436,6 +411,12 @@ fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
     }
 }
 
+/// The fewest slots a block of `K` interleaved columns takes from `apply_with`'s stack.
+fn least_interleaved<const K: usize>(factor: &ApproxInverse) -> usize {
+    let block = Layouts::<f64, K>::new(std::array::from_fn(|j| vec![j as f64 + 1.0; factor.n()]));
+    block.least(factor, Layout::Interleaved)
+}
+
 #[rstest::rstest]
 #[case::consecutive(&[0, 1, 2, 3, 4], &[1, 2, 3, 4, 5], &[0])]
 #[case::interleaved(&[0, 2, 1, 3], &[2, 4, 3, 5], &[3, 3])]
@@ -451,19 +432,28 @@ fn apply_with_gathers_only_blocks_whose_vertices_are_not_consecutive(
     let factor: ApproxInverse = factorize(Laplacian::new(6, a, b).unwrap()).unwrap();
     let rhs = [1.0, -1.0, 2.0, -3.0, 0.5, 0.5];
     assert_eq!(factor.components().len(), gathered.len());
-    let in_place = gathered.iter().max().expect("a block") * size_of::<f64>();
-    let column = 6 * size_of::<f64>();
     // Too little work to wake the pool: every budget solves on the calling thread, on one region.
-    for threads in [threads::ONE, threads::BUDGETS[2], Threads::All] {
-        for k in 1..=3 {
-            let scratch = factor.scratch(k, threads).size_bytes();
+    for k in 1..=3 {
+        for threads in [threads::BUDGETS[2], Threads::All] {
+            let one = factor.scratch(k, threads::ONE);
             assert_eq!(
-                scratch,
-                (k * in_place).max(column + in_place),
+                factor.scratch(k, threads),
+                one,
                 "{k} columns at {threads:?}"
             );
         }
     }
+    let gathers = gathered.iter().max().expect("a block");
+    let interleaved = [
+        least_interleaved::<1>(&factor),
+        least_interleaved::<2>(&factor),
+        least_interleaved::<3>(&factor),
+    ];
+    assert_eq!(
+        interleaved,
+        [1, 2, 3].map(|k| k * gathers),
+        "slots per column"
+    );
     let x = solve_on_dirty_scratch(&factor, &rhs, Threads::All);
     let want = factor.solve(&rhs).expect("rows fit");
     assert_eq!(bits(&x), bits(&want));

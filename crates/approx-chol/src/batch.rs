@@ -8,6 +8,9 @@ use crate::Real;
 pub(crate) trait Batch<T: Real>: Copy + Send + Sync {
     type Wide: Batch<f64>;
 
+    /// Right-hand sides side by side.
+    const LANES: usize;
+
     fn zero() -> Self;
     fn add(self, other: Self) -> Self;
     fn sub(self, other: Self) -> Self;
@@ -20,6 +23,8 @@ pub(crate) trait Batch<T: Real>: Copy + Send + Sync {
 
 impl<T: Real> Batch<T> for T {
     type Wide = f64;
+
+    const LANES: usize = 1;
 
     #[inline(always)]
     fn zero() -> Self {
@@ -65,6 +70,8 @@ impl<T: Real> Batch<T> for T {
 /// `K` right-hand sides side by side, each lane computed as the scalar instance computes it alone.
 impl<T: Real, const K: usize> Batch<T> for [T; K] {
     type Wide = [f64; K];
+
+    const LANES: usize = K;
 
     #[inline(always)]
     fn zero() -> Self {

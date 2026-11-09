@@ -2,7 +2,8 @@
 
 use super::spread::Spread;
 use super::ApproxInverse;
-use crate::{Batch, MemStack, Real, StackReq, Threads};
+use crate::threads::ONE;
+use crate::{Batch, MemBuffer, MemStack, Real, StackReq, Threads};
 
 /// Errors an apply returns, leaving the block as it was.
 #[non_exhaustive]
@@ -34,6 +35,19 @@ impl core::fmt::Display for ApplyError {
 }
 
 impl std::error::Error for ApplyError {}
+
+// Built inline, either error cost within's solves 5–9%.
+#[cold]
+#[inline(never)]
+pub(super) fn rows_error(found: usize, n: usize) -> ApplyError {
+    ApplyError::Rows { expected: n, found }
+}
+
+#[cold]
+#[inline(never)]
+fn scratch_error() -> ApplyError {
+    ApplyError::Scratch
+}
 
 /// Errors forming a [`ColumnMajor`] or [`Columns`] block.
 #[non_exhaustive]
@@ -98,10 +112,10 @@ pub trait MatrixMut<T: Real> {
     /// Copies `from` into column `column`.
     fn write_column(&mut self, column: usize, from: &[T]);
 
-    /// Solves the block through `kernel`; a layout the solve reads in place overrides it.
+    /// Solves the block through `kernel`, or leaves it as it was when the scratch its path takes does not fit; a layout whose columns the solve reaches where they are overrides it.
     #[doc(hidden)]
-    fn solve_by(&mut self, kernel: Kernel<'_, T>) {
-        kernel.by_columns(self);
+    fn solve_by(&mut self, kernel: Kernel<'_, T>) -> Result<(), ApplyError> {
+        kernel.by_columns(self)
     }
 }
 
@@ -124,8 +138,8 @@ impl<T: Real> MatrixMut<T> for [T] {
         self.copy_from_slice(from);
     }
 
-    fn solve_by(&mut self, kernel: Kernel<'_, T>) {
-        kernel.in_place(self);
+    fn solve_by(&mut self, kernel: Kernel<'_, T>) -> Result<(), ApplyError> {
+        kernel.in_place(self)
     }
 }
 
@@ -150,8 +164,8 @@ impl<T: Real, const K: usize> MatrixMut<T> for [[T; K]] {
         (self.iter_mut().zip(from)).for_each(|(row, &value)| row[column] = value);
     }
 
-    fn solve_by(&mut self, kernel: Kernel<'_, T>) {
-        kernel.in_place(self);
+    fn solve_by(&mut self, kernel: Kernel<'_, T>) -> Result<(), ApplyError> {
+        kernel.in_place(self)
     }
 }
 
@@ -175,8 +189,8 @@ where
         self.as_mut_slice().write_column(column, from);
     }
 
-    fn solve_by(&mut self, kernel: Kernel<'_, T>) {
-        self.as_mut_slice().solve_by(kernel);
+    fn solve_by(&mut self, kernel: Kernel<'_, T>) -> Result<(), ApplyError> {
+        self.as_mut_slice().solve_by(kernel)
     }
 }
 
@@ -230,8 +244,8 @@ impl<T: Real> MatrixMut<T> for ColumnMajor<'_, T> {
         self.data[column].copy_from_slice(from);
     }
 
-    fn solve_by(&mut self, kernel: Kernel<'_, T>) {
-        kernel.by_slices(self);
+    fn solve_by(&mut self, kernel: Kernel<'_, T>) -> Result<(), ApplyError> {
+        kernel.by_slices(self)
     }
 }
 
@@ -290,8 +304,8 @@ impl<T: Real, C: AsRef<[T]> + AsMut<[T]>> MatrixMut<T> for Columns<'_, C> {
         self.columns[column].as_mut().copy_from_slice(from);
     }
 
-    fn solve_by(&mut self, kernel: Kernel<'_, T>) {
-        kernel.by_slices(self);
+    fn solve_by(&mut self, kernel: Kernel<'_, T>) -> Result<(), ApplyError> {
+        kernel.by_slices(self)
     }
 }
 
@@ -353,33 +367,85 @@ fn pack_lanes(left: usize) -> usize {
     }
 }
 
-/// One apply's solve, handed to [`MatrixMut::solve_by`]; only the crate makes one, for a block it checked.
+/// One apply's solve, handed to [`MatrixMut::solve_by`]; only the crate makes one, for a block of the operator's rows.
 #[doc(hidden)]
 pub struct Kernel<'a, T> {
     pub(super) inverse: &'a ApproxInverse<T>,
     pub(super) threads: Threads,
-    pub(super) stack: &'a mut MemStack,
+    pub(super) stack: Stack<'a>,
+}
+
+/// Where an apply's scratch comes from.
+pub(super) enum Stack<'a> {
+    /// The caller's, which holds what the block's path takes at one thread or the apply errs.
+    Holds(&'a mut MemStack),
+    /// Allocated for what the block's path takes at the budget.
+    Allocate,
 }
 
 impl<T: Real> Kernel<'_, T> {
+    /// Runs `solve` on a stack that holds what `need` asks of the solve's room, or errs before it touches the block.
+    fn on(
+        self,
+        need: impl Fn(&Room) -> StackReq,
+        solve: impl FnOnce(&ApproxInverse<T>, Threads, &mut MemStack),
+    ) -> Result<(), ApplyError> {
+        let Self {
+            inverse,
+            threads,
+            stack,
+        } = self;
+        let mut allocated;
+        let stack = match stack {
+            Stack::Holds(stack) => {
+                let need = need(&Room::of(inverse, ONE));
+                // An overflowing requirement's alignment is 0, on which can_hold panics.
+                if need.align_bytes() == 0 || !stack.can_hold(need) {
+                    return Err(scratch_error());
+                }
+                stack
+            }
+            Stack::Allocate => {
+                let need = need(&Room::of(inverse, threads));
+                allocated = MemBuffer::try_new(need).map_err(|_| scratch_error())?;
+                MemStack::new(&mut allocated)
+            }
+        };
+        solve(inverse, threads, stack);
+        Ok(())
+    }
+
     /// Solves `rows` of `V`, one right-hand side per lane, where they are.
-    fn in_place<V: Batch<T>>(self, rows: &mut [V]) {
-        self.inverse.solve_unchecked(rows, self.threads, self.stack);
+    fn in_place<V: Batch<T>>(self, rows: &mut [V]) -> Result<(), ApplyError> {
+        self.on(
+            |room| room.in_place(V::LANES),
+            |inverse, threads, stack| inverse.solve_unchecked(rows, threads, stack),
+        )
     }
 
     /// Solves `block` in packs filled from and drained into its own column slices.
-    fn by_slices<S: Slices<T>>(self, block: &mut S) {
-        packs(self.inverse, &mut Sliced(block), self.threads, self.stack);
+    fn by_slices<S: Slices<T>>(self, block: &mut S) -> Result<(), ApplyError> {
+        let columns = block.columns();
+        self.on(
+            |room| room.copied(columns),
+            |inverse, threads, stack| packs(inverse, &mut Sliced(block), threads, stack),
+        )
     }
 
     /// Solves `block` in packs, each column read and written through a column of scratch.
-    fn by_columns<M: MatrixMut<T> + ?Sized>(self, block: &mut M) {
-        let (mut column, rest) = self.stack.make_with(self.inverse.n(), |_| T::zero());
-        let mut staged = Staged {
-            block,
-            column: &mut column,
-        };
-        packs(self.inverse, &mut staged, self.threads, rest);
+    fn by_columns<M: MatrixMut<T> + ?Sized>(self, block: &mut M) -> Result<(), ApplyError> {
+        let columns = block.columns();
+        self.on(
+            |room| room.staged(columns),
+            |inverse, threads, stack| {
+                let (mut column, rest) = stack.make_with(inverse.n(), |_| T::zero());
+                let mut staged = Staged {
+                    block,
+                    column: &mut column,
+                };
+                packs(inverse, &mut staged, threads, rest);
+            },
+        )
     }
 }
 

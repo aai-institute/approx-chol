@@ -22,10 +22,9 @@ pub use wire::FORMAT_VERSION;
 use crate::order::{Listed, Order, Segment, Slots};
 use crate::sgdd::{ranges, BlockComplement, Congruence, IrreducibleBlock, KeptVertices, Summands};
 use crate::storage::OffDiagonal;
-use crate::threads::ONE;
 use crate::Clamp;
-use crate::{Batch, Index, MemBuffer, MemStack, Real, StackReq, Threads};
-use apply::{Kernel, Room};
+use crate::{Batch, Index, MemStack, Real, StackReq, Threads};
+use apply::{rows_error, Kernel, Room, Stack};
 use block_elimination::BlockElimination;
 use cholesky::{Arm, Cholesky, Signed, Workspace};
 use schur::BipartiteBlock;
@@ -39,30 +38,6 @@ fn slots<V>(count: usize) -> StackReq {
     match count {
         0 => StackReq::EMPTY,
         count => StackReq::new::<V>(count),
-    }
-}
-
-/// A block of `rows` must match the operator and `stack` hold its scratch.
-fn check_buffers(
-    rows: usize,
-    n: usize,
-    stack: &MemStack,
-    needed: StackReq,
-) -> Result<(), ApplyError> {
-    // An overflowing requirement's alignment is 0, on which can_hold panics.
-    match rows == n && needed.align_bytes() != 0 && stack.can_hold(needed) {
-        true => Ok(()),
-        false => Err(buffer_error(rows, n)),
-    }
-}
-
-// Built inline, the error cost within's solves 5–9%.
-#[cold]
-#[inline(never)]
-fn buffer_error(found: usize, n: usize) -> ApplyError {
-    match found == n {
-        false => ApplyError::Rows { expected: n, found },
-        true => ApplyError::Scratch,
     }
 }
 
@@ -178,30 +153,37 @@ impl<T: Real> ApproxInverse<T> {
         room.in_place(columns).or(room.staged(columns))
     }
 
-    /// Applies the approximate inverse to every column of `block` at once, each bit for bit as it would be alone, through scratch allocated for this call; [`ApplyError::Scratch`] if it cannot be.
+    /// Applies the approximate inverse to every column of `block` at once, each bit for bit as it would be alone, through scratch allocated for this call, what `block`'s layout takes at `threads`; [`ApplyError::Scratch`] if it cannot be. Its rows and errors are [`apply_with`](Self::apply_with)'s.
     pub fn apply<M: MatrixMut<T> + ?Sized>(
         &self,
         block: &mut M,
         threads: Threads,
     ) -> Result<(), ApplyError> {
-        let Ok(mut scratch) = MemBuffer::try_new(self.scratch(block.columns(), threads)) else {
-            return Err(buffer_error(block.rows(), self.n()));
-        };
-        self.apply_with(block, threads, MemStack::new(&mut scratch))
+        self.apply_on(block, threads, Stack::Allocate)
     }
 
-    /// As [`apply`](Self::apply), allocating nothing at `Count(1)`; a budget above one runs on rayon's pool, which builds itself on first use: `block` holds the right-hand sides on entry and `A⁺b` on floating blocks on return, `0` at vertices in no block; `stack` holds [`scratch`](Self::scratch) for its columns at one thread at least, and solves as many blocks at once as it holds regions, up to `threads`. Either error leaves `block` as it was; a block without columns is left as it is, whatever its rows. A floating block's null vector is projected out of `b`, so a right-hand side along it returns `0` on that block: a preconditioned CG must stop at `rᵀz = 0` rather than divide by it.
+    /// As [`apply`](Self::apply), allocating nothing at `Count(1)`; a budget above one runs on rayon's pool, which builds itself on first use: `block` holds the right-hand sides on entry and `A⁺b` on floating blocks on return, `0` at vertices in no block. A block without columns is left as it is, whatever its rows; one with columns is [`ApplyError::Rows`] unless it has `n` rows, then [`ApplyError::Scratch`] unless `stack` holds what its layout takes at one thread, at most [`scratch`](Self::scratch) for its columns at one thread; either error leaves `block` as it was. The stack solves as many blocks at once as it holds regions, up to `threads`. A floating block's null vector is projected out of `b`, so a right-hand side along it returns `0` on that block: a preconditioned CG must stop at `rᵀz = 0` rather than divide by it.
     pub fn apply_with<M: MatrixMut<T> + ?Sized>(
         &self,
         block: &mut M,
         threads: Threads,
         stack: &mut MemStack,
     ) -> Result<(), ApplyError> {
-        let columns = block.columns();
-        if columns == 0 {
+        self.apply_on(block, threads, Stack::Holds(stack))
+    }
+
+    fn apply_on<M: MatrixMut<T> + ?Sized>(
+        &self,
+        block: &mut M,
+        threads: Threads,
+        stack: Stack<'_>,
+    ) -> Result<(), ApplyError> {
+        if block.columns() == 0 {
             return Ok(());
         }
-        check_buffers(block.rows(), self.n(), stack, self.scratch(columns, ONE))?;
+        if block.rows() != self.n() {
+            return Err(rows_error(block.rows(), self.n()));
+        }
         // An empty system has nothing to solve, and a stack that holds nothing may not be aligned to carve from.
         if self.n() == 0 {
             return Ok(());
@@ -210,8 +192,7 @@ impl<T: Real> ApproxInverse<T> {
             inverse: self,
             threads,
             stack,
-        });
-        Ok(())
+        })
     }
 
     /// Solves `x`, of `n` rows, in place through `stack`, which holds every block's scratch for `V`.

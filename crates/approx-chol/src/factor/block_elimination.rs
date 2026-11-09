@@ -163,6 +163,8 @@ mod tests {
     impl Batch<f64> for Traced {
         type Wide = f64;
 
+        const LANES: usize = 1;
+
         fn zero() -> Self {
             Traced(0.0)
         }
