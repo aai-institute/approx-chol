@@ -1,0 +1,749 @@
+pub mod approx_chol
+pub use approx_chol::MemBuffer
+pub use approx_chol::MemStack
+pub use approx_chol::StackReq
+pub mod approx_chol::input
+#[non_exhaustive] pub enum approx_chol::input::CsrError
+pub approx_chol::input::CsrError::BelowDiagonal
+pub approx_chol::input::CsrError::BelowDiagonal::row: usize
+pub approx_chol::input::CsrError::ColIndicesValuesLenMismatch
+pub approx_chol::input::CsrError::ColIndicesValuesLenMismatch::col_indices_len: usize
+pub approx_chol::input::CsrError::ColIndicesValuesLenMismatch::values_len: usize
+pub approx_chol::input::CsrError::ColumnIndexOutOfBounds
+pub approx_chol::input::CsrError::ColumnIndexOutOfBounds::col: usize
+pub approx_chol::input::CsrError::ColumnIndexOutOfBounds::n: usize
+pub approx_chol::input::CsrError::ColumnIndexOutOfBounds::position: usize
+pub approx_chol::input::CsrError::ExpectedSquareMatrix
+pub approx_chol::input::CsrError::ExpectedSquareMatrix::cols: usize
+pub approx_chol::input::CsrError::ExpectedSquareMatrix::rows: usize
+pub approx_chol::input::CsrError::IndexExceedsIndexType
+pub approx_chol::input::CsrError::IndexExceedsIndexType::kind: approx_chol::IndexKind
+pub approx_chol::input::CsrError::IndexNotRepresentableAsUsize
+pub approx_chol::input::CsrError::IndexNotRepresentableAsUsize::kind: approx_chol::IndexKind
+pub approx_chol::input::CsrError::IndexNotRepresentableAsUsize::position: usize
+pub approx_chol::input::CsrError::MatrixDimensionExceedsIndexType
+pub approx_chol::input::CsrError::MatrixDimensionExceedsIndexType::n: usize
+pub approx_chol::input::CsrError::NotSymmetric
+pub approx_chol::input::CsrError::NotSymmetric::row: usize
+pub approx_chol::input::CsrError::OutOfRange
+pub approx_chol::input::CsrError::OutOfRange::row: usize
+pub approx_chol::input::CsrError::RowGap
+pub approx_chol::input::CsrError::RowGap::row: usize
+pub approx_chol::input::CsrError::RowPtrsEndMismatchNnz
+pub approx_chol::input::CsrError::RowPtrsEndMismatchNnz::nnz: usize
+pub approx_chol::input::CsrError::RowPtrsEndMismatchNnz::row_ptr_end: usize
+pub approx_chol::input::CsrError::RowPtrsLenMismatch
+pub approx_chol::input::CsrError::RowPtrsLenMismatch::expected: usize
+pub approx_chol::input::CsrError::RowPtrsLenMismatch::got: usize
+pub approx_chol::input::CsrError::RowPtrsMustStartAtZero
+pub approx_chol::input::CsrError::RowPtrsMustStartAtZero::got: usize
+pub approx_chol::input::CsrError::RowPtrsNotNonDecreasing
+pub approx_chol::input::CsrError::RowPtrsNotNonDecreasing::next: usize
+pub approx_chol::input::CsrError::RowPtrsNotNonDecreasing::prev: usize
+pub approx_chol::input::CsrError::RowPtrsNotNonDecreasing::row: usize
+impl core::clone::Clone for approx_chol::CsrError
+pub fn approx_chol::CsrError::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::CsrError
+impl core::cmp::PartialEq for approx_chol::CsrError
+pub fn approx_chol::CsrError::eq(&self, &Self) -> bool
+impl core::convert::From<approx_chol::CsrError> for approx_chol::Error
+pub fn approx_chol::Error::from(approx_chol::CsrError) -> Self
+impl core::error::Error for approx_chol::CsrError
+impl core::fmt::Debug for approx_chol::CsrError
+pub fn approx_chol::CsrError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for approx_chol::CsrError
+pub fn approx_chol::CsrError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::CsrError
+impl core::marker::StructuralPartialEq for approx_chol::CsrError
+pub enum approx_chol::input::IndexKind
+pub approx_chol::input::IndexKind::ColIndex
+pub approx_chol::input::IndexKind::RowPtr
+impl core::clone::Clone for approx_chol::IndexKind
+pub fn approx_chol::IndexKind::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::IndexKind
+impl core::cmp::PartialEq for approx_chol::IndexKind
+pub fn approx_chol::IndexKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for approx_chol::IndexKind
+pub fn approx_chol::IndexKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for approx_chol::IndexKind
+pub fn approx_chol::IndexKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::IndexKind
+impl core::marker::StructuralPartialEq for approx_chol::IndexKind
+#[non_exhaustive] pub enum approx_chol::input::Input<'a, T, I>
+pub approx_chol::input::Input::BipartiteFactorWidth2(approx_chol::input::BipartiteFactorWidth2<'a, T, I>)
+pub approx_chol::input::Input::Csr(approx_chol::CsrRef<'a, T, I>)
+pub approx_chol::input::Input::FactorWidth2(approx_chol::input::FactorWidth2<'a, T, I>)
+pub approx_chol::input::Input::Laplacian(approx_chol::input::Laplacian<'a, T, I>)
+pub approx_chol::input::Input::Sddm(approx_chol::input::Sddm<'a, T, I>)
+pub approx_chol::input::Input::UpperCsr(approx_chol::input::UpperCsrRef<'a, T, I>)
+impl<'a, T, I: faer::Index + num_traits::int::PrimInt> core::convert::TryFrom<&'a faer::sparse::csr::numeric::generic::SparseRowMat<faer::sparse::csr::numeric::Own<I, T>>> for approx_chol::input::Input<'a, T, I>
+pub type approx_chol::input::Input<'a, T, I>::Error = approx_chol::CsrError
+pub fn approx_chol::input::Input<'a, T, I>::try_from(&'a faer::sparse::csr::SparseRowMat<I, T>) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I: faer::Index + num_traits::int::PrimInt> core::convert::TryFrom<faer::sparse::csr::numeric::generic::SparseRowMat<faer::sparse::csr::numeric::Ref<'a, I, T>>> for approx_chol::input::Input<'a, T, I>
+pub type approx_chol::input::Input<'a, T, I>::Error = approx_chol::CsrError
+pub fn approx_chol::input::Input<'a, T, I>::try_from(faer::sparse::csr::SparseRowMatRef<'a, I, T>) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I: num_traits::int::PrimInt> core::convert::From<&'a approx_chol::OwnedCsr<T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(&'a approx_chol::OwnedCsr<T, I>) -> Self
+impl<'a, T, I: sprs::indexing::SpIndex> core::convert::TryFrom<&'a sprs::sparse::CsMatBase<T, I, alloc::vec::Vec<I>, alloc::vec::Vec<I>, alloc::vec::Vec<T>>> for approx_chol::input::Input<'a, T, I>
+pub type approx_chol::input::Input<'a, T, I>::Error = approx_chol::CsrError
+pub fn approx_chol::input::Input<'a, T, I>::try_from(&'a sprs::sparse::CsMatI<T, I>) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I: sprs::indexing::SpIndex> core::convert::TryFrom<sprs::sparse::CsMatBase<T, I, &'a [I], &'a [I], &'a [T]>> for approx_chol::input::Input<'a, T, I>
+pub type approx_chol::input::Input<'a, T, I>::Error = approx_chol::CsrError
+pub fn approx_chol::input::Input<'a, T, I>::try_from(sprs::sparse::CsMatViewI<'a, T, I>) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I> core::convert::From<approx_chol::CsrRef<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::CsrRef<'a, T, I>) -> Self
+impl<'a, T, I> core::convert::From<approx_chol::input::BipartiteFactorWidth2<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::input::BipartiteFactorWidth2<'a, T, I>) -> Self
+impl<'a, T, I> core::convert::From<approx_chol::input::FactorWidth2<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::input::FactorWidth2<'a, T, I>) -> Self
+impl<'a, T, I> core::convert::From<approx_chol::input::Laplacian<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::input::Laplacian<'a, T, I>) -> Self
+impl<'a, T, I> core::convert::From<approx_chol::input::Sddm<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::input::Sddm<'a, T, I>) -> Self
+impl<'a, T, I> core::convert::From<approx_chol::input::UpperCsrRef<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::input::UpperCsrRef<'a, T, I>) -> Self
+impl<'a, T: core::clone::Clone, I: core::clone::Clone> core::clone::Clone for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::clone(&self) -> Self
+impl<'a, T: core::fmt::Debug, I: core::fmt::Debug> core::fmt::Debug for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a, T: core::marker::Copy, I: core::marker::Copy> core::marker::Copy for approx_chol::input::Input<'a, T, I>
+pub enum approx_chol::input::Side
+pub approx_chol::input::Side::Left
+pub approx_chol::input::Side::Right
+impl core::clone::Clone for approx_chol::Side
+pub fn approx_chol::Side::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::Side
+impl core::cmp::PartialEq for approx_chol::Side
+pub fn approx_chol::Side::eq(&self, &Self) -> bool
+impl core::fmt::Debug for approx_chol::Side
+pub fn approx_chol::Side::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::Side
+impl core::marker::StructuralPartialEq for approx_chol::Side
+#[non_exhaustive] pub enum approx_chol::input::ViewError
+pub approx_chol::input::ViewError::IndexOutOfRange
+pub approx_chol::input::ViewError::IndexOutOfRange::entry: usize
+pub approx_chol::input::ViewError::InvalidScale
+pub approx_chol::input::ViewError::InvalidScale::entry: usize
+pub approx_chol::input::ViewError::InvalidSurplus
+pub approx_chol::input::ViewError::InvalidSurplus::vertex: usize
+pub approx_chol::input::ViewError::InvalidWeight
+pub approx_chol::input::ViewError::InvalidWeight::entry: usize
+pub approx_chol::input::ViewError::LengthMismatch
+pub approx_chol::input::ViewError::LengthMismatch::expected: usize
+pub approx_chol::input::ViewError::LengthMismatch::found: usize
+pub approx_chol::input::ViewError::RepeatedVertex
+pub approx_chol::input::ViewError::RepeatedVertex::entry: usize
+pub approx_chol::input::ViewError::ZeroSurplus
+impl core::clone::Clone for approx_chol::input::ViewError
+pub fn approx_chol::input::ViewError::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::input::ViewError
+impl core::cmp::PartialEq for approx_chol::input::ViewError
+pub fn approx_chol::input::ViewError::eq(&self, &Self) -> bool
+impl core::error::Error for approx_chol::input::ViewError
+impl core::fmt::Debug for approx_chol::input::ViewError
+pub fn approx_chol::input::ViewError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for approx_chol::input::ViewError
+pub fn approx_chol::input::ViewError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::input::ViewError
+impl core::marker::StructuralPartialEq for approx_chol::input::ViewError
+pub struct approx_chol::input::BipartiteFactorWidth2<'a, T, I>
+impl<'a, T: approx_chol::Real, I: num_traits::int::PrimInt> approx_chol::input::BipartiteFactorWidth2<'a, T, I>
+pub fn approx_chol::input::BipartiteFactorWidth2<'a, T, I>::new(approx_chol::input::FactorWidth1<'a, T, I>, approx_chol::input::FactorWidth1<'a, T, I>) -> core::result::Result<Self, approx_chol::input::ViewError>
+pub fn approx_chol::input::BipartiteFactorWidth2<'a, T, I>::scaled(approx_chol::input::FactorWidth1<'a, T, I>, approx_chol::input::FactorWidth1<'a, T, I>, &'a [T]) -> core::result::Result<Self, approx_chol::input::ViewError>
+impl<'a, T, I> core::convert::From<approx_chol::input::BipartiteFactorWidth2<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::input::BipartiteFactorWidth2<'a, T, I>) -> Self
+impl<'a, T: core::clone::Clone, I: core::clone::Clone> core::clone::Clone for approx_chol::input::BipartiteFactorWidth2<'a, T, I>
+pub fn approx_chol::input::BipartiteFactorWidth2<'a, T, I>::clone(&self) -> Self
+impl<'a, T: core::fmt::Debug, I: core::fmt::Debug> core::fmt::Debug for approx_chol::input::BipartiteFactorWidth2<'a, T, I>
+pub fn approx_chol::input::BipartiteFactorWidth2<'a, T, I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a, T: core::marker::Copy, I: core::marker::Copy> core::marker::Copy for approx_chol::input::BipartiteFactorWidth2<'a, T, I>
+pub struct approx_chol::input::CsrRef<'a, T, I>
+impl<'a, T, I: num_traits::int::PrimInt> approx_chol::CsrRef<'a, T, I>
+pub fn approx_chol::CsrRef<'a, T, I>::col_indices(&self) -> &'a [I]
+pub fn approx_chol::CsrRef<'a, T, I>::n(&self) -> usize
+pub fn approx_chol::CsrRef<'a, T, I>::new(&'a [I], &'a [I], &'a [T], u32) -> core::result::Result<Self, approx_chol::CsrError>
+pub fn approx_chol::CsrRef<'a, T, I>::row_ptrs(&self) -> &'a [I]
+pub fn approx_chol::CsrRef<'a, T, I>::values(&self) -> &'a [T]
+impl<T: core::clone::Clone, I: num_traits::int::PrimInt> approx_chol::CsrRef<'_, T, I>
+pub fn approx_chol::CsrRef<'_, T, I>::to_owned_u32(&self) -> core::result::Result<approx_chol::OwnedCsr<T, u32>, approx_chol::CsrError>
+impl<'a, T, I: faer::Index + num_traits::int::PrimInt> core::convert::TryFrom<&'a faer::sparse::csr::numeric::generic::SparseRowMat<faer::sparse::csr::numeric::Own<I, T>>> for approx_chol::CsrRef<'a, T, I>
+pub type approx_chol::CsrRef<'a, T, I>::Error = approx_chol::CsrError
+pub fn approx_chol::CsrRef<'a, T, I>::try_from(&'a faer::sparse::csr::SparseRowMat<I, T>) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I: faer::Index + num_traits::int::PrimInt> core::convert::TryFrom<faer::sparse::csr::numeric::generic::SparseRowMat<faer::sparse::csr::numeric::Ref<'a, I, T>>> for approx_chol::CsrRef<'a, T, I>
+pub type approx_chol::CsrRef<'a, T, I>::Error = approx_chol::CsrError
+pub fn approx_chol::CsrRef<'a, T, I>::try_from(faer::sparse::csr::SparseRowMatRef<'a, I, T>) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I: num_traits::int::PrimInt> core::convert::From<&'a approx_chol::OwnedCsr<T, I>> for approx_chol::CsrRef<'a, T, I>
+pub fn approx_chol::CsrRef<'a, T, I>::from(&'a approx_chol::OwnedCsr<T, I>) -> Self
+impl<'a, T, I: sprs::indexing::SpIndex> core::convert::TryFrom<&'a sprs::sparse::CsMatBase<T, I, alloc::vec::Vec<I>, alloc::vec::Vec<I>, alloc::vec::Vec<T>>> for approx_chol::CsrRef<'a, T, I>
+pub type approx_chol::CsrRef<'a, T, I>::Error = approx_chol::CsrError
+pub fn approx_chol::CsrRef<'a, T, I>::try_from(&'a sprs::sparse::CsMatI<T, I>) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I: sprs::indexing::SpIndex> core::convert::TryFrom<sprs::sparse::CsMatBase<T, I, &'a [I], &'a [I], &'a [T]>> for approx_chol::CsrRef<'a, T, I>
+pub type approx_chol::CsrRef<'a, T, I>::Error = approx_chol::CsrError
+pub fn approx_chol::CsrRef<'a, T, I>::try_from(sprs::sparse::CsMatViewI<'a, T, I>) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I> core::convert::From<approx_chol::CsrRef<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::CsrRef<'a, T, I>) -> Self
+impl<'a, T: core::clone::Clone, I: core::clone::Clone> core::clone::Clone for approx_chol::CsrRef<'a, T, I>
+pub fn approx_chol::CsrRef<'a, T, I>::clone(&self) -> Self
+impl<'a, T: core::fmt::Debug, I: core::fmt::Debug> core::fmt::Debug for approx_chol::CsrRef<'a, T, I>
+pub fn approx_chol::CsrRef<'a, T, I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a, T: core::marker::Copy, I: core::marker::Copy> core::marker::Copy for approx_chol::CsrRef<'a, T, I>
+pub struct approx_chol::input::FactorWidth1<'a, T, I>
+impl<'a, T: approx_chol::Real, I: num_traits::int::PrimInt> approx_chol::input::FactorWidth1<'a, T, I>
+pub fn approx_chol::input::FactorWidth1<'a, T, I>::new(usize, &'a [I], core::option::Option<&'a [T]>) -> core::result::Result<Self, approx_chol::input::ViewError>
+impl<'a, T: core::clone::Clone, I: core::clone::Clone> core::clone::Clone for approx_chol::input::FactorWidth1<'a, T, I>
+pub fn approx_chol::input::FactorWidth1<'a, T, I>::clone(&self) -> Self
+impl<'a, T: core::fmt::Debug, I: core::fmt::Debug> core::fmt::Debug for approx_chol::input::FactorWidth1<'a, T, I>
+pub fn approx_chol::input::FactorWidth1<'a, T, I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a, T: core::marker::Copy, I: core::marker::Copy> core::marker::Copy for approx_chol::input::FactorWidth1<'a, T, I>
+pub struct approx_chol::input::FactorWidth2<'a, T, I>
+impl<'a, T: approx_chol::Real, I: num_traits::int::PrimInt> approx_chol::input::FactorWidth2<'a, T, I>
+pub fn approx_chol::input::FactorWidth2<'a, T, I>::new(usize, (&'a [I], &'a [T]), (&'a [I], &'a [T])) -> core::result::Result<Self, approx_chol::input::ViewError>
+impl<'a, T, I> core::convert::From<approx_chol::input::FactorWidth2<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::input::FactorWidth2<'a, T, I>) -> Self
+impl<'a, T: core::clone::Clone, I: core::clone::Clone> core::clone::Clone for approx_chol::input::FactorWidth2<'a, T, I>
+pub fn approx_chol::input::FactorWidth2<'a, T, I>::clone(&self) -> Self
+impl<'a, T: core::fmt::Debug, I: core::fmt::Debug> core::fmt::Debug for approx_chol::input::FactorWidth2<'a, T, I>
+pub fn approx_chol::input::FactorWidth2<'a, T, I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a, T: core::marker::Copy, I: core::marker::Copy> core::marker::Copy for approx_chol::input::FactorWidth2<'a, T, I>
+pub struct approx_chol::input::Laplacian<'a, T, I>
+impl<'a, T: approx_chol::Real, I: num_traits::int::PrimInt> approx_chol::input::Laplacian<'a, T, I>
+pub fn approx_chol::input::Laplacian<'a, T, I>::new(usize, &'a [I], &'a [I]) -> core::result::Result<Self, approx_chol::input::ViewError>
+pub fn approx_chol::input::Laplacian<'a, T, I>::weighted(usize, &'a [I], &'a [I], &'a [T]) -> core::result::Result<Self, approx_chol::input::ViewError>
+impl<'a, T, I> core::convert::From<approx_chol::input::Laplacian<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::input::Laplacian<'a, T, I>) -> Self
+impl<'a, T: core::clone::Clone, I: core::clone::Clone> core::clone::Clone for approx_chol::input::Laplacian<'a, T, I>
+pub fn approx_chol::input::Laplacian<'a, T, I>::clone(&self) -> Self
+impl<'a, T: core::fmt::Debug, I: core::fmt::Debug> core::fmt::Debug for approx_chol::input::Laplacian<'a, T, I>
+pub fn approx_chol::input::Laplacian<'a, T, I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a, T: core::marker::Copy, I: core::marker::Copy> core::marker::Copy for approx_chol::input::Laplacian<'a, T, I>
+pub struct approx_chol::input::OwnedCsr<T, I>
+impl<T, I: num_traits::int::PrimInt> approx_chol::OwnedCsr<T, I>
+pub fn approx_chol::OwnedCsr<T, I>::as_csr_ref(&self) -> approx_chol::CsrRef<'_, T, I>
+impl<T: core::clone::Clone, I: num_traits::int::PrimInt> approx_chol::OwnedCsr<T, I>
+pub fn approx_chol::OwnedCsr<T, I>::try_from_usize(&[usize], &[usize], &[T], usize) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I: num_traits::int::PrimInt> core::convert::From<&'a approx_chol::OwnedCsr<T, I>> for approx_chol::CsrRef<'a, T, I>
+pub fn approx_chol::CsrRef<'a, T, I>::from(&'a approx_chol::OwnedCsr<T, I>) -> Self
+impl<'a, T, I: num_traits::int::PrimInt> core::convert::From<&'a approx_chol::OwnedCsr<T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(&'a approx_chol::OwnedCsr<T, I>) -> Self
+impl<T: core::clone::Clone, I: core::clone::Clone> core::clone::Clone for approx_chol::OwnedCsr<T, I>
+pub fn approx_chol::OwnedCsr<T, I>::clone(&self) -> Self
+impl<T: core::fmt::Debug, I: core::fmt::Debug> core::fmt::Debug for approx_chol::OwnedCsr<T, I>
+pub fn approx_chol::OwnedCsr<T, I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct approx_chol::input::Sddm<'a, T, I>
+impl<'a, T: approx_chol::Real, I: num_traits::int::PrimInt> approx_chol::input::Sddm<'a, T, I>
+pub fn approx_chol::input::Sddm<'a, T, I>::new(approx_chol::input::Laplacian<'a, T, I>, &'a [T]) -> core::result::Result<Self, approx_chol::input::ViewError>
+impl<'a, T, I> core::convert::From<approx_chol::input::Sddm<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::input::Sddm<'a, T, I>) -> Self
+impl<'a, T: core::clone::Clone, I: core::clone::Clone> core::clone::Clone for approx_chol::input::Sddm<'a, T, I>
+pub fn approx_chol::input::Sddm<'a, T, I>::clone(&self) -> Self
+impl<'a, T: core::fmt::Debug, I: core::fmt::Debug> core::fmt::Debug for approx_chol::input::Sddm<'a, T, I>
+pub fn approx_chol::input::Sddm<'a, T, I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a, T: core::marker::Copy, I: core::marker::Copy> core::marker::Copy for approx_chol::input::Sddm<'a, T, I>
+pub struct approx_chol::input::UpperCsrRef<'a, T, I>(_)
+impl<'a, T, I: num_traits::int::PrimInt> approx_chol::input::UpperCsrRef<'a, T, I>
+pub fn approx_chol::input::UpperCsrRef<'a, T, I>::new(&'a [I], &'a [I], &'a [T], u32) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I> core::convert::From<approx_chol::input::UpperCsrRef<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::input::UpperCsrRef<'a, T, I>) -> Self
+impl<'a, T: core::clone::Clone, I: core::clone::Clone> core::clone::Clone for approx_chol::input::UpperCsrRef<'a, T, I>
+pub fn approx_chol::input::UpperCsrRef<'a, T, I>::clone(&self) -> Self
+impl<'a, T: core::fmt::Debug, I: core::fmt::Debug> core::fmt::Debug for approx_chol::input::UpperCsrRef<'a, T, I>
+pub fn approx_chol::input::UpperCsrRef<'a, T, I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a, T: core::marker::Copy, I: core::marker::Copy> core::marker::Copy for approx_chol::input::UpperCsrRef<'a, T, I>
+#[non_exhaustive] pub enum approx_chol::ApplyError
+pub approx_chol::ApplyError::Rows
+pub approx_chol::ApplyError::Rows::expected: usize
+pub approx_chol::ApplyError::Rows::found: usize
+pub approx_chol::ApplyError::Scratch
+impl core::clone::Clone for approx_chol::ApplyError
+pub fn approx_chol::ApplyError::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::ApplyError
+impl core::cmp::PartialEq for approx_chol::ApplyError
+pub fn approx_chol::ApplyError::eq(&self, &Self) -> bool
+impl core::error::Error for approx_chol::ApplyError
+impl core::fmt::Debug for approx_chol::ApplyError
+pub fn approx_chol::ApplyError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for approx_chol::ApplyError
+pub fn approx_chol::ApplyError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::ApplyError
+impl core::marker::StructuralPartialEq for approx_chol::ApplyError
+#[non_exhaustive] pub enum approx_chol::CoverSurplus
+pub approx_chol::CoverSurplus::Auto
+pub approx_chol::CoverSurplus::GroundVertex
+pub approx_chol::CoverSurplus::SurplusEdges
+impl core::clone::Clone for approx_chol::CoverSurplus
+pub fn approx_chol::CoverSurplus::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::CoverSurplus
+impl core::cmp::PartialEq for approx_chol::CoverSurplus
+pub fn approx_chol::CoverSurplus::eq(&self, &Self) -> bool
+impl core::default::Default for approx_chol::CoverSurplus
+pub fn approx_chol::CoverSurplus::default() -> Self
+impl core::fmt::Debug for approx_chol::CoverSurplus
+pub fn approx_chol::CoverSurplus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for approx_chol::CoverSurplus
+pub fn approx_chol::CoverSurplus::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for approx_chol::CoverSurplus
+impl core::marker::StructuralPartialEq for approx_chol::CoverSurplus
+impl serde_core::ser::Serialize for approx_chol::CoverSurplus
+pub fn approx_chol::CoverSurplus::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for approx_chol::CoverSurplus
+pub fn approx_chol::CoverSurplus::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+#[non_exhaustive] pub enum approx_chol::CsrError
+pub approx_chol::CsrError::BelowDiagonal
+pub approx_chol::CsrError::BelowDiagonal::row: usize
+pub approx_chol::CsrError::ColIndicesValuesLenMismatch
+pub approx_chol::CsrError::ColIndicesValuesLenMismatch::col_indices_len: usize
+pub approx_chol::CsrError::ColIndicesValuesLenMismatch::values_len: usize
+pub approx_chol::CsrError::ColumnIndexOutOfBounds
+pub approx_chol::CsrError::ColumnIndexOutOfBounds::col: usize
+pub approx_chol::CsrError::ColumnIndexOutOfBounds::n: usize
+pub approx_chol::CsrError::ColumnIndexOutOfBounds::position: usize
+pub approx_chol::CsrError::ExpectedSquareMatrix
+pub approx_chol::CsrError::ExpectedSquareMatrix::cols: usize
+pub approx_chol::CsrError::ExpectedSquareMatrix::rows: usize
+pub approx_chol::CsrError::IndexExceedsIndexType
+pub approx_chol::CsrError::IndexExceedsIndexType::kind: approx_chol::IndexKind
+pub approx_chol::CsrError::IndexNotRepresentableAsUsize
+pub approx_chol::CsrError::IndexNotRepresentableAsUsize::kind: approx_chol::IndexKind
+pub approx_chol::CsrError::IndexNotRepresentableAsUsize::position: usize
+pub approx_chol::CsrError::MatrixDimensionExceedsIndexType
+pub approx_chol::CsrError::MatrixDimensionExceedsIndexType::n: usize
+pub approx_chol::CsrError::NotSymmetric
+pub approx_chol::CsrError::NotSymmetric::row: usize
+pub approx_chol::CsrError::OutOfRange
+pub approx_chol::CsrError::OutOfRange::row: usize
+pub approx_chol::CsrError::RowGap
+pub approx_chol::CsrError::RowGap::row: usize
+pub approx_chol::CsrError::RowPtrsEndMismatchNnz
+pub approx_chol::CsrError::RowPtrsEndMismatchNnz::nnz: usize
+pub approx_chol::CsrError::RowPtrsEndMismatchNnz::row_ptr_end: usize
+pub approx_chol::CsrError::RowPtrsLenMismatch
+pub approx_chol::CsrError::RowPtrsLenMismatch::expected: usize
+pub approx_chol::CsrError::RowPtrsLenMismatch::got: usize
+pub approx_chol::CsrError::RowPtrsMustStartAtZero
+pub approx_chol::CsrError::RowPtrsMustStartAtZero::got: usize
+pub approx_chol::CsrError::RowPtrsNotNonDecreasing
+pub approx_chol::CsrError::RowPtrsNotNonDecreasing::next: usize
+pub approx_chol::CsrError::RowPtrsNotNonDecreasing::prev: usize
+pub approx_chol::CsrError::RowPtrsNotNonDecreasing::row: usize
+impl core::clone::Clone for approx_chol::CsrError
+pub fn approx_chol::CsrError::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::CsrError
+impl core::cmp::PartialEq for approx_chol::CsrError
+pub fn approx_chol::CsrError::eq(&self, &Self) -> bool
+impl core::convert::From<approx_chol::CsrError> for approx_chol::Error
+pub fn approx_chol::Error::from(approx_chol::CsrError) -> Self
+impl core::error::Error for approx_chol::CsrError
+impl core::fmt::Debug for approx_chol::CsrError
+pub fn approx_chol::CsrError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for approx_chol::CsrError
+pub fn approx_chol::CsrError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::CsrError
+impl core::marker::StructuralPartialEq for approx_chol::CsrError
+#[non_exhaustive] pub enum approx_chol::Error
+pub approx_chol::Error::InvalidCsr(approx_chol::CsrError)
+pub approx_chol::Error::Reduce(approx_chol::ReduceError)
+impl core::clone::Clone for approx_chol::Error
+pub fn approx_chol::Error::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::Error
+impl core::cmp::PartialEq for approx_chol::Error
+pub fn approx_chol::Error::eq(&self, &Self) -> bool
+impl core::convert::From<approx_chol::CsrError> for approx_chol::Error
+pub fn approx_chol::Error::from(approx_chol::CsrError) -> Self
+impl core::convert::From<approx_chol::ReduceError> for approx_chol::Error
+pub fn approx_chol::Error::from(approx_chol::ReduceError) -> Self
+impl core::convert::From<never> for approx_chol::Error
+pub fn approx_chol::Error::from(core::convert::Infallible) -> Self
+impl core::error::Error for approx_chol::Error
+pub fn approx_chol::Error::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for approx_chol::Error
+pub fn approx_chol::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for approx_chol::Error
+pub fn approx_chol::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::Error
+impl core::marker::StructuralPartialEq for approx_chol::Error
+#[non_exhaustive] pub enum approx_chol::FrustratedRoute
+pub approx_chol::FrustratedRoute::Cover(approx_chol::CoverSurplus)
+impl core::clone::Clone for approx_chol::FrustratedRoute
+pub fn approx_chol::FrustratedRoute::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::FrustratedRoute
+impl core::cmp::PartialEq for approx_chol::FrustratedRoute
+pub fn approx_chol::FrustratedRoute::eq(&self, &Self) -> bool
+impl core::fmt::Debug for approx_chol::FrustratedRoute
+pub fn approx_chol::FrustratedRoute::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for approx_chol::FrustratedRoute
+pub fn approx_chol::FrustratedRoute::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for approx_chol::FrustratedRoute
+impl core::marker::StructuralPartialEq for approx_chol::FrustratedRoute
+impl serde_core::ser::Serialize for approx_chol::FrustratedRoute
+pub fn approx_chol::FrustratedRoute::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for approx_chol::FrustratedRoute
+pub fn approx_chol::FrustratedRoute::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub enum approx_chol::IndexKind
+pub approx_chol::IndexKind::ColIndex
+pub approx_chol::IndexKind::RowPtr
+impl core::clone::Clone for approx_chol::IndexKind
+pub fn approx_chol::IndexKind::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::IndexKind
+impl core::cmp::PartialEq for approx_chol::IndexKind
+pub fn approx_chol::IndexKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for approx_chol::IndexKind
+pub fn approx_chol::IndexKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for approx_chol::IndexKind
+pub fn approx_chol::IndexKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::IndexKind
+impl core::marker::StructuralPartialEq for approx_chol::IndexKind
+#[non_exhaustive] pub enum approx_chol::Input<'a, T, I>
+pub approx_chol::Input::BipartiteFactorWidth2(approx_chol::input::BipartiteFactorWidth2<'a, T, I>)
+pub approx_chol::Input::Csr(approx_chol::CsrRef<'a, T, I>)
+pub approx_chol::Input::FactorWidth2(approx_chol::input::FactorWidth2<'a, T, I>)
+pub approx_chol::Input::Laplacian(approx_chol::input::Laplacian<'a, T, I>)
+pub approx_chol::Input::Sddm(approx_chol::input::Sddm<'a, T, I>)
+pub approx_chol::Input::UpperCsr(approx_chol::input::UpperCsrRef<'a, T, I>)
+impl<'a, T, I: faer::Index + num_traits::int::PrimInt> core::convert::TryFrom<&'a faer::sparse::csr::numeric::generic::SparseRowMat<faer::sparse::csr::numeric::Own<I, T>>> for approx_chol::input::Input<'a, T, I>
+pub type approx_chol::input::Input<'a, T, I>::Error = approx_chol::CsrError
+pub fn approx_chol::input::Input<'a, T, I>::try_from(&'a faer::sparse::csr::SparseRowMat<I, T>) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I: faer::Index + num_traits::int::PrimInt> core::convert::TryFrom<faer::sparse::csr::numeric::generic::SparseRowMat<faer::sparse::csr::numeric::Ref<'a, I, T>>> for approx_chol::input::Input<'a, T, I>
+pub type approx_chol::input::Input<'a, T, I>::Error = approx_chol::CsrError
+pub fn approx_chol::input::Input<'a, T, I>::try_from(faer::sparse::csr::SparseRowMatRef<'a, I, T>) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I: num_traits::int::PrimInt> core::convert::From<&'a approx_chol::OwnedCsr<T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(&'a approx_chol::OwnedCsr<T, I>) -> Self
+impl<'a, T, I: sprs::indexing::SpIndex> core::convert::TryFrom<&'a sprs::sparse::CsMatBase<T, I, alloc::vec::Vec<I>, alloc::vec::Vec<I>, alloc::vec::Vec<T>>> for approx_chol::input::Input<'a, T, I>
+pub type approx_chol::input::Input<'a, T, I>::Error = approx_chol::CsrError
+pub fn approx_chol::input::Input<'a, T, I>::try_from(&'a sprs::sparse::CsMatI<T, I>) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I: sprs::indexing::SpIndex> core::convert::TryFrom<sprs::sparse::CsMatBase<T, I, &'a [I], &'a [I], &'a [T]>> for approx_chol::input::Input<'a, T, I>
+pub type approx_chol::input::Input<'a, T, I>::Error = approx_chol::CsrError
+pub fn approx_chol::input::Input<'a, T, I>::try_from(sprs::sparse::CsMatViewI<'a, T, I>) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I> core::convert::From<approx_chol::CsrRef<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::CsrRef<'a, T, I>) -> Self
+impl<'a, T, I> core::convert::From<approx_chol::input::BipartiteFactorWidth2<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::input::BipartiteFactorWidth2<'a, T, I>) -> Self
+impl<'a, T, I> core::convert::From<approx_chol::input::FactorWidth2<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::input::FactorWidth2<'a, T, I>) -> Self
+impl<'a, T, I> core::convert::From<approx_chol::input::Laplacian<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::input::Laplacian<'a, T, I>) -> Self
+impl<'a, T, I> core::convert::From<approx_chol::input::Sddm<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::input::Sddm<'a, T, I>) -> Self
+impl<'a, T, I> core::convert::From<approx_chol::input::UpperCsrRef<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::input::UpperCsrRef<'a, T, I>) -> Self
+impl<'a, T: core::clone::Clone, I: core::clone::Clone> core::clone::Clone for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::clone(&self) -> Self
+impl<'a, T: core::fmt::Debug, I: core::fmt::Debug> core::fmt::Debug for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a, T: core::marker::Copy, I: core::marker::Copy> core::marker::Copy for approx_chol::input::Input<'a, T, I>
+#[non_exhaustive] pub enum approx_chol::LayoutError
+pub approx_chol::LayoutError::Column
+pub approx_chol::LayoutError::Column::column: usize
+pub approx_chol::LayoutError::Column::expected: usize
+pub approx_chol::LayoutError::Column::found: usize
+pub approx_chol::LayoutError::Length
+pub approx_chol::LayoutError::Length::found: usize
+pub approx_chol::LayoutError::Length::rows: usize
+impl core::clone::Clone for approx_chol::LayoutError
+pub fn approx_chol::LayoutError::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::LayoutError
+impl core::cmp::PartialEq for approx_chol::LayoutError
+pub fn approx_chol::LayoutError::eq(&self, &Self) -> bool
+impl core::error::Error for approx_chol::LayoutError
+impl core::fmt::Debug for approx_chol::LayoutError
+pub fn approx_chol::LayoutError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for approx_chol::LayoutError
+pub fn approx_chol::LayoutError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::LayoutError
+impl core::marker::StructuralPartialEq for approx_chol::LayoutError
+#[non_exhaustive] pub enum approx_chol::ReduceError
+pub approx_chol::ReduceError::NonpositiveDiagonal
+pub approx_chol::ReduceError::NonpositiveDiagonal::vertex: usize
+pub approx_chol::ReduceError::OutOfRange
+pub approx_chol::ReduceError::OutOfRange::vertex: usize
+pub approx_chol::ReduceError::TooLarge
+pub approx_chol::ReduceError::TooLarge::vertex: usize
+pub approx_chol::ReduceError::Unscalable
+pub approx_chol::ReduceError::Unscalable::vertex: usize
+impl core::clone::Clone for approx_chol::ReduceError
+pub fn approx_chol::ReduceError::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::ReduceError
+impl core::cmp::PartialEq for approx_chol::ReduceError
+pub fn approx_chol::ReduceError::eq(&self, &Self) -> bool
+impl core::convert::From<approx_chol::ReduceError> for approx_chol::Error
+pub fn approx_chol::Error::from(approx_chol::ReduceError) -> Self
+impl core::error::Error for approx_chol::ReduceError
+impl core::fmt::Debug for approx_chol::ReduceError
+pub fn approx_chol::ReduceError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for approx_chol::ReduceError
+pub fn approx_chol::ReduceError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::ReduceError
+impl core::marker::StructuralPartialEq for approx_chol::ReduceError
+#[non_exhaustive] pub enum approx_chol::Sampling
+pub approx_chol::Sampling::CliqueTree
+pub approx_chol::Sampling::CliqueTree::copies: core::num::nonzero::NonZeroU32
+impl core::clone::Clone for approx_chol::Sampling
+pub fn approx_chol::Sampling::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::Sampling
+impl core::cmp::PartialEq for approx_chol::Sampling
+pub fn approx_chol::Sampling::eq(&self, &Self) -> bool
+impl core::fmt::Debug for approx_chol::Sampling
+pub fn approx_chol::Sampling::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for approx_chol::Sampling
+pub fn approx_chol::Sampling::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for approx_chol::Sampling
+impl core::marker::StructuralPartialEq for approx_chol::Sampling
+impl serde_core::ser::Serialize for approx_chol::Sampling
+pub fn approx_chol::Sampling::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for approx_chol::Sampling
+pub fn approx_chol::Sampling::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub enum approx_chol::ScalingOutcome
+pub approx_chol::ScalingOutcome::Certified
+pub approx_chol::ScalingOutcome::Refuted
+pub approx_chol::ScalingOutcome::Unsettled
+impl core::clone::Clone for approx_chol::ScalingOutcome
+pub fn approx_chol::ScalingOutcome::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::ScalingOutcome
+impl core::cmp::PartialEq for approx_chol::ScalingOutcome
+pub fn approx_chol::ScalingOutcome::eq(&self, &Self) -> bool
+impl core::fmt::Debug for approx_chol::ScalingOutcome
+pub fn approx_chol::ScalingOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::ScalingOutcome
+impl core::marker::StructuralPartialEq for approx_chol::ScalingOutcome
+impl serde_core::ser::Serialize for approx_chol::ScalingOutcome
+pub fn approx_chol::ScalingOutcome::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for approx_chol::ScalingOutcome
+pub fn approx_chol::ScalingOutcome::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+#[non_exhaustive] pub enum approx_chol::SchurMode
+pub approx_chol::SchurMode::Approximate
+pub approx_chol::SchurMode::Approximate::sampling: approx_chol::Sampling
+pub approx_chol::SchurMode::Exact
+pub approx_chol::SchurMode::Same
+impl core::clone::Clone for approx_chol::SchurMode
+pub fn approx_chol::SchurMode::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::SchurMode
+impl core::cmp::PartialEq for approx_chol::SchurMode
+pub fn approx_chol::SchurMode::eq(&self, &Self) -> bool
+impl core::default::Default for approx_chol::SchurMode
+pub fn approx_chol::SchurMode::default() -> Self
+impl core::fmt::Debug for approx_chol::SchurMode
+pub fn approx_chol::SchurMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for approx_chol::SchurMode
+pub fn approx_chol::SchurMode::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for approx_chol::SchurMode
+impl core::marker::StructuralPartialEq for approx_chol::SchurMode
+impl serde_core::ser::Serialize for approx_chol::SchurMode
+pub fn approx_chol::SchurMode::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for approx_chol::SchurMode
+pub fn approx_chol::SchurMode::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub enum approx_chol::Side
+pub approx_chol::Side::Left
+pub approx_chol::Side::Right
+impl core::clone::Clone for approx_chol::Side
+pub fn approx_chol::Side::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::Side
+impl core::cmp::PartialEq for approx_chol::Side
+pub fn approx_chol::Side::eq(&self, &Self) -> bool
+impl core::fmt::Debug for approx_chol::Side
+pub fn approx_chol::Side::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::Side
+impl core::marker::StructuralPartialEq for approx_chol::Side
+pub enum approx_chol::Threads
+pub approx_chol::Threads::All
+pub approx_chol::Threads::Count(core::num::nonzero::NonZeroUsize)
+impl core::clone::Clone for approx_chol::Threads
+pub fn approx_chol::Threads::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::Threads
+impl core::cmp::PartialEq for approx_chol::Threads
+pub fn approx_chol::Threads::eq(&self, &Self) -> bool
+impl core::convert::From<faer::Par> for approx_chol::Threads
+pub fn approx_chol::Threads::from(faer::Par) -> Self
+impl core::fmt::Debug for approx_chol::Threads
+pub fn approx_chol::Threads::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::Threads
+impl core::marker::StructuralPartialEq for approx_chol::Threads
+pub struct approx_chol::ApproxInverse<T>
+impl<T: approx_chol::Real> approx_chol::ApproxInverse<T>
+pub fn approx_chol::ApproxInverse<T>::apply<M: approx_chol::MatrixMut<T> + ?core::marker::Sized>(&self, &mut M, approx_chol::Threads) -> core::result::Result<(), approx_chol::ApplyError>
+pub fn approx_chol::ApproxInverse<T>::apply_with<M: approx_chol::MatrixMut<T> + ?core::marker::Sized>(&self, &mut M, approx_chol::Threads, &mut dyn_stack::MemStack) -> core::result::Result<(), approx_chol::ApplyError>
+pub fn approx_chol::ApproxInverse<T>::components(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = approx_chol::Component<'_, T>>
+pub fn approx_chol::ApproxInverse<T>::n(&self) -> usize
+pub fn approx_chol::ApproxInverse<T>::n_steps(&self) -> usize
+pub fn approx_chol::ApproxInverse<T>::scratch(&self, usize, approx_chol::Threads) -> dyn_stack::stack_req::StackReq
+impl<'de, T: approx_chol::Real + serde_core::de::Deserialize<'de>> serde_core::de::Deserialize<'de> for approx_chol::ApproxInverse<T>
+pub fn approx_chol::ApproxInverse<T>::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+impl<T: core::clone::Clone> core::clone::Clone for approx_chol::ApproxInverse<T>
+pub fn approx_chol::ApproxInverse<T>::clone(&self) -> Self
+impl<T: core::fmt::Debug> core::fmt::Debug for approx_chol::ApproxInverse<T>
+pub fn approx_chol::ApproxInverse<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T: serde_core::ser::Serialize> serde_core::ser::Serialize for approx_chol::ApproxInverse<T>
+pub fn approx_chol::ApproxInverse<T>::serialize<S: serde_core::ser::Serializer>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
+#[non_exhaustive] pub struct approx_chol::Clamp
+pub approx_chol::Clamp::scaling: approx_chol::ScalingOutcome
+pub approx_chol::Clamp::violation: f64
+impl core::clone::Clone for approx_chol::Clamp
+pub fn approx_chol::Clamp::clone(&self) -> Self
+impl core::cmp::PartialEq for approx_chol::Clamp
+pub fn approx_chol::Clamp::eq(&self, &Self) -> bool
+impl core::fmt::Debug for approx_chol::Clamp
+pub fn approx_chol::Clamp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for approx_chol::Clamp
+impl serde_core::ser::Serialize for approx_chol::Clamp
+pub fn approx_chol::Clamp::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for approx_chol::Clamp
+pub fn approx_chol::Clamp::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct approx_chol::ColumnMajor<'a, T>
+impl<'a, T> approx_chol::ColumnMajor<'a, T>
+pub fn approx_chol::ColumnMajor<'a, T>::new(&'a mut [T], usize) -> core::result::Result<Self, approx_chol::LayoutError>
+impl<'a, T: core::fmt::Debug> core::fmt::Debug for approx_chol::ColumnMajor<'a, T>
+pub fn approx_chol::ColumnMajor<'a, T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T: approx_chol::Real> approx_chol::MatrixMut<T> for approx_chol::ColumnMajor<'_, T>
+pub fn approx_chol::ColumnMajor<'_, T>::columns(&self) -> usize
+pub fn approx_chol::ColumnMajor<'_, T>::read_column(&self, usize, &mut [T])
+pub fn approx_chol::ColumnMajor<'_, T>::rows(&self) -> usize
+pub fn approx_chol::ColumnMajor<'_, T>::write_column(&mut self, usize, &[T])
+pub struct approx_chol::Columns<'s, C>
+impl<'s, C> approx_chol::Columns<'s, C>
+pub fn approx_chol::Columns<'s, C>::new<T>(&'s mut [C]) -> core::result::Result<Self, approx_chol::LayoutError> where C: core::convert::AsRef<[T]>
+impl<'s, C: core::fmt::Debug> core::fmt::Debug for approx_chol::Columns<'s, C>
+pub fn approx_chol::Columns<'s, C>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T: approx_chol::Real, C: core::convert::AsRef<[T]> + core::convert::AsMut<[T]>> approx_chol::MatrixMut<T> for approx_chol::Columns<'_, C>
+pub fn approx_chol::Columns<'_, C>::columns(&self) -> usize
+pub fn approx_chol::Columns<'_, C>::read_column(&self, usize, &mut [T])
+pub fn approx_chol::Columns<'_, C>::rows(&self) -> usize
+pub fn approx_chol::Columns<'_, C>::write_column(&mut self, usize, &[T])
+pub struct approx_chol::Component<'f, T>
+impl<'f, T: approx_chol::Real> approx_chol::Component<'f, T>
+pub fn approx_chol::Component<'f, T>::clamp(self) -> core::option::Option<&'f approx_chol::Clamp>
+pub fn approx_chol::Component<'f, T>::floats(self) -> bool
+pub fn approx_chol::Component<'f, T>::grounding_unproven(self) -> bool
+pub fn approx_chol::Component<'f, T>::vertices(self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = usize> + 'f
+impl<'f, T: core::clone::Clone> core::clone::Clone for approx_chol::Component<'f, T>
+pub fn approx_chol::Component<'f, T>::clone(&self) -> Self
+impl<'f, T: core::marker::Copy> core::marker::Copy for approx_chol::Component<'f, T>
+impl<T> core::fmt::Debug for approx_chol::Component<'_, T>
+pub fn approx_chol::Component<'_, T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct approx_chol::Config
+pub approx_chol::Config::complement: approx_chol::SchurMode
+pub approx_chol::Config::exact_max_dim: usize
+pub approx_chol::Config::frustrated: approx_chol::FrustratedRoute
+pub approx_chol::Config::sampling: approx_chol::Sampling
+pub approx_chol::Config::seed: u64
+impl core::clone::Clone for approx_chol::Config
+pub fn approx_chol::Config::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::Config
+impl core::cmp::PartialEq for approx_chol::Config
+pub fn approx_chol::Config::eq(&self, &Self) -> bool
+impl core::default::Default for approx_chol::Config
+pub fn approx_chol::Config::default() -> Self
+impl core::fmt::Debug for approx_chol::Config
+pub fn approx_chol::Config::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for approx_chol::Config
+pub fn approx_chol::Config::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for approx_chol::Config
+impl core::marker::StructuralPartialEq for approx_chol::Config
+impl serde_core::ser::Serialize for approx_chol::Config
+pub fn approx_chol::Config::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for approx_chol::Config
+pub fn approx_chol::Config::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct approx_chol::CsrRef<'a, T, I>
+impl<'a, T, I: num_traits::int::PrimInt> approx_chol::CsrRef<'a, T, I>
+pub fn approx_chol::CsrRef<'a, T, I>::col_indices(&self) -> &'a [I]
+pub fn approx_chol::CsrRef<'a, T, I>::n(&self) -> usize
+pub fn approx_chol::CsrRef<'a, T, I>::new(&'a [I], &'a [I], &'a [T], u32) -> core::result::Result<Self, approx_chol::CsrError>
+pub fn approx_chol::CsrRef<'a, T, I>::row_ptrs(&self) -> &'a [I]
+pub fn approx_chol::CsrRef<'a, T, I>::values(&self) -> &'a [T]
+impl<T: core::clone::Clone, I: num_traits::int::PrimInt> approx_chol::CsrRef<'_, T, I>
+pub fn approx_chol::CsrRef<'_, T, I>::to_owned_u32(&self) -> core::result::Result<approx_chol::OwnedCsr<T, u32>, approx_chol::CsrError>
+impl<'a, T, I: faer::Index + num_traits::int::PrimInt> core::convert::TryFrom<&'a faer::sparse::csr::numeric::generic::SparseRowMat<faer::sparse::csr::numeric::Own<I, T>>> for approx_chol::CsrRef<'a, T, I>
+pub type approx_chol::CsrRef<'a, T, I>::Error = approx_chol::CsrError
+pub fn approx_chol::CsrRef<'a, T, I>::try_from(&'a faer::sparse::csr::SparseRowMat<I, T>) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I: faer::Index + num_traits::int::PrimInt> core::convert::TryFrom<faer::sparse::csr::numeric::generic::SparseRowMat<faer::sparse::csr::numeric::Ref<'a, I, T>>> for approx_chol::CsrRef<'a, T, I>
+pub type approx_chol::CsrRef<'a, T, I>::Error = approx_chol::CsrError
+pub fn approx_chol::CsrRef<'a, T, I>::try_from(faer::sparse::csr::SparseRowMatRef<'a, I, T>) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I: num_traits::int::PrimInt> core::convert::From<&'a approx_chol::OwnedCsr<T, I>> for approx_chol::CsrRef<'a, T, I>
+pub fn approx_chol::CsrRef<'a, T, I>::from(&'a approx_chol::OwnedCsr<T, I>) -> Self
+impl<'a, T, I: sprs::indexing::SpIndex> core::convert::TryFrom<&'a sprs::sparse::CsMatBase<T, I, alloc::vec::Vec<I>, alloc::vec::Vec<I>, alloc::vec::Vec<T>>> for approx_chol::CsrRef<'a, T, I>
+pub type approx_chol::CsrRef<'a, T, I>::Error = approx_chol::CsrError
+pub fn approx_chol::CsrRef<'a, T, I>::try_from(&'a sprs::sparse::CsMatI<T, I>) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I: sprs::indexing::SpIndex> core::convert::TryFrom<sprs::sparse::CsMatBase<T, I, &'a [I], &'a [I], &'a [T]>> for approx_chol::CsrRef<'a, T, I>
+pub type approx_chol::CsrRef<'a, T, I>::Error = approx_chol::CsrError
+pub fn approx_chol::CsrRef<'a, T, I>::try_from(sprs::sparse::CsMatViewI<'a, T, I>) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I> core::convert::From<approx_chol::CsrRef<'a, T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::CsrRef<'a, T, I>) -> Self
+impl<'a, T: core::clone::Clone, I: core::clone::Clone> core::clone::Clone for approx_chol::CsrRef<'a, T, I>
+pub fn approx_chol::CsrRef<'a, T, I>::clone(&self) -> Self
+impl<'a, T: core::fmt::Debug, I: core::fmt::Debug> core::fmt::Debug for approx_chol::CsrRef<'a, T, I>
+pub fn approx_chol::CsrRef<'a, T, I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a, T: core::marker::Copy, I: core::marker::Copy> core::marker::Copy for approx_chol::CsrRef<'a, T, I>
+pub struct approx_chol::OwnedCsr<T, I>
+impl<T, I: num_traits::int::PrimInt> approx_chol::OwnedCsr<T, I>
+pub fn approx_chol::OwnedCsr<T, I>::as_csr_ref(&self) -> approx_chol::CsrRef<'_, T, I>
+impl<T: core::clone::Clone, I: num_traits::int::PrimInt> approx_chol::OwnedCsr<T, I>
+pub fn approx_chol::OwnedCsr<T, I>::try_from_usize(&[usize], &[usize], &[T], usize) -> core::result::Result<Self, approx_chol::CsrError>
+impl<'a, T, I: num_traits::int::PrimInt> core::convert::From<&'a approx_chol::OwnedCsr<T, I>> for approx_chol::CsrRef<'a, T, I>
+pub fn approx_chol::CsrRef<'a, T, I>::from(&'a approx_chol::OwnedCsr<T, I>) -> Self
+impl<'a, T, I: num_traits::int::PrimInt> core::convert::From<&'a approx_chol::OwnedCsr<T, I>> for approx_chol::input::Input<'a, T, I>
+pub fn approx_chol::input::Input<'a, T, I>::from(&'a approx_chol::OwnedCsr<T, I>) -> Self
+impl<T: core::clone::Clone, I: core::clone::Clone> core::clone::Clone for approx_chol::OwnedCsr<T, I>
+pub fn approx_chol::OwnedCsr<T, I>::clone(&self) -> Self
+impl<T: core::fmt::Debug, I: core::fmt::Debug> core::fmt::Debug for approx_chol::OwnedCsr<T, I>
+pub fn approx_chol::OwnedCsr<T, I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct approx_chol::ScalingPolicy
+impl approx_chol::ScalingPolicy
+pub fn approx_chol::ScalingPolicy::max_iterations(&self) -> usize
+pub fn approx_chol::ScalingPolicy::new(f64, usize) -> core::option::Option<Self>
+pub fn approx_chol::ScalingPolicy::tolerance(&self) -> f64
+impl core::clone::Clone for approx_chol::ScalingPolicy
+pub fn approx_chol::ScalingPolicy::clone(&self) -> Self
+impl core::cmp::PartialEq for approx_chol::ScalingPolicy
+pub fn approx_chol::ScalingPolicy::eq(&self, &Self) -> bool
+impl core::default::Default for approx_chol::ScalingPolicy
+pub fn approx_chol::ScalingPolicy::default() -> Self
+impl core::fmt::Debug for approx_chol::ScalingPolicy
+pub fn approx_chol::ScalingPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::ScalingPolicy
+impl core::marker::StructuralPartialEq for approx_chol::ScalingPolicy
+impl serde_core::ser::Serialize for approx_chol::ScalingPolicy
+pub fn approx_chol::ScalingPolicy::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for approx_chol::ScalingPolicy
+pub fn approx_chol::ScalingPolicy::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct approx_chol::Sgdd<T>(_)
+impl<T: approx_chol::Real> approx_chol::Sgdd<T>
+pub fn approx_chol::Sgdd<T>::factor(self, &approx_chol::Config) -> approx_chol::ApproxInverse<T>
+pub fn approx_chol::Sgdd<T>::reduce<'a, I, M>(M, approx_chol::ScalingPolicy) -> core::result::Result<Self, approx_chol::Error> where I: num_traits::int::PrimInt + core::marker::Sync + 'a, M: core::convert::TryInto<approx_chol::input::Input<'a, T, I>>, <M as core::convert::TryInto<approx_chol::input::Input<'a, T, I>>>::Error: core::convert::Into<approx_chol::Error>
+impl<T: core::clone::Clone> core::clone::Clone for approx_chol::Sgdd<T>
+pub fn approx_chol::Sgdd<T>::clone(&self) -> Self
+impl<T: core::fmt::Debug> core::fmt::Debug for approx_chol::Sgdd<T>
+pub fn approx_chol::Sgdd<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const approx_chol::FACTOR_FORMAT_VERSION: u32
+pub trait approx_chol::MatrixMut<T: approx_chol::Real>
+pub fn approx_chol::MatrixMut::columns(&self) -> usize
+pub fn approx_chol::MatrixMut::read_column(&self, usize, &mut [T])
+pub fn approx_chol::MatrixMut::rows(&self) -> usize
+pub fn approx_chol::MatrixMut::write_column(&mut self, usize, &[T])
+impl<T: approx_chol::Real, C: core::convert::AsRef<[T]> + core::convert::AsMut<[T]>> approx_chol::MatrixMut<T> for approx_chol::Columns<'_, C>
+pub fn approx_chol::Columns<'_, C>::columns(&self) -> usize
+pub fn approx_chol::Columns<'_, C>::read_column(&self, usize, &mut [T])
+pub fn approx_chol::Columns<'_, C>::rows(&self) -> usize
+pub fn approx_chol::Columns<'_, C>::write_column(&mut self, usize, &[T])
+impl<T: approx_chol::Real, E> approx_chol::MatrixMut<T> for alloc::vec::Vec<E> where [E]: approx_chol::MatrixMut<T>
+pub fn alloc::vec::Vec<E>::columns(&self) -> usize
+pub fn alloc::vec::Vec<E>::read_column(&self, usize, &mut [T])
+pub fn alloc::vec::Vec<E>::rows(&self) -> usize
+pub fn alloc::vec::Vec<E>::write_column(&mut self, usize, &[T])
+impl<T: approx_chol::Real, const K: usize> approx_chol::MatrixMut<T> for [[T; K]]
+pub fn [[T; K]]::columns(&self) -> usize
+pub fn [[T; K]]::read_column(&self, usize, &mut [T])
+pub fn [[T; K]]::rows(&self) -> usize
+pub fn [[T; K]]::write_column(&mut self, usize, &[T])
+impl<T: approx_chol::Real> approx_chol::MatrixMut<T> for [T]
+pub fn [T]::columns(&self) -> usize
+pub fn [T]::read_column(&self, usize, &mut [T])
+pub fn [T]::rows(&self) -> usize
+pub fn [T]::write_column(&mut self, usize, &[T])
+impl<T: approx_chol::Real> approx_chol::MatrixMut<T> for approx_chol::ColumnMajor<'_, T>
+pub fn approx_chol::ColumnMajor<'_, T>::columns(&self) -> usize
+pub fn approx_chol::ColumnMajor<'_, T>::read_column(&self, usize, &mut [T])
+pub fn approx_chol::ColumnMajor<'_, T>::rows(&self) -> usize
+pub fn approx_chol::ColumnMajor<'_, T>::write_column(&mut self, usize, &[T])
+pub trait approx_chol::Real: num_traits::float::Float + num_traits::float::TotalOrder + core::fmt::Debug + core::marker::Send + core::marker::Sync + 'static + approx_chol::seal::Real
+impl approx_chol::Real for f32
+impl approx_chol::Real for f64
+pub fn approx_chol::factorize<'a, T, I, M>(M) -> core::result::Result<approx_chol::ApproxInverse<T>, approx_chol::Error> where T: approx_chol::Real, I: num_traits::int::PrimInt + core::marker::Sync + 'a, M: core::convert::TryInto<approx_chol::input::Input<'a, T, I>>, <M as core::convert::TryInto<approx_chol::input::Input<'a, T, I>>>::Error: core::convert::Into<approx_chol::Error>
+pub fn approx_chol::factorize_complement<T: approx_chol::Real, I: num_traits::int::PrimInt + core::marker::Sync>(approx_chol::input::BipartiteFactorWidth2<'_, T, I>, approx_chol::Side, approx_chol::Config, approx_chol::ScalingPolicy) -> core::result::Result<approx_chol::ApproxInverse<T>, approx_chol::Error>
+pub fn approx_chol::factorize_with<'a, T, I, M>(M, approx_chol::Config, approx_chol::ScalingPolicy) -> core::result::Result<approx_chol::ApproxInverse<T>, approx_chol::Error> where T: approx_chol::Real, I: num_traits::int::PrimInt + core::marker::Sync + 'a, M: core::convert::TryInto<approx_chol::input::Input<'a, T, I>>, <M as core::convert::TryInto<approx_chol::input::Input<'a, T, I>>>::Error: core::convert::Into<approx_chol::Error>
