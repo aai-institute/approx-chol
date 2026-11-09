@@ -21,8 +21,9 @@ representations are those of `../../requirements/input.md`.
   $0$ or above the range floor, magnitudes the build handles, derived diagonals included but a
   Gram form's, which the build checks.
 
-- **`Input`** is opaque: it converts from each of these types and has no other constructor, so
-  every `Input` is admissible.
+- **`Input`** is opaque and a borrowed `Copy` value, as every view it wraps is borrowed: it
+  converts from each of these types and has no other constructor, so every `Input` is
+  admissible.
 - **Admissible is structural:** Submit decides what single entries and rows decide, not
   whether the matrix is GDD.
 - **One `InputError`:** the defect and its position in the caller's terms. Which of several
