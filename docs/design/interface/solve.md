@@ -65,26 +65,30 @@ pub enum ApplyError {
 ```
 
 - `scratch(columns, threads)` is what applying to a block of `columns` columns at `threads`
-  needs to solve as many components at once as the budget has threads, at most the current
-  pool's: a region per thread, of the most one of those components takes. It grows with
-  `columns`; one thread's serves every budget, and a stack of fewer regions solves fewer
-  components at once, to the same bits. `apply` allocates its scratch per call; `apply_with`
-  allocates nothing at `Count(1)`; a budget above one runs on rayon's pool, which builds itself on
-  first use.
+  needs, whichever its layout, the most of the paths below, to solve as many components at once
+  as the budget has threads, at most the current pool's: a region per thread, of the most one of
+  those components takes. It grows with `columns`; one thread's serves every budget, and a stack
+  of fewer regions solves fewer components at once, to the same bits. `apply` allocates its
+  scratch per call; `apply_with` allocates nothing at `Count(1)`; a budget above one runs on
+  rayon's pool, which builds itself on first use.
 - `block` holds the right-hand sides on entry and the solutions on return; a block with columns has
-  $n$ rows, else `Rows`, and one without is left as it is, whatever its rows. `Scratch` is returned
-  when `stack` cannot hold one thread's scratch, `scratch(block.columns(), Threads::Count(1))`,
-  alignment included. Either error leaves `block` untouched.
+  $n$ rows, else `Rows`, and one without is left as it is, whatever its rows. Then `Scratch` is
+  returned when `stack` cannot hold what the block's path takes at one thread, at most
+  `scratch(block.columns(), Threads::Count(1))`, alignment included. Either error leaves `block`
+  untouched.
 - A `MatrixMut` keeps its shape during an apply; `read_column` copies a column into `into`,
   `write_column` copies `from` into one column and touches nothing else, and neither allocates. Each
   panics unless `column < columns()` and the slice has `rows()` entries; the crate's impls keep this
-  contract, and the apply relies on no more. A one-dimensional type is one column; `[[T; K]]` holds
-  $K$ interleaved columns; `ColumnMajor` reads `data` column-major, `rows` to a column, `Length`
-  unless that makes whole columns, none without data; `Columns` is one `&mut [T]`, `Vec<T>` or other
-  `AsMut<[T]>` per column, `Column` at the first not of the first's rows; both solve each column
-  where it is. Foreign types implement it with any stride values: faer's dynamic-shape types, every
-  nalgebra matrix, and ndarray's `ArrayRef`, which owned arrays and views dereference to. A typed
-  faer view converts with `as_dyn_mut().as_dyn_stride_mut()`.
+  contract, and the apply relies on no more. A one-dimensional type is one column and `[[T; K]]`
+  holds $K$ interleaved columns; both solve where they are. `ColumnMajor` reads `data`
+  column-major, `rows` to a column, `Length` unless that makes whole columns, none without data;
+  `Columns` is one `&mut [T]`, `Vec<T>` or other `AsMut<[T]>` per column, `Column` at the first not
+  of the first's rows. These column-stored layouts solve in interleaved packs of 8, 4 or 1 columns
+  filled from their own columns, a column alone where it is; any other `MatrixMut` is staged one
+  column at a time through `read_column` and `write_column` into the same packs. Foreign types
+  implement it with any stride values: faer's dynamic-shape types, every nalgebra matrix, and
+  ndarray's `ArrayRef`, which owned arrays and views dereference to. A typed faer view converts
+  with `as_dyn_mut().as_dyn_stride_mut()`.
 - The unimplemented-trait message names the feature each foreign type needs and the supported
   versions, faer 0.24, nalgebra 0.35 and ndarray 0.17, and suggests `[..]` for an array and
   `&mut *a` for an ndarray array.
@@ -127,8 +131,10 @@ preconditioner, so it right-preconditions there composed with $A$: `y` from
   preconditioner.
 - **`MatrixMut` a trait:** an apply only copies columns in and out; each type copies its own way,
   with its strides, without `unsafe`, and the adapters implement it without the approximate inverse
-  depending on their crates. A layout costs that copy, 4–8% of a block solve, except the crate's,
-  which solve where they are.
+  depending on their crates.
+- **Packs of 8, 4 or 1:** the fused solve measured 2.5 times faster per column at 8 columns than
+  one at a time, 2.1 times at 4, so filling a pack repays its copy; a column left alone gains
+  nothing from one.
 - **`ColumnMajor` and `Columns`:** the two forms whose input can be malformed, checked once;
   each states its shape once, by its data. Rows matter only to a column there is to solve, so
   a block without columns needs none.
