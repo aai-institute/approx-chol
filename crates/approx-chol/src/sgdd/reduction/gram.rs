@@ -5,9 +5,9 @@ use num_traits::PrimInt;
 use super::{Folded, Settling, Surplus};
 use crate::input::{Column, FactorWidth2};
 use crate::sgdd::block::{Grounding, IrreducibleBlock, ReduceError};
-use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, SymmetricBlock};
+use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Cut, SymmetricBlock};
 use crate::sgdd::scaling::{self, ScalingPolicy, RATIO_BAND};
-use crate::sgdd::{Components, Reduced, Summands};
+use crate::sgdd::{Components, Reduced};
 use crate::{narrow, widen, Index, Real};
 
 impl<T: Real, I: Index> Reduced<T, I> {
@@ -18,33 +18,35 @@ impl<T: Real, I: Index> Reduced<T, I> {
         policy: &ScalingPolicy,
     ) -> Result<Self, ReduceError> {
         let (cuts, components) = assemble_values::<T, J, I, S>(cells, v)?.arrange()?;
-        let live = cuts.extract(&components, |vertices, entries| {
-            Ok(SymmetricBlock { vertices, entries })
-        })?;
-        // Built by the first block not already dominant: a dominant input pays only once a block's band fails.
-        let mut nulls: Option<(Vec<f64>, Vec<I>)> = None;
-        // Doubling, the folded blocks held up to 2x their size beside `live` (+12% peak at 99k blocks).
-        let mut signed = Vec::with_capacity(live.len());
-        for a in live {
-            // `V` proves a scaling exists.
-            signed.push(a.reduce(policy, |a| {
-                let (u, _) = nulls.get_or_insert_with(|| null_vectors(v, &components));
-                // `NaN` where a component has no certificate.
-                let u = (a.vertices.iter()).map(|v| u[v.index()]);
-                (u.clone().all(f64::is_finite))
-                    .then(|| scaling::null_scaling(u, &a.entries.rows.diagonal))
-                    .flatten()
-                    .or_else(|| {
-                        scaling::relax(&a.entries.off_diagonal, &a.entries.rows.diagonal, policy)
-                    })
-            })?);
-        }
-        // `u` freed before the column pass: only the certified set outlives the scaling.
-        let read = nulls.map(|(_, certified)| certified);
-        let certified = LazyCell::new(|| read.unwrap_or_else(|| null_vectors(v, &components).1));
-        let blocks = ground_or_float(v, signed, &certified)?;
-        drop(certified);
-        Ok(Summands { components, blocks })
+        components.cut(|components| {
+            let live = cuts.extract(components, |vertices, entries| {
+                Ok(SymmetricBlock { vertices, entries })
+            })?;
+            // Built by the first block not already dominant: a dominant input pays only once a block's band fails.
+            let mut nulls: Option<(Vec<f64>, Vec<I>)> = None;
+            let signed = live.try_map(|_, a| {
+                // `V` proves a scaling exists.
+                a.reduce(policy, |a| {
+                    let (u, _) = nulls.get_or_insert_with(|| null_vectors(v, components));
+                    // `NaN` where a component has no certificate.
+                    let u = (a.vertices.iter()).map(|v| u[v.index()]);
+                    (u.clone().all(f64::is_finite))
+                        .then(|| scaling::null_scaling(u, &a.entries.rows.diagonal))
+                        .flatten()
+                        .or_else(|| {
+                            scaling::relax(
+                                &a.entries.off_diagonal,
+                                &a.entries.rows.diagonal,
+                                policy,
+                            )
+                        })
+                })
+            })?;
+            // `u` freed before the column pass: only the certified set outlives the scaling.
+            let read = nulls.map(|(_, certified)| certified);
+            let certified = LazyCell::new(|| read.unwrap_or_else(|| null_vectors(v, components).1));
+            ground_or_float(v, signed, &certified)
+        })
     }
 }
 /// Summed from `V`'s columns, with what one-ended columns state and the components whose cycles `V` certifies.
@@ -90,11 +92,12 @@ impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_,
 }
 
 /// Each block in turn, a folded one settled by [`Folded::settle`] on one pass over `V`'s columns, which none takes when none is folded.
-fn ground_or_float<T: Real, J: PrimInt, I: Index>(
+fn ground_or_float<'p, T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
-    blocks: Vec<Settling<'_, T, I>>,
+    settling: Cut<'p, I, T, Settling<'p, T, I>>,
     certified: &LazyCell<Vec<I>, impl FnOnce() -> Vec<I>>,
-) -> Result<Vec<IrreducibleBlock<T, I>>, ReduceError> {
+) -> Result<Cut<'p, I, T, IrreducibleBlock<T, I>>, ReduceError> {
+    let blocks = settling.blocks();
     // By vertex, sized only when a block is folded: blocks are disjoint, so one slot per vertex holds its block, `f_i` and surplus.
     let folds = blocks.iter().any(|b| matches!(b, Settling::Pending(_)));
     let n = if folds { v.n() } else { 0 };
@@ -158,12 +161,10 @@ fn ground_or_float<T: Real, J: PrimInt, I: Index>(
         stated: &stated,
         certified,
     };
-    (blocks.into_iter().zip(ones.into_iter().zip(trace)))
-        .map(|(block, band)| match block {
-            Settling::Pending(folded) => folded.settle(band, &gram),
-            Settling::Settled(block) => Ok(block),
-        })
-        .collect()
+    settling.try_map_in_place(|c, block| match block {
+        Settling::Pending(folded) => folded.settle((ones[c], trace[c]), &gram),
+        Settling::Settled(block) => Ok(block),
+    })
 }
 
 /// Per vertex, a `u` orthogonal to its component's coupling columns, `NaN` where none is, and the sorted lowest vertices of the components that have one: one union-find pass; a cycle off by more than `√ε` relative dooms its component.

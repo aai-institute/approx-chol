@@ -20,7 +20,7 @@ pub use config::{Config, SchurMode};
 pub use wire::FORMAT_VERSION;
 
 use crate::order::{Listed, Order, Segment, Slots};
-use crate::sgdd::{BlockComplement, Components, Congruence, IrreducibleBlock, Summands};
+use crate::sgdd::{ranges, BlockComplement, Congruence, IrreducibleBlock, KeptVertices, Summands};
 use crate::storage::OffDiagonal;
 use crate::threads::ONE;
 use crate::Clamp;
@@ -123,20 +123,18 @@ impl<T: Real> ApproxInverse<T> {
         Blocks<T>: From<Box<[Block<T, I>]>>,
         Listed: From<Box<[I]>>,
     {
-        let Summands { components, blocks } = summands;
-        let isolated = components.isolated();
-        let Components {
+        let Summands {
             vertices,
             coupled,
             pivots,
             numbering,
-        } = components;
+        } = summands;
         let inverse_pivots = pivots.iter().map(|&pivot| T::one() / pivot).collect();
-        let (order, segments) = Order::pack(vertices, &coupled, isolated, numbering);
+        let (order, segments) = Order::pack(vertices, ranges(&coupled), numbering);
         let workspace = || Workspace::new(config.split());
         // Exactly sized: collect's reserve rounds a few blocks up to 4 and into_boxed_slice reallocates.
-        let mut factored = Vec::with_capacity(blocks.len());
-        (blocks.into_par_iter().zip(segments))
+        let mut factored = Vec::with_capacity(coupled.len());
+        (coupled.into_par_iter().zip(segments))
             .map_init(workspace, |reused, (block, segment)| {
                 block.factor(segment, &order, config, reused)
             })
@@ -228,7 +226,7 @@ impl<T: Real> ApproxInverse<T> {
 }
 
 /// A coupled summand of the factored matrix: a block of `A`, or a block's complement onto its kept side.
-pub(crate) trait Summand<T, I>: Send {
+pub(crate) trait Summand<T, I>: Send + KeptVertices {
     /// Its factor on `segment` of `order`, its vertices in the factored matrix's numbering.
     fn factor(
         self,

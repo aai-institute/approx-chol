@@ -4,13 +4,12 @@ mod gram;
 mod graph;
 
 use num_traits::PrimInt;
-use rayon::prelude::*;
 
 use super::block::{Balance, BlockComplement, Congruent, Grounding, IrreducibleBlock, ReduceError};
 use super::congruence::Congruence;
 use super::decomposition::{
     of_csr, of_upper, AdjacencyLayout, Biadjacency, Partitioned, RowSums, StrictUpperTriangle,
-    Summands, SymmetricBlock,
+    SymmetricBlock,
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy};
 use super::{diagonal_in_range, Complement, Reduced};
@@ -64,22 +63,12 @@ impl<T: Real, I: Index> Complement<T, I> {
     ) -> Result<Self, ReduceError> {
         let range = input.vertices(kept);
         let layout = Biadjacency::onto(&input, kept);
-        let Summands {
-            mut components,
-            blocks,
-        } = Reduced::from_gram(layout, input.lower(), &policy)?;
-        let vertices: &[I] = &components.vertices;
-        let blocks: Vec<_> = (blocks.into_par_iter())
-            .zip(components.coupled.par_iter_mut())
-            .map(|(block, coupled)| {
-                let complement = BlockComplement::new(block, vertices[coupled.start].index());
-                coupled.start += complement.kept_from();
-                complement
-            })
-            .collect();
-        components.retain_isolated(|v| range.contains(&v.index()));
-        components.numbering = range;
-        Ok(Summands { components, blocks })
+        let whole: Reduced<T, I> = Reduced::from_gram(layout, input.lower(), &policy)?;
+        let mut complement =
+            whole.map(|vertices, block| BlockComplement::new(block, vertices[0].index()));
+        complement.retain_isolated(|v| range.contains(&v.index()));
+        complement.numbering = range;
+        Ok(complement)
     }
 }
 
@@ -432,7 +421,7 @@ mod tests {
                 }
             })
             .expect("admitted");
-        let [clamped] = summands.blocks[..] else {
+        let [clamped] = summands.coupled[..] else {
             panic!("one component")
         };
         assert!(clamped > 16.0 * f64::EPSILON, "{clamped:e}");

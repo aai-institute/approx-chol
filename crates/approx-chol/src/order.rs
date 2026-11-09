@@ -85,11 +85,10 @@ impl From<Box<[u64]>> for Listed {
 }
 
 impl Order {
-    /// The ranges `coupled` of `vertices`, ascending and disjoint, as the coupled blocks' segments, consecutive ones as runs; then the isolated vertices from `isolated` on; every vertex renumbered from `numbering`'s start, whose length is `n`, and moved in place unless that narrows it to `u32`.
+    /// The ranges `coupled` of `vertices`, ascending and disjoint, as the coupled blocks' segments, consecutive ones as runs; then the isolated vertices from the last range's end on; every vertex renumbered from `numbering`'s start, whose length is `n`, and moved in place unless that narrows it to `u32`.
     pub(crate) fn pack<I: Index>(
         mut vertices: Vec<I>,
-        coupled: &[Range<usize>],
-        isolated: usize,
+        coupled: impl ExactSizeIterator<Item = Range<usize>> + Clone,
         numbering: Range<usize>,
     ) -> (Self, Vec<Segment>)
     where
@@ -97,7 +96,9 @@ impl Order {
     {
         let local = |v: I| v.index() - numbering.start;
         let (mut segments, mut end) = (Vec::with_capacity(coupled.len()), 0);
-        for range in coupled {
+        let mut isolated = 0;
+        for range in coupled.clone() {
+            isolated = range.end;
             let (block, len) = (&vertices[range.clone()], range.len());
             let mut segment = match block.windows(2).all(|w| w[1].index() == w[0].index() + 1) {
                 true => Segment::Run {
@@ -109,9 +110,9 @@ impl Order {
             end = segment.place(end);
             segments.push(segment);
         }
-        let listed = (coupled.iter().zip(&segments))
+        let listed = (coupled.zip(&segments))
             .filter(|(_, segment)| matches!(segment, Segment::Listed { .. }))
-            .flat_map(|(range, _)| range.clone())
+            .flat_map(|(range, _)| range)
             .chain(isolated..vertices.len());
         let (len, n) = (end + vertices.len() - isolated, numbering.len());
         let listed = match size_of::<I>() > size_of::<u32>() && n as u64 <= 1 << 32 {
@@ -310,7 +311,7 @@ mod tests {
     #[test]
     fn packing_lists_coupled_blocks_ahead_of_isolated_vertices() {
         let vertices = vec![0u32, 2, 4, 5, 3, 6, 7, 1, 8];
-        let (order, segments) = Order::pack(vertices, &[0..2, 2..5, 5..7], 7, 0..9);
+        let (order, segments) = Order::pack(vertices, [0..2, 2..5, 5..7].into_iter(), 0..9);
         assert_eq!(order.n(), 9);
         let coupled = segments.into_iter().map(|segment| order.slots(segment));
         let blocks: Vec<_> = coupled.chain([order.lone(0)]).collect();
@@ -324,7 +325,7 @@ mod tests {
     #[test]
     fn packing_renumbers_onto_a_kept_side() {
         let vertices = vec![0u32, 4, 6, 1, 5, 8, 7];
-        let (order, segments) = Order::pack(vertices, &[1..3, 4..5], 5, 4..9);
+        let (order, segments) = Order::pack(vertices, [1..3, 4..5].into_iter(), 4..9);
         assert_eq!(order.n(), 5);
         let coupled = segments.into_iter().map(|segment| order.slots(segment));
         let blocks: Vec<_> = coupled.chain([order.lone(0)]).collect();
