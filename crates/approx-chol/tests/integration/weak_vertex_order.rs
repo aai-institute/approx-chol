@@ -43,10 +43,9 @@ fn csr_factor(graph: &Graph, config: Config) -> ApproxInverse {
     factorize_with(csr.as_csr_ref(), config, ScalingPolicy::default()).unwrap()
 }
 
-/// Heavy-row rounding reaches the last-eliminated weak pendant unequally on the cover's two sheets.
+/// The dense arm factors the signed `M`, not its cover, so heavy-row rounding cannot reach the last-eliminated weak pendant unequally on two sheets (#283).
 #[test]
-#[ignore = "#283: componentwise accuracy of the frustrated cover past a weak vertex"]
-fn frustrated_cover_solves_a_pendant_behind_a_heavy_triangle() {
+fn dense_arm_solves_a_pendant_behind_a_heavy_frustrated_triangle() {
     let (h, w) = (1e20, 1.0);
     let positive = |a, b| Edge::positive(a, b, h);
     let x_true = [1.0, -1.0, 0.5, 2.0];
