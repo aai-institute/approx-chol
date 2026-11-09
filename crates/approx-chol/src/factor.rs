@@ -27,7 +27,7 @@ use crate::Clamp;
 use crate::{Batch, Index, MemStack, Real, StackReq, Threads};
 use apply::{rows_error, Kernel, Room, Stack};
 use block_elimination::BlockElimination;
-use cholesky::{Arm, Cholesky, Signed, Workspace};
+use cholesky::{Arm, AsIs, Cholesky, Workspace};
 use schur::BipartiteBlock;
 use sddm::Sddm;
 
@@ -235,10 +235,10 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
         let (elimination, cholesky) = match off_diagonal {
             OffDiagonal::General(adjacency) => {
                 let arm = match config.dense(adjacency.n()) {
-                    true => Arm::Exact(Signed::new(adjacency, balance, grounding)),
+                    true => Arm::AsIs(AsIs::new(adjacency, balance, grounding)),
                     false => {
                         let s = Sddm::of_block(adjacency, balance, grounding, config.frustrated);
-                        Arm::Approximate(s)
+                        Arm::Sddm(s)
                     }
                 };
                 (None, Cholesky::factor(arm, draws, tail(0), reused))

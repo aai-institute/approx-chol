@@ -3,7 +3,7 @@
 use rayon::prelude::*;
 
 use super::block_elimination::BlockElimination;
-use super::cholesky::{Arm, Signed};
+use super::cholesky::{Arm, AsIs};
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::{Config, SchurMode};
 use super::sddm::{cover_vertex, crosses, Layout, Sddm, SddmRows};
@@ -15,7 +15,7 @@ use crate::{narrow, per_task, widen, Index, Real};
 
 /// How one block's Schur complement is formed, resolved from [`Config`] and its kept side.
 enum Formation {
-    /// Exact and signed, for a dense Cholesky of `S` itself.
+    /// Exact and as is, for a dense Cholesky of `S` itself.
     Dense,
     /// Each star's whole clique.
     Exact,
@@ -23,7 +23,7 @@ enum Formation {
     Sampled(Option<Multi>),
 }
 
-/// How a complement on `n_kept` vertices is formed: signed when dense, exact when asked, else sampled with its own sampling or under `Same` the factor's.
+/// How a complement on `n_kept` vertices is formed: as is when dense, exact when asked, else sampled with its own sampling or under `Same` the factor's.
 fn formation(config: &Config, n_kept: usize) -> Formation {
     match config.complement {
         _ if config.dense(n_kept) => Formation::Dense,
@@ -70,18 +70,18 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         inv_pivot: &[T],
     ) -> (Arm<T, I>, Rows<T, I>) {
         let rows = match formation(config, self.cross.n_cols()) {
-            Formation::Dense => return (Arm::Exact(self.signed(inv_pivot)), self.cross),
+            Formation::Dense => return (Arm::AsIs(self.as_is(inv_pivot)), self.cross),
             Formation::Exact => self.exact(inv_pivot, Layout::sddm(self.balance)),
             Formation::Sampled(copies) => self.sample(copies, streams).merge(),
         };
         let s = Sddm::of_rows(rows, &self.grounding, config.frustrated);
-        (Arm::Approximate(s), self.cross)
+        (Arm::Sddm(s), self.cross)
     }
 
     /// `S` alone, a complement's summand: only exact computes pivots, and `C` is freed before the sampled merge.
     pub(super) fn complement(self, config: &Config, streams: Streams) -> Arm<T, I> {
         let rows = match formation(config, self.cross.n_cols()) {
-            Formation::Dense => return Arm::Exact(self.signed(&self.inverse_pivots())),
+            Formation::Dense => return Arm::AsIs(self.as_is(&self.inverse_pivots())),
             Formation::Exact => self.exact(&self.inverse_pivots(), Layout::sddm(self.balance)),
             Formation::Sampled(copies) => {
                 let fill = self.sample(copies, streams);
@@ -91,14 +91,14 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
             }
         };
         let route = config.frustrated;
-        Arm::Approximate(Sddm::of_rows(rows, &self.grounding, route))
+        Arm::Sddm(Sddm::of_rows(rows, &self.grounding, route))
     }
 
     /// `S` itself: a balanced block's exact rows, a frustrated one's signed pairs folded.
-    fn signed(&self, inv_pivot: &[T]) -> Signed<T, I> {
+    fn as_is(&self, inv_pivot: &[T]) -> AsIs<T, I> {
         let rows = self.exact(inv_pivot, Layout::as_is(self.balance));
         let (adjacency, grounding) = rows.close(&self.grounding);
-        Signed::new(adjacency, self.balance, grounding)
+        AsIs::new(adjacency, self.balance, grounding)
     }
 
     /// Inverse pivots `1/(Σ|c_ek| + s_e)`, the same on both sheets of a cover.
