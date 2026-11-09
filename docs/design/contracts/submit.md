@@ -17,9 +17,9 @@ representations are those of `../../requirements/input.md`.
   | `FactorWidth2` | columns of $V$, each two (row, value) pairs, the values absorbing $W$ | the two rows of a column differ |
   | `BipartiteFactorWidth2` | two width-1 factors, the two sides, each column one (row, value) pair per side; optional column scales, each column's weight their square | both sides have the same column count |
 
-  Common checks: well-formed storage, indices in range, lengths that agree, finite values,
-  magnitudes the build handles, derived diagonals included but a Gram form's, which the build
-  checks. A value may be $0$.
+  Common checks: well-formed storage, indices in range, lengths that agree, values finite and
+  $0$ or above the range floor, magnitudes the build handles, derived diagonals included but a
+  Gram form's, which the build checks.
 
 - **`Input`** is opaque: it converts from each of these types and has no other constructor, so
   every `Input` is admissible.
