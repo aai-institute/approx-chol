@@ -17,14 +17,20 @@ pub fn factorize_complement<'a, T: Real, I: PrimInt>(input: BipartiteFactorWidth
 impl<T: Real> Sgdd<T> {
     pub fn reduce<'a, I: PrimInt>(input: impl Into<Input<'a, T, I>>, scaling: ScalingPolicy,
         threads: Threads) -> Result<Sgdd<T>, BuildError>;
-    pub fn clamps(&self) -> &[Clamp];
+    pub fn clamps(&self) -> impl Iterator<Item = Clamped<'_>>;
     pub fn factor(self, config: Config, threads: Threads) -> ApproxInverse<T>;
 }
 impl<T: Real> Complement<T> {
     pub fn reduce_onto<'a, I: PrimInt>(input: BipartiteFactorWidth2<'a, T, I>, kept: Side,
         scaling: ScalingPolicy, threads: Threads) -> Result<Complement<T>, BuildError>;
-    pub fn clamps(&self) -> &[Clamp];
+    pub fn clamps(&self) -> impl Iterator<Item = Clamped<'_>>;
     pub fn factor(self, config: Config, threads: Threads) -> ApproxInverse<T>;
+}
+
+pub struct Clamped<'s> { /* private */ }
+impl<'s> Clamped<'s> {
+    pub fn vertices(&self) -> impl ExactSizeIterator<Item = usize> + 's;
+    pub fn clamp(&self) -> &'s Clamp;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -98,7 +104,6 @@ pub struct ApproxInverse<T> { /* private */ }   // Send + Sync
 impl<T: Real> ApproxInverse<T> {
     pub fn n(&self) -> usize;
     pub fn components(&self) -> impl ExactSizeIterator<Item = Component<'_, T>>;
-    pub fn clamps(&self) -> &[Clamp];
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -112,7 +117,6 @@ impl<'f, T: Real> Component<'f, T> {
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Clamp {
-    pub vertices: Vec<usize>,
     pub violation: f64,
     pub scaling: ScalingOutcome,
 }
@@ -148,10 +152,10 @@ setting is in `../../algorithm.md`, steps 5 and 7.
 - A component's `vertices` are in the order its factor numbers them, in $B$'s numbering;
   `null_vector`, when present, holds one entry per vertex in that order, as computed,
   unnormalized.
-- A `Clamp`'s `vertices` are its component of $A$, ascending, in the input's numbering;
-  `clamps` are ordered by their first vertex. `Component::clamp` is the clamp of the component
-  of $A$ that holds the component, in a whole build its own. A Schur build numbers components on
-  the kept side and clamps on the input, left side first.
+- `clamps` yields one `Clamped` per clamped component of $A$; its `vertices` are in $B$'s
+  numbering: in a whole build the component's, in a Schur build its kept vertices, numbered on
+  the kept side. `Component::clamp` is the clamp of the component of $A$
+  that holds the component, in a whole build its own; it reads the same stored clamp.
 - A `BuildError`'s `vertex` is the lowest vertex of its component, in the input's numbering.
 - `Threads::All` is every thread of the caller's rayon pool; `Count(n)` caps the threads used at
   `n`, whatever the pool's size; faer's `Par::Seq` is `Count(1)`, `Par::Rayon(n)` is `Count(n)`.
@@ -205,7 +209,8 @@ range raises `ValueError`. Python builds `f64`. A clamp also warns with a
 ## Why
 
 - **Two stages, `Sgdd` and `Complement`:** the reduction is complete before any factoring, so a
-  caller reads the clamps and can stop there; the budget lives at this level only.
+  caller reads the clamps, the one fact known before factoring, and can stop there; the budget
+  lives at this level only.
 - **`ScalingPolicy` apart from `Config`:** the first configures Reduction, the second Cholesky;
   each stage takes only its own.
 - **`Sampling` an enum, its copies in each variant:** a clique tree's copies persist in the graph
@@ -215,9 +220,10 @@ range raises `ValueError`. Python builds `f64`. A clamp also warns with a
 - **`FrustratedRoute` and `CoverSurplus` in the configuration:** both routes and both surplus
   encodings target the same $A_r$ (`../../algorithm.md`); they differ in fill and robustness, so
   the caller chooses. The defaults reproduce the current factorization.
-- **`Component::clamp` beside `clamps`:** each component of $B$ lies in one component of $A$, so
-  a caller reads its null vector and clamp together; `clamps` alone holds a clamp on a component
-  of $A$ with no kept vertex. Both read one stored list.
+- **A clamp on its block, read through `Clamped` and `Component::clamp`:** each component of $B$
+  lies in one component of $A$, so a caller reads its null vector and clamp together. Every
+  column of a bipartite input couples both sides, so every clamped component keeps a vertex and
+  its block is the clamp's one owner; a list of clamps or an id into one would be a second.
 - **The result is $B$, `ApproxInverse`:** its facts, its persistence and its apply all concern
   $B$; the factors $\mathcal{L}$ and $\mathcal{D}$ are not exposed, so no type names them.
 - **Vertices in the factor's order:** placing a null vector needs its vertices in one order, not

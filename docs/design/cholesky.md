@@ -91,7 +91,7 @@ pub(crate) struct Reduced<T, I, P> {
     pub(crate) matrix: Grounded<T, P>,
     pub(crate) balance: Balance,                 // singular = balanced and ungrounded
     pub(crate) gauge: Gauge,
-    pub(crate) clamp: Option<ClampId>,           // into the build's list of clamps
+    pub(crate) clamp: Option<Box<Clamp>>,        // its block's, the only owner (#390)
 }
 pub(crate) type ReducedComponent<T, I>  = Reduced<T, I, OffDiagonal<T, I>>;
 pub(crate) type ReducedComplement<T, I> = Reduced<T, I, Bipartite<T, I>>;   // its lift already on K

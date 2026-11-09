@@ -20,7 +20,8 @@ How a caller turns an admissible matrix into the approximate inverse $B$. The re
   out.
 - **Schur complement:** the same, with a `BipartiteFactorWidth2` and the side to keep; $B$
   approximates the pseudoinverse of the Schur complement of $A_r$ on that side; components and
-  null vectors are the complement's, numbered there, and clamps are per component of $A$.
+  null vectors are the complement's, numbered there, and clamps are per component of $A$, on its
+  kept vertices, numbered there too.
 - **Threads:** as Execution, `../architecture.md`. $B$ is bit-identical for every budget.
 
 ## Why
