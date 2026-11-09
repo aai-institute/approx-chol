@@ -18,9 +18,9 @@ pub(crate) struct Workspace<T, I> {
 }
 
 impl<T: Real, I: Index> Workspace<T, I> {
-    pub(super) fn new(split: Option<Multi>) -> Self {
+    pub(super) fn new(copies: Option<Multi>) -> Self {
         Self {
-            elimination: CliqueTreeElimination::new(split),
+            elimination: CliqueTreeElimination::new(copies),
             dense: Vec::new(),
         }
     }

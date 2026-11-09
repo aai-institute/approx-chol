@@ -23,10 +23,10 @@ enum ByCopies<T, I> {
 }
 
 impl<T: Real, I: Index> CliqueTreeElimination<T, I> {
-    pub(in crate::factor) fn new(split: Option<Multi>) -> Self {
-        Self(match split {
+    pub(in crate::factor) fn new(copies: Option<Multi>) -> Self {
+        Self(match copies {
             None => ByCopies::Ac(Elimination::new(Single)),
-            Some(split) => ByCopies::Ac2(Elimination::new(split)),
+            Some(copies) => ByCopies::Ac2(Elimination::new(copies)),
         })
     }
 
@@ -49,7 +49,7 @@ const REUSED_UP_TO: usize = 1024;
 
 /// One copy count's elimination: `C` reaches every edge, so it is fixed per task.
 struct Elimination<T, I, C: Copies> {
-    split: C,
+    copies: C,
     graph: EliminationGraph<T, I, C>,
     clique: CliqueTreeSampler<T, I, C>,
     fill: Fill<T, I, C>,
@@ -57,11 +57,11 @@ struct Elimination<T, I, C: Copies> {
 }
 
 impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
-    fn new(split: C) -> Self {
+    fn new(copies: C) -> Self {
         Self {
-            split,
+            copies,
             graph: EliminationGraph::new(),
-            clique: CliqueTreeSampler::new(split),
+            clique: CliqueTreeSampler::new(copies),
             fill: Fill::new(),
             order: MinDegreeOrder::new(),
         }
@@ -82,10 +82,10 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
                 (tail.filter(|f| f.spans_wide())).map(|f| first_copy(sddm.balance(), f.largest()))
             }
         };
-        self.graph.load(&sddm, self.split);
+        self.graph.load(&sddm, self.copies);
         drop(sddm);
         let (n, edge_ends) = (self.graph.n(), self.graph.edge_ends());
-        self.order.load(&self.graph, self.split, pin, edge_ends);
+        self.order.load(&self.graph, self.copies, pin, edge_ends);
         let mut steps = ApproximateCholesky::with_capacity(n, edge_ends);
         self.pivot_all(&mut draws, &mut steps, slots);
         // Doubling past the estimate otherwise retains up to 2x the entries (+30% on grids).
@@ -94,7 +94,7 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         let last = pin.unwrap_or_else(|| self.order.next_vertex());
         let pinned = (last < slots).then_some(last);
         if n > REUSED_UP_TO {
-            *self = Self::new(self.split);
+            *self = Self::new(self.copies);
         }
         (steps, pinned)
     }
@@ -335,12 +335,12 @@ mod tests {
             .fold(0.0, f64::max)
     }
 
-    fn pivot_defects<C: Copies>(split: C, label: &str, w: &[f32]) -> Option<String> {
-        let mut clique = CliqueTreeSampler::<f32, u32, C>::new(split);
+    fn pivot_defects<C: Copies>(copies: C, label: &str, w: &[f32]) -> Option<String> {
+        let mut clique = CliqueTreeSampler::<f32, u32, C>::new(copies);
         let mut fill = Fill::new();
         let mut steps = ApproximateCholesky::<f32, u32>::with_capacity(w.len() + 1, w.len());
         let draws = &mut Xoshiro256PlusPlus::seed_from_u64(0);
-        let star = (1..).zip(w).map(|(j, &w)| (j, split, w));
+        let star = (1..).zip(w).map(|(j, &w)| (j, copies, w));
         steps.push(0, clique.eliminate(draws, star, &mut fill), w.len() + 1);
         let (fill_off, d) = fill_error(w, &fill);
         let off = (f64::from(steps.headers[0].inverse_degree) * d - 1.0).abs();

@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use super::block_elimination::BlockElimination;
 use super::cholesky::{Arm, Signed};
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
-use super::config::{Config, SchurMode};
+use super::config::{copies, Config, SchurMode};
 use super::sddm::{cover_vertex, crosses, sheets, Sddm, SddmRows};
 use super::{Streams, MULTIPLY_ADD_GRAIN_BITS};
 use crate::sgdd::{Balance, Grounding};
@@ -18,19 +18,17 @@ enum Formation {
     Dense,
     /// Each star's whole clique.
     Exact,
-    /// Clique trees sampled with this split.
+    /// Clique trees sampled with these copies.
     Sampled(Option<Multi>),
 }
 
-/// How a complement on `n_kept` vertices is formed: signed when dense, exact when asked, else sampled with its own split or under `Same` the factor's.
+/// How a complement on `n_kept` vertices is formed: signed when dense, exact when asked, else sampled with its own copies or under `Same` the factor's.
 fn formation(config: &Config, n_kept: usize) -> Formation {
     match config.complement {
         _ if config.dense(n_kept) => Formation::Dense,
         SchurMode::Exact => Formation::Exact,
-        SchurMode::Approximate { split_merge } => {
-            Formation::Sampled(split_merge.and_then(Multi::split))
-        }
-        SchurMode::Same => Formation::Sampled(config.split()),
+        SchurMode::Approximate { split_merge } => Formation::Sampled(copies(split_merge)),
+        SchurMode::Same => Formation::Sampled(copies(config.split_merge)),
     }
 }
 
@@ -73,7 +71,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         let rows = match formation(config, self.cross.n_cols()) {
             Formation::Dense => return (Arm::Exact(self.signed(inv_pivot)), self.cross),
             Formation::Exact => self.exact(inv_pivot),
-            Formation::Sampled(split) => self.sample(split, streams).merge(),
+            Formation::Sampled(copies) => self.sample(copies, streams).merge(),
         };
         let s = Sddm::of_rows(rows, self.balance, &self.grounding);
         (Arm::Approximate(s), self.cross)
@@ -84,8 +82,8 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         let rows = match formation(config, self.cross.n_cols()) {
             Formation::Dense => return Arm::Exact(self.signed(&self.inverse_pivots())),
             Formation::Exact => self.exact(&self.inverse_pivots()),
-            Formation::Sampled(split) => {
-                let fill = self.sample(split, streams);
+            Formation::Sampled(copies) => {
+                let fill = self.sample(copies, streams);
                 // The merge never reads `C`.
                 drop(self.cross);
                 fill.merge()
@@ -157,15 +155,15 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
     }
 
     /// Clique trees need no pivots, so sampling reads only `C`, σ and the streams.
-    fn sample(&self, split: Option<Multi>, streams: Streams) -> Fill<T, I> {
+    fn sample(&self, copies: Option<Multi>, streams: Streams) -> Fill<T, I> {
         let stars = Stars {
             block: self,
             streams,
             ground: I::from_index(self.complement_dimension()),
         };
-        match split {
+        match copies {
             None => stars.sample_with(Single),
-            Some(split) => stars.sample_with(split),
+            Some(copies) => stars.sample_with(copies),
         }
     }
 }
@@ -206,13 +204,13 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
     }
 
     /// Each star's clique tree, chunked in star order so merged duplicates sum alike at any thread count.
-    fn sample_with<C: Copies>(&self, split: C) -> Fill<T, I> {
+    fn sample_with<C: Copies>(&self, copies: C) -> Fill<T, I> {
         let n = self.block.complement_dimension();
         let c = &self.block.cross;
         let shift = bucket_shift(n);
         let count = n.div_ceil(1 << shift);
         let per_task = per_task(c.n_rows(), c.nnz() as u64, 14);
-        let empty = || (CliqueTreeSampler::new(split), vec![Vec::new(); count]);
+        let empty = || (CliqueTreeSampler::new(copies), vec![Vec::new(); count]);
         let stars = sheets(self.block.balance) * c.n_rows();
         let pieces = (0..stars)
             .into_par_iter()

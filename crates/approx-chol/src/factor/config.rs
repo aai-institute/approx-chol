@@ -30,11 +30,11 @@ impl Config {
     pub(super) fn dense(&self, dimension: usize) -> bool {
         dimension <= self.exact_max_dim
     }
+}
 
-    /// The split the factor's own sampler draws with.
-    pub(super) fn split(&self) -> Option<Multi> {
-        self.split_merge.and_then(Multi::split)
-    }
+/// The copies a sampler of `split_merge` draws with: AC2 at `k ≥ 2`, else AC's one.
+pub(super) fn copies(split_merge: Option<u32>) -> Option<Multi> {
+    split_merge.and_then(Multi::split)
 }
 
 /// How a bipartite block's eliminated stars become the kept side's Schur complement; a dense kept side always takes it exact.

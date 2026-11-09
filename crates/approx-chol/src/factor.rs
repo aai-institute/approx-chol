@@ -106,7 +106,7 @@ impl<T: Real> ApproxInverse<T> {
         } = summands;
         let inverse_pivots = pivots.iter().map(|&pivot| T::one() / pivot).collect();
         let (order, segments) = Order::pack(vertices, ranges(&coupled), numbering);
-        let workspace = || Workspace::new(config.split());
+        let workspace = || Workspace::new(config::copies(config.split_merge));
         // Exactly sized: collect's reserve rounds a few blocks up to 4 and into_boxed_slice reallocates.
         let mut factored = Vec::with_capacity(coupled.len());
         (coupled.into_par_iter().zip(segments))
