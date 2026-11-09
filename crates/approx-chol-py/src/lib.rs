@@ -152,7 +152,7 @@ fn owned<T: Element + Copy>(array: &Bound<'_, PyArray1<T>>, name: &str) -> PyRes
 struct PyConfig(Config);
 
 /// Each frustrated route by its Python name.
-const FRUSTRATED: [(&str, FrustratedRoute); 3] = [
+const FRUSTRATED: [(&str, FrustratedRoute); 4] = [
     ("cover", FrustratedRoute::Cover(CoverSurplus::Auto)),
     (
         "cover_ground_vertex",
@@ -162,6 +162,7 @@ const FRUSTRATED: [(&str, FrustratedRoute); 3] = [
         "cover_surplus_edges",
         FrustratedRoute::Cover(CoverSurplus::SurplusEdges),
     ),
+    ("signed", FrustratedRoute::Signed),
 ];
 
 /// The route `name` names, else a `ValueError` listing every name.

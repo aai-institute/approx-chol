@@ -15,7 +15,9 @@ __all__ = [
     "factorize_raw",
 ]
 
-_Frustrated: TypeAlias = Literal["cover", "cover_ground_vertex", "cover_surplus_edges"]
+_Frustrated: TypeAlias = Literal[
+    "cover", "cover_ground_vertex", "cover_surplus_edges", "signed"
+]
 
 @final
 class Config:
@@ -31,7 +33,10 @@ class Config:
     sheets, whose surplus goes to a ground vertex (``"cover_ground_vertex"``),
     onto an edge between each vertex's two copies (``"cover_surplus_edges"``),
     or onto those edges only inside the twist band of
-    ``CoverSurplus::Auto`` (``"cover"``).
+    ``CoverSurplus::Auto`` (``"cover"``); or as it is on one sheet
+    (``"signed"``), its fill signed by its ends and what opposite entries
+    cancel grounded, so it never floats; a bipartite block's complement is
+    still covered as ``"cover"``.
     An argument left out or ``None`` keeps the default, which the getters report.
 
     Raises:

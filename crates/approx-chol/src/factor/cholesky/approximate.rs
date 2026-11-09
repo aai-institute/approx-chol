@@ -6,7 +6,6 @@ mod ordering;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use crate::factor::clique_tree::{CliqueTreeSampler, Copies, Fill, Multi, Single};
-use crate::factor::sddm::{first_copy, Sddm};
 use crate::factor::sign::Sign;
 #[cfg(feature = "serde")]
 use crate::factor::within_one;
@@ -32,17 +31,33 @@ impl<T: Real, I: Index> CliqueTreeElimination<T, I> {
     }
 
     /// Every vertex of `M` in minimum-degree order, each star replaced by a sampled clique tree, but a floating `M`'s last: returned as the slot the solve zeroes.
-    pub(super) fn eliminate(
+    pub(super) fn eliminate<M: Eliminated<T, I>>(
         &mut self,
-        sddm: Sddm<T, I>,
+        m: M,
         draws: Xoshiro256PlusPlus,
         tail: Option<FactorTail<'_, T>>,
     ) -> (ApproximateCholesky<T, I>, Option<usize>) {
         match &mut self.0 {
-            ByCopies::Ac(elimination) => elimination.eliminate(sddm, draws, tail),
-            ByCopies::Ac2(elimination) => elimination.eliminate(sddm, draws, tail),
+            ByCopies::Ac(elimination) => elimination.eliminate(m, draws, tail),
+            ByCopies::Ac2(elimination) => elimination.eliminate(m, draws, tail),
         }
     }
+}
+
+/// What an elimination eliminates: its edges, the ground past its slots, how its weights' signs read, and the slot it leaves.
+pub(in crate::factor) trait Eliminated<T: Real, I: Index> {
+    type Sign: Sign<T, I>;
+
+    /// Its slots; a ground is the vertex past them.
+    fn n(&self) -> usize;
+
+    /// Each edge once as `(i, j, −a_ij)`, the ground's as `(k, n, s_k)`.
+    fn grounded_edges(&self, edge: impl FnMut(I, I, T));
+
+    fn sign(&self) -> Self::Sign;
+
+    /// The vertex no pivot eliminates: the ground, the vertex past the slots, or a floating matrix's gauge, by `tail`.
+    fn pin(&self, tail: Option<FactorTail<'_, T>>) -> Option<usize>;
 }
 
 /// A block this small keeps its buffers for the task's next, its graph's slab never compacted; a larger one frees them.
@@ -68,24 +83,17 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         }
     }
 
-    fn eliminate(
+    fn eliminate<M: Eliminated<T, I>>(
         &mut self,
-        sddm: Sddm<T, I>,
+        m: M,
         mut draws: Xoshiro256PlusPlus,
         tail: Option<FactorTail<'_, T>>,
     ) -> (ApproximateCholesky<T, I>, Option<usize>) {
-        let slots = sddm.n();
-        let pin = match sddm.grounded() {
-            // The ground is never a pivot, so `Σs` is never formed: within unchanged, grids +0-8% PCG iterations at 1-10 grounds.
-            true => Some(slots),
-            // Floating, ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
-            false => {
-                (tail.filter(|f| f.spans_wide())).map(|f| first_copy(sddm.balance(), f.largest()))
-            }
-        };
-        self.graph.load(&sddm, self.copies);
-        let sign = sddm.sign();
-        drop(sddm);
+        let (slots, pin) = (m.n(), m.pin(tail));
+        self.graph
+            .load(&m, slots + usize::from(pin == Some(slots)), self.copies);
+        let sign = m.sign();
+        drop(m);
         let (n, edge_ends) = (self.graph.n(), self.graph.edge_ends());
         self.order.load(&self.graph, self.copies, pin, edge_ends);
         let mut steps = ApproximateCholesky::with_capacity(n, edge_ends);
@@ -126,6 +134,8 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
                 graph.push_pair(u, w, copies, weight);
             }
             order.update(graph, clique.neighbors());
+            // Its own pass: chained onto the neighbors, it cost unsigned 16-vertex paths +5-8%.
+            order.update(graph, clique.dropped());
         }
     }
 }
@@ -242,8 +252,8 @@ const SPLIT: usize = 4;
 
 #[cfg(feature = "serde")]
 impl<T: Real, I: Index> ApproximateCholesky<T, I> {
-    /// Each slot but `pin` pivots once, giving only to slots not yet pivoted, nonnegative shares of at most its whole.
-    pub(super) fn fits(&self, slots: usize, pin: Option<usize>) -> bool {
+    /// Each slot but `pin` pivots once, giving only to slots not yet pivoted, shares `S` admits of at most its whole.
+    pub(super) fn fits<S: Sign<T, I>>(&self, slots: usize, pin: Option<usize>) -> bool {
         let Self {
             headers,
             neighbors,
@@ -271,8 +281,8 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
                 .all(|&j| j.index() < slots && !pivoted[j.index()]);
             let shares = &coefficients[start..end];
             let pivot = header.inverse_degree.is_finite() && header.inverse_degree > T::zero();
-            let nonnegative = shares.iter().all(|&c| c >= T::zero());
-            if !later || !pivot || !nonnegative || !within_one(shares.iter().copied()) {
+            let admitted = shares.iter().all(|&c| S::admits(c));
+            if !later || !pivot || !admitted || !within_one(shares.iter().copied()) {
                 return false;
             }
         }
@@ -286,8 +296,13 @@ mod tests {
 
     use super::*;
     use crate::factor::clique_tree::{Multi, Single};
+    use crate::factor::config::CoverSurplus;
+    use crate::factor::sddm::{Sddm, SignedWdd};
     use crate::factor::sign::Unsigned;
     use crate::factor::within_one;
+    use crate::sgdd::{Balance, Grounding};
+    use crate::storage::{Rows, UpperAdjacency};
+    use crate::widen;
 
     fn stars(m: usize) -> [(&'static str, Vec<f32>); 3] {
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(7);
@@ -405,5 +420,91 @@ mod tests {
         let d = w.iter().sum();
         let off = share_error(&steps, &w, d);
         assert!(off <= f64::EPSILON, "a share off by {off:e}");
+    }
+
+    /// A grounded Z-matrix on `n` vertices, a spanning path and random edges, log-uniform; its `D`-switched copy by random `σ`; and `σ`.
+    fn switched<T: Real>(n: usize, seed: u64) -> (Sddm<T, u32>, SignedWdd<T, u32>, Vec<bool>) {
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
+        let mut pairs: Vec<(usize, usize)> = (1..n).map(|v| (v - 1, v)).collect();
+        for _ in 0..2 * n {
+            let (a, b) = (rng.next_u64() as usize % n, rng.next_u64() as usize % n);
+            pairs.extend((a != b).then_some((a.min(b), a.max(b))));
+        }
+        pairs.sort_unstable();
+        pairs.dedup();
+        let flip: Vec<bool> = (0..n).map(|_| rng.next_u64() % 2 == 1).collect();
+        let (mut ptrs, mut indices, mut z, mut signed) = (vec![0], vec![], vec![], vec![]);
+        for i in 0..n {
+            for &(_, j) in pairs.iter().filter(|&&(a, _)| a == i) {
+                let w: T = narrow(((rng.next_u64() % 1600) as f64 / 100.0 - 8.0).exp2());
+                indices.push(j as u32);
+                z.push(-w);
+                signed.push(if flip[i] != flip[j] { w } else { -w });
+            }
+            ptrs.push(indices.len());
+        }
+        let surplus: Vec<T> = (0..n)
+            .map(|v| narrow(if v % 5 == 0 { 0.5 } else { 0.0 }))
+            .collect();
+        let adjacency =
+            |values| UpperAdjacency::new(Rows::new(ptrs.clone(), indices.clone(), values, n));
+        let sddm = Sddm::of_block(
+            adjacency(z),
+            Balance::Balanced,
+            Grounding::of(surplus.clone()),
+            CoverSurplus::Auto,
+        );
+        (
+            sddm,
+            SignedWdd::new(adjacency(signed), Grounding::of(surplus)),
+            flip,
+        )
+    }
+
+    /// Magnitudes, draws and order agree, so only each share's sign moves, by `σ_v σ_j`.
+    fn switched_defects<T: Real>(seed: u64, copies: Option<Multi>) -> Option<String> {
+        let (sddm, signed, flip) = switched::<T>(80, seed);
+        let draws = Xoshiro256PlusPlus::seed_from_u64(seed);
+        let (z, z_pin) = CliqueTreeElimination::new(copies).eliminate(sddm, draws.clone(), None);
+        let (s, s_pin) = CliqueTreeElimination::new(copies).eliminate(signed, draws, None);
+        let bits = |c: T| widen(c).to_bits();
+        let headers = |steps: &ApproximateCholesky<T, u32>| -> Vec<_> {
+            (steps.headers.iter())
+                .map(|h| (h.vertex, h.len, bits(h.inverse_degree)))
+                .collect()
+        };
+        let mut end = 0;
+        let mut flipped = Vec::new();
+        for h in &z.headers {
+            let v = h.vertex as usize;
+            for k in end..end + h.len as usize {
+                let c = z.coefficients[k];
+                flipped.push(bits(if flip[v] != flip[z.neighbors[k] as usize] {
+                    -c
+                } else {
+                    c
+                }));
+            }
+            end += h.len as usize;
+        }
+        let same = z_pin.is_none()
+            && s_pin.is_none()
+            && headers(&z) == headers(&s)
+            && z.neighbors == s.neighbors
+            && flipped == s.coefficients.iter().map(|&c| bits(c)).collect::<Vec<_>>();
+        (!same).then(|| format!("seed {seed}, {} copies", copies.map_or(1, |c| c.get())))
+    }
+
+    #[test]
+    fn a_switched_z_matrix_eliminates_signed_as_its_seed_does_unsigned() {
+        let ac2 = Multi::split(2).expect("AC2");
+        let mut defects = Vec::new();
+        for seed in 0..16 {
+            for copies in [None, Some(ac2)] {
+                defects.extend(switched_defects::<f64>(seed, copies));
+                defects.extend(switched_defects::<f32>(seed, copies).map(|d| d + ", f32"));
+            }
+        }
+        assert!(defects.is_empty(), "{defects:#?}");
     }
 }

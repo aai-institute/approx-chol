@@ -9,7 +9,7 @@ use crate::csr::{build, OwnedCsr};
 use crate::panel::Panel;
 
 /// Every approximate route a frustrated block takes, by name.
-const ROUTES: [(&str, FrustratedRoute); 3] = [
+const ROUTES: [(&str, FrustratedRoute); 4] = [
     (
         "cover-ground",
         FrustratedRoute::Cover(CoverSurplus::GroundVertex),
@@ -19,6 +19,7 @@ const ROUTES: [(&str, FrustratedRoute); 3] = [
         FrustratedRoute::Cover(CoverSurplus::SurplusEdges),
     ),
     ("cover-auto", FrustratedRoute::Cover(CoverSurplus::Auto)),
+    ("signed", FrustratedRoute::Signed),
 ];
 
 /// Copies per edge: AC, then AC2.

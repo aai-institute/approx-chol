@@ -1,10 +1,11 @@
-//! The Cholesky's input: a Laplacian with its surplus, on one sheet or a Gremban cover's two.
+//! The approximate Cholesky's input: a Laplacian with its surplus, on one sheet or a Gremban cover's two, or frustrated `M` as it is, signed.
 
 use rayon::prelude::*;
 
-use super::config::{CoverSurplus, FrustratedRoute};
-use super::sign::{cancel, Unsigned};
-use crate::sgdd::{Balance, Grounding};
+use super::cholesky::Eliminated;
+use super::config::CoverSurplus;
+use super::sign::{cancel, Signed, Unsigned};
+use crate::sgdd::{Balance, FactorTail, Grounding};
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, widen, Batch, Index, Real};
 
@@ -50,12 +51,12 @@ impl<T: Real, I: Index> Sddm<T, I> {
         Self { adjacency, closure }
     }
 
-    /// Folded `M` on one sheet, or the Gremban cover of frustrated `M` on two, its surplus carried as `route` says.
+    /// Folded `M` on one sheet, or the Gremban cover of frustrated `M` on two, its surplus carried as `surplus` says.
     pub(super) fn of_block(
         adjacency: UpperAdjacency<T, I>,
         balance: Balance,
         grounding: Grounding<T>,
-        route: FrustratedRoute,
+        surplus: CoverSurplus,
     ) -> Self {
         match balance {
             Balance::Balanced => Self::new(adjacency, Closure::Folded(grounding)),
@@ -67,41 +68,28 @@ impl<T: Real, I: Index> Sddm<T, I> {
                         sums.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
                     }
                 });
-                Self::of_rows(rows, &grounding, route)
+                Self::of_rows(rows, &grounding, surplus)
             }
         }
     }
 
-    /// An SDDM's rows [`close`](SddmRows::close)d; on a cover, a ground twists as `route` says, and with none the cover floats. Panics on signed pairs, which close into `M`.
+    /// An SDDM's rows [`close`](SddmRows::close)d; on a cover, a ground twists as `surplus` says, and with none the cover floats. Panics on signed pairs, which close into `M`.
     pub(super) fn of_rows(
         rows: SddmRows<T, I>,
         block: &Grounding<T>,
-        route: FrustratedRoute,
+        surplus: CoverSurplus,
     ) -> Self {
         let layout = rows.layout;
         let (adjacency, grounding) = rows.close(block);
         let closure = match (layout, grounding.surplus()) {
             (Layout::Sheet, _) => Closure::Folded(grounding),
-            (Layout::Cover, Some(ground)) if twists(route, ground, &adjacency) => {
+            (Layout::Cover, Some(ground)) if twists(surplus, ground, &adjacency) => {
                 Closure::Twisted(ground.chunks_exact(2).map(|g| twist(g[0], g[1])).collect())
             }
             (Layout::Cover, _) => Closure::Cover(grounding),
             (Layout::SignedPairs, _) => panic!("signed pairs close into M, not an SDDM"),
         };
         Self::new(adjacency, closure)
-    }
-
-    pub(super) fn n(&self) -> usize {
-        self.adjacency.n()
-    }
-
-    pub(super) fn grounded(&self) -> bool {
-        (self.closure.grounding()).is_some_and(Grounding::is_grounded)
-    }
-
-    /// `L`'s weights are magnitudes.
-    pub(super) fn sign(&self) -> Unsigned {
-        Unsigned
     }
 
     /// Balanced on one sheet, frustrated on a cover's two.
@@ -112,8 +100,21 @@ impl<T: Real, I: Index> Sddm<T, I> {
         }
     }
 
+    fn grounded(&self) -> bool {
+        (self.closure.grounding()).is_some_and(Grounding::is_grounded)
+    }
+}
+
+impl<T: Real, I: Index> Eliminated<T, I> for Sddm<T, I> {
+    /// `L`'s weights are magnitudes.
+    type Sign = Unsigned;
+
+    fn n(&self) -> usize {
+        self.adjacency.n()
+    }
+
     /// Positive Laplacian weights, each edge once with any twists, the ground vertex `n` joined by each surplus.
-    pub(super) fn grounded_edges(&self, mut edge: impl FnMut(I, I, T)) {
+    fn grounded_edges(&self, mut edge: impl FnMut(I, I, T)) {
         let n = self.n();
         let twists = match &self.closure {
             Closure::Twisted(twists) => &twists[..],
@@ -130,11 +131,83 @@ impl<T: Real, I: Index> Sddm<T, I> {
             }
         }
         if let Some(grounding) = self.closure.grounding() {
-            for k in 0..n {
-                if let Some(s) = grounding.edge(k) {
-                    edge(I::from_index(k), I::from_index(n), s);
-                }
+            ground_edges(grounding, n, edge);
+        }
+    }
+
+    fn sign(&self) -> Unsigned {
+        Unsigned
+    }
+
+    fn pin(&self, tail: Option<FactorTail<'_, T>>) -> Option<usize> {
+        match self.grounded() {
+            // The ground is never a pivot, so `Σs` is never formed: within unchanged, grids +0-8% PCG iterations at 1-10 grounds.
+            true => Some(self.n()),
+            // Floating, ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
+            false => {
+                (tail.filter(|f| f.spans_wide())).map(|f| first_copy(self.balance(), f.largest()))
             }
+        }
+    }
+}
+
+/// Frustrated `M` as it is, for the signed elimination: its off-diagonal of either sign, its surplus to a ground it always has, where cancellation lands.
+pub(super) struct SignedWdd<T, I> {
+    adjacency: UpperAdjacency<T, I>,
+    grounding: Grounding<T>,
+}
+
+impl<T: Real, I: Index> SignedWdd<T, I> {
+    /// Panics unless nonempty, with one surplus per row.
+    pub(super) fn new(adjacency: UpperAdjacency<T, I>, grounding: Grounding<T>) -> Self {
+        assert!(adjacency.n() > 0, "M has a vertex");
+        assert!(grounding.fits(adjacency.n()), "one surplus per row");
+        Self {
+            adjacency,
+            grounding,
+        }
+    }
+}
+
+impl<T: Real, I: Index> Eliminated<T, I> for SignedWdd<T, I> {
+    type Sign = Signed<I>;
+
+    fn n(&self) -> usize {
+        self.adjacency.n()
+    }
+
+    /// `−a_ij`, its sign `a_ij`'s flipped, each edge once, the ground vertex `n` joined by each surplus.
+    fn grounded_edges(&self, mut edge: impl FnMut(I, I, T)) {
+        let n = self.n();
+        for i in 0..n {
+            for (j, &a) in self.adjacency.upper(i) {
+                edge(I::from_index(i), I::from_index(j), -a);
+            }
+        }
+        ground_edges(&self.grounding, n, edge);
+    }
+
+    fn sign(&self) -> Signed<I> {
+        Signed {
+            ground: I::from_index(self.n()),
+        }
+    }
+
+    /// The ground, past every slot: a signed factor pins none.
+    fn pin(&self, _: Option<FactorTail<'_, T>>) -> Option<usize> {
+        Some(self.n())
+    }
+}
+
+/// Each surplus as an edge to the ground vertex `n`.
+fn ground_edges<T: Real, I: Index>(
+    grounding: &Grounding<T>,
+    n: usize,
+    mut edge: impl FnMut(I, I, T),
+) {
+    for k in 0..n {
+        if let Some(s) = grounding.edge(k) {
+            edge(I::from_index(k), I::from_index(n), s);
         }
     }
 }
@@ -374,16 +447,16 @@ impl<T: Real, I: Index> ColumnSums<'_, T, I> {
 /// [`CoverSurplus::Auto`]'s twist band, in `ε`.
 const TWIST_BAND: f64 = 5.0;
 
-/// Whether a cover's copies [`twist`] instead of grounding, as `route` says; `Auto` weighs `ground` against `ground + Σ|a_ij|`, both `ε`-scaled so neither overflows, and a cover doubles both sums, so `M`'s decide as its own.
+/// Whether a cover's copies [`twist`] instead of grounding, as `surplus` says; `Auto` weighs `ground` against `ground + Σ|a_ij|`, both `ε`-scaled so neither overflows, and a cover doubles both sums, so `M`'s decide as its own.
 fn twists<T: Real, I: Index>(
-    route: FrustratedRoute,
+    surplus: CoverSurplus,
     ground: &[T],
     adjacency: &UpperAdjacency<T, I>,
 ) -> bool {
-    match route {
-        FrustratedRoute::Cover(CoverSurplus::GroundVertex) => false,
-        FrustratedRoute::Cover(CoverSurplus::SurplusEdges) => true,
-        FrustratedRoute::Cover(CoverSurplus::Auto) => {
+    match surplus {
+        CoverSurplus::GroundVertex => false,
+        CoverSurplus::SurplusEdges => true,
+        CoverSurplus::Auto => {
             let epsilon = widen(T::epsilon());
             let total = crate::lane_sum(ground, epsilon);
             let trace = total + adjacency.scaled_abs_total(epsilon);
@@ -447,8 +520,7 @@ mod tests {
         let signed = UpperAdjacency::new(Rows::new(ptrs, indices, values, n as usize));
         let surplus = [extra].into_iter().chain([0.0; 8]).collect();
         let grounding = Grounding::of(surplus);
-        let route = FrustratedRoute::Cover(CoverSurplus::Auto);
-        Sddm::of_block(signed, Balance::Frustrated, grounding, route)
+        Sddm::of_block(signed, Balance::Frustrated, grounding, CoverSurplus::Auto)
     }
 
     #[test]

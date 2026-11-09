@@ -21,7 +21,9 @@ pub use config::{Config, CoverSurplus, FrustratedRoute, Sampling, SchurMode};
 pub use wire::FORMAT_VERSION;
 
 use crate::order::{Listed, Order, Segment, Slots};
-use crate::sgdd::{ranges, BlockComplement, Congruence, IrreducibleBlock, KeptVertices, Summands};
+use crate::sgdd::{
+    ranges, Balance, BlockComplement, Congruence, IrreducibleBlock, KeptVertices, Summands,
+};
 use crate::storage::OffDiagonal;
 use crate::Clamp;
 use crate::{Batch, Index, MemStack, Real, StackReq, Threads};
@@ -29,7 +31,7 @@ use apply::{rows_error, Kernel, Room, Stack};
 use block_elimination::BlockElimination;
 use cholesky::{Arm, AsIs, Cholesky, Workspace};
 use schur::BipartiteBlock;
-use sddm::Sddm;
+use sddm::{Sddm, SignedWdd};
 
 /// `log₂` of the multiply-adds a block elimination's task carries, below which a split costs more than it saves.
 const MULTIPLY_ADD_GRAIN_BITS: u32 = 17;
@@ -234,11 +236,14 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
         let draws = streams.cholesky();
         let (elimination, cholesky) = match off_diagonal {
             OffDiagonal::General(adjacency) => {
-                let arm = match config.dense(adjacency.n()) {
-                    true => Arm::AsIs(AsIs::new(adjacency, balance, grounding)),
-                    false => {
-                        let s = Sddm::of_block(adjacency, balance, grounding, config.frustrated);
-                        Arm::Sddm(s)
+                let arm = match (config.dense(adjacency.n()), balance, config.frustrated) {
+                    (true, _, _) => Arm::AsIs(AsIs::new(adjacency, balance, grounding)),
+                    (false, Balance::Frustrated, FrustratedRoute::Signed) => {
+                        Arm::Signed(SignedWdd::new(adjacency, grounding))
+                    }
+                    (false, _, route) => {
+                        let surplus = route.cover_surplus();
+                        Arm::Sddm(Sddm::of_block(adjacency, balance, grounding, surplus))
                     }
                 };
                 (None, Cholesky::factor(arm, draws, tail(0), reused))

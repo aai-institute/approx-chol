@@ -1,7 +1,8 @@
 #![cfg(feature = "serde")]
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Laplacian, Sddm};
-use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy, SchurMode, Threads};
+use approx_chol::{factorize_with, ApproxInverse, Config, FrustratedRoute, ScalingPolicy};
+use approx_chol::{SchurMode, Threads};
 use rstest::rstest;
 
 use crate::common::bits::bits;
@@ -43,13 +44,18 @@ fn factors(config: Config) -> Vec<ApproxInverse> {
     vec![bipartite, laplacian, signed]
 }
 
-fn configs() -> [Config; 2] {
+fn configs() -> [Config; 3] {
     let exact = Config {
         complement: SchurMode::Exact,
         exact_max_dim: 0,
         ..Config::default()
     };
-    [Config::default(), exact]
+    let signed = Config {
+        frustrated: FrustratedRoute::Signed,
+        exact_max_dim: 0,
+        ..Config::default()
+    };
+    [Config::default(), exact, signed]
 }
 
 fn bits_at(factor: &ApproxInverse, threads: Threads) -> Vec<u64> {
@@ -357,7 +363,7 @@ fn an_elimination_whose_rows_sum_past_one_is_corrupt() {
 
 /// Each column of a dense `|L|` and each step of an approximate one sums to at most one; past it the substitution can overflow.
 #[rstest]
-#[case::dense("/Dense", 24)]
+#[case::dense("/Dense/0", 24)]
 #[case::approximate("/coefficients", 0)]
 fn a_cholesky_whose_multipliers_pass_one_is_corrupt(
     #[case] stored: &str,
@@ -472,7 +478,7 @@ fn empty_scales_are_corrupt() {
 /// A factor of one unit path `3 → 2 → 1`, gauge `0`, its middle step `len` long: one `u64` block of identity `F`, no elimination, 4 slots pinned at `0`, approximate on one sheet; proven grounding, no lone vertex and no clamp.
 fn path_block_bytes(len: u64) -> Vec<u8> {
     let mut bytes = one_block_head(1, 4, &[]);
-    bytes.extend([0, 0, 4, 1, 0, 1, 3]);
+    bytes.extend([0, 0, 4, 1, 3]);
     for (vertex, len) in [(3, 1), (2, len), (1, 1)] {
         varint(vertex, &mut bytes);
         varint(len, &mut bytes);
@@ -480,7 +486,7 @@ fn path_block_bytes(len: u64) -> Vec<u8> {
     }
     bytes.extend([3, 2, 1, 0, 3]);
     (0..3).for_each(|_| bytes.extend(1.0f64.to_le_bytes()));
-    bytes.extend([0, 0, 0]);
+    bytes.extend([1, 0, 0, 0, 0]);
     bytes
 }
 
@@ -546,7 +552,6 @@ fn a_dense_factor_in_a_covers_place_is_corrupt() {
     assert!(dense["triangular"].get("Dense").is_some());
     serde_json::from_value::<ApproxInverse>(cover.clone()).expect("the cover decodes");
     let cholesky = &mut cover[1][1]["U32"][0]["cholesky"];
-    cholesky["pinned"] = dense["pinned"].clone();
     cholesky["triangular"] = dense["triangular"].clone();
     serde_json::from_value::<ApproxInverse>(cover).expect_err("a dense factor in a cover's place");
 }
@@ -557,8 +562,11 @@ fn a_covers_steps_on_one_sheet_are_corrupt() {
     let mut cover = triangle_cover();
     serde_json::from_value::<ApproxInverse>(cover.clone()).expect("the cover decodes");
     let triangular = &mut cover[1][1]["U32"][0]["cholesky"]["triangular"];
-    let steps = triangular["Cover"].take();
-    assert!(steps.is_object(), "the triangle factors on its cover");
-    *triangular = serde_json::json!({ "Folded": steps });
+    let pinned_steps = triangular["Cover"].take();
+    assert!(
+        pinned_steps[0].is_object(),
+        "the triangle factors on its cover"
+    );
+    *triangular = serde_json::json!({ "Folded": pinned_steps });
     serde_json::from_value::<ApproxInverse>(cover).expect_err("a cover's steps on one sheet");
 }
