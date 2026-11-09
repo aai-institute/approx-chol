@@ -6,8 +6,8 @@ How a caller saves $B$ and loads it in another process. The requirement is "Save
 ## Decision
 
 - **serde:** $B$ is serializable behind the `serde` feature, in the caller's format.
-- **Versioned:** the saved form carries a format version, which changes only when the format
-  does, and its scalar type. A load accepts only the current version and the requested scalar
+- **Versioned:** the saved form carries one format version for all of it, which changes only
+  when the format does, and its scalar type. A load accepts only the current version and the requested scalar
   type; any other is an error naming both.
 - **Validated:** a load checks every invariant of $B$, its facts included. Whatever the format
   decodes yields a valid $B$ or an error through the format's error type, never a panic.

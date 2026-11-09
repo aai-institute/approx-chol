@@ -44,7 +44,7 @@ requirements are in `../requirements/`.
 |---|---|---|
 | Adapters, Rust | impls only: `TryFrom` faer, sprs and nalgebra-sparse matrices for `CsrRef`; `MatrixMut` for faer, nalgebra and ndarray blocks; faer's `LinOp`, `BiLinOp`, `Precond`, `BiPrecond` for `ApproxInverse`; `From<faer::Par>` for `Threads` | none |
 | Adapters, Python | module `approx_chol`: `factorize`, `ApproxInverse`, `Component`, `Clamp`, `Config`, `ScalingPolicy`, `InputError`, `BuildError` | none |
-| Approximate inverse | `ApproxInverse`, `Component`, `Sgdd`, `Complement`, `Clamped`, `factorize`, `factorize_with`, `factorize_complement`, `MatrixMut` with its impls for slices, `Vec` and arrays, `ColumnMajor`, `Columns`, `ApplyError`, `LayoutError`, `dyn_stack`; serde for `ApproxInverse` | none |
+| Approximate inverse | `ApproxInverse`, `Component`, `Sgdd`, `Complement`, `Clamped`, `factorize`, `factorize_with`, `factorize_complement`, `MatrixMut` with its impls for slices, `Vec` and arrays, `ColumnMajor`, `Columns`, `ApplyError`, `LayoutError`, `dyn_stack`, `Header`, `Scalar`, `HeaderMismatch`; serde for `ApproxInverse` | none |
 | Reduction | `ScalingPolicy`, `Clamp`, `ScalingOutcome`, `BuildError` | `Reduced` (per component the WDD matrix with its grounding, its balance, gauge and key, the lift, its clamp), `Lift` with its scratch requirement, the bound on a lone pivot |
 | Cholesky | `Config`, `SchurMode`, `Sampling`, `Multiplicity`, `FrustratedRoute`, `CoverSurplus` | `factor`, `Factorization` with its scratch requirement, `fits_u32` |
 | Input | module `input`: `CsrRef`, `TriangleCsrRef`, `Laplacian`, `Sddm`, `FactorWidth2`, `FactorWidth1`, `BipartiteFactorWidth2`, `Input`, `InputError`, `Side` | the representation an `Input` holds |
@@ -56,8 +56,9 @@ requirements are in `../requirements/`.
   listed here and that every path between parts follows the layer order, and counts the distinct
   part-to-part edges and the exports. The public surface over all features is a committed
   snapshot whose every change CI shows; Python's is the stub that stubtest checks.
-- Each part's exports serialize themselves; on load, the approximate inverse checks that the
-  parts agree, as their owners' checks state, without reading their representations.
+- Each part's exports serialize themselves, under the envelope's one format version; no part
+  versions its own. On load, the approximate inverse checks that the parts agree, as their
+  owners' checks state, without reading their representations.
 
 | From → to | Crosses |
 |---|---|
@@ -138,9 +139,9 @@ and F1, and P1 as far as P5 takes it. P2's module moves, P9b, R1, R1b and R3 fol
 | P3 | `ApproxInverse` and `Component` with `vertices`, `null_vector`, `clamp`, the clamp owned by its block alone; the per-block solver removed, so one width branch sits at the top, around the components, and a component's kind is apart from its width; `Indexed` removed; within migrated | breaking; format version bumped; within's tests | D4, P1 |
 | P4 | `MatrixMut`, `ColumnMajor`, `Columns`, `scratch`, `apply`, `apply_with`, `ApplyError`, `LayoutError`; the budget spread over components by size. On `main` by #382, #395, #398, #400 | each column equals its solve alone, bit for bit, at every budget; `apply_with` allocates nothing at `Count(1)` | P3 |
 | P5 | Build surface, in `src/factor/build.rs` until P2 renames it: `Sgdd` and `Complement` with `Threads` and `clamps`, an iterator of `Clamped` handles over the blocks' clamps, no clamp list and no `ClampId`; no other fact before factoring; the build's six direct rayon sites take the budget through `Threads`, part of P1 | interface tests; `Threads::All` keeps today's schedule, bit-identical | P3, D6, R6 |
-| P6 | Persistence: the envelope `(version, scalar, B)`; each part serializes its exports under its own version, the approximate inverse checks that they agree | round trip; version and scalar rejected by name; corrupt payloads rejected | P3, R3 |
+| P6 | Persistence: the envelope `(Header, B)`, `Header`, `Scalar` and `HeaderMismatch` public, replacing `FACTOR_FORMAT_VERSION`; one version, none per part; format `0x4143_000E` | round trip; postcard bytes equal the flat `(version, scalar, B)`; version and scalar rejected by name; corrupt payloads rejected | P3 |
 | P7 | Adapters: faer (row and column CSR, `MatrixMut`, `LinOp`, `BiLinOp`, `Precond`, `BiPrecond`, `From<Par>`), sprs, nalgebra, ndarray; the unimplemented-trait message | per-feature tests | P4, D6 |
-| P8 | Python: `ApproxInverse` a `LinearOperator`, `threads`, `with_threads`, `apply` with `out`; `components`, `clamps`; `Config`'s `sampling` and `frustrated`; `InputError` and `BuildError` with their kinds; pickle through postcard; any scipy format through `tocsr()`, a CSC no longer read as its transpose; the checks Rust makes no longer repeated; `factorize_raw` removed | pytest, stubtest, changelog | P3–P6 |
+| P8 | Python: `ApproxInverse` a `LinearOperator`, `threads`, `with_threads`, `apply` with `out`; `components`, `clamps`; `Config`'s `sampling` and `frustrated`; `InputError` and `BuildError` with their kinds; pickle through postcard, its header read as P6's `Header`; any scipy format through `tocsr()`, a CSC no longer read as its transpose; the checks Rust makes no longer repeated; `factorize_raw` removed | pytest, stubtest, changelog | P3–P6 |
 | P9 | Visibility per part, the layer and export test, the public-surface snapshot in CI | CI | P2 |
 
 ### Module tree
