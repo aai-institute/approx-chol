@@ -194,7 +194,7 @@ impl<T: Real> ApproxInverse<T> {
         self.apply_with(block, threads, MemStack::new(&mut scratch))
     }
 
-    /// As [`apply`](Self::apply), allocating nothing at `Count(1)`; a budget above one runs on rayon's pool, which builds itself on first use: `block` holds the right-hand sides on entry and `A⁺b` on floating blocks on return, `0` at vertices in no block; `stack` holds [`scratch`](Self::scratch) for its columns at one thread at least, and solves as many blocks at once as it holds regions, up to `threads`. Either error leaves `block` as it was; a block without columns is left as it is, whatever its rows.
+    /// As [`apply`](Self::apply), allocating nothing at `Count(1)`; a budget above one runs on rayon's pool, which builds itself on first use: `block` holds the right-hand sides on entry and `A⁺b` on floating blocks on return, `0` at vertices in no block; `stack` holds [`scratch`](Self::scratch) for its columns at one thread at least, and solves as many blocks at once as it holds regions, up to `threads`. Either error leaves `block` as it was; a block without columns is left as it is, whatever its rows. A floating block's null vector is projected out of `b`, so a right-hand side along it returns `0` on that block: a preconditioned CG must stop at `rᵀz = 0` rather than divide by it.
     pub fn apply_with<M: MatrixMut<T> + ?Sized>(
         &self,
         block: &mut M,
