@@ -81,16 +81,19 @@ fn bipartite_floats(m: u32) -> Vec<bool> {
     floats(&factorize(BipartiteFactorWidth2::new(left, right).unwrap()).unwrap())
 }
 
-fn sddm_floats(m: u32) -> Vec<bool> {
-    let (a, c) = split(m);
+fn sddm_floats(surplus: [f64; 3]) -> Vec<bool> {
     let (u, v) = ([0u32, 1], [1u32, 2]);
-    let surplus = [
+    let sddm = Sddm::new(Laplacian::new(3, &u, &v).unwrap(), &surplus).unwrap();
+    floats(&factorize(sddm).unwrap())
+}
+
+fn split_sddm_floats(m: u32) -> Vec<bool> {
+    let (a, c) = split(m);
+    sddm_floats([
         f64::from(a) * f64::EPSILON,
         0.0,
         f64::from(c) * f64::EPSILON,
-    ];
-    let sddm = Sddm::new(Laplacian::new(3, &u, &v).unwrap(), &surplus).unwrap();
-    floats(&factorize(sddm).unwrap())
+    ])
 }
 
 #[test]
@@ -100,6 +103,7 @@ fn values_gram_and_its_csr_float_exactly_inside_the_band() {
         ("upper csr", upper_csr_floats),
         ("gram", gram_floats),
         ("bipartite", bipartite_floats),
+        ("sddm", split_sddm_floats),
     ];
     let wrong: Vec<_> = (forms.iter())
         .flat_map(|&(name, form)| MS.map(move |m| (name, m, form(m))))
@@ -108,11 +112,14 @@ fn values_gram_and_its_csr_float_exactly_inside_the_band() {
     assert!(wrong.is_empty(), "(form, m, floats): {wrong:?}");
 }
 
-/// A stated surplus carries no rounding, so an `Sddm` grounds on it even inside the band.
+/// A stated surplus sums no rounded term, so its band is `16ε·d`, not a residue's `(k + 3)ε·d`: `mε` on end 0 floats to `m = 16`.
 #[test]
-fn sddm_grounds_on_an_in_band_surplus() {
-    let floating: Vec<u32> = MS.filter(|&m| sddm_floats(m) != [false]).collect();
-    assert!(floating.is_empty(), "sddm floats at m = {floating:?}");
+fn an_sddm_stated_surplus_is_rounding_up_to_its_band() {
+    let wrong: Vec<(u32, Vec<bool>)> = (MS
+        .map(|m| (m, sddm_floats([f64::from(m) * f64::EPSILON, 0.0, 0.0]))))
+    .filter(|(m, floated)| *floated != [*m <= 16])
+    .collect();
+    assert!(wrong.is_empty(), "(m, floats): {wrong:?}");
 }
 
 /// A 9-cycle of `2^1020` weights plus `2^970` of surplus on vertex 0: `tr A` overflows `f64` though every entry fits.
@@ -130,9 +137,26 @@ fn csr_and_gram_float_alike_where_the_trace_overflows() {
     let csr = floats(&factorize(CsrRef::new(&ptrs, &columns, &values, n).unwrap()).unwrap());
     let gram =
         floats(&factorize(FactorWidth2::new(n as usize, (&a, &x), (&b, &y)).unwrap()).unwrap());
+    let mut surplus = vec![0.0; n as usize];
+    surplus[0] = extra * extra;
+    let sddm = sddm_cycle(n, root * root, &surplus);
     assert_eq!(
-        (csr, gram),
-        (vec![true], vec![true]),
-        "(csr floats, gram floats)"
+        (csr, gram, sddm),
+        (vec![true], vec![true], vec![true]),
+        "(csr floats, gram floats, sddm floats)"
     );
+}
+
+fn sddm_cycle(n: u32, weight: f64, surplus: &[f64]) -> Vec<bool> {
+    let (u, v): (Vec<u32>, Vec<u32>) = (0..n).map(|i| (i, (i + 1) % n)).unzip();
+    let weights = vec![weight; n as usize];
+    let laplacian = Laplacian::weighted(n as usize, &u, &v, &weights).unwrap();
+    floats(&factorize(Sddm::new(laplacian, surplus).unwrap()).unwrap())
+}
+
+/// `8ε·d` on every row of the cycle: each within its band, together past the singular band, as at `2^-1000` the scale, though `tr A` overflows.
+#[test]
+fn an_sddm_grounds_alike_where_the_trace_overflows() {
+    let at = |scale: i32| sddm_cycle(9, 2f64.powi(1020 + scale), &[2f64.powi(972 + scale); 9]);
+    assert_eq!((at(0), at(-1000)), (vec![false], vec![false]));
 }

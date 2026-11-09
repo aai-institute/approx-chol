@@ -50,7 +50,7 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
     }
 }
 
-/// `L + diag(s)`: a Laplacian plus each vertex's surplus over diagonal dominance.
+/// `L + diag(s)`: a Laplacian plus each vertex's surplus over diagonal dominance. An `s_i` within `16ε` of its row's diagonal is rounding: a component grounds on its `s_i` past that, or, with none past, on all of them unless together they stay within `5ε` of its trace, where it floats.
 #[derive(Clone, Copy, Debug)]
 pub struct Sddm<'a, T, I = u32> {
     laplacian: Laplacian<'a, T, I>,

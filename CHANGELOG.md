@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A persisted `ApproxInverse` stores every vertex once: each block holds its segment, a run of consecutive vertices or a length of one list, which also lists the isolated vertices, and an isolated vertex is its inverse pivot alone; its dimension and where each list and the isolated and dead vertices start follow from those, so no payload states them apart. A block's factor states a cover's two sheets only where it has them, so a dense factor on two sheets cannot be persisted. The format version is `0x4143_000D`.
 - `Config` gains `frustrated`, so a literal naming every field must name it, and a JSON `Config` without it is rejected.
 - `Config::split_merge` is replaced by `Config::sampling`, a `Sampling`: `CliqueTree { copies }` samples each edge as `copies: NonZeroU32` clique-tree copies, `1` standard AC, more AC2; `SchurMode::Approximate` takes a `sampling` in place of its `split_merge`. `None`, `Some(0)` and `Some(1)` are `copies: 1`, `Some(k)` is `copies: k`, to the same bits. A JSON `Config` stating `split_merge`, or `copies` of `0`, is rejected. `Config`, `Sampling` and `SchurMode` are `Eq` and `Hash`. In Python, `Config.split` is the copies, `1` by default, not `None`; a `split` of `0` or outside `u32` raises `ValueError`, not `OverflowError`. A Python `Config` compares and hashes by value.
+- A row's surplus within its band is rounding, not a ground, whatever the input: a residue `d_i − Σ_j|a_ij|` within `(k_i + 3)ε·d_i` at degree `k_i`, less the block's clamp, which is rounding too; a stated ground, an `Sddm`'s surplus or a Gram's one-ended column, within the band of no summed term, `16ε·d_i` on an unscaled row, and only where its residue is positive. A balanced block that grounds keeps only its rows past their band, or every residue when none is past it; a frustrated one keeps none of its rounding. An `f32` CSR at weight spans from `1e14` no longer grounds on rounding, which cost a mixed-precision PCG 30–50% more iterations ([#311]); an `Sddm` whose grounds all sit within their band floats as its CSR does, where an `f32` one with grounds of `1` beside weights of `1e14` grounded and failed as a preconditioner even on a consistent system ([#343]). A ground below the range floor within its band is rounding, not `OutOfRange`. Factors change bits where a block has rows whose residue is rounding.
 - `InnerParallelism` is replaced by `Threads`: `apply` takes `Threads::All`, every thread of the caller's rayon pool, or `Threads::Count(n)`, at most `n` threads at a time whatever the pool's size; `Count(1)` runs on the calling thread, as `Forbid` did. The solution's bits do not depend on it.
 
 ### Changed
@@ -302,9 +303,11 @@ for graph Laplacians in Rust with Python bindings.
 [#300]: https://github.com/aai-institute/approx-chol/issues/300
 [#301]: https://github.com/aai-institute/approx-chol/issues/301
 [#306]: https://github.com/aai-institute/approx-chol/pull/306
+[#311]: https://github.com/aai-institute/approx-chol/issues/311
 [#312]: https://github.com/aai-institute/approx-chol/issues/312
 [#315]: https://github.com/aai-institute/approx-chol/pull/315
 [#322]: https://github.com/aai-institute/approx-chol/pull/322
 [#327]: https://github.com/aai-institute/approx-chol/issues/327
+[#343]: https://github.com/aai-institute/approx-chol/issues/343
 [#386]: https://github.com/aai-institute/approx-chol/pull/386
 [#388]: https://github.com/aai-institute/approx-chol/pull/388
