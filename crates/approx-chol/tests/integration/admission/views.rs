@@ -22,8 +22,8 @@ fn unit_path() -> Laplacian<'static, f64> {
 
 /// Left rows `0, 1` on one right row, columns scaled by `s`: the path `0 − 2 − 1`.
 fn scaled_bipartite_path(s: &[f64]) -> Result<BipartiteFactorWidth2<'_, f64>, InputError> {
-    let left = FactorWidth1::new(2, &[0u32, 1], None)?;
-    let right = FactorWidth1::new(1, &[0u32, 0], None)?;
+    let left = FactorWidth1::new(2, &[0u32, 1])?;
+    let right = FactorWidth1::new(1, &[0u32, 0])?;
     BipartiteFactorWidth2::scaled(left, right, s)
 }
 
@@ -167,7 +167,7 @@ fn a_ground_below_the_floor_within_its_band_is_rounding() {
 
 #[test]
 fn factor_width_1_new_rejects_mismatched_values_and_rows_past_n() {
-    let mismatch = FactorWidth1::new(3, &[0u32, 1, 2], Some(&[1.0, 2.0][..])).expect_err("values");
+    let mismatch = FactorWidth1::valued(3, &[0u32, 1, 2], &[1.0, 2.0][..]).expect_err("values");
     assert_eq!(
         mismatch,
         InputError::LengthMismatch {
@@ -176,7 +176,7 @@ fn factor_width_1_new_rejects_mismatched_values_and_rows_past_n() {
             found: 2
         }
     );
-    let past = FactorWidth1::<f64>::new(3, &[0u32, 3, 2], None).expect_err("row past n");
+    let past = FactorWidth1::<f64>::new(3, &[0u32, 3, 2]).expect_err("row past n");
     assert_eq!(
         past,
         InputError::IndexOutOfRange {
@@ -184,7 +184,7 @@ fn factor_width_1_new_rejects_mismatched_values_and_rows_past_n() {
             entry: 1
         }
     );
-    let below = FactorWidth1::<f64, i64>::new(3, &[0, 1, -1], None).expect_err("negative row");
+    let below = FactorWidth1::<f64, i64>::new(3, &[0, 1, -1]).expect_err("negative row");
     assert_eq!(
         below,
         InputError::IndexOutOfRange {
@@ -236,8 +236,8 @@ fn an_out_of_range_loading_is_rejected_at_its_vertex(#[case] value: f64) {
 
 #[test]
 fn bipartite_gram_new_rejects_sides_of_unequal_column_count() {
-    let left = FactorWidth1::<f64>::new(2, &[0, 1, 1], None).unwrap();
-    let right = FactorWidth1::new(2, &[0, 1], None).unwrap();
+    let left = FactorWidth1::<f64>::new(2, &[0, 1, 1]).unwrap();
+    let right = FactorWidth1::new(2, &[0, 1]).unwrap();
     let error = BipartiteFactorWidth2::new(left, right).expect_err("column counts");
     assert_eq!(
         error,
@@ -279,8 +279,8 @@ fn weights_or_scales_of_another_column_count_are_rejected() {
 #[case::past_a_quarter_of_the_maximum(f64::MAX)]
 fn an_out_of_range_bipartite_loading_is_rejected_at_its_vertex(#[case] value: f64) {
     let values = [1.0, value];
-    let left = FactorWidth1::new(2, &[0u32, 1], Some(&values[..])).unwrap();
-    let right = FactorWidth1::<f64>::new(1, &[0u32, 0], None).unwrap();
+    let left = FactorWidth1::valued(2, &[0u32, 1], &values[..]).unwrap();
+    let right = FactorWidth1::<f64>::new(1, &[0u32, 0]).unwrap();
     let gram = BipartiteFactorWidth2::new(left, right).unwrap();
     let error = factorize(gram).expect_err("loading out of range");
     assert_names_a_defect(error, &[out_of_range(1), out_of_range(2)]);
@@ -296,8 +296,8 @@ fn a_bipartite_loading_whose_square_underflows_beside_an_in_range_column_factors
     #[case] s: f64,
 ) {
     let (values, scales) = ([z, 1.0], [s, 1.0]);
-    let left = FactorWidth1::new(1, &[0u32, 0], Some(&values[..])).unwrap();
-    let right = FactorWidth1::<f64>::new(2, &[0u32, 1], None).unwrap();
+    let left = FactorWidth1::valued(1, &[0u32, 0], &values[..]).unwrap();
+    let right = FactorWidth1::<f64>::new(2, &[0u32, 1]).unwrap();
     let gram = BipartiteFactorWidth2::scaled(left, right, &scales).unwrap();
     let factor = factorize(gram).expect("every diagonal and cell is in range");
     solve_residual(
@@ -331,7 +331,7 @@ fn a_gram_cell_whose_product_underflows_is_out_of_range() {
 #[test]
 fn a_bipartite_vertex_whose_every_term_underflows_is_out_of_range() {
     let values = [1e-170];
-    let side = || FactorWidth1::new(1, &[0u32], Some(&values[..])).unwrap();
+    let side = || FactorWidth1::valued(1, &[0u32], &values[..]).unwrap();
     let gram = BipartiteFactorWidth2::new(side(), side()).unwrap();
     let error = factorize(gram).expect_err("every term underflows");
     assert_names_a_defect(error, &[out_of_range(0), out_of_range(1)]);
@@ -369,7 +369,7 @@ fn a_grounded_signed_graph_solves_its_matrix(
         .collect();
     let matrix = with_diagonal(matrix(3, a, b, &x, &y), &ground);
     let (ptrs, columns, values) = dense_csr(&matrix);
-    let csr = CsrRef::new(&ptrs, &columns, &values, 3).unwrap();
+    let csr = CsrRef::new(3, &ptrs, &columns, &values).unwrap();
     let factor = factorize(csr).expect("a grounded signed graph");
     solve_residual(&factor, &matrix);
 }
@@ -383,7 +383,7 @@ fn a_bipartite_incidence_checks_each_end_against_its_own_part(
     #[case] b: &[u32],
     #[case] expected: Option<InputError>,
 ) {
-    let side = |rows| FactorWidth1::<f64>::new(2, rows, None);
+    let side = |rows| FactorWidth1::<f64>::new(2, rows);
     let found = side(a)
         .and_then(|l| BipartiteFactorWidth2::new(l, side(b)?))
         .err();
@@ -471,7 +471,7 @@ fn a_low_degree_ground_whose_total_passes_the_maximum_solves() {
         })
         .collect();
     let (ptrs, columns, values) = dense_csr(&matrix);
-    let csr = CsrRef::new(&ptrs, &columns, &values, n as u32).unwrap();
+    let csr = CsrRef::new(n, &ptrs, &columns, &values).unwrap();
     let config = Config {
         exact_max_dim: 0,
         ..Config::default()

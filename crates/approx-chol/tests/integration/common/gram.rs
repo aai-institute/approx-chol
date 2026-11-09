@@ -1,4 +1,4 @@
-use approx_chol::Side;
+use approx_chol::input::Side;
 
 use super::bipartite::Bipartite;
 

@@ -291,7 +291,7 @@ fn a_frustrated_block_with_a_negligible_surplus_solves_backward_stably() {
     let values: Vec<f64> = dense.into_iter().flatten().collect();
     let (ptrs, columns) = ([0u32, 3, 6, 9], [0u32, 1, 2, 0, 1, 2, 0, 1, 2]);
     for config in [Config::default(), exact] {
-        let csr = CsrRef::new(&ptrs, &columns, &values, 3).unwrap();
+        let csr = CsrRef::new(3, &ptrs, &columns, &values).unwrap();
         let x = factorize_with(csr, config, ScalingPolicy::default())
             .unwrap()
             .solve(&rhs)
@@ -318,7 +318,7 @@ fn a_frustrated_block_as_large_as_exact_max_dim_solves_exactly() {
     let ptrs: Vec<u32> = (0..=n as u32).map(|i| i * n as u32).collect();
     let columns: Vec<u32> = (0..n * n).map(|k| (k % n) as u32).collect();
     let values: Vec<f64> = matrix.iter().flatten().copied().collect();
-    let csr = CsrRef::new(&ptrs, &columns, &values, n as u32).unwrap();
+    let csr = CsrRef::new(n, &ptrs, &columns, &values).unwrap();
     let config = Config {
         exact_max_dim: n,
         ..Config::default()
@@ -398,8 +398,8 @@ fn ac2_on_a_one_column_grounded_complement_solves_exactly() {
                 ..Config::default()
             };
             let gram = BipartiteFactorWidth2::scaled(
-                FactorWidth1::new(3, &left, Some(&loadings[..])).unwrap(),
-                FactorWidth1::new(1, &right, None).unwrap(),
+                FactorWidth1::valued(3, &left, &loadings[..]).unwrap(),
+                FactorWidth1::new(1, &right).unwrap(),
                 &scales,
             )
             .unwrap();

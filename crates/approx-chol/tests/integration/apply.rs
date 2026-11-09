@@ -1,8 +1,8 @@
 use std::array;
 
-use approx_chol::input::Laplacian;
+use approx_chol::input::{CsrRef, Laplacian};
 use approx_chol::{
-    factorize, factorize_with, ApplyError, ApproxInverse, ColumnMajor, Columns, Config, CsrRef,
+    factorize, factorize_with, ApplyError, ApproxInverse, ColumnMajor, Columns, Config,
     LayoutError, MatrixMut, MemStack, Real, ScalingPolicy, StackReq, Threads,
 };
 
@@ -343,7 +343,7 @@ fn many_components() -> ApproxInverse {
     }
     let graph = Graph::new(next + side * side, edges);
     let (ptrs, columns, values) = graph.csr(false);
-    let csr = CsrRef::new(&ptrs, &columns, &values, graph.n as u32).unwrap();
+    let csr = CsrRef::new(graph.n, &ptrs, &columns, &values).unwrap();
     let config = Config {
         exact_max_dim: 8,
         ..Config::default()

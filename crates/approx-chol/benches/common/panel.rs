@@ -46,9 +46,12 @@ impl Panel {
     /// The panel's Gram, workers on the left.
     pub fn gram(&self) -> BipartiteFactorWidth2<'_, f64> {
         BipartiteFactorWidth2::new(
-            FactorWidth1::new(self.workers, &self.worker, None).expect("valid side"),
-            FactorWidth1::new(self.firms, &self.firm, self.covariate.as_deref())
-                .expect("valid side"),
+            FactorWidth1::new(self.workers, &self.worker).expect("valid side"),
+            match &self.covariate {
+                Some(covariate) => FactorWidth1::valued(self.firms, &self.firm, covariate),
+                None => FactorWidth1::new(self.firms, &self.firm),
+            }
+            .expect("valid side"),
         )
         .expect("valid gram")
     }

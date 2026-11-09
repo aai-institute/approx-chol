@@ -22,14 +22,15 @@ cargo add approx-chol
 ## Example
 
 ```rust
-use approx_chol::{factorize, CsrRef, Threads};
+use approx_chol::input::CsrRef;
+use approx_chol::{factorize, Threads};
 
 // 4-vertex path graph Laplacian (0-1-2-3)
 let row_ptrs    = [0u32, 2, 5, 8, 10];
 let col_indices = [0u32, 1, 0, 1, 2, 1, 2, 3, 2, 3];
 let values      = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.0];
 
-let csr = CsrRef::new(&row_ptrs, &col_indices, &values, 4)?;
+let csr = CsrRef::new(4, &row_ptrs, &col_indices, &values)?;
 let factor = factorize(csr)?;
 
 // A Laplacian is singular: b sums to zero, and x is orthogonal to the all-ones vector

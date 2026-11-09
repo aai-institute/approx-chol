@@ -22,7 +22,7 @@ fn path_laplacian<I: faer::Index + PrimInt>(row_nnz: Option<Vec<I>>) -> SparseRo
 }
 
 fn run_case<I: faer::Index + PrimInt>() {
-    assert_solves_fixture(&path_laplacian::<I>(None));
+    assert_solves_fixture(path_laplacian::<I>(None).as_ref());
 }
 
 #[rstest]
@@ -36,7 +36,7 @@ fn faer_csr_factorizes_over_index_types(#[case] run: fn()) {
 #[test]
 fn faer_csr_with_full_row_counts_factorizes() {
     let spans: Vec<usize> = ROW_PTRS.windows(2).map(|span| span[1] - span[0]).collect();
-    assert_solves_fixture(&path_laplacian::<u32>(Some(cast_all(&spans))));
+    assert_solves_fixture(path_laplacian::<u32>(Some(cast_all(&spans))).as_ref());
 }
 
 /// A symmetric matrix's CSC arrays are its CSR arrays, so its transpose factors alike.
@@ -64,7 +64,7 @@ fn faer_csr_with_spare_capacity_factorizes() {
     let mut values = VALUES.to_vec();
     values.extend([-1.0, -1.0]);
     let symbolic = SymbolicSparseRowMat::new_checked(N, N, cast_all(&ROW_PTRS), None, col_indices);
-    assert_solves_fixture(&SparseRowMat::new(symbolic, values));
+    assert_solves_fixture(SparseRowMat::new(symbolic, values).as_ref());
 }
 
 /// The identity, its unused slots holding `-1`s that would connect the two vertices if read.
@@ -78,7 +78,7 @@ fn faer_try_from_rows_with_unused_slots_returns_error() {
         vec![0, 1, 1, 0],
     );
     let mat = SparseRowMat::new(symbolic, vec![1.0, -1.0, 1.0, -1.0]);
-    let err = CsrRef::try_from(&mat).expect_err("unused slots must be rejected");
+    let err = CsrRef::try_from(mat.as_ref()).expect_err("unused slots must be rejected");
     assert_eq!(err, InputError::RowGap { row: 0 });
 }
 
@@ -88,7 +88,7 @@ fn faer_try_from_offset_rows_returns_error() {
     let symbolic =
         SymbolicSparseRowMat::<u32>::new_checked(2, 2, vec![2, 4, 6], None, vec![0, 1, 0, 1, 0, 1]);
     let mat = SparseRowMat::new(symbolic, vec![9.0, 9.0, 1.0, -1.0, -1.0, 1.0]);
-    let err = CsrRef::try_from(&mat).expect_err("offset rows must be rejected");
+    let err = CsrRef::try_from(mat.as_ref()).expect_err("offset rows must be rejected");
     assert_eq!(err, InputError::RowPtrs { row: 0 });
 }
 
@@ -97,7 +97,7 @@ fn faer_try_from_non_square_returns_error() {
     let symbolic =
         SymbolicSparseRowMat::<u32>::new_checked(3, 4, vec![0, 1, 2, 3], None, vec![0, 1, 0]);
     let mat = SparseRowMat::new(symbolic, vec![1.0, 1.0, 1.0]);
-    let err = CsrRef::try_from(&mat).expect_err("non-square matrix must be rejected");
+    let err = CsrRef::try_from(mat.as_ref()).expect_err("non-square matrix must be rejected");
     assert_eq!(err, InputError::NotSquare { rows: 3, cols: 4 });
 }
 

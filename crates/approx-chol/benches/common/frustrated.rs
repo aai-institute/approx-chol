@@ -67,7 +67,7 @@ pub enum Fixture {
 impl Fixture {
     pub fn n(&self) -> usize {
         match self {
-            Self::Csr(csr) => csr.csr().n(),
+            Self::Csr(csr) => csr.n(),
             Self::Slopes(panel) => panel.n(),
         }
     }
@@ -77,13 +77,8 @@ impl Fixture {
         let mut entries = HashMap::new();
         match self {
             Self::Csr(csr) => {
-                let csr = csr.csr();
                 for i in 0..csr.n() {
-                    let span = csr.row_ptrs()[i] as usize..csr.row_ptrs()[i + 1] as usize;
-                    let row = csr.col_indices()[span.clone()]
-                        .iter()
-                        .zip(&csr.values()[span]);
-                    for (&j, &a) in row.filter(|&(&j, _)| j as usize > i) {
+                    for (j, a) in csr.row(i).filter(|&(j, _)| j as usize > i) {
                         *entries.entry((i, j as usize)).or_insert(0.0) += a;
                     }
                 }
@@ -101,7 +96,7 @@ impl Fixture {
     /// `A`'s stored nonzeros, both triangles.
     pub fn nnz(&self) -> usize {
         match self {
-            Self::Csr(csr) => csr.csr().values().len(),
+            Self::Csr(csr) => csr.nnz(),
             Self::Slopes(panel) => panel.n() + 2 * self.off_diagonal().len(),
         }
     }

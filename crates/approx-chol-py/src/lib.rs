@@ -1,6 +1,7 @@
+use approx_chol::input::{CsrRef, InputError};
 use approx_chol::{
-    ApplyError, ApproxInverse, Config, CoverSurplus, CsrRef, FrustratedRoute, InputError,
-    MemBuffer, MemStack, Sampling, ScalingPolicy, Sgdd, Threads,
+    ApplyError, ApproxInverse, Config, CoverSurplus, FrustratedRoute, MemBuffer, MemStack,
+    Sampling, ScalingPolicy, Sgdd, Threads,
 };
 use num_traits::PrimInt;
 use numpy::{
@@ -488,10 +489,6 @@ impl CsrArrays<'_> {
         config: Option<&PyConfig>,
         scaling: Option<&PyScalingPolicy>,
     ) -> PyResult<PyApproxInverse> {
-        // Also keeps `CsrRef::new` from overflowing `n + 1`.
-        if u32::try_from(self.n).is_err() {
-            return Err(error_to_py(&InputError::DimensionTooLarge { n: self.n }));
-        }
         let dtypes = (
             self.indptr.getattr("dtype")?,
             self.indices.getattr("dtype")?,
@@ -521,9 +518,9 @@ impl CsrArrays<'_> {
         let data = owned(&self.data, "data")?;
         let config = config.map_or_else(Config::default, |config| config.0);
         let scaling = scaling.map_or_else(ScalingPolicy::default, |scaling| scaling.0);
-        let (py, n, entries) = (self.np.py(), self.n as u32, StoredEntries(data.len()));
+        let (py, n, entries) = (self.np.py(), self.n, StoredEntries(data.len()));
         let inner = entries.detach(py, || {
-            let sgdd = CsrRef::new(&indptr, &indices, &data, n)
+            let sgdd = CsrRef::new(n, &indptr, &indices, &data)
                 .map_err(|e| error_to_py(&e))
                 .and_then(|csr| Sgdd::reduce(csr, scaling).map_err(|e| error_to_py(&e)));
             // Freed before factoring: the copy never coexists with the factor's fill.

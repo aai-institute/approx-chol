@@ -222,7 +222,7 @@ def test_every_integer_index_dtype_factors_alike(indptr_dtype, indices_dtype):
     np.testing.assert_array_equal(approx_chol.factorize(typed).solve(b), expected)
 
 
-def test_duck_typed_factorize_validates_indices_and_dimension():
+def test_duck_typed_factorize_validates_indices_and_row_pointer_length():
     too_large_idx = MatrixLike(
         np.array([0, 2, 4], dtype=np.int64),
         np.array([0, 2**32 + 1, 0, 1], dtype=np.int64),
@@ -247,7 +247,9 @@ def test_duck_typed_factorize_validates_indices_and_dimension():
         np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64),
         (2**32 + 1, 2**32 + 1),
     )
-    with pytest.raises(ValueError, match="^dimension 4294967297 exceeds u32::MAX$"):
+    with pytest.raises(
+        ValueError, match="^row_ptrs has length 3, expected 4294967298$"
+    ):
         approx_chol.factorize(oversized_dim)
 
 

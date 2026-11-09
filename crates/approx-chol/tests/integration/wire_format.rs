@@ -124,8 +124,7 @@ impl Fixture {
             }
             row_ptrs.push(columns.len() as u32);
         }
-        let n = matrix.len() as u32;
-        let csr = CsrRef::new(&row_ptrs, &columns, &values, n).expect("valid csr");
+        let csr = CsrRef::new(matrix.len(), &row_ptrs, &columns, &values).expect("valid csr");
         factorize_with(csr, self.config(), ScalingPolicy::default()).expect("factors")
     }
 
@@ -184,8 +183,8 @@ fn sampled_gram(config: Config) -> ApproxInverse {
         .map(|k| (k / per_row, (k * 5 + k / per_row) % right))
         .unzip();
     let gram = BipartiteFactorWidth2::new(
-        FactorWidth1::new(left as usize, &rows, None).expect("valid rows"),
-        FactorWidth1::new(right as usize, &cols, None).expect("valid columns"),
+        FactorWidth1::new(left as usize, &rows).expect("valid rows"),
+        FactorWidth1::new(right as usize, &cols).expect("valid columns"),
     )
     .expect("valid gram");
     factorize_with(gram, config, ScalingPolicy::default()).expect("factors")

@@ -1,5 +1,5 @@
-use approx_chol::input::Laplacian;
-use approx_chol::{factorize_with, ApproxInverse, Config, OwnedCsr, ScalingPolicy};
+use approx_chol::input::{CsrRef, Laplacian};
+use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy};
 
 use crate::common::dense::dense;
 use crate::common::graph::{Edge, Graph};
@@ -39,8 +39,8 @@ fn assert_componentwise(graph: &Graph, factor: &ApproxInverse, x_true: &[f64]) {
 
 fn csr_factor(graph: &Graph, config: Config) -> ApproxInverse {
     let (ptrs, cols, vals) = graph.csr(false);
-    let csr = OwnedCsr::<f64, u32>::try_from_usize(&ptrs, &cols, &vals, graph.n).unwrap();
-    factorize_with(csr.as_csr_ref(), config, ScalingPolicy::default()).unwrap()
+    let csr = CsrRef::new(graph.n, &ptrs, &cols, &vals).unwrap();
+    factorize_with(csr, config, ScalingPolicy::default()).unwrap()
 }
 
 /// The dense arm factors the signed `M`, not its cover, so heavy-row rounding cannot reach the last-eliminated weak pendant unequally on two sheets (#283).

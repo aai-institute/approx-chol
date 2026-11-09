@@ -279,12 +279,12 @@ mod tests {
         ];
         let n_left = 20;
         let valued = BipartiteFactorWidth2::new(
-            FactorWidth1::new(n_left, &left, Some(&x)).unwrap(),
-            FactorWidth1::new(10, &right, Some(&y)).unwrap(),
+            FactorWidth1::valued(n_left, &left, &x).unwrap(),
+            FactorWidth1::valued(10, &right, &y).unwrap(),
         );
         let incidence = BipartiteFactorWidth2::scaled(
-            FactorWidth1::new(n_left, &left, None).unwrap(),
-            FactorWidth1::new(10, &right, None).unwrap(),
+            FactorWidth1::new(n_left, &left).unwrap(),
+            FactorWidth1::new(10, &right).unwrap(),
             &s,
         );
         let sum = |accumulator: Accumulator, gram: BipartiteFactorWidth2<'_, f64>| {
@@ -312,8 +312,8 @@ mod tests {
         let right: Vec<u32> = (0..11).collect();
         let x = [1.0; 11];
         let gram = BipartiteFactorWidth2::new(
-            FactorWidth1::new(4, &left, Some(&x)).unwrap(),
-            FactorWidth1::new(11, &right, Some(&x)).unwrap(),
+            FactorWidth1::valued(4, &left, &x).unwrap(),
+            FactorWidth1::valued(11, &right, &x).unwrap(),
         )
         .unwrap();
         let rows = Accumulator::Table

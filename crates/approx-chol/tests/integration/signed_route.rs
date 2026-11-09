@@ -24,7 +24,7 @@ fn factor(graph: &Graph, config: Config) -> ApproxInverse {
     let (ptrs, columns, values) = graph.csr(false);
     let ptrs: Vec<u32> = ptrs.into_iter().map(|p| p as u32).collect();
     let columns: Vec<u32> = columns.into_iter().map(|c| c as u32).collect();
-    let csr = CsrRef::new(&ptrs, &columns, &values, graph.n as u32).unwrap();
+    let csr = CsrRef::new(graph.n, &ptrs, &columns, &values).unwrap();
     factorize_with(csr, config, ScalingPolicy::default()).unwrap()
 }
 

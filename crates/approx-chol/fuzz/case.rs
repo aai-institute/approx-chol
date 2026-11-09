@@ -2,7 +2,7 @@ use std::error::Error;
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use approx_chol::input::{
-    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, UpperCsrRef,
+    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, TriangleCsrRef,
 };
 use approx_chol::{factorize_with, ApproxInverse, Config, MemStack, Threads};
 use approx_chol::{FrustratedRoute, Real, Sampling, ScalingPolicy, SchurMode};
@@ -125,11 +125,11 @@ impl<T: Real> Edges<T> {
 
 impl<T: Real> Side<T> {
     fn factor(&self) -> Result<FactorWidth1<'_, T>, Box<dyn Error>> {
-        Ok(FactorWidth1::new(
-            self.n.into(),
-            &self.rows,
-            self.values.as_deref(),
-        )?)
+        let n = self.n.into();
+        Ok(match &self.values {
+            Some(values) => FactorWidth1::valued(n, &self.rows, values)?,
+            None => FactorWidth1::new(n, &self.rows)?,
+        })
     }
 }
 
@@ -140,11 +140,11 @@ impl<T: Real> Case<T> {
         let config = self.build.config();
         Ok(match &self.view {
             View::Csr(r) => {
-                let csr = CsrRef::new(&r.row_ptrs, &r.columns, &r.values, r.n.into())?;
+                let csr = CsrRef::new(r.n.into(), &r.row_ptrs, &r.columns, &r.values)?;
                 factorize_with(csr, config, policy)?
             }
             View::UpperCsr(r) => {
-                let csr = UpperCsrRef::new(&r.row_ptrs, &r.columns, &r.values, r.n.into())?;
+                let csr = TriangleCsrRef::upper(r.n.into(), &r.row_ptrs, &r.columns, &r.values)?;
                 factorize_with(csr, config, policy)?
             }
             View::Laplacian(edges) => factorize_with(edges.laplacian()?, config, policy)?,

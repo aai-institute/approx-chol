@@ -1,8 +1,8 @@
-use approx_chol::input::CsrRef;
+use approx_chol::input::{CsrRef, Side};
 use approx_chol::ScalingOutcome::Unsettled;
 use approx_chol::{
     factorize_complement, factorize_with, ApproxInverse, Component, Config, CoverSurplus,
-    FrustratedRoute, Real, ScalingPolicy, SchurMode, Side,
+    FrustratedRoute, Real, ScalingPolicy, SchurMode,
 };
 use rstest::rstest;
 
@@ -79,7 +79,7 @@ fn scaled_grid<T: Real>() -> String {
         .flat_map(|i| (ptrs[i]..ptrs[i + 1]).map(move |k| (i, k)))
         .map(|(i, k)| T::from(d[i] * values[k] * d[columns[k]]).unwrap())
         .collect();
-    let csr = CsrRef::new(&ptrs, &columns, &scaled, graph.n as u32).unwrap();
+    let csr = CsrRef::new(graph.n, &ptrs, &columns, &scaled).unwrap();
     let factor = |policy| factorize_with(csr, Config::default(), policy).unwrap();
     let at_once: ApproxInverse<T> = factor(ScalingPolicy::new(1e-9, 0).unwrap());
     let unsettled = |c: Component<'_, T>| c.clamp().is_some_and(|c| c.scaling == Unsettled);

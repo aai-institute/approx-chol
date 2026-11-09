@@ -1,4 +1,4 @@
-use approx_chol::input::{CsrRef, InputError, UpperCsrRef};
+use approx_chol::input::{CsrRef, InputError, TriangleCsrRef};
 use approx_chol::{factorize, ApproxInverse, Error};
 use num_traits::PrimInt;
 use proptest::prelude::*;
@@ -61,10 +61,9 @@ fn shape_errors<I: PrimInt + std::fmt::Debug>(
     col_indices: &[I],
     values: &[f64],
 ) -> [InputError; 2] {
-    let n = n as u32;
-    let full = CsrRef::new(row_ptrs, col_indices, values, n).expect_err("full storage must fail");
-    let upper =
-        UpperCsrRef::new(row_ptrs, col_indices, values, n).expect_err("upper storage must fail");
+    let full = CsrRef::new(n, row_ptrs, col_indices, values).expect_err("full storage must fail");
+    let upper = TriangleCsrRef::upper(n, row_ptrs, col_indices, values)
+        .expect_err("upper storage must fail");
     [full, upper]
 }
 
@@ -75,8 +74,8 @@ fn column_errors<I: PrimInt + Sync + std::fmt::Debug>(
     col_indices: &[I],
     values: &[f64],
 ) -> [Error; 2] {
-    let csr = CsrRef::new(row_ptrs, col_indices, values, n as u32).expect("valid shape");
-    let upper = UpperCsrRef::new(row_ptrs, col_indices, values, n as u32).expect("valid shape");
+    let csr = CsrRef::new(n, row_ptrs, col_indices, values).expect("valid shape");
+    let upper = TriangleCsrRef::upper(n, row_ptrs, col_indices, values).expect("valid shape");
     [
         factorize(csr).expect_err("full storage must fail"),
         factorize(upper).expect_err("upper storage must fail"),
@@ -88,8 +87,8 @@ proptest! {
     fn generated_laplacians_reduce_alike_from_full_and_upper_storage(csr in laplacian_csr_strategy()) {
         let (row_ptrs, col_indices, values, n) = &csr;
         let (upper_ptrs, upper_columns, upper_values, _) = upper(&csr);
-        let full = CsrRef::new(row_ptrs, col_indices, values, *n as u32).expect("valid shape");
-        let triangle = UpperCsrRef::new(&upper_ptrs, &upper_columns, &upper_values, *n as u32).expect("valid shape");
+        let full = CsrRef::new(*n, row_ptrs, col_indices, values).expect("valid shape");
+        let triangle = TriangleCsrRef::upper(*n, &upper_ptrs, &upper_columns, &upper_values).expect("valid shape");
         let full: ApproxInverse = factorize(full).expect("a Laplacian is admitted");
         let triangle: ApproxInverse = factorize(triangle).expect("a Laplacian is admitted");
         prop_assert_eq!(format!("{full:?}"), format!("{triangle:?}"));
@@ -184,9 +183,9 @@ proptest! {
 }
 
 #[rstest::rstest]
-#[case::negative_middle(CsrRef::<f64, i64>::new(&[0, -1, 2], &[0, 1], &[1.0, 1.0], 2).err(), 1)]
-#[case::negative_first(CsrRef::<f64, i64>::new(&[-1, 1, 2], &[0, 1], &[1.0, 1.0], 2).err(), 0)]
-#[case::past_usize_last(CsrRef::<f64, u128>::new(&[0, u128::MAX], &[0], &[1.0], 1).err(), 1)]
+#[case::negative_middle(CsrRef::<f64, i64>::new(2, &[0, -1, 2], &[0, 1], &[1.0, 1.0]).err(), 1)]
+#[case::negative_first(CsrRef::<f64, i64>::new(2, &[-1, 1, 2], &[0, 1], &[1.0, 1.0]).err(), 0)]
+#[case::past_usize_last(CsrRef::<f64, u128>::new(1, &[0, u128::MAX], &[0], &[1.0]).err(), 1)]
 fn a_row_pointer_past_usize_is_out_of_range_at_its_position(
     #[case] error: Option<InputError>,
     #[case] entry: usize,
@@ -200,6 +199,6 @@ fn a_row_pointer_past_usize_is_out_of_range_at_its_position(
 
 #[test]
 fn a_decreasing_pair_of_valid_pointers_is_out_of_order_at_the_first() {
-    let error = CsrRef::<f64>::new(&[0, 2, 1, 2], &[0, 1], &[1.0, 1.0], 3).err();
+    let error = CsrRef::<f64>::new(3, &[0, 2, 1, 2], &[0, 1], &[1.0, 1.0]).err();
     assert_eq!(error, Some(InputError::RowPtrs { row: 1 }));
 }

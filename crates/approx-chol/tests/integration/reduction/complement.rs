@@ -1,5 +1,6 @@
 use crate::common::clamps::{Clamped, Clamps};
-use approx_chol::{factorize_complement, factorize_with, Config, ScalingPolicy, Side};
+use approx_chol::input::Side;
+use approx_chol::{factorize_complement, factorize_with, Config, ScalingPolicy};
 use rstest::rstest;
 
 use crate::common::bipartite::Bipartite;

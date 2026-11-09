@@ -5,11 +5,10 @@ mod faer;
 #[cfg(feature = "sprs")]
 mod sprs;
 
-use approx_chol::input::{CsrRef, Input, InputError};
-use approx_chol::{factorize, ApproxInverse};
+use approx_chol::factorize;
+use approx_chol::input::{CsrRef, InputError};
 use num_traits::PrimInt;
 
-use crate::common::bits::bits;
 use crate::common::solve::Solve;
 
 /// The 4-vertex path 0-1-2-3 with unit weights.
@@ -21,20 +20,13 @@ const VALUES: [f64; 10] = [1.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 1.
 fn assert_solves_fixture<'a, I, M>(matrix: M)
 where
     I: PrimInt + Sync + 'a,
-    M: Copy
-        + TryInto<CsrRef<'a, f64, I>, Error = InputError>
-        + TryInto<Input<'a, f64, I>, Error = InputError>,
+    M: TryInto<CsrRef<'a, f64, I>, Error = InputError>,
 {
     let csr: CsrRef<'a, f64, I> = matrix.try_into().expect("valid CSR view");
-    assert_eq!(csr.n(), N);
+    let factor = factorize(csr).expect("the path is SDDM");
+    assert_eq!(factor.n(), N);
     let b = [1.0, -1.0, 1.0, -1.0];
-    let x = factorize(csr)
-        .expect("the path is SDDM")
-        .solve(&b)
-        .expect("solve");
-    // The matrix factors directly too, as `factorize(&matrix)` did before 0.7.
-    let direct: ApproxInverse = factorize(matrix).expect("the path is SDDM");
-    assert_eq!(bits(&direct.solve(&b).expect("solve")), bits(&x));
+    let x = factor.solve(&b).expect("solve");
     for (row, &b) in b.iter().enumerate() {
         let lx: f64 = (ROW_PTRS[row]..ROW_PTRS[row + 1])
             .map(|k| VALUES[k] * x[COL_INDICES[k]])

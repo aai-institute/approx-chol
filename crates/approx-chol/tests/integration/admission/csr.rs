@@ -1,5 +1,6 @@
 use approx_chol::input::{
-    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, InputError, Laplacian, UpperCsrRef,
+    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, InputError, Laplacian,
+    TriangleCsrRef,
 };
 use approx_chol::{factorize, ApproxInverse, Error, ReduceError};
 use rstest::rstest;
@@ -254,8 +255,8 @@ fn in_class_input_is_admitted_on_both_paths(
 }
 
 #[rstest]
-#[case::csr(factorize(CsrRef::<f64>::new(&[0], &[], &[], 0).unwrap()).expect("CSR"))]
-#[case::upper_csr(factorize(UpperCsrRef::<f64>::new(&[0], &[], &[], 0).unwrap()).expect("upper CSR"))]
+#[case::csr(factorize(CsrRef::<f64>::new(0, &[0], &[], &[]).unwrap()).expect("CSR"))]
+#[case::upper_csr(factorize(TriangleCsrRef::<f64>::upper(0, &[0], &[], &[]).unwrap()).expect("upper CSR"))]
 #[case::laplacian(
     factorize(Laplacian::new(0, &[0u32; 0], &[]).unwrap()).expect("Laplacian")
 )]
@@ -264,8 +265,8 @@ fn in_class_input_is_admitted_on_both_paths(
 )]
 #[case::bipartite_factor_width_2(factorize(
     BipartiteFactorWidth2::new(
-        FactorWidth1::new(0, &[0u32; 0], None).unwrap(),
-        FactorWidth1::new(0, &[], None).unwrap()
+        FactorWidth1::new(0, &[0u32; 0]).unwrap(),
+        FactorWidth1::new(0, &[]).unwrap()
     )
     .unwrap(),
 )
@@ -274,18 +275,27 @@ fn an_empty_system_is_admitted_by_every_entry_point(#[case] factor: ApproxInvers
     assert_eq!((factor.n(), factor.components().len()), (0, 0));
 }
 
-#[rstest]
-#[case::csr(CsrRef::<f64>::new(&[0], &[], &[], u32::MAX).err())]
-#[case::upper_csr(UpperCsrRef::<f64>::new(&[0], &[], &[], u32::MAX).err())]
-fn a_dimension_past_the_largest_row_count_is_a_row_pointer_length_mismatch(
-    #[case] error: Option<InputError>,
-) {
+#[test]
+fn a_dimension_past_the_largest_row_count_is_a_row_pointer_length_mismatch() {
+    assert_row_pointer_length_mismatch(u32::MAX as usize);
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn a_dimension_past_u32_reaches_the_row_pointer_length_check() {
+    assert_row_pointer_length_mismatch(1 << 32);
+}
+
+fn assert_row_pointer_length_mismatch(n: usize) {
     let expected = InputError::LengthMismatch {
         parameter: "row_ptrs",
-        expected: u32::MAX as usize + 1,
+        expected: n + 1,
         found: 1,
     };
-    assert_eq!(error, Some(expected));
+    let csr = CsrRef::<f64>::new(n, &[0], &[], &[]);
+    assert_eq!(csr.err(), Some(expected), "whole");
+    let upper = TriangleCsrRef::<f64>::upper(n, &[0], &[], &[]);
+    assert_eq!(upper.err(), Some(expected), "upper");
 }
 
 #[test]
@@ -347,15 +357,15 @@ fn debug_and_bits(factor: &ApproxInverse, rhs: &[f64]) -> (String, Vec<u64>) {
 #[test]
 fn canonical_and_reordered_ingestion_agree_bit_for_bit() {
     let (row_ptrs, columns, values) = grid_laplacian(6, 7);
-    let n = (row_ptrs.len() - 1) as u32;
+    let n = row_ptrs.len() - 1;
     let (reversed_columns, reversed_values) = reversed_rows(&row_ptrs, &columns, &values);
     let rhs: Vec<f64> = (0..n).map(|i| (i % 5) as f64 - 2.0).collect();
 
     let canonical = debug_and_bits(
-        &factorize(CsrRef::new(&row_ptrs, &columns, &values, n).unwrap()).expect("grid"),
+        &factorize(CsrRef::new(n, &row_ptrs, &columns, &values).unwrap()).expect("grid"),
         &rhs,
     );
-    let reordered = CsrRef::new(&row_ptrs, &reversed_columns, &reversed_values, n).unwrap();
+    let reordered = CsrRef::new(n, &row_ptrs, &reversed_columns, &reversed_values).unwrap();
     assert_eq!(
         canonical,
         debug_and_bits(&factorize(reordered).expect("grid"), &rhs)
@@ -365,7 +375,7 @@ fn canonical_and_reordered_ingestion_agree_bit_for_bit() {
         cast_all::<u32, u64>(&row_ptrs),
         cast_all::<u32, u64>(&reversed_columns),
     );
-    let wide = CsrRef::new(&wide_row_ptrs, &wide_columns, &reversed_values, n).unwrap();
+    let wide = CsrRef::new(n, &wide_row_ptrs, &wide_columns, &reversed_values).unwrap();
     assert_eq!(
         canonical,
         debug_and_bits(&factorize(wide).expect("grid"), &rhs)
@@ -389,7 +399,7 @@ fn canonical_and_reordered_ingestion_agree_bit_for_bit() {
         ("reversed", &reversed_columns, &reversed_values),
     ] {
         let (ptrs, kept_columns, kept_values) = upper(&row_ptrs, columns, values);
-        let triangle = UpperCsrRef::new(&ptrs, &kept_columns, &kept_values, n).unwrap();
+        let triangle = TriangleCsrRef::upper(n, &ptrs, &kept_columns, &kept_values).unwrap();
         let triangle = factorize(triangle).expect("grid");
         assert_eq!(
             canonical,

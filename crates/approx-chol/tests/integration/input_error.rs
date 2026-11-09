@@ -46,10 +46,6 @@ use rstest::rstest;
     InputError::RowGap { row: 15 },
     "row 15 leaves unused slots after its entries"
 )]
-#[case::dimension_too_large(
-    InputError::DimensionTooLarge { n: 4_294_967_296 },
-    "dimension 4294967296 exceeds u32::MAX"
-)]
 fn each_input_error_displays_every_field(#[case] error: InputError, #[case] expected: &str) {
     assert_eq!(error.to_string(), expected);
 }

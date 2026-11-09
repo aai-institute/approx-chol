@@ -103,8 +103,8 @@ fn path_solves_as_its_scaled_rhs<T: approx_chol::Real>(big: T, floor: T, down: i
     let s = [big, floor, floor, floor];
     let solve = |b: &[T]| {
         let gram = BipartiteFactorWidth2::scaled(
-            FactorWidth1::new(3, &[0u32, 1, 1, 2], None).unwrap(),
-            FactorWidth1::new(2, &[0u32, 0, 1, 1], None).unwrap(),
+            FactorWidth1::new(3, &[0u32, 1, 1, 2]).unwrap(),
+            FactorWidth1::new(2, &[0u32, 0, 1, 1]).unwrap(),
             &s,
         )
         .unwrap();

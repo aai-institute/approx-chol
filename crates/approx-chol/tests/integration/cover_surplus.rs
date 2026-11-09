@@ -1,5 +1,6 @@
+use approx_chol::input::Side;
 use approx_chol::{factorize_complement, factorize_with, ApproxInverse, Config, CoverSurplus};
-use approx_chol::{FrustratedRoute, ScalingPolicy, SchurMode, Side};
+use approx_chol::{FrustratedRoute, ScalingPolicy, SchurMode};
 
 use crate::common::bipartite::Bipartite;
 use crate::common::bits::bits;

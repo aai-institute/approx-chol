@@ -17,9 +17,18 @@ pub struct FactorWidth1<'a, T, I = u32> {
 }
 
 impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
-    /// `n` rows; each column's row is below `n`, and values, if any, are one per column.
-    pub fn new(n: usize, rows: &'a [I], values: Option<&'a [T]>) -> Result<Self, InputError> {
-        values.map_or(Ok(()), |values| length("values", rows.len(), values.len()))?;
+    /// `n` rows, each column's `rows[k]` below `n`, its value `1`.
+    pub fn new(n: usize, rows: &'a [I]) -> Result<Self, InputError> {
+        Self::checked(n, rows, None)
+    }
+
+    /// `n` rows, each column's `rows[k]` below `n`, its value `values[k]`.
+    pub fn valued(n: usize, rows: &'a [I], values: &'a [T]) -> Result<Self, InputError> {
+        length("values", rows.len(), values.len())?;
+        Self::checked(n, rows, Some(values))
+    }
+
+    fn checked(n: usize, rows: &'a [I], values: Option<&'a [T]>) -> Result<Self, InputError> {
         indices("rows", n, rows)?;
         Ok(Self { n, rows, values })
     }

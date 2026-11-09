@@ -1,4 +1,5 @@
-use approx_chol::{factorize_complement, factorize_with, Config, ScalingPolicy, Side};
+use approx_chol::input::Side;
+use approx_chol::{factorize_complement, factorize_with, Config, ScalingPolicy};
 
 use super::bipartite::Bipartite;
 use super::bits::bits;

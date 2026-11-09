@@ -11,7 +11,6 @@ mod huge_copies;
 mod input_error;
 mod interop;
 mod metamorphic;
-mod owned_csr;
 mod property_csr;
 mod property_factorization;
 mod reduction;
