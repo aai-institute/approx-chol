@@ -73,7 +73,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
             Formation::Exact => self.exact(inv_pivot),
             Formation::Sampled(copies) => self.sample(copies, streams).merge(),
         };
-        let s = Sddm::of_rows(rows, self.balance, &self.grounding);
+        let s = Sddm::of_rows(rows, self.balance, &self.grounding, config.frustrated());
         (Arm::Approximate(s), self.cross)
     }
 
@@ -89,7 +89,8 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
                 fill.merge()
             }
         };
-        Arm::Approximate(Sddm::of_rows(rows, self.balance, &self.grounding))
+        let route = config.frustrated();
+        Arm::Approximate(Sddm::of_rows(rows, self.balance, &self.grounding, route))
     }
 
     /// `S` itself, its exact rows folded off the sheets.

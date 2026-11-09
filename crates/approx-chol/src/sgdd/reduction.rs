@@ -302,7 +302,7 @@ fn surplus<T: Real>(RowSums { diagonal, abs }: &RowSums<T>) -> Grounding<T> {
 const SINGULAR_BAND: f64 = 5.0;
 
 /// Whether `ones = 1ᵀM1` is within the band of `trace = tr M`: needed, not enough, for `M` to float.
-pub(crate) fn within_band<T: Real>(ones: f64, trace: f64) -> bool {
+fn within_band<T: Real>(ones: f64, trace: f64) -> bool {
     ones <= SINGULAR_BAND * widen(T::epsilon()) * trace
 }
 

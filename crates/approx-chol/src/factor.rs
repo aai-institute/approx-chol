@@ -235,7 +235,10 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
             OffDiagonal::General(adjacency) => {
                 let arm = match config.dense(adjacency.n()) {
                     true => Arm::Exact(Signed::new(adjacency, balance, grounding)),
-                    false => Arm::Approximate(Sddm::of_block(adjacency, balance, grounding)),
+                    false => {
+                        let s = Sddm::of_block(adjacency, balance, grounding, config.frustrated());
+                        Arm::Approximate(s)
+                    }
                 };
                 (None, Cholesky::factor(arm, draws, tail(0), reused))
             }
