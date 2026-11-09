@@ -294,6 +294,32 @@ fn a_payload_of_another_format_version_is_rejected_by_version(#[case] declared: 
     }
 }
 
+/// A decoded clamp's violation is a deficit past rounding: finite and positive.
+#[rstest]
+#[case::nan(f64::NAN)]
+#[case::infinite(f64::INFINITY)]
+#[case::negative_infinite(f64::NEG_INFINITY)]
+#[case::zero(0.0)]
+#[case::negative_zero(-0.0)]
+#[case::negative(-1.0)]
+fn a_clamp_whose_violation_is_not_finite_and_positive_is_corrupt(#[case] violation: f64) {
+    let factor = Fixture::Clamped.factor();
+    let mut bytes = postcard::to_stdvec(&factor).expect("serialize");
+    let stored = factor.clamps()[0].violation.to_le_bytes();
+    let hits = bytes.windows(8).filter(|w| *w == stored).count();
+    assert_eq!(
+        hits,
+        factor.clamps().len(),
+        "only the clamps store {stored:?}"
+    );
+    let at = bytes.windows(8).position(|w| w == stored).expect("stored");
+    bytes[at..at + 8].copy_from_slice(&violation.to_le_bytes());
+    assert!(
+        postcard::from_bytes::<ApproxInverse>(&bytes).is_err(),
+        "{violation} decoded"
+    );
+}
+
 /// After a version bump or a new fixture; a factorization change deletes and regenerates the affected fixture, with no version bump.
 #[test]
 #[ignore = "writes fixtures: cargo test -p approx-chol --features serde --test integration -- --ignored regenerate_missing_wire_format_fixtures"]
