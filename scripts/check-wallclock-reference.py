@@ -2,9 +2,9 @@
 """Compare a `wallclock_banded` run against the committed reference (#60).
 
 A regression writes a GitHub job-summary alert but never fails the build, because
-a wall-clock signal on shared runners is advisory. A bench that emitted no number
-is breakage rather than a slow result, so that does fail. --update refreshes the
-reference instead of comparing.
+a wall-clock signal on shared runners is advisory. A bench that emitted no number,
+or measured a workload other than the reference's, is breakage rather than a slow
+result, so that does fail. --update refreshes the reference instead of comparing.
 """
 
 import argparse
@@ -84,13 +84,19 @@ def main() -> int:
         return 0
 
     if workload != baseline_workload:
-        emit(
-            f"⚠️ **Perf reference measures a different workload.** This run is "
-            f"`{workload}`, the reference is `{baseline_workload}` — the two are not "
-            f"comparable, so no verdict was formed. Re-seed via the **Perf "
-            f"Reference** workflow."
+        print(
+            f"::error::wall-clock workload differs from the reference, so no verdict "
+            f"is possible: this run measured `{workload}`, the reference is "
+            f"`{baseline_workload}`"
         )
-        return 0
+        emit(
+            f"## ❌ Perf reference measures a different workload\n\n"
+            f"| | workload |\n|---|---|\n"
+            f"| this run | `{workload}` |\n"
+            f"| reference | `{baseline_workload}` |\n\n"
+            f"Re-seed via the **Perf Reference** workflow."
+        )
+        return 1
 
     threshold_pct = reference["threshold_pct"]
     delta_pct = (measured - baseline) / baseline * 100.0
