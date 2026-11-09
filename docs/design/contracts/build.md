@@ -11,9 +11,10 @@ How a caller turns an admissible matrix into the approximate inverse $B$. The re
   construction, each setting defaulted, serializable behind the `serde` feature; a thread budget
   (a nonzero count or all cores), all cores in the Rust one-call functions and by default in
   Python, named at the two-stage level.
-- **Result:** $B$ or a `BuildError`, at the offending row in the caller's numbering: a Gram
-  form's diagonal, a computed scale, scaled entry or scaled row sum leaves the representable
-  range, or a component has more than $1/\varepsilon$ vertices.
+- **Result:** $B$ or a `BuildError`, located in the caller's numbering: at the offending row, a
+  Gram form's diagonal, a computed scale, scaled entry or scaled row sum leaves the
+  representable range; at its lowest vertex, a component has more than $1/\varepsilon$
+  vertices.
 - **Facts on $B$**, of the target $A_r$ in the caller's numbering: the components, and per
   component its null vector if singular and its clamp if past the rounding band. A clamp states
   whether the scaling was refuted, proving the component is not GDD, or unsettled, its steps run
