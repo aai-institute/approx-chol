@@ -169,13 +169,13 @@ impl<T: Real> ApproxInverse<T> {
         (0..coupled + self.inverse_pivots.len()).map(|k| Component { factor: self, k })
     }
 
-    /// What [`apply_with`](Self::apply_with) takes from its stack for a block of `columns` columns at `threads`: per column solved in place, or for one column copied through first, the most a block of `A` past the budget's share takes alone, its Cholesky's slots plus a gather unless its vertices are consecutive, or a region per thread, at most the pool's, of the most one of the others takes. It grows with `columns` and serves every block of fewer; one thread's serves every budget, solving fewer blocks at once to the same bits.
+    /// What [`apply_with`](Self::apply_with) takes from its stack for any block of `columns` columns at `threads`, whichever its layout; a copied block takes one pack's scratch whatever its columns. It serves every block of fewer columns; one thread's serves every budget, solving fewer blocks at once to the same bits.
     pub fn scratch(&self, columns: usize, threads: Threads) -> StackReq {
         if columns == 0 {
             return StackReq::EMPTY;
         }
         let room = Room::of(self, threads);
-        room.in_place(columns).or(room.staged())
+        room.in_place(columns).or(room.staged(columns))
     }
 
     /// Applies the approximate inverse to every column of `block` at once, each bit for bit as it would be alone, through scratch allocated for this call; [`ApplyError::Scratch`] if it cannot be.
@@ -202,6 +202,10 @@ impl<T: Real> ApproxInverse<T> {
             return Ok(());
         }
         check_buffers(block.rows(), self.n(), stack, self.scratch(columns, ONE))?;
+        // An empty system has nothing to solve, and a stack that holds nothing may not be aligned to carve from.
+        if self.n() == 0 {
+            return Ok(());
+        }
         block.solve_by(Kernel {
             inverse: self,
             threads,

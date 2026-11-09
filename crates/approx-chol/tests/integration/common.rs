@@ -1,3 +1,4 @@
+pub mod apart;
 pub mod bipartite;
 pub mod bits;
 pub mod cases;

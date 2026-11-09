@@ -10,9 +10,12 @@ use approx_chol::{
     ScalingPolicy, Threads,
 };
 
+#[path = "integration/common/apart.rs"]
+mod apart;
 #[path = "integration/common/bipartite.rs"]
 mod bipartite;
 
+use apart::Apart;
 use bipartite::Bipartite;
 
 struct Counting;
@@ -77,27 +80,6 @@ fn factored() -> ApproxInverse<f64> {
     factor
 }
 
-/// Columns stored apart, so the apply copies them through its scratch.
-struct Apart([Vec<f64>; 2]);
-
-impl MatrixMut<f64> for Apart {
-    fn rows(&self) -> usize {
-        self.0[0].len()
-    }
-
-    fn columns(&self) -> usize {
-        self.0.len()
-    }
-
-    fn read_column(&self, column: usize, into: &mut [f64]) {
-        into.copy_from_slice(&self.0[column]);
-    }
-
-    fn write_column(&mut self, column: usize, from: &[f64]) {
-        self.0[column].copy_from_slice(from);
-    }
-}
-
 #[test]
 fn an_apply_on_one_thread_allocates_nothing_and_builds_no_pool() {
     let factor = factored();
@@ -106,10 +88,11 @@ fn an_apply_on_one_thread_allocates_nothing_and_builds_no_pool() {
     let b = |i: usize| ((i * 7919) % 101) as f64 / 50.0 - 1.0;
     let mut rows: Vec<[f64; 2]> = (0..n).map(|i| [b(i), 1.0]).collect();
     let mut column: Vec<f64> = (0..n).map(b).collect();
-    let mut data: Vec<f64> = (0..2 * n).map(b).collect();
+    // Nine columns run a whole pack and a column alone.
+    let mut data: Vec<f64> = (0..9 * n).map(b).collect();
     let mut major = ColumnMajor::new(&mut data, n).unwrap();
-    let mut apart = Apart([column.clone(), column.clone()]);
-    let mut scratch = MemBuffer::new(factor.scratch(2, one));
+    let mut apart = Apart(vec![column.clone(); 9]);
+    let mut scratch = MemBuffer::new(factor.scratch(9, one));
     let stack = MemStack::new(&mut scratch);
 
     let counted = allocations(|| {

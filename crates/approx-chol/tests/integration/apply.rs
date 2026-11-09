@@ -6,6 +6,7 @@ use approx_chol::{
     LayoutError, MatrixMut, MemStack, Real, ScalingPolicy, StackReq, Threads,
 };
 
+use crate::common::apart::Apart;
 use crate::common::bits::bits;
 use crate::common::cases::cases;
 use crate::common::entry::{by_type, cast, cast_all, Entry, Factored, Labels, Types};
@@ -56,34 +57,13 @@ fn components(grounded: bool, triangle: Triangle) -> Graph {
     graph
 }
 
-/// Column `j` of the right-hand sides in the caller's numbering; column 2 is zero.
+/// Column `j` of the right-hand sides in the caller's numbering; column 2 is zero, and no two others are equal.
 fn rhs(n: usize, j: usize) -> Vec<f64> {
     let value = |i: usize| match j {
         2 => 0.0,
-        _ => ((i * 7 + j * 13) % 11) as f64 - 5.0,
+        _ => ((i * 7 + j * 13) % 11) as f64 - 5.0 + (j / 11) as f64 * 0.5,
     };
     (0..n).map(value).collect()
-}
-
-/// Columns stored apart, so the apply copies them through its scratch.
-struct Apart<T>(Vec<Vec<T>>);
-
-impl<T: Real> MatrixMut<T> for Apart<T> {
-    fn rows(&self) -> usize {
-        self.0.first().map_or(0, Vec::len)
-    }
-
-    fn columns(&self) -> usize {
-        self.0.len()
-    }
-
-    fn read_column(&self, column: usize, into: &mut [T]) {
-        into.copy_from_slice(&self.0[column]);
-    }
-
-    fn write_column(&mut self, column: usize, from: &[T]) {
-        self.0[column].copy_from_slice(from);
-    }
 }
 
 /// Each column of a `K`-column block on a NaN-filled stack in the caller's numbering, per layout.
@@ -130,7 +110,7 @@ fn applied<T: Real, const K: usize>(
 /// Every column of every block width and budget equals that column's solve alone, bit for bit.
 fn assert_columns_solve_alone(label: &str, factored: &Factored, types: Types) {
     let n = by_type!(&factored.factor, f => f.n());
-    let alone: Vec<Vec<f64>> = (0..8).map(|j| factored.solve(&rhs(n, j))).collect();
+    let alone: Vec<Vec<f64>> = (0..17).map(|j| factored.solve(&rhs(n, j))).collect();
     let reached = alone[0].iter().any(|x| x.abs() > types.epsilon());
     assert!(reached, "{label}: the right-hand side reaches the solution");
     by_type!(&factored.factor, f => assert_blocks(label, f, &factored.labels, &alone));
@@ -143,12 +123,19 @@ fn assert_blocks<T: Real>(
     alone: &[Vec<f64>],
 ) {
     for threads in threads::BUDGETS {
+        // Across the packs' widths: one column, half a pack, a pack, and past one and two.
         let blocks = [
             applied::<T, 1>(factor, labels, threads),
             applied::<T, 2>(factor, labels, threads),
             applied::<T, 3>(factor, labels, threads),
             applied::<T, 4>(factor, labels, threads),
+            applied::<T, 5>(factor, labels, threads),
+            applied::<T, 6>(factor, labels, threads),
+            applied::<T, 7>(factor, labels, threads),
             applied::<T, 8>(factor, labels, threads),
+            applied::<T, 9>(factor, labels, threads),
+            applied::<T, 16>(factor, labels, threads),
+            applied::<T, 17>(factor, labels, threads),
         ];
         for (layout, block) in blocks.iter().flatten() {
             for (j, column) in block.iter().enumerate() {
