@@ -1,3 +1,4 @@
+pub mod apart;
 pub mod bipartite;
 pub mod bits;
 pub mod cases;
@@ -9,6 +10,7 @@ pub mod gram;
 pub mod graph;
 pub mod grid;
 pub mod interleaved;
+pub mod layouts;
 pub mod lcg;
 pub mod modes;
 pub mod out_of_range;
