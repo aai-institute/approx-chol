@@ -57,8 +57,24 @@ fn bits_at(factor: &ApproxInverse, threads: Threads) -> Vec<u64> {
     bits(&factor.solve_at(&b, threads).unwrap())
 }
 
-#[test]
-fn round_trip_solves_bit_identically() {
+fn through_postcard(factor: &ApproxInverse) -> ApproxInverse {
+    let bytes = postcard::to_stdvec(factor).unwrap();
+    let back: ApproxInverse = postcard::from_bytes(&bytes).unwrap();
+    assert_eq!(postcard::to_stdvec(&back).unwrap(), bytes);
+    back
+}
+
+fn through_json(factor: &ApproxInverse) -> ApproxInverse {
+    let json = serde_json::to_string(factor).unwrap();
+    let back: ApproxInverse = serde_json::from_str(&json).unwrap();
+    assert_eq!(serde_json::to_string(&back).unwrap(), json);
+    back
+}
+
+#[rstest]
+#[case::postcard(through_postcard)]
+#[case::json(through_json)]
+fn round_trip_solves_bit_identically(#[case] round_trip: fn(&ApproxInverse) -> ApproxInverse) {
     let defaults = factors(Config::default());
     assert!(defaults
         .iter()
@@ -69,9 +85,7 @@ fn round_trip_solves_bit_identically() {
     assert!(keeps_transpose(&defaults[0]), "a block keeps Cᵀ");
     for config in configs() {
         for factor in factors(config) {
-            let bytes = postcard::to_stdvec(&factor).unwrap();
-            let back: ApproxInverse = postcard::from_bytes(&bytes).unwrap();
-            assert_eq!(postcard::to_stdvec(&back).unwrap(), bytes);
+            let back = round_trip(&factor);
             assert_eq!(format!("{back:?}"), format!("{factor:?}"));
             for threads in threads::BUDGETS {
                 assert_eq!(bits_at(&factor, threads), bits_at(&back, threads));
