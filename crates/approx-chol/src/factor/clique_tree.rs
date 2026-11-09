@@ -26,6 +26,8 @@ pub(super) struct CliqueTreeSampler<T, I, C: Copies> {
     split: C,
     /// Scratch [`Copies::draw`] reuses across entries; one copy never touches it.
     tally: Vec<(usize, u32)>,
+    /// A signed star's neighbors its merges cancelled to zero: coupled no more, but moved.
+    dropped: Vec<I>,
 }
 
 impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
@@ -37,6 +39,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
             cumsum: Vec::new(),
             split,
             tally: Vec::new(),
+            dropped: Vec::new(),
         }
     }
 

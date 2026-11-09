@@ -8,7 +8,8 @@ use std::path::Path;
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
 use approx_chol::FACTOR_FORMAT_VERSION as FORMAT_VERSION;
-use approx_chol::{factorize_with, ApproxInverse, Config, ScalingOutcome, ScalingPolicy};
+use approx_chol::{factorize_with, ApproxInverse, Config, FrustratedRoute};
+use approx_chol::{ScalingOutcome, ScalingPolicy};
 use rstest::rstest;
 use serde::de::value::{Error, SeqDeserializer};
 use serde::Deserialize;
@@ -56,6 +57,7 @@ fixtures! {
     SampledAc => sampled_ac,
     SampledAc2 => sampled_ac2,
     Clamped => clamped,
+    Signed => signed,
 }
 
 impl Fixture {
@@ -82,8 +84,8 @@ impl Fixture {
                 &[-1.0, 0.0, 1.0, 0.0],
                 &[0.0, -1.0, 0.0, 1.0],
             ]),
-            // A triangle with one positive edge: frustrated, so the approximate arm factors its double cover and the exact arm `M` itself.
-            Self::Cover | Self::DenseFrustrated => {
+            // A triangle with one positive edge: frustrated, so the approximate arm factors its double cover, the exact arm `M` itself, and the signed one `M` on one sheet, exactly, as its stars hold two neighbors.
+            Self::Cover | Self::DenseFrustrated | Self::Signed => {
                 Some(&[&[2.0, -1.0, 1.0], &[-1.0, 2.0, -1.0], &[1.0, -1.0, 2.0]])
             }
             // Two interleaved pairs no scaling makes dominant: each is clamped.
@@ -142,6 +144,11 @@ impl Fixture {
                 exact_max_dim: 0,
                 ..Config::default()
             },
+            Self::Signed => Config {
+                frustrated: FrustratedRoute::Signed,
+                exact_max_dim: 0,
+                ..Config::default()
+            },
             _ => Config::default(),
         }
     }
@@ -149,14 +156,15 @@ impl Fixture {
     /// What the payload's `Debug` must show, so a fixture cannot quietly stop covering its kind.
     fn covers(self) -> &'static [&'static str] {
         match self {
-            Self::Grounded => &["pinned: None"],
-            Self::GroundedApproximate => &["pinned: None", "Folded(", "len: 0"],
+            Self::Grounded => &["Dense([", "], None)"],
+            Self::GroundedApproximate => &["Folded(", "len: 0", "] }, None)"],
             Self::Isolated => &["inverse_pivots: [0.5, 0.25]"],
-            Self::Floating => &["n: 2, pinned: Some(", "triangular: Dense("],
+            Self::Floating => &["n: 2, triangular: Dense(", "], Some("],
             Self::Cover => &["Cover("],
-            Self::DenseFrustrated => &["n: 3, pinned: None", "Dense("],
+            Self::DenseFrustrated => &["n: 3, triangular: Dense(", "], None)"],
             Self::SampledAc | Self::SampledAc2 => &["elimination: Some", "Folded("],
             Self::Clamped => &["scaling: Refuted"],
+            Self::Signed => &["n: 3, triangular: Signed("],
         }
     }
 

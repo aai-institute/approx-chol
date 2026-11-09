@@ -46,7 +46,7 @@ fn unseen<I: Index>() -> I {
 }
 
 impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
-    /// Merges duplicate neighbors under the sampler's `split` cap, grounding what each merge cancels at both its ends, the neighbor's into `fill` and the pivot's into its star; then sorts by per-copy magnitude.
+    /// Merges duplicate neighbors under the sampler's `split` cap, grounding what each merge cancels at both its ends, the neighbor's into `fill` and the pivot's into its star, and drops a neighbor cancelled to zero, which then couples nothing but still moved; then sorts by per-copy magnitude.
     pub(super) fn refill<S: Sign<T, I>>(
         &mut self,
         neighbors: impl Iterator<Item = (I, C, T)>,
@@ -66,8 +66,18 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
             false => self.merge_by_scatter(sign, &mut grounded),
         };
         self.entries.truncate(merged);
+        // Under any sign: a task's next block may be unsigned, and its order holds none of these.
+        self.dropped.clear();
         if let Some(ground) = sign.ground().filter(|_| cancelled != T::zero()) {
             self.ground(ground, cancelled);
+            let dropped = &mut self.dropped;
+            (self.entries).retain(|entry| {
+                let coupled = entry.weight != T::zero();
+                if !coupled {
+                    dropped.push(entry.neighbor);
+                }
+                coupled
+            });
         }
         (self.entries).sort_unstable_by(|a, b| by_per_copy_then_neighbor(sign, a, b));
     }
@@ -173,6 +183,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
     ) {
         let copies = self.split;
         self.entries.clear();
+        self.dropped.clear();
         let entries = neighbors.map(|(neighbor, weight)| StarEntry {
             neighbor,
             copies,
@@ -182,9 +193,14 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         (self.entries).sort_unstable_by(|a, b| by_weight_then_neighbor(sign, a, b));
     }
 
-    /// The last star's neighbors in clique-tree order: every vertex its pivot's elimination moved.
+    /// The last star's neighbors in clique-tree order; with those it [`dropped`](Self::dropped), every vertex its pivot's elimination moved.
     pub(in crate::factor) fn neighbors(&self) -> impl Iterator<Item = I> + '_ {
         self.entries.iter().map(|entry| entry.neighbor)
+    }
+
+    /// The last star's neighbors its merges cancelled to zero, empty unless signed.
+    pub(in crate::factor) fn dropped(&self) -> impl Iterator<Item = I> + '_ {
+        self.dropped.iter().copied()
     }
 }
 
@@ -194,7 +210,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::super::{CliqueTreeSampler, Copies, Multi, Single};
-    use crate::factor::sign::{cancel, Sign, Unsigned};
+    use crate::factor::sign::{Signed, Unsigned};
 
     /// Merged with `merge` under a split of `k`, as `(neighbor, copies, weight bits)`.
     fn merged(
@@ -242,28 +258,6 @@ mod tests {
         }
     }
 
-    /// Signed weights, a merge's cancellation grounded at the vertex it holds.
-    #[derive(Clone, Copy)]
-    struct Grounds(u32);
-
-    impl Sign<f64, u32> for Grounds {
-        fn magnitude(self, w: f64) -> f64 {
-            w.abs()
-        }
-
-        fn merge(self, a: f64, b: f64) -> (f64, f64) {
-            cancel(a, b)
-        }
-
-        fn fill(self, _: f64, _: f64, magnitude: f64, _: u32) -> f64 {
-            magnitude
-        }
-
-        fn ground(self) -> Option<u32> {
-            Some(self.0)
-        }
-    }
-
     #[test]
     fn a_cancelling_merge_grounds_its_gain_at_both_ends() {
         let star = [(1, 2.0), (2, -1.0), (1, -0.5)];
@@ -272,7 +266,7 @@ mod tests {
             let mut fill = Vec::new();
             let neighbors = star.into_iter().chain(ground.map(|g| (9, g)));
             let neighbors = neighbors.map(|(j, w)| (j, Single, w));
-            sampler.refill(neighbors, Grounds(9), |edge| fill.push(edge));
+            sampler.refill(neighbors, Signed { ground: 9 }, |e| fill.push(e));
             let mut entries: Vec<_> = (sampler.entries.iter())
                 .map(|e| (e.neighbor, e.weight))
                 .collect();
@@ -281,5 +275,25 @@ mod tests {
             let fill: Vec<_> = fill.iter().map(|&(lo, hi, _, w)| (lo, hi, w)).collect();
             assert_eq!(fill, [(1, 9, 1.0)]);
         }
+    }
+
+    /// Opposite duplicates summing to zero leave the star, grounded, and still reach the order's rekey, until the next star.
+    #[test]
+    fn an_exact_cancellation_drops_the_neighbor_but_rekeys_it() {
+        let sign = Signed { ground: 9 };
+        let mut sampler = CliqueTreeSampler::<f64, u32, Single>::new(Single);
+        let mut fill = Vec::new();
+        let star = [(1, 1.0), (2, -1.5), (1, -1.0)].map(|(j, w)| (j, Single, w));
+        sampler.refill(star.into_iter(), sign, |edge| fill.push(edge));
+        let mut entries: Vec<_> = (sampler.entries.iter())
+            .map(|e| (e.neighbor, e.weight))
+            .collect();
+        entries.sort_by_key(|&(j, _)| j);
+        assert_eq!(entries, [(2, -1.5), (9, 2.0)]);
+        let fill: Vec<_> = fill.iter().map(|&(lo, hi, _, w)| (lo, hi, w)).collect();
+        assert_eq!(fill, [(1, 9, 2.0)]);
+        assert_eq!(sampler.dropped().collect::<Vec<_>>(), [1]);
+        sampler.refill([(3, Single, 1.0)].into_iter(), Unsigned, |_| {});
+        assert_eq!(sampler.dropped().count(), 0, "the next star's alone");
     }
 }

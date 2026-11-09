@@ -1,10 +1,10 @@
-//! The Cholesky's input: a Laplacian with its surplus, on one sheet or a Gremban cover's two.
+//! The approximate Cholesky's input: a Laplacian with its surplus, on one sheet or a Gremban cover's two, or frustrated `M` as it is, signed.
 
 use rayon::prelude::*;
 
 use super::cholesky::Eliminated;
 use super::config::CoverSurplus;
-use super::sign::{cancel, Unsigned};
+use super::sign::{cancel, Signed, Unsigned};
 use crate::sgdd::{Balance, FactorTail, Grounding};
 use crate::storage::{Rows, UpperAdjacency};
 use crate::{narrow, widen, Batch, Index, Real};
@@ -148,6 +148,54 @@ impl<T: Real, I: Index> Eliminated<T, I> for Sddm<T, I> {
                 (tail.filter(|f| f.spans_wide())).map(|f| first_copy(self.balance(), f.largest()))
             }
         }
+    }
+}
+
+/// Frustrated `M` as it is, for the signed elimination: its off-diagonal of either sign, its surplus to a ground it always has, where cancellation lands.
+pub(super) struct SignedWdd<T, I> {
+    adjacency: UpperAdjacency<T, I>,
+    grounding: Grounding<T>,
+}
+
+impl<T: Real, I: Index> SignedWdd<T, I> {
+    /// Panics unless nonempty, with one surplus per row.
+    pub(super) fn new(adjacency: UpperAdjacency<T, I>, grounding: Grounding<T>) -> Self {
+        assert!(adjacency.n() > 0, "M has a vertex");
+        assert!(grounding.fits(adjacency.n()), "one surplus per row");
+        Self {
+            adjacency,
+            grounding,
+        }
+    }
+}
+
+impl<T: Real, I: Index> Eliminated<T, I> for SignedWdd<T, I> {
+    type Sign = Signed<I>;
+
+    fn n(&self) -> usize {
+        self.adjacency.n()
+    }
+
+    /// `−a_ij`, its sign `a_ij`'s flipped, each edge once, the ground vertex `n` joined by each surplus.
+    fn grounded_edges(&self, mut edge: impl FnMut(I, I, T)) {
+        let n = self.n();
+        for i in 0..n {
+            for (j, &a) in self.adjacency.upper(i) {
+                edge(I::from_index(i), I::from_index(j), -a);
+            }
+        }
+        ground_edges(&self.grounding, n, edge);
+    }
+
+    fn sign(&self) -> Signed<I> {
+        Signed {
+            ground: I::from_index(self.n()),
+        }
+    }
+
+    /// The ground, past every slot: a signed factor pins none.
+    fn pin(&self, _: Option<FactorTail<'_, T>>) -> Option<usize> {
+        Some(self.n())
     }
 }
 

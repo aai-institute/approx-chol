@@ -87,10 +87,13 @@ fn nnz_l(factor: &ApproxInverse) -> usize {
     let mut count = len(&body[2], "lone pivots");
     for block in blocks.as_array().expect("a list of blocks") {
         let triangular = block["cholesky"]["triangular"].as_object();
+        let steps = |steps: &Value| {
+            len(&steps["headers"], "headers") + len(&steps["neighbors"], "neighbors")
+        };
         count += match triangular.and_then(|t| t.iter().next()) {
-            Some((kind, packed)) if kind == "Dense" => len(packed, "packed rows"),
-            Some((kind, steps)) if kind == "Folded" || kind == "Cover" => {
-                len(&steps["headers"], "headers") + len(&steps["neighbors"], "neighbors")
+            Some((kind, dense)) if kind == "Dense" => len(&dense[0], "packed rows"),
+            Some((kind, pinned)) if ["Folded", "Cover"].contains(&kind.as_str()) => {
+                steps(&pinned[0])
             }
             other => panic!("a triangular factor, not {other:?}"),
         };

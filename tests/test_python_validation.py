@@ -68,7 +68,9 @@ def test_a_split_not_an_integer_raises_type_error(split):
 
 def _stub_frustrated_names() -> list[str]:
     stub = Path(__file__).parent.parent / "python" / "approx_chol" / "__init__.pyi"
-    literal = re.search(r"_Frustrated: TypeAlias = Literal\[(.*?)\]", stub.read_text())
+    literal = re.search(
+        r"_Frustrated: TypeAlias = Literal\[(.*?)\]", stub.read_text(), re.DOTALL
+    )
     return re.findall(r'"([^"]+)"', literal.group(1))
 
 
@@ -82,8 +84,8 @@ def test_frustrated_round_trips(frustrated):
 
 def test_an_unknown_frustrated_route_raises_naming_the_stubs_routes():
     with pytest.raises(ValueError, match="frustrated must be one of ") as error:
-        approx_chol.Config(frustrated="signed")
-    named = str(error.value).removesuffix(", not 'signed'")
+        approx_chol.Config(frustrated="sheet")
+    named = str(error.value).removesuffix(", not 'sheet'")
     assert re.findall(r"'([^']+)'", named) == FRUSTRATED
 
 
@@ -112,6 +114,34 @@ def test_each_frustrated_name_factors_as_its_route(light, like, unlike):
     np.testing.assert_array_equal(cover, solve())
     np.testing.assert_array_equal(cover, solve(frustrated=like))
     assert not np.array_equal(cover, solve(frustrated=unlike))
+
+
+def test_signed_factors_a_frustrated_block_as_it_is():
+    """``"signed"`` eliminates the block on one sheet: its solve is neither the cover's nor floating."""
+    matrix = light_row_grid(10, 1.0)
+    b = np.sin(np.arange(matrix.shape[0], dtype=np.float64))
+    config = approx_chol.Config(exact_max_dim=0, frustrated="signed")
+    signed = approx_chol.factorize(matrix, config).solve(b)
+    cover = approx_chol.factorize(matrix, approx_chol.Config(exact_max_dim=0)).solve(b)
+    assert np.all(np.isfinite(signed))
+    assert not np.array_equal(signed, cover)
+
+
+def test_signed_solves_a_triangle_grounded_twice_exactly_where_every_cover_samples():
+    """Vertex 2 pivots first, so each signed star holds at most two entries and is eliminated exactly; every cover holds a three-entry star, which it samples."""
+    m = np.array([[2.5, -1.0, 1.0], [-1.0, 2.75, -1.5], [1.0, -1.5, 2.5]])
+    b = np.array([1.0, -2.0, 0.5])
+    exact = np.linalg.solve(m, b)
+
+    def error(**route):
+        config = approx_chol.Config(exact_max_dim=0, **route)
+        x = approx_chol.factorize(sp.csr_array(m), config).solve(b)
+        return np.linalg.norm(x - exact) / np.linalg.norm(exact)
+
+    assert error(frustrated="signed") < 1e-12
+    for route in ["cover", "cover_ground_vertex", "cover_surplus_edges"]:
+        assert error(frustrated=route) > 1e-6, route
+    assert error() > 1e-6
 
 
 def _u32(*xs):
