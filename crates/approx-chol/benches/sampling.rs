@@ -2,56 +2,17 @@
 mod csr;
 #[path = "common/grid.rs"]
 mod grid;
+#[path = "common/powerlaw.rs"]
+mod powerlaw;
+#[path = "common/stars.rs"]
+mod stars;
 
-use approx_chol::input::{BipartiteFactorWidth2, FactorWidth1};
 use approx_chol::{factorize_with, Config, ScalingPolicy};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use csr::{build, OwnedCsr};
+use csr::build;
 use grid::grid_laplacian;
-use rand::rngs::SmallRng;
-use rand::{RngExt, SeedableRng};
-use std::collections::BTreeSet;
-
-fn barabasi_albert(n: usize, m: usize, seed: u64) -> OwnedCsr {
-    assert!(m >= 1 && n > m);
-    let mut rng = SmallRng::seed_from_u64(seed);
-
-    let mut adj: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); n];
-    let mut degree_list: Vec<u32> = Vec::new();
-
-    for i in 0..m {
-        for j in (i + 1)..m {
-            adj[i].insert(j as u32);
-            adj[j].insert(i as u32);
-            degree_list.push(i as u32);
-            degree_list.push(j as u32);
-        }
-    }
-
-    for v in m..n {
-        let mut targets = BTreeSet::new();
-        while targets.len() < m {
-            if degree_list.is_empty() {
-                let t = rng.random_range(0..v as u32);
-                targets.insert(t);
-            } else {
-                let idx = rng.random_range(0..degree_list.len());
-                targets.insert(degree_list[idx]);
-            }
-        }
-        for &t in &targets {
-            adj[v].insert(t);
-            adj[t as usize].insert(v as u32);
-            degree_list.push(v as u32);
-            degree_list.push(t);
-        }
-    }
-
-    OwnedCsr::laplacian(
-        adj.iter()
-            .map(|neighbors| neighbors.iter().map(|&u| u as usize)),
-    )
-}
+use powerlaw::barabasi_albert;
+use stars::{Stars, STARS};
 
 fn bench_factorization_grid(c: &mut Criterion) {
     let mut group = c.benchmark_group("factorization_grid");
@@ -97,23 +58,10 @@ fn bench_factorization_powerlaw(c: &mut Criterion) {
 
 /// A whole factorize of a bipartite block, reduction included, not main's bare sampler: no sampler is public.
 fn bench_bipartite_stars(c: &mut Criterion) {
-    const STARS: usize = 10_000;
-
     let mut group = c.benchmark_group("bipartite_stars");
     for degree in [4usize, 10, 32] {
-        let mut rng = SmallRng::seed_from_u64(0x5EED);
-        // Every star on the same `degree` kept vertices, as main's; only scales vary.
-        let stars: Vec<u32> = (0..STARS * degree).map(|i| (i / degree) as u32).collect();
-        let kept: Vec<u32> = (0..STARS * degree).map(|i| (i % degree) as u32).collect();
-        let scales: Vec<f64> = (0..STARS * degree)
-            .map(|_| rng.random_range(0.25..1.25f64).sqrt())
-            .collect();
-        let gram = BipartiteFactorWidth2::scaled(
-            FactorWidth1::new(STARS, &stars, None).expect("valid side"),
-            FactorWidth1::new(degree, &kept, None).expect("valid side"),
-            &scales,
-        )
-        .expect("valid gram");
+        let stars = Stars::new(degree);
+        let gram = stars.gram();
 
         group.throughput(criterion::Throughput::Elements(STARS as u64));
         for (label, split_merge) in [("AC", None), ("AC2 k=4", Some(4))] {
