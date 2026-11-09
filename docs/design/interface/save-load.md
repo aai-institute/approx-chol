@@ -10,12 +10,18 @@ impl<T: Real> serde::Serialize for ApproxInverse<T> {}
 #[cfg(feature = "serde")]
 impl<'de, T: Real> serde::Deserialize<'de> for ApproxInverse<T> {}
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Header {
     pub version: u32,
     pub scalar: Scalar,
 }
+impl Header {
+    pub fn of<T: Real>() -> Header;
+    pub fn expect<T: Real>(self) -> Result<(), HeaderMismatch>;
+}
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scalar {
     F32,
@@ -31,11 +37,11 @@ pub struct HeaderMismatch {
 
 - The saved form is the pair `(Header, B)`, an array in a self-describing format: `version`, a
   `u32`, and `scalar`, `"f32"` or `"f64"`, then $B$. postcard writes the same bytes as the flat
-  `(version, scalar, B)`. The format version is `0x4143_000E`; it replaces
-  `FACTOR_FORMAT_VERSION`. The configuration is not in the form.
-- A load reads the `Header` first and, unless it is the current version with `T`'s scalar, fails
-  with a `HeaderMismatch` before it reads $B$; its `Display` names what differs, found and
-  expected.
+  `(version, scalar, B)`. The configuration is not in the form.
+- `Header::of::<T>()` is the current header, format version `0x4143_000E` and `T`'s scalar; it
+  replaces `FACTOR_FORMAT_VERSION`. `expect::<T>` is the one check: `HeaderMismatch` unless the
+  header equals `of::<T>()`; its `Display` names what differs, found and expected. A load reads
+  the `Header` first and checks it before it reads $B$.
 - A rejection of the header or of an invariant of $B$ goes through `D::Error::custom`, with that
   message; a decoding error is the format's own. A format that drops custom messages, such as
   postcard, keeps only the error. The same $B$ bit for bit needs a format that round-trips floats
@@ -49,8 +55,9 @@ class ApproxInverse(LinearOperator):
 ```
 
 An `ApproxInverse` pickles as its saved form, encoded with postcard, and its held budget. A load
-reads the `Header` itself and raises `ValueError` with the `HeaderMismatch` message; a form that
-then fails to decode or validate raises `ValueError` as invalid.
+reads the `Header` itself, checks it with `expect`, and raises `ValueError` with the
+`HeaderMismatch` message; a form that then fails to decode or validate raises `ValueError` as
+invalid.
 
 ## Why
 
