@@ -40,6 +40,36 @@ impl OwnedCsr {
         }))
     }
 
+    /// `D L D` for the weighted `edges`, a repeated pair summed once so both triangles hold the same bits: off-diagonal `−w_ij (d_i d_j)`, diagonal `d_i² Σ_j w_ij`.
+    #[allow(dead_code, reason = "only the reduce bench scales a Laplacian")]
+    pub fn congruent_laplacian(
+        d: &[f64],
+        edges: impl IntoIterator<Item = (usize, usize, f64)>,
+    ) -> Self {
+        let mut edges: Vec<_> = (edges.into_iter())
+            .map(|(a, b, w)| (a.min(b), a.max(b), w))
+            .collect();
+        edges.sort_unstable_by_key(|&(a, b, _)| (a, b));
+        let mut rows: Vec<Vec<(usize, f64)>> = vec![Vec::new(); d.len()];
+        let mut edges = edges.into_iter().peekable();
+        while let Some((a, b, mut w)) = edges.next() {
+            while let Some((_, _, more)) = edges.next_if(|&(c, e, _)| (c, e) == (a, b)) {
+                w += more;
+            }
+            rows[a].push((b, w));
+            rows[b].push((a, w));
+        }
+        Self::from_rows(rows.into_iter().enumerate().map(|(i, mut row)| {
+            let degree: f64 = row.iter().map(|&(_, w)| w).sum();
+            row.push((i, 0.0));
+            row.sort_unstable_by_key(|&(j, _)| j);
+            row.into_iter().map(move |(j, w)| match j == i {
+                true => (j as u32, d[i] * d[i] * degree),
+                false => (j as u32, -(w * (d[i] * d[j]))),
+            })
+        }))
+    }
+
     fn n(&self) -> u32 {
         (self.row_ptrs.len() - 1) as u32
     }
