@@ -8,7 +8,10 @@ mod panel;
 use std::hint::black_box;
 use std::time::Duration;
 
-use approx_chol::{factorize, ApproxInverse, Config, MemBuffer, MemStack, Threads};
+use approx_chol::{
+    factorize, ApplyError, ApproxInverse, ColumnMajor, Columns, Config, MatrixMut, MemBuffer,
+    MemStack, Threads,
+};
 use criterion::{criterion_group, criterion_main, Bencher, BenchmarkId, Criterion};
 use csr::{build, OwnedCsr};
 use grid::grid_laplacian;
@@ -18,36 +21,109 @@ use rand::{RngExt, SeedableRng};
 
 /// The solve alone: `x` and the scratch allocated once, `b` copied in per run.
 fn timed_solve(b: &mut Bencher, factor: &ApproxInverse, rhs: &[f64]) {
-    let mut x = rhs.to_vec();
-    let mut scratch = MemBuffer::new(factor.scratch(1, Threads::All));
-    b.iter(|| {
-        x.copy_from_slice(black_box(rhs));
-        factor
-            .apply_with(&mut x, Threads::All, MemStack::new(&mut scratch))
-            .expect("solve");
-        black_box(&x);
+    timed_block(b, factor, 1, Threads::All, rhs.to_vec(), |x, stack| {
+        factor.apply_with(x, Threads::All, stack)
     });
 }
 
-/// A `K`-column block applied in place: the rows and the scratch allocated once, the right-hand sides copied in per run.
+/// Column `j` of a block over `rhs`, scaled apart from the others.
+fn scaled(rhs: &[f64], j: usize) -> impl Iterator<Item = f64> + '_ {
+    (rhs.iter().enumerate()).map(move |(i, &v)| v * (1.0 + ((i + j) % 3) as f64))
+}
+
+/// A block of `columns` columns stored as `data`, applied through `apply`: the data and the scratch allocated once, the right-hand sides copied in per run.
+fn timed_block<D: Clone>(
+    b: &mut Bencher,
+    factor: &ApproxInverse,
+    columns: usize,
+    threads: Threads,
+    data: D,
+    apply: impl Fn(&mut D, &mut MemStack) -> Result<(), ApplyError>,
+) {
+    let mut block = data.clone();
+    let mut scratch = MemBuffer::new(factor.scratch(columns, threads));
+    b.iter(|| {
+        block.clone_from(black_box(&data));
+        apply(&mut block, MemStack::new(&mut scratch)).expect("apply");
+        black_box(&block);
+    });
+}
+
+/// A `K`-column block applied in place.
 fn timed_apply<const K: usize>(
     b: &mut Bencher,
     factor: &ApproxInverse,
     rhs: &[f64],
     threads: Threads,
 ) {
-    let columns: Vec<[f64; K]> = (rhs.iter().enumerate())
-        .map(|(i, &v)| std::array::from_fn(|j| v * (1.0 + ((i + j) % 3) as f64)))
-        .collect();
-    let mut rows = columns.clone();
-    let mut scratch = MemBuffer::new(factor.scratch(K, threads));
-    b.iter(|| {
-        rows.copy_from_slice(black_box(&columns));
-        factor
-            .apply_with(&mut rows, threads, MemStack::new(&mut scratch))
-            .expect("apply");
-        black_box(&rows);
+    let mut rows = vec![[0.0; K]; rhs.len()];
+    for j in 0..K {
+        (rows.iter_mut().zip(scaled(rhs, j))).for_each(|(row, v)| row[j] = v);
+    }
+    timed_block(b, factor, K, threads, rows, |rows, stack| {
+        factor.apply_with(rows, threads, stack)
     });
+}
+
+/// Columns stored apart, reached only through `read_column` and `write_column`.
+struct Apart<'c>(&'c mut [Vec<f64>]);
+
+impl MatrixMut<f64> for Apart<'_> {
+    fn rows(&self) -> usize {
+        self.0.first().map_or(0, Vec::len)
+    }
+
+    fn columns(&self) -> usize {
+        self.0.len()
+    }
+
+    fn read_column(&self, column: usize, into: &mut [f64]) {
+        into.copy_from_slice(&self.0[column]);
+    }
+
+    fn write_column(&mut self, column: usize, from: &[f64]) {
+        self.0[column].copy_from_slice(from);
+    }
+}
+
+/// How a block stores its columns one by one.
+#[derive(Clone, Copy)]
+enum Layout {
+    ColumnMajor,
+    Columns,
+    Apart,
+}
+
+/// A `k`-column block stored column by column in `layout`.
+fn timed_columns(
+    b: &mut Bencher,
+    factor: &ApproxInverse,
+    rhs: &[f64],
+    k: usize,
+    threads: Threads,
+    layout: Layout,
+) {
+    let n = rhs.len();
+    let columns: Vec<Vec<f64>> = (0..k).map(|j| scaled(rhs, j).collect()).collect();
+    let apply = |block: &mut dyn MatrixMut<f64>, stack: &mut MemStack| {
+        factor.apply_with(block, threads, stack)
+    };
+    match layout {
+        Layout::ColumnMajor => {
+            timed_block(b, factor, k, threads, columns.concat(), |data, stack| {
+                apply(
+                    &mut ColumnMajor::new(data, n).expect("n rows to a column"),
+                    stack,
+                )
+            })
+        }
+        Layout::Columns => timed_block(b, factor, k, threads, columns, |columns, stack| {
+            apply(&mut Columns::new(columns).expect("n rows each"), stack)
+        }),
+        Layout::Apart => timed_block(b, factor, k, threads, columns, |columns, stack| {
+            apply(&mut Apart(columns), stack)
+        }),
+    }
 }
 
 /// `k` interleaved paths: the only shape whose blocks are not contiguous.
@@ -126,6 +202,32 @@ fn bench_panel_solve(c: &mut Criterion, workers: usize, firms: usize) {
             group.bench_function(id(1), |b| timed_apply::<1>(b, &factor, &rhs, threads));
             group.bench_function(id(4), |b| timed_apply::<4>(b, &factor, &rhs, threads));
             group.bench_function(id(8), |b| timed_apply::<8>(b, &factor, &rhs, threads));
+        }
+    }
+    group.finish();
+    if workers >= 200_000 {
+        bench_column_layouts(c, &factor, &rhs, &format!("{workers}x{firms}"));
+    }
+}
+
+/// Layouts stored column by column on the panel, against `panel_solve`'s interleaved `apply_k*`: below, at and past each pack's width.
+fn bench_column_layouts(c: &mut Criterion, factor: &ApproxInverse, rhs: &[f64], panel: &str) {
+    let mut group = c.benchmark_group("column_layouts");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_millis(200));
+    group.measurement_time(Duration::from_secs(2));
+    let one = Threads::Count(std::num::NonZeroUsize::MIN);
+    let layouts = [
+        ("column_major", Layout::ColumnMajor),
+        ("columns", Layout::Columns),
+        ("apart", Layout::Apart),
+    ];
+    for (budget, threads) in [("all", Threads::All), ("one", one)] {
+        for k in [1, 3, 4, 7, 8] {
+            for (name, layout) in layouts {
+                let id = BenchmarkId::new(format!("{name}_k{k}_{budget}"), panel);
+                group.bench_function(id, |b| timed_columns(b, factor, rhs, k, threads, layout));
+            }
         }
     }
     group.finish();
