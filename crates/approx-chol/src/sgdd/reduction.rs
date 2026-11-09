@@ -139,7 +139,14 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
             }
         };
         let deficits = (rows.diagonal.iter().zip(&rows.abs)).map(|(&d, &s)| widen(s) - widen(d));
-        let clamped = vector.worst_past_band(deficits, &rows.diagonal, m.off_diagonal());
+        let clamped = (vector)
+            .past_band(
+                widen(T::epsilon()),
+                deficits,
+                rows.diagonal.iter().map(|&d| widen(d)),
+                row_degrees(rows.diagonal.len(), m.off_diagonal()),
+            )
+            .map_or(0.0, |past| past.fold(0.0, f64::max));
         match balance {
             Balance::Balanced => Ok(Settling::Pending(Folded {
                 m,
@@ -236,7 +243,8 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         let dominant = matches!(self.vector, ScaleVector::Identity);
         let floats = !surplus.states_ground(&self)
             && within_band::<T>(ones, trace)
-            && (((dominant || S::RESIDUES_FLOAT_SCALED) && self.floats(surplus.residues(&self)))
+            && (((dominant || S::RESIDUES_FLOAT_SCALED)
+                && self.ground_rows(surplus.residues(&self)).is_none())
                 || surplus.certifies(self.m.vertices()));
         let (vector, clamped) = (self.vector, self.clamped);
         if floats {
@@ -271,15 +279,45 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         (ones, trace)
     }
 
-    /// Whether no row's surplus outweighs its coupling or passes its band.
-    fn floats(&self, surplus: impl Iterator<Item = f64> + Clone) -> bool {
+    /// The rows whose surplus is a ground, outweighing its coupling or past its band; `None` when every one is rounding.
+    fn ground_rows(&self, surplus: impl Iterator<Item = f64> + Clone) -> Option<Box<[bool]>> {
         let RowSums { diagonal, abs } = &self.rows;
-        if (surplus.clone().zip(abs)).any(|(s, &abs)| s > widen(abs)) {
-            return false;
-        }
+        let coupled = (surplus.clone().zip(abs)).map(|(s, &abs)| s > widen(abs));
         let excess = (surplus.zip(diagonal)).map(|(s, &d)| s - self.clamped * widen(d));
-        (self.vector).worst_past_band(excess, diagonal, self.m.off_diagonal()) == 0.0
+        let degrees = row_degrees(diagonal.len(), self.m.off_diagonal());
+        let past = (self.vector).past_band(
+            widen(T::epsilon()),
+            excess,
+            diagonal.iter().map(|&d| widen(d)),
+            degrees,
+        );
+        match past {
+            // A floating block's rows: one scan, as the mask is built only once a row holds.
+            None if !coupled.clone().any(|c| c) => None,
+            None => rows_where(diagonal.len(), coupled),
+            Some(past) => rows_where(
+                diagonal.len(),
+                coupled.zip(past).map(|(c, ratio)| c || ratio > 0.0),
+            ),
+        }
     }
+}
+
+/// The `n` rows where `holds` does, `None` when none: the mask is built only then.
+fn rows_where(n: usize, holds: impl Iterator<Item = bool>) -> Option<Box<[bool]>> {
+    let mut rows: Option<Box<[bool]>> = None;
+    for (i, _) in holds.enumerate().filter(|&(_, holds)| holds) {
+        rows.get_or_insert_with(|| vec![false; n].into())[i] = true;
+    }
+    rows
+}
+
+/// A residue's terms: at most `n − 1` entries a row, each row's count read on demand.
+fn row_degrees<T: Real, I: Index>(
+    n: usize,
+    off_diagonal: &OffDiagonal<T, I>,
+) -> (usize, impl FnOnce() -> Vec<usize> + '_) {
+    (n.saturating_sub(1), || off_diagonal.degrees())
 }
 
 /// Row `i` of `m` holds a ground out of range.

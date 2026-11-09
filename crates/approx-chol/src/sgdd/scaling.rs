@@ -114,21 +114,33 @@ pub(super) enum ScaleVector {
 }
 
 impl ScaleVector {
-    /// The worst `excess_i / m_ii` past row `i`'s band, `0` if none; degrees cost a pass over the entries, so only a row past the `RATIO_BAND ε` floor pays for them.
-    pub(super) fn worst_past_band<T: Real, I: Index>(
+    /// Each row's `excess_i / m_ii` past its band, `0` within it; `None` while every row is within the `RATIO_BAND ε` floor, which costs one pass; `degrees`, each `k_i ≤ max_k`, is read once and only for a row the bands at `0` and `max_k` leave open.
+    pub(super) fn past_band(
         self,
+        epsilon: f64,
         excess: impl Iterator<Item = f64> + Clone,
-        diagonal: &[T],
-        off_diagonal: &OffDiagonal<T, I>,
-    ) -> f64 {
-        let epsilon = widen(T::epsilon());
-        let ratios = (excess.zip(diagonal)).map(|(e, &d)| e / widen(d));
-        if (ratios.clone()).all(|ratio| ratio <= RATIO_BAND * epsilon) {
-            return 0.0;
+        diagonal: impl Iterator<Item = f64> + Clone,
+        (max_k, degrees): (usize, impl FnOnce() -> Vec<usize>),
+    ) -> Option<impl Iterator<Item = f64>> {
+        let ratios = (excess.zip(diagonal)).map(|(e, d)| (e / d, d));
+        if (ratios.clone()).all(|(ratio, _)| ratio <= RATIO_BAND * epsilon) {
+            return None;
         }
-        (ratios.zip(off_diagonal.degrees()).zip(diagonal))
-            .filter(|&((ratio, k), &d)| ratio > self.row_band(k, widen(d), epsilon))
-            .fold(0.0, |worst, ((ratio, _), _)| worst.max(ratio))
+        let (mut degrees, mut read) = (Some(degrees), Vec::new());
+        Some(ratios.enumerate().map(move |(i, (ratio, d))| {
+            let past = |k| ratio > self.row_band(k, d, epsilon);
+            let past = past(0)
+                && (past(max_k) || {
+                    if let Some(degrees) = degrees.take() {
+                        read = degrees();
+                    }
+                    past(read[i])
+                });
+            match past {
+                true => ratio,
+                false => 0.0,
+            }
+        }))
     }
 
     /// Row `i`'s band for its `k_i` entries and diagonal `m_ii`, in units where `T`'s rounding is `epsilon`.
