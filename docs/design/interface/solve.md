@@ -69,7 +69,8 @@ pub enum ApplyError {
   pool's: a region per thread, of the most one of those components takes. It grows with
   `columns`; one thread's serves every budget, and a stack of fewer regions solves fewer
   components at once, to the same bits. `apply` allocates its scratch per call; `apply_with`
-  allocates nothing.
+  allocates nothing at `Count(1)`; a budget above one runs on rayon's pool, which builds itself on
+  first use.
 - `block` holds the right-hand sides on entry and the solutions on return; a block with columns has
   $n$ rows, else `Rows`, and one without is left as it is, whatever its rows. `Scratch` is returned
   when `stack` cannot hold one thread's scratch, `scratch(block.columns(), Threads::Count(1))`,

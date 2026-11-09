@@ -133,7 +133,7 @@ changes.
 | P1 | Execution: `Threads`, `join`, `fork`, the task grain; no other part calls rayon | every result bit-identical for every budget and in a nested pool | – |
 | P2 | Modules moved to the tree below | bit-identical | R1 |
 | P3 | `ApproxInverse` and `Component` with `vertices`, `null_vector`, `clamp`; the build's list of clamps, `Reduced`'s `report` becoming a `ClampId` into it; the per-block solver removed, so one width branch sits at the top, around the components, and a component's kind is apart from its width; `Indexed` removed; within migrated | breaking; format version bumped; within's tests | D4, P1 |
-| P4 | `MatrixMut`, `ColumnMajor`, `Columns`, `scratch`, `apply`, `apply_with`, `ApplyError`, `LayoutError`; the budget spread over components by size | each column equals its solve alone, bit for bit, at every budget; `apply_with` allocates nothing | P3 |
+| P4 | `MatrixMut`, `ColumnMajor`, `Columns`, `scratch`, `apply`, `apply_with`, `ApplyError`, `LayoutError`; the budget spread over components by size | each column equals its solve alone, bit for bit, at every budget; `apply_with` allocates nothing at `Count(1)` | P3 |
 | P5 | Build surface: `Sgdd` and `Complement` with `Threads` and `clamps`; `Config` comparable and hashable | interface tests | P3, D6, R6 |
 | P6 | Persistence: the envelope `(version, scalar, B)`; each part serializes its exports under its own version, the approximate inverse checks that they agree | round trip; version and scalar rejected by name; corrupt payloads rejected | P3, R3 |
 | P7 | Adapters: faer (row and column CSR, `MatrixMut`, `LinOp`, `BiLinOp`, `Precond`, `BiPrecond`, `From<Par>`), sprs, nalgebra, ndarray; the unimplemented-trait message | per-feature tests | P4, D6 |
