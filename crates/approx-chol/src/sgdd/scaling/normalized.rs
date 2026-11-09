@@ -1,12 +1,22 @@
 use std::borrow::Cow;
 use std::cell::Cell;
 
-use crate::storage::{OffDiagonal, Rows};
+use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::{narrow, widen, Index, Real};
+
+/// `log₂` of the multiply-adds a gathered product's task carries; one task's worth runs as the scatter, which a serial gather is slower than.
+const GATHER_GRAIN_BITS: u32 = 13;
+
+/// Rows a gathering task takes, each entry one lower and one upper multiply-add; `None` where the scatter runs.
+fn gather_split<T: Real, I: Index>(adjacency: &UpperAdjacency<T, I>) -> Option<usize> {
+    crate::split(adjacency.n(), 2 * adjacency.nnz() as u64, GATHER_GRAIN_BITS)
+}
 
 /// `N = D^{-1/2}|offdiag(A_c)|D^{-1/2}`: scales `R` make `R|A_c|R` dominant iff `N y ≤ y` for `y = R√D`, so iff `ρ(N) ≤ 1` (Boman, Chen, Parekh, Toledo, LAA 2005).
 pub(super) struct Normalized<'a, T, I> {
     off_diagonal: &'a OffDiagonal<T, I>,
+    /// A general block's strict lower triangle where its products gather: 12 bytes an entry and 8 a row at `f64` and `u32`, for one relaxation.
+    lower: Option<Rows<T, I>>,
     inv_sqrt: Box<[f64]>,
     /// A product's operand times its scales, formed once per product, not per entry read.
     scaled: Cell<Vec<f64>>,
@@ -15,8 +25,14 @@ pub(super) struct Normalized<'a, T, I> {
 impl<'a, T: Real, I: Index> Normalized<'a, T, I> {
     pub(super) fn new(off_diagonal: &'a OffDiagonal<T, I>, diagonal: &[T]) -> Self {
         let inv_sqrt = diagonal.iter().map(|&d| 1.0 / widen(d).sqrt()).collect();
+        let lower = match off_diagonal {
+            OffDiagonal::General(adjacency) => gather_split(adjacency).map(|_| adjacency.lower()),
+            // Its iteration runs on the kept side: a gather would serve only the probes.
+            OffDiagonal::Bipartite(_) => None,
+        };
         Self {
             off_diagonal,
+            lower,
             inv_sqrt,
             scaled: Cell::default(),
         }
@@ -44,8 +60,22 @@ impl<'a, T: Real, I: Index> Normalized<'a, T, I> {
 
     /// `out = |offdiag(A_c)| D^{-1/2} y`, returning the outer `D^{-1/2}` that makes it `N y`.
     pub(super) fn unscaled(&self, y: &[f64], out: &mut [f64]) -> &[f64] {
-        self.with_scaled(y, &self.inv_sqrt, |x| self.off_diagonal.abs_times(x, out));
+        self.with_scaled(y, &self.inv_sqrt, |x| self.abs_times(x, out));
         &self.inv_sqrt
+    }
+
+    /// `out = |offdiag(A_c)| x`, gathered where the lower triangle is kept and the rows split.
+    fn abs_times(&self, x: &[f64], out: &mut [f64]) {
+        let gather = match self.off_diagonal {
+            OffDiagonal::General(adjacency) => (self.lower.as_ref())
+                .zip(gather_split(adjacency))
+                .map(|split| (adjacency, split)),
+            OffDiagonal::Bipartite(_) => None,
+        };
+        match gather {
+            Some((adjacency, (lower, per))) => adjacency.abs_gathered(lower, per, x, out),
+            None => self.off_diagonal.abs_times(x, out),
+        }
     }
 
     /// `product(s∘y)`.
