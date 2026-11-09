@@ -204,6 +204,12 @@ fn per_task(units: usize, work: u64, bits: u32) -> usize {
     usize::try_from(per).unwrap_or(usize::MAX).max(1)
 }
 
+/// [`per_task`] where a setup loop splits: `None` when one task takes every unit or the pool has one thread.
+fn split(units: usize, work: u64, bits: u32) -> Option<usize> {
+    let per = per_task(units, work, bits);
+    (per < units && rayon::current_num_threads() > 1).then_some(per)
+}
+
 /// Finite, and zero or at least `MIN_POSITIVE/EPSILON`, so no product turns subnormal (#163).
 fn in_range<T: Real>(x: T) -> bool {
     x.is_finite() && (x == T::zero() || x.abs() >= T::min_positive_value() / T::epsilon())

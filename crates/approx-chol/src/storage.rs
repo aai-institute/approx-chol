@@ -1,5 +1,7 @@
 //! Sparse storage shapes every stage reads.
 
+use rayon::prelude::*;
+
 use crate::{narrow, widen, Index, Real, Sum2};
 
 /// Compressed sparse rows.
@@ -101,14 +103,14 @@ impl<T: Real, I: Index> Rows<T, I> {
         }
     }
 
-    /// `out = |X|ᵀ diag(s)² |X| diag(t) x` in one pass, each row read twice while cached.
-    pub(crate) fn abs_gram_times(&self, s: &[f64], t: &[f64], x: &[f64], out: &mut [f64]) {
+    /// `out = |X|ᵀ diag(s)² |X| x` in one pass, each row read twice while cached.
+    pub(crate) fn abs_gram_times(&self, s: &[f64], x: &[f64], out: &mut [f64]) {
         out.fill(0.0);
         for (span, &s) in self.ptrs.windows(2).zip(s) {
             let row = (self.indices[span[0]..span[1]].iter()).zip(&self.values[span[0]..span[1]]);
             let sum: f64 = row
                 .clone()
-                .map(|(&j, &a)| widen(a.abs()) * (x[j.index()] * t[j.index()]))
+                .map(|(&j, &a)| widen(a.abs()) * x[j.index()])
                 .sum();
             let sum = s * s * sum;
             row.for_each(|(&j, &a)| out[j.index()] += widen(a.abs()) * sum);
@@ -250,6 +252,27 @@ impl<T: Real, I: Index> UpperAdjacency<T, I> {
     pub(crate) fn upper(&self, i: usize) -> impl Iterator<Item = (usize, &T)> {
         self.rows.row(i)
     }
+
+    pub(crate) fn nnz(&self) -> usize {
+        self.rows.nnz()
+    }
+
+    /// The strict lower triangle by rows, each row's columns ascending: the stored one transposed.
+    pub(crate) fn lower(&self) -> Rows<T, I> {
+        self.rows.transpose()
+    }
+
+    /// [`OffDiagonal::abs_times`] gathered by row, `per` rows a task, `lower` from [`lower`](Self::lower): each row sums its lower entries, then its upper ones, each from `0` in the scatter's order, so the bits match.
+    pub(crate) fn abs_gathered(&self, lower: &Rows<T, I>, per: usize, x: &[f64], out: &mut [f64]) {
+        let sum = |rows: &Rows<T, I>, i: usize| {
+            (rows.row(i)).fold(0.0, |sum, (j, &a)| sum + widen(a.abs()) * x[j])
+        };
+        (out.par_chunks_mut(per).enumerate()).for_each(|(task, out)| {
+            (task * per..)
+                .zip(out)
+                .for_each(|(i, out)| *out = sum(lower, i) + sum(&self.rows, i));
+        });
+    }
 }
 
 /// A block's off-diagonal by shape: `A_c`'s signed one, or `M`'s once congruent.
@@ -341,19 +364,19 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
         degree
     }
 
-    /// `out = |X| diag(s) y`, each stored entry read for both its ends.
-    pub(crate) fn abs_times(&self, s: &[f64], y: &[f64], out: &mut [f64]) {
+    /// `out = |X| x`, each stored entry read for both its ends.
+    pub(crate) fn abs_times(&self, x: &[f64], out: &mut [f64]) {
         let (rows, offset) = self.stored();
         out.fill(0.0);
         for (i, span) in rows.ptrs.windows(2).enumerate() {
-            let x_i = y[i] * s[i];
+            let x_i = x[i];
             let mut sum = 0.0;
             for (&j, &a) in rows.indices[span[0]..span[1]]
                 .iter()
                 .zip(&rows.values[span[0]..span[1]])
             {
                 let (a, j) = (widen(a.abs()), offset + j.index());
-                sum += a * (y[j] * s[j]);
+                sum += a * x[j];
                 out[j] += a * x_i;
             }
             out[i] += sum;
@@ -402,4 +425,89 @@ pub(crate) fn tally_abs<T: Real>(
         sums[j] += x;
     }
     sums[i] += sum;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = (self.0)
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0 >> 11
+        }
+
+        fn unit(&mut self) -> f64 {
+            self.next() as f64 / (1u64 << 53) as f64
+        }
+    }
+
+    /// A strict upper triangle on `n` vertices, a fifth of its rows empty, entries of both signs over twelve decades.
+    fn adjacency<T: Real>(lcg: &mut Lcg, n: usize, density: f64) -> UpperAdjacency<T, u32> {
+        let (mut ptrs, mut indices, mut values) = (vec![0], vec![], vec![]);
+        for i in 0..n {
+            let empty = lcg.unit() < 0.2;
+            for j in i + 1..n {
+                if !empty && lcg.unit() < density {
+                    let sign = if lcg.unit() < 0.5 { -1.0 } else { 1.0 };
+                    indices.push(j as u32);
+                    values.push(T::from(sign * 10f64.powf(12.0 * lcg.unit() - 6.0)).unwrap());
+                }
+            }
+            ptrs.push(indices.len());
+        }
+        UpperAdjacency::new(Rows::new(ptrs, indices, values, n))
+    }
+
+    fn gathered_matches_scatter<T: Real>() {
+        let mut lcg = Lcg(42);
+        for case in 0..200 {
+            let n = 1 + (lcg.next() % 60) as usize;
+            let adjacency = adjacency::<T>(&mut lcg, n, [0.05, 0.3, 0.9][case % 3]);
+            let lower = adjacency.lower();
+            let general = OffDiagonal::General(adjacency.clone());
+            for trial in 0..20 {
+                let x: Vec<f64> = (0..n)
+                    .map(|_| match lcg.unit() {
+                        r if r < 0.05 => -0.0,
+                        r if r < 0.1 => 0.0,
+                        _ => {
+                            let sign = if trial % 2 == 0 && lcg.unit() < 0.5 {
+                                -1.0
+                            } else {
+                                1.0
+                            };
+                            sign * 10f64.powf(16.0 * lcg.unit() - 8.0)
+                        }
+                    })
+                    .collect();
+                let mut scattered = vec![7.0; n];
+                general.abs_times(&x, &mut scattered);
+                for per in [1, 2, 3, 7, n, n + 5] {
+                    let mut gathered = vec![7.0; n];
+                    adjacency.abs_gathered(&lower, per, &x, &mut gathered);
+                    let bits = |v: &[f64]| v.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+                    assert_eq!(
+                        bits(&gathered),
+                        bits(&scattered),
+                        "case {case}, {per} a task"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_gathered_product_matches_the_scatter_at_f64() {
+        gathered_matches_scatter::<f64>();
+    }
+
+    #[test]
+    fn a_gathered_product_matches_the_scatter_at_f32() {
+        gathered_matches_scatter::<f32>();
+    }
 }

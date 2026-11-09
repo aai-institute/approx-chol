@@ -165,15 +165,13 @@ impl<A, I: Index> Cuts<A, I> {
                 };
                 // About `2^PARALLEL_BITS` vertices a task: waking the pool for less costs more than it saves.
                 let work = components.coupled.iter().map(|c| c.len() as u64).sum();
-                let per_task = crate::per_task(count, work, PARALLEL_BITS);
-                let parallel = per_task < count && rayon::current_num_threads() > 1;
-                let blocks: Vec<_> = match parallel {
-                    true => (0..count)
+                let blocks: Vec<_> = match crate::split(count, work, PARALLEL_BITS) {
+                    Some(per_task) => (0..count)
                         .into_par_iter()
                         .with_min_len(per_task)
                         .map(cut)
                         .collect(),
-                    false => (0..count).map(cut).collect(),
+                    None => (0..count).map(cut).collect(),
                 };
                 // Kept past extraction, an owned assembly raised the Gram peak 11–22%.
                 drop(a);

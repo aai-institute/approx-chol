@@ -59,3 +59,7 @@ harness = false
 [[bench]]
 name = "ingest"
 harness = false
+
+[[bench]]
+name = "reduce"
+harness = false
