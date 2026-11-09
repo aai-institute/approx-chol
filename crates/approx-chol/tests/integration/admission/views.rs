@@ -1,5 +1,5 @@
 use approx_chol::input::{
-    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm, ViewError,
+    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, InputError, Laplacian, Sddm,
 };
 use approx_chol::{
     factorize, factorize_with, ApproxInverse, Config, Error, ReduceError, ScalingPolicy,
@@ -16,29 +16,28 @@ use super::assert_names_a_defect;
 const PATH_A: [u32; 2] = [0, 1];
 const PATH_B: [u32; 2] = [1, 2];
 
-fn two_edges_but(found: usize) -> ViewError {
-    ViewError::LengthMismatch { expected: 2, found }
-}
-
 fn unit_path() -> Laplacian<'static, f64> {
     Laplacian::new(3, &PATH_A, &PATH_B).unwrap()
 }
 
 /// Left rows `0, 1` on one right row, columns scaled by `s`: the path `0 − 2 − 1`.
-fn scaled_bipartite_path(s: &[f64]) -> Result<BipartiteFactorWidth2<'_, f64>, ViewError> {
+fn scaled_bipartite_path(s: &[f64]) -> Result<BipartiteFactorWidth2<'_, f64>, InputError> {
     let left = FactorWidth1::new(2, &[0u32, 1], None)?;
     let right = FactorWidth1::new(1, &[0u32, 0], None)?;
     BipartiteFactorWidth2::scaled(left, right, s)
 }
 
 #[rstest]
-#[case::negative(-1.0)]
-#[case::nan(f64::NAN)]
-#[case::infinite(f64::INFINITY)]
-fn a_weighted_laplacian_rejects_a_negative_or_non_finite_weight_at_its_entry(#[case] weight: f64) {
+#[case::negative(-1.0, InputError::Negative { parameter: "w", entry: 1 })]
+#[case::nan(f64::NAN, InputError::OutOfRange { parameter: "w", entry: 1 })]
+#[case::infinite(f64::INFINITY, InputError::OutOfRange { parameter: "w", entry: 1 })]
+fn a_weighted_laplacian_rejects_a_negative_or_non_finite_weight_at_its_entry(
+    #[case] weight: f64,
+    #[case] expected: InputError,
+) {
     let w = [1.0, weight];
     let error = Laplacian::weighted(3, &PATH_A, &PATH_B, &w).expect_err("invalid weight");
-    assert_eq!(error, ViewError::InvalidWeight { entry: 1 });
+    assert_eq!(error, expected);
 }
 
 #[test]
@@ -52,7 +51,13 @@ fn a_weighted_laplacian_admits_a_zero_weight() {
 #[case::infinite(f64::NEG_INFINITY)]
 fn a_scaled_bipartite_rejects_a_non_finite_scale_at_its_entry(#[case] scale: f64) {
     let error = scaled_bipartite_path(&[1.0, scale]).expect_err("invalid scale");
-    assert_eq!(error, ViewError::InvalidScale { entry: 1 });
+    assert_eq!(
+        error,
+        InputError::OutOfRange {
+            parameter: "s",
+            entry: 1
+        }
+    );
 }
 
 #[test]
@@ -79,23 +84,27 @@ fn a_scale_whose_square_underflows_is_out_of_range_at_its_column() {
 #[rstest]
 #[case::ends_of_unequal_length(
     Laplacian::<f64>::new(3, &[0, 1], &[1]).err(),
-    two_edges_but(1)
+    InputError::LengthMismatch { parameter: "v", expected: 2, found: 1 }
 )]
 #[case::a_weight_per_edge(
     Laplacian::weighted(3, &PATH_A, &PATH_B, &[1.0, 2.0, 3.0]).err(),
-    two_edges_but(3)
+    InputError::LengthMismatch { parameter: "w", expected: 2, found: 3 }
 )]
 #[case::end_past_n(
     Laplacian::<f64>::new(3, &[0, 1], &[1, 3]).err(),
-    ViewError::IndexOutOfRange { entry: 1 }
+    InputError::IndexOutOfRange { parameter: "v", entry: 1 }
+)]
+#[case::start_past_n(
+    Laplacian::<f64>::new(3, &[0, 3], &[1, 2]).err(),
+    InputError::IndexOutOfRange { parameter: "u", entry: 1 }
 )]
 #[case::self_loop(
     Laplacian::<f64>::new(3, &[0, 2], &[1, 2]).err(),
-    ViewError::RepeatedVertex { entry: 1 }
+    InputError::SelfLoop { edge: 1 }
 )]
 fn laplacian_new_rejects_mismatched_lengths_and_bad_ends_at_their_entry(
-    #[case] observed: Option<ViewError>,
-    #[case] expected: ViewError,
+    #[case] observed: Option<InputError>,
+    #[case] expected: InputError,
 ) {
     assert_eq!(observed, Some(expected));
 }
@@ -105,7 +114,8 @@ fn sddm_new_rejects_a_surplus_per_vertex_short() {
     let short = Sddm::new(unit_path(), &[1.0, 1.0]).expect_err("one surplus per vertex");
     assert_eq!(
         short,
-        ViewError::LengthMismatch {
+        InputError::LengthMismatch {
+            parameter: "surplus",
             expected: 3,
             found: 2
         }
@@ -113,12 +123,15 @@ fn sddm_new_rejects_a_surplus_per_vertex_short() {
 }
 
 #[rstest]
-#[case::negative(-1.0)]
-#[case::nan(f64::NAN)]
-#[case::infinite(f64::INFINITY)]
-fn sddm_new_rejects_a_bad_surplus_at_its_vertex(#[case] surplus: f64) {
+#[case::negative(-1.0, InputError::Negative { parameter: "surplus", entry: 2 })]
+#[case::nan(f64::NAN, InputError::OutOfRange { parameter: "surplus", entry: 2 })]
+#[case::infinite(f64::INFINITY, InputError::OutOfRange { parameter: "surplus", entry: 2 })]
+fn sddm_new_rejects_a_bad_surplus_at_its_vertex(
+    #[case] surplus: f64,
+    #[case] expected: InputError,
+) {
     let error = Sddm::new(unit_path(), &[1.0, 0.0, surplus]).expect_err("invalid surplus");
-    assert_eq!(error, ViewError::InvalidSurplus { vertex: 2 });
+    assert_eq!(error, expected);
 }
 
 #[rstest]
@@ -126,7 +139,7 @@ fn sddm_new_rejects_a_bad_surplus_at_its_vertex(#[case] surplus: f64) {
 #[case::negative_zero(-0.0)]
 fn sddm_new_rejects_an_all_zero_surplus_as_a_laplacian(#[case] zero: f64) {
     let error = Sddm::new(unit_path(), &[0.0, zero, 0.0]).expect_err("a Laplacian");
-    assert_eq!(error, ViewError::ZeroSurplus);
+    assert_eq!(error, InputError::ZeroSurplus);
 }
 
 /// Below the floor, a ground past its band needs a coupling near the floor: `FLOOR/2` on `d = 1.5·FLOOR`.
@@ -157,36 +170,53 @@ fn factor_width_1_new_rejects_mismatched_values_and_rows_past_n() {
     let mismatch = FactorWidth1::new(3, &[0u32, 1, 2], Some(&[1.0, 2.0][..])).expect_err("values");
     assert_eq!(
         mismatch,
-        ViewError::LengthMismatch {
+        InputError::LengthMismatch {
+            parameter: "values",
             expected: 3,
             found: 2
         }
     );
     let past = FactorWidth1::<f64>::new(3, &[0u32, 3, 2], None).expect_err("row past n");
-    assert_eq!(past, ViewError::IndexOutOfRange { entry: 1 });
-    let negative = FactorWidth1::<f64, i64>::new(3, &[0, 1, -1], None).expect_err("negative row");
-    assert_eq!(negative, ViewError::IndexOutOfRange { entry: 2 });
+    assert_eq!(
+        past,
+        InputError::IndexOutOfRange {
+            parameter: "rows",
+            entry: 1
+        }
+    );
+    let below = FactorWidth1::<f64, i64>::new(3, &[0, 1, -1], None).expect_err("negative row");
+    assert_eq!(
+        below,
+        InputError::IndexOutOfRange {
+            parameter: "rows",
+            entry: 2
+        }
+    );
 }
 
-fn gram(a: &[u32], b: &[u32], x: &[f64], y: &[f64]) -> Option<ViewError> {
+fn gram(a: &[u32], b: &[u32], x: &[f64], y: &[f64]) -> Option<InputError> {
     FactorWidth2::new(3, (a, x), (b, y)).err()
 }
 
 #[rstest]
-#[case::b_one_short(gram(&PATH_A, &[1], &[1.0, 1.0], &[-1.0, -1.0]), two_edges_but(1))]
-#[case::x_one_short(gram(&PATH_A, &PATH_B, &[1.0], &[-1.0, -1.0]), two_edges_but(1))]
-#[case::y_one_short(gram(&PATH_A, &PATH_B, &[1.0, 1.0], &[1.0]), two_edges_but(1))]
+#[case::b_one_short(gram(&PATH_A, &[1], &[1.0, 1.0], &[-1.0, -1.0]), InputError::LengthMismatch { parameter: "b", expected: 2, found: 1 })]
+#[case::x_one_short(gram(&PATH_A, &PATH_B, &[1.0], &[-1.0, -1.0]), InputError::LengthMismatch { parameter: "x", expected: 2, found: 1 })]
+#[case::y_one_short(gram(&PATH_A, &PATH_B, &[1.0, 1.0], &[1.0]), InputError::LengthMismatch { parameter: "y", expected: 2, found: 1 })]
 #[case::end_past_n(
     gram(&PATH_A, &[1, 3], &[1.0, 1.0], &[-1.0, -1.0]),
-    ViewError::IndexOutOfRange { entry: 1 }
+    InputError::IndexOutOfRange { parameter: "b", entry: 1 }
 )]
-#[case::repeated_vertex(
+#[case::start_past_n(
+    gram(&[0, 3], &PATH_B, &[1.0, 1.0], &[-1.0, -1.0]),
+    InputError::IndexOutOfRange { parameter: "a", entry: 1 }
+)]
+#[case::repeated_row(
     gram(&[0, 2], &PATH_B, &[1.0, 1.0], &[-1.0, -1.0]),
-    ViewError::RepeatedVertex { entry: 1 }
+    InputError::RepeatedRow { column: 1 }
 )]
 fn factor_width_2_new_rejects_mismatched_lengths_and_bad_ends_at_their_entry(
-    #[case] observed: Option<ViewError>,
-    #[case] expected: ViewError,
+    #[case] observed: Option<InputError>,
+    #[case] expected: InputError,
 ) {
     assert_eq!(observed, Some(expected));
 }
@@ -211,7 +241,8 @@ fn bipartite_gram_new_rejects_sides_of_unequal_column_count() {
     let error = BipartiteFactorWidth2::new(left, right).expect_err("column counts");
     assert_eq!(
         error,
-        ViewError::LengthMismatch {
+        InputError::LengthMismatch {
+            parameter: "right",
             expected: 3,
             found: 2
         }
@@ -225,7 +256,21 @@ fn weights_or_scales_of_another_column_count_are_rejected() {
         Laplacian::weighted(3, &PATH_A, &PATH_B, &w).err(),
         scaled_bipartite_path(&w).err(),
     ];
-    assert_eq!(errors, [Some(two_edges_but(1)); 2]);
+    assert_eq!(
+        errors,
+        [
+            Some(InputError::LengthMismatch {
+                parameter: "w",
+                expected: 2,
+                found: 1
+            }),
+            Some(InputError::LengthMismatch {
+                parameter: "s",
+                expected: 2,
+                found: 1
+            })
+        ]
+    );
 }
 
 #[rstest]
@@ -330,13 +375,13 @@ fn a_grounded_signed_graph_solves_its_matrix(
 }
 
 #[rstest]
-#[case::left_past_its_part(&[0, 2], &[0, 1], Some(ViewError::IndexOutOfRange { entry: 1 }))]
-#[case::right_past_its_part(&[0, 1], &[1, 2], Some(ViewError::IndexOutOfRange { entry: 1 }))]
+#[case::left_past_its_part(&[0, 2], &[0, 1], Some(InputError::IndexOutOfRange { parameter: "rows", entry: 1 }))]
+#[case::right_past_its_part(&[0, 1], &[1, 2], Some(InputError::IndexOutOfRange { parameter: "rows", entry: 1 }))]
 #[case::equal_rows_are_distinct_vertices(&[1, 0], &[1, 0], None)]
 fn a_bipartite_incidence_checks_each_end_against_its_own_part(
     #[case] a: &[u32],
     #[case] b: &[u32],
-    #[case] expected: Option<ViewError>,
+    #[case] expected: Option<InputError>,
 ) {
     let side = |rows| FactorWidth1::<f64>::new(2, rows, None);
     let found = side(a)

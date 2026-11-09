@@ -5,7 +5,7 @@ mod faer;
 #[cfg(feature = "sprs")]
 mod sprs;
 
-use approx_chol::input::{CsrError, CsrRef, Input};
+use approx_chol::input::{CsrRef, Input, InputError};
 use approx_chol::{factorize, ApproxInverse};
 use num_traits::PrimInt;
 
@@ -22,8 +22,8 @@ fn assert_solves_fixture<'a, I, M>(matrix: M)
 where
     I: PrimInt + Sync + 'a,
     M: Copy
-        + TryInto<CsrRef<'a, f64, I>, Error = CsrError>
-        + TryInto<Input<'a, f64, I>, Error = CsrError>,
+        + TryInto<CsrRef<'a, f64, I>, Error = InputError>
+        + TryInto<Input<'a, f64, I>, Error = InputError>,
 {
     let csr: CsrRef<'a, f64, I> = matrix.try_into().expect("valid CSR view");
     assert_eq!(csr.n(), N);

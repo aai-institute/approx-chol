@@ -1,5 +1,5 @@
 use approx_chol::input::{
-    BipartiteFactorWidth2, CsrError, CsrRef, FactorWidth1, FactorWidth2, Laplacian, UpperCsrRef,
+    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, InputError, Laplacian, UpperCsrRef,
 };
 use approx_chol::{factorize, ApproxInverse, Error, ReduceError};
 use rstest::rstest;
@@ -11,10 +11,6 @@ use crate::common::out_of_range::{out_of_range, F32_FLOOR, FLOOR};
 use crate::common::solve::Solve;
 
 use super::{assert_names_a_defect, reduce, reduce_upper};
-
-fn csr(error: CsrError) -> Error {
-    Error::InvalidCsr(error)
-}
 
 /// The same matrix with every row's entries reversed, which forces the canonicalizing copy.
 fn reversed_rows<T: Copy>(row_ptrs: &[u32], columns: &[u32], values: &[T]) -> (Vec<u32>, Vec<T>) {
@@ -32,52 +28,52 @@ fn reversed_rows<T: Copy>(row_ptrs: &[u32], columns: &[u32], values: &[T]) -> (V
     &[0, 2, 3],
     &[0, 1, 1],
     &[1.0, -1.0, 1.0],
-    &[csr(CsrError::NotSymmetric { row: 0 }), csr(CsrError::NotSymmetric { row: 1 })],
+    &[Error::Input(InputError::NotSymmetric { row: 0 }), Error::Input(InputError::NotSymmetric { row: 1 })],
 )]
 // The lower entry is stored and its upper is absent: the mirror cursor skips past it.
 #[case::missing_upper_mirror(
     &[0, 1, 3],
     &[0, 0, 1],
     &[1.0, -1.0, 1.0],
-    &[csr(CsrError::NotSymmetric { row: 0 }), csr(CsrError::NotSymmetric { row: 1 })],
+    &[Error::Input(InputError::NotSymmetric { row: 0 }), Error::Input(InputError::NotSymmetric { row: 1 })],
 )]
 #[case::unequal_transpose(
     &[0, 2, 4],
     &[0, 1, 0, 1],
     &[1.0, -1.0, -2.0, 2.0],
-    &[csr(CsrError::NotSymmetric { row: 0 }), csr(CsrError::NotSymmetric { row: 1 })],
+    &[Error::Input(InputError::NotSymmetric { row: 0 }), Error::Input(InputError::NotSymmetric { row: 1 })],
 )]
 #[case::mirrors_nine_ulps_apart(
     &[0, 2, 4],
     &[0, 1, 0, 1],
     &[2.0, -1.0, -(1.0 + 9.0 * f64::EPSILON), 2.0],
-    &[csr(CsrError::NotSymmetric { row: 0 }), csr(CsrError::NotSymmetric { row: 1 })],
+    &[Error::Input(InputError::NotSymmetric { row: 0 }), Error::Input(InputError::NotSymmetric { row: 1 })],
 )]
-#[case::stored_nan(&[0, 1], &[0], &[f64::NAN], &[csr(CsrError::OutOfRange { row: 0 })])]
+#[case::stored_nan(&[0, 1], &[0], &[f64::NAN], &[Error::Input(InputError::InadmissibleRow { row: 0 })])]
 #[case::stored_infinity_off_the_diagonal(
     &[0, 2, 4],
     &[0, 1, 0, 1],
     &[1.0, f64::NEG_INFINITY, f64::NEG_INFINITY, 1.0],
-    &[csr(CsrError::OutOfRange { row: 0 }), csr(CsrError::OutOfRange { row: 1 })],
+    &[Error::Input(InputError::InadmissibleRow { row: 0 }), Error::Input(InputError::InadmissibleRow { row: 1 })],
 )]
 // Descending columns in row 0, so the row must be the caller's, not the canonical copy's.
 #[case::stored_nan_in_a_later_row_of_non_canonical_input(
     &[0, 2, 5, 7],
     &[1, 0, 2, 1, 0, 2, 1],
     &[-1.0, 1.0, -1.0, 2.0, f64::NAN, 1.0, -1.0],
-    &[csr(CsrError::OutOfRange { row: 1 })],
+    &[Error::Input(InputError::InadmissibleRow { row: 1 })],
 )]
 #[case::overflow_via_coalesced_duplicates(
     &[0, 3, 6],
     &[0, 1, 1, 0, 0, 1],
     &[f64::MAX, -f64::MAX, -f64::MAX, -f64::MAX, -f64::MAX, f64::MAX],
-    &[csr(CsrError::OutOfRange { row: 0 }), csr(CsrError::OutOfRange { row: 1 })],
+    &[Error::Input(InputError::InadmissibleRow { row: 0 }), Error::Input(InputError::InadmissibleRow { row: 1 })],
 )]
 #[case::overflow_via_duplicate_diagonal(
     &[0, 2],
     &[0, 0],
     &[f64::MAX, f64::MAX],
-    &[csr(CsrError::OutOfRange { row: 0 })],
+    &[Error::Input(InputError::InadmissibleRow { row: 0 })],
 )]
 // Every entry in range and the matrix GDD, but the centre's `Σ|a_ij|` passes `MAX/4`.
 #[case::absolute_row_sum_past_a_quarter_of_the_maximum(
@@ -100,20 +96,20 @@ fn reversed_rows<T: Copy>(row_ptrs: &[u32], columns: &[u32], values: &[T]) -> (V
     &[0, 2, 4],
     &[0, 1, 0, 1],
     &[1.0, -1e-310, -1e-310, 1.0],
-    &[csr(CsrError::OutOfRange { row: 0 }), csr(CsrError::OutOfRange { row: 1 })],
+    &[Error::Input(InputError::InadmissibleRow { row: 0 }), Error::Input(InputError::InadmissibleRow { row: 1 })],
 )]
-#[case::subnormal_diagonal(&[0, 1], &[0], &[1e-310], &[csr(CsrError::OutOfRange { row: 0 })])]
+#[case::subnormal_diagonal(&[0, 1], &[0], &[1e-310], &[Error::Input(InputError::InadmissibleRow { row: 0 })])]
 #[case::normal_edge_below_min_positive_over_epsilon(
     &[0, 2, 4],
     &[0, 1, 0, 1],
     &[1.0, -FLOOR / 2.0, -FLOOR / 2.0, 1.0],
-    &[csr(CsrError::OutOfRange { row: 0 }), csr(CsrError::OutOfRange { row: 1 })],
+    &[Error::Input(InputError::InadmissibleRow { row: 0 }), Error::Input(InputError::InadmissibleRow { row: 1 })],
 )]
 #[case::subnormal_edge_in_a_later_row(
     &[0, 1, 3, 5],
     &[0, 1, 2, 1, 2],
     &[1.0, 1.0, -1e-310, -1e-310, 1.0],
-    &[csr(CsrError::OutOfRange { row: 1 }), csr(CsrError::OutOfRange { row: 2 })],
+    &[Error::Input(InputError::InadmissibleRow { row: 1 }), Error::Input(InputError::InadmissibleRow { row: 2 })],
 )]
 #[case::negative_diagonal(
     &[0, 1],
@@ -149,25 +145,25 @@ fn out_of_class_input_is_rejected_at_its_reported_position(
     &[0, 1, 3],
     &[0, 0, 1],
     &[1.0, -1.0, 1.0],
-    &[csr(CsrError::BelowDiagonal { row: 1 })],
+    &[Error::Input(InputError::OutsideTriangle { row: 1 })],
 )]
 #[case::entry_below_the_diagonal_in_non_canonical_input(
     &[0, 2, 4],
     &[1, 0, 1, 0],
     &[-1.0, 1.0, 1.0, -1.0],
-    &[csr(CsrError::BelowDiagonal { row: 1 })],
+    &[Error::Input(InputError::OutsideTriangle { row: 1 })],
 )]
 #[case::entry_below_the_diagonal_after_a_stored_zero(
     &[0, 2, 4, 7],
     &[0, 1, 1, 2, 0, 1, 2],
     &[1.0, -1.0, 2.0, -1.0, 0.0, -1.0, 1.0],
-    &[csr(CsrError::BelowDiagonal { row: 2 })],
+    &[Error::Input(InputError::OutsideTriangle { row: 2 })],
 )]
 #[case::stored_nan(
     &[0, 2, 3],
     &[0, 1, 1],
     &[1.0, f64::NAN, 1.0],
-    &[csr(CsrError::OutOfRange { row: 0 })],
+    &[Error::Input(InputError::InadmissibleRow { row: 0 })],
 )]
 fn out_of_class_upper_storage_is_rejected_at_its_reported_position(
     #[case] row_ptrs: &[u32],
@@ -282,11 +278,12 @@ fn an_empty_system_is_admitted_by_every_entry_point(#[case] factor: ApproxInvers
 #[case::csr(CsrRef::<f64>::new(&[0], &[], &[], u32::MAX).err())]
 #[case::upper_csr(UpperCsrRef::<f64>::new(&[0], &[], &[], u32::MAX).err())]
 fn a_dimension_past_the_largest_row_count_is_a_row_pointer_length_mismatch(
-    #[case] error: Option<CsrError>,
+    #[case] error: Option<InputError>,
 ) {
-    let expected = CsrError::RowPtrsLenMismatch {
+    let expected = InputError::LengthMismatch {
+        parameter: "row_ptrs",
         expected: u32::MAX as usize + 1,
-        got: 1,
+        found: 1,
     };
     assert_eq!(error, Some(expected));
 }
@@ -308,12 +305,12 @@ fn f32_pair(diagonal: f32, edge: f32) -> Result<ApproxInverse<f32>, Error> {
 #[case::subnormal_edge(
     1.0,
     -1e-40,
-    &[csr(CsrError::OutOfRange { row: 0 }), csr(CsrError::OutOfRange { row: 1 })],
+    &[Error::Input(InputError::InadmissibleRow { row: 0 }), Error::Input(InputError::InadmissibleRow { row: 1 })],
 )]
 #[case::normal_edge_below_the_floor(
     1.0,
     -F32_FLOOR / 2.0,
-    &[csr(CsrError::OutOfRange { row: 0 }), csr(CsrError::OutOfRange { row: 1 })],
+    &[Error::Input(InputError::InadmissibleRow { row: 0 }), Error::Input(InputError::InadmissibleRow { row: 1 })],
 )]
 #[case::diagonal_past_a_quarter_of_the_maximum(
     f32::MAX,

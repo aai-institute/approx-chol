@@ -3,6 +3,7 @@ use std::ops::Range;
 
 use num_traits::{cast, PrimInt};
 
+use super::error::{dimension, length, InputError};
 use super::index;
 use crate::in_range;
 use crate::Real;
@@ -16,45 +17,26 @@ pub struct CsrRef<'a, T = f64, I = u32> {
 }
 
 impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
-    /// Checks the arrays' shape in 0.6.0's order, so no row slice can fail and each defect reports as it did.
+    /// Checks the arrays' shape, so no row slice can fail.
     pub fn new(
         row_ptrs: &'a [I],
         col_indices: &'a [I],
         values: &'a [T],
         n: u32,
-    ) -> Result<Self, CsrError> {
+    ) -> Result<Self, InputError> {
         let n = n as usize;
-        if row_ptrs.len() != n + 1 {
-            return Err(CsrError::RowPtrsLenMismatch {
-                expected: n + 1,
-                got: row_ptrs.len(),
-            });
-        }
-        if col_indices.len() != values.len() {
-            return Err(CsrError::ColIndicesValuesLenMismatch {
-                col_indices_len: col_indices.len(),
-                values_len: values.len(),
-            });
-        }
-        let row_ptr_last = as_usize(row_ptrs[n], IndexKind::RowPtr, n)?;
+        length("row_ptrs", n + 1, row_ptrs.len())?;
+        length("values", col_indices.len(), values.len())?;
+        let row_ptr_last = representable(row_ptrs, n)?;
         if row_ptrs[0] != I::zero() {
-            return Err(CsrError::RowPtrsMustStartAtZero {
-                got: as_usize(row_ptrs[0], IndexKind::RowPtr, 0)?,
-            });
+            representable(row_ptrs, 0)?;
+            return Err(InputError::RowPtrs { row: 0 });
         }
-        if row_ptr_last != col_indices.len() {
-            return Err(CsrError::RowPtrsEndMismatchNnz {
-                row_ptr_end: row_ptr_last,
-                nnz: col_indices.len(),
-            });
-        }
-        // Compared in `I`, so only the error arm converts a pointer to `usize`.
+        length("col_indices", row_ptr_last, col_indices.len())?;
+        // From 0 and in order up to a decrease, only the pointer after it can be negative.
         if let Some(row) = (0..n).find(|&i| row_ptrs[i] > row_ptrs[i + 1]) {
-            return Err(CsrError::RowPtrsNotNonDecreasing {
-                row,
-                prev: as_usize(row_ptrs[row], IndexKind::RowPtr, row)?,
-                next: as_usize(row_ptrs[row + 1], IndexKind::RowPtr, row + 1)?,
-            });
+            representable(row_ptrs, row + 1)?;
+            return Err(InputError::RowPtrs { row });
         }
         Ok(Self {
             row_ptrs,
@@ -85,11 +67,11 @@ impl<'a, T, I: PrimInt> CsrRef<'a, T, I> {
 }
 
 impl<T: Clone, I: PrimInt> CsrRef<'_, T, I> {
-    /// Owned copy with `u32` indices; [`CsrError::IndexExceedsIndexType`] if an index does not fit.
-    pub fn to_owned_u32(&self) -> Result<OwnedCsr<T, u32>, CsrError> {
+    /// Owned copy with `u32` indices; [`InputError::IndexOutOfRange`] if an index does not fit.
+    pub fn to_owned_u32(&self) -> Result<OwnedCsr<T, u32>, InputError> {
         Ok(OwnedCsr {
-            row_ptrs: cast_slice(self.row_ptrs, IndexKind::RowPtr)?,
-            col_indices: cast_slice(self.col_indices, IndexKind::ColIndex)?,
+            row_ptrs: cast_slice("row_ptrs", self.row_ptrs)?,
+            col_indices: cast_slice("col_indices", self.col_indices)?,
             values: self.values.to_vec(),
         })
     }
@@ -106,7 +88,7 @@ impl<'a, T, I: PrimInt> UpperCsrRef<'a, T, I> {
         col_indices: &'a [I],
         values: &'a [T],
         n: u32,
-    ) -> Result<Self, CsrError> {
+    ) -> Result<Self, InputError> {
         CsrRef::new(row_ptrs, col_indices, values, n).map(Self)
     }
 
@@ -130,10 +112,10 @@ impl<T: Clone, I: PrimInt> OwnedCsr<T, I> {
         col_indices: &[usize],
         values: &[T],
         n: usize,
-    ) -> Result<Self, CsrError> {
-        let n = u32::try_from(n).map_err(|_| CsrError::MatrixDimensionExceedsIndexType { n })?;
-        let row_ptrs = cast_slice(row_ptrs, IndexKind::RowPtr)?;
-        let col_indices = cast_slice(col_indices, IndexKind::ColIndex)?;
+    ) -> Result<Self, InputError> {
+        let n = dimension(n)?;
+        let row_ptrs = cast_slice("row_ptrs", row_ptrs)?;
+        let col_indices = cast_slice("col_indices", col_indices)?;
         CsrRef::new(&row_ptrs, &col_indices, values, n)?;
         Ok(Self {
             row_ptrs,
@@ -160,35 +142,23 @@ impl<'a, T, I: PrimInt> From<&'a OwnedCsr<T, I>> for CsrRef<'a, T, I> {
     }
 }
 
-fn as_usize<I: PrimInt>(value: I, kind: IndexKind, position: usize) -> Result<usize, CsrError> {
-    (value.to_usize()).ok_or(CsrError::IndexNotRepresentableAsUsize { kind, position })
+fn representable<I: PrimInt>(row_ptrs: &[I], entry: usize) -> Result<usize, InputError> {
+    (row_ptrs[entry].to_usize()).ok_or(InputError::IndexOutOfRange {
+        parameter: "row_ptrs",
+        entry,
+    })
 }
 
 /// Reserves up front: collecting into `Option<Vec<_>>` drops the size hint and cost 3.5x the traffic.
-fn cast_slice<S: PrimInt, D: PrimInt>(src: &[S], kind: IndexKind) -> Result<Vec<D>, CsrError> {
+fn cast_slice<S: PrimInt, D: PrimInt>(
+    parameter: &'static str,
+    src: &[S],
+) -> Result<Vec<D>, InputError> {
     let mut out = Vec::with_capacity(src.len());
-    for &value in src {
-        out.push(cast::<S, D>(value).ok_or(CsrError::IndexExceedsIndexType { kind })?);
+    for (entry, &value) in src.iter().enumerate() {
+        out.push(cast::<S, D>(value).ok_or(InputError::IndexOutOfRange { parameter, entry })?);
     }
     Ok(out)
-}
-
-/// Which CSR array an index belongs to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IndexKind {
-    /// `row_ptrs` array.
-    RowPtr,
-    /// `col_indices` array.
-    ColIndex,
-}
-
-impl core::fmt::Display for IndexKind {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::RowPtr => f.write_str("row_ptr"),
-            Self::ColIndex => f.write_str("col_index"),
-        }
-    }
 }
 
 /// Strictly ascending columns per row, all in range, values not yet read; scipy already emits them, so only rare input pays for a copy.
@@ -203,14 +173,14 @@ pub(crate) struct Canonical<'a, T: Clone, I: Clone>(Unchecked<'a, T, I>);
 
 impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
     /// `A` stored whole: every value in range, each nonzero's mirror within 8 ulps.
-    pub(crate) fn whole(csr: CsrRef<'a, T, I>) -> Result<Self, CsrError> {
+    pub(crate) fn whole(csr: CsrRef<'a, T, I>) -> Result<Self, InputError> {
         let unchecked = Unchecked::of(csr)?;
         unchecked.check_mirrors()?;
         Ok(Self(unchecked))
     }
 
     /// `A` stored by its upper triangle: every value in range, no nonzero below the diagonal.
-    pub(crate) fn upper(csr: CsrRef<'a, T, I>) -> Result<Self, CsrError> {
+    pub(crate) fn upper(csr: CsrRef<'a, T, I>) -> Result<Self, InputError> {
         let unchecked = Unchecked::of(csr)?;
         unchecked.check_upper()?;
         Ok(Self(unchecked))
@@ -259,7 +229,7 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
 
 impl<'a, T: Real, I: PrimInt> Unchecked<'a, T, I> {
     /// Reads no value, sparing a stream, unless it rewrites: the checks after it read each.
-    fn of(csr: CsrRef<'a, T, I>) -> Result<Self, CsrError> {
+    fn of(csr: CsrRef<'a, T, I>) -> Result<Self, InputError> {
         match is_canonical(&csr)? {
             true => Ok(Self {
                 row_ptrs: Cow::Borrowed(csr.row_ptrs),
@@ -285,7 +255,7 @@ impl<'a, T: Real, I: PrimInt> Unchecked<'a, T, I> {
     }
 
     /// Each nonzero `(i, j)`, `i < j`, its mirror found by a per-row cursor (binary search: +6-15% build).
-    fn check_mirrors(&self) -> Result<(), CsrError> {
+    fn check_mirrors(&self) -> Result<(), InputError> {
         let (row_ptrs, col_indices, values) = self.arrays();
         let mut cursors = row_ptrs[..self.n()].to_vec();
         for row in 0..self.n() {
@@ -293,7 +263,7 @@ impl<'a, T: Real, I: PrimInt> Unchecked<'a, T, I> {
             // Claimed like any mirror: claiming diagonals up front would skip those below.
             let diagonal = self.claim(&mut cursors, row, row)?;
             if !in_range(diagonal) {
-                return Err(CsrError::OutOfRange { row });
+                return Err(InputError::InadmissibleRow { row });
             }
             let mut cursor = cursors[row];
             while cursor < row_end {
@@ -301,7 +271,7 @@ impl<'a, T: Real, I: PrimInt> Unchecked<'a, T, I> {
                 let upper = values[index(cursor)];
                 cursor = cursor + I::one();
                 if !in_range(upper) {
-                    return Err(CsrError::OutOfRange { row });
+                    return Err(InputError::InadmissibleRow { row });
                 }
                 // Duplicates can coalesce to exactly zero, which needs no mirror.
                 if upper == T::zero() {
@@ -309,7 +279,7 @@ impl<'a, T: Real, I: PrimInt> Unchecked<'a, T, I> {
                 }
                 let lower = self.claim(&mut cursors, col, row)?;
                 if !approximately_equal(upper, lower) {
-                    return Err(CsrError::NotSymmetric { row });
+                    return Err(InputError::NotSymmetric { row });
                 }
             }
         }
@@ -317,7 +287,7 @@ impl<'a, T: Real, I: PrimInt> Unchecked<'a, T, I> {
     }
 
     /// Advances row `row`'s cursor to `col`; a merge-join only because each entry is claimed once. Stored zeros count as absent.
-    fn claim(&self, cursors: &mut [I], row: usize, col: usize) -> Result<T, CsrError> {
+    fn claim(&self, cursors: &mut [I], row: usize, col: usize) -> Result<T, InputError> {
         let (row_ptrs, col_indices, values) = self.arrays();
         let row_end = row_ptrs[row + 1];
         let mut cursor = cursors[row];
@@ -329,7 +299,7 @@ impl<'a, T: Real, I: PrimInt> Unchecked<'a, T, I> {
             }
             let value = values[index(cursor)];
             if !value.is_finite() {
-                return Err(CsrError::OutOfRange { row });
+                return Err(InputError::InadmissibleRow { row });
             }
             cursor = cursor + I::one();
             if at == col {
@@ -339,7 +309,7 @@ impl<'a, T: Real, I: PrimInt> Unchecked<'a, T, I> {
             // Skipped a stored entry whose own mirror above the diagonal is missing.
             if value != T::zero() {
                 cursors[row] = cursor;
-                return Err(CsrError::NotSymmetric { row });
+                return Err(InputError::NotSymmetric { row });
             }
         }
         cursors[row] = cursor;
@@ -347,16 +317,16 @@ impl<'a, T: Real, I: PrimInt> Unchecked<'a, T, I> {
     }
 
     /// Upper storage is symmetric by shape: no mirror is found, and a nonzero below the diagonal is rejected.
-    fn check_upper(&self) -> Result<(), CsrError> {
+    fn check_upper(&self) -> Result<(), InputError> {
         let (row_ptrs, col_indices, values) = self.arrays();
         for row in 0..self.n() {
             let span = index(row_ptrs[row])..index(row_ptrs[row + 1]);
             for (&col, &value) in col_indices[span.clone()].iter().zip(&values[span]) {
                 if !in_range(value) {
-                    return Err(CsrError::OutOfRange { row });
+                    return Err(InputError::InadmissibleRow { row });
                 }
                 if index(col) < row && value != T::zero() {
-                    return Err(CsrError::BelowDiagonal { row });
+                    return Err(InputError::OutsideTriangle { row });
                 }
             }
         }
@@ -375,7 +345,7 @@ fn approximately_equal<T: Real>(left: T, right: T) -> bool {
 }
 
 /// Accumulated, not short-circuited: the `all` form measured 0.4-2% slower.
-fn is_canonical<T, I: PrimInt>(csr: &CsrRef<'_, T, I>) -> Result<bool, CsrError> {
+fn is_canonical<T, I: PrimInt>(csr: &CsrRef<'_, T, I>) -> Result<bool, InputError> {
     // `None` means `I` cannot represent `n`, so every `I` value is below it.
     let limit = I::from(csr.n());
     let mut canonical = true;
@@ -384,7 +354,10 @@ fn is_canonical<T, I: PrimInt>(csr: &CsrRef<'_, T, I>) -> Result<bool, CsrError>
         let start = index(bounds[0]);
         let columns = &csr.col_indices[start..index(bounds[1])];
         if let Some(at) = columns.iter().position(|&j| outside(j)) {
-            return Err(column_error(start + at, columns[at], csr.n()));
+            return Err(InputError::IndexOutOfRange {
+                parameter: "col_indices",
+                entry: start + at,
+            });
         }
         for pair in columns.windows(2) {
             canonical &= pair[0] < pair[1];
@@ -393,22 +366,10 @@ fn is_canonical<T, I: PrimInt>(csr: &CsrRef<'_, T, I>) -> Result<bool, CsrError>
     Ok(canonical)
 }
 
-/// 0.6.0's report of a column outside `0..n`; built only on the error path.
-#[cold]
-fn column_error<I: PrimInt>(position: usize, col: I, n: usize) -> CsrError {
-    match (col >= I::zero()).then(|| col.to_usize()).flatten() {
-        Some(col) => CsrError::ColumnIndexOutOfBounds { position, col, n },
-        None => CsrError::IndexNotRepresentableAsUsize {
-            kind: IndexKind::ColIndex,
-            position,
-        },
-    }
-}
-
 /// Only non-canonical input pays this copy, in its own index type.
 fn rewrite<'a, T: Real, I: PrimInt>(
     csr: &CsrRef<'_, T, I>,
-) -> Result<Unchecked<'a, T, I>, CsrError> {
+) -> Result<Unchecked<'a, T, I>, InputError> {
     let nnz = csr.col_indices.len();
     let mut row_ptrs = Vec::with_capacity(csr.row_ptrs.len());
     let mut col_indices = Vec::with_capacity(nnz);
@@ -430,7 +391,7 @@ fn rewrite<'a, T: Real, I: PrimInt>(
             let folded = group[1..].iter().fold(group[0].1, |sum, &(_, v)| sum + v);
             // Only this fold can overflow; caught here so downstream stays all-finite.
             if !folded.is_finite() {
-                return Err(CsrError::OutOfRange { row });
+                return Err(InputError::InadmissibleRow { row });
             }
             col_indices.push(group[0].0);
             values.push(folded);
@@ -444,151 +405,3 @@ fn rewrite<'a, T: Real, I: PrimInt>(
         values: Cow::Owned(values),
     })
 }
-
-/// Why a CSR is not a symmetric matrix; the variants 0.6.0 had come first, in its order.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CsrError {
-    /// `row_ptrs.len()` does not equal `n + 1`.
-    RowPtrsLenMismatch {
-        /// Expected `row_ptrs` length (`n + 1`).
-        expected: usize,
-        /// Actual `row_ptrs` length.
-        got: usize,
-    },
-    /// `col_indices.len()` does not equal `values.len()`.
-    ColIndicesValuesLenMismatch {
-        /// Length of the column-index array.
-        col_indices_len: usize,
-        /// Length of the values array.
-        values_len: usize,
-    },
-    /// An index value cannot be represented as `usize`.
-    IndexNotRepresentableAsUsize {
-        /// Which CSR array the bad value came from.
-        kind: IndexKind,
-        /// Position in the source array.
-        position: usize,
-    },
-    /// `row_ptrs[0]` must be zero.
-    RowPtrsMustStartAtZero {
-        /// The observed non-zero start pointer.
-        got: usize,
-    },
-    /// `row_ptrs[n]` must match nnz.
-    RowPtrsEndMismatchNnz {
-        /// Value of `row_ptrs[n]`.
-        row_ptr_end: usize,
-        /// Number of non-zeros (`col_indices.len()`).
-        nnz: usize,
-    },
-    /// `row_ptrs` must be non-decreasing.
-    RowPtrsNotNonDecreasing {
-        /// Row index `i` where `row_ptrs[i] > row_ptrs[i + 1]`.
-        row: usize,
-        /// Value of `row_ptrs[i]`.
-        prev: usize,
-        /// Value of `row_ptrs[i + 1]`.
-        next: usize,
-    },
-    /// Column index is out of bounds; found when the input factors.
-    ColumnIndexOutOfBounds {
-        /// Position in `col_indices`.
-        position: usize,
-        /// Out-of-bounds column value.
-        col: usize,
-        /// Matrix dimension.
-        n: usize,
-    },
-    /// An index does not fit the target index type.
-    IndexExceedsIndexType {
-        /// Which array the index came from.
-        kind: IndexKind,
-    },
-    /// The dimension does not fit `u32`.
-    MatrixDimensionExceedsIndexType {
-        /// The dimension.
-        n: usize,
-    },
-    /// A converted matrix is not square.
-    ExpectedSquareMatrix {
-        /// Its row count.
-        rows: usize,
-        /// Its column count.
-        cols: usize,
-    },
-    /// An entry has no mirror within 8 ulps.
-    NotSymmetric {
-        /// The offending row.
-        row: usize,
-    },
-    /// An upper triangle stores a nonzero entry, or a repeated column's nonzero sum, below its diagonal.
-    BelowDiagonal {
-        /// The offending row.
-        row: usize,
-    },
-    /// An entry or a repeated column's sum is not finite, or nonzero below `MIN_POSITIVE/EPSILON`.
-    OutOfRange {
-        /// The offending row.
-        row: usize,
-    },
-    /// A converted matrix's row leaves unused slots after its entries.
-    RowGap {
-        /// The first row with unused slots.
-        row: usize,
-    },
-}
-
-impl core::fmt::Display for CsrError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::RowPtrsLenMismatch { expected, got } => write!(
-                f,
-                "row_ptrs length != n + 1 (expected {expected}, got {got})"
-            ),
-            Self::ColIndicesValuesLenMismatch {
-                col_indices_len,
-                values_len,
-            } => write!(
-                f,
-                "col_indices and values have different lengths ({col_indices_len} != {values_len})"
-            ),
-            Self::IndexNotRepresentableAsUsize { kind, position } => write!(
-                f,
-                "{kind} value at position {position} cannot be represented as usize"
-            ),
-            Self::RowPtrsMustStartAtZero { got } => write!(f, "row_ptrs[0] must be 0 (got {got})"),
-            Self::RowPtrsEndMismatchNnz { row_ptr_end, nnz } => {
-                write!(f, "row_ptrs[n] must equal nnz ({row_ptr_end} != {nnz})")
-            }
-            Self::RowPtrsNotNonDecreasing { row, prev, next } => write!(
-                f,
-                "row_ptrs is not non-decreasing at row {row}: {prev} > {next}"
-            ),
-            Self::ColumnIndexOutOfBounds { position, col, n } => write!(
-                f,
-                "column index out of bounds at position {position}: {col} >= {n}"
-            ),
-            Self::IndexExceedsIndexType { kind } => {
-                write!(f, "{kind} exceeds target index type capacity")
-            }
-            Self::MatrixDimensionExceedsIndexType { n } => {
-                write!(f, "matrix dimension exceeds index type capacity (n={n})")
-            }
-            Self::ExpectedSquareMatrix { rows, cols } => {
-                write!(f, "expected square matrix (got {rows}x{cols})")
-            }
-            Self::NotSymmetric { row } => write!(f, "row {row} has an entry with no equal mirror"),
-            Self::BelowDiagonal { row } => write!(
-                f,
-                "row {row} of an upper triangle has a nonzero below the diagonal"
-            ),
-            Self::OutOfRange { row } => {
-                write!(f, "row {row} has an entry outside the representable range")
-            }
-            Self::RowGap { row } => write!(f, "row {row} leaves unused slots after its entries"),
-        }
-    }
-}
-
-impl std::error::Error for CsrError {}

@@ -65,7 +65,7 @@ pub use factor::{
     ApplyError, ApproxInverse, ColumnMajor, Columns, Component, Config, CoverSurplus,
     FrustratedRoute, LayoutError, MatrixMut, Sampling, SchurMode,
 };
-pub use input::{CsrError, CsrRef, IndexKind, Input, OwnedCsr, Side};
+pub use input::{CsrRef, Input, InputError, OwnedCsr, Side};
 pub use sgdd::{Clamp, ReduceError, ScalingOutcome, ScalingPolicy};
 use sgdd::{Complement, Reduced};
 pub use threads::Threads;

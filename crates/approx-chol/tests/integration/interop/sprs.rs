@@ -1,4 +1,4 @@
-use approx_chol::input::{CsrError, CsrRef};
+use approx_chol::input::{CsrRef, InputError};
 use approx_chol::Error;
 use rstest::rstest;
 use sprs::{CsMatI, SpIndex};
@@ -39,7 +39,7 @@ fn sprs_csc_of_an_asymmetric_matrix_is_rejected() {
         CsMatI::<f64, u32>::new_csc((2, 2), vec![0, 1, 3], vec![0, 0, 1], vec![2.0, -1.0, 2.0]);
     let err = approx_chol::factorize(&csc).expect_err("asymmetric CSC must be rejected");
     assert!(
-        matches!(err, Error::InvalidCsr(CsrError::NotSymmetric { .. })),
+        matches!(err, Error::Input(InputError::NotSymmetric { .. })),
         "{err:?}"
     );
 }
@@ -54,12 +54,12 @@ fn sprs_outer_slice_with_offset_rows_is_rejected() {
         vec![1.0, 1.0, 1.0, -1.0, -1.0, 1.0],
     );
     let err = CsrRef::try_from(mat.slice_outer(2..4)).expect_err("offset rows must be rejected");
-    assert_eq!(err, CsrError::RowPtrsMustStartAtZero { got: 2 });
+    assert_eq!(err, InputError::RowPtrs { row: 0 });
 }
 
 #[test]
 fn sprs_try_from_non_square_returns_error() {
     let mat = CsMatI::<f64, u32>::new((3, 4), vec![0, 1, 2, 3], vec![0, 1, 2], vec![1.0; 3]);
     let err = CsrRef::try_from(&mat).expect_err("non-square matrix must be rejected");
-    assert_eq!(err, CsrError::ExpectedSquareMatrix { rows: 3, cols: 4 });
+    assert_eq!(err, InputError::NotSquare { rows: 3, cols: 4 });
 }

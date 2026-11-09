@@ -8,6 +8,7 @@ mod config;
 mod cover_surplus;
 mod frustrated_bipartite_band;
 mod huge_copies;
+mod input_error;
 mod interop;
 mod metamorphic;
 mod owned_csr;
