@@ -38,7 +38,7 @@ factor.apply(&mut x, Threads::All)?;
 assert!(x.iter().all(|v| f64::is_finite(*v)));
 ```
 
-`apply` solves a block of right-hand sides at once: a `Vec<[f64; K]>` holds `K` interleaved columns, solved in place, each bit for bit as it solves alone; `apply_with` takes the caller's `MemStack` sized by `scratch(columns, threads)` and allocates nothing.
+`apply` solves a block of right-hand sides at once: a `Vec<[f64; K]>` holds `K` interleaved columns, solved in place, each bit for bit as it solves alone; `apply_with` takes the caller's `MemStack` sized by `scratch(columns, threads)` and allocates nothing at `Threads::Count(1)`; a budget above one runs on rayon's pool, which builds itself on first use.
 
 A `Laplacian` or `Sddm`, a `FactorWidth2` or a `BipartiteFactorWidth2` also factors from its edges or columns through `approx_chol::input`; see [`examples/basic_solve.rs`](examples/basic_solve.rs). A signed or signless graph factors as a `CsrRef` whose diagonal is `Σ|w|` over each vertex's edges; repeated entries in a row sum.
 

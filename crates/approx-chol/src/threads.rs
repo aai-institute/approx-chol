@@ -23,12 +23,12 @@ impl From<faer::Par> for Threads {
 }
 
 impl Threads {
-    /// The most threads it runs at a time: no more than the current pool has.
+    /// The most threads it runs at a time: no more than the current pool has; the calling thread alone asks no pool, as outside one rayon would build its global pool.
     pub(crate) fn tasks(self) -> usize {
-        let pool = rayon::current_num_threads();
         match self {
-            Threads::All => pool,
-            Threads::Count(n) => n.get().min(pool),
+            ONE => 1,
+            Threads::All => rayon::current_num_threads(),
+            Threads::Count(n) => n.get().min(rayon::current_num_threads()),
         }
     }
 
