@@ -47,6 +47,13 @@ impl<I: Index> Partition<I> {
         sets.into_partition()
     }
 
+    /// Each component's vertices.
+    pub(super) fn components(&self) -> impl Iterator<Item = &[I]> {
+        (self.ends.iter()).scan(0, |start, &end| {
+            Some(&self.order[std::mem::replace(start, end.index())..end.index()])
+        })
+    }
+
     /// One component of `n > 0` vertices: every vertex is its own position.
     fn whole(n: usize) -> Self {
         Self {

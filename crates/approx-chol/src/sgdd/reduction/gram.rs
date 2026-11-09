@@ -2,11 +2,11 @@ use std::cell::LazyCell;
 
 use num_traits::PrimInt;
 
-use super::{Folded, Settling, Surplus};
+use super::{rows_where, Folded, Settling, Surplus};
 use crate::input::{Column, FactorWidth2};
 use crate::sgdd::block::{Grounding, IrreducibleBlock, ReduceError};
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Cut, SymmetricBlock};
-use crate::sgdd::scaling::{self, ScalingPolicy, RATIO_BAND};
+use crate::sgdd::scaling::{self, ScalingPolicy};
 use crate::sgdd::{Components, Reduced};
 use crate::{narrow, widen, Index, Real};
 
@@ -70,11 +70,13 @@ impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_,
         (folded.m.vertices().iter()).map(|v| self.surplus[v.index()])
     }
 
-    fn states_ground(&self, folded: &Folded<'_, T, I>) -> bool {
-        let epsilon = widen(T::epsilon());
-        // A stated ground sums without cancellation, so the floor ignores degree.
-        (folded.m.vertices().iter().zip(&folded.rows.diagonal))
-            .any(|(v, &d)| self.stated[v.index()] > RATIO_BAND * epsilon * widen(d))
+    fn stated(&self, folded: &Folded<'_, T, I>) -> Option<Box<[bool]>> {
+        let stated = (folded.m.vertices().iter()).map(|v| self.stated[v.index()]);
+        let diagonal = folded.rows.diagonal.iter().map(|&d| widen(d));
+        // A stated ground sums without cancellation: the band of no entry.
+        let past =
+            (folded.vector).past_band(widen(T::epsilon()), stated, diagonal, (0, Vec::new))?;
+        rows_where(folded.rows.diagonal.len(), past.map(|ratio| ratio > 0.0))
     }
 
     fn certifies(&self, vertices: &[I]) -> bool {

@@ -2,13 +2,16 @@
 
 mod cells;
 
+use std::borrow::Cow;
+
 use num_traits::PrimInt;
 
 use super::partition::{Partition, UnionFind};
 use super::{Entries, LonePivot, Partitioned, PrincipalBlocks, RowSums};
 use crate::input::{BipartiteFactorWidth2, Column, FactorWidth2, Side};
 use crate::sgdd::block::{Grounding, ReduceError};
-use crate::sgdd::diagonal_in_range;
+use crate::sgdd::scaling::ScaleVector;
+use crate::sgdd::{diagonal_in_range, within_band};
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::{narrow, widen, Index, Real};
 
@@ -116,9 +119,9 @@ pub(in crate::sgdd) struct Assembled<T, C> {
 }
 
 /// `A = L(C) + diag(σ)`, dominant by shape: no diagonal is stored, each pivot is `Σ_j |c_ij| + σ_i`.
-pub(in crate::sgdd) struct Dominant<'a, T, C> {
+pub(in crate::sgdd) struct Dominant<'a, T: Clone, C> {
     adjacency: C,
-    surplus: Option<&'a [T]>,
+    surplus: Option<Cow<'a, [T]>>,
 }
 
 /// An incidence `V`'s summed cells beside `σ`, and their components.
@@ -147,11 +150,44 @@ pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: 
         return Err(ReduceError::OutOfRange { vertex });
     }
     let Partitioned { a, partition } = a;
+    let surplus = surplus.map(|s| rounded(s, &abs, &partition));
     let a = Dominant {
         adjacency: a,
         surplus,
     };
     Ok(Partitioned { a, partition })
+}
+
+/// An `Sddm`'s surplus under `settle`'s rule, decided per component where `s_i` and `Σ_j|c_ij|` are summed: rows past the band of no entry ground and the rest are rounding; with none past, a component floats in the singular band and keeps every `s_i` past it.
+fn rounded<'a, T: Real, I: Index>(
+    s: &'a [T],
+    abs: &[f64],
+    partition: &Partition<I>,
+) -> Cow<'a, [T]> {
+    let epsilon = widen(T::epsilon());
+    let mut kept = Cow::Borrowed(s);
+    for vertices in partition.components().filter(|vertices| vertices.len() > 1) {
+        let surplus = vertices.iter().map(|v| widen(s[v.index()]));
+        let diagonal = (vertices.iter().zip(surplus.clone())).map(|(v, s)| s + abs[v.index()]);
+        let past = || {
+            let (surplus, diagonal) = (surplus.clone(), diagonal.clone());
+            ScaleVector::Identity.past_band(epsilon, surplus, diagonal, (0, Vec::new))
+        };
+        let floats = || {
+            let ones = crate::Sum2::of(vertices, |_, v| epsilon * widen(s[v.index()])).total();
+            let rows = crate::Sum2::of(vertices, |_, v| epsilon * abs[v.index()]).total();
+            within_band::<T>(ones, ones + rows)
+        };
+        if past().is_some_and(|mut past| past.any(|ratio| ratio > 0.0)) || floats() {
+            let past = past().into_iter().flatten().chain(std::iter::repeat(0.0));
+            for (v, ratio) in vertices.iter().zip(past) {
+                if ratio == 0.0 && s[v.index()] != T::zero() {
+                    kept.to_mut()[v.index()] = T::zero();
+                }
+            }
+        }
+    }
+    kept
 }
 
 /// `A`'s cells, its diagonal `Σ_k w_k v_ik²` and its components, summed in one column pass.
@@ -198,7 +234,7 @@ impl<T: Real, C> LonePivot<T> for Assembled<T, C> {
 
 impl<T: Real, C> LonePivot<T> for Dominant<'_, T, C> {
     fn lone(&self, v: usize) -> T {
-        self.surplus.map_or(T::zero(), |s| s[v])
+        self.surplus.as_deref().map_or(T::zero(), |s| s[v])
     }
 }
 
@@ -242,13 +278,13 @@ where
     }
 
     fn whole(self, vertices: &[I]) -> Self::Block {
-        let grounding = surplus_at(self.surplus, vertices);
+        let grounding = surplus_at(self.surplus.as_deref(), vertices);
         (self.adjacency.whole(vertices), grounding)
     }
 
     fn component(&self, vertices: &[I], position: &[I]) -> Self::Block {
         let off_diagonal = self.adjacency.component(vertices, position);
-        (off_diagonal, surplus_at(self.surplus, vertices))
+        (off_diagonal, surplus_at(self.surplus.as_deref(), vertices))
     }
 }
 

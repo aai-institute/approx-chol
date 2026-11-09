@@ -129,14 +129,27 @@ fn sddm_new_rejects_an_all_zero_surplus_as_a_laplacian(#[case] zero: f64) {
     assert_eq!(error, ViewError::ZeroSurplus);
 }
 
+/// Below the floor, a ground past its band needs a coupling near the floor: `FLOOR/2` on `d = 1.5·FLOOR`.
 #[rstest]
-#[case::below_min_positive_over_epsilon(FLOOR / 2.0)]
-#[case::past_a_quarter_of_the_maximum(f64::MAX / 2.0)]
-fn an_out_of_range_ground_is_rejected_at_its_vertex(#[case] ground: f64) {
+#[case::below_min_positive_over_epsilon([1.0, FLOOR], FLOOR / 2.0)]
+#[case::past_a_quarter_of_the_maximum([1.0, 1.0], f64::MAX / 2.0)]
+fn an_out_of_range_ground_is_rejected_at_its_vertex(
+    #[case] weights: [f64; 2],
+    #[case] ground: f64,
+) {
+    let path = Laplacian::weighted(3, &PATH_A, &PATH_B, &weights).unwrap();
     let ground = [0.0, 0.0, ground];
-    let grounded = Sddm::new(unit_path(), &ground).expect("a valid surplus");
+    let grounded = Sddm::new(path, &ground).expect("a valid surplus");
     let error = factorize(grounded).expect_err("ground out of range");
     assert_names_a_defect(error, &[out_of_range(2)]);
+}
+
+/// `FLOOR/2` on a unit row is within its band: rounding, so the path floats.
+#[test]
+fn a_ground_below_the_floor_within_its_band_is_rounding() {
+    let grounded = Sddm::new(unit_path(), &[0.0, 0.0, FLOOR / 2.0]).expect("a valid surplus");
+    let factor = factorize(grounded).expect("rounding, not a ground");
+    assert!(factor.components().all(|component| component.floats()));
 }
 
 #[test]

@@ -3,7 +3,7 @@
 use std::ops::Range;
 
 use super::congruence::{Congruence, ScaledFactors};
-use super::scaling::{Clamp, ScaleVector, RATIO_BAND};
+use super::scaling::{Clamp, ScaleVector};
 use crate::storage::{OffDiagonal, Rows};
 use crate::{Index, Real};
 
@@ -34,21 +34,26 @@ impl<T: Real> Grounding<T> {
         }
     }
 
-    /// A derived surplus with each entry below the range floor (#163) set to zero while within its row's rounding, `RATIO_BAND ε d_i`; past it, `Err` names the row of a real ground out of range.
-    pub(crate) fn flushed(self, diagonal: &[T]) -> Result<Self, usize> {
+    /// The surplus on `grounds`, the rows whose surplus is a ground, each other row's rounding zeroed; with none, every entry, as `settle` keeps them. Below the range floor (#163) a ground is out of range, `Err` naming its row, and any other entry is zeroed; zeroing all of a surplus is out of range at its first.
+    pub(crate) fn kept(self, grounds: Option<&[bool]>) -> Result<Self, usize> {
         let Some(mut surplus) = self.0 else {
             return Ok(self);
         };
-        let band = RATIO_BAND * crate::widen(T::epsilon());
-        for (i, (s, &d)) in surplus.iter_mut().zip(diagonal).enumerate() {
-            if !crate::in_range(*s) {
-                if crate::widen(*s) > band * crate::widen(d) {
-                    return Err(i);
+        let mut zeroed = None;
+        for (i, s) in surplus.iter_mut().enumerate() {
+            match (grounds.map(|g| g[i]), crate::in_range(*s)) {
+                (Some(true), false) => return Err(i),
+                (Some(false), _) | (None, false) => {
+                    zeroed = zeroed.or((*s > T::zero()).then_some(i));
+                    *s = T::zero();
                 }
-                *s = T::zero();
+                (Some(true) | None, true) => {}
             }
         }
-        Ok(Self::of(surplus.into_vec()))
+        match (Self::of(surplus.into_vec()), zeroed) {
+            (kept, Some(i)) if !kept.is_grounded() => Err(i),
+            (kept, _) => Ok(kept),
+        }
     }
 
     pub(crate) fn ungrounded() -> Self {

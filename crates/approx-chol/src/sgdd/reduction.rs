@@ -139,7 +139,14 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
             }
         };
         let deficits = (rows.diagonal.iter().zip(&rows.abs)).map(|(&d, &s)| widen(s) - widen(d));
-        let clamped = vector.worst_past_band(deficits, &rows.diagonal, m.off_diagonal());
+        let clamped = (vector)
+            .past_band(
+                widen(T::epsilon()),
+                deficits,
+                rows.diagonal.iter().map(|&d| widen(d)),
+                row_degrees(rows.diagonal.len(), m.off_diagonal()),
+            )
+            .map_or(0.0, |past| past.fold(0.0, f64::max));
         match balance {
             Balance::Balanced => Ok(Settling::Pending(Folded {
                 m,
@@ -147,12 +154,15 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
                 vector,
                 clamped,
             })),
-            Balance::Frustrated => {
-                let grounding = surplus(&rows).flushed(&rows.diagonal);
-                let grounding = grounding.map_err(|i| out_of_range(&m, i))?;
-                let block = m.block(balance, grounding, vector, clamped)?;
-                Ok(Settling::Settled(block))
-            }
+            Balance::Frustrated => Ok(Settling::Settled(
+                Folded {
+                    m,
+                    rows,
+                    vector,
+                    clamped,
+                }
+                .frustrated()?,
+            )),
         }
     }
 }
@@ -181,8 +191,10 @@ trait Surplus<T: Real, I: Index> {
         &'a self,
         folded: &'a Folded<'_, T, I>,
     ) -> impl Iterator<Item = f64> + Clone + 'a;
-    /// Whether a row states a ground, which no residue test can float.
-    fn states_ground(&self, folded: &Folded<'_, T, I>) -> bool;
+    /// The rows whose stated ground passes its band, which no certificate floats; none by default.
+    fn stated(&self, _: &Folded<'_, T, I>) -> Option<Box<[bool]>> {
+        None
+    }
     /// Whether the block's cycles all close within `√ε`; asked last, as it may run a pass over `V`.
     fn certifies(&self, vertices: &[I]) -> bool;
     /// `M`'s grounds once it does not float.
@@ -201,10 +213,6 @@ impl<T: Real, I: Index> Surplus<T, I> for RowSurplus {
     ) -> impl Iterator<Item = f64> + Clone + 'a {
         let RowSums { diagonal, abs } = &folded.rows;
         (diagonal.iter().zip(abs)).map(|(&d, &s)| widen(d) - widen(s))
-    }
-
-    fn states_ground(&self, _: &Folded<'_, T, I>) -> bool {
-        false
     }
 
     fn certifies(&self, _: &[I]) -> bool {
@@ -227,36 +235,53 @@ impl<T: Real, I: Index> Surplus<T, I> for RowSurplus {
 }
 
 impl<T: Real, I: Index> Folded<'_, T, I> {
-    /// The one float-or-ground rule: in band, no stated ground, and residues or a certificate float `M`.
+    /// The one float-or-ground rule. A row's surplus is rounding within its band, [`ScaleVector::past_band`]: a residue `(M1)_i` at its `k_i` entries, less the block's clamp, rounding too; a stated ground at none, and only where its residue is positive. `M` floats in the singular band with no stated ground and no residue past its band, or on a certificate; grounded, it keeps the rows past their band, or every residue when none is, as a balanced block needs a ground.
     fn settle<S: Surplus<T, I>>(
         self,
         (ones, trace): (f64, f64),
         surplus: &S,
     ) -> Result<IrreducibleBlock<T, I>, ReduceError> {
-        let dominant = matches!(self.vector, ScaleVector::Identity);
-        let floats = !surplus.states_ground(&self)
-            && within_band::<T>(ones, trace)
-            && (((dominant || S::RESIDUES_FLOAT_SCALED) && self.floats(surplus.residues(&self)))
-                || surplus.certifies(self.m.vertices()));
+        let stated = surplus.stated(&self);
+        let in_band = stated.is_none() && within_band::<T>(ones, trace);
+        let residues_float =
+            matches!(self.vector, ScaleVector::Identity) || S::RESIDUES_FLOAT_SCALED;
+        let certified = || surplus.certifies(self.m.vertices());
+        // A scaled Gram floats on its certificate alone, before any residue is read.
+        let certificate = in_band && !residues_float && certified();
+        let grounds = match certificate {
+            true => None,
+            false => self.ground_rows(surplus.residues(&self), stated.as_deref()),
+        };
         let (vector, clamped) = (self.vector, self.clamped);
-        if floats {
+        if certificate || (in_band && residues_float && (grounds.is_none() || certified())) {
             return (self.m).block(Balance::Balanced, Grounding::ungrounded(), vector, clamped);
         }
         let grounding = surplus.grounds(&self);
-        // The first ground, which flushing all of them would lose from a definite `M`.
-        let Some(first) = (grounding.surplus()).and_then(|s| s.iter().position(|&s| s > T::zero()))
-        else {
+        if !grounding.is_grounded() {
             let vertex = self.m.vertices()[0].index();
             return Err(ReduceError::Unscalable { vertex });
-        };
-        let Self { m, rows, .. } = self;
-        match grounding.flushed(&rows.diagonal) {
-            Ok(grounding) if grounding.is_grounded() => {
-                m.block(Balance::Balanced, grounding, vector, clamped)
-            }
-            Ok(_) => Err(out_of_range(&m, first)),
-            Err(i) => Err(out_of_range(&m, i)),
         }
+        let Self { m, .. } = self;
+        let grounding = grounding
+            .kept(grounds.as_deref())
+            .map_err(|i| out_of_range(&m, i))?;
+        m.block(Balance::Balanced, grounding, vector, clamped)
+    }
+
+    /// A frustrated `M`, definite without a ground, keeping none of its rounding.
+    fn frustrated(self) -> Result<IrreducibleBlock<T, I>, ReduceError> {
+        let grounds = self.ground_rows(RowSurplus.residues(&self), None);
+        let Self {
+            m,
+            rows,
+            vector,
+            clamped,
+        } = self;
+        let grounding = (grounds.as_deref()).map_or(Ok(Grounding::ungrounded()), |g| {
+            surplus(&rows).kept(Some(g))
+        });
+        let grounding = grounding.map_err(|i| out_of_range(&m, i))?;
+        m.block(Balance::Frustrated, grounding, vector, clamped)
     }
 
     /// `(ε·1ᵀM1, ε·tr M)` from `M`'s rows, `1ᵀM1 = tr M − Σ|offdiag(M)|`, so `tr M` cannot overflow.
@@ -271,15 +296,48 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         (ones, trace)
     }
 
-    /// Whether no row's surplus outweighs its coupling or passes its band.
-    fn floats(&self, surplus: impl Iterator<Item = f64> + Clone) -> bool {
+    /// The rows whose surplus is a ground, outweighing its coupling, past its band, or `stated` with a positive residue; `None` when every one is rounding.
+    #[inline(always)]
+    fn ground_rows(
+        &self,
+        surplus: impl Iterator<Item = f64> + Clone,
+        stated: Option<&[bool]>,
+    ) -> Option<Box<[bool]>> {
         let RowSums { diagonal, abs } = &self.rows;
-        if (surplus.clone().zip(abs)).any(|(s, &abs)| s > widen(abs)) {
-            return false;
-        }
+        let stated = |i: usize, s: f64| s > 0.0 && stated.is_some_and(|stated| stated[i]);
+        let ground = (surplus.clone().zip(abs).enumerate())
+            .map(|(i, (s, &abs))| s > widen(abs) || stated(i, s));
         let excess = (surplus.zip(diagonal)).map(|(s, &d)| s - self.clamped * widen(d));
-        (self.vector).worst_past_band(excess, diagonal, self.m.off_diagonal()) == 0.0
+        let degrees = row_degrees(diagonal.len(), self.m.off_diagonal());
+        let diagonal_f64 = diagonal.iter().map(|&d| widen(d));
+        let past = (self.vector).past_band(widen(T::epsilon()), excess, diagonal_f64, degrees);
+        match past {
+            // A floating block's rows: one scan, as the mask is built only once a row holds.
+            None if !ground.clone().any(|g| g) => None,
+            None => rows_where(diagonal.len(), ground),
+            Some(past) => rows_where(
+                diagonal.len(),
+                ground.zip(past).map(|(g, ratio)| g || ratio > 0.0),
+            ),
+        }
     }
+}
+
+/// The `n` rows where `holds` does, `None` when none: the mask is built only then.
+pub(super) fn rows_where(n: usize, holds: impl Iterator<Item = bool>) -> Option<Box<[bool]>> {
+    let mut rows: Option<Box<[bool]>> = None;
+    for (i, _) in holds.enumerate().filter(|&(_, holds)| holds) {
+        rows.get_or_insert_with(|| vec![false; n].into())[i] = true;
+    }
+    rows
+}
+
+/// A residue's terms: at most `n − 1` entries a row, each row's count read on demand.
+fn row_degrees<T: Real, I: Index>(
+    n: usize,
+    off_diagonal: &OffDiagonal<T, I>,
+) -> (usize, impl FnOnce() -> Vec<usize> + '_) {
+    (n.saturating_sub(1), || off_diagonal.degrees())
 }
 
 /// Row `i` of `m` holds a ground out of range.
@@ -302,7 +360,7 @@ fn surplus<T: Real>(RowSums { diagonal, abs }: &RowSums<T>) -> Grounding<T> {
 const SINGULAR_BAND: f64 = 5.0;
 
 /// Whether `ones = 1ᵀM1` is within the band of `trace = tr M`: needed, not enough, for `M` to float.
-fn within_band<T: Real>(ones: f64, trace: f64) -> bool {
+pub(crate) fn within_band<T: Real>(ones: f64, trace: f64) -> bool {
     ones <= SINGULAR_BAND * widen(T::epsilon()) * trace
 }
 
