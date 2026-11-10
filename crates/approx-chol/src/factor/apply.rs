@@ -212,13 +212,14 @@ where
     }
 
     fn read_column(&self, column: usize, into: &mut [T]) {
-        assert_eq!(into.len(), self.nrows(), "one entry per row");
-        (into.iter_mut().zip(self.column(column).iter())).for_each(|(to, &value)| *to = value);
+        let shape = (nalgebra::Dyn(self.nrows()), nalgebra::Const::<1>);
+        let rows = into.len();
+        nalgebra::DVectorViewMut::from_slice(into, rows)
+            .copy_from(&self.generic_view((0, column), shape));
     }
 
     fn write_column(&mut self, column: usize, from: &[T]) {
-        assert_eq!(from.len(), self.nrows(), "one entry per row");
-        (self.column_mut(column).iter_mut().zip(from)).for_each(|(to, &value)| *to = value);
+        self.column_mut(column).copy_from_slice(from);
     }
 }
 
