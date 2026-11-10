@@ -6,14 +6,14 @@ import scipy.sparse as sp
 from scipy.linalg import block_diag
 
 import approx_chol
-from tests._laplacians import grid_laplacian, frustrated_grid
+from tests._laplacians import grid_laplacian
 
 
 def _grid_residual(config: approx_chol.Config) -> float:
     lap = grid_laplacian(4, 4)
     b = np.zeros(lap.shape[0])
     b[0], b[-1] = 1.0, -1.0
-    x = approx_chol.factorize(lap, config=config).solve(b)
+    x = approx_chol.factorize(lap, config=config).apply(b)
     return float(np.linalg.norm(lap @ x - b) / np.linalg.norm(b))
 
 
@@ -21,15 +21,16 @@ def _grid_solution(config: approx_chol.Config) -> np.ndarray:
     lap = grid_laplacian(8, 8)
     b = np.zeros(lap.shape[0])
     b[0], b[-1] = 1.0, -1.0
-    return approx_chol.factorize(lap, config=config).solve(b)
+    return approx_chol.factorize(lap, config=config).apply(b)
 
 
 def test_package_surface_and_basic_factorize_raw_roundtrip():
     assert approx_chol.__all__ == [
         "ApproxInverse",
+        "Clamp",
+        "Component",
         "Config",
         "ScalingPolicy",
-        "Workspace",
         "factorize",
         "factorize_raw",
     ]
@@ -39,7 +40,7 @@ def test_package_surface_and_basic_factorize_raw_roundtrip():
     values = np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64)
 
     factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
-    x = factor.solve(np.array([1.0, -1.0], dtype=np.float64))
+    x = factor.apply(np.array([1.0, -1.0], dtype=np.float64))
 
     assert x.shape == (factor.shape[0],)
     assert np.isfinite(x).all()
@@ -93,8 +94,8 @@ def test_no_config_and_a_default_config_factor_alike():
     b = np.zeros(lap.shape[0])
     b[0], b[-1] = 1.0, -1.0
     np.testing.assert_array_equal(
-        approx_chol.factorize(lap).solve(b),
-        approx_chol.factorize(lap, approx_chol.Config()).solve(b),
+        approx_chol.factorize(lap).apply(b),
+        approx_chol.factorize(lap, config=approx_chol.Config()).apply(b),
     )
 
 
@@ -146,18 +147,3 @@ def test_a_dominant_matrix_does_not_warn():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         approx_chol.factorize(lap)
-
-
-def test_solve_into_with_a_reused_workspace_is_bit_identical():
-    factor = approx_chol.factorize(
-        frustrated_grid(16, 16), approx_chol.Config(exact_max_dim=0)
-    )
-    workspace = factor.workspace()
-    rng = np.random.default_rng(0)
-    for _ in range(3):
-        b = rng.standard_normal(factor.n)
-        fresh, reused = np.empty_like(b), np.empty_like(b)
-        factor.solve_into(b, fresh)
-        factor.solve_into(b, reused, workspace=workspace)
-        np.testing.assert_array_equal(reused, fresh)
-        np.testing.assert_array_equal(reused, factor.solve(b))

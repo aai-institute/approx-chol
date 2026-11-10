@@ -4,13 +4,15 @@ from typing import Any, Literal, TypeAlias, final
 
 import numpy as np
 import numpy.typing as npt
+from scipy.sparse.linalg import LinearOperator
 from typing_extensions import Never
 
 __all__ = [
     "ApproxInverse",
+    "Clamp",
+    "Component",
     "Config",
     "ScalingPolicy",
-    "Workspace",
     "factorize",
     "factorize_raw",
 ]
@@ -45,6 +47,7 @@ class Config:
     Raises:
         ValueError: If ``split`` is outside ``[1, 2**32 - 1]`` or ``frustrated``
             names no route.
+        TypeError: If ``split`` is not an integer, or is a bool.
     """
 
     def __new__(
@@ -88,123 +91,143 @@ class ScalingPolicy:
     def max_iterations(self) -> int: ...
 
 @final
-class ApproxInverse:
-    """Approximate Cholesky factor (LDL^T decomposition).
+class Clamp:
+    """How the reduction clamped a component's rows past rounding to make it dominant.
 
-    Obtained from :func:`factorize` or :func:`factorize_raw`.
-
-    Implements the scipy ``LinearOperator`` duck-type interface (``shape``,
-    ``matvec``, ``rmatvec``, ``dtype``), so it can be passed directly as
-    ``M=factor`` to iterative solvers like ``scipy.sparse.linalg.cg``.
+    ``violation`` is the largest relative dominance violation clamped away,
+    finite and positive; ``scaling`` is what the scaling proved about it:
+    dominant within the policy's tolerance (``"certified"``), not dominant
+    past it (``"refuted"``), or neither, the iteration stopped first
+    (``"unsettled"``). Read-only, from :attr:`Component.clamp`.
     """
 
     def __new__(cls, never: Never, /) -> Never: ...
+    @property
+    def violation(self) -> float: ...
+    @property
+    def scaling(self) -> Literal["certified", "refuted", "unsettled"]: ...
+
+@final
+class Component:
+    """One irreducible block of an :class:`ApproxInverse`, from :attr:`ApproxInverse.components`.
+
+    ``vertices`` are its vertices in the factored matrix's numbering, in the
+    order its factor numbers them, a read-only array; ``clamp`` is how the
+    reduction clamped its rows, or ``None``.
+    """
+
+    def __new__(cls, never: Never, /) -> Never: ...
+    @property
+    def vertices(self) -> npt.NDArray[np.intp]: ...
+    @property
+    def clamp(self) -> Clamp | None: ...
+
+@final
+class ApproxInverse(LinearOperator):
+    """An approximate inverse ``B`` of the factored matrix, from :func:`factorize` or :func:`factorize_raw`.
+
+    A ``scipy.sparse.linalg.LinearOperator`` of shape ``(n, n)`` and dtype
+    ``float64``, its own adjoint and transpose: ``matvec`` and ``rmatvec`` take
+    a vector or a stack of them, ``(..., n)``, ``matmat`` and ``rmatmat``
+    ``(..., n, k)``, so scipy's ``cg`` and ``minres`` take it as ``M``. ``lsmr``
+    takes no preconditioner; right-precondition there: ``y`` from
+    ``lsmr(aslinearoperator(A) @ B, b)``, then ``x = B @ y``.
+
+    It holds a thread budget, :attr:`threads`, at which every apply runs.
+    """
+
+    # No Python constructor: the uninhabited argument makes every call a type error.
+    def __init__(self, factor: Never, /) -> None: ...
     def __reduce__(self) -> tuple[object, ...]:
         """Pickles as the factor's saved form alone, its header first, encoded with postcard.
+
+        A loaded or copied operator's budget is every core, ``threads=None``.
 
         Raises:
             ValueError: On unpickling, if the header's format version or scalar
                 type is not this build's, naming each that differs, found and
                 expected, or if the saved form is otherwise invalid.
         """
-        ...
 
     @property
     def n(self) -> int:
-        """Matrix dimension, which sizes :meth:`solve_into`'s buffers."""
-        ...
+        """Matrix dimension."""
 
     @property
     def n_steps(self) -> int:
         """Number of elimination steps."""
-        ...
 
     @property
-    def shape(self) -> tuple[int, int]:
-        """Preconditioner shape ``(n, n)``."""
-        ...
+    def components(self) -> tuple[Component, ...]:
+        """One :class:`Component` per irreducible block, by its lowest vertex, then the isolated vertices."""
 
     @property
-    def dtype(self) -> np.dtype[np.float64]:
-        """Numpy dtype of output arrays (``numpy.float64``)."""
-        ...
+    def threads(self) -> int | None:
+        """The budget every apply runs at: the build's unless :meth:`with_threads` named another, ``None`` every core."""
 
-    def matvec(self, x: npt.ArrayLike) -> npt.NDArray[np.float64]:
-        """Alias for :meth:`solve`; ``x`` may be an ``(n, 1)`` column."""
-        ...
+    def with_threads(self, threads: int | None) -> ApproxInverse:
+        """This operator at another budget, sharing the factor, copying nothing.
 
-    def rmatvec(self, x: npt.ArrayLike) -> npt.NDArray[np.float64]:
-        """Alias for :meth:`solve`, as the factor is symmetric; ``x`` may be an ``(n, 1)`` column."""
-        ...
-
-    def solve(self, b: npt.ArrayLike) -> npt.NDArray[np.float64]:
-        """Solve LDL^T x = b, returning a new array of the original matrix dimension.
-
-        Copies ``b``; releases the GIL when :func:`factorize` did.
+        Every budget applies to the same bits.
 
         Raises:
-            ValueError: If ``b`` is not 1-D integer or float, or ``len(b) != n``.
+            ValueError: If ``threads`` is outside ``[1, 2**64 - 1]``.
+            TypeError: If ``threads`` is not an integer, or is a bool.
         """
-        ...
 
-    def workspace(self) -> Workspace:
-        """Reusable buffers for :meth:`solve_into` on this factor."""
-        ...
+    def apply(
+        self, b: npt.ArrayLike, *, out: npt.NDArray[np.float64] | None = None
+    ) -> npt.NDArray[np.float64]:
+        """Solve ``A x = b`` approximately, ``x = B b``, at :attr:`threads`.
 
-    def solve_into(
-        self,
-        b: npt.ArrayLike,
-        out: npt.NDArray[np.float64],
-        workspace: Workspace | None = None,
-    ) -> None:
-        """Solve LDL^T x = b, writing the result into *out*.
-
-        ``b`` must have length ``shape[0]``, and *out* at least that length.
-        *out* may be ``b`` or overlap it, as ``b`` is copied before *out* is written.
-        A *workspace* from :meth:`workspace` saves allocating buffers per call.
-        Releases the GIL as :meth:`solve`, solving in its own buffer and only then writing *out*.
+        ``b`` is a real array ``np.asarray`` reads, a vector of length ``n`` or
+        an ``n`` × ``k`` array, converted to ``float64`` if it is not; each
+        column solves bit for bit as it would alone. The solution has ``b``'s
+        shape, written to ``out`` when given and returned, else to a new
+        array. ``out`` is a writable, aligned ``float64`` array of that shape
+        in any order whose entries neither overlap nor interleave, each stride
+        a whole number of entries, ``b`` itself or one overlapping it allowed:
+        the solve runs on a copy. Releases the GIL as :func:`factorize` does.
 
         Raises:
-            ValueError: If ``b`` is not 1-D integer or float, ``out`` is not
-                contiguous, sizes are invalid, ``out`` is not writeable,
-                or *workspace* is from a smaller factor.
+            TypeError: If ``b`` has a dtype other than integer or floating-point,
+                or ``out`` is not a ``float64`` array.
+            ValueError: If ``b`` or ``out`` has a wrong shape, ``out``'s
+                entries overlap or interleave, ``out`` is unaligned or a
+                stride splits an entry, or ``out`` is not writeable.
             BufferError: If ``out`` is already borrowed.
-            RuntimeError: If *workspace* is in use by another call.
         """
-        ...
-
-@final
-class Workspace:
-    """Buffers for one :meth:`ApproxInverse.solve_into` at a time, from :meth:`ApproxInverse.workspace`."""
-
-    # No Python constructor: the uninhabited argument makes every call a type error.
-    def __new__(cls, never: Never, /) -> Never: ...
 
 def factorize(
     matrix: Any,
+    *,
     config: Config | None = None,
     scaling: ScalingPolicy | None = None,
+    threads: int | None = None,
 ) -> ApproxInverse:
     """Factorize an SDDM matrix from a scipy.sparse CSR matrix.
 
     Copies the arrays, then releases the GIL to check and factor the copy above 32768 stored entries.
+    Both stages run at ``threads``, which the operator then holds; every budget builds to the same bits.
 
     Args:
         matrix: A ``scipy.sparse.csr_matrix`` or ``csr_array``.
         config: Optional factorization configuration.
         scaling: Optional scaling policy for blocks short of diagonal dominance.
+        threads: The thread budget, ``None`` every core.
 
     Raises:
         ValueError: If the matrix is not square or symmetric, has invalid
             dtypes/ranges, exceeds index limits, has invalid CSR structure, or
-            has a nonpositive diagonal on a nonzero row; an all-zero row solves to 0.
+            has a nonpositive diagonal on a nonzero row, an all-zero row
+            solving to 0; or if ``threads`` is outside ``[1, 2**64 - 1]``.
+        TypeError: If ``threads`` is not an integer, or is a bool.
 
     Warns:
         RuntimeWarning: If a block falls short of diagonal dominance after
             scaling, so its deficit was clamped, or its scaling did not settle,
             so a singular block may have been grounded.
     """
-    ...
 
 def factorize_raw(
     row_ptrs: npt.ArrayLike,
@@ -214,7 +237,7 @@ def factorize_raw(
     config: Config | None = None,
     scaling: ScalingPolicy | None = None,
 ) -> ApproxInverse:
-    """Factorize an SDDM matrix from raw CSR arrays.
+    """Factorize an SDDM matrix from raw CSR arrays, on every core.
 
     Releases the GIL as :func:`factorize`.
 
@@ -234,4 +257,3 @@ def factorize_raw(
     Warns:
         RuntimeWarning: As :func:`factorize`.
     """
-    ...

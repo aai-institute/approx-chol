@@ -213,7 +213,28 @@ let factor: ApproxInverse = postcard::from_bytes(&bytes)?;
 - `Config.split` is the clique-tree copies, `1` by default where it was `None`; a `split` of `0`, which 0.7 took as one copy, raises `ValueError`, and one outside `u32` raises `ValueError`, not `OverflowError`.
 - An input error's message is `InputError`'s `Display`, and a value outside the range at build reads "a value at vertex …", not "an entry at vertex …".
 - A `Config` compares and hashes by value.
-- The Python API changes of [#429]–[#432] are listed here when they land.
+- `factorize(matrix, config, scaling)` passed positionally is `factorize(matrix, config=config, scaling=scaling)`; `threads=` sets the build's budget, `None` every core as 0.7 built.
+- `ApproxInverse` is a `scipy.sparse.linalg.LinearOperator`, not a duck type: `matvec`, `rmatvec`, `matmat`, `rmatmat` and `@` are scipy's, and stacks `(..., n)` and `(..., n, k)` apply.
+- `ApproxInverse.solve(b)` is `apply(b)`; `solve_into(b, out, workspace)` is `apply(b, out=out)`, whose `out` has `b`'s shape and `float64` dtype, aligned, any order, no longer only contiguous with at least `n` entries; `workspace()` and `Workspace`: none, each apply allocates its own scratch. An `n × k` `b` solves as a block of columns, each bit for bit as alone.
+- A complex or other non-real `b` raises `TypeError`, not `ValueError`; a bool `split` or `threads` raises `TypeError`.
+- `ApproxInverse.threads` reads the budget every apply runs at, and `with_threads(threads)` gives one at another, sharing the factor; a loaded or copied one holds `None`.
+- The Python API changes of [#430]–[#432] are listed here when they land.
 
-[#429]: https://github.com/aai-institute/approx-chol/issues/429
+```python
+# 0.7
+factor = approx_chol.factorize(laplacian, approx_chol.Config(seed=1))
+x = factor.solve(b)
+workspace = factor.workspace()
+factor.solve_into(b, out, workspace)
+```
+
+```python
+# 0.8
+factor = approx_chol.factorize(laplacian, config=approx_chol.Config(seed=1), threads=4)
+x = factor.apply(b)
+factor.apply(b, out=out)
+X = factor.with_threads(1).apply(B)  # an n × k block, serially, to the same bits
+```
+
+[#430]: https://github.com/aai-institute/approx-chol/issues/430
 [#432]: https://github.com/aai-institute/approx-chol/issues/432

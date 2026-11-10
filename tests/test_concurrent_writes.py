@@ -4,7 +4,6 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 import numpy as np
-import pytest
 import scipy.sparse as sp
 
 import approx_chol
@@ -34,7 +33,7 @@ def test_factorize_reads_a_snapshot_of_arrays_another_thread_writes():
     assert lap.indices.dtype == np.int32
     b = np.zeros(lap.shape[0])
     b[0], b[-1] = 1.0, -1.0
-    expected = approx_chol.factorize(lap).solve(b)
+    expected = approx_chol.factorize(lap).apply(b)
     j, column = lap.nnz // 2, lap.indices[lap.nnz // 2]
 
     # One aligned store at a time, so the copy sees the column either valid or out of range.
@@ -49,29 +48,27 @@ def test_factorize_reads_a_snapshot_of_arrays_another_thread_writes():
                 factor = approx_chol.factorize(lap)
             except ValueError:
                 continue
-        np.testing.assert_array_equal(factor.solve(b), expected)
+        np.testing.assert_array_equal(factor.apply(b), expected)
         compared += 1
     assert compared > 0
 
 
-@pytest.mark.parametrize("with_workspace", [False, True])
-def test_solve_into_is_not_corrupted_by_a_concurrent_writer(with_workspace: bool):
+def test_apply_into_out_is_not_corrupted_by_a_concurrent_writer():
     grid = grid_laplacian(150, 150)
     # Two blocks, so the solve writes them one after the other.
     factor = approx_chol.factorize(sp.block_diag([grid, grid], format="csr"))
     b = np.random.default_rng(0).standard_normal(factor.n)
-    expected = factor.solve(b)
+    expected = factor.apply(b)
     assert np.all(expected != 1.0)
     out = np.empty_like(b)
-    workspace = factor.workspace() if with_workspace else None
     start = time.perf_counter()
-    factor.solve_into(b, out, workspace)
+    factor.apply(b, out=out)
     elapsed = time.perf_counter() - start
 
     for delay in np.linspace(0.0, elapsed, 20):
         writer = threading.Timer(delay, out.fill, (1.0,))
         writer.start()
-        factor.solve_into(b, out, workspace)
+        factor.apply(b, out=out)
         writer.join()
         # The write may land after the result; a value that is neither is a corrupted solve.
         assert np.all((out == 1.0) | (out == expected))

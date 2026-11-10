@@ -1,5 +1,6 @@
 """Shared sparse-matrix fixtures for the Python test suite."""
 
+import numpy as np
 import scipy.sparse as sp
 
 
@@ -60,3 +61,8 @@ def light_row_grid(k: int, light: float) -> sp.csr_matrix:
     col_idx += range(k * k)
     data += diagonal
     return sp.csr_matrix((data, (row_idx, col_idx)), shape=(k * k, k * k))
+
+
+def bits(x: np.ndarray) -> np.ndarray:
+    """``x``'s entries as their ``uint64`` bit patterns, so a comparison is bit for bit."""
+    return np.ascontiguousarray(x).view(np.uint64)

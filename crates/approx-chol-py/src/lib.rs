@@ -1,32 +1,25 @@
 use approx_chol::input::{CsrRef, InputError};
 use approx_chol::{
-    ApplyError, ApproxInverse, Config, CoverSurplus, FrustratedRoute, Header, MemBuffer, MemStack,
-    Sampling, ScalingPolicy, Sgdd, Threads,
+    ApproxInverse, Config, CoverSurplus, FrustratedRoute, Header, MatrixMut, Sampling,
+    ScalingOutcome, ScalingPolicy, Sgdd, Threads,
 };
 use num_traits::PrimInt;
+use numpy::ndarray::{ArrayRef, Dimension, Ix1, Ix2};
 use numpy::{
-    BorrowError, Element, PyArray1, PyArrayDescr, PyArrayDescrMethods, PyArrayMethods,
-    PyReadonlyArray1, PyUntypedArray, PyUntypedArrayMethods,
+    BorrowError, Element, PyArray, PyArray1, PyArrayDescrMethods, PyArrayDyn, PyArrayMethods,
+    PyReadwriteArray, PyUntypedArray, PyUntypedArrayMethods,
 };
-use pyo3::exceptions::{PyNotImplementedError, PyOverflowError};
+use pyo3::exceptions::{PyNotImplementedError, PyOverflowError, PyTypeError};
 use pyo3::marker::Ungil;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyType};
+use pyo3::sync::PyOnceLock;
+use pyo3::types::{PyBool, PyBytes, PyTuple, PyType};
 use std::num::NonZeroU64;
+use std::sync::Arc;
 
 #[inline]
 fn value_error(message: impl std::fmt::Display) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.to_string())
-}
-
-/// A vector's length is its block's row count.
-fn apply_error(error: ApplyError) -> PyErr {
-    match error {
-        ApplyError::Rows { expected, found } => value_error(format!(
-            "right-hand side has length {found}, expected {expected}"
-        )),
-        error => value_error(error),
-    }
 }
 
 /// A matrix's stored entries, which size every call on it and its factor.
@@ -55,7 +48,7 @@ fn borrow_error(name: &str, err: BorrowError) -> PyErr {
     }
 }
 
-/// A CSR array's role, which fixes the dtype kinds it may hold without truncation.
+/// An array's role, which fixes the dtype kinds it may hold without truncation.
 #[derive(Clone, Copy)]
 enum Column {
     Index,
@@ -109,24 +102,78 @@ fn as_contiguous<'py, E: Element>(
         .map_err(Into::into)
 }
 
-/// Any 1-D array-like, or scipy's `(n, 1)` column, as contiguous `f64`; a CG's own `f64` vector skips every numpy call.
-fn right_hand_side<'py>(
-    py: Python<'py>,
-    b: &Bound<'py, PyAny>,
-) -> PyResult<PyReadonlyArray1<'py, f64>> {
-    let b = match b.cast::<PyArray1<f64>>() {
-        Ok(array) if array.is_contiguous() => array.clone(),
-        _ => {
-            let np = py.import("numpy")?;
-            let b = np.call_method1("asarray", (b,))?;
-            // LinearOperator's default matmat before scipy 1.18 passes columns and reshapes the result itself.
-            let column = b.getattr("ndim")?.extract::<usize>()? == 2
-                && b.getattr("shape")?.get_item(1)?.extract::<usize>()? == 1;
-            let b = if column { b.call_method0("ravel")? } else { b };
-            as_contiguous(&np, &as_1d(&np, &b, "b", Column::Value)?)?
+/// Whether rust-numpy reads the array right: it neither checks alignment nor strides that split an `f64`.
+fn viewable(array: &Bound<'_, PyUntypedArray>) -> bool {
+    let whole = |stride: &isize| stride.unsigned_abs() % size_of::<f64>() == 0;
+    array.is_aligned() && array.strides().iter().all(whole)
+}
+
+/// `b` as a new `f64` array of its shape and layout, the block an apply solves and returns.
+fn block<'py, D: Dimension>(
+    b: &Bound<'py, PyUntypedArray>,
+) -> PyResult<Bound<'py, PyArray<f64, D>>> {
+    if !Column::Value.accepts(b.dtype().kind()) {
+        let dtype = b.dtype();
+        return Err(PyTypeError::new_err(format!(
+            "b must have a real dtype, not {dtype}"
+        )));
+    }
+    match b.cast::<PyArray<f64, D>>() {
+        // Rust's copy keeps the GIL under #460's bound, numpy's releases it; ndarray rejects an empty view's free strides.
+        Ok(f64s) if viewable(b) && !b.is_empty() => {
+            let f64s = f64s.try_readonly().map_err(|e| borrow_error("b", e))?;
+            Ok(PyArray::from_owned_array(
+                b.py(),
+                f64s.as_array().to_owned(),
+            ))
         }
-    };
-    b.try_readonly().map_err(|e| borrow_error("b", e))
+        _ => (b.call_method1("astype", (f64::get_dtype(b.py()),))?)
+            .cast_into()
+            .map_err(Into::into),
+    }
+}
+
+/// ndarray's rule for a writable view, unchecked in release: each axis, by stride, steps past the span of all faster ones.
+fn entries_overlap(shape: &[usize], strides: &[isize]) -> bool {
+    if shape.contains(&0) {
+        return false;
+    }
+    let mut axes: Vec<(usize, usize)> = (strides.iter().zip(shape))
+        .filter(|&(_, &extent)| extent > 1)
+        .map(|(stride, &extent)| (stride.unsigned_abs() / size_of::<f64>(), extent))
+        .collect();
+    axes.sort_unstable();
+    let mut span = 0;
+    axes.into_iter().any(|(stride, extent)| {
+        let overlaps = stride <= span;
+        span += (extent - 1) * stride;
+        overlaps
+    })
+}
+
+/// `out` borrowed to receive `x`: a writable, aligned `f64` array of `x`'s shape whose entries neither overlap nor interleave.
+fn destination<'py, D: Dimension>(
+    out: &Bound<'py, PyAny>,
+    x: &Bound<'py, PyArray<f64, D>>,
+) -> PyResult<PyReadwriteArray<'py, f64, D>> {
+    let out = (out.cast::<PyArrayDyn<f64>>())
+        .map_err(|_| PyTypeError::new_err("out must be a float64 array"))?;
+    if out.shape() != x.shape() {
+        let (found, expected) = (out.getattr("shape")?, x.getattr("shape")?);
+        return Err(value_error(format!(
+            "out has shape {found}, expected {expected}"
+        )));
+    }
+    let out = out.cast::<PyArray<f64, D>>()?;
+    if !viewable(out.as_untyped()) {
+        return Err(value_error(
+            "out must be aligned, its strides whole float64s",
+        ));
+    }
+    if entries_overlap(out.shape(), out.strides()) {
+        return Err(value_error("out's entries overlap or interleave"));
+    }
+    out.try_readwrite().map_err(|e| borrow_error("out", e))
 }
 
 #[inline]
@@ -166,8 +213,13 @@ fn frustrated_route(name: &str) -> PyResult<FrustratedRoute> {
     })
 }
 
-/// `value` as a positive `N`: an integer past `N` or below 1 is a `ValueError`, a non-integer a `TypeError`.
+/// `value` as a positive `N`: an integer past `N` or below 1 is a `ValueError`, a non-integer or a bool a `TypeError`.
 fn positive<N: TryFrom<NonZeroU64>>(value: &Bound<'_, PyAny>, name: &str) -> PyResult<N> {
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyTypeError::new_err(format!(
+            "{name} must be an integer, not a bool"
+        )));
+    }
     let bits = 8 * size_of::<N>();
     let out_of_range = || value_error(format!("{name} must be an integer in [1, 2**{bits} - 1]"));
     match value.extract::<u64>() {
@@ -263,10 +315,81 @@ impl PyScalingPolicy {
     }
 }
 
-#[pyclass(frozen, module = "approx_chol", name = "ApproxInverse")]
-struct PyApproxInverse {
+/// A build's or an apply's budget: `None` every core, else a count.
+fn threads(threads: Option<&Bound<'_, PyAny>>) -> PyResult<Threads> {
+    threads.map_or(Ok(Threads::All), |threads| {
+        positive(threads, "threads").map(Threads::Count)
+    })
+}
+
+#[pyclass(frozen, module = "approx_chol", name = "Clamp")]
+struct PyClamp {
+    #[pyo3(get)]
+    violation: f64,
+    #[pyo3(get)]
+    scaling: &'static str,
+}
+
+#[pyclass(frozen, module = "approx_chol", name = "Component")]
+struct PyComponent {
+    #[pyo3(get)]
+    vertices: Py<PyArray1<isize>>,
+    #[pyo3(get)]
+    clamp: Option<Py<PyClamp>>,
+}
+
+/// What every budget's operator over one build shares.
+struct Factor {
     inner: ApproxInverse<f64>,
     entries: StoredEntries,
+    components: PyOnceLock<Py<PyTuple>>,
+}
+
+#[pyclass(frozen, module = "approx_chol._approx_chol", name = "_ApproxInverse")]
+struct PyApproxInverse {
+    factor: Arc<Factor>,
+    threads: Threads,
+}
+
+impl PyApproxInverse {
+    fn new(inner: ApproxInverse<f64>, entries: StoredEntries, threads: Threads) -> Self {
+        let components = PyOnceLock::new();
+        let factor = Arc::new(Factor {
+            inner,
+            entries,
+            components,
+        });
+        Self { factor, threads }
+    }
+
+    /// `b` solved at the held budget, into `out` when given.
+    fn apply_as<'py, D: Dimension>(
+        &self,
+        b: &Bound<'py, PyUntypedArray>,
+        out: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>>
+    where
+        ArrayRef<f64, D>: MatrixMut<f64>,
+    {
+        let x = block::<D>(b)?;
+        let written = out.map(|out| destination(out, &x)).transpose()?;
+        {
+            let mut solution = x.try_readwrite().map_err(|e| borrow_error("b", e))?;
+            let mut solution = solution.as_array_mut();
+            let Factor { inner, entries, .. } = &*self.factor;
+            let solved = entries.detach(b.py(), || inner.apply(&mut *solution, self.threads));
+            solved.expect("b has n rows");
+        }
+        match written {
+            None => Ok(x.into_any()),
+            Some(mut written) => {
+                if !x.is_empty() {
+                    written.as_array_mut().assign(&x.readonly().as_array());
+                }
+                Ok(written.as_any().clone())
+            }
+        }
+    }
 }
 
 /// Without this, a deficit the reduction clamped to make a block dominant is silent.
@@ -306,14 +429,10 @@ fn warn_on_scaling(py: Python<'_>, factor: &ApproxInverse<f64>) -> PyResult<()> 
 #[pymethods]
 impl PyApproxInverse {
     /// The factor's saved form, postcard-encoded, and nothing else.
-    fn __reduce__<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<(Bound<'py, PyAny>, (Bound<'py, PyBytes>,))> {
-        let form = postcard::to_allocvec(&self.inner)
+    fn _saved_form<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        let form = postcard::to_allocvec(&self.factor.inner)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-        let load = py.get_type::<Self>().getattr("_load")?;
-        Ok((load, (PyBytes::new(py, &form),)))
+        Ok(PyBytes::new(py, &form))
     }
 
     /// A failed decode reads the header apart, as postcard drops the message naming a mismatch.
@@ -323,11 +442,12 @@ impl PyApproxInverse {
             value_error(format!("the saved ApproxInverse is invalid: {reason}"))
         };
         match postcard::take_from_bytes::<ApproxInverse<f64>>(form) {
-            Ok((inner, [])) => Ok(Self {
+            // Interim: the form's length stands in for the input's entries until #460 settles the bound's owner.
+            Ok((inner, [])) => Ok(Self::new(
                 inner,
-                // Interim: the form's length stands in for the input's entries until #460 settles the bound's owner.
-                entries: StoredEntries(form.len() / size_of::<f64>()),
-            }),
+                StoredEntries(form.len() / size_of::<f64>()),
+                Threads::All,
+            )),
             Ok((_, rest)) => Err(invalid(&format_args!("{} trailing bytes", rest.len()))),
             Err(error) => {
                 let mismatch = postcard::take_from_bytes::<Header>(form)
@@ -340,117 +460,84 @@ impl PyApproxInverse {
 
     #[getter]
     fn n(&self) -> usize {
-        self.inner.n()
+        self.factor.inner.n()
     }
 
     #[getter]
     fn n_steps(&self) -> usize {
-        self.inner.n_steps()
+        self.factor.inner.n_steps()
     }
 
     #[getter]
-    fn shape(&self) -> (usize, usize) {
-        let n = self.inner.n();
-        (n, n)
-    }
-
-    #[getter]
-    fn dtype<'py>(&self, py: Python<'py>) -> Bound<'py, PyArrayDescr> {
-        f64::get_dtype(py)
-    }
-
-    fn matvec<'py>(
-        &self,
-        py: Python<'py>,
-        x: &Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        self.solve(py, x)
-    }
-
-    fn rmatvec<'py>(
-        &self,
-        py: Python<'py>,
-        x: &Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        self.solve(py, x)
-    }
-
-    fn solve<'py>(
-        &self,
-        py: Python<'py>,
-        b: &Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        let b = right_hand_side(py, b)?;
-        let b_slice = b.as_slice().expect("right_hand_side is contiguous");
-        let mut x = b_slice.to_vec();
-        let solved = (self.entries).detach(py, || self.inner.apply(x.as_mut_slice(), Threads::All));
-        solved.map_err(apply_error)?;
-        Ok(PyArray1::from_vec(py, x))
-    }
-
-    fn workspace(&self) -> PyWorkspace {
-        PyWorkspace {
-            x: Vec::new(),
-            scratch: MemBuffer::new(self.inner.scratch(1, Threads::All)),
+    fn threads(&self) -> Option<usize> {
+        match self.threads {
+            Threads::All => None,
+            Threads::Count(count) => Some(count.get()),
         }
     }
 
-    #[pyo3(signature = (b, out, workspace=None))]
-    fn solve_into<'py>(
+    fn with_threads(&self, threads: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        let factor = Arc::clone(&self.factor);
+        Ok(Self {
+            factor,
+            threads: self::threads(threads)?,
+        })
+    }
+
+    #[getter]
+    fn components<'py>(&self, py: Python<'py>) -> PyResult<&Py<PyTuple>> {
+        self.factor.components.get_or_try_init(py, || {
+            let components = self.factor.inner.components().map(|component| {
+                let vertices = component
+                    .vertices()
+                    .map(|v| isize::try_from(v).expect("an index"));
+                let vertices = PyArray1::from_iter(py, vertices);
+                vertices.readwrite().make_nonwriteable();
+                let clamp = component.clamp().map(|clamp| PyClamp {
+                    violation: clamp.violation,
+                    scaling: match clamp.scaling {
+                        ScalingOutcome::Certified => "certified",
+                        ScalingOutcome::Refuted => "refuted",
+                        ScalingOutcome::Unsettled => "unsettled",
+                    },
+                });
+                let clamp = clamp.map(|clamp| Py::new(py, clamp)).transpose()?;
+                let vertices = vertices.unbind();
+                Py::new(py, PyComponent { vertices, clamp })
+            });
+            let components = components.collect::<PyResult<Vec<_>>>()?;
+            PyTuple::new(py, components).map(Bound::unbind)
+        })
+    }
+
+    /// Solves `b` into a new array, or into `out`, which may be `b`: the solve runs on its own copy, as without the GIL another thread may touch `out`.
+    fn apply<'py>(
         &self,
-        py: Python<'py>,
         b: &Bound<'py, PyAny>,
-        out: &Bound<'py, PyArray1<f64>>,
-        mut workspace: Option<PyRefMut<'py, PyWorkspace>>,
-    ) -> PyResult<()> {
-        let n = self.inner.n();
-        let mut owned = None;
-        let PyWorkspace { x, scratch } = match workspace.as_deref_mut() {
-            Some(workspace) => workspace,
-            None => owned.insert(self.workspace()),
+        out: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let b = match b.cast::<PyUntypedArray>() {
+            Ok(b) => b.clone(),
+            Err(_) => (b.py().import("numpy")?)
+                .call_method1("asarray", (b,))?
+                .cast_into()?,
         };
-        {
-            let b = right_hand_side(py, b)?;
-            x.clear();
-            x.extend_from_slice(b.as_slice().expect("right_hand_side is contiguous"));
+        let n = self.factor.inner.n();
+        match b.shape() {
+            [rows] if *rows == n => self.apply_as::<Ix1>(&b, out),
+            [rows, _] if *rows == n => self.apply_as::<Ix2>(&b, out),
+            _ => {
+                let shape = b.getattr("shape")?;
+                Err(value_error(format!(
+                    "b has shape {shape}, expected ({n},) or ({n}, k)"
+                )))
+            }
         }
-        // `b`'s borrow is released, so `out` may be `b` or overlap it.
-        let mut out_rw = out.try_readwrite().map_err(|e| borrow_error("out", e))?;
-        let out = out_rw
-            .as_slice_mut()
-            .map_err(|_| value_error("out must be contiguous"))?;
-        if out.len() < n {
-            return Err(value_error(format!(
-                "out length {} is smaller than matrix dimension {n}",
-                out.len()
-            )));
-        }
-        let out = &mut out[..n];
-        // Our own buffer: without the GIL, or on a free-threaded build, another thread may touch `out`.
-        let solved = (self.entries).detach(py, || {
-            (self.inner).apply_with(x.as_mut_slice(), Threads::All, MemStack::new(scratch))
-        });
-        solved
-            .map(|()| out.copy_from_slice(x))
-            .map_err(|e| match e {
-                ApplyError::Scratch => {
-                    value_error("workspace is from a smaller factor; use this factor's workspace()")
-                }
-                e => apply_error(e),
-            })
     }
-}
-
-/// Caller-owned solve buffers, so repeated `solve_into` calls allocate nothing.
-#[pyclass(name = "Workspace")]
-struct PyWorkspace {
-    /// Grown by the first solve; `workspace()` allocates only `scratch`.
-    x: Vec<f64>,
-    scratch: MemBuffer,
 }
 
 #[pyfunction]
-#[pyo3(signature = (row_ptrs, col_indices, values, n, config=None, scaling=None))]
+#[pyo3(signature = (row_ptrs, col_indices, values, n, config, scaling))]
 fn factorize_raw<'py>(
     py: Python<'py>,
     row_ptrs: &Bound<'py, PyAny>,
@@ -468,17 +555,19 @@ fn factorize_raw<'py>(
         data: as_contiguous(&np, &as_1d(&np, values, "values", Column::Value)?)?,
         np,
     }
-    .factorize(config, scaling)
+    .factorize(config, scaling, Threads::All)
 }
 
 #[pyfunction]
-#[pyo3(signature = (matrix, config=None, scaling=None))]
+#[pyo3(signature = (matrix, config, scaling, threads))]
 fn factorize(
     py: Python<'_>,
     matrix: &Bound<'_, PyAny>,
     config: Option<&PyConfig>,
     scaling: Option<&PyScalingPolicy>,
+    threads: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PyApproxInverse> {
+    let threads = self::threads(threads)?;
     let (n, columns) = matrix.getattr("shape")?.extract::<(usize, usize)>()?;
     if n != columns {
         let error = InputError::NotSquare {
@@ -496,7 +585,7 @@ fn factorize(
         data: as_contiguous(&np, &data)?,
         np,
     }
-    .factorize(config, scaling)
+    .factorize(config, scaling, threads)
 }
 
 /// A CSR's checked arrays: values already `f64`, indices still in the caller's dtype.
@@ -513,6 +602,7 @@ impl CsrArrays<'_> {
         &self,
         config: Option<&PyConfig>,
         scaling: Option<&PyScalingPolicy>,
+        threads: Threads,
     ) -> PyResult<PyApproxInverse> {
         let dtypes = (
             self.indptr.getattr("dtype")?,
@@ -522,11 +612,11 @@ impl CsrArrays<'_> {
         let kind = dtype.getattr("kind")?.extract::<String>()?;
         let width = dtype.getattr("itemsize")?.extract::<usize>()?;
         match (kind.as_str(), width) {
-            ("i", 4) => self.factorize_as::<i32>(config, scaling),
-            ("u", 4) => self.factorize_as::<u32>(config, scaling),
-            ("u", 8) => self.factorize_as::<u64>(config, scaling),
+            ("i", 4) => self.factorize_as::<i32>(config, scaling, threads),
+            ("u", 4) => self.factorize_as::<u32>(config, scaling, threads),
+            ("u", 8) => self.factorize_as::<u64>(config, scaling, threads),
             // Narrower integers widen; int64 beside uint64 promotes to float, and i64 holds any valid index.
-            _ => self.factorize_as::<i64>(config, scaling),
+            _ => self.factorize_as::<i64>(config, scaling, threads),
         }
     }
 
@@ -535,6 +625,7 @@ impl CsrArrays<'_> {
         &self,
         config: Option<&PyConfig>,
         scaling: Option<&PyScalingPolicy>,
+        threads: Threads,
     ) -> PyResult<PyApproxInverse> {
         let indptr = as_contiguous::<J>(&self.np, &self.indptr)?;
         let indices = as_contiguous::<J>(&self.np, &self.indices)?;
@@ -547,24 +638,25 @@ impl CsrArrays<'_> {
         let inner = entries.detach(py, || {
             let sgdd = CsrRef::new(n, &indptr, &indices, &data)
                 .map_err(value_error)
-                .and_then(|csr| Sgdd::reduce(csr, scaling, Threads::All).map_err(value_error));
+                .and_then(|csr| Sgdd::reduce(csr, scaling, threads).map_err(value_error));
             // Freed before factoring: the copy never coexists with the factor's fill.
             drop((indptr, indices, data));
-            sgdd.map(|sgdd| sgdd.factor(config, Threads::All))
+            sgdd.map(|sgdd| sgdd.factor(config, threads))
         })?;
         warn_on_scaling(py, &inner)?;
-        Ok(PyApproxInverse { inner, entries })
+        Ok(PyApproxInverse::new(inner, entries, threads))
     }
 }
 
 /// Approximate Cholesky factorization for SDDM/Laplacian systems.
-// GIL-free is sound: pyclass state is `Sync`, `Workspace` is borrow-checked, the module holds none, and `detach` reads only owned copies.
+// GIL-free is sound: pyclass state is `Sync` and immutable, the module holds none, and `detach` touches only owned copies.
 #[pymodule(gil_used = false)]
 fn _approx_chol(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyApproxInverse>()?;
+    m.add_class::<PyClamp>()?;
+    m.add_class::<PyComponent>()?;
     m.add_class::<PyConfig>()?;
     m.add_class::<PyScalingPolicy>()?;
-    m.add_class::<PyWorkspace>()?;
     m.add_function(wrap_pyfunction!(factorize, m)?)?;
     m.add_function(wrap_pyfunction!(factorize_raw, m)?)?;
     Ok(())

@@ -29,7 +29,7 @@ def test_preconditioner_reduces_cg_iterations_to_tolerance():
     )
     assert info_unpre == 0, f"unpreconditioned CG did not converge, info={info_unpre}"
 
-    factor = approx_chol.factorize(a, approx_chol.Config(seed=0))
+    factor = approx_chol.factorize(a, config=approx_chol.Config(seed=0))
 
     pre_iters: list[int] = []
     x_pre, info_pre = spla.cg(
@@ -56,8 +56,10 @@ def test_sddm_solve_matches_dense_inverse():
     a = sp.csr_matrix(m)
     b = np.array([1.0, 2.0, 3.0])  # sum = 6 != 0
 
-    factor = approx_chol.factorize(a, approx_chol.Config(seed=0, exact_max_dim=0))
-    x = factor.solve(b)
+    factor = approx_chol.factorize(
+        a, config=approx_chol.Config(seed=0, exact_max_dim=0)
+    )
+    x = factor.apply(b)
 
     assert np.linalg.norm(x - np.linalg.solve(m, b)) < 1e-9
 
@@ -69,7 +71,7 @@ def test_sddm_preconditioner_makes_cg_converge():
     a = (lap + 0.5 * sp.eye(n, format="csr")).tocsr()
     b = np.ones(n, dtype=np.float64)  # sum = n != 0
 
-    factor = approx_chol.factorize(a, approx_chol.Config(seed=0))
+    factor = approx_chol.factorize(a, config=approx_chol.Config(seed=0))
     x, info = spla.cg(a, b, M=factor, rtol=1e-8, atol=0.0, maxiter=5000)
 
     assert info == 0, f"preconditioned CG on SDDM did not converge, info={info}"
