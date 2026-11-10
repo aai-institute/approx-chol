@@ -9,17 +9,60 @@ from typing_extensions import Never
 
 __all__ = [
     "ApproxInverse",
+    "BuildError",
     "Clamp",
     "Component",
     "Config",
+    "InputError",
     "ScalingPolicy",
     "factorize",
     "factorize_raw",
 ]
 
+_BuildErrorKind: TypeAlias = Literal["out_of_range", "too_large"]
+
 _Frustrated: TypeAlias = Literal[
     "cover", "cover_ground_vertex", "cover_surplus_edges", "signed"
 ]
+
+class _RustError(ValueError):
+    @property
+    def kind(self) -> str: ...
+
+class InputError(_RustError):
+    """Why an input was rejected: Rust's ``InputError``, its variant in snake case as ``kind``.
+
+    ``parameter`` is the array the variant names, by the caller's name: ``indptr``,
+    ``indices`` or ``data`` of the matrix :func:`factorize` reads, ``row_ptrs``,
+    ``col_indices`` or ``values`` of :func:`factorize_raw`. ``position`` is the
+    entry, row, edge or column the variant names. Each is ``None`` where the
+    variant names none. The message is Rust's ``Display``, which carries every
+    field of the variant and names an array as ``parameter`` does, except
+    ``row_ptrs``; ``kind``, ``parameter`` and ``position`` are for matching.
+    """
+
+    def __init__(
+        self, message: str, kind: str, parameter: str | None, position: int | None, /
+    ) -> None: ...
+    @property
+    def parameter(self) -> str | None: ...
+    @property
+    def position(self) -> int | None: ...
+
+class BuildError(_RustError):
+    """Why a valid input did not build: Rust's ``BuildError``, its variant in snake case as ``kind``.
+
+    ``"out_of_range"``: a value computed at ``vertex``, the offending row, left
+    the representable range. ``"too_large"``: the block whose lowest vertex is
+    ``vertex`` passes ``1/ε`` vertices. ``vertex`` is in the matrix's numbering.
+    The message is Rust's ``Display``.
+    """
+
+    def __init__(self, message: str, kind: _BuildErrorKind, vertex: int, /) -> None: ...
+    @property
+    def kind(self) -> _BuildErrorKind: ...
+    @property
+    def vertex(self) -> int: ...
 
 @final
 class Config:
@@ -217,10 +260,14 @@ def factorize(
         threads: The thread budget, ``None`` every core.
 
     Raises:
-        ValueError: If the matrix is not square or symmetric, has invalid
-            dtypes/ranges, exceeds index limits, has invalid CSR structure, or
+        InputError: If the matrix is not square or symmetric, has a value
+            out of range, exceeds index limits, has invalid CSR structure, or
             has a nonpositive diagonal on a nonzero row, an all-zero row
-            solving to 0; or if ``threads`` is outside ``[1, 2**64 - 1]``.
+            solving to 0.
+        BuildError: If a value computed from the matrix leaves the
+            representable range.
+        ValueError: If an array has a dtype it cannot carry or is not 1-D, or
+            ``threads`` is outside ``[1, 2**64 - 1]``.
         TypeError: If ``threads`` is not an integer, or is a bool.
 
     Warns:
@@ -250,9 +297,11 @@ def factorize_raw(
         scaling: Optional scaling policy, as :func:`factorize`.
 
     Raises:
-        ValueError: If an array is not 1-D or has a dtype it cannot carry, the
-            CSR structure is invalid, or the matrix is not symmetric or has a
-            nonpositive diagonal on a nonzero row; an all-zero row solves to 0.
+        InputError: If the CSR structure is invalid, or the matrix is not
+            symmetric or has a nonpositive diagonal on a nonzero row; an
+            all-zero row solves to 0.
+        BuildError: As :func:`factorize`.
+        ValueError: If an array is not 1-D or has a dtype it cannot carry.
 
     Warns:
         RuntimeWarning: As :func:`factorize`.

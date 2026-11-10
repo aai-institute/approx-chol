@@ -27,9 +27,11 @@ def _grid_solution(config: approx_chol.Config) -> np.ndarray:
 def test_package_surface_and_basic_factorize_raw_roundtrip():
     assert approx_chol.__all__ == [
         "ApproxInverse",
+        "BuildError",
         "Clamp",
         "Component",
         "Config",
+        "InputError",
         "ScalingPolicy",
         "factorize",
         "factorize_raw",

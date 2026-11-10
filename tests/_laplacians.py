@@ -4,6 +4,16 @@ import numpy as np
 import scipy.sparse as sp
 
 
+class MatrixLike:
+    """A duck-typed CSR: the attributes ``factorize`` reads, and nothing else."""
+
+    def __init__(self, indptr, indices, data, shape):
+        self.indptr = indptr
+        self.indices = indices
+        self.data = data
+        self.shape = shape
+
+
 def grid_laplacian(rows: int, cols: int) -> sp.csr_matrix:
     """Build a ``rows x cols`` 2D grid-graph Laplacian as a scipy CSR matrix."""
     n = rows * cols
