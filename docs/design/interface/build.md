@@ -120,6 +120,7 @@ pub struct Clamp {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScalingOutcome {
+    Certified,
     Refuted,
     Unsettled,
 }
@@ -178,7 +179,7 @@ class Component:   # read-only
 
 class Clamp:       # read-only
     violation: float
-    scaling: Literal["refuted", "unsettled"]
+    scaling: Literal["certified", "refuted", "unsettled"]
 
 class BuildError(ValueError):
     kind: Literal["out_of_range", "too_large"]
