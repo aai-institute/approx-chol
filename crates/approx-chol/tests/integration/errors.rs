@@ -12,8 +12,8 @@ use rstest::rstest;
     "w has length 2, expected 3"
 )]
 #[case::row_ptrs(
-    InputError::RowPtrs { row: 4 },
-    "row_ptrs[4] is out of order: the first must be 0, each at most the next"
+    InputError::RowPtrs { parameter: "indptr", row: 4 },
+    "indptr[4] is out of order: the first must be 0, each at most the next"
 )]
 #[case::index_out_of_range(
     InputError::IndexOutOfRange { parameter: "col_indices", entry: 5 },

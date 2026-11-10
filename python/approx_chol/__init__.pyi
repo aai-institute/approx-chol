@@ -37,8 +37,8 @@ class InputError(_RustError):
     ``col_indices`` or ``values`` of :func:`factorize_raw`. ``position`` is the
     entry, row, edge or column the variant names. Each is ``None`` where the
     variant names none. The message is Rust's ``Display``, which carries every
-    field of the variant and names an array as ``parameter`` does, except
-    ``row_ptrs``; ``kind``, ``parameter`` and ``position`` are for matching.
+    field of the variant and names an array as ``parameter`` does; ``kind``,
+    ``parameter`` and ``position`` are for matching.
     """
 
     def __init__(

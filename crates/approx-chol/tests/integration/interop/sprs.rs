@@ -50,7 +50,13 @@ fn sprs_outer_slice_with_offset_rows_is_rejected() {
         vec![1.0, 1.0, 1.0, -1.0, -1.0, 1.0],
     );
     let err = CsrRef::try_from(mat.slice_outer(2..4)).expect_err("offset rows must be rejected");
-    assert_eq!(err, InputError::RowPtrs { row: 0 });
+    assert_eq!(
+        err,
+        InputError::RowPtrs {
+            parameter: "row_ptrs",
+            row: 0
+        }
+    );
 }
 
 #[test]

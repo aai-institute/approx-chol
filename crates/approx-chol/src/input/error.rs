@@ -24,8 +24,10 @@ pub enum InputError {
         /// The length found.
         found: usize,
     },
-    /// `row_ptrs[row]` is out of order: the first is not 0, or it exceeds the next.
+    /// A row pointer is out of order: the first is not 0, or it exceeds the next.
     RowPtrs {
+        /// The slice.
+        parameter: &'static str,
         /// The offending pointer's position.
         row: usize,
     },
@@ -100,9 +102,9 @@ impl core::fmt::Display for InputError {
                 expected,
                 found,
             } => write!(f, "{parameter} has length {found}, expected {expected}"),
-            Self::RowPtrs { row } => write!(
+            Self::RowPtrs { parameter, row } => write!(
                 f,
-                "row_ptrs[{row}] is out of order: the first must be 0, each at most the next"
+                "{parameter}[{row}] is out of order: the first must be 0, each at most the next"
             ),
             Self::IndexOutOfRange { parameter, entry } => {
                 write!(f, "{parameter}[{entry}] is out of range")

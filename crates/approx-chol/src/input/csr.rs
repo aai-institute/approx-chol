@@ -73,13 +73,19 @@ impl<'a, T: Real, I: PrimInt> CsrArrays<'a, T, I> {
         let row_ptr_last = representable(row_ptrs, n)?;
         if row_ptrs[0] != I::zero() {
             representable(row_ptrs, 0)?;
-            return Err(InputError::RowPtrs { row: 0 });
+            return Err(InputError::RowPtrs {
+                parameter: "row_ptrs",
+                row: 0,
+            });
         }
         length("col_indices", row_ptr_last, col_indices.len())?;
         // From 0 and in order up to a decrease, only the pointer after it can be negative.
         if let Some(row) = (0..n).find(|&i| row_ptrs[i] > row_ptrs[i + 1]) {
             representable(row_ptrs, row + 1)?;
-            return Err(InputError::RowPtrs { row });
+            return Err(InputError::RowPtrs {
+                parameter: "row_ptrs",
+                row,
+            });
         }
         let order = match is_canonical(row_ptrs, col_indices)? {
             true => Order::Canonical,

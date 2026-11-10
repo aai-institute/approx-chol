@@ -60,15 +60,21 @@ INPUT_ERRORS = [
     ),
     pytest.param(
         _raw([1, 2, 4], [0, 1, 0, 1], [2, -1, -1, 2]),
-        ("row_ptrs", None, 0),
+        ("row_ptrs", "row_ptrs", 0),
         f"row_ptrs[0] {ORDER}",
         id="row_ptrs_first",
     ),
     pytest.param(
         _raw([0, 3, 2], [0, 1], [2, 2]),
-        ("row_ptrs", None, 1),
+        ("row_ptrs", "row_ptrs", 1),
         f"row_ptrs[1] {ORDER}",
         id="row_ptrs_decreasing",
+    ),
+    pytest.param(
+        _duck([0, 3, 2], [0, 1], [2, 2]),
+        ("row_ptrs", "indptr", 1),
+        f"indptr[1] {ORDER}",
+        id="row_ptrs_scipy",
     ),
     pytest.param(
         _raw([0, 2, 4], [0, 2, 0, 1], [2, -1, -1, 2]),
