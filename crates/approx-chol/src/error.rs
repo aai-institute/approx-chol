@@ -1,42 +1,33 @@
-use crate::input::InputError;
-use crate::ReduceError;
-
-/// Why an input did not factor.
+/// Why a valid input did not reduce: a block too large, or a sum computed from it outside the representable range; each `vertex` is in `A`'s numbering.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Error {
-    /// The input is not a matrix of its form.
-    Input(InputError),
-    /// A block has no SDDM form.
-    Reduce(ReduceError),
+pub enum BuildError {
+    /// The block passes `1/ε` vertices: floor weights in series would fall below `MIN_POSITIVE`.
+    TooLarge {
+        /// The component's lowest vertex.
+        vertex: usize,
+    },
+    /// The row whose computed value left the representable range, in `A`'s numbering; a block left with no representable ground names the first row its float-or-ground rule marks a ground, else its row of the largest residue.
+    OutOfRange {
+        /// The offending row.
+        vertex: usize,
+    },
 }
 
-impl From<InputError> for Error {
-    fn from(error: InputError) -> Self {
-        Self::Input(error)
-    }
-}
-
-impl From<ReduceError> for Error {
-    fn from(error: ReduceError) -> Self {
-        Self::Reduce(error)
-    }
-}
-
-impl core::fmt::Display for Error {
+impl core::fmt::Display for BuildError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Input(error) => write!(f, "invalid input: {error}"),
-            Self::Reduce(error) => write!(f, "cannot reduce: {error}"),
+            Self::TooLarge { vertex } => {
+                write!(f, "the block of vertex {vertex} passes 1/ε vertices")
+            }
+            Self::OutOfRange { vertex } => {
+                write!(
+                    f,
+                    "a value at vertex {vertex} is outside the representable range"
+                )
+            }
         }
     }
 }
 
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Input(error) => Some(error),
-            Self::Reduce(error) => Some(error),
-        }
-    }
-}
+impl std::error::Error for BuildError {}

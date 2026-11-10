@@ -59,7 +59,7 @@ use num_traits::{float::TotalOrder, Float, PrimInt, Unsigned};
 
 use batch::Batch;
 pub use dyn_stack::{MemBuffer, MemStack, StackReq};
-pub use error::Error;
+pub use error::BuildError;
 #[cfg(feature = "serde")]
 pub use factor::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
 pub use factor::{
@@ -67,12 +67,12 @@ pub use factor::{
     FrustratedRoute, LayoutError, MatrixMut, Sampling, SchurMode,
 };
 use input::{Input, Side};
-pub use sgdd::{Clamp, ReduceError, ScalingOutcome, ScalingPolicy};
+pub use sgdd::{Clamp, ScalingOutcome, ScalingPolicy};
 use sgdd::{Complement, Reduced};
 pub use threads::Threads;
 
 /// Factorizes any [`Input`] with [`Config::default`] and [`ScalingPolicy::default`].
-pub fn factorize<'a, T, I, M>(input: M) -> Result<ApproxInverse<T>, Error>
+pub fn factorize<'a, T, I, M>(input: M) -> Result<ApproxInverse<T>, BuildError>
 where
     T: Real,
     I: PrimInt + Sync + 'a,
@@ -86,7 +86,7 @@ pub fn factorize_with<'a, T, I, M>(
     input: M,
     config: Config,
     scaling: ScalingPolicy,
-) -> Result<ApproxInverse<T>, Error>
+) -> Result<ApproxInverse<T>, BuildError>
 where
     T: Real,
     I: PrimInt + Sync + 'a,
@@ -101,7 +101,7 @@ pub fn factorize_complement<T: Real, I: PrimInt + Sync>(
     kept: Side,
     config: Config,
     scaling: ScalingPolicy,
-) -> Result<ApproxInverse<T>, Error> {
+) -> Result<ApproxInverse<T>, BuildError> {
     Ok(match fits_u32(input.n()) {
         true => ApproxInverse::build(
             Complement::<T, u32>::reduce_onto(input, kept, scaling, Threads::All)?,
@@ -134,7 +134,7 @@ enum Indexed<T> {
 
 impl<T: Real> Sgdd<T> {
     /// Reduces any [`Input`], scaling each block short of dominance under `scaling`; nothing after this reads `input`.
-    pub fn reduce<'a, I, M>(input: M, scaling: ScalingPolicy) -> Result<Self, Error>
+    pub fn reduce<'a, I, M>(input: M, scaling: ScalingPolicy) -> Result<Self, BuildError>
     where
         I: PrimInt + Sync + 'a,
         M: Into<Input<'a, T, I>>,
@@ -214,6 +214,15 @@ fn in_range<T: Real>(x: T) -> bool {
 /// In range and at most `MAX/4`, so every row sum, pivot and surplus stays finite.
 fn diagonal_in_range<T: Real>(d: T) -> bool {
     in_range(d) && d <= T::max_value() / (T::one() + T::one() + T::one() + T::one())
+}
+
+/// The index of the largest `key`: the last entry unless an earlier one strictly passes it, then the first of the largest earlier ones; a NaN wins no comparison, and an empty slice gives `0`.
+fn argmax<T: Real>(values: &[T], key: impl Fn(T) -> T) -> usize {
+    let last = values.len().saturating_sub(1);
+    (0..last).fold(last, |best, i| match key(values[i]) > key(values[best]) {
+        true => i,
+        false => best,
+    })
 }
 
 /// Every `f64` sum starts here: a `Float` always casts up.
@@ -328,7 +337,19 @@ fn two_sum<W: Batch<f64>>(a: W, b: W) -> (W, W) {
 
 #[cfg(test)]
 mod tests {
-    use super::{compensated_sum, Sum2};
+    use super::{argmax, compensated_sum, Sum2};
+
+    /// The gauge pin's choice, which a factor's bits follow: a tie with the last entry keeps the last, else the first of the earlier maxima; a NaN never wins.
+    #[test]
+    fn argmax_keeps_the_last_on_a_tie_with_it_else_the_first_maximum() {
+        let id = |x: f64| x;
+        assert_eq!(argmax(&[3.0, 1.0, 3.0], id), 2);
+        assert_eq!(argmax(&[1.0, 3.0, 3.0, 2.0], id), 1);
+        assert_eq!(argmax(&[f64::NAN, 1.0, 2.0], id), 2);
+        assert_eq!(argmax(&[1.0, 2.0, f64::NAN], id), 2);
+        assert_eq!(argmax(&[-4.0, 1.0, 4.0], f64::abs), 2);
+        assert_eq!(argmax::<f64>(&[], id), 0);
+    }
 
     /// The dropped `1.0` is the smaller operand as the addend in one order and as the running sum in the other.
     #[test]

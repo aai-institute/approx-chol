@@ -1,4 +1,5 @@
 use approx_chol::input::Side;
+use approx_chol::Real;
 
 use super::bipartite::Bipartite;
 
@@ -16,10 +17,10 @@ pub fn matrix(n: usize, a: &[u32], b: &[u32], x: &[f64], y: &[f64]) -> Vec<Vec<f
 }
 
 /// `matrix`'s nonzeros as whole CSR arrays.
-pub fn dense_csr(matrix: &[Vec<f64>]) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
+pub fn dense_csr<T: Real>(matrix: &[Vec<T>]) -> (Vec<u32>, Vec<u32>, Vec<T>) {
     let (mut ptrs, mut columns, mut values) = (vec![0u32], Vec::new(), Vec::new());
     for row in matrix {
-        for (j, &x) in row.iter().enumerate().filter(|&(_, &x)| x != 0.0) {
+        for (j, &x) in row.iter().enumerate().filter(|&(_, &x)| x != T::zero()) {
             columns.push(j as u32);
             values.push(x);
         }

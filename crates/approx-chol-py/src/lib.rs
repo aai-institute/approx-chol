@@ -11,21 +11,11 @@ use numpy::{
 use pyo3::exceptions::{PyNotImplementedError, PyOverflowError};
 use pyo3::marker::Ungil;
 use pyo3::prelude::*;
-use std::error::Error;
 use std::num::NonZeroU32;
 
 #[inline]
-fn value_error(message: impl Into<String>) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(message.into())
-}
-
-/// The innermost cause, so the message names the defect and its row or vertex.
-fn error_to_py(error: &dyn Error) -> PyErr {
-    let mut cause = error;
-    while let Some(source) = cause.source() {
-        cause = source;
-    }
-    value_error(cause.to_string())
+fn value_error(message: impl std::fmt::Display) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(message.to_string())
 }
 
 /// A vector's length is its block's row count.
@@ -34,7 +24,7 @@ fn apply_error(error: ApplyError) -> PyErr {
         ApplyError::Rows { expected, found } => value_error(format!(
             "right-hand side has length {found}, expected {expected}"
         )),
-        error => error_to_py(&error),
+        error => value_error(error),
     }
 }
 
@@ -460,7 +450,7 @@ fn factorize(
             rows: n,
             cols: columns,
         };
-        return Err(error_to_py(&error));
+        return Err(value_error(error));
     }
     let np = py.import("numpy")?;
     let data = as_1d(&np, &matrix.getattr("data")?, "data", Column::Value)?;
@@ -521,8 +511,8 @@ impl CsrArrays<'_> {
         let (py, n, entries) = (self.np.py(), self.n, StoredEntries(data.len()));
         let inner = entries.detach(py, || {
             let sgdd = CsrRef::new(n, &indptr, &indices, &data)
-                .map_err(|e| error_to_py(&e))
-                .and_then(|csr| Sgdd::reduce(csr, scaling).map_err(|e| error_to_py(&e)));
+                .map_err(value_error)
+                .and_then(|csr| Sgdd::reduce(csr, scaling).map_err(value_error));
             // Freed before factoring: the copy never coexists with the factor's fill.
             drop((indptr, indices, data));
             sgdd.map(|sgdd| sgdd.factor(&config))

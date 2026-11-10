@@ -175,7 +175,7 @@ impl<T: Real, I: Index> Rows<T, I> {
     }
 
     /// Scaled by `r` on rows and `c` on columns, with the new [`abs_sums`](Self::abs_sums) from the same pass.
-    fn scaled_abs_sums(self, r: &[T], c: &[T], offset: usize) -> Option<(Self, Vec<f64>)> {
+    fn scaled_abs_sums(self, r: &[T], c: &[T], offset: usize) -> Result<(Self, Vec<f64>), usize> {
         let mut sums = vec![0.0; offset + self.n_cols];
         let mut row = (0, 0.0);
         let scaled = self.scaled_seeing(r, c, |i, j, x| {
@@ -188,7 +188,7 @@ impl<T: Real, I: Index> Rows<T, I> {
             sums[offset + j] += x;
         })?;
         sums[row.0] += row.1;
-        Some((scaled, sums))
+        Ok((scaled, sums))
     }
 
     #[inline(always)]
@@ -197,19 +197,19 @@ impl<T: Real, I: Index> Rows<T, I> {
         r: &[T],
         c: &[T],
         mut seen: impl FnMut(usize, usize, T),
-    ) -> Option<Self> {
+    ) -> Result<Self, usize> {
         for (i, span) in self.ptrs.windows(2).enumerate() {
             for p in span[0]..span[1] {
                 let j = self.indices[p].index();
                 let x = r[i] * self.values[p] * c[j];
                 if x == T::zero() || !crate::in_range(x) {
-                    return None;
+                    return Err(i);
                 }
                 self.values[p] = x;
                 seen(i, j, x);
             }
         }
-        Some(self)
+        Ok(self)
     }
 }
 
@@ -336,8 +336,8 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
         }
     }
 
-    /// `F X F` with the new row sums from the same pass; `None` where an entry leaves range.
-    pub(crate) fn scaled_abs_row_sums(self, f: &[T]) -> Option<(Self, Vec<T>)> {
+    /// `F X F` with the new row sums from the same pass; `Err` at the stored row of the first entry that leaves range.
+    pub(crate) fn scaled_abs_row_sums(self, f: &[T]) -> Result<(Self, Vec<T>), usize> {
         let (scaled, sums) = match self {
             Self::General(adjacency) => {
                 let (rows, sums) = adjacency.rows.scaled_abs_sums(f, f, 0)?;
@@ -349,7 +349,7 @@ impl<T: Real, I: Index> OffDiagonal<T, I> {
                 (Self::Bipartite(cross), sums)
             }
         };
-        Some((scaled, sums.into_iter().map(narrow).collect()))
+        Ok((scaled, sums.into_iter().map(narrow).collect()))
     }
 
     /// Each row's off-diagonal count, both triangles.

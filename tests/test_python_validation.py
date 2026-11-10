@@ -179,6 +179,14 @@ def _f64(*xs):
             "row 0 has a negative diagonal, a zero one beside an edge, or one past MAX/4",
             id="nonpositive_diagonal",
         ),
+        pytest.param(
+            _u32(0, 2, 5, 7),
+            _u32(0, 1, 0, 1, 2, 1, 2),
+            _f64(1, -1, -1, 2.0**-960, -(2.0**1000), -(2.0**1000), 2.0**-960),
+            3,
+            "a value at vertex 1 is outside the representable range",
+            id="relaxation_ratio_out_of_range",
+        ),
     ],
 )
 def test_factorize_raw_names_the_defect(row_ptrs, col_indices, values, n, message):

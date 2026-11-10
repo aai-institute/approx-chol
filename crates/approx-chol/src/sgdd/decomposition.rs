@@ -7,11 +7,11 @@ use rayon::prelude::*;
 mod assembly;
 mod partition;
 
-use super::block::{KeptVertices, ReduceError};
+use super::block::KeptVertices;
 use crate::input::Canonical;
 use crate::storage::{tally_abs, OffDiagonal, Rows, UpperAdjacency};
 use crate::threads::task;
-use crate::{Index, Real, Threads};
+use crate::{BuildError, Index, Real, Threads};
 pub(super) use assembly::{
     assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, StrictUpperTriangle,
 };
@@ -70,7 +70,7 @@ pub(super) struct Cuts<A, I> {
 
 impl<A, I: Index> Partitioned<A, I> {
     /// Each component told apart in the partition's array: a coupled one rotated so its eliminated side leads, a lone or dead one by its pivot.
-    pub(super) fn arrange<T: Real>(self) -> Result<Arranged<A, I, T>, ReduceError>
+    pub(super) fn arrange<T: Real>(self) -> Result<Arranged<A, I, T>, BuildError>
     where
         A: PrincipalBlocks<T, I> + LonePivot<T>,
     {
@@ -87,7 +87,7 @@ impl<A, I: Index> Partitioned<A, I> {
         let too_long = |len: usize| T::from(len).is_none_or(|n| n * T::epsilon() >= T::one());
         if let Some(range) = ranges.clone().find(|range| too_long(range.len())) {
             let vertex = order[range.start].index();
-            return Err(ReduceError::TooLarge { vertex });
+            return Err(BuildError::TooLarge { vertex });
         }
         let (mut coupled, mut lone, mut dead, mut pivots) =
             (Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -127,9 +127,9 @@ impl<A, I: Index> Partitioned<A, I> {
     pub(super) fn reduced<T: Real, B: Send>(
         self,
         threads: Threads,
-        block: impl Fn(&[I], <A as PrincipalBlocks<T, I>>::Block, Threads) -> Result<B, ReduceError>
+        block: impl Fn(&[I], <A as PrincipalBlocks<T, I>>::Block, Threads) -> Result<B, BuildError>
             + Sync,
-    ) -> Result<Summands<B, I, T>, ReduceError>
+    ) -> Result<Summands<B, I, T>, BuildError>
     where
         A: PrincipalBlocks<T, I> + LonePivot<T> + Sync,
     {
@@ -144,9 +144,9 @@ impl<A, I: Index> Cuts<A, I> {
         self,
         components: &'p Components<I, T>,
         threads: Threads,
-        block: impl Fn(&'p [I], <A as PrincipalBlocks<T, I>>::Block, Threads) -> Result<B, ReduceError>
+        block: impl Fn(&'p [I], <A as PrincipalBlocks<T, I>>::Block, Threads) -> Result<B, BuildError>
             + Sync,
-    ) -> Result<Cut<'p, I, T, B>, ReduceError>
+    ) -> Result<Cut<'p, I, T, B>, BuildError>
     where
         A: PrincipalBlocks<T, I> + Sync,
     {
@@ -208,8 +208,8 @@ impl<'p, I, T, B> Cut<'p, I, T, B> {
     /// Each block as `f` makes it from its component's index and itself, in turn, up to the first error.
     pub(super) fn try_map<C>(
         self,
-        mut f: impl FnMut(usize, B) -> Result<C, ReduceError>,
-    ) -> Result<Cut<'p, I, T, C>, ReduceError> {
+        mut f: impl FnMut(usize, B) -> Result<C, BuildError>,
+    ) -> Result<Cut<'p, I, T, C>, BuildError> {
         // Doubling, the folded blocks held up to 2x their size beside the live ones (+12% peak at 99k blocks).
         let mut blocks = Vec::with_capacity(self.blocks.len());
         for (k, block) in self.blocks.into_iter().enumerate() {
@@ -224,8 +224,8 @@ impl<'p, I, T, B> Cut<'p, I, T, B> {
     /// As [`try_map`](Self::try_map), into `blocks`' own buffer where `C` fits it.
     pub(super) fn try_map_in_place<C>(
         self,
-        mut f: impl FnMut(usize, B) -> Result<C, ReduceError>,
-    ) -> Result<Cut<'p, I, T, C>, ReduceError> {
+        mut f: impl FnMut(usize, B) -> Result<C, BuildError>,
+    ) -> Result<Cut<'p, I, T, C>, BuildError> {
         let blocks = (self.blocks.into_iter().enumerate())
             .map(|(k, block)| f(k, block))
             .collect::<Result<_, _>>()?;
@@ -274,8 +274,8 @@ impl<I: Index, T> Components<I, T> {
     /// Each coupled component's block in place of its range, as `cut` makes them from these components.
     pub(super) fn cut<B>(
         self,
-        cut: impl for<'p> FnOnce(&'p Self) -> Result<Cut<'p, I, T, B>, ReduceError>,
-    ) -> Result<Summands<B, I, T>, ReduceError> {
+        cut: impl for<'p> FnOnce(&'p Self) -> Result<Cut<'p, I, T, B>, BuildError>,
+    ) -> Result<Summands<B, I, T>, BuildError> {
         let blocks = cut(&self)?.blocks;
         Ok(self.with_coupled(blocks))
     }
@@ -412,5 +412,28 @@ impl<T: Real, J: PrimInt> LonePivot<T> for Canonical<'_, T, J> {
         self.row(v)
             .find(|&(j, _)| j == v)
             .map_or(T::zero(), |(_, a)| a)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::CsrRef;
+
+    /// The size screen reads only the partition, before `A`: a component of `1/ε` vertices after a lone vertex 0 is too large at its lowest vertex.
+    #[test]
+    fn a_component_of_one_over_epsilon_vertices_is_too_large_at_its_lowest_vertex() {
+        let n = (1u32 << 23) + 1;
+        let csr = CsrRef::new(1, &[0u32, 1], &[0], &[1.0f32]).expect("a valid input");
+        let partitioned = Partitioned {
+            a: Canonical::of(csr.0),
+            partition: Partition {
+                order: (0..n).collect(),
+                ends: vec![1, n],
+                position: None,
+            },
+        };
+        let error = partitioned.arrange::<f32>().err();
+        assert_eq!(error, Some(BuildError::TooLarge { vertex: 1 }));
     }
 }

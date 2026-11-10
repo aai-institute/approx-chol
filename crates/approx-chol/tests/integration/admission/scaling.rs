@@ -1,9 +1,13 @@
 use crate::common::clamps::Clamps;
-use approx_chol::input::{CsrRef, FactorWidth2};
-use approx_chol::{factorize, Config, ScalingOutcome, ScalingPolicy, Sgdd};
+use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Side};
+use approx_chol::{
+    factorize, factorize_complement, ApproxInverse, BuildError, Config, Real, ScalingOutcome,
+    ScalingPolicy, Sgdd,
+};
 use rstest::rstest;
 
 use crate::common::entry::only;
+use crate::common::gram::dense_csr;
 use crate::common::lcg::Lcg;
 
 use super::{reduce, reduce_with};
@@ -213,4 +217,77 @@ fn clamps_list_each_component_by_its_first_vertex() {
         .collect();
     let refuted = ScalingOutcome::Refuted;
     assert_eq!(listed, [(vec![0, 2], refuted), (vec![1, 3], refuted)]);
+}
+
+/// `odd` on vertices 1, 3, 5 beside a dominant path on 0, 2, 4, its block's local row `i` vertex `2i + 1`: what fails at the block's row 1 must name vertex 3.
+fn interleaved_error<T: Real>(odd: [[T; 3]; 3]) -> BuildError {
+    let even = |i: usize, j: usize| match i.abs_diff(j) {
+        0 => T::one() + T::one(),
+        1 => -T::one(),
+        _ => T::zero(),
+    };
+    let entry = |i: usize, j: usize| match (i % 2, j % 2) {
+        (0, 0) => even(i / 2, j / 2),
+        (1, 1) => odd[i / 2][j / 2],
+        _ => T::zero(),
+    };
+    let dense: Vec<Vec<T>> = (0..6)
+        .map(|i| (0..6).map(|j| entry(i, j)).collect())
+        .collect();
+    let (row_ptrs, columns, values) = dense_csr(&dense);
+    reduce(&row_ptrs, &columns, &values).expect_err("out of range")
+}
+
+/// Rows 1 and 2 at diagonal `2^-960` share an edge of `2^1000`: at `y = 1` row 1's ratio `Σ_j|a_1j|/√(a_11 a_jj)` passes `f64`.
+#[test]
+fn a_relaxation_whose_first_ratio_overflows_is_out_of_range_at_its_vertex() {
+    let (tiny, huge) = (2f64.powi(-960), 2f64.powi(1000));
+    let error = interleaved_error([[1.0, -1.0, 0.0], [-1.0, tiny, -huge], [0.0, -huge, tiny]]);
+    assert_eq!(error, BuildError::OutOfRange { vertex: 3 });
+}
+
+/// Rows 0 and 2 couple past dominance; their relaxation scales row 1, at `2^100`, so far down that its stored edge `−2^-100` to row 2 falls below `f32`'s floor.
+#[test]
+fn a_scaled_entry_below_the_floor_is_out_of_range_at_its_stored_vertex() {
+    let (big, small) = (2f32.powi(100), 2f32.powi(-100));
+    let error = interleaved_error([[1.0, 0.0, -3.0], [0.0, big, -small], [-3.0, -small, 1.0]]);
+    assert_eq!(error, BuildError::OutOfRange { vertex: 3 });
+}
+
+/// A lone column on left 0 and right 0, then a path `p_0 … p_30` from left 1, alternating sides, column `k` loading `p_k` with `1/4` and `p_{k+1}` with `4`: its null vector falls by `16` a step, so the last columns' scaled entries fall below `f32`'s floor.
+fn geometric_path() -> (Vec<u32>, Vec<u32>, Vec<f32>, Vec<f32>) {
+    let (mut left, mut right, mut x, mut y) = (vec![0], vec![0], vec![1.0], vec![-1.0]);
+    for k in 0..30u32 {
+        let (l, r, xl, yr) = match k % 2 {
+            0 => (k / 2 + 1, k / 2 + 1, 0.25, 4.0),
+            _ => (k.div_ceil(2) + 1, (k - 1) / 2 + 1, 4.0, 0.25),
+        };
+        left.push(l);
+        right.push(r);
+        x.push(xl);
+        y.push(yr);
+    }
+    (left, right, x, y)
+}
+
+/// Left vertices `0..17`, right `17..33`. The first stored row holding a scaled entry below the floor is the stored side's 15th: left 15, vertex 15, when the left side is stored, as whole and kept right; right 15, vertex 32, when the right is, its kept left side rotated after it. Each is its block's local row 14.
+#[test]
+fn a_bipartite_block_names_the_stored_row_in_the_callers_numbering() {
+    let (left, right, x, y) = geometric_path();
+    let left = FactorWidth1::valued(17, &left, &x).expect("a valid side");
+    let right = FactorWidth1::valued(16, &right, &y).expect("a valid side");
+    let v = BipartiteFactorWidth2::new(left, right).expect("a valid gram");
+    let complement = |kept| {
+        factorize_complement(v, kept, Config::default(), ScalingPolicy::default()).map(|_| ())
+    };
+    let whole = factorize(v).map(|_: ApproxInverse<f32>| ());
+    assert_eq!(whole, Err(BuildError::OutOfRange { vertex: 15 }));
+    assert_eq!(
+        complement(Side::Right),
+        Err(BuildError::OutOfRange { vertex: 15 })
+    );
+    assert_eq!(
+        complement(Side::Left),
+        Err(BuildError::OutOfRange { vertex: 32 })
+    );
 }

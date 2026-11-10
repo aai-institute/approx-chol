@@ -1,5 +1,5 @@
 use approx_chol::input::InputError;
-use approx_chol::Error;
+use approx_chol::BuildError;
 use rstest::rstest;
 
 #[rstest]
@@ -50,12 +50,12 @@ fn each_input_error_displays_every_field(#[case] error: InputError, #[case] expe
     assert_eq!(error.to_string(), expected);
 }
 
-#[test]
-fn an_input_error_is_the_source_of_error_input() {
-    let input = InputError::RowPtrs { row: 0 };
-    let error = Error::from(input);
-    assert_eq!(error, Error::Input(input));
-    assert_eq!(error.to_string(), format!("invalid input: {input}"));
-    let source = std::error::Error::source(&error).map(ToString::to_string);
-    assert_eq!(source, Some(input.to_string()));
+#[rstest]
+#[case::too_large(BuildError::TooLarge { vertex: 3 }, "the block of vertex 3 passes 1/ε vertices")]
+#[case::out_of_range(
+    BuildError::OutOfRange { vertex: 4 },
+    "a value at vertex 4 is outside the representable range"
+)]
+fn each_build_error_displays_its_vertex(#[case] error: BuildError, #[case] expected: &str) {
+    assert_eq!(error.to_string(), expected);
 }

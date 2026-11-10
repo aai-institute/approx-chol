@@ -5,7 +5,7 @@ mod graph;
 
 use num_traits::PrimInt;
 
-use super::block::{Balance, BlockComplement, Congruent, Grounding, IrreducibleBlock, ReduceError};
+use super::block::{Balance, BlockComplement, Congruent, Grounding, IrreducibleBlock};
 use super::congruence::Congruence;
 use super::decomposition::{
     of_csr, AdjacencyLayout, Biadjacency, Partitioned, RowSums, StrictUpperTriangle, SymmetricBlock,
@@ -15,7 +15,7 @@ use super::{Complement, Reduced};
 use crate::diagonal_in_range;
 use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Lowered, Side};
 use crate::storage::OffDiagonal;
-use crate::{narrow, widen, Error, Index, Real, Threads};
+use crate::{argmax, narrow, widen, BuildError, Index, Real, Threads};
 
 impl<T: Real, I: Index> Reduced<T, I> {
     /// The view's irreducible blocks, each reduced; `policy` scales those not already dominant.
@@ -23,7 +23,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
         input: Input<'_, T, J>,
         policy: ScalingPolicy,
         threads: Threads,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, BuildError> {
         Ok(match input.0 {
             Lowered::Csr(rows) => of_csr(Canonical::of(rows)).reduce(&policy, threads)?,
             Lowered::FactorWidth2(v) => Self::from_factor_width_2(v, &policy, threads)?,
@@ -34,7 +34,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
         v: FactorWidth2<'_, T, J>,
         policy: &ScalingPolicy,
         threads: Threads,
-    ) -> Result<Self, ReduceError> {
+    ) -> Result<Self, BuildError> {
         match Biadjacency::of(&v) {
             Some(layout) => Self::from_gram(layout, v, policy, threads),
             None => Self::from_gram(StrictUpperTriangle, v, policy, threads),
@@ -47,7 +47,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
         v: FactorWidth2<'_, T, J>,
         policy: &ScalingPolicy,
         threads: Threads,
-    ) -> Result<Self, ReduceError> {
+    ) -> Result<Self, BuildError> {
         match v.is_incidence() {
             true => Self::from_incidence(cells, v, threads),
             false => Self::from_values(cells, v, policy, threads),
@@ -62,7 +62,7 @@ impl<T: Real, I: Index> Complement<T, I> {
         kept: Side,
         policy: ScalingPolicy,
         threads: Threads,
-    ) -> Result<Self, ReduceError> {
+    ) -> Result<Self, BuildError> {
         let range = input.vertices(kept);
         let layout = Biadjacency::onto(&input, kept);
         let whole: Reduced<T, I> = Reduced::from_gram(layout, input.lower(), &policy, threads)?;
@@ -77,11 +77,7 @@ impl<T: Real, I: Index> Complement<T, I> {
 
 impl<T: Real, J: PrimInt + Sync, I: Index> Partitioned<Canonical<'_, T, J>, I> {
     /// Scales and signs each block's `A_c`, closing its surplus from the same rows.
-    fn reduce(
-        self,
-        policy: &ScalingPolicy,
-        threads: Threads,
-    ) -> Result<Reduced<T, I>, ReduceError> {
+    fn reduce(self, policy: &ScalingPolicy, threads: Threads) -> Result<Reduced<T, I>, BuildError> {
         self.reduced(threads, |vertices, entries, threads| {
             let a = SymmetricBlock { vertices, entries };
             let relax = |a: &SymmetricBlock<'_, T, I>| {
@@ -109,21 +105,20 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
     fn reduce(
         self,
         policy: &ScalingPolicy,
-        relax: impl FnOnce(&Self) -> Option<scaling::Relaxation<T>>,
-    ) -> Result<Settling<'p, T, I>, ReduceError> {
+        relax: impl FnOnce(&Self) -> Result<scaling::Relaxation<T>, usize>,
+    ) -> Result<Settling<'p, T, I>, BuildError> {
+        let at = |i| out_of_range(self.vertices, i);
         let RowSums { diagonal, abs } = &self.entries.rows;
         if let Some(i) = abs.iter().position(|&s| !diagonal_in_range(s)) {
-            let vertex = self.vertices[i].index();
-            return Err(ReduceError::OutOfRange { vertex });
+            return Err(at(i));
         }
-        let vertex = self.vertices[0].index();
         let relaxation = match diagonal
             .iter()
             .zip(abs)
             .all(|(&d, &s)| policy.dominates(d, s))
         {
             true => None,
-            false => Some(relax(&self).ok_or(ReduceError::Unscalable { vertex })?),
+            false => Some(relax(&self).map_err(at)?),
         };
         let folding = folding_signs(&self.entries.off_diagonal);
         let balance = match folding {
@@ -140,7 +135,7 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
             Some((scales, vector)) => {
                 let (m, abs) =
                     Congruent::scaled(self.vertices, self.entries.off_diagonal, signs, &scales)
-                        .ok_or(ReduceError::Unscalable { vertex })?;
+                        .map_err(at)?;
                 let diagonal = (self.entries.rows.diagonal.iter().zip(&scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();
@@ -249,7 +244,7 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         self,
         (ones, trace): (f64, f64),
         surplus: &S,
-    ) -> Result<IrreducibleBlock<T, I>, ReduceError> {
+    ) -> Result<IrreducibleBlock<T, I>, BuildError> {
         let stated = surplus.stated(&self);
         let in_band = stated.is_none() && within_band::<T>(ones, trace);
         let residues_float =
@@ -267,18 +262,22 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         }
         let grounding = surplus.grounds(&self);
         if !grounding.is_grounded() {
-            let vertex = self.m.vertices()[0].index();
-            return Err(ReduceError::Unscalable { vertex });
+            let past = (grounds.as_deref()).and_then(|grounds| grounds.iter().position(|&g| g));
+            let row = past.unwrap_or_else(|| {
+                let residues: Vec<f64> = surplus.residues(&self).collect();
+                argmax(&residues, |r| r)
+            });
+            return Err(out_of_range(self.m.vertices(), row));
         }
         let Self { m, .. } = self;
         let grounding = grounding
             .kept(grounds.as_deref())
-            .map_err(|i| out_of_range(&m, i))?;
+            .map_err(|i| out_of_range(m.vertices(), i))?;
         Ok(m.block(Balance::Balanced, grounding, vector, clamped))
     }
 
     /// A frustrated `M`, definite without a ground, keeping none of its rounding.
-    fn frustrated(self) -> Result<IrreducibleBlock<T, I>, ReduceError> {
+    fn frustrated(self) -> Result<IrreducibleBlock<T, I>, BuildError> {
         let grounds = self.ground_rows(RowSurplus.residues(&self), None);
         let Self {
             m,
@@ -289,7 +288,7 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         let grounding = (grounds.as_deref()).map_or(Ok(Grounding::ungrounded()), |g| {
             surplus(&rows).kept(Some(g))
         });
-        let grounding = grounding.map_err(|i| out_of_range(&m, i))?;
+        let grounding = grounding.map_err(|i| out_of_range(m.vertices(), i))?;
         Ok(m.block(Balance::Frustrated, grounding, vector, clamped))
     }
 
@@ -349,10 +348,10 @@ fn row_degrees<T: Real, I: Index>(
     (n.saturating_sub(1), || off_diagonal.degrees())
 }
 
-/// Row `i` of `m` holds a ground out of range.
-fn out_of_range<T: Real, I: Index>(m: &Congruent<'_, T, I>, i: usize) -> ReduceError {
-    ReduceError::OutOfRange {
-        vertex: m.vertices()[i].index(),
+/// Local row `i` of the block on `vertices` computed a value out of range.
+fn out_of_range<I: Index>(vertices: &[I], i: usize) -> BuildError {
+    BuildError::OutOfRange {
+        vertex: vertices[i].index(),
     }
 }
 
@@ -471,9 +470,10 @@ mod tests {
         let csr =
             CsrRef::new(leaves as usize + 1, &row_ptrs, &columns, &values).expect("valid shape");
         let policy = ScalingPolicy::default();
-        let unscaled = |_: &SymmetricBlock<'_, f64, u32>| -> Option<scaling::Relaxation<f64>> {
-            panic!("dominant within the tolerance, so nothing scales")
-        };
+        let unscaled =
+            |_: &SymmetricBlock<'_, f64, u32>| -> Result<scaling::Relaxation<f64>, usize> {
+                panic!("dominant within the tolerance, so nothing scales")
+            };
         let partitioned = of_csr::<f64, u32, u32>(Canonical::of(csr.0));
         let summands = partitioned
             .reduced(Threads::All, |vertices, entries, _| match (SymmetricBlock {

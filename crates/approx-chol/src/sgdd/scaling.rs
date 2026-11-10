@@ -182,10 +182,11 @@ impl ScaleVector {
     }
 }
 
-/// `None` unless every scale is a positive `T`.
-fn positive<T: Real>(scales: Box<[T]>, vector: ScaleVector) -> Option<Relaxation<T>> {
-    let admitted = scales.iter().all(|&f| f.is_finite() && f > T::zero());
-    admitted.then_some((scales, vector))
+/// `Err` at the first row whose scale is not a positive `T`.
+fn positive<T: Real>(scales: Box<[T]>, vector: ScaleVector) -> Result<Relaxation<T>, usize> {
+    (scales.iter())
+        .position(|&f| !(f.is_finite() && f > T::zero()))
+        .map_or(Ok((scales, vector)), Err)
 }
 
 /// `|u|` of a certified null vector: no iteration runs; `None` if a scale leaves `T`.
@@ -201,7 +202,7 @@ pub(super) fn null_scaling<T: Real>(
     // Centred by a power of two, not peaked at 1: `μ²` spans `(high/low)²`, past `f32`'s range from `2^52` on.
     let peak = high * 2f64.powi(-((high / low).log2() / 2.0).floor() as i32);
     let scales: Box<[T]> = u.map(|x| narrow::<T>(x.abs() / peak)).collect();
-    positive(scales, ScaleVector::NullVector)
+    positive(scales, ScaleVector::NullVector).ok()
 }
 
 /// How far, in `ε`, a row ratio `Σ_j|a_ij|f_j / (a_ii f_i)` may sit from `1`: a settled residual and the dominance slack's floor.
@@ -213,7 +214,7 @@ pub(super) fn relax<T: Real, I: Index>(
     diagonal: &[T],
     policy: &ScalingPolicy,
     threads: Threads,
-) -> Option<Relaxation<T>> {
+) -> Result<Relaxation<T>, usize> {
     let n = Normalized::new(off_diagonal, diagonal, threads);
     // A ratio over `k` positive terms rounds by `(k + 3)ε`: no bracket closes tighter.
     let rounding =

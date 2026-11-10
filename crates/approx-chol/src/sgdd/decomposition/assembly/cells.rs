@@ -3,16 +3,15 @@
 use num_traits::PrimInt;
 
 use crate::input::{Column, FactorWidth2};
-use crate::sgdd::block::ReduceError;
 use crate::storage::Rows;
-use crate::{in_range, narrow, widen, Index, Real};
+use crate::{in_range, narrow, widen, BuildError, Index, Real};
 
 /// `A`'s strict upper triangle; `pair` sees each nonzero cell.
 pub(super) fn upper<T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
     seen: impl FnMut(&Column<T, I>),
     pair: impl FnMut(usize, usize, f64),
-) -> Result<Rows<T, I>, ReduceError> {
+) -> Result<Rows<T, I>, BuildError> {
     let counts = counts::<T, J, I>(v, v.n(), seen);
     sum_cells::<T, J, I>(v, &counts, 0, pair)
 }
@@ -23,7 +22,7 @@ pub(super) fn cross<T: Real, J: PrimInt, I: Index>(
     n_left: usize,
     seen: impl FnMut(&Column<T, I>),
     pair: impl FnMut(usize, usize, f64),
-) -> Result<Rows<T, I>, ReduceError> {
+) -> Result<Rows<T, I>, BuildError> {
     Accumulator::of::<T, I>(n_left, v.n() - n_left, v.n_columns()).cross(v, n_left, seen, pair)
 }
 
@@ -78,7 +77,7 @@ impl Accumulator {
         n_left: usize,
         seen: impl FnMut(&Column<T, I>),
         pair: impl FnMut(usize, usize, f64),
-    ) -> Result<Rows<T, I>, ReduceError> {
+    ) -> Result<Rows<T, I>, BuildError> {
         // `?` per arm: returning the arms' results directly reshuffled the whole build's inlining.
         let a = match self {
             Self::Table => dense_cross(v, n_left, seen, pair)?,
@@ -93,10 +92,10 @@ impl Accumulator {
 
 /// Row `i`'s nonzero sum as `T` stores it; one cast to zero underflowed, so it is out of range too.
 #[inline(always)]
-fn admit<T: Real>(i: usize, x: f64) -> Result<T, ReduceError> {
+fn admit<T: Real>(i: usize, x: f64) -> Result<T, BuildError> {
     T::from(x)
         .filter(|&value| value != T::zero() && in_range(value))
-        .ok_or(ReduceError::OutOfRange { vertex: i })
+        .ok_or(BuildError::OutOfRange { vertex: i })
 }
 
 /// `pair` sees each nonzero cell.
@@ -105,7 +104,7 @@ fn dense_cross<T: Real, J: PrimInt, I: Index>(
     n_left: usize,
     mut seen: impl FnMut(&Column<T, I>),
     mut pair: impl FnMut(usize, usize, f64),
-) -> Result<Rows<T, I>, ReduceError> {
+) -> Result<Rows<T, I>, BuildError> {
     let n_right = v.n() - n_left;
     let mut table = vec![0.0_f64; n_left * n_right];
     v.for_each_column::<I>(
@@ -157,7 +156,7 @@ fn sum_cells<T: Real, J: PrimInt, I: Index>(
     counts: &[usize],
     first_column: usize,
     mut pair: impl FnMut(usize, usize, f64),
-) -> Result<Rows<T, I>, ReduceError> {
+) -> Result<Rows<T, I>, BuildError> {
     let starts: Vec<usize> = std::iter::once(0)
         .chain(counts.iter().scan(0, |end, &count| {
             *end += count;

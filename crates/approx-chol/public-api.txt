@@ -42,8 +42,6 @@ pub fn approx_chol::input::InputError::clone(&self) -> Self
 impl core::cmp::Eq for approx_chol::input::InputError
 impl core::cmp::PartialEq for approx_chol::input::InputError
 pub fn approx_chol::input::InputError::eq(&self, &Self) -> bool
-impl core::convert::From<approx_chol::input::InputError> for approx_chol::Error
-pub fn approx_chol::Error::from(approx_chol::input::InputError) -> Self
 impl core::error::Error for approx_chol::input::InputError
 impl core::fmt::Debug for approx_chol::input::InputError
 pub fn approx_chol::input::InputError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -175,6 +173,23 @@ impl core::fmt::Display for approx_chol::ApplyError
 pub fn approx_chol::ApplyError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for approx_chol::ApplyError
 impl core::marker::StructuralPartialEq for approx_chol::ApplyError
+#[non_exhaustive] pub enum approx_chol::BuildError
+pub approx_chol::BuildError::OutOfRange
+pub approx_chol::BuildError::OutOfRange::vertex: usize
+pub approx_chol::BuildError::TooLarge
+pub approx_chol::BuildError::TooLarge::vertex: usize
+impl core::clone::Clone for approx_chol::BuildError
+pub fn approx_chol::BuildError::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::BuildError
+impl core::cmp::PartialEq for approx_chol::BuildError
+pub fn approx_chol::BuildError::eq(&self, &Self) -> bool
+impl core::error::Error for approx_chol::BuildError
+impl core::fmt::Debug for approx_chol::BuildError
+pub fn approx_chol::BuildError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for approx_chol::BuildError
+pub fn approx_chol::BuildError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::BuildError
+impl core::marker::StructuralPartialEq for approx_chol::BuildError
 #[non_exhaustive] pub enum approx_chol::CoverSurplus
 pub approx_chol::CoverSurplus::Auto
 pub approx_chol::CoverSurplus::GroundVertex
@@ -196,26 +211,6 @@ impl serde_core::ser::Serialize for approx_chol::CoverSurplus
 pub fn approx_chol::CoverSurplus::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for approx_chol::CoverSurplus
 pub fn approx_chol::CoverSurplus::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
-#[non_exhaustive] pub enum approx_chol::Error
-pub approx_chol::Error::Input(approx_chol::input::InputError)
-pub approx_chol::Error::Reduce(approx_chol::ReduceError)
-impl core::clone::Clone for approx_chol::Error
-pub fn approx_chol::Error::clone(&self) -> Self
-impl core::cmp::Eq for approx_chol::Error
-impl core::cmp::PartialEq for approx_chol::Error
-pub fn approx_chol::Error::eq(&self, &Self) -> bool
-impl core::convert::From<approx_chol::ReduceError> for approx_chol::Error
-pub fn approx_chol::Error::from(approx_chol::ReduceError) -> Self
-impl core::convert::From<approx_chol::input::InputError> for approx_chol::Error
-pub fn approx_chol::Error::from(approx_chol::input::InputError) -> Self
-impl core::error::Error for approx_chol::Error
-pub fn approx_chol::Error::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
-impl core::fmt::Debug for approx_chol::Error
-pub fn approx_chol::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for approx_chol::Error
-pub fn approx_chol::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for approx_chol::Error
-impl core::marker::StructuralPartialEq for approx_chol::Error
 #[non_exhaustive] pub enum approx_chol::FrustratedRoute
 pub approx_chol::FrustratedRoute::Cover(approx_chol::CoverSurplus)
 pub approx_chol::FrustratedRoute::Signed
@@ -254,27 +249,6 @@ impl core::fmt::Display for approx_chol::LayoutError
 pub fn approx_chol::LayoutError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for approx_chol::LayoutError
 impl core::marker::StructuralPartialEq for approx_chol::LayoutError
-#[non_exhaustive] pub enum approx_chol::ReduceError
-pub approx_chol::ReduceError::OutOfRange
-pub approx_chol::ReduceError::OutOfRange::vertex: usize
-pub approx_chol::ReduceError::TooLarge
-pub approx_chol::ReduceError::TooLarge::vertex: usize
-pub approx_chol::ReduceError::Unscalable
-pub approx_chol::ReduceError::Unscalable::vertex: usize
-impl core::clone::Clone for approx_chol::ReduceError
-pub fn approx_chol::ReduceError::clone(&self) -> Self
-impl core::cmp::Eq for approx_chol::ReduceError
-impl core::cmp::PartialEq for approx_chol::ReduceError
-pub fn approx_chol::ReduceError::eq(&self, &Self) -> bool
-impl core::convert::From<approx_chol::ReduceError> for approx_chol::Error
-pub fn approx_chol::Error::from(approx_chol::ReduceError) -> Self
-impl core::error::Error for approx_chol::ReduceError
-impl core::fmt::Debug for approx_chol::ReduceError
-pub fn approx_chol::ReduceError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for approx_chol::ReduceError
-pub fn approx_chol::ReduceError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for approx_chol::ReduceError
-impl core::marker::StructuralPartialEq for approx_chol::ReduceError
 #[non_exhaustive] pub enum approx_chol::Sampling
 pub approx_chol::Sampling::CliqueTree
 pub approx_chol::Sampling::CliqueTree::copies: core::num::nonzero::NonZeroU32
@@ -452,7 +426,7 @@ pub fn approx_chol::ScalingPolicy::deserialize<__D>(__D) -> core::result::Result
 pub struct approx_chol::Sgdd<T>(_)
 impl<T: approx_chol::Real> approx_chol::Sgdd<T>
 pub fn approx_chol::Sgdd<T>::factor(self, &approx_chol::Config) -> approx_chol::ApproxInverse<T>
-pub fn approx_chol::Sgdd<T>::reduce<'a, I, M>(M, approx_chol::ScalingPolicy) -> core::result::Result<Self, approx_chol::Error> where I: num_traits::int::PrimInt + core::marker::Sync + 'a, M: core::convert::Into<approx_chol::input::Input<'a, T, I>>
+pub fn approx_chol::Sgdd<T>::reduce<'a, I, M>(M, approx_chol::ScalingPolicy) -> core::result::Result<Self, approx_chol::BuildError> where I: num_traits::int::PrimInt + core::marker::Sync + 'a, M: core::convert::Into<approx_chol::input::Input<'a, T, I>>
 impl<T: core::clone::Clone> core::clone::Clone for approx_chol::Sgdd<T>
 pub fn approx_chol::Sgdd<T>::clone(&self) -> Self
 impl<T: core::fmt::Debug> core::fmt::Debug for approx_chol::Sgdd<T>
@@ -491,6 +465,6 @@ pub fn approx_chol::ColumnMajor<'_, T>::write_column(&mut self, usize, &[T])
 pub trait approx_chol::Real: num_traits::float::Float + num_traits::float::TotalOrder + core::fmt::Debug + core::marker::Send + core::marker::Sync + 'static + approx_chol::seal::Real
 impl approx_chol::Real for f32
 impl approx_chol::Real for f64
-pub fn approx_chol::factorize<'a, T, I, M>(M) -> core::result::Result<approx_chol::ApproxInverse<T>, approx_chol::Error> where T: approx_chol::Real, I: num_traits::int::PrimInt + core::marker::Sync + 'a, M: core::convert::Into<approx_chol::input::Input<'a, T, I>>
-pub fn approx_chol::factorize_complement<T: approx_chol::Real, I: num_traits::int::PrimInt + core::marker::Sync>(approx_chol::input::BipartiteFactorWidth2<'_, T, I>, approx_chol::input::Side, approx_chol::Config, approx_chol::ScalingPolicy) -> core::result::Result<approx_chol::ApproxInverse<T>, approx_chol::Error>
-pub fn approx_chol::factorize_with<'a, T, I, M>(M, approx_chol::Config, approx_chol::ScalingPolicy) -> core::result::Result<approx_chol::ApproxInverse<T>, approx_chol::Error> where T: approx_chol::Real, I: num_traits::int::PrimInt + core::marker::Sync + 'a, M: core::convert::Into<approx_chol::input::Input<'a, T, I>>
+pub fn approx_chol::factorize<'a, T, I, M>(M) -> core::result::Result<approx_chol::ApproxInverse<T>, approx_chol::BuildError> where T: approx_chol::Real, I: num_traits::int::PrimInt + core::marker::Sync + 'a, M: core::convert::Into<approx_chol::input::Input<'a, T, I>>
+pub fn approx_chol::factorize_complement<T: approx_chol::Real, I: num_traits::int::PrimInt + core::marker::Sync>(approx_chol::input::BipartiteFactorWidth2<'_, T, I>, approx_chol::input::Side, approx_chol::Config, approx_chol::ScalingPolicy) -> core::result::Result<approx_chol::ApproxInverse<T>, approx_chol::BuildError>
+pub fn approx_chol::factorize_with<'a, T, I, M>(M, approx_chol::Config, approx_chol::ScalingPolicy) -> core::result::Result<approx_chol::ApproxInverse<T>, approx_chol::BuildError> where T: approx_chol::Real, I: num_traits::int::PrimInt + core::marker::Sync + 'a, M: core::convert::Into<approx_chol::input::Input<'a, T, I>>

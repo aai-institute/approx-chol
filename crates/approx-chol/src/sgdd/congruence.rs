@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::{compensated_sum, widen, Batch, Real};
+use crate::{argmax, compensated_sum, widen, Batch, Real};
 
 /// `F` in `M = F A_c F`, finite and nonzero; a folded `A_c`'s null vector is then `F·1`.
 #[cfg_attr(
@@ -48,11 +48,7 @@ impl<T: Real> FactorTail<'_, T> {
 
 /// An index of the largest `|f|`, where pinning the gauge leaves its rounding unamplified by `1/f`.
 fn largest<T: Real>(f: &[T]) -> usize {
-    let last = f.len().saturating_sub(1);
-    (0..last).fold(last, |best, i| match f[i].abs() > f[best].abs() {
-        true => i,
-        false => best,
-    })
+    argmax(f, T::abs)
 }
 
 impl<T: Real> ScaledFactors<T> {

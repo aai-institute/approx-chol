@@ -2,7 +2,9 @@ use crate::common::clamps::Clamps;
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm,
 };
-use approx_chol::{factorize, factorize_with, ApproxInverse, Config, Error, Real, ScalingPolicy};
+use approx_chol::{
+    factorize, factorize_with, ApproxInverse, BuildError, Config, Real, ScalingPolicy,
+};
 use rstest::rstest;
 
 use crate::common::dense::dense;
@@ -10,7 +12,7 @@ use crate::common::dense_residual::apply;
 use crate::common::entry::{floats, only};
 use crate::common::gram::{dense_csr, matrix};
 use crate::common::lcg::Lcg;
-use crate::common::out_of_range::{out_of_range, FLOOR};
+use crate::common::out_of_range::FLOOR;
 use crate::common::solve::Solve;
 
 use super::cycle::Cycle;
@@ -171,7 +173,7 @@ fn at_floor(rows: &[&[f64]]) -> Vec<Vec<f64>> {
         .collect()
 }
 
-fn reduce_error(a: &[Vec<f64>]) -> Error {
+fn reduce_error(a: &[Vec<f64>]) -> BuildError {
     let (ptrs, columns, values) = dense_csr(a);
     let csr = CsrRef::new(a.len(), &ptrs, &columns, &values).unwrap();
     factorize(csr).map(|_: ApproxInverse| ()).unwrap_err()
@@ -204,7 +206,7 @@ fn a_real_ground_below_the_range_floor_is_out_of_range(
     #[case] a: Vec<Vec<f64>>,
     #[case] vertex: usize,
 ) {
-    assert_eq!(reduce_error(&a), out_of_range(vertex));
+    assert_eq!(reduce_error(&a), BuildError::OutOfRange { vertex });
 }
 
 /// Path `0 —r²— 1 —1— 2`, vertex 2 grounded by `1` = its coupling: `x = [2, 2, 1]`.
