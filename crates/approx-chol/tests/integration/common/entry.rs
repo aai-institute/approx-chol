@@ -1,7 +1,10 @@
 use approx_chol::input::{
-    BipartiteFactorWidth2, CsrRef, FactorWidth2, Laplacian, Sddm, TriangleCsrRef,
+    BipartiteFactorWidth2, CsrRef, FactorWidth2, InputError, Laplacian, Sddm, Side, TriangleCsrRef,
 };
-use approx_chol::{factorize_with, ApproxInverse, Component, Config, Real, ScalingPolicy, Threads};
+use approx_chol::{
+    factorize_complement, factorize_with, ApproxInverse, BuildError, Component, Config, Real,
+    ScalingPolicy, Threads,
+};
 use num_traits::{NumCast, PrimInt};
 
 use super::bipartite::side;
@@ -162,16 +165,21 @@ impl Entry {
         }
     }
 
+    /// The whole graph's factor, or a bipartite Gram's complement `onto` a side; an input or build error as its message.
     fn factorize_as<T: Real, I: PrimInt + Sync>(
         self,
         graph: &Graph,
         n_left: usize,
         config: Config,
-    ) -> ApproxInverse<T> {
+        onto: Option<Side>,
+    ) -> Result<ApproxInverse<T>, String> {
         let n = graph.n;
-        let rejected = |error: &dyn std::fmt::Debug| -> ApproxInverse<T> {
-            panic!("{self:?} rejected {graph:?}: {error:?}")
-        };
+        assert!(
+            onto.is_none() || self == Entry::BipartiteFactorWidth2,
+            "only a bipartite Gram has a complement"
+        );
+        let input = |error: InputError| format!("input: {error}");
+        let built = |error: BuildError| error.to_string();
         let (a, b): (Vec<I>, Vec<I>) = (graph.edges.iter())
             .map(|edge| (cast::<usize, I>(edge.a), cast::<usize, I>(edge.b)))
             .unzip();
@@ -183,16 +191,16 @@ impl Entry {
                 let values: Vec<T> = cast_all(&values);
                 match upper {
                     false => {
-                        let csr = CsrRef::new(n, &ptrs, &columns, &values).expect("valid CSR");
+                        let csr = CsrRef::new(n, &ptrs, &columns, &values).map_err(input)?;
                         factorize_with(csr, config, ScalingPolicy::default())
                     }
                     true => {
                         let csr =
-                            TriangleCsrRef::upper(n, &ptrs, &columns, &values).expect("valid CSR");
+                            TriangleCsrRef::upper(n, &ptrs, &columns, &values).map_err(input)?;
                         factorize_with(csr, config, ScalingPolicy::default())
                     }
                 }
-                .unwrap_or_else(|error| rejected(&error))
+                .map_err(built)
             }
             Entry::FactorWidth2 => {
                 let (mut x, mut y) = (vec![], vec![]);
@@ -201,9 +209,8 @@ impl Entry {
                     x.push(cast::<f64, T>(root));
                     y.push(cast(edge.sign() * root));
                 }
-                let v = FactorWidth2::new(n, (&a, &x), (&b, &y)).expect("valid factor");
-                factorize_with(v, config, ScalingPolicy::default())
-                    .unwrap_or_else(|error| rejected(&error))
+                let v = FactorWidth2::new(n, (&a, &x), (&b, &y)).map_err(input)?;
+                factorize_with(v, config, ScalingPolicy::default()).map_err(built)
             }
             Entry::BipartiteFactorWidth2 => {
                 let n_right = n - n_left;
@@ -226,29 +233,33 @@ impl Entry {
                 let right = side(n_right, &right, valued.then_some(&y_t[..]));
                 let s_t: Vec<T> = w.iter().map(|&w| cast(w.sqrt())).collect();
                 let gram = BipartiteFactorWidth2::scaled(
-                    left.expect("valid left factor"),
-                    right.expect("valid right factor"),
+                    left.map_err(input)?,
+                    right.map_err(input)?,
                     &s_t,
                 )
-                .expect("valid bipartite Gram");
-                factorize_with(gram, config, ScalingPolicy::default())
-                    .unwrap_or_else(|error| rejected(&error))
+                .map_err(input)?;
+                let policy = ScalingPolicy::default();
+                match onto {
+                    None => factorize_with(gram, config, policy),
+                    Some(kept) => factorize_complement(gram, kept, config, policy),
+                }
+                .map_err(built)
             }
             Entry::Laplacian | Entry::Sddm => {
                 let weights: Vec<T> = graph.edges.iter().map(|edge| cast(edge.weight)).collect();
-                let view = Laplacian::weighted(n, &a, &b, &weights).expect("valid Laplacian");
+                let view = Laplacian::weighted(n, &a, &b, &weights).map_err(input)?;
                 match self {
                     Entry::Sddm => {
                         let ground: Vec<T> = cast_all(&graph.ground);
                         factorize_with(
-                            Sddm::new(view, &ground).expect("valid surplus"),
+                            Sddm::new(view, &ground).map_err(input)?,
                             config,
                             ScalingPolicy::default(),
                         )
                     }
                     _ => factorize_with(view, config, ScalingPolicy::default()),
                 }
-                .unwrap_or_else(|error| rejected(&error))
+                .map_err(built)
             }
         }
     }
@@ -264,18 +275,38 @@ pub struct Reduced {
 }
 
 impl Reduced {
+    /// Panics with the entry point's message where it rejects the graph.
     pub fn factorize(&self, config: &Config) -> Factored {
+        (self.try_factorize(config, None))
+            .unwrap_or_else(|error| panic!("{:?} rejected {:?}: {error}", self.entry, self.local))
+    }
+
+    /// The whole graph's factor, or a bipartite Gram's complement `onto` a side, numbered as the caller's vertices on it in caller order; a rejection as its message.
+    pub fn try_factorize(&self, config: &Config, onto: Option<Side>) -> Result<Factored, String> {
         let (entry, graph, n_left, config) = (self.entry, &self.local, self.n_left, *config);
         let factor = match self.types {
-            Types::F32U32 => ByType::F32U32(entry.factorize_as::<f32, u32>(graph, n_left, config)),
-            Types::F32U64 => ByType::F32U64(entry.factorize_as::<f32, u64>(graph, n_left, config)),
-            Types::F64U32 => ByType::F64U32(entry.factorize_as::<f64, u32>(graph, n_left, config)),
-            Types::F64U64 => ByType::F64U64(entry.factorize_as::<f64, u64>(graph, n_left, config)),
+            Types::F32U32 => {
+                ByType::F32U32(entry.factorize_as::<f32, u32>(graph, n_left, config, onto)?)
+            }
+            Types::F32U64 => {
+                ByType::F32U64(entry.factorize_as::<f32, u64>(graph, n_left, config, onto)?)
+            }
+            Types::F64U32 => {
+                ByType::F64U32(entry.factorize_as::<f64, u32>(graph, n_left, config, onto)?)
+            }
+            Types::F64U64 => {
+                ByType::F64U64(entry.factorize_as::<f64, u64>(graph, n_left, config, onto)?)
+            }
         };
-        Factored {
-            factor,
-            labels: self.labels.clone(),
-        }
+        let labels = match onto {
+            None => self.labels.clone(),
+            Some(kept) => {
+                let left = kept == Side::Left;
+                let on = (self.labels.0.iter()).filter(|&&at| (at < n_left) == left);
+                Labels(on.map(|&at| if left { at } else { at - n_left }).collect())
+            }
+        };
+        Ok(Factored { factor, labels })
     }
 
     /// Per irreducible block, whether it solves as singular.
