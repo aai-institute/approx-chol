@@ -18,7 +18,6 @@ categories = ["mathematics", "science", "algorithms"]
 unsafe_code = "forbid"
 
 # Tests ran 5x faster for 3.5x a clean build, an incremental rebuild no slower; debug assertions stay on.
-# Local only: `ci.yml` sets opt-level 0, as CI always builds the workspace clean.
 [profile.dev]
 opt-level = 1
 
