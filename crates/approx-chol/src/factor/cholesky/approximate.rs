@@ -295,12 +295,16 @@ mod tests {
     use rand::{Rng, SeedableRng};
 
     use super::*;
+    use crate::factor::cholesky::Arm;
     use crate::factor::clique_tree::{Multi, Single};
+    use crate::factor::config::{Config, FrustratedRoute, Sampling, SchurMode};
+    use crate::factor::schur::BipartiteBlock;
     use crate::factor::sddm::{Closure, Sddm, SignedWdd};
     use crate::factor::sign::Unsigned;
-    use crate::factor::within_one;
-    use crate::sgdd::Grounding;
+    use crate::factor::{within_one, Streams};
+    use crate::sgdd::{Balance, Grounding};
     use crate::storage::{Rows, UpperAdjacency};
+    use crate::threads::ONE;
     use crate::widen;
 
     fn stars(m: usize) -> [(&'static str, Vec<f32>); 3] {
@@ -421,6 +425,10 @@ mod tests {
         assert!(off <= f64::EPSILON, "a share off by {off:e}");
     }
 
+    fn log_uniform<T: Real>(rng: &mut Xoshiro256PlusPlus) -> T {
+        narrow(((rng.next_u64() % 1600) as f64 / 100.0 - 8.0).exp2())
+    }
+
     /// A grounded Z-matrix on `n` vertices, a spanning path and random edges, log-uniform; its `D`-switched copy by random `σ`; and `σ`.
     fn switched<T: Real>(n: usize, seed: u64) -> (Sddm<T, u32>, SignedWdd<T, u32>, Vec<bool>) {
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
@@ -435,7 +443,7 @@ mod tests {
         let (mut ptrs, mut indices, mut z, mut signed) = (vec![0], vec![], vec![], vec![]);
         for i in 0..n {
             for &(_, j) in pairs.iter().filter(|&&(a, _)| a == i) {
-                let w: T = narrow(((rng.next_u64() % 1600) as f64 / 100.0 - 8.0).exp2());
+                let w: T = log_uniform(&mut rng);
                 indices.push(j as u32);
                 z.push(-w);
                 signed.push(if flip[i] != flip[j] { w } else { -w });
@@ -447,20 +455,69 @@ mod tests {
             .collect();
         let adjacency =
             |values| UpperAdjacency::new(Rows::new(ptrs.clone(), indices.clone(), values, n));
-        let sddm = Sddm::new(
-            adjacency(z),
-            Closure::Folded(Grounding::of(surplus.clone())),
-        );
         (
-            sddm,
+            Sddm::new(
+                adjacency(z),
+                Closure::Folded(Grounding::of(surplus.clone())),
+            ),
             SignedWdd::new(adjacency(signed), Grounding::of(surplus)),
             flip,
         )
     }
 
+    /// A grounded bipartite Z-block, `n_e` eliminated vertices each joined to two to five of `n_k` kept ones, log-uniform; its complement under `complement` and the complement of its `D`-switched copy, eliminated signed; and `σ` on the kept side.
+    fn switched_complements<T: Real>(
+        (n_e, n_k): (usize, usize),
+        seed: u64,
+        complement: SchurMode,
+    ) -> (Sddm<T, u32>, SignedWdd<T, u32>, Vec<bool>) {
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
+        let flip: Vec<bool> = (0..n_e + n_k).map(|_| rng.next_u64() % 2 == 1).collect();
+        let (mut ptrs, mut indices, mut z, mut signed) = (vec![0], vec![], vec![], vec![]);
+        for e in 0..n_e {
+            let extra = (0..rng.next_u64() % 4).map(|_| rng.next_u64() as usize % n_k);
+            let mut row: Vec<usize> = [e % n_k, (e + 1) % n_k].into_iter().chain(extra).collect();
+            row.sort_unstable();
+            row.dedup();
+            for k in row {
+                let w: T = log_uniform(&mut rng);
+                indices.push(k as u32);
+                z.push(-w);
+                signed.push(if flip[e] != flip[n_e + k] { w } else { -w });
+            }
+            ptrs.push(indices.len());
+        }
+        let surplus: Vec<T> = (0..n_e + n_k)
+            .map(|v| narrow(if v % 7 == 0 { 0.5 } else { 0.0 }))
+            .collect();
+        let config = Config {
+            exact_max_dim: 0,
+            complement,
+            frustrated: FrustratedRoute::Signed,
+            ..Config::default()
+        };
+        let streams = Streams::of(0, &config);
+        let complement = |values, balance| {
+            let cross = Rows::new(ptrs.clone(), indices.clone(), values, n_k);
+            let grounding = Grounding::of(surplus.clone());
+            let block = BipartiteBlock::of(cross, balance, grounding);
+            block.complement(&config, streams, ONE)
+        };
+        let (Arm::Sddm(sddm), Arm::Signed(signed)) = (
+            complement(z, Balance::Balanced),
+            complement(signed, Balance::Frustrated),
+        ) else {
+            panic!("a balanced complement folds, a frustrated one is signed")
+        };
+        (sddm, signed, flip[n_e..].to_vec())
+    }
+
     /// Magnitudes, draws and order agree, so only each share's sign moves, by `σ_v σ_j`.
-    fn switched_defects<T: Real>(seed: u64, copies: Option<Multi>) -> Option<String> {
-        let (sddm, signed, flip) = switched::<T>(80, seed);
+    fn eliminate_alike<T: Real>(
+        (sddm, signed, flip): (Sddm<T, u32>, SignedWdd<T, u32>, Vec<bool>),
+        seed: u64,
+        copies: Option<Multi>,
+    ) -> bool {
         let draws = Xoshiro256PlusPlus::seed_from_u64(seed);
         let (z, z_pin) = CliqueTreeElimination::new(copies).eliminate(sddm, draws.clone(), None);
         let (s, s_pin) = CliqueTreeElimination::new(copies).eliminate(signed, draws, None);
@@ -484,12 +541,34 @@ mod tests {
             }
             end += h.len as usize;
         }
-        let same = z_pin.is_none()
+        z_pin.is_none()
             && s_pin.is_none()
             && headers(&z) == headers(&s)
             && z.neighbors == s.neighbors
-            && flipped == s.coefficients.iter().map(|&c| bits(c)).collect::<Vec<_>>();
-        (!same).then(|| format!("seed {seed}, {} copies", copies.map_or(1, |c| c.get())))
+            && flipped == s.coefficients.iter().map(|&c| bits(c)).collect::<Vec<_>>()
+    }
+
+    fn switched_defects<T: Real>(seed: u64, copies: Option<Multi>) -> Option<String> {
+        let alike = eliminate_alike(switched::<T>(80, seed), seed, copies);
+        let copies = copies.map_or(1, |c| c.get());
+        (!alike).then(|| {
+            format!(
+                "seed {seed}, {copies} copies, {}",
+                std::any::type_name::<T>()
+            )
+        })
+    }
+
+    fn complement_defects<T: Real>(
+        seed: u64,
+        (formed, complement): (&str, SchurMode),
+        copies: Option<Multi>,
+    ) -> Option<String> {
+        let switched = switched_complements::<T>((90, 40), seed, complement);
+        let alike = eliminate_alike(switched, seed, copies);
+        let copies = copies.map_or(1, |c| c.get());
+        let label = format!("seed {seed}, {formed} complement, {copies} copies");
+        (!alike).then(|| format!("{label}, {}", std::any::type_name::<T>()))
     }
 
     #[test]
@@ -499,7 +578,32 @@ mod tests {
         for seed in 0..16 {
             for copies in [None, Some(ac2)] {
                 defects.extend(switched_defects::<f64>(seed, copies));
-                defects.extend(switched_defects::<f32>(seed, copies).map(|d| d + ", f32"));
+                defects.extend(switched_defects::<f32>(seed, copies));
+            }
+        }
+        assert!(defects.is_empty(), "{defects:#?}");
+    }
+
+    /// A bipartite Z-block's complement, exact or sampled, eliminates as its switched copy's signed complement does, each fill signed by its ends and nothing cancelled.
+    #[test]
+    fn a_switched_bipartite_z_block_forms_and_eliminates_its_complement_signed() {
+        let sampled = |copies| SchurMode::Approximate {
+            sampling: Sampling::CliqueTree {
+                copies: std::num::NonZeroU32::new(copies).expect("a copy"),
+            },
+        };
+        let ac2 = Multi::split(2).expect("AC2");
+        let mut defects = Vec::new();
+        for seed in 0..16 {
+            for formed in [
+                ("exact", SchurMode::Exact),
+                ("AC", sampled(1)),
+                ("AC2", sampled(2)),
+            ] {
+                for copies in [None, Some(ac2)] {
+                    defects.extend(complement_defects::<f64>(seed, formed, copies));
+                    defects.extend(complement_defects::<f32>(seed, formed, copies));
+                }
             }
         }
         assert!(defects.is_empty(), "{defects:#?}");

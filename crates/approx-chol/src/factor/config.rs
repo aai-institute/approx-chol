@@ -47,7 +47,7 @@ impl Config {
 pub enum FrustratedRoute {
     /// Through its Gremban cover, an SDDM on two sheets that solves `[x; −x]`, carrying its surplus as the [`CoverSurplus`] says.
     Cover(CoverSurplus),
-    /// Eliminated as it is, on one sheet: fill sampled on magnitudes and signed by its ends, `σ_a σ_b`; opposite parallel entries cancel, and what they cancel grounds both ends, so it never floats. A bipartite block's complement is still covered, as [`CoverSurplus::Auto`] carries it.
+    /// Eliminated as it is, on one sheet: fill sampled on magnitudes and signed by its ends, `σ_a σ_b`; opposite parallel entries cancel, and what they cancel grounds both ends, so it never floats. A bipartite block's complement is formed signed, exact or sampled, and eliminated so.
     Signed,
 }
 

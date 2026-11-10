@@ -1,5 +1,5 @@
 use approx_chol::input::Side;
-use approx_chol::{factorize_complement, factorize_with, Config, ScalingPolicy};
+use approx_chol::{factorize_complement, factorize_with, ApproxInverse, Config, ScalingPolicy};
 
 use super::bipartite::Bipartite;
 use super::bits::bits;
@@ -32,15 +32,29 @@ impl Bipartite {
     }
 }
 
+/// `g` factored under `config`, whole and onto each side, by name.
+pub fn factors(g: &Bipartite, config: Config) -> Vec<(String, ApproxInverse)> {
+    let policy = ScalingPolicy::default();
+    let mut factors = vec![(
+        "whole".to_string(),
+        factorize_with(g.view(), config, policy).unwrap(),
+    )];
+    for side in [Side::Left, Side::Right] {
+        let onto = factorize_complement(g.view(), side, config, policy).unwrap();
+        factors.push((format!("onto {side:?}"), onto));
+    }
+    factors
+}
+
+/// Whether a frustrated block of `factor` is eliminated signed.
+pub fn is_signed(factor: &ApproxInverse) -> bool {
+    format!("{factor:?}").contains("Signed(")
+}
+
 /// The solve of a fixed `b` under `config`, whole and onto each side, as bits.
 pub fn solves(g: &Bipartite, config: Config) -> Vec<Vec<u64>> {
-    let policy = ScalingPolicy::default();
-    let mut factors = vec![factorize_with(g.view(), config, policy).unwrap()];
-    for side in [Side::Left, Side::Right] {
-        factors.push(factorize_complement(g.view(), side, config, policy).unwrap());
-    }
-    (factors.iter())
-        .map(|factor| {
+    (factors(g, config).iter())
+        .map(|(_, factor)| {
             let b: Vec<f64> = (0..factor.n()).map(|i| (i % 7) as f64 - 3.0).collect();
             bits(&factor.solve(&b).unwrap())
         })

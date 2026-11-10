@@ -5,9 +5,9 @@ use rayon::prelude::*;
 use super::block_elimination::BlockElimination;
 use super::cholesky::Arm;
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
-use super::config::{Config, CoverSurplus, FrustratedRoute, SchurMode};
+use super::config::{Config, SchurMode};
 use super::sddm::{cover_vertex, crosses, Factored, Layout, SddmRows};
-use super::sign::Unsigned;
+use super::sign::{Signed, Unsigned};
 use super::{Streams, MULTIPLY_ADD_GRAIN_BITS};
 use crate::sgdd::{Balance, Grounding};
 use crate::storage::Rows;
@@ -102,17 +102,9 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         rows.arm()
     }
 
-    /// What `S` is factored as, by its kept side; under `Signed` it is still covered, as `Cover(Auto)` carries it.
+    /// What `S` is factored as, by its kept side.
     fn factored(&self, config: &Config) -> Factored {
-        let frustrated = match config.frustrated {
-            FrustratedRoute::Signed => FrustratedRoute::Cover(CoverSurplus::Auto),
-            route => route,
-        };
-        let config = Config {
-            frustrated,
-            ..*config
-        };
-        Factored::of(&config, self.balance, self.cross.n_cols())
+        Factored::of(config, self.balance, self.cross.n_cols())
     }
 
     /// Inverse pivots `1/(Σ|c_ek| + s_e)`, the same on both sheets of a cover.
@@ -223,19 +215,32 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
         let c = &self.block.cross;
         let ground = |e: usize| self.block.grounding.edge(e).map(|s_e| (self.ground, s_e));
         let draws = self.streams.star(s);
-        match self.block.balance {
+        match self.layout {
             // One sheet maps no column, as the balanced loop pays for any map.
-            Balance::Balanced => {
+            Layout::Sheet => {
                 let neighbors = c.row(s).map(|(k, &c)| (I::from_index(k), c.abs()));
                 sampler.eliminate_unique(draws, neighbors.chain(ground(s)), fill, Unsigned);
             }
-            Balance::Frustrated => {
+            Layout::Cover => {
                 let (sheet, e) = (s / c.n_rows(), s % c.n_rows());
                 let neighbors = c.row(e).map(move |(k, &c)| {
                     let on = sheet ^ usize::from(crosses(c));
                     (I::from_index(cover_vertex(k, on)), c.abs())
                 });
                 sampler.eliminate_unique(draws, neighbors.chain(ground(e)), fill, Unsigned);
+            }
+            Layout::SignedPairs => {
+                let neighbors = c.row(s).map(|(k, &c)| (I::from_index(k), -c));
+                let sign = Signed {
+                    ground: self.ground,
+                };
+                let mut fill = fill;
+                // A ground share is a magnitude, so the ground `n` lands on column `2n`, the rows' ground.
+                let paired = |(lo, hi, copies, w): (I, I, C, T)| {
+                    let at = cover_vertex(hi.index(), usize::from(w < T::zero()));
+                    fill((lo, I::from_index(at), copies, w.abs()));
+                };
+                sampler.eliminate_unique(draws, neighbors.chain(ground(s)), paired, sign);
             }
         }
     }
@@ -340,4 +345,72 @@ impl<T: Real, I: Index> Fill<T, I> {
 /// `x·y/d` as the smaller times the larger's share `max·d⁻¹ ≤ 1`, so no product overflows before the division; at least `MIN_POSITIVE`, so no edge of `S` drops and every pivot's inverse is finite.
 fn share<T: Real>(x: T, y: T, inv_pivot: T) -> T {
     (x.min(y) * (x.max(y) * inv_pivot)).max(T::min_positive_value())
+}
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use super::*;
+    use crate::factor::cholesky::Eliminated;
+    use crate::factor::config::{FrustratedRoute, Sampling};
+    use crate::threads::ONE;
+
+    /// Kept `0` and `1` joined through eliminated `e₀` by `c = (−a₀, −b₀)` and `e₁` by `(a₁, −b₁)`, kept surplus `s`: two degree-two stars of opposite sign onto one pair.
+    fn opposed([a0, b0, a1, b1]: [f64; 4], s: [f64; 2]) -> (Rows<f64, u32>, Grounding<f64>) {
+        let cross = Rows::new(vec![0, 2, 4], vec![0, 1, 0, 1], vec![-a0, -b0, a1, -b1], 2);
+        (cross, Grounding::of(vec![0.0, 0.0, s[0], s[1]]))
+    }
+
+    /// `S = D_k − Cᵀ D_e⁻¹ C` as `(−S₀₁, S₀₀ − |S₀₁|, S₁₁ − |S₀₁|)`: the signed elimination's edge and the surplus left on each end.
+    fn schur([a0, b0, a1, b1]: [f64; 4], s: [f64; 2]) -> [f64; 3] {
+        let (d0, d1) = (a0 + b0, a1 + b1);
+        let s01 = -(a0 * b0 / d0 - a1 * b1 / d1);
+        let s00 = a0 + a1 + s[0] - a0 * a0 / d0 - a1 * a1 / d1;
+        let s11 = b0 + b1 + s[1] - b0 * b0 / d0 - b1 * b1 / d1;
+        [-s01, s00 - s01.abs(), s11 - s01.abs()]
+    }
+
+    /// Unequal opposite shares onto one pair keep their signed remainder and ground what cancels on both ends, under exact and sampled formation, either sign dominant.
+    #[test]
+    fn unequal_opposite_shares_keep_their_remainder_and_ground_the_cancelled() {
+        let sampled = |copies| SchurMode::Approximate {
+            sampling: Sampling::CliqueTree {
+                copies: NonZeroU32::new(copies).expect("a copy"),
+            },
+        };
+        let s = [0.25, 0.0];
+        let mut defects = Vec::new();
+        for (alike, weights) in [(true, [2.0, 2.0, 1.0, 1.0]), (false, [1.0, 1.0, 3.0, 1.0])] {
+            let want = schur(weights, s);
+            assert_eq!(want[0] > 0.0, alike, "the alike share dominates");
+            for (formed, complement) in [
+                ("exact", SchurMode::Exact),
+                ("AC", sampled(1)),
+                ("AC2", sampled(2)),
+            ] {
+                let config = Config {
+                    exact_max_dim: 0,
+                    complement,
+                    frustrated: FrustratedRoute::Signed,
+                    ..Config::default()
+                };
+                let (cross, grounding) = opposed(weights, s);
+                let block = BipartiteBlock::of(cross, Balance::Frustrated, grounding);
+                let Arm::Signed(m) = block.complement(&config, Streams::of(0, &config), ONE) else {
+                    panic!("a frustrated complement is signed under Signed")
+                };
+                let mut got = [0.0; 3];
+                m.grounded_edges(|i, j, w| match (i, j) {
+                    (0, 1) => got[0] += w,
+                    (k, 2) => got[1 + k as usize] += w,
+                    other => panic!("no edge {other:?}"),
+                });
+                let off = (got.iter().zip(&want)).fold(0.0f64, |m, (g, w)| m.max((g - w).abs()));
+                if off > 1e-15 {
+                    defects.push(format!("alike {alike}, {formed}: {got:?}, want {want:?}"));
+                }
+            }
+        }
+        assert!(defects.is_empty(), "{defects:#?}");
+    }
 }
