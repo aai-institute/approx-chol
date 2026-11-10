@@ -21,8 +21,9 @@ pub(super) struct Sddm<T, I> {
 #[derive(Clone, Debug)]
 pub(super) enum Closure<T> {
     Folded(Grounding<T>),
+    /// One ground per vertex, each of its copies'.
     Cover(Grounding<T>),
-    /// Each vertex's [`twist`] `k⁺ — k⁻`, zero where it floats; its copies ground alike, so `k⁺`'s ground is the vertex's.
+    /// Each vertex's [`twist`] `k⁺ — k⁻`, zero where it floats.
     Twisted(Box<[T]>),
 }
 
@@ -36,15 +37,15 @@ impl<T: Real> Closure<T> {
 }
 
 impl<T: Real, I: Index> Sddm<T, I> {
-    /// Panics unless nonempty, with one surplus per row or one twist per pair.
+    /// Panics unless nonempty, with one surplus per row, or a cover's per pair, or one twist per pair.
     pub(super) fn new(adjacency: UpperAdjacency<T, I>, closure: Closure<T>) -> Self {
         let n = adjacency.n();
         assert!(n > 0, "an SDDM has a vertex");
         match &closure {
             Closure::Folded(grounding) => assert!(grounding.fits(n), "one surplus per row"),
             Closure::Cover(grounding) => {
-                assert!(grounding.fits(n), "one surplus per row");
                 assert_eq!(n % 2, 0, "every sheet holds the same vertices");
+                assert!(grounding.fits(n / 2), "one surplus per pair");
             }
             Closure::Twisted(twists) => assert_eq!(2 * twists.len(), n, "one twist per pair"),
         }
@@ -84,7 +85,7 @@ impl<T: Real, I: Index> Sddm<T, I> {
     ) -> Self {
         let closure = match grounding.surplus() {
             Some(ground) if twists(surplus, ground, &adjacency) => {
-                Closure::Twisted(ground.iter().step_by(2).map(|&g| twist(g)).collect())
+                Closure::Twisted(ground.iter().map(|&g| twist(g)).collect())
             }
             _ => Closure::Cover(grounding),
         };
@@ -129,8 +130,10 @@ impl<T: Real, I: Index> Eliminated<T, I> for Sddm<T, I> {
                 edge(I::from_index(i), I::from_index(j), -a);
             }
         }
-        if let Some(grounding) = self.closure.grounding() {
-            ground_edges(grounding, n, edge);
+        match &self.closure {
+            Closure::Folded(grounding) => ground_edges(grounding, n, 0, edge),
+            Closure::Cover(grounding) => ground_edges(grounding, n, 1, edge),
+            Closure::Twisted(_) => {}
         }
     }
 
@@ -183,7 +186,7 @@ impl<T: Real, I: Index> Eliminated<T, I> for SignedWdd<T, I> {
                 edge(I::from_index(i), I::from_index(j), -a);
             }
         }
-        ground_edges(&self.grounding, n, edge);
+        ground_edges(&self.grounding, n, 0, edge);
     }
 
     fn sign(&self) -> Signed<I> {
@@ -198,14 +201,15 @@ impl<T: Real, I: Index> Eliminated<T, I> for SignedWdd<T, I> {
     }
 }
 
-/// Each surplus as an edge to the ground vertex `n`.
+/// Each of `n` rows' surplus as an edge to the ground vertex `n`, row `k`'s that of vertex `k >> shift`, a cover's copies sharing theirs.
 fn ground_edges<T: Real, I: Index>(
     grounding: &Grounding<T>,
     n: usize,
+    shift: u32,
     mut edge: impl FnMut(I, I, T),
 ) {
     for k in 0..n {
-        if let Some(s) = grounding.edge(k) {
+        if let Some(s) = grounding.edge(k >> shift) {
             edge(I::from_index(k), I::from_index(n), s);
         }
     }
@@ -437,8 +441,7 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         let ground = ground.unwrap_or_default();
         let ground = match factored.layout() {
             Layout::SignedPairs => return fold(rows, ground),
-            Layout::Sheet => ground,
-            Layout::Cover => ground.into_iter().flat_map(|g| [g, g]).collect(),
+            Layout::Sheet | Layout::Cover => ground,
         };
         let n = rows.sums.len();
         let rows = Rows::new(rows.ptrs, rows.indices, rows.values, n);
@@ -518,7 +521,7 @@ impl<T: Real, I: Index> ColumnSums<'_, T, I> {
 /// [`CoverSurplus::Auto`]'s twist band, in `ε`.
 const TWIST_BAND: f64 = 5.0;
 
-/// Whether a cover's copies [`twist`] instead of grounding, as `surplus` says; `Auto` weighs `ground` against `ground + Σ|a_ij|`, both `ε`-scaled so neither overflows, and a cover doubles both sums, so `M`'s decide as its own.
+/// Whether a cover's copies [`twist`] instead of grounding, as `surplus` says; `Auto` weighs its rows' ground against it plus `Σ|a_ij|`, both `ε`-scaled so neither overflows, each vertex's `ground` summed once per copy: a cover doubles both sums, so `M`'s decide as its own.
 fn twists<T: Real, I: Index>(
     surplus: CoverSurplus,
     ground: &[T],
@@ -529,7 +532,7 @@ fn twists<T: Real, I: Index>(
         CoverSurplus::SurplusEdges => true,
         CoverSurplus::Auto => {
             let epsilon = widen(T::epsilon());
-            let total = crate::lane_sum(ground, epsilon);
+            let total = crate::repeated_lane_sum::<T, 2>(ground, epsilon);
             let trace = total + adjacency.scaled_abs_total(epsilon);
             total <= TWIST_BAND * epsilon * trace
         }

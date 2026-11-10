@@ -158,14 +158,25 @@ fn narrow<T: Real>(sum: f64) -> T {
 
 /// `scale · Σ|x|` in eight fixed lanes, uncompensated: it vectorizes and sums alike at any thread count, for nonnegative sums nothing cancels in.
 fn lane_sum<T: Real>(x: &[T], scale: f64) -> f64 {
+    repeated_lane_sum::<T, 1>(x, scale)
+}
+
+/// [`lane_sum`] of `x` with each entry repeated `K` times in place, bit for bit, without the repeated slice: each term lands in the lanes, or the tail, its copies would.
+fn repeated_lane_sum<T: Real, const K: usize>(x: &[T], scale: f64) -> f64 {
     let mut lanes = [0.0f64; 8];
-    let chunks = x.chunks_exact(8);
+    let chunks = x.chunks_exact(8 / K);
     let rest = chunks.remainder();
     for chunk in chunks {
-        (lanes.iter_mut().zip(chunk)).for_each(|(lane, &x)| *lane += scale * widen(x.abs()));
+        for (m, &x) in chunk.iter().enumerate() {
+            let term = scale * widen(x.abs());
+            lanes[K * m..][..K]
+                .iter_mut()
+                .for_each(|lane| *lane += term);
+        }
     }
     (rest.iter()).fold(lanes.iter().sum::<f64>(), |sum, &x| {
-        sum + scale * widen(x.abs())
+        let term = scale * widen(x.abs());
+        (0..K).fold(sum, |sum, _| sum + term)
     })
 }
 
@@ -258,7 +269,7 @@ fn two_sum<W: Batch<f64>>(a: W, b: W) -> (W, W) {
 
 #[cfg(test)]
 mod tests {
-    use super::{argmax, compensated_sum, Sum2};
+    use super::{argmax, compensated_sum, lane_sum, repeated_lane_sum, Sum2};
 
     /// The gauge pin's choice, which a factor's bits follow: a tie with the last entry keeps the last, else the first of the earlier maxima; a NaN never wins.
     #[test]
@@ -270,6 +281,22 @@ mod tests {
         assert_eq!(argmax(&[1.0, 2.0, f64::NAN], id), 2);
         assert_eq!(argmax(&[-4.0, 1.0, 4.0], f64::abs), 2);
         assert_eq!(argmax::<f64>(&[], id), 0);
+    }
+
+    /// Every length's chunks and tail, on terms whose sum depends on their order.
+    #[test]
+    fn a_repeated_lane_sum_is_the_lane_sum_of_the_repeated_slice_bit_for_bit() {
+        for len in 0..41 {
+            let x: Vec<f64> = (0..len)
+                .map(|i| (i as f64 * 0.7).sin() * 10f64.powi(i % 17))
+                .collect();
+            let twice: Vec<f64> = x.iter().flat_map(|&x| [x, x]).collect();
+            let (repeated, sum) = (
+                repeated_lane_sum::<f64, 2>(&x, 3.0e-3),
+                lane_sum(&twice, 3.0e-3),
+            );
+            assert_eq!(repeated.to_bits(), sum.to_bits(), "{len}");
+        }
     }
 
     /// The dropped `1.0` is the smaller operand as the addend in one order and as the running sum in the other.
