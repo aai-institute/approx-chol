@@ -1,7 +1,9 @@
-#![cfg(any(feature = "sprs", feature = "faer"))]
+#![cfg(any(feature = "sprs", feature = "faer", feature = "nalgebra"))]
 
 #[cfg(feature = "faer")]
 mod faer;
+#[cfg(feature = "nalgebra")]
+mod nalgebra;
 #[cfg(feature = "sprs")]
 mod sprs;
 

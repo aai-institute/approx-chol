@@ -19,14 +19,18 @@ pub enum Layout {
     Apart,
     ColumnMajor,
     Columns,
+    #[cfg(feature = "nalgebra")]
+    Nalgebra,
 }
 
 impl Layout {
-    pub const ALL: [Layout; 4] = [
+    pub const ALL: &[Layout] = &[
         Layout::Interleaved,
         Layout::Apart,
         Layout::ColumnMajor,
         Layout::Columns,
+        #[cfg(feature = "nalgebra")]
+        Layout::Nalgebra,
     ];
 }
 
@@ -38,6 +42,8 @@ pub struct Layouts<T, const K: usize> {
     apart: Apart<T>,
     major: Vec<T>,
     slices: Vec<Vec<T>>,
+    #[cfg(feature = "nalgebra")]
+    nalgebra: nalgebra::DMatrix<T>,
 }
 
 impl<T: Real, const K: usize> Layouts<T, K> {
@@ -51,6 +57,8 @@ impl<T: Real, const K: usize> Layouts<T, K> {
             apart: Apart(columns.to_vec()),
             major: columns.concat(),
             slices: columns.to_vec(),
+            #[cfg(feature = "nalgebra")]
+            nalgebra: nalgebra::DMatrix::from_fn(rows, K, |i, j| columns[j][i]),
         }
     }
 
@@ -63,6 +71,8 @@ impl<T: Real, const K: usize> Layouts<T, K> {
                 f(&mut ColumnMajor::new(&mut self.major, self.rows).expect("whole columns"))
             }
             Layout::Columns => f(&mut Columns::new(&mut self.slices).expect("equal columns")),
+            #[cfg(feature = "nalgebra")]
+            Layout::Nalgebra => f(&mut self.nalgebra),
         }
     }
 
@@ -101,7 +111,7 @@ pub fn assert_errors_leave_the_block<T: Real>(factor: &ApproxInverse<T>) {
                 .collect::<Vec<T>>()
         };
         let fresh = Layouts::new([column(1.0), column(-1.0)]);
-        for layout in Layout::ALL {
+        for &layout in Layout::ALL {
             let mut block = fresh.clone();
             if found == n {
                 let least = fresh.least(factor, layout);

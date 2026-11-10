@@ -1,4 +1,4 @@
-//! [`CsrRef`] views of `sprs` and `faer` matrices, checked square before [`CsrRef::new`]; a CSC matrix is read as its transpose, which a symmetric one equals, so a storage defect names its column as the row.
+//! [`CsrRef`] views of `sprs`, `faer` and `nalgebra-sparse` matrices, checked square before [`CsrRef::new`]; a CSC matrix is read as its transpose, which a symmetric one equals, so a storage defect names its column as the row.
 
 #[cfg(feature = "faer")]
 use num_traits::PrimInt;
@@ -42,5 +42,27 @@ impl<'a, T: Real, I: faer::Index + PrimInt> TryFrom<faer::sparse::SparseRowMatRe
         let end = row_ptrs[n].zx();
         let (col_indices, values) = (&symbolic.col_idx()[..end], &matrix.val()[..end]);
         CsrRef::new(n, row_ptrs, col_indices, values)
+    }
+}
+
+#[cfg(feature = "nalgebra")]
+impl<'a, T: Real> TryFrom<&'a nalgebra_sparse::CsrMatrix<T>> for CsrRef<'a, T, usize> {
+    type Error = InputError;
+
+    fn try_from(matrix: &'a nalgebra_sparse::CsrMatrix<T>) -> Result<Self, InputError> {
+        let n = square(matrix.nrows(), matrix.ncols())?;
+        let (row_ptrs, col_indices, values) = matrix.csr_data();
+        CsrRef::new(n, row_ptrs, col_indices, values)
+    }
+}
+
+#[cfg(feature = "nalgebra")]
+impl<'a, T: Real> TryFrom<&'a nalgebra_sparse::CscMatrix<T>> for CsrRef<'a, T, usize> {
+    type Error = InputError;
+
+    fn try_from(matrix: &'a nalgebra_sparse::CscMatrix<T>) -> Result<Self, InputError> {
+        let n = square(matrix.nrows(), matrix.ncols())?;
+        let (col_ptrs, row_indices, values) = matrix.csc_data();
+        CsrRef::new(n, col_ptrs, row_indices, values)
     }
 }
