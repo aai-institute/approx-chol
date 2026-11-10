@@ -41,6 +41,10 @@ fn input_error(error: InputError, names: CsrNames) -> PyErr {
             expected,
             found,
         },
+        E::RowPtrs { parameter, row } => E::RowPtrs {
+            parameter: names.of(parameter),
+            row,
+        },
         E::IndexOutOfRange { parameter, entry } => E::IndexOutOfRange {
             parameter: names.of(parameter),
             entry,
@@ -58,7 +62,7 @@ fn input_error(error: InputError, names: CsrNames) -> PyErr {
     let (kind, parameter, position) = match error {
         E::VertexCountOverflow { .. } => ("vertex_count_overflow", None, None),
         E::LengthMismatch { parameter, .. } => ("length_mismatch", Some(parameter), None),
-        E::RowPtrs { row, .. } => ("row_ptrs", None, Some(row)),
+        E::RowPtrs { parameter, row } => ("row_ptrs", Some(parameter), Some(row)),
         E::IndexOutOfRange { parameter, entry } => {
             ("index_out_of_range", Some(parameter), Some(entry))
         }
