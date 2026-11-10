@@ -248,10 +248,7 @@ fn destination<'py, D: Dimension>(
 /// A contiguous copy, its borrow released on return so the caller's array is free again.
 fn owned<T: Element + Copy>(array: &Bound<'_, PyArray1<T>>, name: &str) -> PyResult<Vec<T>> {
     let array = array.try_readonly().map_err(|e| borrow_error(name, e))?;
-    let slice = array.as_slice();
-    slice
-        .map(<[T]>::to_vec)
-        .map_err(|_| value_error(format!("{name} must be contiguous")))
+    Ok(array.as_array().to_vec())
 }
 
 #[pyclass(frozen, eq, hash, name = "Config")]
