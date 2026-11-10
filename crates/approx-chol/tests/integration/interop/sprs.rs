@@ -1,5 +1,4 @@
 use approx_chol::input::{CsrRef, InputError};
-use approx_chol::Error;
 use rstest::rstest;
 use sprs::{CsMatI, SpIndex};
 
@@ -37,12 +36,8 @@ fn sprs_csc_factorizes_as_its_csr() {
 fn sprs_csc_of_an_asymmetric_matrix_is_rejected() {
     let csc =
         CsMatI::<f64, u32>::new_csc((2, 2), vec![0, 1, 3], vec![0, 0, 1], vec![2.0, -1.0, 2.0]);
-    let err = approx_chol::factorize(CsrRef::try_from(csc.view()).expect("square"))
-        .expect_err("asymmetric CSC must be rejected");
-    assert!(
-        matches!(err, Error::Input(InputError::NotSymmetric { .. })),
-        "{err:?}"
-    );
+    let err = CsrRef::try_from(csc.view()).expect_err("asymmetric CSC must be rejected");
+    assert!(matches!(err, InputError::NotSymmetric { .. }), "{err:?}");
 }
 
 /// Rows 2..4 of a 4x2 matrix are a square view whose row pointers start past zero.

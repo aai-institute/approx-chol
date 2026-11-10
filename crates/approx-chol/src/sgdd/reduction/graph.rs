@@ -16,7 +16,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
     ) -> Result<Self, ReduceError> {
         assemble_incidence(cells, v)?.reduced(threads, |vertices, (off_diagonal, grounding), _| {
             let m = Congruent::incidence(vertices, off_diagonal);
-            m.block(Balance::Balanced, grounding, ScaleVector::Identity, 0.0)
+            Ok(m.block(Balance::Balanced, grounding, ScaleVector::Identity, 0.0))
         })
     }
 }

@@ -2,12 +2,19 @@
 
 use num_traits::PrimInt;
 
-use crate::Real;
+use crate::{in_range, Real};
 
 /// Why an input was rejected: the defect, and where it sits in the caller's terms. A `parameter` is the constructor's own name for the argument, an `entry` a position in it.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputError {
+    /// The two sides' vertex counts do not fit in `usize` together.
+    VertexCountOverflow {
+        /// The left side's vertex count.
+        n_left: usize,
+        /// The right side's vertex count.
+        n_right: usize,
+    },
     /// A slice's length differs from the one the input fixed: `n`, another slice's, or the last row pointer.
     LengthMismatch {
         /// The slice.
@@ -29,7 +36,7 @@ pub enum InputError {
         /// The offending entry.
         entry: usize,
     },
-    /// A stated value is not finite.
+    /// A stated value is not finite, or nonzero below `MIN_POSITIVE/EPSILON`; for a repeated column, its sum, at the column's first entry.
     OutOfRange {
         /// The slice.
         parameter: &'static str,
@@ -65,8 +72,8 @@ pub enum InputError {
         /// The offending row.
         row: usize,
     },
-    /// A CSR entry or a repeated column's sum is not finite, or nonzero below `MIN_POSITIVE/EPSILON`.
-    InadmissibleRow {
+    /// A row's diagonal is negative, past `MAX/4`, or zero beside a nonzero edge.
+    Diagonal {
         /// The offending row.
         row: usize,
     },
@@ -87,6 +94,9 @@ pub enum InputError {
 impl core::fmt::Display for InputError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::VertexCountOverflow { n_left, n_right } => {
+                write!(f, "vertex counts {n_left} + {n_right} overflow usize")
+            }
             Self::LengthMismatch {
                 parameter,
                 expected,
@@ -100,7 +110,7 @@ impl core::fmt::Display for InputError {
                 write!(f, "{parameter}[{entry}] is out of range")
             }
             Self::OutOfRange { parameter, entry } => {
-                write!(f, "{parameter}[{entry}] is not finite")
+                write!(f, "{parameter}[{entry}] is outside the representable range")
             }
             Self::Negative { parameter, entry } => write!(f, "{parameter}[{entry}] is negative"),
             Self::SelfLoop { edge } => write!(f, "edge {edge} joins a vertex to itself"),
@@ -111,9 +121,10 @@ impl core::fmt::Display for InputError {
                 f,
                 "row {row} of an upper triangle has a nonzero below the diagonal"
             ),
-            Self::InadmissibleRow { row } => {
-                write!(f, "row {row} has an entry outside the representable range")
-            }
+            Self::Diagonal { row } => write!(
+                f,
+                "row {row} has a negative diagonal, a zero one beside an edge, or one past MAX/4"
+            ),
             Self::NotSquare { rows, cols } => write!(f, "matrix is not square ({rows}x{cols})"),
             Self::RowGap { row } => write!(f, "row {row} leaves unused slots after its entries"),
         }
@@ -138,26 +149,41 @@ pub(super) fn length(
     }
 }
 
-pub(super) fn finite<T: Real>(parameter: &'static str, values: &[T]) -> Result<(), InputError> {
-    match values.iter().position(|x| !x.is_finite()) {
-        Some(entry) => Err(InputError::OutOfRange { parameter, entry }),
-        None => Ok(()),
+/// `values[entry]`, or `OutOfRange` at it.
+pub(super) fn value_in_range<T: Real>(
+    parameter: &'static str,
+    values: &[T],
+    entry: usize,
+) -> Result<T, InputError> {
+    match values[entry] {
+        x if in_range(x) => Ok(x),
+        _ => Err(InputError::OutOfRange { parameter, entry }),
     }
 }
 
-/// The first entry not finite and `≥ 0`, by which of the two it fails.
+/// Accumulated, not short-circuited, so the pass vectorizes; the entry is located only on failure.
+pub(super) fn values_in_range<T: Real>(
+    parameter: &'static str,
+    values: &[T],
+) -> Result<(), InputError> {
+    if values.iter().fold(true, |ok, &x| ok & in_range(x)) {
+        return Ok(());
+    }
+    (0..values.len()).try_for_each(|entry| value_in_range(parameter, values, entry).map(drop))
+}
+
+/// The first entry outside the range or negative, by which of the two it fails; accumulated as [`values_in_range`].
 pub(super) fn nonnegative<T: Real>(
     parameter: &'static str,
     values: &[T],
 ) -> Result<(), InputError> {
-    match values
-        .iter()
-        .position(|&x| !(x.is_finite() && x >= T::zero()))
-    {
-        Some(entry) if values[entry].is_finite() => Err(InputError::Negative { parameter, entry }),
-        Some(entry) => Err(InputError::OutOfRange { parameter, entry }),
-        None => Ok(()),
+    if (values.iter()).fold(true, |ok, &x| ok & in_range(x) & (x >= T::zero())) {
+        return Ok(());
     }
+    (0..values.len()).try_for_each(|entry| match value_in_range(parameter, values, entry)? {
+        x if x < T::zero() => Err(InputError::Negative { parameter, entry }),
+        _ => Ok(()),
+    })
 }
 
 /// Every index in `parameter` below `n`.

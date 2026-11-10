@@ -24,7 +24,7 @@ fn reduce_with<T: Real>(
     policy: ScalingPolicy,
 ) -> Result<ApproxInverse<T>, Error> {
     let n = row_ptrs.len() - 1;
-    let csr = CsrRef::new(n, row_ptrs, columns, values).expect("valid shape");
+    let csr = CsrRef::new(n, row_ptrs, columns, values)?;
     factorize_with(csr, Config::default(), policy)
 }
 
@@ -34,7 +34,7 @@ fn reduce_upper<T: Real>(
     values: &[T],
 ) -> Result<ApproxInverse<T>, Error> {
     let n = row_ptrs.len() - 1;
-    let csr = TriangleCsrRef::upper(n, row_ptrs, columns, values).expect("valid shape");
+    let csr = TriangleCsrRef::upper(n, row_ptrs, columns, values)?;
     factorize(csr)
 }
 

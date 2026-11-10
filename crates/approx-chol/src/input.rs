@@ -8,7 +8,7 @@ mod width2;
 
 use num_traits::PrimInt;
 
-pub(crate) use csr::Canonical;
+pub(crate) use csr::{Canonical, CsrArrays};
 pub use csr::{CsrRef, TriangleCsrRef};
 pub use error::InputError;
 pub use width2::bipartite::{BipartiteFactorWidth2, FactorWidth1, Side};
@@ -32,7 +32,6 @@ impl<T: Real, J: PrimInt> Input<'_, T, J> {
     pub(crate) fn n(&self) -> usize {
         match self.0 {
             Lowered::Csr(csr) => csr.n(),
-            Lowered::Triangle(triangle) => triangle.n(),
             Lowered::FactorWidth2(v) => v.n(),
         }
     }
@@ -41,8 +40,7 @@ impl<T: Real, J: PrimInt> Input<'_, T, J> {
 /// An [`Input`] as the core reads it: a CSR matrix stored whole or by its upper triangle, or `V W Vᵀ`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Lowered<'a, T, I> {
-    Csr(CsrRef<'a, T, I>),
-    Triangle(TriangleCsrRef<'a, T, I>),
+    Csr(CsrArrays<'a, T, I>),
     FactorWidth2(FactorWidth2<'a, T, I>),
 }
 
@@ -57,8 +55,8 @@ macro_rules! input_from {
 }
 
 input_from! {
-    CsrRef => |csr| Lowered::Csr(csr),
-    TriangleCsrRef => |triangle| Lowered::Triangle(triangle),
+    CsrRef => |csr| Lowered::Csr(csr.0),
+    TriangleCsrRef => |triangle| Lowered::Csr(triangle.0),
     Laplacian => |laplacian| Lowered::FactorWidth2(laplacian.lower()),
     Sddm => |sddm| Lowered::FactorWidth2(sddm.lower()),
     FactorWidth2 => |v| Lowered::FactorWidth2(v),

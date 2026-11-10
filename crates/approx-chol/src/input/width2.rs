@@ -7,7 +7,7 @@ pub(super) mod weights;
 use num_traits::PrimInt;
 
 use self::weights::Weight;
-use super::error::{check_ends, length, InputError};
+use super::error::{check_ends, length, values_in_range, InputError};
 use super::index;
 use crate::{widen, Index, Real};
 
@@ -29,18 +29,11 @@ enum Columns<'a, T> {
 /// `s[k] (x[k] e_a + y[k] e_(n_left + b))`, a missing side or scale `1`; with neither side, read switched as `e_a − e_b`.
 #[derive(Clone, Copy, Debug)]
 struct BipartiteColumns<'a, T> {
+    n: usize,
     n_left: usize,
-    n_right: usize,
     x: Option<&'a [T]>,
     y: Option<&'a [T]>,
     scale: Option<&'a [T]>,
-}
-
-impl<T> BipartiteColumns<'_, T> {
-    /// Saturates, as a sum past `usize` fails allocation anyway.
-    fn n(&self) -> usize {
-        self.n_left.saturating_add(self.n_right)
-    }
 }
 
 /// `V Vᵀ` on `n` vertices, column `k` of `V` being `x[k] e_a[k] + y[k] e_b[k]`; every other input lowers to one.
@@ -52,7 +45,7 @@ pub struct FactorWidth2<'a, T, I = u32> {
 }
 
 impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
-    /// `a[k] ≠ b[k] < n`; `a`, `x`, `b`, `y` one entry per column.
+    /// `a[k] ≠ b[k] < n`; `a`, `x`, `b`, `y` one entry per column, `x` and `y` [in range](InputError::OutOfRange).
     pub fn new(
         n: usize,
         (a, x): (&'a [I], &'a [T]),
@@ -63,6 +56,8 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         check_ends(n, ("a", a), ("b", b), |column| InputError::RepeatedRow {
             column,
         })?;
+        values_in_range("x", x)?;
+        values_in_range("y", y)?;
         let columns = Columns::FactorWidth2 { n, x, y };
         Ok(Self { a, b, columns })
     }
@@ -96,11 +91,12 @@ impl<'a, T: Real, I: PrimInt> FactorWidth2<'a, T, I> {
         )
     }
 
-    /// Dimension of `A`, not the column count; saturates, as a sum past `usize` fails allocation anyway.
+    /// Dimension of `A`, not the column count.
     pub(crate) fn n(&self) -> usize {
         match self.columns {
-            Columns::Incidence { n, .. } | Columns::FactorWidth2 { n, .. } => n,
-            Columns::Bipartite(columns) => columns.n(),
+            Columns::Incidence { n, .. }
+            | Columns::FactorWidth2 { n, .. }
+            | Columns::Bipartite(BipartiteColumns { n, .. }) => n,
         }
     }
 

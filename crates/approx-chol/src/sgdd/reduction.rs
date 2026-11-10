@@ -11,7 +11,8 @@ use super::decomposition::{
     of_csr, AdjacencyLayout, Biadjacency, Partitioned, RowSums, StrictUpperTriangle, SymmetricBlock,
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy};
-use super::{diagonal_in_range, Complement, Reduced};
+use super::{Complement, Reduced};
+use crate::diagonal_in_range;
 use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Lowered, Side};
 use crate::storage::OffDiagonal;
 use crate::{narrow, widen, Error, Index, Real, Threads};
@@ -24,10 +25,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
         threads: Threads,
     ) -> Result<Self, Error> {
         Ok(match input.0 {
-            Lowered::Csr(csr) => of_csr(Canonical::whole(csr)?).reduce(&policy, threads)?,
-            Lowered::Triangle(triangle) => {
-                of_csr(Canonical::upper(triangle)?).reduce(&policy, threads)?
-            }
+            Lowered::Csr(rows) => of_csr(Canonical::of(rows)).reduce(&policy, threads)?,
             Lowered::FactorWidth2(v) => Self::from_factor_width_2(v, &policy, threads)?,
         })
     }
@@ -114,14 +112,9 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
         relax: impl FnOnce(&Self) -> Option<scaling::Relaxation<T>>,
     ) -> Result<Settling<'p, T, I>, ReduceError> {
         let RowSums { diagonal, abs } = &self.entries.rows;
-        let in_range = |(&d, &s): (&T, &T)| diagonal_in_range(d) && diagonal_in_range(s);
-        if let Some(i) = diagonal.iter().zip(abs).position(|row| !in_range(row)) {
+        if let Some(i) = abs.iter().position(|&s| !diagonal_in_range(s)) {
             let vertex = self.vertices[i].index();
             return Err(ReduceError::OutOfRange { vertex });
-        }
-        if let Some(i) = diagonal.iter().position(|&d| d <= T::zero()) {
-            let vertex = self.vertices[i].index();
-            return Err(ReduceError::NonpositiveDiagonal { vertex });
         }
         let vertex = self.vertices[0].index();
         let relaxation = match diagonal
@@ -270,7 +263,7 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         };
         let (vector, clamped) = (self.vector, self.clamped);
         if certificate || (in_band && residues_float && (grounds.is_none() || certified())) {
-            return (self.m).block(Balance::Balanced, Grounding::ungrounded(), vector, clamped);
+            return Ok((self.m).block(Balance::Balanced, Grounding::ungrounded(), vector, clamped));
         }
         let grounding = surplus.grounds(&self);
         if !grounding.is_grounded() {
@@ -281,7 +274,7 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         let grounding = grounding
             .kept(grounds.as_deref())
             .map_err(|i| out_of_range(&m, i))?;
-        m.block(Balance::Balanced, grounding, vector, clamped)
+        Ok(m.block(Balance::Balanced, grounding, vector, clamped))
     }
 
     /// A frustrated `M`, definite without a ground, keeping none of its rounding.
@@ -297,7 +290,7 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
             surplus(&rows).kept(Some(g))
         });
         let grounding = grounding.map_err(|i| out_of_range(&m, i))?;
-        m.block(Balance::Frustrated, grounding, vector, clamped)
+        Ok(m.block(Balance::Frustrated, grounding, vector, clamped))
     }
 
     /// `(ε·1ᵀM1, ε·tr M)` from `M`'s rows, `1ᵀM1 = tr M − Σ|offdiag(M)|`, so `tr M` cannot overflow.
@@ -481,7 +474,7 @@ mod tests {
         let unscaled = |_: &SymmetricBlock<'_, f64, u32>| -> Option<scaling::Relaxation<f64>> {
             panic!("dominant within the tolerance, so nothing scales")
         };
-        let partitioned = of_csr::<f64, u32, u32>(Canonical::whole(csr).expect("symmetric"));
+        let partitioned = of_csr::<f64, u32, u32>(Canonical::of(csr.0));
         let summands = partitioned
             .reduced(Threads::All, |vertices, entries, _| match (SymmetricBlock {
                 vertices,

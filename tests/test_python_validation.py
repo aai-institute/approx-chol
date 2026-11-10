@@ -176,8 +176,8 @@ def _f64(*xs):
             _u32(0),
             _f64(-1),
             1,
-            "vertex 0 has a nonpositive diagonal",
-            id="from_csr_reduce",
+            "row 0 has a negative diagonal, a zero one beside an edge, or one past MAX/4",
+            id="nonpositive_diagonal",
         ),
     ],
 )

@@ -8,10 +8,11 @@ use num_traits::PrimInt;
 
 use super::partition::{Partition, UnionFind};
 use super::{Entries, LonePivot, Partitioned, PrincipalBlocks, RowSums};
+use crate::diagonal_in_range;
 use crate::input::{BipartiteFactorWidth2, Column, FactorWidth2, Side};
 use crate::sgdd::block::{Grounding, ReduceError};
 use crate::sgdd::scaling::ScaleVector;
-use crate::sgdd::{diagonal_in_range, within_band};
+use crate::sgdd::within_band;
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
 use crate::{narrow, widen, Index, Real};
 
@@ -215,7 +216,9 @@ fn assembled<T: Real, I, C>(
 ) -> Result<Partitioned<Assembled<T, C>, I>, ReduceError> {
     let diagonal = (sums.into_iter().enumerate())
         .map(|(i, sum)| match narrow::<T>(sum) {
-            d if sum != 0.0 && d == T::zero() => Err(ReduceError::OutOfRange { vertex: i }),
+            d if !diagonal_in_range(d) || (sum != 0.0 && d == T::zero()) => {
+                Err(ReduceError::OutOfRange { vertex: i })
+            }
             d => Ok(d),
         })
         .collect::<Result<_, _>>()?;

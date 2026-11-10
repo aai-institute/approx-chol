@@ -5,7 +5,7 @@ use std::ops::Range;
 use num_traits::PrimInt;
 
 use super::{BipartiteColumns, Columns, FactorWidth2};
-use crate::input::error::{finite, indices, length, InputError};
+use crate::input::error::{indices, length, values_in_range, InputError};
 use crate::Real;
 
 /// One side of `V`, with at most one nonzero per column: `values[k]` at `rows[k]`, `1` for `None`.
@@ -22,9 +22,10 @@ impl<'a, T: Real, I: PrimInt> FactorWidth1<'a, T, I> {
         Self::checked(n, rows, None)
     }
 
-    /// `n` rows, each column's `rows[k]` below `n`, its value `values[k]`.
+    /// `n` rows, each column's `rows[k]` below `n`, its value `values[k]`, [in range](InputError::OutOfRange).
     pub fn valued(n: usize, rows: &'a [I], values: &'a [T]) -> Result<Self, InputError> {
         length("values", rows.len(), values.len())?;
+        values_in_range("values", values)?;
         Self::checked(n, rows, Some(values))
     }
 
@@ -49,10 +50,10 @@ impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
         right: FactorWidth1<'a, T, I>,
     ) -> Result<Self, InputError> {
         length("right", left.rows.len(), right.rows.len())?;
-        Ok(Self::of(left, right, None))
+        Self::of(left, right, None)
     }
 
-    /// `(V S)(V S)ᵀ`, `S = diag(s)`: column `k` scaled by `s[k]`, finite, on both sides.
+    /// `(V S)(V S)ᵀ`, `S = diag(s)`: column `k` scaled by `s[k]`, [in range](InputError::OutOfRange), on both sides.
     pub fn scaled(
         left: FactorWidth1<'a, T, I>,
         right: FactorWidth1<'a, T, I>,
@@ -60,13 +61,13 @@ impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
     ) -> Result<Self, InputError> {
         length("right", left.rows.len(), right.rows.len())?;
         length("s", left.rows.len(), s.len())?;
-        finite("s", s)?;
-        Ok(Self::of(left, right, Some(s)))
+        values_in_range("s", s)?;
+        Self::of(left, right, Some(s))
     }
 
     /// Dimension of `A`.
     pub(crate) fn n(&self) -> usize {
-        self.columns.n()
+        self.columns.n
     }
 
     /// The run of `A`'s vertices on `side`.
@@ -90,19 +91,26 @@ impl<'a, T: Real, I: PrimInt> BipartiteFactorWidth2<'a, T, I> {
         left: FactorWidth1<'a, T, I>,
         right: FactorWidth1<'a, T, I>,
         scale: Option<&'a [T]>,
-    ) -> Self {
+    ) -> Result<Self, InputError> {
+        let n = left
+            .n
+            .checked_add(right.n)
+            .ok_or(InputError::VertexCountOverflow {
+                n_left: left.n,
+                n_right: right.n,
+            })?;
         let columns = BipartiteColumns {
+            n,
             n_left: left.n,
-            n_right: right.n,
             x: left.values,
             y: right.values,
             scale,
         };
-        Self {
+        Ok(Self {
             a: left.rows,
             b: right.rows,
             columns,
-        }
+        })
     }
 }
 
