@@ -1,14 +1,17 @@
 use std::num::NonZeroUsize;
 
 use approx_chol::input::{CsrRef, InputError};
-use approx_chol::Threads;
+use approx_chol::{factorize, Threads};
 use faer::sparse::{SparseColMat, SparseRowMat, SymbolicSparseColMat, SymbolicSparseRowMat};
 use faer::Par;
 use num_traits::PrimInt;
 use rstest::rstest;
 
 use super::{assert_solves_fixture, COL_INDICES, N, ROW_PTRS, VALUES};
+use crate::common::bits::bits;
 use crate::common::entry::cast_all;
+use crate::common::graph::Graph;
+use crate::common::grid::grid;
 
 fn path_laplacian<I: faer::Index + PrimInt>(row_nnz: Option<Vec<I>>) -> SparseRowMat<I, f64> {
     let symbolic = SymbolicSparseRowMat::new_checked(
@@ -39,9 +42,9 @@ fn faer_csr_with_full_row_counts_factorizes() {
     assert_solves_fixture(path_laplacian::<u32>(Some(cast_all(&spans))).as_ref());
 }
 
-/// A symmetric matrix's CSC arrays are its CSR arrays, so its transpose factors alike.
+/// A symmetric matrix's CSC arrays are its CSR arrays.
 #[test]
-fn faer_csc_factorizes_as_its_transpose() {
+fn faer_csc_factorizes() {
     let symbolic = SymbolicSparseColMat::<u32>::new_checked(
         N,
         N,
@@ -49,11 +52,67 @@ fn faer_csc_factorizes_as_its_transpose() {
         None,
         cast_all(&COL_INDICES),
     );
-    assert_solves_fixture(
-        SparseColMat::new(symbolic, VALUES.to_vec())
-            .as_ref()
-            .transpose(),
+    assert_solves_fixture(SparseColMat::new(symbolic, VALUES.to_vec()).as_ref());
+}
+
+/// A `rows × cols` grid grounded at vertex 0, so its matrix is SDDM and nonsingular.
+fn grounded_grid(rows: usize, cols: usize) -> Graph {
+    let mut graph = grid(rows, cols);
+    graph.ground[0] = 0.5;
+    graph
+}
+
+/// A grounded grid stored in faer's row and column layouts, and in the same arrays as a `CsrRef`.
+#[test]
+fn faer_row_and_column_storage_factor_as_the_same_csr() {
+    let graph = grounded_grid(9, 7);
+    let (row_ptrs, col_indices, values) = graph.csr(false);
+    let n = graph.n;
+    let rows = SparseRowMat::new(
+        SymbolicSparseRowMat::new_checked(n, n, row_ptrs.clone(), None, col_indices.clone()),
+        values.clone(),
     );
+    let columns = SparseColMat::new(
+        SymbolicSparseColMat::new_checked(n, n, row_ptrs.clone(), None, col_indices.clone()),
+        values.clone(),
+    );
+    let b: Vec<f64> = (0..n).map(|i| (i as f64).sin()).collect();
+    let solve = |csr: CsrRef<'_, f64, usize>| {
+        let mut x = b.clone();
+        factorize(csr)
+            .expect("SDDM")
+            .apply(&mut x, Threads::All)
+            .expect("n rows");
+        bits(&x)
+    };
+    let direct = solve(CsrRef::new(n, &row_ptrs, &col_indices, &values).expect("valid"));
+    assert_eq!(solve(rows.as_ref().try_into().expect("valid")), direct);
+    assert_eq!(solve(columns.as_ref().try_into().expect("valid")), direct);
+}
+
+/// The identity stored by columns, its unused slots holding `-1`s that would connect the two vertices if read.
+#[test]
+fn faer_try_from_columns_with_unused_slots_returns_error() {
+    let symbolic = SymbolicSparseColMat::<u32>::new_checked(
+        2,
+        2,
+        vec![0, 2, 4],
+        Some(vec![1, 1]),
+        vec![0, 1, 1, 0],
+    );
+    let mat = SparseColMat::new(symbolic, vec![1.0, -1.0, 1.0, -1.0]);
+    let err = CsrRef::try_from(mat.as_ref()).expect_err("unused slots must be rejected");
+    assert_eq!(err, InputError::RowGap { row: 0 });
+}
+
+/// A column-major matrix's shape is checked as stored, before its arrays are read as its transpose's.
+#[test]
+fn faer_try_from_non_square_columns_returns_error() {
+    let symbolic =
+        SymbolicSparseColMat::<u32>::new_checked(3, 4, vec![0, 1, 2, 3, 3], None, vec![0, 1, 2]);
+    let mat = SparseColMat::new(symbolic, vec![1.0, 1.0, 1.0]);
+    let err = CsrRef::try_from(mat.as_ref()).expect_err("non-square matrix must be rejected");
+    assert_eq!(err, InputError::NotSquare { rows: 3, cols: 4 });
 }
 
 /// The spare slots hold `-1`s that would connect vertices 0 and 3 if read.
