@@ -130,8 +130,9 @@ class InputError(ValueError):
 
 Python takes any scipy sparse matrix, whole storage, through `tocsr()`, so a CSC factors its own
 matrix; any other object with `indptr`, `indices`, `data` and `shape` is read as a CSR as it
-stands. Anything else raises `TypeError`. Indices pass in any integer dtype without widening,
-values are converted to `f64`, and the arrays are copied once into Rust, so the build runs with
+stands. Anything else raises `TypeError`. Both index arrays take the integer dtype they share,
+`int32`, `uint32` and `uint64` as they are, any other, narrower or mixed, as `int64`, since a
+CSR has one index type; values are converted to `f64`, and the arrays are copied once into Rust, so the build runs with
 the GIL released. `parameter` is `indptr`, `indices` or `data` of the CSR read, and a position
 is in that CSR's storage, after any conversion. A rectangular matrix raises `not_square`. The message carries every field of the Rust
 variant; `kind`, `parameter` and `position` are for matching.
