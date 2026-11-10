@@ -343,8 +343,10 @@ which is SDDM on a cover and WDD under signed elimination, since each eliminatio
 Eliminating a vertex $f \in F$ adds the clique
 on its neighbors with weights $w_{fi} w_{fj} / a_{ff}$ and raises their surpluses (glossary,
 Elimination). These cliques can make $\tilde H$ dense, so $\tilde H$ is formed exactly, or sampled: each
-star of $F$, its ground share included as one more neighbor, is replaced by a clique sample, so
-the surplus raise is sampled with the clique and unbiased like it. The stars are independent,
+star of $F$ is replaced by a clique sample on its neighbors in $K$, unbiased like the clique; its
+ground share counts in $a_{ff}$ but is never drawn, and each neighbor's share $w_{fk} s_f / a_{ff}$
+raises its surplus exactly, as in the exact formation. A sample then joins a star's neighbors
+as its clique does, and a neighbor's surplus does not depend on the draw (#437). The stars are independent,
 since $F$ has no internal edges: on a cover they are formed with a ground vertex, and whether
 $\tilde H$'s surplus then goes to a ground vertex or to surplus edges is decided on $\tilde H$
 (step 5), after formation. Steps 6–7 then factor $\tilde H$.
