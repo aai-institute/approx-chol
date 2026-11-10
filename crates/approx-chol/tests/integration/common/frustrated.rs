@@ -1,5 +1,7 @@
 use approx_chol::input::Side;
-use approx_chol::{factorize_complement, factorize_with, ApproxInverse, Config, ScalingPolicy};
+use approx_chol::{
+    factorize_complement, factorize_with, ApproxInverse, Config, Real, ScalingPolicy,
+};
 
 use super::bipartite::Bipartite;
 use super::bits::bits;
@@ -47,7 +49,7 @@ pub fn factors(g: &Bipartite, config: Config) -> Vec<(String, ApproxInverse)> {
 }
 
 /// Whether a frustrated block of `factor` is eliminated signed.
-pub fn is_signed(factor: &ApproxInverse) -> bool {
+pub fn is_signed<T: Real>(factor: &ApproxInverse<T>) -> bool {
     format!("{factor:?}").contains("Signed(")
 }
 

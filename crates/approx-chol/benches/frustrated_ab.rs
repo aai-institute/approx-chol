@@ -13,6 +13,7 @@ mod frustrated;
 #[allow(dead_code, reason = "the frustrated fixtures draw only slope panels")]
 mod panel;
 #[path = "../tests/integration/common/pcg.rs"]
+#[allow(dead_code, reason = "the bench reads only the iteration count")]
 mod pcg;
 
 use std::alloc::{GlobalAlloc, Layout, System};
