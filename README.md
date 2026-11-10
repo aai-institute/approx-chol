@@ -13,6 +13,10 @@ AC(k) was introduced and analyzed by Gao, Kyng, and Spielman (2025), "AC(k): Rob
 - `crates/approx-chol-py`: Python extension crate (`pyo3`).
 - `python/approx_chol`: Python package surface.
 
+## Upgrading
+
+[MIGRATING.md](MIGRATING.md) maps each item removed or renamed in a release to what takes its place, from 0.7 to 0.8 on.
+
 ## Development
 
 ```bash

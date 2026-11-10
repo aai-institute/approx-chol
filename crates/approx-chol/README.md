@@ -19,6 +19,8 @@ Or with Cargo:
 cargo add approx-chol
 ```
 
+Upgrading from 0.7: [MIGRATING.md](https://github.com/aai-institute/approx-chol/blob/main/MIGRATING.md).
+
 ## Example
 
 ```rust
