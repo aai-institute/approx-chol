@@ -1,5 +1,5 @@
 use approx_chol::input::{CsrRef, InputError, TriangleCsrRef};
-use approx_chol::{factorize, ApproxInverse, Error};
+use approx_chol::{factorize, ApproxInverse};
 use num_traits::PrimInt;
 use proptest::prelude::*;
 
@@ -54,8 +54,8 @@ fn upper((row_ptrs, col_indices, values, n): &LaplacianCsr) -> LaplacianCsr {
     (ptrs, columns, kept, *n)
 }
 
-/// Both constructors share the shape checks, so each must name the same defect.
-fn shape_errors<I: PrimInt + std::fmt::Debug>(
+/// Both constructors share the input checks, so each must name the same defect.
+fn input_errors<I: PrimInt + std::fmt::Debug>(
     n: usize,
     row_ptrs: &[I],
     col_indices: &[I],
@@ -65,18 +65,6 @@ fn shape_errors<I: PrimInt + std::fmt::Debug>(
     let upper = TriangleCsrRef::upper(n, row_ptrs, col_indices, values)
         .expect_err("upper storage must fail");
     [full, upper]
-}
-
-/// Columns are checked at reduction, where both storages canonicalize.
-fn column_errors<I: PrimInt + Sync + std::fmt::Debug>(
-    n: usize,
-    row_ptrs: &[I],
-    col_indices: &[I],
-    values: &[f64],
-) -> [Error; 2] {
-    let csr = CsrRef::new(n, row_ptrs, col_indices, values).unwrap_err();
-    let upper = TriangleCsrRef::upper(n, row_ptrs, col_indices, values).unwrap_err();
-    [Error::Input(csr), Error::Input(upper)]
 }
 
 proptest! {
@@ -98,7 +86,7 @@ proptest! {
     ) {
         row_ptrs.pop();
         let expected = InputError::LengthMismatch { parameter: "row_ptrs", expected: n + 1, found: n };
-        prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
+        prop_assert_eq!(input_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
     #[test]
@@ -107,7 +95,7 @@ proptest! {
     ) {
         values.pop();
         let expected = InputError::LengthMismatch { parameter: "values", expected: col_indices.len(), found: values.len() };
-        prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
+        prop_assert_eq!(input_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
     #[test]
@@ -116,7 +104,7 @@ proptest! {
     ) {
         col_indices.pop();
         let expected = InputError::LengthMismatch { parameter: "values", expected: col_indices.len(), found: values.len() };
-        prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
+        prop_assert_eq!(input_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
     // A nonzero start leaves the first entry in no row, so accepting it would reduce another matrix.
@@ -126,7 +114,7 @@ proptest! {
     ) {
         row_ptrs[0] = 1;
         let expected = InputError::RowPtrs { row: 0 };
-        prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
+        prop_assert_eq!(input_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
     #[test]
@@ -135,7 +123,7 @@ proptest! {
     ) {
         row_ptrs[n] -= 1;
         let expected = InputError::LengthMismatch { parameter: "col_indices", expected: row_ptrs[n] as usize, found: col_indices.len() };
-        prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
+        prop_assert_eq!(input_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
     #[test]
@@ -145,7 +133,7 @@ proptest! {
         prop_assume!(n >= 2);
         row_ptrs[1] = row_ptrs[2] + 1;
         let expected = InputError::RowPtrs { row: 1 };
-        prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
+        prop_assert_eq!(input_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
     #[test]
@@ -155,7 +143,7 @@ proptest! {
         let (mut row_ptrs, col_indices) = (cast_all::<u32, i64>(&row_ptrs), cast_all::<u32, i64>(&col_indices));
         row_ptrs[n] = -1;
         let expected = InputError::IndexOutOfRange { parameter: "row_ptrs", entry: n };
-        prop_assert_eq!(shape_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
+        prop_assert_eq!(input_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
     #[test]
@@ -163,8 +151,8 @@ proptest! {
         (row_ptrs, mut col_indices, values, n) in laplacian_csr_strategy()
     ) {
         col_indices[0] = n as u32;
-        let expected = Error::Input(InputError::IndexOutOfRange { parameter: "col_indices", entry: 0 });
-        prop_assert_eq!(column_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
+        let expected = InputError::IndexOutOfRange { parameter: "col_indices", entry: 0 };
+        prop_assert_eq!(input_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
     #[test]
@@ -174,8 +162,8 @@ proptest! {
         let (row_ptrs, mut col_indices) = (cast_all::<u32, i64>(&row_ptrs), cast_all::<u32, i64>(&col_indices));
         let last = col_indices.len() - 1;
         col_indices[last] = -1;
-        let expected = Error::Input(InputError::IndexOutOfRange { parameter: "col_indices", entry: last });
-        prop_assert_eq!(column_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
+        let expected = InputError::IndexOutOfRange { parameter: "col_indices", entry: last };
+        prop_assert_eq!(input_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 }
 

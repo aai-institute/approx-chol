@@ -1,6 +1,6 @@
 use crate::common::clamps::Clamps;
 use approx_chol::input::{CsrRef, FactorWidth2};
-use approx_chol::{factorize, Config, ScalingOutcome, ScalingPolicy, Sgdd};
+use approx_chol::{factorize, BuildError, Config, ScalingOutcome, ScalingPolicy, Sgdd};
 use rstest::rstest;
 
 use crate::common::entry::only;
@@ -213,4 +213,26 @@ fn clamps_list_each_component_by_its_first_vertex() {
         .collect();
     let refuted = ScalingOutcome::Refuted;
     assert_eq!(listed, [(vec![0, 2], refuted), (vec![1, 3], refuted)]);
+}
+
+/// Vertices 1 and 2 at diagonal `2^-960` share an edge of `2^1000`: at `y = 1` row 1's ratio `Σ_j|a_1j|/√(a_11 a_jj)` passes `f64`, the block's first vertex 0 in range.
+#[test]
+fn a_relaxation_whose_first_ratio_overflows_is_out_of_range_at_its_row() {
+    let (tiny, huge) = (2f64.powi(-960), 2f64.powi(1000));
+    let row_ptrs = [0, 2, 5, 7];
+    let columns = [0, 1, 0, 1, 2, 1, 2];
+    let values = [1.0, -1.0, -1.0, tiny, -huge, -huge, tiny];
+    let error = reduce(&row_ptrs, &columns, &values).expect_err("out of range");
+    assert_eq!(error, BuildError::OutOfRange { vertex: 1 });
+}
+
+/// Rows 0 and 2 couple past dominance; their relaxation scales row 1, at `2^100`, so far down that its stored edge `−2^-100` to row 2 falls below `f32`'s floor, the block's first vertex 0 in range.
+#[test]
+fn a_scaled_entry_below_the_floor_is_out_of_range_at_its_stored_row() {
+    let (big, tiny) = (2f32.powi(100), 2f32.powi(-100));
+    let row_ptrs = [0, 2, 4, 7];
+    let columns = [0, 2, 1, 2, 0, 1, 2];
+    let values = [1.0, -3.0, big, -tiny, -3.0, -tiny, 1.0];
+    let error = reduce(&row_ptrs, &columns, &values).expect_err("out of range");
+    assert_eq!(error, BuildError::OutOfRange { vertex: 1 });
 }

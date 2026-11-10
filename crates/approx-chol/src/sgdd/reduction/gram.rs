@@ -4,11 +4,11 @@ use num_traits::PrimInt;
 
 use super::{rows_where, Folded, Settling, Surplus};
 use crate::input::{Column, FactorWidth2};
-use crate::sgdd::block::{Grounding, IrreducibleBlock, ReduceError};
+use crate::sgdd::block::{Grounding, IrreducibleBlock};
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Cut, SymmetricBlock};
 use crate::sgdd::scaling::{self, ScalingPolicy};
 use crate::sgdd::{Components, Reduced};
-use crate::{narrow, widen, Index, Real, Threads};
+use crate::{narrow, widen, BuildError, Index, Real, Threads};
 
 impl<T: Real, I: Index> Reduced<T, I> {
     /// `V` with values: scaled by its null vectors on demand, folded blocks dropping their rows for a pass over `V` that decides floating.
@@ -17,7 +17,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
         v: FactorWidth2<'_, T, J>,
         policy: &ScalingPolicy,
         threads: Threads,
-    ) -> Result<Self, ReduceError> {
+    ) -> Result<Self, BuildError> {
         let (cuts, components) = assemble_values::<T, J, I, S>(cells, v)?.arrange()?;
         components.cut(|components| {
             let live = cuts.extract(components, threads, |vertices, entries, _| {
@@ -31,17 +31,18 @@ impl<T: Real, I: Index> Reduced<T, I> {
                     let (u, _) = nulls.get_or_insert_with(|| null_vectors(v, components));
                     // `NaN` where a component has no certificate.
                     let u = (a.vertices.iter()).map(|v| u[v.index()]);
-                    (u.clone().all(f64::is_finite))
+                    let certified = (u.clone().all(f64::is_finite))
                         .then(|| scaling::null_scaling(u, &a.entries.rows.diagonal))
-                        .flatten()
-                        .or_else(|| {
-                            scaling::relax(
-                                &a.entries.off_diagonal,
-                                &a.entries.rows.diagonal,
-                                policy,
-                                threads,
-                            )
-                        })
+                        .flatten();
+                    match certified {
+                        Some(relaxation) => Ok(relaxation),
+                        None => scaling::relax(
+                            &a.entries.off_diagonal,
+                            &a.entries.rows.diagonal,
+                            policy,
+                            threads,
+                        ),
+                    }
                 })
             })?;
             // `u` freed before the column pass: only the certified set outlives the scaling.
@@ -100,7 +101,7 @@ fn ground_or_float<'p, T: Real, J: PrimInt, I: Index>(
     v: FactorWidth2<'_, T, J>,
     settling: Cut<'p, I, T, Settling<'p, T, I>>,
     certified: &LazyCell<Vec<I>, impl FnOnce() -> Vec<I>>,
-) -> Result<Cut<'p, I, T, IrreducibleBlock<T, I>>, ReduceError> {
+) -> Result<Cut<'p, I, T, IrreducibleBlock<T, I>>, BuildError> {
     let blocks = settling.blocks();
     // By vertex, sized only when a block is folded: blocks are disjoint, so one slot per vertex holds its block, `f_i` and surplus.
     let folds = blocks.iter().any(|b| matches!(b, Settling::Pending(_)));
@@ -158,7 +159,7 @@ fn ground_or_float<'p, T: Real, J: PrimInt, I: Index>(
     // `|u_i·p| ≤ (u_i² + p²)/2`: a running sum past `f64::MAX` puts `m_ii` or `1ᵀM1` past range.
     let in_range = |&s: &f64| s.is_finite() && narrow::<T>(s.max(0.0)).is_finite();
     if let Some(vertex) = surplus.iter().position(|s| !in_range(s)) {
-        return Err(ReduceError::OutOfRange { vertex });
+        return Err(BuildError::OutOfRange { vertex });
     }
     let gram = GramSurplus {
         surplus: &surplus,

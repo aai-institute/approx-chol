@@ -2,7 +2,9 @@ use crate::common::clamps::Clamps;
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Laplacian, Sddm,
 };
-use approx_chol::{factorize, factorize_with, ApproxInverse, Config, Error, Real, ScalingPolicy};
+use approx_chol::{
+    factorize, factorize_with, ApproxInverse, BuildError, Config, Real, ScalingPolicy,
+};
 use rstest::rstest;
 
 use crate::common::dense::dense;
@@ -171,7 +173,7 @@ fn at_floor(rows: &[&[f64]]) -> Vec<Vec<f64>> {
         .collect()
 }
 
-fn reduce_error(a: &[Vec<f64>]) -> Error {
+fn reduce_error(a: &[Vec<f64>]) -> BuildError {
     let (ptrs, columns, values) = dense_csr(a);
     let csr = CsrRef::new(a.len(), &ptrs, &columns, &values).unwrap();
     factorize(csr).map(|_: ApproxInverse| ()).unwrap_err()

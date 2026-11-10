@@ -1,5 +1,4 @@
 use approx_chol::input::InputError;
-use approx_chol::Error;
 use rstest::rstest;
 
 #[rstest]
@@ -48,14 +47,4 @@ use rstest::rstest;
 )]
 fn each_input_error_displays_every_field(#[case] error: InputError, #[case] expected: &str) {
     assert_eq!(error.to_string(), expected);
-}
-
-#[test]
-fn an_input_error_is_the_source_of_error_input() {
-    let input = InputError::RowPtrs { row: 0 };
-    let error = Error::from(input);
-    assert_eq!(error, Error::Input(input));
-    assert_eq!(error.to_string(), format!("invalid input: {input}"));
-    let source = std::error::Error::source(&error).map(ToString::to_string);
-    assert_eq!(source, Some(input.to_string()));
 }

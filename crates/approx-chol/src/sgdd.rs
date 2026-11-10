@@ -6,7 +6,6 @@ mod decomposition;
 mod reduction;
 mod scaling;
 
-pub use block::ReduceError;
 pub(crate) use block::{Balance, Grounding};
 pub(crate) use block::{BlockComplement, IrreducibleBlock, KeptVertices};
 pub(crate) use congruence::{Congruence, FactorTail};

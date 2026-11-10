@@ -59,7 +59,7 @@ use num_traits::{float::TotalOrder, Float, PrimInt, Unsigned};
 
 use batch::Batch;
 pub use dyn_stack::{MemBuffer, MemStack, StackReq};
-pub use error::Error;
+pub use error::BuildError;
 #[cfg(feature = "serde")]
 pub use factor::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
 pub use factor::{
@@ -67,12 +67,12 @@ pub use factor::{
     FrustratedRoute, LayoutError, MatrixMut, Sampling, SchurMode,
 };
 use input::{Input, Side};
-pub use sgdd::{Clamp, ReduceError, ScalingOutcome, ScalingPolicy};
+pub use sgdd::{Clamp, ScalingOutcome, ScalingPolicy};
 use sgdd::{Complement, Reduced};
 pub use threads::Threads;
 
 /// Factorizes any [`Input`] with [`Config::default`] and [`ScalingPolicy::default`].
-pub fn factorize<'a, T, I, M>(input: M) -> Result<ApproxInverse<T>, Error>
+pub fn factorize<'a, T, I, M>(input: M) -> Result<ApproxInverse<T>, BuildError>
 where
     T: Real,
     I: PrimInt + Sync + 'a,
@@ -86,7 +86,7 @@ pub fn factorize_with<'a, T, I, M>(
     input: M,
     config: Config,
     scaling: ScalingPolicy,
-) -> Result<ApproxInverse<T>, Error>
+) -> Result<ApproxInverse<T>, BuildError>
 where
     T: Real,
     I: PrimInt + Sync + 'a,
@@ -101,7 +101,7 @@ pub fn factorize_complement<T: Real, I: PrimInt + Sync>(
     kept: Side,
     config: Config,
     scaling: ScalingPolicy,
-) -> Result<ApproxInverse<T>, Error> {
+) -> Result<ApproxInverse<T>, BuildError> {
     Ok(match fits_u32(input.n()) {
         true => ApproxInverse::build(
             Complement::<T, u32>::reduce_onto(input, kept, scaling, Threads::All)?,
@@ -134,7 +134,7 @@ enum Indexed<T> {
 
 impl<T: Real> Sgdd<T> {
     /// Reduces any [`Input`], scaling each block short of dominance under `scaling`; nothing after this reads `input`.
-    pub fn reduce<'a, I, M>(input: M, scaling: ScalingPolicy) -> Result<Self, Error>
+    pub fn reduce<'a, I, M>(input: M, scaling: ScalingPolicy) -> Result<Self, BuildError>
     where
         I: PrimInt + Sync + 'a,
         M: Into<Input<'a, T, I>>,

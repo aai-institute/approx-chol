@@ -9,7 +9,7 @@ use crate::common::clamps::Clamps;
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth2, Laplacian, Sddm, TriangleCsrRef,
 };
-use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy};
+use approx_chol::{factorize_with, ApproxInverse, BuildError, Config, ScalingPolicy};
 
 use crate::common::bits::bits;
 use crate::common::dense::dense;
@@ -168,4 +168,16 @@ fn a_grams_clamps_are_listed_by_first_vertex() {
         .map(|clamp| clamp.vertices[0])
         .collect();
     assert_eq!(firsts, [0, 3], "{:?}", factor.clamps());
+}
+
+/// An `f32` path of `1/ε = 2^23` vertices after a lone vertex 0 is too large at its lowest vertex, 1.
+#[test]
+fn a_block_of_one_over_epsilon_vertices_is_too_large_at_its_lowest_vertex() {
+    let n = (1u32 << 23) + 1;
+    let (u, v): (Vec<u32>, Vec<u32>) = (1..n - 1).map(|i| (i, i + 1)).unzip();
+    let path = Laplacian::<f32, u32>::new(n as usize, &u, &v).expect("a path");
+    let error = factorize_with(path, Config::default(), ScalingPolicy::default())
+        .map(|_| ())
+        .expect_err("too large");
+    assert_eq!(error, BuildError::TooLarge { vertex: 1 });
 }

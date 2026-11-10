@@ -2,7 +2,7 @@ use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, InputError, Laplacian,
     TriangleCsrRef,
 };
-use approx_chol::{factorize, ApproxInverse, Error, ReduceError};
+use approx_chol::{factorize, ApproxInverse, BuildError};
 use rstest::rstest;
 
 use crate::common::bits::bits;
@@ -29,53 +29,110 @@ fn reversed_rows<T: Copy>(row_ptrs: &[u32], columns: &[u32], values: &[T]) -> (V
     &[0, 2, 3],
     &[0, 1, 1],
     &[1.0, -1.0, 1.0],
-    &[Error::Input(InputError::NotSymmetric { row: 0 }), Error::Input(InputError::NotSymmetric { row: 1 })],
+    &[InputError::NotSymmetric { row: 0 }, InputError::NotSymmetric { row: 1 }],
 )]
 // The lower entry is stored and its upper is absent: the mirror cursor skips past it.
 #[case::missing_upper_mirror(
     &[0, 1, 3],
     &[0, 0, 1],
     &[1.0, -1.0, 1.0],
-    &[Error::Input(InputError::NotSymmetric { row: 0 }), Error::Input(InputError::NotSymmetric { row: 1 })],
+    &[InputError::NotSymmetric { row: 0 }, InputError::NotSymmetric { row: 1 }],
 )]
 #[case::unequal_transpose(
     &[0, 2, 4],
     &[0, 1, 0, 1],
     &[1.0, -1.0, -2.0, 2.0],
-    &[Error::Input(InputError::NotSymmetric { row: 0 }), Error::Input(InputError::NotSymmetric { row: 1 })],
+    &[InputError::NotSymmetric { row: 0 }, InputError::NotSymmetric { row: 1 }],
 )]
 #[case::mirrors_nine_ulps_apart(
     &[0, 2, 4],
     &[0, 1, 0, 1],
     &[2.0, -1.0, -(1.0 + 9.0 * f64::EPSILON), 2.0],
-    &[Error::Input(InputError::NotSymmetric { row: 0 }), Error::Input(InputError::NotSymmetric { row: 1 })],
+    &[InputError::NotSymmetric { row: 0 }, InputError::NotSymmetric { row: 1 }],
 )]
-#[case::stored_nan(&[0, 1], &[0], &[f64::NAN], &[Error::Input(InputError::OutOfRange { parameter: "values", entry: 0 })])]
+#[case::stored_nan(&[0, 1], &[0], &[f64::NAN], &[InputError::OutOfRange { parameter: "values", entry: 0 }])]
 #[case::stored_infinity_off_the_diagonal(
     &[0, 2, 4],
     &[0, 1, 0, 1],
     &[1.0, f64::NEG_INFINITY, f64::NEG_INFINITY, 1.0],
-    &[Error::Input(InputError::OutOfRange { parameter: "values", entry: 1 })],
+    &[InputError::OutOfRange { parameter: "values", entry: 1 }],
 )]
 // Descending columns in row 0, so the row must be the caller's, not the canonical copy's.
 #[case::stored_nan_in_a_later_row_of_non_canonical_input(
     &[0, 2, 5, 7],
     &[1, 0, 2, 1, 0, 2, 1],
     &[-1.0, 1.0, -1.0, 2.0, f64::NAN, 1.0, -1.0],
-    &[Error::Input(InputError::OutOfRange { parameter: "values", entry: 4 })],
+    &[InputError::OutOfRange { parameter: "values", entry: 4 }],
 )]
 #[case::overflow_via_coalesced_duplicates(
     &[0, 3, 6],
     &[0, 1, 1, 0, 0, 1],
     &[f64::MAX, -f64::MAX, -f64::MAX, -f64::MAX, -f64::MAX, f64::MAX],
-    &[Error::Input(InputError::OutOfRange { parameter: "values", entry: 1 }), Error::Input(InputError::OutOfRange { parameter: "values", entry: 3 })],
+    &[InputError::OutOfRange { parameter: "values", entry: 1 }, InputError::OutOfRange { parameter: "values", entry: 3 }],
 )]
 #[case::overflow_via_duplicate_diagonal(
     &[0, 2],
     &[0, 0],
     &[f64::MAX, f64::MAX],
-    &[Error::Input(InputError::OutOfRange { parameter: "values", entry: 0 })],
+    &[InputError::OutOfRange { parameter: "values", entry: 0 }],
 )]
+#[case::diagonal_past_a_quarter_of_the_maximum(&[0, 1], &[0], &[f64::MAX], &[InputError::Diagonal { row: 0 }])]
+// Normal diagonals; the edge's pivot alone would have no finite inverse (#163).
+#[case::subnormal_edge(
+    &[0, 2, 4],
+    &[0, 1, 0, 1],
+    &[1.0, -1e-310, -1e-310, 1.0],
+    &[InputError::OutOfRange { parameter: "values", entry: 1 }],
+)]
+#[case::subnormal_diagonal(&[0, 1], &[0], &[1e-310], &[InputError::OutOfRange { parameter: "values", entry: 0 }])]
+#[case::normal_edge_below_min_positive_over_epsilon(
+    &[0, 2, 4],
+    &[0, 1, 0, 1],
+    &[1.0, -FLOOR / 2.0, -FLOOR / 2.0, 1.0],
+    &[InputError::OutOfRange { parameter: "values", entry: 1 }],
+)]
+#[case::subnormal_edge_in_a_later_row(
+    &[0, 1, 3, 5],
+    &[0, 1, 2, 1, 2],
+    &[1.0, 1.0, -1e-310, -1e-310, 1.0],
+    &[InputError::OutOfRange { parameter: "values", entry: 2 }],
+)]
+#[case::negative_diagonal(
+    &[0, 1],
+    &[0],
+    &[-1.0],
+    &[InputError::Diagonal { row: 0 }],
+)]
+#[case::zero_diagonal_beside_an_edge(
+    &[0, 2, 4],
+    &[0, 1, 0, 1],
+    &[0.0, -1.0, -1.0, 1.0],
+    &[InputError::Diagonal { row: 0 }],
+)]
+// Components {0, 2} and {1, 3}: the vertex is in the caller's numbering, not the block's.
+#[case::nonpositive_diagonal_in_an_interleaved_later_block(
+    &[0, 2, 4, 6, 8],
+    &[0, 2, 1, 3, 0, 2, 1, 3],
+    &[1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, -1.0],
+    &[InputError::Diagonal { row: 3 }],
+)]
+// Each stated value is checked where it is stored, before repeated columns merge.
+#[case::duplicates_below_the_floor_merging_in_range(&[0, 2], &[0, 0], &[FLOOR / 2.0, FLOOR / 2.0], &[InputError::OutOfRange { parameter: "values", entry: 0 }])]
+#[case::cancelling_subnormal_duplicates(&[0, 2], &[0, 0], &[1e-310, -1e-310], &[InputError::OutOfRange { parameter: "values", entry: 0 }])]
+// The upper entry is in range; its mirror below the diagonal is not.
+#[case::lower_mirror_below_the_floor(&[0, 2, 4], &[0, 1, 0, 1], &[2.0, -1.0, -FLOOR / 2.0, 2.0], &[InputError::OutOfRange { parameter: "values", entry: 2 }])]
+fn out_of_class_input_is_rejected_at_its_reported_position(
+    #[case] row_ptrs: &[u32],
+    #[case] columns: &[u32],
+    #[case] values: &[f64],
+    #[case] defects: &[InputError],
+) {
+    let observed = CsrRef::new(row_ptrs.len() - 1, row_ptrs, columns, values)
+        .expect_err("rejected at construction");
+    assert_names_a_defect(observed, defects);
+}
+
+#[rstest]
 // Every entry in range and the matrix GDD, but the centre's `Σ|a_ij|` passes `MAX/4`.
 #[case::absolute_row_sum_past_a_quarter_of_the_maximum(
     &[0, 3, 5, 7],
@@ -91,70 +148,20 @@ fn reversed_rows<T: Copy>(row_ptrs: &[u32], columns: &[u32], values: &[T]) -> (V
     ],
     &[out_of_range(0)],
 )]
-#[case::diagonal_past_a_quarter_of_the_maximum(&[0, 1], &[0], &[f64::MAX], &[Error::Input(InputError::Diagonal { row: 0 })])]
-// Normal diagonals; the edge's pivot alone would have no finite inverse (#163).
-#[case::subnormal_edge(
-    &[0, 2, 4],
-    &[0, 1, 0, 1],
-    &[1.0, -1e-310, -1e-310, 1.0],
-    &[Error::Input(InputError::OutOfRange { parameter: "values", entry: 1 })],
-)]
-#[case::subnormal_diagonal(&[0, 1], &[0], &[1e-310], &[Error::Input(InputError::OutOfRange { parameter: "values", entry: 0 })])]
-#[case::normal_edge_below_min_positive_over_epsilon(
-    &[0, 2, 4],
-    &[0, 1, 0, 1],
-    &[1.0, -FLOOR / 2.0, -FLOOR / 2.0, 1.0],
-    &[Error::Input(InputError::OutOfRange { parameter: "values", entry: 1 })],
-)]
-#[case::subnormal_edge_in_a_later_row(
-    &[0, 1, 3, 5],
-    &[0, 1, 2, 1, 2],
-    &[1.0, 1.0, -1e-310, -1e-310, 1.0],
-    &[Error::Input(InputError::OutOfRange { parameter: "values", entry: 2 })],
-)]
-#[case::negative_diagonal(
-    &[0, 1],
-    &[0],
-    &[-1.0],
-    &[Error::Input(InputError::Diagonal { row: 0 })],
-)]
-#[case::zero_diagonal_beside_an_edge(
-    &[0, 2, 4],
-    &[0, 1, 0, 1],
-    &[0.0, -1.0, -1.0, 1.0],
-    &[Error::Input(InputError::Diagonal { row: 0 })],
-)]
-// Components {0, 2} and {1, 3}: the vertex is in the caller's numbering, not the block's.
-#[case::nonpositive_diagonal_in_an_interleaved_later_block(
-    &[0, 2, 4, 6, 8],
-    &[0, 2, 1, 3, 0, 2, 1, 3],
-    &[1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, -1.0],
-    &[Error::Input(InputError::Diagonal { row: 3 })],
-)]
-// Each stated value is checked where it is stored, before repeated columns merge.
-#[case::duplicates_below_the_floor_merging_in_range(&[0, 2], &[0, 0], &[FLOOR / 2.0, FLOOR / 2.0], &[Error::Input(InputError::OutOfRange { parameter: "values", entry: 0 })])]
-#[case::cancelling_subnormal_duplicates(&[0, 2], &[0, 0], &[1e-310, -1e-310], &[Error::Input(InputError::OutOfRange { parameter: "values", entry: 0 })])]
-// The upper entry is in range; its mirror below the diagonal is not.
-#[case::lower_mirror_below_the_floor(&[0, 2, 4], &[0, 1, 0, 1], &[2.0, -1.0, -FLOOR / 2.0, 2.0], &[Error::Input(InputError::OutOfRange { parameter: "values", entry: 2 })])]
 // Every value in range, but each row's residue `FLOOR/2` is past its band: a derived ground the floor cannot hold.
 #[case::derived_ground_below_the_floor_past_its_band(
     &[0, 2, 4],
     &[0, 1, 0, 1],
     &[1.5 * FLOOR, -FLOOR, -FLOOR, 1.5 * FLOOR],
-    &[Error::Reduce(ReduceError::OutOfRange { vertex: 0 }), Error::Reduce(ReduceError::OutOfRange { vertex: 1 })],
+    &[out_of_range(0), out_of_range(1)],
 )]
-fn out_of_class_input_is_rejected_at_its_reported_position(
+fn in_class_input_whose_computed_sums_leave_the_range_is_rejected_at_its_row(
     #[case] row_ptrs: &[u32],
     #[case] columns: &[u32],
     #[case] values: &[f64],
-    #[case] defects: &[Error],
+    #[case] defects: &[BuildError],
 ) {
-    let input = CsrRef::new(row_ptrs.len() - 1, row_ptrs, columns, values);
-    let observed = if defects.iter().all(|e| matches!(e, Error::Input(_))) {
-        Error::Input(input.expect_err("rejected at construction"))
-    } else {
-        factorize(input.expect("computed sums are checked at build")).expect_err("out of class")
-    };
+    let observed = reduce(row_ptrs, columns, values).expect_err("out of range at build");
     assert_names_a_defect(observed, defects);
 }
 
@@ -163,37 +170,35 @@ fn out_of_class_input_is_rejected_at_its_reported_position(
     &[0, 1, 3],
     &[0, 0, 1],
     &[1.0, -1.0, 1.0],
-    &[Error::Input(InputError::OutsideTriangle { row: 1 })],
+    &[InputError::OutsideTriangle { row: 1 }],
 )]
 #[case::entry_below_the_diagonal_in_non_canonical_input(
     &[0, 2, 4],
     &[1, 0, 1, 0],
     &[-1.0, 1.0, 1.0, -1.0],
-    &[Error::Input(InputError::OutsideTriangle { row: 1 })],
+    &[InputError::OutsideTriangle { row: 1 }],
 )]
 #[case::entry_below_the_diagonal_after_a_stored_zero(
     &[0, 2, 4, 7],
     &[0, 1, 1, 2, 0, 1, 2],
     &[1.0, -1.0, 2.0, -1.0, 0.0, -1.0, 1.0],
-    &[Error::Input(InputError::OutsideTriangle { row: 2 })],
+    &[InputError::OutsideTriangle { row: 2 }],
 )]
 #[case::stored_nan(
     &[0, 2, 3],
     &[0, 1, 1],
     &[1.0, f64::NAN, 1.0],
-    &[Error::Input(InputError::OutOfRange { parameter: "values", entry: 1 })],
+    &[InputError::OutOfRange { parameter: "values", entry: 1 }],
 )]
-#[case::duplicates_below_the_floor_merging_in_range(&[0, 2], &[0, 0], &[FLOOR / 2.0, FLOOR / 2.0], &[Error::Input(InputError::OutOfRange { parameter: "values", entry: 0 })])]
+#[case::duplicates_below_the_floor_merging_in_range(&[0, 2], &[0, 0], &[FLOOR / 2.0, FLOOR / 2.0], &[InputError::OutOfRange { parameter: "values", entry: 0 }])]
 fn out_of_class_upper_storage_is_rejected_at_its_reported_position(
     #[case] row_ptrs: &[u32],
     #[case] columns: &[u32],
     #[case] values: &[f64],
-    #[case] defects: &[Error],
+    #[case] defects: &[InputError],
 ) {
-    let observed = Error::Input(
-        TriangleCsrRef::upper(row_ptrs.len() - 1, row_ptrs, columns, values)
-            .expect_err("rejected at construction"),
-    );
+    let observed = TriangleCsrRef::upper(row_ptrs.len() - 1, row_ptrs, columns, values)
+        .expect_err("rejected at construction");
     assert_names_a_defect(observed, defects);
 }
 
@@ -338,32 +343,33 @@ fn a_diagonal_at_a_quarter_of_the_maximum_still_solves() {
 }
 
 /// The #163 range in `f32`'s own bounds: `MIN_POSITIVE/EPSILON` is `2^-103`, not `f64`'s `2^-970`.
-fn f32_pair(diagonal: f32, edge: f32) -> Result<ApproxInverse<f32>, Error> {
-    reduce(&[0, 2, 4], &[0, 1, 0, 1], &[diagonal, edge, edge, diagonal])
+fn f32_pair(diagonal: f32, edge: f32) -> [f32; 4] {
+    [diagonal, edge, edge, diagonal]
 }
 
 #[rstest]
 #[case::subnormal_edge(
     1.0,
     -1e-40,
-    &[Error::Input(InputError::OutOfRange { parameter: "values", entry: 1 })],
+    &[InputError::OutOfRange { parameter: "values", entry: 1 }],
 )]
 #[case::normal_edge_below_the_floor(
     1.0,
     -F32_FLOOR / 2.0,
-    &[Error::Input(InputError::OutOfRange { parameter: "values", entry: 1 })],
+    &[InputError::OutOfRange { parameter: "values", entry: 1 }],
 )]
 #[case::diagonal_past_a_quarter_of_the_maximum(
     f32::MAX,
     -1.0,
-    &[Error::Input(InputError::Diagonal { row: 0 }), Error::Input(InputError::Diagonal { row: 1 })],
+    &[InputError::Diagonal { row: 0 }, InputError::Diagonal { row: 1 }],
 )]
 fn f32_out_of_range_input_is_rejected(
     #[case] diagonal: f32,
     #[case] edge: f32,
-    #[case] defects: &[Error],
+    #[case] defects: &[InputError],
 ) {
-    let observed = f32_pair(diagonal, edge).expect_err("out of f32 range");
+    let observed = CsrRef::new(2, &[0u32, 2, 4], &[0, 1, 0, 1], &f32_pair(diagonal, edge))
+        .expect_err("out of f32 range");
     assert_names_a_defect(observed, defects);
 }
 
@@ -371,7 +377,7 @@ fn f32_out_of_range_input_is_rejected(
 #[case::edge_at_the_floor(1.0, -F32_FLOOR)]
 #[case::diagonal_at_a_quarter_of_the_maximum(f32::MAX / 4.0, -(f32::MAX / 4.0) / 2.0)]
 fn f32_in_range_input_is_admitted(#[case] diagonal: f32, #[case] edge: f32) {
-    f32_pair(diagonal, edge).expect("inside f32 range");
+    reduce(&[0, 2, 4], &[0, 1, 0, 1], &f32_pair(diagonal, edge)).expect("inside f32 range");
 }
 
 fn grid_laplacian(rows: usize, cols: usize) -> (Vec<u32>, Vec<u32>, Vec<f64>) {

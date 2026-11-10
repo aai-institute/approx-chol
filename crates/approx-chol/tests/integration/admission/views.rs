@@ -2,7 +2,7 @@ use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, InputError, Laplacian, Sddm,
 };
 use approx_chol::{
-    factorize, factorize_with, ApproxInverse, Config, Error, Real, ReduceError, ScalingPolicy,
+    factorize, factorize_with, ApproxInverse, BuildError, Config, Real, ScalingPolicy,
 };
 use rstest::rstest;
 
@@ -505,10 +505,7 @@ fn a_gram_whose_running_surplus_sum_overflows_is_rejected_not_a_panic(
     let error = outcome
         .expect("no panic")
         .expect_err("a running sum overflows");
-    assert!(matches!(
-        error,
-        Error::Reduce(ReduceError::OutOfRange { .. })
-    ));
+    assert!(matches!(error, BuildError::OutOfRange { .. }));
 }
 
 /// Interleaved, no running sum overflows; the ground is never a pivot, dense or approximate, so its `Σs` past `MAX` is never formed; a link between two spokes frustrates the star, whose cover grounds `2Σs`.

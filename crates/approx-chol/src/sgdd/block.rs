@@ -187,13 +187,13 @@ impl<'p, T: Real, I: Index> Congruent<'p, T, I> {
         }
     }
 
-    /// `S R A_c R S` with its `Σ_j |m_ij|`; `None` once a scaled entry leaves the range.
+    /// `S R A_c R S` with its `Σ_j |m_ij|`; `Err` at the stored row of the first scaled entry that leaves the range.
     pub(super) fn scaled(
         vertices: &'p [I],
         off_diagonal: OffDiagonal<T, I>,
         signs: Congruence<T>,
         scales: &[T],
-    ) -> Option<(Self, Vec<T>)> {
+    ) -> Result<(Self, Vec<T>), usize> {
         let factors: Box<[T]> = (scales.iter().enumerate())
             .map(|(i, &scale)| signs.factor(i) * scale)
             .collect();
@@ -204,7 +204,7 @@ impl<'p, T: Real, I: Index> Congruent<'p, T, I> {
             congruence,
             off_diagonal,
         };
-        Some((m, abs))
+        Ok((m, abs))
     }
 
     /// An incidence Gram, assembled switched across a bipartition.
@@ -293,46 +293,3 @@ type BlockParts<T, I> = (
     bool,
     Option<Box<Clamp>>,
 );
-
-/// Why a block has no SDDM form; each `vertex` is in `A`'s numbering.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReduceError {
-    /// A scale or scaled entry left the representable range.
-    Unscalable {
-        /// The block's first vertex in local order, in `A`'s numbering.
-        vertex: usize,
-    },
-    /// The block passes `1/ε` vertices: floor weights in series would fall below `MIN_POSITIVE`.
-    TooLarge {
-        /// The block's first vertex, in `A`'s numbering.
-        vertex: usize,
-    },
-    /// An assembled entry, diagonal, row sum or row's ground left the representable range.
-    OutOfRange {
-        /// The entry's vertex, in `A`'s numbering.
-        vertex: usize,
-    },
-}
-
-impl core::fmt::Display for ReduceError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Unscalable { vertex } => write!(
-                f,
-                "scaling the block of vertex {vertex} leaves the representable range"
-            ),
-            Self::TooLarge { vertex } => {
-                write!(f, "the block of vertex {vertex} passes 1/ε vertices")
-            }
-            Self::OutOfRange { vertex } => {
-                write!(
-                    f,
-                    "an entry at vertex {vertex} is outside the representable range"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for ReduceError {}

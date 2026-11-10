@@ -12,25 +12,28 @@ struct Bracket {
 }
 
 impl Bracket {
-    /// Of a positive `y`; `None` unless every ratio is finite.
+    /// Of a positive `y`; `Err` at the first row whose `y` is not positive or whose ratio is not finite.
     fn of<T: Real, I: Index>(
         n: &Normalized<'_, T, I>,
         y: &[f64],
         work: &mut [f64],
-    ) -> Option<Self> {
-        if !y.iter().all(|&v| v.is_finite() && v > 0.0) {
-            return None;
+    ) -> Result<Self, usize> {
+        if let Some(i) = y.iter().position(|&v| !(v.is_finite() && v > 0.0)) {
+            return Err(i);
         }
         let scales = n.unscaled(y, work);
         let (mut low, mut high) = (f64::INFINITY, 0.0f64);
         let (mut residual, mut peak) = (0.0f64, 0.0f64);
-        for ((&o, &y), &s) in work.iter().zip(y).zip(scales) {
+        for (i, ((&o, &y), &s)) in work.iter().zip(y).zip(scales).enumerate() {
             let t = s * o / y;
+            if !t.is_finite() {
+                return Err(i);
+            }
             (low, high) = (low.min(t), high.max(t));
             residual = residual.max((s * o - y).abs());
             peak = peak.max(y);
         }
-        (low.is_finite() && high.is_finite()).then_some(Self {
+        Ok(Self {
             low,
             high,
             eigen_residual: residual / peak,
@@ -94,17 +97,17 @@ pub(super) struct InverseIteration<'n, 'a, T, I> {
 }
 
 impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
-    /// From `y = 1`; `None` if its bracket is not finite.
+    /// From `y = 1`; `Err` at the row whose ratio is not finite.
     pub(super) fn new(
         n: &'n Normalized<'a, T, I>,
         tolerance: f64,
         band: f64,
         max_iterations: usize,
-    ) -> Option<Self> {
+    ) -> Result<Self, usize> {
         let mut work = vec![0.0; n.n()];
         let unit = vec![1.0; n.n()];
         let bracket = Bracket::of(n, &unit, &mut work)?;
-        Some(Self {
+        Ok(Self {
             n,
             tolerance,
             band,
@@ -225,7 +228,7 @@ impl<'n, 'a, T: Real, I: Index> InverseIteration<'n, 'a, T, I> {
 
     /// Adopts a positive `y` whose bracket ranks above the best's: meeting `goal` first, then certified by the smaller eigen-residual, else by the smaller violation.
     fn consider(&mut self, y: &[f64], goal: &impl Fn(&Bracket) -> bool) -> bool {
-        let Some(bracket) = Bracket::of(self.n, y, &mut self.work) else {
+        let Ok(bracket) = Bracket::of(self.n, y, &mut self.work) else {
             return false;
         };
         let tolerance = self.tolerance;

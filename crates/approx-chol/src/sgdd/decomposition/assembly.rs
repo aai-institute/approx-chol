@@ -10,11 +10,11 @@ use super::partition::{Partition, UnionFind};
 use super::{Entries, LonePivot, Partitioned, PrincipalBlocks, RowSums};
 use crate::diagonal_in_range;
 use crate::input::{BipartiteFactorWidth2, Column, FactorWidth2, Side};
-use crate::sgdd::block::{Grounding, ReduceError};
+use crate::sgdd::block::Grounding;
 use crate::sgdd::scaling::ScaleVector;
 use crate::sgdd::within_band;
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
-use crate::{narrow, widen, Index, Real};
+use crate::{narrow, widen, BuildError, Index, Real};
 
 /// How a shape's summed cells are stored, and its components found from them.
 pub(in crate::sgdd) trait AdjacencyLayout {
@@ -26,7 +26,7 @@ pub(in crate::sgdd) trait AdjacencyLayout {
         v: FactorWidth2<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         pair: impl FnMut(usize, usize, f64),
-    ) -> Result<Partitioned<Self::Adjacency<T, I>, I>, ReduceError>;
+    ) -> Result<Partitioned<Self::Adjacency<T, I>, I>, BuildError>;
 }
 
 /// A general `V`'s cells: `A`'s strict upper triangle.
@@ -83,7 +83,7 @@ impl AdjacencyLayout for StrictUpperTriangle {
         v: FactorWidth2<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         mut pair: impl FnMut(usize, usize, f64),
-    ) -> Result<Partitioned<UpperAdjacency<T, I>, I>, ReduceError> {
+    ) -> Result<Partitioned<UpperAdjacency<T, I>, I>, BuildError> {
         let mut sets = UnionFind::<I>::new(v.n());
         let rows = cells::upper::<T, J, I>(v, seen, |i, j, cell| {
             sets.union(i, j);
@@ -104,7 +104,7 @@ impl AdjacencyLayout for Biadjacency {
         v: FactorWidth2<'_, T, J>,
         seen: impl FnMut(&Column<T, I>),
         pair: impl FnMut(usize, usize, f64),
-    ) -> Result<Partitioned<Oriented<T, I>, I>, ReduceError> {
+    ) -> Result<Partitioned<Oriented<T, I>, I>, BuildError> {
         let c = cells::cross(v, self.n_left, seen, pair)?;
         let partition = Partition::of_bipartite(&c);
         let onto = self.onto;
@@ -136,7 +136,7 @@ type ValueCells<T, I, S> = Partitioned<Assembled<T, <S as AdjacencyLayout>::Adja
 pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
     cells: S,
     v: FactorWidth2<'a, T, J>,
-) -> Result<IncidenceCells<'a, T, I, S>, ReduceError> {
+) -> Result<IncidenceCells<'a, T, I, S>, BuildError> {
     let mut abs = vec![0.0_f64; v.n()];
     let a = cells.sum(
         v,
@@ -148,7 +148,7 @@ pub(in crate::sgdd) fn assemble_incidence<'a, T: Real, J: PrimInt, I: Index, S: 
     let surplus = v.surplus();
     let s = |i: usize| surplus.map_or(0.0, |s| widen(s[i]));
     if let Some(vertex) = (0..abs.len()).find(|&i| !diagonal_in_range(narrow::<T>(abs[i] + s(i)))) {
-        return Err(ReduceError::OutOfRange { vertex });
+        return Err(BuildError::OutOfRange { vertex });
     }
     let Partitioned { a, partition } = a;
     let surplus = surplus.map(|s| rounded(s, &abs, &partition));
@@ -195,7 +195,7 @@ fn rounded<'a, T: Real, I: Index>(
 pub(in crate::sgdd) fn assemble_values<T: Real, J: PrimInt, I: Index, S: AdjacencyLayout>(
     cells: S,
     v: FactorWidth2<'_, T, J>,
-) -> Result<ValueCells<T, I, S>, ReduceError> {
+) -> Result<ValueCells<T, I, S>, BuildError> {
     let mut sums = vec![0.0; v.n()];
     let a = cells.sum::<T, J, I>(v, |column| add_squares(&mut sums, column), |_, _, _| {})?;
     assembled(a, sums)
@@ -213,11 +213,11 @@ fn add_squares<T: Real, I: Index>(sums: &mut [f64], column: &Column<T, I>) {
 fn assembled<T: Real, I, C>(
     Partitioned { a, partition }: Partitioned<C, I>,
     sums: Vec<f64>,
-) -> Result<Partitioned<Assembled<T, C>, I>, ReduceError> {
+) -> Result<Partitioned<Assembled<T, C>, I>, BuildError> {
     let diagonal = (sums.into_iter().enumerate())
         .map(|(i, sum)| match narrow::<T>(sum) {
             d if !diagonal_in_range(d) || (sum != 0.0 && d == T::zero()) => {
-                Err(ReduceError::OutOfRange { vertex: i })
+                Err(BuildError::OutOfRange { vertex: i })
             }
             d => Ok(d),
         })
