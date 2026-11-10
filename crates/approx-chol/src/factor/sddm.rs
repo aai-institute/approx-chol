@@ -63,25 +63,28 @@ impl<T: Real, I: Index> Sddm<T, I> {
             Balance::Balanced => Self::new(adjacency, Closure::Folded(grounding)),
             Balance::Frustrated => {
                 let n = adjacency.n();
-                // The cover acts as `M − diag(s)` on `[z; −z]`.
-                let rows = SddmRows::split(Layout::Cover, n, n, ONE, |mut sums, i| {
-                    for (j, &a) in adjacency.upper(i) {
-                        sums.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
-                    }
-                });
-                Self::of_rows(rows, &grounding, surplus)
+                // The cover acts as `M` on `[z; −z]`.
+                let rows = SddmRows::split(
+                    Layout::Cover,
+                    n,
+                    n,
+                    ONE,
+                    grounding.surplus(),
+                    |mut sums, i| {
+                        for (j, &a) in adjacency.upper(i) {
+                            sums.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
+                        }
+                    },
+                );
+                Self::of_rows(rows, surplus)
             }
         }
     }
 
     /// An SDDM's rows [`close`](SddmRows::close)d; on a cover, a ground twists as `surplus` says, and with none the cover floats. Panics on signed pairs, which close into `M`.
-    pub(super) fn of_rows(
-        rows: SddmRows<T, I>,
-        block: &Grounding<T>,
-        surplus: CoverSurplus,
-    ) -> Self {
+    pub(super) fn of_rows(rows: SddmRows<T, I>, surplus: CoverSurplus) -> Self {
         let layout = rows.layout;
-        let (adjacency, grounding) = rows.close(block);
+        let (adjacency, grounding) = rows.close();
         let closure = match (layout, grounding.surplus()) {
             (Layout::Sheet, _) => Closure::Folded(grounding),
             (Layout::Cover, Some(ground)) if twists(surplus, ground, &adjacency) => {
@@ -248,11 +251,30 @@ impl Layout {
             Self::Cover | Self::SignedPairs => 2 * n,
         }
     }
+
+    /// Rows for `n` vertices: a cover's two copies of each, else one.
+    pub(super) fn rows(self, n: usize) -> usize {
+        n << self.copy_shift()
+    }
+
+    /// Row `row`'s vertex, a cover's copies interleaved as [`cover_vertex`] places them.
+    fn vertex_of(self, row: usize) -> usize {
+        row >> self.copy_shift()
+    }
+
+    /// Each vertex's rows as a shift: one bit on a cover, which holds two copies.
+    fn copy_shift(self) -> u32 {
+        match self {
+            Self::Cover => 1,
+            Self::Sheet | Self::SignedPairs => 0,
+        }
+    }
 }
 
-/// Rows in a [`Layout`].
-pub(super) struct SddmRows<T, I> {
+/// Rows in a [`Layout`], each ground ending with its vertex's `surplus`.
+pub(super) struct SddmRows<'a, T, I> {
     layout: Layout,
+    surplus: Option<&'a [T]>,
     rows: RowSums<T, I>,
 }
 
@@ -278,7 +300,8 @@ impl<T: Real, I: Index> RowSums<T, I> {
         }
     }
 
-    fn row(&mut self, add: impl FnOnce(ColumnSums<'_, T, I>)) {
+    /// One row, its ground plus `surplus`.
+    fn row(&mut self, add: impl FnOnce(ColumnSums<'_, T, I>), surplus: Option<T>) {
         add(ColumnSums {
             sums: &mut self.sums,
             touched: &mut self.touched,
@@ -292,7 +315,7 @@ impl<T: Real, I: Index> RowSums<T, I> {
             }
             _ => T::zero(),
         };
-        self.ground.push(ground);
+        self.ground.push(surplus.map_or(ground, |s| s + ground));
         for &j in &self.touched {
             let sum = std::mem::replace(&mut self.sums[j.index()], T::zero());
             // A stored zero couples nothing, and a column pushed twice reads zero the second time.
@@ -324,30 +347,36 @@ impl<T: Real, I: Index> RowSums<T, I> {
     }
 }
 
-impl<T: Real, I: Index> SddmRows<T, I> {
-    /// Rows of `n` vertices in `layout`.
-    pub(super) fn new(layout: Layout, n: usize) -> Self {
+impl<'a, T: Real, I: Index> SddmRows<'a, T, I> {
+    /// Rows of `n` vertices in `layout`, each [`row`](Self::row) in order, one `surplus` per vertex.
+    pub(super) fn new(layout: Layout, n: usize, surplus: Option<&'a [T]>) -> Self {
         let rows = RowSums::new(layout.columns(n));
-        Self { layout, rows }
+        Self {
+            layout,
+            surplus,
+            rows,
+        }
     }
 
     pub(super) fn row(&mut self, add: impl FnOnce(ColumnSums<'_, T, I>)) {
-        self.rows.row(add);
+        let vertex = self.layout.vertex_of(self.rows.ptrs.len() - 1);
+        self.rows.row(add, self.surplus.map(|s| s[vertex]));
     }
 
-    /// Rows of `n` vertices in `layout`, `row` writing vertex `k`'s row once, `k⁺`'s on a cover, which `k⁻` mirrors; split by vertex across threads, at least `min_len` a task, so each sums alone and the bits match at any count.
+    /// Rows of `n` vertices in `layout`, one `surplus` per vertex, `row` writing vertex `k`'s row once, `k⁺`'s on a cover, which `k⁻` mirrors; split by vertex across threads, at least `min_len` a task, so each sums alone and the bits match at any count.
     pub(super) fn split(
         layout: Layout,
         n: usize,
         min_len: usize,
         threads: Threads,
+        surplus: Option<&'a [T]>,
         row: impl Fn(ColumnSums<'_, T, I>, usize) + Sync,
     ) -> Self {
         let columns = layout.columns(n);
         // A bool, tested against zero as the balance was: comparing the three-way layout measured a `cmp` more per row.
-        let mirrored = layout == Layout::Cover;
+        let mirrored = layout.copy_shift() != 0;
         let add = |mut rows: RowSums<T, I>, k| {
-            rows.row(|sums| row(sums, k));
+            rows.row(|sums| row(sums, k), surplus.map(|s| s[k]));
             if mirrored {
                 rows.mirror_row();
             }
@@ -355,7 +384,11 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         };
         let Some(per) = threads.per_task(n, min_len) else {
             let rows = (0..n).fold(RowSums::new(columns), add);
-            return Self { layout, rows };
+            return Self {
+                layout,
+                surplus,
+                rows,
+            };
         };
         let rows = (0..n)
             .into_par_iter()
@@ -370,31 +403,32 @@ impl<T: Real, I: Index> SddmRows<T, I> {
             rows
         });
         let rows = rows.unwrap_or_else(|| RowSums::new(columns));
-        Self { layout, rows }
+        Self {
+            layout,
+            surplus,
+            rows,
+        }
     }
 
-    /// The matrix the rows hold, and each row's ground plus its vertex's surplus, the last of `block`'s: an SDDM's `L` on its sheets, or `M` [`fold`](Self::fold)ed from signed pairs.
-    pub(super) fn close(self, block: &Grounding<T>) -> (UpperAdjacency<T, I>, Grounding<T>) {
-        let Self { layout, rows } = self;
+    /// The matrix the rows hold, and each row's ground: an SDDM's `L` on its sheets, or `M` [`fold`]ed from signed pairs.
+    pub(super) fn close(self) -> (UpperAdjacency<T, I>, Grounding<T>) {
+        let Self { layout, rows, .. } = self;
         match layout {
-            Layout::SignedPairs => fold(rows, block),
+            Layout::SignedPairs => fold(rows),
             Layout::Sheet | Layout::Cover => {
                 let n = rows.sums.len() - 1;
-                let ground = with_surplus(rows.ground, block, layout.columns(1));
+                let ground = Grounding::of(rows.ground);
                 let rows = Rows::new(rows.ptrs, rows.indices, rows.values, n);
-                (UpperAdjacency::new(rows), Grounding::of(ground))
+                (UpperAdjacency::new(rows), ground)
             }
         }
     }
 }
 
 /// `M` from its signed pairs' rows: `j`'s `P, N` sum into `N − P`, and the surplus gains what that sum [`cancel`]s on both rows.
-fn fold<T: Real, I: Index>(
-    rows: RowSums<T, I>,
-    block: &Grounding<T>,
-) -> (UpperAdjacency<T, I>, Grounding<T>) {
+fn fold<T: Real, I: Index>(rows: RowSums<T, I>) -> (UpperAdjacency<T, I>, Grounding<T>) {
     let n = rows.ground.len();
-    let mut surplus = with_surplus(rows.ground, block, 1);
+    let mut surplus = rows.ground;
     let (mut ptrs, mut indices, mut values) = (vec![0], Vec::new(), Vec::new());
     for k in 0..n {
         let mut at = rows.ptrs[k];
@@ -419,16 +453,6 @@ fn fold<T: Real, I: Index>(
     }
     let rows = Rows::new(ptrs, indices, values, n);
     (UpperAdjacency::new(rows), Grounding::of(surplus))
-}
-
-/// Each row's ground plus its vertex's surplus, the last of `block`'s, `copies` rows to a vertex.
-fn with_surplus<T: Real>(mut ground: Vec<T>, block: &Grounding<T>, copies: usize) -> Vec<T> {
-    if let Some(stated) = block.surplus() {
-        let kept = stated[stated.len() - ground.len() / copies..].iter();
-        let copied = kept.flat_map(|&s| std::iter::repeat_n(s, copies));
-        (ground.iter_mut().zip(copied)).for_each(|(g, s)| *g = s + *g);
-    }
-    ground
 }
 
 /// One open row's sums by column and the columns they touch, borrowed apart from the finished rows so the sums stay in registers.
