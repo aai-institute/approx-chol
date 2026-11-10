@@ -40,7 +40,7 @@ jobs:
       # All-features is clippied above; hand-enumerated since cargo-hack isn't on conda-forge (#55).
       - name: cargo clippy (approx-chol feature subsets)
         run: |
-          for features in "" serde sprs faer serde,sprs serde,faer sprs,faer; do
+          for features in "" serde sprs faer nalgebra serde,sprs serde,faer sprs,faer; do
             echo "::group::features=[$features]"
             pixi run -e ci cargo clippy -p approx-chol --all-targets --no-default-features --features "$features" --locked -- -D warnings
             echo "::endgroup::"
@@ -61,8 +61,22 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.85.0
       - uses: Swatinem/rust-cache@v2
-      - name: cargo check (workspace, all features, at the declared MSRV)
-        run: cargo check --workspace --all-features --locked
+      # nalgebra 0.35 needs 1.89, checked in msrv-nalgebra; every other feature is read from the manifest.
+      - name: cargo check (workspace, all features but nalgebra, at the declared MSRV)
+        run: |
+          features=$(cargo metadata --no-deps --format-version 1 --locked \
+            | jq -r '.packages[] | select(.name == "approx-chol") | .features | keys - ["nalgebra"] | map("approx-chol/" + .) | join(",")')
+          cargo check --workspace --features "$features" --locked
+
+  msrv-nalgebra:
+    name: MSRV of nalgebra (1.89.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check (approx-chol with nalgebra, at nalgebra 0.35's MSRV)
+        run: cargo check -p approx-chol --features nalgebra --locked
 
   # Baselined on the last release, so a breaking change stays red until its version bump lands.
   semver:

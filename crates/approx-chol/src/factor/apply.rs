@@ -100,7 +100,7 @@ impl std::error::Error for LayoutError {}
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a block of right-hand sides of `{T}`",
     label = "not a `MatrixMut<{T}>`",
-    note = "a slice or `Vec` of `{T}` is one column, one of `[{T}; K]` holds `K`; pass an array as `&mut a[..]`; wrap column-major data in `ColumnMajor`, one slice per column in `Columns`"
+    note = "a slice or `Vec` of `{T}` is one column, one of `[{T}; K]` holds `K`; pass an array as `&mut a[..]`; wrap column-major data in `ColumnMajor`, one slice per column in `Columns`; a nalgebra 0.35 matrix needs the `nalgebra` feature"
 )]
 pub trait MatrixMut<T: Real> {
     /// Rows, the operator's dimension when applied.
@@ -191,6 +191,34 @@ where
 
     fn solve_by(&mut self, kernel: Kernel<'_, T>) -> Result<(), ApplyError> {
         self.as_mut_slice().solve_by(kernel)
+    }
+}
+
+/// Every nalgebra matrix, owned or a view, of any shape and strides.
+#[cfg(feature = "nalgebra")]
+impl<T, R, C, S> MatrixMut<T> for nalgebra::Matrix<T, R, C, S>
+where
+    T: Real,
+    R: nalgebra::Dim,
+    C: nalgebra::Dim,
+    S: nalgebra::RawStorageMut<T, R, C>,
+{
+    fn rows(&self) -> usize {
+        self.nrows()
+    }
+
+    fn columns(&self) -> usize {
+        self.ncols()
+    }
+
+    fn read_column(&self, column: usize, into: &mut [T]) {
+        assert_eq!(into.len(), self.nrows(), "one entry per row");
+        (into.iter_mut().zip(self.column(column).iter())).for_each(|(to, &value)| *to = value);
+    }
+
+    fn write_column(&mut self, column: usize, from: &[T]) {
+        assert_eq!(from.len(), self.nrows(), "one entry per row");
+        (self.column_mut(column).iter_mut().zip(from)).for_each(|(to, &value)| *to = value);
     }
 }
 

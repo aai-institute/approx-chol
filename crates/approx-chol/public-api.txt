@@ -83,6 +83,9 @@ pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::input::CsrRef<'a, 
 impl<'a, T: approx_chol::Real, I: sprs::indexing::SpIndex> core::convert::TryFrom<sprs::sparse::CsMatBase<T, I, &'a [I], &'a [I], &'a [T]>> for approx_chol::input::CsrRef<'a, T, I>
 pub type approx_chol::input::CsrRef<'a, T, I>::Error = approx_chol::input::InputError
 pub fn approx_chol::input::CsrRef<'a, T, I>::try_from(sprs::sparse::CsMatViewI<'a, T, I>) -> core::result::Result<Self, approx_chol::input::InputError>
+impl<'a, T: approx_chol::Real> core::convert::TryFrom<&'a nalgebra_sparse::csr::CsrMatrix<T>> for approx_chol::input::CsrRef<'a, T, usize>
+pub type approx_chol::input::CsrRef<'a, T, usize>::Error = approx_chol::input::InputError
+pub fn approx_chol::input::CsrRef<'a, T, usize>::try_from(&'a nalgebra_sparse::csr::CsrMatrix<T>) -> core::result::Result<Self, approx_chol::input::InputError>
 impl<'a, T: core::clone::Clone, I: core::clone::Clone> core::clone::Clone for approx_chol::input::CsrRef<'a, T, I>
 pub fn approx_chol::input::CsrRef<'a, T, I>::clone(&self) -> Self
 impl<'a, T: core::fmt::Debug, I: core::fmt::Debug> core::fmt::Debug for approx_chol::input::CsrRef<'a, T, I>
@@ -437,6 +440,11 @@ pub fn approx_chol::MatrixMut::columns(&self) -> usize
 pub fn approx_chol::MatrixMut::read_column(&self, usize, &mut [T])
 pub fn approx_chol::MatrixMut::rows(&self) -> usize
 pub fn approx_chol::MatrixMut::write_column(&mut self, usize, &[T])
+impl<T, R, C, S> approx_chol::MatrixMut<T> for nalgebra::base::matrix::Matrix<T, R, C, S> where T: approx_chol::Real, R: nalgebra::base::dimension::Dim, C: nalgebra::base::dimension::Dim, S: nalgebra::base::storage::RawStorageMut<T, R, C>
+pub fn nalgebra::base::matrix::Matrix<T, R, C, S>::columns(&self) -> usize
+pub fn nalgebra::base::matrix::Matrix<T, R, C, S>::read_column(&self, usize, &mut [T])
+pub fn nalgebra::base::matrix::Matrix<T, R, C, S>::rows(&self) -> usize
+pub fn nalgebra::base::matrix::Matrix<T, R, C, S>::write_column(&mut self, usize, &[T])
 impl<T: approx_chol::Real, C: core::convert::AsRef<[T]> + core::convert::AsMut<[T]>> approx_chol::MatrixMut<T> for approx_chol::Columns<'_, C>
 pub fn approx_chol::Columns<'_, C>::columns(&self) -> usize
 pub fn approx_chol::Columns<'_, C>::read_column(&self, usize, &mut [T])
