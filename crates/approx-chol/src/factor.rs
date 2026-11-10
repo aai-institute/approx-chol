@@ -171,7 +171,7 @@ impl<T: Real> ApproxInverse<T> {
         room.in_place(columns).or(room.staged(columns))
     }
 
-    /// Applies the approximate inverse to every column of `block` at once, each bit for bit as it would be alone, through scratch allocated for this call, what `block`'s layout takes at `threads`; [`ApplyError::Scratch`] if it cannot be. Its rows and errors are [`apply_with`](Self::apply_with)'s.
+    /// Applies the approximate inverse to every column of `block` at once, each bit for bit as it would be alone, a NaN's sign and payload aside, through scratch allocated for this call, what `block`'s layout takes at `threads`; [`ApplyError::Scratch`] if it cannot be. Its rows and errors are [`apply_with`](Self::apply_with)'s.
     pub fn apply<M: MatrixMut<T> + ?Sized>(
         &self,
         block: &mut M,

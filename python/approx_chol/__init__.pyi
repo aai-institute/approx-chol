@@ -225,7 +225,8 @@ class ApproxInverse(LinearOperator):
 
         ``b`` is a real array ``np.asarray`` reads, a vector of length ``n`` or
         an ``n`` × ``k`` array, converted to ``float64`` if it is not; each
-        column solves bit for bit as it would alone. The solution has ``b``'s
+        column solves bit for bit as it would alone, a NaN's sign and payload
+        aside. The solution has ``b``'s
         shape, written to ``out`` when given and returned, else to a new
         array. ``out`` is a writable, aligned ``float64`` array of that shape
         in any order whose entries neither overlap nor interleave, each stride
