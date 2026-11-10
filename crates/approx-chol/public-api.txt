@@ -276,6 +276,22 @@ impl serde_core::ser::Serialize for approx_chol::Sampling
 pub fn approx_chol::Sampling::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for approx_chol::Sampling
 pub fn approx_chol::Sampling::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub enum approx_chol::Scalar
+pub approx_chol::Scalar::F32
+pub approx_chol::Scalar::F64
+impl core::clone::Clone for approx_chol::Scalar
+pub fn approx_chol::Scalar::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::Scalar
+impl core::cmp::PartialEq for approx_chol::Scalar
+pub fn approx_chol::Scalar::eq(&self, &Self) -> bool
+impl core::fmt::Debug for approx_chol::Scalar
+pub fn approx_chol::Scalar::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::Scalar
+impl core::marker::StructuralPartialEq for approx_chol::Scalar
+impl serde_core::ser::Serialize for approx_chol::Scalar
+pub fn approx_chol::Scalar::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for approx_chol::Scalar
+pub fn approx_chol::Scalar::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub enum approx_chol::ScalingOutcome
 pub approx_chol::ScalingOutcome::Certified
 pub approx_chol::ScalingOutcome::Refuted
@@ -357,12 +373,12 @@ impl<T: approx_chol::Real + faer_traits::ComplexField> faer::matrix_free::Precon
 pub fn approx_chol::ApproxInverse<T>::apply_in_place(&self, faer::mat::MatMut<'_, T>, faer::Par, &mut dyn_stack::MemStack)
 pub fn approx_chol::ApproxInverse<T>::apply_in_place_scratch(&self, usize, faer::Par) -> dyn_stack::stack_req::StackReq
 pub fn approx_chol::ApproxInverse<T>::conj_apply_in_place(&self, faer::mat::MatMut<'_, T>, faer::Par, &mut dyn_stack::MemStack)
+impl<T: approx_chol::Real + serde_core::ser::Serialize> serde_core::ser::Serialize for approx_chol::ApproxInverse<T>
+pub fn approx_chol::ApproxInverse<T>::serialize<S: serde_core::ser::Serializer>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
 impl<T: core::clone::Clone> core::clone::Clone for approx_chol::ApproxInverse<T>
 pub fn approx_chol::ApproxInverse<T>::clone(&self) -> Self
 impl<T: core::fmt::Debug> core::fmt::Debug for approx_chol::ApproxInverse<T>
 pub fn approx_chol::ApproxInverse<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<T: serde_core::ser::Serialize> serde_core::ser::Serialize for approx_chol::ApproxInverse<T>
-pub fn approx_chol::ApproxInverse<T>::serialize<S: serde_core::ser::Serializer>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
 #[non_exhaustive] pub struct approx_chol::Clamp
 pub approx_chol::Clamp::scaling: approx_chol::ScalingOutcome
 pub approx_chol::Clamp::violation: f64
@@ -431,6 +447,40 @@ impl serde_core::ser::Serialize for approx_chol::Config
 pub fn approx_chol::Config::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for approx_chol::Config
 pub fn approx_chol::Config::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct approx_chol::Header
+pub approx_chol::Header::scalar: approx_chol::Scalar
+pub approx_chol::Header::version: u32
+impl approx_chol::Header
+pub fn approx_chol::Header::expect<T: approx_chol::Real>(self) -> core::result::Result<(), approx_chol::HeaderMismatch>
+pub fn approx_chol::Header::of<T: approx_chol::Real>() -> approx_chol::Header
+impl core::clone::Clone for approx_chol::Header
+pub fn approx_chol::Header::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::Header
+impl core::cmp::PartialEq for approx_chol::Header
+pub fn approx_chol::Header::eq(&self, &Self) -> bool
+impl core::fmt::Debug for approx_chol::Header
+pub fn approx_chol::Header::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::Header
+impl core::marker::StructuralPartialEq for approx_chol::Header
+impl serde_core::ser::Serialize for approx_chol::Header
+pub fn approx_chol::Header::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for approx_chol::Header
+pub fn approx_chol::Header::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+#[non_exhaustive] pub struct approx_chol::HeaderMismatch
+pub approx_chol::HeaderMismatch::expected: approx_chol::Header
+pub approx_chol::HeaderMismatch::found: approx_chol::Header
+impl core::clone::Clone for approx_chol::HeaderMismatch
+pub fn approx_chol::HeaderMismatch::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::HeaderMismatch
+impl core::cmp::PartialEq for approx_chol::HeaderMismatch
+pub fn approx_chol::HeaderMismatch::eq(&self, &Self) -> bool
+impl core::error::Error for approx_chol::HeaderMismatch
+impl core::fmt::Debug for approx_chol::HeaderMismatch
+pub fn approx_chol::HeaderMismatch::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for approx_chol::HeaderMismatch
+pub fn approx_chol::HeaderMismatch::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::HeaderMismatch
+impl core::marker::StructuralPartialEq for approx_chol::HeaderMismatch
 pub struct approx_chol::ScalingPolicy
 impl approx_chol::ScalingPolicy
 pub fn approx_chol::ScalingPolicy::max_iterations(&self) -> usize
@@ -458,7 +508,6 @@ impl<T: core::clone::Clone> core::clone::Clone for approx_chol::Sgdd<T>
 pub fn approx_chol::Sgdd<T>::clone(&self) -> Self
 impl<T: core::fmt::Debug> core::fmt::Debug for approx_chol::Sgdd<T>
 pub fn approx_chol::Sgdd<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub const approx_chol::FACTOR_FORMAT_VERSION: u32
 pub trait approx_chol::MatrixMut<T: approx_chol::Real>
 pub fn approx_chol::MatrixMut::columns(&self) -> usize
 pub fn approx_chol::MatrixMut::read_column(&self, usize, &mut [T])
