@@ -2,7 +2,7 @@ use approx_chol::input::{CsrRef, InputError};
 use rstest::rstest;
 use sprs::{CsMatI, SpIndex};
 
-use super::{assert_solves_fixture, COL_INDICES, N, ROW_PTRS, VALUES};
+use super::path::{assert_solves_fixture, COL_INDICES, N, ROW_PTRS, VALUES};
 use crate::common::entry::cast_all;
 
 fn path_laplacian<I: SpIndex>() -> CsMatI<f64, I> {

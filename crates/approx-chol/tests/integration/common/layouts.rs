@@ -1,5 +1,8 @@
 use std::array;
 
+#[cfg(feature = "ndarray")]
+use ndarray::ShapeBuilder;
+
 use approx_chol::{
     ApplyError, ApproxInverse, ColumnMajor, Columns, MatrixMut, MemBuffer, MemStack, Real,
     StackReq, Threads,
@@ -21,6 +24,12 @@ pub enum Layout {
     Columns,
     #[cfg(feature = "nalgebra")]
     Nalgebra,
+    /// A standard-order `Array2`, its columns strided.
+    #[cfg(feature = "ndarray")]
+    NdarrayRowMajor,
+    /// A Fortran-order `Array2`, its columns contiguous.
+    #[cfg(feature = "ndarray")]
+    NdarrayColumnMajor,
 }
 
 impl Layout {
@@ -31,7 +40,47 @@ impl Layout {
         Layout::Columns,
         #[cfg(feature = "nalgebra")]
         Layout::Nalgebra,
+        #[cfg(feature = "ndarray")]
+        Layout::NdarrayRowMajor,
+        #[cfg(feature = "ndarray")]
+        Layout::NdarrayColumnMajor,
     ];
+}
+
+/// A block in some layout, applied as its own type: a `&mut` to it is sized where the block may not be, so a `dyn Block` holds any.
+pub trait Block<T: Real> {
+    fn apply(&mut self, factor: &ApproxInverse<T>, threads: Threads) -> Result<(), ApplyError>;
+    fn apply_with(
+        &mut self,
+        factor: &ApproxInverse<T>,
+        threads: Threads,
+        stack: &mut MemStack,
+    ) -> Result<(), ApplyError>;
+    fn columns(&self) -> usize;
+    fn read_column(&self, column: usize, into: &mut [T]);
+}
+
+impl<T: Real, M: MatrixMut<T> + ?Sized> Block<T> for &mut M {
+    fn apply(&mut self, factor: &ApproxInverse<T>, threads: Threads) -> Result<(), ApplyError> {
+        factor.apply(*self, threads)
+    }
+
+    fn apply_with(
+        &mut self,
+        factor: &ApproxInverse<T>,
+        threads: Threads,
+        stack: &mut MemStack,
+    ) -> Result<(), ApplyError> {
+        factor.apply_with(*self, threads, stack)
+    }
+
+    fn columns(&self) -> usize {
+        MatrixMut::columns(*self)
+    }
+
+    fn read_column(&self, column: usize, into: &mut [T]) {
+        MatrixMut::read_column(*self, column, into);
+    }
 }
 
 /// The same `K` columns in every layout, each owning its data.
@@ -44,6 +93,10 @@ pub struct Layouts<T, const K: usize> {
     slices: Vec<Vec<T>>,
     #[cfg(feature = "nalgebra")]
     nalgebra: nalgebra::DMatrix<T>,
+    #[cfg(feature = "ndarray")]
+    ndarray_rows: ndarray::Array2<T>,
+    #[cfg(feature = "ndarray")]
+    ndarray_columns: ndarray::Array2<T>,
 }
 
 impl<T: Real, const K: usize> Layouts<T, K> {
@@ -59,20 +112,28 @@ impl<T: Real, const K: usize> Layouts<T, K> {
             slices: columns.to_vec(),
             #[cfg(feature = "nalgebra")]
             nalgebra: nalgebra::DMatrix::from_fn(rows, K, |i, j| columns[j][i]),
+            #[cfg(feature = "ndarray")]
+            ndarray_rows: ndarray::Array2::from_shape_fn((rows, K), |(i, j)| columns[j][i]),
+            #[cfg(feature = "ndarray")]
+            ndarray_columns: ndarray::Array2::from_shape_fn((rows, K).f(), |(i, j)| columns[j][i]),
         }
     }
 
     /// `f` on the block in `layout`.
-    pub fn on<R>(&mut self, layout: Layout, f: impl FnOnce(&mut dyn MatrixMut<T>) -> R) -> R {
+    pub fn on<R>(&mut self, layout: Layout, f: impl FnOnce(&mut dyn Block<T>) -> R) -> R {
         match layout {
-            Layout::Interleaved => f(&mut self.interleaved),
-            Layout::Apart => f(&mut self.apart),
+            Layout::Interleaved => f(&mut &mut self.interleaved),
+            Layout::Apart => f(&mut &mut self.apart),
             Layout::ColumnMajor => {
-                f(&mut ColumnMajor::new(&mut self.major, self.rows).expect("whole columns"))
+                f(&mut &mut ColumnMajor::new(&mut self.major, self.rows).expect("whole columns"))
             }
-            Layout::Columns => f(&mut Columns::new(&mut self.slices).expect("equal columns")),
+            Layout::Columns => f(&mut &mut Columns::new(&mut self.slices).expect("equal columns")),
             #[cfg(feature = "nalgebra")]
-            Layout::Nalgebra => f(&mut self.nalgebra),
+            Layout::Nalgebra => f(&mut &mut self.nalgebra),
+            #[cfg(feature = "ndarray")]
+            Layout::NdarrayRowMajor => f(&mut &mut *self.ndarray_rows),
+            #[cfg(feature = "ndarray")]
+            Layout::NdarrayColumnMajor => f(&mut &mut *self.ndarray_columns),
         }
     }
 
@@ -94,7 +155,7 @@ impl<T: Real, const K: usize> Layouts<T, K> {
         least_slots::<T>(factor.scratch(K, threads::ONE), |stack| {
             let mut fresh = self.clone();
             fresh.on(layout, |block| {
-                factor.apply_with(block, threads::ONE, stack)
+                block.apply_with(factor, threads::ONE, stack)
             })
         })
     }
@@ -119,15 +180,15 @@ pub fn assert_errors_leave_the_block<T: Real>(factor: &ApproxInverse<T>) {
                     let bytes = least * size_of::<T>();
                     let mut buffer = MemBuffer::new(StackReq::new::<T>(least));
                     let short = MemStack::new(&mut buffer[..bytes - 1]);
-                    let error = block.on(layout, |b| factor.apply_with(b, Threads::All, short));
+                    let error = block.on(layout, |b| b.apply_with(factor, Threads::All, short));
                     assert_eq!(error, Err(ApplyError::Scratch), "{layout:?}");
                 }
             } else {
                 let rows = Err(ApplyError::Rows { expected: n, found });
-                let error = block.on(layout, |b| factor.apply(b, Threads::All));
+                let error = block.on(layout, |b| b.apply(factor, Threads::All));
                 assert_eq!(error, rows, "{layout:?}");
                 let stack = MemStack::new_any(&mut cells);
-                let error = block.on(layout, |b| factor.apply_with(b, Threads::All, stack));
+                let error = block.on(layout, |b| b.apply_with(factor, Threads::All, stack));
                 assert_eq!(error, rows, "{layout:?}");
             }
             assert!(

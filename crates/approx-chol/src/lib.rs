@@ -43,7 +43,6 @@ macro_rules! checked_serde {
     };
 }
 
-#[cfg(any(feature = "sprs", feature = "faer", feature = "nalgebra"))]
 mod adapters;
 mod batch;
 mod error;

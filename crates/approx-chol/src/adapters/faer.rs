@@ -63,6 +63,7 @@ fn read_column<T: Real>(block: MatRef<'_, T>, column: usize, into: &mut [T]) {
     (into.iter_mut().zip(block.col(column).iter())).for_each(|(to, &from)| *to = from);
 }
 
+/// faer's `MatMut`, and through it `Mat`, `Col` and `ColMut`, at any strides: columns of row stride 1 are solved as [`ColumnMajor`](crate::ColumnMajor)'s are, others through `read_column` and `write_column`; a typed faer view converts with `as_dyn_mut().as_dyn_stride_mut()`.
 impl<T: Real> MatrixMut<T> for MatMut<'_, T> {
     fn rows(&self) -> usize {
         self.nrows()

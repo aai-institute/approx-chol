@@ -27,12 +27,14 @@ sprs = { version = "0.11", optional = true, default-features = false }
 faer = { version = "0.24", optional = true, default-features = false }
 nalgebra = { version = "0.35", optional = true }
 nalgebra-sparse = { version = "0.12", optional = true, default-features = false }
+ndarray = { version = "0.17", optional = true, default-features = false }
 
 [features]
 serde = ["dep:serde"]
-sprs = ["dep:sprs"]
+sprs = ["dep:sprs", "ndarray"]
 faer = ["dep:faer", "faer/rayon"]
 nalgebra = ["dep:nalgebra", "dep:nalgebra-sparse"]
+ndarray = ["dep:ndarray"]
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }

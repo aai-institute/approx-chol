@@ -85,7 +85,7 @@ fn applied<T: Real, const K: usize>(
             let mut cells = nan_slots::<T>(slots);
             block
                 .on(layout, |b| {
-                    factor.apply_with(b, threads, MemStack::new_any(&mut cells))
+                    b.apply_with(factor, threads, MemStack::new_any(&mut cells))
                 })
                 .expect("its own scratch");
             let columns = block.columns(layout).into_iter();
@@ -258,6 +258,10 @@ fn a_copied_block_takes_one_packs_stack_whatever_its_width() {
         Layout::Columns,
         #[cfg(feature = "nalgebra")]
         Layout::Nalgebra,
+        #[cfg(feature = "ndarray")]
+        Layout::NdarrayRowMajor,
+        #[cfg(feature = "ndarray")]
+        Layout::NdarrayColumnMajor,
     ];
     for layout in copied {
         let least = wide.least(&factor, layout);
@@ -268,7 +272,7 @@ fn a_copied_block_takes_one_packs_stack_whatever_its_width() {
             let mut cells = nan_slots::<f64>(least);
             block
                 .on(layout, |b| {
-                    factor.apply_with(b, threads, MemStack::new_any(&mut cells))
+                    b.apply_with(&factor, threads, MemStack::new_any(&mut cells))
                 })
                 .expect("its own stack");
             let columns: Vec<Vec<u64>> = block.columns(layout).iter().map(|c| bits(c)).collect();
@@ -395,7 +399,7 @@ fn spread_bits(
         let mut block = fresh.clone();
         block
             .on(layout, |b| {
-                factor.apply_with(b, threads, MemStack::new_any(&mut cells))
+                b.apply_with(factor, threads, MemStack::new_any(&mut cells))
             })
             .expect("one region at least");
         (

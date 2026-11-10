@@ -29,7 +29,7 @@ use crate::threads::task;
 use crate::Clamp;
 use crate::{Batch, Index, MemStack, Real, StackReq, Threads};
 pub(crate) use apply::Kernel;
-#[cfg(feature = "faer")]
+#[cfg(any(feature = "faer", feature = "ndarray"))]
 pub(crate) use apply::Slices;
 use apply::{rows_error, Room, Stack};
 use block_elimination::BlockElimination;

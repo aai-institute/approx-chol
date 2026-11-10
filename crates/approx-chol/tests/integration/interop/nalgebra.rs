@@ -5,7 +5,7 @@ use approx_chol::{factorize, ApproxInverse, Threads};
 use nalgebra::{DMatrix, DMatrixViewMut, SMatrix};
 use nalgebra_sparse::{CscMatrix, CsrMatrix};
 
-use super::{assert_solves_fixture, COL_INDICES, N, ROW_PTRS, VALUES};
+use super::path::{assert_solves_fixture, COL_INDICES, N, ROW_PTRS, VALUES};
 use crate::common::bits::bits;
 use crate::common::grid::grid;
 use crate::common::solve::Solve;
