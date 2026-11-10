@@ -58,7 +58,7 @@ class ApproxInverse(LinearOperator):
     def __reduce__(self) -> tuple[object, ...]: ...
 ```
 
-An `ApproxInverse` pickles as its saved form, encoded with postcard, and its held budget. A load
+An `ApproxInverse` pickles as its saved form, encoded with postcard, and nothing else. A load
 reads the `Header` itself, checks it with `expect`, and raises `ValueError` with the
 `HeaderMismatch` message; a form that then fails to decode or validate raises `ValueError` as
 invalid.
@@ -81,7 +81,7 @@ invalid.
   mismatch, the failure a caller can act on, is the one a message must name.
 - **`__reduce__`, not the default:** the pickle then holds only approx-chol's versioned form,
   not scipy's object state, which is not versioned.
-- **The budget in the pickle:** it is what the Python operator holds; another process applies at
-  the same budget, all cores when it was `None`.
+- **Nothing beside the form:** a budget describes the process that applies, its cores and what
+  runs beside it; the loading process states its own.
 - **`ValueError` in Python:** a saved form that does not load is bad input, as `InputError` and
   `BuildError` are `ValueError`s.
