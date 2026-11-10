@@ -120,9 +120,9 @@ own adjoint: `matvec` and `rmatvec` take a vector or a stack of them, $(\ldots, 
 `rmatmat` $(\ldots, n, k)$, as scipy 1.18 passes them. `apply`'s `b` is a real array `np.asarray`
 reads, a vector of length $n$ or an $n \times k$ array, converted to `f64` if it is not; any other
 dtype raises `TypeError`. The solution has `b`'s shape, written to `out` when given, a writable
-`f64` array of that shape in any order whose entries do not overlap, `b` itself allowed, else to a
-new array. A wrong shape or an overlapping `out` raises `ValueError`. Every apply releases the GIL
-and allocates its own scratch. scipy's `cg` and `minres` take it as `M`; `lsmr` takes no
+`f64` array of that shape in any order, aligned, its strides whole `f64`s, whose entries neither
+overlap nor interleave, `b` itself allowed, else to a new array. A wrong shape or any other `out`
+raises `ValueError`. Every apply allocates its own scratch; when it releases the GIL is #460's. scipy's `cg` and `minres` take it as `M`; `lsmr` takes no
 preconditioner, so it right-preconditions there composed with $A$: `y` from
 `lsmr(aslinearoperator(A) @ B, b)`, then `x = B @ y`.
 
