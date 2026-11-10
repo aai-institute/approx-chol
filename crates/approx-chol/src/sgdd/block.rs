@@ -92,6 +92,7 @@ pub(crate) struct IrreducibleBlock<T = f64, I = u32> {
 }
 
 /// A bipartite block's Schur complement onto its kept side, unformed: `C`, and `F` on the kept side.
+#[derive(Clone, Debug)]
 pub(crate) struct BlockComplement<T, I> {
     /// The whole block's first vertex in `A`.
     first: usize,
@@ -104,10 +105,13 @@ pub(crate) struct BlockComplement<T, I> {
     clamp: Option<Box<Clamp>>,
 }
 
-/// A coupled component's block, which knows the vertices of its component it keeps.
-pub(crate) trait KeptVertices {
+/// A coupled component's block, which knows the vertices of its component it keeps and its component's clamp.
+pub(crate) trait CoupledBlock {
     /// Its kept vertices in its component's local order: a tail, so the component ends where they do.
     fn kept(&self) -> Range<usize>;
+
+    /// How the reduction clamped the component's rows past rounding, if it did.
+    fn clamp(&self) -> Option<&Clamp>;
 }
 
 impl<T: Real, I: Index> BlockComplement<T, I> {
@@ -145,10 +149,14 @@ impl<T: Real, I: Index> BlockComplement<T, I> {
     }
 }
 
-impl<T: Real, I: Index> KeptVertices for BlockComplement<T, I> {
+impl<T: Real, I: Index> CoupledBlock for BlockComplement<T, I> {
     fn kept(&self) -> Range<usize> {
         let eliminated = self.cross.n_rows();
         eliminated..eliminated + self.cross.n_cols()
+    }
+
+    fn clamp(&self) -> Option<&Clamp> {
+        self.clamp.as_deref()
     }
 }
 
@@ -279,9 +287,13 @@ impl<T: Real, I: Index> IrreducibleBlock<T, I> {
     }
 }
 
-impl<T: Real, I: Index> KeptVertices for IrreducibleBlock<T, I> {
+impl<T: Real, I: Index> CoupledBlock for IrreducibleBlock<T, I> {
     fn kept(&self) -> Range<usize> {
         0..self.off_diagonal.n()
+    }
+
+    fn clamp(&self) -> Option<&Clamp> {
+        self.clamp.as_deref()
     }
 }
 

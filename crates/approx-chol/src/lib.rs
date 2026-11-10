@@ -63,97 +63,12 @@ use batch::Batch;
 pub use dyn_stack::{MemBuffer, MemStack, StackReq};
 pub use error::BuildError;
 pub use factor::{
-    ApplyError, ApproxInverse, ColumnMajor, Columns, Component, Config, CoverSurplus,
-    FrustratedRoute, Header, HeaderMismatch, LayoutError, MatrixMut, Sampling, Scalar, SchurMode,
+    factorize, factorize_complement, factorize_with, ApplyError, ApproxInverse, Clamped,
+    ColumnMajor, Columns, Complement, Component, Config, CoverSurplus, FrustratedRoute, Header,
+    HeaderMismatch, LayoutError, MatrixMut, Sampling, Scalar, SchurMode, Sgdd,
 };
-use input::{Input, Side};
 pub use sgdd::{Clamp, ScalingOutcome, ScalingPolicy};
-use sgdd::{Complement, Reduced};
 pub use threads::Threads;
-
-/// Factorizes any [`Input`] with [`Config::default`] and [`ScalingPolicy::default`].
-pub fn factorize<'a, T, I, M>(input: M) -> Result<ApproxInverse<T>, BuildError>
-where
-    T: Real,
-    I: PrimInt + Sync + 'a,
-    M: Into<Input<'a, T, I>>,
-{
-    factorize_with(input, Config::default(), ScalingPolicy::default())
-}
-
-/// Factorizes any [`Input`]: [`Sgdd::reduce`] under `scaling`, then [`Sgdd::factor`] under `config`.
-pub fn factorize_with<'a, T, I, M>(
-    input: M,
-    config: Config,
-    scaling: ScalingPolicy,
-) -> Result<ApproxInverse<T>, BuildError>
-where
-    T: Real,
-    I: PrimInt + Sync + 'a,
-    M: Into<Input<'a, T, I>>,
-{
-    Ok(Sgdd::reduce(input, scaling)?.factor(&config))
-}
-
-/// Factors a bipartite `A`'s Schur complement onto its `kept` side, formed under [`Config::complement`] and factored as [`factorize_with`] would; the factor's vertex `k` is the kept side's `k`-th.
-pub fn factorize_complement<T: Real, I: PrimInt + Sync>(
-    input: input::BipartiteFactorWidth2<'_, T, I>,
-    kept: Side,
-    config: Config,
-    scaling: ScalingPolicy,
-) -> Result<ApproxInverse<T>, BuildError> {
-    Ok(match fits_u32(input.n()) {
-        true => ApproxInverse::build(
-            Complement::<T, u32>::reduce_onto(input, kept, scaling, Threads::All)?,
-            &config,
-            Threads::All,
-        ),
-        false => ApproxInverse::build(
-            Complement::<T, u64>::reduce_onto(input, kept, scaling, Threads::All)?,
-            &config,
-            Threads::All,
-        ),
-    })
-}
-
-/// Whether `u32` indexes a cover's two sheets and its ground, the most slots any block of `n` vertices takes.
-fn fits_u32(n: usize) -> bool {
-    u32::try_from(n.saturating_mul(2).saturating_add(1)).is_ok()
-}
-
-/// Built only by [`Sgdd::reduce`]: `A` in symmetric generalized diagonally dominant form, each irreducible block scaled to dominance.
-#[derive(Clone, Debug)]
-pub struct Sgdd<T = f64>(Indexed<T>);
-
-/// The reduction in the narrowest index its cover's `2n + 1` slots fit.
-#[derive(Clone, Debug)]
-enum Indexed<T> {
-    U32(Reduced<T, u32>),
-    U64(Reduced<T, u64>),
-}
-
-impl<T: Real> Sgdd<T> {
-    /// Reduces any [`Input`], scaling each block short of dominance under `scaling`; nothing after this reads `input`.
-    pub fn reduce<'a, I, M>(input: M, scaling: ScalingPolicy) -> Result<Self, BuildError>
-    where
-        I: PrimInt + Sync + 'a,
-        M: Into<Input<'a, T, I>>,
-    {
-        let input = input.into();
-        Ok(Self(match fits_u32(input.n()) {
-            true => Indexed::U32(Reduced::reduce(input, scaling, Threads::All)?),
-            false => Indexed::U64(Reduced::reduce(input, scaling, Threads::All)?),
-        }))
-    }
-
-    /// Factors each block in parallel; clone first to factor again under another `config`.
-    pub fn factor(self, config: &Config) -> ApproxInverse<T> {
-        match self.0 {
-            Indexed::U32(summands) => ApproxInverse::build(summands, config, Threads::All),
-            Indexed::U64(summands) => ApproxInverse::build(summands, config, Threads::All),
-        }
-    }
-}
 
 /// The scalar every stage computes in: `f32` or `f64`, each summed in `f64`, which holds it exactly.
 pub trait Real: Float + TotalOrder + Debug + Send + Sync + 'static + seal::Real {}

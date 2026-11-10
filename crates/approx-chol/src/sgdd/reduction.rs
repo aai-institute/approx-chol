@@ -11,7 +11,7 @@ use super::decomposition::{
     of_csr, AdjacencyLayout, Biadjacency, Partitioned, RowSums, StrictUpperTriangle, SymmetricBlock,
 };
 use super::scaling::{self, ScaleVector, ScalingPolicy};
-use super::{Complement, Reduced};
+use super::{Reduced, ReducedComplement};
 use crate::diagonal_in_range;
 use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Lowered, Side};
 use crate::storage::OffDiagonal;
@@ -55,7 +55,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
     }
 }
 
-impl<T: Real, I: Index> Complement<T, I> {
+impl<T: Real, I: Index> ReducedComplement<T, I> {
     /// As [`Reduced::reduce`], each block's side opposite `kept` eliminated first.
     pub(crate) fn reduce_onto<J: PrimInt>(
         input: BipartiteFactorWidth2<'_, T, J>,

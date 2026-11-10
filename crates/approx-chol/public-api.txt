@@ -393,6 +393,15 @@ impl serde_core::ser::Serialize for approx_chol::Clamp
 pub fn approx_chol::Clamp::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for approx_chol::Clamp
 pub fn approx_chol::Clamp::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct approx_chol::Clamped<'s>
+impl<'s> approx_chol::Clamped<'s>
+pub fn approx_chol::Clamped<'s>::clamp(&self) -> &'s approx_chol::Clamp
+pub fn approx_chol::Clamped<'s>::vertices(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = usize> + 's
+impl<'s> core::clone::Clone for approx_chol::Clamped<'s>
+pub fn approx_chol::Clamped<'s>::clone(&self) -> Self
+impl<'s> core::fmt::Debug for approx_chol::Clamped<'s>
+pub fn approx_chol::Clamped<'s>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'s> core::marker::Copy for approx_chol::Clamped<'s>
 pub struct approx_chol::ColumnMajor<'a, T>
 impl<'a, T> approx_chol::ColumnMajor<'a, T>
 pub fn approx_chol::ColumnMajor<'a, T>::new(&'a mut [T], usize) -> core::result::Result<Self, approx_chol::LayoutError>
@@ -413,6 +422,15 @@ pub fn approx_chol::Columns<'_, C>::columns(&self) -> usize
 pub fn approx_chol::Columns<'_, C>::read_column(&self, usize, &mut [T])
 pub fn approx_chol::Columns<'_, C>::rows(&self) -> usize
 pub fn approx_chol::Columns<'_, C>::write_column(&mut self, usize, &[T])
+pub struct approx_chol::Complement<T>(_)
+impl<T: approx_chol::Real> approx_chol::Complement<T>
+pub fn approx_chol::Complement<T>::clamps(&self) -> impl core::iter::traits::iterator::Iterator<Item = approx_chol::Clamped<'_>>
+pub fn approx_chol::Complement<T>::factor(self, approx_chol::Config, approx_chol::Threads) -> approx_chol::ApproxInverse<T>
+pub fn approx_chol::Complement<T>::reduce_onto<I: num_traits::int::PrimInt + core::marker::Sync>(approx_chol::input::BipartiteFactorWidth2<'_, T, I>, approx_chol::input::Side, approx_chol::ScalingPolicy, approx_chol::Threads) -> core::result::Result<Self, approx_chol::BuildError>
+impl<T: core::clone::Clone> core::clone::Clone for approx_chol::Complement<T>
+pub fn approx_chol::Complement<T>::clone(&self) -> Self
+impl<T: core::fmt::Debug> core::fmt::Debug for approx_chol::Complement<T>
+pub fn approx_chol::Complement<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct approx_chol::Component<'f, T>
 impl<'f, T: approx_chol::Real> approx_chol::Component<'f, T>
 pub fn approx_chol::Component<'f, T>::clamp(self) -> core::option::Option<&'f approx_chol::Clamp>
@@ -502,8 +520,9 @@ impl<'de> serde_core::de::Deserialize<'de> for approx_chol::ScalingPolicy
 pub fn approx_chol::ScalingPolicy::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct approx_chol::Sgdd<T>(_)
 impl<T: approx_chol::Real> approx_chol::Sgdd<T>
-pub fn approx_chol::Sgdd<T>::factor(self, &approx_chol::Config) -> approx_chol::ApproxInverse<T>
-pub fn approx_chol::Sgdd<T>::reduce<'a, I, M>(M, approx_chol::ScalingPolicy) -> core::result::Result<Self, approx_chol::BuildError> where I: num_traits::int::PrimInt + core::marker::Sync + 'a, M: core::convert::Into<approx_chol::input::Input<'a, T, I>>
+pub fn approx_chol::Sgdd<T>::clamps(&self) -> impl core::iter::traits::iterator::Iterator<Item = approx_chol::Clamped<'_>>
+pub fn approx_chol::Sgdd<T>::factor(self, approx_chol::Config, approx_chol::Threads) -> approx_chol::ApproxInverse<T>
+pub fn approx_chol::Sgdd<T>::reduce<'a, I, M>(M, approx_chol::ScalingPolicy, approx_chol::Threads) -> core::result::Result<Self, approx_chol::BuildError> where I: num_traits::int::PrimInt + core::marker::Sync + 'a, M: core::convert::Into<approx_chol::input::Input<'a, T, I>>
 impl<T: core::clone::Clone> core::clone::Clone for approx_chol::Sgdd<T>
 pub fn approx_chol::Sgdd<T>::clone(&self) -> Self
 impl<T: core::fmt::Debug> core::fmt::Debug for approx_chol::Sgdd<T>

@@ -6,6 +6,7 @@ mod surplus_grounds;
 
 use crate::common::bipartite::side;
 use crate::common::clamps::Clamps;
+use crate::common::scaling::exhausted;
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth2, Laplacian, Sddm, TriangleCsrRef,
 };
@@ -71,7 +72,7 @@ fn gram_separates_folded_scaled_and_frustrated_components() {
     let (a, b) = ([0, 1, 3, 4, 3], [1, 2, 4, 5, 5]);
     let (x, y) = ([1.3, 2.7, 1.0, 1.0, 1.0], [-2.7, -4.1, 1.0, 1.0, 1.0]);
     let gram = FactorWidth2::new(7, (&a, &x), (&b, &y)).unwrap();
-    let reduced = factorize_with(gram, dense(), ScalingPolicy::new(0.0, 0).unwrap()).unwrap();
+    let reduced = factorize_with(gram, dense(), exhausted()).unwrap();
     assert_eq!(floats(&reduced), [true, false]);
     assert_eq!(reduced.clamps(), []);
     assert!(!reduced
@@ -138,7 +139,7 @@ fn exhausted_scaling_reports_on_grams_and_rows() {
     let (a, b) = ([0, 1, 0], [1, 2, 2]);
     let (x, y) = ([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
     let gram = FactorWidth2::new(3, (&a, &x), (&b, &y)).unwrap();
-    let policy = ScalingPolicy::new(0.0, 0).unwrap();
+    let policy = exhausted();
     let reported = |f: &ApproxInverse| !f.clamps().is_empty() || only(f).grounding_unproven();
     let factor: ApproxInverse = factorize_with(gram, dense(), policy).unwrap();
     assert!(reported(&factor));
@@ -160,8 +161,7 @@ fn a_grams_clamps_are_listed_by_first_vertex() {
         [4.0, 5.0, 6.0, -4.0, -5.0, -6.0],
     );
     let gram = FactorWidth2::new(6, (&a, &x), (&b, &y)).unwrap();
-    let exhausted = ScalingPolicy::new(0.0, 0).unwrap();
-    let factor: ApproxInverse = factorize_with(gram, dense(), exhausted).unwrap();
+    let factor: ApproxInverse = factorize_with(gram, dense(), exhausted()).unwrap();
     let firsts: Vec<usize> = factor
         .clamps()
         .iter()

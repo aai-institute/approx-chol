@@ -7,8 +7,9 @@ use rayon::prelude::*;
 mod assembly;
 mod partition;
 
-use super::block::KeptVertices;
+use super::block::CoupledBlock;
 use crate::input::Canonical;
+use crate::order::{Listed, Order, Segment};
 use crate::storage::{tally_abs, OffDiagonal, Rows, UpperAdjacency};
 use crate::threads::task;
 use crate::{BuildError, Index, Real, Threads};
@@ -254,7 +255,7 @@ pub(crate) struct Components<I, T, C = Range<usize>> {
 pub(crate) type Summands<B, I, T> = Components<I, T, B>;
 
 /// Each block's kept vertices as a range of `vertices`, each component starting where the one before ends.
-pub(crate) fn ranges<B: KeptVertices>(
+pub(crate) fn ranges<B: CoupledBlock>(
     coupled: &[B],
 ) -> impl ExactSizeIterator<Item = Range<usize>> + Clone + '_ {
     let mut end = 0;
@@ -298,7 +299,36 @@ impl<I, T, C> Components<I, T, C> {
     }
 }
 
-impl<I: Index, T, B: KeptVertices> Summands<B, I, T> {
+/// The factored matrix's summands, its vertices packed: each coupled block on its segment of `order`, in component order, then each lone vertex's pivot.
+#[derive(Clone, Debug)]
+pub(crate) struct Packed<B, T> {
+    pub(crate) order: Order,
+    pub(crate) segments: Vec<Segment>,
+    pub(crate) coupled: Vec<B>,
+    pub(crate) pivots: Vec<T>,
+}
+
+impl<I: Index, T, B: CoupledBlock> Summands<B, I, T> {
+    /// Its vertices packed into the factor's order, the one form a factor or a reader of its blocks' vertices takes.
+    pub(crate) fn pack(self) -> Packed<B, T>
+    where
+        Listed: From<Box<[I]>>,
+    {
+        let Self {
+            vertices,
+            coupled,
+            pivots,
+            numbering,
+        } = self;
+        let (order, segments) = Order::pack(vertices, ranges(&coupled), numbering);
+        Packed {
+            order,
+            segments,
+            coupled,
+            pivots,
+        }
+    }
+
     /// Each block as `f` makes it from its kept vertices and itself, in parallel within `threads`.
     pub(super) fn map<C: Send>(
         mut self,

@@ -4,7 +4,7 @@ mod csr;
 
 use std::time::Duration;
 
-use approx_chol::{ScalingPolicy, Sgdd};
+use approx_chol::{ScalingPolicy, Sgdd, Threads};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 use csr::OwnedCsr;
 use rand::rngs::SmallRng;
@@ -42,7 +42,7 @@ fn bench_reduce_scaled_ring(c: &mut Criterion) {
         let a = scaled_ring(n, 4, 6.0, 0x362);
         let csr = a.csr();
         group.bench_with_input(BenchmarkId::new("w6", label), &csr, |b, &csr| {
-            b.iter(|| Sgdd::reduce(csr, ScalingPolicy::default()).expect("reduces"));
+            b.iter(|| Sgdd::reduce(csr, ScalingPolicy::default(), Threads::All).expect("reduces"));
         });
     }
     group.finish();

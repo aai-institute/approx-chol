@@ -2,6 +2,7 @@
 
 mod apply;
 mod block_elimination;
+mod build;
 mod cholesky;
 mod clique_tree;
 mod config;
@@ -17,11 +18,12 @@ use rand::SeedableRng;
 use rayon::prelude::*;
 
 pub use apply::{ApplyError, ColumnMajor, Columns, LayoutError, MatrixMut};
+pub use build::{factorize, factorize_complement, factorize_with, Clamped, Complement, Sgdd};
 pub use config::{Config, CoverSurplus, FrustratedRoute, Sampling, SchurMode};
 pub use header::{Header, HeaderMismatch, Scalar};
 
-use crate::order::{Listed, Order, Segment, Slots};
-use crate::sgdd::{ranges, BlockComplement, Congruence, IrreducibleBlock, KeptVertices, Summands};
+use crate::order::{Order, Segment, Slots};
+use crate::sgdd::{BlockComplement, Congruence, CoupledBlock, IrreducibleBlock, Packed};
 use crate::storage::OffDiagonal;
 use crate::threads::task;
 use crate::Clamp;
@@ -96,22 +98,20 @@ mod spread;
 impl<T: Real> ApproxInverse<T> {
     /// Factors every coupled summand in parallel, each keyed by its vertices once they are `order`'s.
     pub(crate) fn build<I: Index, B: Summand<T, I>>(
-        summands: Summands<B, I, T>,
+        packed: Packed<B, T>,
         config: &Config,
         threads: Threads,
     ) -> Self
     where
         Blocks<T>: From<Box<[Block<T, I>]>>,
-        Listed: From<Box<[I]>>,
     {
-        let Summands {
-            vertices,
+        let Packed {
+            order,
+            segments,
             coupled,
             pivots,
-            numbering,
-        } = summands;
+        } = packed;
         let inverse_pivots = pivots.iter().map(|&pivot| T::one() / pivot).collect();
-        let (order, segments) = Order::pack(vertices, ranges(&coupled), numbering);
         let workspace = || Workspace::new(config.sampling.copies());
         // Exactly sized: collect's reserve rounds a few blocks up to 4 and into_boxed_slice reallocates.
         let mut factored = Vec::with_capacity(coupled.len());
@@ -225,7 +225,7 @@ impl<T: Real> ApproxInverse<T> {
 }
 
 /// A coupled summand of the factored matrix: a block of `A`, or a block's complement onto its kept side.
-pub(crate) trait Summand<T, I>: Send + KeptVertices {
+pub(crate) trait Summand<T, I>: Send + CoupledBlock {
     /// Its factor on `segment` of `order`, its vertices in the factored matrix's numbering.
     fn factor(
         self,
@@ -481,7 +481,7 @@ impl<T: Real + serde::Serialize> serde::Serialize for ApproxInverse<T> {
 
 /// `(listed, blocks, inverse_pivots)` as decoded.
 #[cfg(feature = "serde")]
-type Body<T> = (Listed, Blocks<T>, Box<[T]>);
+type Body<T> = (crate::order::Listed, Blocks<T>, Box<[T]>);
 
 /// Checks the order and the blocks' segments before anything sized by their `n`: offsets and vertices in bounds, each block's parts agreeing on its segment's length, so a run's length is one its block's bytes back; only then whether each vertex is in one place.
 #[cfg(feature = "serde")]
@@ -542,7 +542,7 @@ mod tests {
         let summands =
             Reduced::<f64, u32>::reduce(csr.into(), ScalingPolicy::default(), Threads::All)
                 .expect("reduces");
-        ApproxInverse::build(summands, &Config::default(), Threads::All)
+        ApproxInverse::build(summands.pack(), &Config::default(), Threads::All)
     }
 
     fn grounded() -> ApproxInverse {
@@ -567,7 +567,7 @@ mod tests {
         let summands =
             Reduced::<f64, u32>::reduce(gram.into(), ScalingPolicy::default(), Threads::All)
                 .expect("reduces");
-        let mut factor = ApproxInverse::build(summands, &Config::default(), Threads::All);
+        let mut factor = ApproxInverse::build(summands.pack(), &Config::default(), Threads::All);
         assert!(only_block_mut(&mut factor).elimination.is_some());
         factor
     }
@@ -650,12 +650,16 @@ mod storage {
         let b = rhs(input.n());
         for config in configs() {
             let narrow = ApproxInverse::build(
-                Reduced::<f64, u32>::reduce(input, policy, Threads::All).expect("reduces"),
+                Reduced::<f64, u32>::reduce(input, policy, Threads::All)
+                    .expect("reduces")
+                    .pack(),
                 &config,
                 Threads::All,
             );
             let wide = ApproxInverse::build(
-                Reduced::<f64, u64>::reduce(input, policy, Threads::All).expect("reduces"),
+                Reduced::<f64, u64>::reduce(input, policy, Threads::All)
+                    .expect("reduces")
+                    .pack(),
                 &config,
                 Threads::All,
             );
@@ -671,7 +675,7 @@ mod storage {
             let reduced =
                 Reduced::<f64, u32>::reduce(input, ScalingPolicy::default(), Threads::All)
                     .expect("reduces");
-            let factor = ApproxInverse::build(reduced, &config, Threads::All);
+            let factor = ApproxInverse::build(reduced.pack(), &config, Threads::All);
             let Blocks::U32(blocks) = &factor.blocks else {
                 unreachable!("built in u32")
             };
@@ -768,7 +772,7 @@ mod budget {
 
     use super::*;
     use crate::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Side};
-    use crate::sgdd::{Complement, Reduced};
+    use crate::sgdd::{Reduced, ReducedComplement};
     use crate::threads::{probe, ONE};
     use crate::{widen, CoverSurplus, FrustratedRoute, Sampling, ScalingPolicy, SchurMode};
 
@@ -860,13 +864,15 @@ mod budget {
                     fingerprint(match kept {
                         None => ApproxInverse::build(
                             Reduced::<_, u32>::reduce(gram.into(), policy, threads)
-                                .expect("reduces"),
+                                .expect("reduces")
+                                .pack(),
                             &config,
                             threads,
                         ),
                         Some(side) => ApproxInverse::build(
-                            Complement::<_, u32>::reduce_onto(gram, side, policy, threads)
-                                .expect("reduces"),
+                            ReducedComplement::<_, u32>::reduce_onto(gram, side, policy, threads)
+                                .expect("reduces")
+                                .pack(),
                             &config,
                             threads,
                         ),
@@ -901,7 +907,9 @@ mod budget {
             let policy = ScalingPolicy::new(1e-9, iterations).expect("valid policy");
             check(&|threads| {
                 fingerprint(ApproxInverse::build(
-                    Reduced::<_, u32>::reduce(csr.into(), policy, threads).expect("reduces"),
+                    Reduced::<_, u32>::reduce(csr.into(), policy, threads)
+                        .expect("reduces")
+                        .pack(),
                     &Config::default(),
                     threads,
                 ))
