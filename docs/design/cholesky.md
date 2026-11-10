@@ -38,8 +38,9 @@ and the component's key. Seven choices shape the factorization; each has one own
   other end, as every edge is. Signed elimination needs this anyway: cancellation adds edges to
   $g$ during the elimination. Each cancellation adds $2\min(|a|,|b|)$ to both ends without
   subtracting, so a frustrated matrix on the signed route stays grounded however small its
-  frustration: its last pivot follows the frustration down to the input's representable range,
-  and no near-balanced block is pinned (#435). On `main` since step G1 (#351).
+  frustration: its last pivot is the cancelled ground, measured to follow the frustration down to
+  $10^{-100}$ in f64 and $10^{-30}$ in f32, and stays positive below, sampled fill being floored at
+  the smallest positive value; no near-balanced block is pinned (#435). On `main` since step G1 (#351).
 - **Three constructors of `Represented`:** `as_is`, the matrix as it is, for the dense arm and the
   signed route; `sampled`, which builds the cover when the route asks for it; and
   `from_cover_rows`, for a bipartite complement formed on the cover. The cover's construction, its
