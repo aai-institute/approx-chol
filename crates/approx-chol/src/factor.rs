@@ -2,6 +2,7 @@
 
 mod apply;
 mod block_elimination;
+mod build;
 mod cholesky;
 mod clique_tree;
 mod config;
@@ -17,6 +18,7 @@ use rand::SeedableRng;
 use rayon::prelude::*;
 
 pub use apply::{ApplyError, ColumnMajor, Columns, LayoutError, MatrixMut};
+pub use build::{factorize, factorize_complement, factorize_with, Sgdd};
 pub use config::{Config, CoverSurplus, FrustratedRoute, Sampling, SchurMode};
 pub use header::{Header, HeaderMismatch, Scalar};
 
