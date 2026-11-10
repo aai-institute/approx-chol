@@ -51,16 +51,6 @@ pub enum FrustratedRoute {
     Signed,
 }
 
-impl FrustratedRoute {
-    /// How a cover on this route carries its surplus: under `Signed`, only a bipartite block's complement is covered.
-    pub(super) fn cover_surplus(self) -> CoverSurplus {
-        match self {
-            Self::Cover(surplus) => surplus,
-            Self::Signed => CoverSurplus::Auto,
-        }
-    }
-}
-
 /// How a frustrated block's Gremban cover carries the surplus each copy of a vertex holds.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]

@@ -296,11 +296,10 @@ mod tests {
 
     use super::*;
     use crate::factor::clique_tree::{Multi, Single};
-    use crate::factor::config::CoverSurplus;
-    use crate::factor::sddm::{Sddm, SignedWdd};
+    use crate::factor::sddm::{Closure, Sddm, SignedWdd};
     use crate::factor::sign::Unsigned;
     use crate::factor::within_one;
-    use crate::sgdd::{Balance, Grounding};
+    use crate::sgdd::Grounding;
     use crate::storage::{Rows, UpperAdjacency};
     use crate::widen;
 
@@ -448,11 +447,9 @@ mod tests {
             .collect();
         let adjacency =
             |values| UpperAdjacency::new(Rows::new(ptrs.clone(), indices.clone(), values, n));
-        let sddm = Sddm::of_block(
+        let sddm = Sddm::new(
             adjacency(z),
-            Balance::Balanced,
-            Grounding::of(surplus.clone()),
-            CoverSurplus::Auto,
+            Closure::Folded(Grounding::of(surplus.clone())),
         );
         (
             sddm,
