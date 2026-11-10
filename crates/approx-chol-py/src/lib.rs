@@ -547,12 +547,12 @@ fn factorize_raw<'py>(
     config: Option<&PyConfig>,
     scaling: Option<&PyScalingPolicy>,
 ) -> PyResult<PyApproxInverse> {
-    let np = py.import("numpy")?;
+    let (np, names) = (py.import("numpy")?, CsrNames::RAW);
     CsrArrays {
         n,
-        indptr: as_1d(&np, row_ptrs, "row_ptrs", Column::Index)?,
-        indices: as_1d(&np, col_indices, "col_indices", Column::Index)?,
-        data: as_contiguous(&np, &as_1d(&np, values, "values", Column::Value)?)?,
+        indptr: as_1d(&np, row_ptrs, names.indptr, Column::Index)?,
+        indices: as_1d(&np, col_indices, names.indices, Column::Index)?,
+        data: as_contiguous(&np, &as_1d(&np, values, names.data, Column::Value)?)?,
         np,
     }
     .factorize(config, scaling, Threads::All)
@@ -576,16 +576,39 @@ fn factorize(
         };
         return Err(value_error(error));
     }
-    let np = py.import("numpy")?;
-    let data = as_1d(&np, &matrix.getattr("data")?, "data", Column::Value)?;
+    let (np, names) = (py.import("numpy")?, CsrNames::SCIPY);
+    let array = |name, column| as_1d(&np, &matrix.getattr(name)?, name, column);
+    let data = array(names.data, Column::Value)?;
     CsrArrays {
-        n,
-        indptr: as_1d(&np, &matrix.getattr("indptr")?, "indptr", Column::Index)?,
-        indices: as_1d(&np, &matrix.getattr("indices")?, "indices", Column::Index)?,
+        indptr: array(names.indptr, Column::Index)?,
+        indices: array(names.indices, Column::Index)?,
         data: as_contiguous(&np, &data)?,
+        n,
         np,
     }
     .factorize(config, scaling, threads)
+}
+
+/// The caller's names of a CSR's three arrays, by which every check names them.
+#[derive(Clone, Copy)]
+struct CsrNames {
+    indptr: &'static str,
+    indices: &'static str,
+    data: &'static str,
+}
+
+impl CsrNames {
+    /// `CsrRef::new`'s own names, which `factorize_raw` takes.
+    const RAW: Self = Self {
+        indptr: "row_ptrs",
+        indices: "col_indices",
+        data: "values",
+    };
+    const SCIPY: Self = Self {
+        indptr: "indptr",
+        indices: "indices",
+        data: "data",
+    };
 }
 
 /// A CSR's checked arrays: values already `f64`, indices still in the caller's dtype.
