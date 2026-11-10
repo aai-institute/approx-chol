@@ -10,13 +10,47 @@ from ._approx_chol import Clamp, Component, Config, ScalingPolicy
 
 __all__ = [
     "ApproxInverse",
+    "BuildError",
     "Clamp",
     "Component",
     "Config",
+    "InputError",
     "ScalingPolicy",
     "factorize",
     "factorize_raw",
 ]
+
+
+# The message first, then the attributes, in `args`: it prints, and pickles, as each class is called.
+class _RustError(ValueError):
+    def __str__(self):
+        return self.args[0]
+
+    @property
+    def kind(self):
+        return self.args[1]
+
+
+class InputError(_RustError):
+    def __init__(self, message, kind, parameter, position, /):
+        super().__init__(message, kind, parameter, position)
+
+    @property
+    def parameter(self):
+        return self.args[2]
+
+    @property
+    def position(self):
+        return self.args[3]
+
+
+class BuildError(_RustError):
+    def __init__(self, message, kind, vertex, /):
+        super().__init__(message, kind, vertex)
+
+    @property
+    def vertex(self):
+        return self.args[2]
 
 
 class ApproxInverse(LinearOperator):

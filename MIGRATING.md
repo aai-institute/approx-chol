@@ -218,7 +218,8 @@ let factor: ApproxInverse = postcard::from_bytes(&bytes)?;
 - `ApproxInverse.solve(b)` is `apply(b)`; `solve_into(b, out, workspace)` is `apply(b, out=out)`, whose `out` has `b`'s shape and `float64` dtype, aligned, any order, no longer only contiguous with at least `n` entries; `workspace()` and `Workspace`: none, each apply allocates its own scratch. An `n × k` `b` solves as a block of columns, each bit for bit as alone.
 - A complex or other non-real `b` raises `TypeError`, not `ValueError`; a bool `split` or `threads` raises `TypeError`.
 - `ApproxInverse.threads` reads the budget every apply runs at, and `with_threads(threads)` gives one at another, sharing the factor; a loaded or copied one holds `None`.
-- The Python API changes of [#430]–[#432] are listed here when they land.
+- An input or build error is an `approx_chol.InputError` or `approx_chol.BuildError`, both `ValueError`s: match `e.kind` and its fields (`parameter` and `position`, or `vertex`) where 0.7 matched the message, `except approx_chol.BuildError as e: e.kind, e.vertex` ([#430]).
+- The Python API changes of [#432] are listed here when it lands.
 
 ```python
 # 0.7

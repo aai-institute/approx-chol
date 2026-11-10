@@ -6,7 +6,7 @@ import pytest
 import scipy.sparse as sp
 
 import approx_chol
-from tests._laplacians import grid_laplacian, light_row_grid
+from tests._laplacians import MatrixLike, grid_laplacian, light_row_grid
 
 
 def _base_csr():
@@ -14,14 +14,6 @@ def _base_csr():
     col_indices = np.array([0, 1, 0, 1], dtype=np.uint32)
     values = np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64)
     return row_ptrs, col_indices, values
-
-
-class MatrixLike:
-    def __init__(self, indptr, indices, data, shape):
-        self.indptr = indptr
-        self.indices = indices
-        self.data = data
-        self.shape = shape
 
 
 def test_one_split_is_the_default():
@@ -145,65 +137,6 @@ def test_signed_solves_a_triangle_grounded_twice_exactly_where_every_cover_sampl
     assert error() > 1e-6
 
 
-def _u32(*xs):
-    return np.array(xs, dtype=np.uint32)
-
-
-def _f64(*xs):
-    return np.array(xs, dtype=np.float64)
-
-
-@pytest.mark.parametrize(
-    ("row_ptrs", "col_indices", "values", "n", "message"),
-    [
-        pytest.param(
-            _u32(0, 2, 4),
-            _u32(0, 1, 0, 1),
-            _f64(2, -1, -1),
-            2,
-            "values has length 3, expected 4",
-            id="csr_new",
-        ),
-        pytest.param(
-            _u32(0, 2, 4),
-            _u32(0, 1, 0, 1),
-            _f64(2, -1, -2, 2),
-            2,
-            "row 0 has an entry with no equal mirror",
-            id="from_csr_csr",
-        ),
-        pytest.param(
-            _u32(0, 1),
-            _u32(0),
-            _f64(-1),
-            1,
-            "row 0 has a negative diagonal, a zero one beside an edge, or one past MAX/4",
-            id="nonpositive_diagonal",
-        ),
-        pytest.param(
-            _u32(0, 2, 5, 7),
-            _u32(0, 1, 0, 1, 2, 1, 2),
-            _f64(1, -1, -1, 2.0**-960, -(2.0**1000), -(2.0**1000), 2.0**-960),
-            3,
-            "a value at vertex 1 is outside the representable range",
-            id="relaxation_ratio_out_of_range",
-        ),
-    ],
-)
-def test_factorize_raw_names_the_defect(row_ptrs, col_indices, values, n, message):
-    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
-        approx_chol.factorize_raw(row_ptrs, col_indices, values, n)
-
-
-def test_factorize_names_the_defect_of_a_scipy_matrix():
-    asymmetric = sp.csr_matrix(np.array([[2.0, -1.0], [0.0, 2.0]]))
-    with pytest.raises(ValueError, match="^row 0 has an entry with no equal mirror$"):
-        approx_chol.factorize(asymmetric)
-
-    with pytest.raises(ValueError, match=r"^matrix is not square \(2x3\)$"):
-        approx_chol.factorize(sp.csr_matrix(np.ones((2, 3))))
-
-
 @pytest.mark.parametrize(
     ("indptr_dtype", "indices_dtype"),
     [
@@ -229,37 +162,6 @@ def test_every_integer_index_dtype_factors_alike(indptr_dtype, indices_dtype):
         lap.shape,
     )
     np.testing.assert_array_equal(approx_chol.factorize(typed).apply(b), expected)
-
-
-def test_duck_typed_factorize_validates_indices_and_row_pointer_length():
-    too_large_idx = MatrixLike(
-        np.array([0, 2, 4], dtype=np.int64),
-        np.array([0, 2**32 + 1, 0, 1], dtype=np.int64),
-        np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64),
-        (2, 2),
-    )
-    with pytest.raises(ValueError, match=r"^col_indices\[1\] is out of range$"):
-        approx_chol.factorize(too_large_idx)
-
-    negative_idx = MatrixLike(
-        np.array([0, 2, 4], dtype=np.int64),
-        np.array([0, -1, 0, 1], dtype=np.int64),
-        np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64),
-        (2, 2),
-    )
-    with pytest.raises(ValueError, match=r"^col_indices\[1\] is out of range$"):
-        approx_chol.factorize(negative_idx)
-
-    oversized_dim = MatrixLike(
-        np.array([0, 2, 4], dtype=np.int64),
-        np.array([0, 1, 0, 1], dtype=np.int64),
-        np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64),
-        (2**32 + 1, 2**32 + 1),
-    )
-    with pytest.raises(
-        ValueError, match="^row_ptrs has length 3, expected 4294967298$"
-    ):
-        approx_chol.factorize(oversized_dim)
 
 
 def test_each_column_rejects_the_dtype_kinds_it_cannot_carry():

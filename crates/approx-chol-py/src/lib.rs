@@ -1,6 +1,6 @@
 use approx_chol::input::{CsrRef, InputError};
 use approx_chol::{
-    ApproxInverse, Config, CoverSurplus, FrustratedRoute, Header, MatrixMut, Sampling,
+    ApproxInverse, BuildError, Config, CoverSurplus, FrustratedRoute, Header, MatrixMut, Sampling,
     ScalingOutcome, ScalingPolicy, Sgdd, Threads,
 };
 use num_traits::PrimInt;
@@ -20,6 +20,70 @@ use std::sync::Arc;
 #[inline]
 fn value_error(message: impl std::fmt::Display) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.to_string())
+}
+
+/// The Python classes `approx_chol` defines, as abi3 cannot subclass `ValueError` in Rust.
+mod raised {
+    pyo3::import_exception!(approx_chol, InputError);
+    pyo3::import_exception!(approx_chol, BuildError);
+}
+
+/// `error` as an `InputError`, its slice by the caller's name in `names`, in the message too; a variant added in Rust since is a plain `ValueError` until it has an arm.
+fn input_error(error: InputError, names: CsrNames) -> PyErr {
+    use InputError as E;
+    let error = match error {
+        E::LengthMismatch {
+            parameter,
+            expected,
+            found,
+        } => E::LengthMismatch {
+            parameter: names.of(parameter),
+            expected,
+            found,
+        },
+        E::IndexOutOfRange { parameter, entry } => E::IndexOutOfRange {
+            parameter: names.of(parameter),
+            entry,
+        },
+        E::OutOfRange { parameter, entry } => E::OutOfRange {
+            parameter: names.of(parameter),
+            entry,
+        },
+        E::Negative { parameter, entry } => E::Negative {
+            parameter: names.of(parameter),
+            entry,
+        },
+        other => other,
+    };
+    let (kind, parameter, position) = match error {
+        E::VertexCountOverflow { .. } => ("vertex_count_overflow", None, None),
+        E::LengthMismatch { parameter, .. } => ("length_mismatch", Some(parameter), None),
+        E::RowPtrs { row } => ("row_ptrs", None, Some(row)),
+        E::IndexOutOfRange { parameter, entry } => {
+            ("index_out_of_range", Some(parameter), Some(entry))
+        }
+        E::OutOfRange { parameter, entry } => ("out_of_range", Some(parameter), Some(entry)),
+        E::Negative { parameter, entry } => ("negative", Some(parameter), Some(entry)),
+        E::SelfLoop { edge } => ("self_loop", None, Some(edge)),
+        E::RepeatedRow { column } => ("repeated_row", None, Some(column)),
+        E::NotSymmetric { row } => ("not_symmetric", None, Some(row)),
+        E::OutsideTriangle { row } => ("outside_triangle", None, Some(row)),
+        E::Diagonal { row } => ("diagonal", None, Some(row)),
+        E::NotSquare { .. } => ("not_square", None, None),
+        E::RowGap { row } => ("row_gap", None, Some(row)),
+        _ => return value_error(error),
+    };
+    PyErr::new::<raised::InputError, _>((error.to_string(), kind, parameter, position))
+}
+
+/// `error` as a `BuildError`; a variant added in Rust since is a plain `ValueError` until it has an arm.
+fn build_error(error: BuildError) -> PyErr {
+    let (kind, vertex) = match error {
+        BuildError::TooLarge { vertex } => ("too_large", vertex),
+        BuildError::OutOfRange { vertex } => ("out_of_range", vertex),
+        _ => return value_error(error),
+    };
+    PyErr::new::<raised::BuildError, _>((error.to_string(), kind, vertex))
 }
 
 /// A matrix's stored entries, which size every call on it and its factor.
@@ -550,6 +614,7 @@ fn factorize_raw<'py>(
     let (np, names) = (py.import("numpy")?, CsrNames::RAW);
     CsrArrays {
         n,
+        names,
         indptr: as_1d(&np, row_ptrs, names.indptr, Column::Index)?,
         indices: as_1d(&np, col_indices, names.indices, Column::Index)?,
         data: as_contiguous(&np, &as_1d(&np, values, names.data, Column::Value)?)?,
@@ -567,16 +632,16 @@ fn factorize(
     scaling: Option<&PyScalingPolicy>,
     threads: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PyApproxInverse> {
-    let threads = self::threads(threads)?;
+    let (threads, names) = (self::threads(threads)?, CsrNames::SCIPY);
     let (n, columns) = matrix.getattr("shape")?.extract::<(usize, usize)>()?;
     if n != columns {
         let error = InputError::NotSquare {
             rows: n,
             cols: columns,
         };
-        return Err(value_error(error));
+        return Err(input_error(error, names));
     }
-    let (np, names) = (py.import("numpy")?, CsrNames::SCIPY);
+    let np = py.import("numpy")?;
     let array = |name, column| as_1d(&np, &matrix.getattr(name)?, name, column);
     let data = array(names.data, Column::Value)?;
     CsrArrays {
@@ -584,6 +649,7 @@ fn factorize(
         indices: array(names.indices, Column::Index)?,
         data: as_contiguous(&np, &data)?,
         n,
+        names,
         np,
     }
     .factorize(config, scaling, threads)
@@ -609,12 +675,23 @@ impl CsrNames {
         indices: "indices",
         data: "data",
     };
+
+    /// The caller's name of the slice `CsrRef::new` names `parameter`.
+    fn of(self, parameter: &'static str) -> &'static str {
+        match parameter {
+            p if p == Self::RAW.indptr => self.indptr,
+            p if p == Self::RAW.indices => self.indices,
+            p if p == Self::RAW.data => self.data,
+            other => other,
+        }
+    }
 }
 
 /// A CSR's checked arrays: values already `f64`, indices still in the caller's dtype.
 struct CsrArrays<'py> {
     np: Bound<'py, PyModule>,
     n: usize,
+    names: CsrNames,
     indptr: Bound<'py, PyAny>,
     indices: Bound<'py, PyAny>,
     data: Bound<'py, PyArray1<f64>>,
@@ -651,16 +728,17 @@ impl CsrArrays<'_> {
     ) -> PyResult<PyApproxInverse> {
         let indptr = as_contiguous::<J>(&self.np, &self.indptr)?;
         let indices = as_contiguous::<J>(&self.np, &self.indices)?;
-        let indptr = owned(&indptr, "indptr")?;
-        let indices = owned(&indices, "indices")?;
-        let data = owned(&self.data, "data")?;
+        let indptr = owned(&indptr, self.names.indptr)?;
+        let indices = owned(&indices, self.names.indices)?;
+        let data = owned(&self.data, self.names.data)?;
         let config = config.map_or_else(Config::default, |config| config.0);
         let scaling = scaling.map_or_else(ScalingPolicy::default, |scaling| scaling.0);
-        let (py, n, entries) = (self.np.py(), self.n, StoredEntries(data.len()));
+        let (py, n, names) = (self.np.py(), self.n, self.names);
+        let entries = StoredEntries(data.len());
         let inner = entries.detach(py, || {
             let sgdd = CsrRef::new(n, &indptr, &indices, &data)
-                .map_err(value_error)
-                .and_then(|csr| Sgdd::reduce(csr, scaling, threads).map_err(value_error));
+                .map_err(|error| input_error(error, names))
+                .and_then(|csr| Sgdd::reduce(csr, scaling, threads).map_err(build_error));
             // Freed before factoring: the copy never coexists with the factor's fill.
             drop((indptr, indices, data));
             sgdd.map(|sgdd| sgdd.factor(config, threads))
