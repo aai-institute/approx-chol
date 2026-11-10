@@ -6,27 +6,32 @@ The contract is `../contracts/build.md`.
 
 ```rust
 // One call, all cores.
-pub fn factorize<'a, T: Real, I: PrimInt>(input: impl Into<Input<'a, T, I>>)
+pub fn factorize<'a, T: Real, I: PrimInt + Sync>(input: impl Into<Input<'a, T, I>>)
     -> Result<ApproxInverse<T>, BuildError>;
-pub fn factorize_with<'a, T: Real, I: PrimInt>(input: impl Into<Input<'a, T, I>>, config: Config,
+pub fn factorize_with<'a, T: Real, I: PrimInt + Sync>(input: impl Into<Input<'a, T, I>>, config: Config,
     scaling: ScalingPolicy) -> Result<ApproxInverse<T>, BuildError>;
-pub fn factorize_complement<'a, T: Real, I: PrimInt>(input: BipartiteFactorWidth2<'a, T, I>,
+pub fn factorize_complement<'a, T: Real, I: PrimInt + Sync>(input: BipartiteFactorWidth2<'a, T, I>,
     kept: Side, config: Config, scaling: ScalingPolicy) -> Result<ApproxInverse<T>, BuildError>;
 
 // Two stages, the budget named.
+#[derive(Clone, Debug)]
+pub struct Sgdd<T = f64> { /* private */ }
+#[derive(Clone, Debug)]
+pub struct Complement<T = f64> { /* private */ }
 impl<T: Real> Sgdd<T> {
-    pub fn reduce<'a, I: PrimInt>(input: impl Into<Input<'a, T, I>>, scaling: ScalingPolicy,
+    pub fn reduce<'a, I: PrimInt + Sync>(input: impl Into<Input<'a, T, I>>, scaling: ScalingPolicy,
         threads: Threads) -> Result<Sgdd<T>, BuildError>;
     pub fn clamps(&self) -> impl Iterator<Item = Clamped<'_>>;
     pub fn factor(self, config: Config, threads: Threads) -> ApproxInverse<T>;
 }
 impl<T: Real> Complement<T> {
-    pub fn reduce_onto<'a, I: PrimInt>(input: BipartiteFactorWidth2<'a, T, I>, kept: Side,
+    pub fn reduce_onto<'a, I: PrimInt + Sync>(input: BipartiteFactorWidth2<'a, T, I>, kept: Side,
         scaling: ScalingPolicy, threads: Threads) -> Result<Complement<T>, BuildError>;
     pub fn clamps(&self) -> impl Iterator<Item = Clamped<'_>>;
     pub fn factor(self, config: Config, threads: Threads) -> ApproxInverse<T>;
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct Clamped<'s> { /* private */ }
 impl<'s> Clamped<'s> {
     pub fn vertices(&self) -> impl ExactSizeIterator<Item = usize> + 's;
