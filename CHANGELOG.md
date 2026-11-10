@@ -21,6 +21,7 @@ Upgrading from 0.7: [MIGRATING.md](MIGRATING.md) maps each removed or renamed it
 - The `faer` feature enables faer's `rayon`, so `Par::Rayon` reaches `Threads` and faer's operators without the caller enabling it ([#426]).
 - With `faer`, `Threads: From<faer::Par>`: `Par::Seq` is `Count(1)`, `Par::Rayon(n)` is `Count(n)`, so faer's parallelism serves as a budget.
 - `ApproxInverse::apply` and `apply_with` solve a block of right-hand sides, each column bit for bit as it solves alone, at a `Threads` budget: `apply` allocates what the block's layout takes, `apply_with` takes it from a `MemStack`, which `scratch(columns, threads)` bounds for every layout. A block is a `MatrixMut`: a slice or `Vec` of `T` is one column, one of `[T; K]` holds `K` interleaved columns, both solved in place; `ColumnMajor::new(data, rows)` reads `data` column-major, `rows` to a column, and `Columns::new(columns)` takes one `&mut [T]`, `Vec<T>` or other `AsMut<[T]>` per column, all of the first's rows; a malformed layout is a `LayoutError` where it is formed. These and any other `MatrixMut` are solved in interleaved packs of their columns copied into the scratch, so they take one pack's scratch whatever their columns. A block without columns is left as it is, whatever its rows.
+- In Python, an `ApproxInverse` pickles, and so deep-copies, as its saved form `(Header, B)` encoded with postcard and nothing else, no object state, and unpickles to a factor that solves bit for bit as the original. A format version or scalar type other than this build's raises `ValueError` naming each that differs, found and expected; any other form that fails to decode or validate, or has trailing bytes, raises `ValueError` as invalid ([#431]).
 
 ### Changed (breaking)
 
@@ -344,4 +345,5 @@ for graph Laplacians in Rust with Python bindings.
 [#426]: https://github.com/aai-institute/approx-chol/issues/426
 [#427]: https://github.com/aai-institute/approx-chol/issues/427
 [#428]: https://github.com/aai-institute/approx-chol/issues/428
+[#431]: https://github.com/aai-institute/approx-chol/issues/431
 [#433]: https://github.com/aai-institute/approx-chol/issues/433

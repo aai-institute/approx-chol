@@ -96,6 +96,16 @@ class ApproxInverse:
     """
 
     def __new__(cls, never: Never, /) -> Never: ...
+    def __reduce__(self) -> tuple[object, ...]:
+        """Pickles as the factor's saved form alone, its header first, encoded with postcard.
+
+        Raises:
+            ValueError: On unpickling, if the header's format version or scalar
+                type is not this build's, naming each that differs, found and
+                expected, or if the saved form is otherwise invalid.
+        """
+        ...
+
     @property
     def n(self) -> int:
         """Matrix dimension, which sizes :meth:`solve_into`'s buffers."""
