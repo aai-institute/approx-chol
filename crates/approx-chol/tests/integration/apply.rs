@@ -78,7 +78,7 @@ fn applied<T: Real, const K: usize>(
     let fresh = Layouts::<T, K>::new(array::from_fn(local));
     let scratch = factor.scratch(K, threads).size_bytes() / size_of::<T>();
     let mut solved = Vec::new();
-    for layout in Layout::ALL {
+    for &layout in Layout::ALL {
         let least = fresh.least(factor, layout);
         for (stack, slots) in [("scratch", scratch + 1), ("its least", least)] {
             let mut block = fresh.clone();
@@ -252,7 +252,13 @@ fn a_copied_block_takes_one_packs_stack_whatever_its_width() {
         })
         .collect();
     let scratch = factor.scratch(45, threads::ONE).size_bytes() / size_of::<f64>();
-    let copied = [Layout::Apart, Layout::ColumnMajor, Layout::Columns];
+    let copied = [
+        Layout::Apart,
+        Layout::ColumnMajor,
+        Layout::Columns,
+        #[cfg(feature = "nalgebra")]
+        Layout::Nalgebra,
+    ];
     for layout in copied {
         let least = wide.least(&factor, layout);
         assert!(least <= narrow.least(&factor, layout), "{layout:?}");
@@ -385,7 +391,7 @@ fn spread_bits(
 ) -> Vec<(Layout, Vec<Vec<u64>>)> {
     let fresh = Layouts::<f64, 9>::new(array::from_fn(|j| rhs(factor.n(), j)));
     let mut cells = nan_cells::<f64>(factor.scratch(9, regions));
-    let solved = Layout::ALL.map(|layout| {
+    let solve = |&layout: &Layout| {
         let mut block = fresh.clone();
         block
             .on(layout, |b| {
@@ -396,8 +402,8 @@ fn spread_bits(
             layout,
             block.columns(layout).iter().map(|c| bits(c)).collect(),
         )
-    });
-    solved.to_vec()
+    };
+    Layout::ALL.iter().map(solve).collect()
 }
 
 /// Every layout at every budget, on a stack of one region or of more, solves each column to the bits of the interleaved block on one thread.
