@@ -38,16 +38,18 @@ impl Header {
 
 /// The scalar type of a [`Real`].
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scalar {
     /// `f32`.
+    #[cfg_attr(feature = "serde", serde(rename = "f32"))]
     F32,
     /// `f64`.
+    #[cfg_attr(feature = "serde", serde(rename = "f64"))]
     F64,
 }
 
 impl Scalar {
+    /// As serde spells it.
     fn name(self) -> &'static str {
         match self {
             Scalar::F32 => "f32",
@@ -62,32 +64,44 @@ impl Scalar {
 pub struct HeaderMismatch {
     /// The header read.
     pub found: Header,
-    /// [`Header::of`] the requested scalar type.
+    /// The header this build reads, [`Header::of`] the requested scalar type.
     pub expected: Header,
 }
 
 impl fmt::Display for HeaderMismatch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (found, expected) = (self.found, self.expected);
-        let version = found.version != expected.version;
-        if version {
+        let versions_differ = found.version != expected.version;
+        if versions_differ {
             write!(
                 f,
                 "format version {:#010x}, expected format version {:#010x}",
                 found.version, expected.version
             )?;
         }
-        if found.scalar != expected.scalar {
-            write!(
+        match found.scalar == expected.scalar {
+            true => Ok(()),
+            false => write!(
                 f,
                 "{}scalar {}, expected scalar {}",
-                if version { "; " } else { "" },
+                if versions_differ { "; " } else { "" },
                 found.scalar.name(),
                 expected.scalar.name()
-            )?;
+            ),
         }
-        Ok(())
     }
 }
 
 impl std::error::Error for HeaderMismatch {}
+
+#[cfg(all(test, feature = "serde"))]
+mod tests {
+    use super::Scalar;
+
+    #[test]
+    fn serde_spells_each_scalar_by_its_name() {
+        for scalar in [Scalar::F32, Scalar::F64] {
+            assert_eq!(serde_json::to_value(scalar).unwrap(), scalar.name());
+        }
+    }
+}

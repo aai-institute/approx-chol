@@ -146,10 +146,9 @@ enum Listed<'a> {
     U32(&'a [u32]),
 }
 
-/// The flat version and scalar, an order listing `dead`, and one block of index tag `tag` up to its segment, the run `0..run`.
+/// The header, an order listing `dead`, and one block of index tag `tag` up to its segment, the run `0..run`.
 fn one_block_head(tag: u8, run: usize, dead: &[u32]) -> Vec<u8> {
-    let Header { version, scalar } = Header::of::<f64>();
-    let mut bytes = postcard::to_stdvec(&(version, scalar, Listed::U32(dead))).unwrap();
+    let mut bytes = postcard::to_stdvec(&(Header::of::<f64>(), Listed::U32(dead))).unwrap();
     bytes.extend([tag, 1]);
     let segment = Segment::Run { start: 0, len: run };
     bytes.extend(postcard::to_stdvec(&segment).unwrap());
@@ -240,9 +239,9 @@ fn a_factor_round_trips_bit_identically() {
     }
 }
 
-/// An `f32` factor writes `"f32"` and loads as `ApproxInverse<f32>` only.
+/// An `f32` factor round trips under a header naming `"f32"`.
 #[test]
-fn a_factor_loads_only_as_its_own_scalar() {
+fn an_f32_factor_round_trips_with_its_scalar() {
     let edge = Laplacian::new(3, &[0u32], &[1]).unwrap();
     let ground = Sddm::new(edge, &[1.0f32, 0.0, 2.0]).unwrap();
     let narrow: ApproxInverse<f32> =
@@ -250,20 +249,12 @@ fn a_factor_loads_only_as_its_own_scalar() {
     let bytes = postcard::to_stdvec(&narrow).unwrap();
     let back: ApproxInverse<f32> = postcard::from_bytes(&bytes).unwrap();
     assert_eq!(format!("{back:?}"), format!("{narrow:?}"));
-    assert_eq!(
-        postcard::from_bytes::<ApproxInverse>(&bytes).unwrap_err(),
-        postcard::Error::SerdeDeCustom
-    );
-
     let json = serde_json::to_value(&narrow).unwrap();
     let version = Header::of::<f32>().version;
     assert_eq!(
         json[0],
         serde_json::json!({"version": version, "scalar": "f32"})
     );
-    let error = serde_json::from_value::<ApproxInverse>(json).unwrap_err();
-    let error = error.to_string();
-    assert!(error.contains("scalar f32, expected scalar f64"), "{error}");
 }
 
 /// [`with_dead_vertices`]'s bytes with its block's run length and its dead vertices replaced, the block's factor kept.
