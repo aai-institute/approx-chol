@@ -622,10 +622,10 @@ fn factorize(
     }
     let np = py.import("numpy")?;
     let array = |name, column| as_1d(&np, &matrix.getattr(name)?, name, column);
-    let data = array("data", Column::Value)?;
+    let data = array(DATA, Column::Value)?;
     let arrays = CsrArrays {
-        indptr: array("indptr", Column::Index)?,
-        indices: array("indices", Column::Index)?,
+        indptr: array(INDPTR, Column::Index)?,
+        indices: array(INDICES, Column::Index)?,
         data: as_contiguous(&np, &data)?,
         n,
         np,
@@ -640,25 +640,31 @@ fn csr<'py>(py: Python<'py>, matrix: &Bound<'py, PyAny>) -> PyResult<Bound<'py, 
     if sparse.call_method1("issparse", (matrix,))?.is_truthy()? {
         return matrix.call_method0("tocsr");
     }
-    for name in ["indptr", "indices", "data", "shape"] {
+    for name in [INDPTR, INDICES, DATA, "shape"] {
         if !matrix.hasattr(name)? {
             let found = matrix.get_type().name()?;
             return Err(PyTypeError::new_err(format!(
-                "matrix must be a scipy sparse matrix or have indptr, indices, data and shape, not {found}"
+                "matrix must be a scipy sparse matrix or have {INDPTR}, {INDICES}, {DATA} and shape, not {found}"
             )));
         }
     }
     Ok(matrix.clone())
 }
 
+/// A CSR's arrays by `CsrRef::new`'s name and by scipy's, which a matrix's attributes and every error carry.
+const CSR_NAMES: [(&str, &str); 3] = [
+    ("row_ptrs", "indptr"),
+    ("col_indices", "indices"),
+    ("values", "data"),
+];
+const INDPTR: &str = CSR_NAMES[0].1;
+const INDICES: &str = CSR_NAMES[1].1;
+const DATA: &str = CSR_NAMES[2].1;
+
 /// scipy's name of the slice `CsrRef::new` names `parameter`.
 fn scipy_name(parameter: &'static str) -> &'static str {
-    match parameter {
-        "row_ptrs" => "indptr",
-        "col_indices" => "indices",
-        "values" => "data",
-        other => other,
-    }
+    let named = CSR_NAMES.iter().find(|(rust, _)| *rust == parameter);
+    named.map_or(parameter, |&(_, scipy)| scipy)
 }
 
 /// A CSR's checked arrays: values already `f64`, indices still in the caller's dtype.
@@ -700,9 +706,9 @@ impl CsrArrays<'_> {
         threads: Threads,
     ) -> PyResult<PyApproxInverse> {
         let (py, n) = (self.np.py(), self.n);
-        let indptr = owned(&as_contiguous::<J>(&self.np, &self.indptr)?, "indptr")?;
-        let indices = owned(&as_contiguous::<J>(&self.np, &self.indices)?, "indices")?;
-        let data = owned(&self.data, "data")?;
+        let indptr = owned(&as_contiguous::<J>(&self.np, &self.indptr)?, INDPTR)?;
+        let indices = owned(&as_contiguous::<J>(&self.np, &self.indices)?, INDICES)?;
+        let data = owned(&self.data, DATA)?;
         drop(self);
         let config = config.map_or_else(Config::default, |config| config.0);
         let scaling = scaling.map_or_else(ScalingPolicy::default, |scaling| scaling.0);
