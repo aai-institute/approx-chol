@@ -34,6 +34,42 @@ impl Layout {
     ];
 }
 
+/// A block in some layout, applied as its own type: a `&mut` to it is sized where the block may not be, so a `dyn Block` holds any.
+pub trait Block<T: Real> {
+    fn apply(&mut self, factor: &ApproxInverse<T>, threads: Threads) -> Result<(), ApplyError>;
+    fn apply_with(
+        &mut self,
+        factor: &ApproxInverse<T>,
+        threads: Threads,
+        stack: &mut MemStack,
+    ) -> Result<(), ApplyError>;
+    fn columns(&self) -> usize;
+    fn read_column(&self, column: usize, into: &mut [T]);
+}
+
+impl<T: Real, M: MatrixMut<T> + ?Sized> Block<T> for &mut M {
+    fn apply(&mut self, factor: &ApproxInverse<T>, threads: Threads) -> Result<(), ApplyError> {
+        factor.apply(*self, threads)
+    }
+
+    fn apply_with(
+        &mut self,
+        factor: &ApproxInverse<T>,
+        threads: Threads,
+        stack: &mut MemStack,
+    ) -> Result<(), ApplyError> {
+        factor.apply_with(*self, threads, stack)
+    }
+
+    fn columns(&self) -> usize {
+        MatrixMut::columns(*self)
+    }
+
+    fn read_column(&self, column: usize, into: &mut [T]) {
+        MatrixMut::read_column(*self, column, into);
+    }
+}
+
 /// The same `K` columns in every layout, each owning its data.
 #[derive(Clone)]
 pub struct Layouts<T, const K: usize> {
@@ -63,16 +99,16 @@ impl<T: Real, const K: usize> Layouts<T, K> {
     }
 
     /// `f` on the block in `layout`.
-    pub fn on<R>(&mut self, layout: Layout, f: impl FnOnce(&mut dyn MatrixMut<T>) -> R) -> R {
+    pub fn on<R>(&mut self, layout: Layout, f: impl FnOnce(&mut dyn Block<T>) -> R) -> R {
         match layout {
-            Layout::Interleaved => f(&mut self.interleaved),
-            Layout::Apart => f(&mut self.apart),
+            Layout::Interleaved => f(&mut &mut self.interleaved),
+            Layout::Apart => f(&mut &mut self.apart),
             Layout::ColumnMajor => {
-                f(&mut ColumnMajor::new(&mut self.major, self.rows).expect("whole columns"))
+                f(&mut &mut ColumnMajor::new(&mut self.major, self.rows).expect("whole columns"))
             }
-            Layout::Columns => f(&mut Columns::new(&mut self.slices).expect("equal columns")),
+            Layout::Columns => f(&mut &mut Columns::new(&mut self.slices).expect("equal columns")),
             #[cfg(feature = "nalgebra")]
-            Layout::Nalgebra => f(&mut self.nalgebra),
+            Layout::Nalgebra => f(&mut &mut self.nalgebra),
         }
     }
 
@@ -94,7 +130,7 @@ impl<T: Real, const K: usize> Layouts<T, K> {
         least_slots::<T>(factor.scratch(K, threads::ONE), |stack| {
             let mut fresh = self.clone();
             fresh.on(layout, |block| {
-                factor.apply_with(block, threads::ONE, stack)
+                block.apply_with(factor, threads::ONE, stack)
             })
         })
     }
@@ -119,15 +155,15 @@ pub fn assert_errors_leave_the_block<T: Real>(factor: &ApproxInverse<T>) {
                     let bytes = least * size_of::<T>();
                     let mut buffer = MemBuffer::new(StackReq::new::<T>(least));
                     let short = MemStack::new(&mut buffer[..bytes - 1]);
-                    let error = block.on(layout, |b| factor.apply_with(b, Threads::All, short));
+                    let error = block.on(layout, |b| b.apply_with(factor, Threads::All, short));
                     assert_eq!(error, Err(ApplyError::Scratch), "{layout:?}");
                 }
             } else {
                 let rows = Err(ApplyError::Rows { expected: n, found });
-                let error = block.on(layout, |b| factor.apply(b, Threads::All));
+                let error = block.on(layout, |b| b.apply(factor, Threads::All));
                 assert_eq!(error, rows, "{layout:?}");
                 let stack = MemStack::new_any(&mut cells);
-                let error = block.on(layout, |b| factor.apply_with(b, Threads::All, stack));
+                let error = block.on(layout, |b| b.apply_with(factor, Threads::All, stack));
                 assert_eq!(error, rows, "{layout:?}");
             }
             assert!(
