@@ -425,7 +425,7 @@ impl<T: Real, I: Index> Block<T, I> {
     }
 }
 
-/// `1/d` for a `d` that is `sgdd::diagonal_in_range`: normal, and at most `ε/MIN_POSITIVE`.
+/// `1/d` for a `d` that is `crate::diagonal_in_range`: normal, and at most `ε/MIN_POSITIVE`.
 #[cfg(feature = "serde")]
 fn inverse_pivot_in_range<T: Real>(inverse: T) -> bool {
     inverse >= T::min_positive_value() && inverse <= T::epsilon() / T::min_positive_value()

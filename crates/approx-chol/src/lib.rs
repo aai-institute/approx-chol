@@ -206,7 +206,14 @@ fn per_task(units: usize, work: u64, bits: u32) -> usize {
 
 /// Finite, and zero or at least `MIN_POSITIVE/EPSILON`, so no product turns subnormal (#163).
 fn in_range<T: Real>(x: T) -> bool {
-    x.is_finite() && (x == T::zero() || x.abs() >= T::min_positive_value() / T::epsilon())
+    let a = x.abs();
+    // `&`, not `&&`: branch-free, so whole-slice checks vectorize; `a < ∞` also rejects NaN.
+    (a < T::infinity()) & ((a == T::zero()) | (a >= T::min_positive_value() / T::epsilon()))
+}
+
+/// In range and at most `MAX/4`, so every row sum, pivot and surplus stays finite.
+fn diagonal_in_range<T: Real>(d: T) -> bool {
+    in_range(d) && d <= T::max_value() / (T::one() + T::one() + T::one() + T::one())
 }
 
 /// Every `f64` sum starts here: a `Float` always casts up.

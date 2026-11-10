@@ -22,7 +22,7 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
         Ok(Self { n, u, v, w: None })
     }
 
-    /// Edge `k` joins `u[k] ≠ v[k] < n` with weight `w[k]`, finite and `≥ 0`; repeated edges sum.
+    /// Edge `k` joins `u[k] ≠ v[k] < n` with weight `w[k]`, [in range](InputError::OutOfRange) and `≥ 0`; repeated edges sum.
     pub fn weighted(n: usize, u: &'a [I], v: &'a [I], w: &'a [T]) -> Result<Self, InputError> {
         length("w", u.len(), w.len())?;
         nonnegative("w", w)?;
@@ -58,7 +58,7 @@ pub struct Sddm<'a, T, I = u32> {
 }
 
 impl<'a, T: Real, I: PrimInt> Sddm<'a, T, I> {
-    /// `s[i]` finite and `≥ 0`, one per vertex, not all zero (that is a [`Laplacian`]).
+    /// `s[i]` [in range](InputError::OutOfRange) and `≥ 0`, one per vertex, not all zero (that is a [`Laplacian`]).
     pub fn new(laplacian: Laplacian<'a, T, I>, surplus: &'a [T]) -> Result<Self, InputError> {
         length("surplus", laplacian.n, surplus.len())?;
         nonnegative("surplus", surplus)?;

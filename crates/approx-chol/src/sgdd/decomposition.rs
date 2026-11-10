@@ -103,17 +103,12 @@ impl<A, I: Index> Partitioned<A, I> {
                 continue;
             }
             let v = order[range.start];
-            let vertex = v.index();
-            match a.lone(vertex) {
-                pivot if pivot == T::zero() => dead.push(v),
-                pivot if pivot > T::zero() && super::diagonal_in_range(pivot) => {
-                    lone.push(v);
-                    pivots.push(pivot);
-                }
-                pivot if pivot < T::zero() => {
-                    return Err(ReduceError::NonpositiveDiagonal { vertex })
-                }
-                _ => return Err(ReduceError::OutOfRange { vertex }),
+            let pivot = a.lone(v.index());
+            if pivot == T::zero() {
+                dead.push(v);
+            } else {
+                lone.push(v);
+                pivots.push(pivot);
             }
         }
         let numbering = 0..order.len();

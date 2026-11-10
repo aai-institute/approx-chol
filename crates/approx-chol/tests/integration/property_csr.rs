@@ -74,12 +74,9 @@ fn column_errors<I: PrimInt + Sync + std::fmt::Debug>(
     col_indices: &[I],
     values: &[f64],
 ) -> [Error; 2] {
-    let csr = CsrRef::new(n, row_ptrs, col_indices, values).expect("valid shape");
-    let upper = TriangleCsrRef::upper(n, row_ptrs, col_indices, values).expect("valid shape");
-    [
-        factorize(csr).expect_err("full storage must fail"),
-        factorize(upper).expect_err("upper storage must fail"),
-    ]
+    let csr = CsrRef::new(n, row_ptrs, col_indices, values).unwrap_err();
+    let upper = TriangleCsrRef::upper(n, row_ptrs, col_indices, values).unwrap_err();
+    [Error::Input(csr), Error::Input(upper)]
 }
 
 proptest! {

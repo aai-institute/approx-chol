@@ -28,7 +28,7 @@ fn upper(csr: &OwnedCsr) -> OwnedCsr {
     OwnedCsr::from_rows((0..csr.n()).map(|i| csr.row(i).filter(move |&(j, _)| j as usize >= i)))
 }
 
-/// Every row's entries in descending column order, which factorize rewrites.
+/// Every row's entries in descending column order, which construction and factorize each rewrite.
 fn reversed(csr: &OwnedCsr) -> OwnedCsr {
     OwnedCsr::from_rows((0..csr.n()).map(|i| {
         let mut entries: Vec<_> = csr.row(i).collect();

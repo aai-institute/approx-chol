@@ -2,7 +2,7 @@ use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, InputError, Laplacian, Sddm,
 };
 use approx_chol::{
-    factorize, factorize_with, ApproxInverse, Config, Error, ReduceError, ScalingPolicy,
+    factorize, factorize_with, ApproxInverse, Config, Error, Real, ReduceError, ScalingPolicy,
 };
 use rstest::rstest;
 
@@ -49,7 +49,9 @@ fn a_weighted_laplacian_admits_a_zero_weight() {
 #[rstest]
 #[case::nan(f64::NAN)]
 #[case::infinite(f64::NEG_INFINITY)]
-fn a_scaled_bipartite_rejects_a_non_finite_scale_at_its_entry(#[case] scale: f64) {
+#[case::below_floor(FLOOR / 2.0)]
+#[case::negative_below_floor(-FLOOR / 2.0)]
+fn a_scaled_bipartite_rejects_an_out_of_range_scale_at_its_entry(#[case] scale: f64) {
     let error = scaled_bipartite_path(&[1.0, scale]).expect_err("invalid scale");
     assert_eq!(
         error,
@@ -68,9 +70,14 @@ fn a_scaled_bipartite_admits_a_negative_or_zero_scale() {
 #[test]
 fn a_weight_below_min_positive_over_epsilon_is_out_of_range_at_its_edge() {
     let w = [1.0, FLOOR / 2.0];
-    let graph = Laplacian::weighted(3, &PATH_A, &PATH_B, &w).unwrap();
-    let error = factorize(graph).expect_err("tiny weight");
-    assert_names_a_defect(error, &[out_of_range(1), out_of_range(2)]);
+    let error = Laplacian::weighted(3, &PATH_A, &PATH_B, &w).expect_err("tiny weight");
+    assert_eq!(
+        error,
+        InputError::OutOfRange {
+            parameter: "w",
+            entry: 1
+        }
+    );
 }
 
 /// Its cell `s·s` underflows to zero, which must not drop the column.
@@ -142,9 +149,7 @@ fn sddm_new_rejects_an_all_zero_surplus_as_a_laplacian(#[case] zero: f64) {
     assert_eq!(error, InputError::ZeroSurplus);
 }
 
-/// Below the floor, a ground past its band needs a coupling near the floor: `FLOOR/2` on `d = 1.5·FLOOR`.
 #[rstest]
-#[case::below_min_positive_over_epsilon([1.0, FLOOR], FLOOR / 2.0)]
 #[case::past_a_quarter_of_the_maximum([1.0, 1.0], f64::MAX / 2.0)]
 fn an_out_of_range_ground_is_rejected_at_its_vertex(
     #[case] weights: [f64; 2],
@@ -157,12 +162,20 @@ fn an_out_of_range_ground_is_rejected_at_its_vertex(
     assert_names_a_defect(error, &[out_of_range(2)]);
 }
 
-/// `FLOOR/2` on a unit row is within its band: rounding, so the path floats.
-#[test]
-fn a_ground_below_the_floor_within_its_band_is_rounding() {
-    let grounded = Sddm::new(unit_path(), &[0.0, 0.0, FLOOR / 2.0]).expect("a valid surplus");
-    let factor = factorize(grounded).expect("rounding, not a ground");
-    assert!(factor.components().all(|component| component.floats()));
+#[rstest]
+#[case::within_rounding([1.0, 1.0])]
+#[case::past_rounding([1.0, FLOOR])]
+fn a_stated_ground_below_the_floor_is_rejected_at_construction(#[case] weights: [f64; 2]) {
+    let graph = Laplacian::weighted(3, &PATH_A, &PATH_B, &weights).unwrap();
+    let surplus = [0.0, 0.0, FLOOR / 2.0];
+    let error = Sddm::new(graph, &surplus).expect_err("stated surplus below the floor");
+    assert_eq!(
+        error,
+        InputError::OutOfRange {
+            parameter: "surplus",
+            entry: 2
+        }
+    );
 }
 
 #[test]
@@ -221,16 +234,35 @@ fn factor_width_2_new_rejects_mismatched_lengths_and_bad_ends_at_their_entry(
     assert_eq!(observed, Some(expected));
 }
 
-/// The constructor checks only the shape: a loading outside the range is caught where it is summed.
 #[rstest]
 #[case::nan(f64::NAN)]
 #[case::infinite(f64::INFINITY)]
 #[case::below_min_positive_over_epsilon(FLOOR / 2.0)]
-#[case::past_a_quarter_of_the_maximum(f64::MAX)]
-fn an_out_of_range_loading_is_rejected_at_its_vertex(#[case] value: f64) {
+fn an_out_of_range_loading_is_rejected_at_construction(#[case] value: f64) {
     let (x, y) = ([1.0, value], [-1.0, -1.0]);
+    let error = FactorWidth2::new(3, (&PATH_A, &x), (&PATH_B, &y)).unwrap_err();
+    assert_eq!(
+        error,
+        InputError::OutOfRange {
+            parameter: "x",
+            entry: 1
+        }
+    );
+    let error = FactorWidth2::new(3, (&PATH_A, &y), (&PATH_B, &x)).unwrap_err();
+    assert_eq!(
+        error,
+        InputError::OutOfRange {
+            parameter: "y",
+            entry: 1
+        }
+    );
+}
+
+#[test]
+fn a_gram_diagonal_magnitude_is_checked_at_build() {
+    let (x, y) = ([1.0, f64::MAX], [-1.0, -1.0]);
     let gram = FactorWidth2::new(3, (&PATH_A, &x), (&PATH_B, &y)).unwrap();
-    let error = factorize(gram).expect_err("loading out of range");
+    let error = factorize(gram).expect_err("derived diagonal out of range");
     assert_names_a_defect(error, &[out_of_range(1), out_of_range(2)]);
 }
 
@@ -247,6 +279,25 @@ fn bipartite_gram_new_rejects_sides_of_unequal_column_count() {
             found: 2
         }
     );
+}
+
+#[test]
+fn bipartite_vertex_counts_must_fit_together() {
+    let side = |n| FactorWidth1::<f64>::new(n, &[]).unwrap();
+    let expected = InputError::VertexCountOverflow {
+        n_left: usize::MAX,
+        n_right: 1,
+    };
+    assert_eq!(
+        BipartiteFactorWidth2::new(side(usize::MAX), side(1)).unwrap_err(),
+        expected
+    );
+    assert_eq!(
+        BipartiteFactorWidth2::scaled(side(usize::MAX), side(1), &[]).unwrap_err(),
+        expected
+    );
+    BipartiteFactorWidth2::new(side(usize::MAX - 1), side(1)).unwrap();
+    BipartiteFactorWidth2::scaled(side(usize::MAX - 1), side(1), &[]).unwrap();
 }
 
 #[test]
@@ -275,14 +326,27 @@ fn weights_or_scales_of_another_column_count_are_rejected() {
 
 #[rstest]
 #[case::nan(f64::NAN)]
+#[case::infinite(f64::INFINITY)]
 #[case::below_min_positive_over_epsilon(FLOOR / 2.0)]
-#[case::past_a_quarter_of_the_maximum(f64::MAX)]
-fn an_out_of_range_bipartite_loading_is_rejected_at_its_vertex(#[case] value: f64) {
+fn an_out_of_range_bipartite_loading_is_rejected_at_construction(#[case] value: f64) {
     let values = [1.0, value];
-    let left = FactorWidth1::valued(2, &[0u32, 1], &values[..]).unwrap();
+    let error = FactorWidth1::valued(2, &[0u32, 1], &values).unwrap_err();
+    assert_eq!(
+        error,
+        InputError::OutOfRange {
+            parameter: "values",
+            entry: 1
+        }
+    );
+}
+
+#[test]
+fn a_bipartite_gram_diagonal_magnitude_is_checked_at_build() {
+    let values = [1.0, f64::MAX];
+    let left = FactorWidth1::valued(2, &[0u32, 1], &values).unwrap();
     let right = FactorWidth1::<f64>::new(1, &[0u32, 0]).unwrap();
     let gram = BipartiteFactorWidth2::new(left, right).unwrap();
-    let error = factorize(gram).expect_err("loading out of range");
+    let error = factorize(gram).expect_err("derived diagonal out of range");
     assert_names_a_defect(error, &[out_of_range(1), out_of_range(2)]);
 }
 
@@ -489,4 +553,77 @@ fn a_low_degree_ground_whose_total_passes_the_maximum_solves() {
         .collect();
     let relative = norm(&residual) / norm(&rhs);
     assert!(relative < 0.5, "{relative:e}");
+}
+
+#[test]
+fn stated_values_use_the_input_scalars_range_floor() {
+    check_stated_floor::<f32>();
+    check_stated_floor::<f64>();
+}
+
+fn check_stated_floor<T: Real>() {
+    let floor = T::min_positive_value() / T::epsilon();
+    let two = T::one() + T::one();
+    for value in [
+        T::zero(),
+        -T::zero(),
+        floor,
+        -floor,
+        floor / two,
+        -floor / two,
+    ] {
+        let values = [T::one(), value];
+        let expected = if value != T::zero() && value.abs() < floor {
+            Some(InputError::OutOfRange {
+                parameter: "values",
+                entry: 1,
+            })
+        } else {
+            None
+        };
+        assert_eq!(FactorWidth1::valued(2, &[0u32, 1], &values).err(), expected);
+        for (parameter, found) in [
+            (
+                "x",
+                FactorWidth2::new(3, (&PATH_A, &values), (&PATH_B, &[T::one(); 2])).err(),
+            ),
+            (
+                "y",
+                FactorWidth2::new(3, (&PATH_A, &[T::one(); 2]), (&PATH_B, &values)).err(),
+            ),
+            (
+                "s",
+                BipartiteFactorWidth2::scaled(
+                    FactorWidth1::new(2, &[0u32, 1]).unwrap(),
+                    FactorWidth1::new(1, &[0u32, 0]).unwrap(),
+                    &values,
+                )
+                .err(),
+            ),
+        ] {
+            assert_eq!(
+                found,
+                expected.map(|_| InputError::OutOfRange {
+                    parameter,
+                    entry: 1
+                })
+            );
+        }
+        if value >= T::zero() {
+            assert_eq!(
+                Laplacian::weighted(3, &PATH_A, &PATH_B, &values).err(),
+                expected.map(|_| InputError::OutOfRange {
+                    parameter: "w",
+                    entry: 1
+                })
+            );
+            assert_eq!(
+                Sddm::new(Laplacian::<T>::new(2, &[0], &[1]).unwrap(), &values).err(),
+                expected.map(|_| InputError::OutOfRange {
+                    parameter: "surplus",
+                    entry: 1
+                })
+            );
+        }
+    }
 }

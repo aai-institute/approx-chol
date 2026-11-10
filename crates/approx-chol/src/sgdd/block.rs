@@ -240,7 +240,7 @@ impl<'p, T: Real, I: Index> Congruent<'p, T, I> {
         grounding: Grounding<T>,
         vector: ScaleVector,
         clamped: f64,
-    ) -> Result<IrreducibleBlock<T, I>, ReduceError> {
+    ) -> IrreducibleBlock<T, I> {
         let Self {
             vertices,
             congruence,
@@ -254,19 +254,14 @@ impl<'p, T: Real, I: Index> Congruent<'p, T, I> {
             "a balanced M is a Z-matrix"
         );
         assert!(grounding.fits(n), "one surplus per row");
-        let surplus = grounding.surplus().unwrap_or_default();
-        if let Some(i) = surplus.iter().position(|&s| !crate::in_range(s)) {
-            let vertex = vertices[i].index();
-            return Err(ReduceError::OutOfRange { vertex });
-        }
-        Ok(IrreducibleBlock {
+        IrreducibleBlock {
             congruence: Box::new(congruence),
             off_diagonal,
             balance,
             grounding,
             grounding_unproven: vector.grounding_unproven(),
             clamp: vector.clamp(clamped).map(Box::new),
-        })
+        }
     }
 }
 
@@ -303,11 +298,6 @@ type BlockParts<T, I> = (
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReduceError {
-    /// A diagonal entry is not positive, so no positive scaling makes its row dominant.
-    NonpositiveDiagonal {
-        /// The entry's vertex, in `A`'s numbering.
-        vertex: usize,
-    },
     /// A scale or scaled entry left the representable range.
     Unscalable {
         /// The block's first vertex in local order, in `A`'s numbering.
@@ -328,9 +318,6 @@ pub enum ReduceError {
 impl core::fmt::Display for ReduceError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::NonpositiveDiagonal { vertex } => {
-                write!(f, "vertex {vertex} has a nonpositive diagonal")
-            }
             Self::Unscalable { vertex } => write!(
                 f,
                 "scaling the block of vertex {vertex} leaves the representable range"
