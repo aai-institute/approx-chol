@@ -13,7 +13,7 @@ use faer::{Col, ColRef, Mat, MatMut, MatRef, Par};
 use num_traits::PrimInt;
 use rstest::rstest;
 
-use super::{assert_solves_fixture, COL_INDICES, N, ROW_PTRS, VALUES};
+use super::path::{assert_solves_fixture, COL_INDICES, N, ROW_PTRS, VALUES};
 use crate::common::bits::bits;
 use crate::common::entry::cast_all;
 use crate::common::graph::Graph;
