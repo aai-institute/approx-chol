@@ -31,6 +31,7 @@ pub approx_chol::input::InputError::RepeatedRow::column: usize
 pub approx_chol::input::InputError::RowGap
 pub approx_chol::input::InputError::RowGap::row: usize
 pub approx_chol::input::InputError::RowPtrs
+pub approx_chol::input::InputError::RowPtrs::parameter: &'static str
 pub approx_chol::input::InputError::RowPtrs::row: usize
 pub approx_chol::input::InputError::SelfLoop
 pub approx_chol::input::InputError::SelfLoop::edge: usize

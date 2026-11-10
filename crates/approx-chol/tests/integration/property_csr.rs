@@ -113,7 +113,7 @@ proptest! {
         (mut row_ptrs, col_indices, values, n) in laplacian_csr_strategy()
     ) {
         row_ptrs[0] = 1;
-        let expected = InputError::RowPtrs { row: 0 };
+        let expected = InputError::RowPtrs { parameter: "row_ptrs", row: 0 };
         prop_assert_eq!(input_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
@@ -132,7 +132,7 @@ proptest! {
     ) {
         prop_assume!(n >= 2);
         row_ptrs[1] = row_ptrs[2] + 1;
-        let expected = InputError::RowPtrs { row: 1 };
+        let expected = InputError::RowPtrs { parameter: "row_ptrs", row: 1 };
         prop_assert_eq!(input_errors(n, &row_ptrs, &col_indices, &values), [expected; 2]);
     }
 
@@ -185,5 +185,11 @@ fn a_row_pointer_past_usize_is_out_of_range_at_its_position(
 #[test]
 fn a_decreasing_pair_of_valid_pointers_is_out_of_order_at_the_first() {
     let error = CsrRef::<f64>::new(3, &[0, 2, 1, 2], &[0, 1], &[1.0, 1.0]).err();
-    assert_eq!(error, Some(InputError::RowPtrs { row: 1 }));
+    assert_eq!(
+        error,
+        Some(InputError::RowPtrs {
+            parameter: "row_ptrs",
+            row: 1
+        })
+    );
 }
