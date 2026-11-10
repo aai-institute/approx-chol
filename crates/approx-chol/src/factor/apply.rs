@@ -194,7 +194,9 @@ where
     }
 }
 
-/// Every nalgebra matrix, owned or a view, of any shape and strides.
+/// Every nalgebra matrix, owned or a view, of any shape and strides, staged through scratch like any block reached by its columns.
+///
+/// A contiguous owned matrix skips the staging copy as `ColumnMajor::new(m.as_mut_slice(), m.nrows())`, a vector as `m.as_mut_slice()`. nalgebra's inherent `rows` and `columns` shadow this trait's: call `MatrixMut::rows(&m)`.
 #[cfg(feature = "nalgebra")]
 impl<T, R, C, S> MatrixMut<T> for nalgebra::Matrix<T, R, C, S>
 where
