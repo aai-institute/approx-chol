@@ -143,7 +143,7 @@ impl Entry {
             Entry::FactorWidth2 => !grounded,
             Entry::BipartiteFactorWidth2 => !grounded && bipartition(graph).is_some(),
             Entry::Laplacian => !signed && !grounded,
-            Entry::Sddm => !signed && grounded,
+            Entry::Sddm => !signed,
         }
     }
 

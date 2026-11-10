@@ -6,6 +6,7 @@ use approx_chol::{
 };
 use rstest::rstest;
 
+use crate::common::bits::bits;
 use crate::common::dense_residual::{apply, solve_residual};
 use crate::common::gram::{dense_csr, matrix};
 use crate::common::out_of_range::{out_of_range, FLOOR};
@@ -141,12 +142,29 @@ fn sddm_new_rejects_a_bad_surplus_at_its_vertex(
     assert_eq!(error, expected);
 }
 
+/// A `6 × 6` grid and a triangle, weights cycling `1..=5`, the grid past the exact arm, and an isolated vertex: `n = 40`.
+fn grid_triangle_and_lone() -> (Vec<u32>, Vec<u32>, Vec<f64>) {
+    let right = (0..36u32).filter(|v| v % 6 < 5).map(|v| (v, v + 1));
+    let down = (0..30u32).map(|v| (v, v + 6));
+    let triangle = [(36, 37), (37, 38), (36, 38)];
+    let (u, v): (Vec<u32>, Vec<u32>) = right.chain(down).chain(triangle).unzip();
+    let w = (0..u.len()).map(|k| 1.0 + (k % 5) as f64).collect();
+    (u, v, w)
+}
+
 #[rstest]
 #[case::zero(0.0)]
 #[case::negative_zero(-0.0)]
-fn sddm_new_rejects_an_all_zero_surplus_as_a_laplacian(#[case] zero: f64) {
-    let error = Sddm::new(unit_path(), &[0.0, zero, 0.0]).expect_err("a Laplacian");
-    assert_eq!(error, InputError::ZeroSurplus);
+fn an_all_zero_sddm_factors_bit_for_bit_as_its_laplacian(#[case] zero: f64) {
+    let (u, v, w) = grid_triangle_and_lone();
+    let laplacian = Laplacian::weighted(40, &u, &v, &w).unwrap();
+    let surplus = [0.0, zero].repeat(20);
+    let sddm = Sddm::new(laplacian, &surplus).expect("an all-zero surplus is admitted");
+    let (sddm, laplacian) = (factorize(sddm).unwrap(), factorize(laplacian).unwrap());
+    assert_eq!(format!("{sddm:?}"), format!("{laplacian:?}"));
+    let b: Vec<f64> = (0..40).map(|i| [1.0, -2.0, 0.5, 0.5][i % 4]).collect();
+    let bits = |factor: &ApproxInverse<f64>| bits(&factor.solve(&b).unwrap());
+    assert_eq!(bits(&sddm), bits(&laplacian));
 }
 
 #[rstest]

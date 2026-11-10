@@ -29,10 +29,6 @@ use rstest::rstest;
 )]
 #[case::self_loop(InputError::SelfLoop { edge: 8 }, "edge 8 joins a vertex to itself")]
 #[case::repeated_row(InputError::RepeatedRow { column: 9 }, "column 9 names one row twice")]
-#[case::zero_surplus(
-    InputError::ZeroSurplus,
-    "every surplus is zero, so the matrix is a Laplacian"
-)]
 #[case::not_symmetric(
     InputError::NotSymmetric { row: 10 },
     "row 10 has an entry with no equal mirror"

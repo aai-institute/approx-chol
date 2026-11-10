@@ -54,21 +54,20 @@ impl<'a, T: Real, I: PrimInt> Laplacian<'a, T, I> {
 #[derive(Clone, Copy, Debug)]
 pub struct Sddm<'a, T, I = u32> {
     laplacian: Laplacian<'a, T, I>,
-    surplus: &'a [T],
+    /// `None` when every `s_i` is zero: the matrix is its Laplacian.
+    surplus: Option<&'a [T]>,
 }
 
 impl<'a, T: Real, I: PrimInt> Sddm<'a, T, I> {
-    /// `s[i]` [in range](InputError::OutOfRange) and `≥ 0`, one per vertex, not all zero (that is a [`Laplacian`]).
+    /// `s[i]` [in range](InputError::OutOfRange) and `≥ 0`, one per vertex. Zeros are no ground: a coupled component whose `s_i` are all zero floats, as [`Component::floats`](crate::Component::floats) reports, and a lone vertex with `s_i = 0` solves to 0.
     pub fn new(laplacian: Laplacian<'a, T, I>, surplus: &'a [T]) -> Result<Self, InputError> {
         length("surplus", laplacian.n, surplus.len())?;
         nonnegative("surplus", surplus)?;
-        match surplus.iter().all(|&s| s == T::zero()) {
-            true => Err(InputError::ZeroSurplus),
-            false => Ok(Self { laplacian, surplus }),
-        }
+        let surplus = Some(surplus).filter(|s| s.iter().any(|&s| s != T::zero()));
+        Ok(Self { laplacian, surplus })
     }
 
     pub(crate) fn lower(self) -> FactorWidth2<'a, T, I> {
-        self.laplacian.plus(Some(self.surplus))
+        self.laplacian.plus(self.surplus)
     }
 }
