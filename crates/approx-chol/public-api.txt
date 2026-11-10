@@ -339,6 +339,24 @@ pub fn approx_chol::ApproxInverse<T>::n_steps(&self) -> usize
 pub fn approx_chol::ApproxInverse<T>::scratch(&self, usize, approx_chol::Threads) -> dyn_stack::stack_req::StackReq
 impl<'de, T: approx_chol::Real + serde_core::de::Deserialize<'de>> serde_core::de::Deserialize<'de> for approx_chol::ApproxInverse<T>
 pub fn approx_chol::ApproxInverse<T>::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+impl<T: approx_chol::Real + faer_traits::ComplexField> faer::matrix_free::BiLinOp<T> for approx_chol::ApproxInverse<T>
+pub fn approx_chol::ApproxInverse<T>::adjoint_apply(&self, faer::mat::MatMut<'_, T>, faer::mat::MatRef<'_, T>, faer::Par, &mut dyn_stack::MemStack)
+pub fn approx_chol::ApproxInverse<T>::transpose_apply(&self, faer::mat::MatMut<'_, T>, faer::mat::MatRef<'_, T>, faer::Par, &mut dyn_stack::MemStack)
+pub fn approx_chol::ApproxInverse<T>::transpose_apply_scratch(&self, usize, faer::Par) -> dyn_stack::stack_req::StackReq
+impl<T: approx_chol::Real + faer_traits::ComplexField> faer::matrix_free::BiPrecond<T> for approx_chol::ApproxInverse<T>
+pub fn approx_chol::ApproxInverse<T>::adjoint_apply_in_place(&self, faer::mat::MatMut<'_, T>, faer::Par, &mut dyn_stack::MemStack)
+pub fn approx_chol::ApproxInverse<T>::transpose_apply_in_place(&self, faer::mat::MatMut<'_, T>, faer::Par, &mut dyn_stack::MemStack)
+pub fn approx_chol::ApproxInverse<T>::transpose_apply_in_place_scratch(&self, usize, faer::Par) -> dyn_stack::stack_req::StackReq
+impl<T: approx_chol::Real + faer_traits::ComplexField> faer::matrix_free::LinOp<T> for approx_chol::ApproxInverse<T>
+pub fn approx_chol::ApproxInverse<T>::apply(&self, faer::mat::MatMut<'_, T>, faer::mat::MatRef<'_, T>, faer::Par, &mut dyn_stack::MemStack)
+pub fn approx_chol::ApproxInverse<T>::apply_scratch(&self, usize, faer::Par) -> dyn_stack::stack_req::StackReq
+pub fn approx_chol::ApproxInverse<T>::conj_apply(&self, faer::mat::MatMut<'_, T>, faer::mat::MatRef<'_, T>, faer::Par, &mut dyn_stack::MemStack)
+pub fn approx_chol::ApproxInverse<T>::ncols(&self) -> usize
+pub fn approx_chol::ApproxInverse<T>::nrows(&self) -> usize
+impl<T: approx_chol::Real + faer_traits::ComplexField> faer::matrix_free::Precond<T> for approx_chol::ApproxInverse<T>
+pub fn approx_chol::ApproxInverse<T>::apply_in_place(&self, faer::mat::MatMut<'_, T>, faer::Par, &mut dyn_stack::MemStack)
+pub fn approx_chol::ApproxInverse<T>::apply_in_place_scratch(&self, usize, faer::Par) -> dyn_stack::stack_req::StackReq
+pub fn approx_chol::ApproxInverse<T>::conj_apply_in_place(&self, faer::mat::MatMut<'_, T>, faer::Par, &mut dyn_stack::MemStack)
 impl<T: core::clone::Clone> core::clone::Clone for approx_chol::ApproxInverse<T>
 pub fn approx_chol::ApproxInverse<T>::clone(&self) -> Self
 impl<T: core::fmt::Debug> core::fmt::Debug for approx_chol::ApproxInverse<T>

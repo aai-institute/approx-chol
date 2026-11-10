@@ -1,16 +1,18 @@
-//! faer's sparse matrices as [`CsrRef`] views, its dense ones as blocks of right-hand sides, and its parallelism as a [`Threads`] budget.
+//! faer's sparse matrices as [`CsrRef`] views, its dense ones as blocks of right-hand sides, its parallelism as a [`Threads`] budget, and an [`ApproxInverse`] as faer's operator.
 
 use std::num::NonZeroUsize;
 
+use faer::matrix_free::{BiLinOp, BiPrecond, LinOp, Precond};
 use faer::reborrow::{Reborrow, ReborrowMut};
 use faer::sparse::{SparseColMatRef, SparseRowMatRef};
+use faer::traits::ComplexField;
 use faer::{Col, ColMut, ContiguousFwd, Mat, MatMut, MatRef, Par};
 use num_traits::PrimInt;
 
 use super::square;
 use crate::factor::{Kernel, Slices};
 use crate::input::{CsrRef, InputError};
-use crate::{ApplyError, MatrixMut, Real, Threads};
+use crate::{ApplyError, ApproxInverse, MatrixMut, MemStack, Real, StackReq, Threads};
 
 impl<'a, T: Real, I: faer::Index + PrimInt> TryFrom<SparseRowMatRef<'a, I, T>>
     for CsrRef<'a, T, I>
@@ -178,5 +180,129 @@ impl<T: Real> MatrixMut<T> for Col<T> {
 
     fn solve_by(&mut self, kernel: Kernel<'_, T>) -> Result<(), ApplyError> {
         self.as_mat_mut().solve_by(kernel)
+    }
+}
+
+/// faer's operators return nothing, so an error panics, as faer's own do.
+#[track_caller]
+fn or_panic(result: Result<(), ApplyError>) {
+    if let Err(error) = result {
+        panic!("{error}");
+    }
+}
+
+#[track_caller]
+fn apply_in_place<T: Real>(
+    inverse: &ApproxInverse<T>,
+    mut rhs: MatMut<'_, T>,
+    par: Par,
+    stack: &mut MemStack,
+) {
+    or_panic(inverse.apply_with(&mut rhs, par.into(), stack));
+}
+
+/// `rhs` copied into `out` and applied there; with columns, either of other rows than `n` panics as the apply errs, before the copy.
+#[track_caller]
+fn apply<T: Real + ComplexField>(
+    inverse: &ApproxInverse<T>,
+    mut out: MatMut<'_, T>,
+    rhs: MatRef<'_, T>,
+    par: Par,
+    stack: &mut MemStack,
+) {
+    let n = inverse.n();
+    if rhs.ncols() > 0 {
+        for found in [rhs.nrows(), out.nrows()] {
+            if found != n {
+                or_panic(Err(ApplyError::Rows { expected: n, found }));
+            }
+        }
+    }
+    out.copy_from(rhs);
+    apply_in_place(inverse, out, par, stack);
+}
+
+// B is real and symmetric: its conjugate, transpose and adjoint all apply as B does.
+impl<T: Real + ComplexField> LinOp<T> for ApproxInverse<T> {
+    fn apply_scratch(&self, rhs_ncols: usize, par: Par) -> StackReq {
+        self.scratch(rhs_ncols, par.into())
+    }
+
+    fn nrows(&self) -> usize {
+        self.n()
+    }
+
+    fn ncols(&self) -> usize {
+        self.n()
+    }
+
+    #[track_caller]
+    fn apply(&self, out: MatMut<'_, T>, rhs: MatRef<'_, T>, par: Par, stack: &mut MemStack) {
+        apply(self, out, rhs, par, stack);
+    }
+
+    #[track_caller]
+    fn conj_apply(&self, out: MatMut<'_, T>, rhs: MatRef<'_, T>, par: Par, stack: &mut MemStack) {
+        apply(self, out, rhs, par, stack);
+    }
+}
+
+impl<T: Real + ComplexField> BiLinOp<T> for ApproxInverse<T> {
+    fn transpose_apply_scratch(&self, rhs_ncols: usize, par: Par) -> StackReq {
+        self.apply_scratch(rhs_ncols, par)
+    }
+
+    #[track_caller]
+    fn transpose_apply(
+        &self,
+        out: MatMut<'_, T>,
+        rhs: MatRef<'_, T>,
+        par: Par,
+        stack: &mut MemStack,
+    ) {
+        apply(self, out, rhs, par, stack);
+    }
+
+    #[track_caller]
+    fn adjoint_apply(
+        &self,
+        out: MatMut<'_, T>,
+        rhs: MatRef<'_, T>,
+        par: Par,
+        stack: &mut MemStack,
+    ) {
+        apply(self, out, rhs, par, stack);
+    }
+}
+
+impl<T: Real + ComplexField> Precond<T> for ApproxInverse<T> {
+    fn apply_in_place_scratch(&self, rhs_ncols: usize, par: Par) -> StackReq {
+        self.apply_scratch(rhs_ncols, par)
+    }
+
+    #[track_caller]
+    fn apply_in_place(&self, rhs: MatMut<'_, T>, par: Par, stack: &mut MemStack) {
+        apply_in_place(self, rhs, par, stack);
+    }
+
+    #[track_caller]
+    fn conj_apply_in_place(&self, rhs: MatMut<'_, T>, par: Par, stack: &mut MemStack) {
+        apply_in_place(self, rhs, par, stack);
+    }
+}
+
+impl<T: Real + ComplexField> BiPrecond<T> for ApproxInverse<T> {
+    fn transpose_apply_in_place_scratch(&self, rhs_ncols: usize, par: Par) -> StackReq {
+        self.apply_scratch(rhs_ncols, par)
+    }
+
+    #[track_caller]
+    fn transpose_apply_in_place(&self, rhs: MatMut<'_, T>, par: Par, stack: &mut MemStack) {
+        apply_in_place(self, rhs, par, stack);
+    }
+
+    #[track_caller]
+    fn adjoint_apply_in_place(&self, rhs: MatMut<'_, T>, par: Par, stack: &mut MemStack) {
+        apply_in_place(self, rhs, par, stack);
     }
 }

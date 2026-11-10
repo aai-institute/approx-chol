@@ -1,9 +1,15 @@
 use std::num::NonZeroUsize;
 
 use approx_chol::input::{CsrRef, InputError};
-use approx_chol::{factorize, ApplyError, ApproxInverse, MemBuffer, MemStack, Threads};
-use faer::sparse::{SparseColMat, SparseRowMat, SymbolicSparseColMat, SymbolicSparseRowMat};
-use faer::{Col, Mat, MatRef, Par};
+use approx_chol::{factorize, ApplyError, ApproxInverse, MemBuffer, MemStack, StackReq, Threads};
+use faer::matrix_free::conjugate_gradient::{
+    conjugate_gradient, conjugate_gradient_scratch, CgParams,
+};
+use faer::matrix_free::{BiLinOp, BiPrecond, IdentityPrecond, LinOp, Precond};
+use faer::sparse::{
+    SparseColMat, SparseRowMat, SparseRowMatRef, SymbolicSparseColMat, SymbolicSparseRowMat,
+};
+use faer::{Col, ColRef, Mat, MatMut, MatRef, Par};
 use num_traits::PrimInt;
 use rstest::rstest;
 
@@ -12,7 +18,7 @@ use crate::common::bits::bits;
 use crate::common::entry::cast_all;
 use crate::common::graph::Graph;
 use crate::common::grid::grid;
-use crate::common::scratch::least_slots;
+use crate::common::scratch::{least_slots, nan_cells, nan_slots};
 
 fn path_laplacian<I: faer::Index + PrimInt>(row_nnz: Option<Vec<I>>) -> SparseRowMat<I, f64> {
     let symbolic = SymbolicSparseRowMat::new_checked(
@@ -322,4 +328,197 @@ fn faer_block_of_other_rows_returns_error() {
         })
     );
     assert!((0..2).all(|j| (0..=n).all(|i| mat[(i, j)] == (i + j) as f64)));
+}
+
+type Apply = fn(&ApproxInverse<f64>, MatMut<'_, f64>, MatRef<'_, f64>, Par, &mut MemStack);
+type InPlace = fn(&ApproxInverse<f64>, MatMut<'_, f64>, Par, &mut MemStack);
+type Scratch = fn(&ApproxInverse<f64>, usize, Par) -> StackReq;
+
+/// faer's out-of-place methods, each with its scratch query.
+const APPLIES: [(&str, Apply, Scratch); 4] = [
+    ("apply", LinOp::apply, LinOp::apply_scratch),
+    ("conj_apply", LinOp::conj_apply, LinOp::apply_scratch),
+    (
+        "transpose_apply",
+        BiLinOp::transpose_apply,
+        BiLinOp::transpose_apply_scratch,
+    ),
+    (
+        "adjoint_apply",
+        BiLinOp::adjoint_apply,
+        BiLinOp::transpose_apply_scratch,
+    ),
+];
+
+/// faer's in-place methods, each with its scratch query.
+const IN_PLACE: [(&str, InPlace, Scratch); 4] = [
+    (
+        "apply_in_place",
+        Precond::apply_in_place,
+        Precond::apply_in_place_scratch,
+    ),
+    (
+        "conj_apply_in_place",
+        Precond::conj_apply_in_place,
+        Precond::apply_in_place_scratch,
+    ),
+    (
+        "transpose_apply_in_place",
+        BiPrecond::transpose_apply_in_place,
+        BiPrecond::transpose_apply_in_place_scratch,
+    ),
+    (
+        "adjoint_apply_in_place",
+        BiPrecond::adjoint_apply_in_place,
+        BiPrecond::transpose_apply_in_place_scratch,
+    ),
+];
+
+/// Each of faer's operator methods, on a NaN-filled stack its own scratch query sizes, equals `apply`, bit for bit.
+#[test]
+fn faer_operator_methods_equal_apply() {
+    let (factor, column) = grid_inverse();
+    let n = factor.n();
+    for par in [Par::Seq, Par::rayon(3)] {
+        for k in [1, 5, 9] {
+            let columns: Vec<Vec<f64>> = (0..k).map(&column).collect();
+            let rhs = Mat::from_fn(n, k, |i, j| columns[j][i]);
+            let mut expected = rhs.clone();
+            factor.apply(&mut expected, par.into()).expect("n rows");
+            let expected = column_bits(expected.as_ref());
+            let own = factor.scratch(k, par.into());
+            for (name, _, scratch) in APPLIES.iter().copied() {
+                assert_eq!(scratch(&factor, k, par), own, "{name}'s scratch");
+            }
+            for (name, _, scratch) in IN_PLACE.iter().copied() {
+                assert_eq!(
+                    scratch(&factor, k, par),
+                    own,
+                    "{name}'s scratch, no temporary"
+                );
+            }
+            for (name, apply, scratch) in APPLIES {
+                let mut cells = nan_cells::<f64>(scratch(&factor, k, par));
+                let mut out = Mat::from_fn(n, k, |_, _| f64::NAN);
+                apply(
+                    &factor,
+                    out.as_mut(),
+                    rhs.as_ref(),
+                    par,
+                    MemStack::new_any(&mut cells),
+                );
+                assert_eq!(
+                    column_bits(out.as_ref()),
+                    expected,
+                    "{name}, {k} columns, {par:?}"
+                );
+            }
+            for (name, apply, scratch) in IN_PLACE {
+                let mut cells = nan_cells::<f64>(scratch(&factor, k, par));
+                let mut block = rhs.clone();
+                apply(&factor, block.as_mut(), par, MemStack::new_any(&mut cells));
+                assert_eq!(
+                    column_bits(block.as_ref()),
+                    expected,
+                    "{name}, {k} columns, {par:?}"
+                );
+            }
+        }
+    }
+}
+
+/// faer's operators return nothing, so a block of other rows panics with `ApplyError`'s message.
+#[test]
+#[should_panic(expected = "the block has 64 rows, expected 63")]
+fn faer_operator_on_other_rows_panics() {
+    let (factor, _) = grid_inverse();
+    let mut buffer = MemBuffer::new(factor.scratch(1, Threads::All));
+    let mut block = Mat::<f64>::zeros(factor.n() + 1, 1);
+    Precond::apply_in_place(
+        &factor,
+        block.as_mut(),
+        Par::Seq,
+        MemStack::new(&mut buffer),
+    );
+}
+
+/// `LinOp::apply` checks `out`'s rows before copying `rhs` into it, so a mismatch panics with `ApplyError`'s message.
+#[test]
+#[should_panic(expected = "the block has 64 rows, expected 63")]
+fn faer_apply_into_other_rows_panics() {
+    let (factor, column) = grid_inverse();
+    let mut cells = nan_cells::<f64>(factor.scratch(1, Threads::All));
+    let rhs = ColRef::from_slice(&column(0)).as_mat().to_owned();
+    let mut out = Mat::<f64>::zeros(factor.n() + 1, 1);
+    LinOp::apply(
+        &factor,
+        out.as_mut(),
+        rhs.as_ref(),
+        Par::Seq,
+        MemStack::new_any(&mut cells),
+    );
+}
+
+/// A stack too small for the block, here a pack of four columns, panics with `ApplyError`'s message.
+#[test]
+#[should_panic(expected = "the apply's scratch does not fit")]
+fn faer_operator_on_a_short_stack_panics() {
+    let (factor, column) = grid_inverse();
+    let mut block = Mat::from_fn(factor.n(), 4, |i, j| column(j)[i]);
+    Precond::apply_in_place(
+        &factor,
+        block.as_mut(),
+        Par::Seq,
+        MemStack::new_any(&mut nan_slots::<f64>(0)),
+    );
+}
+
+/// faer's CG on `a` preconditioned by `precond`, from zero, to `‖Ax − b‖ ≤ 1e-10 ‖b‖`: its solution and iterations.
+fn faer_cg(
+    precond: impl Precond<f64>,
+    a: SparseRowMatRef<'_, usize, f64>,
+    b: &[f64],
+) -> (Vec<f64>, usize) {
+    let par = Par::rayon(2);
+    let mut buffer = MemBuffer::new(conjugate_gradient_scratch(&precond, a, 1, par));
+    let mut x = Col::zeros(b.len());
+    let params = CgParams {
+        abs_tolerance: 0.0,
+        rel_tolerance: 1e-10,
+        max_iters: 1000,
+        ..Default::default()
+    };
+    let info = conjugate_gradient(
+        x.as_mat_mut(),
+        precond,
+        a,
+        ColRef::from_slice(b).as_mat(),
+        params,
+        |_| {},
+        par,
+        MemStack::new(&mut buffer),
+    )
+    .expect("converges");
+    (x.iter().copied().collect(), info.iter_count)
+}
+
+/// faer's CG preconditioned by an approximate inverse, passed by reference, converges on a grounded grid in a third of the unpreconditioned iterations.
+#[test]
+fn faer_cg_preconditioned_by_an_approx_inverse_converges() {
+    let graph = grounded_grid(30, 30);
+    let (row_ptrs, col_indices, values) = graph.csr(false);
+    let n = graph.n;
+    let a = SparseRowMat::new(
+        SymbolicSparseRowMat::new_checked(n, n, row_ptrs, None, col_indices),
+        values,
+    );
+    let factor = factorize(CsrRef::try_from(a.as_ref()).expect("valid")).expect("SDDM");
+    let b: Vec<f64> = (0..n).map(|i| ((i * 7) as f64).sin()).collect();
+    let (x, preconditioned) = faer_cg(&factor, a.as_ref(), &b);
+    assert!(graph.relative_residual(&x, &b) < 1e-9, "true residual");
+    let (_, plain) = faer_cg(IdentityPrecond { dim: n }, a.as_ref(), &b);
+    assert!(
+        preconditioned * 3 < plain,
+        "{preconditioned} iterations preconditioned, {plain} plain"
+    );
 }
