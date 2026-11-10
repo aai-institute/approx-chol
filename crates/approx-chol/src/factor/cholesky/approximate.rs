@@ -385,6 +385,7 @@ mod tests {
         clique.eliminate_unique(
             Xoshiro256PlusPlus::seed_from_u64(0),
             star,
+            0.0,
             |e| fill.push(e),
             Unsigned,
         );

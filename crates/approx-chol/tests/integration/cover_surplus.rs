@@ -196,3 +196,52 @@ fn past_the_twist_band_auto_carries_the_surplus_to_the_ground_vertex_and_every_s
         }
     }
 }
+
+/// Kept `k0, k1` frustrated through eliminated `e0, e1`; eliminated `e2` joins `k0` and, lightly, `k2`, its own surplus the heaviest of its star.
+fn pendant_through_a_grounded_star() -> Bipartite {
+    Bipartite {
+        n_left: 3,
+        n_right: 3,
+        left: vec![0, 0, 1, 1, 2, 2, 2],
+        right: vec![0, 1, 0, 1, 0, 2, 2],
+        values: Some((
+            vec![1.0, 1.0, 1.0, 1.0, 1.0, 0.03, 4.0],
+            vec![1.0, 1.0, 1.0, -1.0, 1.0, 0.03, 0.0],
+        )),
+    }
+}
+
+/// `e2`'s star once drew `k2`'s share onto the ground on both sheets, which left a twisted cover no path to `k2` (#437); its ground share is exact, so `k2` stays coupled.
+#[test]
+fn a_kept_vertex_joined_only_through_a_grounded_star_factors_under_every_surplus() {
+    let g = pendant_through_a_grounded_star();
+    let mut panicked = Vec::new();
+    for complement in [SchurMode::Exact, SchurMode::Same] {
+        for seed in 0..64 {
+            let base = Config {
+                seed,
+                ..sparse(complement)
+            };
+            let runs = each(base, |config| {
+                std::panic::catch_unwind(|| {
+                    let factor = factorize_with(g.view(), config, ScalingPolicy::default());
+                    factor.unwrap().solve(&[1.0; 6]).unwrap()
+                })
+            });
+            for (run, surplus) in runs.into_iter().zip(SURPLUSES) {
+                match run {
+                    Ok(x) => assert!(
+                        x.iter().all(|x| x.is_finite()),
+                        "{complement:?}, {surplus:?}, seed {seed}"
+                    ),
+                    Err(_) => panicked.push((complement, surplus, seed)),
+                }
+            }
+        }
+    }
+    assert!(
+        panicked.is_empty(),
+        "{} panicked: {panicked:?}",
+        panicked.len()
+    );
+}

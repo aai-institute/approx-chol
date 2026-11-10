@@ -66,6 +66,7 @@ Upgrading from 0.7: [MIGRATING.md](MIGRATING.md) maps each removed or renamed it
 - Decoding rejects an approximate factor with a negative share; such a payload decoded and solved another matrix.
 - Decoding rejects a component's clamp whose violation is NaN, infinite, zero or negative; such a payload decoded and reported it as the clamp ([#418]).
 - The exact arm factors a frustrated block as itself, not its two-sheet cover, so `Config::exact_max_dim` counts its vertices once; a frustrated block of `exact_max_dim / 2 < n ≤ exact_max_dim` vertices factored approximately before. ([#327])
+- A sampled complement takes each eliminated star's ground share exactly, `|c_ek| s_e / d_e` onto every kept neighbor's diagonal, and its clique tree no longer draws the ground. A kept vertex whose shares were drawn onto the ground on both sheets was left unreachable under `CoverSurplus::SurplusEdges`, and the build panicked. Factors change bits wherever a sampled complement has a grounded star; on a 95000 × 5000 slopes Gram, `nnz(L)` and the build's peak grow 3–5% and the fill to merge shrinks 20–23% ([#437]).
 
 ## [0.7.0] - 2026-10-30
 
@@ -355,4 +356,5 @@ for graph Laplacians in Rust with Python bindings.
 [#431]: https://github.com/aai-institute/approx-chol/issues/431
 [#433]: https://github.com/aai-institute/approx-chol/issues/433
 [#435]: https://github.com/aai-institute/approx-chol/issues/435
+[#437]: https://github.com/aai-institute/approx-chol/issues/437
 [#460]: https://github.com/aai-institute/approx-chol/issues/460

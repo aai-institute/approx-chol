@@ -52,31 +52,33 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         sign: S,
     ) -> (f64, impl Iterator<Item = (I, f64)> + '_) {
         self.refill(neighbors, sign, |edge| fill.push(edge));
-        let d = (self.sample(draws, |edge| fill.push(edge), sign))
+        let d = (self.sample(draws, |edge| fill.push(edge), sign, 0.0))
             .expect("a pivot of a connected graph has a neighbor");
         let shares =
             (self.entries.iter()).map(move |entry| (entry.neighbor, widen(entry.weight) / d));
         (d, shares)
     }
 
-    /// A neighborhood with no duplicate, as a row of `C` is, consuming its star's own `draws` so no task boundary moves one; every neighbor splits alike, so raw weights sort once; fill only, as the complement holds its pivots.
+    /// A neighborhood with no duplicate, as a row of `C` is, consuming its star's own `draws` so no task boundary moves one; every neighbor splits alike, so raw weights sort once; fill only, as the complement holds its pivots; `ground` joins the degree, never the tree.
     pub(super) fn eliminate_unique<S: Sign<T, I>>(
         &mut self,
         mut rng: Xoshiro256PlusPlus,
         neighbors: impl Iterator<Item = (I, T)>,
+        ground: f64,
         fill: impl FnMut((I, I, C, T)),
         sign: S,
     ) {
         self.refill_unique(neighbors, sign);
-        self.sample(&mut rng, fill, sign);
+        self.sample(&mut rng, fill, sign, ground);
     }
 
-    /// Prepares the star's CDF, then fills `per_copy(w_i (S_{>i} / d))` per copy of each entry but the heaviest, each copy drawing past it; `d`, unless the star is empty.
+    /// Prepares the star's CDF, then fills `per_copy(w_i (S_{>i} / d))` per copy of each entry but the heaviest, each copy drawing past it, `d` counting `ground` past the entries; `d`, unless the star is empty.
     fn sample<S: Sign<T, I>>(
         &mut self,
         rng: &mut Xoshiro256PlusPlus,
         mut fill: impl FnMut((I, I, C, T)),
         sign: S,
+        ground: f64,
     ) -> Option<f64> {
         let entries = &self.entries;
         let (_, rest) = entries.split_last()?;
@@ -86,7 +88,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
             acc += widen(sign.magnitude(entry.weight));
             self.cumsum.push(acc);
         }
-        let d = suffix_past(&self.cumsum, None);
+        let d = suffix_past(&self.cumsum, None) + ground;
         debug_assert!(
             d.is_finite() && d > 0.0,
             "positive weights under the diagonal bound"

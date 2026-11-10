@@ -71,17 +71,17 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         inv_pivot: &[T],
     ) -> (Arm<T, I>, Rows<T, I>) {
         let factored = self.factored(config);
+        let kept = self.kept_ground(inv_pivot);
         let rows = match formation(config, factored) {
-            Formation::Exact => self.exact(inv_pivot, factored, threads),
+            Formation::Exact => self.exact(inv_pivot, factored, threads, kept.as_deref()),
             Formation::Sampled(copies) => {
-                let kept = Self::kept_surplus(&self.grounding, self.cross.n_rows());
-                self.sample(copies, factored, streams, threads).merge(kept)
+                (self.sample(copies, factored, streams, threads)).merge(kept.as_deref())
             }
         };
         (rows.arm(), self.cross)
     }
 
-    /// `S` alone, a complement's summand: only exact computes pivots, and `C` is freed before the sampled merge.
+    /// `S` alone, a complement's summand: `C` is freed before the sampled merge.
     pub(super) fn complement(
         self,
         config: &Config,
@@ -89,14 +89,16 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         threads: Threads,
     ) -> Arm<T, I> {
         let factored = self.factored(config);
+        let inv_pivot = self.inverse_pivots();
+        let kept = self.kept_ground(&inv_pivot);
         let rows = match formation(config, factored) {
-            Formation::Exact => self.exact(&self.inverse_pivots(), factored, threads),
+            Formation::Exact => self.exact(&inv_pivot, factored, threads, kept.as_deref()),
             Formation::Sampled(copies) => {
+                drop(inv_pivot);
                 let fill = self.sample(copies, factored, streams, threads);
-                let kept = Self::kept_surplus(&self.grounding, self.cross.n_rows());
                 // The merge never reads `C`.
                 drop(self.cross);
-                fill.merge(kept)
+                fill.merge(kept.as_deref())
             }
         };
         rows.arm()
@@ -119,34 +121,51 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
             .collect()
     }
 
-    /// The kept rows' surplus `s_k`, after the `n_e` eliminated rows'; borrowed from σ alone, so `C` can be freed while it is held.
-    fn kept_surplus(grounding: &Grounding<T>, n_e: usize) -> Option<&[T]> {
-        grounding.surplus().map(|s| &s[n_e..])
+    /// `S`'s ground on each kept vertex, its surplus `s_k` plus every star's share `|c_ek| s_e / d_e` in ascending `e`, exact under either formation: no clique tree draws its star's ground, so a sampled `S`'s kept side stays connected without it (#437); owned apart from σ, so `C` can be freed while it is held.
+    fn kept_ground(&self, inv_pivot: &[T]) -> Option<Vec<T>> {
+        let (c, grounding) = (&self.cross, &self.grounding);
+        let s = &grounding.surplus()?[c.n_rows()..];
+        let mut ground = vec![T::zero(); s.len()];
+        for (e, &inv_pivot) in inv_pivot.iter().enumerate() {
+            if let Some(s_e) = grounding.edge(e) {
+                for (k, &c) in c.row(e) {
+                    ground[k] = ground[k] + share(c.abs(), s_e, inv_pivot);
+                }
+            }
+        }
+        (ground.iter_mut().zip(s)).for_each(|(g, &s)| *g = s + *g);
+        Some(ground)
     }
 
-    /// `S` exact by kept row in its layout, `S = D_k − Cᵀ D_e⁻¹ C`, through a `Cᵀ` freed before the rows close.
-    fn exact(&self, inv_pivot: &[T], factored: Factored, threads: Threads) -> SddmRows<'_, T, I> {
+    /// `S` exact by kept row in its layout, `S = D_k − Cᵀ D_e⁻¹ C`, through a `Cᵀ` freed before the rows close, each vertex's rows grounded by `ground`.
+    fn exact<'a>(
+        &'a self,
+        inv_pivot: &[T],
+        factored: Factored,
+        threads: Threads,
+        ground: Option<&'a [T]>,
+    ) -> SddmRows<'a, T, I> {
         match factored.layout() {
-            Layout::Sheet => self.exact_rows(inv_pivot, factored, threads, |j, _, _| j),
+            Layout::Sheet => self.exact_rows(inv_pivot, factored, threads, ground, |j, _, _| j),
             Layout::Cover | Layout::SignedPairs => {
-                self.exact_rows(inv_pivot, factored, threads, |j, c_ek, c_ej| {
+                self.exact_rows(inv_pivot, factored, threads, ground, |j, c_ek, c_ej| {
                     cover_vertex(j, usize::from(crosses(c_ek) != crosses(c_ej)))
                 })
             }
         }
     }
 
-    /// `|c_ke||c_je|/d_e` to `j`'s `vertex`, each row summing only `j > k` (a cover's `k⁻` mirrors `k⁺`), the ground's share last.
-    fn exact_rows(
-        &self,
+    /// `|c_ke||c_je|/d_e` to `j`'s `vertex`, each row summing only `j > k` (a cover's `k⁻` mirrors `k⁺`).
+    fn exact_rows<'a>(
+        &'a self,
         inv_pivot: &[T],
         factored: Factored,
         threads: Threads,
+        ground: Option<&'a [T]>,
         vertex: impl Fn(usize, T, T) -> usize + Sync,
-    ) -> SddmRows<'_, T, I> {
-        let (c, grounding) = (&self.cross, &self.grounding);
+    ) -> SddmRows<'a, T, I> {
+        let c = &self.cross;
         let ct = c.transpose();
-        let ground = factored.layout().columns(c.n_cols());
         // Each task carries one grain of the complement's `nnz·(nnz/n_e)/2` multiply-adds.
         let work = c.nnz() as u64 * (c.nnz() / c.n_rows().max(1)) as u64 / 2;
         SddmRows::split(
@@ -154,15 +173,12 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
             c.n_cols(),
             per_task(c.n_cols(), work, MULTIPLY_ADD_GRAIN_BITS),
             threads,
-            Self::kept_surplus(grounding, c.n_rows()),
+            ground,
             |mut sums, k| {
                 for (e, &c_ek) in ct.row(k) {
                     for (j, &c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
                         let w = share(c_ek.abs(), c_ej.abs(), inv_pivot[e]);
                         sums.add(vertex(j, c_ek, c_ej), w);
-                    }
-                    if let Some(s_e) = grounding.edge(e) {
-                        sums.add(ground, share(c_ek.abs(), s_e, inv_pivot[e]));
                     }
                 }
             },
@@ -182,7 +198,6 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
             block: self,
             streams,
             layout,
-            ground: I::from_index(layout.rows(self.cross.n_cols())),
         };
         let pieces = match copies {
             None => stars.sample_with(Single, threads),
@@ -196,12 +211,11 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
     }
 }
 
-/// The eliminated side's stars: row `e` of `C` on each of `layout`'s sheets, its ground share last at the vertex past the rows, each under its own stream.
+/// The eliminated side's stars: row `e` of `C` on each of `layout`'s sheets, its ground in the degree but never drawn, each under its own stream.
 struct Stars<'a, T, I> {
     block: &'a BipartiteBlock<T, I>,
     streams: Streams,
     layout: Layout,
-    ground: I,
 }
 
 impl<T: Real, I: Index> Stars<'_, T, I> {
@@ -213,13 +227,13 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
         fill: impl FnMut((I, I, C, T)),
     ) {
         let c = &self.block.cross;
-        let ground = |e: usize| self.block.grounding.edge(e).map(|s_e| (self.ground, s_e));
+        let ground = |e: usize| self.block.grounding.edge(e).map_or(0.0, widen);
         let draws = self.streams.star(s);
         match self.layout {
             // One sheet maps no column, as the balanced loop pays for any map.
             Layout::Sheet => {
                 let neighbors = c.row(s).map(|(k, &c)| (I::from_index(k), c.abs()));
-                sampler.eliminate_unique(draws, neighbors.chain(ground(s)), fill, Unsigned);
+                sampler.eliminate_unique(draws, neighbors, ground(s), fill, Unsigned);
             }
             Layout::Cover => {
                 let (sheet, e) = (s / c.n_rows(), s % c.n_rows());
@@ -227,20 +241,20 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
                     let on = sheet ^ usize::from(crosses(c));
                     (I::from_index(cover_vertex(k, on)), c.abs())
                 });
-                sampler.eliminate_unique(draws, neighbors.chain(ground(e)), fill, Unsigned);
+                sampler.eliminate_unique(draws, neighbors, ground(e), fill, Unsigned);
             }
             Layout::SignedPairs => {
                 let neighbors = c.row(s).map(|(k, &c)| (I::from_index(k), -c));
+                // The vertex past the kept rows, which no fill reaches: a star's ground share is exact.
                 let sign = Signed {
-                    ground: self.ground,
+                    ground: I::from_index(c.n_cols()),
                 };
                 let mut fill = fill;
-                // A ground share is a magnitude, so the ground `n` lands on column `2n`, the rows' ground.
                 let paired = |(lo, hi, copies, w): (I, I, C, T)| {
                     let at = cover_vertex(hi.index(), usize::from(w < T::zero()));
                     fill((lo, I::from_index(at), copies, w.abs()));
                 };
-                sampler.eliminate_unique(draws, neighbors.chain(ground(s)), paired, sign);
+                sampler.eliminate_unique(draws, neighbors, ground(s), paired, sign);
             }
         }
     }
@@ -284,7 +298,7 @@ fn bucket_shift(n: usize) -> u32 {
 /// One thread's fill edges `(lo, hi, weight)`, split by `lo` into the ranges of [`bucket_shift`].
 type Buckets<T, I> = Vec<Vec<(I, I, T)>>;
 
-/// Every task's sampled fill over the rows of `kept` vertices for `factored`, bucketed by row; an edge to the last column is `lo`'s ground weight.
+/// Every task's sampled fill over the rows of `kept` vertices for `factored`, bucketed by row.
 struct Fill<T, I> {
     factored: Factored,
     kept: usize,
@@ -292,8 +306,8 @@ struct Fill<T, I> {
 }
 
 impl<T: Real, I: Index> Fill<T, I> {
-    /// Bucket by bucket, counting-sorts the chunks' rows unflattened, merges each row's duplicates, stores `−w`; each row's ground gains its vertex's `surplus`.
-    fn merge(self, surplus: Option<&[T]>) -> SddmRows<'_, T, I> {
+    /// Bucket by bucket, counting-sorts the chunks' rows unflattened, merges each row's duplicates, stores `−w`; each row's ground is its vertex's `ground`.
+    fn merge(self, ground: Option<&[T]>) -> SddmRows<'_, T, I> {
         let Self {
             factored,
             kept,
@@ -306,7 +320,7 @@ impl<T: Real, I: Index> Fill<T, I> {
         let most = (0..count).map(bucket).max().unwrap_or(0);
         let (mut columns, mut weights) = (vec![I::zero(); most], vec![T::zero(); most]);
         let (mut starts, mut next) = (Vec::new(), Vec::new());
-        let mut rows = SddmRows::new(factored, kept, surplus);
+        let mut rows = SddmRows::new(factored, kept, ground);
         for b in 0..count {
             let first = b * stride;
             let len = (n - first).min(stride);
@@ -352,7 +366,7 @@ mod tests {
 
     use super::*;
     use crate::factor::cholesky::Eliminated;
-    use crate::factor::config::{FrustratedRoute, Sampling};
+    use crate::factor::config::{CoverSurplus, FrustratedRoute, Sampling};
     use crate::threads::ONE;
 
     /// Kept `0` and `1` joined through eliminated `e₀` by `c = (−a₀, −b₀)` and `e₁` by `(a₁, −b₁)`, kept surplus `s`: two degree-two stars of opposite sign onto one pair.
@@ -412,5 +426,88 @@ mod tests {
             }
         }
         assert!(defects.is_empty(), "{defects:#?}");
+    }
+
+    /// Kept `0, 1, 2` through eliminated `e₀, e₁, e₂`, frustrated unless `balanced`; `e₀` grounded by a subnormal, `e₁` and `e₂` by normal surpluses.
+    fn grounded_stars<T: Real>(balanced: bool) -> BipartiteBlock<T, u32> {
+        let t = |x: f64| narrow::<T>(x);
+        let flip = if balanced { -1.0 } else { 1.0 };
+        let values = [-1.0, -0.5, 0.75 * flip, -1.0, -2.0, -0.25, -0.125].map(t);
+        let cross = Rows::new(
+            vec![0, 2, 4, 7],
+            vec![0, 1, 0, 1, 0, 1, 2],
+            values.to_vec(),
+            3,
+        );
+        let subnormal = T::min_positive_value() / t(4.0);
+        assert!(subnormal > T::zero() && !subnormal.is_normal());
+        let surplus = vec![subnormal, t(0.25), t(1.5), t(0.1), T::zero(), t(0.5)];
+        let balance = if balanced {
+            Balance::Balanced
+        } else {
+            Balance::Frustrated
+        };
+        BipartiteBlock::of(cross, balance, Grounding::of(surplus))
+    }
+
+    /// Each row's ground edge's bits, by row.
+    fn ground_bits<T: Real>(arm: Arm<T, u32>) -> Vec<(u32, u64)> {
+        let Arm::Sddm(m) = arm else {
+            panic!("an approximately factored complement is an SDDM")
+        };
+        let n = m.n() as u32;
+        let mut ground = Vec::new();
+        m.grounded_edges(|i, j, w| {
+            if j == n {
+                ground.push((i, w.to_f64().expect("a float").to_bits()));
+            }
+        });
+        ground
+    }
+
+    fn assert_grounds_are_exact<T: Real>() {
+        let sampled = |copies| SchurMode::Approximate {
+            sampling: Sampling::CliqueTree {
+                copies: NonZeroU32::new(copies).expect("a copy"),
+            },
+        };
+        for balanced in [true, false] {
+            let config = |complement| Config {
+                exact_max_dim: 0,
+                complement,
+                frustrated: FrustratedRoute::Cover(CoverSurplus::GroundVertex),
+                ..Config::default()
+            };
+            let grounds = |complement| {
+                let config = config(complement);
+                let block = grounded_stars::<T>(balanced);
+                ground_bits(block.complement(&config, Streams::of(0, &config), ONE))
+            };
+            let exact = grounds(SchurMode::Exact);
+            assert_eq!(exact.len(), if balanced { 3 } else { 6 }, "{exact:?}");
+            for copies in [1, 2, 3] {
+                assert_eq!(
+                    grounds(sampled(copies)),
+                    exact,
+                    "balanced {balanced}, copies {copies}"
+                );
+            }
+            if !balanced {
+                for pair in exact.chunks_exact(2) {
+                    assert_eq!(
+                        (pair[0].0 / 2, pair[0].1),
+                        (pair[1].0 / 2, pair[1].1),
+                        "{exact:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A sampled complement grounds each kept vertex as the exact one does, bit for bit, under AC and AC2, a subnormal star's ground included, and a cover grounds both copies alike (#437).
+    #[test]
+    fn a_sampled_complement_grounds_bit_for_bit_as_the_exact_one() {
+        assert_grounds_are_exact::<f64>();
+        assert_grounds_are_exact::<f32>();
     }
 }

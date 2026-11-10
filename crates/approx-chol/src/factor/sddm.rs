@@ -313,7 +313,7 @@ pub(super) struct SddmRows<'a, T, I> {
     rows: RowSums<T, I>,
 }
 
-/// Rows summed one at a time, each column's addends in arrival order and stored as `−w` by column; column `n` is the row's ground weight. Apart from the layout: a task moves these per row, and a layout byte among them measured extra stores in each move.
+/// Rows summed one at a time, each column's addends in arrival order and stored as `−w` by column. Apart from the layout: a task moves these per row, and a layout byte among them measured extra stores in each move.
 struct RowSums<T, I> {
     sums: Vec<T>,
     touched: Vec<I>,
@@ -326,7 +326,7 @@ struct RowSums<T, I> {
 impl<T: Real, I: Index> RowSums<T, I> {
     fn new(n: usize) -> Self {
         Self {
-            sums: vec![T::zero(); n + 1],
+            sums: vec![T::zero(); n],
             touched: Vec::new(),
             ptrs: vec![0],
             indices: Vec::new(),
@@ -335,22 +335,14 @@ impl<T: Real, I: Index> RowSums<T, I> {
         }
     }
 
-    /// One row, its ground plus `surplus`.
+    /// One row, its ground `surplus`.
     fn row(&mut self, add: impl FnOnce(ColumnSums<'_, T, I>), surplus: Option<T>) {
         add(ColumnSums {
             sums: &mut self.sums,
             touched: &mut self.touched,
         });
-        let n = self.sums.len() - 1;
         self.touched.sort_unstable();
-        let ground = match self.touched.last() {
-            Some(&j) if j.index() == n => {
-                self.touched.pop();
-                std::mem::replace(&mut self.sums[n], T::zero())
-            }
-            _ => T::zero(),
-        };
-        self.ground.push(surplus.map_or(ground, |s| s + ground));
+        self.ground.push(surplus.unwrap_or_else(T::zero));
         for &j in &self.touched {
             let sum = std::mem::replace(&mut self.sums[j.index()], T::zero());
             // A stored zero couples nothing, and a column pushed twice reads zero the second time.
@@ -452,7 +444,7 @@ impl<'a, T: Real, I: Index> SddmRows<'a, T, I> {
         match factored.layout() {
             Layout::SignedPairs => fold(rows),
             Layout::Sheet | Layout::Cover => {
-                let n = rows.sums.len() - 1;
+                let n = rows.sums.len();
                 let ground = Grounding::of(rows.ground);
                 let rows = Rows::new(rows.ptrs, rows.indices, rows.values, n);
                 (UpperAdjacency::new(rows), ground)
