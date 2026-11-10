@@ -36,7 +36,10 @@ class Config:
     ``CoverSurplus::Auto`` (``"cover"``); or as it is on one sheet
     (``"signed"``), its fill signed by its ends and what opposite entries
     cancel grounded, so it never floats; a bipartite block's complement is
-    formed signed and eliminated so.
+    formed signed and eliminated so. Any frustration grounds, however small:
+    a cancellation adds ``2 min(|a|, |b|)`` to both ends without
+    subtracting, so every pivot stays positive; below ``ε_mach·κ`` a solve is
+    limited by conditioning, as under every route.
     An argument left out or ``None`` keeps the default, which the getters report.
 
     Raises:

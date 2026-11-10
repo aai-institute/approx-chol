@@ -48,6 +48,8 @@ pub enum FrustratedRoute {
     /// Through its Gremban cover, an SDDM on two sheets that solves `[x; −x]`, carrying its surplus as the [`CoverSurplus`] says.
     Cover(CoverSurplus),
     /// Eliminated as it is, on one sheet: fill sampled on magnitudes and signed by its ends, `σ_a σ_b`; opposite parallel entries cancel, and what they cancel grounds both ends, so it never floats. A bipartite block's complement is formed signed, exact or sampled, and eliminated so.
+    ///
+    /// Any frustration grounds, however small: a cancellation adds `2 min(|a|, |b|)` to both ends without subtracting, and sampled fill is floored at the smallest positive value, so every pivot stays positive. Measured on cycles, grids, random graphs and bipartite Grams one edge short of balance (#435), the last pivot equals the cancelled ground and follows the frustration from `1e-2` down to `1e-100` of the diagonal in `f64` and `1e-30` in `f32`. A nearly balanced block is as ill-conditioned as its frustration is small, and a solve below `ε_mach·κ` is limited by that conditioning, as under every route.
     Signed,
 }
 
