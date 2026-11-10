@@ -73,9 +73,9 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         let factored = self.factored(config);
         let kept = self.kept_ground(inv_pivot);
         let rows = match formation(config, factored) {
-            Formation::Exact => self.exact(inv_pivot, factored, threads, kept.as_deref()),
+            Formation::Exact => self.exact(inv_pivot, factored, threads, kept),
             Formation::Sampled(copies) => {
-                (self.sample(copies, factored, streams, threads)).merge(kept.as_deref())
+                (self.sample(copies, factored, streams, threads)).merge(kept)
             }
         };
         (rows.arm(), self.cross)
@@ -92,13 +92,13 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         let inv_pivot = self.inverse_pivots();
         let kept = self.kept_ground(&inv_pivot);
         let rows = match formation(config, factored) {
-            Formation::Exact => self.exact(&inv_pivot, factored, threads, kept.as_deref()),
+            Formation::Exact => self.exact(&inv_pivot, factored, threads, kept),
             Formation::Sampled(copies) => {
                 drop(inv_pivot);
                 let fill = self.sample(copies, factored, streams, threads);
                 // The merge never reads `C`.
                 drop(self.cross);
-                fill.merge(kept.as_deref())
+                fill.merge(kept)
             }
         };
         rows.arm()
@@ -121,7 +121,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
             .collect()
     }
 
-    /// `S`'s ground on each kept vertex, its surplus `s_k` plus every star's share `|c_ek| s_e / d_e` in ascending `e`, exact under either formation: no clique tree draws its star's ground, so a sampled `S`'s kept side stays connected without it (#437); owned apart from σ, so `C` can be freed while it is held.
+    /// `S`'s ground on each kept vertex, its surplus `s_k` plus every star's share `|c_ek| s_e / d_e` in ascending `e`, exact under either formation: no clique tree draws its star's ground, so a sampled `S`'s kept side stays connected without it (#437).
     fn kept_ground(&self, inv_pivot: &[T]) -> Option<Vec<T>> {
         let (c, grounding) = (&self.cross, &self.grounding);
         let s = &grounding.surplus()?[c.n_rows()..];
@@ -138,13 +138,13 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
     }
 
     /// `S` exact by kept row in its layout, `S = D_k − Cᵀ D_e⁻¹ C`, through a `Cᵀ` freed before the rows close, each vertex's rows grounded by `ground`.
-    fn exact<'a>(
-        &'a self,
+    fn exact(
+        &self,
         inv_pivot: &[T],
         factored: Factored,
         threads: Threads,
-        ground: Option<&'a [T]>,
-    ) -> SddmRows<'a, T, I> {
+        ground: Option<Vec<T>>,
+    ) -> SddmRows<T, I> {
         match factored.layout() {
             Layout::Sheet => self.exact_rows(inv_pivot, factored, threads, ground, |j, _, _| j),
             Layout::Cover | Layout::SignedPairs => {
@@ -156,14 +156,14 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
     }
 
     /// `|c_ke||c_je|/d_e` to `j`'s `vertex`, each row summing only `j > k` (a cover's `k⁻` mirrors `k⁺`).
-    fn exact_rows<'a>(
-        &'a self,
+    fn exact_rows(
+        &self,
         inv_pivot: &[T],
         factored: Factored,
         threads: Threads,
-        ground: Option<&'a [T]>,
+        ground: Option<Vec<T>>,
         vertex: impl Fn(usize, T, T) -> usize + Sync,
-    ) -> SddmRows<'a, T, I> {
+    ) -> SddmRows<T, I> {
         let c = &self.cross;
         let ct = c.transpose();
         // Each task carries one grain of the complement's `nnz·(nnz/n_e)/2` multiply-adds.
@@ -307,7 +307,7 @@ struct Fill<T, I> {
 
 impl<T: Real, I: Index> Fill<T, I> {
     /// Bucket by bucket, counting-sorts the chunks' rows unflattened, merges each row's duplicates, stores `−w`; each row's ground is its vertex's `ground`.
-    fn merge(self, ground: Option<&[T]>) -> SddmRows<'_, T, I> {
+    fn merge(self, ground: Option<Vec<T>>) -> SddmRows<T, I> {
         let Self {
             factored,
             kept,
