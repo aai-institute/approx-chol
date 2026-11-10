@@ -16,7 +16,8 @@ requirements are in `../requirements/`.
 ```
 
 - A part uses only parts below it. Reduction and Cholesky never use each other. Adapters use
-  only the public surface.
+  only the public surface, except that a block whose columns are contiguous solves through the
+  approximate inverse's slices path.
 - The Rust API is the public face of Input and the approximate inverse, with their configuration
   and reports; it is not a part of its own.
 - Each part owns its configuration, errors and encoding. The approximate inverse
@@ -26,7 +27,8 @@ requirements are in `../requirements/`.
   `rayon`, `sprs` 0.11, `nalgebra` 0.35 with nalgebra-sparse 0.12, `ndarray` 0.17; `sprs` enables
   `ndarray`. dyn-stack 0.13 is a required dependency, re-exported. A Rust adapter borrows, never
   copies: a matrix converts into Input and fails as Input validates; a dense type implements the
-  solve's block trait, which the solve reads and writes column by column through its scratch. Moving
+  solve's block trait, which the solve reads and writes column by column through its scratch, or, where its columns are
+  contiguous, where they are. Moving
   a feature to another version is a breaking release. Python converts a form it cannot borrow, as
   documented.
 
