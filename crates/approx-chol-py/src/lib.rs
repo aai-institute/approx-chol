@@ -28,8 +28,8 @@ mod raised {
     pyo3::import_exception!(approx_chol, BuildError);
 }
 
-/// `error` as an `InputError`, its slice by the caller's name in `names`, in the message too; a variant added in Rust since is a plain `ValueError` until it has an arm.
-fn input_error(error: InputError, names: CsrNames) -> PyErr {
+/// `error` as an `InputError`, its slice by scipy's name, in the message too; a variant added in Rust since is a plain `ValueError` until it has an arm.
+fn input_error(error: InputError) -> PyErr {
     use InputError as E;
     let error = match error {
         E::LengthMismatch {
@@ -37,24 +37,24 @@ fn input_error(error: InputError, names: CsrNames) -> PyErr {
             expected,
             found,
         } => E::LengthMismatch {
-            parameter: names.of(parameter),
+            parameter: scipy_name(parameter),
             expected,
             found,
         },
         E::RowPtrs { parameter, row } => E::RowPtrs {
-            parameter: names.of(parameter),
+            parameter: scipy_name(parameter),
             row,
         },
         E::IndexOutOfRange { parameter, entry } => E::IndexOutOfRange {
-            parameter: names.of(parameter),
+            parameter: scipy_name(parameter),
             entry,
         },
         E::OutOfRange { parameter, entry } => E::OutOfRange {
-            parameter: names.of(parameter),
+            parameter: scipy_name(parameter),
             entry,
         },
         E::Negative { parameter, entry } => E::Negative {
-            parameter: names.of(parameter),
+            parameter: scipy_name(parameter),
             entry,
         },
         other => other,
@@ -248,10 +248,7 @@ fn destination<'py, D: Dimension>(
 /// A contiguous copy, its borrow released on return so the caller's array is free again.
 fn owned<T: Element + Copy>(array: &Bound<'_, PyArray1<T>>, name: &str) -> PyResult<Vec<T>> {
     let array = array.try_readonly().map_err(|e| borrow_error(name, e))?;
-    let slice = array.as_slice();
-    slice
-        .map(<[T]>::to_vec)
-        .map_err(|_| value_error(format!("{name} must be contiguous")))
+    Ok(array.as_array().to_vec())
 }
 
 #[pyclass(frozen, eq, hash, name = "Config")]
@@ -605,29 +602,6 @@ impl PyApproxInverse {
 }
 
 #[pyfunction]
-#[pyo3(signature = (row_ptrs, col_indices, values, n, config, scaling))]
-fn factorize_raw<'py>(
-    py: Python<'py>,
-    row_ptrs: &Bound<'py, PyAny>,
-    col_indices: &Bound<'py, PyAny>,
-    values: &Bound<'py, PyAny>,
-    n: usize,
-    config: Option<&PyConfig>,
-    scaling: Option<&PyScalingPolicy>,
-) -> PyResult<PyApproxInverse> {
-    let (np, names) = (py.import("numpy")?, CsrNames::RAW);
-    CsrArrays {
-        n,
-        names,
-        indptr: as_1d(&np, row_ptrs, names.indptr, Column::Index)?,
-        indices: as_1d(&np, col_indices, names.indices, Column::Index)?,
-        data: as_contiguous(&np, &as_1d(&np, values, names.data, Column::Value)?)?,
-        np,
-    }
-    .factorize(config, scaling, Threads::All)
-}
-
-#[pyfunction]
 #[pyo3(signature = (matrix, config, scaling, threads))]
 fn factorize(
     py: Python<'_>,
@@ -636,66 +610,67 @@ fn factorize(
     scaling: Option<&PyScalingPolicy>,
     threads: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PyApproxInverse> {
-    let (threads, names) = (self::threads(threads)?, CsrNames::SCIPY);
+    let threads = self::threads(threads)?;
+    let matrix = csr(py, matrix)?;
     let (n, columns) = matrix.getattr("shape")?.extract::<(usize, usize)>()?;
     if n != columns {
         let error = InputError::NotSquare {
             rows: n,
             cols: columns,
         };
-        return Err(input_error(error, names));
+        return Err(input_error(error));
     }
     let np = py.import("numpy")?;
     let array = |name, column| as_1d(&np, &matrix.getattr(name)?, name, column);
-    let data = array(names.data, Column::Value)?;
-    CsrArrays {
-        indptr: array(names.indptr, Column::Index)?,
-        indices: array(names.indices, Column::Index)?,
+    let data = array(DATA, Column::Value)?;
+    let arrays = CsrArrays {
+        indptr: array(INDPTR, Column::Index)?,
+        indices: array(INDICES, Column::Index)?,
         data: as_contiguous(&np, &data)?,
         n,
-        names,
         np,
+    };
+    drop((data, matrix));
+    arrays.factorize(config, scaling, threads)
+}
+
+/// The CSR `matrix` is read as: a scipy sparse matrix's `tocsr()`, else any object with a CSR's arrays and `shape`.
+fn csr<'py>(py: Python<'py>, matrix: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let sparse = py.import("scipy.sparse")?;
+    if sparse.call_method1("issparse", (matrix,))?.is_truthy()? {
+        return matrix.call_method0("tocsr");
     }
-    .factorize(config, scaling, threads)
-}
-
-/// The caller's names of a CSR's three arrays, by which every check names them.
-#[derive(Clone, Copy)]
-struct CsrNames {
-    indptr: &'static str,
-    indices: &'static str,
-    data: &'static str,
-}
-
-impl CsrNames {
-    /// `CsrRef::new`'s own names, which `factorize_raw` takes.
-    const RAW: Self = Self {
-        indptr: "row_ptrs",
-        indices: "col_indices",
-        data: "values",
-    };
-    const SCIPY: Self = Self {
-        indptr: "indptr",
-        indices: "indices",
-        data: "data",
-    };
-
-    /// The caller's name of the slice `CsrRef::new` names `parameter`.
-    fn of(self, parameter: &'static str) -> &'static str {
-        match parameter {
-            p if p == Self::RAW.indptr => self.indptr,
-            p if p == Self::RAW.indices => self.indices,
-            p if p == Self::RAW.data => self.data,
-            other => other,
+    for name in [INDPTR, INDICES, DATA, "shape"] {
+        if !matrix.hasattr(name)? {
+            let found = matrix.get_type().name()?;
+            return Err(PyTypeError::new_err(format!(
+                "matrix must be a scipy sparse matrix or have {INDPTR}, {INDICES}, {DATA} and shape, not {found}"
+            )));
         }
     }
+    Ok(matrix.clone())
+}
+
+/// A CSR's arrays by `CsrRef::new`'s name and by scipy's, which a matrix's attributes and every error carry.
+const CSR_NAMES: [(&str, &str); 3] = [
+    ("row_ptrs", "indptr"),
+    ("col_indices", "indices"),
+    ("values", "data"),
+];
+const INDPTR: &str = CSR_NAMES[0].1;
+const INDICES: &str = CSR_NAMES[1].1;
+const DATA: &str = CSR_NAMES[2].1;
+
+/// scipy's name of the slice `CsrRef::new` names `parameter`.
+fn scipy_name(parameter: &'static str) -> &'static str {
+    let named = CSR_NAMES.iter().find(|(rust, _)| *rust == parameter);
+    named.map_or(parameter, |&(_, scipy)| scipy)
 }
 
 /// A CSR's checked arrays: values already `f64`, indices still in the caller's dtype.
 struct CsrArrays<'py> {
     np: Bound<'py, PyModule>,
     n: usize,
-    names: CsrNames,
     indptr: Bound<'py, PyAny>,
     indices: Bound<'py, PyAny>,
     data: Bound<'py, PyArray1<f64>>,
@@ -703,7 +678,7 @@ struct CsrArrays<'py> {
 
 impl CsrArrays<'_> {
     fn factorize(
-        &self,
+        self,
         config: Option<&PyConfig>,
         scaling: Option<&PyScalingPolicy>,
         threads: Threads,
@@ -723,25 +698,24 @@ impl CsrArrays<'_> {
         }
     }
 
-    /// Copies the arrays, so nothing after reads a caller's array.
+    /// Copies the arrays and releases every Python array it holds, a conversion's included, before the build reads the copy.
     fn factorize_as<J: Element + PrimInt + Sync + Send>(
-        &self,
+        self,
         config: Option<&PyConfig>,
         scaling: Option<&PyScalingPolicy>,
         threads: Threads,
     ) -> PyResult<PyApproxInverse> {
-        let indptr = as_contiguous::<J>(&self.np, &self.indptr)?;
-        let indices = as_contiguous::<J>(&self.np, &self.indices)?;
-        let indptr = owned(&indptr, self.names.indptr)?;
-        let indices = owned(&indices, self.names.indices)?;
-        let data = owned(&self.data, self.names.data)?;
+        let (py, n) = (self.np.py(), self.n);
+        let indptr = owned(&as_contiguous::<J>(&self.np, &self.indptr)?, INDPTR)?;
+        let indices = owned(&as_contiguous::<J>(&self.np, &self.indices)?, INDICES)?;
+        let data = owned(&self.data, DATA)?;
+        drop(self);
         let config = config.map_or_else(Config::default, |config| config.0);
         let scaling = scaling.map_or_else(ScalingPolicy::default, |scaling| scaling.0);
-        let (py, n, names) = (self.np.py(), self.n, self.names);
         let entries = StoredEntries(data.len());
         let inner = entries.detach(py, || {
             let sgdd = CsrRef::new(n, &indptr, &indices, &data)
-                .map_err(|error| input_error(error, names))
+                .map_err(input_error)
                 .and_then(|csr| Sgdd::reduce(csr, scaling, threads).map_err(build_error));
             // Freed before factoring: the copy never coexists with the factor's fill.
             drop((indptr, indices, data));
@@ -762,6 +736,5 @@ fn _approx_chol(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyConfig>()?;
     m.add_class::<PyScalingPolicy>()?;
     m.add_function(wrap_pyfunction!(factorize, m)?)?;
-    m.add_function(wrap_pyfunction!(factorize_raw, m)?)?;
     Ok(())
 }

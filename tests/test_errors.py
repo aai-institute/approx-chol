@@ -14,25 +14,19 @@ ORDER = "is out of order: the first must be 0, each at most the next"
 DIAGONAL = "has a negative diagonal, a zero one beside an edge, or one past MAX/4"
 
 
-def _raw(row_ptrs, col_indices, values):
-    n = len(row_ptrs) - 1
-    return lambda: approx_chol.factorize_raw(
-        np.array(row_ptrs, dtype=np.uint32),
-        np.array(col_indices, dtype=np.uint32),
-        np.array(values, dtype=np.float64),
-        n,
-    )
-
-
-def _duck(row_ptrs, col_indices, values, shape=None):
-    n = len(row_ptrs) - 1
+def _duck(indptr, indices, data, shape=None, index_dtype=np.int64):
+    n = len(indptr) - 1
     matrix = MatrixLike(
-        np.array(row_ptrs, dtype=np.int64),
-        np.array(col_indices, dtype=np.int64),
-        np.array(values, dtype=np.float64),
+        np.array(indptr, dtype=index_dtype),
+        np.array(indices, dtype=index_dtype),
+        np.array(data, dtype=np.float64),
         shape or (n, n),
     )
     return lambda: approx_chol.factorize(matrix)
+
+
+def _u32(indptr, indices, data):
+    return _duck(indptr, indices, data, index_dtype=np.uint32)
 
 
 def _scipy(dense):
@@ -41,16 +35,10 @@ def _scipy(dense):
 
 INPUT_ERRORS = [
     pytest.param(
-        _raw([0, 2, 4], [0, 1, 0, 1], [2, -1, -1]),
-        ("length_mismatch", "values", None),
-        "values has length 3, expected 4",
-        id="length_mismatch",
-    ),
-    pytest.param(
-        _duck([0, 2, 4], [0, 1, 0, 1], [2, -1, -1]),
+        _u32([0, 2, 4], [0, 1, 0, 1], [2, -1, -1]),
         ("length_mismatch", "data", None),
         "data has length 3, expected 4",
-        id="length_mismatch_scipy",
+        id="length_mismatch",
     ),
     pytest.param(
         _duck([0, 2, 4], [0, 1, 0, 1], [2, -1, -1, 2], shape=(2**32 + 1, 2**32 + 1)),
@@ -59,27 +47,21 @@ INPUT_ERRORS = [
         id="length_mismatch_oversized_dimension",
     ),
     pytest.param(
-        _raw([1, 2, 4], [0, 1, 0, 1], [2, -1, -1, 2]),
-        ("row_ptrs", "row_ptrs", 0),
-        f"row_ptrs[0] {ORDER}",
+        _u32([1, 2, 4], [0, 1, 0, 1], [2, -1, -1, 2]),
+        ("row_ptrs", "indptr", 0),
+        f"indptr[0] {ORDER}",
         id="row_ptrs_first",
     ),
     pytest.param(
-        _raw([0, 3, 2], [0, 1], [2, 2]),
-        ("row_ptrs", "row_ptrs", 1),
-        f"row_ptrs[1] {ORDER}",
+        _u32([0, 3, 2], [0, 1], [2, 2]),
+        ("row_ptrs", "indptr", 1),
+        f"indptr[1] {ORDER}",
         id="row_ptrs_decreasing",
     ),
     pytest.param(
-        _duck([0, 3, 2], [0, 1], [2, 2]),
-        ("row_ptrs", "indptr", 1),
-        f"indptr[1] {ORDER}",
-        id="row_ptrs_scipy",
-    ),
-    pytest.param(
-        _raw([0, 2, 4], [0, 2, 0, 1], [2, -1, -1, 2]),
-        ("index_out_of_range", "col_indices", 1),
-        "col_indices[1] is out of range",
+        _u32([0, 2, 4], [0, 2, 0, 1], [2, -1, -1, 2]),
+        ("index_out_of_range", "indices", 1),
+        "indices[1] is out of range",
         id="index_out_of_range",
     ),
     pytest.param(
@@ -101,19 +83,19 @@ INPUT_ERRORS = [
         id="index_out_of_range_indptr",
     ),
     pytest.param(
-        _raw([0, 1], [0], [np.nan]),
-        ("out_of_range", "values", 0),
-        "values[0] is outside the representable range",
+        _u32([0, 1], [0], [np.nan]),
+        ("out_of_range", "data", 0),
+        "data[0] is outside the representable range",
         id="out_of_range",
     ),
     pytest.param(
         _duck([0, 2, 4], [0, 1, 0, 1], [1, -1e-310, -1e-310, 1]),
         ("out_of_range", "data", 1),
         "data[1] is outside the representable range",
-        id="out_of_range_scipy",
+        id="out_of_range_subnormal",
     ),
     pytest.param(
-        _raw([0, 2, 4], [0, 1, 0, 1], [2, -1, -2, 2]),
+        _u32([0, 2, 4], [0, 1, 0, 1], [2, -1, -2, 2]),
         ("not_symmetric", None, 0),
         "row 0 has an entry with no equal mirror",
         id="not_symmetric",
@@ -125,7 +107,7 @@ INPUT_ERRORS = [
         id="not_symmetric_scipy",
     ),
     pytest.param(
-        _raw([0, 1], [0], [-1]),
+        _u32([0, 1], [0], [-1]),
         ("diagonal", None, 0),
         f"row 0 {DIAGONAL}",
         id="diagonal",
@@ -151,7 +133,7 @@ BUILD_ERRORS = [
         id="out_of_range",
     ),
     pytest.param(
-        _raw(
+        _u32(
             [0, 2, 5, 7],
             [0, 1, 0, 1, 2, 1, 2],
             [1, -1, -1, 2.0**-960, -(2.0**1000), -(2.0**1000), 2.0**-960],

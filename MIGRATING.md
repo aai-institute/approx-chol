@@ -219,7 +219,8 @@ let factor: ApproxInverse = postcard::from_bytes(&bytes)?;
 - A complex or other non-real `b` raises `TypeError`, not `ValueError`; a bool `split` or `threads` raises `TypeError`.
 - `ApproxInverse.threads` reads the budget every apply runs at, and `with_threads(threads)` gives one at another, sharing the factor; a loaded or copied one holds `None`.
 - An input or build error is an `approx_chol.InputError` or `approx_chol.BuildError`, both `ValueError`s: match `e.kind` and its fields (`parameter` and `position`, or `vertex`) where 0.7 matched the message, `except approx_chol.BuildError as e: e.kind, e.vertex` ([#430]).
-- The Python API changes of [#432] are listed here when it lands.
+- `factorize` reads a scipy sparse matrix through `tocsr()`: a CSC factors its own matrix, where 0.7 factored its transpose, and every other scipy format is accepted. An object that is neither scipy sparse nor has `indptr`, `indices`, `data` and `shape` raises `TypeError`, not `AttributeError` ([#432]).
+- `factorize_raw(row_ptrs, col_indices, values, n, config, scaling)` is removed: pass the arrays to `factorize` as any object with `indptr`, `indices`, `data` and `shape`, read as before in any integer index dtype, or as a scipy `csr_array`; an error names them `indptr`, `indices` and `data`, not `row_ptrs`, `col_indices` and `values`.
 
 ```python
 # 0.7
@@ -235,6 +236,21 @@ factor = approx_chol.factorize(laplacian, config=approx_chol.Config(seed=1), thr
 x = factor.apply(b)
 factor.apply(b, out=out)
 X = factor.with_threads(1).apply(B)  # an n × k block, serially, to the same bits
+```
+
+```python
+# 0.7
+factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, n)
+```
+
+```python
+# 0.8
+from types import SimpleNamespace
+
+csr = SimpleNamespace(indptr=row_ptrs, indices=col_indices, data=values, shape=(n, n))
+factor = approx_chol.factorize(csr)
+# or, through scipy, which checks the arrays and may convert their dtype first
+factor = approx_chol.factorize(scipy.sparse.csr_array((values, col_indices, row_ptrs), shape=(n, n)))
 ```
 
 [#430]: https://github.com/aai-institute/approx-chol/issues/430

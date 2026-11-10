@@ -16,7 +16,6 @@ __all__ = [
     "InputError",
     "ScalingPolicy",
     "factorize",
-    "factorize_raw",
 ]
 
 _BuildErrorKind: TypeAlias = Literal["out_of_range", "too_large"]
@@ -32,9 +31,8 @@ class _RustError(ValueError):
 class InputError(_RustError):
     """Why an input was rejected: Rust's ``InputError``, its variant in snake case as ``kind``.
 
-    ``parameter`` is the array the variant names, by the caller's name: ``indptr``,
-    ``indices`` or ``data`` of the matrix :func:`factorize` reads, ``row_ptrs``,
-    ``col_indices`` or ``values`` of :func:`factorize_raw`. ``position`` is the
+    ``parameter`` is the array the variant names: ``indptr``, ``indices`` or
+    ``data`` of the CSR :func:`factorize` reads. ``position`` is the
     entry, row, edge or column the variant names. Each is ``None`` where the
     variant names none. The message is Rust's ``Display``, which carries every
     field of the variant and names an array as ``parameter`` does; ``kind``,
@@ -167,7 +165,7 @@ class Component:
 
 @final
 class ApproxInverse(LinearOperator):
-    """An approximate inverse ``B`` of the factored matrix, from :func:`factorize` or :func:`factorize_raw`.
+    """An approximate inverse ``B`` of the factored matrix, from :func:`factorize`.
 
     A ``scipy.sparse.linalg.LinearOperator`` of shape ``(n, n)`` and dtype
     ``float64``, its own adjoint and transpose: ``matvec`` and ``rmatvec`` take
@@ -249,13 +247,19 @@ def factorize(
     scaling: ScalingPolicy | None = None,
     threads: int | None = None,
 ) -> ApproxInverse:
-    """Factorize an SDDM matrix from a scipy.sparse CSR matrix.
+    """Factorize an SDDM matrix from a scipy sparse matrix or a CSR's arrays.
 
-    Copies the arrays, then releases the GIL to check and factor the copy above 32768 stored entries.
+    A scipy sparse matrix, any format, is read as its ``tocsr()``, so a CSC
+    factors its own matrix; any other object is read as the CSR its
+    ``indptr``, ``indices``, ``data`` and ``shape`` state. An error's
+    ``position`` is in the CSR read. Copies the arrays, then releases the
+    GIL to check and factor the copy above 32768 stored entries.
     Both stages run at ``threads``, which the operator then holds; every budget builds to the same bits.
 
     Args:
-        matrix: A ``scipy.sparse.csr_matrix`` or ``csr_array``.
+        matrix: A 2-D scipy sparse array or matrix, or a CSR's ``indptr``,
+            ``indices`` and ``data``, any integer index dtype, and its
+            2-D ``shape``.
         config: Optional factorization configuration.
         scaling: Optional scaling policy for blocks short of diagonal dominance.
         threads: The thread budget, ``None`` every core.
@@ -267,43 +271,14 @@ def factorize(
             solving to 0.
         BuildError: If a value computed from the matrix leaves the
             representable range.
-        ValueError: If an array has a dtype it cannot carry or is not 1-D, or
-            ``threads`` is outside ``[1, 2**64 - 1]``.
-        TypeError: If ``threads`` is not an integer, or is a bool.
+        ValueError: If the matrix is not 2-D, an array has a dtype it cannot
+            carry or is not 1-D, or ``threads`` is outside ``[1, 2**64 - 1]``.
+        TypeError: If ``matrix`` is neither scipy sparse nor has a CSR's
+            arrays and ``shape``, or ``threads`` is not an integer, or is a
+            bool.
 
     Warns:
         RuntimeWarning: If a block falls short of diagonal dominance after
             scaling, so its deficit was clamped, or its scaling did not settle,
             so a singular block may have been grounded.
-    """
-
-def factorize_raw(
-    row_ptrs: npt.ArrayLike,
-    col_indices: npt.ArrayLike,
-    values: npt.ArrayLike,
-    n: int,
-    config: Config | None = None,
-    scaling: ScalingPolicy | None = None,
-) -> ApproxInverse:
-    """Factorize an SDDM matrix from raw CSR arrays, on every core.
-
-    Releases the GIL as :func:`factorize`.
-
-    Args:
-        row_ptrs: CSR row pointer array, any integer dtype.
-        col_indices: CSR column index array, any integer dtype.
-        values: CSR value array, integer or floating-point.
-        n: Matrix dimension.
-        config: Optional factorization configuration.
-        scaling: Optional scaling policy, as :func:`factorize`.
-
-    Raises:
-        InputError: If the CSR structure is invalid, or the matrix is not
-            symmetric or has a nonpositive diagonal on a nonzero row; an
-            all-zero row solves to 0.
-        BuildError: As :func:`factorize`.
-        ValueError: If an array is not 1-D or has a dtype it cannot carry.
-
-    Warns:
-        RuntimeWarning: As :func:`factorize`.
     """
