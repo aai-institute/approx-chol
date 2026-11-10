@@ -120,7 +120,7 @@ Python submits as part of the build call (`interface/build.md`): a matrix is che
 passed.
 
 ```python
-def factorize(matrix: sparray | spmatrix, *, ...) -> ApproxInverse: ...
+def factorize(matrix: sparray | spmatrix | CsrLike, *, ...) -> ApproxInverse: ...
 
 class InputError(ValueError):
     kind: str            # the Rust variant in snake_case, e.g. "not_symmetric"
@@ -128,11 +128,12 @@ class InputError(ValueError):
     position: int | None # the entry, row, edge, column or vertex the variant names
 ```
 
-Python takes any scipy sparse matrix, whole storage. CSR, and CSC as the CSR of its transpose,
-with `f64` values and `int32` or `int64` indices are read without a copy; any other format goes
-through `tocsr()` and any other dtype is converted to `f64` or `int64`, each at most once.
-Anything else raises `TypeError`. `parameter` is `indptr`, `indices` or `data` of the matrix
-read. A rectangular matrix raises `not_square`. The message carries every field of the Rust
+Python takes any scipy sparse matrix, whole storage, through `tocsr()`, so a CSC factors its own
+matrix; any other object with `indptr`, `indices`, `data` and `shape` is read as a CSR as it
+stands. Anything else raises `TypeError`. Indices pass in any integer dtype without widening,
+values are converted to `f64`, and the arrays are copied once into Rust, so the build runs with
+the GIL released. `parameter` is `indptr`, `indices` or `data` of the CSR read, and a position
+is in that CSR's storage, after any conversion. A rectangular matrix raises `not_square`. The message carries every field of the Rust
 variant; `kind`, `parameter` and `position` are for matching.
 
 ## Why
@@ -159,6 +160,10 @@ variant; `kind`, `parameter` and `position` are for matching.
 - **`Side` in `input`:** it names a part of `BipartiteFactorWidth2`; Build names a side with it.
 - **Python: any scipy sparse matrix, inside the build call:** Python users hold scipy matrices,
   networkx's Laplacians among them; within, the one consumer of the other forms, calls Rust. A
-  Python input object would be one more step that carries nothing.
+  Python input object would be one more step that carries nothing. Arrays held without scipy
+  pass as an object with a CSR's four attributes.
+- **Python: a CSC through `tocsr()`, not as its transpose:** symmetry is checked to a tolerance,
+  so a nearly symmetric CSC's transpose is another matrix the check accepts; read as its
+  transpose it would factor that one (#432).
 - **`InputError` a `ValueError`:** existing `except ValueError` keeps working; `kind` and the
   position mirror the Rust variant.
