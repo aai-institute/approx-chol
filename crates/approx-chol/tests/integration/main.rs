@@ -3,6 +3,7 @@ mod common;
 
 mod admission;
 mod apply;
+mod build;
 mod component;
 mod config;
 mod cover_surplus;

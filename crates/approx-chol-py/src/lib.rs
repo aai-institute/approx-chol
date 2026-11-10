@@ -512,10 +512,10 @@ impl CsrArrays<'_> {
         let inner = entries.detach(py, || {
             let sgdd = CsrRef::new(n, &indptr, &indices, &data)
                 .map_err(value_error)
-                .and_then(|csr| Sgdd::reduce(csr, scaling).map_err(value_error));
+                .and_then(|csr| Sgdd::reduce(csr, scaling, Threads::All).map_err(value_error));
             // Freed before factoring: the copy never coexists with the factor's fill.
             drop((indptr, indices, data));
-            sgdd.map(|sgdd| sgdd.factor(&config))
+            sgdd.map(|sgdd| sgdd.factor(config, Threads::All))
         })?;
         warn_on_scaling(py, &inner)?;
         Ok(PyApproxInverse { inner, entries })

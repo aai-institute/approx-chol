@@ -1,8 +1,8 @@
 use approx_chol::input::{CsrRef, Side};
 use approx_chol::ScalingOutcome::Unsettled;
 use approx_chol::{
-    factorize_complement, factorize_with, ApproxInverse, Component, Config, CoverSurplus,
-    FrustratedRoute, Real, ScalingPolicy, SchurMode,
+    ApproxInverse, Complement, Component, Config, CoverSurplus, FrustratedRoute, Real,
+    ScalingPolicy, SchurMode, Sgdd,
 };
 use rstest::rstest;
 
@@ -15,13 +15,20 @@ use crate::common::solve::Solve;
 use crate::common::sparse::clique_tree;
 use crate::common::threads;
 
-/// The factor as shown, and the solve of `b` as bits, which its solve and each column of a four-column apply match under each budget; `kept` factors the complement.
+/// The factor as shown, which a build under each budget matches, and the solve of `b` as bits, which its solve and each column of a four-column apply match under each budget; `kept` factors the complement.
 fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> (String, Vec<u64>) {
-    let gram = g.view();
-    let factor = match kept {
-        None => factorize_with(gram, config, ScalingPolicy::default()).unwrap(),
-        Some(side) => factorize_complement(gram, side, config, ScalingPolicy::default()).unwrap(),
+    let (gram, policy) = (g.view(), ScalingPolicy::default());
+    let build = |threads| match kept {
+        None => (Sgdd::reduce(gram, policy, threads).unwrap()).factor(config, threads),
+        Some(side) => {
+            (Complement::reduce_onto(gram, side, policy, threads).unwrap()).factor(config, threads)
+        }
     };
+    let [factor, rest @ ..] = threads::BUDGETS.map(build);
+    let shown = format!("{factor:?}");
+    for (threads, built) in threads::BUDGETS[1..].iter().zip(&rest) {
+        assert_eq!(format!("{built:?}"), shown, "built at {threads:?}");
+    }
     assert_eq!(factor.components().len(), 3);
     let b: Vec<f64> = (0..factor.n())
         .map(|i| ((i * 7919) % 101) as f64 / 50.0 - 1.0)
@@ -50,7 +57,7 @@ fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> (String, Vec
             assert_eq!(&bits(&column), alone, "column {j}, {threads:?}");
         }
     }
-    (format!("{factor:?}"), whole)
+    (shown, whole)
 }
 
 #[rstest]
@@ -76,7 +83,19 @@ fn scaled_grid<T: Real>() -> String {
     }
     let (ptrs, columns, scaled) = dld::<T>(&graph, &mut lcg, 2.0);
     let csr = CsrRef::new(graph.n, &ptrs, &columns, &scaled).unwrap();
-    let factor = |policy| factorize_with(csr, Config::default(), policy).unwrap();
+    let factor = |policy| {
+        let build = |threads| {
+            let sgdd = Sgdd::reduce(csr, policy, threads).unwrap();
+            let clamps: Vec<String> = sgdd.clamps().map(|c| format!("{c:?}")).collect();
+            (clamps, sgdd.factor(Config::default(), threads))
+        };
+        let [(clamps, factor), rest @ ..] = threads::BUDGETS.map(build);
+        for (threads, (at, built)) in threads::BUDGETS[1..].iter().zip(rest) {
+            assert_eq!(at, clamps, "clamps at {threads:?}");
+            assert_eq!(format!("{built:?}"), format!("{factor:?}"), "{threads:?}");
+        }
+        factor
+    };
     let at_once: ApproxInverse<T> = factor(ScalingPolicy::new(1e-9, 0).unwrap());
     let unsettled = |c: Component<'_, T>| c.clamp().is_some_and(|c| c.scaling == Unsettled);
     assert!(at_once.components().any(unsettled), "relax never ran");

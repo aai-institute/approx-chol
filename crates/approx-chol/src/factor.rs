@@ -18,7 +18,7 @@ use rand::SeedableRng;
 use rayon::prelude::*;
 
 pub use apply::{ApplyError, ColumnMajor, Columns, LayoutError, MatrixMut};
-pub use build::{factorize, factorize_complement, factorize_with, Sgdd};
+pub use build::{factorize, factorize_complement, factorize_with, Clamped, Complement, Sgdd};
 pub use config::{Config, CoverSurplus, FrustratedRoute, Sampling, SchurMode};
 pub use header::{Header, HeaderMismatch, Scalar};
 

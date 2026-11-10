@@ -1,8 +1,8 @@
-//! How many threads a solve may use.
+//! How many threads a build or a solve may use.
 
 use std::num::NonZeroUsize;
 
-/// The threads a solve may use; the solution's bits do not depend on it.
+/// The threads a build or a solve may use; no result's bits depend on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Threads {
     /// Every thread of the caller's rayon pool.

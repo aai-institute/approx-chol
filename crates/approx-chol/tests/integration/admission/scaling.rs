@@ -2,7 +2,7 @@ use crate::common::clamps::Clamps;
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Side};
 use approx_chol::{
     factorize, factorize_complement, ApproxInverse, BuildError, Config, Real, ScalingOutcome,
-    ScalingPolicy, Sgdd,
+    ScalingPolicy, Sgdd, Threads,
 };
 use rstest::rstest;
 
@@ -110,9 +110,9 @@ fn a_reduction_keeps_its_own_scaling_when_factored() {
     };
     assert_eq!(clamp.scaling, ScalingOutcome::Unsettled, "{clamp:?}");
     let scaling = ScalingPolicy::new(1e-9, 6144).expect("a valid policy");
-    let factor = Sgdd::reduce(csr, scaling)
+    let factor = Sgdd::reduce(csr, scaling, Threads::All)
         .expect("admitted")
-        .factor(&Config::default());
+        .factor(Config::default(), Threads::All);
     assert_eq!(factor.clamps(), []);
     assert!(!only(&factor).grounding_unproven());
 }
