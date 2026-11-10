@@ -87,9 +87,11 @@ pub enum ApplyError {
   filled from their own columns, a column alone where it is; any other `MatrixMut` is staged one
   column at a time through `read_column` and `write_column` into the same packs. Foreign types
   implement it with any stride values: faer's dynamic-shape types, every nalgebra matrix, and
-  ndarray's `ArrayRef`, which owned arrays and views dereference to; a faer block whose columns
-  are contiguous, row stride 1, solves as `ColumnMajor` does, any other stride staged. A typed faer view converts
-  with `as_dyn_mut().as_dyn_stride_mut()`.
+  ndarray's `ArrayRef`, which owned arrays and views dereference to; a faer or ndarray block whose
+  columns are contiguous, row stride 1, solves as `ColumnMajor` does, any other stride staged.
+  ndarray's `ArrayRef` is unsized, so an `Array1`, `Array2` or view is passed as `&mut *a`, and
+  no `&mut dyn MatrixMut` holds one. A typed faer view converts with
+  `as_dyn_mut().as_dyn_stride_mut()`.
 - The unimplemented-trait message names the feature each foreign type needs and the supported
   versions, faer 0.24, nalgebra 0.35 and ndarray 0.17, and suggests `[..]` for an array and
   `&mut *a` for an ndarray array.
