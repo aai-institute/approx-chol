@@ -31,7 +31,7 @@ nalgebra-sparse = { version = "0.12", optional = true, default-features = false 
 [features]
 serde = ["dep:serde"]
 sprs = ["dep:sprs"]
-faer = ["dep:faer"]
+faer = ["dep:faer", "faer/rayon"]
 nalgebra = ["dep:nalgebra", "dep:nalgebra-sparse"]
 
 [dev-dependencies]
