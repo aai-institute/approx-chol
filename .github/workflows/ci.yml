@@ -20,12 +20,17 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # The three tasks share only setup, so they run in parallel.
   check:
-    name: Check + Coverage (Linux)
+    name: Check (Linux, ${{ matrix.task }})
     runs-on: ubuntu-latest
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
+    strategy:
+      fail-fast: false
+      matrix:
+        task: [lint, default-features, coverage]
     steps:
       - uses: actions/checkout@v7
       - uses: prefix-dev/setup-pixi@v0.10.0
@@ -34,13 +39,19 @@ jobs:
           cache: true
           cache-write: ${{ github.ref == 'refs/heads/main' }}
       - uses: mozilla-actions/sccache-action@v0.0.10
+      # Matrix jobs share a job id; without a key the three would overwrite one cache.
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.task }}
       - name: cargo fmt
+        if: matrix.task == 'lint'
         run: pixi run -e ci cargo fmt --all -- --check
       - name: cargo clippy
+        if: matrix.task == 'lint'
         run: pixi run -e ci cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       # All-features is clippied above; none, each and each pair here, since cargo-hack isn't on conda-forge (#55).
       - name: cargo clippy (approx-chol feature subsets)
+        if: matrix.task == 'lint'
         run: |
           mapfile -t all < <(pixi run -e ci cargo metadata --no-deps --format-version 1 --locked | jq -r "$FEATURES_JQ | .[]")
           [ "${#all[@]}" -gt 0 ] || { echo "::error::no approx-chol features found"; exit 1; }
@@ -57,11 +68,13 @@ jobs:
           done
       # Coverage tests only --all-features, which hides breakage with features off.
       - name: cargo test (default features)
+        if: matrix.task == 'default-features'
         run: pixi run -e ci cargo test --workspace --locked --no-fail-fast
       - name: coverage (cargo test + pytest, instrumented)
+        if: matrix.task == 'coverage'
         run: pixi run -e ci coverage
       - name: stubtest (python/approx_chol/__init__.pyi against the built module)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.task == 'coverage' }}
         run: pixi run -e ci stubtest
 
   msrv:
