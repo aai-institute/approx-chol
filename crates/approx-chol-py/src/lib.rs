@@ -5,14 +5,14 @@ use approx_chol::{
 };
 use num_traits::PrimInt;
 use numpy::{
-    BorrowError, Element, PyArray1, PyArrayDescr, PyArrayMethods, PyReadonlyArray1,
-    PyUntypedArrayMethods,
+    BorrowError, Element, PyArray1, PyArrayDescr, PyArrayDescrMethods, PyArrayMethods,
+    PyReadonlyArray1, PyUntypedArray, PyUntypedArrayMethods,
 };
 use pyo3::exceptions::{PyNotImplementedError, PyOverflowError};
 use pyo3::marker::Ungil;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyType};
-use std::num::NonZeroU32;
+use std::num::NonZeroU64;
 
 #[inline]
 fn value_error(message: impl std::fmt::Display) -> PyErr {
@@ -63,10 +63,10 @@ enum Column {
 }
 
 impl Column {
-    fn accepts(self, kind: &str) -> bool {
+    fn accepts(self, kind: u8) -> bool {
         match self {
-            Self::Index => kind == "i" || kind == "u",
-            Self::Value => kind == "i" || kind == "u" || kind == "f",
+            Self::Index => matches!(kind, b'i' | b'u'),
+            Self::Value => matches!(kind, b'i' | b'u' | b'f'),
         }
     }
 
@@ -86,11 +86,11 @@ fn as_1d<'py>(
     column: Column,
 ) -> PyResult<Bound<'py, PyAny>> {
     let arr = np.call_method1("asarray", (array_like,))?;
-    if arr.getattr("ndim")?.extract::<usize>()? != 1 {
+    let array = arr.cast::<PyUntypedArray>()?;
+    if array.ndim() != 1 {
         return Err(value_error(format!("{name} must be a 1-D array")));
     }
-    let kind = arr.getattr("dtype")?.getattr("kind")?.extract::<String>()?;
-    if !column.accepts(&kind) {
+    if !column.accepts(array.dtype().kind()) {
         return Err(value_error(format!(
             "{name} must have {}",
             column.expected()
@@ -166,14 +166,15 @@ fn frustrated_route(name: &str) -> PyResult<FrustratedRoute> {
     })
 }
 
-/// `split` as copies: an integer past `u32` or `0` is a `ValueError`, a non-integer a `TypeError`.
-fn copies(split: &Bound<'_, PyAny>) -> PyResult<NonZeroU32> {
-    let out_of_range = || value_error("split must be an integer in [1, 2**32 - 1]");
-    match split.extract::<i64>() {
-        Ok(k) => (u32::try_from(k).ok())
-            .and_then(NonZeroU32::new)
+/// `value` as a positive `N`: an integer past `N` or below 1 is a `ValueError`, a non-integer a `TypeError`.
+fn positive<N: TryFrom<NonZeroU64>>(value: &Bound<'_, PyAny>, name: &str) -> PyResult<N> {
+    let bits = 8 * size_of::<N>();
+    let out_of_range = || value_error(format!("{name} must be an integer in [1, 2**{bits} - 1]"));
+    match value.extract::<u64>() {
+        Ok(k) => (NonZeroU64::new(k))
+            .and_then(|k| N::try_from(k).ok())
             .ok_or_else(out_of_range),
-        Err(e) if e.is_instance_of::<PyOverflowError>(split.py()) => Err(out_of_range()),
+        Err(e) if e.is_instance_of::<PyOverflowError>(value.py()) => Err(out_of_range()),
         Err(e) => Err(e),
     }
 }
@@ -192,7 +193,7 @@ impl PyConfig {
         let sampling = match split {
             None => default.sampling,
             Some(split) => Sampling::CliqueTree {
-                copies: copies(&split)?,
+                copies: positive(&split, "split")?,
             },
         };
         Ok(Self(Config {
