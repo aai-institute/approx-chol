@@ -18,7 +18,7 @@ impl Header {
     /// The header this build writes for an `ApproxInverse<T>`, and the only one it reads.
     pub fn of<T: Real>() -> Header {
         Header {
-            version: 0x4143_000E,
+            version: 0x4143_000F,
             scalar: T::SCALAR,
         }
     }
@@ -68,16 +68,32 @@ pub struct HeaderMismatch {
     pub expected: Header,
 }
 
+/// Two format versions that differ, as both a [`HeaderMismatch`] and a load stopped at the version name them.
+pub(super) struct VersionMismatch {
+    pub(super) found: u32,
+    pub(super) expected: u32,
+}
+
+impl fmt::Display for VersionMismatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "format version {:#010x}, expected format version {:#010x}",
+            self.found, self.expected
+        )
+    }
+}
+
 impl fmt::Display for HeaderMismatch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (found, expected) = (self.found, self.expected);
         let versions_differ = found.version != expected.version;
         if versions_differ {
-            write!(
-                f,
-                "format version {:#010x}, expected format version {:#010x}",
-                found.version, expected.version
-            )?;
+            let versions = VersionMismatch {
+                found: found.version,
+                expected: expected.version,
+            };
+            write!(f, "{versions}")?;
         }
         match found.scalar == expected.scalar {
             true => Ok(()),

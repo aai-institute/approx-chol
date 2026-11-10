@@ -10,7 +10,6 @@ use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
 use approx_chol::{factorize_with, ApproxInverse, Config, FrustratedRoute, Header, Scalar};
 use approx_chol::{ScalingOutcome, ScalingPolicy};
 use rstest::rstest;
-use serde::Deserialize;
 
 use crate::common::pcg::relative_residual;
 use crate::common::solve::Solve;
@@ -265,53 +264,154 @@ fn assert_committed_payload_decodes_and_solves(fixture: Fixture) {
     );
 }
 
-fn released(version: u32) -> Header {
-    Header {
-        version,
-        ..Header::of::<f64>()
-    }
+/// [`Fixture::Grounded`]'s body behind `declared`, written as postcard.
+fn behind(declared: impl serde::Serialize) -> Vec<u8> {
+    let bytes = postcard::to_stdvec(&Fixture::Grounded.factor()).expect("serialize");
+    let (_, body) = postcard::take_from_bytes::<Header>(&bytes).expect("a header");
+    let mut payload = postcard::to_stdvec(&declared).expect("serialize");
+    payload.extend_from_slice(body);
+    payload
 }
 
 #[rstest]
-#[case::from_the_old_crate(released(0x4143_0005))]
-#[case::from_a_future_release(released(Header::of::<f64>().version + 1))]
-#[case::zero(released(0))]
-#[case::of_f32(Header::of::<f32>())]
-#[case::of_f32_and_zero(Header { version: 0, scalar: Scalar::F32 })]
-fn a_payload_of_another_header_is_rejected_by_name(#[case] declared: Header) {
-    let expected = Header::of::<f64>();
-    let bytes = postcard::to_stdvec(&Fixture::Grounded.factor()).expect("serialize");
-    let (_, body) = postcard::take_from_bytes::<(u32, Scalar)>(&bytes).expect("a flat header");
-    let mut payload = postcard::to_stdvec(&(declared.version, declared.scalar)).expect("serialize");
-    payload.extend_from_slice(body);
+#[case::from_the_old_crate(
+    Header { version: 0x4143_0005, scalar: Scalar::F64 },
+    "format version 0x41430005, expected format version 0x4143000f"
+)]
+#[case::from_a_future_release(
+    Header { version: 0x4143_0010, scalar: Scalar::F64 },
+    "format version 0x41430010, expected format version 0x4143000f"
+)]
+#[case::zero(
+    Header { version: 0, scalar: Scalar::F64 },
+    "format version 0x00000000, expected format version 0x4143000f"
+)]
+#[case::of_f32(
+    Header { version: 0x4143_000F, scalar: Scalar::F32 },
+    "scalar f32, expected scalar f64"
+)]
+fn a_payload_of_another_header_is_rejected_by_name(#[case] declared: Header, #[case] named: &str) {
+    let mismatch = declared.expect::<f64>().expect_err("another header");
+    assert_eq!(mismatch.to_string(), named);
     assert_eq!(
-        postcard::from_bytes::<ApproxInverse>(&payload)
+        (mismatch.found, mismatch.expected),
+        (declared, Header::of::<f64>())
+    );
+    assert_eq!(
+        postcard::from_bytes::<ApproxInverse>(&behind(declared))
             .expect_err("another header must not decode"),
         postcard::Error::SerdeDeCustom
     );
+    // Nothing valid follows the header, so only a gate that reads it first can name it.
+    let header = serde_json::to_string(&declared).expect("serialize");
+    for json in [
+        format!("[{header}]"),
+        format!(r#"[{header}, "not a factor"]"#),
+    ] {
+        let error = serde_json::from_str::<ApproxInverse>(&json)
+            .expect_err("another header must not decode")
+            .to_string();
+        assert!(error.contains(named), "expected {named:?}, got: {error}");
+    }
+}
 
-    let mismatch = declared.expect::<f64>().expect_err("another header");
-    assert_eq!((mismatch.found, mismatch.expected), (declared, expected));
-    // Nothing follows the header, so only a gate that reads it first can name it.
-    let lone = serde_json::json!([declared]);
-    let error = ApproxInverse::<f64>::deserialize(lone)
-        .expect_err("another header must not decode")
+#[test]
+fn an_f64_payload_is_rejected_as_f32_by_name() {
+    let factor = Fixture::Grounded.factor();
+    let bytes = postcard::to_stdvec(&factor).expect("serialize");
+    assert_eq!(
+        postcard::from_bytes::<ApproxInverse<f32>>(&bytes).expect_err("f64 is not f32"),
+        postcard::Error::SerdeDeCustom
+    );
+    let json = serde_json::to_string(&factor).expect("serialize");
+    let error = serde_json::from_str::<ApproxInverse<f32>>(&json)
+        .expect_err("f64 is not f32")
         .to_string();
-    let mut named = Vec::new();
-    if declared.version != expected.version {
-        named.push(format!(
-            "format version {:#010x}, expected format version {:#010x}",
-            declared.version, expected.version
-        ));
-    }
-    if declared.scalar != expected.scalar {
-        named.push("scalar f32, expected scalar f64".to_owned());
-    }
-    assert!(!named.is_empty());
-    for named in named {
-        assert!(error.contains(&named), "expected {named:?}, got: {error}");
-        assert!(mismatch.to_string().contains(&named), "{mismatch}");
-    }
+    assert!(error.contains("scalar f64, expected scalar f32"), "{error}");
+}
+
+/// A sequence is read in order, so a header wrong in both stops at its version; a map names both.
+#[test]
+fn a_header_wrong_in_both_is_rejected_by_version_first() {
+    let declared = Header {
+        version: 0,
+        scalar: Scalar::F32,
+    };
+    let mismatch = declared.expect::<f64>().expect_err("another header");
+    assert_eq!(
+        mismatch.to_string(),
+        "format version 0x00000000, expected format version 0x4143000f; \
+         scalar f32, expected scalar f64"
+    );
+    let error = |json: &str| {
+        serde_json::from_str::<ApproxInverse>(json)
+            .expect_err("another header must not decode")
+            .to_string()
+    };
+    let in_order = error(r#"[[0, "f32"]]"#);
+    assert!(
+        in_order.contains("format version 0x00000000, expected format version 0x4143000f")
+            && !in_order.contains("scalar"),
+        "{in_order}"
+    );
+    let both = error(r#"[{"version": 0, "scalar": "f32"}]"#);
+    assert!(both.contains(&mismatch.to_string()), "{both}");
+}
+
+/// A load from 0.7.0, `(0x4143_0009, (n, dead, blocks))`, of an edge `0–1` grounded at `0` beside a lone vertex `2`.
+const RELEASED_0_7: &str = "89808c8a04030002000200010000000102020003000000000000e03f000000000000e0bf0000000000000040000202000000000000e03f";
+/// The same factor as `0x4143_000E` wrote it, `(version, B)` with no scalar.
+const UNSCALARED_000E: &str = "8e808c8a0400020001000002000000000000e03f000000000000d03f";
+/// A version alone.
+const BARE_000E: &str = "8e808c8a04";
+
+/// Postcard keeps no message; a gate reading the scalar or body first would fail `DeserializeUnexpectedEnd` on a bare version.
+#[rstest]
+#[case::released_0_7(RELEASED_0_7)]
+#[case::unscalared_000e(UNSCALARED_000E)]
+#[case::bare_version(BARE_000E)]
+fn an_old_envelope_is_rejected_at_its_version(#[case] hex: &str) {
+    let bytes: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex"))
+        .collect();
+    assert_eq!(
+        postcard::from_bytes::<ApproxInverse>(&bytes).expect_err("an old envelope"),
+        postcard::Error::SerdeDeCustom
+    );
+}
+
+/// 0.7.0's JSON of the factor in [`RELEASED_0_7`]: its version alone where a header stands.
+const RELEASED_0_7_JSON: &str = r#"[1094909961,[3,[],[{"U32":{"restriction":{"vertices":[0,1],"congruence":"Identity"},"elimination":null,"cholesky":{"sheets":"One","grounded":true,"n":2,"pinned":2,"triangular":{"Dense":[0.5,-0.5,2.0]}},"report":null}},{"Isolated":{"vertex":2,"inverse_pivot":0.5}}]]]"#;
+
+#[rstest]
+#[case::released_0_7(
+    RELEASED_0_7_JSON,
+    "invalid type: integer `1094909961`, expected a Header"
+)]
+#[case::empty(r#"[[]]"#, "invalid length 0, expected a Header")]
+#[case::version_alone(r#"[[1094909967]]"#, "invalid length 1, expected a Header")]
+fn a_json_header_not_of_two_fields_is_rejected(#[case] json: &str, #[case] named: &str) {
+    let error = serde_json::from_str::<ApproxInverse>(json)
+        .expect_err("no header")
+        .to_string();
+    assert!(error.contains(named), "expected {named:?}, got: {error}");
+}
+
+#[test]
+fn an_unknown_scalar_discriminant_is_corrupt() {
+    let payload = behind((0x4143_000Fu32, 2u8));
+    postcard::from_bytes::<ApproxInverse>(&payload).expect_err("no scalar 2");
+}
+
+#[rstest]
+#[case::named(r#"[{"version": 1094909967, "scalar": "f16"}]"#)]
+#[case::in_order(r#"[[1094909967, "f16"]]"#)]
+fn an_unknown_scalar_name_is_rejected(#[case] json: &str) {
+    let error = serde_json::from_str::<ApproxInverse>(json)
+        .expect_err("no scalar f16")
+        .to_string();
+    assert!(error.contains("unknown variant `f16`"), "{error}");
 }
 
 /// A decoded clamp's violation is a deficit past rounding: finite and positive.
