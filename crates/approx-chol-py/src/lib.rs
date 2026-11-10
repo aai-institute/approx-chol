@@ -6,8 +6,8 @@ use approx_chol::{
 use num_traits::PrimInt;
 use numpy::ndarray::{ArrayRef, Dimension, Ix1, Ix2};
 use numpy::{
-    BorrowError, Element, PyArray, PyArray1, PyArrayDescrMethods, PyArrayDyn, PyArrayMethods,
-    PyReadwriteArray, PyUntypedArray, PyUntypedArrayMethods,
+    BorrowError, Element, PyArray, PyArray1, PyArrayDescr, PyArrayDescrMethods, PyArrayDyn,
+    PyArrayMethods, PyReadwriteArray, PyUntypedArray, PyUntypedArrayMethods,
 };
 use pyo3::exceptions::{PyNotImplementedError, PyOverflowError, PyTypeError};
 use pyo3::marker::Ungil;
@@ -609,12 +609,11 @@ impl CsrArrays<'_> {
             self.indices.getattr("dtype")?,
         );
         let dtype = self.np.call_method1("result_type", dtypes)?;
-        let kind = dtype.getattr("kind")?.extract::<String>()?;
-        let width = dtype.getattr("itemsize")?.extract::<usize>()?;
-        match (kind.as_str(), width) {
-            ("i", 4) => self.factorize_as::<i32>(config, scaling, threads),
-            ("u", 4) => self.factorize_as::<u32>(config, scaling, threads),
-            ("u", 8) => self.factorize_as::<u64>(config, scaling, threads),
+        let dtype = dtype.cast::<PyArrayDescr>()?;
+        match (dtype.kind(), dtype.itemsize()) {
+            (b'i', 4) => self.factorize_as::<i32>(config, scaling, threads),
+            (b'u', 4) => self.factorize_as::<u32>(config, scaling, threads),
+            (b'u', 8) => self.factorize_as::<u64>(config, scaling, threads),
             // Narrower integers widen; int64 beside uint64 promotes to float, and i64 holds any valid index.
             _ => self.factorize_as::<i64>(config, scaling, threads),
         }
