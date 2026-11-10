@@ -24,7 +24,7 @@ impl<'de, T: Real> Visitor<'de> for Checked<T> {
     type Value = Self;
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("a Header")
+        f.write_str("struct Header")
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self, A::Error> {

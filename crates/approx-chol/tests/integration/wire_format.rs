@@ -381,16 +381,16 @@ fn an_old_envelope_is_rejected_at_its_version(#[case] hex: &str) {
     );
 }
 
-/// 0.7.0's JSON of the factor in [`RELEASED_0_7`]: its version alone where a header stands.
+/// 0.7.0's JSON of the factor in [`RELEASED_0_7`]: a self-describing format cannot name a bare version where a header stands.
 const RELEASED_0_7_JSON: &str = r#"[1094909961,[3,[],[{"U32":{"restriction":{"vertices":[0,1],"congruence":"Identity"},"elimination":null,"cholesky":{"sheets":"One","grounded":true,"n":2,"pinned":2,"triangular":{"Dense":[0.5,-0.5,2.0]}},"report":null}},{"Isolated":{"vertex":2,"inverse_pivot":0.5}}]]]"#;
 
 #[rstest]
 #[case::released_0_7(
     RELEASED_0_7_JSON,
-    "invalid type: integer `1094909961`, expected a Header"
+    "invalid type: integer `1094909961`, expected struct Header"
 )]
-#[case::empty(r#"[[]]"#, "invalid length 0, expected a Header")]
-#[case::version_alone(r#"[[1094909967]]"#, "invalid length 1, expected a Header")]
+#[case::empty(r#"[[]]"#, "invalid length 0, expected struct Header")]
+#[case::version_alone(r#"[[1094909967]]"#, "invalid length 1, expected struct Header")]
 fn a_json_header_not_of_two_fields_is_rejected(#[case] json: &str, #[case] named: &str) {
     let error = serde_json::from_str::<ApproxInverse>(json)
         .expect_err("no header")
