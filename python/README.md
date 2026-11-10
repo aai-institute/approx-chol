@@ -73,7 +73,7 @@ x = factor.apply(b)
 
 ## API
 
-- `factorize(matrix, *, config=None, scaling=None, threads=None)` — Factorize a `scipy.sparse.csr_array` or `csr_matrix` at a thread budget, `None` every core.
+- `factorize(matrix, *, config=None, scaling=None, threads=None)` — Factorize a scipy sparse array or matrix of any format, read through `tocsr()`, or an object with a CSR's `indptr`, `indices`, `data` and `shape`, at a thread budget, `None` every core.
 - `factorize_raw(row_ptrs, col_indices, values, n, config=None, scaling=None)` — Factorize from raw CSR arrays.
 - `ApproxInverse` — a `LinearOperator`; `apply(b, *, out=None)` solves a vector or an n × k block, into `out` when given; `threads` and `with_threads(threads)` read and change its budget; `components` lists each `Component`'s `vertices` and `clamp`.
 - `Config(seed=0, split=1, exact_max_dim=24, *, frustrated="cover")` — Configuration for the factorization; `split` is the number of clique-tree copies each edge is sampled as, `1` standard AC and more AC2; `frustrated` carries a frustrated block's surplus on its cover to a ground vertex (`"cover_ground_vertex"`), onto edges between each vertex's copies (`"cover_surplus_edges"`), or onto those edges only inside the twist band of `CoverSurplus::Auto` (`"cover"`), or eliminates a frustrated block as it is, on one sheet, a bipartite block's complement formed signed (`"signed"`); blocks of at most `exact_max_dim` vertices, a bipartite block's kept side counted, are factored exactly by dense Cholesky, and `0` factors every block approximately.

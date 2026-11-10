@@ -219,7 +219,7 @@ let factor: ApproxInverse = postcard::from_bytes(&bytes)?;
 - A complex or other non-real `b` raises `TypeError`, not `ValueError`; a bool `split` or `threads` raises `TypeError`.
 - `ApproxInverse.threads` reads the budget every apply runs at, and `with_threads(threads)` gives one at another, sharing the factor; a loaded or copied one holds `None`.
 - An input or build error is an `approx_chol.InputError` or `approx_chol.BuildError`, both `ValueError`s: match `e.kind` and its fields (`parameter` and `position`, or `vertex`) where 0.7 matched the message, `except approx_chol.BuildError as e: e.kind, e.vertex` ([#430]).
-- The Python API changes of [#432] are listed here when it lands.
+- `factorize` reads a scipy sparse matrix through `tocsr()`: a CSC factors its own matrix, where 0.7 factored its transpose, and every other scipy format is accepted. An object that is neither scipy sparse nor has `indptr`, `indices`, `data` and `shape` raises `TypeError`, not `AttributeError` ([#432]).
 
 ```python
 # 0.7

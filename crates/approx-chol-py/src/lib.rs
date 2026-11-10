@@ -634,6 +634,7 @@ fn factorize(
     threads: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PyApproxInverse> {
     let (threads, names) = (self::threads(threads)?, CsrNames::SCIPY);
+    let matrix = csr(py, matrix)?;
     let (n, columns) = matrix.getattr("shape")?.extract::<(usize, usize)>()?;
     if n != columns {
         let error = InputError::NotSquare {
@@ -645,15 +646,33 @@ fn factorize(
     let np = py.import("numpy")?;
     let array = |name, column| as_1d(&np, &matrix.getattr(name)?, name, column);
     let data = array(names.data, Column::Value)?;
-    CsrArrays {
+    let arrays = CsrArrays {
         indptr: array(names.indptr, Column::Index)?,
         indices: array(names.indices, Column::Index)?,
         data: as_contiguous(&np, &data)?,
         n,
         names,
         np,
+    };
+    drop((data, matrix));
+    arrays.factorize(config, scaling, threads)
+}
+
+/// The CSR `matrix` is read as: a scipy sparse matrix's `tocsr()`, else any object with a CSR's arrays and `shape`.
+fn csr<'py>(py: Python<'py>, matrix: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let sparse = py.import("scipy.sparse")?;
+    if sparse.call_method1("issparse", (matrix,))?.is_truthy()? {
+        return matrix.call_method0("tocsr");
     }
-    .factorize(config, scaling, threads)
+    for name in ["indptr", "indices", "data", "shape"] {
+        if !matrix.hasattr(name)? {
+            let found = matrix.get_type().name()?;
+            return Err(PyTypeError::new_err(format!(
+                "matrix must be a scipy sparse matrix or have indptr, indices, data and shape, not {found}"
+            )));
+        }
+    }
+    Ok(matrix.clone())
 }
 
 /// The caller's names of a CSR's three arrays, by which every check names them.
@@ -700,7 +719,7 @@ struct CsrArrays<'py> {
 
 impl CsrArrays<'_> {
     fn factorize(
-        &self,
+        self,
         config: Option<&PyConfig>,
         scaling: Option<&PyScalingPolicy>,
         threads: Threads,
@@ -720,21 +739,20 @@ impl CsrArrays<'_> {
         }
     }
 
-    /// Copies the arrays, so nothing after reads a caller's array.
+    /// Copies the arrays and releases every Python array it holds, a conversion's included, before the build reads the copy.
     fn factorize_as<J: Element + PrimInt + Sync + Send>(
-        &self,
+        self,
         config: Option<&PyConfig>,
         scaling: Option<&PyScalingPolicy>,
         threads: Threads,
     ) -> PyResult<PyApproxInverse> {
-        let indptr = as_contiguous::<J>(&self.np, &self.indptr)?;
-        let indices = as_contiguous::<J>(&self.np, &self.indices)?;
-        let indptr = owned(&indptr, self.names.indptr)?;
-        let indices = owned(&indices, self.names.indices)?;
-        let data = owned(&self.data, self.names.data)?;
+        let (py, n, names) = (self.np.py(), self.n, self.names);
+        let indptr = owned(&as_contiguous::<J>(&self.np, &self.indptr)?, names.indptr)?;
+        let indices = owned(&as_contiguous::<J>(&self.np, &self.indices)?, names.indices)?;
+        let data = owned(&self.data, names.data)?;
+        drop(self);
         let config = config.map_or_else(Config::default, |config| config.0);
         let scaling = scaling.map_or_else(ScalingPolicy::default, |scaling| scaling.0);
-        let (py, n, names) = (self.np.py(), self.n, self.names);
         let entries = StoredEntries(data.len());
         let inner = entries.detach(py, || {
             let sgdd = CsrRef::new(n, &indptr, &indices, &data)

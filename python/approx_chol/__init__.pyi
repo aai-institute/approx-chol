@@ -249,13 +249,19 @@ def factorize(
     scaling: ScalingPolicy | None = None,
     threads: int | None = None,
 ) -> ApproxInverse:
-    """Factorize an SDDM matrix from a scipy.sparse CSR matrix.
+    """Factorize an SDDM matrix from a scipy sparse matrix or a CSR's arrays.
 
-    Copies the arrays, then releases the GIL to check and factor the copy above 32768 stored entries.
+    A scipy sparse matrix, any format, is read as its ``tocsr()``, so a CSC
+    factors its own matrix; any other object is read as the CSR its
+    ``indptr``, ``indices``, ``data`` and ``shape`` state. An error's
+    ``position`` is in the CSR read. Copies the arrays, then releases the
+    GIL to check and factor the copy above 32768 stored entries.
     Both stages run at ``threads``, which the operator then holds; every budget builds to the same bits.
 
     Args:
-        matrix: A ``scipy.sparse.csr_matrix`` or ``csr_array``.
+        matrix: A 2-D scipy sparse array or matrix, or a CSR's ``indptr``,
+            ``indices`` and ``data``, any integer index dtype, and its
+            2-D ``shape``.
         config: Optional factorization configuration.
         scaling: Optional scaling policy for blocks short of diagonal dominance.
         threads: The thread budget, ``None`` every core.
@@ -267,9 +273,11 @@ def factorize(
             solving to 0.
         BuildError: If a value computed from the matrix leaves the
             representable range.
-        ValueError: If an array has a dtype it cannot carry or is not 1-D, or
-            ``threads`` is outside ``[1, 2**64 - 1]``.
-        TypeError: If ``threads`` is not an integer, or is a bool.
+        ValueError: If the matrix is not 2-D, an array has a dtype it cannot
+            carry or is not 1-D, or ``threads`` is outside ``[1, 2**64 - 1]``.
+        TypeError: If ``matrix`` is neither scipy sparse nor has a CSR's
+            arrays and ``shape``, or ``threads`` is not an integer, or is a
+            bool.
 
     Warns:
         RuntimeWarning: If a block falls short of diagonal dominance after
