@@ -68,7 +68,7 @@ pub use factor::{
 };
 use input::{Input, Side};
 pub use sgdd::{Clamp, ScalingOutcome, ScalingPolicy};
-use sgdd::{Complement, Reduced};
+use sgdd::{Reduced, ReducedComplement};
 pub use threads::Threads;
 
 /// Factorizes any [`Input`] with [`Config::default`] and [`ScalingPolicy::default`].
@@ -104,12 +104,12 @@ pub fn factorize_complement<T: Real, I: PrimInt + Sync>(
 ) -> Result<ApproxInverse<T>, BuildError> {
     Ok(match fits_u32(input.n()) {
         true => ApproxInverse::build(
-            Complement::<T, u32>::reduce_onto(input, kept, scaling, Threads::All)?,
+            ReducedComplement::<T, u32>::reduce_onto(input, kept, scaling, Threads::All)?,
             &config,
             Threads::All,
         ),
         false => ApproxInverse::build(
-            Complement::<T, u64>::reduce_onto(input, kept, scaling, Threads::All)?,
+            ReducedComplement::<T, u64>::reduce_onto(input, kept, scaling, Threads::All)?,
             &config,
             Threads::All,
         ),

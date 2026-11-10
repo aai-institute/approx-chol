@@ -21,7 +21,7 @@ pub use config::{Config, CoverSurplus, FrustratedRoute, Sampling, SchurMode};
 pub use header::{Header, HeaderMismatch, Scalar};
 
 use crate::order::{Listed, Order, Segment, Slots};
-use crate::sgdd::{ranges, BlockComplement, Congruence, IrreducibleBlock, KeptVertices, Summands};
+use crate::sgdd::{ranges, BlockComplement, Congruence, CoupledBlock, IrreducibleBlock, Summands};
 use crate::storage::OffDiagonal;
 use crate::threads::task;
 use crate::Clamp;
@@ -225,7 +225,7 @@ impl<T: Real> ApproxInverse<T> {
 }
 
 /// A coupled summand of the factored matrix: a block of `A`, or a block's complement onto its kept side.
-pub(crate) trait Summand<T, I>: Send + KeptVertices {
+pub(crate) trait Summand<T, I>: Send + CoupledBlock {
     /// Its factor on `segment` of `order`, its vertices in the factored matrix's numbering.
     fn factor(
         self,
@@ -768,7 +768,7 @@ mod budget {
 
     use super::*;
     use crate::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Side};
-    use crate::sgdd::{Complement, Reduced};
+    use crate::sgdd::{Reduced, ReducedComplement};
     use crate::threads::{probe, ONE};
     use crate::{widen, CoverSurplus, FrustratedRoute, Sampling, ScalingPolicy, SchurMode};
 
@@ -865,7 +865,7 @@ mod budget {
                             threads,
                         ),
                         Some(side) => ApproxInverse::build(
-                            Complement::<_, u32>::reduce_onto(gram, side, policy, threads)
+                            ReducedComplement::<_, u32>::reduce_onto(gram, side, policy, threads)
                                 .expect("reduces"),
                             &config,
                             threads,

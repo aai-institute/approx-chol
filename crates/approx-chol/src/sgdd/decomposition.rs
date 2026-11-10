@@ -7,7 +7,7 @@ use rayon::prelude::*;
 mod assembly;
 mod partition;
 
-use super::block::KeptVertices;
+use super::block::CoupledBlock;
 use crate::input::Canonical;
 use crate::storage::{tally_abs, OffDiagonal, Rows, UpperAdjacency};
 use crate::threads::task;
@@ -254,7 +254,7 @@ pub(crate) struct Components<I, T, C = Range<usize>> {
 pub(crate) type Summands<B, I, T> = Components<I, T, B>;
 
 /// Each block's kept vertices as a range of `vertices`, each component starting where the one before ends.
-pub(crate) fn ranges<B: KeptVertices>(
+pub(crate) fn ranges<B: CoupledBlock>(
     coupled: &[B],
 ) -> impl ExactSizeIterator<Item = Range<usize>> + Clone + '_ {
     let mut end = 0;
@@ -298,7 +298,7 @@ impl<I, T, C> Components<I, T, C> {
     }
 }
 
-impl<I: Index, T, B: KeptVertices> Summands<B, I, T> {
+impl<I: Index, T, B: CoupledBlock> Summands<B, I, T> {
     /// Each block as `f` makes it from its kept vertices and itself, in parallel within `threads`.
     pub(super) fn map<C: Send>(
         mut self,
