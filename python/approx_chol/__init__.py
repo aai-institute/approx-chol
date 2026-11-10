@@ -88,9 +88,9 @@ class ApproxInverse(LinearOperator):
         return self._factor.apply(b, out)
 
     def _matvec(self, x):
-        if x.ndim == 1:
+        # scipy before 1.18 passes a vector as an (n, 1) column.
+        if x.ndim == 1 or x.shape == (self.n, 1):
             return self.apply(x)
-        # A stack of vectors, or scipy before 1.18's (n, 1) column, is a block of columns.
         stack = x.reshape(math.prod(x.shape[:-1]), self.n)
         return self.apply(stack.T).T.reshape(x.shape)
 
