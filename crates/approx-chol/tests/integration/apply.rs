@@ -258,6 +258,10 @@ fn a_copied_block_takes_one_packs_stack_whatever_its_width() {
         Layout::Columns,
         #[cfg(feature = "nalgebra")]
         Layout::Nalgebra,
+        #[cfg(feature = "ndarray")]
+        Layout::NdarrayRowMajor,
+        #[cfg(feature = "ndarray")]
+        Layout::NdarrayColumnMajor,
     ];
     for layout in copied {
         let least = wide.least(&factor, layout);

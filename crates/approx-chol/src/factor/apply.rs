@@ -96,12 +96,13 @@ impl std::error::Error for LayoutError {}
 
 /// A block of right-hand sides, the solutions written over them.
 ///
-/// It keeps its shape during an apply; `read_column` copies one column into `into`, `write_column` copies `from` into one column and touches nothing else, and neither allocates. Each panics unless `column < columns()` and the slice has `rows()` entries. A slice or `Vec` of `T` is one column; one of `[T; K]` holds `K` interleaved columns, solved where they are; any other block, [`ColumnMajor`] and [`Columns`] among them, is solved in interleaved packs of its columns copied into scratch. With the `faer` feature, faer's `Mat`, `MatMut`, `Col` and `ColMut` are blocks at any strides: contiguous columns are solved as [`ColumnMajor`]'s are, others through `read_column` and `write_column`; a typed faer view converts with `as_dyn_mut().as_dyn_stride_mut()`.
+/// It keeps its shape during an apply; `read_column` copies one column into `into`, `write_column` copies `from` into one column and touches nothing else, and neither allocates. Each panics unless `column < columns()` and the slice has `rows()` entries. A slice or `Vec` of `T` is one column; one of `[T; K]` holds `K` interleaved columns, solved where they are; any other block, [`ColumnMajor`] and [`Columns`] among them, is solved in interleaved packs of its columns copied into scratch. Foreign blocks come with their crates' features, each adapter's impl stating which types are blocks: a faer or ndarray block whose columns have row stride 1 is solved as [`ColumnMajor`]'s are, any other foreign block staged through `read_column` and `write_column`.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a block of right-hand sides of `{T}`",
     label = "not a `MatrixMut<{T}>`",
     note = "a slice or `Vec` of `{T}` is one column, one of `[{T}; K]` holds `K`; pass an array as `&mut a[..]`; wrap column-major data in `ColumnMajor`, one slice per column in `Columns`; a nalgebra 0.35 matrix needs the `nalgebra` feature",
-    note = "with feature `faer`, faer 0.24's `Mat`, `MatMut`, `Col` and `ColMut` are blocks; convert a typed faer view with `as_dyn_mut().as_dyn_stride_mut()`"
+    note = "with feature `faer`, faer 0.24's `Mat`, `MatMut`, `Col` and `ColMut` are blocks; convert a typed faer view with `as_dyn_mut().as_dyn_stride_mut()`",
+    note = "with feature `ndarray`, ndarray 0.17's `ArrayRef1` and `ArrayRef2` are blocks: pass an `Array1`, `Array2` or a view of one as `&mut *a`; convert an `ArrayD` with `into_dimensionality::<Ix2>()`"
 )]
 pub trait MatrixMut<T: Real> {
     /// Rows, the operator's dimension when applied.

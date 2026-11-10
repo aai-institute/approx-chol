@@ -92,6 +92,13 @@ fn an_apply_on_one_thread_allocates_nothing_and_builds_no_pool() {
     let mut data: Vec<f64> = (0..9 * n).map(b).collect();
     let mut major = ColumnMajor::new(&mut data, n).unwrap();
     let mut apart = Apart(vec![column.clone(); 9]);
+    // A standard-order array is staged, a Fortran-order one solved where its columns are.
+    #[cfg(feature = "ndarray")]
+    let mut arrays = {
+        use ndarray::ShapeBuilder;
+        let value = |(i, j): (usize, usize)| b(i + j * n);
+        [(n, 9).set_f(false), (n, 9).f()].map(|shape| ndarray::Array2::from_shape_fn(shape, value))
+    };
     let mut scratch = MemBuffer::new(factor.scratch(9, one));
     let stack = MemStack::new(&mut scratch);
 
@@ -103,6 +110,10 @@ fn an_apply_on_one_thread_allocates_nothing_and_builds_no_pool() {
             &mut apart,
         ] {
             factor.apply_with(block, one, stack).unwrap();
+        }
+        #[cfg(feature = "ndarray")]
+        for array in &mut arrays {
+            factor.apply_with(&mut **array, one, stack).unwrap();
         }
     });
 

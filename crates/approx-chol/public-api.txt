@@ -563,6 +563,16 @@ pub fn faer::mat::MatMut<'_, T>::columns(&self) -> usize
 pub fn faer::mat::MatMut<'_, T>::read_column(&self, usize, &mut [T])
 pub fn faer::mat::MatMut<'_, T>::rows(&self) -> usize
 pub fn faer::mat::MatMut<'_, T>::write_column(&mut self, usize, &[T])
+impl<T: approx_chol::Real> approx_chol::MatrixMut<T> for ndarray::aliases::ArrayRef1<T>
+pub fn ndarray::aliases::ArrayRef1<T>::columns(&self) -> usize
+pub fn ndarray::aliases::ArrayRef1<T>::read_column(&self, usize, &mut [T])
+pub fn ndarray::aliases::ArrayRef1<T>::rows(&self) -> usize
+pub fn ndarray::aliases::ArrayRef1<T>::write_column(&mut self, usize, &[T])
+impl<T: approx_chol::Real> approx_chol::MatrixMut<T> for ndarray::aliases::ArrayRef2<T>
+pub fn ndarray::aliases::ArrayRef2<T>::columns(&self) -> usize
+pub fn ndarray::aliases::ArrayRef2<T>::read_column(&self, usize, &mut [T])
+pub fn ndarray::aliases::ArrayRef2<T>::rows(&self) -> usize
+pub fn ndarray::aliases::ArrayRef2<T>::write_column(&mut self, usize, &[T])
 pub trait approx_chol::Real: num_traits::float::Float + num_traits::float::TotalOrder + core::fmt::Debug + core::marker::Send + core::marker::Sync + 'static + approx_chol::seal::Real
 impl approx_chol::Real for f32
 impl approx_chol::Real for f64

@@ -1,5 +1,8 @@
 use std::array;
 
+#[cfg(feature = "ndarray")]
+use ndarray::ShapeBuilder;
+
 use approx_chol::{
     ApplyError, ApproxInverse, ColumnMajor, Columns, MatrixMut, MemBuffer, MemStack, Real,
     StackReq, Threads,
@@ -21,6 +24,12 @@ pub enum Layout {
     Columns,
     #[cfg(feature = "nalgebra")]
     Nalgebra,
+    /// A standard-order `Array2`, its columns strided.
+    #[cfg(feature = "ndarray")]
+    NdarrayRowMajor,
+    /// A Fortran-order `Array2`, its columns contiguous.
+    #[cfg(feature = "ndarray")]
+    NdarrayColumnMajor,
 }
 
 impl Layout {
@@ -31,6 +40,10 @@ impl Layout {
         Layout::Columns,
         #[cfg(feature = "nalgebra")]
         Layout::Nalgebra,
+        #[cfg(feature = "ndarray")]
+        Layout::NdarrayRowMajor,
+        #[cfg(feature = "ndarray")]
+        Layout::NdarrayColumnMajor,
     ];
 }
 
@@ -80,6 +93,10 @@ pub struct Layouts<T, const K: usize> {
     slices: Vec<Vec<T>>,
     #[cfg(feature = "nalgebra")]
     nalgebra: nalgebra::DMatrix<T>,
+    #[cfg(feature = "ndarray")]
+    ndarray_rows: ndarray::Array2<T>,
+    #[cfg(feature = "ndarray")]
+    ndarray_columns: ndarray::Array2<T>,
 }
 
 impl<T: Real, const K: usize> Layouts<T, K> {
@@ -95,6 +112,10 @@ impl<T: Real, const K: usize> Layouts<T, K> {
             slices: columns.to_vec(),
             #[cfg(feature = "nalgebra")]
             nalgebra: nalgebra::DMatrix::from_fn(rows, K, |i, j| columns[j][i]),
+            #[cfg(feature = "ndarray")]
+            ndarray_rows: ndarray::Array2::from_shape_fn((rows, K), |(i, j)| columns[j][i]),
+            #[cfg(feature = "ndarray")]
+            ndarray_columns: ndarray::Array2::from_shape_fn((rows, K).f(), |(i, j)| columns[j][i]),
         }
     }
 
@@ -109,6 +130,10 @@ impl<T: Real, const K: usize> Layouts<T, K> {
             Layout::Columns => f(&mut &mut Columns::new(&mut self.slices).expect("equal columns")),
             #[cfg(feature = "nalgebra")]
             Layout::Nalgebra => f(&mut &mut self.nalgebra),
+            #[cfg(feature = "ndarray")]
+            Layout::NdarrayRowMajor => f(&mut &mut *self.ndarray_rows),
+            #[cfg(feature = "ndarray")]
+            Layout::NdarrayColumnMajor => f(&mut &mut *self.ndarray_columns),
         }
     }
 
