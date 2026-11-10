@@ -3,31 +3,29 @@
 use rayon::prelude::*;
 
 use super::block_elimination::BlockElimination;
-use super::cholesky::{Arm, AsIs};
+use super::cholesky::Arm;
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::{Config, SchurMode};
-use super::sddm::{cover_vertex, crosses, Layout, Sddm, SddmRows};
-use super::sign::Unsigned;
+use super::sddm::{cover_vertex, crosses, Factored, Layout, SddmRows};
+use super::sign::{Signed, Unsigned};
 use super::{Streams, MULTIPLY_ADD_GRAIN_BITS};
 use crate::sgdd::{Balance, Grounding};
 use crate::storage::Rows;
 use crate::threads::task;
 use crate::{narrow, per_task, widen, Index, Real, Threads};
 
-/// How one block's Schur complement is formed, resolved from [`Config`] and its kept side.
+/// How one block's Schur complement is formed, resolved from [`Config`] and what it is factored as.
 enum Formation {
-    /// Exact and as is, for a dense Cholesky of `S` itself.
-    Dense,
     /// Each star's whole clique.
     Exact,
     /// Clique trees sampled with these copies.
     Sampled(Option<Multi>),
 }
 
-/// How a complement on `n_kept` vertices is formed: as is when dense, exact when asked, else sampled with its own sampling or under `Same` the factor's.
-fn formation(config: &Config, n_kept: usize) -> Formation {
+/// Exact when factored as it is, which spends nothing on sparsity, or when asked, else sampled with its own sampling or under `Same` the factor's.
+fn formation(config: &Config, factored: Factored) -> Formation {
     match config.complement {
-        _ if config.dense(n_kept) => Formation::Dense,
+        _ if matches!(factored, Factored::AsIs(_)) => Formation::Exact,
         SchurMode::Exact => Formation::Exact,
         SchurMode::Approximate { sampling } => Formation::Sampled(sampling.copies()),
         SchurMode::Same => Formation::Sampled(config.sampling.copies()),
@@ -72,16 +70,15 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         threads: Threads,
         inv_pivot: &[T],
     ) -> (Arm<T, I>, Rows<T, I>) {
-        let rows = match formation(config, self.cross.n_cols()) {
-            Formation::Dense => return (Arm::AsIs(self.as_is(inv_pivot, threads)), self.cross),
-            Formation::Exact => self.exact(inv_pivot, Layout::sddm(self.balance), threads),
+        let factored = self.factored(config);
+        let rows = match formation(config, factored) {
+            Formation::Exact => self.exact(inv_pivot, factored, threads),
             Formation::Sampled(copies) => {
                 let kept = Self::kept_surplus(&self.grounding, self.cross.n_rows());
-                self.sample(copies, streams, threads).merge(kept)
+                self.sample(copies, factored, streams, threads).merge(kept)
             }
         };
-        let s = Sddm::of_rows(rows, config.frustrated.cover_surplus());
-        (Arm::Sddm(s), self.cross)
+        (rows.arm(), self.cross)
     }
 
     /// `S` alone, a complement's summand: only exact computes pivots, and `C` is freed before the sampled merge.
@@ -91,27 +88,23 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         streams: Streams,
         threads: Threads,
     ) -> Arm<T, I> {
-        let rows = match formation(config, self.cross.n_cols()) {
-            Formation::Dense => return Arm::AsIs(self.as_is(&self.inverse_pivots(), threads)),
-            Formation::Exact => {
-                self.exact(&self.inverse_pivots(), Layout::sddm(self.balance), threads)
-            }
+        let factored = self.factored(config);
+        let rows = match formation(config, factored) {
+            Formation::Exact => self.exact(&self.inverse_pivots(), factored, threads),
             Formation::Sampled(copies) => {
-                let fill = self.sample(copies, streams, threads);
+                let fill = self.sample(copies, factored, streams, threads);
                 let kept = Self::kept_surplus(&self.grounding, self.cross.n_rows());
                 // The merge never reads `C`.
                 drop(self.cross);
                 fill.merge(kept)
             }
         };
-        Arm::Sddm(Sddm::of_rows(rows, config.frustrated.cover_surplus()))
+        rows.arm()
     }
 
-    /// `S` itself: a balanced block's exact rows, a frustrated one's signed pairs folded.
-    fn as_is(&self, inv_pivot: &[T], threads: Threads) -> AsIs<T, I> {
-        let rows = self.exact(inv_pivot, Layout::as_is(self.balance), threads);
-        let (adjacency, grounding) = rows.close();
-        AsIs::new(adjacency, self.balance, grounding)
+    /// What `S` is factored as, by its kept side.
+    fn factored(&self, config: &Config) -> Factored {
+        Factored::of(config, self.balance, self.cross.n_cols())
     }
 
     /// Inverse pivots `1/(Σ|c_ek| + s_e)`, the same on both sheets of a cover.
@@ -131,12 +124,12 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         grounding.surplus().map(|s| &s[n_e..])
     }
 
-    /// `S` exact by kept row in `layout`, `S = D_k − Cᵀ D_e⁻¹ C`, through a `Cᵀ` freed before the rows close.
-    fn exact(&self, inv_pivot: &[T], layout: Layout, threads: Threads) -> SddmRows<'_, T, I> {
-        match layout {
-            Layout::Sheet => self.exact_rows(inv_pivot, layout, threads, |j, _, _| j),
+    /// `S` exact by kept row in its layout, `S = D_k − Cᵀ D_e⁻¹ C`, through a `Cᵀ` freed before the rows close.
+    fn exact(&self, inv_pivot: &[T], factored: Factored, threads: Threads) -> SddmRows<'_, T, I> {
+        match factored.layout() {
+            Layout::Sheet => self.exact_rows(inv_pivot, factored, threads, |j, _, _| j),
             Layout::Cover | Layout::SignedPairs => {
-                self.exact_rows(inv_pivot, layout, threads, |j, c_ek, c_ej| {
+                self.exact_rows(inv_pivot, factored, threads, |j, c_ek, c_ej| {
                     cover_vertex(j, usize::from(crosses(c_ek) != crosses(c_ej)))
                 })
             }
@@ -147,17 +140,17 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
     fn exact_rows(
         &self,
         inv_pivot: &[T],
-        layout: Layout,
+        factored: Factored,
         threads: Threads,
         vertex: impl Fn(usize, T, T) -> usize + Sync,
     ) -> SddmRows<'_, T, I> {
         let (c, grounding) = (&self.cross, &self.grounding);
         let ct = c.transpose();
-        let ground = layout.columns(c.n_cols());
+        let ground = factored.layout().columns(c.n_cols());
         // Each task carries one grain of the complement's `nnz·(nnz/n_e)/2` multiply-adds.
         let work = c.nnz() as u64 * (c.nnz() / c.n_rows().max(1)) as u64 / 2;
         SddmRows::split(
-            layout,
+            factored,
             c.n_cols(),
             per_task(c.n_cols(), work, MULTIPLY_ADD_GRAIN_BITS),
             threads,
@@ -177,23 +170,37 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
     }
 
     /// Clique trees need no pivots, so sampling reads only `C`, σ and the streams.
-    fn sample(&self, copies: Option<Multi>, streams: Streams, threads: Threads) -> Fill<T, I> {
+    fn sample(
+        &self,
+        copies: Option<Multi>,
+        factored: Factored,
+        streams: Streams,
+        threads: Threads,
+    ) -> Fill<T, I> {
+        let layout = factored.layout();
         let stars = Stars {
             block: self,
             streams,
-            ground: I::from_index(Layout::sddm(self.balance).columns(self.cross.n_cols())),
+            layout,
+            ground: I::from_index(layout.rows(self.cross.n_cols())),
         };
-        match copies {
+        let pieces = match copies {
             None => stars.sample_with(Single, threads),
             Some(copies) => stars.sample_with(copies, threads),
+        };
+        Fill {
+            factored,
+            kept: self.cross.n_cols(),
+            pieces,
         }
     }
 }
 
-/// The eliminated side's stars: row `e` of `C` on each sheet, its ground share last, each under its own stream.
+/// The eliminated side's stars: row `e` of `C` on each of `layout`'s sheets, its ground share last at the vertex past the rows, each under its own stream.
 struct Stars<'a, T, I> {
     block: &'a BipartiteBlock<T, I>,
     streams: Streams,
+    layout: Layout,
     ground: I,
 }
 
@@ -208,13 +215,13 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
         let c = &self.block.cross;
         let ground = |e: usize| self.block.grounding.edge(e).map(|s_e| (self.ground, s_e));
         let draws = self.streams.star(s);
-        match self.block.balance {
+        match self.layout {
             // One sheet maps no column, as the balanced loop pays for any map.
-            Balance::Balanced => {
+            Layout::Sheet => {
                 let neighbors = c.row(s).map(|(k, &c)| (I::from_index(k), c.abs()));
                 sampler.eliminate_unique(draws, neighbors.chain(ground(s)), fill, Unsigned);
             }
-            Balance::Frustrated => {
+            Layout::Cover => {
                 let (sheet, e) = (s / c.n_rows(), s % c.n_rows());
                 let neighbors = c.row(e).map(move |(k, &c)| {
                     let on = sheet ^ usize::from(crosses(c));
@@ -222,18 +229,30 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
                 });
                 sampler.eliminate_unique(draws, neighbors.chain(ground(e)), fill, Unsigned);
             }
+            Layout::SignedPairs => {
+                let neighbors = c.row(s).map(|(k, &c)| (I::from_index(k), -c));
+                let sign = Signed {
+                    ground: self.ground,
+                };
+                let mut fill = fill;
+                // A ground share is a magnitude, so the ground `n` lands on column `2n`, the rows' ground.
+                let paired = |(lo, hi, copies, w): (I, I, C, T)| {
+                    let at = cover_vertex(hi.index(), usize::from(w < T::zero()));
+                    fill((lo, I::from_index(at), copies, w.abs()));
+                };
+                sampler.eliminate_unique(draws, neighbors.chain(ground(s)), paired, sign);
+            }
         }
     }
 
     /// Each star's clique tree, chunked in star order so merged duplicates sum alike at any thread count.
-    fn sample_with<C: Copies>(&self, copies: C, threads: Threads) -> Fill<T, I> {
+    fn sample_with<C: Copies>(&self, copies: C, threads: Threads) -> Vec<Buckets<T, I>> {
         let c = &self.block.cross;
-        let layout = Layout::sddm(self.block.balance);
-        let n = layout.rows(c.n_cols());
+        let n = self.layout.rows(c.n_cols());
         let shift = bucket_shift(n);
         let count = n.div_ceil(1 << shift);
         let per_task = per_task(c.n_rows(), c.nnz() as u64, 14);
-        let stars = layout.columns(c.n_rows());
+        let stars = self.layout.rows(c.n_rows());
         let piece = |task: usize| {
             let (mut sampler, mut buckets) =
                 (CliqueTreeSampler::new(copies), vec![Vec::new(); count]);
@@ -246,18 +265,13 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
             buckets
         };
         let tasks = stars.div_ceil(per_task);
-        let pieces = match threads.per_task(tasks, 1) {
+        match threads.per_task(tasks, 1) {
             Some(per) => (0..tasks)
                 .into_par_iter()
                 .with_min_len(per)
                 .map(|k| task(|| piece(k)))
                 .collect(),
             None => (0..tasks).map(piece).collect(),
-        };
-        Fill {
-            layout,
-            kept: c.n_cols(),
-            pieces,
         }
     }
 }
@@ -270,9 +284,9 @@ fn bucket_shift(n: usize) -> u32 {
 /// One thread's fill edges `(lo, hi, weight)`, split by `lo` into the ranges of [`bucket_shift`].
 type Buckets<T, I> = Vec<Vec<(I, I, T)>>;
 
-/// Every task's sampled fill over the rows of `kept` vertices in `layout`, bucketed by row; an edge to the last column is `lo`'s ground weight.
+/// Every task's sampled fill over the rows of `kept` vertices for `factored`, bucketed by row; an edge to the last column is `lo`'s ground weight.
 struct Fill<T, I> {
-    layout: Layout,
+    factored: Factored,
     kept: usize,
     pieces: Vec<Buckets<T, I>>,
 }
@@ -281,18 +295,18 @@ impl<T: Real, I: Index> Fill<T, I> {
     /// Bucket by bucket, counting-sorts the chunks' rows unflattened, merges each row's duplicates, stores `−w`; each row's ground gains its vertex's `surplus`.
     fn merge(self, surplus: Option<&[T]>) -> SddmRows<'_, T, I> {
         let Self {
-            layout,
+            factored,
             kept,
             mut pieces,
         } = self;
-        let n = layout.rows(kept);
+        let n = factored.layout().rows(kept);
         let stride = 1 << bucket_shift(n);
         let count = n.div_ceil(stride);
         let bucket = |b: usize| pieces.iter().map(|p| p[b].len()).sum();
         let most = (0..count).map(bucket).max().unwrap_or(0);
         let (mut columns, mut weights) = (vec![I::zero(); most], vec![T::zero(); most]);
         let (mut starts, mut next) = (Vec::new(), Vec::new());
-        let mut rows = SddmRows::new(layout, kept, surplus);
+        let mut rows = SddmRows::new(factored, kept, surplus);
         for b in 0..count {
             let first = b * stride;
             let len = (n - first).min(stride);
@@ -331,4 +345,72 @@ impl<T: Real, I: Index> Fill<T, I> {
 /// `x·y/d` as the smaller times the larger's share `max·d⁻¹ ≤ 1`, so no product overflows before the division; at least `MIN_POSITIVE`, so no edge of `S` drops and every pivot's inverse is finite.
 fn share<T: Real>(x: T, y: T, inv_pivot: T) -> T {
     (x.min(y) * (x.max(y) * inv_pivot)).max(T::min_positive_value())
+}
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use super::*;
+    use crate::factor::cholesky::Eliminated;
+    use crate::factor::config::{FrustratedRoute, Sampling};
+    use crate::threads::ONE;
+
+    /// Kept `0` and `1` joined through eliminated `e₀` by `c = (−a₀, −b₀)` and `e₁` by `(a₁, −b₁)`, kept surplus `s`: two degree-two stars of opposite sign onto one pair.
+    fn opposed([a0, b0, a1, b1]: [f64; 4], s: [f64; 2]) -> (Rows<f64, u32>, Grounding<f64>) {
+        let cross = Rows::new(vec![0, 2, 4], vec![0, 1, 0, 1], vec![-a0, -b0, a1, -b1], 2);
+        (cross, Grounding::of(vec![0.0, 0.0, s[0], s[1]]))
+    }
+
+    /// `S = D_k − Cᵀ D_e⁻¹ C` as `(−S₀₁, S₀₀ − |S₀₁|, S₁₁ − |S₀₁|)`: the signed elimination's edge and the surplus left on each end.
+    fn schur([a0, b0, a1, b1]: [f64; 4], s: [f64; 2]) -> [f64; 3] {
+        let (d0, d1) = (a0 + b0, a1 + b1);
+        let s01 = -(a0 * b0 / d0 - a1 * b1 / d1);
+        let s00 = a0 + a1 + s[0] - a0 * a0 / d0 - a1 * a1 / d1;
+        let s11 = b0 + b1 + s[1] - b0 * b0 / d0 - b1 * b1 / d1;
+        [-s01, s00 - s01.abs(), s11 - s01.abs()]
+    }
+
+    /// Unequal opposite shares onto one pair keep their signed remainder and ground what cancels on both ends, under exact and sampled formation, either sign dominant.
+    #[test]
+    fn unequal_opposite_shares_keep_their_remainder_and_ground_the_cancelled() {
+        let sampled = |copies| SchurMode::Approximate {
+            sampling: Sampling::CliqueTree {
+                copies: NonZeroU32::new(copies).expect("a copy"),
+            },
+        };
+        let s = [0.25, 0.0];
+        let mut defects = Vec::new();
+        for (alike, weights) in [(true, [2.0, 2.0, 1.0, 1.0]), (false, [1.0, 1.0, 3.0, 1.0])] {
+            let want = schur(weights, s);
+            assert_eq!(want[0] > 0.0, alike, "the alike share dominates");
+            for (formed, complement) in [
+                ("exact", SchurMode::Exact),
+                ("AC", sampled(1)),
+                ("AC2", sampled(2)),
+            ] {
+                let config = Config {
+                    exact_max_dim: 0,
+                    complement,
+                    frustrated: FrustratedRoute::Signed,
+                    ..Config::default()
+                };
+                let (cross, grounding) = opposed(weights, s);
+                let block = BipartiteBlock::of(cross, Balance::Frustrated, grounding);
+                let Arm::Signed(m) = block.complement(&config, Streams::of(0, &config), ONE) else {
+                    panic!("a frustrated complement is signed under Signed")
+                };
+                let mut got = [0.0; 3];
+                m.grounded_edges(|i, j, w| match (i, j) {
+                    (0, 1) => got[0] += w,
+                    (k, 2) => got[1 + k as usize] += w,
+                    other => panic!("no edge {other:?}"),
+                });
+                let off = (got.iter().zip(&want)).fold(0.0f64, |m, (g, w)| m.max((g - w).abs()));
+                if off > 1e-15 {
+                    defects.push(format!("alike {alike}, {formed}: {got:?}, want {want:?}"));
+                }
+            }
+        }
+        assert!(defects.is_empty(), "{defects:#?}");
+    }
 }

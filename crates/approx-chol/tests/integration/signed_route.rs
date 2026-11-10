@@ -1,9 +1,13 @@
-use approx_chol::input::CsrRef;
-use approx_chol::ScalingPolicy;
+use approx_chol::input::{CsrRef, Side};
 use approx_chol::{factorize_with, ApproxInverse, Config, CoverSurplus, FrustratedRoute};
+use approx_chol::{ScalingPolicy, SchurMode};
 use rstest::rstest;
 
+use crate::common::bipartite::Bipartite;
 use crate::common::bits::bits;
+use crate::common::cycle::Cycle;
+use crate::common::dense_residual::{apply, max_abs_diff};
+use crate::common::frustrated::{factors, is_signed};
 use crate::common::graph::{Edge, Graph};
 use crate::common::grid::light_row;
 use crate::common::lcg::Lcg;
@@ -82,9 +86,83 @@ fn a_frustrated_cycle_without_surplus_solves_exactly() {
         .solve(&b)
         .unwrap();
         let scale = dense.iter().fold(0.0f64, |m, x| m.max(x.abs()));
-        let off = (signed.iter().zip(&dense)).fold(0.0f64, |m, (s, d)| m.max((s - d).abs()));
+        let off = max_abs_diff(&signed, &dense);
         assert!(off <= 1e-13 * scale, "n = {n}: off by {off:e} of {scale:e}");
         assert!(graph.relative_residual(&signed, &b) <= 1e-13, "n = {n}");
+    }
+}
+
+/// `g`'s [`factors`] under `config`, each with its `A` or `S` dense.
+fn bipartite_factors(g: &Bipartite, config: Config) -> Vec<(String, ApproxInverse, Vec<Vec<f64>>)> {
+    let matrices = [
+        g.dense(),
+        g.complement(Side::Left),
+        g.complement(Side::Right),
+    ];
+    (factors(g, config).into_iter().zip(matrices))
+        .map(|((built, factor), a)| (built, factor, a))
+        .collect()
+}
+
+/// A frustrated bipartite cycle without surplus: each eliminated star holds two neighbors, so its complement, exact or sampled, is a frustrated cycle, which the signed elimination solves exactly, whole or as a complement; at `m = 2` its two stars cancel to a diagonal.
+#[test]
+fn a_frustrated_bipartite_cycle_without_surplus_solves_exactly() {
+    for m in [2, 3, 5, 16] {
+        let cycle = Cycle {
+            cycle: m,
+            pendants: 0,
+            wide: 1,
+            right_pendants: 0,
+        };
+        let g = cycle.bipartite();
+        for complement in [SchurMode::Exact, SchurMode::Same] {
+            let config = Config {
+                complement,
+                ..signed()
+            };
+            for (built, factor, a) in bipartite_factors(&g, config) {
+                let name = format!("m = {m}, {complement:?}, {built}");
+                assert!(is_signed(&factor), "{name}: signed");
+                let want: Vec<f64> = (0..a.len()).map(|i| ((3 * i + 1) as f64).sin()).collect();
+                let x = factor.solve(&apply(&a, &want)).unwrap();
+                let off = max_abs_diff(&x, &want);
+                assert!(off <= 1e-13, "{name}: off by {off:e}");
+            }
+        }
+    }
+}
+
+/// Both routes precondition a frustrated bipartite input, whole and onto each side, its complement exact or sampled.
+#[rstest]
+fn both_routes_converge_on_a_frustrated_bipartite_input(
+    #[values(SchurMode::Exact, SchurMode::Same)] complement: SchurMode,
+    #[values(1, 2)] copies: u32,
+    #[values(FrustratedRoute::Signed, FrustratedRoute::Cover(CoverSurplus::Auto))]
+    route: FrustratedRoute,
+) {
+    let config = Config {
+        frustrated: route,
+        sampling: clique_tree(copies),
+        complement,
+        exact_max_dim: 0,
+        ..Config::default()
+    };
+    let signed = matches!(route, FrustratedRoute::Signed);
+    for (built, factor, a) in bipartite_factors(&Bipartite::frustrated(), config) {
+        assert_eq!(is_signed(&factor), signed, "{built}");
+        let want: Vec<f64> = (0..a.len()).map(|i| ((7 * i + 3) as f64).sin()).collect();
+        let b = apply(&a, &want);
+        let iterations = pcg_iterations(
+            |x| apply(&a, x),
+            |r| factor.solve(r).unwrap(),
+            &b,
+            1e-8,
+            200,
+        );
+        assert!(
+            iterations.is_some(),
+            "{route:?}, {complement:?} at {copies} copies, {built}: did not converge"
+        );
     }
 }
 
@@ -137,10 +215,7 @@ fn a_switched_balanced_input_solves_alike_under_both_routes() {
         },
     );
     let signed = factor(&graph, signed());
-    assert!(
-        !format!("{signed:?}").contains("Signed("),
-        "a balanced block folds"
-    );
+    assert!(!is_signed(&signed), "a balanced block folds");
     assert_eq!(
         bits(&signed.solve(&b).unwrap()),
         bits(&cover.solve(&b).unwrap())
@@ -192,7 +267,7 @@ mod serde {
     /// A signed frustrated triangle's payload as JSON.
     fn triangle() -> serde_json::Value {
         let factor = factor(&frustrated_cycle(3), signed());
-        assert!(format!("{factor:?}").contains("Signed("));
+        assert!(is_signed(&factor));
         serde_json::to_value(&factor).unwrap()
     }
 

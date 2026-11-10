@@ -36,7 +36,7 @@ class Config:
     ``CoverSurplus::Auto`` (``"cover"``); or as it is on one sheet
     (``"signed"``), its fill signed by its ends and what opposite entries
     cancel grounded, so it never floats; a bipartite block's complement is
-    still covered as ``"cover"``.
+    formed signed and eliminated so.
     An argument left out or ``None`` keeps the default, which the getters report.
 
     Raises:
