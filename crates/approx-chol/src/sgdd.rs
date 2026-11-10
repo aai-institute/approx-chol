@@ -9,7 +9,7 @@ mod scaling;
 pub(crate) use block::{Balance, Grounding};
 pub(crate) use block::{BlockComplement, CoupledBlock, IrreducibleBlock};
 pub(crate) use congruence::{Congruence, FactorTail};
-pub(crate) use decomposition::{ranges, Components, Summands};
+pub(crate) use decomposition::{Components, Packed, Summands};
 pub(crate) use reduction::within_band;
 pub use scaling::{Clamp, ScalingOutcome, ScalingPolicy};
 

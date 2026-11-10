@@ -9,6 +9,7 @@ mod partition;
 
 use super::block::CoupledBlock;
 use crate::input::Canonical;
+use crate::order::{Listed, Order, Segment};
 use crate::storage::{tally_abs, OffDiagonal, Rows, UpperAdjacency};
 use crate::threads::task;
 use crate::{BuildError, Index, Real, Threads};
@@ -298,7 +299,36 @@ impl<I, T, C> Components<I, T, C> {
     }
 }
 
+/// The factored matrix's summands, its vertices packed: each coupled block on its segment of `order`, in component order, then each lone vertex's pivot.
+#[derive(Clone, Debug)]
+pub(crate) struct Packed<B, T> {
+    pub(crate) order: Order,
+    pub(crate) segments: Vec<Segment>,
+    pub(crate) coupled: Vec<B>,
+    pub(crate) pivots: Vec<T>,
+}
+
 impl<I: Index, T, B: CoupledBlock> Summands<B, I, T> {
+    /// Its vertices packed into the factor's order, the one form a factor or a reader of its blocks' vertices takes.
+    pub(crate) fn pack(self) -> Packed<B, T>
+    where
+        Listed: From<Box<[I]>>,
+    {
+        let Self {
+            vertices,
+            coupled,
+            pivots,
+            numbering,
+        } = self;
+        let (order, segments) = Order::pack(vertices, ranges(&coupled), numbering);
+        Packed {
+            order,
+            segments,
+            coupled,
+            pivots,
+        }
+    }
+
     /// Each block as `f` makes it from its kept vertices and itself, in parallel within `threads`.
     pub(super) fn map<C: Send>(
         mut self,

@@ -4,7 +4,7 @@ use num_traits::PrimInt;
 
 use super::{ApproxInverse, Summand};
 use crate::input::{BipartiteFactorWidth2, Input, Side};
-use crate::sgdd::{Reduced, ReducedComplement, Summands};
+use crate::sgdd::{IrreducibleBlock, Packed, Reduced, ReducedComplement, Summands};
 use crate::{BuildError, Config, Real, ScalingPolicy, Threads};
 
 /// Factorizes any [`Input`] with [`Config::default`] and [`ScalingPolicy::default`].
@@ -38,14 +38,19 @@ pub fn factorize_complement<T: Real, I: PrimInt + Sync>(
     config: Config,
     scaling: ScalingPolicy,
 ) -> Result<ApproxInverse<T>, BuildError> {
-    let narrow = || ReducedComplement::reduce_onto(input, kept, scaling, Threads::All);
-    let wide = || ReducedComplement::reduce_onto(input, kept, scaling, Threads::All);
+    let narrow =
+        || ReducedComplement::reduce_onto(input, kept, scaling, Threads::All).map(Summands::pack);
+    let wide =
+        || ReducedComplement::reduce_onto(input, kept, scaling, Threads::All).map(Summands::pack);
     Ok(Indexed::of(input.n(), narrow, wide)?.factor(&config, Threads::All))
 }
 
 /// Built only by [`Sgdd::reduce`]: `A` in symmetric generalized diagonally dominant form, each irreducible block scaled to dominance.
 #[derive(Clone, Debug)]
-pub struct Sgdd<T = f64>(Indexed<Reduced<T, u32>, Reduced<T, u64>>);
+pub struct Sgdd<T = f64>(Indexed<PackedSgdd<T, u32>, PackedSgdd<T, u64>>);
+
+/// A reduction packed for its factor, its indices in `I`.
+type PackedSgdd<T, I> = Packed<IrreducibleBlock<T, I>, T>;
 
 /// A value in the narrowest index a cover's `2n + 1` slots fit.
 #[derive(Clone, Copy, Debug)]
@@ -68,13 +73,11 @@ impl<N, W> Indexed<N, W> {
     }
 }
 
-impl<T: Real, B: Summand<T, u32>, C: Summand<T, u64>>
-    Indexed<Summands<B, u32, T>, Summands<C, u64, T>>
-{
+impl<T: Real, B: Summand<T, u32>, C: Summand<T, u64>> Indexed<Packed<B, T>, Packed<C, T>> {
     fn factor(self, config: &Config, threads: Threads) -> ApproxInverse<T> {
         match self {
-            Self::U32(summands) => ApproxInverse::build(summands, config, threads),
-            Self::U64(summands) => ApproxInverse::build(summands, config, threads),
+            Self::U32(packed) => ApproxInverse::build(packed, config, threads),
+            Self::U64(packed) => ApproxInverse::build(packed, config, threads),
         }
     }
 }
@@ -87,8 +90,8 @@ impl<T: Real> Sgdd<T> {
         M: Into<Input<'a, T, I>>,
     {
         let input = input.into();
-        let narrow = || Reduced::reduce(input, scaling, Threads::All);
-        let wide = || Reduced::reduce(input, scaling, Threads::All);
+        let narrow = || Reduced::reduce(input, scaling, Threads::All).map(Summands::pack);
+        let wide = || Reduced::reduce(input, scaling, Threads::All).map(Summands::pack);
         Indexed::of(input.n(), narrow, wide).map(Self)
     }
 
