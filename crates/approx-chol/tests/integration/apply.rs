@@ -7,7 +7,7 @@ use approx_chol::{
 };
 
 use crate::common::apart::Apart;
-use crate::common::bits::bits;
+use crate::common::bits::{bits, canonical_bits};
 use crate::common::cases::cases;
 use crate::common::entry::{by_type, cast_all, Entry, Factored, Labels, Types};
 use crate::common::graph::{Edge, Graph};
@@ -526,4 +526,37 @@ fn a_column_major_column_past_the_block_panics() {
     let mut data = [0.0f64; 4];
     let major = ColumnMajor::new(&mut data, 2).unwrap();
     major.read_column(2, &mut [0.0; 2]);
+}
+
+/// A floating bipartite Gram its congruence negates from vertex 4, `b` past `f64::MAX`: the projection's sum is NaN, which the negated rows reach; each column is NaN where it is alone, and bit for bit elsewhere (#437).
+#[test]
+fn a_nan_reaching_a_negated_row_is_nan_in_the_same_rows_in_a_block_as_alone() {
+    let g = crate::common::bipartite::Bipartite {
+        n_left: 4,
+        n_right: 3,
+        left: vec![0, 0, 1, 1, 2, 2, 3, 3],
+        right: vec![0, 1, 1, 2, 0, 2, 0, 1],
+        values: None,
+    };
+    let factor = factorize(g.view()).unwrap();
+    assert!(
+        format!("{factor:?}").contains("NegateFrom(4)"),
+        "{factor:?}"
+    );
+    let b: Vec<f64> = (0..7).map(|i| (i as f64 - 3.0) * 6e307).collect();
+    let mut rows: Vec<[f64; 3]> = b.iter().map(|&v| [v, -v, 0.5 * v]).collect();
+    factor.apply(rows.as_mut_slice(), Threads::All).unwrap();
+    let mut nan = false;
+    for (j, sign) in [1.0, -1.0, 0.5].into_iter().enumerate() {
+        let mut alone: Vec<f64> = b.iter().map(|&v| sign * v).collect();
+        factor.apply(&mut alone, Threads::All).unwrap();
+        let column: Vec<f64> = rows.iter().map(|row| row[j]).collect();
+        assert_eq!(
+            canonical_bits(&column),
+            canonical_bits(&alone),
+            "column {j}"
+        );
+        nan |= alone[4..].iter().any(|x| x.is_nan());
+    }
+    assert!(nan, "a NaN reaches a negated row");
 }

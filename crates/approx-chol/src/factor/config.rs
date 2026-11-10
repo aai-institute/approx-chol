@@ -60,7 +60,7 @@ pub enum FrustratedRoute {
 pub enum CoverSurplus {
     /// To a ground vertex both sheets share; inside `Auto`'s twist band its common mode `1/s` swamps `z`, and PCG stalls where `Auto` converges.
     GroundVertex,
-    /// As an edge `k⁺ — k⁻` per vertex, a quarter of its copies' surplus, which acts on `[z; −z]` as the grounds do: the cover stays singular, its common mode never in `z`. On a sampled complement the sheets draw their ground shares from different streams, so the edge takes their mean, unbiased; a whole block's cover and an exact complement mirror their rows, so the mean is exact.
+    /// As an edge `k⁺ — k⁻` per vertex, a quarter of its copies' surplus, which acts on `[z; −z]` as the grounds do: the cover stays singular, its common mode never in `z`. Both copies of a vertex ground alike, a sampled complement's too, its stars' ground shares exact (#437), so the edge is exact.
     SurplusEdges,
     /// Surplus edges inside the twist band, `Σs ≤ 5ε (Σs + Σ|a_ij|)` over the cover's surplus `s` and off-diagonal `a`, where a ground vertex's common mode would swamp `z`; else the ground vertex.
     #[default]

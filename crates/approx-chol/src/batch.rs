@@ -4,7 +4,7 @@ use std::array;
 
 use crate::Real;
 
-/// A value per right-hand side, every operation per value, so each rounds as it would solved alone.
+/// A value per right-hand side, every operation per value, so each rounds as it would solved alone, a NaN's sign and payload aside: the optimizer may compile the instances apart, and a NaN's sign may differ between them (#437).
 pub(crate) trait Batch<T: Real>: Copy + Send + Sync {
     type Wide: Batch<f64>;
 

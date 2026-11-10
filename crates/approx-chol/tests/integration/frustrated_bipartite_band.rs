@@ -44,9 +44,9 @@ fn a_frustrated_bipartite_block_with_a_negligible_surplus_solves_backward_stably
     };
     let cycles = [
         ("eliminated", narrow(8, 7, 0)),
-        // A two-neighbor pendant's star samples its ground share onto one neighbor per sheet, so the copies ground unequally.
+        // A two-neighbor pendant's star samples fill between its neighbors.
         (
-            "eliminated, sampled unequally",
+            "eliminated, two neighbors",
             Cycle {
                 wide: 2,
                 ..narrow(8, 7, 0)

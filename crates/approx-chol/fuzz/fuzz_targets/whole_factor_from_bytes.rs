@@ -6,6 +6,19 @@ use libfuzzer_sys::fuzz_target;
 #[path = "../cells.rs"]
 mod cells;
 
+/// `x`'s bits, every NaN the one canonical NaN: Rust leaves a NaN's sign and payload to the optimizer (#437).
+fn canonical(x: f64) -> u64 {
+    match x.is_nan() {
+        true => f64::NAN.to_bits(),
+        false => x.to_bits(),
+    }
+}
+
+/// Bit for bit, a NaN's sign and payload aside.
+fn same(a: &[f64], b: impl IntoIterator<Item = f64>) -> bool {
+    (a.iter().zip(b)).all(|(&a, b)| canonical(a) == canonical(b))
+}
+
 // A persisted factor's blocks must cover `0..n` once each, or a solve would index past `x`.
 fuzz_target!(|data: &[u8]| {
     let Ok(factor) = postcard::from_bytes::<ApproxInverse<f64>>(data) else {
@@ -21,16 +34,13 @@ fuzz_target!(|data: &[u8]| {
         x
     };
     // NaN scratch reaches the solution if any slot is read before written.
-    let agrees = (solve(0.0).iter().zip(solve(f64::NAN))).all(|(a, b)| a.to_bits() == b.to_bits());
-    assert!(agrees, "dirty scratch changed the solution");
+    assert!(
+        same(&solve(0.0), solve(f64::NAN)),
+        "dirty scratch changed the solution"
+    );
     let mut x = b.clone();
     factor.apply(&mut x, Threads::All).expect("b has length n");
-    assert!(
-        x.iter()
-            .zip(solve(0.0))
-            .all(|(a, b)| a.to_bits() == b.to_bits()),
-        "apply and apply_with agree"
-    );
+    assert!(same(&x, solve(0.0)), "apply and apply_with agree");
     let mut rows: Vec<[f64; 3]> = b.iter().map(|&v| [v, -v, 0.5 * v]).collect();
     let mut cells = cells::filled(factor.scratch(3, Threads::All), f64::NAN);
     factor
@@ -47,7 +57,7 @@ fuzz_target!(|data: &[u8]| {
             .expect("b has length n");
         let column = rows.iter().map(|row| row[j]);
         assert!(
-            column.zip(alone).all(|(a, b)| a.to_bits() == b.to_bits()),
+            same(&alone, column),
             "each column of a block solves as it does alone"
         );
     }
