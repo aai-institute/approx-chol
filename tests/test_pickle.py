@@ -6,7 +6,7 @@ import pytest
 import scipy.sparse as sp
 
 import approx_chol
-from tests._laplacians import frustrated_grid, grid_laplacian
+from tests._laplacians import bits, frustrated_grid, grid_laplacian
 
 MATRICES = {
     "laplacian": grid_laplacian(6, 7),
@@ -30,8 +30,8 @@ def _assert_solves_alike(original, restored) -> None:
     assert restored.shape == original.shape
     assert restored.n_steps == original.n_steps
     for b in _right_hand_sides(original.n):
-        expected = original.solve(b).view(np.uint64)
-        np.testing.assert_array_equal(restored.solve(b).view(np.uint64), expected)
+        expected = bits(original.apply(b))
+        np.testing.assert_array_equal(bits(restored.apply(b)), expected)
 
 
 def _form() -> bytes:

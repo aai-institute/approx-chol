@@ -21,12 +21,10 @@ def _shares(lap: sp.csr_matrix) -> dict[str, float]:
     b = np.zeros(factor.n)
     b[0], b[-1] = 1.0, -1.0
     out = np.empty_like(b)
-    workspace = factor.workspace()
     calls: dict[str, Callable[[], object]] = {
         "factorize": lambda: approx_chol.factorize(lap),
-        "solve": lambda: factor.solve(b),
-        "solve_into": lambda: factor.solve_into(b, out),
-        "solve_into with a workspace": lambda: factor.solve_into(b, out, workspace),
+        "apply": lambda: factor.apply(b),
+        "apply into out": lambda: factor.apply(b, out=out),
     }
     count = [0]
     stop = threading.Event()

@@ -30,7 +30,7 @@ factor = factorize(laplacian)
 
 # RHS must lie in the range of the Laplacian (sum to zero)
 b = np.array([1.0, -1.0, 1.0, -1.0])
-x = factor.solve(b)
+x = factor.apply(b)
 ```
 
 ### Preconditioning
@@ -41,6 +41,14 @@ x = factor.solve(b)
 from scipy.sparse.linalg import cg
 
 x, info = cg(laplacian, b, M=factor)
+```
+
+It applies at a thread budget, the build's `threads` unless `with_threads` names another:
+
+```python
+factor = factorize(laplacian, threads=4)
+serial = factor.with_threads(1)  # shares the factor, same bits
+X = serial.apply(B, out=X)  # an n × k block, into a preallocated array
 ```
 
 ### Configuration
@@ -60,15 +68,14 @@ For direct control over CSR arrays without constructing a scipy sparse matrix:
 from approx_chol import factorize_raw
 
 factor = factorize_raw(row_ptrs, col_indices, values, n=4)
-x = factor.solve(b)
+x = factor.apply(b)
 ```
 
 ## API
 
-- `factorize(matrix, config=None)` — Factorize a `scipy.sparse.csr_array` or `csr_matrix`.
-- `factorize_raw(row_ptrs, col_indices, values, n, config=None)` — Factorize from raw CSR arrays.
-- `ApproxInverse.solve(b)` — Solve LDL^T x = b, returning a new array.
-- `ApproxInverse.solve_into(b, out)` — Solve in-place into a pre-allocated array.
+- `factorize(matrix, *, config=None, scaling=None, threads=None)` — Factorize a `scipy.sparse.csr_array` or `csr_matrix` at a thread budget, `None` every core.
+- `factorize_raw(row_ptrs, col_indices, values, n, config=None, scaling=None)` — Factorize from raw CSR arrays.
+- `ApproxInverse` — a `LinearOperator`; `apply(b, *, out=None)` solves a vector or an n × k block, into `out` when given; `threads` and `with_threads(threads)` read and change its budget; `components` lists each `Component`'s `vertices` and `clamp`.
 - `Config(seed=0, split=1, exact_max_dim=24, *, frustrated="cover")` — Configuration for the factorization; `split` is the number of clique-tree copies each edge is sampled as, `1` standard AC and more AC2; `frustrated` carries a frustrated block's surplus on its cover to a ground vertex (`"cover_ground_vertex"`), onto edges between each vertex's copies (`"cover_surplus_edges"`), or onto those edges only inside the twist band of `CoverSurplus::Auto` (`"cover"`), or eliminates a frustrated block as it is, on one sheet, a bipartite block's complement formed signed (`"signed"`); blocks of at most `exact_max_dim` vertices, a bipartite block's kept side counted, are factored exactly by dense Cholesky, and `0` factors every block approximately.
 
 ## Attribution

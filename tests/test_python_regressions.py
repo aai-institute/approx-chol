@@ -16,8 +16,8 @@ def test_factorize_raw_copies_non_contiguous_arrays():
     b = np.array([1.0, -1.0])
     contiguous = (row_ptrs.copy(), col_indices.copy(), values.copy())
     np.testing.assert_array_equal(
-        approx_chol.factorize_raw(row_ptrs, col_indices, values, 2).solve(b),
-        approx_chol.factorize_raw(*contiguous, 2).solve(b),
+        approx_chol.factorize_raw(row_ptrs, col_indices, values, 2).apply(b),
+        approx_chol.factorize_raw(*contiguous, 2).apply(b),
     )
 
 
@@ -27,4 +27,4 @@ def test_factorize_raw_takes_scipy_arrays_as_factorize_does():
     b = np.zeros(lap.shape[0])
     b[0], b[-1] = 1.0, -1.0
     raw = approx_chol.factorize_raw(lap.indptr, lap.indices, lap.data, lap.shape[0])
-    np.testing.assert_array_equal(raw.solve(b), approx_chol.factorize(lap).solve(b))
+    np.testing.assert_array_equal(raw.apply(b), approx_chol.factorize(lap).apply(b))

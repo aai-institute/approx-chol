@@ -4,10 +4,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 import scipy.sparse as sp
-import scipy.sparse.linalg as sla
 
 import approx_chol
-from tests._laplacians import grid_laplacian, frustrated_grid, light_row_grid
+from tests._laplacians import grid_laplacian, light_row_grid
 
 
 def _base_csr():
@@ -32,7 +31,7 @@ def test_one_split_is_the_default():
 
     def solve(split):
         config = approx_chol.Config(split=split, exact_max_dim=0)
-        return approx_chol.factorize(lap, config).solve(b)
+        return approx_chol.factorize(lap, config=config).apply(b)
 
     np.testing.assert_array_equal(solve(1), solve(None))
     assert not np.array_equal(solve(2), solve(None))
@@ -60,7 +59,7 @@ def test_configs_compare_and_hash_by_value():
     assert len({approx_chol.Config(), approx_chol.Config(split=1)}) == 1
 
 
-@pytest.mark.parametrize("split", [2.0, "2", np.float64(2.0)])
+@pytest.mark.parametrize("split", [2.0, "2", np.float64(2.0), True])
 def test_a_split_not_an_integer_raises_type_error(split):
     with pytest.raises(TypeError):
         approx_chol.Config(split=split)
@@ -108,7 +107,7 @@ def test_each_frustrated_name_factors_as_its_route(light, like, unlike):
 
     def solve(**route):
         config = approx_chol.Config(exact_max_dim=0, **route)
-        return approx_chol.factorize(matrix, config).solve(b)
+        return approx_chol.factorize(matrix, config=config).apply(b)
 
     cover = solve(frustrated="cover")
     np.testing.assert_array_equal(cover, solve())
@@ -121,8 +120,10 @@ def test_signed_factors_a_frustrated_block_as_it_is():
     matrix = light_row_grid(10, 1.0)
     b = np.sin(np.arange(matrix.shape[0], dtype=np.float64))
     config = approx_chol.Config(exact_max_dim=0, frustrated="signed")
-    signed = approx_chol.factorize(matrix, config).solve(b)
-    cover = approx_chol.factorize(matrix, approx_chol.Config(exact_max_dim=0)).solve(b)
+    signed = approx_chol.factorize(matrix, config=config).apply(b)
+    cover = approx_chol.factorize(
+        matrix, config=approx_chol.Config(exact_max_dim=0)
+    ).apply(b)
     assert np.all(np.isfinite(signed))
     assert not np.array_equal(signed, cover)
 
@@ -135,7 +136,7 @@ def test_signed_solves_a_triangle_grounded_twice_exactly_where_every_cover_sampl
 
     def error(**route):
         config = approx_chol.Config(exact_max_dim=0, **route)
-        x = approx_chol.factorize(sp.csr_array(m), config).solve(b)
+        x = approx_chol.factorize(sp.csr_array(m), config=config).apply(b)
         return np.linalg.norm(x - exact) / np.linalg.norm(exact)
 
     assert error(frustrated="signed") < 1e-12
@@ -219,7 +220,7 @@ def test_every_integer_index_dtype_factors_alike(indptr_dtype, indices_dtype):
     lap = grid_laplacian(8, 8)
     b = np.zeros(lap.shape[0])
     b[0], b[-1] = 1.0, -1.0
-    expected = approx_chol.factorize(lap).solve(b)
+    expected = approx_chol.factorize(lap).apply(b)
 
     typed = MatrixLike(
         lap.indptr.astype(indptr_dtype),
@@ -227,7 +228,7 @@ def test_every_integer_index_dtype_factors_alike(indptr_dtype, indices_dtype):
         lap.data,
         lap.shape,
     )
-    np.testing.assert_array_equal(approx_chol.factorize(typed).solve(b), expected)
+    np.testing.assert_array_equal(approx_chol.factorize(typed).apply(b), expected)
 
 
 def test_duck_typed_factorize_validates_indices_and_row_pointer_length():
@@ -282,85 +283,13 @@ def test_each_column_rejects_the_dtype_kinds_it_cannot_carry():
         approx_chol.factorize(two_dimensional)
 
 
-def test_solve_and_solve_into_raise_value_error_for_shape():
-    row_ptrs, col_indices, values = _base_csr()
-    factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
-
-    with pytest.raises(ValueError, match="right-hand side has length 12, expected 2"):
-        factor.solve(np.zeros(12))
-
-    rhs = np.array([1.0, -1.0])
-    with pytest.raises(ValueError, match="out length"):
-        factor.solve_into(rhs, np.zeros(1))
-
-
-def test_solve_into_solves_in_place_and_into_an_overlapping_view():
-    row_ptrs, col_indices, values = _base_csr()
-    factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
-    rhs = np.array([1.0, -1.0])
-    expected = factor.solve(rhs)
-
-    in_place = rhs.copy()
-    factor.solve_into(in_place, in_place)
-    np.testing.assert_array_equal(in_place, expected)
-
-    base = np.array([1.0, -1.0, 0.0])
-    factor.solve_into(base[:-1], base[1:])
-    np.testing.assert_array_equal(base[1:], expected)
-
-
-def test_solve_takes_any_1d_array_like_as_the_stub_declares():
-    lap = grid_laplacian(4, 4)
-    factor = approx_chol.factorize(lap)
-    b = np.zeros(lap.shape[0])
-    b[0], b[-1] = 1.0, -1.0
-    expected = factor.solve(b)
-    np.testing.assert_array_equal(factor.solve(b.tolist()), expected)
-    np.testing.assert_array_equal(factor.matvec(b.astype(np.float32)), expected)
-    block = np.column_stack([b, 2 * b])
-    np.testing.assert_array_equal(
-        sla.aslinearoperator(factor) @ block, np.column_stack([expected, 2 * expected])
-    )
-
-
-def test_matvec_takes_the_column_scipy_before_1_18_passes():
-    lap = grid_laplacian(4, 4)
-    factor = approx_chol.factorize(lap)
-    b = np.zeros(lap.shape[0])
-    b[0], b[-1] = 1.0, -1.0
-    np.testing.assert_array_equal(factor.matvec(b.reshape(-1, 1)), factor.solve(b))
-
-
 def test_an_all_zero_row_factors_and_solves_to_zero():
     dead = sp.csr_matrix(np.array([[0.0, 0, 0], [0, 2, -1], [0, -1, 2]]))
-    x = approx_chol.factorize(dead).solve(np.ones(3))
+    x = approx_chol.factorize(dead).apply(np.ones(3))
     np.testing.assert_array_equal(x, [0.0, 1.0, 1.0])
 
 
-def test_a_workspace_from_a_smaller_factor_raises():
-    approximate = approx_chol.Config(exact_max_dim=0)
-    small = approx_chol.factorize(frustrated_grid(2, 2), approximate)
-    large = approx_chol.factorize(frustrated_grid(16, 16), approximate)
-    b = np.zeros(large.n)
-    with pytest.raises(ValueError, match="workspace is from a smaller factor"):
-        large.solve_into(b, np.empty_like(b), small.workspace())
-
-
-def test_a_workspace_in_use_raises_instead_of_sharing():
-    factor = approx_chol.factorize(grid_laplacian(4, 4))
-    workspace = factor.workspace()
-    out = np.empty(factor.n)
-
-    class ReentrantRhs:
-        def __array__(self, dtype=None, copy=None):
-            factor.solve_into(np.zeros(factor.n), np.empty(factor.n), workspace)
-            return np.zeros(factor.n)
-
-    with pytest.raises(RuntimeError, match="borrowed"):
-        factor.solve_into(ReentrantRhs(), out, workspace)
-
-
-@pytest.mark.parametrize("cls", [approx_chol.ApproxInverse, approx_chol.Workspace])
-def test_approx_inverse_and_workspace_cannot_be_constructed_directly(cls):
+@pytest.mark.parametrize("cls", [approx_chol.Component, approx_chol.Clamp])
+def test_component_and_clamp_cannot_be_constructed_directly(cls):
     with pytest.raises(TypeError, match="cannot create"):
         cls()
