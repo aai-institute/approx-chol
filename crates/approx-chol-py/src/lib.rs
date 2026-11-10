@@ -1,6 +1,6 @@
 use approx_chol::input::{CsrRef, InputError};
 use approx_chol::{
-    ApplyError, ApproxInverse, Config, CoverSurplus, FrustratedRoute, MemBuffer, MemStack,
+    ApplyError, ApproxInverse, Config, CoverSurplus, FrustratedRoute, Header, MemBuffer, MemStack,
     Sampling, ScalingPolicy, Sgdd, Threads,
 };
 use num_traits::PrimInt;
@@ -11,6 +11,7 @@ use numpy::{
 use pyo3::exceptions::{PyNotImplementedError, PyOverflowError};
 use pyo3::marker::Ungil;
 use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyType};
 use std::num::NonZeroU32;
 
 #[inline]
@@ -261,7 +262,7 @@ impl PyScalingPolicy {
     }
 }
 
-#[pyclass(frozen, name = "ApproxInverse")]
+#[pyclass(frozen, module = "approx_chol", name = "ApproxInverse")]
 struct PyApproxInverse {
     inner: ApproxInverse<f64>,
     entries: StoredEntries,
@@ -303,6 +304,39 @@ fn warn_on_scaling(py: Python<'_>, factor: &ApproxInverse<f64>) -> PyResult<()> 
 
 #[pymethods]
 impl PyApproxInverse {
+    /// The factor's saved form, postcard-encoded, and nothing else.
+    fn __reduce__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(Bound<'py, PyAny>, (Bound<'py, PyBytes>,))> {
+        let form = postcard::to_allocvec(&self.inner)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let load = py.get_type::<Self>().getattr("_load")?;
+        Ok((load, (PyBytes::new(py, &form),)))
+    }
+
+    /// A failed decode reads the header apart, as postcard drops the message naming a mismatch.
+    #[classmethod]
+    fn _load(_cls: &Bound<'_, PyType>, form: &[u8]) -> PyResult<Self> {
+        let invalid = |reason: &dyn std::fmt::Display| {
+            value_error(format!("the saved ApproxInverse is invalid: {reason}"))
+        };
+        match postcard::take_from_bytes::<ApproxInverse<f64>>(form) {
+            Ok((inner, [])) => Ok(Self {
+                inner,
+                // Interim: the form's length stands in for the input's entries until #460 settles the bound's owner.
+                entries: StoredEntries(form.len() / size_of::<f64>()),
+            }),
+            Ok((_, rest)) => Err(invalid(&format_args!("{} trailing bytes", rest.len()))),
+            Err(error) => {
+                let mismatch = postcard::take_from_bytes::<Header>(form)
+                    .ok()
+                    .and_then(|(header, _)| header.expect::<f64>().err());
+                Err(mismatch.map_or_else(|| invalid(&error), value_error))
+            }
+        }
+    }
+
     #[getter]
     fn n(&self) -> usize {
         self.inner.n()
