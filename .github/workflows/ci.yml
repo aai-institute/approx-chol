@@ -12,6 +12,8 @@ env:
   CARGO_PROFILE_DEV_OPT_LEVEL: 0
   # Both free-threaded jobs build this one interpreter; `publish.yml` has its own copy.
   FREETHREADED_PYTHON: "3.14t"
+  # approx-chol's features, as `cargo metadata --no-deps` lists them: the clippy subsets and the MSRV checks read them here.
+  FEATURES_JQ: '.packages[] | select(.name == "approx-chol") | .features | keys'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -37,10 +39,18 @@ jobs:
         run: pixi run -e ci cargo fmt --all -- --check
       - name: cargo clippy
         run: pixi run -e ci cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      # All-features is clippied above; hand-enumerated since cargo-hack isn't on conda-forge (#55).
+      # All-features is clippied above; none, each and each pair here, since cargo-hack isn't on conda-forge (#55).
       - name: cargo clippy (approx-chol feature subsets)
         run: |
-          for features in "" serde sprs faer nalgebra serde,sprs serde,faer sprs,faer; do
+          mapfile -t all < <(pixi run -e ci cargo metadata --no-deps --format-version 1 --locked | jq -r "$FEATURES_JQ | .[]")
+          [ "${#all[@]}" -gt 0 ] || { echo "::error::no approx-chol features found"; exit 1; }
+          subsets=("" "${all[@]}")
+          for ((i = 0; i < ${#all[@]}; i++)); do
+            for ((j = i + 1; j < ${#all[@]}; j++)); do
+              subsets+=("${all[i]},${all[j]}")
+            done
+          done
+          for features in "${subsets[@]}"; do
             echo "::group::features=[$features]"
             pixi run -e ci cargo clippy -p approx-chol --all-targets --no-default-features --features "$features" --locked -- -D warnings
             echo "::endgroup::"
@@ -55,28 +65,31 @@ jobs:
         run: pixi run -e ci stubtest
 
   msrv:
-    name: MSRV (1.85.0)
+    name: MSRV (${{ matrix.rust }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The crate's MSRV; nalgebra 0.35 needs 1.89.
+          - rust: 1.85.0
+            exclude: '["nalgebra"]'
+          - rust: 1.89.0
+            exclude: "[]"
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v2
-      # nalgebra 0.35 needs 1.89, checked in msrv-nalgebra; every other feature is read from the manifest.
-      - name: cargo check (workspace, all features but nalgebra, at the declared MSRV)
+      - name: cargo check (workspace, every feature but the excluded)
+        env:
+          EXCLUDE: ${{ matrix.exclude }}
         run: |
           features=$(cargo metadata --no-deps --format-version 1 --locked \
-            | jq -r '.packages[] | select(.name == "approx-chol") | .features | keys - ["nalgebra"] | map("approx-chol/" + .) | join(",")')
+            | jq -r --argjson exclude "$EXCLUDE" "$FEATURES_JQ"' - $exclude | map("approx-chol/" + .) | join(",")')
+          [ -n "$features" ] || { echo "::error::no features left to check"; exit 1; }
           cargo check --workspace --features "$features" --locked
-
-  msrv-nalgebra:
-    name: MSRV of nalgebra (1.89.0)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.89.0
-      - uses: Swatinem/rust-cache@v2
-      - name: cargo check (approx-chol with nalgebra, at nalgebra 0.35's MSRV)
-        run: cargo check -p approx-chol --features nalgebra --locked
 
   # Baselined on the last release, so a breaking change stays red until its version bump lands.
   semver:
