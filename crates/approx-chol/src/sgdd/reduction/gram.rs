@@ -31,18 +31,15 @@ impl<T: Real, I: Index> Reduced<T, I> {
                     let (u, _) = nulls.get_or_insert_with(|| null_vectors(v, components));
                     // `NaN` where a component has no certificate.
                     let u = (a.vertices.iter()).map(|v| u[v.index()]);
-                    let certified = (u.clone().all(f64::is_finite))
-                        .then(|| scaling::null_scaling(u, &a.entries.rows.diagonal))
-                        .flatten();
-                    match certified {
-                        Some(relaxation) => Ok(relaxation),
-                        None => scaling::relax(
-                            &a.entries.off_diagonal,
-                            &a.entries.rows.diagonal,
-                            policy,
-                            threads,
-                        ),
-                    }
+                    let relax = || {
+                        let (off_diagonal, diagonal) =
+                            (&a.entries.off_diagonal, &a.entries.rows.diagonal);
+                        scaling::relax(off_diagonal, diagonal, policy, threads)
+                    };
+                    (u.clone().all(f64::is_finite))
+                        .then_some(u)
+                        .and_then(|u| scaling::null_scaling(u, &a.entries.rows.diagonal))
+                        .map_or_else(relax, Ok)
                 })
             })?;
             // `u` freed before the column pass: only the certified set outlives the scaling.

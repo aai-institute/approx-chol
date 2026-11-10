@@ -216,6 +216,15 @@ fn diagonal_in_range<T: Real>(d: T) -> bool {
     in_range(d) && d <= T::max_value() / (T::one() + T::one() + T::one() + T::one())
 }
 
+/// The index of the largest `key`: the last entry unless an earlier one strictly passes it, then the first of the largest earlier ones; a NaN wins no comparison, and an empty slice gives `0`.
+fn argmax<T: Real>(values: &[T], key: impl Fn(T) -> T) -> usize {
+    let last = values.len().saturating_sub(1);
+    (0..last).fold(last, |best, i| match key(values[i]) > key(values[best]) {
+        true => i,
+        false => best,
+    })
+}
+
 /// Every `f64` sum starts here: a `Float` always casts up.
 fn widen<T: Real>(x: T) -> f64 {
     x.to_f64().expect("a float casts to f64")
@@ -328,7 +337,19 @@ fn two_sum<W: Batch<f64>>(a: W, b: W) -> (W, W) {
 
 #[cfg(test)]
 mod tests {
-    use super::{compensated_sum, Sum2};
+    use super::{argmax, compensated_sum, Sum2};
+
+    /// The gauge pin's choice, which a factor's bits follow: a tie with the last entry keeps the last, else the first of the earlier maxima; a NaN never wins.
+    #[test]
+    fn argmax_keeps_the_last_on_a_tie_with_it_else_the_first_maximum() {
+        let id = |x: f64| x;
+        assert_eq!(argmax(&[3.0, 1.0, 3.0], id), 2);
+        assert_eq!(argmax(&[1.0, 3.0, 3.0, 2.0], id), 1);
+        assert_eq!(argmax(&[f64::NAN, 1.0, 2.0], id), 2);
+        assert_eq!(argmax(&[1.0, 2.0, f64::NAN], id), 2);
+        assert_eq!(argmax(&[-4.0, 1.0, 4.0], f64::abs), 2);
+        assert_eq!(argmax::<f64>(&[], id), 0);
+    }
 
     /// The dropped `1.0` is the smaller operand as the addend in one order and as the running sum in the other.
     #[test]

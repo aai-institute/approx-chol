@@ -414,3 +414,26 @@ impl<T: Real, J: PrimInt> LonePivot<T> for Canonical<'_, T, J> {
             .map_or(T::zero(), |(_, a)| a)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::CsrRef;
+
+    /// The size screen reads only the partition, before `A`: a component of `1/ε` vertices after a lone vertex 0 is too large at its lowest vertex.
+    #[test]
+    fn a_component_of_one_over_epsilon_vertices_is_too_large_at_its_lowest_vertex() {
+        let n = (1u32 << 23) + 1;
+        let csr = CsrRef::new(1, &[0u32, 1], &[0], &[1.0f32]).expect("a valid input");
+        let partitioned = Partitioned {
+            a: Canonical::of(csr.0),
+            partition: Partition {
+                order: (0..n).collect(),
+                ends: vec![1, n],
+                position: None,
+            },
+        };
+        let error = partitioned.arrange::<f32>().err();
+        assert_eq!(error, Some(BuildError::TooLarge { vertex: 1 }));
+    }
+}

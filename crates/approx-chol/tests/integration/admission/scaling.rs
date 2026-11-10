@@ -1,6 +1,9 @@
 use crate::common::clamps::Clamps;
-use approx_chol::input::{CsrRef, FactorWidth2};
-use approx_chol::{factorize, BuildError, Config, ScalingOutcome, ScalingPolicy, Sgdd};
+use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Side};
+use approx_chol::{
+    factorize, factorize_complement, ApproxInverse, BuildError, Config, Real, ScalingOutcome,
+    ScalingPolicy, Sgdd,
+};
 use rstest::rstest;
 
 use crate::common::entry::only;
@@ -235,4 +238,76 @@ fn a_scaled_entry_below_the_floor_is_out_of_range_at_its_stored_row() {
     let values = [1.0, -3.0, big, -tiny, -3.0, -tiny, 1.0];
     let error = reduce(&row_ptrs, &columns, &values).expect_err("out of range");
     assert_eq!(error, BuildError::OutOfRange { vertex: 1 });
+}
+
+/// `odd` on vertices 1, 3, 5 beside a dominant path on 0, 2, 4: the block's local row `i` is vertex `2i + 1`.
+fn interleaved<T: Real>(odd: [[T; 3]; 3]) -> (Vec<u32>, Vec<u32>, Vec<T>) {
+    let even = |i: usize, j: usize| match i.abs_diff(j) {
+        0 => T::one() + T::one(),
+        1 => -T::one(),
+        _ => T::zero(),
+    };
+    let (mut row_ptrs, mut columns, mut values) = (vec![0u32], Vec::new(), Vec::new());
+    for i in 0..6 {
+        for j in 0..6 {
+            let value = match (i % 2, j % 2) {
+                (0, 0) => even(i / 2, j / 2),
+                (1, 1) => odd[i / 2][j / 2],
+                _ => T::zero(),
+            };
+            if value != T::zero() {
+                columns.push(j as u32);
+                values.push(value);
+            }
+        }
+        row_ptrs.push(columns.len() as u32);
+    }
+    (row_ptrs, columns, values)
+}
+
+/// Each case's block is `{1, 3, 5}`; its row 1, vertex 3, is the one out of range.
+#[test]
+fn an_interleaved_block_names_the_vertex_not_its_local_row() {
+    let (tiny, huge) = (2f64.powi(-960), 2f64.powi(1000));
+    let (row_ptrs, columns, values) =
+        interleaved([[1.0, -1.0, 0.0], [-1.0, tiny, -huge], [0.0, -huge, tiny]]);
+    let relaxed = reduce(&row_ptrs, &columns, &values).expect_err("a ratio overflows");
+    let (big, small) = (2f32.powi(100), 2f32.powi(-100));
+    let (row_ptrs, columns, values) =
+        interleaved([[1.0, 0.0, -3.0], [0.0, big, -small], [-3.0, -small, 1.0]]);
+    let scaled = reduce(&row_ptrs, &columns, &values).expect_err("a scaled entry underflows");
+    assert_eq!([relaxed, scaled], [BuildError::OutOfRange { vertex: 3 }; 2]);
+}
+
+/// A lone column on left 0 and right 0, then a path `p_0 … p_30` from left 1, alternating sides, column `k` loading `p_k` with `1/4` and `p_{k+1}` with `4`: its null vector falls by `16` a step, so the last columns' scaled entries fall below `f32`'s floor.
+fn geometric_path() -> (Vec<u32>, Vec<u32>, Vec<f32>, Vec<f32>) {
+    let (mut left, mut right, mut x, mut y) = (vec![0], vec![0], vec![1.0], vec![-1.0]);
+    for k in 0..30u32 {
+        let (l, r, xl, yr) = match k % 2 {
+            0 => (k / 2 + 1, k / 2 + 1, 0.25, 4.0),
+            _ => (k.div_ceil(2) + 1, (k - 1) / 2 + 1, 4.0, 0.25),
+        };
+        left.push(l);
+        right.push(r);
+        x.push(xl);
+        y.push(yr);
+    }
+    (left, right, x, y)
+}
+
+/// Left vertices `0..17`, right `17..33`. The first stored row holding a scaled entry below the floor is the stored side's 15th: left 15, vertex 15, when the left side is stored, as whole and kept right; right 15, vertex 32, when the right is, its kept left side rotated after it. Each is its block's local row 14.
+#[test]
+fn a_bipartite_block_names_the_stored_row_in_the_callers_numbering() {
+    let (left, right, x, y) = geometric_path();
+    let left = FactorWidth1::valued(17, &left, &x).expect("a valid side");
+    let right = FactorWidth1::valued(16, &right, &y).expect("a valid side");
+    let v = BipartiteFactorWidth2::new(left, right).expect("a valid gram");
+    let complement = |kept| {
+        factorize_complement(v, kept, Config::default(), ScalingPolicy::default()).map(|_| ())
+    };
+    let whole = factorize(v).map(|_: ApproxInverse<f32>| ());
+    let out_of_range = |vertex| Err(BuildError::OutOfRange { vertex });
+    assert_eq!(whole, out_of_range(15));
+    assert_eq!(complement(Side::Right), out_of_range(15));
+    assert_eq!(complement(Side::Left), out_of_range(32));
 }

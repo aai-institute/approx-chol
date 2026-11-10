@@ -15,7 +15,7 @@ use super::{Complement, Reduced};
 use crate::diagonal_in_range;
 use crate::input::{BipartiteFactorWidth2, Canonical, FactorWidth2, Input, Lowered, Side};
 use crate::storage::OffDiagonal;
-use crate::{narrow, widen, BuildError, Index, Real, Threads};
+use crate::{argmax, narrow, widen, BuildError, Index, Real, Threads};
 
 impl<T: Real, I: Index> Reduced<T, I> {
     /// The view's irreducible blocks, each reduced; `policy` scales those not already dominant.
@@ -263,7 +263,10 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
         let grounding = surplus.grounds(&self);
         if !grounding.is_grounded() {
             let past = (grounds.as_deref()).and_then(|grounds| grounds.iter().position(|&g| g));
-            let row = past.unwrap_or_else(|| largest(surplus.residues(&self)));
+            let row = past.unwrap_or_else(|| {
+                let residues: Vec<f64> = surplus.residues(&self).collect();
+                argmax(&residues, |r| r)
+            });
             return Err(out_of_range(self.m.vertices(), row));
         }
         let Self { m, .. } = self;
@@ -350,15 +353,6 @@ fn out_of_range<I: Index>(vertices: &[I], i: usize) -> BuildError {
     BuildError::OutOfRange {
         vertex: vertices[i].index(),
     }
-}
-
-/// The first row of the largest residue.
-fn largest(residues: impl Iterator<Item = f64>) -> usize {
-    let first_max = |best: (usize, f64), row: (usize, f64)| match row.1 > best.1 {
-        true => row,
-        false => best,
-    };
-    residues.enumerate().reduce(first_max).map_or(0, |(i, _)| i)
 }
 
 /// Each row's residue, deficits clamped to zero.

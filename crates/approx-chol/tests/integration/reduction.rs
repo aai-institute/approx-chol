@@ -170,14 +170,12 @@ fn a_grams_clamps_are_listed_by_first_vertex() {
     assert_eq!(firsts, [0, 3], "{:?}", factor.clamps());
 }
 
-/// An `f32` path of `1/ε = 2^23` vertices after a lone vertex 0 is too large at its lowest vertex, 1.
-#[test]
-fn a_block_of_one_over_epsilon_vertices_is_too_large_at_its_lowest_vertex() {
-    let n = (1u32 << 23) + 1;
-    let (u, v): (Vec<u32>, Vec<u32>) = (1..n - 1).map(|i| (i, i + 1)).unzip();
-    let path = Laplacian::<f32, u32>::new(n as usize, &u, &v).expect("a path");
-    let error = factorize_with(path, Config::default(), ScalingPolicy::default())
-        .map(|_| ())
-        .expect_err("too large");
-    assert_eq!(error, BuildError::TooLarge { vertex: 1 });
+#[rstest::rstest]
+#[case::too_large(BuildError::TooLarge { vertex: 3 }, "the block of vertex 3 passes 1/ε vertices")]
+#[case::out_of_range(
+    BuildError::OutOfRange { vertex: 4 },
+    "a value at vertex 4 is outside the representable range"
+)]
+fn each_build_error_displays_its_vertex(#[case] error: BuildError, #[case] expected: &str) {
+    assert_eq!(error.to_string(), expected);
 }
