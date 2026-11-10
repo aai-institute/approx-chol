@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use approx_chol::input::{CsrRef, InputError};
 use approx_chol::{factorize, ApproxInverse, Threads};
 use nalgebra::{DMatrix, DMatrixViewMut, SMatrix};
-use nalgebra_sparse::CsrMatrix;
+use nalgebra_sparse::{CscMatrix, CsrMatrix};
 
 use super::{assert_solves_fixture, COL_INDICES, N, ROW_PTRS, VALUES};
 use crate::common::bits::bits;
@@ -59,11 +59,24 @@ fn nalgebra_csr_factors_bit_for_bit_as_its_arrays() {
     assert_eq!(solved_bits(&viewed), solved_bits(&factor()));
 }
 
+/// A symmetric matrix's CSC arrays are its CSR arrays, so both factor alike.
+#[test]
+fn nalgebra_csc_factors_bit_for_bit_as_its_csr() {
+    let (n, ptrs, columns, values) = grounded_grid();
+    let matrix = CscMatrix::try_from_csc_data(n, n, ptrs, columns, values).unwrap();
+    let viewed = factorize(CsrRef::try_from(&matrix).unwrap()).unwrap();
+    assert_eq!(solved_bits(&viewed), solved_bits(&factor()));
+}
+
 #[test]
 fn nalgebra_try_from_non_square_returns_error() {
     let csr =
         CsrMatrix::try_from_csr_data(3, 4, vec![0, 1, 2, 3], vec![0, 1, 0], vec![1.0; 3]).unwrap();
     let err = CsrRef::try_from(&csr).expect_err("non-square matrix must be rejected");
+    assert_eq!(err, InputError::NotSquare { rows: 3, cols: 4 });
+    let csc = CscMatrix::try_from_csc_data(3, 4, vec![0, 1, 2, 3, 3], vec![0, 1, 0], vec![1.0; 3])
+        .unwrap();
+    let err = CsrRef::try_from(&csc).expect_err("non-square matrix must be rejected");
     assert_eq!(err, InputError::NotSquare { rows: 3, cols: 4 });
 }
 

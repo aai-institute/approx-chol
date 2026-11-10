@@ -83,6 +83,9 @@ pub fn approx_chol::input::Input<'a, T, I>::from(approx_chol::input::CsrRef<'a, 
 impl<'a, T: approx_chol::Real, I: sprs::indexing::SpIndex> core::convert::TryFrom<sprs::sparse::CsMatBase<T, I, &'a [I], &'a [I], &'a [T]>> for approx_chol::input::CsrRef<'a, T, I>
 pub type approx_chol::input::CsrRef<'a, T, I>::Error = approx_chol::input::InputError
 pub fn approx_chol::input::CsrRef<'a, T, I>::try_from(sprs::sparse::CsMatViewI<'a, T, I>) -> core::result::Result<Self, approx_chol::input::InputError>
+impl<'a, T: approx_chol::Real> core::convert::TryFrom<&'a nalgebra_sparse::csc::CscMatrix<T>> for approx_chol::input::CsrRef<'a, T, usize>
+pub type approx_chol::input::CsrRef<'a, T, usize>::Error = approx_chol::input::InputError
+pub fn approx_chol::input::CsrRef<'a, T, usize>::try_from(&'a nalgebra_sparse::csc::CscMatrix<T>) -> core::result::Result<Self, approx_chol::input::InputError>
 impl<'a, T: approx_chol::Real> core::convert::TryFrom<&'a nalgebra_sparse::csr::CsrMatrix<T>> for approx_chol::input::CsrRef<'a, T, usize>
 pub type approx_chol::input::CsrRef<'a, T, usize>::Error = approx_chol::input::InputError
 pub fn approx_chol::input::CsrRef<'a, T, usize>::try_from(&'a nalgebra_sparse::csr::CsrMatrix<T>) -> core::result::Result<Self, approx_chol::input::InputError>

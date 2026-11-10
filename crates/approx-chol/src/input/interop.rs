@@ -55,3 +55,14 @@ impl<'a, T: Real> TryFrom<&'a nalgebra_sparse::CsrMatrix<T>> for CsrRef<'a, T, u
         CsrRef::new(n, row_ptrs, col_indices, values)
     }
 }
+
+#[cfg(feature = "nalgebra")]
+impl<'a, T: Real> TryFrom<&'a nalgebra_sparse::CscMatrix<T>> for CsrRef<'a, T, usize> {
+    type Error = InputError;
+
+    fn try_from(matrix: &'a nalgebra_sparse::CscMatrix<T>) -> Result<Self, InputError> {
+        let n = square(matrix.nrows(), matrix.ncols())?;
+        let (col_ptrs, row_indices, values) = matrix.csc_data();
+        CsrRef::new(n, col_ptrs, row_indices, values)
+    }
+}

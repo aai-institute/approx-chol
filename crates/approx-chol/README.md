@@ -49,7 +49,7 @@ A `Laplacian` or `Sddm`, a `FactorWidth2` or a `BipartiteFactorWidth2` also fact
 |---------|--------|
 | `sprs`  | Zero-copy `CsrRef` conversion from `sprs` matrices via `TryFrom`. |
 | `faer`  | Zero-copy `CsrRef` conversion from `faer` matrices via `TryFrom`. |
-| `nalgebra` | Zero-copy `CsrRef` conversion from a `nalgebra-sparse` 0.12 `CsrMatrix` via `TryFrom`; every `nalgebra` 0.35 matrix, owned or a view, is a `MatrixMut` block for `apply`. Needs Rust 1.89, nalgebra's MSRV, above the crate's 1.85. |
+| `nalgebra` | Zero-copy `CsrRef` conversion from a `nalgebra-sparse` 0.12 `CsrMatrix` or `CscMatrix` via `TryFrom`; every `nalgebra` 0.35 matrix, owned or a view, is a `MatrixMut` block for `apply`, a contiguous one copied less through `ColumnMajor::new(m.as_mut_slice(), m.nrows())`. Needs Rust 1.89, nalgebra's MSRV, above the crate's 1.85. |
 | `serde` | Serialize and deserialize `ApproxInverse`, led by its format version. |
 
 ## Attribution
