@@ -17,7 +17,6 @@ __all__ = [
     "InputError",
     "ScalingPolicy",
     "factorize",
-    "factorize_raw",
 ]
 
 
@@ -112,10 +111,3 @@ class ApproxInverse(LinearOperator):
 
 def factorize(matrix, *, config=None, scaling=None, threads=None):
     return ApproxInverse(_approx_chol.factorize(matrix, config, scaling, threads))
-
-
-def factorize_raw(row_ptrs, col_indices, values, n, config=None, scaling=None):
-    factor = _approx_chol.factorize_raw(
-        row_ptrs, col_indices, values, n, config, scaling
-    )
-    return ApproxInverse(factor)

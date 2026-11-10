@@ -6,7 +6,7 @@ import scipy.sparse as sp
 from scipy.linalg import block_diag
 
 import approx_chol
-from tests._laplacians import grid_laplacian
+from tests._laplacians import MatrixLike, grid_laplacian
 
 
 def _grid_residual(config: approx_chol.Config) -> float:
@@ -24,7 +24,7 @@ def _grid_solution(config: approx_chol.Config) -> np.ndarray:
     return approx_chol.factorize(lap, config=config).apply(b)
 
 
-def test_package_surface_and_basic_factorize_raw_roundtrip():
+def test_package_surface_and_a_duck_csr_roundtrip():
     assert approx_chol.__all__ == [
         "ApproxInverse",
         "BuildError",
@@ -34,14 +34,13 @@ def test_package_surface_and_basic_factorize_raw_roundtrip():
         "InputError",
         "ScalingPolicy",
         "factorize",
-        "factorize_raw",
     ]
 
-    row_ptrs = np.array([0, 2, 4], dtype=np.uint32)
-    col_indices = np.array([0, 1, 0, 1], dtype=np.uint32)
-    values = np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64)
+    indptr = np.array([0, 2, 4], dtype=np.uint32)
+    indices = np.array([0, 1, 0, 1], dtype=np.uint32)
+    data = np.array([2.0, -1.0, -1.0, 2.0], dtype=np.float64)
 
-    factor = approx_chol.factorize_raw(row_ptrs, col_indices, values, 2)
+    factor = approx_chol.factorize(MatrixLike(indptr, indices, data, (2, 2)))
     x = factor.apply(np.array([1.0, -1.0], dtype=np.float64))
 
     assert x.shape == (factor.shape[0],)
@@ -77,7 +76,7 @@ def _dld_path(n: int) -> sp.csr_matrix:
     return sp.csr_matrix(sp.diags(d) @ lap @ sp.diags(d))
 
 
-def test_factorize_and_factorize_raw_scale_under_the_given_policy():
+def test_factorize_scales_under_the_given_policy():
     path = _dld_path(10)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
@@ -86,9 +85,8 @@ def test_factorize_and_factorize_raw_scale_under_the_given_policy():
     with pytest.warns(RuntimeWarning, match="1 block\\(s\\) did not settle"):
         approx_chol.factorize(path, scaling=no_budget)
     with pytest.warns(RuntimeWarning, match="1 block\\(s\\) did not settle"):
-        approx_chol.factorize_raw(
-            path.indptr, path.indices, path.data, path.shape[0], scaling=no_budget
-        )
+        duck = MatrixLike(path.indptr, path.indices, path.data, path.shape)
+        approx_chol.factorize(duck, scaling=no_budget)
 
 
 def test_no_config_and_a_default_config_factor_alike():
