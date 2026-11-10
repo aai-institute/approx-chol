@@ -26,7 +26,10 @@ use crate::storage::OffDiagonal;
 use crate::threads::task;
 use crate::Clamp;
 use crate::{Batch, Index, MemStack, Real, StackReq, Threads};
-use apply::{rows_error, Kernel, Room, Stack};
+pub(crate) use apply::Kernel;
+#[cfg(feature = "faer")]
+pub(crate) use apply::Slices;
+use apply::{rows_error, Room, Stack};
 use block_elimination::BlockElimination;
 use cholesky::{Cholesky, Workspace};
 use schur::BipartiteBlock;

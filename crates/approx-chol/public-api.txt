@@ -476,6 +476,26 @@ pub fn approx_chol::ColumnMajor<'_, T>::columns(&self) -> usize
 pub fn approx_chol::ColumnMajor<'_, T>::read_column(&self, usize, &mut [T])
 pub fn approx_chol::ColumnMajor<'_, T>::rows(&self) -> usize
 pub fn approx_chol::ColumnMajor<'_, T>::write_column(&mut self, usize, &[T])
+impl<T: approx_chol::Real> approx_chol::MatrixMut<T> for faer::col::Col<T>
+pub fn faer::col::Col<T>::columns(&self) -> usize
+pub fn faer::col::Col<T>::read_column(&self, usize, &mut [T])
+pub fn faer::col::Col<T>::rows(&self) -> usize
+pub fn faer::col::Col<T>::write_column(&mut self, usize, &[T])
+impl<T: approx_chol::Real> approx_chol::MatrixMut<T> for faer::col::ColMut<'_, T>
+pub fn faer::col::ColMut<'_, T>::columns(&self) -> usize
+pub fn faer::col::ColMut<'_, T>::read_column(&self, usize, &mut [T])
+pub fn faer::col::ColMut<'_, T>::rows(&self) -> usize
+pub fn faer::col::ColMut<'_, T>::write_column(&mut self, usize, &[T])
+impl<T: approx_chol::Real> approx_chol::MatrixMut<T> for faer::mat::Mat<T>
+pub fn faer::mat::Mat<T>::columns(&self) -> usize
+pub fn faer::mat::Mat<T>::read_column(&self, usize, &mut [T])
+pub fn faer::mat::Mat<T>::rows(&self) -> usize
+pub fn faer::mat::Mat<T>::write_column(&mut self, usize, &[T])
+impl<T: approx_chol::Real> approx_chol::MatrixMut<T> for faer::mat::MatMut<'_, T>
+pub fn faer::mat::MatMut<'_, T>::columns(&self) -> usize
+pub fn faer::mat::MatMut<'_, T>::read_column(&self, usize, &mut [T])
+pub fn faer::mat::MatMut<'_, T>::rows(&self) -> usize
+pub fn faer::mat::MatMut<'_, T>::write_column(&mut self, usize, &[T])
 pub trait approx_chol::Real: num_traits::float::Float + num_traits::float::TotalOrder + core::fmt::Debug + core::marker::Send + core::marker::Sync + 'static + approx_chol::seal::Real
 impl approx_chol::Real for f32
 impl approx_chol::Real for f64

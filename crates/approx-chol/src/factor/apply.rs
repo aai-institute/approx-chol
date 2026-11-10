@@ -96,11 +96,12 @@ impl std::error::Error for LayoutError {}
 
 /// A block of right-hand sides, the solutions written over them.
 ///
-/// It keeps its shape during an apply; `read_column` copies one column into `into`, `write_column` copies `from` into one column and touches nothing else, and neither allocates. Each panics unless `column < columns()` and the slice has `rows()` entries. A slice or `Vec` of `T` is one column; one of `[T; K]` holds `K` interleaved columns, solved where they are; any other block, [`ColumnMajor`] and [`Columns`] among them, is solved in interleaved packs of its columns copied into scratch.
+/// It keeps its shape during an apply; `read_column` copies one column into `into`, `write_column` copies `from` into one column and touches nothing else, and neither allocates. Each panics unless `column < columns()` and the slice has `rows()` entries. A slice or `Vec` of `T` is one column; one of `[T; K]` holds `K` interleaved columns, solved where they are; any other block, [`ColumnMajor`] and [`Columns`] among them, is solved in interleaved packs of its columns copied into scratch. With the `faer` feature, faer's `Mat`, `MatMut`, `Col` and `ColMut` are blocks at any strides: contiguous columns are solved as [`ColumnMajor`]'s are, others through `read_column` and `write_column`; a typed faer view converts with `as_dyn_mut().as_dyn_stride_mut()`.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a block of right-hand sides of `{T}`",
     label = "not a `MatrixMut<{T}>`",
-    note = "a slice or `Vec` of `{T}` is one column, one of `[{T}; K]` holds `K`; pass an array as `&mut a[..]`; wrap column-major data in `ColumnMajor`, one slice per column in `Columns`; a nalgebra 0.35 matrix needs the `nalgebra` feature"
+    note = "a slice or `Vec` of `{T}` is one column, one of `[{T}; K]` holds `K`; pass an array as `&mut a[..]`; wrap column-major data in `ColumnMajor`, one slice per column in `Columns`; a nalgebra 0.35 matrix needs the `nalgebra` feature",
+    note = "with feature `faer`, faer 0.24's `Mat`, `MatMut`, `Col` and `ColMut` are blocks; convert a typed faer view with `as_dyn_mut().as_dyn_stride_mut()`"
 )]
 pub trait MatrixMut<T: Real> {
     /// Rows, the operator's dimension when applied.
@@ -424,7 +425,7 @@ impl<T: Real> Kernel<'_, T> {
     }
 
     /// Solves `block` in packs filled from and drained into its own column slices.
-    fn by_slices<S: Slices<T>>(self, block: &mut S) -> Result<(), ApplyError> {
+    pub(crate) fn by_slices<S: Slices<T>>(self, block: &mut S) -> Result<(), ApplyError> {
         let columns = block.columns();
         self.on(
             |room| room.copied(columns),
@@ -433,7 +434,10 @@ impl<T: Real> Kernel<'_, T> {
     }
 
     /// Solves `block` in packs, each column read and written through a column of scratch.
-    fn by_columns<M: MatrixMut<T> + ?Sized>(self, block: &mut M) -> Result<(), ApplyError> {
+    pub(crate) fn by_columns<M: MatrixMut<T> + ?Sized>(
+        self,
+        block: &mut M,
+    ) -> Result<(), ApplyError> {
         let columns = block.columns();
         self.on(
             |room| room.staged(columns),
@@ -461,7 +465,7 @@ trait Packed<T: Real> {
 }
 
 /// A block whose columns are slices of its own, so packs fill from them and a column alone is solved where it is.
-trait Slices<T: Real>: MatrixMut<T> {
+pub(crate) trait Slices<T: Real>: MatrixMut<T> {
     fn column_mut(&mut self, column: usize) -> &mut [T];
 }
 
