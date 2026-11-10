@@ -75,6 +75,9 @@ impl<'a, T: core::marker::Copy, I: core::marker::Copy> core::marker::Copy for ap
 pub struct approx_chol::input::CsrRef<'a, T, I>(_)
 impl<'a, T: approx_chol::Real, I: num_traits::int::PrimInt> approx_chol::input::CsrRef<'a, T, I>
 pub fn approx_chol::input::CsrRef<'a, T, I>::new(usize, &'a [I], &'a [I], &'a [T]) -> core::result::Result<Self, approx_chol::input::InputError>
+impl<'a, T: approx_chol::Real, I: faer::Index + num_traits::int::PrimInt> core::convert::TryFrom<faer::sparse::csc::numeric::generic::SparseColMat<faer::sparse::csc::numeric::Ref<'a, I, T>>> for approx_chol::input::CsrRef<'a, T, I>
+pub type approx_chol::input::CsrRef<'a, T, I>::Error = approx_chol::input::InputError
+pub fn approx_chol::input::CsrRef<'a, T, I>::try_from(faer::sparse::csc::SparseColMatRef<'a, I, T>) -> core::result::Result<Self, approx_chol::input::InputError>
 impl<'a, T: approx_chol::Real, I: faer::Index + num_traits::int::PrimInt> core::convert::TryFrom<faer::sparse::csr::numeric::generic::SparseRowMat<faer::sparse::csr::numeric::Ref<'a, I, T>>> for approx_chol::input::CsrRef<'a, T, I>
 pub type approx_chol::input::CsrRef<'a, T, I>::Error = approx_chol::input::InputError
 pub fn approx_chol::input::CsrRef<'a, T, I>::try_from(faer::sparse::csr::SparseRowMatRef<'a, I, T>) -> core::result::Result<Self, approx_chol::input::InputError>
@@ -336,6 +339,24 @@ pub fn approx_chol::ApproxInverse<T>::n_steps(&self) -> usize
 pub fn approx_chol::ApproxInverse<T>::scratch(&self, usize, approx_chol::Threads) -> dyn_stack::stack_req::StackReq
 impl<'de, T: approx_chol::Real + serde_core::de::Deserialize<'de>> serde_core::de::Deserialize<'de> for approx_chol::ApproxInverse<T>
 pub fn approx_chol::ApproxInverse<T>::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+impl<T: approx_chol::Real + faer_traits::ComplexField> faer::matrix_free::BiLinOp<T> for approx_chol::ApproxInverse<T>
+pub fn approx_chol::ApproxInverse<T>::adjoint_apply(&self, faer::mat::MatMut<'_, T>, faer::mat::MatRef<'_, T>, faer::Par, &mut dyn_stack::MemStack)
+pub fn approx_chol::ApproxInverse<T>::transpose_apply(&self, faer::mat::MatMut<'_, T>, faer::mat::MatRef<'_, T>, faer::Par, &mut dyn_stack::MemStack)
+pub fn approx_chol::ApproxInverse<T>::transpose_apply_scratch(&self, usize, faer::Par) -> dyn_stack::stack_req::StackReq
+impl<T: approx_chol::Real + faer_traits::ComplexField> faer::matrix_free::BiPrecond<T> for approx_chol::ApproxInverse<T>
+pub fn approx_chol::ApproxInverse<T>::adjoint_apply_in_place(&self, faer::mat::MatMut<'_, T>, faer::Par, &mut dyn_stack::MemStack)
+pub fn approx_chol::ApproxInverse<T>::transpose_apply_in_place(&self, faer::mat::MatMut<'_, T>, faer::Par, &mut dyn_stack::MemStack)
+pub fn approx_chol::ApproxInverse<T>::transpose_apply_in_place_scratch(&self, usize, faer::Par) -> dyn_stack::stack_req::StackReq
+impl<T: approx_chol::Real + faer_traits::ComplexField> faer::matrix_free::LinOp<T> for approx_chol::ApproxInverse<T>
+pub fn approx_chol::ApproxInverse<T>::apply(&self, faer::mat::MatMut<'_, T>, faer::mat::MatRef<'_, T>, faer::Par, &mut dyn_stack::MemStack)
+pub fn approx_chol::ApproxInverse<T>::apply_scratch(&self, usize, faer::Par) -> dyn_stack::stack_req::StackReq
+pub fn approx_chol::ApproxInverse<T>::conj_apply(&self, faer::mat::MatMut<'_, T>, faer::mat::MatRef<'_, T>, faer::Par, &mut dyn_stack::MemStack)
+pub fn approx_chol::ApproxInverse<T>::ncols(&self) -> usize
+pub fn approx_chol::ApproxInverse<T>::nrows(&self) -> usize
+impl<T: approx_chol::Real + faer_traits::ComplexField> faer::matrix_free::Precond<T> for approx_chol::ApproxInverse<T>
+pub fn approx_chol::ApproxInverse<T>::apply_in_place(&self, faer::mat::MatMut<'_, T>, faer::Par, &mut dyn_stack::MemStack)
+pub fn approx_chol::ApproxInverse<T>::apply_in_place_scratch(&self, usize, faer::Par) -> dyn_stack::stack_req::StackReq
+pub fn approx_chol::ApproxInverse<T>::conj_apply_in_place(&self, faer::mat::MatMut<'_, T>, faer::Par, &mut dyn_stack::MemStack)
 impl<T: core::clone::Clone> core::clone::Clone for approx_chol::ApproxInverse<T>
 pub fn approx_chol::ApproxInverse<T>::clone(&self) -> Self
 impl<T: core::fmt::Debug> core::fmt::Debug for approx_chol::ApproxInverse<T>
@@ -473,6 +494,26 @@ pub fn approx_chol::ColumnMajor<'_, T>::columns(&self) -> usize
 pub fn approx_chol::ColumnMajor<'_, T>::read_column(&self, usize, &mut [T])
 pub fn approx_chol::ColumnMajor<'_, T>::rows(&self) -> usize
 pub fn approx_chol::ColumnMajor<'_, T>::write_column(&mut self, usize, &[T])
+impl<T: approx_chol::Real> approx_chol::MatrixMut<T> for faer::col::Col<T>
+pub fn faer::col::Col<T>::columns(&self) -> usize
+pub fn faer::col::Col<T>::read_column(&self, usize, &mut [T])
+pub fn faer::col::Col<T>::rows(&self) -> usize
+pub fn faer::col::Col<T>::write_column(&mut self, usize, &[T])
+impl<T: approx_chol::Real> approx_chol::MatrixMut<T> for faer::col::ColMut<'_, T>
+pub fn faer::col::ColMut<'_, T>::columns(&self) -> usize
+pub fn faer::col::ColMut<'_, T>::read_column(&self, usize, &mut [T])
+pub fn faer::col::ColMut<'_, T>::rows(&self) -> usize
+pub fn faer::col::ColMut<'_, T>::write_column(&mut self, usize, &[T])
+impl<T: approx_chol::Real> approx_chol::MatrixMut<T> for faer::mat::Mat<T>
+pub fn faer::mat::Mat<T>::columns(&self) -> usize
+pub fn faer::mat::Mat<T>::read_column(&self, usize, &mut [T])
+pub fn faer::mat::Mat<T>::rows(&self) -> usize
+pub fn faer::mat::Mat<T>::write_column(&mut self, usize, &[T])
+impl<T: approx_chol::Real> approx_chol::MatrixMut<T> for faer::mat::MatMut<'_, T>
+pub fn faer::mat::MatMut<'_, T>::columns(&self) -> usize
+pub fn faer::mat::MatMut<'_, T>::read_column(&self, usize, &mut [T])
+pub fn faer::mat::MatMut<'_, T>::rows(&self) -> usize
+pub fn faer::mat::MatMut<'_, T>::write_column(&mut self, usize, &[T])
 pub trait approx_chol::Real: num_traits::float::Float + num_traits::float::TotalOrder + core::fmt::Debug + core::marker::Send + core::marker::Sync + 'static + approx_chol::seal::Real
 impl approx_chol::Real for f32
 impl approx_chol::Real for f64

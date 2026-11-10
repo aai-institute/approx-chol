@@ -21,8 +21,8 @@ skip = [
 ]
 skip-tree = [
     { crate = "proptest@1.10.0", reason = "dev-only; proptest and its dev-only companion tempfile both pull a rand 0.9 lineage (rand, rand_core, getrandom, rand_chacha, rand_xorshift) while the library depends on rand 0.10" },
-    { crate = "spindle@0.2.6", reason = "dev-only: faer's rayon feature, on for the Par test; pulls equator 0.4.2 beside faer's 0.6.0" },
-    { crate = "sysctl@0.6.0", reason = "dev-only: faer's rayon feature via gemm-common; pulls thiserror 1 beside postcard's thiserror 2" },
+    { crate = "spindle@0.2.6", reason = "faer's rayon feature, which the faer feature enables; pulls equator 0.4.2 beside faer's 0.6.0" },
+    { crate = "sysctl@0.6.0", reason = "faer's rayon feature via gemm-common, which the faer feature enables; pulls thiserror 1 beside postcard's (dev-only) thiserror 2" },
 ]
 
 [advisories]
