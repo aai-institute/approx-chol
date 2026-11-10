@@ -22,7 +22,7 @@ pub(super) struct Sddm<T, I> {
 pub(super) enum Closure<T> {
     Folded(Grounding<T>),
     Cover(Grounding<T>),
-    /// Each vertex's [`twist`] `k⁺ — k⁻`, zero where both copies float.
+    /// Each vertex's [`twist`] `k⁺ — k⁻`, zero where it floats; its copies ground alike, so `k⁺`'s ground is the vertex's.
     Twisted(Box<[T]>),
 }
 
@@ -84,7 +84,7 @@ impl<T: Real, I: Index> Sddm<T, I> {
     ) -> Self {
         let closure = match grounding.surplus() {
             Some(ground) if twists(surplus, ground, &adjacency) => {
-                Closure::Twisted(ground.chunks_exact(2).map(|g| twist(g[0], g[1])).collect())
+                Closure::Twisted(ground.iter().step_by(2).map(|&g| twist(g)).collect())
             }
             _ => Closure::Cover(grounding),
         };
@@ -540,13 +540,13 @@ fn twists<T: Real, I: Index>(
     }
 }
 
-/// The edge `k⁺ — k⁻`, a quarter of `g⁺ + g⁻`, that acts on `[z; −z]` as grounds `g⁺, g⁻` together do; with `g⁺ ≠ g⁻` the sheets are not mirrored, and the edge holds their mean on both. Zero where both copies float, else at least `MIN_POSITIVE`, as a share is.
-fn twist<T: Real>(g_plus: T, g_minus: T) -> T {
-    if g_plus == T::zero() && g_minus == T::zero() {
+/// The edge `k⁺ — k⁻`, a quarter of both copies' ground `g` each, that acts on `[z; −z]` as the two grounds together do. Zero where the vertex floats, else at least `MIN_POSITIVE`, as a share is.
+fn twist<T: Real>(g: T) -> T {
+    if g == T::zero() {
         return T::zero();
     }
-    let quarter = narrow::<T>(0.25);
-    (g_plus * quarter + g_minus * quarter).max(T::min_positive_value())
+    let quarter = g * narrow::<T>(0.25);
+    (quarter + quarter).max(T::min_positive_value())
 }
 
 /// A negative entry joins its ends on one sheet, a positive one across them.
