@@ -6,33 +6,10 @@ use rstest::rstest;
 use crate::common::bipartite::Bipartite;
 use crate::common::dense;
 use crate::common::dense_residual;
-use crate::common::lcg::Lcg;
+use crate::common::scaling::exhausted;
 use crate::common::solve::Solve;
 
 impl Bipartite {
-    /// `columns` columns over sides of `n_left` and `n_right`, left vertex `n_left − 1` in none, so it is dead.
-    fn new(n_left: usize, n_right: usize, columns: usize, signed: bool) -> Self {
-        let mut lcg = Lcg(0x9e37_79b9);
-        let mut next = || (lcg.next_u64() >> 33) as usize;
-        let left: Vec<u32> = (0..columns).map(|k| (k % (n_left - 1)) as u32).collect();
-        let right: Vec<u32> = (0..columns).map(|_| (next() % n_right) as u32).collect();
-        let values = signed.then(|| {
-            let mut magnitude = || 0.5 + (next() % 1000) as f64 / 1000.0;
-            let x: Vec<f64> = (0..columns).map(|_| magnitude()).collect();
-            let y: Vec<f64> = (0..columns)
-                .map(|k| magnitude() * if k % 3 == 0 { -1.0 } else { 1.0 })
-                .collect();
-            (x, y)
-        });
-        Self {
-            n_left,
-            n_right,
-            left,
-            right,
-            values,
-        }
-    }
-
     /// Right vertex `n_right − 1` in one column, at `x = 0`, so it is lone.
     fn with_lone_vertex(mut self) -> Self {
         let lone = self.n_right as u32 - 1;
@@ -136,8 +113,7 @@ fn a_sampled_complement_is_the_whole_factors_kept_part() {
 #[test]
 fn a_complement_reports_the_whole_blocks_clamp_on_its_kept_side() {
     let gram = Bipartite::new(31, 12, 60, true);
-    let exhausted = ScalingPolicy::new(0.0, 0).expect("a valid policy");
-    let whole = factorize_with(gram.view(), dense::dense(), exhausted).expect("factors");
+    let whole = factorize_with(gram.view(), dense::dense(), exhausted()).expect("factors");
     let [clamp] = &whole.clamps()[..] else {
         panic!("one clamp: {:?}", whole.clamps())
     };
@@ -148,7 +124,7 @@ fn a_complement_reports_the_whole_blocks_clamp_on_its_kept_side() {
     );
     for (kept, vertices) in [(Side::Left, 0..30), (Side::Right, 0..12)] {
         let factor =
-            factorize_complement(gram.view(), kept, dense::dense(), exhausted).expect("factors");
+            factorize_complement(gram.view(), kept, dense::dense(), exhausted()).expect("factors");
         let vertices = vertices.collect();
         let expected = Clamped {
             vertices,

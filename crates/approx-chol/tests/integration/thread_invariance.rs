@@ -10,6 +10,7 @@ use crate::common::bipartite::Bipartite;
 use crate::common::bits::bits;
 use crate::common::grid::grid;
 use crate::common::lcg::Lcg;
+use crate::common::scaling::dld;
 use crate::common::solve::Solve;
 use crate::common::sparse::clique_tree;
 use crate::common::threads;
@@ -73,12 +74,7 @@ fn scaled_grid<T: Real>() -> String {
     for edge in &mut graph.edges {
         edge.weight = 10f64.powf(4.0 * lcg.unit());
     }
-    let d: Vec<f64> = (0..graph.n).map(|_| 10f64.powf(2.0 * lcg.unit())).collect();
-    let (ptrs, columns, values) = graph.csr(false);
-    let scaled: Vec<T> = (0..graph.n)
-        .flat_map(|i| (ptrs[i]..ptrs[i + 1]).map(move |k| (i, k)))
-        .map(|(i, k)| T::from(d[i] * values[k] * d[columns[k]]).unwrap())
-        .collect();
+    let (ptrs, columns, scaled) = dld::<T>(&graph, &mut lcg, 2.0);
     let csr = CsrRef::new(graph.n, &ptrs, &columns, &scaled).unwrap();
     let factor = |policy| factorize_with(csr, Config::default(), policy).unwrap();
     let at_once: ApproxInverse<T> = factor(ScalingPolicy::new(1e-9, 0).unwrap());
