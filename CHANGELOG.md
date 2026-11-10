@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (breaking)
 
+- `Header { version, scalar }`, `Scalar { F32, F64 }` and `#[non_exhaustive] HeaderMismatch { found, expected }` replace `FACTOR_FORMAT_VERSION`: `Header::of::<T>()` is the header a persisted `ApproxInverse<T>` is written with and the only one it loads, format version `0x4143_000E` and `T`'s scalar type, and `expect::<T>()` checks a header read apart. A persisted `ApproxInverse` is the pair `(Header, B)`: postcard writes the flat `(version, scalar, B)`, a self-describing format `{"version", "scalar"}` with `"f32"` or `"f64"`. A load checks the header before it reads `B` and rejects another version or scalar type with `HeaderMismatch`'s message, which names what differs. ([#425])
 - One `#[non_exhaustive] BuildError` with `TooLarge { vertex }` and `OutOfRange { vertex }` replaces `Error` and `ReduceError`: `factorize`, `factorize_with`, `factorize_complement` and `Sgdd::reduce` return it, since every input defect is an `InputError` at construction. `ReduceError::Unscalable` is folded into `OutOfRange`, which names the row whose computed value left the range, in the caller's numbering, where `Unscalable` named the block's first vertex. A relaxation rejects a NaN ratio, which it ignored before; none arises from a valid input, as each ratio divides a sum of positive terms by a finite positive `y`. `OutOfRange` reads "a value at vertex {vertex} is outside the representable range", in Rust and Python, where it read "an entry at vertex …". ([#422])
 
 - `CsrRef::new` and `TriangleCsrRef::upper` check column range, symmetry or triangle membership, coalesced sums and diagonals at construction, so a defect is an `InputError` before the build. A diagonal that is negative, above `MAX/4`, or zero beside a nonzero edge is `InputError::Diagonal { row }`; an isolated zero row is still accepted. `ReduceError::NonpositiveDiagonal` is removed. Unsorted rows are sorted and coalesced to be checked and again when they factor, so the views and `Input` stay borrowed and `Copy`. Computed row sums and component-size limits remain build-time checks. ([#421])
@@ -334,6 +335,7 @@ for graph Laplacians in Rust with Python bindings.
 [#421]: https://github.com/aai-institute/approx-chol/issues/421
 [#422]: https://github.com/aai-institute/approx-chol/issues/422
 [#423]: https://github.com/aai-institute/approx-chol/issues/423
+[#425]: https://github.com/aai-institute/approx-chol/issues/425
 [#426]: https://github.com/aai-institute/approx-chol/issues/426
 [#427]: https://github.com/aai-institute/approx-chol/issues/427
 [#433]: https://github.com/aai-institute/approx-chol/issues/433

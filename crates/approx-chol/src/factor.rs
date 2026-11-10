@@ -5,6 +5,7 @@ mod block_elimination;
 mod cholesky;
 mod clique_tree;
 mod config;
+mod header;
 mod schur;
 mod sddm;
 mod sign;
@@ -17,8 +18,7 @@ use rayon::prelude::*;
 
 pub use apply::{ApplyError, ColumnMajor, Columns, LayoutError, MatrixMut};
 pub use config::{Config, CoverSurplus, FrustratedRoute, Sampling, SchurMode};
-#[cfg(feature = "serde")]
-pub use wire::FORMAT_VERSION;
+pub use header::{Header, HeaderMismatch, Scalar};
 
 use crate::order::{Listed, Order, Segment, Slots};
 use crate::sgdd::{ranges, BlockComplement, Congruence, IrreducibleBlock, KeptVertices, Summands};
@@ -470,12 +470,12 @@ fn splitmix(x: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-/// `(FORMAT_VERSION, (listed, blocks, inverse_pivots))`: the vertices once, each block's segment a run or a length of the order's `listed`.
+/// `(Header, (listed, blocks, inverse_pivots))`: the vertices once, each block's segment a run or a length of the order's `listed`.
 #[cfg(feature = "serde")]
-impl<T: serde::Serialize> serde::Serialize for ApproxInverse<T> {
+impl<T: Real + serde::Serialize> serde::Serialize for ApproxInverse<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let body = (self.order.listed(), &self.blocks, &self.inverse_pivots);
-        wire::serialize(serializer, body)
+        wire::serialize::<T, _>(serializer, body)
     }
 }
 
@@ -487,7 +487,8 @@ type Body<T> = (Listed, Blocks<T>, Box<[T]>);
 #[cfg(feature = "serde")]
 impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ApproxInverse<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let (order, mut blocks, inverse_pivots): Body<T> = wire::deserialize(deserializer)?;
+        let (order, mut blocks, inverse_pivots): Body<T> =
+            wire::deserialize::<T, _, _>(deserializer)?;
         let order = on!(&mut blocks, blocks => Order::decoded(order, blocks.iter_mut().map(|b| &mut b.segment)));
         let fits = || on!(&blocks, blocks => blocks.iter().all(Block::holds));
         let once =

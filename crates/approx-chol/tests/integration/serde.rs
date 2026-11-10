@@ -1,7 +1,7 @@
 #![cfg(feature = "serde")]
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Laplacian, Sddm};
-use approx_chol::{factorize_with, ApproxInverse, Config, FrustratedRoute, ScalingPolicy};
+use approx_chol::{factorize_with, ApproxInverse, Config, FrustratedRoute, Header, ScalingPolicy};
 use approx_chol::{SchurMode, Threads};
 use rstest::rstest;
 
@@ -146,17 +146,17 @@ enum Listed<'a> {
     U32(&'a [u32]),
 }
 
-/// The version, an order listing `dead`, and one block of index tag `tag` up to its segment, the run `0..run`.
+/// The flat version and scalar, an order listing `dead`, and one block of index tag `tag` up to its segment, the run `0..run`.
 fn one_block_head(tag: u8, run: usize, dead: &[u32]) -> Vec<u8> {
-    let version = approx_chol::FACTOR_FORMAT_VERSION;
-    let mut bytes = postcard::to_stdvec(&(version, Listed::U32(dead))).unwrap();
+    let Header { version, scalar } = Header::of::<f64>();
+    let mut bytes = postcard::to_stdvec(&(version, scalar, Listed::U32(dead))).unwrap();
     bytes.extend([tag, 1]);
     let segment = Segment::Run { start: 0, len: run };
     bytes.extend(postcard::to_stdvec(&segment).unwrap());
     bytes
 }
 
-/// The version and the order of one `u32` block on `0..n`, up to its segment.
+/// The header and the order of one `u32` block on `0..n`, up to its segment.
 fn one_block_factor(n: u64) -> Vec<u8> {
     one_block_head(0, n as usize, &[])
 }
@@ -222,8 +222,12 @@ fn a_factor_round_trips_bit_identically() {
         .chain([with_dead_vertices(), with_isolated_vertex()]);
     for factor in all {
         let bytes = postcard::to_stdvec(&factor).unwrap();
-        let version = postcard::to_stdvec(&approx_chol::FACTOR_FORMAT_VERSION).unwrap();
-        assert!(bytes.starts_with(&version), "the version leads");
+        let Header { version, scalar } = Header::of::<f64>();
+        let header = postcard::to_stdvec(&(version, scalar)).unwrap();
+        assert!(
+            bytes.starts_with(&header),
+            "the flat version and scalar lead"
+        );
         let decoded: ApproxInverse = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(
             (decoded.n(), decoded.n_steps()),
@@ -234,6 +238,32 @@ fn a_factor_round_trips_bit_identically() {
             bits_at(&factor, Threads::All)
         );
     }
+}
+
+/// An `f32` factor writes `"f32"` and loads as `ApproxInverse<f32>` only.
+#[test]
+fn a_factor_loads_only_as_its_own_scalar() {
+    let edge = Laplacian::new(3, &[0u32], &[1]).unwrap();
+    let ground = Sddm::new(edge, &[1.0f32, 0.0, 2.0]).unwrap();
+    let narrow: ApproxInverse<f32> =
+        factorize_with(ground, Config::default(), ScalingPolicy::default()).unwrap();
+    let bytes = postcard::to_stdvec(&narrow).unwrap();
+    let back: ApproxInverse<f32> = postcard::from_bytes(&bytes).unwrap();
+    assert_eq!(format!("{back:?}"), format!("{narrow:?}"));
+    assert_eq!(
+        postcard::from_bytes::<ApproxInverse>(&bytes).unwrap_err(),
+        postcard::Error::SerdeDeCustom
+    );
+
+    let json = serde_json::to_value(&narrow).unwrap();
+    let version = Header::of::<f32>().version;
+    assert_eq!(
+        json[0],
+        serde_json::json!({"version": version, "scalar": "f32"})
+    );
+    let error = serde_json::from_value::<ApproxInverse>(json).unwrap_err();
+    let error = error.to_string();
+    assert!(error.contains("scalar f32, expected scalar f64"), "{error}");
 }
 
 /// [`with_dead_vertices`]'s bytes with its block's run length and its dead vertices replaced, the block's factor kept.
@@ -422,7 +452,7 @@ fn an_isolated_vertex_round_trips_through_json() {
     assert_eq!(factor.solve(&b).unwrap(), back.solve(&b).unwrap());
 }
 
-/// [`with_isolated_vertex`]'s JSON `[version, [listed, blocks, inverse_pivots]]` with its block's segment and the listed vertices replaced.
+/// [`with_isolated_vertex`]'s JSON `[header, [listed, blocks, inverse_pivots]]` with its block's segment and the listed vertices replaced.
 fn with_order(segment: serde_json::Value, listed: serde_json::Value) -> serde_json::Value {
     let mut v = serde_json::to_value(with_isolated_vertex()).unwrap();
     assert_eq!(v[1][0], serde_json::json!({"U32": [2]}));

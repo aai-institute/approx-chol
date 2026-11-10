@@ -7,11 +7,9 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use approx_chol::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1};
-use approx_chol::FACTOR_FORMAT_VERSION as FORMAT_VERSION;
-use approx_chol::{factorize_with, ApproxInverse, Config, FrustratedRoute};
+use approx_chol::{factorize_with, ApproxInverse, Config, FrustratedRoute, Header, Scalar};
 use approx_chol::{ScalingOutcome, ScalingPolicy};
 use rstest::rstest;
-use serde::de::value::{Error, SeqDeserializer};
 use serde::Deserialize;
 
 use crate::common::pcg::relative_residual;
@@ -169,10 +167,8 @@ impl Fixture {
 
     /// The one place a fixture path is spelled, so the reader and the regenerator agree on the version.
     fn path(self) -> String {
-        format!(
-            "{FIXTURE_DIR}/{}_{FORMAT_VERSION:#010x}.postcard",
-            self.name()
-        )
+        let version = Header::of::<f64>().version;
+        format!("{FIXTURE_DIR}/{}_{version:#010x}.postcard", self.name())
     }
 }
 
@@ -210,8 +206,10 @@ fn every_fixture_has_a_case() {
         .map(|f| file_name(Path::new(&f.path())))
         .collect();
     assert_eq!(
-        committed, named,
-        "every committed payload is a fixture of format version {FORMAT_VERSION:#010x}"
+        committed,
+        named,
+        "every committed payload is a fixture of format version {:#010x}",
+        Header::of::<f64>().version
     );
 }
 
@@ -267,29 +265,52 @@ fn assert_committed_payload_decodes_and_solves(fixture: Fixture) {
     );
 }
 
+fn released(version: u32) -> Header {
+    Header {
+        version,
+        ..Header::of::<f64>()
+    }
+}
+
 #[rstest]
-#[case::from_the_old_crate(0x4143_0005)]
-#[case::from_a_future_release(FORMAT_VERSION + 1)]
-#[case::zero(0)]
-fn a_payload_of_another_format_version_is_rejected_by_version(#[case] declared: u32) {
+#[case::from_the_old_crate(released(0x4143_0005))]
+#[case::from_a_future_release(released(Header::of::<f64>().version + 1))]
+#[case::zero(released(0))]
+#[case::of_f32(Header::of::<f32>())]
+#[case::of_f32_and_zero(Header { version: 0, scalar: Scalar::F32 })]
+fn a_payload_of_another_header_is_rejected_by_name(#[case] declared: Header) {
+    let expected = Header::of::<f64>();
     let bytes = postcard::to_stdvec(&Fixture::Grounded.factor()).expect("serialize");
-    let (_, body) = postcard::take_from_bytes::<u32>(&bytes).expect("a leading version");
-    let mut payload = postcard::to_stdvec(&declared).expect("serialize the version");
+    let (_, body) = postcard::take_from_bytes::<(u32, Scalar)>(&bytes).expect("a flat header");
+    let mut payload = postcard::to_stdvec(&(declared.version, declared.scalar)).expect("serialize");
     payload.extend_from_slice(body);
     assert_eq!(
         postcard::from_bytes::<ApproxInverse>(&payload)
-            .expect_err("another version must not decode"),
+            .expect_err("another header must not decode"),
         postcard::Error::SerdeDeCustom
     );
 
-    // Nothing follows the version, so only a gate that reads it first can name it.
-    let lone = SeqDeserializer::<_, Error>::new(std::iter::once(declared));
+    let mismatch = declared.expect::<f64>().expect_err("another header");
+    assert_eq!((mismatch.found, mismatch.expected), (declared, expected));
+    // Nothing follows the header, so only a gate that reads it first can name it.
+    let lone = serde_json::json!([declared]);
     let error = ApproxInverse::<f64>::deserialize(lone)
-        .expect_err("another version must not decode")
+        .expect_err("another header must not decode")
         .to_string();
-    for version in [declared, FORMAT_VERSION] {
-        let named = format!("format version {version:#010x}");
+    let mut named = Vec::new();
+    if declared.version != expected.version {
+        named.push(format!(
+            "format version {:#010x}, expected format version {:#010x}",
+            declared.version, expected.version
+        ));
+    }
+    if declared.scalar != expected.scalar {
+        named.push("scalar f32, expected scalar f64".to_owned());
+    }
+    assert!(!named.is_empty());
+    for named in named {
         assert!(error.contains(&named), "expected {named:?}, got: {error}");
+        assert!(mismatch.to_string().contains(&named), "{mismatch}");
     }
 }
 

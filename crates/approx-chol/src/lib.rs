@@ -62,11 +62,9 @@ use num_traits::{float::TotalOrder, Float, PrimInt, Unsigned};
 use batch::Batch;
 pub use dyn_stack::{MemBuffer, MemStack, StackReq};
 pub use error::BuildError;
-#[cfg(feature = "serde")]
-pub use factor::FORMAT_VERSION as FACTOR_FORMAT_VERSION;
 pub use factor::{
     ApplyError, ApproxInverse, ColumnMajor, Columns, Component, Config, CoverSurplus,
-    FrustratedRoute, LayoutError, MatrixMut, Sampling, SchurMode,
+    FrustratedRoute, Header, HeaderMismatch, LayoutError, MatrixMut, Sampling, Scalar, SchurMode,
 };
 use input::{Input, Side};
 pub use sgdd::{Clamp, ScalingOutcome, ScalingPolicy};
@@ -174,10 +172,17 @@ trait Index: PrimInt + Unsigned + Send + Sync + 'static {
 
 mod seal {
     /// Only the crate implements [`Real`](super::Real), so every `T` widens to `f64` exactly.
-    pub trait Real {}
+    pub trait Real {
+        /// What a persisted factor's [`Header`](crate::Header) records for it.
+        const SCALAR: crate::Scalar;
+    }
 
-    impl Real for f32 {}
-    impl Real for f64 {}
+    impl Real for f32 {
+        const SCALAR: crate::Scalar = crate::Scalar::F32;
+    }
+    impl Real for f64 {
+        const SCALAR: crate::Scalar = crate::Scalar::F64;
+    }
 }
 
 macro_rules! index {
