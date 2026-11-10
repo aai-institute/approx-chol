@@ -2,8 +2,6 @@
 
 mod csr;
 mod error;
-#[cfg(any(feature = "sprs", feature = "faer", feature = "nalgebra"))]
-mod interop;
 mod width2;
 
 use num_traits::PrimInt;
