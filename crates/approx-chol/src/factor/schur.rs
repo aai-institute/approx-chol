@@ -75,9 +75,12 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         let rows = match formation(config, self.cross.n_cols()) {
             Formation::Dense => return (Arm::AsIs(self.as_is(inv_pivot, threads)), self.cross),
             Formation::Exact => self.exact(inv_pivot, Layout::sddm(self.balance), threads),
-            Formation::Sampled(copies) => self.sample(copies, streams, threads).merge(),
+            Formation::Sampled(copies) => {
+                let kept = Self::kept_surplus(&self.grounding, self.cross.n_rows());
+                self.sample(copies, streams, threads).merge(kept)
+            }
         };
-        let s = Sddm::of_rows(rows, &self.grounding, config.frustrated.cover_surplus());
+        let s = Sddm::of_rows(rows, config.frustrated.cover_surplus());
         (Arm::Sddm(s), self.cross)
     }
 
@@ -95,19 +98,19 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
             }
             Formation::Sampled(copies) => {
                 let fill = self.sample(copies, streams, threads);
+                let kept = Self::kept_surplus(&self.grounding, self.cross.n_rows());
                 // The merge never reads `C`.
                 drop(self.cross);
-                fill.merge()
+                fill.merge(kept)
             }
         };
-        let surplus = config.frustrated.cover_surplus();
-        Arm::Sddm(Sddm::of_rows(rows, &self.grounding, surplus))
+        Arm::Sddm(Sddm::of_rows(rows, config.frustrated.cover_surplus()))
     }
 
     /// `S` itself: a balanced block's exact rows, a frustrated one's signed pairs folded.
     fn as_is(&self, inv_pivot: &[T], threads: Threads) -> AsIs<T, I> {
         let rows = self.exact(inv_pivot, Layout::as_is(self.balance), threads);
-        let (adjacency, grounding) = rows.close(&self.grounding);
+        let (adjacency, grounding) = rows.close();
         AsIs::new(adjacency, self.balance, grounding)
     }
 
@@ -123,8 +126,13 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
             .collect()
     }
 
-    /// `S − diag(s_k)` exact by kept row in `layout`, `S = D_k − Cᵀ D_e⁻¹ C`, through a `Cᵀ` freed before closing adds `s_k`.
-    fn exact(&self, inv_pivot: &[T], layout: Layout, threads: Threads) -> SddmRows<T, I> {
+    /// The kept rows' surplus `s_k`, after the `n_e` eliminated rows'; borrowed from σ alone, so `C` can be freed while it is held.
+    fn kept_surplus(grounding: &Grounding<T>, n_e: usize) -> Option<&[T]> {
+        grounding.surplus().map(|s| &s[n_e..])
+    }
+
+    /// `S` exact by kept row in `layout`, `S = D_k − Cᵀ D_e⁻¹ C`, through a `Cᵀ` freed before the rows close.
+    fn exact(&self, inv_pivot: &[T], layout: Layout, threads: Threads) -> SddmRows<'_, T, I> {
         match layout {
             Layout::Sheet => self.exact_rows(inv_pivot, layout, threads, |j, _, _| j),
             Layout::Cover | Layout::SignedPairs => {
@@ -142,7 +150,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         layout: Layout,
         threads: Threads,
         vertex: impl Fn(usize, T, T) -> usize + Sync,
-    ) -> SddmRows<T, I> {
+    ) -> SddmRows<'_, T, I> {
         let (c, grounding) = (&self.cross, &self.grounding);
         let ct = c.transpose();
         let ground = layout.columns(c.n_cols());
@@ -153,6 +161,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
             c.n_cols(),
             per_task(c.n_cols(), work, MULTIPLY_ADD_GRAIN_BITS),
             threads,
+            Self::kept_surplus(grounding, c.n_rows()),
             |mut sums, k| {
                 for (e, &c_ek) in ct.row(k) {
                     for (j, &c_ej) in c.row(e).skip_while(|&(j, _)| j <= k) {
@@ -220,7 +229,7 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
     fn sample_with<C: Copies>(&self, copies: C, threads: Threads) -> Fill<T, I> {
         let c = &self.block.cross;
         let layout = Layout::sddm(self.block.balance);
-        let n = layout.columns(c.n_cols());
+        let n = layout.rows(c.n_cols());
         let shift = bucket_shift(n);
         let count = n.div_ceil(1 << shift);
         let per_task = per_task(c.n_rows(), c.nnz() as u64, 14);
@@ -269,21 +278,21 @@ struct Fill<T, I> {
 }
 
 impl<T: Real, I: Index> Fill<T, I> {
-    /// Bucket by bucket, counting-sorts the chunks' rows unflattened, merges each row's duplicates, stores `−w`.
-    fn merge(self) -> SddmRows<T, I> {
+    /// Bucket by bucket, counting-sorts the chunks' rows unflattened, merges each row's duplicates, stores `−w`; each row's ground gains its vertex's `surplus`.
+    fn merge(self, surplus: Option<&[T]>) -> SddmRows<'_, T, I> {
         let Self {
             layout,
             kept,
             mut pieces,
         } = self;
-        let n = layout.columns(kept);
+        let n = layout.rows(kept);
         let stride = 1 << bucket_shift(n);
         let count = n.div_ceil(stride);
         let bucket = |b: usize| pieces.iter().map(|p| p[b].len()).sum();
         let most = (0..count).map(bucket).max().unwrap_or(0);
         let (mut columns, mut weights) = (vec![I::zero(); most], vec![T::zero(); most]);
         let (mut starts, mut next) = (Vec::new(), Vec::new());
-        let mut rows = SddmRows::new(layout, kept);
+        let mut rows = SddmRows::new(layout, kept, surplus);
         for b in 0..count {
             let first = b * stride;
             let len = (n - first).min(stride);
