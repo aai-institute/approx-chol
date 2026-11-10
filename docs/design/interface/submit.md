@@ -79,20 +79,19 @@ pub mod input {
 
     #[non_exhaustive]
     pub enum InputError {
+        VertexCountOverflow { n_left: usize, n_right: usize },
         LengthMismatch { parameter: &'static str, expected: usize, found: usize },
-        RowPtrs { row: usize },
+        RowPtrs { parameter: &'static str, row: usize },
         IndexOutOfRange { parameter: &'static str, entry: usize },
         OutOfRange { parameter: &'static str, entry: usize },
         Negative { parameter: &'static str, entry: usize },
-        Magnitude { vertex: usize },
         SelfLoop { edge: usize },
         RepeatedRow { column: usize },
         NotSymmetric { row: usize },
         OutsideTriangle { row: usize },
-        InadmissibleRow { row: usize },
+        Diagonal { row: usize },
         NotSquare { rows: usize, cols: usize },
         RowGap { row: usize },
-        VertexCountOverflow { n_left: usize, n_right: usize },
     }
 
     pub enum Side { Left, Right }
@@ -111,8 +110,9 @@ as the CSR of their transpose, positions in that storage. A sprs view converts w
 and indices share one type, sprs's default. `NotSquare` and `RowGap` arise only from conversions,
 whose `parameter` is the source's own field name; `RowGap` is a faer matrix stored with gaps
 (`row_nnz` or `col_nnz` set). A first row pointer other than 0, an adapter's offset view
-included, is `RowPtrs { row: 0 }`. `OutOfRange` is a stated value that is not finite, or neither
-0 nor above the range floor. `VertexCountOverflow` is a `BipartiteFactorWidth2` whose sides' rows
+included, is `RowPtrs { parameter, row: 0 }`. `OutOfRange` is a stated value that is not finite, or neither
+0 nor above the range floor; `Diagonal` a diagonal that is negative, past `MAX/4`, or zero beside
+an edge. `VertexCountOverflow` is a `BipartiteFactorWidth2` whose sides' rows
 sum past `usize`. A magnitude derived from a Gram form, a diagonal of $V W V^\top$, is the
 build's to check (`BuildError::OutOfRange`), not the constructor's.
 
