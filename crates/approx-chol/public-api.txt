@@ -37,7 +37,6 @@ pub approx_chol::input::InputError::SelfLoop::edge: usize
 pub approx_chol::input::InputError::VertexCountOverflow
 pub approx_chol::input::InputError::VertexCountOverflow::n_left: usize
 pub approx_chol::input::InputError::VertexCountOverflow::n_right: usize
-pub approx_chol::input::InputError::ZeroSurplus
 impl core::clone::Clone for approx_chol::input::InputError
 pub fn approx_chol::input::InputError::clone(&self) -> Self
 impl core::cmp::Eq for approx_chol::input::InputError

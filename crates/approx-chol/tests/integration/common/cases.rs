@@ -89,9 +89,7 @@ macro_rules! cases {
     (@excludes frustrated BipartiteFactorWidth2 $out:tt $in:tt) => { $crate::common::cases::cases! $out; };
     (@excludes frustrated Laplacian $out:tt $in:tt) => { $crate::common::cases::cases! $out; };
     (@excludes frustrated Sddm $out:tt $in:tt) => { $crate::common::cases::cases! $out; };
-    (@excludes floating Sddm $out:tt $in:tt) => { $crate::common::cases::cases! $out; };
     (@excludes floating_non_bipartite BipartiteFactorWidth2 $out:tt $in:tt) => { $crate::common::cases::cases! $out; };
-    (@excludes floating_non_bipartite Sddm $out:tt $in:tt) => { $crate::common::cases::cases! $out; };
     (@excludes f32 F64U32 $out:tt $in:tt) => { $crate::common::cases::cases! $out; };
     (@excludes f32 F64U64 $out:tt $in:tt) => { $crate::common::cases::cases! $out; };
     (@excludes f64 F32U32 $out:tt $in:tt) => { $crate::common::cases::cases! $out; };

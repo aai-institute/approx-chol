@@ -60,8 +60,6 @@ pub enum InputError {
         /// The offending column.
         column: usize,
     },
-    /// Every surplus is zero: the matrix is a [`Laplacian`](super::Laplacian).
-    ZeroSurplus,
     /// An entry has no mirror within 8 ulps.
     NotSymmetric {
         /// The offending row.
@@ -115,7 +113,6 @@ impl core::fmt::Display for InputError {
             Self::Negative { parameter, entry } => write!(f, "{parameter}[{entry}] is negative"),
             Self::SelfLoop { edge } => write!(f, "edge {edge} joins a vertex to itself"),
             Self::RepeatedRow { column } => write!(f, "column {column} names one row twice"),
-            Self::ZeroSurplus => write!(f, "every surplus is zero, so the matrix is a Laplacian"),
             Self::NotSymmetric { row } => write!(f, "row {row} has an entry with no equal mirror"),
             Self::OutsideTriangle { row } => write!(
                 f,
