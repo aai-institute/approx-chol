@@ -75,6 +75,7 @@ dependencies = [
  "approx-chol",
  "num-traits",
  "numpy",
+ "postcard",
  "pyo3",
 ]
 
