@@ -6,9 +6,9 @@ The contract is `../contracts/save-load.md`; `ApproxInverse` is that of `interfa
 
 ```rust
 #[cfg(feature = "serde")]
-impl<T: Real> serde::Serialize for ApproxInverse<T> {}
+impl<T: Real + serde::Serialize> serde::Serialize for ApproxInverse<T> {}
 #[cfg(feature = "serde")]
-impl<'de, T: Real> serde::Deserialize<'de> for ApproxInverse<T> {}
+impl<'de, T: Real + serde::Deserialize<'de>> serde::Deserialize<'de> for ApproxInverse<T> {}
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +28,7 @@ pub enum Scalar {
     F64,
 }
 
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeaderMismatch {
     pub found: Header,
@@ -38,10 +39,13 @@ pub struct HeaderMismatch {
 - The saved form is the pair `(Header, B)`, an array in a self-describing format: `version`, a
   `u32`, and `scalar`, `"f32"` or `"f64"`, then $B$. postcard writes the same bytes as the flat
   `(version, scalar, B)`. The configuration is not in the form.
-- `Header::of::<T>()` is the current header, format version `0x4143_000E` and `T`'s scalar; it
+- `Header::of::<T>()` is the current header, format version `0x4143_000F` and `T`'s scalar; it
   replaces `FACTOR_FORMAT_VERSION`. `expect::<T>` is the one check: `HeaderMismatch` unless the
   header equals `of::<T>()`; its `Display` names what differs, found and expected. A load reads
-  the `Header` first and checks it before it reads $B$.
+  `version` first and rejects any other by name before it reads `scalar`, then checks `scalar`
+  with `expect`, both before $B$; a header written as a map is read whole, then checked. A payload
+  older than the header, a bare version where the header stands, fails in a self-describing format
+  as the format's type error, which names `struct Header`, not the version.
 - A rejection of the header or of an invariant of $B$ goes through `D::Error::custom`, with that
   message; a decoding error is the format's own. A format that drops custom messages, such as
   postcard, keeps only the error. The same $B$ bit for bit needs a format that round-trips floats
