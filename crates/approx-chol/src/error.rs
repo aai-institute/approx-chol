@@ -7,7 +7,7 @@ pub enum BuildError {
         /// The component's lowest vertex.
         vertex: usize,
     },
-    /// A value computed at row `vertex` left the representable range: an assembled entry, diagonal or row sum, a Gram's derived surplus, a relaxation's ratio or scale, a scaled entry at its stored row, or a ground; a block left with no representable ground names the first row its float-or-ground rule marks a ground, else its row of the largest residue.
+    /// The row whose computed value left the representable range, in `A`'s numbering; a block left with no representable ground names the first row its float-or-ground rule marks a ground, else its row of the largest residue.
     OutOfRange {
         /// The offending row.
         vertex: usize,

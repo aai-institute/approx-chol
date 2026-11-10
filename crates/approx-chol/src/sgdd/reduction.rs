@@ -107,10 +107,10 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
         policy: &ScalingPolicy,
         relax: impl FnOnce(&Self) -> Result<scaling::Relaxation<T>, usize>,
     ) -> Result<Settling<'p, T, I>, BuildError> {
-        let vertices = self.vertices;
+        let at = |i| out_of_range(self.vertices, i);
         let RowSums { diagonal, abs } = &self.entries.rows;
         if let Some(i) = abs.iter().position(|&s| !diagonal_in_range(s)) {
-            return Err(out_of_range(vertices, i));
+            return Err(at(i));
         }
         let relaxation = match diagonal
             .iter()
@@ -118,7 +118,7 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
             .all(|(&d, &s)| policy.dominates(d, s))
         {
             true => None,
-            false => Some(relax(&self).map_err(|i| out_of_range(vertices, i))?),
+            false => Some(relax(&self).map_err(at)?),
         };
         let folding = folding_signs(&self.entries.off_diagonal);
         let balance = match folding {
@@ -135,7 +135,7 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
             Some((scales, vector)) => {
                 let (m, abs) =
                     Congruent::scaled(self.vertices, self.entries.off_diagonal, signs, &scales)
-                        .map_err(|i| out_of_range(vertices, i))?;
+                        .map_err(at)?;
                 let diagonal = (self.entries.rows.diagonal.iter().zip(&scales[..]))
                     .map(|(&a, &f)| f * a * f)
                     .collect();

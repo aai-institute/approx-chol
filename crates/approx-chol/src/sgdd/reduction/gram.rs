@@ -32,9 +32,12 @@ impl<T: Real, I: Index> Reduced<T, I> {
                     // `NaN` where a component has no certificate.
                     let u = (a.vertices.iter()).map(|v| u[v.index()]);
                     let relax = || {
-                        let (off_diagonal, diagonal) =
-                            (&a.entries.off_diagonal, &a.entries.rows.diagonal);
-                        scaling::relax(off_diagonal, diagonal, policy, threads)
+                        scaling::relax(
+                            &a.entries.off_diagonal,
+                            &a.entries.rows.diagonal,
+                            policy,
+                            threads,
+                        )
                     };
                     (u.clone().all(f64::is_finite))
                         .then_some(u)

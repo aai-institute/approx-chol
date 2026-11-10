@@ -1,4 +1,5 @@
 use approx_chol::input::InputError;
+use approx_chol::BuildError;
 use rstest::rstest;
 
 #[rstest]
@@ -46,5 +47,15 @@ use rstest::rstest;
     "row 15 leaves unused slots after its entries"
 )]
 fn each_input_error_displays_every_field(#[case] error: InputError, #[case] expected: &str) {
+    assert_eq!(error.to_string(), expected);
+}
+
+#[rstest]
+#[case::too_large(BuildError::TooLarge { vertex: 3 }, "the block of vertex 3 passes 1/ε vertices")]
+#[case::out_of_range(
+    BuildError::OutOfRange { vertex: 4 },
+    "a value at vertex 4 is outside the representable range"
+)]
+fn each_build_error_displays_its_vertex(#[case] error: BuildError, #[case] expected: &str) {
     assert_eq!(error.to_string(), expected);
 }

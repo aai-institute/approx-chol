@@ -12,7 +12,7 @@ use crate::common::dense_residual::apply;
 use crate::common::entry::{floats, only};
 use crate::common::gram::{dense_csr, matrix};
 use crate::common::lcg::Lcg;
-use crate::common::out_of_range::{out_of_range, FLOOR};
+use crate::common::out_of_range::FLOOR;
 use crate::common::solve::Solve;
 
 use super::cycle::Cycle;
@@ -206,7 +206,7 @@ fn a_real_ground_below_the_range_floor_is_out_of_range(
     #[case] a: Vec<Vec<f64>>,
     #[case] vertex: usize,
 ) {
-    assert_eq!(reduce_error(&a), out_of_range(vertex));
+    assert_eq!(reduce_error(&a), BuildError::OutOfRange { vertex });
 }
 
 /// Path `0 —r²— 1 —1— 2`, vertex 2 grounded by `1` = its coupling: `x = [2, 2, 1]`.

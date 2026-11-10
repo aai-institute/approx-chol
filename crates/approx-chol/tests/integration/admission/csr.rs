@@ -8,7 +8,7 @@ use rstest::rstest;
 use crate::common::bits::bits;
 use crate::common::entry::cast_all;
 use crate::common::grid::grid;
-use crate::common::out_of_range::{out_of_range, F32_FLOOR, FLOOR};
+use crate::common::out_of_range::{F32_FLOOR, FLOOR};
 use crate::common::solve::Solve;
 
 use super::{assert_names_a_defect, reduce, reduce_upper};
@@ -146,14 +146,14 @@ fn out_of_class_input_is_rejected_at_its_reported_position(
         -0.6 * (f64::MAX / 4.0),
         f64::MAX / 4.0,
     ],
-    &[out_of_range(0)],
+    &[BuildError::OutOfRange { vertex: 0 }],
 )]
 // Every value in range, but each row's residue `FLOOR/2` is past its band: a derived ground the floor cannot hold.
 #[case::derived_ground_below_the_floor_past_its_band(
     &[0, 2, 4],
     &[0, 1, 0, 1],
     &[1.5 * FLOOR, -FLOOR, -FLOOR, 1.5 * FLOOR],
-    &[out_of_range(0), out_of_range(1)],
+    &[BuildError::OutOfRange { vertex: 0 }, BuildError::OutOfRange { vertex: 1 }],
 )]
 fn in_class_input_whose_computed_sums_leave_the_range_is_rejected_at_its_row(
     #[case] row_ptrs: &[u32],

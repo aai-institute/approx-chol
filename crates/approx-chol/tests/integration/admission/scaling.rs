@@ -7,6 +7,7 @@ use approx_chol::{
 use rstest::rstest;
 
 use crate::common::entry::only;
+use crate::common::gram::dense_csr;
 use crate::common::lcg::Lcg;
 
 use super::{reduce, reduce_with};
@@ -218,65 +219,39 @@ fn clamps_list_each_component_by_its_first_vertex() {
     assert_eq!(listed, [(vec![0, 2], refuted), (vec![1, 3], refuted)]);
 }
 
-/// Vertices 1 and 2 at diagonal `2^-960` share an edge of `2^1000`: at `y = 1` row 1's ratio `Σ_j|a_1j|/√(a_11 a_jj)` passes `f64`, the block's first vertex 0 in range.
-#[test]
-fn a_relaxation_whose_first_ratio_overflows_is_out_of_range_at_its_row() {
-    let (tiny, huge) = (2f64.powi(-960), 2f64.powi(1000));
-    let row_ptrs = [0, 2, 5, 7];
-    let columns = [0, 1, 0, 1, 2, 1, 2];
-    let values = [1.0, -1.0, -1.0, tiny, -huge, -huge, tiny];
-    let error = reduce(&row_ptrs, &columns, &values).expect_err("out of range");
-    assert_eq!(error, BuildError::OutOfRange { vertex: 1 });
-}
-
-/// Rows 0 and 2 couple past dominance; their relaxation scales row 1, at `2^100`, so far down that its stored edge `−2^-100` to row 2 falls below `f32`'s floor, the block's first vertex 0 in range.
-#[test]
-fn a_scaled_entry_below_the_floor_is_out_of_range_at_its_stored_row() {
-    let (big, tiny) = (2f32.powi(100), 2f32.powi(-100));
-    let row_ptrs = [0, 2, 4, 7];
-    let columns = [0, 2, 1, 2, 0, 1, 2];
-    let values = [1.0, -3.0, big, -tiny, -3.0, -tiny, 1.0];
-    let error = reduce(&row_ptrs, &columns, &values).expect_err("out of range");
-    assert_eq!(error, BuildError::OutOfRange { vertex: 1 });
-}
-
-/// `odd` on vertices 1, 3, 5 beside a dominant path on 0, 2, 4: the block's local row `i` is vertex `2i + 1`.
-fn interleaved<T: Real>(odd: [[T; 3]; 3]) -> (Vec<u32>, Vec<u32>, Vec<T>) {
+/// `odd` on vertices 1, 3, 5 beside a dominant path on 0, 2, 4, its block's local row `i` vertex `2i + 1`: what fails at the block's row 1 must name vertex 3.
+fn interleaved_error<T: Real>(odd: [[T; 3]; 3]) -> BuildError {
     let even = |i: usize, j: usize| match i.abs_diff(j) {
         0 => T::one() + T::one(),
         1 => -T::one(),
         _ => T::zero(),
     };
-    let (mut row_ptrs, mut columns, mut values) = (vec![0u32], Vec::new(), Vec::new());
-    for i in 0..6 {
-        for j in 0..6 {
-            let value = match (i % 2, j % 2) {
-                (0, 0) => even(i / 2, j / 2),
-                (1, 1) => odd[i / 2][j / 2],
-                _ => T::zero(),
-            };
-            if value != T::zero() {
-                columns.push(j as u32);
-                values.push(value);
-            }
-        }
-        row_ptrs.push(columns.len() as u32);
-    }
-    (row_ptrs, columns, values)
+    let entry = |i: usize, j: usize| match (i % 2, j % 2) {
+        (0, 0) => even(i / 2, j / 2),
+        (1, 1) => odd[i / 2][j / 2],
+        _ => T::zero(),
+    };
+    let dense: Vec<Vec<T>> = (0..6)
+        .map(|i| (0..6).map(|j| entry(i, j)).collect())
+        .collect();
+    let (row_ptrs, columns, values) = dense_csr(&dense);
+    reduce(&row_ptrs, &columns, &values).expect_err("out of range")
 }
 
-/// Each case's block is `{1, 3, 5}`; its row 1, vertex 3, is the one out of range.
+/// Rows 1 and 2 at diagonal `2^-960` share an edge of `2^1000`: at `y = 1` row 1's ratio `Σ_j|a_1j|/√(a_11 a_jj)` passes `f64`.
 #[test]
-fn an_interleaved_block_names_the_vertex_not_its_local_row() {
+fn a_relaxation_whose_first_ratio_overflows_is_out_of_range_at_its_vertex() {
     let (tiny, huge) = (2f64.powi(-960), 2f64.powi(1000));
-    let (row_ptrs, columns, values) =
-        interleaved([[1.0, -1.0, 0.0], [-1.0, tiny, -huge], [0.0, -huge, tiny]]);
-    let relaxed = reduce(&row_ptrs, &columns, &values).expect_err("a ratio overflows");
+    let error = interleaved_error([[1.0, -1.0, 0.0], [-1.0, tiny, -huge], [0.0, -huge, tiny]]);
+    assert_eq!(error, BuildError::OutOfRange { vertex: 3 });
+}
+
+/// Rows 0 and 2 couple past dominance; their relaxation scales row 1, at `2^100`, so far down that its stored edge `−2^-100` to row 2 falls below `f32`'s floor.
+#[test]
+fn a_scaled_entry_below_the_floor_is_out_of_range_at_its_stored_vertex() {
     let (big, small) = (2f32.powi(100), 2f32.powi(-100));
-    let (row_ptrs, columns, values) =
-        interleaved([[1.0, 0.0, -3.0], [0.0, big, -small], [-3.0, -small, 1.0]]);
-    let scaled = reduce(&row_ptrs, &columns, &values).expect_err("a scaled entry underflows");
-    assert_eq!([relaxed, scaled], [BuildError::OutOfRange { vertex: 3 }; 2]);
+    let error = interleaved_error([[1.0, 0.0, -3.0], [0.0, big, -small], [-3.0, -small, 1.0]]);
+    assert_eq!(error, BuildError::OutOfRange { vertex: 3 });
 }
 
 /// A lone column on left 0 and right 0, then a path `p_0 … p_30` from left 1, alternating sides, column `k` loading `p_k` with `1/4` and `p_{k+1}` with `4`: its null vector falls by `16` a step, so the last columns' scaled entries fall below `f32`'s floor.
@@ -306,8 +281,13 @@ fn a_bipartite_block_names_the_stored_row_in_the_callers_numbering() {
         factorize_complement(v, kept, Config::default(), ScalingPolicy::default()).map(|_| ())
     };
     let whole = factorize(v).map(|_: ApproxInverse<f32>| ());
-    let out_of_range = |vertex| Err(BuildError::OutOfRange { vertex });
-    assert_eq!(whole, out_of_range(15));
-    assert_eq!(complement(Side::Right), out_of_range(15));
-    assert_eq!(complement(Side::Left), out_of_range(32));
+    assert_eq!(whole, Err(BuildError::OutOfRange { vertex: 15 }));
+    assert_eq!(
+        complement(Side::Right),
+        Err(BuildError::OutOfRange { vertex: 15 })
+    );
+    assert_eq!(
+        complement(Side::Left),
+        Err(BuildError::OutOfRange { vertex: 32 })
+    );
 }

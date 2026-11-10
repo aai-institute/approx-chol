@@ -22,16 +22,20 @@ impl Bracket {
             return Err(i);
         }
         let scales = n.unscaled(y, work);
-        let (mut low, mut high) = (f64::INFINITY, 0.0f64);
+        let ratio = |((&o, &y), &s): ((&f64, &f64), &f64)| s * o / y;
+        let ratios = || work.iter().zip(y).zip(scales);
+        let (mut low, mut high, mut finite) = (f64::INFINITY, 0.0f64, true);
         let (mut residual, mut peak) = (0.0f64, 0.0f64);
-        for (i, ((&o, &y), &s)) in work.iter().zip(y).zip(scales).enumerate() {
-            let t = s * o / y;
-            if !t.is_finite() {
-                return Err(i);
-            }
+        for entry @ ((&o, &y), &s) in ratios() {
+            let t = ratio(entry);
+            finite &= t.is_finite();
             (low, high) = (low.min(t), high.max(t));
             residual = residual.max((s * o - y).abs());
             peak = peak.max(y);
+        }
+        if !finite {
+            let row = ratios().position(|entry| !ratio(entry).is_finite());
+            return Err(row.expect("a ratio that is not finite has a row"));
         }
         Ok(Self {
             low,

@@ -9,7 +9,7 @@ use crate::common::clamps::Clamps;
 use approx_chol::input::{
     BipartiteFactorWidth2, CsrRef, FactorWidth2, Laplacian, Sddm, TriangleCsrRef,
 };
-use approx_chol::{factorize_with, ApproxInverse, BuildError, Config, ScalingPolicy};
+use approx_chol::{factorize_with, ApproxInverse, Config, ScalingPolicy};
 
 use crate::common::bits::bits;
 use crate::common::dense::dense;
@@ -168,14 +168,4 @@ fn a_grams_clamps_are_listed_by_first_vertex() {
         .map(|clamp| clamp.vertices[0])
         .collect();
     assert_eq!(firsts, [0, 3], "{:?}", factor.clamps());
-}
-
-#[rstest::rstest]
-#[case::too_large(BuildError::TooLarge { vertex: 3 }, "the block of vertex 3 passes 1/ε vertices")]
-#[case::out_of_range(
-    BuildError::OutOfRange { vertex: 4 },
-    "a value at vertex 4 is outside the representable range"
-)]
-fn each_build_error_displays_its_vertex(#[case] error: BuildError, #[case] expected: &str) {
-    assert_eq!(error.to_string(), expected);
 }

@@ -184,13 +184,9 @@ impl ScaleVector {
 
 /// `Err` at the first row whose scale is not a positive `T`.
 fn positive<T: Real>(scales: Box<[T]>, vector: ScaleVector) -> Result<Relaxation<T>, usize> {
-    match scales
-        .iter()
+    (scales.iter())
         .position(|&f| !(f.is_finite() && f > T::zero()))
-    {
-        None => Ok((scales, vector)),
-        Some(i) => Err(i),
-    }
+        .map_or(Ok((scales, vector)), Err)
 }
 
 /// `|u|` of a certified null vector: no iteration runs; `None` if a scale leaves `T`.

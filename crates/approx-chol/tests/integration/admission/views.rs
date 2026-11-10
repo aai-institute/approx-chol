@@ -9,7 +9,7 @@ use rstest::rstest;
 use crate::common::bits::bits;
 use crate::common::dense_residual::{apply, solve_residual};
 use crate::common::gram::{dense_csr, matrix};
-use crate::common::out_of_range::{out_of_range, FLOOR};
+use crate::common::out_of_range::FLOOR;
 use crate::common::solve::Solve;
 
 use super::assert_names_a_defect;
@@ -86,7 +86,13 @@ fn a_weight_below_min_positive_over_epsilon_is_out_of_range_at_its_edge() {
 fn a_scale_whose_square_underflows_is_out_of_range_at_its_column() {
     let path = scaled_bipartite_path(&[1.0, 1e-170]).unwrap();
     let error = factorize(path).expect_err("tiny scale");
-    assert_names_a_defect(error, &[out_of_range(1), out_of_range(2)]);
+    assert_names_a_defect(
+        error,
+        &[
+            BuildError::OutOfRange { vertex: 1 },
+            BuildError::OutOfRange { vertex: 2 },
+        ],
+    );
 }
 
 #[rstest]
@@ -177,7 +183,7 @@ fn an_out_of_range_ground_is_rejected_at_its_vertex(
     let ground = [0.0, 0.0, ground];
     let grounded = Sddm::new(path, &ground).expect("a valid surplus");
     let error = factorize(grounded).expect_err("ground out of range");
-    assert_names_a_defect(error, &[out_of_range(2)]);
+    assert_names_a_defect(error, &[BuildError::OutOfRange { vertex: 2 }]);
 }
 
 #[rstest]
@@ -281,7 +287,13 @@ fn a_gram_diagonal_magnitude_is_checked_at_build() {
     let (x, y) = ([1.0, f64::MAX], [-1.0, -1.0]);
     let gram = FactorWidth2::new(3, (&PATH_A, &x), (&PATH_B, &y)).unwrap();
     let error = factorize(gram).expect_err("derived diagonal out of range");
-    assert_names_a_defect(error, &[out_of_range(1), out_of_range(2)]);
+    assert_names_a_defect(
+        error,
+        &[
+            BuildError::OutOfRange { vertex: 1 },
+            BuildError::OutOfRange { vertex: 2 },
+        ],
+    );
 }
 
 #[test]
@@ -365,7 +377,13 @@ fn a_bipartite_gram_diagonal_magnitude_is_checked_at_build() {
     let right = FactorWidth1::<f64>::new(1, &[0u32, 0]).unwrap();
     let gram = BipartiteFactorWidth2::new(left, right).unwrap();
     let error = factorize(gram).expect_err("derived diagonal out of range");
-    assert_names_a_defect(error, &[out_of_range(1), out_of_range(2)]);
+    assert_names_a_defect(
+        error,
+        &[
+            BuildError::OutOfRange { vertex: 1 },
+            BuildError::OutOfRange { vertex: 2 },
+        ],
+    );
 }
 
 /// Its square underflows, but the vertex's other column keeps the diagonal in range.
@@ -406,7 +424,13 @@ fn a_gram_cell_whose_product_underflows_is_out_of_range() {
     let (x, y) = ([1e-170, 1.0, 1.0], [1e-170, -1.0, -1.0]);
     let gram = FactorWidth2::new(4, (&[0u32, 0, 1], &x), (&[1, 2, 3], &y)).unwrap();
     let error = factorize(gram).expect_err("cell below the floor");
-    assert_names_a_defect(error, &[out_of_range(0), out_of_range(1)]);
+    assert_names_a_defect(
+        error,
+        &[
+            BuildError::OutOfRange { vertex: 0 },
+            BuildError::OutOfRange { vertex: 1 },
+        ],
+    );
 }
 
 /// Its cell underflows too, so the vertex is out of range, not dead.
@@ -416,7 +440,13 @@ fn a_bipartite_vertex_whose_every_term_underflows_is_out_of_range() {
     let side = || FactorWidth1::valued(1, &[0u32], &values[..]).unwrap();
     let gram = BipartiteFactorWidth2::new(side(), side()).unwrap();
     let error = factorize(gram).expect_err("every term underflows");
-    assert_names_a_defect(error, &[out_of_range(0), out_of_range(1)]);
+    assert_names_a_defect(
+        error,
+        &[
+            BuildError::OutOfRange { vertex: 0 },
+            BuildError::OutOfRange { vertex: 1 },
+        ],
+    );
 }
 
 #[test]
@@ -424,7 +454,13 @@ fn a_gram_vertex_whose_every_term_underflows_is_out_of_range() {
     let (x, y) = ([1e-170, 1.0], [1e-170, -1.0]);
     let gram = FactorWidth2::new(4, (&[0u32, 2], &x), (&[1, 3], &y)).unwrap();
     let error = factorize(gram).expect_err("every term underflows");
-    assert_names_a_defect(error, &[out_of_range(0), out_of_range(1)]);
+    assert_names_a_defect(
+        error,
+        &[
+            BuildError::OutOfRange { vertex: 0 },
+            BuildError::OutOfRange { vertex: 1 },
+        ],
+    );
 }
 
 fn with_diagonal(mut matrix: Vec<Vec<f64>>, diagonal: &[f64]) -> Vec<Vec<f64>> {
