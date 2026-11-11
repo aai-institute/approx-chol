@@ -151,41 +151,47 @@ impl<A, I: Index> Cuts<A, I> {
     where
         A: PrincipalBlocks<T, I> + Sync,
     {
+        self.blocks(components, threads, &block, |assembly, split| {
+            let blocks = split.each(0..components.coupled.len(), |k, threads| {
+                let (vertices, entries) = assembly.cut(k);
+                block(vertices, entries, threads)
+            });
+            // Kept past extraction, an owned assembly raised the Gram peak 11–22%.
+            drop(assembly);
+            blocks
+        })
+    }
+
+    /// Each coupled component's block in component order: a connected input's as `whole` makes it from the assembly moved in whole, others' as `many` makes them from the assembly it frees, under the split `threads` makes of them.
+    fn blocks<'p, T: Real, B>(
+        self,
+        components: &'p Components<I, T>,
+        threads: Threads,
+        whole: impl FnOnce(
+            &'p [I],
+            <A as PrincipalBlocks<T, I>>::Block,
+            Threads,
+        ) -> Result<B, BuildError>,
+        many: impl FnOnce(Assembly<'p, A, I, T>, &Split) -> Vec<Result<B, BuildError>>,
+    ) -> Result<Cut<'p, I, T, B>, BuildError>
+    where
+        A: PrincipalBlocks<T, I>,
+    {
         let Self { a, position } = self;
-        let count = components.coupled.len();
-        let blocks = match (count, position) {
+        let blocks = match (components.coupled.len(), position) {
             (0, _) => Vec::new(),
             (_, None) => {
-                let whole = components.component(0);
-                vec![block(whole, a.whole(whole), threads)?]
+                let vertices = components.component(0);
+                vec![whole(vertices, a.whole(vertices), threads)?]
             }
             (_, Some(position)) => {
-                let cut = |k: usize, threads| {
-                    let vertices = components.component(k);
-                    block(vertices, a.component(vertices, &position), threads)
+                let split = Split::of(components, threads);
+                let assembly = Assembly {
+                    a,
+                    position,
+                    components,
                 };
-                // About `2^PARALLEL_BITS` vertices a task: waking the pool for less costs more than it saves.
-                let work = components.coupled.iter().map(|c| c.len() as u64).sum();
-                let grain = crate::per_task(count, work, PARALLEL_BITS);
-                let blocks: Vec<_> = match threads.per_task(count, grain) {
-                    Some(per) => {
-                        let nested = threads.within_task(count.div_ceil(per));
-                        (0..count)
-                            .into_par_iter()
-                            .with_min_len(per)
-                            .map(|k| task(|| cut(k, nested)))
-                            .collect()
-                    }
-                    None => (0..count).map(|k| cut(k, threads)).collect(),
-                };
-                // Kept past extraction, an owned assembly raised the Gram peak 11–22%.
-                drop(a);
-                drop(position);
-                if let Some(&error) = blocks.iter().find_map(|b| b.as_ref().err()) {
-                    return Err(error);
-                }
-                // In place: a block's result is the block's own size.
-                blocks.into_iter().filter_map(Result::ok).collect()
+                first_error(many(assembly, &split))?
             }
         };
         Ok(Cut {
@@ -193,6 +199,78 @@ impl<A, I: Index> Cuts<A, I> {
             lent: PhantomData,
         })
     }
+}
+
+/// An assembled `A` with each vertex's position in its component, from which each component's block is cut; freed when dropped.
+struct Assembly<'p, A, I, T> {
+    a: A,
+    position: Vec<I>,
+    components: &'p Components<I, T>,
+}
+
+impl<'p, A, I: Index, T: Real> Assembly<'p, A, I, T>
+where
+    A: PrincipalBlocks<T, I>,
+{
+    /// Component `k`'s vertices and its block.
+    fn cut(&self, k: usize) -> (&'p [I], A::Block) {
+        let vertices = self.components.component(k);
+        (vertices, self.a.component(vertices, &self.position))
+    }
+}
+
+/// How a loop over the coupled components splits under a budget: about `2^PARALLEL_BITS` vertices a task, as waking the pool for less costs more than it saves.
+enum Split {
+    /// On the calling thread, each item under the whole budget.
+    Serial(Threads),
+    /// In tasks of at least `per_task` items, each item under the budget `within_task` its task leaves it.
+    Tasks {
+        per_task: usize,
+        within_task: Threads,
+    },
+}
+
+impl Split {
+    fn of<I, T>(components: &Components<I, T>, threads: Threads) -> Self {
+        let count = components.coupled.len();
+        let work = components.coupled.iter().map(|c| c.len() as u64).sum();
+        let grain = crate::per_task(count, work, PARALLEL_BITS);
+        match threads.per_task(count, grain) {
+            Some(per_task) => Split::Tasks {
+                per_task,
+                within_task: threads.within_task(count.div_ceil(per_task)),
+            },
+            None => Split::Serial(threads),
+        }
+    }
+
+    /// `f` of each item, one per component in component order, under the budget its task leaves it.
+    fn each<X: Send, R: Send, P>(&self, items: P, f: impl Fn(X, Threads) -> R + Sync) -> Vec<R>
+    where
+        P: IntoParallelIterator<Item = X> + IntoIterator<Item = X>,
+        <P as IntoParallelIterator>::Iter: IndexedParallelIterator,
+    {
+        match *self {
+            Split::Tasks {
+                per_task,
+                within_task,
+            } => (IntoParallelIterator::into_par_iter(items))
+                .with_min_len(per_task)
+                .map(|x| task(|| f(x, within_task)))
+                .collect(),
+            Split::Serial(threads) => (IntoIterator::into_iter(items))
+                .map(|x| f(x, threads))
+                .collect(),
+        }
+    }
+}
+
+/// The first error in component order, else every block.
+fn first_error<B>(blocks: Vec<Result<B, BuildError>>) -> Result<Vec<B>, BuildError> {
+    if let Some(&error) = blocks.iter().find_map(|b| b.as_ref().err()) {
+        return Err(error);
+    }
+    Ok(blocks.into_iter().filter_map(Result::ok).collect())
 }
 
 /// Each coupled component's block, one per component in component order, cut from the components it borrows.
