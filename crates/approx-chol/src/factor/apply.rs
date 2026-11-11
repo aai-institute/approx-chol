@@ -96,7 +96,7 @@ impl std::error::Error for LayoutError {}
 
 /// A block of right-hand sides, the solutions written over them.
 ///
-/// It keeps its shape during an apply; `read_column` copies one column into `into`, `write_column` copies `from` into one column and touches nothing else, and neither allocates. Each panics unless `column < columns()` and the slice has `rows()` entries. A slice or `Vec` of `T` is one column; one of `[T; K]` holds `K` interleaved columns, solved where they are; any other block, [`ColumnMajor`] and [`Columns`] among them, is solved in interleaved packs of its columns copied into scratch. Foreign blocks come with their crates' features, each adapter's impl stating which types are blocks: a faer or ndarray block whose columns have row stride 1 is solved as [`ColumnMajor`]'s are, any other foreign block staged through `read_column` and `write_column`.
+/// It keeps its shape during an apply; `read_column` copies one column into `into`, `write_column` copies `from` into one column and touches nothing else, and neither allocates. Each panics unless `column < columns()` and the slice has `rows()` entries. A slice or `Vec` of `T` is one column; one of `[T; K]` holds `K` interleaved columns, solved where they are; any other block, [`ColumnMajor`] and [`Columns`] among them, is solved in interleaved packs of eight of its columns copied into scratch, the columns past the last whole pack in one more, a single one of a block of slices solved where it is. Foreign blocks come with their crates' features, each adapter's impl stating which types are blocks: a faer or ndarray block whose columns have row stride 1 is solved as [`ColumnMajor`]'s are, any other foreign block staged through `read_column` and `write_column`.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a block of right-hand sides of `{T}`",
     label = "not a `MatrixMut<{T}>`",
@@ -342,10 +342,7 @@ impl Room {
 
     /// A block of `columns` columns whose slices fill its packs, a column alone solved where it is.
     pub(super) fn copied(&self, columns: usize) -> StackReq {
-        match pack_lanes(columns) {
-            1 => self.in_place(1),
-            lanes => self.column.array(lanes).and(self.in_place(lanes)),
-        }
+        by_width(columns, Copied(self))
     }
 
     /// A block of `columns` columns read and written through a column.
@@ -354,18 +351,45 @@ impl Room {
     }
 }
 
-/// Columns a copied block solves at once: the fused solve measured 2.5x faster per column at 8 than one at a time, 2.1x at 4.
+/// The widest pack a copied block solves at once: per column, eight lanes solved 2.1x faster than one at a time.
 const PACK: usize = 8;
 
-/// The widest pack a remainder short of [`PACK`] takes; fewer columns go one at a time.
-const HALF: usize = PACK / 2;
+/// What a copied block does with its next columns, by the width of the packs they take.
+trait Width {
+    type Output;
+    /// A column alone, solved where it is.
+    fn alone(self) -> Self::Output;
+    /// `columns` columns in packs of `W` lanes, the last short of `W` with spare lanes.
+    fn packs<const W: usize>(self, columns: usize) -> Self::Output;
+}
 
-/// Columns of the widest pack a copied block with `left` columns to go takes next.
-fn pack_lanes(left: usize) -> usize {
+/// Hands `next` the packs a copied block with `left` columns to go takes next: of [`PACK`] lanes until fewer than `PACK - 1` columns are left, which take one pack of their own width, or one column alone.
+fn by_width<N: Width>(left: usize, next: N) -> N::Output {
     match left {
-        PACK.. => PACK,
-        HALF.. => HALF,
-        _ => 1,
+        ..2 => next.alone(),
+        2 => next.packs::<2>(2),
+        3 => next.packs::<3>(3),
+        4 => next.packs::<4>(4),
+        5 => next.packs::<5>(5),
+        6 => next.packs::<6>(6),
+        // Seven lanes solved 7% slower at one thread than eight with one spare.
+        _ if left % PACK == PACK - 1 => next.packs::<PACK>(left),
+        _ => next.packs::<PACK>(left / PACK * PACK),
+    }
+}
+
+/// The stack a copied block takes: its widest pack's, which is its first.
+struct Copied<'r>(&'r Room);
+
+impl Width for Copied<'_> {
+    type Output = StackReq;
+
+    fn alone(self) -> StackReq {
+        self.0.in_place(1)
+    }
+
+    fn packs<const W: usize>(self, _: usize) -> StackReq {
+        self.0.column.array(W).and(self.0.in_place(W))
     }
 }
 
@@ -457,10 +481,10 @@ impl<T: Real> Kernel<'_, T> {
 /// A copied block's columns as its packs reach them.
 trait Packed<T: Real> {
     fn columns(&self) -> usize;
-    /// Copies columns `first..first + W` into the lanes of `rows`.
-    fn fill<const W: usize>(&mut self, first: usize, rows: &mut [[T; W]]);
-    /// Copies the lanes of `rows` back into columns `first..first + W`.
-    fn drain<const W: usize>(&mut self, first: usize, rows: &[[T; W]]);
+    /// Copies columns `first..first + lanes` into the first `lanes` lanes of `rows`.
+    fn fill<const W: usize>(&mut self, first: usize, lanes: usize, rows: &mut [[T; W]]);
+    /// Copies the first `lanes` lanes of `rows` back into columns `first..first + lanes`.
+    fn drain<const W: usize>(&mut self, first: usize, lanes: usize, rows: &[[T; W]]);
     /// Solves column `column` alone through `solve`.
     fn one(&mut self, column: usize, solve: impl FnOnce(&mut [T]));
 }
@@ -478,14 +502,14 @@ impl<T: Real, S: Slices<T>> Packed<T> for Sliced<'_, S> {
         self.0.columns()
     }
 
-    fn fill<const W: usize>(&mut self, first: usize, rows: &mut [[T; W]]) {
-        for lane in 0..W {
+    fn fill<const W: usize>(&mut self, first: usize, lanes: usize, rows: &mut [[T; W]]) {
+        for lane in 0..lanes {
             rows.write_column(lane, self.0.column_mut(first + lane));
         }
     }
 
-    fn drain<const W: usize>(&mut self, first: usize, rows: &[[T; W]]) {
-        for lane in 0..W {
+    fn drain<const W: usize>(&mut self, first: usize, lanes: usize, rows: &[[T; W]]) {
+        for lane in 0..lanes {
             rows.read_column(lane, self.0.column_mut(first + lane));
         }
     }
@@ -506,15 +530,15 @@ impl<T: Real, M: MatrixMut<T> + ?Sized> Packed<T> for Staged<'_, T, M> {
         self.block.columns()
     }
 
-    fn fill<const W: usize>(&mut self, first: usize, rows: &mut [[T; W]]) {
-        for lane in 0..W {
+    fn fill<const W: usize>(&mut self, first: usize, lanes: usize, rows: &mut [[T; W]]) {
+        for lane in 0..lanes {
             self.block.read_column(first + lane, self.column);
             rows.write_column(lane, self.column);
         }
     }
 
-    fn drain<const W: usize>(&mut self, first: usize, rows: &[[T; W]]) {
-        for lane in 0..W {
+    fn drain<const W: usize>(&mut self, first: usize, lanes: usize, rows: &[[T; W]]) {
+        for lane in 0..lanes {
             rows.read_column(lane, self.column);
             self.block.write_column(first + lane, self.column);
         }
@@ -537,31 +561,59 @@ fn packs<T: Real, P: Packed<T>>(
     let columns = block.columns();
     let mut first = 0;
     while first < columns {
-        first += match pack_lanes(columns - first) {
-            PACK => whole_packs::<T, PACK, P>(inverse, block, first, threads, stack),
-            HALF => whole_packs::<T, HALF, P>(inverse, block, first, threads, stack),
-            _ => {
-                block.one(first, |x| inverse.solve_unchecked(x, threads, stack));
-                1
-            }
+        let next = Next {
+            inverse,
+            block: &mut *block,
+            first,
+            threads,
+            stack: &mut *stack,
         };
+        first += by_width(columns - first, next);
     }
 }
 
-/// Solves each whole pack of `W` columns of `block` from `first` on through rows carved once; the columns it solved.
-fn whole_packs<T: Real, const W: usize, P: Packed<T>>(
-    inverse: &ApproxInverse<T>,
-    block: &mut P,
+/// A copied block's solve from column `first` on; each width solves the columns it is handed, and returns how many.
+struct Next<'a, T, P> {
+    inverse: &'a ApproxInverse<T>,
+    block: &'a mut P,
     first: usize,
     threads: Threads,
-    stack: &mut MemStack,
-) -> usize {
-    let solved = (block.columns() - first) / W * W;
-    let (mut rows, rest) = stack.make_with(inverse.n(), |_| [T::zero(); W]);
-    for start in (first..first + solved).step_by(W) {
-        block.fill(start, &mut rows);
-        inverse.solve_unchecked(&mut rows, threads, rest);
-        block.drain(start, &rows);
+    stack: &'a mut MemStack,
+}
+
+impl<T: Real, P: Packed<T>> Width for Next<'_, T, P> {
+    type Output = usize;
+
+    fn alone(self) -> usize {
+        let Self {
+            inverse,
+            block,
+            first,
+            threads,
+            stack,
+        } = self;
+        block.one(first, |x| inverse.solve_unchecked(x, threads, stack));
+        1
     }
-    solved
+
+    /// Through rows carved once.
+    fn packs<const W: usize>(self, columns: usize) -> usize {
+        let Self {
+            inverse,
+            block,
+            first,
+            threads,
+            stack,
+        } = self;
+        let (mut rows, rest) = stack.make_with(inverse.n(), |_| [T::zero(); W]);
+        let end = first + columns;
+        for start in (first..end).step_by(W) {
+            let lanes = W.min(end - start);
+            // A spare lane keeps what it held; lanes never mix, so it reaches no column.
+            block.fill(start, lanes, &mut rows);
+            inverse.solve_unchecked(&mut rows, threads, rest);
+            block.drain(start, lanes, &rows);
+        }
+        columns
+    }
 }

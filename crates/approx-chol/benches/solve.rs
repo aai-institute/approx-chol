@@ -223,7 +223,7 @@ fn bench_column_layouts(c: &mut Criterion, factor: &ApproxInverse, rhs: &[f64], 
         ("apart", Layout::Apart),
     ];
     for (budget, threads) in [("all", Threads::All), ("one", one)] {
-        for k in [1, 3, 4, 7, 8] {
+        for k in 1..=8 {
             for (name, layout) in layouts {
                 let id = BenchmarkId::new(format!("{name}_k{k}_{budget}"), panel);
                 group.bench_function(id, |b| timed_columns(b, factor, rhs, k, threads, layout));
