@@ -7,7 +7,7 @@ mod width2;
 use num_traits::PrimInt;
 
 pub(crate) use csr::{Canonical, CsrArrays};
-pub use csr::{CsrRef, TriangleCsrRef};
+pub use csr::{CsrNames, CsrRef, TriangleCsrRef};
 pub use error::InputError;
 pub use width2::bipartite::{BipartiteFactorWidth2, FactorWidth1, Side};
 pub use width2::laplacian::{Laplacian, Sddm};

@@ -46,6 +46,10 @@ use rstest::rstest;
     InputError::RowGap { row: 15 },
     "row 15 leaves unused slots after its entries"
 )]
+#[case::stored_by_columns(
+    InputError::StoredByColumns,
+    "matrix is stored by columns (CSC); convert it to CSR first, as with to_csr()"
+)]
 fn each_input_error_displays_every_field(#[case] error: InputError, #[case] expected: &str) {
     assert_eq!(error.to_string(), expected);
 }

@@ -4,7 +4,7 @@ use num_traits::PrimInt;
 
 use crate::{in_range, Real};
 
-/// Why an input was rejected: the defect, and where it sits in the caller's terms. A `parameter` is the constructor's own name for the argument, an `entry` a position in it.
+/// Why an input was rejected: the defect, and where it sits in the caller's terms. A `parameter` is the constructor's own name for the argument, or the caller's by [`CsrRef::named`](crate::input::CsrRef::named), an `entry` a position in it.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputError {
@@ -89,6 +89,8 @@ pub enum InputError {
         /// The first row with unused slots.
         row: usize,
     },
+    /// A converted matrix is stored by columns; its library's own conversion to rows, sprs's `to_csr()`, makes the CSR it converts from.
+    StoredByColumns,
 }
 
 impl core::fmt::Display for InputError {
@@ -126,6 +128,10 @@ impl core::fmt::Display for InputError {
             ),
             Self::NotSquare { rows, cols } => write!(f, "matrix is not square ({rows}x{cols})"),
             Self::RowGap { row } => write!(f, "row {row} leaves unused slots after its entries"),
+            Self::StoredByColumns => write!(
+                f,
+                "matrix is stored by columns (CSC); convert it to CSR first, as with to_csr()"
+            ),
         }
     }
 }

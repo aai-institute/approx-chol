@@ -49,9 +49,9 @@ A `Laplacian` or `Sddm`, a `FactorWidth2` or a `BipartiteFactorWidth2` also fact
 
 | Feature | Effect |
 |---------|--------|
-| `sprs`  | Zero-copy `CsrRef` conversion from `sprs` matrices via `TryFrom`; enables `ndarray`. |
-| `faer`  | Zero-copy `CsrRef` conversion from `faer` matrices via `TryFrom`. |
-| `nalgebra` | Zero-copy `CsrRef` conversion from a `nalgebra-sparse` 0.12 `CsrMatrix` or `CscMatrix` via `TryFrom`; every `nalgebra` 0.35 matrix, owned or a view, is a `MatrixMut` block for `apply`, a contiguous one copied less through `ColumnMajor::new(m.as_mut_slice(), m.nrows())`. Needs Rust 1.89, nalgebra's MSRV, above the crate's 1.85. |
+| `sprs`  | Zero-copy `CsrRef` conversion from a `sprs` CSR view via `TryFrom`, a CSC view an `InputError::StoredByColumns` (convert with `to_csr()`); enables `ndarray`. |
+| `faer`  | Zero-copy `CsrRef` conversion from a `faer` `SparseRowMatRef` via `TryFrom`; a `SparseColMatRef` converts with `to_row_major()` first. |
+| `nalgebra` | Zero-copy `CsrRef` conversion from a `nalgebra-sparse` 0.12 `CsrMatrix` via `TryFrom`, a `CscMatrix` through `CsrMatrix::from(&csc)` first; every `nalgebra` 0.35 matrix, owned or a view, is a `MatrixMut` block for `apply`, a contiguous one copied less through `ColumnMajor::new(m.as_mut_slice(), m.nrows())`. Needs Rust 1.89, nalgebra's MSRV, above the crate's 1.85. |
 | `ndarray` | `ndarray` 0.17's `ArrayRef2` and `ArrayRef1` are `MatrixMut` blocks for `apply`: an `Array2`, an `Array1` or a view of either, passed as `&mut *a`; an `ArrayD` converts with `into_dimensionality::<Ix2>()`. Columns of row stride 1, as in a Fortran-order array, are solved where they are. |
 | `serde` | Serialize and deserialize `ApproxInverse`, led by its `Header`: format version and scalar type. |
 

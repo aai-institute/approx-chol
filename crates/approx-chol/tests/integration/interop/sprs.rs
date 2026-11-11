@@ -26,35 +26,43 @@ fn sprs_csr_factorizes_over_index_types(#[case] run: fn()) {
     run();
 }
 
-/// A symmetric matrix's CSC arrays are its CSR arrays, so both factor alike.
+/// A CSC read as a CSR would be its transpose, which the 8-ulp symmetry check cannot tell from the matrix.
 #[test]
-fn sprs_csc_factorizes_as_its_csr() {
-    assert_solves_fixture(path_laplacian::<u32>().to_csc().view());
+fn sprs_csc_is_rejected_as_stored_by_columns_and_converts_by_to_csr() {
+    let csc = path_laplacian::<u32>().to_csc();
+    let err = CsrRef::try_from(csc.view()).expect_err("a CSC view is rejected");
+    assert_eq!(err, InputError::StoredByColumns);
+    assert_solves_fixture(csc.to_csr().view());
 }
 
+/// Rows 2..4 of a 4x2 matrix are a square view whose `indptr` starts past zero.
 #[test]
-fn sprs_csc_of_an_asymmetric_matrix_is_rejected() {
-    let csc =
-        CsMatI::<f64, u32>::new_csc((2, 2), vec![0, 1, 3], vec![0, 0, 1], vec![2.0, -1.0, 2.0]);
-    let err = CsrRef::try_from(csc.view()).expect_err("asymmetric CSC must be rejected");
-    assert!(matches!(err, InputError::NotSymmetric { .. }), "{err:?}");
-}
-
-/// Rows 2..4 of a 4x2 matrix are a square view whose row pointers start past zero.
-#[test]
-fn sprs_outer_slice_with_offset_rows_is_rejected() {
+fn sprs_outer_slice_with_offset_rows_is_rejected_by_indptr() {
     let mat = CsMatI::<f64, u32>::new(
         (4, 2),
         vec![0, 1, 2, 4, 6],
         vec![0, 1, 0, 1, 0, 1],
         vec![1.0, 1.0, 1.0, -1.0, -1.0, 1.0],
     );
-    let err = CsrRef::try_from(mat.slice_outer(2..4)).expect_err("offset rows must be rejected");
+    let err = CsrRef::try_from(mat.slice_outer(2..4)).expect_err("offset rows are rejected");
     assert_eq!(
         err,
         InputError::RowPtrs {
-            parameter: "row_ptrs",
+            parameter: "indptr",
             row: 0
+        }
+    );
+}
+
+#[test]
+fn sprs_nan_is_rejected_by_data() {
+    let mat = CsMatI::<f64, u32>::new((2, 2), vec![0, 1, 2], vec![0, 1], vec![1.0, f64::NAN]);
+    let err = CsrRef::try_from(mat.view()).expect_err("NaN is rejected");
+    assert_eq!(
+        err,
+        InputError::OutOfRange {
+            parameter: "data",
+            entry: 1
         }
     );
 }
@@ -62,6 +70,14 @@ fn sprs_outer_slice_with_offset_rows_is_rejected() {
 #[test]
 fn sprs_try_from_non_square_returns_error() {
     let mat = CsMatI::<f64, u32>::new((3, 4), vec![0, 1, 2, 3], vec![0, 1, 2], vec![1.0; 3]);
+    let err = CsrRef::try_from(mat.view()).expect_err("non-square matrix must be rejected");
+    assert_eq!(err, InputError::NotSquare { rows: 3, cols: 4 });
+}
+
+/// The shape is checked before the storage order.
+#[test]
+fn sprs_try_from_non_square_csc_returns_not_square() {
+    let mat = CsMatI::<f64, u32>::new_csc((3, 4), vec![0, 1, 2, 3, 3], vec![0, 1, 2], vec![1.0; 3]);
     let err = CsrRef::try_from(mat.view()).expect_err("non-square matrix must be rejected");
     assert_eq!(err, InputError::NotSquare { rows: 3, cols: 4 });
 }

@@ -59,13 +59,26 @@ fn nalgebra_csr_factors_bit_for_bit_as_its_arrays() {
     assert_eq!(solved_bits(&viewed), solved_bits(&factor()));
 }
 
-/// A symmetric matrix's CSC arrays are its CSR arrays, so both factor alike.
+/// A CSC converts through nalgebra-sparse's own `CsrMatrix::from`.
 #[test]
-fn nalgebra_csc_factors_bit_for_bit_as_its_csr() {
+fn nalgebra_csc_converted_to_csr_factors_bit_for_bit_as_its_arrays() {
     let (n, ptrs, columns, values) = grounded_grid();
-    let matrix = CscMatrix::try_from_csc_data(n, n, ptrs, columns, values).unwrap();
+    let csc = CscMatrix::try_from_csc_data(n, n, ptrs, columns, values).unwrap();
+    let matrix = CsrMatrix::from(&csc);
     let viewed = factorize(CsrRef::try_from(&matrix).unwrap()).unwrap();
     assert_eq!(solved_bits(&viewed), solved_bits(&factor()));
+}
+
+/// Pins the name only: nalgebra-sparse validates its offsets and indices, and its values' name is `CSR_REF`'s.
+#[test]
+fn nalgebra_nan_is_rejected_by_values() {
+    let (ptrs, indices, values) = (vec![0, 1, 2], vec![0, 1], vec![1.0, f64::NAN]);
+    let expected = InputError::OutOfRange {
+        parameter: "values",
+        entry: 1,
+    };
+    let csr = CsrMatrix::try_from_csr_data(2, 2, ptrs, indices, values);
+    assert_eq!(CsrRef::try_from(&csr.unwrap()).unwrap_err(), expected);
 }
 
 #[test]
@@ -73,10 +86,6 @@ fn nalgebra_try_from_non_square_returns_error() {
     let csr =
         CsrMatrix::try_from_csr_data(3, 4, vec![0, 1, 2, 3], vec![0, 1, 0], vec![1.0; 3]).unwrap();
     let err = CsrRef::try_from(&csr).expect_err("non-square matrix must be rejected");
-    assert_eq!(err, InputError::NotSquare { rows: 3, cols: 4 });
-    let csc = CscMatrix::try_from_csc_data(3, 4, vec![0, 1, 2, 3, 3], vec![0, 1, 0], vec![1.0; 3])
-        .unwrap();
-    let err = CsrRef::try_from(&csc).expect_err("non-square matrix must be rejected");
     assert_eq!(err, InputError::NotSquare { rows: 3, cols: 4 });
 }
 

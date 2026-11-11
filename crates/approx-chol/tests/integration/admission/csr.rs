@@ -1,5 +1,5 @@
 use approx_chol::input::{
-    BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, InputError, Laplacian,
+    BipartiteFactorWidth2, CsrNames, CsrRef, FactorWidth1, FactorWidth2, InputError, Laplacian,
     TriangleCsrRef,
 };
 use approx_chol::{factorize, ApproxInverse, BuildError};
@@ -482,4 +482,35 @@ fn an_unsorted_view_is_copy_and_builds_as_its_canonical_form_each_time() {
     for view in [triangle, triangle] {
         assert_eq!(debug_and_bits(&factorize(view).unwrap(), &rhs), expected);
     }
+}
+
+const SCIPY: CsrNames = CsrNames {
+    row_ptrs: "indptr",
+    col_indices: "indices",
+    values: "data",
+};
+
+/// One case per check that names an array.
+#[rstest]
+#[case::row_ptrs_length(2, &[0, 1], &[0], &[1.0], InputError::LengthMismatch { parameter: "indptr", expected: 3, found: 2 })]
+#[case::values_length(1, &[0, 1], &[0], &[], InputError::LengthMismatch { parameter: "data", expected: 1, found: 0 })]
+#[case::col_indices_length(1, &[0, 2], &[0], &[1.0], InputError::LengthMismatch { parameter: "indices", expected: 2, found: 1 })]
+#[case::negative_last_row_ptr(1, &[0, -1], &[], &[], InputError::IndexOutOfRange { parameter: "indptr", entry: 1 })]
+#[case::negative_first_row_ptr(1, &[-1, 0], &[], &[], InputError::IndexOutOfRange { parameter: "indptr", entry: 0 })]
+#[case::offset_row_ptrs(1, &[1, 2], &[0, 0], &[1.0, 1.0], InputError::RowPtrs { parameter: "indptr", row: 0 })]
+#[case::decreasing_row_ptrs(3, &[0, 2, 1, 2], &[0, 1], &[1.0, 1.0],InputError::RowPtrs { parameter: "indptr", row: 1 })]
+#[case::column_out_of_range(1, &[0, 1], &[1], &[1.0], InputError::IndexOutOfRange { parameter: "indices", entry: 0 })]
+#[case::diagonal_value(1, &[0, 1], &[0], &[f64::NAN], InputError::OutOfRange { parameter: "data", entry: 0 })]
+#[case::upper_value(2, &[0, 2, 3], &[0, 1, 1], &[1.0, f64::NAN, 1.0], InputError::OutOfRange { parameter: "data", entry: 1 })]
+#[case::unsorted_value(2, &[0, 2, 4], &[1, 0, 0, 1], &[-1.0, f64::NAN, -1.0, 1.0], InputError::OutOfRange { parameter: "data", entry: 1 })]
+#[case::coalesced_sum(1, &[0, 2], &[0, 0], &[f64::MAX, f64::MAX], InputError::OutOfRange { parameter: "data", entry: 0 })]
+fn a_named_csr_names_each_array_by_the_callers_name(
+    #[case] n: usize,
+    #[case] row_ptrs: &[i32],
+    #[case] columns: &[i32],
+    #[case] values: &[f64],
+    #[case] expected: InputError,
+) {
+    let observed = CsrRef::named(n, row_ptrs, columns, values, SCIPY).unwrap_err();
+    assert_eq!(observed, expected);
 }
