@@ -60,6 +60,8 @@ Upgrading from 0.7: [MIGRATING.md](MIGRATING.md) maps each removed or renamed it
 - Faster factorization of inputs with many small components or long paths, with fewer allocations per component. ([#312])
 - Faster approximate factorization: 4-15% on grids, power-law graphs and fixed-effects inputs, with factors bit for bit as before unless a vertex's AC2 copy degree reaches `u32::MAX - 1`, which takes a `split_merge` near `2^30` or more: there its place in the minimum-degree order now follows its degree back down. ([#386])
 - Faster approximate factorization: 3-12% on grids and banded inputs, with factors bit for bit as before except in `f32`, where a star of 21 to 32 entries now sums a neighbor's duplicates in the order they come, as every other star does. ([#388])
+- An apply in which no component passes its thread's share of the work, as at one thread always, reads the components' step and scratch totals the build summed instead of walking every component again: on 50,000 floating components of 2–5 vertices 19% fewer instructions at one thread, 12% on a fixed-effects panel of 21,000 components; bits unchanged ([#481]).
+- A copied block (`ColumnMajor`, `Columns`, a staged or foreign block) of 2 to 7 columns, or with that many past its last pack of 8, solves them in one pack of their own width, 7 in a pack of 8, where fewer than 4 went one at a time and 5 to 7 took a pack of 4 and singles: on a 200,000 × 10,000 fixed-effects panel 1.06–1.56x faster per column for 2, 3, 5, 6 and 7 columns, as fast as before for 1, 4 and 8; bits unchanged. `scratch(columns, threads)` grows to the wider pack, up to 8 columns of `n` at 7 ([#482]).
 - A factor stores no ground, so a definite block of `n` vertices on one sheet, grounded or frustrated, solves in place: it takes no Cholesky slot, not `n + 1`, and a grounded cover takes `2n`, not `2n + 1`.
 
 ### Fixed
@@ -364,3 +366,5 @@ for graph Laplacians in Rust with Python bindings.
 [#437]: https://github.com/aai-institute/approx-chol/issues/437
 [#460]: https://github.com/aai-institute/approx-chol/issues/460
 [#472]: https://github.com/aai-institute/approx-chol/issues/472
+[#481]: https://github.com/aai-institute/approx-chol/pull/481
+[#482]: https://github.com/aai-institute/approx-chol/pull/482
