@@ -1,10 +1,18 @@
 #[path = "common/csr.rs"]
 #[allow(dead_code, reason = "`build` and `laplacian` serve the factor benches")]
 mod csr;
+#[path = "../tests/integration/common/disjoint.rs"]
+mod disjoint;
+#[path = "common/gram.rs"]
+mod gram;
+#[path = "../tests/integration/common/lcg.rs"]
+mod lcg;
 
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
-use approx_chol::{ScalingPolicy, Sgdd, Threads};
+use approx_chol::input::Input;
+use approx_chol::{Config, ScalingPolicy, Sgdd, Threads};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 use csr::OwnedCsr;
 use rand::rngs::SmallRng;
@@ -48,5 +56,34 @@ fn bench_reduce_scaled_ring(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_reduce_scaled_ring);
+/// Each Gram of #281 as `FactorWidth2` and as its CSR twin, reduced and built, on the calling thread and on all of a 12-thread pool.
+fn bench_reduce_gram_blocks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sgdd_reduce");
+    group.sample_size(10);
+    group.sampling_mode(SamplingMode::Flat);
+    group.warm_up_time(Duration::from_secs(1));
+    let pool = (rayon::ThreadPoolBuilder::new().num_threads(12).build()).expect("a pool");
+    let one = Threads::Count(NonZeroUsize::MIN);
+    for (name, sizes) in gram::cases() {
+        let (gram, csr) = gram::with_csr(&sizes);
+        for (t, threads) in [("t1", one), ("t12", Threads::All)] {
+            let mut stages = |input: &str, view: Input<'_, f64, u32>| {
+                let id = |stage| BenchmarkId::new(format!("gram/{name}/{input}/{stage}"), t);
+                let reduce = || Sgdd::reduce(view, ScalingPolicy::default(), threads);
+                let build = || {
+                    reduce()
+                        .expect("reduces")
+                        .factor(Config::default(), threads)
+                };
+                group.bench_function(id("reduce"), |b| b.iter(|| pool.install(reduce)));
+                group.bench_function(id("build"), |b| b.iter(|| pool.install(build)));
+            };
+            stages("fw2", gram.view().into());
+            stages("csr", csr.csr().into());
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_reduce_scaled_ring, bench_reduce_gram_blocks);
 criterion_main!(benches);

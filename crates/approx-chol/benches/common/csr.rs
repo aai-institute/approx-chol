@@ -70,6 +70,21 @@ impl OwnedCsr {
         }))
     }
 
+    /// `V Vᵀ` for `V`'s columns `(a, b, x, y)`, a repeated cell summed in column order, so both triangles hold the same bits.
+    #[allow(dead_code, reason = "only the reduce benches take a Gram's CSR twin")]
+    pub fn gram(n: usize, columns: impl IntoIterator<Item = (u32, u32, f64, f64)>) -> Self {
+        let mut rows: Vec<Vec<(u32, f64)>> = vec![Vec::new(); n];
+        for (a, b, x, y) in columns {
+            rows[a as usize].extend([(a, x * x), (b, x * y)]);
+            rows[b as usize].extend([(b, y * y), (a, x * y)]);
+        }
+        Self::from_rows(rows.into_iter().map(|mut row| {
+            row.sort_by_key(|&(j, _)| j);
+            let cells = row.chunk_by(|p, q| p.0 == q.0);
+            (cells.map(|cell| (cell[0].0, cell.iter().map(|&(_, v)| v).sum()))).collect::<Vec<_>>()
+        }))
+    }
+
     pub fn n(&self) -> usize {
         self.row_ptrs.len() - 1
     }
@@ -85,7 +100,10 @@ impl OwnedCsr {
     }
 
     /// Stored entries, both triangles.
-    #[allow(dead_code, reason = "only the frustrated benches count entries")]
+    #[allow(
+        dead_code,
+        reason = "only the frustrated and peak benches count entries"
+    )]
     pub fn nnz(&self) -> usize {
         self.values.len()
     }

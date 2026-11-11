@@ -73,6 +73,11 @@ harness = false
 name = "frustrated"
 harness = false
 
+# Prints peak bytes, not times.
+[[bench]]
+name = "reduce_peak"
+harness = false
+
 # Counts `nnz(L)` from the serde payload.
 [[bench]]
 name = "frustrated_ab"
