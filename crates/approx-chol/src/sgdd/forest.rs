@@ -1,34 +1,22 @@
 use crate::Index;
 
-/// What a link carries to its parent, composed along a path: nothing, a sign parity, or a ratio.
+/// What a link carries to its parent, composed along a path.
 pub(super) trait Potential: Copy {
     /// A vertex's potential to itself.
     const ROOT: Self;
+    /// What a link from `b` up to `a` carries before it is stored.
+    type Link: Copy + Into<Self>;
     fn then(self, up: Self) -> Self;
+    fn reversed(link: Self::Link) -> Self::Link;
 }
 
 impl Potential for () {
     const ROOT: Self = ();
+    type Link = Self;
     fn then(self, _: Self) -> Self {}
-}
-
-impl Potential for bool {
-    const ROOT: Self = false;
-    fn then(self, up: Self) -> Self {
-        self ^ up
+    fn reversed(link: Self) -> Self {
+        link
     }
-}
-
-impl Potential for f64 {
-    const ROOT: Self = 1.0;
-    fn then(self, up: Self) -> Self {
-        self * up
-    }
-}
-
-pub(super) enum Under {
-    A,
-    B,
 }
 
 /// Union by size with path halving, each vertex holding its potential to its parent.
@@ -68,17 +56,13 @@ impl<I: Index, P: Potential> Forest<I, P> {
         (i, to_root)
     }
 
-    /// Links two distinct roots by size, `a` on top at a tie; `under` gives the potential of the one going under.
-    pub(super) fn link(
-        &mut self,
-        a: usize,
-        b: usize,
-        under: impl FnOnce(Under) -> P,
-    ) -> (usize, P) {
-        let (big, small, potential) = match self.size[a] >= self.size[b] {
-            true => (a, b, under(Under::B)),
-            false => (b, a, under(Under::A)),
+    /// Links two distinct roots by size, `a` on top at a tie: `b` goes under `a` by `b_to_a`, else `a` under `b` by its reverse.
+    pub(super) fn link(&mut self, a: usize, b: usize, b_to_a: P::Link) -> (usize, P) {
+        let (big, small, link) = match self.size[a] >= self.size[b] {
+            true => (a, b, b_to_a),
+            false => (b, a, P::reversed(b_to_a)),
         };
+        let potential = link.into();
         self.links[small] = (I::from_index(big), potential);
         self.size[big] = self.size[big] + self.size[small];
         (big, potential)
@@ -89,7 +73,7 @@ impl<I: Index> Forest<I, ()> {
     pub(super) fn union(&mut self, i: usize, j: usize) {
         let ((a, ()), (b, ())) = (self.find(i), self.find(j));
         if a != b {
-            self.link(a, b, |_| ());
+            self.link(a, b, ());
         }
     }
 }

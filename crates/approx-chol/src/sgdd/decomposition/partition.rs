@@ -26,7 +26,7 @@ impl<I: Index> Partition<I> {
                 root = match root {
                     Some(root) if root != other => {
                         links -= 1;
-                        Some(columns.link(root, other, |_| ()).0)
+                        Some(columns.link(root, other, ()).0)
                     }
                     _ => Some(other),
                 };

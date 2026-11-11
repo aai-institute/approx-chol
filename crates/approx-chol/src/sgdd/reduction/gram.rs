@@ -7,7 +7,7 @@ use super::{rows_where, Folded, Settling, Surplus};
 use crate::input::{Column, FactorWidth2};
 use crate::sgdd::block::{Grounding, IrreducibleBlock};
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Cut, SymmetricBlock};
-use crate::sgdd::forest::{Forest, Under};
+use crate::sgdd::forest::{Forest, Potential};
 use crate::sgdd::scaling::{self, ScalingPolicy};
 use crate::sgdd::{Components, Reduced};
 use crate::{narrow, widen, BuildError, Index, Real, Threads};
@@ -234,6 +234,39 @@ fn coupling<T: Real, I: Index>(column: &Column<T, I>, component: &[I]) -> Option
     couples.then_some(c.index())
 }
 
+/// `u_b / u_a`, undivided: reversing swaps it exactly, and a closing cycle compares its halves.
+#[derive(Clone, Copy)]
+pub(in crate::sgdd) struct Ratio {
+    num: f64,
+    den: f64,
+}
+
+impl Ratio {
+    fn agrees(self, tolerance: f64) -> bool {
+        (self.num - self.den).abs() <= tolerance * self.num.abs().max(self.den.abs())
+    }
+}
+
+impl From<Ratio> for f64 {
+    fn from(r: Ratio) -> Self {
+        r.num / r.den
+    }
+}
+
+impl Potential for f64 {
+    const ROOT: Self = 1.0;
+    type Link = Ratio;
+    fn then(self, up: Self) -> Self {
+        self * up
+    }
+    fn reversed(r: Ratio) -> Ratio {
+        Ratio {
+            num: r.den,
+            den: r.num,
+        }
+    }
+}
+
 /// Joins `u_b = k·u_a` in a forest whose potentials are `u_child / u_parent`; `false` on a cycle missing by more than `tolerance`, relative, or a ratio leaving the finite nonzero range.
 fn join<I: Index>(forest: &mut Forest<I, f64>, a: usize, b: usize, k: f64, tolerance: f64) -> bool {
     // An overflowed `v_a/v_b` would compare `∞ ≤ tolerance·∞` and pass.
@@ -241,14 +274,13 @@ fn join<I: Index>(forest: &mut Forest<I, f64>, a: usize, b: usize, k: f64, toler
         return false;
     }
     let ((ra, xa), (rb, xb)) = (forest.find(a), forest.find(b));
+    let ratio = Ratio {
+        num: k * xa,
+        den: xb,
+    };
     if ra == rb {
-        let (want, have) = (k * xa, xb);
-        return (want - have).abs() <= tolerance * want.abs().max(have.abs());
+        return ratio.agrees(tolerance);
     }
-    // `u_rb = (k·xa/xb)·u_ra`.
-    let (_, ratio) = forest.link(ra, rb, |under| match under {
-        Under::B => k * xa / xb,
-        Under::A => xb / (k * xa),
-    });
-    ratio.is_finite() && ratio != 0.0
+    let (_, stored) = forest.link(ra, rb, ratio);
+    stored.is_finite() && stored != 0.0
 }

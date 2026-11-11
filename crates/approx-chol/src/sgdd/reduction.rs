@@ -10,7 +10,7 @@ use super::congruence::Congruence;
 use super::decomposition::{
     of_csr, AdjacencyLayout, Biadjacency, Partitioned, RowSums, StrictUpperTriangle, SymmetricBlock,
 };
-use super::forest::Forest;
+use super::forest::{Forest, Potential};
 use super::scaling::{self, ScaleVector, ScalingPolicy};
 use super::{Reduced, ReducedComplement};
 use crate::diagonal_in_range;
@@ -373,6 +373,18 @@ pub(crate) fn within_band<T: Real>(ones: f64, trace: f64) -> bool {
     ones <= SINGULAR_BAND * widen(T::epsilon()) * trace
 }
 
+/// A sign parity: whether two signs differ, its own reverse.
+impl Potential for bool {
+    const ROOT: Self = false;
+    type Link = Self;
+    fn then(self, up: Self) -> Self {
+        self ^ up
+    }
+    fn reversed(differ: Self) -> Self {
+        differ
+    }
+}
+
 /// The signs `S` folding `A_c` into a Z-matrix, `I` when it already is one; `None` when frustrated.
 fn folding_signs<T: Real, I: Index>(off_diagonal: &OffDiagonal<T, I>) -> Option<Congruence<T>> {
     if off_diagonal.nonpositive() {
@@ -390,7 +402,7 @@ fn folding_signs<T: Real, I: Index>(off_diagonal: &OffDiagonal<T, I>) -> Option<
             let differ = a > T::zero();
             let ((ri, pi), (rj, pj)) = (forest.find(i), forest.find(j));
             if ri != rj {
-                forest.link(ri, rj, |_| pi ^ pj ^ differ);
+                forest.link(ri, rj, pi ^ pj ^ differ);
             } else if pi ^ pj != differ {
                 return None;
             }
