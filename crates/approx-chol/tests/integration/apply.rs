@@ -3,7 +3,7 @@ use std::array;
 use approx_chol::input::{CsrRef, Laplacian};
 use approx_chol::{
     factorize, factorize_with, ApplyError, ApproxInverse, ColumnMajor, Columns, Config,
-    LayoutError, MatrixMut, MemStack, Real, ScalingPolicy, StackReq, Threads,
+    FrustratedRoute, LayoutError, MatrixMut, MemStack, Real, ScalingPolicy, StackReq, Threads,
 };
 
 use crate::common::apart::Apart;
@@ -112,7 +112,7 @@ fn assert_blocks<T: Real>(
     alone: &[Vec<f64>],
 ) {
     for threads in threads::BUDGETS {
-        // Across the packs' widths: one column, half a pack, a pack, and past one and two.
+        // Every remainder a pack leaves, alone and after one whole pack, and past two.
         let blocks = [
             applied::<T, 1>(factor, labels, threads),
             applied::<T, 2>(factor, labels, threads),
@@ -123,6 +123,12 @@ fn assert_blocks<T: Real>(
             applied::<T, 7>(factor, labels, threads),
             applied::<T, 8>(factor, labels, threads),
             applied::<T, 9>(factor, labels, threads),
+            applied::<T, 10>(factor, labels, threads),
+            applied::<T, 11>(factor, labels, threads),
+            applied::<T, 12>(factor, labels, threads),
+            applied::<T, 13>(factor, labels, threads),
+            applied::<T, 14>(factor, labels, threads),
+            applied::<T, 15>(factor, labels, threads),
             applied::<T, 16>(factor, labels, threads),
             applied::<T, 17>(factor, labels, threads),
         ];
@@ -164,9 +170,12 @@ cases! {
 cases! {
     fn frustrated_blocks_solve_each_column_alone(route in routes(frustrated), types in types(all)) {
         let (entry, mode) = route;
-        let factor = entry.reduce(&components(false, Triangle::Positive), types).factorize(&mode.config());
-        let label = format!("frustrated {entry:?} {types:?} {mode:?}");
-        assert_columns_solve_alone(&label, &factor, types);
+        let reduced = entry.reduce(&components(false, Triangle::Positive), types);
+        for frustrated in [mode.config().frustrated, FrustratedRoute::Signed] {
+            let factor = reduced.factorize(&Config { frustrated, ..mode.config() });
+            let label = format!("frustrated {entry:?} {types:?} {mode:?} {frustrated:?}");
+            assert_columns_solve_alone(&label, &factor, types);
+        }
     }
 }
 
@@ -285,6 +294,40 @@ fn a_copied_block_takes_one_packs_stack_whatever_its_width() {
     }
 }
 
+/// Fifteen columns take a pack of eight, then seven in a pack of eight whose spare lane keeps column 7's solution: NaN or inf there leaves columns 8 to 14 as they solve alone.
+#[test]
+fn a_column_solved_to_nan_reaches_no_column_of_the_next_pack() {
+    let interleaved = Laplacian::new(6, &[0u32, 2, 1, 3], &[2, 4, 3, 5]).unwrap();
+    let factor: ApproxInverse = factorize(interleaved).unwrap();
+    for poison in [f64::NAN, f64::INFINITY] {
+        let column = |j| {
+            let mut b = rhs(6, j);
+            b[0] = if j == 7 { poison } else { b[0] };
+            b
+        };
+        let fresh = Layouts::<f64, 15>::new(array::from_fn(column));
+        let alone: Vec<Vec<u64>> = (8..15)
+            .map(|j| {
+                let mut x = column(j);
+                factor.apply(&mut x, Threads::All).expect("6 rows");
+                bits(&x)
+            })
+            .collect();
+        for &layout in Layout::ALL {
+            for threads in [threads::ONE, Threads::All] {
+                let mut block = fresh.clone();
+                block
+                    .on(layout, |b| b.apply(&factor, threads))
+                    .expect("6 rows");
+                let columns = block.columns(layout);
+                assert!(columns[7].iter().any(|x| !x.is_finite()), "{layout:?}");
+                let after: Vec<Vec<u64>> = columns[8..].iter().map(|c| bits(c)).collect();
+                assert_eq!(after, alone, "{layout:?} {poison} at {threads:?}");
+            }
+        }
+    }
+}
+
 /// An empty stack's slice is not aligned for `f64`: an apply with nothing to solve takes no slot from it.
 #[test]
 fn an_apply_with_nothing_to_solve_accepts_an_empty_stack() {
@@ -381,20 +424,20 @@ fn a_decoded_factor_spreads_to_the_same_bits() {
     let bytes = postcard::to_stdvec(&factor).expect("serialize");
     let decoded: ApproxInverse = postcard::from_bytes(&bytes).expect("decode");
     assert_eq!(
-        spread_bits(&decoded, Threads::All, Threads::All),
-        spread_bits(&factor, threads::ONE, threads::ONE)
+        spread_bits::<9>(&decoded, Threads::All, Threads::All),
+        spread_bits::<9>(&factor, threads::ONE, threads::ONE)
     );
     assert_spread_changes_no_bit(&decoded);
 }
 
-/// Nine columns in each layout, a pack and a column alone, applied at `threads` on a NaN-filled stack of `scratch(9, regions)`.
-fn spread_bits(
+/// `K` columns in each layout applied at `threads` on a NaN-filled stack of `scratch(K, regions)`.
+fn spread_bits<const K: usize>(
     factor: &ApproxInverse,
     threads: Threads,
     regions: Threads,
 ) -> Vec<(Layout, Vec<Vec<u64>>)> {
-    let fresh = Layouts::<f64, 9>::new(array::from_fn(|j| rhs(factor.n(), j)));
-    let mut cells = nan_cells::<f64>(factor.scratch(9, regions));
+    let fresh = Layouts::<f64, K>::new(array::from_fn(|j| rhs(factor.n(), j)));
+    let mut cells = nan_cells::<f64>(factor.scratch(K, regions));
     let solve = |&layout: &Layout| {
         let mut block = fresh.clone();
         block
@@ -410,21 +453,30 @@ fn spread_bits(
     Layout::ALL.iter().map(solve).collect()
 }
 
-/// Every layout at every budget, on a stack of one region or of more, solves each column to the bits of the interleaved block on one thread.
+/// Every layout at every budget, on a stack of one region or of more, solves each column to the bits of the interleaved block on one thread: a pack and a column alone, and a pack and each remainder of two to seven.
 fn assert_spread_changes_no_bit(factor: &ApproxInverse) {
-    let one = spread_bits(factor, threads::ONE, threads::ONE);
+    assert_spread_at::<9>(factor);
+    assert_spread_at::<10>(factor);
+    assert_spread_at::<11>(factor);
+    assert_spread_at::<13>(factor);
+    assert_spread_at::<14>(factor);
+    assert_spread_at::<15>(factor);
+}
+
+fn assert_spread_at<const K: usize>(factor: &ApproxInverse) {
+    let one = spread_bits::<K>(factor, threads::ONE, threads::ONE);
     let (Layout::Interleaved, alone) = &one[0] else {
         unreachable!("the interleaved block comes first")
     };
     let eight = Threads::Count(std::num::NonZeroUsize::new(8).unwrap());
     for threads in threads::BUDGETS.into_iter().chain([eight]) {
         for regions in [threads::ONE, threads::BUDGETS[2], threads] {
-            for (layout, columns) in spread_bits(factor, threads, regions) {
+            for (layout, columns) in spread_bits::<K>(factor, threads, regions) {
                 assert_eq!(columns.len(), alone.len());
                 for (j, (column, alone)) in columns.iter().zip(alone).enumerate() {
                     assert_eq!(
                         column, alone,
-                        "{layout:?} column {j}, {threads:?} on {regions:?}'s regions"
+                        "{layout:?} column {j} of {K}, {threads:?} on {regions:?}'s regions"
                     );
                 }
             }
