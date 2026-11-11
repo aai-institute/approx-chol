@@ -54,6 +54,7 @@ Upgrading from 0.7: [MIGRATING.md](MIGRATING.md) maps each removed or renamed it
 ### Changed
 
 - `apply` spreads its thread budget over the components by size: a component past the budget's share of the work is solved on the whole budget, one after another, the others at once, each on one thread, once their work outweighs waking the pool. On 1M vertices in 100 to 100,000 components an apply at 12 threads takes 4–8x less time, on 8 equal components 4–5x less; one component, or one thread, as before; the bits do not change. `scratch(columns, threads)` holds a region per thread, at most the pool's, of the most one of the components solved at once takes; `apply_with` needs one thread's scratch and solves as many components at once as its stack holds regions.
+- A Gram (`FactorWidth2` with values) of many components reduces them under the build's `Threads` budget as a CSR input does, each component's signs, scales and rows in a task of its own, once every component is cut and the assembly freed; one component reduces as before, and factors are bit for bit as before at every budget. The reduction's peak memory: at one thread, equal to before; in parallel, up to one block workspace more per running task ([#281]).
 - Faster factorization of inputs with many small components or long paths, with fewer allocations per component. ([#312])
 - Faster approximate factorization: 4-15% on grids, power-law graphs and fixed-effects inputs, with factors bit for bit as before unless a vertex's AC2 copy degree reaches `u32::MAX - 1`, which takes a `split_merge` near `2^30` or more: there its place in the minimum-degree order now follows its degree back down. ([#386])
 - Faster approximate factorization: 3-12% on grids and banded inputs, with factors bit for bit as before except in `f32`, where a star of 21 to 32 entries now sums a neighbor's duplicates in the order they come, as every other star does. ([#388])
@@ -329,6 +330,7 @@ for graph Laplacians in Rust with Python bindings.
 [#267]: https://github.com/aai-institute/approx-chol/issues/267
 [#275]: https://github.com/aai-institute/approx-chol/issues/275
 [#277]: https://github.com/aai-institute/approx-chol/issues/277
+[#281]: https://github.com/aai-institute/approx-chol/issues/281
 [#300]: https://github.com/aai-institute/approx-chol/issues/300
 [#301]: https://github.com/aai-institute/approx-chol/issues/301
 [#306]: https://github.com/aai-institute/approx-chol/pull/306

@@ -156,9 +156,31 @@ impl<A, I: Index> Cuts<A, I> {
                 let (vertices, entries) = assembly.cut(k);
                 block(vertices, entries, threads)
             });
-            // Kept past extraction, an owned assembly raised the Gram peak 11–22%.
             drop(assembly);
             blocks
+        })
+    }
+
+    /// As [`extract`](Self::extract), each block `cut` from the assembly and, once every block is cut and the assembly freed, as `then` makes it under the same budgets.
+    pub(super) fn extract_then<'p, T: Real, X: Send, B: Send>(
+        self,
+        components: &'p Components<I, T>,
+        threads: Threads,
+        cut: impl Fn(&'p [I], <A as PrincipalBlocks<T, I>>::Block) -> X + Sync,
+        then: impl Fn(X, Threads) -> Result<B, BuildError> + Sync,
+    ) -> Result<Cut<'p, I, T, B>, BuildError>
+    where
+        A: PrincipalBlocks<T, I> + Sync,
+    {
+        let whole = |vertices, entries, threads| then(cut(vertices, entries), threads);
+        self.blocks(components, threads, whole, |assembly, split| {
+            let live = split.each(0..components.coupled.len(), |k, _| {
+                let (vertices, entries) = assembly.cut(k);
+                cut(vertices, entries)
+            });
+            // Kept past extraction, an owned assembly raised the Gram peak 11–22%.
+            drop(assembly);
+            split.each(live, &then)
         })
     }
 
@@ -285,22 +307,6 @@ impl<'p, I, T, B> Cut<'p, I, T, B> {
     }
 
     /// Each block as `f` makes it from its component's index and itself, in turn, up to the first error.
-    pub(super) fn try_map<C>(
-        self,
-        mut f: impl FnMut(usize, B) -> Result<C, BuildError>,
-    ) -> Result<Cut<'p, I, T, C>, BuildError> {
-        // Doubling, the folded blocks held up to 2x their size beside the live ones (+12% peak at 99k blocks).
-        let mut blocks = Vec::with_capacity(self.blocks.len());
-        for (k, block) in self.blocks.into_iter().enumerate() {
-            blocks.push(f(k, block)?);
-        }
-        Ok(Cut {
-            blocks,
-            lent: PhantomData,
-        })
-    }
-
-    /// As [`try_map`](Self::try_map), into `blocks`' own buffer where `C` fits it.
     pub(super) fn try_map_in_place<C>(
         self,
         mut f: impl FnMut(usize, B) -> Result<C, BuildError>,

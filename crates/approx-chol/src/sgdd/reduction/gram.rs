@@ -1,4 +1,5 @@
 use std::cell::LazyCell;
+use std::sync::OnceLock;
 
 use num_traits::PrimInt;
 
@@ -12,7 +13,7 @@ use crate::{narrow, widen, BuildError, Index, Real, Threads};
 
 impl<T: Real, I: Index> Reduced<T, I> {
     /// `V` with values: scaled by its null vectors on demand, folded blocks dropping their rows for a pass over `V` that decides floating.
-    pub(super) fn from_values<J: PrimInt, S: AdjacencyLayout>(
+    pub(super) fn from_values<J: PrimInt + Sync, S: AdjacencyLayout>(
         cells: S,
         v: FactorWidth2<'_, T, J>,
         policy: &ScalingPolicy,
@@ -20,15 +21,14 @@ impl<T: Real, I: Index> Reduced<T, I> {
     ) -> Result<Self, BuildError> {
         let (cuts, components) = assemble_values::<T, J, I, S>(cells, v)?.arrange()?;
         components.cut(|components| {
-            let live = cuts.extract(components, threads, |vertices, entries, _| {
-                Ok(SymmetricBlock { vertices, entries })
-            })?;
-            // Built by the first block not already dominant: a dominant input pays only once a block's band fails.
-            let mut nulls: Option<(Vec<f64>, Vec<I>)> = None;
-            let signed = live.try_map(|_, a| {
+            // Built by whichever block first fails dominance: a dominant input pays only once a block's band fails.
+            let nulls = OnceLock::<(Vec<f64>, Vec<I>)>::new();
+            let live = |vertices, entries| SymmetricBlock { vertices, entries };
+            let signed = cuts.extract_then(components, threads, live, |a, threads| {
                 // `V` proves a scaling exists.
                 a.reduce(policy, |a| {
-                    let (u, _) = nulls.get_or_insert_with(|| null_vectors(v, components));
+                    // Serial: a rayon task stolen inside `get_or_init` could re-enter it.
+                    let (u, _) = nulls.get_or_init(|| null_vectors(v, components));
                     // `NaN` where a component has no certificate.
                     let u = (a.vertices.iter()).map(|v| u[v.index()]);
                     let relax = || {
@@ -46,7 +46,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
                 })
             })?;
             // `u` freed before the column pass: only the certified set outlives the scaling.
-            let read = nulls.map(|(_, certified)| certified);
+            let read = nulls.into_inner().map(|(_, certified)| certified);
             let certified = LazyCell::new(|| read.unwrap_or_else(|| null_vectors(v, components).1));
             ground_or_float(v, signed, &certified)
         })
