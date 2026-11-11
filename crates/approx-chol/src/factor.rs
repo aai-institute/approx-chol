@@ -771,12 +771,13 @@ mod budget {
     use rstest::rstest;
 
     use super::*;
-    use crate::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, Side};
+    use crate::input::{BipartiteFactorWidth2, CsrRef, FactorWidth1, FactorWidth2, Side};
     use crate::sgdd::{Reduced, ReducedComplement};
     use crate::threads::{probe, ONE};
     use crate::{widen, CoverSurplus, FrustratedRoute, Sampling, ScalingPolicy, SchurMode};
 
     const THREE: Threads = Threads::Count(NonZeroUsize::new(3).unwrap());
+    const SIX: Threads = Threads::Count(NonZeroUsize::new(6).unwrap());
 
     /// The factor as shown, every stored field, and its apply's bits.
     fn fingerprint<T: Real>(factor: ApproxInverse<T>) -> (String, Vec<u64>) {
@@ -795,16 +796,21 @@ mod budget {
         /// `groups` rings of 2000 vertices, each joined to its six nearest on either side and scaled off dominance, so the Perron product gathers; relaxed `0`, `8` and `100` iterations.
         Perron64(u32),
         Perron32(u32),
+        /// A Gram of components of [`NESTED`] vertices short of dominance, the odd ones relaxed: under `Count(6)` each task leaves the two large ones `Count(3)`, past the gather grain.
+        Nested,
     }
 
-    const CASES: [Case; 6] = [
+    const CASES: [Case; 7] = [
         Case::Bipartite(1),
         Case::Bipartite(3),
         Case::Perron64(1),
         Case::Perron64(8),
         Case::Perron32(1),
         Case::Perron32(8),
+        Case::Nested,
     ];
+
+    const NESTED: [u32; 8] = [64, 3000, 64, 3000, 64, 64, 64, 64];
 
     type Build<'a> = &'a (dyn Fn(Threads) -> (String, Vec<u64>) + Sync);
 
@@ -815,7 +821,44 @@ mod budget {
                 Case::Bipartite(groups) => bipartite(groups, &mut check),
                 Case::Perron64(groups) => perron::<f64>(groups, &mut check),
                 Case::Perron32(groups) => perron::<f32>(groups, &mut check),
+                Case::Nested => nested(&mut check),
             }
+        }
+    }
+
+    fn nested(check: &mut impl FnMut(Build<'_>)) {
+        let (mut a, mut b, mut x, mut y) = (vec![], vec![], vec![], vec![]);
+        let mut first = 0;
+        for (k, size) in NESTED.into_iter().enumerate() {
+            let u = |i: u32| 1.0 + (i % 3) as f64 / 2.0;
+            let path = (0..size - 1).map(|i| (i, i + 1));
+            let chords = (0..size)
+                .map(|i| (i, (i * 7 + 3) % size))
+                .filter(|(i, j)| i != j);
+            for (i, j) in path.chain(chords) {
+                let x_k = 1.0 + (a.len() % 5) as f64 / 4.0;
+                a.push(first + i);
+                b.push(first + j);
+                x.push(x_k);
+                y.push(match k % 2 {
+                    0 => -x_k * u(i) / u(j),
+                    _ => -0.5 - (a.len() % 3) as f64 / 4.0,
+                });
+            }
+            first += size;
+        }
+        let gram = FactorWidth2::new(first as usize, (&a, &x), (&b, &y)).expect("valid gram");
+        for iterations in [0, 8] {
+            let policy = ScalingPolicy::new(1e-9, iterations).expect("valid policy");
+            check(&|threads| {
+                fingerprint(ApproxInverse::build(
+                    Reduced::<_, u32>::reduce(gram.into(), policy, threads)
+                        .expect("reduces")
+                        .pack(),
+                    &Config::default(),
+                    threads,
+                ))
+            });
         }
     }
 
@@ -928,7 +971,7 @@ mod budget {
     /// Under `All`, `Count(1)` and `Count(3)`, in pools of one, two and seven threads, each build equals it under `All` outside any.
     #[rstest]
     fn a_build_is_bit_identical_across_budgets(
-        #[values(CASES[0], CASES[1], CASES[2], CASES[3], CASES[4], CASES[5])] case: Case,
+        #[values(CASES[0], CASES[1], CASES[2], CASES[3], CASES[4], CASES[5], CASES[6])] case: Case,
     ) {
         let pools = [1, 2, 7].map(|size| {
             rayon::ThreadPoolBuilder::new()
@@ -955,7 +998,7 @@ mod budget {
         let mut widest = 0;
         for case in CASES {
             case.each_build(|build| {
-                for (budget, n) in [(ONE, 1), (THREE, 3)] {
+                for (budget, n) in [(ONE, 1), (THREE, 3), (SIX, 6)] {
                     let peak = probe::peak(|| drop(pool.install(|| build(budget))));
                     assert!(peak <= n, "{case:?}: {peak} threads under {budget:?}");
                 }

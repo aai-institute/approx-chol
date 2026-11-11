@@ -6,6 +6,7 @@ pub mod clamps;
 pub mod cycle;
 pub mod dense;
 pub mod dense_residual;
+pub mod disjoint;
 pub mod drawn;
 pub mod entry;
 pub mod frustrated;

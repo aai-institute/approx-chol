@@ -30,7 +30,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
         })
     }
 
-    fn from_factor_width_2<J: PrimInt>(
+    fn from_factor_width_2<J: PrimInt + Sync>(
         v: FactorWidth2<'_, T, J>,
         policy: &ScalingPolicy,
         threads: Threads,
@@ -42,7 +42,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
     }
 
     /// An incidence `V` is dominant by shape; values are scaled under `policy`.
-    fn from_gram<J: PrimInt, S: AdjacencyLayout>(
+    fn from_gram<J: PrimInt + Sync, S: AdjacencyLayout>(
         cells: S,
         v: FactorWidth2<'_, T, J>,
         policy: &ScalingPolicy,
@@ -57,7 +57,7 @@ impl<T: Real, I: Index> Reduced<T, I> {
 
 impl<T: Real, I: Index> ReducedComplement<T, I> {
     /// As [`Reduced::reduce`], each block's side opposite `kept` eliminated first.
-    pub(crate) fn reduce_onto<J: PrimInt>(
+    pub(crate) fn reduce_onto<J: PrimInt + Sync>(
         input: BipartiteFactorWidth2<'_, T, J>,
         kept: Side,
         policy: ScalingPolicy,
