@@ -8,6 +8,7 @@ mod assembly;
 mod partition;
 
 use super::block::CoupledBlock;
+use super::forest::Forest;
 use crate::input::Canonical;
 use crate::order::{Listed, Order, Segment};
 use crate::storage::{tally_abs, OffDiagonal, Rows, UpperAdjacency};
@@ -17,7 +18,6 @@ pub(super) use assembly::{
     assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, StrictUpperTriangle,
 };
 use partition::Partition;
-use partition::UnionFind;
 
 /// An assembled `A` and its connected components, found from the same cells.
 pub(super) struct Partitioned<A, I> {
@@ -29,7 +29,7 @@ pub(super) struct Partitioned<A, I> {
 pub(super) fn of_csr<T: Real, J: PrimInt, I: Index>(
     csr: Canonical<'_, T, J>,
 ) -> Partitioned<Canonical<'_, T, J>, I> {
-    let mut sets = UnionFind::<I>::new(csr.n());
+    let mut sets = Forest::<I, ()>::new(csr.n());
     for i in 0..csr.n() {
         for (j, a) in csr.above(i) {
             if a != T::zero() {
