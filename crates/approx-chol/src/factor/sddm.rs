@@ -53,45 +53,6 @@ impl<T: Real, I: Index> Sddm<T, I> {
         Self { adjacency, closure }
     }
 
-    /// The Gremban cover of frustrated `M`, its surplus carried as `surplus` says.
-    fn gremban(
-        adjacency: &UpperAdjacency<T, I>,
-        block: &Grounding<T>,
-        surplus: CoverSurplus,
-    ) -> Self {
-        let n = adjacency.n();
-        // The cover acts as `M` on `[z; −z]`.
-        let rows = SddmRows::split(
-            Factored::Cover(surplus),
-            n,
-            n,
-            ONE,
-            block.surplus().map(<[T]>::to_vec),
-            |mut sums, i| {
-                for (j, &a) in adjacency.upper(i) {
-                    sums.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
-                }
-            },
-        );
-        let (adjacency, grounding) = rows.close();
-        Self::cover(adjacency, grounding, surplus)
-    }
-
-    /// A cover's closed `L`, whose ground twists as `surplus` says; with none the cover floats.
-    fn cover(
-        adjacency: UpperAdjacency<T, I>,
-        grounding: Grounding<T>,
-        surplus: CoverSurplus,
-    ) -> Self {
-        let closure = match grounding.surplus() {
-            Some(ground) if twists(surplus, ground, &adjacency) => {
-                Closure::Twisted(ground.iter().map(|&g| twist(g)).collect())
-            }
-            _ => Closure::Cover(grounding),
-        };
-        Self::new(adjacency, closure)
-    }
-
     /// Balanced on one sheet, frustrated on a cover's two.
     pub(super) fn balance(&self) -> Balance {
         match self.closure {
@@ -215,22 +176,34 @@ fn ground_edges<T: Real, I: Index>(
     }
 }
 
-/// What a block's Cholesky factors: `M` as it is, densely; or approximately its SDDM on one sheet, its Gremban cover carrying its surplus as said, or frustrated `M` signed.
+/// What a block's Cholesky factors: `M` as it is, densely; or approximately its SDDM on one sheet, its Gremban cover grounded or twisted, or frustrated `M` signed.
 #[derive(Clone, Copy)]
 pub(super) enum Factored {
     AsIs(Balance),
     Folded,
-    Cover(CoverSurplus),
+    /// Grounded as [`Closure::Cover`].
+    Cover,
+    /// Twisted as [`Closure::Twisted`].
+    TwistedCover,
     Signed,
 }
 
 impl Factored {
-    /// For a block of `n` vertices, a bipartite one's kept side, under `config`: dense up to its `exact_max_dim`, else folded when balanced, else by its frustrated route.
-    pub(super) fn of(config: &Config, balance: Balance, n: usize) -> Self {
+    /// For a block of `n` vertices, a bipartite one's kept side, under `config`: dense up to its `exact_max_dim`, else folded when balanced, else by its frustrated route, a cover twisting as [`twists`] decides from `M`'s `ground` and `off_diagonal`.
+    pub(super) fn of<T: Real>(
+        config: &Config,
+        balance: Balance,
+        n: usize,
+        ground: Option<&[T]>,
+        off_diagonal: impl FnOnce(f64) -> f64,
+    ) -> Self {
         match (config.dense(n), balance, config.frustrated) {
             (true, _, _) => Self::AsIs(balance),
             (false, Balance::Balanced, _) => Self::Folded,
-            (false, Balance::Frustrated, FrustratedRoute::Cover(surplus)) => Self::Cover(surplus),
+            (false, Balance::Frustrated, FrustratedRoute::Cover(surplus)) => match ground {
+                Some(ground) if twists(surplus, ground, off_diagonal) => Self::TwistedCover,
+                _ => Self::Cover,
+            },
             (false, Balance::Frustrated, FrustratedRoute::Signed) => Self::Signed,
         }
     }
@@ -239,7 +212,7 @@ impl Factored {
     pub(super) fn layout(self) -> Layout {
         match self {
             Self::AsIs(Balance::Balanced) | Self::Folded => Layout::Sheet,
-            Self::Cover(_) => Layout::Cover,
+            Self::Cover | Self::TwistedCover => Layout::Cover,
             Self::AsIs(Balance::Frustrated) | Self::Signed => Layout::SignedPairs,
         }
     }
@@ -251,7 +224,16 @@ impl Factored {
         grounding: Grounding<T>,
     ) -> Arm<T, I> {
         match self {
-            Self::Cover(surplus) => Arm::Sddm(Sddm::gremban(&adjacency, &grounding, surplus)),
+            Self::Cover | Self::TwistedCover => {
+                // The cover acts as `M` on `[z; −z]`.
+                let (n, ground) = (adjacency.n(), grounding.surplus().map(<[T]>::to_vec));
+                let rows = SddmRows::split(self, n, n, ONE, ground, |mut sums, i| {
+                    for (j, &a) in adjacency.upper(i) {
+                        sums.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
+                    }
+                });
+                rows.arm()
+            }
             _ => self.closed(adjacency, grounding),
         }
     }
@@ -265,7 +247,12 @@ impl Factored {
         match self {
             Self::AsIs(balance) => Arm::AsIs(AsIs::new(adjacency, balance, grounding)),
             Self::Folded => Arm::Sddm(Sddm::new(adjacency, Closure::Folded(grounding))),
-            Self::Cover(surplus) => Arm::Sddm(Sddm::cover(adjacency, grounding, surplus)),
+            Self::Cover => Arm::Sddm(Sddm::new(adjacency, Closure::Cover(grounding))),
+            Self::TwistedCover => {
+                let ground = grounding.surplus().expect("a twisted cover has a ground");
+                let twists = ground.iter().map(|&g| twist(g)).collect();
+                Arm::Sddm(Sddm::new(adjacency, Closure::Twisted(twists)))
+            }
             Self::Signed => Arm::Signed(SignedWdd::new(adjacency, grounding)),
         }
     }
@@ -521,19 +508,19 @@ impl<T: Real, I: Index> ColumnSums<'_, T, I> {
 /// [`CoverSurplus::Auto`]'s twist band, in `ε`.
 const TWIST_BAND: f64 = 5.0;
 
-/// Whether a cover's copies [`twist`] instead of grounding, as `surplus` says; `Auto` weighs its rows' ground against it plus `Σ|a_ij|`, both `ε`-scaled so neither overflows, each vertex's `ground` summed once per copy: a cover doubles both sums, so `M`'s decide as its own.
-fn twists<T: Real, I: Index>(
+/// Whether a cover's copies [`twist`] instead of grounding, as `surplus` says; `Auto` weighs `M`'s `ground` against it plus `off_diagonal(scale)`, `scale · Σ|a_ij|` over both triangles, both `ε`-scaled so neither overflows: a cover doubles both, so `M`'s decide as its own.
+fn twists<T: Real>(
     surplus: CoverSurplus,
     ground: &[T],
-    adjacency: &UpperAdjacency<T, I>,
+    off_diagonal: impl FnOnce(f64) -> f64,
 ) -> bool {
     match surplus {
         CoverSurplus::GroundVertex => false,
         CoverSurplus::SurplusEdges => true,
         CoverSurplus::Auto => {
             let epsilon = widen(T::epsilon());
-            let total = crate::repeated_lane_sum::<T, 2>(ground, epsilon);
-            let trace = total + adjacency.scaled_abs_total(epsilon);
+            let total = crate::lane_sum(ground, epsilon);
+            let trace = total + off_diagonal(epsilon);
             total <= TWIST_BAND * epsilon * trace
         }
     }
@@ -586,6 +573,11 @@ mod tests {
 
     /// A frustrated 9-cycle of `2^1020` plus `extra` on vertex 0: `Σ|a_ij|` overflows `f64`, the band `≈ 2^974.5` does not.
     fn cycle_cover(extra: f64) -> Sddm<f64, u32> {
+        let config = Config {
+            exact_max_dim: 0,
+            frustrated: FrustratedRoute::Cover(CoverSurplus::Auto),
+            ..Config::default()
+        };
         let n = 9;
         let indices: Vec<u32> = [1, n - 1].into_iter().chain(2..n).collect();
         let ptrs: Vec<usize> = [0]
@@ -597,7 +589,18 @@ mod tests {
         let signed = UpperAdjacency::new(Rows::new(ptrs, indices, values, n as usize));
         let surplus = [extra].into_iter().chain([0.0; 8]).collect();
         let grounding = Grounding::of(surplus);
-        Sddm::gremban(&signed, &grounding, CoverSurplus::Auto)
+        let off_diagonal = |scale| signed.scaled_abs_total(scale);
+        let factored = Factored::of(
+            &config,
+            Balance::Frustrated,
+            n as usize,
+            grounding.surplus(),
+            off_diagonal,
+        );
+        let Arm::Sddm(cover) = factored.arm(signed, grounding) else {
+            panic!("a frustrated block's cover is an SDDM")
+        };
+        cover
     }
 
     #[test]

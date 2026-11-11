@@ -253,7 +253,15 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
         let draws = streams.cholesky();
         let (elimination, cholesky) = match off_diagonal {
             OffDiagonal::General(adjacency) => {
-                let arm = Factored::of(config, balance, adjacency.n()).arm(adjacency, grounding);
+                let off_diagonal = |scale| adjacency.scaled_abs_total(scale);
+                let factored = Factored::of(
+                    config,
+                    balance,
+                    adjacency.n(),
+                    grounding.surplus(),
+                    off_diagonal,
+                );
+                let arm = factored.arm(adjacency, grounding);
                 (None, Cholesky::factor(arm, draws, tail(0), reused))
             }
             OffDiagonal::Bipartite(cross) => {
