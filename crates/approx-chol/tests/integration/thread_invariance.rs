@@ -1,13 +1,16 @@
-use approx_chol::input::{CsrRef, Side};
+use std::num::NonZeroUsize;
+
+use approx_chol::input::{CsrRef, FactorWidth2, Side};
 use approx_chol::ScalingOutcome::Unsettled;
 use approx_chol::{
-    ApproxInverse, Complement, Component, Config, CoverSurplus, FrustratedRoute, Real,
-    ScalingPolicy, SchurMode, Sgdd,
+    ApproxInverse, BuildError, Complement, Component, Config, CoverSurplus, FrustratedRoute, Real,
+    ScalingPolicy, SchurMode, Sgdd, Threads,
 };
 use rstest::rstest;
 
 use crate::common::bipartite::Bipartite;
 use crate::common::bits::bits;
+use crate::common::disjoint::Disjoint;
 use crate::common::grid::grid;
 use crate::common::lcg::Lcg;
 use crate::common::scaling::dld;
@@ -110,4 +113,71 @@ fn scaled_grid<T: Real>() -> String {
 #[case::f32(scaled_grid::<f32>)]
 fn a_relaxation_is_bit_identical_across_thread_counts(#[case] factors: fn() -> String) {
     threads::across_pools(factors);
+}
+
+/// Gram components short of dominance, alternately certified by a null vector and relaxed, each reduced in its task: the factor and its solve agree bit for bit across budgets, `Count(6)` among them, and exactly the relaxed ones stop unsettled when relax `stops` at once.
+fn gram_blocks(sizes: &[usize], policy: ScalingPolicy, stops: bool) -> (String, Vec<u64>) {
+    let gram = Disjoint::new(sizes, |k| k % 2 == 0);
+    let six = Threads::Count(NonZeroUsize::new(6).unwrap());
+    let build = |threads| {
+        (Sgdd::reduce(gram.view(), policy, threads).unwrap()).factor(Config::default(), threads)
+    };
+    let factor = build(six);
+    let shown = format!("{factor:?}");
+    for threads in threads::BUDGETS {
+        let built = format!("{:?}", build(threads));
+        assert_eq!(built, shown, "built at {threads:?}");
+    }
+    assert_eq!(factor.components().len(), sizes.len());
+    for (k, c) in factor.components().enumerate() {
+        let unsettled = (c.clamp()).is_some_and(|c| c.scaling == Unsettled);
+        assert_eq!(unsettled, stops && k % 2 == 1, "component {k}");
+    }
+    let b: Vec<f64> = (0..factor.n())
+        .map(|i| ((i * 7919) % 101) as f64 / 50.0 - 1.0)
+        .collect();
+    (shown, bits(&factor.solve(&b).unwrap()))
+}
+
+/// 600 ten-vertex stars, past the split grain, four of whose centers sum their absolute row past `MAX/4` though each cell and diagonal is in range: the reduction of a block, not the assembly, fails, at the first such center in component order under every budget.
+#[test]
+fn a_gram_fails_at_its_first_failing_block_across_thread_counts() {
+    let failing = [7, 150, 151, 599];
+    let (mut a, mut b, mut x, mut y) = (vec![], vec![], vec![], vec![]);
+    for k in 0..600u32 {
+        for leaf in 1..10 {
+            let (x_k, y_k) = match failing.contains(&k) {
+                true => (2e153, -6e153),
+                false => (1.0, -0.5),
+            };
+            a.push(10 * k);
+            b.push(10 * k + leaf);
+            x.push(x_k);
+            y.push(y_k);
+        }
+    }
+    let gram = FactorWidth2::new(6000, (&a, &x), (&b, &y)).unwrap();
+    let first = BuildError::OutOfRange { vertex: 70 };
+    threads::across_pools(|| {
+        for threads in threads::BUDGETS {
+            let error = Sgdd::reduce(gram, ScalingPolicy::default(), threads).err();
+            assert_eq!(error, Some(first), "{threads:?}");
+        }
+    });
+}
+
+/// 200 small blocks, past `extract`'s grain.
+const MANY: [usize; 200] = [64; 200];
+/// Two relaxed blocks whose products pass the gather grain (2¹³ multiply-adds) under the `Count(3)` that `extract` leaves each task of `Count(6)`.
+const NESTED: [usize; 8] = [64, 3000, 64, 3000, 64, 64, 64, 64];
+
+#[rstest]
+#[case::at_once(ScalingPolicy::new(1e-9, 0).unwrap(), true)]
+#[case::settled(ScalingPolicy::default(), false)]
+fn gram_blocks_are_bit_identical_across_thread_counts(
+    #[values(&MANY[..], &NESTED[..])] sizes: &[usize],
+    #[case] policy: ScalingPolicy,
+    #[case] stops: bool,
+) {
+    threads::across_pools(|| gram_blocks(sizes, policy, stops));
 }
