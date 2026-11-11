@@ -234,8 +234,7 @@ fn coupling<T: Real, I: Index>(column: &Column<T, I>, component: &[I]) -> Option
     couples.then_some(c.index())
 }
 
-/// `u_b / u_a`, undivided: reversing swaps it exactly, and a closing cycle compares its halves.
-#[derive(Clone, Copy)]
+/// `u_b / u_a` across a link from `b` up to `a`, undivided: reversing swaps it exactly, and a closing cycle compares its halves.
 pub(in crate::sgdd) struct Ratio {
     num: f64,
     den: f64,
@@ -259,11 +258,8 @@ impl Potential for f64 {
     fn then(self, up: Self) -> Self {
         self * up
     }
-    fn reversed(r: Ratio) -> Ratio {
-        Ratio {
-            num: r.den,
-            den: r.num,
-        }
+    fn reversed(Ratio { num, den }: Ratio) -> Ratio {
+        Ratio { num: den, den: num }
     }
 }
 
@@ -274,6 +270,7 @@ fn join<I: Index>(forest: &mut Forest<I, f64>, a: usize, b: usize, k: f64, toler
         return false;
     }
     let ((ra, xa), (rb, xb)) = (forest.find(a), forest.find(b));
+    // `u_rb / u_ra = k·xa/xb`.
     let ratio = Ratio {
         num: k * xa,
         den: xb,

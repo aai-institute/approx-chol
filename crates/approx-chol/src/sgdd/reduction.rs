@@ -380,8 +380,8 @@ impl Potential for bool {
     fn then(self, up: Self) -> Self {
         self ^ up
     }
-    fn reversed(differ: Self) -> Self {
-        differ
+    fn reversed(link: Self) -> Self {
+        link
     }
 }
 

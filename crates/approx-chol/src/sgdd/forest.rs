@@ -5,7 +5,7 @@ pub(super) trait Potential: Copy {
     /// A vertex's potential to itself.
     const ROOT: Self;
     /// What a link from `b` up to `a` carries before it is stored.
-    type Link: Copy + Into<Self>;
+    type Link: Into<Self>;
     fn then(self, up: Self) -> Self;
     fn reversed(link: Self::Link) -> Self::Link;
 }
