@@ -90,7 +90,7 @@ pub mod input {
         Diagonal { row: usize },
         NotSquare { rows: usize, cols: usize },
         RowGap { row: usize },
-        ColumnMajor,
+        StoredByColumns,
     }
 
     pub enum Side { Left, Right }
@@ -105,13 +105,13 @@ pub mod input {
 order, and repeated columns, which sum; a triangle's diagonal is stored once, in it. A CSC
 triangle is passed as the CSR of the other, the arrays of a faer `SparseColMatRef` holding the lower triangle
 to `upper`. Only row-major storage converts: a sprs CSR view, a faer `SparseRowMatRef`, a
-nalgebra-sparse `CsrMatrix`; a sprs CSC view is `ColumnMajor`, and a CSC reaches `CsrRef` through
+nalgebra-sparse `CsrMatrix`; a sprs CSC view is `StoredByColumns`, and a CSC reaches `CsrRef` through
 its library's own conversion (`to_csr()`, `to_row_major()`, `CsrMatrix::from`). A sprs view
 converts when its pointers and indices share one type, sprs's default. A conversion's errors name
 each array by its source's field name (sprs `indptr`, `indices`, `data`; faer `row_ptr`,
 `col_idx`, `val`; nalgebra-sparse `row_offsets`, `col_indices`, `values`) through
 `CsrRef::named`; `new` is `named` with `CsrNames::CSR_REF`. `NotSquare`, `RowGap` and
-`ColumnMajor` arise only from conversions; `RowGap` is a faer matrix stored with gaps
+`StoredByColumns` arise only from conversions; `RowGap` is a faer matrix stored with gaps
 (`row_nnz` set). A first row pointer other than 0, an adapter's offset view
 included, is `RowPtrs { parameter, row: 0 }`. `OutOfRange` is a stated value that is not finite, or neither
 0 nor above the range floor; `Diagonal` a diagonal that is negative, past `MAX/4`, or zero beside
