@@ -75,6 +75,7 @@ fn input_error(error: InputError) -> PyErr {
         E::Diagonal { row } => ("diagonal", None, Some(row)),
         E::NotSquare { .. } => ("not_square", None, None),
         E::RowGap { row } => ("row_gap", None, Some(row)),
+        E::StoredByColumns => ("stored_by_columns", None, None),
         _ => return value_error(error),
     };
     PyErr::new::<raised::InputError, _>((error.to_string(), kind, parameter, position))

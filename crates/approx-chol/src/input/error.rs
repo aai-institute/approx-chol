@@ -89,6 +89,8 @@ pub enum InputError {
         /// The first row with unused slots.
         row: usize,
     },
+    /// A converted matrix is stored by columns; its library's own conversion to rows, sprs's `to_csr()`, makes the CSR it converts from.
+    StoredByColumns,
 }
 
 impl core::fmt::Display for InputError {
@@ -126,6 +128,10 @@ impl core::fmt::Display for InputError {
             ),
             Self::NotSquare { rows, cols } => write!(f, "matrix is not square ({rows}x{cols})"),
             Self::RowGap { row } => write!(f, "row {row} leaves unused slots after its entries"),
+            Self::StoredByColumns => write!(
+                f,
+                "matrix is stored by columns (CSC); convert it to CSR first, as with to_csr()"
+            ),
         }
     }
 }

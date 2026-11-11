@@ -49,19 +49,6 @@ fn faer_csr_with_full_row_counts_factorizes() {
     assert_solves_fixture(path_laplacian::<u32>(Some(cast_all(&spans))).as_ref());
 }
 
-/// A symmetric matrix's CSC arrays are its CSR arrays.
-#[test]
-fn faer_csc_factorizes() {
-    let symbolic = SymbolicSparseColMat::<u32>::new_checked(
-        N,
-        N,
-        cast_all(&ROW_PTRS),
-        None,
-        cast_all(&COL_INDICES),
-    );
-    assert_solves_fixture(SparseColMat::new(symbolic, VALUES.to_vec()).as_ref());
-}
-
 /// A `rows × cols` grid grounded at vertex 0, so its matrix is SDDM and nonsingular.
 fn grounded_grid(rows: usize, cols: usize) -> Graph {
     let mut graph = grid(rows, cols);
@@ -69,9 +56,9 @@ fn grounded_grid(rows: usize, cols: usize) -> Graph {
     graph
 }
 
-/// A grounded grid stored in faer's row and column layouts, and in the same arrays as a `CsrRef`.
+/// A grounded grid stored in faer's row layout, in its column layout converted by `to_row_major`, and in the same arrays as a `CsrRef`.
 #[test]
-fn faer_row_and_column_storage_factor_as_the_same_csr() {
+fn faer_rows_and_columns_converted_to_rows_factor_as_the_same_csr() {
     let graph = grounded_grid(9, 7);
     let (row_ptrs, col_indices, values) = graph.csr(false);
     let n = graph.n;
@@ -94,32 +81,8 @@ fn faer_row_and_column_storage_factor_as_the_same_csr() {
     };
     let direct = solve(CsrRef::new(n, &row_ptrs, &col_indices, &values).expect("valid"));
     assert_eq!(solve(rows.as_ref().try_into().expect("valid")), direct);
-    assert_eq!(solve(columns.as_ref().try_into().expect("valid")), direct);
-}
-
-/// The identity stored by columns, its unused slots holding `-1`s that would connect the two vertices if read.
-#[test]
-fn faer_try_from_columns_with_unused_slots_returns_error() {
-    let symbolic = SymbolicSparseColMat::<u32>::new_checked(
-        2,
-        2,
-        vec![0, 2, 4],
-        Some(vec![1, 1]),
-        vec![0, 1, 1, 0],
-    );
-    let mat = SparseColMat::new(symbolic, vec![1.0, -1.0, 1.0, -1.0]);
-    let err = CsrRef::try_from(mat.as_ref()).expect_err("unused slots must be rejected");
-    assert_eq!(err, InputError::RowGap { row: 0 });
-}
-
-/// A column-major matrix's shape is checked as stored, before its arrays are read as its transpose's.
-#[test]
-fn faer_try_from_non_square_columns_returns_error() {
-    let symbolic =
-        SymbolicSparseColMat::<u32>::new_checked(3, 4, vec![0, 1, 2, 3, 3], None, vec![0, 1, 2]);
-    let mat = SparseColMat::new(symbolic, vec![1.0, 1.0, 1.0]);
-    let err = CsrRef::try_from(mat.as_ref()).expect_err("non-square matrix must be rejected");
-    assert_eq!(err, InputError::NotSquare { rows: 3, cols: 4 });
+    let converted = columns.as_ref().to_row_major().expect("allocates");
+    assert_eq!(solve(converted.as_ref().try_into().expect("valid")), direct);
 }
 
 /// The spare slots hold `-1`s that would connect vertices 0 and 3 if read.

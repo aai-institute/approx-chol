@@ -153,6 +153,7 @@ UNREACHABLE = {
         "repeated_row": "FactorWidth2 only",
         "outside_triangle": "TriangleCsrRef only",
         "row_gap": "the faer adapter only",
+        "stored_by_columns": "the sprs adapter only",
     },
     "BuildError": {
         "too_large": "an f64 block of 2**52 vertices",
