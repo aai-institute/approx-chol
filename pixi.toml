@@ -66,6 +66,8 @@ deny = "cargo deny --locked check"
 semver = "cargo semver-checks --package approx-chol --all-features"
 # Writes the public-surface snapshot; `--check` diffs against it, as CI does.
 public-api = "./scripts/public-api.sh"
+# Src code, docs and test lines against the merge base with main; fails a refactor/… branch whose code or tests grow.
+size = "./scripts/size.sh"
 # Mutants in compiled-out code survive trivially, so serde is enabled and sprs/faer adapters excluded.
 mutants = "cargo mutants -C --locked --features serde"
 
