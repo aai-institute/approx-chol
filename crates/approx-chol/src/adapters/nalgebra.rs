@@ -1,16 +1,23 @@
 //! nalgebra-sparse `CsrMatrix`es as [`CsrRef`] views and nalgebra matrices as blocks of right-hand sides.
 
 use super::square;
-use crate::input::{CsrRef, InputError};
+use crate::input::{CsrNames, CsrRef, InputError};
 use crate::{MatrixMut, Real};
+
+/// nalgebra-sparse's names of a `CsrMatrix`'s arrays, its accessors'.
+const NAMES: CsrNames = CsrNames {
+    row_ptrs: "row_offsets",
+    col_indices: "col_indices",
+    values: "values",
+};
 
 impl<'a, T: Real> TryFrom<&'a nalgebra_sparse::CsrMatrix<T>> for CsrRef<'a, T, usize> {
     type Error = InputError;
 
     fn try_from(matrix: &'a nalgebra_sparse::CsrMatrix<T>) -> Result<Self, InputError> {
         let n = square(matrix.nrows(), matrix.ncols())?;
-        let (row_ptrs, col_indices, values) = matrix.csr_data();
-        CsrRef::new(n, row_ptrs, col_indices, values)
+        let (row_offsets, col_indices, values) = matrix.csr_data();
+        CsrRef::named(n, row_offsets, col_indices, values, NAMES)
     }
 }
 

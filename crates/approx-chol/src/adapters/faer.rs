@@ -11,8 +11,15 @@ use num_traits::PrimInt;
 
 use super::square;
 use crate::factor::{Kernel, Slices};
-use crate::input::{CsrRef, InputError};
+use crate::input::{CsrNames, CsrRef, InputError};
 use crate::{ApplyError, ApproxInverse, MatrixMut, MemStack, Real, StackReq, Threads};
+
+/// faer's names of a `SparseRowMatRef`'s arrays.
+const NAMES: CsrNames = CsrNames {
+    row_ptrs: "row_ptr",
+    col_indices: "col_idx",
+    values: "val",
+};
 
 impl<'a, T: Real, I: faer::Index + PrimInt> TryFrom<SparseRowMatRef<'a, I, T>>
     for CsrRef<'a, T, I>
@@ -30,7 +37,7 @@ impl<'a, T: Real, I: faer::Index + PrimInt> TryFrom<SparseRowMatRef<'a, I, T>>
         // faer may keep spare capacity past the last row.
         let end = row_ptrs[n].zx();
         let (col_indices, values) = (&symbolic.col_idx()[..end], &matrix.val()[..end]);
-        CsrRef::new(n, row_ptrs, col_indices, values)
+        CsrRef::named(n, row_ptrs, col_indices, values, NAMES)
     }
 }
 

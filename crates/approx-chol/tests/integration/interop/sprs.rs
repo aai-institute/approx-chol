@@ -35,9 +35,9 @@ fn sprs_csc_is_rejected_as_stored_by_columns_and_converts_by_to_csr() {
     assert_solves_fixture(csc.to_csr().view());
 }
 
-/// Rows 2..4 of a 4x2 matrix are a square view whose row pointers start past zero.
+/// Rows 2..4 of a 4x2 matrix are a square view whose `indptr` starts past zero.
 #[test]
-fn sprs_outer_slice_with_offset_rows_is_rejected() {
+fn sprs_outer_slice_with_offset_rows_is_rejected_by_indptr() {
     let mat = CsMatI::<f64, u32>::new(
         (4, 2),
         vec![0, 1, 2, 4, 6],
@@ -48,8 +48,21 @@ fn sprs_outer_slice_with_offset_rows_is_rejected() {
     assert_eq!(
         err,
         InputError::RowPtrs {
-            parameter: "row_ptrs",
+            parameter: "indptr",
             row: 0
+        }
+    );
+}
+
+#[test]
+fn sprs_nan_is_rejected_by_data() {
+    let mat = CsMatI::<f64, u32>::new((2, 2), vec![0, 1, 2], vec![0, 1], vec![1.0, f64::NAN]);
+    let err = CsrRef::try_from(mat.view()).expect_err("NaN is rejected");
+    assert_eq!(
+        err,
+        InputError::OutOfRange {
+            parameter: "data",
+            entry: 1
         }
     );
 }

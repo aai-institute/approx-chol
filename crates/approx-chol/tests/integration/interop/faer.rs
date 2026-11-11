@@ -121,10 +121,22 @@ fn faer_try_from_offset_rows_returns_error() {
     assert_eq!(
         err,
         InputError::RowPtrs {
-            parameter: "row_ptrs",
+            parameter: "row_ptr",
             row: 0
         }
     );
+}
+
+#[test]
+fn faer_nan_is_rejected_by_val() {
+    let (ptrs, indices, values) = (vec![0u32, 1, 2], vec![0u32, 1], vec![1.0, f64::NAN]);
+    let expected = InputError::OutOfRange {
+        parameter: "val",
+        entry: 1,
+    };
+    let symbolic = SymbolicSparseRowMat::new_checked(2, 2, ptrs, None, indices);
+    let rows = SparseRowMat::new(symbolic, values);
+    assert_eq!(CsrRef::try_from(rows.as_ref()).unwrap_err(), expected);
 }
 
 #[test]
