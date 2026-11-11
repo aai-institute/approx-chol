@@ -8,6 +8,26 @@ use super::error::{length, value_in_range, InputError};
 use super::index;
 use crate::{diagonal_in_range, in_range, Real};
 
+/// The caller's names of a CSR's three arrays, by which every [`InputError`] of [`CsrRef::named`] names one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CsrNames {
+    /// The row pointers' name.
+    pub row_ptrs: &'static str,
+    /// The column indices' name.
+    pub col_indices: &'static str,
+    /// The values' name.
+    pub values: &'static str,
+}
+
+impl CsrNames {
+    /// The names of [`CsrRef::new`]'s and [`TriangleCsrRef::upper`]'s parameters.
+    pub const CSR_REF: Self = Self {
+        row_ptrs: "row_ptrs",
+        col_indices: "col_indices",
+        values: "values",
+    };
+}
+
 /// Borrowed CSR of a symmetric `A`, checked whole by [`CsrRef::new`].
 #[derive(Clone, Copy, Debug)]
 pub struct CsrRef<'a, T, I = u32>(pub(crate) CsrArrays<'a, T, I>);
@@ -20,8 +40,21 @@ impl<'a, T: Real, I: PrimInt> CsrRef<'a, T, I> {
         col_indices: &'a [I],
         values: &'a [T],
     ) -> Result<Self, InputError> {
-        let arrays = CsrArrays::shaped(n, row_ptrs, col_indices, values)?;
-        arrays.canonical()?.check_mirrors()?;
+        Self::named(n, row_ptrs, col_indices, values, CsrNames::CSR_REF)
+    }
+
+    /// [`CsrRef::new`], each array named in an error by its name in `names`.
+    pub fn named(
+        n: usize,
+        row_ptrs: &'a [I],
+        col_indices: &'a [I],
+        values: &'a [T],
+        names: CsrNames,
+    ) -> Result<Self, InputError> {
+        let arrays = CsrArrays::shaped(n, row_ptrs, col_indices, values, names)?;
+        arrays
+            .canonical(names.values)?
+            .check_mirrors(names.values)?;
         Ok(Self(arrays))
     }
 }
@@ -38,8 +71,9 @@ impl<'a, T: Real, I: PrimInt> TriangleCsrRef<'a, T, I> {
         col_indices: &'a [I],
         values: &'a [T],
     ) -> Result<Self, InputError> {
-        let arrays = CsrArrays::shaped(n, row_ptrs, col_indices, values)?;
-        arrays.canonical()?.check_upper()?;
+        let names = CsrNames::CSR_REF;
+        let arrays = CsrArrays::shaped(n, row_ptrs, col_indices, values, names)?;
+        arrays.canonical(names.values)?.check_upper(names.values)?;
         Ok(Self(arrays))
     }
 }
@@ -67,27 +101,29 @@ impl<'a, T: Real, I: PrimInt> CsrArrays<'a, T, I> {
         row_ptrs: &'a [I],
         col_indices: &'a [I],
         values: &'a [T],
+        names: CsrNames,
     ) -> Result<Self, InputError> {
-        length("row_ptrs", n.saturating_add(1), row_ptrs.len())?;
-        length("values", col_indices.len(), values.len())?;
-        let row_ptr_last = representable(row_ptrs, n)?;
+        length(names.row_ptrs, n.saturating_add(1), row_ptrs.len())?;
+        length(names.values, col_indices.len(), values.len())?;
+        let pointer = |entry| representable(names.row_ptrs, row_ptrs, entry);
+        let row_ptr_last = pointer(n)?;
         if row_ptrs[0] != I::zero() {
-            representable(row_ptrs, 0)?;
+            pointer(0)?;
             return Err(InputError::RowPtrs {
-                parameter: "row_ptrs",
+                parameter: names.row_ptrs,
                 row: 0,
             });
         }
-        length("col_indices", row_ptr_last, col_indices.len())?;
+        length(names.col_indices, row_ptr_last, col_indices.len())?;
         // From 0 and in order up to a decrease, only the pointer after it can be negative.
         if let Some(row) = (0..n).find(|&i| row_ptrs[i] > row_ptrs[i + 1]) {
-            representable(row_ptrs, row + 1)?;
+            pointer(row + 1)?;
             return Err(InputError::RowPtrs {
-                parameter: "row_ptrs",
+                parameter: names.row_ptrs,
                 row,
             });
         }
-        let order = match is_canonical(row_ptrs, col_indices)? {
+        let order = match is_canonical(names.col_indices, row_ptrs, col_indices)? {
             true => Order::Canonical,
             false => Order::Unsorted,
         };
@@ -104,23 +140,24 @@ impl<'a, T: Real, I: PrimInt> CsrArrays<'a, T, I> {
     }
 
     /// Unsorted rows are rewritten here, at construction to check them and again to factor: keeping the copy would cost `Input` its `Copy`.
-    fn canonical(&self) -> Result<Canonical<'a, T, I>, InputError> {
+    fn canonical(&self, values: &'static str) -> Result<Canonical<'a, T, I>, InputError> {
         match self.order {
             Order::Canonical => Ok(Canonical {
                 row_ptrs: Cow::Borrowed(self.row_ptrs),
                 col_indices: Cow::Borrowed(self.col_indices),
                 values: Cow::Borrowed(self.values),
             }),
-            Order::Unsorted => rewrite(self),
+            Order::Unsorted => rewrite(values, self),
         }
     }
 }
 
-fn representable<I: PrimInt>(row_ptrs: &[I], entry: usize) -> Result<usize, InputError> {
-    (row_ptrs[entry].to_usize()).ok_or(InputError::IndexOutOfRange {
-        parameter: "row_ptrs",
-        entry,
-    })
+fn representable<I: PrimInt>(
+    parameter: &'static str,
+    row_ptrs: &[I],
+    entry: usize,
+) -> Result<usize, InputError> {
+    (row_ptrs[entry].to_usize()).ok_or(InputError::IndexOutOfRange { parameter, entry })
 }
 
 /// A symmetric `A` in canonical rows; checked whenever reached from outside this module, as only [`Canonical::of`] is.
@@ -132,7 +169,8 @@ pub(crate) struct Canonical<'a, T: Clone, I: Clone> {
 
 impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
     pub(crate) fn of(arrays: CsrArrays<'a, T, I>) -> Self {
-        arrays.canonical().expect("checked when constructed")
+        let values = CsrNames::CSR_REF.values;
+        arrays.canonical(values).expect("checked when constructed")
     }
 
     pub(crate) fn n(&self) -> usize {
@@ -187,23 +225,23 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
     }
 
     /// Each nonzero `(i, j)`, `i < j`, its mirror found by a per-row cursor (binary search: +6-15% build).
-    fn check_mirrors(&self) -> Result<(), InputError> {
+    fn check_mirrors(&self, values: &'static str) -> Result<(), InputError> {
         let mut cursors = self.row_ptrs[..self.n()].to_vec();
         for row in 0..self.n() {
             let row_end = self.row_ptrs[row + 1];
             // Claimed like any mirror: claiming diagonals up front would skip those below.
-            let diagonal = self.claim(&mut cursors, row, row)?;
+            let diagonal = self.claim(&mut cursors, row, row, values)?;
             let mut cursor = cursors[row];
             while cursor < row_end {
                 let at = index(cursor);
                 let col = index(self.col_indices[at]);
-                let upper = value_in_range("values", &self.values, at)?;
+                let upper = value_in_range(values, &self.values, at)?;
                 cursor = cursor + I::one();
                 // Duplicates can coalesce to exactly zero, which needs no mirror.
                 if upper == T::zero() {
                     continue;
                 }
-                let lower = self.claim(&mut cursors, col, row)?;
+                let lower = self.claim(&mut cursors, col, row, values)?;
                 if !approximately_equal(upper, lower) {
                     return Err(InputError::NotSymmetric { row });
                 }
@@ -216,7 +254,13 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
     }
 
     /// Advances row `row`'s cursor to `col`; a merge-join only because each entry is claimed once. Stored zeros count as absent.
-    fn claim(&self, cursors: &mut [I], row: usize, col: usize) -> Result<T, InputError> {
+    fn claim(
+        &self,
+        cursors: &mut [I],
+        row: usize,
+        col: usize,
+        values: &'static str,
+    ) -> Result<T, InputError> {
         let row_end = self.row_ptrs[row + 1];
         let mut cursor = cursors[row];
         let mut found = T::zero();
@@ -226,7 +270,7 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
             if j > col {
                 break;
             }
-            let value = value_in_range("values", &self.values, at)?;
+            let value = value_in_range(values, &self.values, at)?;
             cursor = cursor + I::one();
             if j == col {
                 found = value;
@@ -242,7 +286,7 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
     }
 
     /// Upper storage is symmetric by shape: no mirror is found, and a nonzero below the diagonal is rejected.
-    fn check_upper(&self) -> Result<(), InputError> {
+    fn check_upper(&self, values: &'static str) -> Result<(), InputError> {
         // Row `j`'s edges to rows above it are stored in those rows, so they are marked ahead.
         let mut coupled_above = vec![false; self.n()];
         for row in 0..self.n() {
@@ -250,7 +294,7 @@ impl<'a, T: Real, I: PrimInt> Canonical<'a, T, I> {
             let span = self.span(row);
             for (at, &col) in span.clone().zip(&self.col_indices[span]) {
                 let col = index(col);
-                let value = value_in_range("values", &self.values, at)?;
+                let value = value_in_range(values, &self.values, at)?;
                 if value == T::zero() {
                     continue;
                 }
@@ -294,7 +338,11 @@ fn approximately_equal<T: Real>(left: T, right: T) -> bool {
 }
 
 /// Reads no value, sparing a stream: the checks after it read each. Accumulated, not short-circuited: the `all` form measured 0.4-2% slower.
-fn is_canonical<I: PrimInt>(row_ptrs: &[I], col_indices: &[I]) -> Result<bool, InputError> {
+fn is_canonical<I: PrimInt>(
+    parameter: &'static str,
+    row_ptrs: &[I],
+    col_indices: &[I],
+) -> Result<bool, InputError> {
     // `None` means `I` cannot represent `n`, so every `I` value is below it.
     let limit = I::from(row_ptrs.len() - 1);
     let mut canonical = true;
@@ -304,7 +352,7 @@ fn is_canonical<I: PrimInt>(row_ptrs: &[I], col_indices: &[I]) -> Result<bool, I
         let columns = &col_indices[start..index(bounds[1])];
         if let Some(at) = columns.iter().position(|&j| outside(j)) {
             return Err(InputError::IndexOutOfRange {
-                parameter: "col_indices",
+                parameter,
                 entry: start + at,
             });
         }
@@ -317,6 +365,7 @@ fn is_canonical<I: PrimInt>(row_ptrs: &[I], col_indices: &[I]) -> Result<bool, I
 
 /// Sorts and coalesces each row into a copy in the input's own index type; each value, and each repeated column's sum, is checked at the caller's position.
 fn rewrite<'a, T: Real, I: PrimInt>(
+    parameter: &'static str,
     csr: &CsrArrays<'_, T, I>,
 ) -> Result<Canonical<'a, T, I>, InputError> {
     let nnz = csr.col_indices.len();
@@ -328,7 +377,7 @@ fn rewrite<'a, T: Real, I: PrimInt>(
     for bounds in csr.row_ptrs.windows(2) {
         entries.clear();
         for at in index(bounds[0])..index(bounds[1]) {
-            let value = value_in_range("values", csr.values, at)?;
+            let value = value_in_range(parameter, csr.values, at)?;
             entries.push((csr.col_indices[at], value, at));
         }
         // One row's degree, not nnz. Stable, so duplicates sum in stored order.
@@ -339,7 +388,7 @@ fn rewrite<'a, T: Real, I: PrimInt>(
             // A single entry was checked above; only a sum can leave the range here.
             if group.len() > 1 && !in_range(folded) {
                 return Err(InputError::OutOfRange {
-                    parameter: "values",
+                    parameter,
                     entry: at,
                 });
             }

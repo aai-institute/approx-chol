@@ -4,7 +4,7 @@ use num_traits::PrimInt;
 
 use crate::{in_range, Real};
 
-/// Why an input was rejected: the defect, and where it sits in the caller's terms. A `parameter` is the constructor's own name for the argument, an `entry` a position in it.
+/// Why an input was rejected: the defect, and where it sits in the caller's terms. A `parameter` is the constructor's own name for the argument, or the caller's by [`CsrRef::named`](crate::input::CsrRef::named), an `entry` a position in it.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputError {

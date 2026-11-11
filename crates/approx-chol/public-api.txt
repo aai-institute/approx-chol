@@ -74,8 +74,24 @@ pub fn approx_chol::input::BipartiteFactorWidth2<'a, T, I>::clone(&self) -> Self
 impl<'a, T: core::fmt::Debug, I: core::fmt::Debug> core::fmt::Debug for approx_chol::input::BipartiteFactorWidth2<'a, T, I>
 pub fn approx_chol::input::BipartiteFactorWidth2<'a, T, I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a, T: core::marker::Copy, I: core::marker::Copy> core::marker::Copy for approx_chol::input::BipartiteFactorWidth2<'a, T, I>
+pub struct approx_chol::input::CsrNames
+pub approx_chol::input::CsrNames::col_indices: &'static str
+pub approx_chol::input::CsrNames::row_ptrs: &'static str
+pub approx_chol::input::CsrNames::values: &'static str
+impl approx_chol::input::CsrNames
+pub const approx_chol::input::CsrNames::CSR_REF: Self
+impl core::clone::Clone for approx_chol::input::CsrNames
+pub fn approx_chol::input::CsrNames::clone(&self) -> Self
+impl core::cmp::Eq for approx_chol::input::CsrNames
+impl core::cmp::PartialEq for approx_chol::input::CsrNames
+pub fn approx_chol::input::CsrNames::eq(&self, &Self) -> bool
+impl core::fmt::Debug for approx_chol::input::CsrNames
+pub fn approx_chol::input::CsrNames::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for approx_chol::input::CsrNames
+impl core::marker::StructuralPartialEq for approx_chol::input::CsrNames
 pub struct approx_chol::input::CsrRef<'a, T, I>(_)
 impl<'a, T: approx_chol::Real, I: num_traits::int::PrimInt> approx_chol::input::CsrRef<'a, T, I>
+pub fn approx_chol::input::CsrRef<'a, T, I>::named(usize, &'a [I], &'a [I], &'a [T], approx_chol::input::CsrNames) -> core::result::Result<Self, approx_chol::input::InputError>
 pub fn approx_chol::input::CsrRef<'a, T, I>::new(usize, &'a [I], &'a [I], &'a [T]) -> core::result::Result<Self, approx_chol::input::InputError>
 impl<'a, T: approx_chol::Real, I: faer::Index + num_traits::int::PrimInt> core::convert::TryFrom<faer::sparse::csr::numeric::generic::SparseRowMat<faer::sparse::csr::numeric::Ref<'a, I, T>>> for approx_chol::input::CsrRef<'a, T, I>
 pub type approx_chol::input::CsrRef<'a, T, I>::Error = approx_chol::input::InputError
