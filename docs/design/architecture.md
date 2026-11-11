@@ -44,7 +44,7 @@ requirements are in `../requirements/`.
 
 | Part | Public, at the crate root | Crate-internal |
 |---|---|---|
-| Adapters, Rust | impls only: `TryFrom` faer, sprs and nalgebra-sparse matrices for `CsrRef`; `MatrixMut` for faer, nalgebra and ndarray blocks; faer's `LinOp`, `BiLinOp`, `Precond`, `BiPrecond` for `ApproxInverse`; `From<faer::Par>` for `Threads` | none |
+| Adapters, Rust | impls only: `TryFrom` faer, sprs and nalgebra-sparse row-major matrices for `CsrRef`; `MatrixMut` for faer, nalgebra and ndarray blocks; faer's `LinOp`, `BiLinOp`, `Precond`, `BiPrecond` for `ApproxInverse`; `From<faer::Par>` for `Threads` | none |
 | Adapters, Python | module `approx_chol`: `factorize`, `ApproxInverse`, `Component`, `Clamp`, `Config`, `ScalingPolicy`, `InputError`, `BuildError` | none |
 | Approximate inverse | `ApproxInverse`, `Component`, `Sgdd`, `Complement`, `Clamped`, `factorize`, `factorize_with`, `factorize_complement`, `MatrixMut` with its impls for slices, `Vec` and arrays, `ColumnMajor`, `Columns`, `ApplyError`, `LayoutError`, `dyn_stack`, `Header`, `Scalar`, `HeaderMismatch`; serde for `ApproxInverse` | none |
 | Reduction | `ScalingPolicy`, `Clamp`, `ScalingOutcome`, `BuildError` | `Reduced` (per component the WDD matrix with its grounding, its balance, gauge and key, the lift, its clamp), `Lift` with its scratch requirement, the bound on a lone pivot |

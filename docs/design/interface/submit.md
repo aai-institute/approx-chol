@@ -17,7 +17,15 @@ pub mod input {
     impl<'a, T: Real, I: PrimInt> CsrRef<'a, T, I> {
         pub fn new(n: usize, row_ptrs: &'a [I], col_indices: &'a [I], values: &'a [T])
             -> Result<Self, InputError>;
+        pub fn named(n: usize, row_ptrs: &'a [I], col_indices: &'a [I], values: &'a [T],
+            names: CsrNames) -> Result<Self, InputError>;
     }
+    pub struct CsrNames {
+        pub row_ptrs: &'static str,
+        pub col_indices: &'static str,
+        pub values: &'static str,
+    }
+    impl CsrNames { pub const CSR_REF: CsrNames; }
     impl<'a, T: Real, I: PrimInt> TriangleCsrRef<'a, T, I> {
         pub fn upper(n: usize, row_ptrs: &'a [I], col_indices: &'a [I], values: &'a [T])
             -> Result<Self, InputError>;
@@ -62,18 +70,8 @@ pub mod input {
     {
         type Error = InputError;
     }
-    #[cfg(feature = "faer")]
-    impl<'a, T: Real, I: PrimInt + faer::Index> TryFrom<faer::sparse::SparseColMatRef<'a, I, T>>
-        for CsrRef<'a, T, I>
-    {
-        type Error = InputError;
-    }
     #[cfg(feature = "nalgebra")]
     impl<'a, T: Real> TryFrom<&'a nalgebra_sparse::CsrMatrix<T>> for CsrRef<'a, T, usize> {
-        type Error = InputError;
-    }
-    #[cfg(feature = "nalgebra")]
-    impl<'a, T: Real> TryFrom<&'a nalgebra_sparse::CscMatrix<T>> for CsrRef<'a, T, usize> {
         type Error = InputError;
     }
 
@@ -92,6 +90,7 @@ pub mod input {
         Diagonal { row: usize },
         NotSquare { rows: usize, cols: usize },
         RowGap { row: usize },
+        ColumnMajor,
     }
 
     pub enum Side { Left, Right }
@@ -104,12 +103,16 @@ pub mod input {
 `T`. Every type is `Copy` and `Debug`; every error type implements `Error` and `Display`.
 `CsrRef::new`, `TriangleCsrRef::upper` and `TriangleCsrRef::lower` accept a row's entries in any
 order, and repeated columns, which sum; a triangle's diagonal is stored once, in it. A CSC
-triangle is passed as the CSR of the other, a faer `SparseColMatRef` holding the lower triangle
-to `upper`. A sprs CSC view, a faer `SparseColMatRef` and a nalgebra-sparse `CscMatrix` are read
-as the CSR of their transpose, positions in that storage. A sprs view converts when its pointers
-and indices share one type, sprs's default. `NotSquare` and `RowGap` arise only from conversions,
-whose `parameter` is the source's own field name; `RowGap` is a faer matrix stored with gaps
-(`row_nnz` or `col_nnz` set). A first row pointer other than 0, an adapter's offset view
+triangle is passed as the CSR of the other, the arrays of a faer `SparseColMatRef` holding the lower triangle
+to `upper`. Only row-major storage converts: a sprs CSR view, a faer `SparseRowMatRef`, a
+nalgebra-sparse `CsrMatrix`; a sprs CSC view is `ColumnMajor`, and a CSC reaches `CsrRef` through
+its library's own conversion (`to_csr()`, `to_row_major()`, `CsrMatrix::from`). A sprs view
+converts when its pointers and indices share one type, sprs's default. A conversion's errors name
+each array by its source's field name (sprs `indptr`, `indices`, `data`; faer `row_ptr`,
+`col_idx`, `val`; nalgebra-sparse `row_offsets`, `col_indices`, `values`) through
+`CsrRef::named`; `new` is `named` with `CsrNames::CSR_REF`. `NotSquare`, `RowGap` and
+`ColumnMajor` arise only from conversions; `RowGap` is a faer matrix stored with gaps
+(`row_nnz` set). A first row pointer other than 0, an adapter's offset view
 included, is `RowPtrs { parameter, row: 0 }`. `OutOfRange` is a stated value that is not finite, or neither
 0 nor above the range floor; `Diagonal` a diagonal that is negative, past `MAX/4`, or zero beside
 an edge. `VertexCountOverflow` is a `BipartiteFactorWidth2` whose sides' rows
@@ -149,9 +152,12 @@ variant; `kind`, `parameter` and `position` are for matching.
   exact terms, for reading, not matching; whether an index or a value is wrong is the variant. A
   bipartite form numbers its vertices left side first, so a vertex is a position on both sides.
 - **`#[non_exhaustive]`:** variants can be added without a breaking release.
-- **sprs, faer and nalgebra-sparse through `TryFrom` into `CsrRef`:** their matrices are
-  compressed storage; a symmetric matrix's CSC storage is the CSR of its transpose, so the column
-  forms, faer's and nalgebra-sparse's main ones, convert too.
+- **sprs, faer and nalgebra-sparse through `TryFrom` into `CsrRef`, row-major only:** their CSR
+  storage is a `CsrRef`'s, borrowed. A CSC is not read as its transpose: symmetry is checked to a
+  tolerance, so a nearly symmetric matrix's transpose is another matrix the check accepts, and the
+  build would factor that one (#472, as Python's #432); the caller's conversion copies once.
+- **Names passed in, `CsrRef::named`:** each check names the array it finds wrong as it raises
+  the error, so no error is renamed afterwards and each source's names have one owner.
 - **Any order and repeated columns:** they store the same matrix; Submit judges the matrix, not
   its storage.
 - **One `TriangleCsrRef`, `upper` and `lower`:** both triangles carry the same fact, so one type;
@@ -163,8 +169,7 @@ variant; `kind`, `parameter` and `position` are for matching.
   networkx's Laplacians among them; within, the one consumer of the other forms, calls Rust. A
   Python input object would be one more step that carries nothing. Arrays held without scipy
   pass as an object with a CSR's four attributes.
-- **Python: a CSC through `tocsr()`, not as its transpose:** symmetry is checked to a tolerance,
-  so a nearly symmetric CSC's transpose is another matrix the check accepts; read as its
-  transpose it would factor that one (#432).
+- **Python: a CSC through `tocsr()`, not as its transpose:** for the reason the Rust conversions
+  take rows only (#432).
 - **`InputError` a `ValueError`:** existing `except ValueError` keeps working; `kind` and the
   position mirror the Rust variant.
