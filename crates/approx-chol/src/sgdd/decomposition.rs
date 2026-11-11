@@ -307,7 +307,7 @@ impl<'p, I, T, B> Cut<'p, I, T, B> {
     }
 
     /// Each block as `f` makes it from its component's index and itself, in turn, up to the first error.
-    pub(super) fn try_map_in_place<C>(
+    pub(super) fn try_map<C>(
         self,
         mut f: impl FnMut(usize, B) -> Result<C, BuildError>,
     ) -> Result<Cut<'p, I, T, C>, BuildError> {

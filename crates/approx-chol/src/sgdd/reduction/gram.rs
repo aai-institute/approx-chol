@@ -166,7 +166,7 @@ fn ground_or_float<'p, T: Real, J: PrimInt, I: Index>(
         stated: &stated,
         certified,
     };
-    settling.try_map_in_place(|c, block| match block {
+    settling.try_map(|c, block| match block {
         Settling::Pending(folded) => folded.settle((ones[c], trace[c]), &gram),
         Settling::Settled(block) => Ok(block),
     })
