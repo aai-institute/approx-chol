@@ -1,4 +1,4 @@
-use approx_chol::input::{CsrRef, InputError};
+use approx_chol::input::{CsrNames, CsrRef, InputError};
 use approx_chol::{
     ApproxInverse, BuildError, Config, CoverSurplus, FrustratedRoute, Header, MatrixMut, Sampling,
     ScalingOutcome, ScalingPolicy, Sgdd, Threads,
@@ -28,37 +28,9 @@ mod raised {
     pyo3::import_exception!(approx_chol, BuildError);
 }
 
-/// `error` as an `InputError`, its slice by scipy's name, in the message too; a variant added in Rust since is a plain `ValueError` until it has an arm.
+/// `error` as an `InputError`; a variant added in Rust since is a plain `ValueError` until it has an arm.
 fn input_error(error: InputError) -> PyErr {
     use InputError as E;
-    let error = match error {
-        E::LengthMismatch {
-            parameter,
-            expected,
-            found,
-        } => E::LengthMismatch {
-            parameter: scipy_name(parameter),
-            expected,
-            found,
-        },
-        E::RowPtrs { parameter, row } => E::RowPtrs {
-            parameter: scipy_name(parameter),
-            row,
-        },
-        E::IndexOutOfRange { parameter, entry } => E::IndexOutOfRange {
-            parameter: scipy_name(parameter),
-            entry,
-        },
-        E::OutOfRange { parameter, entry } => E::OutOfRange {
-            parameter: scipy_name(parameter),
-            entry,
-        },
-        E::Negative { parameter, entry } => E::Negative {
-            parameter: scipy_name(parameter),
-            entry,
-        },
-        other => other,
-    };
     let (kind, parameter, position) = match error {
         E::VertexCountOverflow { .. } => ("vertex_count_overflow", None, None),
         E::LengthMismatch { parameter, .. } => ("length_mismatch", Some(parameter), None),
@@ -623,10 +595,10 @@ fn factorize(
     }
     let np = py.import("numpy")?;
     let array = |name, column| as_1d(&np, &matrix.getattr(name)?, name, column);
-    let data = array(DATA, Column::Value)?;
+    let data = array(SCIPY.values, Column::Value)?;
     let arrays = CsrArrays {
-        indptr: array(INDPTR, Column::Index)?,
-        indices: array(INDICES, Column::Index)?,
+        indptr: array(SCIPY.row_ptrs, Column::Index)?,
+        indices: array(SCIPY.col_indices, Column::Index)?,
         data: as_contiguous(&np, &data)?,
         n,
         np,
@@ -641,32 +613,28 @@ fn csr<'py>(py: Python<'py>, matrix: &Bound<'py, PyAny>) -> PyResult<Bound<'py, 
     if sparse.call_method1("issparse", (matrix,))?.is_truthy()? {
         return matrix.call_method0("tocsr");
     }
-    for name in [INDPTR, INDICES, DATA, "shape"] {
+    let CsrNames {
+        row_ptrs: indptr,
+        col_indices: indices,
+        values: data,
+    } = SCIPY;
+    for name in [indptr, indices, data, "shape"] {
         if !matrix.hasattr(name)? {
             let found = matrix.get_type().name()?;
             return Err(PyTypeError::new_err(format!(
-                "matrix must be a scipy sparse matrix or have {INDPTR}, {INDICES}, {DATA} and shape, not {found}"
+                "matrix must be a scipy sparse matrix or have {indptr}, {indices}, {data} and shape, not {found}"
             )));
         }
     }
     Ok(matrix.clone())
 }
 
-/// A CSR's arrays by `CsrRef::new`'s name and by scipy's, which a matrix's attributes and every error carry.
-const CSR_NAMES: [(&str, &str); 3] = [
-    ("row_ptrs", "indptr"),
-    ("col_indices", "indices"),
-    ("values", "data"),
-];
-const INDPTR: &str = CSR_NAMES[0].1;
-const INDICES: &str = CSR_NAMES[1].1;
-const DATA: &str = CSR_NAMES[2].1;
-
-/// scipy's name of the slice `CsrRef::new` names `parameter`.
-fn scipy_name(parameter: &'static str) -> &'static str {
-    let named = CSR_NAMES.iter().find(|(rust, _)| *rust == parameter);
-    named.map_or(parameter, |&(_, scipy)| scipy)
-}
+/// A CSR's arrays by scipy's names, which a matrix's attributes and every error carry.
+const SCIPY: CsrNames = CsrNames {
+    row_ptrs: "indptr",
+    col_indices: "indices",
+    values: "data",
+};
 
 /// A CSR's checked arrays: values already `f64`, indices still in the caller's dtype.
 struct CsrArrays<'py> {
@@ -707,15 +675,18 @@ impl CsrArrays<'_> {
         threads: Threads,
     ) -> PyResult<PyApproxInverse> {
         let (py, n) = (self.np.py(), self.n);
-        let indptr = owned(&as_contiguous::<J>(&self.np, &self.indptr)?, INDPTR)?;
-        let indices = owned(&as_contiguous::<J>(&self.np, &self.indices)?, INDICES)?;
-        let data = owned(&self.data, DATA)?;
+        let indptr = owned(&as_contiguous::<J>(&self.np, &self.indptr)?, SCIPY.row_ptrs)?;
+        let indices = owned(
+            &as_contiguous::<J>(&self.np, &self.indices)?,
+            SCIPY.col_indices,
+        )?;
+        let data = owned(&self.data, SCIPY.values)?;
         drop(self);
         let config = config.map_or_else(Config::default, |config| config.0);
         let scaling = scaling.map_or_else(ScalingPolicy::default, |scaling| scaling.0);
         let entries = StoredEntries(data.len());
         let inner = entries.detach(py, || {
-            let sgdd = CsrRef::new(n, &indptr, &indices, &data)
+            let sgdd = CsrRef::named(n, &indptr, &indices, &data, SCIPY)
                 .map_err(input_error)
                 .and_then(|csr| Sgdd::reduce(csr, scaling, threads).map_err(build_error));
             // Freed before factoring: the copy never coexists with the factor's fill.
