@@ -70,8 +70,8 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         threads: Threads,
         inv_pivot: &[T],
     ) -> (Arm<T, I>, Rows<T, I>) {
-        let factored = self.factored(config);
         let kept = self.kept_ground(inv_pivot);
+        let factored = self.factored(config, kept.as_deref(), inv_pivot);
         let rows = match formation(config, factored) {
             Formation::Exact => self.exact(inv_pivot, factored, threads, kept),
             Formation::Sampled(copies) => {
@@ -88,9 +88,9 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         streams: Streams,
         threads: Threads,
     ) -> Arm<T, I> {
-        let factored = self.factored(config);
         let inv_pivot = self.inverse_pivots();
         let kept = self.kept_ground(&inv_pivot);
+        let factored = self.factored(config, kept.as_deref(), &inv_pivot);
         let rows = match formation(config, factored) {
             Formation::Exact => self.exact(&inv_pivot, factored, threads, kept),
             Formation::Sampled(copies) => {
@@ -104,9 +104,31 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         rows.arm()
     }
 
-    /// What `S` is factored as, by its kept side.
-    fn factored(&self, config: &Config) -> Factored {
-        Factored::of(config, self.balance, self.cross.n_cols())
+    /// What `S` is factored as, by its kept side, its `ground` and its off-diagonal as formed exactly: a cover twists or grounds before any clique tree is drawn.
+    fn factored(&self, config: &Config, ground: Option<&[T]>, inv_pivot: &[T]) -> Factored {
+        let off_diagonal = |scale| self.scaled_off_diagonal(inv_pivot, scale);
+        Factored::of(
+            config,
+            self.balance,
+            self.cross.n_cols(),
+            ground,
+            off_diagonal,
+        )
+    }
+
+    /// `scale · Σ_{j≠k} Σ_e |c_ej||c_ek| / d_e`, `S`'s off-diagonal before opposite shares cancel, as a cover holds it on each sheet.
+    fn scaled_off_diagonal(&self, inv_pivot: &[T], scale: f64) -> f64 {
+        let c = &self.cross;
+        let mut total = 0.0;
+        for (e, &inv_pivot) in inv_pivot.iter().enumerate() {
+            let mut before = 0.0;
+            for (_, &c) in c.row(e) {
+                let w = widen(c.abs());
+                total += scale * w * (before * widen(inv_pivot));
+                before += w;
+            }
+        }
+        2.0 * total
     }
 
     /// Inverse pivots `1/(Σ|c_ek| + s_e)`, the same on both sheets of a cover.
@@ -121,7 +143,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
             .collect()
     }
 
-    /// `S`'s ground on each kept vertex, its surplus `s_k` plus every star's share `|c_ek| s_e / d_e` in ascending `e`, exact under either formation: no clique tree draws its star's ground, so a sampled `S`'s kept side stays connected without it (#437).
+    /// `S`'s ground on each kept vertex, its surplus `s_k` plus every star's share `|c_ek| s_e / d_e` in ascending `e`, exact under either formation, what a clique tree draws onto the ground dropped: a twisted cover's draws none, so its kept side stays connected (#437).
     fn kept_ground(&self, inv_pivot: &[T]) -> Option<Vec<T>> {
         let (c, grounding) = (&self.cross, &self.grounding);
         let s = &grounding.surplus()?[c.n_rows()..];
@@ -194,10 +216,15 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         threads: Threads,
     ) -> Fill<T, I> {
         let layout = factored.layout();
+        let ground = match factored {
+            Factored::TwistedCover => None,
+            _ => Some(I::from_index(layout.rows(self.cross.n_cols()))),
+        };
         let stars = Stars {
             block: self,
             streams,
             layout,
+            ground,
         };
         let pieces = match copies {
             None => stars.sample_with(Single, threads),
@@ -211,11 +238,12 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
     }
 }
 
-/// The eliminated side's stars: row `e` of `C` on each of `layout`'s sheets, its ground in the degree but never drawn, each under its own stream.
+/// The eliminated side's stars: row `e` of `C` on each of `layout`'s sheets, each under its own stream, its ground an entry at `ground` whose draws drop, or, where the cover twists, in the degree alone.
 struct Stars<'a, T, I> {
     block: &'a BipartiteBlock<T, I>,
     streams: Streams,
     layout: Layout,
+    ground: Option<I>,
 }
 
 impl<T: Real, I: Index> Stars<'_, T, I> {
@@ -227,25 +255,32 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
         fill: impl FnMut((I, I, C, T)),
     ) {
         let c = &self.block.cross;
-        let ground = |e: usize| self.block.grounding.edge(e).map_or(0.0, widen);
+        let ground = |e: usize| match (self.ground, self.block.grounding.edge(e)) {
+            (Some(at), s_e) => (s_e.map(|s_e| (at, s_e)), 0.0),
+            (None, s_e) => (None, s_e.map_or(0.0, widen)),
+        };
         let draws = self.streams.star(s);
         match self.layout {
             // One sheet maps no column, as the balanced loop pays for any map.
             Layout::Sheet => {
+                let (drawn, degree) = ground(s);
                 let neighbors = c.row(s).map(|(k, &c)| (I::from_index(k), c.abs()));
-                sampler.eliminate_unique(draws, neighbors, ground(s), fill, Unsigned);
+                let fill = self.off_ground(fill);
+                sampler.eliminate_unique(draws, neighbors.chain(drawn), degree, fill, Unsigned);
             }
             Layout::Cover => {
                 let (sheet, e) = (s / c.n_rows(), s % c.n_rows());
+                let (drawn, degree) = ground(e);
                 let neighbors = c.row(e).map(move |(k, &c)| {
                     let on = sheet ^ usize::from(crosses(c));
                     (I::from_index(cover_vertex(k, on)), c.abs())
                 });
-                sampler.eliminate_unique(draws, neighbors, ground(e), fill, Unsigned);
+                let fill = self.off_ground(fill);
+                sampler.eliminate_unique(draws, neighbors.chain(drawn), degree, fill, Unsigned);
             }
             Layout::SignedPairs => {
+                let (drawn, degree) = ground(s);
                 let neighbors = c.row(s).map(|(k, &c)| (I::from_index(k), -c));
-                // The vertex past the kept rows, which no fill reaches: a star's ground share is exact.
                 let sign = Signed {
                     ground: I::from_index(c.n_cols()),
                 };
@@ -254,7 +289,21 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
                     let at = cover_vertex(hi.index(), usize::from(w < T::zero()));
                     fill((lo, I::from_index(at), copies, w.abs()));
                 };
-                sampler.eliminate_unique(draws, neighbors, ground(s), paired, sign);
+                let fill = self.off_ground(paired);
+                sampler.eliminate_unique(draws, neighbors.chain(drawn), degree, fill, sign);
+            }
+        }
+    }
+
+    /// `fill` without a clique tree's draws onto the ground: `S`'s ground is exact, so they add nothing.
+    fn off_ground<C: Copies>(
+        &self,
+        mut fill: impl FnMut((I, I, C, T)),
+    ) -> impl FnMut((I, I, C, T)) {
+        let ground = self.ground;
+        move |edge| {
+            if Some(edge.1) != ground {
+                fill(edge);
             }
         }
     }
@@ -501,6 +550,39 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// Under `Auto`, a sampled complement is bit for bit the one under the surplus it resolves to, on either side of the twist band: the cover is decided before any clique tree is drawn.
+    #[test]
+    fn auto_samples_the_complement_of_the_surplus_it_resolves_to() {
+        let edges = |surplus, scale: f64| {
+            let config = Config {
+                exact_max_dim: 0,
+                complement: SchurMode::Approximate {
+                    sampling: Sampling::CliqueTree {
+                        copies: NonZeroU32::MIN,
+                    },
+                },
+                frustrated: FrustratedRoute::Cover(surplus),
+                ..Config::default()
+            };
+            let stars = grounded_stars::<f64>(false);
+            let ground = stars.grounding.surplus().expect("a ground");
+            let grounding = Grounding::of(ground.iter().map(|s| s * scale).collect());
+            let block = BipartiteBlock::of(stars.cross, stars.balance, grounding);
+            let Arm::Sddm(m) = block.complement(&config, Streams::of(0, &config), ONE) else {
+                panic!("a cover is an SDDM")
+            };
+            let mut edges = Vec::new();
+            m.grounded_edges(|i, j, w: f64| edges.push((i, j, w.to_bits())));
+            edges
+        };
+        let (twisted, grounded) = (CoverSurplus::SurplusEdges, CoverSurplus::GroundVertex);
+        for (scale, resolved, other) in [(1e-20, twisted, grounded), (1.0, grounded, twisted)] {
+            let auto = edges(CoverSurplus::Auto, scale);
+            assert_eq!(auto, edges(resolved, scale), "scale {scale}");
+            assert_ne!(auto, edges(other, scale), "scale {scale}");
         }
     }
 

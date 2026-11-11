@@ -62,7 +62,7 @@ pub enum CoverSurplus {
     GroundVertex,
     /// As an edge `k⁺ — k⁻` per vertex, a quarter of its copies' surplus, which acts on `[z; −z]` as the grounds do: the cover stays singular, its common mode never in `z`. Both copies of a vertex ground alike, a sampled complement's too, its stars' ground shares exact (#437), so the edge is exact.
     SurplusEdges,
-    /// Surplus edges inside the twist band, `Σs ≤ 5ε (Σs + Σ|a_ij|)` over the cover's surplus `s` and off-diagonal `a`, where a ground vertex's common mode would swamp `z`; else the ground vertex.
+    /// Surplus edges inside the twist band, `Σs ≤ 5ε (Σs + Σ|a_ij|)` over the cover's surplus `s` and off-diagonal `a`, a sampled complement's as formed exactly, so it is decided before sampling, where a ground vertex's common mode would swamp `z`; else the ground vertex.
     #[default]
     Auto,
 }
