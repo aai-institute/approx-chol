@@ -7,6 +7,7 @@ use super::{rows_where, Folded, Settling, Surplus};
 use crate::input::{Column, FactorWidth2};
 use crate::sgdd::block::{Grounding, IrreducibleBlock};
 use crate::sgdd::decomposition::{assemble_values, AdjacencyLayout, Cut, SymmetricBlock};
+use crate::sgdd::forest::{Forest, Potential};
 use crate::sgdd::scaling::{self, ScalingPolicy};
 use crate::sgdd::{Components, Reduced};
 use crate::{narrow, widen, BuildError, Index, Real, Threads};
@@ -191,7 +192,8 @@ fn null_vectors<T: Real, J: PrimInt, I: Index>(
         lowest.push(vertices.iter().min().copied());
     }
     let mut alive = coupled;
-    let mut forest = RatioForest::<I>::new(n, widen(T::epsilon()).sqrt());
+    let tolerance = widen(T::epsilon()).sqrt();
+    let mut forest = Forest::<I, f64>::new(n);
     v.for_each_column::<I>(
         #[inline(always)]
         |column| {
@@ -202,7 +204,8 @@ fn null_vectors<T: Real, J: PrimInt, I: Index>(
                 return;
             };
             let k = -widen(column.v_a) / widen(column.v_b);
-            if !doomed[c] && !forest.join(column.a.index(), column.b.index(), k) {
+            let (a, b) = (column.a.index(), column.b.index());
+            if !doomed[c] && !join(&mut forest, a, b, k, tolerance) {
                 doomed[c] = true;
                 alive -= 1;
             }
@@ -231,58 +234,50 @@ fn coupling<T: Real, I: Index>(column: &Column<T, I>, component: &[I]) -> Option
     couples.then_some(c.index())
 }
 
-/// Union-find whose links carry `u_child / u_parent`.
-struct RatioForest<I> {
-    parent: Vec<I>,
-    /// `1` at a root.
-    ratio: Vec<f64>,
-    size: Vec<I>,
-    /// How far a closing cycle may miss, relative.
-    tolerance: f64,
+/// `u_b / u_a` across a link from `b` up to `a`, undivided: reversing swaps it exactly, and a closing cycle compares its halves.
+pub(in crate::sgdd) struct Ratio {
+    num: f64,
+    den: f64,
 }
 
-impl<I: Index> RatioForest<I> {
-    fn new(n: usize, tolerance: f64) -> Self {
-        Self {
-            parent: (0..n).map(I::from_index).collect(),
-            ratio: vec![1.0; n],
-            size: vec![I::one(); n],
-            tolerance,
-        }
+impl Ratio {
+    fn agrees(self, tolerance: f64) -> bool {
+        (self.num - self.den).abs() <= tolerance * self.num.abs().max(self.den.abs())
     }
+}
 
-    /// Root and `u_i / u_root`, halving the path.
-    fn find(&mut self, mut i: usize) -> (usize, f64) {
-        let mut x = 1.0;
-        while self.parent[i].index() != i {
-            let up = self.parent[i].index();
-            self.ratio[i] *= self.ratio[up];
-            self.parent[i] = self.parent[up];
-            x *= self.ratio[i];
-            i = self.parent[i].index();
-        }
-        (i, x)
+impl From<Ratio> for f64 {
+    fn from(r: Ratio) -> Self {
+        r.num / r.den
     }
+}
 
-    /// Joins `u_b = k·u_a`; `false` on a broken cycle or a ratio leaving the finite nonzero range.
-    fn join(&mut self, a: usize, b: usize, k: f64) -> bool {
-        // An overflowed `v_a/v_b` would compare `∞ ≤ tolerance·∞` and pass.
-        if !k.is_finite() {
-            return false;
-        }
-        let ((ra, xa), (rb, xb)) = (self.find(a), self.find(b));
-        if ra == rb {
-            let (want, have) = (k * xa, xb);
-            return (want - have).abs() <= self.tolerance * want.abs().max(have.abs());
-        }
-        // `u_rb = (k·xa/xb)·u_ra`, inverted when `ra` goes under `rb`.
-        let (big, small, ratio) = match self.size[ra] >= self.size[rb] {
-            true => (ra, rb, k * xa / xb),
-            false => (rb, ra, xb / (k * xa)),
-        };
-        self.parent[small] = I::from_index(big);
-        self.ratio[small] = ratio;
-        self.size[big] = self.size[big] + self.size[small];
-        ratio.is_finite() && ratio != 0.0
+impl Potential for f64 {
+    const ROOT: Self = 1.0;
+    type Link = Ratio;
+    fn then(self, up: Self) -> Self {
+        self * up
     }
+    fn reversed(Ratio { num, den }: Ratio) -> Ratio {
+        Ratio { num: den, den: num }
+    }
+}
+
+/// Joins `u_b = k·u_a` in a forest whose potentials are `u_child / u_parent`; `false` on a cycle missing by more than `tolerance`, relative, or a ratio leaving the finite nonzero range.
+fn join<I: Index>(forest: &mut Forest<I, f64>, a: usize, b: usize, k: f64, tolerance: f64) -> bool {
+    // An overflowed `v_a/v_b` would compare `∞ ≤ tolerance·∞` and pass.
+    if !k.is_finite() {
+        return false;
+    }
+    let ((ra, xa), (rb, xb)) = (forest.find(a), forest.find(b));
+    // `u_rb / u_ra = k·xa/xb`.
+    let ratio = Ratio {
+        num: k * xa,
+        den: xb,
+    };
+    if ra == rb {
+        return ratio.agrees(tolerance);
+    }
+    let (_, stored) = forest.link(ra, rb, ratio);
+    stored.is_finite() && stored != 0.0
 }

@@ -1,3 +1,4 @@
+use crate::sgdd::forest::Forest;
 use crate::storage::Rows;
 use crate::{Index, Real};
 
@@ -14,18 +15,18 @@ impl<I: Index> Partition<I> {
     pub(super) fn of_bipartite<T: Real>(c: &Rows<T, I>) -> Self {
         let (n_left, n_right) = (c.n_rows(), c.n_cols());
         // A row joins its columns; once they are one set, no cell joins anything new.
-        let (mut columns, mut links) = (UnionFind::<I>::new(n_right), n_right.saturating_sub(1));
+        let (mut columns, mut links) = (Forest::<I, ()>::new(n_right), n_right.saturating_sub(1));
         'rows: for i in 0..n_left {
             let mut root = None;
             for (j, _) in c.row(i) {
                 if links == 0 {
                     break 'rows;
                 }
-                let other = columns.find(j);
+                let (other, ()) = columns.find(j);
                 root = match root {
                     Some(root) if root != other => {
                         links -= 1;
-                        Some(columns.join(root, other))
+                        Some(columns.link(root, other, ()).0)
                     }
                     _ => Some(other),
                 };
@@ -35,9 +36,9 @@ impl<I: Index> Partition<I> {
         if n_left > 0 && links == 0 && (0..n_left).all(|i| c.row_len(i) > 0) {
             return Self::whole(n_left + n_right);
         }
-        let mut sets = UnionFind::new(n_left + n_right);
+        let mut sets = Forest::new(n_left + n_right);
         for j in 0..n_right {
-            sets.union(n_left + j, n_left + columns.find(j));
+            sets.union(n_left + j, n_left + columns.find(j).0);
         }
         for i in 0..n_left {
             if let Some((j, _)) = c.row(i).next() {
@@ -64,60 +65,20 @@ impl<I: Index> Partition<I> {
     }
 }
 
-/// Union by size with path compression.
-pub(super) struct UnionFind<I> {
-    parent: Vec<I>,
-    size: Vec<I>,
-}
-
-impl<I: Index> UnionFind<I> {
-    pub(super) fn new(n: usize) -> Self {
-        Self {
-            parent: (0..n).map(I::from_index).collect(),
-            size: vec![I::one(); n],
-        }
-    }
-
-    /// Path halving: every visited vertex skips to its grandparent.
-    fn find(&mut self, mut i: usize) -> usize {
-        while self.parent[i].index() != i {
-            let grandparent = self.parent[self.parent[i].index()];
-            self.parent[i] = grandparent;
-            i = grandparent.index();
-        }
-        i
-    }
-
-    pub(super) fn union(&mut self, i: usize, j: usize) {
-        let (a, b) = (self.find(i), self.find(j));
-        if a != b {
-            self.join(a, b);
-        }
-    }
-
-    /// Links two distinct roots by size, returning the joined root.
-    fn join(&mut self, mut a: usize, mut b: usize) -> usize {
-        if self.size[a] < self.size[b] {
-            std::mem::swap(&mut a, &mut b);
-        }
-        self.parent[b] = I::from_index(a);
-        self.size[a] = self.size[a] + self.size[b];
-        a
-    }
-
+impl<I: Index> Forest<I, ()> {
     /// Components ordered by lowest vertex, members ascending.
     pub(super) fn into_partition(mut self) -> Partition<I> {
-        let n = self.parent.len();
+        let n = self.len();
         // Connected, the common case, skips the counting sort: every vertex is its own position.
-        let root = (n > 0).then(|| self.find(0));
-        if root.is_some_and(|root| self.size[root].index() == n) {
+        let root = (n > 0).then(|| self.find(0).0);
+        if root.is_some_and(|root| self.size(root).index() == n) {
             return Partition::whole(n);
         }
         let mut label = vec![I::max_value(); n];
         let mut counts: Vec<I> = Vec::new();
         let component: Vec<I> = (0..n)
             .map(|v| {
-                let root = self.find(v);
+                let (root, ()) = self.find(v);
                 if label[root] == I::max_value() {
                     label[root] = I::from_index(counts.len());
                     counts.push(I::zero());

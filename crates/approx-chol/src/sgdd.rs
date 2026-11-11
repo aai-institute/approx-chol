@@ -3,6 +3,7 @@
 mod block;
 mod congruence;
 mod decomposition;
+mod forest;
 mod reduction;
 mod scaling;
 

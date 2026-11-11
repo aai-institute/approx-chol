@@ -6,11 +6,12 @@ use std::borrow::Cow;
 
 use num_traits::PrimInt;
 
-use super::partition::{Partition, UnionFind};
+use super::partition::Partition;
 use super::{Entries, LonePivot, Partitioned, PrincipalBlocks, RowSums};
 use crate::diagonal_in_range;
 use crate::input::{BipartiteFactorWidth2, Column, FactorWidth2, Side};
 use crate::sgdd::block::Grounding;
+use crate::sgdd::forest::Forest;
 use crate::sgdd::scaling::ScaleVector;
 use crate::sgdd::within_band;
 use crate::storage::{OffDiagonal, Rows, UpperAdjacency};
@@ -84,7 +85,7 @@ impl AdjacencyLayout for StrictUpperTriangle {
         seen: impl FnMut(&Column<T, I>),
         mut pair: impl FnMut(usize, usize, f64),
     ) -> Result<Partitioned<UpperAdjacency<T, I>, I>, BuildError> {
-        let mut sets = UnionFind::<I>::new(v.n());
+        let mut sets = Forest::<I, ()>::new(v.n());
         let rows = cells::upper::<T, J, I>(v, seen, |i, j, cell| {
             sets.union(i, j);
             pair(i, j, cell);

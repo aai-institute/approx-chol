@@ -10,6 +10,7 @@ use super::congruence::Congruence;
 use super::decomposition::{
     of_csr, AdjacencyLayout, Biadjacency, Partitioned, RowSums, StrictUpperTriangle, SymmetricBlock,
 };
+use super::forest::{Forest, Potential};
 use super::scaling::{self, ScaleVector, ScalingPolicy};
 use super::{Reduced, ReducedComplement};
 use crate::diagonal_in_range;
@@ -372,6 +373,18 @@ pub(crate) fn within_band<T: Real>(ones: f64, trace: f64) -> bool {
     ones <= SINGULAR_BAND * widen(T::epsilon()) * trace
 }
 
+/// A sign parity: whether two signs differ, its own reverse.
+impl Potential for bool {
+    const ROOT: Self = false;
+    type Link = Self;
+    fn then(self, up: Self) -> Self {
+        self ^ up
+    }
+    fn reversed(link: Self) -> Self {
+        link
+    }
+}
+
 /// The signs `S` folding `A_c` into a Z-matrix, `I` when it already is one; `None` when frustrated.
 fn folding_signs<T: Real, I: Index>(off_diagonal: &OffDiagonal<T, I>) -> Option<Congruence<T>> {
     if off_diagonal.nonpositive() {
@@ -382,71 +395,23 @@ fn folding_signs<T: Real, I: Index>(off_diagonal: &OffDiagonal<T, I>) -> Option<
             return Some(Congruence::NegateFrom(cross.n_rows()));
         }
     }
-    let mut forest = ParityForest::<I>::new(off_diagonal.n());
+    let mut forest = Forest::<I, bool>::new(off_diagonal.n());
     for (i, row) in off_diagonal.upper_rows() {
         for (j, &a) in row {
             // A positive entry folds only across opposite signs.
-            forest.join(i, j, a > T::zero())?;
+            let differ = a > T::zero();
+            let ((ri, pi), (rj, pj)) = (forest.find(i), forest.find(j));
+            if ri != rj {
+                forest.link(ri, rj, pi ^ pj ^ differ);
+            } else if pi ^ pj != differ {
+                return None;
+            }
         }
     }
-    Some(forest.signs())
-}
-
-/// Union-find whose links carry whether the two ends' signs differ.
-struct ParityForest<I> {
-    parent: Vec<I>,
-    /// Parity to the parent; `false` at a root.
-    odd: Vec<bool>,
-    size: Vec<I>,
-}
-
-impl<I: Index> ParityForest<I> {
-    fn new(n: usize) -> Self {
-        Self {
-            parent: (0..n).map(I::from_index).collect(),
-            odd: vec![false; n],
-            size: vec![I::one(); n],
-        }
-    }
-
-    /// Root and parity to it, halving the path.
-    fn find(&mut self, mut x: usize) -> (usize, bool) {
-        let mut parity = false;
-        while self.parent[x].index() != x {
-            let up = self.parent[x].index();
-            self.odd[x] ^= self.odd[up];
-            self.parent[x] = self.parent[up];
-            parity ^= self.odd[x];
-            x = self.parent[x].index();
-        }
-        (x, parity)
-    }
-
-    /// Each vertex negated when odd to its root.
-    fn signs<T: Real>(mut self) -> Congruence<T> {
-        let sign = |negated: bool| if negated { -T::one() } else { T::one() };
-        Congruence::Signs(
-            (0..self.parent.len())
-                .map(|i| sign(self.find(i).1))
-                .collect(),
-        )
-    }
-
-    /// `None` when `i` and `j` are already joined at the other parity.
-    fn join(&mut self, i: usize, j: usize, differ: bool) -> Option<()> {
-        let ((ri, pi), (rj, pj)) = (self.find(i), self.find(j));
-        if ri == rj {
-            return (pi ^ pj == differ).then_some(());
-        }
-        let (big, small) = match self.size[ri] >= self.size[rj] {
-            true => (ri, rj),
-            false => (rj, ri),
-        };
-        self.parent[small] = I::from_index(big);
-        self.odd[small] = pi ^ pj ^ differ;
-        self.size[big] = self.size[big] + self.size[small];
-        Some(())
-    }
+    let sign = |negated: bool| if negated { -T::one() } else { T::one() };
+    Some(Congruence::Signs(
+        (0..forest.len()).map(|i| sign(forest.find(i).1)).collect(),
+    ))
 }
 
 #[cfg(test)]
