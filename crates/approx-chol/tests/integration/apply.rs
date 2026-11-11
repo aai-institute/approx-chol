@@ -458,6 +458,7 @@ fn assert_spread_changes_no_bit(factor: &ApproxInverse) {
     assert_spread_at::<9>(factor);
     assert_spread_at::<10>(factor);
     assert_spread_at::<11>(factor);
+    assert_spread_at::<12>(factor);
     assert_spread_at::<13>(factor);
     assert_spread_at::<14>(factor);
     assert_spread_at::<15>(factor);
