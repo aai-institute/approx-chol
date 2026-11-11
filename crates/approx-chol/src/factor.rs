@@ -55,8 +55,7 @@ pub struct ApproxInverse<T = f64> {
     blocks: Blocks<T>,
     /// Each lone vertex's whole factor `1/σ`, in the order `order` lists them ahead of the dead ones.
     inverse_pivots: Box<[T]>,
-    /// The coupled blocks' elimination steps.
-    coupled_steps: usize,
+    coupled: Coupled,
 }
 
 /// Every coupled block's factor, block `k` on `order`'s segment `k`, all in `u32` while a cover's `2n + 1` slots fit it, else in `u64`.
@@ -94,6 +93,7 @@ macro_rules! on {
 }
 
 mod spread;
+use spread::Coupled;
 
 impl<T: Real> ApproxInverse<T> {
     /// Factors every coupled summand in parallel, each keyed by its vertices once they are `order`'s.
@@ -137,12 +137,12 @@ impl<T: Real> ApproxInverse<T> {
     }
 
     fn new(order: Order, blocks: Blocks<T>, inverse_pivots: Box<[T]>) -> Self {
-        let coupled_steps = on!(&blocks, blocks => blocks.iter().map(Block::n_steps).sum());
+        let coupled = on!(&blocks, blocks => Coupled::of(blocks));
         Self {
             order,
             blocks,
             inverse_pivots,
-            coupled_steps,
+            coupled,
         }
     }
 
@@ -153,7 +153,7 @@ impl<T: Real> ApproxInverse<T> {
 
     /// Total elimination steps: every slot but a floating block's gauge, whichever arm factored it.
     pub fn n_steps(&self) -> usize {
-        self.coupled_steps + self.inverse_pivots.len()
+        self.coupled.all.steps + self.inverse_pivots.len()
     }
 
     /// One per irreducible block of `A` the factored matrix meets, coupled blocks by their component's lowest vertex in the input's numbering, then isolated vertices; dead vertices are in none.

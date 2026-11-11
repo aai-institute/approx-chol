@@ -16,30 +16,66 @@ const SPREAD_STEPS: usize = 8192;
 /// Claims per worker: a few dozen let unequal blocks even out, while 100,000 blocks of 9 vertices still claim dozens at once.
 const CLAIMS_PER_WORKER: usize = 16;
 
+/// Every coupled block summed, and the most steps one takes.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Coupled {
+    pub(super) all: Small,
+    most_steps: usize,
+}
+
+impl Coupled {
+    pub(super) fn of<T: Real, I: Index>(blocks: &[Block<T, I>]) -> Self {
+        let (mut all, mut most_steps) = (Small::default(), 0);
+        for block in blocks {
+            let steps = block.n_steps();
+            all.add(steps, block.global_scratch_slots());
+            most_steps = most_steps.max(steps);
+        }
+        Self { all, most_steps }
+    }
+}
+
 /// How a solve at a budget runs the coupled blocks.
 pub(super) struct Spread {
     /// Threads at a time: the budget's, at most the pool's and one per block.
     tasks: usize,
-    /// The steps past which a block runs alone.
-    share: usize,
+    within: Within,
 }
 
-/// The blocks within the budget's share.
-#[derive(Default)]
-struct Small {
-    steps: usize,
+/// Which blocks run within the budget's share, the rest alone.
+enum Within {
+    /// Every block, summed at build.
+    All(Small),
+    /// Those of at most these steps.
+    Share(usize),
+}
+
+/// Some blocks summed: their steps and the most slots one takes.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct Small {
+    pub(super) steps: usize,
     /// The most slots one of them takes.
     slots: usize,
 }
 
+impl Small {
+    fn add(&mut self, steps: usize, slots: usize) {
+        self.steps += steps;
+        self.slots = self.slots.max(slots);
+    }
+}
+
 impl Spread {
     pub(super) fn of<T: Real>(inverse: &ApproxInverse<T>, threads: Threads) -> Self {
-        let coupled = on!(&inverse.blocks, blocks => blocks.len());
-        let tasks = threads.tasks().min(coupled).max(1);
-        Self {
-            tasks,
-            share: inverse.coupled_steps / tasks,
-        }
+        let blocks = on!(&inverse.blocks, blocks => blocks.len());
+        let tasks = threads.tasks().min(blocks).max(1);
+        let Coupled { all, most_steps } = inverse.coupled;
+        let share = all.steps / tasks;
+        let within = match most_steps > share {
+            true => Within::Share(share),
+            false => Within::All(all),
+        };
+        Self { tasks, within }
     }
 
     /// The solve's room on the stack: the most a block running alone takes, and regions of the most another one takes, one per thread when they run at once.
@@ -66,14 +102,15 @@ impl Spread {
         blocks: &[Block<T, I>],
         mut alone: impl FnMut(&Block<T, I>),
     ) -> Small {
+        let share = match self.within {
+            Within::All(small) => return small,
+            Within::Share(share) => share,
+        };
         let mut small = Small::default();
         for block in blocks {
-            match block.n_steps() > self.share {
+            match block.n_steps() > share {
                 true => alone(block),
-                false => {
-                    small.steps += block.n_steps();
-                    small.slots = small.slots.max(block.global_scratch_slots());
-                }
+                false => small.add(block.n_steps(), block.global_scratch_slots()),
             }
         }
         small
@@ -111,7 +148,10 @@ impl Spread {
         let small = self.split(blocks, |block| {
             block.solve_global(order, x, threads, stack);
         });
-        let within = |block: &&Block<T, I>| block.n_steps() <= self.share;
+        let within = |block: &&Block<T, I>| match self.within {
+            Within::All(_) => true,
+            Within::Share(share) => block.n_steps() <= share,
+        };
         let region = slots::<V>(small.slots);
         let workers = match self.spreads(&small) {
             true => regions(stack, region, self.tasks),
