@@ -11,10 +11,10 @@ use crate::sgdd::FactorTail;
 use crate::{Batch, Index, MemStack, Real};
 use approximate::{ApproximateCholesky, CliqueTreeElimination};
 
-/// A task's buffers, reused across its blocks by either arm.
+/// A task's buffers, reused across its blocks by either kernel.
 pub(crate) struct Workspace<T, I> {
     elimination: CliqueTreeElimination<T, I>,
-    /// The dense arm's working matrix: allocated per block, it cost 8% of building 2–5 vertex blocks.
+    /// The dense kernel's working matrix: allocated per block, it cost 8% of building 2–5 vertex blocks.
     dense: Vec<T>,
 }
 

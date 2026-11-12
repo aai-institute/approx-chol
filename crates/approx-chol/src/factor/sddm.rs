@@ -31,9 +31,8 @@ impl<T: Real, I: Index> Sdd<T, I> {
             "every sheet holds the same vertices"
         );
         assert!(surplus.fits(n >> shift), "one surplus per vertex");
-        let signed = layout == Layout::Signed;
         debug_assert!(
-            signed || off_diagonal.nonpositive(),
+            layout == Layout::Signed || off_diagonal.nonpositive(),
             "a Z-matrix's off-diagonal is nonpositive"
         );
         Self {
@@ -237,13 +236,10 @@ impl<T: Real, I: Index> RowSums<T, I> {
         self.ptrs.push(self.indices.len());
     }
 
-    /// Repeats the row just ended on the other sheet, each column's sheet bit flipped, but for its twist.
-    fn mirror_row(&mut self, twisted: bool) {
+    /// Repeats the row just ended, slot `at`'s, on the other sheet, each column's sheet bit flipped, but for its twist, its edge to `at + 1`.
+    fn mirror_row(&mut self, at: usize) {
         let (start, end) = (self.ptrs[self.ptrs.len() - 2], self.indices.len());
-        let start = start
-            + usize::from(
-                twisted && self.indices.get(start) == Some(&I::from_index(self.ptrs.len() - 1)),
-            );
+        let start = start + usize::from(self.indices.get(start) == Some(&I::from_index(at + 1)));
         for i in start..end {
             self.indices.push(self.indices[i] ^ I::one());
             self.values.push(self.values[i]);
@@ -292,30 +288,27 @@ impl<T: Real, I: Index> SddmRows<T, I> {
         let add = |mut rows: RowSums<T, I>, k| {
             rows.row(twists, 2 * k, |sums| row(sums, k));
             if mirrored {
-                rows.mirror_row(twists.is_some());
+                rows.mirror_row(2 * k);
             }
             rows
         };
-        let Some(per) = threads.per_task(n, min_len) else {
-            let rows = (0..n).fold(RowSums::new(columns), add);
-            return Self {
-                factored,
-                ground,
-                rows,
-            };
+        let rows = match threads.per_task(n, min_len) {
+            None => (0..n).fold(RowSums::new(columns), add),
+            Some(per) => {
+                let rows = (0..n)
+                    .into_par_iter()
+                    .with_min_len(per)
+                    .fold(|| RowSums::new(columns), |rows, k| task(|| add(rows, k)));
+                let rows = rows.reduce_with(|mut rows, part| {
+                    let offset = rows.indices.len();
+                    rows.ptrs.extend(part.ptrs[1..].iter().map(|&p| p + offset));
+                    rows.indices.extend(part.indices);
+                    rows.values.extend(part.values);
+                    rows
+                });
+                rows.unwrap_or_else(|| RowSums::new(columns))
+            }
         };
-        let rows = (0..n)
-            .into_par_iter()
-            .with_min_len(per)
-            .fold(|| RowSums::new(columns), |rows, k| task(|| add(rows, k)));
-        let rows = rows.reduce_with(|mut rows, part| {
-            let offset = rows.indices.len();
-            rows.ptrs.extend(part.ptrs[1..].iter().map(|&p| p + offset));
-            rows.indices.extend(part.indices);
-            rows.values.extend(part.values);
-            rows
-        });
-        let rows = rows.unwrap_or_else(|| RowSums::new(columns));
         Self {
             factored,
             ground,
@@ -330,7 +323,6 @@ impl<T: Real, I: Index> SddmRows<T, I> {
             ground,
             rows,
         } = self;
-        let ground = ground.filter(|_| factored != Factored::TwistedCover);
         let ground = ground.unwrap_or_default();
         let (off_diagonal, surplus) = match factored.layout() {
             Layout::Signed => fold(rows, ground),
@@ -339,6 +331,10 @@ impl<T: Real, I: Index> SddmRows<T, I> {
                 let rows = Rows::new(rows.ptrs, rows.indices, rows.values, n);
                 (UpperAdjacency::new(rows), Grounding::of(ground))
             }
+        };
+        let surplus = match factored {
+            Factored::TwistedCover => Grounding::ungrounded(),
+            _ => surplus,
         };
         Sdd::new(off_diagonal, surplus, factored.layout())
     }
