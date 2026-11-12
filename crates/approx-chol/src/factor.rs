@@ -261,12 +261,12 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
                     grounding.surplus(),
                     off_diagonal,
                 );
-                let arm = factored.arm(adjacency, grounding);
-                (None, Cholesky::factor(arm, draws, tail(0), reused))
+                let m = factored.on(adjacency, grounding);
+                (None, Cholesky::factor(m, config, draws, tail(0), reused))
             }
             OffDiagonal::Bipartite(cross) => {
                 let kept = tail(cross.n_rows());
-                let factor = |s| Cholesky::factor(s, draws, kept, reused);
+                let factor = |s| Cholesky::factor(s, config, draws, kept, reused);
                 let block = BipartiteBlock::of(cross, balance, grounding);
                 let (elimination, factored) = block.eliminate(config, streams, threads, factor);
                 (Some(Box::new(elimination)), factored)
@@ -298,7 +298,7 @@ impl<T: Real, I: Index> Summand<T, I> for BlockComplement<T, I> {
         let streams = Streams::of(first, config);
         let s = BipartiteBlock::of(cross, balance, grounding).complement(config, streams, threads);
         let tail = congruence.factor_tail(0);
-        let cholesky = Cholesky::factor(s, streams.cholesky(), tail, reused);
+        let cholesky = Cholesky::factor(s, config, streams.cholesky(), tail, reused);
         Block {
             segment,
             congruence,

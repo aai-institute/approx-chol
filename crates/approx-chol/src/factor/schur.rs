@@ -3,10 +3,9 @@
 use rayon::prelude::*;
 
 use super::block_elimination::BlockElimination;
-use super::cholesky::Arm;
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::{Config, SchurMode};
-use super::sddm::{cover_vertex, crosses, Factored, Layout, SddmRows};
+use super::sddm::{cover_vertex, crosses, Factored, Layout, Sdd, SddmRows};
 use super::sign::{Signed, Unsigned};
 use super::{Streams, MULTIPLY_ADD_GRAIN_BITS};
 use crate::sgdd::{Balance, Grounding};
@@ -54,7 +53,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         config: &Config,
         streams: Streams,
         threads: Threads,
-        factor: impl FnOnce(Arm<T, I>) -> R,
+        factor: impl FnOnce(Sdd<T, I>) -> R,
     ) -> (BlockElimination<T, I>, R) {
         let inv_pivot = self.inverse_pivots();
         let (s, cross) = self.complement_and_cross(config, streams, threads, &inv_pivot);
@@ -69,7 +68,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         streams: Streams,
         threads: Threads,
         inv_pivot: &[T],
-    ) -> (Arm<T, I>, Rows<T, I>) {
+    ) -> (Sdd<T, I>, Rows<T, I>) {
         let kept = self.kept_ground(inv_pivot);
         let factored = self.factored(config, kept.as_deref(), inv_pivot);
         let rows = match formation(config, factored) {
@@ -78,7 +77,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
                 (self.sample(copies, factored, streams, threads)).merge(kept)
             }
         };
-        (rows.arm(), self.cross)
+        (rows.close(), self.cross)
     }
 
     /// `S` alone, a complement's summand: `C` is freed before the sampled merge.
@@ -87,7 +86,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         config: &Config,
         streams: Streams,
         threads: Threads,
-    ) -> Arm<T, I> {
+    ) -> Sdd<T, I> {
         let inv_pivot = self.inverse_pivots();
         let kept = self.kept_ground(&inv_pivot);
         let factored = self.factored(config, kept.as_deref(), &inv_pivot);
@@ -101,7 +100,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
                 fill.merge(kept)
             }
         };
-        rows.arm()
+        rows.close()
     }
 
     /// What `S` is factored as, by its kept side, its `ground` and its off-diagonal as formed exactly: a cover twists or grounds before any clique tree is drawn.
@@ -168,8 +167,8 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         ground: Option<Vec<T>>,
     ) -> SddmRows<T, I> {
         match factored.layout() {
-            Layout::Sheet => self.exact_rows(inv_pivot, factored, threads, ground, |j, _, _| j),
-            Layout::Cover | Layout::SignedPairs => {
+            Layout::Like => self.exact_rows(inv_pivot, factored, threads, ground, |j, _, _| j),
+            Layout::Cover | Layout::Signed => {
                 self.exact_rows(inv_pivot, factored, threads, ground, |j, c_ek, c_ej| {
                     cover_vertex(j, usize::from(crosses(c_ek) != crosses(c_ej)))
                 })
@@ -262,7 +261,7 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
         let draws = self.streams.star(s);
         match self.layout {
             // One sheet maps no column, as the balanced loop pays for any map.
-            Layout::Sheet => {
+            Layout::Like => {
                 let (drawn, degree) = ground(s);
                 let neighbors = c.row(s).map(|(k, &c)| (I::from_index(k), c.abs()));
                 let fill = self.off_ground(fill);
@@ -278,7 +277,7 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
                 let fill = self.off_ground(fill);
                 sampler.eliminate_unique(draws, neighbors.chain(drawn), degree, fill, Unsigned);
             }
-            Layout::SignedPairs => {
+            Layout::Signed => {
                 let (drawn, degree) = ground(s);
                 let neighbors = c.row(s).map(|(k, &c)| (I::from_index(k), -c));
                 let sign = Signed {
@@ -414,7 +413,6 @@ mod tests {
     use std::num::NonZeroU32;
 
     use super::*;
-    use crate::factor::cholesky::Eliminated;
     use crate::factor::config::{CoverSurplus, FrustratedRoute, Sampling};
     use crate::threads::ONE;
 
@@ -459,9 +457,9 @@ mod tests {
                 };
                 let (cross, grounding) = opposed(weights, s);
                 let block = BipartiteBlock::of(cross, Balance::Frustrated, grounding);
-                let Arm::Signed(m) = block.complement(&config, Streams::of(0, &config), ONE) else {
-                    panic!("a frustrated complement is signed under Signed")
-                };
+                let m = block.complement(&config, Streams::of(0, &config), ONE);
+                let signed = m.layout() == Layout::Signed;
+                assert!(signed, "a frustrated complement is signed under Signed");
                 let mut got = [0.0; 3];
                 m.grounded_edges(|i, j, w| match (i, j) {
                     (0, 1) => got[0] += w,
@@ -500,10 +498,9 @@ mod tests {
     }
 
     /// Each row's ground edge's bits, by row.
-    fn ground_bits<T: Real>(arm: Arm<T, u32>) -> Vec<(u32, u64)> {
-        let Arm::Sddm(m) = arm else {
-            panic!("an approximately factored complement is an SDDM")
-        };
+    fn ground_bits<T: Real>(m: Sdd<T, u32>) -> Vec<(u32, u64)> {
+        let sddm = m.layout() != Layout::Signed;
+        assert!(sddm, "an approximately factored complement is an SDDM");
         let n = m.n() as u32;
         let mut ground = Vec::new();
         m.grounded_edges(|i, j, w| {
@@ -571,9 +568,8 @@ mod tests {
             let ground = stars.grounding.surplus().expect("a ground");
             let grounding = Grounding::of(ground.iter().map(|s| s * scale).collect());
             let block = BipartiteBlock::of(stars.cross, stars.balance, grounding);
-            let Arm::Sddm(m) = block.complement(&config, Streams::of(0, &config), ONE) else {
-                panic!("a cover is an SDDM")
-            };
+            let m = block.complement(&config, Streams::of(0, &config), ONE);
+            assert_eq!(m.layout(), Layout::Cover, "a cover is an SDDM");
             let mut edges = Vec::new();
             m.grounded_edges(|i, j, w: f64| edges.push((i, j, w.to_bits())));
             edges
