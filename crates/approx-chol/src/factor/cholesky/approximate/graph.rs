@@ -2,7 +2,7 @@ mod lists;
 
 use self::lists::Lists;
 use crate::factor::clique_tree::{Copies, Degrees};
-use crate::factor::sddm::Sdd;
+use crate::factor::sdd::Sdd;
 use crate::{Index, Real};
 
 /// One half of an edge; `mirror` indexes the other half in `to`'s list, so removal is O(1), and a list moving whole keeps it.

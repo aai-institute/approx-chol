@@ -1,6 +1,6 @@
 //! Exact Cholesky of a small `M` by GTH elimination: every pivot a sum of nonnegative terms, so none cancels or fails.
 
-use crate::factor::sddm::{Layout, Sdd};
+use crate::factor::sdd::{Layout, Sdd};
 use crate::factor::sign::cancel;
 use crate::factor::within_one;
 use crate::sgdd::FactorTail;

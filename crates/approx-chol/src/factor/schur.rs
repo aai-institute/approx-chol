@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use super::block_elimination::BlockElimination;
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::{Config, SchurMode};
-use super::sddm::{cover_vertex, crosses, Factored, Layout, Sdd, SddmRows};
+use super::sdd::{cover_vertex, crosses, Layout, Route, Sdd, SddRows};
 use super::sign::{Signed, Unsigned};
 use super::{Streams, MULTIPLY_ADD_GRAIN_BITS};
 use crate::sgdd::{Balance, Grounding};
@@ -13,7 +13,7 @@ use crate::storage::Rows;
 use crate::threads::task;
 use crate::{narrow, per_task, widen, Index, Real, Threads};
 
-/// How one block's Schur complement is formed, resolved from [`Config`] and what it is factored as.
+/// How one block's Schur complement is formed, resolved from [`Config`] and its kept side's size.
 enum Formation {
     /// Each star's whole clique.
     Exact,
@@ -21,10 +21,10 @@ enum Formation {
     Sampled(Option<Multi>),
 }
 
-/// Exact when factored as it is, which spends nothing on sparsity, or when asked, else sampled with its own sampling or under `Same` the factor's.
-fn formation(config: &Config, factored: Factored) -> Formation {
+/// Exact when its `n` kept vertices factor densely, which spends nothing on sparsity, or when asked, else sampled with its own sampling or under `Same` the factor's.
+fn formation(config: &Config, n: usize) -> Formation {
     match config.complement {
-        _ if matches!(factored, Factored::AsIs(_)) => Formation::Exact,
+        _ if config.dense(n) => Formation::Exact,
         SchurMode::Exact => Formation::Exact,
         SchurMode::Approximate { sampling } => Formation::Sampled(sampling.copies()),
         SchurMode::Same => Formation::Sampled(config.sampling.copies()),
@@ -70,11 +70,11 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         inv_pivot: &[T],
     ) -> (Sdd<T, I>, Rows<T, I>) {
         let kept = self.kept_ground(inv_pivot);
-        let factored = self.factored(config, kept.as_deref(), inv_pivot);
-        let rows = match formation(config, factored) {
-            Formation::Exact => self.exact(inv_pivot, factored, threads, kept),
+        let route = self.route(config, kept.as_deref(), inv_pivot);
+        let rows = match formation(config, self.cross.n_cols()) {
+            Formation::Exact => self.exact(inv_pivot, route, threads, kept),
             Formation::Sampled(copies) => {
-                (self.sample(copies, factored, streams, threads)).merge(kept)
+                (self.sample(copies, route, streams, threads)).merge(kept)
             }
         };
         (rows.close(), self.cross)
@@ -89,12 +89,12 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
     ) -> Sdd<T, I> {
         let inv_pivot = self.inverse_pivots();
         let kept = self.kept_ground(&inv_pivot);
-        let factored = self.factored(config, kept.as_deref(), &inv_pivot);
-        let rows = match formation(config, factored) {
-            Formation::Exact => self.exact(&inv_pivot, factored, threads, kept),
+        let route = self.route(config, kept.as_deref(), &inv_pivot);
+        let rows = match formation(config, self.cross.n_cols()) {
+            Formation::Exact => self.exact(&inv_pivot, route, threads, kept),
             Formation::Sampled(copies) => {
                 drop(inv_pivot);
-                let fill = self.sample(copies, factored, streams, threads);
+                let fill = self.sample(copies, route, streams, threads);
                 // The merge never reads `C`.
                 drop(self.cross);
                 fill.merge(kept)
@@ -103,10 +103,10 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         rows.close()
     }
 
-    /// What `S` is factored as, by its kept side, its `ground` and its off-diagonal as formed exactly: a cover twists or grounds before any clique tree is drawn.
-    fn factored(&self, config: &Config, ground: Option<&[T]>, inv_pivot: &[T]) -> Factored {
+    /// The matrix that stands for `S`, by its kept side, its `ground` and its off-diagonal as formed exactly: a cover twists or grounds before any clique tree is drawn.
+    fn route(&self, config: &Config, ground: Option<&[T]>, inv_pivot: &[T]) -> Route {
         let off_diagonal = |scale| self.scaled_off_diagonal(inv_pivot, scale);
-        Factored::of(
+        Route::of(
             config,
             self.balance,
             self.cross.n_cols(),
@@ -162,14 +162,14 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
     fn exact(
         &self,
         inv_pivot: &[T],
-        factored: Factored,
+        route: Route,
         threads: Threads,
         ground: Option<Vec<T>>,
-    ) -> SddmRows<T, I> {
-        match factored.layout() {
-            Layout::Like => self.exact_rows(inv_pivot, factored, threads, ground, |j, _, _| j),
+    ) -> SddRows<T, I> {
+        match route.layout() {
+            Layout::Like => self.exact_rows(inv_pivot, route, threads, ground, |j, _, _| j),
             Layout::Cover | Layout::Signed => {
-                self.exact_rows(inv_pivot, factored, threads, ground, |j, c_ek, c_ej| {
+                self.exact_rows(inv_pivot, route, threads, ground, |j, c_ek, c_ej| {
                     cover_vertex(j, usize::from(crosses(c_ek) != crosses(c_ej)))
                 })
             }
@@ -180,17 +180,17 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
     fn exact_rows(
         &self,
         inv_pivot: &[T],
-        factored: Factored,
+        route: Route,
         threads: Threads,
         ground: Option<Vec<T>>,
         vertex: impl Fn(usize, T, T) -> usize + Sync,
-    ) -> SddmRows<T, I> {
+    ) -> SddRows<T, I> {
         let c = &self.cross;
         let ct = c.transpose();
         // Each task carries one grain of the complement's `nnz·(nnz/n_e)/2` multiply-adds.
         let work = c.nnz() as u64 * (c.nnz() / c.n_rows().max(1)) as u64 / 2;
-        SddmRows::split(
-            factored,
+        SddRows::split(
+            route,
             c.n_cols(),
             per_task(c.n_cols(), work, MULTIPLY_ADD_GRAIN_BITS),
             threads,
@@ -210,13 +210,13 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
     fn sample(
         &self,
         copies: Option<Multi>,
-        factored: Factored,
+        route: Route,
         streams: Streams,
         threads: Threads,
     ) -> Fill<T, I> {
-        let layout = factored.layout();
-        let ground = match factored {
-            Factored::TwistedCover => None,
+        let layout = route.layout();
+        let ground = match route {
+            Route::TwistedCover => None,
             _ => Some(I::from_index(layout.rows(self.cross.n_cols()))),
         };
         let stars = Stars {
@@ -230,7 +230,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
             Some(copies) => stars.sample_with(copies, threads),
         };
         Fill {
-            factored,
+            route,
             kept: self.cross.n_cols(),
             pieces,
         }
@@ -346,29 +346,29 @@ fn bucket_shift(n: usize) -> u32 {
 /// One thread's fill edges `(lo, hi, weight)`, split by `lo` into the ranges of [`bucket_shift`].
 type Buckets<T, I> = Vec<Vec<(I, I, T)>>;
 
-/// Every task's sampled fill over the rows of `kept` vertices for `factored`, bucketed by row.
+/// Every task's sampled fill over the rows of `kept` vertices for `route`, bucketed by row.
 struct Fill<T, I> {
-    factored: Factored,
+    route: Route,
     kept: usize,
     pieces: Vec<Buckets<T, I>>,
 }
 
 impl<T: Real, I: Index> Fill<T, I> {
     /// Bucket by bucket, counting-sorts the chunks' rows unflattened, merges each row's duplicates, stores `−w`; each row's ground is its vertex's `ground`.
-    fn merge(self, ground: Option<Vec<T>>) -> SddmRows<T, I> {
+    fn merge(self, ground: Option<Vec<T>>) -> SddRows<T, I> {
         let Self {
-            factored,
+            route,
             kept,
             mut pieces,
         } = self;
-        let n = factored.layout().rows(kept);
+        let n = route.layout().rows(kept);
         let stride = 1 << bucket_shift(n);
         let count = n.div_ceil(stride);
         let bucket = |b: usize| pieces.iter().map(|p| p[b].len()).sum();
         let most = (0..count).map(bucket).max().unwrap_or(0);
         let (mut columns, mut weights) = (vec![I::zero(); most], vec![T::zero(); most]);
         let (mut starts, mut next) = (Vec::new(), Vec::new());
-        let mut rows = SddmRows::new(factored, kept, ground);
+        let mut rows = SddRows::new(route, kept, ground);
         for b in 0..count {
             let first = b * stride;
             let len = (n - first).min(stride);

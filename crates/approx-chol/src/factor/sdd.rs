@@ -1,4 +1,4 @@
-//! What a block's Cholesky factors and the matrix it reads: `M` as it is, its SDDM on one sheet, or its Gremban cover's on two.
+//! The SDD matrix a block's Cholesky factors: `M` itself or its Gremban cover, and the rows that form it.
 
 use rayon::prelude::*;
 
@@ -39,6 +39,27 @@ impl<T: Real, I: Index> Sdd<T, I> {
             off_diagonal,
             surplus,
             layout,
+        }
+    }
+
+    /// A block's `M`, its off-diagonal and surplus as they are, as the matrix `route` takes it to.
+    pub(super) fn of(
+        route: Route,
+        off_diagonal: UpperAdjacency<T, I>,
+        surplus: Grounding<T>,
+    ) -> Self {
+        match route.layout() {
+            Layout::Cover => {
+                // The cover acts as `M` on `[z; −z]`.
+                let (n, ground) = (off_diagonal.n(), surplus.surplus().map(<[T]>::to_vec));
+                let rows = SddRows::split(route, n, n, ONE, ground, |mut sums, i| {
+                    for (j, &a) in off_diagonal.upper(i) {
+                        sums.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
+                    }
+                });
+                rows.close()
+            }
+            layout => Self::new(off_diagonal, surplus, layout),
         }
     }
 
@@ -84,11 +105,10 @@ impl<T: Real, I: Index> Sdd<T, I> {
     }
 }
 
-/// What a block's Cholesky factors: `M` as it is, densely; or approximately its SDDM on one sheet, its Gremban cover grounded or twisted, or frustrated `M` signed.
+/// The SDD matrix that stands for a block's `M`: itself, like or signed, or its Gremban cover; a dense block stands for itself whatever its [`FrustratedRoute`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Factored {
-    AsIs(Balance),
-    Folded,
+pub(super) enum Route {
+    Like,
     /// Each copy's surplus an edge to the ground.
     Cover,
     /// Each vertex's surplus its [`twist`], an edge between its copies.
@@ -96,8 +116,8 @@ pub(super) enum Factored {
     Signed,
 }
 
-impl Factored {
-    /// For a block of `n` vertices, a bipartite one's kept side, under `config`: dense up to its `exact_max_dim`, else folded when balanced, else by its frustrated route, a cover twisting as [`twists`] decides from `M`'s `ground` and `off_diagonal`.
+impl Route {
+    /// For a block of `n` vertices, a bipartite one's kept side, under `config`: itself when balanced or dense, else by its frustrated route, a cover twisting as [`twists`] decides from `M`'s `ground` and `off_diagonal`.
     pub(super) fn of<T: Real>(
         config: &Config,
         balance: Balance,
@@ -105,44 +125,23 @@ impl Factored {
         ground: Option<&[T]>,
         off_diagonal: impl FnOnce(f64) -> f64,
     ) -> Self {
-        match (config.dense(n), balance, config.frustrated) {
-            (true, _, _) => Self::AsIs(balance),
-            (false, Balance::Balanced, _) => Self::Folded,
-            (false, Balance::Frustrated, FrustratedRoute::Cover(surplus)) => match ground {
-                Some(ground) if twists(surplus, ground, off_diagonal) => Self::TwistedCover,
-                _ => Self::Cover,
-            },
-            (false, Balance::Frustrated, FrustratedRoute::Signed) => Self::Signed,
+        match (balance, config.frustrated) {
+            (Balance::Balanced, _) => Self::Like,
+            (Balance::Frustrated, FrustratedRoute::Cover(surplus)) if !config.dense(n) => {
+                match ground {
+                    Some(ground) if twists(surplus, ground, off_diagonal) => Self::TwistedCover,
+                    _ => Self::Cover,
+                }
+            }
+            (Balance::Frustrated, _) => Self::Signed,
         }
     }
 
-    /// Frustrated `M`'s own rows are signed pairs, whether factored densely or signed.
     pub(super) fn layout(self) -> Layout {
         match self {
-            Self::AsIs(Balance::Balanced) | Self::Folded => Layout::Like,
+            Self::Like => Layout::Like,
             Self::Cover | Self::TwistedCover => Layout::Cover,
-            Self::AsIs(Balance::Frustrated) | Self::Signed => Layout::Signed,
-        }
-    }
-
-    /// A block's `M`, its off-diagonal and surplus as they are, as the matrix this factors.
-    pub(super) fn on<T: Real, I: Index>(
-        self,
-        off_diagonal: UpperAdjacency<T, I>,
-        surplus: Grounding<T>,
-    ) -> Sdd<T, I> {
-        match self.layout() {
-            Layout::Cover => {
-                // The cover acts as `M` on `[z; −z]`.
-                let (n, ground) = (off_diagonal.n(), surplus.surplus().map(<[T]>::to_vec));
-                let rows = SddmRows::split(self, n, n, ONE, ground, |mut sums, i| {
-                    for (j, &a) in off_diagonal.upper(i) {
-                        sums.add(cover_vertex(j, usize::from(crosses(a))), a.abs());
-                    }
-                });
-                rows.close()
-            }
-            layout => Sdd::new(off_diagonal, surplus, layout),
+            Self::Signed => Layout::Signed,
         }
     }
 
@@ -159,7 +158,7 @@ pub(super) enum Layout {
     Like,
     /// `M`'s Gremban cover, a Z-matrix on two sheets: column [`cover_vertex`], rows `k⁺` and `k⁻`.
     Cover,
-    /// `M` of either sign, a row per vertex: forming, column `2j` sums its like magnitudes and `2j + 1` the unlike, as `k⁺`'s on a cover, which [`close`](SddmRows::close) folds into one signed entry.
+    /// `M` of either sign, a row per vertex: forming, column `2j` sums its like magnitudes and `2j + 1` the unlike, as `k⁺`'s on a cover, which [`close`](SddRows::close) folds into one signed entry.
     Signed,
 }
 
@@ -187,8 +186,8 @@ impl Layout {
 }
 
 /// Rows in the [`Layout`] of what they are formed for, and each vertex's ground.
-pub(super) struct SddmRows<T, I> {
-    factored: Factored,
+pub(super) struct SddRows<T, I> {
+    route: Route,
     ground: Option<Vec<T>>,
     rows: RowSums<T, I>,
 }
@@ -255,36 +254,36 @@ impl<T: Real, I: Index> RowSums<T, I> {
     }
 }
 
-impl<T: Real, I: Index> SddmRows<T, I> {
-    /// Rows of `n` vertices for `factored`, each [`row`](Self::row) in order, one `ground` per vertex.
-    pub(super) fn new(factored: Factored, n: usize, ground: Option<Vec<T>>) -> Self {
-        let rows = RowSums::new(factored.layout().columns(n));
+impl<T: Real, I: Index> SddRows<T, I> {
+    /// Rows of `n` vertices for `route`, each [`row`](Self::row) in order, one `ground` per vertex.
+    pub(super) fn new(route: Route, n: usize, ground: Option<Vec<T>>) -> Self {
+        let rows = RowSums::new(route.layout().columns(n));
         Self {
-            factored,
+            route,
             ground,
             rows,
         }
     }
 
     pub(super) fn row(&mut self, add: impl FnOnce(ColumnSums<'_, T, I>)) {
-        let twists = self.factored.twists(&self.ground);
+        let twists = self.route.twists(&self.ground);
         self.rows.row(twists, self.rows.ptrs.len() - 1, add);
     }
 
-    /// Rows of `n` vertices for `factored`, one `ground` per vertex, `row` writing vertex `k`'s row once, `k⁺`'s on a cover, which `k⁻` mirrors; split by vertex across threads, at least `min_len` a task, so each sums alone and the bits match at any count.
+    /// Rows of `n` vertices for `route`, one `ground` per vertex, `row` writing vertex `k`'s row once, `k⁺`'s on a cover, which `k⁻` mirrors; split by vertex across threads, at least `min_len` a task, so each sums alone and the bits match at any count.
     pub(super) fn split(
-        factored: Factored,
+        route: Route,
         n: usize,
         min_len: usize,
         threads: Threads,
         ground: Option<Vec<T>>,
         row: impl Fn(ColumnSums<'_, T, I>, usize) + Sync,
     ) -> Self {
-        let layout = factored.layout();
+        let layout = route.layout();
         let columns = layout.columns(n);
         // A bool, tested against zero as the balance was: comparing the three-way layout measured a `cmp` more per row.
         let mirrored = layout.copy_shift() != 0;
-        let twists = factored.twists(&ground);
+        let twists = route.twists(&ground);
         let add = |mut rows: RowSums<T, I>, k| {
             rows.row(twists, 2 * k, |sums| row(sums, k));
             if mirrored {
@@ -310,7 +309,7 @@ impl<T: Real, I: Index> SddmRows<T, I> {
             }
         };
         Self {
-            factored,
+            route,
             ground,
             rows,
         }
@@ -319,12 +318,12 @@ impl<T: Real, I: Index> SddmRows<T, I> {
     /// The matrix the rows hold, each vertex's ground its surplus but where it twisted: an SDDM's `L` on its sheets, or `M` [`fold`]ed from signed pairs.
     pub(super) fn close(self) -> Sdd<T, I> {
         let Self {
-            factored,
+            route,
             ground,
             rows,
         } = self;
         let ground = ground.unwrap_or_default();
-        let (off_diagonal, surplus) = match factored.layout() {
+        let (off_diagonal, surplus) = match route.layout() {
             Layout::Signed => fold(rows, ground),
             Layout::Like | Layout::Cover => {
                 let n = rows.sums.len();
@@ -332,11 +331,11 @@ impl<T: Real, I: Index> SddmRows<T, I> {
                 (UpperAdjacency::new(rows), Grounding::of(ground))
             }
         };
-        let surplus = match factored {
-            Factored::TwistedCover => Grounding::ungrounded(),
+        let surplus = match route {
+            Route::TwistedCover => Grounding::ungrounded(),
             _ => surplus,
         };
-        Sdd::new(off_diagonal, surplus, factored.layout())
+        Sdd::new(off_diagonal, surplus, route.layout())
     }
 }
 
@@ -479,16 +478,16 @@ mod tests {
         let surplus = [extra].into_iter().chain([0.0; 8]).collect();
         let grounding = Grounding::of(surplus);
         let off_diagonal = |scale| signed.scaled_abs_total(scale);
-        let factored = Factored::of(
+        let route = Route::of(
             &config,
             Balance::Frustrated,
             n as usize,
             grounding.surplus(),
             off_diagonal,
         );
-        let cover = factored.layout() == Layout::Cover;
+        let cover = route.layout() == Layout::Cover;
         assert!(cover, "a frustrated block's cover is an SDDM");
-        factored.on(signed, grounding)
+        Sdd::of(route, signed, grounding)
     }
 
     #[test]
