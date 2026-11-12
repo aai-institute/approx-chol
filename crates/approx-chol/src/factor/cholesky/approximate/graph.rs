@@ -1,8 +1,8 @@
 mod lists;
 
 use self::lists::Lists;
-use super::Eliminated;
 use crate::factor::clique_tree::{Copies, Degrees};
+use crate::factor::sddm::Sdd;
 use crate::{Index, Real};
 
 /// One half of an edge; `mirror` indexes the other half in `to`'s list, so removal is O(1), and a list moving whole keeps it.
@@ -29,7 +29,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
     }
 
     /// `n` vertices: `m`'s, then its ground when it has one, which the order pins.
-    pub(super) fn load<M: Eliminated<T, I>>(&mut self, m: &M, n: usize, split: C) {
+    pub(super) fn load(&mut self, m: &Sdd<T, I>, n: usize, split: C) {
         // One slot past the degree: the first fill edge reallocating measured +2-3% on grids.
         let mut room = vec![1u32; n];
         // Saturated, a list past u32 slots fails in its growth, not as a wrapped room.

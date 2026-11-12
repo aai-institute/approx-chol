@@ -1,53 +1,19 @@
 //! Exact Cholesky of a small `M` by GTH elimination: every pivot a sum of nonnegative terms, so none cancels or fails.
 
+use crate::factor::sddm::{Layout, Sdd};
 use crate::factor::sign::cancel;
 use crate::factor::within_one;
-use crate::sgdd::{Balance, FactorTail, Grounding};
-use crate::storage::UpperAdjacency;
+use crate::sgdd::FactorTail;
 use crate::{Batch, Index, Real};
-
-/// `M` as it is, its off-diagonal signed and its surplus closing it: dense Cholesky needs no cover, fold or dominance.
-pub(in crate::factor) struct AsIs<T, I> {
-    adjacency: UpperAdjacency<T, I>,
-    /// Frustrated, its off-diagonals of either sign, so GTH tracks the surplus their cancellation leaves; balanced, a Z-matrix.
-    balance: Balance,
-    grounding: Grounding<T>,
-}
-
-impl<T: Real, I: Index> AsIs<T, I> {
-    /// Panics unless nonempty, with one surplus per row.
-    pub(in crate::factor) fn new(
-        adjacency: UpperAdjacency<T, I>,
-        balance: Balance,
-        grounding: Grounding<T>,
-    ) -> Self {
-        assert!(adjacency.n() > 0, "M has a vertex");
-        assert!(grounding.fits(adjacency.n()), "one surplus per row");
-        Self {
-            adjacency,
-            balance,
-            grounding,
-        }
-    }
-
-    pub(super) fn n(&self) -> usize {
-        self.adjacency.n()
-    }
-
-    /// Singular exactly when balanced and ungrounded: its null vector is `1`, the fold's `F·1` in `A`.
-    pub(super) fn floats(&self) -> bool {
-        self.balance == Balance::Balanced && !self.grounding.is_grounded()
-    }
-}
 
 /// GTH on the packed lower `M`, the surplus as a last row `−s`, a floating `M`'s gauge moved last, both dropped (`d − Σl²` reached 7e-2 on within's grounded dumps, GTH 3e-15, for 11-80% more time); returns unit lower `L` with `D⁻¹` on its diagonal, and the gauge.
 pub(super) fn factor<T: Real, I: Index>(
-    as_is: &AsIs<T, I>,
+    matrix: &Sdd<T, I>,
     tail: Option<FactorTail<'_, T>>,
     values: &mut Vec<T>,
 ) -> (Vec<T>, Option<usize>) {
-    let n = as_is.n();
-    let pin = (as_is.floats()).then(|| tail.map_or(n - 1, FactorTail::largest));
+    let (n, signed) = (matrix.n(), matrix.layout() == Layout::Signed);
+    let pin = (matrix.floats()).then(|| tail.map_or(n - 1, FactorTail::largest));
     let m = n - usize::from(pin.is_some());
     let packed = row_start(m + 1);
     // `D⁻¹` trails the rows, contiguous as every row's fill reads it: strided in the diagonal measured +12-18% at n 16-24.
@@ -62,15 +28,11 @@ pub(super) fn factor<T: Real, I: Index>(
         let (k, j) = (slot(k), slot(j));
         values[row_start(k.max(j)) + k.min(j)] = a;
     };
-    for i in 0..n {
-        as_is.adjacency.upper(i).for_each(|(j, &a)| entry(i, j, a));
-    }
-    let ground = |i| as_is.grounding.edge(i).map(|s| (i, s));
-    (0..n).filter_map(ground).for_each(|(i, s)| entry(i, n, -s));
+    matrix.grounded_edges(|i, j, w| entry(i.index(), j.index(), -w));
     let (matrix, inverse_pivots) = values.split_at_mut(packed);
-    match as_is.balance {
-        Balance::Balanced => eliminate::<T, false>(matrix, inverse_pivots, m),
-        Balance::Frustrated => eliminate::<T, true>(matrix, inverse_pivots, m),
+    match signed {
+        false => eliminate::<T, false>(matrix, inverse_pivots, m),
+        true => eliminate::<T, true>(matrix, inverse_pivots, m),
     }
     for row in 0..m {
         let start = row_start(row);

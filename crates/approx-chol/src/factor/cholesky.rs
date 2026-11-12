@@ -4,19 +4,17 @@ mod dense;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use super::clique_tree::Multi;
-use super::sddm::{descend, lifted, Sddm, SignedWdd};
-#[cfg(feature = "serde")]
+use super::config::Config;
+use super::sddm::{descend, lifted, Layout, Sdd};
 use super::sign::{Signed, Unsigned};
-use crate::sgdd::{Balance, FactorTail};
+use crate::sgdd::FactorTail;
 use crate::{Batch, Index, MemStack, Real};
-pub(super) use approximate::Eliminated;
 use approximate::{ApproximateCholesky, CliqueTreeElimination};
-pub(super) use dense::AsIs;
 
-/// A task's buffers, reused across its blocks by either arm.
+/// A task's buffers, reused across its blocks by either kernel.
 pub(crate) struct Workspace<T, I> {
     elimination: CliqueTreeElimination<T, I>,
-    /// The dense arm's working matrix: allocated per block, it cost 8% of building 2–5 vertex blocks.
+    /// The dense kernel's working matrix: allocated per block, it cost 8% of building 2–5 vertex blocks.
     dense: Vec<T>,
 }
 
@@ -27,13 +25,6 @@ impl<T: Real, I: Index> Workspace<T, I> {
             dense: Vec::new(),
         }
     }
-}
-
-/// What a Cholesky factors: `M` as it is, factored densely; its SDDM; or frustrated `M` signed, both factored approximately.
-pub(super) enum Arm<T, I> {
-    AsIs(AsIs<T, I>),
-    Sddm(Sddm<T, I>),
-    Signed(SignedWdd<T, I>),
 }
 
 /// The factor of what the elimination leaves; it builds its own Triangular, so its facts come from that matrix.
@@ -52,38 +43,33 @@ pub(super) struct Cholesky<T, I> {
 impl<T: Real, I: Index> Cholesky<T, I> {
     /// Dense on `M` as it is, approximate on its SDDM or signed; `tail` is `F` on its vertices, `None` when every `|f|` is `1`.
     pub(super) fn factor(
-        arm: Arm<T, I>,
+        m: Sdd<T, I>,
+        config: &Config,
         draws: Xoshiro256PlusPlus,
         tail: Option<FactorTail<'_, T>>,
         reused: &mut Workspace<T, I>,
     ) -> Self {
-        match arm {
-            Arm::AsIs(as_is) => {
-                let (factor, pinned) = dense::factor(&as_is, tail, &mut reused.dense);
-                Self {
-                    n: as_is.n(),
-                    triangular: Triangular::Dense(factor.into(), pinned),
-                }
+        let n = m.n();
+        let triangular = match m.layout() {
+            Layout::Cover => {
+                let (steps, pinned) = reused.elimination.eliminate(m, Unsigned, draws, tail);
+                Triangular::Cover(Box::new(steps), pinned)
             }
-            Arm::Sddm(sddm) => {
-                let (balance, n) = (sddm.balance(), sddm.n());
-                let (steps, pinned) = reused.elimination.eliminate(sddm, draws, tail);
-                let steps = Box::new(steps);
-                let triangular = match balance {
-                    Balance::Balanced => Triangular::Folded(steps, pinned),
-                    Balance::Frustrated => Triangular::Cover(steps, pinned),
-                };
-                Self { n, triangular }
+            Layout::Like | Layout::Signed if config.dense(n) => {
+                let (factor, pinned) = dense::factor(&m, tail, &mut reused.dense);
+                Triangular::Dense(factor.into(), pinned)
             }
-            Arm::Signed(m) => {
-                let n = m.n();
-                let (steps, _) = reused.elimination.eliminate(m, draws, tail);
-                Self {
-                    n,
-                    triangular: Triangular::Signed(Box::new(steps)),
-                }
+            Layout::Like => {
+                let (steps, pinned) = reused.elimination.eliminate(m, Unsigned, draws, tail);
+                Triangular::Folded(Box::new(steps), pinned)
             }
-        }
+            Layout::Signed => {
+                let ground = I::from_index(n);
+                let (steps, _) = (reused.elimination).eliminate(m, Signed { ground }, draws, tail);
+                Triangular::Signed(Box::new(steps))
+            }
+        };
+        Self { n, triangular }
     }
 
     /// Pivots eliminated: every slot but a floating matrix's pinned one.

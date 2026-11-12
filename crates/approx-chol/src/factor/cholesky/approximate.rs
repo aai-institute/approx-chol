@@ -6,6 +6,7 @@ mod ordering;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use crate::factor::clique_tree::{CliqueTreeSampler, Copies, Fill, Multi, Single};
+use crate::factor::sddm::Sdd;
 use crate::factor::sign::Sign;
 #[cfg(feature = "serde")]
 use crate::factor::within_one;
@@ -31,33 +32,18 @@ impl<T: Real, I: Index> CliqueTreeElimination<T, I> {
     }
 
     /// Every vertex of `M` in minimum-degree order, each star replaced by a sampled clique tree, but a floating `M`'s last: returned as the slot the solve zeroes.
-    pub(super) fn eliminate<M: Eliminated<T, I>>(
+    pub(super) fn eliminate<S: Sign<T, I>>(
         &mut self,
-        m: M,
+        m: Sdd<T, I>,
+        sign: S,
         draws: Xoshiro256PlusPlus,
         tail: Option<FactorTail<'_, T>>,
     ) -> (ApproximateCholesky<T, I>, Option<usize>) {
         match &mut self.0 {
-            ByCopies::Ac(elimination) => elimination.eliminate(m, draws, tail),
-            ByCopies::Ac2(elimination) => elimination.eliminate(m, draws, tail),
+            ByCopies::Ac(elimination) => elimination.eliminate(m, sign, draws, tail),
+            ByCopies::Ac2(elimination) => elimination.eliminate(m, sign, draws, tail),
         }
     }
-}
-
-/// What an elimination eliminates: its edges, the ground past its slots, how its weights' signs read, and the slot it leaves.
-pub(in crate::factor) trait Eliminated<T: Real, I: Index> {
-    type Sign: Sign<T, I>;
-
-    /// Its slots; a ground is the vertex past them.
-    fn n(&self) -> usize;
-
-    /// Each edge once as `(i, j, −a_ij)`, the ground's as `(k, n, s_k)`.
-    fn grounded_edges(&self, edge: impl FnMut(I, I, T));
-
-    fn sign(&self) -> Self::Sign;
-
-    /// The vertex no pivot eliminates: the ground, the vertex past the slots, or a floating matrix's gauge, by `tail`.
-    fn pin(&self, tail: Option<FactorTail<'_, T>>) -> Option<usize>;
 }
 
 /// A block this small keeps its buffers for the task's next, its graph's slab never compacted; a larger one frees them.
@@ -83,16 +69,16 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         }
     }
 
-    fn eliminate<M: Eliminated<T, I>>(
+    fn eliminate<S: Sign<T, I>>(
         &mut self,
-        m: M,
+        m: Sdd<T, I>,
+        sign: S,
         mut draws: Xoshiro256PlusPlus,
         tail: Option<FactorTail<'_, T>>,
     ) -> (ApproximateCholesky<T, I>, Option<usize>) {
         let (slots, pin) = (m.n(), m.pin(tail));
         self.graph
             .load(&m, slots + usize::from(pin == Some(slots)), self.copies);
-        let sign = m.sign();
         drop(m);
         let (n, edge_ends) = (self.graph.n(), self.graph.edge_ends());
         self.order.load(&self.graph, self.copies, pin, edge_ends);
@@ -295,12 +281,11 @@ mod tests {
     use rand::{Rng, SeedableRng};
 
     use super::*;
-    use crate::factor::cholesky::Arm;
     use crate::factor::clique_tree::{Multi, Single};
     use crate::factor::config::{Config, FrustratedRoute, Sampling, SchurMode};
     use crate::factor::schur::BipartiteBlock;
-    use crate::factor::sddm::{Closure, Sddm, SignedWdd};
-    use crate::factor::sign::Unsigned;
+    use crate::factor::sddm::Layout;
+    use crate::factor::sign::{Signed, Unsigned};
     use crate::factor::{within_one, Streams};
     use crate::sgdd::{Balance, Grounding};
     use crate::storage::{Rows, UpperAdjacency};
@@ -431,7 +416,7 @@ mod tests {
     }
 
     /// A grounded Z-matrix on `n` vertices, a spanning path and random edges, log-uniform; its `D`-switched copy by random `σ`; and `σ`.
-    fn switched<T: Real>(n: usize, seed: u64) -> (Sddm<T, u32>, SignedWdd<T, u32>, Vec<bool>) {
+    fn switched<T: Real>(n: usize, seed: u64) -> (Sdd<T, u32>, Sdd<T, u32>, Vec<bool>) {
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
         let mut pairs: Vec<(usize, usize)> = (1..n).map(|v| (v - 1, v)).collect();
         for _ in 0..2 * n {
@@ -457,11 +442,8 @@ mod tests {
         let adjacency =
             |values| UpperAdjacency::new(Rows::new(ptrs.clone(), indices.clone(), values, n));
         (
-            Sddm::new(
-                adjacency(z),
-                Closure::Folded(Grounding::of(surplus.clone())),
-            ),
-            SignedWdd::new(adjacency(signed), Grounding::of(surplus)),
+            Sdd::new(adjacency(z), Grounding::of(surplus.clone()), Layout::Like),
+            Sdd::new(adjacency(signed), Grounding::of(surplus), Layout::Signed),
             flip,
         )
     }
@@ -471,7 +453,7 @@ mod tests {
         (n_e, n_k): (usize, usize),
         seed: u64,
         complement: SchurMode,
-    ) -> (Sddm<T, u32>, SignedWdd<T, u32>, Vec<bool>) {
+    ) -> (Sdd<T, u32>, Sdd<T, u32>, Vec<bool>) {
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
         let flip: Vec<bool> = (0..n_e + n_k).map(|_| rng.next_u64() % 2 == 1).collect();
         let (mut ptrs, mut indices, mut z, mut signed) = (vec![0], vec![], vec![], vec![]);
@@ -504,24 +486,26 @@ mod tests {
             let block = BipartiteBlock::of(cross, balance, grounding);
             block.complement(&config, streams, ONE)
         };
-        let (Arm::Sddm(sddm), Arm::Signed(signed)) = (
-            complement(z, Balance::Balanced),
-            complement(signed, Balance::Frustrated),
-        ) else {
-            panic!("a balanced complement folds, a frustrated one is signed")
-        };
+        let sddm = complement(z, Balance::Balanced);
+        let signed = complement(signed, Balance::Frustrated);
+        let folds = sddm.layout() == Layout::Like && signed.layout() == Layout::Signed;
+        assert!(
+            folds,
+            "a balanced complement folds, a frustrated one is signed"
+        );
         (sddm, signed, flip[n_e..].to_vec())
     }
 
     /// Magnitudes, draws and order agree, so only each share's sign moves, by `σ_v σ_j`.
     fn eliminate_alike<T: Real>(
-        (sddm, signed, flip): (Sddm<T, u32>, SignedWdd<T, u32>, Vec<bool>),
+        (sddm, signed, flip): (Sdd<T, u32>, Sdd<T, u32>, Vec<bool>),
         seed: u64,
         copies: Option<Multi>,
     ) -> bool {
         let draws = Xoshiro256PlusPlus::seed_from_u64(seed);
-        let (z, z_pin) = CliqueTreeElimination::new(copies).eliminate(sddm, draws.clone(), None);
-        let (s, s_pin) = CliqueTreeElimination::new(copies).eliminate(signed, draws, None);
+        let (ground, new) = (signed.n() as u32, || CliqueTreeElimination::new(copies));
+        let (z, z_pin) = new().eliminate(sddm, Unsigned, draws.clone(), None);
+        let (s, s_pin) = new().eliminate(signed, Signed { ground }, draws, None);
         let bits = |c: T| widen(c).to_bits();
         let headers = |steps: &ApproximateCholesky<T, u32>| -> Vec<_> {
             (steps.headers.iter())
