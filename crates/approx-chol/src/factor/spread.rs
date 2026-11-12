@@ -121,7 +121,7 @@ impl Spread {
     }
 }
 
-/// Solves every coupled block of `x`, of `n` rows, through `stack`, which holds one thread's [`slots`](Spread::slots) or more: as many blocks within the share at once as it holds regions, at most the budget's threads.
+/// Solves every coupled block of `x`, of `n` rows, through `stack`, which holds one region of its [`room`](Spread::room) or more: as many blocks within the share at once as it holds regions, at most the budget's threads.
 pub(super) fn solve_blocks<T: Real, V: Batch<T>>(
     inverse: &ApproxInverse<T>,
     x: &mut [V],
