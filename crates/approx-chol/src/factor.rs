@@ -8,7 +8,7 @@ mod clique_tree;
 mod config;
 mod header;
 mod schur;
-mod sddm;
+mod sdd;
 mod sign;
 #[cfg(feature = "serde")]
 mod wire;
@@ -35,7 +35,7 @@ use apply::{rows_error, Room, Stack};
 use block_elimination::BlockElimination;
 use cholesky::{Cholesky, Workspace};
 use schur::BipartiteBlock;
-use sddm::Factored;
+use sdd::{Route, Sdd};
 
 /// `log₂` of the multiply-adds a block elimination's task carries, below which a split costs more than it saves.
 const MULTIPLY_ADD_GRAIN_BITS: u32 = 17;
@@ -254,14 +254,14 @@ impl<T: Real, I: Index> Summand<T, I> for IrreducibleBlock<T, I> {
         let (elimination, cholesky) = match off_diagonal {
             OffDiagonal::General(adjacency) => {
                 let off_diagonal = |scale| adjacency.scaled_abs_total(scale);
-                let factored = Factored::of(
+                let route = Route::of(
                     config,
                     balance,
                     adjacency.n(),
                     grounding.surplus(),
                     off_diagonal,
                 );
-                let m = factored.on(adjacency, grounding);
+                let m = Sdd::of(route, adjacency, grounding);
                 (None, Cholesky::factor(m, config, draws, tail(0), reused))
             }
             OffDiagonal::Bipartite(cross) => {

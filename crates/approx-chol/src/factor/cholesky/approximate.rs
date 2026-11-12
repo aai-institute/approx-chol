@@ -6,7 +6,7 @@ mod ordering;
 use rand::rngs::Xoshiro256PlusPlus;
 
 use crate::factor::clique_tree::{CliqueTreeSampler, Copies, Fill, Multi, Single};
-use crate::factor::sddm::Sdd;
+use crate::factor::sdd::Sdd;
 use crate::factor::sign::Sign;
 #[cfg(feature = "serde")]
 use crate::factor::within_one;
@@ -284,7 +284,7 @@ mod tests {
     use crate::factor::clique_tree::{Multi, Single};
     use crate::factor::config::{Config, FrustratedRoute, Sampling, SchurMode};
     use crate::factor::schur::BipartiteBlock;
-    use crate::factor::sddm::Layout;
+    use crate::factor::sdd::Layout;
     use crate::factor::sign::{Signed, Unsigned};
     use crate::factor::{within_one, Streams};
     use crate::sgdd::{Balance, Grounding};

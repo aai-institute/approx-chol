@@ -5,7 +5,7 @@ use rand::rngs::Xoshiro256PlusPlus;
 
 use super::clique_tree::Multi;
 use super::config::Config;
-use super::sddm::{descend, lifted, Layout, Sdd};
+use super::sdd::{descend, lifted, Layout, Sdd};
 use super::sign::{Signed, Unsigned};
 use crate::sgdd::FactorTail;
 use crate::{Batch, Index, MemStack, Real};
