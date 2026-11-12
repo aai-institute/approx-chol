@@ -68,6 +68,7 @@ fn solve_bits(g: &Bipartite, config: Config, kept: Option<Side>) -> (String, Vec
 #[case::ac2(Config { sampling: clique_tree(3), ..Config::default() })]
 #[case::exact(Config { complement: SchurMode::Exact, ..Config::default() })]
 #[case::surplus_edges(Config { frustrated: FrustratedRoute::Cover(CoverSurplus::SurplusEdges), ..Config::default() })]
+#[case::exact_surplus_edges(Config { complement: SchurMode::Exact, frustrated: FrustratedRoute::Cover(CoverSurplus::SurplusEdges), ..Config::default() })]
 #[case::signed(Config { frustrated: FrustratedRoute::Signed, ..Config::default() })]
 fn solves_are_bit_identical_across_thread_counts(
     #[case] config: Config,
