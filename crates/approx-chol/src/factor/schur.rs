@@ -500,7 +500,7 @@ mod tests {
     /// Each row's ground edge's bits, by row.
     fn ground_bits<T: Real>(m: Sdd<T, u32>) -> Vec<(u32, u64)> {
         let sddm = m.layout() != Layout::Signed;
-        assert!(sddm, "an approximately route complement is an SDDM");
+        assert!(sddm, "an approximately factored complement is an SDDM");
         let n = m.n() as u32;
         let mut ground = Vec::new();
         m.grounded_edges(|i, j, w| {

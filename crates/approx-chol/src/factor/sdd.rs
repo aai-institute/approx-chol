@@ -105,7 +105,7 @@ impl<T: Real, I: Index> Sdd<T, I> {
     }
 }
 
-/// The SDD matrix that stands for a block's `M`: itself, or its Gremban cover.
+/// The SDD matrix that stands for a block's `M`: itself, like or signed, or its Gremban cover; a dense block stands for itself whatever its [`FrustratedRoute`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Route {
     Like,
