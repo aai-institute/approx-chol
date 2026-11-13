@@ -3,7 +3,7 @@
 use num_traits::PrimInt;
 use rayon::iter::Either;
 
-use super::{ApproxInverse, Summand};
+use super::{ApproxInverse, Indexed, Summand};
 use crate::input::{BipartiteFactorWidth2, Input, Side};
 use crate::order::Slots;
 use crate::sgdd::{
@@ -60,13 +60,6 @@ type PackedSgdd<T, I> = Packed<IrreducibleBlock<T, I>, T>;
 /// A reduced complement packed for its factor, its indices in `I`.
 type PackedComplement<T, I> = Packed<BlockComplement<T, I>, T>;
 
-/// A value in the narrowest index a cover's `2n + 1` slots fit.
-#[derive(Clone, Copy, Debug)]
-enum Indexed<N, W> {
-    U32(N),
-    U64(W),
-}
-
 impl<N, W> Indexed<N, W> {
     /// `narrow` while `u32` indexes a cover's two sheets and its ground, the most slots any block of `n` vertices takes, else `wide`.
     fn of(
@@ -90,10 +83,7 @@ impl<T: Real, B: Summand<T, u32>, C: Summand<T, u64>> Indexed<Packed<B, T>, Pack
     }
 
     fn factor(self, config: &Config, threads: Threads) -> ApproxInverse<T> {
-        match self {
-            Self::U32(packed) => ApproxInverse::build(packed, config, threads),
-            Self::U64(packed) => ApproxInverse::build(packed, config, threads),
-        }
+        on!(self, packed => ApproxInverse::build(packed, config, threads))
     }
 }
 

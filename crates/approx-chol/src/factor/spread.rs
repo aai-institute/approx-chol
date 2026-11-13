@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::apply::Room;
-use super::{slots, ApproxInverse, Block, Blocks};
+use super::{slots, ApproxInverse, Block, Indexed};
 use crate::order::{Order, Rows};
 use crate::threads::ONE;
 use crate::{Batch, Index, MemStack, Real, StackReq, Threads};
@@ -130,10 +130,7 @@ pub(super) fn solve_blocks<T: Real, V: Batch<T>>(
 ) {
     let spread = Spread::of(inverse, threads);
     // Sound for an ApproxInverse's own blocks alone: `pack` and decoding leave their segments disjoint.
-    match &inverse.blocks {
-        Blocks::U32(blocks) => spread.solve(blocks, &inverse.order, x, threads, stack),
-        Blocks::U64(blocks) => spread.solve(blocks, &inverse.order, x, threads, stack),
-    }
+    on!(&inverse.blocks, blocks => spread.solve(blocks, &inverse.order, x, threads, stack));
 }
 
 impl Spread {
