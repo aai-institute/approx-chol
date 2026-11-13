@@ -2,7 +2,6 @@
 
 mod apply;
 mod block_elimination;
-mod build;
 mod cholesky;
 mod clique_tree;
 mod config;
@@ -58,17 +57,20 @@ pub struct ApproxInverse<T = f64> {
     coupled: Coupled,
 }
 
-/// Every coupled block's factor, block `k` on `order`'s segment `k`, all in `u32` while a cover's `2n + 1` slots fit it, else in `u64`.
+/// A value in the narrowest index a cover's `2n + 1` slots fit.
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
-    serde(bound(deserialize = "T: Real + serde::Deserialize<'de>"))
+    serde(rename = "Blocks")
 )]
-#[derive(Clone, Debug)]
-pub(crate) enum Blocks<T> {
-    U32(Box<[Block<T, u32>]>),
-    U64(Box<[Block<T, u64>]>),
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Indexed<N, W> {
+    U32(N),
+    U64(W),
 }
+
+/// Every coupled block's factor, block `k` on `order`'s segment `k`.
+pub(crate) type Blocks<T> = Indexed<Box<[Block<T, u32>]>, Box<[Block<T, u64>]>>;
 
 impl<T> From<Box<[Block<T, u32>]>> for Blocks<T> {
     fn from(blocks: Box<[Block<T, u32>]>) -> Self {
@@ -82,16 +84,18 @@ impl<T> From<Box<[Block<T, u64>]>> for Blocks<T> {
     }
 }
 
-/// Runs `$body` on the blocks, whichever index type stores them.
+/// Runs `$body` on the value, whichever index type stores it.
 macro_rules! on {
     ($blocks:expr, $each:ident => $body:expr) => {
         match $blocks {
-            Blocks::U32($each) => $body,
-            Blocks::U64($each) => $body,
+            Indexed::U32($each) => $body,
+            Indexed::U64($each) => $body,
         }
     };
 }
 
+// Below `on!`: a macro_rules macro is visible only to modules declared after it.
+mod build;
 mod spread;
 use spread::Coupled;
 
