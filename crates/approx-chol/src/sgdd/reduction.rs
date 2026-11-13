@@ -152,22 +152,15 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
                 row_degrees(rows.diagonal.len(), m.off_diagonal()),
             )
             .map_or(0.0, |past| past.fold(0.0, f64::max));
+        let folded = Folded {
+            m,
+            rows,
+            vector,
+            clamped,
+        };
         match balance {
-            Balance::Balanced => Ok(Settling::Pending(Folded {
-                m,
-                rows,
-                vector,
-                clamped,
-            })),
-            Balance::Frustrated => Ok(Settling::Settled(
-                Folded {
-                    m,
-                    rows,
-                    vector,
-                    clamped,
-                }
-                .frustrated()?,
-            )),
+            Balance::Balanced => Ok(Settling::Pending(folded)),
+            Balance::Frustrated => Ok(Settling::Settled(folded.frustrated()?)),
         }
     }
 }
@@ -189,8 +182,6 @@ struct Folded<'p, T, I> {
 
 /// `M`'s surplus `M1` and what tells a real one from rounding: a CSR `A` has only `M`'s rows, a Gram also `V`.
 trait Surplus<T: Real, I: Index> {
-    /// Whether residues alone float a scaled block, which then has no certificate to fall back on.
-    const RESIDUES_FLOAT_SCALED: bool;
     /// Each row's residue `(M1)_i`.
     fn residues<'a>(
         &'a self,
@@ -200,8 +191,10 @@ trait Surplus<T: Real, I: Index> {
     fn stated(&self, _: &Folded<'_, T, I>) -> Option<Box<[bool]>> {
         None
     }
-    /// Whether the block's cycles all close within `√ε`; asked last, as it may run a pass over `V`.
-    fn certifies(&self, vertices: &[I]) -> bool;
+    /// Whether a block's cycles all close within `√ε`, asked last, as it may run a pass over `V`; none, so residues alone float a scaled block, by default.
+    fn certifier(&self) -> Option<impl Fn(&[I]) -> bool + '_> {
+        None::<fn(&[I]) -> bool>
+    }
     /// `M`'s grounds once it does not float.
     fn grounds(&self, folded: &Folded<'_, T, I>) -> Grounding<T>;
 }
@@ -210,18 +203,12 @@ trait Surplus<T: Real, I: Index> {
 struct RowSurplus;
 
 impl<T: Real, I: Index> Surplus<T, I> for RowSurplus {
-    const RESIDUES_FLOAT_SCALED: bool = true;
-
     fn residues<'a>(
         &'a self,
         folded: &'a Folded<'_, T, I>,
     ) -> impl Iterator<Item = f64> + Clone + 'a {
         let RowSums { diagonal, abs } = &folded.rows;
         (diagonal.iter().zip(abs)).map(|(&d, &s)| widen(d) - widen(s))
-    }
-
-    fn certifies(&self, _: &[I]) -> bool {
-        false
     }
 
     fn grounds(&self, Folded { m, rows, .. }: &Folded<'_, T, I>) -> Grounding<T> {
@@ -248,9 +235,9 @@ impl<T: Real, I: Index> Folded<'_, T, I> {
     ) -> Result<IrreducibleBlock<T, I>, BuildError> {
         let stated = surplus.stated(&self);
         let in_band = stated.is_none() && within_band::<T>(ones, trace);
-        let residues_float =
-            matches!(self.vector, ScaleVector::Identity) || S::RESIDUES_FLOAT_SCALED;
-        let certified = || surplus.certifies(self.m.vertices());
+        let certifier = surplus.certifier();
+        let residues_float = matches!(self.vector, ScaleVector::Identity) || certifier.is_none();
+        let certified = || certifier.as_ref().is_some_and(|c| c(self.m.vertices()));
         // A scaled Gram floats on its certificate alone, before any residue is read.
         let certificate = in_band && !residues_float && certified();
         let grounds = match certificate {
