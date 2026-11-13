@@ -152,22 +152,15 @@ impl<'p, T: Real, I: Index> SymmetricBlock<'p, T, I> {
                 row_degrees(rows.diagonal.len(), m.off_diagonal()),
             )
             .map_or(0.0, |past| past.fold(0.0, f64::max));
+        let folded = Folded {
+            m,
+            rows,
+            vector,
+            clamped,
+        };
         match balance {
-            Balance::Balanced => Ok(Settling::Pending(Folded {
-                m,
-                rows,
-                vector,
-                clamped,
-            })),
-            Balance::Frustrated => Ok(Settling::Settled(
-                Folded {
-                    m,
-                    rows,
-                    vector,
-                    clamped,
-                }
-                .frustrated()?,
-            )),
+            Balance::Balanced => Ok(Settling::Pending(folded)),
+            Balance::Frustrated => Ok(Settling::Settled(folded.frustrated()?)),
         }
     }
 }
