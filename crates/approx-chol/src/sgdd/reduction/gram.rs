@@ -64,9 +64,6 @@ struct GramSurplus<'a, I, F> {
 }
 
 impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_, I, F> {
-    // A Gram's grounds are stated or break a cycle: a scaled block floats only on its certificate.
-    const RESIDUES_FLOAT_SCALED: bool = false;
-
     fn residues<'a>(
         &'a self,
         folded: &'a Folded<'_, T, I>,
@@ -83,8 +80,11 @@ impl<T: Real, I: Index, F: FnOnce() -> Vec<I>> Surplus<T, I> for GramSurplus<'_,
         rows_where(folded.rows.diagonal.len(), past.map(|ratio| ratio > 0.0))
     }
 
-    fn certifies(&self, vertices: &[I]) -> bool {
-        (vertices.iter().min()).is_some_and(|v| self.certified.binary_search(v).is_ok())
+    // A Gram's grounds are stated or break a cycle: a scaled block floats only on its certificate.
+    fn certifier(&self) -> Option<impl Fn(&[I]) -> bool + '_> {
+        Some(|vertices: &[I]| {
+            (vertices.iter().min()).is_some_and(|v| self.certified.binary_search(v).is_ok())
+        })
     }
 
     // Every rounded surplus ≤ 0 leaves nothing to ground: out of band, only past degree ~2·10⁸ (#299).
