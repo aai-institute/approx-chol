@@ -182,14 +182,8 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         sign: S,
     ) {
         let copies = self.split;
-        self.entries.clear();
+        self.load(neighbors.map(|(neighbor, weight)| (neighbor, copies, weight)));
         self.dropped.clear();
-        let entries = neighbors.map(|(neighbor, weight)| StarEntry {
-            neighbor,
-            copies,
-            weight,
-        });
-        self.entries.extend(entries);
         (self.entries).sort_unstable_by(|a, b| by_weight_then_neighbor(sign, a, b));
     }
 
