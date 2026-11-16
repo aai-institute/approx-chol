@@ -1,4 +1,6 @@
-use approx_chol::{ApproxInverse, Component, Config, MemStack, Real, SchurMode, Threads};
+use std::num::NonZeroU32;
+
+use approx_chol::{ApproxInverse, Component, Config, MemStack, Real, Sampling, SchurMode, Threads};
 
 use crate::common::bits::bits;
 use crate::common::cases::cases;
@@ -484,6 +486,36 @@ fn a_frustrated_grid_whose_surplus_lies_on_a_light_row_converges_under_pcg(
         assert!(
             iterations.is_some(),
             "seed {seed}: PCG did not reach {tolerance:e}"
+        );
+    }
+}
+
+/// A band of width 5 converges as a band: degrees counting a fill pair's duplicates moved elimination off the band's front, 24-25 iterations under AC.
+#[rstest::rstest]
+fn a_banded_laplacian_preconditions_within_16_iterations(#[values(1, 2)] copies: u32) {
+    let (n, band) = (2_000, 5);
+    let edges = (0..n).flat_map(|i| {
+        (1..=band)
+            .filter(move |d| i + d < n)
+            .map(move |d| Edge::negative(i, i + d, 1.0 + ((i * 7 + d * 3) % 5) as f64 / 4.0))
+    });
+    let mut graph = Graph::new(n, edges.collect());
+    graph.ground[0] = 1.0;
+    let b = graph.apply(&(0..n).map(|v| (v % 5) as f64 - 2.0).collect::<Vec<_>>());
+    for seed in 0..3 {
+        let config = Config {
+            seed,
+            exact_max_dim: 0,
+            sampling: Sampling::CliqueTree {
+                copies: NonZeroU32::new(copies).expect("one copy or more"),
+            },
+            ..Config::default()
+        };
+        let factor = Entry::Csr.reduce(&graph, Types::F64U32).factorize(&config);
+        let iterations = pcg_iterations(|x| graph.apply(x), |r| factor.solve(r), &b, 1e-8, 100);
+        assert!(
+            iterations.is_some_and(|it| it <= 16),
+            "seed {seed}, {copies} copies: {iterations:?} iterations"
         );
     }
 }
