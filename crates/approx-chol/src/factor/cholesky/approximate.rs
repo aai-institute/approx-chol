@@ -77,13 +77,31 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         tail: Option<FactorTail<'_, T>>,
     ) -> (ApproximateCholesky<T, I>, Option<usize>) {
         let (slots, pin) = (m.n(), m.pin(tail));
-        self.graph
-            .load(&m, slots + usize::from(pin == Some(slots)), self.copies);
-        drop(m);
-        let (n, edge_ends) = (self.graph.n(), self.graph.edge_ends());
-        self.order.load(&self.graph, self.copies, pin, edge_ends);
-        let mut steps = ApproximateCholesky::with_capacity(n, edge_ends);
-        self.pivot_all(&mut draws, &mut steps, slots, sign);
+        let n = slots + usize::from(pin == Some(slots));
+        let room = EliminationGraph::<T, I, C>::room(&m, n);
+        let first = (n > REUSED_UP_TO)
+            .then(|| local_minima(&m, &room, pin))
+            .flatten();
+        let (mut steps, kept) = match &first {
+            None => {
+                self.graph.load(&m, &room, self.copies);
+                drop((m, room));
+                (ApproximateCholesky::with_capacity(n, 0), n)
+            }
+            Some(first) => {
+                let steps = self.eliminate_first(m, room, first, sign, &mut draws, slots);
+                (steps, first.count)
+            }
+        };
+        let edge_ends = self.graph.edge_ends();
+        let queued = |v| Some(v) != pin && first.as_ref().is_none_or(|first| !first.gone(v));
+        self.order.load(&self.graph, self.copies, queued, edge_ends);
+        drop(first);
+        steps.neighbors.reserve_exact(edge_ends);
+        steps.coefficients.reserve_exact(edge_ends);
+        // Every vertex left but one: the pin, or the order's last.
+        let pivots = kept - 1;
+        self.pivot_all(&mut draws, &mut steps, slots, sign, pivots);
         // Doubling past the estimate otherwise retains up to 2x the entries (+30% on grids).
         steps.neighbors.shrink_to_fit();
         steps.coefficients.shrink_to_fit();
@@ -102,6 +120,7 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         steps: &mut ApproximateCholesky<T, I>,
         slots: usize,
         sign: S,
+        pivots: usize,
     ) {
         let Self {
             graph,
@@ -110,7 +129,7 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
             order,
             ..
         } = self;
-        for _ in 1..graph.n() {
+        for _ in 0..pivots {
             let v = order.next_vertex();
             fill.clear();
             let column = clique.eliminate(draws, graph.neighbors(v), fill, sign);
@@ -124,6 +143,169 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
             order.update(graph, clique.dropped());
         }
     }
+
+    /// Pivots those `remaining` marks gone, each star its row of `m`, the fill merged as it grows; loads the graph with the rest.
+    fn eliminate_first<S: Sign<T, I>>(
+        &mut self,
+        m: Sdd<T, I>,
+        room: Vec<u32>,
+        remaining: &Remaining,
+        sign: S,
+        draws: &mut Xoshiro256PlusPlus,
+        slots: usize,
+    ) -> ApproximateCholesky<T, I> {
+        let (n, split) = (room.len(), self.copies);
+        let mut start = vec![0usize; n + 1];
+        for v in 0..n {
+            start[v + 1] = start[v]
+                + if remaining.gone(v) {
+                    room[v] as usize - 1
+                } else {
+                    0
+                };
+        }
+        drop(room);
+        let mut rows = vec![(I::from_index(0), T::zero()); start[n]];
+        let mut at = start.clone();
+        let mut rest = Vec::new();
+        m.grounded_edges(|k, j, w| {
+            let (row, to) = match (remaining.gone(k.index()), remaining.gone(j.index())) {
+                (true, _) => (k, j),
+                (_, true) => (j, k),
+                _ => return rest.push((k, j, w, split.get())),
+            };
+            rows[at[row.index()]] = (to, w);
+            at[row.index()] += 1;
+        });
+        drop((at, m));
+        let mut steps = ApproximateCholesky::with_capacity(n, start[n]);
+        let mut merged = rest.len();
+        for v in (0..n).filter(|&v| remaining.gone(v)) {
+            self.fill.clear();
+            let row = rows[start[v]..start[v + 1]].iter();
+            let column = (self.clique).eliminate(
+                draws,
+                row.map(|&(u, w)| (u, split, w)),
+                &mut self.fill,
+                sign,
+            );
+            steps.push(v, column, slots);
+            let fill = self.fill.iter();
+            rest.extend(fill.map(|&(u, w, copies, weight)| (u, w, weight, copies.get())));
+            // Merged at each doubling, so the staged fill stays within twice its merged size.
+            if rest.len() >= (2 * merged).max(1 << 16) {
+                merge_parallel(&mut rest, sign, remaining);
+                merged = rest.len();
+            }
+        }
+        drop((rows, start));
+        merge_parallel(&mut rest, sign, remaining);
+        self.graph.load_merged(&rest, remaining, split);
+        steps
+    }
+}
+
+/// Each vertex's id among those minimum degree eliminates, [`u32::MAX`] for one pivoted first, and their count.
+struct Remaining {
+    ids: Vec<u32>,
+    count: usize,
+}
+
+impl Remaining {
+    fn gone(&self, v: usize) -> bool {
+        self.ids[v] == u32::MAX
+    }
+
+    fn id<I: Index>(&self, v: I) -> usize {
+        self.ids[v.index()] as usize
+    }
+}
+
+/// Vertices whose `(room, id)` is below every neighbor's but the pin's, if their edges are a quarter of all and their ids fit `u32`: an independent set (Liu's multiple minimum degree), so each star is its input row.
+fn local_minima<T: Real, I: Index>(
+    m: &Sdd<T, I>,
+    room: &[u32],
+    pin: Option<usize>,
+) -> Option<Remaining> {
+    u32::try_from(room.len()).ok()?;
+    let key = |v: usize| (u64::from(room[v]) << 32) | v as u64;
+    let mut lowest = vec![u64::MAX; room.len()];
+    m.grounded_edges(|k, j, _| {
+        let (k, j) = (k.index(), j.index());
+        if Some(j) != pin {
+            lowest[k] = lowest[k].min(key(j));
+        }
+        if Some(k) != pin {
+            lowest[j] = lowest[j].min(key(k));
+        }
+    });
+    let first = |v: usize| Some(v) != pin && room[v] > 1 && key(v) < lowest[v];
+    let edges = |v: usize| room[v] as usize - 1;
+    let covered: usize = (0..room.len()).filter(|&v| first(v)).map(edges).sum();
+    // Below it, grids pay the staging for few pivots.
+    if 4 * covered < (0..room.len()).map(edges).sum() {
+        return None;
+    }
+    let mut count = 0;
+    let ids = (0..room.len())
+        .map(|v| match first(v) {
+            true => u32::MAX,
+            false => {
+                count += 1;
+                count as u32 - 1
+            }
+        })
+        .collect();
+    Some(Remaining { ids, count })
+}
+
+/// Sums parallel `(lo, hi, weight, copies)` edges as a star's merge would, unsigned only, as a signed merge grounds what it cancels; buckets by `lo`'s remaining id, then scatters on `hi`'s.
+fn merge_parallel<T: Real, I: Index, S: Sign<T, I>>(
+    edges: &mut Vec<(I, I, T, u32)>,
+    sign: S,
+    remaining: &Remaining,
+) {
+    if sign.ground().is_some() || edges.is_empty() {
+        return;
+    }
+    let kept = remaining.count;
+    let mut start = vec![0usize; kept + 1];
+    for edge in edges.iter() {
+        start[remaining.id(edge.0) + 1] += 1;
+    }
+    for l in 0..kept {
+        start[l + 1] += start[l];
+    }
+    let mut bucketed = edges.clone();
+    let mut at = start.clone();
+    for &edge in edges.iter() {
+        bucketed[at[remaining.id(edge.0)]] = edge;
+        at[remaining.id(edge.0)] += 1;
+    }
+    drop(at);
+    let mut seen = vec![usize::MAX; kept];
+    let mut out = 0;
+    for l in 0..kept {
+        let first = out;
+        for &edge in &bucketed[start[l]..start[l + 1]] {
+            match seen[remaining.id(edge.1)] {
+                usize::MAX => {
+                    seen[remaining.id(edge.1)] = out;
+                    edges[out] = edge;
+                    out += 1;
+                }
+                held => {
+                    let held = &mut edges[held];
+                    held.2 = sign.merge(held.2, edge.2).0;
+                    held.3 = held.3.saturating_add(edge.3);
+                }
+            }
+        }
+        for edge in &edges[first..out] {
+            seen[remaining.id(edge.1)] = usize::MAX;
+        }
+    }
+    edges.truncate(out);
 }
 
 /// A step's neighbors follow the previous step's, so the solve's running `usize` offset finds them at any size.
@@ -278,7 +460,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
 
 #[cfg(test)]
 mod tests {
-    use rand::{Rng, SeedableRng};
+    use rand::{Rng, RngExt, SeedableRng};
 
     use super::*;
     use crate::factor::clique_tree::{Multi, Single};
@@ -291,6 +473,36 @@ mod tests {
     use crate::storage::{Rows, UpperAdjacency};
     use crate::threads::ONE;
     use crate::widen;
+
+    /// Each pair once, its weights and copies summed.
+    #[test]
+    fn merging_sums_each_pairs_parallel_edges() {
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(3);
+        let n = 12u32;
+        let remaining = Remaining {
+            ids: (0..n).collect(),
+            count: n as usize,
+        };
+        let mut edges: Vec<(u32, u32, f64, u32)> = (0..300)
+            .map(|_| {
+                let (a, b) = (rng.random_range(0..n), rng.random_range(0..n - 1));
+                let b = b + u32::from(b >= a);
+                let w = f64::from(rng.random_range(1..5u8));
+                (a.min(b), a.max(b), w, rng.random_range(1..3))
+            })
+            .collect();
+        let mut want = std::collections::BTreeMap::<(u32, u32), (f64, u32)>::new();
+        for &(a, b, w, copies) in &edges {
+            let held = want.entry((a, b)).or_default();
+            *held = (held.0 + w, held.1 + copies);
+        }
+        merge_parallel(&mut edges, Unsigned, &remaining);
+        let have: std::collections::BTreeMap<_, _> = (edges.iter())
+            .map(|&(a, b, w, copies)| ((a, b), (w, copies)))
+            .collect();
+        assert_eq!(have.len(), edges.len(), "a pair held twice");
+        assert_eq!(have, want);
+    }
 
     fn stars(m: usize) -> [(&'static str, Vec<f32>); 3] {
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(7);

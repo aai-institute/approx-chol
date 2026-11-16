@@ -19,7 +19,7 @@ pub(in crate::factor) trait Copies: Copy + Send + Sync {
     ) -> impl Iterator<Item = (usize, Self, T)> + 'a;
 }
 
-/// Each vertex's copies over its incident edges, kept as edges come and go.
+/// Each vertex's copies over its incident edges, those a merge's cap dropped counted, kept as edges come and go.
 pub(in crate::factor) trait Degrees: Default {
     fn load(&mut self, n: usize);
     fn add(&mut self, v: usize, copies: u32);
@@ -28,21 +28,42 @@ pub(in crate::factor) trait Degrees: Default {
     fn get(&self, v: usize, len: u32) -> u64;
 }
 
-/// One copy per edge: a vertex's edge count is its degree.
+/// One copy per edge: a vertex's edge count is its degree, plus the copies merges dropped, allocated on the first.
 #[derive(Default)]
-pub(in crate::factor) struct EdgeCounts;
+pub(in crate::factor) struct EdgeCounts {
+    n: usize,
+    dropped: Vec<u64>,
+}
 
 impl Degrees for EdgeCounts {
-    fn load(&mut self, _: usize) {}
+    fn load(&mut self, n: usize) {
+        self.n = n;
+        self.dropped = Vec::new();
+    }
 
-    fn add(&mut self, _: usize, _: u32) {}
+    fn add(&mut self, v: usize, copies: u32) {
+        if copies > 1 {
+            if self.dropped.is_empty() {
+                self.dropped.resize(self.n, 0);
+            }
+            self.dropped[v] += u64::from(copies - 1);
+        }
+    }
 
-    fn remove(&mut self, _: usize, _: u32) {}
+    fn remove(&mut self, v: usize, copies: u32) {
+        if copies > 1 {
+            self.dropped[v] -= u64::from(copies - 1);
+        }
+    }
 
-    fn release(&mut self, _: usize) {}
+    fn release(&mut self, v: usize) {
+        if let Some(dropped) = self.dropped.get_mut(v) {
+            *dropped = 0;
+        }
+    }
 
-    fn get(&self, _: usize, len: u32) -> u64 {
-        u64::from(len)
+    fn get(&self, v: usize, len: u32) -> u64 {
+        u64::from(len) + self.dropped.get(v).copied().unwrap_or(0)
     }
 }
 
