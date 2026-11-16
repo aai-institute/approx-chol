@@ -86,9 +86,16 @@ fn round_trip_solves_bit_identically(#[case] round_trip: fn(&ApproxInverse) -> A
         .iter()
         .flat_map(ApproxInverse::components)
         .any(|component| component.floats()));
-    // `Cᵀ` is not persisted: only `Debug` shows that a block kept it and that loading rebuilt it.
-    let keeps_transpose = |factor: &ApproxInverse| format!("{factor:?}").contains("ct: Some(");
-    assert!(keeps_transpose(&defaults[0]), "a block keeps Cᵀ");
+    // The forward's leaves are not persisted: only `Debug` shows that a block split into them and that loading rebuilt them.
+    let splits_forward = |factor: &ApproxInverse| {
+        let shown = format!("{factor:?}");
+        (shown.split("leaves: [").skip(1))
+            .any(|rest| rest[..rest.find(']').unwrap()].matches(',').count() > 1)
+    };
+    assert!(
+        splits_forward(&defaults[0]),
+        "a block splits its forward into leaves"
+    );
     for config in configs() {
         for factor in factors(config) {
             let back = round_trip(&factor);

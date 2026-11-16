@@ -389,9 +389,10 @@ impl<T: Real, I: Index> Block<T, I> {
         eliminated + self.cholesky.n_steps()
     }
 
-    /// Slots [`solve_global`](Self::solve_global) takes: room to gather unless the vertices are consecutive, plus the Cholesky's.
+    /// Slots [`solve_global`](Self::solve_global) takes: room to gather unless the vertices are consecutive, plus the Cholesky's or the elimination's forward, which frees its own first.
     fn global_scratch_slots(&self) -> usize {
-        self.segment.gather_slots() + self.cholesky.scratch_slots()
+        let forward = (self.elimination.as_deref()).map_or(0, BlockElimination::scratch_slots);
+        self.segment.gather_slots() + self.cholesky.scratch_slots().max(forward)
     }
 
     /// Solves the block's vertices of `x`, its segment of `order`, in place through a stack of [`global_scratch_slots`](Self::global_scratch_slots) slots.
@@ -419,7 +420,9 @@ impl<T: Real, I: Index> Block<T, I> {
         match &self.elimination {
             None => self.cholesky.solve(x, stack),
             Some(elimination) => {
-                elimination.solve(x, threads, |kept| self.cholesky.solve(kept, stack));
+                elimination.solve(x, threads, stack, |kept, stack| {
+                    self.cholesky.solve(kept, stack)
+                });
                 if singular {
                     self.congruence.regauge(x);
                 }

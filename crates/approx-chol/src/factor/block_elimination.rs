@@ -1,10 +1,12 @@
 //! A bipartite block's eliminated side as `L`'s first block column, and the solve `M⁻¹x` around `S`'s.
 
+use std::ops::Range;
+
 use rayon::prelude::*;
 
 use super::{within_one, MULTIPLY_ADD_GRAIN_BITS};
 use crate::storage::Rows;
-use crate::{Batch, Index, Real, Threads};
+use crate::{Batch, Index, MemStack, Real, Threads};
 
 /// `M`'s cross block scaled by its inverse pivots, `D_e⁻¹ C`, and `D_e⁻¹`, applied as two products because the block's steps commute.
 #[cfg_attr(
@@ -21,9 +23,9 @@ pub(super) struct BlockElimination<T, I> {
     /// `D_e⁻¹ C`, signs kept and shared with the block: a frustrated block's cover never doubles it; each row's magnitudes sum to at most one, so no product with a solution overflows.
     cross: Rows<T, I>,
     inv_pivot: Box<[T]>,
-    /// `(D_e⁻¹ C)ᵀ` past one grain of the forward's `nnz` multiply-adds, so a solve may split by kept row as [`Threads::per_task`] says.
+    /// The forward's leaves of eliminated rows, fixed by the shape so its sums are too; [`Threads::per_task`] only groups them.
     #[cfg_attr(feature = "serde", serde(skip))]
-    ct: Option<Rows<T, I>>,
+    leaves: Box<[usize]>,
 }
 
 impl<T: Real, I: Index> BlockElimination<T, I> {
@@ -35,11 +37,11 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
 
     fn scaled(cross: Rows<T, I>, inv_pivot: Box<[T]>) -> Self {
         debug_assert!(rows_within_one(&cross), "a D_e⁻¹C row sums past one");
-        let ct = (cross.nnz() > 1 << MULTIPLY_ADD_GRAIN_BITS).then(|| cross.transpose());
+        let leaves = leaves(&cross);
         Self {
             cross,
             inv_pivot,
-            ct,
+            leaves,
         }
     }
 
@@ -47,48 +49,81 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         self.inv_pivot.len()
     }
 
-    /// `x ← M⁻¹x`, with `reduced` solving `S` in place on the kept half between the two products.
+    /// Slots the forward takes from a solve's stack, freed before `reduced` runs: one sum per leaf and kept row.
+    pub(super) fn scratch_slots(&self) -> usize {
+        match self.leaves.len() - 1 {
+            0 | 1 => 0,
+            n_leaves => n_leaves * self.n_kept(),
+        }
+    }
+
+    pub(super) fn n_kept(&self) -> usize {
+        self.cross.n_cols()
+    }
+
+    /// `x ← M⁻¹x` through a stack of at least [`scratch_slots`](Self::scratch_slots), with `reduced` solving `S` in place on the kept half between the two products.
     pub(super) fn solve<V: Batch<T>>(
         &self,
         x: &mut [V],
         threads: Threads,
-        reduced: impl FnOnce(&mut [V]),
+        stack: &mut MemStack,
+        reduced: impl FnOnce(&mut [V], &mut MemStack),
     ) {
         let (eliminated, kept) = x.split_at_mut(self.n_eliminated());
-        self.forward(eliminated, kept, threads);
-        reduced(kept);
+        self.forward(eliminated, kept, threads, stack);
+        reduced(kept, stack);
         self.backward(eliminated, kept, threads);
     }
 
-    /// Each `b_k` subtracts `(D_e⁻¹ C)_ek b_e` term by term in ascending `e`: scattered through `D_e⁻¹ C`, or gathered through `(D_e⁻¹ C)ᵀ` where it is kept and [`Threads::per_task`] splits the rows, the same bits either way.
-    fn forward<V: Batch<T>>(&self, b: &[V], kept: &mut [V], threads: Threads) {
-        if let (Some(ct), Some(per)) = (&self.ct, threads.per_task(kept.len(), 1)) {
-            let gather = |k: usize, b_k: &mut V| {
-                for (e, &c) in ct.row(k) {
-                    *b_k = b_k.sub(b[e].mul(c));
-                }
-            };
-            // Rayon's adaptive split of single rows beats par_chunks_mut(1).
-            if per == 1 {
-                kept.par_iter_mut()
-                    .enumerate()
-                    .for_each(|(k, b_k)| gather(k, b_k));
-            } else {
-                (kept.par_chunks_mut(per).enumerate()).for_each(|(task, b_ks)| {
-                    (task * per..).zip(b_ks).for_each(|(k, b_k)| gather(k, b_k));
-                });
-            }
-        } else {
-            let c = &self.cross;
-            for (e, &b_e) in b.iter().enumerate() {
+    /// Each leaf sums `−(D_e⁻¹ C)_ek b_e` in ascending `e` from zero, and each `b_k` adds its leaves' sums in leaf order: the same bits under any threads.
+    fn forward<V: Batch<T>>(
+        &self,
+        b: &[V],
+        kept: &mut [V],
+        threads: Threads,
+        stack: &mut MemStack,
+    ) {
+        let c = &self.cross;
+        let scatter = |rows: Range<usize>, sums: &mut [V]| {
+            for e in rows {
                 for (k, &c) in c.row(e) {
-                    kept[k] = kept[k].sub(b_e.mul(c));
+                    sums[k] = sums[k].sub(b[e].mul(c));
                 }
             }
+        };
+        let (bounds, n_kept) = (&self.leaves, kept.len());
+        let n_leaves = bounds.len() - 1;
+        if n_leaves < 2 {
+            scatter(0..b.len(), kept);
+            return;
+        }
+        let (mut partial, _) = stack.make_with(n_leaves * n_kept, |_| V::zero());
+        let leaf = |l: usize, sums: &mut [V]| scatter(bounds[l]..bounds[l + 1], sums);
+        match threads.per_task(n_leaves, 1) {
+            Some(per) => {
+                (partial.par_chunks_mut(per * n_kept).enumerate()).for_each(|(task, sums)| {
+                    (task * per..)
+                        .zip(sums.chunks_mut(n_kept))
+                        .for_each(|(l, s)| leaf(l, s));
+                })
+            }
+            None => (partial.chunks_mut(n_kept).enumerate()).for_each(|(l, s)| leaf(l, s)),
+        }
+        let add = |first: usize, b_ks: &mut [V]| {
+            for sums in partial.chunks(n_kept) {
+                for (b_k, &s) in b_ks.iter_mut().zip(&sums[first..]) {
+                    *b_k = b_k.add(s);
+                }
+            }
+        };
+        match threads.per_task(n_kept, (1 << LEAF_BITS) / n_leaves + 1) {
+            Some(per) => (kept.par_chunks_mut(per).enumerate())
+                .for_each(|(task, b_ks)| add(task * per, b_ks)),
+            None => add(0, kept),
         }
     }
 
-    /// `x_e = D_e⁻¹ b_e − D_e⁻¹ C x_k` by eliminated row, split as [`Threads::per_task`] says where `(D_e⁻¹ C)ᵀ` is kept.
+    /// `x_e = D_e⁻¹ b_e − D_e⁻¹ C x_k` by eliminated row, split as [`Threads::per_task`] says past one grain of multiply-adds.
     fn backward<V: Batch<T>>(&self, eliminated: &mut [V], kept: &[V], threads: Threads) {
         let c = &self.cross;
         // Scaled here: a serial pass after the parallel gather rewrites lines its workers hold.
@@ -106,13 +141,39 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         let len = eliminated.len();
         // A fixed grain, as TBB's simple partitioner: concurrent blocks share the pool; a short block still splits 16 ways.
         let grain = ROWS_PER_TASK.min(len.div_ceil(16));
-        if let (Some(_), Some(per)) = (&self.ct, threads.per_task(len, grain)) {
+        let splits = self.cross.nnz() > 1 << MULTIPLY_ADD_GRAIN_BITS;
+        if let (true, Some(per)) = (splits, threads.per_task(len, grain)) {
             (eliminated.par_chunks_mut(per).enumerate())
                 .for_each(|(task, ys)| rows(task * per, ys));
         } else {
             rows(0, eliminated);
         }
     }
+}
+
+/// Multiply-adds a forward leaf reaches at least.
+const LEAF_BITS: u32 = 14;
+
+/// Row bounds of the forward's leaves: one past one grain of multiply-adds, else each reaching `max(16·n_kept, 2^LEAF_BITS)`, so adding the leaves' sums costs a sixteenth.
+fn leaves<T: Real, I: Index>(cross: &Rows<T, I>) -> Box<[usize]> {
+    let n = cross.n_rows();
+    if cross.nnz() <= 1 << MULTIPLY_ADD_GRAIN_BITS {
+        return [0, n].into();
+    }
+    let target = (16 * cross.n_cols()).max(1 << LEAF_BITS);
+    let mut bounds = vec![0];
+    let mut filled = 0;
+    for e in 0..n {
+        filled += cross.row_len(e);
+        if filled >= target {
+            bounds.push(e + 1);
+            filled = 0;
+        }
+    }
+    if bounds.last() != Some(&n) {
+        bounds.push(n);
+    }
+    bounds.into()
 }
 
 /// Each `|D_e⁻¹C|` row sums to at most one: the backward sum cannot overflow where the solution fits.
@@ -125,11 +186,7 @@ checked_serde!(BlockElimination);
 
 #[cfg(feature = "serde")]
 impl<T: Real, I: Index> BlockElimination<T, I> {
-    pub(super) fn n_kept(&self) -> usize {
-        self.cross.n_cols()
-    }
-
-    /// `(D_e⁻¹ C)ᵀ` is derived, so it is rebuilt rather than read: a stored one could disagree with `D_e⁻¹ C`.
+    /// The leaves are derived, so they are rebuilt rather than read: stored ones could disagree with `D_e⁻¹ C`.
     fn checked(self) -> Option<Self> {
         let pivots = self.inv_pivot.len() == self.cross.n_rows()
             && self
@@ -137,7 +194,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
                 .iter()
                 .all(|p| p.is_finite() && *p > T::zero());
         let (n_rows, n_cols) = (self.cross.n_rows(), self.cross.n_cols());
-        // The larger side is eliminated, which bounds `n_cols` by decoded rows before `n` or `(D_e⁻¹ C)ᵀ` exists.
+        // The larger side is eliminated, which bounds `n_cols` by decoded rows before `n` or the leaves exist.
         let sides = n_cols <= n_rows;
         (pivots && sides && rows_within_one(&self.cross))
             .then(|| Self::scaled(self.cross, self.inv_pivot))
@@ -219,32 +276,37 @@ mod tests {
 
     #[test]
     fn each_pass_splits_across_exactly_its_threads() {
-        // Odd lengths, which a halving splitter leaves in fewer than `n` tasks.
-        let (n_eliminated, n_kept, quarter) = (40_001, 10_001, 2_500);
+        // Odd lengths, which a halving splitter leaves in fewer than `n` tasks; ~61 leaves so every `n ≤ 8` groups them into `n`.
+        let (n_eliminated, n_kept, quarter) = (250_001, 101, 25);
         let ptrs = (0..=n_eliminated).map(|e| 4 * e).collect();
         let indices = (0..n_eliminated)
             .flat_map(|e| (0..4).map(move |j| (e % quarter + j * quarter) as u32))
             .collect();
         let cross = Rows::new(ptrs, indices, vec![0.25; 4 * n_eliminated], n_kept);
         let elimination = BlockElimination::new(cross, vec![1.0; n_eliminated].into());
-        assert!(elimination.ct.is_some(), "the solve may split");
+        assert!(elimination.leaves.len() > 60, "the forward may split");
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(8)
             .build()
             .unwrap();
+        let mut scratch =
+            crate::MemBuffer::new(crate::StackReq::new::<Traced>(elimination.scratch_slots()));
+        let stack = MemStack::new(&mut scratch);
         let mut x = vec![Traced(1.0); n_eliminated + n_kept];
         let (eliminated, kept) = x.split_at_mut(n_eliminated);
         for n in 1..=8 {
             let threads = Threads::Count(NonZeroUsize::new(n).unwrap());
-            let forward =
-                pool.install(|| workers(n, || elimination.forward(eliminated, kept, threads)));
+            let forward = pool
+                .install(|| workers(n, || elimination.forward(eliminated, kept, threads, stack)));
             let backward =
                 pool.install(|| workers(n, || elimination.backward(eliminated, kept, threads)));
             for used in [forward, backward] {
                 assert_eq!(used.len(), n, "{used:?} under {n}");
             }
         }
-        let alone = workers(1, || elimination.solve(&mut x, crate::threads::ONE, |_| ()));
+        let alone = workers(1, || {
+            elimination.solve(&mut x, crate::threads::ONE, stack, |_, _| ())
+        });
         assert_eq!(
             alone,
             BTreeSet::from([None]),
