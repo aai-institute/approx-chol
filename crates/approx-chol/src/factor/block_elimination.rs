@@ -49,10 +49,10 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         self.inv_pivot.len()
     }
 
-    /// Slots the forward takes from a solve's stack, freed before `reduced` runs: one sum per leaf and kept row.
+    /// Slots the forward takes from a solve's stack, freed before `reduced` runs: one sum per leaf and kept row, none for a single leaf.
     pub(super) fn scratch_slots(&self) -> usize {
         match self.leaves.len() - 1 {
-            0 | 1 => 0,
+            1 => 0,
             n_leaves => n_leaves * self.n_kept(),
         }
     }
@@ -75,7 +75,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         self.backward(eliminated, kept, threads);
     }
 
-    /// Each leaf sums `−(D_e⁻¹ C)_ek b_e` in ascending `e` from zero, and each `b_k` adds its leaves' sums in leaf order: the same bits under any threads.
+    /// A single leaf subtracts `(D_e⁻¹ C)_ek b_e` from each `b_k` in ascending `e`; past it, each leaf sums those terms from zero and each `b_k` adds its leaves' sums in leaf order: the same bits under any threads.
     fn forward<V: Batch<T>>(
         &self,
         b: &[V],
@@ -92,12 +92,13 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
             }
         };
         let (bounds, n_kept) = (&self.leaves, kept.len());
-        let n_leaves = bounds.len() - 1;
-        if n_leaves < 2 {
+        let slots = self.scratch_slots();
+        if slots == 0 {
             scatter(0..b.len(), kept);
             return;
         }
-        let (mut partial, _) = stack.make_with(n_leaves * n_kept, |_| V::zero());
+        let n_leaves = bounds.len() - 1;
+        let (mut partial, _) = stack.make_with(slots, |_| V::zero());
         let leaf = |l: usize, sums: &mut [V]| scatter(bounds[l]..bounds[l + 1], sums);
         match threads.per_task(n_leaves, 1) {
             Some(per) => {
@@ -126,7 +127,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     /// `x_e = D_e⁻¹ b_e − D_e⁻¹ C x_k` by eliminated row, split as [`Threads::per_task`] says past one grain of multiply-adds.
     fn backward<V: Batch<T>>(&self, eliminated: &mut [V], kept: &[V], threads: Threads) {
         let c = &self.cross;
-        // Scaled here: a serial pass after the parallel gather rewrites lines its workers hold.
+        // Scaled here: a serial pass after the parallel forward rewrites lines its workers read.
         let rows = |first: usize, ys: &mut [V]| {
             let inv_pivots = &self.inv_pivot[first..][..ys.len()];
             for (e, (y, &inv_pivot)) in (first..).zip(ys.iter_mut().zip(inv_pivots)) {
@@ -141,8 +142,7 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
         let len = eliminated.len();
         // A fixed grain, as TBB's simple partitioner: concurrent blocks share the pool; a short block still splits 16 ways.
         let grain = ROWS_PER_TASK.min(len.div_ceil(16));
-        let splits = self.cross.nnz() > 1 << MULTIPLY_ADD_GRAIN_BITS;
-        if let (true, Some(per)) = (splits, threads.per_task(len, grain)) {
+        if let (true, Some(per)) = (splits(c), threads.per_task(len, grain)) {
             (eliminated.par_chunks_mut(per).enumerate())
                 .for_each(|(task, ys)| rows(task * per, ys));
         } else {
@@ -151,13 +151,18 @@ impl<T: Real, I: Index> BlockElimination<T, I> {
     }
 }
 
-/// Multiply-adds a forward leaf reaches at least.
+/// Multiply-adds every forward leaf but the last reaches.
 const LEAF_BITS: u32 = 14;
 
-/// Row bounds of the forward's leaves: one past one grain of multiply-adds, else each reaching `max(16·n_kept, 2^LEAF_BITS)`, so adding the leaves' sums costs a sixteenth.
+/// Past one grain of multiply-adds, a solve's passes may split.
+fn splits<T: Real, I: Index>(cross: &Rows<T, I>) -> bool {
+    cross.nnz() > 1 << MULTIPLY_ADD_GRAIN_BITS
+}
+
+/// Row bounds of the forward's leaves: a single leaf unless the passes split, else each but the last reaching `max(16·n_kept, 2^LEAF_BITS)`, so adding the leaves' sums costs at most a sixteenth; a block of `16·n_kept ≥ nnz` keeps one leaf, its forward serial.
 fn leaves<T: Real, I: Index>(cross: &Rows<T, I>) -> Box<[usize]> {
     let n = cross.n_rows();
-    if cross.nnz() <= 1 << MULTIPLY_ADD_GRAIN_BITS {
+    if !splits(cross) {
         return [0, n].into();
     }
     let target = (16 * cross.n_cols()).max(1 << LEAF_BITS);
