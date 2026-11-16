@@ -47,7 +47,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         }
     }
 
-    /// `L` and `factor(S)` over one pivot vector; σ is freed before `S` is factored, and `(D_e⁻¹ C)ᵀ` built after.
+    /// `L` and `factor(S)` over one pivot vector; σ is freed before `S` is factored.
     pub(super) fn eliminate<R>(
         self,
         config: &Config,

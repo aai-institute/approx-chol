@@ -24,7 +24,7 @@ pub struct Bipartite {
 }
 
 impl Bipartite {
-    /// Three components of `(left, right, frustrated)` vertices, 48 entries to a left vertex: the first's 3200·48 entries clear the `Cᵀ` gate (2¹⁷) by 17%, so its elimination's solves split; each splits its star fold and exact rows, together they split the components.
+    /// Three components of `(left, right, frustrated)` vertices, 48 entries to a left vertex: the first's 3200·48 entries clear the split gate (2¹⁷) by 17%, so its elimination's solves split into leaves; each splits its star fold and exact rows, together they split the components.
     pub fn three_groups() -> Self {
         const DEGREE: usize = 48;
         let (mut left, mut right, mut x, mut y) = (vec![], vec![], vec![], vec![]);
