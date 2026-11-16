@@ -26,10 +26,14 @@ fn grounded_complete(w: f64) -> Graph {
     graph
 }
 
+/// Binary exponents of `w`: a power of ten rounds each weight apart, and a fill sum tied at `w = 1` then breaks its tie by summation order (`2^-53` measured 1.2%).
 const F64_EXPONENTS: [i32; 20] = [
-    -290, -200, -100, -30, -16, -15, -14, -5, -1, 21, 23, 31, 32, 37, 43, 50, 100, 152, 200, 300,
+    -963, -664, -332, -100, -53, -50, -47, -17, -3, 70, 76, 103, 106, 123, 143, 166, 332, 505, 664,
+    997,
 ];
-const F32_EXPONENTS: [i32; 14] = [-30, -20, -12, -8, -7, -6, -5, -2, -1, 7, 10, 12, 20, 30];
+const F32_EXPONENTS: [i32; 14] = [
+    -100, -66, -40, -27, -23, -20, -17, -7, -3, 23, 33, 40, 66, 100,
+];
 
 /// `w · x(w)` is invariant at a fixed seed, so an absolute floor deviates by order one.
 fn assert_invariant_under_scaling(
@@ -52,12 +56,12 @@ fn assert_invariant_under_scaling(
     };
     let want = solve(1.0);
     for &exponent in exponents {
-        let scaled = solve(10f64.powi(exponent));
+        let scaled = solve(2f64.powi(exponent));
         for (index, (&scaled, &want)) in scaled.iter().zip(&want).enumerate() {
             let deviation = ((scaled - want) / want).abs();
             assert!(
                 deviation < tolerance,
-                "{types:?} {config:?} w=1e{exponent}: x[{index}] deviates by {deviation:e}"
+                "{types:?} {config:?} w=2^{exponent}: x[{index}] deviates by {deviation:e}"
             );
         }
     }
