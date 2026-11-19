@@ -76,19 +76,20 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         mut draws: Xoshiro256PlusPlus,
         tail: Option<FactorTail<'_, T>>,
     ) -> (ApproximateCholesky<T, I>, Option<usize>) {
-        let (slots, pin) = (m.n(), m.pin(tail));
-        self.graph
-            .load(&m, slots + usize::from(pin == Some(slots)), self.copies);
+        let (slots, ground, gauge) = (m.n(), m.ground(), m.gauge(tail));
+        self.graph.load(&m, self.copies);
         drop(m);
         let (n, edge_ends) = (self.graph.n(), self.graph.edge_ends());
-        self.order.load(&self.graph, self.copies, pin, edge_ends);
+        self.order
+            .load(&self.graph, self.copies, ground.or(gauge), edge_ends);
         let mut steps = ApproximateCholesky::with_capacity(n, edge_ends);
         self.pivot_all(&mut draws, &mut steps, slots, sign);
         // Doubling past the estimate otherwise retains up to 2x the entries (+30% on grids).
         steps.neighbors.shrink_to_fit();
         steps.coefficients.shrink_to_fit();
-        let last = pin.unwrap_or_else(|| self.order.next_vertex());
-        let pinned = (last < slots).then_some(last);
+        let pinned = ground
+            .is_none()
+            .then(|| gauge.unwrap_or_else(|| self.order.next_vertex()));
         if n > REUSED_UP_TO {
             *self = Self::new(self.copies);
         }
