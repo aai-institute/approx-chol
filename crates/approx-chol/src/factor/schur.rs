@@ -1,7 +1,5 @@
 //! The Schur complement `S` a bipartite block leaves on its kept side, formed exact or sampled.
 
-use rayon::prelude::*;
-
 use super::block_elimination::BlockElimination;
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::{Config, SchurMode};
@@ -10,7 +8,6 @@ use super::sign::{Signed, Unsigned};
 use super::{Streams, MULTIPLY_ADD_GRAIN_BITS};
 use crate::sgdd::{Balance, Grounding};
 use crate::storage::Rows;
-use crate::threads::task;
 use crate::{narrow, per_task, widen, Index, Real, Threads};
 
 /// How one block's Schur complement is formed, resolved from [`Config`] and its kept side's size.
@@ -327,14 +324,7 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
             buckets
         };
         let tasks = stars.div_ceil(per_task);
-        match threads.per_task(tasks, 1) {
-            Some(per) => (0..tasks)
-                .into_par_iter()
-                .with_min_len(per)
-                .map(|k| task(|| piece(k)))
-                .collect(),
-            None => (0..tasks).map(piece).collect(),
-        }
+        threads.split(tasks, 1).map(0..tasks, |k, _, _| piece(k))
     }
 }
 

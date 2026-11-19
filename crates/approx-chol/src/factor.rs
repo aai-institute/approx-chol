@@ -14,7 +14,6 @@ mod wire;
 
 use rand::rngs::Xoshiro256PlusPlus;
 use rand::SeedableRng;
-use rayon::prelude::*;
 
 pub use apply::{ApplyError, ColumnMajor, Columns, LayoutError, MatrixMut};
 pub use build::{factorize, factorize_complement, factorize_with, Clamped, Complement, Sgdd};
@@ -24,7 +23,6 @@ pub use header::{Header, HeaderMismatch, Scalar};
 use crate::order::{Order, Segment, Slots};
 use crate::sgdd::{BlockComplement, Congruence, CoupledBlock, IrreducibleBlock, Packed};
 use crate::storage::OffDiagonal;
-use crate::threads::task;
 use crate::Clamp;
 use crate::{Batch, Index, MemStack, Real, StackReq, Threads};
 pub(crate) use apply::Kernel;
@@ -117,25 +115,11 @@ impl<T: Real> ApproxInverse<T> {
         } = packed;
         let inverse_pivots = pivots.iter().map(|&pivot| T::one() / pivot).collect();
         let workspace = || Workspace::new(config.sampling.copies());
-        // Exactly sized: collect's reserve rounds a few blocks up to 4 and into_boxed_slice reallocates.
-        let mut factored = Vec::with_capacity(coupled.len());
-        match threads.per_task(coupled.len(), 1) {
-            Some(per) => {
-                let nested = threads.within_task(coupled.len().div_ceil(per));
-                (coupled.into_par_iter().zip(segments))
-                    .with_min_len(per)
-                    .map_init(workspace, |reused, (block, segment)| {
-                        task(|| block.factor(segment, &order, config, nested, reused))
-                    })
-                    .collect_into_vec(&mut factored);
-            }
-            None => {
-                let mut reused = workspace();
-                factored.extend(coupled.into_iter().zip(segments).map(|(block, segment)| {
-                    block.factor(segment, &order, config, threads, &mut reused)
-                }));
-            }
-        }
+        let factored = threads.split(coupled.len(), 1).map_init(
+            workspace,
+            coupled,
+            |reused, k, block, nested| block.factor(segments[k], &order, config, nested, reused),
+        );
         let blocks = Blocks::from(factored.into_boxed_slice());
         Self::new(order, blocks, inverse_pivots)
     }

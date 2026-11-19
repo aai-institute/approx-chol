@@ -2,6 +2,8 @@
 
 use std::num::NonZeroUsize;
 
+use rayon::prelude::*;
+
 /// The threads a build or a solve may use; no result's bits depend on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Threads {
@@ -40,6 +42,77 @@ impl Threads {
         match self {
             Threads::All => Threads::All,
             Threads::Count(n) => NonZeroUsize::new(n.get() / tasks).map_or(ONE, Threads::Count),
+        }
+    }
+
+    /// How a loop over `count` items splits, at least `grain` items a task.
+    pub(crate) fn split(self, count: usize, grain: usize) -> Split {
+        match self.per_task(count, grain) {
+            Some(per_task) => Split::Tasks {
+                per_task,
+                within_task: self.within_task(count.div_ceil(per_task)),
+            },
+            None => Split::Serial(self),
+        }
+    }
+}
+
+/// How a loop over items splits under a budget.
+pub(crate) enum Split {
+    /// On the calling thread, each item under the whole budget.
+    Serial(Threads),
+    /// In tasks of at least `per_task` items, each item under the budget `within_task` its task leaves it.
+    Tasks {
+        per_task: usize,
+        within_task: Threads,
+    },
+}
+
+impl Split {
+    /// `f` of each item and its position, in item order, each under the budget its task leaves it.
+    pub(crate) fn map<X: Send, R: Send, P>(
+        &self,
+        items: P,
+        f: impl Fn(usize, X, Threads) -> R + Sync,
+    ) -> Vec<R>
+    where
+        P: IntoParallelIterator<Item = X> + IntoIterator<Item = X>,
+        <P as IntoParallelIterator>::Iter: IndexedParallelIterator,
+    {
+        self.map_init(|| (), items, |(), k, x, threads| f(k, x, threads))
+    }
+
+    /// As [`map`](Self::map), each task reusing one `init()` across its items.
+    pub(crate) fn map_init<S, X: Send, R: Send, P>(
+        &self,
+        init: impl Fn() -> S + Sync + Send,
+        items: P,
+        f: impl Fn(&mut S, usize, X, Threads) -> R + Sync,
+    ) -> Vec<R>
+    where
+        P: IntoParallelIterator<Item = X> + IntoIterator<Item = X>,
+        <P as IntoParallelIterator>::Iter: IndexedParallelIterator,
+    {
+        match *self {
+            Split::Tasks {
+                per_task,
+                within_task,
+            } => {
+                // Exactly sized: collect's reserve rounds a few items up to 4.
+                let mut out = Vec::new();
+                (IntoParallelIterator::into_par_iter(items))
+                    .enumerate()
+                    .with_min_len(per_task)
+                    .map_init(&init, |s, (k, x)| task(|| f(s, k, x, within_task)))
+                    .collect_into_vec(&mut out);
+                out
+            }
+            Split::Serial(threads) => {
+                let mut s = init();
+                (IntoIterator::into_iter(items).enumerate())
+                    .map(|(k, x)| f(&mut s, k, x, threads))
+                    .collect()
+            }
         }
     }
 }
