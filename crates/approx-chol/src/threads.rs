@@ -104,9 +104,10 @@ impl Split {
                 per_task,
                 within_task,
             } => {
+                let items = IntoParallelIterator::into_par_iter(items);
                 // Exactly sized: collect's reserve rounds a few items up to 4.
-                let mut out = Vec::new();
-                (IntoParallelIterator::into_par_iter(items))
+                let mut out = Vec::with_capacity(items.len());
+                items
                     .enumerate()
                     .with_min_len(per_task)
                     .map_init(&init, |s, (k, x)| task(|| f(s, k, x, within_task)))
