@@ -207,7 +207,7 @@ impl<A, I: Index> Cuts<A, I> {
             }
             (count, Some(position)) => {
                 let work = components.coupled.iter().map(|c| c.len() as u64).sum();
-                let split = threads.split(count, crate::per_task(count, work, PARALLEL_BITS));
+                let split = threads.split(count, crate::threads::grain(count, work, PARALLEL_BITS));
                 let assembly = Assembly {
                     a,
                     position,

@@ -57,6 +57,12 @@ impl Threads {
     }
 }
 
+/// `units` per task so each carries `2^bits` of `work`, in `u64` as a 32-bit `usize` wraps past `2^(32-bits)` units.
+pub(crate) fn grain(units: usize, work: u64, bits: u32) -> usize {
+    let per = ((units as u64) << bits).div_ceil(work.max(1));
+    usize::try_from(per).unwrap_or(usize::MAX).max(1)
+}
+
 /// How a loop over items splits under a budget.
 pub(crate) enum Split {
     /// On the calling thread, each item under the whole budget.
