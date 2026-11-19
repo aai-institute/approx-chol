@@ -1,6 +1,7 @@
 mod lists;
 
 use self::lists::Lists;
+use super::{Staged, STOOD_UP_TO};
 use crate::factor::clique_tree::{absorb, Copies, Degrees};
 use crate::factor::sdd::Sdd;
 use crate::factor::sign::Sign;
@@ -32,17 +33,50 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         }
     }
 
-    /// `m`'s vertices, then its ground when it has one, which the order pins.
-    pub(super) fn load(&mut self, m: &Sdd<T, I>, split: C) {
-        // One slot past the degree: the first fill edge reallocating measured +2-3% on grids.
+    /// Each of `m`'s vertices, then its ground's, its edges plus one slot: the first fill edge reallocating measured +2-3% on grids.
+    pub(super) fn room(m: &Sdd<T, I>) -> Vec<u32> {
         let mut room = vec![1u32; m.n() + usize::from(m.ground().is_some())];
         // Saturated, a list past u32 slots fails in its growth, not as a wrapped room.
         m.grounded_edges(|k, j, _| {
             room[k.index()] = room[k.index()].saturating_add(1);
             room[j.index()] = room[j.index()].saturating_add(1);
         });
-        self.reset(&room, split);
+        room
+    }
+
+    /// `m`'s edges in the [`room`](Self::room) it counted; its ground the order pins.
+    pub(super) fn load(&mut self, m: &Sdd<T, I>, room: &[u32], split: C) {
+        self.reset(room, split);
         m.grounded_edges(|k, j, w| self.push_pair(k, j, split, w));
+    }
+
+    /// `pairs`, each `(lo, hi, copies, weight, merged)` once, `merged` its copies before the cap; a vertex `gone` gets no room. A pair whose cap dropped copies stands as up to [`STOOD_UP_TO`] parallel entries sharing its weight, so the degree counts them until a star merges them back.
+    pub(super) fn load_merged(
+        &mut self,
+        pairs: &[Staged<T, I, C>],
+        gone: impl Fn(usize) -> bool,
+        n: usize,
+        split: C,
+    ) {
+        let stood = |copies: C, merged: u32| (merged - copies.get()).min(STOOD_UP_TO - 1);
+        let mut room: Vec<u32> = (0..n).map(|v| u32::from(!gone(v))).collect();
+        for &(k, j, copies, _, merged) in pairs {
+            let entries = 1 + stood(copies, merged);
+            room[k.index()] = room[k.index()].saturating_add(entries);
+            room[j.index()] = room[j.index()].saturating_add(entries);
+        }
+        self.reset(&room, split);
+        drop(room);
+        let one = split.cap(1);
+        for &(k, j, copies, weight, merged) in pairs {
+            let extra = stood(copies, merged);
+            // Shared, not left on one entry: a fill cancelling one entry exactly leaves the others weighted.
+            let share = weight / T::from(1 + extra).expect("at most four entries");
+            self.push_pair(k, j, copies, share);
+            for _ in 0..extra {
+                self.push_pair(k, j, one, share);
+            }
+        }
     }
 
     /// Vertex `v` edgeless, with room for `room[v]` edges.
@@ -92,6 +126,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
     }
 
     /// `u — v` appended to lists of `lens`, each half's mirror the other list's length.
+    #[inline(always)] // A merged load's second caller left it out of line: AC2 bipartite builds +2.5%.
     fn push_at(&mut self, u: I, v: I, (len_u, len_v): (u32, u32), copies: C, weight: T) {
         // A list's length is a u32 that its growth keeps in range, so a mirror never truncates.
         let edge = |to, mirror| Edge {
@@ -163,6 +198,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
     }
 
     /// Swap-removes `u`'s edge at `at`, repairing the moved edge's mirror.
+    #[inline(always)] // Out of line once the merged load added code, as `push_at`.
     fn swap_remove(&mut self, u: usize, at: usize) {
         if let Some(moved) = self.lists.swap_remove(u, at) {
             self.lists.get_mut(moved.to.index())[moved.mirror as usize].mirror = at as u32;
@@ -299,6 +335,38 @@ mod tests {
         graph.push_fill((0, 1, Single, 1.0), Single, Unsigned);
         assert_eq!((to_one(&graph), graph.degree(0)), (2, 10));
         graph.lists.assert_consistent();
+    }
+
+    /// A merged pair stands as its kept entry and one per dropped copy, at most four, sharing its weight; the degree counts them, AC and AC2, also once a neighbor goes.
+    #[test]
+    fn a_merged_pair_stands_for_the_copies_its_cap_dropped() {
+        fn check<C: Copies>(split: C, stood: impl Fn(u32) -> u64) {
+            let pairs: Vec<_> = (1..9u32)
+                .map(|merged| (0, merged, split.cap(merged), f64::from(merged), merged))
+                .collect();
+            let mut graph = EliminationGraph::<f64, u32, C>::new();
+            graph.load_merged(&pairs, |_| false, 9, split);
+            graph.lists.assert_consistent();
+            for merged in 1..9u32 {
+                let entries: Vec<_> = graph.neighbors(merged as usize).collect();
+                let weight: f64 = entries.iter().map(|e| e.2).sum();
+                let dropped = merged - split.cap(merged).get();
+                assert_eq!(entries.len() as u32, 1 + dropped.min(3), "{merged}");
+                assert!(
+                    (weight - f64::from(merged)).abs() < 1e-12,
+                    "{merged}: {weight}"
+                );
+            }
+            let want: u64 = (1..9).map(&stood).sum();
+            assert_eq!(graph.degree(0), want);
+            graph.eliminate_vertex(8);
+            assert_eq!(graph.degree(0), want - stood(8));
+        }
+        check(Single, |merged| u64::from(merged.min(4)));
+        let split = Multi::split(4).expect("AC2");
+        check(split, |merged| {
+            u64::from(merged.min(4) + merged.saturating_sub(4).min(3))
+        });
     }
 
     /// Opposite duplicates cancel twice the smaller magnitude onto the ground at both ends, and a pair cancelled to zero leaves both lists.

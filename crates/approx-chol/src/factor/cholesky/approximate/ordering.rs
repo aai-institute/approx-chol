@@ -31,12 +31,12 @@ impl<I: Index> MinDegreeOrder<I> {
         }
     }
 
-    /// `pin` is never queued.
+    /// The vertices `queued` holds; the never-pivoted vertex, or one pivoted already, is not.
     pub(super) fn load<T: Real, C: Copies>(
         &mut self,
         graph: &EliminationGraph<T, I, C>,
         split: C,
-        pin: Option<usize>,
+        queued: impl Fn(usize) -> bool,
         edge_ends: usize,
     ) {
         let n = graph.n();
@@ -48,7 +48,7 @@ impl<I: Index> MinDegreeOrder<I> {
         elems.reserve(n);
         let mut min_list = lists.len();
         for v in 0..n {
-            if Some(v) == pin {
+            if !queued(v) {
                 elems.push(QueueElem {
                     prev: sentinel(),
                     next: sentinel(),
@@ -195,7 +195,7 @@ mod tests {
             graph.push_pair(v, v + 1, split, 1.0);
         }
         let mut order = MinDegreeOrder::new();
-        order.load(&graph, split, None, graph.edge_ends());
+        order.load(&graph, split, |_| true, graph.edge_ends());
         let mut popped = Vec::new();
         for _ in 0..3 {
             let v = order.next_vertex();

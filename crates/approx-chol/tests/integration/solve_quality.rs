@@ -519,3 +519,34 @@ fn a_banded_laplacian_preconditions_within_16_iterations(#[values(1, 2)] copies:
         );
     }
 }
+
+/// fixest's difficult panel, person × firm, person `i`'s ten spells at firms `10i..10i+9`: people pivot first, and the firm band without their merged copies in its degrees took 49-54 iterations.
+#[rstest::rstest]
+fn a_person_firm_band_preconditions_within_20_iterations(#[values(1, 2)] copies: u32) {
+    let (people, spells) = (100_000, 10);
+    let firms = people / 23;
+    let edges = (0..people).flat_map(|person| {
+        (0..spells)
+            .map(move |t| Edge::negative(person, people + (spells * person + t) % firms, 1.0))
+    });
+    let n = people + firms;
+    let mut graph = Graph::new(n, edges.collect());
+    graph.ground[0] = 1.0;
+    let b = graph.apply(&(0..n).map(|v| (v % 5) as f64 - 2.0).collect::<Vec<_>>());
+    for seed in 0..3 {
+        let config = Config {
+            seed,
+            exact_max_dim: 0,
+            sampling: Sampling::CliqueTree {
+                copies: NonZeroU32::new(copies).expect("one copy or more"),
+            },
+            ..Config::default()
+        };
+        let factor = Entry::Csr.reduce(&graph, Types::F64U32).factorize(&config);
+        let iterations = pcg_iterations(|x| graph.apply(x), |r| factor.solve(r), &b, 1e-8, 100);
+        assert!(
+            iterations.is_some_and(|it| it <= 20),
+            "seed {seed}, {copies} copies: {iterations:?} iterations"
+        );
+    }
+}
