@@ -253,6 +253,52 @@ mod tests {
                 prop_assert_eq!(graph.degree(x), copies);
             }
         }
+
+        /// Signed AC2 fill, cancelling partly or to zero, among eliminations: each degree stays its list's copies, the ground's too.
+        #[test]
+        fn signed_fill_keeps_degrees(ops in vec((0..N, 0..N, 0u8..8, 1u32..5, -3i8..4), 0..300)) {
+            let split = Multi::split(4).expect("AC2");
+            let sign = Signed { ground: N as u32 };
+            let mut graph = EliminationGraph::<f64, u32, Multi>::new();
+            graph.reset(&[1; N + 1], split);
+            let mut alive = [true; N];
+            for (u, v, eliminate, copies, weight) in ops {
+                if eliminate == 0 && alive[u] {
+                    graph.eliminate_vertex(u);
+                    alive[u] = false;
+                } else if u != v && alive[u] && alive[v] && weight != 0 {
+                    let edge = (u.min(v) as u32, u.max(v) as u32, split.cap(copies), f64::from(weight));
+                    graph.push_fill(edge, split, sign);
+                }
+                graph.lists.assert_consistent();
+                for x in 0..=N {
+                    let copies: u64 = graph.neighbors(x).map(|(_, c, _)| u64::from(c.get())).sum();
+                    prop_assert_eq!(graph.degree(x), copies);
+                }
+            }
+        }
+    }
+
+    /// A pair on two lists of 8 merges; once both hold 9, a duplicate stands beside it and the degree counts both.
+    #[test]
+    fn fill_merges_up_to_eight_entries() {
+        let mut graph = EliminationGraph::<f64, u32, Single>::new();
+        graph.reset(&[1; 24], Single);
+        graph.push_pair(0, 1, Single, 1.0);
+        for k in 0..7 {
+            graph.push_pair(0, 2 + k, Single, 1.0);
+            graph.push_pair(1, 9 + k, Single, 1.0);
+        }
+        let to_one = |graph: &EliminationGraph<f64, u32, Single>| {
+            graph.neighbors(0).filter(|&(to, _, _)| to == 1).count()
+        };
+        graph.push_fill((0, 1, Single, 1.0), Single, Unsigned);
+        assert_eq!((to_one(&graph), graph.degree(0)), (1, 8));
+        graph.push_pair(0, 16, Single, 1.0);
+        graph.push_pair(1, 17, Single, 1.0);
+        graph.push_fill((0, 1, Single, 1.0), Single, Unsigned);
+        assert_eq!((to_one(&graph), graph.degree(0)), (2, 10));
+        graph.lists.assert_consistent();
     }
 
     /// Opposite duplicates cancel twice the smaller magnitude onto the ground at both ends, and a pair cancelled to zero leaves both lists.
