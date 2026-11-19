@@ -97,11 +97,11 @@ impl<T: Real, I: Index> Sdd<T, I> {
         (!self.floats()).then(|| self.n())
     }
 
-    /// A floating matrix's gauge, the slot no pivot eliminates, where `tail` spans wide, on a cover its first copy; else the order's last vertex is.
+    /// A floating matrix's gauge, the slot no pivot eliminates, where `tail` spans wide, on a cover its first copy; `None` when grounded, and when narrow, as the order's last vertex then pins it.
     pub(super) fn gauge(&self, tail: Option<FactorTail<'_, T>>) -> Option<usize> {
         // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
-        let wide = tail.filter(|f| self.floats() && f.spans_wide());
-        wide.map(|f| f.largest() << self.layout.copy_shift())
+        (tail.filter(|f| self.floats() && f.spans_wide()))
+            .map(|f| f.largest() << self.layout.copy_shift())
     }
 }
 
