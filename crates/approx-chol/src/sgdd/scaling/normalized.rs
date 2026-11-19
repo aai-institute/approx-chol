@@ -27,7 +27,7 @@ impl<'a, T: Real, I: Index> Normalized<'a, T, I> {
         let lower = match off_diagonal {
             OffDiagonal::General(adjacency) => {
                 let (rows, work) = (adjacency.n(), 2 * adjacency.nnz() as u64);
-                let grain = crate::per_task(rows, work, GATHER_GRAIN_BITS);
+                let grain = crate::threads::grain(rows, work, GATHER_GRAIN_BITS);
                 // Each entry one lower and one upper multiply-add; unsplit, the scatter runs.
                 threads
                     .per_task(rows, grain)

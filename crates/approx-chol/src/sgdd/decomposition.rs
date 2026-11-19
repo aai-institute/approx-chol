@@ -2,7 +2,6 @@ use std::marker::PhantomData;
 use std::ops::Range;
 
 use num_traits::PrimInt;
-use rayon::prelude::*;
 
 mod assembly;
 mod partition;
@@ -12,7 +11,7 @@ use super::forest::Forest;
 use crate::input::Canonical;
 use crate::order::{Listed, Order, Segment};
 use crate::storage::{tally_abs, OffDiagonal, Rows, UpperAdjacency};
-use crate::threads::task;
+use crate::threads::Split;
 use crate::{BuildError, Index, Real, Threads};
 pub(super) use assembly::{
     assemble_incidence, assemble_values, AdjacencyLayout, Biadjacency, StrictUpperTriangle,
@@ -152,7 +151,7 @@ impl<A, I: Index> Cuts<A, I> {
         A: PrincipalBlocks<T, I> + Sync,
     {
         self.blocks(components, threads, &block, |assembly, split| {
-            let blocks = split.each(0..components.coupled.len(), |k, threads| {
+            let blocks = split.map(0..components.coupled.len(), |k, _, threads| {
                 let (vertices, entries) = assembly.cut(k);
                 block(vertices, entries, threads)
             });
@@ -174,13 +173,13 @@ impl<A, I: Index> Cuts<A, I> {
     {
         let whole = |vertices, entries, threads| then(cut(vertices, entries), threads);
         self.blocks(components, threads, whole, |assembly, split| {
-            let live = split.each(0..components.coupled.len(), |k, _| {
+            let live = split.map(0..components.coupled.len(), |k, _, _| {
                 let (vertices, entries) = assembly.cut(k);
                 cut(vertices, entries)
             });
             // Kept past extraction, an owned assembly raised the Gram peak 11–22%.
             drop(assembly);
-            split.each(live, &then)
+            split.map(live, |_, x, threads| then(x, threads))
         })
     }
 
@@ -206,8 +205,9 @@ impl<A, I: Index> Cuts<A, I> {
                 let vertices = components.component(0);
                 vec![whole(vertices, a.whole(vertices), threads)?]
             }
-            (_, Some(position)) => {
-                let split = Split::of(components, threads);
+            (count, Some(position)) => {
+                let work = components.coupled.iter().map(|c| c.len() as u64).sum();
+                let split = threads.split(count, crate::threads::grain(count, work, PARALLEL_BITS));
                 let assembly = Assembly {
                     a,
                     position,
@@ -238,52 +238,6 @@ where
     fn cut(&self, k: usize) -> (&'p [I], A::Block) {
         let vertices = self.components.component(k);
         (vertices, self.a.component(vertices, &self.position))
-    }
-}
-
-/// How a loop over the coupled components splits under a budget: about `2^PARALLEL_BITS` vertices a task, as waking the pool for less costs more than it saves.
-enum Split {
-    /// On the calling thread, each item under the whole budget.
-    Serial(Threads),
-    /// In tasks of at least `per_task` items, each item under the budget `within_task` its task leaves it.
-    Tasks {
-        per_task: usize,
-        within_task: Threads,
-    },
-}
-
-impl Split {
-    fn of<I, T>(components: &Components<I, T>, threads: Threads) -> Self {
-        let count = components.coupled.len();
-        let work = components.coupled.iter().map(|c| c.len() as u64).sum();
-        let grain = crate::per_task(count, work, PARALLEL_BITS);
-        match threads.per_task(count, grain) {
-            Some(per_task) => Split::Tasks {
-                per_task,
-                within_task: threads.within_task(count.div_ceil(per_task)),
-            },
-            None => Split::Serial(threads),
-        }
-    }
-
-    /// `f` of each item, one per component in component order, under the budget its task leaves it.
-    fn each<X: Send, R: Send, P>(&self, items: P, f: impl Fn(X, Threads) -> R + Sync) -> Vec<R>
-    where
-        P: IntoParallelIterator<Item = X> + IntoIterator<Item = X>,
-        <P as IntoParallelIterator>::Iter: IndexedParallelIterator,
-    {
-        match *self {
-            Split::Tasks {
-                per_task,
-                within_task,
-            } => (IntoParallelIterator::into_par_iter(items))
-                .with_min_len(per_task)
-                .map(|x| task(|| f(x, within_task)))
-                .collect(),
-            Split::Serial(threads) => (IntoIterator::into_iter(items))
-                .map(|x| f(x, threads))
-                .collect(),
-        }
     }
 }
 
@@ -321,6 +275,7 @@ impl<'p, I, T, B> Cut<'p, I, T, B> {
     }
 }
 
+/// About `2^PARALLEL_BITS` vertices a task, as waking the pool for less costs more than it saves.
 const PARALLEL_BITS: u32 = 12;
 
 /// `A`'s vertices by component in the partition's array, components by lowest vertex: each coupled component in local order, its eliminated side first, then the lone vertices, then the dead ones.
@@ -423,18 +378,9 @@ impl<I: Index, T, B: CoupledBlock> Summands<B, I, T> {
         B: Send,
     {
         let kept: Vec<_> = ranges(&self.coupled).collect();
-        let vertices = &self.vertices;
-        let blocks = std::mem::take(&mut self.coupled);
-        let map = |(block, kept): (B, std::ops::Range<usize>)| f(&vertices[kept], block);
-        let coupled = match threads.per_task(blocks.len(), 1) {
-            Some(per) => blocks
-                .into_par_iter()
-                .zip(kept)
-                .with_min_len(per)
-                .map(|item| task(|| map(item)))
-                .collect(),
-            None => blocks.into_iter().zip(kept).map(map).collect(),
-        };
+        let (blocks, vertices) = (std::mem::take(&mut self.coupled), &self.vertices);
+        let coupled = (threads.split(blocks.len(), 1))
+            .map(blocks, |k, block, _| f(&vertices[kept[k].clone()], block));
         self.with_coupled(coupled)
     }
 

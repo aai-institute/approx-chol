@@ -1,7 +1,5 @@
 //! The Schur complement `S` a bipartite block leaves on its kept side, formed exact or sampled.
 
-use rayon::prelude::*;
-
 use super::block_elimination::BlockElimination;
 use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
 use super::config::{Config, SchurMode};
@@ -10,8 +8,7 @@ use super::sign::{Signed, Unsigned};
 use super::{Streams, MULTIPLY_ADD_GRAIN_BITS};
 use crate::sgdd::{Balance, Grounding};
 use crate::storage::Rows;
-use crate::threads::task;
-use crate::{narrow, per_task, widen, Index, Real, Threads};
+use crate::{narrow, widen, Index, Real, Threads};
 
 /// How one block's Schur complement is formed, resolved from [`Config`] and its kept side's size.
 enum Formation {
@@ -192,7 +189,7 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         SddRows::split(
             route,
             c.n_cols(),
-            per_task(c.n_cols(), work, MULTIPLY_ADD_GRAIN_BITS),
+            crate::threads::grain(c.n_cols(), work, MULTIPLY_ADD_GRAIN_BITS),
             threads,
             ground,
             |mut sums, k| {
@@ -313,7 +310,7 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
         let n = self.layout.rows(c.n_cols());
         let shift = bucket_shift(n);
         let count = n.div_ceil(1 << shift);
-        let per_task = per_task(c.n_rows(), c.nnz() as u64, 14);
+        let per_task = crate::threads::grain(c.n_rows(), c.nnz() as u64, 14);
         let stars = self.layout.rows(c.n_rows());
         let piece = |task: usize| {
             let (mut sampler, mut buckets) =
@@ -327,14 +324,7 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
             buckets
         };
         let tasks = stars.div_ceil(per_task);
-        match threads.per_task(tasks, 1) {
-            Some(per) => (0..tasks)
-                .into_par_iter()
-                .with_min_len(per)
-                .map(|k| task(|| piece(k)))
-                .collect(),
-            None => (0..tasks).map(piece).collect(),
-        }
+        threads.split(tasks, 1).map(0..tasks, |k, _, _| piece(k))
     }
 }
 
