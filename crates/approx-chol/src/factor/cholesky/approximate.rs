@@ -239,7 +239,7 @@ struct LocalMinima {
 }
 
 impl LocalMinima {
-    /// The set, if its edges are a quarter of all and the vertices fit `u32`; each edge marks its larger end unless its smaller is `never`, which an edge to the ground always is.
+    /// The set, if its edges are a quarter of all and the vertices fit `u32`; each edge between slots marks its larger end unless its smaller is `never`; edges to the ground are not walked.
     fn of<T: Real, I: Index>(m: &Sdd<T, I>, room: &[u32], never: Option<usize>) -> Option<Self> {
         u32::try_from(room.len()).ok()?;
         let key = |v: usize| (u64::from(room[v]) << 32) | v as u64;
