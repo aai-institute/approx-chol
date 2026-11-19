@@ -91,14 +91,6 @@ impl<T: Real> Congruence<T> {
         self.apply(x);
     }
 
-    /// `x ← x − x_q·1` at the largest `|f|`, where a split block's singular solve fixes `M`'s gauge.
-    pub(crate) fn regauge<V: Batch<T>>(&self, x: &mut [V]) {
-        if let Congruence::Scaled(scales) = self {
-            let gauge = x[scales.peak];
-            x.iter_mut().for_each(|x| *x = x.sub(gauge));
-        }
-    }
-
     /// `x ← F x` back in `A_c`'s scale, `F·1` projected out last when `M` is singular.
     pub(crate) fn prolongate<V: Batch<T>>(&self, x: &mut [V], singular: bool) {
         self.apply(x);

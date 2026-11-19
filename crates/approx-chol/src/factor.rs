@@ -419,14 +419,9 @@ impl<T: Real, I: Index> Block<T, I> {
         self.congruence.restrict(x, singular);
         match &self.elimination {
             None => self.cholesky.solve(x, stack),
-            Some(elimination) => {
-                elimination.solve(x, threads, stack, |kept, stack| {
-                    self.cholesky.solve(kept, stack)
-                });
-                if singular {
-                    self.congruence.regauge(x);
-                }
-            }
+            Some(elimination) => elimination.solve(x, threads, stack, |kept, stack| {
+                self.cholesky.solve(kept, stack)
+            }),
         }
         self.congruence.prolongate(x, singular);
     }
