@@ -92,7 +92,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
     }
 
     /// `u — v` appended to lists of `lens`, each half's mirror the other list's length.
-    fn push_at(&mut self, u: I, v: I, (mirror_v, mirror_u): (u32, u32), copies: C, weight: T) {
+    fn push_at(&mut self, u: I, v: I, (len_u, len_v): (u32, u32), copies: C, weight: T) {
         // A list's length is a u32 that its growth keeps in range, so a mirror never truncates.
         let edge = |to, mirror| Edge {
             to,
@@ -100,8 +100,8 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
             copies,
             weight,
         };
-        self.lists.push(u.index(), edge(v, mirror_u));
-        self.lists.push(v.index(), edge(u, mirror_v));
+        self.lists.push(u.index(), edge(v, len_v));
+        self.lists.push(v.index(), edge(u, len_u));
         self.degrees.add(u.index(), copies.get());
         self.degrees.add(v.index(), copies.get());
     }
