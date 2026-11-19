@@ -92,16 +92,16 @@ impl<T: Real, I: Index> Sdd<T, I> {
         }
     }
 
-    /// The vertex no pivot eliminates: the ground, the vertex past the slots, or a floating matrix's gauge, by `tail`, on a cover its first copy.
-    pub(super) fn pin(&self, tail: Option<FactorTail<'_, T>>) -> Option<usize> {
-        match self.floats() {
-            // The ground is never a pivot, so `Σs` is never formed: within unchanged, grids +0-8% PCG iterations at 1-10 grounds.
-            false => Some(self.n()),
-            // Floating, ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
-            true => {
-                (tail.filter(|f| f.spans_wide())).map(|f| f.largest() << self.layout.copy_shift())
-            }
-        }
+    /// Its ground, the vertex past the slots, unless it floats: no pivot eliminates it, so `Σs` is never formed (within unchanged, grids +0-8% PCG iterations at 1-10 grounds).
+    pub(super) fn ground(&self) -> Option<usize> {
+        (!self.floats()).then(|| self.n())
+    }
+
+    /// A floating matrix's gauge, the slot no pivot eliminates, where `tail` spans wide, on a cover its first copy; else the order's last vertex is.
+    pub(super) fn gauge(&self, tail: Option<FactorTail<'_, T>>) -> Option<usize> {
+        // Ending at a small |f| left lili's PCG unconverged; forcing always cost +3-5% PCG iterations.
+        let wide = tail.filter(|f| self.floats() && f.spans_wide());
+        wide.map(|f| f.largest() << self.layout.copy_shift())
     }
 }
 
