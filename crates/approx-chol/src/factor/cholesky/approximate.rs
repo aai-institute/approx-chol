@@ -225,6 +225,7 @@ fn pivot<T: Real, I: Index, C: Copies, S: Sign<T, I>>(
 const PHASED_FROM: usize = 1024;
 
 /// Entries a merged pair stands as at most, so the copies its cap dropped still count in the degree: without, fixest's person × firm band took 49-54 PCG iterations instead of 17-19; 4 measured as the full count.
+/// A ground edge a signed cancellation owes stages as `split` copies, so its end's ground pair stands as an entry more: staged as none, signed realistic and power-law AC took +0.3-0.4 PCG iterations on average (realistic over seeds 0-8, power law 3-8; AC2 unchanged) and every signed build +0.4-2.1% instructions.
 const STOOD_UP_TO: u32 = 4;
 
 /// A staged pair `(lo, hi, copies, weight, merged)`: `merged` counts its copies before the cap.
