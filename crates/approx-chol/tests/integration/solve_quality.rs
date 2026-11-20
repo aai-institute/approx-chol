@@ -520,7 +520,7 @@ fn a_banded_laplacian_preconditions_within_16_iterations(#[values(1, 2)] copies:
     }
 }
 
-/// fixest's difficult panel, person × firm, person `i`'s ten spells at firms `10i..10i+9`: people pivot first, and the firm band without their merged copies in its degrees took 49-54 iterations.
+/// fixest's difficult panel, person × firm, person `i`'s spell `t` at firm `(10i + t) mod F`, `F = people / 23`, so each firm holds about 230 people: people pivot first, and the firm band without their merged copies in its degrees took 49-54 iterations.
 #[rstest::rstest]
 fn a_person_firm_band_preconditions_within_20_iterations(#[values(1, 2)] copies: u32) {
     let (people, spells) = (100_000, 10);

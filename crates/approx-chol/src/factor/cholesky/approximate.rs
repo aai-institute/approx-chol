@@ -1,4 +1,4 @@
-//! Approximate Cholesky of a whole SDDM: clique-tree elimination in minimum-degree order (GKS 2023, Algorithm 8, stars by Algorithm 6).
+//! Approximate Cholesky of a whole SDDM: clique-tree elimination in minimum-degree order (GKS 2023, Algorithm 8, stars by Algorithm 6); a block above [`PHASED_FROM`] vertices may first pivot its local minima, in index order.
 
 mod graph;
 mod ordering;
@@ -31,7 +31,7 @@ impl<T: Real, I: Index> CliqueTreeElimination<T, I> {
         })
     }
 
-    /// Every vertex of `M` in minimum-degree order, each star replaced by a sampled clique tree, but a floating `M`'s last: returned as the slot the solve zeroes.
+    /// Every vertex of `M`, each star replaced by a sampled clique tree, but a floating `M`'s last: returned as the slot the solve zeroes. Above [`PHASED_FROM`] vertices, [`LocalMinima`] pivot first in index order when they hold a quarter of the edges; the rest go in minimum-degree order.
     pub(super) fn eliminate<S: Sign<T, I>>(
         &mut self,
         m: Sdd<T, I>,
