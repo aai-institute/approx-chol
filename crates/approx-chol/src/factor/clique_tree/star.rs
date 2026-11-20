@@ -144,7 +144,6 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         write
     }
 
-    /// Capped as the sum grows, which keeps the cap of the whole sum: no input exceeds the split; returns the magnitude the sum cancelled.
     fn absorb<S: Sign<T, I>>(
         &mut self,
         sign: S,
@@ -152,11 +151,8 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         duplicate: StarEntry<T, I, C>,
     ) -> T {
         let merged = &mut self.entries[position];
-        let (weight, gain) = sign.merge(merged.weight, duplicate.weight);
-        merged.weight = weight;
-        let copies = merged.copies.get().saturating_add(duplicate.copies.get());
-        merged.copies = self.split.cap(copies);
-        gain
+        let held = (&mut merged.copies, &mut merged.weight);
+        super::absorb(sign, self.split, held, (duplicate.copies, duplicate.weight))
     }
 
     /// `cancelled` onto the star's `ground` entry, added where the pivot has none.
