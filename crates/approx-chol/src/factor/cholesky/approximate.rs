@@ -295,20 +295,69 @@ fn coarse_first(n: usize) -> impl Iterator<Item = usize> {
     (0..n).step_by(64).chain(rest)
 }
 
-/// Each pair once, its duplicates absorbed into it as the star absorbs them; what a merge cancels grounds both its ends, merged in turn, and a pair cancelled to zero leaves.
+/// Each pair once, its duplicates absorbed into it as the star absorbs them; what a merge cancels grounds both its ends, absorbed into their ground pairs, and a pair cancelled to zero leaves.
 fn merge_pairs<T: Real, I: Index, C: Copies, S: Sign<T, I>>(
     pairs: &mut Vec<Staged<T, I, C>>,
     first: &LocalMinima,
     split: C,
     sign: S,
 ) {
-    loop {
-        let grounded = merge_once(pairs, first, split, sign);
-        if grounded.is_empty() {
-            return;
-        }
-        // An edge to the ground is a magnitude, so merging these cancels nothing more.
-        pairs.extend(grounded);
+    let grounded = merge_once(pairs, first, split, sign);
+    if !grounded.is_empty() {
+        ground_into(pairs, &grounded, first, split, sign);
+    }
+}
+
+/// The ground edges a merge owes absorbed into the merged `pairs` as merging them all again would: each into its end's ground pair in the order owed, or where an end has none, into a new pair closing its bucket. Every edge to the ground weighs above zero, a surplus or a magnitude, so nothing cancels.
+fn ground_into<T: Real, I: Index, C: Copies, S: Sign<T, I>>(
+    pairs: &mut Vec<Staged<T, I, C>>,
+    grounded: &[Staged<T, I, C>],
+    first: &LocalMinima,
+    split: C,
+    sign: S,
+) {
+    let ground = grounded[0].1;
+    // Each end's ground pair: in `pairs`, or past them in `new`.
+    let mut host = vec![usize::MAX; first.left];
+    for (at, pair) in pairs
+        .iter()
+        .enumerate()
+        .filter(|(_, pair)| pair.1 == ground)
+    {
+        host[first.id(pair.0)] = at;
+    }
+    let mut new = Vec::new();
+    for &edge in grounded {
+        let held = match host[first.id(edge.0)] {
+            usize::MAX => {
+                host[first.id(edge.0)] = pairs.len() + new.len();
+                new.push(edge);
+                continue;
+            }
+            at if at < pairs.len() => &mut pairs[at],
+            at => &mut new[at - pairs.len()],
+        };
+        let cancelled = absorb(sign, split, (&mut held.2, &mut held.3), (edge.2, edge.3));
+        // A second merge would ground what this cancels and drop a pair it zeroes.
+        debug_assert!(cancelled == T::zero() && held.3 > T::zero());
+        held.4 = held.4.saturating_add(edge.4);
+    }
+    let Some(&filler) = new.first() else {
+        return;
+    };
+    // Each new pair closes its end's bucket, shifted in from the back.
+    new.sort_unstable_by_key(|pair| first.id(pair.0));
+    // A merge leaves `pairs` in their `lo` buckets, in id order.
+    let ends: Vec<usize> = (new.iter())
+        .map(|pair| pairs.partition_point(|p| first.id(p.0) <= first.id(pair.0)))
+        .collect();
+    let (mut stop, mut shift) = (pairs.len(), new.len());
+    pairs.resize(stop + shift, filler);
+    for (&at, &pair) in ends.iter().zip(&new).rev() {
+        pairs.copy_within(at..stop, at + shift);
+        shift -= 1;
+        pairs[at + shift] = pair;
+        stop = at;
     }
 }
 
@@ -680,6 +729,71 @@ mod tests {
                 (1, 3, 3.0, 2),
                 (2, 3, 2.0, 1)
             ]
+        );
+    }
+
+    /// Absorbing the owed ground edges leaves the pairs, their order and bits as merging every pair again did, with or without ground pairs held, under either copy count and with vertices pivoted first.
+    #[test]
+    fn owed_ground_edges_merge_as_a_second_merge_would() {
+        let (n, ground) = (40u32, 40u32);
+        // Every fifth vertex pivoted first, so ids skip it.
+        let mut left = 0;
+        let ids = (0..=n)
+            .map(|v| match v % 5 == 2 {
+                true => u32::MAX,
+                false => {
+                    left += 1;
+                    left - 1
+                }
+            })
+            .collect();
+        let sparse = LocalMinima {
+            ids,
+            left: left as usize,
+        };
+        let dense = none_first(n + 1);
+        for seed in 0..32 {
+            let first = [&dense, &sparse][seed as usize % 2];
+            let split = Multi::split(2).expect("AC2");
+            again_alike(seed, first, split, (n, ground));
+            again_alike(seed, first, Single, (n, ground));
+        }
+    }
+
+    fn again_alike<C: Copies>(seed: u64, first: &LocalMinima, split: C, (n, ground): (u32, u32)) {
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
+        let kept: Vec<u32> = (0..n).filter(|&v| !first.gone(v as usize)).collect();
+        let mut pairs: Vec<Staged<f64, u32, C>> = (0..400)
+            .map(|_| {
+                let a = rng.random_range(0..kept.len());
+                let b = rng.random_range(0..kept.len() - 1);
+                let (a, b) = (kept[a], kept[b + usize::from(b >= a)]);
+                let w = f64::from(rng.random_range(1..5u8)) * [-1.0, 1.0][rng.random_range(0..2)];
+                (a.min(b), a.max(b), split, w, split.get())
+            })
+            .collect();
+        let held = kept.iter().filter(|_| rng.random_range(0..3) == 0);
+        pairs.extend(held.map(|&k| (k, ground, split, 0.5, split.get())));
+        let sign = Signed { ground };
+        let mut again = pairs.clone();
+        loop {
+            let grounded = merge_once(&mut again, first, split, sign);
+            if grounded.is_empty() {
+                break;
+            }
+            again.extend(grounded);
+        }
+        merge_pairs(&mut pairs, first, split, sign);
+        let bits = |pairs: &[Staged<f64, u32, C>]| -> Vec<_> {
+            (pairs.iter())
+                .map(|&(a, b, c, w, m)| (a, b, c.get(), w.to_bits(), m))
+                .collect()
+        };
+        assert_eq!(
+            bits(&pairs),
+            bits(&again),
+            "seed {seed}, {} copies",
+            split.get()
         );
     }
 
