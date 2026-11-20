@@ -12,6 +12,21 @@ use cdf::{draw_after, suffix_past};
 pub(super) use copies::{Copies, Degrees, Multi, Single};
 use star::StarEntry;
 
+/// A duplicate's `(copies, weight)` absorbed into a held pair's under `split`: weights by [`Sign::merge`], copies summed and capped; returns the magnitude the sum cancelled.
+#[inline(always)] // Out of line, the star's AC2 merge measured +2% of a bipartite build.
+pub(super) fn absorb<T: Real, I: Index, C: Copies, S: Sign<T, I>>(
+    sign: S,
+    split: C,
+    (copies, weight): (&mut C, &mut T),
+    duplicate: (C, T),
+) -> T {
+    let (merged, gain) = sign.merge(*weight, duplicate.1);
+    *weight = merged;
+    // Capped as the sum grows, which keeps the cap of the whole sum: no input exceeds the split.
+    *copies = split.cap(copies.get().saturating_add(duplicate.0.get()));
+    gain
+}
+
 /// Fill edges `(lo, hi, copies, weight)`, `lo < hi`, as an elimination emits them: one per entry and partner, its weight summed over its copies.
 pub(super) type Fill<T, I, C> = Vec<(I, I, C, T)>;
 

@@ -105,11 +105,11 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         sign: S,
     ) {
         let Self {
+            copies: split,
             graph,
             clique,
             fill,
             order,
-            ..
         } = self;
         for _ in 1..graph.n() {
             let v = order.next_vertex();
@@ -117,8 +117,8 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
             let column = clique.eliminate(draws, graph.neighbors(v), fill, sign);
             steps.push(v, column, slots);
             graph.eliminate_vertex(v);
-            for &(u, w, copies, weight) in fill.iter() {
-                graph.push_pair(u, w, copies, weight);
+            for &edge in fill.iter() {
+                graph.push_fill(edge, *split, sign);
             }
             order.update(graph, clique.neighbors());
             // Its own pass: chained onto the neighbors, it cost unsigned 16-vertex paths +5-8%.

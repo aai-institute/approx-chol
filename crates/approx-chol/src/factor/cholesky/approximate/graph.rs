@@ -1,9 +1,13 @@
 mod lists;
 
 use self::lists::Lists;
-use crate::factor::clique_tree::{Copies, Degrees};
+use crate::factor::clique_tree::{absorb, Copies, Degrees};
 use crate::factor::sdd::Sdd;
+use crate::factor::sign::Sign;
 use crate::{Index, Real};
+
+/// Longest list [`EliminationGraph::push_fill`] searches: banded matrices need 8, 32 measured the same, and every search costs fill-heavy bipartite graphs build time.
+const MERGED_UP_TO: u32 = 8;
 
 /// One half of an edge; `mirror` indexes the other half in `to`'s list, so removal is O(1), and a list moving whole keeps it.
 #[derive(Clone, Copy, Debug)]
@@ -83,18 +87,79 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
     }
 
     pub(super) fn push_pair(&mut self, u: I, v: I, copies: C, weight: T) {
+        let (len_u, len_v) = (self.lists.len(u.index()), self.lists.len(v.index()));
+        self.push_at(u, v, (len_u, len_v), copies, weight);
+    }
+
+    /// `u — v` appended to lists of `lens`, each half's mirror the other list's length.
+    fn push_at(&mut self, u: I, v: I, (len_u, len_v): (u32, u32), copies: C, weight: T) {
         // A list's length is a u32 that its growth keeps in range, so a mirror never truncates.
-        let (mirror_u, mirror_v) = (self.lists.len(v.index()), self.lists.len(u.index()));
         let edge = |to, mirror| Edge {
             to,
             mirror,
             copies,
             weight,
         };
-        self.lists.push(u.index(), edge(v, mirror_u));
-        self.lists.push(v.index(), edge(u, mirror_v));
+        self.lists.push(u.index(), edge(v, len_v));
+        self.lists.push(v.index(), edge(u, len_u));
         self.degrees.add(u.index(), copies.get());
         self.degrees.add(v.index(), copies.get());
+    }
+
+    /// Absorbed into an `u — v` pair already held, so the degree counts it once, where the shorter list is searchable; past that the star's merge absorbs the duplicate.
+    #[inline(always)] // Out of line or left to rustc, the pivot loop measured +2% of a bipartite build.
+    pub(super) fn push_fill<S: Sign<T, I>>(
+        &mut self,
+        (u, v, copies, weight): (I, I, C, T),
+        split: C,
+        sign: S,
+    ) {
+        let lens = (self.lists.len(u.index()), self.lists.len(v.index()));
+        // Read once: past the search, a second read of both lengths measured +2% of a bipartite build.
+        if lens.0.min(lens.1) > MERGED_UP_TO {
+            return self.push_at(u, v, lens, copies, weight);
+        }
+        let (a, b) = if lens.0 <= lens.1 { (u, v) } else { (v, u) };
+        let held = (self.lists.get(a.index()).iter()).position(|edge| edge.to == b);
+        let Some(at) = held else {
+            return self.push_at(u, v, lens, copies, weight);
+        };
+        let edge = self.lists.get(a.index())[at];
+        let (mut sum, mut merged) = (edge.copies, edge.weight);
+        let cancelled = absorb(sign, split, (&mut sum, &mut merged), (copies, weight));
+        for end in [a, b] {
+            self.degrees.remove(end.index(), edge.copies.get());
+        }
+        if merged == T::zero() {
+            self.swap_remove(b.index(), edge.mirror as usize);
+            self.swap_remove(a.index(), at);
+        } else {
+            for end in [a, b] {
+                self.degrees.add(end.index(), sum.get());
+            }
+            let half = &mut self.lists.get_mut(a.index())[at];
+            (half.copies, half.weight) = (sum, merged);
+            let half = &mut self.lists.get_mut(b.index())[edge.mirror as usize];
+            (half.copies, half.weight) = (sum, merged);
+        }
+        if let Some(ground) = sign.ground().filter(|_| cancelled != T::zero()) {
+            self.ground_both((a, b), ground, cancelled, split, sign);
+        }
+    }
+
+    /// `cancelled` grounded at both `ends`, as the star grounds a merge's; out of line, so `push_fill` inlines without its recursion.
+    #[inline(never)]
+    fn ground_both<S: Sign<T, I>>(
+        &mut self,
+        ends: (I, I),
+        ground: I,
+        cancelled: T,
+        split: C,
+        sign: S,
+    ) {
+        for end in [ends.0, ends.1] {
+            self.push_fill((end, ground, split, cancelled), split, sign);
+        }
     }
 
     /// Swap-removes `u`'s edge at `at`, repairing the moved edge's mirror.
@@ -113,6 +178,7 @@ mod tests {
     use super::EliminationGraph;
     use crate::factor::cholesky::approximate::REUSED_UP_TO;
     use crate::factor::clique_tree::{Copies, Multi, Single};
+    use crate::factor::sign::{Signed, Unsigned};
 
     const N: usize = 8;
 
@@ -158,6 +224,103 @@ mod tests {
             degrees_track_lists(Single, &ops)?;
             degrees_track_lists(Multi::split(4).expect("AC2"), &ops)?;
         }
+
+        /// Lists never past `N - 1 < MERGED_UP_TO`, so every fill pushed merges: one entry a pair, its weights summed, its copies capped, the degree their sum.
+        #[test]
+        fn short_lists_merge_fill(pushes in vec((0..N, 0..N, 1u32..5, 1u8..9), 0..200)) {
+            let split = Multi::split(4).expect("AC2");
+            let mut graph = EliminationGraph::<f64, u32, Multi>::new();
+            graph.reset(&[1; N], split);
+            let mut want = std::collections::HashMap::new();
+            for &(u, v, copies, weight) in pushes.iter().filter(|p| p.0 != p.1) {
+                let edge = (u.min(v) as u32, u.max(v) as u32, split.cap(copies), f64::from(weight));
+                graph.push_fill(edge, split, Unsigned);
+                let (sum, total) = want.entry((u.min(v), u.max(v))).or_insert((0, 0.0));
+                (*sum, *total) = (*sum + copies, *total + f64::from(weight));
+            }
+            graph.lists.assert_consistent();
+            for x in 0..N {
+                let have: Vec<_> = graph.neighbors(x).map(|(to, c, w)| (to as usize, c.get(), w)).collect();
+                let mut ends: Vec<_> = have.iter().map(|h| h.0).collect();
+                ends.sort_unstable();
+                ends.dedup();
+                prop_assert_eq!(ends.len(), have.len());
+                for (to, copies, weight) in have {
+                    let (sum, total) = want[&(x.min(to), x.max(to))];
+                    prop_assert_eq!((copies, weight), (sum.min(4), total));
+                }
+                let copies: u64 = graph.neighbors(x).map(|(_, c, _)| u64::from(c.get())).sum();
+                prop_assert_eq!(graph.degree(x), copies);
+            }
+        }
+
+        /// Signed AC2 fill, cancelling partly or to zero, among eliminations: each degree stays its list's copies, the ground's too.
+        #[test]
+        fn signed_fill_keeps_degrees(ops in vec((0..N, 0..N, 0u8..8, 1u32..5, -3i8..4), 0..300)) {
+            let split = Multi::split(4).expect("AC2");
+            let sign = Signed { ground: N as u32 };
+            let mut graph = EliminationGraph::<f64, u32, Multi>::new();
+            graph.reset(&[1; N + 1], split);
+            let mut alive = [true; N];
+            for (u, v, eliminate, copies, weight) in ops {
+                if eliminate == 0 && alive[u] {
+                    graph.eliminate_vertex(u);
+                    alive[u] = false;
+                } else if u != v && alive[u] && alive[v] && weight != 0 {
+                    let edge = (u.min(v) as u32, u.max(v) as u32, split.cap(copies), f64::from(weight));
+                    graph.push_fill(edge, split, sign);
+                }
+                graph.lists.assert_consistent();
+                for x in 0..=N {
+                    let copies: u64 = graph.neighbors(x).map(|(_, c, _)| u64::from(c.get())).sum();
+                    prop_assert_eq!(graph.degree(x), copies);
+                }
+            }
+        }
+    }
+
+    /// A pair on two lists of 8 merges; once both hold 9, a duplicate stands beside it and the degree counts both.
+    #[test]
+    fn fill_merges_up_to_eight_entries() {
+        let mut graph = EliminationGraph::<f64, u32, Single>::new();
+        graph.reset(&[1; 24], Single);
+        graph.push_pair(0, 1, Single, 1.0);
+        for k in 0..7 {
+            graph.push_pair(0, 2 + k, Single, 1.0);
+            graph.push_pair(1, 9 + k, Single, 1.0);
+        }
+        let to_one = |graph: &EliminationGraph<f64, u32, Single>| {
+            graph.neighbors(0).filter(|&(to, _, _)| to == 1).count()
+        };
+        graph.push_fill((0, 1, Single, 1.0), Single, Unsigned);
+        assert_eq!((to_one(&graph), graph.degree(0)), (1, 8));
+        graph.push_pair(0, 16, Single, 1.0);
+        graph.push_pair(1, 17, Single, 1.0);
+        graph.push_fill((0, 1, Single, 1.0), Single, Unsigned);
+        assert_eq!((to_one(&graph), graph.degree(0)), (2, 10));
+        graph.lists.assert_consistent();
+    }
+
+    /// Opposite duplicates cancel twice the smaller magnitude onto the ground at both ends, and a pair cancelled to zero leaves both lists.
+    #[test]
+    fn signed_fill_cancels_onto_the_ground() {
+        let sign = Signed { ground: 3u32 };
+        let mut graph = EliminationGraph::<f64, u32, Single>::new();
+        graph.reset(&[2; 4], Single);
+        graph.push_fill((0, 1, Single, 2.0), Single, sign);
+        graph.push_fill((0, 1, Single, -0.5), Single, sign);
+        let lists = |graph: &EliminationGraph<f64, u32, Single>, x| {
+            graph
+                .neighbors(x)
+                .map(|(to, _, w)| (to, w))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(lists(&graph, 0), [(1, 1.5), (3, 1.0)]);
+        assert_eq!(lists(&graph, 1), [(0, 1.5), (3, 1.0)]);
+        graph.push_fill((0, 1, Single, -1.5), Single, sign);
+        assert_eq!(lists(&graph, 0), [(3, 4.0)]);
+        assert_eq!(lists(&graph, 1), [(3, 4.0)]);
+        graph.lists.assert_consistent();
     }
 
     fn degrees_track_lists<C: Copies>(
