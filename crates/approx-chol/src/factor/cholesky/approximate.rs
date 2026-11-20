@@ -550,6 +550,85 @@ mod tests {
         }
     }
 
+    /// `people` joined to two or three of `firms`, plus random person–person edges, so ties and neighboring minima occur; grounded at every tenth person when `grounded`.
+    fn panel(people: usize, firms: usize, grounded: bool) -> Sdd<f64, u32> {
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(11);
+        let n = people + firms;
+        let mut pairs: Vec<(usize, usize)> = Vec::new();
+        for person in 0..people {
+            let spells = 2 + rng.next_u64() as usize % 2;
+            pairs.extend((0..spells).map(|_| (person, people + rng.next_u64() as usize % firms)));
+        }
+        for _ in 0..people / 4 {
+            let (a, b) = (
+                rng.next_u64() as usize % people,
+                rng.next_u64() as usize % people,
+            );
+            pairs.extend((a != b).then_some((a.min(b), a.max(b))));
+        }
+        pairs.sort_unstable();
+        pairs.dedup();
+        let (mut ptrs, mut indices) = (vec![0], Vec::new());
+        for i in 0..n {
+            indices.extend((pairs.iter()).filter(|p| p.0 == i).map(|p| p.1 as u32));
+            ptrs.push(indices.len());
+        }
+        let values = vec![-1.0; indices.len()];
+        let surplus = (0..n)
+            .map(|v| {
+                if grounded && v < people && v % 10 == 0 {
+                    1.0
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        let adjacency = UpperAdjacency::new(Rows::new(ptrs, indices, values, n));
+        Sdd::new(adjacency, Grounding::of(surplus), Layout::Like)
+    }
+
+    /// The set holds no edge, each member's `(degree, id)` below its neighbors' but `never`'s, every vertex so placed is in it, and `never` is not.
+    #[test]
+    fn local_minima_are_an_independent_set_without_never() {
+        for grounded in [false, true] {
+            let m = panel(1500, 60, grounded);
+            let room = EliminationGraph::<f64, u32, Single>::room(&m);
+            let mut adjacent = vec![Vec::new(); m.n()];
+            for i in 0..m.n() {
+                for j in m.neighbors_past(i) {
+                    adjacent[i].push(j);
+                    adjacent[j].push(i);
+                }
+            }
+            let key = |v: usize| (room[v], v);
+            let below_all = |v: usize, but: usize| {
+                room[v] > 1 && (adjacent[v].iter()).all(|&j| j == but || key(v) < key(j))
+            };
+            // A local minimum whose neighbor sits below all but it: as `never`, it leaves that neighbor in the set.
+            let blocking = (0..m.n())
+                .find(|&v| below_all(v, v) && adjacent[v].iter().any(|&j| below_all(j, v)))
+                .expect("a local minimum blocking a neighbor");
+            for never in [m.ground(), Some(blocking)] {
+                let first = LocalMinima::of(&m, &room, never).expect("people hold most edges");
+                let label = format!("grounded {grounded}, never {never:?}");
+                assert!(
+                    never.is_none_or(|v| v >= m.n() || !first.gone(v)),
+                    "{label}"
+                );
+                for v in 0..m.n() {
+                    let below = (adjacent[v].iter()).all(|&j| Some(j) == never || key(v) < key(j));
+                    let member = Some(v) != never && room[v] > 1 && below;
+                    assert_eq!(first.gone(v), member, "{label}: vertex {v}");
+                    if first.gone(v) {
+                        assert!(adjacent[v].iter().all(|&j| !first.gone(j)), "{label}: {v}");
+                    }
+                }
+                let left = (0..room.len()).filter(|&v| !first.gone(v)).count();
+                assert_eq!(first.left, left, "{label}");
+            }
+        }
+    }
+
     /// Each pair once, its weights and uncapped copies summed, its copies capped.
     #[test]
     fn merging_sums_each_pairs_parallel_edges() {

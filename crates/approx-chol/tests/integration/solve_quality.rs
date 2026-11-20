@@ -1,6 +1,9 @@
 use std::num::NonZeroU32;
 
-use approx_chol::{ApproxInverse, Component, Config, MemStack, Real, Sampling, SchurMode, Threads};
+use approx_chol::{
+    ApproxInverse, Component, Config, CoverSurplus, FrustratedRoute, MemStack, Real, Sampling,
+    SchurMode, Threads,
+};
 
 use crate::common::bits::bits;
 use crate::common::cases::cases;
@@ -549,4 +552,110 @@ fn a_person_firm_band_preconditions_within_20_iterations(#[values(1, 2)] copies:
             "seed {seed}, {copies} copies: {iterations:?} iterations"
         );
     }
+}
+
+/// A person × firm panel as above at `people`, five spells each; an edge is positive where `positive` says.
+fn person_firm(people: usize, positive: impl Fn(usize, usize) -> bool) -> Graph {
+    let (spells, firms) = (5, people / 23);
+    let pairs = (0..people).flat_map(|person| {
+        (0..spells).map(move |t| (person, people + (spells * person + t) % firms))
+    });
+    let edges = pairs
+        .map(|(a, b)| match positive(a, b) {
+            true => Edge::positive(a, b, 1.0),
+            false => Edge::negative(a, b, 1.0),
+        })
+        .collect();
+    Graph::new(people + firms, edges)
+}
+
+/// PCG iterations to `1e-8` on `graph` under `config`, at most 100; the panels below measured 6-15.
+fn panel_iterations(graph: &Graph, config: &Config) -> Option<usize> {
+    let factor = Entry::Csr.reduce(graph, Types::F64U32).factorize(config);
+    let b = graph.apply(
+        &(0..graph.n)
+            .map(|v| (v % 5) as f64 - 2.0)
+            .collect::<Vec<_>>(),
+    );
+    pcg_iterations(|x| graph.apply(x), |r| factor.solve(r), &b, 1e-8, 100)
+}
+
+fn copies_config(copies: u32, frustrated: FrustratedRoute) -> Config {
+    Config {
+        exact_max_dim: 0,
+        sampling: Sampling::CliqueTree {
+            copies: NonZeroU32::new(copies).expect("one copy or more"),
+        },
+        frustrated,
+        ..Config::default()
+    }
+}
+
+/// A frustrated panel, signs mixed per spell, takes the local-minimum phase on one signed sheet and on the cover's two.
+#[rstest::rstest]
+fn a_frustrated_panel_pivots_its_people_first_on_either_route(
+    #[values(FrustratedRoute::Signed, FrustratedRoute::Cover(CoverSurplus::Auto))]
+    frustrated: FrustratedRoute,
+    #[values(1, 4)] copies: u32,
+) {
+    let mut graph = person_firm(20_000, |a, b| (a * 7 + b * 13) % 5 == 0);
+    graph.ground[0] = 1.0;
+    let iterations = panel_iterations(&graph, &copies_config(copies, frustrated));
+    assert!(
+        iterations.is_some_and(|it| it <= 25),
+        "{frustrated:?}, {copies} copies: {iterations:?} iterations"
+    );
+}
+
+/// A floating panel takes the phase, the order's last vertex pinned.
+#[rstest::rstest]
+fn a_floating_panel_pivots_its_people_first(#[values(1, 4)] copies: u32) {
+    let graph = person_firm(20_000, |_, _| false);
+    let route = FrustratedRoute::Cover(CoverSurplus::Auto);
+    let iterations = panel_iterations(&graph, &copies_config(copies, route));
+    assert!(
+        iterations.is_some_and(|it| it <= 25),
+        "{copies} copies: {iterations:?} iterations"
+    );
+}
+
+/// `D L D` of a floating panel, `d` spanning `10⁻⁹`, so the scaling's `f = D⁻¹·1` spans past `1/√ε` and its largest `|f|` is the gauge, which never pivots first.
+#[test]
+fn a_gauged_floating_panel_pivots_its_people_first() {
+    use approx_chol::input::CsrRef;
+    use approx_chol::{factorize_with, ScalingPolicy};
+
+    let graph = person_firm(20_000, |_, _| false);
+    let d: Vec<f64> = (0..graph.n)
+        .map(|i| 1e-9f64.powf((i * 37 % 101) as f64 / 100.0))
+        .collect();
+    let (ptrs, columns, values) = graph.csr(false);
+    let scaled: Vec<f64> = (0..graph.n)
+        .flat_map(|i| (ptrs[i]..ptrs[i + 1]).map(move |k| (i, k)))
+        .map(|(i, k)| d[i] * values[k] * d[columns[k]])
+        .collect();
+    let apply = |x: &[f64]| -> Vec<f64> {
+        (0..graph.n)
+            .map(|i| {
+                (ptrs[i]..ptrs[i + 1])
+                    .map(|k| scaled[k] * x[columns[k]])
+                    .sum()
+            })
+            .collect()
+    };
+    let csr = CsrRef::new(graph.n, &ptrs, &columns, &scaled).unwrap();
+    let route = FrustratedRoute::Cover(CoverSurplus::Auto);
+    let factor: ApproxInverse =
+        factorize_with(csr, copies_config(1, route), ScalingPolicy::default()).unwrap();
+    assert!(factor.components().all(|component| component.floats()));
+    let b = apply(
+        &(0..graph.n)
+            .map(|v| (v % 5) as f64 - 2.0)
+            .collect::<Vec<_>>(),
+    );
+    let iterations = pcg_iterations(apply, |r| factor.solve(r).unwrap(), &b, 1e-8, 100);
+    assert!(
+        iterations.is_some_and(|it| it <= 25),
+        "{iterations:?} iterations"
+    );
 }
