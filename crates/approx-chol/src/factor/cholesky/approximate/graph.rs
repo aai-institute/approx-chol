@@ -6,10 +6,6 @@ use crate::factor::sdd::Sdd;
 use crate::factor::sign::Sign;
 use crate::{Index, Real};
 
-/// Entries a merged pair stands as at most, so the copies its cap dropped still count in the degree: without, fixest's person × firm band took 49-54 PCG iterations instead of 17-19; 4 measured as the full count.
-/// A ground edge a signed cancellation owes stages as `split` copies, so its end's ground pair stands as an entry more: staged as none, signed realistic and power-law AC took +0.3-0.4 PCG iterations on average (realistic over seeds 0-8, power law 3-8; AC2 unchanged) and every signed build +0.4-2.1% instructions.
-const STOOD_UP_TO: u32 = 4;
-
 /// A staged pair `(lo, hi, weight, merged)`: `merged` counts its copies before the cap; its capped copies are `split.cap(merged)`.
 pub(super) type Staged<T, I> = (I, I, T, u32);
 
@@ -97,7 +93,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         m.grounded_edges(|k, j, w| self.push_pair(k, j, split, w));
     }
 
-    /// `pairs`, each once; a vertex `gone` gets no room. A pair whose cap dropped copies stands as up to [`STOOD_UP_TO`] parallel entries sharing its weight, so the degree counts them until a star merges them back.
+    /// `pairs`, each once with its capped copies; a vertex `gone` gets no room.
     pub(super) fn load_merged(
         &mut self,
         pairs: &[Staged<T, I>],
@@ -105,24 +101,15 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         n: usize,
         split: C,
     ) {
-        let stood = |merged: u32| (merged - split.cap(merged).get()).min(STOOD_UP_TO - 1);
         let mut room: Vec<u32> = (0..n).map(|v| u32::from(!gone(v))).collect();
-        for &(k, j, _, merged) in pairs {
-            let entries = 1 + stood(merged);
-            room[k.index()] = room[k.index()].saturating_add(entries);
-            room[j.index()] = room[j.index()].saturating_add(entries);
+        for &(k, j, _, _) in pairs {
+            room[k.index()] = room[k.index()].saturating_add(1);
+            room[j.index()] = room[j.index()].saturating_add(1);
         }
         self.reset(&room, split);
         drop(room);
-        let one = split.cap(1);
         for &(k, j, weight, merged) in pairs {
-            let extra = stood(merged);
-            // Shared, not left on one entry: a fill cancelling one entry exactly leaves the others weighted.
-            let share = weight / T::from(1 + extra).expect("at most four entries");
-            self.push_pair(k, j, split.cap(merged), share);
-            for _ in 0..extra {
-                self.push_pair(k, j, one, share);
-            }
+            self.push_pair(k, j, split.cap(merged), weight);
         }
     }
 
@@ -418,10 +405,10 @@ mod tests {
         graph.lists.assert_consistent();
     }
 
-    /// A merged pair stands as its kept entry and one per dropped copy, at most four, sharing its weight; the degree counts them, AC and AC2, also once a neighbor goes.
+    /// A merged pair loads as one entry, its weight whole and its copies capped; the degree counts them, AC and AC2, also once a neighbor goes.
     #[test]
-    fn a_merged_pair_stands_for_the_copies_its_cap_dropped() {
-        fn check<C: Copies>(split: C, stood: impl Fn(u32) -> u64) {
+    fn a_merged_pair_loads_as_one_capped_entry() {
+        fn check<C: Copies>(split: C) {
             let pairs: Vec<_> = (1..9u32)
                 .map(|merged| (0, merged, f64::from(merged), merged))
                 .collect();
@@ -430,24 +417,20 @@ mod tests {
             graph.lists.assert_consistent();
             for merged in 1..9u32 {
                 let entries: Vec<_> = graph.neighbors(merged as usize).collect();
-                let weight: f64 = entries.iter().map(|e| e.2).sum();
-                let dropped = merged - split.cap(merged).get();
-                assert_eq!(entries.len() as u32, 1 + dropped.min(3), "{merged}");
-                assert!(
-                    (weight - f64::from(merged)).abs() < 1e-12,
-                    "{merged}: {weight}"
+                assert_eq!(entries.len(), 1, "{merged}");
+                assert_eq!(
+                    (entries[0].1.get(), entries[0].2),
+                    (split.cap(merged).get(), f64::from(merged))
                 );
             }
-            let want: u64 = (1..9).map(&stood).sum();
+            let capped = |merged: u32| u64::from(split.cap(merged).get());
+            let want: u64 = (1..9).map(capped).sum();
             assert_eq!(graph.degree(0), want);
             graph.eliminate_vertex(8);
-            assert_eq!(graph.degree(0), want - stood(8));
+            assert_eq!(graph.degree(0), want - capped(8));
         }
-        check(Single, |merged| u64::from(merged.min(4)));
-        let split = Multi::split(4).expect("AC2");
-        check(split, |merged| {
-            u64::from(merged.min(4) + merged.saturating_sub(4).min(3))
-        });
+        check(Single);
+        check(Multi::split(4).expect("AC2"));
     }
 
     /// Opposite duplicates cancel twice the smaller magnitude onto the ground at both ends, and a pair cancelled to zero leaves both lists.
