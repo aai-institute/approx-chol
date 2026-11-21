@@ -27,8 +27,11 @@ pub(super) fn absorb<T: Real, I: Index, C: Copies, S: Sign<T, I>>(
     gain
 }
 
-/// Fill edges `(lo, hi, copies, weight)`, `lo < hi`, as an elimination emits them: one per entry and partner, its weight summed over its copies.
-pub(super) type Fill<T, I, C> = Vec<(I, I, C, T)>;
+/// An edge `(lo, hi, copies, weight)`, `lo < hi`, its weight summed over its copies: fill as an elimination emits it, one per entry and partner, or a pair the local-minimum phase stages.
+pub(super) type Pair<T, I, C> = (I, I, C, T);
+
+/// The fill a pivot's elimination emits.
+pub(super) type Fill<T, I, C> = Vec<Pair<T, I, C>>;
 
 /// A pivot's elimination, reused across pivots; AC and AC2 differ only in `C`.
 pub(super) struct CliqueTreeSampler<T, I, C: Copies> {
