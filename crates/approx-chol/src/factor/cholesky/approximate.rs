@@ -184,7 +184,7 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
             let column = clique.eliminate(draws, row.map(|&(u, w)| (u, split, w)), fill, sign);
             steps.push(v, column, slots);
             staged.extend_from_slice(fill);
-            // Merged once it holds twice the pairs its last merge left, and at least 2^16.
+            // So past 2^16 pairs the staging stays within twice its merged size.
             if staged.len() >= (2 * merged).max(1 << 16) {
                 merge_pairs(&mut staged, first, split, sign);
                 merged = staged.len();

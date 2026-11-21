@@ -177,7 +177,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
     #[inline(always)] // Out of line or left to rustc, the pivot loop measured +2% of a bipartite build.
     pub(super) fn push_fill<S: Sign<T, I>>(
         &mut self,
-        (u, v, copies, weight): (I, I, C, T),
+        (u, v, copies, weight): Pair<T, I, C>,
         search: &mut FillSearch,
         split: C,
         sign: S,
