@@ -44,37 +44,24 @@ impl<T: Real, I: Index> BipartiteBlock<T, I> {
         }
     }
 
-    /// `L` and `factor(S)` over one pivot vector; σ is freed before `S` is factored.
-    pub(super) fn eliminate<R>(
+    /// `L` and `S` over one pivot vector; σ dies before either is returned.
+    pub(super) fn eliminate(
         self,
         config: &Config,
         streams: Streams,
         threads: Threads,
-        factor: impl FnOnce(Sdd<T, I>) -> R,
-    ) -> (BlockElimination<T, I>, R) {
+    ) -> (BlockElimination<T, I>, Sdd<T, I>) {
         let inv_pivot = self.inverse_pivots();
-        let (s, cross) = self.complement_and_cross(config, streams, threads, &inv_pivot);
-        let reduced = factor(s);
-        (BlockElimination::new(cross, inv_pivot), reduced)
-    }
-
-    /// `S`, and `C` handed back for `L`: σ dies here, before `S` is factored.
-    fn complement_and_cross(
-        self,
-        config: &Config,
-        streams: Streams,
-        threads: Threads,
-        inv_pivot: &[T],
-    ) -> (Sdd<T, I>, Rows<T, I>) {
-        let kept = self.kept_ground(inv_pivot);
-        let route = self.route(config, kept.as_deref(), inv_pivot);
+        let kept = self.kept_ground(&inv_pivot);
+        let route = self.route(config, kept.as_deref(), &inv_pivot);
         let rows = match formation(config, self.cross.n_cols()) {
-            Formation::Exact => self.exact(inv_pivot, route, threads, kept),
+            Formation::Exact => self.exact(&inv_pivot, route, threads, kept),
             Formation::Sampled(copies) => {
                 (self.sample(copies, route, streams, threads)).merge(kept)
             }
         };
-        (rows.close(), self.cross)
+        let s = rows.close();
+        (BlockElimination::new(self.cross, inv_pivot), s)
     }
 
     /// `S` alone, a complement's summand: `C` is freed before the sampled merge.
