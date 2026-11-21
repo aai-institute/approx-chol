@@ -77,6 +77,11 @@ impl<T: Real, I: Index> Sdd<T, I> {
         self.layout != Layout::Signed && !self.surplus.is_grounded()
     }
 
+    /// Slot `i`'s neighbors past it, each edge once over all slots; the ground's edges are not among them.
+    pub(super) fn neighbors_past(&self, i: usize) -> impl Iterator<Item = usize> + '_ {
+        self.off_diagonal.upper(i).map(|(j, _)| j)
+    }
+
     /// Each edge once as `(i, j, −a_ij)`, then each surplus as `(k, n, s_k)`.
     pub(super) fn grounded_edges(&self, mut edge: impl FnMut(I, I, T)) {
         let (n, shift) = (self.n(), self.layout.copy_shift());

@@ -1,4 +1,4 @@
-//! Approximate Cholesky of a whole SDDM: clique-tree elimination in minimum-degree order (GKS 2023, Algorithm 8, stars by Algorithm 6).
+//! Approximate Cholesky of a whole SDDM: clique-tree elimination in minimum-degree order (GKS 2023, Algorithm 8, stars by Algorithm 6); a block above [`PHASED_FROM`] vertices may first pivot its local minima, in index order.
 
 mod graph;
 mod ordering;
@@ -12,7 +12,7 @@ use crate::factor::sign::Sign;
 use crate::factor::within_one;
 use crate::sgdd::FactorTail;
 use crate::{narrow, Batch, Index, Real};
-use graph::EliminationGraph;
+use graph::{EliminationGraph, Staged};
 use ordering::MinDegreeOrder;
 
 /// A task's AC or AC2 elimination; small blocks reuse its buffers (malloc was 17% of 20-vertex covers).
@@ -31,7 +31,7 @@ impl<T: Real, I: Index> CliqueTreeElimination<T, I> {
         })
     }
 
-    /// Every vertex of `M` in minimum-degree order, each star replaced by a sampled clique tree, but a floating `M`'s last: returned as the slot the solve zeroes.
+    /// Every vertex of `M`, each star replaced by a sampled clique tree, but a floating `M`'s last: returned as the slot the solve zeroes. Above [`PHASED_FROM`] vertices, [`LocalMinima`] may pivot first in index order; the rest go in minimum-degree order.
     pub(super) fn eliminate<S: Sign<T, I>>(
         &mut self,
         m: Sdd<T, I>,
@@ -77,13 +77,29 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         tail: Option<FactorTail<'_, T>>,
     ) -> (ApproximateCholesky<T, I>, Option<usize>) {
         let (slots, ground, gauge) = (m.n(), m.ground(), m.gauge(tail));
-        self.graph.load(&m, self.copies);
-        drop(m);
-        let (n, edge_ends) = (self.graph.n(), self.graph.edge_ends());
-        self.order
-            .load(&self.graph, self.copies, ground.or(gauge), edge_ends);
-        let mut steps = ApproximateCholesky::with_capacity(n, edge_ends);
-        self.pivot_all(&mut draws, &mut steps, slots, sign);
+        let never = ground.or(gauge);
+        let room = EliminationGraph::<T, I, C>::room(&m);
+        let n = room.len();
+        let first = (n > PHASED_FROM)
+            .then(|| LocalMinima::of(&m, &room, never))
+            .flatten();
+        // Every vertex left but one: the never-pivoted one, or the order's last.
+        let pivots = first.as_ref().map_or(n, |first| first.left) - 1;
+        let mut steps = match &first {
+            None => {
+                self.graph.load(&m, &room, self.copies);
+                drop((m, room));
+                ApproximateCholesky::with_capacity(n, 0)
+            }
+            Some(first) => self.pivot_first((m, room), first, sign, &mut draws, slots),
+        };
+        let edge_ends = self.graph.edge_ends();
+        let queue = |v| Some(v) != never && !first.as_ref().is_some_and(|first| first.gone(v));
+        self.order.load(&self.graph, self.copies, queue, edge_ends);
+        drop(first);
+        steps.neighbors.reserve_exact(edge_ends);
+        steps.coefficients.reserve_exact(edge_ends);
+        self.pivot_all(&mut draws, &mut steps, slots, sign, pivots);
         // Doubling past the estimate otherwise retains up to 2x the entries (+30% on grids).
         steps.neighbors.shrink_to_fit();
         steps.coefficients.shrink_to_fit();
@@ -103,6 +119,7 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
         steps: &mut ApproximateCholesky<T, I>,
         slots: usize,
         sign: S,
+        pivots: usize,
     ) {
         let Self {
             copies: split,
@@ -111,7 +128,7 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
             fill,
             order,
         } = self;
-        for _ in 1..graph.n() {
+        for _ in 0..pivots {
             let v = order.next_vertex();
             fill.clear();
             let column = clique.eliminate(draws, graph.neighbors(v), fill, sign);
@@ -125,6 +142,220 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
             order.update(graph, clique.dropped());
         }
     }
+
+    /// Pivots `first`'s vertices, each star its row of `m`, their fill staged with `m`'s other edges and merged as it grows; loads the graph with the merged pairs.
+    fn pivot_first<S: Sign<T, I>>(
+        &mut self,
+        (m, room): (Sdd<T, I>, Vec<u32>),
+        first: &LocalMinima,
+        sign: S,
+        draws: &mut Xoshiro256PlusPlus,
+        slots: usize,
+    ) -> ApproximateCholesky<T, I> {
+        let (n, split) = (room.len(), self.copies);
+        let row = |v: usize| (room[v] as usize - 1) * usize::from(first.gone(v));
+        // Row `v` is written from `start[v + 1]`, which then ends it where `start[v]` begins it.
+        let mut start = vec![0usize; n + 1];
+        for v in 1..n {
+            start[v + 1] = start[v] + row(v - 1);
+        }
+        let mut rows = vec![(I::from_index(0), T::zero()); start[n] + row(n - 1)];
+        drop(room);
+        let mut staged = Vec::new();
+        m.grounded_edges(|k, j, w| {
+            let (row, to) = match (first.gone(k.index()), first.gone(j.index())) {
+                (true, _) => (k, j),
+                (_, true) => (j, k),
+                _ => return staged.push((k, j, w, split.get())),
+            };
+            rows[start[row.index() + 1]] = (to, w);
+            start[row.index() + 1] += 1;
+        });
+        drop(m);
+        let mut steps = ApproximateCholesky::with_capacity(n, rows.len());
+        let mut merged = staged.len();
+        let Self { clique, fill, .. } = self;
+        for v in (0..n).filter(|&v| first.gone(v)) {
+            let row = rows[start[v]..start[v + 1]].iter();
+            fill.clear();
+            let column = clique.eliminate(draws, row.map(|&(u, w)| (u, split, w)), fill, sign);
+            steps.push(v, column, slots);
+            staged.extend(
+                fill.iter()
+                    .map(|&(u, w, c, weight)| (u, w, weight, c.get())),
+            );
+            // Merged at each doubling, so the staging stays within twice its merged size.
+            if staged.len() >= (2 * merged).max(1 << 16) {
+                merge_pairs(&mut staged, first, split, sign);
+                merged = staged.len();
+            }
+        }
+        drop((rows, start));
+        merge_pairs(&mut staged, first, split, sign);
+        self.graph.load_merged(&staged, |v| first.gone(v), n, split);
+        steps
+    }
+}
+
+/// Above it, the local minima may pivot first; a smaller block has too few to pay the staging.
+const PHASED_FROM: usize = 1024;
+
+/// The vertices that pivot first, each `(degree, id)` below every neighbor's but the never-pivoted one's: an independent set (Liu's multiple minimum degree), so each star is its input row.
+struct LocalMinima {
+    /// Each other vertex's id among those minimum degree eliminates, [`u32::MAX`] for one pivoted first.
+    ids: Vec<u32>,
+    /// The vertices minimum degree eliminates, the never-pivoted one counted.
+    left: usize,
+}
+
+impl LocalMinima {
+    /// The set, if its edges are a quarter of all and the vertices fit `u32`; each edge between slots marks its larger end unless its smaller is `never`; edges to the ground are not walked.
+    fn of<T: Real, I: Index>(m: &Sdd<T, I>, room: &[u32], never: Option<usize>) -> Option<Self> {
+        u32::try_from(room.len()).ok()?;
+        let key = |v: usize| (u64::from(room[v]) << 32) | v as u64;
+        let candidate = |v: usize| Some(v) != never && room[v] > 1;
+        let edges = |v: usize| u64::from(room[v] - 1);
+        let total: u64 = (0..room.len()).map(edges).sum();
+        // The unmarked candidates' edges: what the set may still cover.
+        let mut open: u64 = (0..room.len()).filter(|&v| candidate(v)).map(edges).sum();
+        let mut above = vec![false; room.len()];
+        for i in coarse_first(m.n()) {
+            for j in m.neighbors_past(i) {
+                let (lo, hi) = if key(i) < key(j) { (i, j) } else { (j, i) };
+                if Some(lo) != never && !above[hi] {
+                    above[hi] = true;
+                    if candidate(hi) {
+                        open -= edges(hi);
+                    }
+                }
+            }
+            // Below a quarter, grids would pay the staging for few pivots; a sparse sweep rejects one after a fifth to a third of its rows.
+            if 4 * open < total {
+                return None;
+            }
+        }
+        let first = |v: usize| candidate(v) && !above[v];
+        let mut left = 0;
+        let ids = (0..room.len())
+            .map(|v| match first(v) {
+                true => u32::MAX,
+                false => {
+                    left += 1;
+                    left as u32 - 1
+                }
+            })
+            .collect();
+        Some(Self { ids, left })
+    }
+
+    fn gone(&self, v: usize) -> bool {
+        self.ids[v] == u32::MAX
+    }
+
+    fn id<I: Index>(&self, v: I) -> usize {
+        self.ids[v.index()] as usize
+    }
+}
+
+/// `0..n` by strides 64, 32, …, 1, each once: marks don't depend on the order, and a sparse sweep first marks most of a near-regular graph early.
+fn coarse_first(n: usize) -> impl Iterator<Item = usize> {
+    let rest = (0..6)
+        .rev()
+        .flat_map(move |s| ((1 << s)..n).step_by(2 << s));
+    (0..n).step_by(64).chain(rest)
+}
+
+/// Each pair once, its duplicates' weights merged into it as the star merges them; what a merge cancels grounds both its ends, absorbed into their ground pairs, and a pair cancelled to zero leaves.
+fn merge_pairs<T: Real, I: Index, C: Copies, S: Sign<T, I>>(
+    pairs: &mut Vec<Staged<T, I>>,
+    first: &LocalMinima,
+    split: C,
+    sign: S,
+) {
+    let grounded = merge_once(pairs, first, split, sign);
+    if !grounded.is_empty() {
+        ground_into(pairs, &grounded, first, sign);
+    }
+}
+
+/// The ground edges a merge owes absorbed into the merged `pairs` as merging them all again would: each into its end's ground pair in the order owed, or where an end has none, into a new pair closing its bucket. Every edge to the ground weighs above zero, a surplus or a magnitude, so nothing cancels.
+fn ground_into<T: Real, I: Index, S: Sign<T, I>>(
+    pairs: &mut Vec<Staged<T, I>>,
+    grounded: &[Staged<T, I>],
+    first: &LocalMinima,
+    sign: S,
+) {
+    let (ground, before) = (grounded[0].1, pairs.len());
+    let mut host = vec![usize::MAX; first.left];
+    for (at, pair) in pairs.iter().enumerate().filter(|(_, p)| p.1 == ground) {
+        host[first.id(pair.0)] = at;
+    }
+    for &edge in grounded {
+        match host[first.id(edge.0)] {
+            usize::MAX => {
+                host[first.id(edge.0)] = pairs.len();
+                pairs.push(edge);
+            }
+            at => {
+                let held = &mut pairs[at];
+                let (weight, cancelled) = sign.merge(held.2, edge.2);
+                (held.2, held.3) = (weight, held.3.saturating_add(edge.3));
+                // A second merge would ground what this cancels and drop a pair it zeroes.
+                debug_assert!(cancelled == T::zero() && weight > T::zero());
+            }
+        }
+    }
+    // A merge leaves `pairs` in their `lo` buckets in id order, so a stable sort closes each bucket with its new pair.
+    if pairs.len() > before {
+        pairs.sort_by_key(|pair| first.id(pair.0));
+    }
+}
+
+/// One merge, bucketed by `lo`'s id, then scattered on `hi`'s; returns the ground edges its cancellations owe.
+fn merge_once<T: Real, I: Index, C: Copies, S: Sign<T, I>>(
+    pairs: &mut Vec<Staged<T, I>>,
+    first: &LocalMinima,
+    split: C,
+    sign: S,
+) -> Vec<Staged<T, I>> {
+    let left = first.left;
+    // Bucket `l` is written from `end[l]`, which then ends it.
+    let mut end = vec![0usize; left + 1];
+    for pair in pairs.iter() {
+        end[first.id(pair.0) + 1] += 1;
+    }
+    for l in 0..left {
+        end[l + 1] += end[l];
+    }
+    let mut bucketed = pairs.clone();
+    for &pair in pairs.iter() {
+        let l = first.id(pair.0);
+        bucketed[end[l]] = pair;
+        end[l] += 1;
+    }
+    // One past each `hi`'s pair in the output; at most `from`, it is an earlier bucket's.
+    let (mut seen, mut out, mut begin, mut grounded) = (vec![0usize; left], 0, 0, Vec::new());
+    for &stop in &end[..left] {
+        let from = out;
+        for &pair in &bucketed[std::mem::replace(&mut begin, stop)..stop] {
+            let hi = first.id(pair.1);
+            if seen[hi] <= from {
+                seen[hi] = out + 1;
+                pairs[out] = pair;
+                out += 1;
+                continue;
+            }
+            let held = &mut pairs[seen[hi] - 1];
+            let (weight, cancelled) = sign.merge(held.2, pair.2);
+            (held.2, held.3) = (weight, held.3.saturating_add(pair.3));
+            if let Some(ground) = sign.ground().filter(|_| cancelled != T::zero()) {
+                grounded.extend([pair.0, pair.1].map(|end| (end, ground, cancelled, split.get())));
+            }
+        }
+    }
+    pairs.truncate(out);
+    pairs.retain(|pair| pair.2 != T::zero());
+    grounded
 }
 
 /// A step's neighbors follow the previous step's, so the solve's running `usize` offset finds them at any size.
@@ -279,7 +510,7 @@ impl<T: Real, I: Index> ApproximateCholesky<T, I> {
 
 #[cfg(test)]
 mod tests {
-    use rand::{Rng, SeedableRng};
+    use rand::{Rng, RngExt, SeedableRng};
 
     use super::*;
     use crate::factor::clique_tree::{Multi, Single};
@@ -292,6 +523,218 @@ mod tests {
     use crate::storage::{Rows, UpperAdjacency};
     use crate::threads::ONE;
     use crate::widen;
+
+    /// Every vertex left, numbered by itself.
+    fn none_first(n: u32) -> LocalMinima {
+        LocalMinima {
+            ids: (0..n).collect(),
+            left: n as usize,
+        }
+    }
+
+    /// Every row once, whatever `n`.
+    #[test]
+    fn coarse_first_visits_each_row_once() {
+        for n in [0, 1, 2, 63, 64, 65, 127, 1000] {
+            let mut rows: Vec<_> = coarse_first(n).collect();
+            rows.sort_unstable();
+            assert_eq!(rows, (0..n).collect::<Vec<_>>(), "{n}");
+        }
+    }
+
+    /// `people` joined to two or three of `firms`, plus random person–person edges, so ties and neighboring minima occur; grounded at every tenth person when `grounded`.
+    fn panel(people: usize, firms: usize, grounded: bool) -> Sdd<f64, u32> {
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(11);
+        let n = people + firms;
+        let mut pairs: Vec<(usize, usize)> = Vec::new();
+        for person in 0..people {
+            let spells = 2 + rng.next_u64() as usize % 2;
+            pairs.extend((0..spells).map(|_| (person, people + rng.next_u64() as usize % firms)));
+        }
+        for _ in 0..people / 4 {
+            let (a, b) = (
+                rng.next_u64() as usize % people,
+                rng.next_u64() as usize % people,
+            );
+            pairs.extend((a != b).then_some((a.min(b), a.max(b))));
+        }
+        pairs.sort_unstable();
+        pairs.dedup();
+        let (mut ptrs, mut indices) = (vec![0], Vec::new());
+        for i in 0..n {
+            indices.extend((pairs.iter()).filter(|p| p.0 == i).map(|p| p.1 as u32));
+            ptrs.push(indices.len());
+        }
+        let values = vec![-1.0; indices.len()];
+        let surplus = (0..n)
+            .map(|v| {
+                if grounded && v < people && v % 10 == 0 {
+                    1.0
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        let adjacency = UpperAdjacency::new(Rows::new(ptrs, indices, values, n));
+        Sdd::new(adjacency, Grounding::of(surplus), Layout::Like)
+    }
+
+    /// The set holds no edge, each member's `(degree, id)` below its neighbors' but `never`'s, every vertex so placed is in it, and `never` is not.
+    #[test]
+    fn local_minima_are_an_independent_set_without_never() {
+        for grounded in [false, true] {
+            let m = panel(1500, 60, grounded);
+            let room = EliminationGraph::<f64, u32, Single>::room(&m);
+            let mut adjacent = vec![Vec::new(); m.n()];
+            for i in 0..m.n() {
+                for j in m.neighbors_past(i) {
+                    adjacent[i].push(j);
+                    adjacent[j].push(i);
+                }
+            }
+            let key = |v: usize| (room[v], v);
+            let below_all = |v: usize, but: usize| {
+                room[v] > 1 && (adjacent[v].iter()).all(|&j| j == but || key(v) < key(j))
+            };
+            // A local minimum whose neighbor sits below all but it: as `never`, it leaves that neighbor in the set.
+            let blocking = (0..m.n())
+                .find(|&v| below_all(v, v) && adjacent[v].iter().any(|&j| below_all(j, v)))
+                .expect("a local minimum blocking a neighbor");
+            for never in [m.ground(), Some(blocking)] {
+                let first = LocalMinima::of(&m, &room, never).expect("people hold most edges");
+                let label = format!("grounded {grounded}, never {never:?}");
+                assert!(
+                    never.is_none_or(|v| v >= m.n() || !first.gone(v)),
+                    "{label}"
+                );
+                for v in 0..m.n() {
+                    let below = (adjacent[v].iter()).all(|&j| Some(j) == never || key(v) < key(j));
+                    let member = Some(v) != never && room[v] > 1 && below;
+                    assert_eq!(first.gone(v), member, "{label}: vertex {v}");
+                    if first.gone(v) {
+                        assert!(adjacent[v].iter().all(|&j| !first.gone(j)), "{label}: {v}");
+                    }
+                }
+                let left = (0..room.len()).filter(|&v| !first.gone(v)).count();
+                assert_eq!(first.left, left, "{label}");
+            }
+        }
+    }
+
+    /// Each pair once, its weights and uncapped copies summed.
+    #[test]
+    fn merging_sums_each_pairs_parallel_edges() {
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(3);
+        let (n, split) = (12u32, Multi::split(4).expect("AC2"));
+        let mut pairs: Vec<Staged<f64, u32>> = (0..300)
+            .map(|_| {
+                let (a, b) = (rng.random_range(0..n), rng.random_range(0..n - 1));
+                let b = b + u32::from(b >= a);
+                let (w, copies) = (f64::from(rng.random_range(1..5u8)), rng.random_range(1..3));
+                (a.min(b), a.max(b), w, copies)
+            })
+            .collect();
+        let mut want = std::collections::BTreeMap::<(u32, u32), (f64, u32)>::new();
+        for &(a, b, w, copies) in &pairs {
+            let held = want.entry((a, b)).or_default();
+            *held = (held.0 + w, held.1 + copies);
+        }
+        merge_pairs(&mut pairs, &none_first(n), split, Unsigned);
+        let have: std::collections::BTreeMap<_, _> = (pairs.iter())
+            .map(|&(a, b, w, merged)| ((a, b), (w, merged)))
+            .collect();
+        assert_eq!(have.len(), pairs.len(), "a pair held twice");
+        assert_eq!(have, want);
+    }
+
+    /// Opposite duplicates cancel onto the ground at both ends, merged with the ground edges held, and a pair cancelled to zero leaves.
+    #[test]
+    fn merging_grounds_what_a_signed_pair_cancels() {
+        let sign = Signed { ground: 3u32 };
+        let mut pairs: Vec<Staged<f64, u32>> = vec![
+            (0, 1, 2.0, 1),
+            (0, 3, 1.0, 1),
+            (0, 1, -0.5, 1),
+            (1, 2, 1.0, 1),
+            (1, 2, -1.0, 1),
+        ];
+        merge_pairs(&mut pairs, &none_first(4), Single, sign);
+        pairs.sort_by_key(|p| (p.0, p.1));
+        assert_eq!(
+            pairs,
+            [
+                (0, 1, 1.5, 2),
+                (0, 3, 2.0, 2),
+                (1, 3, 3.0, 2),
+                (2, 3, 2.0, 1)
+            ]
+        );
+    }
+
+    /// Absorbing the owed ground edges leaves the pairs, their order and bits as merging every pair again did, with or without ground pairs held, under either copy count and with vertices pivoted first.
+    #[test]
+    fn owed_ground_edges_merge_as_a_second_merge_would() {
+        let (n, ground) = (40u32, 40u32);
+        // Every fifth vertex pivoted first, so ids skip it.
+        let mut left = 0;
+        let ids = (0..=n)
+            .map(|v| match v % 5 == 2 {
+                true => u32::MAX,
+                false => {
+                    left += 1;
+                    left - 1
+                }
+            })
+            .collect();
+        let sparse = LocalMinima {
+            ids,
+            left: left as usize,
+        };
+        let dense = none_first(n + 1);
+        for seed in 0..32 {
+            let first = [&dense, &sparse][seed as usize % 2];
+            let split = Multi::split(2).expect("AC2");
+            again_alike(seed, first, split, (n, ground));
+            again_alike(seed, first, Single, (n, ground));
+        }
+    }
+
+    fn again_alike<C: Copies>(seed: u64, first: &LocalMinima, split: C, (n, ground): (u32, u32)) {
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
+        let kept: Vec<u32> = (0..n).filter(|&v| !first.gone(v as usize)).collect();
+        let mut pairs: Vec<Staged<f64, u32>> = (0..400)
+            .map(|_| {
+                let a = rng.random_range(0..kept.len());
+                let b = rng.random_range(0..kept.len() - 1);
+                let (a, b) = (kept[a], kept[b + usize::from(b >= a)]);
+                let w = f64::from(rng.random_range(1..5u8)) * [-1.0, 1.0][rng.random_range(0..2)];
+                (a.min(b), a.max(b), w, split.get())
+            })
+            .collect();
+        let held = kept.iter().filter(|_| rng.random_range(0..3) == 0);
+        pairs.extend(held.map(|&k| (k, ground, 0.5, split.get())));
+        let sign = Signed { ground };
+        let mut again = pairs.clone();
+        loop {
+            let grounded = merge_once(&mut again, first, split, sign);
+            if grounded.is_empty() {
+                break;
+            }
+            again.extend(grounded);
+        }
+        merge_pairs(&mut pairs, first, split, sign);
+        let bits = |pairs: &[Staged<f64, u32>]| -> Vec<_> {
+            (pairs.iter())
+                .map(|&(a, b, w, m)| (a, b, w.to_bits(), m))
+                .collect()
+        };
+        assert_eq!(
+            bits(&pairs),
+            bits(&again),
+            "seed {seed}, {} copies",
+            split.get()
+        );
+    }
 
     fn stars(m: usize) -> [(&'static str, Vec<f32>); 3] {
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(7);

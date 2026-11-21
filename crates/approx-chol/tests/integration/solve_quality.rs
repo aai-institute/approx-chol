@@ -1,6 +1,10 @@
 use std::num::NonZeroU32;
 
-use approx_chol::{ApproxInverse, Component, Config, MemStack, Real, Sampling, SchurMode, Threads};
+use approx_chol::input::CsrRef;
+use approx_chol::{
+    factorize_with, ApproxInverse, Component, Config, CoverSurplus, FrustratedRoute, MemStack,
+    Real, Sampling, ScalingPolicy, SchurMode, Threads,
+};
 
 use crate::common::bits::bits;
 use crate::common::cases::cases;
@@ -8,8 +12,10 @@ use crate::common::entry::{by_type, cast_all, Entry, Factored, Types};
 use crate::common::graph::{Edge, Graph};
 use crate::common::grid;
 use crate::common::layouts::{assert_errors_leave_the_block, Layout, Layouts};
+use crate::common::lcg::Lcg;
 use crate::common::modes::Mode;
 use crate::common::pcg::pcg_iterations;
+use crate::common::scaling::dld;
 use crate::common::scratch::nan_cells;
 use crate::common::solve::Solve;
 use crate::common::sparse::{clique_tree, Sparse};
@@ -516,6 +522,91 @@ fn a_banded_laplacian_preconditions_within_16_iterations(#[values(1, 2)] copies:
         assert!(
             iterations.is_some_and(|it| it <= 16),
             "seed {seed}, {copies} copies: {iterations:?} iterations"
+        );
+    }
+}
+
+/// The person × firm panels whose people pivot first: fixest's difficult band, a frustrated panel on either route, and a floating one, plain or scaled so its gauge never pivots first.
+#[derive(Clone, Copy, Debug)]
+enum Panel {
+    Band,
+    Signed,
+    Cover,
+    Floating,
+    Gauged,
+}
+
+/// Person `i`'s spell `t` at firm `(spells·i + t) mod F`, `F = people / 23`, so each firm holds about `23·spells` people. The band without its merged copies in the degrees took 49-54 iterations; the others measured 6-15.
+#[rstest::rstest]
+#[case(Panel::Band, 1)]
+#[case(Panel::Band, 2)]
+#[case(Panel::Signed, 1)]
+#[case(Panel::Signed, 4)]
+#[case(Panel::Cover, 1)]
+#[case(Panel::Cover, 4)]
+#[case(Panel::Floating, 1)]
+#[case(Panel::Floating, 4)]
+#[case(Panel::Gauged, 1)]
+fn a_person_firm_panel_pivots_its_people_first(#[case] panel: Panel, #[case] copies: u32) {
+    let (people, spells, seeds, bound) = match panel {
+        Panel::Band => (100_000, 10, 3, 20),
+        _ => (20_000, 5, 1, 25),
+    };
+    let frustrated = matches!(panel, Panel::Signed | Panel::Cover);
+    let floats = matches!(panel, Panel::Floating | Panel::Gauged);
+    let firms = people / 23;
+    let edges =
+        (0..people).flat_map(|i| (0..spells).map(move |t| (i, people + (spells * i + t) % firms)));
+    let edges = edges.map(|(a, b)| match frustrated && (a * 7 + b * 13) % 5 == 0 {
+        true => Edge::positive(a, b, 1.0),
+        false => Edge::negative(a, b, 1.0),
+    });
+    let mut graph = Graph::new(people + firms, edges.collect());
+    graph.ground[0] = if floats { 0.0 } else { 1.0 };
+    // `d` down to `10⁻⁹`: the scaling's `f = D⁻¹·1` spans past `1/√ε`, and its largest `|f|` is the gauge.
+    let (ptrs, columns, values) = match panel {
+        Panel::Gauged => dld(&graph, &mut Lcg(1), -9.0),
+        _ => graph.csr(false),
+    };
+    // Unscaled, the edges' own product, independent of the CSR the factor reads.
+    let apply = |x: &[f64]| -> Vec<f64> {
+        let row = |i: usize| {
+            (ptrs[i]..ptrs[i + 1])
+                .map(|k| values[k] * x[columns[k]])
+                .sum()
+        };
+        match panel {
+            Panel::Gauged => (0..graph.n).map(row).collect(),
+            _ => graph.apply(x),
+        }
+    };
+    let b = apply(
+        &(0..graph.n)
+            .map(|v| (v % 5) as f64 - 2.0)
+            .collect::<Vec<_>>(),
+    );
+    let frustrated = match panel {
+        Panel::Signed => FrustratedRoute::Signed,
+        _ => FrustratedRoute::Cover(CoverSurplus::Auto),
+    };
+    for seed in 0..seeds {
+        let config = Config {
+            seed,
+            exact_max_dim: 0,
+            sampling: clique_tree(copies),
+            frustrated,
+            ..Config::default()
+        };
+        let csr = CsrRef::new(graph.n, &ptrs, &columns, &values).unwrap();
+        let factor: ApproxInverse = factorize_with(csr, config, ScalingPolicy::default()).unwrap();
+        assert!(
+            factor.components().all(|c| c.floats() == floats),
+            "{panel:?}"
+        );
+        let iterations = pcg_iterations(apply, |r| factor.solve(r).unwrap(), &b, 1e-8, 100);
+        assert!(
+            iterations.is_some_and(|it| it <= bound),
+            "{panel:?}, seed {seed}, {copies} copies: {iterations:?} iterations"
         );
     }
 }
