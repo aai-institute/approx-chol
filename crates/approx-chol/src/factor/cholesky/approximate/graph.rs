@@ -6,8 +6,8 @@ use crate::factor::sdd::Sdd;
 use crate::factor::sign::Sign;
 use crate::{Index, Real};
 
-/// A staged pair `(lo, hi, weight, merged)`: `merged` counts its copies before the cap; its capped copies are `split.cap(merged)`.
-pub(super) type Staged<T, I> = (I, I, T, u32);
+/// A staged pair `(lo, hi, weight, copies)`, its copies capped as the star's merge caps them.
+pub(super) type Staged<T, I, C> = (I, I, T, C);
 
 /// Whether a pivot's fill is searched for in the shorter of its ends' lists, so a duplicate merges into its pair and the degrees count it once.
 ///
@@ -96,7 +96,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
     /// `pairs`, each once with its capped copies; a vertex `gone` gets no room.
     pub(super) fn load_merged(
         &mut self,
-        pairs: &[Staged<T, I>],
+        pairs: &[Staged<T, I, C>],
         gone: impl Fn(usize) -> bool,
         n: usize,
         split: C,
@@ -108,8 +108,8 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         }
         self.reset(&room, split);
         drop(room);
-        for &(k, j, weight, merged) in pairs {
-            self.push_pair(k, j, split.cap(merged), weight);
+        for &(k, j, weight, copies) in pairs {
+            self.push_pair(k, j, copies, weight);
         }
     }
 
@@ -413,7 +413,7 @@ mod tests {
     fn a_merged_pair_loads_as_one_capped_entry() {
         fn check<C: Copies>(split: C) {
             let pairs: Vec<_> = (1..9u32)
-                .map(|merged| (0, merged, f64::from(merged), merged))
+                .map(|merged| (0, merged, f64::from(merged), split.cap(merged)))
                 .collect();
             let mut graph = EliminationGraph::<f64, u32, C>::new();
             graph.load_merged(&pairs, |_| false, 9, split);
