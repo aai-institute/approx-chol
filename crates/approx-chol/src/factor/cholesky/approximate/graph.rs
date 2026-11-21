@@ -1,11 +1,17 @@
 mod lists;
 
 use self::lists::Lists;
-use super::{Staged, STOOD_UP_TO};
 use crate::factor::clique_tree::{absorb, Copies, Degrees};
 use crate::factor::sdd::Sdd;
 use crate::factor::sign::Sign;
 use crate::{Index, Real};
+
+/// Entries a merged pair stands as at most, so the copies its cap dropped still count in the degree: without, fixest's person × firm band took 49-54 PCG iterations instead of 17-19; 4 measured as the full count.
+/// A ground edge a signed cancellation owes stages as `split` copies, so its end's ground pair stands as an entry more: staged as none, signed realistic and power-law AC took +0.3-0.4 PCG iterations on average (realistic over seeds 0-8, power law 3-8; AC2 unchanged) and every signed build +0.4-2.1% instructions.
+const STOOD_UP_TO: u32 = 4;
+
+/// A staged pair `(lo, hi, weight, merged)`: `merged` counts its copies before the cap; its capped copies are `split.cap(merged)`.
+pub(super) type Staged<T, I> = (I, I, T, u32);
 
 /// Longest list [`EliminationGraph::push_fill`] searches: banded matrices need 8, 32 measured the same, and every search costs fill-heavy bipartite graphs build time.
 const MERGED_UP_TO: u32 = 8;
@@ -50,29 +56,29 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         m.grounded_edges(|k, j, w| self.push_pair(k, j, split, w));
     }
 
-    /// `pairs`, each `(lo, hi, copies, weight, merged)` once, `merged` its copies before the cap; a vertex `gone` gets no room. A pair whose cap dropped copies stands as up to [`STOOD_UP_TO`] parallel entries sharing its weight, so the degree counts them until a star merges them back.
+    /// `pairs`, each once; a vertex `gone` gets no room. A pair whose cap dropped copies stands as up to [`STOOD_UP_TO`] parallel entries sharing its weight, so the degree counts them until a star merges them back.
     pub(super) fn load_merged(
         &mut self,
-        pairs: &[Staged<T, I, C>],
+        pairs: &[Staged<T, I>],
         gone: impl Fn(usize) -> bool,
         n: usize,
         split: C,
     ) {
-        let stood = |copies: C, merged: u32| (merged - copies.get()).min(STOOD_UP_TO - 1);
+        let stood = |merged: u32| (merged - split.cap(merged).get()).min(STOOD_UP_TO - 1);
         let mut room: Vec<u32> = (0..n).map(|v| u32::from(!gone(v))).collect();
-        for &(k, j, copies, _, merged) in pairs {
-            let entries = 1 + stood(copies, merged);
+        for &(k, j, _, merged) in pairs {
+            let entries = 1 + stood(merged);
             room[k.index()] = room[k.index()].saturating_add(entries);
             room[j.index()] = room[j.index()].saturating_add(entries);
         }
         self.reset(&room, split);
         drop(room);
         let one = split.cap(1);
-        for &(k, j, copies, weight, merged) in pairs {
-            let extra = stood(copies, merged);
+        for &(k, j, weight, merged) in pairs {
+            let extra = stood(merged);
             // Shared, not left on one entry: a fill cancelling one entry exactly leaves the others weighted.
             let share = weight / T::from(1 + extra).expect("at most four entries");
-            self.push_pair(k, j, copies, share);
+            self.push_pair(k, j, split.cap(merged), share);
             for _ in 0..extra {
                 self.push_pair(k, j, one, share);
             }
@@ -342,7 +348,7 @@ mod tests {
     fn a_merged_pair_stands_for_the_copies_its_cap_dropped() {
         fn check<C: Copies>(split: C, stood: impl Fn(u32) -> u64) {
             let pairs: Vec<_> = (1..9u32)
-                .map(|merged| (0, merged, split.cap(merged), f64::from(merged), merged))
+                .map(|merged| (0, merged, f64::from(merged), merged))
                 .collect();
             let mut graph = EliminationGraph::<f64, u32, C>::new();
             graph.load_merged(&pairs, |_| false, 9, split);
