@@ -20,7 +20,7 @@ pub use build::{factorize, factorize_complement, factorize_with, Clamped, Comple
 pub use config::{Config, CoverSurplus, FrustratedRoute, Sampling, SchurMode};
 pub use header::{Header, HeaderMismatch, Scalar};
 
-use crate::order::{Order, Segment, Slots};
+use crate::order::{Order, Rows, Segment, Slots};
 use crate::sgdd::{BlockComplement, Congruence, CoupledBlock, IrreducibleBlock, Packed};
 use crate::storage::OffDiagonal;
 use crate::Clamp;
@@ -372,10 +372,10 @@ impl<T: Real, I: Index> Block<T, I> {
     }
 
     /// Solves the block's vertices of `x`, its segment of `order`, in place through a stack of [`global_scratch_slots`](Self::global_scratch_slots) slots.
-    fn solve_global<V: Batch<T>>(
+    fn solve_global<V: Batch<T>, X: Rows<V> + ?Sized>(
         &self,
         order: &Order,
-        x: &mut [V],
+        x: &mut X,
         threads: Threads,
         stack: &mut MemStack,
     ) {
@@ -671,7 +671,7 @@ mod storage {
                     let mut x = b.clone();
                     let mut cells = vec![std::mem::MaybeUninit::new(fill); len];
                     let stack = MemStack::new_any(&mut cells);
-                    block.solve_global(&factor.order, &mut x, Threads::All, stack);
+                    block.solve_global(&factor.order, &mut x[..], Threads::All, stack);
                     x.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
                 };
                 assert_eq!(solve(0.0), solve(f64::NAN), "{config:?}");

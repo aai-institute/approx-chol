@@ -202,11 +202,7 @@ impl Spread {
             for block in claimed.iter().filter(within) {
                 // SAFETY: each block is claimed once, and an ApproxInverse's segments share no vertex.
                 let mut rows = unsafe { x.claim() };
-                order
-                    .slots(block.segment)
-                    .on_local(&mut rows, stack, |local, rest| {
-                        block.solve_unchecked(local, rest, ONE)
-                    });
+                block.solve_global(order, &mut rows, ONE, stack);
             }
         };
         split(stack, region, workers, &work);
