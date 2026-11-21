@@ -1,6 +1,6 @@
 //! Blocks of right-hand sides an [`ApproxInverse`] applies to, and how each reaches the solve.
 
-use super::spread::Spread;
+use super::spread::Room;
 use super::ApproxInverse;
 use crate::threads::ONE;
 use crate::{Batch, MemBuffer, MemStack, Real, StackReq, Threads};
@@ -317,29 +317,7 @@ impl<T: Real, C: AsRef<[T]> + AsMut<[T]>> Slices<T> for Columns<'_, C> {
     }
 }
 
-/// What a solve at a budget takes from the stack, from which each path's need follows.
-pub(super) struct Room {
-    /// A column of the operator's rows.
-    pub(super) column: StackReq,
-    /// Per lane, the most a block past the budget's share takes alone.
-    pub(super) alone: StackReq,
-    /// Per lane, the most one of the others takes, on each thread solving them at once.
-    pub(super) region: StackReq,
-    /// Threads solving the others at once.
-    pub(super) regions: usize,
-}
-
 impl Room {
-    pub(super) fn of<T: Real>(inverse: &ApproxInverse<T>, threads: Threads) -> Self {
-        Spread::of(inverse, threads).room(inverse)
-    }
-
-    /// Rows of `lanes` right-hand sides each, solved where they are.
-    pub(super) fn in_place(&self, lanes: usize) -> StackReq {
-        let regions = self.region.array(lanes).array(self.regions);
-        self.alone.array(lanes).or(regions)
-    }
-
     /// A block of `columns` columns whose slices fill its packs, a column alone solved where it is.
     pub(super) fn copied(&self, columns: usize) -> StackReq {
         by_width(columns, Copied(self))
@@ -479,7 +457,7 @@ impl<T: Real> Kernel<'_, T> {
 }
 
 /// A copied block's columns as its packs reach them.
-trait Packed<T: Real> {
+trait Packs<T: Real> {
     fn columns(&self) -> usize;
     /// Copies columns `first..first + lanes` into the first `lanes` lanes of `rows`.
     fn fill<const W: usize>(&mut self, first: usize, lanes: usize, rows: &mut [[T; W]]);
@@ -497,7 +475,7 @@ pub(crate) trait Slices<T: Real>: MatrixMut<T> {
 /// A block of [`Slices`] its packs reach where its columns are.
 struct Sliced<'b, S>(&'b mut S);
 
-impl<T: Real, S: Slices<T>> Packed<T> for Sliced<'_, S> {
+impl<T: Real, S: Slices<T>> Packs<T> for Sliced<'_, S> {
     fn columns(&self) -> usize {
         self.0.columns()
     }
@@ -525,7 +503,7 @@ struct Staged<'b, T, M: ?Sized> {
     column: &'b mut [T],
 }
 
-impl<T: Real, M: MatrixMut<T> + ?Sized> Packed<T> for Staged<'_, T, M> {
+impl<T: Real, M: MatrixMut<T> + ?Sized> Packs<T> for Staged<'_, T, M> {
     fn columns(&self) -> usize {
         self.block.columns()
     }
@@ -552,7 +530,7 @@ impl<T: Real, M: MatrixMut<T> + ?Sized> Packed<T> for Staged<'_, T, M> {
 }
 
 /// Solves every column of `block`, the widest packs first.
-fn packs<T: Real, P: Packed<T>>(
+fn packs<T: Real, P: Packs<T>>(
     inverse: &ApproxInverse<T>,
     block: &mut P,
     threads: Threads,
@@ -581,7 +559,7 @@ struct Next<'a, T, P> {
     stack: &'a mut MemStack,
 }
 
-impl<T: Real, P: Packed<T>> Width for Next<'_, T, P> {
+impl<T: Real, P: Packs<T>> Width for Next<'_, T, P> {
     type Output = usize;
 
     fn alone(self) -> usize {

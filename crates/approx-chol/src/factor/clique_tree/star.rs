@@ -1,7 +1,7 @@
 use core::cmp::Ordering;
 
 use super::copies::Copies;
-use super::CliqueTreeSampler;
+use super::{CliqueTreeSampler, Pair};
 use crate::factor::sign::Sign;
 use crate::{Index, Real};
 
@@ -51,7 +51,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         &mut self,
         neighbors: impl Iterator<Item = (I, C, T)>,
         sign: S,
-        mut fill: impl FnMut((I, I, C, T)),
+        mut fill: impl FnMut(Pair<T, I, C>),
     ) {
         self.load(neighbors);
         let (split, mut cancelled) = (self.split, T::zero());

@@ -1,7 +1,7 @@
 //! The Schur complement `S` a bipartite block leaves on its kept side, formed exact or sampled.
 
 use super::block_elimination::BlockElimination;
-use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Single};
+use super::clique_tree::{CliqueTreeSampler, Copies, Multi, Pair, Single};
 use super::config::{Config, SchurMode};
 use super::sdd::{cover_vertex, crosses, Layout, Route, Sdd, SddRows};
 use super::sign::{Signed, Unsigned};
@@ -235,7 +235,7 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
         &self,
         s: usize,
         sampler: &mut CliqueTreeSampler<T, I, C>,
-        fill: impl FnMut((I, I, C, T)),
+        fill: impl FnMut(Pair<T, I, C>),
     ) {
         let c = &self.block.cross;
         let ground = |e: usize| match (self.ground, self.block.grounding.edge(e)) {
@@ -268,7 +268,7 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
                     ground: I::from_index(c.n_cols()),
                 };
                 let mut fill = fill;
-                let paired = |(lo, hi, copies, w): (I, I, C, T)| {
+                let paired = |(lo, hi, copies, w): Pair<T, I, C>| {
                     let at = cover_vertex(hi.index(), usize::from(w < T::zero()));
                     fill((lo, I::from_index(at), copies, w.abs()));
                 };
@@ -281,8 +281,8 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
     /// `fill` without a clique tree's draws onto the ground: `S`'s ground is exact, so they add nothing.
     fn off_ground<C: Copies>(
         &self,
-        mut fill: impl FnMut((I, I, C, T)),
-    ) -> impl FnMut((I, I, C, T)) {
+        mut fill: impl FnMut(Pair<T, I, C>),
+    ) -> impl FnMut(Pair<T, I, C>) {
         let ground = self.ground;
         move |edge| {
             if Some(edge.1) != ground {
@@ -304,7 +304,7 @@ impl<T: Real, I: Index> Stars<'_, T, I> {
                 (CliqueTreeSampler::new(copies), vec![Vec::new(); count]);
             for s in task * per_task..stars.min((task + 1) * per_task) {
                 let push =
-                    |(lo, hi, _, w): (I, I, C, T)| buckets[lo.index() >> shift].push((lo, hi, w));
+                    |(lo, hi, _, w): Pair<T, I, C>| buckets[lo.index() >> shift].push((lo, hi, w));
                 self.eliminate(s, &mut sampler, push);
             }
             buckets.iter_mut().for_each(Vec::shrink_to_fit);

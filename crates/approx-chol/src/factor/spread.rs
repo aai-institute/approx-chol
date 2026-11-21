@@ -4,8 +4,7 @@
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::apply::Room;
-use super::{slots, ApproxInverse, Block, Indexed};
+use super::{ApproxInverse, Block, Indexed};
 use crate::order::{Order, Rows};
 use crate::threads::ONE;
 use crate::{Batch, Index, MemStack, Real, StackReq, Threads};
@@ -15,6 +14,38 @@ const SPREAD_STEPS: usize = 8192;
 
 /// Claims per worker: a few dozen let unequal blocks even out, while 100,000 blocks of 9 vertices still claim dozens at once.
 const CLAIMS_PER_WORKER: usize = 16;
+
+/// `count` slots of `V` on a stack; none asks no alignment either, so any stack serves a solve that takes none.
+fn slots<V>(count: usize) -> StackReq {
+    match count {
+        0 => StackReq::EMPTY,
+        count => StackReq::new::<V>(count),
+    }
+}
+
+/// What a solve at a budget takes from the stack, from which each path's need follows.
+pub(super) struct Room {
+    /// A column of the operator's rows.
+    pub(super) column: StackReq,
+    /// Per lane, the most a block past the budget's share takes alone.
+    alone: StackReq,
+    /// Per lane, the most one of the others takes, on each thread solving them at once.
+    region: StackReq,
+    /// Threads solving the others at once.
+    regions: usize,
+}
+
+impl Room {
+    pub(super) fn of<T: Real>(inverse: &ApproxInverse<T>, threads: Threads) -> Self {
+        Spread::of(inverse, threads).room(inverse)
+    }
+
+    /// Rows of `lanes` right-hand sides each, solved where they are.
+    pub(super) fn in_place(&self, lanes: usize) -> StackReq {
+        let regions = self.region.array(lanes).array(self.regions);
+        self.alone.array(lanes).or(regions)
+    }
+}
 
 /// Every coupled block summed, and the most steps one takes.
 #[derive(Clone, Copy, Debug)]
@@ -36,7 +67,7 @@ impl Coupled {
 }
 
 /// How a solve at a budget runs the coupled blocks.
-pub(super) struct Spread {
+struct Spread {
     /// Threads at a time: the budget's, at most the pool's and one per block.
     tasks: usize,
     within: Within,
@@ -66,7 +97,7 @@ impl Small {
 }
 
 impl Spread {
-    pub(super) fn of<T: Real>(inverse: &ApproxInverse<T>, threads: Threads) -> Self {
+    fn of<T: Real>(inverse: &ApproxInverse<T>, threads: Threads) -> Self {
         let blocks = on!(&inverse.blocks, blocks => blocks.len());
         let tasks = threads.tasks().min(blocks).max(1);
         let Coupled { all, most_steps } = inverse.coupled;
@@ -79,7 +110,7 @@ impl Spread {
     }
 
     /// The solve's room on the stack: the most a block running alone takes, and regions of the most another one takes, one per thread when they run at once.
-    pub(super) fn room<T: Real>(&self, inverse: &ApproxInverse<T>) -> Room {
+    fn room<T: Real>(&self, inverse: &ApproxInverse<T>) -> Room {
         let mut alone = 0;
         let small = on!(&inverse.blocks, blocks => self.split(blocks, |block| {
             alone = alone.max(block.global_scratch_slots());
@@ -171,11 +202,7 @@ impl Spread {
             for block in claimed.iter().filter(within) {
                 // SAFETY: each block is claimed once, and an ApproxInverse's segments share no vertex.
                 let mut rows = unsafe { x.claim() };
-                order
-                    .slots(block.segment)
-                    .on_local(&mut rows, stack, |local, rest| {
-                        block.solve_unchecked(local, rest, ONE)
-                    });
+                block.solve_global(order, &mut rows, ONE, stack);
             }
         };
         split(stack, region, workers, &work);
