@@ -69,7 +69,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         // Under any sign: a task's next block may be unsigned, and its order holds none of these.
         self.dropped.clear();
         if let Some(ground) = sign.ground().filter(|_| cancelled != T::zero()) {
-            self.ground(ground, cancelled);
+            self.ground(sign, ground, cancelled);
             let dropped = &mut self.dropped;
             (self.entries).retain(|entry| {
                 let coupled = entry.weight != T::zero();
@@ -155,19 +155,21 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         super::absorb(sign, self.split, held, (duplicate.copies, duplicate.weight))
     }
 
-    /// `cancelled` onto the star's `ground` entry, added where the pivot has none.
-    fn ground(&mut self, ground: I, cancelled: T) {
-        match self
+    /// `cancelled` owed to the star's `ground` entry as a duplicate at the split, added where the pivot has none.
+    fn ground<S: Sign<T, I>>(&mut self, sign: S, ground: I, cancelled: T) {
+        let owed = StarEntry {
+            neighbor: ground,
+            copies: self.split,
+            weight: cancelled,
+        };
+        let held = self
             .entries
-            .iter_mut()
-            .find(|entry| entry.neighbor == ground)
-        {
-            Some(entry) => entry.weight = entry.weight + cancelled,
-            None => self.entries.push(StarEntry {
-                neighbor: ground,
-                copies: self.split,
-                weight: cancelled,
-            }),
+            .iter()
+            .position(|entry| entry.neighbor == ground);
+        if let Some(position) = held {
+            self.absorb(sign, position, owed);
+        } else {
+            self.entries.push(owed);
         }
     }
 
@@ -246,6 +248,18 @@ mod tests {
             prop_assert_eq!(merged(k, &star, |s| s.merge_by_search(Unsigned, |_, _| {})), model(k, &star));
             prop_assert_eq!(merged(k, &star, |s| s.merge_by_scatter(Unsigned, |_, _| {})), model(k, &star));
         }
+    }
+
+    /// The owed ground edge is a duplicate at the split, as the graph absorbs it, whatever copies the pivot's ground entry held.
+    #[test]
+    fn an_owed_ground_edge_joins_the_ground_entry_at_the_split() {
+        let split = Multi::split(2).expect("AC2");
+        let mut sampler = CliqueTreeSampler::<f64, u32, Multi>::new(split);
+        let star = [(1, 2.0), (1, -0.5), (9, 0.25)].map(|(j, w)| (j, split.cap(1), w));
+        sampler.refill(star.into_iter(), Signed { ground: 9 }, |_| {});
+        let ground = (sampler.entries.iter()).find(|e| e.neighbor == 9);
+        let ground = ground.map(|e| (e.copies.get(), e.weight));
+        assert_eq!(ground, Some((split.get(), 1.25)));
     }
 
     #[test]
