@@ -6,15 +6,52 @@ use crate::factor::sdd::Sdd;
 use crate::factor::sign::Sign;
 use crate::{Index, Real};
 
-/// Entries a merged pair stands as at most, so the copies its cap dropped still count in the degree: without, fixest's person × firm band took 49-54 PCG iterations instead of 17-19; 4 measured as the full count.
-/// A ground edge a signed cancellation owes stages as `split` copies, so its end's ground pair stands as an entry more: staged as none, signed realistic and power-law AC took +0.3-0.4 PCG iterations on average (realistic over seeds 0-8, power law 3-8; AC2 unchanged) and every signed build +0.4-2.1% instructions.
-const STOOD_UP_TO: u32 = 4;
-
 /// A staged pair `(lo, hi, weight, merged)`: `merged` counts its copies before the cap; its capped copies are `split.cap(merged)`.
 pub(super) type Staged<T, I> = (I, I, T, u32);
 
-/// Longest list [`EliminationGraph::push_fill`] searches: banded matrices need 8, 32 measured the same, and every search costs fill-heavy bipartite graphs build time.
-const MERGED_UP_TO: u32 = 8;
+/// Whether a pivot's fill is searched for in the shorter of its ends' lists, so a duplicate merges into its pair and the degrees count it once.
+///
+/// A search costs that list's length; an unmerged duplicate costs only a degree too high, which matters where it moves the order. Banded and fixest fill nearly always lands on a held pair (96-100%), the fronts it inflates then lose the order to fresh vertices (banded 55 PCG iterations instead of 14, fixest 5M 39 instead of 17); power-law and person × firm fill rarely does (2-20%) until the remainder is nearly complete, where searches cost their builds up to 4x.
+/// The ground edges a signed cancellation owes are the pivot's fill too, so they search under, and count toward, the same record.
+pub(super) struct FillSearch {
+    /// The pivot's stored entries; a list within twice them belongs to a vertex near the order's minimum.
+    pivot_entries: u32,
+    /// Its searches so far that found the pair, and that did not.
+    found: u32,
+    missed: u32,
+    /// More pivots left than four times its neighbors; at most that, the remainder is nearly complete and every order of it fills alike (2-4 measured alike, 8 cost bands 0.5-1.5 PCG iterations).
+    order_matters: bool,
+}
+
+impl FillSearch {
+    /// For the fill of a pivot holding `entries`, `neighbors` distinct, with `remaining` pivots left after it.
+    pub(super) fn new(entries: u32, neighbors: usize, remaining: usize) -> Self {
+        Self {
+            pivot_entries: entries,
+            found: 0,
+            missed: 0,
+            order_matters: remaining > 4 * neighbors,
+        }
+    }
+
+    /// Whether a pair whose shorter list holds `shorter` entries is searched for.
+    fn worth(&self, shorter: u32) -> bool {
+        // Could its ends be pivoted soon? A degree too high would pass them over.
+        let competitive = shorter <= self.pivot_entries.saturating_mul(2);
+        // Does this pivot's fill keep landing on held pairs? Allowing one miss, fixest took 40 PCG iterations instead of 17; 2-4 measured alike.
+        let paying_off = self.missed < 3 + 2 * self.found;
+        // Does the order still matter? Not once the remainder is nearly complete.
+        competitive && paying_off && self.order_matters
+    }
+
+    fn record(&mut self, found: bool) {
+        if found {
+            self.found += 1;
+        } else {
+            self.missed += 1;
+        }
+    }
+}
 
 /// One half of an edge; `mirror` indexes the other half in `to`'s list, so removal is O(1), and a list moving whole keeps it.
 #[derive(Clone, Copy, Debug)]
@@ -56,7 +93,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         m.grounded_edges(|k, j, w| self.push_pair(k, j, split, w));
     }
 
-    /// `pairs`, each once; a vertex `gone` gets no room. A pair whose cap dropped copies stands as up to [`STOOD_UP_TO`] parallel entries sharing its weight, so the degree counts them until a star merges them back.
+    /// `pairs`, each once with its capped copies; a vertex `gone` gets no room.
     pub(super) fn load_merged(
         &mut self,
         pairs: &[Staged<T, I>],
@@ -64,24 +101,15 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         n: usize,
         split: C,
     ) {
-        let stood = |merged: u32| (merged - split.cap(merged).get()).min(STOOD_UP_TO - 1);
         let mut room: Vec<u32> = (0..n).map(|v| u32::from(!gone(v))).collect();
-        for &(k, j, _, merged) in pairs {
-            let entries = 1 + stood(merged);
-            room[k.index()] = room[k.index()].saturating_add(entries);
-            room[j.index()] = room[j.index()].saturating_add(entries);
+        for &(k, j, _, _) in pairs {
+            room[k.index()] = room[k.index()].saturating_add(1);
+            room[j.index()] = room[j.index()].saturating_add(1);
         }
         self.reset(&room, split);
         drop(room);
-        let one = split.cap(1);
         for &(k, j, weight, merged) in pairs {
-            let extra = stood(merged);
-            // Shared, not left on one entry: a fill cancelling one entry exactly leaves the others weighted.
-            let share = weight / T::from(1 + extra).expect("at most four entries");
-            self.push_pair(k, j, split.cap(merged), share);
-            for _ in 0..extra {
-                self.push_pair(k, j, one, share);
-            }
+            self.push_pair(k, j, split.cap(merged), weight);
         }
     }
 
@@ -111,7 +139,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         self.degrees.get(v, self.lists.len(v))
     }
 
-    pub(super) fn neighbors(&self, v: usize) -> impl Iterator<Item = (I, C, T)> + '_ {
+    pub(super) fn neighbors(&self, v: usize) -> impl ExactSizeIterator<Item = (I, C, T)> + '_ {
         self.lists.get(v).iter().map(|e| (e.to, e.copies, e.weight))
     }
 
@@ -147,21 +175,23 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         self.degrees.add(v.index(), copies.get());
     }
 
-    /// Absorbed into an `u — v` pair already held, so the degree counts it once, where the shorter list is searchable; past that the star's merge absorbs the duplicate.
+    /// Absorbed into an `u — v` pair already held, so the degree counts it once, where `search` finds it worth a search; otherwise the star's merge absorbs the duplicate.
     #[inline(always)] // Out of line or left to rustc, the pivot loop measured +2% of a bipartite build.
     pub(super) fn push_fill<S: Sign<T, I>>(
         &mut self,
         (u, v, copies, weight): (I, I, C, T),
+        search: &mut FillSearch,
         split: C,
         sign: S,
     ) {
         let lens = (self.lists.len(u.index()), self.lists.len(v.index()));
         // Read once: past the search, a second read of both lengths measured +2% of a bipartite build.
-        if lens.0.min(lens.1) > MERGED_UP_TO {
+        if !search.worth(lens.0.min(lens.1)) {
             return self.push_at(u, v, lens, copies, weight);
         }
         let (a, b) = if lens.0 <= lens.1 { (u, v) } else { (v, u) };
         let held = (self.lists.get(a.index()).iter()).position(|edge| edge.to == b);
+        search.record(held.is_some());
         let Some(at) = held else {
             return self.push_at(u, v, lens, copies, weight);
         };
@@ -184,7 +214,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
             (half.copies, half.weight) = (sum, merged);
         }
         if let Some(ground) = sign.ground().filter(|_| cancelled != T::zero()) {
-            self.ground_both((a, b), ground, cancelled, split, sign);
+            self.ground_both((a, b), ground, cancelled, search, split, sign);
         }
     }
 
@@ -195,11 +225,12 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         ends: (I, I),
         ground: I,
         cancelled: T,
+        search: &mut FillSearch,
         split: C,
         sign: S,
     ) {
         for end in [ends.0, ends.1] {
-            self.push_fill((end, ground, split, cancelled), split, sign);
+            self.push_fill((end, ground, split, cancelled), search, split, sign);
         }
     }
 
@@ -217,12 +248,17 @@ mod tests {
     use proptest::collection::vec;
     use proptest::prelude::*;
 
-    use super::EliminationGraph;
+    use super::{EliminationGraph, FillSearch};
     use crate::factor::cholesky::approximate::REUSED_UP_TO;
     use crate::factor::clique_tree::{Copies, Multi, Single};
     use crate::factor::sign::{Signed, Unsigned};
 
     const N: usize = 8;
+
+    /// A fresh pivot's search, every list within reach and the remainder sparse: it searches until it misses thrice.
+    fn searching() -> FillSearch {
+        FillSearch::new(N as u32, 1, usize::MAX)
+    }
 
     proptest! {
         /// Pairs pushed and vertices eliminated leave each mirror pointing back, through moves, in-place growth and compaction.
@@ -267,7 +303,7 @@ mod tests {
             degrees_track_lists(Multi::split(4).expect("AC2"), &ops)?;
         }
 
-        /// Lists never past `N - 1 < MERGED_UP_TO`, so every fill pushed merges: one entry a pair, its weights summed, its copies capped, the degree their sum.
+        /// Each fill pushed as a fresh pivot's, so every one is searched and merges: one entry a pair, its weights summed, its copies capped, the degree their sum.
         #[test]
         fn short_lists_merge_fill(pushes in vec((0..N, 0..N, 1u32..5, 1u8..9), 0..200)) {
             let split = Multi::split(4).expect("AC2");
@@ -276,7 +312,7 @@ mod tests {
             let mut want = std::collections::HashMap::new();
             for &(u, v, copies, weight) in pushes.iter().filter(|p| p.0 != p.1) {
                 let edge = (u.min(v) as u32, u.max(v) as u32, split.cap(copies), f64::from(weight));
-                graph.push_fill(edge, split, Unsigned);
+                graph.push_fill(edge, &mut searching(), split, Unsigned);
                 let (sum, total) = want.entry((u.min(v), u.max(v))).or_insert((0, 0.0));
                 (*sum, *total) = (*sum + copies, *total + f64::from(weight));
             }
@@ -310,7 +346,7 @@ mod tests {
                     alive[u] = false;
                 } else if u != v && alive[u] && alive[v] && weight != 0 {
                     let edge = (u.min(v) as u32, u.max(v) as u32, split.cap(copies), f64::from(weight));
-                    graph.push_fill(edge, split, sign);
+                    graph.push_fill(edge, &mut searching(), split, sign);
                 }
                 graph.lists.assert_consistent();
                 for x in 0..=N {
@@ -321,9 +357,30 @@ mod tests {
         }
     }
 
-    /// A pair on two lists of 8 merges; once both hold 9, a duplicate stands beside it and the degree counts both.
+    /// A search is made while the shorter list is within twice the pivot's entries, its misses stay below three plus twice its hits, and the remainder is sparse.
     #[test]
-    fn fill_merges_up_to_eight_entries() {
+    fn fill_search_asks_three_questions() {
+        let search = FillSearch::new(4, 4, 100);
+        assert!(search.worth(8) && !search.worth(9));
+        let mut search = FillSearch::new(4, 4, 100);
+        for _ in 0..3 {
+            assert!(search.worth(1));
+            search.record(false);
+        }
+        assert!(!search.worth(1));
+        let mut search = FillSearch::new(4, 4, 100);
+        search.record(true);
+        for _ in 0..5 {
+            assert!(search.worth(1));
+            search.record(false);
+        }
+        assert!(!search.worth(1));
+        assert!(!FillSearch::new(4, 4, 16).worth(1) && FillSearch::new(4, 4, 17).worth(1));
+    }
+
+    /// A searched pair merges and the degree counts it once; past the pivot's reach, a duplicate stands beside it and the degree counts both.
+    #[test]
+    fn fill_merges_within_reach() {
         let mut graph = EliminationGraph::<f64, u32, Single>::new();
         graph.reset(&[1; 24], Single);
         graph.push_pair(0, 1, Single, 1.0);
@@ -334,19 +391,27 @@ mod tests {
         let to_one = |graph: &EliminationGraph<f64, u32, Single>| {
             graph.neighbors(0).filter(|&(to, _, _)| to == 1).count()
         };
-        graph.push_fill((0, 1, Single, 1.0), Single, Unsigned);
+        graph.push_fill(
+            (0, 1, Single, 1.0),
+            &mut FillSearch::new(4, 1, 24),
+            Single,
+            Unsigned,
+        );
         assert_eq!((to_one(&graph), graph.degree(0)), (1, 8));
-        graph.push_pair(0, 16, Single, 1.0);
-        graph.push_pair(1, 17, Single, 1.0);
-        graph.push_fill((0, 1, Single, 1.0), Single, Unsigned);
-        assert_eq!((to_one(&graph), graph.degree(0)), (2, 10));
+        graph.push_fill(
+            (0, 1, Single, 1.0),
+            &mut FillSearch::new(3, 1, 24),
+            Single,
+            Unsigned,
+        );
+        assert_eq!((to_one(&graph), graph.degree(0)), (2, 9));
         graph.lists.assert_consistent();
     }
 
-    /// A merged pair stands as its kept entry and one per dropped copy, at most four, sharing its weight; the degree counts them, AC and AC2, also once a neighbor goes.
+    /// A merged pair loads as one entry, its weight whole and its copies capped; the degree counts them, AC and AC2, also once a neighbor goes.
     #[test]
-    fn a_merged_pair_stands_for_the_copies_its_cap_dropped() {
-        fn check<C: Copies>(split: C, stood: impl Fn(u32) -> u64) {
+    fn a_merged_pair_loads_as_one_capped_entry() {
+        fn check<C: Copies>(split: C) {
             let pairs: Vec<_> = (1..9u32)
                 .map(|merged| (0, merged, f64::from(merged), merged))
                 .collect();
@@ -355,34 +420,31 @@ mod tests {
             graph.lists.assert_consistent();
             for merged in 1..9u32 {
                 let entries: Vec<_> = graph.neighbors(merged as usize).collect();
-                let weight: f64 = entries.iter().map(|e| e.2).sum();
-                let dropped = merged - split.cap(merged).get();
-                assert_eq!(entries.len() as u32, 1 + dropped.min(3), "{merged}");
-                assert!(
-                    (weight - f64::from(merged)).abs() < 1e-12,
-                    "{merged}: {weight}"
+                assert_eq!(entries.len(), 1, "{merged}");
+                assert_eq!(
+                    (entries[0].1.get(), entries[0].2),
+                    (split.cap(merged).get(), f64::from(merged))
                 );
             }
-            let want: u64 = (1..9).map(&stood).sum();
+            let capped = |merged: u32| u64::from(split.cap(merged).get());
+            let want: u64 = (1..9).map(capped).sum();
             assert_eq!(graph.degree(0), want);
             graph.eliminate_vertex(8);
-            assert_eq!(graph.degree(0), want - stood(8));
+            assert_eq!(graph.degree(0), want - capped(8));
         }
-        check(Single, |merged| u64::from(merged.min(4)));
-        let split = Multi::split(4).expect("AC2");
-        check(split, |merged| {
-            u64::from(merged.min(4) + merged.saturating_sub(4).min(3))
-        });
+        check(Single);
+        check(Multi::split(4).expect("AC2"));
     }
 
-    /// Opposite duplicates cancel twice the smaller magnitude onto the ground at both ends, and a pair cancelled to zero leaves both lists.
+    /// Opposite duplicates cancel twice the smaller magnitude onto the ground at both ends, and a pair cancelled to zero leaves both lists; the owed ground edges search under the pivot's one record.
     #[test]
     fn signed_fill_cancels_onto_the_ground() {
         let sign = Signed { ground: 3u32 };
         let mut graph = EliminationGraph::<f64, u32, Single>::new();
         graph.reset(&[2; 4], Single);
-        graph.push_fill((0, 1, Single, 2.0), Single, sign);
-        graph.push_fill((0, 1, Single, -0.5), Single, sign);
+        let mut search = searching();
+        graph.push_fill((0, 1, Single, 2.0), &mut search, Single, sign);
+        graph.push_fill((0, 1, Single, -0.5), &mut search, Single, sign);
         let lists = |graph: &EliminationGraph<f64, u32, Single>, x| {
             graph
                 .neighbors(x)
@@ -391,9 +453,11 @@ mod tests {
         };
         assert_eq!(lists(&graph, 0), [(1, 1.5), (3, 1.0)]);
         assert_eq!(lists(&graph, 1), [(0, 1.5), (3, 1.0)]);
-        graph.push_fill((0, 1, Single, -1.5), Single, sign);
+        graph.push_fill((0, 1, Single, -1.5), &mut search, Single, sign);
         assert_eq!(lists(&graph, 0), [(3, 4.0)]);
         assert_eq!(lists(&graph, 1), [(3, 4.0)]);
+        // One record: each push and owed ground edge searched; misses on the new pairs (0, 1), (0, 3), (1, 3), hits after.
+        assert_eq!((search.found, search.missed), (4, 3));
         graph.lists.assert_consistent();
     }
 
