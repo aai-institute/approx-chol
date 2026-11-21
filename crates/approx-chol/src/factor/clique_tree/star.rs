@@ -184,7 +184,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
     }
 
     /// The last star's neighbors in clique-tree order; with those it [`dropped`](Self::dropped), every vertex its pivot's elimination moved.
-    pub(in crate::factor) fn neighbors(&self) -> impl Iterator<Item = I> + '_ {
+    pub(in crate::factor) fn neighbors(&self) -> impl ExactSizeIterator<Item = I> + '_ {
         self.entries.iter().map(|entry| entry.neighbor)
     }
 

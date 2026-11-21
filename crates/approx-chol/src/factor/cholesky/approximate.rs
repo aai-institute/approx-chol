@@ -12,7 +12,7 @@ use crate::factor::sign::Sign;
 use crate::factor::within_one;
 use crate::sgdd::FactorTail;
 use crate::{narrow, Batch, Index, Real};
-use graph::{EliminationGraph, Staged};
+use graph::{EliminationGraph, FillSearch, Staged};
 use ordering::MinDegreeOrder;
 
 /// A task's AC or AC2 elimination; small blocks reuse its buffers (malloc was 17% of 20-vertex covers).
@@ -128,14 +128,16 @@ impl<T: Real, I: Index, C: Copies> Elimination<T, I, C> {
             fill,
             order,
         } = self;
-        for _ in 0..pivots {
+        for remaining in (0..pivots).rev() {
             let v = order.next_vertex();
             fill.clear();
+            let entries = graph.entries(v);
             let column = clique.eliminate(draws, graph.neighbors(v), fill, sign);
             steps.push(v, column, slots);
             graph.eliminate_vertex(v);
+            let mut search = FillSearch::new(entries, clique.neighbors().len(), remaining);
             for &edge in fill.iter() {
-                graph.push_fill(edge, *split, sign);
+                graph.push_fill(edge, &mut search, *split, sign);
             }
             order.update(graph, clique.neighbors());
             // Its own pass: chained onto the neighbors, it cost unsigned 16-vertex paths +5-8%.
