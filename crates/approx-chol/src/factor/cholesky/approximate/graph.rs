@@ -1,13 +1,10 @@
 mod lists;
 
 use self::lists::Lists;
-use crate::factor::clique_tree::{absorb, Copies, Degrees};
+use crate::factor::clique_tree::{absorb, Copies, Degrees, Pair};
 use crate::factor::sdd::Sdd;
 use crate::factor::sign::Sign;
 use crate::{Index, Real};
-
-/// A staged pair `(lo, hi, weight, merged)`: `merged` counts its copies before the cap; its capped copies are `split.cap(merged)`.
-pub(super) type Staged<T, I> = (I, I, T, u32);
 
 /// Whether a pivot's fill is searched for in the shorter of its ends' lists, so a duplicate merges into its pair and the degrees count it once.
 ///
@@ -96,7 +93,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
     /// `pairs`, each once with its capped copies; a vertex `gone` gets no room.
     pub(super) fn load_merged(
         &mut self,
-        pairs: &[Staged<T, I>],
+        pairs: &[Pair<T, I, C>],
         gone: impl Fn(usize) -> bool,
         n: usize,
         split: C,
@@ -108,8 +105,9 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
         }
         self.reset(&room, split);
         drop(room);
-        for &(k, j, weight, merged) in pairs {
-            self.push_pair(k, j, split.cap(merged), weight);
+        for &(k, j, copies, weight) in pairs {
+            debug_assert!(copies.get() <= split.get(), "a merge caps every pair");
+            self.push_pair(k, j, copies, weight);
         }
     }
 
@@ -179,7 +177,7 @@ impl<T: Real, I: Index, C: Copies> EliminationGraph<T, I, C> {
     #[inline(always)] // Out of line or left to rustc, the pivot loop measured +2% of a bipartite build.
     pub(super) fn push_fill<S: Sign<T, I>>(
         &mut self,
-        (u, v, copies, weight): (I, I, C, T),
+        (u, v, copies, weight): Pair<T, I, C>,
         search: &mut FillSearch,
         split: C,
         sign: S,
@@ -413,20 +411,20 @@ mod tests {
     fn a_merged_pair_loads_as_one_capped_entry() {
         fn check<C: Copies>(split: C) {
             let pairs: Vec<_> = (1..9u32)
-                .map(|merged| (0, merged, f64::from(merged), merged))
+                .map(|neighbor| (0, neighbor, split.cap(neighbor), f64::from(neighbor)))
                 .collect();
             let mut graph = EliminationGraph::<f64, u32, C>::new();
             graph.load_merged(&pairs, |_| false, 9, split);
             graph.lists.assert_consistent();
-            for merged in 1..9u32 {
-                let entries: Vec<_> = graph.neighbors(merged as usize).collect();
-                assert_eq!(entries.len(), 1, "{merged}");
+            for neighbor in 1..9u32 {
+                let entries: Vec<_> = graph.neighbors(neighbor as usize).collect();
+                assert_eq!(entries.len(), 1, "{neighbor}");
                 assert_eq!(
                     (entries[0].1.get(), entries[0].2),
-                    (split.cap(merged).get(), f64::from(merged))
+                    (split.cap(neighbor).get(), f64::from(neighbor))
                 );
             }
-            let capped = |merged: u32| u64::from(split.cap(merged).get());
+            let capped = |neighbor: u32| u64::from(split.cap(neighbor).get());
             let want: u64 = (1..9).map(capped).sum();
             assert_eq!(graph.degree(0), want);
             graph.eliminate_vertex(8);

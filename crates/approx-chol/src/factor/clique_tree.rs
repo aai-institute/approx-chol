@@ -27,8 +27,11 @@ pub(super) fn absorb<T: Real, I: Index, C: Copies, S: Sign<T, I>>(
     gain
 }
 
-/// Fill edges `(lo, hi, copies, weight)`, `lo < hi`, as an elimination emits them: one per entry and partner, its weight summed over its copies.
-pub(super) type Fill<T, I, C> = Vec<(I, I, C, T)>;
+/// An edge `(lo, hi, copies, weight)`, `lo < hi`, its weight summed over its copies.
+pub(super) type Pair<T, I, C> = (I, I, C, T);
+
+/// A pivot's fill, one [`Pair`] per entry and partner.
+pub(super) type Fill<T, I, C> = Vec<Pair<T, I, C>>;
 
 /// A pivot's elimination, reused across pivots; AC and AC2 differ only in `C`.
 pub(super) struct CliqueTreeSampler<T, I, C: Copies> {
@@ -80,7 +83,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
         mut rng: Xoshiro256PlusPlus,
         neighbors: impl Iterator<Item = (I, T)>,
         ground: f64,
-        fill: impl FnMut((I, I, C, T)),
+        fill: impl FnMut(Pair<T, I, C>),
         sign: S,
     ) {
         self.refill_unique(neighbors, sign);
@@ -91,7 +94,7 @@ impl<T: Real, I: Index, C: Copies> CliqueTreeSampler<T, I, C> {
     fn sample<S: Sign<T, I>>(
         &mut self,
         rng: &mut Xoshiro256PlusPlus,
-        mut fill: impl FnMut((I, I, C, T)),
+        mut fill: impl FnMut(Pair<T, I, C>),
         sign: S,
         ground: f64,
     ) -> Option<f64> {
